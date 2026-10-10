@@ -1,0 +1,94 @@
+version: 1
+tracker:
+  kind: linear
+  pickup:
+    checks: [has_description, not_started]
+states:
+  todo: "Todo"
+  dev: "In Progress"
+  human_review: "Human Review"
+  ai_review: "AI Review"
+  ready: "Ready to Merge"
+  done: "Done"
+limits:
+  parallel_sessions: 3
+  question_sessions: 2
+  per_run: { turns: 150, duration: 90m, usd: 5 }
+  verify_attempts: 2
+  review_rounds: 5
+workspace:
+  setup: []
+  ports: { base: 4200 }
+on:
+  ticket.delegated:
+    - { when: "state in [todo, dev] && !blocked", run: dev }
+  ticket.moved:
+    - { from: human_review, to: dev, run: dev-feedback }
+    - { to: ai_review, run: review }
+  session.prompted:
+    - { when: "blocked", run: dev-feedback, debounce: 0s }
+    - { when: "state in [dev, human_review]", run: dev-feedback, debounce: 3m }
+  session.mentioned:
+    - { run: ask }
+  command:
+    - { say: retiens, run: remember }
+    - { say: "fais-le", do: propose_delegate }
+  label.added:
+    - { label: "agent:reprendre", run: dev-feedback }
+    - { label: "agent:stop", do: stop }
+  session.stopped:
+    - { do: stop }
+  pr.checks_failed:
+    - { when: "state in [human_review, ai_review] && !blocked", run: fix-ci }
+  pr.merged:
+    - { move: done, do: cleanup, run: learn }
+jobs:
+  dev:
+    queue: dev
+    model: sonnet
+    workspace: worktree
+    session: new
+    skill: "relais:dev"
+    pickup: true
+    verify: []
+    on_start: { move: dev }
+    on_success: { move: human_review, post: summary }
+  dev-feedback:
+    extends: dev
+    session: resume
+    skill: "relais:feedback"
+    input: feedback
+    pickup: false
+    on_start: {}
+    on_success: { post: reply }
+  fix-ci:
+    extends: dev-feedback
+    input: ci_failures
+  review:
+    queue: dev
+    model: opus
+    workspace: worktree
+    session: new
+    skill: "relais:review"
+    on_success: { move: ready, post: synthesis }
+  ask:
+    queue: questions
+    model: sonnet
+    workspace: trunk-readonly
+    session: new
+    skill: "relais:ask"
+    input: thread
+    limits: { turns: 30, duration: 5m, usd: 0.5 }
+    on_success: { post: reply }
+  learn:
+    queue: questions
+    model: haiku
+    workspace: knowledge
+    session: new
+    skill: "relais:learn"
+    limits: { turns: 40, duration: 10m, usd: 0.5 }
+    on_success: {}
+  remember:
+    extends: learn
+    input: thread
+    on_success: { post: reply }
