@@ -10,19 +10,31 @@ export type Verifier = (cwd: string, commands: string[], timeoutMs?: number) => 
 
 function runOne(cwd: string, command: string, timeoutMs: number): Promise<{ exitCode: number | null; output: string }> {
   return new Promise((resolve) => {
-    const child = spawn('bash', ['-lc', command], { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn('bash', ['-lc', command], { cwd, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
     let output = '';
+    let done = false;
+    const finish = (exitCode: number | null, extra = ''): void => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      resolve({ exitCode, output: output + extra });
+    };
     child.stdout.on('data', (d) => (output += d));
     child.stderr.on('data', (d) => (output += d));
-    let timedOut = false;
     const timer = setTimeout(() => {
-      timedOut = true;
-      child.kill('SIGKILL');
+      try {
+        process.kill(-child.pid!, 'SIGKILL');
+      } catch {
+        try {
+          child.kill('SIGKILL');
+        } catch {
+          // already gone
+        }
+      }
+      finish(null);
     }, timeoutMs);
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      resolve({ exitCode: timedOut ? null : code, output });
-    });
+    child.on('error', (err) => finish(null, String(err)));
+    child.on('close', (code) => finish(code));
   });
 }
 

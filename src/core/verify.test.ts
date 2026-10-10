@@ -19,4 +19,17 @@ describe('runVerify', () => {
     const res = await runVerify(process.cwd(), ['sleep 5'], 200);
     expect(res.failures[0]).toMatchObject({ command: 'sleep 5', exitCode: null });
   });
+
+  it('resolves with a failure when cwd does not exist', async () => {
+    const res = await runVerify('/nonexistent-relais-dir', ['true']);
+    expect(res.ok).toBe(false);
+    expect(res.failures[0]).toMatchObject({ command: 'true', exitCode: null });
+  });
+
+  it('kills compound commands promptly on timeout', async () => {
+    const t = Date.now();
+    const res = await runVerify(process.cwd(), ['sleep 5; true'], 200);
+    expect(Date.now() - t).toBeLessThan(3000);
+    expect(res.failures[0]).toMatchObject({ command: 'sleep 5; true', exitCode: null });
+  });
 });
