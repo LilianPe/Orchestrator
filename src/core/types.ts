@@ -79,6 +79,7 @@ export interface TicketState {
   worktreePath?: string;
   port?: number;
   activeRunId?: string;
+  verifyingRunId?: string;
   pendingJob?: { job: string; input?: InputKind; inputText?: string; resume?: boolean };
   verifyAttempts: number;
   pendingFeedback: FeedbackItem[];

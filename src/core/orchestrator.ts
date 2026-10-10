@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import type { Forge } from '../adapters/forge/types.js';
-import type { RunHandle, Runner } from '../adapters/runner/types.js';
+import type { RunHandle, RunResult, Runner } from '../adapters/runner/types.js';
 import { ActivityRelay } from '../adapters/tracker/activity-relay.js';
 import type { Tracker } from '../adapters/tracker/types.js';
 import type { WorkspaceManager } from '../adapters/workspace/types.js';
@@ -77,7 +77,7 @@ export class Orchestrator {
   private chain: Promise<void> = Promise.resolve();
   private background = new Set<Promise<void>>();
   private handles = new Map<string, RunHandle>();
-  private verifying = new Set<string>();
+  private stopping = false;
   private newId: () => string;
 
   constructor(private d: OrchestratorDeps) {
@@ -103,19 +103,38 @@ export class Orchestrator {
 
   recover(): void {
     const { store } = this.d;
+    const block = (t: TicketState, reason: string): void => {
+      t.activeRunId = undefined;
+      t.verifyingRunId = undefined;
+      t.blocked = true;
+      t.blockReason = reason;
+      this.putTicket(t);
+    };
     for (const run of store.runsByStatus('running')) {
       store.putRun({ ...run, status: 'failure', endedAt: this.d.clock.now() });
-      const t = store.getTicket(run.projectId, run.ticketId);
-      if (t && t.activeRunId === run.id) {
-        t.activeRunId = undefined;
-        t.blocked = true;
-        t.blockReason = 'Relais a redémarré pendant le run. Répondez dans le fil pour relancer.';
-        store.putTicket(t);
+    }
+    for (const t of store.listTickets()) {
+      if (t.activeRunId) {
+        const r = store.getRun(t.activeRunId);
+        if (!r || r.status !== 'running') block(t, 'Relais a redémarré pendant le run. Répondez dans le fil pour relancer.');
       }
+      if (t.verifyingRunId) block(t, 'Relais a redémarré pendant les vérifications. Répondez dans le fil pour relancer.');
     }
   }
 
+  async tick(): Promise<void> {
+    const next = this.chain
+      .then(async () => {
+        await this.drain('dev');
+        await this.drain('questions');
+      })
+      .catch((err: unknown) => this.log('error', `tick: ${(err as Error).message}`));
+    this.chain = next;
+    return next;
+  }
+
   stopAll(): void {
+    this.stopping = true;
     for (const h of this.handles.values()) h.stop();
   }
 
@@ -200,22 +219,50 @@ export class Orchestrator {
         ticket.costUsd += event.payload.costUsd;
         activeJob = event.payload.job;
       }
-      if (event.type === 'verify.passed' || event.type === 'verify.failed') this.verifying.delete(ticket.ticketId);
+      if (event.type === 'verify.passed' || event.type === 'verify.failed') {
+        if (event.payload.runId !== ticket.verifyingRunId) {
+          this.log('info', `ignored stale ${event.type} for ${ticket.ticketId} (run ${event.payload.runId})`);
+          return;
+        }
+        ticket.verifyingRunId = undefined;
+      }
       this.putTicket(ticket);
     }
 
     const commands = decide(event, ticket, { workflow: project.workflow, activeJob });
     for (const c of commands) {
       bus.publish({ kind: 'command', projectId: project.id, ticketId: ticket?.ticketId, command: c });
-      await this.exec(project, ticket?.ticketId, c);
+      try {
+        await this.exec(project, ticket?.ticketId, c);
+      } catch (err) {
+        const message = (err as Error).message;
+        this.log('error', `command ${c.kind} for ${ticket?.ticketId ?? '*'}: ${message}`);
+        if (!ticket) throw err;
+        await this.failTicket(project, ticket.ticketId, `Erreur : ${message}`);
+        break;
+      }
     }
 
     if (ticket && SETTLES_RUN.has(event.type)) await this.settle(project, ticket.ticketId);
   }
 
+  private async failTicket(project: ProjectRuntime, ticketId: string, reason: string): Promise<void> {
+    const t = this.d.store.getTicket(project.id, ticketId);
+    if (!t) return;
+    t.blocked = true;
+    t.blockReason = reason;
+    this.putTicket(t);
+    try {
+      const session = await this.sessionFor(t);
+      await this.d.tracker.activity(session, { type: 'error', body: reason });
+    } catch (err) {
+      this.log('warn', `could not post error activity for ${ticketId}: ${(err as Error).message}`);
+    }
+  }
+
   private async settle(project: ProjectRuntime, ticketId: string): Promise<void> {
     const t = this.ticket(project.id, ticketId);
-    if (!t.activeRunId && !this.verifying.has(ticketId) && t.pendingJob) {
+    if (!t.activeRunId && !t.verifyingRunId && t.pendingJob) {
       const pending = t.pendingJob;
       t.pendingJob = undefined;
       this.putTicket(t);
@@ -226,6 +273,7 @@ export class Orchestrator {
   }
 
   private async drain(queue: QueueName): Promise<void> {
+    if (this.stopping) return;
     const n = this.d.store.listQueue().filter((q) => q.queue === queue).length;
     for (let i = 0; i < n; i++) {
       if (this.isPaused() || this.overBudget() || !this.d.scheduler.hasFree(queue)) return;
@@ -252,6 +300,7 @@ export class Orchestrator {
         return this.startRun(project, ticketId, c);
       case 'stop_run': {
         t.pendingJob = undefined;
+        t.verifyingRunId = undefined;
         this.putTicket(t);
         store.removeFromQueue(project.id, ticketId);
         store.deleteTimersFor(project.id, ticketId);
@@ -262,7 +311,8 @@ export class Orchestrator {
         const run = store.getRun(c.runId);
         const job = project.workflow.jobs[c.job];
         if (!run || !job) return;
-        this.verifying.add(ticketId);
+        t.verifyingRunId = run.id;
+        this.putTicket(t);
         this.track(
           (async () => {
             const res = await this.d.verify(run.cwd, job.verify);
@@ -356,11 +406,16 @@ export class Orchestrator {
       priority: t.priority,
       enqueuedAt: this.d.clock.now(),
     };
-    if (job.queue === 'dev' && (t.activeRunId || this.verifying.has(ticketId))) {
+    if (job.queue === 'dev' && (t.activeRunId || t.verifyingRunId)) {
       t.pendingJob = { job: job.name, input: opts.input, inputText: opts.inputText, resume: opts.resume };
       return this.putTicket(t);
     }
-    if (this.isPaused() || this.overBudget()) return this.d.scheduler.enqueue(item);
+    if (this.stopping || this.isPaused()) return this.d.scheduler.enqueue(item);
+    if (this.overBudget()) {
+      this.d.scheduler.enqueue(item);
+      await this.noteBudget(project, ticketId);
+      return;
+    }
     const key = `${ticketId}:${job.queue}`;
     const slot = this.d.scheduler.tryAcquire(job.queue, key);
     if (slot === null) return this.d.scheduler.enqueue(item);
@@ -369,12 +424,28 @@ export class Orchestrator {
     } catch (err) {
       this.d.scheduler.release(key);
       const fresh = this.ticket(project.id, ticketId);
+      if (fresh.activeRunId) {
+        const r = this.d.store.getRun(fresh.activeRunId);
+        if (r && r.status === 'running' && !this.handles.has(r.id)) this.d.store.putRun({ ...r, status: 'failure', endedAt: this.d.clock.now() });
+        if (!this.handles.has(fresh.activeRunId)) fresh.activeRunId = undefined;
+      }
       fresh.blocked = true;
       fresh.blockReason = `Erreur au lancement : ${(err as Error).message}`;
       this.putTicket(fresh);
       const session = opts.linearSessionId ?? (await this.sessionFor(fresh));
       await this.d.tracker.activity(session, { type: 'error', body: fresh.blockReason });
     }
+  }
+
+  private async noteBudget(project: ProjectRuntime, ticketId: string): Promise<void> {
+    const day = new Date(this.d.clock.now()).toISOString().slice(0, 10);
+    const key = `budget:${day}:${project.id}:${ticketId}`;
+    if (this.d.store.getMeta(key)) return;
+    this.d.store.setMeta(key, '1');
+    await this.d.tracker.comment(
+      ticketId,
+      "Budget journalier de Relais atteint : ce ticket reste en file jusqu'à demain (ou jusqu'à une hausse du plafond).",
+    );
   }
 
   private async launch(project: ProjectRuntime, ticketId: string, job: JobSpec, opts: StartOpts, slot: number, key: string): Promise<void> {
@@ -493,27 +564,46 @@ export class Orchestrator {
 
   private async pump(project: ProjectRuntime, run: RunRecord, handle: RunHandle): Promise<void> {
     const { tracker, bus, store, clock } = this.d;
-    const relay = new ActivityRelay(
-      (a) => (run.linearSessionId ? tracker.activity(run.linearSessionId, a) : Promise.resolve()),
-      this.d.activityIntervalMs ?? 2000,
-      () => clock.now(),
-    );
-    for await (const ev of handle.events) {
-      bus.publish({ kind: 'run', runId: run.id, ticketId: run.ticketId, ev });
-      relay.push(ev);
+    let result: RunResult;
+    try {
+      const relay = new ActivityRelay(
+        (a) => (run.linearSessionId ? tracker.activity(run.linearSessionId, a) : Promise.resolve()),
+        this.d.activityIntervalMs ?? 2000,
+        () => clock.now(),
+      );
+      for await (const ev of handle.events) {
+        bus.publish({ kind: 'run', runId: run.id, ticketId: run.ticketId, ev });
+        relay.push(ev);
+      }
+      result = await handle.done;
+      await relay.flush();
+      this.handles.delete(run.id);
+      const rec = store.getRun(run.id) ?? run;
+      store.putRun({
+        ...rec,
+        status: result.outcome,
+        endedAt: clock.now(),
+        costUsd: result.costUsd,
+        turns: result.turns,
+        lastText: result.lastText,
+      });
+    } catch (err) {
+      const message = (err as Error).message;
+      this.log('error', `run ${run.id} failed: ${message}`);
+      try {
+        handle.stop();
+      } catch {
+        /* best effort */
+      }
+      this.handles.delete(run.id);
+      try {
+        const rec = store.getRun(run.id) ?? run;
+        store.putRun({ ...rec, status: 'failure', endedAt: clock.now(), lastText: message });
+      } catch (e) {
+        this.log('error', `could not record failure of run ${run.id}: ${(e as Error).message}`);
+      }
+      result = { outcome: 'failure', costUsd: 0, turns: 0, lastText: message };
     }
-    const result = await handle.done;
-    await relay.flush();
-    this.handles.delete(run.id);
-    const rec = store.getRun(run.id) ?? run;
-    store.putRun({
-      ...rec,
-      status: result.outcome,
-      endedAt: clock.now(),
-      costUsd: result.costUsd,
-      turns: result.turns,
-      lastText: result.lastText,
-    });
     await this.submit({
       id: `run:${run.id}:finished`,
       type: 'run.finished',
