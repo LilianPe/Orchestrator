@@ -1,0 +1,7 @@
+node_modules/
+dist/
+coverage/
+.env
+*.log
+.relais-home/
+web/dist/
