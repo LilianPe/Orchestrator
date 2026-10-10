@@ -5,3 +5,4 @@ coverage/
 *.log
 .relais-home/
 web/dist/
+.superpowers/
