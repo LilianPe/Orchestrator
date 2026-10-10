@@ -75,7 +75,9 @@ function startOfUtcDay(ts: number): number {
 
 export class Orchestrator {
   private chain: Promise<void> = Promise.resolve();
-  private background = new Set<Promise<void>>();
+  private background = new Map<Promise<void>, string | undefined>();
+  /** Runs whose event stream is still open (the runner is working, nothing for Relais to do): idle() does not wait for them. */
+  private liveRuns = new Set<string>();
   private handles = new Map<string, RunHandle>();
   private stopping = false;
   private newId: () => string;
@@ -94,11 +96,18 @@ export class Orchestrator {
 
   async idle(): Promise<void> {
     for (;;) {
+      // Let promise continuations of a just-released/finished runner settle before sampling the state.
+      await new Promise<void>((resolve) => setImmediate(resolve));
       const chain = this.chain;
       await chain;
-      await Promise.all([...this.background]);
-      if (chain === this.chain && this.background.size === 0) return;
+      const pending = this.pendingBackground();
+      await Promise.all(pending);
+      if (chain === this.chain && pending.length === 0 && this.pendingBackground().length === 0) return;
     }
+  }
+
+  private pendingBackground(): Promise<void>[] {
+    return [...this.background].filter(([, runId]) => runId === undefined || !this.liveRuns.has(runId)).map(([p]) => p);
   }
 
   recover(): void {
@@ -157,9 +166,9 @@ export class Orchestrator {
     this.d.bus.publish({ kind: 'log', level, message, at: this.d.clock.now() });
   }
 
-  private track(p: Promise<void>): void {
+  private track(p: Promise<void>, runId?: string): void {
     const wrapped = p.catch((err: unknown) => this.log('error', (err as Error).message)).finally(() => this.background.delete(wrapped));
-    this.background.add(wrapped);
+    this.background.set(wrapped, runId);
   }
 
   private putTicket(t: TicketState): void {
@@ -559,7 +568,8 @@ export class Orchestrator {
       env: { ...this.d.agentEnv(run), ...(ws.port !== undefined ? { PORT: String(ws.port) } : {}) },
     });
     this.handles.set(runId, handle);
-    this.track(this.pump(project, run, handle));
+    this.liveRuns.add(runId);
+    this.track(this.pump(project, run, handle), runId);
   }
 
   private async pump(project: ProjectRuntime, run: RunRecord, handle: RunHandle): Promise<void> {
@@ -575,6 +585,7 @@ export class Orchestrator {
         bus.publish({ kind: 'run', runId: run.id, ticketId: run.ticketId, ev });
         relay.push(ev);
       }
+      this.liveRuns.delete(run.id);
       result = await handle.done;
       await relay.flush();
       this.handles.delete(run.id);
@@ -589,6 +600,7 @@ export class Orchestrator {
       });
     } catch (err) {
       const message = (err as Error).message;
+      this.liveRuns.delete(run.id);
       this.log('error', `run ${run.id} failed: ${message}`);
       try {
         handle.stop();
