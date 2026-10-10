@@ -96,6 +96,7 @@ export class Orchestrator {
 
   async idle(): Promise<void> {
     for (;;) {
+      // Note: setImmediate is incompatible with fake timers (vi.useFakeTimers fakes it by default).
       // Let promise continuations of a just-released/finished runner settle before sampling the state.
       await new Promise<void>((resolve) => setImmediate(resolve));
       const chain = this.chain;
@@ -145,6 +146,8 @@ export class Orchestrator {
   stopAll(): void {
     this.stopping = true;
     for (const h of this.handles.values()) h.stop();
+    // Stopped runs are no longer "live": idle() must wait for their pumps to persist the final status.
+    this.liveRuns.clear();
   }
 
   project(id: string): ProjectRuntime {

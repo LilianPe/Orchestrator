@@ -76,6 +76,18 @@ describe('Orchestrator', () => {
     expect(store.runsByStatus('running')).toEqual([]);
   });
 
+  it('stopAll() then idle() waits until the stopped run is persisted', async () => {
+    const { store, tracker, runner, orch } = setup();
+    tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+    runner.enqueue({ hold: true });
+    await orch.submit(delegated());
+    await orch.idle();
+    const runId = store.getTicket('p', 'REL-1')!.activeRunId!;
+    orch.stopAll();
+    await orch.idle();
+    expect(store.getRun(runId)!.status).toBe('stopped');
+  });
+
   const waitFor = async (cond: () => boolean): Promise<void> => {
     for (let i = 0; i < 200 && !cond(); i++) await new Promise((r) => setTimeout(r, 5));
     expect(cond()).toBe(true);
