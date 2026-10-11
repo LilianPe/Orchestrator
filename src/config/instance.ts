@@ -42,6 +42,7 @@ export function homePaths(home: string) {
   return {
     config: join(home, 'config.yaml'),
     secrets: join(home, 'secrets.json'),
+    runSettings: join(home, 'run-settings.json'),
     db: join(home, 'relais.db'),
     transcripts: join(home, 'transcripts'),
     workspaces: join(home, 'workspaces'),
