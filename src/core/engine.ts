@@ -158,6 +158,16 @@ export function decide(event: RelaisEvent, ticket: TicketState | undefined, ctx:
         { kind: 'patch_ticket', patch: { prNumber: event.payload.number, prUrl: event.payload.url } },
         { kind: 'link_pr', url: event.payload.url },
       ];
+    case 'session.stopped': {
+      const sessionId = event.payload.linearSessionId;
+      if (isQuestionSession(ticket, sessionId)) {
+        return [
+          { kind: 'stop_run', linearSessionId: sessionId },
+          { kind: 'activity', type: 'response', body: 'Arrêté.', linearSessionId: sessionId },
+        ];
+      }
+      break;
+    }
     case 'session.prompted':
       if (isQuestionSession(ticket, event.payload.linearSessionId)) {
         if (!workflow.jobs['ask']) return [];

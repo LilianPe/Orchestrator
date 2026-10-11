@@ -318,6 +318,12 @@ export class Orchestrator {
       case 'start_run':
         return this.startRun(project, ticketId, c);
       case 'stop_run': {
+        if (c.linearSessionId) {
+          for (const r of store.runsByStatus('running')) {
+            if (r.projectId === project.id && r.ticketId === ticketId && r.linearSessionId === c.linearSessionId) this.handles.get(r.id)?.stop();
+          }
+          return;
+        }
         t.pendingJob = undefined;
         t.verifyingRunId = undefined;
         this.putTicket(t);

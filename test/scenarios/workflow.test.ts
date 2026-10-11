@@ -110,6 +110,43 @@ describe('standard workflow', () => {
     expect(h.tracker.activities('ls-1').at(-1)!.type).toBe('response');
   });
 
+  describe('I2: a stop targets the run of the session that sent it', () => {
+    async function devAndAskRunning(h: ReturnType<typeof createHarness>) {
+      h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+      h.runner.enqueue({ hold: true }, { hold: true });
+      await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+      await h.send('session.mentioned', { linearSessionId: 'ls-9', body: 'où en es-tu ?', author: 'L' });
+      const devRunId = h.ticket().activeRunId!;
+      const askRunId = h.runner.requests[1]!.runId;
+      return { devRunId, askRunId };
+    }
+
+    it('a stop in a question thread stops only the question run', async () => {
+      const h = createHarness();
+      const { devRunId, askRunId } = await devAndAskRunning(h);
+      await h.send('session.stopped', { linearSessionId: 'ls-9' });
+      expect(h.store.getRun(askRunId)!.status).toBe('stopped');
+      expect(h.store.getRun(devRunId)!.status).toBe('running');
+      expect(h.ticket()).toMatchObject({ blocked: false, activeRunId: devRunId });
+      expect(h.tracker.activities('ls-9').at(-1)).toEqual({ type: 'response', body: 'Arrêté.' });
+      expect(h.tracker.activities('ls-1').filter((a) => a.type === 'response')).toEqual([]);
+      h.runner.release(devRunId);
+      await h.orch.idle();
+    });
+
+    it('a stop in the dev thread stops the dev run and blocks, leaving the question run alone', async () => {
+      const h = createHarness();
+      const { devRunId, askRunId } = await devAndAskRunning(h);
+      await h.send('session.stopped', { linearSessionId: 'ls-1' });
+      expect(h.store.getRun(devRunId)!.status).toBe('stopped');
+      expect(h.store.getRun(askRunId)!.status).toBe('running');
+      expect(h.ticket().blocked).toBe(true);
+      expect(h.tracker.activities('ls-1').at(-1)!.type).toBe('response');
+      h.runner.release(askRunId);
+      await h.orch.idle();
+    });
+  });
+
   it('criterion 6: a mention runs ask read-only in its own thread', async () => {
     const h = createHarness();
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
