@@ -21,8 +21,9 @@ export async function reconcileOnce(d: ReconcileDeps): Promise<void> {
       const delegated = new Set(issues.map((i) => i.identifier));
       for (const issue of issues) {
         const t = d.store.getTicket(p.id, issue.identifier);
-        if (!t) {
-          d.submit({ id: `reconcile:delegated:${issue.identifier}`, type: 'ticket.delegated', at, projectId: p.id, ticketId: issue.identifier, payload: {} });
+        if (!t || !t.delegated) {
+          const id = t ? `reconcile:delegated:${issue.identifier}:${t.updatedAt}` : `reconcile:delegated:${issue.identifier}`;
+          d.submit({ id, type: 'ticket.delegated', at, projectId: p.id, ticketId: issue.identifier, payload: {} });
           continue;
         }
         const to = (Object.entries(p.workflow.states) as [LogicalState, string][]).find(([, n]) => n === issue.stateName)?.[0];
@@ -38,8 +39,13 @@ export async function reconcileOnce(d: ReconcileDeps): Promise<void> {
         }
       }
       for (const t of d.store.listTickets()) {
-        if (t.projectId !== p.id || !t.activeRunId || delegated.has(t.ticketId)) continue;
-        d.submit({ id: `reconcile:undelegated:${t.ticketId}:${t.activeRunId}`, type: 'session.stopped', at, projectId: p.id, ticketId: t.ticketId, payload: {} });
+        if (t.projectId !== p.id || delegated.has(t.ticketId)) continue;
+        if (t.activeRunId) {
+          d.submit({ id: `reconcile:undelegated:${t.ticketId}:${t.activeRunId}`, type: 'session.stopped', at, projectId: p.id, ticketId: t.ticketId, payload: {} });
+        }
+        if (t.delegated && t.logical !== 'done') {
+          d.submit({ id: `reconcile:undelegated-flag:${t.ticketId}:${t.updatedAt}`, type: 'ticket.undelegated', at, projectId: p.id, ticketId: t.ticketId, payload: {} });
+        }
       }
     } catch (err) {
       d.log(`reconcile ${p.id}: ${(err as Error).message}`);

@@ -25,6 +25,12 @@ const USAGE = `Usage : relais <commande>
   pause | resume     suspendre ou reprendre la file
   stop <ID>          arrêter le run d'un ticket`;
 
+/** Basic auth for a Relais bound to a non-loopback host (RELAIS_UI_PASSWORD). */
+function uiAuth(): Record<string, string> {
+  const pw = process.env['RELAIS_UI_PASSWORD'];
+  return pw ? { authorization: `Basic ${Buffer.from(`relais:${pw}`).toString('base64')}` } : {};
+}
+
 async function main(): Promise<number> {
   const { positionals, values } = parseArgs({ allowPositionals: true, options: { 'fake-runner': { type: 'boolean' } } });
   const [cmd, arg] = positionals;
@@ -86,25 +92,25 @@ async function main(): Promise<number> {
       return 0;
     }
     case 'status': {
-      const s = (await (await fetch(`${api}/api/state`)).json()) as any;
+      const s = (await (await fetch(`${api}/api/state`, { headers: uiAuth() })).json()) as any;
       console.log(`Linear : ${s.linearConnected ? 'connecté' : 'non connecté'} · file : ${s.paused ? 'en pause' : 'active'} · places dev ${s.capacity.dev.used}/${s.capacity.dev.total} · coût du jour ${s.costTodayUsd.toFixed(2)} $`);
       for (const t of s.tickets) console.log(`  ${t.ticketId}  ${t.logical}${t.blocked ? ' (bloqué)' : ''}  ${t.title}`);
       return 0;
     }
     case 'pause':
     case 'resume':
-      await fetch(`${api}/api/control/${cmd}`, { method: 'POST' });
+      await fetch(`${api}/api/control/${cmd}`, { method: 'POST', headers: uiAuth() });
       console.log(cmd === 'pause' ? 'File en pause.' : 'File relancée.');
       return 0;
     case 'stop': {
       if (!arg) break;
-      const s = (await (await fetch(`${api}/api/state`)).json()) as any;
+      const s = (await (await fetch(`${api}/api/state`, { headers: uiAuth() })).json()) as any;
       const t = s.tickets.find((x: any) => x.ticketId === arg);
       if (!t) {
         console.log(`Ticket ${arg} inconnu de Relais.`);
         return 1;
       }
-      await fetch(`${api}/api/tickets/${t.projectId}/${arg}/stop`, { method: 'POST' });
+      await fetch(`${api}/api/tickets/${t.projectId}/${arg}/stop`, { method: 'POST', headers: uiAuth() });
       console.log(`Arrêt demandé pour ${arg}.`);
       return 0;
     }

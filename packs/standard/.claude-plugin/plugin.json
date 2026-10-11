@@ -1,5 +1,5 @@
 {
   "name": "relais",
   "version": "0.1.0",
-  "description": "Relais standard pack: dev, feedback, review, ask and learn skills plus always-on rules."
+  "description": "Relais standard pack: job skills (dev, feedback, fix-ci, review, ask, learn), method skills (tdd, debugging, verification, code-review, receiving-review) and always-on rules."
 }

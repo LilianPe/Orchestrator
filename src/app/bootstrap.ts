@@ -15,6 +15,7 @@ import { Reconciler } from '../adapters/tracker/linear/reconcile.js';
 import { LinearTracker } from '../adapters/tracker/linear/tracker.js';
 import { GitWorkspaces } from '../adapters/workspace/git-workspaces.js';
 import { homePaths, loadInstance, loadSecrets, saveSecrets } from '../config/instance.js';
+import { writeRunSettings } from '../config/run-settings.js';
 import { loadWorkflow } from '../config/load-workflow.js';
 import { EventBus } from '../core/bus.js';
 import { SystemClock } from '../core/clock.js';
@@ -34,6 +35,13 @@ export interface BootOptions {
   fakeRunner?: boolean;
   port?: number;
   log?: (m: string) => void;
+  /** Defaults to process.env; read for RELAIS_UI_PASSWORD. */
+  env?: NodeJS.ProcessEnv;
+}
+
+export function isLoopbackHost(host: string): boolean {
+  const h = host.replace(/^\[|\]$/g, '').toLowerCase();
+  return h === 'localhost' || h === '::1' || /^127\.\d+\.\d+\.\d+$/.test(h);
 }
 
 const RELAIS_LABELS = ['agent:reprendre', 'agent:stop'];
@@ -44,6 +52,13 @@ export async function startRelais(o: BootOptions): Promise<{ url: string; stop()
   const packDir = join(root, 'packs/standard');
   const webDir = join(root, 'web/dist');
   const instance = loadInstance(o.home);
+  const uiPassword = isLoopbackHost(instance.host) ? undefined : (o.env ?? process.env)['RELAIS_UI_PASSWORD'] || undefined;
+  if (!isLoopbackHost(instance.host) && !uiPassword) {
+    throw new Error(
+      `host: ${instance.host} expose l'interface et l'API de Relais hors de cette machine. ` +
+        "Définissez la variable d'environnement RELAIS_UI_PASSWORD (mot de passe de l'interface), ou remettez host: 127.0.0.1 dans config.yaml.",
+    );
+  }
   const paths = homePaths(o.home);
   const port = o.port ?? instance.port;
   const baseUrl = instance.publicUrl ?? `http://localhost:${port}`;
@@ -116,7 +131,9 @@ export async function startRelais(o: BootOptions): Promise<{ url: string; stop()
     verify: runVerify,
     projects,
     packDir,
+    settingsPath: writeRunSettings(packDir, o.home),
     dailyBudgetUsd: instance.limits.perDayUsd,
+    knowledgeConfigured: !!instance.knowledge,
     agentEnv: (run) => ({
       RELAIS_API: `http://127.0.0.1:${port}/agent`,
       RELAIS_RUN_TOKEN: run.token,
@@ -170,6 +187,7 @@ export async function startRelais(o: BootOptions): Promise<{ url: string; stop()
     dailyBudgetUsd: instance.limits.perDayUsd,
     transcriptsDir: paths.transcripts,
     webDir: existsSync(webDir) ? webDir : undefined,
+    uiPassword,
     oauth: loadSecrets(o.home).linear
       ? {
           authorizeUrl: () => {
@@ -187,6 +205,7 @@ export async function startRelais(o: BootOptions): Promise<{ url: string; stop()
             const s2 = loadSecrets(o.home);
             saveSecrets(o.home, { ...s2, linear: { ...s2.linear!, appUserId: who.viewer.id, organizationId: who.organization.id } });
             await connectLinear();
+            await orchestrator.announceRecovery();
             for (const p of projects) {
               const created = await linearTracker!.ensureSetup(p.teamKey, p.workflow.states, RELAIS_LABELS);
               if (created.length) log(`Linear ${p.teamKey} : créé ${created.join(', ')}`);
@@ -205,7 +224,10 @@ export async function startRelais(o: BootOptions): Promise<{ url: string; stop()
   }, 60_000);
   tickInterval.unref();
   poller.start();
-  if (await connectLinear()) reconciler.start();
+  if (await connectLinear()) {
+    await orchestrator.announceRecovery();
+    reconciler.start();
+  }
   else log(`Linear non connecté : ouvrez ${baseUrl}/oauth/start`);
   log(`Relais écoute sur ${baseUrl}`);
 
