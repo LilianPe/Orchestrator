@@ -11,7 +11,7 @@ Tu reprends la session de dev du ticket. Le bloc « Retours à traiter », « V�
 
 1. Lis chaque retour. Pour un retour ancré sur un fichier (`chemin:ligne — texte`), ouvre ce fichier à cette ligne.
 2. Un retour ambigu ou contradictoire avec le ticket : pose UNE question avec `relais-agent ask` et termine ton tour.
-3. Pour la CI : `gh pr checks` puis `gh run view <id> --log-failed` pour voir l'erreur exacte avant de corriger.
+3. Pour la CI : `gh pr checks` puis `gh run view <id> --log-failed` pour voir l'erreur exacte avant de corriger. Un échec de CI isolé est normalement traité par `relais:fix-ci` : applique ses règles (reproduire en local, ne jamais désactiver ni affaiblir un test ou une étape de CI).
 4. Corrige chaque point, avec un test quand le retour décrit un bug.
 5. Relance les tests concernés jusqu'au vert, commite (`<ID>: retours de review`), pousse avec `git push`.
 

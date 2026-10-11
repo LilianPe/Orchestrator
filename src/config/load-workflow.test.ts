@@ -33,7 +33,8 @@ describe('loadWorkflow', () => {
     expect(fb.skill).toBe('relais:feedback');
     expect(fb.onStart).toEqual({});
     expect(wf.jobs['fix-ci']!.input).toBe('ci_failures');
-    expect(wf.jobs['fix-ci']!.skill).toBe('relais:feedback');
+    expect(wf.jobs['fix-ci']!.skill).toBe('relais:fix-ci');
+    expect(wf.jobs['fix-ci']!.session).toBe('resume');
     expect(wf.jobs['remember']!.workspace).toBe('knowledge');
     expect(wf.jobs['ask']!.limits.usd).toBe(0.5);
     expect(wf.jobs['dev']!.limits.turns).toBe(150);
