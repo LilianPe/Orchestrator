@@ -1,48 +1,90 @@
-import type { Clock } from '../../core/clock.js';
-import type { ProjectRuntime } from '../../core/orchestrator.js';
-import type { RelaisEvent } from '../../core/types.js';
-import type { Store } from '../../store/types.js';
-import type { Forge } from './types.js';
+import type { Clock } from "../../core/clock.js";
+import type { ProjectRuntime } from "../../core/orchestrator.js";
+import type { RelaisEvent, TicketState } from "../../core/types.js";
+import type { Store } from "../../store/types.js";
+import type { Forge } from "./types.js";
 
 export class PrPoller {
   private handle: NodeJS.Timeout | undefined;
   private running = false;
 
   constructor(
-    private d: { store: Store; forge: Forge; projects: ProjectRuntime[]; submit: (e: RelaisEvent) => void; clock: Clock; log: (m: string) => void },
+    private d: {
+      store: Store;
+      forge: Forge;
+      projects: ProjectRuntime[];
+      submit: (e: RelaisEvent) => void;
+      clock: Clock;
+      log: (m: string) => void;
+    },
   ) {}
 
   async pollOnce(): Promise<void> {
     for (const t of this.d.store.listTickets()) {
-      if (!t.branch || t.logical === 'done') continue;
+      try {
+        await this.pollTicket(t);
+      } catch (err) {
+        this.d.log(`pr poll ${t.ticketId}: ${(err as Error).message}`);
+      }
+    }
+  }
+
+  private async pollTicket(t: TicketState): Promise<void> {
+    {
+      if (!t.branch || t.logical === "done") return;
       const project = this.d.projects.find((p) => p.id === t.projectId);
-      if (!project) continue;
+      if (!project) return;
       let pr;
       try {
         pr = await this.d.forge.findPr(project.repoPath, t.branch);
       } catch (err) {
         this.d.log(`pr poll ${t.ticketId}: ${(err as Error).message}`);
-        continue;
+        return;
       }
-      if (!pr) continue;
+      if (!pr) return;
       const at = this.d.clock.now();
       const base = { at, projectId: t.projectId, ticketId: t.ticketId };
       const payload = { number: pr.number, url: pr.url, branch: pr.branch };
-      if (t.prNumber !== pr.number) this.d.submit({ ...base, id: `pr:${t.ticketId}:${pr.number}:opened`, type: 'pr.opened', payload });
-      if (pr.state === 'MERGED') {
-        this.d.submit({ ...base, id: `pr:${t.ticketId}:${pr.number}:merged`, type: 'pr.merged', payload });
-        continue;
+      if (t.prNumber !== pr.number)
+        this.d.submit({
+          ...base,
+          id: `pr:${t.ticketId}:${pr.number}:opened`,
+          type: "pr.opened",
+          payload,
+        });
+      if (pr.state === "MERGED") {
+        this.d.submit({
+          ...base,
+          id: `pr:${t.ticketId}:${pr.number}:merged`,
+          type: "pr.merged",
+          payload,
+        });
+        return;
       }
-      if (pr.state === 'CLOSED') {
-        this.d.submit({ ...base, id: `pr:${t.ticketId}:${pr.number}:closed`, type: 'pr.closed', payload });
-        continue;
+      if (pr.state === "CLOSED") {
+        this.d.submit({
+          ...base,
+          id: `pr:${t.ticketId}:${pr.number}:closed`,
+          type: "pr.closed",
+          payload,
+        });
+        return;
       }
       const metaKey = `checks:${t.projectId}:${t.ticketId}`;
-      if ((pr.checks === 'pass' || pr.checks === 'fail') && this.d.store.getMeta(metaKey) !== pr.checks) {
-        this.d.store.setMeta(metaKey, pr.checks);
+      if (pr.checks === "none") return;
+      const last = this.d.store.getMeta(metaKey);
+      if (pr.checks !== last) {
         const id = `pr:${t.ticketId}:${pr.number}:checks:${pr.checks}:${at}`;
-        if (pr.checks === 'fail') this.d.submit({ ...base, id, type: 'pr.checks_failed', payload: { ...payload, failures: pr.failedChecks } });
-        else this.d.submit({ ...base, id, type: 'pr.checks_passed', payload });
+        if (pr.checks === "fail")
+          this.d.submit({
+            ...base,
+            id,
+            type: "pr.checks_failed",
+            payload: { ...payload, failures: pr.failedChecks },
+          });
+        else if (pr.checks === "pass")
+          this.d.submit({ ...base, id, type: "pr.checks_passed", payload });
+        this.d.store.setMeta(metaKey, pr.checks);
       }
     }
   }
@@ -52,7 +94,9 @@ export class PrPoller {
     this.handle = setInterval(() => {
       if (this.running) return;
       this.running = true;
-      void this.pollOnce().finally(() => (this.running = false));
+      void this.pollOnce()
+        .catch((e: Error) => this.d.log(`pr poll: ${e.message}`))
+        .finally(() => (this.running = false));
     }, intervalMs);
   }
 
