@@ -63,9 +63,11 @@ export class ClaudeCodeRunner implements Runner {
         }
       }
     };
+    let killTimer: NodeJS.Timeout | undefined;
     const interrupt = () => {
       signal('SIGINT');
-      setTimeout(() => signal('SIGKILL'), this.o.killGraceMs ?? 10_000).unref();
+      killTimer ??= setTimeout(() => signal('SIGKILL'), this.o.killGraceMs ?? 10_000);
+      killTimer.unref();
     };
     transcript.on('error', (e) => (stderr = (stderr + `\n[transcript] ${e.message}`).slice(-10_000)));
     const limit = () => {
@@ -98,6 +100,7 @@ export class ClaudeCodeRunner implements Runner {
         if (finished) return;
         finished = true;
         clearTimeout(timer);
+        clearTimeout(killTimer);
         ch.close();
         const outcome: RunOutcome = stopped ? 'stopped' : limited ? 'limit' : result && !result.isError ? 'success' : 'failure';
         const text = result?.text || lastText || (spawnError ? spawnError.message : stderr.trim().slice(-2000));
