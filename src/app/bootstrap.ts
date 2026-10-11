@@ -213,7 +213,11 @@ export async function startRelais(o: BootOptions): Promise<{ url: string; stop()
       reconciler.stop();
       orchestrator.stopAll();
       await orchestrator.idle();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+        // Long-lived SSE streams (/api/events) would otherwise keep close() pending forever.
+        (server as unknown as { closeAllConnections(): void }).closeAllConnections();
+      });
       store.close();
     },
   };
