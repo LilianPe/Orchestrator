@@ -12,7 +12,13 @@ const TYPES: Record<string, string> = {
 
 export function readStatic(webDir: string, urlPath: string): { body: Buffer; type: string } | undefined {
   const root = normalize(webDir + sep);
-  let file = normalize(join(webDir, decodeURIComponent(urlPath)));
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(urlPath);
+  } catch {
+    return undefined;
+  }
+  let file = normalize(join(webDir, decoded));
   if (!file.startsWith(root) && file !== normalize(webDir)) return undefined;
   if (!existsSync(file) || statSync(file).isDirectory()) file = join(webDir, 'index.html');
   if (!existsSync(file)) return undefined;

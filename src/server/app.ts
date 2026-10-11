@@ -33,6 +33,10 @@ function startOfUtcDay(ts: number): number {
   return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
 }
 
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
 function publicRun({ token: _t, ...rest }: RunRecord) {
   return rest;
 }
@@ -55,7 +59,7 @@ export function createApp(d: ServerDeps): Hono {
       await d.oauth.callback(c.req.query('code') ?? '', c.req.query('state') ?? '');
       return c.html('<p>Linear est connecté. Vous pouvez fermer cet onglet.</p>');
     } catch (err) {
-      return c.html(`<p>Connexion Linear impossible : ${(err as Error).message}</p>`, 400);
+      return c.html(`<p>Connexion Linear impossible : ${escapeHtml((err as Error).message)}</p>`, 400);
     }
   });
 
@@ -109,7 +113,15 @@ export function createApp(d: ServerDeps): Hono {
     const file = join(d.transcriptsDir, `${id}.jsonl`);
     if (!existsSync(file)) return c.notFound();
     const lines = readFileSync(file, 'utf8').split('\n').filter(Boolean);
-    return c.json(lines.map((l) => JSON.parse(l)));
+    const parsed: unknown[] = [];
+    for (const l of lines) {
+      try {
+        parsed.push(JSON.parse(l));
+      } catch {
+        // skip a half-written line
+      }
+    }
+    return c.json(parsed);
   });
 
   const control = (type: 'control.pause' | 'control.resume') => (c: Context) => {

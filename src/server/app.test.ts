@@ -29,7 +29,7 @@ function setup() {
     id: 'r1', projectId: 'p', ticketId: 'REL-1', job: 'dev', queue: 'dev', status: 'running', claudeSessionId: 'c', linearSessionId: 'ls-1',
     startedAt: 1, costUsd: 0.5, turns: 2, lastText: '', token: 'tok', cwd: '/w',
   });
-  return { app, store, tracker, submitted, linearWebhook, transcriptsDir };
+  return { app, store, tracker, submitted, linearWebhook, transcriptsDir, webDir };
 }
 
 describe('server', () => {
@@ -81,5 +81,28 @@ describe('server', () => {
     expect(await (await app.request('/api/runs/r1/transcript')).json()).toEqual([{ type: 'system' }, { type: 'result' }]);
     expect(await (await app.request('/')).text()).toContain('Relais');
     expect(await (await app.request('/some/route')).text()).toContain('Relais');
+  });
+
+  it('does not serve files outside webDir', async () => {
+    const { app, webDir } = setup();
+    writeFileSync(join(webDir, '..', 'relais-secret.txt'), 'TOPSECRET');
+    for (const path of ['/%2e%2e/relais-secret.txt', '/..%2frelais-secret.txt', '/../relais-secret.txt']) {
+      const res = await app.request(path);
+      expect(await res.text()).not.toContain('TOPSECRET');
+    }
+  });
+
+  it('returns 404 on a malformed URI without throwing', async () => {
+    const { app } = setup();
+    const res = await app.request('/%E0%A4%A');
+    expect(res.status).toBe(404);
+  });
+
+  it('skips a truncated last transcript line', async () => {
+    const { app, transcriptsDir } = setup();
+    writeFileSync(join(transcriptsDir, 'r2.jsonl'), '{"type":"system"}\n{"type":"res');
+    const res = await app.request('/api/runs/r2/transcript');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual([{ type: 'system' }]);
   });
 });
