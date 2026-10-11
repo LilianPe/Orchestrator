@@ -29,6 +29,7 @@ export interface PrPayload {
 
 export interface EventPayloads {
   'ticket.delegated': { linearSessionId?: string; promptContext?: string };
+  'ticket.undelegated': Record<string, never>;
   'session.mentioned': { linearSessionId: string; body: string; author: string };
   'session.prompted': { linearSessionId: string; body: string; author: string };
   'session.stopped': { linearSessionId?: string };
@@ -67,6 +68,10 @@ export interface TicketState {
   ticketId: string;
   title: string;
   logical: LogicalState;
+  /** True only while the ticket is delegated to the app user: only then does it get dev-queue work. */
+  delegated: boolean;
+  /** Linear sessions opened by a mention or a command on this ticket: replies there are questions, never feedback. */
+  questionSessionIds: string[];
   blocked: boolean;
   blockReason?: string;
   claudeSessionId?: string;
@@ -79,12 +84,18 @@ export interface TicketState {
   worktreePath?: string;
   port?: number;
   activeRunId?: string;
+  verifyingRunId?: string;
   pendingJob?: { job: string; input?: InputKind; inputText?: string; resume?: boolean };
   verifyAttempts: number;
   pendingFeedback: FeedbackItem[];
   priority: number;
   costUsd: number;
   updatedAt: number;
+}
+
+/** Fills fields added after a row was first persisted. */
+export function normalizeTicket(t: TicketState): TicketState {
+  return { ...t, delegated: t.delegated ?? false, questionSessionIds: t.questionSessionIds ?? [] };
 }
 
 export function newTicketState(
@@ -100,6 +111,8 @@ export function newTicketState(
     ticketId,
     title,
     logical,
+    delegated: false,
+    questionSessionIds: [],
     blocked: false,
     verifyAttempts: 0,
     pendingFeedback: [],
