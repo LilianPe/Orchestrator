@@ -45,7 +45,7 @@ Sans tokens, pour tester l'interface : `relais up --fake-runner`.
 - [Configuration du démon](docs/configuration.md) : variables d'environnement, `config.yaml`, `secrets.json`, budget journalier, ports, secrets.
 - [Personnaliser `workflow.yml`](docs/workflow.md) : événements, jobs, modèles, limites, vérifications, recettes.
 - [Projets, worktrees et base de connaissance](docs/projets-et-workspaces.md) : plusieurs dépôts, worktrees par ticket, `workspace.setup`, ports, nettoyage, dépôt de connaissance.
-- [Pack et skills](docs/pack-et-skills.md) : skills du pack, règles toujours actives, permissions, créer un skill.
+- [Pack et skills](docs/pack-et-skills.md) : skills de job et skills de méthode (TDD, débogage, vérification, review à niveaux), règles toujours actives, permissions, personnaliser ou créer un skill.
 
 ### Utiliser
 - [Ligne de commande](docs/cli.md) : `relais init|up|plan|status|pause|resume|stop` et `relais-agent`.

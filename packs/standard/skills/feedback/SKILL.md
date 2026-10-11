@@ -5,16 +5,35 @@ description: Appliquer des retours de review (Linear, GitHub, vérifications ou 
 
 # relais:feedback
 
-Tu reprends la session de dev du ticket. Le bloc « Retours à traiter », « Vérifications en échec » ou « CI en échec » liste ce qu'il faut corriger.
+Tu reprends la session de dev du ticket, dans son worktree et sur sa branche, déjà poussée. Le bloc « Retours à traiter », « Vérifications en échec » ou « CI en échec » liste ce qu'il faut traiter. Tu es seul pendant ton tour ; ton seul canal vers un humain est `relais-agent ask "<question>"`, puis fin du tour.
 
-## Étapes
+## 1. Rassembler
 
-1. Lis chaque retour. Pour un retour ancré sur un fichier (`chemin:ligne — texte`), ouvre ce fichier à cette ligne.
-2. Un retour ambigu ou contradictoire avec le ticket : pose UNE question avec `relais-agent ask` et termine ton tour.
-3. Pour la CI : `gh pr checks` puis `gh run view <id> --log-failed` pour voir l'erreur exacte avant de corriger. Un échec de CI isolé est normalement traité par `relais:fix-ci` : applique ses règles (reproduire en local, ne jamais désactiver ni affaiblir un test ou une étape de CI).
-4. Corrige chaque point, avec un test quand le retour décrit un bug.
-5. Relance les tests concernés jusqu'au vert, commite (`<ID>: retours de review`), pousse avec `git push`.
+- **Retours à traiter** : messages du fil Linear et commentaires de review GitHub non résolus, avec leur auteur. Le bloc dit « aucun retour écrit » : relis le fil Linear du ticket et la PR (`gh pr view <branche> --comments`) pour trouver ce qui est demandé.
+- **Vérifications en échec** : les commandes de `verify` du projet, leur code de sortie et la fin de leur sortie. C'est un symptôme : `relais:debugging`.
+- **CI en échec** : applique `relais:fix-ci` (lire l'échec exact, reproduire en local, classer la cause ; jamais désactiver ni affaiblir un test ou une étape de CI).
+- Vérifie où en est la branche : `git status` (rien d'inattendu en cours), `git log --oneline -10`.
+
+## 2. Traiter avec `relais:receiving-review`
+
+Lis tous les retours, puis applique `relais:receiving-review` : comprendre chacun, vérifier sa prémisse et sa correction dans le code, corriger ce qui est juste avec sa preuve (`relais:tdd`), refuser avec une raison ce qui ne l'est pas.
+
+- Un retour humain ambigu ou contraire au ticket : UNE question avec `relais-agent ask`, après avoir traité les retours indépendants.
+- Un retour qui demande autre chose que le ticket (nouvelle fonctionnalité) : réponds qu'il mérite son propre ticket, sauf si l'humain le demande explicitement dans ce ticket.
+- Un commit par cause, message `<ID>: <ce qui est corrigé>`. Jamais d'`--amend` ni de réécriture : la branche est poussée.
+
+## 3. Vérifier et pousser
+
+1. `relais:verification` : les tests de ce que tu as changé, la vérification de types et le lint du dépôt s'ils existent ; pour des vérifications en échec, rejoue exactement la commande qui a échoué.
+2. Conflit avec la base de la PR : `git fetch origin`, puis `git merge-tree --write-tree --name-only origin/<base> HEAD` (base : `gh pr view <branche> --json baseRefName --jq .baseRefName`). Code 1 : fusionne la base (`git merge --no-edit origin/<base>`), résous chaque hunk lu avec Edit en gardant l'intention des deux côtés, `git add`, `git commit --no-edit`, relance tests et types. Contradiction entre les deux côtés, deux migrations sur les mêmes tables, ou résolution hors périmètre : `git merge --abort` et question.
+3. Pousse vers la destination nommée : `git push origin HEAD:refs/heads/<branche>`, puis vérifie que `git ls-remote origin refs/heads/<branche>` montre `git rev-parse HEAD`.
+
+## Interdits
+
+Ne merge jamais la PR. Ne force-push jamais, ne réécris pas l'historique, ne rebase pas une branche poussée. Ne pousse jamais sur le tronc. Ne change pas de branche. Ne désactive ni n'affaiblis aucun test ou étape de CI.
 
 ## Dernier message (publié dans Linear)
 
-En français, une puce par retour : `- <retour résumé> → <ce qui a été fait> (<sha court>)`. Termine par les retours non traités et pourquoi, s'il y en a.
+En français, une puce par retour : `- <retour résumé> → <ce qui a été fait> (<sha court>)`, ou `→ non appliqué : <raison>`. Puis une ligne **Vérifié** (commandes et résultat). Termine par les retours non traités et pourquoi, s'il y en a.
+
+Si tu poses une question avec `relais-agent ask`, ce dernier message n'est pas publié : la question doit dire aussi ce qui a déjà été traité.
