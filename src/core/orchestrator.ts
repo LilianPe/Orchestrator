@@ -78,6 +78,11 @@ function startOfUtcDay(ts: number): number {
   return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
 }
 
+type RecoveryNotice = ({ ticket: { projectId: string; ticketId: string } } | { sessionId: string }) & {
+  type: 'elicitation' | 'error';
+  body: string;
+};
+
 export class Orchestrator {
   private chain: Promise<void> = Promise.resolve();
   private background = new Map<Promise<void>, string | undefined>();
@@ -86,10 +91,7 @@ export class Orchestrator {
   private handles = new Map<string, RunHandle>();
   private stopping = false;
   /** French notices for Linear, collected by recover() and posted once Linear is reachable. */
-  private recoveryNotices: ({ ticket: { projectId: string; ticketId: string } } | { sessionId: string }) & {
-    type: 'elicitation' | 'error';
-    body: string;
-  }[] = [];
+  private recoveryNotices: RecoveryNotice[] = [];
   private newId: () => string;
 
   constructor(private d: OrchestratorDeps) {
