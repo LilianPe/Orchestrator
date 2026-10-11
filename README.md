@@ -11,8 +11,6 @@ relais up            # http://localhost:4100, puis « Connecter Linear »
 Sans tokens, pour tester l'interface : `relais up --fake-runner`.
 
 ## Documents
-- Spec : `docs/superpowers/specs/2026-10-10-relais-mvp-design.md`
-- Plan : `docs/superpowers/plans/2026-10-10-relais-mvp.md`
 - Recette : `docs/recette.md`
 
 ## Développement
