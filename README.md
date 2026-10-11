@@ -11,6 +11,7 @@ relais up            # http://localhost:4100, puis « Connecter Linear »
 Sans tokens, pour tester l'interface : `relais up --fake-runner`.
 
 ## Documents
+- Personnaliser le comportement (`.relais/workflow.yml`) : [`docs/workflow.md`](docs/workflow.md)
 - Recette : `docs/recette.md`
 
 ## Développement
