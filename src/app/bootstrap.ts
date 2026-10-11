@@ -22,6 +22,7 @@ import { logicalFromName, Orchestrator, type ProjectRuntime } from '../core/orch
 import { Scheduler } from '../core/scheduler.js';
 import { TimerService } from '../core/timers.js';
 import { runVerify } from '../core/verify.js';
+import { KnowledgeBase } from '../knowledge/kb.js';
 import { startSmeeRelay } from '../relay/smee.js';
 import { createApp } from '../server/app.js';
 import { SqliteStore } from '../store/sqlite-store.js';
@@ -98,8 +99,12 @@ export async function startRelais(o: BootOptions): Promise<{ url: string; stop()
   const runner: Runner = o.fakeRunner ? new FakeRunner() : new ClaudeCodeRunner({ transcriptsDir: paths.transcripts });
   const workspaces = new GitWorkspaces({ root: paths.workspaces, knowledgeRepo: instance.knowledge?.repoPath });
   const forge = new GhCliForge();
+  const kb = instance.knowledge ? new KnowledgeBase(instance.knowledge.repoPath) : undefined;
 
   const orchestrator = new Orchestrator({
+    beforeRun: async () => {
+      if (kb) await kb.pull();
+    },
     store,
     clock,
     bus,
@@ -149,6 +154,7 @@ export async function startRelais(o: BootOptions): Promise<{ url: string; stop()
 
   const oauthStates = new Set<string>();
   const app = createApp({
+    knowledgeSearch: kb ? (q) => kb.search(q) : undefined,
     store,
     bus,
     clock,
