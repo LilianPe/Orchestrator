@@ -117,6 +117,7 @@ export async function startRelais(o: BootOptions): Promise<{ url: string; stop()
     projects,
     packDir,
     dailyBudgetUsd: instance.limits.perDayUsd,
+    knowledgeConfigured: !!instance.knowledge,
     agentEnv: (run) => ({
       RELAIS_API: `http://127.0.0.1:${port}/agent`,
       RELAIS_RUN_TOKEN: run.token,

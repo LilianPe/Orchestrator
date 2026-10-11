@@ -17,7 +17,7 @@ import { SqliteStore } from '../../src/store/sqlite-store.js';
 
 export const packDir = join(import.meta.dirname, '../../packs/standard');
 
-export function createHarness(opts: { projectYaml?: string; verify?: Verifier } = {}) {
+export function createHarness(opts: { projectYaml?: string; verify?: Verifier; knowledge?: boolean } = {}) {
   let projectFile: string | undefined;
   if (opts.projectYaml) {
     projectFile = join(mkdtempSync(join(tmpdir(), 'relais-h-')), 'workflow.yml');
@@ -47,6 +47,7 @@ export function createHarness(opts: { projectYaml?: string; verify?: Verifier } 
     agentEnv: (r) => ({ RELAIS_RUN_TOKEN: r.token }),
     newId: () => `id-${++n}`,
     activityIntervalMs: 0,
+    knowledgeConfigured: opts.knowledge,
   });
   let orch = build();
   const timers = new TimerService(store, clock, (e) => void orch.submit(e));

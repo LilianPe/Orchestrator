@@ -50,6 +50,8 @@ export interface OrchestratorDeps {
   newId?: () => string;
   activityIntervalMs?: number;
   beforeRun?: (run: RunRecord) => Promise<void>;
+  /** False when no knowledge repo is configured: `knowledge` jobs (learn, remember) are then skipped. Default true. */
+  knowledgeConfigured?: boolean;
 }
 
 interface StartOpts {
@@ -463,6 +465,15 @@ export class Orchestrator {
     const t = this.ticket(project.id, ticketId);
     if (job.queue === 'dev' && !t.delegated) {
       return this.log('warn', `refused ${job.name} on ${ticketId}: the ticket is not delegated to Relais`);
+    }
+    if (job.workspace === 'knowledge' && this.d.knowledgeConfigured === false) {
+      this.log('info', `skipped ${job.name} on ${ticketId}: no knowledge repo configured`);
+      if (opts.linearSessionId) {
+        await this.d.tracker
+          .activity(opts.linearSessionId, { type: 'response', body: "Aucune base de connaissance n'est configurée pour Relais : je ne peux rien retenir." })
+          .catch((err: Error) => this.log('warn', `could not answer ${ticketId}: ${err.message}`));
+      }
+      return;
     }
     const item = {
       projectId: project.id,

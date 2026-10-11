@@ -272,6 +272,26 @@ describe('standard workflow', () => {
     });
   });
 
+  describe('M2: without a knowledge repo', () => {
+    it('a merge skips learn without blocking the ticket or posting an error', async () => {
+      const h = createHarness({ knowledge: false });
+      await delegatedAndInReview(h);
+      await h.send('pr.merged', { number: 3, url: 'https://gh/pr/3', branch: 'relais/rel-1-export-csv' });
+      expect(h.ticket()).toMatchObject({ logical: 'done', blocked: false });
+      expect(h.runner.requests).toHaveLength(1);
+      expect(h.tracker.activities().filter((a) => a.type === 'error')).toEqual([]);
+    });
+
+    it('"retiens" answers that no knowledge base is configured, without a run', async () => {
+      const h = createHarness({ knowledge: false });
+      h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+      await h.send('command', { name: 'retiens', body: 'un fait', linearSessionId: 'ls-10', author: 'L' });
+      expect(h.runner.requests).toHaveLength(0);
+      expect(h.ticket().blocked).toBe(false);
+      expect(h.tracker.activities('ls-10').at(-1)).toMatchObject({ type: 'response', body: expect.stringContaining('base de connaissance') });
+    });
+  });
+
   it('respects the parallel cap and drains the queue', async () => {
     const h = createHarness({ projectYaml: 'version: 1\nlimits: { parallel_sessions: 1 }\n' });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Un' });
