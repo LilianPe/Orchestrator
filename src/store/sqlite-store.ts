@@ -1,5 +1,5 @@
 import { DatabaseSync } from 'node:sqlite';
-import type { QueueName, RelaisEvent, TicketState } from '../core/types.js';
+import { normalizeTicket, type QueueName, type RelaisEvent, type TicketState } from '../core/types.js';
 import type { QueueItem, RunRecord, Store, TimerRecord } from './types.js';
 
 const SCHEMA = `
@@ -28,7 +28,7 @@ export class SqliteStore implements Store {
     const row = this.db.prepare('SELECT data FROM tickets WHERE project_id = ? AND ticket_id = ?').get(projectId, ticketId) as
       | { data: string }
       | undefined;
-    return row ? (JSON.parse(row.data) as TicketState) : undefined;
+    return row ? normalizeTicket(JSON.parse(row.data) as TicketState) : undefined;
   }
 
   putTicket(t: TicketState): void {
@@ -38,7 +38,7 @@ export class SqliteStore implements Store {
   }
 
   listTickets(): TicketState[] {
-    return (this.db.prepare('SELECT data FROM tickets').all() as { data: string }[]).map((r) => JSON.parse(r.data));
+    return (this.db.prepare('SELECT data FROM tickets').all() as { data: string }[]).map((r) => normalizeTicket(JSON.parse(r.data) as TicketState));
   }
 
   recordEvent(e: RelaisEvent): boolean {

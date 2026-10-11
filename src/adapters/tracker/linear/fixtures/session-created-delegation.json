@@ -1,0 +1,3 @@
+{ "type": "AgentSessionEvent", "action": "created", "webhookTimestamp": 1000,
+  "agentSession": { "id": "as-1", "issue": { "id": "u1", "identifier": "REL-1", "title": "Export" }, "comment": null, "creator": { "name": "Lilian" } },
+  "promptContext": "<issue identifier=\"REL-1\">Export</issue>" }

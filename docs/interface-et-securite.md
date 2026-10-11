@@ -1,0 +1,73 @@
+# Interface web et sécurité
+
+## L'interface
+
+`relais up` sert une interface web sur `http://localhost:<port>` (4100 par défaut). Elle nécessite `npm run build` (dossier `web/dist`) ; sans lui, seules l'API et les webhooks répondent.
+
+Ce qu'elle montre, en direct :
+
+- **En-tête** : places occupées (`dev`, `questions`), longueur de la file, coût du jour et budget, indicateur « en direct » ; boutons **Connecter Linear** (tant que Linear n'est pas connecté) et **Pause / Reprendre**.
+- **Tickets** : identifiant, titre, état logique, `bloqué` (la raison au survol), coût cumulé ; bouton **Stop** sur un ticket qui a un run en cours. Cliquer un identifiant ouvre son run.
+- **Session en direct** : la sortie du run sélectionné (texte, appels d'outils), reçue en direct depuis l'ouverture de la page. Le transcript complet d'un run reste disponible par l'API (`/api/runs/<id>/transcript`) et dans `<RELAIS_HOME>/transcripts/`.
+- **Journal** : les derniers messages du démon et les événements reçus.
+
+Le direct passe par un flux **SSE** (`GET /api/events`) avec un `ping` toutes les 15 s.
+
+Développement de l'interface : `npm run dev:web` lance Vite sur le port 5173 avec un proxy de `/api` et `/oauth` vers `http://127.0.0.1:4100` (un `relais up` doit tourner).
+
+## Ce que le serveur expose
+
+| Route | Rôle | Protection |
+|---|---|---|
+| `GET /` et fichiers statiques | Interface | mot de passe (hors bouclage) |
+| `GET /api/state` | État : tickets, file, runs actifs (sans leurs jetons), coût, capacité | mot de passe |
+| `GET /api/events`, `GET /api/events/recent` | Flux SSE, 100 derniers événements | mot de passe |
+| `GET /api/runs/:id/transcript` | Transcript d'un run | mot de passe |
+| `POST /api/control/pause`, `/api/control/resume` | Pause / reprise | mot de passe + contrôle d'origine |
+| `POST /api/tickets/:projet/:ticket/stop` | Arrêt d'un run | mot de passe + contrôle d'origine |
+| `GET /oauth/start` | Démarre la connexion Linear | mot de passe |
+| `GET /oauth/callback` | Retour OAuth de Linear | paramètre `state` aléatoire, à usage unique |
+| `POST /webhooks/linear` | Webhooks Linear | signature HMAC + fraîcheur 60 s |
+| `/agent/*` | API des agents (`relais-agent`) | jeton du run en cours (`Authorization: Bearer`) |
+
+## Exposition réseau et mot de passe
+
+Par défaut Relais écoute sur `127.0.0.1` : seule la machine locale y accède, sans mot de passe.
+
+Pour l'exposer (serveur, Docker), mettez `host: 0.0.0.0` (ou une adresse précise) dans `config.yaml`. Relais **refuse alors de démarrer** sans la variable `RELAIS_UI_PASSWORD` :
+
+> host: 0.0.0.0 expose l'interface et l'API de Relais hors de cette machine. Définissez la variable d'environnement RELAIS_UI_PASSWORD (mot de passe de l'interface), ou remettez host: 127.0.0.1 dans config.yaml.
+
+Avec le mot de passe, tout passe par une authentification **HTTP Basic** (nom d'utilisateur libre, mot de passe = `RELAIS_UI_PASSWORD`, comparé en temps constant), sauf trois routes qui ont leur propre protection : `POST /webhooks/linear`, `GET /oauth/callback` et `/agent/*`. Vérification : `curl -i https://<domaine>/api/state` doit répondre 401.
+
+Les commandes `relais status|pause|resume|stop` envoient `RELAIS_UI_PASSWORD` si la variable est définie dans le shell.
+
+Le Basic auth transmet le mot de passe à chaque requête : derrière une exposition Internet, mettez Relais derrière un proxy **HTTPS** (Caddy, nginx, Traefik, tunnel Cloudflare) et réglez `publicUrl` sur l'URL HTTPS.
+
+## Protection CSRF
+
+Toute requête `POST` (et autre méthode non `GET`/`HEAD`) sur `/api/*` qui porte un en-tête `Origin` est refusée (403 `cross-origin request refused`) si cet `Origin` ne correspond pas à l'hôte du serveur. Une page tierce ouverte dans votre navigateur ne peut donc pas mettre la file en pause ni arrêter un run, même en local sans mot de passe. Les outils sans `Origin` (CLI, `curl`) ne sont pas concernés.
+
+Derrière un proxy, l'en-tête `Host` transmis à Relais doit être celui de l'URL publique, sinon les boutons de l'interface sont refusés.
+
+## Jetons des agents
+
+Chaque run reçoit un `RELAIS_RUN_TOKEN` aléatoire. L'API `/agent/*` ne l'accepte que tant que ce run est `running`. Ce jeton :
+
+- ne lit que **le ticket du run** (`/agent/issue/<autre ticket>` → 403) ;
+- peut chercher des tickets, chercher dans la base de connaissance et poser une question dans la session du ticket ;
+- n'apparaît pas dans `/api/state`.
+
+`RELAIS_API` pointe toujours sur `http://127.0.0.1:<port>/agent` : les agents parlent au démon en local.
+
+## Secrets
+
+Où ils sont et comment ils restent dans le démon : [`configuration.md`](configuration.md#ce-qui-ne-sort-pas-du-démon). En résumé : `secrets.json` en `0600`, environnement des runs sans `RELAIS_*` ni `LINEAR_*`, jeton Linear jamais transmis aux agents, `run-settings.json` qui interdit aux runs de lire les fichiers sensibles de `RELAIS_HOME`.
+
+## Limites connues
+
+- **Même utilisateur système.** Les runs tournent sous le même utilisateur que le démon. Les refus de Claude Code sont indicatifs : un agent qui exécute du code (`node -e …`, autorisé par le pack) peut lire `secrets.json` ou `relais.db`. Une injection dans un ticket ou un commentaire pourrait l'y pousser. **Ne confiez pas à Relais des tickets écrits par des personnes non fiables** tant que les runs ne tournent pas sous un utilisateur séparé.
+- **Secrets transmis aux runs.** `ANTHROPIC_API_KEY`, `GH_TOKEN` et les autres variables du démon hors `RELAIS_*`/`LINEAR_*` sont visibles des agents (ils en ont besoin). Donnez au compte GitHub les droits minimaux ([`github.md`](github.md#permissions-nécessaires)).
+- **Canal smee public.** Le contenu des webhooks transite par smee.io et y est lisible par qui connaît l'URL ([`linear.md`](linear.md#3-webhooks--smee-ou-url-publique)).
+- **Merge.** Seule la protection de branche GitHub garantit que l'agent ne merge pas ([`github.md`](github.md#protection-de-branche-fortement-conseillée)).
+- **Transcripts.** `transcripts/` contient tout ce que les agents ont lu et écrit ; protégez `RELAIS_HOME` en conséquence.
