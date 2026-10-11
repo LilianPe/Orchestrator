@@ -4,7 +4,8 @@ export type ActivityType = 'thought' | 'response' | 'elicitation' | 'error';
 
 export type Command =
   | { kind: 'start_run'; job: string; input?: InputKind; inputText?: string; linearSessionId?: string; resume?: boolean }
-  | { kind: 'stop_run' }
+  /** Without linearSessionId: stop the ticket's dev work. With it: stop only the runs of that (question) session. */
+  | { kind: 'stop_run'; linearSessionId?: string }
   | { kind: 'run_verify'; runId: string; job: string }
   | { kind: 'move'; to: LogicalState }
   | { kind: 'labels'; add: string[]; remove: string[] }

@@ -1,6 +1,6 @@
 # Recette Relais (Linear de test)
 
-Prérequis : Node 24, `gh` connecté, `claude` connecté, un espace Linear de test dont vous êtes admin, un petit dépôt GitHub avec des tests.
+Prérequis : Node 24, `gh` connecté, `claude` connecté, un espace Linear de test dont vous êtes admin, un petit dépôt GitHub avec des tests, avec une **protection de branche sur la branche par défaut** (PR obligatoire, force-push interdit) : les refus du pack ne sont qu'une première barrière, c'est GitHub qui garantit que seuls les humains mergent.
 
 ## 0. Installation
 ```bash
@@ -33,6 +33,9 @@ Déléguer un ticket, pendant le run cliquer « Send stop request » dans Linear
 
 ## 8. Docker (critère 8)
 `docker compose up --build` sur une machine Linux avec `data/config.yaml` adapté (`host: 0.0.0.0`, `publicUrl: https://<domaine>`, `relay: { kind: none }`, `repoPath` sous `/repos`). Attendu : interface sur le port 4100, même comportement que 3.
+Variables obligatoires (compose refuse de démarrer sinon) : `ANTHROPIC_API_KEY`, `GH_TOKEN`, `RELAIS_UI_PASSWORD`. Optionnelles : `GIT_AUTHOR_NAME` / `GIT_AUTHOR_EMAIL` (identité des commits, `Relais <relais@localhost>` par défaut).
+Le conteneur tourne sous l'utilisateur `node` (uid 1000) : `data/` et `repos/` doivent lui être accessibles en écriture (`sudo chown -R 1000:1000 data repos`). Au démarrage, `gh auth setup-git` branche `GH_TOKEN` sur git : les dépôts sous `/repos` doivent avoir un remote **HTTPS** (`https://github.com/...`), pas SSH (aucune clé dans le conteneur). Vérifier : `docker compose exec relais git -C /repos/<dépôt> remote -v`.
+Avec `host` différent de `127.0.0.1`, Relais refuse de démarrer sans `RELAIS_UI_PASSWORD` : l'interface, `/api/*` et `/oauth/start` demandent alors une authentification HTTP Basic (nom d'utilisateur libre, mot de passe = `RELAIS_UI_PASSWORD`). Restent ouverts : `POST /webhooks/linear` (signé), `GET /oauth/callback` et `/agent/*` (jeton de run). Vérifier : `curl -i https://<domaine>/api/state` répond 401 ; la CLI (`relais status`) utilise la même variable.
 
 ## Vérifications live optionnelles
 - `LINEAR_API_KEY=<clé perso> npx vitest run src/adapters/tracker/linear/queries.live.test.ts` : toutes les requêtes valident contre le schéma Linear.
@@ -44,3 +47,9 @@ Déléguer un ticket, pendant le run cliquer « Send stop request » dans Linear
 3. Linear accepte-t-il une URL de callback OAuth en `http://localhost` (sinon procédure cloudflared déjà décrite) ? Observer : la connexion de l'étape 2 aboutit, ou l'erreur de Linear.
 4. Le daemon annonce `http://localhost:4100` mais écoute sur `127.0.0.1` : si `localhost` résout d'abord en `::1`, le lien ne répond pas. Observer : si le lien ne répond pas, utiliser `http://127.0.0.1:4100`.
 5. Le dépôt de base de connaissance (`knowledge.repoPath`) doit rester sur sa branche par défaut : Relais y fait un `fetch` + `merge --ff-only` avant chaque run. Observer : aucun échec de `merge --ff-only` dans les logs d'un run.
+6. La version de Claude Code installée applique-t-elle les jokers en milieu de motif (`Bash(git push * --force*)`, `Bash(git push *+*)`, `Bash(git push * *:main*)`) ? Observer : dans un worktree de test, demander à une session lancée avec `--settings ~/.relais/run-settings.json` d'exécuter `git push origin HEAD --force`, `git push origin +HEAD` et `git push origin HEAD:main` ; chacune doit être refusée par les permissions (pas par GitHub). Même contrôle pour le joker en tête de `Bash(*secrets.json*)` : `cat ~/.relais/secrets.json` doit être refusé.
+
+## Sécurité : limites connues
+- Au démarrage, Relais écrit `<RELAIS_HOME>/run-settings.json` (les réglages du pack + des refus de lecture sur `secrets.json`, `relais.db`, `transcripts/` et `logs/` du vrai `RELAIS_HOME`) et le passe à chaque run via `--settings`. Vérifier : le fichier existe et contient le chemin réel (`/data/...` en Docker).
+- L'environnement d'un run ne contient ni `LINEAR_*` ni les `RELAIS_*` du daemon (seuls `RELAIS_API`, `RELAIS_RUN_TOKEN`, `RELAIS_TICKET`, `RELAIS_KNOWLEDGE`, `RELAIS_ROOT` sont posés).
+- Risque résiduel : le pack autorise `Bash(node:*)`, `Bash(npx:*)`, `Bash(npm:*)`. Un agent (ou une injection dans un ticket) peut donc lire `secrets.json` via un script (`node -e "…readFileSync(…)"`) : les listes de refus de Claude Code sont indicatives, pas une frontière de sécurité. L'agent tourne avec le même utilisateur que le daemon. Ne pas déployer Relais sur des tickets venant de personnes non fiables tant que les runs ne tournent pas sous un utilisateur séparé.

@@ -17,7 +17,7 @@ import { SqliteStore } from '../../src/store/sqlite-store.js';
 
 export const packDir = join(import.meta.dirname, '../../packs/standard');
 
-export function createHarness(opts: { projectYaml?: string; verify?: Verifier } = {}) {
+export function createHarness(opts: { projectYaml?: string; verify?: Verifier; knowledge?: boolean } = {}) {
   let projectFile: string | undefined;
   if (opts.projectYaml) {
     projectFile = join(mkdtempSync(join(tmpdir(), 'relais-h-')), 'workflow.yml');
@@ -32,7 +32,7 @@ export function createHarness(opts: { projectYaml?: string; verify?: Verifier } 
   const workspaces = new FakeWorkspaces();
   const project = { id: 'p', repoPath: '/repo', teamKey: 'REL', workflow };
   let n = 0;
-  const orch = new Orchestrator({
+  const build = () => new Orchestrator({
     store,
     clock,
     bus: new EventBus(),
@@ -47,7 +47,9 @@ export function createHarness(opts: { projectYaml?: string; verify?: Verifier } 
     agentEnv: (r) => ({ RELAIS_RUN_TOKEN: r.token }),
     newId: () => `id-${++n}`,
     activityIntervalMs: 0,
+    knowledgeConfigured: opts.knowledge,
   });
+  let orch = build();
   const timers = new TimerService(store, clock, (e) => void orch.submit(e));
   let seq = 0;
 
@@ -62,5 +64,20 @@ export function createHarness(opts: { projectYaml?: string; verify?: Verifier } 
     await orch.idle();
   }
 
-  return { clock, store, tracker, forge, runner, workspaces, orch, send, advance, project, ticket: (id = 'REL-1') => store.getTicket('p', id)! };
+  /** Graceful shutdown, then a fresh orchestrator over the same store, as `relais up` does on restart. */
+  async function restart(): Promise<void> {
+    orch.stopAll();
+    await orch.idle();
+    orch = build();
+    orch.recover();
+    await orch.announceRecovery();
+  }
+
+  return {
+    clock, store, tracker, forge, runner, workspaces, send, advance, restart, project,
+    get orch() {
+      return orch;
+    },
+    ticket: (id = 'REL-1') => store.getTicket('p', id)!,
+  };
 }

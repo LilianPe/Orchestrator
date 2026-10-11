@@ -9,7 +9,7 @@ import { newTicketState, type RelaisEvent } from '../core/types.js';
 import { SqliteStore } from '../store/sqlite-store.js';
 import { createApp } from './app.js';
 
-function setup() {
+function setup(extra: { uiPassword?: string } = {}) {
   const store = new SqliteStore(':memory:');
   const bus = new EventBus();
   const tracker = new FakeTracker();
@@ -22,7 +22,7 @@ function setup() {
   const app = createApp({
     store, bus, clock: new FakeClock(10), submit: (e) => void submitted.push(e), isPaused: () => false, linearWebhook,
     linearConnected: () => true, tracker, capacity: () => ({ dev: { used: 1, total: 3 }, questions: { used: 0, total: 2 } }),
-    transcriptsDir, webDir,
+    transcriptsDir, webDir, ...extra,
   });
   store.putTicket(newTicketState('p', 'REL-1', 'Export', 'dev', 1));
   store.putRun({
@@ -104,5 +104,46 @@ describe('server', () => {
     const res = await app.request('/api/runs/r2/transcript');
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual([{ type: 'system' }]);
+  });
+
+  describe('UI password (non-loopback host)', () => {
+    const basic = (p: string) => ({ authorization: `Basic ${Buffer.from(`admin:${p}`).toString('base64')}` });
+
+    it('requires Basic auth on the API, the UI and /oauth/start', async () => {
+      const { app } = setup({ uiPassword: 's3cret' });
+      for (const path of ['/api/state', '/', '/oauth/start', '/api/runs/r1/transcript']) {
+        const res = await app.request(path);
+        expect(res.status, path).toBe(401);
+        expect(res.headers.get('www-authenticate')).toMatch(/^Basic /);
+      }
+      expect((await app.request('/api/state', { headers: basic('wrong') })).status).toBe(401);
+      expect((await app.request('/api/state', { headers: basic('s3cret') })).status).toBe(200);
+      expect((await app.request('/api/control/pause', { method: 'POST' })).status).toBe(401);
+    });
+
+    it('leaves the webhook, the OAuth callback and the run-token agent API open', async () => {
+      const { app } = setup({ uiPassword: 's3cret' });
+      expect((await app.request('/webhooks/linear', { method: 'POST', body: '{}' })).status).toBe(200);
+      expect((await app.request('/oauth/callback?code=x&state=y')).status).not.toBe(401);
+      expect((await app.request('/agent/issue/REL-1', { headers: { authorization: 'Bearer tok' } })).status).toBe(200);
+    });
+  });
+
+  describe('CSRF', () => {
+    it('rejects a mutating API call from another origin', async () => {
+      const { app, submitted } = setup();
+      const res = await app.request('/api/control/pause', { method: 'POST', headers: { origin: 'https://evil.example' } });
+      expect(res.status).toBe(403);
+      const stop = await app.request('/api/tickets/p/REL-1/stop', { method: 'POST', headers: { origin: 'null' } });
+      expect(stop.status).toBe(403);
+      expect(submitted).toEqual([]);
+    });
+
+    it('accepts same-origin and Origin-less calls', async () => {
+      const { app, submitted } = setup();
+      expect((await app.request('http://localhost:4100/api/control/pause', { method: 'POST', headers: { origin: 'http://localhost:4100' } })).status).toBe(200);
+      expect((await app.request('/api/control/resume', { method: 'POST' })).status).toBe(200);
+      expect(submitted).toHaveLength(2);
+    });
   });
 });
