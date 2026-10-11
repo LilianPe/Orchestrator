@@ -67,4 +67,46 @@ describe('GitWorkspaces', () => {
     const ws = new GitWorkspaces({ root });
     await expect(ws.prepare(req(repo, { setup: ['exit 2'] }))).rejects.toThrow('Le setup du worktree a échoué : exit 2');
   });
+
+  it('removes the worktree when setup fails so a retry re-runs setup', async () => {
+    const { base, repo, root } = fixtureRepo();
+    const flag = join(base, 'flag');
+    const setup = [`test -f ${flag} || exit 2`];
+    const ws = new GitWorkspaces({ root });
+    await expect(ws.prepare(req(repo, { setup }))).rejects.toThrow('Le setup du worktree a échoué');
+    expect(existsSync(join(root, 'p', 'REL-1'))).toBe(false);
+    writeFileSync(flag, 'ok');
+    const w = await ws.prepare(req(repo, { setup }));
+    expect(existsSync(w.path)).toBe(true);
+  });
+
+  it('keeps unpushed local commits when re-preparing after cleanup', async () => {
+    const { repo, root } = fixtureRepo();
+    const ws = new GitWorkspaces({ root });
+    const w = await ws.prepare(req(repo));
+    git(w.path, 'config', 'user.email', 't@t');
+    git(w.path, 'config', 'user.name', 't');
+    git(w.path, 'commit', '--allow-empty', '-m', 'local only');
+    await ws.cleanup('p', repo, 'REL-1');
+    const w2 = await ws.prepare(req(repo));
+    expect(git(w2.path, 'log', '-1', '--format=%s')).toBe('local only');
+  });
+
+  it('cleanup of one ticket leaves another untouched', async () => {
+    const { repo, root } = fixtureRepo();
+    const ws = new GitWorkspaces({ root });
+    await ws.prepare(req(repo));
+    const w2 = await ws.prepare(req(repo, { ticketId: 'REL-2', title: 'Other' }));
+    await ws.cleanup('p', repo, 'REL-1');
+    expect(existsSync(w2.path)).toBe(true);
+  });
+
+  it('rejects unsafe identifiers', async () => {
+    const { repo, root } = fixtureRepo();
+    const ws = new GitWorkspaces({ root });
+    await expect(ws.prepare(req(repo, { ticketId: '../x' }))).rejects.toThrow('Identifiant invalide : ../x');
+    await expect(ws.prepare(req(repo, { projectId: 'a/b' }))).rejects.toThrow('Identifiant invalide : a/b');
+    await expect(ws.cleanup('p', repo, '..')).rejects.toThrow('Identifiant invalide : ..');
+    await expect(ws.cleanup('a\\b', repo, 'REL-1')).rejects.toThrow('Identifiant invalide');
+  });
 });
