@@ -1,5 +1,19 @@
 # Relais
 
-Orchestrateur d agents de code : tickets Linear -> sessions Claude Code -> review humaine -> review IA -> pret a merger.
+Orchestrateur d'agents de code : un ticket Linear délégué à l'agent devient une PR, relue par un humain puis par une boucle de review IA, prête à merger. Prototype privé.
 
-Prototype prive. Spec : docs/superpowers/specs/2026-10-10-relais-mvp-design.md
+## Démarrage
+```bash
+npm ci && npm run build && npm link
+cd <votre dépôt> && relais init
+relais up            # http://localhost:4100, puis « Connecter Linear »
+```
+Sans tokens, pour tester l'interface : `relais up --fake-runner`.
+
+## Documents
+- Spec : `docs/superpowers/specs/2026-10-10-relais-mvp-design.md`
+- Plan : `docs/superpowers/plans/2026-10-10-relais-mvp.md`
+- Recette : `docs/recette.md`
+
+## Développement
+`npm test` · `npm run typecheck` · `npm run lint` · `npm run dev:web` (UI avec proxy vers :4100)

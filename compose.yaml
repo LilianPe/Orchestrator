@@ -1,0 +1,11 @@
+services:
+  relais:
+    build: .
+    ports: ["4100:4100"]
+    volumes:
+      - ./data:/data
+      - ./repos:/repos
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      GH_TOKEN: ${GH_TOKEN}
+    restart: unless-stopped
