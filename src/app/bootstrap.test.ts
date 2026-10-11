@@ -1,4 +1,4 @@
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -15,6 +15,8 @@ describe('bootstrap', () => {
     expect(app.url).toBe('http://localhost:4199');
     const state = await (await fetch('http://127.0.0.1:4199/api/state')).json();
     expect(state).toMatchObject({ linearConnected: false, paused: false, tickets: [] });
+    const runSettings = JSON.parse(readFileSync(join(home, 'run-settings.json'), 'utf8'));
+    expect(runSettings.permissions.deny).toContain(`Read(/${home}/secrets.json)`);
     await app.stop();
   });
 

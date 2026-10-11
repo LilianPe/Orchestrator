@@ -44,3 +44,8 @@ Déléguer un ticket, pendant le run cliquer « Send stop request » dans Linear
 3. Linear accepte-t-il une URL de callback OAuth en `http://localhost` (sinon procédure cloudflared déjà décrite) ? Observer : la connexion de l'étape 2 aboutit, ou l'erreur de Linear.
 4. Le daemon annonce `http://localhost:4100` mais écoute sur `127.0.0.1` : si `localhost` résout d'abord en `::1`, le lien ne répond pas. Observer : si le lien ne répond pas, utiliser `http://127.0.0.1:4100`.
 5. Le dépôt de base de connaissance (`knowledge.repoPath`) doit rester sur sa branche par défaut : Relais y fait un `fetch` + `merge --ff-only` avant chaque run. Observer : aucun échec de `merge --ff-only` dans les logs d'un run.
+
+## Sécurité : limites connues
+- Au démarrage, Relais écrit `<RELAIS_HOME>/run-settings.json` (les réglages du pack + des refus de lecture sur `secrets.json`, `relais.db`, `transcripts/` et `logs/` du vrai `RELAIS_HOME`) et le passe à chaque run via `--settings`. Vérifier : le fichier existe et contient le chemin réel (`/data/...` en Docker).
+- L'environnement d'un run ne contient ni `LINEAR_*` ni les `RELAIS_*` du daemon (seuls `RELAIS_API`, `RELAIS_RUN_TOKEN`, `RELAIS_TICKET`, `RELAIS_KNOWLEDGE`, `RELAIS_ROOT` sont posés).
+- Risque résiduel : le pack autorise `Bash(node:*)`, `Bash(npx:*)`, `Bash(npm:*)`. Un agent (ou une injection dans un ticket) peut donc lire `secrets.json` via un script (`node -e "…readFileSync(…)"`) : les listes de refus de Claude Code sont indicatives, pas une frontière de sécurité. L'agent tourne avec le même utilisateur que le daemon. Ne pas déployer Relais sur des tickets venant de personnes non fiables tant que les runs ne tournent pas sous un utilisateur séparé.

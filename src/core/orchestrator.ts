@@ -45,6 +45,8 @@ export interface OrchestratorDeps {
   verify: Verifier;
   projects: ProjectRuntime[];
   packDir: string;
+  /** `--settings` file for runs; defaults to <packDir>/settings.json. */
+  settingsPath?: string;
   agentEnv: (run: RunRecord) => Record<string, string>;
   dailyBudgetUsd?: number;
   newId?: () => string;
@@ -634,7 +636,7 @@ export class Orchestrator {
       resume,
       model: job.model,
       pluginDir: this.d.packDir,
-      settingsPath: join(this.d.packDir, 'settings.json'),
+      settingsPath: this.d.settingsPath ?? join(this.d.packDir, 'settings.json'),
       readOnly: job.workspace === 'trunk-readonly',
       limits: job.limits,
       env: { ...this.d.agentEnv(run), ...(ws.port !== undefined ? { PORT: String(ws.port) } : {}) },

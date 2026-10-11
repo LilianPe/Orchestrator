@@ -15,6 +15,7 @@ import { Reconciler } from '../adapters/tracker/linear/reconcile.js';
 import { LinearTracker } from '../adapters/tracker/linear/tracker.js';
 import { GitWorkspaces } from '../adapters/workspace/git-workspaces.js';
 import { homePaths, loadInstance, loadSecrets, saveSecrets } from '../config/instance.js';
+import { writeRunSettings } from '../config/run-settings.js';
 import { loadWorkflow } from '../config/load-workflow.js';
 import { EventBus } from '../core/bus.js';
 import { SystemClock } from '../core/clock.js';
@@ -116,6 +117,7 @@ export async function startRelais(o: BootOptions): Promise<{ url: string; stop()
     verify: runVerify,
     projects,
     packDir,
+    settingsPath: writeRunSettings(packDir, o.home),
     dailyBudgetUsd: instance.limits.perDayUsd,
     knowledgeConfigured: !!instance.knowledge,
     agentEnv: (run) => ({
