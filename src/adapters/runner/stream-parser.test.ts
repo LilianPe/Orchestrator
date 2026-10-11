@@ -26,3 +26,15 @@ describe('summarizeToolInput', () => {
     [{ other: 1 }, '{"other":1}'],
   ])('%j', (input, out) => expect(summarizeToolInput(input)).toBe(out));
 });
+
+describe('parseStreamLine totality', () => {
+  it('never throws on valid-but-unexpected JSON', () => {
+    expect(parseStreamLine('{"type":"user","message":{"content":"plain string"}}')).toEqual([]);
+    expect(parseStreamLine('{"type":"user","message":{"content":[null,{"type":"tool_result"}]}}')).toEqual([{ kind: 'tool_result', isError: false }]);
+    expect(parseStreamLine('{"type":"assistant","message":{"content":[null,{"type":"tool_use","name":"X"}]}}')).toEqual([{ kind: 'tool', name: 'X', input: '' }]);
+    expect(parseStreamLine('{"type":"assistant"}')).toEqual([]);
+    expect(parseStreamLine('{"type":"assistant","message":{"content":"str"}}')).toEqual([]);
+    expect(parseStreamLine('null')).toEqual([]);
+    expect(parseStreamLine('42')).toEqual([]);
+  });
+});

@@ -40,6 +40,7 @@ export class ClaudeCodeRunner implements Runner {
       cwd: req.cwd,
       env: { ...process.env, ...req.env },
       stdio: ['ignore', 'pipe', 'pipe'],
+      detached: true,
     });
     const transcript = createWriteStream(join(this.o.transcriptsDir, `${req.runId}.jsonl`), { flags: 'a' });
     const ch = new Channel<RunStreamEvent>();
@@ -50,10 +51,23 @@ export class ClaudeCodeRunner implements Runner {
     let stopped = false;
     let limited = false;
 
-    const interrupt = () => {
-      child.kill('SIGINT');
-      setTimeout(() => child.kill('SIGKILL'), this.o.killGraceMs ?? 10_000).unref();
+    const signal = (sig: NodeJS.Signals) => {
+      try {
+        if (child.pid === undefined) throw new Error('no pid');
+        process.kill(-child.pid, sig);
+      } catch {
+        try {
+          child.kill(sig);
+        } catch {
+          // already gone
+        }
+      }
     };
+    const interrupt = () => {
+      signal('SIGINT');
+      setTimeout(() => signal('SIGKILL'), this.o.killGraceMs ?? 10_000).unref();
+    };
+    transcript.on('error', (e) => (stderr = (stderr + `\n[transcript] ${e.message}`).slice(-10_000)));
     const limit = () => {
       if (limited || stopped) return;
       limited = true;
@@ -62,18 +76,18 @@ export class ClaudeCodeRunner implements Runner {
     const timer = setTimeout(limit, req.limits.durationMs);
 
     createInterface({ input: child.stdout }).on('line', (line) => {
-      transcript.write(line + '\n');
       try {
+        transcript.write(line + '\n');
         const raw = JSON.parse(line) as { type?: string; subtype?: string };
-        if (raw.type === 'assistant' && ++assistantTurns > req.limits.turns) limit();
-        if (raw.type === 'result' && typeof raw.subtype === 'string' && raw.subtype.includes('max')) limited = true;
+        if (raw?.type === 'assistant' && ++assistantTurns > req.limits.turns) limit();
+        if (raw?.type === 'result' && typeof raw.subtype === 'string' && raw.subtype.includes('max')) limited = true;
+        for (const ev of parseStreamLine(line)) {
+          if (ev.kind === 'text' && ev.text.trim()) lastText = ev.text;
+          if (ev.kind === 'result') result = ev;
+          ch.push(ev);
+        }
       } catch {
-        // non-JSON line: kept in the transcript only
-      }
-      for (const ev of parseStreamLine(line)) {
-        if (ev.kind === 'text' && ev.text.trim()) lastText = ev.text;
-        if (ev.kind === 'result') result = ev;
-        ch.push(ev);
+        // a malformed line must never escape the handler; it stays in the transcript only
       }
     });
     child.stderr.on('data', (d) => (stderr = (stderr + d).slice(-10_000)));
