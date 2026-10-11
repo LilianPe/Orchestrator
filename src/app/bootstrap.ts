@@ -187,6 +187,7 @@ export async function startRelais(o: BootOptions): Promise<{ url: string; stop()
             const s2 = loadSecrets(o.home);
             saveSecrets(o.home, { ...s2, linear: { ...s2.linear!, appUserId: who.viewer.id, organizationId: who.organization.id } });
             await connectLinear();
+            await orchestrator.announceRecovery();
             for (const p of projects) {
               const created = await linearTracker!.ensureSetup(p.teamKey, p.workflow.states, RELAIS_LABELS);
               if (created.length) log(`Linear ${p.teamKey} : créé ${created.join(', ')}`);
@@ -205,7 +206,10 @@ export async function startRelais(o: BootOptions): Promise<{ url: string; stop()
   }, 60_000);
   tickInterval.unref();
   poller.start();
-  if (await connectLinear()) reconciler.start();
+  if (await connectLinear()) {
+    await orchestrator.announceRecovery();
+    reconciler.start();
+  }
   else log(`Linear non connecté : ouvrez ${baseUrl}/oauth/start`);
   log(`Relais écoute sur ${baseUrl}`);
 

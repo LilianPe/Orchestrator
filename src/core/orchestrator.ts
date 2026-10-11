@@ -81,6 +81,11 @@ export class Orchestrator {
   private liveRuns = new Set<string>();
   private handles = new Map<string, RunHandle>();
   private stopping = false;
+  /** French notices for Linear, collected by recover() and posted once Linear is reachable. */
+  private recoveryNotices: ({ ticket: { projectId: string; ticketId: string } } | { sessionId: string }) & {
+    type: 'elicitation' | 'error';
+    body: string;
+  }[] = [];
   private newId: () => string;
 
   constructor(private d: OrchestratorDeps) {
@@ -112,6 +117,10 @@ export class Orchestrator {
     return [...this.background].filter(([, runId]) => runId === undefined || !this.liveRuns.has(runId)).map(([p]) => p);
   }
 
+  /**
+   * Settles runs cut by a crash (`running`) or a shutdown (`interrupted`) and blocks their tickets.
+   * The matching Linear notices are posted by announceRecovery().
+   */
   recover(): void {
     const { store } = this.d;
     const block = (t: TicketState, reason: string): void => {
@@ -120,9 +129,18 @@ export class Orchestrator {
       t.blocked = true;
       t.blockReason = reason;
       this.putTicket(t);
+      this.recoveryNotices.push({ ticket: { projectId: t.projectId, ticketId: t.ticketId }, type: 'elicitation', body: reason });
     };
-    for (const run of store.runsByStatus('running')) {
-      store.putRun({ ...run, status: 'failure', endedAt: this.d.clock.now() });
+    const cut = [...store.runsByStatus('running'), ...store.runsByStatus('interrupted')];
+    for (const run of cut) {
+      store.putRun({ ...run, status: run.status === 'interrupted' ? 'stopped' : 'failure', endedAt: run.endedAt ?? this.d.clock.now() });
+      if (run.queue === 'questions' && run.linearSessionId) {
+        this.recoveryNotices.push({
+          sessionId: run.linearSessionId,
+          type: 'error',
+          body: 'Relais a redémarré pendant ma réponse. Reposez la question dans ce fil.',
+        });
+      }
     }
     for (const t of store.listTickets()) {
       if (t.activeRunId) {
@@ -131,6 +149,30 @@ export class Orchestrator {
       }
       if (t.verifyingRunId) block(t, 'Relais a redémarré pendant les vérifications. Répondez dans le fil pour relancer.');
     }
+  }
+
+  /** Best effort: posts the notices collected by recover(); a failure is logged, never retried. */
+  announceRecovery(): Promise<void> {
+    const notices = this.recoveryNotices;
+    this.recoveryNotices = [];
+    const next = this.chain.then(async () => {
+      for (const n of notices) {
+        try {
+          let session: string;
+          if ('sessionId' in n) session = n.sessionId;
+          else {
+            const t = this.d.store.getTicket(n.ticket.projectId, n.ticket.ticketId);
+            if (!t) continue;
+            session = await this.sessionFor(t);
+          }
+          await this.d.tracker.activity(session, { type: n.type, body: n.body });
+        } catch (err) {
+          this.log('warn', `recovery notice not posted: ${(err as Error).message}`);
+        }
+      }
+    });
+    this.chain = next;
+    return next;
   }
 
   async tick(): Promise<void> {
@@ -609,14 +651,17 @@ export class Orchestrator {
       await relay.flush();
       this.handles.delete(run.id);
       const rec = store.getRun(run.id) ?? run;
+      const interrupted = this.stopping && result.outcome === 'stopped';
       store.putRun({
         ...rec,
-        status: result.outcome,
+        status: interrupted ? 'interrupted' : result.outcome,
         endedAt: clock.now(),
         costUsd: result.costUsd,
         turns: result.turns,
         lastText: result.lastText,
       });
+      // Shutdown, not a user stop: keep the ticket's activeRunId so the next start's recover() blocks it and tells Linear.
+      if (interrupted) return;
     } catch (err) {
       const message = (err as Error).message;
       this.liveRuns.delete(run.id);
