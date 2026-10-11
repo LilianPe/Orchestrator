@@ -1,0 +1,97 @@
+# Ligne de commande
+
+Relais fournit deux exécutables (installés par `npm link`, voir [`installation.md`](installation.md)) :
+
+- **`relais`** : pour vous, l'opérateur ;
+- **`relais-agent`** : pour les agents, pendant un run. Vous ne l'appelez pas vous-même.
+
+Toutes les commandes `relais` lisent `RELAIS_HOME` (défaut `~/.relais`) et `config.yaml`. Une commande inconnue ou incomplète affiche l'aide et sort avec le code 1.
+
+## `relais`
+
+| Commande | Rôle | Démon requis |
+|---|---|---|
+| `relais init` | Configurer Relais pour le dépôt courant. | non |
+| `relais up [--fake-runner]` | Démarrer le démon. | — |
+| `relais plan` | Lister les tickets délégués et dire lesquels seraient pris. | non (Linear connecté) |
+| `relais status` | État de l'instance en cours. | oui |
+| `relais pause` / `relais resume` | Suspendre / reprendre la file. | oui |
+| `relais stop <ID>` | Arrêter le run d'un ticket. | oui |
+
+Les commandes qui demandent le démon appellent `http://127.0.0.1:<port>/api/…` avec le `port` de `config.yaml`. Si `RELAIS_UI_PASSWORD` est défini dans votre shell, elles l'envoient en HTTP Basic (nécessaire quand le démon écoute hors bouclage). En Docker, lancez-les dans le conteneur : `docker compose exec relais node dist/src/cli/relais.js status`.
+
+### `relais init`
+
+À lancer **dans le dépôt** à confier à Relais (sinon il demande le chemin du dépôt). Assistant interactif :
+
+1. Demande la **clé de l'équipe Linear** (ex. `REL`), mise en majuscules.
+2. Ajoute (ou remplace) le projet dans `config.yaml` : `id` = nom du dossier du dépôt (slug, 30 caractères max), `repoPath` = racine git, `linearTeamKey`.
+3. Sans `publicUrl` ni relais configuré, crée un **canal smee.io** et l'enregistre dans `relay`.
+4. Affiche les valeurs exactes à saisir dans Linear (URL de callback, URL de webhook, catégories) puis demande **Client ID**, **Client secret** et **Webhook signing secret**, enregistrés dans `secrets.json`. Détails : [`linear.md`](linear.md).
+5. Si aucune base de connaissance n'est configurée, propose de créer un dépôt GitHub privé `relais-knowledge` (`gh repo create`). Voir [`projets-et-workspaces.md`](projets-et-workspaces.md#base-de-connaissance-partagée).
+6. Si `.relais/workflow.yml` n'existe pas, le crée : demande les commandes de vérification (proposées à partir des scripts `lint`, `typecheck`, `test` de `package.json`, séparées par `;`) et met `workspace.setup: ["npm ci"]` si le dépôt a un `package-lock.json`. Contenu exact : [`workflow.md`](workflow.md#1-rôle-du-fichier-et-fusion-avec-le-pack).
+7. Écrit `config.yaml` et affiche la suite : `relais up`, « Connecter Linear », déléguer un ticket.
+
+`relais init` est relançable : pour un deuxième dépôt (nouveau projet), ou pour changer les identifiants Linear. Il ne réécrit jamais un `.relais/workflow.yml` existant. Pensez à commiter `.relais/workflow.yml` dans le dépôt.
+
+### `relais up`
+
+Démarre le démon au premier plan : serveur HTTP (interface, API, webhooks, OAuth), relais smee, minuteries, relevé des PR toutes les 30 s, réconciliation Linear toutes les 30 s, réévaluation de la file toutes les minutes. Affiche `Relais tourne : <url>`.
+
+- Écrit `<RELAIS_HOME>/run-settings.json` (voir [`configuration.md`](configuration.md#ce-qui-ne-sort-pas-du-démon)).
+- Clôt les runs interrompus par un arrêt ou un crash précédent et bloque leurs tickets (voir [`exploitation.md`](exploitation.md#arrêt-redémarrage-et-runs-interrompus)).
+- Si Linear n'est pas connecté, journalise `Linear non connecté : ouvrez <url>/oauth/start`.
+- Refuse de démarrer si `host` n'est pas en bouclage et que `RELAIS_UI_PASSWORD` est vide.
+
+`Ctrl+C` (SIGINT) ou SIGTERM : arrêt propre (les runs en cours sont interrompus, puis repris en main au prochain démarrage).
+
+`--fake-runner` : remplace Claude Code par un runner simulé qui répond « Terminé. » sans rien coûter. Pour tester l'interface et le câblage Linear.
+
+### `relais plan`
+
+Ne démarre rien. Pour chaque projet, liste les tickets délégués à l'agent dans Linear, triés par priorité :
+
+```text
+REL-12  pris  Ajouter l'export CSV
+REL-15  pas pris  Corriger le login — La description fait moins de 30 caractères.
+REL-9  déjà géré  Refonte du menu (human_review)
+```
+
+- `pris` : passerait les contrôles `tracker.pickup.checks` ;
+- `pas pris` : suivi des raisons ;
+- `déjà géré` : déjà suivi par Relais (avec son état logique).
+
+Exige que Linear soit connecté (`Linear non connecté : lancez relais up puis connectez Linear.` sinon).
+
+### `relais status`
+
+```text
+Linear : connecté · file : active · places dev 1/3 · coût du jour 2.40 $
+  REL-12  dev  Ajouter l'export CSV
+  REL-15  todo (bloqué)  Corriger le login
+```
+
+### `relais pause` / `relais resume`
+
+`pause` : plus aucun run ne démarre ; les demandes s'accumulent dans la file. Les runs en cours continuent. L'état de pause est conservé dans `relais.db` et survit à un redémarrage. `resume` relance la file. Équivalent au bouton « Pause / Reprendre » de l'interface.
+
+### `relais stop <ID>`
+
+Arrête le run du ticket `<ID>` (ex. `REL-12`) : SIGINT au processus Claude Code, puis SIGKILL après 10 s. Le ticket est bloqué jusqu'à une réponse dans le fil Linear ou le label `agent:reprendre`. Équivalent au bouton « Stop » de l'interface, au « stop » de la session Linear et au label `agent:stop`.
+
+## `relais-agent` (côté agent)
+
+Pendant un run, Relais ajoute `bin/` de Relais au `PATH` et pose `RELAIS_API` et `RELAIS_RUN_TOKEN`. L'agent utilise alors :
+
+| Commande | Effet |
+|---|---|
+| `relais-agent issue <ID>` | Affiche le ticket : identifiant, titre, statut, URL, description. **Limité au ticket du run** (403 sinon). |
+| `relais-agent search <texte>` | Recherche des tickets Linear. |
+| `relais-agent kb search <mots>` | Recherche dans `notes/*.md` de la base de connaissance (mots de 3 lettres ou plus, sans accents ni casse). Affiche `fichier:ligne: texte`. |
+| `relais-agent ask <question>` | Publie la question dans la session Linear (elicitation) et **bloque** le ticket. L'agent doit terminer son tour ; la réponse humaine relance le travail. |
+
+Lancé hors d'un run, il répond `relais-agent doit être lancé par Relais (RELAIS_API et RELAIS_RUN_TOKEN manquants).` (code 2). Le jeton n'est accepté que tant que le run est en cours. Le pack autorise `Bash(relais-agent:*)` et le hook de démarrage rappelle ces commandes à l'agent ([`pack-et-skills.md`](pack-et-skills.md)).
+
+## Scripts de développement
+
+Voir [Contribuer](../README.md#contribuer).

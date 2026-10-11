@@ -63,6 +63,7 @@ jobs:
     on_success: { post: reply }
   fix-ci:
     extends: dev-feedback
+    skill: "relais:fix-ci"
     input: ci_failures
   review:
     queue: dev
