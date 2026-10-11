@@ -1,6 +1,6 @@
 # Recette Relais (Linear de test)
 
-Prérequis : Node 24, `gh` connecté, `claude` connecté, un espace Linear de test dont vous êtes admin, un petit dépôt GitHub avec des tests.
+Prérequis : Node 24, `gh` connecté, `claude` connecté, un espace Linear de test dont vous êtes admin, un petit dépôt GitHub avec des tests, avec une **protection de branche sur la branche par défaut** (PR obligatoire, force-push interdit) : les refus du pack ne sont qu'une première barrière, c'est GitHub qui garantit que seuls les humains mergent.
 
 ## 0. Installation
 ```bash
@@ -45,6 +45,7 @@ Avec `host` différent de `127.0.0.1`, Relais refuse de démarrer sans `RELAIS_U
 3. Linear accepte-t-il une URL de callback OAuth en `http://localhost` (sinon procédure cloudflared déjà décrite) ? Observer : la connexion de l'étape 2 aboutit, ou l'erreur de Linear.
 4. Le daemon annonce `http://localhost:4100` mais écoute sur `127.0.0.1` : si `localhost` résout d'abord en `::1`, le lien ne répond pas. Observer : si le lien ne répond pas, utiliser `http://127.0.0.1:4100`.
 5. Le dépôt de base de connaissance (`knowledge.repoPath`) doit rester sur sa branche par défaut : Relais y fait un `fetch` + `merge --ff-only` avant chaque run. Observer : aucun échec de `merge --ff-only` dans les logs d'un run.
+6. La version de Claude Code installée applique-t-elle les jokers en milieu de motif (`Bash(git push * --force*)`, `Bash(git push *+*)`, `Bash(git push * *:main*)`) ? Observer : dans un worktree de test, demander à une session lancée avec `--settings ~/.relais/run-settings.json` d'exécuter `git push origin HEAD --force`, `git push origin +HEAD` et `git push origin HEAD:main` ; chacune doit être refusée par les permissions (pas par GitHub). Même contrôle pour le joker en tête de `Bash(*secrets.json*)` : `cat ~/.relais/secrets.json` doit être refusé.
 
 ## Sécurité : limites connues
 - Au démarrage, Relais écrit `<RELAIS_HOME>/run-settings.json` (les réglages du pack + des refus de lecture sur `secrets.json`, `relais.db`, `transcripts/` et `logs/` du vrai `RELAIS_HOME`) et le passe à chaque run via `--settings`. Vérifier : le fichier existe et contient le chemin réel (`/data/...` en Docker).

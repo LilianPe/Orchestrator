@@ -34,6 +34,21 @@ describe('standard pack', () => {
     expect(s.permissions.allow).toContain('Bash(relais-agent:*)');
   });
 
+  it('denies force pushes and pushes to the trunk written mid-command', () => {
+    const s = JSON.parse(readFileSync(join(pack, 'settings.json'), 'utf8'));
+    expect(s.permissions.deny).toEqual(
+      expect.arrayContaining([
+        'Bash(git push * --force*)',
+        'Bash(git push * -f*)',
+        'Bash(git push *+*)',
+        'Bash(git push * *:main*)',
+        'Bash(git push * *:master*)',
+        'Bash(git push * main)',
+        'Bash(git push * master)',
+      ]),
+    );
+  });
+
   it('hook injects the rules, and the knowledge index when present', () => {
     const plain = hook({ RELAIS_TICKET: 'REL-1' });
     expect(plain.hookEventName).toBe('SessionStart');
