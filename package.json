@@ -7,8 +7,8 @@
     "node": ">=24"
   },
   "bin": {
-    "relais": "dist/src/cli/relais.js",
-    "relais-agent": "dist/src/cli/relais-agent.js"
+    "relais": "bin/relais",
+    "relais-agent": "bin/relais-agent"
   },
   "scripts": {
     "dev": "tsx src/cli/relais.ts",
