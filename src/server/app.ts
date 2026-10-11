@@ -1,3 +1,4 @@
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Hono, type Context } from 'hono';
@@ -24,6 +25,8 @@ export interface ServerDeps {
   dailyBudgetUsd?: number;
   transcriptsDir: string;
   webDir?: string;
+  /** When set (non-loopback host), HTTP Basic auth with this password guards everything but the webhook, the OAuth callback and /agent. */
+  uiPassword?: string;
 }
 
 type AgentEnv = { Variables: { run: RunRecord } };
@@ -37,12 +40,57 @@ function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
+function sameSecret(a: string, b: string): boolean {
+  const h = (s: string) => createHash('sha256').update(s).digest();
+  return timingSafeEqual(h(a), h(b));
+}
+
+function basicPassword(header: string | undefined): string | undefined {
+  const m = header?.match(/^Basic\s+(.+)$/i);
+  if (!m) return undefined;
+  const decoded = Buffer.from(m[1]!, 'base64').toString('utf8');
+  const i = decoded.indexOf(':');
+  return i < 0 ? undefined : decoded.slice(i + 1);
+}
+
+function isPublicPath(method: string, path: string): boolean {
+  return (method === 'POST' && path === '/webhooks/linear') || (method === 'GET' && path === '/oauth/callback') || path === '/agent' || path.startsWith('/agent/');
+}
+
 function publicRun({ token: _t, ...rest }: RunRecord) {
   return rest;
 }
 
 export function createApp(d: ServerDeps): Hono {
   const app = new Hono();
+
+  if (d.uiPassword) {
+    const password = d.uiPassword;
+    app.use('*', async (c, next) => {
+      if (isPublicPath(c.req.method, c.req.path)) return next();
+      const given = basicPassword(c.req.header('authorization'));
+      if (given === undefined || !sameSecret(given, password)) {
+        return c.text('Authentification requise', 401, { 'WWW-Authenticate': 'Basic realm="Relais", charset="UTF-8"' });
+      }
+      return next();
+    });
+  }
+
+  // CSRF: a browser always sends Origin on a cross-site POST; refuse it unless it is this server.
+  app.use('/api/*', async (c, next) => {
+    if (c.req.method === 'GET' || c.req.method === 'HEAD') return next();
+    const origin = c.req.header('origin');
+    if (origin !== undefined) {
+      let host: string | undefined;
+      try {
+        host = new URL(origin).host;
+      } catch {
+        host = undefined;
+      }
+      if (!host || host !== new URL(c.req.url).host) return c.json({ error: 'cross-origin request refused' }, 403);
+    }
+    return next();
+  });
 
   app.post('/webhooks/linear', async (c) => {
     const raw = await c.req.text();

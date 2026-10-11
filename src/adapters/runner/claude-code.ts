@@ -29,6 +29,15 @@ export function buildClaudeArgs(req: RunRequest): string[] {
   return args;
 }
 
+/** Variables the daemon sets for a run; every other RELAIS_* (and every LINEAR_*) stays in the daemon. */
+const DAEMON_ONLY = /^(LINEAR_|RELAIS_)/;
+
+export function childEnv(base: NodeJS.ProcessEnv, run: Record<string, string>): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [k, v] of Object.entries(base)) if (v !== undefined && !DAEMON_ONLY.test(k)) env[k] = v;
+  return { ...env, ...run };
+}
+
 export class ClaudeCodeRunner implements Runner {
   constructor(private o: ClaudeRunnerOptions) {
     mkdirSync(o.transcriptsDir, { recursive: true });
@@ -38,7 +47,7 @@ export class ClaudeCodeRunner implements Runner {
     const [cmd, ...prefix] = this.o.command ?? ['claude'];
     const child = spawn(cmd!, [...prefix, ...buildClaudeArgs(req)], {
       cwd: req.cwd,
-      env: { ...process.env, ...req.env },
+      env: childEnv(process.env, req.env),
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: true,
     });

@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -28,10 +28,52 @@ describe('standard pack', () => {
     }
   });
 
+  it('ships the method skills, and every skill has frontmatter named after its folder', () => {
+    const names = readdirSync(join(pack, 'skills'));
+    expect(names).toEqual(expect.arrayContaining(['tdd', 'debugging', 'verification', 'code-review', 'receiving-review']));
+    for (const name of names) {
+      const text = readFileSync(join(pack, 'skills', name, 'SKILL.md'), 'utf8');
+      expect(text, name).toMatch(new RegExp(`^---\\nname: ${name}\\ndescription: .+\\n---\\n`));
+    }
+  });
+
+  it('only cites relais:<skill> names that exist', () => {
+    const names = new Set(readdirSync(join(pack, 'skills')));
+    const sources = [
+      ...[...names].map((n) => readFileSync(join(pack, 'skills', n, 'SKILL.md'), 'utf8')),
+      readFileSync(join(pack, 'hooks/session-start.mjs'), 'utf8'),
+    ];
+    const cited = new Set(sources.flatMap((s) => [...s.matchAll(/relais:([a-z][a-z-]*[a-z])/g)].map((m) => m[1]!)));
+    expect(cited.size).toBeGreaterThan(5);
+    for (const c of cited) expect(names.has(c), `relais:${c}`).toBe(true);
+  });
+
+  it('allows the read-only git and CI commands the skills rely on', () => {
+    const s = JSON.parse(readFileSync(join(pack, 'settings.json'), 'utf8'));
+    expect(s.permissions.allow).toEqual(
+      expect.arrayContaining(['Bash(git merge-tree:*)', 'Bash(git rev-list:*)', 'Bash(git ls-remote:*)', 'Bash(gh run view:*)', 'Bash(gh run list:*)']),
+    );
+  });
+
   it('denies merge, force push and reading Relais secrets', () => {
     const s = JSON.parse(readFileSync(join(pack, 'settings.json'), 'utf8'));
     expect(s.permissions.deny).toEqual(expect.arrayContaining(['Bash(gh pr merge:*)', 'Bash(git push --force:*)', 'Bash(git push -f:*)', 'Read(~/.relais/**)']));
     expect(s.permissions.allow).toContain('Bash(relais-agent:*)');
+  });
+
+  it('denies force pushes and pushes to the trunk written mid-command', () => {
+    const s = JSON.parse(readFileSync(join(pack, 'settings.json'), 'utf8'));
+    expect(s.permissions.deny).toEqual(
+      expect.arrayContaining([
+        'Bash(git push * --force*)',
+        'Bash(git push * -f*)',
+        'Bash(git push *+*)',
+        'Bash(git push * *:main*)',
+        'Bash(git push * *:master*)',
+        'Bash(git push * main)',
+        'Bash(git push * master)',
+      ]),
+    );
   });
 
   it('hook injects the rules, and the knowledge index when present', () => {
@@ -40,6 +82,10 @@ describe('standard pack', () => {
     expect(plain.additionalContext).toContain('Ne merge jamais');
     expect(plain.additionalContext).toContain('REL-1');
     expect(plain.additionalContext).not.toContain('Base de connaissance');
+    for (const s of ['relais:tdd', 'relais:debugging', 'relais:verification', 'relais:code-review', 'relais:receiving-review']) {
+      expect(plain.additionalContext).toContain(s);
+    }
+    expect(plain.additionalContext).toContain(join(pack, 'skills'));
     const kb = mkdtempSync(join(tmpdir(), 'relais-kb-'));
     writeFileSync(join(kb, 'INDEX.md'), '- scores.md — agrégats côté serveur\n');
     expect(hook({ RELAIS_KNOWLEDGE: kb }).additionalContext).toContain('agrégats côté serveur');
