@@ -1,0 +1,219 @@
+import { join } from 'node:path';
+import { describe, expect, it } from 'vitest';
+import { FakeForge } from '../adapters/forge/fake.js';
+import { FakeRunner } from '../adapters/runner/fake.js';
+import type { Runner } from '../adapters/runner/types.js';
+import type { Verifier } from './verify.js';
+import { FakeTracker } from '../adapters/tracker/fake.js';
+import { FakeWorkspaces } from '../adapters/workspace/fake.js';
+import { loadWorkflow } from '../config/load-workflow.js';
+import { SqliteStore } from '../store/sqlite-store.js';
+import { EventBus } from './bus.js';
+import { FakeClock } from './clock.js';
+import { Orchestrator } from './orchestrator.js';
+import { Scheduler } from './scheduler.js';
+import type { RelaisEvent } from './types.js';
+
+function setup(o: { runner?: Runner; verify?: Verifier; budget?: number; tweak?: (w: ReturnType<typeof loadWorkflow>) => void } = {}) {
+  const packDir = join(import.meta.dirname, '../../packs/standard');
+  const workflow = loadWorkflow({ packDir });
+  o.tweak?.(workflow);
+  const store = new SqliteStore(':memory:');
+  const tracker = new FakeTracker();
+  const fakeRunner = new FakeRunner();
+  const runner = o.runner ?? fakeRunner;
+  const scheduler = new Scheduler(store, { dev: 3, questions: 2 });
+  let n = 0;
+  const orch = new Orchestrator({
+    store, clock: new FakeClock(1_000), bus: new EventBus(), scheduler,
+    tracker, forge: new FakeForge(), runner, workspaces: new FakeWorkspaces(), verify: o.verify ?? (async () => ({ ok: true, failures: [] })), dailyBudgetUsd: o.budget,
+    projects: [{ id: 'p', repoPath: '/repo', teamKey: 'REL', workflow }], packDir,
+    agentEnv: (r) => ({ RELAIS_RUN_TOKEN: r.token }), newId: () => `id-${++n}`, activityIntervalMs: 0,
+  });
+  return { store, tracker, runner: fakeRunner, orch, scheduler };
+}
+
+const delegated = (id = 'e1'): RelaisEvent => ({ id, type: 'ticket.delegated', at: 1_000, projectId: 'p', ticketId: 'REL-1', payload: { linearSessionId: 'ls-1' } });
+
+describe('Orchestrator', () => {
+  it('ignores a duplicate event id', async () => {
+    const { tracker, runner, orch } = setup();
+    tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+    await orch.submit(delegated());
+    await orch.submit(delegated());
+    await orch.idle();
+    expect(runner.requests).toHaveLength(1);
+  });
+
+  it('ignores moves of tickets it does not manage', async () => {
+    const { store, orch } = setup();
+    await orch.submit({ id: 'm', type: 'ticket.moved', at: 1, projectId: 'p', ticketId: 'REL-9', payload: { from: 'todo', to: 'dev' } });
+    await orch.idle();
+    expect(store.getTicket('p', 'REL-9')).toBeUndefined();
+  });
+
+  it('passes the pack, settings and agent env to the runner', async () => {
+    const { tracker, runner, orch } = setup();
+    tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+    await orch.submit(delegated());
+    await orch.idle();
+    const r = runner.requests[0]!;
+    expect(r.pluginDir.endsWith('packs/standard')).toBe(true);
+    expect(r.settingsPath.endsWith('packs/standard/settings.json')).toBe(true);
+    expect(r.env['RELAIS_RUN_TOKEN']).toBeDefined();
+    expect(r.env['PORT']).toBe('4200');
+  });
+
+  it('recover() blocks tickets whose run was interrupted', async () => {
+    const { store, tracker, runner, orch } = setup();
+    tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+    runner.enqueue({ hold: true });
+    await orch.submit(delegated());
+    orch.recover();
+    const t = store.getTicket('p', 'REL-1')!;
+    expect(t.blocked).toBe(true);
+    expect(t.activeRunId).toBeUndefined();
+    expect(store.runsByStatus('running')).toEqual([]);
+  });
+
+  it('stopAll() then idle() waits until the interrupted run is persisted', async () => {
+    const { store, tracker, runner, orch } = setup();
+    tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+    runner.enqueue({ hold: true });
+    await orch.submit(delegated());
+    await orch.idle();
+    const runId = store.getTicket('p', 'REL-1')!.activeRunId!;
+    orch.stopAll();
+    await orch.idle();
+    // A shutdown is not a user stop: the run is `interrupted` and the ticket keeps it for recover() on the next start.
+    expect(store.getRun(runId)!.status).toBe('interrupted');
+    expect(store.getTicket('p', 'REL-1')!.activeRunId).toBe(runId);
+  });
+
+  const waitFor = async (cond: () => boolean): Promise<void> => {
+    for (let i = 0; i < 200 && !cond(); i++) await new Promise((r) => setTimeout(r, 5));
+    expect(cond()).toBe(true);
+  };
+
+  it('fails the run, frees the slot and blocks the ticket when the runner rejects', async () => {
+    const rejecting: Runner = {
+      start: () => ({
+        events: (async function* () {})(),
+        done: new Promise((_, rej) => setTimeout(() => rej(new Error('spawn boom')), 5)),
+        stop: () => {},
+      }),
+    };
+    const { store, tracker, orch, scheduler } = setup({ runner: rejecting });
+    tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+    await orch.submit(delegated());
+    await orch.idle();
+    const t = store.getTicket('p', 'REL-1')!;
+    expect(t.blocked).toBe(true);
+    expect(t.activeRunId).toBeUndefined();
+    expect(scheduler.inUse('dev')).toBe(0);
+    expect(store.runsByStatus('failure')).toHaveLength(1);
+    expect(store.runsByStatus('running')).toEqual([]);
+  });
+
+  it('recover() blocks a ticket whose activeRunId points to a finished run', async () => {
+    const { store, tracker, orch } = setup();
+    tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+    await orch.submit(delegated());
+    await orch.idle();
+    const t = store.getTicket('p', 'REL-1')!;
+    t.activeRunId = store.runsByStatus('success')[0]!.id;
+    t.blocked = false;
+    store.putTicket(t);
+    orch.recover();
+    const after = store.getTicket('p', 'REL-1')!;
+    expect(after.blocked).toBe(true);
+    expect(after.activeRunId).toBeUndefined();
+    expect(after.blockReason).toContain('redémarré');
+  });
+
+  it('recover() blocks a ticket that was being verified', async () => {
+    const { store, tracker, orch } = setup();
+    tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+    await orch.submit(delegated());
+    await orch.idle();
+    const t = store.getTicket('p', 'REL-1')!;
+    t.verifyingRunId = 'r-x';
+    t.blocked = false;
+    store.putTicket(t);
+    orch.recover();
+    const after = store.getTicket('p', 'REL-1')!;
+    expect(after.blocked).toBe(true);
+    expect(after.verifyingRunId).toBeUndefined();
+    expect(after.blockReason).toContain('vérifications');
+  });
+
+  it('ignores a verification result that arrives after the ticket was stopped', async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    const { store, tracker, orch } = setup({
+      verify: async () => {
+        await gate;
+        return { ok: true, failures: [] };
+      },
+      tweak: (w) => {
+        w.jobs['dev']!.verify = ['true'];
+      },
+    });
+    tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+    await orch.submit(delegated());
+    await waitFor(() => !!store.getTicket('p', 'REL-1')?.verifyingRunId);
+    await orch.submit({ id: 'stop', type: 'control.stop', at: 2, projectId: 'p', ticketId: 'REL-1', payload: {} });
+    expect(store.getTicket('p', 'REL-1')!.verifyingRunId).toBeUndefined();
+    release();
+    await orch.idle();
+    const moves = tracker.calls.filter((c) => c.method === 'moveTo').map((c) => c.args[1]);
+    expect(moves).not.toContain('Human Review');
+    expect(store.getTicket('p', 'REL-1')!.logical).not.toBe('human_review');
+  });
+
+  it('enqueues over budget and comments only once per ticket per day', async () => {
+    const { store, tracker, runner, orch } = setup({ budget: 0.01 });
+    tracker.addIssue({ identifier: 'REL-1', title: 'A' });
+    tracker.addIssue({ identifier: 'REL-2', title: 'B' });
+    await orch.submit(delegated());
+    await orch.idle();
+    expect(runner.requests).toHaveLength(1);
+    const d2 = (id: string): RelaisEvent => ({ id, type: 'ticket.delegated', at: 1_000, projectId: 'p', ticketId: 'REL-2', payload: { linearSessionId: 'ls-2' } });
+    await orch.submit(d2('e2'));
+    await orch.submit(d2('e3'));
+    await orch.idle();
+    expect(runner.requests).toHaveLength(1);
+    expect(store.listQueue().length).toBeGreaterThanOrEqual(1);
+    const comments = tracker.calls.filter((c) => c.method === 'comment' && c.args[0] === 'REL-2');
+    expect(comments).toHaveLength(1);
+    expect(String(comments[0]!.args[1])).toContain('Budget journalier');
+  });
+
+  it('does not start runs after stopAll()', async () => {
+    const { store, tracker, runner, orch } = setup();
+    tracker.addIssue({ identifier: 'REL-1', title: 'A' });
+    orch.stopAll();
+    await orch.submit(delegated());
+    await orch.tick();
+    await orch.idle();
+    expect(runner.requests).toHaveLength(0);
+    expect(store.listQueue()).toHaveLength(1);
+  });
+
+  it('blocks the ticket with the error when a command throws', async () => {
+    const { store, tracker, orch } = setup();
+    tracker.addIssue({ identifier: 'REL-1', title: 'A' });
+    const move = tracker.moveTo.bind(tracker);
+    let n = 0;
+    tracker.moveTo = async (id, name) => {
+      if (++n > 1) throw new Error('linear down');
+      return move(id, name);
+    };
+    await orch.submit(delegated());
+    await orch.idle();
+    const t = store.getTicket('p', 'REL-1')!;
+    expect(t.blocked).toBe(true);
+    expect(t.blockReason).toBe('Erreur : linear down');
+    expect(tracker.activities().some((a) => a.type === 'error')).toBe(true);
+  });
+});
