@@ -6,7 +6,8 @@ export interface RunRecord {
   ticketId: string;
   job: string;
   queue: QueueName;
-  status: 'running' | RunOutcome;
+  /** `interrupted`: cut by a daemon shutdown; recover() settles it on the next start. */
+  status: 'running' | 'interrupted' | RunOutcome;
   claudeSessionId: string;
   linearSessionId?: string;
   startedAt: number;

@@ -76,7 +76,7 @@ describe('Orchestrator', () => {
     expect(store.runsByStatus('running')).toEqual([]);
   });
 
-  it('stopAll() then idle() waits until the stopped run is persisted', async () => {
+  it('stopAll() then idle() waits until the interrupted run is persisted', async () => {
     const { store, tracker, runner, orch } = setup();
     tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
     runner.enqueue({ hold: true });
@@ -85,7 +85,9 @@ describe('Orchestrator', () => {
     const runId = store.getTicket('p', 'REL-1')!.activeRunId!;
     orch.stopAll();
     await orch.idle();
-    expect(store.getRun(runId)!.status).toBe('stopped');
+    // A shutdown is not a user stop: the run is `interrupted` and the ticket keeps it for recover() on the next start.
+    expect(store.getRun(runId)!.status).toBe('interrupted');
+    expect(store.getTicket('p', 'REL-1')!.activeRunId).toBe(runId);
   });
 
   const waitFor = async (cond: () => boolean): Promise<void> => {
