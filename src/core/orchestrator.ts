@@ -45,11 +45,15 @@ export interface OrchestratorDeps {
   verify: Verifier;
   projects: ProjectRuntime[];
   packDir: string;
+  /** `--settings` file for runs; defaults to <packDir>/settings.json. */
+  settingsPath?: string;
   agentEnv: (run: RunRecord) => Record<string, string>;
   dailyBudgetUsd?: number;
   newId?: () => string;
   activityIntervalMs?: number;
   beforeRun?: (run: RunRecord) => Promise<void>;
+  /** False when no knowledge repo is configured: `knowledge` jobs (learn, remember) are then skipped. Default true. */
+  knowledgeConfigured?: boolean;
 }
 
 interface StartOpts {
@@ -63,6 +67,7 @@ interface StartOpts {
 const CREATES_TICKET = new Set<EventType>(['ticket.delegated', 'session.mentioned', 'command', 'session.prompted']);
 const SETTLES_RUN = new Set<EventType>(['run.finished', 'verify.passed', 'verify.failed']);
 const ECHO_MS = 60_000;
+const MAX_QUESTION_SESSIONS = 50;
 
 export function logicalFromName(states: Record<LogicalState, string>, name: string): LogicalState | undefined {
   return (Object.entries(states) as [LogicalState, string][]).find(([, n]) => n === name)?.[0];
@@ -73,6 +78,11 @@ function startOfUtcDay(ts: number): number {
   return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
 }
 
+type RecoveryNotice = ({ ticket: { projectId: string; ticketId: string } } | { sessionId: string }) & {
+  type: 'elicitation' | 'error';
+  body: string;
+};
+
 export class Orchestrator {
   private chain: Promise<void> = Promise.resolve();
   private background = new Map<Promise<void>, string | undefined>();
@@ -80,6 +90,8 @@ export class Orchestrator {
   private liveRuns = new Set<string>();
   private handles = new Map<string, RunHandle>();
   private stopping = false;
+  /** French notices for Linear, collected by recover() and posted once Linear is reachable. */
+  private recoveryNotices: RecoveryNotice[] = [];
   private newId: () => string;
 
   constructor(private d: OrchestratorDeps) {
@@ -111,6 +123,10 @@ export class Orchestrator {
     return [...this.background].filter(([, runId]) => runId === undefined || !this.liveRuns.has(runId)).map(([p]) => p);
   }
 
+  /**
+   * Settles runs cut by a crash (`running`) or a shutdown (`interrupted`) and blocks their tickets.
+   * The matching Linear notices are posted by announceRecovery().
+   */
   recover(): void {
     const { store } = this.d;
     const block = (t: TicketState, reason: string): void => {
@@ -119,9 +135,18 @@ export class Orchestrator {
       t.blocked = true;
       t.blockReason = reason;
       this.putTicket(t);
+      this.recoveryNotices.push({ ticket: { projectId: t.projectId, ticketId: t.ticketId }, type: 'elicitation', body: reason });
     };
-    for (const run of store.runsByStatus('running')) {
-      store.putRun({ ...run, status: 'failure', endedAt: this.d.clock.now() });
+    const cut = [...store.runsByStatus('running'), ...store.runsByStatus('interrupted')];
+    for (const run of cut) {
+      store.putRun({ ...run, status: run.status === 'interrupted' ? 'stopped' : 'failure', endedAt: run.endedAt ?? this.d.clock.now() });
+      if (run.queue === 'questions' && run.linearSessionId) {
+        this.recoveryNotices.push({
+          sessionId: run.linearSessionId,
+          type: 'error',
+          body: 'Relais a redémarré pendant ma réponse. Reposez la question dans ce fil.',
+        });
+      }
     }
     for (const t of store.listTickets()) {
       if (t.activeRunId) {
@@ -130,6 +155,30 @@ export class Orchestrator {
       }
       if (t.verifyingRunId) block(t, 'Relais a redémarré pendant les vérifications. Répondez dans le fil pour relancer.');
     }
+  }
+
+  /** Best effort: posts the notices collected by recover(); a failure is logged, never retried. */
+  announceRecovery(): Promise<void> {
+    const notices = this.recoveryNotices;
+    this.recoveryNotices = [];
+    const next = this.chain.then(async () => {
+      for (const n of notices) {
+        try {
+          let session: string;
+          if ('sessionId' in n) session = n.sessionId;
+          else {
+            const t = this.d.store.getTicket(n.ticket.projectId, n.ticket.ticketId);
+            if (!t) continue;
+            session = await this.sessionFor(t);
+          }
+          await this.d.tracker.activity(session, { type: n.type, body: n.body });
+        } catch (err) {
+          this.log('warn', `recovery notice not posted: ${(err as Error).message}`);
+        }
+      }
+    });
+    this.chain = next;
+    return next;
   }
 
   async tick(): Promise<void> {
@@ -218,8 +267,14 @@ export class Orchestrator {
 
     let activeJob = ticket?.activeRunId ? store.getRun(ticket.activeRunId)?.job : undefined;
     if (ticket) {
-      if (event.type === 'ticket.delegated' && event.payload.linearSessionId && !ticket.linearSessionId) {
-        ticket.linearSessionId = event.payload.linearSessionId;
+      if (event.type === 'ticket.delegated') {
+        ticket.delegated = true;
+        if (event.payload.linearSessionId && !ticket.linearSessionId) ticket.linearSessionId = event.payload.linearSessionId;
+      }
+      if (event.type === 'ticket.undelegated') ticket.delegated = false;
+      if ((event.type === 'session.mentioned' || event.type === 'command') && event.payload.linearSessionId !== ticket.linearSessionId) {
+        const ids = ticket.questionSessionIds.filter((id) => id !== event.payload.linearSessionId);
+        ticket.questionSessionIds = [...ids, event.payload.linearSessionId].slice(-MAX_QUESTION_SESSIONS);
       }
       if (event.type === 'ticket.moved' && event.payload.to) ticket.logical = event.payload.to;
       if (event.type === 'run.finished') {
@@ -311,6 +366,12 @@ export class Orchestrator {
       case 'start_run':
         return this.startRun(project, ticketId, c);
       case 'stop_run': {
+        if (c.linearSessionId) {
+          for (const r of store.runsByStatus('running')) {
+            if (r.projectId === project.id && r.ticketId === ticketId && r.linearSessionId === c.linearSessionId) this.handles.get(r.id)?.stop();
+          }
+          return;
+        }
         t.pendingJob = undefined;
         t.verifyingRunId = undefined;
         this.putTicket(t);
@@ -406,6 +467,18 @@ export class Orchestrator {
     const job = project.workflow.jobs[opts.job];
     if (!job) return this.log('error', `unknown job ${opts.job}`);
     const t = this.ticket(project.id, ticketId);
+    if (job.queue === 'dev' && !t.delegated) {
+      return this.log('warn', `refused ${job.name} on ${ticketId}: the ticket is not delegated to Relais`);
+    }
+    if (job.workspace === 'knowledge' && this.d.knowledgeConfigured === false) {
+      this.log('info', `skipped ${job.name} on ${ticketId}: no knowledge repo configured`);
+      if (opts.linearSessionId) {
+        await this.d.tracker
+          .activity(opts.linearSessionId, { type: 'response', body: "Aucune base de connaissance n'est configurée pour Relais : je ne peux rien retenir." })
+          .catch((err: Error) => this.log('warn', `could not answer ${ticketId}: ${err.message}`));
+      }
+      return;
+    }
     const item = {
       projectId: project.id,
       ticketId,
@@ -565,7 +638,7 @@ export class Orchestrator {
       resume,
       model: job.model,
       pluginDir: this.d.packDir,
-      settingsPath: join(this.d.packDir, 'settings.json'),
+      settingsPath: this.d.settingsPath ?? join(this.d.packDir, 'settings.json'),
       readOnly: job.workspace === 'trunk-readonly',
       limits: job.limits,
       env: { ...this.d.agentEnv(run), ...(ws.port !== undefined ? { PORT: String(ws.port) } : {}) },
@@ -593,14 +666,17 @@ export class Orchestrator {
       await relay.flush();
       this.handles.delete(run.id);
       const rec = store.getRun(run.id) ?? run;
+      const interrupted = this.stopping && result.outcome === 'stopped';
       store.putRun({
         ...rec,
-        status: result.outcome,
+        status: interrupted ? 'interrupted' : result.outcome,
         endedAt: clock.now(),
         costUsd: result.costUsd,
         turns: result.turns,
         lastText: result.lastText,
       });
+      // Shutdown, not a user stop: keep the ticket's activeRunId so the next start's recover() blocks it and tells Linear.
+      if (interrupted) return;
     } catch (err) {
       const message = (err as Error).message;
       this.liveRuns.delete(run.id);

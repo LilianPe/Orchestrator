@@ -110,6 +110,73 @@ describe('standard workflow', () => {
     expect(h.tracker.activities('ls-1').at(-1)!.type).toBe('response');
   });
 
+  describe('I2: a stop targets the run of the session that sent it', () => {
+    async function devAndAskRunning(h: ReturnType<typeof createHarness>) {
+      h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+      h.runner.enqueue({ hold: true }, { hold: true });
+      await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+      await h.send('session.mentioned', { linearSessionId: 'ls-9', body: 'où en es-tu ?', author: 'L' });
+      const devRunId = h.ticket().activeRunId!;
+      const askRunId = h.runner.requests[1]!.runId;
+      return { devRunId, askRunId };
+    }
+
+    it('a stop in a question thread stops only the question run', async () => {
+      const h = createHarness();
+      const { devRunId, askRunId } = await devAndAskRunning(h);
+      await h.send('session.stopped', { linearSessionId: 'ls-9' });
+      expect(h.store.getRun(askRunId)!.status).toBe('stopped');
+      expect(h.store.getRun(devRunId)!.status).toBe('running');
+      expect(h.ticket()).toMatchObject({ blocked: false, activeRunId: devRunId });
+      expect(h.tracker.activities('ls-9').at(-1)).toEqual({ type: 'response', body: 'Arrêté.' });
+      expect(h.tracker.activities('ls-1').filter((a) => a.type === 'response')).toEqual([]);
+      h.runner.release(devRunId);
+      await h.orch.idle();
+    });
+
+    it('a stop in the dev thread stops the dev run and blocks, leaving the question run alone', async () => {
+      const h = createHarness();
+      const { devRunId, askRunId } = await devAndAskRunning(h);
+      await h.send('session.stopped', { linearSessionId: 'ls-1' });
+      expect(h.store.getRun(devRunId)!.status).toBe('stopped');
+      expect(h.store.getRun(askRunId)!.status).toBe('running');
+      expect(h.ticket().blocked).toBe(true);
+      expect(h.tracker.activities('ls-1').at(-1)!.type).toBe('response');
+      h.runner.release(askRunId);
+      await h.orch.idle();
+    });
+  });
+
+  describe('I1: restart during a run', () => {
+    it('a dev run interrupted by shutdown blocks the ticket with a French message, and a reply resumes it', async () => {
+      const h = createHarness();
+      h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+      h.runner.enqueue({ hold: true });
+      await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+      const runId = h.ticket().activeRunId!;
+      await h.restart();
+      expect(h.store.getRun(runId)!.status).not.toBe('running');
+      expect(h.ticket()).toMatchObject({ blocked: true, logical: 'dev' });
+      expect(h.ticket().activeRunId).toBeUndefined();
+      expect(h.tracker.activities('ls-1').at(-1)).toMatchObject({ type: 'elicitation', body: expect.stringContaining('redémarré') });
+      h.runner.enqueue({ events: [{ kind: 'text', text: 'Repris.' }] });
+      await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'reprends', author: 'L' });
+      expect(h.runner.requests).toHaveLength(2);
+      expect(h.runner.requests[1]).toMatchObject({ resume: true, claudeSessionId: h.runner.requests[0]!.claudeSessionId });
+      expect(h.ticket().blocked).toBe(false);
+    });
+
+    it('a question run interrupted by shutdown gets a French notice in its thread', async () => {
+      const h = createHarness();
+      h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+      h.runner.enqueue({ hold: true });
+      await h.send('session.mentioned', { linearSessionId: 'ls-9', body: 'où ?', author: 'L' });
+      await h.restart();
+      expect(h.tracker.activities('ls-9').at(-1)).toMatchObject({ type: 'error', body: expect.stringContaining('redémarré') });
+      expect(h.ticket().blocked).toBe(false);
+    });
+  });
+
   it('criterion 6: a mention runs ask read-only in its own thread', async () => {
     const h = createHarness();
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
@@ -131,6 +198,98 @@ describe('standard workflow', () => {
     expect(r.prompt.startsWith('/relais:learn\n')).toBe(true);
     expect(r.prompt).toContain('les agrégats se calculent côté serveur');
     expect(r.cwd).toMatch(/^\/tmp\/relais-fake\/_kb\//);
+  });
+
+  describe('C1: a mention never makes a ticket delegated', () => {
+    async function mentioned(h: ReturnType<typeof createHarness>, stateName = 'Todo') {
+      h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', stateName });
+      h.runner.enqueue({ events: [{ kind: 'text', text: 'Dans src/scores/history.ts.' }] });
+      await h.send('session.mentioned', { linearSessionId: 'ls-9', body: 'où est calculé le score ?', author: 'L' });
+    }
+
+    it('a follow-up in the ask thread of a todo ticket runs ask again with the thread', async () => {
+      const h = createHarness();
+      await mentioned(h);
+      h.runner.enqueue({ events: [{ kind: 'text', text: 'Parce que.' }] });
+      await h.send('session.prompted', { linearSessionId: 'ls-9', body: 'et pourquoi ?', author: 'L' });
+      await h.advance(600_000);
+      expect(h.runner.requests).toHaveLength(2);
+      const r = h.runner.requests[1]!;
+      expect(r).toMatchObject({ readOnly: true, cwd: '/tmp/relais-fake/p/_trunk' });
+      expect(r.prompt.startsWith('/relais:ask\n')).toBe(true);
+      expect(r.prompt).toContain('et pourquoi ?');
+      expect(h.tracker.activities('ls-9').at(-1)).toEqual({ type: 'response', body: 'Parce que.' });
+    });
+
+    it('a follow-up in the ask thread of a human-owned in-progress ticket stays read-only', async () => {
+      const h = createHarness();
+      await mentioned(h, 'In Progress');
+      expect(h.ticket().logical).toBe('dev');
+      await h.send('session.prompted', { linearSessionId: 'ls-9', body: 'et pourquoi ?', author: 'L' });
+      await h.advance(600_000);
+      expect(h.runner.requests.map((r) => [r.prompt.split('\n')[0], r.readOnly])).toEqual([
+        ['/relais:ask', true],
+        ['/relais:ask', true],
+      ]);
+      expect(h.ticket()).toMatchObject({ pendingFeedback: [], blocked: false });
+      expect(h.tracker.calls.filter((c) => c.method === 'ensureSession')).toEqual([]);
+    });
+
+    it('moving a mention-only ticket to AI Review starts no review and moves nothing', async () => {
+      const h = createHarness();
+      await mentioned(h);
+      await h.send('ticket.moved', { from: 'human_review', to: 'ai_review' });
+      expect(h.runner.requests).toHaveLength(1);
+      expect(h.tracker.calls.filter((c) => c.method === 'moveTo')).toEqual([]);
+      expect(h.ticket().logical).toBe('ai_review');
+    });
+
+    it('agent:reprendre on a mention-only ticket starts nothing', async () => {
+      const h = createHarness();
+      await mentioned(h);
+      await h.send('label.added', { label: 'agent:reprendre' });
+      expect(h.runner.requests).toHaveLength(1);
+    });
+
+    it('a later delegation of a mentioned ticket starts dev', async () => {
+      const h = createHarness();
+      await mentioned(h);
+      await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+      expect(h.runner.requests).toHaveLength(2);
+      expect(h.runner.requests[1]!.prompt.startsWith('/relais:dev\n')).toBe(true);
+      expect(h.ticket()).toMatchObject({ delegated: true, linearSessionId: 'ls-1' });
+    });
+
+    it('on a delegated ticket, a follow-up in a question thread runs ask, not feedback', async () => {
+      const h = createHarness();
+      await delegatedAndInReview(h);
+      h.runner.enqueue({}, {});
+      await h.send('session.mentioned', { linearSessionId: 'ls-9', body: 'question ?', author: 'L' });
+      await h.send('session.prompted', { linearSessionId: 'ls-9', body: 'et pourquoi ?', author: 'L' });
+      await h.advance(600_000);
+      expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/relais:dev', '/relais:ask', '/relais:ask']);
+      expect(h.ticket().pendingFeedback).toEqual([]);
+    });
+  });
+
+  describe('M2: without a knowledge repo', () => {
+    it('a merge skips learn without blocking the ticket or posting an error', async () => {
+      const h = createHarness({ knowledge: false });
+      await delegatedAndInReview(h);
+      await h.send('pr.merged', { number: 3, url: 'https://gh/pr/3', branch: 'relais/rel-1-export-csv' });
+      expect(h.ticket()).toMatchObject({ logical: 'done', blocked: false });
+      expect(h.runner.requests).toHaveLength(1);
+      expect(h.tracker.activities().filter((a) => a.type === 'error')).toEqual([]);
+    });
+
+    it('"retiens" answers that no knowledge base is configured, without a run', async () => {
+      const h = createHarness({ knowledge: false });
+      h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+      await h.send('command', { name: 'retiens', body: 'un fait', linearSessionId: 'ls-10', author: 'L' });
+      expect(h.runner.requests).toHaveLength(0);
+      expect(h.ticket().blocked).toBe(false);
+      expect(h.tracker.activities('ls-10').at(-1)).toMatchObject({ type: 'response', body: expect.stringContaining('base de connaissance') });
+    });
   });
 
   it('respects the parallel cap and drains the queue', async () => {
