@@ -8,8 +8,9 @@ packs/standard/
 ├── workflow.yml                 # comportement par défaut (événements, jobs, limites)
 ├── settings.json                # permissions des runs
 ├── hooks/hooks.json             # hook SessionStart
-├── hooks/session-start.mjs      # règles toujours actives + index de la base de connaissance
-└── skills/<nom>/SKILL.md        # une consigne par type de run
+├── hooks/session-start.mjs      # règles toujours actives, méthode, index de la base de connaissance
+├── NOTICE.md                    # origine de la méthode (superpowers, MIT)
+└── skills/<nom>/SKILL.md        # skills de job (un par type de run) et skills de méthode
 ```
 
 Chaque run lance Claude Code avec `--plugin-dir packs/standard` (les skills deviennent `/relais:<nom>`), `--settings <RELAIS_HOME>/run-settings.json` et `--setting-sources project,local`. Conséquence de cette dernière option : les réglages **utilisateur** de Claude Code (`~/.claude/settings.json`) ne s'appliquent pas aux runs ; ceux du dépôt (`.claude/settings.json`, `.claude/settings.local.json`) s'appliquent.
@@ -18,16 +19,35 @@ Le comportement (quel skill, quand, avec quel modèle) se règle dans `.relais/w
 
 ## Les skills du pack
 
-Tous écrivent leur dernier message en français : il est publié tel quel dans la session Linear.
+Deux familles :
 
-| Skill | Job(s) | Espace | Rôle |
-|---|---|---|---|
-| `relais:dev` | `dev` | worktree du ticket | Lit le ticket, pose une question si une décision manque, écrit un test qui échoue puis le code, lance tests / lint / types, commite (`<ID>: …`), pousse, ouvre la PR (`Fixes <ID>`). Message : ce qui a changé, comment tester, points d'attention. |
-| `relais:feedback` | `dev-feedback` | worktree, session reprise | Traite les retours (fil Linear, commentaires de review non résolus, vérifications en échec), un commit par lot, répond point par point. |
-| `relais:fix-ci` | `fix-ci` | worktree, session reprise | Lit l'échec exact (`gh pr checks`, `gh run view --log-failed`), le reproduit en local, classe la cause (régression, instable, infra). Régression : correction minimale + test. Instable ou infra : pose une question au lieu de « corriger » à l'aveugle. Interdit de désactiver, sauter ou affaiblir un test ou une étape de CI. |
-| `relais:review` | `review` | worktree, session neuve | Boucle de review IA : liste les défauts par gravité, corrige bloquants et importants, attend la CI, jusqu'à zéro défaut ou `review_rounds` rounds. Message : synthèse, corrigé, reste à voir. |
-| `relais:ask` | `ask` | `_trunk`, lecture seule (mode plan) | Répond à une question à partir de la base de connaissance, de `docs/agent/`, de `CLAUDE.md`, du code et des tickets, avec ses sources. |
-| `relais:learn` | `learn`, `remember` | worktree du dépôt de connaissance | Écrit 0 à 3 fiches (`notes/<slug>.md` + ligne dans `INDEX.md`) et ouvre une PR. Pour `remember`, enregistre ce qui est demandé. |
+- les **skills de job** sont ceux que `workflow.yml` lance (`skill: "relais:<nom>"`) : ils disent quoi faire du début à la fin d'un run et le format du dernier message ;
+- les **skills de méthode** disent *comment* faire une étape (tester, déboguer, vérifier, relire, traiter des retours). Les skills de job les chargent au bon moment, et le hook de démarrage rappelle à chaque run de les utiliser.
+
+### Les skills de job
+
+Tous écrivent leur dernier message en français : il est publié tel quel dans la session Linear. Quand l'agent pose une question (`relais-agent ask`), le ticket est bloqué et ce dernier message n'est **pas** publié : la question doit se suffire.
+
+| Skill | Job(s) | Espace | Rôle | Méthode chargée |
+|---|---|---|---|---|
+| `relais:dev` | `dev` | worktree du ticket | Lit le ticket, le confronte au code, pose une question si une décision manque, fait un mini-plan si le ticket a plusieurs étapes, développe test d'abord, vérifie (tests ciblés, types, lint), fait une auto-review légère, contrôle les conflits avec le tronc (rebase avant le premier push), pousse vers `refs/heads/<branche>` et vérifie le distant, ouvre la PR (`Fixes <ID>` seulement si tout le ticket est réglé, sinon `Part of <ID>`). N'attend pas la CI. Message : ce qui a changé, comment tester, vérifié, points d'attention. | `tdd`, `debugging`, `verification`, `code-review` (rapide ou standard), `receiving-review` |
+| `relais:feedback` | `dev-feedback` | worktree, session reprise | Traite les retours (fil Linear, commentaires de review GitHub non résolus, vérifications en échec) : vérifie chacun dans le code, corrige avec un test, refuse avec une raison, un commit par cause ; fusionne la base en cas de conflit (pas de rebase d'une branche poussée). Message : une ligne par retour. | `receiving-review`, `tdd`, `debugging`, `verification` |
+| `relais:fix-ci` | `fix-ci` | worktree, session reprise | Lit l'échec exact (`gh pr checks`, `gh run view --log-failed`), le reproduit en local, regarde si la base échoue aussi, classe la cause (régression, instable, infra). Régression : correction minimale + test. Instable ou infra : une relance (`gh run rerun --failed`), puis une question au lieu de « corriger » à l'aveugle. Deux corrections ratées sur un même check : question. Interdit de désactiver, sauter ou affaiblir un test ou une étape de CI. | `debugging`, `tdd`, `verification` |
+| `relais:review` | `review` | worktree, session neuve | Boucle de review IA : round 1 sur tout le diff au niveau que mérite son risque, corrections vérifiées, puis rounds ciblés sur les seuls commits de correction et leurs consommateurs, avec un registre des décisions. S'arrête quand un round ne trouve que des constats mineurs, au plafond `review_rounds`, ou sur un point à trancher (question). Puis vérification de types, fusion de la base si elle a bougé, push, CI jusqu'au vert (3 tentatives par check). Message : synthèse (rounds, niveau, CI), corrigé, reste à voir, hors périmètre. | `code-review`, `receiving-review`, `tdd`, `debugging`, `verification` |
+| `relais:ask` | `ask` | `_trunk`, lecture seule (mode plan) | Répond à une question à partir de la base de connaissance, de `docs/agent/`, de `CLAUDE.md`, du code et des tickets, en n'affirmant que ce qu'il a lu, avec ses sources. | `verification` |
+| `relais:learn` | `learn`, `remember` | worktree du dépôt de connaissance | Écrit 0 à 3 fiches vérifiées (`notes/<slug>.md` + ligne dans `INDEX.md`), complète une fiche existante plutôt que d'en créer une, et ouvre une PR. Pour `remember`, enregistre fidèlement ce qui est demandé. | — |
+
+### Les skills de méthode
+
+| Skill | Quand | Ce qu'il impose |
+|---|---|---|
+| `relais:tdd` | tout changement de comportement | Un test qui échoue pour la bonne raison avant le code ; code minimal ; tests voisins verts ; des tests qui peuvent vraiment échouer (pas d'assertion sur un mock). |
+| `relais:debugging` | bug, test rouge, CI ou vérification en échec | La cause avant la correction : lire l'erreur entière, reproduire, comparer à ce qui marche, une hypothèse à la fois ; après trois corrections ratées, question de conception plutôt qu'une quatrième. |
+| `relais:verification` | avant d'affirmer « fait », « vert », « corrigé », et avant commit, push, PR | Une commande lancée et lue pour chaque affirmation. Tests ciblés, types et lint ; pas la suite complète (c'est le rôle de `verify` et de la CI). Push vérifié par `git ls-remote`. |
+| `relais:code-review` | relire un diff (`review`, auto-review de `dev`) | Diff délimité à la base de la PR. Trois niveaux choisis sur le risque : **rapide** (texte, config), **standard** (logique, docs qui décrivent le code), **approfondi** (accès, données, migrations, secrets, gros diff ; passes par angle, en sous-agents parallèles si l'outil est disponible). Constats classés par portée (dans le périmètre, hors périmètre, conflit de règle) et gravité (bloquant, important, mineur), chacun vérifié avant d'être rapporté. |
+| `relais:receiving-review` | traiter des retours ou des constats | Tout lire, vérifier la prémisse et la correction proposée dans le code, ne pas trancher un compromis seul, un commit par cause avec sa preuve, répondre sans complaisance (corrigé, refusé avec raison, ou question). |
+
+La méthode est réécrite à partir des skills superpowers (MIT) : voir `packs/standard/NOTICE.md`.
 
 Texte complet : `packs/standard/skills/<nom>/SKILL.md`.
 
@@ -37,13 +57,14 @@ Texte complet : `packs/standard/skills/<nom>/SKILL.md`.
 
 - le ticket courant (`RELAIS_TICKET`) ;
 - les règles : messages Linear en français, ne jamais merger ni force-pusher, ne rien modifier hors du répertoire de travail, ne jamais déclarer fini sans tests lancés et lus, passer par `relais-agent` pour Linear, poser **une** question avec `relais-agent ask` plutôt qu'inventer, dernier message lisible seul ;
+- la méthode : avant chaque étape, charger le skill de méthode qui s'applique (`relais:tdd`, `relais:debugging`, `relais:verification`, `relais:code-review`, `relais:receiving-review`), le `CLAUDE.md` du dépôt l'emportant en cas de contradiction ; si l'outil Skill est indisponible, lire le fichier du skill (le hook donne le chemin absolu du dossier `skills/`) ;
 - si `RELAIS_KNOWLEDGE` est défini et contient `INDEX.md` : l'index de la base de connaissance (8 000 caractères au plus) et le chemin des fiches.
 
 ## Permissions
 
 `packs/standard/settings.json` fixe `defaultMode: acceptEdits` et :
 
-**Autorisé** sans confirmation : lecture, édition et recherche de fichiers ; `git status|diff|log|show|add|commit|push|fetch|rebase|checkout|switch|branch|rev-parse|merge-base` ; `gh pr create|view|list|checks|diff|edit` ; `npm`, `npx`, `node`, `pnpm`, `yarn` ; `ls`, `cat`, `grep`, `rg`, `find`, `head`, `tail`, `wc`, `sleep` ; `relais-agent`.
+**Autorisé** sans confirmation : lecture, édition et recherche de fichiers ; `git status|diff|log|show|add|commit|push|fetch|rebase|checkout|switch|branch|rev-parse|merge-base|merge-tree|merge|revert|rev-list|ls-remote` ; `gh pr create|view|list|checks|diff|edit` ; `gh run view|list|rerun` ; `npm`, `npx`, `node`, `pnpm`, `yarn` ; `ls`, `cat`, `grep`, `rg`, `find`, `head`, `tail`, `wc`, `sleep` ; `relais-agent`.
 
 **Refusé** :
 
@@ -59,20 +80,23 @@ Ces règles sont une première barrière, pas une garantie : protégez la branch
 
 Les runs `trunk-readonly` (questions) tournent en plus avec `--permission-mode plan`.
 
+Pourquoi `git merge` est autorisé : une branche déjà poussée ne peut pas être rebasée, puisque le force-push est refusé. Les skills `feedback`, `fix-ci` et `review` intègrent donc la base par une fusion (`git merge --no-edit origin/<base>`) quand elle est en conflit ou qu'elle a bougé ; seul `dev`, avant son premier push, rebase. `git merge-tree` sert au contrôle de conflit sans toucher à l'arbre, `git ls-remote` à vérifier qu'un push a bien atteint le distant.
+
 ## Personnaliser
 
 Du plus simple au plus profond :
 
 1. **Régler le comportement** sans toucher au pack : `.relais/workflow.yml` du dépôt (modèles, limites, vérifications, règles, jobs). Voir [`workflow.md`](workflow.md#6-recettes).
-2. **Donner du contexte au dépôt** : `CLAUDE.md` et `docs/agent/*.md` sont lus par les skills `dev` et `ask`. Les réglages Claude Code du dépôt (`.claude/settings.json`) s'appliquent aux runs.
+2. **Donner du contexte au dépôt** : `CLAUDE.md` et `docs/agent/*.md` sont lus par les skills `dev`, `review` et `ask`. Le `CLAUDE.md` l'emporte sur les skills du pack là où ils parlent du même sujet : c'est l'endroit pour vos conventions de commit, de test, de nommage, ou pour durcir la méthode (« lancer toujours la suite X avant de pousser »). Les réglages Claude Code du dépôt (`.claude/settings.json`) s'appliquent aux runs.
 3. **Ajouter un skill** pour un nouveau job : un skill de projet `.claude/skills/<nom>/SKILL.md` versionné dans le dépôt, référencé par `skill: "<nom>"` dans un job de `.relais/workflow.yml`. Exemple complet : [`workflow.md`](workflow.md#ajouter-un-job-personnalisé-avec-son-propre-skill).
-4. **Modifier le pack** lui-même : éditer `packs/standard/` (skills, hook, permissions) dans votre copie de Relais. Cela s'applique à tous les projets de l'instance ; redémarrez `relais up` pour régénérer `run-settings.json`.
+4. **Modifier le pack** lui-même : éditer `packs/standard/` (skills, hook, permissions) dans votre copie de Relais. Cela s'applique à tous les projets de l'instance ; redémarrez `relais up` pour régénérer `run-settings.json`. Pour changer la méthode de toute l'équipe (seuils des niveaux de review, commandes de vérification, règles de TDD), éditez le skill de méthode concerné : tous les skills de job qui le chargent suivent. Ajouter un skill de méthode : un dossier `skills/<nom>/SKILL.md`, cité comme `relais:<nom>` depuis un skill de job ou le hook.
 
 Relais charge toujours `packs/standard` : `extends` dans `workflow.yml` n'a pas d'effet et il n'existe pas encore de mécanisme pour choisir un autre pack. Pour un « pack » d'équipe, maintenez une copie de Relais avec votre `packs/standard/`.
 
 ### Écrire un skill
 
-- Frontmatter `name` (nom du dossier) et `description` ; `src/pack.test.ts` vérifie que chaque skill référencé par le `workflow.yml` du pack existe avec ce frontmatter.
+- Frontmatter `name` (nom du dossier) et `description` ; `src/pack.test.ts` vérifie que chaque skill du pack a ce frontmatter, que chaque skill référencé par le `workflow.yml` du pack existe, et que chaque `relais:<nom>` cité dans un skill ou dans le hook existe.
+- Appuyez-vous sur les skills de méthode plutôt que de répéter leurs règles : « applique `relais:receiving-review` » reste juste quand la méthode évolue.
 - Le prompt du run commence par `/<skill>` suivi du bloc « Ticket » (identifiant, titre, URL, branche, PR, description), du « Contexte Linear » quand le webhook en fournit un et, selon `input`, « Retours à traiter », « CI en échec », « Message » ou « Vérifications en échec ».
 - Dites explicitement ce qu'il faut faire **à la fin** : commit/push, et le format du dernier message (publié dans Linear).
 - Utilisez `relais-agent ask` pour toute décision manquante, puis fin de tour.
