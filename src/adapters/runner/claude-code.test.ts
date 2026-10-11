@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { buildClaudeArgs, ClaudeCodeRunner } from './claude-code.js';
+import { buildClaudeArgs, childEnv, ClaudeCodeRunner } from './claude-code.js';
 import type { RunRequest, RunStreamEvent } from './types.js';
 
 const fx = (n: string) => join(import.meta.dirname, 'fixtures', n);
@@ -74,5 +74,18 @@ describe('ClaudeCodeRunner', () => {
     expect((await slow.done).outcome).toBe('limit');
     const chatty = r.start(req({ limits: { turns: 2, durationMs: 10_000, usd: 5 } }, { FAKE_CLAUDE_SCRIPT: fx('stream-many-turns.jsonl'), FAKE_CLAUDE_HANG: '1' }));
     expect((await chatty.done).outcome).toBe('limit');
+  });
+});
+
+describe('childEnv', () => {
+  it('drops daemon-only secrets (LINEAR_*, non-run RELAIS_*) and keeps the run variables', () => {
+    const env = childEnv(
+      { HOME: '/h', PATH: '/bin', ANTHROPIC_API_KEY: 'k', GH_TOKEN: 'g', LINEAR_API_KEY: 'lin', LINEAR_TOKEN: 'x', RELAIS_HOME: '/data', RELAIS_UI_PASSWORD: 'pw', RELAIS_SECRET: 's' },
+      { RELAIS_API: 'http://127.0.0.1:4100/agent', RELAIS_RUN_TOKEN: 't', RELAIS_TICKET: 'REL-1', RELAIS_KNOWLEDGE: '', RELAIS_ROOT: '/app', PATH: '/app/bin:/bin' },
+    );
+    expect(env).toEqual({
+      HOME: '/h', PATH: '/app/bin:/bin', ANTHROPIC_API_KEY: 'k', GH_TOKEN: 'g',
+      RELAIS_API: 'http://127.0.0.1:4100/agent', RELAIS_RUN_TOKEN: 't', RELAIS_TICKET: 'REL-1', RELAIS_KNOWLEDGE: '', RELAIS_ROOT: '/app',
+    });
   });
 });
