@@ -11,7 +11,7 @@ function ev<T extends EventType>(type: T, payload: EventPayloads[T]): RelaisEven
   return { id: `e-${type}`, type, at: 1000, projectId: 'p', ticketId: 'REL-1', payload } as RelaisEvent;
 }
 function ticket(patch: Partial<TicketState> = {}): TicketState {
-  return { ...newTicketState('p', 'REL-1', 'Titre', 'todo', 0), ...patch };
+  return { ...newTicketState('p', 'REL-1', 'Titre', 'todo', 0), delegated: true, ...patch };
 }
 
 describe('decide — YAML rules of the standard pack', () => {
@@ -40,6 +40,20 @@ describe('decide — YAML rules of the standard pack', () => {
   it('routes a reply in a foreign session to ask', () => {
     const out = decide(ev('session.prompted', { linearSessionId: 's9', body: 'et pour mobile ?', author: 'L' }), ticket({ linearSessionId: 's1' }), ctx);
     expect(out).toEqual([{ kind: 'start_run', job: 'ask', input: 'thread', inputText: 'et pour mobile ?', linearSessionId: 's9' }]);
+  });
+
+  it('on a non-delegated ticket, a reply routes to ask and dev-queue rules are skipped', () => {
+    const t = ticket({ delegated: false, logical: 'dev' });
+    expect(decide(ev('session.prompted', { linearSessionId: 's9', body: 'et pourquoi ?', author: 'L' }), t, ctx)).toEqual([
+      { kind: 'start_run', job: 'ask', input: 'thread', inputText: 'et pourquoi ?', linearSessionId: 's9' },
+    ]);
+    expect(decide(ev('ticket.moved', { from: 'human_review', to: 'ai_review' }), { ...t, logical: 'ai_review' }, ctx)).toEqual([]);
+    expect(decide(ev('label.added', { label: 'agent:reprendre' }), t, ctx)).toEqual([]);
+  });
+
+  it('on a delegated ticket, a reply in a recorded question session routes to ask', () => {
+    const out = decide(ev('session.prompted', { linearSessionId: 's9', body: 'et ?', author: 'L' }), ticket({ logical: 'dev', questionSessionIds: ['s9'] }), ctx);
+    expect(out[0]).toMatchObject({ kind: 'start_run', job: 'ask', linearSessionId: 's9' });
   });
 
   it('moves human_review -> dev runs dev-feedback', () => {

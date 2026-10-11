@@ -25,6 +25,20 @@ function successCommands(job: JobSpec, runId: string): Command[] {
   return out;
 }
 
+/** A Linear session that carries questions (read-only answers), not the ticket's dev conversation. */
+export function isQuestionSession(ticket: TicketState | undefined, sessionId: string | undefined): boolean {
+  if (!ticket || !sessionId) return false;
+  if (!ticket.delegated) return true;
+  if (ticket.questionSessionIds.includes(sessionId)) return true;
+  return !!ticket.linearSessionId && sessionId !== ticket.linearSessionId;
+}
+
+/** Non-delegated tickets only ever get question-queue work. */
+function ruleAllowed(rule: Rule, event: RelaisEvent, ticket: TicketState | undefined, workflow: Workflow): boolean {
+  if (!rule.run || !ticket || ticket.delegated || event.type === 'ticket.delegated') return true;
+  return workflow.jobs[rule.run]?.queue === 'questions';
+}
+
 export function formatFailuresShort(failures: VerifyFailure[]): string {
   return failures.map((f) => `- \`${f.command}\` (code ${f.exitCode ?? 'timeout'})`).join('\n');
 }
@@ -145,7 +159,7 @@ export function decide(event: RelaisEvent, ticket: TicketState | undefined, ctx:
         { kind: 'link_pr', url: event.payload.url },
       ];
     case 'session.prompted':
-      if (ticket?.linearSessionId && event.payload.linearSessionId !== ticket.linearSessionId) {
+      if (isQuestionSession(ticket, event.payload.linearSessionId)) {
         if (!workflow.jobs['ask']) return [];
         return [
           { kind: 'start_run', job: 'ask', input: 'thread', inputText: event.payload.body, linearSessionId: event.payload.linearSessionId },
@@ -156,6 +170,6 @@ export function decide(event: RelaisEvent, ticket: TicketState | undefined, ctx:
       break;
   }
   const rules = workflow.on[event.type] ?? [];
-  const rule = rules.find((r) => ruleMatches(r, event, ticket, ctx));
+  const rule = rules.find((r) => ruleAllowed(r, event, ticket, workflow) && ruleMatches(r, event, ticket, ctx));
   return rule ? ruleCommands(rule, event, ticket, ctx) : [];
 }

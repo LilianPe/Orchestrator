@@ -133,6 +133,78 @@ describe('standard workflow', () => {
     expect(r.cwd).toMatch(/^\/tmp\/relais-fake\/_kb\//);
   });
 
+  describe('C1: a mention never makes a ticket delegated', () => {
+    async function mentioned(h: ReturnType<typeof createHarness>, stateName = 'Todo') {
+      h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', stateName });
+      h.runner.enqueue({ events: [{ kind: 'text', text: 'Dans src/scores/history.ts.' }] });
+      await h.send('session.mentioned', { linearSessionId: 'ls-9', body: 'où est calculé le score ?', author: 'L' });
+    }
+
+    it('a follow-up in the ask thread of a todo ticket runs ask again with the thread', async () => {
+      const h = createHarness();
+      await mentioned(h);
+      h.runner.enqueue({ events: [{ kind: 'text', text: 'Parce que.' }] });
+      await h.send('session.prompted', { linearSessionId: 'ls-9', body: 'et pourquoi ?', author: 'L' });
+      await h.advance(600_000);
+      expect(h.runner.requests).toHaveLength(2);
+      const r = h.runner.requests[1]!;
+      expect(r).toMatchObject({ readOnly: true, cwd: '/tmp/relais-fake/p/_trunk' });
+      expect(r.prompt.startsWith('/relais:ask\n')).toBe(true);
+      expect(r.prompt).toContain('et pourquoi ?');
+      expect(h.tracker.activities('ls-9').at(-1)).toEqual({ type: 'response', body: 'Parce que.' });
+    });
+
+    it('a follow-up in the ask thread of a human-owned in-progress ticket stays read-only', async () => {
+      const h = createHarness();
+      await mentioned(h, 'In Progress');
+      expect(h.ticket().logical).toBe('dev');
+      await h.send('session.prompted', { linearSessionId: 'ls-9', body: 'et pourquoi ?', author: 'L' });
+      await h.advance(600_000);
+      expect(h.runner.requests.map((r) => [r.prompt.split('\n')[0], r.readOnly])).toEqual([
+        ['/relais:ask', true],
+        ['/relais:ask', true],
+      ]);
+      expect(h.ticket()).toMatchObject({ pendingFeedback: [], blocked: false });
+      expect(h.tracker.calls.filter((c) => c.method === 'ensureSession')).toEqual([]);
+    });
+
+    it('moving a mention-only ticket to AI Review starts no review and moves nothing', async () => {
+      const h = createHarness();
+      await mentioned(h);
+      await h.send('ticket.moved', { from: 'human_review', to: 'ai_review' });
+      expect(h.runner.requests).toHaveLength(1);
+      expect(h.tracker.calls.filter((c) => c.method === 'moveTo')).toEqual([]);
+      expect(h.ticket().logical).toBe('ai_review');
+    });
+
+    it('agent:reprendre on a mention-only ticket starts nothing', async () => {
+      const h = createHarness();
+      await mentioned(h);
+      await h.send('label.added', { label: 'agent:reprendre' });
+      expect(h.runner.requests).toHaveLength(1);
+    });
+
+    it('a later delegation of a mentioned ticket starts dev', async () => {
+      const h = createHarness();
+      await mentioned(h);
+      await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+      expect(h.runner.requests).toHaveLength(2);
+      expect(h.runner.requests[1]!.prompt.startsWith('/relais:dev\n')).toBe(true);
+      expect(h.ticket()).toMatchObject({ delegated: true, linearSessionId: 'ls-1' });
+    });
+
+    it('on a delegated ticket, a follow-up in a question thread runs ask, not feedback', async () => {
+      const h = createHarness();
+      await delegatedAndInReview(h);
+      h.runner.enqueue({}, {});
+      await h.send('session.mentioned', { linearSessionId: 'ls-9', body: 'question ?', author: 'L' });
+      await h.send('session.prompted', { linearSessionId: 'ls-9', body: 'et pourquoi ?', author: 'L' });
+      await h.advance(600_000);
+      expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/relais:dev', '/relais:ask', '/relais:ask']);
+      expect(h.ticket().pendingFeedback).toEqual([]);
+    });
+  });
+
   it('respects the parallel cap and drains the queue', async () => {
     const h = createHarness({ projectYaml: 'version: 1\nlimits: { parallel_sessions: 1 }\n' });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Un' });

@@ -63,6 +63,7 @@ interface StartOpts {
 const CREATES_TICKET = new Set<EventType>(['ticket.delegated', 'session.mentioned', 'command', 'session.prompted']);
 const SETTLES_RUN = new Set<EventType>(['run.finished', 'verify.passed', 'verify.failed']);
 const ECHO_MS = 60_000;
+const MAX_QUESTION_SESSIONS = 50;
 
 export function logicalFromName(states: Record<LogicalState, string>, name: string): LogicalState | undefined {
   return (Object.entries(states) as [LogicalState, string][]).find(([, n]) => n === name)?.[0];
@@ -218,8 +219,14 @@ export class Orchestrator {
 
     let activeJob = ticket?.activeRunId ? store.getRun(ticket.activeRunId)?.job : undefined;
     if (ticket) {
-      if (event.type === 'ticket.delegated' && event.payload.linearSessionId && !ticket.linearSessionId) {
-        ticket.linearSessionId = event.payload.linearSessionId;
+      if (event.type === 'ticket.delegated') {
+        ticket.delegated = true;
+        if (event.payload.linearSessionId && !ticket.linearSessionId) ticket.linearSessionId = event.payload.linearSessionId;
+      }
+      if (event.type === 'ticket.undelegated') ticket.delegated = false;
+      if ((event.type === 'session.mentioned' || event.type === 'command') && event.payload.linearSessionId !== ticket.linearSessionId) {
+        const ids = ticket.questionSessionIds.filter((id) => id !== event.payload.linearSessionId);
+        ticket.questionSessionIds = [...ids, event.payload.linearSessionId].slice(-MAX_QUESTION_SESSIONS);
       }
       if (event.type === 'ticket.moved' && event.payload.to) ticket.logical = event.payload.to;
       if (event.type === 'run.finished') {
@@ -406,6 +413,9 @@ export class Orchestrator {
     const job = project.workflow.jobs[opts.job];
     if (!job) return this.log('error', `unknown job ${opts.job}`);
     const t = this.ticket(project.id, ticketId);
+    if (job.queue === 'dev' && !t.delegated) {
+      return this.log('warn', `refused ${job.name} on ${ticketId}: the ticket is not delegated to Relais`);
+    }
     const item = {
       projectId: project.id,
       ticketId,
