@@ -35,6 +35,13 @@ export interface BootOptions {
   fakeRunner?: boolean;
   port?: number;
   log?: (m: string) => void;
+  /** Defaults to process.env; read for RELAIS_UI_PASSWORD. */
+  env?: NodeJS.ProcessEnv;
+}
+
+export function isLoopbackHost(host: string): boolean {
+  const h = host.replace(/^\[|\]$/g, '').toLowerCase();
+  return h === 'localhost' || h === '::1' || /^127\.\d+\.\d+\.\d+$/.test(h);
 }
 
 const RELAIS_LABELS = ['agent:reprendre', 'agent:stop'];
@@ -45,6 +52,13 @@ export async function startRelais(o: BootOptions): Promise<{ url: string; stop()
   const packDir = join(root, 'packs/standard');
   const webDir = join(root, 'web/dist');
   const instance = loadInstance(o.home);
+  const uiPassword = isLoopbackHost(instance.host) ? undefined : (o.env ?? process.env)['RELAIS_UI_PASSWORD'] || undefined;
+  if (!isLoopbackHost(instance.host) && !uiPassword) {
+    throw new Error(
+      `host: ${instance.host} expose l'interface et l'API de Relais hors de cette machine. ` +
+        "Définissez la variable d'environnement RELAIS_UI_PASSWORD (mot de passe de l'interface), ou remettez host: 127.0.0.1 dans config.yaml.",
+    );
+  }
   const paths = homePaths(o.home);
   const port = o.port ?? instance.port;
   const baseUrl = instance.publicUrl ?? `http://localhost:${port}`;
@@ -173,6 +187,7 @@ export async function startRelais(o: BootOptions): Promise<{ url: string; stop()
     dailyBudgetUsd: instance.limits.perDayUsd,
     transcriptsDir: paths.transcripts,
     webDir: existsSync(webDir) ? webDir : undefined,
+    uiPassword,
     oauth: loadSecrets(o.home).linear
       ? {
           authorizeUrl: () => {

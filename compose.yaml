@@ -8,4 +8,5 @@ services:
     environment:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       GH_TOKEN: ${GH_TOKEN}
+      RELAIS_UI_PASSWORD: ${RELAIS_UI_PASSWORD:?définissez RELAIS_UI_PASSWORD (mot de passe de l'interface)}
     restart: unless-stopped

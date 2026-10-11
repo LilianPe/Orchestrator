@@ -33,6 +33,7 @@ Déléguer un ticket, pendant le run cliquer « Send stop request » dans Linear
 
 ## 8. Docker (critère 8)
 `docker compose up --build` sur une machine Linux avec `data/config.yaml` adapté (`host: 0.0.0.0`, `publicUrl: https://<domaine>`, `relay: { kind: none }`, `repoPath` sous `/repos`). Attendu : interface sur le port 4100, même comportement que 3.
+Avec `host` différent de `127.0.0.1`, Relais refuse de démarrer sans `RELAIS_UI_PASSWORD` : l'interface, `/api/*` et `/oauth/start` demandent alors une authentification HTTP Basic (nom d'utilisateur libre, mot de passe = `RELAIS_UI_PASSWORD`). Restent ouverts : `POST /webhooks/linear` (signé), `GET /oauth/callback` et `/agent/*` (jeton de run). Vérifier : `curl -i https://<domaine>/api/state` répond 401 ; la CLI (`relais status`) utilise la même variable.
 
 ## Vérifications live optionnelles
 - `LINEAR_API_KEY=<clé perso> npx vitest run src/adapters/tracker/linear/queries.live.test.ts` : toutes les requêtes valident contre le schéma Linear.
