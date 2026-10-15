@@ -12,7 +12,9 @@ export function verifyLinearSignature(raw: string, signature: string | undefined
   return given.length === expected.length && timingSafeEqual(given, expected);
 }
 
-export function isFresh(body: { webhookTimestamp?: number }, now: number, maxSkewMs = 60_000): boolean {
+export const FRESHNESS_MS = 60_000;
+
+export function isFresh(body: { webhookTimestamp?: number }, now: number, maxSkewMs = FRESHNESS_MS): boolean {
   return typeof body.webhookTimestamp === 'number' && Math.abs(now - body.webhookTimestamp) <= maxSkewMs;
 }
 
@@ -90,7 +92,7 @@ export function deliveryKey(body: any, raw: string): string {
   return `body:${createHash('sha256').update(raw).digest('hex')}`;
 }
 
-export function mapLinearWebhook(body: any, deliveryId: string, ctx: MapContext): RelaisEvent[] {
+export function mapLinearWebhook(body: any, key: string, ctx: MapContext): RelaisEvent[] {
   let identifier: string | undefined;
   if (body?.type === 'AgentSessionEvent') identifier = body.agentSession?.issue?.identifier;
   else if (body?.type === 'Issue') identifier = body.data?.identifier ?? (body.data?.team?.key ? `${body.data.team.key}-${body.data.number}` : undefined);
@@ -101,6 +103,6 @@ export function mapLinearWebhook(body: any, deliveryId: string, ctx: MapContext)
   const partials = body.type === 'AgentSessionEvent' ? sessionEvents(body, projectId, ctx) : issueEvents(body, identifier, teamKey, projectId, ctx);
   const at = ctx.now();
   return partials.map(
-    (p) => ({ id: `linear:${deliveryId}${p.suffix ?? ''}`, type: p.type, at, projectId, ticketId: identifier, payload: p.payload }) as RelaisEvent,
+    (p) => ({ id: `linear:${key}${p.suffix ?? ''}`, type: p.type, at, projectId, ticketId: identifier, payload: p.payload }) as RelaisEvent,
   );
 }

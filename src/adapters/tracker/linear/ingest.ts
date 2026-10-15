@@ -1,5 +1,5 @@
 import type { RelaisEvent } from '../../../core/types.js';
-import { deliveryKey, isFresh, mapLinearWebhook, verifyLinearSignature, type MapContext } from './webhook.js';
+import { deliveryKey, FRESHNESS_MS, isFresh, mapLinearWebhook, verifyLinearSignature, type MapContext } from './webhook.js';
 
 export interface IngestDeps {
   secret: () => string;
@@ -10,8 +10,8 @@ export interface IngestDeps {
 }
 
 const ACKED = new Set(['ticket.delegated', 'session.mentioned', 'command']);
-// Twice the freshness window: a replay is rejected as stale before its key expires.
-const SEEN_TTL_MS = 120_000;
+// A replay is rejected as stale before its key expires.
+const SEEN_TTL_MS = 2 * FRESHNESS_MS;
 
 export function createLinearIngest(d: IngestDeps) {
   const seen = new Map<string, number>();
@@ -23,9 +23,12 @@ export function createLinearIngest(d: IngestDeps) {
     } catch {
       return { status: 400 };
     }
-    if (!isFresh(body, d.ctx.now())) return { status: 401 };
     const now = d.ctx.now();
-    for (const [k, at] of seen) if (now - at > SEEN_TTL_MS) seen.delete(k);
+    if (!isFresh(body, now)) return { status: 401 };
+    for (const [k, at] of seen) {
+      if (now - at <= SEEN_TTL_MS) break;
+      seen.delete(k);
+    }
     const key = deliveryKey(body, raw);
     if (seen.has(key)) return { status: 200 };
     const events = mapLinearWebhook(body, key, d.ctx);
