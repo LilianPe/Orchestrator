@@ -1,6 +1,8 @@
+import { createHmac } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
+import { verifyLinearSignature } from '../adapters/tracker/linear/webhook.js';
 import { startSmeeRelay } from './smee.js';
 
 let server: Server | undefined;
@@ -35,5 +37,45 @@ describe('smee relay', () => {
     expect(got.raw).toBe('{"type":"Issue","n":1}');
     expect(got.headers['linear-signature']).toBe('abc');
     expect(got.headers['linear-delivery']).toBe('d1');
+  });
+
+  it('keeps a JSON.stringify-shaped body byte-identical, so its signature stays valid', async () => {
+    const secret = 's3cret';
+    const raw = JSON.stringify({ type: 'Issue', t: 'é😀 a\nb "q" \\ \ud800 </x>', n: 1.5, big: 1e21, 2: 'k', b: [] });
+    const sig = createHmac('sha256', secret).update(raw).digest('hex');
+    const url = await sseServer({ 'linear-signature': sig, body: JSON.parse(raw) });
+    const got = await new Promise<string>((resolve) => {
+      const relay = startSmeeRelay({
+        url,
+        log: () => {},
+        onWebhook: (r) => {
+          relay.close();
+          resolve(r);
+          return { status: 200 };
+        },
+      });
+    });
+    expect(got).toBe(raw);
+    expect(verifyLinearSignature(got, sig, secret)).toBe(true);
+  });
+
+  it('explains the smee limitation when a body whose bytes it cannot reproduce is rejected', async () => {
+    const secret = 's3cret';
+    const raw = '{"type": "Issue", "n": 1.0, "t": "a\\/b"}';
+    const sig = createHmac('sha256', secret).update(raw).digest('hex');
+    const url = await sseServer({ 'linear-signature': sig, body: JSON.parse(raw) });
+    const logged = await new Promise<string>((resolve) => {
+      const relay = startSmeeRelay({
+        url,
+        log: (m) => {
+          relay.close();
+          resolve(m);
+        },
+        onWebhook: (r, h) => ({ status: verifyLinearSignature(r, h['linear-signature'], secret) ? 200 : 401 }),
+      });
+    });
+    expect(logged).toMatch(/^relay: webhook rejected with 401/);
+    expect(logged).toMatch(/smee\.io re-serializes/);
+    expect(logged).toMatch(/publicUrl/);
   });
 });
