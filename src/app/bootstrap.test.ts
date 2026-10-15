@@ -49,33 +49,19 @@ describe('bootstrap', () => {
     ctrl.abort();
   }, 4000);
 
-  it('warns at startup when the webhook signing secret is missing', async () => {
+  it.each([
+    { webhookSecret: undefined, warns: true, port: 4194 },
+    { webhookSecret: '', warns: true, port: 4193 },
+    { webhookSecret: '  ', warns: true, port: 4192 },
+    { webhookSecret: 'whsecret', warns: false, port: 4191 },
+  ])('warns at startup only when the webhook signing secret is unusable ($webhookSecret)', async ({ webhookSecret, warns, port }) => {
     const home = mkdtempSync(join(tmpdir(), 'relais-boot-'));
-    saveInstance(home, { port: 4194, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
+    saveInstance(home, { port, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
+    if (webhookSecret !== undefined) saveSecrets(home, { linear: { clientId: 'cid', clientSecret: 'cs', webhookSecret } });
     const logs: string[] = [];
     const app = await startRelais({ home, fakeRunner: true, log: (m) => void logs.push(m) });
     await app.stop();
-    expect(logs.some((m) => m.includes('secret de webhook') && m.includes('refusé'))).toBe(true);
-  });
-
-  it.each(['', '  '])('warns at startup when the webhook signing secret is blank (%j)', async (webhookSecret) => {
-    const home = mkdtempSync(join(tmpdir(), 'relais-boot-'));
-    saveInstance(home, { port: 4192, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
-    saveSecrets(home, { linear: { clientId: 'cid', clientSecret: 'cs', webhookSecret } });
-    const logs: string[] = [];
-    const app = await startRelais({ home, fakeRunner: true, log: (m) => void logs.push(m) });
-    await app.stop();
-    expect(logs.some((m) => m.includes('secret de webhook'))).toBe(true);
-  });
-
-  it('does not warn when the webhook signing secret is set', async () => {
-    const home = mkdtempSync(join(tmpdir(), 'relais-boot-'));
-    saveInstance(home, { port: 4193, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
-    saveSecrets(home, { linear: { clientId: 'cid', clientSecret: 'cs', webhookSecret: 'whsecret' } });
-    const logs: string[] = [];
-    const app = await startRelais({ home, fakeRunner: true, log: (m) => void logs.push(m) });
-    await app.stop();
-    expect(logs.some((m) => m.includes('secret de webhook'))).toBe(false);
+    expect(logs.some((m) => m.includes('secret de webhook') && m.includes('refusé'))).toBe(warns);
   });
 
   it('TrackerSwitch explains how to connect', async () => {

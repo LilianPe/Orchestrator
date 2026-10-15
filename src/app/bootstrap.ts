@@ -13,6 +13,7 @@ import { buildAuthorizeUrl, exchangeCode, TokenManager } from '../adapters/track
 import { Q } from '../adapters/tracker/linear/queries.js';
 import { Reconciler } from '../adapters/tracker/linear/reconcile.js';
 import { LinearTracker } from '../adapters/tracker/linear/tracker.js';
+import { isUsableWebhookSecret } from '../adapters/tracker/linear/webhook.js';
 import { GitWorkspaces } from '../adapters/workspace/git-workspaces.js';
 import { homePaths, loadInstance, loadSecrets, saveSecrets } from '../config/instance.js';
 import { writeRunSettings } from '../config/run-settings.js';
@@ -146,8 +147,9 @@ export async function startRelais(o: BootOptions): Promise<{ url: string; stop()
   orchestrator.recover();
   const submit = (e: Parameters<Orchestrator['submit']>[0]) => void orchestrator.submit(e);
 
+  const webhookSecret = () => loadSecrets(o.home).linear?.webhookSecret ?? '';
   const ingest = createLinearIngest({
-    secret: () => loadSecrets(o.home).linear?.webhookSecret ?? '',
+    secret: webhookSecret,
     submit,
     ack: (sessionId) => trackerSwitch.activity(sessionId, { type: 'thought', body: 'Pris en compte.' }),
     log,
@@ -229,7 +231,7 @@ export async function startRelais(o: BootOptions): Promise<{ url: string; stop()
     reconciler.start();
   }
   else log(`Linear non connecté : ouvrez ${baseUrl}/oauth/start`);
-  if (!loadSecrets(o.home).linear?.webhookSecret?.trim())
+  if (!isUsableWebhookSecret(webhookSecret()))
     log('Attention : aucun secret de webhook Linear configuré, tout webhook sera refusé. Relancez relais init pour le renseigner.');
   log(`Relais écoute sur ${baseUrl}`);
 
