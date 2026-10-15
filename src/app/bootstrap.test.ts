@@ -58,6 +58,16 @@ describe('bootstrap', () => {
     expect(logs.some((m) => m.includes('secret de webhook') && m.includes('refusé'))).toBe(true);
   });
 
+  it.each(['', '  '])('warns at startup when the webhook signing secret is blank (%j)', async (webhookSecret) => {
+    const home = mkdtempSync(join(tmpdir(), 'relais-boot-'));
+    saveInstance(home, { port: 4192, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
+    saveSecrets(home, { linear: { clientId: 'cid', clientSecret: 'cs', webhookSecret } });
+    const logs: string[] = [];
+    const app = await startRelais({ home, fakeRunner: true, log: (m) => void logs.push(m) });
+    await app.stop();
+    expect(logs.some((m) => m.includes('secret de webhook'))).toBe(true);
+  });
+
   it('does not warn when the webhook signing secret is set', async () => {
     const home = mkdtempSync(join(tmpdir(), 'relais-boot-'));
     saveInstance(home, { port: 4193, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });

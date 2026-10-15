@@ -2,7 +2,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { LogicalState, RelaisEvent } from '../../../core/types.js';
 
 export function verifyLinearSignature(raw: string, signature: string | undefined, secret: string): boolean {
-  if (!secret || !signature || !/^[0-9a-f]+$/i.test(signature)) return false;
+  if (!secret.trim() || !signature || !/^[0-9a-f]+$/i.test(signature)) return false;
   const expected = Buffer.from(createHmac('sha256', secret).update(raw).digest('hex'), 'hex');
   const given = Buffer.from(signature, 'hex');
   return given.length === expected.length && timingSafeEqual(given, expected);

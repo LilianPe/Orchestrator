@@ -35,6 +35,8 @@ describe('signature', () => {
     const raw = '{"a":1}';
     const sig = createHmac('sha256', '').update(raw).digest('hex');
     expect(verifyLinearSignature(raw, sig, '')).toBe(false);
+    const blank = createHmac('sha256', '  ').update(raw).digest('hex');
+    expect(verifyLinearSignature(raw, blank, '  ')).toBe(false);
   });
   it('checks freshness', () => {
     expect(isFresh({ webhookTimestamp: 1000 }, 50_000)).toBe(true);

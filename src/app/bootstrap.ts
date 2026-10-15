@@ -229,7 +229,7 @@ export async function startRelais(o: BootOptions): Promise<{ url: string; stop()
     reconciler.start();
   }
   else log(`Linear non connecté : ouvrez ${baseUrl}/oauth/start`);
-  if (!loadSecrets(o.home).linear?.webhookSecret)
+  if (!loadSecrets(o.home).linear?.webhookSecret?.trim())
     log('Attention : aucun secret de webhook Linear configuré, tout webhook sera refusé. Relancez relais init pour le renseigner.');
   log(`Relais écoute sur ${baseUrl}`);
 
