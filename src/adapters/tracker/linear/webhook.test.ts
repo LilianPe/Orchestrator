@@ -120,6 +120,54 @@ describe('ingest', () => {
     expect(order).toEqual(['ack:as-1', 'submit:ticket.delegated']);
   });
 
+  function idsOf(now = 1000) {
+    const ids: string[] = [];
+    const ingest = createLinearIngest({
+      secret: () => 'sec',
+      ctx: { ...ctx(), now: () => now },
+      submit: (e: RelaisEvent) => void ids.push(e.id),
+      ack: async () => {},
+      log: () => {},
+    });
+    const send = (body: unknown, delivery?: string) => {
+      const { raw, sig } = signed(body);
+      expect(ingest(raw, { 'linear-signature': sig, 'linear-delivery': delivery })).toEqual({ status: 200 });
+    };
+    return { ids, send };
+  }
+
+  it('keeps the same event ids when a signed webhook is replayed with another or no Linear-Delivery', () => {
+    for (const name of ['session-prompted', 'session-created-delegation', 'issue-moved-labeled']) {
+      const { ids, send } = idsOf();
+      const body = fx(name);
+      send(body, 'd1');
+      send(body, 'forged');
+      send(body);
+      const n = ids.length / 3;
+      expect(n).toBeGreaterThan(0);
+      expect(ids.slice(n, 2 * n)).toEqual(ids.slice(0, n));
+      expect(ids.slice(2 * n)).toEqual(ids.slice(0, n));
+    }
+  });
+
+  it('keeps the same id when Linear re-sends an activity with a new webhookTimestamp', () => {
+    const { ids, send } = idsOf();
+    send(fx('session-prompted'), 'd1');
+    send({ ...fx('session-prompted'), webhookTimestamp: 1500 }, 'd2');
+    expect(ids[1]).toBe(ids[0]);
+  });
+
+  it('gives distinct ids to two different webhooks', () => {
+    const { ids, send } = idsOf();
+    const prompted = fx('session-prompted');
+    send(prompted, 'd1');
+    send({ ...prompted, agentActivity: { ...prompted.agentActivity, id: 'aa-2' } }, 'd2');
+    const moved = fx('issue-moved-labeled');
+    send({ ...moved, data: { ...moved.data, updatedAt: '2026-10-15T10:00:00.000Z' } }, 'd3');
+    send({ ...moved, data: { ...moved.data, updatedAt: '2026-10-15T10:00:01.000Z' } }, 'd4');
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
   it('rejects a bad signature and a stale body', () => {
     const submit = vi.fn();
     const ingest = createLinearIngest({ secret: () => 'sec', ctx: { ...ctx(), now: () => 999_999 }, submit, ack: async () => {}, log: () => {} });

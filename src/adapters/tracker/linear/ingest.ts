@@ -1,6 +1,5 @@
-import { randomUUID } from 'node:crypto';
 import type { RelaisEvent } from '../../../core/types.js';
-import { isFresh, mapLinearWebhook, verifyLinearSignature, type MapContext } from './webhook.js';
+import { deliveryKey, isFresh, mapLinearWebhook, verifyLinearSignature, type MapContext } from './webhook.js';
 
 export interface IngestDeps {
   secret: () => string;
@@ -22,7 +21,7 @@ export function createLinearIngest(d: IngestDeps) {
       return { status: 400 };
     }
     if (!isFresh(body, d.ctx.now())) return { status: 401 };
-    const events = mapLinearWebhook(body, headers['linear-delivery'] ?? randomUUID(), d.ctx);
+    const events = mapLinearWebhook(body, deliveryKey(body, raw), d.ctx);
     for (const e of events) {
       const sessionId = (e.payload as { linearSessionId?: string }).linearSessionId;
       if (ACKED.has(e.type) && sessionId) d.ack(sessionId).catch((err: Error) => d.log(`ack failed: ${err.message}`));

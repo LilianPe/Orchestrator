@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import type { LogicalState, RelaisEvent } from '../../../core/types.js';
 
 export function isUsableWebhookSecret(secret: unknown): boolean {
@@ -78,6 +78,16 @@ function issueEvents(body: any, identifier: string, teamKey: string, projectId: 
     }
   }
   return out;
+}
+
+// Linear-Delivery is outside the HMAC: the dedup key must come from the signed body.
+export function deliveryKey(body: any, raw: string): string {
+  if (body?.type === 'AgentSessionEvent') {
+    if (body.action === 'prompted' && body.agentActivity?.id) return `activity:${body.agentActivity.id}`;
+    if (body.action === 'created' && body.agentSession?.id) return `session:${body.agentSession.id}`;
+  }
+  if (body?.type === 'Issue' && body.data?.id && body.data?.updatedAt) return `issue:${body.data.id}:${body.data.updatedAt}`;
+  return `body:${createHash('sha256').update(raw).digest('hex')}`;
 }
 
 export function mapLinearWebhook(body: any, deliveryId: string, ctx: MapContext): RelaisEvent[] {
