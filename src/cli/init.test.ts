@@ -48,4 +48,26 @@ describe('relais init', () => {
     expect(out).toContain('Agent session events');
     expect(existsSync(join(home, 'config.yaml'))).toBe(true);
   });
+
+  it('asks the webhook signing secret again until it is not empty', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'relais-init-home-'));
+    const repo = mkdtempSync(join(tmpdir(), 'relais-init-repo-'));
+    const exec: Exec = async (cmd, args) =>
+      cmd === 'git' && args[0] === 'rev-parse' ? { stdout: `${repo}\n`, stderr: '', code: 0 } : { stdout: '', stderr: '', code: 0 };
+    const asked: string[] = [];
+    const answers = ['REL', 'cid', 'csecret', '', '  ', 'whsecret', ''];
+    const io: InitIO = {
+      ask: async (q, def) => {
+        asked.push(q);
+        if (!answers.length) throw new Error(`no more answers (${q})`);
+        return answers.shift() || def || '';
+      },
+      confirm: async () => false,
+      print: () => {},
+    };
+    await runInit({ io, home, cwd: repo, createSmee: async () => 'https://smee.io/abc', exec });
+
+    expect(asked.filter((q) => q === 'Webhook signing secret')).toHaveLength(3);
+    expect(loadSecrets(home).linear?.webhookSecret).toBe('whsecret');
+  });
 });

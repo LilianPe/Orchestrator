@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { Orchestrator } from '../core/orchestrator.js';
-import { saveInstance } from '../config/instance.js';
+import { saveInstance, saveSecrets } from '../config/instance.js';
 import { startRelais } from './bootstrap.js';
 import { TrackerSwitch } from './tracker-switch.js';
 
@@ -48,6 +48,21 @@ describe('bootstrap', () => {
     await app.stop();
     ctrl.abort();
   }, 4000);
+
+  it.each([
+    { webhookSecret: undefined, warns: true, port: 4194 },
+    { webhookSecret: '', warns: true, port: 4193 },
+    { webhookSecret: '  ', warns: true, port: 4192 },
+    { webhookSecret: 'whsecret', warns: false, port: 4191 },
+  ])('warns at startup only when the webhook signing secret is unusable ($webhookSecret)', async ({ webhookSecret, warns, port }) => {
+    const home = mkdtempSync(join(tmpdir(), 'relais-boot-'));
+    saveInstance(home, { port, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
+    if (webhookSecret !== undefined) saveSecrets(home, { linear: { clientId: 'cid', clientSecret: 'cs', webhookSecret } });
+    const logs: string[] = [];
+    const app = await startRelais({ home, fakeRunner: true, log: (m) => void logs.push(m) });
+    await app.stop();
+    expect(logs.some((m) => m.includes('secret de webhook') && m.includes('refusé'))).toBe(warns);
+  });
 
   it('TrackerSwitch explains how to connect', async () => {
     await expect(new TrackerSwitch(4100).getIssue('REL-1')).rejects.toThrow('Linear non connecté : ouvrez http://localhost:4100/oauth/start');

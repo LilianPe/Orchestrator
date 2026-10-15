@@ -27,7 +27,7 @@ Les commandes qui demandent le démon appellent `http://127.0.0.1:<port>/api/…
 1. Demande la **clé de l'équipe Linear** (ex. `REL`), mise en majuscules.
 2. Ajoute (ou remplace) le projet dans `config.yaml` : `id` = nom du dossier du dépôt (slug, 30 caractères max), `repoPath` = racine git, `linearTeamKey`.
 3. Sans `publicUrl` ni relais configuré, crée un **canal smee.io** et l'enregistre dans `relay`.
-4. Affiche les valeurs exactes à saisir dans Linear (URL de callback, URL de webhook, catégories) puis demande **Client ID**, **Client secret** et **Webhook signing secret**, enregistrés dans `secrets.json`. Détails : [`linear.md`](linear.md).
+4. Affiche les valeurs exactes à saisir dans Linear (URL de callback, URL de webhook, catégories) puis demande **Client ID**, **Client secret** et **Webhook signing secret** (redemandé tant que la réponse est vide), enregistrés dans `secrets.json`. Détails : [`linear.md`](linear.md).
 5. Si aucune base de connaissance n'est configurée, propose de créer un dépôt GitHub privé `relais-knowledge` (`gh repo create`). Voir [`projets-et-workspaces.md`](projets-et-workspaces.md#base-de-connaissance-partagée).
 6. Si `.relais/workflow.yml` n'existe pas, le crée : demande les commandes de vérification (proposées à partir des scripts `lint`, `typecheck`, `test` de `package.json`, séparées par `;`) et met `workspace.setup: ["npm ci"]` si le dépôt a un `package-lock.json`. Contenu exact : [`workflow.md`](workflow.md#1-rôle-du-fichier-et-fusion-avec-le-pack).
 7. Écrit `config.yaml` et affiche la suite : `relais up`, « Connecter Linear », déléguer un ticket.
@@ -41,6 +41,7 @@ Démarre le démon au premier plan : serveur HTTP (interface, API, webhooks, OAu
 - Écrit `<RELAIS_HOME>/run-settings.json` (voir [`configuration.md`](configuration.md#ce-qui-ne-sort-pas-du-démon)).
 - Clôt les runs interrompus par un arrêt ou un crash précédent et bloque leurs tickets (voir [`exploitation.md`](exploitation.md#arrêt-redémarrage-et-runs-interrompus)).
 - Si Linear n'est pas connecté, journalise `Linear non connecté : ouvrez <url>/oauth/start`.
+- Si le secret de webhook manque dans `secrets.json`, journalise un avertissement : tous les webhooks seront refusés (401) tant qu'il n'est pas renseigné.
 - Refuse de démarrer si `host` n'est pas en bouclage et que `RELAIS_UI_PASSWORD` est vide.
 
 `Ctrl+C` (SIGINT) ou SIGTERM : arrêt propre (les runs en cours sont interrompus, puis repris en main au prochain démarrage).

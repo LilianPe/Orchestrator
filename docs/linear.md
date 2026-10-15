@@ -49,6 +49,7 @@ Linear doit pouvoir joindre Relais. Deux modes, réglés dans `config.yaml` :
 Chaque webhook est vérifié, quel que soit le mode :
 
 - **signature HMAC-SHA256** du corps brut avec le *webhook signing secret*, comparée à l'en-tête `linear-signature` (comparaison en temps constant) ; sinon refus (401) ;
+- **secret obligatoire** : si le *webhook signing secret* est vide (ou fait seulement d'espaces) ou absent de `secrets.json`, **tous** les webhooks sont refusés (401), même ceux dont la signature est calculée sur ce secret vide (n'importe qui pourrait la calculer). `relais init` redemande le secret tant que la réponse est vide, et `relais up` affiche un avertissement au démarrage s'il manque ;
 - **fraîcheur** : `webhookTimestamp` à moins de 60 s de l'horloge locale ; sinon refus (401). Gardez l'horloge de la machine synchronisée (NTP).
 
 Un canal smee est public : n'importe qui connaissant l'URL peut y lire les événements (contenu des tickets) et y écrire. La signature empêche d'injecter de faux événements, pas la lecture. Pour un usage durable ou sur des données sensibles, préférez une URL publique. Point à vérifier à la recette : que le corps relayé par smee garde une signature valide (sinon les événements sont rejetés ; passer en `publicUrl`).

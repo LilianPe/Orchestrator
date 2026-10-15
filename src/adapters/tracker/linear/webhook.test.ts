@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { RelaisEvent } from '../../../core/types.js';
 import { createLinearIngest } from './ingest.js';
-import { isFresh, mapLinearWebhook, stripMention, verifyLinearSignature, type MapContext } from './webhook.js';
+import { isFresh, isUsableWebhookSecret, mapLinearWebhook, stripMention, verifyLinearSignature, type MapContext } from './webhook.js';
 
 const fx = (name: string) => JSON.parse(readFileSync(join(import.meta.dirname, 'fixtures', `${name}.json`), 'utf8'));
 const NAMES: Record<string, string> = { 's-hr': 'Human Review', 's-ai': 'AI Review' };
@@ -30,6 +30,20 @@ describe('signature', () => {
     expect(verifyLinearSignature(raw, sig, 'other')).toBe(false);
     expect(verifyLinearSignature(raw, undefined, 'sec')).toBe(false);
     expect(verifyLinearSignature(raw, 'zz', 'sec')).toBe(false);
+  });
+  it('rejects everything when the secret is empty, even a signature computed with it', () => {
+    const raw = '{"a":1}';
+    for (const secret of ['', '  ']) {
+      const sig = createHmac('sha256', secret).update(raw).digest('hex');
+      expect(verifyLinearSignature(raw, sig, secret)).toBe(false);
+    }
+  });
+  it('rejects instead of throwing when a hand-written secrets.json holds a non-string secret', () => {
+    const raw = '{"a":1}';
+    for (const secret of [12345, true, null]) {
+      expect(isUsableWebhookSecret(secret)).toBe(false);
+      expect(verifyLinearSignature(raw, 'ab', secret as unknown as string)).toBe(false);
+    }
   });
   it('checks freshness', () => {
     expect(isFresh({ webhookTimestamp: 1000 }, 50_000)).toBe(true);
@@ -112,6 +126,15 @@ describe('ingest', () => {
     const { raw, sig } = signed(fx('session-prompted'));
     expect(ingest(raw, { 'linear-signature': 'bad' })).toEqual({ status: 401 });
     expect(ingest(raw, { 'linear-signature': sig })).toEqual({ status: 401 });
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  it('rejects a fresh webhook forged with an empty secret', () => {
+    const submit = vi.fn();
+    const ingest = createLinearIngest({ secret: () => '', ctx: { ...ctx(), now: () => 2000 }, submit, ack: async () => {}, log: () => {} });
+    const raw = JSON.stringify(fx('session-prompted'));
+    const forged = createHmac('sha256', '').update(raw).digest('hex');
+    expect(ingest(raw, { 'linear-signature': forged })).toEqual({ status: 401 });
     expect(submit).not.toHaveBeenCalled();
   });
 });

@@ -92,7 +92,7 @@ Le coût du jour et le plafond sont affichés dans l'interface et par `relais st
 | Champ | Source | Rôle |
 |---|---|---|
 | `clientId`, `clientSecret` | saisis pendant `relais init` | OAuth et rafraîchissement du jeton. |
-| `webhookSecret` | saisi pendant `relais init` | Vérifie la signature HMAC des webhooks Linear. |
+| `webhookSecret` | saisi pendant `relais init` (obligatoire) | Vérifie la signature HMAC des webhooks Linear. Vide ou absent : tous les webhooks sont refusés (401). |
 | `accessToken`, `refreshToken`, `expiresAt` | « Connecter Linear » | Jeton de l'application, rafraîchi automatiquement. |
 | `appUserId`, `organizationId` | « Connecter Linear » | Identité de l'agent dans Linear (sert à lister les tickets qui lui sont délégués). |
 
