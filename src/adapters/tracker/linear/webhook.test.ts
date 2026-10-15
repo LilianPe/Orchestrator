@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { RelaisEvent } from '../../../core/types.js';
 import { createLinearIngest } from './ingest.js';
-import { isFresh, mapLinearWebhook, stripMention, verifyLinearSignature, type MapContext } from './webhook.js';
+import { isFresh, isUsableWebhookSecret, mapLinearWebhook, stripMention, verifyLinearSignature, type MapContext } from './webhook.js';
 
 const fx = (name: string) => JSON.parse(readFileSync(join(import.meta.dirname, 'fixtures', `${name}.json`), 'utf8'));
 const NAMES: Record<string, string> = { 's-hr': 'Human Review', 's-ai': 'AI Review' };
@@ -36,6 +36,13 @@ describe('signature', () => {
     for (const secret of ['', '  ']) {
       const sig = createHmac('sha256', secret).update(raw).digest('hex');
       expect(verifyLinearSignature(raw, sig, secret)).toBe(false);
+    }
+  });
+  it('rejects instead of throwing when a hand-written secrets.json holds a non-string secret', () => {
+    const raw = '{"a":1}';
+    for (const secret of [12345, true, null]) {
+      expect(isUsableWebhookSecret(secret)).toBe(false);
+      expect(verifyLinearSignature(raw, 'ab', secret as unknown as string)).toBe(false);
     }
   });
   it('checks freshness', () => {

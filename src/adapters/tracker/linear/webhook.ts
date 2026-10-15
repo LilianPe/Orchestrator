@@ -1,8 +1,8 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { LogicalState, RelaisEvent } from '../../../core/types.js';
 
-export function isUsableWebhookSecret(secret: string | undefined): secret is string {
-  return !!secret?.trim();
+export function isUsableWebhookSecret(secret: unknown): boolean {
+  return typeof secret === 'string' && secret.trim() !== '';
 }
 
 export function verifyLinearSignature(raw: string, signature: string | undefined, secret: string): boolean {
