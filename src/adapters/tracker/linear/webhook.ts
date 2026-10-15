@@ -83,13 +83,14 @@ function issueEvents(body: any, identifier: string, teamKey: string, projectId: 
 }
 
 // Linear-Delivery is outside the HMAC: the dedup key must come from the signed body.
-export function deliveryKey(body: any, raw: string): string {
+export function deliveryKey(body: any): string {
   if (body?.type === 'AgentSessionEvent') {
     if (body.action === 'prompted' && body.agentActivity?.id) return `activity:${body.agentActivity.id}`;
     if (body.action === 'created' && body.agentSession?.id) return `session:${body.agentSession.id}`;
   }
   if (body?.type === 'Issue' && body.data?.id && body.data?.updatedAt) return `issue:${body.data.id}:${body.data.updatedAt}`;
-  return `body:${createHash('sha256').update(raw).digest('hex')}`;
+  // Linear resends a failed delivery with a new webhookTimestamp: leave it out of the hash.
+  return `body:${createHash('sha256').update(JSON.stringify({ ...body, webhookTimestamp: undefined })).digest('hex')}`;
 }
 
 export function mapLinearWebhook(body: any, key: string, ctx: MapContext): RelaisEvent[] {

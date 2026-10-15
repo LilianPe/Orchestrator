@@ -29,7 +29,7 @@ export function createLinearIngest(d: IngestDeps) {
       if (now - at <= SEEN_TTL_MS) break;
       seen.delete(k);
     }
-    const key = deliveryKey(body, raw);
+    const key = deliveryKey(body);
     if (seen.has(key)) return { status: 200 };
     const events = mapLinearWebhook(body, key, d.ctx);
     for (const e of events) {

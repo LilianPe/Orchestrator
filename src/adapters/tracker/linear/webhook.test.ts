@@ -172,6 +172,14 @@ describe('ingest', () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
+  it('keeps the fallback id when Linear resends with a new webhookTimestamp', () => {
+    const { agentActivity: _, ...noActivityId } = fx('session-prompted');
+    const body = { ...noActivityId, agentActivity: { content: { body: 'x' } } };
+    const first = idsOf(body);
+    expect(first.length).toBe(1);
+    expect(idsOf({ ...body, webhookTimestamp: 1500 })).toEqual(first);
+  });
+
   it('neither acks nor submits again a webhook replayed within the freshness window', () => {
     const { ids, acks, send } = make();
     send(fx('session-created-delegation'), { 'linear-delivery': 'd1' });
