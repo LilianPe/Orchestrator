@@ -53,7 +53,11 @@ export async function runInit(d: InitDeps): Promise<void> {
   );
   const clientId = await io.ask('Client ID');
   const clientSecret = await io.ask('Client secret');
-  const webhookSecret = await io.ask('Webhook signing secret');
+  let webhookSecret = '';
+  while (!webhookSecret) {
+    webhookSecret = (await io.ask('Webhook signing secret')).trim();
+    if (!webhookSecret) io.print('Le webhook signing secret est obligatoire : sans lui, Relais refuse tous les webhooks.');
+  }
   const secrets = loadSecrets(d.home);
   const keepTokens = secrets.linear?.clientId === clientId ? secrets.linear : {};
   saveSecrets(d.home, { ...secrets, linear: { ...keepTokens, clientId, clientSecret, webhookSecret } });

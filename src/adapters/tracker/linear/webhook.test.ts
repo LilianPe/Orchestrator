@@ -31,6 +31,11 @@ describe('signature', () => {
     expect(verifyLinearSignature(raw, undefined, 'sec')).toBe(false);
     expect(verifyLinearSignature(raw, 'zz', 'sec')).toBe(false);
   });
+  it('rejects everything when the secret is empty, even a signature computed with it', () => {
+    const raw = '{"a":1}';
+    const sig = createHmac('sha256', '').update(raw).digest('hex');
+    expect(verifyLinearSignature(raw, sig, '')).toBe(false);
+  });
   it('checks freshness', () => {
     expect(isFresh({ webhookTimestamp: 1000 }, 50_000)).toBe(true);
     expect(isFresh({ webhookTimestamp: 1000 }, 70_000)).toBe(false);
@@ -112,6 +117,15 @@ describe('ingest', () => {
     const { raw, sig } = signed(fx('session-prompted'));
     expect(ingest(raw, { 'linear-signature': 'bad' })).toEqual({ status: 401 });
     expect(ingest(raw, { 'linear-signature': sig })).toEqual({ status: 401 });
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  it('rejects a fresh webhook forged with an empty secret', () => {
+    const submit = vi.fn();
+    const ingest = createLinearIngest({ secret: () => '', ctx: { ...ctx(), now: () => 2000 }, submit, ack: async () => {}, log: () => {} });
+    const raw = JSON.stringify(fx('session-prompted'));
+    const forged = createHmac('sha256', '').update(raw).digest('hex');
+    expect(ingest(raw, { 'linear-signature': forged })).toEqual({ status: 401 });
     expect(submit).not.toHaveBeenCalled();
   });
 });
