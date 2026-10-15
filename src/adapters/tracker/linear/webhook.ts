@@ -30,7 +30,7 @@ export function stripMention(body: string): string {
   return body.replace(/^\s*(\[@[^\]]*\]\([^)]*\)|@\S+)\s*/, '').trim();
 }
 
-type PartialEvent = { type: RelaisEvent['type']; payload: unknown };
+type PartialEvent = { type: RelaisEvent['type']; payload: unknown; suffix?: string };
 
 function author(body: any): string {
   return body.agentActivity?.user?.name ?? body.agentSession?.comment?.user?.name ?? body.agentSession?.creator?.name ?? 'Humain';
@@ -74,7 +74,7 @@ function issueEvents(body: any, identifier: string, teamKey: string, projectId: 
     for (const id of data.labelIds as string[]) {
       if ((from.labelIds as string[]).includes(id)) continue;
       const name = ctx.labelNameById(teamKey, id);
-      if (name && !ctx.isEcho(`label:${identifier}:${name}`)) out.push({ type: 'label.added', payload: { label: name } });
+      if (name && !ctx.isEcho(`label:${identifier}:${name}`)) out.push({ type: 'label.added', payload: { label: name }, suffix: `:label:${name}` });
     }
   }
   return out;
@@ -101,6 +101,6 @@ export function mapLinearWebhook(body: any, deliveryId: string, ctx: MapContext)
   const partials = body.type === 'AgentSessionEvent' ? sessionEvents(body, projectId, ctx) : issueEvents(body, identifier, teamKey, projectId, ctx);
   const at = ctx.now();
   return partials.map(
-    (p, i) => ({ id: i === 0 ? `linear:${deliveryId}` : `linear:${deliveryId}:${i}`, type: p.type, at, projectId, ticketId: identifier, payload: p.payload }) as RelaisEvent,
+    (p) => ({ id: `linear:${deliveryId}${p.suffix ?? ''}`, type: p.type, at, projectId, ticketId: identifier, payload: p.payload }) as RelaisEvent,
   );
 }

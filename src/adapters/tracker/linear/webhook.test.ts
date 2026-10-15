@@ -87,8 +87,12 @@ describe('mapLinearWebhook', () => {
     const out = mapLinearWebhook(fx('issue-moved-labeled'), 'd6', ctx());
     expect(out).toEqual([
       { id: 'linear:d6', type: 'ticket.moved', at: 5000, projectId: 'p', ticketId: 'REL-1', payload: { from: 'human_review', to: 'ai_review' } },
-      { id: 'linear:d6:1', type: 'label.added', at: 5000, projectId: 'p', ticketId: 'REL-1', payload: { label: 'agent:reprendre' } },
+      { id: 'linear:d6:label:agent:reprendre', type: 'label.added', at: 5000, projectId: 'p', ticketId: 'REL-1', payload: { label: 'agent:reprendre' } },
     ]);
+  });
+  it('keeps the label event id when the state change is an echo', () => {
+    const out = mapLinearWebhook(fx('issue-moved-labeled'), 'd6', ctx(['state:REL-1:AI Review']));
+    expect(out.map((e) => e.id)).toEqual(['linear:d6:label:agent:reprendre']);
   });
   it('drops echoes of our own writes', () => {
     expect(mapLinearWebhook(fx('issue-moved-labeled'), 'd7', ctx(['state:REL-1:AI Review', 'label:REL-1:agent:reprendre']))).toEqual([]);
@@ -120,52 +124,65 @@ describe('ingest', () => {
     expect(order).toEqual(['ack:as-1', 'submit:ticket.delegated']);
   });
 
-  function idsOf(now = 1000) {
+  function make(now = 1000) {
     const ids: string[] = [];
+    const acks: string[] = [];
     const ingest = createLinearIngest({
       secret: () => 'sec',
       ctx: { ...ctx(), now: () => now },
       submit: (e: RelaisEvent) => void ids.push(e.id),
-      ack: async () => {},
+      ack: async (s) => void acks.push(s),
       log: () => {},
     });
     const send = (body: unknown, delivery?: string) => {
       const { raw, sig } = signed(body);
       expect(ingest(raw, { 'linear-signature': sig, 'linear-delivery': delivery })).toEqual({ status: 200 });
     };
-    return { ids, send };
+    return { ids, acks, send };
+  }
+
+  // A fresh ingest per call: what reaches the store, without the in-memory replay guard.
+  function idsOf(body: unknown, delivery?: string): string[] {
+    const { ids, send } = make();
+    send(body, delivery);
+    return ids;
   }
 
   it('keeps the same event ids when a signed webhook is replayed with another or no Linear-Delivery', () => {
     for (const name of ['session-prompted', 'session-created-delegation', 'issue-moved-labeled']) {
-      const { ids, send } = idsOf();
-      const body = fx(name);
-      send(body, 'd1');
-      send(body, 'forged');
-      send(body);
-      const n = ids.length / 3;
-      expect(n).toBeGreaterThan(0);
-      expect(ids.slice(n, 2 * n)).toEqual(ids.slice(0, n));
-      expect(ids.slice(2 * n)).toEqual(ids.slice(0, n));
+      const first = idsOf(fx(name), 'd1');
+      expect(first.length).toBeGreaterThan(0);
+      expect(idsOf(fx(name), 'forged')).toEqual(first);
+      expect(idsOf(fx(name))).toEqual(first);
     }
   });
 
-  it('keeps the same id when Linear re-sends an activity with a new webhookTimestamp', () => {
-    const { ids, send } = idsOf();
-    send(fx('session-prompted'), 'd1');
-    send({ ...fx('session-prompted'), webhookTimestamp: 1500 }, 'd2');
-    expect(ids[1]).toBe(ids[0]);
+  it('keeps the same ids when Linear re-sends a webhook with a new webhookTimestamp', () => {
+    for (const name of ['session-prompted', 'issue-moved-labeled']) {
+      expect(idsOf({ ...fx(name), webhookTimestamp: 1500 }, 'd2')).toEqual(idsOf(fx(name), 'd1'));
+    }
   });
 
   it('gives distinct ids to two different webhooks', () => {
-    const { ids, send } = idsOf();
     const prompted = fx('session-prompted');
-    send(prompted, 'd1');
-    send({ ...prompted, agentActivity: { ...prompted.agentActivity, id: 'aa-2' } }, 'd2');
     const moved = fx('issue-moved-labeled');
-    send({ ...moved, data: { ...moved.data, updatedAt: '2026-10-15T10:00:00.000Z' } }, 'd3');
-    send({ ...moved, data: { ...moved.data, updatedAt: '2026-10-15T10:00:01.000Z' } }, 'd4');
+    const ids = [
+      ...idsOf(prompted, 'd1'),
+      ...idsOf({ ...prompted, agentActivity: { ...prompted.agentActivity, id: 'aa-2' } }, 'd2'),
+      ...idsOf(moved, 'd3'),
+      ...idsOf({ ...moved, data: { ...moved.data, updatedAt: '2026-10-15T10:00:01.000Z' } }, 'd4'),
+    ];
+    expect(ids).toHaveLength(6);
     expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it('neither acks nor submits again a webhook replayed within the freshness window', () => {
+    const { ids, acks, send } = make();
+    send(fx('session-created-delegation'), 'd1');
+    send(fx('session-created-delegation'), 'forged');
+    send({ ...fx('session-created-delegation'), webhookTimestamp: 1500 });
+    expect(acks).toEqual(['as-1']);
+    expect(ids).toHaveLength(1);
   });
 
   it('rejects a bad signature and a stale body', () => {
