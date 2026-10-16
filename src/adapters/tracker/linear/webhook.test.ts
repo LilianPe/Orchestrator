@@ -87,8 +87,17 @@ describe('mapLinearWebhook', () => {
     const out = mapLinearWebhook(fx('issue-moved-labeled'), 'd6', ctx());
     expect(out).toEqual([
       { id: 'linear:d6', type: 'ticket.moved', at: 5000, projectId: 'p', ticketId: 'REL-1', payload: { from: 'human_review', to: 'ai_review' } },
-      { id: 'linear:d6:1', type: 'label.added', at: 5000, projectId: 'p', ticketId: 'REL-1', payload: { label: 'agent:reprendre' } },
+      { id: 'linear:d6:label:l-resume', type: 'label.added', at: 5000, projectId: 'p', ticketId: 'REL-1', payload: { label: 'agent:reprendre' } },
     ]);
+  });
+  it('keeps the label event id when the state change is an echo', () => {
+    const out = mapLinearWebhook(fx('issue-moved-labeled'), 'd6', ctx(['state:REL-1:AI Review']));
+    expect(out.map((e) => e.id)).toEqual(['linear:d6:label:l-resume']);
+  });
+  it('keeps the label event id when the label is renamed', () => {
+    const renamed = { ...ctx(), labelNameById: (_t: string, id: string) => ({ 'l-bug': 'bug', 'l-resume': 'agent:resume' })[id] };
+    const ids = (c: MapContext) => mapLinearWebhook(fx('issue-moved-labeled'), 'd6', c).map((e) => e.id);
+    expect(ids(renamed)).toEqual(ids(ctx()));
   });
   it('drops echoes of our own writes', () => {
     expect(mapLinearWebhook(fx('issue-moved-labeled'), 'd7', ctx(['state:REL-1:AI Review', 'label:REL-1:agent:reprendre']))).toEqual([]);
@@ -116,8 +125,96 @@ describe('ingest', () => {
       log: () => {},
     });
     const { raw, sig } = signed(fx('session-created-delegation'));
-    expect(ingest(raw, { 'linear-signature': sig, 'linear-delivery': 'd9' })).toEqual({ status: 200 });
+    expect(ingest(raw, { 'linear-signature': sig })).toEqual({ status: 200 });
     expect(order).toEqual(['ack:as-1', 'submit:ticket.delegated']);
+  });
+
+  function make() {
+    const ids: string[] = [];
+    const acks: string[] = [];
+    const ingest = createLinearIngest({
+      secret: () => 'sec',
+      ctx: { ...ctx(), now: () => 1000 },
+      submit: (e: RelaisEvent) => void ids.push(e.id),
+      ack: async (s) => void acks.push(s),
+      log: () => {},
+    });
+    const send = (body: unknown, headers: Record<string, string> = {}) => {
+      const { raw, sig } = signed(body);
+      expect(ingest(raw, { ...headers, 'linear-signature': sig })).toEqual({ status: 200 });
+    };
+    return { ids, acks, send };
+  }
+
+  // A fresh ingest per call: the ids that reach the store, without the in-memory replay guard.
+  function idsOf(body: unknown, headers?: Record<string, string>): string[] {
+    const { ids, send } = make();
+    send(body, headers);
+    return ids;
+  }
+
+  it.each(['session-prompted', 'session-created-delegation', 'issue-moved-labeled'])(
+    'derives %s event ids from the signed body only',
+    (name) => {
+      const first = idsOf(fx(name), { 'linear-delivery': 'd1' });
+      expect(first.length).toBeGreaterThan(0);
+      expect(idsOf(fx(name), { 'linear-delivery': 'forged' })).toEqual(first);
+      expect(idsOf(fx(name))).toEqual(first);
+      expect(idsOf({ ...fx(name), webhookTimestamp: 1500 })).toEqual(first);
+    },
+  );
+
+  it('gives distinct ids to two different webhooks', () => {
+    const prompted = fx('session-prompted');
+    const moved = fx('issue-moved-labeled');
+    const ids = [
+      ...idsOf(prompted),
+      ...idsOf({ ...prompted, agentActivity: { ...prompted.agentActivity, id: 'aa-2' } }),
+      ...idsOf(moved),
+      ...idsOf({ ...moved, data: { ...moved.data, updatedAt: '2026-10-15T10:00:01.000Z' } }),
+    ];
+    expect(ids).toHaveLength(6);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it('keeps the fallback id when Linear resends with a new webhookTimestamp', () => {
+    const { agentActivity: _, ...noActivityId } = fx('session-prompted');
+    const body = { ...noActivityId, agentActivity: { content: { body: 'x' } } };
+    const first = idsOf(body);
+    expect(first.length).toBe(1);
+    expect(idsOf({ ...body, webhookTimestamp: 1500 })).toEqual(first);
+  });
+
+  it('neither acks nor submits again a webhook replayed within the freshness window', () => {
+    const { ids, acks, send } = make();
+    send(fx('session-created-delegation'), { 'linear-delivery': 'd1' });
+    send(fx('session-created-delegation'), { 'linear-delivery': 'forged' });
+    send({ ...fx('session-created-delegation'), webhookTimestamp: 1500 });
+    expect(acks).toEqual(['as-1']);
+    expect(ids).toHaveLength(1);
+  });
+
+  it('still drops a replay that is fresh when a later webhook purges the guard', () => {
+    let now = 1000;
+    const ids: string[] = [];
+    const ingest = createLinearIngest({
+      secret: () => 'sec',
+      ctx: { ...ctx(), now: () => now },
+      submit: (e: RelaisEvent) => void ids.push(e.id),
+      ack: async () => {},
+      log: () => {},
+    });
+    const send = (body: unknown) => {
+      const { raw, sig } = signed(body);
+      return ingest(raw, { 'linear-signature': sig });
+    };
+    const first = fx('session-prompted');
+    send(first);
+    now = 60_000;
+    send({ ...first, webhookTimestamp: 60_000, agentActivity: { ...first.agentActivity, id: 'aa-2' } });
+    now = 61_000;
+    expect(send(first)).toEqual({ status: 200 });
+    expect(ids).toHaveLength(2);
   });
 
   it('rejects a bad signature and a stale body', () => {

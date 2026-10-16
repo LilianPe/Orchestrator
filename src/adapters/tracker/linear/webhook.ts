@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import type { LogicalState, RelaisEvent } from '../../../core/types.js';
 
 export function isUsableWebhookSecret(secret: unknown): boolean {
@@ -12,8 +12,10 @@ export function verifyLinearSignature(raw: string, signature: string | undefined
   return given.length === expected.length && timingSafeEqual(given, expected);
 }
 
-export function isFresh(body: { webhookTimestamp?: number }, now: number, maxSkewMs = 60_000): boolean {
-  return typeof body.webhookTimestamp === 'number' && Math.abs(now - body.webhookTimestamp) <= maxSkewMs;
+export const FRESHNESS_MS = 60_000;
+
+export function isFresh(body: { webhookTimestamp?: number }, now: number): boolean {
+  return typeof body.webhookTimestamp === 'number' && Math.abs(now - body.webhookTimestamp) <= FRESHNESS_MS;
 }
 
 export interface MapContext {
@@ -30,7 +32,7 @@ export function stripMention(body: string): string {
   return body.replace(/^\s*(\[@[^\]]*\]\([^)]*\)|@\S+)\s*/, '').trim();
 }
 
-type PartialEvent = { type: RelaisEvent['type']; payload: unknown };
+type PartialEvent = { type: RelaisEvent['type']; payload: unknown; suffix?: string };
 
 function author(body: any): string {
   return body.agentActivity?.user?.name ?? body.agentSession?.comment?.user?.name ?? body.agentSession?.creator?.name ?? 'Humain';
@@ -74,13 +76,24 @@ function issueEvents(body: any, identifier: string, teamKey: string, projectId: 
     for (const id of data.labelIds as string[]) {
       if ((from.labelIds as string[]).includes(id)) continue;
       const name = ctx.labelNameById(teamKey, id);
-      if (name && !ctx.isEcho(`label:${identifier}:${name}`)) out.push({ type: 'label.added', payload: { label: name } });
+      if (name && !ctx.isEcho(`label:${identifier}:${name}`)) out.push({ type: 'label.added', payload: { label: name }, suffix: `:label:${id}` });
     }
   }
   return out;
 }
 
-export function mapLinearWebhook(body: any, deliveryId: string, ctx: MapContext): RelaisEvent[] {
+// Linear-Delivery is outside the HMAC: the dedup key must come from the signed body.
+export function deliveryKey(body: any): string {
+  if (body?.type === 'AgentSessionEvent') {
+    if (body.action === 'prompted' && body.agentActivity?.id) return `activity:${body.agentActivity.id}`;
+    if (body.action === 'created' && body.agentSession?.id) return `session:${body.agentSession.id}`;
+  }
+  if (body?.type === 'Issue' && body.data?.id && body.data?.updatedAt) return `issue:${body.data.id}:${body.data.updatedAt}`;
+  // Linear resends a failed delivery with a new webhookTimestamp: leave it out of the hash.
+  return `body:${createHash('sha256').update(JSON.stringify({ ...body, webhookTimestamp: undefined })).digest('hex')}`;
+}
+
+export function mapLinearWebhook(body: any, key: string, ctx: MapContext): RelaisEvent[] {
   let identifier: string | undefined;
   if (body?.type === 'AgentSessionEvent') identifier = body.agentSession?.issue?.identifier;
   else if (body?.type === 'Issue') identifier = body.data?.identifier ?? (body.data?.team?.key ? `${body.data.team.key}-${body.data.number}` : undefined);
@@ -91,6 +104,6 @@ export function mapLinearWebhook(body: any, deliveryId: string, ctx: MapContext)
   const partials = body.type === 'AgentSessionEvent' ? sessionEvents(body, projectId, ctx) : issueEvents(body, identifier, teamKey, projectId, ctx);
   const at = ctx.now();
   return partials.map(
-    (p, i) => ({ id: i === 0 ? `linear:${deliveryId}` : `linear:${deliveryId}:${i}`, type: p.type, at, projectId, ticketId: identifier, payload: p.payload }) as RelaisEvent,
+    (p) => ({ id: `linear:${key}${p.suffix ?? ''}`, type: p.type, at, projectId, ticketId: identifier, payload: p.payload }) as RelaisEvent,
   );
 }

@@ -1,6 +1,5 @@
-import { randomUUID } from 'node:crypto';
 import type { RelaisEvent } from '../../../core/types.js';
-import { isFresh, mapLinearWebhook, verifyLinearSignature, type MapContext } from './webhook.js';
+import { deliveryKey, FRESHNESS_MS, isFresh, mapLinearWebhook, verifyLinearSignature, type MapContext } from './webhook.js';
 
 export interface IngestDeps {
   secret: () => string;
@@ -11,8 +10,11 @@ export interface IngestDeps {
 }
 
 const ACKED = new Set(['ticket.delegated', 'session.mentioned', 'command']);
+// A replay is rejected as stale before its key expires.
+const SEEN_TTL_MS = 2 * FRESHNESS_MS;
 
 export function createLinearIngest(d: IngestDeps) {
+  const seen = new Map<string, number>();
   return (raw: string, headers: Record<string, string | undefined>): { status: number } => {
     if (!verifyLinearSignature(raw, headers['linear-signature'], d.secret())) return { status: 401 };
     let body: any;
@@ -21,13 +23,21 @@ export function createLinearIngest(d: IngestDeps) {
     } catch {
       return { status: 400 };
     }
-    if (!isFresh(body, d.ctx.now())) return { status: 401 };
-    const events = mapLinearWebhook(body, headers['linear-delivery'] ?? randomUUID(), d.ctx);
+    const now = d.ctx.now();
+    if (!isFresh(body, now)) return { status: 401 };
+    for (const [k, at] of seen) {
+      if (now - at <= SEEN_TTL_MS) break;
+      seen.delete(k);
+    }
+    const key = deliveryKey(body);
+    if (seen.has(key)) return { status: 200 };
+    const events = mapLinearWebhook(body, key, d.ctx);
     for (const e of events) {
       const sessionId = (e.payload as { linearSessionId?: string }).linearSessionId;
       if (ACKED.has(e.type) && sessionId) d.ack(sessionId).catch((err: Error) => d.log(`ack failed: ${err.message}`));
       d.submit(e);
     }
+    seen.set(key, now);
     return { status: 200 };
   };
 }
