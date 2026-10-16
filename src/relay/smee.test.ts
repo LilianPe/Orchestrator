@@ -6,7 +6,10 @@ import { verifyLinearSignature } from '../adapters/tracker/linear/webhook.js';
 import { startSmeeRelay } from './smee.js';
 
 let server: Server | undefined;
+let relay: { close(): void } | undefined;
 afterEach(() => {
+  relay?.close();
+  relay = undefined;
   server?.closeAllConnections();
   server?.close();
 });
@@ -27,15 +30,20 @@ function serveSigned(raw: string): Promise<{ url: string; sig: string }> {
   return sseServer({ 'linear-signature': sig, body: JSON.parse(raw) }).then((url) => ({ url, sig }));
 }
 
-function firstWebhook(url: string): Promise<{ raw: string; headers: Record<string, string | undefined> }> {
+type Relayed = { raw: string; headers: Record<string, string | undefined>; logs: string[] };
+
+// Resolves on the first relayed webhook; the relay logs a rejection synchronously after onWebhook returns,
+// so `logs` already holds it when the awaiting test resumes.
+function firstWebhook(url: string, status: (raw: string, headers: Relayed['headers']) => number = () => 200): Promise<Relayed> {
+  const logs: string[] = [];
   return new Promise((resolve) => {
-    const relay = startSmeeRelay({
+    relay = startSmeeRelay({
       url,
-      log: () => {},
+      log: (m) => logs.push(m),
       onWebhook: (raw, headers) => {
-        relay.close();
-        resolve({ raw, headers });
-        return { status: 200 };
+        relay?.close();
+        resolve({ raw, headers, logs });
+        return { status: status(raw, headers) };
       },
     });
   });
@@ -61,24 +69,30 @@ describe('smee relay', () => {
   it('explains the smee limitation when a body whose bytes it cannot reproduce is rejected', async () => {
     const raw = '{"type": "Issue", "n": 1.0, "t": "a\\/b"}';
     const { url } = await serveSigned(raw);
-    let relayed = '';
-    const logged = await new Promise<string>((resolve) => {
-      const relay = startSmeeRelay({
-        url,
-        log: (m) => {
-          if (!m.startsWith('relay: webhook rejected')) return;
-          relay.close();
-          resolve(m);
-        },
-        onWebhook: (r, h) => {
-          relayed = r;
-          return { status: verifyLinearSignature(r, h['linear-signature'], SECRET) ? 200 : 401 };
-        },
-      });
-    });
-    expect(relayed).not.toBe(raw);
+    const got = await firstWebhook(url, (r, h) => (verifyLinearSignature(r, h['linear-signature'], SECRET) ? 200 : 401));
+    expect(got.raw).not.toBe(raw);
+    const logged = got.logs.find((m) => m.startsWith('relay: webhook rejected')) ?? '';
     expect(logged).toMatch(/^relay: webhook rejected with 401/);
     expect(logged).toMatch(/smee\.io re-serializes/);
     expect(logged).toMatch(/publicUrl/);
+  });
+
+  // The shapes docs/linear.md (section 3) lists as not reproducible through smee.
+  it.each([
+    ['spaces', '{"type": "Issue"}'],
+    ['indentation', '{\n  "type": "Issue"\n}'],
+    ['escaped slash', '{"t":"a\\/b"}'],
+    ['optional unicode escape', '{"t":"\\u00e9"}'],
+    ['1.0', '{"n":1.0}'],
+    ['1e3', '{"n":1e3}'],
+    ['-0', '{"n":-0}'],
+    ['more than 17 significant digits', '{"n":0.30000000000000001}'],
+    ['integer beyond 2^53 not exactly representable', '{"n":9007199254740993}'],
+    ['duplicate keys', '{"a":1,"a":2}'],
+    ['numeric key after a string key', '{"type":"Issue","2":"k"}'],
+  ])('does not reproduce a body with %s', async (_shape, raw) => {
+    const { url } = await serveSigned(raw);
+    const got = await firstWebhook(url);
+    expect(got.raw).not.toBe(raw);
   });
 });
