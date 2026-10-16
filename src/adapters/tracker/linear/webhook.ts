@@ -14,8 +14,8 @@ export function verifyLinearSignature(raw: string, signature: string | undefined
 
 export const FRESHNESS_MS = 60_000;
 
-export function isFresh(body: { webhookTimestamp?: number }, now: number, maxSkewMs = FRESHNESS_MS): boolean {
-  return typeof body.webhookTimestamp === 'number' && Math.abs(now - body.webhookTimestamp) <= maxSkewMs;
+export function isFresh(body: { webhookTimestamp?: number }, now: number): boolean {
+  return typeof body.webhookTimestamp === 'number' && Math.abs(now - body.webhookTimestamp) <= FRESHNESS_MS;
 }
 
 export interface MapContext {
