@@ -194,6 +194,29 @@ describe('ingest', () => {
     expect(ids).toHaveLength(1);
   });
 
+  it('still drops a replay that is fresh when a later webhook purges the guard', () => {
+    let now = 1000;
+    const ids: string[] = [];
+    const ingest = createLinearIngest({
+      secret: () => 'sec',
+      ctx: { ...ctx(), now: () => now },
+      submit: (e: RelaisEvent) => void ids.push(e.id),
+      ack: async () => {},
+      log: () => {},
+    });
+    const send = (body: unknown) => {
+      const { raw, sig } = signed(body);
+      return ingest(raw, { 'linear-signature': sig });
+    };
+    const first = fx('session-prompted');
+    send(first);
+    now = 60_000;
+    send({ ...first, webhookTimestamp: 60_000, agentActivity: { ...first.agentActivity, id: 'aa-2' } });
+    now = 61_000;
+    expect(send(first)).toEqual({ status: 200 });
+    expect(ids).toHaveLength(2);
+  });
+
   it('rejects a bad signature and a stale body', () => {
     const submit = vi.fn();
     const ingest = createLinearIngest({ secret: () => 'sec', ctx: { ...ctx(), now: () => 999_999 }, submit, ack: async () => {}, log: () => {} });
