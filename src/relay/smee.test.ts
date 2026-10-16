@@ -86,13 +86,15 @@ describe('smee relay', () => {
     ['1.0', '{"n":1.0}'],
     ['1e3', '{"n":1e3}'],
     ['-0', '{"n":-0}'],
-    ['more than 17 significant digits', '{"n":0.30000000000000001}'],
-    ['integer beyond 2^53 not exactly representable', '{"n":9007199254740993}'],
+    ['a float longer than its shortest form', '{"n":0.30000000000000001}'],
+    ['an integer beyond 2^53 not exactly representable', '{"n":9007199254740993}'],
+    ['an integer JSON.stringify writes in exponent form', '{"n":1000000000000000000000}'],
     ['duplicate keys', '{"a":1,"a":2}'],
     ['numeric key after a string key', '{"type":"Issue","2":"k"}'],
   ])('does not reproduce a body with %s', async (_shape, raw) => {
     const { url } = await serveSigned(raw);
     const got = await firstWebhook(url);
+    expect(got.raw).toBe(JSON.stringify(JSON.parse(raw)));
     expect(got.raw).not.toBe(raw);
   });
 });
