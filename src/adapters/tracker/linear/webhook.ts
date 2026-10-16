@@ -76,7 +76,7 @@ function issueEvents(body: any, identifier: string, teamKey: string, projectId: 
     for (const id of data.labelIds as string[]) {
       if ((from.labelIds as string[]).includes(id)) continue;
       const name = ctx.labelNameById(teamKey, id);
-      if (name && !ctx.isEcho(`label:${identifier}:${name}`)) out.push({ type: 'label.added', payload: { label: name }, suffix: `:label:${name}` });
+      if (name && !ctx.isEcho(`label:${identifier}:${name}`)) out.push({ type: 'label.added', payload: { label: name }, suffix: `:label:${id}` });
     }
   }
   return out;

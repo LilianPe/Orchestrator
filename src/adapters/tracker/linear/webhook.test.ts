@@ -87,12 +87,17 @@ describe('mapLinearWebhook', () => {
     const out = mapLinearWebhook(fx('issue-moved-labeled'), 'd6', ctx());
     expect(out).toEqual([
       { id: 'linear:d6', type: 'ticket.moved', at: 5000, projectId: 'p', ticketId: 'REL-1', payload: { from: 'human_review', to: 'ai_review' } },
-      { id: 'linear:d6:label:agent:reprendre', type: 'label.added', at: 5000, projectId: 'p', ticketId: 'REL-1', payload: { label: 'agent:reprendre' } },
+      { id: 'linear:d6:label:l-resume', type: 'label.added', at: 5000, projectId: 'p', ticketId: 'REL-1', payload: { label: 'agent:reprendre' } },
     ]);
   });
   it('keeps the label event id when the state change is an echo', () => {
     const out = mapLinearWebhook(fx('issue-moved-labeled'), 'd6', ctx(['state:REL-1:AI Review']));
-    expect(out.map((e) => e.id)).toEqual(['linear:d6:label:agent:reprendre']);
+    expect(out.map((e) => e.id)).toEqual(['linear:d6:label:l-resume']);
+  });
+  it('keeps the label event id when the label is renamed', () => {
+    const renamed = { ...ctx(), labelNameById: (_t: string, id: string) => ({ 'l-bug': 'bug', 'l-resume': 'agent:resume' })[id] };
+    const ids = (c: MapContext) => mapLinearWebhook(fx('issue-moved-labeled'), 'd6', c).map((e) => e.id);
+    expect(ids(renamed)).toEqual(ids(ctx()));
   });
   it('drops echoes of our own writes', () => {
     expect(mapLinearWebhook(fx('issue-moved-labeled'), 'd7', ctx(['state:REL-1:AI Review', 'label:REL-1:agent:reprendre']))).toEqual([]);
