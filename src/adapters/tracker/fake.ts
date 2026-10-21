@@ -39,7 +39,8 @@ export class FakeTracker implements Tracker {
   }
 
   async getIssue(identifier: string): Promise<TrackerIssue> {
-    return { ...this.must(identifier) };
+    const i = this.must(identifier);
+    return { ...i, labels: [...i.labels] };
   }
 
   async listDelegated(teamKey: string): Promise<TrackerIssue[]> {
@@ -65,6 +66,7 @@ export class FakeTracker implements Tracker {
 
   async comment(identifier: string, body: string): Promise<void> {
     this.record('comment', identifier, body);
+    this.must(identifier);
   }
 
   async activity(sessionId: string, a: ActivityInput): Promise<void> {
@@ -77,6 +79,7 @@ export class FakeTracker implements Tracker {
 
   async ensureSession(identifier: string): Promise<string> {
     this.record('ensureSession', identifier);
+    this.must(identifier);
     return `fake-session-${++this.sessions}`;
   }
 }
