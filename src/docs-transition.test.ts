@@ -50,6 +50,10 @@ describe('docs/transition.md', () => {
     expect(missing).toEqual([]);
   });
 
+  it('gives every row, in or out of src/, a known status', () => {
+    expect([...rows].filter(([, s]) => !STATUSES.includes(s)).map(([p]) => p)).toEqual([]);
+  });
+
   it('lists each path once, and only paths that exist', () => {
     expect(duplicates).toEqual([]);
     expect([...rows.keys()].filter((p) => !existsSync(join(root, p)))).toEqual([]);
