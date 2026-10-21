@@ -19,7 +19,7 @@ Un faux par port, tous montés par `createHarness()` :
 | AgentRuntime | `Runner` (`src/adapters/runner/types.ts`) | `h.runner` (`FakeRunner`) | `enqueue({ events, outcome, hold })`, `release(runId)`, `requests` |
 | SandboxProvider | `SandboxProvider` (`src/adapters/sandbox/types.ts`) | `h.sandboxes` (`FakeSandboxProvider`) | `create`, `destroy`, `active()`, `created`, `destroyed` |
 | CheckRunner | `CheckRunner` (`src/adapters/checks/types.ts`) | `h.checks` (`FakeCheckRunner`) | `failNext(output)`, `enqueue(result)`, `holdNext()`, `calls` |
-| Publisher | `Publisher` (`src/adapters/publisher/types.ts`) | `h.publisher` (`FakePublisher`) | `publish`, `published` ; la PR publiée apparaît dans `h.forge` |
+| Publisher | `Publisher` (`src/adapters/publisher/types.ts`) | `h.publisher` (`FakePublisher`) | `publish`, `published` ; la PR publiée apparaît dans `h.forge`, ouverte, checks en attente |
 
 Les worktrees ont aussi leur faux, `h.workspaces` (`FakeWorkspaces`).
 
@@ -29,6 +29,8 @@ Ce qui est branché sur le moteur aujourd'hui :
 
 - `h.checks` exécute les vérifications des jobs (`verify` d'un job). Un scénario peut encore passer son propre `verify` à `createHarness({ verify })`, qui remplace alors `h.checks`.
 - `h.sandboxes` et `h.publisher` ne sont pas encore appelés par l'orchestrateur : l'agent travaille dans son worktree et pousse lui-même. Le scénario les appelle à la place de l'étape qui les utilisera, et vérifie ce que le moteur en fait (par exemple un `pr.opened` construit depuis la publication).
+
+`FakePublisher` numérote ses PR lui-même (1, 2… par branche) : ne mélangez pas dans un même scénario une PR posée à la main par `h.forge.setPr` et une publication, elles pourraient partager un numéro. Republier une branche la remet ouverte, checks en attente.
 
 Ces interfaces sont **minimales** : elles portent ce dont les faux ont besoin. Leur contrat complet (idempotence, erreurs, fencing) et les suites de conformité viennent d'ORC-189.
 
@@ -45,7 +47,7 @@ import { createHarness } from '../helpers/harness.js';
 describe('mon comportement', () => {
   it('un run tenu ouvert garde le ticket en dev', async () => {
     const h = createHarness();
-    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Exporter les audits en CSV.' });
+    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Exporter les audits en CSV depuis la liste des audits.' });
     h.runner.enqueue({ hold: true }); // le run reste ouvert jusqu'à h.runner.release(runId)
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
     await h.advance(180_000);
@@ -54,6 +56,7 @@ describe('mon comportement', () => {
 });
 ```
 
+- La description du ticket doit faire au moins 30 caractères : sinon le contrôle de prise en charge du pack standard (`has_description`) bloque le ticket et aucun run ne démarre.
 - `h.send(type, payload, ticketId?)` soumet un événement (ticket `REL-1` par défaut) et attend la fin de son traitement.
 - `h.ticket()` lit l'état du ticket dans le store.
 - `h.restart()` arrête proprement l'orchestrateur et en relance un neuf sur le même store, comme `relais up` au redémarrage.
@@ -77,7 +80,7 @@ for (let i = 0; i < preset.bounds.verifyAttempts; i++) h.checks.failNext('1 test
 expect(h.ticket()).toMatchObject({ blocked: true });
 ```
 
-Un test de propriétés lit ses bornes dans `preset.bounds` au lieu de les recopier. Le préréglage se superpose au pack standard ; `projectYaml` et `preset` ne se combinent pas.
+Un test de propriétés lit ses bornes dans `preset.bounds` au lieu de les recopier. `verifyAttempts` vaut au moins 1 : le schéma de `workflow.yml` accepte 0, que le moteur traite comme 1, et le préréglage refuse cette ambiguïté. Le préréglage se superpose au pack standard ; `projectYaml` et `preset` ne se combinent pas.
 
 Le préréglage de production, `factory/default`, et ses autres compteurs (review, CI rouge) arrivent avec ORC-187. Le scénario d'exemple qui utilise chaque nouveau faux et le préréglage est `test/scenarios/harness.test.ts`.
 
@@ -88,8 +91,8 @@ Chaque scénario est livré par le ticket qui livre le comportement qu'il teste,
 | Scénario | Ticket | Faux à piloter |
 |---|---|---|
 | CI rouge 3 fois | ORC-184 | `h.forge` (checks en échec), `h.runner` |
-| `.skip` ajouté | ORC-158 | `h.checks`, `h.publisher` |
-| Config de tests modifiée | ORC-131 | `h.checks`, `h.publisher` |
+| `.skip` ajouté | ORC-158 | `h.checks`, puis `h.publisher` quand l'usine poussera |
+| Config de tests modifiée | ORC-131 | `h.checks`, puis `h.publisher` quand l'usine poussera |
 | Réponse humaine pendant un run | ORC-180 | `h.runner` (`hold`), `h.advance` |
 | Redémarrage pendant un contrôle | ORC-220 | `h.checks` (`holdNext`), `h.store`, `h.restart()` |
 | Budget épuisé | ORC-216 | `h.runner` (`turns`, `costUsd`, `outcome: 'limit'`) |

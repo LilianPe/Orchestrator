@@ -16,21 +16,20 @@ export interface TestPreset {
 
 export function testPreset(opts: { verifyAttempts?: number } = {}): TestPreset {
   const verifyAttempts = opts.verifyAttempts ?? 2;
+  // The schema accepts 0, which the engine treats as 1: refused here so property tests see one meaning.
   if (!Number.isInteger(verifyAttempts) || verifyAttempts < 1) throw new Error('verifyAttempts must be a positive integer');
-  const commands = ['fake:check'];
+  const build = { name: 'build', kind: 'agent', job: 'dev' } as const;
+  const verify = { name: 'verify', kind: 'check', commands: ['fake:check'], bound: 'verifyAttempts' } as const;
   return {
     name: 'test/minimal',
-    steps: [
-      { name: 'build', kind: 'agent', job: 'dev' },
-      { name: 'verify', kind: 'check', commands, bound: 'verifyAttempts' },
-    ],
+    steps: [build, { ...verify, commands: [...verify.commands] }],
     bounds: { verifyAttempts },
     yaml: [
       'version: 1',
       'limits:',
       `  verify_attempts: ${verifyAttempts}`,
       'jobs:',
-      `  dev: { verify: ${JSON.stringify(commands)} }`,
+      `  ${build.job}: { verify: ${JSON.stringify(verify.commands)} }`,
       '',
     ].join('\n'),
   };
