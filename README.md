@@ -58,6 +58,9 @@ Sans tokens, pour tester l'interface : `relais up --fake-runner`.
 ### Transition vers l'usine
 - [Point de départ](docs/transition.md) : commit et tag de référence (`relais-v1-final`), tests live hors CI, inventaire des modules avec leur statut et le ticket qui les touche.
 
+### Tester
+- [Tests et harnais](docs/tests.md) : écrire un scénario avec les faux adaptateurs, l'horloge simulée et le préréglage de test.
+
 ### Contribuer
 
 ```bash

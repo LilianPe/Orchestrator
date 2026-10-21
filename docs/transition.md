@@ -104,7 +104,13 @@ Le premier ticket cité est celui qui touche le module en premier ou le plus ; l
 | `src/adapters/tracker/linear/fixtures/` | Données de test : webhooks Linear | garder | ORC-160 (suivent `webhook.ts`) |
 | `src/adapters/workspace/types.ts` | Port `WorkspaceManager` | adapter | ORC-189 (devient SandboxProvider), ORC-204 |
 | `src/adapters/workspace/git-workspaces.ts` | Worktrees par ticket sur l'hôte, `_trunk`, `_kb`, ports, `setup` | adapter | ORC-179 (base du miroir et des clones neufs, ou retiré), ORC-204 (`branchName`, `setup` dans le conteneur), ORC-193 (`_kb`) |
-| `src/adapters/workspace/fake.ts` | `FakeWorkspaces` | adapter | ORC-225 (`FakeSandboxProvider`), ORC-204 |
+| `src/adapters/workspace/fake.ts` | `FakeWorkspaces` | adapter | ORC-189 (suit son port vers `SandboxProvider`, dont ORC-225 a posé le faux à côté), ORC-204 |
+| `src/adapters/sandbox/types.ts` | Port `SandboxProvider`, niveaux réseau | garder | ORC-225, ORC-189 |
+| `src/adapters/sandbox/fake.ts` | `FakeSandboxProvider` du harnais | garder | ORC-225 |
+| `src/adapters/publisher/types.ts` | Port `Publisher` : pousse le sha vérifié, ouvre ou met à jour la PR | garder | ORC-225 |
+| `src/adapters/publisher/fake.ts` | `FakePublisher` du harnais | garder | ORC-225 |
+| `src/adapters/checks/types.ts` | Port `CheckRunner` : vérifications hors de l'agent | garder | ORC-225, ORC-151 |
+| `src/adapters/checks/fake.ts` | `FakeCheckRunner` du harnais | garder | ORC-225 |
 
 ### `src/app/` et racine de `src/`
 
