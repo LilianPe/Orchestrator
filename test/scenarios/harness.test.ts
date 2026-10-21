@@ -65,7 +65,6 @@ describe('harness: new port fakes and the test preset', () => {
       projectId: 'p', repoPath: '/repo', ticketId: 'REL-1', branch: branch!, sha: 'abc123', title: 'feat: export CSV (REL-1)', body: '',
     });
     expect((await h.forge.findPr('/repo', branch!))?.checks).toBe('pending');
-    await h.advance(60_000);
     await h.send('pr.opened', { number: pub.prNumber, url: pub.url, branch: branch! });
     expect(h.ticket()).toMatchObject({ prNumber: pub.prNumber, prUrl: pub.url });
   });
