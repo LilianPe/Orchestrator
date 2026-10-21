@@ -63,6 +63,10 @@ Sans tokens, pour tester l'interface : `relais up --fake-runner`.
 ### Tester
 - [Tests et harnais](docs/tests.md) : écrire un scénario avec les faux adaptateurs, l'horloge simulée et le préréglage de test.
 
+### Décisions
+Propositions écrites pour les tickets de décision : question, options, preuves, recommandation. La décision elle-même est prise par le dev et écrite dans le ticket.
+- [ORC-128 — Options de `claude -p`](docs/decisions/ORC-128.md) : ignorer les réglages du dépôt, couper les outils web intégrés, reprendre la session d'un ticket.
+
 ### Contribuer
 
 ```bash
