@@ -55,6 +55,9 @@ Sans tokens, pour tester l'interface : `relais up --fake-runner`.
 - [Exploitation](docs/exploitation.md) : limites atteintes, tickets bloqués, pause, journaux et transcripts, redémarrages, dépannage.
 - [Recette](docs/recette.md) : vérification de bout en bout sur un Linear de test.
 
+### Transition vers l'usine
+- [Point de départ](docs/transition.md) : commit et tag de référence (`relais-v1-final`), tests live hors CI, inventaire des modules avec leur statut et le ticket qui les touche.
+
 ### Contribuer
 
 ```bash
