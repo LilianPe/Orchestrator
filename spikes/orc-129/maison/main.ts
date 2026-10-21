@@ -1,20 +1,17 @@
 // Option A of the ORC-129 spike: homegrown inbox + journal + projection + outbox on Postgres.
 // Throwaway prototype. Usage: node main.ts setup | send <n> | worker | status | replay
-import { isDeepStrictEqual } from 'node:util';
 import pg from 'pg';
-import { decide, effectId, type EngineEvent, type TicketState } from '../shared/decide.ts';
-import { delegated, runEffect } from '../shared/effects.ts';
+import { decide, type EngineEvent, type TicketState } from '../shared/decide.ts';
+import { delegated, effectDone, runEffect } from '../shared/effects.ts';
+import { JOURNAL_SCHEMA, recordedDecision, replayJournal } from '../shared/journal.ts';
 
 const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL, max: 4 });
 const LEASE = '5 seconds';
 const log = (...a: unknown[]) => console.log(`[maison ${process.pid}]`, ...a);
 
-const SCHEMA = `
+const SCHEMA = `${JOURNAL_SCHEMA}
 create table inbox   (id text primary key, ticket text not null, event jsonb not null,
                       received_at timestamptz not null default now(), processed_at timestamptz);
-create table journal (ticket text not null, seq int not null, event_id text not null unique, event jsonb not null,
-                      decision jsonb not null, primary key (ticket, seq));
-create table tickets (id text primary key, seq int not null, state jsonb);
 create table outbox  (id text primary key, ticket text not null, effect jsonb not null,
                       status text not null default 'pending', attempts int not null default 0,
                       lease_until timestamptz, next_at timestamptz not null default now(), result jsonb);`;
@@ -67,14 +64,14 @@ async function decideNext(): Promise<boolean> {
     const t = await c.query('select seq, state from tickets where id = $1', [ticket]);
     const seq = (t.rows[0]?.seq ?? 0) + 1;
     const state: TicketState | undefined = t.rows[0]?.state ?? undefined;
-    const decision = decide(state, event);
-    const effects = decision.effects.map((effect, i) => ({ id: effectId(ticket, seq, i), effect }));
+    const decision = recordedDecision(ticket, seq, decide(state, event));
+    const { effects } = decision;
     await c.query('insert into journal (ticket, seq, event_id, event, decision) values ($1, $2, $3, $4, $5)', [
-      ticket, seq, id, event, { state: decision.state ?? null, effects },
+      ticket, seq, id, event, decision,
     ]);
     await c.query(
       'insert into tickets (id, seq, state) values ($1, $2, $3) on conflict (id) do update set seq = $2, state = $3',
-      [ticket, seq, decision.state ?? null],
+      [ticket, seq, decision.state],
     );
     for (const e of effects) await c.query('insert into outbox (id, ticket, effect) values ($1, $2, $3)', [e.id, ticket, e.effect]);
     await c.query('update inbox set processed_at = now() where id = $1', [id]);
@@ -99,7 +96,7 @@ async function executeNext(): Promise<boolean> {
     const result = await runEffect(id, effect);
     await tx(async (c) => {
       await c.query("update outbox set status = 'done', result = $2, lease_until = null where id = $1", [id, result]);
-      await append(c, { id: `effect:${id}`, ticket, type: 'effect.done', payload: { effectId: id, result } });
+      await append(c, effectDone(id, ticket, result));
     });
     log(`effect ${id} done -> ${result.commentId}`);
   } catch (err) {
@@ -121,22 +118,6 @@ async function worker(): Promise<never> {
   }
 }
 
-/** Replays the journal through decide and compares each decision with the recorded one. */
-async function replay(): Promise<void> {
-  const { rows } = await pool.query('select ticket, seq, event, decision from journal order by ticket, seq');
-  const states = new Map<string, TicketState | undefined>();
-  let mismatches = 0;
-  for (const r of rows) {
-    const d = decide(states.get(r.ticket), r.event);
-    const effects = d.effects.map((effect, i) => ({ id: effectId(r.ticket, r.seq, i), effect }));
-    const same = isDeepStrictEqual({ state: d.state ?? null, effects }, r.decision);
-    if (!same) mismatches++;
-    console.log(`${same ? 'identique' : 'ÉCART'}  ${r.ticket}#${r.seq}  ${r.event.id}`);
-    states.set(r.ticket, d.state);
-  }
-  console.log(`rejeu : ${rows.length} décision(s), ${mismatches} écart(s)`);
-}
-
 async function status(): Promise<void> {
   const t = await pool.query('select id, seq, state from tickets');
   const o = await pool.query('select id, status, attempts, result from outbox order by id');
@@ -146,10 +127,12 @@ async function status(): Promise<void> {
 
 const [cmd, arg] = process.argv.slice(2);
 if (cmd === 'setup') await pool.query(SCHEMA);
-else if (cmd === 'send') log(`inbox write ${delegated(Number(arg)).id}:`, (await append(pool, delegated(Number(arg)))) ? 'inserted' : 'duplicate, ignored');
+else if (cmd === 'send') {
+  const e = delegated(Number(arg));
+  log(`inbox write ${e.id}:`, (await append(pool, e)) ? 'inserted' : 'duplicate, ignored');
+}
 else if (cmd === 'worker') await worker();
-else if (cmd === 'replay') await replay();
+else if (cmd === 'replay') replayJournal((await pool.query('select ticket, seq, event, decision from journal order by ticket, seq')).rows);
 else if (cmd === 'status') await status();
-else if (cmd === 'done') process.exitCode = (await pool.query("select 1 from tickets where state->>'status' = 'done'")).rowCount ? 0 : 1;
 else throw new Error(`unknown command ${cmd}`);
 await pool.end();

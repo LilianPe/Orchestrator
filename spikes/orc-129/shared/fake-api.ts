@@ -4,8 +4,9 @@
 // It honours an Idempotency-Key header unless IGNORE_IDEMPOTENCY=1.
 import { appendFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
+import { FAKE_API } from './effects.ts';
 
-const port = Number(process.env.FAKE_API_PORT ?? 4129);
+const port = Number(new URL(FAKE_API).port);
 const holdMs = Number(process.env.HOLD_MS ?? 3000);
 const log = process.env.FAKE_API_LOG ?? 'fake-api.jsonl';
 const honourKey = process.env.IGNORE_IDEMPOTENCY !== '1';

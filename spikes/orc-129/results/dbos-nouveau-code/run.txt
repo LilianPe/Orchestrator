@@ -5,19 +5,21 @@ NOTICE:  database "spike_dbos_nouveau_code" does not exist, skipping
 === setup
 
 === webhook delivered twice (same delivery id)
-[dbos 28761] enqueue linear:delivery-1: enqueued
-[dbos 28774] enqueue linear:delivery-1: existing workflow id, ignored
+[dbos 43345] enqueue linear:delivery-1: enqueued
+[dbos 43357] enqueue linear:delivery-1: existing workflow id, ignored
 
 === worker 1 starts; kill -9 as soon as the external API has applied the effect
 worker 1 killed (-9) while the API holds its response
-[dbos 28786] worker up
-[dbos 28786] decided linear:delivery-1 -> 1 effect(s)
-[dbos 28786] executing ORC-1:1:0
 
-=== worker 2 restarts
-TICKET NOT DONE after restart
-[dbos 28868] worker up
+=== worker 2 restarts (env: DBOS__APPVERSION=v2)
+TICKET NOT DONE 20 s after restart
+
+=== external API calls
 {"received":1,"applied":1}
+{"at":"2026-10-21T21:09:55.279Z","type":"received","key":"ORC-1:1:0","body":"{\"kind\":\"post_comment\",\"ticket\":\"ORC-1\",\"body\":\"Pris en compte : Ajouter un bouton\"}"}
+{"at":"2026-10-21T21:09:55.279Z","type":"applied","key":"ORC-1:1:0","commentId":"comment-1"}
+
+=== state
 {
  "tickets": [
   {
@@ -32,7 +34,7 @@ TICKET NOT DONE after restart
   {
    "workflow_uuid": "linear:delivery-1",
    "status": "PENDING",
-   "application_version": "1b3aef4e2971b2152004dc2c0775ac7d",
+   "application_version": "5f5c3c1b801a8ca7340632e5c090cf9e",
    "executor_id": "local",
    "recovery_attempts": "1"
   }
@@ -63,4 +65,10 @@ TICKET NOT DONE after restart
   }
  ]
 }
+--- worker-1.log
+[dbos 43370] worker up
+[dbos 43370] decided linear:delivery-1 -> 1 effect(s)
+[dbos 43370] executing ORC-1:1:0
+--- worker-2.log
+[dbos 43433] worker up
 exit 1

@@ -4,19 +4,14 @@
 // Throwaway prototype. Usage: node main.ts setup | send <n> | worker | status | replay
 import { DBOS, DBOSClient } from '@dbos-inc/dbos-sdk';
 import { NodePostgresDataSource } from '@dbos-inc/node-pg-datasource';
-import { isDeepStrictEqual } from 'node:util';
 import pg from 'pg';
-import { decide, effectId, type EngineEvent, type TicketState } from '../shared/decide.ts';
-import { delegated, runEffect } from '../shared/effects.ts';
+import { decide, type EngineEvent, type TicketState } from '../shared/decide.ts';
+import { delegated, effectDone, runEffect } from '../shared/effects.ts';
+import { JOURNAL_SCHEMA, recordedDecision, replayJournal } from '../shared/journal.ts';
 
 const url = process.env.DATABASE_URL!;
 const QUEUE = 'tickets';
 const log = (...a: unknown[]) => console.log(`[dbos ${process.pid}]`, ...a);
-
-const SCHEMA = `
-create table journal (ticket text not null, seq int not null, event_id text not null unique, event jsonb not null,
-                      decision jsonb not null, primary key (ticket, seq));
-create table tickets (id text primary key, seq int not null, state jsonb);`;
 
 const app = new NodePostgresDataSource('app', { connectionString: url });
 
@@ -28,16 +23,15 @@ const decideTx = app.registerTransaction(
     const t = await c.query('select seq, state from tickets where id = $1', [event.ticket]);
     const seq = (t.rows[0]?.seq ?? 0) + 1;
     const state: TicketState | undefined = t.rows[0]?.state ?? undefined;
-    const decision = decide(state, event);
-    const effects = decision.effects.map((effect, i) => ({ id: effectId(event.ticket, seq, i), effect }));
+    const decision = recordedDecision(event.ticket, seq, decide(state, event));
     await c.query('insert into journal (ticket, seq, event_id, event, decision) values ($1, $2, $3, $4, $5)', [
-      event.ticket, seq, event.id, event, { state: decision.state ?? null, effects },
+      event.ticket, seq, event.id, event, decision,
     ]);
     await c.query(
       'insert into tickets (id, seq, state) values ($1, $2, $3) on conflict (id) do update set seq = $2, state = $3',
-      [event.ticket, seq, decision.state ?? null],
+      [event.ticket, seq, decision.state],
     );
-    return effects;
+    return decision.effects;
   },
   { name: 'decideTx' },
 );
@@ -55,7 +49,7 @@ const handleEvent = DBOS.registerWorkflow(
         { name: `effect:${id}`, retriesAllowed: true, maxAttempts: 5, intervalSeconds: 1, backoffRate: 2 },
       );
       log(`effect ${id} done -> ${result.commentId}`);
-      const next: EngineEvent = { id: `effect:${id}`, ticket: event.ticket, type: 'effect.done', payload: { effectId: id, result } };
+      const next = effectDone(id, event.ticket, result);
       await DBOS.startWorkflow(handleEvent, {
         workflowID: next.id,
         queueName: QUEUE,
@@ -88,24 +82,6 @@ async function worker(): Promise<never> {
   return new Promise(() => {});
 }
 
-async function replay(): Promise<void> {
-  const db = new pg.Client({ connectionString: url });
-  await db.connect();
-  const { rows } = await db.query('select ticket, seq, event, decision from journal order by ticket, seq');
-  const states = new Map<string, TicketState | undefined>();
-  let mismatches = 0;
-  for (const r of rows) {
-    const d = decide(states.get(r.ticket), r.event);
-    const effects = d.effects.map((effect, i) => ({ id: effectId(r.ticket, r.seq, i), effect }));
-    const same = isDeepStrictEqual({ state: d.state ?? null, effects }, r.decision);
-    if (!same) mismatches++;
-    console.log(`${same ? 'identique' : 'ÉCART'}  ${r.ticket}#${r.seq}  ${r.event.id}`);
-    states.set(r.ticket, d.state);
-  }
-  console.log(`rejeu : ${rows.length} décision(s), ${mismatches} écart(s)`);
-  await db.end();
-}
-
 async function query(sql: string) {
   const db = new pg.Client({ connectionString: url });
   await db.connect();
@@ -116,14 +92,14 @@ async function query(sql: string) {
 
 const [cmd, arg] = process.argv.slice(2);
 if (cmd === 'setup') {
-  await query(SCHEMA);
+  await query(JOURNAL_SCHEMA);
   await NodePostgresDataSource.initializeDBOSSchema({ connectionString: url });
   // DBOS migrates its system schema (dbos.*) itself, at launch.
   await launch();
   await DBOS.shutdown();
 } else if (cmd === 'send') await send(Number(arg));
 else if (cmd === 'worker') await worker();
-else if (cmd === 'replay') await replay();
+else if (cmd === 'replay') replayJournal(await query('select ticket, seq, event, decision from journal order by ticket, seq'));
 else if (cmd === 'status')
   console.log(JSON.stringify({
     tickets: await query('select id, seq, state from tickets'),
@@ -131,5 +107,4 @@ else if (cmd === 'status')
     dbosTables: (await query("select table_name from information_schema.tables where table_schema = 'dbos' order by 1")).map((r) => r.table_name),
     steps: await query('select workflow_uuid, function_id, function_name, output from dbos.operation_outputs order by workflow_uuid, function_id'),
   }, null, 1));
-else if (cmd === 'done') process.exitCode = (await query("select 1 from tickets where state->>'status' = 'done'")).length ? 0 : 1;
 else throw new Error(`unknown command ${cmd}`);

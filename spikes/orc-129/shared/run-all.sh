@@ -16,4 +16,4 @@ run maison maison
 run dbos dbos
 run maison maison-sans-cle IGNORE_IDEMPOTENCY=1
 run dbos dbos-sans-cle IGNORE_IDEMPOTENCY=1
-run dbos dbos-nouveau-code WORKER2_APPVERSION=v2 WAIT_ITER=40
+run dbos dbos-nouveau-code "WORKER2_ENV=DBOS__APPVERSION=v2" RECOVERY_TIMEOUT=20

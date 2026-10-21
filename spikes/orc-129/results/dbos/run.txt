@@ -5,29 +5,21 @@ NOTICE:  database "spike_dbos" does not exist, skipping
 === setup
 
 === webhook delivered twice (same delivery id)
-[dbos 25462] enqueue linear:delivery-1: enqueued
-[dbos 25474] enqueue linear:delivery-1: existing workflow id, ignored
+[dbos 40791] enqueue linear:delivery-1: enqueued
+[dbos 40803] enqueue linear:delivery-1: existing workflow id, ignored
 
 === worker 1 starts; kill -9 as soon as the external API has applied the effect
 worker 1 killed (-9) while the API holds its response
-[dbos 25486] worker up
-[dbos 25486] decided linear:delivery-1 -> 1 effect(s)
-[dbos 25486] executing ORC-1:1:0
 
-=== worker 2 restarts
-[dbos 25563] worker up
-[dbos 25563] decided linear:delivery-1 -> 1 effect(s)
-[dbos 25563] executing ORC-1:1:0
-[dbos 25563] effect ORC-1:1:0 done -> comment-1
-[dbos 25563] decided effect:ORC-1:1:0 -> 0 effect(s)
-recovered to done in 2.5 s after restart
+=== worker 2 restarts (env: none)
+recovered to done in 2.4 s after restart
 
 === external API calls
 {"received":2,"applied":1}
-{"at":"2026-10-21T21:04:17.654Z","type":"received","key":"ORC-1:1:0","body":"{\"kind\":\"post_comment\",\"ticket\":\"ORC-1\",\"body\":\"Pris en compte : Ajouter un bouton\"}"}
-{"at":"2026-10-21T21:04:17.654Z","type":"applied","key":"ORC-1:1:0","commentId":"comment-1"}
-{"at":"2026-10-21T21:04:19.033Z","type":"received","key":"ORC-1:1:0","body":"{\"kind\":\"post_comment\",\"ticket\":\"ORC-1\",\"body\":\"Pris en compte : Ajouter un bouton\"}"}
-{"at":"2026-10-21T21:04:19.033Z","type":"deduplicated","key":"ORC-1:1:0","commentId":"comment-1"}
+{"at":"2026-10-21T21:09:29.260Z","type":"received","key":"ORC-1:1:0","body":"{\"kind\":\"post_comment\",\"ticket\":\"ORC-1\",\"body\":\"Pris en compte : Ajouter un bouton\"}"}
+{"at":"2026-10-21T21:09:29.260Z","type":"applied","key":"ORC-1:1:0","commentId":"comment-1"}
+{"at":"2026-10-21T21:09:30.620Z","type":"received","key":"ORC-1:1:0","body":"{\"kind\":\"post_comment\",\"ticket\":\"ORC-1\",\"body\":\"Pris en compte : Ajouter un bouton\"}"}
+{"at":"2026-10-21T21:09:30.620Z","type":"deduplicated","key":"ORC-1:1:0","commentId":"comment-1"}
 
 === state
 {
@@ -45,14 +37,14 @@ recovered to done in 2.5 s after restart
   {
    "workflow_uuid": "linear:delivery-1",
    "status": "SUCCESS",
-   "application_version": "1b3aef4e2971b2152004dc2c0775ac7d",
+   "application_version": "5f5c3c1b801a8ca7340632e5c090cf9e",
    "executor_id": "local",
    "recovery_attempts": "2"
   },
   {
    "workflow_uuid": "effect:ORC-1:1:0",
    "status": "SUCCESS",
-   "application_version": "1b3aef4e2971b2152004dc2c0775ac7d",
+   "application_version": "5f5c3c1b801a8ca7340632e5c090cf9e",
    "executor_id": "local",
    "recovery_attempts": "1"
   }
@@ -111,4 +103,14 @@ rejeu : 2 décision(s), 0 écart(s)
 identique  ORC-1#1  linear:delivery-1
 ÉCART  ORC-1#2  effect:ORC-1:1:0
 rejeu : 2 décision(s), 1 écart(s)
+--- worker-1.log
+[dbos 40815] worker up
+[dbos 40815] decided linear:delivery-1 -> 1 effect(s)
+[dbos 40815] executing ORC-1:1:0
+--- worker-2.log
+[dbos 40947] worker up
+[dbos 40947] decided linear:delivery-1 -> 1 effect(s)
+[dbos 40947] executing ORC-1:1:0
+[dbos 40947] effect ORC-1:1:0 done -> comment-1
+[dbos 40947] decided effect:ORC-1:1:0 -> 0 effect(s)
 exit 0

@@ -7,6 +7,7 @@
 | Chemin | Rôle |
 |---|---|
 | `shared/decide.ts` | copie minimale du contrat `decide(state, event) → (state, effects)`, pure, commune aux deux options |
+| `shared/journal.ts` | le schéma `journal` + `tickets`, la forme d'une décision enregistrée et le rejeu, communs aux deux options |
 | `shared/effects.ts` | l'appel de l'effet (un commentaire) avec `Idempotency-Key` = id de l'effet, et l'événement de délégation |
 | `shared/fake-api.ts` | la fausse API externe : applique le commentaire à la réception, puis retient sa réponse 3 s (la fenêtre du `kill -9`) |
 | `shared/run-scenario.sh` | le scénario, identique pour les deux options |
@@ -24,7 +25,7 @@
 6. On rejoue le journal à travers `decide` et on compare chaque décision à celle enregistrée.
 7. Contrôle négatif : on falsifie une décision enregistrée ; le rejeu doit signaler un écart.
 
-Variantes : `IGNORE_IDEMPOTENCY=1` (l'API ignore la clé d'idempotence) et, pour DBOS, `WORKER2_APPVERSION=v2` (un déploiement de code neuf entre le crash et la reprise).
+Variantes : `IGNORE_IDEMPOTENCY=1` (l'API ignore la clé d'idempotence) et, pour DBOS, `WORKER2_ENV=DBOS__APPVERSION=v2` (un déploiement de code neuf entre le crash et la reprise).
 
 ## Relancer
 
