@@ -8,10 +8,10 @@ Cette page fige l'état de Relais d'où part le MVP de l'usine, et dit, pour cha
 |---|---|
 | Commit | `ebc405d` (`ebc405d5f3e3f5a69a4bd2e1b71e5e0d3eb1caaf`), merge de la PR #27, tête de `main` au 21/10 |
 | CI sur ce commit | workflow `ci` (`npm ci`, `npm run typecheck`, `npm run lint`, `npm test`) vert : run [38868662643](https://github.com/LilianPe/relais/actions/runs/38868662643) |
-| Tag | `relais-v1-final`, annoté, sur ce commit (posé par un mainteneur, commande ci-dessous) |
+| Tag | `relais-v1-final`, annoté, sur ce commit, poussé sur GitHub le 21/10 (commande ci-dessous) |
 | Taille de départ | 65 fichiers non test dans `src/`, dont 4 487 lignes de TypeScript |
 
-Poser le tag (une fois, par un mainteneur) :
+Commande qui a posé le tag (une fois, par un mainteneur ; ne pas la rejouer) :
 
 ```bash
 git tag -a relais-v1-final ebc405d5f3e3f5a69a4bd2e1b71e5e0d3eb1caaf -m "Relais V1 : point de départ du MVP de l'usine"
