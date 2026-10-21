@@ -64,11 +64,14 @@ Sans tokens, pour tester l'interface : `relais up --fake-runner`.
 ### Contribuer
 
 ```bash
-npm test            # suite complète (vitest)
-npm run typecheck   # types du démon et de l'interface
+npm test                  # unitaires et scénarios (projet vitest `unit`)
+npm run test:all          # les trois projets vitest
+npm run test:integration  # Postgres (DATABASE_URL requis)
+npm run test:isolation    # moteur rootless (RELAIS_ISOLATION=1)
+npm run typecheck         # types du démon et de l'interface
 npm run lint
-npm run dev         # CLI depuis les sources (tsx) : npm run dev -- up
-npm run dev:web     # interface avec proxy vers :4100
+npm run dev               # CLI depuis les sources (tsx) : npm run dev -- up
+npm run dev:web           # interface avec proxy vers :4100
 ```
 
 Règles :
@@ -76,4 +79,4 @@ Règles :
 - **Toute nouvelle feature livre sa doc** : une page dans `docs/` (installation, configuration, utilisation) ou une section d'une page existante, et son lien depuis ce README. Une feature sans doc n'est pas terminée.
 - Les exemples YAML de [`docs/workflow.md`](docs/workflow.md) sont chargés par un test (`src/docs-workflow.test.ts`) : gardez-les valides.
 - Code, noms de fichiers et messages de commit en anglais (`feat(core): …`, `docs: …`) ; textes destinés aux humains (docs, skills du pack, messages Linear) en français.
-- La CI (`.github/workflows/ci.yml`) lance typecheck, lint et tests sur chaque PR.
+- La CI (`.github/workflows/ci.yml`) lance typecheck, lint et tests unitaires sur chaque PR, plus les jobs Postgres et rootless séparés.

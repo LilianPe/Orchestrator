@@ -5,8 +5,22 @@ Relais se teste sans vrais services : un **harnais** monte l'orchestrateur sur u
 - Tests unitaires : à côté du code (`*.test.ts`).
 - Scénarios : `test/scenarios/` (le harnais, `test/helpers/harness.ts`).
 - Bout en bout : `test/e2e/`.
+- Intégration : `test/integration/` (Postgres).
+- Isolation : `test/isolation/` (moteur de conteneurs rootless).
 
 Pendant le travail, lancez seulement les tests des fichiers touchés : `npx vitest run test/scenarios/harness.test.ts`.
+
+## Les trois projets Vitest
+
+`vitest.config.ts` déclare trois projets, pour que la CI rapide reste rapide :
+
+| Projet | Commande | Ce qu'il couvre |
+|---|---|---|
+| `unit` | `npm test` | unitaires, scénarios et bout en bout (sauté sans `RELAIS_E2E=1`) |
+| `integration` | `npm run test:integration` | `test/integration/`, avec `DATABASE_URL` (Postgres) |
+| `isolation` | `npm run test:isolation` | `test/isolation/`, avec `RELAIS_ISOLATION=1` et un moteur rootless |
+
+`npm run test:all` lance les trois. Sans `DATABASE_URL`, les tests d'intégration se sautent ; sans `RELAIS_ISOLATION=1`, les tests d'isolation se sautent. La CI (`.github/workflows/ci.yml`) lance le projet `unit` avec typecheck et lint, puis Postgres en service pour `integration` et Podman rootless pour `isolation`. Aucun secret n'est défini dans les workflows.
 
 ## Les faux adaptateurs
 
