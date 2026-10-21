@@ -8,6 +8,7 @@ const STATUSES = ['garder', 'adapter', 'retirer', 'à trancher'];
 
 function sourceFiles(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+    if (e.name.startsWith('.')) return [];
     const p = join(dir, e.name);
     if (e.isDirectory()) return sourceFiles(p);
     return e.name.endsWith('.test.ts') ? [] : [relative(root, p)];
@@ -15,26 +16,34 @@ function sourceFiles(dir: string): string[] {
 }
 
 // Each inventory row: | `path` [, `path`…] | role | status | target ticket |
-function inventory(): Map<string, string> {
+function inventory(): { rows: Map<string, string>; duplicates: string[] } {
   const rows = new Map<string, string>();
+  const duplicates: string[] = [];
   for (const line of doc.split('\n')) {
     if (!line.startsWith('|')) continue;
     const cells = line.split('|').slice(1, -1).map((c) => c.trim());
     if (cells.length < 4) continue;
-    for (const [, path] of cells[0]!.matchAll(/`(src\/[^`]+)`/g)) rows.set(path!, cells[2]!);
+    for (const [, path] of cells[0]!.matchAll(/`(src\/[^`]+)`/g)) {
+      if (rows.has(path!)) duplicates.push(path!);
+      rows.set(path!, cells[2]!);
+    }
   }
-  return rows;
+  return { rows, duplicates };
 }
 
 describe('docs/transition.md', () => {
-  const rows = inventory();
+  const { rows, duplicates } = inventory();
+
+  it('lists each path once', () => {
+    expect(duplicates).toEqual([]);
+  });
 
   it('gives every non-test file of src/ a row with a starting status', () => {
     const files = sourceFiles(join(root, 'src'));
     expect(files.length).toBeGreaterThan(50);
     const missing = files.filter((f) => {
       const row = [...rows].find(([p]) => p === f || (p.endsWith('/') && f.startsWith(p)));
-      return !row || !STATUSES.some((s) => row[1].startsWith(s));
+      return !row || !STATUSES.includes(row[1]);
     });
     expect(missing).toEqual([]);
   });

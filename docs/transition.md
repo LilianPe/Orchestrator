@@ -8,7 +8,7 @@ Cette page fige l'état de Relais d'où part le MVP de l'usine, et dit, pour cha
 |---|---|
 | Commit | `ebc405d` (`ebc405d5f3e3f5a69a4bd2e1b71e5e0d3eb1caaf`), merge de la PR #27, tête de `main` au 21/10 |
 | CI sur ce commit | workflow `ci` (`npm ci`, `npm run typecheck`, `npm run lint`, `npm test`) vert : run [38868662643](https://github.com/LilianPe/relais/actions/runs/38868662643) |
-| Tag | `relais-v1-final`, annoté, posé sur ce commit |
+| Tag | `relais-v1-final`, annoté, sur ce commit (posé par un mainteneur, commande ci-dessous) |
 | Taille de départ | 65 fichiers non test dans `src/`, dont 4 487 lignes de TypeScript |
 
 Poser le tag (une fois, par un mainteneur) :
@@ -80,7 +80,7 @@ Le premier ticket cité est celui qui touche le module en premier ou le plus ; l
 
 | Module | Rôle | Statut | Ticket cible |
 |---|---|---|---|
-| `src/adapters/exec.ts` | `execCmd`, `mustExec` : sous-processus utilisé par git, `gh`, la base de connaissance, la CLI | garder | à trancher (aucun ticket ne le nomme) |
+| `src/adapters/exec.ts` | `execCmd`, `mustExec` : sous-processus utilisé par git, `gh`, la base de connaissance, la CLI | à trancher | aucun ticket ne le nomme |
 | `src/adapters/forge/types.ts` | Port `Forge` | adapter | ORC-181 (port gardé, nouvelles opérations), ORC-124 |
 | `src/adapters/forge/fake.ts` | `FakeForge` | adapter | ORC-181, ORC-225 |
 | `src/adapters/forge/gh-cli.ts` | Forge par la CLI `gh` | retirer | ORC-181 (après ORC-124, GitHub App) |
@@ -88,12 +88,12 @@ Le premier ticket cité est celui qui touche le module en premier ou le plus ; l
 | `src/adapters/runner/types.ts` | Port `Runner`, `RunHandle`, `RunRequest` | garder | ORC-204 (port gardé), ORC-189 (devient AgentRuntime) |
 | `src/adapters/runner/claude-code.ts` | `ClaudeCodeRunner` : `claude -p` en sous-processus sur l'hôte, transcripts | adapter | ORC-136, ORC-204 (dans le runner isolé), ORC-205 (réglages imposés), ORC-217 (session sur volume), ORC-194 (`--max-budget-usd`), ORC-167 |
 | `src/adapters/runner/stream-parser.ts` | Lecture du stream-json de Claude Code | adapter | ORC-136 (usage en tokens), gardé par ORC-204 |
-| `src/adapters/runner/channel.ts` | File asynchrone qui porte le flux d'un `RunHandle` | garder | à trancher (aucun ticket ne le nomme ; suit le port `Runner`) |
+| `src/adapters/runner/channel.ts` | File asynchrone qui porte le flux d'un `RunHandle` | à trancher | aucun ticket ne le nomme ; suit le port `Runner` (ORC-204) |
 | `src/adapters/runner/fake.ts` | `FakeRunner` du harnais | garder | ORC-204, ORC-225 |
 | `src/adapters/runner/fixtures/` | Données de test : faux `claude` et flux stream-json | garder | ORC-136 (suivent le runner) |
 | `src/adapters/tracker/types.ts` | Port `Tracker`, `ActivityInput` | adapter | ORC-160 (id d'effet), ORC-171 (plan dans la session) |
 | `src/adapters/tracker/fake.ts` | `FakeTracker` | garder | ORC-160, ORC-225 |
-| `src/adapters/tracker/activity-relay.ts` | Relaie la sortie d'un run en activités de la session Linear, avec un débit plafonné | à trancher | à trancher (aucun ticket ne le nomme) |
+| `src/adapters/tracker/activity-relay.ts` | Relaie la sortie d'un run en activités de la session Linear, avec un débit plafonné | à trancher | aucun ticket ne le nomme |
 | `src/adapters/tracker/linear/api.ts` | `LinearApi` : client GraphQL | garder | ORC-160 |
 | `src/adapters/tracker/linear/queries.ts` | Documents GraphQL | adapter | ORC-160 (marqueur de commentaire), ORC-171 (`agentSessionUpdate` avec plan) |
 | `src/adapters/tracker/linear/tracker.ts` | `LinearTracker` (cache, `ensureSetup`) | adapter | ORC-160 (commentaires et labels idempotents), ORC-201 (plus de « Ready to Merge » ni `agent:*`), ORC-170 |
@@ -112,7 +112,7 @@ Le premier ticket cité est celui qui touche le module en premier ou le plus ; l
 |---|---|---|---|
 | `src/app/bootstrap.ts` | Câblage du démon (store, adaptateurs, orchestrateur, serveur, variables `RELAIS_*`) | adapter | ORC-147 (`submit` → inbox), ORC-149, ORC-167, ORC-179 (`PORT`), ORC-192, ORC-201, câblage restant retiré par ORC-169 |
 | `src/app/root.ts` | Trouve la racine du dépôt par le `package.json` nommé `relais` | adapter | ORC-167 (le renommage du paquet le casse, le ticket ne le nomme pas) |
-| `src/app/tracker-switch.ts` | `Tracker` de substitution tant que Linear n'est pas connecté par OAuth | garder | à trancher (aucun ticket ne le nomme) |
+| `src/app/tracker-switch.ts` | `Tracker` de substitution tant que Linear n'est pas connecté par OAuth | à trancher | aucun ticket ne le nomme |
 | `src/version.ts` | Version du paquet | garder | ORC-167 |
 
 ### `src/store/`
@@ -166,7 +166,7 @@ Le premier ticket cité est celui qui touche le module en premier ou le plus ; l
 | `web/src/App.tsx` | Interface : en-tête (places, file, coût du jour), tickets, session en direct, journal | adapter | ORC-223 (Flux, Détail d'un run, Vue d'ensemble), ORC-194 (coût en tokens) |
 | `web/src/state.ts` | Reducer de l'état de l'interface | adapter | ORC-223 |
 | `web/src/api.ts`, `web/src/types.ts` | Appels à `/api/*` et SSE, types des vues (6 états, coût en USD) | adapter | ORC-223 (API lues depuis Postgres), ORC-194 |
-| `web/src/main.tsx`, `web/src/styles.css`, `web/index.html`, `web/vite.config.ts`, `web/tsconfig.json` | Point d'entrée, styles, build Vite | garder | ORC-223 |
+| `web/src/main.tsx`, `web/src/styles.css`, `web/src/vite-env.d.ts`, `web/index.html`, `web/vite.config.ts`, `web/tsconfig.json` | Point d'entrée, styles, build Vite | garder | ORC-223 |
 
 ### `packs/standard/`
 
