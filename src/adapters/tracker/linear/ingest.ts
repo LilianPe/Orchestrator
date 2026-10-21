@@ -1,10 +1,10 @@
-import type { RelaisEvent } from '../../../core/types.js';
+import type { FactoryEvent } from '../../../core/types.js';
 import { deliveryKey, FRESHNESS_MS, isFresh, mapLinearWebhook, verifyLinearSignature, type MapContext } from './webhook.js';
 
 export interface IngestDeps {
   secret: () => string;
   ctx: MapContext;
-  submit: (e: RelaisEvent) => void;
+  submit: (e: FactoryEvent) => void;
   ack: (sessionId: string) => Promise<void>;
   log: (m: string) => void;
 }

@@ -17,10 +17,10 @@ function scriptedIO(answers: string[], confirms: boolean[]): InitIO & { printed:
   };
 }
 
-describe('relais init', () => {
+describe('factory init', () => {
   it('writes config, secrets and the project workflow', async () => {
-    const home = mkdtempSync(join(tmpdir(), 'relais-init-home-'));
-    const repo = mkdtempSync(join(tmpdir(), 'relais-init-repo-'));
+    const home = mkdtempSync(join(tmpdir(), 'factory-init-home-'));
+    const repo = mkdtempSync(join(tmpdir(), 'factory-init-repo-'));
     execFileSync('git', ['init', '-q'], { cwd: repo });
     writeFileSync(join(repo, 'package.json'), JSON.stringify({ scripts: { test: 'vitest run' } }));
     writeFileSync(join(repo, 'package-lock.json'), '{}');
@@ -38,7 +38,7 @@ describe('relais init', () => {
     expect(cfg.relay).toEqual({ kind: 'smee', url: 'https://smee.io/abc' });
     expect(cfg.projects).toEqual([{ id: expect.any(String), repoPath: repo, linearTeamKey: 'REL' }]);
     expect(loadSecrets(home).linear).toEqual({ clientId: 'cid', clientSecret: 'csecret', webhookSecret: 'whsecret' });
-    const wf = readFileSync(join(repo, '.relais/workflow.yml'), 'utf8');
+    const wf = readFileSync(join(repo, '.factory/workflow.yml'), 'utf8');
     expect(wf).toContain('team: REL');
     expect(wf).toContain('npm test');
     expect(wf).toContain('npm ci');
@@ -50,8 +50,8 @@ describe('relais init', () => {
   });
 
   it('asks the webhook signing secret again until it is not empty', async () => {
-    const home = mkdtempSync(join(tmpdir(), 'relais-init-home-'));
-    const repo = mkdtempSync(join(tmpdir(), 'relais-init-repo-'));
+    const home = mkdtempSync(join(tmpdir(), 'factory-init-home-'));
+    const repo = mkdtempSync(join(tmpdir(), 'factory-init-repo-'));
     const exec: Exec = async (cmd, args) =>
       cmd === 'git' && args[0] === 'rev-parse' ? { stdout: `${repo}\n`, stderr: '', code: 0 } : { stdout: '', stderr: '', code: 0 };
     const asked: string[] = [];

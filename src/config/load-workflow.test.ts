@@ -7,7 +7,7 @@ import { loadWorkflow, WorkflowError } from './load-workflow.js';
 const packDir = join(import.meta.dirname, '../../packs/standard');
 
 function projectFile(yaml: string): string {
-  const dir = mkdtempSync(join(tmpdir(), 'relais-wf-'));
+  const dir = mkdtempSync(join(tmpdir(), 'factory-wf-'));
   const f = join(dir, 'workflow.yml');
   writeFileSync(f, yaml);
   return f;
@@ -30,10 +30,10 @@ describe('loadWorkflow', () => {
     expect(fb.queue).toBe('dev');
     expect(fb.model).toBe('sonnet');
     expect(fb.session).toBe('resume');
-    expect(fb.skill).toBe('relais:feedback');
+    expect(fb.skill).toBe('factory:feedback');
     expect(fb.onStart).toEqual({});
     expect(wf.jobs['fix-ci']!.input).toBe('ci_failures');
-    expect(wf.jobs['fix-ci']!.skill).toBe('relais:fix-ci');
+    expect(wf.jobs['fix-ci']!.skill).toBe('factory:fix-ci');
     expect(wf.jobs['fix-ci']!.session).toBe('resume');
     expect(wf.jobs['remember']!.workspace).toBe('knowledge');
     expect(wf.jobs['ask']!.limits.usd).toBe(0.5);

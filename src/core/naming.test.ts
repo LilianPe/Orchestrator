@@ -14,7 +14,7 @@ describe('slugify', () => {
 });
 
 describe('branchName', () => {
-  it('prefixes with relais/ and the lowercased identifier', () => {
-    expect(branchName('REL-12', 'Export CSV des audits')).toBe('relais/rel-12-export-csv-des-audits');
+  it('prefixes with factory/ and the lowercased identifier', () => {
+    expect(branchName('REL-12', 'Export CSV des audits')).toBe('factory/rel-12-export-csv-des-audits');
   });
 });

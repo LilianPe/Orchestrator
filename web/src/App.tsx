@@ -2,6 +2,7 @@ import { useEffect, useReducer } from 'react';
 import { fetchSnapshot, post, subscribe } from './api.js';
 import { initialState, reducer } from './state.js';
 import type { RunLine, TicketView } from './types.js';
+import { PRODUCT_NAME } from '../../src/product.js';
 
 const LABELS: Record<TicketView['logical'], string> = {
   todo: 'Todo', dev: 'En cours', human_review: 'Review humaine', ai_review: 'Review IA', ready: 'Prêt à merger', done: 'Terminé',
@@ -44,7 +45,7 @@ export function App() {
   return (
     <div className="page">
       <header>
-        <h1>Relais</h1>
+        <h1>{PRODUCT_NAME}</h1>
         {snap && (
           <div className="stats">
             <span>Places {snap.capacity.dev.used}/{snap.capacity.dev.total}</span>

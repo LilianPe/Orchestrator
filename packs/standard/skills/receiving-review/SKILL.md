@@ -1,9 +1,9 @@
 ---
 name: receiving-review
-description: Traiter des retours (review humaine ou IA, commentaires de PR, vérifications ou CI en échec) avec rigueur : comprendre, vérifier dans le code, corriger ce qui est juste, refuser avec une raison ce qui ne l'est pas. Utilisé par relais:feedback, relais:fix-ci et relais:review.
+description: Traiter des retours (review humaine ou IA, commentaires de PR, vérifications ou CI en échec) avec rigueur : comprendre, vérifier dans le code, corriger ce qui est juste, refuser avec une raison ce qui ne l'est pas. Utilisé par factory:feedback, factory:fix-ci et factory:review.
 ---
 
-# relais:receiving-review
+# factory:receiving-review
 
 Un retour est une affirmation sur le code, et la correction qu'il propose en est une autre. Les deux se vérifient avant d'écrire une ligne. Ni complaisance (« excellente remarque ! »), ni application aveugle, ni défense de principe.
 
@@ -11,7 +11,7 @@ Un retour est une affirmation sur le code, et la correction qu'il propose en est
 
 - Lis **tous** les retours avant d'en corriger un : plusieurs retours peuvent décrire un même mécanisme, ou se contredire.
 - Reformule chacun en une exigence technique (« la date doit être validée côté serveur »). Retour ancré (`chemin:ligne — texte`) : ouvre ce fichier à cette ligne.
-- **Un retour ambigu, ou contraire au ticket ou à un autre retour humain** : ne corrige rien de ce qui en dépend. Pose UNE question précise avec `relais-agent ask "<question>"` (ce que tu as compris, les deux lectures possibles), traite les retours indépendants, puis termine ton tour.
+- **Un retour ambigu, ou contraire au ticket ou à un autre retour humain** : ne corrige rien de ce qui en dépend. Pose UNE question précise avec `factory-agent ask "<question>"` (ce que tu as compris, les deux lectures possibles), traite les retours indépendants, puis termine ton tour.
 
 ## 2. Vérifier dans le code
 
@@ -30,8 +30,8 @@ Pour chaque retour :
 Source du retour :
 
 - **Humain** (fil Linear, commentaire de PR d'un relecteur) : c'est la décision produit. Applique après avoir compris ; s'il contredit le ticket ou un choix antérieur, demande au lieu de trancher.
-- **IA ou outil** (review automatique, constat de `relais:code-review`) : sceptique. Un retour non vérifié n'est pas appliqué.
-- **Vérification ou CI en échec** : ce n'est pas une opinion, c'est un symptôme ; passe par `relais:debugging`.
+- **IA ou outil** (review automatique, constat de `factory:code-review`) : sceptique. Un retour non vérifié n'est pas appliqué.
+- **Vérification ou CI en échec** : ce n'est pas une opinion, c'est un symptôme ; passe par `factory:debugging`.
 
 ## 3. Corriger
 
@@ -39,8 +39,8 @@ Source du retour :
 - **Un commit par cause.** Plusieurs retours sur un même mécanisme sont un seul défaut vu sous plusieurs angles : une correction à la cause, un commit qui les nomme tous. Les retours indépendants gardent chacun leur commit.
 - **Corrige la règle, pas l'exemple** : un retour qui cite un cas d'une classe de bugs se corrige par ce qui couvre toute la classe.
 - **Une duplication se supprime**, elle ne se commente pas (« voir plus haut »).
-- **Chaque correction de comportement a sa preuve** (`relais:tdd`) : un test rouge sur l'ancien code puis vert. Pour un durcissement sans changement visible, montre que le test rougit quand tu casses volontairement la garde (avec Edit), puis remets-la.
-- Lance les tests de ce que la correction change (`relais:verification`), pas la suite complète.
+- **Chaque correction de comportement a sa preuve** (`factory:tdd`) : un test rouge sur l'ancien code puis vert. Pour un durcissement sans changement visible, montre que le test rougit quand tu casses volontairement la garde (avec Edit), puis remets-la.
+- Lance les tests de ce que la correction change (`factory:verification`), pas la suite complète.
 - Jamais `git commit --amend` ni réécriture d'historique : la branche est déjà poussée et le force-push est interdit. Pour annuler une correction : `git revert --no-edit <sha>`.
 
 ## 4. Répondre

@@ -1,6 +1,6 @@
 import type { Store } from '../store/types.js';
 import type { Clock } from './clock.js';
-import type { RelaisEvent } from './types.js';
+import type { FactoryEvent } from './types.js';
 
 export class TimerService {
   private handle: NodeJS.Timeout | undefined;
@@ -8,7 +8,7 @@ export class TimerService {
   constructor(
     private store: Store,
     private clock: Clock,
-    private emit: (e: RelaisEvent) => void,
+    private emit: (e: FactoryEvent) => void,
   ) {}
 
   tick(): void {

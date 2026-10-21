@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { FakeTracker } from '../adapters/tracker/fake.js';
 import { EventBus } from '../core/bus.js';
 import { FakeClock } from '../core/clock.js';
-import { newTicketState, type RelaisEvent } from '../core/types.js';
+import { newTicketState, type FactoryEvent } from '../core/types.js';
 import { SqliteStore } from '../store/sqlite-store.js';
 import { createApp } from './app.js';
 
@@ -14,10 +14,10 @@ function setup(extra: { uiPassword?: string } = {}) {
   const bus = new EventBus();
   const tracker = new FakeTracker();
   tracker.addIssue({ identifier: 'REL-1', title: 'Export' });
-  const submitted: RelaisEvent[] = [];
-  const transcriptsDir = mkdtempSync(join(tmpdir(), 'relais-tr-'));
-  const webDir = mkdtempSync(join(tmpdir(), 'relais-web-'));
-  writeFileSync(join(webDir, 'index.html'), '<h1>Relais</h1>');
+  const submitted: FactoryEvent[] = [];
+  const transcriptsDir = mkdtempSync(join(tmpdir(), 'factory-tr-'));
+  const webDir = mkdtempSync(join(tmpdir(), 'factory-web-'));
+  writeFileSync(join(webDir, 'index.html'), '<h1>Factory</h1>');
   const linearWebhook = vi.fn(() => ({ status: 200 }));
   const app = createApp({
     store, bus, clock: new FakeClock(10), submit: (e) => void submitted.push(e), isPaused: () => false, linearWebhook,
@@ -79,14 +79,14 @@ describe('server', () => {
     const { app, transcriptsDir } = setup();
     writeFileSync(join(transcriptsDir, 'r1.jsonl'), '{"type":"system"}\n{"type":"result"}\n');
     expect(await (await app.request('/api/runs/r1/transcript')).json()).toEqual([{ type: 'system' }, { type: 'result' }]);
-    expect(await (await app.request('/')).text()).toContain('Relais');
-    expect(await (await app.request('/some/route')).text()).toContain('Relais');
+    expect(await (await app.request('/')).text()).toContain('Factory');
+    expect(await (await app.request('/some/route')).text()).toContain('Factory');
   });
 
   it('does not serve files outside webDir', async () => {
     const { app, webDir } = setup();
-    writeFileSync(join(webDir, '..', 'relais-secret.txt'), 'TOPSECRET');
-    for (const path of ['/%2e%2e/relais-secret.txt', '/..%2frelais-secret.txt', '/../relais-secret.txt']) {
+    writeFileSync(join(webDir, '..', 'factory-secret.txt'), 'TOPSECRET');
+    for (const path of ['/%2e%2e/factory-secret.txt', '/..%2ffactory-secret.txt', '/../factory-secret.txt']) {
       const res = await app.request(path);
       expect(await res.text()).not.toContain('TOPSECRET');
     }

@@ -30,13 +30,14 @@ import { createApp } from '../server/app.js';
 import { SqliteStore } from '../store/sqlite-store.js';
 import { repoRoot } from './root.js';
 import { TrackerSwitch } from './tracker-switch.js';
+import { PRODUCT_NAME } from '../product.js';
 
 export interface BootOptions {
   home: string;
   fakeRunner?: boolean;
   port?: number;
   log?: (m: string) => void;
-  /** Defaults to process.env; read for RELAIS_UI_PASSWORD. */
+  /** Defaults to process.env; read for FACTORY_UI_PASSWORD. */
   env?: NodeJS.ProcessEnv;
 }
 
@@ -45,19 +46,19 @@ export function isLoopbackHost(host: string): boolean {
   return h === 'localhost' || h === '::1' || /^127\.\d+\.\d+\.\d+$/.test(h);
 }
 
-const RELAIS_LABELS = ['agent:reprendre', 'agent:stop'];
+const FACTORY_LABELS = ['agent:reprendre', 'agent:stop'];
 
-export async function startRelais(o: BootOptions): Promise<{ url: string; stop(): Promise<void> }> {
-  const log = o.log ?? ((m: string) => console.log(`[relais] ${m}`));
+export async function startFactory(o: BootOptions): Promise<{ url: string; stop(): Promise<void> }> {
+  const log = o.log ?? ((m: string) => console.log(`[factoryd] ${m}`));
   const root = repoRoot();
   const packDir = join(root, 'packs/standard');
   const webDir = join(root, 'web/dist');
   const instance = loadInstance(o.home);
-  const uiPassword = isLoopbackHost(instance.host) ? undefined : (o.env ?? process.env)['RELAIS_UI_PASSWORD'] || undefined;
+  const uiPassword = isLoopbackHost(instance.host) ? undefined : (o.env ?? process.env)['FACTORY_UI_PASSWORD'] || undefined;
   if (!isLoopbackHost(instance.host) && !uiPassword) {
     throw new Error(
-      `host: ${instance.host} expose l'interface et l'API de Relais hors de cette machine. ` +
-        "Définissez la variable d'environnement RELAIS_UI_PASSWORD (mot de passe de l'interface), ou remettez host: 127.0.0.1 dans config.yaml.",
+      `host: ${instance.host} expose l'interface et l'API de ${PRODUCT_NAME} hors de cette machine. ` +
+        "Définissez la variable d'environnement FACTORY_UI_PASSWORD (mot de passe de l'interface), ou remettez host: 127.0.0.1 dans config.yaml.",
     );
   }
   const paths = homePaths(o.home);
@@ -65,7 +66,7 @@ export async function startRelais(o: BootOptions): Promise<{ url: string; stop()
   const baseUrl = instance.publicUrl ?? `http://localhost:${port}`;
 
   const projects: ProjectRuntime[] = instance.projects.map((p) => {
-    const projectFile = join(p.repoPath, '.relais/workflow.yml');
+    const projectFile = join(p.repoPath, '.factory/workflow.yml');
     return {
       id: p.id,
       repoPath: p.repoPath,
@@ -136,11 +137,11 @@ export async function startRelais(o: BootOptions): Promise<{ url: string; stop()
     dailyBudgetUsd: instance.limits.perDayUsd,
     knowledgeConfigured: !!instance.knowledge,
     agentEnv: (run) => ({
-      RELAIS_API: `http://127.0.0.1:${port}/agent`,
-      RELAIS_RUN_TOKEN: run.token,
-      RELAIS_TICKET: run.ticketId,
-      RELAIS_KNOWLEDGE: instance.knowledge?.repoPath ?? '',
-      RELAIS_ROOT: root,
+      FACTORY_API: `http://127.0.0.1:${port}/agent`,
+      FACTORY_RUN_TOKEN: run.token,
+      FACTORY_TICKET: run.ticketId,
+      FACTORY_KNOWLEDGE: instance.knowledge?.repoPath ?? '',
+      FACTORY_ROOT: root,
       PATH: `${join(root, 'bin')}:${process.env['PATH'] ?? ''}`,
     }),
   });
@@ -209,7 +210,7 @@ export async function startRelais(o: BootOptions): Promise<{ url: string; stop()
             await connectLinear();
             await orchestrator.announceRecovery();
             for (const p of projects) {
-              const created = await linearTracker!.ensureSetup(p.teamKey, p.workflow.states, RELAIS_LABELS);
+              const created = await linearTracker!.ensureSetup(p.teamKey, p.workflow.states, FACTORY_LABELS);
               if (created.length) log(`Linear ${p.teamKey} : créé ${created.join(', ')}`);
             }
             reconciler.start();
@@ -232,8 +233,8 @@ export async function startRelais(o: BootOptions): Promise<{ url: string; stop()
   }
   else log(`Linear non connecté : ouvrez ${baseUrl}/oauth/start`);
   if (!isUsableWebhookSecret(webhookSecret()))
-    log('Attention : aucun secret de webhook Linear configuré, tout webhook sera refusé. Relancez relais init pour le renseigner.');
-  log(`Relais écoute sur ${baseUrl}`);
+    log('Attention : aucun secret de webhook Linear configuré, tout webhook sera refusé. Relancez factory init pour le renseigner.');
+  log(`${PRODUCT_NAME} écoute sur ${baseUrl}`);
 
   return {
     url: baseUrl,

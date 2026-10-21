@@ -14,7 +14,7 @@ import { FakeClock } from '../../src/core/clock.js';
 import { Orchestrator } from '../../src/core/orchestrator.js';
 import { Scheduler } from '../../src/core/scheduler.js';
 import { TimerService } from '../../src/core/timers.js';
-import type { EventPayloads, EventType, RelaisEvent } from '../../src/core/types.js';
+import type { EventPayloads, EventType, FactoryEvent } from '../../src/core/types.js';
 import type { Verifier } from '../../src/core/verify.js';
 import { SqliteStore } from '../../src/store/sqlite-store.js';
 import type { TestPreset } from './test-preset.js';
@@ -28,7 +28,7 @@ export function createHarness(
   const projectYaml = opts.projectYaml ?? opts.preset?.yaml;
   let projectFile: string | undefined;
   if (projectYaml) {
-    projectFile = join(mkdtempSync(join(tmpdir(), 'relais-h-')), 'workflow.yml');
+    projectFile = join(mkdtempSync(join(tmpdir(), 'factory-h-')), 'workflow.yml');
     writeFileSync(projectFile, projectYaml);
   }
   const workflow = loadWorkflow({ packDir, projectFile });
@@ -55,7 +55,7 @@ export function createHarness(
     verify: checks.run,
     projects: [project],
     packDir,
-    agentEnv: (r) => ({ RELAIS_RUN_TOKEN: r.token }),
+    agentEnv: (r) => ({ FACTORY_RUN_TOKEN: r.token }),
     newId: () => `id-${++n}`,
     activityIntervalMs: 0,
     knowledgeConfigured: opts.knowledge,
@@ -65,7 +65,7 @@ export function createHarness(
   let seq = 0;
 
   async function send<T extends EventType>(type: T, payload: EventPayloads[T], ticketId = 'REL-1'): Promise<void> {
-    await orch.submit({ id: `t-${++seq}`, type, at: clock.now(), projectId: 'p', ticketId, payload } as RelaisEvent);
+    await orch.submit({ id: `t-${++seq}`, type, at: clock.now(), projectId: 'p', ticketId, payload } as FactoryEvent);
     await orch.idle();
   }
 
@@ -75,7 +75,7 @@ export function createHarness(
     await orch.idle();
   }
 
-  /** Graceful shutdown, then a fresh orchestrator over the same store, as `relais up` does on restart. */
+  /** Graceful shutdown, then a fresh orchestrator over the same store, as `factory up` does on restart. */
   async function restart(): Promise<void> {
     orch.stopAll();
     await orch.idle();

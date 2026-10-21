@@ -7,20 +7,21 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 RUN npm install -g @anthropic-ai/claude-code
 # Default commit identity (GIT_AUTHOR_* / GIT_COMMITTER_* env vars override it); repos are bind-mounted, possibly with another owner.
-RUN git config --system user.name "Relais" \
- && git config --system user.email "relais@localhost" \
+RUN git config --system user.email "factory@localhost" \
  && git config --system --add safe.directory '*'
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 COPY . .
 RUN npm run build && npm prune --omit=dev
-COPY docker/entrypoint.sh /usr/local/bin/relais-entrypoint
-RUN chmod 0755 /usr/local/bin/relais-entrypoint \
+# The commit name is the product name, read from the built source so it is written in one place only.
+RUN git config --system user.name "$(node -p "require('./dist/src/product.js').PRODUCT_NAME")"
+COPY docker/entrypoint.sh /usr/local/bin/factory-entrypoint
+RUN chmod 0755 /usr/local/bin/factory-entrypoint \
  && mkdir -p /data /repos \
  && chown node:node /data /repos
-ENV RELAIS_HOME=/data NODE_ENV=production
+ENV FACTORY_HOME=/data NODE_ENV=production
 USER node
 EXPOSE 4100
-ENTRYPOINT ["/usr/local/bin/relais-entrypoint"]
-CMD ["node", "dist/src/cli/relais.js", "up"]
+ENTRYPOINT ["/usr/local/bin/factory-entrypoint"]
+CMD ["node", "dist/src/cli/factory.js", "up"]

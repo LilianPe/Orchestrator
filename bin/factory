@@ -1,4 +1,4 @@
 #!/usr/bin/env bash
 ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
-if [ -f "$ROOT/dist/src/cli/relais.js" ]; then exec node "$ROOT/dist/src/cli/relais.js" "$@"; fi
-exec "$ROOT/node_modules/.bin/tsx" "$ROOT/src/cli/relais.ts" "$@"
+if [ -f "$ROOT/dist/src/cli/factory.js" ]; then exec node "$ROOT/dist/src/cli/factory.js" "$@"; fi
+exec "$ROOT/node_modules/.bin/tsx" "$ROOT/src/cli/factory.ts" "$@"

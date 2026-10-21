@@ -1,9 +1,9 @@
 import type { RunStreamEvent } from '../adapters/runner/types.js';
 import type { Command } from './commands.js';
-import type { RelaisEvent, TicketState } from './types.js';
+import type { FactoryEvent, TicketState } from './types.js';
 
 export type BusMessage =
-  | { kind: 'event'; event: RelaisEvent }
+  | { kind: 'event'; event: FactoryEvent }
   | { kind: 'command'; projectId: string; ticketId?: string; command: Command }
   | { kind: 'run'; runId: string; ticketId: string; ev: RunStreamEvent }
   | { kind: 'ticket'; ticket: TicketState }

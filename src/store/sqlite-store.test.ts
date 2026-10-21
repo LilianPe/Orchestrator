@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { newTicketState, type RelaisEvent } from '../core/types.js';
+import { newTicketState, type FactoryEvent } from '../core/types.js';
 import { SqliteStore } from './sqlite-store.js';
 import type { QueueItem, RunRecord } from './types.js';
 
@@ -26,7 +26,7 @@ describe('SqliteStore', () => {
 
   it('dedupes events by id and lists recent ones', () => {
     const s = store();
-    const e = { id: 'e1', type: 'control.pause', at: 5, projectId: 'p', payload: {} } as RelaisEvent;
+    const e = { id: 'e1', type: 'control.pause', at: 5, projectId: 'p', payload: {} } as FactoryEvent;
     expect(s.recordEvent(e)).toBe(true);
     expect(s.recordEvent(e)).toBe(false);
     expect(s.recentEvents(10)).toEqual([e]);

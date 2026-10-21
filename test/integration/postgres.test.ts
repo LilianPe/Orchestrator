@@ -8,9 +8,9 @@ describe.skipIf(!url)('Postgres integration', () => {
     const client = new Client({ connectionString: url });
     await client.connect();
     try {
-      await client.query('create temp table relais_ci (id integer primary key, label text not null)');
-      await client.query("insert into relais_ci (id, label) values (1, 'ok')");
-      const result = await client.query<{ label: string }>('select label from relais_ci where id = 1');
+      await client.query('create temp table factory_ci (id integer primary key, label text not null)');
+      await client.query("insert into factory_ci (id, label) values (1, 'ok')");
+      const result = await client.query<{ label: string }>('select label from factory_ci where id = 1');
       expect(result.rows[0]?.label).toBe('ok');
     } finally {
       await client.end();

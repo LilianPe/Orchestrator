@@ -62,7 +62,7 @@ describe('LinearTracker', () => {
     const { api, calls } = fakeLinear({
       Issue: () => ({ issue: node }),
       TeamLabels: () => ({ issueLabels: { nodes: [{ id: 'l1', name: 'bug' }] } }),
-      Team: () => ({ teams: { nodes: [{ id: 't-1', key: 'REL', name: 'Relais' }] } }),
+      Team: () => ({ teams: { nodes: [{ id: 't-1', key: 'REL', name: 'Factory' }] } }),
       LabelCreate: (v) => ({ issueLabelCreate: { success: true, issueLabel: { id: 'l2', name: v.input.name } } }),
       IssueUpdate: () => ({ issueUpdate: { success: true } }),
     });
@@ -75,7 +75,7 @@ describe('LinearTracker', () => {
     const { api, calls } = fakeLinear({
       TeamStates: () => states,
       TeamLabels: () => ({ issueLabels: { nodes: [] } }),
-      Team: () => ({ teams: { nodes: [{ id: 't-1', key: 'REL', name: 'Relais' }] } }),
+      Team: () => ({ teams: { nodes: [{ id: 't-1', key: 'REL', name: 'Factory' }] } }),
       StateCreate: (v) => ({ workflowStateCreate: { success: true, workflowState: { id: 'x', name: v.input.name } } }),
       LabelCreate: (v) => ({ issueLabelCreate: { success: true, issueLabel: { id: 'y', name: v.input.name } } }),
     });

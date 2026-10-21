@@ -17,7 +17,7 @@ describe('docs/workflow.md', () => {
   it('every yaml example loads on top of the standard pack', () => {
     const examples = blocks('yaml');
     expect(examples.length).toBeGreaterThanOrEqual(10);
-    const dir = mkdtempSync(join(tmpdir(), 'relais-doc-wf-'));
+    const dir = mkdtempSync(join(tmpdir(), 'factory-doc-wf-'));
     examples.forEach((yaml, i) => {
       const file = join(dir, `example-${i}.yml`);
       writeFileSync(file, yaml);

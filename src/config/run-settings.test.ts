@@ -7,7 +7,7 @@ import { buildRunSettings, writeRunSettings } from './run-settings.js';
 describe('run settings', () => {
   const pack = { permissions: { defaultMode: 'acceptEdits', allow: ['Read'], deny: ['Bash(gh pr merge:*)'] } };
 
-  it('adds denies for the real RELAIS_HOME secrets to the pack settings', () => {
+  it('adds denies for the real FACTORY_HOME secrets to the pack settings', () => {
     const s = buildRunSettings(pack, '/data');
     expect(s.permissions.allow).toEqual(['Read']);
     expect(s.permissions.defaultMode).toBe('acceptEdits');
@@ -15,18 +15,18 @@ describe('run settings', () => {
       'Bash(gh pr merge:*)',
       'Read(//data/secrets.json)',
       'Edit(//data/secrets.json)',
-      'Read(//data/relais.db*)',
+      'Read(//data/factory.db*)',
       'Read(//data/transcripts/**)',
       'Read(//data/logs/**)',
       'Bash(*secrets.json*)',
-      'Bash(*relais.db*)',
+      'Bash(*factory.db*)',
     ]);
   });
 
   it('writes the file in the home and returns its path', () => {
-    const packDir = mkdtempSync(join(tmpdir(), 'relais-pack-'));
+    const packDir = mkdtempSync(join(tmpdir(), 'factory-pack-'));
     writeFileSync(join(packDir, 'settings.json'), JSON.stringify(pack));
-    const home = mkdtempSync(join(tmpdir(), 'relais-home-'));
+    const home = mkdtempSync(join(tmpdir(), 'factory-home-'));
     const path = writeRunSettings(packDir, home);
     expect(path).toBe(join(home, 'run-settings.json'));
     const written = JSON.parse(readFileSync(path, 'utf8'));

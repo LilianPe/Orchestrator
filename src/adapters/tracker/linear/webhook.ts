@@ -1,5 +1,5 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
-import type { LogicalState, RelaisEvent } from '../../../core/types.js';
+import type { LogicalState, FactoryEvent } from '../../../core/types.js';
 
 export function isUsableWebhookSecret(secret: unknown): boolean {
   return typeof secret === 'string' && secret.trim() !== '';
@@ -32,7 +32,7 @@ export function stripMention(body: string): string {
   return body.replace(/^\s*(\[@[^\]]*\]\([^)]*\)|@\S+)\s*/, '').trim();
 }
 
-type PartialEvent = { type: RelaisEvent['type']; payload: unknown; suffix?: string };
+type PartialEvent = { type: FactoryEvent['type']; payload: unknown; suffix?: string };
 
 function author(body: any): string {
   return body.agentActivity?.user?.name ?? body.agentSession?.comment?.user?.name ?? body.agentSession?.creator?.name ?? 'Humain';
@@ -93,7 +93,7 @@ export function deliveryKey(body: any): string {
   return `body:${createHash('sha256').update(JSON.stringify({ ...body, webhookTimestamp: undefined })).digest('hex')}`;
 }
 
-export function mapLinearWebhook(body: any, key: string, ctx: MapContext): RelaisEvent[] {
+export function mapLinearWebhook(body: any, key: string, ctx: MapContext): FactoryEvent[] {
   let identifier: string | undefined;
   if (body?.type === 'AgentSessionEvent') identifier = body.agentSession?.issue?.identifier;
   else if (body?.type === 'Issue') identifier = body.data?.identifier ?? (body.data?.team?.key ? `${body.data.team.key}-${body.data.number}` : undefined);
@@ -104,6 +104,6 @@ export function mapLinearWebhook(body: any, key: string, ctx: MapContext): Relai
   const partials = body.type === 'AgentSessionEvent' ? sessionEvents(body, projectId, ctx) : issueEvents(body, identifier, teamKey, projectId, ctx);
   const at = ctx.now();
   return partials.map(
-    (p) => ({ id: `linear:${key}${p.suffix ?? ''}`, type: p.type, at, projectId, ticketId: identifier, payload: p.payload }) as RelaisEvent,
+    (p) => ({ id: `linear:${key}${p.suffix ?? ''}`, type: p.type, at, projectId, ticketId: identifier, payload: p.payload }) as FactoryEvent,
   );
 }

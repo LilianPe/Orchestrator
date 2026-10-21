@@ -1,4 +1,4 @@
-import type { InputKind, QueueName, RelaisEvent, RunOutcome, TicketState } from '../core/types.js';
+import type { InputKind, QueueName, FactoryEvent, RunOutcome, TicketState } from '../core/types.js';
 
 export interface RunRecord {
   id: string;
@@ -44,8 +44,8 @@ export interface Store {
   getTicket(projectId: string, ticketId: string): TicketState | undefined;
   putTicket(t: TicketState): void;
   listTickets(): TicketState[];
-  recordEvent(e: RelaisEvent): boolean;
-  recentEvents(limit: number, ticketId?: string): RelaisEvent[];
+  recordEvent(e: FactoryEvent): boolean;
+  recentEvents(limit: number, ticketId?: string): FactoryEvent[];
   putRun(r: RunRecord): void;
   getRun(id: string): RunRecord | undefined;
   runsByStatus(status: RunRecord['status']): RunRecord[];

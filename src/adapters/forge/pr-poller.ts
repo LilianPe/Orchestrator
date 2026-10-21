@@ -1,6 +1,6 @@
 import type { Clock } from "../../core/clock.js";
 import type { ProjectRuntime } from "../../core/orchestrator.js";
-import type { RelaisEvent, TicketState } from "../../core/types.js";
+import type { FactoryEvent, TicketState } from "../../core/types.js";
 import type { Store } from "../../store/types.js";
 import type { Forge } from "./types.js";
 
@@ -13,7 +13,7 @@ export class PrPoller {
       store: Store;
       forge: Forge;
       projects: ProjectRuntime[];
-      submit: (e: RelaisEvent) => void;
+      submit: (e: FactoryEvent) => void;
       clock: Clock;
       log: (m: string) => void;
     },

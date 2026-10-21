@@ -2,7 +2,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { loadWorkflow } from '../../../config/load-workflow.js';
 import { FakeClock } from '../../../core/clock.js';
-import { newTicketState, type RelaisEvent } from '../../../core/types.js';
+import { newTicketState, type FactoryEvent } from '../../../core/types.js';
 import { SqliteStore } from '../../../store/sqlite-store.js';
 import { FakeTracker } from '../fake.js';
 import { reconcileOnce } from './reconcile.js';
@@ -17,7 +17,7 @@ describe('reconcileOnce', () => {
     tracker.addIssue({ identifier: 'REL-2', delegateId: 'app', stateName: 'AI Review' });
     store.putTicket({ ...newTicketState('p', 'REL-2', 'T', 'human_review', 7), delegated: true });
     store.putTicket({ ...newTicketState('p', 'REL-3', 'T', 'dev', 8), delegated: true, activeRunId: 'r3' });
-    const events: RelaisEvent[] = [];
+    const events: FactoryEvent[] = [];
     await reconcileOnce({
       tracker, store, projects: [{ id: 'p', repoPath: '/r', teamKey: 'REL', workflow }],
       submit: (e) => events.push(e), clock: new FakeClock(100), log: () => {},
@@ -36,7 +36,7 @@ describe('reconcileOnce', () => {
     tracker.addIssue({ identifier: 'REL-4', delegateId: 'app' });
     store.putTicket({ ...newTicketState('p', 'REL-4', 'T', 'todo', 4) });
     store.putTicket({ ...newTicketState('p', 'REL-5', 'T', 'human_review', 5), delegated: true });
-    const events: RelaisEvent[] = [];
+    const events: FactoryEvent[] = [];
     await reconcileOnce({
       tracker, store, projects: [{ id: 'p', repoPath: '/r', teamKey: 'REL', workflow }],
       submit: (e) => events.push(e), clock: new FakeClock(100), log: () => {},

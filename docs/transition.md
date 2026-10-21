@@ -33,7 +33,41 @@ L'usine évolue à partir de `main`, sans branche longue : chaque incrément est
 
 ## Données
 
-Aucune migration : `relais.db`, `transcripts/`, `workspaces/` et le dépôt de connaissance repartent de zéro (ORC-178 archive puis supprime les anciens).
+Aucune migration : `relais.db`, `transcripts/`, `workspaces/` et le dépôt de connaissance repartent de zéro (ORC-178 archive puis supprime les anciens). Depuis ORC-167, l'instance vit dans `~/.factory` (base `factory.db`) : rien n'est relu de `~/.relais`.
+
+## Renommage (ORC-167)
+
+Relais a été renommé d'un bloc, sans changement de comportement : seuls les noms changent.
+
+| Avant | Après |
+|---|---|
+| paquet `relais`, CLI `relais` (`bin/relais`, `src/cli/relais.ts`) | paquet `factory`, CLI `factory` (`bin/factory`, `src/cli/factory.ts`) ; le démon, lancé par `factory up`, signe ses journaux `[factoryd]` |
+| `relais-agent` (`bin/relais-agent`, `src/cli/relais-agent.ts`) | `factory-agent`, nom temporaire jusqu'à son retrait par ORC-192 |
+| variables `RELAIS_*` (`RELAIS_HOME`, `RELAIS_UI_PASSWORD`, `RELAIS_API`, `RELAIS_RUN_TOKEN`, `RELAIS_TICKET`, `RELAIS_KNOWLEDGE`, `RELAIS_ROOT`, `RELAIS_E2E`, `RELAIS_ISOLATION`) | `FACTORY_*`, même suffixe |
+| `~/.relais`, `relais.db` | `~/.factory`, `factory.db` (pas de migration, voir « Données ») |
+| `.relais/workflow.yml` dans le dépôt | `.factory/workflow.yml` |
+| plugin `relais`, skills `relais:<nom>` | plugin `factory`, skills `factory:<nom>` |
+| branches `relais/<id>-<slug>` | branches `factory/<id>-<slug>` |
+| type `RelaisEvent`, `startRelais`, `relaisHome` | `FactoryEvent`, `startFactory`, `factoryHome` |
+| service compose `relais`, `relais-entrypoint`, `relais@localhost` | service `factory`, `factory-entrypoint`, `factory@localhost` |
+| dépôt de connaissance créé par `init` : `relais-knowledge` | `factory-knowledge` |
+
+**Nom affiché.** Ce qu'un humain lit (aide et messages de la CLI, titre et en-tête de l'interface, messages publiés dans Linear, realm du mot de passe, nom de l'identité git des commits) vient d'une seule constante, `PRODUCT_NAME` dans `src/product.ts`, aujourd'hui `Orchestrator` (nom de bêta). Le jour du nom définitif, on ne change que cette constante, le nom du dépôt GitHub et les docs. Elle est lue par :
+
+- `src/cli/factory.ts`, `src/cli/init.ts`, `src/cli/factory-agent.ts` (aide, questions et messages) ;
+- `src/app/bootstrap.ts` (journaux du démon), `src/core/orchestrator.ts` (messages Linear), `src/server/app.ts` (realm HTTP Basic) ;
+- `web/src/App.tsx` (en-tête) et `web/vite.config.ts`, qui remplace `%PRODUCT_NAME%` dans le titre de `web/index.html` au build et en dev ;
+- le `Dockerfile`, qui écrit l'identité git de l'image depuis `dist/src/product.js` après le build ; `compose.yaml` ne passe plus de nom par défaut, et `docker/entrypoint.sh` retire un `GIT_AUTHOR_NAME` ou `GIT_COMMITTER_NAME` vide pour que ce nom s'applique.
+
+Les textes du pack (`packs/standard/`, skills et hook) ne peuvent pas importer la constante : ils disent « l'usine », sans nom propre.
+
+**Occurrences de `relais` qui restent.** Dans `src/`, `bin/`, `packs/` et `web/` (recherche sans casse), une seule, vérifiée par `src/product.test.ts` :
+
+| Où | Pourquoi |
+|---|---|
+| `src/product.test.ts` | le motif `/relais/i` que le test cherche dans ces quatre dossiers ; il échoue si l'ancien nom revient ailleurs |
+
+Hors de ces dossiers, l'ancien nom reste là où il est juste : les URL du dépôt GitHub `LilianPe/relais` (non renommé), le tag `relais-v1-final` et l'état de départ décrit sur cette page, `TICKETS.md` (gelé), et les autres pages de `docs/` et le `README.md`, qui décrivent encore l'état de départ et sont réécrites ticket par ticket (ORC-202).
 
 ## Tests live, hors CI
 
@@ -42,7 +76,7 @@ Deux tests parlent à de vrais services. Ils sont dans le glob de `vitest.config
 | Test | Condition qui le lance | Sinon |
 |---|---|---|
 | `src/adapters/tracker/linear/queries.live.test.ts` | `LINEAR_API_KEY` définie (`describe.skipIf(!key)`) | sauté |
-| `test/e2e/pack.e2e.test.ts` | `RELAIS_E2E=1` (`describe.skipIf(process.env['RELAIS_E2E'] !== '1')`) | sauté |
+| `test/e2e/pack.e2e.test.ts` | `FACTORY_E2E=1` (`describe.skipIf(process.env['FACTORY_E2E'] !== '1')`, `RELAIS_E2E` avant ORC-167) | sauté |
 
 Sur le run de référence, le journal de la CI montre les deux fichiers « 1 skipped » (40 fichiers passés, 2 sautés, 250 tests passés, 2 sautés). Un ticket qui ajoute un test live suit la même règle : une variable d'environnement le lance, la CI ne la définit pas.
 
@@ -71,10 +105,10 @@ Le premier ticket cité est celui qui touche le module en premier ou le plus ; l
 | `src/core/verify.ts` | `runVerify` : commandes `bash -lc` dans le worktree de l'agent | adapter | ORC-151 (sandbox neuf, SHA figé), ORC-179 (plus dans le worktree) |
 | `src/core/prompt.ts` | Prompt texte d'un run (skill, ticket, branche, PR, échecs de vérif) | adapter | ORC-136 (pistes d'`intake`), ORC-151 (logs tronqués), ORC-182 (entrées de l'agent de réponse) |
 | `src/core/pickup.ts` | Contrôles avant prise (description, branche poussée, critères) | adapter | ORC-206 (garde avant In Progress) ; reste en place jusque-là (ORC-169) |
-| `src/core/naming.ts` | `slugify`, `branchName` (`relais/<id>-<slug>`) | adapter | ORC-167 (préfixe), ORC-136 et ORC-204 (`branchName` de Linear) |
+| `src/core/naming.ts` | `slugify`, `branchName` (`factory/<id>-<slug>`) | adapter | ORC-167 (préfixe), ORC-136 et ORC-204 (`branchName` de Linear) |
 | `src/core/clock.ts` | `Clock`, `SystemClock`, `FakeClock` | garder | ORC-225, ORC-161 |
 | `src/core/duration.ts` | `parseDuration` (`3m`, `90m`…) | garder | ORC-177 (gardé si `factory.yml` garde des durées en texte) |
-| `src/core/types.ts` | `RelaisEvent`, `TicketState`, 6 états logiques | adapter | ORC-133 (`schemaVersion`, renommages), ORC-160 (taint, acteur), ORC-180 (`humanInbox`), ORC-187 (états retirés) |
+| `src/core/types.ts` | `FactoryEvent`, `TicketState`, 6 états logiques | adapter | ORC-133 (`schemaVersion`, renommages), ORC-160 (taint, acteur), ORC-180 (`humanInbox`), ORC-187 (états retirés) |
 
 ### `src/adapters/`
 
@@ -116,10 +150,11 @@ Le premier ticket cité est celui qui touche le module en premier ou le plus ; l
 
 | Module | Rôle | Statut | Ticket cible |
 |---|---|---|---|
-| `src/app/bootstrap.ts` | Câblage du démon (store, adaptateurs, orchestrateur, serveur, variables `RELAIS_*`) | adapter | ORC-147 (`submit` → inbox), ORC-149, ORC-167, ORC-179 (`PORT`), ORC-192, ORC-201, câblage restant retiré par ORC-169 |
-| `src/app/root.ts` | Trouve la racine du dépôt par le `package.json` nommé `relais` | adapter | ORC-167 (le renommage du paquet le casse, le ticket ne le nomme pas) |
+| `src/app/bootstrap.ts` | Câblage du démon (store, adaptateurs, orchestrateur, serveur, variables `FACTORY_*`) | adapter | ORC-147 (`submit` → inbox), ORC-149, ORC-167, ORC-179 (`PORT`), ORC-192, ORC-201, câblage restant retiré par ORC-169 |
+| `src/app/root.ts` | Trouve la racine du dépôt par le `package.json` nommé `factory` | adapter | ORC-167 (le renommage du paquet le casse, le ticket ne le nomme pas) |
 | `src/app/tracker-switch.ts` | `Tracker` de substitution tant que Linear n'est pas connecté par OAuth | garder | ORC-208 |
 | `src/version.ts` | Version du paquet | garder | ORC-167 |
+| `src/product.ts` | `PRODUCT_NAME`, le nom affiché (CLI, interface, messages Linear et GitHub, identité git) : sa seule source | garder | ORC-167 (le nom définitif ne change que cette constante) |
 
 ### `src/store/`
 
@@ -133,9 +168,9 @@ Le premier ticket cité est celui qui touche le module en premier ou le plus ; l
 | Module | Rôle | Statut | Ticket cible |
 |---|---|---|---|
 | `src/config/instance.ts` | `config.yaml` et `secrets.json` de l'instance (zod) | adapter | ORC-209 (`factory.yml`), ORC-199 (`config.yaml` et `secrets.json` retirés), ORC-194 (`perDayUsd`), ORC-167 (`RELAIS_HOME`) |
-| `src/config/load-workflow.ts` | Fusion pack + `.relais/workflow.yml` | retirer | ORC-177 (remplacé par ORC-187 et ORC-209) |
+| `src/config/load-workflow.ts` | Fusion pack + `.factory/workflow.yml` | retirer | ORC-177 (remplacé par ORC-187 et ORC-209) |
 | `src/config/workflow-schema.ts` | Schéma zod de `workflow.yml` | retirer | ORC-177 |
-| `src/config/run-settings.ts` | `run-settings.json` : refus de lecture sur `RELAIS_HOME` | retirer | ORC-179, ORC-199 |
+| `src/config/run-settings.ts` | `run-settings.json` : refus de lecture sur `FACTORY_HOME` | retirer | ORC-179, ORC-199 |
 
 ### `src/server/`
 
@@ -160,10 +195,10 @@ Le premier ticket cité est celui qui touche le module en premier ou le plus ; l
 
 | Module | Rôle | Statut | Ticket cible |
 |---|---|---|---|
-| `src/cli/relais.ts` | CLI `relais` : `init`, `up`, `plan`, `status`, `pause`, `resume`, `stop` | adapter | ORC-167 (`factory`), ORC-200 (`plan`, `pause`, `resume`, `--fake-runner` retirés), ORC-220 (`status`, `stop`) |
-| `src/cli/init.ts` | Assistant `init` (app OAuth, smee, base de connaissance, `.relais/workflow.yml`) | adapter | ORC-208 (GitHub App, `factory.yml`, détection), ORC-177, ORC-193, ORC-200 |
-| `src/cli/plan.ts` | `relais plan` : tickets délégués qui seraient pris | retirer | ORC-200 |
-| `src/cli/relais-agent.ts` | CLI de l'agent : `issue`, `search`, `kb search`, `ask` | retirer | ORC-192 (MCP de l'usine) |
+| `src/cli/factory.ts` | CLI `factory` : `init`, `up`, `plan`, `status`, `pause`, `resume`, `stop` | adapter | ORC-167 (`factory`), ORC-200 (`plan`, `pause`, `resume`, `--fake-runner` retirés), ORC-220 (`status`, `stop`) |
+| `src/cli/init.ts` | Assistant `init` (app OAuth, smee, base de connaissance, `.factory/workflow.yml`) | adapter | ORC-208 (GitHub App, `factory.yml`, détection), ORC-177, ORC-193, ORC-200 |
+| `src/cli/plan.ts` | `factory plan` : tickets délégués qui seraient pris | retirer | ORC-200 |
+| `src/cli/factory-agent.ts` | CLI de l'agent (`factory-agent`, nom temporaire) : `issue`, `search`, `kb search`, `ask` | retirer | ORC-192 (MCP de l'usine) |
 
 ### `web/`
 
@@ -180,8 +215,8 @@ Le premier ticket cité est celui qui touche le module en premier ou le plus ; l
 |---|---|---|---|
 | `packs/standard/workflow.yml` | 6 états, règles `on`, jobs, limites | retirer | ORC-177 (remplacé par ORC-187), ORC-193 (`learn`, `remember`), ORC-194 (`usd`) |
 | `packs/standard/settings.json` | Réglages Claude Code des runs (`acceptEdits`, `git push`, `gh`…) | adapter | ORC-191, ORC-205 (deny-list imposée), ORC-181 |
-| `packs/standard/.claude-plugin/plugin.json` | Plugin `relais` | adapter | ORC-167 (nom), ORC-191 |
-| `packs/standard/hooks/hooks.json`, `packs/standard/hooks/session-start.mjs` | Hook de démarrage : règles, méthode, index de la base | adapter | ORC-191 (plus de `RELAIS_*` ni `relais-agent`), ORC-232 (index injecté par le `systemPrompt`), ORC-205 |
+| `packs/standard/.claude-plugin/plugin.json` | Plugin `factory` | adapter | ORC-167 (nom), ORC-191 |
+| `packs/standard/hooks/hooks.json`, `packs/standard/hooks/session-start.mjs` | Hook de démarrage : règles, méthode, index de la base | adapter | ORC-191 (plus de `FACTORY_*` ni `factory-agent`), ORC-232 (index injecté par le `systemPrompt`), ORC-205 |
 | `packs/standard/skills/{dev,feedback,review,ask}/` | Skills de job | adapter | ORC-191 (une consigne par étape, fin par `submit_result`), ORC-187 |
 | `packs/standard/skills/{fix-ci,learn}/` | Skills de job sans équivalent au MVP | retirer | ORC-191, ORC-193 (`learn`) |
 | `packs/standard/skills/{tdd,debugging,verification,code-review,receiving-review}/` | Skills de méthode | garder | ORC-191 (relus pour retirer push et CI) |

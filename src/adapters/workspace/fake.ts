@@ -8,10 +8,10 @@ export class FakeWorkspaces implements WorkspaceManager {
 
   async prepare(req: WorkspaceRequest): Promise<Workspace> {
     this.prepared.push(req);
-    if (req.kind === 'trunk-readonly') return { path: `/tmp/relais-fake/${req.projectId}/_trunk` };
-    if (req.kind === 'knowledge') return { path: `/tmp/relais-fake/_kb/${req.runId}` };
+    if (req.kind === 'trunk-readonly') return { path: `/tmp/factory-fake/${req.projectId}/_trunk` };
+    if (req.kind === 'knowledge') return { path: `/tmp/factory-fake/_kb/${req.runId}` };
     return {
-      path: `/tmp/relais-fake/${req.projectId}/${req.ticketId}`,
+      path: `/tmp/factory-fake/${req.projectId}/${req.ticketId}`,
       port: req.portBase + req.slot,
       branch: branchName(req.ticketId, req.title),
     };

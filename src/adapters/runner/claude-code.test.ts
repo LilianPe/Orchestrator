@@ -9,14 +9,14 @@ const fx = (n: string) => join(import.meta.dirname, 'fixtures', n);
 
 function req(patch: Partial<RunRequest> = {}, env: Record<string, string> = {}): RunRequest {
   return {
-    runId: `r-${Math.random().toString(36).slice(2)}`, cwd: process.cwd(), prompt: '/relais:dev\n\n## Ticket', claudeSessionId: 'uuid-1', resume: false,
+    runId: `r-${Math.random().toString(36).slice(2)}`, cwd: process.cwd(), prompt: '/factory:dev\n\n## Ticket', claudeSessionId: 'uuid-1', resume: false,
     model: 'sonnet', pluginDir: '/pack', settingsPath: '/pack/settings.json', readOnly: false,
     limits: { turns: 50, durationMs: 10_000, usd: 5 }, env, ...patch,
   };
 }
 
 function runner() {
-  const transcriptsDir = mkdtempSync(join(tmpdir(), 'relais-tr-'));
+  const transcriptsDir = mkdtempSync(join(tmpdir(), 'factory-tr-'));
   return { transcriptsDir, r: new ClaudeCodeRunner({ transcriptsDir, command: [process.execPath, fx('fake-claude.mjs')], killGraceMs: 500 }) };
 }
 
@@ -29,7 +29,7 @@ async function drain(it: AsyncIterable<RunStreamEvent>) {
 describe('buildClaudeArgs', () => {
   it('starts a new session', () => {
     expect(buildClaudeArgs(req())).toEqual([
-      '-p', '/relais:dev\n\n## Ticket', '--output-format', 'stream-json', '--verbose', '--session-id', 'uuid-1', '--model', 'sonnet',
+      '-p', '/factory:dev\n\n## Ticket', '--output-format', 'stream-json', '--verbose', '--session-id', 'uuid-1', '--model', 'sonnet',
       '--plugin-dir', '/pack', '--settings', '/pack/settings.json', '--setting-sources', 'project,local', '--max-budget-usd', '5',
     ]);
   });
@@ -78,14 +78,14 @@ describe('ClaudeCodeRunner', () => {
 });
 
 describe('childEnv', () => {
-  it('drops daemon-only secrets (LINEAR_*, non-run RELAIS_*) and keeps the run variables', () => {
+  it('drops daemon-only secrets (LINEAR_*, non-run FACTORY_*) and keeps the run variables', () => {
     const env = childEnv(
-      { HOME: '/h', PATH: '/bin', ANTHROPIC_API_KEY: 'k', GH_TOKEN: 'g', LINEAR_API_KEY: 'lin', LINEAR_TOKEN: 'x', RELAIS_HOME: '/data', RELAIS_UI_PASSWORD: 'pw', RELAIS_SECRET: 's' },
-      { RELAIS_API: 'http://127.0.0.1:4100/agent', RELAIS_RUN_TOKEN: 't', RELAIS_TICKET: 'REL-1', RELAIS_KNOWLEDGE: '', RELAIS_ROOT: '/app', PATH: '/app/bin:/bin' },
+      { HOME: '/h', PATH: '/bin', ANTHROPIC_API_KEY: 'k', GH_TOKEN: 'g', LINEAR_API_KEY: 'lin', LINEAR_TOKEN: 'x', FACTORY_HOME: '/data', FACTORY_UI_PASSWORD: 'pw', FACTORY_SECRET: 's' },
+      { FACTORY_API: 'http://127.0.0.1:4100/agent', FACTORY_RUN_TOKEN: 't', FACTORY_TICKET: 'REL-1', FACTORY_KNOWLEDGE: '', FACTORY_ROOT: '/app', PATH: '/app/bin:/bin' },
     );
     expect(env).toEqual({
       HOME: '/h', PATH: '/app/bin:/bin', ANTHROPIC_API_KEY: 'k', GH_TOKEN: 'g',
-      RELAIS_API: 'http://127.0.0.1:4100/agent', RELAIS_RUN_TOKEN: 't', RELAIS_TICKET: 'REL-1', RELAIS_KNOWLEDGE: '', RELAIS_ROOT: '/app',
+      FACTORY_API: 'http://127.0.0.1:4100/agent', FACTORY_RUN_TOKEN: 't', FACTORY_TICKET: 'REL-1', FACTORY_KNOWLEDGE: '', FACTORY_ROOT: '/app',
     });
   });
 });

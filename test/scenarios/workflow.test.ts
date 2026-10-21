@@ -18,11 +18,11 @@ describe('standard workflow', () => {
     const h = createHarness();
     await delegatedAndInReview(h);
     const req = h.runner.requests[0]!;
-    expect(req).toMatchObject({ resume: false, model: 'sonnet', cwd: '/tmp/relais-fake/p/REL-1', readOnly: false });
-    expect(req.prompt.startsWith('/relais:dev\n')).toBe(true);
-    expect(req.prompt).toContain('Branche : relais/rel-1-export-csv');
+    expect(req).toMatchObject({ resume: false, model: 'sonnet', cwd: '/tmp/factory-fake/p/REL-1', readOnly: false });
+    expect(req.prompt.startsWith('/factory:dev\n')).toBe(true);
+    expect(req.prompt).toContain('Branche : factory/rel-1-export-csv');
     const t = h.ticket();
-    expect(t).toMatchObject({ logical: 'human_review', blocked: false, branch: 'relais/rel-1-export-csv', linearSessionId: 'ls-1' });
+    expect(t).toMatchObject({ logical: 'human_review', blocked: false, branch: 'factory/rel-1-export-csv', linearSessionId: 'ls-1' });
     expect(t.activeRunId).toBeUndefined();
     const moves = h.tracker.calls.filter((c) => c.method === 'moveTo').map((c) => c.args[1]);
     expect(moves).toEqual(['In Progress', 'Human Review']);
@@ -45,7 +45,7 @@ describe('standard workflow', () => {
     const r = h.runner.requests[1]!;
     expect(r.resume).toBe(true);
     expect(r.claudeSessionId).toBe(h.runner.requests[0]!.claudeSessionId);
-    expect(r.prompt.startsWith('/relais:feedback\n')).toBe(true);
+    expect(r.prompt.startsWith('/factory:feedback\n')).toBe(true);
     expect(r.prompt).toContain('boutons mal alignés');
     expect(r.prompt).toContain('bug quand la liste est vide');
     expect(h.ticket()).toMatchObject({ logical: 'human_review', pendingFeedback: [] });
@@ -76,11 +76,11 @@ describe('standard workflow', () => {
     expect(h.runner.requests[1]!.prompt).toContain('Rounds de review max : 5');
     expect(h.ticket().logical).toBe('ready');
     expect(h.tracker.activities('ls-1').at(-1)).toEqual({ type: 'response', body: 'Synthèse : 2 rounds, CI verte.' });
-    await h.send('pr.merged', { number: 3, url: 'https://gh/pr/3', branch: 'relais/rel-1-export-csv' });
+    await h.send('pr.merged', { number: 3, url: 'https://gh/pr/3', branch: 'factory/rel-1-export-csv' });
     expect(h.ticket().logical).toBe('done');
     expect(h.workspaces.cleaned).toEqual(['REL-1']);
-    expect(h.runner.requests.at(-1)!.prompt.startsWith('/relais:learn\n')).toBe(true);
-    expect(h.runner.requests.at(-1)!.cwd).toMatch(/^\/tmp\/relais-fake\/_kb\//);
+    expect(h.runner.requests.at(-1)!.prompt.startsWith('/factory:learn\n')).toBe(true);
+    expect(h.runner.requests.at(-1)!.cwd).toMatch(/^\/tmp\/factory-fake\/_kb\//);
   });
 
   it('verification failures resume the session, then pass', async () => {
@@ -183,7 +183,7 @@ describe('standard workflow', () => {
     h.runner.enqueue({ events: [{ kind: 'text', text: 'Dans src/scores/history.ts.' }] });
     await h.send('session.mentioned', { linearSessionId: 'ls-9', body: 'où est calculé le score ?', author: 'L' });
     const r = h.runner.requests[0]!;
-    expect(r).toMatchObject({ readOnly: true, cwd: '/tmp/relais-fake/p/_trunk' });
+    expect(r).toMatchObject({ readOnly: true, cwd: '/tmp/factory-fake/p/_trunk' });
     expect(r.prompt).toContain('## Message\noù est calculé le score ?');
     expect(h.tracker.activities('ls-9').at(-1)).toEqual({ type: 'response', body: 'Dans src/scores/history.ts.' });
     expect(h.ticket()).toMatchObject({ logical: 'todo', blocked: false });
@@ -195,9 +195,9 @@ describe('standard workflow', () => {
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
     await h.send('command', { name: 'retiens', body: 'les agrégats se calculent côté serveur', linearSessionId: 'ls-10', author: 'L' });
     const r = h.runner.requests[0]!;
-    expect(r.prompt.startsWith('/relais:learn\n')).toBe(true);
+    expect(r.prompt.startsWith('/factory:learn\n')).toBe(true);
     expect(r.prompt).toContain('les agrégats se calculent côté serveur');
-    expect(r.cwd).toMatch(/^\/tmp\/relais-fake\/_kb\//);
+    expect(r.cwd).toMatch(/^\/tmp\/factory-fake\/_kb\//);
   });
 
   describe('C1: a mention never makes a ticket delegated', () => {
@@ -215,8 +215,8 @@ describe('standard workflow', () => {
       await h.advance(600_000);
       expect(h.runner.requests).toHaveLength(2);
       const r = h.runner.requests[1]!;
-      expect(r).toMatchObject({ readOnly: true, cwd: '/tmp/relais-fake/p/_trunk' });
-      expect(r.prompt.startsWith('/relais:ask\n')).toBe(true);
+      expect(r).toMatchObject({ readOnly: true, cwd: '/tmp/factory-fake/p/_trunk' });
+      expect(r.prompt.startsWith('/factory:ask\n')).toBe(true);
       expect(r.prompt).toContain('et pourquoi ?');
       expect(h.tracker.activities('ls-9').at(-1)).toEqual({ type: 'response', body: 'Parce que.' });
     });
@@ -228,8 +228,8 @@ describe('standard workflow', () => {
       await h.send('session.prompted', { linearSessionId: 'ls-9', body: 'et pourquoi ?', author: 'L' });
       await h.advance(600_000);
       expect(h.runner.requests.map((r) => [r.prompt.split('\n')[0], r.readOnly])).toEqual([
-        ['/relais:ask', true],
-        ['/relais:ask', true],
+        ['/factory:ask', true],
+        ['/factory:ask', true],
       ]);
       expect(h.ticket()).toMatchObject({ pendingFeedback: [], blocked: false });
       expect(h.tracker.calls.filter((c) => c.method === 'ensureSession')).toEqual([]);
@@ -256,7 +256,7 @@ describe('standard workflow', () => {
       await mentioned(h);
       await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
       expect(h.runner.requests).toHaveLength(2);
-      expect(h.runner.requests[1]!.prompt.startsWith('/relais:dev\n')).toBe(true);
+      expect(h.runner.requests[1]!.prompt.startsWith('/factory:dev\n')).toBe(true);
       expect(h.ticket()).toMatchObject({ delegated: true, linearSessionId: 'ls-1' });
     });
 
@@ -267,7 +267,7 @@ describe('standard workflow', () => {
       await h.send('session.mentioned', { linearSessionId: 'ls-9', body: 'question ?', author: 'L' });
       await h.send('session.prompted', { linearSessionId: 'ls-9', body: 'et pourquoi ?', author: 'L' });
       await h.advance(600_000);
-      expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/relais:dev', '/relais:ask', '/relais:ask']);
+      expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:dev', '/factory:ask', '/factory:ask']);
       expect(h.ticket().pendingFeedback).toEqual([]);
     });
   });
@@ -276,7 +276,7 @@ describe('standard workflow', () => {
     it('a merge skips learn without blocking the ticket or posting an error', async () => {
       const h = createHarness({ knowledge: false });
       await delegatedAndInReview(h);
-      await h.send('pr.merged', { number: 3, url: 'https://gh/pr/3', branch: 'relais/rel-1-export-csv' });
+      await h.send('pr.merged', { number: 3, url: 'https://gh/pr/3', branch: 'factory/rel-1-export-csv' });
       expect(h.ticket()).toMatchObject({ logical: 'done', blocked: false });
       expect(h.runner.requests).toHaveLength(1);
       expect(h.tracker.activities().filter((a) => a.type === 'error')).toEqual([]);
@@ -304,7 +304,7 @@ describe('standard workflow', () => {
     h.runner.release(h.ticket('REL-1').activeRunId!);
     await h.orch.idle();
     expect(h.runner.requests).toHaveLength(2);
-    expect(h.runner.requests[1]!.cwd).toBe('/tmp/relais-fake/p/REL-2');
+    expect(h.runner.requests[1]!.cwd).toBe('/tmp/factory-fake/p/REL-2');
   });
 
   it('a ticket failing pickup checks is blocked with an explanation', async () => {

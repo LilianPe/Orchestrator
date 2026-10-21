@@ -61,7 +61,7 @@ describe('harness: new port fakes and the test preset', () => {
     const h = createHarness({ preset: testPreset() });
     await delegate(h);
     const { branch } = h.ticket();
-    const sandbox = await h.sandboxes.create({ runId: 'r-verify', ticketId: 'REL-1', workspacePath: '/tmp/relais-fake/p/REL-1', network: 'none' });
+    const sandbox = await h.sandboxes.create({ runId: 'r-verify', ticketId: 'REL-1', workspacePath: '/tmp/factory-fake/p/REL-1', network: 'none' });
     expect(h.sandboxes.active()).toEqual([sandbox]);
     await h.sandboxes.destroy(sandbox.id);
     const pub = await h.publisher.publish({

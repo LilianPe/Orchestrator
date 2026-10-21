@@ -48,7 +48,7 @@ jobs:
     model: sonnet
     workspace: worktree
     session: new
-    skill: "relais:dev"
+    skill: "factory:dev"
     pickup: true
     verify: []
     on_start: { move: dev }
@@ -56,28 +56,28 @@ jobs:
   dev-feedback:
     extends: dev
     session: resume
-    skill: "relais:feedback"
+    skill: "factory:feedback"
     input: feedback
     pickup: false
     on_start: {}
     on_success: { post: reply }
   fix-ci:
     extends: dev-feedback
-    skill: "relais:fix-ci"
+    skill: "factory:fix-ci"
     input: ci_failures
   review:
     queue: dev
     model: opus
     workspace: worktree
     session: new
-    skill: "relais:review"
+    skill: "factory:review"
     on_success: { move: ready, post: synthesis }
   ask:
     queue: questions
     model: sonnet
     workspace: trunk-readonly
     session: new
-    skill: "relais:ask"
+    skill: "factory:ask"
     input: thread
     limits: { turns: 30, duration: 5m, usd: 0.5 }
     on_success: { post: reply }
@@ -86,7 +86,7 @@ jobs:
     model: haiku
     workspace: knowledge
     session: new
-    skill: "relais:learn"
+    skill: "factory:learn"
     limits: { turns: 40, duration: 10m, usd: 0.5 }
     on_success: {}
   remember:

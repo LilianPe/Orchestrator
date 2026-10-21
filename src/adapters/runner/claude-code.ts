@@ -29,8 +29,8 @@ export function buildClaudeArgs(req: RunRequest): string[] {
   return args;
 }
 
-/** Variables the daemon sets for a run; every other RELAIS_* (and every LINEAR_*) stays in the daemon. */
-const DAEMON_ONLY = /^(LINEAR_|RELAIS_)/;
+/** Variables the daemon sets for a run; every other FACTORY_* (and every LINEAR_*) stays in the daemon. */
+const DAEMON_ONLY = /^(LINEAR_|FACTORY_)/;
 
 export function childEnv(base: NodeJS.ProcessEnv, run: Record<string, string>): Record<string, string> {
   const env: Record<string, string> = {};

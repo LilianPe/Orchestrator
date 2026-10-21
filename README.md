@@ -1,3 +1,5 @@
+> **Orchestrator** (nom de bêta de l'usine) : ces docs décrivent l'état de départ (Relais) ; elles sont réécrites ticket par ticket. Le code porte déjà les nouveaux noms (CLI `factory`, variables `FACTORY_*`, `~/.factory`, `.factory/`) : la correspondance est dans [`docs/transition.md`, « Renommage »](docs/transition.md#renommage-orc-167).
+
 # Relais
 
 Orchestrateur d'agents de code : un ticket Linear délégué à l'agent devient une PR, relue par un humain puis par une boucle de review IA, prête à merger. Prototype privé.

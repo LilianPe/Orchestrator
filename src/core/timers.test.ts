@@ -2,13 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { SqliteStore } from '../store/sqlite-store.js';
 import { FakeClock } from './clock.js';
 import { TimerService } from './timers.js';
-import type { RelaisEvent } from './types.js';
+import type { FactoryEvent } from './types.js';
 
 describe('TimerService', () => {
   it('emits debounce.fired once when due', () => {
     const store = new SqliteStore(':memory:');
     const clock = new FakeClock(0);
-    const events: RelaisEvent[] = [];
+    const events: FactoryEvent[] = [];
     const svc = new TimerService(store, clock, (e) => events.push(e));
     store.putTimer({ key: 'REL-1:dev-feedback', projectId: 'p', ticketId: 'REL-1', job: 'dev-feedback', fireAt: 180_000 });
     svc.tick();

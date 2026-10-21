@@ -16,10 +16,10 @@ describe('pickupFailures', () => {
 
   it('reports each failing check', async () => {
     const ws = new FakeWorkspaces();
-    ws.remoteBranches.add('relais/rel-3-old');
+    ws.remoteBranches.add('factory/rel-3-old');
     expect(await pickupFailures(['has_description', 'not_started', 'has_acceptance_criteria'], issue('court'), '/r', ws)).toEqual([
       'La description fait moins de 30 caractères.',
-      'Une branche relais/rel-3-… existe déjà sur origin.',
+      'Une branche factory/rel-3-… existe déjà sur origin.',
       "La description ne contient pas de critères d'acceptation.",
     ]);
   });
