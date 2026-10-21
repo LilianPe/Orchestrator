@@ -10,7 +10,7 @@ import type { RunRecord, Store } from '../store/types.js';
 import type { EventBus } from './bus.js';
 import type { Clock } from './clock.js';
 import type { Decision, Effect } from './decision.js';
-import { decide } from './engine.js';
+import { decide, isFenced } from './engine.js';
 import { pickupFailures } from './pickup.js';
 import { buildPrompt, formatFeedback, formatVerifyFailures } from './prompt.js';
 import { reduce } from './reduce.js';
@@ -273,12 +273,8 @@ export class Orchestrator {
       const run = store.getRun(event.payload.runId);
       if (run) this.d.scheduler.release(`${run.ticketId}:${run.queue}`);
     }
-    if (ticket && (event.type === 'verify.passed' || event.type === 'verify.failed') && event.payload.runId !== ticket.verifyingRunId) {
-      this.log('info', `ignored stale ${event.type} for ${ticket.ticketId} (run ${event.payload.runId})`);
-      return;
-    }
-
     const decision = decide(ticket, event, project.workflow);
+    if (isFenced(decision)) this.log('info', `ignored stale ${event.type} for ${ticket?.ticketId ?? '*'}: ${decision.trace[0]}`);
     if (ticket) {
       let next = reduce(ticket, event)!;
       for (const e of decision.events) next = reduce(next, e)!;

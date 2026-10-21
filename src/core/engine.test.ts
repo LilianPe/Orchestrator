@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { loadWorkflow } from '../config/load-workflow.js';
 import type { Decision } from './decision.js';
 import { decide } from './engine.js';
+import { reduce } from './reduce.js';
 import { newTicketState, type EventPayloads, type EventType, type FactoryEvent, type TicketState } from './types.js';
 
 const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../packs/standard') });
@@ -94,6 +95,36 @@ describe('decide — YAML rules of the standard pack', () => {
     const out = decide(ticket({ logical: 'ready' }), ev('pr.merged', { number: 3, url: 'u', branch: 'b' }), workflow);
     expect(kinds(out).effects).toEqual(['move', 'cleanup', 'start_run']);
     expect(out.effects[2]).toMatchObject({ job: 'learn' });
+  });
+});
+
+describe('decide — fencing', () => {
+  const passed = ev('verify.passed', { runId: 'r1', job: 'dev' });
+
+  it('ignores a verification result that arrives after the ticket was stopped', () => {
+    const stopped = decide(ticket({ logical: 'dev', verifyingRunId: 'r1' }), ev('control.stop', {}), workflow);
+    const afterStop = stopped.events.reduce<TicketState | undefined>((s, e) => reduce(s, e), ticket({ logical: 'dev', verifyingRunId: 'r1' }));
+    expect(afterStop!.verifyingRunId).toBeUndefined();
+    const out = decide(afterStop, passed, workflow);
+    expect(out).toEqual(decision());
+    expect(out.trace.join(' ')).toContain('fenced');
+  });
+
+  it('ignores a verification result for another run than the one awaited', () => {
+    expect(decide(ticket({ verifyingRunId: 'r2' }), passed, workflow)).toEqual(decision());
+    expect(decide(ticket({ verifyingRunId: 'r1' }), passed, workflow).effects.length).toBeGreaterThan(0);
+  });
+
+  it('ignores the end of a dev run that is no longer the active run', () => {
+    const finished = ev('run.finished', { runId: 'r1', job: 'dev', outcome: 'failure', costUsd: 0, turns: 1, lastText: '' });
+    expect(decide(ticket({ activeRunId: 'r2' }), finished, workflow)).toEqual(decision());
+    expect(decide(ticket(), finished, workflow)).toEqual(decision());
+    expect(decide(ticket({ activeRunId: 'r1' }), finished, workflow).events).toEqual([{ type: 'ticket.blocked', reason: 'Le run dev a échoué.' }]);
+  });
+
+  it('still answers a question run, which is never the active run', () => {
+    const finished = ev('run.finished', { runId: 'r9', job: 'ask', outcome: 'success', costUsd: 0, turns: 1, lastText: 'ok' });
+    expect(decide(ticket({ activeRunId: 'r1' }), finished, workflow).effects).toEqual([{ kind: 'post_output', style: 'reply', runId: 'r9' }]);
   });
 });
 

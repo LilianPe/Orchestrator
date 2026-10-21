@@ -105,9 +105,33 @@ function applyRule(out: Decision, rule: Rule, event: FactoryEvent, ticket: Ticke
   return out;
 }
 
+const FENCED = 'fenced: ';
+
+export function isFenced(d: Decision): boolean {
+  return d.trace[0]?.startsWith(FENCED) ?? false;
+}
+
+/** A result whose attempt is no longer active: the dev run or the verification it reports on was replaced or stopped. */
+function staleAttempt(state: TicketState | undefined, event: FactoryEvent, workflow: Workflow): string | undefined {
+  if (event.type === 'verify.passed' || event.type === 'verify.failed') {
+    const { runId } = event.payload;
+    return runId === state?.verifyingRunId ? undefined : `${event.type} for run ${runId}, awaited ${state?.verifyingRunId ?? 'none'}`;
+  }
+  if (event.type === 'run.finished' && workflow.jobs[event.payload.job]?.queue === 'dev') {
+    const { runId } = event.payload;
+    return runId === state?.activeRunId ? undefined : `run.finished for run ${runId}, active ${state?.activeRunId ?? 'none'}`;
+  }
+  return undefined;
+}
+
 /** Pure: the same state, event and workflow always give the same decision. */
 export function decide(state: TicketState | undefined, event: FactoryEvent, workflow: Workflow): Decision {
   const out = empty();
+  const fence = staleAttempt(state, event, workflow);
+  if (fence) {
+    out.trace.push(`${FENCED}${fence}`);
+    return out;
+  }
   // Rules read the ticket as it is once the event's own facts are recorded (new status, delegation…).
   const ticket = reduce(state, event);
   if (BUILT_IN.has(event.type)) out.trace.push(`built-in ${event.type}`);
