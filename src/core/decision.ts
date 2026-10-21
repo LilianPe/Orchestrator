@@ -1,8 +1,9 @@
-import type { FeedbackItem, InputKind, LogicalState, TicketState } from './types.js';
+import type { InputKind, InternalEvent, LogicalState } from './types.js';
 
 export type ActivityType = 'thought' | 'response' | 'elicitation' | 'error';
 
-export type Command =
+/** An action outside the ticket state, carried out by the orchestrator (later: the outbox). */
+export type Effect =
   | { kind: 'start_run'; job: string; input?: InputKind; inputText?: string; linearSessionId?: string; resume?: boolean }
   /** Without linearSessionId: stop the ticket's dev work. With it: stop only the runs of that (question) session. */
   | { kind: 'stop_run'; linearSessionId?: string }
@@ -13,13 +14,15 @@ export type Command =
   | { kind: 'activity'; type: ActivityType; body: string; linearSessionId?: string; runId?: string }
   | { kind: 'post_output'; style: 'summary' | 'reply' | 'synthesis'; runId: string }
   | { kind: 'link_pr'; url: string }
-  | { kind: 'set_debounce'; job: string; ms: number }
-  | { kind: 'append_feedback'; item: FeedbackItem }
   | { kind: 'cleanup' }
-  | { kind: 'block'; reason: string }
-  | { kind: 'unblock' }
-  | {
-      kind: 'patch_ticket';
-      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId'>>;
-    }
   | { kind: 'set_paused'; paused: boolean };
+
+export type Timer = { kind: 'debounce'; job: string; ms: number };
+
+/** What `decide` returns: state changes for `reduce`, effects to run, timers to arm, and why. */
+export interface Decision {
+  events: InternalEvent[];
+  effects: Effect[];
+  timers: Timer[];
+  trace: string[];
+}

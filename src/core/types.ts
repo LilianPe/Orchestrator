@@ -63,6 +63,38 @@ export type FactoryEvent<T extends EventType = EventType> = {
   };
 }[T];
 
+/** State changes decided by `decide`, applied to the ticket by `reduce`. */
+export type DecidedEvent =
+  | { type: 'ticket.blocked'; reason: string }
+  | { type: 'ticket.unblocked' }
+  | {
+      type: 'ticket.patched';
+      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId'>>;
+    }
+  | { type: 'feedback.appended'; item: FeedbackItem }
+  /** The ticket's dev work is stopped: nothing pending, no verification awaited. */
+  | { type: 'work.cancelled' }
+  | { type: 'verify.started'; runId: string };
+
+export type PendingJob = { job: string; input?: InputKind; inputText?: string; resume?: boolean };
+
+/** Facts the orchestrator records around an effect it carried out, applied to the ticket by `reduce`. */
+export type ShellEvent =
+  /** The factory itself moved the ticket in the tracker. */
+  | { type: 'status.recorded'; to: LogicalState }
+  | { type: 'session.linked'; linearSessionId: string }
+  | { type: 'pending.set'; job: PendingJob }
+  | { type: 'pending.cleared' }
+  | { type: 'workspace.prepared'; path: string; port?: number; branch?: string }
+  | { type: 'workspace.released' }
+  | { type: 'run.started'; runId: string; job: string; queue: QueueName; claudeSessionId: string; feedbackConsumed: boolean }
+  /** The active run is gone without a `run.finished` (launch failure). */
+  | { type: 'run.cleared' }
+  /** The factory restarted while the ticket had a run or a verification in flight. */
+  | { type: 'run.interrupted'; reason: string };
+
+export type InternalEvent = DecidedEvent | ShellEvent;
+
 export interface TicketState {
   projectId: string;
   ticketId: string;
@@ -84,8 +116,10 @@ export interface TicketState {
   worktreePath?: string;
   port?: number;
   activeRunId?: string;
+  /** Job of `activeRunId`, read by `when: job == …` conditions. */
+  activeJob?: string;
   verifyingRunId?: string;
-  pendingJob?: { job: string; input?: InputKind; inputText?: string; resume?: boolean };
+  pendingJob?: PendingJob;
   verifyAttempts: number;
   pendingFeedback: FeedbackItem[];
   priority: number;
