@@ -14,7 +14,7 @@ function external(t: TicketState, e: FactoryEvent): TicketState {
       if (id === t.linearSessionId) return t;
       return { ...t, questionSessionIds: [...t.questionSessionIds.filter((s) => s !== id), id].slice(-MAX_QUESTION_SESSIONS) };
     }
-    case 'ticket.moved':
+    case 'status.changed':
       return e.payload.to ? { ...t, logical: e.payload.to } : t;
     case 'run.finished': {
       const active = t.activeRunId === e.payload.runId;

@@ -33,8 +33,10 @@ export interface EventPayloads {
   'session.mentioned': { linearSessionId: string; body: string; author: string };
   'session.prompted': { linearSessionId: string; body: string; author: string };
   'session.stopped': { linearSessionId?: string };
-  'ticket.moved': { from: LogicalState | null; to: LogicalState | null };
-  'label.added': { label: string };
+  'status.changed': { from: LogicalState | null; to: LogicalState | null };
+  'label.changed': { label: string; change: 'added' | 'removed' };
+  /** A commit pushed by a human on the ticket's branch. */
+  'push.human': { branch: string; sha: string; author: string };
   command: { name: string; body: string; linearSessionId: string; author: string };
   'pr.opened': PrPayload;
   'pr.checks_passed': PrPayload;

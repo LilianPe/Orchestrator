@@ -15,7 +15,7 @@ Le fichier du projet ne contient **que ce que vous changez**. Règles de fusion 
 |---|---|
 | `tracker`, `states`, `limits`, `workspace` | Fusion en profondeur, clé par clé : `limits: { per_run: { usd: 10 } }` ne change que le budget et garde `turns` et `duration` du pack. |
 | Listes (`verify`, `setup`, `pickup.checks`…) | **Remplacées** en entier, jamais concaténées. |
-| `on` | **Remplacé par type d'événement** : si le projet déclare `on.ticket.moved`, toute la liste `ticket.moved` du pack est ignorée ; les autres événements du pack restent actifs. |
+| `on` | **Remplacé par type d'événement** : si le projet déclare `on.status.changed`, toute la liste `status.changed` du pack est ignorée ; les autres événements du pack restent actifs. |
 | `jobs` | Fusion en profondeur, job par job : `jobs.review.model: sonnet` ne change que le modèle du job `review` du pack. Un nom de job absent du pack crée un nouveau job. |
 | `extends` d'un job | Le job hérite de son parent champ par champ, **sauf** `on_start` et `on_success`, qui remplacent en entier la valeur du parent quand ils sont présents (`on_start: {}` annule donc le `move` hérité). |
 
@@ -76,7 +76,7 @@ Associe les six **états logiques** de Relais aux noms exacts des colonnes (stat
 | `ready` | `Ready to Merge` |
 | `done` | `Done` |
 
-Vous pouvez n'en redéfinir qu'une partie ; après fusion, les six doivent avoir un nom. Aucun autre nom d'état n'est accepté. Lors de « Connecter Linear », Relais crée dans l'équipe les statuts manquants. Un statut Linear qui n'est associé à aucun état logique est vu comme « inconnu » : un déplacement vers lui produit un `ticket.moved` avec `to` vide, que les règles `from`/`to` ne reconnaissent pas.
+Vous pouvez n'en redéfinir qu'une partie ; après fusion, les six doivent avoir un nom. Aucun autre nom d'état n'est accepté. Lors de « Connecter Linear », Relais crée dans l'équipe les statuts manquants. Un statut Linear qui n'est associé à aucun état logique est vu comme « inconnu » : un déplacement vers lui produit un `status.changed` avec `to` vide, que les règles `from`/`to` ne reconnaissent pas.
 
 ### `limits`
 | Clé | Type | Défaut | Effet quand la limite est atteinte |
@@ -162,11 +162,12 @@ Jobs du pack :
 | Événement | Quand | Particularités |
 |---|---|---|
 | `ticket.delegated` | Le ticket est délégué à Relais dans Linear. | — |
-| `ticket.moved` | Le ticket change de statut dans Linear (par un humain). | Filtrable avec `from` / `to`. Les déplacements faits par Relais lui-même ne génèrent pas cet événement. |
+| `status.changed` | Le ticket change de statut dans Linear (par un humain). | Filtrable avec `from` / `to`. Les déplacements faits par Relais lui-même ne génèrent pas cet événement. |
 | `session.mentioned` | `@relais …` dans un commentaire, quand le premier mot n'est pas une commande. | — |
 | `session.prompted` | Réponse dans une session Linear de Relais. | Quand une règle correspond, le message est d'abord ajouté aux retours en attente (`input: feedback`). Dans une session de question, Relais lance directement `ask`, sans lire les règles. |
 | `session.stopped` | Bouton « stop » dans Linear, ou ticket retiré à l'agent. | Dans une session de question, Relais arrête la réponse en cours, sans lire les règles. |
-| `label.added` | Un label est ajouté au ticket (par un humain). | Filtrable avec `label`. |
+| `label.changed` | Un label est ajouté au ticket (par un humain). | Filtrable avec `label` (seul l'ajout correspond ; Relais ne produit pas encore d'événement pour un retrait). |
+| `push.human` | Un humain pousse un commit sur la branche du ticket. | Aucune règle dans le pack. Relais ne reçoit pas encore cet événement (webhooks GitHub : ORC-134). |
 | `command` | `@relais <mot> …` quand `<mot>` est une valeur `say` de la liste `command`. | Filtrable avec `say`. |
 | `pr.checks_passed` | La CI de la PR passe. | — |
 | `pr.checks_failed` | La CI de la PR échoue. | — |
@@ -187,7 +188,7 @@ Ces types sont acceptés par le chargeur, mais Relais les traite en dur : une r�
 | `pr.opened` | Mémorise la PR et l'attache à la session Linear. |
 | `control.pause` / `control.resume` / `control.stop` | Pause / reprise de la file, arrêt d'un ticket (interface, `relais pause`, `relais resume`, `relais stop`). |
 
-Tout autre nom sous `on` est refusé (`on.<nom>: unknown event type`).
+Tout autre nom sous `on` est refusé (`on.<nom>: unknown event type`), sauf les deux anciens noms, encore acceptés comme alias : `ticket.moved` (lu comme `status.changed`) et `label.added` (lu comme `label.changed`).
 
 Les événements qui concernent un ticket que Relais ne suit pas encore sont ignorés, sauf `ticket.delegated`, `session.mentioned`, `session.prompted` et `command`, qui l'ajoutent au suivi.
 
@@ -198,8 +199,8 @@ Les événements qui concernent un ticket que Relais ne suit pas encore sont ign
 | Champ | Effet |
 |---|---|
 | `when` | Condition sur l'état du ticket (section 4). |
-| `from`, `to` | État logique de départ / d'arrivée. Ne filtrent que `ticket.moved` (ignorés sur les autres événements). |
-| `label` | Nom exact du label. La règle ne correspond **qu'à** `label.added`. |
+| `from`, `to` | État logique de départ / d'arrivée. Ne filtrent que `status.changed` (ignorés sur les autres événements). |
+| `label` | Nom exact du label. La règle ne correspond **qu'à** l'ajout de ce label (`label.changed`). |
 | `say` | Mot de commande, **en minuscules** (Relais met en minuscules le mot tapé). La règle ne correspond qu'à `command`. Chaque `say` déclaré sous `command` devient un mot de commande reconnu. |
 
 Une règle sans condition correspond toujours.
@@ -226,11 +227,11 @@ Il n'existe pas de champ `post` dans une règle : la publication du résultat se
 | Événement | Règles (dans l'ordre) |
 |---|---|
 | `ticket.delegated` | si `state in [todo, dev] && !blocked` → `dev` |
-| `ticket.moved` | de `human_review` vers `dev` → `dev-feedback` ; vers `ai_review` → `review` |
+| `status.changed` | de `human_review` vers `dev` → `dev-feedback` ; vers `ai_review` → `review` |
 | `session.prompted` | si `blocked` → `dev-feedback` immédiatement ; si `state in [dev, human_review]` → `dev-feedback` après 3 min sans nouveau message |
 | `session.mentioned` | → `ask` |
 | `command` | `retiens` → `remember` ; `fais-le` → `propose_delegate` |
-| `label.added` | `agent:reprendre` → `dev-feedback` ; `agent:stop` → `stop` |
+| `label.changed` | `agent:reprendre` → `dev-feedback` ; `agent:stop` → `stop` |
 | `session.stopped` | → `stop` |
 | `pr.checks_failed` | si `state in [human_review, ai_review] && !blocked` → `fix-ci` |
 | `pr.merged` | → passe en `done`, supprime le worktree, lance `learn` |
@@ -365,7 +366,7 @@ Lancer la review IA en posant le label `agent:review`, puis retirer ce label :
 ```yaml
 version: 1
 on:
-  label.added:
+  label.changed:
     - { label: "agent:reprendre", run: dev-feedback }
     - { label: "agent:stop", do: stop }
     - { label: "agent:review", run: review, labels: { remove: ["agent:review"] } }
@@ -382,7 +383,7 @@ Pas de review IA (passer en AI Review ne lance plus rien) :
 ```yaml
 version: 1
 on:
-  ticket.moved:
+  status.changed:
     - { from: human_review, to: dev, run: dev-feedback }
 ```
 
@@ -429,7 +430,7 @@ Relais valide le fichier au démarrage de `relais up` et refuse de démarrer s'i
 | Limite à 0 ou négative | `<fichier>: limits.parallel_sessions: Too small: expected number to be >0` |
 | `version` absente ou différente de 1 | `<fichier>: version: Invalid input: expected 1` |
 | Événement inconnu (ou `ticket.undelegated`, interne) | `on.ticket.created: unknown event type` |
-| `run` vers un job inexistant | `on.label.added[0].run: unknown job "audit"` |
+| `run` vers un job inexistant | `on.label.changed[0].run: unknown job "audit"` |
 | Condition invalide | `on.ticket.delegated[0].when: invalid condition: state == todo \|\| blocked` |
 | Champ obligatoire manquant dans un nouveau job | `jobs.audit.queue: required` |
 | `extends` vers un job inexistant | `jobs.<parent>: unknown job` (le message nomme le parent introuvable) |
@@ -440,10 +441,10 @@ Relais valide le fichier au démarrage de `relais up` et refuse de démarrer s'i
 Pièges silencieux (aucune erreur) :
 - **Sous `limits`, `limits.per_run`, un `limits` de job, `workspace` et `tracker`, une clé inconnue est ignorée sans message.** `limits: { parallel: 5 }` est accepté et ne fait rien : relisez l'orthographe.
 - Une règle sur un événement du cycle de vie (`run.finished`, `verify.*`, `debounce.fired`, `pr.opened`, `control.*`) ne se déclenche jamais.
-- `from` / `to` sur un autre événement que `ticket.moved` sont ignorés ; `label` ou `say` sur le mauvais événement rendent la règle inapplicable.
+- `from` / `to` sur un autre événement que `status.changed` sont ignorés ; `label` ou `say` sur le mauvais événement rendent la règle inapplicable.
 - Un `say` avec une majuscule ne correspond jamais.
 - Déclarer `on.<événement>` dans le projet efface les règles du pack pour cet événement : recopiez celles que vous gardez.
-- Un `move` fait par Relais (règle ou `on_success`) ne déclenche pas les règles `ticket.moved` : par exemple, `on_success: { move: ai_review }` ne lance pas la review.
+- Un `move` fait par Relais (règle ou `on_success`) ne déclenche pas les règles `status.changed` : par exemple, `on_success: { move: ai_review }` ne lance pas la review.
 - Modifier le fichier sans redémarrer `relais up` n'a aucun effet.
 
 ## 8. Pas de limite « illimitée »

@@ -22,7 +22,7 @@ workspace:
 on:
   ticket.delegated:
     - { when: "state in [todo, dev] && !blocked", run: dev }
-  ticket.moved:
+  status.changed:
     - { from: human_review, to: dev, run: dev-feedback }
     - { to: ai_review, run: review }
   session.prompted:
@@ -33,7 +33,7 @@ on:
   command:
     - { say: retiens, run: remember }
     - { say: "fais-le", do: propose_delegate }
-  label.added:
+  label.changed:
     - { label: "agent:reprendre", run: dev-feedback }
     - { label: "agent:stop", do: stop }
   session.stopped:

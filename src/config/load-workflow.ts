@@ -17,10 +17,18 @@ import {
 export class WorkflowError extends Error {}
 
 const EVENT_TYPES: readonly string[] = [
-  'ticket.delegated', 'session.mentioned', 'session.prompted', 'session.stopped', 'ticket.moved', 'label.added',
-  'command', 'pr.opened', 'pr.checks_passed', 'pr.checks_failed', 'pr.merged', 'pr.closed', 'run.finished',
+  'ticket.delegated', 'session.mentioned', 'session.prompted', 'session.stopped', 'status.changed', 'label.changed',
+  'push.human', 'command', 'pr.opened', 'pr.checks_passed', 'pr.checks_failed', 'pr.merged', 'pr.closed', 'run.finished',
   'verify.passed', 'verify.failed', 'debounce.fired', 'control.pause', 'control.resume', 'control.stop',
 ];
+
+/** Event names before ORC-133, still accepted as `on` keys. */
+const RENAMED: Record<string, EventType> = { 'ticket.moved': 'status.changed', 'label.added': 'label.changed' };
+
+function renameOn(raw: RawWorkflow): RawWorkflow {
+  if (!raw.on) return raw;
+  return { ...raw, on: Object.fromEntries(Object.entries(raw.on).map(([k, rules]) => [RENAMED[k] ?? k, rules])) };
+}
 
 function readRaw(file: string): RawWorkflow {
   const doc = parse(readFileSync(file, 'utf8')) ?? {};
@@ -29,7 +37,7 @@ function readRaw(file: string): RawWorkflow {
     const issue = res.error.issues[0]!;
     throw new WorkflowError(`${file}: ${issue.path.join('.')}: ${issue.message}`);
   }
-  return res.data;
+  return renameOn(res.data);
 }
 
 function isObject(v: unknown): v is Record<string, unknown> {

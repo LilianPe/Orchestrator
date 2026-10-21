@@ -24,6 +24,28 @@ describe('loadWorkflow', () => {
     expect(wf.commands).toEqual(['retiens', 'fais-le']);
   });
 
+  it('accepts the former event names of a project file as aliases', () => {
+    const wf = loadWorkflow({
+      packDir,
+      projectFile: projectFile(`
+version: 1
+on:
+  ticket.moved:
+    - { to: ready, comment: "prêt" }
+  label.added:
+    - { label: "agent:audit", comment: "audit" }
+`),
+    });
+    expect(wf.on['status.changed']).toEqual([expect.objectContaining({ to: 'ready', comment: 'prêt' })]);
+    expect(wf.on['label.changed']).toEqual([expect.objectContaining({ label: 'agent:audit' })]);
+    expect(Object.keys(wf.on)).not.toContain('ticket.moved');
+  });
+
+  it('accepts rules on a human push', () => {
+    const wf = loadWorkflow({ packDir, projectFile: projectFile(`version: 1\non:\n  push.human:\n    - { comment: "commit humain" }\n`) });
+    expect(wf.on['push.human']).toHaveLength(1);
+  });
+
   it('resolves extends field by field', () => {
     const wf = loadWorkflow({ packDir });
     const fb = wf.jobs['dev-feedback']!;

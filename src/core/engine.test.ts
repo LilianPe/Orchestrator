@@ -57,8 +57,8 @@ describe('decide — YAML rules of the standard pack', () => {
     expect(decide(t, ev('session.prompted', { linearSessionId: 's9', body: 'et pourquoi ?', author: 'L' }), workflow)).toEqual(
       decision({ effects: [{ kind: 'start_run', job: 'ask', input: 'thread', inputText: 'et pourquoi ?', linearSessionId: 's9' }] }),
     );
-    expect(decide({ ...t, logical: 'ai_review' }, ev('ticket.moved', { from: 'human_review', to: 'ai_review' }), workflow)).toEqual(decision());
-    expect(decide(t, ev('label.added', { label: 'agent:reprendre' }), workflow)).toEqual(decision());
+    expect(decide({ ...t, logical: 'ai_review' }, ev('status.changed', { from: 'human_review', to: 'ai_review' }), workflow)).toEqual(decision());
+    expect(decide(t, ev('label.changed', { label: 'agent:reprendre', change: 'added' }), workflow)).toEqual(decision());
   });
 
   it('on a delegated ticket, a reply in a recorded question session routes to ask', () => {
@@ -67,12 +67,12 @@ describe('decide — YAML rules of the standard pack', () => {
   });
 
   it('moves human_review -> dev runs dev-feedback', () => {
-    const out = decide(ticket({ logical: 'dev' }), ev('ticket.moved', { from: 'human_review', to: 'dev' }), workflow);
+    const out = decide(ticket({ logical: 'dev' }), ev('status.changed', { from: 'human_review', to: 'dev' }), workflow);
     expect(out).toEqual(decision({ effects: [{ kind: 'start_run', job: 'dev-feedback', input: 'feedback', inputText: undefined, linearSessionId: undefined }] }));
   });
 
   it('moving to ai_review runs review', () => {
-    const out = decide(ticket({ logical: 'ai_review' }), ev('ticket.moved', { from: 'human_review', to: 'ai_review' }), workflow);
+    const out = decide(ticket({ logical: 'ai_review' }), ev('status.changed', { from: 'human_review', to: 'ai_review' }), workflow);
     expect(out.effects[0]).toMatchObject({ kind: 'start_run', job: 'review' });
   });
 
@@ -87,8 +87,16 @@ describe('decide — YAML rules of the standard pack', () => {
   });
 
   it('the agent:stop label stops', () => {
-    const out = decide(ticket({ logical: 'dev' }), ev('label.added', { label: 'agent:stop' }), workflow);
+    const out = decide(ticket({ logical: 'dev' }), ev('label.changed', { label: 'agent:stop', change: 'added' }), workflow);
     expect(kinds(out)).toEqual({ events: ['work.cancelled', 'ticket.blocked'], effects: ['stop_run', 'activity'], timers: [] });
+  });
+
+  it('a label rule matches only the addition of the label', () => {
+    expect(decide(ticket({ logical: 'dev' }), ev('label.changed', { label: 'agent:stop', change: 'removed' }), workflow)).toEqual(decision());
+  });
+
+  it('a human push is a typed event that the standard pack does not react to', () => {
+    expect(decide(ticket({ logical: 'dev' }), ev('push.human', { branch: 'factory/rel-1', sha: 'abc123', author: 'lilian' }), workflow)).toEqual(decision());
   });
 
   it('merge moves to done, cleans up and learns', () => {

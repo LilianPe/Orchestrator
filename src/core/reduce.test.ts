@@ -35,8 +35,8 @@ describe('reduce — facts carried by external events', () => {
   });
 
   it('a status change to a known state records it; to an unknown state changes nothing', () => {
-    expect(reduce(ticket(), ev('ticket.moved', { from: 'todo', to: 'dev' }))!.logical).toBe('dev');
-    expect(reduce(ticket({ logical: 'dev' }), ev('ticket.moved', { from: 'dev', to: null }))!.logical).toBe('dev');
+    expect(reduce(ticket(), ev('status.changed', { from: 'todo', to: 'dev' }))!.logical).toBe('dev');
+    expect(reduce(ticket({ logical: 'dev' }), ev('status.changed', { from: 'dev', to: null }))!.logical).toBe('dev');
   });
 
   it('a finished run adds its cost and frees the ticket only if it was the active run', () => {

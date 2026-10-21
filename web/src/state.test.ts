@@ -24,7 +24,7 @@ describe('reducer', () => {
     expect(s.tickets['p/REL-1']!.logical).toBe('human_review');
     s = reducer(s, { type: 'bus', message: { kind: 'run', runId: 'r1', ticketId: 'REL-1', ev: { kind: 'text', text: 'Bonjour' } } });
     expect(s.runLines['r1']).toEqual([{ kind: 'text', text: 'Bonjour' }]);
-    s = reducer(s, { type: 'bus', message: { kind: 'event', event: { id: 'e1', type: 'ticket.moved', at: 5, projectId: 'p', ticketId: 'REL-1', payload: {} } } });
+    s = reducer(s, { type: 'bus', message: { kind: 'event', event: { id: 'e1', type: 'status.changed', at: 5, projectId: 'p', ticketId: 'REL-1', payload: {} } } });
     expect(s.events[0]!.id).toBe('e1');
     s = reducer(s, { type: 'bus', message: { kind: 'log', level: 'info', message: 'ping', at: 1 } });
     expect(s.logs).toEqual([]);

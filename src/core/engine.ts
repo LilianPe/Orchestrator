@@ -51,11 +51,13 @@ export function formatFailuresShort(failures: VerifyFailure[]): string {
 }
 
 function ruleMatches(rule: Rule, event: FactoryEvent, ticket: TicketState | undefined, activeJob: string | undefined): boolean {
-  if (event.type === 'ticket.moved') {
+  if (event.type === 'status.changed') {
     if (rule.from && rule.from !== event.payload.from) return false;
     if (rule.to && rule.to !== event.payload.to) return false;
   }
-  if (rule.label !== undefined && (event.type !== 'label.added' || event.payload.label !== rule.label)) return false;
+  if (rule.label !== undefined && (event.type !== 'label.changed' || event.payload.change !== 'added' || event.payload.label !== rule.label)) {
+    return false;
+  }
   if (rule.say !== undefined && (event.type !== 'command' || event.payload.name !== rule.say)) return false;
   if (rule.when) {
     return evalCondition(rule.when, {

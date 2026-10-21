@@ -86,8 +86,8 @@ describe('mapLinearWebhook', () => {
   it('maps a move and an added label', () => {
     const out = mapLinearWebhook(fx('issue-moved-labeled'), 'd6', ctx());
     expect(out).toEqual([
-      { id: 'linear:d6', type: 'ticket.moved', at: 5000, projectId: 'p', ticketId: 'REL-1', payload: { from: 'human_review', to: 'ai_review' } },
-      { id: 'linear:d6:label:l-resume', type: 'label.added', at: 5000, projectId: 'p', ticketId: 'REL-1', payload: { label: 'agent:reprendre' } },
+      { id: 'linear:d6', type: 'status.changed', at: 5000, projectId: 'p', ticketId: 'REL-1', payload: { from: 'human_review', to: 'ai_review' } },
+      { id: 'linear:d6:label:l-resume', type: 'label.changed', at: 5000, projectId: 'p', ticketId: 'REL-1', payload: { label: 'agent:reprendre', change: 'added' } },
     ]);
   });
   it('keeps the label event id when the state change is an echo', () => {

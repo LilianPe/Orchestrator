@@ -47,7 +47,7 @@ describe('Orchestrator', () => {
 
   it('ignores moves of tickets it does not manage', async () => {
     const { store, orch } = setup();
-    await orch.submit({ id: 'm', type: 'ticket.moved', at: 1, projectId: 'p', ticketId: 'REL-9', payload: { from: 'todo', to: 'dev' } });
+    await orch.submit({ id: 'm', type: 'status.changed', at: 1, projectId: 'p', ticketId: 'REL-9', payload: { from: 'todo', to: 'dev' } });
     await orch.idle();
     expect(store.getTicket('p', 'REL-9')).toBeUndefined();
   });

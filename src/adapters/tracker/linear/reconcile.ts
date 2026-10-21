@@ -30,7 +30,7 @@ export async function reconcileOnce(d: ReconcileDeps): Promise<void> {
         if (to && to !== t.logical && !d.store.isEcho(`state:${issue.identifier}:${issue.stateName}`, at)) {
           d.submit({
             id: `reconcile:moved:${issue.identifier}:${issue.stateName}:${t.updatedAt}`,
-            type: 'ticket.moved',
+            type: 'status.changed',
             at,
             projectId: p.id,
             ticketId: issue.identifier,
