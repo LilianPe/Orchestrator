@@ -24,6 +24,12 @@ export function testPreset(opts: { verifyAttempts?: number } = {}): TestPreset {
   return {
     steps: [build, verify],
     bounds: { verifyAttempts },
-    yaml: stringify({ version: 1, limits: { verify_attempts: verifyAttempts }, jobs: { [build.job]: { verify: verify.commands } } }),
+    // `dev-feedback` (and `fix-ci`, which extends it) would inherit the check from `dev`: emptied so
+    // `steps` stays the whole flow.
+    yaml: stringify({
+      version: 1,
+      limits: { verify_attempts: verifyAttempts },
+      jobs: { [build.job]: { verify: verify.commands }, 'dev-feedback': { verify: [] } },
+    }),
   };
 }

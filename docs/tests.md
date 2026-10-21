@@ -70,6 +70,8 @@ describe('mon comportement', () => {
 - `build` : une étape d'agent (le job `dev`) ;
 - `verify` : une étape de contrôle (`fake:check`, exécutée par `h.checks`), bornée par `bounds.verifyAttempts`.
 
+Seuls les runs du job `dev` passent par `verify` : le préréglage vide le `verify` de `dev-feedback`, que `fix-ci` étend, pour que ces deux étapes restent tout l'enchaînement.
+
 Avec `verifyAttempts: N`, chaque échec de `verify` relance l'agent sur la même session, et le **N-ième échec bloque le ticket**. Un contrôle vert remet le compteur à zéro.
 
 ```ts

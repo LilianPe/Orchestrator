@@ -28,6 +28,16 @@ describe('harness: new port fakes and the test preset', () => {
     expect(h.ticket()).toMatchObject({ logical: 'human_review', blocked: false, verifyAttempts: 0 });
   });
 
+  it('test preset: only the build step runs the check, not the feedback runs that extend it', async () => {
+    const h = createHarness({ preset: testPreset() });
+    await delegate(h);
+    expect(h.checks.calls).toHaveLength(1);
+    await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'aussi le titre', author: 'L' });
+    await h.advance(180_000);
+    expect(h.runner.requests).toHaveLength(2);
+    expect(h.checks.calls).toHaveLength(1);
+  });
+
   it('a held check keeps the ticket verifying until it is released', async () => {
     const h = createHarness({ preset: testPreset() });
     const release = h.checks.holdNext();
