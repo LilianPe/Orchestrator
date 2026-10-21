@@ -38,6 +38,10 @@ describe('harness: new port fakes and the test preset', () => {
     expect(h.checks.calls).toHaveLength(1);
   });
 
+  it('refuses a projectYaml combined with a preset, even an empty one', () => {
+    expect(() => createHarness({ projectYaml: '', preset: testPreset() })).toThrow('not both');
+  });
+
   it('a held check keeps the ticket verifying until it is released', async () => {
     const h = createHarness({ preset: testPreset() });
     const release = h.checks.holdNext();

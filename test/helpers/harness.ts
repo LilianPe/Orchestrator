@@ -24,7 +24,7 @@ export const packDir = join(import.meta.dirname, '../../packs/standard');
 export function createHarness(
   opts: { projectYaml?: string; preset?: TestPreset; verify?: Verifier; knowledge?: boolean } = {},
 ) {
-  if (opts.projectYaml && opts.preset) throw new Error('createHarness: pass projectYaml or preset, not both');
+  if (opts.projectYaml !== undefined && opts.preset) throw new Error('createHarness: pass projectYaml or preset, not both');
   const projectYaml = opts.projectYaml ?? opts.preset?.yaml;
   let projectFile: string | undefined;
   if (projectYaml) {
