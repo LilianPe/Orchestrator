@@ -38,7 +38,7 @@ export function createHarness(
   const forge = new FakeForge();
   const runner = new FakeRunner();
   const workspaces = new FakeWorkspaces();
-  const checks = new FakeCheckRunner();
+  const checks = new FakeCheckRunner(opts.verify);
   const sandboxes = new FakeSandboxProvider();
   const publisher = new FakePublisher(forge);
   const project = { id: 'p', repoPath: '/repo', teamKey: 'REL', workflow };
@@ -52,7 +52,7 @@ export function createHarness(
     forge,
     runner,
     workspaces,
-    verify: opts.verify ?? checks.run,
+    verify: checks.run,
     projects: [project],
     packDir,
     agentEnv: (r) => ({ RELAIS_RUN_TOKEN: r.token }),

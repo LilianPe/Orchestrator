@@ -1,4 +1,4 @@
-import type { VerifyResult } from '../../core/verify.js';
+import type { Verifier, VerifyResult } from '../../core/verify.js';
 import type { CheckRunner } from './types.js';
 
 const PASS: VerifyResult = { ok: true, failures: [] };
@@ -8,6 +8,9 @@ type Scripted = (commands: string[]) => VerifyResult | Promise<VerifyResult>;
 export class FakeCheckRunner implements CheckRunner {
   calls: { cwd: string; commands: string[] }[] = [];
   private results: Scripted[] = [];
+
+  /** `fallback` answers once the queue is empty: a pass by default. */
+  constructor(private fallback: Verifier = async () => PASS) {}
 
   enqueue(...results: VerifyResult[]): void {
     this.results.push(...results.map((r) => () => r));
@@ -27,6 +30,7 @@ export class FakeCheckRunner implements CheckRunner {
 
   run = async (cwd: string, commands: string[]): Promise<VerifyResult> => {
     this.calls.push({ cwd, commands });
-    return (this.results.shift() ?? (() => PASS))(commands);
+    const next = this.results.shift();
+    return next ? next(commands) : this.fallback(cwd, commands);
   };
 }

@@ -27,7 +27,7 @@ L'**AgentRuntime** du doc MVP est le `Runner` actuel : son faux est `FakeRunner`
 
 Ce qui est branché sur le moteur aujourd'hui :
 
-- `h.checks` exécute les vérifications des jobs (`verify` d'un job). Un scénario peut encore passer son propre `verify` à `createHarness({ verify })`, qui remplace alors `h.checks`.
+- `h.checks` exécute les vérifications des jobs (`verify` d'un job). Un scénario peut passer son propre `verify` à `createHarness({ verify })` : il répond à la place du vert par défaut, une fois vide la file de `h.checks` (`failNext`, `enqueue`, `holdNext`), et `h.checks.calls` enregistre toujours chaque appel.
 - `h.sandboxes` et `h.publisher` ne sont pas encore appelés par l'orchestrateur : l'agent travaille dans son worktree et pousse lui-même. Le scénario les appelle à la place de l'étape qui les utilisera, et vérifie ce que le moteur en fait (par exemple un `pr.opened` construit depuis la publication).
 
 `FakePublisher` numérote ses PR lui-même (1, 2… par branche) : ne mélangez pas dans un même scénario une PR posée à la main par `h.forge.setPr` et une publication, elles pourraient partager un numéro. Republier une branche la remet ouverte, checks en attente.

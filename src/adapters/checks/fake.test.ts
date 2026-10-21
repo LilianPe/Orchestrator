@@ -30,6 +30,15 @@ describe('FakeCheckRunner', () => {
     expect((await p).ok).toBe(false);
   });
 
+  it('falls back to the given verifier once the queue is empty, still recording the call', async () => {
+    const fail = { ok: false, failures: [{ command: 'npm test', exitCode: 2, output: 'own' }] };
+    const c = new FakeCheckRunner(async () => fail);
+    c.failNext('queued');
+    expect((await c.run('/w', ['npm test'])).failures[0]!.output).toBe('queued');
+    expect(await c.run('/w', ['npm test'])).toEqual(fail);
+    expect(c.calls).toHaveLength(2);
+  });
+
   it('enqueues explicit results', async () => {
     const c = new FakeCheckRunner();
     const failures = [{ command: 'lint', exitCode: null, output: 'timeout' }];
