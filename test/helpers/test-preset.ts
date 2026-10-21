@@ -3,6 +3,8 @@ import { stringify } from 'yaml';
 /**
  * Minimal test preset: one fake agent step, one fake check step, and the bounded counter between
  * them. It overlays the standard pack until `factory/default` (ORC-187) replaces the YAML workflow.
+ * `build` is the `dev` job and the jobs that extend it (`dev-feedback`, `fix-ci`): each of their runs
+ * is followed by `verify`, as in the engine, so a resumed run after a block is checked again.
  */
 export type TestStep =
   | { name: 'build'; kind: 'agent'; job: string }

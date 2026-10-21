@@ -28,6 +28,19 @@ describe('harness: new port fakes and the test preset', () => {
     expect(h.ticket()).toMatchObject({ logical: 'human_review', blocked: false, verifyAttempts: 0 });
   });
 
+  it('test preset: a feedback run is checked too, and its pass resets the counter', async () => {
+    const h = createHarness({ preset: testPreset({ verifyAttempts: 2 }) });
+    h.checks.failNext('1 failed');
+    h.checks.failNext('2 failed');
+    await delegate(h);
+    expect(h.ticket()).toMatchObject({ blocked: true, verifyAttempts: 1 });
+    await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'reprends', author: 'L' });
+    await h.advance(0);
+    expect(h.runner.requests).toHaveLength(3);
+    expect(h.checks.calls).toHaveLength(3);
+    expect(h.ticket()).toMatchObject({ blocked: false, verifyAttempts: 0 });
+  });
+
   it('refuses a projectYaml combined with a preset, even an empty one', () => {
     expect(() => createHarness({ projectYaml: '', preset: testPreset() })).toThrow('not both');
   });
