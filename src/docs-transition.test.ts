@@ -1,55 +1,64 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const root = join(import.meta.dirname, '..');
 const doc = readFileSync(join(root, 'docs/transition.md'), 'utf8');
 const STATUSES = ['garder', 'adapter', 'retirer', 'à trancher'];
 
-function sourceFiles(dir: string): string[] {
-  return readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
-    if (e.name.startsWith('.')) return [];
-    const p = join(dir, e.name);
-    if (e.isDirectory()) return sourceFiles(p);
-    return e.name.endsWith('.test.ts') ? [] : [relative(root, p)];
-  });
+function section(title: string): string {
+  const start = doc.indexOf(`\n## ${title}\n`);
+  expect(start, title).toBeGreaterThanOrEqual(0);
+  const end = doc.indexOf('\n## ', start + 1);
+  return doc.slice(start, end === -1 ? undefined : end);
 }
 
-// Each inventory row: | `path` [, `path`…] | role | status | target ticket |
-function inventory(): { rows: Map<string, string>; duplicates: string[] } {
-  const rows = new Map<string, string>();
-  const duplicates: string[] = [];
-  for (const line of doc.split('\n')) {
-    if (!line.startsWith('|')) continue;
-    const cells = line.split('|').slice(1, -1).map((c) => c.trim());
-    if (cells.length < 4) continue;
-    for (const [, path] of cells[0]!.matchAll(/`(src\/[^`]+)`/g)) {
-      if (rows.has(path!)) duplicates.push(path!);
-      rows.set(path!, cells[2]!);
+const expand = (path: string): string[] => {
+  const m = /\{([^}]+)\}/.exec(path);
+  return m ? m[1]!.split(',').flatMap((alt) => expand(path.replace(m[0], alt))) : [path];
+};
+
+const sourceFiles = readdirSync(join(root, 'src'), { recursive: true, withFileTypes: true })
+  .filter((e) => e.isFile() && !e.name.startsWith('.') && !e.name.endsWith('.test.ts'))
+  .map((e) => join(e.parentPath, e.name).slice(root.length + 1));
+
+// Inventory tables: the module cell is first, the status column is found by its header.
+const rows = new Map<string, string>();
+const duplicates: string[] = [];
+let statusCol = -1;
+for (const line of section('Inventaire des modules').split('\n')) {
+  if (!line.startsWith('|')) continue;
+  const cells = line.split('|').slice(1, -1).map((c) => c.trim());
+  if (cells.includes('Statut')) statusCol = cells.indexOf('Statut');
+  else if (!cells[0]!.startsWith('-')) {
+    for (const [, path] of cells[0]!.matchAll(/`([^`]+)`/g)) {
+      for (const p of expand(path!)) {
+        if (rows.has(p)) duplicates.push(p);
+        rows.set(p, cells[statusCol] ?? '');
+      }
     }
   }
-  return { rows, duplicates };
 }
 
 describe('docs/transition.md', () => {
-  const { rows, duplicates } = inventory();
-
-  it('lists each path once', () => {
-    expect(duplicates).toEqual([]);
-  });
-
   it('gives every non-test file of src/ a row with a starting status', () => {
-    const files = sourceFiles(join(root, 'src'));
-    expect(files.length).toBeGreaterThan(50);
-    const missing = files.filter((f) => {
-      const row = [...rows].find(([p]) => p === f || (p.endsWith('/') && f.startsWith(p)));
-      return !row || !STATUSES.includes(row[1]);
+    expect(sourceFiles.length).toBeGreaterThan(50);
+    const missing = sourceFiles.filter((f) => {
+      const status = rows.get(f) ?? [...rows].find(([p]) => p.endsWith('/') && f.startsWith(p))?.[1];
+      return !STATUSES.includes(status ?? '');
     });
     expect(missing).toEqual([]);
   });
 
-  it('only lists paths that exist', () => {
+  it('lists each path once, and only paths that exist', () => {
+    expect(duplicates).toEqual([]);
     expect([...rows.keys()].filter((p) => !existsSync(join(root, p)))).toEqual([]);
+  });
+
+  it('lists in « À trancher » exactly the rows marked à trancher', () => {
+    const undecided = [...rows].filter(([, s]) => s === 'à trancher').map(([p]) => p);
+    const listed = [...section('À trancher').matchAll(/^- `([^`]+)`/gm)].map((m) => m[1]);
+    expect(listed.sort()).toEqual(undecided.sort());
   });
 
   it('is linked from the README', () => {
