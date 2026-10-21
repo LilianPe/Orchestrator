@@ -17,6 +17,17 @@ describe('FakePublisher', () => {
     expect(p.published.map((r) => r.sha)).toEqual(['aaa', 'bbb', 'aaa']);
   });
 
+  it('opens a new PR when the forge shows the branch PR merged or closed', async () => {
+    const forge = new FakeForge();
+    const p = new FakePublisher(forge);
+    const first = await p.publish(req());
+    forge.setPr('relais/rel-1-x', { number: first.prNumber, url: first.url, state: 'MERGED', checks: 'pass', failedChecks: [] });
+    const second = await p.publish(req({ sha: 'bbb' }));
+    expect(second.prNumber).toBe(2);
+    expect((await forge.findPr('/repo', 'relais/rel-1-x'))).toMatchObject({ number: 2, state: 'OPEN' });
+    expect((await p.publish(req({ sha: 'ccc' }))).prNumber).toBe(2);
+  });
+
   it('makes the published PR visible to a FakeForge, checks pending', async () => {
     const forge = new FakeForge();
     const p = new FakePublisher(forge);
