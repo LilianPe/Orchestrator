@@ -29,7 +29,7 @@ Revenir à l'état de départ pour comparer : `git diff relais-v1-final -- <chem
 
 ## Branche de travail
 
-L'usine évolue sur `main` directement, sans branche longue : chaque incrément est un ticket ORC, sur une branche nommée d'après lui, et arrive par PR vers `main` (règle du dépôt, `AGENTS.md`). Le tag `relais-v1-final` garde l'état de départ.
+L'usine évolue sur `main` directement, sans branche longue : chaque incrément est un ticket ORC, sur une branche nommée d'après lui, et arrive par PR vers `main`, jamais par un push direct sur `main`. Le tag `relais-v1-final` garde l'état de départ.
 
 ## Données
 
