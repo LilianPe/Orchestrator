@@ -36,7 +36,7 @@ Ces interfaces sont **minimales** : elles portent ce dont les faux ont besoin. L
 
 ## L'horloge simulée
 
-`h.clock` est une `FakeClock`. `await h.advance(ms)` avance l'horloge, déclenche les minuteries échues (debounce, relances) et attend que l'orchestrateur ait tout traité. Aucun scénario n'attend de vrai délai.
+`h.clock` est une `FakeClock`. `await h.advance(ms)` avance l'horloge, déclenche les minuteries échues (aujourd'hui le seul minuteur est le debounce) et attend que l'orchestrateur ait tout traité. Aucun scénario n'attend de vrai délai.
 
 ## Écrire un scénario
 
@@ -56,7 +56,7 @@ describe('mon comportement', () => {
 });
 ```
 
-- La description du ticket doit faire au moins 30 caractères : sinon le contrôle de prise en charge du pack standard (`has_description`) bloque le ticket et aucun run ne démarre.
+- `h.tracker.addIssue({ identifier, title })` pose une description par défaut assez longue. Une description passée au faux doit faire au moins 30 caractères : sinon le contrôle de prise en charge du pack standard (`has_description`) bloque le ticket et aucun run ne démarre.
 - `h.send(type, payload, ticketId?)` soumet un événement (ticket `REL-1` par défaut) et attend la fin de son traitement.
 - `h.ticket()` lit l'état du ticket dans le store.
 - `h.restart()` arrête proprement l'orchestrateur et en relance un neuf sur le même store, comme `relais up` au redémarrage.
@@ -96,7 +96,7 @@ Chaque scénario est livré par le ticket qui livre le comportement qu'il teste,
 | `.skip` ajouté | ORC-158 | `h.checks`, puis `h.publisher` quand l'usine poussera |
 | Config de tests modifiée | ORC-131 | `h.checks`, puis `h.publisher` quand l'usine poussera |
 | Réponse humaine pendant un run | ORC-180 | `h.runner` (`hold`), `h.advance` |
-| Redémarrage pendant un contrôle | ORC-220 | `h.checks` (`holdNext`), `h.store`, `h.restart()` |
+| Redémarrage pendant un contrôle | ORC-220 | `h.store` (contrôle en cours posé à la main), `h.restart()` |
 | Budget épuisé | ORC-216 | `h.runner` (`turns`, `costUsd`, `outcome: 'limit'`) |
 | Délégation retirée | ORC-227 | `h.tracker`, `h.runner` (`hold`), `h.sandboxes` |
 
