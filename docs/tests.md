@@ -30,7 +30,7 @@ Ce qui est branché sur le moteur aujourd'hui :
 - `h.checks` exécute les vérifications des jobs (`verify` d'un job). Un scénario peut passer son propre `verify` à `createHarness({ verify })` : il répond à la place du vert par défaut, une fois vide la file de `h.checks` (`failNext`, `enqueue`, `holdNext`), et `h.checks.calls` enregistre toujours chaque appel.
 - `h.sandboxes` et `h.publisher` ne sont pas encore appelés par l'orchestrateur : l'agent travaille dans son worktree et pousse lui-même. Le scénario les appelle à la place de l'étape qui les utilisera, et vérifie ce que le moteur en fait (par exemple un `pr.opened` construit depuis la publication).
 
-`FakePublisher` numérote ses PR lui-même (1, 2… par branche) : ne mélangez pas dans un même scénario une PR posée à la main par `h.forge.setPr` et une publication, elles pourraient partager un numéro. Republier une branche met à jour sa PR, checks en attente ; si `h.forge` montre cette PR mergée ou fermée, la publication en ouvre une nouvelle, comme sur GitHub.
+`FakePublisher` numérote ses PR lui-même, dans l'ordre où il les ouvre (1, 2…) : ne mélangez pas dans un même scénario une PR posée à la main par `h.forge.setPr` et une publication, elles pourraient partager un numéro. Republier une branche met à jour sa PR, checks en attente ; si `h.forge` montre cette PR mergée ou fermée, la publication en ouvre une nouvelle, comme sur GitHub.
 
 Ces interfaces sont **minimales** : elles portent ce dont les faux ont besoin. Leur contrat complet (idempotence, erreurs, fencing) et les suites de conformité viennent d'ORC-189.
 
