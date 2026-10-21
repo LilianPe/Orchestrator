@@ -80,7 +80,7 @@ Le premier ticket cité est celui qui touche le module en premier ou le plus ; l
 
 | Module | Rôle | Statut | Ticket cible |
 |---|---|---|---|
-| `src/adapters/exec.ts` | `execCmd`, `mustExec` : sous-processus utilisé par git, `gh`, la base de connaissance, la CLI | à trancher | aucun ticket ne le nomme |
+| `src/adapters/exec.ts` | `execCmd`, `mustExec` : sous-processus utilisé par git, `gh`, la base de connaissance, la CLI | garder | ORC-124 (son usage pour `gh` part avec la GitHub App ; git en garde besoin) |
 | `src/adapters/forge/types.ts` | Port `Forge` | adapter | ORC-181 (port gardé, nouvelles opérations), ORC-124 |
 | `src/adapters/forge/fake.ts` | `FakeForge` | adapter | ORC-181, ORC-225 |
 | `src/adapters/forge/gh-cli.ts` | Forge par la CLI `gh` | retirer | ORC-181 (après ORC-124, GitHub App) |
@@ -88,12 +88,12 @@ Le premier ticket cité est celui qui touche le module en premier ou le plus ; l
 | `src/adapters/runner/types.ts` | Port `Runner`, `RunHandle`, `RunRequest` | garder | ORC-204 (port gardé), ORC-189 (devient AgentRuntime) |
 | `src/adapters/runner/claude-code.ts` | `ClaudeCodeRunner` : `claude -p` en sous-processus sur l'hôte, transcripts | adapter | ORC-136, ORC-204 (dans le runner isolé), ORC-205 (réglages imposés), ORC-217 (session sur volume), ORC-194 (`--max-budget-usd`), ORC-167 |
 | `src/adapters/runner/stream-parser.ts` | Lecture du stream-json de Claude Code | adapter | ORC-136 (usage en tokens), gardé par ORC-204 |
-| `src/adapters/runner/channel.ts` | File asynchrone qui porte le flux d'un `RunHandle` | à trancher | aucun ticket ne le nomme ; suit le port `Runner` (ORC-204) |
+| `src/adapters/runner/channel.ts` | File asynchrone qui porte le flux d'un `RunHandle` | garder | ORC-204 (suit le port `Runner`) |
 | `src/adapters/runner/fake.ts` | `FakeRunner` du harnais | garder | ORC-204, ORC-225 |
 | `src/adapters/runner/fixtures/` | Données de test : faux `claude` et flux stream-json | garder | ORC-136 (suivent le runner) |
 | `src/adapters/tracker/types.ts` | Port `Tracker`, `ActivityInput` | adapter | ORC-160 (id d'effet), ORC-171 (plan dans la session) |
 | `src/adapters/tracker/fake.ts` | `FakeTracker` | garder | ORC-160, ORC-225 |
-| `src/adapters/tracker/activity-relay.ts` | Relaie la sortie d'un run en activités de la session Linear, avec un débit plafonné | à trancher | aucun ticket ne le nomme |
+| `src/adapters/tracker/activity-relay.ts` | Relaie la sortie d'un run en activités de la session Linear, avec un débit plafonné | adapter | ORC-171 |
 | `src/adapters/tracker/linear/api.ts` | `LinearApi` : client GraphQL | garder | ORC-160 |
 | `src/adapters/tracker/linear/queries.ts` | Documents GraphQL | adapter | ORC-160 (marqueur de commentaire), ORC-171 (`agentSessionUpdate` avec plan) |
 | `src/adapters/tracker/linear/tracker.ts` | `LinearTracker` (cache, `ensureSetup`) | adapter | ORC-160 (commentaires et labels idempotents), ORC-201 (plus de « Ready to Merge » ni `agent:*`), ORC-170 |
@@ -112,7 +112,7 @@ Le premier ticket cité est celui qui touche le module en premier ou le plus ; l
 |---|---|---|---|
 | `src/app/bootstrap.ts` | Câblage du démon (store, adaptateurs, orchestrateur, serveur, variables `RELAIS_*`) | adapter | ORC-147 (`submit` → inbox), ORC-149, ORC-167, ORC-179 (`PORT`), ORC-192, ORC-201, câblage restant retiré par ORC-169 |
 | `src/app/root.ts` | Trouve la racine du dépôt par le `package.json` nommé `relais` | adapter | ORC-167 (le renommage du paquet le casse, le ticket ne le nomme pas) |
-| `src/app/tracker-switch.ts` | `Tracker` de substitution tant que Linear n'est pas connecté par OAuth | à trancher | aucun ticket ne le nomme |
+| `src/app/tracker-switch.ts` | `Tracker` de substitution tant que Linear n'est pas connecté par OAuth | garder | ORC-208 |
 | `src/version.ts` | Version du paquet | garder | ORC-167 |
 
 ### `src/store/`
@@ -193,7 +193,4 @@ Le premier ticket cité est celui qui touche le module en premier ou le plus ; l
 
 Modules dont aucun ticket MVP ne règle le sort ; le statut ou le ticket est à décider avant le ticket qui les touche en premier :
 
-- `src/adapters/exec.ts` : utilitaire gardé, mais sans ticket cible ; ses appelants changent (ORC-181 retire `gh-cli.ts`, ORC-204 déplace `setup` dans le conteneur).
-- `src/adapters/runner/channel.ts` : file du flux d'un `RunHandle` ; gardé tant que le port `Runner` l'est (ORC-204), sans ticket qui le nomme.
-- `src/adapters/tracker/activity-relay.ts` : relais de la sortie du run vers la session Linear ; aucun ticket ne dit s'il reste (fil d'activité en direct) ou s'il cède la place au plan de session (ORC-171) et au dashboard (ORC-223).
-- `src/app/tracker-switch.ts` : tracker de substitution avant la connexion OAuth ; aucun ticket ne dit s'il survit à la nouvelle mise en route (ORC-208, ORC-222).
+aucun.
