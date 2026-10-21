@@ -45,6 +45,26 @@ describe('Orchestrator', () => {
     expect(runner.requests).toHaveLength(1);
   });
 
+  it('creates the ticket from the snapshot carried by the event, without reading the tracker', async () => {
+    const { store, tracker, orch } = setup();
+    const issue = { title: 'Export CSV', logical: 'todo' as const, priority: 3 };
+    const payload = { name: 'fais-le', body: '', linearSessionId: 'q1', author: 'L', issue };
+    await orch.submit({ id: 'c1', type: 'command', at: 1_000, projectId: 'p', ticketId: 'REL-1', payload } as FactoryEvent);
+    await orch.idle();
+    expect(store.getTicket('p', 'REL-1')).toMatchObject({ title: 'Export CSV', priority: 3, questionSessionIds: ['q1'] });
+    expect(tracker.calls.filter((c) => c.method === 'getIssue')).toEqual([]);
+  });
+
+  it('reads the tracker once to fill a creating event without a snapshot, and journals the filled event', async () => {
+    const { store, tracker, orch } = setup();
+    tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', stateName: 'In Progress', priority: 2 });
+    await orch.submit({ id: 'm1', type: 'session.mentioned', at: 1_000, projectId: 'p', ticketId: 'REL-1', payload: { linearSessionId: 'q1', body: '?', author: 'L' } } as FactoryEvent);
+    await orch.idle();
+    expect(store.getTicket('p', 'REL-1')).toMatchObject({ title: 'Export CSV', logical: 'dev', priority: 2 });
+    const journaled = store.recentEvents(10).find((e) => e.id === 'm1')!;
+    expect(journaled.payload).toMatchObject({ issue: { title: 'Export CSV', logical: 'dev', priority: 2 } });
+  });
+
   it('ignores moves of tickets it does not manage', async () => {
     const { store, orch } = setup();
     await orch.submit({ id: 'm', type: 'status.changed', at: 1, projectId: 'p', ticketId: 'REL-9', payload: { from: 'todo', to: 'dev' } });

@@ -16,10 +16,10 @@ import { buildPrompt, formatFeedback, formatVerifyFailures } from './prompt.js';
 import { reduce } from './reduce.js';
 import type { Scheduler } from './scheduler.js';
 import {
-  newTicketState,
   type EventType,
   type InputKind,
   type InternalEvent,
+  type IssueSnapshot,
   type LogicalState,
   type QueueName,
   type FactoryEvent,
@@ -241,14 +241,23 @@ export class Orchestrator {
     return t;
   }
 
-  private async createTicket(project: ProjectRuntime, ticketId: string): Promise<TicketState> {
-    const issue = await this.d.tracker.getIssue(ticketId);
+  /**
+   * An event that starts tracking a ticket must carry its snapshot, so that `decide` and a replay of the
+   * journal never read the tracker. A producer that could not fill it gets it filled here, before journaling.
+   */
+  private async withSnapshot(event: FactoryEvent): Promise<FactoryEvent> {
+    if (event.projectId === '*' || !event.ticketId || !CREATES_TICKET.has(event.type)) return event;
+    const payload = event.payload as { issue?: IssueSnapshot };
+    if (payload.issue || this.d.store.getTicket(event.projectId, event.ticketId)) return event;
+    const project = this.project(event.projectId);
+    const issue = await this.d.tracker.getIssue(event.ticketId);
     const logical = logicalFromName(project.workflow.states, issue.stateName) ?? 'todo';
-    return this.putTicket(newTicketState(project.id, ticketId, issue.title, logical, this.d.clock.now(), issue.priority));
+    return { ...event, payload: { ...payload, issue: { title: issue.title, logical, priority: issue.priority } } } as FactoryEvent;
   }
 
-  private async handle(event: FactoryEvent): Promise<void> {
+  private async handle(incoming: FactoryEvent): Promise<void> {
     const { store, bus } = this.d;
+    const event = await this.withSnapshot(incoming);
     if (!store.recordEvent(event)) return;
     bus.publish({ kind: 'event', event });
 
@@ -260,26 +269,21 @@ export class Orchestrator {
     }
 
     const project = this.project(event.projectId);
-    let ticket = event.ticketId ? store.getTicket(project.id, event.ticketId) : undefined;
-    if (!ticket && event.ticketId) {
-      if (!CREATES_TICKET.has(event.type)) {
-        this.log('info', `ignored ${event.type} for unmanaged ticket ${event.ticketId}`);
-        return;
-      }
-      ticket = await this.createTicket(project, event.ticketId);
+    const known = event.ticketId ? store.getTicket(project.id, event.ticketId) : undefined;
+    if (!known && event.ticketId && !CREATES_TICKET.has(event.type)) {
+      this.log('info', `ignored ${event.type} for unmanaged ticket ${event.ticketId}`);
+      return;
     }
 
     if (event.type === 'run.finished') {
       const run = store.getRun(event.payload.runId);
       if (run) this.d.scheduler.release(`${run.ticketId}:${run.queue}`);
     }
-    const decision = decide(ticket, event, project.workflow);
-    if (isFenced(decision)) this.log('info', `ignored stale ${event.type} for ${ticket?.ticketId ?? '*'}: ${decision.trace[0]}`);
-    if (ticket) {
-      let next = reduce(ticket, event)!;
-      for (const e of decision.events) next = reduce(next, e)!;
-      ticket = this.putTicket(next);
-    }
+    const decision = decide(known, event, project.workflow);
+    if (isFenced(decision)) this.log('info', `ignored stale ${event.type} for ${event.ticketId ?? '*'}: ${decision.trace[0]}`);
+    let next = reduce(known, event);
+    for (const e of decision.events) next = reduce(next, e);
+    const ticket = next && this.putTicket(next);
     await this.carryOut(project, ticket, decision);
 
     if (ticket && SETTLES_RUN.has(event.type)) await this.settle(project, ticket.ticketId);

@@ -1,4 +1,4 @@
-import type { InternalEvent, FactoryEvent, TicketState } from './types.js';
+import { newTicketState, type InternalEvent, type FactoryEvent, type TicketState } from './types.js';
 
 const MAX_QUESTION_SESSIONS = 50;
 
@@ -71,12 +71,25 @@ function internal(t: TicketState, e: InternalEvent): TicketState {
   }
 }
 
+/** A ticket the factory does not track yet starts from the snapshot its creating event carries. */
+function tracked(e: FactoryEvent): TicketState | undefined {
+  const issue =
+    e.type === 'ticket.delegated' || e.type === 'session.mentioned' || e.type === 'session.prompted' || e.type === 'command'
+      ? e.payload.issue
+      : undefined;
+  if (!issue || !e.ticketId) return undefined;
+  return newTicketState(e.projectId, e.ticketId, issue.title, issue.logical, e.at, issue.priority);
+}
+
 function isExternal(e: FactoryEvent | InternalEvent): e is FactoryEvent {
   return 'id' in e;
 }
 
 /** Pure: applies one event to a ticket's state and returns the new state; the input is never mutated. */
 export function reduce(state: TicketState | undefined, event: FactoryEvent | InternalEvent): TicketState | undefined {
-  if (!state) return undefined;
+  if (!state) {
+    const created = isExternal(event) ? tracked(event) : undefined;
+    return created && external(created, event as FactoryEvent);
+  }
   return isExternal(event) ? external(state, event) : internal(state, event);
 }

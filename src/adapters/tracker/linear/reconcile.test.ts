@@ -23,7 +23,7 @@ describe('reconcileOnce', () => {
       submit: (e) => events.push(e), clock: new FakeClock(100), log: () => {},
     });
     expect(events.map((e) => [e.id, e.type, e.payload])).toEqual([
-      ['reconcile:delegated:REL-1', 'ticket.delegated', {}],
+      ['reconcile:delegated:REL-1', 'ticket.delegated', { issue: { title: 'Ticket', logical: 'todo', priority: 0 } }],
       ['reconcile:moved:REL-2:AI Review:7', 'status.changed', { from: 'human_review', to: 'ai_review' }],
       ['reconcile:undelegated:REL-3:r3', 'session.stopped', {}],
       ['reconcile:undelegated-flag:REL-3:8', 'ticket.undelegated', {}],

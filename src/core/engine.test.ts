@@ -27,6 +27,11 @@ describe('decide — YAML rules of the standard pack', () => {
     );
   });
 
+  it('starts dev on delegation of a ticket it does not track yet, from the snapshot in the event', () => {
+    const out = decide(undefined, ev('ticket.delegated', { issue: { title: 'Export CSV', logical: 'todo', priority: 0 } }), workflow);
+    expect(out.effects).toEqual([{ kind: 'start_run', job: 'dev', input: undefined, inputText: undefined, linearSessionId: undefined }]);
+  });
+
   it('ignores delegation of a blocked ticket', () => {
     expect(decide(ticket({ blocked: true }), ev('ticket.delegated', {}), workflow)).toEqual(decision());
   });

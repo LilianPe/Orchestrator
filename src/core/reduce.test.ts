@@ -57,6 +57,17 @@ describe('reduce — facts carried by external events', () => {
 
   it('without a ticket, there is nothing to reduce', () => {
     expect(reduce(undefined, ev('control.pause', {}))).toBeUndefined();
+    expect(reduce(undefined, ev('ticket.delegated', {}))).toBeUndefined();
+  });
+
+  it('an event that brings the ticket snapshot starts tracking the ticket from it', () => {
+    const issue = { title: 'Export CSV', logical: 'dev' as const, priority: 2 };
+    expect(reduce(undefined, ev('ticket.delegated', { linearSessionId: 's1', issue }))).toEqual({
+      ...newTicketState('p', 'REL-1', 'Export CSV', 'dev', 1000, 2),
+      delegated: true,
+      linearSessionId: 's1',
+    });
+    expect(reduce(undefined, ev('session.mentioned', { linearSessionId: 's2', body: '?', author: 'L', issue }))).toMatchObject({ delegated: false, questionSessionIds: ['s2'] });
   });
 });
 

@@ -27,17 +27,24 @@ export interface PrPayload {
   branch: string;
 }
 
+/** What the factory needs to start tracking a ticket, read from the tracker when the event comes in. */
+export interface IssueSnapshot {
+  title: string;
+  logical: LogicalState;
+  priority: number;
+}
+
 export interface EventPayloads {
-  'ticket.delegated': { linearSessionId?: string; promptContext?: string };
+  'ticket.delegated': { linearSessionId?: string; promptContext?: string; issue?: IssueSnapshot };
   'ticket.undelegated': Record<string, never>;
-  'session.mentioned': { linearSessionId: string; body: string; author: string };
-  'session.prompted': { linearSessionId: string; body: string; author: string };
+  'session.mentioned': { linearSessionId: string; body: string; author: string; issue?: IssueSnapshot };
+  'session.prompted': { linearSessionId: string; body: string; author: string; issue?: IssueSnapshot };
   'session.stopped': { linearSessionId?: string };
   'status.changed': { from: LogicalState | null; to: LogicalState | null };
   'label.changed': { label: string; change: 'added' | 'removed' };
   /** A commit pushed by a human on the ticket's branch. */
   'push.human': { branch: string; sha: string; author: string };
-  command: { name: string; body: string; linearSessionId: string; author: string };
+  command: { name: string; body: string; linearSessionId: string; author: string; issue?: IssueSnapshot };
   'pr.opened': PrPayload;
   'pr.checks_passed': PrPayload;
   'pr.checks_failed': PrPayload & { failures: string[] };
