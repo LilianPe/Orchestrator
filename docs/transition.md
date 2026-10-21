@@ -29,7 +29,7 @@ Revenir à l'état de départ pour comparer : `git diff relais-v1-final -- <chem
 
 ## Branche de travail
 
-L'usine évolue sur `main` directement, sans branche longue : chaque incrément est un ticket ORC, sur une branche nommée d'après lui, et arrive par PR vers `main`, jamais par un push direct sur `main`. Le tag `relais-v1-final` garde l'état de départ.
+L'usine évolue à partir de `main`, sans branche longue : chaque incrément est un ticket ORC, sur une branche nommée d'après lui, et arrive par PR vers `main`, jamais par un push direct sur `main`. Le tag `relais-v1-final` garde l'état de départ.
 
 ## Données
 
@@ -55,7 +55,7 @@ Statuts de départ :
 - **retirer** : le module disparaît ; le ticket cité le remplace ou le retire.
 - **à trancher** : aucun ticket ne règle clairement son sort (voir la dernière section).
 
-Le premier ticket cité est celui qui touche le module en premier ou le plus ; les suivants le touchent aussi. `src/docs-transition.test.ts` vérifie que chaque fichier non test de `src/` a une ligne avec un statut, que chaque chemin cité existe et n'est cité qu'une fois, et que la section « À trancher » liste exactement les lignes de ce statut.
+Le premier ticket cité est celui qui touche le module en premier ou le plus ; les suivants le touchent aussi. `src/docs-transition.test.ts` vérifie que chaque fichier non test de `src/` a une ligne, que chaque ligne (dans `src/` ou non) a un des quatre statuts, que chaque chemin cité existe et n'est cité qu'une fois, et que la section « À trancher » liste exactement les lignes de ce statut.
 
 ### `src/core/`
 
