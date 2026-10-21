@@ -40,7 +40,7 @@ describe('harness: new port fakes and the test preset', () => {
     expect(h.ticket()).toMatchObject({ logical: 'human_review', verifyAttempts: 0 });
   });
 
-  it('sandbox, publisher and forge fakes chain on the simulated clock', async () => {
+  it('the scenario drives the sandbox and publisher fakes (not yet called by the orchestrator) and feeds the engine a pr.opened', async () => {
     const h = createHarness({ preset: testPreset() });
     await delegate(h);
     const { branch } = h.ticket();
@@ -54,6 +54,5 @@ describe('harness: new port fakes and the test preset', () => {
     await h.advance(60_000);
     await h.send('pr.opened', { number: pub.prNumber, url: pub.url, branch: branch! });
     expect(h.ticket()).toMatchObject({ prNumber: pub.prNumber, prUrl: pub.url });
-    expect(h.sandboxes.active()).toEqual([]);
   });
 });

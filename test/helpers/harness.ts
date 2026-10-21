@@ -85,7 +85,7 @@ export function createHarness(
   }
 
   return {
-    clock, store, tracker, forge, runner, workspaces, checks, sandboxes, publisher, preset: opts.preset,
+    clock, store, tracker, forge, runner, workspaces, checks, sandboxes, publisher,
     send, advance, restart, project,
     get orch() {
       return orch;
