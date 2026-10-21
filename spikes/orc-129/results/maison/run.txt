@@ -1,31 +1,32 @@
 
 === fresh database spike_maison
+NOTICE:  database "spike_maison" does not exist, skipping
 
 === setup
 
 === webhook delivered twice (same delivery id)
-[maison 1752054] inbox write linear:delivery-1: inserted
-[maison 1752067] inbox write linear:delivery-1: duplicate, ignored
+[maison 23047] inbox write linear:delivery-1: inserted
+[maison 23059] inbox write linear:delivery-1: duplicate, ignored
 
 === worker 1 starts; kill -9 as soon as the external API has applied the effect
 worker 1 killed (-9) while the API holds its response
-[maison 1752096] worker up
-[maison 1752096] decided linear:delivery-1 -> seq 1, 1 effect(s)
-[maison 1752096] executing ORC-1:1:0 (attempt 1)
+[maison 23071] worker up
+[maison 23071] decided linear:delivery-1 -> seq 1, 1 effect(s)
+[maison 23071] executing ORC-1:1:0 (attempt 1)
 
 === worker 2 restarts
-[maison 1752118] worker up
-[maison 1752118] executing ORC-1:1:0 (attempt 2)
-[maison 1752118] effect ORC-1:1:0 done -> comment-1
-[maison 1752118] decided effect:ORC-1:1:0 -> seq 2, 0 effect(s)
+[maison 23095] worker up
+[maison 23095] executing ORC-1:1:0 (attempt 2)
+[maison 23095] effect ORC-1:1:0 done -> comment-1
+[maison 23095] decided effect:ORC-1:1:0 -> seq 2, 0 effect(s)
 recovered to done in 5.2 s after restart
 
 === external API calls
 {"received":2,"applied":1}
-{"at":"2026-10-21T15:35:11.197Z","type":"received","key":"ORC-1:1:0","body":"{\"body\":\"Pris en compte : Ajouter un bouton\",\"kind\":\"post_comment\",\"ticket\":\"ORC-1\"}"}
-{"at":"2026-10-21T15:35:11.197Z","type":"applied","key":"ORC-1:1:0","commentId":"comment-1"}
-{"at":"2026-10-21T15:35:16.288Z","type":"received","key":"ORC-1:1:0","body":"{\"body\":\"Pris en compte : Ajouter un bouton\",\"kind\":\"post_comment\",\"ticket\":\"ORC-1\"}"}
-{"at":"2026-10-21T15:35:16.288Z","type":"deduplicated","key":"ORC-1:1:0","commentId":"comment-1"}
+{"at":"2026-10-21T21:04:07.988Z","type":"received","key":"ORC-1:1:0","body":"{\"body\":\"Pris en compte : Ajouter un bouton\",\"kind\":\"post_comment\",\"ticket\":\"ORC-1\"}"}
+{"at":"2026-10-21T21:04:07.988Z","type":"applied","key":"ORC-1:1:0","commentId":"comment-1"}
+{"at":"2026-10-21T21:04:13.026Z","type":"received","key":"ORC-1:1:0","body":"{\"body\":\"Pris en compte : Ajouter un bouton\",\"kind\":\"post_comment\",\"ticket\":\"ORC-1\"}"}
+{"at":"2026-10-21T21:04:13.026Z","type":"deduplicated","key":"ORC-1:1:0","commentId":"comment-1"}
 
 === state
 {

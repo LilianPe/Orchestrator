@@ -127,7 +127,8 @@ else if (cmd === 'replay') await replay();
 else if (cmd === 'status')
   console.log(JSON.stringify({
     tickets: await query('select id, seq, state from tickets'),
-    workflows: await query('select workflow_uuid, status, recovery_attempts from dbos.workflow_status order by created_at'),
+    workflows: await query('select workflow_uuid, status, application_version, executor_id, recovery_attempts from dbos.workflow_status order by created_at'),
+    dbosTables: (await query("select table_name from information_schema.tables where table_schema = 'dbos' order by 1")).map((r) => r.table_name),
     steps: await query('select workflow_uuid, function_id, function_name, output from dbos.operation_outputs order by workflow_uuid, function_id'),
   }, null, 1));
 else if (cmd === 'done') process.exitCode = (await query("select 1 from tickets where state->>'status' = 'done'")).length ? 0 : 1;

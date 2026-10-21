@@ -40,15 +40,30 @@ async function append(c: pg.ClientBase | pg.Pool, e: EngineEvent): Promise<boole
   return r.rowCount === 1;
 }
 
-/** Decision transaction (ORC-149): lock the ticket, decide, write journal + projection + outbox, mark the inbox row. */
+/**
+ * Decision transaction (ORC-149): lock the ticket, then take its oldest unprocessed event, decide,
+ * write journal + projection + outbox, mark the inbox row. Locking the ticket before picking the row
+ * keeps per-ticket order with several workers (only one worker runs in the spike).
+ */
 async function decideNext(): Promise<boolean> {
   return tx(async (c) => {
-    const { rows } = await c.query(
-      'select id, ticket, event from inbox where processed_at is null order by received_at, id limit 1 for update skip locked',
+    const pending = await c.query(
+      'select ticket from inbox where processed_at is null group by ticket order by min(received_at)',
     );
-    if (!rows[0]) return false;
-    const { id, ticket, event } = rows[0];
-    await c.query('select pg_advisory_xact_lock(hashtext($1))', [ticket]);
+    let row;
+    for (const { ticket } of pending.rows) {
+      const lock = await c.query('select pg_try_advisory_xact_lock(hashtext($1)) as ok', [ticket]);
+      if (!lock.rows[0].ok) continue;
+      row = (
+        await c.query(
+          'select id, ticket, event from inbox where ticket = $1 and processed_at is null order by received_at, id limit 1',
+          [ticket],
+        )
+      ).rows[0];
+      if (row) break;
+    }
+    if (!row) return false;
+    const { id, ticket, event } = row;
     const t = await c.query('select seq, state from tickets where id = $1', [ticket]);
     const seq = (t.rows[0]?.seq ?? 0) + 1;
     const state: TicketState | undefined = t.rows[0]?.state ?? undefined;

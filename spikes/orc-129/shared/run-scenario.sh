@@ -44,7 +44,14 @@ start=$(date +%s.%N)
 ${WORKER2_APPVERSION:+env DBOS__APPVERSION=$WORKER2_APPVERSION} node main.ts worker > "$out/worker-2.log" 2>&1 & w=$!
 for _ in $(seq 1 "${WAIT_ITER:-300}"); do node main.ts done && break; sleep 0.2; done
 end=$(date +%s.%N)
-node main.ts done || { echo "TICKET NOT DONE after restart"; kill $w; exit 1; }
+if ! node main.ts done; then
+  echo "TICKET NOT DONE after restart"
+  kill $w; wait $w 2>/dev/null || true
+  cat "$out/worker-2.log"
+  curl -s 127.0.0.1:${FAKE_API_PORT:-4129}/stats; echo
+  node main.ts status
+  exit 1
+fi
 kill $w; wait $w 2>/dev/null || true
 cat "$out/worker-2.log"
 printf 'recovered to done in %.1f s after restart\n' "$(echo "$end - $start" | bc)"
