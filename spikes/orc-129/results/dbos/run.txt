@@ -1,0 +1,92 @@
+
+=== fresh database spike_dbos
+
+=== setup
+
+=== webhook delivered twice (same delivery id)
+[dbos 1752733] enqueue linear:delivery-1: enqueued
+[dbos 1752747] enqueue linear:delivery-1: existing workflow id, ignored
+
+=== worker 1 starts; kill -9 as soon as the external API has applied the effect
+worker 1 killed (-9) while the API holds its response
+[dbos 1752761] worker up
+[dbos 1752761] decided linear:delivery-1 -> 1 effect(s)
+[dbos 1752761] executing ORC-1:1:0
+
+=== worker 2 restarts
+[dbos 1752843] worker up
+[dbos 1752843] decided linear:delivery-1 -> 1 effect(s)
+[dbos 1752843] executing ORC-1:1:0
+[dbos 1752843] effect ORC-1:1:0 done -> comment-1
+[dbos 1752843] decided effect:ORC-1:1:0 -> 0 effect(s)
+recovered to done in 2.6 s after restart
+
+=== external API calls
+{"received":2,"applied":1}
+{"at":"2026-10-21T15:35:21.357Z","type":"received","key":"ORC-1:1:0","body":"{\"kind\":\"post_comment\",\"ticket\":\"ORC-1\",\"body\":\"Pris en compte : Ajouter un bouton\"}"}
+{"at":"2026-10-21T15:35:21.358Z","type":"applied","key":"ORC-1:1:0","commentId":"comment-1"}
+{"at":"2026-10-21T15:35:22.735Z","type":"received","key":"ORC-1:1:0","body":"{\"kind\":\"post_comment\",\"ticket\":\"ORC-1\",\"body\":\"Pris en compte : Ajouter un bouton\"}"}
+{"at":"2026-10-21T15:35:22.735Z","type":"deduplicated","key":"ORC-1:1:0","commentId":"comment-1"}
+
+=== state
+{
+ "tickets": [
+  {
+   "id": "ORC-1",
+   "seq": 2,
+   "state": {
+    "status": "done",
+    "commentId": "comment-1"
+   }
+  }
+ ],
+ "workflows": [
+  {
+   "workflow_uuid": "linear:delivery-1",
+   "status": "SUCCESS",
+   "recovery_attempts": "2"
+  },
+  {
+   "workflow_uuid": "effect:ORC-1:1:0",
+   "status": "SUCCESS",
+   "recovery_attempts": "1"
+  }
+ ],
+ "steps": [
+  {
+   "workflow_uuid": "effect:ORC-1:1:0",
+   "function_id": 0,
+   "function_name": "decideTx",
+   "output": "{\"json\":[],\"__dbos_serializer\":\"superjson\"}"
+  },
+  {
+   "workflow_uuid": "linear:delivery-1",
+   "function_id": 0,
+   "function_name": "decideTx",
+   "output": "{\"json\":[{\"id\":\"ORC-1:1:0\",\"effect\":{\"kind\":\"post_comment\",\"ticket\":\"ORC-1\",\"body\":\"Pris en compte : Ajouter un bouton\"}}],\"__dbos_serializer\":\"superjson\"}"
+  },
+  {
+   "workflow_uuid": "linear:delivery-1",
+   "function_id": 1,
+   "function_name": "effect:ORC-1:1:0",
+   "output": "{\"json\":{\"commentId\":\"comment-1\"},\"__dbos_serializer\":\"superjson\"}"
+  },
+  {
+   "workflow_uuid": "linear:delivery-1",
+   "function_id": 2,
+   "function_name": "handleEvent",
+   "output": null
+  }
+ ]
+}
+
+=== replay of the journal
+identique  ORC-1#1  linear:delivery-1
+identique  ORC-1#2  effect:ORC-1:1:0
+rejeu : 2 décision(s), 0 écart(s)
+
+=== negative control: tamper with one recorded decision, the replay must report it
+identique  ORC-1#1  linear:delivery-1
+ÉCART  ORC-1#2  effect:ORC-1:1:0
+rejeu : 2 décision(s), 1 écart(s)
+exit 0

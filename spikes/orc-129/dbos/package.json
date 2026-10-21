@@ -1,0 +1,11 @@
+{
+  "name": "orc-129-spike-dbos",
+  "private": true,
+  "type": "module",
+  "description": "Throwaway ORC-129 spike: DBOS Transact. Not part of the build, the tests or the CI.",
+  "dependencies": {
+    "@dbos-inc/dbos-sdk": "5.3.0",
+    "@dbos-inc/node-pg-datasource": "5.3.0",
+    "pg": "8.16.3"
+  }
+}

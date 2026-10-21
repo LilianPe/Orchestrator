@@ -1,0 +1,19 @@
+
+=== fresh database spike_dbos_nouveau_code
+NOTICE:  database "spike_dbos_nouveau_code" does not exist, skipping
+
+=== setup
+
+=== webhook delivered twice (same delivery id)
+[dbos 1755203] enqueue linear:delivery-1: enqueued
+[dbos 1755216] enqueue linear:delivery-1: existing workflow id, ignored
+
+=== worker 1 starts; kill -9 as soon as the external API has applied the effect
+worker 1 killed (-9) while the API holds its response
+[dbos 1755228] worker up
+[dbos 1755228] decided linear:delivery-1 -> 1 effect(s)
+[dbos 1755228] executing ORC-1:1:0
+
+=== worker 2 restarts
+TICKET NOT DONE after restart
+exit 1
