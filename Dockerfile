@@ -6,16 +6,16 @@ RUN apt-get update \
  && apt-get update && apt-get install -y --no-install-recommends gh \
  && rm -rf /var/lib/apt/lists/*
 RUN npm install -g @anthropic-ai/claude-code
-# Default commit identity, email here and name after the build (GIT_AUTHOR_* / GIT_COMMITTER_* env vars override it); repos are bind-mounted, possibly with another owner.
-RUN git config --system user.email "factory@localhost" \
- && git config --system --add safe.directory '*'
+# Repos are bind-mounted, possibly with another owner.
+RUN git config --system --add safe.directory '*'
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 COPY . .
 RUN npm run build && npm prune --omit=dev
-# The commit name is the product name, read from the built source so it is written in one place only.
-RUN git config --system user.name "$(node -p "require('./dist/src/product.js').PRODUCT_NAME")"
+# Default commit identity (GIT_AUTHOR_* / GIT_COMMITTER_* env vars override it); the name is the product name, read from the built source.
+RUN git config --system user.name "$(node -p "require('./dist/src/product.js').PRODUCT_NAME")" \
+ && git config --system user.email "factory@localhost"
 COPY docker/entrypoint.sh /usr/local/bin/factory-entrypoint
 RUN chmod 0755 /usr/local/bin/factory-entrypoint \
  && mkdir -p /data /repos \
