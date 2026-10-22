@@ -61,7 +61,7 @@ Relais a été renommé d'un bloc, sans changement de comportement : seuls les n
 
 Les textes du pack (`packs/standard/`, skills et hook) ne peuvent pas importer la constante : ils disent « l'usine », sans nom propre.
 
-**Occurrences de `relais` qui restent.** Dans les fichiers suivis par git hors de `docs/` et du `README.md` (recherche sans casse), une seule, vérifiée par `src/product.test.ts` :
+**Occurrences de `relais` qui restent.** Dans les fichiers du dépôt, suivis ou nouveaux (hors `.gitignore`), sauf `docs/` et le `README.md` (recherche sans casse), une seule, vérifiée par `src/product.test.ts` :
 
 | Où | Pourquoi |
 |---|---|
