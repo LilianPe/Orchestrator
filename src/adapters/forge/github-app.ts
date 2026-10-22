@@ -1,0 +1,318 @@
+import { createPrivateKey, createSign } from 'node:crypto';
+import { execCmd, mustExec, type Exec } from '../exec.js';
+import type { FeedbackItem } from '../../core/types.js';
+import { aggregateChecks } from './gh-cli.js';
+import type { Forge, PrInfo } from './types.js';
+
+export interface GitHubRepoRef {
+  owner: string;
+  name: string;
+}
+
+export interface HttpRequest {
+  method: string;
+  headers: Record<string, string>;
+  body?: string;
+}
+
+export interface HttpResponse {
+  ok: boolean;
+  status: number;
+  text(): Promise<string>;
+}
+
+/** Injected in tests: no unit test ever reaches the network. */
+export type HttpClient = (url: string, init: HttpRequest) => Promise<HttpResponse>;
+
+export const fetchHttp: HttpClient = async (url, init) => {
+  const res = await fetch(url, { method: init.method, headers: init.headers, body: init.body });
+  return { ok: res.ok, status: res.status, text: () => res.text() };
+};
+
+/** GitHub rejects installation tokens older than one hour; cache them with a safety margin. */
+export const TOKEN_SAFETY_MARGIN_MS = 60_000;
+const ONE_HOUR_MS = 60 * 60_000;
+
+const THREADS_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) { pullRequest(number: $number) { reviewThreads(first: 100) { nodes {
+    isResolved comments(first: 1) { nodes { author { login } body createdAt path line } } } } } } }`;
+
+interface AccessTokenDto {
+  token: string;
+  expires_at?: string;
+}
+
+interface PullRequestDto {
+  number: number;
+  html_url: string;
+  state: 'open' | 'closed';
+  merged_at: string | null;
+  head: { ref: string; sha: string };
+}
+
+interface CheckRunsDto {
+  check_runs?: { name: string; status: string; conclusion: string | null }[];
+}
+
+interface StatusesDto {
+  statuses?: { context: string; state: string }[];
+}
+
+interface ReviewThreadNode {
+  isResolved: boolean;
+  comments: {
+    nodes: { author: { login: string } | null; body: string; createdAt: string; path: string; line: number | null }[];
+  };
+}
+
+interface ReviewThreadsDto {
+  data?: { repository?: { pullRequest?: { reviewThreads: { nodes: ReviewThreadNode[] } } | null } | null };
+  errors?: { message: string }[];
+}
+
+export interface GitHubAppForgeOptions {
+  appId: string | number;
+  /** PEM content. */
+  privateKey: string;
+  /** Known installation; otherwise discovered with GET /repos/{owner}/{repo}/installation. */
+  installationId?: string | number;
+  apiBase?: string;
+  http?: HttpClient;
+  exec?: Exec;
+  /** Overrides `git remote get-url origin` (tests). */
+  resolveRepo?: (repoPath: string) => Promise<GitHubRepoRef>;
+  now?: () => number;
+  log?: (message: string) => void;
+}
+
+function b64url(value: string): string {
+  return Buffer.from(value).toString('base64url');
+}
+
+/** RS256 app JWT: iss = appId, iat = now - 60 s, exp = now + 9 min. */
+export function createAppJwt(appId: string | number, privateKey: string, nowMs = Date.now()): string {
+  const now = Math.floor(nowMs / 1000);
+  const header = b64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
+  const payload = b64url(JSON.stringify({ iat: now - 60, exp: now + 9 * 60, iss: String(appId) }));
+  const signature = createSign('RSA-SHA256').update(`${header}.${payload}`).sign(privateKey).toString('base64url');
+  return `${header}.${payload}.${signature}`;
+}
+
+/** Parses HTTPS and SSH GitHub remotes into owner/name, without calling gh. */
+export function parseGitHubRemote(remote: string): GitHubRepoRef | undefined {
+  const value = remote.trim();
+  let path: string | undefined;
+  const url = /^(?:https?|ssh|git):\/\/(?:[^@/]+@)?github\.com\/(.+)$/i.exec(value);
+  if (url) path = url[1];
+  else {
+    const scp = /^(?:[^@/]+@)?github\.com:(.+)$/i.exec(value);
+    if (scp) path = scp[1];
+    else {
+      const bare = /^github\.com\/(.+)$/i.exec(value);
+      if (bare) path = bare[1];
+    }
+  }
+  if (!path) return undefined;
+  const parts = path.replace(/^\/+|\/+$/g, '').split('/');
+  if (parts.length !== 2) return undefined;
+  const [owner, rawName] = parts;
+  const name = rawName?.replace(/\.git$/, '');
+  return owner && name ? { owner, name } : undefined;
+}
+
+function checkRunBucket(run: { status: string; conclusion: string | null }): string {
+  if (run.status !== 'completed') return 'pending';
+  switch (run.conclusion) {
+    case 'success':
+    case 'neutral':
+    case 'skipped':
+      return 'pass';
+    case 'failure':
+    case 'timed_out':
+    case 'cancelled':
+    case 'action_required':
+    case 'stale':
+    case 'startup_failure':
+      return 'fail';
+    default:
+      return 'pending';
+  }
+}
+
+function statusBucket(state: string): string {
+  if (state === 'success') return 'pass';
+  if (state === 'failure' || state === 'error') return 'fail';
+  return 'pending';
+}
+
+export class GitHubAppForge implements Forge {
+  private readonly appId: string;
+  readonly #privateKey: string;
+  private readonly installationId: string | undefined;
+  private readonly apiBase: string;
+  private readonly http: HttpClient;
+  private readonly exec: Exec;
+  private readonly resolveRepoFn: ((repoPath: string) => Promise<GitHubRepoRef>) | undefined;
+  private readonly now: () => number;
+  private readonly log: ((message: string) => void) | undefined;
+  readonly #tokens = new Map<string, { token: string; expiresAt: number }>();
+  private readonly inflight = new Map<string, Promise<string>>();
+
+  constructor(options: GitHubAppForgeOptions) {
+    this.appId = String(options.appId);
+    this.#privateKey = options.privateKey;
+    this.installationId = options.installationId === undefined ? undefined : String(options.installationId);
+    this.apiBase = (options.apiBase ?? 'https://api.github.com').replace(/\/+$/, '');
+    this.http = options.http ?? fetchHttp;
+    this.exec = options.exec ?? execCmd;
+    this.resolveRepoFn = options.resolveRepo;
+    this.now = options.now ?? (() => Date.now());
+    this.log = options.log;
+    try {
+      createPrivateKey(this.#privateKey);
+    } catch {
+      throw new Error('GitHub App : clé privée invalide (PEM RSA attendu)');
+    }
+  }
+
+  async findPr(repoPath: string, branch: string): Promise<PrInfo | undefined> {
+    const repo = await this.repo(repoPath);
+    const token = await this.installationToken(repo);
+    const query = new URLSearchParams({ head: `${repo.owner}:${branch}`, state: 'all', per_page: '1' });
+    const pulls = await this.call<PullRequestDto[]>(
+      'GET',
+      `/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}/pulls?${query}`,
+      token,
+    );
+    const pr = pulls[0];
+    if (!pr) return undefined;
+    const state: PrInfo['state'] = pr.state === 'open' ? 'OPEN' : pr.merged_at ? 'MERGED' : 'CLOSED';
+    const checks = state === 'OPEN' ? await this.checksFor(repo, pr.head.sha, token) : { checks: 'none' as const, failedChecks: [] };
+    return { number: pr.number, url: pr.html_url, state, branch: pr.head.ref, ...checks };
+  }
+
+  async unresolvedReviewComments(repoPath: string, prNumber: number): Promise<FeedbackItem[]> {
+    const repo = await this.repo(repoPath);
+    const token = await this.installationToken(repo);
+    const out = await this.call<ReviewThreadsDto>('POST', '/graphql', token, {
+      query: THREADS_QUERY,
+      variables: { owner: repo.owner, name: repo.name, number: prNumber },
+    });
+    if (out.errors?.length) throw new Error(`GitHub GraphQL : ${out.errors.map((e) => e.message).join('; ')}`);
+    const pr = out.data?.repository?.pullRequest;
+    if (!pr) throw new Error(`GitHub GraphQL : PR ${repo.owner}/${repo.name}#${prNumber} introuvable`);
+    return pr.reviewThreads.nodes
+      .filter((t) => !t.isResolved && t.comments.nodes[0])
+      .map((t) => {
+        const c = t.comments.nodes[0]!;
+        return {
+          author: c.author?.login ?? 'inconnu',
+          body: `${c.path}${c.line ? `:${c.line}` : ''} — ${c.body}`,
+          at: Date.parse(c.createdAt),
+          source: 'review' as const,
+        };
+      });
+  }
+
+  private async checksFor(
+    repo: GitHubRepoRef,
+    sha: string,
+    token: string,
+  ): Promise<{ checks: PrInfo['checks']; failedChecks: string[] }> {
+    const base = `/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}/commits/${encodeURIComponent(sha)}`;
+    const [runs, statuses] = await Promise.all([
+      this.call<CheckRunsDto>('GET', `${base}/check-runs?per_page=100`, token),
+      this.call<StatusesDto>('GET', `${base}/status`, token),
+    ]);
+    const buckets: string[] = [];
+    const failedChecks: string[] = [];
+    for (const run of runs.check_runs ?? []) {
+      const bucket = checkRunBucket(run);
+      buckets.push(bucket);
+      if (bucket === 'fail') failedChecks.push(run.name);
+    }
+    for (const status of statuses.statuses ?? []) {
+      const bucket = statusBucket(status.state);
+      buckets.push(bucket);
+      if (bucket === 'fail') failedChecks.push(status.context);
+    }
+    return { checks: aggregateChecks(buckets), failedChecks };
+  }
+
+  private async repo(repoPath: string): Promise<GitHubRepoRef> {
+    if (this.resolveRepoFn) return this.resolveRepoFn(repoPath);
+    const remote = await mustExec(this.exec, 'git', ['remote', 'get-url', 'origin'], { cwd: repoPath });
+    const repo = parseGitHubRemote(remote);
+    if (!repo) throw new Error(`remote origin de ${repoPath} n'est pas un dépôt GitHub`);
+    return repo;
+  }
+
+  private async installationToken(repo: GitHubRepoRef): Promise<string> {
+    const key = `${repo.owner}/${repo.name}`;
+    const now = this.now();
+    const cached = this.#tokens.get(key);
+    if (cached && cached.expiresAt > now) return cached.token;
+    const pending = this.inflight.get(key);
+    if (pending) return pending;
+    const request = this.fetchInstallationToken(repo, now).finally(() => this.inflight.delete(key));
+    this.inflight.set(key, request);
+    return request;
+  }
+
+  private async fetchInstallationToken(repo: GitHubRepoRef, now: number): Promise<string> {
+    const jwt = createAppJwt(this.appId, this.#privateKey, now);
+    const installationId = this.installationId ?? (await this.findInstallationId(repo, jwt));
+    const data = await this.call<AccessTokenDto>(
+      'POST',
+      `/app/installations/${encodeURIComponent(installationId)}/access_tokens`,
+      jwt,
+      { repositories: [repo.name] },
+    );
+    if (!data?.token) throw new Error("GitHub App : réponse sans jeton d'installation");
+    const requested = data.expires_at ? Date.parse(data.expires_at) : Number.NaN;
+    const hardLimit = now + ONE_HOUR_MS;
+    const expiresAt = (Number.isFinite(requested) ? Math.min(requested, hardLimit) : hardLimit) - TOKEN_SAFETY_MARGIN_MS;
+    this.#tokens.set(`${repo.owner}/${repo.name}`, { token: data.token, expiresAt });
+    this.log?.(`GitHub App : jeton d'installation pour ${repo.owner}/${repo.name} (expire ${new Date(expiresAt).toISOString()})`);
+    return data.token;
+  }
+
+  private async findInstallationId(repo: GitHubRepoRef, jwt: string): Promise<string> {
+    const data = await this.call<{ id?: number }>(
+      'GET',
+      `/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}/installation`,
+      jwt,
+    );
+    if (!data?.id) throw new Error(`GitHub App : installation introuvable pour ${repo.owner}/${repo.name}`);
+    return String(data.id);
+  }
+
+  private async call<T>(method: string, path: string, auth: string, body?: unknown): Promise<T> {
+    const res = await this.http(`${this.apiBase}${path}`, {
+      method,
+      headers: {
+        accept: 'application/vnd.github+json',
+        authorization: `Bearer ${auth}`,
+        'x-github-api-version': '2022-11-28',
+        'user-agent': 'factory-orchestrator',
+        ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+    const text = await res.text();
+    let data: unknown;
+    try {
+      data = text ? JSON.parse(text) : undefined;
+    } catch {
+      data = undefined;
+    }
+    if (!res.ok) {
+      const message =
+        typeof data === 'object' && data !== null && 'message' in data
+          ? String((data as { message: unknown }).message)
+          : text.slice(0, 200);
+      throw new Error(`GitHub API ${method} ${path.split('?')[0]}: ${res.status}${message ? ` ${message}` : ''}`);
+    }
+    return data as T;
+  }
+}

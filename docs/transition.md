@@ -119,6 +119,7 @@ Le premier ticket cité est celui qui touche le module en premier ou le plus ; l
 | `src/adapters/forge/types.ts` | Port `Forge` | adapter | ORC-181 (port gardé, nouvelles opérations), ORC-124 |
 | `src/adapters/forge/fake.ts` | `FakeForge` | adapter | ORC-181, ORC-225 |
 | `src/adapters/forge/gh-cli.ts` | Forge par la CLI `gh` | retirer | ORC-181 (après ORC-124, GitHub App) |
+| `src/adapters/forge/github-app.ts` | Forge GitHub App : JWT RS256, jeton d'installation limité au dépôt, PR/checks/reviews en REST et GraphQL | garder | ORC-124 (remplace `gh-cli` après ORC-125) |
 | `src/adapters/forge/pr-poller.ts` | Relevé des PR toutes les 30 s | retirer | ORC-181, remplacé par ORC-134 (webhooks) et ORC-185 (réconciliation) |
 | `src/adapters/runner/types.ts` | Port `Runner`, `RunHandle`, `RunRequest` | garder | ORC-204 (port gardé), ORC-189 (devient AgentRuntime) |
 | `src/adapters/runner/claude-code.ts` | `ClaudeCodeRunner` : `claude -p` en sous-processus sur l'hôte, transcripts | adapter | ORC-136, ORC-204 (dans le runner isolé), ORC-205 (réglages imposés), ORC-217 (session sur volume), ORC-194 (`--max-budget-usd`), ORC-167 |
@@ -169,6 +170,7 @@ Le premier ticket cité est celui qui touche le module en premier ou le plus ; l
 | Module | Rôle | Statut | Ticket cible |
 |---|---|---|---|
 | `src/config/instance.ts` | `config.yaml` et `secrets.json` de l'instance (zod) | adapter | ORC-209 (`factory.yml`), ORC-199 (`config.yaml` et `secrets.json` retirés), ORC-194 (`perDayUsd`), ORC-167 (`RELAIS_HOME`) |
+| `src/config/github-app.ts` | Résolution de la GitHub App (PEM ou chemin, repli `GH_APP_*`) | garder | ORC-124 (cible `factory.yml`, ORC-209) |
 | `src/config/load-workflow.ts` | Fusion pack + `.factory/workflow.yml` | retirer | ORC-177 (remplacé par ORC-187 et ORC-209) |
 | `src/config/workflow-schema.ts` | Schéma zod de `workflow.yml` | retirer | ORC-177 |
 | `src/config/run-settings.ts` | `run-settings.json` : refus de lecture sur `FACTORY_HOME` | retirer | ORC-179, ORC-199 |

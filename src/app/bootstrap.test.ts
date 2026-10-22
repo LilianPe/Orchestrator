@@ -1,4 +1,5 @@
 import { mkdtempSync, readFileSync } from 'node:fs';
+import { generateKeyPairSync } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -18,6 +19,34 @@ describe('bootstrap', () => {
     const runSettings = JSON.parse(readFileSync(join(home, 'run-settings.json'), 'utf8'));
     expect(runSettings.permissions.deny).toContain(`Read(/${home}/secrets.json)`);
     await app.stop();
+  });
+
+  it('selects the GitHub App forge when the app is configured, without logging the key', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
+    const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+    const pem = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+    saveInstance(home, {
+      port: 4190,
+      host: '127.0.0.1',
+      relay: { kind: 'none' },
+      projects: [],
+      limits: {},
+      github: { appId: '123', privateKey: pem },
+    });
+    const logs: string[] = [];
+    const app = await startFactory({ home, fakeRunner: true, log: (m) => void logs.push(m), env: {} });
+    await app.stop();
+    expect(logs.some((m) => m.includes('GitHub App 123'))).toBe(true);
+    expect(logs.join('\n')).not.toContain('PRIVATE KEY');
+  });
+
+  it('falls back to the gh CLI when no GitHub App is configured', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
+    saveInstance(home, { port: 4189, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
+    const logs: string[] = [];
+    const app = await startFactory({ home, fakeRunner: true, log: (m) => void logs.push(m), env: {} });
+    await app.stop();
+    expect(logs.some((m) => m.includes('CLI gh'))).toBe(true);
   });
 
   it('ticks the orchestrator every minute until stopped', async () => {
