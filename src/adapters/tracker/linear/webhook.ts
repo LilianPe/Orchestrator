@@ -1,5 +1,5 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
-import type { LogicalState, FactoryEvent } from '../../../core/types.js';
+import { TRUSTED, type LogicalState, type FactoryEvent } from '../../../core/types.js';
 
 export function isUsableWebhookSecret(secret: unknown): boolean {
   return typeof secret === 'string' && secret.trim() !== '';
@@ -104,6 +104,6 @@ export function mapLinearWebhook(body: any, key: string, ctx: MapContext): Facto
   const partials = body.type === 'AgentSessionEvent' ? sessionEvents(body, projectId, ctx) : issueEvents(body, identifier, teamKey, projectId, ctx);
   const at = ctx.now();
   return partials.map(
-    (p) => ({ id: `linear:${key}${p.suffix ?? ''}`, type: p.type, at, projectId, ticketId: identifier, payload: p.payload }) as FactoryEvent,
+    (p) => ({ ...TRUSTED, id: `linear:${key}${p.suffix ?? ''}`, type: p.type, at, projectId, ticketId: identifier, payload: p.payload }) as FactoryEvent,
   );
 }

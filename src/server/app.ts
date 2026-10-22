@@ -6,7 +6,7 @@ import { streamSSE } from 'hono/streaming';
 import type { Tracker } from '../adapters/tracker/types.js';
 import type { BusMessage, EventBus } from '../core/bus.js';
 import type { Clock } from '../core/clock.js';
-import type { FactoryEvent } from '../core/types.js';
+import { TRUSTED, type FactoryEvent } from '../core/types.js';
 import type { RunRecord, Store } from '../store/types.js';
 import { readStatic } from './static.js';
 import { PRODUCT_NAME } from '../product.js';
@@ -175,7 +175,7 @@ export function createApp(d: ServerDeps): Hono {
 
   const control = (type: 'control.pause' | 'control.resume') => (c: Context) => {
     const at = d.clock.now();
-    d.submit({ id: `ui:${type}:${at}`, type, at, projectId: '*', payload: {} } as FactoryEvent);
+    d.submit({ ...TRUSTED, id: `ui:${type}:${at}`, type, at, projectId: '*', payload: {} } as FactoryEvent);
     return c.json({ ok: true });
   };
   app.post('/api/control/pause', control('control.pause'));
@@ -183,7 +183,7 @@ export function createApp(d: ServerDeps): Hono {
   app.post('/api/tickets/:projectId/:ticketId/stop', (c) => {
     const at = d.clock.now();
     const ticketId = c.req.param('ticketId');
-    d.submit({ id: `ui:stop:${ticketId}:${at}`, type: 'control.stop', at, projectId: c.req.param('projectId'), ticketId, payload: {} });
+    d.submit({ ...TRUSTED, id: `ui:stop:${ticketId}:${at}`, type: 'control.stop', at, projectId: c.req.param('projectId'), ticketId, payload: {} });
     return c.json({ ok: true });
   });
 

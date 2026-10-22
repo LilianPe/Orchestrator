@@ -12,7 +12,7 @@ import { EventBus } from './bus.js';
 import { FakeClock } from './clock.js';
 import { Orchestrator } from './orchestrator.js';
 import { Scheduler } from './scheduler.js';
-import type { FactoryEvent } from './types.js';
+import { TRUSTED, type FactoryEvent } from './types.js';
 
 function setup(o: { runner?: Runner; verify?: Verifier; budget?: number; tweak?: (w: ReturnType<typeof loadWorkflow>) => void } = {}) {
   const packDir = join(import.meta.dirname, '../../packs/standard');
@@ -33,7 +33,7 @@ function setup(o: { runner?: Runner; verify?: Verifier; budget?: number; tweak?:
   return { store, tracker, runner: fakeRunner, orch, scheduler };
 }
 
-const delegated = (id = 'e1'): FactoryEvent => ({ id, type: 'ticket.delegated', at: 1_000, projectId: 'p', ticketId: 'REL-1', payload: { linearSessionId: 'ls-1' } });
+const delegated = (id = 'e1'): FactoryEvent => ({ ...TRUSTED, id, type: 'ticket.delegated', at: 1_000, projectId: 'p', ticketId: 'REL-1', payload: { linearSessionId: 'ls-1' } });
 
 describe('Orchestrator', () => {
   it('ignores a duplicate event id', async () => {
@@ -67,7 +67,7 @@ describe('Orchestrator', () => {
 
   it('ignores moves of tickets it does not manage', async () => {
     const { store, orch } = setup();
-    await orch.submit({ id: 'm', type: 'status.changed', at: 1, projectId: 'p', ticketId: 'REL-9', payload: { from: 'todo', to: 'dev' } });
+    await orch.submit({ ...TRUSTED, id: 'm', type: 'status.changed', at: 1, projectId: 'p', ticketId: 'REL-9', payload: { from: 'todo', to: 'dev' } });
     await orch.idle();
     expect(store.getTicket('p', 'REL-9')).toBeUndefined();
   });
@@ -182,7 +182,7 @@ describe('Orchestrator', () => {
     tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
     await orch.submit(delegated());
     await waitFor(() => !!store.getTicket('p', 'REL-1')?.verifyingRunId);
-    await orch.submit({ id: 'stop', type: 'control.stop', at: 2, projectId: 'p', ticketId: 'REL-1', payload: {} });
+    await orch.submit({ ...TRUSTED, id: 'stop', type: 'control.stop', at: 2, projectId: 'p', ticketId: 'REL-1', payload: {} });
     expect(store.getTicket('p', 'REL-1')!.verifyingRunId).toBeUndefined();
     release();
     await orch.idle();
@@ -198,7 +198,7 @@ describe('Orchestrator', () => {
     await orch.submit(delegated());
     await orch.idle();
     expect(runner.requests).toHaveLength(1);
-    const d2 = (id: string): FactoryEvent => ({ id, type: 'ticket.delegated', at: 1_000, projectId: 'p', ticketId: 'REL-2', payload: { linearSessionId: 'ls-2' } });
+    const d2 = (id: string): FactoryEvent => ({ ...TRUSTED, id, type: 'ticket.delegated', at: 1_000, projectId: 'p', ticketId: 'REL-2', payload: { linearSessionId: 'ls-2' } });
     await orch.submit(d2('e2'));
     await orch.submit(d2('e3'));
     await orch.idle();

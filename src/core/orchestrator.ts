@@ -14,6 +14,7 @@ import { decide, isFenced } from './engine.js';
 import { pickupFailures } from './pickup.js';
 import { buildPrompt, formatFeedback, formatVerifyFailures } from './prompt.js';
 import { reduce } from './reduce.js';
+import { upcast, type StoredEvent } from './upcast.js';
 import type { Scheduler } from './scheduler.js';
 import {
   type EventType,
@@ -25,6 +26,7 @@ import {
   type FactoryEvent,
   type TicketState,
   type VerifyFailure,
+  TRUSTED,
 } from './types.js';
 import type { Verifier } from './verify.js';
 import { PRODUCT_NAME } from '../product.js';
@@ -100,9 +102,10 @@ export class Orchestrator {
     this.newId = d.newId ?? randomUUID;
   }
 
-  submit(event: FactoryEvent): Promise<void> {
+  /** Accepts an event of any schema version: it is upcast before anything reads it. */
+  submit(event: FactoryEvent | StoredEvent): Promise<void> {
     const next = this.chain
-      .then(() => this.handle(event))
+      .then(() => this.handle(upcast(event)))
       .catch((err: unknown) => this.log('error', `event ${event.id} (${event.type}): ${(err as Error).message}`));
     this.chain = next;
     return next;
@@ -378,7 +381,7 @@ export class Orchestrator {
         this.track(
           (async () => {
             const res = await this.d.verify(run.cwd, job.verify);
-            const base = { at: clock.now(), projectId: project.id, ticketId };
+            const base = { ...TRUSTED, at: clock.now(), projectId: project.id, ticketId };
             const event: FactoryEvent = res.ok
               ? { ...base, id: `verify:${run.id}`, type: 'verify.passed', payload: { runId: run.id, job: job.name } }
               : { ...base, id: `verify:${run.id}`, type: 'verify.failed', payload: { runId: run.id, job: job.name, failures: res.failures } };
@@ -654,6 +657,7 @@ export class Orchestrator {
       result = { outcome: 'failure', costUsd: 0, turns: 0, lastText: message };
     }
     await this.submit({
+      ...TRUSTED,
       id: `run:${run.id}:finished`,
       type: 'run.finished',
       at: clock.now(),

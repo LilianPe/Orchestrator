@@ -61,6 +61,15 @@ export interface EventPayloads {
 
 export type EventType = keyof EventPayloads;
 
+/** Version of the event shape; `upcast` brings older journal rows up to it. */
+export const SCHEMA_VERSION = 2;
+
+/** `untrusted`: the event carries content from a source the factory does not trust. */
+export type Taint = 'trusted' | 'untrusted';
+
+/** Version and taint of an event produced by the factory itself or a source it trusts. */
+export const TRUSTED = { schemaVersion: SCHEMA_VERSION, taint: 'trusted' } as const;
+
 export type FactoryEvent<T extends EventType = EventType> = {
   [K in T]: {
     id: string;
@@ -68,6 +77,8 @@ export type FactoryEvent<T extends EventType = EventType> = {
     at: number;
     projectId: string;
     ticketId?: string;
+    schemaVersion: typeof SCHEMA_VERSION;
+    taint: Taint;
     payload: EventPayloads[K];
   };
 }[T];

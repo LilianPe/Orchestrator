@@ -1,6 +1,6 @@
 import type { Clock } from "../../core/clock.js";
 import type { ProjectRuntime } from "../../core/orchestrator.js";
-import type { FactoryEvent, TicketState } from "../../core/types.js";
+import { TRUSTED, type FactoryEvent, type TicketState } from "../../core/types.js";
 import type { Store } from "../../store/types.js";
 import type { Forge } from "./types.js";
 
@@ -43,7 +43,7 @@ export class PrPoller {
       }
       if (!pr) return;
       const at = this.d.clock.now();
-      const base = { at, projectId: t.projectId, ticketId: t.ticketId };
+      const base = { ...TRUSTED, at, projectId: t.projectId, ticketId: t.ticketId };
       const payload = { number: pr.number, url: pr.url, branch: pr.branch };
       if (t.prNumber !== pr.number)
         this.d.submit({
