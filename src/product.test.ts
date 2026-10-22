@@ -6,9 +6,9 @@ import { describe, expect, it } from 'vitest';
 const root = join(import.meta.dirname, '..');
 
 describe('product name', () => {
-  it('leaves no trace of the old name in tracked and new files outside docs/ and README.md (docs/transition.md, « Renommage »)', () => {
+  it('leaves no trace of the old name in tracked files outside docs/ and README.md (docs/transition.md, « Renommage »)', () => {
     const self = relative(root, import.meta.filename);
-    const hits = execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], { cwd: root, encoding: 'utf8' })
+    const hits = execFileSync('git', ['ls-files', '-z'], { cwd: root, encoding: 'utf8' })
       .split('\0')
       .filter((f) => f && f !== self && !f.startsWith('docs/') && f !== 'README.md' && existsSync(join(root, f)))
       .filter((f) => /relais/i.test(readFileSync(join(root, f), 'utf8')));
