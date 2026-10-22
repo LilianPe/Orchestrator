@@ -19,7 +19,7 @@ Après `destroy`, un `create` pour le même `runId` donne un nouveau sandbox.
 
 ## Idempotence
 
-La clé est l'id de la tentative, `runId` (ligne « Conteneur » d'ORC-162 : un label porte l'id de tentative, cherché avant de créer). Un `create` rejoué rend le sandbox tel qu'il a été créé, même si la requête rejouée demande un autre niveau réseau.
+La clé est l'id de la tentative, `runId` (ligne « Conteneur » d'ORC-162 : un label porte l'id de tentative, cherché avant de créer). Un `create` rejoué rend le sandbox tel qu'il a été créé. Une requête rejouée avec un autre niveau réseau n'est pas spécifiée : le faux rend le sandbox existant, la suite ne le vérifie pas ; à trancher avec le vrai fournisseur (ORC-204), refuser l'écart étant le choix prudent.
 
 ## Fencing
 

@@ -51,8 +51,9 @@ export function describeTrackerContract(name: string, make: () => TrackerSubject
 
     it('rejects every call on an unknown issue', async () => {
       const s = await make();
+      const state = (await s.tracker.getIssue(s.issue)).stateName;
       await expect(s.tracker.getIssue(s.missing)).rejects.toThrow();
-      await expect(s.tracker.moveTo(s.missing, 'Todo')).rejects.toThrow();
+      await expect(s.tracker.moveTo(s.missing, state)).rejects.toThrow();
       await expect(s.tracker.setLabels(s.missing, ['x'], [])).rejects.toThrow();
       await expect(s.tracker.comment(s.missing, 'x')).rejects.toThrow();
       await expect(s.tracker.ensureSession(s.missing)).rejects.toThrow();

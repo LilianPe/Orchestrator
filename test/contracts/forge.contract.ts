@@ -45,14 +45,15 @@ export function describeForgeContract(name: string, make: () => ForgeSubject | P
     it('findPr and unresolvedReviewComments return snapshots the caller may mutate', async (ctx) => {
       const s = await withPr(() => ctx.skip());
       const pr = (await s.forge.findPr(s.repoPath, s.pr.branch))!;
-      pr.state = 'CLOSED';
+      const before = structuredClone(pr);
+      pr.number = -1;
       pr.failedChecks.push('mutated-by-caller');
-      const again = (await s.forge.findPr(s.repoPath, s.pr.branch))!;
-      expect(again.failedChecks).not.toContain('mutated-by-caller');
+      expect(await s.forge.findPr(s.repoPath, s.pr.branch)).toEqual(before);
       const items = await s.forge.unresolvedReviewComments(s.repoPath, s.pr.number);
-      const count = items.length;
+      const listed = structuredClone(items);
+      if (items[0]) items[0].body = 'mutated-by-caller';
       items.push({ author: 'x', body: 'x', at: 0, source: 'review' });
-      expect(await s.forge.unresolvedReviewComments(s.repoPath, s.pr.number)).toHaveLength(count);
+      expect(await s.forge.unresolvedReviewComments(s.repoPath, s.pr.number)).toEqual(listed);
     });
 
     it('unresolvedReviewComments lists the unresolved review threads as review feedback', async (ctx) => {

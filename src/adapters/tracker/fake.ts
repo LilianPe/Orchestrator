@@ -65,8 +65,8 @@ export class FakeTracker implements Tracker {
   }
 
   async comment(identifier: string, body: string): Promise<void> {
-    this.record('comment', identifier, body);
     this.must(identifier);
+    this.record('comment', identifier, body);
   }
 
   async activity(sessionId: string, a: ActivityInput): Promise<void> {
@@ -78,8 +78,8 @@ export class FakeTracker implements Tracker {
   }
 
   async ensureSession(identifier: string): Promise<string> {
-    this.record('ensureSession', identifier);
     this.must(identifier);
+    this.record('ensureSession', identifier);
     return `fake-session-${++this.sessions}`;
   }
 }

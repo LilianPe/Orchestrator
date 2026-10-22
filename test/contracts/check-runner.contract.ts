@@ -53,7 +53,7 @@ export function describeCheckRunnerContract(name: string, make: () => CheckRunne
     it('a command that outlives the timeout fails without an exit code', async (ctx) => {
       const s = await make();
       if (!s.slow) ctx.skip();
-      const r = await s.checks.run(s.cwd, [s.slow!, s.pass], 200);
+      const r = await s.checks.run(s.cwd, [s.slow!], 200);
       expect(r.ok).toBe(false);
       expect(r.failures).toEqual([expect.objectContaining({ command: s.slow, exitCode: null })]);
     });

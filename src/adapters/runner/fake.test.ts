@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { describeAgentRuntimeContract } from '../../../test/contracts/agent-runtime.contract.js';
+import { describeAgentRuntimeContract, type AgentScript } from '../../../test/contracts/agent-runtime.contract.js';
 import { FakeRunner, type FakeScript } from './fake.js';
 import type { RunRequest, RunStreamEvent } from './types.js';
 
@@ -14,7 +14,7 @@ async function collect(it: AsyncIterable<RunStreamEvent>): Promise<RunStreamEven
   return out;
 }
 
-const scripts: Record<string, FakeScript> = {
+const scripts: Record<AgentScript, FakeScript> = {
   success: { events: [{ kind: 'text', text: 'PR ouverte.' }] },
   failure: { outcome: 'failure' },
   hang: { hold: true },
@@ -25,7 +25,7 @@ describeAgentRuntimeContract(
   'FakeRunner',
   () => {
     const runtime = new FakeRunner();
-    return { runtime, script: (name) => (runtime.enqueue(scripts[name]!), {}) };
+    return { runtime, script: (name) => (runtime.enqueue(scripts[name]), {}) };
   },
   ['duration-limit', 'turn-limit'],
 );

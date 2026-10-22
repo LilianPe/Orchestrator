@@ -31,7 +31,7 @@ Une suite ne lance aucun service : pour un adaptateur qui parle à un vrai servi
 
 ## Écarts connus
 
-Un cas qu'une implémentation ne tient pas encore se déclare dans le troisième argument : il tourne en `it.fails` (`test/contracts/gaps.ts`), reste vert tant que l'écart existe, et vire au rouge le jour où l'implémentation s'aligne, ce qui oblige à retirer la déclaration. Écarts déclarés aujourd'hui, tous sur des faux :
+Un cas qu'une implémentation ne tient pas encore se déclare dans le troisième argument : il tourne en `it.fails` (`test/contracts/gaps.ts`), reste vert tant que l'écart existe, et vire au rouge le jour où l'implémentation s'aligne, ce qui oblige à retirer la déclaration. Limite : `it.fails` reste vert quelle que soit la cause de l'échec ; un cas déclaré ne protège donc pas contre une autre régression dans ce même cas. Écarts déclarés aujourd'hui, tous sur des faux :
 
 | Implémentation | Écart | Fiche |
 |---|---|---|
@@ -44,8 +44,8 @@ Hors CI, sautés sans leurs variables (règle de [`docs/transition.md`](../trans
 
 | Test | Variables | Ce qu'il lit |
 |---|---|---|
-| `src/adapters/tracker/linear/tracker.live.test.ts` | `FACTORY_LIVE_LINEAR_TOKEN`, `FACTORY_LIVE_LINEAR_ISSUE` (un ticket, ex. `ORC-1`) ; option `FACTORY_LIVE_LINEAR_SEARCH`, un mot de son titre | le ticket, sans rien écrire |
-| `src/adapters/forge/gh-cli.live.test.ts` | `FACTORY_LIVE_GH_REPO` (un clone local), `FACTORY_LIVE_GH_BRANCH` et `FACTORY_LIVE_GH_PR` (une branche et sa PR) ; `gh` connecté | la PR, sans rien écrire |
+| `src/adapters/tracker/linear/tracker.live.test.ts` | `FACTORY_LIVE_LINEAR_TOKEN` (un jeton d'accès OAuth, envoyé en `Bearer` comme le fait l'instance ; pas une clé d'API personnelle), `FACTORY_LIVE_LINEAR_ISSUE` (un ticket, ex. `ORC-1`) ; option `FACTORY_LIVE_LINEAR_SEARCH`, un mot de son titre | le ticket, sans rien écrire |
+| `src/adapters/forge/gh-cli.live.test.ts` | `FACTORY_LIVE_GH_REPO` (un clone local), `FACTORY_LIVE_GH_BRANCH` et `FACTORY_LIVE_GH_PR` (une branche et sa PR, aux checks terminés : une PR mergée convient) ; `gh` connecté | la PR, sans rien écrire |
 
 ```bash
 FACTORY_LIVE_GH_REPO=$PWD FACTORY_LIVE_GH_BRANCH=orc-168-ci-postgres-docker-rootless FACTORY_LIVE_GH_PR=30 \
