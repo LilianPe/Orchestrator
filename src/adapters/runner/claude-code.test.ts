@@ -88,4 +88,9 @@ describe('childEnv', () => {
       FACTORY_API: 'http://127.0.0.1:4100/agent', FACTORY_RUN_TOKEN: 't', FACTORY_TICKET: 'REL-1', FACTORY_KNOWLEDGE: '', FACTORY_ROOT: '/app',
     });
   });
+
+  it('drops variables left over from the old prefix', () => {
+    const env = childEnv({ HOME: '/h', RELAIS_UI_PASSWORD: 'pw', RELAIS_HOME: '/old' }, {}); // transition, à retirer (ORC-167)
+    expect(env).toEqual({ HOME: '/h' });
+  });
 });

@@ -43,7 +43,7 @@ Relais a été renommé d'un bloc, sans changement de comportement : seuls les n
 |---|---|
 | paquet `relais`, CLI `relais` (`bin/relais`, `src/cli/relais.ts`) | paquet `factory`, CLI `factory` (`bin/factory`, `src/cli/factory.ts`) ; le démon, lancé par `factory up`, signe ses journaux `[factoryd]` |
 | `relais-agent` (`bin/relais-agent`, `src/cli/relais-agent.ts`) | `factory-agent`, nom temporaire jusqu'à son retrait par ORC-192 |
-| variables `RELAIS_*` (`RELAIS_HOME`, `RELAIS_UI_PASSWORD`, `RELAIS_API`, `RELAIS_RUN_TOKEN`, `RELAIS_TICKET`, `RELAIS_KNOWLEDGE`, `RELAIS_ROOT`, `RELAIS_E2E`, `RELAIS_ISOLATION`) | `FACTORY_*`, même suffixe ; les anciennes ne sont plus lues, ni filtrées de l'environnement des runs : retirez-les du shell du démon |
+| variables `RELAIS_*` (`RELAIS_HOME`, `RELAIS_UI_PASSWORD`, `RELAIS_API`, `RELAIS_RUN_TOKEN`, `RELAIS_TICKET`, `RELAIS_KNOWLEDGE`, `RELAIS_ROOT`, `RELAIS_E2E`, `RELAIS_ISOLATION`) | `FACTORY_*`, même suffixe ; les anciennes ne sont plus lues, mais restent retirées de l'environnement des runs, pour qu'un secret oublié dans le shell du démon n'atteigne pas les agents (filtre de transition, à retirer) |
 | `~/.relais`, `relais.db` | `~/.factory`, `factory.db` (pas de migration, voir « Données ») |
 | `.relais/workflow.yml` dans le dépôt | `.factory/workflow.yml` |
 | plugin `relais`, skills `relais:<nom>` | plugin `factory`, skills `factory:<nom>` |
@@ -61,11 +61,12 @@ Relais a été renommé d'un bloc, sans changement de comportement : seuls les n
 
 Les textes du pack (`packs/standard/`, skills et hook) ne peuvent pas importer la constante : ils disent « l'usine », sans nom propre.
 
-**Occurrences de `relais` qui restent.** Dans les fichiers suivis par git hors de `docs/` et du `README.md` (recherche sans casse), une seule, vérifiée par `src/product.test.ts` :
+**Occurrences de `relais` qui restent.** Dans les fichiers suivis par git hors de `docs/` et du `README.md` (recherche sans casse), les lignes ci-dessous, vérifiées par `src/product.test.ts` ; une ligne de transition porte la marque « transition, à retirer », que le test accepte :
 
 | Où | Pourquoi |
 |---|---|
 | `src/product.test.ts` | le motif `/relais/i` que le test cherche dans ces fichiers ; il échoue si l'ancien nom revient ailleurs |
+| `src/adapters/runner/claude-code.ts` (`DAEMON_ONLY`) et son test | le préfixe `RELAIS_` encore filtré de l'environnement des runs ; transition, à retirer quand plus aucune instance n'a d'ancienne variable |
 
 Dans `docs/` et le `README.md`, l'ancien nom reste là où il est juste : les URL du dépôt GitHub `LilianPe/relais` (non renommé), le tag `relais-v1-final` et l'état de départ décrit sur cette page, et les autres pages de `docs/` et le `README.md`, qui décrivent encore l'état de départ et sont réécrites ticket par ticket (ORC-202).
 
