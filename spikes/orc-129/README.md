@@ -1,6 +1,6 @@
 # Spike ORC-129 : inbox + outbox maison ou DBOS Transact
 
-**Code jetable.** Ces prototypes sont les preuves de la proposition [`docs/decisions/ORC-129.md`](../../docs/decisions/ORC-129.md). Ils ne doivent pas être repris tels quels dans `src/` : pas de tests, pas de gestion d'erreur sérieuse, un seul ticket, une seule sorte d'effet. Ils sont hors du build, du lint (`spikes/**` ignoré par `eslint.config.js`), du typecheck et de `npm test`, et la CI ne les lance pas.
+**Code jetable.** Ces prototypes sont les preuves de la décision [`docs/decisions/ORC-129.md`](../../docs/decisions/ORC-129.md). Ils ne doivent pas être repris tels quels dans `src/` : pas de tests, pas de gestion d'erreur sérieuse, un seul ticket, une seule sorte d'effet. Ils sont hors du build, du lint (`spikes/**` ignoré par `eslint.config.js`), du typecheck et de `npm test`, et la CI ne les lance pas.
 
 ## Ce qu'il y a
 
