@@ -61,13 +61,13 @@ Relais a été renommé d'un bloc, sans changement de comportement : seuls les n
 
 Les textes du pack (`packs/standard/`, skills et hook) ne peuvent pas importer la constante : ils disent « l'usine », sans nom propre.
 
-**Occurrences de `relais` qui restent.** Dans `src/`, `bin/`, `packs/` et `web/` (recherche sans casse), une seule, vérifiée par `src/product.test.ts` :
+**Occurrences de `relais` qui restent.** Dans les fichiers suivis par git hors de `docs/` et du `README.md` (recherche sans casse), une seule, vérifiée par `src/product.test.ts` :
 
 | Où | Pourquoi |
 |---|---|
-| `src/product.test.ts` | le motif `/relais/i` que le test cherche dans ces quatre dossiers ; il échoue si l'ancien nom revient ailleurs |
+| `src/product.test.ts` | le motif `/relais/i` que le test cherche dans ces fichiers ; il échoue si l'ancien nom revient ailleurs |
 
-Hors de ces dossiers, l'ancien nom reste là où il est juste : les URL du dépôt GitHub `LilianPe/relais` (non renommé), le tag `relais-v1-final` et l'état de départ décrit sur cette page, `TICKETS.md` (gelé), et les autres pages de `docs/` et le `README.md`, qui décrivent encore l'état de départ et sont réécrites ticket par ticket (ORC-202).
+Dans `docs/` et le `README.md`, l'ancien nom reste là où il est juste : les URL du dépôt GitHub `LilianPe/relais` (non renommé), le tag `relais-v1-final` et l'état de départ décrit sur cette page, et les autres pages de `docs/` et le `README.md`, qui décrivent encore l'état de départ et sont réécrites ticket par ticket (ORC-202).
 
 ## Tests live, hors CI
 
