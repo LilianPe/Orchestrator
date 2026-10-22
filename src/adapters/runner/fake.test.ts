@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { FakeRunner } from './fake.js';
+import { describeAgentRuntimeContract } from '../../../test/contracts/agent-runtime.contract.js';
+import { FakeRunner, type FakeScript } from './fake.js';
 import type { RunRequest, RunStreamEvent } from './types.js';
 
 const req = (runId: string): RunRequest => ({
@@ -13,6 +14,22 @@ async function collect(it: AsyncIterable<RunStreamEvent>): Promise<RunStreamEven
   return out;
 }
 
+const scripts: Record<string, FakeScript> = {
+  success: { events: [{ kind: 'text', text: 'PR ouverte.' }] },
+  failure: { outcome: 'failure' },
+  hang: { hold: true },
+  chatty: { events: ['un', 'deux', 'trois'].map((text) => ({ kind: 'text', text })), hold: true },
+};
+
+describeAgentRuntimeContract(
+  'FakeRunner',
+  () => {
+    const runtime = new FakeRunner();
+    return { runtime, script: (name) => (runtime.enqueue(scripts[name]!), {}) };
+  },
+  ['duration-limit', 'turn-limit'],
+);
+
 describe('FakeRunner', () => {
   it('replays a script and resolves with its outcome', async () => {
     const r = new FakeRunner();
@@ -23,14 +40,11 @@ describe('FakeRunner', () => {
     expect(r.requests).toHaveLength(1);
   });
 
-  it('holds until released, and stop yields stopped', async () => {
+  it('holds until released', async () => {
     const r = new FakeRunner();
-    r.enqueue({ hold: true }, { hold: true });
+    r.enqueue({ hold: true });
     const a = r.start(req('a'));
-    const b = r.start(req('b'));
     r.release('a');
     expect((await a.done).outcome).toBe('success');
-    b.stop();
-    expect((await b.done).outcome).toBe('stopped');
   });
 });
