@@ -1,7 +1,7 @@
 import type { JobSpec, Rule, Workflow } from '../config/workflow-schema.js';
 import type { Command } from './commands.js';
 import { evalCondition } from './conditions.js';
-import type { RelaisEvent, TicketState, VerifyFailure } from './types.js';
+import type { FactoryEvent, TicketState, VerifyFailure } from './types.js';
 
 export interface DecideContext {
   workflow: Workflow;
@@ -34,7 +34,7 @@ export function isQuestionSession(ticket: TicketState | undefined, sessionId: st
 }
 
 /** Non-delegated tickets only ever get question-queue work. */
-function ruleAllowed(rule: Rule, event: RelaisEvent, ticket: TicketState | undefined, workflow: Workflow): boolean {
+function ruleAllowed(rule: Rule, event: FactoryEvent, ticket: TicketState | undefined, workflow: Workflow): boolean {
   if (!rule.run || !ticket || ticket.delegated || event.type === 'ticket.delegated') return true;
   return workflow.jobs[rule.run]?.queue === 'questions';
 }
@@ -43,7 +43,7 @@ export function formatFailuresShort(failures: VerifyFailure[]): string {
   return failures.map((f) => `- \`${f.command}\` (code ${f.exitCode ?? 'timeout'})`).join('\n');
 }
 
-function ruleMatches(rule: Rule, event: RelaisEvent, ticket: TicketState | undefined, ctx: DecideContext): boolean {
+function ruleMatches(rule: Rule, event: FactoryEvent, ticket: TicketState | undefined, ctx: DecideContext): boolean {
   if (event.type === 'ticket.moved') {
     if (rule.from && rule.from !== event.payload.from) return false;
     if (rule.to && rule.to !== event.payload.to) return false;
@@ -60,7 +60,7 @@ function ruleMatches(rule: Rule, event: RelaisEvent, ticket: TicketState | undef
   return true;
 }
 
-function ruleCommands(rule: Rule, event: RelaisEvent, ticket: TicketState | undefined, ctx: DecideContext): Command[] {
+function ruleCommands(rule: Rule, event: FactoryEvent, ticket: TicketState | undefined, ctx: DecideContext): Command[] {
   const out: Command[] = [];
   if (event.type === 'session.prompted') {
     out.push({
@@ -99,7 +99,7 @@ function ruleCommands(rule: Rule, event: RelaisEvent, ticket: TicketState | unde
   return out;
 }
 
-export function decide(event: RelaisEvent, ticket: TicketState | undefined, ctx: DecideContext): Command[] {
+export function decide(event: FactoryEvent, ticket: TicketState | undefined, ctx: DecideContext): Command[] {
   const { workflow } = ctx;
   switch (event.type) {
     case 'control.pause':

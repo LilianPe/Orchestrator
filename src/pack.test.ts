@@ -13,15 +13,15 @@ function hook(env: Record<string, string> = {}) {
 }
 
 describe('standard pack', () => {
-  it('is a plugin named relais', () => {
-    expect(JSON.parse(readFileSync(join(pack, '.claude-plugin/plugin.json'), 'utf8')).name).toBe('relais');
+  it('is a plugin named factory', () => {
+    expect(JSON.parse(readFileSync(join(pack, '.claude-plugin/plugin.json'), 'utf8')).name).toBe('factory');
   });
 
   it('ships every skill the workflow references, with matching frontmatter', () => {
     const wf = loadWorkflow({ packDir: pack });
     for (const job of Object.values(wf.jobs)) {
       const [plugin, skill] = job.skill.split(':');
-      expect(plugin).toBe('relais');
+      expect(plugin).toBe('factory');
       const file = join(pack, 'skills', skill!, 'SKILL.md');
       expect(existsSync(file), file).toBe(true);
       expect(readFileSync(file, 'utf8')).toMatch(new RegExp(`^---\\nname: ${skill}\\ndescription: .+\\n---\\n`));
@@ -37,15 +37,15 @@ describe('standard pack', () => {
     }
   });
 
-  it('only cites relais:<skill> names that exist', () => {
+  it('only cites factory:<skill> names that exist', () => {
     const names = new Set(readdirSync(join(pack, 'skills')));
     const sources = [
       ...[...names].map((n) => readFileSync(join(pack, 'skills', n, 'SKILL.md'), 'utf8')),
       readFileSync(join(pack, 'hooks/session-start.mjs'), 'utf8'),
     ];
-    const cited = new Set(sources.flatMap((s) => [...s.matchAll(/relais:([a-z][a-z-]*[a-z])/g)].map((m) => m[1]!)));
+    const cited = new Set(sources.flatMap((s) => [...s.matchAll(/factory:([a-z][a-z-]*[a-z])/g)].map((m) => m[1]!)));
     expect(cited.size).toBeGreaterThan(5);
-    for (const c of cited) expect(names.has(c), `relais:${c}`).toBe(true);
+    for (const c of cited) expect(names.has(c), `factory:${c}`).toBe(true);
   });
 
   it('allows the read-only git and CI commands the skills rely on', () => {
@@ -55,10 +55,10 @@ describe('standard pack', () => {
     );
   });
 
-  it('denies merge, force push and reading Relais secrets', () => {
+  it('denies merge, force push and reading factory secrets', () => {
     const s = JSON.parse(readFileSync(join(pack, 'settings.json'), 'utf8'));
-    expect(s.permissions.deny).toEqual(expect.arrayContaining(['Bash(gh pr merge:*)', 'Bash(git push --force:*)', 'Bash(git push -f:*)', 'Read(~/.relais/**)']));
-    expect(s.permissions.allow).toContain('Bash(relais-agent:*)');
+    expect(s.permissions.deny).toEqual(expect.arrayContaining(['Bash(gh pr merge:*)', 'Bash(git push --force:*)', 'Bash(git push -f:*)', 'Read(~/.factory/**)']));
+    expect(s.permissions.allow).toContain('Bash(factory-agent:*)');
   });
 
   it('denies force pushes and pushes to the trunk written mid-command', () => {
@@ -77,17 +77,17 @@ describe('standard pack', () => {
   });
 
   it('hook injects the rules, and the knowledge index when present', () => {
-    const plain = hook({ RELAIS_TICKET: 'REL-1' });
+    const plain = hook({ FACTORY_TICKET: 'REL-1' });
     expect(plain.hookEventName).toBe('SessionStart');
     expect(plain.additionalContext).toContain('Ne merge jamais');
     expect(plain.additionalContext).toContain('REL-1');
     expect(plain.additionalContext).not.toContain('Base de connaissance');
-    for (const s of ['relais:tdd', 'relais:debugging', 'relais:verification', 'relais:code-review', 'relais:receiving-review']) {
+    for (const s of ['factory:tdd', 'factory:debugging', 'factory:verification', 'factory:code-review', 'factory:receiving-review']) {
       expect(plain.additionalContext).toContain(s);
     }
     expect(plain.additionalContext).toContain(join(pack, 'skills'));
-    const kb = mkdtempSync(join(tmpdir(), 'relais-kb-'));
+    const kb = mkdtempSync(join(tmpdir(), 'factory-kb-'));
     writeFileSync(join(kb, 'INDEX.md'), '- scores.md — agrégats côté serveur\n');
-    expect(hook({ RELAIS_KNOWLEDGE: kb }).additionalContext).toContain('agrégats côté serveur');
+    expect(hook({ FACTORY_KNOWLEDGE: kb }).additionalContext).toContain('agrégats côté serveur');
   });
 });

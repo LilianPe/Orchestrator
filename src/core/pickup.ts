@@ -9,7 +9,7 @@ export async function pickupFailures(
   workspaces: WorkspaceManager,
 ): Promise<string[]> {
   const out: string[] = [];
-  const prefix = `relais/${issue.identifier.toLowerCase()}-`;
+  const prefix = `factory/${issue.identifier.toLowerCase()}-`;
   for (const check of checks) {
     if (check === 'has_description' && issue.description.trim().length < 30) {
       out.push('La description fait moins de 30 caractères.');

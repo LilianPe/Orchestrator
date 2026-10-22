@@ -8,7 +8,7 @@ import { KnowledgeBase } from './kb.js';
 const git = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, encoding: 'utf8' });
 
 function kbRepo() {
-  const base = mkdtempSync(join(tmpdir(), 'relais-kbt-'));
+  const base = mkdtempSync(join(tmpdir(), 'factory-kbt-'));
   const origin = join(base, 'origin.git');
   git(base, 'init', '--bare', '-b', 'main', origin);
   const repo = join(base, 'kb');

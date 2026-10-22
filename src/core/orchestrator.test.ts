@@ -12,7 +12,7 @@ import { EventBus } from './bus.js';
 import { FakeClock } from './clock.js';
 import { Orchestrator } from './orchestrator.js';
 import { Scheduler } from './scheduler.js';
-import type { RelaisEvent } from './types.js';
+import type { FactoryEvent } from './types.js';
 
 function setup(o: { runner?: Runner; verify?: Verifier; budget?: number; tweak?: (w: ReturnType<typeof loadWorkflow>) => void } = {}) {
   const packDir = join(import.meta.dirname, '../../packs/standard');
@@ -28,12 +28,12 @@ function setup(o: { runner?: Runner; verify?: Verifier; budget?: number; tweak?:
     store, clock: new FakeClock(1_000), bus: new EventBus(), scheduler,
     tracker, forge: new FakeForge(), runner, workspaces: new FakeWorkspaces(), verify: o.verify ?? (async () => ({ ok: true, failures: [] })), dailyBudgetUsd: o.budget,
     projects: [{ id: 'p', repoPath: '/repo', teamKey: 'REL', workflow }], packDir,
-    agentEnv: (r) => ({ RELAIS_RUN_TOKEN: r.token }), newId: () => `id-${++n}`, activityIntervalMs: 0,
+    agentEnv: (r) => ({ FACTORY_RUN_TOKEN: r.token }), newId: () => `id-${++n}`, activityIntervalMs: 0,
   });
   return { store, tracker, runner: fakeRunner, orch, scheduler };
 }
 
-const delegated = (id = 'e1'): RelaisEvent => ({ id, type: 'ticket.delegated', at: 1_000, projectId: 'p', ticketId: 'REL-1', payload: { linearSessionId: 'ls-1' } });
+const delegated = (id = 'e1'): FactoryEvent => ({ id, type: 'ticket.delegated', at: 1_000, projectId: 'p', ticketId: 'REL-1', payload: { linearSessionId: 'ls-1' } });
 
 describe('Orchestrator', () => {
   it('ignores a duplicate event id', async () => {
@@ -60,7 +60,7 @@ describe('Orchestrator', () => {
     const r = runner.requests[0]!;
     expect(r.pluginDir.endsWith('packs/standard')).toBe(true);
     expect(r.settingsPath.endsWith('packs/standard/settings.json')).toBe(true);
-    expect(r.env['RELAIS_RUN_TOKEN']).toBeDefined();
+    expect(r.env['FACTORY_RUN_TOKEN']).toBeDefined();
     expect(r.env['PORT']).toBe('4200');
   });
 
@@ -178,7 +178,7 @@ describe('Orchestrator', () => {
     await orch.submit(delegated());
     await orch.idle();
     expect(runner.requests).toHaveLength(1);
-    const d2 = (id: string): RelaisEvent => ({ id, type: 'ticket.delegated', at: 1_000, projectId: 'p', ticketId: 'REL-2', payload: { linearSessionId: 'ls-2' } });
+    const d2 = (id: string): FactoryEvent => ({ id, type: 'ticket.delegated', at: 1_000, projectId: 'p', ticketId: 'REL-2', payload: { linearSessionId: 'ls-2' } });
     await orch.submit(d2('e2'));
     await orch.submit(d2('e3'));
     await orch.idle();

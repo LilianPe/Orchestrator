@@ -8,7 +8,7 @@ import { GitWorkspaces } from './git-workspaces.js';
 const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
 
 function fixtureRepo() {
-  const base = mkdtempSync(join(tmpdir(), 'relais-git-'));
+  const base = mkdtempSync(join(tmpdir(), 'factory-git-'));
   const origin = join(base, 'origin.git');
   git(base, 'init', '--bare', '-b', 'main', origin);
   const repo = join(base, 'repo');
@@ -32,8 +32,8 @@ describe('GitWorkspaces', () => {
     const { repo, root } = fixtureRepo();
     const ws = new GitWorkspaces({ root });
     const w = await ws.prepare(req(repo));
-    expect(w).toEqual({ path: join(root, 'p', 'REL-1'), port: 4201, branch: 'relais/rel-1-export-csv' });
-    expect(git(w.path, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('relais/rel-1-export-csv');
+    expect(w).toEqual({ path: join(root, 'p', 'REL-1'), port: 4201, branch: 'factory/rel-1-export-csv' });
+    expect(git(w.path, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('factory/rel-1-export-csv');
     expect(await ws.prepare(req(repo))).toEqual(w);
     await ws.cleanup('p', repo, 'REL-1');
     expect(existsSync(w.path)).toBe(false);
@@ -41,15 +41,15 @@ describe('GitWorkspaces', () => {
 
   it('checks out an existing remote branch', async () => {
     const { repo, root } = fixtureRepo();
-    git(repo, 'checkout', '-b', 'relais/rel-1-export-csv');
+    git(repo, 'checkout', '-b', 'factory/rel-1-export-csv');
     git(repo, 'commit', '--allow-empty', '-m', 'wip');
-    git(repo, 'push', '-u', 'origin', 'relais/rel-1-export-csv');
+    git(repo, 'push', '-u', 'origin', 'factory/rel-1-export-csv');
     git(repo, 'checkout', 'main');
     const ws = new GitWorkspaces({ root });
     const w = await ws.prepare(req(repo));
     expect(git(w.path, 'log', '-1', '--format=%s')).toBe('wip');
-    expect(await ws.remoteBranchExists(repo, 'relais/rel-1-')).toBe(true);
-    expect(await ws.remoteBranchExists(repo, 'relais/rel-2-')).toBe(false);
+    expect(await ws.remoteBranchExists(repo, 'factory/rel-1-')).toBe(true);
+    expect(await ws.remoteBranchExists(repo, 'factory/rel-2-')).toBe(false);
   });
 
   it('prepares the read-only trunk and a knowledge worktree', async () => {

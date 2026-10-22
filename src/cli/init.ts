@@ -4,6 +4,7 @@ import type { Exec } from '../adapters/exec.js';
 import { isUsableWebhookSecret } from '../adapters/tracker/linear/webhook.js';
 import { loadInstance, loadSecrets, saveInstance, saveSecrets } from '../config/instance.js';
 import { slugify } from '../core/naming.js';
+import { PRODUCT_NAME } from '../product.js';
 
 export interface InitIO {
   ask(q: string, def?: string): Promise<string>;
@@ -29,7 +30,7 @@ function detectVerify(repo: string): string[] {
 export async function runInit(d: InitDeps): Promise<void> {
   const { io } = d;
   const top = await d.exec('git', ['rev-parse', '--show-toplevel'], { cwd: d.cwd });
-  const repoPath = top.code === 0 ? top.stdout.trim() : await io.ask('Chemin du dépôt git à confier à Relais');
+  const repoPath = top.code === 0 ? top.stdout.trim() : await io.ask(`Chemin du dépôt git à confier à ${PRODUCT_NAME}`);
   const teamKey = (await io.ask('Clé de l’équipe Linear (ex. REL)')).toUpperCase();
 
   const cfg = loadInstance(d.home);
@@ -43,7 +44,7 @@ export async function runInit(d: InitDeps): Promise<void> {
     [
       '',
       '1. Dans Linear : Settings → API → OAuth applications → New application.',
-      '   - Name : relais (c’est le nom qu’on mentionnera avec @)',
+      `   - Name : ${PRODUCT_NAME} (c’est le nom qu’on mentionnera avec @)`,
       `   - Callback URL : ${callbackUrl}`,
       '   - Cochez « Webhooks », URL :',
       `     ${webhookUrl}`,
@@ -58,18 +59,18 @@ export async function runInit(d: InitDeps): Promise<void> {
   for (;;) {
     webhookSecret = (await io.ask('Webhook signing secret')).trim();
     if (isUsableWebhookSecret(webhookSecret)) break;
-    io.print('Le webhook signing secret est obligatoire : sans lui, Relais refuse tous les webhooks.');
+    io.print(`Le webhook signing secret est obligatoire : sans lui, ${PRODUCT_NAME} refuse tous les webhooks.`);
   }
   const secrets = loadSecrets(d.home);
   const keepTokens = secrets.linear?.clientId === clientId ? secrets.linear : {};
   saveSecrets(d.home, { ...secrets, linear: { ...keepTokens, clientId, clientSecret, webhookSecret } });
 
-  if (!cfg.knowledge && (await io.confirm('Créer un dépôt GitHub privé « relais-knowledge » pour la base de connaissance ?', true))) {
+  if (!cfg.knowledge && (await io.confirm('Créer un dépôt GitHub privé « factory-knowledge » pour la base de connaissance ?', true))) {
     const kbPath = join(d.home, 'knowledge');
-    const created = await d.exec('gh', ['repo', 'create', 'relais-knowledge', '--private', '--add-readme', '--clone'], { cwd: d.home });
+    const created = await d.exec('gh', ['repo', 'create', 'factory-knowledge', '--private', '--add-readme', '--clone'], { cwd: d.home });
     if (created.code === 0) {
       mkdirSync(join(kbPath, 'notes'), { recursive: true });
-      writeFileSync(join(kbPath, 'INDEX.md'), '# Base de connaissance Relais\n\n');
+      writeFileSync(join(kbPath, 'INDEX.md'), `# Base de connaissance ${PRODUCT_NAME}\n\n`);
       writeFileSync(join(kbPath, 'notes/.gitkeep'), '');
       await d.exec('git', ['-C', kbPath, 'add', '.'], {});
       await d.exec('git', ['-C', kbPath, 'commit', '-m', 'init knowledge base'], {});
@@ -80,7 +81,7 @@ export async function runInit(d: InitDeps): Promise<void> {
     }
   }
 
-  const wfFile = join(repoPath, '.relais/workflow.yml');
+  const wfFile = join(repoPath, '.factory/workflow.yml');
   if (!existsSync(wfFile)) {
     const detected = detectVerify(repoPath);
     const verify = (await io.ask('Commandes de vérification après chaque run (séparées par ;)', detected.join('; ')))
@@ -88,7 +89,7 @@ export async function runInit(d: InitDeps): Promise<void> {
       .map((s) => s.trim())
       .filter(Boolean);
     const setup = existsSync(join(repoPath, 'package-lock.json')) ? ['npm ci'] : [];
-    mkdirSync(join(repoPath, '.relais'), { recursive: true });
+    mkdirSync(join(repoPath, '.factory'), { recursive: true });
     writeFileSync(
       wfFile,
       [
@@ -113,9 +114,9 @@ export async function runInit(d: InitDeps): Promise<void> {
       '',
       'Configuration écrite.',
       'Ensuite :',
-      '  1. relais up',
+      '  1. factory up',
       `  2. ouvrez http://localhost:${cfg.port} et cliquez « Connecter Linear » (installe l’agent dans votre espace)`,
-      '  3. déléguez un ticket à @relais dans Linear',
+      `  3. déléguez un ticket à @${PRODUCT_NAME} dans Linear`,
       '',
     ].join('\n'),
   );

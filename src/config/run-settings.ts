@@ -8,7 +8,7 @@ interface Settings {
 }
 
 /**
- * The pack's settings plus denies for this instance's real RELAIS_HOME secrets.
+ * The pack's settings plus denies for this instance's real FACTORY_HOME secrets.
  * Not `Read(<home>/**)`: worktrees live in <home>/workspaces and runs must read them.
  * `//` prefixes an absolute path in Claude Code permission rules.
  */
@@ -18,11 +18,11 @@ export function buildRunSettings(pack: Settings, home: string): Settings {
     ...(pack.permissions.deny ?? []),
     `Read(${abs}/secrets.json)`,
     `Edit(${abs}/secrets.json)`,
-    `Read(${abs}/relais.db*)`,
+    `Read(${abs}/factory.db*)`,
     `Read(${abs}/transcripts/**)`,
     `Read(${abs}/logs/**)`,
     'Bash(*secrets.json*)',
-    'Bash(*relais.db*)',
+    'Bash(*factory.db*)',
   ];
   return { ...pack, permissions: { ...pack.permissions, deny } };
 }

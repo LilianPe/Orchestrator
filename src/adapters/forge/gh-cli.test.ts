@@ -25,12 +25,12 @@ describe('GhCliForge', () => {
   it('finds an open PR with failing checks even when gh exits non-zero', async () => {
     const forge = new GhCliForge(
       fakeExec({
-        'gh pr list': { stdout: JSON.stringify([{ number: 7, url: 'https://gh/7', state: 'OPEN', headRefName: 'relais/rel-1-x' }]) },
+        'gh pr list': { stdout: JSON.stringify([{ number: 7, url: 'https://gh/7', state: 'OPEN', headRefName: 'factory/rel-1-x' }]) },
         'gh pr checks 7': { stdout: JSON.stringify([{ name: 'test', bucket: 'fail' }, { name: 'lint', bucket: 'pass' }]), code: 1 },
       }),
     );
-    expect(await forge.findPr('/r', 'relais/rel-1-x')).toEqual({
-      number: 7, url: 'https://gh/7', state: 'OPEN', branch: 'relais/rel-1-x', checks: 'fail', failedChecks: ['test'],
+    expect(await forge.findPr('/r', 'factory/rel-1-x')).toEqual({
+      number: 7, url: 'https://gh/7', state: 'OPEN', branch: 'factory/rel-1-x', checks: 'fail', failedChecks: ['test'],
     });
   });
 

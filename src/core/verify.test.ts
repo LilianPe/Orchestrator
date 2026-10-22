@@ -21,7 +21,7 @@ describe('runVerify', () => {
   });
 
   it('resolves with a failure when cwd does not exist', async () => {
-    const res = await runVerify('/nonexistent-relais-dir', ['true']);
+    const res = await runVerify('/nonexistent-factory-dir', ['true']);
     expect(res.ok).toBe(false);
     expect(res.failures[0]).toMatchObject({ command: 'true', exitCode: null });
   });

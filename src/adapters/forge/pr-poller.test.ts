@@ -2,7 +2,7 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { loadWorkflow } from '../../config/load-workflow.js';
 import { FakeClock } from '../../core/clock.js';
-import { newTicketState, type RelaisEvent } from '../../core/types.js';
+import { newTicketState, type FactoryEvent } from '../../core/types.js';
 import { SqliteStore } from '../../store/sqlite-store.js';
 import { FakeForge } from './fake.js';
 import { PrPoller } from './pr-poller.js';
@@ -12,7 +12,7 @@ describe('PrPoller', () => {
     const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../../packs/standard') });
     const store = new SqliteStore(':memory:');
     const forge = new FakeForge();
-    const events: RelaisEvent[] = [];
+    const events: FactoryEvent[] = [];
     const clock = new FakeClock(100);
     store.putTicket({ ...newTicketState('p', 'REL-1', 'T', 'human_review', 1), branch: 'b' });
     const poller = new PrPoller({ store, forge, projects: [{ id: 'p', repoPath: '/r', teamKey: 'REL', workflow }], submit: (e) => events.push(e), clock, log: () => {} });
@@ -36,11 +36,11 @@ describe('PrPoller', () => {
     await poller.pollOnce();
     expect(events.at(-1)!.id).toBe('pr:REL-1:7:merged');
   });
-  function setup(submit?: (e: RelaisEvent) => void, log: (m: string) => void = () => {}) {
+  function setup(submit?: (e: FactoryEvent) => void, log: (m: string) => void = () => {}) {
     const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../../packs/standard') });
     const store = new SqliteStore(':memory:');
     const forge = new FakeForge();
-    const events: RelaisEvent[] = [];
+    const events: FactoryEvent[] = [];
     const clock = new FakeClock(100);
     const poller = new PrPoller({ store, forge, projects: [{ id: 'p', repoPath: '/r', teamKey: 'REL', workflow }], submit: submit ?? ((e) => events.push(e)), clock, log });
     return { store, forge, events, poller };
@@ -58,7 +58,7 @@ describe('PrPoller', () => {
 
   it('isolates a failing ticket and logs', async () => {
     const logs: string[] = [];
-    const events: RelaisEvent[] = [];
+    const events: FactoryEvent[] = [];
     const { store, forge, poller } = setup((e) => {
       if (e.ticketId === 'REL-1') throw new Error('boom');
       events.push(e);

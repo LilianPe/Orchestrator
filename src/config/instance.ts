@@ -34,8 +34,8 @@ export interface Secrets {
   linear?: LinearSecrets;
 }
 
-export function relaisHome(env: NodeJS.ProcessEnv = process.env): string {
-  return env['RELAIS_HOME'] ?? join(env['HOME'] ?? homedir(), '.relais');
+export function factoryHome(env: NodeJS.ProcessEnv = process.env): string {
+  return env['FACTORY_HOME'] ?? join(env['HOME'] ?? homedir(), '.factory');
 }
 
 export function homePaths(home: string) {
@@ -43,7 +43,7 @@ export function homePaths(home: string) {
     config: join(home, 'config.yaml'),
     secrets: join(home, 'secrets.json'),
     runSettings: join(home, 'run-settings.json'),
-    db: join(home, 'relais.db'),
+    db: join(home, 'factory.db'),
     transcripts: join(home, 'transcripts'),
     workspaces: join(home, 'workspaces'),
     logs: join(home, 'logs'),

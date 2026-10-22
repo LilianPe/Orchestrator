@@ -3,7 +3,7 @@ name: tdd
 description: Méthode test d'abord (rouge, vert, nettoyage) pour tout changement de comportement : fonctionnalité, correction de bug, refactorisation. À suivre avant d'écrire le code de production.
 ---
 
-# relais:tdd
+# factory:tdd
 
 **Règle : pas de code de production sans un test qui a échoué d'abord, et pour la bonne raison.** Un test que tu n'as pas vu échouer ne prouve rien : il peut tester autre chose, ou rien du tout.
 
@@ -32,7 +32,7 @@ Exceptions (à écrire dans ton dernier message, avec la raison) : fichier de co
 
 ## Bug : le test d'abord
 
-Un bug se corrige en deux commits logiques ou un seul, mais toujours dans cet ordre : un test qui reproduit le symptôme (rouge), puis la correction (vert). Pour trouver la cause, suis `relais:debugging` ; le test vient avant la correction.
+Un bug se corrige en deux commits logiques ou un seul, mais toujours dans cet ordre : un test qui reproduit le symptôme (rouge), puis la correction (vert). Pour trouver la cause, suis `factory:debugging` ; le test vient avant la correction.
 
 ## Signaux d'arrêt
 
@@ -44,4 +44,4 @@ Difficile à tester ? C'est souvent le design : interface plus simple, dépendan
 
 - chaque comportement nouveau ou corrigé a un test que tu as vu échouer pour la bonne raison ;
 - le code minimal le fait passer, et les tests voisins sont verts ;
-- tu peux citer la commande lancée et son résultat (voir `relais:verification`).
+- tu peux citer la commande lancée et son résultat (voir `factory:verification`).

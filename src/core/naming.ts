@@ -11,5 +11,5 @@ export function slugify(s: string, max = 40): string {
 }
 
 export function branchName(identifier: string, title: string): string {
-  return `relais/${identifier.toLowerCase()}-${slugify(title)}`;
+  return `factory/${identifier.toLowerCase()}-${slugify(title)}`;
 }

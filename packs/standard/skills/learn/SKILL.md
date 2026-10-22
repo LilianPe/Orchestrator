@@ -1,9 +1,9 @@
 ---
 name: learn
-description: Ajouter à la base de connaissance partagée ce qui mérite d'être retenu après un ticket ou sur demande (« retiens ça »), par une PR relue (lancé par Relais).
+description: Ajouter à la base de connaissance partagée ce qui mérite d'être retenu après un ticket ou sur demande (« retiens ça »), par une PR relue (lancé par l'usine).
 ---
 
-# relais:learn
+# factory:learn
 
 Ton répertoire de travail est un worktree du dépôt de connaissance, sur une branche `learn/...` dédiée. Le dépôt contient `INDEX.md` (une ligne par fiche) et `notes/*.md`. Personne ne répond pendant ton tour.
 

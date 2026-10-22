@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { runAgentCli } from './relais-agent.js';
+import { runAgentCli } from './factory-agent.js';
+import { PRODUCT_NAME } from '../product.js';
 
 function fetchStub(responses: Record<string, unknown>) {
   const calls: { url: string; init?: RequestInit }[] = [];
@@ -10,13 +11,13 @@ function fetchStub(responses: Record<string, unknown>) {
   }) as unknown as typeof fetch;
   return { f, calls };
 }
-const env = { RELAIS_API: 'http://127.0.0.1:4100/agent', RELAIS_RUN_TOKEN: 'tok' } as NodeJS.ProcessEnv;
+const env = { FACTORY_API: 'http://127.0.0.1:4100/agent', FACTORY_RUN_TOKEN: 'tok' } as NodeJS.ProcessEnv;
 
-describe('relais-agent', () => {
-  it('refuses to run outside Relais', async () => {
+describe('factory-agent', () => {
+  it('refuses to run outside the factory', async () => {
     const out: string[] = [];
     expect(await runAgentCli(['issue', 'REL-1'], {} as NodeJS.ProcessEnv, fetch, (s) => out.push(s))).toBe(2);
-    expect(out.join('')).toContain('doit être lancé par Relais');
+    expect(out.join('')).toContain(`doit être lancé par ${PRODUCT_NAME}`);
   });
 
   it('reads an issue with the bearer token', async () => {

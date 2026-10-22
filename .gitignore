@@ -3,7 +3,7 @@ dist/
 coverage/
 .env
 *.log
-.relais-home/
+.factory-home/
 web/dist/
 .superpowers/
 docs/superpowers/

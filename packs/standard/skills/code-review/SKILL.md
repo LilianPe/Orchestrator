@@ -1,9 +1,9 @@
 ---
 name: code-review
-description: Relire un diff à un niveau proportionné à son risque (rapide, standard, approfondi), limité à ce que le diff change ou casse, avec des défauts classés et vérifiés. Utilisé par relais:review et en auto-review dans relais:dev.
+description: Relire un diff à un niveau proportionné à son risque (rapide, standard, approfondi), limité à ce que le diff change ou casse, avec des défauts classés et vérifiés. Utilisé par factory:review et en auto-review dans factory:dev.
 ---
 
-# relais:code-review
+# factory:code-review
 
 Tu relis un diff comme un relecteur exigeant, pas comme son auteur. Le résultat est une **liste de défauts vérifiés**, classés, que l'appelant corrige. Une review coûte des tokens : son niveau se choisit sur le risque du diff, une fois, avant de commencer.
 
@@ -84,4 +84,4 @@ Une ligne par constat, du plus grave au moins grave :
 
 Puis, s'il y en a : « Hors périmètre » (une ligne chacun), « Conflits de règle » (avec la règle). Aucun constat : écris « aucun défaut trouvé » et ce que tu as vérifié (niveau, angles, fichiers).
 
-Le relecteur ne modifie rien pendant la review : les corrections viennent après, par l'appelant (`relais:receiving-review`).
+Le relecteur ne modifie rien pendant la review : les corrections viennent après, par l'appelant (`factory:receiving-review`).

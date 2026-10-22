@@ -20,11 +20,12 @@ import {
   type InputKind,
   type LogicalState,
   type QueueName,
-  type RelaisEvent,
+  type FactoryEvent,
   type TicketState,
   type VerifyFailure,
 } from './types.js';
 import type { Verifier } from './verify.js';
+import { PRODUCT_NAME } from '../product.js';
 
 export interface ProjectRuntime {
   id: string;
@@ -86,7 +87,7 @@ type RecoveryNotice = ({ ticket: { projectId: string; ticketId: string } } | { s
 export class Orchestrator {
   private chain: Promise<void> = Promise.resolve();
   private background = new Map<Promise<void>, string | undefined>();
-  /** Runs whose event stream is still open (the runner is working, nothing for Relais to do): idle() does not wait for them. */
+  /** Runs whose event stream is still open (the runner is working, nothing for the factory to do): idle() does not wait for them. */
   private liveRuns = new Set<string>();
   private handles = new Map<string, RunHandle>();
   private stopping = false;
@@ -98,7 +99,7 @@ export class Orchestrator {
     this.newId = d.newId ?? randomUUID;
   }
 
-  submit(event: RelaisEvent): Promise<void> {
+  submit(event: FactoryEvent): Promise<void> {
     const next = this.chain
       .then(() => this.handle(event))
       .catch((err: unknown) => this.log('error', `event ${event.id} (${event.type}): ${(err as Error).message}`));
@@ -144,16 +145,16 @@ export class Orchestrator {
         this.recoveryNotices.push({
           sessionId: run.linearSessionId,
           type: 'error',
-          body: 'Relais a redémarré pendant ma réponse. Reposez la question dans ce fil.',
+          body: `${PRODUCT_NAME} a redémarré pendant ma réponse. Reposez la question dans ce fil.`,
         });
       }
     }
     for (const t of store.listTickets()) {
       if (t.activeRunId) {
         const r = store.getRun(t.activeRunId);
-        if (!r || r.status !== 'running') block(t, 'Relais a redémarré pendant le run. Répondez dans le fil pour relancer.');
+        if (!r || r.status !== 'running') block(t, `${PRODUCT_NAME} a redémarré pendant le run. Répondez dans le fil pour relancer.`);
       }
-      if (t.verifyingRunId) block(t, 'Relais a redémarré pendant les vérifications. Répondez dans le fil pour relancer.');
+      if (t.verifyingRunId) block(t, `${PRODUCT_NAME} a redémarré pendant les vérifications. Répondez dans le fil pour relancer.`);
     }
   }
 
@@ -243,7 +244,7 @@ export class Orchestrator {
     return t;
   }
 
-  private async handle(event: RelaisEvent): Promise<void> {
+  private async handle(event: FactoryEvent): Promise<void> {
     const { store, bus } = this.d;
     if (!store.recordEvent(event)) return;
     bus.publish({ kind: 'event', event });
@@ -390,7 +391,7 @@ export class Orchestrator {
           (async () => {
             const res = await this.d.verify(run.cwd, job.verify);
             const base = { at: clock.now(), projectId: project.id, ticketId };
-            const event: RelaisEvent = res.ok
+            const event: FactoryEvent = res.ok
               ? { ...base, id: `verify:${run.id}`, type: 'verify.passed', payload: { runId: run.id, job: job.name } }
               : { ...base, id: `verify:${run.id}`, type: 'verify.failed', payload: { runId: run.id, job: job.name, failures: res.failures } };
             void this.submit(event);
@@ -468,13 +469,13 @@ export class Orchestrator {
     if (!job) return this.log('error', `unknown job ${opts.job}`);
     const t = this.ticket(project.id, ticketId);
     if (job.queue === 'dev' && !t.delegated) {
-      return this.log('warn', `refused ${job.name} on ${ticketId}: the ticket is not delegated to Relais`);
+      return this.log('warn', `refused ${job.name} on ${ticketId}: the ticket is not delegated to ${PRODUCT_NAME}`);
     }
     if (job.workspace === 'knowledge' && this.d.knowledgeConfigured === false) {
       this.log('info', `skipped ${job.name} on ${ticketId}: no knowledge repo configured`);
       if (opts.linearSessionId) {
         await this.d.tracker
-          .activity(opts.linearSessionId, { type: 'response', body: "Aucune base de connaissance n'est configurée pour Relais : je ne peux rien retenir." })
+          .activity(opts.linearSessionId, { type: 'response', body: `Aucune base de connaissance n'est configurée pour ${PRODUCT_NAME} : je ne peux rien retenir.` })
           .catch((err: Error) => this.log('warn', `could not answer ${ticketId}: ${err.message}`));
       }
       return;
@@ -529,7 +530,7 @@ export class Orchestrator {
     this.d.store.setMeta(key, '1');
     await this.d.tracker.comment(
       ticketId,
-      "Budget journalier de Relais atteint : ce ticket reste en file jusqu'à demain (ou jusqu'à une hausse du plafond).",
+      `Budget journalier de ${PRODUCT_NAME} atteint : ce ticket reste en file jusqu'à demain (ou jusqu'à une hausse du plafond).`,
     );
   }
 

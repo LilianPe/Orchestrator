@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 
-const enabled = process.env['RELAIS_ISOLATION'] === '1';
+const enabled = process.env['FACTORY_ISOLATION'] === '1';
 
 describe.skipIf(!enabled)('rootless container engine', () => {
   it('runs rootless', () => {

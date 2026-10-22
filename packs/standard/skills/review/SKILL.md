@@ -1,11 +1,11 @@
 ---
 name: review
-description: Boucle de review IA d'une PR jusqu'à zéro défaut bloquant et CI verte, avec un nombre de rounds plafonné (lancé par Relais).
+description: Boucle de review IA d'une PR jusqu'à zéro défaut bloquant et CI verte, avec un nombre de rounds plafonné (lancé par l'usine).
 ---
 
-# relais:review
+# factory:review
 
-Tu mènes la PR de la branche courante à un état propre : review, corrections, review ciblée des corrections, jusqu'à ce qu'il ne reste plus de défaut, puis intégration de la base si besoin, push, et CI verte. « Rounds de review max » (dans le prompt) plafonne le nombre de rounds. Tu es seul : ton seul canal vers un humain est `relais-agent ask "<question>"`, puis fin du tour.
+Tu mènes la PR de la branche courante à un état propre : review, corrections, review ciblée des corrections, jusqu'à ce qu'il ne reste plus de défaut, puis intégration de la base si besoin, push, et CI verte. « Rounds de review max » (dans le prompt) plafonne le nombre de rounds. Tu es seul : ton seul canal vers un humain est `factory-agent ask "<question>"`, puis fin du tour.
 
 ## 0. Préparer
 
@@ -16,14 +16,14 @@ Tu mènes la PR de la branche courante à un état propre : review, corrections,
 
 ## 1. Round 1 : tout le diff, au niveau qu'il mérite
 
-1. Choisis le niveau de `relais:code-review` sur le diff de la PR (`git diff --stat origin/<base>...HEAD`, puis les hunks si les chemins ne suffisent pas) : **rapide**, **standard** ou **approfondi**, selon sa table. C'est la seule passe large de la boucle : un chemin critique (accès, données, migrations, secrets) prend « approfondi » dès maintenant plutôt que de remonter le niveau round après round.
-2. Lance `relais:code-review` à ce niveau, sur le diff complet de la PR (base de la PR, pas un sous-ensemble), avec la consigne : ne signaler que des défauts dans ces lignes ou dans ce qu'elles cassent.
+1. Choisis le niveau de `factory:code-review` sur le diff de la PR (`git diff --stat origin/<base>...HEAD`, puis les hunks si les chemins ne suffisent pas) : **rapide**, **standard** ou **approfondi**, selon sa table. C'est la seule passe large de la boucle : un chemin critique (accès, données, migrations, secrets) prend « approfondi » dès maintenant plutôt que de remonter le niveau round après round.
+2. Lance `factory:code-review` à ce niveau, sur le diff complet de la PR (base de la PR, pas un sous-ensemble), avec la consigne : ne signaler que des défauts dans ces lignes ou dans ce qu'elles cassent.
 3. Garde les constats dans le périmètre ; mets les « hors périmètre » et « conflits de règle » de côté pour le message final (jamais corrigés ici).
 4. Aucun constat bloquant ni important : va à l'étape 3. Sinon : étape 2.
 
 ## 2. Corriger, puis relire les corrections
 
-**Corriger** (chaque round) avec `relais:receiving-review` : vérifier chaque constat et sa correction proposée avant d'écrire, un commit par cause (`<ID>: review round <n> — <cause>`), chaque correction de comportement prouvée par un test rouge puis vert, tests ciblés seulement. Les constats **mineurs** du round 1 peuvent être corrigés avec le reste ; ensuite, plus jamais.
+**Corriger** (chaque round) avec `factory:receiving-review` : vérifier chaque constat et sa correction proposée avant d'écrire, un commit par cause (`<ID>: review round <n> — <cause>`), chaque correction de comportement prouvée par un test rouge puis vert, tests ciblés seulement. Les constats **mineurs** du round 1 peuvent être corrigés avec le reste ; ensuite, plus jamais.
 
 Ne corrige pas, et note comme **à trancher** :
 
@@ -32,7 +32,7 @@ Ne corrige pas, et note comme **à trancher** :
 - un constat qui inverserait une décision du registre, ou qui porte sur une clé déjà modifiée par **deux** rounds : c'est une question de conception, pas une file de corrections ;
 - un texte sans oracle exécutable (commentaire, doc, prompt, constante de réglage) déjà modifié une fois pour une question de formulation : une autre lecture du même texte ne justifie pas un deuxième changement. Un texte qui contredit le code reste un défaut à corriger.
 
-**Relire** (round 2 et suivants) : `relais:code-review` au niveau **standard**, limité aux commits de correction du round précédent (`git show <sha>` pour chacun) **et à ce qui les consomme** (un type rétréci, une fonction dont le contrat change, un état partagé). Jamais une nouvelle relecture de toute la PR. Donne-lui le registre avec la consigne : « ces choix sont décidés ; un constat qui en inverserait un s'écrit `inversion : <clé>`, pas comme un défaut ; un bug introduit par une correction est un défaut ».
+**Relire** (round 2 et suivants) : `factory:code-review` au niveau **standard**, limité aux commits de correction du round précédent (`git show <sha>` pour chacun) **et à ce qui les consomme** (un type rétréci, une fonction dont le contrat change, un état partagé). Jamais une nouvelle relecture de toute la PR. Donne-lui le registre avec la consigne : « ces choix sont décidés ; un constat qui en inverserait un s'écrit `inversion : <clé>`, pas comme un défaut ; un bug introduit par une correction est un défaut ».
 
 **Convergence** :
 
@@ -57,13 +57,13 @@ Avant de déclarer la boucle convergée, lance **une fois** la vérification de 
 ## 5. CI jusqu'au vert
 
 1. Attends le résultat : `sleep 60 && gh pr checks <branche>`, 20 fois au plus. Code 0 : tout vert. Code 8 : en cours. Code 1 : un check rouge, ou une lecture ratée ; relis une fois avant de conclure. Juste après un push, les checks lus peuvent être ceux du commit précédent : vérifie que la PR montre ton commit (`gh pr view <branche> --json headRefOid`).
-2. Check rouge : méthode de `relais:fix-ci` (échec exact, reproduction locale, classement). Régression : correction, commit `<ID>: fix CI — <cause>`, push, nouvelle attente. Instable ou infra : `gh run rerun <run-id> --failed` une fois ; même échec : réel. Échec présent aussi sur la base : ne corrige pas du code hors de la PR, signale-le.
+2. Check rouge : méthode de `factory:fix-ci` (échec exact, reproduction locale, classement). Régression : correction, commit `<ID>: fix CI — <cause>`, push, nouvelle attente. Instable ou infra : `gh run rerun <run-id> --failed` une fois ; même échec : réel. Échec présent aussi sur la base : ne corrige pas du code hors de la PR, signale-le.
 3. Au plus 3 tentatives de correction par check. Une correction de CI qui change le comportement de production au-delà de ce que le check exigeait passe par un round ciblé (compté dans le plafond).
 4. Toujours en cours après les 20 lectures : dis « CI en cours » avec les checks en attente, jamais « verte ».
 
 ## 6. Quand demander à un humain
 
-Un point **à trancher** qui est peut-être un défaut, un défaut bloquant encore ouvert au plafond, une CI rouge après 3 tentatives, un conflit dans un des trois cas d'arrêt : pose UNE question avec `relais-agent ask`. Elle bloque le ticket : il ne passe pas en « prêt à merger » et ton dernier message **n'est pas publié**. La question porte donc la synthèse : rounds faits, ce qui est corrigé, et le point à décider avec ses options et l'historique de la clé.
+Un point **à trancher** qui est peut-être un défaut, un défaut bloquant encore ouvert au plafond, une CI rouge après 3 tentatives, un conflit dans un des trois cas d'arrêt : pose UNE question avec `factory-agent ask`. Elle bloque le ticket : il ne passe pas en « prêt à merger » et ton dernier message **n'est pas publié**. La question porte donc la synthèse : rounds faits, ce qui est corrigé, et le point à décider avec ses options et l'historique de la clé.
 
 Points à trancher qui ne sont que des compromis ou des préférences, mineurs, hors périmètre : pas de question, ils vont dans le dernier message.
 

@@ -2,7 +2,7 @@ import { createHmac } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import type { RelaisEvent } from '../../../core/types.js';
+import type { FactoryEvent } from '../../../core/types.js';
 import { createLinearIngest } from './ingest.js';
 import { isFresh, isUsableWebhookSecret, mapLinearWebhook, stripMention, verifyLinearSignature, type MapContext } from './webhook.js';
 
@@ -54,8 +54,8 @@ describe('signature', () => {
 
 describe('stripMention', () => {
   it('removes plain and markdown mentions', () => {
-    expect(stripMention('@relais  tu penses quoi ?')).toBe('tu penses quoi ?');
-    expect(stripMention('[@relais](https://x) Retiens ça')).toBe('Retiens ça');
+    expect(stripMention('@factory  tu penses quoi ?')).toBe('tu penses quoi ?');
+    expect(stripMention('[@factory](https://x) Retiens ça')).toBe('Retiens ça');
     expect(stripMention('sans mention')).toBe('sans mention');
   });
 });
@@ -120,7 +120,7 @@ describe('ingest', () => {
     const ingest = createLinearIngest({
       secret: () => 'sec',
       ctx: { ...ctx(), now: () => 2000 },
-      submit: (e: RelaisEvent) => void order.push(`submit:${e.type}`),
+      submit: (e: FactoryEvent) => void order.push(`submit:${e.type}`),
       ack: async (s) => void order.push(`ack:${s}`),
       log: () => {},
     });
@@ -135,7 +135,7 @@ describe('ingest', () => {
     const ingest = createLinearIngest({
       secret: () => 'sec',
       ctx: { ...ctx(), now: () => 1000 },
-      submit: (e: RelaisEvent) => void ids.push(e.id),
+      submit: (e: FactoryEvent) => void ids.push(e.id),
       ack: async (s) => void acks.push(s),
       log: () => {},
     });
@@ -200,7 +200,7 @@ describe('ingest', () => {
     const ingest = createLinearIngest({
       secret: () => 'sec',
       ctx: { ...ctx(), now: () => now },
-      submit: (e: RelaisEvent) => void ids.push(e.id),
+      submit: (e: FactoryEvent) => void ids.push(e.id),
       ack: async () => {},
       log: () => {},
     });

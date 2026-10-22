@@ -39,7 +39,7 @@ Avec `host` différent de `127.0.0.1`, Relais refuse de démarrer sans `RELAIS_U
 
 ## Vérifications live optionnelles
 - `LINEAR_API_KEY=<clé perso> npx vitest run src/adapters/tracker/linear/queries.live.test.ts` : toutes les requêtes valident contre le schéma Linear.
-- `RELAIS_E2E=1 npx vitest run test/e2e/pack.e2e.test.ts` : le pack charge le hook et refuse `gh pr merge`.
+- `FACTORY_E2E=1 npx vitest run test/e2e/pack.e2e.test.ts` : le pack charge le hook et refuse `gh pr merge`.
 
 ## Points à vérifier pendant la recette
 1. Claude Code `stream-json` émet-il une ligne `assistant` par message (le plafond de tours de Relais compte ces lignes) ? Observer : le nombre de tours affiché pour un run correspond au nombre de messages assistant réels.

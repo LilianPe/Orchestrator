@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+ROOT="${FACTORY_ROOT:-$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)}"
+if [ -f "$ROOT/dist/src/cli/factory-agent.js" ]; then exec node "$ROOT/dist/src/cli/factory-agent.js" "$@"; fi
+exec "$ROOT/node_modules/.bin/tsx" "$ROOT/src/cli/factory-agent.ts" "$@"

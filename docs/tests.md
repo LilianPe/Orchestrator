@@ -16,11 +16,11 @@ Pendant le travail, lancez seulement les tests des fichiers touchés : `npx vite
 
 | Projet | Commande | Ce qu'il couvre |
 |---|---|---|
-| `unit` | `npm test` | unitaires, scénarios et bout en bout (sauté sans `RELAIS_E2E=1`) |
+| `unit` | `npm test` | unitaires, scénarios et bout en bout (sauté sans `FACTORY_E2E=1`) |
 | `integration` | `npm run test:integration` | `test/integration/`, avec `DATABASE_URL` (Postgres) |
-| `isolation` | `npm run test:isolation` | `test/isolation/`, avec `RELAIS_ISOLATION=1` et un moteur rootless |
+| `isolation` | `npm run test:isolation` | `test/isolation/`, avec `FACTORY_ISOLATION=1` et un moteur rootless |
 
-`npm run test:all` lance les trois. Sans `DATABASE_URL`, les tests d'intégration se sautent ; sans `RELAIS_ISOLATION=1`, les tests d'isolation se sautent. La CI (`.github/workflows/ci.yml`) lance le projet `unit` avec typecheck et lint, puis Postgres en service pour `integration` et Podman rootless pour `isolation`. Aucun secret n'est défini dans les workflows.
+`npm run test:all` lance les trois. Sans `DATABASE_URL`, les tests d'intégration se sautent ; sans `FACTORY_ISOLATION=1`, les tests d'isolation se sautent. La CI (`.github/workflows/ci.yml`) lance le projet `unit` avec typecheck et lint, puis Postgres en service pour `integration` et Podman rootless pour `isolation`. Aucun secret n'est défini dans les workflows.
 
 ## Les faux adaptateurs
 

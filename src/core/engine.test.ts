@@ -2,13 +2,13 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { loadWorkflow } from '../config/load-workflow.js';
 import { decide } from './engine.js';
-import { newTicketState, type EventPayloads, type EventType, type RelaisEvent, type TicketState } from './types.js';
+import { newTicketState, type EventPayloads, type EventType, type FactoryEvent, type TicketState } from './types.js';
 
 const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../packs/standard') });
 const ctx = { workflow };
 
-function ev<T extends EventType>(type: T, payload: EventPayloads[T]): RelaisEvent {
-  return { id: `e-${type}`, type, at: 1000, projectId: 'p', ticketId: 'REL-1', payload } as RelaisEvent;
+function ev<T extends EventType>(type: T, payload: EventPayloads[T]): FactoryEvent {
+  return { id: `e-${type}`, type, at: 1000, projectId: 'p', ticketId: 'REL-1', payload } as FactoryEvent;
 }
 function ticket(patch: Partial<TicketState> = {}): TicketState {
   return { ...newTicketState('p', 'REL-1', 'Titre', 'todo', 0), delegated: true, ...patch };

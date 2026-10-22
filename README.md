@@ -1,3 +1,5 @@
+> **Orchestrator** (nom de bêta de l'usine) : ces docs décrivent l'état de départ (Relais) ; elles sont réécrites ticket par ticket. Le code porte déjà les nouveaux noms (CLI `factory`, variables `FACTORY_*`, `~/.factory`, `.factory/`) : la correspondance est dans [`docs/transition.md`, « Renommage »](docs/transition.md#renommage-orc-167).
+
 # Relais
 
 Orchestrateur d'agents de code : un ticket Linear délégué à l'agent devient une PR, relue par un humain puis par une boucle de review IA, prête à merger. Prototype privé.
@@ -67,7 +69,7 @@ Sans tokens, pour tester l'interface : `relais up --fake-runner`.
 npm test                  # unitaires et scénarios (projet vitest `unit`)
 npm run test:all          # les trois projets vitest
 npm run test:integration  # Postgres (DATABASE_URL requis)
-npm run test:isolation    # moteur rootless (RELAIS_ISOLATION=1)
+npm run test:isolation    # moteur rootless (FACTORY_ISOLATION=1)
 npm run typecheck         # types du démon et de l'interface
 npm run lint
 npm run dev               # CLI depuis les sources (tsx) : npm run dev -- up

@@ -20,17 +20,17 @@ jobs:
       postgres:
         image: postgres:16
         env:
-          POSTGRES_USER: relais
-          POSTGRES_PASSWORD: relais
-          POSTGRES_DB: relais_test
+          POSTGRES_USER: factory
+          POSTGRES_PASSWORD: factory
+          POSTGRES_DB: factory_test
         ports: ["5432:5432"]
         options: >-
-          --health-cmd "pg_isready -U relais -d relais_test"
+          --health-cmd "pg_isready -U factory -d factory_test"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
     env:
-      DATABASE_URL: postgres://relais:relais@127.0.0.1:5432/relais_test
+      DATABASE_URL: postgres://factory:factory@127.0.0.1:5432/factory_test
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -42,7 +42,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       XDG_RUNTIME_DIR: /tmp/podman-runtime
-      RELAIS_ISOLATION: "1"
+      FACTORY_ISOLATION: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

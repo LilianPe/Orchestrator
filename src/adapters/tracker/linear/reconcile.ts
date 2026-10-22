@@ -1,6 +1,6 @@
 import type { Clock } from '../../../core/clock.js';
 import type { ProjectRuntime } from '../../../core/orchestrator.js';
-import type { LogicalState, RelaisEvent } from '../../../core/types.js';
+import type { LogicalState, FactoryEvent } from '../../../core/types.js';
 import type { Store } from '../../../store/types.js';
 import type { Tracker } from '../types.js';
 
@@ -8,7 +8,7 @@ export interface ReconcileDeps {
   tracker: Pick<Tracker, 'listDelegated'>;
   store: Store;
   projects: ProjectRuntime[];
-  submit: (e: RelaisEvent) => void;
+  submit: (e: FactoryEvent) => void;
   clock: Clock;
   log: (m: string) => void;
 }

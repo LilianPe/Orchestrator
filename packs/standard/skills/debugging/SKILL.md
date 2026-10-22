@@ -3,7 +3,7 @@ name: debugging
 description: Méthode de diagnostic pour un bug, un test rouge, une CI en échec ou un comportement inattendu : trouver la cause avant toute correction.
 ---
 
-# relais:debugging
+# factory:debugging
 
 **Règle : pas de correction sans cause établie.** Corriger un symptôme déplace le bug et coûte un aller-retour de plus. Une méthode posée est plus rapide qu'une suite d'essais au hasard, surtout quand la correction « évidente » tente.
 
@@ -31,13 +31,13 @@ Tu ne comprends pas un point : dis-le dans ton message plutôt que de faire semb
 
 ## 4. Corriger
 
-1. Un test qui reproduit le bug et échoue (`relais:tdd`). Sans framework de test : un script de reproduction lancé avant et après.
+1. Un test qui reproduit le bug et échoue (`factory:tdd`). Sans framework de test : un script de reproduction lancé avant et après.
 2. **Une** correction, à la cause. Pas de « tant que j'y suis », pas de refactorisation groupée.
-3. Vérifie : le test passe, les tests voisins aussi, le symptôme d'origine a disparu (`relais:verification`).
+3. Vérifie : le test passe, les tests voisins aussi, le symptôme d'origine a disparu (`factory:verification`).
 
 ## Trois corrections ratées : stop
 
-Si trois corrections successives échouent, ou si chaque correction révèle un problème ailleurs, ce n'est plus une hypothèse fausse : c'est la conception. N'essaie pas une quatrième. Annule les essais, décris dans ton message ce que tu as établi, ce qui a été tenté et pourquoi ça n'a pas suffi, et pose la question de conception avec `relais-agent ask "<question>"`, puis termine ton tour.
+Si trois corrections successives échouent, ou si chaque correction révèle un problème ailleurs, ce n'est plus une hypothèse fausse : c'est la conception. N'essaie pas une quatrième. Annule les essais, décris dans ton message ce que tu as établi, ce qui a été tenté et pourquoi ça n'a pas suffi, et pose la question de conception avec `factory-agent ask "<question>"`, puis termine ton tour.
 
 ## Pas de cause dans le code
 

@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 import { fileURLToPath } from 'node:url';
+import { PRODUCT_NAME } from '../product.js';
 
-const USAGE = 'Usage : relais-agent issue <ID> | search <texte> | kb search <mots> | ask <question>';
+const USAGE = 'Usage : factory-agent issue <ID> | search <texte> | kb search <mots> | ask <question>';
 
 export async function runAgentCli(argv: string[], env: NodeJS.ProcessEnv, fetchImpl: typeof fetch, out: (s: string) => void): Promise<number> {
-  const api = env['RELAIS_API'];
-  const token = env['RELAIS_RUN_TOKEN'];
+  const api = env['FACTORY_API'];
+  const token = env['FACTORY_RUN_TOKEN'];
   if (!api || !token) {
-    out('relais-agent doit être lancé par Relais (RELAIS_API et RELAIS_RUN_TOKEN manquants).\n');
+    out(`factory-agent doit être lancé par ${PRODUCT_NAME} (FACTORY_API et FACTORY_RUN_TOKEN manquants).\n`);
     return 2;
   }
   const headers = { authorization: `Bearer ${token}`, 'content-type': 'application/json' };
@@ -40,7 +41,7 @@ export async function runAgentCli(argv: string[], env: NodeJS.ProcessEnv, fetchI
       return 0;
     }
   } catch (err) {
-    out(`relais-agent : ${(err as Error).message}\n`);
+    out(`factory-agent : ${(err as Error).message}\n`);
     return 1;
   }
   out(`${USAGE}\n`);

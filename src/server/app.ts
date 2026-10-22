@@ -6,15 +6,16 @@ import { streamSSE } from 'hono/streaming';
 import type { Tracker } from '../adapters/tracker/types.js';
 import type { BusMessage, EventBus } from '../core/bus.js';
 import type { Clock } from '../core/clock.js';
-import type { RelaisEvent } from '../core/types.js';
+import type { FactoryEvent } from '../core/types.js';
 import type { RunRecord, Store } from '../store/types.js';
 import { readStatic } from './static.js';
+import { PRODUCT_NAME } from '../product.js';
 
 export interface ServerDeps {
   store: Store;
   bus: EventBus;
   clock: Clock;
-  submit: (e: RelaisEvent) => void;
+  submit: (e: FactoryEvent) => void;
   isPaused: () => boolean;
   linearWebhook: (raw: string, headers: Record<string, string | undefined>) => { status: number };
   oauth?: { authorizeUrl: () => string; callback: (code: string, state: string) => Promise<void> };
@@ -70,7 +71,7 @@ export function createApp(d: ServerDeps): Hono {
       if (isPublicPath(c.req.method, c.req.path)) return next();
       const given = basicPassword(c.req.header('authorization'));
       if (given === undefined || !sameSecret(given, password)) {
-        return c.text('Authentification requise', 401, { 'WWW-Authenticate': 'Basic realm="Relais", charset="UTF-8"' });
+        return c.text('Authentification requise', 401, { 'WWW-Authenticate': `Basic realm="${PRODUCT_NAME}", charset="UTF-8"` });
       }
       return next();
     });
@@ -174,7 +175,7 @@ export function createApp(d: ServerDeps): Hono {
 
   const control = (type: 'control.pause' | 'control.resume') => (c: Context) => {
     const at = d.clock.now();
-    d.submit({ id: `ui:${type}:${at}`, type, at, projectId: '*', payload: {} } as RelaisEvent);
+    d.submit({ id: `ui:${type}:${at}`, type, at, projectId: '*', payload: {} } as FactoryEvent);
     return c.json({ ok: true });
   };
   app.post('/api/control/pause', control('control.pause'));

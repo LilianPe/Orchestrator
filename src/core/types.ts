@@ -52,7 +52,7 @@ export interface EventPayloads {
 
 export type EventType = keyof EventPayloads;
 
-export type RelaisEvent<T extends EventType = EventType> = {
+export type FactoryEvent<T extends EventType = EventType> = {
   [K in T]: {
     id: string;
     type: K;

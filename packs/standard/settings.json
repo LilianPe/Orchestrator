@@ -11,7 +11,7 @@
       "Bash(gh run view:*)", "Bash(gh run list:*)", "Bash(gh run rerun:*)",
       "Bash(npm:*)", "Bash(npx:*)", "Bash(node:*)", "Bash(pnpm:*)", "Bash(yarn:*)",
       "Bash(ls:*)", "Bash(cat:*)", "Bash(grep:*)", "Bash(rg:*)", "Bash(find:*)", "Bash(head:*)", "Bash(tail:*)", "Bash(wc:*)", "Bash(sleep:*)",
-      "Bash(relais-agent:*)"
+      "Bash(factory-agent:*)"
     ],
     "deny": [
       "Bash(gh pr merge:*)",
@@ -27,7 +27,7 @@
       "Bash(git push * master)",
       "Bash(git reset --hard origin:*)",
       "Bash(rm -rf /:*)",
-      "Read(~/.relais/**)"
+      "Read(~/.factory/**)"
     ]
   }
 }
