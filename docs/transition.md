@@ -119,7 +119,8 @@ Le premier ticket cité est celui qui touche le module en premier ou le plus ; l
 | `src/adapters/forge/types.ts` | Port `Forge` | adapter | ORC-181 (port gardé, nouvelles opérations), ORC-124 |
 | `src/adapters/forge/fake.ts` | `FakeForge` | adapter | ORC-181, ORC-225 |
 | `src/adapters/forge/gh-cli.ts` | Forge par la CLI `gh` | retirer | ORC-181 (après ORC-124, GitHub App) |
-| `src/adapters/forge/github-app.ts` | Forge GitHub App : JWT RS256, jeton d'installation limité au dépôt, PR/checks/reviews en REST et GraphQL | garder | ORC-124 (remplace `gh-cli` après ORC-125) |
+| `src/adapters/forge/github-app.ts` | Forge GitHub App : JWT RS256, jeton d'installation limité au dépôt, PR/checks/reviews en REST et GraphQL | garder | ORC-124 (remplace `gh-cli` après ORC-125), ORC-135 (authentification partagée) |
+| `src/adapters/forge/github-app-api.ts` | Lectures GitHub App de `factory doctor` : workflows et environnements protégés | garder | ORC-135 |
 | `src/adapters/forge/pr-poller.ts` | Relevé des PR toutes les 30 s | retirer | ORC-181, remplacé par ORC-134 (webhooks) et ORC-185 (réconciliation) |
 | `src/adapters/runner/types.ts` | Port `Runner`, `RunHandle`, `RunRequest` | garder | ORC-204 (port gardé), ORC-189 (devient AgentRuntime) |
 | `src/adapters/runner/claude-code.ts` | `ClaudeCodeRunner` : `claude -p` en sous-processus sur l'hôte, transcripts | adapter | ORC-136, ORC-204 (dans le runner isolé), ORC-205 (réglages imposés), ORC-217 (session sur volume), ORC-194 (`--max-budget-usd`), ORC-167 |
@@ -198,7 +199,8 @@ Le premier ticket cité est celui qui touche le module en premier ou le plus ; l
 
 | Module | Rôle | Statut | Ticket cible |
 |---|---|---|---|
-| `src/cli/factory.ts` | CLI `factory` : `init`, `up`, `plan`, `status`, `pause`, `resume`, `stop` | adapter | ORC-167 (`factory`), ORC-200 (`plan`, `pause`, `resume`, `--fake-runner` retirés), ORC-220 (`status`, `stop`) |
+| `src/cli/factory.ts` | CLI `factory` : `init`, `doctor`, `up`, `plan`, `status`, `pause`, `resume`, `stop` | adapter | ORC-167 (`factory`), ORC-135 (`doctor`), ORC-200 (`plan`, `pause`, `resume`, `--fake-runner` retirés), ORC-220 (`status`, `stop`) |
+| `src/cli/doctor.ts` | `factory doctor` : refuse un dépôt dont la CI peut exposer des secrets aux branches `factory/*` sans approbation humaine | adapter | ORC-135, ORC-208 (intégration à `init`) |
 | `src/cli/init.ts` | Assistant `init` (app OAuth, smee, base de connaissance, `.factory/workflow.yml`) | adapter | ORC-208 (GitHub App, `factory.yml`, détection), ORC-177, ORC-193, ORC-200 |
 | `src/cli/plan.ts` | `factory plan` : tickets délégués qui seraient pris | retirer | ORC-200 |
 | `src/cli/factory-agent.ts` | CLI de l'agent (`factory-agent`, nom temporaire) : `issue`, `search`, `kb search`, `ask` | retirer | ORC-192 (MCP de l'usine) |

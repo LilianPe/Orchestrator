@@ -145,16 +145,32 @@ function statusBucket(state: string): string {
   return 'pending';
 }
 
-export class GitHubAppForge implements Forge {
-  private readonly appId: string;
+/** GitHub API failure with its status, so callers can fail closed on 404/403. */
+export class GitHubApiError extends Error {
+  readonly status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = 'GitHubApiError';
+    this.status = status;
+  }
+}
+
+/**
+ * GitHub App authentication shared by the forge and the reads of `factory doctor`:
+ * RS256 JWT, repo-scoped installation token cached per repo, JSON REST calls.
+ * The token stays in memory: it is never logged and never appears in an error.
+ */
+export class GitHubAppAuth {
+  protected readonly appId: string;
   readonly #privateKey: string;
-  private readonly installationId: string | undefined;
-  private readonly apiBase: string;
-  private readonly http: HttpClient;
-  private readonly exec: Exec;
+  protected readonly installationId: string | undefined;
+  protected readonly apiBase: string;
+  protected readonly http: HttpClient;
+  protected readonly exec: Exec;
   private readonly resolveRepoFn: ((repoPath: string) => Promise<GitHubRepoRef>) | undefined;
-  private readonly now: () => number;
-  private readonly log: ((message: string) => void) | undefined;
+  protected readonly now: () => number;
+  protected readonly log: ((message: string) => void) | undefined;
   readonly #tokens = new Map<string, { token: string; expiresAt: number }>();
   private readonly inflight = new Map<string, Promise<string>>();
 
@@ -175,6 +191,97 @@ export class GitHubAppForge implements Forge {
     }
   }
 
+  protected async repo(repoPath: string): Promise<GitHubRepoRef> {
+    if (this.resolveRepoFn) return this.resolveRepoFn(repoPath);
+    const remote = await mustExec(this.exec, 'git', ['remote', 'get-url', 'origin'], { cwd: repoPath });
+    const repo = parseGitHubRemote(remote);
+    if (!repo) throw new Error(`remote origin de ${repoPath} n'est pas un dépôt GitHub`);
+    return repo;
+  }
+
+  protected async installationToken(repo: GitHubRepoRef): Promise<string> {
+    const key = `${repo.owner}/${repo.name}`;
+    const now = this.now();
+    const cached = this.#tokens.get(key);
+    if (cached && cached.expiresAt > now) return cached.token;
+    const pending = this.inflight.get(key);
+    if (pending) return pending;
+    const request = this.fetchInstallationToken(repo, now).finally(() => this.inflight.delete(key));
+    this.inflight.set(key, request);
+    return request;
+  }
+
+  private async fetchInstallationToken(repo: GitHubRepoRef, now: number): Promise<string> {
+    const jwt = createAppJwt(this.appId, this.#privateKey, now);
+    const installationId = this.installationId ?? (await this.findInstallationId(repo, jwt));
+    const data = await this.call<AccessTokenDto>(
+      'POST',
+      `/app/installations/${encodeURIComponent(installationId)}/access_tokens`,
+      jwt,
+      { repositories: [repo.name] },
+    );
+    if (!data?.token) throw new Error("GitHub App : réponse sans jeton d'installation");
+    const requested = data.expires_at ? Date.parse(data.expires_at) : Number.NaN;
+    const hardLimit = now + ONE_HOUR_MS;
+    const expiresAt = (Number.isFinite(requested) ? Math.min(requested, hardLimit) : hardLimit) - TOKEN_SAFETY_MARGIN_MS;
+    this.#tokens.set(`${repo.owner}/${repo.name}`, { token: data.token, expiresAt });
+    this.log?.(`GitHub App : jeton d'installation pour ${repo.owner}/${repo.name} (expire ${new Date(expiresAt).toISOString()})`);
+    return data.token;
+  }
+
+  private async findInstallationId(repo: GitHubRepoRef, jwt: string): Promise<string> {
+    const data = await this.call<{ id?: number }>(
+      'GET',
+      `/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}/installation`,
+      jwt,
+    );
+    if (!data?.id) throw new Error(`GitHub App : installation introuvable pour ${repo.owner}/${repo.name}`);
+    return String(data.id);
+  }
+
+  protected async call<T>(method: string, path: string, auth: string, body?: unknown): Promise<T> {
+    const res = await this.http(`${this.apiBase}${path}`, {
+      method,
+      headers: {
+        accept: 'application/vnd.github+json',
+        authorization: `Bearer ${auth}`,
+        'x-github-api-version': '2022-11-28',
+        'user-agent': 'factory-orchestrator',
+        ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+    const text = await res.text();
+    let data: unknown;
+    try {
+      data = text ? JSON.parse(text) : undefined;
+    } catch {
+      data = undefined;
+    }
+    if (!res.ok) {
+      const message =
+        typeof data === 'object' && data !== null && 'message' in data
+          ? String((data as { message: unknown }).message)
+          : text.slice(0, 200);
+      throw new GitHubApiError(res.status, `GitHub API ${method} ${path.split('?')[0]}: ${res.status}${message ? ` ${message}` : ''}`);
+    }
+    return data as T;
+  }
+
+  /** Resolves repo + token, then calls the API on a path built from owner/name. */
+  protected async request<T>(
+    repoPath: string,
+    method: string,
+    path: (repo: GitHubRepoRef) => string,
+    body?: unknown,
+  ): Promise<T> {
+    const repo = await this.repo(repoPath);
+    const token = await this.installationToken(repo);
+    return this.call<T>(method, path(repo), token, body);
+  }
+}
+
+export class GitHubAppForge extends GitHubAppAuth implements Forge {
   async findPr(repoPath: string, branch: string): Promise<PrInfo | undefined> {
     const repo = await this.repo(repoPath);
     const token = await this.installationToken(repo);
@@ -237,82 +344,5 @@ export class GitHubAppForge implements Forge {
       if (bucket === 'fail') failedChecks.push(status.context);
     }
     return { checks: aggregateChecks(buckets), failedChecks };
-  }
-
-  private async repo(repoPath: string): Promise<GitHubRepoRef> {
-    if (this.resolveRepoFn) return this.resolveRepoFn(repoPath);
-    const remote = await mustExec(this.exec, 'git', ['remote', 'get-url', 'origin'], { cwd: repoPath });
-    const repo = parseGitHubRemote(remote);
-    if (!repo) throw new Error(`remote origin de ${repoPath} n'est pas un dépôt GitHub`);
-    return repo;
-  }
-
-  private async installationToken(repo: GitHubRepoRef): Promise<string> {
-    const key = `${repo.owner}/${repo.name}`;
-    const now = this.now();
-    const cached = this.#tokens.get(key);
-    if (cached && cached.expiresAt > now) return cached.token;
-    const pending = this.inflight.get(key);
-    if (pending) return pending;
-    const request = this.fetchInstallationToken(repo, now).finally(() => this.inflight.delete(key));
-    this.inflight.set(key, request);
-    return request;
-  }
-
-  private async fetchInstallationToken(repo: GitHubRepoRef, now: number): Promise<string> {
-    const jwt = createAppJwt(this.appId, this.#privateKey, now);
-    const installationId = this.installationId ?? (await this.findInstallationId(repo, jwt));
-    const data = await this.call<AccessTokenDto>(
-      'POST',
-      `/app/installations/${encodeURIComponent(installationId)}/access_tokens`,
-      jwt,
-      { repositories: [repo.name] },
-    );
-    if (!data?.token) throw new Error("GitHub App : réponse sans jeton d'installation");
-    const requested = data.expires_at ? Date.parse(data.expires_at) : Number.NaN;
-    const hardLimit = now + ONE_HOUR_MS;
-    const expiresAt = (Number.isFinite(requested) ? Math.min(requested, hardLimit) : hardLimit) - TOKEN_SAFETY_MARGIN_MS;
-    this.#tokens.set(`${repo.owner}/${repo.name}`, { token: data.token, expiresAt });
-    this.log?.(`GitHub App : jeton d'installation pour ${repo.owner}/${repo.name} (expire ${new Date(expiresAt).toISOString()})`);
-    return data.token;
-  }
-
-  private async findInstallationId(repo: GitHubRepoRef, jwt: string): Promise<string> {
-    const data = await this.call<{ id?: number }>(
-      'GET',
-      `/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}/installation`,
-      jwt,
-    );
-    if (!data?.id) throw new Error(`GitHub App : installation introuvable pour ${repo.owner}/${repo.name}`);
-    return String(data.id);
-  }
-
-  private async call<T>(method: string, path: string, auth: string, body?: unknown): Promise<T> {
-    const res = await this.http(`${this.apiBase}${path}`, {
-      method,
-      headers: {
-        accept: 'application/vnd.github+json',
-        authorization: `Bearer ${auth}`,
-        'x-github-api-version': '2022-11-28',
-        'user-agent': 'factory-orchestrator',
-        ...(body === undefined ? {} : { 'content-type': 'application/json' }),
-      },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    });
-    const text = await res.text();
-    let data: unknown;
-    try {
-      data = text ? JSON.parse(text) : undefined;
-    } catch {
-      data = undefined;
-    }
-    if (!res.ok) {
-      const message =
-        typeof data === 'object' && data !== null && 'message' in data
-          ? String((data as { message: unknown }).message)
-          : text.slice(0, 200);
-      throw new Error(`GitHub API ${method} ${path.split('?')[0]}: ${res.status}${message ? ` ${message}` : ''}`);
-    }
-    return data as T;
   }
 }

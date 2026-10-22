@@ -12,6 +12,7 @@ Toutes les commandes `relais` lisent `RELAIS_HOME` (défaut `~/.relais`) et `con
 | Commande | Rôle | Démon requis |
 |---|---|---|
 | `relais init` | Configurer Relais pour le dépôt courant. | non |
+| `factory doctor [repo]` | Refuser un dépôt dont la CI peut exposer des secrets aux branches de l'usine. | non (GitHub App) |
 | `relais up [--fake-runner]` | Démarrer le démon. | — |
 | `relais plan` | Lister les tickets délégués et dire lesquels seraient pris. | non (Linear connecté) |
 | `relais status` | État de l'instance en cours. | oui |
@@ -47,6 +48,17 @@ Démarre le démon au premier plan : serveur HTTP (interface, API, webhooks, OAu
 `Ctrl+C` (SIGINT) ou SIGTERM : arrêt propre (les runs en cours sont interrompus, puis repris en main au prochain démarrage).
 
 `--fake-runner` : remplace Claude Code par un runner simulé qui répond « Terminé. » sans rien coûter. Pour tester l'interface et le câblage Linear.
+
+### `factory doctor [repo]`
+
+Contrôle avant de confier un dépôt : refuse (code retour `1`) une CI qui peut exposer des secrets à une branche `factory/*` sans approbation humaine, et accepte (code `0`) une CI sans secrets ou dont les jobs à secrets sont sous un environnement protégé avec required reviewers.
+
+- Lit `.github/workflows` et `GET /repos/{owner}/{repo}/environments` avec la GitHub App : pas de repli `gh`.
+- Résout `owner/name` par `git remote get-url origin` ; dépôt courant par défaut.
+- `--json` : rapport machine (workflows, déclencheurs, secrets oui/non, environnements, verdict).
+- N'affiche jamais de secret ; en cas de doute (YAML ambigu, `on` dynamique, secrets indirects, API en erreur), refuse.
+
+Règle complète, exemples et limites : [`github.md`](github.md).
 
 ### `relais plan`
 

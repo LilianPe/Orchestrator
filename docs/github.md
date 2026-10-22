@@ -35,6 +35,7 @@ Une valeur de `config.yaml` l'emporte sur la variable d'environnement. Si une se
    - **Pull requests** : lecture/écriture ;
    - **Checks** : lecture ;
    - **Commit statuses** : lecture ;
+   - **Actions** : lecture (lister les environnements et leurs règles de protection, pour `factory doctor`) ;
    - **Metadata** : lecture (obligatoire pour toute App).
    Aucune permission d'**administration**, ni `Actions` en écriture, ni `Workflows`.
 4. Créez l'App, notez son **App ID**, puis **Generate a private key**. Placez le `.pem` hors du dépôt, en mode `0600` (par exemple `~/.relais/github-app.pem`).
@@ -119,6 +120,80 @@ Le pack interdit aux agents `gh pr merge`, le force-push et le push direct sur `
 - ne pas mettre le compte de Relais dans les exceptions (*bypass*).
 
 Le dépôt de connaissance (`relais-knowledge`) mérite la même protection : les runs `learn` y ouvrent des PR, un humain les merge.
+
+## `factory doctor` : secrets de CI et branches de l'usine
+
+`factory doctor [repo] [--json]` (dépôt courant par défaut) vérifie, avant de confier un dépôt, qu'aucune CI ne peut exposer de secrets à une branche `factory/*`. Le contrôle vit dans `doctor`, pas seulement dans le skill `fix-ci` : une PR de l'usine ne doit jamais déclencher un job qui lit les secrets du dépôt sans qu'un humain ait approuvé.
+
+La commande résout `owner/name` avec `git remote get-url origin`, puis lit avec la GitHub App :
+
+- `.github/workflows/*.yml` et `*.yaml` (Contents API, branche par défaut) ;
+- `GET /repos/{owner}/{repo}/environments` et leurs `protection_rules`.
+
+Elle exige la GitHub App (`github.*` ou `GH_APP_*`) : aucun repli `gh` pour ce contrôle. Code retour `0` si le dépôt est accepté, `1` s'il est refusé ou si une lecture échoue.
+
+### Règle
+
+Un workflow **avec secrets** (`secrets.*`, `${{ secrets.X }}`, `secrets: inherit` ou une clé `secrets:`) est refusé s'il peut tourner sur une branche de l'usine :
+
+- `pull_request` et `pull_request_target` : toujours considérés à risque, car une PR de `factory/*` peut les déclencher ; le filtre `branches` d'une pull request porte sur la branche de base, pas sur la branche de tête ;
+- `push` sans filtre : toutes les branches ;
+- `push` dont le filtre `branches` peut atteindre `factory/*` (`factory/**`, `*/*`, `**`…) ou dont `branches-ignore` ne l'exclut pas entièrement ;
+- `workflow_run` sans filtre, ou avec un filtre qui atteint `factory/*` (protection supplémentaire de la même famille de risque).
+
+À l'inverse, un `push` limité à des branches hors usine (`main`, `release/*`) ou à des tags seulement ne voit pas les secrets sur une branche `factory/*`.
+
+Sont acceptés :
+
+1. une CI dédiée **sans secrets** sur ces branches ;
+2. un workflow avec secrets dont **tous les jobs qui voient un secret** sont rattachés à un environnement GitHub dont les `protection_rules` contiennent `required_reviewers` avec au moins un reviewer : l'approbation humaine bloque le job avant qu'il ne lise le secret ;
+3. un workflow avec secrets qui ne tourne que sur des branches hors usine, ou seulement sur des tags.
+
+En cas de doute, `doctor` refuse : YAML invalide ou ambigu (multi-document, `on` dynamique, filtres mal typés), environnement introuvable ou sans required reviewers, clé `secrets:` (workflow réutilisable) sans environnement protégé, erreur de l'API GitHub. `GITHUB_TOKEN` compte comme un secret.
+
+### Exemples
+
+Refus :
+
+```text
+$ factory doctor
+Workflows GitHub Actions : 1
+
+.github/workflows/ci.yml
+  déclencheurs : pull_request
+  secrets : oui
+  environnements : aucun
+  environnement protégé : non
+  verdict : refusé — secrets exposés sur les branches de l'usine (pull_request peut exécuter la CI sur une branche `factory/*`) sans approbation humaine
+  ...
+Résultat : refusé — 1 workflow(s) sur 1 peuvent exposer des secrets aux branches de l'usine.
+```
+
+Acceptation avec approbation humaine (`ci-protected` a une règle `required_reviewers`) :
+
+```yaml
+on: pull_request
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    environment: ci-protected
+    steps:
+      - run: npm test
+        env:
+          TOKEN: ${{ secrets.NPM_TOKEN }}
+```
+
+`factory doctor` affiche alors `secrets : oui`, `environnement protégé : oui` et `verdict : accepté`.
+
+`--json` produit le même verdict dans un objet `{ repoPath, accepted, workflows: [{ path, triggers, secrets, environments, protected, verdict, reasons }] }`, sans aucune valeur de secret.
+
+### Limites
+
+- La lecture porte sur la **branche par défaut** (Contents API sans `ref`) : les workflows de `pull_request` sont bien ceux que GitHub utilise pour une PR de `factory/*` ; un workflow qui n'existerait que sur une branche poussée n'est pas vu.
+- L'App ne peut pas lister les secrets du dépôt : `doctor` détecte les **références** aux secrets, pas leur existence.
+- Les workflows réutilisables appelés ne sont pas téléchargés : `secrets: inherit` est traité comme un secret, et un workflow réutilisable appelé sans `secrets:` ne reçoit aucun secret.
+- Ce contrôle ne remplace pas la protection de branche : il garantit seulement que la CI ne lit pas de secret sur une branche d'usine sans approbation.
+- Permission requise : **Actions : lecture** (présente dans [`github-app-manifest.json`](github-app-manifest.json)) ; c'est la permission que GitHub associe à `GET /repos/{owner}/{repo}/environments`. Une App créée avant ORC-135 doit l'ajouter, sinon cette lecture répond 403 et `doctor` refuse le dépôt.
 
 ## CI
 
