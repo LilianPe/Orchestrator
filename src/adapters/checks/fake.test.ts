@@ -1,5 +1,20 @@
 import { describe, expect, it } from 'vitest';
+import { describeCheckRunnerContract, type FailingCommand } from '../../../test/contracts/check-runner.contract.js';
 import { FakeCheckRunner } from './fake.js';
+
+describeCheckRunnerContract('FakeCheckRunner', () => {
+  const fails: [FailingCommand, FailingCommand] = [
+    { command: 'npm test', exitCode: 1, output: '1 test failed' },
+    { command: 'npm run lint', exitCode: 2, output: 'lint: 2 errors' },
+  ];
+  const slow = 'npm run e2e';
+  const failures = [...fails, { command: slow, exitCode: null, output: '' }];
+  const checks = new FakeCheckRunner(async (_cwd, commands) => {
+    const failed = commands.flatMap((c) => failures.filter((f) => f.command === c));
+    return { ok: failed.length === 0, failures: failed };
+  });
+  return { checks, cwd: '/w', pass: 'npm run build', fails, slow };
+});
 
 describe('FakeCheckRunner', () => {
   it('passes by default and records each call', async () => {
