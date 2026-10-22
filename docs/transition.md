@@ -163,6 +163,10 @@ Le premier ticket cité est celui qui touche le module en premier ou le plus ; l
 |---|---|---|---|
 | `src/store/types.ts` | Port `Store` synchrone | adapter | ORC-132 (async, puis `PgStore`), ORC-178 (`queue`, `echoes`, `costSince` retirés) |
 | `src/store/sqlite-store.ts` | `SqliteStore` sur `node:sqlite` | retirer | ORC-132 (Postgres), retrait ORC-178 |
+| `src/store/pg/schema.ts` | Schéma Drizzle des 12 tables du moteur | garder | ORC-132 |
+| `src/store/pg/types.ts` | Port `AsyncStore` et `DequeuedEffect` | garder | ORC-132 |
+| `src/store/pg/pg-store.ts` | `PgStore` asynchrone sur Postgres | garder | ORC-132 |
+| `src/store/pg/migrate.ts` | Application des migrations Drizzle | garder | ORC-132 |
 
 ### `src/config/`
 
