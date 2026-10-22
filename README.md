@@ -67,7 +67,7 @@ Sans tokens, pour tester l'interface : `relais up --fake-runner`.
 Pages des tickets de décision : question, options, preuves, recommandation, puis la décision du dev, écrite aussi dans le ticket.
 - [ORC-128 — Options de `claude -p`](docs/decisions/ORC-128.md) : ignorer les réglages du dépôt, couper les outils web intégrés, reprendre la session d'un ticket.
 - [ORC-129 : inbox + outbox maison ou DBOS Transact](docs/decisions/ORC-129.md) : décision (option maison), spike `kill -9` et rejeu sur les deux options, impact sur les tickets du moteur.
-- [ORC-138 — Invariants de `decide` et doublons des effets](docs/decisions/ORC-138.md) : proposition, à trancher. Les 12 invariants testables par propriété et la table d'idempotence des 7 effets externes.
+- [ORC-138 — Invariants de `decide` et doublons des effets](docs/decisions/ORC-138.md) : tranché le 2026-10-22, toutes les recommandations retenues. Les 12 invariants testables par propriété et la table d'idempotence des 7 effets externes.
 
 ### Contribuer
 
