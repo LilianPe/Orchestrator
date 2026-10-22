@@ -211,6 +211,45 @@ jobs:
     expect(result.code).toBe(0);
   });
 
+  it('accepts branches filtered to everything except factory/*', async () => {
+    const ci = `on:
+  push:
+    branches: ["**", "!factory/**"]
+jobs:
+  test:
+    steps:
+      - run: echo "\${{ secrets.NPM_TOKEN }}"
+`;
+    const result = await doctor([workflow(ci)]);
+    expect(result.code).toBe(0);
+  });
+
+  it('refuses a filter that re-includes a factory branch after excluding it', async () => {
+    const ci = `on:
+  push:
+    branches: ["**", "!factory/**", "factory/keep"]
+jobs:
+  test:
+    steps:
+      - run: echo "\${{ secrets.NPM_TOKEN }}"
+`;
+    const result = await doctor([workflow(ci)]);
+    expect(result.code).toBe(1);
+  });
+
+  it('refuses branches-ignore that re-includes a factory branch', async () => {
+    const ci = `on:
+  push:
+    branches-ignore: ["factory/**", "!factory/keep"]
+jobs:
+  test:
+    steps:
+      - run: echo "\${{ secrets.NPM_TOKEN }}"
+`;
+    const result = await doctor([workflow(ci)]);
+    expect(result.code).toBe(1);
+  });
+
   it('accepts a tags-only push, which does not run on branches', async () => {
     const ci = `on:
   push:

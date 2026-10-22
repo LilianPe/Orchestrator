@@ -269,19 +269,43 @@ function coversAllFactoryBranches(pattern: string): boolean {
 }
 
 function branchesReachFactory(patterns: string[]): boolean {
-  const positives = patterns.filter((pattern) => !pattern.startsWith('!'));
-  const negatives = patterns.filter((pattern) => pattern.startsWith('!')).map((pattern) => pattern.slice(1));
-  if (negatives.some(coversAllFactoryBranches)) return false;
-  if (positives.length === 0) return true;
-  return positives.some(canMatchFactory);
+  // GitHub applies patterns in order: a later negative can exclude a positive,
+  // and a later positive can re-include a branch. Only positives after the last
+  // "exclude every factory branch" pattern can bring factory branches back.
+  let lastCover = -1;
+  for (let index = 0; index < patterns.length; index++) {
+    const pattern = patterns[index]!;
+    if (pattern.startsWith('!') && coversAllFactoryBranches(pattern.slice(1))) lastCover = index;
+  }
+  if (lastCover === -1) {
+    const positives = patterns.filter((pattern) => !pattern.startsWith('!'));
+    return positives.length === 0 || positives.some(canMatchFactory);
+  }
+  for (let index = lastCover + 1; index < patterns.length; index++) {
+    const pattern = patterns[index]!;
+    if (!pattern.startsWith('!') && canMatchFactory(pattern)) return true;
+  }
+  return false;
+}
+
+function branchesIgnoreReachFactory(patterns: string[]): boolean {
+  let lastCover = -1;
+  for (let index = 0; index < patterns.length; index++) {
+    const pattern = patterns[index]!;
+    if (!pattern.startsWith('!') && coversAllFactoryBranches(pattern)) lastCover = index;
+  }
+  if (lastCover === -1) return true;
+  for (let index = lastCover + 1; index < patterns.length; index++) {
+    const pattern = patterns[index]!;
+    if (pattern.startsWith('!') && canMatchFactory(pattern.slice(1))) return true;
+  }
+  return false;
 }
 
 /** Branch push: an absent filter means all branches; a tags-only filter means no branch push. */
 function pushReachesFactory(filters: TriggerFilters): boolean {
   if (filters.branches !== undefined) return branchesReachFactory(filters.branches);
-  if (filters.branchesIgnore !== undefined) {
-    return !filters.branchesIgnore.some(coversAllFactoryBranches);
-  }
+  if (filters.branchesIgnore !== undefined) return branchesIgnoreReachFactory(filters.branchesIgnore);
   if (filters.tags !== undefined || filters.tagsIgnore !== undefined) return false;
   return true;
 }
