@@ -15,11 +15,13 @@ import { SqliteStore } from '../store/sqlite-store.js';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { runInit } from './init.js';
+import { runDoctorCommand } from './doctor.js';
 import { formatPlan, planRows } from './plan.js';
 import { PRODUCT_NAME } from '../product.js';
 
 const USAGE = `Usage : factory <commande>
   init               configurer ${PRODUCT_NAME} pour le dépôt courant
+  doctor [repo] [--json] refuser un dépôt dont la CI peut exposer des secrets aux branches de l'usine
   up [--fake-runner] démarrer ${PRODUCT_NAME} (interface sur http://localhost:4100)
   plan               voir quels tickets délégués seraient pris
   status             état de l'instance en cours
@@ -33,7 +35,10 @@ function uiAuth(): Record<string, string> {
 }
 
 async function main(): Promise<number> {
-  const { positionals, values } = parseArgs({ allowPositionals: true, options: { 'fake-runner': { type: 'boolean' } } });
+  const { positionals, values } = parseArgs({
+    allowPositionals: true,
+    options: { 'fake-runner': { type: 'boolean' }, json: { type: 'boolean' } },
+  });
   const [cmd, arg] = positionals;
   const home = factoryHome();
   const cfg = loadInstance(home);
@@ -59,6 +64,8 @@ async function main(): Promise<number> {
       rl.close();
       return 0;
     }
+    case 'doctor':
+      return runDoctorCommand({ repoPath: arg ?? process.cwd(), home, json: values.json });
     case 'up': {
       const app = await startFactory({ home, fakeRunner: values['fake-runner'] });
       console.log(`${PRODUCT_NAME} tourne : ${app.url}  (Ctrl+C pour arrêter)`);
