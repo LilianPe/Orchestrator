@@ -57,15 +57,15 @@ Relais a été renommé d'un bloc, sans changement de comportement : seuls les n
 - `src/cli/factory.ts`, `src/cli/init.ts`, `src/cli/factory-agent.ts` (aide, questions et messages, titre de l'`INDEX.md` créé par `init`) ;
 - `src/app/bootstrap.ts` (journaux du démon), `src/core/orchestrator.ts` (messages Linear), `src/server/app.ts` (realm HTTP Basic) ;
 - `web/src/App.tsx` (en-tête) et `web/vite.config.ts`, qui remplace `%PRODUCT_NAME%` dans le titre de `web/index.html` au build et en dev ;
-- le `Dockerfile`, qui écrit l'identité git de l'image depuis `dist/src/product.js` après le build ; `compose.yaml` passe `GIT_AUTHOR_NAME` et `GIT_COMMITTER_NAME` telles quelles depuis le shell, sans défaut : absentes, elles ne sont pas définies dans le conteneur et ce nom s'applique, `docker compose exec` compris. Le committer ne reprend plus `GIT_AUTHOR_NAME` : définissez les deux pour un autre nom.
+- le `Dockerfile`, qui écrit l'identité git de l'image depuis `dist/src/product.js` après le build ; `compose.yaml` passe `GIT_AUTHOR_NAME` et `GIT_COMMITTER_NAME` telles quelles depuis le shell, sans défaut : absentes, elles ne sont pas définies dans le conteneur et ce nom s'applique, `docker compose exec` compris. Le committer ne reprend plus `GIT_AUTHOR_NAME` : définissez les deux pour un autre nom. Ne les définissez jamais vides (`GIT_AUTHOR_NAME=` dans `.env` ou le shell) : la valeur vide passe telle quelle et git refuse alors tout commit (« empty ident name ») ; retirez la ligne pour garder le nom de l'image.
 
 Les textes du pack (`packs/standard/`, skills et hook) ne peuvent pas importer la constante : ils disent « l'usine », sans nom propre.
 
-**Occurrences de `relais` qui restent.** Dans les fichiers suivis par git hors de `docs/` et du `README.md` (recherche sans casse), les lignes ci-dessous, vérifiées par `src/product.test.ts` ; une ligne de transition porte la marque « transition, à retirer », que le test accepte :
+**Occurrences de `relais` qui restent.** Dans les fichiers suivis par git hors de `docs/` et du `README.md` (recherche sans casse), les lignes ci-dessous, vérifiées par `src/product.test.ts` ; les lignes de transition portent la marque « transition, à retirer », que le test accepte :
 
 | Où | Pourquoi |
 |---|---|
-| `src/product.test.ts` | le motif `/relais/i` que le test cherche dans ces fichiers ; il échoue si l'ancien nom revient ailleurs |
+| `src/product.test.ts` | le motif `/relais/i` que le test cherche dans ces fichiers ; il échoue si l'ancien nom revient ailleurs sur une ligne sans la marque |
 | `src/adapters/runner/claude-code.ts` (`DAEMON_ONLY`) et son test | le préfixe `RELAIS_` encore filtré de l'environnement des runs ; transition, à retirer quand plus aucune instance n'a d'ancienne variable |
 
 Dans `docs/` et le `README.md`, l'ancien nom reste là où il est juste : les URL du dépôt GitHub `LilianPe/relais` (non renommé), le tag `relais-v1-final` et l'état de départ décrit sur cette page, et les autres pages de `docs/` et le `README.md`, qui décrivent encore l'état de départ et sont réécrites ticket par ticket (ORC-202).
