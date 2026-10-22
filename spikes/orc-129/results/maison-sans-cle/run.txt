@@ -1,0 +1,76 @@
+
+=== fresh database spike_maison_sans_cle
+NOTICE:  database "spike_maison_sans_cle" does not exist, skipping
+
+=== setup
+
+=== webhook delivered twice (same delivery id)
+[maison 41382] inbox write linear:delivery-1: inserted
+[maison 41394] inbox write linear:delivery-1: duplicate, ignored
+
+=== worker 1 starts; kill -9 as soon as the external API has applied the effect
+worker 1 killed (-9) while the API holds its response
+
+=== worker 2 restarts (env: none)
+recovered to done in 8.1 s after restart
+
+=== external API calls
+{"received":2,"applied":2}
+{"at":"2026-10-21T21:09:33.245Z","type":"received","key":"ORC-1:1:0","body":"{\"body\":\"Pris en compte : Ajouter un bouton\",\"kind\":\"post_comment\",\"ticket\":\"ORC-1\"}"}
+{"at":"2026-10-21T21:09:33.245Z","type":"applied","key":"ORC-1:1:0","commentId":"comment-1"}
+{"at":"2026-10-21T21:09:38.320Z","type":"received","key":"ORC-1:1:0","body":"{\"body\":\"Pris en compte : Ajouter un bouton\",\"kind\":\"post_comment\",\"ticket\":\"ORC-1\"}"}
+{"at":"2026-10-21T21:09:38.320Z","type":"applied","key":"ORC-1:1:0","commentId":"comment-2"}
+
+=== state
+{
+ "tickets": [
+  {
+   "id": "ORC-1",
+   "seq": 2,
+   "state": {
+    "status": "done",
+    "commentId": "comment-2"
+   }
+  }
+ ],
+ "outbox": [
+  {
+   "id": "ORC-1:1:0",
+   "status": "done",
+   "attempts": 2,
+   "result": {
+    "commentId": "comment-2"
+   }
+  }
+ ],
+ "inbox": [
+  {
+   "id": "linear:delivery-1",
+   "processed": true
+  },
+  {
+   "id": "effect:ORC-1:1:0",
+   "processed": true
+  }
+ ]
+}
+
+=== replay of the journal
+identique  ORC-1#1  linear:delivery-1
+identique  ORC-1#2  effect:ORC-1:1:0
+rejeu : 2 décision(s), 0 écart(s)
+
+=== negative control: tamper with one recorded decision, the replay must report it
+identique  ORC-1#1  linear:delivery-1
+ÉCART  ORC-1#2  effect:ORC-1:1:0
+rejeu : 2 décision(s), 1 écart(s)
+--- worker-1.log
+[maison 41406] worker up
+[maison 41406] decided linear:delivery-1 -> seq 1, 1 effect(s)
+[maison 41406] executing ORC-1:1:0 (attempt 1)
+--- worker-2.log
+[maison 41428] worker up
+[maison 41428] executing ORC-1:1:0 (attempt 2)
+[maison 41428] effect ORC-1:1:0 done -> comment-2
+[maison 41428] decided effect:ORC-1:1:0 -> seq 2, 0 effect(s)
+exit 0

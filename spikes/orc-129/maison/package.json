@@ -1,0 +1,9 @@
+{
+  "name": "orc-129-spike-maison",
+  "private": true,
+  "type": "module",
+  "description": "Throwaway ORC-129 spike: homegrown inbox + outbox on Postgres. Not part of the build, the tests or the CI.",
+  "dependencies": {
+    "pg": "8.16.3"
+  }
+}
