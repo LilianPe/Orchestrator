@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { serve } from '@hono/node-server';
 import { GhCliForge } from '../adapters/forge/gh-cli.js';
+import { GitHubAppForge } from '../adapters/forge/github-app.js';
 import { PrPoller } from '../adapters/forge/pr-poller.js';
 import { ClaudeCodeRunner } from '../adapters/runner/claude-code.js';
 import { FakeRunner } from '../adapters/runner/fake.js';
@@ -16,6 +17,7 @@ import { LinearTracker } from '../adapters/tracker/linear/tracker.js';
 import { isUsableWebhookSecret } from '../adapters/tracker/linear/webhook.js';
 import { GitWorkspaces } from '../adapters/workspace/git-workspaces.js';
 import { homePaths, loadInstance, loadSecrets, saveSecrets } from '../config/instance.js';
+import { resolveGithubApp } from '../config/github-app.js';
 import { writeRunSettings } from '../config/run-settings.js';
 import { loadWorkflow } from '../config/load-workflow.js';
 import { EventBus } from '../core/bus.js';
@@ -54,7 +56,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
   const packDir = join(root, 'packs/standard');
   const webDir = join(root, 'web/dist');
   const instance = loadInstance(o.home);
-  const uiPassword = isLoopbackHost(instance.host) ? undefined : (o.env ?? process.env)['FACTORY_UI_PASSWORD'] || undefined;
+  const env = o.env ?? process.env;
+  const uiPassword = isLoopbackHost(instance.host) ? undefined : env['FACTORY_UI_PASSWORD'] || undefined;
   if (!isLoopbackHost(instance.host) && !uiPassword) {
     throw new Error(
       `host: ${instance.host} expose l'interface et l'API de ${PRODUCT_NAME} hors de cette machine. ` +
@@ -64,6 +67,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
   const paths = homePaths(o.home);
   const port = o.port ?? instance.port;
   const baseUrl = instance.publicUrl ?? `http://localhost:${port}`;
+  const githubApp = resolveGithubApp(instance, env);
 
   const projects: ProjectRuntime[] = instance.projects.map((p) => {
     const projectFile = join(p.repoPath, '.factory/workflow.yml');
@@ -115,7 +119,17 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
   const scheduler = new Scheduler(store, { dev: limits?.parallelSessions ?? 3, questions: limits?.questionSessions ?? 2 });
   const runner: Runner = o.fakeRunner ? new FakeRunner() : new ClaudeCodeRunner({ transcriptsDir: paths.transcripts });
   const workspaces = new GitWorkspaces({ root: paths.workspaces, knowledgeRepo: instance.knowledge?.repoPath });
-  const forge = new GhCliForge();
+  const forge = githubApp
+    ? new GitHubAppForge({ ...githubApp, log })
+    : new GhCliForge();
+  if (githubApp) {
+    log(
+      `forge GitHub : GitHub App ${githubApp.appId} (jetons d'installation limités au dépôt du run` +
+        `${githubApp.installationId ? `, installation ${githubApp.installationId}` : ", installation résolue par dépôt"})`,
+    );
+  } else {
+    log('forge GitHub : CLI gh (repli de migration ; GH_TOKEN reste requis par les agents jusqu’à ORC-125)');
+  }
   const kb = instance.knowledge ? new KnowledgeBase(instance.knowledge.repoPath) : undefined;
 
   const orchestrator = new Orchestrator({

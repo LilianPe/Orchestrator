@@ -17,7 +17,10 @@ Les deux fichiers d'instance sont lus **au démarrage** de `relais up` : redéma
 | `RELAIS_HOME` | toutes les commandes `relais` | `$HOME/.relais` | Répertoire de l'instance (voir [`installation.md`](installation.md#le-répertoire-home-du-démon)). | non |
 | `RELAIS_UI_PASSWORD` | `relais up`, `relais status/pause/resume/stop` | — | Mot de passe HTTP Basic de l'interface et de l'API. **Obligatoire** dès que `host` n'est pas une adresse de bouclage : sans lui, `relais up` refuse de démarrer. Ignoré quand `host` est en bouclage. Voir [`interface-et-securite.md`](interface-et-securite.md). | **oui** |
 | `ANTHROPIC_API_KEY` | `claude` (hérité par les runs) | — | Authentification de Claude Code si vous n'utilisez pas `claude login`. Obligatoire en Docker. | **oui** |
-| `GH_TOKEN` | `gh` et, en Docker, git via `gh auth setup-git` | — | Authentification GitHub si vous n'utilisez pas `gh auth login`. Obligatoire en Docker. | **oui** |
+| `GH_TOKEN` | `gh`, les agents et, en Docker, git via `gh auth setup-git` | — | Authentification GitHub des agents et du repli `gh` du démon. Obligatoire en Docker tant que ORC-125 n'a pas retiré `gh`. | **oui** |
+| `GH_APP_ID` | démon (repli de `github.appId`) | — | Identifiant de la GitHub App d'usine. | non |
+| `GH_APP_KEY` | démon (repli de `github.privateKey`) | — | Clé privée PEM de la GitHub App, ou chemin vers le fichier `.pem`. | **oui** |
+| `GH_APP_INSTALLATION_ID` | démon (repli de `github.installationId`) | — | Installation de l'App à utiliser ; facultatif, le démon sait la retrouver par dépôt. | non |
 | `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME`, `GIT_COMMITTER_EMAIL` | git (hérité par les runs) | identité git de la machine ; en Docker `Relais <relais@localhost>` | Identité des commits des agents. | non |
 | `PATH` | le démon | — | Doit contenir `claude`, `gh`, `git`. Relais y ajoute `bin/` de Relais pour les runs. | non |
 
@@ -38,6 +41,7 @@ Variables **posées par Relais** dans l'environnement de chaque run (à ne pas d
 | `projects` | liste de `{ id, repoPath, linearTeamKey }` | `[]` | Un projet = un dépôt local + une équipe Linear. Voir [`projets-et-workspaces.md`](projets-et-workspaces.md). |
 | `limits.perDayUsd` | nombre > 0 | — (pas de plafond) | Budget journalier de toute l'instance, en dollars. Voir [Budget journalier](#budget-journalier). |
 | `knowledge.repoPath` | chemin | — | Clone local du dépôt de base de connaissance. Absent : les jobs `learn` et `remember` sont ignorés et `relais-agent kb search` ne renvoie rien. |
+| `github` | `{ appId, privateKey, installationId?, webhookSecret? }` | — | GitHub App du démon. Absent : repli sur la CLI `gh`. Voir [GitHub App](#github-app). |
 
 Exemple :
 
@@ -55,7 +59,28 @@ limits:
   perDayUsd: 40
 knowledge:
   repoPath: /home/moi/.relais/knowledge
+github:
+  appId: "123456"
+  privateKey: /home/moi/.relais/github-app.pem
+  installationId: "987654" # facultatif
 ```
+
+### GitHub App
+
+La section `github` configure l'identité du **démon** sur GitHub. Elle est facultative : sans elle, Relais utilise la CLI `gh` et `GH_TOKEN` comme avant (repli de migration, retiré après ORC-125).
+
+| Clé | Type | Défaut | Effet |
+|---|---|---|---|
+| `github.appId` | texte ou entier | — | App ID de la GitHub App. |
+| `github.privateKey` | texte | — | Clé privée PEM **inline**, ou chemin vers un fichier `.pem` (recommandé, mode `0600`). |
+| `github.installationId` | texte ou entier | découverte par dépôt | Installation à utiliser. Absent : le démon appelle `GET /repos/{owner}/{repo}/installation`. |
+| `github.webhookSecret` | texte | — | Réservé aux futurs webhooks GitHub ; non utilisé par le relevé actuel. |
+
+Les variables `GH_APP_ID`, `GH_APP_KEY` et `GH_APP_INSTALLATION_ID` servent de repli, champ par champ. Une configuration partielle (`appId` sans clé, ou l'inverse) empêche le démarrage : Relais ne bascule pas silencieusement sur `gh`.
+
+Le démon échange un JWT RS256 contre un **jeton d'installation limité au dépôt** demandé, le garde en mémoire au plus une heure (marge de sécurité de 60 s) et ne le transmet jamais aux runs. Permissions, création de l'App et rotation de clé : [`github.md`](github.md#github-app-recommandé).
+
+> **Cible.** La section vit encore dans `config.yaml` : le passage à `factory.yml` est suivi par ORC-209. Les variables d'environnement resteront le repli pour Docker et les installations existantes.
 
 ### Budget journalier
 
@@ -105,5 +130,6 @@ Le démon détient les secrets ; les runs Claude Code n'en ont pas besoin et ne 
 1. **Environnement des runs filtré.** Chaque run hérite de l'environnement du démon **sans** aucune variable `RELAIS_*` ni `LINEAR_*` (donc ni `RELAIS_UI_PASSWORD`, ni une éventuelle clé Linear). Relais pose ensuite seulement `RELAIS_API` (API locale `http://127.0.0.1:<port>/agent`), `RELAIS_RUN_TOKEN` (jeton aléatoire valable pendant le run), `RELAIS_TICKET`, `RELAIS_KNOWLEDGE`, `RELAIS_ROOT` et `PATH`. Les autres variables (`ANTHROPIC_API_KEY`, `GH_TOKEN`, `GIT_*`…) sont transmises : l'agent en a besoin pour travailler.
 2. **Linear passe par `relais-agent`.** L'agent ne voit jamais le jeton Linear : il appelle l'API locale avec son jeton de run, qui ne donne accès qu'au ticket du run, à la recherche, à la base de connaissance et à la question (`ask`). Voir [`cli.md`](cli.md#relais-agent-côté-agent).
 3. **`run-settings.json`.** À chaque `relais up`, Relais écrit `<RELAIS_HOME>/run-settings.json` : les permissions du pack (`packs/standard/settings.json`) plus des refus sur le **vrai** chemin de `RELAIS_HOME` : `Read`/`Edit` de `secrets.json`, `Read` de `relais.db*`, `transcripts/**`, `logs/**`, et toute commande Bash qui mentionne `secrets.json` ou `relais.db`. Ce fichier est passé à chaque run par `--settings`. Les worktrees (`workspaces/`) restent lisibles.
+4. **Jeton GitHub App hors des runs.** Le jeton d'installation est demandé pour le seul dépôt du run, conservé en mémoire du démon et jamais monté dans l'environnement du runner ni écrit dans un transcript. `GH_TOKEN` reste transmis aux agents **temporairement**, car `gh` leur sert encore à ouvrir et lire les PR ; ORC-125 retirera cette variable. Voir [`github.md`](github.md#jetons).
 
 Limite connue : ces refus sont des garde-fous de Claude Code, pas une frontière de sécurité. Un agent qui exécute du code (`node`, `npm`) avec le même utilisateur système que le démon peut lire `secrets.json`. Détails et conséquences : [`interface-et-securite.md`](interface-et-securite.md#limites-connues).

@@ -1,21 +1,77 @@
 # GitHub
 
-Relais ne parle à GitHub qu'à travers la CLI **`gh`** et **git** : pas d'application GitHub, pas de webhook GitHub. Les agents poussent leurs branches et ouvrent les PR ; le démon **relève** les PR toutes les 30 s pour suivre la CI, les reviews et les merges.
+Relais parle à GitHub à travers **git** et une **GitHub App d'usine**. Le démon utilise l'App quand elle est configurée ; sinon il retombe sur la CLI **`gh`** (repli de migration). Les agents continuent d'utiliser `gh` et `GH_TOKEN` tant que ORC-125 n'a pas retiré cette dépendance. Il n'y a pas de webhook GitHub : le démon **relève** les PR toutes les 30 s pour suivre la CI, les reviews et les merges.
 
-## Compte et authentification
+## Authentification du démon
 
-Le démon et les agents utilisent le même compte : celui de `gh` sur la machine.
+### GitHub App (recommandé)
+
+La GitHub App est l'identité du **démon**, pas celle des agents. Elle sert à lire les PR, les checks et les fils de review sans dépendre de `GH_TOKEN` ni de la CLI `gh`.
+
+```yaml
+# <RELAIS_HOME>/config.yaml
+github:
+  appId: "123456"
+  privateKey: /home/relais/.relais/github-app.pem   # PEM inline ou chemin de fichier
+  installationId: "987654"                          # facultatif
+```
+
+Les variables d'environnement servent de repli, pour les installations existantes et Docker :
+
+| Variable | Rôle |
+|---|---|
+| `GH_APP_ID` | identifiant de l'App |
+| `GH_APP_KEY` | clé privée PEM, ou chemin vers le fichier `.pem` |
+| `GH_APP_INSTALLATION_ID` | installation à utiliser ; facultatif |
+
+Une valeur de `config.yaml` l'emporte sur la variable d'environnement. Si une seule des deux valeurs `appId` / `privateKey` est fournie, le démarrage échoue avec un message explicite plutôt que de basculer silencieusement sur `gh`.
+
+#### Créer l'App
+
+1. GitHub → **Settings → Developer settings → GitHub Apps → New GitHub App**.
+2. Renseignez un nom et une URL. **Désactivez le webhook** : Relais n'en a pas besoin.
+3. Dans **Repository permissions**, appliquez le manifeste [`github-app-manifest.json`](github-app-manifest.json) :
+   - **Contents** : lecture/écriture ;
+   - **Pull requests** : lecture/écriture ;
+   - **Checks** : lecture ;
+   - **Commit statuses** : lecture ;
+   - **Metadata** : lecture (obligatoire pour toute App).
+   Aucune permission d'**administration**, ni `Actions` en écriture, ni `Workflows`.
+4. Créez l'App, notez son **App ID**, puis **Generate a private key**. Placez le `.pem` hors du dépôt, en mode `0600` (par exemple `~/.relais/github-app.pem`).
+5. **Install** l'App sur les dépôts confiés à Relais. L'identifiant d'installation est visible dans l'URL `https://github.com/settings/installations/<id>` ; il est facultatif, le démon sait le retrouver dépôt par dépôt.
+6. Renseignez `config.yaml` ou les variables `GH_APP_*`, puis redémarrez `relais up`. Le démarrage journalise le forge choisi, sans secret.
+
+#### Jetons
+
+- Le démon signe un **JWT RS256** avec la clé privée : `iss = appId`, `iat = maintenant - 60 s`, `exp = maintenant + 9 min`.
+- Il échange ce JWT contre un **jeton d'installation** : `POST /app/installations/{id}/access_tokens` avec `{ "repositories": ["<dépôt du run>"] }`. Si `installationId` n'est pas configuré, il appelle d'abord `GET /repos/{owner}/{repo}/installation`.
+- Le jeton dure **au plus 1 heure**. Il est mis en cache **par dépôt** jusqu'à son expiration, avec une marge de sécurité de 60 s.
+- Il reste **en mémoire du démon** : jamais écrit sur disque, jamais journalisé, jamais transmis aux runs Claude Code (`RELAIS_*`, `GH_TOKEN`, etc. inchangés). Un run ne peut donc pas agir sur un autre dépôt avec ce jeton.
+- La clé privée n'est jamais journalisée. Le message de démarrage ne contient que l'App ID et, le cas échéant, l'ID d'installation.
+
+#### Rotation de clé
+
+1. GitHub App → **Private keys → Generate a private key**.
+2. Déposez le nouveau `.pem` (mode `0600`) et mettez à jour `github.privateKey` ou `GH_APP_KEY`.
+3. Redémarrez le démon ; les jetons d'installation en cache sont oubliés et les nouveaux sont émis avec la nouvelle clé.
+4. Révoquez l'ancienne clé dans GitHub. Les jetons d'installation déjà émis expirent d'eux-mêmes en moins d'une heure, mais une clé privée compromise peut en émettre de nouveaux : révoquez-la sans attendre.
+
+### CLI `gh` (repli de migration)
+
+Sans section `github`, le démon utilise `GhCliForge` et la CLI `gh`, comme avant :
 
 - **Poste** : `gh auth login` avec le compte qui doit pousser et ouvrir les PR, et git configuré pour pousser vers `origin` (SSH ou HTTPS). Vérifiez `gh auth status` et `git push` depuis le dépôt.
 - **Docker** : variable `GH_TOKEN` ; au démarrage, le conteneur lance `gh auth setup-git` pour que git pousse en HTTPS avec ce jeton. Les dépôts montés doivent donc avoir un remote **HTTPS**. Voir [`deploiement.md`](deploiement.md).
 
-Les commits portent l'identité git de la machine (`user.name` / `user.email`) ou les variables `GIT_AUTHOR_*` / `GIT_COMMITTER_*`.
+Le démarrage journalise explicitement `forge GitHub : CLI gh (repli de migration…)`. Ce repli disparaîtra après ORC-125.
 
-Un compte dédié (« bot ») est conseillé : ses PR sont clairement identifiées et vous pouvez limiter ses droits.
+### Agents (temporaire)
 
-### Permissions nécessaires
+Les skills `dev`, `fix-ci` et `review` appellent encore `gh` et `GH_TOKEN` pour créer, lire et modifier les PR. **Ne les retirez pas avant ORC-125** : cette PR ne fait que brancher la GitHub App côté démon. Le jour venu, les agents passeront par l'API locale de Relais, qui portera elle-même le jeton d'installation limité au dépôt du run.
 
-Sur chaque dépôt confié à Relais, le compte doit pouvoir :
+### Permissions nécessaires pour le repli `gh`
+
+Sur chaque dépôt confié à Relais, le compte `gh` doit pouvoir :
 
 | Action | Utilisée par | Commande |
 |---|---|---|
@@ -26,14 +82,14 @@ Sur chaque dépôt confié à Relais, le compte doit pouvoir :
 
 Avec un jeton à granularité fine : *Contents* lecture/écriture, *Pull requests* lecture/écriture, *Actions* et *Checks* lecture, *Metadata* lecture. Avec un jeton classique : scope `repo` (et `workflow` seulement si les agents doivent modifier `.github/workflows`, ce que le skill `fix-ci` leur interdit). Pour `relais init` → « Créer un dépôt relais-knowledge », le compte doit aussi pouvoir créer un dépôt.
 
-> Ces listes de droits sont déduites des commandes utilisées par Relais et le pack ; elles n'ont pas été validées une par une sur un jeton à granularité fine.
-
 ## Ce que Relais relève
 
 Toutes les 30 s, pour chaque ticket suivi qui a une branche et n'est pas `done` :
 
-- `gh pr list --head <branche> --state all` : la PR de la branche (ouverte, mergée, fermée) ;
-- si elle est ouverte, `gh pr checks` : état agrégé de la CI (`fail` si un check échoue ou est annulé, `pending` si un check tourne, `pass` sinon).
+- `GET /repos/{owner}/{repo}/pulls?head={owner}:{branche}&state=all` : la PR de la branche (ouverte, mergée, fermée) ;
+- si elle est ouverte, `GET /repos/{owner}/{repo}/commits/{sha}/check-runs` et `GET /repos/{owner}/{repo}/commits/{sha}/status` : état agrégé de la CI (`fail` si un check échoue ou est annulé, `pending` si un check tourne, `pass` sinon, `none` sans check).
+
+Au moment d'un run `dev-feedback`, les fils de review **non résolus** sont lus en GraphQL (`reviewThreads`) et transformés en retours pour l'agent.
 
 Événements produits (voir [`workflow.md`](workflow.md#3-les-règles-on)) :
 

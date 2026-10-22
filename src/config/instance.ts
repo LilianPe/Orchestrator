@@ -6,6 +6,16 @@ import { z } from 'zod';
 
 const projectSchema = z.object({ id: z.string().min(1), repoPath: z.string().min(1), linearTeamKey: z.string().min(1) });
 
+const idSchema = z.union([z.string().min(1), z.number().int().positive()]).transform(String);
+
+const githubSchema = z.object({
+  appId: idSchema,
+  /** PEM inline, or a path to a PEM file. Resolved by resolveGithubApp before use. */
+  privateKey: z.string().min(1),
+  installationId: idSchema.optional(),
+  webhookSecret: z.string().optional(),
+});
+
 const instanceSchema = z.object({
   port: z.number().int().positive().default(4100),
   host: z.string().default('127.0.0.1'),
@@ -14,9 +24,11 @@ const instanceSchema = z.object({
   projects: z.array(projectSchema).default([]),
   limits: z.object({ perDayUsd: z.number().positive().optional() }).default({}),
   knowledge: z.object({ repoPath: z.string() }).optional(),
+  github: githubSchema.optional(),
 });
 
 export type ProjectConfig = z.infer<typeof projectSchema>;
+export type GithubConfig = z.infer<typeof githubSchema>;
 export type InstanceConfig = z.infer<typeof instanceSchema>;
 
 export interface LinearSecrets {

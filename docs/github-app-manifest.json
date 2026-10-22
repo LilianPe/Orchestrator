@@ -1,0 +1,14 @@
+{
+  "name": "Relais Factory",
+  "description": "GitHub App of the Relais daemon: read PRs, checks and review threads. No administration.",
+  "url": "https://github.com/LilianPe/relais",
+  "public": false,
+  "default_permissions": {
+    "contents": "write",
+    "pull_requests": "write",
+    "checks": "read",
+    "statuses": "read",
+    "metadata": "read"
+  },
+  "default_events": []
+}
