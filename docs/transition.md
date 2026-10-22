@@ -52,7 +52,7 @@ Relais a été renommé d'un bloc, sans changement de comportement : seuls les n
 | service compose `relais`, `relais-entrypoint`, `relais@localhost` | service `factory`, `factory-entrypoint`, `factory@localhost` |
 | dépôt de connaissance créé par `init` : `relais-knowledge` | `factory-knowledge` |
 
-**Nom affiché.** Ce qu'un humain lit (aide et messages de la CLI, titre et en-tête de l'interface, messages publiés dans Linear, realm du mot de passe, nom de l'identité git des commits) vient d'une seule constante, `PRODUCT_NAME` dans `src/product.ts`, aujourd'hui `Orchestrator` (nom de bêta). Le jour du nom définitif, on ne change que cette constante, le nom du dépôt GitHub et les docs. Elle est lue par :
+**Nom affiché.** Ce qu'un humain lit (aide et messages de la CLI, titre et en-tête de l'interface, messages publiés dans Linear, realm du mot de passe, nom de l'identité git des commits) vient d'une seule constante, `PRODUCT_NAME` dans `src/product.ts`, aujourd'hui `Orchestrator` (nom de bêta). Le jour du nom définitif, on change cette constante, le nom du dépôt GitHub et les docs ; sur chaque instance déjà configurée, on renomme aussi à la main l'application OAuth Linear, que `init` fait créer sous ce nom et qu'on mentionne avec @. Elle est lue par :
 
 - `src/cli/factory.ts`, `src/cli/init.ts`, `src/cli/factory-agent.ts` (aide, questions et messages) ;
 - `src/app/bootstrap.ts` (journaux du démon), `src/core/orchestrator.ts` (messages Linear), `src/server/app.ts` (realm HTTP Basic) ;
@@ -154,7 +154,7 @@ Le premier ticket cité est celui qui touche le module en premier ou le plus ; l
 | `src/app/root.ts` | Trouve la racine du dépôt par le `package.json` nommé `factory` | adapter | ORC-167 (le renommage du paquet le casse, le ticket ne le nomme pas) |
 | `src/app/tracker-switch.ts` | `Tracker` de substitution tant que Linear n'est pas connecté par OAuth | garder | ORC-208 |
 | `src/version.ts` | Version du paquet | garder | ORC-167 |
-| `src/product.ts` | `PRODUCT_NAME`, le nom affiché (CLI, interface, messages Linear et GitHub, identité git) : sa seule source | garder | ORC-167 (le nom définitif ne change que cette constante) |
+| `src/product.ts` | `PRODUCT_NAME`, le nom affiché (CLI, interface, messages Linear, realm HTTP, identité git) : sa seule source | garder | ORC-167 (le nom définitif ne change que cette constante) |
 
 ### `src/store/`
 
