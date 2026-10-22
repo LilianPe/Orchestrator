@@ -1,5 +1,7 @@
 import type { ActivityInput, SearchHit, Tracker, TrackerIssue } from './types.js';
 
+const snapshot = (i: TrackerIssue): TrackerIssue => ({ ...i, labels: [...i.labels] });
+
 export class FakeTracker implements Tracker {
   issues = new Map<string, TrackerIssue>();
   calls: { method: string; args: unknown[] }[] = [];
@@ -39,12 +41,11 @@ export class FakeTracker implements Tracker {
   }
 
   async getIssue(identifier: string): Promise<TrackerIssue> {
-    const i = this.must(identifier);
-    return { ...i, labels: [...i.labels] };
+    return snapshot(this.must(identifier));
   }
 
   async listDelegated(teamKey: string): Promise<TrackerIssue[]> {
-    return [...this.issues.values()].filter((i) => i.teamKey === teamKey && i.delegateId);
+    return [...this.issues.values()].filter((i) => i.teamKey === teamKey && i.delegateId).map(snapshot);
   }
 
   async search(term: string): Promise<SearchHit[]> {

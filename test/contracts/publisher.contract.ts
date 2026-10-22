@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { PublishRequest, Publisher } from '../../src/adapters/publisher/types.js';
+import { subjectWith } from './cases.js';
 
 /** What the implementation under test arranged for the suite. Docs: docs/ports/publisher.md. */
 export interface PublisherSubject {
@@ -24,9 +25,9 @@ export function describePublisherContract(name: string, make: () => PublisherSub
       const s = await make();
       const first = await s.publisher.publish(s.request);
       const replay = await s.publisher.publish(s.request);
-      const next = await s.publisher.publish({ ...s.request, sha: `${s.request.sha}-next` });
+      const sha = `${s.request.sha}-next`;
       expect(replay).toEqual(first);
-      expect(next).toEqual({ ...first, sha: `${s.request.sha}-next` });
+      expect(await s.publisher.publish({ ...s.request, sha })).toEqual({ ...first, sha });
     });
 
     it('each branch gets its own PR', async () => {
@@ -37,13 +38,13 @@ export function describePublisherContract(name: string, make: () => PublisherSub
     });
 
     it('once the branch PR is merged or closed, publishing opens a new one', async (ctx) => {
-      const s = await make();
-      if (!s.end) ctx.skip();
+      const s = await subjectWith(make, () => ctx.skip(), 'end');
       const first = await s.publisher.publish(s.request);
-      await s.end!(s.request.branch, first.prNumber);
-      const second = await s.publisher.publish({ ...s.request, sha: `${s.request.sha}-next` });
+      await s.end(s.request.branch, first.prNumber);
+      const next = { ...s.request, sha: `${s.request.sha}-next` };
+      const second = await s.publisher.publish(next);
       expect(second.prNumber).not.toBe(first.prNumber);
-      expect(await s.publisher.publish({ ...s.request, sha: `${s.request.sha}-next` })).toEqual(second);
+      expect(await s.publisher.publish(next)).toEqual(second);
     });
   });
 }

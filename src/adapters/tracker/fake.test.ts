@@ -14,7 +14,6 @@ describeTrackerContract(
       missing: 'REL-404',
       searchTerm: 'csv',
       states: ['In Progress', 'In Review'],
-      writable: true,
       delegation: { teamKey: 'REL', delegated: 'REL-1', notDelegated: 'REL-2' },
     };
   },

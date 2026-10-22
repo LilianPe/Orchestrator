@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { CheckRunner } from '../../src/adapters/checks/types.js';
+import { subjectWith } from './cases.js';
 
 export interface FailingCommand {
   command: string;
@@ -51,9 +52,8 @@ export function describeCheckRunnerContract(name: string, make: () => CheckRunne
     });
 
     it('a command that outlives the timeout fails without an exit code', async (ctx) => {
-      const s = await make();
-      if (!s.slow) ctx.skip();
-      const r = await s.checks.run(s.cwd, [s.slow!], 200);
+      const s = await subjectWith(make, () => ctx.skip(), 'slow');
+      const r = await s.checks.run(s.cwd, [s.slow], 200);
       expect(r.ok).toBe(false);
       expect(r.failures).toEqual([expect.objectContaining({ command: s.slow, exitCode: null })]);
     });

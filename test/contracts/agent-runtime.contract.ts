@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { RunHandle, RunRequest, RunResult, Runner, RunStreamEvent } from '../../src/adapters/runner/types.js';
-import { caseFor } from './gaps.js';
+import { caseFor } from './cases.js';
 
 /**
  * The behaviours a case asks of the runtime: `success` and `failure` end on their own, `hang` runs until stopped or capped,
@@ -26,7 +26,7 @@ function request(patch: Partial<RunRequest>): RunRequest {
   };
 }
 
-async function drain(events: AsyncIterable<RunStreamEvent>): Promise<RunStreamEvent[]> {
+export async function drain(events: AsyncIterable<RunStreamEvent>): Promise<RunStreamEvent[]> {
   const out: RunStreamEvent[] = [];
   for await (const e of events) out.push(e);
   return out;
@@ -34,7 +34,9 @@ async function drain(events: AsyncIterable<RunStreamEvent>): Promise<RunStreamEv
 
 /** The result, or `pending` if the run has not ended within `ms`. */
 function within(h: RunHandle, ms: number): Promise<RunResult | 'pending'> {
-  return Promise.race([h.done, new Promise<'pending'>((resolve) => setTimeout(() => resolve('pending'), ms))]);
+  let timer: NodeJS.Timeout | undefined;
+  const late = new Promise<'pending'>((resolve) => (timer = setTimeout(() => resolve('pending'), ms)));
+  return Promise.race([h.done, late]).finally(() => clearTimeout(timer));
 }
 
 export function describeAgentRuntimeContract(name: string, make: () => AgentRuntimeSubject, gaps?: AgentRuntimeGap[]): void {
@@ -90,24 +92,19 @@ export function describeAgentRuntimeContract(name: string, make: () => AgentRunt
       expect((await b.done).outcome).toBe('stopped');
     });
 
-    caseFor(gaps, 'duration-limit')('a run past its duration cap ends in limit', async () => {
-      const s = make();
-      const h = start(s, 'hang', { limits: { turns: 50, durationMs: 200, usd: 5 } });
+    const endsInLimit = async (script: AgentScript, limits: RunRequest['limits']) => {
+      const h = start(make(), script, { limits });
       try {
-        expect(await within(h, 3_000)).toMatchObject({ outcome: 'limit' });
+        expect(await within(h, 1_500)).toMatchObject({ outcome: 'limit' });
       } finally {
         h.stop();
       }
-    });
+    };
 
-    caseFor(gaps, 'turn-limit')('a run past its turn cap ends in limit', async () => {
-      const s = make();
-      const h = start(s, 'chatty', { limits: { turns: 2, durationMs: 10_000, usd: 5 } });
-      try {
-        expect(await within(h, 3_000)).toMatchObject({ outcome: 'limit' });
-      } finally {
-        h.stop();
-      }
-    });
+    caseFor(gaps, 'duration-limit')('a run past its duration cap ends in limit', () =>
+      endsInLimit('hang', { turns: 50, durationMs: 200, usd: 5 }));
+
+    caseFor(gaps, 'turn-limit')('a run past its turn cap ends in limit', () =>
+      endsInLimit('chatty', { turns: 2, durationMs: 10_000, usd: 5 }));
   });
 }

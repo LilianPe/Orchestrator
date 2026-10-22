@@ -13,6 +13,5 @@ describe.skipIf(!token || !issue)('LinearTracker against the live API', () => {
     issue: issue!,
     missing: `${issue!.split('-')[0]}-999999`,
     searchTerm: process.env['FACTORY_LIVE_LINEAR_SEARCH'],
-    writable: false,
   }));
 });

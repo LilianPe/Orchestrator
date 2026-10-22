@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { FeedbackItem } from '../../src/core/types.js';
 import type { Forge } from '../../src/adapters/forge/types.js';
+import { subjectWith } from './cases.js';
 
 /** What the implementation under test arranged for the suite. Docs: docs/ports/forge.md. */
 export interface ForgeSubject {
@@ -15,12 +16,6 @@ export interface ForgeSubject {
 }
 
 export function describeForgeContract(name: string, make: () => ForgeSubject | Promise<ForgeSubject>): void {
-  const withPr = async (skip: () => void) => {
-    const s = await make();
-    if (!s.pr) skip();
-    return s as ForgeSubject & { pr: { branch: string; number: number } };
-  };
-
   describe(`Forge contract: ${name}`, () => {
     it('findPr answers undefined for a branch without a PR', async () => {
       const s = await make();
@@ -28,7 +23,7 @@ export function describeForgeContract(name: string, make: () => ForgeSubject | P
     });
 
     it('findPr returns the branch PR, its checks consistent with the failed ones', async (ctx) => {
-      const s = await withPr(() => ctx.skip());
+      const s = await subjectWith(make, () => ctx.skip(), 'pr');
       const pr = await s.forge.findPr(s.repoPath, s.pr.branch);
       expect(pr).toMatchObject({ number: s.pr.number, branch: s.pr.branch });
       expect(pr!.url).toMatch(/^https:\/\//);
@@ -38,12 +33,13 @@ export function describeForgeContract(name: string, make: () => ForgeSubject | P
     });
 
     it('findPr is a read: asking twice gives the same answer', async (ctx) => {
-      const s = await withPr(() => ctx.skip());
-      expect(await s.forge.findPr(s.repoPath, s.pr.branch)).toEqual(await s.forge.findPr(s.repoPath, s.pr.branch));
+      const s = await subjectWith(make, () => ctx.skip(), 'pr');
+      const [a, b] = await Promise.all([s.forge.findPr(s.repoPath, s.pr.branch), s.forge.findPr(s.repoPath, s.pr.branch)]);
+      expect(a).toEqual(b);
     });
 
     it('findPr and unresolvedReviewComments return snapshots the caller may mutate', async (ctx) => {
-      const s = await withPr(() => ctx.skip());
+      const s = await subjectWith(make, () => ctx.skip(), 'pr');
       const pr = (await s.forge.findPr(s.repoPath, s.pr.branch))!;
       const before = structuredClone(pr);
       pr.number = -1;
@@ -57,7 +53,7 @@ export function describeForgeContract(name: string, make: () => ForgeSubject | P
     });
 
     it('unresolvedReviewComments lists the unresolved review threads as review feedback', async (ctx) => {
-      const s = await withPr(() => ctx.skip());
+      const s = await subjectWith(make, () => ctx.skip(), 'pr');
       const items = await s.forge.unresolvedReviewComments(s.repoPath, s.pr.number);
       if (s.unresolved) expect(items).toEqual(s.unresolved);
       for (const item of items) {
