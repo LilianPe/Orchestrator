@@ -46,7 +46,7 @@ Ce qui est branché sur le moteur aujourd'hui :
 
 `FakePublisher` numérote ses PR lui-même, dans l'ordre où il les ouvre (1, 2…) : ne mélangez pas dans un même scénario une PR posée à la main par `h.forge.setPr` et une publication, elles pourraient partager un numéro. Republier une branche met à jour sa PR, checks en attente ; si `h.forge` montre cette PR mergée ou fermée, la publication en ouvre une nouvelle, comme sur GitHub.
 
-Ces interfaces sont **minimales** : elles portent ce dont les faux ont besoin. Leur contrat complet (idempotence, erreurs, fencing) et les suites de conformité viennent d'ORC-189.
+Ces interfaces sont **minimales** : elles portent ce dont les faux ont besoin. Leur contrat (méthodes, idempotence, erreurs, fencing) est dans [`docs/ports/`](ports/README.md), une fiche par port ; chaque faux passe la suite de conformité de son port (`test/contracts/`), et un faux qu'on modifie doit continuer à la passer.
 
 ## L'horloge simulée
 

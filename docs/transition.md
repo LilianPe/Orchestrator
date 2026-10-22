@@ -72,14 +72,16 @@ Dans `docs/` et le `README.md`, l'ancien nom reste là où il est juste : les UR
 
 ## Tests live, hors CI
 
-Deux tests parlent à de vrais services. Ils sont dans le glob de `vitest.config.ts`, mais se sautent eux-mêmes quand leur variable manque, et la CI (`.github/workflows/ci.yml`) n'en définit aucune :
+Quatre tests parlent à de vrais services. Ils sont dans le glob de `vitest.config.ts`, mais se sautent eux-mêmes quand leur variable manque, et la CI (`.github/workflows/ci.yml`) n'en définit aucune :
 
 | Test | Condition qui le lance | Sinon |
 |---|---|---|
 | `src/adapters/tracker/linear/queries.live.test.ts` | `LINEAR_API_KEY` définie (`describe.skipIf(!key)`) | sauté |
+| `src/adapters/tracker/linear/tracker.live.test.ts` | `FACTORY_LIVE_LINEAR_TOKEN` et `FACTORY_LIVE_LINEAR_ISSUE` définies (ORC-189, suite de conformité Tracker, lecture seule) | sauté |
+| `src/adapters/forge/gh-cli.live.test.ts` | `FACTORY_LIVE_GH_REPO`, `FACTORY_LIVE_GH_BRANCH` et `FACTORY_LIVE_GH_PR` définies (ORC-189, suite de conformité Forge, lecture seule) | sauté |
 | `test/e2e/pack.e2e.test.ts` | `FACTORY_E2E=1` (`describe.skipIf(process.env['FACTORY_E2E'] !== '1')`, `RELAIS_E2E` avant ORC-167) | sauté |
 
-Sur le run de référence, le journal de la CI montre les deux fichiers « 1 skipped » (40 fichiers passés, 2 sautés, 250 tests passés, 2 sautés). Un ticket qui ajoute un test live suit la même règle : une variable d'environnement le lance, la CI ne la définit pas.
+Sur le run de référence, avant ORC-189, le journal de la CI montre les deux premiers fichiers « 1 skipped » (40 fichiers passés, 2 sautés, 250 tests passés, 2 sautés). Un ticket qui ajoute un test live suit la même règle : une variable d'environnement le lance, la CI ne la définit pas.
 
 ## Inventaire des modules
 

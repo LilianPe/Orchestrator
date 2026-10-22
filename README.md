@@ -62,6 +62,7 @@ Sans tokens, pour tester l'interface : `relais up --fake-runner`.
 
 ### Tester
 - [Tests et harnais](docs/tests.md) : écrire un scénario avec les faux adaptateurs, l'horloge simulée et le préréglage de test.
+- [Contrats des ports](docs/ports/README.md) : une fiche par port (méthodes, idempotence, erreurs, fencing) et sa suite de conformité, à faire passer à tout nouvel adaptateur.
 
 ### Décisions
 Pages des tickets de décision : question, options, preuves, recommandation, puis la décision du dev, écrite aussi dans le ticket.
