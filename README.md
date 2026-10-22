@@ -69,7 +69,7 @@ Sans tokens, pour tester l'interface : `relais up --fake-runner`.
 npm test                  # unitaires et scénarios (projet vitest `unit`)
 npm run test:all          # les trois projets vitest
 npm run test:integration  # Postgres (DATABASE_URL requis)
-npm run test:isolation    # moteur rootless (RELAIS_ISOLATION=1)
+npm run test:isolation    # moteur rootless (FACTORY_ISOLATION=1)
 npm run typecheck         # types du démon et de l'interface
 npm run lint
 npm run dev               # CLI depuis les sources (tsx) : npm run dev -- up

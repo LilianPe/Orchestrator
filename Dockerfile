@@ -6,7 +6,7 @@ RUN apt-get update \
  && apt-get update && apt-get install -y --no-install-recommends gh \
  && rm -rf /var/lib/apt/lists/*
 RUN npm install -g @anthropic-ai/claude-code
-# Default commit identity (GIT_AUTHOR_* / GIT_COMMITTER_* env vars override it); repos are bind-mounted, possibly with another owner.
+# Default commit identity, email here and name after the build (GIT_AUTHOR_* / GIT_COMMITTER_* env vars override it); repos are bind-mounted, possibly with another owner.
 RUN git config --system user.email "factory@localhost" \
  && git config --system --add safe.directory '*'
 WORKDIR /app

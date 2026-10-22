@@ -21,7 +21,7 @@ Les deux fichiers d'instance sont lus **au démarrage** de `relais up` : redéma
 | `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME`, `GIT_COMMITTER_EMAIL` | git (hérité par les runs) | identité git de la machine ; en Docker `Relais <relais@localhost>` | Identité des commits des agents. | non |
 | `PATH` | le démon | — | Doit contenir `claude`, `gh`, `git`. Relais y ajoute `bin/` de Relais pour les runs. | non |
 
-Variables réservées aux tests (sans effet sur le démon) : `LINEAR_API_KEY` (test live des requêtes Linear), `RELAIS_E2E=1` (test du pack avec le vrai `claude`). Voir [`recette.md`](recette.md#vérifications-live-optionnelles).
+Variables réservées aux tests (sans effet sur le démon) : `LINEAR_API_KEY` (test live des requêtes Linear), `FACTORY_E2E=1` (test du pack avec le vrai `claude`). Voir [`recette.md`](recette.md#vérifications-live-optionnelles).
 
 Variables **posées par Relais** dans l'environnement de chaque run (à ne pas définir vous-même) : `RELAIS_API`, `RELAIS_RUN_TOKEN`, `RELAIS_TICKET`, `RELAIS_KNOWLEDGE`, `RELAIS_ROOT`, `PATH` et, pour la file `dev`, `PORT`. Voir [« Ce qui ne sort pas du démon »](#ce-qui-ne-sort-pas-du-démon).
 

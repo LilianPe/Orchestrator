@@ -43,7 +43,7 @@ Relais a été renommé d'un bloc, sans changement de comportement : seuls les n
 |---|---|
 | paquet `relais`, CLI `relais` (`bin/relais`, `src/cli/relais.ts`) | paquet `factory`, CLI `factory` (`bin/factory`, `src/cli/factory.ts`) ; le démon, lancé par `factory up`, signe ses journaux `[factoryd]` |
 | `relais-agent` (`bin/relais-agent`, `src/cli/relais-agent.ts`) | `factory-agent`, nom temporaire jusqu'à son retrait par ORC-192 |
-| variables `RELAIS_*` (`RELAIS_HOME`, `RELAIS_UI_PASSWORD`, `RELAIS_API`, `RELAIS_RUN_TOKEN`, `RELAIS_TICKET`, `RELAIS_KNOWLEDGE`, `RELAIS_ROOT`, `RELAIS_E2E`, `RELAIS_ISOLATION`) | `FACTORY_*`, même suffixe |
+| variables `RELAIS_*` (`RELAIS_HOME`, `RELAIS_UI_PASSWORD`, `RELAIS_API`, `RELAIS_RUN_TOKEN`, `RELAIS_TICKET`, `RELAIS_KNOWLEDGE`, `RELAIS_ROOT`, `RELAIS_E2E`, `RELAIS_ISOLATION`) | `FACTORY_*`, même suffixe ; les anciennes ne sont plus lues, ni filtrées de l'environnement des runs : retirez-les du shell du démon |
 | `~/.relais`, `relais.db` | `~/.factory`, `factory.db` (pas de migration, voir « Données ») |
 | `.relais/workflow.yml` dans le dépôt | `.factory/workflow.yml` |
 | plugin `relais`, skills `relais:<nom>` | plugin `factory`, skills `factory:<nom>` |
