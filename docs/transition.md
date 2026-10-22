@@ -57,7 +57,7 @@ Relais a été renommé d'un bloc, sans changement de comportement : seuls les n
 - `src/cli/factory.ts`, `src/cli/init.ts`, `src/cli/factory-agent.ts` (aide, questions et messages, titre de l'`INDEX.md` créé par `init`) ;
 - `src/app/bootstrap.ts` (journaux du démon), `src/core/orchestrator.ts` (messages Linear), `src/server/app.ts` (realm HTTP Basic) ;
 - `web/src/App.tsx` (en-tête) et `web/vite.config.ts`, qui remplace `%PRODUCT_NAME%` dans le titre de `web/index.html` au build et en dev ;
-- le `Dockerfile`, qui écrit l'identité git de l'image depuis `dist/src/product.js` après le build ; `compose.yaml` ne passe plus de nom par défaut, et `docker/entrypoint.sh` retire un `GIT_AUTHOR_NAME` ou `GIT_COMMITTER_NAME` vide pour que ce nom s'applique.
+- le `Dockerfile`, qui écrit l'identité git de l'image depuis `dist/src/product.js` après le build ; `compose.yaml` passe `GIT_AUTHOR_NAME` et `GIT_COMMITTER_NAME` telles quelles depuis le shell, sans défaut : absentes, elles ne sont pas définies dans le conteneur et ce nom s'applique, `docker compose exec` compris. Le committer ne reprend plus `GIT_AUTHOR_NAME` : définissez les deux pour un autre nom.
 
 Les textes du pack (`packs/standard/`, skills et hook) ne peuvent pas importer la constante : ils disent « l'usine », sans nom propre.
 
