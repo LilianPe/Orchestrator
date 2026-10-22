@@ -14,10 +14,11 @@ export class FakeForge implements Forge {
   }
 
   async findPr(_repoPath: string, branch: string): Promise<PrInfo | undefined> {
-    return this.prs.get(branch);
+    const pr = this.prs.get(branch);
+    return pr && { ...pr, failedChecks: [...pr.failedChecks] };
   }
 
   async unresolvedReviewComments(_repoPath: string, prNumber: number): Promise<FeedbackItem[]> {
-    return this.comments.get(prNumber) ?? [];
+    return (this.comments.get(prNumber) ?? []).map((c) => ({ ...c }));
   }
 }
