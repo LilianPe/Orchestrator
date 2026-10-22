@@ -52,9 +52,9 @@ Relais a été renommé d'un bloc, sans changement de comportement : seuls les n
 | service compose `relais`, `relais-entrypoint`, `relais@localhost` | service `factory`, `factory-entrypoint`, `factory@localhost` |
 | dépôt de connaissance créé par `init` : `relais-knowledge` | `factory-knowledge` |
 
-**Nom affiché.** Ce qu'un humain lit (aide et messages de la CLI, titre et en-tête de l'interface, messages publiés dans Linear, realm du mot de passe, nom de l'identité git des commits) vient d'une seule constante, `PRODUCT_NAME` dans `src/product.ts`, aujourd'hui `Orchestrator` (nom de bêta). Le jour du nom définitif, on change cette constante, le nom du dépôt GitHub et les docs ; sur une instance déjà configurée, ce qui a été écrit sous l'ancien nom ne suit pas et se renomme à la main : l'application OAuth Linear, que `init` fait créer sous ce nom et qu'on mentionne avec @, et le titre de l'`INDEX.md` de la base de connaissance. Elle est lue par :
+**Nom affiché.** Ce qu'un humain lit (aide et messages de la CLI, titre et en-tête de l'interface, messages publiés dans Linear, realm du mot de passe, nom de l'identité git des commits) vient d'une seule constante, `PRODUCT_NAME` dans `src/product.ts`, aujourd'hui `Orchestrator` (nom de bêta). Le jour du nom définitif, on change cette constante, le nom du dépôt GitHub et les docs ; sur une instance déjà configurée, ce qui a été écrit sous l'ancien nom ne suit pas et se renomme à la main : l'application OAuth Linear, que `init` fait créer sous ce nom et qu'on mentionne avec @, et le titre de l'`INDEX.md` de la base de connaissance. La constante est lue par :
 
-- `src/cli/factory.ts`, `src/cli/init.ts`, `src/cli/factory-agent.ts` (aide, questions et messages) ;
+- `src/cli/factory.ts`, `src/cli/init.ts`, `src/cli/factory-agent.ts` (aide, questions et messages, titre de l'`INDEX.md` créé par `init`) ;
 - `src/app/bootstrap.ts` (journaux du démon), `src/core/orchestrator.ts` (messages Linear), `src/server/app.ts` (realm HTTP Basic) ;
 - `web/src/App.tsx` (en-tête) et `web/vite.config.ts`, qui remplace `%PRODUCT_NAME%` dans le titre de `web/index.html` au build et en dev ;
 - le `Dockerfile`, qui écrit l'identité git de l'image depuis `dist/src/product.js` après le build ; `compose.yaml` ne passe plus de nom par défaut, et `docker/entrypoint.sh` retire un `GIT_AUTHOR_NAME` ou `GIT_COMMITTER_NAME` vide pour que ce nom s'applique.
@@ -154,7 +154,7 @@ Le premier ticket cité est celui qui touche le module en premier ou le plus ; l
 | `src/app/root.ts` | Trouve la racine du dépôt par le `package.json` nommé `factory` | adapter | ORC-167 (le renommage du paquet le casse, le ticket ne le nomme pas) |
 | `src/app/tracker-switch.ts` | `Tracker` de substitution tant que Linear n'est pas connecté par OAuth | garder | ORC-208 |
 | `src/version.ts` | Version du paquet | garder | ORC-167 |
-| `src/product.ts` | `PRODUCT_NAME`, le nom affiché sa seule source (ses lecteurs : « Renommage », plus haut) | garder | ORC-167 (le nom définitif ne change que cette constante) |
+| `src/product.ts` | `PRODUCT_NAME`, seule source du nom affiché (ses lecteurs : « Nom affiché », plus haut) | garder | ORC-167 (nom définitif : voir « Nom affiché ») |
 
 ### `src/store/`
 
