@@ -14,7 +14,7 @@ RUN npm ci
 COPY . .
 RUN npm run build && npm prune --omit=dev
 # Default commit identity (GIT_AUTHOR_* / GIT_COMMITTER_* env vars override it); the name is the product name, read from the built source.
-RUN name="$(node -p "require('./dist/src/product.js').PRODUCT_NAME")" && [ -n "$name" ] \
+RUN name="$(node -e "const n = require('./dist/src/product.js').PRODUCT_NAME; if (typeof n !== 'string' || !n) process.exit(1); process.stdout.write(n)")" \
  && git config --system user.name "$name" \
  && git config --system user.email "factory@localhost"
 COPY docker/entrypoint.sh /usr/local/bin/factory-entrypoint
