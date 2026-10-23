@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, type TestContext } from 'vitest';
@@ -68,7 +68,9 @@ describeAgentRuntimeContract(
   { violates: [LAUNCH] },
 );
 
-const cwd = mkdtempSync(join(tmpdir(), 'factory-negative-'));
+const UNSTARTABLE = 'a command that cannot start fails without an exit code, and run does not reject';
+const REPLAY = 'replaying runs the commands again';
+const cwd = tmpdir();
 
 function checksThat(checks: CheckRunner, patch: Partial<CheckRunnerSubject> = {}): () => CheckRunnerSubject {
   return () => ({
@@ -79,7 +81,7 @@ function checksThat(checks: CheckRunner, patch: Partial<CheckRunnerSubject> = {}
       { command: 'exit 1', exitCode: 1, output: '' },
       { command: 'exit 2', exitCode: 2, output: '' },
     ],
-    unstartableCwd: join(cwd, 'no-such-dir'),
+    unstartableCwd: join(cwd, 'factory-negative-no-such-dir'),
     ...patch,
   });
 }
@@ -87,13 +89,13 @@ function checksThat(checks: CheckRunner, patch: Partial<CheckRunnerSubject> = {}
 describeCheckRunnerContract(
   'a check runner that rejects when a command cannot start',
   checksThat({ run: async (dir, commands, timeoutMs) => (existsSync(dir) ? runVerify(dir, commands, timeoutMs) : Promise.reject(new Error('spawn bash ENOENT'))) }),
-  { violates: ['a command that cannot start fails without an exit code, and run does not reject'] },
+  { violates: [UNSTARTABLE] },
 );
 
 describeCheckRunnerContract(
   'a check runner that skips the commands it cannot start',
   checksThat({ run: async (dir, commands, timeoutMs) => (existsSync(dir) ? runVerify(dir, commands, timeoutMs) : { ok: true, failures: [] }) }),
-  { violates: ['a command that cannot start fails without an exit code, and run does not reject'] },
+  { violates: [UNSTARTABLE] },
 );
 
 describeCheckRunnerContract(
@@ -101,17 +103,19 @@ describeCheckRunnerContract(
   () => {
     const seen = new Set<string>();
     const fake = new FakeCheckRunner();
-    const run = fake.run;
-    fake.run = async (dir, commands, timeoutMs) => {
+    const run: CheckRunner['run'] = async (dir, commands, timeoutMs) => {
       const key = commands.join('\n');
       if (seen.has(key)) return { ok: true, failures: [] };
       seen.add(key);
-      return run(dir, commands, timeoutMs);
+      return fake.run(dir, commands, timeoutMs);
     };
-    return checksThat(fake, { counted: { command: 'npm run count', runs: async () => fake.calls.length } })();
+    return checksThat({ run }, { counted: { command: 'npm run count', runs: async () => fake.calls.length } })();
   },
-  { violates: ['replaying runs the commands again'] },
+  { violates: [REPLAY] },
 );
+
+const UNREACHABLE = 'findPr and unresolvedReviewComments reject when the forge does not answer';
+const UNREADABLE = 'findPr gives none for checks it cannot read';
 
 function forgeThat(patch: Partial<ForgeSubject>): () => ForgeSubject {
   return () => {
@@ -124,7 +128,7 @@ function forgeThat(patch: Partial<ForgeSubject>): () => ForgeSubject {
 describeForgeContract(
   'a forge that answers nothing instead of rejecting when it cannot reach the forge',
   forgeThat({ unreachable: { findPr: async () => undefined, unresolvedReviewComments: async () => [] } }),
-  { violates: ['findPr and unresolvedReviewComments reject when the forge does not answer'] },
+  { violates: [UNREACHABLE] },
 );
 
 describeForgeContract(
@@ -132,18 +136,18 @@ describeForgeContract(
   forgeThat({
     unreachable: { findPr: async () => Promise.reject(new Error('forge unreachable')), unresolvedReviewComments: async () => [] },
   }),
-  { violates: ['findPr and unresolvedReviewComments reject when the forge does not answer'] },
+  { violates: [UNREACHABLE] },
 );
 
-const unreadable = (findPr: Forge['findPr']): Partial<ForgeSubject> => {
-  const fake = new FakeForge();
-  return { forge: { findPr, unresolvedReviewComments: (r, n) => fake.unresolvedReviewComments(r, n) }, unreadableChecks: 'factory/rel-2-y' };
-};
+const unreadable = (findPr: Forge['findPr']): Partial<ForgeSubject> => ({
+  forge: { findPr, unresolvedReviewComments: async () => [] },
+  unreadableChecks: 'factory/rel-2-y',
+});
 
 describeForgeContract(
   'a forge that rejects checks it cannot read',
   forgeThat(unreadable(async () => Promise.reject(new SyntaxError('Unexpected token n in JSON')))),
-  { violates: ['findPr gives none for checks it cannot read'] },
+  { violates: [UNREADABLE] },
 );
 
 describeForgeContract(
@@ -151,63 +155,51 @@ describeForgeContract(
   forgeThat(
     unreadable(async (_repo, branch) => ({ number: 8, url: 'https://github.test/pr/8', state: 'OPEN', branch, checks: 'pending', failedChecks: [] })),
   ),
-  { violates: ['findPr gives none for checks it cannot read'] },
+  { violates: [UNREADABLE] },
 );
 
 const EFFECTS = 'comment, activity and addExternalUrl write their effect; replaying comment or activity writes it again';
 
-function trackerThat(tracker: FakeTracker): () => TrackerSubject {
+function trackerThat(Tracker: new () => FakeTracker): () => TrackerSubject {
   return () => {
+    const tracker = new Tracker();
     tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV des audits' });
-    return {
-      tracker,
-      issue: 'REL-1',
-      missing: 'REL-404',
-      states: ['In Progress', 'Human Review'],
-      written: {
-        comments: async (issue) => tracker.comments(issue),
-        activities: async (session) => tracker.activities(session),
-        externalUrls: async (session) => tracker.externalUrls(session),
-      },
-    };
+    return { tracker, issue: 'REL-1', missing: 'REL-404', states: ['In Progress', 'Human Review'], written: tracker.written() };
   };
 }
 
 describeTrackerContract(
   'a tracker whose comment writes nothing',
-  () =>
-    trackerThat(
-      new (class extends FakeTracker {
-        override async comment(identifier: string): Promise<void> {
-          await this.getIssue(identifier);
-        }
-      })(),
-    )(),
+  trackerThat(
+    class extends FakeTracker {
+      override async comment(identifier: string): Promise<void> {
+        await this.getIssue(identifier);
+      }
+    },
+  ),
   { violates: [EFFECTS] },
 );
 
 describeTrackerContract(
   'a tracker that drops a replayed activity',
-  () =>
-    trackerThat(
-      new (class extends FakeTracker {
-        override async activity(sessionId: string, a: Parameters<FakeTracker['activity']>[1]): Promise<void> {
-          if (this.activities(sessionId).some((b) => JSON.stringify(b) === JSON.stringify(a))) return;
-          await super.activity(sessionId, a);
-        }
-      })(),
-    )(),
+  trackerThat(
+    class extends FakeTracker {
+      override async activity(sessionId: string, a: Parameters<FakeTracker['activity']>[1]): Promise<void> {
+        if (this.activities(sessionId).some((b) => JSON.stringify(b) === JSON.stringify(a))) return;
+        await super.activity(sessionId, a);
+      }
+    },
+  ),
   { violates: [EFFECTS] },
 );
 
 describeTrackerContract(
   'a tracker whose addExternalUrl writes nothing',
-  () =>
-    trackerThat(
-      new (class extends FakeTracker {
-        override async addExternalUrl(): Promise<void> {}
-      })(),
-    )(),
+  trackerThat(
+    class extends FakeTracker {
+      override async addExternalUrl(): Promise<void> {}
+    },
+  ),
   { violates: [EFFECTS] },
 );
 

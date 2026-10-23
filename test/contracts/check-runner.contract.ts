@@ -1,6 +1,6 @@
-import { describe, expect } from 'vitest';
+import { expect } from 'vitest';
 import type { CheckRunner } from '../../src/adapters/checks/types.js';
-import { contractCases, subjectWith, type ContractOptions } from './cases.js';
+import { describeContract, subjectWith, type ContractOptions } from './cases.js';
 
 export interface FailingCommand {
   command: string;
@@ -30,8 +30,7 @@ export function describeCheckRunnerContract(
   make: () => CheckRunnerSubject | Promise<CheckRunnerSubject>,
   options?: ContractOptions,
 ): void {
-  describe(`CheckRunner contract: ${name}`, () => {
-    const { it, end } = contractCases(options);
+  describeContract(`CheckRunner contract: ${name}`, options, (it) => {
 
     it('no command is a pass', async () => {
       const s = await make();
@@ -86,6 +85,5 @@ export function describeCheckRunnerContract(
       expect((await s.counted.runs()) - before).toBe(2);
     });
 
-    end();
   });
 }

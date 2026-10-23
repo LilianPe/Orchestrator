@@ -1,4 +1,4 @@
-import { expect, it as vitestIt, type TestContext } from 'vitest';
+import { describe, expect, it as vitestIt, type TestContext } from 'vitest';
 
 /** A fresh subject that carries the optional fields a case needs; without them, the case is skipped. */
 export async function subjectWith<S, K extends keyof S>(
@@ -30,7 +30,7 @@ export function asNegativeControl(body: CaseBody): CaseBody {
     const skip = () => {
       throw new Error('negative control: the subject lacks a field the case needs');
     };
-    await expect((async () => body(Object.create(ctx, { skip: { value: skip } }) as TestContext))()).rejects.toMatchObject({
+    await expect(Promise.resolve().then(() => body(Object.create(ctx, { skip: { value: skip } }) as TestContext))).rejects.toMatchObject({
       name: 'AssertionError',
     });
   };
@@ -39,6 +39,7 @@ export function asNegativeControl(body: CaseBody): CaseBody {
 /**
  * The `it` of a contract suite, and `end`, to call once every case is declared: it rejects a `violates`
  * entry that names no case, so a renamed case cannot turn its negative control into a silent no-op.
+ * Suites use it through `describeContract`, which calls `end`.
  */
 export function contractCases({ violates }: ContractOptions = {}): { it: (name: string, body: CaseBody) => void; end: () => void } {
   const declared = new Set<string>();
@@ -53,4 +54,13 @@ export function contractCases({ violates }: ContractOptions = {}): { it: (name: 
     if (unknown.length) throw new Error(`violates names no case of the suite: ${unknown.join(', ')}`);
   };
   return { it, end };
+}
+
+/** A contract suite: `define` declares its cases with the `it` it is given. */
+export function describeContract(title: string, options: ContractOptions | undefined, define: (it: (name: string, body: CaseBody) => void) => void): void {
+  describe(title, () => {
+    const { it, end } = contractCases(options);
+    define(it);
+    end();
+  });
 }

@@ -17,11 +17,7 @@ describeTrackerContract(
       searchTerm: 'csv',
       states: ['In Progress', 'Human Review'],
       delegation: { teamKey: 'REL', delegated: 'REL-1', notDelegated: 'REL-2' },
-      written: {
-        comments: async (issue) => tracker.comments(issue),
-        activities: async (session) => tracker.activities(session),
-        externalUrls: async (session) => tracker.externalUrls(session),
-      },
+      written: tracker.written(),
     };
   },
 );

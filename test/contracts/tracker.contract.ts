@@ -1,6 +1,6 @@
-import { describe, expect } from 'vitest';
+import { expect } from 'vitest';
 import type { ActivityInput, Tracker } from '../../src/adapters/tracker/types.js';
-import { contractCases, subjectWith, type ContractOptions } from './cases.js';
+import { describeContract, subjectWith, type ContractOptions } from './cases.js';
 
 /** What the implementation under test arranged for the suite. Docs: docs/ports/tracker.md. */
 export interface TrackerSubject {
@@ -24,8 +24,7 @@ export interface TrackerSubject {
 }
 
 export function describeTrackerContract(name: string, make: () => TrackerSubject | Promise<TrackerSubject>, options?: ContractOptions): void {
-  describe(`Tracker contract: ${name}`, () => {
-    const { it, end } = contractCases(options);
+  describeContract(`Tracker contract: ${name}`, options, (it) => {
 
     it('getIssue returns the issue, its team being the identifier prefix', async () => {
       const s = await make();
@@ -138,6 +137,5 @@ export function describeTrackerContract(name: string, make: () => TrackerSubject
       expect(await s.written.externalUrls(session)).toContainEqual({ label: 'Pull request', url: 'https://github.test/pr/1' });
     });
 
-    end();
   });
 }

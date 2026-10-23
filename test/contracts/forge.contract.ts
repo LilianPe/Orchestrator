@@ -1,7 +1,7 @@
-import { describe, expect } from 'vitest';
+import { expect } from 'vitest';
 import type { FeedbackItem } from '../../src/core/types.js';
 import type { Forge } from '../../src/adapters/forge/types.js';
-import { contractCases, subjectWith, type ContractOptions } from './cases.js';
+import { describeContract, subjectWith, type ContractOptions } from './cases.js';
 
 /** What the implementation under test arranged for the suite. Docs: docs/ports/forge.md. */
 export interface ForgeSubject {
@@ -20,8 +20,7 @@ export interface ForgeSubject {
 }
 
 export function describeForgeContract(name: string, make: () => ForgeSubject | Promise<ForgeSubject>, options?: ContractOptions): void {
-  describe(`Forge contract: ${name}`, () => {
-    const { it, end } = contractCases(options);
+  describeContract(`Forge contract: ${name}`, options, (it) => {
 
     it('findPr answers undefined for a branch without a PR', async () => {
       const s = await make();
@@ -83,6 +82,5 @@ export function describeForgeContract(name: string, make: () => ForgeSubject | P
       });
     });
 
-    end();
   });
 }

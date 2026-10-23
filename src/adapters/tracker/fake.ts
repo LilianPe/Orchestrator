@@ -43,20 +43,29 @@ export class FakeTracker implements Tracker {
     return issue;
   }
 
+  private argsOf(method: string, target?: string): unknown[][] {
+    return this.calls.filter((c) => c.method === method && (!target || c.args[0] === target)).map((c) => c.args.slice(1));
+  }
+
   activities(sessionId?: string): ActivityInput[] {
-    return this.calls
-      .filter((c) => c.method === 'activity' && (!sessionId || c.args[0] === sessionId))
-      .map((c) => c.args[1] as ActivityInput);
+    return this.argsOf('activity', sessionId).map(([a]) => a as ActivityInput);
   }
 
   comments(identifier: string): string[] {
-    return this.calls.filter((c) => c.method === 'comment' && c.args[0] === identifier).map((c) => c.args[1] as string);
+    return this.argsOf('comment', identifier).map(([body]) => body as string);
   }
 
   externalUrls(sessionId: string): { label: string; url: string }[] {
-    return this.calls
-      .filter((c) => c.method === 'addExternalUrl' && c.args[0] === sessionId)
-      .map((c) => ({ label: c.args[1] as string, url: c.args[2] as string }));
+    return this.argsOf('addExternalUrl', sessionId).map(([label, url]) => ({ label: label as string, url: url as string }));
+  }
+
+  /** What the comments, activities and links written so far read back as, in the shape the contract suite asks. */
+  written() {
+    return {
+      comments: async (identifier: string) => this.comments(identifier),
+      activities: async (sessionId: string) => this.activities(sessionId),
+      externalUrls: async (sessionId: string) => this.externalUrls(sessionId),
+    };
   }
 
   private record(method: string, ...args: unknown[]): void {
