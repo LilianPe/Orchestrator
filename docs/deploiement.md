@@ -8,7 +8,7 @@ Le dépôt fournit un `Dockerfile` et un `compose.yaml`.
 
 ### L'image
 
-- Base `node:24-bookworm-slim`, avec `git`, `gh` (dépôt officiel GitHub CLI) et Claude Code (`npm install -g @anthropic-ai/claude-code`, dernière version au moment du build).
+- Base `node:24.22.1-bookworm-slim` (patch épinglé : la mise à jour de sécurité de Node se fait en changeant ce tag, pas par un simple rebuild), avec `git`, `gh` (dépôt officiel GitHub CLI) et Claude Code (`npm install -g @anthropic-ai/claude-code`, dernière version au moment du build).
 - Relais construit dans `/app` (`npm ci`, `npm run build`, dépendances de dev retirées).
 - Identité git par défaut au niveau système : `Relais <relais@localhost>`, et `safe.directory '*'` (les dépôts montés peuvent appartenir à un autre utilisateur). Les variables `GIT_AUTHOR_*` / `GIT_COMMITTER_*` la remplacent.
 - `RELAIS_HOME=/data`, `NODE_ENV=production`.

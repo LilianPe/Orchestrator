@@ -6,7 +6,7 @@ Cette page couvre l'installation de Relais sur une machine (poste de dev ou serv
 
 | Outil | Version | Pourquoi |
 |---|---|---|
-| Node.js | **24 ou plus** (`engines.node: ">=24"`) | Le démon utilise `node:sqlite`, intégré à Node 24. |
+| Node.js | **24.22.1 ou plus** (`engines.node: ">=24.22.1"`) | Le démon utilise `node:sqlite`, intégré à Node 24 ; 24.22.1 est le minimum corrigé de la release de sécurité d'octobre 2026. |
 | npm | celui de Node 24 | Installation et build. |
 | git | récent (worktrees) | Un worktree git par ticket. |
 | GitHub CLI `gh` | connecté (`gh auth login`) au compte qui pousse et ouvre les PR | Relais et les agents appellent `gh pr …`, `gh api graphql`. Voir [`github.md`](github.md). |
