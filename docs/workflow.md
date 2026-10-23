@@ -192,7 +192,7 @@ Tout autre nom sous `on` est refusé (`on.<nom>: unknown event type`), sauf les 
 
 Les événements qui concernent un ticket que Relais ne suit pas encore sont ignorés, sauf `ticket.delegated`, `session.mentioned`, `session.prompted` et `command`, qui l'ajoutent au suivi.
 
-**Événements non fiables.** Chaque événement porte une étiquette de confiance (`taint`). Un événement marqué `untrusted` (contenu venu d'une source que l'orchestrateur ne tient pas pour fiable) ne lance jamais un job `workspace: knowledge` (`learn`, `remember`) : la règle s'applique sans ce run, et une activité Linear explique le refus. Les autres runs démarrent avec la liste des chemins sensibles qu'ils ne doivent pas écrire (`.github/**`, `.factory/**`, `.claude/**`, `CODEOWNERS`, `.env*`). Aujourd'hui, aucune source ne marque d'événement `untrusted` (ORC-160) et rien n'applique encore cette liste (sandbox du runner, ORC-151) ; un run différé par `debounce` perd l'étiquette en route.
+**Événements non fiables.** Chaque événement porte une étiquette de confiance (`taint`). Un événement marqué `untrusted` (contenu venu d'une source que l'orchestrateur ne tient pas pour fiable) ne lance jamais un job `workspace: knowledge` (`learn`, `remember`) : la règle s'applique sans ce run, et une activité Linear explique le refus. Les autres runs lancés directement par l'événement démarrent avec la liste des chemins sensibles qu'ils ne doivent pas écrire (`.github/**`, `.factory/**`, `.claude/**`, `CODEOWNERS`, `.env*`). Aujourd'hui, aucune source ne marque d'événement `untrusted` (ORC-160) et rien n'applique encore cette liste (sandbox du runner, ORC-151) ; l'étiquette se perd sur un run différé par `debounce` et sur la relance qui suit une vérification en échec.
 
 ### Champs d'une règle
 

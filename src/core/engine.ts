@@ -11,8 +11,9 @@ const STOP_MESSAGE = 'Arrêté. Répondez dans ce fil ou posez le label agent:re
 /** Paths a run started from an untrusted event must not write; enforced by the runner's sandbox (ORC-151). */
 export const SENSITIVE_PATHS: readonly string[] = ['.github/**', '.factory/**', '.claude/**', 'CODEOWNERS', '.env*'];
 
-export const TAINTED_KNOWLEDGE =
-  "Je n'écris pas dans la base de connaissances à partir d'un contenu non fiable. Un humain peut relancer la demande lui-même.";
+export function taintedKnowledge(job: string): string {
+  return `Je ne lance pas ${job} : ce job écrit dans la base de connaissances, et l'événement vient d'une source non fiable.`;
+}
 
 const BUILT_IN = new Set<EventType>([
   'control.pause', 'control.resume', 'control.stop', 'run.finished', 'verify.passed', 'verify.failed', 'debounce.fired', 'pr.opened',
@@ -48,9 +49,19 @@ export function isQuestionSession(ticket: TicketState | undefined, sessionId: st
   return !!ticket.linearSessionId && sessionId !== ticket.linearSessionId;
 }
 
-/** A run started from untrusted content carries the paths it must not write. */
-function guard(event: FactoryEvent, effect: StartRun): StartRun {
-  return event.taint === 'untrusted' ? { ...effect, sensitivePaths: SENSITIVE_PATHS } : effect;
+function refusesRun(event: FactoryEvent, job: JobSpec): boolean {
+  return job.workspace === 'knowledge' && event.taint === 'untrusted';
+}
+
+/** Starts `job`, unless untrusted content would write the knowledge base: then explains the refusal instead. */
+function startRun(out: Decision, event: FactoryEvent, job: JobSpec, run: Omit<StartRun, 'kind' | 'job'>): void {
+  if (refusesRun(event, job)) {
+    out.trace.push(`taint: refused ${job.name}`);
+    out.effects.push({ kind: 'activity', type: 'response', body: taintedKnowledge(job.name), linearSessionId: run.linearSessionId });
+    return;
+  }
+  const effect: StartRun = { kind: 'start_run', job: job.name, ...run };
+  out.effects.push(event.taint === 'untrusted' ? { ...effect, sensitivePaths: SENSITIVE_PATHS } : effect);
 }
 
 /** Non-delegated tickets only ever get question-queue work. */
@@ -90,10 +101,7 @@ function applyRule(out: Decision, rule: Rule, event: FactoryEvent, ticket: Ticke
     });
   }
   const job = rule.run ? workflow.jobs[rule.run]! : undefined;
-  const threaded = event.type === 'session.mentioned' || event.type === 'command';
-  const linearSessionId = threaded ? event.payload.linearSessionId : undefined;
-  const refused = job?.workspace === 'knowledge' && event.taint === 'untrusted';
-  if (job && !refused && ticket?.blocked) out.events.push({ type: 'ticket.unblocked' });
+  if (job && !refusesRun(event, job) && ticket?.blocked) out.events.push({ type: 'ticket.unblocked' });
   if (rule.move) out.effects.push({ kind: 'move', to: rule.move });
   if (rule.labels) out.effects.push({ kind: 'labels', add: rule.labels.add, remove: rule.labels.remove });
   if (rule.comment) out.effects.push({ kind: 'comment', body: rule.comment });
@@ -106,19 +114,16 @@ function applyRule(out: Decision, rule: Rule, event: FactoryEvent, ticket: Ticke
       body: 'Pour que je développe ce ticket, déléguez-le moi (champ « Agent » du ticket).',
     });
   }
-  if (job && refused) {
-    out.trace.push(`taint: refused ${job.name}`);
-    out.effects.push({ kind: 'activity', type: 'response', body: TAINTED_KNOWLEDGE, linearSessionId });
-  } else if (job && rule.debounceMs && rule.debounceMs > 0) {
+  if (!job) return out;
+  if (rule.debounceMs && rule.debounceMs > 0 && !refusesRun(event, job)) {
     out.timers.push({ kind: 'debounce', job: job.name, ms: rule.debounceMs });
-  } else if (job) {
-    out.effects.push(guard(event, {
-      kind: 'start_run',
-      job: job.name,
+  } else {
+    const threaded = event.type === 'session.mentioned' || event.type === 'command';
+    startRun(out, event, job, {
       input: job.input,
       inputText: threaded ? event.payload.body : undefined,
-      linearSessionId,
-    }));
+      linearSessionId: threaded ? event.payload.linearSessionId : undefined,
+    });
   }
   return out;
 }
@@ -226,8 +231,8 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
     case 'session.prompted':
       if (isQuestionSession(ticket, event.payload.linearSessionId)) {
         out.trace.push('built-in session.prompted (question session)');
-        if (!workflow.jobs['ask']) return out;
-        out.effects.push(guard(event, { kind: 'start_run', job: 'ask', input: 'thread', inputText: event.payload.body, linearSessionId: event.payload.linearSessionId }));
+        const ask = workflow.jobs['ask'];
+        if (ask) startRun(out, event, ask, { input: 'thread', inputText: event.payload.body, linearSessionId: event.payload.linearSessionId });
         return out;
       }
       break;

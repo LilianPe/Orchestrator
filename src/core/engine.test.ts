@@ -2,7 +2,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { loadWorkflow } from '../config/load-workflow.js';
 import type { Decision } from './decision.js';
-import { decide, SENSITIVE_PATHS, TAINTED_KNOWLEDGE } from './engine.js';
+import { decide, SENSITIVE_PATHS, taintedKnowledge } from './engine.js';
 import { reduce } from './reduce.js';
 import { newTicketState, type EventPayloads, type EventType, type FactoryEvent, type TicketState } from './types.js';
 
@@ -147,20 +147,41 @@ describe('decide — taint', () => {
 
   it('refuses to write the knowledge base from an untrusted event, and says why in its session', () => {
     const out = decide(ticket(), untrusted(retiens), workflow);
-    expect(out).toEqual(decision({ effects: [{ kind: 'activity', type: 'response', body: TAINTED_KNOWLEDGE, linearSessionId: 's3' }] }));
+    expect(out).toEqual(decision({ effects: [{ kind: 'activity', type: 'response', body: taintedKnowledge('remember'), linearSessionId: 's3' }] }));
     expect(out.trace.join(' ')).toContain('taint: refused remember');
   });
 
   it('keeps the other effects of an untrusted event when it refuses its knowledge run', () => {
     const out = decide(ticket({ logical: 'ready' }), untrusted(ev('pr.merged', { number: 3, url: 'u', branch: 'b' })), workflow);
     expect(kinds(out).effects).toEqual(['move', 'cleanup', 'activity']);
-    expect(out.effects[2]).toEqual({ kind: 'activity', type: 'response', body: TAINTED_KNOWLEDGE, linearSessionId: undefined });
+    expect(out.effects[2]).toEqual({ kind: 'activity', type: 'response', body: taintedKnowledge('learn'), linearSessionId: undefined });
   });
 
   it('starts the other runs of an untrusted event with the sensitive paths of the repository', () => {
     const out = decide(ticket(), untrusted(ev('ticket.delegated', {})), workflow);
     expect(out.effects).toEqual([{ kind: 'start_run', job: 'dev', input: undefined, inputText: undefined, linearSessionId: undefined, sensitivePaths: SENSITIVE_PATHS }]);
     expect(SENSITIVE_PATHS).toEqual(['.github/**', '.factory/**', '.claude/**', 'CODEOWNERS', '.env*']);
+  });
+
+  it('leaves a blocked ticket blocked when it refuses its knowledge run', () => {
+    const out = decide(ticket({ blocked: true }), untrusted(retiens), workflow);
+    expect(kinds(out)).toEqual({ events: [], effects: ['activity'], timers: [] });
+  });
+
+  it('refuses a debounced knowledge run without arming its timer', () => {
+    const debounced = { ...workflow, on: { ...workflow.on, command: [{ say: 'retiens', run: 'remember', debounceMs: 1000 }] } };
+    expect(kinds(decide(ticket(), untrusted(retiens), debounced))).toEqual({ events: [], effects: ['activity'], timers: [] });
+  });
+
+  it('answers an untrusted question with sensitive paths on its ask run', () => {
+    const out = decide(ticket({ linearSessionId: 's1' }), untrusted(ev('session.prompted', { linearSessionId: 's9', body: 'et pour mobile ?', author: 'L' })), workflow);
+    expect(out.effects).toEqual([{ kind: 'start_run', job: 'ask', input: 'thread', inputText: 'et pour mobile ?', linearSessionId: 's9', sensitivePaths: SENSITIVE_PATHS }]);
+  });
+
+  it('refuses an untrusted question when its ask job writes the knowledge base', () => {
+    const knowledgeAsk = { ...workflow, jobs: { ...workflow.jobs, ask: { ...workflow.jobs['ask']!, workspace: 'knowledge' as const } } };
+    const out = decide(ticket({ linearSessionId: 's1' }), untrusted(ev('session.prompted', { linearSessionId: 's9', body: 'et pour mobile ?', author: 'L' })), knowledgeAsk);
+    expect(out.effects).toEqual([{ kind: 'activity', type: 'response', body: taintedKnowledge('ask'), linearSessionId: 's9' }]);
   });
 
   it('starts a run from a trusted event without sensitive paths', () => {
