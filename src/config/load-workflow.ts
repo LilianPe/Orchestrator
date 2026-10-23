@@ -25,9 +25,13 @@ const EVENT_TYPES: readonly string[] = [
 /** Event names before ORC-133, still accepted as `on` keys. */
 const RENAMED: Record<string, EventType> = { 'ticket.moved': 'status.changed', 'label.added': 'label.changed' };
 
-function renameOn(raw: RawWorkflow): RawWorkflow {
+function renameOn(file: string, raw: RawWorkflow): RawWorkflow {
   if (!raw.on) return raw;
-  return { ...raw, on: Object.fromEntries(Object.entries(raw.on).map(([k, rules]) => [RENAMED[k] ?? k, rules])) };
+  const on = raw.on;
+  for (const [former, current] of Object.entries(RENAMED)) {
+    if (former in on && current in on) throw new WorkflowError(`${file}: on.${former}: same event as on.${current}, keep only one`);
+  }
+  return { ...raw, on: Object.fromEntries(Object.entries(on).map(([k, rules]) => [RENAMED[k] ?? k, rules])) };
 }
 
 function readRaw(file: string): RawWorkflow {
@@ -37,7 +41,7 @@ function readRaw(file: string): RawWorkflow {
     const issue = res.error.issues[0]!;
     throw new WorkflowError(`${file}: ${issue.path.join('.')}: ${issue.message}`);
   }
-  return renameOn(res.data);
+  return renameOn(file, res.data);
 }
 
 function isObject(v: unknown): v is Record<string, unknown> {

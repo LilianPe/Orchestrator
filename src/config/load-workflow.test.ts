@@ -41,6 +41,11 @@ on:
     expect(Object.keys(wf.on)).not.toContain('ticket.moved');
   });
 
+  it('refuses a project file that declares an event under both its former and its current name', () => {
+    const file = projectFile('version: 1\non:\n  ticket.moved:\n    - { to: ready, comment: "a" }\n  status.changed:\n    - { to: ready, comment: "b" }\n');
+    expect(() => loadWorkflow({ packDir, projectFile: file })).toThrow(/on\.ticket\.moved: same event as on\.status\.changed/);
+  });
+
   it('accepts rules on a human push', () => {
     const wf = loadWorkflow({ packDir, projectFile: projectFile(`version: 1\non:\n  push.human:\n    - { comment: "commit humain" }\n`) });
     expect(wf.on['push.human']).toHaveLength(1);
