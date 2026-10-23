@@ -294,11 +294,6 @@ export class Orchestrator {
 
   private async carryOut(project: ProjectRuntime, ticket: TicketState | undefined, decision: Decision): Promise<void> {
     const { store, bus, clock } = this.d;
-    if (ticket) {
-      for (const t of decision.timers) {
-        store.putTimer({ key: `${ticket.ticketId}:${t.job}`, projectId: project.id, ticketId: ticket.ticketId, job: t.job, fireAt: clock.now() + t.ms });
-      }
-    }
     for (const c of decision.effects) {
       bus.publish({ kind: 'command', projectId: project.id, ticketId: ticket?.ticketId, command: c });
       try {
@@ -308,8 +303,13 @@ export class Orchestrator {
         this.log('error', `command ${c.kind} for ${ticket?.ticketId ?? '*'}: ${message}`);
         if (!ticket) throw err;
         await this.failTicket(project, ticket.ticketId, `Erreur : ${message}`);
-        break;
+        return;
       }
+    }
+    // After the effects, as `set_debounce` was: a stop in the same decision keeps the timer, a failed effect arms none.
+    if (!ticket) return;
+    for (const t of decision.timers) {
+      store.putTimer({ key: `${ticket.ticketId}:${t.job}`, projectId: project.id, ticketId: ticket.ticketId, job: t.job, fireAt: clock.now() + t.ms });
     }
   }
 

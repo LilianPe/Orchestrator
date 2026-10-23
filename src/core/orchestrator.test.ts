@@ -236,4 +236,33 @@ describe('Orchestrator', () => {
     expect(t.blockReason).toBe('Erreur : linear down');
     expect(tracker.activities().some((a) => a.type === 'error')).toBe(true);
   });
+
+  const labelled = (label: string): FactoryEvent =>
+    ({ ...TRUSTED, id: `l:${label}`, type: 'label.changed', at: 2_000, projectId: 'p', ticketId: 'REL-1', payload: { label, change: 'added' } });
+
+  it('arms a rule timer after its effects, so a stop in the same rule does not delete it', async () => {
+    const { store, tracker, orch } = setup({
+      tweak: (w) => { w.on['label.changed'] = [{ label: 'agent:x', do: 'stop', run: 'dev-feedback', debounceMs: 180_000 }]; },
+    });
+    tracker.addIssue({ identifier: 'REL-1', title: 'A' });
+    await orch.submit(delegated());
+    await orch.idle();
+    await orch.submit(labelled('agent:x'));
+    await orch.idle();
+    expect(store.dueTimers(Number.MAX_SAFE_INTEGER).map((t) => t.key)).toEqual(['REL-1:dev-feedback']);
+  });
+
+  it('arms no rule timer when an earlier effect of the rule fails', async () => {
+    const { store, tracker, orch } = setup({
+      tweak: (w) => { w.on['label.changed'] = [{ label: 'agent:y', comment: 'reçu', run: 'dev-feedback', debounceMs: 180_000 }]; },
+    });
+    tracker.addIssue({ identifier: 'REL-1', title: 'A' });
+    tracker.comment = async () => { throw new Error('linear down'); };
+    await orch.submit(delegated());
+    await orch.idle();
+    await orch.submit(labelled('agent:y'));
+    await orch.idle();
+    expect(store.getTicket('p', 'REL-1')!.blockReason).toBe('Erreur : linear down');
+    expect(store.dueTimers(Number.MAX_SAFE_INTEGER)).toEqual([]);
+  });
 });
