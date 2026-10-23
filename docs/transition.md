@@ -96,7 +96,7 @@ Le premier ticket cité est celui qui touche le module en premier ou le plus ; l
 
 | Module | Rôle | Statut | Ticket cible |
 |---|---|---|---|
-| `src/core/engine.ts` | `decide(état, événement, wf)` pure : règles `on` du YAML et cas codés → `{events, effects, timers, trace}` | adapter | ORC-133 (fait : signature, fencing), ORC-187 (préréglage), ORC-169 (règles `on` retirées) |
+| `src/core/engine.ts` | `decide(état, événement, wf)` pure : règles `on` du YAML et cas codés → `{events, effects, timers, trace}` | adapter | ORC-133 (fait : signature, fencing, taint : refus des jobs `knowledge`, `sensitivePaths` sur `start_run`), ORC-187 (préréglage), ORC-169 (règles `on` retirées) |
 | `src/core/reduce.ts` | `reduce(état, événement)` pure : seul endroit qui change l'état d'un ticket | garder | ORC-133, ORC-149 (worker), ORC-173 (propriétés) |
 | `src/core/upcast.ts` | `upcast` : relit un événement du journal écrit par une version antérieure (`schemaVersion`) | garder | ORC-133, ORC-174 (oracle de rejeu) |
 | `src/core/orchestrator.ts` | Files, runs, vérifications, blocages, reprise ; exécute les effets, change l'état par `reduce` (ORC-133) | retirer | ORC-133 (`reduce` extrait), ORC-149 (worker), ORC-150 (exécuteurs), ORC-220 (`recover`), retrait final ORC-169 |

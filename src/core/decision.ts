@@ -4,7 +4,8 @@ export type ActivityType = 'thought' | 'response' | 'elicitation' | 'error';
 
 /** An action outside the ticket state, carried out by the orchestrator (later: the outbox). */
 export type Effect =
-  | { kind: 'start_run'; job: string; input?: InputKind; inputText?: string; linearSessionId?: string; resume?: boolean }
+  /** `sensitivePaths`: set on a run started from an untrusted event, for the runner's sandbox (ORC-151) to protect. */
+  | { kind: 'start_run'; job: string; input?: InputKind; inputText?: string; linearSessionId?: string; resume?: boolean; sensitivePaths?: readonly string[] }
   /** Without linearSessionId: stop the ticket's dev work. With it: stop only the runs of that (question) session. */
   | { kind: 'stop_run'; linearSessionId?: string }
   | { kind: 'run_verify'; runId: string; job: string }
