@@ -33,9 +33,9 @@ Chaque garantie d'erreur ou d'effet d'une fiche a son cas. Pour une panne, le su
 
 ## Contrôles négatifs
 
-Un cas qui passe contre tous les sujets ne prouve rien s'il passerait aussi contre un sujet qui viole sa garantie. `test/contracts/negative-controls.test.ts` lance les cas d'erreur et d'effet contre des sujets qui en violent chacun une exprès (un `start` qui lève, un `run` qui rejette, une forge qui se tait au lieu de rejeter, un commentaire qui n'écrit rien…) : le cas doit y échouer sur une assertion.
+Un cas qui passe contre tous les sujets ne prouve rien s'il passerait aussi contre un sujet qui viole sa garantie. `test/contracts/negative-controls.test.ts` lance les cas d'erreur et d'effet ajoutés par ORC-265 contre des sujets qui violent chacun une garantie exprès (un `start` qui lève, un `run` qui rejette, une forge qui se tait au lieu de rejeter, un commentaire qui n'écrit rien…) : le cas doit y échouer sur une assertion. Les cas plus anciens (ticket inconnu, statut absent, `destroy` d'un id inconnu…) n'ont pas encore le leur.
 
-Le troisième argument d'une suite, `{ violates: [noms de cas] }`, la met dans ce mode : seuls ces cas tournent, et chacun ne passe que s'il échoue sur une assertion (une autre erreur, un `TypeError` du sujet par exemple, fait échouer le contrôle). Un nom qui ne désigne aucun cas fait échouer le fichier, pour qu'un cas renommé ne laisse pas son contrôle tourner à vide. Un nouveau cas d'erreur ou d'effet arrive avec son contrôle.
+Le troisième argument d'une suite, `{ violates: [noms de cas] }`, la met dans ce mode : seuls ces cas tournent, et chacun ne passe que s'il échoue sur une assertion (une autre erreur, un `TypeError` du sujet par exemple, fait échouer le contrôle, de même qu'un sujet qui n'a pas le champ dont le cas a besoin, au lieu de le sauter). Un nom qui ne désigne aucun cas fait échouer le fichier, pour qu'un cas renommé ne laisse pas son contrôle tourner à vide. Un nouveau cas d'erreur ou d'effet arrive avec son contrôle.
 
 ## Écarts connus
 

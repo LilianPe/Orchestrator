@@ -1,17 +1,18 @@
 import { existsSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, type TestContext } from 'vitest';
 import { FakeCheckRunner } from '../../src/adapters/checks/fake.js';
 import type { CheckRunner } from '../../src/adapters/checks/types.js';
 import { FakeForge } from '../../src/adapters/forge/fake.js';
 import type { Forge } from '../../src/adapters/forge/types.js';
+import { Channel } from '../../src/adapters/runner/channel.js';
 import { FakeRunner } from '../../src/adapters/runner/fake.js';
-import type { RunHandle, RunRequest } from '../../src/adapters/runner/types.js';
+import type { RunHandle, RunRequest, RunStreamEvent } from '../../src/adapters/runner/types.js';
 import { FakeTracker } from '../../src/adapters/tracker/fake.js';
 import { runVerify } from '../../src/core/verify.js';
 import { describeAgentRuntimeContract, type AgentRuntimeSubject } from './agent-runtime.contract.js';
-import { contractCases } from './cases.js';
+import { asNegativeControl, contractCases } from './cases.js';
 import { describeCheckRunnerContract, type CheckRunnerSubject } from './check-runner.contract.js';
 import { describeForgeContract, type ForgeSubject } from './forge.contract.js';
 import { describeTrackerContract, type TrackerSubject } from './tracker.contract.js';
@@ -54,6 +55,15 @@ describeAgentRuntimeContract(
   runtimeThat((inner, req) => {
     const h = inner.start(req);
     return req.cwd === NOWHERE ? { ...h, done: h.done.then((r) => ({ ...r, outcome: 'success' as const })) } : h;
+  }),
+  { violates: [LAUNCH] },
+);
+
+describeAgentRuntimeContract(
+  'a runtime whose stream never closes when it cannot launch',
+  runtimeThat((inner, req) => {
+    const h = inner.start(req);
+    return req.cwd === NOWHERE ? { ...h, events: new Channel<RunStreamEvent>() } : h;
   }),
   { violates: [LAUNCH] },
 );
@@ -114,6 +124,14 @@ function forgeThat(patch: Partial<ForgeSubject>): () => ForgeSubject {
 describeForgeContract(
   'a forge that answers nothing instead of rejecting when it cannot reach the forge',
   forgeThat({ unreachable: { findPr: async () => undefined, unresolvedReviewComments: async () => [] } }),
+  { violates: ['findPr and unresolvedReviewComments reject when the forge does not answer'] },
+);
+
+describeForgeContract(
+  'a forge that answers no review threads instead of rejecting when it cannot reach the forge',
+  forgeThat({
+    unreachable: { findPr: async () => Promise.reject(new Error('forge unreachable')), unresolvedReviewComments: async () => [] },
+  }),
   { violates: ['findPr and unresolvedReviewComments reject when the forge does not answer'] },
 );
 
@@ -198,5 +216,12 @@ describe('contractCases', () => {
     const { it: kase, end } = contractCases({ violates: ['a case renamed since'] });
     kase('a case of the suite', () => {});
     expect(end).toThrow('violates names no case of the suite: a case renamed since');
+  });
+
+  it('fails a negative control whose subject lacks a field the case needs, instead of skipping it', async () => {
+    let skipped = false;
+    const ctx = { skip: () => void (skipped = true) } as unknown as TestContext;
+    await expect(asNegativeControl((c) => c.skip())(ctx)).rejects.toMatchObject({ name: 'AssertionError' });
+    expect(skipped).toBe(false);
   });
 });

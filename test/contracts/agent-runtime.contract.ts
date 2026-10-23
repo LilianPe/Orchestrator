@@ -39,6 +39,13 @@ function within(h: RunHandle, ms: number): Promise<RunResult | 'pending'> {
   return Promise.race([h.done, late]).finally(() => clearTimeout(timer));
 }
 
+/** Whether the stream closes within `ms`. */
+async function closesWithin(events: AsyncIterable<RunStreamEvent>, ms: number): Promise<boolean> {
+  let timer: NodeJS.Timeout | undefined;
+  const late = new Promise<false>((resolve) => (timer = setTimeout(() => resolve(false), ms)));
+  return Promise.race([drain(events).then(() => true), late]).finally(() => clearTimeout(timer));
+}
+
 export function describeAgentRuntimeContract(name: string, make: () => AgentRuntimeSubject, options?: ContractOptions): void {
   const start = (s: AgentRuntimeSubject, script: AgentScript, patch: Partial<RunRequest> = {}) =>
     s.runtime.start(request({ ...patch, ...s.script(script) }));
@@ -70,7 +77,7 @@ export function describeAgentRuntimeContract(name: string, make: () => AgentRunt
       let h: RunHandle | undefined;
       expect(() => (h = start(s, 'unlaunchable'))).not.toThrow();
       await expect(within(h!, 1_500)).resolves.toMatchObject({ outcome: 'failure' });
-      await drain(h!.events);
+      expect(await closesWithin(h!.events, 1_500)).toBe(true);
     });
 
     it('stop ends a running run in stopped and closes its stream; stopping again changes nothing', async () => {

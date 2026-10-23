@@ -126,12 +126,13 @@ export function describeTrackerContract(name: string, make: () => TrackerSubject
       expect((await s.written.comments(s.issue)).filter((c) => c === body).length - before).toBe(2);
 
       const session = await s.tracker.ensureSession(s.issue);
-      const thought: ActivityInput = { type: 'thought', body: 'Je lis le ticket.' };
-      const action: ActivityInput = { type: 'action', action: 'Lecture', parameter: 'README.md', result: 'ok', ephemeral: true };
-      await s.tracker.activity(session, thought);
-      await s.tracker.activity(session, action);
-      await s.tracker.activity(session, thought);
-      expect((await s.written.activities(session)).slice(-3)).toEqual([thought, action, thought]);
+      const activities: ActivityInput[] = [
+        ...(['thought', 'response', 'elicitation', 'error'] as const).map((type) => ({ type, body: `Activité ${type}.` })),
+        { type: 'action', action: 'Lecture', parameter: 'README.md', result: 'ok', ephemeral: true },
+        { type: 'action', action: 'Écriture', parameter: 'src/a.ts' },
+      ];
+      for (const a of [...activities, activities[0]!]) await s.tracker.activity(session, a);
+      expect((await s.written.activities(session)).slice(-7)).toEqual([...activities, activities[0]]);
 
       await s.tracker.addExternalUrl(session, 'Pull request', 'https://github.test/pr/1');
       expect(await s.written.externalUrls(session)).toContainEqual({ label: 'Pull request', url: 'https://github.test/pr/1' });

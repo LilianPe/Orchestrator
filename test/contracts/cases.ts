@@ -22,6 +22,21 @@ export interface ContractOptions {
 type CaseBody = (ctx: TestContext) => unknown;
 
 /**
+ * The body of a negative control: it passes only if the case fails on an assertion. A missing subject field
+ * fails it too, instead of skipping it as `ctx.skip` would.
+ */
+export function asNegativeControl(body: CaseBody): CaseBody {
+  return async (ctx) => {
+    const skip = () => {
+      throw new Error('negative control: the subject lacks a field the case needs');
+    };
+    await expect((async () => body(Object.create(ctx, { skip: { value: skip } }) as TestContext))()).rejects.toMatchObject({
+      name: 'AssertionError',
+    });
+  };
+}
+
+/**
  * The `it` of a contract suite, and `end`, to call once every case is declared: it rejects a `violates`
  * entry that names no case, so a renamed case cannot turn its negative control into a silent no-op.
  */
@@ -31,9 +46,7 @@ export function contractCases({ violates }: ContractOptions = {}): { it: (name: 
     declared.add(name);
     if (!violates) return void vitestIt(name, body);
     if (!violates.includes(name)) return;
-    vitestIt(`${name} (negative control)`, async (ctx) => {
-      await expect((async () => body(ctx))()).rejects.toMatchObject({ name: 'AssertionError' });
-    });
+    vitestIt(`${name} (negative control)`, asNegativeControl(body));
   };
   const end = (): void => {
     const unknown = (violates ?? []).filter((n) => !declared.has(n));
