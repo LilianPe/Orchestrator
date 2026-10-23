@@ -12,7 +12,7 @@ import { EventBus } from './bus.js';
 import { FakeClock } from './clock.js';
 import { Orchestrator } from './orchestrator.js';
 import { Scheduler } from './scheduler.js';
-import type { FactoryEvent } from './types.js';
+import { TRUSTED, type FactoryEvent } from './types.js';
 
 function setup(o: { runner?: Runner; verify?: Verifier; budget?: number; tweak?: (w: ReturnType<typeof loadWorkflow>) => void } = {}) {
   const packDir = join(import.meta.dirname, '../../packs/standard');
@@ -33,7 +33,7 @@ function setup(o: { runner?: Runner; verify?: Verifier; budget?: number; tweak?:
   return { store, tracker, runner: fakeRunner, orch, scheduler };
 }
 
-const delegated = (id = 'e1'): FactoryEvent => ({ id, type: 'ticket.delegated', at: 1_000, projectId: 'p', ticketId: 'REL-1', payload: { linearSessionId: 'ls-1' } });
+const delegated = (id = 'e1'): FactoryEvent => ({ ...TRUSTED, id, type: 'ticket.delegated', at: 1_000, projectId: 'p', ticketId: 'REL-1', payload: { linearSessionId: 'ls-1' } });
 
 describe('Orchestrator', () => {
   it('ignores a duplicate event id', async () => {
@@ -45,9 +45,29 @@ describe('Orchestrator', () => {
     expect(runner.requests).toHaveLength(1);
   });
 
+  it('creates the ticket from the snapshot carried by the event, without reading the tracker', async () => {
+    const { store, tracker, orch } = setup();
+    const issue = { title: 'Export CSV', logical: 'todo' as const, priority: 3 };
+    const payload = { name: 'fais-le', body: '', linearSessionId: 'q1', author: 'L', issue };
+    await orch.submit({ id: 'c1', type: 'command', at: 1_000, projectId: 'p', ticketId: 'REL-1', payload } as FactoryEvent);
+    await orch.idle();
+    expect(store.getTicket('p', 'REL-1')).toMatchObject({ title: 'Export CSV', priority: 3, questionSessionIds: ['q1'] });
+    expect(tracker.calls.filter((c) => c.method === 'getIssue')).toEqual([]);
+  });
+
+  it('reads the tracker once to fill a creating event without a snapshot, and journals the filled event', async () => {
+    const { store, tracker, orch } = setup();
+    tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', stateName: 'In Progress', priority: 2 });
+    await orch.submit({ id: 'm1', type: 'session.mentioned', at: 1_000, projectId: 'p', ticketId: 'REL-1', payload: { linearSessionId: 'q1', body: '?', author: 'L' } } as FactoryEvent);
+    await orch.idle();
+    expect(store.getTicket('p', 'REL-1')).toMatchObject({ title: 'Export CSV', logical: 'dev', priority: 2 });
+    const journaled = store.recentEvents(10).find((e) => e.id === 'm1')!;
+    expect(journaled.payload).toMatchObject({ issue: { title: 'Export CSV', logical: 'dev', priority: 2 } });
+  });
+
   it('ignores moves of tickets it does not manage', async () => {
     const { store, orch } = setup();
-    await orch.submit({ id: 'm', type: 'ticket.moved', at: 1, projectId: 'p', ticketId: 'REL-9', payload: { from: 'todo', to: 'dev' } });
+    await orch.submit({ ...TRUSTED, id: 'm', type: 'status.changed', at: 1, projectId: 'p', ticketId: 'REL-9', payload: { from: 'todo', to: 'dev' } });
     await orch.idle();
     expect(store.getTicket('p', 'REL-9')).toBeUndefined();
   });
@@ -162,7 +182,7 @@ describe('Orchestrator', () => {
     tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
     await orch.submit(delegated());
     await waitFor(() => !!store.getTicket('p', 'REL-1')?.verifyingRunId);
-    await orch.submit({ id: 'stop', type: 'control.stop', at: 2, projectId: 'p', ticketId: 'REL-1', payload: {} });
+    await orch.submit({ ...TRUSTED, id: 'stop', type: 'control.stop', at: 2, projectId: 'p', ticketId: 'REL-1', payload: {} });
     expect(store.getTicket('p', 'REL-1')!.verifyingRunId).toBeUndefined();
     release();
     await orch.idle();
@@ -178,7 +198,7 @@ describe('Orchestrator', () => {
     await orch.submit(delegated());
     await orch.idle();
     expect(runner.requests).toHaveLength(1);
-    const d2 = (id: string): FactoryEvent => ({ id, type: 'ticket.delegated', at: 1_000, projectId: 'p', ticketId: 'REL-2', payload: { linearSessionId: 'ls-2' } });
+    const d2 = (id: string): FactoryEvent => ({ ...TRUSTED, id, type: 'ticket.delegated', at: 1_000, projectId: 'p', ticketId: 'REL-2', payload: { linearSessionId: 'ls-2' } });
     await orch.submit(d2('e2'));
     await orch.submit(d2('e3'));
     await orch.idle();
@@ -215,5 +235,34 @@ describe('Orchestrator', () => {
     expect(t.blocked).toBe(true);
     expect(t.blockReason).toBe('Erreur : linear down');
     expect(tracker.activities().some((a) => a.type === 'error')).toBe(true);
+  });
+
+  const labelled = (label: string): FactoryEvent =>
+    ({ ...TRUSTED, id: `l:${label}`, type: 'label.changed', at: 2_000, projectId: 'p', ticketId: 'REL-1', payload: { label, change: 'added' } });
+
+  it('arms a rule timer after its effects, so a stop in the same rule does not delete it', async () => {
+    const { store, tracker, orch } = setup({
+      tweak: (w) => { w.on['label.changed'] = [{ label: 'agent:x', do: 'stop', run: 'dev-feedback', debounceMs: 180_000 }]; },
+    });
+    tracker.addIssue({ identifier: 'REL-1', title: 'A' });
+    await orch.submit(delegated());
+    await orch.idle();
+    await orch.submit(labelled('agent:x'));
+    await orch.idle();
+    expect(store.dueTimers(Number.MAX_SAFE_INTEGER).map((t) => t.key)).toEqual(['REL-1:dev-feedback']);
+  });
+
+  it('arms no rule timer when an earlier effect of the rule fails', async () => {
+    const { store, tracker, orch } = setup({
+      tweak: (w) => { w.on['label.changed'] = [{ label: 'agent:y', comment: 'reçu', run: 'dev-feedback', debounceMs: 180_000 }]; },
+    });
+    tracker.addIssue({ identifier: 'REL-1', title: 'A' });
+    tracker.comment = async () => { throw new Error('linear down'); };
+    await orch.submit(delegated());
+    await orch.idle();
+    await orch.submit(labelled('agent:y'));
+    await orch.idle();
+    expect(store.getTicket('p', 'REL-1')!.blockReason).toBe('Erreur : linear down');
+    expect(store.dueTimers(Number.MAX_SAFE_INTEGER)).toEqual([]);
   });
 });

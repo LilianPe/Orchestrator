@@ -105,13 +105,15 @@ export class PgStore implements AsyncStore {
    */
   async recordEvent(event: FactoryEvent): Promise<boolean> {
     const now = this.now();
+    // A row without a version predates versioning: version 1, as `upcast` reads it.
+    const version = event.schemaVersion ?? 1;
     return this.db.transaction(async (tx) => {
       const inserted = await tx.execute(
         sql`
           insert into inbox (id, event_id, type, payload, received_at, schema_version)
           values (
             ${event.id}, ${event.id}, ${event.type}, ${JSON.stringify(event)}::jsonb,
-            to_timestamp(${now / 1000}), 1
+            to_timestamp(${now / 1000}), ${version}
           )
           on conflict do nothing
           returning id
@@ -133,7 +135,7 @@ export class PgStore implements AsyncStore {
         insert into journal (id, ticket_id, event_id, seq, type, payload, schema_version, created_at)
         values (
           ${event.id}, ${ticketId}, ${event.id}, ${seq}, ${event.type},
-          ${JSON.stringify(event)}::jsonb, 1, to_timestamp(${now / 1000})
+          ${JSON.stringify(event)}::jsonb, ${version}, to_timestamp(${now / 1000})
         )
       `);
       return true;

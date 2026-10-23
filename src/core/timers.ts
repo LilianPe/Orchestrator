@@ -1,6 +1,6 @@
 import type { Store } from '../store/types.js';
 import type { Clock } from './clock.js';
-import type { FactoryEvent } from './types.js';
+import { TRUSTED, type FactoryEvent } from './types.js';
 
 export class TimerService {
   private handle: NodeJS.Timeout | undefined;
@@ -16,6 +16,7 @@ export class TimerService {
     for (const t of this.store.dueTimers(now)) {
       this.store.deleteTimer(t.key);
       this.emit({
+        ...TRUSTED,
         id: `timer:${t.key}:${t.fireAt}`,
         type: 'debounce.fired',
         at: now,

@@ -17,7 +17,7 @@ describe('TimerService', () => {
     svc.tick();
     svc.tick();
     expect(events).toEqual([
-      { id: 'timer:REL-1:dev-feedback:180000', type: 'debounce.fired', at: 180_000, projectId: 'p', ticketId: 'REL-1', payload: { job: 'dev-feedback' } },
+      { id: 'timer:REL-1:dev-feedback:180000', type: 'debounce.fired', at: 180_000, schemaVersion: 2, taint: 'trusted', projectId: 'p', ticketId: 'REL-1', payload: { job: 'dev-feedback' } },
     ]);
   });
 });

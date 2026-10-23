@@ -1,5 +1,5 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
-import type { LogicalState, FactoryEvent } from '../../../core/types.js';
+import { TRUSTED, type LogicalState, type FactoryEvent } from '../../../core/types.js';
 
 export function isUsableWebhookSecret(secret: unknown): boolean {
   return typeof secret === 'string' && secret.trim() !== '';
@@ -67,7 +67,7 @@ function issueEvents(body: any, identifier: string, teamKey: string, projectId: 
     const fromName = ctx.stateNameById(teamKey, from.stateId);
     if (toName && !ctx.isEcho(`state:${identifier}:${toName}`)) {
       out.push({
-        type: 'ticket.moved',
+        type: 'status.changed',
         payload: { from: fromName ? ctx.logicalFor(projectId, fromName) : null, to: ctx.logicalFor(projectId, toName) },
       });
     }
@@ -76,7 +76,7 @@ function issueEvents(body: any, identifier: string, teamKey: string, projectId: 
     for (const id of data.labelIds as string[]) {
       if ((from.labelIds as string[]).includes(id)) continue;
       const name = ctx.labelNameById(teamKey, id);
-      if (name && !ctx.isEcho(`label:${identifier}:${name}`)) out.push({ type: 'label.added', payload: { label: name }, suffix: `:label:${id}` });
+      if (name && !ctx.isEcho(`label:${identifier}:${name}`)) out.push({ type: 'label.changed', payload: { label: name, change: 'added' }, suffix: `:label:${id}` });
     }
   }
   return out;
@@ -104,6 +104,6 @@ export function mapLinearWebhook(body: any, key: string, ctx: MapContext): Facto
   const partials = body.type === 'AgentSessionEvent' ? sessionEvents(body, projectId, ctx) : issueEvents(body, identifier, teamKey, projectId, ctx);
   const at = ctx.now();
   return partials.map(
-    (p) => ({ id: `linear:${key}${p.suffix ?? ''}`, type: p.type, at, projectId, ticketId: identifier, payload: p.payload }) as FactoryEvent,
+    (p) => ({ ...TRUSTED, id: `linear:${key}${p.suffix ?? ''}`, type: p.type, at, projectId, ticketId: identifier, payload: p.payload }) as FactoryEvent,
   );
 }

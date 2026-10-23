@@ -1,10 +1,10 @@
 import type { RunStreamEvent } from '../adapters/runner/types.js';
-import type { Command } from './commands.js';
+import type { Effect } from './decision.js';
 import type { FactoryEvent, TicketState } from './types.js';
 
 export type BusMessage =
   | { kind: 'event'; event: FactoryEvent }
-  | { kind: 'command'; projectId: string; ticketId?: string; command: Command }
+  | { kind: 'command'; projectId: string; ticketId?: string; command: Effect }
   | { kind: 'run'; runId: string; ticketId: string; ev: RunStreamEvent }
   | { kind: 'ticket'; ticket: TicketState }
   | { kind: 'log'; level: 'info' | 'warn' | 'error'; message: string; at: number };

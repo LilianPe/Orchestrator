@@ -56,7 +56,7 @@ describe('standard workflow', () => {
     const h = createHarness();
     await delegatedAndInReview(h);
     h.runner.enqueue({ hold: true }, { events: [{ kind: 'text', text: 'Second passage.' }] });
-    await h.send('ticket.moved', { from: 'human_review', to: 'dev' });
+    await h.send('status.changed', { from: 'human_review', to: 'dev' });
     const runningId = h.ticket().activeRunId!;
     await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'aussi le titre', author: 'L' });
     await h.advance(180_000);
@@ -71,7 +71,7 @@ describe('standard workflow', () => {
     const h = createHarness();
     await delegatedAndInReview(h);
     h.runner.enqueue({ events: [{ kind: 'text', text: 'Synthèse : 2 rounds, CI verte.' }] });
-    await h.send('ticket.moved', { from: 'human_review', to: 'ai_review' });
+    await h.send('status.changed', { from: 'human_review', to: 'ai_review' });
     expect(h.runner.requests[1]).toMatchObject({ model: 'opus', resume: false });
     expect(h.runner.requests[1]!.prompt).toContain('Rounds de review max : 5');
     expect(h.ticket().logical).toBe('ready');
@@ -238,7 +238,7 @@ describe('standard workflow', () => {
     it('moving a mention-only ticket to AI Review starts no review and moves nothing', async () => {
       const h = createHarness();
       await mentioned(h);
-      await h.send('ticket.moved', { from: 'human_review', to: 'ai_review' });
+      await h.send('status.changed', { from: 'human_review', to: 'ai_review' });
       expect(h.runner.requests).toHaveLength(1);
       expect(h.tracker.calls.filter((c) => c.method === 'moveTo')).toEqual([]);
       expect(h.ticket().logical).toBe('ai_review');
@@ -247,7 +247,7 @@ describe('standard workflow', () => {
     it('agent:reprendre on a mention-only ticket starts nothing', async () => {
       const h = createHarness();
       await mentioned(h);
-      await h.send('label.added', { label: 'agent:reprendre' });
+      await h.send('label.changed', { label: 'agent:reprendre', change: 'added' });
       expect(h.runner.requests).toHaveLength(1);
     });
 

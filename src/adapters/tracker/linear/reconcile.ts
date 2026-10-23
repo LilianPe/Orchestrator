@@ -1,6 +1,6 @@
 import type { Clock } from '../../../core/clock.js';
-import type { ProjectRuntime } from '../../../core/orchestrator.js';
-import type { LogicalState, FactoryEvent } from '../../../core/types.js';
+import { logicalFromName, type ProjectRuntime } from '../../../core/orchestrator.js';
+import { TRUSTED, type FactoryEvent } from '../../../core/types.js';
 import type { Store } from '../../../store/types.js';
 import type { Tracker } from '../types.js';
 
@@ -23,14 +23,18 @@ export async function reconcileOnce(d: ReconcileDeps): Promise<void> {
         const t = d.store.getTicket(p.id, issue.identifier);
         if (!t || !t.delegated) {
           const id = t ? `reconcile:delegated:${issue.identifier}:${t.updatedAt}` : `reconcile:delegated:${issue.identifier}`;
-          d.submit({ id, type: 'ticket.delegated', at, projectId: p.id, ticketId: issue.identifier, payload: {} });
+          const logical = logicalFromName(p.workflow.states, issue.stateName) ?? 'todo';
+          // An untracked ticket: the snapshot spares the orchestrator a second read of the tracker.
+          const payload = t ? {} : { issue: { title: issue.title, logical, priority: issue.priority } };
+          d.submit({ ...TRUSTED, id, type: 'ticket.delegated', at, projectId: p.id, ticketId: issue.identifier, payload });
           continue;
         }
-        const to = (Object.entries(p.workflow.states) as [LogicalState, string][]).find(([, n]) => n === issue.stateName)?.[0];
+        const to = logicalFromName(p.workflow.states, issue.stateName);
         if (to && to !== t.logical && !d.store.isEcho(`state:${issue.identifier}:${issue.stateName}`, at)) {
           d.submit({
+            ...TRUSTED,
             id: `reconcile:moved:${issue.identifier}:${issue.stateName}:${t.updatedAt}`,
-            type: 'ticket.moved',
+            type: 'status.changed',
             at,
             projectId: p.id,
             ticketId: issue.identifier,
@@ -41,10 +45,10 @@ export async function reconcileOnce(d: ReconcileDeps): Promise<void> {
       for (const t of d.store.listTickets()) {
         if (t.projectId !== p.id || delegated.has(t.ticketId)) continue;
         if (t.activeRunId) {
-          d.submit({ id: `reconcile:undelegated:${t.ticketId}:${t.activeRunId}`, type: 'session.stopped', at, projectId: p.id, ticketId: t.ticketId, payload: {} });
+          d.submit({ ...TRUSTED, id: `reconcile:undelegated:${t.ticketId}:${t.activeRunId}`, type: 'session.stopped', at, projectId: p.id, ticketId: t.ticketId, payload: {} });
         }
         if (t.delegated && t.logical !== 'done') {
-          d.submit({ id: `reconcile:undelegated-flag:${t.ticketId}:${t.updatedAt}`, type: 'ticket.undelegated', at, projectId: p.id, ticketId: t.ticketId, payload: {} });
+          d.submit({ ...TRUSTED, id: `reconcile:undelegated-flag:${t.ticketId}:${t.updatedAt}`, type: 'ticket.undelegated', at, projectId: p.id, ticketId: t.ticketId, payload: {} });
         }
       }
     } catch (err) {

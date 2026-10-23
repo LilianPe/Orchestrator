@@ -9,20 +9,25 @@ import type { JobSpec, Workflow } from '../config/workflow-schema.js';
 import type { RunRecord, Store } from '../store/types.js';
 import type { EventBus } from './bus.js';
 import type { Clock } from './clock.js';
-import type { Command } from './commands.js';
-import { decide } from './engine.js';
+import type { Decision, Effect } from './decision.js';
+import { decide, isFenced } from './engine.js';
 import { pickupFailures } from './pickup.js';
 import { buildPrompt, formatFeedback, formatVerifyFailures } from './prompt.js';
+import { reduce } from './reduce.js';
+import { upcast, type StoredEvent } from './upcast.js';
 import type { Scheduler } from './scheduler.js';
 import {
-  newTicketState,
+  CREATES_TICKET,
   type EventType,
   type InputKind,
+  type InternalEvent,
+  type IssueSnapshot,
   type LogicalState,
   type QueueName,
   type FactoryEvent,
   type TicketState,
   type VerifyFailure,
+  TRUSTED,
 } from './types.js';
 import type { Verifier } from './verify.js';
 import { PRODUCT_NAME } from '../product.js';
@@ -65,10 +70,8 @@ interface StartOpts {
   resume?: boolean;
 }
 
-const CREATES_TICKET = new Set<EventType>(['ticket.delegated', 'session.mentioned', 'command', 'session.prompted']);
 const SETTLES_RUN = new Set<EventType>(['run.finished', 'verify.passed', 'verify.failed']);
 const ECHO_MS = 60_000;
-const MAX_QUESTION_SESSIONS = 50;
 
 export function logicalFromName(states: Record<LogicalState, string>, name: string): LogicalState | undefined {
   return (Object.entries(states) as [LogicalState, string][]).find(([, n]) => n === name)?.[0];
@@ -99,9 +102,10 @@ export class Orchestrator {
     this.newId = d.newId ?? randomUUID;
   }
 
-  submit(event: FactoryEvent): Promise<void> {
+  /** Accepts an event of any schema version: it is upcast before anything reads it. */
+  submit(event: FactoryEvent | StoredEvent): Promise<void> {
     const next = this.chain
-      .then(() => this.handle(event))
+      .then(() => this.handle(upcast(event)))
       .catch((err: unknown) => this.log('error', `event ${event.id} (${event.type}): ${(err as Error).message}`));
     this.chain = next;
     return next;
@@ -130,13 +134,9 @@ export class Orchestrator {
    */
   recover(): void {
     const { store } = this.d;
-    const block = (t: TicketState, reason: string): void => {
-      t.activeRunId = undefined;
-      t.verifyingRunId = undefined;
-      t.blocked = true;
-      t.blockReason = reason;
-      this.putTicket(t);
+    const block = (t: TicketState, reason: string): TicketState => {
       this.recoveryNotices.push({ ticket: { projectId: t.projectId, ticketId: t.ticketId }, type: 'elicitation', body: reason });
+      return this.apply(t, { type: 'run.interrupted', reason });
     };
     const cut = [...store.runsByStatus('running'), ...store.runsByStatus('interrupted')];
     for (const run of cut) {
@@ -149,10 +149,10 @@ export class Orchestrator {
         });
       }
     }
-    for (const t of store.listTickets()) {
+    for (let t of store.listTickets()) {
       if (t.activeRunId) {
         const r = store.getRun(t.activeRunId);
-        if (!r || r.status !== 'running') block(t, `${PRODUCT_NAME} a redémarré pendant le run. Répondez dans le fil pour relancer.`);
+        if (!r || r.status !== 'running') t = block(t, `${PRODUCT_NAME} a redémarré pendant le run. Répondez dans le fil pour relancer.`);
       }
       if (t.verifyingRunId) block(t, `${PRODUCT_NAME} a redémarré pendant les vérifications. Répondez dans le fil pour relancer.`);
     }
@@ -224,10 +224,18 @@ export class Orchestrator {
     this.background.set(wrapped, runId);
   }
 
-  private putTicket(t: TicketState): void {
-    t.updatedAt = this.d.clock.now();
-    this.d.store.putTicket(t);
-    this.d.bus.publish({ kind: 'ticket', ticket: t });
+  private putTicket(t: TicketState): TicketState {
+    const stamped = { ...t, updatedAt: this.d.clock.now() };
+    this.d.store.putTicket(stamped);
+    this.d.bus.publish({ kind: 'ticket', ticket: stamped });
+    return stamped;
+  }
+
+  /** The only way the orchestrator changes a ticket: through `reduce`, then persisted. */
+  private apply(t: TicketState, ...events: InternalEvent[]): TicketState {
+    let next = t;
+    for (const e of events) next = reduce(next, e)!;
+    return this.putTicket(next);
   }
 
   private ticket(projectId: string, ticketId: string): TicketState {
@@ -236,69 +244,57 @@ export class Orchestrator {
     return t;
   }
 
-  private async createTicket(project: ProjectRuntime, ticketId: string): Promise<TicketState> {
-    const issue = await this.d.tracker.getIssue(ticketId);
+  /**
+   * An event that starts tracking a ticket must carry its snapshot, so that `decide` and a replay of the
+   * journal never read the tracker. A producer that could not fill it gets it filled here, before journaling.
+   */
+  private async withSnapshot(event: FactoryEvent): Promise<FactoryEvent> {
+    if (event.projectId === '*' || !event.ticketId || !CREATES_TICKET.has(event.type)) return event;
+    const payload = event.payload as { issue?: IssueSnapshot };
+    if (payload.issue || this.d.store.getTicket(event.projectId, event.ticketId)) return event;
+    const project = this.project(event.projectId);
+    const issue = await this.d.tracker.getIssue(event.ticketId);
     const logical = logicalFromName(project.workflow.states, issue.stateName) ?? 'todo';
-    const t = newTicketState(project.id, ticketId, issue.title, logical, this.d.clock.now(), issue.priority);
-    this.putTicket(t);
-    return t;
+    return { ...event, payload: { ...payload, issue: { title: issue.title, logical, priority: issue.priority } } } as FactoryEvent;
   }
 
-  private async handle(event: FactoryEvent): Promise<void> {
+  private async handle(incoming: FactoryEvent): Promise<void> {
     const { store, bus } = this.d;
+    const event = await this.withSnapshot(incoming);
     if (!store.recordEvent(event)) return;
     bus.publish({ kind: 'event', event });
 
     if (event.projectId === '*') {
-      const workflow = this.d.projects[0]?.workflow;
-      if (!workflow) return;
-      for (const c of decide(event, undefined, { workflow })) await this.exec(this.d.projects[0]!, undefined, c);
+      const project = this.d.projects[0];
+      if (!project) return;
+      await this.carryOut(project, undefined, decide(undefined, event, project.workflow));
       return;
     }
 
     const project = this.project(event.projectId);
-    let ticket = event.ticketId ? store.getTicket(project.id, event.ticketId) : undefined;
-    if (!ticket && event.ticketId) {
-      if (!CREATES_TICKET.has(event.type)) {
-        this.log('info', `ignored ${event.type} for unmanaged ticket ${event.ticketId}`);
-        return;
-      }
-      ticket = await this.createTicket(project, event.ticketId);
+    const known = event.ticketId ? store.getTicket(project.id, event.ticketId) : undefined;
+    if (!known && event.ticketId && !CREATES_TICKET.has(event.type)) {
+      this.log('info', `ignored ${event.type} for unmanaged ticket ${event.ticketId}`);
+      return;
     }
 
-    let activeJob = ticket?.activeRunId ? store.getRun(ticket.activeRunId)?.job : undefined;
-    if (ticket) {
-      if (event.type === 'ticket.delegated') {
-        ticket.delegated = true;
-        if (event.payload.linearSessionId && !ticket.linearSessionId) ticket.linearSessionId = event.payload.linearSessionId;
-      }
-      if (event.type === 'ticket.undelegated') ticket.delegated = false;
-      if ((event.type === 'session.mentioned' || event.type === 'command') && event.payload.linearSessionId !== ticket.linearSessionId) {
-        const ids = ticket.questionSessionIds.filter((id) => id !== event.payload.linearSessionId);
-        ticket.questionSessionIds = [...ids, event.payload.linearSessionId].slice(-MAX_QUESTION_SESSIONS);
-      }
-      if (event.type === 'ticket.moved' && event.payload.to) ticket.logical = event.payload.to;
-      if (event.type === 'run.finished') {
-        const run = store.getRun(event.payload.runId);
-        if (run) {
-          this.d.scheduler.release(`${run.ticketId}:${run.queue}`);
-          if (run.queue === 'dev' && ticket.activeRunId === run.id) ticket.activeRunId = undefined;
-        }
-        ticket.costUsd += event.payload.costUsd;
-        activeJob = event.payload.job;
-      }
-      if (event.type === 'verify.passed' || event.type === 'verify.failed') {
-        if (event.payload.runId !== ticket.verifyingRunId) {
-          this.log('info', `ignored stale ${event.type} for ${ticket.ticketId} (run ${event.payload.runId})`);
-          return;
-        }
-        ticket.verifyingRunId = undefined;
-      }
-      this.putTicket(ticket);
+    if (event.type === 'run.finished') {
+      const run = store.getRun(event.payload.runId);
+      if (run) this.d.scheduler.release(`${run.ticketId}:${run.queue}`);
     }
+    const decision = decide(known, event, project.workflow);
+    if (isFenced(decision)) this.log('info', `ignored stale ${event.type} for ${event.ticketId ?? '*'}: ${decision.trace[0]}`);
+    let next = reduce(known, event);
+    for (const e of decision.events) next = reduce(next, e);
+    const ticket = next && this.putTicket(next);
+    await this.carryOut(project, ticket, decision);
 
-    const commands = decide(event, ticket, { workflow: project.workflow, activeJob });
-    for (const c of commands) {
+    if (ticket && SETTLES_RUN.has(event.type)) await this.settle(project, ticket.ticketId);
+  }
+
+  private async carryOut(project: ProjectRuntime, ticket: TicketState | undefined, decision: Decision): Promise<void> {
+    const { store, bus, clock } = this.d;
+    for (const c of decision.effects) {
       bus.publish({ kind: 'command', projectId: project.id, ticketId: ticket?.ticketId, command: c });
       try {
         await this.exec(project, ticket?.ticketId, c);
@@ -307,19 +303,20 @@ export class Orchestrator {
         this.log('error', `command ${c.kind} for ${ticket?.ticketId ?? '*'}: ${message}`);
         if (!ticket) throw err;
         await this.failTicket(project, ticket.ticketId, `Erreur : ${message}`);
-        break;
+        return;
       }
     }
-
-    if (ticket && SETTLES_RUN.has(event.type)) await this.settle(project, ticket.ticketId);
+    // After the effects, as `set_debounce` was: a stop in the same decision keeps the timer, a failed effect arms none.
+    if (!ticket) return;
+    for (const t of decision.timers) {
+      store.putTimer({ key: `${ticket.ticketId}:${t.job}`, projectId: project.id, ticketId: ticket.ticketId, job: t.job, fireAt: clock.now() + t.ms });
+    }
   }
 
   private async failTicket(project: ProjectRuntime, ticketId: string, reason: string): Promise<void> {
-    const t = this.d.store.getTicket(project.id, ticketId);
-    if (!t) return;
-    t.blocked = true;
-    t.blockReason = reason;
-    this.putTicket(t);
+    const found = this.d.store.getTicket(project.id, ticketId);
+    if (!found) return;
+    const t = this.apply(found, { type: 'ticket.blocked', reason });
     try {
       const session = await this.sessionFor(t);
       await this.d.tracker.activity(session, { type: 'error', body: reason });
@@ -332,8 +329,7 @@ export class Orchestrator {
     const t = this.ticket(project.id, ticketId);
     if (!t.activeRunId && !t.verifyingRunId && t.pendingJob) {
       const pending = t.pendingJob;
-      t.pendingJob = undefined;
-      this.putTicket(t);
+      this.apply(t, { type: 'pending.cleared' });
       await this.startRun(project, ticketId, pending);
     }
     await this.drain('dev');
@@ -351,7 +347,7 @@ export class Orchestrator {
     }
   }
 
-  private async exec(project: ProjectRuntime, ticketId: string | undefined, c: Command): Promise<void> {
+  private async exec(project: ProjectRuntime, ticketId: string | undefined, c: Effect): Promise<void> {
     const { store, tracker, clock } = this.d;
     if (c.kind === 'set_paused') {
       store.setMeta('paused', c.paused ? '1' : '0');
@@ -373,9 +369,6 @@ export class Orchestrator {
           }
           return;
         }
-        t.pendingJob = undefined;
-        t.verifyingRunId = undefined;
-        this.putTicket(t);
         store.removeFromQueue(project.id, ticketId);
         store.deleteTimersFor(project.id, ticketId);
         if (t.activeRunId) this.handles.get(t.activeRunId)?.stop();
@@ -385,12 +378,10 @@ export class Orchestrator {
         const run = store.getRun(c.runId);
         const job = project.workflow.jobs[c.job];
         if (!run || !job) return;
-        t.verifyingRunId = run.id;
-        this.putTicket(t);
         this.track(
           (async () => {
             const res = await this.d.verify(run.cwd, job.verify);
-            const base = { at: clock.now(), projectId: project.id, ticketId };
+            const base = { ...TRUSTED, at: clock.now(), projectId: project.id, ticketId };
             const event: FactoryEvent = res.ok
               ? { ...base, id: `verify:${run.id}`, type: 'verify.passed', payload: { runId: run.id, job: job.name } }
               : { ...base, id: `verify:${run.id}`, type: 'verify.failed', payload: { runId: run.id, job: job.name, failures: res.failures } };
@@ -422,36 +413,17 @@ export class Orchestrator {
       case 'link_pr':
         if (t.linearSessionId) await tracker.addExternalUrl(t.linearSessionId, 'Pull request', c.url);
         return;
-      case 'set_debounce':
-        store.putTimer({ key: `${ticketId}:${c.job}`, projectId: project.id, ticketId, job: c.job, fireAt: clock.now() + c.ms });
-        return;
-      case 'append_feedback':
-        t.pendingFeedback.push(c.item);
-        return this.putTicket(t);
       case 'cleanup':
         await this.d.workspaces.cleanup(project.id, project.repoPath, ticketId);
-        t.worktreePath = undefined;
-        t.port = undefined;
-        return this.putTicket(t);
-      case 'block':
-        t.blocked = true;
-        t.blockReason = c.reason;
-        return this.putTicket(t);
-      case 'unblock':
-        t.blocked = false;
-        t.blockReason = undefined;
-        return this.putTicket(t);
-      case 'patch_ticket':
-        Object.assign(t, c.patch);
-        return this.putTicket(t);
+        this.apply(this.ticket(project.id, ticketId), { type: 'workspace.released' });
+        return;
     }
   }
 
   private async sessionFor(t: TicketState): Promise<string> {
     if (t.linearSessionId) return t.linearSessionId;
     const s = await this.d.tracker.ensureSession(t.ticketId);
-    t.linearSessionId = s;
-    this.putTicket(t);
+    this.apply(this.ticket(t.projectId, t.ticketId), { type: 'session.linked', linearSessionId: s });
     return s;
   }
 
@@ -459,9 +431,7 @@ export class Orchestrator {
     const stateName = project.workflow.states[to];
     this.d.store.putEcho(`state:${t.ticketId}:${stateName}`, this.d.clock.now() + ECHO_MS);
     await this.d.tracker.moveTo(t.ticketId, stateName);
-    const fresh = this.ticket(project.id, t.ticketId);
-    fresh.logical = to;
-    this.putTicket(fresh);
+    this.apply(this.ticket(project.id, t.ticketId), { type: 'status.recorded', to });
   }
 
   private async startRun(project: ProjectRuntime, ticketId: string, opts: StartOpts): Promise<void> {
@@ -493,8 +463,8 @@ export class Orchestrator {
       enqueuedAt: this.d.clock.now(),
     };
     if (job.queue === 'dev' && (t.activeRunId || t.verifyingRunId)) {
-      t.pendingJob = { job: job.name, input: opts.input, inputText: opts.inputText, resume: opts.resume };
-      return this.putTicket(t);
+      this.apply(t, { type: 'pending.set', job: { job: job.name, input: opts.input, inputText: opts.inputText, resume: opts.resume } });
+      return;
     }
     if (this.stopping || this.isPaused()) return this.d.scheduler.enqueue(item);
     if (this.overBudget()) {
@@ -509,17 +479,17 @@ export class Orchestrator {
       await this.launch(project, ticketId, job, opts, slot, key);
     } catch (err) {
       this.d.scheduler.release(key);
-      const fresh = this.ticket(project.id, ticketId);
+      let fresh = this.ticket(project.id, ticketId);
+      const events: InternalEvent[] = [];
       if (fresh.activeRunId) {
         const r = this.d.store.getRun(fresh.activeRunId);
         if (r && r.status === 'running' && !this.handles.has(r.id)) this.d.store.putRun({ ...r, status: 'failure', endedAt: this.d.clock.now() });
-        if (!this.handles.has(fresh.activeRunId)) fresh.activeRunId = undefined;
+        if (!this.handles.has(fresh.activeRunId)) events.push({ type: 'run.cleared' });
       }
-      fresh.blocked = true;
-      fresh.blockReason = `Erreur au lancement : ${(err as Error).message}`;
-      this.putTicket(fresh);
+      const reason = `Erreur au lancement : ${(err as Error).message}`;
+      fresh = this.apply(fresh, ...events, { type: 'ticket.blocked', reason });
       const session = opts.linearSessionId ?? (await this.sessionFor(fresh));
-      await this.d.tracker.activity(session, { type: 'error', body: fresh.blockReason });
+      await this.d.tracker.activity(session, { type: 'error', body: reason });
     }
   }
 
@@ -544,9 +514,7 @@ export class Orchestrator {
       const failures = await pickupFailures(wf.tracker.pickup.checks, issue, project.repoPath, workspaces);
       if (failures.length) {
         this.d.scheduler.release(key);
-        t.blocked = true;
-        t.blockReason = failures.join(' ');
-        this.putTicket(t);
+        t = this.apply(t, { type: 'ticket.blocked', reason: failures.join(' ') });
         const session = await this.sessionFor(t);
         await tracker.activity(session, {
           type: 'elicitation',
@@ -569,12 +537,7 @@ export class Orchestrator {
       runId,
     });
     t = this.ticket(project.id, ticketId);
-    if (job.queue === 'dev') {
-      t.worktreePath = ws.path;
-      t.port = ws.port;
-      if (ws.branch) t.branch = ws.branch;
-      this.putTicket(t);
-    }
+    if (job.queue === 'dev') t = this.apply(t, { type: 'workspace.prepared', path: ws.path, port: ws.port, branch: ws.branch });
     if (job.onStart.move && t.logical !== job.onStart.move) await this.move(project, t, job.onStart.move);
     t = this.ticket(project.id, ticketId);
 
@@ -584,14 +547,12 @@ export class Orchestrator {
     const wantsResume = opts.resume ?? job.session === 'resume';
     const resume = wantsResume && !!t.claudeSessionId;
     const claudeSessionId = resume ? t.claudeSessionId! : this.newId();
-    if (job.queue === 'dev' && !t.claudeSessionId) t.claudeSessionId = claudeSessionId;
 
     const kind = opts.input ?? job.input;
     let input: { kind: InputKind; text: string } | undefined;
     if (kind === 'feedback') {
       const items = [...t.pendingFeedback];
       if (t.prNumber) items.push(...(await forge.unresolvedReviewComments(project.repoPath, t.prNumber)));
-      t.pendingFeedback = [];
       input = { kind, text: items.length ? formatFeedback(items) : '(aucun retour écrit : relisez la PR et le fil Linear)' };
     } else if (kind === 'verify_failures') {
       input = { kind, text: formatVerifyFailures(JSON.parse(opts.inputText ?? '[]') as VerifyFailure[]) };
@@ -627,8 +588,7 @@ export class Orchestrator {
       cwd: ws.path,
     };
     store.putRun(run);
-    if (job.queue === 'dev') t.activeRunId = runId;
-    this.putTicket(t);
+    this.apply(t, { type: 'run.started', runId, job: job.name, queue: job.queue, claudeSessionId, feedbackConsumed: kind === 'feedback' });
     if (this.d.beforeRun) await this.d.beforeRun(run).catch((err: Error) => this.log('warn', `beforeRun: ${err.message}`));
 
     const handle = this.d.runner.start({
@@ -697,6 +657,7 @@ export class Orchestrator {
       result = { outcome: 'failure', costUsd: 0, turns: 0, lastText: message };
     }
     await this.submit({
+      ...TRUSTED,
       id: `run:${run.id}:finished`,
       type: 'run.finished',
       at: clock.now(),

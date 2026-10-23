@@ -96,12 +96,14 @@ Le premier ticket cité est celui qui touche le module en premier ou le plus ; l
 
 | Module | Rôle | Statut | Ticket cible |
 |---|---|---|---|
-| `src/core/engine.ts` | `decide(event, ticket, ctx)` : règles `on` du YAML et cas codés → commandes | adapter | ORC-133 (`decide` pure, `{events, effects, timers, trace}`), ORC-187 (préréglage), ORC-169 (règles `on` retirées) |
-| `src/core/orchestrator.ts` | Files, runs, vérifications, blocages, reprise ; mute l'état hors de `decide` | retirer | ORC-133 (`reduce` extrait), ORC-149 (worker), ORC-150 (exécuteurs), ORC-220 (`recover`), retrait final ORC-169 |
+| `src/core/engine.ts` | `decide(état, événement, wf)` pure : règles `on` du YAML et cas codés → `{events, effects, timers, trace}` | adapter | ORC-133 (fait : signature, fencing, taint : refus des jobs `knowledge`, `sensitivePaths` sur `start_run`), ORC-187 (préréglage), ORC-169 (règles `on` retirées) |
+| `src/core/reduce.ts` | `reduce(état, événement)` pure : seul endroit qui change l'état d'un ticket | garder | ORC-133, ORC-149 (worker), ORC-173 (propriétés) |
+| `src/core/upcast.ts` | `upcast` : relit un événement du journal écrit par une version antérieure (`schemaVersion`) | garder | ORC-133, ORC-174 (oracle de rejeu) |
+| `src/core/orchestrator.ts` | Files, runs, vérifications, blocages, reprise ; exécute les effets, change l'état par `reduce` (ORC-133) | retirer | ORC-133 (`reduce` extrait), ORC-149 (worker), ORC-150 (exécuteurs), ORC-220 (`recover`), retrait final ORC-169 |
 | `src/core/bus.ts` | Chaîne d'événements en mémoire (`EventBus`, aussi source du SSE) | retirer | ORC-169 (ORC-223 garde le flux SSE du dashboard) |
 | `src/core/scheduler.ts` | Places `dev` et `questions` en mémoire | retirer | ORC-169 (ORC-182 garde un emplacement à part pour les questions) |
 | `src/core/timers.ts` | `TimerService` : debounce en mémoire, `debounce.fired` | retirer | ORC-161 (timers en base via l'inbox), retrait ORC-169 |
-| `src/core/commands.ts` | Type `Command` (effets externes et changements d'état mêlés) | retirer | ORC-133 (découpé en effets, timers, événements), retrait ORC-169 |
+| `src/core/decision.ts` | Type `Decision` de `decide` : `Effect` (ex-`Command` côté externe), `Timer` (ex-`set_debounce`) ; remplace `commands.ts` (ORC-133) | garder | ORC-133, ORC-162 (effets idempotents) |
 | `src/core/conditions.ts` | Mini-langage `when` | retirer | ORC-177 |
 | `src/core/verify.ts` | `runVerify` : commandes `bash -lc` dans le worktree de l'agent | adapter | ORC-151 (sandbox neuf, SHA figé), ORC-179 (plus dans le worktree) |
 | `src/core/prompt.ts` | Prompt texte d'un run (skill, ticket, branche, PR, échecs de vérif) | adapter | ORC-136 (pistes d'`intake`), ORC-151 (logs tronqués), ORC-182 (entrées de l'agent de réponse) |
@@ -109,7 +111,7 @@ Le premier ticket cité est celui qui touche le module en premier ou le plus ; l
 | `src/core/naming.ts` | `slugify`, `branchName` (`factory/<id>-<slug>`) | adapter | ORC-167 (préfixe), ORC-136 et ORC-204 (`branchName` de Linear) |
 | `src/core/clock.ts` | `Clock`, `SystemClock`, `FakeClock` | garder | ORC-225, ORC-161 |
 | `src/core/duration.ts` | `parseDuration` (`3m`, `90m`…) | garder | ORC-177 (gardé si `factory.yml` garde des durées en texte) |
-| `src/core/types.ts` | `FactoryEvent`, `TicketState`, 6 états logiques | adapter | ORC-133 (`schemaVersion`, renommages), ORC-160 (taint, acteur), ORC-180 (`humanInbox`), ORC-187 (états retirés) |
+| `src/core/types.ts` | `FactoryEvent` (`schemaVersion`, taint), `TicketState`, 6 états logiques | adapter | ORC-133 (fait : `schemaVersion`, champ taint, renommages), ORC-160 (taint posé à l'ingestion, acteur), ORC-180 (`humanInbox`), ORC-187 (états retirés) |
 
 ### `src/adapters/`
 

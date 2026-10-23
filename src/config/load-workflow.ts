@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { parse } from 'yaml';
 import { parseCondition } from '../core/conditions.js';
 import { parseDuration } from '../core/duration.js';
-import type { EventType, LogicalState } from '../core/types.js';
+import { RENAMED_V1, type EventType, type LogicalState } from '../core/types.js';
 import {
   rawWorkflowSchema,
   type JobSpec,
@@ -17,10 +17,20 @@ import {
 export class WorkflowError extends Error {}
 
 const EVENT_TYPES: readonly string[] = [
-  'ticket.delegated', 'session.mentioned', 'session.prompted', 'session.stopped', 'ticket.moved', 'label.added',
-  'command', 'pr.opened', 'pr.checks_passed', 'pr.checks_failed', 'pr.merged', 'pr.closed', 'run.finished',
+  'ticket.delegated', 'session.mentioned', 'session.prompted', 'session.stopped', 'status.changed', 'label.changed',
+  'push.human', 'command', 'pr.opened', 'pr.checks_passed', 'pr.checks_failed', 'pr.merged', 'pr.closed', 'run.finished',
   'verify.passed', 'verify.failed', 'debounce.fired', 'control.pause', 'control.resume', 'control.stop',
 ];
+
+/** Event names of version 1 are still accepted as `on` keys. */
+function renameOn(file: string, raw: RawWorkflow): RawWorkflow {
+  if (!raw.on) return raw;
+  const on = raw.on;
+  for (const [former, current] of Object.entries(RENAMED_V1)) {
+    if (former in on && current in on) throw new WorkflowError(`${file}: on.${former}: same event as on.${current}, keep only one`);
+  }
+  return { ...raw, on: Object.fromEntries(Object.entries(on).map(([k, rules]) => [RENAMED_V1[k] ?? k, rules])) };
+}
 
 function readRaw(file: string): RawWorkflow {
   const doc = parse(readFileSync(file, 'utf8')) ?? {};
@@ -29,7 +39,7 @@ function readRaw(file: string): RawWorkflow {
     const issue = res.error.issues[0]!;
     throw new WorkflowError(`${file}: ${issue.path.join('.')}: ${issue.message}`);
   }
-  return res.data;
+  return renameOn(file, res.data);
 }
 
 function isObject(v: unknown): v is Record<string, unknown> {
