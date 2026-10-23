@@ -1,6 +1,6 @@
 import { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { newTicketState, type FactoryEvent } from '../../src/core/types.js';
+import { newTicketState, SCHEMA_VERSION, TRUSTED, type FactoryEvent } from '../../src/core/types.js';
 import { migratePgStore } from '../../src/store/pg/migrate.js';
 import { OUTBOX_LEASE_MS, PgStore } from '../../src/store/pg/pg-store.js';
 import { PG_TABLE_NAMES } from '../../src/store/pg/schema.js';
@@ -210,6 +210,15 @@ describe.skipIf(!url)('PgStore integration', () => {
     ]);
     expect(await store.recentEvents(10)).toEqual([second, first]);
     expect(await store.recentEvents(1, 'REL-1')).toEqual([second]);
+  });
+
+  it('records the schema version the event carries in the inbox and journal columns', async () => {
+    await store.recordEvent({ ...TRUSTED, id: 'e-v2', type: 'control.pause', at: 1_000, projectId: 'p', ticketId: 'REL-1', payload: {} });
+    const rows = await pool.query<{ inbox: number; journal: number }>(
+      `select (select schema_version from inbox where event_id = 'e-v2') as inbox,
+              (select schema_version from journal where event_id = 'e-v2') as journal`,
+    );
+    expect(rows.rows[0]).toEqual({ inbox: SCHEMA_VERSION, journal: SCHEMA_VERSION });
   });
 
   it('rolls the inbox insert back when the journal insert fails', async () => {
