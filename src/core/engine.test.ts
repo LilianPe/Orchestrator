@@ -100,6 +100,12 @@ describe('decide — YAML rules of the standard pack', () => {
     expect(decide(ticket({ logical: 'dev' }), ev('label.changed', { label: 'agent:stop', change: 'removed' }), workflow)).toEqual(decision());
   });
 
+  it('a label.changed rule without label also matches additions only, as label.added did', () => {
+    const wf = { ...workflow, on: { ...workflow.on, 'label.changed': [{ comment: 'label modifié' }] } };
+    expect(decide(ticket(), ev('label.changed', { label: 'x', change: 'removed' }), wf)).toEqual(decision());
+    expect(decide(ticket(), ev('label.changed', { label: 'x', change: 'added' }), wf).effects).toEqual([{ kind: 'comment', body: 'label modifié' }]);
+  });
+
   it('a human push is a typed event that the standard pack does not react to', () => {
     expect(decide(ticket({ logical: 'dev' }), ev('push.human', { branch: 'factory/rel-1', sha: 'abc123', author: 'lilian' }), workflow)).toEqual(decision());
   });

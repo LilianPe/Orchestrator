@@ -79,9 +79,9 @@ function ruleMatches(rule: Rule, event: FactoryEvent, ticket: TicketState | unde
     if (rule.from && rule.from !== event.payload.from) return false;
     if (rule.to && rule.to !== event.payload.to) return false;
   }
-  if (rule.label !== undefined && (event.type !== 'label.changed' || event.payload.change !== 'added' || event.payload.label !== rule.label)) {
-    return false;
-  }
+  // Rules under label.changed see additions only, as under label.added before the rename.
+  if (event.type === 'label.changed' && event.payload.change !== 'added') return false;
+  if (rule.label !== undefined && (event.type !== 'label.changed' || event.payload.label !== rule.label)) return false;
   if (rule.say !== undefined && (event.type !== 'command' || event.payload.name !== rule.say)) return false;
   if (rule.when) {
     return evalCondition(rule.when, {
