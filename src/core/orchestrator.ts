@@ -17,6 +17,7 @@ import { reduce } from './reduce.js';
 import { upcast, type StoredEvent } from './upcast.js';
 import type { Scheduler } from './scheduler.js';
 import {
+  CREATES_TICKET,
   type EventType,
   type InputKind,
   type InternalEvent,
@@ -69,7 +70,6 @@ interface StartOpts {
   resume?: boolean;
 }
 
-const CREATES_TICKET = new Set<EventType>(['ticket.delegated', 'session.mentioned', 'command', 'session.prompted']);
 const SETTLES_RUN = new Set<EventType>(['run.finished', 'verify.passed', 'verify.failed']);
 const ECHO_MS = 60_000;
 

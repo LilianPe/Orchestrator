@@ -1,4 +1,4 @@
-import { newTicketState, type InternalEvent, type FactoryEvent, type TicketState } from './types.js';
+import { CREATES_TICKET, newTicketState, type InternalEvent, type FactoryEvent, type IssueSnapshot, type TicketState } from './types.js';
 
 const MAX_QUESTION_SESSIONS = 50;
 
@@ -73,10 +73,7 @@ function internal(t: TicketState, e: InternalEvent): TicketState {
 
 /** A ticket the factory does not track yet starts from the snapshot its creating event carries. */
 function tracked(e: FactoryEvent): TicketState | undefined {
-  const issue =
-    e.type === 'ticket.delegated' || e.type === 'session.mentioned' || e.type === 'session.prompted' || e.type === 'command'
-      ? e.payload.issue
-      : undefined;
+  const issue = CREATES_TICKET.has(e.type) ? (e.payload as { issue?: IssueSnapshot }).issue : undefined;
   if (!issue || !e.ticketId) return undefined;
   return newTicketState(e.projectId, e.ticketId, issue.title, issue.logical, e.at, issue.priority);
 }

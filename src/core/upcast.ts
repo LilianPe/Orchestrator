@@ -1,4 +1,4 @@
-import { SCHEMA_VERSION, type FactoryEvent, type Taint } from './types.js';
+import { RENAMED_V1, SCHEMA_VERSION, type FactoryEvent, type Taint } from './types.js';
 
 /** An event as it may sit in the journal, whatever factory version wrote it. */
 export interface StoredEvent {
@@ -11,8 +11,6 @@ export interface StoredEvent {
   taint?: Taint;
   payload: unknown;
 }
-
-const RENAMED_V1: Record<string, string> = { 'ticket.moved': 'status.changed', 'label.added': 'label.changed' };
 
 /** Upcaster from version N to N + 1, indexed by N. A row without a version is version 1. */
 const UPCASTERS: Record<number, (e: StoredEvent) => StoredEvent> = {

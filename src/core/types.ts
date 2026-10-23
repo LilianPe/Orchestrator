@@ -61,6 +61,12 @@ export interface EventPayloads {
 
 export type EventType = keyof EventPayloads;
 
+/** Events that start tracking a ticket the factory does not track yet; their payload carries its `issue` snapshot. */
+export const CREATES_TICKET: ReadonlySet<EventType> = new Set<EventType>(['ticket.delegated', 'session.mentioned', 'command', 'session.prompted']);
+
+/** Event names of schema version 1, renamed in version 2. */
+export const RENAMED_V1: Readonly<Record<string, EventType>> = { 'ticket.moved': 'status.changed', 'label.added': 'label.changed' };
+
 /** Version of the event shape; `upcast` brings older journal rows up to it. */
 export const SCHEMA_VERSION = 2;
 

@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { parse } from 'yaml';
 import { parseCondition } from '../core/conditions.js';
 import { parseDuration } from '../core/duration.js';
-import type { EventType, LogicalState } from '../core/types.js';
+import { RENAMED_V1, type EventType, type LogicalState } from '../core/types.js';
 import {
   rawWorkflowSchema,
   type JobSpec,
@@ -22,16 +22,14 @@ const EVENT_TYPES: readonly string[] = [
   'verify.passed', 'verify.failed', 'debounce.fired', 'control.pause', 'control.resume', 'control.stop',
 ];
 
-/** Event names before ORC-133, still accepted as `on` keys. */
-const RENAMED: Record<string, EventType> = { 'ticket.moved': 'status.changed', 'label.added': 'label.changed' };
-
+/** Event names of version 1 are still accepted as `on` keys. */
 function renameOn(file: string, raw: RawWorkflow): RawWorkflow {
   if (!raw.on) return raw;
   const on = raw.on;
-  for (const [former, current] of Object.entries(RENAMED)) {
+  for (const [former, current] of Object.entries(RENAMED_V1)) {
     if (former in on && current in on) throw new WorkflowError(`${file}: on.${former}: same event as on.${current}, keep only one`);
   }
-  return { ...raw, on: Object.fromEntries(Object.entries(on).map(([k, rules]) => [RENAMED[k] ?? k, rules])) };
+  return { ...raw, on: Object.fromEntries(Object.entries(on).map(([k, rules]) => [RENAMED_V1[k] ?? k, rules])) };
 }
 
 function readRaw(file: string): RawWorkflow {
