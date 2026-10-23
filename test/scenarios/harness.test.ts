@@ -41,6 +41,20 @@ describe('harness: new port fakes and the test preset', () => {
     expect(h.ticket()).toMatchObject({ blocked: false, verifyAttempts: 0 });
   });
 
+  it('a held run reaches its duration cap on the simulated clock and blocks the ticket', async () => {
+    const h = createHarness();
+    h.runner.enqueue({ hold: true });
+    await delegate(h);
+    const runId = h.ticket().activeRunId!;
+    const cap = h.runner.requests[0]!.limits.durationMs;
+    await h.advance(cap - 1);
+    expect(h.ticket().activeRunId).toBe(runId);
+    await h.advance(1);
+    expect(h.store.getRun(runId)).toMatchObject({ status: 'limit' });
+    expect(h.ticket()).toMatchObject({ blocked: true });
+    expect(h.tracker.activities('ls-1').at(-1)).toMatchObject({ type: 'elicitation', body: expect.stringContaining('plafond') });
+  });
+
   it('refuses a projectYaml combined with a preset, even an empty one', () => {
     expect(() => createHarness({ projectYaml: '', preset: testPreset() })).toThrow('not both');
   });

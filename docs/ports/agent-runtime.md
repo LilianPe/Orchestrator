@@ -27,7 +27,7 @@ Un `RunHandle` appartient à un seul `start`, donc à un seul `runId` : la suite
 
 ## Ce que la suite demande à l'implémentation
 
-`AgentRuntimeSubject` : le runtime, et `script(nom)`, qui prépare le prochain run à se comporter comme `success`, `failure`, `hang` (tourne jusqu'à l'arrêt ou au plafond) ou `chatty` (enchaîne au moins trois tours), et rend ce que sa requête doit porter pour ça (le faux `claude` lit son script dans l'environnement).
+`AgentRuntimeSubject` : le runtime, en option `elapse(ms)`, qui avance son horloge (absent, la suite attend en temps réel), et `script(nom)`, qui prépare le prochain run à se comporter comme `success`, `failure`, `hang` (tourne jusqu'à l'arrêt ou au plafond) ou `chatty` (enchaîne au moins trois tours), et rend ce que sa requête doit porter pour ça (le faux `claude` lit son script dans l'environnement).
 
 ## Hypothèse sur le point ouvert (ORC-155)
 
@@ -35,4 +35,7 @@ ORC-155 décidera si ce port devient une abstraction du harness (Claude Code ou 
 
 ## Écarts connus
 
-`FakeRunner` ignore `limits` : un run tenu (`hold`) ne finit jamais en `limit`. Cas `duration-limit` et `turn-limit`, déclarés en `it.fails` sur le faux.
+Aucun. `FakeRunner` ignorait `limits` : depuis ORC-189, il les tient comme le vrai runtime.
+
+- Tours : un script dont `turns` dépasse `limits.turns` finit en `limit` tout de suite, sans attendre `release`, avec `turns` ramené au plafond.
+- Durée : sur l'horloge simulée passée au constructeur (`new FakeRunner(clock)`), vérifiée à chaque `tick()`. Un run tenu (`hold`) finit en `limit` quand l'horloge atteint `limits.durationMs` depuis son départ. Le harnais des scénarios lui passe son horloge et appelle `tick()` dans `advance(ms)` : un scénario qui avance l'horloge au-delà du plafond d'un run tenu le voit finir en `limit`.

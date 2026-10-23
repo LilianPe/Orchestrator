@@ -15,7 +15,7 @@ Les interfaces gardent leur nom actuel (`Runner` pour AgentRuntime) : elles pren
 
 ## Brancher une nouvelle implémentation
 
-Une suite est une fonction `describe<Port>Contract(nom, make, écarts?)`. `make` est appelé par cas et rend un sujet neuf : l'implémentation, plus ce que la suite ne peut pas inventer (un ticket existant, une PR, des commandes qui échouent…). Le type `<Port>Subject` de chaque suite dit quoi fournir ; un champ optionnel absent saute les cas qui en ont besoin (`subjectWith`, `test/contracts/cases.ts`). Un test à côté de l'adaptateur l'appelle ; pour un futur adaptateur de conteneurs, par exemple :
+Une suite est une fonction `describe<Port>Contract(nom, make)`. `make` est appelé par cas et rend un sujet neuf : l'implémentation, plus ce que la suite ne peut pas inventer (un ticket existant, une PR, des commandes qui échouent…). Le type `<Port>Subject` de chaque suite dit quoi fournir ; un champ optionnel absent saute les cas qui en ont besoin (`subjectWith`, `test/contracts/cases.ts`). Un test à côté de l'adaptateur l'appelle ; pour un futur adaptateur de conteneurs, par exemple :
 
 ```ts
 import { describeSandboxContract } from '../../../test/contracts/sandbox.contract.js';
@@ -31,12 +31,9 @@ Une suite ne lance aucun service : pour un adaptateur qui parle à un vrai servi
 
 ## Écarts connus
 
-Un cas qu'une implémentation ne tient pas encore se déclare dans le troisième argument : il tourne en `it.fails` (`caseFor`, `test/contracts/cases.ts`), reste vert tant que l'écart existe, et vire au rouge le jour où l'implémentation s'aligne, ce qui oblige à retirer la déclaration. Limite : `it.fails` reste vert quelle que soit la cause de l'échec ; un cas déclaré ne protège donc pas contre une autre régression dans ce même cas. Écarts déclarés aujourd'hui, tous sur des faux :
+Aucun : chaque implémentation passe sa suite en entier. Les faux qui s'en écartaient ont été alignés par ORC-189 ; chaque fiche dit lesquels, et ce qu'un scénario doit déclarer depuis (catalogue de statuts de `FakeTracker`, horloge de `FakeRunner`).
 
-| Implémentation | Écart | Fiche |
-|---|---|---|
-| `FakeTracker` | `moveTo-unknown-state` : accepte un statut que l'équipe n'a pas | [tracker.md](tracker.md#écarts-connus) |
-| `FakeRunner` | `duration-limit`, `turn-limit` : ignore les plafonds | [agent-runtime.md](agent-runtime.md#écarts-connus) |
+Une implémentation qui ne tiendrait pas un cas ne le déclare pas dans sa suite : elle s'aligne, ou le cas sort du contrat avec la fiche, par une décision écrite.
 
 ## Tests live
 

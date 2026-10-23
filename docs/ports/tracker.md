@@ -13,7 +13,7 @@ Le suivi des tickets : lire un ticket, le déplacer, l'étiqueter, commenter, et
 | `getIssue(id)` | le ticket, `teamKey` = préfixe de l'identifiant ; une copie que l'appelant peut modifier | lecture | rejette sur un ticket inconnu |
 | `listDelegated(teamKey)` | les tickets de l'équipe délégués à l'app, et seulement eux | lecture | — |
 | `search(term)` | les tickets que le terme trouve, dont ceux qui l'ont dans leur titre, avec URL et statut | lecture | — |
-| `moveTo(id, statut)` | le ticket est dans ce statut | sans effet de plus | rejette sur un ticket inconnu ; sur un statut que l'équipe n'a pas, rejette et laisse le statut (écart du faux, plus bas) |
+| `moveTo(id, statut)` | le ticket est dans ce statut | sans effet de plus | rejette sur un ticket inconnu ; sur un statut que l'équipe n'a pas, rejette et laisse le statut |
 | `setLabels(id, add, remove)` | l'état final : `add` posés (créés s'ils manquent), `remove` retirés ; retirer un label absent est ignoré | sans effet de plus | rejette sur un ticket inconnu |
 | `comment(id, corps)` | un commentaire sur le ticket | **écrit un second commentaire** | rejette sur un ticket inconnu |
 | `ensureSession(id)` | un identifiant de session d'agent sur le ticket | peut ouvrir une autre session | rejette sur un ticket inconnu |
@@ -34,6 +34,9 @@ Aucun au niveau du port : il n'a pas de notion de tentative. Les échos de nos p
 
 ## Écarts connus
 
-- `FakeTracker.moveTo` accepte n'importe quel nom de statut : il n'a pas de catalogue par équipe. Cas `moveTo-unknown-state`, déclaré en `it.fails` sur le faux.
+Aucun. `FakeTracker` acceptait n'importe quel nom de statut : depuis ORC-189, il a un catalogue par équipe et refuse, dans `moveTo` comme dans `addIssue`, un statut qui n'y est pas.
+
+- Par défaut, chaque équipe a les statuts du workflow standard (`STANDARD_STATES`, `packs/standard/workflow.yml` ; un test vérifie qu'ils ne divergent pas). Le harnais des scénarios passe ceux de la config du workflow qu'il charge.
+- Un scénario qui a besoin d'un statut hors catalogue le déclare : `tracker.setStates('REL', [...STANDARD_STATES, 'Blocked'])`, ou `new FakeTracker([...])` pour toutes les équipes.
 
 Le live `LinearTracker` tourne en lecture seule (sans statuts) : variables dans [l'index](README.md#tests-live).

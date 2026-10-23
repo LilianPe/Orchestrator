@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import type { RunHandle, RunRequest, RunResult, Runner, RunStreamEvent } from '../../src/adapters/runner/types.js';
-import { caseFor } from './cases.js';
 
 /**
  * The behaviours a case asks of the runtime: `success` and `failure` end on their own, `hang` runs until stopped or capped,
@@ -13,9 +12,9 @@ export interface AgentRuntimeSubject {
   runtime: Runner;
   /** Arranges the next run to behave as `script`, and returns what its request must carry for it. */
   script: (script: AgentScript) => Partial<RunRequest>;
+  /** Moves the runtime's clock forward; absent, the suite waits in real time. */
+  elapse?: (ms: number) => void;
 }
-
-export type AgentRuntimeGap = 'duration-limit' | 'turn-limit';
 
 let n = 0;
 function request(patch: Partial<RunRequest>): RunRequest {
@@ -39,7 +38,7 @@ function within(h: RunHandle, ms: number): Promise<RunResult | 'pending'> {
   return Promise.race([h.done, late]).finally(() => clearTimeout(timer));
 }
 
-export function describeAgentRuntimeContract(name: string, make: () => AgentRuntimeSubject, gaps?: AgentRuntimeGap[]): void {
+export function describeAgentRuntimeContract(name: string, make: () => AgentRuntimeSubject): void {
   const start = (s: AgentRuntimeSubject, script: AgentScript, patch: Partial<RunRequest> = {}) =>
     s.runtime.start(request({ ...patch, ...s.script(script) }));
 
@@ -93,7 +92,9 @@ export function describeAgentRuntimeContract(name: string, make: () => AgentRunt
     });
 
     const endsInLimit = async (script: AgentScript, limits: RunRequest['limits']) => {
-      const h = start(make(), script, { limits });
+      const s = make();
+      const h = start(s, script, { limits });
+      s.elapse?.(limits.durationMs);
       try {
         expect(await within(h, 1_500)).toMatchObject({ outcome: 'limit' });
       } finally {
@@ -101,10 +102,10 @@ export function describeAgentRuntimeContract(name: string, make: () => AgentRunt
       }
     };
 
-    caseFor(gaps, 'duration-limit')('a run past its duration cap ends in limit', () =>
+    it('a run past its duration cap ends in limit', () =>
       endsInLimit('hang', { turns: 50, durationMs: 200, usd: 5 }));
 
-    caseFor(gaps, 'turn-limit')('a run past its turn cap ends in limit', () =>
+    it('a run past its turn cap ends in limit', () =>
       endsInLimit('chatty', { turns: 2, durationMs: 10_000, usd: 5 }));
   });
 }

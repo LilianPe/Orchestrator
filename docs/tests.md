@@ -28,9 +28,9 @@ Un faux par port, tous montés par `createHarness()` :
 
 | Port (doc MVP) | Interface | Faux | Ce qu'il offre au scénario |
 |---|---|---|---|
-| Tracker | `Tracker` (`src/adapters/tracker/types.ts`) | `h.tracker` (`FakeTracker`) | `addIssue`, `calls`, `activities(sessionId)` |
+| Tracker | `Tracker` (`src/adapters/tracker/types.ts`) | `h.tracker` (`FakeTracker`) | `addIssue`, `calls`, `activities(sessionId)`, `setStates(teamKey, statuts)` (catalogue par équipe, par défaut les statuts du workflow chargé ; un statut hors catalogue est refusé) |
 | Forge | `Forge` (`src/adapters/forge/types.ts`) | `h.forge` (`FakeForge`) | `setPr`, `setReviewComments` |
-| AgentRuntime | `Runner` (`src/adapters/runner/types.ts`) | `h.runner` (`FakeRunner`) | `enqueue({ events, outcome, hold })`, `release(runId)`, `requests` |
+| AgentRuntime | `Runner` (`src/adapters/runner/types.ts`) | `h.runner` (`FakeRunner`) | `enqueue({ events, outcome, turns, hold })`, `release(runId)`, `requests` ; plafonds tenus : `turns` au-delà de `limits.turns`, ou un run tenu dont la durée dépasse `limits.durationMs` sur `h.clock`, finit en `limit` |
 | SandboxProvider | `SandboxProvider` (`src/adapters/sandbox/types.ts`) | `h.sandboxes` (`FakeSandboxProvider`) | `create`, `destroy`, `active()`, `created`, `destroyed` |
 | CheckRunner | `CheckRunner` (`src/adapters/checks/types.ts`) | `h.checks` (`FakeCheckRunner`) | `failNext(output)`, `enqueue(result)`, `holdNext()`, `calls` |
 | Publisher | `Publisher` (`src/adapters/publisher/types.ts`) | `h.publisher` (`FakePublisher`) | `publish`, `published` ; la PR publiée apparaît dans `h.forge`, ouverte, checks en attente |
@@ -50,7 +50,7 @@ Ces interfaces sont **minimales** : elles portent ce dont les faux ont besoin. L
 
 ## L'horloge simulée
 
-`h.clock` est une `FakeClock`. `await h.advance(ms)` avance l'horloge, déclenche les minuteries échues (aujourd'hui le seul minuteur est le debounce) et attend que l'orchestrateur ait tout traité. Aucun scénario n'attend de vrai délai.
+`h.clock` est une `FakeClock`. `await h.advance(ms)` avance l'horloge, termine en `limit` les runs tenus dont le plafond de durée est atteint, déclenche les minuteries échues (aujourd'hui le seul minuteur est le debounce) et attend que l'orchestrateur ait tout traité. Aucun scénario n'attend de vrai délai.
 
 ## Écrire un scénario
 

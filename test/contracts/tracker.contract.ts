@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Tracker } from '../../src/adapters/tracker/types.js';
-import { caseFor, subjectWith } from './cases.js';
+import { subjectWith } from './cases.js';
 
 /** What the implementation under test arranged for the suite. Docs: docs/ports/tracker.md. */
 export interface TrackerSubject {
@@ -17,9 +17,7 @@ export interface TrackerSubject {
   delegation?: { teamKey: string; delegated: string; notDelegated: string };
 }
 
-export type TrackerGap = 'moveTo-unknown-state';
-
-export function describeTrackerContract(name: string, make: () => TrackerSubject | Promise<TrackerSubject>, gaps?: TrackerGap[]): void {
+export function describeTrackerContract(name: string, make: () => TrackerSubject | Promise<TrackerSubject>): void {
   describe(`Tracker contract: ${name}`, () => {
     it('getIssue returns the issue, its team being the identifier prefix', async () => {
       const s = await make();
@@ -77,7 +75,7 @@ export function describeTrackerContract(name: string, make: () => TrackerSubject
       expect((await s.tracker.getIssue(s.issue)).stateName).toBe(b);
     });
 
-    caseFor(gaps, 'moveTo-unknown-state')('moveTo rejects a state the team does not have and keeps the state', async (ctx) => {
+    it('moveTo rejects a state the team does not have and keeps the state', async (ctx) => {
       const s = await subjectWith(make, () => ctx.skip(), 'states');
       await s.tracker.moveTo(s.issue, s.states[0]);
       await expect(s.tracker.moveTo(s.issue, 'No Such State 189')).rejects.toThrow();
