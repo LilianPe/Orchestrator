@@ -29,9 +29,11 @@ describeSandboxContract('PodmanSandboxProvider', () => ({
 
 Une suite ne lance aucun service : pour un adaptateur qui parle à un vrai service, le test est un test live (ci-dessous).
 
+Une suite ne vérifie pas toute sa fiche. Ce qu'elle ne sait pas provoquer (un service qui ne répond pas, un lancement qui échoue) ou que le port ne permet pas de relire (un commentaire, une activité) reste une garantie de la fiche, sans cas qui la teste.
+
 ## Écarts connus
 
-Aucun : chaque implémentation passe sa suite en entier. Les faux qui s'en écartaient ont été alignés par ORC-189 ; chaque fiche dit lesquels, et ce qu'un scénario doit déclarer depuis (catalogue de statuts de `FakeTracker`, horloge de `FakeRunner`).
+Aucun : chaque implémentation passe tous les cas qu'elle lance. `LinearTracker` en live ne lance que les lectures (sans `states`, les cas d'écriture sont sautés) : ses écritures ne passent par aucune suite. Les faux qui s'en écartaient ont été alignés par ORC-189 ; chaque fiche dit lesquels, et ce qu'un scénario doit déclarer depuis (catalogue de statuts de `FakeTracker`, horloge de `FakeRunner`).
 
 Une implémentation qui ne tiendrait pas un cas ne le déclare pas dans sa suite : elle s'aligne, ou le cas sort du contrat avec la fiche, par une décision écrite.
 

@@ -23,7 +23,7 @@ Un run qui dépasse `limits.durationMs` ou `limits.turns` finit en `limit`. Deux
 
 ## Fencing
 
-Un `RunHandle` appartient à un seul `start`, donc à un seul `runId` : la suite vérifie que les runs ne se mélangent pas. Ignorer le résultat d'une tentative qui n'est plus active, c'est le moteur (ORC-133, ORC-162).
+Un `RunHandle` appartient à un seul `start`, donc à un seul `runId` : la suite vérifie qu'arrêter un run laisse l'autre tourner. Ignorer le résultat d'une tentative qui n'est plus active, c'est le moteur (ORC-133, ORC-162).
 
 ## Ce que la suite demande à l'implémentation
 
@@ -37,5 +37,5 @@ ORC-155 décidera si ce port devient une abstraction du harness (Claude Code ou 
 
 Aucun. `FakeRunner` ignorait `limits` : depuis ORC-189, il les tient comme le vrai runtime.
 
-- Tours : un script dont `turns` dépasse `limits.turns` finit en `limit` tout de suite, sans attendre `release`, et rapporte `limits.turns + 1` tours : le vrai runtime coupe au tour qui dépasse et rapporte celui-là.
+- Tours : un script dont `turns` dépasse `limits.turns` finit en `limit` tout de suite, sans attendre `release`, et rapporte `limits.turns + 1` tours : le vrai runtime interrompt l'agent au tour qui dépasse et rapporte les tours lus jusqu'à sa sortie, au moins celui-là ; le faux rapporte ce minimum.
 - Durée : sur l'horloge simulée passée au constructeur (`new FakeRunner(clock)`), vérifiée à chaque `tick()`. Un run tenu (`hold`) finit en `limit` quand l'horloge atteint `limits.durationMs` depuis son départ. Le harnais des scénarios lui passe son horloge et appelle `tick()` dans `advance(ms)` : un scénario qui avance l'horloge au-delà du plafond d'un run tenu le voit finir en `limit`.

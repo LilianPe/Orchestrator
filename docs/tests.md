@@ -30,7 +30,7 @@ Un faux par port, tous montés par `createHarness()` :
 |---|---|---|---|
 | Tracker | `Tracker` (`src/adapters/tracker/types.ts`) | `h.tracker` (`FakeTracker`) | `addIssue`, `calls`, `activities(sessionId)`, `setStates(teamKey, statuts)` (catalogue par équipe, par défaut les statuts du workflow chargé ; un statut hors catalogue est refusé) |
 | Forge | `Forge` (`src/adapters/forge/types.ts`) | `h.forge` (`FakeForge`) | `setPr`, `setReviewComments` |
-| AgentRuntime | `Runner` (`src/adapters/runner/types.ts`) | `h.runner` (`FakeRunner`) | `enqueue({ events, outcome, turns, hold })`, `release(runId)`, `requests` ; plafonds tenus : `turns` au-delà de `limits.turns`, ou un run tenu dont la durée atteint `limits.durationMs` sur `h.clock`, finit en `limit` |
+| AgentRuntime | `Runner` (`src/adapters/runner/types.ts`) | `h.runner` (`FakeRunner`) | `enqueue({ events, outcome, turns, hold })`, `release(runId)`, `requests` ; plafonds tenus : `turns` au-delà de `limits.turns`, ou un run tenu quand `h.advance(ms)` porte `h.clock` à `limits.durationMs` depuis son départ, finit en `limit` (avancer `h.clock` seule ne le termine pas) |
 | SandboxProvider | `SandboxProvider` (`src/adapters/sandbox/types.ts`) | `h.sandboxes` (`FakeSandboxProvider`) | `create`, `destroy`, `active()`, `created`, `destroyed` |
 | CheckRunner | `CheckRunner` (`src/adapters/checks/types.ts`) | `h.checks` (`FakeCheckRunner`) | `failNext(output)`, `enqueue(result)`, `holdNext()`, `calls` |
 | Publisher | `Publisher` (`src/adapters/publisher/types.ts`) | `h.publisher` (`FakePublisher`) | `publish`, `published` ; la PR publiée apparaît dans `h.forge`, ouverte, checks en attente |
