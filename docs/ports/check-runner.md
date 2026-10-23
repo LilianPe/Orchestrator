@@ -26,4 +26,4 @@ Le résultat ne porte pas de tentative : c'est le moteur qui le rattache à son 
 
 ## Écarts connus
 
-`FakeCheckRunner` ne transmet pas `timeoutMs` à son `Verifier` de repli : un scénario ne peut pas en dépendre. Ce n'est pas un écart à la fiche (le faux ne lance rien), la suite y joue la commande lente par sa table.
+Aucun. `FakeCheckRunner` ne transmettait pas `timeoutMs` à son `Verifier` de repli : depuis ORC-189, il le transmet, et la suite y joue la commande lente par sa table, qui ne la fait échouer que sous un timeout plus court qu'elle.
