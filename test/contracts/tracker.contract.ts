@@ -39,10 +39,14 @@ export function describeTrackerContract(name: string, make: () => TrackerSubject
       expect(again.stateName).not.toBe('mutated-by-caller');
     });
 
-    it('rejects every call on an unknown issue', async () => {
+    it('getIssue rejects an unknown issue', async () => {
       const s = await make();
-      const state = (await s.tracker.getIssue(s.issue)).stateName;
       await expect(s.tracker.getIssue(s.missing)).rejects.toThrow();
+    });
+
+    it('every write rejects an unknown issue', async (ctx) => {
+      const s = await subjectWith(make, () => ctx.skip(), 'states');
+      const state = (await s.tracker.getIssue(s.issue)).stateName;
       await expect(s.tracker.moveTo(s.missing, state)).rejects.toThrow();
       await expect(s.tracker.setLabels(s.missing, ['x'], [])).rejects.toThrow();
       await expect(s.tracker.comment(s.missing, 'x')).rejects.toThrow();
