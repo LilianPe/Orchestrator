@@ -51,7 +51,7 @@ export class FakeRunner implements Runner {
     const done: Promise<RunResult> = held.then(() => {
       ch.close();
       this.live.delete(req.runId);
-      const turns = Math.min(s.turns ?? 1, req.limits.turns);
+      const turns = overTurns ? req.limits.turns + 1 : (s.turns ?? 1);
       return { outcome: forced ?? s.outcome ?? 'success', costUsd: s.costUsd ?? 0.1, turns, lastText };
     });
     return { events: ch, done, stop: () => end('stopped') };

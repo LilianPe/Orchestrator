@@ -37,6 +37,6 @@ Aucun au niveau du port : il n'a pas de notion de tentative. Les échos de nos p
 Aucun. `FakeTracker` acceptait n'importe quel nom de statut : depuis ORC-189, il a un catalogue par équipe et refuse, dans `moveTo` comme dans `addIssue`, un statut qui n'y est pas.
 
 - Par défaut, chaque équipe a les statuts du workflow standard (`STANDARD_STATES`, `packs/standard/workflow.yml` ; un test vérifie qu'ils ne divergent pas). Le harnais des scénarios passe ceux de la config du workflow qu'il charge.
-- Un scénario qui a besoin d'un statut hors catalogue le déclare : `tracker.setStates('REL', [...STANDARD_STATES, 'Blocked'])`, ou `new FakeTracker([...])` pour toutes les équipes.
+- Le catalogue ne porte que les statuts que le workflow nomme ; une vraie équipe Linear en a d'autres (Backlog, Canceled…). Un scénario qui a besoin d'un statut hors catalogue le déclare : `h.tracker.setStates('REL', [...h.tracker.statesOf('REL'), 'Backlog'])` (garde les statuts du workflow chargé), ou `new FakeTracker([...])` pour toutes les équipes.
 
 Le live `LinearTracker` tourne en lecture seule (sans statuts) : variables dans [l'index](README.md#tests-live).

@@ -37,5 +37,5 @@ ORC-155 décidera si ce port devient une abstraction du harness (Claude Code ou 
 
 Aucun. `FakeRunner` ignorait `limits` : depuis ORC-189, il les tient comme le vrai runtime.
 
-- Tours : un script dont `turns` dépasse `limits.turns` finit en `limit` tout de suite, sans attendre `release`, avec `turns` ramené au plafond.
+- Tours : un script dont `turns` dépasse `limits.turns` finit en `limit` tout de suite, sans attendre `release`, et rapporte `limits.turns + 1` tours : le vrai runtime coupe au tour qui dépasse et rapporte celui-là.
 - Durée : sur l'horloge simulée passée au constructeur (`new FakeRunner(clock)`), vérifiée à chaque `tick()`. Un run tenu (`hold`) finit en `limit` quand l'horloge atteint `limits.durationMs` depuis son départ. Le harnais des scénarios lui passe son horloge et appelle `tick()` dans `advance(ms)` : un scénario qui avance l'horloge au-delà du plafond d'un run tenu le voit finir en `limit`.

@@ -91,10 +91,10 @@ export function describeAgentRuntimeContract(name: string, make: () => AgentRunt
       expect((await b.done).outcome).toBe('stopped');
     });
 
-    const endsInLimit = async (script: AgentScript, limits: RunRequest['limits']) => {
+    const endsInLimit = async (script: AgentScript, limits: RunRequest['limits'], elapse = 0) => {
       const s = make();
       const h = start(s, script, { limits });
-      s.elapse?.(limits.durationMs);
+      s.elapse?.(elapse);
       try {
         expect(await within(h, 1_500)).toMatchObject({ outcome: 'limit' });
       } finally {
@@ -103,7 +103,7 @@ export function describeAgentRuntimeContract(name: string, make: () => AgentRunt
     };
 
     it('a run past its duration cap ends in limit', () =>
-      endsInLimit('hang', { turns: 50, durationMs: 200, usd: 5 }));
+      endsInLimit('hang', { turns: 50, durationMs: 200, usd: 5 }, 200));
 
     it('a run past its turn cap ends in limit', () =>
       endsInLimit('chatty', { turns: 2, durationMs: 10_000, usd: 5 }));

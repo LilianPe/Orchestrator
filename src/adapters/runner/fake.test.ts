@@ -53,10 +53,10 @@ describe('FakeRunner', () => {
     expect(await h.done).toMatchObject({ outcome: 'limit', turns: 4 });
   });
 
-  it('ends a run whose scripted turns exceed its turn cap in limit, at the cap', async () => {
+  it('ends a run whose scripted turns exceed its turn cap in limit, on the turn past the cap', async () => {
     const r = new FakeRunner();
-    r.enqueue({ hold: true, turns: 11 }, { turns: 10 });
-    expect(await r.start(req('over')).done).toMatchObject({ outcome: 'limit', turns: 10 });
+    r.enqueue({ hold: true, turns: 30 }, { turns: 10 });
+    expect(await r.start(req('over')).done).toMatchObject({ outcome: 'limit', turns: 11 });
     expect((await r.start(req('at')).done).outcome).toBe('success');
   });
 
