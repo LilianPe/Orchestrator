@@ -188,11 +188,11 @@ Ces types sont acceptés par le chargeur, mais Relais les traite en dur : une r�
 | `pr.opened` | Mémorise la PR et l'attache à la session Linear. |
 | `control.pause` / `control.resume` / `control.stop` | Pause / reprise de la file, arrêt d'un ticket (interface, `relais pause`, `relais resume`, `relais stop`). |
 
-Tout autre nom sous `on` est refusé (`on.<nom>: unknown event type`), sauf les deux anciens noms, encore acceptés comme alias : `ticket.moved` (lu comme `status.changed`) et `label.added` (lu comme `label.changed`).
+Tout autre nom sous `on` est refusé (`on.<nom>: unknown event type`), sauf les deux anciens noms, encore acceptés comme alias : `ticket.moved` (lu comme `status.changed`) et `label.added` (lu comme `label.changed`). Un même fichier ne peut pas déclarer un événement sous ses deux noms : le chargement est refusé (`on.ticket.moved: same event as on.status.changed`).
 
 Les événements qui concernent un ticket que Relais ne suit pas encore sont ignorés, sauf `ticket.delegated`, `session.mentioned`, `session.prompted` et `command`, qui l'ajoutent au suivi.
 
-**Événements non fiables.** Chaque événement porte une étiquette de confiance (`taint`). Un événement marqué `untrusted` (contenu venu d'une source que l'orchestrateur ne tient pas pour fiable) ne lance jamais un job `workspace: knowledge` (`learn`, `remember`) : la règle s'applique sans ce run, et une activité Linear explique le refus. Les autres runs lancés directement par l'événement démarrent avec la liste des chemins sensibles qu'ils ne doivent pas écrire (`.github/**`, `.factory/**`, `.claude/**`, `CODEOWNERS`, `.env*`). Aujourd'hui, aucune source ne marque d'événement `untrusted` (ORC-160) et rien n'applique encore cette liste (sandbox du runner, ORC-151) ; l'étiquette se perd sur un run différé par `debounce` et sur la relance qui suit une vérification en échec.
+**Événements non fiables.** Chaque événement porte une étiquette de confiance (`taint`). Un événement marqué `untrusted` (contenu venu d'une source que l'orchestrateur ne tient pas pour fiable) ne lance jamais un job `workspace: knowledge` (`learn`, `remember`) : la règle s'applique sans ce run, et une activité Linear explique le refus. Les autres runs que l'événement demande portent la liste des chemins sensibles qu'ils ne doivent pas écrire (`.github/**`, `.factory/**`, `.claude/**`, `CODEOWNERS`, `.env*`). Aujourd'hui, aucune source ne marque d'événement `untrusted` (ORC-160) et rien n'applique encore cette liste (sandbox du runner, ORC-151). L'étiquette n'est pas conservée dans l'état du ticket : un run qui ne part pas au traitement de l'événement, ou qui lit un contenu que le ticket a gardé, démarre sans elle (à reprendre avec ORC-160).
 
 ### Champs d'une règle
 
