@@ -22,7 +22,8 @@ const UPCASTERS: Record<number, (e: StoredEvent) => StoredEvent> = {
     payload: e.type === 'label.added' ? { ...(e.payload as object), change: 'added' } : e.payload,
     schemaVersion: 2,
     // Version 1 had no taint and the factory trusted every event: replaying it must give the same decisions.
-    taint: 'trusted',
+    // A row that does carry a taint keeps it: an unversioned producer must not launder an untrusted event.
+    taint: e.taint ?? 'trusted',
   }),
 };
 

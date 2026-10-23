@@ -29,6 +29,10 @@ describe('upcast', () => {
     expect(upcast(v1.prompted)).toEqual({ ...v1.prompted, schemaVersion: SCHEMA_VERSION, taint: 'trusted' });
   });
 
+  it('keeps the taint of a row that has one without a version', () => {
+    expect(upcast({ ...v1.prompted, taint: 'untrusted' }).taint).toBe('untrusted');
+  });
+
   it('leaves a current event as it is', () => {
     const current = upcast(v1.moved);
     expect(upcast(current)).toBe(current);
