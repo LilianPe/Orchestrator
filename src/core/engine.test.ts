@@ -111,6 +111,16 @@ describe('decide — YAML rules of the standard pack', () => {
   });
 });
 
+describe('decide — purity', () => {
+  it('gives the same decision twice for the same state, event and workflow, and leaves the state untouched', () => {
+    const state = ticket({ logical: 'dev', blocked: true, linearSessionId: 's1' });
+    const before = structuredClone(state);
+    const event = ev('session.prompted', { linearSessionId: 's1', body: 'oui, vas-y', author: 'L' });
+    expect(decide(state, event, workflow)).toEqual(decide(state, event, workflow));
+    expect(state).toEqual(before);
+  });
+});
+
 describe('decide — fencing', () => {
   const passed = ev('verify.passed', { runId: 'r1', job: 'dev' });
 
