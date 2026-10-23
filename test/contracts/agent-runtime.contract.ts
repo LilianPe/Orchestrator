@@ -1,11 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect } from 'vitest';
 import type { RunHandle, RunRequest, RunResult, Runner, RunStreamEvent } from '../../src/adapters/runner/types.js';
+import { contractCases, type ContractOptions } from './cases.js';
 
 /**
  * The behaviours a case asks of the runtime: `success` and `failure` end on their own, `hang` runs until stopped or capped,
- * `chatty` keeps taking turns (at least 3) until stopped or capped.
+ * `chatty` keeps taking turns (at least 3) until stopped or capped, `unlaunchable` cannot start (a missing working directory, say).
  */
-export type AgentScript = 'success' | 'failure' | 'hang' | 'chatty';
+export type AgentScript = 'success' | 'failure' | 'hang' | 'chatty' | 'unlaunchable';
 
 /** What the implementation under test arranged for the suite. Docs: docs/ports/agent-runtime.md. */
 export interface AgentRuntimeSubject {
@@ -38,11 +39,13 @@ function within(h: RunHandle, ms: number): Promise<RunResult | 'pending'> {
   return Promise.race([h.done, late]).finally(() => clearTimeout(timer));
 }
 
-export function describeAgentRuntimeContract(name: string, make: () => AgentRuntimeSubject): void {
+export function describeAgentRuntimeContract(name: string, make: () => AgentRuntimeSubject, options?: ContractOptions): void {
   const start = (s: AgentRuntimeSubject, script: AgentScript, patch: Partial<RunRequest> = {}) =>
     s.runtime.start(request({ ...patch, ...s.script(script) }));
 
   describe(`AgentRuntime contract: ${name}`, () => {
+    const { it, end } = contractCases(options);
+
     it('a successful run streams its events, closes the stream and ends in success', async () => {
       const s = make();
       const h = start(s, 'success');
@@ -60,6 +63,14 @@ export function describeAgentRuntimeContract(name: string, make: () => AgentRunt
       const h = start(s, 'failure');
       await drain(h.events);
       expect((await h.done).outcome).toBe('failure');
+    });
+
+    it('a run that cannot launch ends in failure: start does not throw, done does not reject, the stream closes', async () => {
+      const s = make();
+      let h: RunHandle | undefined;
+      expect(() => (h = start(s, 'unlaunchable'))).not.toThrow();
+      await expect(within(h!, 1_500)).resolves.toMatchObject({ outcome: 'failure' });
+      await drain(h!.events);
     });
 
     it('stop ends a running run in stopped and closes its stream; stopping again changes nothing', async () => {
@@ -107,5 +118,7 @@ export function describeAgentRuntimeContract(name: string, make: () => AgentRunt
 
     it('a run past its turn cap ends in limit', () =>
       endsInLimit('chatty', { turns: 2, durationMs: 10_000, usd: 5 }));
+
+    end();
   });
 }

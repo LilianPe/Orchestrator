@@ -9,12 +9,18 @@ describeCheckRunnerContract('FakeCheckRunner', () => {
   ];
   // The slow command takes 1 s: it fails, without an exit code, only under a shorter timeout the fake passed on.
   const slow = 'npm run e2e';
-  const checks = new FakeCheckRunner(async (_cwd, commands, timeoutMs) => {
+  // Nothing starts in this folder, as when the real one is missing.
+  const unstartableCwd = '/missing';
+  let runs = 0;
+  const counted = 'npm run count';
+  const checks = new FakeCheckRunner(async (cwd, commands, timeoutMs) => {
+    if (cwd === unstartableCwd) return { ok: false, failures: commands.map((command) => ({ command, exitCode: null, output: 'spawn ENOENT' })) };
+    runs += commands.filter((c) => c === counted).length;
     const timedOut = timeoutMs !== undefined && timeoutMs < 1_000 ? [{ command: slow, exitCode: null, output: '' }] : [];
     const failed = commands.flatMap((c) => [...fails, ...timedOut].filter((f) => f.command === c));
     return { ok: failed.length === 0, failures: failed };
   });
-  return { checks, cwd: '/w', pass: 'npm run build', fails, slow };
+  return { checks, cwd: '/w', pass: 'npm run build', fails, slow, unstartableCwd, counted: { command: counted, runs: async () => runs } };
 });
 
 describe('FakeCheckRunner', () => {

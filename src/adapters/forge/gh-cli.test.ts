@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { describeForgeContract } from '../../../test/contracts/forge.contract.js';
 import type { Exec } from '../exec.js';
 import { aggregateChecks, GhCliForge } from './gh-cli.js';
 
@@ -10,6 +11,29 @@ function fakeExec(map: Record<string, { stdout: string; code?: number }>): Exec 
     return { stdout: hit[1].stdout, stderr: '', code: hit[1].code ?? 0 };
   };
 }
+
+const pr = (number: number, branch: string) => JSON.stringify([{ number, url: `https://github.test/pr/${number}`, state: 'OPEN', headRefName: branch }]);
+const thread = { isResolved: false, comments: { nodes: [{ author: { login: 'alice' }, body: 'renommer', createdAt: '2026-10-10T10:00:00Z', path: 'src/a.ts', line: 3 }] } };
+
+describeForgeContract('GhCliForge (scripted gh)', () => ({
+  forge: new GhCliForge(
+    fakeExec({
+      'gh pr list --head factory/rel-404 ': { stdout: '[]' },
+      'gh pr list --head factory/rel-1-x ': { stdout: pr(7, 'factory/rel-1-x') },
+      'gh pr checks 7 ': { stdout: JSON.stringify([{ name: 'test', bucket: 'fail' }, { name: 'lint', bucket: 'pass' }]), code: 1 },
+      'gh pr list --head factory/rel-2-y ': { stdout: pr(8, 'factory/rel-2-y') },
+      'gh pr checks 8 ': { stdout: 'no checks reported on the branch', code: 1 },
+      'gh repo view': { stdout: JSON.stringify({ owner: { login: 'me' }, name: 'app' }) },
+      'gh api graphql': { stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [thread] } } } } }) },
+    }),
+  ),
+  repoPath: '/repo',
+  missingBranch: 'factory/rel-404',
+  pr: { branch: 'factory/rel-1-x', number: 7 },
+  unresolved: [{ author: 'alice', body: 'src/a.ts:3 — renommer', at: Date.parse('2026-10-10T10:00:00Z'), source: 'review' }],
+  unreachable: new GhCliForge(async () => ({ stdout: '', stderr: 'error connecting to api.github.com', code: 1 })),
+  unreadableChecks: 'factory/rel-2-y',
+}));
 
 describe('aggregateChecks', () => {
   it.each([

@@ -1,7 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect } from 'vitest';
 import type { FeedbackItem } from '../../src/core/types.js';
 import type { Forge } from '../../src/adapters/forge/types.js';
-import { subjectWith } from './cases.js';
+import { contractCases, subjectWith, type ContractOptions } from './cases.js';
 
 /** What the implementation under test arranged for the suite. Docs: docs/ports/forge.md. */
 export interface ForgeSubject {
@@ -13,10 +13,16 @@ export interface ForgeSubject {
   pr?: { branch: string; number: number };
   /** The unresolved review threads arranged on `pr`; absent, only their shape is checked. */
   unresolved?: FeedbackItem[];
+  /** The same implementation, talking to a forge that does not answer; absent, the case is skipped. */
+  unreachable?: Forge;
+  /** The branch of an open PR whose checks the forge answers in a form that cannot be read; absent, the case is skipped. */
+  unreadableChecks?: string;
 }
 
-export function describeForgeContract(name: string, make: () => ForgeSubject | Promise<ForgeSubject>): void {
+export function describeForgeContract(name: string, make: () => ForgeSubject | Promise<ForgeSubject>, options?: ContractOptions): void {
   describe(`Forge contract: ${name}`, () => {
+    const { it, end } = contractCases(options);
+
     it('findPr answers undefined for a branch without a PR', async () => {
       const s = await make();
       expect(await s.forge.findPr(s.repoPath, s.missingBranch)).toBeUndefined();
@@ -63,5 +69,20 @@ export function describeForgeContract(name: string, make: () => ForgeSubject | P
         expect(Number.isFinite(item.at)).toBe(true);
       }
     });
+
+    it('findPr and unresolvedReviewComments reject when the forge does not answer', async (ctx) => {
+      const s = await subjectWith(make, () => ctx.skip(), 'unreachable');
+      await expect(s.unreachable.findPr(s.repoPath, s.pr?.branch ?? s.missingBranch)).rejects.toThrow();
+      await expect(s.unreachable.unresolvedReviewComments(s.repoPath, s.pr?.number ?? 1)).rejects.toThrow();
+    });
+
+    it('findPr gives none for checks it cannot read', async (ctx) => {
+      const s = await subjectWith(make, () => ctx.skip(), 'unreadableChecks');
+      await expect(s.forge.findPr(s.repoPath, s.unreadableChecks)).resolves.toMatchObject({
+        branch: s.unreadableChecks, state: 'OPEN', checks: 'none', failedChecks: [],
+      });
+    });
+
+    end();
   });
 }

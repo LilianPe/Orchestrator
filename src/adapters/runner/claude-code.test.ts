@@ -21,15 +21,16 @@ function runner() {
   return { transcriptsDir, r: new ClaudeCodeRunner({ transcriptsDir, command: [process.execPath, fx('fake-claude.mjs')], killGraceMs: 500 }) };
 }
 
-const scripts: Record<AgentScript, Record<string, string>> = {
-  success: { FAKE_CLAUDE_SCRIPT: fx('stream-success.jsonl') },
-  failure: { FAKE_CLAUDE_SCRIPT: fx('stream-error.jsonl') },
-  hang: { FAKE_CLAUDE_SCRIPT: fx('stream-success.jsonl'), FAKE_CLAUDE_HANG: '1' },
-  chatty: { FAKE_CLAUDE_SCRIPT: fx('stream-many-turns.jsonl'), FAKE_CLAUDE_HANG: '1' },
+const scripts: Record<AgentScript, Partial<RunRequest>> = {
+  success: { env: { FAKE_CLAUDE_SCRIPT: fx('stream-success.jsonl') } },
+  failure: { env: { FAKE_CLAUDE_SCRIPT: fx('stream-error.jsonl') } },
+  hang: { env: { FAKE_CLAUDE_SCRIPT: fx('stream-success.jsonl'), FAKE_CLAUDE_HANG: '1' } },
+  chatty: { env: { FAKE_CLAUDE_SCRIPT: fx('stream-many-turns.jsonl'), FAKE_CLAUDE_HANG: '1' } },
+  unlaunchable: { cwd: join(tmpdir(), 'factory-contract-no-such-dir') },
 };
 
 const shared = runner().r;
-describeAgentRuntimeContract('ClaudeCodeRunner (fake claude CLI)', () => ({ runtime: shared, script: (name) => ({ env: scripts[name] }) }));
+describeAgentRuntimeContract('ClaudeCodeRunner (fake claude CLI)', () => ({ runtime: shared, script: (name) => scripts[name] }));
 
 describe('buildClaudeArgs', () => {
   it('starts a new session', () => {

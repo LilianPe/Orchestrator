@@ -4,6 +4,8 @@ import type { Forge, PrInfo } from './types.js';
 export class FakeForge implements Forge {
   private prs = new Map<string, PrInfo>();
   private comments = new Map<number, FeedbackItem[]>();
+  /** A forge that does not answer: every read rejects. */
+  offline = false;
 
   setPr(branch: string, pr: Omit<PrInfo, 'branch'>): void {
     this.prs.set(branch, { ...pr, branch });
@@ -13,12 +15,18 @@ export class FakeForge implements Forge {
     this.comments.set(prNumber, items);
   }
 
+  private answer(): void {
+    if (this.offline) throw new Error('forge unreachable');
+  }
+
   async findPr(_repoPath: string, branch: string): Promise<PrInfo | undefined> {
+    this.answer();
     const pr = this.prs.get(branch);
     return pr && { ...pr, failedChecks: [...pr.failedChecks] };
   }
 
   async unresolvedReviewComments(_repoPath: string, prNumber: number): Promise<FeedbackItem[]> {
+    this.answer();
     return (this.comments.get(prNumber) ?? []).map((c) => ({ ...c }));
   }
 }

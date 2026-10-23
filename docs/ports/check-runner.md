@@ -22,7 +22,7 @@ Le résultat ne porte pas de tentative : c'est le moteur qui le rattache à son 
 
 ## Ce que la suite demande à l'implémentation
 
-`CheckRunnerSubject` : un dossier, une commande qui passe, deux commandes qui échouent avec des codes distincts et le texte qu'elles affichent, et en option une commande qui dépasse 200 ms. Le faux interprète ces commandes par un `Verifier` de repli (celui de son constructeur).
+`CheckRunnerSubject` : un dossier, une commande qui passe, deux commandes qui échouent avec des codes distincts et le texte qu'elles affichent, et en option une commande qui dépasse 200 ms, un dossier où aucune commande ne démarre (`runVerify` : un dossier absent, où `bash` ne se lance pas), et une commande qui passe en comptant ses lancements, pour vérifier qu'un rejeu relance. Le faux interprète ces commandes par un `Verifier` de repli (celui de son constructeur).
 
 ## Écarts connus
 

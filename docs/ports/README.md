@@ -5,7 +5,7 @@ Le moteur ne parle au monde que par six ports. Chacun a une **fiche** (ce que to
 | Port (doc MVP) | Interface | Fiche | Suite | Lancée sur |
 |---|---|---|---|---|
 | Tracker | `Tracker` | [tracker.md](tracker.md) | `test/contracts/tracker.contract.ts` | `FakeTracker` ; `LinearTracker` en live, lecture seule |
-| Forge | `Forge` | [forge.md](forge.md) | `test/contracts/forge.contract.ts` | `FakeForge` ; `GhCliForge` en live |
+| Forge | `Forge` | [forge.md](forge.md) | `test/contracts/forge.contract.ts` | `FakeForge`, `GhCliForge` (sur un `gh` scripté) ; `GhCliForge` en live |
 | Publisher | `Publisher` | [publisher.md](publisher.md) | `test/contracts/publisher.contract.ts` | `FakePublisher` |
 | SandboxProvider | `SandboxProvider` | [sandbox-provider.md](sandbox-provider.md) | `test/contracts/sandbox.contract.ts` | `FakeSandboxProvider` |
 | CheckRunner | `CheckRunner` | [check-runner.md](check-runner.md) | `test/contracts/check-runner.contract.ts` | `FakeCheckRunner`, `runVerify` |
@@ -29,7 +29,13 @@ describeSandboxContract('PodmanSandboxProvider', () => ({
 
 Une suite ne lance aucun service : pour un adaptateur qui parle à un vrai service, le test est un test live (ci-dessous).
 
-Une suite ne vérifie pas toute sa fiche. Ce qu'elle ne sait pas provoquer (un service qui ne répond pas, un lancement qui échoue) ou que le port ne permet pas de relire (un commentaire, une activité) reste une garantie de la fiche, sans cas qui la teste.
+Chaque garantie d'erreur ou d'effet d'une fiche a son cas. Pour une panne, le sujet fournit de quoi la provoquer (un faux qui échoue sur demande, comme `FakeForge.offline`, ou le vrai adaptateur pointé vers un dossier absent ou un réseau coupé) ; pour un effet que le port ne relit pas (un commentaire, une activité), le sujet fournit de quoi le relire (`written` du Tracker). Une garantie qu'on ne sait pas tester ne s'écrit pas dans la fiche.
+
+## Contrôles négatifs
+
+Un cas qui passe contre tous les sujets ne prouve rien s'il passerait aussi contre un sujet qui viole sa garantie. `test/contracts/negative-controls.test.ts` lance les cas d'erreur et d'effet contre des sujets qui en violent chacun une exprès (un `start` qui lève, un `run` qui rejette, une forge qui se tait au lieu de rejeter, un commentaire qui n'écrit rien…) : le cas doit y échouer sur une assertion.
+
+Le troisième argument d'une suite, `{ violates: [noms de cas] }`, la met dans ce mode : seuls ces cas tournent, et chacun ne passe que s'il échoue sur une assertion (une autre erreur, un `TypeError` du sujet par exemple, fait échouer le contrôle). Un nom qui ne désigne aucun cas fait échouer le fichier, pour qu'un cas renommé ne laisse pas son contrôle tourner à vide. Un nouveau cas d'erreur ou d'effet arrive avec son contrôle.
 
 ## Écarts connus
 
@@ -43,8 +49,8 @@ Hors CI, sautés sans leurs variables (règle de [`docs/transition.md`](../trans
 
 | Test | Variables | Ce qu'il lit |
 |---|---|---|
-| `src/adapters/tracker/linear/tracker.live.test.ts` | `FACTORY_LIVE_LINEAR_TOKEN` (un jeton d'accès OAuth, envoyé en `Bearer` comme le fait l'instance ; pas une clé d'API personnelle), `FACTORY_LIVE_LINEAR_ISSUE` (un ticket, ex. `ORC-1`) ; option `FACTORY_LIVE_LINEAR_SEARCH`, un mot de son titre | le ticket, sans rien écrire |
-| `src/adapters/forge/gh-cli.live.test.ts` | `FACTORY_LIVE_GH_REPO` (un clone local), `FACTORY_LIVE_GH_BRANCH` et `FACTORY_LIVE_GH_PR` (une branche et sa PR, aux checks terminés : une PR mergée convient) ; `gh` connecté | la PR, sans rien écrire |
+| `src/adapters/tracker/linear/tracker.live.test.ts` | `FACTORY_LIVE_LINEAR_TOKEN` (le jeton d'accès OAuth de l'app, envoyé en `Bearer` comme le fait l'instance ; pas une clé d'API personnelle), `FACTORY_LIVE_LINEAR_ISSUE` (un ticket, ex. `ORC-1`) ; options `FACTORY_LIVE_LINEAR_SEARCH`, un mot de son titre, et `FACTORY_LIVE_LINEAR_DELEGATED` avec `FACTORY_LIVE_LINEAR_NOT_DELEGATED`, deux tickets de la même équipe, l'un délégué à l'app (pas terminé ni annulé), l'autre non | le ticket et les tickets délégués à l'app (l'utilisateur du jeton), sans rien écrire |
+| `src/adapters/forge/gh-cli.live.test.ts` | `FACTORY_LIVE_GH_REPO` (un clone local), `FACTORY_LIVE_GH_BRANCH` et `FACTORY_LIVE_GH_PR` (une branche et sa PR, aux checks terminés : une PR mergée convient) ; `gh` connecté | la PR, sans rien écrire ; la forge injoignable passe par un proxy sur un port local fermé |
 
 ```bash
 FACTORY_LIVE_GH_REPO=$PWD FACTORY_LIVE_GH_BRANCH=orc-168-ci-postgres-docker-rootless FACTORY_LIVE_GH_PR=30 \

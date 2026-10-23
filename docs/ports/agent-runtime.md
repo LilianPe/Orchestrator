@@ -27,7 +27,7 @@ Un `RunHandle` appartient à un seul `start`, donc à un seul `runId` : la suite
 
 ## Ce que la suite demande à l'implémentation
 
-`AgentRuntimeSubject` : le runtime, en option `elapse(ms)`, qui avance son horloge (absent, la suite attend en temps réel), et `script(nom)`, qui prépare le prochain run à se comporter comme `success`, `failure`, `hang` (tourne jusqu'à l'arrêt ou au plafond) ou `chatty` (enchaîne au moins trois tours), et rend ce que sa requête doit porter pour ça (le faux `claude` lit son script dans l'environnement).
+`AgentRuntimeSubject` : le runtime, en option `elapse(ms)`, qui avance son horloge (absent, la suite attend en temps réel), et `script(nom)`, qui prépare le prochain run à se comporter comme `success`, `failure`, `hang` (tourne jusqu'à l'arrêt ou au plafond) ou `chatty` (enchaîne au moins trois tours) ou `unlaunchable` (ne peut pas démarrer : `ClaudeCodeRunner` le lance dans un dossier absent), et rend ce que sa requête doit porter pour ça (le faux `claude` lit son script dans l'environnement).
 
 ## Hypothèse sur le point ouvert (ORC-155)
 

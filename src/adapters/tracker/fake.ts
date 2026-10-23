@@ -49,6 +49,16 @@ export class FakeTracker implements Tracker {
       .map((c) => c.args[1] as ActivityInput);
   }
 
+  comments(identifier: string): string[] {
+    return this.calls.filter((c) => c.method === 'comment' && c.args[0] === identifier).map((c) => c.args[1] as string);
+  }
+
+  externalUrls(sessionId: string): { label: string; url: string }[] {
+    return this.calls
+      .filter((c) => c.method === 'addExternalUrl' && c.args[0] === sessionId)
+      .map((c) => ({ label: c.args[1] as string, url: c.args[2] as string }));
+  }
+
   private record(method: string, ...args: unknown[]): void {
     this.calls.push({ method, args });
   }

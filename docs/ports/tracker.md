@@ -30,7 +30,7 @@ Aucun au niveau du port : il n'a pas de notion de tentative. Les échos de nos p
 
 ## Ce que la suite demande à l'implémentation
 
-`TrackerSubject` : un ticket existant, un identifiant absent de la même équipe, et en option un terme de recherche, deux statuts de l'équipe, une équipe avec un ticket délégué et un non délégué. Les cas d'écriture ne tournent que si le sujet donne les deux statuts : jamais contre un espace partagé.
+`TrackerSubject` : un ticket existant, un identifiant absent de la même équipe, et en option un terme de recherche, deux statuts de l'équipe, une équipe avec un ticket délégué et un non délégué, et `written`, qui relit ce que `comment`, `activity` et `addExternalUrl` ont écrit (le port ne sait pas le relire ; `FakeTracker` le lit par `comments`, `activities` et `externalUrls`). Les cas d'écriture ne tournent que si le sujet donne les deux statuts : jamais contre un espace partagé.
 
 ## Écarts connus
 
@@ -39,4 +39,4 @@ Aucun. `FakeTracker` acceptait n'importe quel nom de statut : depuis ORC-189, il
 - Par défaut, chaque équipe a les statuts du workflow standard (`STANDARD_STATES`, `packs/standard/workflow.yml` ; un test vérifie qu'ils ne divergent pas). Le harnais des scénarios passe ceux de la config du workflow qu'il charge.
 - Le catalogue ne porte que les statuts que le workflow nomme ; une vraie équipe Linear en a d'autres (Backlog, Canceled…). Un scénario qui a besoin d'un statut hors catalogue le déclare : `h.tracker.setStates('REL', [...h.tracker.statesOf('REL'), 'Backlog'])` (garde les statuts du workflow chargé), ou `new FakeTracker([...])` pour toutes les équipes.
 
-Le live `LinearTracker` tourne en lecture seule (sans statuts) : variables dans [l'index](README.md#tests-live).
+Le live `LinearTracker` tourne en lecture seule (sans statuts) : `getIssue`, `search` et `listDelegated`, avec l'utilisateur du jeton comme app ; variables dans [l'index](README.md#tests-live). Ses écritures, et donc leurs effets, ne passent par aucune suite.
