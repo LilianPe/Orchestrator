@@ -28,9 +28,9 @@ export class FakeCheckRunner implements CheckRunner {
     return release;
   }
 
-  run = async (cwd: string, commands: string[]): Promise<VerifyResult> => {
+  run: Verifier = async (cwd, commands, timeoutMs) => {
     this.calls.push({ cwd, commands });
     const next = this.results.shift();
-    return next ? next(commands) : this.fallback(cwd, commands);
+    return next ? next(commands) : this.fallback(cwd, commands, timeoutMs);
   };
 }

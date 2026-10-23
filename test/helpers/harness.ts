@@ -34,9 +34,9 @@ export function createHarness(
   const workflow = loadWorkflow({ packDir, projectFile });
   const clock = new FakeClock(Date.UTC(2026, 9, 10, 9, 0));
   const store = new SqliteStore(':memory:');
-  const tracker = new FakeTracker();
+  const tracker = new FakeTracker(Object.values(workflow.states));
   const forge = new FakeForge();
-  const runner = new FakeRunner();
+  const runner = new FakeRunner(clock);
   const workspaces = new FakeWorkspaces();
   const checks = new FakeCheckRunner(opts.verify);
   const sandboxes = new FakeSandboxProvider();
@@ -71,6 +71,7 @@ export function createHarness(
 
   async function advance(ms: number): Promise<void> {
     clock.advance(ms);
+    runner.tick();
     timers.tick();
     await orch.idle();
   }

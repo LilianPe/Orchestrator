@@ -1,5 +1,21 @@
 import { describe, expect, it } from 'vitest';
+import { describeCheckRunnerContract, type FailingCommand } from '../../../test/contracts/check-runner.contract.js';
 import { FakeCheckRunner } from './fake.js';
+
+describeCheckRunnerContract('FakeCheckRunner', () => {
+  const fails: [FailingCommand, FailingCommand] = [
+    { command: 'npm test', exitCode: 1, output: '1 test failed' },
+    { command: 'npm run lint', exitCode: 2, output: 'lint: 2 errors' },
+  ];
+  // The slow command takes 1 s: it fails, without an exit code, only under a shorter timeout the fake passed on.
+  const slow = 'npm run e2e';
+  const checks = new FakeCheckRunner(async (_cwd, commands, timeoutMs) => {
+    const timedOut = timeoutMs !== undefined && timeoutMs < 1_000 ? [{ command: slow, exitCode: null, output: '' }] : [];
+    const failed = commands.flatMap((c) => [...fails, ...timedOut].filter((f) => f.command === c));
+    return { ok: failed.length === 0, failures: failed };
+  });
+  return { checks, cwd: '/w', pass: 'npm run build', fails, slow };
+});
 
 describe('FakeCheckRunner', () => {
   it('passes by default and records each call', async () => {

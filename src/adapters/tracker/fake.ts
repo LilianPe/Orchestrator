@@ -1,9 +1,29 @@
 import type { ActivityInput, SearchHit, Tracker, TrackerIssue } from './types.js';
 
+const snapshot = (i: TrackerIssue): TrackerIssue => ({ ...i, labels: [...i.labels] });
+
+/** The states of packs/standard/workflow.yml, the catalogue every team has unless a test declares another. */
+export const STANDARD_STATES = ['Todo', 'In Progress', 'Human Review', 'AI Review', 'Ready to Merge', 'Done'] as const;
+
 export class FakeTracker implements Tracker {
   issues = new Map<string, TrackerIssue>();
   calls: { method: string; args: unknown[] }[] = [];
   private sessions = 0;
+  private teamStates = new Map<string, readonly string[]>();
+
+  constructor(private readonly defaultStates: readonly string[] = STANDARD_STATES) {}
+
+  setStates(teamKey: string, states: readonly string[]): void {
+    this.teamStates.set(teamKey, states);
+  }
+
+  statesOf(teamKey: string): readonly string[] {
+    return this.teamStates.get(teamKey) ?? this.defaultStates;
+  }
+
+  private checkState(teamKey: string, stateName: string): void {
+    if (!this.statesOf(teamKey).includes(stateName)) throw new Error(`unknown state ${stateName} for team ${teamKey}`);
+  }
 
   addIssue(p: Partial<TrackerIssue> & { identifier: string }): TrackerIssue {
     const issue: TrackerIssue = {
@@ -18,6 +38,7 @@ export class FakeTracker implements Tracker {
       createdAt: 0,
       ...p,
     };
+    this.checkState(issue.teamKey, issue.stateName);
     this.issues.set(issue.identifier, issue);
     return issue;
   }
@@ -39,11 +60,11 @@ export class FakeTracker implements Tracker {
   }
 
   async getIssue(identifier: string): Promise<TrackerIssue> {
-    return { ...this.must(identifier) };
+    return snapshot(this.must(identifier));
   }
 
   async listDelegated(teamKey: string): Promise<TrackerIssue[]> {
-    return [...this.issues.values()].filter((i) => i.teamKey === teamKey && i.delegateId);
+    return [...this.issues.values()].filter((i) => i.teamKey === teamKey && i.delegateId).map(snapshot);
   }
 
   async search(term: string): Promise<SearchHit[]> {
@@ -54,7 +75,9 @@ export class FakeTracker implements Tracker {
 
   async moveTo(identifier: string, stateName: string): Promise<void> {
     this.record('moveTo', identifier, stateName);
-    this.must(identifier).stateName = stateName;
+    const i = this.must(identifier);
+    this.checkState(i.teamKey, stateName);
+    i.stateName = stateName;
   }
 
   async setLabels(identifier: string, add: string[], remove: string[]): Promise<void> {
@@ -64,6 +87,7 @@ export class FakeTracker implements Tracker {
   }
 
   async comment(identifier: string, body: string): Promise<void> {
+    this.must(identifier);
     this.record('comment', identifier, body);
   }
 
@@ -76,6 +100,7 @@ export class FakeTracker implements Tracker {
   }
 
   async ensureSession(identifier: string): Promise<string> {
+    this.must(identifier);
     this.record('ensureSession', identifier);
     return `fake-session-${++this.sessions}`;
   }

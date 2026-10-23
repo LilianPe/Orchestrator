@@ -1,10 +1,20 @@
 import { describe, expect, it } from 'vitest';
+import { describePublisherContract } from '../../../test/contracts/publisher.contract.js';
 import { FakeForge } from '../forge/fake.js';
 import { FakePublisher } from './fake.js';
 import type { PublishRequest } from './types.js';
 
 const req = (o: Partial<PublishRequest> = {}): PublishRequest => ({
   projectId: 'p', repoPath: '/repo', ticketId: 'REL-1', branch: 'factory/rel-1-x', sha: 'aaa', title: 'feat: x', body: 'b', ...o,
+});
+
+describePublisherContract('FakePublisher', () => {
+  const forge = new FakeForge();
+  return {
+    publisher: new FakePublisher(forge),
+    request: req(),
+    end: async (branch, prNumber) => forge.setPr(branch, { number: prNumber, url: `https://github.test/pr/${prNumber}`, state: 'MERGED', checks: 'pass', failedChecks: [] }),
+  };
 });
 
 describe('FakePublisher', () => {

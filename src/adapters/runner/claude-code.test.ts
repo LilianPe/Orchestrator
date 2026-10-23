@@ -2,8 +2,9 @@ import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { describeAgentRuntimeContract, drain, type AgentScript } from '../../../test/contracts/agent-runtime.contract.js';
 import { buildClaudeArgs, childEnv, ClaudeCodeRunner } from './claude-code.js';
-import type { RunRequest, RunStreamEvent } from './types.js';
+import type { RunRequest } from './types.js';
 
 const fx = (n: string) => join(import.meta.dirname, 'fixtures', n);
 
@@ -20,11 +21,15 @@ function runner() {
   return { transcriptsDir, r: new ClaudeCodeRunner({ transcriptsDir, command: [process.execPath, fx('fake-claude.mjs')], killGraceMs: 500 }) };
 }
 
-async function drain(it: AsyncIterable<RunStreamEvent>) {
-  const out: RunStreamEvent[] = [];
-  for await (const e of it) out.push(e);
-  return out;
-}
+const scripts: Record<AgentScript, Record<string, string>> = {
+  success: { FAKE_CLAUDE_SCRIPT: fx('stream-success.jsonl') },
+  failure: { FAKE_CLAUDE_SCRIPT: fx('stream-error.jsonl') },
+  hang: { FAKE_CLAUDE_SCRIPT: fx('stream-success.jsonl'), FAKE_CLAUDE_HANG: '1' },
+  chatty: { FAKE_CLAUDE_SCRIPT: fx('stream-many-turns.jsonl'), FAKE_CLAUDE_HANG: '1' },
+};
+
+const shared = runner().r;
+describeAgentRuntimeContract('ClaudeCodeRunner (fake claude CLI)', () => ({ runtime: shared, script: (name) => ({ env: scripts[name] }) }));
 
 describe('buildClaudeArgs', () => {
   it('starts a new session', () => {
@@ -59,21 +64,6 @@ describe('ClaudeCodeRunner', () => {
     const h = r.start(req({}, { FAKE_CLAUDE_SCRIPT: fx('stream-error.jsonl') }));
     await drain(h.events);
     expect(await h.done).toMatchObject({ outcome: 'failure', lastText: 'Je tente.' });
-  });
-
-  it('stops on request', async () => {
-    const { r } = runner();
-    const h = r.start(req({}, { FAKE_CLAUDE_SCRIPT: fx('stream-success.jsonl'), FAKE_CLAUDE_HANG: '1' }));
-    setTimeout(() => h.stop(), 200);
-    expect((await h.done).outcome).toBe('stopped');
-  });
-
-  it('enforces the duration and turn caps', async () => {
-    const { r } = runner();
-    const slow = r.start(req({ limits: { turns: 50, durationMs: 200, usd: 5 } }, { FAKE_CLAUDE_SCRIPT: fx('stream-success.jsonl'), FAKE_CLAUDE_HANG: '1' }));
-    expect((await slow.done).outcome).toBe('limit');
-    const chatty = r.start(req({ limits: { turns: 2, durationMs: 10_000, usd: 5 } }, { FAKE_CLAUDE_SCRIPT: fx('stream-many-turns.jsonl'), FAKE_CLAUDE_HANG: '1' }));
-    expect((await chatty.done).outcome).toBe('limit');
   });
 });
 

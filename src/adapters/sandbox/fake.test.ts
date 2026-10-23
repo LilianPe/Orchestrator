@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest';
+import { describeSandboxContract } from '../../../test/contracts/sandbox.contract.js';
 import { FakeSandboxProvider } from './fake.js';
+
+describeSandboxContract('FakeSandboxProvider', () => {
+  const provider = new FakeSandboxProvider();
+  return {
+    provider,
+    request: { runId: 'r1', ticketId: 'REL-1', workspacePath: '/w', network: 'none' },
+    active: async () => provider.active().map((s) => s.id),
+  };
+});
 
 describe('FakeSandboxProvider', () => {
   it('creates sandboxes with the requested network level and tracks the active ones', async () => {

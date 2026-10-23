@@ -28,9 +28,9 @@ Un faux par port, tous montés par `createHarness()` :
 
 | Port (doc MVP) | Interface | Faux | Ce qu'il offre au scénario |
 |---|---|---|---|
-| Tracker | `Tracker` (`src/adapters/tracker/types.ts`) | `h.tracker` (`FakeTracker`) | `addIssue`, `calls`, `activities(sessionId)` |
+| Tracker | `Tracker` (`src/adapters/tracker/types.ts`) | `h.tracker` (`FakeTracker`) | `addIssue`, `calls`, `activities(sessionId)`, `setStates(teamKey, statuts)` (catalogue par équipe, par défaut les statuts du workflow chargé ; un statut hors catalogue est refusé) |
 | Forge | `Forge` (`src/adapters/forge/types.ts`) | `h.forge` (`FakeForge`) | `setPr`, `setReviewComments` |
-| AgentRuntime | `Runner` (`src/adapters/runner/types.ts`) | `h.runner` (`FakeRunner`) | `enqueue({ events, outcome, hold })`, `release(runId)`, `requests` |
+| AgentRuntime | `Runner` (`src/adapters/runner/types.ts`) | `h.runner` (`FakeRunner`) | `enqueue({ events, outcome, turns, hold })`, `release(runId)`, `requests` ; plafonds tenus : `turns` au-delà de `limits.turns`, ou un run tenu quand `h.advance(ms)` porte `h.clock` à `limits.durationMs` depuis son départ, finit en `limit` (avancer `h.clock` seule ne le termine pas) |
 | SandboxProvider | `SandboxProvider` (`src/adapters/sandbox/types.ts`) | `h.sandboxes` (`FakeSandboxProvider`) | `create`, `destroy`, `active()`, `created`, `destroyed` |
 | CheckRunner | `CheckRunner` (`src/adapters/checks/types.ts`) | `h.checks` (`FakeCheckRunner`) | `failNext(output)`, `enqueue(result)`, `holdNext()`, `calls` |
 | Publisher | `Publisher` (`src/adapters/publisher/types.ts`) | `h.publisher` (`FakePublisher`) | `publish`, `published` ; la PR publiée apparaît dans `h.forge`, ouverte, checks en attente |
@@ -46,11 +46,11 @@ Ce qui est branché sur le moteur aujourd'hui :
 
 `FakePublisher` numérote ses PR lui-même, dans l'ordre où il les ouvre (1, 2…) : ne mélangez pas dans un même scénario une PR posée à la main par `h.forge.setPr` et une publication, elles pourraient partager un numéro. Republier une branche met à jour sa PR, checks en attente ; si `h.forge` montre cette PR mergée ou fermée, la publication en ouvre une nouvelle, comme sur GitHub.
 
-Ces interfaces sont **minimales** : elles portent ce dont les faux ont besoin. Leur contrat complet (idempotence, erreurs, fencing) et les suites de conformité viennent d'ORC-189.
+Ces interfaces sont **minimales** : elles portent ce dont les faux ont besoin. Leur contrat (méthodes, idempotence, erreurs, fencing) est dans [`docs/ports/`](ports/README.md), une fiche par port ; chaque faux passe la suite de conformité de son port (`test/contracts/`), et un faux qu'on modifie doit continuer à la passer.
 
 ## L'horloge simulée
 
-`h.clock` est une `FakeClock`. `await h.advance(ms)` avance l'horloge, déclenche les minuteries échues (aujourd'hui le seul minuteur est le debounce) et attend que l'orchestrateur ait tout traité. Aucun scénario n'attend de vrai délai.
+`h.clock` est une `FakeClock`. `await h.advance(ms)` avance l'horloge, termine en `limit` les runs tenus dont le plafond de durée est atteint, déclenche les minuteries échues (aujourd'hui le seul minuteur est le debounce) et attend que l'orchestrateur ait tout traité. Aucun scénario n'attend de vrai délai.
 
 ## Écrire un scénario
 
