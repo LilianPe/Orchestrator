@@ -217,6 +217,52 @@ describe('ingest', () => {
     expect(ids).toEqual(['linear:issue:u1:2026-10-15T10:00:00.000Z', 'linear:issue:u1:2026-10-15T10:00:00.000Z:label:l-resume']);
   });
 
+  it('submits two webhooks in arrival order even when the echo lookup of the first is slower', async () => {
+    const ids: string[] = [];
+    let release!: () => void;
+    const slow = new Promise<void>((r) => (release = r));
+    const ingest = createLinearIngest({
+      secret: () => 'sec',
+      // The first webhook moves the ticket to AI Review, the second to Human Review; only the first lookup waits.
+      ctx: { ...ctx(), now: () => 1000, isEcho: async (k: string) => (k === 'state:REL-1:AI Review' ? (await slow, false) : false) },
+      submit: (e: FactoryEvent) => void ids.push(e.id),
+      ack: async () => {},
+      log: () => {},
+    });
+    const moved = fx('issue-moved-labeled');
+    const first = { ...moved, updatedFrom: { stateId: 's-hr' } };
+    const second = {
+      ...moved,
+      data: { ...moved.data, updatedAt: '2026-10-15T10:00:01.000Z', stateId: 's-hr', state: { id: 's-hr', name: 'Human Review' } },
+      updatedFrom: { stateId: 's-ai' },
+    };
+    const a = signed(first);
+    const b = signed(second);
+    const both = Promise.all([ingest(a.raw, { 'linear-signature': a.sig }), ingest(b.raw, { 'linear-signature': b.sig })]);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(ids).toEqual([]);
+    release();
+    await both;
+    expect(ids).toEqual(['linear:issue:u1:2026-10-15T10:00:00.000Z', 'linear:issue:u1:2026-10-15T10:00:01.000Z']);
+  });
+
+  it('keeps ingesting after a webhook whose echo lookup failed', async () => {
+    const ids: string[] = [];
+    let fail = true;
+    const ingest = createLinearIngest({
+      secret: () => 'sec',
+      ctx: { ...ctx(), now: () => 1000, isEcho: async () => { if (fail) throw new Error('store down'); return false; } },
+      submit: (e: FactoryEvent) => void ids.push(e.id),
+      ack: async () => {},
+      log: () => {},
+    });
+    const { raw, sig } = signed(fx('issue-moved-labeled'));
+    await expect(ingest(raw, { 'linear-signature': sig })).rejects.toThrow('store down');
+    fail = false;
+    expect(await ingest(raw, { 'linear-signature': sig })).toEqual({ status: 200 });
+    expect(ids).toHaveLength(2);
+  });
+
   it('still drops a replay that is fresh when a later webhook purges the guard', async () => {
     let now = 1000;
     const ids: string[] = [];
