@@ -29,7 +29,7 @@ import { runVerify } from '../core/verify.js';
 import { KnowledgeBase } from '../knowledge/kb.js';
 import { startSmeeRelay } from '../relay/smee.js';
 import { createApp } from '../server/app.js';
-import { SqliteStore } from '../store/sqlite-store.js';
+import { openStore } from '../store/open.js';
 import { repoRoot } from './root.js';
 import { TrackerSwitch } from './tracker-switch.js';
 import { PRODUCT_NAME } from '../product.js';
@@ -80,7 +80,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
   });
   const limits = projects[0]?.workflow.limits;
 
-  const store = new SqliteStore(paths.db);
+  const { store, kind } = await openStore({ env, sqlitePath: paths.db, migrationsFolder: join(root, 'drizzle') });
+  log(kind === 'postgres' ? 'store : Postgres (migrations Drizzle appliquées)' : `store : SQLite (${paths.db})`);
   const clock = new SystemClock();
   const bus = new EventBus();
   bus.subscribe((m) => {

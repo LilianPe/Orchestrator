@@ -11,7 +11,7 @@ import { repoRoot } from '../app/root.js';
 import { homePaths, loadInstance, loadSecrets, factoryHome, saveSecrets } from '../config/instance.js';
 import { loadWorkflow } from '../config/load-workflow.js';
 import { createSmeeChannel } from '../relay/smee.js';
-import { SqliteStore } from '../store/sqlite-store.js';
+import { openStore } from '../store/open.js';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { runInit } from './init.js';
@@ -94,7 +94,7 @@ async function main(): Promise<number> {
         const f = join(p.repoPath, '.factory/workflow.yml');
         return { id: p.id, repoPath: p.repoPath, teamKey: p.linearTeamKey, workflow: loadWorkflow({ packDir, projectFile: existsSync(f) ? f : undefined }) };
       });
-      const store = new SqliteStore(homePaths(home).db);
+      const { store } = await openStore({ env: process.env, sqlitePath: homePaths(home).db, migrationsFolder: join(repoRoot(), 'drizzle') });
       console.log(formatPlan(await planRows({ tracker, store, projects, workspaces: new GitWorkspaces({ root: homePaths(home).workspaces }) })));
       await store.close();
       return 0;
