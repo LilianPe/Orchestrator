@@ -41,7 +41,7 @@ describe('inbox: written before the answer, processed from the inbox', () => {
     const acks: string[] = [];
     const { raw, headers } = signedDelegation();
     expect(await linearIngest((e) => h.orch.accept(e), acks)(raw, headers)).toEqual({ status: 200 });
-    await h.orch.idle();
+    await h.orch.drained();
     expect(acks).toEqual([]);
     expect(await delegations(h.store)).toHaveLength(1);
     expect(h.runner.requests).toHaveLength(runs);
@@ -59,13 +59,13 @@ describe('inbox: written before the answer, processed from the inbox', () => {
     const { raw, headers } = signedDelegation();
     // The answer is 200: the event is written; its processing fails afterwards.
     expect(await linearIngest((e) => h.orch.accept(e))(raw, headers)).toEqual({ status: 200 });
-    await h.orch.idle();
+    await h.orch.drained();
     expect(await h.store.getTicket('p', 'REL-1')).toBeUndefined();
     expect((await h.store.pendingInbox(10)).map((e) => e.type)).toEqual(['ticket.delegated']);
 
     // Not retried in a loop by the same process: a later event leaves it pending.
-    await h.orch.submit({ ...TRUSTED, id: 'ui:resume', type: 'control.resume', at: h.clock.now(), projectId: '*', payload: {} });
-    await h.orch.idle();
+    await h.orch.accept({ ...TRUSTED, id: 'ui:resume', type: 'control.resume', at: h.clock.now(), projectId: '*', payload: {} });
+    await h.orch.drained();
     expect((await h.store.pendingInbox(10)).map((e) => e.type)).toEqual(['ticket.delegated']);
 
     down = false;
@@ -139,7 +139,7 @@ describe('inbox: written before the answer, processed from the inbox', () => {
     failNext = true;
     await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'et le PDF ?', author: 'L' });
     h.runner.release(run!.runId);
-    await h.orch.idle();
+    await h.orch.drained();
     expect((await h.store.pendingInbox(10)).map((e) => e.type)).toEqual(['session.prompted', 'run.finished']);
     // The only dev slot is free again: another ticket starts its run.
     await h.send('ticket.delegated', { linearSessionId: 'ls-2' }, 'REL-2');
@@ -165,7 +165,7 @@ describe('inbox: written before the answer, processed from the inbox', () => {
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
     failNext = true;
     h.runner.release(h.runner.requests[0]!.runId);
-    await h.orch.idle();
+    await h.orch.drained();
     expect((await h.store.pendingInbox(10)).map((e) => e.type)).toEqual(['run.finished']);
 
     // recover() runs before the replay: it must not block the ticket and fence the result.

@@ -53,10 +53,11 @@ describe.skipIf(!PG_URL)('orchestrator on PgStore', () => {
     expect(h.runner.requests).toHaveLength(1);
     expect(await h.store.listQueue()).toHaveLength(1);
     h.runner.release((await h.ticket('REL-1')).activeRunId!);
-    await h.orch.idle();
+    await h.orch.drained();
     expect(h.runner.requests).toHaveLength(2);
     expect(h.runner.requests[1]!.cwd).toBe('/tmp/factory-fake/p/REL-2');
-    const outbox = await pool.query<{ status: string }>(`select status from outbox`);
+    // The queue item; the decisions' own outbox rows (ORC-149) are not queue rows.
+    const outbox = await pool.query<{ status: string }>(`select status from outbox where payload ? 'queue'`);
     expect(outbox.rows).toEqual([{ status: 'done' }]);
   });
 
@@ -79,12 +80,12 @@ describe.skipIf(!PG_URL)('orchestrator on PgStore', () => {
   it('pauses the queue through meta and drains it on resume', async () => {
     const h = harness();
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
-    await h.orch.submit({ id: 'pause', type: 'control.pause', at: h.clock.now(), projectId: '*', payload: {} });
+    await h.orch.accept({ id: 'pause', type: 'control.pause', at: h.clock.now(), projectId: '*', payload: {} });
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
     expect(h.runner.requests).toHaveLength(0);
     expect(await h.orch.isPaused()).toBe(true);
-    await h.orch.submit({ id: 'resume', type: 'control.resume', at: h.clock.now(), projectId: '*', payload: {} });
-    await h.orch.idle();
+    await h.orch.accept({ id: 'resume', type: 'control.resume', at: h.clock.now(), projectId: '*', payload: {} });
+    await h.orch.drained();
     expect(h.runner.requests).toHaveLength(1);
     expect(await h.orch.isPaused()).toBe(false);
   });

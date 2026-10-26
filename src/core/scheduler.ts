@@ -35,6 +35,10 @@ export class Scheduler {
     return [...this.held.values()].filter((h) => h.queue === queue).length;
   }
 
+  free(queue: QueueName): number {
+    return this.capacity[queue] - this.inUse(queue);
+  }
+
   hasFree(queue: QueueName): boolean {
     return this.inUse(queue) < this.capacity[queue];
   }

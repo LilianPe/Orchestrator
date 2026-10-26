@@ -6,15 +6,17 @@ import { ActivityRelay } from '../adapters/tracker/activity-relay.js';
 import type { Tracker } from '../adapters/tracker/types.js';
 import type { WorkspaceManager } from '../adapters/workspace/types.js';
 import type { JobSpec, Workflow } from '../config/workflow-schema.js';
-import type { RunRecord, Store } from '../store/types.js';
+import { Worker } from '../runtime/worker.js';
+import { workflowVersion } from '../runtime/workflow-version.js';
+import type { DecisionOutcome, DecisionPlan, DecisionRequest, OutboxRow, RunRecord, Store, WorkflowVersion } from '../store/types.js';
 import type { EventBus } from './bus.js';
 import type { Clock } from './clock.js';
-import type { Decision, Effect } from './decision.js';
+import type { Effect, OutboxEffect } from './decision.js';
 import { decide, isFenced, refusesDevWork } from './engine.js';
 import { pickupFailures } from './pickup.js';
 import { buildPrompt, formatFeedback, formatVerifyFailures } from './prompt.js';
 import { reduce } from './reduce.js';
-import { upcast, type StoredEvent } from './upcast.js';
+import type { StoredEvent } from './upcast.js';
 import type { Scheduler } from './scheduler.js';
 import {
   CREATES_TICKET,
@@ -71,6 +73,8 @@ export interface OrchestratorDeps {
    * so the inbox is not dispatched before the tracker is connected. Default false (tests).
    */
   holdInboxUntilReplay?: boolean;
+  /** Lease of a claimed outbox row (ORC-149); default 60 s, renewed every 20 s while the effect runs. */
+  effectLeaseMs?: number;
 }
 
 interface StartOpts {
@@ -84,8 +88,6 @@ interface StartOpts {
 /** Events after which `handle` settles the ticket: the pending job starts once nothing is in flight. */
 export const SETTLES_RUN: ReadonlySet<EventType> = new Set<EventType>(['run.finished', 'verify.passed', 'verify.failed']);
 const ECHO_MS = 60_000;
-/** Inbox rows read per query by the dispatcher. */
-const INBOX_BATCH = 100;
 
 export function logicalFromName(states: Record<LogicalState, string>, name: string): LogicalState | undefined {
   return (Object.entries(states) as [LogicalState, string][]).find(([, n]) => n === name)?.[0];
@@ -102,9 +104,8 @@ type RecoveryNotice = ({ ticket: { projectId: string; ticketId: string } } | { s
 };
 
 export class Orchestrator {
-  private chain: Promise<void> = Promise.resolve();
   private background = new Map<Promise<void>, string | undefined>();
-  /** Runs whose event stream is still open (the runner is working, nothing for the factory to do): idle() does not wait for them. */
+  /** Runs whose event stream is still open (the runner is working, nothing for the factory to do): drained() does not wait for them. */
   private liveRuns = new Set<string>();
   private handles = new Map<string, RunHandle>();
   private stopping = false;
@@ -113,36 +114,46 @@ export class Orchestrator {
   private newId: () => string;
   /** Inbox writes in flight (accept). */
   private writes = new Set<Promise<void>>();
-  /** A dispatch pass is queued in the chain and has not started reading the inbox yet. */
-  private dispatchQueued = false;
   /** False until `replayInbox()` when `holdInboxUntilReplay` is set: `accept` then only writes. */
   private dispatchOpen: boolean;
-  /** Inbox rows whose processing failed in this process: left pending for the next start. */
-  private skipped = new Set<string>();
-  /**
-   * Tickets (`projectId:ticketId`) with a skipped row: their later rows are skipped too and stay
-   * pending, so the next start replays the ticket's events in order instead of processing the
-   * later ones without the failed one (a delegation that failed would make them "unmanaged").
-   */
-  private skippedTickets = new Set<string>();
+  /** The inbox worker (ORC-149): one task per ticket, a decision transaction per event. */
+  private readonly worker: Worker;
+  /** Versions of the projects' workflows, by workflow object. */
+  private versionOfWorkflow = new WeakMap<Workflow, WorkflowVersion>();
+  /** Workflows by version hash: the current ones and those tickets are frozen on. */
+  private workflows = new Map<string, Workflow>();
+  /** Dequeued items whose start has not taken its slot yet, per queue: drain hands out no more than the free slots. */
+  private admitting: Record<QueueName, number> = { dev: 0, questions: 0 };
+  /** Drains run one at a time. */
+  private draining: Promise<void> = Promise.resolve();
 
   constructor(private d: OrchestratorDeps) {
     this.newId = d.newId ?? randomUUID;
     this.dispatchOpen = !d.holdInboxUntilReplay;
+    this.worker = new Worker({
+      store: d.store,
+      log: (level, message) => this.log(level, message),
+      prepare: (event) => this.withSnapshot(event),
+      request: (event) => this.request(event),
+      committed: (event, outcome) => this.committed(event, outcome),
+      execute: (row) => this.execute(row),
+      effectFailed: (row, err) => this.effectFailed(row, err),
+      leaseMs: d.effectLeaseMs,
+    });
   }
 
   /**
    * The one way in for an event (ORC-147): writes it to the inbox and resolves once the row is
-   * committed, then lets the dispatcher process it from the inbox. Resolves `false` for an id the
+   * committed, then lets the worker process it from the inbox. Resolves `false` for an id the
    * inbox already holds (a duplicate: nothing more happens). Rejects when the write fails: the
    * event was not taken, and the producer must report it (a webhook answers 500).
    */
   accept(event: FactoryEvent | StoredEvent): Promise<boolean> {
     const write = this.d.store.appendInbox(event).then((fresh) => {
-      if (fresh && this.dispatchOpen) void this.dispatch();
+      if (fresh && this.dispatchOpen) this.kick();
       return fresh;
     });
-    // idle() waits for writes in flight too: their event is about to be dispatched.
+    // drained() waits for writes in flight too: their event is about to be processed.
     const tracked: Promise<void> = write.then(
       () => void this.writes.delete(tracked),
       () => void this.writes.delete(tracked),
@@ -151,40 +162,37 @@ export class Orchestrator {
     return write;
   }
 
-  /**
-   * `accept`, then waits for the dispatcher to process the event. Accepts an event of any schema
-   * version: it is upcast when read back from the inbox. Never rejects: a failure is logged.
-   */
-  async submit(event: FactoryEvent | StoredEvent): Promise<void> {
-    try {
-      await this.accept(event);
-    } catch (err) {
-      this.log('error', `event ${event.id} (${event.type}) not written to the inbox: ${(err as Error).message}`);
-      return;
-    }
-    await this.chain;
+  private kick(): void {
+    this.worker.kick().catch((err: unknown) => this.log('error', `inbox: ${(err as Error).message}`));
   }
 
   /**
-   * Processes the inbox rows a previous process left unprocessed (written, then a crash or a
-   * failed handling), oldest first. `factory up` calls it once at start, after `recover()`.
+   * Processes the inbox rows and outbox effects a previous process left (written, then a crash or
+   * a failed processing), oldest first. `factory up` calls it once at start, after `recover()`,
+   * through `startWorker`.
    */
-  replayInbox(): Promise<void> {
+  async replayInbox(): Promise<void> {
     this.dispatchOpen = true;
-    return this.dispatch();
+    await this.worker.kick();
+  }
+
+  /** `replayInbox`, then polls the store: rows written by another process, leases that expired. */
+  startWorker(intervalMs = 1000): Promise<void> {
+    this.worker.start(intervalMs);
+    return this.replayInbox();
   }
 
   /**
-   * `submit` for the results the orchestrator produces itself (run finished, checks): nobody
-   * resends them, so a failed inbox write is retried with a bounded backoff before giving up with
-   * an error (the run's slot is then held until `recover()` at the next start).
+   * For the results the orchestrator produces itself (run finished, checks): nobody resends them,
+   * so a failed inbox write is retried with a bounded backoff before giving up with an error (the
+   * run's slot is then held until `recover()` at the next start).
    */
   private async submitResult(event: FactoryEvent): Promise<void> {
     const { attempts, baseMs } = this.d.inboxRetry ?? { attempts: 5, baseMs: 200 };
     for (let n = 1; ; n++) {
       try {
         await this.accept(event);
-        break;
+        return;
       } catch (err) {
         if (n >= attempts) {
           this.log('error', `event ${event.id} (${event.type}) not written to the inbox after ${n} attempts, lost: ${(err as Error).message}`);
@@ -193,94 +201,28 @@ export class Orchestrator {
         await new Promise((resolve) => setTimeout(resolve, baseMs * 2 ** (n - 1)));
       }
     }
-    await this.chain;
   }
 
   /**
-   * Reads the pending inbox rows and handles them one by one in the event chain, marking each
-   * processed once handled. A row whose handling throws stays pending and is skipped until the
-   * next start (no retry loop in the same process), and so are the later rows of its ticket; the
-   * per-ticket worker and the dead-letter replace this with ORC-149 and ORC-175.
-   *
-   * Only a failure before the event is journaled (`recordEvent`) is replayed faithfully: the
-   * journal, the projection, the effects and `markInboxProcessed` are separate writes, so after a
-   * failure or a crash past `recordEvent` the replay finds the event journaled, skips it as a
-   * duplicate and marks it processed: its remaining effects are lost. ORC-149's single decision
-   * transaction closes this.
+   * Waits until this process has nothing left to do with the inbox and the outbox (ORC-149, in
+   * place of the event chain's `idle()`): no inbox write in flight, no pending row or claimable
+   * effect it can still process, no worker task running, and no background work (checks, the end
+   * of a run) about to write to the inbox. Runs still streaming are not waited for. Rows this
+   * process skipped (a failed processing) or left to another worker do not count.
    */
-  private dispatch(): Promise<void> {
-    if (this.dispatchQueued) return this.chain;
-    this.dispatchQueued = true;
-    const next = this.chain
-      .then(async () => {
-        this.dispatchQueued = false;
-        const seen = new Set<string>();
-        for (;;) {
-          const rows = await this.d.store.pendingInbox(INBOX_BATCH, [...this.skipped]);
-          if (rows.length === 0) return;
-          for (const row of rows) {
-            if (seen.has(row.id)) {
-              // Handled, yet still pending: never loop on it.
-              this.skipped.add(row.id);
-              this.log('error', `event ${row.id} (${row.type}) still pending after its processing, skipped until the next start`);
-              continue;
-            }
-            seen.add(row.id);
-            const ticket = row.ticketId === undefined ? undefined : `${row.projectId}:${row.ticketId}`;
-            if (ticket !== undefined && this.skippedTickets.has(ticket)) {
-              this.skipped.add(row.id);
-              await this.freeSlot(row);
-              this.log('error', `event ${row.id} (${row.type}) kept in the inbox behind a failed event of ${row.ticketId}, for the next start`);
-              continue;
-            }
-            await this.process(row);
-          }
-          // A short batch was the last: what was accepted meanwhile queued a pass of its own.
-          if (rows.length < INBOX_BATCH) return;
-        }
-      })
-      .catch((err: unknown) => {
-        this.dispatchQueued = false;
-        this.log('error', `inbox: ${(err as Error).message}`);
-      });
-    this.chain = next;
-    return next;
-  }
-
-  private async process(row: StoredEvent): Promise<void> {
-    try {
-      await this.handle(upcast(row));
-      await this.d.store.markInboxProcessed(row.id);
-    } catch (err) {
-      this.skipped.add(row.id);
-      if (row.ticketId !== undefined) this.skippedTickets.add(`${row.projectId}:${row.ticketId}`);
-      this.log('error', `event ${row.id} (${row.type}): ${(err as Error).message} (kept in the inbox for the next start)`);
-      await this.freeSlot(row);
-    }
-  }
-
-  /**
-   * A run result left pending still frees its run's slot: held until the next start, it would
-   * otherwise keep the slot taken and, slot after slot, stop every launch. The slots are in memory,
-   * so the replay at the next start frees nothing twice.
-   */
-  private async freeSlot(event: FactoryEvent | StoredEvent): Promise<void> {
-    if (event.type !== 'run.finished') return;
-    const run = await this.d.store.getRun((event.payload as EventPayloads['run.finished']).runId).catch(() => undefined);
-    if (run) this.d.scheduler.release(`${run.ticketId}:${run.queue}`);
-  }
-
-  async idle(): Promise<void> {
+  async drained(): Promise<void> {
     for (;;) {
       // Note: setImmediate is incompatible with fake timers (vi.useFakeTimers fakes it by default).
       // Let promise continuations of a just-released/finished runner settle before sampling the state.
       await new Promise<void>((resolve) => setImmediate(resolve));
       await Promise.all(this.writes);
-      const chain = this.chain;
-      await chain;
+      // After stopAll(), only what is already handed out (or accepted here) is finished: a daemon
+      // shutting down does not take up the rows another process left.
+      const handed = this.stopping || !this.dispatchOpen ? 0 : await this.worker.kick();
+      await this.worker.settle();
       const pending = this.pendingBackground();
       await Promise.all(pending);
-      if (chain === this.chain && pending.length === 0 && this.writes.size === 0 && this.pendingBackground().length === 0) return;
+      if (handed === 0 && pending.length === 0 && this.writes.size === 0 && this.pendingBackground().length === 0) return;
     }
   }
 
@@ -329,58 +271,55 @@ export class Orchestrator {
 
   /**
    * Blocks a ticket from outside an event (the agent's question through /agent/ask). It runs in
-   * the event chain, so its read-modify-write never interleaves with an event's and overwrites it,
-   * and after the events accepted before it (their inbox write in flight included).
+   * the ticket's worker task, so its read-modify-write never interleaves with a decision's, and
+   * after the events accepted before it (their inbox write in flight included).
    */
   async blockTicket(projectId: string, ticketId: string, reason: string): Promise<void> {
     await Promise.all(this.writes);
-    const next = this.chain.then(async () => {
+    await this.worker.kick();
+    await this.worker.exclusive({ projectId, ticketId }, async () => {
       const t = await this.d.store.getTicket(projectId, ticketId);
       if (t) await this.apply(t, { type: 'ticket.blocked', reason });
     });
-    this.chain = next.catch((err: unknown) => this.log('error', `block ${ticketId}: ${(err as Error).message}`));
-    return next;
   }
 
   /** Best effort: posts the notices collected by recover(); a failure is logged, never retried. */
-  announceRecovery(): Promise<void> {
+  async announceRecovery(): Promise<void> {
     const notices = this.recoveryNotices;
     this.recoveryNotices = [];
-    const next = this.chain.then(async () => {
-      for (const n of notices) {
-        try {
-          let session: string;
-          if ('sessionId' in n) session = n.sessionId;
-          else {
-            const t = await this.d.store.getTicket(n.ticket.projectId, n.ticket.ticketId);
-            if (!t) continue;
-            session = await this.sessionFor(t);
-          }
-          await this.d.tracker.activity(session, { type: n.type, body: n.body });
-        } catch (err) {
-          this.log('warn', `recovery notice not posted: ${(err as Error).message}`);
+    for (const n of notices) {
+      const post = async () => {
+        let session: string;
+        if ('sessionId' in n) session = n.sessionId;
+        else {
+          const t = await this.d.store.getTicket(n.ticket.projectId, n.ticket.ticketId);
+          if (!t) return;
+          session = await this.sessionFor(t);
         }
+        await this.d.tracker.activity(session, { type: n.type, body: n.body });
+      };
+      try {
+        await ('sessionId' in n ? post() : this.worker.exclusive(n.ticket, post));
+      } catch (err) {
+        this.log('warn', `recovery notice not posted: ${(err as Error).message}`);
       }
-    });
-    this.chain = next;
-    return next;
+    }
   }
 
   async tick(): Promise<void> {
-    const next = this.chain
-      .then(async () => {
-        await this.drain('dev');
-        await this.drain('questions');
-      })
-      .catch((err: unknown) => this.log('error', `tick: ${(err as Error).message}`));
-    this.chain = next;
-    return next;
+    try {
+      await this.drain('dev');
+      await this.drain('questions');
+    } catch (err) {
+      this.log('error', `tick: ${(err as Error).message}`);
+    }
   }
 
   stopAll(): void {
     this.stopping = true;
+    this.worker.stop();
     for (const h of this.handles.values()) h.stop();
-    // Stopped runs are no longer "live": idle() must wait for their pumps to persist the final status.
+    // Stopped runs are no longer "live": drained() must wait for their pumps to persist the final status.
     this.liveRuns.clear();
   }
 
@@ -408,18 +347,59 @@ export class Orchestrator {
     this.background.set(wrapped, runId);
   }
 
-  private async putTicket(t: TicketState): Promise<TicketState> {
-    const stamped = { ...t, updatedAt: this.d.clock.now() };
-    await this.d.store.putTicket(stamped);
-    this.d.bus.publish({ kind: 'ticket', ticket: stamped });
-    return stamped;
+  /**
+   * The only way the orchestrator changes a ticket outside a decision (an effect recording what it
+   * did): through `reduce`, on the projection read again under the ticket's lock.
+   */
+  private async apply(t: TicketState, ...events: InternalEvent[]): Promise<TicketState> {
+    const now = this.d.clock.now();
+    const step = (from: TicketState): TicketState => {
+      let next = from;
+      for (const e of events) next = reduce(next, e)!;
+      return { ...next, updatedAt: now };
+    };
+    let next = await this.d.store.updateTicket(t.projectId, t.ticketId, step);
+    if (!next) {
+      next = step(t);
+      await this.d.store.putTicket(next);
+    }
+    this.d.bus.publish({ kind: 'ticket', ticket: next });
+    return next;
   }
 
-  /** The only way the orchestrator changes a ticket: through `reduce`, then persisted. */
-  private apply(t: TicketState, ...events: InternalEvent[]): Promise<TicketState> {
-    let next = t;
-    for (const e of events) next = reduce(next, e)!;
-    return this.putTicket(next);
+  /** The version of a project's workflow now: a ticket's first decision freezes it (ORC-149). */
+  private currentVersion(project: ProjectRuntime): WorkflowVersion {
+    let v = this.versionOfWorkflow.get(project.workflow);
+    if (!v) {
+      v = workflowVersion(project.workflow);
+      this.versionOfWorkflow.set(project.workflow, v);
+      this.workflows.set(v.hash, project.workflow);
+    }
+    return v;
+  }
+
+  private workflowOf(version: WorkflowVersion): Workflow {
+    let wf = this.workflows.get(version.hash);
+    if (!wf) {
+      wf = version.definition as Workflow;
+      this.workflows.set(version.hash, wf);
+    }
+    return wf;
+  }
+
+  /** The project as a ticket sees it: with the workflow version the ticket is frozen on. */
+  private async runtimeFor(projectId: string, ticketId: string | undefined): Promise<ProjectRuntime | undefined> {
+    const project = projectId === '*' ? this.d.projects[0] : this.project(projectId);
+    if (!project || !ticketId) return project;
+    const hash = (await this.d.store.getTicket(project.id, ticketId))?.workflowHash;
+    if (!hash || hash === this.currentVersion(project).hash) return project;
+    let workflow = this.workflows.get(hash);
+    if (!workflow) {
+      const stored = await this.d.store.getWorkflowVersion(hash);
+      if (!stored) throw new Error(`workflow version ${hash} of ${ticketId} is not stored`);
+      workflow = this.workflowOf(stored);
+    }
+    return { ...project, workflow };
   }
 
   private async ticket(projectId: string, ticketId: string): Promise<TicketState> {
@@ -442,56 +422,87 @@ export class Orchestrator {
     return { ...event, payload: { ...payload, issue: { title: issue.title, logical, priority: issue.priority } } } as FactoryEvent;
   }
 
-  private async handle(incoming: FactoryEvent): Promise<void> {
-    const { store, bus } = this.d;
-    const event = await this.withSnapshot(incoming);
-    if (!(await store.recordEvent(event))) return;
-    bus.publish({ kind: 'event', event });
-
-    if (event.projectId === '*') {
-      const project = this.d.projects[0];
-      if (!project) return;
-      await this.carryOut(project, undefined, decide(undefined, event, project.workflow));
-      return;
-    }
-
-    const project = this.project(event.projectId);
-    const known = event.ticketId ? await store.getTicket(project.id, event.ticketId) : undefined;
-    if (!known && event.ticketId && !CREATES_TICKET.has(event.type)) {
-      this.log('info', `ignored ${event.type} for unmanaged ticket ${event.ticketId}`);
-      return;
-    }
-
-    await this.freeSlot(event);
-    const decision = decide(known, event, project.workflow);
-    if (isFenced(decision)) this.log('info', `ignored stale ${event.type} for ${event.ticketId ?? '*'}: ${decision.trace[0]}`);
-    let next = reduce(known, event);
-    for (const e of decision.events) next = reduce(next, e);
-    const ticket = next && (await this.putTicket(next));
-    await this.carryOut(project, ticket, decision);
-
-    if (ticket && SETTLES_RUN.has(event.type)) await this.settle(project, ticket.ticketId);
+  /** The decision transaction of an event (ORC-149): `decide` runs in the store, under the ticket's lock. */
+  private request(event: FactoryEvent): DecisionRequest {
+    const project = event.projectId === '*' ? this.d.projects[0] : this.project(event.projectId);
+    const now = this.d.clock.now();
+    const none: DecisionPlan = { effects: [], timers: [], clearTimers: false };
+    if (!project) return { event, workflow: { hash: '', definition: null }, decide: () => none };
+    return {
+      event,
+      workflow: this.currentVersion(project),
+      decide: (known, version) => {
+        const workflow = this.workflowOf(version);
+        if (event.projectId === '*') return { ...none, effects: decide(undefined, event, workflow).effects };
+        if (!known && event.ticketId && !CREATES_TICKET.has(event.type)) {
+          return { ...none, note: `ignored ${event.type} for unmanaged ticket ${event.ticketId}` };
+        }
+        const decision = decide(known, event, workflow);
+        let next = reduce(known, event);
+        for (const e of decision.events) next = reduce(next, e);
+        const ticket = next && { ...next, updatedAt: now, workflowHash: version.hash };
+        const effects: OutboxEffect[] = [...decision.effects];
+        // After the effects, as before: start the ticket's pending job, then drain the queues.
+        if (ticket && SETTLES_RUN.has(event.type)) effects.push({ kind: 'settle' });
+        return {
+          ticket,
+          effects,
+          timers: ticket
+            ? decision.timers.map((t) => ({
+                key: `${ticket.ticketId}:${t.job}`,
+                projectId: project.id,
+                ticketId: ticket.ticketId,
+                job: t.job,
+                fireAt: now + t.ms,
+                armedBy: event.id,
+              }))
+            : [],
+          // A stop deletes the ticket's timers before this decision arms its own, as `stop_run` did.
+          clearTimers: decision.effects.some((c) => c.kind === 'stop_run' && !c.linearSessionId),
+          note: isFenced(decision) ? `ignored stale ${event.type} for ${event.ticketId ?? '*'}: ${decision.trace[0]}` : undefined,
+        };
+      },
+    };
   }
 
-  private async carryOut(project: ProjectRuntime, ticket: TicketState | undefined, decision: Decision): Promise<void> {
-    const { store, bus, clock } = this.d;
-    for (const c of decision.effects) {
-      bus.publish({ kind: 'command', projectId: project.id, ticketId: ticket?.ticketId, command: c });
-      try {
-        await this.exec(project, ticket?.ticketId, c);
-      } catch (err) {
-        const message = (err as Error).message;
-        this.log('error', `command ${c.kind} for ${ticket?.ticketId ?? '*'}: ${message}`);
-        if (!ticket) throw err;
-        await this.failTicket(project, ticket.ticketId, `Erreur : ${message}`);
-        return;
-      }
+  /** After the commit, before the effects. */
+  private async committed(event: FactoryEvent, outcome: Extract<DecisionOutcome, { status: 'committed' }>): Promise<void> {
+    const { store, bus, scheduler } = this.d;
+    bus.publish({ kind: 'event', event });
+    if (outcome.plan.note) this.log('info', outcome.plan.note);
+    if (event.type === 'run.finished' && outcome.known) {
+      const run = await store.getRun(event.payload.runId);
+      if (run) scheduler.release(`${run.ticketId}:${run.queue}`);
     }
-    // After the effects, as `set_debounce` was: a stop in the same decision keeps the timer, a failed effect arms none.
-    if (!ticket) return;
-    for (const t of decision.timers) {
-      await store.putTimer({ key: `${ticket.ticketId}:${t.job}`, projectId: project.id, ticketId: ticket.ticketId, job: t.job, fireAt: clock.now() + t.ms });
+    if (outcome.plan.ticket) bus.publish({ kind: 'ticket', ticket: outcome.plan.ticket });
+  }
+
+  /** Executes one outbox row of a decision, after its commit (the executors of ORC-150 take this over). */
+  private async execute(row: OutboxRow): Promise<void> {
+    const project = await this.runtimeFor(row.projectId, row.ticketId);
+    if (!project) return;
+    const effect = row.effect;
+    if (effect.kind === 'settle') {
+      if (row.ticketId) await this.settle(project, row.ticketId);
+      return;
     }
+    this.d.bus.publish({ kind: 'command', projectId: project.id, ticketId: row.ticketId, command: effect });
+    await this.exec(project, row.ticketId, effect);
+  }
+
+  /**
+   * An effect threw: the worker skips the decision's later effects, and the ticket is blocked with
+   * the error. The timers the decision armed go too, as when they were armed after the effects.
+   */
+  private async effectFailed(row: OutboxRow, err: Error): Promise<void> {
+    const { store } = this.d;
+    this.log('error', `command ${row.effect.kind} for ${row.ticketId ?? '*'}: ${err.message}`);
+    if (!row.ticketId || row.effect.kind === 'settle') return;
+    for (const t of await store.dueTimers(Number.MAX_SAFE_INTEGER)) {
+      if (t.armedBy === row.eventId) await store.deleteTimer(t.key, t.fireAt);
+    }
+    const project = await this.runtimeFor(row.projectId, row.ticketId);
+    if (project) await this.failTicket(project, row.ticketId, `Erreur : ${err.message}`);
   }
 
   private async failTicket(project: ProjectRuntime, ticketId: string, reason: string): Promise<void> {
@@ -517,14 +528,39 @@ export class Orchestrator {
     await this.drain('questions');
   }
 
-  private async drain(queue: QueueName): Promise<void> {
+  /** Starts queued items while slots are free, one drain at a time. */
+  private drain(queue: QueueName): Promise<void> {
+    const next = this.draining.then(() => this.drainNow(queue));
+    this.draining = next.catch(() => undefined);
+    return next;
+  }
+
+  /**
+   * Each item starts in its own ticket's task, without waiting for it (a long `prepare` holds only
+   * that ticket); `admitting` counts the starts not past their slot yet, so a drain hands out no
+   * more items than free slots.
+   */
+  private async drainNow(queue: QueueName): Promise<void> {
     if (this.stopping) return;
     const n = (await this.d.store.listQueue()).filter((q) => q.queue === queue).length;
     for (let i = 0; i < n; i++) {
-      if ((await this.isPaused()) || (await this.overBudget()) || !this.d.scheduler.hasFree(queue)) return;
+      if ((await this.isPaused()) || (await this.overBudget()) || this.d.scheduler.free(queue) - this.admitting[queue] <= 0) return;
       const item = await this.d.scheduler.next(queue);
       if (!item) return;
-      await this.startRun(this.project(item.projectId), item.ticketId, item);
+      this.admitting[queue]++;
+      let done = false;
+      const admitted = () => {
+        if (done) return;
+        done = true;
+        this.admitting[queue]--;
+      };
+      this.worker
+        .exclusive(item, async () => {
+          const project = await this.runtimeFor(item.projectId, item.ticketId);
+          if (project) await this.startRun(project, item.ticketId, item, admitted);
+        })
+        .catch((err: unknown) => this.log('error', `start ${item.job} on ${item.ticketId}: ${(err as Error).message}`))
+        .finally(admitted);
     }
   }
 
@@ -550,9 +586,9 @@ export class Orchestrator {
           }
           return;
         }
+        // The ticket's timers were deleted by the decision itself (`clearTimers`).
         // The ticket's dev work only: a question waiting for its slot is still answered.
         await store.removeFromQueue(project.id, ticketId, 'dev');
-        await store.deleteTimersFor(project.id, ticketId);
         if (t.activeRunId) this.handles.get(t.activeRunId)?.stop();
         return;
       }
@@ -616,7 +652,8 @@ export class Orchestrator {
     await this.apply(await this.ticket(project.id, t.ticketId), { type: 'status.recorded', to });
   }
 
-  private async startRun(project: ProjectRuntime, ticketId: string, opts: StartOpts): Promise<void> {
+  /** `admitted` is called once the start took its slot, or will not take one (`drainNow`). */
+  private async startRun(project: ProjectRuntime, ticketId: string, opts: StartOpts, admitted?: () => void): Promise<void> {
     const job = project.workflow.jobs[opts.job];
     if (!job) return this.log('error', `unknown job ${opts.job}`);
     const t = await this.ticket(project.id, ticketId);
@@ -659,6 +696,7 @@ export class Orchestrator {
     }
     const key = `${ticketId}:${job.queue}`;
     const slot = this.d.scheduler.tryAcquire(job.queue, key);
+    admitted?.();
     if (slot === null) return this.d.scheduler.enqueue(item);
     try {
       await this.launch(project, ticketId, job, opts, slot, key);
