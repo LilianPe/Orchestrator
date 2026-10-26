@@ -58,6 +58,19 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     expect(await s.dueTimers(Number.MAX_SAFE_INTEGER)).toEqual([]);
   });
 
+  it('keeps a due timer until it is deleted, and a re-armed timer when deleting the old firing', async () => {
+    const s = await store();
+    const timer = { key: 'REL-1:dev-feedback', projectId: 'p', ticketId: 'REL-1', job: 'dev-feedback', fireAt: 500 };
+    await s.putTimer(timer);
+    expect(await s.dueTimers(600)).toEqual([timer]);
+    expect(await s.dueTimers(600)).toEqual([timer]);
+    await s.putTimer({ ...timer, fireAt: 900 });
+    await s.deleteTimer(timer.key, 500);
+    expect(await s.dueTimers(1000)).toEqual([{ ...timer, fireAt: 900 }]);
+    await s.deleteTimer(timer.key, 900);
+    expect(await s.dueTimers(1000)).toEqual([]);
+  });
+
   it('orders the queue by priority then age, dedupes by ticket+job, and hands an item out once', async () => {
     const s = await store();
     await s.enqueue(q({ ticketId: 'A', priority: 0, enqueuedAt: 1 }));

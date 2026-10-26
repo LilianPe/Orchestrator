@@ -253,30 +253,29 @@ export class PgStore implements AsyncStore {
   }
 
   /**
-   * Claims every due timer in one transaction and marks it `fired`. A timer is therefore returned
-   * once; `putTimer` resets it to `pending`.
+   * Reads the due timers without changing them, as SQLite does: a timer stays due until
+   * `deleteTimer` removes it, so a pass cut before that (an error, a shutdown) fires it again on
+   * the next one. Its event id (`timer:<key>:<fireAt>`) makes the second firing a no-op.
    */
   async dueTimers(now: number): Promise<TimerRecord[]> {
-    return this.db.transaction(async (tx) => {
-      const result = await tx.execute<{ id: string; payload: TimerRecord }>(
-        sql`
-          select id, payload
-          from timers
-          where status = 'pending' and due_at <= to_timestamp(${now / 1000})
-          order by due_at, id
-          for update skip locked
-        `,
-      );
-      const rows = result.rows;
-      if (rows.length === 0) return [];
-      const ids = rows.map((row) => sql`${row.id}`);
-      await tx.execute(sql`update timers set status = 'fired' where id in (${sql.join(ids, sql`, `)})`);
-      return rows.map((row) => row.payload);
-    });
+    const result = await this.db.execute<{ payload: TimerRecord }>(sql`
+      select payload
+      from timers
+      where status = 'pending' and due_at <= to_timestamp(${now / 1000})
+      order by due_at, id
+    `);
+    return result.rows.map((row) => row.payload);
   }
 
-  async deleteTimer(key: string): Promise<void> {
-    await this.db.execute(sql`delete from timers where id = ${key}`);
+  async deleteTimer(key: string, fireAt?: number): Promise<void> {
+    if (fireAt === undefined) {
+      await this.db.execute(sql`delete from timers where id = ${key} and status = 'pending'`);
+      return;
+    }
+    await this.db.execute(sql`
+      delete from timers
+      where id = ${key} and status = 'pending' and (payload->>'fireAt')::double precision = ${fireAt}
+    `);
   }
 
   async deleteTimersFor(projectId: string, ticketId: string): Promise<void> {

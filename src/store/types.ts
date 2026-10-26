@@ -57,7 +57,8 @@ export interface Store {
   findRunByToken(token: string): Promise<RunRecord | undefined>;
   putTimer(t: TimerRecord): Promise<void>;
   dueTimers(now: number): Promise<TimerRecord[]>;
-  deleteTimer(key: string): Promise<void>;
+  /** With `fireAt`, deletes the timer only while it is still armed for that time: a re-armed timer stays. */
+  deleteTimer(key: string, fireAt?: number): Promise<void>;
   deleteTimersFor(projectId: string, ticketId: string): Promise<void>;
   /** Queues an item (deduped by ticket + job) and returns its id. */
   enqueue(q: QueueItem): Promise<string>;

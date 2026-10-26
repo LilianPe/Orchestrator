@@ -256,16 +256,17 @@ describe.skipIf(!url)('PgStore integration', () => {
     expect(await store.costSince(0)).toBe(2);
   });
 
-  it('claims due timers once and supports deletion', async () => {
+  it('reads due timers without consuming them, and supports deletion', async () => {
     const timer = { key: 'REL-1:dev-feedback', projectId: 'p', ticketId: 'REL-1', job: 'dev-feedback', fireAt: 5_000 };
     await store.putTimer(timer);
 
     expect(await store.dueTimers(4_999)).toEqual([]);
     expect(await store.dueTimers(5_000)).toEqual([timer]);
-    expect(await store.dueTimers(10_000)).toEqual([]);
+    // A pass cut before deleteTimer (an error, a shutdown) finds the timer again.
+    expect(await store.dueTimers(10_000)).toEqual([timer]);
 
-    const fired = await pool.query<{ status: string }>('select status from timers where id = $1', [timer.key]);
-    expect(fired.rows[0]?.status).toBe('fired');
+    const pending = await pool.query<{ status: string }>('select status from timers where id = $1', [timer.key]);
+    expect(pending.rows[0]?.status).toBe('pending');
 
     await store.putTimer({ ...timer, fireAt: 9_000 });
     await store.deleteTimer(timer.key);

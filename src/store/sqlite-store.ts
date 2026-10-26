@@ -95,8 +95,9 @@ export class SqliteStore implements Store {
     );
   }
 
-  async deleteTimer(key: string): Promise<void> {
-    this.db.prepare('DELETE FROM timers WHERE key = ?').run(key);
+  async deleteTimer(key: string, fireAt?: number): Promise<void> {
+    if (fireAt === undefined) this.db.prepare('DELETE FROM timers WHERE key = ?').run(key);
+    else this.db.prepare('DELETE FROM timers WHERE key = ? AND fire_at = ?').run(key, fireAt);
   }
 
   async deleteTimersFor(projectId: string, ticketId: string): Promise<void> {

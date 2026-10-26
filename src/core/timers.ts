@@ -23,7 +23,8 @@ export class TimerService {
   private async fire(): Promise<void> {
     const now = this.clock.now();
     for (const t of await this.store.dueTimers(now)) {
-      await this.store.deleteTimer(t.key);
+      // Only the timer read here: the orchestrator may have re-armed the key meanwhile.
+      await this.store.deleteTimer(t.key, t.fireAt);
       this.emit({
         ...TRUSTED,
         id: `timer:${t.key}:${t.fireAt}`,

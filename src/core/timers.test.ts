@@ -21,6 +21,43 @@ describe('TimerService', () => {
     ]);
   });
 
+  it('deletes only the firing it read, not a timer re-armed while the pass awaited the store', async () => {
+    const inner = new SqliteStore(':memory:');
+    const timer = { key: 'REL-1:dev-feedback', projectId: 'p', ticketId: 'REL-1', job: 'dev-feedback', fireAt: 100 };
+    await inner.putTimer(timer);
+    // The orchestrator re-arms the key between the read and the delete.
+    const store = Object.assign(Object.create(inner) as SqliteStore, {
+      dueTimers: async (now: number) => {
+        const due = await inner.dueTimers(now);
+        await inner.putTimer({ ...timer, fireAt: 900 });
+        return due;
+      },
+    });
+    const events: FactoryEvent[] = [];
+    await new TimerService(store, new FakeClock(500), (e) => events.push(e)).tick();
+    expect(events.map((e) => e.id)).toEqual(['timer:REL-1:dev-feedback:100']);
+    expect(await inner.dueTimers(1000)).toEqual([{ ...timer, fireAt: 900 }]);
+  });
+
+  it('fires again on the next pass a timer whose pass failed before deleting it', async () => {
+    const inner = new SqliteStore(':memory:');
+    await inner.putTimer({ key: 'REL-1:x', projectId: 'p', ticketId: 'REL-1', job: 'x', fireAt: 100 });
+    let fail = true;
+    const store = Object.assign(Object.create(inner) as SqliteStore, {
+      deleteTimer: async (key: string, fireAt?: number) => {
+        if (fail) throw new Error('store down');
+        return inner.deleteTimer(key, fireAt);
+      },
+    });
+    const events: FactoryEvent[] = [];
+    const svc = new TimerService(store, new FakeClock(500), (e) => events.push(e));
+    await expect(svc.tick()).rejects.toThrow('store down');
+    fail = false;
+    await svc.tick();
+    expect(events.map((e) => e.id)).toEqual(['timer:REL-1:x:100']);
+    expect(await inner.dueTimers(1000)).toEqual([]);
+  });
+
   it('runs one pass at a time, so overlapping ticks fire a timer once', async () => {
     const store = new SqliteStore(':memory:');
     const clock = new FakeClock(500);
