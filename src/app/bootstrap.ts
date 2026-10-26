@@ -196,6 +196,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     clock,
     submit,
     isPaused: () => orchestrator.isPaused(),
+    blockTicket: (projectId, ticketId, reason) => orchestrator.blockTicket(projectId, ticketId, reason),
     linearWebhook: ingest,
     linearConnected: () => !!trackerSwitch.current,
     tracker: trackerSwitch,

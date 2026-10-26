@@ -19,8 +19,9 @@ async function setup(extra: { uiPassword?: string } = {}) {
   const webDir = mkdtempSync(join(tmpdir(), 'factory-web-'));
   writeFileSync(join(webDir, 'index.html'), '<h1>Factory</h1>');
   const linearWebhook = vi.fn(() => ({ status: 200 }));
+  const blockTicket = vi.fn(async (_p: string, _t: string, _reason: string) => {});
   const app = createApp({
-    store, bus, clock: new FakeClock(10), submit: (e) => void submitted.push(e), isPaused: () => false, linearWebhook,
+    store, bus, clock: new FakeClock(10), submit: (e) => void submitted.push(e), isPaused: () => false, linearWebhook, blockTicket,
     linearConnected: () => true, tracker, capacity: () => ({ dev: { used: 1, total: 3 }, questions: { used: 0, total: 2 } }),
     transcriptsDir, webDir, ...extra,
   });
@@ -29,7 +30,7 @@ async function setup(extra: { uiPassword?: string } = {}) {
     id: 'r1', projectId: 'p', ticketId: 'REL-1', job: 'dev', queue: 'dev', status: 'running', claudeSessionId: 'c', linearSessionId: 'ls-1',
     startedAt: 1, costUsd: 0.5, turns: 2, lastText: '', token: 'tok', cwd: '/w',
   });
-  return { app, store, tracker, submitted, linearWebhook, transcriptsDir, webDir };
+  return { app, store, tracker, submitted, linearWebhook, blockTicket, transcriptsDir, webDir };
 }
 
 describe('server', () => {
@@ -67,12 +68,12 @@ describe('server', () => {
     expect((await app.request('/agent/issue/REL-2', { headers: { authorization: 'Bearer tok' } })).status).toBe(403);
   });
 
-  it('agent ask posts an elicitation and blocks the ticket', async () => {
-    const { app, store, tracker } = await setup();
+  it('agent ask posts an elicitation and blocks the ticket through the orchestrator', async () => {
+    const { app, tracker, blockTicket } = await setup();
     const res = await app.request('/agent/ask', { method: 'POST', headers: { authorization: 'Bearer tok', 'content-type': 'application/json' }, body: JSON.stringify({ text: 'Quelle base ?' }) });
     expect(res.status).toBe(200);
     expect(tracker.activities('ls-1')).toEqual([{ type: 'elicitation', body: 'Quelle base ?' }]);
-    expect((await store.getTicket('p', 'REL-1'))!.blocked).toBe(true);
+    expect(blockTicket).toHaveBeenCalledWith('p', 'REL-1', "Question posée par l'agent");
   });
 
   it('returns a transcript and serves the UI', async () => {

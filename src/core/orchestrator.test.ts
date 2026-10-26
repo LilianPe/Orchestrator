@@ -39,13 +39,32 @@ describe('Orchestrator', () => {
   it('starts no dev job on a merged ticket, even one it holds outside decide (ORC-268)', async () => {
     const { store, tracker, runner, orch } = setup();
     tracker.addIssue({ identifier: 'REL-1', title: 'T', description: 'Exporter les audits en CSV depuis la liste des audits.' });
-    store.putTicket({ ...newTicketState('p', 'REL-1', 'T', 'done', 1), delegated: true, prState: 'MERGED', pendingJob: { job: 'dev-feedback' } });
+    await store.putTicket({ ...newTicketState('p', 'REL-1', 'T', 'done', 1), delegated: true, prState: 'MERGED', pendingJob: { job: 'dev-feedback' } });
     // A result settles the ticket: settle would start the pending job.
     await orch.submit({ ...TRUSTED, id: 'v1', type: 'verify.passed', at: 1_000, projectId: 'p', ticketId: 'REL-1', payload: { runId: 'old', job: 'dev' } });
     await orch.idle();
     expect(runner.requests).toEqual([]);
-    expect(store.getTicket('p', 'REL-1')!.pendingJob).toBeUndefined();
-    expect(store.getTicket('p', 'REL-1')!.blocked).toBe(false);
+    expect((await store.getTicket('p', 'REL-1'))!.pendingJob).toBeUndefined();
+    expect((await store.getTicket('p', 'REL-1'))!.blocked).toBe(false);
+  });
+
+  it('blocks a ticket from outside an event only after the event in flight, never over it', async () => {
+    const { store, tracker, orch } = setup();
+    tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const getIssue = tracker.getIssue.bind(tracker);
+    tracker.getIssue = async (id: string) => (await gate, getIssue(id));
+    const order: string[] = [];
+    const delegation = orch.submit(delegated()).then(() => void order.push('event'));
+    const block = orch.blockTicket('p', 'REL-1', "Question posée par l'agent").then(() => void order.push('block'));
+    await new Promise((r) => setTimeout(r, 10));
+    expect(order).toEqual([]);
+    release();
+    await Promise.all([delegation, block]);
+    await orch.idle();
+    expect(order).toEqual(['event', 'block']);
+    expect(await store.getTicket('p', 'REL-1')).toMatchObject({ blocked: true, blockReason: "Question posée par l'agent" });
   });
 
   it('ignores a duplicate event id', async () => {

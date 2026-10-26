@@ -17,6 +17,8 @@ export interface ServerDeps {
   clock: Clock;
   submit: (e: FactoryEvent) => void;
   isPaused: () => boolean | Promise<boolean>;
+  /** Blocks a ticket through the orchestrator's event chain (Orchestrator.blockTicket). */
+  blockTicket: (projectId: string, ticketId: string, reason: string) => Promise<void>;
   linearWebhook: (raw: string, headers: Record<string, string | undefined>) => { status: number } | Promise<{ status: number }>;
   oauth?: { authorizeUrl: () => string; callback: (code: string, state: string) => Promise<void> };
   linearConnected: () => boolean;
@@ -207,14 +209,7 @@ export function createApp(d: ServerDeps): Hono {
     const { text } = (await c.req.json()) as { text?: string };
     if (!text) return c.json({ error: 'text required' }, 400);
     if (run.linearSessionId) await d.tracker.activity(run.linearSessionId, { type: 'elicitation', body: text });
-    const t = await d.store.getTicket(run.projectId, run.ticketId);
-    if (t) {
-      t.blocked = true;
-      t.blockReason = "Question posée par l'agent";
-      t.updatedAt = d.clock.now();
-      await d.store.putTicket(t);
-      d.bus.publish({ kind: 'ticket', ticket: t });
-    }
+    await d.blockTicket(run.projectId, run.ticketId, "Question posée par l'agent");
     return c.json({ ok: true });
   });
   app.route('/agent', agent);

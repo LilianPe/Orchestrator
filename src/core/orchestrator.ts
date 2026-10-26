@@ -159,6 +159,19 @@ export class Orchestrator {
     }
   }
 
+  /**
+   * Blocks a ticket from outside an event (the agent's question through /agent/ask). It runs in
+   * the event chain, so its read-modify-write never interleaves with an event's and overwrites it.
+   */
+  blockTicket(projectId: string, ticketId: string, reason: string): Promise<void> {
+    const next = this.chain.then(async () => {
+      const t = await this.d.store.getTicket(projectId, ticketId);
+      if (t) await this.apply(t, { type: 'ticket.blocked', reason });
+    });
+    this.chain = next.catch((err: unknown) => this.log('error', `block ${ticketId}: ${(err as Error).message}`));
+    return next;
+  }
+
   /** Best effort: posts the notices collected by recover(); a failure is logged, never retried. */
   announceRecovery(): Promise<void> {
     const notices = this.recoveryNotices;
