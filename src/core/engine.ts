@@ -253,14 +253,22 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
       return out;
     }
     case 'pr.merged':
-      // Delivered: nothing pending starts after the merge, and a verification in flight is no longer awaited.
+      // Delivered: the dev run in flight stops, and nothing pending, queued or debounced starts after the merge.
+      // Before the rule's effects, so its cleanup and learn run come after the stop.
       out.trace.push('built-in pr.merged: work cancelled');
       out.events.push({ type: 'work.cancelled' });
+      out.effects.push({ kind: 'stop_run' });
       break;
-    case 'pr.opened':
-      out.events.push({ type: 'ticket.patched', patch: { prNumber: event.payload.number, prUrl: event.payload.url } });
+    case 'pr.opened': {
+      // A new PR (another number) reopens a delivered ticket; the same PR seen again leaves it as it is.
+      const reopens = event.payload.number !== ticket?.prNumber;
+      out.events.push({
+        type: 'ticket.patched',
+        patch: { prNumber: event.payload.number, prUrl: event.payload.url, ...(reopens ? { prState: 'OPEN' as const } : {}) },
+      });
       out.effects.push({ kind: 'link_pr', url: event.payload.url });
       return out;
+    }
     case 'session.stopped': {
       const sessionId = event.payload.linearSessionId;
       if (isQuestionSession(ticket, sessionId)) {

@@ -274,9 +274,18 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
 
     it.todo('I8 (a) — the cancel event leads to the terminal status cancelled (no terminal status yet: run.cancel and statuses of ORC-133)');
 
+    // A human takes the ticket back (out of done, delegated again) or a new PR opens: it is no longer delivered.
+    const reopens = (step: Step): boolean => {
+      if (step.kind !== 'decided') return false;
+      const e = step.event;
+      if (e.type === 'ticket.delegated') return true;
+      if (e.type === 'status.changed') return step.before?.logical === 'done' && e.payload.to !== null && e.payload.to !== 'done';
+      return e.type === 'pr.opened' && e.payload.number !== step.before?.prNumber;
+    };
     const noDevRunAfterMerge = (s: Sequences): void => {
       let merged = false;
       for (const step of run(s).steps) {
+        if (reopens(step)) merged = false;
         if (merged) expect(starts(step).filter((e) => isDevStart(e, wf)), 'dev run started after pr.merged').toEqual([]);
         if (step.kind === 'decided' && step.event.type === 'pr.merged') merged = true;
       }

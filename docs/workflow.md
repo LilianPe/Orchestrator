@@ -171,7 +171,7 @@ Jobs du pack :
 | `command` | `@relais <mot> …` quand `<mot>` est une valeur `say` de la liste `command`. | Filtrable avec `say`. |
 | `pr.checks_passed` | La CI de la PR passe. | — |
 | `pr.checks_failed` | La CI de la PR échoue. | — |
-| `pr.merged` | La PR est mergée. | Avant les règles, Relais annule le travail de la file `dev` en attente et note la PR comme mergée. Ensuite, plus aucun job de la file `dev` ne démarre sur le ticket, quelle que soit la règle ou la minuterie qui le demande (`agent:reprendre`, réponse, changement de statut, CI rouge) : le refus est seulement tracé, sans message dans Linear. La fin du run `dev` encore en cours et ses vérifications sont ignorées. Les jobs de la file `questions` (`learn`, `ask`) tournent toujours. |
+| `pr.merged` | La PR est mergée. | Avant les règles, Relais note la PR comme mergée et arrête le travail du ticket comme un `stop`, sans le bloquer : run `dev` en cours arrêté, runs en attente ou en file et minuteries `debounce` supprimés. Ensuite, plus aucun job de la file `dev` ne démarre sur le ticket, quelle que soit la règle ou la minuterie qui le demande (`agent:reprendre`, réponse, changement de statut, CI rouge) : le refus est seulement tracé, sans message dans Linear. La fin du run `dev` arrêté et ses vérifications sont ignorées. Les règles s'appliquent après l'arrêt : `done`, nettoyage et `learn` ne changent pas, et les jobs de la file `questions` (`learn`, `ask`) tournent toujours. Le ticket redevient actif quand un humain le sort de *Done*, le délègue à nouveau, ou qu'une nouvelle PR (autre numéro) s'ouvre pour lui. |
 | `pr.closed` | La PR est fermée sans merge. | — |
 
 Le pack n'utilise pas `pr.checks_passed` ni `pr.closed` : vous pouvez y ajouter vos propres règles.

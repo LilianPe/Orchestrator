@@ -2,10 +2,15 @@ import { CREATES_TICKET, newTicketState, type InternalEvent, type FactoryEvent, 
 
 const MAX_QUESTION_SESSIONS = 50;
 
+/** A human takes a delivered ticket back: it is no longer merged, and dev work may start again (I8 b ends). */
+function reopened(t: TicketState): TicketState {
+  return t.prState === 'MERGED' ? { ...t, prState: undefined } : t;
+}
+
 function external(t: TicketState, e: FactoryEvent): TicketState {
   switch (e.type) {
     case 'ticket.delegated':
-      return { ...t, delegated: true, linearSessionId: t.linearSessionId ?? e.payload.linearSessionId };
+      return reopened({ ...t, delegated: true, linearSessionId: t.linearSessionId ?? e.payload.linearSessionId });
     case 'ticket.undelegated':
       return { ...t, delegated: false };
     case 'session.mentioned':
@@ -14,8 +19,12 @@ function external(t: TicketState, e: FactoryEvent): TicketState {
       if (id === t.linearSessionId) return t;
       return { ...t, questionSessionIds: [...t.questionSessionIds.filter((s) => s !== id), id].slice(-MAX_QUESTION_SESSIONS) };
     }
-    case 'status.changed':
-      return e.payload.to ? { ...t, logical: e.payload.to } : t;
+    case 'status.changed': {
+      const to = e.payload.to;
+      if (!to) return t;
+      // Out of done, by a human (the factory's own moves are no status.changed): the ticket is reopened.
+      return t.logical === 'done' && to !== 'done' ? reopened({ ...t, logical: to }) : { ...t, logical: to };
+    }
     case 'run.finished': {
       const active = t.activeRunId === e.payload.runId;
       return {
@@ -29,7 +38,7 @@ function external(t: TicketState, e: FactoryEvent): TicketState {
     case 'verify.failed':
       return e.payload.runId === t.verifyingRunId ? { ...t, verifyingRunId: undefined } : t;
     case 'pr.merged':
-      return { ...t, prState: 'MERGED' };
+      return { ...t, prState: 'MERGED', prNumber: e.payload.number, prUrl: e.payload.url };
     default:
       return t;
   }

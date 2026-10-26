@@ -125,8 +125,8 @@ describe('decide — YAML rules of the standard pack', () => {
 
   it('merge moves to done, cleans up and learns', () => {
     const out = decide(ticket({ logical: 'ready' }), ev('pr.merged', { number: 3, url: 'u', branch: 'b' }), workflow);
-    expect(kinds(out).effects).toEqual(['move', 'cleanup', 'start_run']);
-    expect(out.effects[2]).toMatchObject({ job: 'learn' });
+    expect(kinds(out).effects).toEqual(['stop_run', 'move', 'cleanup', 'start_run']);
+    expect(out.effects[3]).toMatchObject({ job: 'learn' });
   });
 });
 
@@ -134,10 +134,33 @@ describe('decide — after the merge (ORC-268)', () => {
   const merged = (patch: Partial<TicketState> = {}) => ticket({ logical: 'done', prState: 'MERGED', ...patch });
   const devStarts = (d: Decision) => d.effects.filter((e) => e.kind === 'start_run' && workflow.jobs[e.job]?.queue === 'dev');
 
-  it('a merge cancels the dev work still pending, and still learns', () => {
-    const out = decide(ticket({ logical: 'ready', pendingJob: { job: 'dev-feedback' }, verifyingRunId: 'r1' }), ev('pr.merged', { number: 3, url: 'u', branch: 'b' }), workflow);
+  it('a merge stops the dev work in flight, pending, queued or debounced, before its rule cleans up and learns', () => {
+    const t = ticket({ logical: 'ready', activeRunId: 'r1', pendingJob: { job: 'dev-feedback' }, verifyingRunId: 'r1' });
+    const out = decide(t, ev('pr.merged', { number: 3, url: 'u', branch: 'b' }), workflow);
     expect(out.events).toEqual([{ type: 'work.cancelled' }]);
-    expect(out.effects[2]).toMatchObject({ kind: 'start_run', job: 'learn' });
+    expect(out.effects).toEqual([
+      { kind: 'stop_run' },
+      { kind: 'move', to: 'done' },
+      { kind: 'cleanup' },
+      { kind: 'start_run', job: 'learn', input: undefined, inputText: undefined, linearSessionId: undefined },
+    ]);
+  });
+
+  it('a new PR reopens a merged ticket; the merged PR seen again does not', () => {
+    const t = merged({ logical: 'human_review', prNumber: 3 });
+    const again = decide(t, ev('pr.opened', { number: 3, url: 'u', branch: 'b' }), workflow);
+    expect(again.events).toEqual([{ type: 'ticket.patched', patch: { prNumber: 3, prUrl: 'u' } }]);
+    const fresh = decide(t, ev('pr.opened', { number: 4, url: 'u4', branch: 'b' }), workflow);
+    expect(fresh.events).toEqual([{ type: 'ticket.patched', patch: { prNumber: 4, prUrl: 'u4', prState: 'OPEN' } }]);
+    const reopened = fresh.events.reduce<TicketState | undefined>((s, e) => reduce(s, e), t);
+    expect(devStarts(decide(reopened, ev('label.changed', { label: 'agent:reprendre', change: 'added' }), workflow))).toHaveLength(1);
+  });
+
+  it('a human who takes the ticket out of done, or delegates it again, can relaunch dev work', () => {
+    const back = decide(merged(), ev('status.changed', { from: 'done', to: 'human_review' }), workflow);
+    expect(devStarts(decide(reduce(merged(), ev('status.changed', { from: 'done', to: 'human_review' })), ev('label.changed', { label: 'agent:reprendre', change: 'added' }), workflow))).toHaveLength(1);
+    expect(back.trace).toContain('no rule for status.changed');
+    expect(devStarts(decide(merged({ logical: 'todo' }), ev('ticket.delegated', {}), workflow))).toEqual([expect.objectContaining({ job: 'dev' })]);
   });
 
   it('a relaunch by label starts no dev run on a merged ticket, and leaves it as it is', () => {
@@ -147,7 +170,7 @@ describe('decide — after the merge (ORC-268)', () => {
   });
 
   it('no rule nor timer starts dev work on a merged ticket', () => {
-    expect(devStarts(decide(merged({ logical: 'dev' }), ev('ticket.delegated', {}), workflow))).toEqual([]);
+    expect(devStarts(decide(merged({ logical: 'ready' }), ev('status.changed', { from: 'human_review', to: 'dev' }), workflow))).toEqual([]);
     expect(devStarts(decide(merged({ logical: 'ai_review' }), ev('status.changed', { from: 'human_review', to: 'ai_review' }), workflow))).toEqual([]);
     expect(devStarts(decide(merged({ logical: 'human_review' }), ev('pr.checks_failed', { number: 3, url: 'u', branch: 'b', failures: ['test'] }), workflow))).toEqual([]);
     expect(decide(merged(), ev('debounce.fired', { job: 'dev-feedback' }), workflow)).toEqual(decision());
@@ -224,8 +247,8 @@ describe('decide — taint', () => {
 
   it('keeps the other effects of an untrusted event when it refuses its knowledge run', () => {
     const out = decide(ticket({ logical: 'ready' }), untrusted(ev('pr.merged', { number: 3, url: 'u', branch: 'b' })), workflow);
-    expect(kinds(out).effects).toEqual(['move', 'cleanup', 'activity']);
-    expect(out.effects[2]).toEqual({ kind: 'activity', type: 'response', body: taintedKnowledge('learn'), linearSessionId: undefined });
+    expect(kinds(out).effects).toEqual(['stop_run', 'move', 'cleanup', 'activity']);
+    expect(out.effects[3]).toEqual({ kind: 'activity', type: 'response', body: taintedKnowledge('learn'), linearSessionId: undefined });
   });
 
   it('starts the other runs of an untrusted event with the sensitive paths of the repository', () => {
@@ -361,7 +384,7 @@ describe('decide — built-ins', () => {
   it('pr.opened records and links the PR', () => {
     expect(decide(ticket(), ev('pr.opened', { number: 7, url: 'https://gh/pr/7', branch: 'b' }), workflow)).toEqual(
       decision({
-        events: [{ type: 'ticket.patched', patch: { prNumber: 7, prUrl: 'https://gh/pr/7' } }],
+        events: [{ type: 'ticket.patched', patch: { prNumber: 7, prUrl: 'https://gh/pr/7', prState: 'OPEN' } }],
         effects: [{ kind: 'link_pr', url: 'https://gh/pr/7' }],
       }),
     );

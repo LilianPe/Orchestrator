@@ -83,6 +83,22 @@ describe('standard workflow', () => {
     expect(h.runner.requests.at(-1)!.cwd).toMatch(/^\/tmp\/factory-fake\/_kb\//);
   });
 
+  it('a merge drops the queued and debounced feedback runs, refuses a relaunch, and still cleans up and learns (ORC-268)', async () => {
+    const h = createHarness();
+    await delegatedAndInReview(h);
+    await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'encore un détail', author: 'L' });
+    // Paused: the relaunch waits in the scheduler queue, out of decide's sight, when the PR is merged.
+    await h.send('control.pause', {});
+    await h.send('label.changed', { label: 'agent:reprendre', change: 'added' });
+    await h.send('pr.merged', { number: 3, url: 'https://gh/pr/3', branch: 'factory/rel-1-export-csv' });
+    await h.send('control.resume', {});
+    await h.advance(180_000);
+    await h.send('label.changed', { label: 'agent:reprendre', change: 'added' });
+    expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:dev', '/factory:learn']);
+    expect(h.ticket()).toMatchObject({ logical: 'done', prState: 'MERGED' });
+    expect(h.workspaces.cleaned).toEqual(['REL-1']);
+  });
+
   it('verification failures resume the session, then pass', async () => {
     const verify = vi
       .fn()
