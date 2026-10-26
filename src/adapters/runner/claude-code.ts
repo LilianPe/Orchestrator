@@ -5,6 +5,7 @@ import { createInterface } from 'node:readline';
 import type { RunOutcome } from '../../core/types.js';
 import { Channel } from './channel.js';
 import { parseStreamLine } from './stream-parser.js';
+import { maskTranscriptLine, transcriptSecrets } from './transcript.js';
 import type { RunHandle, RunRequest, RunResult, Runner, RunStreamEvent } from './types.js';
 
 export interface ClaudeRunnerOptions {
@@ -55,6 +56,8 @@ export class ClaudeCodeRunner implements Runner {
       detached: true,
     });
     const transcript = createWriteStream(join(this.o.transcriptsDir, `${req.runId}.jsonl`), { flags: 'a' });
+    // Masked on write: the file never holds a secret value the daemon or the run knows of.
+    const secrets = transcriptSecrets({ ...process.env, ...req.env });
     const ch = new Channel<RunStreamEvent>();
     let assistantTurns = 0;
     let lastText = '';
@@ -91,7 +94,7 @@ export class ClaudeCodeRunner implements Runner {
 
     createInterface({ input: child.stdout }).on('line', (line) => {
       try {
-        transcript.write(line + '\n');
+        transcript.write(maskTranscriptLine(line, secrets) + '\n');
         const raw = JSON.parse(line) as { type?: string; subtype?: string };
         if (raw?.type === 'assistant' && ++assistantTurns > req.limits.turns) limit();
         if (raw?.type === 'result' && typeof raw.subtype === 'string' && raw.subtype.includes('max')) limited = true;
