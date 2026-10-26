@@ -15,7 +15,7 @@ const SEEN_TTL_MS = 2 * FRESHNESS_MS;
 
 export function createLinearIngest(d: IngestDeps) {
   const seen = new Map<string, number>();
-  return (raw: string, headers: Record<string, string | undefined>): { status: number } => {
+  return async (raw: string, headers: Record<string, string | undefined>): Promise<{ status: number }> => {
     if (!verifyLinearSignature(raw, headers['linear-signature'], d.secret())) return { status: 401 };
     let body: any;
     try {
@@ -31,13 +31,20 @@ export function createLinearIngest(d: IngestDeps) {
     }
     const key = deliveryKey(body);
     if (seen.has(key)) return { status: 200 };
-    const events = mapLinearWebhook(body, key, d.ctx);
+    // Claimed before the echo lookup awaits the store, so a concurrent replay is dropped too.
+    seen.set(key, now);
+    let events: FactoryEvent[];
+    try {
+      events = await mapLinearWebhook(body, key, d.ctx);
+    } catch (err) {
+      seen.delete(key);
+      throw err;
+    }
     for (const e of events) {
       const sessionId = (e.payload as { linearSessionId?: string }).linearSessionId;
       if (ACKED.has(e.type) && sessionId) d.ack(sessionId).catch((err: Error) => d.log(`ack failed: ${err.message}`));
       d.submit(e);
     }
-    seen.set(key, now);
     return { status: 200 };
   };
 }

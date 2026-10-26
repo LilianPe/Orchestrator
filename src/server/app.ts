@@ -17,7 +17,7 @@ export interface ServerDeps {
   clock: Clock;
   submit: (e: FactoryEvent) => void;
   isPaused: () => boolean;
-  linearWebhook: (raw: string, headers: Record<string, string | undefined>) => { status: number };
+  linearWebhook: (raw: string, headers: Record<string, string | undefined>) => { status: number } | Promise<{ status: number }>;
   oauth?: { authorizeUrl: () => string; callback: (code: string, state: string) => Promise<void> };
   linearConnected: () => boolean;
   tracker: Pick<Tracker, 'getIssue' | 'search' | 'activity'>;
@@ -97,7 +97,7 @@ export function createApp(d: ServerDeps): Hono {
     const raw = await c.req.text();
     const headers: Record<string, string | undefined> = {};
     c.req.raw.headers.forEach((v, k) => (headers[k.toLowerCase()] = v));
-    const { status } = d.linearWebhook(raw, headers);
+    const { status } = await d.linearWebhook(raw, headers);
     return c.body(null, status as 200);
   });
 

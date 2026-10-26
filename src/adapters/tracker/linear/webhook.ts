@@ -23,7 +23,8 @@ export interface MapContext {
   logicalFor(projectId: string, stateName: string): LogicalState | null;
   stateNameById(teamKey: string, stateId: string): string | undefined;
   labelNameById(teamKey: string, labelId: string): string | undefined;
-  isEcho(key: string): boolean;
+  /** May read the store, hence the promise. */
+  isEcho(key: string): boolean | Promise<boolean>;
   commands(projectId: string): string[];
   now(): number;
 }
@@ -57,7 +58,7 @@ function sessionEvents(body: any, projectId: string, ctx: MapContext): PartialEv
   return [];
 }
 
-function issueEvents(body: any, identifier: string, teamKey: string, projectId: string, ctx: MapContext): PartialEvent[] {
+async function issueEvents(body: any, identifier: string, teamKey: string, projectId: string, ctx: MapContext): Promise<PartialEvent[]> {
   if (body.action !== 'update') return [];
   const out: PartialEvent[] = [];
   const data = body.data ?? {};
@@ -65,7 +66,7 @@ function issueEvents(body: any, identifier: string, teamKey: string, projectId: 
   if (from.stateId !== undefined) {
     const toName: string | undefined = data.state?.name ?? ctx.stateNameById(teamKey, data.stateId);
     const fromName = ctx.stateNameById(teamKey, from.stateId);
-    if (toName && !ctx.isEcho(`state:${identifier}:${toName}`)) {
+    if (toName && !(await ctx.isEcho(`state:${identifier}:${toName}`))) {
       out.push({
         type: 'status.changed',
         payload: { from: fromName ? ctx.logicalFor(projectId, fromName) : null, to: ctx.logicalFor(projectId, toName) },
@@ -76,7 +77,7 @@ function issueEvents(body: any, identifier: string, teamKey: string, projectId: 
     for (const id of data.labelIds as string[]) {
       if ((from.labelIds as string[]).includes(id)) continue;
       const name = ctx.labelNameById(teamKey, id);
-      if (name && !ctx.isEcho(`label:${identifier}:${name}`)) out.push({ type: 'label.changed', payload: { label: name, change: 'added' }, suffix: `:label:${id}` });
+      if (name && !(await ctx.isEcho(`label:${identifier}:${name}`))) out.push({ type: 'label.changed', payload: { label: name, change: 'added' }, suffix: `:label:${id}` });
     }
   }
   return out;
@@ -93,7 +94,7 @@ export function deliveryKey(body: any): string {
   return `body:${createHash('sha256').update(JSON.stringify({ ...body, webhookTimestamp: undefined })).digest('hex')}`;
 }
 
-export function mapLinearWebhook(body: any, key: string, ctx: MapContext): FactoryEvent[] {
+export async function mapLinearWebhook(body: any, key: string, ctx: MapContext): Promise<FactoryEvent[]> {
   let identifier: string | undefined;
   if (body?.type === 'AgentSessionEvent') identifier = body.agentSession?.issue?.identifier;
   else if (body?.type === 'Issue') identifier = body.data?.identifier ?? (body.data?.team?.key ? `${body.data.team.key}-${body.data.number}` : undefined);
@@ -101,7 +102,7 @@ export function mapLinearWebhook(body: any, key: string, ctx: MapContext): Facto
   const teamKey = identifier.split('-')[0]!;
   const projectId = ctx.projectIdForTeam(teamKey);
   if (!projectId) return [];
-  const partials = body.type === 'AgentSessionEvent' ? sessionEvents(body, projectId, ctx) : issueEvents(body, identifier, teamKey, projectId, ctx);
+  const partials = body.type === 'AgentSessionEvent' ? sessionEvents(body, projectId, ctx) : await issueEvents(body, identifier, teamKey, projectId, ctx);
   const at = ctx.now();
   return partials.map(
     (p) => ({ ...TRUSTED, id: `linear:${key}${p.suffix ?? ''}`, type: p.type, at, projectId, ticketId: identifier, payload: p.payload }) as FactoryEvent,
