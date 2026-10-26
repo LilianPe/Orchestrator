@@ -1,8 +1,8 @@
-import type { FactoryEvent, QueueName, TicketState } from '../../core/types.js';
-import type { QueueItem, RunRecord, TimerRecord } from '../types.js';
+import type { QueueName, TicketState } from '../../core/types.js';
+import type { QueueItem, Store } from '../types.js';
 
 /**
- * An outbox row claimed by `dequeue`: the caller runs `effect` with `id` as the idempotency key.
+ * An outbox row claimed by `claim`: the caller runs `effect` with `id` as the idempotency key.
  * `payload` is the queued `QueueItem` for the current engine; the outbox is deliberately more
  * general than the queue it replaces.
  */
@@ -23,32 +23,12 @@ export interface PutTicketOptions {
 }
 
 /**
- * Async port of `Store`, backed by Postgres. It mirrors the current `Store` methods so part 2 can
- * switch callers one at a time. `enqueue` returns the outbox id and `dequeue` returns the claimed
- * effect (not just its payload), because the outbox needs the id for idempotency.
+ * The `Store` port as Postgres serves it, plus the outbox operations the effect executors of
+ * ORC-150 build on. `dequeue` (from `Store`) takes an item out for good, as the SQLite queue did;
+ * `claim` hands it out under a lease instead, and `completeEffect` settles it.
  */
-export interface AsyncStore {
-  getTicket(projectId: string, ticketId: string): Promise<TicketState | undefined>;
+export interface AsyncStore extends Store {
   putTicket(t: TicketState, options?: PutTicketOptions): Promise<void>;
-  listTickets(): Promise<TicketState[]>;
-  recordEvent(e: FactoryEvent): Promise<boolean>;
-  recentEvents(limit: number, ticketId?: string): Promise<FactoryEvent[]>;
-  putRun(r: RunRecord): Promise<void>;
-  getRun(id: string): Promise<RunRecord | undefined>;
-  runsByStatus(status: RunRecord['status']): Promise<RunRecord[]>;
-  findRunByToken(token: string): Promise<RunRecord | undefined>;
-  putTimer(t: TimerRecord): Promise<void>;
-  dueTimers(now: number): Promise<TimerRecord[]>;
-  deleteTimer(key: string): Promise<void>;
-  deleteTimersFor(projectId: string, ticketId: string): Promise<void>;
-  enqueue(q: QueueItem): Promise<string>;
-  dequeue(queue: QueueName, now?: number): Promise<DequeuedEffect | undefined>;
-  listQueue(): Promise<QueueItem[]>;
-  removeFromQueue(projectId: string, ticketId: string): Promise<void>;
-  putEcho(key: string, until: number): Promise<void>;
-  isEcho(key: string, now: number): Promise<boolean>;
-  costSince(ts: number): Promise<number>;
-  getMeta(key: string): Promise<string | undefined>;
-  setMeta(key: string, value: string): Promise<void>;
-  close(): Promise<void>;
+  claim(queue: QueueName, now?: number): Promise<DequeuedEffect | undefined>;
+  completeEffect(id: string): Promise<void>;
 }
