@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { Orchestrator } from '../core/orchestrator.js';
 import { saveInstance, saveSecrets } from '../config/instance.js';
 import { startFactory } from './bootstrap.js';
+import { SqliteStore } from '../store/sqlite-store.js';
 import { TrackerSwitch } from './tracker-switch.js';
 
 describe('bootstrap', () => {
@@ -64,6 +65,20 @@ describe('bootstrap', () => {
     await app.stop();
     expect([existsSync(old), existsSync(recent)]).toEqual([false, true]);
     expect(logs).toContain('transcripts : 1 supprimé(s) après 30 jours');
+  });
+
+  it('closes the store it opened when the start fails afterwards', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
+    saveInstance(home, { port: 4185, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
+    const recover = vi.spyOn(Orchestrator.prototype, 'recover').mockRejectedValue(new Error('boom'));
+    const close = vi.spyOn(SqliteStore.prototype, 'close');
+    try {
+      await expect(startFactory({ home, fakeRunner: true, log: () => {}, env: {} })).rejects.toThrow('boom');
+      expect(close).toHaveBeenCalledTimes(1);
+    } finally {
+      recover.mockRestore();
+      close.mockRestore();
+    }
   });
 
   it('ticks the orchestrator every minute until stopped', async () => {
