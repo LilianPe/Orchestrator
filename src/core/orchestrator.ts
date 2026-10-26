@@ -60,6 +60,11 @@ export interface OrchestratorDeps {
   beforeRun?: (run: RunRecord) => Promise<void>;
   /** False when no knowledge repo is configured: `knowledge` jobs (learn, remember) are then skipped. Default true. */
   knowledgeConfigured?: boolean;
+  /**
+   * Retries of the inbox write of a run or check result (ORC-147): `attempts` writes in all, the
+   * n-th retry after `baseMs * 2^(n-1)`. Default 5 writes from 200 ms (about 3 s in all).
+   */
+  inboxRetry?: { attempts: number; baseMs: number };
 }
 
 interface StartOpts {
@@ -106,6 +111,12 @@ export class Orchestrator {
   private dispatchQueued = false;
   /** Inbox rows whose processing failed in this process: left pending for the next start. */
   private skipped = new Set<string>();
+  /**
+   * Tickets (`projectId:ticketId`) with a skipped row: their later rows are skipped too and stay
+   * pending, so the next start replays the ticket's events in order instead of processing the
+   * later ones without the failed one (a delegation that failed would make them "unmanaged").
+   */
+  private skippedTickets = new Set<string>();
 
   constructor(private d: OrchestratorDeps) {
     this.newId = d.newId ?? randomUUID;
@@ -158,10 +169,38 @@ export class Orchestrator {
   }
 
   /**
+   * `submit` for the results the orchestrator produces itself (run finished, checks): nobody
+   * resends them, so a failed inbox write is retried with a bounded backoff before giving up with
+   * an error (the run's slot is then held until `recover()` at the next start).
+   */
+  private async submitResult(event: FactoryEvent): Promise<void> {
+    const { attempts, baseMs } = this.d.inboxRetry ?? { attempts: 5, baseMs: 200 };
+    for (let n = 1; ; n++) {
+      try {
+        await this.accept(event);
+        break;
+      } catch (err) {
+        if (n >= attempts) {
+          this.log('error', `event ${event.id} (${event.type}) not written to the inbox after ${n} attempts, lost: ${(err as Error).message}`);
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, baseMs * 2 ** (n - 1)));
+      }
+    }
+    await this.chain;
+  }
+
+  /**
    * Reads the pending inbox rows and handles them one by one in the event chain, marking each
    * processed once handled. A row whose handling throws stays pending and is skipped until the
-   * next start (no retry loop in the same process); the per-ticket worker and the dead-letter
-   * replace this with ORC-149 and ORC-175.
+   * next start (no retry loop in the same process), and so are the later rows of its ticket; the
+   * per-ticket worker and the dead-letter replace this with ORC-149 and ORC-175.
+   *
+   * Only a failure before the event is journaled (`recordEvent`) is replayed faithfully: the
+   * journal, the projection, the effects and `markInboxProcessed` are separate writes, so after a
+   * failure or a crash past `recordEvent` the replay finds the event journaled, skips it as a
+   * duplicate and marks it processed: its remaining effects are lost. ORC-149's single decision
+   * transaction closes this.
    */
   private dispatch(): Promise<void> {
     if (this.dispatchQueued) return this.chain;
@@ -181,6 +220,12 @@ export class Orchestrator {
               continue;
             }
             seen.add(row.id);
+            const ticket = row.ticketId === undefined ? undefined : `${row.projectId}:${row.ticketId}`;
+            if (ticket !== undefined && this.skippedTickets.has(ticket)) {
+              this.skipped.add(row.id);
+              this.log('error', `event ${row.id} (${row.type}) kept in the inbox behind a failed event of ${row.ticketId}, for the next start`);
+              continue;
+            }
             await this.process(row);
           }
         }
@@ -199,6 +244,7 @@ export class Orchestrator {
       await this.d.store.markInboxProcessed(row.id);
     } catch (err) {
       this.skipped.add(row.id);
+      if (row.ticketId !== undefined) this.skippedTickets.add(`${row.projectId}:${row.ticketId}`);
       this.log('error', `event ${row.id} (${row.type}): ${(err as Error).message} (kept in the inbox for the next start)`);
     }
   }
@@ -494,7 +540,7 @@ export class Orchestrator {
             const event: FactoryEvent = res.ok
               ? { ...base, id: `check:${run.id}`, type: 'verify.passed', payload: { runId: run.id, job: job.name } }
               : { ...base, id: `check:${run.id}`, type: 'verify.failed', payload: { runId: run.id, job: job.name, failures: res.failures } };
-            await this.submit(event);
+            await this.submitResult(event);
           })(),
         );
         return;
@@ -768,7 +814,7 @@ export class Orchestrator {
       }
       result = { outcome: 'failure', costUsd: 0, turns: 0, lastText: message };
     }
-    await this.submit({
+    await this.submitResult({
       ...TRUSTED,
       id: `attempt:${run.id}:finished`,
       type: 'run.finished',

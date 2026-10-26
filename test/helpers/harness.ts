@@ -75,6 +75,7 @@ export function createHarness(
     newId: () => `id-${++n}`,
     activityIntervalMs: 0,
     knowledgeConfigured: opts.knowledge,
+    inboxRetry: { attempts: 3, baseMs: 1 },
   });
   let orch = build();
   const timers = new TimerService(store, clock, (e) => void orch.submit(e));

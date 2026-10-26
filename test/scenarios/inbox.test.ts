@@ -87,4 +87,70 @@ describe('inbox: written before the answer, processed from the inbox', () => {
     ]);
     expect(await h.store.pendingInbox(10)).toEqual([]);
   });
+
+  it('keeps the later events of a ticket behind its failed event, and replays them in order at the next start', async () => {
+    const h = createHarness();
+    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+    h.tracker.addIssue({ identifier: 'REL-2', title: 'Import CSV' });
+    const getIssue = h.tracker.getIssue.bind(h.tracker);
+    let down = true;
+    h.tracker.getIssue = async (id: string) => {
+      if (down && id === 'REL-1') throw new Error('Linear unreachable');
+      return getIssue(id);
+    };
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    // It carries its snapshot, so it needs no tracker read: processed alone, it would create the
+    // ticket without its delegation.
+    const issue = { title: 'Export CSV', logical: 'todo' as const, priority: 0 };
+    await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'ajoute aussi le PDF', author: 'L', issue });
+    // Another ticket is not held back.
+    await h.send('ticket.delegated', { linearSessionId: 'ls-2' }, 'REL-2');
+    expect(await h.ticket('REL-2')).toMatchObject({ delegated: true });
+    expect(await h.store.getTicket('p', 'REL-1')).toBeUndefined();
+    expect((await h.store.pendingInbox(10)).map((e) => e.type)).toEqual(['ticket.delegated', 'session.prompted']);
+
+    down = false;
+    await h.restart();
+    expect(await h.ticket()).toMatchObject({ delegated: true });
+    const types = (await h.store.recentEvents(50, 'REL-1')).map((e) => e.type).reverse();
+    expect(types.filter((t) => t === 'ticket.delegated' || t === 'session.prompted')).toEqual(['ticket.delegated', 'session.prompted']);
+    expect(await h.store.pendingInbox(10)).toEqual([]);
+  });
+
+  /** A SQLite store whose inbox write fails `failures` times for the ids matching `pattern`. */
+  function flakyInbox(pattern: RegExp, failures: number): SqliteStore {
+    const inner = new SqliteStore(':memory:');
+    return Object.assign(Object.create(inner) as SqliteStore, {
+      appendInbox: async (e: Parameters<SqliteStore['appendInbox']>[0]) => {
+        if (pattern.test(e.id) && failures > 0) {
+          failures--;
+          throw new Error('database down');
+        }
+        return inner.appendInbox(e);
+      },
+    });
+  }
+
+  it('retries the inbox write of run and check results until it goes through', async () => {
+    // The harness retries 3 times: two failures for the check, then two for the run result.
+    const h = createHarness({ store: flakyInbox(/^check:/, 2), preset: testPreset() });
+    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    const ids = (await h.store.recentEvents(50, 'REL-1')).map((e) => e.id);
+    expect(ids.filter((id) => /^(attempt|check):/.test(id))).toHaveLength(2);
+    expect(await h.ticket()).toMatchObject({ logical: 'human_review', blocked: false });
+
+    const h2 = createHarness({ store: flakyInbox(/^attempt:/, 2) });
+    h2.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+    await h2.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    expect((await h2.store.recentEvents(50, 'REL-1')).map((e) => e.type)).toContain('run.finished');
+  });
+
+  it('gives up on a run result after the last attempt without throwing, and leaves the run unsettled', async () => {
+    const h = createHarness({ store: flakyInbox(/^attempt:/, Infinity) });
+    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    expect((await h.store.recentEvents(50, 'REL-1')).map((e) => e.type)).not.toContain('run.finished');
+    expect(await h.ticket()).toMatchObject({ activeRunId: expect.any(String) });
+  });
 });
