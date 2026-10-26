@@ -118,7 +118,8 @@ export class ClaudeCodeRunner implements Runner {
         clearTimeout(killTimer);
         ch.close();
         const outcome: RunOutcome = stopped ? 'stopped' : limited ? 'limit' : result && !result.isError ? 'success' : 'failure';
-        const text = result?.text || lastText || (spawnError ? spawnError.message : stderr.trim().slice(-2000));
+        // Masked like the transcript: it becomes the run's lastText, stored and posted to Linear.
+        const text = maskTranscriptLine(result?.text || lastText || (spawnError ? spawnError.message : stderr.trim().slice(-2000)), secrets);
         transcript.end(() => resolve({ outcome, costUsd: result?.costUsd ?? 0, turns: result?.turns ?? assistantTurns, lastText: text }));
       };
       child.on('error', (err) => finish(err));

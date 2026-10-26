@@ -27,6 +27,23 @@ describe('transcript masking', () => {
     expect(secrets).not.toContain('/home/node');
   });
 
+  it('reads *_PASS, *_PWD and *APIKEY variables as secrets, and the credentials of any URL value', () => {
+    const secrets = transcriptSecrets({
+      SMTP_PASS: 'smtp-pass-123',
+      DB_PWD: 'db-pwd-12345',
+      OPENAI_APIKEY: 'apikey-123456',
+      REDIS_URL: 'redis://default:pw@cache:6379',
+      UPSTREAM: 'https://ci-bot:long-password-1@git.example.com/repo.git',
+      HOMEPAGE: 'https://example.com/a@b',
+    });
+    expect(secrets).toEqual(
+      expect.arrayContaining(['smtp-pass-123', 'db-pwd-12345', 'apikey-123456', 'default:pw', 'ci-bot:long-password-1', 'long-password-1']),
+    );
+    expect(secrets).not.toContain('pw');
+    expect(secrets).not.toContain('https://example.com/a@b');
+    expect(maskTranscriptLine('connected to redis://default:pw@cache:6379', secrets)).toBe(`connected to redis://${MASK}@cache:6379`);
+  });
+
   it('masks known values, their JSON-escaped form and secret shapes, and keeps the line valid JSON', () => {
     const pem = '-----BEGIN PRIVATE KEY-----\nMIIabc\n-----END PRIVATE KEY-----';
     const line = JSON.stringify({
@@ -82,7 +99,7 @@ describe('ClaudeCodeRunner transcript', () => {
       [
         readFileSync(fx('stream-success.jsonl'), 'utf8').split('\n')[0],
         JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: `FACTORY_RUN_TOKEN=tok-abcdef-123456 ${leaked}` }] } }),
-        JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'Fini.', total_cost_usd: 0.1, num_turns: 1 }),
+        JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'Fini avec tok-abcdef-123456.', total_cost_usd: 0.1, num_turns: 1 }),
       ].join('\n'),
     );
     const runner = new ClaudeCodeRunner({ transcriptsDir, command: [process.execPath, fx('fake-claude.mjs')], killGraceMs: 500 });
@@ -92,13 +109,14 @@ describe('ClaudeCodeRunner transcript', () => {
       env: { FAKE_CLAUDE_SCRIPT: script, FACTORY_RUN_TOKEN: 'tok-abcdef-123456' },
     });
     await drain(h.events);
-    await h.done;
+    const result = await h.done;
     const file = join(transcriptsDir, 'r-masked.jsonl');
     const written = readFileSync(file, 'utf8');
     expect(written).not.toContain('tok-abcdef-123456');
     expect(written).not.toContain(leaked);
     expect(written).toContain(`FACTORY_RUN_TOKEN=${MASK} ${MASK}`);
     expect(written.trim().split('\n').map((l) => JSON.parse(l))).toHaveLength(3);
+    expect(result.lastText).toBe(`Fini avec ${MASK}.`);
     const writtenAt = statSync(file).mtimeMs;
     expect(transcriptExpiresAt(writtenAt) - writtenAt).toBe(30 * DAY);
     expect(purgeTranscripts(transcriptsDir, writtenAt + 30 * DAY - 1)).toEqual([]);
