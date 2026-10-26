@@ -17,7 +17,20 @@ export interface PgStoreOptions {
   max?: number;
   /** Injectable clock for deterministic tests. */
   now?: () => number;
+  /** Where an idle client's error goes (Postgres restarted, connection cut). Default: stderr. */
+  onError?: (err: Error) => void;
 }
+
+/**
+ * A pool emits `error` when an idle client loses its connection; unheard, Node throws it and the
+ * daemon dies. The pool reconnects on the next query, so the error is only reported. An injected
+ * pool that already has a listener keeps it.
+ */
+export function listenForPoolErrors(pool: Pool, onError: (err: Error) => void): void {
+  if (pool.listenerCount('error') === 0) pool.on('error', onError);
+}
+
+const reportToStderr = (err: Error) => console.error(`[postgres] ${err.message}`);
 
 const dateToMs = (value: Date | string | null): number => {
   if (value === null) return 0;
@@ -52,6 +65,7 @@ export class PgStore implements AsyncStore {
     }
     this.db = drizzle(this.pool, { schema });
     this.clock = options.now ?? (() => Date.now());
+    listenForPoolErrors(this.pool, options.onError ?? reportToStderr);
   }
 
   private now(): number {

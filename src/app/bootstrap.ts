@@ -81,7 +81,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
   });
   const limits = projects[0]?.workflow.limits;
 
-  const { store, kind } = await openStore({ env, sqlitePath: paths.db, migrationsFolder: join(root, 'drizzle') });
+  const { store, kind } = await openStore({ env, sqlitePath: paths.db, migrationsFolder: join(root, 'drizzle'), log });
   log(kind === 'postgres' ? 'store : Postgres (migrations Drizzle appliquées)' : `store : SQLite (${paths.db})`);
   const clock = new SystemClock();
   const bus = new EventBus();

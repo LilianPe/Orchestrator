@@ -1,6 +1,6 @@
 import { Pool } from 'pg';
 import { migratePgStore } from './pg/migrate.js';
-import { PgStore } from './pg/pg-store.js';
+import { listenForPoolErrors, PgStore } from './pg/pg-store.js';
 import { SqliteStore } from './sqlite-store.js';
 import type { Store } from './types.js';
 
@@ -13,6 +13,8 @@ export interface OpenStoreOptions {
   sqlitePath: string;
   /** The `drizzle/` folder of this checkout or image. */
   migrationsFolder: string;
+  /** Reports a lost Postgres connection; the store reconnects on its next query. */
+  log?: (m: string) => void;
 }
 
 export interface OpenedStore {
@@ -27,11 +29,13 @@ export interface OpenedStore {
 export async function openStore(o: OpenStoreOptions): Promise<OpenedStore> {
   const url = o.env[DATABASE_URL_ENV]?.trim();
   if (!url) return { store: new SqliteStore(o.sqlitePath), kind: 'sqlite' };
+  const onError = (err: Error) => (o.log ?? console.error)(`postgres : ${err.message}`);
   const pool = new Pool({ connectionString: url, max: 1 });
+  listenForPoolErrors(pool, onError);
   try {
     await migratePgStore(pool, o.migrationsFolder);
   } finally {
     await pool.end();
   }
-  return { store: new PgStore({ connectionString: url }), kind: 'postgres' };
+  return { store: new PgStore({ connectionString: url, onError }), kind: 'postgres' };
 }
