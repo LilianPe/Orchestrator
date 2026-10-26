@@ -73,6 +73,8 @@ interface StartOpts {
 /** Events after which `handle` settles the ticket: the pending job starts once nothing is in flight. */
 export const SETTLES_RUN: ReadonlySet<EventType> = new Set<EventType>(['run.finished', 'verify.passed', 'verify.failed']);
 const ECHO_MS = 60_000;
+/** Inbox rows read per query by the dispatcher. */
+const INBOX_BATCH = 100;
 
 export function logicalFromName(states: Record<LogicalState, string>, name: string): LogicalState | undefined {
   return (Object.entries(states) as [LogicalState, string][]).find(([, n]) => n === name)?.[0];
@@ -98,18 +100,107 @@ export class Orchestrator {
   /** French notices for Linear, collected by recover() and posted once Linear is reachable. */
   private recoveryNotices: RecoveryNotice[] = [];
   private newId: () => string;
+  /** Inbox writes in flight (accept). */
+  private writes = new Set<Promise<void>>();
+  /** A dispatch pass is queued in the chain and has not started reading the inbox yet. */
+  private dispatchQueued = false;
+  /** Inbox rows whose processing failed in this process: left pending for the next start. */
+  private skipped = new Set<string>();
 
   constructor(private d: OrchestratorDeps) {
     this.newId = d.newId ?? randomUUID;
   }
 
-  /** Accepts an event of any schema version: it is upcast before anything reads it. */
-  submit(event: FactoryEvent | StoredEvent): Promise<void> {
+  /**
+   * The one way in for an event (ORC-147): writes it to the inbox and resolves once the row is
+   * committed, then lets the dispatcher process it from the inbox. Resolves `false` for an id the
+   * inbox already holds (a duplicate: nothing more happens). Rejects when the write fails: the
+   * event was not taken, and the producer must report it (a webhook answers 500).
+   */
+  accept(event: FactoryEvent | StoredEvent): Promise<boolean> {
+    const write = this.d.store.appendInbox(event).then((fresh) => {
+      if (fresh) void this.dispatch();
+      return fresh;
+    });
+    // idle() waits for writes in flight too: their event is about to be dispatched.
+    const tracked: Promise<void> = write.then(
+      () => {
+        this.writes.delete(tracked);
+      },
+      () => {
+        this.writes.delete(tracked);
+      },
+    );
+    this.writes.add(tracked);
+    return write;
+  }
+
+  /**
+   * `accept`, then waits for the dispatcher to process the event. Accepts an event of any schema
+   * version: it is upcast when read back from the inbox. Never rejects: a failure is logged.
+   */
+  async submit(event: FactoryEvent | StoredEvent): Promise<void> {
+    try {
+      await this.accept(event);
+    } catch (err) {
+      this.log('error', `event ${event.id} (${event.type}) not written to the inbox: ${(err as Error).message}`);
+      return;
+    }
+    await this.chain;
+  }
+
+  /**
+   * Processes the inbox rows a previous process left unprocessed (written, then a crash or a
+   * failed handling), oldest first. `factory up` calls it once at start, after `recover()`.
+   */
+  replayInbox(): Promise<void> {
+    return this.dispatch();
+  }
+
+  /**
+   * Reads the pending inbox rows and handles them one by one in the event chain, marking each
+   * processed once handled. A row whose handling throws stays pending and is skipped until the
+   * next start (no retry loop in the same process); the per-ticket worker and the dead-letter
+   * replace this with ORC-149 and ORC-175.
+   */
+  private dispatch(): Promise<void> {
+    if (this.dispatchQueued) return this.chain;
+    this.dispatchQueued = true;
     const next = this.chain
-      .then(() => this.handle(upcast(event)))
-      .catch((err: unknown) => this.log('error', `event ${event.id} (${event.type}): ${(err as Error).message}`));
+      .then(async () => {
+        this.dispatchQueued = false;
+        const seen = new Set<string>();
+        for (;;) {
+          const rows = await this.d.store.pendingInbox(INBOX_BATCH, [...this.skipped]);
+          if (rows.length === 0) return;
+          for (const row of rows) {
+            if (seen.has(row.id)) {
+              // Handled, yet still pending: never loop on it.
+              this.skipped.add(row.id);
+              this.log('error', `event ${row.id} (${row.type}) still pending after its processing, skipped until the next start`);
+              continue;
+            }
+            seen.add(row.id);
+            await this.process(row);
+          }
+        }
+      })
+      .catch((err: unknown) => {
+        this.dispatchQueued = false;
+        this.log('error', `inbox: ${(err as Error).message}`);
+      });
     this.chain = next;
     return next;
+  }
+
+  private async process(row: StoredEvent): Promise<void> {
+    try {
+      await this.handle(upcast(row));
+      await this.d.store.markInboxProcessed(row.id);
+    } catch (err) {
+      this.skipped.add(row.id);
+      this.log('error', `event ${row.id} (${row.type}): ${(err as Error).message} (kept in the inbox for the next start)`);
+    }
   }
 
   async idle(): Promise<void> {
@@ -117,11 +208,12 @@ export class Orchestrator {
       // Note: setImmediate is incompatible with fake timers (vi.useFakeTimers fakes it by default).
       // Let promise continuations of a just-released/finished runner settle before sampling the state.
       await new Promise<void>((resolve) => setImmediate(resolve));
+      await Promise.all(this.writes);
       const chain = this.chain;
       await chain;
       const pending = this.pendingBackground();
       await Promise.all(pending);
-      if (chain === this.chain && pending.length === 0 && this.pendingBackground().length === 0) return;
+      if (chain === this.chain && pending.length === 0 && this.writes.size === 0 && this.pendingBackground().length === 0) return;
     }
   }
 
@@ -161,9 +253,11 @@ export class Orchestrator {
 
   /**
    * Blocks a ticket from outside an event (the agent's question through /agent/ask). It runs in
-   * the event chain, so its read-modify-write never interleaves with an event's and overwrites it.
+   * the event chain, so its read-modify-write never interleaves with an event's and overwrites it,
+   * and after the events accepted before it (their inbox write in flight included).
    */
-  blockTicket(projectId: string, ticketId: string, reason: string): Promise<void> {
+  async blockTicket(projectId: string, ticketId: string, reason: string): Promise<void> {
+    await Promise.all(this.writes);
     const next = this.chain.then(async () => {
       const t = await this.d.store.getTicket(projectId, ticketId);
       if (t) await this.apply(t, { type: 'ticket.blocked', reason });
@@ -398,9 +492,9 @@ export class Orchestrator {
             const res = await this.d.verify(run.cwd, job.verify);
             const base = { ...TRUSTED, at: clock.now(), projectId: project.id, ticketId };
             const event: FactoryEvent = res.ok
-              ? { ...base, id: `verify:${run.id}`, type: 'verify.passed', payload: { runId: run.id, job: job.name } }
-              : { ...base, id: `verify:${run.id}`, type: 'verify.failed', payload: { runId: run.id, job: job.name, failures: res.failures } };
-            void this.submit(event);
+              ? { ...base, id: `check:${run.id}`, type: 'verify.passed', payload: { runId: run.id, job: job.name } }
+              : { ...base, id: `check:${run.id}`, type: 'verify.failed', payload: { runId: run.id, job: job.name, failures: res.failures } };
+            await this.submit(event);
           })(),
         );
         return;
@@ -676,7 +770,7 @@ export class Orchestrator {
     }
     await this.submit({
       ...TRUSTED,
-      id: `run:${run.id}:finished`,
+      id: `attempt:${run.id}:finished`,
       type: 'run.finished',
       at: clock.now(),
       projectId: project.id,

@@ -99,6 +99,8 @@ export function createHarness(
     orch = build();
     await orch.recover();
     await orch.announceRecovery();
+    await orch.replayInbox();
+    await orch.idle();
   }
 
   return {
