@@ -281,19 +281,12 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
         if (step.kind === 'decided' && step.event.type === 'pr.merged') merged = true;
       }
     };
-    it.fails(
-      'KNOWN VIOLATION — (b) after pr.merged, no event starts a dev run: a human relaunch',
+    it(
+      '(b) after pr.merged, no event starts a dev run (ORC-268)',
       () => {
+        // A human relaunch after the merge; and, found by fast-check, a run in flight at the merge whose checks then
+        // fail, a debounce armed before the merge that fires after it, and the job kept pending that settle starts.
         const relaunched = seq(...delegated(), ext('pr.merged', pr), ext('label.changed', { label: 'agent:reprendre', change: 'added' }));
-        violated('dev run started after pr.merged', noDevRunAfterMerge, relaunched);
-      },
-      TIMEOUT,
-    );
-
-    it.fails(
-      'KNOWN VIOLATION — (b) after pr.merged, no event starts a dev run: a run in flight at the merge whose checks then fail',
-      () => {
-        // Found by fast-check.
         const inFlight = seq(
           ...delegated(),
           runStarted(),
@@ -301,27 +294,9 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
           runFinished('success'),
           ext('verify.failed', { runId: 'r1', job: 'dev', failures: VERIFY_FAILURES }),
         );
-        violated('dev run started after pr.merged', noDevRunAfterMerge, inFlight);
-      },
-      TIMEOUT,
-    );
-
-    it.fails(
-      'KNOWN VIOLATION — (b) after pr.merged, no event starts a dev run: a debounce armed before the merge fires after it',
-      () => {
-        // Found by fast-check: pr.merged keeps the debounce timer, and debounce.fired starts its job whatever the status.
         const debounced = seq(...delegated('dev'), reply(), ext('pr.merged', pr), ext('debounce.fired', { job: 'dev-feedback' }));
-        violated('dev run started after pr.merged', noDevRunAfterMerge, debounced);
-      },
-      TIMEOUT,
-    );
-
-    it.fails(
-      'KNOWN VIOLATION — (b) after pr.merged, no event starts a dev run: settle starts the job kept pending before the merge',
-      () => {
-        // Found by fast-check once the fold modelled settle: pr.merged keeps the pending job, settle starts it when the run ends.
         const pending = seq(...delegated('dev'), runStarted(), reply(), ext('debounce.fired', { job: 'dev-feedback' }), ext('pr.merged', pr), runFinished('failure'));
-        violated('dev run started after pr.merged', noDevRunAfterMerge, pending);
+        holds(noDevRunAfterMerge, [relaunched, inFlight, debounced, pending]);
       },
       TIMEOUT,
     );

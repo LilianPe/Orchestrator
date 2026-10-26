@@ -52,7 +52,11 @@ describe('reduce — facts carried by external events', () => {
 
   it('events that carry no ticket fact leave the state as it was', () => {
     const t = ticket({ logical: 'dev' });
-    expect(reduce(t, ev('pr.merged', { number: 1, url: 'u', branch: 'b' }))).toEqual(t);
+    expect(reduce(t, ev('pr.closed', { number: 1, url: 'u', branch: 'b' }))).toEqual(t);
+  });
+
+  it('a merge records the PR as merged, the fact decide reads to start no dev work any more (ORC-268)', () => {
+    expect(reduce(ticket({ logical: 'ready' }), ev('pr.merged', { number: 1, url: 'u', branch: 'b' }))).toEqual(ticket({ logical: 'ready', prState: 'MERGED' }));
   });
 
   it('without a ticket, there is nothing to reduce', () => {

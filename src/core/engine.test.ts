@@ -130,6 +130,48 @@ describe('decide — YAML rules of the standard pack', () => {
   });
 });
 
+describe('decide — after the merge (ORC-268)', () => {
+  const merged = (patch: Partial<TicketState> = {}) => ticket({ logical: 'done', prState: 'MERGED', ...patch });
+  const devStarts = (d: Decision) => d.effects.filter((e) => e.kind === 'start_run' && workflow.jobs[e.job]?.queue === 'dev');
+
+  it('a merge cancels the dev work still pending, and still learns', () => {
+    const out = decide(ticket({ logical: 'ready', pendingJob: { job: 'dev-feedback' }, verifyingRunId: 'r1' }), ev('pr.merged', { number: 3, url: 'u', branch: 'b' }), workflow);
+    expect(out.events).toEqual([{ type: 'work.cancelled' }]);
+    expect(out.effects[2]).toMatchObject({ kind: 'start_run', job: 'learn' });
+  });
+
+  it('a relaunch by label starts no dev run on a merged ticket, and leaves it as it is', () => {
+    const out = decide(merged({ blocked: true }), ev('label.changed', { label: 'agent:reprendre', change: 'added' }), workflow);
+    expect(out).toEqual(decision());
+    expect(out.trace).toContain('merged: refused dev-feedback');
+  });
+
+  it('no rule nor timer starts dev work on a merged ticket', () => {
+    expect(devStarts(decide(merged({ logical: 'dev' }), ev('ticket.delegated', {}), workflow))).toEqual([]);
+    expect(devStarts(decide(merged({ logical: 'ai_review' }), ev('status.changed', { from: 'human_review', to: 'ai_review' }), workflow))).toEqual([]);
+    expect(devStarts(decide(merged({ logical: 'human_review' }), ev('pr.checks_failed', { number: 3, url: 'u', branch: 'b', failures: ['test'] }), workflow))).toEqual([]);
+    expect(decide(merged(), ev('debounce.fired', { job: 'dev-feedback' }), workflow)).toEqual(decision());
+    const reply = decide(merged({ logical: 'human_review', linearSessionId: 's1' }), ev('session.prompted', { linearSessionId: 's1', body: 'encore ?', author: 'L' }), workflow);
+    expect(kinds(reply)).toEqual({ events: ['feedback.appended'], effects: [], timers: [] });
+  });
+
+  it('ignores the results of the dev run in flight at the merge, verify relaunch included', () => {
+    const finished = ev('run.finished', { runId: 'r1', job: 'dev', outcome: 'success', costUsd: 1, turns: 3, lastText: 'ok' });
+    const out = decide(merged({ activeRunId: 'r1' }), finished, workflow);
+    expect(out).toEqual(decision());
+    expect(out.trace).toEqual(['merged: ignored run.finished for run r1']);
+    const failed = ev('verify.failed', { runId: 'r1', job: 'dev', failures: [{ command: 'npm test', exitCode: 1, output: 'rouge' }] });
+    expect(decide(merged({ verifyingRunId: 'r1' }), failed, workflow)).toEqual(decision());
+  });
+
+  it('still answers questions and still posts the learn run of a merged ticket', () => {
+    const question = decide(merged({ linearSessionId: 's1' }), ev('session.mentioned', { linearSessionId: 's2', body: '?', author: 'L' }), workflow);
+    expect(question.effects[0]).toMatchObject({ kind: 'start_run', job: 'ask' });
+    const learned = decide(merged(), ev('run.finished', { runId: 'r9', job: 'learn', outcome: 'success', costUsd: 0, turns: 1, lastText: '' }), workflow);
+    expect(learned.trace).not.toContain('merged: ignored run.finished for run r9');
+  });
+});
+
 describe('decide — purity', () => {
   it('gives the same decision twice for the same state, event and workflow, and leaves the state untouched', () => {
     const state = ticket({ logical: 'dev', blocked: true, linearSessionId: 's1' });

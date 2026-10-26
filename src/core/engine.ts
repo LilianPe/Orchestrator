@@ -59,15 +59,25 @@ function runTaint(event: FactoryEvent, ticket: TicketState | undefined, input: I
   return feedback.some((f) => f.taint !== 'trusted') ? 'untrusted' : 'trusted';
 }
 
+/** The ticket's PR is merged: it is delivered, and no dev work starts on it any more (I8 b). */
+function delivered(ticket: TicketState | undefined, job: JobSpec): boolean {
+  return job.queue === 'dev' && ticket?.prState === 'MERGED';
+}
+
 function refusesRun(event: FactoryEvent, ticket: TicketState | undefined, job: JobSpec, input = job.input): boolean {
-  return job.workspace === 'knowledge' && runTaint(event, ticket, input) === 'untrusted';
+  return delivered(ticket, job) || (job.workspace === 'knowledge' && runTaint(event, ticket, input) === 'untrusted');
 }
 
 /**
- * Starts `job`, unless untrusted content would write the knowledge base: then explains the refusal instead.
- * Every `start_run` of `decide` goes through here, so the taint rule applies whatever branch starts the run.
+ * Starts `job`, unless the ticket is delivered (traced only) or untrusted content would write the knowledge
+ * base (the refusal is explained). Every `start_run` of `decide` goes through here, so both rules apply
+ * whatever branch starts the run.
  */
 function startRun(out: Decision, event: FactoryEvent, ticket: TicketState | undefined, job: JobSpec, run: Omit<StartRun, 'kind' | 'job'>): void {
+  if (delivered(ticket, job)) {
+    out.trace.push(`merged: refused ${job.name}`);
+    return;
+  }
   const taint = runTaint(event, ticket, run.input ?? job.input);
   if (job.workspace === 'knowledge' && taint === 'untrusted') {
     out.trace.push(`taint: refused ${job.name}`);
@@ -164,12 +174,24 @@ function staleAttempt(state: TicketState | undefined, event: FactoryEvent, workf
   return undefined;
 }
 
+/** A result of the dev work in flight when the PR was merged: traced, never acted on (I8 b). */
+function afterMerge(state: TicketState | undefined, event: FactoryEvent, workflow: Workflow): string | undefined {
+  if (state?.prState !== 'MERGED') return undefined;
+  if (event.type !== 'run.finished' && event.type !== 'verify.passed' && event.type !== 'verify.failed') return undefined;
+  return workflow.jobs[event.payload.job]?.queue === 'dev' ? `merged: ignored ${event.type} for run ${event.payload.runId}` : undefined;
+}
+
 /** Pure: the same state, event and workflow always give the same decision. */
 export function decide(state: TicketState | undefined, event: FactoryEvent, workflow: Workflow): Decision {
   const out = empty();
   const fence = staleAttempt(state, event, workflow);
   if (fence) {
     out.trace.push(`${FENCED}${fence}`);
+    return out;
+  }
+  const merged = afterMerge(state, event, workflow);
+  if (merged) {
+    out.trace.push(merged);
     return out;
   }
   // Rules read the ticket as it is once the event's own facts are recorded (new status, delegation…).
@@ -230,6 +252,11 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
       startRun(out, event, ticket, job, { input: job.input });
       return out;
     }
+    case 'pr.merged':
+      // Delivered: nothing pending starts after the merge, and a verification in flight is no longer awaited.
+      out.trace.push('built-in pr.merged: work cancelled');
+      out.events.push({ type: 'work.cancelled' });
+      break;
     case 'pr.opened':
       out.events.push({ type: 'ticket.patched', patch: { prNumber: event.payload.number, prUrl: event.payload.url } });
       out.effects.push({ kind: 'link_pr', url: event.payload.url });

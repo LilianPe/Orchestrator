@@ -171,7 +171,7 @@ Jobs du pack :
 | `command` | `@relais <mot> …` quand `<mot>` est une valeur `say` de la liste `command`. | Filtrable avec `say`. |
 | `pr.checks_passed` | La CI de la PR passe. | — |
 | `pr.checks_failed` | La CI de la PR échoue. | — |
-| `pr.merged` | La PR est mergée. | — |
+| `pr.merged` | La PR est mergée. | Avant les règles, Relais annule le travail de la file `dev` en attente et note la PR comme mergée. Ensuite, plus aucun job de la file `dev` ne démarre sur le ticket, quelle que soit la règle ou la minuterie qui le demande (`agent:reprendre`, réponse, changement de statut, CI rouge) : le refus est seulement tracé, sans message dans Linear. La fin du run `dev` encore en cours et ses vérifications sont ignorées. Les jobs de la file `questions` (`learn`, `ask`) tournent toujours. |
 | `pr.closed` | La PR est fermée sans merge. | — |
 
 Le pack n'utilise pas `pr.checks_passed` ni `pr.closed` : vous pouvez y ajouter vos propres règles.
@@ -182,8 +182,8 @@ Ces types sont acceptés par le chargeur, mais Relais les traite en dur : une r�
 
 | Événement | Comportement fixe |
 |---|---|
-| `run.finished` | Succès : vérifications si le job en a, sinon `on_success`. Échec ou limite : ticket bloqué (file `dev`) ou message d'erreur (file `questions`). Run arrêté : rien. |
-| `verify.passed` / `verify.failed` | `on_success`, ou nouvelle tentative, ou blocage (voir `verify`). |
+| `run.finished` | Succès : vérifications si le job en a, sinon `on_success`. Échec ou limite : ticket bloqué (file `dev`) ou message d'erreur (file `questions`). Run arrêté : rien. Fin d'un run de la file `dev` après le merge de la PR : rien. |
+| `verify.passed` / `verify.failed` | `on_success`, ou nouvelle tentative, ou blocage (voir `verify`). Après le merge de la PR : rien. |
 | `debounce.fired` | Lance le job dont le délai `debounce` vient d'expirer (et débloque le ticket). |
 | `pr.opened` | Mémorise la PR et l'attache à la session Linear. |
 | `control.pause` / `control.resume` / `control.stop` | Pause / reprise de la file, arrêt d'un ticket (interface, `relais pause`, `relais resume`, `relais stop`). |

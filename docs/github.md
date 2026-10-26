@@ -99,7 +99,7 @@ Au moment d'un run `dev-feedback`, les fils de review **non résolus** sont lus 
 | Nouvelle PR pour la branche | `pr.opened` | URL ajoutée à la session Linear |
 | CI qui passe au rouge | `pr.checks_failed` (avec la liste des checks en échec) | `fix-ci` si le ticket est en *Human Review* ou *AI Review* et non bloqué |
 | CI qui passe au vert | `pr.checks_passed` | rien |
-| PR mergée | `pr.merged` | *Done*, worktree supprimé, `learn` |
+| PR mergée | `pr.merged` | *Done*, worktree supprimé, `learn` ; ensuite, plus aucun run de code sur le ticket |
 | PR fermée sans merge | `pr.closed` | rien |
 
 Un changement d'état de CI n'est signalé qu'une fois (pas à chaque relevé). Les commentaires de review **non résolus** de la PR sont relus au moment d'un run `dev-feedback` (entrée `feedback`) : résolvez un fil sur GitHub pour qu'il ne soit plus renvoyé à l'agent.

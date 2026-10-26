@@ -28,6 +28,8 @@ function external(t: TicketState, e: FactoryEvent): TicketState {
     case 'verify.passed':
     case 'verify.failed':
       return e.payload.runId === t.verifyingRunId ? { ...t, verifyingRunId: undefined } : t;
+    case 'pr.merged':
+      return { ...t, prState: 'MERGED' };
     default:
       return t;
   }
