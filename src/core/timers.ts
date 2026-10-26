@@ -8,7 +8,8 @@ export class TimerService {
   constructor(
     private store: Store,
     private clock: Clock,
-    private emit: (e: FactoryEvent) => void,
+    /** Writes the firing to the inbox; awaited before the timer is deleted. */
+    private emit: (e: FactoryEvent) => unknown,
     private onError: (err: Error) => void = () => {},
   ) {}
 
@@ -23,9 +24,9 @@ export class TimerService {
   private async fire(): Promise<void> {
     const now = this.clock.now();
     for (const t of await this.store.dueTimers(now)) {
-      // Only the timer read here: the orchestrator may have re-armed the key meanwhile.
-      await this.store.deleteTimer(t.key, t.fireAt);
-      this.emit({
+      // The firing is in the inbox before the timer goes (ORC-147): a pass cut in between fires it
+      // again on the next one, and the id dedups the second firing.
+      await this.emit({
         ...TRUSTED,
         id: `timer:${t.key}:${t.fireAt}`,
         type: 'debounce.fired',
@@ -34,6 +35,8 @@ export class TimerService {
         ticketId: t.ticketId,
         payload: { job: t.job },
       });
+      // Only the timer read here: the orchestrator may have re-armed the key meanwhile.
+      await this.store.deleteTimer(t.key, t.fireAt);
     }
   }
 

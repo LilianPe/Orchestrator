@@ -15,7 +15,8 @@ export interface ServerDeps {
   store: Store;
   bus: EventBus;
   clock: Clock;
-  submit: (e: FactoryEvent) => void;
+  /** Writes an event to the inbox (ORC-147); awaited before the route answers. */
+  submit: (e: FactoryEvent) => unknown;
   isPaused: () => boolean | Promise<boolean>;
   /** Blocks a ticket through the orchestrator's event chain (Orchestrator.blockTicket). */
   blockTicket: (projectId: string, ticketId: string, reason: string) => Promise<void>;
@@ -183,17 +184,18 @@ export function createApp(d: ServerDeps): Hono {
     return c.json(parsed);
   });
 
-  const control = (type: 'control.pause' | 'control.resume') => (c: Context) => {
+  // The answer waits for the inbox write (ORC-147): `ok` means the command is recorded.
+  const control = (type: 'control.pause' | 'control.resume') => async (c: Context) => {
     const at = d.clock.now();
-    d.submit({ ...TRUSTED, id: `ui:${type}:${at}`, type, at, projectId: '*', payload: {} } as FactoryEvent);
+    await d.submit({ ...TRUSTED, id: `ui:${type}:${at}`, type, at, projectId: '*', payload: {} } as FactoryEvent);
     return c.json({ ok: true });
   };
   app.post('/api/control/pause', control('control.pause'));
   app.post('/api/control/resume', control('control.resume'));
-  app.post('/api/tickets/:projectId/:ticketId/stop', (c) => {
+  app.post('/api/tickets/:projectId/:ticketId/stop', async (c) => {
     const at = d.clock.now();
     const ticketId = c.req.param('ticketId');
-    d.submit({ ...TRUSTED, id: `ui:stop:${ticketId}:${at}`, type: 'control.stop', at, projectId: c.req.param('projectId'), ticketId, payload: {} });
+    await d.submit({ ...TRUSTED, id: `ui:stop:${ticketId}:${at}`, type: 'control.stop', at, projectId: c.req.param('projectId'), ticketId, payload: {} });
     return c.json({ ok: true });
   });
 

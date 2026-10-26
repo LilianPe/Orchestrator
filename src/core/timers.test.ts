@@ -50,12 +50,30 @@ describe('TimerService', () => {
       },
     });
     const events: FactoryEvent[] = [];
-    const svc = new TimerService(store, new FakeClock(500), (e) => events.push(e));
+    // The firing goes to the inbox, which dedups it by id (ORC-147).
+    const svc = new TimerService(store, new FakeClock(500), (e) => (events.push(e), inner.appendInbox(e)));
     await expect(svc.tick()).rejects.toThrow('store down');
     fail = false;
     await svc.tick();
-    expect(events.map((e) => e.id)).toEqual(['timer:REL-1:x:100']);
+    expect(events.map((e) => e.id)).toEqual(['timer:REL-1:x:100', 'timer:REL-1:x:100']);
+    expect((await inner.pendingInbox(10)).map((e) => e.id)).toEqual(['timer:REL-1:x:100']);
     expect(await inner.dueTimers(1000)).toEqual([]);
+  });
+
+  it('writes the firing to the inbox before deleting the timer, and keeps the timer when the write fails', async () => {
+    const store = new SqliteStore(':memory:');
+    await store.putTimer({ key: 'REL-1:x', projectId: 'p', ticketId: 'REL-1', job: 'x', fireAt: 100 });
+    let down = true;
+    const svc = new TimerService(store, new FakeClock(500), async (e) => {
+      if (down) throw new Error('inbox down');
+      return store.appendInbox(e);
+    });
+    await expect(svc.tick()).rejects.toThrow('inbox down');
+    expect(await store.dueTimers(1000)).toHaveLength(1);
+    down = false;
+    await svc.tick();
+    expect((await store.pendingInbox(10)).map((e) => e.id)).toEqual(['timer:REL-1:x:100']);
+    expect(await store.dueTimers(1000)).toEqual([]);
   });
 
   it('runs one pass at a time, so overlapping ticks fire a timer once', async () => {

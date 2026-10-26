@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { FactoryEvent } from '../../../core/types.js';
+import { SqliteStore } from '../../../store/sqlite-store.js';
 import { createLinearIngest } from './ingest.js';
 import { isFresh, isUsableWebhookSecret, mapLinearWebhook, stripMention, verifyLinearSignature, type MapContext } from './webhook.js';
 
@@ -120,27 +121,93 @@ describe('ingest', () => {
     return { raw, sig: createHmac('sha256', 'sec').update(raw).digest('hex') };
   }
 
-  it('acks then submits a delegation', async () => {
+  /** An inbox on the SQLite store, as the daemon has it without FACTORY_DATABASE_URL. */
+  function inbox(store = new SqliteStore(':memory:')) {
+    return {
+      store,
+      accept: (e: FactoryEvent) => store.appendInbox(e),
+      ids: async () => (await store.pendingInbox(100)).map((e) => e.id),
+    };
+  }
+
+  it('writes a delegation to the inbox, then acks, then answers 200 (ORC-147)', async () => {
     const order: string[] = [];
+    const { store, ids } = inbox();
     const ingest = createLinearIngest({
       secret: () => 'sec',
       ctx: { ...ctx(), now: () => 2000 },
-      submit: (e: FactoryEvent) => void order.push(`submit:${e.type}`),
+      accept: async (e) => {
+        const fresh = await store.appendInbox(e);
+        order.push(`inbox:${e.type}`);
+        return fresh;
+      },
       ack: async (s) => void order.push(`ack:${s}`),
       log: () => {},
     });
     const { raw, sig } = signed(fx('session-created-delegation'));
     expect(await ingest(raw, { 'linear-signature': sig })).toEqual({ status: 200 });
-    expect(order).toEqual(['ack:as-1', 'submit:ticket.delegated']);
+    expect(order).toEqual(['inbox:ticket.delegated', 'ack:as-1']);
+    expect(await ids()).toHaveLength(1);
   });
 
-  function make() {
-    const ids: string[] = [];
+  it('answers only once the inbox write is committed', async () => {
+    let commit!: () => void;
+    const committed = new Promise<void>((r) => (commit = r));
+    const { store, ids } = inbox();
+    const ingest = createLinearIngest({
+      secret: () => 'sec',
+      ctx: { ...ctx(), now: () => 2000 },
+      accept: async (e) => {
+        await committed;
+        return store.appendInbox(e);
+      },
+      ack: async () => {},
+      log: () => {},
+    });
+    const { raw, sig } = signed(fx('session-created-delegation'));
+    let answered: { status: number } | undefined;
+    const response = ingest(raw, { 'linear-signature': sig }).then((r) => (answered = r));
+    await new Promise((r) => setTimeout(r, 10));
+    expect(answered).toBeUndefined();
+    expect(await ids()).toEqual([]);
+    commit();
+    await response;
+    expect(answered).toEqual({ status: 200 });
+    expect(await ids()).toHaveLength(1);
+  });
+
+  it('answers 500 without acking when the inbox write fails, and takes the webhook Linear sends again', async () => {
     const acks: string[] = [];
+    const logs: string[] = [];
+    const { store, ids } = inbox();
+    let down = true;
+    const ingest = createLinearIngest({
+      secret: () => 'sec',
+      ctx: { ...ctx(), now: () => 2000 },
+      accept: async (e) => {
+        if (down) throw new Error('database down');
+        return store.appendInbox(e);
+      },
+      ack: async (s) => void acks.push(s),
+      log: (m) => logs.push(m),
+    });
+    const { raw, sig } = signed(fx('session-created-delegation'));
+    expect(await ingest(raw, { 'linear-signature': sig })).toEqual({ status: 500 });
+    expect(acks).toEqual([]);
+    expect(logs.join('\n')).toContain('database down');
+    down = false;
+    expect(await ingest(raw, { 'linear-signature': sig })).toEqual({ status: 200 });
+    expect(acks).toEqual(['as-1']);
+    expect(await ids()).toHaveLength(1);
+  });
+
+  function make(store?: SqliteStore) {
+    const acks: string[] = [];
+    const box = inbox(store);
     const ingest = createLinearIngest({
       secret: () => 'sec',
       ctx: { ...ctx(), now: () => 1000 },
-      submit: (e: FactoryEvent) => void ids.push(e.id),
+      accept: box.accept,
       ack: async (s) => void acks.push(s),
       log: () => {},
     });
@@ -148,14 +215,14 @@ describe('ingest', () => {
       const { raw, sig } = signed(body);
       expect(await ingest(raw, { ...headers, 'linear-signature': sig })).toEqual({ status: 200 });
     };
-    return { ids, acks, send };
+    return { ids: box.ids, acks, send, store: box.store };
   }
 
-  // A fresh ingest per call: the ids that reach the store, without the in-memory replay guard.
+  // A fresh inbox per call: the ids that reach the store.
   async function idsOf(body: unknown, headers?: Record<string, string>): Promise<string[]> {
     const { ids, send } = make();
     await send(body, headers);
-    return ids;
+    return ids();
   }
 
   it.each(['session-prompted', 'session-created-delegation', 'issue-moved-labeled'])(
@@ -190,23 +257,34 @@ describe('ingest', () => {
     expect(await idsOf({ ...body, webhookTimestamp: 1500 })).toEqual(first);
   });
 
-  it('neither acks nor submits again a webhook replayed within the freshness window', async () => {
+  it('neither acks nor writes again a webhook replayed within the freshness window', async () => {
     const { ids, acks, send } = make();
     await send(fx('session-created-delegation'), { 'linear-delivery': 'd1' });
     await send(fx('session-created-delegation'), { 'linear-delivery': 'forged' });
     await send({ ...fx('session-created-delegation'), webhookTimestamp: 1500 });
     expect(acks).toEqual(['as-1']);
-    expect(ids).toHaveLength(1);
+    expect(await ids()).toHaveLength(1);
   });
 
-  it('submits once when the same webhook arrives twice while the echo lookup is pending', async () => {
-    const ids: string[] = [];
+  it('drops a replay after a restart: the dedup is the inbox key, not process memory', async () => {
+    const before = make();
+    await before.send(fx('session-created-delegation'));
+    await before.store.markInboxProcessed((await before.ids())[0]!);
+    // A new ingest (a restarted daemon) over the same store.
+    const after = make(before.store);
+    await after.send({ ...fx('session-created-delegation'), webhookTimestamp: 1500 });
+    expect(after.acks).toEqual([]);
+    expect(await after.ids()).toEqual([]);
+  });
+
+  it('writes once when the same webhook arrives twice while the echo lookup is pending', async () => {
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
+    const { accept, ids } = inbox();
     const ingest = createLinearIngest({
       secret: () => 'sec',
       ctx: { ...ctx(), now: () => 1000, isEcho: async () => (await gate, false) },
-      submit: (e: FactoryEvent) => void ids.push(e.id),
+      accept,
       ack: async () => {},
       log: () => {},
     });
@@ -214,18 +292,18 @@ describe('ingest', () => {
     const both = Promise.all([ingest(raw, { 'linear-signature': sig }), ingest(raw, { 'linear-signature': sig })]);
     release();
     expect(await both).toEqual([{ status: 200 }, { status: 200 }]);
-    expect(ids).toEqual(['linear:issue:u1:2026-10-15T10:00:00.000Z', 'linear:issue:u1:2026-10-15T10:00:00.000Z:label:l-resume']);
+    expect(await ids()).toEqual(['linear:issue:u1:2026-10-15T10:00:00.000Z', 'linear:issue:u1:2026-10-15T10:00:00.000Z:label:l-resume']);
   });
 
-  it('submits two webhooks in arrival order even when the echo lookup of the first is slower', async () => {
-    const ids: string[] = [];
+  it('writes two webhooks in arrival order even when the echo lookup of the first is slower', async () => {
     let release!: () => void;
     const slow = new Promise<void>((r) => (release = r));
+    const { accept, ids } = inbox();
     const ingest = createLinearIngest({
       secret: () => 'sec',
       // The first webhook moves the ticket to AI Review, the second to Human Review; only the first lookup waits.
       ctx: { ...ctx(), now: () => 1000, isEcho: async (k: string) => (k === 'state:REL-1:AI Review' ? (await slow, false) : false) },
-      submit: (e: FactoryEvent) => void ids.push(e.id),
+      accept,
       ack: async () => {},
       log: () => {},
     });
@@ -240,67 +318,44 @@ describe('ingest', () => {
     const b = signed(second);
     const both = Promise.all([ingest(a.raw, { 'linear-signature': a.sig }), ingest(b.raw, { 'linear-signature': b.sig })]);
     await new Promise((r) => setTimeout(r, 10));
-    expect(ids).toEqual([]);
+    expect(await ids()).toEqual([]);
     release();
     await both;
-    expect(ids).toEqual(['linear:issue:u1:2026-10-15T10:00:00.000Z', 'linear:issue:u1:2026-10-15T10:00:01.000Z']);
+    expect(await ids()).toEqual(['linear:issue:u1:2026-10-15T10:00:00.000Z', 'linear:issue:u1:2026-10-15T10:00:01.000Z']);
   });
 
-  it('keeps ingesting after a webhook whose echo lookup failed', async () => {
-    const ids: string[] = [];
+  it('answers 500 to a webhook whose echo lookup failed, and keeps ingesting', async () => {
     let fail = true;
+    const { accept, ids } = inbox();
     const ingest = createLinearIngest({
       secret: () => 'sec',
       ctx: { ...ctx(), now: () => 1000, isEcho: async () => { if (fail) throw new Error('store down'); return false; } },
-      submit: (e: FactoryEvent) => void ids.push(e.id),
+      accept,
       ack: async () => {},
       log: () => {},
     });
     const { raw, sig } = signed(fx('issue-moved-labeled'));
-    await expect(ingest(raw, { 'linear-signature': sig })).rejects.toThrow('store down');
+    expect(await ingest(raw, { 'linear-signature': sig })).toEqual({ status: 500 });
     fail = false;
     expect(await ingest(raw, { 'linear-signature': sig })).toEqual({ status: 200 });
-    expect(ids).toHaveLength(2);
-  });
-
-  it('still drops a replay that is fresh when a later webhook purges the guard', async () => {
-    let now = 1000;
-    const ids: string[] = [];
-    const ingest = createLinearIngest({
-      secret: () => 'sec',
-      ctx: { ...ctx(), now: () => now },
-      submit: (e: FactoryEvent) => void ids.push(e.id),
-      ack: async () => {},
-      log: () => {},
-    });
-    const send = async (body: unknown) => {
-      const { raw, sig } = signed(body);
-      return await ingest(raw, { 'linear-signature': sig });
-    };
-    const first = fx('session-prompted');
-    await send(first);
-    now = 60_000;
-    await send({ ...first, webhookTimestamp: 60_000, agentActivity: { ...first.agentActivity, id: 'aa-2' } });
-    now = 61_000;
-    expect(await send(first)).toEqual({ status: 200 });
-    expect(ids).toHaveLength(2);
+    expect(await ids()).toHaveLength(2);
   });
 
   it('rejects a bad signature and a stale body', async () => {
-    const submit = vi.fn();
-    const ingest = createLinearIngest({ secret: () => 'sec', ctx: { ...ctx(), now: () => 999_999 }, submit, ack: async () => {}, log: () => {} });
+    const accept = vi.fn(async () => true);
+    const ingest = createLinearIngest({ secret: () => 'sec', ctx: { ...ctx(), now: () => 999_999 }, accept, ack: async () => {}, log: () => {} });
     const { raw, sig } = signed(fx('session-prompted'));
     expect(await ingest(raw, { 'linear-signature': 'bad' })).toEqual({ status: 401 });
     expect(await ingest(raw, { 'linear-signature': sig })).toEqual({ status: 401 });
-    expect(submit).not.toHaveBeenCalled();
+    expect(accept).not.toHaveBeenCalled();
   });
 
   it('rejects a fresh webhook forged with an empty secret', async () => {
-    const submit = vi.fn();
-    const ingest = createLinearIngest({ secret: () => '', ctx: { ...ctx(), now: () => 2000 }, submit, ack: async () => {}, log: () => {} });
+    const accept = vi.fn(async () => true);
+    const ingest = createLinearIngest({ secret: () => '', ctx: { ...ctx(), now: () => 2000 }, accept, ack: async () => {}, log: () => {} });
     const raw = JSON.stringify(fx('session-prompted'));
     const forged = createHmac('sha256', '').update(raw).digest('hex');
     expect(await ingest(raw, { 'linear-signature': forged })).toEqual({ status: 401 });
-    expect(submit).not.toHaveBeenCalled();
+    expect(accept).not.toHaveBeenCalled();
   });
 });

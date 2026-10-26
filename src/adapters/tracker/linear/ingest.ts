@@ -1,22 +1,28 @@
 import type { FactoryEvent } from '../../../core/types.js';
-import { deliveryKey, FRESHNESS_MS, isFresh, mapLinearWebhook, verifyLinearSignature, type MapContext } from './webhook.js';
+import { deliveryKey, isFresh, mapLinearWebhook, verifyLinearSignature, type MapContext } from './webhook.js';
 
 export interface IngestDeps {
   secret: () => string;
   ctx: MapContext;
-  submit: (e: FactoryEvent) => void;
+  /**
+   * Writes an event to the inbox (ORC-147) and resolves once it is committed: `false` when the
+   * inbox already holds its id. Rejects when the write fails.
+   */
+  accept: (e: FactoryEvent) => Promise<boolean>;
   ack: (sessionId: string) => Promise<void>;
   log: (m: string) => void;
 }
 
 const ACKED = new Set(['ticket.delegated', 'session.mentioned', 'command']);
-// A replay is rejected as stale before its key expires.
-const SEEN_TTL_MS = 2 * FRESHNESS_MS;
 
+/**
+ * The Linear webhook (ORC-147): the response comes only once the events are in the inbox. 200
+ * means written (or already there: a replay is a duplicate by event id, before or after a
+ * restart); 500 means nothing may have been written, and Linear sends the webhook again.
+ */
 export function createLinearIngest(d: IngestDeps) {
-  const seen = new Map<string, number>();
-  // Webhooks are mapped and submitted one at a time, in arrival order: the echo lookup awaits the
-  // store, and a later webhook of the same ticket must not reach the orchestrator first.
+  // Webhooks are mapped and written one at a time, in arrival order: the echo lookup awaits the
+  // store, and a later webhook of the same ticket must not reach the inbox first.
   let tail: Promise<unknown> = Promise.resolve();
   return async (raw: string, headers: Record<string, string | undefined>): Promise<{ status: number }> => {
     if (!verifyLinearSignature(raw, headers['linear-signature'], d.secret())) return { status: 401 };
@@ -26,32 +32,24 @@ export function createLinearIngest(d: IngestDeps) {
     } catch {
       return { status: 400 };
     }
-    const now = d.ctx.now();
-    if (!isFresh(body, now)) return { status: 401 };
-    for (const [k, at] of seen) {
-      if (now - at <= SEEN_TTL_MS) break;
-      seen.delete(k);
-    }
+    if (!isFresh(body, d.ctx.now())) return { status: 401 };
     const key = deliveryKey(body);
-    if (seen.has(key)) return { status: 200 };
-    // Claimed before the echo lookup awaits the store, so a concurrent replay is dropped too.
-    seen.set(key, now);
     const turn = tail.then(async () => {
-      let events: FactoryEvent[];
-      try {
-        events = await mapLinearWebhook(body, key, d.ctx);
-      } catch (err) {
-        seen.delete(key);
-        throw err;
-      }
+      const events = await mapLinearWebhook(body, key, d.ctx);
       for (const e of events) {
+        // A duplicate (already in the inbox) is neither acked nor processed again.
+        if (!(await d.accept(e))) continue;
         const sessionId = (e.payload as { linearSessionId?: string }).linearSessionId;
         if (ACKED.has(e.type) && sessionId) d.ack(sessionId).catch((err: Error) => d.log(`ack failed: ${err.message}`));
-        d.submit(e);
       }
     });
     tail = turn.catch(() => undefined);
-    await turn;
+    try {
+      await turn;
+    } catch (err) {
+      d.log(`webhook not written to the inbox: ${(err as Error).message}`);
+      return { status: 500 };
+    }
     return { status: 200 };
   };
 }
