@@ -127,7 +127,8 @@ Le premier ticket cité est celui qui touche le module en premier ou le plus ; l
 | `src/adapters/forge/github-app-api.ts` | Lectures GitHub App de `factory doctor` : workflows et environnements protégés | garder | ORC-135 |
 | `src/adapters/forge/pr-poller.ts` | Relevé des PR toutes les 30 s | retirer | ORC-181, remplacé par ORC-134 (webhooks) et ORC-185 (réconciliation) |
 | `src/adapters/runner/types.ts` | Port `Runner`, `RunHandle`, `RunRequest` | garder | ORC-204 (port gardé), ORC-189 (devient AgentRuntime) |
-| `src/adapters/runner/claude-code.ts` | `ClaudeCodeRunner` : `claude -p` en sous-processus sur l'hôte, transcripts | adapter | ORC-136, ORC-204 (dans le runner isolé), ORC-205 (réglages imposés), ORC-217 (session sur volume), ORC-194 (`--max-budget-usd`), ORC-167 |
+| `src/adapters/runner/claude-code.ts` | `ClaudeCodeRunner` : `claude -p` en sous-processus sur l'hôte, transcripts masqués à l'écriture | adapter | ORC-136, ORC-204 (dans le runner isolé), ORC-205 (réglages imposés), ORC-217 (session sur volume), ORC-194 (`--max-budget-usd`), ORC-167 |
+| `src/adapters/runner/transcript.ts` | Masquage des secrets dans les transcripts, rétention de 30 jours et purge | garder | ORC-132 (suit les transcripts dans le runner isolé, ORC-204) |
 | `src/adapters/runner/stream-parser.ts` | Lecture du stream-json de Claude Code | adapter | ORC-136 (usage en tokens), gardé par ORC-204 |
 | `src/adapters/runner/channel.ts` | File asynchrone qui porte le flux d'un `RunHandle` | garder | ORC-204 (suit le port `Runner`) |
 | `src/adapters/runner/fake.ts` | `FakeRunner` du harnais | garder | ORC-204, ORC-225 |
@@ -182,11 +183,12 @@ Contrôles déterministes de `verify`, purs : ils lisent le diff `baseSha..SHA` 
 
 | Module | Rôle | Statut | Ticket cible |
 |---|---|---|---|
-| `src/store/types.ts` | Port `Store` synchrone | adapter | ORC-132 (async, puis `PgStore`), ORC-178 (`queue`, `echoes`, `costSince` retirés) |
-| `src/store/sqlite-store.ts` | `SqliteStore` sur `node:sqlite` | retirer | ORC-132 (Postgres), retrait ORC-178 |
+| `src/store/types.ts` | Port `Store` asynchrone, servi par `SqliteStore` et `PgStore` | adapter | ORC-178 (`queue`, `echoes`, `costSince` retirés) |
+| `src/store/open.ts` | Choix du store au démarrage : `PgStore` et migrations quand `FACTORY_DATABASE_URL` est défini, `SqliteStore` sinon | adapter | ORC-178 (plus que Postgres) |
+| `src/store/sqlite-store.ts` | `SqliteStore` sur `node:sqlite`, derrière le port asynchrone | retirer | retrait ORC-178 |
 | `src/store/pg/schema.ts` | Schéma Drizzle des 12 tables du moteur | garder | ORC-132 |
-| `src/store/pg/types.ts` | Port `AsyncStore` et `DequeuedEffect` | garder | ORC-132 |
-| `src/store/pg/pg-store.ts` | `PgStore` asynchrone sur Postgres | garder | ORC-132 |
+| `src/store/pg/types.ts` | `AsyncStore` (le port `Store` plus le bail de l'outbox) et `DequeuedEffect` | garder | ORC-132, ORC-150 (exécuteurs d'outbox) |
+| `src/store/pg/pg-store.ts` | `PgStore` sur Postgres, store du démon quand `FACTORY_DATABASE_URL` est défini | garder | ORC-132 |
 | `src/store/pg/migrate.ts` | Application des migrations Drizzle | garder | ORC-132 |
 
 ### `src/config/`
@@ -254,7 +256,7 @@ Contrôles déterministes de `verify`, purs : ils lisent le diff `baseSha..SHA` 
 
 | Module | Rôle | Statut | Ticket cible |
 |---|---|---|---|
-| `test/helpers/harness.ts` | `createHarness` : faux adaptateurs, `FakeClock`, `SqliteStore(':memory:')`, `send`, `advance`, `restart` | adapter | ORC-225 (nouveaux faux, préréglage de test), ORC-228 (Postgres, worker, outbox), ORC-132 (store async), ORC-149 (`idle` remplacé) |
+| `test/helpers/harness.ts` | `createHarness` : faux adaptateurs, `FakeClock`, `SqliteStore(':memory:')` ou le store passé (`PgStore` dans `test/integration/`), `send`, `advance`, `restart` | adapter | ORC-225 (nouveaux faux, préréglage de test), ORC-228 (Postgres par défaut, worker, outbox), ORC-149 (`idle` remplacé) |
 | `test/scenarios/workflow.test.ts` | Scénarios de bout en bout sur le harnais (22 `it` au départ) | adapter | ORC-169 (chaque scénario réécrit ou marqué abandonné), ORC-225, ORC-228, ORC-187 |
 | `test/e2e/pack.e2e.test.ts` | Test du pack avec le vrai `claude` (live, voir plus haut) | adapter | ORC-191 (renommé, `git push` refusé) |
 

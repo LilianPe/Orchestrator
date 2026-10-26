@@ -58,15 +58,15 @@ Tout l'état de l'instance vit dans **`RELAIS_HOME`**, par défaut `~/.relais` (
 | `config.yaml` | Configuration de l'instance : port, hôte, projets, relais webhook, budget, base de connaissance. Voir [`configuration.md`](configuration.md). | non |
 | `secrets.json` | Identifiants et jetons Linear. Écrit en mode `0600`. | **oui** |
 | `run-settings.json` | Permissions Claude Code passées à chaque run (`--settings`), régénéré à chaque `relais up`. | non |
-| `relais.db` | Base SQLite : tickets suivis, événements, runs, coûts, file, minuteries. | oui (contient l'historique) |
-| `transcripts/<runId>.jsonl` | Sortie `stream-json` brute de chaque run. | oui (code, contenu des tickets) |
+| `relais.db` | Base SQLite : tickets suivis, événements, runs, coûts, file, minuteries. Absente quand `FACTORY_DATABASE_URL` désigne une base Postgres ([`configuration.md`](configuration.md#variables-denvironnement)). | oui (contient l'historique) |
+| `transcripts/<runId>.jsonl` | Sortie `stream-json` de chaque run, secrets masqués, supprimée 30 jours après sa dernière écriture ([`exploitation.md`](exploitation.md#journaux-transcripts-et-données)). | oui (code, contenu des tickets) |
 | `workspaces/<projet>/<ticket>/` | Worktree git de chaque ticket en cours. | — |
 | `workspaces/<projet>/_trunk/` | Copie détachée de la branche principale, pour les questions en lecture seule. | — |
 | `workspaces/_kb/<runId>/` | Worktrees du dépôt de connaissance pour les runs `learn` / `remember`. | — |
 | `logs/` | Créé au démarrage mais pas encore utilisé : les journaux du démon sortent sur la sortie standard. | — |
 | `knowledge/` | Emplacement visé par `relais init` pour le dépôt de connaissance (voir [`projets-et-workspaces.md`](projets-et-workspaces.md#base-de-connaissance-partagée)). | — |
 
-Sauvegarder une instance = sauvegarder `config.yaml`, `secrets.json` et `relais.db`. Les worktrees se recréent à partir des branches poussées.
+Sauvegarder une instance = sauvegarder `config.yaml`, `secrets.json` et `relais.db` (ou la base Postgres, avec `pg_dump`, quand `FACTORY_DATABASE_URL` est défini). Les worktrees se recréent à partir des branches poussées.
 
 ## Désinstaller
 
