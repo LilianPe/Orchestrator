@@ -218,11 +218,11 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
       TIMEOUT,
     );
 
-    it.fails(
-      'KNOWN VIOLATION — a reply in the dev session of a delegated ticket is recorded or delivered (lost in todo, ai_review, ready)',
+    it(
+      'a reply in the dev session of a delegated ticket is recorded or delivered, whatever its status (ORC-267)',
       () => {
         const counterexample = seq(...delegated(), reply());
-        violated('reply in the dev session', (s) => {
+        holds((s) => {
           for (const step of decided(run(s))) {
             const e = step.event;
             if (e.type !== 'session.prompted' || !step.after?.delegated || e.payload.linearSessionId !== step.after.linearSessionId) continue;
@@ -230,7 +230,7 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
             const delivered = step.decision.effects.some((x) => x.kind === 'start_run' && x.inputText === e.payload.body);
             expect(recorded || delivered, 'reply in the dev session recorded or delivered').toBe(true);
           }
-        }, counterexample);
+        }, [counterexample]);
       },
       TIMEOUT,
     );

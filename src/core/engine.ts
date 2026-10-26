@@ -93,13 +93,16 @@ function ruleMatches(rule: Rule, event: FactoryEvent, ticket: TicketState | unde
   return true;
 }
 
+/** Records a reply in the ticket's dev session: it waits in pendingFeedback for the next run that consumes it (I6). */
+function appendFeedback(out: Decision, event: FactoryEvent<'session.prompted'>): void {
+  out.events.push({
+    type: 'feedback.appended',
+    item: { author: event.payload.author, body: event.payload.body, at: event.at, source: 'session' },
+  });
+}
+
 function applyRule(out: Decision, rule: Rule, event: FactoryEvent, ticket: TicketState | undefined, workflow: Workflow): Decision {
-  if (event.type === 'session.prompted') {
-    out.events.push({
-      type: 'feedback.appended',
-      item: { author: event.payload.author, body: event.payload.body, at: event.at, source: 'session' },
-    });
-  }
+  if (event.type === 'session.prompted') appendFeedback(out, event);
   const job = rule.run ? workflow.jobs[rule.run]! : undefined;
   if (job && !refusesRun(event, job) && ticket?.blocked) out.events.push({ type: 'ticket.unblocked' });
   if (rule.move) out.effects.push({ kind: 'move', to: rule.move });
@@ -244,6 +247,8 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
   const index = rules.findIndex((r) => ruleAllowed(r, event, ticket, workflow) && ruleMatches(r, event, ticket, activeJob));
   if (index < 0) {
     out.trace.push(`no rule for ${event.type}`);
+    // No rule for this status (todo, ai_review, ready, done…): the reply is still kept, never dropped (I6).
+    if (event.type === 'session.prompted' && ticket) appendFeedback(out, event);
     return out;
   }
   out.trace.push(`on.${event.type}[${index}]`);

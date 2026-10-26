@@ -52,6 +52,19 @@ describe('decide — YAML rules of the standard pack', () => {
     expect(out.effects[0]).toMatchObject({ job: 'dev-feedback', input: 'feedback' });
   });
 
+  it('records a reply in the dev session when no rule matches its status, so it waits for the next feedback run (ORC-267)', () => {
+    for (const logical of ['todo', 'ai_review', 'ready', 'done'] as const) {
+      const out = decide(ticket({ logical, linearSessionId: 's1' }), ev('session.prompted', { linearSessionId: 's1', body: 'ok', author: 'Lilian' }), workflow);
+      expect(out).toEqual(decision({ events: [{ type: 'feedback.appended', item: { author: 'Lilian', body: 'ok', at: 1000, source: 'session' } }] }));
+      expect(out.trace).toContain('no rule for session.prompted');
+    }
+  });
+
+  it('records a reply in the dev session of a delegated ticket that has no linked session yet (ORC-267)', () => {
+    const out = decide(ticket({ logical: 'ai_review' }), ev('session.prompted', { linearSessionId: 's1', body: 'ok', author: 'L' }), workflow);
+    expect(kinds(out)).toEqual({ events: ['feedback.appended'], effects: [], timers: [] });
+  });
+
   it('routes a reply in a foreign session to ask', () => {
     const out = decide(ticket({ linearSessionId: 's1' }), ev('session.prompted', { linearSessionId: 's9', body: 'et pour mobile ?', author: 'L' }), workflow);
     expect(out).toEqual(decision({ effects: [{ kind: 'start_run', job: 'ask', input: 'thread', inputText: 'et pour mobile ?', linearSessionId: 's9' }] }));

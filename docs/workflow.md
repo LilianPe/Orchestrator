@@ -155,7 +155,7 @@ Jobs du pack :
 
 ## 3. Les règles `on`
 
-`on` associe un type d'événement à une **liste ordonnée** de règles. Pour un événement donné, Relais parcourt la liste et applique **la première règle qui correspond, et elle seule**. Si aucune ne correspond, il ne se passe rien.
+`on` associe un type d'événement à une **liste ordonnée** de règles. Pour un événement donné, Relais parcourt la liste et applique **la première règle qui correspond, et elle seule**. Si aucune ne correspond, il ne se passe rien, sauf pour une réponse dans la session dev du ticket, qui est toujours gardée (voir `session.prompted`).
 
 ### Événements configurables
 
@@ -164,7 +164,7 @@ Jobs du pack :
 | `ticket.delegated` | Le ticket est délégué à Relais dans Linear. | — |
 | `status.changed` | Le ticket change de statut dans Linear (par un humain). | Filtrable avec `from` / `to`. Les déplacements faits par Relais lui-même ne génèrent pas cet événement. |
 | `session.mentioned` | `@relais …` dans un commentaire, quand le premier mot n'est pas une commande. | — |
-| `session.prompted` | Réponse dans une session Linear de Relais. | Quand une règle correspond, le message est d'abord ajouté aux retours en attente (`input: feedback`). Dans une session de question, Relais lance directement `ask`, sans lire les règles. |
+| `session.prompted` | Réponse dans une session Linear de Relais. | Dans la session dev d'un ticket délégué, le message est toujours ajouté aux retours en attente (`input: feedback`), qu'une règle corresponde ou non : sans règle pour l'état du ticket (`todo`, `ai_review`, `ready`, `done` dans le pack), il attend le prochain run qui lit les retours (`dev-feedback`, `fix-ci`). Dans une session de question, Relais lance directement `ask`, sans lire les règles. |
 | `session.stopped` | Bouton « stop » dans Linear, ou ticket retiré à l'agent. | Dans une session de question, Relais arrête la réponse en cours, sans lire les règles. |
 | `label.changed` | Un label est ajouté au ticket (par un humain). | Filtrable avec `label` (seul l'ajout correspond ; Relais ne produit pas encore d'événement pour un retrait). |
 | `push.human` | Un humain pousse un commit sur la branche du ticket. | Aucune règle dans le pack. Relais ne reçoit pas encore cet événement (webhooks GitHub : ORC-134). |
@@ -230,7 +230,7 @@ Il n'existe pas de champ `post` dans une règle : la publication du résultat se
 |---|---|
 | `ticket.delegated` | si `state in [todo, dev] && !blocked` → `dev` |
 | `status.changed` | de `human_review` vers `dev` → `dev-feedback` ; vers `ai_review` → `review` |
-| `session.prompted` | si `blocked` → `dev-feedback` immédiatement ; si `state in [dev, human_review]` → `dev-feedback` après 3 min sans nouveau message |
+| `session.prompted` | si `blocked` → `dev-feedback` immédiatement ; si `state in [dev, human_review]` → `dev-feedback` après 3 min sans nouveau message ; sinon, le message reste dans les retours en attente |
 | `session.mentioned` | → `ask` |
 | `command` | `retiens` → `remember` ; `fais-le` → `propose_delegate` |
 | `label.changed` | `agent:reprendre` → `dev-feedback` ; `agent:stop` → `stop` |
