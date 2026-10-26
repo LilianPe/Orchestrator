@@ -157,6 +157,8 @@ export interface TicketState {
   priority: number;
   costUsd: number;
   updatedAt: number;
+  /** Hash of the workflow version the ticket was decided on first, read for all its later decisions (ORC-149). */
+  workflowHash?: string;
 }
 
 /** Fills fields added after a row was first persisted. */

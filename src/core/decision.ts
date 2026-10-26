@@ -18,6 +18,13 @@ export type Effect =
   | { kind: 'cleanup' }
   | { kind: 'set_paused'; paused: boolean };
 
+/**
+ * What the worker writes to the outbox for a decision (ORC-149): the decided effects, plus
+ * `settle` after an event that settles a run (start the ticket's pending job, then drain the
+ * queues), a shell step until ORC-150 moves it into `decide`.
+ */
+export type OutboxEffect = Effect | { kind: 'settle' };
+
 export type Timer = { kind: 'debounce'; job: string; ms: number };
 
 /** What `decide` returns: state changes for `reduce`, effects to run, timers to arm, and why. */

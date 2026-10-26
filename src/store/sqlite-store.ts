@@ -1,7 +1,17 @@
 import { DatabaseSync } from 'node:sqlite';
+import type { OutboxEffect } from '../core/decision.js';
 import { normalizeTicket, type QueueName, type FactoryEvent, type TicketState } from '../core/types.js';
 import type { StoredEvent } from '../core/upcast.js';
-import type { QueueItem, RunRecord, Store, TimerRecord } from './types.js';
+import type {
+  DecisionOutcome,
+  DecisionRequest,
+  OutboxRow,
+  QueueItem,
+  RunRecord,
+  Store,
+  TimerRecord,
+  WorkflowVersion,
+} from './types.js';
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS tickets (project_id TEXT, ticket_id TEXT, data TEXT NOT NULL, PRIMARY KEY (project_id, ticket_id));
@@ -14,7 +24,35 @@ CREATE TABLE IF NOT EXISTS timers (key TEXT PRIMARY KEY, fire_at INTEGER NOT NUL
 CREATE TABLE IF NOT EXISTS queue (project_id TEXT, ticket_id TEXT, job TEXT, queue TEXT NOT NULL, rank INTEGER NOT NULL, enqueued_at INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY (project_id, ticket_id, job));
 CREATE TABLE IF NOT EXISTS echoes (key TEXT PRIMARY KEY, until INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS outbox (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, ticket_id TEXT, event_id TEXT NOT NULL, seq INTEGER NOT NULL, i INTEGER NOT NULL, status TEXT NOT NULL, lease_until INTEGER, data TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS outbox_open ON outbox (project_id, ticket_id, status, seq, i);
+CREATE TABLE IF NOT EXISTS workflow_versions (hash TEXT PRIMARY KEY, definition TEXT NOT NULL);
 `;
+
+interface OutboxSqlRow {
+  id: string;
+  project_id: string;
+  ticket_id: string | null;
+  event_id: string;
+  seq: number;
+  i: number;
+  status: OutboxRow['status'];
+  lease_until: number | null;
+  data: string;
+}
+
+function outboxRow(r: OutboxSqlRow): OutboxRow {
+  return {
+    id: r.id,
+    projectId: r.project_id,
+    ...(r.ticket_id === null ? {} : { ticketId: r.ticket_id }),
+    eventId: r.event_id,
+    seq: Number(r.seq),
+    i: Number(r.i),
+    effect: JSON.parse(r.data) as OutboxEffect,
+    status: r.status,
+  };
+}
 
 const rank = (priority: number) => (priority === 0 ? 5 : priority);
 
@@ -33,16 +71,11 @@ export class SqliteStore implements Store {
   }
 
   async getTicket(projectId: string, ticketId: string): Promise<TicketState | undefined> {
-    const row = this.db.prepare('SELECT data FROM tickets WHERE project_id = ? AND ticket_id = ?').get(projectId, ticketId) as
-      | { data: string }
-      | undefined;
-    return row ? normalizeTicket(JSON.parse(row.data) as TicketState) : undefined;
+    return this.ticketRow(projectId, ticketId);
   }
 
   async putTicket(t: TicketState): Promise<void> {
-    this.db
-      .prepare('INSERT INTO tickets (project_id, ticket_id, data) VALUES (?, ?, ?) ON CONFLICT DO UPDATE SET data = excluded.data')
-      .run(t.projectId, t.ticketId, JSON.stringify(t));
+    this.writeTicket(t);
   }
 
   async listTickets(): Promise<TicketState[]> {
@@ -70,6 +103,163 @@ export class SqliteStore implements Store {
 
   async markInboxProcessed(id: string): Promise<void> {
     this.db.prepare('UPDATE inbox SET processed_at = ? WHERE id = ? AND processed_at IS NULL').run(this.now(), id);
+  }
+
+  /**
+   * The decision transaction (ORC-149). `node:sqlite` is synchronous and the store serves one
+   * process: no await between BEGIN and COMMIT, so nothing of another ticket interleaves with it,
+   * and the in-process worker keeps one task per ticket (the lock of the single process).
+   */
+  async decide(req: DecisionRequest): Promise<DecisionOutcome> {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const outcome = this.decideIn(req, req.event.ticketId ?? null);
+      this.db.exec('COMMIT');
+      return outcome;
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
+  private decideIn(req: DecisionRequest, ticketId: string | null): DecisionOutcome {
+    const { event } = req;
+    const row = this.db.prepare('SELECT processed_at FROM inbox WHERE id = ?').get(event.id) as { processed_at: number | null } | undefined;
+    if (!row) throw new Error(`event ${event.id} is not in the inbox`);
+    if (row.processed_at !== null) return { status: 'processed' };
+    const first = this.db
+      .prepare(
+        `SELECT id FROM inbox WHERE processed_at IS NULL AND json_extract(data, '$.projectId') = ? AND json_extract(data, '$.ticketId') IS ?
+         ORDER BY seq LIMIT 1`,
+      )
+      .get(event.projectId, ticketId) as { id: string } | undefined;
+    if (first && first.id !== event.id) return { status: 'waiting', reason: `${first.id} comes first` };
+    const open = this.db
+      .prepare(`SELECT id FROM outbox WHERE project_id = ? AND ticket_id IS ? AND status IN ('pending', 'running') LIMIT 1`)
+      .get(event.projectId, ticketId) as { id: string } | undefined;
+    if (open) return { status: 'waiting', reason: `effect ${open.id} is unfinished` };
+    if (this.db.prepare('SELECT 1 FROM events WHERE id = ?').get(event.id)) {
+      this.db.prepare('UPDATE inbox SET processed_at = ? WHERE id = ?').run(Date.now(), event.id);
+      return { status: 'duplicate' };
+    }
+
+    const known = ticketId === null ? undefined : this.ticketRow(event.projectId, ticketId);
+    const plan = req.decide(known, this.frozenWorkflow(known, req.workflow));
+
+    const { n } = this.db.prepare('SELECT COUNT(*) AS n FROM events WHERE ticket_id IS ?').get(ticketId) as { n: number };
+    const seq = Number(n) + 1;
+    this.db.prepare('INSERT INTO events (id, at, ticket_id, data) VALUES (?, ?, ?, ?)').run(event.id, event.at, ticketId, JSON.stringify(event));
+    if (plan.ticket) {
+      if (plan.ticket.workflowHash === req.workflow.hash) {
+        this.db
+          .prepare('INSERT OR IGNORE INTO workflow_versions (hash, definition) VALUES (?, ?)')
+          .run(req.workflow.hash, JSON.stringify(req.workflow.definition));
+      }
+      this.writeTicket(plan.ticket);
+    }
+    if (plan.clearTimers && ticketId !== null) this.clearTimers(event.projectId, ticketId);
+    for (const t of plan.timers) this.writeTimer(t);
+    const effectIds = plan.effects.map((effect, k) => {
+      const id = `${ticketId ?? '*'}:${seq}:${k + 1}`;
+      this.db
+        .prepare(`INSERT INTO outbox (id, project_id, ticket_id, event_id, seq, i, status, data) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)`)
+        .run(id, event.projectId, ticketId, event.id, seq, k + 1, JSON.stringify(effect));
+      return id;
+    });
+    this.db.prepare('UPDATE inbox SET processed_at = ? WHERE id = ?').run(Date.now(), event.id);
+    return { status: 'committed', seq, effectIds, known, plan };
+  }
+
+  private frozenWorkflow(known: TicketState | undefined, current: WorkflowVersion): WorkflowVersion {
+    const hash = known?.workflowHash;
+    if (!hash || hash === current.hash) return current;
+    const row = this.db.prepare('SELECT definition FROM workflow_versions WHERE hash = ?').get(hash) as { definition: string } | undefined;
+    if (!row) throw new Error(`workflow version ${hash} of ${known.ticketId} is not stored`);
+    return { hash, definition: JSON.parse(row.definition) as unknown };
+  }
+
+  async getWorkflowVersion(hash: string): Promise<WorkflowVersion | undefined> {
+    const row = this.db.prepare('SELECT definition FROM workflow_versions WHERE hash = ?').get(hash) as { definition: string } | undefined;
+    return row ? { hash, definition: JSON.parse(row.definition) as unknown } : undefined;
+  }
+
+  async claimEffect(projectId: string, ticketId: string | undefined, leaseMs: number): Promise<OutboxRow | 'busy' | undefined> {
+    const row = this.db
+      .prepare(`SELECT * FROM outbox WHERE project_id = ? AND ticket_id IS ? AND status IN ('pending', 'running') ORDER BY seq, i LIMIT 1`)
+      .get(projectId, ticketId ?? null) as OutboxSqlRow | undefined;
+    if (!row) return undefined;
+    const now = Date.now();
+    if (row.status === 'running' && (row.lease_until ?? 0) >= now) return 'busy';
+    this.db.prepare(`UPDATE outbox SET status = 'running', lease_until = ? WHERE id = ?`).run(now + leaseMs, row.id);
+    return { ...outboxRow(row), status: 'running' };
+  }
+
+  async renewEffect(id: string, leaseMs: number): Promise<void> {
+    this.db.prepare(`UPDATE outbox SET lease_until = ? WHERE id = ? AND status = 'running'`).run(Date.now() + leaseMs, id);
+  }
+
+  async completeEffect(id: string): Promise<void> {
+    this.db.prepare(`UPDATE outbox SET status = 'done', lease_until = NULL WHERE id = ?`).run(id);
+  }
+
+  async failEffect(id: string): Promise<void> {
+    this.db.prepare(`UPDATE outbox SET status = 'failed', lease_until = NULL WHERE id = ?`).run(id);
+  }
+
+  async effectTickets(): Promise<{ projectId: string; ticketId?: string }[]> {
+    const rows = this.db
+      .prepare(
+        `SELECT DISTINCT o.project_id, o.ticket_id FROM outbox o
+         WHERE (o.status = 'pending' OR (o.status = 'running' AND COALESCE(o.lease_until, 0) < ?))
+           AND NOT EXISTS (
+             SELECT 1 FROM outbox p
+             WHERE p.project_id = o.project_id AND p.ticket_id IS o.ticket_id AND p.status IN ('pending', 'running')
+               AND (p.seq < o.seq OR (p.seq = o.seq AND p.i < o.i))
+           )`,
+      )
+      .all(Date.now()) as { project_id: string; ticket_id: string | null }[];
+    return rows.map((r) => ({ projectId: r.project_id, ...(r.ticket_id === null ? {} : { ticketId: r.ticket_id }) }));
+  }
+
+  async listEffects(projectId: string, ticketId?: string): Promise<OutboxRow[]> {
+    const rows = this.db
+      .prepare('SELECT * FROM outbox WHERE project_id = ? AND ticket_id IS ? ORDER BY seq, i')
+      .all(projectId, ticketId ?? null) as unknown as OutboxSqlRow[];
+    return rows.map(outboxRow);
+  }
+
+  async updateTicket(projectId: string, ticketId: string, f: (t: TicketState) => TicketState): Promise<TicketState | undefined> {
+    const t = this.ticketRow(projectId, ticketId);
+    if (!t) return undefined;
+    const next = f(t);
+    this.writeTicket(next);
+    return next;
+  }
+
+  private ticketRow(projectId: string, ticketId: string): TicketState | undefined {
+    const row = this.db.prepare('SELECT data FROM tickets WHERE project_id = ? AND ticket_id = ?').get(projectId, ticketId) as
+      | { data: string }
+      | undefined;
+    return row ? normalizeTicket(JSON.parse(row.data) as TicketState) : undefined;
+  }
+
+  private writeTicket(t: TicketState): void {
+    this.db
+      .prepare('INSERT INTO tickets (project_id, ticket_id, data) VALUES (?, ?, ?) ON CONFLICT DO UPDATE SET data = excluded.data')
+      .run(t.projectId, t.ticketId, JSON.stringify(t));
+  }
+
+  private writeTimer(t: TimerRecord): void {
+    this.db
+      .prepare('INSERT INTO timers (key, fire_at, data) VALUES (?, ?, ?) ON CONFLICT DO UPDATE SET fire_at = excluded.fire_at, data = excluded.data')
+      .run(t.key, t.fireAt, JSON.stringify(t));
+  }
+
+  private clearTimers(projectId: string, ticketId: string): void {
+    for (const r of this.db.prepare('SELECT key, data FROM timers').all() as { key: string; data: string }[]) {
+      const t = JSON.parse(r.data) as TimerRecord;
+      if (t.projectId === projectId && t.ticketId === ticketId) this.db.prepare('DELETE FROM timers WHERE key = ?').run(r.key);
+    }
   }
 
   async recordEvent(e: FactoryEvent): Promise<boolean> {
@@ -114,9 +304,7 @@ export class SqliteStore implements Store {
   }
 
   async putTimer(t: TimerRecord): Promise<void> {
-    this.db
-      .prepare('INSERT INTO timers (key, fire_at, data) VALUES (?, ?, ?) ON CONFLICT DO UPDATE SET fire_at = excluded.fire_at, data = excluded.data')
-      .run(t.key, t.fireAt, JSON.stringify(t));
+    this.writeTimer(t);
   }
 
   async dueTimers(now: number): Promise<TimerRecord[]> {

@@ -2,9 +2,10 @@ import { createHash } from 'node:crypto';
 import { sql } from 'drizzle-orm';
 import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
+import type { OutboxEffect } from '../../core/decision.js';
 import { normalizeTicket, type FactoryEvent, type QueueName, type TicketState } from '../../core/types.js';
 import type { StoredEvent } from '../../core/upcast.js';
-import type { QueueItem, RunRecord, TimerRecord } from '../types.js';
+import type { DecisionOutcome, DecisionRequest, OutboxRow, QueueItem, RunRecord, TimerRecord, WorkflowVersion } from '../types.js';
 import * as schema from './schema.js';
 import type { AsyncStore, DequeuedEffect, PutTicketOptions } from './types.js';
 
@@ -48,12 +49,49 @@ const QUEUE_ORDER = sql.raw(
 /** Key/value metadata kept in `workflow_versions` under a reserved id prefix, until ORC-178 removes it. */
 const metaId = (key: string) => `meta:${key}`;
 
+/** A workflow version a ticket is frozen on (ORC-149), in `workflow_versions` beside the meta rows. */
+const workflowId = (hash: string) => `wf:${hash}`;
+
+/**
+ * The key of a ticket's advisory lock, shared by every writer of its journal, projection and
+ * outbox: the decision transaction, `updateTicket`, `recordEvent` and `enqueue`.
+ */
+const ticketLock = (ticketId: string | undefined | null) => sql`select pg_advisory_xact_lock(hashtext(${ticketId ?? '__global__'}))`;
+
+/** The `outbox.ticket_id` of a decision row: the ticket, or `*` for an event without one. */
+const outboxTicket = (ticketId: string | undefined | null) => ticketId ?? '*';
+
+/** Decision rows (ORC-149) carry `payload.effect`; the legacy queue rows carry `payload.queue`. */
+const DECISION_ROW = sql.raw(`payload ? 'effect'`);
+const OUTBOX_ORDER = sql.raw(`(payload->>'seq')::int, (payload->>'i')::int`);
+
+interface OutboxPayload {
+  projectId: string;
+  ticketId?: string;
+  eventId: string;
+  seq: number;
+  i: number;
+  effect: OutboxEffect;
+}
+
+type Tx = Parameters<Parameters<NodePgDatabase<typeof schema>['transaction']>[0]>[0];
+
+const outboxRow = (id: string, status: OutboxRow['status'], p: OutboxPayload): OutboxRow => ({
+  id,
+  projectId: p.projectId,
+  ...(p.ticketId === undefined ? {} : { ticketId: p.ticketId }),
+  eventId: p.eventId,
+  seq: p.seq,
+  i: p.i,
+  effect: p.effect,
+  status,
+});
+
 export class PgStore implements AsyncStore {
   private readonly pool: Pool;
   private readonly db: NodePgDatabase<typeof schema>;
   private readonly ownsPool: boolean;
   private readonly clock: () => number;
-  private lastReceivedUs = 0;
 
   constructor(options: PgStoreOptions = {}) {
     if (options.pool) {
@@ -75,9 +113,11 @@ export class PgStore implements AsyncStore {
   }
 
   async getTicket(projectId: string, ticketId: string): Promise<TicketState | undefined> {
-    const result = await this.db.execute<{ data: TicketState }>(
-      sql`select data from tickets where id = ${ticketId} limit 1`,
-    );
+    return this.readTicket(this.db, projectId, ticketId);
+  }
+
+  private async readTicket(db: Tx | NodePgDatabase<typeof schema>, projectId: string, ticketId: string): Promise<TicketState | undefined> {
+    const result = await db.execute<{ data: TicketState }>(sql`select data from tickets where id = ${ticketId} limit 1`);
     const row = result.rows[0];
     if (!row) return undefined;
     const ticket = normalizeTicket(row.data);
@@ -89,16 +129,20 @@ export class PgStore implements AsyncStore {
    * (the schema is single-project, unlike the old `(project_id, ticket_id)` key).
    */
   async putTicket(ticket: TicketState, options: PutTicketOptions = {}): Promise<void> {
+    await this.writeTicket(this.db, ticket, options);
+  }
+
+  private async writeTicket(db: Tx | NodePgDatabase<typeof schema>, ticket: TicketState, options: PutTicketOptions = {}): Promise<void> {
     const t = normalizeTicket(ticket);
     const stepCursor = t.pendingJob?.job ?? null;
     const activeAttempts = (t.activeRunId ? 1 : 0) + (t.verifyingRunId ? 1 : 0);
     const now = this.now();
-    await this.db.execute(sql`
+    await db.execute(sql`
       insert into tickets (
         id, status, step_cursor, active_attempts, human_inbox, workflow_hash, data, created_at, updated_at
       ) values (
         ${t.ticketId}, ${t.logical}, ${stepCursor}, ${activeAttempts}, ${JSON.stringify(t.pendingFeedback)}::jsonb,
-        ${options.workflowHash ?? null}, ${JSON.stringify(t)}::jsonb,
+        ${options.workflowHash ?? t.workflowHash ?? null}, ${JSON.stringify(t)}::jsonb,
         to_timestamp(${now / 1000}), to_timestamp(${t.updatedAt / 1000})
       )
       on conflict (id) do update set
@@ -118,32 +162,29 @@ export class PgStore implements AsyncStore {
   }
 
   /**
-   * `received_at` of the next inbox row, in microseconds: the clock, but strictly after the
-   * previous row, so the rows of one webhook (written within the same millisecond) keep their
-   * order in `pendingInbox`.
-   */
-  private nextReceivedUs(): number {
-    this.lastReceivedUs = Math.max(this.now() * 1000, this.lastReceivedUs + 1);
-    return this.lastReceivedUs;
-  }
-
-  /**
    * Writes an event to `inbox`, committed before the call resolves (ORC-147). `on conflict do
    * nothing` on the event id: a delivery received twice returns `false` the second time.
+   *
+   * Under the ticket's advisory lock, `received_at` is the server's `clock_timestamp()` (ORC-149):
+   * the rows of a ticket get their time in the order they commit, whatever process writes them,
+   * and a decision of the ticket (same lock) never runs while one of its rows is being written.
+   * The worker decides a ticket's rows in that order, so a later row cannot pass an earlier one
+   * that was still uncommitted.
    */
   async appendInbox(event: FactoryEvent | StoredEvent): Promise<boolean> {
-    const receivedUs = this.nextReceivedUs();
-    const inserted = await this.db.execute(sql`
-      insert into inbox (id, event_id, type, payload, received_at, schema_version)
-      values (
-        ${event.id}, ${event.id}, ${event.type}, ${JSON.stringify(event)}::jsonb,
-        to_timestamp(0) + ${receivedUs}::double precision * interval '1 microsecond',
-        ${event.schemaVersion ?? 1}
-      )
-      on conflict do nothing
-      returning id
-    `);
-    return (inserted.rowCount ?? 0) > 0;
+    return this.db.transaction(async (tx) => {
+      await tx.execute(ticketLock(event.ticketId));
+      const inserted = await tx.execute(sql`
+        insert into inbox (id, event_id, type, payload, received_at, schema_version)
+        values (
+          ${event.id}, ${event.id}, ${event.type}, ${JSON.stringify(event)}::jsonb,
+          clock_timestamp(), ${event.schemaVersion ?? 1}
+        )
+        on conflict do nothing
+        returning id
+      `);
+      return (inserted.rowCount ?? 0) > 0;
+    });
   }
 
   async pendingInbox(limit: number, exclude: readonly string[] = []): Promise<StoredEvent[]> {
@@ -164,6 +205,189 @@ export class PgStore implements AsyncStore {
   }
 
   /**
+   * The decision transaction (ORC-149), in one `BEGIN … COMMIT`:
+   *
+   * 1. `pg_advisory_xact_lock` on the ticket, before anything is read: two workers (two daemons)
+   *    never decide the same ticket at once;
+   * 2. the inbox row must still be pending (`for update`), be the oldest pending row of its ticket
+   *    and find no unfinished outbox row of the ticket, or nothing happens (`processed`, `waiting`):
+   *    the ticket's events are decided in arrival order, each after the effects of the previous one;
+   * 3. the projection and the workflow version the ticket is frozen on are read, `decide` runs;
+   * 4. journal (next `seq` of the ticket), projection, timers, outbox rows `ticket:seq:i` and the
+   *    inbox mark are written. A throw anywhere rolls all of it back: the row stays pending.
+   */
+  async decide(req: DecisionRequest): Promise<DecisionOutcome> {
+    const { event } = req;
+    const ticketId = event.ticketId ?? null;
+    const now = this.now();
+    return this.db.transaction(async (tx): Promise<DecisionOutcome> => {
+      await tx.execute(ticketLock(ticketId));
+      const row = await tx.execute<{ processed: boolean }>(
+        sql`select processed_at is not null as processed from inbox where id = ${event.id} for update`,
+      );
+      if (!row.rows[0]) throw new Error(`event ${event.id} is not in the inbox`);
+      if (row.rows[0].processed) return { status: 'processed' };
+      const first = await tx.execute<{ id: string }>(sql`
+        select id from inbox
+        where processed_at is null and payload->>'projectId' = ${event.projectId}
+          and (payload->>'ticketId') is not distinct from ${ticketId}
+        order by received_at, id
+        limit 1
+      `);
+      const firstId = first.rows[0]?.id;
+      if (firstId !== undefined && firstId !== event.id) return { status: 'waiting', reason: `${firstId} comes first` };
+      const open = await tx.execute<{ id: string }>(sql`
+        select id from outbox
+        where ticket_id = ${outboxTicket(ticketId)} and ${DECISION_ROW} and payload->>'projectId' = ${event.projectId}
+          and status in ('pending', 'running')
+        limit 1
+      `);
+      if (open.rows[0]) return { status: 'waiting', reason: `effect ${open.rows[0].id} is unfinished` };
+      const markProcessed = sql`update inbox set processed_at = to_timestamp(${now / 1000}) where id = ${event.id}`;
+      if ((await tx.execute(sql`select 1 from journal where event_id = ${event.id} limit 1`)).rowCount) {
+        await tx.execute(markProcessed);
+        return { status: 'duplicate' };
+      }
+
+      const known = ticketId === null ? undefined : await this.readTicket(tx, event.projectId, ticketId);
+      const frozen = known?.workflowHash && known.workflowHash !== req.workflow.hash ? await this.readWorkflow(tx, known.workflowHash) : req.workflow;
+      if (!frozen) throw new Error(`workflow version ${known?.workflowHash} of ${ticketId} is not stored`);
+      const plan = req.decide(known, frozen);
+
+      const seqResult = await tx.execute<{ seq: number }>(
+        sql`select coalesce(max(seq), 0) + 1 as seq from journal where ticket_id is not distinct from ${ticketId}`,
+      );
+      const seq = Number(seqResult.rows[0]?.seq ?? 1);
+      await tx.execute(sql`
+        insert into journal (id, ticket_id, event_id, seq, type, payload, schema_version, created_at)
+        values (
+          ${event.id}, ${ticketId}, ${event.id}, ${seq}, ${event.type},
+          ${JSON.stringify(event)}::jsonb, ${event.schemaVersion ?? 1}, to_timestamp(${now / 1000})
+        )
+      `);
+      if (plan.ticket) {
+        if (plan.ticket.workflowHash === req.workflow.hash) {
+          await tx.execute(sql`
+            insert into workflow_versions (id, hash, definition, created_at)
+            values (${workflowId(req.workflow.hash)}, ${req.workflow.hash}, ${JSON.stringify(req.workflow.definition)}::jsonb, to_timestamp(${now / 1000}))
+            on conflict do nothing
+          `);
+        }
+        await this.writeTicket(tx, plan.ticket);
+      }
+      if (plan.clearTimers && ticketId !== null) {
+        await tx.execute(sql`delete from timers where ticket_id = ${ticketId} and payload->>'projectId' = ${event.projectId}`);
+      }
+      for (const t of plan.timers) await this.writeTimer(tx, t);
+      const effectIds: string[] = [];
+      for (const [k, effect] of plan.effects.entries()) {
+        const id = `${outboxTicket(ticketId)}:${seq}:${k + 1}`;
+        const payload: OutboxPayload = { projectId: event.projectId, ...(ticketId === null ? {} : { ticketId }), eventId: event.id, seq, i: k + 1, effect };
+        await tx.execute(sql`
+          insert into outbox (id, ticket_id, effect, payload, status, available_at, attempts, created_at, updated_at)
+          values (
+            ${id}, ${outboxTicket(ticketId)}, ${effect.kind}, ${JSON.stringify(payload)}::jsonb, 'pending',
+            to_timestamp(${now / 1000}), 0, to_timestamp(${now / 1000}), to_timestamp(${now / 1000})
+          )
+        `);
+        effectIds.push(id);
+      }
+      await tx.execute(markProcessed);
+      return { status: 'committed', seq, effectIds, known, plan };
+    });
+  }
+
+  private async readWorkflow(db: Tx | NodePgDatabase<typeof schema>, hash: string): Promise<WorkflowVersion | undefined> {
+    const result = await db.execute<{ definition: unknown }>(sql`select definition from workflow_versions where id = ${workflowId(hash)} limit 1`);
+    const row = result.rows[0];
+    return row ? { hash, definition: row.definition } : undefined;
+  }
+
+  getWorkflowVersion(hash: string): Promise<WorkflowVersion | undefined> {
+    return this.readWorkflow(this.db, hash);
+  }
+
+  /**
+   * The ticket's first unfinished decision row, claimed under a lease (`for update`: two workers
+   * never claim the same row). `busy` while another worker's lease on it is live.
+   */
+  async claimEffect(projectId: string, ticketId: string | undefined, leaseMs: number): Promise<OutboxRow | 'busy' | undefined> {
+    const now = this.now();
+    return this.db.transaction(async (tx) => {
+      const result = await tx.execute<{ id: string; status: OutboxRow['status']; live: boolean; payload: OutboxPayload }>(sql`
+        select id, status, coalesce(lease_until >= to_timestamp(${now / 1000}), false) as live, payload
+        from outbox
+        where ticket_id = ${outboxTicket(ticketId)} and ${DECISION_ROW} and payload->>'projectId' = ${projectId}
+          and status in ('pending', 'running')
+        order by ${OUTBOX_ORDER}
+        limit 1
+        for update
+      `);
+      const row = result.rows[0];
+      if (!row) return undefined;
+      if (row.status === 'running' && row.live) return 'busy' as const;
+      await tx.execute(sql`
+        update outbox set status = 'running', attempts = attempts + 1,
+          lease_until = to_timestamp(${(now + leaseMs) / 1000}), updated_at = to_timestamp(${now / 1000})
+        where id = ${row.id}
+      `);
+      return outboxRow(row.id, 'running', row.payload);
+    });
+  }
+
+  async renewEffect(id: string, leaseMs: number): Promise<void> {
+    const now = this.now();
+    await this.db.execute(sql`
+      update outbox set lease_until = to_timestamp(${(now + leaseMs) / 1000}), updated_at = to_timestamp(${now / 1000})
+      where id = ${id} and status = 'running'
+    `);
+  }
+
+  async failEffect(id: string): Promise<void> {
+    await this.db.execute(sql`
+      update outbox set status = 'failed', lease_until = null, updated_at = to_timestamp(${this.now() / 1000})
+      where id = ${id}
+    `);
+  }
+
+  /** Tickets whose first unfinished row is claimable: pending, or running under an expired lease. */
+  async effectTickets(): Promise<{ projectId: string; ticketId?: string }[]> {
+    const now = this.now();
+    const result = await this.db.execute<{ project_id: string; ticket_id: string | null }>(sql`
+      select project_id, ticket_id from (
+        select distinct on (outbox.ticket_id, payload->>'projectId')
+          payload->>'projectId' as project_id, payload->>'ticketId' as ticket_id, status, lease_until
+        from outbox
+        where ${DECISION_ROW} and status in ('pending', 'running')
+        order by outbox.ticket_id, payload->>'projectId', ${OUTBOX_ORDER}
+      ) head
+      where status = 'pending' or coalesce(lease_until < to_timestamp(${now / 1000}), true)
+    `);
+    return result.rows.map((r) => ({ projectId: r.project_id, ...(r.ticket_id === null ? {} : { ticketId: r.ticket_id }) }));
+  }
+
+  async listEffects(projectId: string, ticketId?: string): Promise<OutboxRow[]> {
+    const result = await this.db.execute<{ id: string; status: OutboxRow['status']; payload: OutboxPayload }>(sql`
+      select id, status, payload from outbox
+      where ticket_id = ${outboxTicket(ticketId)} and ${DECISION_ROW} and payload->>'projectId' = ${projectId}
+      order by ${OUTBOX_ORDER}
+    `);
+    return result.rows.map((r) => outboxRow(r.id, r.status, r.payload));
+  }
+
+  /** Read-modify-write of the projection under the ticket's advisory lock. */
+  async updateTicket(projectId: string, ticketId: string, f: (t: TicketState) => TicketState): Promise<TicketState | undefined> {
+    return this.db.transaction(async (tx) => {
+      await tx.execute(ticketLock(ticketId));
+      const t = await this.readTicket(tx, projectId, ticketId);
+      if (!t) return undefined;
+      const next = f(t);
+      await this.writeTicket(tx, next);
+      return next;
+    });
+  }
+
+  /**
    * Appends to `journal`; every event reaches it from its inbox row (`appendInbox`, ORC-147). The
    * second call for the same event id returns `false` without touching the journal: the journal's
    * unique event id is the dedup key.
@@ -179,7 +403,7 @@ export class PgStore implements AsyncStore {
       const ticketId = event.ticketId ?? null;
       // Taken before the insert: a second call for the same event (same ticket) waits for the first
       // to commit, then meets its journal row on the unique event id.
-      await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${ticketId ?? '__global__'}))`);
+      await tx.execute(ticketLock(ticketId));
       const inserted = await tx.execute(sql`
         insert into journal (id, ticket_id, event_id, seq, type, payload, schema_version, created_at)
         select
@@ -273,7 +497,11 @@ export class PgStore implements AsyncStore {
   }
 
   async putTimer(timer: TimerRecord): Promise<void> {
-    await this.db.execute(sql`
+    await this.writeTimer(this.db, timer);
+  }
+
+  private async writeTimer(db: Tx | NodePgDatabase<typeof schema>, timer: TimerRecord): Promise<void> {
+    await db.execute(sql`
       insert into timers (id, ticket_id, kind, due_at, payload, status, created_at)
       values (
         ${timer.key}, ${timer.ticketId}, ${timer.job}, to_timestamp(${timer.fireAt / 1000}),
@@ -320,7 +548,7 @@ export class PgStore implements AsyncStore {
    */
   async enqueue(item: QueueItem): Promise<string> {
     return this.db.transaction(async (tx) => {
-      await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${item.ticketId}))`);
+      await tx.execute(ticketLock(item.ticketId));
 
       // The synchronous queue deduped by ticket + job; keep that contract for queue-shaped rows.
       const existing = await tx.execute<{ id: string; status: string }>(
@@ -478,7 +706,8 @@ export class PgStore implements AsyncStore {
     await this.db.execute(
       sql`
         delete from outbox
-        where ticket_id = ${ticketId} and status = 'pending' and payload->>'projectId' = ${projectId} ${ofQueue}
+        where ticket_id = ${ticketId} and status = 'pending' and payload->>'projectId' = ${projectId}
+          and payload->>'queue' is not null ${ofQueue}
       `,
     );
   }
