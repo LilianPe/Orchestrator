@@ -6,6 +6,7 @@ import { GhCliForge } from '../adapters/forge/gh-cli.js';
 import { GitHubAppForge } from '../adapters/forge/github-app.js';
 import { PrPoller } from '../adapters/forge/pr-poller.js';
 import { ClaudeCodeRunner } from '../adapters/runner/claude-code.js';
+import { purgeTranscripts } from '../adapters/runner/transcript.js';
 import { FakeRunner } from '../adapters/runner/fake.js';
 import type { Runner } from '../adapters/runner/types.js';
 import { LinearApi } from '../adapters/tracker/linear/api.js';
@@ -237,6 +238,14 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
   const server = serve({ fetch: app.fetch, port, hostname: instance.host });
   const relay = instance.relay.kind === 'smee' ? startSmeeRelay({ url: instance.relay.url, onWebhook: ingest, log }) : undefined;
   timers.start();
+  // Transcripts are kept 30 days (ORC-132): purged at start, then daily.
+  const purge = () => {
+    const removed = purgeTranscripts(paths.transcripts, Date.now());
+    if (removed.length) log(`transcripts : ${removed.length} supprimé(s) après 30 jours`);
+  };
+  purge();
+  const purgeInterval = setInterval(purge, 24 * 60 * 60 * 1000);
+  purgeInterval.unref();
   const tickInterval = setInterval(() => {
     orchestrator.tick().catch((e: unknown) => log(`tick: ${(e as Error).message}`));
   }, 60_000);
@@ -255,6 +264,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     url: baseUrl,
     async stop() {
       clearInterval(tickInterval);
+      clearInterval(purgeInterval);
       relay?.close();
       timers.stop();
       poller.stop();

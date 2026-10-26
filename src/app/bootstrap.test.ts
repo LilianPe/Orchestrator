@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
 import { generateKeyPairSync } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -47,6 +47,23 @@ describe('bootstrap', () => {
     const app = await startFactory({ home, fakeRunner: true, log: (m) => void logs.push(m), env: {} });
     await app.stop();
     expect(logs.some((m) => m.includes('CLI gh'))).toBe(true);
+  });
+
+  it('purges the transcripts older than 30 days at start', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
+    saveInstance(home, { port: 4186, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
+    const dir = join(home, 'transcripts');
+    mkdirSync(dir, { recursive: true });
+    const old = join(dir, 'r-old.jsonl');
+    const recent = join(dir, 'r-recent.jsonl');
+    for (const f of [old, recent]) writeFileSync(f, '{}\n');
+    const t = (Date.now() - 31 * 24 * 60 * 60 * 1000) / 1000;
+    utimesSync(old, t, t);
+    const logs: string[] = [];
+    const app = await startFactory({ home, fakeRunner: true, log: (m) => void logs.push(m), env: {} });
+    await app.stop();
+    expect([existsSync(old), existsSync(recent)]).toEqual([false, true]);
+    expect(logs).toContain('transcripts : 1 supprimé(s) après 30 jours');
   });
 
   it('ticks the orchestrator every minute until stopped', async () => {
