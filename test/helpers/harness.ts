@@ -18,6 +18,7 @@ import { TimerService } from '../../src/core/timers.js';
 import type { EventPayloads, EventType, FactoryEvent } from '../../src/core/types.js';
 import type { Verifier } from '../../src/core/verify.js';
 import { SqliteStore } from '../../src/store/sqlite-store.js';
+import type { Store } from '../../src/store/types.js';
 import type { TestPreset } from './test-preset.js';
 
 export const packDir = join(import.meta.dirname, '../../packs/standard');
@@ -36,12 +37,19 @@ export function loadTestWorkflow(projectYaml?: string): Workflow {
 }
 
 export function createHarness(
-  opts: { projectYaml?: string; preset?: TestPreset; verify?: Verifier; knowledge?: boolean } = {},
+  opts: {
+    projectYaml?: string;
+    preset?: TestPreset;
+    verify?: Verifier;
+    knowledge?: boolean;
+    /** An empty store to run on instead of the in-memory SQLite one (the Postgres scenarios of test/integration). */
+    store?: Store;
+  } = {},
 ) {
   if (opts.projectYaml !== undefined && opts.preset) throw new Error('createHarness: pass projectYaml or preset, not both');
   const workflow = loadTestWorkflow(opts.projectYaml ?? opts.preset?.yaml);
   const clock = new FakeClock(Date.UTC(2026, 9, 10, 9, 0));
-  const store = new SqliteStore(':memory:');
+  const store = opts.store ?? new SqliteStore(':memory:');
   const tracker = new FakeTracker(Object.values(workflow.states));
   const forge = new FakeForge();
   const runner = new FakeRunner(clock);
