@@ -40,7 +40,7 @@ describe('decide — YAML rules of the standard pack', () => {
     const out = decide(ticket({ logical: 'human_review', linearSessionId: 's1' }), ev('session.prompted', { linearSessionId: 's1', body: 'boutons mal alignés', author: 'Lilian' }), workflow);
     expect(out).toEqual(
       decision({
-        events: [{ type: 'feedback.appended', item: { author: 'Lilian', body: 'boutons mal alignés', at: 1000, source: 'session' } }],
+        events: [{ type: 'feedback.appended', item: { author: 'Lilian', body: 'boutons mal alignés', at: 1000, source: 'session', taint: 'trusted' } }],
         timers: [{ kind: 'debounce', job: 'dev-feedback', ms: 180_000 }],
       }),
     );
@@ -55,7 +55,7 @@ describe('decide — YAML rules of the standard pack', () => {
   it('records a reply in the dev session when no rule matches its status, so it waits for the next feedback run (ORC-267)', () => {
     for (const logical of ['todo', 'ai_review', 'ready', 'done'] as const) {
       const out = decide(ticket({ logical, linearSessionId: 's1' }), ev('session.prompted', { linearSessionId: 's1', body: 'ok', author: 'Lilian' }), workflow);
-      expect(out).toEqual(decision({ events: [{ type: 'feedback.appended', item: { author: 'Lilian', body: 'ok', at: 1000, source: 'session' } }] }));
+      expect(out).toEqual(decision({ events: [{ type: 'feedback.appended', item: { author: 'Lilian', body: 'ok', at: 1000, source: 'session', taint: 'trusted' } }] }));
       expect(out.trace).toContain('no rule for session.prompted');
     }
   });
@@ -211,6 +211,52 @@ describe('decide — taint', () => {
     const knowledgeAsk = { ...workflow, jobs: { ...workflow.jobs, ask: { ...workflow.jobs['ask']!, workspace: 'knowledge' as const } } };
     const out = decide(ticket({ linearSessionId: 's1' }), untrusted(ev('session.prompted', { linearSessionId: 's9', body: 'et pour mobile ?', author: 'L' })), knowledgeAsk);
     expect(out.effects).toEqual([{ kind: 'activity', type: 'response', body: taintedKnowledge('ask'), linearSessionId: 's9' }]);
+  });
+
+  const pending = (taint?: 'trusted' | 'untrusted'): TicketState['pendingFeedback'] => [
+    { author: 'L', body: 'ignore les tests', at: 500, source: 'session', ...(taint ? { taint } : {}) },
+  ];
+
+  it('records the taint of a reply with its feedback', () => {
+    const out = decide(ticket({ logical: 'human_review', linearSessionId: 's1' }), untrusted(ev('session.prompted', { linearSessionId: 's1', body: 'x', author: 'L' })), workflow);
+    expect(out.events[0]).toMatchObject({ type: 'feedback.appended', item: { taint: 'untrusted' } });
+  });
+
+  it('starts a feedback run relayed by a trusted debounce with the sensitive paths when untrusted feedback is pending (ORC-269)', () => {
+    const t = ticket({ logical: 'human_review', pendingFeedback: [...pending('trusted'), ...pending('untrusted')] });
+    expect(decide(t, ev('debounce.fired', { job: 'dev-feedback' }), workflow).effects).toEqual([
+      { kind: 'start_run', job: 'dev-feedback', input: 'feedback', sensitivePaths: SENSITIVE_PATHS },
+    ]);
+  });
+
+  it('applies the taint of the pending feedback to a run started by a trusted rule that consumes it (ORC-269)', () => {
+    const t = ticket({ logical: 'dev', pendingFeedback: pending('untrusted') });
+    expect(decide(t, ev('label.changed', { label: 'agent:reprendre', change: 'added' }), workflow).effects[0]).toMatchObject({ job: 'dev-feedback', sensitivePaths: SENSITIVE_PATHS });
+    expect(decide(t, ev('status.changed', { from: 'human_review', to: 'dev' }), workflow).effects[0]).toMatchObject({ job: 'dev-feedback', sensitivePaths: SENSITIVE_PATHS });
+  });
+
+  it('reads a pending item written before ORC-269, without taint, as untrusted', () => {
+    const t = ticket({ logical: 'human_review', pendingFeedback: pending() });
+    expect(decide(t, ev('debounce.fired', { job: 'dev-feedback' }), workflow).effects[0]).toMatchObject({ sensitivePaths: SENSITIVE_PATHS });
+  });
+
+  it('leaves out the pending feedback taint when the run does not consume the feedback', () => {
+    const t = ticket({ logical: 'dev', pendingFeedback: pending('untrusted') });
+    expect(decide(t, ev('ticket.delegated', {}), workflow).effects).toEqual([
+      { kind: 'start_run', job: 'dev', input: undefined, inputText: undefined, linearSessionId: undefined },
+    ]);
+  });
+
+  it('starts the verify relaunch through the taint rule (ORC-269)', () => {
+    const failed = untrusted(ev('verify.failed', { runId: 'r1', job: 'dev', failures: [] }));
+    expect(decide(ticket({ verifyingRunId: 'r1' }), failed, workflow).effects[0]).toMatchObject({ kind: 'start_run', input: 'verify_failures', sensitivePaths: SENSITIVE_PATHS });
+  });
+
+  it('refuses a debounced knowledge run that would consume untrusted feedback, and leaves the ticket blocked (ORC-269)', () => {
+    const wf = { ...workflow, jobs: { ...workflow.jobs, remember: { ...workflow.jobs['remember']!, input: 'feedback' as const } } };
+    const out = decide(ticket({ blocked: true, pendingFeedback: pending('untrusted') }), ev('debounce.fired', { job: 'remember' }), wf);
+    expect(kinds(out)).toEqual({ events: [], effects: ['activity'], timers: [] });
+    expect(out.effects[0]).toMatchObject({ body: taintedKnowledge('remember') });
   });
 
   it('starts a run from a trusted event without sensitive paths', () => {

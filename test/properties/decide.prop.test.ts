@@ -424,11 +424,11 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
       }
     };
 
-    it.fails(
-      'KNOWN VIOLATION — untrusted feedback relayed by a later trusted event (debounce) still starts a sandboxed run',
+    it(
+      'untrusted feedback relayed by a later trusted event (debounce) still starts a sandboxed run (ORC-269)',
       () => {
         const counterexample = seq(...delegated('dev'), reply('untrusted'), ext('debounce.fired', { job: 'dev-feedback' }));
-        violated('feedback run without the sensitive paths', feedbackRunSandboxed, counterexample);
+        holds(feedbackRunSandboxed, [counterexample]);
       },
       TIMEOUT,
     );

@@ -2,7 +2,7 @@ import type { JobSpec, Rule, Workflow } from '../config/workflow-schema.js';
 import { evalCondition } from './conditions.js';
 import type { Decision, Effect } from './decision.js';
 import { reduce } from './reduce.js';
-import type { EventType, FactoryEvent, TicketState, VerifyFailure } from './types.js';
+import type { EventType, FactoryEvent, InputKind, Taint, TicketState, VerifyFailure } from './types.js';
 
 type StartRun = Extract<Effect, { kind: 'start_run' }>;
 
@@ -49,19 +49,33 @@ export function isQuestionSession(ticket: TicketState | undefined, sessionId: st
   return !!ticket.linearSessionId && sessionId !== ticket.linearSessionId;
 }
 
-function refusesRun(event: FactoryEvent, job: JobSpec): boolean {
-  return job.workspace === 'knowledge' && event.taint === 'untrusted';
+/**
+ * The strongest taint of what a run reads: its event, and the ticket's pending feedback when the run
+ * consumes it, even if a trusted event (a timer, a label) starts it (I12). An item without taint is untrusted.
+ */
+function runTaint(event: FactoryEvent, ticket: TicketState | undefined, input: InputKind | undefined): Taint {
+  if (event.taint === 'untrusted') return 'untrusted';
+  const feedback = input === 'feedback' ? (ticket?.pendingFeedback ?? []) : [];
+  return feedback.some((f) => f.taint !== 'trusted') ? 'untrusted' : 'trusted';
 }
 
-/** Starts `job`, unless untrusted content would write the knowledge base: then explains the refusal instead. */
-function startRun(out: Decision, event: FactoryEvent, job: JobSpec, run: Omit<StartRun, 'kind' | 'job'>): void {
-  if (refusesRun(event, job)) {
+function refusesRun(event: FactoryEvent, ticket: TicketState | undefined, job: JobSpec, input = job.input): boolean {
+  return job.workspace === 'knowledge' && runTaint(event, ticket, input) === 'untrusted';
+}
+
+/**
+ * Starts `job`, unless untrusted content would write the knowledge base: then explains the refusal instead.
+ * Every `start_run` of `decide` goes through here, so the taint rule applies whatever branch starts the run.
+ */
+function startRun(out: Decision, event: FactoryEvent, ticket: TicketState | undefined, job: JobSpec, run: Omit<StartRun, 'kind' | 'job'>): void {
+  const taint = runTaint(event, ticket, run.input ?? job.input);
+  if (job.workspace === 'knowledge' && taint === 'untrusted') {
     out.trace.push(`taint: refused ${job.name}`);
     out.effects.push({ kind: 'activity', type: 'response', body: taintedKnowledge(job.name), linearSessionId: run.linearSessionId });
     return;
   }
   const effect: StartRun = { kind: 'start_run', job: job.name, ...run };
-  out.effects.push(event.taint === 'untrusted' ? { ...effect, sensitivePaths: SENSITIVE_PATHS } : effect);
+  out.effects.push(taint === 'untrusted' ? { ...effect, sensitivePaths: SENSITIVE_PATHS } : effect);
 }
 
 /** Non-delegated tickets only ever get question-queue work. */
@@ -97,14 +111,14 @@ function ruleMatches(rule: Rule, event: FactoryEvent, ticket: TicketState | unde
 function appendFeedback(out: Decision, event: FactoryEvent<'session.prompted'>): void {
   out.events.push({
     type: 'feedback.appended',
-    item: { author: event.payload.author, body: event.payload.body, at: event.at, source: 'session' },
+    item: { author: event.payload.author, body: event.payload.body, at: event.at, source: 'session', taint: event.taint },
   });
 }
 
 function applyRule(out: Decision, rule: Rule, event: FactoryEvent, ticket: TicketState | undefined, workflow: Workflow): Decision {
   if (event.type === 'session.prompted') appendFeedback(out, event);
   const job = rule.run ? workflow.jobs[rule.run]! : undefined;
-  if (job && !refusesRun(event, job) && ticket?.blocked) out.events.push({ type: 'ticket.unblocked' });
+  if (job && !refusesRun(event, ticket, job) && ticket?.blocked) out.events.push({ type: 'ticket.unblocked' });
   if (rule.move) out.effects.push({ kind: 'move', to: rule.move });
   if (rule.labels) out.effects.push({ kind: 'labels', add: rule.labels.add, remove: rule.labels.remove });
   if (rule.comment) out.effects.push({ kind: 'comment', body: rule.comment });
@@ -118,11 +132,11 @@ function applyRule(out: Decision, rule: Rule, event: FactoryEvent, ticket: Ticke
     });
   }
   if (!job) return out;
-  if (rule.debounceMs && rule.debounceMs > 0 && !refusesRun(event, job)) {
+  if (rule.debounceMs && rule.debounceMs > 0 && !refusesRun(event, ticket, job)) {
     out.timers.push({ kind: 'debounce', job: job.name, ms: rule.debounceMs });
   } else {
     const threaded = event.type === 'session.mentioned' || event.type === 'command';
-    startRun(out, event, job, {
+    startRun(out, event, ticket, job, {
       input: job.input,
       inputText: threaded ? event.payload.body : undefined,
       linearSessionId: threaded ? event.payload.linearSessionId : undefined,
@@ -202,7 +216,8 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
       const { failures, job } = event.payload;
       if (used + 1 < workflow.limits.verifyAttempts) {
         out.events.push({ type: 'ticket.patched', patch: { verifyAttempts: used + 1 } });
-        out.effects.push({ kind: 'start_run', job, input: 'verify_failures', inputText: JSON.stringify(failures), resume: true });
+        const spec = workflow.jobs[job];
+        if (spec) startRun(out, event, ticket, spec, { input: 'verify_failures', inputText: JSON.stringify(failures), resume: true });
         return out;
       }
       const reason = `Vérifications toujours en échec après ${workflow.limits.verifyAttempts} tentatives.`;
@@ -211,8 +226,8 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
     case 'debounce.fired': {
       const job = workflow.jobs[event.payload.job];
       if (!job) return out;
-      if (ticket?.blocked) out.events.push({ type: 'ticket.unblocked' });
-      out.effects.push({ kind: 'start_run', job: job.name, input: job.input });
+      if (ticket?.blocked && !refusesRun(event, ticket, job)) out.events.push({ type: 'ticket.unblocked' });
+      startRun(out, event, ticket, job, { input: job.input });
       return out;
     }
     case 'pr.opened':
@@ -235,7 +250,7 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
       if (isQuestionSession(ticket, event.payload.linearSessionId)) {
         out.trace.push('built-in session.prompted (question session)');
         const ask = workflow.jobs['ask'];
-        if (ask) startRun(out, event, ask, { input: 'thread', inputText: event.payload.body, linearSessionId: event.payload.linearSessionId });
+        if (ask) startRun(out, event, ticket, ask, { input: 'thread', inputText: event.payload.body, linearSessionId: event.payload.linearSessionId });
         return out;
       }
       break;
