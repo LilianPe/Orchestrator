@@ -50,6 +50,9 @@ describe.skipIf(!PG_URL)('openStore and the daemon on Postgres', () => {
       await app.stop();
     }
     expect(logs).toContain('store : Postgres (migrations Drizzle appliquées)');
-    expect(logs.join('\n')).not.toContain(new URL(db.url).password);
+    // The password alone can be a common word (it is `factory` in CI), so look for the credentials as written in a URL.
+    const { username, password } = new URL(db.url);
+    expect(logs.join('\n')).not.toContain(db.url);
+    expect(logs.join('\n')).not.toContain(`${username}:${password}@`);
   });
 });
