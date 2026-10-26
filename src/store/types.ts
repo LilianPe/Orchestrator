@@ -1,4 +1,5 @@
 import type { InputKind, QueueName, FactoryEvent, RunOutcome, TicketState } from '../core/types.js';
+import type { StoredEvent } from '../core/upcast.js';
 
 export interface RunRecord {
   id: string;
@@ -48,7 +49,16 @@ export interface Store {
   getTicket(projectId: string, ticketId: string): Promise<TicketState | undefined>;
   putTicket(t: TicketState): Promise<void>;
   listTickets(): Promise<TicketState[]>;
-  /** False when an event with this id was already recorded. */
+  /**
+   * The inbox (ORC-147): every event is written here, durably, before anything acts on it. False
+   * when an event with this id is already in the inbox, processed or not: the id is the dedup key.
+   */
+  appendInbox(e: FactoryEvent | StoredEvent): Promise<boolean>;
+  /** Inbox events not processed yet, oldest first, except the ids in `exclude`. */
+  pendingInbox(limit: number, exclude?: readonly string[]): Promise<StoredEvent[]>;
+  /** Marks an inbox event processed: `pendingInbox` no longer returns it. */
+  markInboxProcessed(id: string): Promise<void>;
+  /** Journals an event. False when an event with this id was already journaled. */
   recordEvent(e: FactoryEvent): Promise<boolean>;
   recentEvents(limit: number, ticketId?: string): Promise<FactoryEvent[]>;
   putRun(r: RunRecord): Promise<void>;

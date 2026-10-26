@@ -99,6 +99,37 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     expect(await s.listQueue()).toEqual([]);
   });
 
+  it('keeps inbox events in arrival order until processed, and dedups them by id (ORC-147)', async () => {
+    const s = await store();
+    const ev = (id: string, type = 'control.pause') => ({ id, type, at: 5, projectId: '*', payload: {} }) as FactoryEvent;
+    // Same millisecond, ids out of alphabetical order: the arrival order still wins.
+    expect(await s.appendInbox(ev('b'))).toBe(true);
+    expect(await s.appendInbox(ev('a', 'control.resume'))).toBe(true);
+    expect(await s.appendInbox(ev('c'))).toBe(true);
+    expect(await s.appendInbox(ev('b'))).toBe(false);
+    expect(await s.pendingInbox(10)).toEqual([ev('b'), ev('a', 'control.resume'), ev('c')]);
+    expect((await s.pendingInbox(1)).map((e) => e.id)).toEqual(['b']);
+    expect((await s.pendingInbox(10, ['a'])).map((e) => e.id)).toEqual(['b', 'c']);
+    expect((await s.pendingInbox(1, ['b'])).map((e) => e.id)).toEqual(['a']);
+    await s.markInboxProcessed('b');
+    expect((await s.pendingInbox(10)).map((e) => e.id)).toEqual(['a', 'c']);
+    // Processed is still known: a replay of the same id is a duplicate.
+    expect(await s.appendInbox(ev('b'))).toBe(false);
+    expect((await s.pendingInbox(10)).map((e) => e.id)).toEqual(['a', 'c']);
+  });
+
+  it('journals an event already in the inbox once, and leaves its inbox row to markInboxProcessed', async () => {
+    const s = await store();
+    const e = { id: 'e1', type: 'control.pause', at: 5, projectId: 'p', payload: {} } as FactoryEvent;
+    expect(await s.appendInbox(e)).toBe(true);
+    expect(await s.recordEvent(e)).toBe(true);
+    expect(await s.recordEvent(e)).toBe(false);
+    expect(await s.recentEvents(10)).toEqual([e]);
+    expect((await s.pendingInbox(10)).map((x) => x.id)).toEqual(['e1']);
+    await s.markInboxProcessed('e1');
+    expect(await s.pendingInbox(10)).toEqual([]);
+  });
+
   it('expires echoes and keeps meta', async () => {
     const s = await store();
     await s.putEcho('state:REL-1:Done', 100);

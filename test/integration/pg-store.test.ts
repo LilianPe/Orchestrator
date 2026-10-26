@@ -238,9 +238,11 @@ describe.skipIf(!url)('PgStore integration', () => {
   });
 
   it('rolls the inbox insert back when the journal insert fails', async () => {
+    // A journal row under the same primary key but another event id: the dedup (by event id)
+    // lets the event through, and the journal insert fails on the key.
     await pool.query(
       `insert into journal (id, ticket_id, event_id, seq, type, payload, created_at)
-       values ('seed', 'REL-1', 'e-rollback', 1, 'control.pause', '{}'::jsonb, now())`,
+       values ('e-rollback', 'REL-1', 'seed', 1, 'control.pause', '{}'::jsonb, now())`,
     );
     await expect(
       store.recordEvent({

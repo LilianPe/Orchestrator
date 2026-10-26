@@ -1,11 +1,14 @@
 import { DatabaseSync } from 'node:sqlite';
 import { normalizeTicket, type QueueName, type FactoryEvent, type TicketState } from '../core/types.js';
+import type { StoredEvent } from '../core/upcast.js';
 import type { QueueItem, RunRecord, Store, TimerRecord } from './types.js';
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS tickets (project_id TEXT, ticket_id TEXT, data TEXT NOT NULL, PRIMARY KEY (project_id, ticket_id));
 CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, at INTEGER NOT NULL, ticket_id TEXT, data TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS events_at ON events (at);
+CREATE TABLE IF NOT EXISTS inbox (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, received_at INTEGER NOT NULL, processed_at INTEGER, data TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS inbox_pending ON inbox (processed_at, seq);
 CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, status TEXT NOT NULL, token TEXT NOT NULL, started_at INTEGER NOT NULL, cost_usd REAL NOT NULL, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS timers (key TEXT PRIMARY KEY, fire_at INTEGER NOT NULL, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS queue (project_id TEXT, ticket_id TEXT, job TEXT, queue TEXT NOT NULL, rank INTEGER NOT NULL, enqueued_at INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY (project_id, ticket_id, job));
@@ -40,6 +43,29 @@ export class SqliteStore implements Store {
 
   async listTickets(): Promise<TicketState[]> {
     return (this.db.prepare('SELECT data FROM tickets').all() as { data: string }[]).map((r) => normalizeTicket(JSON.parse(r.data) as TicketState));
+  }
+
+  /** The inbox (ORC-147): `seq` keeps the arrival order, the unique id dedups. */
+  async appendInbox(e: FactoryEvent | StoredEvent): Promise<boolean> {
+    const res = this.db
+      .prepare('INSERT OR IGNORE INTO inbox (id, received_at, data) VALUES (?, ?, ?)')
+      .run(e.id, Date.now(), JSON.stringify(e));
+    return Number(res.changes) === 1;
+  }
+
+  async pendingInbox(limit: number, exclude: readonly string[] = []): Promise<StoredEvent[]> {
+    const skip = new Set(exclude);
+    const rows = this.db
+      .prepare('SELECT id, data FROM inbox WHERE processed_at IS NULL ORDER BY seq LIMIT ?')
+      .all(limit + skip.size) as { id: string; data: string }[];
+    return rows
+      .filter((r) => !skip.has(r.id))
+      .slice(0, limit)
+      .map((r) => JSON.parse(r.data) as StoredEvent);
+  }
+
+  async markInboxProcessed(id: string): Promise<void> {
+    this.db.prepare('UPDATE inbox SET processed_at = ? WHERE id = ? AND processed_at IS NULL').run(Date.now(), id);
   }
 
   async recordEvent(e: FactoryEvent): Promise<boolean> {
