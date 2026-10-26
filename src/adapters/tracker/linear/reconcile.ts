@@ -20,7 +20,7 @@ export async function reconcileOnce(d: ReconcileDeps): Promise<void> {
       const at = d.clock.now();
       const delegated = new Set(issues.map((i) => i.identifier));
       for (const issue of issues) {
-        const t = d.store.getTicket(p.id, issue.identifier);
+        const t = await d.store.getTicket(p.id, issue.identifier);
         if (!t || !t.delegated) {
           const id = t ? `reconcile:delegated:${issue.identifier}:${t.updatedAt}` : `reconcile:delegated:${issue.identifier}`;
           const logical = logicalFromName(p.workflow.states, issue.stateName) ?? 'todo';
@@ -30,7 +30,7 @@ export async function reconcileOnce(d: ReconcileDeps): Promise<void> {
           continue;
         }
         const to = logicalFromName(p.workflow.states, issue.stateName);
-        if (to && to !== t.logical && !d.store.isEcho(`state:${issue.identifier}:${issue.stateName}`, at)) {
+        if (to && to !== t.logical && !(await d.store.isEcho(`state:${issue.identifier}:${issue.stateName}`, at))) {
           d.submit({
             ...TRUSTED,
             id: `reconcile:moved:${issue.identifier}:${issue.stateName}:${t.updatedAt}`,
@@ -42,7 +42,7 @@ export async function reconcileOnce(d: ReconcileDeps): Promise<void> {
           });
         }
       }
-      for (const t of d.store.listTickets()) {
+      for (const t of await d.store.listTickets()) {
         if (t.projectId !== p.id || delegated.has(t.ticketId)) continue;
         if (t.activeRunId) {
           d.submit({ ...TRUSTED, id: `reconcile:undelegated:${t.ticketId}:${t.activeRunId}`, type: 'session.stopped', at, projectId: p.id, ticketId: t.ticketId, payload: {} });

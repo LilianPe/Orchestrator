@@ -80,7 +80,7 @@ export function createHarness(
   async function advance(ms: number): Promise<void> {
     clock.advance(ms);
     runner.tick();
-    timers.tick();
+    await timers.tick();
     await orch.idle();
   }
 
@@ -89,7 +89,7 @@ export function createHarness(
     orch.stopAll();
     await orch.idle();
     orch = build();
-    orch.recover();
+    await orch.recover();
     await orch.announceRecovery();
   }
 
@@ -99,6 +99,6 @@ export function createHarness(
     get orch() {
       return orch;
     },
-    ticket: (id = 'REL-1') => store.getTicket('p', id)!,
+    ticket: async (id = 'REL-1') => (await store.getTicket('p', id))!,
   };
 }

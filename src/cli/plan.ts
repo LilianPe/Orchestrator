@@ -23,7 +23,7 @@ export async function planRows(d: {
   const rows: PlanRow[] = [];
   for (const p of d.projects) {
     for (const issue of await d.tracker.listDelegated(p.teamKey)) {
-      const known = d.store.getTicket(p.id, issue.identifier);
+      const known = await d.store.getTicket(p.id, issue.identifier);
       if (known) {
         rows.push({ identifier: issue.identifier, title: issue.title, priority: issue.priority, status: 'déjà géré', reasons: [known.logical] });
         continue;

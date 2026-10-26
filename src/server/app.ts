@@ -16,7 +16,7 @@ export interface ServerDeps {
   bus: EventBus;
   clock: Clock;
   submit: (e: FactoryEvent) => void;
-  isPaused: () => boolean;
+  isPaused: () => boolean | Promise<boolean>;
   linearWebhook: (raw: string, headers: Record<string, string | undefined>) => { status: number } | Promise<{ status: number }>;
   oauth?: { authorizeUrl: () => string; callback: (code: string, state: string) => Promise<void> };
   linearConnected: () => boolean;
@@ -112,20 +112,20 @@ export function createApp(d: ServerDeps): Hono {
     }
   });
 
-  app.get('/api/state', (c) =>
+  app.get('/api/state', async (c) =>
     c.json({
-      paused: d.isPaused(),
+      paused: await d.isPaused(),
       linearConnected: d.linearConnected(),
-      tickets: d.store.listTickets(),
-      queue: d.store.listQueue(),
-      activeRuns: d.store.runsByStatus('running').map(publicRun),
-      costTodayUsd: d.store.costSince(startOfUtcDay(d.clock.now())),
+      tickets: await d.store.listTickets(),
+      queue: await d.store.listQueue(),
+      activeRuns: (await d.store.runsByStatus('running')).map(publicRun),
+      costTodayUsd: await d.store.costSince(startOfUtcDay(d.clock.now())),
       budgetUsd: d.dailyBudgetUsd ?? null,
       capacity: d.capacity(),
     }),
   );
 
-  app.get('/api/events/recent', (c) => c.json(d.store.recentEvents(100, c.req.query('ticket') || undefined)));
+  app.get('/api/events/recent', async (c) => c.json(await d.store.recentEvents(100, c.req.query('ticket') || undefined)));
 
   app.get('/api/events', (c) =>
     streamSSE(c, async (stream) => {
@@ -190,7 +190,7 @@ export function createApp(d: ServerDeps): Hono {
   const agent = new Hono<AgentEnv>();
   agent.use('*', async (c, next) => {
     const token = c.req.header('authorization')?.replace(/^Bearer\s+/i, '');
-    const run = token ? d.store.findRunByToken(token) : undefined;
+    const run = token ? await d.store.findRunByToken(token) : undefined;
     if (!run || run.status !== 'running') return c.json({ error: 'unauthorized' }, 401);
     c.set('run', run);
     await next();
@@ -207,12 +207,12 @@ export function createApp(d: ServerDeps): Hono {
     const { text } = (await c.req.json()) as { text?: string };
     if (!text) return c.json({ error: 'text required' }, 400);
     if (run.linearSessionId) await d.tracker.activity(run.linearSessionId, { type: 'elicitation', body: text });
-    const t = d.store.getTicket(run.projectId, run.ticketId);
+    const t = await d.store.getTicket(run.projectId, run.ticketId);
     if (t) {
       t.blocked = true;
       t.blockReason = "Question posée par l'agent";
       t.updatedAt = d.clock.now();
-      d.store.putTicket(t);
+      await d.store.putTicket(t);
       d.bus.publish({ kind: 'ticket', ticket: t });
     }
     return c.json({ ok: true });

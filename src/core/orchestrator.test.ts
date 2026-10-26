@@ -63,7 +63,7 @@ describe('Orchestrator', () => {
     const payload = { name: 'fais-le', body: '', linearSessionId: 'q1', author: 'L', issue };
     await orch.submit({ id: 'c1', type: 'command', at: 1_000, projectId: 'p', ticketId: 'REL-1', payload } as FactoryEvent);
     await orch.idle();
-    expect(store.getTicket('p', 'REL-1')).toMatchObject({ title: 'Export CSV', priority: 3, questionSessionIds: ['q1'] });
+    expect(await store.getTicket('p', 'REL-1')).toMatchObject({ title: 'Export CSV', priority: 3, questionSessionIds: ['q1'] });
     expect(tracker.calls.filter((c) => c.method === 'getIssue')).toEqual([]);
   });
 
@@ -72,8 +72,8 @@ describe('Orchestrator', () => {
     tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', stateName: 'In Progress', priority: 2 });
     await orch.submit({ id: 'm1', type: 'session.mentioned', at: 1_000, projectId: 'p', ticketId: 'REL-1', payload: { linearSessionId: 'q1', body: '?', author: 'L' } } as FactoryEvent);
     await orch.idle();
-    expect(store.getTicket('p', 'REL-1')).toMatchObject({ title: 'Export CSV', logical: 'dev', priority: 2 });
-    const journaled = store.recentEvents(10).find((e) => e.id === 'm1')!;
+    expect(await store.getTicket('p', 'REL-1')).toMatchObject({ title: 'Export CSV', logical: 'dev', priority: 2 });
+    const journaled = (await store.recentEvents(10)).find((e) => e.id === 'm1')!;
     expect(journaled.payload).toMatchObject({ issue: { title: 'Export CSV', logical: 'dev', priority: 2 } });
   });
 
@@ -81,7 +81,7 @@ describe('Orchestrator', () => {
     const { store, orch } = setup();
     await orch.submit({ ...TRUSTED, id: 'm', type: 'status.changed', at: 1, projectId: 'p', ticketId: 'REL-9', payload: { from: 'todo', to: 'dev' } });
     await orch.idle();
-    expect(store.getTicket('p', 'REL-9')).toBeUndefined();
+    expect(await store.getTicket('p', 'REL-9')).toBeUndefined();
   });
 
   it('passes the pack, settings and agent env to the runner', async () => {
@@ -101,11 +101,11 @@ describe('Orchestrator', () => {
     tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
     runner.enqueue({ hold: true });
     await orch.submit(delegated());
-    orch.recover();
-    const t = store.getTicket('p', 'REL-1')!;
+    await orch.recover();
+    const t = (await store.getTicket('p', 'REL-1'))!;
     expect(t.blocked).toBe(true);
     expect(t.activeRunId).toBeUndefined();
-    expect(store.runsByStatus('running')).toEqual([]);
+    expect(await store.runsByStatus('running')).toEqual([]);
   });
 
   it('stopAll() then idle() waits until the interrupted run is persisted', async () => {
@@ -114,17 +114,17 @@ describe('Orchestrator', () => {
     runner.enqueue({ hold: true });
     await orch.submit(delegated());
     await orch.idle();
-    const runId = store.getTicket('p', 'REL-1')!.activeRunId!;
+    const runId = (await store.getTicket('p', 'REL-1'))!.activeRunId!;
     orch.stopAll();
     await orch.idle();
     // A shutdown is not a user stop: the run is `interrupted` and the ticket keeps it for recover() on the next start.
-    expect(store.getRun(runId)!.status).toBe('interrupted');
-    expect(store.getTicket('p', 'REL-1')!.activeRunId).toBe(runId);
+    expect((await store.getRun(runId))!.status).toBe('interrupted');
+    expect((await store.getTicket('p', 'REL-1'))!.activeRunId).toBe(runId);
   });
 
-  const waitFor = async (cond: () => boolean): Promise<void> => {
-    for (let i = 0; i < 200 && !cond(); i++) await new Promise((r) => setTimeout(r, 5));
-    expect(cond()).toBe(true);
+  const waitFor = async (cond: () => boolean | Promise<boolean>): Promise<void> => {
+    for (let i = 0; i < 200 && !(await cond()); i++) await new Promise((r) => setTimeout(r, 5));
+    expect(await cond()).toBe(true);
   };
 
   it('fails the run, frees the slot and blocks the ticket when the runner rejects', async () => {
@@ -139,12 +139,12 @@ describe('Orchestrator', () => {
     tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
     await orch.submit(delegated());
     await orch.idle();
-    const t = store.getTicket('p', 'REL-1')!;
+    const t = (await store.getTicket('p', 'REL-1'))!;
     expect(t.blocked).toBe(true);
     expect(t.activeRunId).toBeUndefined();
     expect(scheduler.inUse('dev')).toBe(0);
-    expect(store.runsByStatus('failure')).toHaveLength(1);
-    expect(store.runsByStatus('running')).toEqual([]);
+    expect(await store.runsByStatus('failure')).toHaveLength(1);
+    expect(await store.runsByStatus('running')).toEqual([]);
   });
 
   it('recover() blocks a ticket whose activeRunId points to a finished run', async () => {
@@ -152,12 +152,12 @@ describe('Orchestrator', () => {
     tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
     await orch.submit(delegated());
     await orch.idle();
-    const t = store.getTicket('p', 'REL-1')!;
-    t.activeRunId = store.runsByStatus('success')[0]!.id;
+    const t = (await store.getTicket('p', 'REL-1'))!;
+    t.activeRunId = (await store.runsByStatus('success'))[0]!.id;
     t.blocked = false;
-    store.putTicket(t);
-    orch.recover();
-    const after = store.getTicket('p', 'REL-1')!;
+    await store.putTicket(t);
+    await orch.recover();
+    const after = (await store.getTicket('p', 'REL-1'))!;
     expect(after.blocked).toBe(true);
     expect(after.activeRunId).toBeUndefined();
     expect(after.blockReason).toContain('redémarré');
@@ -168,12 +168,12 @@ describe('Orchestrator', () => {
     tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
     await orch.submit(delegated());
     await orch.idle();
-    const t = store.getTicket('p', 'REL-1')!;
+    const t = (await store.getTicket('p', 'REL-1'))!;
     t.verifyingRunId = 'r-x';
     t.blocked = false;
-    store.putTicket(t);
-    orch.recover();
-    const after = store.getTicket('p', 'REL-1')!;
+    await store.putTicket(t);
+    await orch.recover();
+    const after = (await store.getTicket('p', 'REL-1'))!;
     expect(after.blocked).toBe(true);
     expect(after.verifyingRunId).toBeUndefined();
     expect(after.blockReason).toContain('vérifications');
@@ -193,14 +193,14 @@ describe('Orchestrator', () => {
     });
     tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
     await orch.submit(delegated());
-    await waitFor(() => !!store.getTicket('p', 'REL-1')?.verifyingRunId);
+    await waitFor(async () => !!(await store.getTicket('p', 'REL-1'))?.verifyingRunId);
     await orch.submit({ ...TRUSTED, id: 'stop', type: 'control.stop', at: 2, projectId: 'p', ticketId: 'REL-1', payload: {} });
-    expect(store.getTicket('p', 'REL-1')!.verifyingRunId).toBeUndefined();
+    expect((await store.getTicket('p', 'REL-1'))!.verifyingRunId).toBeUndefined();
     release();
     await orch.idle();
     const moves = tracker.calls.filter((c) => c.method === 'moveTo').map((c) => c.args[1]);
     expect(moves).not.toContain('Human Review');
-    expect(store.getTicket('p', 'REL-1')!.logical).not.toBe('human_review');
+    expect((await store.getTicket('p', 'REL-1'))!.logical).not.toBe('human_review');
   });
 
   it('enqueues over budget and comments only once per ticket per day', async () => {
@@ -215,7 +215,7 @@ describe('Orchestrator', () => {
     await orch.submit(d2('e3'));
     await orch.idle();
     expect(runner.requests).toHaveLength(1);
-    expect(store.listQueue().length).toBeGreaterThanOrEqual(1);
+    expect((await store.listQueue()).length).toBeGreaterThanOrEqual(1);
     const comments = tracker.calls.filter((c) => c.method === 'comment' && c.args[0] === 'REL-2');
     expect(comments).toHaveLength(1);
     expect(String(comments[0]!.args[1])).toContain('Budget journalier');
@@ -229,7 +229,7 @@ describe('Orchestrator', () => {
     await orch.tick();
     await orch.idle();
     expect(runner.requests).toHaveLength(0);
-    expect(store.listQueue()).toHaveLength(1);
+    expect(await store.listQueue()).toHaveLength(1);
   });
 
   it('blocks the ticket with the error when a command throws', async () => {
@@ -243,7 +243,7 @@ describe('Orchestrator', () => {
     };
     await orch.submit(delegated());
     await orch.idle();
-    const t = store.getTicket('p', 'REL-1')!;
+    const t = (await store.getTicket('p', 'REL-1'))!;
     expect(t.blocked).toBe(true);
     expect(t.blockReason).toBe('Erreur : linear down');
     expect(tracker.activities().some((a) => a.type === 'error')).toBe(true);
@@ -261,7 +261,7 @@ describe('Orchestrator', () => {
     await orch.idle();
     await orch.submit(labelled('agent:x'));
     await orch.idle();
-    expect(store.dueTimers(Number.MAX_SAFE_INTEGER).map((t) => t.key)).toEqual(['REL-1:dev-feedback']);
+    expect((await store.dueTimers(Number.MAX_SAFE_INTEGER)).map((t) => t.key)).toEqual(['REL-1:dev-feedback']);
   });
 
   it('arms no rule timer when an earlier effect of the rule fails', async () => {
@@ -274,7 +274,7 @@ describe('Orchestrator', () => {
     await orch.idle();
     await orch.submit(labelled('agent:y'));
     await orch.idle();
-    expect(store.getTicket('p', 'REL-1')!.blockReason).toBe('Erreur : linear down');
-    expect(store.dueTimers(Number.MAX_SAFE_INTEGER)).toEqual([]);
+    expect((await store.getTicket('p', 'REL-1'))!.blockReason).toBe('Erreur : linear down');
+    expect(await store.dueTimers(Number.MAX_SAFE_INTEGER)).toEqual([]);
   });
 });

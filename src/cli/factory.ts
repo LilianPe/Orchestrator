@@ -96,7 +96,7 @@ async function main(): Promise<number> {
       });
       const store = new SqliteStore(homePaths(home).db);
       console.log(formatPlan(await planRows({ tracker, store, projects, workspaces: new GitWorkspaces({ root: homePaths(home).workspaces }) })));
-      store.close();
+      await store.close();
       return 0;
     }
     case 'status': {

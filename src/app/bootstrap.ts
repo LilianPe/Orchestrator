@@ -159,7 +159,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       PATH: `${join(root, 'bin')}:${process.env['PATH'] ?? ''}`,
     }),
   });
-  orchestrator.recover();
+  await orchestrator.recover();
   const submit = (e: Parameters<Orchestrator['submit']>[0]) => void orchestrator.submit(e);
 
   const webhookSecret = () => loadSecrets(o.home).linear?.webhookSecret ?? '';
@@ -183,7 +183,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
   });
 
   const reconciler = new Reconciler({ tracker: trackerSwitch, store, projects, submit, clock, log });
-  const timers = new TimerService(store, clock, submit);
+  const timers = new TimerService(store, clock, submit, (e) => log(`timers: ${e.message}`));
   const poller = new PrPoller({ store, forge, projects, submit, clock, log });
 
   const oauthStates = new Set<string>();
@@ -265,7 +265,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
         // Long-lived SSE streams (/api/events) would otherwise keep close() pending forever.
         (server as unknown as { closeAllConnections(): void }).closeAllConnections();
       });
-      store.close();
+      await store.close();
     },
   };
 }

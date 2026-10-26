@@ -15,8 +15,8 @@ describe('reconcileOnce', () => {
     const store = new SqliteStore(':memory:');
     tracker.addIssue({ identifier: 'REL-1', delegateId: 'app' });
     tracker.addIssue({ identifier: 'REL-2', delegateId: 'app', stateName: 'AI Review' });
-    store.putTicket({ ...newTicketState('p', 'REL-2', 'T', 'human_review', 7), delegated: true });
-    store.putTicket({ ...newTicketState('p', 'REL-3', 'T', 'dev', 8), delegated: true, activeRunId: 'r3' });
+    await store.putTicket({ ...newTicketState('p', 'REL-2', 'T', 'human_review', 7), delegated: true });
+    await store.putTicket({ ...newTicketState('p', 'REL-3', 'T', 'dev', 8), delegated: true, activeRunId: 'r3' });
     const events: FactoryEvent[] = [];
     await reconcileOnce({
       tracker, store, projects: [{ id: 'p', repoPath: '/r', teamKey: 'REL', workflow }],
@@ -34,8 +34,8 @@ describe('reconcileOnce', () => {
     const tracker = new FakeTracker();
     const store = new SqliteStore(':memory:');
     tracker.addIssue({ identifier: 'REL-4', delegateId: 'app' });
-    store.putTicket({ ...newTicketState('p', 'REL-4', 'T', 'todo', 4) });
-    store.putTicket({ ...newTicketState('p', 'REL-5', 'T', 'human_review', 5), delegated: true });
+    await store.putTicket({ ...newTicketState('p', 'REL-4', 'T', 'todo', 4) });
+    await store.putTicket({ ...newTicketState('p', 'REL-5', 'T', 'human_review', 5), delegated: true });
     const events: FactoryEvent[] = [];
     await reconcileOnce({
       tracker, store, projects: [{ id: 'p', repoPath: '/r', teamKey: 'REL', workflow }],

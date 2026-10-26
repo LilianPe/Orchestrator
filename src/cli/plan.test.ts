@@ -16,7 +16,7 @@ describe('plan', () => {
     tracker.addIssue({ identifier: 'REL-3', title: 'Flou', delegateId: 'a', priority: 2, description: 'court' });
     tracker.addIssue({ identifier: 'REL-4', title: 'En cours', delegateId: 'a', priority: 3 });
     const store = new SqliteStore(':memory:');
-    store.putTicket(newTicketState('p', 'REL-4', 'En cours', 'dev', 1));
+    await store.putTicket(newTicketState('p', 'REL-4', 'En cours', 'dev', 1));
     const rows = await planRows({ tracker, store, projects: [{ id: 'p', repoPath: '/r', teamKey: 'REL', workflow }], workspaces: new FakeWorkspaces() });
     expect(rows.map((r) => [r.identifier, r.status])).toEqual([
       ['REL-2', 'pris'],

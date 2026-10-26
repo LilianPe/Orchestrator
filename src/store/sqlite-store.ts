@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 
 const rank = (priority: number) => (priority === 0 ? 5 : priority);
 
+/** The SQLite store, kept until ORC-178: synchronous `node:sqlite` calls behind the async `Store` port. */
 export class SqliteStore implements Store {
   private db: DatabaseSync;
 
@@ -24,31 +25,31 @@ export class SqliteStore implements Store {
     this.db.exec(SCHEMA);
   }
 
-  getTicket(projectId: string, ticketId: string): TicketState | undefined {
+  async getTicket(projectId: string, ticketId: string): Promise<TicketState | undefined> {
     const row = this.db.prepare('SELECT data FROM tickets WHERE project_id = ? AND ticket_id = ?').get(projectId, ticketId) as
       | { data: string }
       | undefined;
     return row ? normalizeTicket(JSON.parse(row.data) as TicketState) : undefined;
   }
 
-  putTicket(t: TicketState): void {
+  async putTicket(t: TicketState): Promise<void> {
     this.db
       .prepare('INSERT INTO tickets (project_id, ticket_id, data) VALUES (?, ?, ?) ON CONFLICT DO UPDATE SET data = excluded.data')
       .run(t.projectId, t.ticketId, JSON.stringify(t));
   }
 
-  listTickets(): TicketState[] {
+  async listTickets(): Promise<TicketState[]> {
     return (this.db.prepare('SELECT data FROM tickets').all() as { data: string }[]).map((r) => normalizeTicket(JSON.parse(r.data) as TicketState));
   }
 
-  recordEvent(e: FactoryEvent): boolean {
+  async recordEvent(e: FactoryEvent): Promise<boolean> {
     const res = this.db
       .prepare('INSERT OR IGNORE INTO events (id, at, ticket_id, data) VALUES (?, ?, ?, ?)')
       .run(e.id, e.at, e.ticketId ?? null, JSON.stringify(e));
     return Number(res.changes) === 1;
   }
 
-  recentEvents(limit: number, ticketId?: string): FactoryEvent[] {
+  async recentEvents(limit: number, ticketId?: string): Promise<FactoryEvent[]> {
     const rows = (
       ticketId
         ? this.db.prepare('SELECT data FROM events WHERE ticket_id = ? ORDER BY at DESC, rowid DESC LIMIT ?').all(ticketId, limit)
@@ -57,7 +58,7 @@ export class SqliteStore implements Store {
     return rows.map((r) => JSON.parse(r.data));
   }
 
-  putRun(r: RunRecord): void {
+  async putRun(r: RunRecord): Promise<void> {
     this.db
       .prepare(
         `INSERT INTO runs (id, status, token, started_at, cost_usd, data) VALUES (?, ?, ?, ?, ?, ?)
@@ -66,54 +67,55 @@ export class SqliteStore implements Store {
       .run(r.id, r.status, r.token, r.startedAt, r.costUsd, JSON.stringify(r));
   }
 
-  getRun(id: string): RunRecord | undefined {
+  async getRun(id: string): Promise<RunRecord | undefined> {
     const row = this.db.prepare('SELECT data FROM runs WHERE id = ?').get(id) as { data: string } | undefined;
     return row ? JSON.parse(row.data) : undefined;
   }
 
-  runsByStatus(status: RunRecord['status']): RunRecord[] {
+  async runsByStatus(status: RunRecord['status']): Promise<RunRecord[]> {
     return (this.db.prepare('SELECT data FROM runs WHERE status = ? ORDER BY started_at').all(status) as { data: string }[]).map(
       (r) => JSON.parse(r.data),
     );
   }
 
-  findRunByToken(token: string): RunRecord | undefined {
+  async findRunByToken(token: string): Promise<RunRecord | undefined> {
     const row = this.db.prepare('SELECT data FROM runs WHERE token = ?').get(token) as { data: string } | undefined;
     return row ? JSON.parse(row.data) : undefined;
   }
 
-  putTimer(t: TimerRecord): void {
+  async putTimer(t: TimerRecord): Promise<void> {
     this.db
       .prepare('INSERT INTO timers (key, fire_at, data) VALUES (?, ?, ?) ON CONFLICT DO UPDATE SET fire_at = excluded.fire_at, data = excluded.data')
       .run(t.key, t.fireAt, JSON.stringify(t));
   }
 
-  dueTimers(now: number): TimerRecord[] {
+  async dueTimers(now: number): Promise<TimerRecord[]> {
     return (this.db.prepare('SELECT data FROM timers WHERE fire_at <= ? ORDER BY fire_at').all(now) as { data: string }[]).map((r) =>
       JSON.parse(r.data),
     );
   }
 
-  deleteTimer(key: string): void {
+  async deleteTimer(key: string): Promise<void> {
     this.db.prepare('DELETE FROM timers WHERE key = ?').run(key);
   }
 
-  deleteTimersFor(projectId: string, ticketId: string): void {
-    for (const t of this.dueTimers(Number.MAX_SAFE_INTEGER)) {
-      if (t.projectId === projectId && t.ticketId === ticketId) this.deleteTimer(t.key);
+  async deleteTimersFor(projectId: string, ticketId: string): Promise<void> {
+    for (const t of await this.dueTimers(Number.MAX_SAFE_INTEGER)) {
+      if (t.projectId === projectId && t.ticketId === ticketId) await this.deleteTimer(t.key);
     }
   }
 
-  enqueue(item: QueueItem): void {
+  async enqueue(item: QueueItem): Promise<string> {
     this.db
       .prepare(
         `INSERT INTO queue (project_id, ticket_id, job, queue, rank, enqueued_at, data) VALUES (?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT DO UPDATE SET data = excluded.data, rank = excluded.rank`,
       )
       .run(item.projectId, item.ticketId, item.job, item.queue, rank(item.priority), item.enqueuedAt, JSON.stringify(item));
+    return `${item.projectId}:${item.ticketId}:${item.job}`;
   }
 
-  dequeue(queue: QueueName): QueueItem | undefined {
+  async dequeue(queue: QueueName): Promise<QueueItem | undefined> {
     const row = this.db
       .prepare('SELECT project_id, ticket_id, job, data FROM queue WHERE queue = ? ORDER BY rank, enqueued_at LIMIT 1')
       .get(queue) as { project_id: string; ticket_id: string; job: string; data: string } | undefined;
@@ -122,40 +124,40 @@ export class SqliteStore implements Store {
     return JSON.parse(row.data);
   }
 
-  listQueue(): QueueItem[] {
+  async listQueue(): Promise<QueueItem[]> {
     return (this.db.prepare('SELECT data FROM queue ORDER BY rank, enqueued_at').all() as { data: string }[]).map((r) =>
       JSON.parse(r.data),
     );
   }
 
-  removeFromQueue(projectId: string, ticketId: string, queue?: QueueName): void {
+  async removeFromQueue(projectId: string, ticketId: string, queue?: QueueName): Promise<void> {
     this.db.prepare('DELETE FROM queue WHERE project_id = ? AND ticket_id = ? AND (? IS NULL OR queue = ?)').run(projectId, ticketId, queue ?? null, queue ?? null);
   }
 
-  putEcho(key: string, until: number): void {
+  async putEcho(key: string, until: number): Promise<void> {
     this.db.prepare('INSERT INTO echoes (key, until) VALUES (?, ?) ON CONFLICT DO UPDATE SET until = excluded.until').run(key, until);
   }
 
-  isEcho(key: string, now: number): boolean {
+  async isEcho(key: string, now: number): Promise<boolean> {
     const row = this.db.prepare('SELECT until FROM echoes WHERE key = ?').get(key) as { until: number } | undefined;
     return !!row && row.until >= now;
   }
 
-  costSince(ts: number): number {
+  async costSince(ts: number): Promise<number> {
     const row = this.db.prepare('SELECT COALESCE(SUM(cost_usd), 0) AS total FROM runs WHERE started_at >= ?').get(ts) as { total: number };
     return row.total;
   }
 
-  getMeta(key: string): string | undefined {
+  async getMeta(key: string): Promise<string | undefined> {
     const row = this.db.prepare('SELECT value FROM meta WHERE key = ?').get(key) as { value: string } | undefined;
     return row?.value;
   }
 
-  setMeta(key: string, value: string): void {
+  async setMeta(key: string, value: string): Promise<void> {
     this.db.prepare('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT DO UPDATE SET value = excluded.value').run(key, value);
   }
 
-  close(): void {
+  async close(): Promise<void> {
     this.db.close();
   }
 }

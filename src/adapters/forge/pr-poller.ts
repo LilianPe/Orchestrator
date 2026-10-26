@@ -20,7 +20,7 @@ export class PrPoller {
   ) {}
 
   async pollOnce(): Promise<void> {
-    for (const t of this.d.store.listTickets()) {
+    for (const t of await this.d.store.listTickets()) {
       try {
         await this.pollTicket(t);
       } catch (err) {
@@ -67,7 +67,7 @@ export class PrPoller {
       if (done) return;
       const metaKey = `checks:${t.projectId}:${t.ticketId}`;
       if (pr.checks === "none") return;
-      const last = this.d.store.getMeta(metaKey);
+      const last = await this.d.store.getMeta(metaKey);
       if (pr.checks !== last) {
         const id = `pr:${t.ticketId}:${pr.number}:checks:${pr.checks}:${at}`;
         if (pr.checks === "fail")
@@ -79,7 +79,7 @@ export class PrPoller {
           });
         else if (pr.checks === "pass")
           this.d.submit({ ...base, id, type: "pr.checks_passed", payload });
-        this.d.store.setMeta(metaKey, pr.checks);
+        await this.d.store.setMeta(metaKey, pr.checks);
       }
     }
   }

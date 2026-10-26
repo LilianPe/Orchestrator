@@ -40,29 +40,36 @@ export interface QueueItem {
   enqueuedAt: number;
 }
 
+/**
+ * The state port. Asynchronous because Postgres is (ORC-132): `SqliteStore` implements it by
+ * wrapping its synchronous calls, `PgStore` natively.
+ */
 export interface Store {
-  getTicket(projectId: string, ticketId: string): TicketState | undefined;
-  putTicket(t: TicketState): void;
-  listTickets(): TicketState[];
-  recordEvent(e: FactoryEvent): boolean;
-  recentEvents(limit: number, ticketId?: string): FactoryEvent[];
-  putRun(r: RunRecord): void;
-  getRun(id: string): RunRecord | undefined;
-  runsByStatus(status: RunRecord['status']): RunRecord[];
-  findRunByToken(token: string): RunRecord | undefined;
-  putTimer(t: TimerRecord): void;
-  dueTimers(now: number): TimerRecord[];
-  deleteTimer(key: string): void;
-  deleteTimersFor(projectId: string, ticketId: string): void;
-  enqueue(q: QueueItem): void;
-  dequeue(queue: QueueName): QueueItem | undefined;
-  listQueue(): QueueItem[];
+  getTicket(projectId: string, ticketId: string): Promise<TicketState | undefined>;
+  putTicket(t: TicketState): Promise<void>;
+  listTickets(): Promise<TicketState[]>;
+  /** False when an event with this id was already recorded. */
+  recordEvent(e: FactoryEvent): Promise<boolean>;
+  recentEvents(limit: number, ticketId?: string): Promise<FactoryEvent[]>;
+  putRun(r: RunRecord): Promise<void>;
+  getRun(id: string): Promise<RunRecord | undefined>;
+  runsByStatus(status: RunRecord['status']): Promise<RunRecord[]>;
+  findRunByToken(token: string): Promise<RunRecord | undefined>;
+  putTimer(t: TimerRecord): Promise<void>;
+  dueTimers(now: number): Promise<TimerRecord[]>;
+  deleteTimer(key: string): Promise<void>;
+  deleteTimersFor(projectId: string, ticketId: string): Promise<void>;
+  /** Queues an item (deduped by ticket + job) and returns its id. */
+  enqueue(q: QueueItem): Promise<string>;
+  /** Takes the next item of a queue out of the store: it is not handed out again. */
+  dequeue(queue: QueueName): Promise<QueueItem | undefined>;
+  listQueue(): Promise<QueueItem[]>;
   /** Drops the ticket's queued runs, of every queue or of `queue` only. */
-  removeFromQueue(projectId: string, ticketId: string, queue?: QueueName): void;
-  putEcho(key: string, until: number): void;
-  isEcho(key: string, now: number): boolean;
-  costSince(ts: number): number;
-  getMeta(key: string): string | undefined;
-  setMeta(key: string, value: string): void;
-  close(): void;
+  removeFromQueue(projectId: string, ticketId: string, queue?: QueueName): Promise<void>;
+  putEcho(key: string, until: number): Promise<void>;
+  isEcho(key: string, now: number): Promise<boolean>;
+  costSince(ts: number): Promise<number>;
+  getMeta(key: string): Promise<string | undefined>;
+  setMeta(key: string, value: string): Promise<void>;
+  close(): Promise<void>;
 }

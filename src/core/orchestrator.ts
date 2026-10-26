@@ -133,15 +133,15 @@ export class Orchestrator {
    * Settles runs cut by a crash (`running`) or a shutdown (`interrupted`) and blocks their tickets.
    * The matching Linear notices are posted by announceRecovery().
    */
-  recover(): void {
+  async recover(): Promise<void> {
     const { store } = this.d;
-    const block = (t: TicketState, reason: string): TicketState => {
+    const block = (t: TicketState, reason: string): Promise<TicketState> => {
       this.recoveryNotices.push({ ticket: { projectId: t.projectId, ticketId: t.ticketId }, type: 'elicitation', body: reason });
       return this.apply(t, { type: 'run.interrupted', reason });
     };
-    const cut = [...store.runsByStatus('running'), ...store.runsByStatus('interrupted')];
+    const cut = [...(await store.runsByStatus('running')), ...(await store.runsByStatus('interrupted'))];
     for (const run of cut) {
-      store.putRun({ ...run, status: run.status === 'interrupted' ? 'stopped' : 'failure', endedAt: run.endedAt ?? this.d.clock.now() });
+      await store.putRun({ ...run, status: run.status === 'interrupted' ? 'stopped' : 'failure', endedAt: run.endedAt ?? this.d.clock.now() });
       if (run.queue === 'questions' && run.linearSessionId) {
         this.recoveryNotices.push({
           sessionId: run.linearSessionId,
@@ -150,12 +150,12 @@ export class Orchestrator {
         });
       }
     }
-    for (let t of store.listTickets()) {
+    for (let t of await store.listTickets()) {
       if (t.activeRunId) {
-        const r = store.getRun(t.activeRunId);
-        if (!r || r.status !== 'running') t = block(t, `${PRODUCT_NAME} a redémarré pendant le run. Répondez dans le fil pour relancer.`);
+        const r = await store.getRun(t.activeRunId);
+        if (!r || r.status !== 'running') t = await block(t, `${PRODUCT_NAME} a redémarré pendant le run. Répondez dans le fil pour relancer.`);
       }
-      if (t.verifyingRunId) block(t, `${PRODUCT_NAME} a redémarré pendant les vérifications. Répondez dans le fil pour relancer.`);
+      if (t.verifyingRunId) await block(t, `${PRODUCT_NAME} a redémarré pendant les vérifications. Répondez dans le fil pour relancer.`);
     }
   }
 
@@ -169,7 +169,7 @@ export class Orchestrator {
           let session: string;
           if ('sessionId' in n) session = n.sessionId;
           else {
-            const t = this.d.store.getTicket(n.ticket.projectId, n.ticket.ticketId);
+            const t = await this.d.store.getTicket(n.ticket.projectId, n.ticket.ticketId);
             if (!t) continue;
             session = await this.sessionFor(t);
           }
@@ -207,13 +207,13 @@ export class Orchestrator {
     return p;
   }
 
-  isPaused(): boolean {
-    return this.d.store.getMeta('paused') === '1';
+  async isPaused(): Promise<boolean> {
+    return (await this.d.store.getMeta('paused')) === '1';
   }
 
-  private overBudget(): boolean {
+  private async overBudget(): Promise<boolean> {
     const budget = this.d.dailyBudgetUsd;
-    return budget !== undefined && this.d.store.costSince(startOfUtcDay(this.d.clock.now())) >= budget;
+    return budget !== undefined && (await this.d.store.costSince(startOfUtcDay(this.d.clock.now()))) >= budget;
   }
 
   private log(level: 'info' | 'warn' | 'error', message: string): void {
@@ -225,22 +225,22 @@ export class Orchestrator {
     this.background.set(wrapped, runId);
   }
 
-  private putTicket(t: TicketState): TicketState {
+  private async putTicket(t: TicketState): Promise<TicketState> {
     const stamped = { ...t, updatedAt: this.d.clock.now() };
-    this.d.store.putTicket(stamped);
+    await this.d.store.putTicket(stamped);
     this.d.bus.publish({ kind: 'ticket', ticket: stamped });
     return stamped;
   }
 
   /** The only way the orchestrator changes a ticket: through `reduce`, then persisted. */
-  private apply(t: TicketState, ...events: InternalEvent[]): TicketState {
+  private apply(t: TicketState, ...events: InternalEvent[]): Promise<TicketState> {
     let next = t;
     for (const e of events) next = reduce(next, e)!;
     return this.putTicket(next);
   }
 
-  private ticket(projectId: string, ticketId: string): TicketState {
-    const t = this.d.store.getTicket(projectId, ticketId);
+  private async ticket(projectId: string, ticketId: string): Promise<TicketState> {
+    const t = await this.d.store.getTicket(projectId, ticketId);
     if (!t) throw new Error(`unknown ticket ${ticketId}`);
     return t;
   }
@@ -252,7 +252,7 @@ export class Orchestrator {
   private async withSnapshot(event: FactoryEvent): Promise<FactoryEvent> {
     if (event.projectId === '*' || !event.ticketId || !CREATES_TICKET.has(event.type)) return event;
     const payload = event.payload as { issue?: IssueSnapshot };
-    if (payload.issue || this.d.store.getTicket(event.projectId, event.ticketId)) return event;
+    if (payload.issue || (await this.d.store.getTicket(event.projectId, event.ticketId))) return event;
     const project = this.project(event.projectId);
     const issue = await this.d.tracker.getIssue(event.ticketId);
     const logical = logicalFromName(project.workflow.states, issue.stateName) ?? 'todo';
@@ -262,7 +262,7 @@ export class Orchestrator {
   private async handle(incoming: FactoryEvent): Promise<void> {
     const { store, bus } = this.d;
     const event = await this.withSnapshot(incoming);
-    if (!store.recordEvent(event)) return;
+    if (!(await store.recordEvent(event))) return;
     bus.publish({ kind: 'event', event });
 
     if (event.projectId === '*') {
@@ -273,21 +273,21 @@ export class Orchestrator {
     }
 
     const project = this.project(event.projectId);
-    const known = event.ticketId ? store.getTicket(project.id, event.ticketId) : undefined;
+    const known = event.ticketId ? await store.getTicket(project.id, event.ticketId) : undefined;
     if (!known && event.ticketId && !CREATES_TICKET.has(event.type)) {
       this.log('info', `ignored ${event.type} for unmanaged ticket ${event.ticketId}`);
       return;
     }
 
     if (event.type === 'run.finished') {
-      const run = store.getRun(event.payload.runId);
+      const run = await store.getRun(event.payload.runId);
       if (run) this.d.scheduler.release(`${run.ticketId}:${run.queue}`);
     }
     const decision = decide(known, event, project.workflow);
     if (isFenced(decision)) this.log('info', `ignored stale ${event.type} for ${event.ticketId ?? '*'}: ${decision.trace[0]}`);
     let next = reduce(known, event);
     for (const e of decision.events) next = reduce(next, e);
-    const ticket = next && this.putTicket(next);
+    const ticket = next && (await this.putTicket(next));
     await this.carryOut(project, ticket, decision);
 
     if (ticket && SETTLES_RUN.has(event.type)) await this.settle(project, ticket.ticketId);
@@ -310,14 +310,14 @@ export class Orchestrator {
     // After the effects, as `set_debounce` was: a stop in the same decision keeps the timer, a failed effect arms none.
     if (!ticket) return;
     for (const t of decision.timers) {
-      store.putTimer({ key: `${ticket.ticketId}:${t.job}`, projectId: project.id, ticketId: ticket.ticketId, job: t.job, fireAt: clock.now() + t.ms });
+      await store.putTimer({ key: `${ticket.ticketId}:${t.job}`, projectId: project.id, ticketId: ticket.ticketId, job: t.job, fireAt: clock.now() + t.ms });
     }
   }
 
   private async failTicket(project: ProjectRuntime, ticketId: string, reason: string): Promise<void> {
-    const found = this.d.store.getTicket(project.id, ticketId);
+    const found = await this.d.store.getTicket(project.id, ticketId);
     if (!found) return;
-    const t = this.apply(found, { type: 'ticket.blocked', reason });
+    const t = await this.apply(found, { type: 'ticket.blocked', reason });
     try {
       const session = await this.sessionFor(t);
       await this.d.tracker.activity(session, { type: 'error', body: reason });
@@ -327,10 +327,10 @@ export class Orchestrator {
   }
 
   private async settle(project: ProjectRuntime, ticketId: string): Promise<void> {
-    const t = this.ticket(project.id, ticketId);
+    const t = await this.ticket(project.id, ticketId);
     if (!t.activeRunId && !t.verifyingRunId && t.pendingJob) {
       const pending = t.pendingJob;
-      this.apply(t, { type: 'pending.cleared' });
+      await this.apply(t, { type: 'pending.cleared' });
       await this.startRun(project, ticketId, pending);
     }
     await this.drain('dev');
@@ -339,10 +339,10 @@ export class Orchestrator {
 
   private async drain(queue: QueueName): Promise<void> {
     if (this.stopping) return;
-    const n = this.d.store.listQueue().filter((q) => q.queue === queue).length;
+    const n = (await this.d.store.listQueue()).filter((q) => q.queue === queue).length;
     for (let i = 0; i < n; i++) {
-      if (this.isPaused() || this.overBudget() || !this.d.scheduler.hasFree(queue)) return;
-      const item = this.d.scheduler.next(queue);
+      if ((await this.isPaused()) || (await this.overBudget()) || !this.d.scheduler.hasFree(queue)) return;
+      const item = await this.d.scheduler.next(queue);
       if (!item) return;
       await this.startRun(this.project(item.projectId), item.ticketId, item);
     }
@@ -351,7 +351,7 @@ export class Orchestrator {
   private async exec(project: ProjectRuntime, ticketId: string | undefined, c: Effect): Promise<void> {
     const { store, tracker, clock } = this.d;
     if (c.kind === 'set_paused') {
-      store.setMeta('paused', c.paused ? '1' : '0');
+      await store.setMeta('paused', c.paused ? '1' : '0');
       if (!c.paused) {
         await this.drain('dev');
         await this.drain('questions');
@@ -359,25 +359,25 @@ export class Orchestrator {
       return;
     }
     if (!ticketId) return;
-    const t = this.ticket(project.id, ticketId);
+    const t = await this.ticket(project.id, ticketId);
     switch (c.kind) {
       case 'start_run':
         return this.startRun(project, ticketId, c);
       case 'stop_run': {
         if (c.linearSessionId) {
-          for (const r of store.runsByStatus('running')) {
+          for (const r of await store.runsByStatus('running')) {
             if (r.projectId === project.id && r.ticketId === ticketId && r.linearSessionId === c.linearSessionId) this.handles.get(r.id)?.stop();
           }
           return;
         }
         // The ticket's dev work only: a question waiting for its slot is still answered.
-        store.removeFromQueue(project.id, ticketId, 'dev');
-        store.deleteTimersFor(project.id, ticketId);
+        await store.removeFromQueue(project.id, ticketId, 'dev');
+        await store.deleteTimersFor(project.id, ticketId);
         if (t.activeRunId) this.handles.get(t.activeRunId)?.stop();
         return;
       }
       case 'run_verify': {
-        const run = store.getRun(c.runId);
+        const run = await store.getRun(c.runId);
         const job = project.workflow.jobs[c.job];
         if (!run || !job) return;
         this.track(
@@ -395,19 +395,19 @@ export class Orchestrator {
       case 'move':
         return this.move(project, t, c.to);
       case 'labels': {
-        for (const l of c.add) store.putEcho(`label:${ticketId}:${l}`, clock.now() + ECHO_MS);
+        for (const l of c.add) await store.putEcho(`label:${ticketId}:${l}`, clock.now() + ECHO_MS);
         await tracker.setLabels(ticketId, c.add, c.remove);
         return;
       }
       case 'comment':
         return tracker.comment(ticketId, c.body);
       case 'activity': {
-        const fromRun = c.runId ? store.getRun(c.runId)?.linearSessionId : undefined;
+        const fromRun = c.runId ? (await store.getRun(c.runId))?.linearSessionId : undefined;
         const session = c.linearSessionId ?? fromRun ?? (await this.sessionFor(t));
         return tracker.activity(session, { type: c.type, body: c.body });
       }
       case 'post_output': {
-        const run = store.getRun(c.runId);
+        const run = await store.getRun(c.runId);
         if (!run) return;
         const session = run.linearSessionId ?? (await this.sessionFor(t));
         return tracker.activity(session, { type: 'response', body: run.lastText.trim() || 'Terminé.' });
@@ -417,7 +417,7 @@ export class Orchestrator {
         return;
       case 'cleanup':
         await this.d.workspaces.cleanup(project.id, project.repoPath, ticketId);
-        this.apply(this.ticket(project.id, ticketId), { type: 'workspace.released' });
+        await this.apply(await this.ticket(project.id, ticketId), { type: 'workspace.released' });
         return;
     }
   }
@@ -425,21 +425,21 @@ export class Orchestrator {
   private async sessionFor(t: TicketState): Promise<string> {
     if (t.linearSessionId) return t.linearSessionId;
     const s = await this.d.tracker.ensureSession(t.ticketId);
-    this.apply(this.ticket(t.projectId, t.ticketId), { type: 'session.linked', linearSessionId: s });
+    await this.apply(await this.ticket(t.projectId, t.ticketId), { type: 'session.linked', linearSessionId: s });
     return s;
   }
 
   private async move(project: ProjectRuntime, t: TicketState, to: LogicalState): Promise<void> {
     const stateName = project.workflow.states[to];
-    this.d.store.putEcho(`state:${t.ticketId}:${stateName}`, this.d.clock.now() + ECHO_MS);
+    await this.d.store.putEcho(`state:${t.ticketId}:${stateName}`, this.d.clock.now() + ECHO_MS);
     await this.d.tracker.moveTo(t.ticketId, stateName);
-    this.apply(this.ticket(project.id, t.ticketId), { type: 'status.recorded', to });
+    await this.apply(await this.ticket(project.id, t.ticketId), { type: 'status.recorded', to });
   }
 
   private async startRun(project: ProjectRuntime, ticketId: string, opts: StartOpts): Promise<void> {
     const job = project.workflow.jobs[opts.job];
     if (!job) return this.log('error', `unknown job ${opts.job}`);
-    const t = this.ticket(project.id, ticketId);
+    const t = await this.ticket(project.id, ticketId);
     // As decide refuses it, also for the starts it does not see: the pending job by settle, the queue by drain.
     const refused = refusesDevWork(t, job);
     if (refused === 'undelegated') {
@@ -468,12 +468,12 @@ export class Orchestrator {
       enqueuedAt: this.d.clock.now(),
     };
     if (job.queue === 'dev' && (t.activeRunId || t.verifyingRunId)) {
-      this.apply(t, { type: 'pending.set', job: { job: job.name, input: opts.input, inputText: opts.inputText, resume: opts.resume } });
+      await this.apply(t, { type: 'pending.set', job: { job: job.name, input: opts.input, inputText: opts.inputText, resume: opts.resume } });
       return;
     }
-    if (this.stopping || this.isPaused()) return this.d.scheduler.enqueue(item);
-    if (this.overBudget()) {
-      this.d.scheduler.enqueue(item);
+    if (this.stopping || (await this.isPaused())) return this.d.scheduler.enqueue(item);
+    if (await this.overBudget()) {
+      await this.d.scheduler.enqueue(item);
       await this.noteBudget(project, ticketId);
       return;
     }
@@ -484,15 +484,15 @@ export class Orchestrator {
       await this.launch(project, ticketId, job, opts, slot, key);
     } catch (err) {
       this.d.scheduler.release(key);
-      let fresh = this.ticket(project.id, ticketId);
+      let fresh = await this.ticket(project.id, ticketId);
       const events: InternalEvent[] = [];
       if (fresh.activeRunId) {
-        const r = this.d.store.getRun(fresh.activeRunId);
-        if (r && r.status === 'running' && !this.handles.has(r.id)) this.d.store.putRun({ ...r, status: 'failure', endedAt: this.d.clock.now() });
+        const r = await this.d.store.getRun(fresh.activeRunId);
+        if (r && r.status === 'running' && !this.handles.has(r.id)) await this.d.store.putRun({ ...r, status: 'failure', endedAt: this.d.clock.now() });
         if (!this.handles.has(fresh.activeRunId)) events.push({ type: 'run.cleared' });
       }
       const reason = `Erreur au lancement : ${(err as Error).message}`;
-      fresh = this.apply(fresh, ...events, { type: 'ticket.blocked', reason });
+      fresh = await this.apply(fresh, ...events, { type: 'ticket.blocked', reason });
       const session = opts.linearSessionId ?? (await this.sessionFor(fresh));
       await this.d.tracker.activity(session, { type: 'error', body: reason });
     }
@@ -501,8 +501,8 @@ export class Orchestrator {
   private async noteBudget(project: ProjectRuntime, ticketId: string): Promise<void> {
     const day = new Date(this.d.clock.now()).toISOString().slice(0, 10);
     const key = `budget:${day}:${project.id}:${ticketId}`;
-    if (this.d.store.getMeta(key)) return;
-    this.d.store.setMeta(key, '1');
+    if (await this.d.store.getMeta(key)) return;
+    await this.d.store.setMeta(key, '1');
     await this.d.tracker.comment(
       ticketId,
       `Budget journalier de ${PRODUCT_NAME} atteint : ce ticket reste en file jusqu'à demain (ou jusqu'à une hausse du plafond).`,
@@ -513,13 +513,13 @@ export class Orchestrator {
     const { tracker, store, clock, workspaces, forge } = this.d;
     const wf = project.workflow;
     const issue = await tracker.getIssue(ticketId);
-    let t = this.ticket(project.id, ticketId);
+    let t = await this.ticket(project.id, ticketId);
 
     if (job.pickup && !t.claudeSessionId) {
       const failures = await pickupFailures(wf.tracker.pickup.checks, issue, project.repoPath, workspaces);
       if (failures.length) {
         this.d.scheduler.release(key);
-        t = this.apply(t, { type: 'ticket.blocked', reason: failures.join(' ') });
+        t = await this.apply(t, { type: 'ticket.blocked', reason: failures.join(' ') });
         const session = await this.sessionFor(t);
         await tracker.activity(session, {
           type: 'elicitation',
@@ -541,13 +541,13 @@ export class Orchestrator {
       setup: wf.workspace.setup,
       runId,
     });
-    t = this.ticket(project.id, ticketId);
-    if (job.queue === 'dev') t = this.apply(t, { type: 'workspace.prepared', path: ws.path, port: ws.port, branch: ws.branch });
+    t = await this.ticket(project.id, ticketId);
+    if (job.queue === 'dev') t = await this.apply(t, { type: 'workspace.prepared', path: ws.path, port: ws.port, branch: ws.branch });
     if (job.onStart.move && t.logical !== job.onStart.move) await this.move(project, t, job.onStart.move);
-    t = this.ticket(project.id, ticketId);
+    t = await this.ticket(project.id, ticketId);
 
     const linearSessionId = opts.linearSessionId ?? (await this.sessionFor(t));
-    t = this.ticket(project.id, ticketId);
+    t = await this.ticket(project.id, ticketId);
 
     const wantsResume = opts.resume ?? job.session === 'resume';
     const resume = wantsResume && !!t.claudeSessionId;
@@ -592,8 +592,8 @@ export class Orchestrator {
       token: this.newId(),
       cwd: ws.path,
     };
-    store.putRun(run);
-    this.apply(t, { type: 'run.started', runId, job: job.name, queue: job.queue, claudeSessionId, feedbackConsumed: kind === 'feedback' });
+    await store.putRun(run);
+    await this.apply(t, { type: 'run.started', runId, job: job.name, queue: job.queue, claudeSessionId, feedbackConsumed: kind === 'feedback' });
     if (this.d.beforeRun) await this.d.beforeRun(run).catch((err: Error) => this.log('warn', `beforeRun: ${err.message}`));
 
     const handle = this.d.runner.start({
@@ -631,9 +631,9 @@ export class Orchestrator {
       result = await handle.done;
       await relay.flush();
       this.handles.delete(run.id);
-      const rec = store.getRun(run.id) ?? run;
+      const rec = (await store.getRun(run.id)) ?? run;
       const interrupted = this.stopping && result.outcome === 'stopped';
-      store.putRun({
+      await store.putRun({
         ...rec,
         status: interrupted ? 'interrupted' : result.outcome,
         endedAt: clock.now(),
@@ -654,8 +654,8 @@ export class Orchestrator {
       }
       this.handles.delete(run.id);
       try {
-        const rec = store.getRun(run.id) ?? run;
-        store.putRun({ ...rec, status: 'failure', endedAt: clock.now(), lastText: message });
+        const rec = (await store.getRun(run.id)) ?? run;
+        await store.putRun({ ...rec, status: 'failure', endedAt: clock.now(), lastText: message });
       } catch (e) {
         this.log('error', `could not record failure of run ${run.id}: ${(e as Error).message}`);
       }

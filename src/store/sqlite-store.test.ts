@@ -16,62 +16,62 @@ function q(patch: Partial<QueueItem>): QueueItem {
 }
 
 describe('SqliteStore', () => {
-  it('round-trips tickets', () => {
+  it('round-trips tickets', async () => {
     const s = store();
     const t = { ...newTicketState('p', 'REL-1', 'T', 'todo', 1), pendingFeedback: [{ author: 'a', body: 'b', at: 2, source: 'session' as const }] };
-    s.putTicket(t);
-    expect(s.getTicket('p', 'REL-1')).toEqual(t);
-    expect(s.listTickets()).toHaveLength(1);
+    await s.putTicket(t);
+    expect(await s.getTicket('p', 'REL-1')).toEqual(t);
+    expect(await s.listTickets()).toHaveLength(1);
   });
 
-  it('dedupes events by id and lists recent ones', () => {
+  it('dedupes events by id and lists recent ones', async () => {
     const s = store();
     const e = { id: 'e1', type: 'control.pause', at: 5, projectId: 'p', payload: {} } as FactoryEvent;
-    expect(s.recordEvent(e)).toBe(true);
-    expect(s.recordEvent(e)).toBe(false);
-    expect(s.recentEvents(10)).toEqual([e]);
+    expect(await s.recordEvent(e)).toBe(true);
+    expect(await s.recordEvent(e)).toBe(false);
+    expect(await s.recentEvents(10)).toEqual([e]);
   });
 
-  it('stores runs and finds them by token and status', () => {
+  it('stores runs and finds them by token and status', async () => {
     const s = store();
-    s.putRun(run());
-    s.putRun(run({ id: 'r2', token: 't2', status: 'success', costUsd: 1.5, startedAt: 200 }));
-    expect(s.findRunByToken('t2')!.id).toBe('r2');
-    expect(s.runsByStatus('running').map((r) => r.id)).toEqual(['r1']);
-    expect(s.costSince(150)).toBe(1.5);
+    await s.putRun(run());
+    await s.putRun(run({ id: 'r2', token: 't2', status: 'success', costUsd: 1.5, startedAt: 200 }));
+    expect((await s.findRunByToken('t2'))!.id).toBe('r2');
+    expect((await s.runsByStatus('running')).map((r) => r.id)).toEqual(['r1']);
+    expect(await s.costSince(150)).toBe(1.5);
   });
 
-  it('fires due timers', () => {
+  it('fires due timers', async () => {
     const s = store();
-    s.putTimer({ key: 'REL-1:dev-feedback', projectId: 'p', ticketId: 'REL-1', job: 'dev-feedback', fireAt: 500 });
-    expect(s.dueTimers(499)).toEqual([]);
-    expect(s.dueTimers(500)).toHaveLength(1);
-    s.deleteTimer('REL-1:dev-feedback');
-    expect(s.dueTimers(1000)).toEqual([]);
-    s.putTimer({ key: 'REL-2:x', projectId: 'p', ticketId: 'REL-2', job: 'x', fireAt: 9e12 });
-    s.deleteTimersFor('p', 'REL-2');
-    expect(s.dueTimers(Number.MAX_SAFE_INTEGER)).toEqual([]);
+    await s.putTimer({ key: 'REL-1:dev-feedback', projectId: 'p', ticketId: 'REL-1', job: 'dev-feedback', fireAt: 500 });
+    expect(await s.dueTimers(499)).toEqual([]);
+    expect(await s.dueTimers(500)).toHaveLength(1);
+    await s.deleteTimer('REL-1:dev-feedback');
+    expect(await s.dueTimers(1000)).toEqual([]);
+    await s.putTimer({ key: 'REL-2:x', projectId: 'p', ticketId: 'REL-2', job: 'x', fireAt: 9e12 });
+    await s.deleteTimersFor('p', 'REL-2');
+    expect(await s.dueTimers(Number.MAX_SAFE_INTEGER)).toEqual([]);
   });
 
-  it('orders the queue by priority then age, dedupes by ticket+job', () => {
+  it('orders the queue by priority then age, dedupes by ticket+job', async () => {
     const s = store();
-    s.enqueue(q({ ticketId: 'A', priority: 0, enqueuedAt: 1 }));
-    s.enqueue(q({ ticketId: 'B', priority: 3, enqueuedAt: 2 }));
-    s.enqueue(q({ ticketId: 'C', priority: 1, enqueuedAt: 3 }));
-    s.enqueue(q({ ticketId: 'B', priority: 3, enqueuedAt: 9 }));
-    expect(s.listQueue()).toHaveLength(3);
-    expect(s.dequeue('dev')!.ticketId).toBe('C');
-    expect(s.dequeue('dev')!.ticketId).toBe('B');
-    expect(s.dequeue('dev')!.ticketId).toBe('A');
-    expect(s.dequeue('dev')).toBeUndefined();
+    await s.enqueue(q({ ticketId: 'A', priority: 0, enqueuedAt: 1 }));
+    await s.enqueue(q({ ticketId: 'B', priority: 3, enqueuedAt: 2 }));
+    await s.enqueue(q({ ticketId: 'C', priority: 1, enqueuedAt: 3 }));
+    await s.enqueue(q({ ticketId: 'B', priority: 3, enqueuedAt: 9 }));
+    expect(await s.listQueue()).toHaveLength(3);
+    expect((await s.dequeue('dev'))!.ticketId).toBe('C');
+    expect((await s.dequeue('dev'))!.ticketId).toBe('B');
+    expect((await s.dequeue('dev'))!.ticketId).toBe('A');
+    expect(await s.dequeue('dev')).toBeUndefined();
   });
 
-  it('expires echoes and keeps meta', () => {
+  it('expires echoes and keeps meta', async () => {
     const s = store();
-    s.putEcho('state:REL-1:Done', 100);
-    expect(s.isEcho('state:REL-1:Done', 99)).toBe(true);
-    expect(s.isEcho('state:REL-1:Done', 101)).toBe(false);
-    s.setMeta('paused', '1');
-    expect(s.getMeta('paused')).toBe('1');
+    await s.putEcho('state:REL-1:Done', 100);
+    expect(await s.isEcho('state:REL-1:Done', 99)).toBe(true);
+    expect(await s.isEcho('state:REL-1:Done', 101)).toBe(false);
+    await s.setMeta('paused', '1');
+    expect(await s.getMeta('paused')).toBe('1');
   });
 });

@@ -39,11 +39,11 @@ export class Scheduler {
     return this.inUse(queue) < this.capacity[queue];
   }
 
-  enqueue(item: QueueItem): void {
-    this.store.enqueue(item);
+  async enqueue(item: QueueItem): Promise<void> {
+    await this.store.enqueue(item);
   }
 
-  next(queue: QueueName): QueueItem | undefined {
+  next(queue: QueueName): Promise<QueueItem | undefined> {
     return this.store.dequeue(queue);
   }
 }
