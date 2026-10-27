@@ -33,7 +33,7 @@ Chaque garantie d'erreur ou d'effet d'une fiche a son cas. Pour une panne, le su
 
 ## Contrôles négatifs
 
-Un cas qui passe contre tous les sujets ne prouve rien s'il passerait aussi contre un sujet qui viole sa garantie. `test/contracts/negative-controls.test.ts` lance chaque cas d'erreur et d'effet des suites, et « seulement eux » de `listDelegated`, contre des sujets qui violent chacun une garantie exprès : le cas doit y échouer sur une assertion. Ce qu'ils couvrent, par port :
+Un cas qui passe contre tous les sujets ne prouve rien s'il passerait aussi contre un sujet qui viole sa garantie. `test/contracts/negative-controls.test.ts` lance chaque cas d'erreur des suites, les cas d'effet ajoutés par ORC-265 et « seulement eux » de `listDelegated`, contre des sujets qui violent chacun une garantie exprès : le cas doit y échouer sur une assertion. Ce qu'ils couvrent, par port :
 
 | Port | Cas | Sujets fautifs |
 |---|---|---|
@@ -43,7 +43,7 @@ Un cas qui passe contre tous les sujets ne prouve rien s'il passerait aussi cont
 | Tracker | ticket inconnu en lecture et en écriture, statut absent de la team, effets des écritures, `ensureSession`, `listDelegated` | un autre ticket rendu pour un inconnu, chaque écriture (`moveTo`, `setLabels`, `comment`, `ensureSession`) qui accepte un inconnu, un statut absent ignoré ou écrit puis rejeté, un commentaire qui n'écrit rien… |
 | SandboxProvider | `destroy` d'un id inconnu ou déjà détruit | un `destroy` qui rejette un id qu'il n'a plus, ou qu'il n'a jamais créé |
 
-Un cas qui attend une réponse du port (un résultat, un `undefined`, un `destroy` sans effet) la lit par `resolved` (`test/contracts/cases.ts`) : un sujet qui rejette au lieu de répondre y échoue sur une assertion, pas sur sa propre erreur. Ce sont ces contrôles qui l'ont montré (ORC-271) : avant, un sujet qui rejetait (un `done`, un `run`, un `findPr` ou un `destroy`) faisait échouer le cas sur sa propre erreur.
+Un cas d'erreur qui attend une réponse du port (un résultat, un `undefined`, un `destroy` sans effet) la lit par `resolved` (`test/contracts/cases.ts`) : un sujet qui rejette au lieu de répondre y échoue sur une assertion, pas sur sa propre erreur. Ce sont ces contrôles qui l'ont montré (ORC-271) : avant, un sujet qui rejetait (un `done`, un `run`, un `findPr` ou un `destroy`) faisait échouer le cas sur sa propre erreur.
 
 Les suites Tracker, Forge, AgentRuntime, CheckRunner et SandboxProvider déclarent leurs cas par `describeContract` (`test/contracts/cases.ts`). Leur troisième argument, `{ violates: [noms de cas] }`, les met dans ce mode : seuls ces cas tournent, et chacun ne passe que s'il échoue sur une assertion (une autre erreur, un `TypeError` du sujet par exemple, fait échouer le contrôle, de même qu'un sujet qui n'a pas le champ dont le cas a besoin, au lieu de le sauter). Un nom qui ne désigne aucun cas, ou une liste vide, fait échouer le fichier, pour qu'un cas renommé ne laisse pas son contrôle tourner à vide. Un nouveau cas d'erreur ou d'effet arrive avec son contrôle ; la suite Publisher, qui n'en a pas, n'a pas encore cet argument : son premier passe par `describeContract`.
 

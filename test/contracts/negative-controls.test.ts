@@ -314,7 +314,7 @@ describeForgeContract(
   { violates: [NO_PR] },
 );
 
-const EFFECTS ='comment, activity and addExternalUrl write their effect; replaying comment or activity writes it again';
+const EFFECTS = 'comment, activity and addExternalUrl write their effect; replaying comment or activity writes it again';
 
 function trackerThat(Tracker: new () => FakeTracker): () => TrackerSubject {
   return () => {
@@ -464,7 +464,7 @@ describeTrackerContract(
   { violates: [UNKNOWN_STATE] },
 );
 
-const DELEGATED ='listDelegated lists the team issues delegated to the app, and only them';
+const DELEGATED = 'listDelegated lists the team issues delegated to the app, and only them';
 
 describeTrackerContract(
   'a tracker whose listDelegated lists every team',
