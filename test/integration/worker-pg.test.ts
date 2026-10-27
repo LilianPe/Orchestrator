@@ -1,6 +1,7 @@
 import { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { TRUSTED, type FactoryEvent } from '../../src/core/types.js';
+import { newTicketState, TRUSTED, type FactoryEvent } from '../../src/core/types.js';
+import { OutboxExecutor } from '../../src/runtime/outbox.js';
 import { migratePgStore } from '../../src/store/pg/migrate.js';
 import { PgStore } from '../../src/store/pg/pg-store.js';
 import { PG_TABLE_NAMES } from '../../src/store/pg/schema.js';
@@ -60,7 +61,10 @@ describe.skipIf(!PG_URL)('worker on PgStore', () => {
     } else {
       expect((await journal()).map((r) => r.seq)).toEqual([1]);
       expect((await outbox()).map((r) => r.id)).toEqual(['REL-1:1:1', 'REL-1:1:2', 'REL-1:1:3']);
-      expect((await pool.query(`select 1 from inbox where processed_at is null`)).rowCount).toBe(0);
+      // Pending: only the result of each effect done before the kill, written with its row (ORC-150).
+      expect((await pool.query<{ id: string }>(`select id from inbox where processed_at is null`)).rows.map((r) => r.id)).toEqual(
+        done.map((id) => `effect:${id}`),
+      );
     }
 
     const h = createHarness({ store: new PgStore({ pool }), projectYaml: CRASH_WORKFLOW });
@@ -75,6 +79,109 @@ describe.skipIf(!PG_URL)('worker on PgStore', () => {
     expect(h.tracker.calls.filter((c) => c.method === 'comment')).toHaveLength(1);
     expect(h.runner.requests).toHaveLength(1);
     expect((await journal()).filter((r) => r.seq === 1)).toHaveLength(1);
+  });
+
+  it('takes up an effect cut by SIGKILL after it acted once its lease expires, and settles it once (ORC-150, criterion 2)', async () => {
+    const { completed } = crashAfterDecision(db.url, 'acted:1', 300);
+    expect(completed).toEqual([]);
+    const head = async () => (await pool.query<{ status: string; attempts: number }>(`select status, attempts from outbox where id = 'REL-1:1:1'`)).rows[0];
+    expect(await head()).toEqual({ status: 'running', attempts: 1 });
+
+    const h = createHarness({ store: new PgStore({ pool }), projectYaml: CRASH_WORKFLOW, effectLeaseMs: 300 });
+    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+    await h.restart();
+    const open = async () => (await pool.query(`select 1 from outbox where ticket_id = 'REL-1' and status <> 'done'`)).rowCount;
+    for (let i = 0; i < 100 && (await open()) !== 0; i++) {
+      await new Promise((r) => setTimeout(r, 20));
+      await h.orch.drained();
+    }
+    expect(await head()).toEqual({ status: 'done', attempts: 2 });
+    // At least once: the labels are set again by the new claim (idempotency per effect: ORC-162).
+    expect(h.tracker.calls.filter((c) => c.method === 'setLabels')).toHaveLength(1);
+    expect(h.tracker.calls.filter((c) => c.method === 'comment')).toHaveLength(1);
+    expect(h.runner.requests).toHaveLength(1);
+    expect((await pool.query(`select 1 from journal where event_id = 'effect:REL-1:1:1'`)).rowCount).toBe(1);
+    h.orch.stopAll();
+    await h.orch.drained();
+  });
+
+  /** Writes `n` decisions of `effects` comments each per ticket, through the decision transaction. */
+  async function seedEffects(store: PgStore, tickets: string[], effects: number): Promise<void> {
+    for (const t of tickets) {
+      const event: FactoryEvent = { ...TRUSTED, id: `d:${t}`, type: 'ticket.delegated', at: 1, projectId: 'p', ticketId: t, payload: { linearSessionId: `ls-${t}` } };
+      await store.appendInbox(event);
+      await store.decide({
+        event,
+        workflow: { hash: 'h', definition: {} },
+        decide: () => ({
+          ticket: newTicketState('p', t, t, 'todo', 1),
+          effects: Array.from({ length: effects }, (_, k) => ({ kind: 'comment' as const, body: `${t}#${k}` })),
+          timers: [],
+          clearTimers: false,
+        }),
+      });
+    }
+  }
+
+  it('claims with FOR UPDATE SKIP LOCKED: an executor does not wait for a row another one holds (ORC-150, criterion 1)', async () => {
+    const store = new PgStore({ pool });
+    await seedEffects(store, ['REL-1'], 2);
+    const holder = await pool.connect();
+    try {
+      // Another executor is claiming or settling REL-1's head row right now.
+      await holder.query('begin');
+      await holder.query(`select 1 from outbox where id = 'REL-1:1:1' for update`);
+      const started = Date.now();
+      const claim = await Promise.race([store.claimEffect('p', 'REL-1', 60_000), new Promise((r) => setTimeout(() => r('blocked'), 3_000))]);
+      // Not blocked, and not the next row either: the ticket's effects stay in order.
+      expect(claim).toBe('busy');
+      expect(Date.now() - started).toBeLessThan(2_000);
+    } finally {
+      await holder.query('rollback');
+      holder.release();
+    }
+    expect(await store.claimEffect('p', 'REL-1', 60_000)).toMatchObject({ id: 'REL-1:1:1', attempts: 1 });
+  });
+
+  it('never runs the same row in two executors, and keeps each ticket in order (ORC-150, criterion 1)', async () => {
+    const tickets = ['REL-1', 'REL-2', 'REL-3', 'REL-4'];
+    const perTicket = 6;
+    await seedEffects(new PgStore({ pool }), tickets, perTicket);
+    const ran: string[] = [];
+    const executor = () => {
+      const store = new PgStore({ connectionString: db.url, max: 4 });
+      const exec = new OutboxExecutor({
+        store,
+        log: () => {},
+        retryIn: () => {},
+        execute: async (row) => {
+          ran.push(row.id);
+          await new Promise((r) => setTimeout(r, Math.random() * 5));
+        },
+      });
+      const loop = async () => {
+        for (;;) {
+          const due = await store.effectTickets();
+          const open = (await pool.query(`select 1 from outbox where status in ('pending', 'running')`)).rowCount;
+          if (open === 0) return;
+          // Both executors go after the same tickets, in the same order: they race on every row.
+          for (const t of due) await exec.runTicket(t.projectId, t.ticketId);
+          if (due.length === 0) await new Promise((r) => setTimeout(r, 2));
+        }
+      };
+      return { store, loop };
+    };
+    const a = executor();
+    const b = executor();
+    await Promise.all([a.loop(), b.loop()]);
+    expect([...ran].sort()).toEqual(tickets.flatMap((t) => Array.from({ length: perTicket }, (_, k) => `${t}:1:${k + 1}`)).sort());
+    for (const t of tickets) {
+      expect(ran.filter((id) => id.startsWith(`${t}:`))).toEqual(Array.from({ length: perTicket }, (_, k) => `${t}:1:${k + 1}`));
+    }
+    expect((await pool.query(`select 1 from outbox where status <> 'done' or attempts <> 1`)).rowCount).toBe(0);
+    // One result per row in the inbox.
+    expect((await pool.query(`select 1 from inbox where id like 'effect:%'`)).rowCount).toBe(tickets.length * perTicket);
+    await Promise.all([a.store.close(), b.store.close()]);
   });
 
   it('takes the ticket advisory lock before reading anything: a held lock holds that ticket only (criterion 1)', async () => {
@@ -163,15 +270,16 @@ describe.skipIf(!PG_URL)('worker on PgStore', () => {
       await Promise.all([a.h.orch.drained(), b.h.orch.drained()]);
     }
 
-    expect(outcomes.filter((s) => s === 'committed')).toHaveLength(tickets.length * (prompts + 1));
+    // Each event, and the result of its one comment (ORC-150).
+    expect(outcomes.filter((s) => s === 'committed')).toHaveLength(2 * tickets.length * (prompts + 1));
     expect((await pool.query(`select 1 from outbox where status <> 'done'`)).rowCount).toBe(0);
     for (const t of tickets) {
       // A lost update (two decisions on the same projection) or a reordering would show here.
       const ticket = await seed.getTicket('p', t);
       expect(ticket!.pendingFeedback.map((f) => f.body)).toEqual(Array.from({ length: prompts }, (_, k) => `${t}#${k}`));
       const journal = await pool.query<{ event_id: string; seq: number }>(`select event_id, seq from journal where ticket_id = $1 order by seq`, [t]);
-      expect(journal.rows.map((r) => r.event_id)).toEqual(order.get(t));
-      expect(journal.rows.map((r) => r.seq)).toEqual(Array.from({ length: prompts + 1 }, (_, k) => k + 1));
+      expect(journal.rows.map((r) => r.event_id).filter((id) => !id.startsWith('effect:'))).toEqual(order.get(t));
+      expect(journal.rows.map((r) => r.seq)).toEqual(Array.from({ length: 2 * (prompts + 1) }, (_, k) => k + 1));
       const comments = [...a.h.tracker.calls, ...b.h.tracker.calls].filter((c) => c.method === 'comment' && c.args[0] === t);
       expect(comments).toHaveLength(prompts + 1);
     }

@@ -33,7 +33,8 @@ describe('worker: per-ticket lock and decision transaction', () => {
     // Committed before the kill: journal, projection and the three outbox rows, the inbox row processed.
     expect((await h.store.recentEvents(10, 'REL-1')).map((e) => e.type)).toEqual(['ticket.delegated']);
     expect(await h.ticket()).toMatchObject({ delegated: true });
-    expect(await h.store.pendingInbox(10)).toEqual([]);
+    // The result of each effect done before the kill, written with its row (ORC-150).
+    expect((await h.store.pendingInbox(10)).map((e) => e.id)).toEqual(done.map((id) => `effect:${id}`));
     expect((await h.store.listEffects('p', 'REL-1')).map((r) => [r.id, r.effect.kind])).toEqual([
       ['REL-1:1:1', 'labels'],
       ['REL-1:1:2', 'comment'],
@@ -241,7 +242,7 @@ on:
 
       broken = false;
       await h.restart();
-      expect(decided.slice(1)).toEqual(['g1', 'g2']);
+      expect(decided.slice(1).filter((id) => !id.startsWith('effect:'))).toEqual(['g1', 'g2']);
       expect(await h.store.getMeta('paused')).toBe('0');
     });
   });
@@ -281,5 +282,143 @@ on:
     const tickets = h.runner.requests.map((r) => r.cwd.split(/[\\/]/).pop());
     expect(tickets.slice(0, 2)).toEqual(['REL-1', 'REL-2']);
     expect((await h.store.listQueue()).find((q) => q.ticketId === 'REL-2')).toBeUndefined();
+  });
+});
+
+/**
+ * ORC-150: the outbox executors. Each effect is claimed under a lease, retried with a backoff,
+ * dead past its last attempt, and its result comes back through the inbox as `effect:<id>`.
+ */
+describe('outbox executors: lease, backoff, results through the inbox', () => {
+  const journal = async (h: ReturnType<typeof createHarness>) => (await h.store.recentEvents(100, 'REL-1')).reverse();
+  const delegation = (h: ReturnType<typeof createHarness>) =>
+    ({ ...TRUSTED, id: 'd1', type: 'ticket.delegated' as const, at: h.clock.now(), projectId: 'p', ticketId: 'REL-1', payload: { linearSessionId: 'ls-1' } });
+
+  it('writes each effect result to the inbox as effect:<id>, decided by the worker like any event (criteria 4 and 5)', async () => {
+    const h = createHarness({ projectYaml: CRASH_WORKFLOW });
+    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    const rows = await h.store.listEffects('p', 'REL-1');
+    const events = await journal(h);
+    // Every row settled wrote one result, journaled after the event that decided the row.
+    for (const r of rows) {
+      expect(r.status).toBe('done');
+      const result = events.filter((e) => e.id === `effect:${r.id}`);
+      expect(result).toEqual([
+        expect.objectContaining({ type: 'effect.done', payload: { effectId: r.id, kind: r.effect.kind, eventId: r.eventId, attempts: 1 } }),
+      ]);
+      expect(events.findIndex((e) => e.id === `effect:${r.id}`)).toBeGreaterThan(events.findIndex((e) => e.id === r.eventId));
+    }
+    expect(events.slice(0, 4).map((e) => e.id)).toEqual(['t-1', 'effect:REL-1:1:1', 'effect:REL-1:1:2', 'effect:REL-1:1:3']);
+    // The run's result enters as attempt:<id>:finished.
+    expect(events.map((e) => e.id)).toContain('attempt:id-1:finished');
+    expect(await h.store.pendingInbox(10)).toEqual([]);
+  });
+
+  it('retries an effect that fails for a while, after a backoff, and blocks nothing (criterion 3)', async () => {
+    const h = createHarness({ projectYaml: CRASH_WORKFLOW, effectRetry: { attempts: 4, baseMs: 20, capMs: 1_000 } });
+    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+    const comment = h.tracker.comment.bind(h.tracker);
+    const tries: number[] = [];
+    h.tracker.comment = async (id: string, body: string) => {
+      tries.push(Date.now());
+      if (tries.length <= 2) throw new Error('Linear unreachable');
+      return comment(id, body);
+    };
+    await h.orch.accept(delegation(h));
+    await waitFor(async () => (await h.store.listEffects('p', 'REL-1')).filter((r) => r.status === 'done').length >= 3);
+    await h.orch.drained();
+    expect(tries).toHaveLength(3);
+    // 20 ms, then 40 ms: never before the backoff.
+    expect(tries[1]! - tries[0]!).toBeGreaterThanOrEqual(19);
+    expect(tries[2]! - tries[1]!).toBeGreaterThanOrEqual(39);
+    expect((await h.store.listEffects('p', 'REL-1'))[1]).toMatchObject({ id: 'REL-1:1:2', status: 'done', attempts: 3, error: 'Linear unreachable' });
+    expect(await h.ticket()).toMatchObject({ blocked: false });
+    expect(h.runner.requests).toHaveLength(1);
+    expect((await journal(h)).find((e) => e.id === 'effect:REL-1:1:2')).toMatchObject({ type: 'effect.done', payload: { attempts: 3 } });
+  });
+
+  it('lets an effect die past its last attempt: the rest of its decision is skipped and decide blocks the ticket', async () => {
+    const h = createHarness({ projectYaml: CRASH_WORKFLOW, effectRetry: { attempts: 2, baseMs: 5, capMs: 5 } });
+    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+    h.tracker.comment = async () => {
+      throw new Error('Linear down');
+    };
+    await h.orch.accept(delegation(h));
+    await waitFor(async () => (await h.store.getTicket('p', 'REL-1'))?.blocked === true);
+    await h.orch.drained();
+    expect((await h.store.listEffects('p', 'REL-1')).slice(0, 3).map((r) => [r.effect.kind, r.status])).toEqual([
+      ['labels', 'done'],
+      ['comment', 'dead'],
+      ['start_run', 'failed'],
+    ]);
+    expect(h.runner.requests).toHaveLength(0);
+    expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Erreur : Linear down' });
+    expect((await journal(h)).find((e) => e.id === 'effect:REL-1:1:2')).toMatchObject({ type: 'effect.failed', payload: { error: 'Linear down', attempts: 2 } });
+    expect(h.tracker.activities().filter((a) => a.type === 'error').map((a) => ('body' in a ? a.body : ''))).toEqual(['Erreur : Linear down']);
+  });
+
+  it('does not loop when the error notice of a dead effect dies too', async () => {
+    const h = createHarness({ projectYaml: CRASH_WORKFLOW });
+    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+    h.tracker.comment = async () => {
+      throw new Error('Linear down');
+    };
+    h.tracker.activity = async () => {
+      throw new Error('Linear down');
+    };
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    // The comment dies, then its notice: two results, nothing more.
+    expect((await journal(h)).filter((e) => e.type === 'effect.failed')).toHaveLength(2);
+    expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Erreur : Linear down' });
+    expect(await h.store.pendingInbox(10)).toEqual([]);
+  });
+
+  it('takes up an effect cut by SIGKILL after it acted once its lease expires, and runs it again (criterion 2, at least once)', async () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'factory-worker-')), 'factory.db');
+    const { completed } = crashAfterDecision(file, 'acted:1', 300);
+    expect(completed).toEqual([]);
+
+    const h = createHarness({ store: new SqliteStore(file), projectYaml: CRASH_WORKFLOW, effectLeaseMs: 300 });
+    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+    // The labels were set, but the row is still running under the dead process's claim, with no result.
+    expect((await h.store.listEffects('p', 'REL-1'))[0]).toMatchObject({ id: 'REL-1:1:1', status: 'running', attempts: 1 });
+    expect(await h.store.pendingInbox(10)).toEqual([]);
+
+    await h.restart();
+    const settled = async () => (await h.store.listEffects('p', 'REL-1')).slice(0, 3).every((r) => r.status === 'done');
+    for (let i = 0; i < 100 && !(await settled()); i++) {
+      await new Promise((r) => setTimeout(r, 20));
+      await h.orch.drained();
+    }
+    const rows = await h.store.listEffects('p', 'REL-1');
+    expect(rows.slice(0, 3).map((r) => [r.id, r.status, r.attempts])).toEqual([
+      ['REL-1:1:1', 'done', 2],
+      ['REL-1:1:2', 'done', 1],
+      ['REL-1:1:3', 'done', 1],
+    ]);
+    // Run again under its new claim: the labels are set a second time here (idempotency per effect: ORC-162).
+    expect(h.tracker.calls.filter((c) => c.method === 'setLabels')).toHaveLength(1);
+    expect(h.tracker.calls.filter((c) => c.method === 'comment')).toHaveLength(1);
+    expect(h.runner.requests).toHaveLength(1);
+    // One result per row, whatever its number of attempts.
+    expect((await journal(h)).filter((e) => e.id === 'effect:REL-1:1:1')).toHaveLength(1);
+  });
+
+  it('hands a queued start lost in a crash out again once its lease expires', async () => {
+    const h = createHarness({ projectYaml: CRASH_WORKFLOW });
+    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+    await h.store.setMeta('paused', '1');
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    expect((await h.store.listQueue()).map((q) => q.ticketId)).toEqual(['REL-1']);
+    // A daemon takes the item, then dies before the start is recorded.
+    expect(await h.store.claimQueued('dev', 1)).toBeDefined();
+    await new Promise((r) => setTimeout(r, 5));
+    await h.store.setMeta('paused', '0');
+    await h.orch.tick();
+    await h.orch.drained();
+    expect(h.runner.requests).toHaveLength(1);
+    expect(await h.store.listQueue()).toEqual([]);
+    expect(await h.store.claimQueued('dev', 60_000)).toBeUndefined();
   });
 });

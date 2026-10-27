@@ -13,13 +13,18 @@ on:
 
 /**
  * Runs `crash-after-decision.ts` in a child process on `target` (a SQLite file or a Postgres URL),
- * killed before it claims outbox row number `killAt` (0: inside the decision transaction). Returns
- * how it ended and the ids of the rows it completed before dying.
+ * killed before it claims outbox row number `killAt` (0: inside the decision transaction), or with
+ * `acted:<n>`, after row `n` acted and before it is settled, under a lease of `leaseMs`. Returns how
+ * it ended and the ids of the rows it completed before dying.
  */
-export function crashAfterDecision(target: string, killAt: number): { exited: { status: number | null; signal: string | null }; completed: string[] } {
+export function crashAfterDecision(
+  target: string,
+  killAt: number | `acted:${number}`,
+  leaseMs?: number,
+): { exited: { status: number | null; signal: string | null }; completed: string[] } {
   const logFile = join(mkdtempSync(join(tmpdir(), 'factory-decision-')), 'completed.log');
   const root = join(import.meta.dirname, '../..');
-  const child = spawnSync(process.execPath, ['--import', 'tsx', join(root, 'test/helpers/crash-after-decision.ts'), target, String(killAt), logFile], {
+  const child = spawnSync(process.execPath, ['--import', 'tsx', join(root, 'test/helpers/crash-after-decision.ts'), target, String(killAt), logFile, ...(leaseMs === undefined ? [] : [String(leaseMs)])], {
     cwd: root,
     encoding: 'utf8',
     timeout: 60_000,

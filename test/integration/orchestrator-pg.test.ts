@@ -38,7 +38,11 @@ describe.skipIf(!PG_URL)('orchestrator on PgStore', () => {
     expect(await h.ticket()).toMatchObject({ logical: 'human_review', blocked: false, verifyAttempts: 0 });
     expect(await h.store.runsByStatus('success')).toHaveLength(2);
     const journal = await pool.query<{ type: string }>(`select type from journal where ticket_id = 'REL-1' order by seq`);
-    expect(journal.rows.map((r) => r.type)).toEqual(['ticket.delegated', 'run.finished', 'verify.failed', 'run.finished', 'verify.passed']);
+    // The results of the effects (ORC-150) are journaled too: left out here.
+    expect(journal.rows.map((r) => r.type).filter((t) => !t.startsWith('effect.'))).toEqual([
+      'ticket.delegated', 'run.finished', 'verify.failed', 'run.finished', 'verify.passed',
+    ]);
+    expect(journal.rows.map((r) => r.type)).not.toContain('effect.failed');
     const projection = await pool.query<{ status: string; active_attempts: number }>(`select status, active_attempts from tickets where id = 'REL-1'`);
     expect(projection.rows[0]).toEqual({ status: 'human_review', active_attempts: 0 });
   });
