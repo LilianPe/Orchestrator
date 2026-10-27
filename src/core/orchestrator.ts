@@ -234,11 +234,14 @@ export class Orchestrator {
       await Promise.all(this.writes);
       // After stopAll(), only what is already handed out (or accepted here) is finished: a daemon
       // shutting down does not take up the rows another process left.
-      const handed = this.stopping || !this.dispatchOpen ? 0 : await this.worker.kick();
+      const kick = () => (this.stopping || !this.dispatchOpen ? Promise.resolve(0) : this.worker.kick());
+      const handed = await kick();
       await this.worker.settle();
       const pending = this.pendingBackground();
       await Promise.all(pending);
-      if (handed === 0 && pending.length === 0 && this.writes.size === 0 && this.pendingBackground().length === 0) return;
+      // What settled may have written rows (a run's result once its pump ends): read the inbox again.
+      const more = await kick();
+      if (handed === 0 && more === 0 && pending.length === 0 && this.writes.size === 0 && this.pendingBackground().length === 0) return;
     }
   }
 
