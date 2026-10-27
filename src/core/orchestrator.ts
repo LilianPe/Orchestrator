@@ -70,7 +70,8 @@ interface StartOpts {
   resume?: boolean;
 }
 
-const SETTLES_RUN = new Set<EventType>(['run.finished', 'verify.passed', 'verify.failed']);
+/** Events after which `handle` settles the ticket: the pending job starts once nothing is in flight. */
+export const SETTLES_RUN: ReadonlySet<EventType> = new Set<EventType>(['run.finished', 'verify.passed', 'verify.failed']);
 const ECHO_MS = 60_000;
 
 export function logicalFromName(states: Record<LogicalState, string>, name: string): LogicalState | undefined {

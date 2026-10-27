@@ -7,6 +7,7 @@ Relais se teste sans vrais services : un **harnais** monte l'orchestrateur sur u
 - Bout en bout : `test/e2e/`.
 - Intégration : `test/integration/` (Postgres).
 - Isolation : `test/isolation/` (moteur de conteneurs rootless).
+- Propriétés de `decide` : `test/properties/` (fast-check).
 
 Pendant le travail, lancez seulement les tests des fichiers touchés : `npx vitest run test/scenarios/harness.test.ts`.
 
@@ -20,7 +21,7 @@ Pendant le travail, lancez seulement les tests des fichiers touchés : `npx vite
 | `integration` | `npm run test:integration` | `test/integration/`, avec `DATABASE_URL` (Postgres) |
 | `isolation` | `npm run test:isolation` | `test/isolation/`, avec `FACTORY_ISOLATION=1` et un moteur rootless |
 
-`npm run test:all` lance les trois. Sans `DATABASE_URL`, les tests d'intégration se sautent ; sans `FACTORY_ISOLATION=1`, les tests d'isolation se sautent. La CI (`.github/workflows/ci.yml`) lance le projet `unit` avec typecheck et lint, puis Postgres en service pour `integration` et Podman rootless pour `isolation`. Aucun secret n'est défini dans les workflows.
+`npm run test:all` lance les trois. Sans `DATABASE_URL`, les tests d'intégration se sautent ; sans `FACTORY_ISOLATION=1`, les tests d'isolation se sautent. La CI (`.github/workflows/ci.yml`) lance le projet `unit` avec typecheck et lint, les tests de propriétés sur 10 000 séquences (job `properties`), puis Postgres en service pour `integration` et Podman rootless pour `isolation`. Aucun secret n'est défini dans les workflows.
 
 ## Les faux adaptateurs
 
@@ -99,6 +100,26 @@ expect(h.ticket()).toMatchObject({ blocked: true });
 Un test de propriétés lit ses bornes dans `preset.bounds` au lieu de les recopier. `verifyAttempts` vaut au moins 1 : le schéma de `workflow.yml` accepte 0, que le moteur traite comme 1, et le préréglage refuse cette ambiguïté. Le préréglage se superpose au pack standard ; `projectYaml` et `preset` ne se combinent pas.
 
 Le préréglage de production, `factory/default`, et ses autres compteurs (review, CI rouge) arrivent avec ORC-187. Le scénario d'exemple qui utilise chaque nouveau faux et le préréglage est `test/scenarios/harness.test.ts`.
+
+## Les tests de propriétés de `decide`
+
+`test/properties/decide.prop.test.ts` vérifie les invariants de `decide` tranchés par [ORC-138](decisions/ORC-138.md) (I1 à I12) sur des séquences d'événements générées par fast-check (ORC-173) :
+
+- `events.ts` génère la boîte de réception d'un ticket : des événements de `src/core/types.ts` (un générateur par type, un type ajouté sans générateur ne compile pas) mêlés aux faits que l'orchestrateur enregistre autour de ses effets (`run.started`, `pending.set`…), avec des fragments qui enchaînent un run, sa vérification, la boucle `verify`, la CI rouge, une réponse suivie de son debounce. La séquence est ensuite **désordonnée** (échanges voisins, un mélange complet une fois sur huit) puis reçoit des **doublons** de même id. Les événements isolés et les messages humains venus de l'extérieur sont non fiables une fois sur cinq ; les fragments enchaînés (tentative, boucle `verify`, CI rouge, rapports de la forge) restent fiables, tout comme les événements que l'usine produit elle-même (`run.finished`, `verify.*`, `debounce.fired`, `control.*`), que leurs producteurs marquent fiables.
+- `fold.ts` replie la séquence par le pas d'ORC-138, comme `Orchestrator.handle` : un id déjà vu est ignoré, un événement pour un ticket non suivi est journalisé sans décision, sinon `decide` puis `reduce`. Il reprend aussi ce qui, autour de `decide`, change les runs qui démarrent : les faits de `move` et `cleanup`, le job mis en attente (`pending.set`) quand un démarrage dev tombe pendant un run ou une vérification, et le démarrage de ce job par `settle` après un résultat de run. Le lancement lui-même (`run.started`), les minuteurs et la file du scheduler ne sont pas modélisés : le générateur insère leurs faits. Chaque état, événement, décision et le workflow sont gelés en profondeur : un `decide` ou un `reduce` qui écrit dans son entrée échoue.
+
+Une propriété par invariant, sur ce que `decide` porte aujourd'hui. La part d'un invariant dont le mécanisme n'existe pas encore (SHA, portes, gel, risque, `humanInbox`…) est un `it.todo` qui nomme le ticket qui l'apporte. Un invariant que le code viole aujourd'hui est un `it.fails` par contre-exemple minimal, qui rejoue ce contre-exemple : il échoue à chaque exécution, quelle que soit la graine, et seulement sur l'assertion attendue (une autre erreur le fait passer au rouge) ; le jour où le code est corrigé, il passe au rouge, pour qu'on le change en `it` qui lance la propriété avec le contre-exemple dans `examples`. I10 dédoublonne par `Store.recordEvent` (SQLite en mémoire), comme l'orchestrateur. « Projection = rejeu » est vérifiée en mémoire, sur le journal du repli : elle montre que chaque changement appliqué est journalisé et que `reduce` ne lit rien d'autre ; le rejeu d'un journal durable, enregistré hors du repli, attend le harnais Postgres d'ORC-228.
+
+| Variable | Défaut | Rôle |
+|---|---|---|
+| `NUM_RUNS` | 200 | séquences par propriété ; la CI en lance 10 000 |
+| `PROP_SEED` | aléatoire | rejoue la graine qu'affiche fast-check en cas d'échec |
+
+```bash
+npm test                                   # propriétés comprises, 200 séquences
+NUM_RUNS=10000 npm run test:properties     # comme le job `properties` de la CI
+PROP_SEED=149083903 npm run test:properties
+```
 
 ## Les sept scénarios obligatoires
 

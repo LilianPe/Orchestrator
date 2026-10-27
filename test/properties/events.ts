@@ -1,0 +1,290 @@
+import fc from 'fast-check';
+import {
+  LOGICAL_STATES,
+  TRUSTED,
+  type EventPayloads,
+  type EventType,
+  type FactoryEvent,
+  type IssueSnapshot,
+  type PrPayload,
+  type ShellEvent,
+} from '../../src/core/types.js';
+
+/**
+ * Generator of event sequences for the property tests of `decide` (ORC-173).
+ *
+ * A sequence is one ticket's inbox as the orchestrator would see it: external events (`FactoryEvent`,
+ * deduplicated by id) interleaved with the facts the orchestrator records around the effects it carries
+ * out (`ShellEvent`: a run started, a pending job set…). Values are drawn from small pools so that run
+ * ids, sessions and jobs collide often: a `run.finished` meets the active run, a stale one, or none.
+ * Once built, the sequence is reordered (adjacent swaps, sometimes a full shuffle) and then gets
+ * duplicates: copies of external events, same id, inserted anywhere after their original.
+ */
+
+export const PROJECT = 'p';
+export const TICKET = 'REL-1';
+export const DEV_SESSION = 's-dev';
+const RUN_IDS = ['r1', 'r2', 'r3'] as const;
+/** Every job of the standard pack, plus one the workflow does not know. */
+const JOBS = ['dev', 'dev-feedback', 'fix-ci', 'review', 'ask', 'learn', 'remember', 'unknown'] as const;
+const DEV_JOBS = ['dev', 'dev-feedback', 'fix-ci', 'review'] as const;
+export const VERIFY_FAILURES = [{ command: 'fake:check', exitCode: 1, output: 'rouge' }];
+
+export type Entry = { kind: 'external'; event: FactoryEvent } | { kind: 'shell'; event: ShellEvent };
+
+/** An external event before it gets its id, time and taint. */
+type Draft = { [K in EventType]: { type: K; payload: EventPayloads[K] } }[EventType];
+type DraftEntry = { kind: 'external'; draft: Draft; untrusted: boolean } | { kind: 'shell'; event: ShellEvent };
+
+const session = fc.constantFrom(DEV_SESSION, 's-q1', 's-q2');
+const author = fc.constantFrom('lilian', 'armand');
+const body = fc.constantFrom('ok', 'boutons mal alignés', 'et pour mobile ?');
+const runId = fc.constantFrom(...RUN_IDS);
+const job = fc.constantFrom(...JOBS);
+const logical = fc.constantFrom(...LOGICAL_STATES);
+const issue: fc.Arbitrary<IssueSnapshot> = fc.record({ title: fc.constant('Titre'), logical, priority: fc.integer({ min: 0, max: 2 }) });
+const pr: fc.Arbitrary<PrPayload> = fc.integer({ min: 1, max: 2 }).map((n) => ({ number: n, url: `https://forge/pr/${n}`, branch: 'agent/rel-1' }));
+const empty = fc.constant({} as Record<string, never>);
+
+/** One arbitrary per event type: adding an event type to `EventPayloads` fails to compile until it is generated here. */
+const PAYLOADS: { [K in EventType]: fc.Arbitrary<EventPayloads[K]> } = {
+  'ticket.delegated': fc.record({ linearSessionId: fc.option(session, { nil: undefined }), issue }),
+  'ticket.undelegated': empty,
+  'session.mentioned': fc.record({ linearSessionId: session, body, author, issue }),
+  'session.prompted': fc.record({ linearSessionId: session, body, author, issue }),
+  'session.stopped': fc.record({ linearSessionId: fc.option(session, { nil: undefined }) }),
+  'status.changed': fc.record({ from: fc.option(logical, { nil: null }), to: fc.option(logical, { nil: null }) }),
+  'label.changed': fc.record({ label: fc.constantFrom('agent:reprendre', 'agent:stop', 'bug'), change: fc.constantFrom('added' as const, 'removed' as const) }),
+  'push.human': fc.record({ branch: fc.constant('agent/rel-1'), sha: fc.constantFrom('aaa', 'bbb'), author }),
+  command: fc.record({ name: fc.constantFrom('retiens', 'fais-le', 'autre'), body, linearSessionId: session, author, issue }),
+  'pr.opened': pr,
+  'pr.checks_passed': pr,
+  'pr.checks_failed': pr.map((p) => ({ ...p, failures: ['test'] })),
+  'pr.merged': pr,
+  'pr.closed': pr,
+  'run.finished': fc.record({
+    runId,
+    job,
+    outcome: fc.constantFrom('success' as const, 'failure' as const, 'stopped' as const, 'limit' as const),
+    costUsd: fc.constantFrom(0, 0.5),
+    turns: fc.constant(3),
+    lastText: fc.constant('fini'),
+  }),
+  'verify.passed': fc.record({ runId, job }),
+  'verify.failed': fc.record({ runId, job, failures: fc.constant(VERIFY_FAILURES) }),
+  'debounce.fired': fc.record({ job }),
+  'control.pause': empty,
+  'control.resume': empty,
+  'control.stop': empty,
+};
+
+const EVENT_TYPES = Object.keys(PAYLOADS) as EventType[];
+
+function draftOf<K extends EventType>(type: K): fc.Arbitrary<Draft> {
+  return (PAYLOADS[type] as fc.Arbitrary<EventPayloads[K]>).map((payload) => ({ type, payload }) as Draft);
+}
+
+const anyDraft: fc.Arbitrary<Draft> = fc.oneof(...EVENT_TYPES.map((t) => draftOf(t)));
+
+/**
+ * Events the factory produces itself (its runner, its checks, its timers, its UI): always trusted, as
+ * their producers stamp them `TRUSTED`. Only events that carry content from outside can be untrusted.
+ */
+const FACTORY_PRODUCED: ReadonlySet<EventType> = new Set<EventType>([
+  'run.finished', 'verify.passed', 'verify.failed', 'debounce.fired', 'control.pause', 'control.resume', 'control.stop',
+]);
+
+/**
+ * One time in five untrusted, when the event can be: enough to exercise the taint rules (I12) without
+ * drowning the rest. Only single events and human messages draw their taint here; the scripted
+ * fragments below (attempt, verify loop, red CI, forge reports) stay trusted.
+ */
+const external = (draft: fc.Arbitrary<Draft>): fc.Arbitrary<DraftEntry> =>
+  fc.record({ draft, roll: fc.integer({ min: 0, max: 4 }) }).map(
+    ({ draft: d, roll }): DraftEntry => ({ kind: 'external', draft: d, untrusted: roll === 0 && !FACTORY_PRODUCED.has(d.type) }),
+  );
+
+const shell: fc.Arbitrary<ShellEvent> = fc.oneof(
+  fc.record({
+    type: fc.constant('run.started' as const),
+    runId,
+    job: fc.constantFrom(...DEV_JOBS, 'ask'),
+    feedbackConsumed: fc.boolean(),
+  }).map((e): ShellEvent => ({ ...e, queue: e.job === 'ask' ? 'questions' : 'dev', claudeSessionId: 'claude-1' })),
+  fc.constant<ShellEvent>({ type: 'run.cleared' }),
+  fc.constant<ShellEvent>({ type: 'run.interrupted', reason: 'redémarrage' }),
+  logical.map((to): ShellEvent => ({ type: 'status.recorded', to })),
+  fc.constantFrom(...DEV_JOBS).map((j): ShellEvent => ({ type: 'pending.set', job: { job: j } })),
+  fc.constant<ShellEvent>({ type: 'pending.cleared' }),
+  fc.constant<ShellEvent>({ type: 'session.linked', linearSessionId: DEV_SESSION }),
+);
+
+/**
+ * One dev attempt as the orchestrator drives it: the run starts, finishes, and its verification
+ * reports. Repeated, it walks the verify loop up to its bound (I5); with another run id in between,
+ * it leaves stale results behind (I11).
+ */
+const attempt: fc.Arbitrary<DraftEntry[]> = fc
+  .record({
+    runId,
+    job: fc.constantFrom(...DEV_JOBS),
+    outcome: fc.constantFrom('success' as const, 'success' as const, 'failure' as const, 'limit' as const),
+    verdict: fc.constantFrom('verify.failed' as const, 'verify.failed' as const, 'verify.passed' as const),
+  })
+  .map(({ runId: id, job: j, outcome, verdict }): DraftEntry[] => {
+    const finished: Draft = { type: 'run.finished', payload: { runId: id, job: j, outcome, costUsd: 0.5, turns: 3, lastText: 'fini' } };
+    const report: Draft =
+      verdict === 'verify.passed'
+        ? { type: 'verify.passed', payload: { runId: id, job: j } }
+        : { type: 'verify.failed', payload: { runId: id, job: j, failures: VERIFY_FAILURES } };
+    return [
+      { kind: 'shell', event: { type: 'run.started', runId: id, job: j, queue: 'dev', claudeSessionId: 'claude-1', feedbackConsumed: j !== 'dev' } },
+      { kind: 'external', draft: finished, untrusted: false },
+      { kind: 'external', draft: report, untrusted: false },
+    ];
+  });
+
+/**
+ * The verify loop walked to its bound or past it: successful runs whose checks fail, each resumed run
+ * under the next run id, sometimes ending green. The single attempts above rarely chain that far.
+ */
+const verifyLoop: fc.Arbitrary<DraftEntry[]> = fc
+  .record({ job: fc.constantFrom('dev' as const, 'dev-feedback' as const, 'fix-ci' as const), rounds: fc.integer({ min: 1, max: 4 }), green: fc.boolean() })
+  .map(({ job: j, rounds, green }) =>
+    Array.from({ length: rounds }, (_, i): DraftEntry[] => {
+      const id = RUN_IDS[i % RUN_IDS.length]!;
+      const last = i === rounds - 1;
+      const report: Draft =
+        last && green
+          ? { type: 'verify.passed', payload: { runId: id, job: j } }
+          : { type: 'verify.failed', payload: { runId: id, job: j, failures: VERIFY_FAILURES } };
+      return [
+        { kind: 'shell', event: { type: 'run.started', runId: id, job: j, queue: 'dev', claudeSessionId: 'claude-1', feedbackConsumed: i > 0 } },
+        { kind: 'external', draft: { type: 'run.finished', payload: { runId: id, job: j, outcome: 'success', costUsd: 0.5, turns: 3, lastText: 'fini' } }, untrusted: false },
+        { kind: 'external', draft: report, untrusted: false },
+      ];
+    }).flat(),
+  );
+
+/** The PR goes to review, then the forge reports red CI several times in a row: the red-CI loop of I5. */
+const redCi: fc.Arbitrary<DraftEntry[]> = fc
+  .record({ to: fc.constantFrom('human_review' as const, 'ai_review' as const), reports: fc.integer({ min: 1, max: 5 }), pr })
+  .map(({ to, reports, pr: p }): DraftEntry[] => [
+    { kind: 'external', draft: { type: 'status.changed', payload: { from: 'dev', to } }, untrusted: false },
+    ...Array.from({ length: reports }, (): DraftEntry => ({ kind: 'external', draft: { type: 'pr.checks_failed', payload: { ...p, failures: ['test'] } }, untrusted: false })),
+  ]);
+
+/** A reply in the dev session, then the debounce it armed fires: feedback relayed by the factory's own timer (I6, I12). */
+const devReply: fc.Arbitrary<Draft> = PAYLOADS['session.prompted'].map((p) => ({ type: 'session.prompted', payload: { ...p, linearSessionId: DEV_SESSION } }));
+const debouncedReply: fc.Arbitrary<DraftEntry[]> = external(devReply).map((reply): DraftEntry[] => [
+  reply,
+  { kind: 'external', draft: { type: 'debounce.fired', payload: { job: 'dev-feedback' } }, untrusted: false },
+]);
+
+/** A human talks to the factory: in the dev session, in a question session, through a label. */
+const human: fc.Arbitrary<Draft> = fc.oneof(draftOf('session.prompted'), draftOf('session.mentioned'), draftOf('command'), draftOf('label.changed'));
+const humanFragment: fc.Arbitrary<DraftEntry[]> = external(human).map((e) => [e]);
+
+/** The forge reports on the PR: red CI, green CI, merge. */
+const forge: fc.Arbitrary<DraftEntry[]> = fc
+  .oneof(draftOf('pr.checks_failed'), draftOf('pr.checks_failed'), draftOf('pr.checks_passed'), draftOf('pr.opened'), draftOf('pr.merged'))
+  .map((d) => [{ kind: 'external', draft: d, untrusted: false }]);
+
+const fragment: fc.Arbitrary<DraftEntry[]> = fc.oneof(
+  { arbitrary: external(anyDraft).map((e) => [e]), weight: 6 },
+  { arbitrary: shell.map((event): DraftEntry[] => [{ kind: 'shell', event }]), weight: 2 },
+  { arbitrary: attempt, weight: 3 },
+  { arbitrary: verifyLoop, weight: 2 },
+  { arbitrary: redCi, weight: 1 },
+  { arbitrary: debouncedReply, weight: 1 },
+  { arbitrary: humanFragment, weight: 2 },
+  { arbitrary: forge, weight: 2 },
+);
+
+/** Delegation first, most of the time: rules for a delegated ticket are the bulk of the workflow. */
+const opening: fc.Arbitrary<DraftEntry[]> = fc.oneof(
+  {
+    arbitrary: fc.constantFrom('todo' as const, 'dev' as const).map((l): DraftEntry[] => [
+      {
+        kind: 'external',
+        draft: { type: 'ticket.delegated', payload: { linearSessionId: DEV_SESSION, issue: { title: 'Titre', logical: l, priority: 0 } } },
+        untrusted: false,
+      },
+      { kind: 'shell', event: { type: 'session.linked', linearSessionId: DEV_SESSION } },
+    ]),
+    weight: 4,
+  },
+  { arbitrary: fc.constant<DraftEntry[]>([]), weight: 1 },
+);
+
+function stamp(drafts: DraftEntry[]): Entry[] {
+  return drafts.map((d, i): Entry => {
+    if (d.kind === 'shell') return d;
+    const event = {
+      id: `ev-${i}`,
+      type: d.draft.type,
+      at: 1_000 * (i + 1),
+      projectId: PROJECT,
+      ticketId: TICKET,
+      ...TRUSTED,
+      ...(d.untrusted ? { taint: 'untrusted' } : {}),
+      payload: d.draft.payload,
+    } as FactoryEvent;
+    return { kind: 'external', event };
+  });
+}
+
+/** Swaps of adjacent entries, then, one time in eight, a full shuffle: events arrive out of order. */
+function reorder(entries: Entry[], swaps: number[], shuffle: number[] | undefined): Entry[] {
+  const out = [...entries];
+  if (out.length < 2) return out;
+  for (const s of swaps) {
+    const i = s % (out.length - 1);
+    [out[i], out[i + 1]] = [out[i + 1]!, out[i]!];
+  }
+  if (!shuffle) return out;
+  // Fisher-Yates driven by the generated numbers, so fast-check can still shrink it.
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = shuffle[i % shuffle.length]! % (i + 1);
+    [out[i], out[j]] = [out[j]!, out[i]!];
+  }
+  return out;
+}
+
+/** Copies of external events (same id), each inserted at some position after its original. */
+function duplicate(entries: Entry[], copies: { source: number; offset: number }[]): Entry[] {
+  const out = [...entries];
+  for (const { source, offset } of copies) {
+    const externals = out.flatMap((e, i) => (e.kind === 'external' ? [i] : []));
+    if (externals.length === 0) return out;
+    const from = externals[source % externals.length]!;
+    const at = from + 1 + (offset % (out.length - from));
+    out.splice(at, 0, out[from]!);
+  }
+  return out;
+}
+
+export interface Sequences {
+  /** Reordered, each external event once. */
+  unique: Entry[];
+  /** `unique` with duplicates of its external events inserted after their original. */
+  withDuplicates: Entry[];
+}
+
+export const sequences: fc.Arbitrary<Sequences> = fc
+  .record({
+    opening,
+    body: fc.array(fragment, { maxLength: 16 }),
+    swaps: fc.array(fc.nat(), { maxLength: 6 }),
+    // One in eight: `fc.option`'s `freq` would give the opposite (nil one time in `freq`).
+    shuffle: fc.oneof(
+      { withCrossShrink: true },
+      { arbitrary: fc.constant(undefined), weight: 7 },
+      { arbitrary: fc.array(fc.nat(), { minLength: 1, maxLength: 8 }), weight: 1 },
+    ),
+    copies: fc.array(fc.record({ source: fc.nat(), offset: fc.nat() }), { maxLength: 5 }),
+  })
+  .map(({ opening: head, body: fragments, swaps, shuffle, copies }) => {
+    const unique = reorder(stamp([...head, ...fragments.flat()]), swaps, shuffle);
+    return { unique, withDuplicates: duplicate(unique, copies) };
+  });
