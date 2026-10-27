@@ -13,7 +13,7 @@ export interface AgentRuntimeSubject {
   runtime: Runner;
   /** Arranges the next run to behave as `script`, and returns what its request must carry for it. */
   script: (script: AgentScript) => Partial<RunRequest>;
-  /** Moves the runtime's clock forward; absent, the suite waits in real time. */
+  /** Moves the runtime's clock forward; absent, the suite waits in real time. Given, a capped run must end in `limit` within 100 ms. */
   elapse?: (ms: number) => void;
 }
 
