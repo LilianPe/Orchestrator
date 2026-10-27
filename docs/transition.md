@@ -155,8 +155,14 @@ Le premier ticket cité est celui qui touche le module en premier ou le plus ; l
 
 ### `src/checks/`
 
+Contrôles déterministes de `verify`, purs : ils lisent le diff `baseSha..SHA` (ou le contenu des manifestes avant et après) et rendent le résultat d'un check `factory/...`. Ils ne sont pas encore branchés : `verify` en clone neuf sur SHA figé arrive avec ORC-151.
+
 | Module | Rôle | Statut | Ticket cible |
 |---|---|---|---|
+| `src/checks/types.ts` | `CheckResult` : nom du check (`check`), succès ou échec, résumé publié sur la PR | garder | ORC-158, ORC-151 (publication des checks), ORC-145, ORC-131 |
+| `src/checks/diff.ts` | `parseDiff` : fichiers du diff unifié, lignes ajoutées numérotées, lignes retirées comptées | garder | ORC-158, ORC-145 (taille du diff), ORC-123 (tests ajoutés), ORC-131 |
+| `src/checks/test-files.ts` | Règle unique « fichier de test » (TS/JS et Python) et fichiers du harnais de test | garder | ORC-158, ORC-145 (lignes hors tests), ORC-123 (étape `tests`), ORC-131 (gel) |
+| `src/checks/anti-cheat.ts` | Scan des lignes ajoutées contre les quatre formes de triche, check `factory/anti-triche` | garder | ORC-158, ORC-151 (branché dans `verify`), ORC-131 (empreintes des tests gelés), ORC-225 (scénario « `.skip` ajouté ») |
 | `src/checks/deps.ts` | Contrôle `factory/dependances` : dépendances ajoutées (npm, PyPI) lues dans le contenu avant et après des manifestes, existence au registre et liste autorisée, bloquant ; liste des ajouts pour le journal de sécurité | garder | ORC-165, ORC-151 (appelé par `verify`), ORC-209 (liste autorisée dans `.factory/config.yml`), ORC-223 (journal de sécurité) |
 | `src/checks/registry.ts` | `PackageRegistry`, `HttpPackageRegistry` : registre npm et API JSON de PyPI, `fetch` et URL de base injectables | garder | ORC-165, ORC-213 (requêtes par le proxy de sortie) |
 | `src/checks/fake-registry.ts` | `FakePackageRegistry` des tests | garder | ORC-165 |
