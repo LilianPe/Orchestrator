@@ -1,7 +1,7 @@
 import fc from 'fast-check';
 import {
   LOGICAL_STATES,
-  SCHEMA_VERSION,
+  TRUSTED,
   type EventPayloads,
   type EventType,
   type FactoryEvent,
@@ -24,10 +24,11 @@ import {
 export const PROJECT = 'p';
 export const TICKET = 'REL-1';
 export const DEV_SESSION = 's-dev';
-export const RUN_IDS = ['r1', 'r2', 'r3'] as const;
+const RUN_IDS = ['r1', 'r2', 'r3'] as const;
 /** Every job of the standard pack, plus one the workflow does not know. */
-export const JOBS = ['dev', 'dev-feedback', 'fix-ci', 'review', 'ask', 'learn', 'remember', 'unknown'] as const;
+const JOBS = ['dev', 'dev-feedback', 'fix-ci', 'review', 'ask', 'learn', 'remember', 'unknown'] as const;
 const DEV_JOBS = ['dev', 'dev-feedback', 'fix-ci', 'review'] as const;
+export const VERIFY_FAILURES = [{ command: 'fake:check', exitCode: 1, output: 'rouge' }];
 
 export type Entry = { kind: 'external'; event: FactoryEvent } | { kind: 'shell'; event: ShellEvent };
 
@@ -70,7 +71,7 @@ const PAYLOADS: { [K in EventType]: fc.Arbitrary<EventPayloads[K]> } = {
     lastText: fc.constant('fini'),
   }),
   'verify.passed': fc.record({ runId, job }),
-  'verify.failed': fc.record({ runId, job, failures: fc.constant([{ command: 'fake:check', exitCode: 1, output: 'rouge' }]) }),
+  'verify.failed': fc.record({ runId, job, failures: fc.constant(VERIFY_FAILURES) }),
   'debounce.fired': fc.record({ job }),
   'control.pause': empty,
   'control.resume': empty,
@@ -89,11 +90,15 @@ const anyDraft: fc.Arbitrary<Draft> = fc.oneof(...EVENT_TYPES.map((t) => draftOf
  * Events the factory produces itself (its runner, its checks, its timers, its UI): always trusted, as
  * their producers stamp them `TRUSTED`. Only events that carry content from outside can be untrusted.
  */
-export const FACTORY_PRODUCED: ReadonlySet<EventType> = new Set<EventType>([
+const FACTORY_PRODUCED: ReadonlySet<EventType> = new Set<EventType>([
   'run.finished', 'verify.passed', 'verify.failed', 'debounce.fired', 'control.pause', 'control.resume', 'control.stop',
 ]);
 
-/** One time in five untrusted, when the event can be: enough to exercise the taint rules (I12) without drowning the rest. */
+/**
+ * One time in five untrusted, when the event can be: enough to exercise the taint rules (I12) without
+ * drowning the rest. Only single events and human messages draw their taint here; the scripted
+ * fragments below (attempt, verify loop, red CI, forge reports) stay trusted.
+ */
 const external = (draft: fc.Arbitrary<Draft>): fc.Arbitrary<DraftEntry> =>
   fc.record({ draft, roll: fc.integer({ min: 0, max: 4 }) }).map(
     ({ draft: d, roll }): DraftEntry => ({ kind: 'external', draft: d, untrusted: roll === 0 && !FACTORY_PRODUCED.has(d.type) }),
@@ -131,7 +136,7 @@ const attempt: fc.Arbitrary<DraftEntry[]> = fc
     const report: Draft =
       verdict === 'verify.passed'
         ? { type: 'verify.passed', payload: { runId: id, job: j } }
-        : { type: 'verify.failed', payload: { runId: id, job: j, failures: [{ command: 'fake:check', exitCode: 1, output: 'rouge' }] } };
+        : { type: 'verify.failed', payload: { runId: id, job: j, failures: VERIFY_FAILURES } };
     return [
       { kind: 'shell', event: { type: 'run.started', runId: id, job: j, queue: 'dev', claudeSessionId: 'claude-1', feedbackConsumed: j !== 'dev' } },
       { kind: 'external', draft: finished, untrusted: false },
@@ -152,7 +157,7 @@ const verifyLoop: fc.Arbitrary<DraftEntry[]> = fc
       const report: Draft =
         last && green
           ? { type: 'verify.passed', payload: { runId: id, job: j } }
-          : { type: 'verify.failed', payload: { runId: id, job: j, failures: [{ command: 'fake:check', exitCode: 1, output: 'rouge' }] } };
+          : { type: 'verify.failed', payload: { runId: id, job: j, failures: VERIFY_FAILURES } };
       return [
         { kind: 'shell', event: { type: 'run.started', runId: id, job: j, queue: 'dev', claudeSessionId: 'claude-1', feedbackConsumed: i > 0 } },
         { kind: 'external', draft: { type: 'run.finished', payload: { runId: id, job: j, outcome: 'success', costUsd: 0.5, turns: 3, lastText: 'fini' } }, untrusted: false },
@@ -170,10 +175,9 @@ const redCi: fc.Arbitrary<DraftEntry[]> = fc
   ]);
 
 /** A reply in the dev session, then the debounce it armed fires: feedback relayed by the factory's own timer (I6, I12). */
-const debouncedReply: fc.Arbitrary<DraftEntry[]> = external(draftOf('session.prompted')).map((reply): DraftEntry[] => [
-  reply.kind === 'external' && reply.draft.type === 'session.prompted'
-    ? { ...reply, draft: { ...reply.draft, payload: { ...reply.draft.payload, linearSessionId: DEV_SESSION } } }
-    : reply,
+const devReply: fc.Arbitrary<Draft> = PAYLOADS['session.prompted'].map((p) => ({ type: 'session.prompted', payload: { ...p, linearSessionId: DEV_SESSION } }));
+const debouncedReply: fc.Arbitrary<DraftEntry[]> = external(devReply).map((reply): DraftEntry[] => [
+  reply,
   { kind: 'external', draft: { type: 'debounce.fired', payload: { job: 'dev-feedback' } }, untrusted: false },
 ]);
 
@@ -222,8 +226,8 @@ function stamp(drafts: DraftEntry[]): Entry[] {
       at: 1_000 * (i + 1),
       projectId: PROJECT,
       ticketId: TICKET,
-      schemaVersion: SCHEMA_VERSION,
-      taint: d.untrusted ? 'untrusted' : 'trusted',
+      ...TRUSTED,
+      ...(d.untrusted ? { taint: 'untrusted' } : {}),
       payload: d.draft.payload,
     } as FactoryEvent;
     return { kind: 'external', event };
@@ -272,7 +276,12 @@ export const sequences: fc.Arbitrary<Sequences> = fc
     opening,
     body: fc.array(fragment, { maxLength: 16 }),
     swaps: fc.array(fc.nat(), { maxLength: 6 }),
-    shuffle: fc.option(fc.array(fc.nat(), { minLength: 1, maxLength: 8 }), { nil: undefined, freq: 7 }),
+    // One in eight: `fc.option`'s `freq` would give the opposite (nil one time in `freq`).
+    shuffle: fc.oneof(
+      { withCrossShrink: true },
+      { arbitrary: fc.constant(undefined), weight: 7 },
+      { arbitrary: fc.array(fc.nat(), { minLength: 1, maxLength: 8 }), weight: 1 },
+    ),
     copies: fc.array(fc.record({ source: fc.nat(), offset: fc.nat() }), { maxLength: 5 }),
   })
   .map(({ opening: head, body: fragments, swaps, shuffle, copies }) => {

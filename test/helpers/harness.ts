@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { FakeCheckRunner } from '../../src/adapters/checks/fake.js';
@@ -9,6 +9,7 @@ import { FakeSandboxProvider } from '../../src/adapters/sandbox/fake.js';
 import { FakeTracker } from '../../src/adapters/tracker/fake.js';
 import { FakeWorkspaces } from '../../src/adapters/workspace/fake.js';
 import { loadWorkflow } from '../../src/config/load-workflow.js';
+import type { Workflow } from '../../src/config/workflow-schema.js';
 import { EventBus } from '../../src/core/bus.js';
 import { FakeClock } from '../../src/core/clock.js';
 import { Orchestrator } from '../../src/core/orchestrator.js';
@@ -21,17 +22,24 @@ import type { TestPreset } from './test-preset.js';
 
 export const packDir = join(import.meta.dirname, '../../packs/standard');
 
+/** The standard pack with `projectYaml` on top, as a project's workflow.yml; the temporary file is removed once read. */
+export function loadTestWorkflow(projectYaml?: string): Workflow {
+  if (!projectYaml) return loadWorkflow({ packDir });
+  const dir = mkdtempSync(join(tmpdir(), 'factory-h-'));
+  try {
+    const projectFile = join(dir, 'workflow.yml');
+    writeFileSync(projectFile, projectYaml);
+    return loadWorkflow({ packDir, projectFile });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 export function createHarness(
   opts: { projectYaml?: string; preset?: TestPreset; verify?: Verifier; knowledge?: boolean } = {},
 ) {
   if (opts.projectYaml !== undefined && opts.preset) throw new Error('createHarness: pass projectYaml or preset, not both');
-  const projectYaml = opts.projectYaml ?? opts.preset?.yaml;
-  let projectFile: string | undefined;
-  if (projectYaml) {
-    projectFile = join(mkdtempSync(join(tmpdir(), 'factory-h-')), 'workflow.yml');
-    writeFileSync(projectFile, projectYaml);
-  }
-  const workflow = loadWorkflow({ packDir, projectFile });
+  const workflow = loadTestWorkflow(opts.projectYaml ?? opts.preset?.yaml);
   const clock = new FakeClock(Date.UTC(2026, 9, 10, 9, 0));
   const store = new SqliteStore(':memory:');
   const tracker = new FakeTracker(Object.values(workflow.states));

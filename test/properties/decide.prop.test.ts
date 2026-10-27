@@ -1,9 +1,9 @@
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
-import { decide, SENSITIVE_PATHS } from '../../src/core/engine.js';
+import { decide, isFenced, SENSITIVE_PATHS } from '../../src/core/engine.js';
 import { reduce } from '../../src/core/reduce.js';
 import {
-  SCHEMA_VERSION,
+  TRUSTED,
   type EventPayloads,
   type EventType,
   type FactoryEvent,
@@ -11,16 +11,18 @@ import {
   type ShellEvent,
   type TicketState,
 } from '../../src/core/types.js';
-import { DEV_SESSION, PROJECT, sequences, TICKET, type Entry, type Sequences } from './events.js';
-import { decided, effects, fold, isDevStart, params, TIMEOUT, workflow, type Run } from './fold.js';
+import { SqliteStore } from '../../src/store/sqlite-store.js';
+import { DEV_SESSION, PROJECT, sequences, TICKET, VERIFY_FAILURES, type Entry, type Sequences } from './events.js';
+import { decided, effects, fold, isDevStart, params, stepEffects, TIMEOUT, workflow, type Run, type Step } from './fold.js';
 
 /**
  * Invariants of `decide` (docs/decisions/ORC-138.md, I1 to I12) checked as properties over generated
  * sequences with duplicates and reordering (ORC-173). Each property states what the current pure
  * `decide`/`reduce` can show; the part of an invariant whose mechanism does not exist yet is an
  * `it.todo` naming the ticket that brings it. A property that today's code violates is an `it.fails`
- * carrying its minimal counterexample in `examples`, so it fails on every run, whatever the seed:
- * when the code is fixed, the `it.fails` turns red and must become an `it`.
+ * per minimal counterexample, which fails on every run, whatever the seed, and only with the expected
+ * assertion (`violated`): when the code is fixed, the `it.fails` turns red and must become an `it`
+ * that runs the property with the counterexample in its `examples`.
  */
 
 const wf = workflow();
@@ -30,7 +32,7 @@ const wf = workflow();
 let n = 0;
 function ext<T extends EventType>(type: T, payload: EventPayloads[T], taint: 'trusted' | 'untrusted' = 'trusted'): Entry {
   n += 1;
-  const event = { id: `ex-${n}`, type, at: 1_000 * n, projectId: PROJECT, ticketId: TICKET, schemaVersion: SCHEMA_VERSION, taint, payload };
+  const event = { id: `ex-${n}`, type, at: 1_000 * n, projectId: PROJECT, ticketId: TICKET, ...TRUSTED, taint, payload };
   return { kind: 'external', event: event as FactoryEvent };
 }
 const sh = (event: ShellEvent): Entry => ({ kind: 'shell', event });
@@ -41,24 +43,41 @@ const delegated = (logical: 'todo' | 'dev' = 'todo') => [
   sh({ type: 'session.linked', linearSessionId: DEV_SESSION }),
 ];
 const pr = { number: 1, url: 'https://forge/pr/1', branch: 'agent/rel-1' };
+const runStarted = () => sh({ type: 'run.started', runId: 'r1', job: 'dev', queue: 'dev', claudeSessionId: 'claude-1', feedbackConsumed: false });
+const runFinished = (outcome: 'success' | 'failure') => ext('run.finished', { runId: 'r1', job: 'dev', outcome, costUsd: 0.5, turns: 3, lastText: 'fini' });
+const reply = (taint: 'trusted' | 'untrusted' = 'trusted') => ext('session.prompted', { linearSessionId: DEV_SESSION, body: 'ok', author: 'lilian' }, taint);
 
 /** Every property gets the same generator; `examples` are tried first, before the random sequences. */
 function holds(check: (s: Sequences) => void, examples: Sequences[] = []): void {
   fc.assert(
-    fc.property(sequences, (s) => {
-      check(s);
-    }),
+    fc.property(sequences, check),
     params(examples.map((e): [Sequences] => [e])),
   );
 }
 
 const run = (s: Sequences): Run => fold(s.withDuplicates, wf);
 
+/** Runs started while handling a step: decided by `decide`, or the pending job started by `settle`. */
+const starts = (step: Step) => stepEffects(step).filter((e) => e.kind === 'start_run');
+
+/**
+ * A known violation, for an `it.fails`: the property must fail on its counterexample with the
+ * assertion labelled `label`. Any other outcome returns normally, so the `it.fails` turns red: the
+ * code was fixed, or the property now breaks for another reason.
+ */
+function violated(label: string, check: (s: Sequences) => void, counterexample: Sequences): void {
+  try {
+    check(counterexample);
+  } catch (err) {
+    if ((err as Error).message.startsWith(label)) throw err;
+  }
+}
+
 describe('decide — properties over generated sequences (ORC-173)', () => {
   it(
     'decide and reduce never throw and never write their inputs',
     () => {
-      // `fold` freezes every state and event in depth: a write throws in strict mode.
+      // `fold` freezes every state, event, decision and the workflow in depth: a write throws in strict mode.
       holds((s) => {
         run(s);
       });
@@ -68,8 +87,11 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
 
   describe('projection = replay of the journal (in memory)', () => {
     it(
-      'after every step, folding reduce over the journal so far gives the incremental projection',
+      'the journal alone rebuilds the projection: after every step, reduce from no state over the journal so far gives the incremental state',
       () => {
+        // In memory, over the fold's own journal: this checks that every change the step applies (decided
+        // events, shell facts, pending jobs) is journaled and that reduce reads nothing else. A replay of
+        // a durable journal, recorded independently of the fold, is the Postgres part below.
         holds((s) => {
           const r = run(s);
           let replayed: TicketState | undefined;
@@ -140,7 +162,7 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
               const resumed = step.decision.effects.filter((e) => e.kind === 'start_run' && e.input === 'verify_failures');
               relaunches += resumed.length;
               expect(relaunches).toBeLessThanOrEqual(attempts - 1);
-              if (step.event.type === 'verify.failed' && step.decision.trace[0]?.startsWith('fenced') !== true) {
+              if (step.event.type === 'verify.failed' && !isFenced(step.decision)) {
                 const used = step.before?.verifyAttempts ?? 0;
                 if (used + 1 >= attempts) {
                   expect(resumed).toEqual([]);
@@ -157,6 +179,10 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
 
     /** Stand-in bound for the red-CI loop: the standard pack declares none; ORC-187 brings the preset's. */
     const CI_RELAUNCHES = 2;
+    const redCiBounded = (s: Sequences): void => {
+      const fixes = effects(run(s)).filter((e) => e.kind === 'start_run' && e.job === 'fix-ci');
+      expect(fixes.length, 'fix-ci relaunches').toBeLessThanOrEqual(CI_RELAUNCHES + 1);
+    };
     it.fails(
       `KNOWN VIOLATION — red CI relaunches fix-ci at most ${CI_RELAUNCHES} + 1 times (pr.checks_failed has no counter)`,
       () => {
@@ -168,10 +194,7 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
           ext('pr.checks_failed', { ...pr, failures: ['test'] }),
           ext('pr.checks_failed', { ...pr, failures: ['test'] }),
         );
-        holds((s) => {
-          const fixes = effects(run(s)).filter((e) => e.kind === 'start_run' && e.job === 'fix-ci');
-          expect(fixes.length).toBeLessThanOrEqual(CI_RELAUNCHES + 1);
-        }, [counterexample]);
+        violated('fix-ci relaunches', redCiBounded, counterexample);
       },
       TIMEOUT,
     );
@@ -198,16 +221,16 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
     it.fails(
       'KNOWN VIOLATION — a reply in the dev session of a delegated ticket is recorded or delivered (lost in todo, ai_review, ready)',
       () => {
-        const counterexample = seq(...delegated(), ext('session.prompted', { linearSessionId: DEV_SESSION, body: 'ok', author: 'lilian' }));
-        holds((s) => {
+        const counterexample = seq(...delegated(), reply());
+        violated('reply in the dev session', (s) => {
           for (const step of decided(run(s))) {
             const e = step.event;
             if (e.type !== 'session.prompted' || !step.after?.delegated || e.payload.linearSessionId !== step.after.linearSessionId) continue;
             const recorded = step.decision.events.some((x) => x.type === 'feedback.appended' && x.item.body === e.payload.body);
             const delivered = step.decision.effects.some((x) => x.kind === 'start_run' && x.inputText === e.payload.body);
-            expect(recorded || delivered).toBe(true);
+            expect(recorded || delivered, 'reply in the dev session recorded or delivered').toBe(true);
           }
-        }, [counterexample]);
+        }, counterexample);
       },
       TIMEOUT,
     );
@@ -235,7 +258,7 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
     it(
       '(a) from any reachable state, control.stop stops the dev work and blocks the ticket in one step',
       () => {
-        const stop = { id: 'stop', type: 'control.stop', at: 0, projectId: PROJECT, ticketId: TICKET, schemaVersion: SCHEMA_VERSION, taint: 'trusted', payload: {} } as FactoryEvent;
+        const stop = { ...TRUSTED, id: 'stop', type: 'control.stop', at: 0, projectId: PROJECT, ticketId: TICKET, payload: {} } as FactoryEvent;
         holds((s) => {
           for (const step of run(s).steps) {
             if (!step.after) continue;
@@ -251,25 +274,54 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
 
     it.todo('I8 (a) — the cancel event leads to the terminal status cancelled (no terminal status yet: run.cancel and statuses of ORC-133)');
 
+    const noDevRunAfterMerge = (s: Sequences): void => {
+      let merged = false;
+      for (const step of run(s).steps) {
+        if (merged) expect(starts(step).filter((e) => isDevStart(e, wf)), 'dev run started after pr.merged').toEqual([]);
+        if (step.kind === 'decided' && step.event.type === 'pr.merged') merged = true;
+      }
+    };
     it.fails(
-      'KNOWN VIOLATION — (b) after pr.merged, no event starts a dev run',
+      'KNOWN VIOLATION — (b) after pr.merged, no event starts a dev run: a human relaunch',
       () => {
-        // A human relaunch after the merge, and (found by fast-check) a run in flight at the merge whose checks then fail.
         const relaunched = seq(...delegated(), ext('pr.merged', pr), ext('label.changed', { label: 'agent:reprendre', change: 'added' }));
+        violated('dev run started after pr.merged', noDevRunAfterMerge, relaunched);
+      },
+      TIMEOUT,
+    );
+
+    it.fails(
+      'KNOWN VIOLATION — (b) after pr.merged, no event starts a dev run: a run in flight at the merge whose checks then fail',
+      () => {
+        // Found by fast-check.
         const inFlight = seq(
           ...delegated(),
-          sh({ type: 'run.started', runId: 'r1', job: 'dev', queue: 'dev', claudeSessionId: 'claude-1', feedbackConsumed: false }),
+          runStarted(),
           ext('pr.merged', pr),
-          ext('run.finished', { runId: 'r1', job: 'dev', outcome: 'success', costUsd: 0.5, turns: 3, lastText: 'fini' }),
-          ext('verify.failed', { runId: 'r1', job: 'dev', failures: [{ command: 'fake:check', exitCode: 1, output: 'rouge' }] }),
+          runFinished('success'),
+          ext('verify.failed', { runId: 'r1', job: 'dev', failures: VERIFY_FAILURES }),
         );
-        holds((s) => {
-          let merged = false;
-          for (const step of decided(run(s))) {
-            if (merged) expect(step.decision.effects.filter((e) => isDevStart(e, wf))).toEqual([]);
-            if (step.event.type === 'pr.merged') merged = true;
-          }
-        }, [relaunched, inFlight]);
+        violated('dev run started after pr.merged', noDevRunAfterMerge, inFlight);
+      },
+      TIMEOUT,
+    );
+
+    it.fails(
+      'KNOWN VIOLATION — (b) after pr.merged, no event starts a dev run: a debounce armed before the merge fires after it',
+      () => {
+        // Found by fast-check: pr.merged keeps the debounce timer, and debounce.fired starts its job whatever the status.
+        const debounced = seq(...delegated('dev'), reply(), ext('pr.merged', pr), ext('debounce.fired', { job: 'dev-feedback' }));
+        violated('dev run started after pr.merged', noDevRunAfterMerge, debounced);
+      },
+      TIMEOUT,
+    );
+
+    it.fails(
+      'KNOWN VIOLATION — (b) after pr.merged, no event starts a dev run: settle starts the job kept pending before the merge',
+      () => {
+        // Found by fast-check once the fold modelled settle: pr.merged keeps the pending job, settle starts it when the run ends.
+        const pending = seq(...delegated('dev'), runStarted(), reply(), ext('debounce.fired', { job: 'dev-feedback' }), ext('pr.merged', pr), runFinished('failure'));
+        violated('dev run started after pr.merged', noDevRunAfterMerge, pending);
       },
       TIMEOUT,
     );
@@ -293,16 +345,25 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
 
   describe('I10 — a duplicate has no effect', () => {
     it(
-      'duplicating events (same id) anywhere after their original changes neither the final state nor the effects',
+      'duplicating events (same id) anywhere after their original changes neither the final state nor the effects, through the store’s inbox',
       () => {
-        holds((s) => {
-          const once = fold(s.unique, wf);
-          const twice = fold(s.withDuplicates, wf);
-          expect(twice.final).toEqual(once.final);
-          expect(effects(twice)).toEqual(effects(once));
-          expect(decided(twice).map((d) => d.decision.timers)).toEqual(decided(once).map((d) => d.decision.timers));
-          expect(twice.journal).toEqual(once.journal);
-        });
+        // Duplicates are dropped by what drops them in `Orchestrator.handle`: `Store.recordEvent`, here on SQLite.
+        // One store for every sequence, each recording its ids under its own prefix.
+        const store = new SqliteStore(':memory:');
+        let sequence = 0;
+        try {
+          holds((s) => {
+            const prefix = `s${++sequence}:`;
+            const once = fold(s.unique, wf);
+            const twice = fold(s.withDuplicates, wf, (e) => store.recordEvent({ ...e, id: prefix + e.id }));
+            expect(twice.final).toEqual(once.final);
+            expect(effects(twice)).toEqual(effects(once));
+            expect(decided(twice).map((d) => d.decision.timers)).toEqual(decided(once).map((d) => d.decision.timers));
+            expect(twice.journal).toEqual(once.journal);
+          });
+        } finally {
+          store.close();
+        }
       },
       TIMEOUT,
     );
@@ -349,25 +410,43 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
       TIMEOUT,
     );
 
+    /** A run that reads the pending feedback while part of it came from an untrusted event is sandboxed, whoever starts it. */
+    const feedbackRunSandboxed = (s: Sequences): void => {
+      let untrustedPending = false;
+      for (const step of run(s).steps) {
+        if (step.kind === 'shell' && step.event.type === 'run.started' && step.event.feedbackConsumed) untrustedPending = false;
+        if (step.kind === 'decided' && step.event.taint === 'untrusted' && step.decision.events.some((e) => e.type === 'feedback.appended')) {
+          untrustedPending = true;
+        }
+        for (const e of starts(step)) {
+          if (e.input === 'feedback' && untrustedPending) expect(e.sensitivePaths, 'feedback run without the sensitive paths').toEqual(SENSITIVE_PATHS);
+        }
+      }
+    };
+
     it.fails(
       'KNOWN VIOLATION — untrusted feedback relayed by a later trusted event (debounce) still starts a sandboxed run',
       () => {
+        const counterexample = seq(...delegated('dev'), reply('untrusted'), ext('debounce.fired', { job: 'dev-feedback' }));
+        violated('feedback run without the sensitive paths', feedbackRunSandboxed, counterexample);
+      },
+      TIMEOUT,
+    );
+
+    it.fails(
+      'KNOWN VIOLATION — untrusted feedback that arrives once its job is pending still starts a sandboxed run (settle)',
+      () => {
+        // Found by fast-check once the fold modelled settle: the pending job was decided before the untrusted
+        // reply came in, and settle starts it on all the pending feedback, the untrusted reply included.
         const counterexample = seq(
           ...delegated('dev'),
-          ext('session.prompted', { linearSessionId: DEV_SESSION, body: 'ok', author: 'lilian' }, 'untrusted'),
+          runStarted(),
+          reply(),
           ext('debounce.fired', { job: 'dev-feedback' }),
+          reply('untrusted'),
+          runFinished('failure'),
         );
-        holds((s) => {
-          let untrustedPending = false;
-          for (const step of run(s).steps) {
-            if (step.kind === 'shell' && step.event.type === 'run.started' && step.event.feedbackConsumed) untrustedPending = false;
-            if (step.kind !== 'decided') continue;
-            if (step.event.taint === 'untrusted' && step.decision.events.some((e) => e.type === 'feedback.appended')) untrustedPending = true;
-            for (const e of step.decision.effects) {
-              if (e.kind === 'start_run' && e.input === 'feedback' && untrustedPending) expect(e.sensitivePaths).toEqual(SENSITIVE_PATHS);
-            }
-          }
-        }, [counterexample]);
+        violated('feedback run without the sensitive paths', feedbackRunSandboxed, counterexample);
       },
       TIMEOUT,
     );
