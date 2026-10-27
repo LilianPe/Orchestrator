@@ -277,8 +277,8 @@ export class Worker {
         return outcome.backoff ? 'held' : 'waiting';
       }
       this.passed(row, key);
-      if (outcome.status === 'committed') this.unwait(key);
       if (outcome.status === 'committed') {
+        this.unwait(key);
         try {
           await this.d.committed(event, outcome);
         } catch (err) {

@@ -575,13 +575,15 @@ export class Orchestrator {
         this.d.store.renewQueued(claim, leaseMs).catch((err: unknown) => this.log('warn', `lease of queued ${item.job} on ${item.ticketId}: ${(err as Error).message}`));
       }, Math.max(1, Math.floor(leaseMs / 3)));
       renew.unref();
-      const taken = () => this.d.store.finishQueued(claim).then(() => undefined);
+      let finished = false;
+      const taken = () => this.d.store.finishQueued(claim).then(() => void (finished = true));
       this.worker
         .exclusive(item, async () => {
           const project = await this.runtimeFor(item.projectId, item.ticketId);
           const outcome = project ? await this.startRun(project, item.ticketId, item, admitted, taken) : 'done';
           clearInterval(renew);
-          await (outcome === 'queued' ? this.d.store.releaseQueued(claim) : this.d.store.finishQueued(claim));
+          if (outcome === 'queued') await this.d.store.releaseQueued(claim);
+          else if (!finished) await this.d.store.finishQueued(claim);
         })
         .catch(async (err: unknown) => {
           clearInterval(renew);
@@ -744,24 +746,23 @@ export class Orchestrator {
       await this.apply(t, { type: 'pending.set', job: { job: job.name, input: opts.input, inputText: opts.inputText, resume: opts.resume } });
       return 'done';
     }
-    if (this.stopping || (await this.isPaused())) {
+    // Back in line: through its claim for a start handed out of the queue, as a new request otherwise.
+    const requeue = async (): Promise<'queued'> => {
       if (!fromQueue) await this.d.scheduler.enqueue(item);
       return 'queued';
-    }
+    };
+    if (this.stopping || (await this.isPaused())) return requeue();
     if (await this.overBudget()) {
-      if (!fromQueue) await this.d.scheduler.enqueue(item);
+      const queued = await requeue();
       await this.noteBudget(project, ticketId);
-      return 'queued';
+      return queued;
     }
     const key = `${ticketId}:${job.queue}`;
     // A start from a decision leaves alone the slots a drain promised to the items it dequeued.
     const promised = admitted ? 0 : this.admitting[job.queue];
     const slot = this.d.scheduler.free(job.queue) > promised ? this.d.scheduler.tryAcquire(job.queue, key) : null;
     admitted?.();
-    if (slot === null) {
-      if (!fromQueue) await this.d.scheduler.enqueue(item);
-      return 'queued';
-    }
+    if (slot === null) return requeue();
     try {
       await this.launch(project, ticketId, job, opts, slot, key, recorded);
     } catch (err) {

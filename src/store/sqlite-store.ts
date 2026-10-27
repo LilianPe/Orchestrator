@@ -293,9 +293,7 @@ export class SqliteStore implements Store {
       this.db
         .prepare(`UPDATE outbox SET status = 'failed' WHERE event_id = ? AND status = 'pending' AND json_extract(data, '$.kind') <> 'settle'`)
         .run(row.event_id);
-      for (const r of this.db.prepare('SELECT key, data FROM timers').all() as { key: string; data: string }[]) {
-        if ((JSON.parse(r.data) as TimerRecord).armedBy === row.event_id) this.db.prepare('DELETE FROM timers WHERE key = ?').run(r.key);
-      }
+      this.deleteArmedBy(row.event_id);
       this.appendResult(effectResult(outboxRow(row), at, error));
       return true;
     });
@@ -428,6 +426,10 @@ export class SqliteStore implements Store {
   }
 
   async deleteTimersArmedBy(eventId: string): Promise<void> {
+    this.deleteArmedBy(eventId);
+  }
+
+  private deleteArmedBy(eventId: string): void {
     this.db.prepare("DELETE FROM timers WHERE json_extract(data, '$.armedBy') = ?").run(eventId);
   }
 
