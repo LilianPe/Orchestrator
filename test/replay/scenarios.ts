@@ -1,3 +1,5 @@
+import { runRepair } from '../../src/cli/repair.js';
+import type { TicketState } from '../../src/core/types.js';
 import { exportJournal, type ExportedJournal } from '../../src/runtime/replay.js';
 import type { Workflow } from '../../src/config/workflow-schema.js';
 import { createHarness, loadTestWorkflow } from '../helpers/harness.js';
@@ -47,6 +49,21 @@ export const SCENARIOS: Record<string, { preset?: TestPreset; run(h: Harness): P
       await h.send('pr.checks_failed', red);
       await h.send('pr.checks_failed', red);
       await h.send('label.changed', { label: 'agent:stop', change: 'added' });
+    },
+  },
+  /**
+   * A reply whose decision throws (a corrupt projection) is dead-lettered and blocks the ticket; once the
+   * projection is fixed, `factory run repair replay` decides it again and unblocks the ticket (ORC-175).
+   */
+  'dead-letter-then-repair': {
+    run: async (h) => {
+      await delegated(h);
+      const good = await h.ticket();
+      await h.store.putTicket({ ...good, pendingFeedback: null as unknown as TicketState['pendingFeedback'] });
+      await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'et le mobile ?', author: 'Lilian' });
+      await h.store.putTicket({ ...(await h.ticket()), pendingFeedback: [] });
+      await runRepair({ store: h.store, target: 'REL-1', action: 'replay', by: 'ops', now: h.clock.now(), print: () => {} });
+      await h.orch.drained();
     },
   },
 };

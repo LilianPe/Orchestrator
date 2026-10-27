@@ -195,7 +195,7 @@ Contrôles déterministes de `verify`, purs : ils lisent le diff `baseSha..SHA` 
 
 | Module | Rôle | Statut | Ticket cible |
 |---|---|---|---|
-| `src/store/types.ts` | Port `Store` asynchrone, servi par `SqliteStore` et `PgStore` ; transaction de décision, outbox des décisions et versions de workflow (ORC-149) ; réclamation, nouvel essai, mort et résultat `effect:<id>` d'un effet, file `queue` sous bail (ORC-150) ; décision enregistrée dans sa transaction, `ticketJournal` (ORC-174) | adapter | ORC-178 (`queue`, `echoes`, `costSince` retirés) |
+| `src/store/types.ts` | Port `Store` asynchrone, servi par `SqliteStore` et `PgStore` ; transaction de décision, outbox des décisions et versions de workflow (ORC-149) ; réclamation, nouvel essai, mort et résultat `effect:<id>` d'un effet, file `queue` sous bail (ORC-150) ; décision enregistrée dans sa transaction, `ticketJournal` (ORC-174) ; dead-letter d'une ligne, liste et réparation (`deadLetter`, `deadLetters`, `getDeadLetter`, `repairDeadLetter`, ORC-175) | adapter | ORC-178 (`queue`, `echoes`, `costSince` retirés) |
 | `src/store/open.ts` | Choix du store au démarrage : `PgStore` et migrations quand `FACTORY_DATABASE_URL` est défini, `SqliteStore` sinon | adapter | ORC-178 (plus que Postgres) |
 | `src/store/sqlite-store.ts` | `SqliteStore` sur `node:sqlite`, derrière le port asynchrone ; table `dead_letter`, équivalent de celle de Postgres (ORC-175) | retirer | retrait ORC-178 |
 | `src/store/pg/schema.ts` | Schéma Drizzle des 12 tables du moteur ; `dead_letter` complétée (ticket, statut, échecs, auteur de la réparation : migration `0002_dead_letter_repair`, ORC-175) | garder | ORC-132, ORC-175 |
@@ -236,7 +236,7 @@ Contrôles déterministes de `verify`, purs : ils lisent le diff `baseSha..SHA` 
 
 | Module | Rôle | Statut | Ticket cible |
 |---|---|---|---|
-| `src/cli/factory.ts` | CLI `factory` : `init`, `doctor`, `up`, `plan`, `status`, `pause`, `resume`, `stop`, `replay` | adapter | ORC-167 (`factory`), ORC-135 (`doctor`), ORC-174 (`replay`), ORC-200 (`plan`, `pause`, `resume`, `--fake-runner` retirés), ORC-220 (`status`, `stop`) |
+| `src/cli/factory.ts` | CLI `factory` : `init`, `doctor`, `up`, `plan`, `status`, `pause`, `resume`, `stop`, `replay`, `run repair` | adapter | ORC-167 (`factory`), ORC-135 (`doctor`), ORC-174 (`replay`), ORC-175 (`run repair`), ORC-200 (`plan`, `pause`, `resume`, `--fake-runner` retirés), ORC-220 (`status`, `stop`) |
 | `src/cli/doctor.ts` | `factory doctor` : refuse un dépôt dont la CI peut exposer des secrets aux branches `factory/*` sans approbation humaine | adapter | ORC-135, ORC-208 (intégration à `init`) |
 | `src/cli/init.ts` | Assistant `init` (app OAuth, smee, base de connaissance, `.factory/workflow.yml`) | adapter | ORC-208 (GitHub App, `factory.yml`, détection), ORC-177, ORC-193, ORC-200 |
 | `src/cli/replay.ts` | `factory replay` : rejoue des journaux exportés (régression bit à bit, `--what-if`), `--export` d'un ticket de l'instance | garder | ORC-174 (fait) |

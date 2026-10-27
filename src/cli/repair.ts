@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { repoRoot } from '../app/root.js';
 import { homePaths } from '../config/instance.js';
 import { REPAIR_ACTIONS, REPAIR_LABELS, type DeadLetter, type RepairAction } from '../core/dead-letter.js';
-import { SETTLES_RUN } from '../core/orchestrator.js';
+import { SETTLES_RUN } from '../core/decision-plan.js';
 import type { EventType } from '../core/types.js';
 import { openStore } from '../store/open.js';
 import type { Store } from '../store/types.js';
