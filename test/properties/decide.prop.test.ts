@@ -21,8 +21,9 @@ import { decided, effects, fold, isDevStart, launches, params, readsFeedback, st
  * `decide`/`reduce` can show; the part of an invariant whose mechanism does not exist yet is an
  * `it.todo` naming the ticket that brings it. A property that today's code violates is an `it.fails`
  * per minimal counterexample, which fails on every run, whatever the seed, and only with the expected
- * assertion (`violated`): when the code is fixed, the `it.fails` turns red and must become an `it`
- * that runs the property with the counterexample in its `examples`.
+ * assertion (catch the error and rethrow it only when its message starts with that assertion's label):
+ * when the code is fixed, the `it.fails` turns red and must become an `it` that runs the property with
+ * the counterexample in its `examples`. None is open today.
  */
 
 const wf = workflow();
@@ -67,19 +68,6 @@ const run = (s: Sequences): Run => fold(s.withDuplicates, wf);
 
 /** Runs started while handling a step: decided by `decide`, or the pending job started by `settle`. */
 const starts = (step: Step) => stepEffects(step).filter((e) => e.kind === 'start_run');
-
-/**
- * A known violation, for an `it.fails`: the property must fail on its counterexample with the
- * assertion labelled `label`. Any other outcome returns normally, so the `it.fails` turns red: the
- * code was fixed, or the property now breaks for another reason.
- */
-function violated(label: string, check: (s: Sequences) => void, counterexample: Sequences): void {
-  try {
-    check(counterexample);
-  } catch (err) {
-    if ((err as Error).message.startsWith(label)) throw err;
-  }
-}
 
 describe('decide — properties over generated sequences (ORC-173)', () => {
   it(
