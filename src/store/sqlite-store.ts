@@ -376,11 +376,14 @@ export class SqliteStore implements Store {
     return rows.map((r) => JSON.parse(r.data));
   }
 
+  /** A run's `labels` keep what it was created with: a later write cannot change them (ORC-226). */
   async putRun(r: RunRecord): Promise<void> {
     this.db
       .prepare(
         `INSERT INTO runs (id, status, token, started_at, cost_usd, data) VALUES (?, ?, ?, ?, ?, ?)
-         ON CONFLICT DO UPDATE SET status = excluded.status, cost_usd = excluded.cost_usd, data = excluded.data`,
+         ON CONFLICT DO UPDATE SET status = excluded.status, cost_usd = excluded.cost_usd,
+           data = CASE WHEN json_type(runs.data, '$.labels') IS NULL THEN excluded.data
+                       ELSE json_set(excluded.data, '$.labels', json(json_extract(runs.data, '$.labels'))) END`,
       )
       .run(r.id, r.status, r.token, r.startedAt, r.costUsd, JSON.stringify(r));
   }

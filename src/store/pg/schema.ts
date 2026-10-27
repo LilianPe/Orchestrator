@@ -194,6 +194,11 @@ export const attempts = pgTable(
     fingerprints: jsonb('fingerprints').$type<unknown>().notNull().default(sql`'{}'::jsonb`),
     image: text('image'),
     risk: text('risk'),
+    /** Attempt labels (ORC-226): the first labels a run is stored with, never rewritten after. */
+    factoryVersion: text('factory_version'),
+    factoryCommit: text('factory_commit'),
+    registryCommit: text('registry_commit'),
+    deliveredFactIds: jsonb('delivered_fact_ids').$type<string[]>(),
     startedAt: timestamp('started_at', { withTimezone: true, mode: 'date' }).notNull(),
     endedAt: timestamp('ended_at', { withTimezone: true, mode: 'date' }),
     status: text('status').notNull(),

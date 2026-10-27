@@ -1,3 +1,4 @@
+import type { AttemptLabels } from '../core/attempt-labels.js';
 import type { OutboxEffect } from '../core/decision.js';
 import { TRUSTED, type InputKind, type QueueName, type FactoryEvent, type RunOutcome, type TicketState } from '../core/types.js';
 import type { StoredEvent } from '../core/upcast.js';
@@ -25,6 +26,8 @@ export interface RunRecord {
   lastText: string;
   token: string;
   cwd: string;
+  /** What the attempt ran with, set at creation and never changed after (ORC-226). Absent on older records. */
+  labels?: AttemptLabels;
 }
 
 export interface TimerRecord {

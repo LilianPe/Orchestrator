@@ -1,5 +1,8 @@
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { writeRunSettings } from '../config/run-settings.js';
 import { FakeForge } from '../adapters/forge/fake.js';
 import { FakeRunner } from '../adapters/runner/fake.js';
 import type { Runner } from '../adapters/runner/types.js';
@@ -8,6 +11,7 @@ import { FakeTracker } from '../adapters/tracker/fake.js';
 import { FakeWorkspaces } from '../adapters/workspace/fake.js';
 import { loadWorkflow } from '../config/load-workflow.js';
 import { SqliteStore } from '../store/sqlite-store.js';
+import { hashText } from './attempt-labels.js';
 import { EventBus } from './bus.js';
 import { FakeClock } from './clock.js';
 import { Orchestrator } from './orchestrator.js';
@@ -15,10 +19,19 @@ import type { EffectRetry } from '../runtime/outbox.js';
 import { Scheduler } from './scheduler.js';
 import { newTicketState, TRUSTED, type FactoryEvent } from './types.js';
 
+const packDir = join(import.meta.dirname, '../../packs/standard');
+
 function setup(
-  o: { runner?: Runner; verify?: Verifier; budget?: number; hold?: boolean; tweak?: (w: ReturnType<typeof loadWorkflow>) => void; effectRetry?: EffectRetry } = {},
+  o: {
+    runner?: Runner;
+    verify?: Verifier;
+    budget?: number;
+    hold?: boolean;
+    settingsPath?: string;
+    tweak?: (w: ReturnType<typeof loadWorkflow>) => void;
+    effectRetry?: EffectRetry;
+  } = {},
 ) {
-  const packDir = join(import.meta.dirname, '../../packs/standard');
   const workflow = loadWorkflow({ packDir });
   o.tweak?.(workflow);
   const store = new SqliteStore(':memory:');
@@ -30,8 +43,8 @@ function setup(
   const orch = new Orchestrator({
     store, clock: new FakeClock(1_000), bus: new EventBus(), scheduler,
     tracker, forge: new FakeForge(), runner, workspaces: new FakeWorkspaces(), verify: o.verify ?? (async () => ({ ok: true, failures: [] })), dailyBudgetUsd: o.budget,
-    projects: [{ id: 'p', repoPath: '/repo', teamKey: 'REL', workflow }], packDir,
-    agentEnv: (r) => ({ FACTORY_RUN_TOKEN: r.token }), newId: () => `id-${++n}`, activityIntervalMs: 0, holdInboxUntilReplay: o.hold,
+    projects: [{ id: 'p', repoPath: '/repo', teamKey: 'REL', workflow }], packDir, settingsPath: o.settingsPath,
+    agentEnv: (r) => ({ FACTORY_RUN_TOKEN: r.token }), newId: () => `id-${++n}`, activityIntervalMs: 0, holdInboxUntilReplay: o.hold, factoryCommit: 'cafe42',
     // One attempt: a failed effect dies at once (the retries have their own tests).
     effectRetry: o.effectRetry ?? { attempts: 1, baseMs: 1, capMs: 1 },
   });
@@ -134,6 +147,39 @@ describe('Orchestrator', () => {
     expect(r.settingsPath.endsWith('packs/standard/settings.json')).toBe(true);
     expect(r.env['FACTORY_RUN_TOKEN']).toBeDefined();
     expect(r.env['PORT']).toBe('4200');
+  });
+
+  it('labels the attempt it launches, and the labels outlive the run settling (ORC-226)', async () => {
+    const { store, tracker, runner, orch } = setup();
+    tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+    await orch.accept(delegated());
+    await orch.drained();
+    const req = runner.requests[0]!;
+    const run = (await store.getRun(req.runId))!;
+    expect(run.status).not.toBe('running');
+    expect(run.labels).toMatchObject({ task: run.job, queue: run.queue, model: req.model, factoryCommit: 'cafe42', effort: null });
+    expect(run.labels!.fingerprints.prompt).toBe(hashText(req.prompt));
+    expect(run.labels!.fingerprints.workflow).toMatch(/^sha256:[0-9a-f]{64}$/);
+  });
+
+  it('gives two instances with different homes the same config fingerprint (ORC-226)', async () => {
+    const homes = [mkdtempSync(join(tmpdir(), 'home-a-')), mkdtempSync(join(tmpdir(), 'home-b-'))];
+    try {
+      const configs: (string | null)[] = [];
+      for (const home of homes) {
+        const settingsPath = writeRunSettings(packDir, home);
+        const { store, tracker, runner, orch } = setup({ settingsPath });
+        tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+        await orch.accept(delegated());
+        await orch.drained();
+        expect(runner.requests[0]!.settingsPath).toBe(settingsPath);
+        configs.push((await store.getRun(runner.requests[0]!.runId))!.labels!.fingerprints.config);
+      }
+      expect(readFileSync(join(homes[0]!, 'run-settings.json'), 'utf8')).not.toBe(readFileSync(join(homes[1]!, 'run-settings.json'), 'utf8'));
+      expect(configs[1]).toBe(configs[0]);
+    } finally {
+      for (const home of homes) rmSync(home, { recursive: true, force: true });
+    }
   });
 
   it('recover() blocks tickets whose run was interrupted', async () => {

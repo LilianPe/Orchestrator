@@ -7,6 +7,8 @@ import { EventBus } from '../core/bus.js';
 import { FakeClock } from '../core/clock.js';
 import { newTicketState, type FactoryEvent } from '../core/types.js';
 import { SqliteStore } from '../store/sqlite-store.js';
+import { LABELS } from '../../test/helpers/store-suite.js';
+import { pendingLabels } from '../core/attempt-labels.js';
 import { createApp } from './app.js';
 
 async function setup(extra: { uiPassword?: string } = {}) {
@@ -48,6 +50,17 @@ describe('server', () => {
     expect(body.activeRuns[0].id).toBe('r1');
     expect(body.activeRuns[0].token).toBeUndefined();
     expect(body.capacity.dev).toEqual({ used: 1, total: 3 });
+  });
+
+  it('serves the labels of a run with those still null and the tickets that will fill them (ORC-226)', async () => {
+    const { app, store } = await setup();
+    const run = (await store.getRun('r1'))!;
+    await store.putRun({ ...run, id: 'r2', token: 'tok2', labels: LABELS });
+    const body = await (await app.request('/api/state')).json();
+    const labelled = body.activeRuns.find((r: { id: string }) => r.id === 'r2');
+    expect(labelled.labels).toEqual({ ...LABELS, pending: pendingLabels(LABELS) });
+    expect(labelled.labels.pending.effort).toEqual(['ORC-136', 'ORC-187']);
+    expect(labelled.labels.pending).not.toHaveProperty('factoryCommit');
   });
 
   it('submits pause and stop controls', async () => {

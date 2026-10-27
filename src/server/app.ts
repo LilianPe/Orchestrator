@@ -6,6 +6,7 @@ import { streamSSE } from 'hono/streaming';
 import type { Tracker } from '../adapters/tracker/types.js';
 import type { BusMessage, EventBus } from '../core/bus.js';
 import type { Clock } from '../core/clock.js';
+import { pendingLabels } from '../core/attempt-labels.js';
 import { TRUSTED, type FactoryEvent } from '../core/types.js';
 import type { RunRecord, Store } from '../store/types.js';
 import { readStatic } from './static.js';
@@ -62,7 +63,8 @@ function isPublicPath(method: string, path: string): boolean {
 }
 
 function publicRun({ token: _t, ...rest }: RunRecord) {
-  return rest;
+  // The labels still null, with the tickets that will fill them, as known now (ORC-226).
+  return rest.labels ? { ...rest, labels: { ...rest.labels, pending: pendingLabels(rest.labels) } } : rest;
 }
 
 export function createApp(d: ServerDeps): Hono {

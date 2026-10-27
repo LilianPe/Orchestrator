@@ -115,6 +115,10 @@ const outboxRow = ({ id, status, attempts, payload: p }: OutboxSqlRow): OutboxRo
   ...(p.lease === undefined ? {} : { lease: p.lease }),
 });
 
+/** An attempt's label column on update: kept once the attempt has labels, else the write's (ORC-226). */
+const FIRST_LABELS = (column: string) =>
+  sql.raw(`case when attempts.data ? 'labels' then attempts.${column} else excluded.${column} end`);
+
 export class PgStore implements AsyncStore {
   private readonly pool: Pool;
   private readonly db: NodePgDatabase<typeof schema>;
@@ -580,12 +584,19 @@ export class PgStore implements AsyncStore {
    */
   async putRun(run: RunRecord): Promise<void> {
     const endedAt = run.endedAt === undefined ? null : new Date(run.endedAt);
+    const l = run.labels;
+    const fact = l?.deliveredFactIds == null ? null : JSON.stringify(l.deliveredFactIds);
+    // The first record with labels fixes them, in `data.labels` and in their columns alike: an
+    // attempt's labels say what it was created with (ORC-226).
     await this.db.execute(sql`
       insert into attempts (
         id, ticket_id, step, model, effort, fingerprints, image, risk,
+        factory_version, factory_commit, registry_commit, delivered_fact_ids,
         started_at, ended_at, status, data, cost_usd
       ) values (
-        ${run.id}, ${run.ticketId}, ${run.job}, null, null, '{}'::jsonb, null, null,
+        ${run.id}, ${run.ticketId}, ${run.job}, ${l?.model ?? null}, ${l?.effort ?? null},
+        ${JSON.stringify(l?.fingerprints ?? {})}::jsonb, ${l?.image ?? null}, ${l?.risk ?? null},
+        ${l?.factoryVersion ?? null}, ${l?.factoryCommit ?? null}, ${l?.registryCommit ?? null}, ${fact}::jsonb,
         to_timestamp(${run.startedAt / 1000}), ${endedAt}, ${run.status},
         ${JSON.stringify(run)}::jsonb, ${run.costUsd}
       )
@@ -595,7 +606,19 @@ export class PgStore implements AsyncStore {
         started_at = excluded.started_at,
         ended_at = excluded.ended_at,
         status = excluded.status,
-        data = excluded.data,
+        model = ${FIRST_LABELS('model')},
+        effort = ${FIRST_LABELS('effort')},
+        fingerprints = ${FIRST_LABELS('fingerprints')},
+        image = ${FIRST_LABELS('image')},
+        risk = ${FIRST_LABELS('risk')},
+        factory_version = ${FIRST_LABELS('factory_version')},
+        factory_commit = ${FIRST_LABELS('factory_commit')},
+        registry_commit = ${FIRST_LABELS('registry_commit')},
+        delivered_fact_ids = ${FIRST_LABELS('delivered_fact_ids')},
+        data = case
+          when attempts.data ? 'labels' then jsonb_set(excluded.data, '{labels}', attempts.data->'labels')
+          else excluded.data
+        end,
         cost_usd = excluded.cost_usd
     `);
   }
