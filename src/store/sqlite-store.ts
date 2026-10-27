@@ -22,7 +22,11 @@ const rank = (priority: number) => (priority === 0 ? 5 : priority);
 export class SqliteStore implements Store {
   private db: DatabaseSync;
 
-  constructor(path: string) {
+  /** `now` stamps the inbox rows, like PgStore's injectable clock. */
+  constructor(
+    path: string,
+    private readonly now: () => number = () => Date.now(),
+  ) {
     this.db = new DatabaseSync(path);
     this.db.exec('PRAGMA journal_mode = WAL;');
     this.db.exec(SCHEMA);
@@ -49,7 +53,7 @@ export class SqliteStore implements Store {
   async appendInbox(e: FactoryEvent | StoredEvent): Promise<boolean> {
     const res = this.db
       .prepare('INSERT OR IGNORE INTO inbox (id, received_at, data) VALUES (?, ?, ?)')
-      .run(e.id, Date.now(), JSON.stringify(e));
+      .run(e.id, this.now(), JSON.stringify(e));
     return Number(res.changes) === 1;
   }
 
@@ -65,7 +69,7 @@ export class SqliteStore implements Store {
   }
 
   async markInboxProcessed(id: string): Promise<void> {
-    this.db.prepare('UPDATE inbox SET processed_at = ? WHERE id = ? AND processed_at IS NULL').run(Date.now(), id);
+    this.db.prepare('UPDATE inbox SET processed_at = ? WHERE id = ? AND processed_at IS NULL').run(this.now(), id);
   }
 
   async recordEvent(e: FactoryEvent): Promise<boolean> {

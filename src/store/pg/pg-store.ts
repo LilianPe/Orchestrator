@@ -164,10 +164,9 @@ export class PgStore implements AsyncStore {
   }
 
   /**
-   * Appends to `journal`, and to `inbox` when the event did not come through `appendInbox` (it is
-   * then written as processed), in one transaction. The second call for the same event id returns
-   * `false` without touching the journal: the journal's unique event id is the dedup key, since
-   * the inbox row of an event usually exists before it is journaled (ORC-147).
+   * Appends to `journal`; every event reaches it from its inbox row (`appendInbox`, ORC-147). The
+   * second call for the same event id returns `false` without touching the journal: the journal's
+   * unique event id is the dedup key.
    *
    * The per-ticket journal sequence is allocated under a transaction-scoped advisory lock, so two
    * workers cannot pick the same `seq` for a ticket.
@@ -177,16 +176,6 @@ export class PgStore implements AsyncStore {
     // A row without a version predates versioning: version 1, as `upcast` reads it.
     const version = event.schemaVersion ?? 1;
     return this.db.transaction(async (tx) => {
-      await tx.execute(
-        sql`
-          insert into inbox (id, event_id, type, payload, received_at, processed_at, schema_version)
-          values (
-            ${event.id}, ${event.id}, ${event.type}, ${JSON.stringify(event)}::jsonb,
-            to_timestamp(${now / 1000}), to_timestamp(${now / 1000}), ${version}
-          )
-          on conflict do nothing
-        `,
-      );
       const ticketId = event.ticketId ?? null;
       // Taken before the dedup check: a second call for the same event (same ticket) waits for the
       // first to commit, then sees its journal row.
