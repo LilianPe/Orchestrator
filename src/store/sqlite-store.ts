@@ -183,7 +183,12 @@ export class SqliteStore implements Store {
   }
 
   async markInboxProcessed(id: string): Promise<void> {
-    this.db.prepare('UPDATE inbox SET processed_at = ? WHERE id = ? AND processed_at IS NULL').run(this.now(), id);
+    this.markProcessed(id);
+  }
+
+  /** False when the row was no longer pending. */
+  private markProcessed(id: string): boolean {
+    return Number(this.db.prepare('UPDATE inbox SET processed_at = ? WHERE id = ? AND processed_at IS NULL').run(this.now(), id).changes) === 1;
   }
 
   /**
@@ -364,18 +369,17 @@ export class SqliteStore implements Store {
 
   async deadLetter(row: StoredEvent, error: string, at: number): Promise<boolean> {
     return this.atomically(() => {
-      const marked = this.db.prepare('UPDATE inbox SET processed_at = ? WHERE id = ? AND processed_at IS NULL').run(this.now(), row.id);
-      if (Number(marked.changes) !== 1) return false;
+      if (!this.markProcessed(row.id)) return false;
       const event = deadLetteredEvent(row);
-      const prev = this.db.prepare('SELECT failures FROM dead_letter WHERE event_id = ?').get(event.id) as { failures: number } | undefined;
-      const failures = Number(prev?.failures ?? 0) + 1;
-      this.db
+      const upserted = this.db
         .prepare(
           `INSERT INTO dead_letter (event_id, project_id, ticket_id, status, failures, error, created_at, updated_at, data)
-           VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?)
-           ON CONFLICT (event_id) DO UPDATE SET status = 'open', failures = excluded.failures, error = excluded.error, updated_at = excluded.updated_at`,
+           VALUES (?, ?, ?, 'open', 1, ?, ?, ?, ?)
+           ON CONFLICT (event_id) DO UPDATE SET status = 'open', failures = dead_letter.failures + 1, error = excluded.error, updated_at = excluded.updated_at
+           RETURNING failures`,
         )
-        .run(event.id, event.projectId, event.ticketId ?? null, failures, error, at, at, JSON.stringify(event));
+        .get(event.id, event.projectId, event.ticketId ?? null, error, at, at, JSON.stringify(event)) as { failures: number };
+      const failures = Number(upserted.failures);
       const notice = deadLetterNotice({ event, error, failures }, at);
       if (notice) this.appendResult(notice);
       return true;

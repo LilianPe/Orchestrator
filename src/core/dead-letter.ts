@@ -10,12 +10,13 @@ import { TRUSTED, type EventPayloads, type FactoryEvent, type TicketState } from
 
 /** What `factory run repair` does with a dead-lettered event. */
 export type RepairAction = EventPayloads['dead_letter.repaired']['action'];
-export const REPAIR_ACTIONS: readonly RepairAction[] = ['replay', 'skip', 'force'];
+
+/** The status of a dead letter once repaired by each action. */
+export const REPAIRED_STATUS = { replay: 'replayed', skip: 'skipped', force: 'forced' } as const satisfies Record<RepairAction, string>;
+export const REPAIR_ACTIONS = Object.keys(REPAIRED_STATUS) as readonly RepairAction[];
 
 /** `open` until repaired; then the last repair. A replay whose decision throws again reopens it. */
-export type DeadLetterStatus = 'open' | 'replayed' | 'skipped' | 'forced';
-
-export const REPAIRED_STATUS: Record<RepairAction, DeadLetterStatus> = { replay: 'replayed', skip: 'skipped', force: 'forced' };
+export type DeadLetterStatus = 'open' | (typeof REPAIRED_STATUS)[RepairAction];
 
 /** The action in French, for the operator and the ticket's session. */
 export const REPAIR_LABELS: Record<RepairAction, string> = { replay: 'rejoué', skip: 'ignoré', force: 'forcé' };
@@ -43,8 +44,13 @@ export function deadLetterReason(p: EventPayloads['dead_letter.added']): string 
   return `${reasonPrefix(p.eventId)} (${p.eventType}) : sa décision a échoué (${p.error}).`;
 }
 
-export function blockedByDeadLetter(t: TicketState, eventId: string): boolean {
+function blockedByDeadLetter(t: TicketState, eventId: string): boolean {
   return t.blocked && (t.blockReason?.startsWith(`${reasonPrefix(eventId)} (`) ?? false);
+}
+
+/** The ticket with the block of a dead-lettered event lifted, or as it is when blocked by anything else (`decide` and `reduce` of a repair). */
+export function liftDeadLetterBlock<T extends TicketState | undefined>(t: T, eventId: string): T {
+  return t && blockedByDeadLetter(t, eventId) ? { ...t, blocked: false, blockReason: undefined } : t;
 }
 
 /** The event a dead-lettered row is about: a failed repair is the event it repairs, not a new dead letter. */
@@ -99,7 +105,6 @@ export function repairedEvent(e: FactoryEvent<'dead_letter.repaired'>): FactoryE
 
 /** The event a decision is about: the one a `replay` or `force` repair applies, else the event itself. */
 export function effectiveEvent(event: FactoryEvent): FactoryEvent {
-  if (event.type !== 'dead_letter.repaired') return event;
-  const repaired = repairedEvent(event);
-  return repaired ? effectiveEvent(repaired) : event;
+  // Never nested: a failed repair is dead-lettered as the event it repairs (`deadLetteredEvent`).
+  return (event.type === 'dead_letter.repaired' && repairedEvent(event)) || event;
 }

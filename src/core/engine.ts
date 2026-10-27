@@ -1,6 +1,6 @@
 import type { JobSpec, Rule, Workflow } from '../config/workflow-schema.js';
 import { evalCondition } from './conditions.js';
-import { blockedByDeadLetter, deadLetterReason, REPAIR_LABELS, repairedEvent } from './dead-letter.js';
+import { deadLetterReason, liftDeadLetterBlock, REPAIR_LABELS, repairedEvent } from './dead-letter.js';
 import type { Decision, Effect } from './decision.js';
 import { reduce } from './reduce.js';
 import type { EventType, FactoryEvent, FeedbackItem, InputKind, Taint, TicketState, VerifyFailure } from './types.js';
@@ -268,8 +268,8 @@ function settledTicket(ticket: TicketState): string | undefined {
  */
 function repair(state: TicketState | undefined, event: FactoryEvent<'dead_letter.repaired'>, workflow: Workflow): Decision {
   const { eventId, action, by } = event.payload;
-  const lifted = state !== undefined && blockedByDeadLetter(state, eventId);
-  const base = lifted ? { ...state, blocked: false, blockReason: undefined } : state;
+  const base = liftDeadLetterBlock(state, eventId);
+  const lifted = base !== state;
   const repaired = repairedEvent(event);
   const out = action === 'replay' && repaired ? decide(base, repaired, workflow) : empty();
   // Pushed, not put first: the trace of a replayed event keeps its fence first (`isFenced`).

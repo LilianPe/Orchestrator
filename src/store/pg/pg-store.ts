@@ -543,11 +543,11 @@ export class PgStore implements AsyncStore {
   }
 
   async repairDeadLetter(eventId: string, action: RepairAction, by: string, at: number): Promise<DeadLetter | undefined> {
-    const found = await this.db.execute<{ ticket_id: string | null }>(sql`select ticket_id from dead_letter where id = ${eventId}`);
-    if (!found.rows[0]) return undefined;
     return this.db.transaction(async (tx) => {
+      const found = await tx.execute<{ ticket_id: string | null }>(sql`select ticket_id from dead_letter where id = ${eventId} and status = 'open'`);
+      if (!found.rows[0]) return undefined;
       // The ticket's lock, as `appendInbox`: the repair gets its `received_at` in commit order.
-      await tx.execute(ticketLock(found.rows[0]!.ticket_id));
+      await tx.execute(ticketLock(found.rows[0].ticket_id));
       const status = REPAIRED_STATUS[action];
       const updated = await tx.execute<DeadLetterPgRow>(sql`
         update dead_letter set status = ${status}, resolved_by = ${by}, updated_at = to_timestamp(${at / 1000})
