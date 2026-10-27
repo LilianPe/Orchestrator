@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { parseDiff } from './diff.js';
 import { DIFF_SIZE_CHECK, MAX_DIFF, MaxDiffConfigError, diffSizeCheck, measureDiff, resolveMaxDiff } from './diff-size.js';
 
 // A new file of `lines` added lines.
@@ -18,8 +19,8 @@ function deletedFile(path: string, lines: number): string {
   return [`diff --git a/${path} b/${path}`, 'deleted file mode 100644', `--- a/${path}`, '+++ /dev/null', `@@ -1,${lines} +0,0 @@`, ...body, ''].join('\n');
 }
 
-function renamedFile(from: string, to: string, added = 0): string {
-  const head = [`diff --git a/${from} b/${to}`, `similarity index ${added === 0 ? 100 : 90}%`, `rename from ${from}`, `rename to ${to}`];
+function renamedFile(from: string, to: string, added = 0, kind: 'rename' | 'copy' = 'rename'): string {
+  const head = [`diff --git a/${from} b/${to}`, `similarity index ${added === 0 ? 100 : 90}%`, `${kind} from ${from}`, `${kind} to ${to}`];
   if (added === 0) return [...head, ''].join('\n');
   const body = Array.from({ length: added }, (_, i) => `+new ${i}`);
   return [...head, `--- a/${from}`, `+++ b/${to}`, `@@ -1,1 +1,${added + 1} @@`, ' context', ...body, ''].join('\n');
@@ -124,15 +125,15 @@ describe('diffSizeCheck', () => {
   });
 
   it('judges a copy by its new path: a test copied from code is a test', () => {
-    const copy = ['diff --git a/src/fixture.ts b/test/fixture.ts', 'similarity index 80%', 'copy from src/fixture.ts', 'copy to test/fixture.ts', '--- a/src/fixture.ts', '+++ b/test/fixture.ts', '@@ -1,1 +1,301 @@', ' context', ...Array.from({ length: 300 }, (_, i) => `+new ${i}`), ''].join('\n');
-    expect(measureDiff(copy).size).toEqual({ files: 0, lines: 0 });
+    expect(measureDiff(renamedFile('src/fixture.ts', 'test/fixture.ts', 300, 'copy')).size).toEqual({ files: 0, lines: 0 });
+    expect(measureDiff(renamedFile('src/fixture.ts', 'src/fixture2.ts', 3, 'copy')).size).toEqual({ files: 1, lines: 3 });
   });
 
   it('keeps an agent-written path from breaking the summary', () => {
     // git quotes a path with a newline or a backtick; parseDiff decodes it.
-    const path = String.raw`"src/a\n[ok](x)` + '`' + String.raw`b.ts"`;
+    const [a, b] = [String.raw`"a/src/a\n[ok](x)` + '`b.ts"', String.raw`"b/src/a\n[ok](x)` + '`b.ts"'];
     const body = Array.from({ length: 401 }, (_, i) => `+line ${i}`);
-    const diff = [`diff --git ${path.replace('"src', '"a/src')} ${path.replace('"src', '"b/src')}`, 'new file mode 100644', '--- /dev/null', `+++ ${path.replace('"src', '"b/src')}`, '@@ -0,0 +1,401 @@', ...body, ''].join('\n');
+    const diff = [`diff --git ${a} ${b}`, 'new file mode 100644', '--- /dev/null', `+++ ${b}`, '@@ -0,0 +1,401 @@', ...body, ''].join('\n');
     const result = diffSizeCheck(diff);
     expect(result.ok).toBe(false);
     expect(result.summary).toContain('- `` src/a?[ok](x)`b.ts `` : 401 ligne(s)');
@@ -140,6 +141,10 @@ describe('diffSizeCheck', () => {
 
   it('counts the test runner configuration: it is not a test', () => {
     expect(measureDiff(modifiedFile('vitest.config.ts', 2, 1)).size).toEqual({ files: 1, lines: 3 });
+  });
+
+  it('takes the files already parsed, as verify will for every check', () => {
+    expect(diffSizeCheck(parseDiff(files(16)))).toMatchObject({ ok: false, size: { files: 16, lines: 16 } });
   });
 
   it('passes an empty diff', () => {

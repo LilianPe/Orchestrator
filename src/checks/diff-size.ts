@@ -12,6 +12,7 @@
 // - a pure rename counts as one file with no line, a binary file as one file with no line.
 // Other generated files count: nothing in the diff says a file is generated.
 import { parseDiff, type DiffFile } from './diff.js';
+import { mdCode } from './markdown.js';
 import { isTestFile, normalizePath } from './test-files.js';
 import type { CheckResult } from './types.js';
 
@@ -99,19 +100,20 @@ export interface DiffMeasure {
   size: MaxDiff;
   /** Files that count, biggest first. */
   counted: CountedFile[];
-  /** Paths left out. */
-  tests: string[];
-  generated: string[];
+  /** Files left out. */
+  tests: number;
+  generated: number;
 }
 
-export function measureDiff(diff: string): DiffMeasure {
+/** `diff`: the text of `git diff`, or its files already parsed (`verify` parses once for every check). */
+export function measureDiff(diff: string | DiffFile[]): DiffMeasure {
   const counted: CountedFile[] = [];
-  const tests: string[] = [];
-  const generated: string[] = [];
-  for (const file of parseDiff(diff)) {
+  let tests = 0;
+  let generated = 0;
+  for (const file of typeof diff === 'string' ? parseDiff(diff) : diff) {
     const kind = kindOf(file);
-    if (kind === 'test') tests.push(file.path);
-    else if (kind === 'generated') generated.push(file.path);
+    if (kind === 'test') tests++;
+    else if (kind === 'generated') generated++;
     else counted.push({ path: file.path, lines: file.added.length + file.removed });
   }
   counted.sort((a, b) => b.lines - a.lines);
@@ -129,28 +131,20 @@ export interface DiffSizeResult extends CheckResult {
   limits: MaxDiff;
 }
 
-// A path comes from the agent's diff: no control character, and a code span that survives a backtick.
-function mdCode(path: string): string {
-  const s = path.replace(/\p{Cc}/gu, '?');
-  return s.includes('`') ? `\`\` ${s} \`\`` : `\`${s}\``;
-}
-
 /** Files named in a blocking summary, biggest first: where a split would start. */
 const LISTED = 10;
 
 function leftOut(m: DiffMeasure): string {
-  const parts = [
-    ...(m.tests.length > 0 ? [`${m.tests.length} fichier(s) de test non compté(s)`] : []),
-    ...(m.generated.length > 0 ? [`${m.generated.length} fichier(s) généré(s) non compté(s)`] : []),
-  ];
+  const parts: string[] = [];
+  if (m.tests > 0) parts.push(`${m.tests} fichier(s) de test non compté(s)`);
+  if (m.generated > 0) parts.push(`${m.generated} fichier(s) généré(s) non compté(s)`);
   return parts.length > 0 ? ` (${parts.join(', ')})` : '';
 }
 
 function blockedSummary(m: DiffMeasure, limits: MaxDiff): string {
-  const over = [
-    ...(m.size.files > limits.files ? [`${m.size.files} fichiers hors tests, au-delà de ${limits.files}`] : []),
-    ...(m.size.lines > limits.lines ? [`${m.size.lines} lignes hors tests, au-delà de ${limits.lines}`] : []),
-  ];
+  const over: string[] = [];
+  if (m.size.files > limits.files) over.push(`${m.size.files} fichiers hors tests, au-delà de ${limits.files}`);
+  if (m.size.lines > limits.lines) over.push(`${m.size.lines} lignes hors tests, au-delà de ${limits.lines}`);
   const biggest = m.counted.slice(0, LISTED).map((f) => `- ${mdCode(f.path)} : ${f.lines} ligne(s)`);
   return [
     `Diff trop gros pour une PR : ${over.join(' ; ')}${leftOut(m)}.`,
@@ -164,7 +158,7 @@ function blockedSummary(m: DiffMeasure, limits: MaxDiff): string {
 }
 
 /** The `factory/taille-du-diff` check run: success only when the diff outside tests stays within `max_diff`. */
-export function diffSizeCheck(diff: string, options: DiffSizeOptions = {}): DiffSizeResult {
+export function diffSizeCheck(diff: string | DiffFile[], options: DiffSizeOptions = {}): DiffSizeResult {
   const measure = measureDiff(diff);
   let limits: MaxDiff;
   try {
