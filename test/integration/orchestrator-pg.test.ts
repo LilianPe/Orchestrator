@@ -47,6 +47,22 @@ describe.skipIf(!PG_URL)('orchestrator on PgStore', () => {
     expect(projection.rows[0]).toEqual({ status: 'human_review', active_attempts: 0 });
   });
 
+  it('starts a queued item whose holder died before its start, once its lease expired (ORC-150)', async () => {
+    const h = harness({ projectYaml: 'version: 1\n' });
+    h.tracker.addIssue({ identifier: 'REL-1', title: 'Un' });
+    await h.store.setMeta('paused', '1');
+    await h.send('ticket.delegated', { linearSessionId: 'a' });
+    expect((await h.store.listQueue()).map((q) => q.ticketId)).toEqual(['REL-1']);
+    // Another daemon took it, then died: its lease is already over.
+    expect(await h.store.claimQueued('dev', -1)).toBeDefined();
+    await h.store.setMeta('paused', '0');
+    await h.orch.tick();
+    await h.orch.drained();
+    expect(h.runner.requests).toHaveLength(1);
+    expect(await h.store.listQueue()).toEqual([]);
+    expect((await pool.query(`select status from outbox where payload ? 'queue'`)).rows).toEqual([{ status: 'done' }]);
+  });
+
   it('respects the parallel cap and drains the queue through the outbox', async () => {
     const h = harness({ projectYaml: 'version: 1\nlimits: { parallel_sessions: 1 }\n' });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Un' });

@@ -418,5 +418,9 @@ describe('decide — built-ins', () => {
     // A step of the shell, or an unknown ticket: nothing to block.
     expect(decide(ticket(), ev('effect.failed', { ...result, kind: 'settle', error: 'x' }), workflow)).toEqual(decision());
     expect(decide(undefined, ev('effect.failed', { ...result, error: 'x' }), workflow)).toEqual(decision());
+    // Delivered, or stopped by a human (the reason stays): nothing to block.
+    expect(decide(ticket({ logical: 'done' }), ev('effect.failed', { ...result, error: 'x' }), workflow)).toEqual(decision());
+    expect(decide(ticket({ prState: 'MERGED' }), ev('effect.failed', { ...result, error: 'x' }), workflow)).toEqual(decision());
+    expect(decide(ticket({ blocked: true, blockReason: 'Arrêté à la demande' }), ev('effect.failed', { ...result, error: 'x' }), workflow)).toEqual(decision());
   });
 });

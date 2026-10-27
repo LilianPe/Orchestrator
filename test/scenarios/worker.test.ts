@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { loadWorkflow } from '../../src/config/load-workflow.js';
-import { TRUSTED } from '../../src/core/types.js';
+import { TRUSTED, type FactoryEvent } from '../../src/core/types.js';
 import { SqliteStore } from '../../src/store/sqlite-store.js';
 import type { DecisionRequest } from '../../src/store/types.js';
 import type { WorkspaceRequest } from '../../src/adapters/workspace/types.js';
@@ -420,5 +420,60 @@ describe('outbox executors: lease, backoff, results through the inbox', () => {
     expect(h.runner.requests).toHaveLength(1);
     expect(await h.store.listQueue()).toEqual([]);
     expect(await h.store.claimQueued('dev', 60_000)).toBeUndefined();
+  });
+});
+
+describe('a stop and an effect held back by its backoff (ORC-150, ORC-138)', () => {
+  const RUN_THEN_COMMENT = `
+version: 1
+on:
+  ticket.delegated:
+    - { run: dev }
+  label.changed:
+    - { label: "agent:x", comment: "reçu" }
+`;
+
+  it.each([
+    { type: 'control.stop' as const, payload: {} },
+    { type: 'session.stopped' as const, payload: { linearSessionId: 'ls-1' } },
+  ])('lets $type stop the run without waiting for the retry, and keeps its block reason', async ({ type, payload }) => {
+    // A minute of backoff: the stop must not wait for it.
+    const h = createHarness({ projectYaml: RUN_THEN_COMMENT, effectRetry: { attempts: 8, baseMs: 60_000, capMs: 60_000 } });
+    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+    h.runner.enqueue({ hold: true });
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    const runId = (await h.ticket()).activeRunId!;
+    expect(runId).toBeDefined();
+    h.tracker.comment = async () => {
+      throw new Error('Linear down');
+    };
+    await h.send('label.changed', { label: 'agent:x', change: 'added' });
+    const comment = (await h.store.listEffects('p', 'REL-1')).find((r) => r.effect.kind === 'comment')!;
+    expect(comment).toMatchObject({ status: 'pending', attempts: 1, error: 'Linear down' });
+
+    const started = Date.now();
+    await h.orch.accept({ ...TRUSTED, id: 'stop-1', type, at: h.clock.now(), projectId: 'p', ticketId: 'REL-1', payload } as FactoryEvent);
+    await waitFor(async () => (await h.store.getRun(runId))?.status === 'stopped');
+    await h.orch.drained();
+    expect(Date.now() - started).toBeLessThan(10_000);
+    expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Arrêté à la demande' });
+    expect((await h.store.listEffects('p', 'REL-1')).find((r) => r.id === comment.id)).toMatchObject({ status: 'failed', error: 'cancelled by stop-1' });
+    // No effect.failed for a cancelled row: nothing rewrites the stop's reason.
+    expect((await h.store.recentEvents(100, 'REL-1')).some((e) => e.type === 'effect.failed')).toBe(false);
+    expect(await h.store.pendingInbox(10)).toEqual([]);
+  });
+
+  it('does not let another event pass the backoff', async () => {
+    const h = createHarness({ projectYaml: RUN_THEN_COMMENT, effectRetry: { attempts: 8, baseMs: 60_000, capMs: 60_000 } });
+    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+    h.runner.enqueue({ hold: true });
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    h.tracker.comment = async () => {
+      throw new Error('Linear down');
+    };
+    await h.send('label.changed', { label: 'agent:x', change: 'added' });
+    await h.send('label.changed', { label: 'agent:y', change: 'added' });
+    expect((await h.store.pendingInbox(10)).map((e) => e.type)).toEqual(['label.changed']);
+    h.orch.stopAll();
   });
 });

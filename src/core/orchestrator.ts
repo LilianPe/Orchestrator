@@ -504,6 +504,9 @@ export class Orchestrator {
     }
     bus.publish({ kind: 'event', event });
     if (outcome.plan.note) this.log('info', outcome.plan.note);
+    if (outcome.preempted.length > 0) {
+      this.log('warn', `${event.type} ${event.id} cancelled the effects held back by their retry: ${outcome.preempted.join(', ')}`);
+    }
     if (outcome.plan.ticket) bus.publish({ kind: 'ticket', ticket: outcome.plan.ticket });
   }
 

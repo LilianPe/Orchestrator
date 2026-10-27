@@ -166,9 +166,11 @@ export class SqliteStore implements Store {
       .get(event.projectId, ticketId) as { id: string } | undefined;
     if (first && first.id !== event.id) return { status: 'waiting', reason: `${first.id} comes first` };
     const open = this.db
-      .prepare(`SELECT id FROM outbox WHERE project_id = ? AND ticket_id IS ? AND status IN ('pending', 'running') LIMIT 1`)
-      .get(event.projectId, ticketId) as { id: string } | undefined;
-    if (open) return { status: 'waiting', reason: `effect ${open.id} is unfinished` };
+      .prepare(`SELECT id, status, available_at FROM outbox WHERE project_id = ? AND ticket_id IS ? AND status IN ('pending', 'running') ORDER BY seq, i`)
+      .all(event.projectId, ticketId) as { id: string; status: string; available_at: number }[];
+    // Held back by its backoff (nothing running): a stop of the ticket's work may go first (ORC-150).
+    const backedOff = open.length > 0 && open.every((r) => r.status === 'pending') && Number(open[0]!.available_at) > Date.now();
+    if (open.length > 0 && !backedOff) return { status: 'waiting', reason: `effect ${open[0]!.id} is unfinished` };
     if (this.db.prepare('SELECT 1 FROM events WHERE id = ?').get(event.id)) {
       this.db.prepare('UPDATE inbox SET processed_at = ? WHERE id = ?').run(this.now(), event.id);
       return { status: 'duplicate' };
@@ -176,6 +178,12 @@ export class SqliteStore implements Store {
 
     const known = ticketId === null ? undefined : this.ticketRow(event.projectId, ticketId);
     const plan = req.decide(known, this.frozenWorkflow(known, req.workflow));
+    const preempted = open.map((r) => r.id);
+    if (preempted.length > 0) {
+      if (!plan.clearTimers) return { status: 'waiting', reason: `effect ${preempted[0]} waits for its retry` };
+      const cancel = this.db.prepare(`UPDATE outbox SET status = 'failed', error = ? WHERE id = ?`);
+      for (const id of preempted) cancel.run(`cancelled by ${event.id}`, id);
+    }
 
     const { n } = this.db.prepare('SELECT COUNT(*) AS n FROM events WHERE ticket_id IS ?').get(ticketId) as { n: number };
     const seq = Number(n) + 1;
@@ -200,7 +208,7 @@ export class SqliteStore implements Store {
       return id;
     });
     this.db.prepare('UPDATE inbox SET processed_at = ? WHERE id = ?').run(this.now(), event.id);
-    return { status: 'committed', seq, effectIds, known, plan };
+    return { status: 'committed', seq, effectIds, known, plan, preempted };
   }
 
   private frozenWorkflow(known: TicketState | undefined, current: WorkflowVersion): WorkflowVersion {

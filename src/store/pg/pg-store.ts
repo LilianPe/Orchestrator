@@ -264,13 +264,17 @@ export class PgStore implements AsyncStore {
       `);
       const firstId = first.rows[0]?.id;
       if (firstId !== undefined && firstId !== event.id) return { status: 'waiting', reason: `${firstId} comes first` };
-      const open = await tx.execute<{ id: string }>(sql`
-        select id from outbox
+      // Locked: an executor claiming one of them right now finishes first, and is seen here.
+      const open = await tx.execute<{ id: string; status: string; later: boolean }>(sql`
+        select id, status, available_at > to_timestamp(${now / 1000}) as later from outbox
         where ticket_id = ${outboxTicket(ticketId)} and ${DECISION_ROW} and payload->>'projectId' = ${event.projectId}
           and status in ('pending', 'running')
-        limit 1
+        order by ${OUTBOX_ORDER}
+        for update
       `);
-      if (open.rows[0]) return { status: 'waiting', reason: `effect ${open.rows[0].id} is unfinished` };
+      // Held back by its backoff (nothing running): a stop of the ticket's work may go first (ORC-150).
+      const backedOff = open.rows.length > 0 && open.rows.every((r) => r.status === 'pending') && open.rows[0]!.later;
+      if (open.rows[0] && !backedOff) return { status: 'waiting', reason: `effect ${open.rows[0].id} is unfinished` };
       const markProcessed = sql`update inbox set processed_at = to_timestamp(${now / 1000}) where id = ${event.id}`;
       if ((await tx.execute(sql`select 1 from journal where event_id = ${event.id} limit 1`)).rowCount) {
         await tx.execute(markProcessed);
@@ -281,6 +285,15 @@ export class PgStore implements AsyncStore {
       const frozen = known?.workflowHash && known.workflowHash !== req.workflow.hash ? await this.readWorkflow(tx, known.workflowHash) : req.workflow;
       if (!frozen) throw new Error(`workflow version ${known?.workflowHash} of ${ticketId} is not stored`);
       const plan = req.decide(known, frozen);
+      const preempted = open.rows.map((r) => r.id);
+      if (preempted.length > 0) {
+        if (!plan.clearTimers) return { status: 'waiting', reason: `effect ${preempted[0]} waits for its retry` };
+        await tx.execute(sql`
+          update outbox set status = 'failed', updated_at = to_timestamp(${now / 1000}),
+            payload = payload || jsonb_build_object('error', ${`cancelled by ${event.id}`}::text)
+          where id = any(${sql.param(preempted)}::text[])
+        `);
+      }
 
       const seqResult = await tx.execute<{ seq: number }>(
         sql`select coalesce(max(seq), 0) + 1 as seq from journal where ticket_id is not distinct from ${ticketId}`,
@@ -321,7 +334,7 @@ export class PgStore implements AsyncStore {
         effectIds.push(id);
       }
       await tx.execute(markProcessed);
-      return { status: 'committed', seq, effectIds, known, plan };
+      return { status: 'committed', seq, effectIds, known, plan, preempted };
     });
   }
 
@@ -818,23 +831,26 @@ export class PgStore implements AsyncStore {
     });
   }
 
+  /** Items in line: pending, or handed out under a lease that expired (their holder died), as SQLite lists them. */
   async listQueue(): Promise<QueueItem[]> {
     const result = await this.db.execute<{ payload: QueueItem }>(
       sql`
-        select payload from outbox
-        where status = 'pending' and payload->>'queue' is not null
+        select payload - 'lease' as payload from outbox
+        where payload->>'queue' is not null
+          and (status = 'pending' or (status = 'running' and coalesce(lease_until < to_timestamp(${this.now() / 1000}), true)))
         order by ${QUEUE_ORDER}
       `,
     );
     return result.rows.map((row) => row.payload);
   }
 
+  /** Handed-out items too (a stop during their start): `releaseQueued` then finds nothing to put back. */
   async removeFromQueue(projectId: string, ticketId: string, queue?: QueueName): Promise<void> {
     const ofQueue = queue === undefined ? sql`` : sql`and payload->>'queue' = ${queue}`;
     await this.db.execute(
       sql`
         delete from outbox
-        where ticket_id = ${ticketId} and status = 'pending' and payload->>'projectId' = ${projectId}
+        where ticket_id = ${ticketId} and status in ('pending', 'running') and payload->>'projectId' = ${projectId}
           and payload->>'queue' is not null ${ofQueue}
       `,
     );

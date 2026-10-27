@@ -317,6 +317,52 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     ]);
   });
 
+  it('lists a handed-out queue item again once its lease expired, and removes handed-out items of a stopped ticket (ORC-150)', async () => {
+    const s = await store();
+    await s.enqueue(q({ ticketId: 'A' }));
+    await s.enqueue(q({ ticketId: 'B', enqueuedAt: 2 }));
+    // A's holder died: its lease is over, the item is in line again.
+    expect(await s.claimQueued('dev', -1)).toMatchObject({ item: { ticketId: 'A' } });
+    expect((await s.listQueue()).map((i) => i.ticketId)).toEqual(['A', 'B']);
+    expect((await s.listQueue())[0]).not.toHaveProperty('lease');
+    // B is being started when its ticket is stopped: gone, and its claim cannot put it back.
+    const a = (await s.claimQueued('dev', 60_000))!;
+    const b = (await s.claimQueued('dev', 60_000))!;
+    expect([a.item.ticketId, b.item.ticketId]).toEqual(['A', 'B']);
+    await s.removeFromQueue('p', 'B');
+    expect(await s.releaseQueued(b)).toBe(false);
+    expect(await s.releaseQueued(a)).toBe(true);
+    expect((await s.listQueue()).map((i) => i.ticketId)).toEqual(['A']);
+  });
+
+  it('lets a stop of the ticket\'s work pass effects held back by their backoff, and cancels them (ORC-150)', async () => {
+    const s = await store();
+    await s.appendInbox(delegatedEvent('e1'));
+    await s.decide(request(delegatedEvent('e1')));
+    const row = await s.claimEffect('p', 'REL-1', 60_000);
+    if (typeof row !== 'object') throw new Error('expected a claimed row');
+    expect(await s.retryEffect(row.id, row.lease!, 'Linear down', 60_000)).toBe(true);
+    await s.appendInbox(delegatedEvent('e2'));
+    // Not a stop: it waits for the retry.
+    expect(await s.decide(request(delegatedEvent('e2'), { effects: [] }))).toMatchObject({ status: 'waiting' });
+    // A stop goes first: the held rows are cancelled, with no result to decide.
+    expect(await s.decide(request(delegatedEvent('e2'), { effects: [{ kind: 'stop_run' }], clearTimers: true }))).toMatchObject({
+      status: 'committed',
+      preempted: ['REL-1:1:1', 'REL-1:1:2'],
+    });
+    expect((await s.listEffects('p', 'REL-1')).map((r) => [r.id, r.status])).toEqual([
+      ['REL-1:1:1', 'failed'],
+      ['REL-1:1:2', 'failed'],
+      ['REL-1:2:1', 'pending'],
+    ]);
+    expect(await s.pendingInbox(10)).toEqual([]);
+    // A running effect still holds a stop: it ends on its own.
+    const stop = await s.claimEffect('p', 'REL-1', 60_000);
+    expect(stop).toMatchObject({ id: 'REL-1:2:1' });
+    await s.appendInbox(delegatedEvent('e3'));
+    expect(await s.decide(request(delegatedEvent('e3'), { effects: [{ kind: 'stop_run' }], clearTimers: true }))).toMatchObject({ status: 'waiting' });
+  });
+
   it('writes the result of a done effect to the inbox as effect:<id>, with its row, in one transaction (ORC-150)', async () => {
     const s = await store();
     await s.appendInbox(delegatedEvent('e1'));

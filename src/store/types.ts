@@ -84,12 +84,27 @@ export interface DecisionRequest {
 }
 
 export type DecisionOutcome =
-  | { status: 'committed'; seq: number; effectIds: string[]; known: TicketState | undefined; plan: DecisionPlan }
+  | {
+      status: 'committed';
+      seq: number;
+      effectIds: string[];
+      known: TicketState | undefined;
+      plan: DecisionPlan;
+      /**
+       * Pending rows of the ticket a stop cancelled (ORC-150): held back by their backoff, they do
+       * not hold a stop of the ticket's work (`clearTimers`); they go `failed`, with no result event.
+       */
+      preempted: string[];
+    }
   /** Already journaled (an older engine journaled it before marking it): marked processed, nothing else. */
   | { status: 'duplicate' }
   /** No longer pending: another worker processed it. */
   | { status: 'processed' }
-  /** Not this row's turn: an older row of the ticket is still pending, or an effect of the ticket is unfinished. */
+  /**
+   * Not this row's turn: an older row of the ticket is still pending, or an effect of the ticket is
+   * unfinished (running, or pending; one held back by its backoff only holds events that do not stop
+   * the ticket's work).
+   */
   | { status: 'waiting'; reason: string };
 
 /** An outbox row written by a decision (ORC-149), executed after the commit. */
@@ -229,9 +244,12 @@ export interface Store {
   finishQueued(claim: QueueClaim): Promise<boolean>;
   /** The item goes back in line, at its place (no free slot, paused, over budget). */
   releaseQueued(claim: QueueClaim): Promise<boolean>;
-  /** Items waiting in line (not handed out). */
+  /** Items waiting in line: not handed out, or handed out under a lease that expired (their holder died). */
   listQueue(): Promise<QueueItem[]>;
-  /** Drops the ticket's queued runs, of every queue or of `queue` only. */
+  /**
+   * Takes the ticket's items out of the queue, of every queue or of `queue` only, handed-out ones
+   * included (a stop): their claim then settles nothing.
+   */
   removeFromQueue(projectId: string, ticketId: string, queue?: QueueName): Promise<void>;
   putEcho(key: string, until: number): Promise<void>;
   isEcho(key: string, now: number): Promise<boolean>;

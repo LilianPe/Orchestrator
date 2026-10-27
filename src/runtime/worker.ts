@@ -227,10 +227,8 @@ export class Worker {
       const effects = await this.executor.runTicket(ref.projectId, ref.ticketId);
       // Their results are in the inbox now: the next pass reads them.
       if (effects.settled > 0) this.kick().catch((e: unknown) => this.d.log('error', `worker: ${(e as Error).message}`));
-      if (effects.status === 'busy') {
-        this.waitAll(key);
-        break;
-      }
+      // Effects held (another worker's lease, a backoff): the next row still goes to the store, which
+      // lets a stop of the ticket's work pass a backoff (ORC-150) and answers `waiting` otherwise.
       const row = this.queued.get(key)?.shift();
       if (!row) break;
       if ((await this.process(row, key)) === 'waiting') {

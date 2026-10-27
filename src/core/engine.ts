@@ -7,6 +7,7 @@ import type { EventType, FactoryEvent, InputKind, Taint, TicketState, VerifyFail
 type StartRun = Extract<Effect, { kind: 'start_run' }>;
 
 const STOP_MESSAGE = 'Arrêté. Répondez dans ce fil ou posez le label agent:reprendre pour relancer.';
+const STOPPED = 'Arrêté à la demande';
 
 /** Paths a run started from an untrusted event must not write; enforced by the runner's sandbox (ORC-151). */
 export const SENSITIVE_PATHS: readonly string[] = ['.github/**', '.factory/**', '.claude/**', 'CODEOWNERS', '.env*'];
@@ -25,7 +26,7 @@ function empty(): Decision {
 }
 
 function stop(out: Decision): Decision {
-  out.events.push({ type: 'work.cancelled' }, { type: 'ticket.blocked', reason: 'Arrêté à la demande' });
+  out.events.push({ type: 'work.cancelled' }, { type: 'ticket.blocked', reason: STOPPED });
   out.effects.push({ kind: 'stop_run' }, { kind: 'activity', type: 'response', body: STOP_MESSAGE });
   return out;
 }
@@ -270,6 +271,11 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
       // `settle` is a step of the shell, not an effect of the workflow: its failure is only logged.
       const { kind, error, eventId } = event.payload;
       if (kind === 'settle' || !ticket) return out;
+      // Nothing left to block: a delivered ticket, or one a human stopped (its reason stays).
+      if (ticket.logical === 'done' || ticket.prState === 'MERGED' || (ticket.blocked && ticket.blockReason === STOPPED)) {
+        out.trace.push(`effect.failed ignored: ticket ${ticket.logical === 'done' || ticket.prState === 'MERGED' ? 'delivered' : 'stopped'}`);
+        return out;
+      }
       const reason = `Erreur : ${error}`;
       out.events.push({ type: 'ticket.blocked', reason });
       // The error notice of a failed effect is not noticed again when it fails too: the tracker may be what fails.
