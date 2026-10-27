@@ -12,6 +12,8 @@ export interface ClaudeRunnerOptions {
   transcriptsDir: string;
   command?: string[];
   killGraceMs?: number;
+  /** Secrets held outside the environment (the daemon's secrets file), masked like the environment's. */
+  secrets?: () => readonly string[];
 }
 
 export function buildClaudeArgs(req: RunRequest): string[] {
@@ -56,8 +58,9 @@ export class ClaudeCodeRunner implements Runner {
       detached: true,
     });
     const transcript = createWriteStream(join(this.o.transcriptsDir, `${req.runId}.jsonl`), { flags: 'a' });
-    // Masked on write: the file never holds a secret value the daemon or the run knows of.
-    const secrets = transcriptSecrets({ ...process.env, ...req.env });
+    // Masked as read: the transcript, the stream events (SSE, Linear) and the final text never
+    // hold a secret value the daemon or the run knows of.
+    const secrets = transcriptSecrets({ ...process.env, ...req.env }, this.o.secrets?.());
     const ch = new Channel<RunStreamEvent>();
     let assistantTurns = 0;
     let lastText = '';
@@ -92,9 +95,10 @@ export class ClaudeCodeRunner implements Runner {
     };
     const timer = setTimeout(limit, req.limits.durationMs);
 
-    createInterface({ input: child.stdout }).on('line', (line) => {
+    createInterface({ input: child.stdout }).on('line', (unmasked) => {
       try {
-        transcript.write(maskTranscriptLine(line, secrets) + '\n');
+        const line = maskTranscriptLine(unmasked, secrets);
+        transcript.write(line + '\n');
         const raw = JSON.parse(line) as { type?: string; subtype?: string };
         if (raw?.type === 'assistant' && ++assistantTurns > req.limits.turns) limit();
         if (raw?.type === 'result' && typeof raw.subtype === 'string' && raw.subtype.includes('max')) limited = true;
@@ -118,8 +122,9 @@ export class ClaudeCodeRunner implements Runner {
         clearTimeout(killTimer);
         ch.close();
         const outcome: RunOutcome = stopped ? 'stopped' : limited ? 'limit' : result && !result.isError ? 'success' : 'failure';
-        // Masked like the transcript: it becomes the run's lastText, stored and posted to Linear.
-        const text = maskTranscriptLine(result?.text || lastText || (spawnError ? spawnError.message : stderr.trim().slice(-2000)), secrets);
+        // It becomes the run's lastText, stored and posted to Linear: the stream's text is masked
+        // already, stderr and a spawn error are masked here.
+        const text = result?.text || lastText || maskTranscriptLine(spawnError ? spawnError.message : stderr.trim().slice(-2000), secrets);
         transcript.end(() => resolve({ outcome, costUsd: result?.costUsd ?? 0, turns: result?.turns ?? assistantTurns, lastText: text }));
       };
       child.on('error', (err) => finish(err));

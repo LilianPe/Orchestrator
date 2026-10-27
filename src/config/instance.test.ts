@@ -2,7 +2,7 @@ import { mkdtempSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { homePaths, loadInstance, loadSecrets, factoryHome, saveInstance, saveSecrets } from './instance.js';
+import { homePaths, loadInstance, loadSecrets, factoryHome, saveInstance, saveSecrets, secretValues } from './instance.js';
 
 describe('instance config', () => {
   it('resolves home', () => {
@@ -28,6 +28,12 @@ describe('instance config', () => {
     saveSecrets(home, { linear: { clientId: 'c', clientSecret: 's', webhookSecret: 'w' } });
     expect(loadSecrets(home).linear!.clientId).toBe('c');
     expect(statSync(homePaths(home).secrets).mode & 0o777).toBe(0o600);
+  });
+
+  it('lists the secret values of the secrets file, not its identifiers', () => {
+    expect(secretValues({})).toEqual([]);
+    const linear = { clientId: 'c', clientSecret: 's', webhookSecret: 'w', accessToken: 'a', refreshToken: 'r', appUserId: 'u', organizationId: 'o' };
+    expect(secretValues({ linear })).toEqual(['s', 'w', 'a', 'r']);
   });
 
   it('rejects an invalid config with the key path', () => {

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { drain } from '../../../test/contracts/agent-runtime.contract.js';
 import { ClaudeCodeRunner } from './claude-code.js';
-import { MASK, maskTranscriptLine, purgeTranscripts, TRANSCRIPT_RETENTION_MS, transcriptExpiresAt, transcriptSecrets } from './transcript.js';
+import { MASK, maskTranscriptLine, purgeTranscripts, transcriptSecrets } from './transcript.js';
 
 const DAY = 24 * 60 * 60 * 1000;
 const fx = (n: string) => join(import.meta.dirname, 'fixtures', n);
@@ -55,6 +55,11 @@ describe('transcript masking', () => {
     expect(content).toBe(`token=${MASK} key=${MASK} gh=${MASK} auth: ${MASK} lin=${MASK} ok`);
   });
 
+  it('leaves *_ASKPASS helper paths readable, and adds the secrets given outside the environment', () => {
+    const secrets = transcriptSecrets({ GIT_ASKPASS: '/usr/lib/git-core/git-gui--askpass', SSH_ASKPASS: '/usr/bin/ssh-askpass' }, ['linear-client-secret', 'short']);
+    expect(secrets).toEqual(['linear-client-secret']);
+  });
+
   it('leaves a line without secrets unchanged', () => {
     const line = '{"type":"assistant","message":{"content":[{"type":"text","text":"Je regarde le code."}]}}';
     expect(maskTranscriptLine(line, transcriptSecrets({ GH_TOKEN: 'ghs_not-in-the-line' }))).toBe(line);
@@ -62,11 +67,6 @@ describe('transcript masking', () => {
 });
 
 describe('transcript retention', () => {
-  it('expires a transcript 30 days after its last write', () => {
-    expect(TRANSCRIPT_RETENTION_MS).toBe(30 * DAY);
-    expect(transcriptExpiresAt(1_000)).toBe(1_000 + 30 * DAY);
-  });
-
   it('purges the transcripts older than 30 days and keeps the others', () => {
     const dir = mkdtempSync(join(tmpdir(), 'factory-tr-'));
     const now = Date.UTC(2026, 9, 26);
@@ -90,7 +90,7 @@ describe('transcript retention', () => {
 });
 
 describe('ClaudeCodeRunner transcript', () => {
-  it('writes the transcript masked, outside the journal, with an expiry 30 days after its last write', async () => {
+  it('writes the transcript and streams its events masked, outside the journal, kept 30 days after its last write', async () => {
     const transcriptsDir = mkdtempSync(join(tmpdir(), 'factory-tr-'));
     const script = join(mkdtempSync(join(tmpdir(), 'factory-script-')), 'stream.jsonl');
     const leaked = `ghp_${'z'.repeat(36)}`;
@@ -99,26 +99,31 @@ describe('ClaudeCodeRunner transcript', () => {
       [
         readFileSync(fx('stream-success.jsonl'), 'utf8').split('\n')[0],
         JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: `FACTORY_RUN_TOKEN=tok-abcdef-123456 ${leaked}` }] } }),
+        JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'Le secret est linear-client-secret.' }, { type: 'tool_use', id: 't2', name: 'Bash', input: { command: 'echo tok-abcdef-123456' } }] } }),
         JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'Fini avec tok-abcdef-123456.', total_cost_usd: 0.1, num_turns: 1 }),
       ].join('\n'),
     );
-    const runner = new ClaudeCodeRunner({ transcriptsDir, command: [process.execPath, fx('fake-claude.mjs')], killGraceMs: 500 });
+    const runner = new ClaudeCodeRunner({ transcriptsDir, command: [process.execPath, fx('fake-claude.mjs')], killGraceMs: 500, secrets: () => ['linear-client-secret'] });
     const h = runner.start({
       runId: 'r-masked', cwd: process.cwd(), prompt: '/factory:dev', claudeSessionId: 'uuid-1', resume: false, model: 'sonnet',
       pluginDir: '/pack', settingsPath: '/pack/settings.json', readOnly: false, limits: { turns: 50, durationMs: 10_000, usd: 5 },
       env: { FAKE_CLAUDE_SCRIPT: script, FACTORY_RUN_TOKEN: 'tok-abcdef-123456' },
     });
-    await drain(h.events);
+    const events = await drain(h.events);
     const result = await h.done;
+    const streamed = JSON.stringify(events);
+    expect(streamed).not.toContain('tok-abcdef-123456');
+    expect(streamed).not.toContain('linear-client-secret');
+    expect(events).toEqual(expect.arrayContaining([{ kind: 'text', text: `Le secret est ${MASK}.` }]));
     const file = join(transcriptsDir, 'r-masked.jsonl');
     const written = readFileSync(file, 'utf8');
     expect(written).not.toContain('tok-abcdef-123456');
     expect(written).not.toContain(leaked);
     expect(written).toContain(`FACTORY_RUN_TOKEN=${MASK} ${MASK}`);
-    expect(written.trim().split('\n').map((l) => JSON.parse(l))).toHaveLength(3);
+    expect(written.trim().split('\n').map((l) => JSON.parse(l))).toHaveLength(4);
+    expect(written).not.toContain('linear-client-secret');
     expect(result.lastText).toBe(`Fini avec ${MASK}.`);
     const writtenAt = statSync(file).mtimeMs;
-    expect(transcriptExpiresAt(writtenAt) - writtenAt).toBe(30 * DAY);
     expect(purgeTranscripts(transcriptsDir, writtenAt + 30 * DAY - 1)).toEqual([]);
     expect(purgeTranscripts(transcriptsDir, writtenAt + 30 * DAY)).toEqual(['r-masked.jsonl']);
   });

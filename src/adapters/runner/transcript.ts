@@ -26,10 +26,10 @@ const SECRET_PATTERNS: RegExp[] = [
 /**
  * The secret values of an environment, to mask literally: the value of every secret variable, and
  * the credentials of every URL value whatever its variable (`user:password` as written, and the
- * decoded password).
+ * decoded password). `extra` adds the secrets held outside the environment (the daemon's secrets file).
  */
-export function transcriptSecrets(env: Record<string, string | undefined>): string[] {
-  const out = new Set<string>();
+export function transcriptSecrets(env: Record<string, string | undefined>, extra: readonly string[] = []): string[] {
+  const out = new Set(extra.filter((s) => s.length >= MIN_SECRET_LENGTH));
   for (const [name, value] of Object.entries(env)) {
     if (!value) continue;
     if (SECRET_NAME.test(name) && value.length >= MIN_SECRET_LENGTH) out.add(value);
@@ -44,28 +44,22 @@ export function transcriptSecrets(env: Record<string, string | undefined>): stri
       // not a URL
     }
   }
-  // Longest first, so a secret that contains another is masked whole.
-  return [...out].sort((a, b) => b.length - a.length);
+  // Each as written and as JSON escapes it in a stream line (a PEM's newlines become \n), computed
+  // once per run; longest first, so a secret that contains another is masked whole.
+  const forms = new Set([...out].flatMap((s) => [s, JSON.stringify(s).slice(1, -1)]));
+  return [...forms].sort((a, b) => b.length - a.length);
 }
 
 /** Masks a transcript line (a JSON line of the stream): known secret values, then secret shapes. */
 export function maskTranscriptLine(line: string, secrets: readonly string[]): string {
   let out = line;
-  for (const s of secrets) {
-    // A secret appears in the line as JSON escapes it (a PEM's newlines become \n).
-    for (const form of new Set([s, JSON.stringify(s).slice(1, -1)])) out = out.split(form).join(MASK);
-  }
+  for (const s of secrets) if (out.includes(s)) out = out.split(s).join(MASK);
   for (const p of SECRET_PATTERNS) out = out.replace(p, MASK);
   return out;
 }
 
-/** When a transcript last written at `writtenAt` expires. */
-export function transcriptExpiresAt(writtenAt: number): number {
-  return writtenAt + TRANSCRIPT_RETENTION_MS;
-}
-
 /** Deletes the transcripts whose last write is older than the retention; returns the deleted file names. */
-export function purgeTranscripts(dir: string, now: number, retentionMs = TRANSCRIPT_RETENTION_MS): string[] {
+export function purgeTranscripts(dir: string, now: number): string[] {
   let names: string[];
   try {
     names = readdirSync(dir);
@@ -77,7 +71,7 @@ export function purgeTranscripts(dir: string, now: number, retentionMs = TRANSCR
     if (!name.endsWith('.jsonl')) continue;
     const file = join(dir, name);
     try {
-      if (statSync(file).mtimeMs + retentionMs <= now) {
+      if (statSync(file).mtimeMs + TRANSCRIPT_RETENTION_MS <= now) {
         unlinkSync(file);
         removed.push(name);
       }
