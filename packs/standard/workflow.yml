@@ -15,6 +15,7 @@ limits:
   question_sessions: 2
   per_run: { turns: 150, duration: 90m, usd: 5 }
   verify_attempts: 2
+  ci_fix_attempts: 2
   review_rounds: 5
 workspace:
   setup: []

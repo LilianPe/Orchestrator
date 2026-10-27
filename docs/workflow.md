@@ -87,6 +87,7 @@ Vous pouvez n'en redéfinir qu'une partie ; après fusion, les six doivent avoir
 | `per_run.duration` | durée | `90m` | Durée maximale d'un run, même résultat `limit`. |
 | `per_run.usd` | nombre > 0 | 5 | Passé à Claude Code (`--max-budget-usd`) ; quand Claude Code s'arrête sur ce plafond, le résultat est `limit`. |
 | `verify_attempts` | entier ≥ 0 | 2 | Nombre de passes de vérification avant de bloquer le ticket (voir `jobs.*.verify`). `0` et `1` bloquent dès le premier échec. |
+| `ci_fix_attempts` | entier ≥ 0 | 2 | Nombre de runs qu'une CI rouge (`pr.checks_failed`) peut lancer avant que la CI rouge suivante bloque le ticket (voir ci-dessous). `0` bloque dès la première CI rouge. |
 | `review_rounds` | entier > 0 | 5 | Indiqué au skill de review dans son prompt (« Rounds de review max : 5 ») ; seulement pour les jobs dont le skill se termine par `:review`. C'est le skill qui respecte ce nombre, Relais ne le compte pas. |
 
 `per_run` est la limite par défaut de **tous** les jobs ; chaque job peut la remplacer champ par champ avec son propre `limits`.
@@ -94,6 +95,12 @@ Vous pouvez n'en redéfinir qu'une partie ; après fusion, les six doivent avoir
 Que se passe-t-il quand un run atteint une limite (`limit`) ou échoue ?
 - Job de la file `dev` : le ticket est **bloqué** et Relais écrit dans la session Linear « Le run <job> a atteint un plafond (tours, durée ou budget). Répondez dans ce fil pour que je reprenne. » (ou « … a échoué. »). Une réponse dans le fil relance `dev-feedback` (règle `session.prompted` du pack).
 - Job de la file `questions` : Relais répond « Je n'ai pas pu terminer (échec ou plafond atteint). ».
+
+Que se passe-t-il quand la CI reste rouge (`ci_fix_attempts`) ?
+- Chaque règle `pr.checks_failed` qui lance un run (`fix-ci` dans le pack) compte ce run sur le ticket. Une fois `ci_fix_attempts` runs lancés, la CI rouge suivante n'applique pas la règle : le ticket est **bloqué** et Relais écrit dans la session Linear « CI toujours en échec après 2 tentatives de fix-ci. », la liste des checks en échec, puis « Répondez dans ce fil pour relancer. ». Les CI rouges suivantes ne relancent rien et ne répètent pas le message.
+- Le compte repart de zéro quand la CI passe au vert (`pr.checks_passed`, qui lève aussi le blocage dû à cette borne), quand une autre PR est relevée pour le ticket (`pr.opened` d'un autre numéro), ou quand un humain relance le ticket bloqué (réponse dans le fil, label `agent:reprendre`, changement de statut ou délégation qui lance un run). Ni un nouveau push de l'agent (c'est la boucle elle-même) ni une minuterie `debounce` armée avant le blocage ne le remettent à zéro.
+- Contrairement à `verify_attempts`, qui compte les passes (le premier run compris), `ci_fix_attempts` compte les relances : avec `2`, deux `fix-ci`, puis blocage à la troisième CI rouge. C'est l'unité de l'invariant I5 ([`decisions/ORC-138.md`](decisions/ORC-138.md), point 8).
+- Borne provisoire : la boucle review IA → correction n'est pas encore comptée par le moteur, et n'a donc pas ce compteur en commun avec la CI rouge. Le compteur unique des deux boucles arrive avec ORC-184 et le préréglage d'ORC-187.
 
 Durées : un nombre (millisecondes) ou un texte `<entier><unité>` avec l'unité `ms`, `s`, `m` ou `h` (`90m`, `30s`, `2h`). Les combinaisons comme `1h30m` sont refusées : écrivez `90m`.
 
@@ -169,8 +176,8 @@ Jobs du pack :
 | `label.changed` | Un label est ajouté au ticket (par un humain). | Filtrable avec `label` (seul l'ajout correspond ; Relais ne produit pas encore d'événement pour un retrait). |
 | `push.human` | Un humain pousse un commit sur la branche du ticket. | Aucune règle dans le pack. Relais ne reçoit pas encore cet événement (webhooks GitHub : ORC-134). |
 | `command` | `@relais <mot> …` quand `<mot>` est une valeur `say` de la liste `command`. | Filtrable avec `say`. |
-| `pr.checks_passed` | La CI de la PR passe. | — |
-| `pr.checks_failed` | La CI de la PR échoue. | — |
+| `pr.checks_passed` | La CI de la PR passe. | Avant les règles, Relais remet à zéro le compte des relances sur CI rouge (`limits.ci_fix_attempts`) et lève le blocage dû à cette borne. |
+| `pr.checks_failed` | La CI de la PR échoue. | Une règle qui lance un run est bornée par `limits.ci_fix_attempts` : une fois la borne atteinte, Relais bloque le ticket au lieu d'appliquer la règle. |
 | `pr.merged` | La PR est mergée. | Avant les règles, Relais note la PR comme mergée et arrête le travail du ticket comme un `stop`, sans le bloquer : run `dev` en cours arrêté, runs en attente ou en file et minuteries `debounce` supprimés. Ensuite, plus aucun job de la file `dev` ne démarre sur le ticket, quelle que soit la règle, la minuterie ou l'attente qui le demande (`agent:reprendre`, réponse, CI rouge, job en attente ou en file) : le refus est seulement tracé, sans message dans Linear. La fin du run `dev` arrêté et ses vérifications sont ignorées. Les règles s'appliquent après l'arrêt : `done`, nettoyage et `learn` ne changent pas, et les jobs de la file `questions` (`learn`, `ask`) tournent toujours. Le ticket redevient actif quand un humain change son statut pour autre chose que *Done* (aussi quand Relais n'a pas pu le passer en *Done*), le délègue à nouveau, ou qu'une nouvelle PR (autre numéro) est relevée pour lui. Le relevé GitHub ne regarde plus un ticket en *Done* dont la PR est mergée : une nouvelle PR n'est vue qu'une fois le ticket sorti de *Done*. |
 | `pr.closed` | La PR est fermée sans merge. | — |
 
@@ -235,7 +242,7 @@ Il n'existe pas de champ `post` dans une règle : la publication du résultat se
 | `command` | `retiens` → `remember` ; `fais-le` → `propose_delegate` |
 | `label.changed` | `agent:reprendre` → `dev-feedback` ; `agent:stop` → `stop` |
 | `session.stopped` | → `stop` |
-| `pr.checks_failed` | si `state in [human_review, ai_review] && !blocked` → `fix-ci` |
+| `pr.checks_failed` | si `state in [human_review, ai_review] && !blocked` → `fix-ci`, au plus `limits.ci_fix_attempts` fois de suite, puis blocage |
 | `pr.merged` | → passe en `done`, supprime le worktree, lance `learn` |
 
 ## 4. Grammaire de `when`
@@ -451,7 +458,7 @@ Pièges silencieux (aucune erreur) :
 
 ## 8. Pas de limite « illimitée »
 
-Toutes les limites doivent être strictement positives (sauf `verify_attempts`, qui accepte 0) : il n'existe pas de valeur `0`, `-1` ou `unlimited` qui désactive un plafond. Pour lever une limite en pratique, mettez une grande valeur :
+Toutes les limites doivent être strictement positives (sauf `verify_attempts` et `ci_fix_attempts`, qui acceptent 0 : bloquer dès le premier échec, pas lever la limite) : il n'existe pas de valeur `0`, `-1` ou `unlimited` qui désactive un plafond. Pour lever une limite en pratique, mettez une grande valeur :
 
 ```yaml
 version: 1

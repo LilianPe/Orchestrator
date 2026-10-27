@@ -124,6 +124,30 @@ describe('standard workflow', () => {
     expect(await h.ticket()).toMatchObject({ logical: 'human_review', verifyAttempts: 0 });
   });
 
+  it('red CI relaunches fix-ci up to limits.ci_fix_attempts, then blocks; a green CI resets the count (ORC-270)', async () => {
+    const h = createHarness();
+    await delegatedAndInReview(h);
+    const red = { number: 7, url: 'https://forge/pr/7', branch: 'factory/rel-1-export-csv', failures: ['test'] };
+    const fixCi = () => h.runner.requests.filter((r) => r.prompt.startsWith('/factory:fix-ci\n')).length;
+    await h.send('pr.checks_failed', red);
+    await h.send('pr.checks_failed', red);
+    expect(fixCi()).toBe(2);
+    expect(await h.ticket()).toMatchObject({ blocked: false, ciFixAttempts: 2 });
+    await h.send('pr.checks_failed', red);
+    expect(fixCi()).toBe(2);
+    expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'CI toujours en échec après 2 tentatives de fix-ci.' });
+    expect(h.tracker.activities('ls-1').at(-1)).toMatchObject({ type: 'elicitation', body: expect.stringContaining('- `test`') });
+    await h.send('pr.checks_failed', red);
+    expect(fixCi()).toBe(2);
+    // The human relaunches: a new budget, and a green CI resets it too.
+    await h.send('label.changed', { label: 'agent:reprendre', change: 'added' });
+    expect(await h.ticket()).toMatchObject({ blocked: false, ciFixAttempts: 0 });
+    await h.send('pr.checks_failed', red);
+    expect(fixCi()).toBe(3);
+    await h.send('pr.checks_passed', { number: 7, url: red.url, branch: red.branch });
+    expect(await h.ticket()).toMatchObject({ blocked: false, ciFixAttempts: 0 });
+  });
+
   it('criterion 7: a stop request stops the running session and blocks', async () => {
     const h = createHarness();
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });

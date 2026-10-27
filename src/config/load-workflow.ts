@@ -167,6 +167,7 @@ export function loadWorkflow(opts: { packDir: string; projectFile?: string }): W
       questionSessions: raw.limits?.question_sessions ?? 2,
       perRun,
       verifyAttempts: raw.limits?.verify_attempts ?? 2,
+      ciFixAttempts: raw.limits?.ci_fix_attempts ?? 2,
       reviewRounds: raw.limits?.review_rounds ?? 5,
     },
     workspace: { setup: raw.workspace?.setup ?? [], portBase: raw.workspace?.ports?.base ?? 4200 },

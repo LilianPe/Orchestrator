@@ -19,6 +19,7 @@ describe('loadWorkflow', () => {
     expect(wf.states.human_review).toBe('Human Review');
     expect(wf.limits.parallelSessions).toBe(3);
     expect(wf.limits.perRun.durationMs).toBe(90 * 60_000);
+    expect(wf.limits.ciFixAttempts).toBe(2);
     expect(wf.on['session.prompted']).toHaveLength(2);
     expect(wf.on['session.prompted']![1]!.debounceMs).toBe(180_000);
     expect(wf.commands).toEqual(['retiens', 'fais-le']);
@@ -102,6 +103,13 @@ on:
 `),
       }),
     ).toThrow(/on\.session\.prompted\[0\]\.when/);
+  });
+
+  it('reads limits.ci_fix_attempts, 0 included, and refuses a negative bound (ORC-270)', () => {
+    const bound = (n: number) => loadWorkflow({ packDir, projectFile: projectFile(`version: 1\nlimits: { ci_fix_attempts: ${n} }\n`) }).limits.ciFixAttempts;
+    expect(bound(0)).toBe(0);
+    expect(bound(5)).toBe(5);
+    expect(() => bound(-1)).toThrow(WorkflowError);
   });
 
   it('rejects a rule that runs an unknown job', () => {

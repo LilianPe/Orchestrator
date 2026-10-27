@@ -42,14 +42,18 @@ function deepFreeze<T>(value: T): T {
   return value;
 }
 
-const workflows = new Map<number, Workflow>();
+const workflows = new Map<string, Workflow>();
 
-/** The standard pack under the test preset: `dev` and the jobs that extend it are verified, bounded at `verifyAttempts`. Frozen, as every property shares it. */
-export function workflow(verifyAttempts = 2): Workflow {
-  let wf = workflows.get(verifyAttempts);
+/**
+ * The standard pack under the test preset: `dev` and the jobs that extend it are verified, bounded at
+ * `verifyAttempts`, and red CI starts `fix-ci` at most `ciFixAttempts` times. Frozen, as every property shares it.
+ */
+export function workflow(verifyAttempts = 2, ciFixAttempts = 2): Workflow {
+  const key = `${verifyAttempts}:${ciFixAttempts}`;
+  let wf = workflows.get(key);
   if (!wf) {
-    wf = deepFreeze(loadTestWorkflow(testPreset({ verifyAttempts }).yaml));
-    workflows.set(verifyAttempts, wf);
+    wf = deepFreeze(loadTestWorkflow(testPreset({ verifyAttempts, ciFixAttempts }).yaml));
+    workflows.set(key, wf);
   }
   return wf;
 }

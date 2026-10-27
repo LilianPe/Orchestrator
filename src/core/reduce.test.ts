@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { reduce } from './reduce.js';
-import { newTicketState, type EventPayloads, type EventType, type InternalEvent, type FactoryEvent, type TicketState } from './types.js';
+import { newTicketState, normalizeTicket, type EventPayloads, type EventType, type InternalEvent, type FactoryEvent, type TicketState } from './types.js';
 
 function ev<T extends EventType>(type: T, payload: EventPayloads[T]): FactoryEvent {
   return { id: `e-${type}`, type, at: 1000, projectId: 'p', ticketId: 'REL-1', schemaVersion: 2, taint: 'trusted', payload } as FactoryEvent;
@@ -98,7 +98,13 @@ describe('reduce — decided events', () => {
   });
 
   it('patches the allowed fields', () => {
-    expect(reduce(ticket(), { type: 'ticket.patched', patch: { prNumber: 7, prUrl: 'u', verifyAttempts: 1 } })).toMatchObject({ prNumber: 7, prUrl: 'u', verifyAttempts: 1 });
+    expect(reduce(ticket(), { type: 'ticket.patched', patch: { prNumber: 7, prUrl: 'u', verifyAttempts: 1, ciFixAttempts: 2 } })).toMatchObject({ prNumber: 7, prUrl: 'u', verifyAttempts: 1, ciFixAttempts: 2 });
+  });
+
+  it('a ticket persisted before ORC-270 reads a red-CI count of 0', () => {
+    const { ciFixAttempts: _, ...older } = ticket();
+    expect(normalizeTicket(older as TicketState).ciFixAttempts).toBe(0);
+    expect(normalizeTicket(ticket({ ciFixAttempts: 2 })).ciFixAttempts).toBe(2);
   });
 
   it('appends feedback in order', () => {

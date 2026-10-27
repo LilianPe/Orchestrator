@@ -74,6 +74,7 @@ export const rawWorkflowSchema = z
         question_sessions: z.number().int().positive(),
         per_run: rawLimits,
         verify_attempts: z.number().int().nonnegative(),
+        ci_fix_attempts: z.number().int().nonnegative(),
         review_rounds: z.number().int().positive(),
       })
       .partial()
@@ -103,6 +104,8 @@ export interface Limits {
   questionSessions: number;
   perRun: RunLimits;
   verifyAttempts: number;
+  /** Runs red CI may start before the next red CI blocks the ticket (I5, ORC-270); 0 blocks at the first. */
+  ciFixAttempts: number;
   reviewRounds: number;
 }
 
