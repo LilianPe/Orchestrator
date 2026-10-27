@@ -42,6 +42,7 @@ export function asNegativeControl(body: CaseBody): CaseBody {
  * Suites use it through `describeContract`, which calls `end`.
  */
 export function contractCases({ violates }: ContractOptions = {}): { it: (name: string, body: CaseBody) => void; end: () => void } {
+  if (violates?.length === 0) throw new Error('violates names no case: an empty list would run no case at all');
   const declared = new Set<string>();
   const it = (name: string, body: CaseBody): void => {
     declared.add(name);

@@ -210,6 +210,10 @@ describe('contractCases', () => {
     expect(end).toThrow('violates names no case of the suite: a case renamed since');
   });
 
+  it('rejects an empty violates, which would run no case at all', () => {
+    expect(() => contractCases({ violates: [] })).toThrow('violates names no case');
+  });
+
   it('fails a negative control whose subject lacks a field the case needs, instead of skipping it', async () => {
     let skipped = false;
     const ctx = { skip: () => void (skipped = true) } as unknown as TestContext;
