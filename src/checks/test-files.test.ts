@@ -25,10 +25,11 @@ describe('isTestFile', () => {
 
 describe('isTestHarnessFile', () => {
   it('recognises the runner configuration and global setup, which are not test files', () => {
-    for (const p of ['vitest.config.ts', 'web/vitest.config.mts', 'jest.config.js', 'jest.setup.ts', 'src/setupTests.ts', 'pytest.ini']) {
+    for (const p of ['vitest.config.ts', 'web/vitest.config.mts', 'vitest.config.e2e.ts', 'vitest.workspace.unit.mjs', 'jest.config.js', 'jest.setup.ts', 'jest.config.ci.cjs', 'src/setupTests.ts', 'pytest.ini']) {
       expect(isTestHarnessFile(p), p).toBe(true);
       expect(isTestFile(p), p).toBe(false);
     }
-    expect(isTestHarnessFile('vite.config.ts')).toBe(false);
+    // vite.config.* also builds the app: what it reads of the test environment can ship.
+    for (const p of ['vite.config.ts', 'vitest.ts', 'jest.configure.ts']) expect(isTestHarnessFile(p), p).toBe(false);
   });
 });

@@ -108,6 +108,74 @@ describe('scanDiff', () => {
     expect(scanDiff(diff)).toEqual([]);
   });
 
+  it('leaves skip-like calls alone outside test files', () => {
+    const diff = [added('src/parse.ts', 'this.skip(1);'), added('src/parse.ts', "t.skip('x');"), added('src/ui.tsx', 'const v = context.only;')].join('');
+    expect(scanDiff(diff)).toEqual([]);
+  });
+
+  it('reads code, not the strings, regex literals and comments that quote a pattern', () => {
+    const quotes = [
+      "const fixture = \"  it.skip('rounds', () => {\";",
+      "const rule = { pattern: /--no-verify\\b/, other: /@ts-ignore|process\\.exit\\(0\\)/ };",
+      '// Never add it.skip, process.exit(0) or a --no-verify here; expect(true) proves nothing.',
+      '/* the scanner reads VITEST and NODE_ENV === "test" */',
+      ' * it.skip and @ts-ignore are findings, the doc comment says.',
+      "const s = '// @ts-ignore' + '/* eslint-disable */';",
+      'const half = total / 2 / count; it(`works ${half}`, () => {});',
+    ];
+    const diff = [
+      ...quotes.map((l) => added('src/a.test.ts', l)),
+      ...quotes.slice(1).map((l) => added('src/scanner.ts', l)),
+      added('app/a.py', 'msg = "pytest.skip( and # noqa are findings"  # see it.skip'),
+      added('app/a.py', "rule = r'#\\s*type:\\s*ignore'"),
+    ].join('');
+    expect(scanDiff(diff)).toEqual([]);
+  });
+
+  it('still reads the directives in comments and the commands in strings', () => {
+    const diff = [
+      added('src/a.ts', "const run = () => execSync('git commit --no-verify -m x');"),
+      added('src/a.ts', 'const x = f(); /* @ts-ignore */'),
+      added('src/a.ts', ' * @ts-expect-error'),
+      added('src/a.ts', "if (process.env['VITEST']) return 1;"),
+      added('src/a.test.ts', "expect('ok').toBe('ok');"),
+      added('src/a.test.ts', 'expect(`${x}`).toBe(y);'),
+      added('app/a.py', 'x = f()  # type: ignore'),
+    ].join('');
+    expect(scanDiff(diff).map((f) => [f.file, f.form, f.match])).toEqual([
+      ['src/a.ts', 'bypass', '--no-verify'],
+      ['src/a.ts', 'bypass', '@ts-ignore'],
+      ['src/a.ts', 'bypass', '@ts-expect-error'],
+      ['src/a.ts', 'test-only-behaviour', 'VITEST'],
+      ['src/a.test.ts', 'bypass', "expect('ok')"],
+      ['app/a.py', 'bypass', '# type: ignore'],
+    ]);
+  });
+
+  it('lets test files run --no-verify on throwaway repositories', () => {
+    expect(scanDiff(added('test/helpers/repo.ts', "git(['commit', '--no-verify', '-m', 'seed']);"))).toEqual([]);
+  });
+
+  it('reads a Claude permission rule in a settings file as a rule, not a command', () => {
+    const rules = ['      "Bash(git commit --no-verify:*)",', '      "Bash(*--no-verify*)"'];
+    const diff = [...rules.map((l) => added('.claude/settings.json', l)), ...rules.map((l) => added('packs/standard/settings.local.json', l))].join('');
+    expect(scanDiff(diff)).toEqual([]);
+    expect(scanDiff(added('.claude/settings.json', '  "hooks": { "PreToolUse": "git commit --no-verify" },'))).toHaveLength(1);
+  });
+
+  it('blocks tests left out by the runner configuration', () => {
+    const diff = [
+      added('jest.config.js', "  testPathIgnorePatterns: ['/scores/'],"),
+      added('package.json', '    "test": "pytest --deselect tests/test_scores.py::test_rounds",'),
+      added('pytest.ini', 'addopts = --deselect tests/test_scores.py::test_rounds'),
+    ].join('');
+    expect(scanDiff(diff).map((f) => [f.file, f.form, f.match])).toEqual([
+      ['jest.config.js', 'disabled-test', 'testPathIgnorePatterns'],
+      ['package.json', 'disabled-test', '--deselect'],
+      ['pytest.ini', 'disabled-test', '--deselect'],
+    ]);
+  });
+
   it('reports every finding of a line, at its line in the new file', () => {
     const diff = fileDiff('src/a.test.ts', ' a', '-b', '+c', ' d', "+it.skip('x', () => expect(1).toBe(1)); // eslint-disable-line");
     expect(scanDiff(diff)).toEqual([
@@ -136,6 +204,11 @@ describe('scanDiff', () => {
         { file: 'test/acceptance/scores.test.ts', form: 'frozen-test', match: 'renommé en test/old/scores.test.ts' },
         { file: 'test/old/scores.test.ts', line: 2, form: 'disabled-test', match: 'it.skip' },
       ]);
+    });
+
+    it('leaves a frozen test alone when it is only the source of a copy', () => {
+      const diff = ['diff --git a/tests/test_scores.py b/tests/test_copy.py', 'similarity index 100%', 'copy from tests/test_scores.py', 'copy to tests/test_copy.py', ''].join('\n');
+      expect(scanDiff(diff, { frozenTests })).toEqual([]);
     });
 
     it('leaves files outside the frozen set alone', () => {
@@ -178,6 +251,16 @@ describe('antiCheatCheck', () => {
         '- `src/b.test.ts:11` : contournement (`` expect(`ok`) ``)',
       ].join('\n'),
     );
+  });
+
+  it('keeps the summary under the GitHub limit, cutting long matches and counting what is left out', () => {
+    const long = added('src/score.ts', `const t = 'test', pad = '${'x'.repeat(1000)}'; if (process.env.NODE_ENV === t) return pad;`);
+    const many = Array.from({ length: 2000 }, (_, i) => added(`src/f${i}.ts`, '// @ts-ignore')).join('');
+    const result = antiCheatCheck(long + many);
+    expect(result.findings).toHaveLength(2001);
+    expect(result.summary.length).toBeLessThanOrEqual(65_535);
+    expect(result.summary.split('\n')[1]).toMatch(/^- `src\/score\.ts:11` : comportement différent sous test \(`'test', pad = 'x{180,}…`\)$/);
+    expect(result.summary).toMatch(/\n… et \d+ autres$/);
   });
 
   it('says 1 constat for a single finding', () => {

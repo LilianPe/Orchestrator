@@ -8,8 +8,10 @@ const TEST_NAME = [/\.(?:test|spec)(?:-d)?\.[cm]?[jt]sx?$/, /^test_[^/]*\.py$/, 
 // Anything under one of these directories is test code (helpers, fixtures, contracts included).
 const TEST_DIR = new Set(['test', 'tests', '__tests__']);
 
-// The test runner's own configuration and global setup: not a test, but read only by the test run.
-const HARNESS_NAME = [/^(?:vitest|jest)\.(?:config|setup|workspace)\.[cm]?[jt]s$/, /^setupTests\.[cm]?[jt]sx?$/, /^pytest\.ini$/];
+// The test runner's own configuration and global setup: not a test, but read only by the test run. Variants
+// (`vitest.config.e2e.ts`) included. `vite.config.*` is not: it also builds the app, where a `define` reading the test
+// environment would change what ships.
+const HARNESS_NAME = [/^(?:vitest|jest)\.(?:config|setup|workspace)(?:\.[\w-]+)?\.[cm]?[jt]s$/, /^setupTests\.[cm]?[jt]sx?$/, /^pytest\.ini$/];
 
 function parts(path: string): string[] {
   return path.replace(/\\/g, '/').split('/').filter(Boolean);
