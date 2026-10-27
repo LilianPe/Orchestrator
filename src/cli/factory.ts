@@ -17,6 +17,7 @@ import { join } from 'node:path';
 import { runInit } from './init.js';
 import { runDoctorCommand } from './doctor.js';
 import { formatPlan, planRows } from './plan.js';
+import { runReplayCommand } from './replay.js';
 import { PRODUCT_NAME } from '../product.js';
 
 const USAGE = `Usage : factory <commande>
@@ -26,7 +27,8 @@ const USAGE = `Usage : factory <commande>
   plan               voir quels tickets délégués seraient pris
   status             état de l'instance en cours
   pause | resume     suspendre ou reprendre la file
-  stop <ID>          arrêter le run d'un ticket`;
+  stop <ID>          arrêter le run d'un ticket
+  replay <journal>... rejouer des journaux exportés (régression bit à bit, --what-if <workflow.yml>, --export <ID>)`;
 
 /** Basic auth for an instance bound to a non-loopback host (FACTORY_UI_PASSWORD). */
 function uiAuth(): Record<string, string> {
@@ -35,6 +37,8 @@ function uiAuth(): Record<string, string> {
 }
 
 async function main(): Promise<number> {
+  // Its own options, and no instance needed to replay a file (the CI has none).
+  if (process.argv[2] === 'replay') return runReplayCommand(process.argv.slice(3));
   const { positionals, values } = parseArgs({
     allowPositionals: true,
     options: { 'fake-runner': { type: 'boolean' }, json: { type: 'boolean' } },
