@@ -18,8 +18,10 @@ const SCHEMA = `
 CREATE TABLE IF NOT EXISTS tickets (project_id TEXT, ticket_id TEXT, data TEXT NOT NULL, PRIMARY KEY (project_id, ticket_id));
 CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, at INTEGER NOT NULL, ticket_id TEXT, data TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS events_at ON events (at);
+CREATE INDEX IF NOT EXISTS events_ticket ON events (ticket_id);
 CREATE TABLE IF NOT EXISTS inbox (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, received_at INTEGER NOT NULL, processed_at INTEGER, data TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS inbox_pending ON inbox (processed_at, seq);
+CREATE INDEX IF NOT EXISTS inbox_pending_ticket ON inbox (json_extract(data, '$.projectId'), json_extract(data, '$.ticketId'), seq) WHERE processed_at IS NULL;
 CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, status TEXT NOT NULL, token TEXT NOT NULL, started_at INTEGER NOT NULL, cost_usd REAL NOT NULL, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS timers (key TEXT PRIMARY KEY, fire_at INTEGER NOT NULL, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS queue (project_id TEXT, ticket_id TEXT, job TEXT, queue TEXT NOT NULL, rank INTEGER NOT NULL, enqueued_at INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY (project_id, ticket_id, job));
@@ -27,6 +29,7 @@ CREATE TABLE IF NOT EXISTS echoes (key TEXT PRIMARY KEY, until INTEGER NOT NULL)
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS outbox (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, ticket_id TEXT, event_id TEXT NOT NULL, seq INTEGER NOT NULL, i INTEGER NOT NULL, status TEXT NOT NULL, lease_until INTEGER, lease TEXT, data TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS outbox_open ON outbox (project_id, ticket_id, status, seq, i);
+CREATE INDEX IF NOT EXISTS outbox_event ON outbox (event_id);
 CREATE TABLE IF NOT EXISTS workflow_versions (hash TEXT PRIMARY KEY, definition TEXT NOT NULL);
 `;
 
@@ -142,7 +145,7 @@ export class SqliteStore implements Store {
       .get(event.projectId, ticketId) as { id: string } | undefined;
     if (open) return { status: 'waiting', reason: `effect ${open.id} is unfinished` };
     if (this.db.prepare('SELECT 1 FROM events WHERE id = ?').get(event.id)) {
-      this.db.prepare('UPDATE inbox SET processed_at = ? WHERE id = ?').run(Date.now(), event.id);
+      this.db.prepare('UPDATE inbox SET processed_at = ? WHERE id = ?').run(this.now(), event.id);
       return { status: 'duplicate' };
     }
 
@@ -169,7 +172,7 @@ export class SqliteStore implements Store {
         .run(id, event.projectId, ticketId, event.id, seq, k + 1, JSON.stringify(effect));
       return id;
     });
-    this.db.prepare('UPDATE inbox SET processed_at = ? WHERE id = ?').run(Date.now(), event.id);
+    this.db.prepare('UPDATE inbox SET processed_at = ? WHERE id = ?').run(this.now(), event.id);
     return { status: 'committed', seq, effectIds, known, plan };
   }
 
