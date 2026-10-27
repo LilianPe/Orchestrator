@@ -194,7 +194,11 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
     const redCiBounded = (r: Run, bound: number): void => {
       let fixes = 0;
       for (const step of decided(r)) {
-        if (step.decision.events.some((e) => e.type === 'ticket.patched' && e.patch.ciFixAttempts === 0)) fixes = 0;
+        if (step.decision.events.some((e) => e.type === 'ticket.patched' && e.patch.ciFixAttempts === 0)) {
+          // Only a green CI, another PR or a human ends the loop: a reset by anything else would let it run unbounded.
+          expect(CI_RESETS, 'red-CI reset').toContain(step.event.type);
+          fixes = 0;
+        }
         if (step.event.type !== 'pr.checks_failed') {
           if (step.after) expect(step.after.ciFixAttempts, 'ciFixAttempts').toBe(fixes);
           continue;
@@ -211,6 +215,7 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
       }
     };
     const ciBound = wf.limits.ciFixAttempts;
+    const CI_RESETS: EventType[] = ['pr.checks_passed', 'pr.opened', 'session.prompted', 'label.changed', 'status.changed', 'ticket.delegated'];
     const redCiCounterexample = seq(
       ...delegated(),
       ext('status.changed', { from: 'todo', to: 'human_review' }),

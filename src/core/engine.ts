@@ -43,15 +43,25 @@ function block(out: Decision, reason: string, body: string): Decision {
   return out;
 }
 
+/** Prefix of the block reason of the red-CI bound: a green CI lifts that block (ORC-270). */
+const RED_CI_BLOCKED = 'CI toujours en échec après ';
+
+/** Events a human sends: unblocking the ticket, they give the red-CI loop its whole bound back (ORC-270). */
+const HUMAN_RELAUNCH = new Set<EventType>(['session.prompted', 'label.changed', 'status.changed', 'ticket.delegated']);
+
 /** The red-CI loop starts over with its whole bound (ORC-270); nothing is recorded when its count is already 0. */
 function resetRedCi(out: Decision, ticket: TicketState | undefined): void {
   if ((ticket?.ciFixAttempts ?? 0) > 0) out.events.push({ type: 'ticket.patched', patch: { ciFixAttempts: 0 } });
 }
 
-/** Work starts again on a blocked ticket. Relaunched by anything but red CI itself (a reply, a label, a status change…), the red-CI count resets. */
+/**
+ * Work starts again on a blocked ticket. Relaunched by a human (a reply, a label, a status change), the
+ * red-CI count resets; by a machine event (a timer, red CI itself), it does not, or a timer armed before
+ * the block would undo it.
+ */
 function unblock(out: Decision, event: FactoryEvent, ticket: TicketState): void {
   out.events.push({ type: 'ticket.unblocked' });
-  if (event.type !== 'pr.checks_failed') resetRedCi(out, ticket);
+  if (HUMAN_RELAUNCH.has(event.type)) resetRedCi(out, ticket);
 }
 
 /** A Linear session that carries questions (read-only answers), not the ticket's dev conversation. */
@@ -196,7 +206,7 @@ function fixRedCi(out: Decision, rule: Rule, event: FactoryEvent<'pr.checks_fail
   out.trace.push(`red CI: ${job.name} bound ${bound} reached`);
   // Already blocked (by a rule without !blocked): the ticket keeps its reason and gets no second notice.
   if (ticket?.blocked) return out;
-  const reason = `CI toujours en échec après ${bound} tentatives de ${job.name}.`;
+  const reason = `${RED_CI_BLOCKED}${bound} tentatives de ${job.name}.`;
   const failures = event.payload.failures.map((f) => `- \`${f}\``);
   return block(out, reason, [reason, ...failures, 'Répondez dans ce fil pour relancer.'].join('\n'));
 }
@@ -331,11 +341,15 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
       break;
     case 'pr.checks_passed':
       // Green CI ends the red-CI loop: its count starts over (ORC-270). The rules of pr.checks_passed still apply.
+      // A ticket blocked by the red-CI bound is no longer blocked for a reason that holds: the block is lifted.
       resetRedCi(out, ticket);
+      if (ticket?.blocked && ticket.blockReason?.startsWith(RED_CI_BLOCKED)) out.events.push({ type: 'ticket.unblocked' });
       break;
     case 'pr.opened': {
       // A new PR (another number) reopens a delivered ticket; the same PR seen again leaves it as it is.
       const reopens = event.payload.number !== ticket?.prNumber;
+      // Another PR is another red-CI loop: the count of the previous one does not carry over (ORC-270).
+      if (reopens) resetRedCi(out, ticket);
       out.events.push({
         type: 'ticket.patched',
         patch: { prNumber: event.payload.number, prUrl: event.payload.url, ...(reopens ? { prState: 'OPEN' as const } : {}) },

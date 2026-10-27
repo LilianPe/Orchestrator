@@ -420,6 +420,21 @@ describe('decide — built-ins', () => {
       expect(decide(inReview(), green, workflow).events).toEqual([]);
     });
 
+    it('a green CI lifts the block of the red-CI bound, and only that block', () => {
+      const green = ev('pr.checks_passed', { number: 3, url: 'u', branch: 'b' });
+      const ciBlocked = inReview({ ciFixAttempts: 2, blocked: true, blockReason: 'CI toujours en échec après 2 tentatives de fix-ci.' });
+      expect(decide(ciBlocked, green, workflow).events).toEqual([{ type: 'ticket.patched', patch: { ciFixAttempts: 0 } }, { type: 'ticket.unblocked' }]);
+      const otherwise = inReview({ ciFixAttempts: 1, blocked: true, blockReason: 'Le run dev a échoué.' });
+      expect(decide(otherwise, green, workflow).events).toEqual([{ type: 'ticket.patched', patch: { ciFixAttempts: 0 } }]);
+    });
+
+    it('another PR resets the count; the same PR seen again does not', () => {
+      const opened = (number: number) => ev('pr.opened', { number, url: `u${number}`, branch: 'b' });
+      const used = inReview({ ciFixAttempts: 2, prNumber: 3 });
+      expect(decide(used, opened(4), workflow).events[0]).toEqual({ type: 'ticket.patched', patch: { ciFixAttempts: 0 } });
+      expect(decide(used, opened(3), workflow).events).toEqual([{ type: 'ticket.patched', patch: { prNumber: 3, prUrl: 'u3' } }]);
+    });
+
     it('a human who relaunches the blocked ticket resets the count', () => {
       const blocked = inReview({ ciFixAttempts: 2, blocked: true, linearSessionId: 's1' });
       const reply = decide(blocked, ev('session.prompted', { linearSessionId: 's1', body: 'corrige le lint', author: 'L' }), workflow);
@@ -427,8 +442,11 @@ describe('decide — built-ins', () => {
       expect(reply.events[2]).toEqual({ type: 'ticket.patched', patch: { ciFixAttempts: 0 } });
       const label = decide(blocked, ev('label.changed', { label: 'agent:reprendre', change: 'added' }), workflow);
       expect(label.events).toEqual([{ type: 'ticket.unblocked' }, { type: 'ticket.patched', patch: { ciFixAttempts: 0 } }]);
+      const moved = decide(blocked, ev('status.changed', { from: 'human_review', to: 'dev' }), workflow);
+      expect(moved.events).toEqual([{ type: 'ticket.unblocked' }, { type: 'ticket.patched', patch: { ciFixAttempts: 0 } }]);
+      // A timer armed before the block is no human relaunch: it would undo the bound.
       const timer = decide(blocked, ev('debounce.fired', { job: 'dev-feedback' }), workflow);
-      expect(timer.events).toEqual([{ type: 'ticket.unblocked' }, { type: 'ticket.patched', patch: { ciFixAttempts: 0 } }]);
+      expect(timer.events).toEqual([{ type: 'ticket.unblocked' }]);
     });
 
     it('counts nothing when no fix-ci starts: no rule, or a merged PR', () => {
