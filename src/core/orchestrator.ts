@@ -710,6 +710,13 @@ export class Orchestrator {
       this.log('info', `refused ${job.name} on ${ticketId}: its PR is merged`);
       return 'done';
     }
+    // A decision that starts a dev job unblocks the ticket first: blocked now, it was blocked since
+    // (a failed launch whose notice failed, a stop, recover()), and a retried or queued start must
+    // not launch a run on it.
+    if (job.queue === 'dev' && t.blocked) {
+      this.log('warn', `refused ${job.name} on ${ticketId}: the ticket is blocked (${t.blockReason ?? 'no reason'})`);
+      return 'done';
+    }
     if (job.workspace === 'knowledge' && this.d.knowledgeConfigured === false) {
       this.log('info', `skipped ${job.name} on ${ticketId}: no knowledge repo configured`);
       if (opts.linearSessionId) {
@@ -766,8 +773,13 @@ export class Orchestrator {
       }
       const reason = `Erreur au lancement : ${(err as Error).message}`;
       fresh = await this.apply(fresh, ...events, { type: 'ticket.blocked', reason });
-      const session = opts.linearSessionId ?? (await this.sessionFor(fresh));
-      await this.d.tracker.activity(session, { type: 'error', body: reason });
+      // The ticket is blocked: a failed notice must not fail the effect, whose retry would start again.
+      try {
+        const session = opts.linearSessionId ?? (await this.sessionFor(fresh));
+        await this.d.tracker.activity(session, { type: 'error', body: reason });
+      } catch (e) {
+        this.log('warn', `could not post the launch error of ${ticketId}: ${(e as Error).message}`);
+      }
     }
     return 'done';
   }
@@ -877,7 +889,9 @@ export class Orchestrator {
     await store.putRun(run);
     await this.apply(t, { type: 'run.started', runId, job: job.name, queue: job.queue, claudeSessionId, feedbackConsumed: kind === 'feedback' });
     // The run is written: a queued item it came from leaves the queue now (a crash from here on is recover()'s).
-    await recorded?.();
+    // Logged, not thrown: the run is launched either way, and a queue item left behind is refused
+    // when handed out again (its ticket has a run, or is blocked).
+    await recorded?.().catch((err: Error) => this.log('warn', `queued ${job.name} on ${ticketId} not taken out of the queue: ${err.message}`));
     if (this.d.beforeRun) await this.d.beforeRun(run).catch((err: Error) => this.log('warn', `beforeRun: ${err.message}`));
 
     const handle = this.d.runner.start({

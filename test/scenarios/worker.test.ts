@@ -506,3 +506,40 @@ on:
     h.orch.stopAll();
   });
 });
+
+describe('a start that must not run (ORC-150 review)', () => {
+  it('blocks the ticket once when a launch fails and its notice fails too: the start is not retried', async () => {
+    const h = createHarness();
+    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+    h.workspaces.prepare = async () => {
+      throw new Error('disk full');
+    };
+    const activity = h.tracker.activity.bind(h.tracker);
+    h.tracker.activity = async (sessionId, a) => {
+      if (a.type === 'error') throw new Error('Linear down');
+      return activity(sessionId, a);
+    };
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Erreur au lancement : disk full' });
+    expect((await h.store.listEffects('p', 'REL-1')).find((r) => r.effect.kind === 'start_run')).toMatchObject({ status: 'done', attempts: 1 });
+    expect(h.runner.requests).toHaveLength(0);
+  });
+
+  it('drops a queued dev start of a ticket blocked meanwhile, without a run', async () => {
+    const h = createHarness({ projectYaml: 'version: 1\nlimits:\n  parallel_sessions: 1\n' });
+    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+    h.tracker.addIssue({ identifier: 'REL-2', title: 'Import CSV' });
+    h.runner.enqueue({ hold: true });
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    await h.send('ticket.delegated', { linearSessionId: 'ls-2' }, 'REL-2');
+    expect((await h.store.listQueue()).map((q) => q.ticketId)).toEqual(['REL-2']);
+    await h.orch.blockTicket('p', 'REL-2', 'Question posée par l\'agent');
+    h.runner.release(h.runner.requests[0]!.runId);
+    await h.orch.drained();
+    expect(h.runner.requests).toHaveLength(1);
+    expect(await h.store.listQueue()).toEqual([]);
+    const t = await h.ticket('REL-2');
+    expect(t.blocked).toBe(true);
+    expect(t.activeRunId).toBeUndefined();
+  });
+});
