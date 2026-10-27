@@ -190,7 +190,7 @@ function applyRule(out: Decision, rule: Rule, event: FactoryEvent, ticket: Ticke
 /**
  * A rule that answers red CI with a run, bounded by `limits.ciFixAttempts` (I5, ORC-270): each run it
  * starts is counted, and once the count reaches the bound the next red CI blocks the ticket instead of
- * applying the rule. A green CI or a human relaunch (`unblock`) resets the count. A run the rule would
+ * applying the rule. A green CI, another PR or a human relaunch (`unblock`) resets the count. A run the rule would
  * not start anyway (merged PR, I8 b) is neither counted nor blocked.
  */
 function fixRedCi(out: Decision, rule: Rule, event: FactoryEvent<'pr.checks_failed'>, ticket: TicketState | undefined, workflow: Workflow): Decision {

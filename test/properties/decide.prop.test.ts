@@ -199,15 +199,12 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
           expect(CI_RESETS, 'red-CI reset').toContain(step.event.type);
           fixes = 0;
         }
-        if (step.event.type !== 'pr.checks_failed') {
-          if (step.after) expect(step.after.ciFixAttempts, 'ciFixAttempts').toBe(fixes);
-          continue;
-        }
-        const fixCi = step.decision.effects.filter((e) => e.kind === 'start_run' && e.job === 'fix-ci');
+        const red = step.event.type === 'pr.checks_failed';
+        const fixCi = red ? step.decision.effects.filter((e) => e.kind === 'start_run' && e.job === 'fix-ci') : [];
         fixes += fixCi.length;
         expect(fixes, 'fix-ci relaunches').toBeLessThanOrEqual(bound);
         if (step.after) expect(step.after.ciFixAttempts, 'ciFixAttempts').toBe(fixes);
-        if ((step.before?.ciFixAttempts ?? 0) < bound) continue;
+        if (!red || (step.before?.ciFixAttempts ?? 0) < bound) continue;
         expect(fixCi).toEqual([]);
         const matched = step.decision.trace.includes('on.pr.checks_failed[0]');
         const refused = step.decision.trace.includes('merged: refused fix-ci');
