@@ -291,13 +291,14 @@ export class Worker {
         return 'done';
       }
       let outcome: DecisionOutcome;
-      let event: FactoryEvent;
+      let event: FactoryEvent | undefined;
       try {
         event = await this.d.prepare(poisonOn(() => upcast(row)));
         const req = this.d.request(event);
         outcome = await this.d.store.decide({ ...req, decide: (ticket, workflow) => poisonOn(() => req.decide(ticket, workflow)) });
       } catch (err) {
-        if (err instanceof PoisonEvent) await this.deadLetter(row, key, err);
+        // Set aside as prepared (its snapshot filled), so that a replay decides what was decided.
+        if (err instanceof PoisonEvent) await this.deadLetter(event ?? row, key, err);
         else this.failed(row, key, toError(err));
         return 'done';
       }

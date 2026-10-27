@@ -295,3 +295,25 @@ describe('Worker: a decision that throws is dead-lettered (ORC-175)', () => {
     expect((await store.recentEvents(10, 'REL-1')).map((e) => e.id)).toContain('e1');
   });
 });
+
+describe('Worker: what a dead letter keeps (ORC-175)', () => {
+  it('keeps the event as prepared (its snapshot filled), so that a replay decides the same event', async () => {
+    const issue = { title: 'T', logical: 'todo' as const, priority: 0 };
+    const { store, worker } = setup({
+      prepare: async (e) => ({ ...e, payload: { ...e.payload, issue } }) as FactoryEvent,
+      request: (e) =>
+        e.id !== 'e1'
+          ? twoComments(e)
+          : {
+              ...twoComments(e),
+              decide: () => {
+                throw new Error('boom');
+              },
+            },
+    });
+    await store.appendInbox(event('e1'));
+    await worker.kick();
+    await settled(worker);
+    expect(await store.deadLetters('REL-1')).toMatchObject([{ eventId: 'e1', event: { id: 'e1', payload: { issue } } }]);
+  });
+});

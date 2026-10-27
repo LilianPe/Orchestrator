@@ -129,6 +129,8 @@ export class SqliteStore implements Store {
   ) {
     this.db = new DatabaseSync(path);
     this.db.exec('PRAGMA journal_mode = WAL;');
+    // `factory run repair` writes to the daemon's file from another process (ORC-175): wait for its lock.
+    this.db.exec('PRAGMA busy_timeout = 5000;');
     this.db.exec(SCHEMA);
     for (const [table, column, definition] of ADDED_COLUMNS) {
       const columns = this.db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
