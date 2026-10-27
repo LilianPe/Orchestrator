@@ -1,7 +1,7 @@
 // Deterministic scan of the diff `baseSha..SHA` against the four forms of cheating (ORC-158). No model: a finding is
 // a pattern on an ADDED line, so a removed line never blocks. Every finding blocks `factory/anti-triche`.
 import { parseDiff, type DiffFile } from './diff.js';
-import { isTestFile, isTestHarnessFile } from './test-files.js';
+import { isTestFile, isTestHarnessFile, normalizePath } from './test-files.js';
 import type { CheckResult } from './types.js';
 
 export const ANTI_CHEAT_CHECK = 'factory/anti-triche';
@@ -29,19 +29,20 @@ export interface AntiCheatResult extends CheckResult {
 
 type Lang = 'js' | 'py' | 'other';
 
+/** A test file, the test runner's configuration and global setup, or anything else. */
+type FileKind = 'test' | 'harness' | 'code';
+
 /** What a piece of a JS or Python line is: code, a string literal, a regex literal (JS) or a comment. */
 type Kind = 'code' | 'string' | 'regex' | 'comment';
 type Token = [kind: Kind, from: number, to: number];
 
 interface Rule {
   form: Exclude<CheatForm, 'frozen-test'>;
-  langs: Lang[];
+  /** Default: every language. */
+  langs?: Lang[];
   pattern: RegExp;
-  /**
-   * `tests`: only in test files; `code`: only outside test files and the test runner's configuration;
-   * `not-tests`: anywhere but test files, whose fixtures quote the patterns.
-   */
-  only?: 'tests' | 'code' | 'not-tests';
+  /** Default: every kind of file. Test files are left out of the rules their fixtures quote. */
+  in?: FileKind[];
   /**
    * In JS and Python a rule reads code only: string and regex literals and comments are blanked, so a line that
    * quotes a pattern (a fixture, a scanner's own regex, a comment stating a rule) is not a finding. `comment` also
@@ -53,19 +54,19 @@ interface Rule {
 
 const RULES: Rule[] = [
   // 2. Disabling. `t.skip()` and `context.only` are common outside tests (parsers, React contexts): tests only.
-  { form: 'disabled-test', langs: ['js'], only: 'tests', pattern: /\b(?:it|test|describe|suite|context|bench)(?:\.\w+)*\.(?:skip|only|todo|skipIf|runIf)\b/ },
-  { form: 'disabled-test', langs: ['js'], only: 'tests', pattern: /\b(?:ctx|t|this)\.skip\s*\(/ },
+  { form: 'disabled-test', langs: ['js'], in: ['test'], pattern: /\b(?:it|test|describe|suite|context|bench)(?:\.\w+)*\.(?:skip|only|todo|skipIf|runIf)\b/ },
+  { form: 'disabled-test', langs: ['js'], in: ['test'], pattern: /\b(?:ctx|t|this)\.skip\s*\(/ },
   { form: 'disabled-test', langs: ['js'], pattern: /(?<![\w.$])x(?:it|describe|test)\s*\(/ },
   // `fit` and `fdescribe` focus like `.only`; outside tests, `fit(` is too often a real function.
-  { form: 'disabled-test', langs: ['js'], only: 'tests', pattern: /(?<![\w.$])f(?:it|describe)\s*\(/ },
+  { form: 'disabled-test', langs: ['js'], in: ['test'], pattern: /(?<![\w.$])f(?:it|describe)\s*\(/ },
   { form: 'disabled-test', langs: ['py'], pattern: /\bpytest\.mark\.(?:skip|skipif|xfail)\b/ },
   { form: 'disabled-test', langs: ['py'], pattern: /\bpytest\.(?:skip|xfail)\s*\(/ },
   { form: 'disabled-test', langs: ['py'], pattern: /\bunittest\.(?:skip|skipIf|skipUnless|expectedFailure)\b|^\s*@(?:skip|skipIf|skipUnless|expectedFailure)\b|\bself\.skipTest\s*\(/ },
   // Tests left out by the runner: jest's ignore list, pytest's `--deselect`. Vitest's `exclude` is not read: the same
   // key leaves files out of coverage.
-  { form: 'disabled-test', langs: ['js', 'py', 'other'], only: 'not-tests', keep: 'string', pattern: /\btestPathIgnorePatterns\b|--deselect\b/ },
+  { form: 'disabled-test', in: ['harness', 'code'], keep: 'string', pattern: /\btestPathIgnorePatterns\b|--deselect\b/ },
   // 3. Bypasses. Tests run `git commit --no-verify` in throwaway repositories: not a bypass of this one.
-  { form: 'bypass', langs: ['js', 'py', 'other'], only: 'not-tests', keep: 'string', pattern: /--no-verify\b/ },
+  { form: 'bypass', in: ['harness', 'code'], keep: 'string', pattern: /--no-verify\b/ },
   // A checker directive only acts at the start of a comment. All three TypeScript ones silence the type checker.
   { form: 'bypass', langs: ['js', 'other'], keep: 'comment', pattern: /(?<=(?:\/\/|\/\*|^\s*\*)\s*)eslint-disable\b/ },
   { form: 'bypass', langs: ['js', 'other'], keep: 'comment', pattern: /(?<=(?:\/\/|\/\*|^\s*\*)[\s/*]*)@ts-(?:ignore|nocheck|expect-error)\b/ },
@@ -78,9 +79,9 @@ const RULES: Rule[] = [
   // Leaving with success before the tests can fail. Shell `exit 0` is not scanned: too common in real scripts.
   { form: 'bypass', langs: ['js', 'py'], pattern: /(?<![\w.$])(?:process\.|sys\.|os\._)?exit\s*\(\s*0?\s*\)/ },
   // 4. Code that behaves differently under test, outside tests only: a pattern list, false negatives accepted.
-  { form: 'test-only-behaviour', langs: ['js', 'py'], only: 'code', keep: 'string', pattern: /\b(?:NODE_ENV|env\.MODE)\b.*(['"`])test\1|(['"`])test\2.*\b(?:NODE_ENV|env\.MODE)\b/ },
-  { form: 'test-only-behaviour', langs: ['js', 'py'], only: 'code', keep: 'string', pattern: /\b(?:VITEST(?:_[A-Z_]+)?|JEST_WORKER_ID|PYTEST_CURRENT_TEST)\b/ },
-  { form: 'test-only-behaviour', langs: ['py'], only: 'code', keep: 'string', pattern: /\bsys\.modules\b.*(['"])pytest\1|(['"])pytest\2.*\bsys\.modules\b/ },
+  { form: 'test-only-behaviour', langs: ['js', 'py'], in: ['code'], keep: 'string', pattern: /\b(?:NODE_ENV|env\.MODE)\b.*(['"`])test\1|(['"`])test\2.*\b(?:NODE_ENV|env\.MODE)\b/ },
+  { form: 'test-only-behaviour', langs: ['js', 'py'], in: ['code'], keep: 'string', pattern: /\b(?:VITEST(?:_[A-Z_]+)?|JEST_WORKER_ID|PYTEST_CURRENT_TEST)\b/ },
+  { form: 'test-only-behaviour', langs: ['py'], in: ['code'], keep: 'string', pattern: /\bsys\.modules\b.*(['"])pytest\1|(['"])pytest\2.*\bsys\.modules\b/ },
 ];
 
 const FORM_LABEL: Record<CheatForm, string> = {
@@ -105,10 +106,18 @@ function lang(path: string): Lang {
   return 'other';
 }
 
-// A `/` opens a regex literal, not a division, after nothing, an operator, an opening bracket or a keyword.
-function regexMayStart(before: string): boolean {
-  const t = before.trimEnd();
-  return t === '' || /[(,=:[!&|?{};+\-*%<>~^]$/.test(t) || /\b(?:return|typeof|case|do|else|in|of|void|yield|await|delete|throw|new)$/.test(t);
+const KEYWORDS_BEFORE_REGEX = new Set(['return', 'typeof', 'case', 'do', 'else', 'in', 'of', 'void', 'yield', 'await', 'delete', 'throw', 'new']);
+
+// A `/` at `i` opens a regex literal, not a division, after nothing, an operator, an opening bracket or a keyword.
+// Reads back from `i` without copying the line: a minified line has thousands of `/`.
+function regexMayStart(text: string, i: number): boolean {
+  let j = i - 1;
+  while (j >= 0 && /\s/.test(text[j]!)) j--;
+  if (j < 0) return true;
+  if ('(,=:[!&|?{};+-*%<>~^'.includes(text[j]!)) return true;
+  let k = j;
+  while (k >= 0 && /\w/.test(text[k]!)) k--;
+  return KEYWORDS_BEFORE_REGEX.has(text.slice(k + 1, j + 1));
 }
 
 // End of the literal opened at `i`: a string or template up to its unescaped closing quote, a regex up to its
@@ -133,8 +142,7 @@ function literalEnd(text: string, i: number, regex: boolean): number {
  * One line cut into code, literals and comments. Line by line, without state: a string or a comment spanning lines
  * reads as code on its next lines, except a JS line starting with `*` (the middle of a block comment).
  */
-function tokenize(text: string, l: Lang): Token[] {
-  if (l === 'other') return [['code', 0, text.length]];
+function tokenize(text: string, l: Exclude<Lang, 'other'>): Token[] {
   if (l === 'js' && /^\s*\*/.test(text)) return [['comment', 0, text.length]];
   const tokens: Token[] = [];
   const push = (kind: Kind, from: number, to: number): void => {
@@ -151,7 +159,7 @@ function tokenize(text: string, l: Lang): Token[] {
       const close = text.indexOf('*/', i + 2);
       [kind, to] = ['comment', close === -1 ? text.length : close + 2];
     } else if (c === "'" || c === '"' || (l === 'js' && c === '`')) [kind, to] = ['string', literalEnd(text, i, false)];
-    else if (l === 'js' && c === '/' && regexMayStart(text.slice(0, i))) [kind, to] = ['regex', literalEnd(text, i, true)];
+    else if (l === 'js' && c === '/' && regexMayStart(text, i)) [kind, to] = ['regex', literalEnd(text, i, true)];
     push(kind, i, to);
     i = to;
   }
@@ -165,13 +173,14 @@ function view(text: string, tokens: Token[], keep: Kind | undefined): string {
   for (const [kind, from, to] of tokens) {
     const part = text.slice(from, to);
     if (kind === 'code' || kind === keep) out += part;
-    else if (kind === 'string') out += part[0] + part.slice(1, -1).replace(part[0] === '`' ? /[^$]/g : /./g, ' ') + (part.length > 1 ? part.at(-1) : '');
+    else if (kind === 'string') {
+      const inner = part.slice(1, -1);
+      out += part[0] + (part[0] === '`' ? inner.replace(/[^$]/g, ' ') : ' '.repeat(inner.length)) + (part.length > 1 ? part.at(-1) : '');
+    }
     else out += ' '.repeat(part.length);
   }
   return out;
 }
-
-const norm = (path: string): string => path.replace(/\\/g, '/').replace(/^\.\//, '');
 
 // Only a change to the frozen path itself: a copy of a frozen test leaves it as it was.
 function frozenChange(file: DiffFile, frozen: Set<string>): CheatFinding | undefined {
@@ -183,24 +192,23 @@ function frozenChange(file: DiffFile, frozen: Set<string>): CheatFinding | undef
 }
 
 export function scanDiff(diff: string, options: AntiCheatOptions = {}): CheatFinding[] {
-  const frozen = new Set([...(options.frozenTests ?? [])].map(norm));
+  const frozen = new Set([...(options.frozenTests ?? [])].map(normalizePath));
   const findings: CheatFinding[] = [];
   for (const file of parseDiff(diff)) {
     const frozenFinding = frozenChange(file, frozen);
     if (frozenFinding) findings.push(frozenFinding);
     if (PROSE.test(file.path)) continue;
     const l = lang(file.path);
-    const test = isTestFile(file.path);
-    const scope = { tests: test, code: !test && !isTestHarnessFile(file.path), 'not-tests': !test };
-    const rules = RULES.filter((r) => r.langs.includes(l) && (r.only === undefined || scope[r.only]));
+    const kind: FileKind = isTestFile(file.path) ? 'test' : isTestHarnessFile(file.path) ? 'harness' : 'code';
+    const rules = RULES.filter((r) => (r.langs?.includes(l) ?? true) && (r.in?.includes(kind) ?? true));
     const settings = CLAUDE_SETTINGS.test(file.path);
     for (const { line, text } of file.added) {
       if (settings && PERMISSION_RULE.test(text)) continue;
-      const tokens = tokenize(text, l);
-      const views = new Map<Rule['keep'], string>();
+      // Other files are read whole: no tokens, the line itself is every view.
+      const tokens = l === 'other' ? undefined : tokenize(text, l);
+      const views: Partial<Record<Kind, string>> = {};
       for (const rule of rules) {
-        if (!views.has(rule.keep)) views.set(rule.keep, view(text, tokens, rule.keep));
-        const m = rule.pattern.exec(views.get(rule.keep)!);
+        const m = rule.pattern.exec(tokens ? (views[rule.keep ?? 'code'] ??= view(text, tokens, rule.keep)) : text);
         if (m) findings.push({ file: file.path, line, form: rule.form, match: text.slice(m.index, m.index + m[0].length).trim() });
       }
     }
@@ -241,6 +249,6 @@ function summarize(findings: CheatFinding[]): string {
 /** The `factory/anti-triche` check run: success only when the diff shows none of the four forms. */
 export function antiCheatCheck(diff: string, options: AntiCheatOptions = {}): AntiCheatResult {
   const findings = scanDiff(diff, options);
-  if (findings.length === 0) return { check: ANTI_CHEAT_CHECK, ok: true, summary: 'aucun test désactivé, aucun contournement', findings };
-  return { check: ANTI_CHEAT_CHECK, ok: false, summary: summarize(findings), findings };
+  const ok = findings.length === 0;
+  return { check: ANTI_CHEAT_CHECK, ok, summary: ok ? 'aucun test désactivé, aucun contournement' : summarize(findings), findings };
 }

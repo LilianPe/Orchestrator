@@ -22,7 +22,7 @@ function unquote(raw: string): string {
   if (!raw.startsWith('"')) return raw.split('\t')[0]!;
   const bytes: number[] = [];
   const body = raw.slice(1, raw.lastIndexOf('"'));
-  const escapes: Record<string, number> = { n: 10, t: 9, r: 13, b: 8, f: 12, a: 7, v: 11, '"': 34, '\\': 92 };
+  const escapes: Record<string, number> = { n: 10, t: 9, r: 13, b: 8, f: 12, a: 7, v: 11 };
   for (let i = 0; i < body.length; i++) {
     const c = body[i]!;
     if (c !== '\\') {

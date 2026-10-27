@@ -13,8 +13,13 @@ const TEST_DIR = new Set(['test', 'tests', '__tests__']);
 // environment would change what ships.
 const HARNESS_NAME = [/^(?:vitest|jest)\.(?:config|setup|workspace)(?:\.[\w-]+)?\.[cm]?[jt]s$/, /^setupTests\.[cm]?[jt]sx?$/, /^pytest\.ini$/];
 
+/** Repository-relative path with slashes and no leading `./`, as git prints it. */
+export function normalizePath(path: string): string {
+  return path.replace(/\\/g, '/').replace(/^\.\//, '');
+}
+
 function parts(path: string): string[] {
-  return path.replace(/\\/g, '/').split('/').filter(Boolean);
+  return normalizePath(path).split('/').filter(Boolean);
 }
 
 export function isTestFile(path: string): boolean {
