@@ -6,7 +6,7 @@ import type { Forge } from "./types.js";
 
 export class PrPoller {
   private handle: NodeJS.Timeout | undefined;
-  private running = false;
+  private polling: Promise<void> | undefined;
 
   constructor(
     private d: {
@@ -85,18 +85,18 @@ export class PrPoller {
   }
 
   start(intervalMs = 30_000): void {
-    this.stop();
+    if (this.handle) clearInterval(this.handle);
     this.handle = setInterval(() => {
-      if (this.running) return;
-      this.running = true;
-      void this.pollOnce()
+      this.polling ??= this.pollOnce()
         .catch((e: Error) => this.d.log(`pr poll: ${e.message}`))
-        .finally(() => (this.running = false));
+        .finally(() => (this.polling = undefined));
     }, intervalMs);
   }
 
-  stop(): void {
+  /** No poll starts after it; resolves once the poll under way, if any, has finished. */
+  async stop(): Promise<void> {
     if (this.handle) clearInterval(this.handle);
     this.handle = undefined;
+    await this.polling;
   }
 }

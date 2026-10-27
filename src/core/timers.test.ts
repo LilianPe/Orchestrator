@@ -67,4 +67,28 @@ describe('TimerService', () => {
     await Promise.all([svc.tick(), svc.tick()]);
     expect(events).toHaveLength(1);
   });
+
+  it('stop() resolves once the pass under way has finished', async () => {
+    const inner = new SqliteStore(':memory:');
+    await inner.putTimer({ key: 'REL-1:x', projectId: 'p', ticketId: 'REL-1', job: 'x', fireAt: 100 });
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const store = Object.assign(Object.create(inner) as SqliteStore, {
+      dueTimers: async (now: number) => {
+        await gate;
+        return inner.dueTimers(now);
+      },
+    });
+    const events: FactoryEvent[] = [];
+    const svc = new TimerService(store, new FakeClock(500), (e) => events.push(e));
+    const pass = svc.tick();
+    let stopped = false;
+    const stop = svc.stop().then(() => (stopped = true));
+    await new Promise((r) => setImmediate(r));
+    expect(stopped).toBe(false);
+    release();
+    await Promise.all([pass, stop]);
+    expect(events).toHaveLength(1);
+    expect(await inner.dueTimers(1000)).toEqual([]);
+  });
 });

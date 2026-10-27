@@ -38,12 +38,14 @@ export class TimerService {
   }
 
   start(intervalMs = 1000): void {
-    this.stop();
+    if (this.handle) clearInterval(this.handle);
     this.handle = setInterval(() => void this.tick().catch((err: Error) => this.onError(err)), intervalMs);
   }
 
-  stop(): void {
+  /** No pass starts after it; resolves once the pass under way, if any, has finished. */
+  async stop(): Promise<void> {
     if (this.handle) clearInterval(this.handle);
     this.handle = undefined;
+    await this.ticking?.catch(() => {});
   }
 }

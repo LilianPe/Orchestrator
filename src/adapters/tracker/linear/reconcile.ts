@@ -59,14 +59,23 @@ export async function reconcileOnce(d: ReconcileDeps): Promise<void> {
 
 export class Reconciler {
   private handle: NodeJS.Timeout | undefined;
+  /** One pass at a time: an interval that finds a pass still running skips its turn. */
+  private passing: Promise<void> | undefined;
   constructor(private d: ReconcileDeps) {}
-  start(intervalMs = 30_000): void {
-    this.stop();
-    void reconcileOnce(this.d);
-    this.handle = setInterval(() => void reconcileOnce(this.d), intervalMs);
+  private pass(): void {
+    this.passing ??= reconcileOnce(this.d)
+      .catch((e: Error) => this.d.log(`reconcile: ${e.message}`))
+      .finally(() => (this.passing = undefined));
   }
-  stop(): void {
+  start(intervalMs = 30_000): void {
+    if (this.handle) clearInterval(this.handle);
+    this.pass();
+    this.handle = setInterval(() => this.pass(), intervalMs);
+  }
+  /** No pass starts after it; resolves once the pass under way, if any, has finished. */
+  async stop(): Promise<void> {
     if (this.handle) clearInterval(this.handle);
     this.handle = undefined;
+    await this.passing;
   }
 }

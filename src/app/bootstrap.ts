@@ -17,7 +17,7 @@ import { Reconciler } from '../adapters/tracker/linear/reconcile.js';
 import { LinearTracker } from '../adapters/tracker/linear/tracker.js';
 import { isUsableWebhookSecret } from '../adapters/tracker/linear/webhook.js';
 import { GitWorkspaces } from '../adapters/workspace/git-workspaces.js';
-import { homePaths, loadInstance, loadSecrets, saveSecrets } from '../config/instance.js';
+import { homePaths, loadInstance, loadSecrets, saveSecrets, secretValues } from '../config/instance.js';
 import { resolveGithubApp } from '../config/github-app.js';
 import { writeRunSettings } from '../config/run-settings.js';
 import { loadWorkflow } from '../config/load-workflow.js';
@@ -121,7 +121,9 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     };
 
     const scheduler = new Scheduler(store, { dev: limits?.parallelSessions ?? 3, questions: limits?.questionSessions ?? 2 });
-    const runner: Runner = o.fakeRunner ? new FakeRunner() : new ClaudeCodeRunner({ transcriptsDir: paths.transcripts });
+    // The daemon's own secrets never enter a run's environment; masked all the same, should one surface.
+    const daemonSecrets = () => [...secretValues(loadSecrets(o.home)), ...(instance.github?.webhookSecret ? [instance.github.webhookSecret] : [])];
+    const runner: Runner = o.fakeRunner ? new FakeRunner() : new ClaudeCodeRunner({ transcriptsDir: paths.transcripts, secrets: daemonSecrets });
     const workspaces = new GitWorkspaces({ root: paths.workspaces, knowledgeRepo: instance.knowledge?.repoPath });
     const forge = githubApp
       ? new GitHubAppForge({ ...githubApp, log })
@@ -240,45 +242,55 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
 
     const server = serve({ fetch: app.fetch, port, hostname: instance.host });
     const relay = instance.relay.kind === 'smee' ? startSmeeRelay({ url: instance.relay.url, onWebhook: ingest, log }) : undefined;
-    timers.start();
-    // Transcripts are kept 30 days (ORC-132): purged at start, then daily.
-    const purge = () => {
-      const removed = purgeTranscripts(paths.transcripts, Date.now());
-      if (removed.length) log(`transcripts : ${removed.length} supprimé(s) après 30 jours`);
+    let purgeInterval: NodeJS.Timeout | undefined;
+    let tickInterval: NodeJS.Timeout | undefined;
+    // Everything but the store, which the caller closes after: by stop(), or by a start that fails from here on.
+    const shutdown = async () => {
+      clearInterval(tickInterval);
+      clearInterval(purgeInterval);
+      relay?.close();
+      // A pass under way finishes first, so it never reads or writes a closed store.
+      await Promise.all([timers.stop(), poller.stop(), reconciler.stop()]);
+      orchestrator.stopAll();
+      await orchestrator.idle();
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+        // Long-lived SSE streams (/api/events) would otherwise keep close() pending forever.
+        (server as unknown as { closeAllConnections(): void }).closeAllConnections();
+      });
     };
-    purge();
-    const purgeInterval = setInterval(purge, 24 * 60 * 60 * 1000);
-    purgeInterval.unref();
-    const tickInterval = setInterval(() => {
-      orchestrator.tick().catch((e: unknown) => log(`tick: ${(e as Error).message}`));
-    }, 60_000);
-    tickInterval.unref();
-    poller.start();
-    if (await connectLinear()) {
-      await orchestrator.announceRecovery();
-      reconciler.start();
+    try {
+      timers.start();
+      // Transcripts are kept 30 days (ORC-132): purged at start, then daily.
+      const purge = () => {
+        const removed = purgeTranscripts(paths.transcripts, Date.now());
+        if (removed.length) log(`transcripts : ${removed.length} supprimé(s) après 30 jours`);
+      };
+      purge();
+      purgeInterval = setInterval(purge, 24 * 60 * 60 * 1000);
+      purgeInterval.unref();
+      tickInterval = setInterval(() => {
+        orchestrator.tick().catch((e: unknown) => log(`tick: ${(e as Error).message}`));
+      }, 60_000);
+      tickInterval.unref();
+      poller.start();
+      if (await connectLinear()) {
+        await orchestrator.announceRecovery();
+        reconciler.start();
+      }
+      else log(`Linear non connecté : ouvrez ${baseUrl}/oauth/start`);
+      if (!isUsableWebhookSecret(webhookSecret()))
+        log('Attention : aucun secret de webhook Linear configuré, tout webhook sera refusé. Relancez factory init pour le renseigner.');
+    } catch (err) {
+      await shutdown().catch((e: Error) => log(`arrêt après un démarrage manqué : ${e.message}`));
+      throw err;
     }
-    else log(`Linear non connecté : ouvrez ${baseUrl}/oauth/start`);
-    if (!isUsableWebhookSecret(webhookSecret()))
-      log('Attention : aucun secret de webhook Linear configuré, tout webhook sera refusé. Relancez factory init pour le renseigner.');
     log(`${PRODUCT_NAME} écoute sur ${baseUrl}`);
 
     return {
       url: baseUrl,
       async stop() {
-        clearInterval(tickInterval);
-        clearInterval(purgeInterval);
-        relay?.close();
-        timers.stop();
-        poller.stop();
-        reconciler.stop();
-        orchestrator.stopAll();
-        await orchestrator.idle();
-        await new Promise<void>((resolve) => {
-          server.close(() => resolve());
-          // Long-lived SSE streams (/api/events) would otherwise keep close() pending forever.
-          (server as unknown as { closeAllConnections(): void }).closeAllConnections();
-        });
+        await shutdown();
         await store.close();
       },
     };

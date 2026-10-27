@@ -3,7 +3,9 @@ import { generateKeyPairSync } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
+import { PrPoller } from '../adapters/forge/pr-poller.js';
 import { Orchestrator } from '../core/orchestrator.js';
+import { TimerService } from '../core/timers.js';
 import { saveInstance, saveSecrets } from '../config/instance.js';
 import { startFactory } from './bootstrap.js';
 import { SqliteStore } from '../store/sqlite-store.js';
@@ -79,6 +81,29 @@ describe('bootstrap', () => {
       recover.mockRestore();
       close.mockRestore();
     }
+  });
+
+  it('stops the server and the timers it started when the start fails after them', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
+    saveInstance(home, { port: 4184, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
+    const poll = vi.spyOn(PrPoller.prototype, 'start').mockImplementation(() => {
+      throw new Error('boom');
+    });
+    const timersStop = vi.spyOn(TimerService.prototype, 'stop');
+    const close = vi.spyOn(SqliteStore.prototype, 'close');
+    try {
+      await expect(startFactory({ home, fakeRunner: true, log: () => {}, env: {} })).rejects.toThrow('boom');
+      expect(timersStop).toHaveBeenCalled();
+      expect(close).toHaveBeenCalledTimes(1);
+    } finally {
+      poll.mockRestore();
+      timersStop.mockRestore();
+      close.mockRestore();
+    }
+    // The port is free again: a second start listens on it.
+    const app = await startFactory({ home, fakeRunner: true, log: () => {}, env: {} });
+    expect((await fetch('http://127.0.0.1:4184/api/state')).status).toBe(200);
+    await app.stop();
   });
 
   it('ticks the orchestrator every minute until stopped', async () => {

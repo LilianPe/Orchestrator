@@ -107,8 +107,28 @@ describe('PrPoller', () => {
       vi.spyOn(poller, 'pollOnce').mockRejectedValue(new Error('nope'));
       poller.start(10);
       await vi.advanceTimersByTimeAsync(15);
-      poller.stop();
+      await poller.stop();
       expect(logs.some((m) => m.includes('nope'))).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stop() resolves once the poll under way has finished, and starts none after', async () => {
+    vi.useFakeTimers();
+    try {
+      const { poller } = setup();
+      let release!: () => void;
+      const polls = vi.spyOn(poller, 'pollOnce').mockImplementation(() => new Promise<void>((r) => (release = r)));
+      poller.start(10);
+      await vi.advanceTimersByTimeAsync(15);
+      let stopped = false;
+      const stop = poller.stop().then(() => (stopped = true));
+      await vi.advanceTimersByTimeAsync(50);
+      expect(stopped).toBe(false);
+      release();
+      await stop;
+      expect(polls).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }
