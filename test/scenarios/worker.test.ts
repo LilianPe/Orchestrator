@@ -463,6 +463,35 @@ on:
     expect(await h.store.pendingInbox(10)).toEqual([]);
   });
 
+  it('lets a stop pass the result of an effect of the same decision done before the one in backoff', async () => {
+    const LABEL_THEN_COMMENT = `
+version: 1
+on:
+  ticket.delegated:
+    - { run: dev }
+  label.changed:
+    - { label: "agent:x", labels: { add: ["vu"] }, comment: "reçu" }
+`;
+    const h = createHarness({ projectYaml: LABEL_THEN_COMMENT, effectRetry: { attempts: 8, baseMs: 60_000, capMs: 60_000 } });
+    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+    h.runner.enqueue({ hold: true });
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    const runId = (await h.ticket()).activeRunId!;
+    h.tracker.comment = async () => {
+      throw new Error('Linear down');
+    };
+    await h.send('label.changed', { label: 'agent:x', change: 'added' });
+    const effects = (await h.store.listEffects('p', 'REL-1')).filter((r) => r.effect.kind === 'labels' || r.effect.kind === 'comment');
+    expect(effects.map((r) => [r.effect.kind, r.status])).toEqual([['labels', 'done'], ['comment', 'pending']]);
+    expect((await h.store.pendingInbox(10)).map((e) => e.type)).toEqual(['effect.done']);
+
+    await h.orch.accept({ ...TRUSTED, id: 'stop-1', type: 'control.stop', at: h.clock.now(), projectId: 'p', ticketId: 'REL-1', payload: {} });
+    await waitFor(async () => (await h.store.getRun(runId))?.status === 'stopped');
+    await h.orch.drained();
+    expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Arrêté à la demande' });
+    expect(await h.store.pendingInbox(10)).toEqual([]);
+  });
+
   it('does not let another event pass the backoff', async () => {
     const h = createHarness({ projectYaml: RUN_THEN_COMMENT, effectRetry: { attempts: 8, baseMs: 60_000, capMs: 60_000 } });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });

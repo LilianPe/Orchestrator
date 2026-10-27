@@ -263,7 +263,18 @@ export class PgStore implements AsyncStore {
         limit 1
       `);
       const firstId = first.rows[0]?.id;
-      if (firstId !== undefined && firstId !== event.id) return { status: 'waiting', reason: `${firstId} comes first` };
+      // Only results of done effects ahead: a stop may pass them, as it passes the effects in backoff.
+      let jumped = false;
+      if (firstId !== undefined && firstId !== event.id) {
+        const ahead = await tx.execute<{ type: string }>(sql`
+          select type from inbox
+          where processed_at is null and payload->>'projectId' = ${event.projectId}
+            and (payload->>'ticketId') is not distinct from ${ticketId}
+            and (received_at, id) < (select received_at, id from inbox where id = ${event.id})
+        `);
+        if (!ahead.rows.every((r) => r.type === 'effect.done')) return { status: 'waiting', reason: `${firstId} comes first` };
+        jumped = true;
+      }
       // Locked: an executor claiming one of them right now finishes first, and is seen here.
       const open = await tx.execute<{ id: string; status: string; later: boolean }>(sql`
         select id, status, available_at > to_timestamp(${now / 1000}) as later from outbox
@@ -275,6 +286,7 @@ export class PgStore implements AsyncStore {
       // Held back by its backoff (nothing running): a stop of the ticket's work may go first (ORC-150).
       const backedOff = open.rows.length > 0 && open.rows.every((r) => r.status === 'pending') && open.rows[0]!.later;
       if (open.rows[0] && !backedOff) return { status: 'waiting', reason: `effect ${open.rows[0].id} is unfinished` };
+      if (jumped && !backedOff) return { status: 'waiting', reason: `${firstId} comes first` };
       const markProcessed = sql`update inbox set processed_at = to_timestamp(${now / 1000}) where id = ${event.id}`;
       if ((await tx.execute(sql`select 1 from journal where event_id = ${event.id} limit 1`)).rowCount) {
         await tx.execute(markProcessed);
@@ -287,7 +299,7 @@ export class PgStore implements AsyncStore {
       const plan = req.decide(known, frozen);
       const preempted = open.rows.map((r) => r.id);
       if (preempted.length > 0) {
-        if (!plan.clearTimers) return { status: 'waiting', reason: `effect ${preempted[0]} waits for its retry` };
+        if (!plan.clearTimers) return { status: 'waiting', reason: `effect ${preempted[0]} waits for its retry`, backoff: true };
         await tx.execute(sql`
           update outbox set status = 'failed', updated_at = to_timestamp(${now / 1000}),
             payload = payload || jsonb_build_object('error', ${`cancelled by ${event.id}`}::text)

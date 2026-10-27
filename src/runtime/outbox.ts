@@ -70,7 +70,8 @@ export class OutboxExecutor {
       if (row === undefined) return { status: 'done', settled };
       if (row === 'busy') return { status: 'busy', settled };
       const outcome = await this.run(row);
-      if (outcome !== 'lost') settled++;
+      // A result entered the inbox (done or dead): whoever polls should read it.
+      if (outcome === 'done' || outcome === 'dead') settled++;
       if (outcome === 'retry') return { status: 'busy', settled };
     }
   }

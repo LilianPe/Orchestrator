@@ -363,6 +363,26 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     expect(await s.decide(request(delegatedEvent('e3'), { effects: [{ kind: 'stop_run' }], clearTimers: true }))).toMatchObject({ status: 'waiting' });
   });
 
+  it('lets a stop pass the results of the earlier effects of a decision held by a backoff (ORC-150)', async () => {
+    const s = await store();
+    await s.appendInbox(delegatedEvent('e1'));
+    await s.decide(request(delegatedEvent('e1')));
+    const done = await s.claimEffect('p', 'REL-1', 60_000);
+    if (typeof done !== 'object') throw new Error('expected a claimed row');
+    expect(await s.completeEffect(done.id, done.lease)).toBe(true);
+    const held = await s.claimEffect('p', 'REL-1', 60_000);
+    if (typeof held !== 'object') throw new Error('expected a claimed row');
+    expect(await s.retryEffect(held.id, held.lease!, 'Linear down', 60_000)).toBe(true);
+    // effect:REL-1:1:1 is in the inbox ahead of the stop, and waits for the retry like any event.
+    await s.appendInbox(delegatedEvent('e2'));
+    expect(await s.decide(request(delegatedEvent('e2'), { effects: [] }))).toMatchObject({ status: 'waiting' });
+    expect(await s.decide(request(delegatedEvent('e2'), { effects: [{ kind: 'stop_run' }], clearTimers: true }))).toMatchObject({
+      status: 'committed',
+      preempted: ['REL-1:1:2'],
+    });
+    expect((await s.pendingInbox(10)).map((e) => e.id)).toEqual(['effect:REL-1:1:1']);
+  });
+
   it('writes the result of a done effect to the inbox as effect:<id>, with its row, in one transaction (ORC-150)', async () => {
     const s = await store();
     await s.appendInbox(delegatedEvent('e1'));

@@ -79,7 +79,7 @@ export class Worker {
   private retryTimers = new Set<NodeJS.Timeout>();
   private readonly retry: { attempts: number; baseMs: number };
   /** Rows that found another worker's row or effect first: retried at the next poll. */
-  private waited = new Set<string>();
+  private waited = new Map<string, string>();
   private tasks = new Set<Promise<unknown>>();
   private pass: Promise<number> | undefined;
   private again = false;
@@ -190,7 +190,7 @@ export class Worker {
 
   private async scan(): Promise<number> {
     let n = 0;
-    const exclude = [...this.skipped, ...this.waited, ...this.queuedIds];
+    const exclude = [...this.skipped, ...this.waited.keys(), ...this.queuedIds];
     for (const row of await this.d.store.pendingInbox(INBOX_BATCH, exclude)) {
       const key = ticketKey(row);
       this.queuedIds.add(row.id);
@@ -226,11 +226,12 @@ export class Worker {
     for (;;) {
       const effects = await this.executor.runTicket(ref.projectId, ref.ticketId);
       // Their results are in the inbox now: the next pass reads them.
-      if (effects.settled > 0) this.kick().catch((e: unknown) => this.d.log('error', `worker: ${(e as Error).message}`));
+      if (effects.settled > 0) this.kickInBackground();
       // Effects held (another worker's lease, a backoff): the next row still goes to the store, which
       // lets a stop of the ticket's work pass a backoff (ORC-150) and answers `waiting` otherwise.
       const row = this.queued.get(key)?.shift();
       if (!row) break;
+      // `held`: only a backoff holds it, so the ticket's next row is tried (a stop passes them both).
       if ((await this.process(row, key)) === 'waiting') {
         this.waitAll(key);
         break;
@@ -245,12 +246,12 @@ export class Worker {
   private waitAll(key: string): void {
     for (const row of this.queued.get(key) ?? []) {
       this.queuedIds.delete(row.id);
-      this.waited.add(row.id);
+      this.waited.set(row.id, key);
     }
     this.queued.delete(key);
   }
 
-  private async process(row: StoredEvent, key: string): Promise<'done' | 'waiting'> {
+  private async process(row: StoredEvent, key: string): Promise<'done' | 'held' | 'waiting'> {
     try {
       const holder = this.holders.get(key);
       if (holder !== undefined && holder !== row.id) {
@@ -272,10 +273,11 @@ export class Worker {
         return 'done';
       }
       if (outcome.status === 'waiting') {
-        this.waited.add(row.id);
-        return 'waiting';
+        this.waited.set(row.id, key);
+        return outcome.backoff ? 'held' : 'waiting';
       }
       this.passed(row, key);
+      if (outcome.status === 'committed') this.unwait(key);
       if (outcome.status === 'committed') {
         try {
           await this.d.committed(event, outcome);
@@ -310,6 +312,20 @@ export class Worker {
     }, delay);
     timer.unref();
     this.retryTimers.add(timer);
+  }
+
+  /**
+   * A row of the ticket went through (a stop that cancelled a backoff, say): its rows that found it
+   * held are tried again now rather than at the next poll.
+   */
+  private unwait(key: string): void {
+    let any = false;
+    for (const [id, k] of this.waited) {
+      if (k !== key) continue;
+      this.waited.delete(id);
+      any = true;
+    }
+    if (any) this.kickInBackground();
   }
 
   /** No retry left for this row in this process: it waits for the next start. */

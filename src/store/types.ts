@@ -105,7 +105,8 @@ export type DecisionOutcome =
    * unfinished (running, or pending; one held back by its backoff only holds events that do not stop
    * the ticket's work).
    */
-  | { status: 'waiting'; reason: string };
+  /** `backoff`: held by an effect in backoff only; a later row of the ticket (a stop) may still pass. */
+  | { status: 'waiting'; reason: string; backoff?: true };
 
 /** An outbox row written by a decision (ORC-149), executed after the commit. */
 export interface OutboxRow {

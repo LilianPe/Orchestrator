@@ -164,13 +164,25 @@ export class SqliteStore implements Store {
          ORDER BY seq LIMIT 1`,
       )
       .get(event.projectId, ticketId) as { id: string } | undefined;
-    if (first && first.id !== event.id) return { status: 'waiting', reason: `${first.id} comes first` };
+    // Only results of done effects ahead: a stop may pass them, as it passes the effects in backoff.
+    let jumped = false;
+    if (first && first.id !== event.id) {
+      const ahead = this.db
+        .prepare(
+          `SELECT json_extract(data, '$.type') AS type FROM inbox WHERE processed_at IS NULL AND json_extract(data, '$.projectId') = ? AND json_extract(data, '$.ticketId') IS ?
+             AND seq < (SELECT seq FROM inbox WHERE id = ?)`,
+        )
+        .all(event.projectId, ticketId, event.id) as { type: string }[];
+      if (!ahead.every((r) => r.type === 'effect.done')) return { status: 'waiting', reason: `${first.id} comes first` };
+      jumped = true;
+    }
     const open = this.db
       .prepare(`SELECT id, status, available_at FROM outbox WHERE project_id = ? AND ticket_id IS ? AND status IN ('pending', 'running') ORDER BY seq, i`)
       .all(event.projectId, ticketId) as { id: string; status: string; available_at: number }[];
     // Held back by its backoff (nothing running): a stop of the ticket's work may go first (ORC-150).
     const backedOff = open.length > 0 && open.every((r) => r.status === 'pending') && Number(open[0]!.available_at) > Date.now();
     if (open.length > 0 && !backedOff) return { status: 'waiting', reason: `effect ${open[0]!.id} is unfinished` };
+    if (jumped && !backedOff) return { status: 'waiting', reason: `${first!.id} comes first` };
     if (this.db.prepare('SELECT 1 FROM events WHERE id = ?').get(event.id)) {
       this.db.prepare('UPDATE inbox SET processed_at = ? WHERE id = ?').run(this.now(), event.id);
       return { status: 'duplicate' };
@@ -180,7 +192,7 @@ export class SqliteStore implements Store {
     const plan = req.decide(known, this.frozenWorkflow(known, req.workflow));
     const preempted = open.map((r) => r.id);
     if (preempted.length > 0) {
-      if (!plan.clearTimers) return { status: 'waiting', reason: `effect ${preempted[0]} waits for its retry` };
+      if (!plan.clearTimers) return { status: 'waiting', reason: `effect ${preempted[0]} waits for its retry`, backoff: true };
       const cancel = this.db.prepare(`UPDATE outbox SET status = 'failed', error = ? WHERE id = ?`);
       for (const id of preempted) cancel.run(`cancelled by ${event.id}`, id);
     }
