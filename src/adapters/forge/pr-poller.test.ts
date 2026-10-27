@@ -84,12 +84,19 @@ describe('PrPoller', () => {
     expect(events.map((e) => e.id)).toEqual(['pr:REL-1:7:merged']);
     await poller.pollOnce();
     expect(findPr).toHaveBeenCalledTimes(2);
-    // Taken back out of done, then done again: watched again.
-    store.putTicket({ ...store.getTicket('p', 'REL-1')!, logical: 'human_review' });
-    await poller.pollOnce();
+    // Done again with the same PR: nothing new to watch. With a new PR: watched again.
     store.putTicket({ ...store.getTicket('p', 'REL-1')!, logical: 'done' });
     await poller.pollOnce();
+    expect(findPr).toHaveBeenCalledTimes(2);
+    store.putTicket({ ...store.getTicket('p', 'REL-1')!, prNumber: 8 });
+    forge.setPr('b', { number: 8, url: 'u8', state: 'OPEN', checks: 'none', failedChecks: [] });
+    await poller.pollOnce();
+    expect(findPr).toHaveBeenCalledTimes(3);
+    // A done ticket whose PR was never seen has nothing to wait for.
+    store.putTicket({ ...newTicketState('p', 'REL-2', 'T', 'done', 1), branch: 'b2' });
+    await poller.pollOnce();
     expect(findPr).toHaveBeenCalledTimes(4);
+    expect(findPr.mock.calls.map((c) => c[1])).toEqual(['b', 'b', 'b', 'b']);
   });
 
   it('start() survives a rejecting pollOnce', async () => {

@@ -85,7 +85,7 @@ Avec un jeton à granularité fine : *Contents* lecture/écriture, *Pull request
 
 ## Ce que Relais relève
 
-Toutes les 30 s, pour chaque ticket suivi qui a une branche et n'est pas `done` (un ticket passé en `done` avant que le relevé voie le merge reste relevé, pour le seul merge ou la fermeture de sa PR, jusqu'à ce qu'il les voie : Linear peut le passer en *Done* avant, et seul `pr.merged` arrête le travail de code) :
+Toutes les 30 s, pour chaque ticket suivi qui a une branche et n'est pas `done` (un ticket passé en `done` avant que le relevé voie le merge de sa PR connue reste relevé, pour le seul merge ou la fermeture de cette PR, jusqu'à ce qu'il les voie : Linear peut le passer en *Done* avant, et seul `pr.merged` arrête le travail de code) :
 
 - `GET /repos/{owner}/{repo}/pulls?head={owner}:{branche}&state=all` : la PR de la branche (ouverte, mergée, fermée) ;
 - si elle est ouverte, `GET /repos/{owner}/{repo}/commits/{sha}/check-runs` et `GET /repos/{owner}/{repo}/commits/{sha}/status` : état agrégé de la CI (`fail` si un check échoue ou est annulé, `pending` si un check tourne, `pass` sinon, `none` sans check).

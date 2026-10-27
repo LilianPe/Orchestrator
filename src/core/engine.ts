@@ -62,12 +62,19 @@ function runTaint(event: FactoryEvent, ticket: TicketState | undefined, input: I
 }
 
 /**
- * Why `job` must not start: the ticket's PR is merged, so no dev work starts on it any more (I8 b), or
- * untrusted content would write the knowledge base (I12).
+ * Why a dev-queue job may not run on the ticket at all: its PR is merged (I8 b), or it is not delegated.
+ * `decide` and `Orchestrator.startRun` (for the starts `decide` does not see) both apply it.
  */
-function refusal(event: FactoryEvent, ticket: TicketState | undefined, job: JobSpec, input = job.input): 'merged' | 'taint' | undefined {
-  if (job.queue === 'dev' && ticket?.prState === 'MERGED') return 'merged';
-  return job.workspace === 'knowledge' && runTaint(event, ticket, input) === 'untrusted' ? 'taint' : undefined;
+export function refusesDevWork(ticket: TicketState | undefined, job: JobSpec): 'undelegated' | 'merged' | undefined {
+  if (job.queue !== 'dev' || !ticket) return undefined;
+  if (ticket.prState === 'MERGED') return 'merged';
+  return ticket.delegated ? undefined : 'undelegated';
+}
+
+/** Why `job` must not start: the ticket's PR is merged (I8 b), or untrusted content would write the knowledge base (I12). */
+function refusal(event: FactoryEvent, ticket: TicketState | undefined, job: JobSpec, taint = runTaint(event, ticket, job.input)): 'merged' | 'taint' | undefined {
+  if (refusesDevWork(ticket, job) === 'merged') return 'merged';
+  return job.workspace === 'knowledge' && taint === 'untrusted' ? 'taint' : undefined;
 }
 
 /**
@@ -76,8 +83,8 @@ function refusal(event: FactoryEvent, ticket: TicketState | undefined, job: JobS
  * whatever branch starts the run.
  */
 function startRun(out: Decision, event: FactoryEvent, ticket: TicketState | undefined, job: JobSpec, run: Omit<StartRun, 'kind' | 'job'>): void {
-  const input = run.input ?? job.input;
-  const refused = refusal(event, ticket, job, input);
+  const taint = runTaint(event, ticket, run.input ?? job.input);
+  const refused = refusal(event, ticket, job, taint);
   if (refused === 'merged') {
     out.trace.push(`merged: refused ${job.name}`);
     return;
@@ -88,7 +95,7 @@ function startRun(out: Decision, event: FactoryEvent, ticket: TicketState | unde
     return;
   }
   const effect: StartRun = { kind: 'start_run', job: job.name, ...run };
-  out.effects.push(runTaint(event, ticket, input) === 'untrusted' ? { ...effect, sensitivePaths: SENSITIVE_PATHS } : effect);
+  out.effects.push(taint === 'untrusted' ? { ...effect, sensitivePaths: SENSITIVE_PATHS } : effect);
 }
 
 /** Non-delegated tickets only ever get question-queue work. */
@@ -129,7 +136,6 @@ function appendFeedback(out: Decision, event: FactoryEvent<'session.prompted'>):
 }
 
 function applyRule(out: Decision, rule: Rule, event: FactoryEvent, ticket: TicketState | undefined, workflow: Workflow): Decision {
-  if (event.type === 'session.prompted') appendFeedback(out, event);
   const job = rule.run ? workflow.jobs[rule.run]! : undefined;
   if (job && !refusal(event, ticket, job) && ticket?.blocked) out.events.push({ type: 'ticket.unblocked' });
   if (rule.move) out.effects.push({ kind: 'move', to: rule.move });
@@ -293,6 +299,8 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
         if (ask) startRun(out, event, ticket, ask, { input: 'thread', inputText: event.payload.body, linearSessionId: event.payload.linearSessionId });
         return out;
       }
+      // A reply in the dev session is kept whether a rule matches or not (I6).
+      if (ticket) appendFeedback(out, event);
       break;
     default:
       break;
@@ -302,8 +310,6 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
   const index = rules.findIndex((r) => ruleAllowed(r, event, ticket, workflow) && ruleMatches(r, event, ticket, activeJob));
   if (index < 0) {
     out.trace.push(`no rule for ${event.type}`);
-    // No rule for this status (todo, ai_review, ready, done…): the reply is still kept, never dropped (I6).
-    if (event.type === 'session.prompted' && ticket) appendFeedback(out, event);
     return out;
   }
   out.trace.push(`on.${event.type}[${index}]`);

@@ -1,7 +1,7 @@
 import type { Parameters } from 'fast-check';
 import type { Workflow } from '../../src/config/workflow-schema.js';
 import type { Decision, Effect } from '../../src/core/decision.js';
-import { decide } from '../../src/core/engine.js';
+import { decide, refusesDevWork } from '../../src/core/engine.js';
 import { SETTLES_RUN } from '../../src/core/orchestrator.js';
 import { reduce } from '../../src/core/reduce.js';
 import { CREATES_TICKET, type FactoryEvent, type InternalEvent, type ShellEvent, type TicketState } from '../../src/core/types.js';
@@ -139,18 +139,19 @@ export function fold(entries: readonly Entry[], wf: Workflow, inbox: Inbox = mem
       // `move` and `cleanup` record their fact once carried out.
       if (e.kind === 'move') record({ type: 'status.recorded', to: e.to });
       if (e.kind === 'cleanup') record({ type: 'workspace.released' });
-      // `startRun`: a dev start while the run or the verification of the slot is in flight waits as the pending job;
+      // `startRun`: a dev start it does not refuse, while the run or the verification of the slot is in flight, waits as the pending job;
       // otherwise it launches, and its run (whose `run.started` is not modelled) holds the slot.
-      if (!isDevStart(e, wf) || !state.delegated) continue;
+      if (!isDevStart(e, wf) || refusesDevWork(state, wf.jobs[e.job]!)) continue;
       if (state.activeRunId || state.verifyingRunId) record({ type: 'pending.set', job: { job: e.job, input: e.input, inputText: e.inputText, resume: e.resume } });
       else launched = true;
     }
-    // `settle`: once nothing is in flight, the pending job starts (startRun refuses dev work on an undelegated or merged ticket).
+    // `settle`: once nothing is in flight, the pending job starts, unless startRun refuses it.
     const pending = state.pendingJob;
     if (!SETTLES_RUN.has(event.type) || !pending || launched || state.activeRunId || state.verifyingRunId) continue;
     const settledFrom = state;
     record({ type: 'pending.cleared' });
-    if (!wf.jobs[pending.job] || (takesDevSlot(pending.job, wf) && (!state.delegated || state.prState === 'MERGED'))) continue;
+    const job = wf.jobs[pending.job];
+    if (!job || refusesDevWork(state, job)) continue;
     const start: StartRun = deepFreeze({ kind: 'start_run', ...pending });
     steps.push({ kind: 'settled', event, before: settledFrom, after: state, start, journalEnd: journal.length });
   }

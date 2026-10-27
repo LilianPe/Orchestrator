@@ -33,11 +33,11 @@ export class PrPoller {
     {
       if (!t.branch) return;
       // Done in Linear is not merged: Linear may move the ticket before a poll sees the merge, and only
-      // pr.merged marks it delivered (I8 b). A done ticket is watched until its PR is seen merged or closed.
-      const doneKey = `pr-final:${t.projectId}:${t.ticketId}`;
+      // pr.merged marks it delivered (I8 b). A done ticket with a known PR is watched until that PR is seen
+      // merged or closed (its number kept in `finalKey`, so a new PR is watched again).
+      const finalKey = `pr-final:${t.projectId}:${t.ticketId}`;
       const done = t.logical === "done";
-      if (!done && this.d.store.getMeta(doneKey)) this.d.store.setMeta(doneKey, "");
-      if (done && (t.prState === "MERGED" || this.d.store.getMeta(doneKey))) return;
+      if (done && (!t.prNumber || t.prState === "MERGED" || this.d.store.getMeta(finalKey) === String(t.prNumber))) return;
       const project = this.d.projects.find((p) => p.id === t.projectId);
       if (!project) return;
       let pr;
@@ -58,24 +58,10 @@ export class PrPoller {
           type: "pr.opened",
           payload,
         });
-      if (pr.state === "MERGED") {
-        this.d.submit({
-          ...base,
-          id: `pr:${t.ticketId}:${pr.number}:merged`,
-          type: "pr.merged",
-          payload,
-        });
-        if (done) this.d.store.setMeta(doneKey, "1");
-        return;
-      }
-      if (pr.state === "CLOSED") {
-        this.d.submit({
-          ...base,
-          id: `pr:${t.ticketId}:${pr.number}:closed`,
-          type: "pr.closed",
-          payload,
-        });
-        if (done) this.d.store.setMeta(doneKey, "1");
+      if (pr.state === "MERGED" || pr.state === "CLOSED") {
+        if (pr.state === "MERGED") this.d.submit({ ...base, id: `pr:${t.ticketId}:${pr.number}:merged`, type: "pr.merged", payload });
+        else this.d.submit({ ...base, id: `pr:${t.ticketId}:${pr.number}:closed`, type: "pr.closed", payload });
+        if (done) this.d.store.setMeta(finalKey, String(pr.number));
         return;
       }
       if (done) return;
