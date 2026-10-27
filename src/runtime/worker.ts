@@ -1,6 +1,6 @@
 import type { FactoryEvent } from '../core/types.js';
 import { upcast, type StoredEvent } from '../core/upcast.js';
-import type { DecisionOutcome, DecisionRequest, OutboxRow, Store } from '../store/types.js';
+import type { DecisionOutcome, DecisionRequest, EffectOutcome, OutboxRow, Store } from '../store/types.js';
 import { OutboxExecutor, type EffectRetry } from './outbox.js';
 
 /** Inbox rows read per pass. */
@@ -21,7 +21,7 @@ export interface WorkerDeps {
   /** After the commit, before the decision's effects: bus, logs, in-memory slots. */
   committed(event: FactoryEvent, outcome: Extract<DecisionOutcome, { status: 'committed' }>): Promise<void>;
   /** Executes one outbox row. Throws when the effect failed: the executor retries it, then lets it die (ORC-150). */
-  execute(row: OutboxRow): Promise<void>;
+  execute(row: OutboxRow): Promise<EffectOutcome | void>;
   leaseMs?: number;
   /** Retries of a row whose processing throws (`PROCESS_RETRY` by default). */
   retry?: { attempts: number; baseMs: number };

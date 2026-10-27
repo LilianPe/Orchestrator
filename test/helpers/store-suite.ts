@@ -456,6 +456,18 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     expect((await s.pendingInbox(10)).map((e) => e.id)).toEqual(['effect:REL-1:1:1']);
   });
 
+  it('carries in the result of a replayed effect that it found the effect already made (ORC-162)', async () => {
+    const s = await store();
+    await s.appendInbox(delegatedEvent('e1'));
+    await s.decide(request(delegatedEvent('e1')));
+    const row = await s.claimEffect('p', 'REL-1', 60_000);
+    if (typeof row !== 'object') throw new Error('expected a claimed row');
+    expect(await s.completeEffect(row.id, row.lease, 1_000, { deduplicated: true, ref: 'comment-1' })).toBe(true);
+    expect((await s.pendingInbox(10))[0]!.payload).toEqual({
+      effectId: 'REL-1:1:1', kind: 'comment', eventId: 'e1', attempts: 1, deduplicated: true, ref: 'comment-1',
+    });
+  });
+
   it("puts a failed effect back after its backoff, and the ticket's later rows behind it (ORC-150)", async () => {
     const s = await store();
     await s.appendInbox(delegatedEvent('e1'));

@@ -326,6 +326,8 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
       return out;
     }
     case 'effect.done':
+      // A replay that found its effect already made (ORC-162): nothing to decide, but it stays visible.
+      if (event.payload.deduplicated) out.trace.push(`effect ${event.payload.effectId} deduplicated${event.payload.ref ? ` (${event.payload.ref})` : ''}`);
       return out;
     case 'effect.failed': {
       // `settle` is a step of the shell, not an effect of the workflow: its failure is only logged.

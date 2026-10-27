@@ -10,6 +10,7 @@ import {
   LEASE_MS,
   type DecisionOutcome,
   type DecisionRequest,
+  type EffectOutcome,
   type OutboxRow,
   type QueueClaim,
   type QueueItem,
@@ -449,12 +450,12 @@ export class PgStore implements AsyncStore {
     `);
   }
 
-  async completeEffect(id: string, lease?: string, at?: number): Promise<boolean> {
+  async completeEffect(id: string, lease?: string, at?: number, outcome?: EffectOutcome): Promise<boolean> {
     const now = this.now();
     return this.settleHeld(id, lease, async (tx, row) => {
       await tx.execute(sql`update outbox set status = 'done', lease_until = null, updated_at = to_timestamp(${now / 1000}) where id = ${id}`);
       // A decision row reports back to the inbox (ORC-150); a legacy queue row has nobody to tell.
-      if (lease !== undefined && 'effect' in row.payload) await this.appendResult(tx, effectResult(outboxRow(row), at ?? now));
+      if (lease !== undefined && 'effect' in row.payload) await this.appendResult(tx, effectResult(outboxRow(row), at ?? now, undefined, outcome));
       return true;
     });
   }

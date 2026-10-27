@@ -7,6 +7,7 @@ import {
   effectResult,
   type DecisionOutcome,
   type DecisionRequest,
+  type EffectOutcome,
   type OutboxRow,
   type QueueClaim,
   type QueueItem,
@@ -266,12 +267,12 @@ export class SqliteStore implements Store {
       .get(id, lease ?? null, lease ?? null) as OutboxSqlRow | undefined;
   }
 
-  async completeEffect(id: string, lease?: string, at = Date.now()): Promise<boolean> {
+  async completeEffect(id: string, lease?: string, at = Date.now(), outcome?: EffectOutcome): Promise<boolean> {
     return this.atomically(() => {
       const row = this.heldRow(id, lease);
       if (!row) return false;
       this.db.prepare(`UPDATE outbox SET status = 'done', lease_until = NULL WHERE id = ?`).run(id);
-      this.appendResult(effectResult(outboxRow(row), at));
+      this.appendResult(effectResult(outboxRow(row), at, undefined, outcome));
       return true;
     });
   }
