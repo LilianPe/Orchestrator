@@ -98,12 +98,12 @@ Le premier ticket cité est celui qui touche le module en premier ou le plus ; l
 
 | Module | Rôle | Statut | Ticket cible |
 |---|---|---|---|
-| `src/core/engine.ts` | `decide(état, événement, wf)` pure : règles `on` du YAML et cas codés → `{events, effects, timers, trace}` | adapter | ORC-133 (fait : signature, fencing, taint : refus des jobs `knowledge`, `sensitivePaths` sur `start_run`), ORC-269 (fait : taint des retours en attente, tout `start_run` passe par la règle de taint), ORC-187 (préréglage), ORC-169 (règles `on` retirées) |
+| `src/core/engine.ts` | `decide(état, événement, wf)` pure : règles `on` du YAML et cas codés → `{events, effects, timers, trace}` ; résultat d'un effet `effect.done` (rien) ou `effect.failed` (ticket bloqué, ORC-150) | adapter | ORC-133 (fait : signature, fencing, taint : refus des jobs `knowledge`, `sensitivePaths` sur `start_run`), ORC-269 (fait : taint des retours en attente, tout `start_run` passe par la règle de taint), ORC-187 (préréglage), ORC-169 (règles `on` retirées) |
 | `src/core/reduce.ts` | `reduce(état, événement)` pure : seul endroit qui change l'état d'un ticket | garder | ORC-133, ORC-149 (worker), ORC-173 (propriétés) |
 | `src/core/upcast.ts` | `upcast` : relit un événement du journal écrit par une version antérieure (`schemaVersion`) | garder | ORC-133, ORC-174 (oracle de rejeu) |
-| `src/core/orchestrator.ts` | Files, runs, vérifications, blocages, reprise ; construit la transaction de décision du worker, exécute les effets de l'outbox, change l'état par `reduce` (ORC-133) | retirer | ORC-133 (`reduce` extrait), ORC-147 (fait : `accept` écrit l'inbox, événements traités depuis l'inbox, rejeu au démarrage), ORC-149 (fait : chaîne en mémoire, `submit` et `idle` retirés au profit du worker), ORC-150 (exécuteurs), ORC-220 (`recover`), retrait final ORC-169 |
+| `src/core/orchestrator.ts` | Files, runs, vérifications, blocages, reprise ; construit la transaction de décision du worker, exécute les effets de l'outbox, change l'état par `reduce` (ORC-133) | retirer | ORC-133 (`reduce` extrait), ORC-147 (fait : `accept` écrit l'inbox, événements traités depuis l'inbox, rejeu au démarrage), ORC-149 (fait : chaîne en mémoire, `submit` et `idle` retirés au profit du worker), ORC-150 (fait : effets par l'exécuteur d'outbox, `failTicket` remplacé par `effect.failed` décidé ; reste : un exécuteur par port, `Scheduler` en limite de réclamation), ORC-220 (`recover`), retrait final ORC-169 |
 | `src/core/bus.ts` | Chaîne d'événements en mémoire (`EventBus`, aussi source du SSE) | retirer | ORC-169 (ORC-223 garde le flux SSE du dashboard) |
-| `src/core/scheduler.ts` | Places `dev` et `questions` en mémoire | retirer | ORC-169 (ORC-182 garde un emplacement à part pour les questions) |
+| `src/core/scheduler.ts` | Places `dev` et `questions` en mémoire ; un départ est tiré de la file `queue` sous bail jusqu'à l'écriture du run (ORC-150) | retirer | ORC-169 (ORC-182 garde un emplacement à part pour les questions) |
 | `src/core/timers.ts` | `TimerService` : debounce en mémoire, `debounce.fired` | retirer | ORC-161 (timers en base via l'inbox), retrait ORC-169 |
 | `src/core/decision.ts` | Type `Decision` de `decide` : `Effect` (ex-`Command` côté externe), `Timer` (ex-`set_debounce`) ; remplace `commands.ts` (ORC-133) ; `OutboxEffect` (un effet, ou `settle`) écrit dans l'outbox (ORC-149) | garder | ORC-133, ORC-162 (effets idempotents), ORC-150 (`settle` passe dans `decide`) |
 | `src/core/conditions.ts` | Mini-langage `when` | retirer | ORC-177 |
@@ -113,13 +113,14 @@ Le premier ticket cité est celui qui touche le module en premier ou le plus ; l
 | `src/core/naming.ts` | `slugify`, `branchName` (`factory/<id>-<slug>`) | adapter | ORC-167 (préfixe), ORC-136 et ORC-204 (`branchName` de Linear) |
 | `src/core/clock.ts` | `Clock`, `SystemClock`, `FakeClock` | garder | ORC-225, ORC-161 |
 | `src/core/duration.ts` | `parseDuration` (`3m`, `90m`…) | garder | ORC-177 (gardé si `factory.yml` garde des durées en texte) |
-| `src/core/types.ts` | `FactoryEvent` (`schemaVersion`, taint), `TicketState`, 6 états logiques | adapter | ORC-133 (fait : `schemaVersion`, champ taint, renommages), ORC-269 (fait : taint de `FeedbackItem`), ORC-160 (taint posé à l'ingestion, acteur), ORC-180 (`humanInbox`), ORC-187 (états retirés) |
+| `src/core/types.ts` | `FactoryEvent` (`schemaVersion`, taint), `TicketState`, 6 états logiques ; événements `effect.done` et `effect.failed` (ORC-150) | adapter | ORC-133 (fait : `schemaVersion`, champ taint, renommages), ORC-269 (fait : taint de `FeedbackItem`), ORC-160 (taint posé à l'ingestion, acteur), ORC-180 (`humanInbox`), ORC-187 (états retirés) |
 
 ### `src/runtime/`
 
 | Module | Rôle | Statut | Ticket cible |
 |---|---|---|---|
-| `src/runtime/worker.ts` | Worker de l'inbox : une tâche par ticket, transaction de décision du store par événement, effets de l'outbox exécutés après le commit sous bail renouvelé et jeton de réclamation, ligne en échec retentée 5 fois puis gardée pour le démarrage suivant | garder | ORC-149, ORC-150 (exécuteurs d'outbox, backoff), ORC-175 (dead-letter), ORC-228 (harnais) |
+| `src/runtime/worker.ts` | Worker de l'inbox : une tâche par ticket, transaction de décision du store par événement, effets de l'outbox confiés à l'exécuteur après le commit, ligne en échec retentée 5 fois puis gardée pour le démarrage suivant | garder | ORC-149, ORC-150 (fait : exécuteur d'outbox), ORC-175 (dead-letter), ORC-228 (harnais) |
+| `src/runtime/outbox.ts` | Exécuteur d'outbox : réclamation sous bail renouvelé et jeton, backoff `1 s × 2^(essai − 1)` plafonné à 5 min, ligne `dead` au 8e essai, résultat `effect:<id>` écrit dans l'inbox avec la ligne | garder | ORC-150, ORC-162 (idempotence par effet), un exécuteur par port (Tracker, Forge, AgentRuntime…) à venir |
 | `src/runtime/workflow-version.ts` | Hash sha256 du workflow (JSON canonique) : la version figée d'un ticket | garder | ORC-149, ORC-187 (préréglage en TypeScript) |
 
 ### `src/adapters/`
@@ -190,11 +191,11 @@ Contrôles déterministes de `verify`, purs : ils lisent le diff `baseSha..SHA` 
 
 | Module | Rôle | Statut | Ticket cible |
 |---|---|---|---|
-| `src/store/types.ts` | Port `Store` asynchrone, servi par `SqliteStore` et `PgStore` ; transaction de décision, outbox des décisions et versions de workflow (ORC-149) | adapter | ORC-178 (`queue`, `echoes`, `costSince` retirés), ORC-150 (réclamation par les exécuteurs) |
+| `src/store/types.ts` | Port `Store` asynchrone, servi par `SqliteStore` et `PgStore` ; transaction de décision, outbox des décisions et versions de workflow (ORC-149) ; réclamation, nouvel essai, mort et résultat `effect:<id>` d'un effet, file `queue` sous bail (ORC-150) | adapter | ORC-178 (`queue`, `echoes`, `costSince` retirés) |
 | `src/store/open.ts` | Choix du store au démarrage : `PgStore` et migrations quand `FACTORY_DATABASE_URL` est défini, `SqliteStore` sinon | adapter | ORC-178 (plus que Postgres) |
 | `src/store/sqlite-store.ts` | `SqliteStore` sur `node:sqlite`, derrière le port asynchrone | retirer | retrait ORC-178 |
 | `src/store/pg/schema.ts` | Schéma Drizzle des 12 tables du moteur | garder | ORC-132 |
-| `src/store/pg/types.ts` | `AsyncStore` (le port `Store` plus le bail de l'outbox) et `DequeuedEffect` | garder | ORC-132, ORC-150 (exécuteurs d'outbox) |
+| `src/store/pg/types.ts` | `AsyncStore` (le port `Store` plus la réclamation brute d'une ligne de file, `claim`) et `DequeuedEffect` | garder | ORC-132, ORC-178 (`queue` retirée) |
 | `src/store/pg/pg-store.ts` | `PgStore` sur Postgres, store du démon quand `FACTORY_DATABASE_URL` est défini | garder | ORC-132 |
 | `src/store/pg/migrate.ts` | Application des migrations Drizzle | garder | ORC-132 |
 
