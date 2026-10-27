@@ -142,6 +142,7 @@ export class Orchestrator {
       effectFailed: (row, err) => this.effectFailed(row, err),
       leaseMs: d.effectLeaseMs,
       retry: d.processRetry,
+      left: (row) => void this.freeSlot(row),
     });
   }
 
@@ -466,6 +467,17 @@ export class Orchestrator {
         };
       },
     };
+  }
+
+  /**
+   * A run result left for the next start (behind a failed event, or failing itself past its last
+   * retry) still frees its run's slot: otherwise, slot after slot, it would stop every launch until
+   * a restart. The slots are in memory, so the replay at the next start frees nothing twice.
+   */
+  private async freeSlot(row: StoredEvent): Promise<void> {
+    if (row.type !== 'run.finished') return;
+    const run = await this.d.store.getRun((row.payload as EventPayloads['run.finished']).runId).catch(() => undefined);
+    if (run) this.d.scheduler.release(`${run.ticketId}:${run.queue}`);
   }
 
   /** After the commit, before the effects. */

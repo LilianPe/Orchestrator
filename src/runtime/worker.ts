@@ -28,6 +28,8 @@ export interface WorkerDeps {
   leaseMs?: number;
   /** Retries of a row whose processing throws (`PROCESS_RETRY` by default). */
   retry?: { attempts: number; baseMs: number };
+  /** A row left for the next start: past its last retry, or behind such a row. Must not throw. */
+  left?(row: StoredEvent): void;
 }
 
 interface TicketRef {
@@ -68,7 +70,7 @@ export class Worker {
   /** Keys held by a failed row (its id): their later rows wait behind it. */
   private holders = new Map<string, string>();
   /** The rows waiting behind each held key, released once its failed row passes. */
-  private behind = new Map<string, Set<string>>();
+  private behind = new Map<string, Map<string, StoredEvent>>();
   /** Failed processings of each row in this process. */
   private failures = new Map<string, number>();
   private retryTimers = new Set<NodeJS.Timeout>();
@@ -227,10 +229,11 @@ export class Worker {
       const holder = this.holders.get(key);
       if (holder !== undefined && holder !== row.id) {
         this.skipped.add(row.id);
-        const rows = this.behind.get(key) ?? new Set<string>();
-        rows.add(row.id);
+        const rows = this.behind.get(key) ?? new Map<string, StoredEvent>();
+        rows.set(row.id, row);
         this.behind.set(key, rows);
         this.d.log('error', `event ${row.id} (${row.type}) kept in the inbox behind a failed event of ${whose(row)} (${holder})`);
+        if (this.givenUp(holder)) this.d.left?.(row);
         return 'done';
       }
       let outcome: DecisionOutcome;
@@ -267,8 +270,9 @@ export class Worker {
     this.failures.set(row.id, n);
     this.skipped.add(row.id);
     this.holders.set(key, row.id);
-    if (n >= this.retry.attempts || this.stopped) {
+    if (this.givenUp(row.id)) {
       this.d.log('error', `event ${row.id} (${row.type}): ${err.message} (kept in the inbox for the next start, after ${n} attempts)`);
+      for (const r of [row, ...(this.behind.get(key)?.values() ?? [])]) this.d.left?.(r);
       return;
     }
     const delay = this.retry.baseMs * 3 ** (n - 1);
@@ -282,12 +286,17 @@ export class Worker {
     this.retryTimers.add(timer);
   }
 
+  /** No retry left for this row in this process: it waits for the next start. */
+  private givenUp(id: string): boolean {
+    return (this.failures.get(id) ?? 0) >= this.retry.attempts || this.stopped;
+  }
+
   /** A row went through: if it held its key, the rows behind it are taken up again. */
   private passed(row: StoredEvent, key: string): void {
     this.failures.delete(row.id);
     if (this.holders.get(key) !== row.id) return;
     this.holders.delete(key);
-    for (const id of this.behind.get(key) ?? []) this.skipped.delete(id);
+    for (const id of this.behind.get(key)?.keys() ?? []) this.skipped.delete(id);
     this.behind.delete(key);
     this.kick().catch((e: unknown) => this.d.log('error', `worker: ${(e as Error).message}`));
   }
