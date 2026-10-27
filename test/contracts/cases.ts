@@ -11,6 +11,11 @@ export async function subjectWith<S, K extends keyof S>(
   return s as S & Required<Pick<S, K>>;
 }
 
+/** What `p` resolves to. A port call that must answer and rejects instead fails the case on an assertion, not on the subject's error. */
+export function resolved<T>(p: Promise<T>): Promise<T> {
+  return p.catch((e: unknown) => expect.fail(`expected an answer, got a rejection: ${String(e)}`));
+}
+
 export interface ContractOptions {
   /**
    * Turns the suite into a negative control: the subject breaks these cases on purpose, only they run,

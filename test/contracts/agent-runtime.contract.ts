@@ -1,6 +1,6 @@
 import { expect } from 'vitest';
 import type { RunHandle, RunRequest, Runner, RunStreamEvent } from '../../src/adapters/runner/types.js';
-import { describeContract, type ContractOptions } from './cases.js';
+import { describeContract, resolved, type ContractOptions } from './cases.js';
 
 /**
  * The behaviours a case asks of the runtime: `success` and `failure` end on their own, `hang` runs until stopped or capped,
@@ -13,7 +13,7 @@ export interface AgentRuntimeSubject {
   runtime: Runner;
   /** Arranges the next run to behave as `script`, and returns what its request must carry for it. */
   script: (script: AgentScript) => Partial<RunRequest>;
-  /** Moves the runtime's clock forward; absent, the suite waits in real time. */
+  /** Moves the runtime's clock forward; absent, the suite waits in real time. Given, a capped run must end in `limit` within 100 ms. */
   elapse?: (ms: number) => void;
 }
 
@@ -61,14 +61,14 @@ export function describeAgentRuntimeContract(name: string, make: () => AgentRunt
       const s = make();
       const h = start(s, 'failure');
       await drain(h.events);
-      expect((await h.done).outcome).toBe('failure');
+      expect((await resolved(h.done)).outcome).toBe('failure');
     });
 
     it('a run that cannot launch ends in failure: start does not throw, done does not reject, the stream closes', async () => {
       const s = make();
       let h: RunHandle | undefined;
       expect(() => (h = start(s, 'unlaunchable'))).not.toThrow();
-      await expect(within(h!.done, 1_500)).resolves.toMatchObject({ outcome: 'failure' });
+      expect(await within(resolved(h!.done), 1_500)).toMatchObject({ outcome: 'failure' });
       expect(await within(drain(h!.events), 1_500)).not.toBe('pending');
     });
 
@@ -106,7 +106,7 @@ export function describeAgentRuntimeContract(name: string, make: () => AgentRunt
       const h = start(s, script, { limits });
       s.elapse?.(elapse);
       try {
-        expect(await within(h.done, 1_500)).toMatchObject({ outcome: 'limit' });
+        expect(await within(resolved(h.done), s.elapse ? 100 : 1_500)).toMatchObject({ outcome: 'limit' });
       } finally {
         h.stop();
       }

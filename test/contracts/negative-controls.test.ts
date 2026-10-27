@@ -7,14 +7,19 @@ import type { CheckRunner } from '../../src/adapters/checks/types.js';
 import { FakeForge } from '../../src/adapters/forge/fake.js';
 import type { Forge } from '../../src/adapters/forge/types.js';
 import { Channel } from '../../src/adapters/runner/channel.js';
-import { FakeRunner } from '../../src/adapters/runner/fake.js';
-import type { RunHandle, RunRequest, RunStreamEvent } from '../../src/adapters/runner/types.js';
+import { FakeRunner, type FakeScript } from '../../src/adapters/runner/fake.js';
+import type { RunHandle, RunRequest, RunResult, RunStreamEvent } from '../../src/adapters/runner/types.js';
+import { FakeSandboxProvider } from '../../src/adapters/sandbox/fake.js';
 import { FakeTracker } from '../../src/adapters/tracker/fake.js';
-import { runVerify } from '../../src/core/verify.js';
-import { describeAgentRuntimeContract, type AgentRuntimeSubject } from './agent-runtime.contract.js';
+import type { TrackerIssue } from '../../src/adapters/tracker/types.js';
+import { FakeClock } from '../../src/core/clock.js';
+import type { RunOutcome, VerifyFailure } from '../../src/core/types.js';
+import { runVerify, type VerifyResult } from '../../src/core/verify.js';
+import { describeAgentRuntimeContract, type AgentRuntimeSubject, type AgentScript } from './agent-runtime.contract.js';
 import { asNegativeControl, contractCases } from './cases.js';
 import { describeCheckRunnerContract, type CheckRunnerSubject } from './check-runner.contract.js';
 import { describeForgeContract, type ForgeSubject } from './forge.contract.js';
+import { describeSandboxContract, type SandboxSubject } from './sandbox.contract.js';
 import { describeTrackerContract, type TrackerSubject } from './tracker.contract.js';
 
 // Each subject breaks one guarantee on purpose: the case that checks it must fail against it.
@@ -22,12 +27,21 @@ import { describeTrackerContract, type TrackerSubject } from './tracker.contract
 const LAUNCH = 'a run that cannot launch ends in failure: start does not throw, done does not reject, the stream closes';
 const NOWHERE = '/contract-cannot-launch';
 
+const fakeScripts: Partial<Record<AgentScript, FakeScript>> = {
+  failure: { outcome: 'failure' },
+  hang: { hold: true },
+  chatty: { events: ['un', 'deux', 'trois'].map((text) => ({ kind: 'text', text })), turns: 3, hold: true },
+  unlaunchable: { events: [], outcome: 'failure' },
+};
+
 function runtimeThat(start: (inner: FakeRunner, req: RunRequest) => RunHandle): () => AgentRuntimeSubject {
   return () => {
-    const inner = new FakeRunner();
+    const clock = new FakeClock();
+    const inner = new FakeRunner(clock);
     return {
       runtime: { start: (req) => start(inner, req) },
-      script: (name) => (name === 'unlaunchable' ? (inner.enqueue({ events: [], outcome: 'failure' }), { cwd: NOWHERE }) : {}),
+      script: (name) => (inner.enqueue(fakeScripts[name] ?? {}), name === 'unlaunchable' ? { cwd: NOWHERE } : {}),
+      elapse: (ms) => (clock.advance(ms), inner.tick()),
     };
   };
 }
@@ -68,6 +82,51 @@ describeAgentRuntimeContract(
   { violates: [LAUNCH] },
 );
 
+const FAILED = 'a failed run ends in failure';
+const DURATION_CAP = 'a run past its duration cap ends in limit';
+const TURN_CAP = 'a run past its turn cap ends in limit';
+
+const ending = (from: RunOutcome, end: (r: RunResult) => RunResult | Promise<RunResult>) => (inner: FakeRunner, req: RunRequest): RunHandle => {
+  const h = inner.start(req);
+  return { ...h, done: h.done.then((r) => (r.outcome === from ? end(r) : r)) };
+};
+
+describeAgentRuntimeContract(
+  'a runtime that reports a failed run as a success',
+  runtimeThat(ending('failure', (r) => ({ ...r, outcome: 'success' }))),
+  { violates: [FAILED] },
+);
+
+describeAgentRuntimeContract(
+  'a runtime whose done rejects when the run fails',
+  runtimeThat(ending('failure', () => Promise.reject(new Error('claude exited with code 1')))),
+  { violates: [FAILED] },
+);
+
+describeAgentRuntimeContract(
+  'a runtime that ignores its duration cap',
+  runtimeThat((inner, req) => inner.start({ ...req, limits: { ...req.limits, durationMs: Infinity } })),
+  { violates: [DURATION_CAP] },
+);
+
+describeAgentRuntimeContract(
+  'a runtime that ignores its turn cap',
+  runtimeThat((inner, req) => inner.start({ ...req, limits: { ...req.limits, turns: Infinity } })),
+  { violates: [TURN_CAP] },
+);
+
+describeAgentRuntimeContract(
+  'a runtime that ends a capped run in failure',
+  runtimeThat(ending('limit', (r) => ({ ...r, outcome: 'failure' }))),
+  { violates: [DURATION_CAP, TURN_CAP] },
+);
+
+describeAgentRuntimeContract(
+  'a runtime whose done rejects when a run hits its cap',
+  runtimeThat(ending('limit', () => Promise.reject(new Error('max turns reached')))),
+  { violates: [DURATION_CAP, TURN_CAP] },
+);
+
 const UNSTARTABLE = 'a command that cannot start fails without an exit code, and run does not reject';
 const REPLAY = 'replaying runs the commands again';
 const cwd = mkdtempSync(join(tmpdir(), 'factory-negative-'));
@@ -78,9 +137,10 @@ function checksThat(checks: CheckRunner, patch: Partial<CheckRunnerSubject> = {}
     cwd,
     pass: 'true',
     fails: [
-      { command: 'exit 1', exitCode: 1, output: '' },
-      { command: 'exit 2', exitCode: 2, output: '' },
+      { command: 'echo first failure; exit 1', exitCode: 1, output: 'first failure' },
+      { command: 'echo second failure; exit 2', exitCode: 2, output: 'second failure' },
     ],
+    slow: 'sleep 0.5',
     unstartableCwd: join(cwd, 'missing'),
     ...patch,
   });
@@ -114,6 +174,71 @@ describeCheckRunnerContract(
   { violates: [REPLAY] },
 );
 
+const FAILING = 'reports a failing command with its exit code and output';
+const IN_ORDER = 'runs every command and reports the failures in order';
+const TIMEOUT = 'a command that outlives the timeout fails without an exit code';
+
+const verifying = (then: (r: VerifyResult) => VerifyResult | Promise<VerifyResult>): CheckRunner => ({
+  run: async (dir, commands, timeoutMs) => then(await runVerify(dir, commands, timeoutMs)),
+});
+const eachFailure = (patch: (f: VerifyFailure) => VerifyFailure) => verifying((r) => ({ ...r, failures: r.failures.map(patch) }));
+
+describeCheckRunnerContract(
+  'a check runner that drops the output of a failure',
+  checksThat(eachFailure((f) => ({ ...f, output: '' }))),
+  { violates: [FAILING] },
+);
+
+describeCheckRunnerContract(
+  'a check runner that reports a failure without its exit code',
+  checksThat(eachFailure((f) => ({ ...f, exitCode: null }))),
+  { violates: [FAILING, IN_ORDER] },
+);
+
+describeCheckRunnerContract(
+  'a check runner that reports a failure as a pass',
+  checksThat({ run: async () => ({ ok: true, failures: [] }) }),
+  { violates: [FAILING, IN_ORDER, TIMEOUT] },
+);
+
+describeCheckRunnerContract(
+  'a check runner whose run rejects when a command fails',
+  checksThat(verifying((r) => (r.ok ? r : Promise.reject(new Error(`${r.failures[0]!.command} failed`))))),
+  { violates: [FAILING, IN_ORDER, TIMEOUT] },
+);
+
+describeCheckRunnerContract(
+  'a check runner that stops at the first failure',
+  checksThat({
+    run: async (dir, commands, timeoutMs) => {
+      for (const command of commands) {
+        const r = await runVerify(dir, [command], timeoutMs);
+        if (!r.ok) return r;
+      }
+      return { ok: true, failures: [] };
+    },
+  }),
+  { violates: [IN_ORDER] },
+);
+
+describeCheckRunnerContract(
+  'a check runner that reports the failures out of order',
+  checksThat(verifying((r) => ({ ...r, failures: [...r.failures].reverse() }))),
+  { violates: [IN_ORDER] },
+);
+
+describeCheckRunnerContract(
+  'a check runner that ignores the timeout',
+  checksThat({ run: (dir, commands) => runVerify(dir, commands) }),
+  { violates: [TIMEOUT] },
+);
+
+describeCheckRunnerContract(
+  'a check runner that gives a timed-out command an exit code',
+  checksThat(eachFailure((f) => ({ ...f, exitCode: f.exitCode ?? 137 }))),
+  { violates: [TIMEOUT] },
+);
+
 const UNREACHABLE = 'findPr and unresolvedReviewComments reject when the forge does not answer';
 const UNREADABLE = 'findPr gives none for checks it cannot read';
 
@@ -139,10 +264,8 @@ describeForgeContract(
   { violates: [UNREACHABLE] },
 );
 
-const unreadable = (findPr: Forge['findPr']): Partial<ForgeSubject> => ({
-  forge: { findPr, unresolvedReviewComments: async () => [] },
-  unreadableChecks: 'factory/rel-2-y',
-});
+const findingPr = (findPr: Forge['findPr']): Partial<ForgeSubject> => ({ forge: { findPr, unresolvedReviewComments: async () => [] } });
+const unreadable = (findPr: Forge['findPr']): Partial<ForgeSubject> => ({ ...findingPr(findPr), unreadableChecks: 'factory/rel-2-y' });
 
 describeForgeContract(
   'a forge that rejects checks it cannot read',
@@ -156,6 +279,20 @@ describeForgeContract(
     unreadable(async (_repo, branch) => ({ number: 8, url: 'https://github.test/pr/8', state: 'OPEN', branch, checks: 'pending', failedChecks: [] })),
   ),
   { violates: [UNREADABLE] },
+);
+
+const NO_PR = 'findPr answers undefined for a branch without a PR';
+
+describeForgeContract(
+  'a forge that finds a PR on every branch',
+  forgeThat(findingPr(async (_repo, branch) => ({ number: 7, url: 'https://github.test/pr/7', state: 'OPEN', branch, checks: 'pass', failedChecks: [] }))),
+  { violates: [NO_PR] },
+);
+
+describeForgeContract(
+  'a forge that rejects a branch without a PR',
+  forgeThat(findingPr(async (_repo, branch) => Promise.reject(new Error(`no pull requests found for branch "${branch}"`)))),
+  { violates: [NO_PR] },
 );
 
 const EFFECTS = 'comment, activity and addExternalUrl write their effect; replaying comment or activity writes it again';
@@ -216,6 +353,113 @@ describeTrackerContract(
   { violates: [EFFECTS] },
 );
 
+const UNKNOWN_READ = 'getIssue rejects an unknown issue';
+const UNKNOWN_WRITE = 'every write rejects an unknown issue';
+const UNKNOWN_STATE = 'moveTo rejects a state the team does not have and keeps the state';
+
+describeTrackerContract(
+  'a tracker whose getIssue answers an unknown issue with another one',
+  trackerThat(
+    class extends FakeTracker {
+      override async getIssue(identifier: string): Promise<TrackerIssue> {
+        return super.getIssue(this.issues.has(identifier) ? identifier : 'REL-1');
+      }
+    },
+  ),
+  { violates: [UNKNOWN_READ] },
+);
+
+describeTrackerContract(
+  'a tracker whose moveTo ignores an unknown issue',
+  trackerThat(
+    class extends FakeTracker {
+      override async moveTo(identifier: string, stateName: string): Promise<void> {
+        if (this.issues.has(identifier)) await super.moveTo(identifier, stateName);
+      }
+    },
+  ),
+  { violates: [UNKNOWN_WRITE] },
+);
+
+describeTrackerContract(
+  'a tracker whose setLabels ignores an unknown issue',
+  trackerThat(
+    class extends FakeTracker {
+      override async setLabels(identifier: string, add: string[], remove: string[]): Promise<void> {
+        if (this.issues.has(identifier)) await super.setLabels(identifier, add, remove);
+      }
+    },
+  ),
+  { violates: [UNKNOWN_WRITE] },
+);
+
+describeTrackerContract(
+  'a tracker whose comment ignores an unknown issue',
+  trackerThat(
+    class extends FakeTracker {
+      override async comment(identifier: string, body: string): Promise<void> {
+        if (this.issues.has(identifier)) await super.comment(identifier, body);
+      }
+    },
+  ),
+  { violates: [UNKNOWN_WRITE] },
+);
+
+describeTrackerContract(
+  'a tracker whose ensureSession opens a session on an unknown issue',
+  trackerThat(
+    class extends FakeTracker {
+      override async ensureSession(identifier: string): Promise<string> {
+        return this.issues.has(identifier) ? super.ensureSession(identifier) : 'session-on-nothing';
+      }
+    },
+  ),
+  { violates: [UNKNOWN_WRITE] },
+);
+
+describeTrackerContract(
+  'a tracker whose moveTo ignores a state the team does not have',
+  trackerThat(
+    class extends FakeTracker {
+      override async moveTo(identifier: string, stateName: string): Promise<void> {
+        const { teamKey } = await this.getIssue(identifier);
+        if (this.statesOf(teamKey).includes(stateName)) await super.moveTo(identifier, stateName);
+      }
+    },
+  ),
+  { violates: [UNKNOWN_STATE] },
+);
+
+describeTrackerContract(
+  'a tracker whose moveTo writes a state the team does not have, then rejects',
+  trackerThat(
+    class extends FakeTracker {
+      override async moveTo(identifier: string, stateName: string): Promise<void> {
+        const { teamKey } = await this.getIssue(identifier);
+        if (this.statesOf(teamKey).includes(stateName)) return super.moveTo(identifier, stateName);
+        this.issues.get(identifier)!.stateName = stateName;
+        throw new Error(`unknown state ${stateName} for team ${teamKey}`);
+      }
+    },
+  ),
+  { violates: [UNKNOWN_STATE] },
+);
+
+describeTrackerContract(
+  'a tracker whose moveTo loses the issue on a state the team does not have',
+  trackerThat(
+    class extends FakeTracker {
+      override async moveTo(identifier: string, stateName: string): Promise<void> {
+        const { teamKey } = await this.getIssue(identifier);
+        if (this.statesOf(teamKey).includes(stateName)) return super.moveTo(identifier, stateName);
+        this.issues.delete(identifier);
+        throw new Error(`unknown state ${stateName} for team ${teamKey}`);
+      }
+    },
+  ),
+  { violates: [UNKNOWN_STATE] },
+);
+
 const DELEGATED = 'listDelegated lists the team issues delegated to the app, and only them';
 
 describeTrackerContract(
@@ -232,6 +476,45 @@ describeTrackerContract(
     return { tracker, issue: 'REL-1', missing: 'REL-404', delegation: { teamKey: 'REL', delegated: 'REL-1', notDelegated: 'REL-2' } };
   },
   { violates: [DELEGATED] },
+);
+
+const UNKNOWN_ID = 'destroy is idempotent and ignores an unknown id';
+
+function sandboxesThat(Provider: new () => FakeSandboxProvider): () => SandboxSubject {
+  return () => {
+    const provider = new Provider();
+    return {
+      provider,
+      request: { runId: 'r1', ticketId: 'REL-1', workspacePath: '/w', network: 'none' },
+      active: async () => provider.active().map((s) => s.id),
+    };
+  };
+}
+
+describeSandboxContract(
+  'a sandbox provider whose destroy rejects an id it no longer has',
+  sandboxesThat(
+    class extends FakeSandboxProvider {
+      override async destroy(id: string): Promise<void> {
+        if (!this.active().some((s) => s.id === id)) throw new Error(`no such container: ${id}`);
+        await super.destroy(id);
+      }
+    },
+  ),
+  { violates: [UNKNOWN_ID] },
+);
+
+describeSandboxContract(
+  'a sandbox provider whose destroy rejects an id it never created',
+  sandboxesThat(
+    class extends FakeSandboxProvider {
+      override async destroy(id: string): Promise<void> {
+        if (!this.active().some((s) => s.id === id) && !this.destroyed.includes(id)) throw new Error(`no such container: ${id}`);
+        await super.destroy(id);
+      }
+    },
+  ),
+  { violates: [UNKNOWN_ID] },
 );
 
 describe('contractCases', () => {

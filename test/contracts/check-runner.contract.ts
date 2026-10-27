@@ -1,6 +1,6 @@
 import { expect } from 'vitest';
 import type { CheckRunner } from '../../src/adapters/checks/types.js';
-import { describeContract, subjectWith, type ContractOptions } from './cases.js';
+import { describeContract, resolved, subjectWith, type ContractOptions } from './cases.js';
 
 export interface FailingCommand {
   command: string;
@@ -45,7 +45,7 @@ export function describeCheckRunnerContract(
     it('reports a failing command with its exit code and output', async () => {
       const s = await make();
       const [fail] = s.fails;
-      const r = await s.checks.run(s.cwd, [s.pass, fail.command]);
+      const r = await resolved(s.checks.run(s.cwd, [s.pass, fail.command]));
       expect(r.ok).toBe(false);
       expect(r.failures).toHaveLength(1);
       expect(r.failures[0]).toMatchObject({ command: fail.command, exitCode: fail.exitCode });
@@ -55,14 +55,14 @@ export function describeCheckRunnerContract(
     it('runs every command and reports the failures in order', async () => {
       const s = await make();
       const [a, b] = s.fails;
-      const r = await s.checks.run(s.cwd, [b.command, s.pass, a.command]);
+      const r = await resolved(s.checks.run(s.cwd, [b.command, s.pass, a.command]));
       expect(r.ok).toBe(false);
       expect(r.failures.map((f) => [f.command, f.exitCode])).toEqual([[b.command, b.exitCode], [a.command, a.exitCode]]);
     });
 
     it('a command that outlives the timeout fails without an exit code', async (ctx) => {
       const s = await subjectWith(make, () => ctx.skip(), 'slow');
-      const r = await s.checks.run(s.cwd, [s.slow], 200);
+      const r = await resolved(s.checks.run(s.cwd, [s.slow], 200));
       expect(r.ok).toBe(false);
       expect(r.failures).toEqual([expect.objectContaining({ command: s.slow, exitCode: null })]);
     });
@@ -70,7 +70,7 @@ export function describeCheckRunnerContract(
     it('a command that cannot start fails without an exit code, and run does not reject', async (ctx) => {
       const s = await subjectWith(make, () => ctx.skip(), 'unstartableCwd');
       const [fail] = s.fails;
-      const r = await s.checks.run(s.unstartableCwd, [s.pass, fail.command]).catch((e: unknown) => e);
+      const r = await resolved(s.checks.run(s.unstartableCwd, [s.pass, fail.command]));
       expect(r).toEqual({
         ok: false,
         failures: [expect.objectContaining({ command: s.pass, exitCode: null }), expect.objectContaining({ command: fail.command, exitCode: null })],
