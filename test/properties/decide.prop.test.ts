@@ -274,12 +274,12 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
 
     it.todo('I8 (a) — the cancel event leads to the terminal status cancelled (no terminal status yet: run.cancel and statuses of ORC-133)');
 
-    // A human takes the ticket back (out of done, delegated again) or a new PR opens: it is no longer delivered.
+    // A human takes the ticket back (moves it anywhere but done, delegates it again) or a new PR opens: it is no longer delivered.
     const reopens = (step: Step): boolean => {
       if (step.kind !== 'decided') return false;
       const e = step.event;
       if (e.type === 'ticket.delegated') return true;
-      if (e.type === 'status.changed') return step.before?.logical === 'done' && e.payload.to !== null && e.payload.to !== 'done';
+      if (e.type === 'status.changed') return e.payload.to !== null && e.payload.to !== 'done';
       return e.type === 'pr.opened' && e.payload.number !== step.before?.prNumber;
     };
     const noDevRunAfterMerge = (s: Sequences): void => {
@@ -394,10 +394,14 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
       TIMEOUT,
     );
 
-    /** A run that reads the pending feedback while part of it came from an untrusted event is sandboxed, whoever starts it. */
-    const feedbackRunSandboxed = (s: Sequences): void => {
+    /**
+     * A run that reads the pending feedback while part of it came from an untrusted event is sandboxed: the
+     * runs `decide` starts, and with `settle`, the pending job the orchestrator starts later too.
+     */
+    const feedbackRunSandboxed = (settle: boolean) => (s: Sequences): void => {
       let untrustedPending = false;
       for (const step of run(s).steps) {
+        if (step.kind === 'settled' && !settle) continue;
         if (step.kind === 'shell' && step.event.type === 'run.started' && step.event.feedbackConsumed) untrustedPending = false;
         if (step.kind === 'decided' && step.event.taint === 'untrusted' && step.decision.events.some((e) => e.type === 'feedback.appended')) {
           untrustedPending = true;
@@ -411,8 +415,9 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
     it(
       'untrusted feedback relayed by a later trusted event (debounce) still starts a sandboxed run (ORC-269)',
       () => {
+        // The runs decide starts; the pending job settle starts is the known violation below.
         const counterexample = seq(...delegated('dev'), reply('untrusted'), ext('debounce.fired', { job: 'dev-feedback' }));
-        holds(feedbackRunSandboxed, [counterexample]);
+        holds(feedbackRunSandboxed(false), [counterexample]);
       },
       TIMEOUT,
     );
@@ -421,7 +426,9 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
       'KNOWN VIOLATION — untrusted feedback that arrives once its job is pending still starts a sandboxed run (settle)',
       () => {
         // Found by fast-check once the fold modelled settle: the pending job was decided before the untrusted
-        // reply came in, and settle starts it on all the pending feedback, the untrusted reply included.
+        // reply came in, and settle starts it on all the pending feedback, the untrusted reply included. The
+        // pending job, the queue item and the launch carry no taint: it is to be computed at launch from what the
+        // run reads, with the sensitive paths taken to the runner's sandbox (ORC-151).
         const counterexample = seq(
           ...delegated('dev'),
           runStarted(),
@@ -430,7 +437,7 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
           reply('untrusted'),
           runFinished('failure'),
         );
-        violated('feedback run without the sensitive paths', feedbackRunSandboxed, counterexample);
+        violated('feedback run without the sensitive paths', feedbackRunSandboxed(true), counterexample);
       },
       TIMEOUT,
     );

@@ -22,8 +22,9 @@ function external(t: TicketState, e: FactoryEvent): TicketState {
     case 'status.changed': {
       const to = e.payload.to;
       if (!to) return t;
-      // Out of done, by a human (the factory's own moves are no status.changed): the ticket is reopened.
-      return t.logical === 'done' && to !== 'done' ? reopened({ ...t, logical: to }) : { ...t, logical: to };
+      // A human moves a merged ticket anywhere but done (the factory's own moves are no status.changed): it is
+      // reopened, out of done or, when the factory's move to done failed, out of the status it stayed in.
+      return to !== 'done' ? reopened({ ...t, logical: to }) : { ...t, logical: to };
     }
     case 'run.finished': {
       const active = t.activeRunId === e.payload.runId;

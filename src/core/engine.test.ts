@@ -169,22 +169,29 @@ describe('decide — after the merge (ORC-268)', () => {
     expect(out.trace).toContain('merged: refused dev-feedback');
   });
 
+  it('a human status change reopens a merged ticket the factory could not move to done', () => {
+    const stuck = merged({ logical: 'human_review' });
+    expect(devStarts(decide(stuck, ev('status.changed', { from: 'human_review', to: 'dev' }), workflow))).toEqual([expect.objectContaining({ job: 'dev-feedback' })]);
+    expect(devStarts(decide(stuck, ev('status.changed', { from: 'human_review', to: 'done' }), workflow))).toEqual([]);
+  });
+
   it('no rule nor timer starts dev work on a merged ticket', () => {
-    expect(devStarts(decide(merged({ logical: 'ready' }), ev('status.changed', { from: 'human_review', to: 'dev' }), workflow))).toEqual([]);
-    expect(devStarts(decide(merged({ logical: 'ai_review' }), ev('status.changed', { from: 'human_review', to: 'ai_review' }), workflow))).toEqual([]);
     expect(devStarts(decide(merged({ logical: 'human_review' }), ev('pr.checks_failed', { number: 3, url: 'u', branch: 'b', failures: ['test'] }), workflow))).toEqual([]);
     expect(decide(merged(), ev('debounce.fired', { job: 'dev-feedback' }), workflow)).toEqual(decision());
     const reply = decide(merged({ logical: 'human_review', linearSessionId: 's1' }), ev('session.prompted', { linearSessionId: 's1', body: 'encore ?', author: 'L' }), workflow);
     expect(kinds(reply)).toEqual({ events: ['feedback.appended'], effects: [], timers: [] });
   });
 
-  it('ignores the results of the dev run in flight at the merge, verify relaunch included', () => {
+  it('ignores the end of the dev run in flight at the merge, and its verification is fenced', () => {
     const finished = ev('run.finished', { runId: 'r1', job: 'dev', outcome: 'success', costUsd: 1, turns: 3, lastText: 'ok' });
     const out = decide(merged({ activeRunId: 'r1' }), finished, workflow);
     expect(out).toEqual(decision());
     expect(out.trace).toEqual(['merged: ignored run.finished for run r1']);
     const failed = ev('verify.failed', { runId: 'r1', job: 'dev', failures: [{ command: 'npm test', exitCode: 1, output: 'rouge' }] });
-    expect(decide(merged({ verifyingRunId: 'r1' }), failed, workflow)).toEqual(decision());
+    // pr.merged cancelled the verification awaited: a late result is stale.
+    const late = decide(merged(), failed, workflow);
+    expect(late).toEqual(decision());
+    expect(late.trace[0]).toMatch(/^fenced: /);
   });
 
   it('still answers questions and still posts the learn run of a merged ticket', () => {
@@ -300,9 +307,9 @@ describe('decide — taint', () => {
     expect(decide(t, ev('status.changed', { from: 'human_review', to: 'dev' }), workflow).effects[0]).toMatchObject({ job: 'dev-feedback', sensitivePaths: SENSITIVE_PATHS });
   });
 
-  it('reads a pending item written before ORC-269, without taint, as untrusted', () => {
+  it('reads a pending item written before ORC-269, without taint, as trusted, as upcast reads a version 1 event', () => {
     const t = ticket({ logical: 'human_review', pendingFeedback: pending() });
-    expect(decide(t, ev('debounce.fired', { job: 'dev-feedback' }), workflow).effects[0]).toMatchObject({ sensitivePaths: SENSITIVE_PATHS });
+    expect(decide(t, ev('debounce.fired', { job: 'dev-feedback' }), workflow).effects[0]).not.toHaveProperty('sensitivePaths');
   });
 
   it('leaves out the pending feedback taint when the run does not consume the feedback', () => {

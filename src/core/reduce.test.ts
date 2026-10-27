@@ -68,9 +68,10 @@ describe('reduce — facts carried by external events', () => {
     expect(reduce(merged, ev('status.changed', { from: 'done', to: 'done' }))!.prState).toBe('MERGED');
   });
 
-  it('a status change outside done keeps a merged ticket delivered (ORC-268)', () => {
+  it('a human status change reopens a merged ticket whose move to done failed (ORC-268)', () => {
     const merged = ticket({ logical: 'ready', prState: 'MERGED' });
-    expect(reduce(merged, ev('status.changed', { from: 'ready', to: 'dev' }))!.prState).toBe('MERGED');
+    expect(reduce(merged, ev('status.changed', { from: 'ready', to: 'dev' }))).toMatchObject({ logical: 'dev', prState: undefined });
+    expect(reduce(merged, ev('status.changed', { from: 'ready', to: 'done' }))!.prState).toBe('MERGED');
   });
 
   it('without a ticket, there is nothing to reduce', () => {

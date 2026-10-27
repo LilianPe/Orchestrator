@@ -15,8 +15,8 @@ export interface FeedbackItem {
   source: 'session' | 'review' | 'label' | 'verify' | 'ci';
   /**
    * Taint of the event that brought the item; a run that consumes the pending feedback is as untrusted
-   * as its least trusted item (I12). Absent on items written before ORC-269: their source is unknown,
-   * so `decide` reads them as untrusted (fail closed, as `upcast` never launders a tainted event).
+   * as its least trusted item (I12). Absent on items written before ORC-269, when no source marked an
+   * event untrusted (ORC-160): `decide` reads them as trusted, as `upcast` reads a version 1 event.
    */
   taint?: Taint;
 }

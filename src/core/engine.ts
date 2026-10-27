@@ -51,21 +51,23 @@ export function isQuestionSession(ticket: TicketState | undefined, sessionId: st
 
 /**
  * The strongest taint of what a run reads: its event, and the ticket's pending feedback when the run
- * consumes it, even if a trusted event (a timer, a label) starts it (I12). An item without taint is untrusted.
+ * consumes it, even if a trusted event (a timer, a label) starts it (I12). An item without taint was
+ * written before ORC-269, when no source marked an event untrusted: it stays trusted, as `upcast` reads
+ * a version 1 event, so that replaying the journal gives the same decisions.
  */
 function runTaint(event: FactoryEvent, ticket: TicketState | undefined, input: InputKind | undefined): Taint {
   if (event.taint === 'untrusted') return 'untrusted';
   const feedback = input === 'feedback' ? (ticket?.pendingFeedback ?? []) : [];
-  return feedback.some((f) => f.taint !== 'trusted') ? 'untrusted' : 'trusted';
+  return feedback.some((f) => f.taint === 'untrusted') ? 'untrusted' : 'trusted';
 }
 
-/** The ticket's PR is merged: it is delivered, and no dev work starts on it any more (I8 b). */
-function delivered(ticket: TicketState | undefined, job: JobSpec): boolean {
-  return job.queue === 'dev' && ticket?.prState === 'MERGED';
-}
-
-function refusesRun(event: FactoryEvent, ticket: TicketState | undefined, job: JobSpec, input = job.input): boolean {
-  return delivered(ticket, job) || (job.workspace === 'knowledge' && runTaint(event, ticket, input) === 'untrusted');
+/**
+ * Why `job` must not start: the ticket's PR is merged, so no dev work starts on it any more (I8 b), or
+ * untrusted content would write the knowledge base (I12).
+ */
+function refusal(event: FactoryEvent, ticket: TicketState | undefined, job: JobSpec, input = job.input): 'merged' | 'taint' | undefined {
+  if (job.queue === 'dev' && ticket?.prState === 'MERGED') return 'merged';
+  return job.workspace === 'knowledge' && runTaint(event, ticket, input) === 'untrusted' ? 'taint' : undefined;
 }
 
 /**
@@ -74,18 +76,19 @@ function refusesRun(event: FactoryEvent, ticket: TicketState | undefined, job: J
  * whatever branch starts the run.
  */
 function startRun(out: Decision, event: FactoryEvent, ticket: TicketState | undefined, job: JobSpec, run: Omit<StartRun, 'kind' | 'job'>): void {
-  if (delivered(ticket, job)) {
+  const input = run.input ?? job.input;
+  const refused = refusal(event, ticket, job, input);
+  if (refused === 'merged') {
     out.trace.push(`merged: refused ${job.name}`);
     return;
   }
-  const taint = runTaint(event, ticket, run.input ?? job.input);
-  if (job.workspace === 'knowledge' && taint === 'untrusted') {
+  if (refused === 'taint') {
     out.trace.push(`taint: refused ${job.name}`);
     out.effects.push({ kind: 'activity', type: 'response', body: taintedKnowledge(job.name), linearSessionId: run.linearSessionId });
     return;
   }
   const effect: StartRun = { kind: 'start_run', job: job.name, ...run };
-  out.effects.push(taint === 'untrusted' ? { ...effect, sensitivePaths: SENSITIVE_PATHS } : effect);
+  out.effects.push(runTaint(event, ticket, input) === 'untrusted' ? { ...effect, sensitivePaths: SENSITIVE_PATHS } : effect);
 }
 
 /** Non-delegated tickets only ever get question-queue work. */
@@ -128,7 +131,7 @@ function appendFeedback(out: Decision, event: FactoryEvent<'session.prompted'>):
 function applyRule(out: Decision, rule: Rule, event: FactoryEvent, ticket: TicketState | undefined, workflow: Workflow): Decision {
   if (event.type === 'session.prompted') appendFeedback(out, event);
   const job = rule.run ? workflow.jobs[rule.run]! : undefined;
-  if (job && !refusesRun(event, ticket, job) && ticket?.blocked) out.events.push({ type: 'ticket.unblocked' });
+  if (job && !refusal(event, ticket, job) && ticket?.blocked) out.events.push({ type: 'ticket.unblocked' });
   if (rule.move) out.effects.push({ kind: 'move', to: rule.move });
   if (rule.labels) out.effects.push({ kind: 'labels', add: rule.labels.add, remove: rule.labels.remove });
   if (rule.comment) out.effects.push({ kind: 'comment', body: rule.comment });
@@ -142,7 +145,7 @@ function applyRule(out: Decision, rule: Rule, event: FactoryEvent, ticket: Ticke
     });
   }
   if (!job) return out;
-  if (rule.debounceMs && rule.debounceMs > 0 && !refusesRun(event, ticket, job)) {
+  if (rule.debounceMs && rule.debounceMs > 0 && !refusal(event, ticket, job)) {
     out.timers.push({ kind: 'debounce', job: job.name, ms: rule.debounceMs });
   } else {
     const threaded = event.type === 'session.mentioned' || event.type === 'command';
@@ -174,11 +177,13 @@ function staleAttempt(state: TicketState | undefined, event: FactoryEvent, workf
   return undefined;
 }
 
-/** A result of the dev work in flight when the PR was merged: traced, never acted on (I8 b). */
+/**
+ * The end of the dev run in flight when the PR was merged: traced, never acted on (I8 b). Its verification
+ * cannot follow: pr.merged cancels the one awaited, so a later verify.* is fenced as stale.
+ */
 function afterMerge(state: TicketState | undefined, event: FactoryEvent, workflow: Workflow): string | undefined {
-  if (state?.prState !== 'MERGED') return undefined;
-  if (event.type !== 'run.finished' && event.type !== 'verify.passed' && event.type !== 'verify.failed') return undefined;
-  return workflow.jobs[event.payload.job]?.queue === 'dev' ? `merged: ignored ${event.type} for run ${event.payload.runId}` : undefined;
+  if (state?.prState !== 'MERGED' || event.type !== 'run.finished') return undefined;
+  return workflow.jobs[event.payload.job]?.queue === 'dev' ? `merged: ignored run.finished for run ${event.payload.runId}` : undefined;
 }
 
 /** Pure: the same state, event and workflow always give the same decision. */
@@ -248,7 +253,7 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
     case 'debounce.fired': {
       const job = workflow.jobs[event.payload.job];
       if (!job) return out;
-      if (ticket?.blocked && !refusesRun(event, ticket, job)) out.events.push({ type: 'ticket.unblocked' });
+      if (ticket?.blocked && !refusal(event, ticket, job)) out.events.push({ type: 'ticket.unblocked' });
       startRun(out, event, ticket, job, { input: job.input });
       return out;
     }
