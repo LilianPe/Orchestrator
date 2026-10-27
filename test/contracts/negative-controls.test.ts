@@ -203,6 +203,24 @@ describeTrackerContract(
   { violates: [EFFECTS] },
 );
 
+const DELEGATED = 'listDelegated lists the team issues delegated to the app, and only them';
+
+describeTrackerContract(
+  'a tracker whose listDelegated lists every team',
+  () => {
+    const tracker = new (class extends FakeTracker {
+      override async listDelegated(): Promise<Awaited<ReturnType<FakeTracker['listDelegated']>>> {
+        return [...(await super.listDelegated('REL')), ...(await super.listDelegated('OPS'))];
+      }
+    })();
+    tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV des audits', delegateId: 'app' });
+    tracker.addIssue({ identifier: 'REL-2', title: 'Autre ticket' });
+    tracker.addIssue({ identifier: 'OPS-1', title: 'Ticket délégué d’une autre équipe', delegateId: 'app' });
+    return { tracker, issue: 'REL-1', missing: 'REL-404', delegation: { teamKey: 'REL', delegated: 'REL-1', notDelegated: 'REL-2' } };
+  },
+  { violates: [DELEGATED] },
+);
+
 describe('contractCases', () => {
   it('rejects a violates entry that names no case of the suite', () => {
     const { it: kase, end } = contractCases({ violates: ['a case renamed since'] });

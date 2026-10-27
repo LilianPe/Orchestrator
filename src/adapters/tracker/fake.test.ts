@@ -10,6 +10,7 @@ describeTrackerContract(
     const tracker = new FakeTracker();
     tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV des audits', labels: ['bug'], delegateId: 'app' });
     tracker.addIssue({ identifier: 'REL-2', title: 'Autre ticket' });
+    tracker.addIssue({ identifier: 'OPS-1', title: 'Ticket délégué d’une autre équipe', delegateId: 'app' });
     return {
       tracker,
       issue: 'REL-1',

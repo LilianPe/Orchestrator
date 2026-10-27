@@ -72,6 +72,8 @@ export function describeTrackerContract(name: string, make: () => TrackerSubject
     it('listDelegated lists the team issues delegated to the app, and only them', async (ctx) => {
       const s = await subjectWith(make, () => ctx.skip(), 'delegation');
       const { teamKey, delegated, notDelegated } = s.delegation;
+      // An issue of another team, or one that does not exist, would never be listed: « only them » would check nothing.
+      expect((await s.tracker.getIssue(notDelegated)).teamKey).toBe(teamKey);
       const listed = await s.tracker.listDelegated(teamKey);
       const ids = listed.map((i) => i.identifier);
       expect(ids).toContain(delegated);
