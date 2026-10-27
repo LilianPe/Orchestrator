@@ -93,7 +93,8 @@ export class OutboxExecutor {
     try {
       await this.d.execute(row);
     } catch (err) {
-      failure = err as Error;
+      // A non-Error throw still has a message to store and to report.
+      failure = err instanceof Error ? err : new Error(String(err));
     } finally {
       clearInterval(renew);
     }

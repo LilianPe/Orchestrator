@@ -507,6 +507,21 @@ on:
   });
 });
 
+describe('an effect that throws something other than an Error (ORC-150 review)', () => {
+  it('records its message and lets it die like any failed effect', async () => {
+    const yaml = 'version: 1\non:\n  label.changed:\n    - { label: "agent:x", comment: "reçu" }\n';
+    const h = createHarness({ projectYaml: yaml, effectRetry: { attempts: 1, baseMs: 1, capMs: 1 } });
+    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    h.tracker.comment = async () => {
+      throw 'Linear down';
+    };
+    await h.send('label.changed', { label: 'agent:x', change: 'added' });
+    expect((await h.store.listEffects('p', 'REL-1')).find((r) => r.effect.kind === 'comment')).toMatchObject({ status: 'dead', error: 'Linear down' });
+    expect(await h.store.pendingInbox(10)).toEqual([]);
+  });
+});
+
 describe('a start that must not run (ORC-150 review)', () => {
   it('blocks the ticket once when a launch fails and its notice fails too: the start is not retried', async () => {
     const h = createHarness();
