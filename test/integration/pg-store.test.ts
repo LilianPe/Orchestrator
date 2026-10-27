@@ -202,6 +202,9 @@ describe.skipIf(!url)('PgStore integration', () => {
       `select (select count(*) from inbox)::int as inbox, (select count(*) from journal)::int as journal`,
     );
     expect(counts.rows[0]).toEqual({ inbox: 2, journal: 2 });
+    // Journaled means handled: no inbox row is left for a replay to take as unprocessed.
+    const pending = await pool.query('select id from inbox where processed_at is null');
+    expect(pending.rows).toEqual([]);
 
     const journal = await pool.query<{ event_id: string; seq: number; type: string }>(
       'select event_id, seq, type from journal where ticket_id = $1 order by seq',

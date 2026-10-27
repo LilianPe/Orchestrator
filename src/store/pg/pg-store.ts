@@ -117,7 +117,9 @@ export class PgStore implements AsyncStore {
 
   /**
    * Appends to `inbox` and `journal` in one transaction. The second call for the same event id
-   * returns `false` without touching the journal (the ORC-147 idempotency contract).
+   * returns `false` without touching the journal (the ORC-147 idempotency contract). The inbox row
+   * is written processed: the event is handled as it is journaled, and an inbox replay (ORC-147)
+   * must not take these rows for unprocessed ones.
    *
    * The per-ticket journal sequence is allocated under a transaction-scoped advisory lock, so two
    * workers cannot pick the same `seq` for a ticket.
@@ -129,10 +131,10 @@ export class PgStore implements AsyncStore {
     return this.db.transaction(async (tx) => {
       const inserted = await tx.execute(
         sql`
-          insert into inbox (id, event_id, type, payload, received_at, schema_version)
+          insert into inbox (id, event_id, type, payload, received_at, processed_at, schema_version)
           values (
             ${event.id}, ${event.id}, ${event.type}, ${JSON.stringify(event)}::jsonb,
-            to_timestamp(${now / 1000}), ${version}
+            to_timestamp(${now / 1000}), to_timestamp(${now / 1000}), ${version}
           )
           on conflict do nothing
           returning id
