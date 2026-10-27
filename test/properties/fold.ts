@@ -102,6 +102,11 @@ function takesDevSlot(job: string, wf: Workflow): boolean {
   return wf.jobs[job]?.queue === 'dev';
 }
 
+/** The run reads the ticket's pending feedback, as `Orchestrator.launch` decides it: the start's input, else its job's. */
+export function readsFeedback(start: StartRun, wf: Workflow): boolean {
+  return (start.input ?? wf.jobs[start.job]?.input) === 'feedback';
+}
+
 /** `Orchestrator.startRun` refuses the start: dev work on a merged or undelegated ticket, or on a blocked one. */
 function refusesStart(state: TicketState, job: JobSpec): boolean {
   return !!refusesDevWork(state, job) || (job.queue === 'dev' && state.blocked);
@@ -112,7 +117,7 @@ function refusesStart(state: TicketState, job: JobSpec): boolean {
  * reads now (I12, ORC-274). The forge's review comments, untrusted too, are not modelled: no PR has any.
  */
 function launch(start: StartRun, state: TicketState, wf: Workflow): StartRun {
-  const read = (start.input ?? wf.jobs[start.job]?.input) === 'feedback' ? state.pendingFeedback : [];
+  const read = readsFeedback(start, wf) ? state.pendingFeedback : [];
   const sensitivePaths = sensitivePathsAtLaunch(start.sensitivePaths, read);
   return deepFreeze(sensitivePaths ? { ...start, sensitivePaths } : start);
 }
@@ -174,12 +179,13 @@ export function fold(entries: readonly Entry[], wf: Workflow, inbox: Inbox = mem
       // `startRun`: a dev start it does not refuse, while the run or the verification of the slot is in flight, waits as the pending job;
       // otherwise it launches, and a dev run (whose `run.started` is not modelled) holds the slot.
       if (e.kind !== 'start_run' || refusesStart(state, wf.jobs[e.job]!)) continue;
-      if (isDevStart(e, wf) && (state.activeRunId || state.verifyingRunId)) {
+      const dev = isDevStart(e, wf);
+      if (dev && (state.activeRunId || state.verifyingRunId)) {
         record({ type: 'pending.set', job: { job: e.job, input: e.input, inputText: e.inputText, resume: e.resume, sensitivePaths: e.sensitivePaths } });
         continue;
       }
       launches.push(launch(e, state, wf));
-      if (isDevStart(e, wf)) launched = true;
+      if (dev) launched = true;
     }
     // `settle`: once nothing is in flight, the pending job starts, unless startRun refuses it.
     const pending = state.pendingJob;

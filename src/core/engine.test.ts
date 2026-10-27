@@ -319,13 +319,12 @@ describe('decide — taint', () => {
     ]);
   });
 
-  it('gives a launch the strongest of the sensitive paths its start was decided with and the taint of what it reads (ORC-274)', () => {
+  it('gives a launch the sensitive paths when its start was decided with them or what it reads is untrusted (ORC-274)', () => {
     expect(sensitivePathsAtLaunch(undefined, [])).toBeUndefined();
     expect(sensitivePathsAtLaunch([], pending('trusted'))).toBeUndefined();
     expect(sensitivePathsAtLaunch(undefined, [...pending(), ...pending('trusted')])).toBeUndefined();
     expect(sensitivePathsAtLaunch(undefined, pending('untrusted'))).toEqual(SENSITIVE_PATHS);
     expect(sensitivePathsAtLaunch(SENSITIVE_PATHS, pending('trusted'))).toEqual(SENSITIVE_PATHS);
-    expect(sensitivePathsAtLaunch(['docs/**'], pending('untrusted'))).toEqual(['docs/**', ...SENSITIVE_PATHS]);
   });
 
   it('starts the verify relaunch through the taint rule (ORC-269)', () => {

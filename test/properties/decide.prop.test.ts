@@ -13,7 +13,7 @@ import {
 } from '../../src/core/types.js';
 import { SqliteStore } from '../../src/store/sqlite-store.js';
 import { DEV_SESSION, PROJECT, sequences, TICKET, VERIFY_FAILURES, type Entry, type Sequences } from './events.js';
-import { decided, effects, fold, isDevStart, launches, params, stepEffects, TIMEOUT, workflow, type Run, type Step } from './fold.js';
+import { decided, effects, fold, isDevStart, launches, params, readsFeedback, stepEffects, TIMEOUT, workflow, type Run, type Step } from './fold.js';
 
 /**
  * Invariants of `decide` (docs/decisions/ORC-138.md, I1 to I12) checked as properties over generated
@@ -449,8 +449,7 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
           untrustedPending = true;
         }
         for (const e of launches(step)) {
-          const reads = (e.input ?? wf.jobs[e.job]?.input) === 'feedback';
-          if (reads && untrustedPending) expect(e.sensitivePaths, 'feedback run without the sensitive paths').toEqual(SENSITIVE_PATHS);
+          if (readsFeedback(e, wf) && untrustedPending) expect(e.sensitivePaths, 'feedback run without the sensitive paths').toEqual(SENSITIVE_PATHS);
         }
       }
     };

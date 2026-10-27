@@ -22,7 +22,7 @@ import {
 import type { EventBus } from './bus.js';
 import type { Clock } from './clock.js';
 import type { Effect, OutboxEffect } from './decision.js';
-import { decide, isFenced, refusesDevWork, sensitivePathsAtLaunch } from './engine.js';
+import { decide, isFenced, refusesDevWork, sensitivePathsAtLaunch, taintedKnowledge } from './engine.js';
 import { attemptLabels, packFingerprints } from './attempt-labels.js';
 import { pickupFailures } from './pickup.js';
 import { buildPrompt, formatFeedback, formatVerifyFailures } from './prompt.js';
@@ -110,9 +110,6 @@ interface StartOpts {
 /** Events after which `handle` settles the ticket: the pending job starts once nothing is in flight. */
 export const SETTLES_RUN: ReadonlySet<EventType> = new Set<EventType>(['run.finished', 'verify.passed', 'verify.failed']);
 const ECHO_MS = 60_000;
-/** A knowledge job refused at its launch: the event that started it was trusted, what it would read is not (I12). */
-const TAINTED_AT_LAUNCH = (job: string): string =>
-  `Je ne lance pas ${job} : ce job écrit dans la base de connaissances, et des retours qu'il lirait (fil ou commentaires de review) viennent d'une source non fiable.`;
 
 export function logicalFromName(states: Record<LogicalState, string>, name: string): LogicalState | undefined {
   return (Object.entries(states) as [LogicalState, string][]).find(([, n]) => n === name)?.[0];
@@ -883,7 +880,7 @@ export class Orchestrator {
       this.d.scheduler.release(key);
       this.log('warn', `refused ${job.name} on ${ticketId}: it would write the knowledge base from untrusted content`);
       await tracker
-        .activity(linearSessionId, { type: 'response', body: TAINTED_AT_LAUNCH(job.name) })
+        .activity(linearSessionId, { type: 'response', body: taintedKnowledge(job.name, 'read') })
         .catch((err: Error) => this.log('warn', `could not answer ${ticketId}: ${err.message}`));
       return;
     }
@@ -930,7 +927,7 @@ export class Orchestrator {
       token: this.newId(),
       cwd: ws.path,
       labels,
-      ...(sensitivePaths ? { sensitivePaths } : {}),
+      sensitivePaths,
     };
     await store.putRun(run);
     await this.apply(t, { type: 'run.started', runId, job: job.name, queue: job.queue, claudeSessionId, feedbackConsumed: kind === 'feedback' });
@@ -952,7 +949,7 @@ export class Orchestrator {
       readOnly: job.workspace === 'trunk-readonly',
       limits: job.limits,
       env: { ...this.d.agentEnv(run), ...(ws.port !== undefined ? { PORT: String(ws.port) } : {}) },
-      ...(sensitivePaths ? { sensitivePaths } : {}),
+      sensitivePaths,
     });
     this.handles.set(runId, handle);
     this.liveRuns.add(runId);

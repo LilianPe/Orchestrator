@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { SENSITIVE_PATHS } from '../../src/core/engine.js';
+import { SENSITIVE_PATHS, taintedKnowledge } from '../../src/core/engine.js';
 import { TRUSTED } from '../../src/core/types.js';
 import { createHarness } from '../helpers/harness.js';
 
@@ -448,7 +448,7 @@ describe('I12: the taint of a run is what it reads at its launch (ORC-274)', () 
     await h.send('control.resume', {});
     expect(h.runner.requests).toHaveLength(1);
     expect(await h.store.listQueue()).toEqual([]);
-    expect(h.tracker.activities('ls-10').at(-1)).toMatchObject({ type: 'response', body: expect.stringMatching(/^Je ne lance pas remember : .*source non fiable/) });
+    expect(h.tracker.activities('ls-10').at(-1)).toEqual({ type: 'response', body: taintedKnowledge('remember', 'read') });
   });
 
   it('keeps the sensitive paths a start was decided with when the launch reads no feedback (an untrusted question)', async () => {
