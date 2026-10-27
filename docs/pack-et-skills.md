@@ -71,6 +71,7 @@ Texte complet : `packs/standard/skills/<nom>/SKILL.md`.
 - `gh pr merge` : seuls les humains mergent ;
 - tout force-push : `git push --force`, `-f`, `--force-with-lease`, une option de force en milieu de commande, un refspec `+…` ;
 - tout push direct sur `main` ou `master` (`git push origin main`, `HEAD:main`…) ;
+- tout contournement des hooks git par `--no-verify` (`git commit --no-verify`, `git commit -n`, `git push --no-verify`, l'option en milieu de commande, ou toute commande qui la contient) ; le scan du diff (`factory/anti-triche`, ORC-158) refuse aussi un `--no-verify` ajouté dans un fichier du dépôt ;
 - `git reset --hard origin…`, `rm -rf /` ;
 - la lecture de `~/.relais/**`.
 
