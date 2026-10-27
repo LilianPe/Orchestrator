@@ -35,7 +35,9 @@ ORC-155 décidera si ce port devient une abstraction du harness (Claude Code ou 
 
 ## Écarts connus
 
-Aucun. `FakeRunner` ignorait `limits` : depuis ORC-189, il les tient comme le vrai runtime.
+`RunRequest.sensitivePaths` (les chemins qu'un run qui lit un contenu non fiable ne doit pas écrire, ORC-274) est porté jusqu'au port mais appliqué par aucune implémentation : `ClaudeCodeRunner` l'ignore, et la suite ne le vérifie pas. L'appliquer revient à la sandbox du runner (ORC-151, ORC-204).
+
+`FakeRunner` ignorait `limits` : depuis ORC-189, il les tient comme le vrai runtime.
 
 - Tours : un script dont `turns` dépasse `limits.turns` finit en `limit` tout de suite, sans attendre `release`, et rapporte `limits.turns + 1` tours : le vrai runtime interrompt l'agent au tour qui dépasse et rapporte les tours lus jusqu'à sa sortie, au moins celui-là ; le faux rapporte ce minimum.
 - Durée : sur l'horloge simulée passée au constructeur (`new FakeRunner(clock)`), vérifiée à chaque `tick()`. Un run tenu (`hold`) finit en `limit` quand l'horloge atteint `limits.durationMs` depuis son départ. Le harnais des scénarios lui passe son horloge et appelle `tick()` dans `advance(ms)` : un scénario qui avance l'horloge au-delà du plafond d'un run tenu le voit finir en `limit`.
