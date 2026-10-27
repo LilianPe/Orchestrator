@@ -15,6 +15,7 @@ import { hashText } from './attempt-labels.js';
 import { EventBus } from './bus.js';
 import { FakeClock } from './clock.js';
 import { Orchestrator } from './orchestrator.js';
+import { runRepair } from '../cli/repair.js';
 import type { EffectRetry } from '../runtime/outbox.js';
 import { Scheduler } from './scheduler.js';
 import { newTicketState, TRUSTED, type FactoryEvent } from './types.js';
@@ -319,21 +320,99 @@ describe('Orchestrator', () => {
     expect(await store.listQueue()).toHaveLength(1);
   });
 
-  it('blocks the ticket with the error when a command throws', async () => {
-    const { store, tracker, orch } = setup();
-    tracker.addIssue({ identifier: 'REL-1', title: 'A' });
-    const move = tracker.moveTo.bind(tracker);
-    let n = 0;
-    tracker.moveTo = async (id, name) => {
-      if (++n > 1) throw new Error('linear down');
-      return move(id, name);
-    };
-    await orch.accept(delegated());
-    await orch.drained();
-    const t = (await store.getTicket('p', 'REL-1'))!;
-    expect(t.blocked).toBe(true);
-    expect(t.blockReason).toBe('Erreur : linear down');
-    expect(tracker.activities().some((a) => a.type === 'error')).toBe(true);
+  // ORC-175, in place of 'blocks the ticket with the error when a command throws': a failed effect is
+  // still decided as `effect.failed` (below, 'arms no rule timer…'); what throws now is the decision itself.
+  describe('an event whose decision throws (ORC-175)', () => {
+    /** A rule whose condition is broken (`when` not a parsed condition): `decide` throws on `label.changed`. */
+    function broken() {
+      let workflow!: ReturnType<typeof loadWorkflow>;
+      const s = setup({
+        tweak: (w) => {
+          workflow = w;
+          w.on['label.changed'] = [{ label: 'agent:x', when: {} as never, comment: 'reçu' }];
+        },
+      });
+      s.tracker.addIssue({ identifier: 'REL-1', title: 'A' });
+      const fix = () => void (workflow.on['label.changed'] = [{ label: 'agent:x', comment: 'reçu' }]);
+      return { ...s, fix };
+    }
+    const label = (id: string): FactoryEvent =>
+      ({ ...TRUSTED, id, type: 'label.changed', at: 2_000, projectId: 'p', ticketId: 'REL-1', payload: { label: 'agent:x', change: 'added' } });
+
+    it('dead-letters it and blocks the ticket, with a message naming it; the events behind it go on', async () => {
+      const { store, tracker, orch } = broken();
+      await orch.accept(delegated());
+      await orch.drained();
+      await orch.accept(label('l1'));
+      await orch.accept({ ...TRUSTED, id: 's1', type: 'session.prompted', at: 2_000, projectId: 'p', ticketId: 'REL-1', payload: { linearSessionId: 'ls-1', body: 'ok', author: 'lilian' } });
+      await orch.drained();
+      const [dl] = await store.deadLetters('REL-1');
+      expect(dl).toMatchObject({ eventId: 'l1', projectId: 'p', ticketId: 'REL-1', status: 'open', failures: 1, event: { type: 'label.changed' } });
+      expect(dl!.error).toMatch(/every/);
+      const t = (await store.getTicket('p', 'REL-1'))!;
+      expect(t.blocked).toBe(true);
+      expect(t.blockReason).toMatch(/^Événement l1 mis de côté \(label\.changed\) : sa décision a échoué/);
+      expect(tracker.activities().filter((a) => a.type === 'error').map((a) => ('body' in a ? a.body : ''))).toEqual([`${t.blockReason} Un mainteneur peut le réparer : \`factory run repair REL-1\`.`]);
+      // Not retried: nothing pending; the reply behind it was decided (kept as feedback for the next run, I6).
+      expect(await store.pendingInbox(10)).toEqual([]);
+      expect(t.pendingFeedback.map((f) => f.body)).toEqual(['ok']);
+      // The block is a decision of its own, journaled: the poison event is not.
+      const journal = (await store.recentEvents(20, 'REL-1')).map((e) => e.id);
+      expect(journal).toContain('dead-letter:l1:1');
+      expect(journal).not.toContain('l1');
+    });
+
+    it('replays it once fixed with `factory run repair`, which unblocks the ticket and is journaled', async () => {
+      const { store, tracker, orch, fix } = broken();
+      await orch.accept(delegated());
+      await orch.accept(label('l1'));
+      await orch.drained();
+      fix();
+      const lines: string[] = [];
+      expect(await runRepair({ store, target: 'REL-1', action: 'replay', by: 'armand', now: 3_000, print: (l) => void lines.push(l) })).toBe(0);
+      await orch.drained();
+      const t = (await store.getTicket('p', 'REL-1'))!;
+      expect(t.blocked).toBe(false);
+      expect(t.blockReason).toBeUndefined();
+      // The rule of the replayed event ran: its comment is posted.
+      expect(tracker.calls.filter((c) => c.method === 'comment').map((c) => c.args[1])).toContain('reçu');
+      expect(tracker.activities().map((a) => ('body' in a ? a.body : ''))).toContain('Événement l1 réparé par armand (rejoué) : le ticket est débloqué.');
+      expect(await store.deadLetters('REL-1')).toMatchObject([{ eventId: 'l1', status: 'replayed', resolvedBy: 'armand' }]);
+      expect((await store.recentEvents(20, 'REL-1')).find((e) => e.id === 'repair:l1:1')).toMatchObject({
+        type: 'dead_letter.repaired',
+        payload: { eventId: 'l1', action: 'replay', by: 'armand', event: { id: 'l1', type: 'label.changed' } },
+      });
+    });
+
+    it('dead-letters a replay that throws again on the same event, one failure more', async () => {
+      const { store, orch } = broken();
+      await orch.accept(delegated());
+      await orch.accept(label('l1'));
+      await orch.drained();
+      await runRepair({ store, target: 'REL-1', action: 'replay', by: 'armand', now: 3_000, print: () => {} });
+      await orch.drained();
+      expect(await store.deadLetters('REL-1')).toMatchObject([{ eventId: 'l1', status: 'open', failures: 2 }]);
+      expect((await store.getTicket('p', 'REL-1'))!.blocked).toBe(true);
+      expect((await store.recentEvents(20, 'REL-1')).map((e) => e.id)).toContain('dead-letter:l1:2');
+    });
+
+    it.each([
+      ['skip', 'ignoré'],
+      ['force', 'forcé'],
+    ] as const)('%s: unblocks the ticket without the decision of the event', async (action, label_) => {
+      const { store, tracker, orch } = broken();
+      await orch.accept(delegated());
+      await orch.accept(label('l1'));
+      await orch.drained();
+      // Still broken: neither repair decides the event.
+      expect(await runRepair({ store, target: 'REL-1', action, by: 'armand', now: 3_000, print: () => {} })).toBe(0);
+      await orch.drained();
+      expect((await store.getTicket('p', 'REL-1'))!.blocked).toBe(false);
+      expect(tracker.calls.filter((c) => c.method === 'comment').map((c) => c.args[1])).not.toContain('reçu');
+      expect(tracker.activities().map((a) => ('body' in a ? a.body : ''))).toContain(`Événement l1 réparé par armand (${label_}) : le ticket est débloqué.`);
+      expect(await store.deadLetters('REL-1')).toMatchObject([{ status: action === 'skip' ? 'skipped' : 'forced', resolvedBy: 'armand' }]);
+      expect((await store.recentEvents(20, 'REL-1')).find((e) => e.id === 'repair:l1:1')).toMatchObject({ payload: { action, by: 'armand' } });
+    });
   });
 
   const labelled = (label: string): FactoryEvent =>

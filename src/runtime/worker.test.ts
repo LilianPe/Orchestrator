@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { newTicketState, type FactoryEvent } from '../core/types.js';
+import type { StoredEvent } from '../core/upcast.js';
 import { SqliteStore } from '../store/sqlite-store.js';
 import type { DecisionRequest, OutboxRow } from '../store/types.js';
 import { effectBackoff } from './outbox.js';
@@ -7,6 +8,24 @@ import { Worker, type WorkerDeps } from './worker.js';
 
 const event = (id: string): FactoryEvent =>
   ({ id, type: 'ticket.delegated', at: 1, projectId: 'p', ticketId: 'REL-1', payload: { linearSessionId: 'ls-1' } }) as FactoryEvent;
+
+/** Each event decides two comments. */
+const twoComments = (e: FactoryEvent): DecisionRequest => ({
+  event: e,
+  workflow: { hash: 'h', definition: {} },
+  decide: (ticket) => ({
+    ticket: ticket ?? newTicketState('p', 'REL-1', 'T', 'todo', 1),
+    // The result of an effect (ORC-150) decides nothing more.
+    effects: e.type.startsWith('effect.')
+      ? []
+      : [
+          { kind: 'comment', body: `${e.id}/1` },
+          { kind: 'comment', body: `${e.id}/2` },
+        ],
+    timers: [],
+    clearTimers: false,
+  }),
+});
 
 /** A worker over an in-memory SQLite store: each event decides two comments. */
 function setup(patch: Partial<WorkerDeps> = {}) {
@@ -17,22 +36,7 @@ function setup(patch: Partial<WorkerDeps> = {}) {
     store,
     log: (_level, message) => void logs.push(message),
     prepare: async (e) => e,
-    request: (e): DecisionRequest => ({
-      event: e,
-      workflow: { hash: 'h', definition: {} },
-      decide: (ticket) => ({
-        ticket: ticket ?? newTicketState('p', 'REL-1', 'T', 'todo', 1),
-        // The result of an effect (ORC-150) decides nothing more.
-        effects: e.type.startsWith('effect.')
-          ? []
-          : [
-              { kind: 'comment', body: `${e.id}/1` },
-              { kind: 'comment', body: `${e.id}/2` },
-            ],
-        timers: [],
-        clearTimers: false,
-      }),
-    }),
+    request: twoComments,
     committed: async () => {},
     execute: async (row: OutboxRow) => void executed.push(row.id),
     ...patch,
@@ -209,5 +213,85 @@ describe('Worker.start', () => {
     worker.stop();
     await worker.settle();
     expect(executed).toEqual(['REL-1:1:1', 'REL-1:1:2']);
+  });
+});
+
+describe('Worker: a decision that throws is dead-lettered (ORC-175)', () => {
+  /** `decide` throws on the event `poison`, every time. */
+  const poisoned = (patch: Partial<WorkerDeps> = {}) =>
+    setup({
+      request: (e) => {
+        const req = twoComments(e);
+        if (e.id !== 'poison') return req;
+        return {
+          ...req,
+          decide: () => {
+            throw new TypeError('rule.when.every is not a function');
+          },
+        };
+      },
+      ...patch,
+    });
+
+  it('sets the row aside at once, without retrying it, and lets the rows behind it go on', async () => {
+    const deadLettered: string[] = [];
+    const { store, worker, logs, executed } = poisoned({ retry: { attempts: 5, baseMs: 1 }, deadLettered: (row) => void deadLettered.push(row.id) });
+    await store.appendInbox(event('poison'));
+    await store.appendInbox(event('e2'));
+    await worker.kick();
+    await settled(worker);
+    expect(await store.deadLetters('REL-1')).toMatchObject([{ eventId: 'poison', failures: 1, status: 'open', error: 'rule.when.every is not a function' }]);
+    expect(deadLettered).toEqual(['poison']);
+    // e2 decided, then the event that blocks the ticket (its decision here: two comments, as any event).
+    expect(executed).toEqual(['REL-1:1:1', 'REL-1:1:2', 'REL-1:2:1', 'REL-1:2:2']);
+    expect((await store.recentEvents(10, 'REL-1')).map((e) => e.id).reverse().filter((id) => !id.startsWith('effect:'))).toEqual(['e2', 'dead-letter:poison:1']);
+    expect(await store.pendingInbox(10)).toEqual([]);
+    expect(logs.filter((m) => m.includes('retried'))).toEqual([]);
+    expect(logs).toContain('event poison (ticket.delegated) dead-lettered, its decision threw: rule.when.every is not a function (repair: factory run repair REL-1)');
+  });
+
+  it('dead-letters an event its upcast refuses', async () => {
+    const { store, worker } = setup();
+    const future: StoredEvent = { ...event('future'), schemaVersion: 99 };
+    await store.appendInbox(future);
+    await worker.kick();
+    await settled(worker);
+    expect(await store.deadLetters('REL-1')).toMatchObject([{ eventId: 'future', error: 'event future: schema version 99 is newer than 2' }]);
+  });
+
+  it('keeps the row and retries it when the dead letter cannot be written: nothing is lost', async () => {
+    let down = 1;
+    const { store, worker, logs } = poisoned({ retry: { attempts: 3, baseMs: 1 } });
+    const write = store.deadLetter.bind(store);
+    store.deadLetter = async (...args) => {
+      if (down-- > 0) throw new Error('database down');
+      return write(...args);
+    };
+    await store.appendInbox(event('poison'));
+    worker.start(60_000);
+    await worker.kick();
+    for (let i = 0; i < 200 && (await store.deadLetters()).length === 0; i++) await new Promise((r) => setTimeout(r, 5));
+    worker.stop();
+    await worker.settle();
+    expect(logs.some((m) => m.includes('rule.when.every is not a function; not dead-lettered: database down (attempt 1 of 3'))).toBe(true);
+    expect(await store.deadLetters('REL-1')).toMatchObject([{ eventId: 'poison', failures: 1 }]);
+  });
+
+  it('still retries a row whose store transaction throws: the database, not the event', async () => {
+    let failures = 1;
+    const { store, worker } = setup({ retry: { attempts: 3, baseMs: 1 } });
+    const decide = store.decide.bind(store);
+    store.decide = async (req) => {
+      if (failures-- > 0) throw new Error('database hiccup');
+      return decide(req);
+    };
+    await store.appendInbox(event('e1'));
+    worker.start(60_000);
+    await worker.kick();
+    for (let i = 0; i < 200 && (await store.pendingInbox(10)).length > 0; i++) await new Promise((r) => setTimeout(r, 5));
+    worker.stop();
+    await worker.settle();
+    expect(await store.deadLetters()).toEqual([]);
+    expect((await store.recentEvents(10, 'REL-1')).map((e) => e.id)).toContain('e1');
   });
 });

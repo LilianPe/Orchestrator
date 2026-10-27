@@ -1,5 +1,6 @@
 import type { JobSpec, Rule, Workflow } from '../config/workflow-schema.js';
 import { evalCondition } from './conditions.js';
+import { blockedByDeadLetter, deadLetterReason, type RepairAction } from './dead-letter.js';
 import type { Decision, Effect } from './decision.js';
 import { reduce } from './reduce.js';
 import type { EventType, FactoryEvent, FeedbackItem, InputKind, Taint, TicketState, VerifyFailure } from './types.js';
@@ -20,7 +21,7 @@ export function taintedKnowledge(job: string, source: 'event' | 'read' = 'event'
 
 const BUILT_IN = new Set<EventType>([
   'control.pause', 'control.resume', 'control.stop', 'run.finished', 'verify.passed', 'verify.failed', 'debounce.fired', 'pr.opened',
-  'effect.done', 'effect.failed',
+  'effect.done', 'effect.failed', 'dead_letter.added',
 ]);
 
 function empty(): Decision {
@@ -254,8 +255,33 @@ function afterMerge(state: TicketState | undefined, event: FactoryEvent, workflo
   return workflow.jobs[event.payload.job]?.queue === 'dev' ? `merged: ignored run.finished for run ${event.payload.runId}` : undefined;
 }
 
+/** Delivered (`done`, PR merged) or stopped by a human (its reason stays): a failure blocks it no more. */
+function settledTicket(ticket: TicketState): string | undefined {
+  if (ticket.logical === 'done' || ticket.prState === 'MERGED') return 'delivered';
+  return ticket.blocked && ticket.blockReason === STOPPED ? 'stopped' : undefined;
+}
+
+/**
+ * A dead-lettered event repaired by `factory run repair` (ORC-175). The block of that event is lifted
+ * first (`reduce` does the same), then a `replay` decides the event again on the unblocked ticket; a
+ * `force` records its facts (by `reduce`) without its decision, a `skip` drops it.
+ */
+function repair(state: TicketState | undefined, event: FactoryEvent<'dead_letter.repaired'>, workflow: Workflow): Decision {
+  const { eventId, action, by, event: repaired } = event.payload;
+  const lifted = state !== undefined && blockedByDeadLetter(state, eventId);
+  const base = lifted ? { ...state, blocked: false, blockReason: undefined } : state;
+  const out = action === 'replay' && repaired ? decide(base, repaired, workflow) : empty();
+  // Pushed, not put first: the trace of a replayed event keeps its fence first (`isFenced`).
+  out.trace.push(`built-in dead_letter.repaired: ${action} ${eventId}`);
+  if (lifted) out.effects.push({ kind: 'activity', type: 'response', body: `Événement ${eventId} réparé par ${by} (${REPAIR_LABELS[action]}) : le ticket est débloqué.` });
+  return out;
+}
+
+const REPAIR_LABELS: Record<RepairAction, string> = { replay: 'rejoué', skip: 'ignoré', force: 'forcé' };
+
 /** Pure: the same state, event and workflow always give the same decision. */
 export function decide(state: TicketState | undefined, event: FactoryEvent, workflow: Workflow): Decision {
+  if (event.type === 'dead_letter.repaired') return repair(state, event, workflow);
   const out = empty();
   const fence = staleAttempt(state, event, workflow);
   if (fence) {
@@ -327,13 +353,27 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
     }
     case 'effect.done':
       return out;
+    case 'dead_letter.added': {
+      // An event without a ticket, or a ticket the factory does not track: the dead letter waits for its repair.
+      if (!ticket) return out;
+      const settled = settledTicket(ticket);
+      if (settled) {
+        out.trace.push(`dead_letter.added ignored: ticket ${settled}`);
+        return out;
+      }
+      const reason = deadLetterReason(event.payload);
+      out.events.push({ type: 'ticket.blocked', reason });
+      out.effects.push({ kind: 'activity', type: 'error', body: `${reason} Un mainteneur peut le réparer : \`factory run repair ${ticket.ticketId}\`.` });
+      return out;
+    }
     case 'effect.failed': {
       // `settle` is a step of the shell, not an effect of the workflow: its failure is only logged.
       const { kind, error, eventId } = event.payload;
       if (kind === 'settle' || !ticket) return out;
       // Nothing left to block: a delivered ticket, or one a human stopped (its reason stays).
-      if (ticket.logical === 'done' || ticket.prState === 'MERGED' || (ticket.blocked && ticket.blockReason === STOPPED)) {
-        out.trace.push(`effect.failed ignored: ticket ${ticket.logical === 'done' || ticket.prState === 'MERGED' ? 'delivered' : 'stopped'}`);
+      const settled = settledTicket(ticket);
+      if (settled) {
+        out.trace.push(`effect.failed ignored: ticket ${settled}`);
         return out;
       }
       // The error notice of a block died: the ticket stays blocked for the reason the notice carried.

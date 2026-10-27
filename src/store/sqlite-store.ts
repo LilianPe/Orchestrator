@@ -1,5 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
+import {
+  deadLetteredEvent,
+  deadLetterNotice,
+  REPAIRED_STATUS,
+  repairEvent,
+  type DeadLetter,
+  type DeadLetterStatus,
+  type RepairAction,
+} from '../core/dead-letter.js';
 import type { OutboxEffect } from '../core/decision.js';
 import { normalizeTicket, type QueueName, type FactoryEvent, type TicketState } from '../core/types.js';
 import type { StoredEvent } from '../core/upcast.js';
@@ -38,7 +47,33 @@ CREATE INDEX IF NOT EXISTS outbox_open ON outbox (project_id, ticket_id, status,
 CREATE INDEX IF NOT EXISTS outbox_event ON outbox (event_id);
 CREATE TABLE IF NOT EXISTS workflow_versions (hash TEXT PRIMARY KEY, definition TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS decision_trace (event_id TEXT PRIMARY KEY, data TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS dead_letter (event_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, ticket_id TEXT, status TEXT NOT NULL, failures INTEGER NOT NULL, error TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, resolved_by TEXT, data TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS dead_letter_ticket ON dead_letter (ticket_id, status);
 `;
+
+interface DeadLetterSqlRow {
+  event_id: string;
+  project_id: string;
+  ticket_id: string | null;
+  status: DeadLetterStatus;
+  failures: number;
+  error: string;
+  resolved_by: string | null;
+  data: string;
+}
+
+function deadLetterRow(r: DeadLetterSqlRow): DeadLetter {
+  return {
+    eventId: r.event_id,
+    projectId: r.project_id,
+    ...(r.ticket_id === null ? {} : { ticketId: r.ticket_id }),
+    event: JSON.parse(r.data) as StoredEvent,
+    error: r.error,
+    failures: Number(r.failures),
+    status: r.status,
+    ...(r.resolved_by === null ? {} : { resolvedBy: r.resolved_by }),
+  };
+}
 
 /** Columns added after their table was first created (ORC-150): `ALTER TABLE` on an older file. */
 const ADDED_COLUMNS: [table: string, column: string, definition: string][] = [
@@ -323,6 +358,46 @@ export class SqliteStore implements Store {
   /** The result of an effect, to the inbox in the transaction that settles its row. */
   private appendResult(e: FactoryEvent): void {
     this.db.prepare('INSERT OR IGNORE INTO inbox (id, received_at, data) VALUES (?, ?, ?)').run(e.id, Date.now(), JSON.stringify(e));
+  }
+
+  async deadLetter(row: StoredEvent, error: string, at: number): Promise<boolean> {
+    return this.atomically(() => {
+      const marked = this.db.prepare('UPDATE inbox SET processed_at = ? WHERE id = ? AND processed_at IS NULL').run(this.now(), row.id);
+      if (Number(marked.changes) !== 1) return false;
+      const event = deadLetteredEvent(row);
+      const prev = this.db.prepare('SELECT failures FROM dead_letter WHERE event_id = ?').get(event.id) as { failures: number } | undefined;
+      const failures = Number(prev?.failures ?? 0) + 1;
+      this.db
+        .prepare(
+          `INSERT INTO dead_letter (event_id, project_id, ticket_id, status, failures, error, created_at, updated_at, data)
+           VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?)
+           ON CONFLICT (event_id) DO UPDATE SET status = 'open', failures = excluded.failures, error = excluded.error, updated_at = excluded.updated_at`,
+        )
+        .run(event.id, event.projectId, event.ticketId ?? null, failures, error, at, at, JSON.stringify(event));
+      const notice = deadLetterNotice({ event, error, failures }, at);
+      if (notice) this.db.prepare('INSERT OR IGNORE INTO inbox (id, received_at, data) VALUES (?, ?, ?)').run(notice.id, this.now(), JSON.stringify(notice));
+      return true;
+    });
+  }
+
+  async deadLetters(ticketId?: string): Promise<DeadLetter[]> {
+    const rows = this.db
+      .prepare(`SELECT * FROM dead_letter WHERE ? IS NULL OR ticket_id = ? ORDER BY status = 'open' DESC, created_at, event_id`)
+      .all(ticketId ?? null, ticketId ?? null) as unknown as DeadLetterSqlRow[];
+    return rows.map(deadLetterRow);
+  }
+
+  async repairDeadLetter(eventId: string, action: RepairAction, by: string, at: number): Promise<DeadLetter | undefined> {
+    return this.atomically(() => {
+      const row = this.db.prepare(`SELECT * FROM dead_letter WHERE event_id = ? AND status = 'open'`).get(eventId) as unknown as DeadLetterSqlRow | undefined;
+      if (!row) return undefined;
+      const status = REPAIRED_STATUS[action];
+      this.db.prepare('UPDATE dead_letter SET status = ?, resolved_by = ?, updated_at = ? WHERE event_id = ?').run(status, by, at, eventId);
+      const dl = { ...deadLetterRow(row), status, resolvedBy: by };
+      const repair = repairEvent(dl, action, by, at);
+      this.db.prepare('INSERT OR IGNORE INTO inbox (id, received_at, data) VALUES (?, ?, ?)').run(repair.id, this.now(), JSON.stringify(repair));
+      return dl;
+    });
   }
 
   async effectTickets(): Promise<{ projectId: string; ticketId?: string }[]> {

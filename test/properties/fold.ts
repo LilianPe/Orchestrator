@@ -3,6 +3,7 @@ import type { JobSpec, Workflow } from '../../src/config/workflow-schema.js';
 import type { Decision, Effect } from '../../src/core/decision.js';
 import { decide, refusesDevWork, sensitivePathsAtLaunch } from '../../src/core/engine.js';
 import { SETTLES_RUN } from '../../src/core/decision-plan.js';
+import { effectiveEvent } from '../../src/core/dead-letter.js';
 import { reduce } from '../../src/core/reduce.js';
 import { CREATES_TICKET, type FactoryEvent, type InternalEvent, type ShellEvent, type TicketState } from '../../src/core/types.js';
 import { loadTestWorkflow } from '../helpers/harness.js';
@@ -157,7 +158,7 @@ export function fold(entries: readonly Entry[], wf: Workflow, inbox: Inbox = mem
       steps.push({ kind: 'duplicate', event, before, after: before, journalEnd: journal.length });
       continue;
     }
-    if (!before && !CREATES_TICKET.has(event.type)) {
+    if (!before && !CREATES_TICKET.has(effectiveEvent(event).type)) {
       // Journaled, then dropped by the orchestrator: an event for a ticket it does not track decides nothing.
       journal.push(event);
       steps.push({ kind: 'ignored', event, before, after: before, journalEnd: journal.length });
@@ -189,7 +190,7 @@ export function fold(entries: readonly Entry[], wf: Workflow, inbox: Inbox = mem
     }
     // `settle`: once nothing is in flight, the pending job starts, unless startRun refuses it.
     const pending = state.pendingJob;
-    if (!SETTLES_RUN.has(event.type) || !pending || launched || state.activeRunId || state.verifyingRunId) continue;
+    if (!SETTLES_RUN.has(effectiveEvent(event).type) || !pending || launched || state.activeRunId || state.verifyingRunId) continue;
     const settledFrom = state;
     record({ type: 'pending.cleared' });
     const job = wf.jobs[pending.job];

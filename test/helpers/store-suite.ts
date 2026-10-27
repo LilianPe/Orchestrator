@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import type { AttemptLabels } from '../../src/core/attempt-labels.js';
-import { newTicketState, type FactoryEvent, type TicketState } from '../../src/core/types.js';
+import { newTicketState, TRUSTED, type FactoryEvent, type TicketState } from '../../src/core/types.js';
 import type { DecisionPlan, DecisionRequest, QueueItem, RunRecord, Store, WorkflowVersion } from '../../src/store/types.js';
 
 function run(patch: Partial<RunRecord> = {}): RunRecord {
@@ -568,5 +568,51 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     await s.putTicket(newTicketState('p', 'REL-1', 'T', 'todo', 1));
     expect(await s.updateTicket('p', 'REL-1', (t) => ({ ...t, blocked: true }))).toMatchObject({ blocked: true });
     expect(await s.getTicket('p', 'REL-1')).toMatchObject({ blocked: true });
+  });
+  it('sets a row whose decision threw aside in one transaction: dead letter, inbox mark, the blocking event (ORC-175)', async () => {
+    const s = await store();
+    await s.appendInbox(delegatedEvent('e1'));
+    await s.appendInbox(delegatedEvent('e2'));
+    expect(await s.deadLetter(delegatedEvent('e1'), 'boom', 50)).toBe(true);
+    // Once only: the row is no longer pending.
+    expect(await s.deadLetter(delegatedEvent('e1'), 'boom', 50)).toBe(false);
+    expect(await s.deadLetters('REL-1')).toEqual([
+      { eventId: 'e1', projectId: 'p', ticketId: 'REL-1', event: delegatedEvent('e1'), error: 'boom', failures: 1, status: 'open' },
+    ]);
+    expect(await s.deadLetters('REL-2')).toEqual([]);
+    expect((await s.deadLetters()).map((d) => d.eventId)).toEqual(['e1']);
+    // Not journaled, not pending: the row behind it is next, then the event that blocks the ticket.
+    expect(await s.recentEvents(10)).toEqual([]);
+    expect(await s.pendingInbox(10)).toEqual([
+      delegatedEvent('e2'),
+      { ...TRUSTED, id: 'dead-letter:e1:1', type: 'dead_letter.added', at: 50, projectId: 'p', ticketId: 'REL-1', payload: { eventId: 'e1', eventType: 'ticket.delegated', error: 'boom', failures: 1 } },
+    ]);
+  });
+
+  it('repairs an open dead letter once: its status, and the repair event in the inbox (ORC-175)', async () => {
+    const s = await store();
+    await s.appendInbox(delegatedEvent('e1'));
+    await s.deadLetter(delegatedEvent('e1'), 'boom', 50);
+    await s.markInboxProcessed('dead-letter:e1:1');
+    const repaired = await s.repairDeadLetter('e1', 'replay', 'armand', 60);
+    expect(repaired).toMatchObject({ eventId: 'e1', status: 'replayed', resolvedBy: 'armand', failures: 1 });
+    expect(await s.repairDeadLetter('e1', 'skip', 'armand', 61)).toBeUndefined();
+    expect(await s.repairDeadLetter('nope', 'skip', 'armand', 61)).toBeUndefined();
+    const [repair] = await s.pendingInbox(10);
+    expect(repair).toMatchObject({
+      id: 'repair:e1:1',
+      type: 'dead_letter.repaired',
+      at: 60,
+      ticketId: 'REL-1',
+      payload: { eventId: 'e1', action: 'replay', by: 'armand', event: { id: 'e1', type: 'ticket.delegated' } },
+    });
+    // The replay throws again: the same dead letter reopens, one failure more, with a new blocking event.
+    expect(await s.deadLetter(repair!, 'boom again', 70)).toBe(true);
+    expect(await s.deadLetters('REL-1')).toMatchObject([{ eventId: 'e1', status: 'open', failures: 2, error: 'boom again' }]);
+    expect((await s.pendingInbox(10)).map((e) => e.id)).toEqual(['dead-letter:e1:2']);
+    // A skip carries no event.
+    expect(await s.repairDeadLetter('e1', 'skip', 'lilian', 80)).toMatchObject({ status: 'skipped', resolvedBy: 'lilian', failures: 2 });
+    expect((await s.pendingInbox(10))[1]).toMatchObject({ id: 'repair:e1:2', payload: { eventId: 'e1', action: 'skip', by: 'lilian' } });
+    expect(((await s.pendingInbox(10))[1]!.payload as { event?: unknown }).event).toBeUndefined();
   });
 }

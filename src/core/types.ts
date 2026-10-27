@@ -77,6 +77,13 @@ export interface EventPayloads {
   'effect.done': EffectResultPayload;
   /** An outbox effect that failed on its last attempt (ORC-150): the ticket is blocked. */
   'effect.failed': EffectResultPayload & { error: string };
+  /** An event whose decision threw, set aside in `dead_letter` (ORC-175): the ticket is blocked. */
+  'dead_letter.added': { eventId: string; eventType: string; error: string; failures: number };
+  /**
+   * A dead-lettered event repaired by `factory run repair` (ORC-175): `replay` decides `event` again,
+   * `force` records its facts without its decision, `skip` drops it. Its block is lifted.
+   */
+  'dead_letter.repaired': { eventId: string; action: 'replay' | 'skip' | 'force'; by: string; event?: FactoryEvent };
 }
 
 export type EventType = keyof EventPayloads;

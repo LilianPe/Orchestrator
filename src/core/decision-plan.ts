@@ -1,5 +1,6 @@
 import type { Workflow } from '../config/workflow-schema.js';
 import type { DecisionPlan } from '../store/types.js';
+import { effectiveEvent } from './dead-letter.js';
 import type { OutboxEffect } from './decision.js';
 import { decide, isFenced } from './engine.js';
 import { reduce } from './reduce.js';
@@ -30,7 +31,9 @@ export interface PlanInput {
  */
 export function planDecision({ event, known, workflow, hash, now }: PlanInput): DecisionPlan {
   if (event.projectId === '*') return { ...NO_PLAN, effects: decide(undefined, event, workflow).effects, at: now };
-  if (!known && event.ticketId && !CREATES_TICKET.has(event.type)) {
+  // A repair that replays or forces an event (ORC-175) is planned as that event would be.
+  const decided = effectiveEvent(event);
+  if (!known && event.ticketId && !CREATES_TICKET.has(decided.type)) {
     return { ...NO_PLAN, at: now, note: `ignored ${event.type} for unmanaged ticket ${event.ticketId}` };
   }
   const decision = decide(known, event, workflow);
@@ -39,7 +42,7 @@ export function planDecision({ event, known, workflow, hash, now }: PlanInput): 
   const ticket = next && { ...next, updatedAt: now, workflowHash: hash };
   const effects: OutboxEffect[] = [...decision.effects];
   // After the effects, as before: start the ticket's pending job, then drain the queues.
-  if (ticket && SETTLES_RUN.has(event.type)) effects.push({ kind: 'settle' });
+  if (ticket && SETTLES_RUN.has(decided.type)) effects.push({ kind: 'settle' });
   return {
     ticket,
     effects,
