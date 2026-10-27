@@ -10,7 +10,7 @@ import type { RunRecord, Store } from '../store/types.js';
 import type { EventBus } from './bus.js';
 import type { Clock } from './clock.js';
 import type { Decision, Effect } from './decision.js';
-import { decide, isFenced } from './engine.js';
+import { decide, isFenced, refusesDevWork } from './engine.js';
 import { pickupFailures } from './pickup.js';
 import { buildPrompt, formatFeedback, formatVerifyFailures } from './prompt.js';
 import { reduce } from './reduce.js';
@@ -370,7 +370,8 @@ export class Orchestrator {
           }
           return;
         }
-        store.removeFromQueue(project.id, ticketId);
+        // The ticket's dev work only: a question waiting for its slot is still answered.
+        store.removeFromQueue(project.id, ticketId, 'dev');
         store.deleteTimersFor(project.id, ticketId);
         if (t.activeRunId) this.handles.get(t.activeRunId)?.stop();
         return;
@@ -439,9 +440,12 @@ export class Orchestrator {
     const job = project.workflow.jobs[opts.job];
     if (!job) return this.log('error', `unknown job ${opts.job}`);
     const t = this.ticket(project.id, ticketId);
-    if (job.queue === 'dev' && !t.delegated) {
+    // As decide refuses it, also for the starts it does not see: the pending job by settle, the queue by drain.
+    const refused = refusesDevWork(t, job);
+    if (refused === 'undelegated') {
       return this.log('warn', `refused ${job.name} on ${ticketId}: the ticket is not delegated to ${PRODUCT_NAME}`);
     }
+    if (refused === 'merged') return this.log('info', `refused ${job.name} on ${ticketId}: its PR is merged`);
     if (job.workspace === 'knowledge' && this.d.knowledgeConfigured === false) {
       this.log('info', `skipped ${job.name} on ${ticketId}: no knowledge repo configured`);
       if (opts.linearSessionId) {

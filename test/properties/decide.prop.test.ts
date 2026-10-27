@@ -218,11 +218,11 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
       TIMEOUT,
     );
 
-    it.fails(
-      'KNOWN VIOLATION — a reply in the dev session of a delegated ticket is recorded or delivered (lost in todo, ai_review, ready)',
+    it(
+      'a reply in the dev session of a delegated ticket is recorded or delivered, whatever its status (ORC-267)',
       () => {
         const counterexample = seq(...delegated(), reply());
-        violated('reply in the dev session', (s) => {
+        holds((s) => {
           for (const step of decided(run(s))) {
             const e = step.event;
             if (e.type !== 'session.prompted' || !step.after?.delegated || e.payload.linearSessionId !== step.after.linearSessionId) continue;
@@ -230,7 +230,7 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
             const delivered = step.decision.effects.some((x) => x.kind === 'start_run' && x.inputText === e.payload.body);
             expect(recorded || delivered, 'reply in the dev session recorded or delivered').toBe(true);
           }
-        }, counterexample);
+        }, [counterexample]);
       },
       TIMEOUT,
     );
@@ -274,26 +274,28 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
 
     it.todo('I8 (a) — the cancel event leads to the terminal status cancelled (no terminal status yet: run.cancel and statuses of ORC-133)');
 
+    // A human takes the ticket back (moves it anywhere but done, delegates it again) or a new PR opens: it is no longer delivered.
+    const reopens = (step: Step): boolean => {
+      if (step.kind !== 'decided') return false;
+      const e = step.event;
+      if (e.type === 'ticket.delegated') return true;
+      if (e.type === 'status.changed') return e.payload.to !== null && e.payload.to !== 'done';
+      return e.type === 'pr.opened' && e.payload.number !== step.before?.prNumber;
+    };
     const noDevRunAfterMerge = (s: Sequences): void => {
       let merged = false;
       for (const step of run(s).steps) {
+        if (reopens(step)) merged = false;
         if (merged) expect(starts(step).filter((e) => isDevStart(e, wf)), 'dev run started after pr.merged').toEqual([]);
         if (step.kind === 'decided' && step.event.type === 'pr.merged') merged = true;
       }
     };
-    it.fails(
-      'KNOWN VIOLATION — (b) after pr.merged, no event starts a dev run: a human relaunch',
+    it(
+      '(b) after pr.merged, no event starts a dev run (ORC-268)',
       () => {
+        // A human relaunch after the merge; and, found by fast-check, a run in flight at the merge whose checks then
+        // fail, a debounce armed before the merge that fires after it, and the job kept pending that settle starts.
         const relaunched = seq(...delegated(), ext('pr.merged', pr), ext('label.changed', { label: 'agent:reprendre', change: 'added' }));
-        violated('dev run started after pr.merged', noDevRunAfterMerge, relaunched);
-      },
-      TIMEOUT,
-    );
-
-    it.fails(
-      'KNOWN VIOLATION — (b) after pr.merged, no event starts a dev run: a run in flight at the merge whose checks then fail',
-      () => {
-        // Found by fast-check.
         const inFlight = seq(
           ...delegated(),
           runStarted(),
@@ -301,27 +303,9 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
           runFinished('success'),
           ext('verify.failed', { runId: 'r1', job: 'dev', failures: VERIFY_FAILURES }),
         );
-        violated('dev run started after pr.merged', noDevRunAfterMerge, inFlight);
-      },
-      TIMEOUT,
-    );
-
-    it.fails(
-      'KNOWN VIOLATION — (b) after pr.merged, no event starts a dev run: a debounce armed before the merge fires after it',
-      () => {
-        // Found by fast-check: pr.merged keeps the debounce timer, and debounce.fired starts its job whatever the status.
         const debounced = seq(...delegated('dev'), reply(), ext('pr.merged', pr), ext('debounce.fired', { job: 'dev-feedback' }));
-        violated('dev run started after pr.merged', noDevRunAfterMerge, debounced);
-      },
-      TIMEOUT,
-    );
-
-    it.fails(
-      'KNOWN VIOLATION — (b) after pr.merged, no event starts a dev run: settle starts the job kept pending before the merge',
-      () => {
-        // Found by fast-check once the fold modelled settle: pr.merged keeps the pending job, settle starts it when the run ends.
         const pending = seq(...delegated('dev'), runStarted(), reply(), ext('debounce.fired', { job: 'dev-feedback' }), ext('pr.merged', pr), runFinished('failure'));
-        violated('dev run started after pr.merged', noDevRunAfterMerge, pending);
+        holds(noDevRunAfterMerge, [relaunched, inFlight, debounced, pending]);
       },
       TIMEOUT,
     );
@@ -410,10 +394,14 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
       TIMEOUT,
     );
 
-    /** A run that reads the pending feedback while part of it came from an untrusted event is sandboxed, whoever starts it. */
-    const feedbackRunSandboxed = (s: Sequences): void => {
+    /**
+     * A run that reads the pending feedback while part of it came from an untrusted event is sandboxed: the
+     * runs `decide` starts, and with `settle`, the pending job the orchestrator starts later too.
+     */
+    const feedbackRunSandboxed = (settle: boolean) => (s: Sequences): void => {
       let untrustedPending = false;
       for (const step of run(s).steps) {
+        if (step.kind === 'settled' && !settle) continue;
         if (step.kind === 'shell' && step.event.type === 'run.started' && step.event.feedbackConsumed) untrustedPending = false;
         if (step.kind === 'decided' && step.event.taint === 'untrusted' && step.decision.events.some((e) => e.type === 'feedback.appended')) {
           untrustedPending = true;
@@ -424,11 +412,12 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
       }
     };
 
-    it.fails(
-      'KNOWN VIOLATION — untrusted feedback relayed by a later trusted event (debounce) still starts a sandboxed run',
+    it(
+      'untrusted feedback relayed by a later trusted event (debounce) still starts a sandboxed run (ORC-269)',
       () => {
+        // The runs decide starts; the pending job settle starts is the known violation below.
         const counterexample = seq(...delegated('dev'), reply('untrusted'), ext('debounce.fired', { job: 'dev-feedback' }));
-        violated('feedback run without the sensitive paths', feedbackRunSandboxed, counterexample);
+        holds(feedbackRunSandboxed(false), [counterexample]);
       },
       TIMEOUT,
     );
@@ -437,7 +426,9 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
       'KNOWN VIOLATION — untrusted feedback that arrives once its job is pending still starts a sandboxed run (settle)',
       () => {
         // Found by fast-check once the fold modelled settle: the pending job was decided before the untrusted
-        // reply came in, and settle starts it on all the pending feedback, the untrusted reply included.
+        // reply came in, and settle starts it on all the pending feedback, the untrusted reply included. The
+        // pending job, the queue item and the launch carry no taint: it is to be computed at launch from what the
+        // run reads, with the sensitive paths taken to the runner's sandbox (ORC-151).
         const counterexample = seq(
           ...delegated('dev'),
           runStarted(),
@@ -446,7 +437,7 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
           reply('untrusted'),
           runFinished('failure'),
         );
-        violated('feedback run without the sensitive paths', feedbackRunSandboxed, counterexample);
+        violated('feedback run without the sensitive paths', feedbackRunSandboxed(true), counterexample);
       },
       TIMEOUT,
     );

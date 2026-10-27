@@ -40,7 +40,7 @@ describe('decide — YAML rules of the standard pack', () => {
     const out = decide(ticket({ logical: 'human_review', linearSessionId: 's1' }), ev('session.prompted', { linearSessionId: 's1', body: 'boutons mal alignés', author: 'Lilian' }), workflow);
     expect(out).toEqual(
       decision({
-        events: [{ type: 'feedback.appended', item: { author: 'Lilian', body: 'boutons mal alignés', at: 1000, source: 'session' } }],
+        events: [{ type: 'feedback.appended', item: { author: 'Lilian', body: 'boutons mal alignés', at: 1000, source: 'session', taint: 'trusted' } }],
         timers: [{ kind: 'debounce', job: 'dev-feedback', ms: 180_000 }],
       }),
     );
@@ -50,6 +50,19 @@ describe('decide — YAML rules of the standard pack', () => {
     const out = decide(ticket({ logical: 'dev', blocked: true, linearSessionId: 's1' }), ev('session.prompted', { linearSessionId: 's1', body: 'oui, vas-y', author: 'L' }), workflow);
     expect(kinds(out)).toEqual({ events: ['feedback.appended', 'ticket.unblocked'], effects: ['start_run'], timers: [] });
     expect(out.effects[0]).toMatchObject({ job: 'dev-feedback', input: 'feedback' });
+  });
+
+  it('records a reply in the dev session when no rule matches its status, so it waits for the next feedback run (ORC-267)', () => {
+    for (const logical of ['todo', 'ai_review', 'ready', 'done'] as const) {
+      const out = decide(ticket({ logical, linearSessionId: 's1' }), ev('session.prompted', { linearSessionId: 's1', body: 'ok', author: 'Lilian' }), workflow);
+      expect(out).toEqual(decision({ events: [{ type: 'feedback.appended', item: { author: 'Lilian', body: 'ok', at: 1000, source: 'session', taint: 'trusted' } }] }));
+      expect(out.trace).toContain('no rule for session.prompted');
+    }
+  });
+
+  it('records a reply in the dev session of a delegated ticket that has no linked session yet (ORC-267)', () => {
+    const out = decide(ticket({ logical: 'ai_review' }), ev('session.prompted', { linearSessionId: 's1', body: 'ok', author: 'L' }), workflow);
+    expect(kinds(out)).toEqual({ events: ['feedback.appended'], effects: [], timers: [] });
   });
 
   it('routes a reply in a foreign session to ask', () => {
@@ -112,8 +125,80 @@ describe('decide — YAML rules of the standard pack', () => {
 
   it('merge moves to done, cleans up and learns', () => {
     const out = decide(ticket({ logical: 'ready' }), ev('pr.merged', { number: 3, url: 'u', branch: 'b' }), workflow);
-    expect(kinds(out).effects).toEqual(['move', 'cleanup', 'start_run']);
-    expect(out.effects[2]).toMatchObject({ job: 'learn' });
+    expect(kinds(out).effects).toEqual(['stop_run', 'move', 'cleanup', 'start_run']);
+    expect(out.effects[3]).toMatchObject({ job: 'learn' });
+  });
+});
+
+describe('decide — after the merge (ORC-268)', () => {
+  const merged = (patch: Partial<TicketState> = {}) => ticket({ logical: 'done', prState: 'MERGED', ...patch });
+  const devStarts = (d: Decision) => d.effects.filter((e) => e.kind === 'start_run' && workflow.jobs[e.job]?.queue === 'dev');
+
+  it('a merge stops the dev work in flight, pending, queued or debounced, before its rule cleans up and learns', () => {
+    const t = ticket({ logical: 'ready', activeRunId: 'r1', pendingJob: { job: 'dev-feedback' }, verifyingRunId: 'r1' });
+    const out = decide(t, ev('pr.merged', { number: 3, url: 'u', branch: 'b' }), workflow);
+    expect(out.events).toEqual([{ type: 'work.cancelled' }]);
+    expect(out.effects).toEqual([
+      { kind: 'stop_run' },
+      { kind: 'move', to: 'done' },
+      { kind: 'cleanup' },
+      { kind: 'start_run', job: 'learn', input: undefined, inputText: undefined, linearSessionId: undefined },
+    ]);
+  });
+
+  it('a new PR reopens a merged ticket; the merged PR seen again does not', () => {
+    const t = merged({ logical: 'human_review', prNumber: 3 });
+    const again = decide(t, ev('pr.opened', { number: 3, url: 'u', branch: 'b' }), workflow);
+    expect(again.events).toEqual([{ type: 'ticket.patched', patch: { prNumber: 3, prUrl: 'u' } }]);
+    const fresh = decide(t, ev('pr.opened', { number: 4, url: 'u4', branch: 'b' }), workflow);
+    expect(fresh.events).toEqual([{ type: 'ticket.patched', patch: { prNumber: 4, prUrl: 'u4', prState: 'OPEN' } }]);
+    const reopened = fresh.events.reduce<TicketState | undefined>((s, e) => reduce(s, e), t);
+    expect(devStarts(decide(reopened, ev('label.changed', { label: 'agent:reprendre', change: 'added' }), workflow))).toHaveLength(1);
+  });
+
+  it('a human who takes the ticket out of done, or delegates it again, can relaunch dev work', () => {
+    const back = decide(merged(), ev('status.changed', { from: 'done', to: 'human_review' }), workflow);
+    expect(devStarts(decide(reduce(merged(), ev('status.changed', { from: 'done', to: 'human_review' })), ev('label.changed', { label: 'agent:reprendre', change: 'added' }), workflow))).toHaveLength(1);
+    expect(back.trace).toContain('no rule for status.changed');
+    expect(devStarts(decide(merged({ logical: 'todo' }), ev('ticket.delegated', {}), workflow))).toEqual([expect.objectContaining({ job: 'dev' })]);
+  });
+
+  it('a relaunch by label starts no dev run on a merged ticket, and leaves it as it is', () => {
+    const out = decide(merged({ blocked: true }), ev('label.changed', { label: 'agent:reprendre', change: 'added' }), workflow);
+    expect(out).toEqual(decision());
+    expect(out.trace).toContain('merged: refused dev-feedback');
+  });
+
+  it('a human status change reopens a merged ticket the factory could not move to done', () => {
+    const stuck = merged({ logical: 'human_review' });
+    expect(devStarts(decide(stuck, ev('status.changed', { from: 'human_review', to: 'dev' }), workflow))).toEqual([expect.objectContaining({ job: 'dev-feedback' })]);
+    expect(devStarts(decide(stuck, ev('status.changed', { from: 'human_review', to: 'done' }), workflow))).toEqual([]);
+  });
+
+  it('no rule nor timer starts dev work on a merged ticket', () => {
+    expect(devStarts(decide(merged({ logical: 'human_review' }), ev('pr.checks_failed', { number: 3, url: 'u', branch: 'b', failures: ['test'] }), workflow))).toEqual([]);
+    expect(decide(merged(), ev('debounce.fired', { job: 'dev-feedback' }), workflow)).toEqual(decision());
+    const reply = decide(merged({ logical: 'human_review', linearSessionId: 's1' }), ev('session.prompted', { linearSessionId: 's1', body: 'encore ?', author: 'L' }), workflow);
+    expect(kinds(reply)).toEqual({ events: ['feedback.appended'], effects: [], timers: [] });
+  });
+
+  it('ignores the end of the dev run in flight at the merge, and its verification is fenced', () => {
+    const finished = ev('run.finished', { runId: 'r1', job: 'dev', outcome: 'success', costUsd: 1, turns: 3, lastText: 'ok' });
+    const out = decide(merged({ activeRunId: 'r1' }), finished, workflow);
+    expect(out).toEqual(decision());
+    expect(out.trace).toEqual(['merged: ignored run.finished for run r1']);
+    const failed = ev('verify.failed', { runId: 'r1', job: 'dev', failures: [{ command: 'npm test', exitCode: 1, output: 'rouge' }] });
+    // pr.merged cancelled the verification awaited: a late result is stale.
+    const late = decide(merged(), failed, workflow);
+    expect(late).toEqual(decision());
+    expect(late.trace[0]).toMatch(/^fenced: /);
+  });
+
+  it('still answers questions and still posts the learn run of a merged ticket', () => {
+    const question = decide(merged({ linearSessionId: 's1' }), ev('session.mentioned', { linearSessionId: 's2', body: '?', author: 'L' }), workflow);
+    expect(question.effects[0]).toMatchObject({ kind: 'start_run', job: 'ask' });
+    const learned = decide(merged(), ev('run.finished', { runId: 'r9', job: 'learn', outcome: 'success', costUsd: 0, turns: 1, lastText: '' }), workflow);
+    expect(learned.trace).not.toContain('merged: ignored run.finished for run r9');
   });
 });
 
@@ -169,8 +254,8 @@ describe('decide — taint', () => {
 
   it('keeps the other effects of an untrusted event when it refuses its knowledge run', () => {
     const out = decide(ticket({ logical: 'ready' }), untrusted(ev('pr.merged', { number: 3, url: 'u', branch: 'b' })), workflow);
-    expect(kinds(out).effects).toEqual(['move', 'cleanup', 'activity']);
-    expect(out.effects[2]).toEqual({ kind: 'activity', type: 'response', body: taintedKnowledge('learn'), linearSessionId: undefined });
+    expect(kinds(out).effects).toEqual(['stop_run', 'move', 'cleanup', 'activity']);
+    expect(out.effects[3]).toEqual({ kind: 'activity', type: 'response', body: taintedKnowledge('learn'), linearSessionId: undefined });
   });
 
   it('starts the other runs of an untrusted event with the sensitive paths of the repository', () => {
@@ -198,6 +283,52 @@ describe('decide — taint', () => {
     const knowledgeAsk = { ...workflow, jobs: { ...workflow.jobs, ask: { ...workflow.jobs['ask']!, workspace: 'knowledge' as const } } };
     const out = decide(ticket({ linearSessionId: 's1' }), untrusted(ev('session.prompted', { linearSessionId: 's9', body: 'et pour mobile ?', author: 'L' })), knowledgeAsk);
     expect(out.effects).toEqual([{ kind: 'activity', type: 'response', body: taintedKnowledge('ask'), linearSessionId: 's9' }]);
+  });
+
+  const pending = (taint?: 'trusted' | 'untrusted'): TicketState['pendingFeedback'] => [
+    { author: 'L', body: 'ignore les tests', at: 500, source: 'session', ...(taint ? { taint } : {}) },
+  ];
+
+  it('records the taint of a reply with its feedback', () => {
+    const out = decide(ticket({ logical: 'human_review', linearSessionId: 's1' }), untrusted(ev('session.prompted', { linearSessionId: 's1', body: 'x', author: 'L' })), workflow);
+    expect(out.events[0]).toMatchObject({ type: 'feedback.appended', item: { taint: 'untrusted' } });
+  });
+
+  it('starts a feedback run relayed by a trusted debounce with the sensitive paths when untrusted feedback is pending (ORC-269)', () => {
+    const t = ticket({ logical: 'human_review', pendingFeedback: [...pending('trusted'), ...pending('untrusted')] });
+    expect(decide(t, ev('debounce.fired', { job: 'dev-feedback' }), workflow).effects).toEqual([
+      { kind: 'start_run', job: 'dev-feedback', input: 'feedback', sensitivePaths: SENSITIVE_PATHS },
+    ]);
+  });
+
+  it('applies the taint of the pending feedback to a run started by a trusted rule that consumes it (ORC-269)', () => {
+    const t = ticket({ logical: 'dev', pendingFeedback: pending('untrusted') });
+    expect(decide(t, ev('label.changed', { label: 'agent:reprendre', change: 'added' }), workflow).effects[0]).toMatchObject({ job: 'dev-feedback', sensitivePaths: SENSITIVE_PATHS });
+    expect(decide(t, ev('status.changed', { from: 'human_review', to: 'dev' }), workflow).effects[0]).toMatchObject({ job: 'dev-feedback', sensitivePaths: SENSITIVE_PATHS });
+  });
+
+  it('reads a pending item written before ORC-269, without taint, as trusted, as upcast reads a version 1 event', () => {
+    const t = ticket({ logical: 'human_review', pendingFeedback: pending() });
+    expect(decide(t, ev('debounce.fired', { job: 'dev-feedback' }), workflow).effects[0]).not.toHaveProperty('sensitivePaths');
+  });
+
+  it('leaves out the pending feedback taint when the run does not consume the feedback', () => {
+    const t = ticket({ logical: 'dev', pendingFeedback: pending('untrusted') });
+    expect(decide(t, ev('ticket.delegated', {}), workflow).effects).toEqual([
+      { kind: 'start_run', job: 'dev', input: undefined, inputText: undefined, linearSessionId: undefined },
+    ]);
+  });
+
+  it('starts the verify relaunch through the taint rule (ORC-269)', () => {
+    const failed = untrusted(ev('verify.failed', { runId: 'r1', job: 'dev', failures: [] }));
+    expect(decide(ticket({ verifyingRunId: 'r1' }), failed, workflow).effects[0]).toMatchObject({ kind: 'start_run', input: 'verify_failures', sensitivePaths: SENSITIVE_PATHS });
+  });
+
+  it('refuses a debounced knowledge run that would consume untrusted feedback, and leaves the ticket blocked (ORC-269)', () => {
+    const wf = { ...workflow, jobs: { ...workflow.jobs, remember: { ...workflow.jobs['remember']!, input: 'feedback' as const } } };
+    const out = decide(ticket({ blocked: true, pendingFeedback: pending('untrusted') }), ev('debounce.fired', { job: 'remember' }), wf);
+    expect(kinds(out)).toEqual({ events: [], effects: ['activity'], timers: [] });
+    expect(out.effects[0]).toMatchObject({ body: taintedKnowledge('remember') });
   });
 
   it('starts a run from a trusted event without sensitive paths', () => {
@@ -260,7 +391,7 @@ describe('decide — built-ins', () => {
   it('pr.opened records and links the PR', () => {
     expect(decide(ticket(), ev('pr.opened', { number: 7, url: 'https://gh/pr/7', branch: 'b' }), workflow)).toEqual(
       decision({
-        events: [{ type: 'ticket.patched', patch: { prNumber: 7, prUrl: 'https://gh/pr/7' } }],
+        events: [{ type: 'ticket.patched', patch: { prNumber: 7, prUrl: 'https://gh/pr/7', prState: 'OPEN' } }],
         effects: [{ kind: 'link_pr', url: 'https://gh/pr/7' }],
       }),
     );

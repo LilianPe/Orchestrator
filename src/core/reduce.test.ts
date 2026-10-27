@@ -52,7 +52,26 @@ describe('reduce — facts carried by external events', () => {
 
   it('events that carry no ticket fact leave the state as it was', () => {
     const t = ticket({ logical: 'dev' });
-    expect(reduce(t, ev('pr.merged', { number: 1, url: 'u', branch: 'b' }))).toEqual(t);
+    expect(reduce(t, ev('pr.closed', { number: 1, url: 'u', branch: 'b' }))).toEqual(t);
+  });
+
+  it('a merge records the PR as merged, the fact decide reads to start no dev work any more (ORC-268)', () => {
+    expect(reduce(ticket({ logical: 'ready' }), ev('pr.merged', { number: 1, url: 'u', branch: 'b' }))).toEqual(
+      ticket({ logical: 'ready', prState: 'MERGED', prNumber: 1, prUrl: 'u' }),
+    );
+  });
+
+  it('a human who takes a merged ticket out of done, or delegates it again, reopens it (ORC-268)', () => {
+    const merged = ticket({ logical: 'done', delegated: true, prState: 'MERGED', prNumber: 1 });
+    expect(reduce(merged, ev('status.changed', { from: 'done', to: 'dev' }))).toMatchObject({ logical: 'dev', prState: undefined, prNumber: 1 });
+    expect(reduce(merged, ev('ticket.delegated', {}))!.prState).toBeUndefined();
+    expect(reduce(merged, ev('status.changed', { from: 'done', to: 'done' }))!.prState).toBe('MERGED');
+  });
+
+  it('a human status change reopens a merged ticket whose move to done failed (ORC-268)', () => {
+    const merged = ticket({ logical: 'ready', prState: 'MERGED' });
+    expect(reduce(merged, ev('status.changed', { from: 'ready', to: 'dev' }))).toMatchObject({ logical: 'dev', prState: undefined });
+    expect(reduce(merged, ev('status.changed', { from: 'ready', to: 'done' }))!.prState).toBe('MERGED');
   });
 
   it('without a ticket, there is nothing to reduce', () => {

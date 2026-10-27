@@ -155,7 +155,7 @@ Jobs du pack :
 
 ## 3. Les règles `on`
 
-`on` associe un type d'événement à une **liste ordonnée** de règles. Pour un événement donné, Relais parcourt la liste et applique **la première règle qui correspond, et elle seule**. Si aucune ne correspond, il ne se passe rien.
+`on` associe un type d'événement à une **liste ordonnée** de règles. Pour un événement donné, Relais parcourt la liste et applique **la première règle qui correspond, et elle seule**. Si aucune ne correspond, il ne se passe rien, sauf pour une réponse dans la session dev du ticket, qui est toujours gardée (voir `session.prompted`).
 
 ### Événements configurables
 
@@ -164,14 +164,14 @@ Jobs du pack :
 | `ticket.delegated` | Le ticket est délégué à Relais dans Linear. | — |
 | `status.changed` | Le ticket change de statut dans Linear (par un humain). | Filtrable avec `from` / `to`. Les déplacements faits par Relais lui-même ne génèrent pas cet événement. |
 | `session.mentioned` | `@relais …` dans un commentaire, quand le premier mot n'est pas une commande. | — |
-| `session.prompted` | Réponse dans une session Linear de Relais. | Quand une règle correspond, le message est d'abord ajouté aux retours en attente (`input: feedback`). Dans une session de question, Relais lance directement `ask`, sans lire les règles. |
+| `session.prompted` | Réponse dans une session Linear de Relais. | Dans la session dev d'un ticket délégué, le message est toujours ajouté aux retours en attente (`input: feedback`), qu'une règle corresponde ou non : sans règle pour l'état du ticket (`todo`, `ai_review`, `ready`, `done` dans le pack), il attend le prochain run qui lit les retours (`input: feedback` : `dev-feedback` dans le pack). Dans une session de question, Relais lance directement `ask`, sans lire les règles. |
 | `session.stopped` | Bouton « stop » dans Linear, ou ticket retiré à l'agent. | Dans une session de question, Relais arrête la réponse en cours, sans lire les règles. |
 | `label.changed` | Un label est ajouté au ticket (par un humain). | Filtrable avec `label` (seul l'ajout correspond ; Relais ne produit pas encore d'événement pour un retrait). |
 | `push.human` | Un humain pousse un commit sur la branche du ticket. | Aucune règle dans le pack. Relais ne reçoit pas encore cet événement (webhooks GitHub : ORC-134). |
 | `command` | `@relais <mot> …` quand `<mot>` est une valeur `say` de la liste `command`. | Filtrable avec `say`. |
 | `pr.checks_passed` | La CI de la PR passe. | — |
 | `pr.checks_failed` | La CI de la PR échoue. | — |
-| `pr.merged` | La PR est mergée. | — |
+| `pr.merged` | La PR est mergée. | Avant les règles, Relais note la PR comme mergée et arrête le travail du ticket comme un `stop`, sans le bloquer : run `dev` en cours arrêté, runs en attente ou en file et minuteries `debounce` supprimés. Ensuite, plus aucun job de la file `dev` ne démarre sur le ticket, quelle que soit la règle, la minuterie ou l'attente qui le demande (`agent:reprendre`, réponse, CI rouge, job en attente ou en file) : le refus est seulement tracé, sans message dans Linear. La fin du run `dev` arrêté et ses vérifications sont ignorées. Les règles s'appliquent après l'arrêt : `done`, nettoyage et `learn` ne changent pas, et les jobs de la file `questions` (`learn`, `ask`) tournent toujours. Le ticket redevient actif quand un humain change son statut pour autre chose que *Done* (aussi quand Relais n'a pas pu le passer en *Done*), le délègue à nouveau, ou qu'une nouvelle PR (autre numéro) est relevée pour lui. Le relevé GitHub ne regarde plus un ticket en *Done* dont la PR est mergée : une nouvelle PR n'est vue qu'une fois le ticket sorti de *Done*. |
 | `pr.closed` | La PR est fermée sans merge. | — |
 
 Le pack n'utilise pas `pr.checks_passed` ni `pr.closed` : vous pouvez y ajouter vos propres règles.
@@ -182,8 +182,8 @@ Ces types sont acceptés par le chargeur, mais Relais les traite en dur : une r�
 
 | Événement | Comportement fixe |
 |---|---|
-| `run.finished` | Succès : vérifications si le job en a, sinon `on_success`. Échec ou limite : ticket bloqué (file `dev`) ou message d'erreur (file `questions`). Run arrêté : rien. |
-| `verify.passed` / `verify.failed` | `on_success`, ou nouvelle tentative, ou blocage (voir `verify`). |
+| `run.finished` | Succès : vérifications si le job en a, sinon `on_success`. Échec ou limite : ticket bloqué (file `dev`) ou message d'erreur (file `questions`). Run arrêté : rien. Fin d'un run de la file `dev` après le merge de la PR : rien. |
+| `verify.passed` / `verify.failed` | `on_success`, ou nouvelle tentative, ou blocage (voir `verify`). Après le merge de la PR : rien. |
 | `debounce.fired` | Lance le job dont le délai `debounce` vient d'expirer (et débloque le ticket). |
 | `pr.opened` | Mémorise la PR et l'attache à la session Linear. |
 | `control.pause` / `control.resume` / `control.stop` | Pause / reprise de la file, arrêt d'un ticket (interface, `relais pause`, `relais resume`, `relais stop`). |
@@ -192,7 +192,7 @@ Tout autre nom sous `on` est refusé (`on.<nom>: unknown event type`), sauf les 
 
 Les événements qui concernent un ticket que Relais ne suit pas encore sont ignorés, sauf `ticket.delegated`, `session.mentioned`, `session.prompted` et `command`, qui l'ajoutent au suivi.
 
-**Événements non fiables.** Chaque événement porte une étiquette de confiance (`taint`). Un événement marqué `untrusted` (contenu venu d'une source que l'orchestrateur ne tient pas pour fiable) ne lance jamais un job `workspace: knowledge` (`learn`, `remember`) : la règle s'applique sans ce run, et une activité Linear explique le refus. Les autres runs que l'événement demande portent la liste des chemins sensibles qu'ils ne doivent pas écrire (`.github/**`, `.factory/**`, `.claude/**`, `CODEOWNERS`, `.env*`). Aujourd'hui, aucune source ne marque d'événement `untrusted` (ORC-160) et rien n'applique encore cette liste (sandbox du runner, ORC-151). L'étiquette n'est pas conservée dans l'état du ticket : un run qui ne part pas au traitement de l'événement, ou qui lit un contenu que le ticket a gardé, démarre sans elle (à reprendre avec ORC-160).
+**Événements non fiables.** Chaque événement porte une étiquette de confiance (`taint`). Un événement marqué `untrusted` (contenu venu d'une source que l'orchestrateur ne tient pas pour fiable) ne lance jamais un job `workspace: knowledge` (`learn`, `remember`) : la règle s'applique sans ce run, et une activité Linear explique le refus. Les autres runs que l'événement demande portent la liste des chemins sensibles qu'ils ne doivent pas écrire (`.github/**`, `.factory/**`, `.claude/**`, `CODEOWNERS`, `.env*`). Aujourd'hui, aucune source ne marque d'événement `untrusted` (ORC-160) et rien n'applique encore cette liste (sandbox du runner, ORC-151). Chaque retour en attente garde l'étiquette de l'événement qui l'a apporté : un run qui lit les retours (`input: feedback`) est non fiable dès qu'un de ces retours l'est, même lancé plus tard par un événement fiable (fin de `debounce`, label `agent:reprendre`, passage en `dev`). Un retour enregistré avant cette règle, sans étiquette, compte comme fiable, comme un événement de la première version du journal : aucune source ne marquait alors d'événement `untrusted`. Les autres runs, relance de `verify` comprise, ne prennent que l'étiquette de leur événement, même quand ils reprennent une session Claude qui a lu un contenu non fiable (à reprendre avec ORC-160).
 
 ### Champs d'une règle
 
@@ -230,7 +230,7 @@ Il n'existe pas de champ `post` dans une règle : la publication du résultat se
 |---|---|
 | `ticket.delegated` | si `state in [todo, dev] && !blocked` → `dev` |
 | `status.changed` | de `human_review` vers `dev` → `dev-feedback` ; vers `ai_review` → `review` |
-| `session.prompted` | si `blocked` → `dev-feedback` immédiatement ; si `state in [dev, human_review]` → `dev-feedback` après 3 min sans nouveau message |
+| `session.prompted` | si `blocked` → `dev-feedback` immédiatement ; si `state in [dev, human_review]` → `dev-feedback` après 3 min sans nouveau message ; sinon, le message reste dans les retours en attente |
 | `session.mentioned` | → `ask` |
 | `command` | `retiens` → `remember` ; `fais-le` → `propose_delegate` |
 | `label.changed` | `agent:reprendre` → `dev-feedback` ; `agent:stop` → `stop` |

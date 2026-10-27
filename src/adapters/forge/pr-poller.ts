@@ -31,7 +31,13 @@ export class PrPoller {
 
   private async pollTicket(t: TicketState): Promise<void> {
     {
-      if (!t.branch || t.logical === "done") return;
+      if (!t.branch) return;
+      // Done in Linear is not merged: Linear may move the ticket before a poll sees the merge, and only
+      // pr.merged marks it delivered (I8 b). A done ticket with a known PR is watched until that PR is seen
+      // merged or closed (its number kept in `finalKey`, so a new PR is watched again).
+      const finalKey = `pr-final:${t.projectId}:${t.ticketId}`;
+      const done = t.logical === "done";
+      if (done && (!t.prNumber || t.prState === "MERGED" || this.d.store.getMeta(finalKey) === String(t.prNumber))) return;
       const project = this.d.projects.find((p) => p.id === t.projectId);
       if (!project) return;
       let pr;
@@ -52,24 +58,13 @@ export class PrPoller {
           type: "pr.opened",
           payload,
         });
-      if (pr.state === "MERGED") {
-        this.d.submit({
-          ...base,
-          id: `pr:${t.ticketId}:${pr.number}:merged`,
-          type: "pr.merged",
-          payload,
-        });
+      if (pr.state === "MERGED" || pr.state === "CLOSED") {
+        if (pr.state === "MERGED") this.d.submit({ ...base, id: `pr:${t.ticketId}:${pr.number}:merged`, type: "pr.merged", payload });
+        else this.d.submit({ ...base, id: `pr:${t.ticketId}:${pr.number}:closed`, type: "pr.closed", payload });
+        if (done) this.d.store.setMeta(finalKey, String(pr.number));
         return;
       }
-      if (pr.state === "CLOSED") {
-        this.d.submit({
-          ...base,
-          id: `pr:${t.ticketId}:${pr.number}:closed`,
-          type: "pr.closed",
-          payload,
-        });
-        return;
-      }
+      if (done) return;
       const metaKey = `checks:${t.projectId}:${t.ticketId}`;
       if (pr.checks === "none") return;
       const last = this.d.store.getMeta(metaKey);

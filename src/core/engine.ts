@@ -2,7 +2,7 @@ import type { JobSpec, Rule, Workflow } from '../config/workflow-schema.js';
 import { evalCondition } from './conditions.js';
 import type { Decision, Effect } from './decision.js';
 import { reduce } from './reduce.js';
-import type { EventType, FactoryEvent, TicketState, VerifyFailure } from './types.js';
+import type { EventType, FactoryEvent, InputKind, Taint, TicketState, VerifyFailure } from './types.js';
 
 type StartRun = Extract<Effect, { kind: 'start_run' }>;
 
@@ -49,19 +49,53 @@ export function isQuestionSession(ticket: TicketState | undefined, sessionId: st
   return !!ticket.linearSessionId && sessionId !== ticket.linearSessionId;
 }
 
-function refusesRun(event: FactoryEvent, job: JobSpec): boolean {
-  return job.workspace === 'knowledge' && event.taint === 'untrusted';
+/**
+ * The strongest taint of what a run reads: its event, and the ticket's pending feedback when the run
+ * consumes it, even if a trusted event (a timer, a label) starts it (I12). An item without taint was
+ * written before ORC-269, when no source marked an event untrusted: it stays trusted, as `upcast` reads
+ * a version 1 event, so that replaying the journal gives the same decisions.
+ */
+function runTaint(event: FactoryEvent, ticket: TicketState | undefined, input: InputKind | undefined): Taint {
+  if (event.taint === 'untrusted') return 'untrusted';
+  const feedback = input === 'feedback' ? (ticket?.pendingFeedback ?? []) : [];
+  return feedback.some((f) => f.taint === 'untrusted') ? 'untrusted' : 'trusted';
 }
 
-/** Starts `job`, unless untrusted content would write the knowledge base: then explains the refusal instead. */
-function startRun(out: Decision, event: FactoryEvent, job: JobSpec, run: Omit<StartRun, 'kind' | 'job'>): void {
-  if (refusesRun(event, job)) {
+/**
+ * Why a dev-queue job may not run on the ticket at all: its PR is merged (I8 b), or it is not delegated.
+ * `decide` and `Orchestrator.startRun` (for the starts `decide` does not see) both apply it.
+ */
+export function refusesDevWork(ticket: TicketState | undefined, job: JobSpec): 'undelegated' | 'merged' | undefined {
+  if (job.queue !== 'dev' || !ticket) return undefined;
+  if (ticket.prState === 'MERGED') return 'merged';
+  return ticket.delegated ? undefined : 'undelegated';
+}
+
+/** Why `job` must not start: the ticket's PR is merged (I8 b), or untrusted content would write the knowledge base (I12). */
+function refusal(event: FactoryEvent, ticket: TicketState | undefined, job: JobSpec, taint = runTaint(event, ticket, job.input)): 'merged' | 'taint' | undefined {
+  if (refusesDevWork(ticket, job) === 'merged') return 'merged';
+  return job.workspace === 'knowledge' && taint === 'untrusted' ? 'taint' : undefined;
+}
+
+/**
+ * Starts `job`, unless the ticket is delivered (traced only) or untrusted content would write the knowledge
+ * base (the refusal is explained). Every `start_run` of `decide` goes through here, so both rules apply
+ * whatever branch starts the run.
+ */
+function startRun(out: Decision, event: FactoryEvent, ticket: TicketState | undefined, job: JobSpec, run: Omit<StartRun, 'kind' | 'job'>): void {
+  const taint = runTaint(event, ticket, run.input ?? job.input);
+  const refused = refusal(event, ticket, job, taint);
+  if (refused === 'merged') {
+    out.trace.push(`merged: refused ${job.name}`);
+    return;
+  }
+  if (refused === 'taint') {
     out.trace.push(`taint: refused ${job.name}`);
     out.effects.push({ kind: 'activity', type: 'response', body: taintedKnowledge(job.name), linearSessionId: run.linearSessionId });
     return;
   }
   const effect: StartRun = { kind: 'start_run', job: job.name, ...run };
-  out.effects.push(event.taint === 'untrusted' ? { ...effect, sensitivePaths: SENSITIVE_PATHS } : effect);
+  out.effects.push(taint === 'untrusted' ? { ...effect, sensitivePaths: SENSITIVE_PATHS } : effect);
 }
 
 /** Non-delegated tickets only ever get question-queue work. */
@@ -93,15 +127,17 @@ function ruleMatches(rule: Rule, event: FactoryEvent, ticket: TicketState | unde
   return true;
 }
 
+/** Records a reply in the ticket's dev session: it waits in pendingFeedback for the next run that consumes it (I6). */
+function appendFeedback(out: Decision, event: FactoryEvent<'session.prompted'>): void {
+  out.events.push({
+    type: 'feedback.appended',
+    item: { author: event.payload.author, body: event.payload.body, at: event.at, source: 'session', taint: event.taint },
+  });
+}
+
 function applyRule(out: Decision, rule: Rule, event: FactoryEvent, ticket: TicketState | undefined, workflow: Workflow): Decision {
-  if (event.type === 'session.prompted') {
-    out.events.push({
-      type: 'feedback.appended',
-      item: { author: event.payload.author, body: event.payload.body, at: event.at, source: 'session' },
-    });
-  }
   const job = rule.run ? workflow.jobs[rule.run]! : undefined;
-  if (job && !refusesRun(event, job) && ticket?.blocked) out.events.push({ type: 'ticket.unblocked' });
+  if (job && !refusal(event, ticket, job) && ticket?.blocked) out.events.push({ type: 'ticket.unblocked' });
   if (rule.move) out.effects.push({ kind: 'move', to: rule.move });
   if (rule.labels) out.effects.push({ kind: 'labels', add: rule.labels.add, remove: rule.labels.remove });
   if (rule.comment) out.effects.push({ kind: 'comment', body: rule.comment });
@@ -115,11 +151,11 @@ function applyRule(out: Decision, rule: Rule, event: FactoryEvent, ticket: Ticke
     });
   }
   if (!job) return out;
-  if (rule.debounceMs && rule.debounceMs > 0 && !refusesRun(event, job)) {
+  if (rule.debounceMs && rule.debounceMs > 0 && !refusal(event, ticket, job)) {
     out.timers.push({ kind: 'debounce', job: job.name, ms: rule.debounceMs });
   } else {
     const threaded = event.type === 'session.mentioned' || event.type === 'command';
-    startRun(out, event, job, {
+    startRun(out, event, ticket, job, {
       input: job.input,
       inputText: threaded ? event.payload.body : undefined,
       linearSessionId: threaded ? event.payload.linearSessionId : undefined,
@@ -147,12 +183,26 @@ function staleAttempt(state: TicketState | undefined, event: FactoryEvent, workf
   return undefined;
 }
 
+/**
+ * The end of the dev run in flight when the PR was merged: traced, never acted on (I8 b). Its verification
+ * cannot follow: pr.merged cancels the one awaited, so a later verify.* is fenced as stale.
+ */
+function afterMerge(state: TicketState | undefined, event: FactoryEvent, workflow: Workflow): string | undefined {
+  if (state?.prState !== 'MERGED' || event.type !== 'run.finished') return undefined;
+  return workflow.jobs[event.payload.job]?.queue === 'dev' ? `merged: ignored run.finished for run ${event.payload.runId}` : undefined;
+}
+
 /** Pure: the same state, event and workflow always give the same decision. */
 export function decide(state: TicketState | undefined, event: FactoryEvent, workflow: Workflow): Decision {
   const out = empty();
   const fence = staleAttempt(state, event, workflow);
   if (fence) {
     out.trace.push(`${FENCED}${fence}`);
+    return out;
+  }
+  const merged = afterMerge(state, event, workflow);
+  if (merged) {
+    out.trace.push(merged);
     return out;
   }
   // Rules read the ticket as it is once the event's own facts are recorded (new status, delegation…).
@@ -199,7 +249,8 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
       const { failures, job } = event.payload;
       if (used + 1 < workflow.limits.verifyAttempts) {
         out.events.push({ type: 'ticket.patched', patch: { verifyAttempts: used + 1 } });
-        out.effects.push({ kind: 'start_run', job, input: 'verify_failures', inputText: JSON.stringify(failures), resume: true });
+        const spec = workflow.jobs[job];
+        if (spec) startRun(out, event, ticket, spec, { input: 'verify_failures', inputText: JSON.stringify(failures), resume: true });
         return out;
       }
       const reason = `Vérifications toujours en échec après ${workflow.limits.verifyAttempts} tentatives.`;
@@ -208,14 +259,27 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
     case 'debounce.fired': {
       const job = workflow.jobs[event.payload.job];
       if (!job) return out;
-      if (ticket?.blocked) out.events.push({ type: 'ticket.unblocked' });
-      out.effects.push({ kind: 'start_run', job: job.name, input: job.input });
+      if (ticket?.blocked && !refusal(event, ticket, job)) out.events.push({ type: 'ticket.unblocked' });
+      startRun(out, event, ticket, job, { input: job.input });
       return out;
     }
-    case 'pr.opened':
-      out.events.push({ type: 'ticket.patched', patch: { prNumber: event.payload.number, prUrl: event.payload.url } });
+    case 'pr.merged':
+      // Delivered: the dev run in flight stops, and nothing pending, queued or debounced starts after the merge.
+      // Before the rule's effects, so its cleanup and learn run come after the stop.
+      out.trace.push('built-in pr.merged: work cancelled');
+      out.events.push({ type: 'work.cancelled' });
+      out.effects.push({ kind: 'stop_run' });
+      break;
+    case 'pr.opened': {
+      // A new PR (another number) reopens a delivered ticket; the same PR seen again leaves it as it is.
+      const reopens = event.payload.number !== ticket?.prNumber;
+      out.events.push({
+        type: 'ticket.patched',
+        patch: { prNumber: event.payload.number, prUrl: event.payload.url, ...(reopens ? { prState: 'OPEN' as const } : {}) },
+      });
       out.effects.push({ kind: 'link_pr', url: event.payload.url });
       return out;
+    }
     case 'session.stopped': {
       const sessionId = event.payload.linearSessionId;
       if (isQuestionSession(ticket, sessionId)) {
@@ -232,9 +296,11 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
       if (isQuestionSession(ticket, event.payload.linearSessionId)) {
         out.trace.push('built-in session.prompted (question session)');
         const ask = workflow.jobs['ask'];
-        if (ask) startRun(out, event, ask, { input: 'thread', inputText: event.payload.body, linearSessionId: event.payload.linearSessionId });
+        if (ask) startRun(out, event, ticket, ask, { input: 'thread', inputText: event.payload.body, linearSessionId: event.payload.linearSessionId });
         return out;
       }
+      // A reply in the dev session is kept whether a rule matches or not (I6).
+      if (ticket) appendFeedback(out, event);
       break;
     default:
       break;

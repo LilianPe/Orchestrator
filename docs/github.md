@@ -85,7 +85,7 @@ Avec un jeton à granularité fine : *Contents* lecture/écriture, *Pull request
 
 ## Ce que Relais relève
 
-Toutes les 30 s, pour chaque ticket suivi qui a une branche et n'est pas `done` :
+Toutes les 30 s, pour chaque ticket suivi qui a une branche et n'est pas `done` (un ticket passé en `done` avant que le relevé voie le merge de sa PR connue reste relevé, pour le seul merge ou la fermeture de cette PR, jusqu'à ce qu'il les voie : Linear peut le passer en *Done* avant, et seul `pr.merged` arrête le travail de code) :
 
 - `GET /repos/{owner}/{repo}/pulls?head={owner}:{branche}&state=all` : la PR de la branche (ouverte, mergée, fermée) ;
 - si elle est ouverte, `GET /repos/{owner}/{repo}/commits/{sha}/check-runs` et `GET /repos/{owner}/{repo}/commits/{sha}/status` : état agrégé de la CI (`fail` si un check échoue ou est annulé, `pending` si un check tourne, `pass` sinon, `none` sans check).
@@ -99,7 +99,7 @@ Au moment d'un run `dev-feedback`, les fils de review **non résolus** sont lus 
 | Nouvelle PR pour la branche | `pr.opened` | URL ajoutée à la session Linear |
 | CI qui passe au rouge | `pr.checks_failed` (avec la liste des checks en échec) | `fix-ci` si le ticket est en *Human Review* ou *AI Review* et non bloqué |
 | CI qui passe au vert | `pr.checks_passed` | rien |
-| PR mergée | `pr.merged` | *Done*, worktree supprimé, `learn` |
+| PR mergée | `pr.merged` | *Done*, worktree supprimé, `learn` ; ensuite, plus aucun run de code sur le ticket |
 | PR fermée sans merge | `pr.closed` | rien |
 
 Un changement d'état de CI n'est signalé qu'une fois (pas à chaque relevé). Les commentaires de review **non résolus** de la PR sont relus au moment d'un run `dev-feedback` (entrée `feedback`) : résolvez un fil sur GitHub pour qu'il ne soit plus renvoyé à l'agent.
