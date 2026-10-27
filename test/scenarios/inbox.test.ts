@@ -2,6 +2,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { stringify } from 'yaml';
 import { TRUSTED } from '../../src/core/types.js';
 import { SqliteStore } from '../../src/store/sqlite-store.js';
 import type { Store } from '../../src/store/types.js';
@@ -114,6 +115,62 @@ describe('inbox: written before the answer, processed from the inbox', () => {
     expect(await h.ticket()).toMatchObject({ delegated: true });
     const types = (await h.store.recentEvents(50, 'REL-1')).map((e) => e.type).reverse();
     expect(types.filter((t) => t === 'ticket.delegated' || t === 'session.prompted')).toEqual(['ticket.delegated', 'session.prompted']);
+    expect(await h.store.pendingInbox(10)).toEqual([]);
+  });
+
+  it('frees the slot of a run whose result is held behind a failed event of its ticket', async () => {
+    const inner = new SqliteStore(':memory:');
+    let failNext = false;
+    const store = Object.assign(Object.create(inner) as SqliteStore, {
+      putTicket: async (t: Parameters<SqliteStore['putTicket']>[0]) => {
+        if (failNext) {
+          failNext = false;
+          throw new Error('database down');
+        }
+        return inner.putTicket(t);
+      },
+    });
+    const h = createHarness({ store, projectYaml: stringify({ version: 1, limits: { parallel_sessions: 1 } }) });
+    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+    h.tracker.addIssue({ identifier: 'REL-2', title: 'Import CSV' });
+    h.runner.enqueue({ hold: true });
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    const [run] = h.runner.requests;
+    failNext = true;
+    await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'et le PDF ?', author: 'L' });
+    h.runner.release(run!.runId);
+    await h.orch.idle();
+    expect((await h.store.pendingInbox(10)).map((e) => e.type)).toEqual(['session.prompted', 'run.finished']);
+    // The only dev slot is free again: another ticket starts its run.
+    await h.send('ticket.delegated', { linearSessionId: 'ls-2' }, 'REL-2');
+    expect(h.runner.requests).toHaveLength(2);
+  });
+
+  it('settles at the next start, with its real result, a run whose result was written but not processed', async () => {
+    const inner = new SqliteStore(':memory:');
+    let failNext = false;
+    const store = Object.assign(Object.create(inner) as SqliteStore, {
+      // The crash between the inbox write and the processing: the result is not journaled yet.
+      recordEvent: async (e: Parameters<SqliteStore['recordEvent']>[0]) => {
+        if (failNext) {
+          failNext = false;
+          throw new Error('database down');
+        }
+        return inner.recordEvent(e);
+      },
+    });
+    const h = createHarness({ store, preset: testPreset() });
+    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+    h.runner.enqueue({ hold: true });
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    failNext = true;
+    h.runner.release(h.runner.requests[0]!.runId);
+    await h.orch.idle();
+    expect((await h.store.pendingInbox(10)).map((e) => e.type)).toEqual(['run.finished']);
+
+    // recover() runs before the replay: it must not block the ticket and fence the result.
+    await h.restart();
+    expect(await h.ticket()).toMatchObject({ logical: 'human_review', blocked: false });
     expect(await h.store.pendingInbox(10)).toEqual([]);
   });
 

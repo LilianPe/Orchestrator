@@ -18,6 +18,7 @@ import { upcast, type StoredEvent } from './upcast.js';
 import type { Scheduler } from './scheduler.js';
 import {
   CREATES_TICKET,
+  type EventPayloads,
   type EventType,
   type InputKind,
   type InternalEvent,
@@ -223,6 +224,7 @@ export class Orchestrator {
             const ticket = row.ticketId === undefined ? undefined : `${row.projectId}:${row.ticketId}`;
             if (ticket !== undefined && this.skippedTickets.has(ticket)) {
               this.skipped.add(row.id);
+              await this.freeSlot(row);
               this.log('error', `event ${row.id} (${row.type}) kept in the inbox behind a failed event of ${row.ticketId}, for the next start`);
               continue;
             }
@@ -246,7 +248,19 @@ export class Orchestrator {
       this.skipped.add(row.id);
       if (row.ticketId !== undefined) this.skippedTickets.add(`${row.projectId}:${row.ticketId}`);
       this.log('error', `event ${row.id} (${row.type}): ${(err as Error).message} (kept in the inbox for the next start)`);
+      await this.freeSlot(row);
     }
+  }
+
+  /**
+   * A run result left pending still frees its run's slot: held until the next start, it would
+   * otherwise keep the slot taken and, slot after slot, stop every launch. The slots are in memory,
+   * so the replay at the next start frees nothing twice.
+   */
+  private async freeSlot(row: StoredEvent): Promise<void> {
+    if (row.type !== 'run.finished') return;
+    const run = await this.d.store.getRun((row.payload as EventPayloads['run.finished']).runId).catch(() => undefined);
+    if (run) this.d.scheduler.release(`${run.ticketId}:${run.queue}`);
   }
 
   async idle(): Promise<void> {
@@ -270,9 +284,18 @@ export class Orchestrator {
   /**
    * Settles runs cut by a crash (`running`) or a shutdown (`interrupted`) and blocks their tickets.
    * The matching Linear notices are posted by announceRecovery().
+   *
+   * A run or check whose result is in the inbox, written before the crash and not yet processed,
+   * is left alone: the inbox replay settles it with its real result, which a block would fence.
    */
   async recover(): Promise<void> {
     const { store } = this.d;
+    const finished = new Set<string>();
+    const checked = new Set<string>();
+    for (const row of await store.pendingInbox(Number.MAX_SAFE_INTEGER)) {
+      if (row.type === 'run.finished') finished.add((row.payload as EventPayloads['run.finished']).runId);
+      if (row.type === 'verify.passed' || row.type === 'verify.failed') checked.add((row.payload as { runId: string }).runId);
+    }
     const block = (t: TicketState, reason: string): Promise<TicketState> => {
       this.recoveryNotices.push({ ticket: { projectId: t.projectId, ticketId: t.ticketId }, type: 'elicitation', body: reason });
       return this.apply(t, { type: 'run.interrupted', reason });
@@ -289,11 +312,11 @@ export class Orchestrator {
       }
     }
     for (let t of await store.listTickets()) {
-      if (t.activeRunId) {
+      if (t.activeRunId && !finished.has(t.activeRunId)) {
         const r = await store.getRun(t.activeRunId);
         if (!r || r.status !== 'running') t = await block(t, `${PRODUCT_NAME} a redémarré pendant le run. Répondez dans le fil pour relancer.`);
       }
-      if (t.verifyingRunId) await block(t, `${PRODUCT_NAME} a redémarré pendant les vérifications. Répondez dans le fil pour relancer.`);
+      if (t.verifyingRunId && !checked.has(t.verifyingRunId)) await block(t, `${PRODUCT_NAME} a redémarré pendant les vérifications. Répondez dans le fil pour relancer.`);
     }
   }
 

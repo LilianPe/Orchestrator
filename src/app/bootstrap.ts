@@ -243,6 +243,9 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
         : undefined,
     });
 
+    // Linear before any source: the first event accepted dispatches the inbox's older rows too,
+    // and they need the tracker to be processed rather than left for the next start.
+    const linearConnected = await connectLinear();
     const server = serve({ fetch: app.fetch, port, hostname: instance.host });
     const relay = instance.relay.kind === 'smee' ? startSmeeRelay({ url: instance.relay.url, onWebhook: ingest, log }) : undefined;
     let purgeInterval: NodeJS.Timeout | undefined;
@@ -277,7 +280,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       }, 60_000);
       tickInterval.unref();
       poller.start();
-      if (await connectLinear()) {
+      if (linearConnected) {
         await orchestrator.announceRecovery();
         reconciler.start();
       }
