@@ -19,7 +19,10 @@ export interface TomlTable {
 const BARE_KEY = /[A-Za-z0-9_-]/;
 const ESCAPES: Record<string, string> = { b: '\b', t: '\t', n: '\n', f: '\f', r: '\r', '"': '"', '\\': '\\' };
 
-const isTable = (v: TomlValue | undefined): v is TomlTable => typeof v === 'object' && v !== null && !Array.isArray(v);
+/** Number, boolean, date or time, read in place (sticky: no copy of the rest of the file). */
+const SCALAR = /[A-Za-z0-9_:.+-]+(?: [0-9]{2}:[0-9:.+\-Z]*)?/y;
+
+export const isTable = (v: TomlValue | undefined): v is TomlTable => typeof v === 'object' && v !== null && !Array.isArray(v);
 
 export function parseToml(text: string): TomlTable {
   const src = text.replace(/\r\n/g, '\n');
@@ -28,9 +31,10 @@ export function parseToml(text: string): TomlTable {
   let current = root;
 
   const line = (): number => src.slice(0, i).split('\n').length;
-  const fail = (message: string): never => {
+  // A declaration, not an arrow in a const: TypeScript narrows after a call to it.
+  function fail(message: string): never {
     throw new TomlError(message, line());
-  };
+  }
   const skipSpaces = (): void => {
     while (src[i] === ' ' || src[i] === '\t') i++;
   };
@@ -127,8 +131,11 @@ export function parseToml(text: string): TomlTable {
       const next = t[k];
       if (next === undefined) t = t[k] = {};
       else if (isTable(next)) t = next;
-      else if (Array.isArray(next) && isTable(next[next.length - 1])) t = next[next.length - 1] as TomlTable;
-      else fail(`'${k}' is not a table`);
+      else {
+        const last = Array.isArray(next) ? next.at(-1) : undefined;
+        if (isTable(last)) t = last;
+        else fail(`'${k}' is not a table`);
+      }
     }
     return t;
   };
@@ -183,10 +190,11 @@ export function parseToml(text: string): TomlTable {
       }
     }
     // Number, boolean, date or time: kept as raw text.
-    const m = /^[A-Za-z0-9_:.+-]+(?: [0-9]{2}:[0-9:.+\-Z]*)?/.exec(src.slice(i));
+    SCALAR.lastIndex = i;
+    const m = SCALAR.exec(src);
     if (!m) fail('expected a value');
-    i += m![0].length;
-    return m![0];
+    i += m[0].length;
+    return m[0];
   };
 
   while (i < src.length) {
@@ -194,17 +202,18 @@ export function parseToml(text: string): TomlTable {
     if (i >= src.length) break;
     if (src[i] === '[') {
       const isArray = src[i + 1] === '[';
-      i += isArray ? 2 : 1;
+      const close = isArray ? ']]' : ']';
+      i += close.length;
       const path = key();
-      if (!src.startsWith(isArray ? ']]' : ']', i)) fail('unterminated table header');
-      i += isArray ? 2 : 1;
+      if (!src.startsWith(close, i)) fail('unterminated table header');
+      i += close.length;
       if (isArray) {
         const parent = tableAt(root, path.slice(0, -1));
         const last = path[path.length - 1]!;
         const list = parent[last] ?? (parent[last] = []);
         if (!Array.isArray(list)) fail(`'${last}' is not an array of tables`);
         const t: TomlTable = {};
-        (list as TomlValue[]).push(t);
+        list.push(t);
         current = t;
       } else current = tableAt(root, path);
       endOfLine();

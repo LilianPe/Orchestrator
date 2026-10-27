@@ -1,6 +1,6 @@
 import { posix } from 'node:path';
 import type { Ecosystem, PackageRegistry, RegistryLookup } from './registry.js';
-import { parseToml, type TomlTable, type TomlValue } from './toml.js';
+import { isTable, parseToml, type TomlTable, type TomlValue } from './toml.js';
 
 /**
  * `factory/dependances`: blocks a change that adds a package missing from its registry, or one
@@ -127,7 +127,7 @@ export function manifestKind(path: string): ManifestKind | undefined {
 export const normalizePypiName = (name: string): string => name.replace(/[-_.]+/g, '-').toLowerCase();
 
 const NPM_NAME = /^(?:@[a-z0-9~-][a-z0-9._~-]*\/)?[a-z0-9~-][a-z0-9._~-]*$/i;
-export const isValidNpmName = (name: string): boolean => name.length > 0 && name.length <= 214 && NPM_NAME.test(name);
+const isValidNpmName = (name: string): boolean => name.length > 0 && name.length <= 214 && NPM_NAME.test(name);
 
 interface Declared {
   ecosystem: Ecosystem;
@@ -170,14 +170,14 @@ function fileSource(manifest: string, s: string): DependencySource {
 
 const NPM_SECTIONS = ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies'] as const;
 
+/** `name@range` → `name`, scope kept (`@s/n@1` → `@s/n`). */
+const stripVersion = (name: string): string => name.replace(/(.)@.*$/, '$1');
+const isAlias = (spec: string): boolean => spec.trim().startsWith('npm:');
+
 function npmDeclared(manifest: string, declared: string, spec: string): Declared {
   const s = spec.trim();
   const base = { ecosystem: 'npm' as const, name: declared, declared, spec };
-  if (s.startsWith('npm:')) {
-    const target = s.slice(4);
-    const at = target.indexOf('@', 1);
-    return { ...base, name: at === -1 ? target : target.slice(0, at), source: 'registry' };
-  }
+  if (isAlias(s)) return { ...base, name: stripVersion(s.slice(4)), source: 'registry' };
   if (s.startsWith('workspace:')) return { ...base, source: 'local' };
   if (/^(?:file|link|portal):/i.test(s) || /^(\.{1,2}(\/|$)|\/|~\/)/.test(s)) return { ...base, source: fileSource(manifest, s) };
   // git, tarball URL, hosted shortcuts, other protocols and the `user/repo` shorthand (a version range never contains `/`).
@@ -189,7 +189,7 @@ function npmDeclared(manifest: string, declared: string, spec: string): Declared
 function overrideTarget(key: string): string {
   const segments = (key.split('>').pop() ?? key).trim().replace(/^\*\*\//, '').split('/');
   const last = segments.length > 1 && segments.at(-2)!.startsWith('@') ? segments.slice(-2).join('/') : segments.at(-1)!;
-  return last.replace(/(.)@.*$/, '$1');
+  return stripVersion(last);
 }
 
 /**
@@ -209,7 +209,7 @@ function npmOverrides(m: Manifest, v: unknown, where: string, parent?: string): 
     if (typeof spec !== 'string') throw new ManifestError(`« ${where} » : la valeur de « ${path} » n'est pas une chaîne`);
     if (spec.startsWith('$')) continue;
     const d = npmDeclared(m.path, overrideTarget(path), spec);
-    if (d.source === 'registry' && !spec.trim().startsWith('npm:')) continue;
+    if (d.source === 'registry' && !isAlias(spec)) continue;
     m.deps.push({ ...d, declared: `${where} ${path}` });
   }
 }
@@ -245,11 +245,13 @@ function pypiDeclared(declared: string, spec: string, source: DependencySource):
   return { ecosystem: 'pypi', name: normalizePypiName(declared), declared, spec, source };
 }
 
+/** A bare path or URL names no package: kept as written. */
+const unnamed = (req: string, source: DependencySource): Declared => ({ ecosystem: 'pypi', name: req, declared: req, spec: req, source });
+
 /** One PEP 508 requirement, or a bare URL or path as `pip` accepts them in a requirements file. */
 function readRequirement(m: Manifest, text: string, where: string): Declared {
   const req = text.trim();
-  // A path is not a package name: kept as written.
-  if (isPathSpec(req)) return { ...pypiDeclared(req, req, fileSource(m.path, req)), name: req };
+  if (isPathSpec(req)) return unnamed(req, fileSource(m.path, req));
   const pep = PEP508.exec(req);
   const rest = pep?.[2]!.trim() ?? '';
   if (pep && rest.startsWith('@')) {
@@ -259,7 +261,7 @@ function readRequirement(m: Manifest, text: string, where: string): Declared {
   if (pep && (rest === '' || /^[<>=!~(;,]/.test(rest))) return pypiDeclared(pep[1]!, rest, 'registry');
   if (req.includes('://') || /^git\+/.test(req)) {
     const egg = /[#&]egg=([A-Za-z0-9._-]+)/.exec(req);
-    return egg ? pypiDeclared(egg[1]!, req, 'remote') : { ...pypiDeclared(req, req, 'remote'), name: req };
+    return egg ? pypiDeclared(egg[1]!, req, 'remote') : unnamed(req, 'remote');
   }
   throw new ManifestError(`${where} : exigence illisible « ${req} »`);
 }
@@ -302,8 +304,7 @@ function readRequirements(m: Manifest, text: string): void {
   });
 }
 
-const asTable = (v: TomlValue | undefined): TomlTable | undefined =>
-  typeof v === 'object' && v !== null && !Array.isArray(v) ? v : undefined;
+const asTable = (v: TomlValue | undefined): TomlTable | undefined => (isTable(v) ? v : undefined);
 const at = (t: TomlTable | undefined, dotted: string): TomlValue | undefined =>
   dotted.split('.').reduce<TomlValue | undefined>((v, k) => asTable(v)?.[k], t);
 
@@ -329,10 +330,13 @@ function requirementTables(m: Manifest, v: TomlValue | undefined, where: string,
  * soon as one names a git repository, a URL, another index or a path outside the repository; local
  * when all name a path or workspace; the registry otherwise.
  */
+const unreadableSource = (): never => {
+  throw new ManifestError('source de dépendance illisible');
+};
+
 function tablesSource(manifest: string, spec: TomlValue, remoteKeys: readonly string[]): DependencySource {
-  const tables = (Array.isArray(spec) ? spec : [spec]).map(asTable);
-  if (tables.length === 0 || tables.some((t) => t === undefined)) throw new ManifestError('source de dépendance illisible');
-  const ts = tables as TomlTable[];
+  const ts = (Array.isArray(spec) ? spec : [spec]).map((t) => asTable(t) ?? unreadableSource());
+  if (ts.length === 0) unreadableSource();
   const outside = (t: TomlTable): boolean => 'path' in t && (typeof t.path !== 'string' || pathSource(manifest, t.path) === 'remote');
   if (ts.some((t) => remoteKeys.some((k) => k in t) || outside(t))) return 'remote';
   return ts.every((t) => 'path' in t || 'workspace' in t) ? 'local' : 'registry';
@@ -347,8 +351,8 @@ function poetryTable(m: Manifest, v: TomlValue | undefined, where: string): void
   if (!t) throw new ManifestError(`« ${where} » n'est pas une table`);
   for (const [name, spec] of Object.entries(t)) {
     if (name.toLowerCase() === 'python') continue;
-    if (typeof spec === 'string') m.deps.push(pypiDeclared(name, spec, 'registry'));
-    else m.deps.push(pypiDeclared(name, JSON.stringify(spec), tablesSource(m.path, spec, POETRY_REMOTE)));
+    const table = typeof spec !== 'string';
+    m.deps.push(pypiDeclared(name, table ? JSON.stringify(spec) : spec, table ? tablesSource(m.path, spec, POETRY_REMOTE) : 'registry'));
   }
 }
 
@@ -412,7 +416,7 @@ const READERS: Record<Exclude<ManifestKind, 'unsupported'>, (m: Manifest, text: 
 /** A git, URL or path source is compared with its spec: pointing an existing name elsewhere adds it. */
 const keyOf = (d: Declared): string =>
   d.source === 'registry' ? `${d.ecosystem}:${d.name}` : `${d.ecosystem}:${d.source}:${d.name}:${d.spec}`;
-const directiveKey = (ecosystem: Ecosystem, directive: string): string => `${ecosystem}:directive:${directive}`;
+const directiveKey = (d: { ecosystem: Ecosystem; directive: string }): string => `${d.ecosystem}:directive:${d.directive}`;
 
 export interface AddedDirective {
   ecosystem: Ecosystem;
@@ -448,29 +452,30 @@ export function addedDependencies(changes: ManifestChange[]): Additions {
       continue;
     }
     const ecosystem: Ecosystem = kind === 'package.json' ? 'npm' : 'pypi';
-    const read = (text: string): Manifest => {
+    const read = (text: string | null): { deps: AddedDependency[]; directives: AddedDirective[] } | ManifestError | undefined => {
+      if (text === null) return undefined;
       const m: Manifest = { path: change.path, deps: [], directives: [] };
-      READERS[kind](m, text);
-      return m;
+      try {
+        READERS[kind](m, text);
+      } catch (err) {
+        if (err instanceof ManifestError) return err;
+        throw err;
+      }
+      return {
+        deps: m.deps.map((d) => ({ ...d, manifest: change.path })),
+        directives: m.directives.map((directive) => ({ ecosystem, directive, manifest: change.path })),
+      };
     };
-    if (change.before !== null) {
-      try {
-        const m = read(change.before);
-        for (const d of m.deps) seen.add(keyOf(d));
-        for (const directive of m.directives) seen.add(directiveKey(ecosystem, directive));
-      } catch (err) {
-        if (!(err instanceof ManifestError)) throw err;
-      }
+    const before = read(change.before);
+    if (before && !(before instanceof ManifestError)) {
+      for (const d of before.deps) seen.add(keyOf(d));
+      for (const d of before.directives) seen.add(directiveKey(d));
     }
-    if (change.after !== null) {
-      try {
-        const m = read(change.after);
-        for (const d of m.deps) deps.push({ ...d, manifest: change.path });
-        for (const directive of m.directives) directives.push({ ecosystem, directive, manifest: change.path });
-      } catch (err) {
-        if (!(err instanceof ManifestError)) throw err;
-        unreadable.push({ manifest: change.path, error: err.message });
-      }
+    const after = read(change.after);
+    if (after instanceof ManifestError) unreadable.push({ manifest: change.path, error: after.message });
+    else if (after) {
+      deps.push(...after.deps);
+      directives.push(...after.directives);
     }
   }
   // Declared before (in any manifest) or already listed: not added.
@@ -481,7 +486,7 @@ export function addedDependencies(changes: ManifestChange[]): Additions {
   };
   return {
     added: deps.filter((d) => isNew(keyOf(d))),
-    directives: directives.filter((d) => isNew(directiveKey(d.ecosystem, d.directive))),
+    directives: directives.filter((d) => isNew(directiveKey(d))),
     unreadable,
     unsupported,
   };
@@ -555,7 +560,7 @@ export async function checkDependencies(input: DependencyCheckInput): Promise<De
     const key = `${ecosystem}:${name}`;
     let p = lookups.get(key);
     if (!p) {
-      p = limit(async () => input.registry.lookup(ecosystem, name)).catch(
+      p = limit(() => input.registry.lookup(ecosystem, name)).catch(
         (err: unknown): RegistryLookup => ({ status: 'unknown', reason: err instanceof Error ? err.message : String(err) }),
       );
       lookups.set(key, p);

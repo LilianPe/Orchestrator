@@ -10,10 +10,6 @@ export class FakePackageRegistry implements PackageRegistry {
     this.packages = { npm: new Set(packages.npm), pypi: new Set(packages.pypi) };
   }
 
-  add(ecosystem: Ecosystem, name: string): void {
-    this.packages[ecosystem].add(name);
-  }
-
   fail(ecosystem: Ecosystem, name: string, reason = 'registry unreachable'): void {
     this.failing.set(`${ecosystem}:${name}`, reason);
   }

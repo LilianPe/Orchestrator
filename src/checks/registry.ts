@@ -26,8 +26,8 @@ export interface HttpPackageRegistryOptions {
 const trimSlash = (url: string): string => url.replace(/\/+$/, '');
 
 /** `@scope/name` is one path segment for the npm registry: the slash is encoded. */
-export const npmPath = (name: string): string =>
-  name.startsWith('@') ? `@${encodeURIComponent(name.slice(1)).replace(/%2F/i, '%2f')}` : encodeURIComponent(name);
+const npmPath = (name: string): string =>
+  name.startsWith('@') ? `@${encodeURIComponent(name.slice(1)).replace(/%2F/, '%2f')}` : encodeURIComponent(name);
 
 /** Public npm registry and PyPI JSON API. 404 is `missing`; any other non-200 or a network error is `unknown`. */
 export class HttpPackageRegistry implements PackageRegistry {
