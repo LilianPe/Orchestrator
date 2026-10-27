@@ -82,3 +82,23 @@ describe('Worker', () => {
     expect((await store.listEffects('p', 'REL-1'))[0]).toMatchObject({ status: 'running', lease: (other as OutboxRow).lease });
   });
 });
+
+describe('Worker.start', () => {
+  it('retries a failed row in process once started as the daemon does (start() no longer leaves it stopped)', async () => {
+    let failures = 2;
+    const { store, worker, executed } = setup({
+      retry: { attempts: 5, baseMs: 5 },
+      prepare: async (e) => {
+        if (failures-- > 0) throw new Error('Linear unreachable');
+        return e;
+      },
+    });
+    worker.start(60_000);
+    await store.appendInbox(event('e1'));
+    await worker.kick();
+    for (let i = 0; i < 200 && executed.length < 2; i++) await new Promise((r) => setTimeout(r, 5));
+    worker.stop();
+    await worker.settle();
+    expect(executed).toEqual(['REL-1:1:1', 'REL-1:1:2']);
+  });
+});

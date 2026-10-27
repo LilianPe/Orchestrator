@@ -136,6 +136,7 @@ export class Worker {
   /** Polls the store (rows written by another process, leases expired): the daemon's loop. */
   start(intervalMs = 1000): void {
     this.stop();
+    this.stopped = false;
     this.poller = setInterval(() => {
       this.waited.clear();
       this.kick().catch((err: unknown) => this.d.log('error', `worker: ${(err as Error).message}`));
