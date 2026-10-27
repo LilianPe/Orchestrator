@@ -1,9 +1,11 @@
 import type { Workflow } from '../config/workflow-schema.js';
 import { NO_PLAN, planDecision } from '../core/decision-plan.js';
-import { SCHEMA_VERSION } from '../core/types.js';
+import { SCHEMA_VERSION, type FactoryEvent } from '../core/types.js';
 import { upcast } from '../core/upcast.js';
 import type { DecisionPlan, DecisionRecord, JournalEntry, Store } from '../store/types.js';
 import { canonical } from './workflow-version.js';
+
+const isObject = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v);
 
 /** Version of the exported journal file (`factory replay --export`). */
 export const JOURNAL_FORMAT = 1;
@@ -35,7 +37,7 @@ export async function exportJournal(store: Store, projectId: string, ticketId?: 
 /** Parses an exported journal; throws on another format. */
 export function readJournal(text: string, source = 'journal'): ExportedJournal {
   const j = JSON.parse(text) as Partial<ExportedJournal>;
-  if (j.format !== JOURNAL_FORMAT || typeof j.projectId !== 'string' || !Array.isArray(j.entries) || typeof j.workflows !== 'object') {
+  if (j.format !== JOURNAL_FORMAT || typeof j.projectId !== 'string' || !Array.isArray(j.entries) || !isObject(j.workflows)) {
     throw new Error(`${source} : pas un journal exporté au format ${JOURNAL_FORMAT}`);
   }
   return j as ExportedJournal;
@@ -86,7 +88,6 @@ export interface ReplayReport {
 /** JSON as the store keeps it: `undefined` fields dropped. */
 const json = (v: unknown): unknown => (v === undefined ? undefined : JSON.parse(canonical(v)));
 
-const isObject = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v);
 
 /** The first path where two JSON values differ, with both canonical values there. */
 function firstDifference(a: unknown, b: unknown, path: string): { path: string; recorded?: string; replayed?: string } | undefined {
@@ -110,9 +111,7 @@ function firstDifference(a: unknown, b: unknown, path: string): { path: string; 
 }
 
 /** The decision of one recorded row, run again from its recorded inputs. */
-function rerun(entry: JournalEntry & { decision: DecisionRecord }, journal: ExportedJournal, workflow: Workflow | undefined): DecisionPlan {
-  const { decision } = entry;
-  const event = upcast(entry.event);
+function rerun(event: FactoryEvent, decision: DecisionRecord, journal: ExportedJournal, workflow: Workflow | undefined): DecisionPlan {
   if (event.id !== decision.eventId) throw new Error(`journal row ${event.id} carries the decision of ${decision.eventId}`);
   // Nothing was decided: an event of a project the instance did not know.
   if (!decision.workflowHash) return NO_PLAN;
@@ -157,13 +156,14 @@ export function replayJournal(journal: ExportedJournal, options: ReplayOptions =
       report.unrecorded++;
       continue;
     }
-    const plan = rerun({ ...entry, decision }, journal, mode === 'what-if' ? options.workflow : undefined);
+    const event = upcast(entry.event);
+    const plan = rerun(event, decision, journal, mode === 'what-if' ? options.workflow : undefined);
     report.replayed++;
     let diverged = false;
     for (const field of COMPARED) {
       const d = firstDifference(json(decision[field]), json(plan[field]), field);
       if (!d) continue;
-      report.divergences.push({ seq: decision.seq, eventId: decision.eventId, eventType: upcast(entry.event).type, field, ...d } as Divergence);
+      report.divergences.push({ seq: decision.seq, eventId: decision.eventId, eventType: event.type, field, ...d } as Divergence);
       diverged = true;
     }
     if (diverged && mode === 'what-if') break;

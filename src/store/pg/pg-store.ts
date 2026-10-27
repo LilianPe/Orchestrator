@@ -6,6 +6,7 @@ import type { OutboxEffect } from '../../core/decision.js';
 import { normalizeTicket, type FactoryEvent, type QueueName, type TicketState } from '../../core/types.js';
 import type { StoredEvent } from '../../core/upcast.js';
 import {
+  decidedOn,
   decisionRecord,
   effectResult,
   LEASE_MS,
@@ -329,19 +330,18 @@ export class PgStore implements AsyncStore {
         insert into decision_trace (id, ticket_id, event_id, decision, created_at)
         values (
           ${event.id}, ${outboxTicket(ticketId)}, ${event.id},
-          ${JSON.stringify(decisionRecord(event, seq, known, frozen, plan))}::jsonb, to_timestamp(${now / 1000})
+          ${JSON.stringify(decisionRecord(event, seq, known, decidedOn(req, frozen), plan))}::jsonb, to_timestamp(${now / 1000})
         )
       `);
-      if (plan.ticket) {
-        if (plan.ticket.workflowHash === req.workflow.hash) {
-          await tx.execute(sql`
-            insert into workflow_versions (id, hash, definition, created_at)
-            values (${workflowId(req.workflow.hash)}, ${req.workflow.hash}, ${JSON.stringify(req.workflow.definition)}::jsonb, to_timestamp(${now / 1000}))
-            on conflict do nothing
-          `);
-        }
-        await this.writeTicket(tx, plan.ticket);
+      // Every version a decision ran on is kept, projection written or not: its replay needs it (ORC-174).
+      if (req.workflow.hash !== '' && frozen.hash === req.workflow.hash) {
+        await tx.execute(sql`
+          insert into workflow_versions (id, hash, definition, created_at)
+          values (${workflowId(req.workflow.hash)}, ${req.workflow.hash}, ${JSON.stringify(req.workflow.definition)}::jsonb, to_timestamp(${now / 1000}))
+          on conflict do nothing
+        `);
       }
+      if (plan.ticket) await this.writeTicket(tx, plan.ticket);
       if (plan.clearTimers && ticketId !== null) {
         await tx.execute(sql`delete from timers where ticket_id = ${ticketId} and payload->>'projectId' = ${event.projectId}`);
       }

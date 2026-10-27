@@ -4,6 +4,7 @@ import type { OutboxEffect } from '../core/decision.js';
 import { normalizeTicket, type QueueName, type FactoryEvent, type TicketState } from '../core/types.js';
 import type { StoredEvent } from '../core/upcast.js';
 import {
+  decidedOn,
   decisionRecord,
   effectResult,
   type DecisionOutcome,
@@ -207,15 +208,14 @@ export class SqliteStore implements Store {
     this.db.prepare('INSERT INTO events (id, at, ticket_id, data) VALUES (?, ?, ?, ?)').run(event.id, event.at, ticketId, JSON.stringify(event));
     this.db
       .prepare('INSERT INTO decision_trace (event_id, data) VALUES (?, ?)')
-      .run(event.id, JSON.stringify(decisionRecord(event, seq, known, frozen, plan)));
-    if (plan.ticket) {
-      if (plan.ticket.workflowHash === req.workflow.hash) {
-        this.db
-          .prepare('INSERT OR IGNORE INTO workflow_versions (hash, definition) VALUES (?, ?)')
-          .run(req.workflow.hash, JSON.stringify(req.workflow.definition));
-      }
-      this.writeTicket(plan.ticket);
+      .run(event.id, JSON.stringify(decisionRecord(event, seq, known, decidedOn(req, frozen), plan)));
+    // Every version a decision ran on is kept, projection written or not: its replay needs it (ORC-174).
+    if (req.workflow.hash !== '' && frozen.hash === req.workflow.hash) {
+      this.db
+        .prepare('INSERT OR IGNORE INTO workflow_versions (hash, definition) VALUES (?, ?)')
+        .run(req.workflow.hash, JSON.stringify(req.workflow.definition));
     }
+    if (plan.ticket) this.writeTicket(plan.ticket);
     if (plan.clearTimers && ticketId !== null) this.clearTimers(event.projectId, ticketId);
     for (const t of plan.timers) this.writeTimer(t);
     const effectIds = plan.effects.map((effect, k) => {

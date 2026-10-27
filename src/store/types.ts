@@ -107,15 +107,20 @@ export interface DecisionRecord {
   trace?: string[];
 }
 
+/** The hash a decision ran on: the frozen version, or none when the request had no workflow (an unknown project). */
+export function decidedOn(req: DecisionRequest, frozen: WorkflowVersion): string {
+  return req.workflow.hash === '' ? '' : frozen.hash;
+}
+
 /** The record of a committed decision, written in its transaction (ORC-174). */
-export function decisionRecord(event: FactoryEvent, seq: number, known: TicketState | undefined, workflow: WorkflowVersion, plan: DecisionPlan): DecisionRecord {
+export function decisionRecord(event: FactoryEvent, seq: number, known: TicketState | undefined, workflowHash: string, plan: DecisionPlan): DecisionRecord {
   return {
     eventId: event.id,
     projectId: event.projectId,
     ...(event.ticketId === undefined ? {} : { ticketId: event.ticketId }),
     seq,
     ...(plan.at === undefined ? {} : { at: plan.at }),
-    workflowHash: workflow.hash,
+    workflowHash,
     ...(known === undefined ? {} : { before: known }),
     ...(plan.ticket === undefined ? {} : { ticket: plan.ticket }),
     effects: plan.effects,

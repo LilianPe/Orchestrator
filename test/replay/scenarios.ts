@@ -1,6 +1,7 @@
 import { exportJournal, type ExportedJournal } from '../../src/runtime/replay.js';
-import { createHarness } from '../helpers/harness.js';
-import { testPreset } from '../helpers/test-preset.js';
+import type { Workflow } from '../../src/config/workflow-schema.js';
+import { createHarness, loadTestWorkflow } from '../helpers/harness.js';
+import { testPreset, type TestPreset } from '../helpers/test-preset.js';
 
 type Harness = ReturnType<typeof createHarness>;
 
@@ -14,45 +15,55 @@ async function delegated(h: Harness): Promise<void> {
  * Harness scenarios whose journals `record.ts` writes to `journals/` (ORC-174): the recorded
  * journals the CI replays until real ones are exported from an instance (docs/tests.md).
  */
-export const SCENARIOS: Record<string, () => Promise<Harness>> = {
+export const SCENARIOS: Record<string, { preset?: TestPreset; run(h: Harness): Promise<void> }> = {
   /** Delegation, a failed check, a resumed run, human review, two replies within the debounce window. */
-  'check-failed-then-feedback': async () => {
-    const h = createHarness({ preset: testPreset() });
-    h.checks.failNext('1 failed');
-    await delegated(h);
-    h.runner.enqueue({ events: [{ kind: 'text', text: 'Corrigé.' }] });
-    await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'boutons mal alignés', author: 'Lilian' });
-    await h.advance(60_000);
-    await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'bug quand la liste est vide', author: 'Lilian' });
-    await h.advance(180_000);
-    return h;
+  'check-failed-then-feedback': {
+    preset: testPreset(),
+    run: async (h) => {
+      h.checks.failNext('1 failed');
+      await delegated(h);
+      h.runner.enqueue({ events: [{ kind: 'text', text: 'Corrigé.' }] });
+      await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'boutons mal alignés', author: 'Lilian' });
+      await h.advance(60_000);
+      await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'bug quand la liste est vide', author: 'Lilian' });
+      await h.advance(180_000);
+    },
   },
   /** AI review, merge, cleanup and learn. */
-  'review-merge-done': async () => {
-    const h = createHarness();
-    await delegated(h);
-    h.runner.enqueue({ events: [{ kind: 'text', text: 'Synthèse : 2 rounds, CI verte.' }] });
-    await h.send('status.changed', { from: 'human_review', to: 'ai_review' });
-    await h.send('pr.merged', { number: 3, url: 'https://gh/pr/3', branch: 'factory/rel-1-export-csv' });
-    return h;
+  'review-merge-done': {
+    run: async (h) => {
+      await delegated(h);
+      h.runner.enqueue({ events: [{ kind: 'text', text: 'Synthèse : 2 rounds, CI verte.' }] });
+      await h.send('status.changed', { from: 'human_review', to: 'ai_review' });
+      await h.send('pr.merged', { number: 3, url: 'https://gh/pr/3', branch: 'factory/rel-1-export-csv' });
+    },
   },
   /** Red CI past its bound blocks the ticket; a human stop. */
-  'red-ci-then-stop': async () => {
-    const h = createHarness({ preset: testPreset({ ciFixAttempts: 1 }) });
-    await delegated(h);
-    const red = { number: 7, url: 'https://forge/pr/7', branch: 'factory/rel-1-export-csv', failures: ['test'] };
-    await h.send('pr.checks_failed', red);
-    await h.send('pr.checks_failed', red);
-    await h.send('label.changed', { label: 'agent:stop', change: 'added' });
-    return h;
+  'red-ci-then-stop': {
+    preset: testPreset({ ciFixAttempts: 1 }),
+    run: async (h) => {
+      await delegated(h);
+      const red = { number: 7, url: 'https://forge/pr/7', branch: 'factory/rel-1-export-csv', failures: ['test'] };
+      await h.send('pr.checks_failed', red);
+      await h.send('pr.checks_failed', red);
+      await h.send('label.changed', { label: 'agent:stop', change: 'added' });
+    },
   },
 };
+
+/** The workflow a scenario runs on today: the standard pack under its preset. */
+export function scenarioWorkflow(name: string): Workflow {
+  const scenario = SCENARIOS[name];
+  if (!scenario) throw new Error(`unknown scenario ${name}`);
+  return loadTestWorkflow(scenario.preset?.yaml);
+}
 
 /** Runs a scenario and exports the journal of its ticket. */
 export async function record(name: string): Promise<ExportedJournal> {
   const scenario = SCENARIOS[name];
   if (!scenario) throw new Error(`unknown scenario ${name}`);
-  const h = await scenario();
+  const h = createHarness({ preset: scenario.preset });
+  await scenario.run(h);
   h.orch.stopAll();
   await h.orch.drained();
   const journal = await exportJournal(h.store, 'p', 'REL-1');

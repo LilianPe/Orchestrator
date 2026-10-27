@@ -1,11 +1,11 @@
-import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { repoRoot } from '../app/root.js';
 import { homePaths, loadInstance, factoryHome } from '../config/instance.js';
 import { loadWorkflow } from '../config/load-workflow.js';
 import { exportJournal, formatReplay, readJournal, replayJournal, type ReplayOptions } from '../runtime/replay.js';
-import { openStore } from '../store/open.js';
+import { DATABASE_URL_ENV, openStore } from '../store/open.js';
 
 export const REPLAY_USAGE = `Usage : factory replay <journal.json | dossier>... [--what-if <workflow.yml>] [--pack <dossier>]
         factory replay --export <ID> [--project <id>] [--out <fichier>]
@@ -19,10 +19,10 @@ export interface ReplayIo {
   env: NodeJS.ProcessEnv;
 }
 
-/** `.json` files of the paths given, a folder read in name order. */
+/** `.json` files of the paths given, a folder read in name order; a missing path is kept, and reported as unreadable. */
 function journalFiles(paths: string[]): string[] {
   return paths.flatMap((p) =>
-    statSync(p).isDirectory()
+    existsSync(p) && statSync(p).isDirectory()
       ? readdirSync(p)
           .filter((f) => f.endsWith('.json'))
           .sort()
@@ -31,39 +31,81 @@ function journalFiles(paths: string[]): string[] {
   );
 }
 
-/** The instance's store, read-only: the daemon migrates it. */
+/**
+ * The journal of a ticket of the instance. Postgres is opened without migration (the daemon's to
+ * run); SQLite only when its file exists, as its store creates any table it lacks on opening.
+ */
 async function exportFromInstance(env: NodeJS.ProcessEnv, ticketId: string, projectId: string | undefined): Promise<unknown> {
   const home = factoryHome(env);
   const projects = loadInstance(home).projects;
   const project = projectId ?? (projects.length === 1 ? projects[0]!.id : undefined);
   if (!project) throw new Error(`précisez --project (${projects.map((p) => p.id).join(', ') || 'aucun projet configuré'})`);
-  const { store } = await openStore({ env, sqlitePath: homePaths(home).db, migrationsFolder: join(repoRoot(), 'drizzle'), migrate: false });
+  const sqlitePath = homePaths(home).db;
+  if (!env[DATABASE_URL_ENV]?.trim() && !existsSync(sqlitePath)) throw new Error(`pas de base d'instance : ni ${DATABASE_URL_ENV} ni ${sqlitePath}`);
+  const { store } = await openStore({ env, sqlitePath, migrationsFolder: join(repoRoot(), 'drizzle'), migrate: false });
   try {
-    return await exportJournal(store, project, ticketId);
+    const journal = await exportJournal(store, project, ticketId);
+    if (journal.entries.length === 0) throw new Error(`aucun événement journalisé pour ${ticketId} dans le projet ${project}`);
+    return journal;
   } finally {
     await store.close();
   }
 }
 
+/** Replays the given journals: 0 without divergence, 1 when one diverges, 2 when one cannot be read or replays nothing. */
+function replayFiles(paths: string[], options: ReplayOptions, io: ReplayIo): number {
+  const files = journalFiles(paths);
+  if (files.length === 0) {
+    io.print('Aucun journal à rejouer.');
+    return 2;
+  }
+  let diverged = 0;
+  let broken = 0;
+  for (const file of files) {
+    try {
+      const report = replayJournal(readJournal(readFileSync(file, 'utf8'), file), options);
+      io.print(`${file} : ${formatReplay(report)}`);
+      if (report.divergences.length > 0) diverged++;
+      // A journal with no decision to compare checks nothing: refused, not passed.
+      else if (report.replayed === 0) broken++;
+    } catch (err) {
+      io.print(`${file} : illisible ou impossible à rejouer : ${(err as Error).message}`);
+      broken++;
+    }
+  }
+  const failed = diverged + broken;
+  io.print(failed === 0 ? `${files.length} journal(aux) rejoué(s) sans divergence.` : `${diverged} journal(aux) sur ${files.length} divergent, ${broken} en erreur ou sans décision.`);
+  return broken > 0 ? 2 : diverged > 0 ? 1 : 0;
+}
+
 /**
  * `factory replay` (ORC-174). Exit code 0 when every journal replays without divergence, 1 when one
- * diverges, 2 on a usage error.
+ * diverges, 2 on a usage error, a journal that cannot be read or replayed, or one without a decision.
  */
 export async function runReplayCommand(argv: string[], io: ReplayIo = { print: (l) => console.log(l), env: process.env }): Promise<number> {
-  const { positionals, values } = parseArgs({
-    args: argv,
-    allowPositionals: true,
-    options: {
-      'what-if': { type: 'string' },
-      pack: { type: 'string' },
-      export: { type: 'string' },
-      project: { type: 'string' },
-      out: { type: 'string' },
-    },
-  });
+  let args;
+  try {
+    args = parseArgs({
+      args: argv,
+      allowPositionals: true,
+      options: {
+        'what-if': { type: 'string' },
+        pack: { type: 'string' },
+        export: { type: 'string' },
+        project: { type: 'string' },
+        out: { type: 'string' },
+      },
+    });
+  } catch (err) {
+    io.print(`${(err as Error).message}
+${REPLAY_USAGE}`);
+    return 2;
+  }
+  const { positionals, values } = args;
   if (values.export) {
     const journal = await exportFromInstance(io.env, values.export, values.project);
-    const text = `${JSON.stringify(journal, null, 2)}\n`;
+    const text = `${JSON.stringify(journal, null, 2)}
+`;
     if (values.out) {
       writeFileSync(values.out, text);
       io.print(`Journal de ${values.export} écrit dans ${values.out}.`);
@@ -77,17 +119,5 @@ export async function runReplayCommand(argv: string[], io: ReplayIo = { print: (
   const options: ReplayOptions = values['what-if']
     ? { mode: 'what-if', workflow: loadWorkflow({ packDir: values.pack ?? join(repoRoot(), 'packs/standard'), projectFile: values['what-if'] }) }
     : { mode: 'regression' };
-  const files = journalFiles(positionals);
-  if (files.length === 0) {
-    io.print('Aucun journal à rejouer.');
-    return 2;
-  }
-  let diverged = 0;
-  for (const file of files) {
-    const report = replayJournal(readJournal(readFileSync(file, 'utf8'), file), options);
-    io.print(`${file} : ${formatReplay(report)}`);
-    if (report.divergences.length > 0) diverged++;
-  }
-  io.print(diverged === 0 ? `${files.length} journal(aux) rejoué(s) sans divergence.` : `${diverged} journal(aux) sur ${files.length} divergent.`);
-  return diverged === 0 ? 0 : 1;
+  return replayFiles(positionals, options, io);
 }

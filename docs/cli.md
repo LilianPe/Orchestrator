@@ -96,7 +96,7 @@ Arrête le run du ticket `<ID>` (ex. `REL-12`) : SIGINT au processus Claude Code
 
 Rejoue des journaux de tickets exportés, sans instance ni réseau : chaque ligne du journal passe par les upcasters (`schemaVersion`), puis sa décision est refaite (`decide`, puis `reduce`) à partir de ce que la transaction de décision a enregistré (projection lue sous le verrou, version du workflow, horloge). Un dossier est lu en entier (`*.json`, par ordre de nom).
 
-- **Régression** (par défaut) : la projection, les effets, les minuteries et la remise à zéro des minuteries doivent ressortir **bit à bit** comme enregistrés (JSON canonique, clés triées). Chaque divergence est listée avec l'événement qui la porte. Code de sortie 0 sans divergence, 1 sinon.
+- **Régression** (par défaut) : la projection, les effets, les minuteries et la remise à zéro des minuteries doivent ressortir **bit à bit** comme enregistrés (JSON canonique, clés triées). Chaque divergence est listée avec l'événement qui la porte. Code de sortie 0 sans divergence, 1 si un journal diverge, 2 sur une option inconnue, un journal illisible ou impossible à rejouer (version de workflow absente) ou un journal sans aucune décision ; les autres journaux du dossier sont rejoués quand même.
 - **What-if** (`--what-if <workflow.yml>`) : les décisions tournent sur ce workflow, posé sur le pack standard (`--pack <dossier>` pour un autre), au lieu des versions sur lesquelles les tickets étaient figés. Le rejeu s'arrête à la première divergence et la signale :
 
 ```
@@ -106,7 +106,7 @@ test/replay/journals/check-failed-then-feedback.json : p/REL-1 : 4 décision(s) 
 1 journal(aux) sur 1 divergent.
 ```
 
-`factory replay --export <ID> [--project <id>] [--out <fichier>]` écrit le journal d'un ticket de l'instance (store de `FACTORY_DATABASE_URL`, sinon `factory.db`, ouvert sans migration), avec les versions de workflow de ses décisions. `--project` est requis quand l'instance a plusieurs projets. Le format et la mise en CI : [`tests.md`](tests.md#loracle-de-rejeu).
+`factory replay --export <ID> [--project <id>] [--out <fichier>]` écrit le journal d'un ticket de l'instance (store de `FACTORY_DATABASE_URL`, sinon `factory.db`, ouvert sans migration), avec les versions de workflow de ses décisions. `--project` est requis quand l'instance a plusieurs projets. Un ticket sans événement journalisé, ou une instance sans base, est refusé plutôt qu'exporté vide. Le format et la mise en CI : [`tests.md`](tests.md#loracle-de-rejeu).
 
 ## `relais-agent` (côté agent)
 

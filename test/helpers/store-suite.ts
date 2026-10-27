@@ -303,6 +303,22 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     expect(await s.ticketJournal('other', 'REL-1')).toEqual([]);
   });
 
+  it('records the version a decision ran on even without a projection, and none for an unknown project (ORC-174)', async () => {
+    const s = await store();
+    // An event ignored before the ticket is tracked: its version is kept, its replay needs it.
+    const h3: WorkflowVersion = { hash: 'h3', definition: { version: 1, name: 'v3' } };
+    await s.appendInbox(delegatedEvent('n1', 'REL-3'));
+    await s.decide(request(delegatedEvent('n1', 'REL-3'), { ticket: undefined, effects: [], timers: [] }, h3));
+    expect(await s.getWorkflowVersion('h3')).toEqual(h3);
+    expect((await s.ticketJournal('p', 'REL-3'))[0]!.decision).toMatchObject({ workflowHash: 'h3' });
+    // A tracked ticket whose project is gone: the orchestrator decides nothing, on no workflow.
+    await s.appendInbox(delegatedEvent('e1'));
+    await s.decide(request(delegatedEvent('e1'), { effects: [] }));
+    await s.appendInbox(delegatedEvent('e2'));
+    await s.decide({ event: delegatedEvent('e2'), workflow: { hash: '', definition: null }, decide: () => ({ effects: [], timers: [], clearTimers: false }) });
+    expect((await s.ticketJournal('p', 'REL-1'))[1]!.decision).toMatchObject({ eventId: 'e2', workflowHash: '' });
+  });
+
   it('writes nothing when the decision throws before the commit (ORC-149)', async () => {
     const s = await store();
     await s.appendInbox(delegatedEvent('e1'));
