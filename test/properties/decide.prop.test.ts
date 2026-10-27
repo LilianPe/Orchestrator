@@ -55,6 +55,14 @@ function holds(check: (s: Sequences) => void, examples: Sequences[] = []): void 
   );
 }
 
+/** `holds` for a check that awaits (the store is asynchronous, ORC-132). */
+function holdsAsync(check: (s: Sequences) => Promise<void>, examples: Sequences[] = []): Promise<void> {
+  return fc.assert(
+    fc.asyncProperty(sequences, check),
+    params(examples.map((e): [Sequences] => [e])),
+  );
+}
+
 const run = (s: Sequences): Run => fold(s.withDuplicates, wf);
 
 /** Runs started while handling a step: decided by `decide`, or the pending job started by `settle`. */
@@ -330,23 +338,28 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
   describe('I10 — a duplicate has no effect', () => {
     it(
       'duplicating events (same id) anywhere after their original changes neither the final state nor the effects, through the store’s inbox',
-      () => {
+      async () => {
         // Duplicates are dropped by what drops them in `Orchestrator.handle`: `Store.recordEvent`, here on SQLite.
-        // One store for every sequence, each recording its ids under its own prefix.
+        // One store for every sequence, each recording its ids under its own prefix. The store answers
+        // asynchronously: its answers are taken first, in order, then the fold reads them.
         const store = new SqliteStore(':memory:');
         let sequence = 0;
         try {
-          holds((s) => {
+          await holdsAsync(async (s) => {
             const prefix = `s${++sequence}:`;
             const once = fold(s.unique, wf);
-            const twice = fold(s.withDuplicates, wf, (e) => store.recordEvent({ ...e, id: prefix + e.id }));
+            const answers: boolean[] = [];
+            for (const entry of s.withDuplicates) {
+              if (entry.kind === 'external') answers.push(await store.recordEvent({ ...entry.event, id: prefix + entry.event.id }));
+            }
+            const twice = fold(s.withDuplicates, wf, () => answers.shift()!);
             expect(twice.final).toEqual(once.final);
             expect(effects(twice)).toEqual(effects(once));
             expect(decided(twice).map((d) => d.decision.timers)).toEqual(decided(once).map((d) => d.decision.timers));
             expect(twice.journal).toEqual(once.journal);
           });
         } finally {
-          store.close();
+          await store.close();
         }
       },
       TIMEOUT,

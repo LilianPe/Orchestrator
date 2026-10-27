@@ -2,7 +2,7 @@ import { EventSource } from 'eventsource';
 
 export interface RelayOptions {
   url: string;
-  onWebhook: (raw: string, headers: Record<string, string | undefined>) => { status: number };
+  onWebhook: (raw: string, headers: Record<string, string | undefined>) => { status: number } | Promise<{ status: number }>;
   log: (m: string) => void;
 }
 
@@ -22,8 +22,12 @@ export function startSmeeRelay(o: RelayOptions): { close(): void } {
       for (const [k, v] of Object.entries(data)) if (typeof v === 'string') headers[k.toLowerCase()] = v;
       // smee.io forwards only the parsed body: JSON.stringify restores Linear's bytes only when Linear itself
       // produced them with compact JSON.stringify, which is what it sends today.
-      const { status } = o.onWebhook(JSON.stringify(data['body']), headers);
-      if (status !== 200) o.log(`relay: webhook rejected with ${status}${status === 401 ? ` (${REJECTED_401_HINT})` : ''}`);
+      const report = ({ status }: { status: number }) => {
+        if (status !== 200) o.log(`relay: webhook rejected with ${status}${status === 401 ? ` (${REJECTED_401_HINT})` : ''}`);
+      };
+      const result = o.onWebhook(JSON.stringify(data['body']), headers);
+      if (result instanceof Promise) result.then(report, (err: Error) => o.log(`relay: webhook failed (${err.message})`));
+      else report(result);
     } catch (err) {
       o.log(`relay: bad message (${(err as Error).message})`);
     }

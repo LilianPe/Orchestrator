@@ -14,7 +14,7 @@ describe('PrPoller', () => {
     const forge = new FakeForge();
     const events: FactoryEvent[] = [];
     const clock = new FakeClock(100);
-    store.putTicket({ ...newTicketState('p', 'REL-1', 'T', 'human_review', 1), branch: 'b' });
+    await store.putTicket({ ...newTicketState('p', 'REL-1', 'T', 'human_review', 1), branch: 'b' });
     const poller = new PrPoller({ store, forge, projects: [{ id: 'p', repoPath: '/r', teamKey: 'REL', workflow }], submit: (e) => events.push(e), clock, log: () => {} });
 
     await poller.pollOnce();
@@ -48,7 +48,7 @@ describe('PrPoller', () => {
 
   it('re-emits checks_failed after fail -> pending -> fail', async () => {
     const { store, forge, events, poller } = setup();
-    store.putTicket({ ...newTicketState('p', 'REL-1', 'T', 'human_review', 1), branch: 'b', prNumber: 7 });
+    await store.putTicket({ ...newTicketState('p', 'REL-1', 'T', 'human_review', 1), branch: 'b', prNumber: 7 });
     for (const checks of ['fail', 'pending', 'fail'] as const) {
       forge.setPr('b', { number: 7, url: 'u', state: 'OPEN', checks, failedChecks: checks === 'fail' ? ['t'] : [] });
       await poller.pollOnce();
@@ -63,8 +63,8 @@ describe('PrPoller', () => {
       if (e.ticketId === 'REL-1') throw new Error('boom');
       events.push(e);
     }, (m) => logs.push(m));
-    store.putTicket({ ...newTicketState('p', 'REL-1', 'T', 'human_review', 1), branch: 'b1' });
-    store.putTicket({ ...newTicketState('p', 'REL-2', 'T', 'human_review', 1), branch: 'b2' });
+    await store.putTicket({ ...newTicketState('p', 'REL-1', 'T', 'human_review', 1), branch: 'b1' });
+    await store.putTicket({ ...newTicketState('p', 'REL-2', 'T', 'human_review', 1), branch: 'b2' });
     forge.setPr('b1', { number: 1, url: 'u', state: 'OPEN', checks: 'none', failedChecks: [] });
     forge.setPr('b2', { number: 2, url: 'u', state: 'OPEN', checks: 'none', failedChecks: [] });
     await poller.pollOnce();
@@ -75,7 +75,7 @@ describe('PrPoller', () => {
   it('watches a ticket moved to done before the merge was seen, until its PR is merged or closed (ORC-268)', async () => {
     const { store, forge, events, poller } = setup();
     const findPr = vi.spyOn(forge, 'findPr');
-    store.putTicket({ ...newTicketState('p', 'REL-1', 'T', 'done', 1), branch: 'b', prNumber: 7 });
+    await store.putTicket({ ...newTicketState('p', 'REL-1', 'T', 'done', 1), branch: 'b', prNumber: 7 });
     forge.setPr('b', { number: 7, url: 'u', state: 'OPEN', checks: 'fail', failedChecks: ['t'] });
     await poller.pollOnce();
     expect(events).toEqual([]);
@@ -85,15 +85,15 @@ describe('PrPoller', () => {
     await poller.pollOnce();
     expect(findPr).toHaveBeenCalledTimes(2);
     // Done again with the same PR: nothing new to watch. With a new PR: watched again.
-    store.putTicket({ ...store.getTicket('p', 'REL-1')!, logical: 'done' });
+    await store.putTicket({ ...(await store.getTicket('p', 'REL-1'))!, logical: 'done' });
     await poller.pollOnce();
     expect(findPr).toHaveBeenCalledTimes(2);
-    store.putTicket({ ...store.getTicket('p', 'REL-1')!, prNumber: 8 });
+    await store.putTicket({ ...(await store.getTicket('p', 'REL-1'))!, prNumber: 8 });
     forge.setPr('b', { number: 8, url: 'u8', state: 'OPEN', checks: 'none', failedChecks: [] });
     await poller.pollOnce();
     expect(findPr).toHaveBeenCalledTimes(3);
     // A done ticket whose PR was never seen has nothing to wait for.
-    store.putTicket({ ...newTicketState('p', 'REL-2', 'T', 'done', 1), branch: 'b2' });
+    await store.putTicket({ ...newTicketState('p', 'REL-2', 'T', 'done', 1), branch: 'b2' });
     await poller.pollOnce();
     expect(findPr).toHaveBeenCalledTimes(4);
     expect(findPr.mock.calls.map((c) => c[1])).toEqual(['b', 'b', 'b', 'b']);
@@ -107,8 +107,28 @@ describe('PrPoller', () => {
       vi.spyOn(poller, 'pollOnce').mockRejectedValue(new Error('nope'));
       poller.start(10);
       await vi.advanceTimersByTimeAsync(15);
-      poller.stop();
+      await poller.stop();
       expect(logs.some((m) => m.includes('nope'))).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stop() resolves once the poll under way has finished, and starts none after', async () => {
+    vi.useFakeTimers();
+    try {
+      const { poller } = setup();
+      let release!: () => void;
+      const polls = vi.spyOn(poller, 'pollOnce').mockImplementation(() => new Promise<void>((r) => (release = r)));
+      poller.start(10);
+      await vi.advanceTimersByTimeAsync(15);
+      let stopped = false;
+      const stop = poller.stop().then(() => (stopped = true));
+      await vi.advanceTimersByTimeAsync(50);
+      expect(stopped).toBe(false);
+      release();
+      await stop;
+      expect(polls).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }

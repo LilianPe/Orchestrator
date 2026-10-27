@@ -5,10 +5,10 @@ import { migratePgStore } from '../../src/store/pg/migrate.js';
 import { OUTBOX_LEASE_MS, PgStore } from '../../src/store/pg/pg-store.js';
 import { PG_TABLE_NAMES } from '../../src/store/pg/schema.js';
 import type { QueueItem, RunRecord } from '../../src/store/types.js';
+import { createTestDatabase, PG_URL, TRUNCATE_ALL as TRUNCATE } from '../helpers/pg-database.js';
+import { storeContract } from '../helpers/store-suite.js';
 
-const url = process.env['DATABASE_URL'] ?? process.env['TEST_DATABASE_URL'] ?? '';
-
-const TRUNCATE = `truncate table ${PG_TABLE_NAMES.map((name) => `"${name}"`).join(', ')} restart identity cascade`;
+const url = PG_URL;
 
 function queueItem(patch: Partial<QueueItem>): QueueItem {
   return {
@@ -42,11 +42,13 @@ function runRecord(patch: Partial<RunRecord> = {}): RunRecord {
 }
 
 describe.skipIf(!url)('PgStore integration', () => {
+  let db: Awaited<ReturnType<typeof createTestDatabase>>;
   let pool: Pool;
   let store: PgStore;
 
   beforeAll(async () => {
-    pool = new Pool({ connectionString: url, max: 4 });
+    db = await createTestDatabase('factory_pgstore');
+    pool = new Pool({ connectionString: db.url, max: 4 });
     await migratePgStore(pool);
     store = new PgStore({ pool, now: () => 1_000_000 });
   });
@@ -57,6 +59,7 @@ describe.skipIf(!url)('PgStore integration', () => {
 
   afterAll(async () => {
     await pool.end();
+    await db.drop();
   });
 
   it('applies the migration to an empty database and creates exactly the twelve tables', async () => {
@@ -199,6 +202,9 @@ describe.skipIf(!url)('PgStore integration', () => {
       `select (select count(*) from inbox)::int as inbox, (select count(*) from journal)::int as journal`,
     );
     expect(counts.rows[0]).toEqual({ inbox: 2, journal: 2 });
+    // Journaled means handled: no inbox row is left for a replay to take as unprocessed.
+    const pending = await pool.query('select id from inbox where processed_at is null');
+    expect(pending.rows).toEqual([]);
 
     const journal = await pool.query<{ event_id: string; seq: number; type: string }>(
       'select event_id, seq, type from journal where ticket_id = $1 order by seq',
@@ -210,6 +216,16 @@ describe.skipIf(!url)('PgStore integration', () => {
     ]);
     expect(await store.recentEvents(10)).toEqual([second, first]);
     expect(await store.recentEvents(1, 'REL-1')).toEqual([second]);
+  });
+
+  it('lists recent events newest recorded first, whatever their own `at`', async () => {
+    let now = 2_000_000;
+    const ticking = new PgStore({ pool, now: () => (now += 1_000) });
+    const a = { id: 'a', type: 'control.pause', at: 5_000, projectId: 'p', ticketId: 'REL-1', payload: {} } as FactoryEvent;
+    const b = { id: 'b', type: 'control.resume', at: 1.5, projectId: 'p', ticketId: 'REL-2', payload: {} } as FactoryEvent;
+    await ticking.recordEvent(a);
+    await ticking.recordEvent(b);
+    expect(await ticking.recentEvents(10)).toEqual([b, a]);
   });
 
   it('records the schema version the event carries in the inbox and journal columns', async () => {
@@ -255,16 +271,17 @@ describe.skipIf(!url)('PgStore integration', () => {
     expect(await store.costSince(0)).toBe(2);
   });
 
-  it('claims due timers once and supports deletion', async () => {
+  it('reads due timers without consuming them, and supports deletion', async () => {
     const timer = { key: 'REL-1:dev-feedback', projectId: 'p', ticketId: 'REL-1', job: 'dev-feedback', fireAt: 5_000 };
     await store.putTimer(timer);
 
     expect(await store.dueTimers(4_999)).toEqual([]);
     expect(await store.dueTimers(5_000)).toEqual([timer]);
-    expect(await store.dueTimers(10_000)).toEqual([]);
+    // A pass cut before deleteTimer (an error, a shutdown) finds the timer again.
+    expect(await store.dueTimers(10_000)).toEqual([timer]);
 
-    const fired = await pool.query<{ status: string }>('select status from timers where id = $1', [timer.key]);
-    expect(fired.rows[0]?.status).toBe('fired');
+    const pending = await pool.query<{ status: string }>('select status from timers where id = $1', [timer.key]);
+    expect(pending.rows[0]?.status).toBe('pending');
 
     await store.putTimer({ ...timer, fireAt: 9_000 });
     await store.deleteTimer(timer.key);
@@ -287,7 +304,7 @@ describe.skipIf(!url)('PgStore integration', () => {
     expect((await store.listQueue()).filter((item) => item.ticketId === 'DUP')).toHaveLength(2);
   });
 
-  it('orders the outbox by available_at and marks claimed effects running', async () => {
+  it('claims the outbox by available_at and marks claimed effects running', async () => {
     const idA = await store.enqueue(queueItem({ ticketId: 'A', enqueuedAt: 1_000 }));
     const idB = await store.enqueue(queueItem({ ticketId: 'B', enqueuedAt: 3_000 }));
     const idC = await store.enqueue(queueItem({ ticketId: 'C', enqueuedAt: 2_000 }));
@@ -297,12 +314,12 @@ describe.skipIf(!url)('PgStore integration', () => {
     expect(idC).toMatch(/^C:\d+:\d+$/);
     expect(await store.listQueue()).toHaveLength(3);
 
-    const first = await store.dequeue('dev', 4_000);
+    const first = await store.claim('dev', 4_000);
     expect(first).toMatchObject({ id: idA, ticketId: 'A', effect: 'dev', status: 'running', attempts: 1 });
     expect(first?.leaseUntil).toBe(4_000 + OUTBOX_LEASE_MS);
-    expect((await store.dequeue('dev', 4_000))?.ticketId).toBe('C');
-    expect((await store.dequeue('dev', 4_000))?.ticketId).toBe('B');
-    expect(await store.dequeue('dev', 4_000)).toBeUndefined();
+    expect((await store.claim('dev', 4_000))?.ticketId).toBe('C');
+    expect((await store.claim('dev', 4_000))?.ticketId).toBe('B');
+    expect(await store.claim('dev', 4_000)).toBeUndefined();
 
     const statuses = await pool.query<{ status: string }>('select status from outbox order by id');
     expect(statuses.rows.map((row) => row.status)).toEqual(['running', 'running', 'running']);
@@ -310,10 +327,10 @@ describe.skipIf(!url)('PgStore integration', () => {
 
   it('reclaims an outbox effect once its lease expires', async () => {
     const id = await store.enqueue(queueItem({ ticketId: 'LEASE', enqueuedAt: 1_000 }));
-    expect((await store.dequeue('dev', 2_000))?.attempts).toBe(1);
-    expect(await store.dequeue('dev', 2_000 + OUTBOX_LEASE_MS - 1)).toBeUndefined();
+    expect((await store.claim('dev', 2_000))?.attempts).toBe(1);
+    expect(await store.claim('dev', 2_000 + OUTBOX_LEASE_MS - 1)).toBeUndefined();
 
-    const reclaimed = await store.dequeue('dev', 2_000 + OUTBOX_LEASE_MS + 1);
+    const reclaimed = await store.claim('dev', 2_000 + OUTBOX_LEASE_MS + 1);
     expect(reclaimed).toMatchObject({ id, ticketId: 'LEASE', attempts: 2 });
   });
 
@@ -382,5 +399,46 @@ describe.skipIf(!url)('PgStore integration', () => {
       freezes: 1,
       artifacts: 1,
     });
+  });
+});
+
+describe.skipIf(!url)('PgStore, Store contract', () => {
+  let db: Awaited<ReturnType<typeof createTestDatabase>>;
+  let pool: Pool;
+
+  beforeAll(async () => {
+    db = await createTestDatabase('factory_contract');
+    pool = new Pool({ connectionString: db.url, max: 4 });
+    await migratePgStore(pool);
+  });
+
+  afterAll(async () => {
+    await pool.end();
+    await db.drop();
+  });
+
+  storeContract(async () => {
+    await pool.query(TRUNCATE);
+    return new PgStore({ pool });
+  });
+
+  it('takes a dequeued item out for good: no lease brings it back', async () => {
+    await pool.query(TRUNCATE);
+    const store = new PgStore({ pool, now: () => 1_000 });
+    const id = await store.enqueue(queueItem({ ticketId: 'ONCE', enqueuedAt: 500 }));
+    expect((await store.dequeue('dev'))?.ticketId).toBe('ONCE');
+    expect(await store.claim('dev', 1_000 + 10 * OUTBOX_LEASE_MS)).toBeUndefined();
+    expect(await store.dequeue('dev')).toBeUndefined();
+    const row = await pool.query<{ status: string }>('select status from outbox where id = $1', [id]);
+    expect(row.rows[0]?.status).toBe('done');
+  });
+
+  it('settles a claimed effect with completeEffect', async () => {
+    await pool.query(TRUNCATE);
+    const store = new PgStore({ pool, now: () => 1_000 });
+    const id = await store.enqueue(queueItem({ ticketId: 'DONE', enqueuedAt: 500 }));
+    expect((await store.claim('dev', 1_000))?.id).toBe(id);
+    await store.completeEffect(id);
+    expect(await store.claim('dev', 1_000 + 10 * OUTBOX_LEASE_MS)).toBeUndefined();
   });
 });

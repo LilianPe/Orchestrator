@@ -16,7 +16,7 @@ describe('harness: new port fakes and the test preset', () => {
     expect(h.checks.calls).toHaveLength(preset.bounds.verifyAttempts);
     expect(h.checks.calls[0]!.commands).toEqual(preset.steps.find((s) => s.kind === 'check')!.commands);
     expect(h.runner.requests).toHaveLength(preset.bounds.verifyAttempts);
-    expect(h.ticket()).toMatchObject({ blocked: true, verifyAttempts: preset.bounds.verifyAttempts - 1 });
+    expect(await h.ticket()).toMatchObject({ blocked: true, verifyAttempts: preset.bounds.verifyAttempts - 1 });
     expect(h.tracker.activities('ls-1').at(-1)!.type).toBe('elicitation');
   });
 
@@ -25,7 +25,7 @@ describe('harness: new port fakes and the test preset', () => {
     h.checks.failNext('1 failed');
     await delegate(h);
     expect(h.checks.calls).toHaveLength(2);
-    expect(h.ticket()).toMatchObject({ logical: 'human_review', blocked: false, verifyAttempts: 0 });
+    expect(await h.ticket()).toMatchObject({ logical: 'human_review', blocked: false, verifyAttempts: 0 });
   });
 
   it('test preset: a feedback run is checked too, and its pass resets the counter', async () => {
@@ -33,25 +33,25 @@ describe('harness: new port fakes and the test preset', () => {
     h.checks.failNext('1 failed');
     h.checks.failNext('2 failed');
     await delegate(h);
-    expect(h.ticket()).toMatchObject({ blocked: true, verifyAttempts: 1 });
+    expect(await h.ticket()).toMatchObject({ blocked: true, verifyAttempts: 1 });
     await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'reprends', author: 'L' });
     await h.advance(0);
     expect(h.runner.requests).toHaveLength(3);
     expect(h.checks.calls).toHaveLength(3);
-    expect(h.ticket()).toMatchObject({ blocked: false, verifyAttempts: 0 });
+    expect(await h.ticket()).toMatchObject({ blocked: false, verifyAttempts: 0 });
   });
 
   it('a held run reaches its duration cap on the simulated clock and blocks the ticket', async () => {
     const h = createHarness();
     h.runner.enqueue({ hold: true });
     await delegate(h);
-    const runId = h.ticket().activeRunId!;
+    const runId = (await h.ticket()).activeRunId!;
     const cap = h.runner.requests[0]!.limits.durationMs;
     await h.advance(cap - 1);
-    expect(h.ticket().activeRunId).toBe(runId);
+    expect((await h.ticket()).activeRunId).toBe(runId);
     await h.advance(1);
-    expect(h.store.getRun(runId)).toMatchObject({ status: 'limit' });
-    expect(h.ticket()).toMatchObject({ blocked: true });
+    expect(await h.store.getRun(runId)).toMatchObject({ status: 'limit' });
+    expect(await h.ticket()).toMatchObject({ blocked: true });
     expect(h.tracker.activities('ls-1').at(-1)).toMatchObject({ type: 'elicitation', body: expect.stringContaining('plafond') });
   });
 
@@ -64,17 +64,17 @@ describe('harness: new port fakes and the test preset', () => {
     const release = h.checks.holdNext();
     const delegated = delegate(h);
     await vi.waitFor(() => expect(h.checks.calls).toHaveLength(1));
-    expect(h.ticket().verifyingRunId).toBeDefined();
+    expect((await h.ticket()).verifyingRunId).toBeDefined();
     release({ ok: false, failures: [{ command: 'fake:check', exitCode: 1, output: '1 failed' }] });
     await delegated;
     expect(h.runner.requests).toHaveLength(2);
-    expect(h.ticket()).toMatchObject({ logical: 'human_review', verifyAttempts: 0 });
+    expect(await h.ticket()).toMatchObject({ logical: 'human_review', verifyAttempts: 0 });
   });
 
   it('the scenario drives the sandbox and publisher fakes (not yet called by the orchestrator) and feeds the engine a pr.opened', async () => {
     const h = createHarness({ preset: testPreset() });
     await delegate(h);
-    const { branch } = h.ticket();
+    const { branch } = await h.ticket();
     const sandbox = await h.sandboxes.create({ runId: 'r-verify', ticketId: 'REL-1', workspacePath: '/tmp/factory-fake/p/REL-1', network: 'none' });
     expect(h.sandboxes.active()).toEqual([sandbox]);
     await h.sandboxes.destroy(sandbox.id);
@@ -83,6 +83,6 @@ describe('harness: new port fakes and the test preset', () => {
     });
     expect((await h.forge.findPr('/repo', branch!))?.checks).toBe('pending');
     await h.send('pr.opened', { number: pub.prNumber, url: pub.url, branch: branch! });
-    expect(h.ticket()).toMatchObject({ prNumber: pub.prNumber, prUrl: pub.url });
+    expect(await h.ticket()).toMatchObject({ prNumber: pub.prNumber, prUrl: pub.url });
   });
 });

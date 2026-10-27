@@ -6,7 +6,7 @@ import type { Forge } from "./types.js";
 
 export class PrPoller {
   private handle: NodeJS.Timeout | undefined;
-  private running = false;
+  private polling: Promise<void> | undefined;
 
   constructor(
     private d: {
@@ -20,7 +20,7 @@ export class PrPoller {
   ) {}
 
   async pollOnce(): Promise<void> {
-    for (const t of this.d.store.listTickets()) {
+    for (const t of await this.d.store.listTickets()) {
       try {
         await this.pollTicket(t);
       } catch (err) {
@@ -37,7 +37,7 @@ export class PrPoller {
       // merged or closed (its number kept in `finalKey`, so a new PR is watched again).
       const finalKey = `pr-final:${t.projectId}:${t.ticketId}`;
       const done = t.logical === "done";
-      if (done && (!t.prNumber || t.prState === "MERGED" || this.d.store.getMeta(finalKey) === String(t.prNumber))) return;
+      if (done && (!t.prNumber || t.prState === "MERGED" || (await this.d.store.getMeta(finalKey)) === String(t.prNumber))) return;
       const project = this.d.projects.find((p) => p.id === t.projectId);
       if (!project) return;
       let pr;
@@ -61,13 +61,13 @@ export class PrPoller {
       if (pr.state === "MERGED" || pr.state === "CLOSED") {
         if (pr.state === "MERGED") this.d.submit({ ...base, id: `pr:${t.ticketId}:${pr.number}:merged`, type: "pr.merged", payload });
         else this.d.submit({ ...base, id: `pr:${t.ticketId}:${pr.number}:closed`, type: "pr.closed", payload });
-        if (done) this.d.store.setMeta(finalKey, String(pr.number));
+        if (done) await this.d.store.setMeta(finalKey, String(pr.number));
         return;
       }
       if (done) return;
       const metaKey = `checks:${t.projectId}:${t.ticketId}`;
       if (pr.checks === "none") return;
-      const last = this.d.store.getMeta(metaKey);
+      const last = await this.d.store.getMeta(metaKey);
       if (pr.checks !== last) {
         const id = `pr:${t.ticketId}:${pr.number}:checks:${pr.checks}:${at}`;
         if (pr.checks === "fail")
@@ -79,24 +79,24 @@ export class PrPoller {
           });
         else if (pr.checks === "pass")
           this.d.submit({ ...base, id, type: "pr.checks_passed", payload });
-        this.d.store.setMeta(metaKey, pr.checks);
+        await this.d.store.setMeta(metaKey, pr.checks);
       }
     }
   }
 
   start(intervalMs = 30_000): void {
-    this.stop();
+    if (this.handle) clearInterval(this.handle);
     this.handle = setInterval(() => {
-      if (this.running) return;
-      this.running = true;
-      void this.pollOnce()
+      this.polling ??= this.pollOnce()
         .catch((e: Error) => this.d.log(`pr poll: ${e.message}`))
-        .finally(() => (this.running = false));
+        .finally(() => (this.polling = undefined));
     }, intervalMs);
   }
 
-  stop(): void {
+  /** No poll starts after it; resolves once the poll under way, if any, has finished. */
+  async stop(): Promise<void> {
     if (this.handle) clearInterval(this.handle);
     this.handle = undefined;
+    await this.polling;
   }
 }

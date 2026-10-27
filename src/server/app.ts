@@ -16,8 +16,10 @@ export interface ServerDeps {
   bus: EventBus;
   clock: Clock;
   submit: (e: FactoryEvent) => void;
-  isPaused: () => boolean;
-  linearWebhook: (raw: string, headers: Record<string, string | undefined>) => { status: number };
+  isPaused: () => boolean | Promise<boolean>;
+  /** Blocks a ticket through the orchestrator's event chain (Orchestrator.blockTicket). */
+  blockTicket: (projectId: string, ticketId: string, reason: string) => Promise<void>;
+  linearWebhook: (raw: string, headers: Record<string, string | undefined>) => { status: number } | Promise<{ status: number }>;
   oauth?: { authorizeUrl: () => string; callback: (code: string, state: string) => Promise<void> };
   linearConnected: () => boolean;
   tracker: Pick<Tracker, 'getIssue' | 'search' | 'activity'>;
@@ -97,7 +99,7 @@ export function createApp(d: ServerDeps): Hono {
     const raw = await c.req.text();
     const headers: Record<string, string | undefined> = {};
     c.req.raw.headers.forEach((v, k) => (headers[k.toLowerCase()] = v));
-    const { status } = d.linearWebhook(raw, headers);
+    const { status } = await d.linearWebhook(raw, headers);
     return c.body(null, status as 200);
   });
 
@@ -112,20 +114,28 @@ export function createApp(d: ServerDeps): Hono {
     }
   });
 
-  app.get('/api/state', (c) =>
-    c.json({
-      paused: d.isPaused(),
+  app.get('/api/state', async (c) => {
+    // Independent reads: one round trip's wait on Postgres, not five.
+    const [paused, tickets, queue, running, costTodayUsd] = await Promise.all([
+      d.isPaused(),
+      d.store.listTickets(),
+      d.store.listQueue(),
+      d.store.runsByStatus('running'),
+      d.store.costSince(startOfUtcDay(d.clock.now())),
+    ]);
+    return c.json({
+      paused,
       linearConnected: d.linearConnected(),
-      tickets: d.store.listTickets(),
-      queue: d.store.listQueue(),
-      activeRuns: d.store.runsByStatus('running').map(publicRun),
-      costTodayUsd: d.store.costSince(startOfUtcDay(d.clock.now())),
+      tickets,
+      queue,
+      activeRuns: running.map(publicRun),
+      costTodayUsd,
       budgetUsd: d.dailyBudgetUsd ?? null,
       capacity: d.capacity(),
-    }),
-  );
+    });
+  });
 
-  app.get('/api/events/recent', (c) => c.json(d.store.recentEvents(100, c.req.query('ticket') || undefined)));
+  app.get('/api/events/recent', async (c) => c.json(await d.store.recentEvents(100, c.req.query('ticket') || undefined)));
 
   app.get('/api/events', (c) =>
     streamSSE(c, async (stream) => {
@@ -190,7 +200,7 @@ export function createApp(d: ServerDeps): Hono {
   const agent = new Hono<AgentEnv>();
   agent.use('*', async (c, next) => {
     const token = c.req.header('authorization')?.replace(/^Bearer\s+/i, '');
-    const run = token ? d.store.findRunByToken(token) : undefined;
+    const run = token ? await d.store.findRunByToken(token) : undefined;
     if (!run || run.status !== 'running') return c.json({ error: 'unauthorized' }, 401);
     c.set('run', run);
     await next();
@@ -207,14 +217,11 @@ export function createApp(d: ServerDeps): Hono {
     const { text } = (await c.req.json()) as { text?: string };
     if (!text) return c.json({ error: 'text required' }, 400);
     if (run.linearSessionId) await d.tracker.activity(run.linearSessionId, { type: 'elicitation', body: text });
-    const t = d.store.getTicket(run.projectId, run.ticketId);
-    if (t) {
-      t.blocked = true;
-      t.blockReason = "Question posée par l'agent";
-      t.updatedAt = d.clock.now();
-      d.store.putTicket(t);
-      d.bus.publish({ kind: 'ticket', ticket: t });
-    }
+    // Not awaited: the block waits its turn behind the events before it (a run's launch among them),
+    // and the agent must not wait minutes for an answer, nor ask again when its request times out.
+    d.blockTicket(run.projectId, run.ticketId, "Question posée par l'agent").catch((err: Error) =>
+      d.bus.publish({ kind: 'log', level: 'error', message: `ask ${run.ticketId}: ${err.message}`, at: d.clock.now() }),
+    );
     return c.json({ ok: true });
   });
   app.route('/agent', agent);

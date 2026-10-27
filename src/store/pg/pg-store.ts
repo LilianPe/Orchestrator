@@ -7,7 +7,7 @@ import type { QueueItem, RunRecord, TimerRecord } from '../types.js';
 import * as schema from './schema.js';
 import type { AsyncStore, DequeuedEffect, PutTicketOptions } from './types.js';
 
-/** How long a `dequeue` claim keeps a row out of another worker's reach. */
+/** How long a `claim` keeps a row out of another worker's reach. */
 export const OUTBOX_LEASE_MS = 30_000;
 
 export interface PgStoreOptions {
@@ -17,7 +17,20 @@ export interface PgStoreOptions {
   max?: number;
   /** Injectable clock for deterministic tests. */
   now?: () => number;
+  /** Where an idle client's error goes (Postgres restarted, connection cut). Default: stderr. */
+  onError?: (err: Error) => void;
 }
+
+/**
+ * A pool emits `error` when an idle client loses its connection; unheard, Node throws it and the
+ * daemon dies. The pool reconnects on the next query, so the error is only reported. An injected
+ * pool that already has a listener keeps it.
+ */
+export function listenForPoolErrors(pool: Pool, onError: (err: Error) => void): void {
+  if (pool.listenerCount('error') === 0) pool.on('error', onError);
+}
+
+const reportToStderr = (err: Error) => console.error(`[postgres] ${err.message}`);
 
 const dateToMs = (value: Date | string | null): number => {
   if (value === null) return 0;
@@ -25,6 +38,11 @@ const dateToMs = (value: Date | string | null): number => {
 };
 
 const echoId = (key: string) => `echo:${key}`;
+
+/** Queue order of the SQLite store: priority 1 (urgent) first, 0 (none) after 4 (low), then age. */
+const QUEUE_ORDER = sql.raw(
+  `case when (payload->>'priority')::int = 0 then 5 else coalesce((payload->>'priority')::int, 5) end, available_at, id`,
+);
 
 /** Key/value metadata kept in `workflow_versions` under a reserved id prefix, until ORC-178 removes it. */
 const metaId = (key: string) => `meta:${key}`;
@@ -47,6 +65,7 @@ export class PgStore implements AsyncStore {
     }
     this.db = drizzle(this.pool, { schema });
     this.clock = options.now ?? (() => Date.now());
+    listenForPoolErrors(this.pool, options.onError ?? reportToStderr);
   }
 
   private now(): number {
@@ -98,7 +117,9 @@ export class PgStore implements AsyncStore {
 
   /**
    * Appends to `inbox` and `journal` in one transaction. The second call for the same event id
-   * returns `false` without touching the journal (the ORC-147 idempotency contract).
+   * returns `false` without touching the journal (the ORC-147 idempotency contract). The inbox row
+   * is written processed: the event is handled as it is journaled, and an inbox replay (ORC-147)
+   * must not take these rows for unprocessed ones.
    *
    * The per-ticket journal sequence is allocated under a transaction-scoped advisory lock, so two
    * workers cannot pick the same `seq` for a ticket.
@@ -110,10 +131,10 @@ export class PgStore implements AsyncStore {
     return this.db.transaction(async (tx) => {
       const inserted = await tx.execute(
         sql`
-          insert into inbox (id, event_id, type, payload, received_at, schema_version)
+          insert into inbox (id, event_id, type, payload, received_at, processed_at, schema_version)
           values (
             ${event.id}, ${event.id}, ${event.type}, ${JSON.stringify(event)}::jsonb,
-            to_timestamp(${now / 1000}), ${version}
+            to_timestamp(${now / 1000}), to_timestamp(${now / 1000}), ${version}
           )
           on conflict do nothing
           returning id
@@ -142,6 +163,10 @@ export class PgStore implements AsyncStore {
     });
   }
 
+  /**
+   * Newest recorded first, on the indexed `created_at` (the event's own `at` has no index); `seq`
+   * orders a ticket's events recorded in the same millisecond.
+   */
   async recentEvents(limit: number, ticketId?: string): Promise<FactoryEvent[]> {
     const result = ticketId
       ? await this.db.execute<{ payload: FactoryEvent }>(
@@ -234,30 +259,23 @@ export class PgStore implements AsyncStore {
   }
 
   /**
-   * Claims every due timer in one transaction and marks it `fired`. A timer is therefore returned
-   * once; `putTimer` resets it to `pending`.
+   * Reads the due timers without changing them, as SQLite does: a timer stays due until
+   * `deleteTimer` removes it, so a pass cut before that (an error, a shutdown) fires it again on
+   * the next one. Its event id (`timer:<key>:<fireAt>`) makes the second firing a no-op.
    */
   async dueTimers(now: number): Promise<TimerRecord[]> {
-    return this.db.transaction(async (tx) => {
-      const result = await tx.execute<{ id: string; payload: TimerRecord }>(
-        sql`
-          select id, payload
-          from timers
-          where status = 'pending' and due_at <= to_timestamp(${now / 1000})
-          order by due_at, id
-          for update skip locked
-        `,
-      );
-      const rows = result.rows;
-      if (rows.length === 0) return [];
-      const ids = rows.map((row) => sql`${row.id}`);
-      await tx.execute(sql`update timers set status = 'fired' where id in (${sql.join(ids, sql`, `)})`);
-      return rows.map((row) => row.payload);
-    });
+    const result = await this.db.execute<{ payload: TimerRecord }>(sql`
+      select payload
+      from timers
+      where status = 'pending' and due_at <= to_timestamp(${now / 1000})
+      order by due_at, id
+    `);
+    return result.rows.map((row) => row.payload);
   }
 
-  async deleteTimer(key: string): Promise<void> {
-    await this.db.execute(sql`delete from timers where id = ${key}`);
+  async deleteTimer(key: string, fireAt?: number): Promise<void> {
+    const armedAt = fireAt === undefined ? sql`` : sql`and (payload->>'fireAt')::double precision = ${fireAt}`;
+    await this.db.execute(sql`delete from timers where id = ${key} and status = 'pending' ${armedAt}`);
   }
 
   async deleteTimersFor(projectId: string, ticketId: string): Promise<void> {
@@ -289,11 +307,10 @@ export class PgStore implements AsyncStore {
       );
       const current = existing.rows[0];
       if (current) {
+        // A deduped row keeps its place in line, as the SQLite queue keeps `enqueued_at`.
         if (current.status === 'pending') {
-          const availableAt = new Date(item.enqueuedAt > 0 ? item.enqueuedAt : this.now());
           await tx.execute(sql`
-            update outbox set payload = ${JSON.stringify(item)}::jsonb, available_at = ${availableAt},
-              updated_at = to_timestamp(${this.now() / 1000})
+            update outbox set payload = ${JSON.stringify(item)}::jsonb, updated_at = to_timestamp(${this.now() / 1000})
             where id = ${current.id}
           `);
         }
@@ -328,10 +345,37 @@ export class PgStore implements AsyncStore {
   }
 
   /**
-   * Claims the oldest pending effect for a queue with `FOR UPDATE SKIP LOCKED`, marks it `running`
-   * and returns it with a lease. An expired lease makes the row claimable again.
+   * The `Store` queue: takes the next pending item of a queue out for good (status `done`), in the
+   * SQLite order (priority, then age). Not gated by `available_at`: the legacy queue has no delay.
+   * `FOR UPDATE SKIP LOCKED` keeps two daemons from taking the same item.
    */
-  async dequeue(queue: QueueName, now = this.now()): Promise<DequeuedEffect | undefined> {
+  async dequeue(queue: QueueName): Promise<QueueItem | undefined> {
+    const now = this.now();
+    return this.db.transaction(async (tx) => {
+      const result = await tx.execute<{ id: string; payload: QueueItem }>(sql`
+        select id, payload from outbox
+        where status = 'pending' and payload->>'queue' = ${queue}
+        order by ${QUEUE_ORDER}
+        limit 1
+        for update skip locked
+      `);
+      const row = result.rows[0];
+      if (!row) return undefined;
+      await tx.execute(sql`
+        update outbox set status = 'done', attempts = attempts + 1, lease_until = null,
+          updated_at = to_timestamp(${now / 1000})
+        where id = ${row.id}
+      `);
+      return row.payload;
+    });
+  }
+
+  /**
+   * Claims the next pending effect for a queue with `FOR UPDATE SKIP LOCKED`, marks it `running`
+   * and returns it with a lease. An expired lease makes the row claimable again; `completeEffect`
+   * settles it. Not used by the orchestrator yet: the outbox executors arrive with ORC-150.
+   */
+  async claim(queue: QueueName, now = this.now()): Promise<DequeuedEffect | undefined> {
     return this.db.transaction(async (tx) => {
       const result = await tx.execute<{
         id: string;
@@ -351,7 +395,7 @@ export class PgStore implements AsyncStore {
             and available_at <= to_timestamp(${now / 1000})
             and (lease_until is null or lease_until < to_timestamp(${now / 1000}))
             and payload->>'queue' = ${queue}
-          order by available_at, id
+          order by ${QUEUE_ORDER}
           limit 1
           for update skip locked
         `,
@@ -381,22 +425,30 @@ export class PgStore implements AsyncStore {
     });
   }
 
+  async completeEffect(id: string): Promise<void> {
+    await this.db.execute(sql`
+      update outbox set status = 'done', lease_until = null, updated_at = to_timestamp(${this.now() / 1000})
+      where id = ${id}
+    `);
+  }
+
   async listQueue(): Promise<QueueItem[]> {
     const result = await this.db.execute<{ payload: QueueItem }>(
       sql`
         select payload from outbox
         where status = 'pending' and payload->>'queue' is not null
-        order by available_at, id
+        order by ${QUEUE_ORDER}
       `,
     );
     return result.rows.map((row) => row.payload);
   }
 
-  async removeFromQueue(projectId: string, ticketId: string): Promise<void> {
+  async removeFromQueue(projectId: string, ticketId: string, queue?: QueueName): Promise<void> {
+    const ofQueue = queue === undefined ? sql`` : sql`and payload->>'queue' = ${queue}`;
     await this.db.execute(
       sql`
         delete from outbox
-        where ticket_id = ${ticketId} and status = 'pending' and payload->>'projectId' = ${projectId}
+        where ticket_id = ${ticketId} and status = 'pending' and payload->>'projectId' = ${projectId} ${ofQueue}
       `,
     );
   }

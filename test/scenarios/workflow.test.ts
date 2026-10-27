@@ -21,7 +21,7 @@ describe('standard workflow', () => {
     expect(req).toMatchObject({ resume: false, model: 'sonnet', cwd: '/tmp/factory-fake/p/REL-1', readOnly: false });
     expect(req.prompt.startsWith('/factory:dev\n')).toBe(true);
     expect(req.prompt).toContain('Branche : factory/rel-1-export-csv');
-    const t = h.ticket();
+    const t = await h.ticket();
     expect(t).toMatchObject({ logical: 'human_review', blocked: false, branch: 'factory/rel-1-export-csv', linearSessionId: 'ls-1' });
     expect(t.activeRunId).toBeUndefined();
     const moves = h.tracker.calls.filter((c) => c.method === 'moveTo').map((c) => c.args[1]);
@@ -48,7 +48,7 @@ describe('standard workflow', () => {
     expect(r.prompt.startsWith('/factory:feedback\n')).toBe(true);
     expect(r.prompt).toContain('boutons mal alignés');
     expect(r.prompt).toContain('bug quand la liste est vide');
-    expect(h.ticket()).toMatchObject({ logical: 'human_review', pendingFeedback: [] });
+    expect(await h.ticket()).toMatchObject({ logical: 'human_review', pendingFeedback: [] });
     expect(h.tracker.activities('ls-1').at(-1)).toEqual({ type: 'response', body: 'Corrigé dans abc123.' });
   });
 
@@ -57,7 +57,7 @@ describe('standard workflow', () => {
     await delegatedAndInReview(h);
     h.runner.enqueue({ hold: true }, { events: [{ kind: 'text', text: 'Second passage.' }] });
     await h.send('status.changed', { from: 'human_review', to: 'dev' });
-    const runningId = h.ticket().activeRunId!;
+    const runningId = (await h.ticket()).activeRunId!;
     await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'aussi le titre', author: 'L' });
     await h.advance(180_000);
     expect(h.runner.requests).toHaveLength(2);
@@ -74,10 +74,10 @@ describe('standard workflow', () => {
     await h.send('status.changed', { from: 'human_review', to: 'ai_review' });
     expect(h.runner.requests[1]).toMatchObject({ model: 'opus', resume: false });
     expect(h.runner.requests[1]!.prompt).toContain('Rounds de review max : 5');
-    expect(h.ticket().logical).toBe('ready');
+    expect((await h.ticket()).logical).toBe('ready');
     expect(h.tracker.activities('ls-1').at(-1)).toEqual({ type: 'response', body: 'Synthèse : 2 rounds, CI verte.' });
     await h.send('pr.merged', { number: 3, url: 'https://gh/pr/3', branch: 'factory/rel-1-export-csv' });
-    expect(h.ticket().logical).toBe('done');
+    expect((await h.ticket()).logical).toBe('done');
     expect(h.workspaces.cleaned).toEqual(['REL-1']);
     expect(h.runner.requests.at(-1)!.prompt.startsWith('/factory:learn\n')).toBe(true);
     expect(h.runner.requests.at(-1)!.cwd).toMatch(/^\/tmp\/factory-fake\/_kb\//);
@@ -95,7 +95,7 @@ describe('standard workflow', () => {
     await h.advance(180_000);
     await h.send('label.changed', { label: 'agent:reprendre', change: 'added' });
     expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:dev', '/factory:learn']);
-    expect(h.ticket()).toMatchObject({ logical: 'done', prState: 'MERGED' });
+    expect(await h.ticket()).toMatchObject({ logical: 'done', prState: 'MERGED' });
     expect(h.workspaces.cleaned).toEqual(['REL-1']);
   });
 
@@ -105,7 +105,7 @@ describe('standard workflow', () => {
     await h.send('control.pause', {});
     await h.send('session.mentioned', { linearSessionId: 'ls-q', body: 'pourquoi ce choix ?', author: 'L' });
     await h.send('pr.merged', { number: 3, url: 'https://gh/pr/3', branch: 'factory/rel-1-export-csv' });
-    expect(h.store.listQueue().map((q) => q.job)).toEqual(['ask', 'learn']);
+    expect((await h.store.listQueue()).map((q) => q.job)).toEqual(['ask', 'learn']);
     await h.send('control.resume', {});
     expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:dev', '/factory:ask', '/factory:learn']);
   });
@@ -121,7 +121,7 @@ describe('standard workflow', () => {
     expect(h.runner.requests[1]).toMatchObject({ resume: true });
     expect(h.runner.requests[1]!.prompt).toContain('## Vérifications en échec');
     expect(h.runner.requests[1]!.prompt).toContain('1 failed');
-    expect(h.ticket()).toMatchObject({ logical: 'human_review', verifyAttempts: 0 });
+    expect(await h.ticket()).toMatchObject({ logical: 'human_review', verifyAttempts: 0 });
   });
 
   it('criterion 7: a stop request stops the running session and blocks', async () => {
@@ -129,11 +129,11 @@ describe('standard workflow', () => {
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
     h.runner.enqueue({ hold: true });
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
-    const runId = h.ticket().activeRunId!;
+    const runId = (await h.ticket()).activeRunId!;
     await h.send('session.stopped', { linearSessionId: 'ls-1' });
-    expect(h.store.getRun(runId)!.status).toBe('stopped');
-    expect(h.ticket()).toMatchObject({ blocked: true });
-    expect(h.ticket().activeRunId).toBeUndefined();
+    expect((await h.store.getRun(runId))!.status).toBe('stopped');
+    expect(await h.ticket()).toMatchObject({ blocked: true });
+    expect((await h.ticket()).activeRunId).toBeUndefined();
     expect(h.tracker.activities('ls-1').at(-1)!.type).toBe('response');
   });
 
@@ -143,7 +143,7 @@ describe('standard workflow', () => {
       h.runner.enqueue({ hold: true }, { hold: true });
       await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
       await h.send('session.mentioned', { linearSessionId: 'ls-9', body: 'où en es-tu ?', author: 'L' });
-      const devRunId = h.ticket().activeRunId!;
+      const devRunId = (await h.ticket()).activeRunId!;
       const askRunId = h.runner.requests[1]!.runId;
       return { devRunId, askRunId };
     }
@@ -152,9 +152,9 @@ describe('standard workflow', () => {
       const h = createHarness();
       const { devRunId, askRunId } = await devAndAskRunning(h);
       await h.send('session.stopped', { linearSessionId: 'ls-9' });
-      expect(h.store.getRun(askRunId)!.status).toBe('stopped');
-      expect(h.store.getRun(devRunId)!.status).toBe('running');
-      expect(h.ticket()).toMatchObject({ blocked: false, activeRunId: devRunId });
+      expect((await h.store.getRun(askRunId))!.status).toBe('stopped');
+      expect((await h.store.getRun(devRunId))!.status).toBe('running');
+      expect(await h.ticket()).toMatchObject({ blocked: false, activeRunId: devRunId });
       expect(h.tracker.activities('ls-9').at(-1)).toEqual({ type: 'response', body: 'Arrêté.' });
       expect(h.tracker.activities('ls-1').filter((a) => a.type === 'response')).toEqual([]);
       h.runner.release(devRunId);
@@ -165,9 +165,9 @@ describe('standard workflow', () => {
       const h = createHarness();
       const { devRunId, askRunId } = await devAndAskRunning(h);
       await h.send('session.stopped', { linearSessionId: 'ls-1' });
-      expect(h.store.getRun(devRunId)!.status).toBe('stopped');
-      expect(h.store.getRun(askRunId)!.status).toBe('running');
-      expect(h.ticket().blocked).toBe(true);
+      expect((await h.store.getRun(devRunId))!.status).toBe('stopped');
+      expect((await h.store.getRun(askRunId))!.status).toBe('running');
+      expect((await h.ticket()).blocked).toBe(true);
       expect(h.tracker.activities('ls-1').at(-1)!.type).toBe('response');
       h.runner.release(askRunId);
       await h.orch.idle();
@@ -180,17 +180,17 @@ describe('standard workflow', () => {
       h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
       h.runner.enqueue({ hold: true });
       await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
-      const runId = h.ticket().activeRunId!;
+      const runId = (await h.ticket()).activeRunId!;
       await h.restart();
-      expect(h.store.getRun(runId)!.status).not.toBe('running');
-      expect(h.ticket()).toMatchObject({ blocked: true, logical: 'dev' });
-      expect(h.ticket().activeRunId).toBeUndefined();
+      expect((await h.store.getRun(runId))!.status).not.toBe('running');
+      expect(await h.ticket()).toMatchObject({ blocked: true, logical: 'dev' });
+      expect((await h.ticket()).activeRunId).toBeUndefined();
       expect(h.tracker.activities('ls-1').at(-1)).toMatchObject({ type: 'elicitation', body: expect.stringContaining('redémarré') });
       h.runner.enqueue({ events: [{ kind: 'text', text: 'Repris.' }] });
       await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'reprends', author: 'L' });
       expect(h.runner.requests).toHaveLength(2);
       expect(h.runner.requests[1]).toMatchObject({ resume: true, claudeSessionId: h.runner.requests[0]!.claudeSessionId });
-      expect(h.ticket().blocked).toBe(false);
+      expect((await h.ticket()).blocked).toBe(false);
     });
 
     it('a question run interrupted by shutdown gets a French notice in its thread', async () => {
@@ -200,7 +200,7 @@ describe('standard workflow', () => {
       await h.send('session.mentioned', { linearSessionId: 'ls-9', body: 'où ?', author: 'L' });
       await h.restart();
       expect(h.tracker.activities('ls-9').at(-1)).toMatchObject({ type: 'error', body: expect.stringContaining('redémarré') });
-      expect(h.ticket().blocked).toBe(false);
+      expect((await h.ticket()).blocked).toBe(false);
     });
   });
 
@@ -213,8 +213,8 @@ describe('standard workflow', () => {
     expect(r).toMatchObject({ readOnly: true, cwd: '/tmp/factory-fake/p/_trunk' });
     expect(r.prompt).toContain('## Message\noù est calculé le score ?');
     expect(h.tracker.activities('ls-9').at(-1)).toEqual({ type: 'response', body: 'Dans src/scores/history.ts.' });
-    expect(h.ticket()).toMatchObject({ logical: 'todo', blocked: false });
-    expect(h.ticket().activeRunId).toBeUndefined();
+    expect(await h.ticket()).toMatchObject({ logical: 'todo', blocked: false });
+    expect((await h.ticket()).activeRunId).toBeUndefined();
   });
 
   it('criterion 6b: "retiens" runs remember in a knowledge workspace', async () => {
@@ -251,14 +251,14 @@ describe('standard workflow', () => {
     it('a follow-up in the ask thread of a human-owned in-progress ticket stays read-only', async () => {
       const h = createHarness();
       await mentioned(h, 'In Progress');
-      expect(h.ticket().logical).toBe('dev');
+      expect((await h.ticket()).logical).toBe('dev');
       await h.send('session.prompted', { linearSessionId: 'ls-9', body: 'et pourquoi ?', author: 'L' });
       await h.advance(600_000);
       expect(h.runner.requests.map((r) => [r.prompt.split('\n')[0], r.readOnly])).toEqual([
         ['/factory:ask', true],
         ['/factory:ask', true],
       ]);
-      expect(h.ticket()).toMatchObject({ pendingFeedback: [], blocked: false });
+      expect(await h.ticket()).toMatchObject({ pendingFeedback: [], blocked: false });
       expect(h.tracker.calls.filter((c) => c.method === 'ensureSession')).toEqual([]);
     });
 
@@ -268,7 +268,7 @@ describe('standard workflow', () => {
       await h.send('status.changed', { from: 'human_review', to: 'ai_review' });
       expect(h.runner.requests).toHaveLength(1);
       expect(h.tracker.calls.filter((c) => c.method === 'moveTo')).toEqual([]);
-      expect(h.ticket().logical).toBe('ai_review');
+      expect((await h.ticket()).logical).toBe('ai_review');
     });
 
     it('agent:reprendre on a mention-only ticket starts nothing', async () => {
@@ -284,7 +284,7 @@ describe('standard workflow', () => {
       await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
       expect(h.runner.requests).toHaveLength(2);
       expect(h.runner.requests[1]!.prompt.startsWith('/factory:dev\n')).toBe(true);
-      expect(h.ticket()).toMatchObject({ delegated: true, linearSessionId: 'ls-1' });
+      expect(await h.ticket()).toMatchObject({ delegated: true, linearSessionId: 'ls-1' });
     });
 
     it('on a delegated ticket, a follow-up in a question thread runs ask, not feedback', async () => {
@@ -295,7 +295,7 @@ describe('standard workflow', () => {
       await h.send('session.prompted', { linearSessionId: 'ls-9', body: 'et pourquoi ?', author: 'L' });
       await h.advance(600_000);
       expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:dev', '/factory:ask', '/factory:ask']);
-      expect(h.ticket().pendingFeedback).toEqual([]);
+      expect((await h.ticket()).pendingFeedback).toEqual([]);
     });
   });
 
@@ -304,7 +304,7 @@ describe('standard workflow', () => {
       const h = createHarness({ knowledge: false });
       await delegatedAndInReview(h);
       await h.send('pr.merged', { number: 3, url: 'https://gh/pr/3', branch: 'factory/rel-1-export-csv' });
-      expect(h.ticket()).toMatchObject({ logical: 'done', blocked: false });
+      expect(await h.ticket()).toMatchObject({ logical: 'done', blocked: false });
       expect(h.runner.requests).toHaveLength(1);
       expect(h.tracker.activities().filter((a) => a.type === 'error')).toEqual([]);
     });
@@ -314,7 +314,7 @@ describe('standard workflow', () => {
       h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
       await h.send('command', { name: 'retiens', body: 'un fait', linearSessionId: 'ls-10', author: 'L' });
       expect(h.runner.requests).toHaveLength(0);
-      expect(h.ticket().blocked).toBe(false);
+      expect((await h.ticket()).blocked).toBe(false);
       expect(h.tracker.activities('ls-10').at(-1)).toMatchObject({ type: 'response', body: expect.stringContaining('base de connaissance') });
     });
   });
@@ -327,8 +327,8 @@ describe('standard workflow', () => {
     await h.send('ticket.delegated', { linearSessionId: 'a' }, 'REL-1');
     await h.send('ticket.delegated', { linearSessionId: 'b' }, 'REL-2');
     expect(h.runner.requests).toHaveLength(1);
-    expect(h.store.listQueue()).toHaveLength(1);
-    h.runner.release(h.ticket('REL-1').activeRunId!);
+    expect(await h.store.listQueue()).toHaveLength(1);
+    h.runner.release((await h.ticket('REL-1')).activeRunId!);
     await h.orch.idle();
     expect(h.runner.requests).toHaveLength(2);
     expect(h.runner.requests[1]!.cwd).toBe('/tmp/factory-fake/p/REL-2');
@@ -339,7 +339,7 @@ describe('standard workflow', () => {
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Flou', description: 'trop court' });
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
     expect(h.runner.requests).toHaveLength(0);
-    expect(h.ticket().blocked).toBe(true);
+    expect((await h.ticket()).blocked).toBe(true);
     const last = h.tracker.activities('ls-1').at(-1)!;
     expect(last.type).toBe('elicitation');
   });

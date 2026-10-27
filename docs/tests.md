@@ -66,14 +66,14 @@ describe('mon comportement', () => {
     h.runner.enqueue({ hold: true }); // le run reste ouvert jusqu'à h.runner.release(runId)
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
     await h.advance(180_000);
-    expect(h.ticket()).toMatchObject({ logical: 'dev' });
+    expect(await h.ticket()).toMatchObject({ logical: 'dev' });
   });
 });
 ```
 
 - `h.tracker.addIssue({ identifier, title })` pose une description par défaut assez longue. Une description passée au faux doit faire au moins 30 caractères : sinon le contrôle de prise en charge du pack standard (`has_description`) bloque le ticket et aucun run ne démarre.
 - `h.send(type, payload, ticketId?)` soumet un événement (ticket `REL-1` par défaut) et attend la fin de son traitement.
-- `h.ticket()` lit l'état du ticket dans le store.
+- `await h.ticket()` lit l'état du ticket dans le store (asynchrone, comme tout le store). `createHarness({ store })` fait tourner le harnais sur un autre store vide : `test/integration/orchestrator-pg.test.ts` l'utilise avec `PgStore`.
 - `h.restart()` arrête proprement l'orchestrateur et en relance un neuf sur le même store, comme `relais up` au redémarrage.
 - `h.checks.holdNext()` garde le prochain contrôle en cours et rend la fonction qui le termine (vert par défaut, ou le résultat passé). `h.send` et `h.advance` attendent la fin des contrôles en cours : n'attendez l'envoi qu'après avoir relâché le contrôle, et observez l'état intermédiaire avec `vi.waitFor` (exemple dans `test/scenarios/harness.test.ts`).
 - `createHarness({ projectYaml })` surcharge le `workflow.yml` du pack standard, comme le fichier `.relais/workflow.yml` d'un projet.
@@ -94,7 +94,7 @@ const preset = testPreset({ verifyAttempts: 3 });
 const h = createHarness({ preset });
 for (let i = 0; i < preset.bounds.verifyAttempts; i++) h.checks.failNext('1 test en échec');
 // … délégation : 3 runs, 3 contrôles, puis le ticket est bloqué
-expect(h.ticket()).toMatchObject({ blocked: true });
+expect(await h.ticket()).toMatchObject({ blocked: true });
 ```
 
 Un test de propriétés lit ses bornes dans `preset.bounds` au lieu de les recopier. `verifyAttempts` vaut au moins 1 : le schéma de `workflow.yml` accepte 0, que le moteur traite comme 1, et le préréglage refuse cette ambiguïté. Le préréglage se superpose au pack standard ; `projectYaml` et `preset` ne se combinent pas.

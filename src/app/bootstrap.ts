@@ -6,6 +6,7 @@ import { GhCliForge } from '../adapters/forge/gh-cli.js';
 import { GitHubAppForge } from '../adapters/forge/github-app.js';
 import { PrPoller } from '../adapters/forge/pr-poller.js';
 import { ClaudeCodeRunner } from '../adapters/runner/claude-code.js';
+import { purgeTranscripts } from '../adapters/runner/transcript.js';
 import { FakeRunner } from '../adapters/runner/fake.js';
 import type { Runner } from '../adapters/runner/types.js';
 import { LinearApi } from '../adapters/tracker/linear/api.js';
@@ -16,7 +17,7 @@ import { Reconciler } from '../adapters/tracker/linear/reconcile.js';
 import { LinearTracker } from '../adapters/tracker/linear/tracker.js';
 import { isUsableWebhookSecret } from '../adapters/tracker/linear/webhook.js';
 import { GitWorkspaces } from '../adapters/workspace/git-workspaces.js';
-import { homePaths, loadInstance, loadSecrets, saveSecrets } from '../config/instance.js';
+import { homePaths, loadInstance, loadSecrets, saveSecrets, secretValues } from '../config/instance.js';
 import { resolveGithubApp } from '../config/github-app.js';
 import { writeRunSettings } from '../config/run-settings.js';
 import { loadWorkflow } from '../config/load-workflow.js';
@@ -29,7 +30,7 @@ import { runVerify } from '../core/verify.js';
 import { KnowledgeBase } from '../knowledge/kb.js';
 import { startSmeeRelay } from '../relay/smee.js';
 import { createApp } from '../server/app.js';
-import { SqliteStore } from '../store/sqlite-store.js';
+import { openStore } from '../store/open.js';
 import { repoRoot } from './root.js';
 import { TrackerSwitch } from './tracker-switch.js';
 import { PRODUCT_NAME } from '../product.js';
@@ -80,184 +81,176 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
   });
   const limits = projects[0]?.workflow.limits;
 
-  const store = new SqliteStore(paths.db);
-  const clock = new SystemClock();
-  const bus = new EventBus();
-  bus.subscribe((m) => {
-    if (m.kind === 'log' && m.message !== 'ping') log(`${m.level}: ${m.message}`);
-  });
+  const { store, kind } = await openStore({ env, sqlitePath: paths.db, migrationsFolder: join(root, 'drizzle'), log });
+  log(kind === 'postgres' ? 'store : Postgres (migrations Drizzle appliquées)' : `store : SQLite (${paths.db})`);
+  // From here on, a failed start closes the store it opened (the Postgres pool would keep the process alive).
+  try {
+    const clock = new SystemClock();
+    const bus = new EventBus();
+    bus.subscribe((m) => {
+      if (m.kind === 'log' && m.message !== 'ping') log(`${m.level}: ${m.message}`);
+    });
 
-  const trackerSwitch = new TrackerSwitch(port);
-  let linearTracker: LinearTracker | undefined;
-  const tokenManager = () => {
-    const linear = loadSecrets(o.home).linear;
-    if (!linear) return undefined;
-    return new TokenManager({
-      clientId: linear.clientId,
-      clientSecret: linear.clientSecret,
-      load: () => {
-        const l = loadSecrets(o.home).linear;
-        return l?.accessToken ? { accessToken: l.accessToken, refreshToken: l.refreshToken, expiresAt: l.expiresAt } : undefined;
+    const trackerSwitch = new TrackerSwitch(port);
+    let linearTracker: LinearTracker | undefined;
+    const tokenManager = () => {
+      const linear = loadSecrets(o.home).linear;
+      if (!linear) return undefined;
+      return new TokenManager({
+        clientId: linear.clientId,
+        clientSecret: linear.clientSecret,
+        load: () => {
+          const l = loadSecrets(o.home).linear;
+          return l?.accessToken ? { accessToken: l.accessToken, refreshToken: l.refreshToken, expiresAt: l.expiresAt } : undefined;
+        },
+        save: (t) => {
+          const s = loadSecrets(o.home);
+          if (s.linear) saveSecrets(o.home, { ...s, linear: { ...s.linear, ...t } });
+        },
+      });
+    };
+    const connectLinear = async () => {
+      const tm = tokenManager();
+      const appUserId = loadSecrets(o.home).linear?.appUserId;
+      if (!tm || !appUserId) return false;
+      const api = new LinearApi(() => tm.get());
+      linearTracker = new LinearTracker(api, appUserId);
+      for (const p of projects) await linearTracker.warm(p.teamKey).catch((e: Error) => log(`warm ${p.teamKey}: ${e.message}`));
+      trackerSwitch.set(linearTracker);
+      return true;
+    };
+
+    const scheduler = new Scheduler(store, { dev: limits?.parallelSessions ?? 3, questions: limits?.questionSessions ?? 2 });
+    // The daemon's own secrets never enter a run's environment; masked all the same, should one surface.
+    const daemonSecrets = () => [...secretValues(loadSecrets(o.home)), ...(instance.github?.webhookSecret ? [instance.github.webhookSecret] : [])];
+    const runner: Runner = o.fakeRunner ? new FakeRunner() : new ClaudeCodeRunner({ transcriptsDir: paths.transcripts, secrets: daemonSecrets });
+    const workspaces = new GitWorkspaces({ root: paths.workspaces, knowledgeRepo: instance.knowledge?.repoPath });
+    const forge = githubApp
+      ? new GitHubAppForge({ ...githubApp, log })
+      : new GhCliForge();
+    if (githubApp) {
+      log(
+        `forge GitHub : GitHub App ${githubApp.appId} (jetons d'installation limités au dépôt du run` +
+          `${githubApp.installationId ? `, installation ${githubApp.installationId}` : ", installation résolue par dépôt"})`,
+      );
+    } else {
+      log('forge GitHub : CLI gh (repli de migration ; GH_TOKEN reste requis par les agents jusqu’à ORC-125)');
+    }
+    const kb = instance.knowledge ? new KnowledgeBase(instance.knowledge.repoPath) : undefined;
+
+    const orchestrator = new Orchestrator({
+      beforeRun: async () => {
+        if (kb) await kb.pull();
       },
-      save: (t) => {
-        const s = loadSecrets(o.home);
-        if (s.linear) saveSecrets(o.home, { ...s, linear: { ...s.linear, ...t } });
+      store,
+      clock,
+      bus,
+      scheduler,
+      tracker: trackerSwitch,
+      forge,
+      runner,
+      workspaces,
+      verify: runVerify,
+      projects,
+      packDir,
+      settingsPath: writeRunSettings(packDir, o.home),
+      dailyBudgetUsd: instance.limits.perDayUsd,
+      knowledgeConfigured: !!instance.knowledge,
+      agentEnv: (run) => ({
+        FACTORY_API: `http://127.0.0.1:${port}/agent`,
+        FACTORY_RUN_TOKEN: run.token,
+        FACTORY_TICKET: run.ticketId,
+        FACTORY_KNOWLEDGE: instance.knowledge?.repoPath ?? '',
+        FACTORY_ROOT: root,
+        PATH: `${join(root, 'bin')}:${process.env['PATH'] ?? ''}`,
+      }),
+    });
+    await orchestrator.recover();
+    const submit = (e: Parameters<Orchestrator['submit']>[0]) => void orchestrator.submit(e);
+
+    const webhookSecret = () => loadSecrets(o.home).linear?.webhookSecret ?? '';
+    const ingest = createLinearIngest({
+      secret: webhookSecret,
+      submit,
+      ack: (sessionId) => trackerSwitch.activity(sessionId, { type: 'thought', body: 'Pris en compte.' }),
+      log,
+      ctx: {
+        projectIdForTeam: (k) => projects.find((p) => p.teamKey === k)?.id,
+        logicalFor: (pid, name) => {
+          const p = projects.find((x) => x.id === pid);
+          return p ? (logicalFromName(p.workflow.states, name) ?? null) : null;
+        },
+        stateNameById: (t, id) => linearTracker?.stateNameById(t, id),
+        labelNameById: (t, id) => linearTracker?.labelNameById(t, id),
+        isEcho: (k) => store.isEcho(k, clock.now()),
+        commands: (pid) => projects.find((p) => p.id === pid)?.workflow.commands ?? [],
+        now: () => clock.now(),
       },
     });
-  };
-  const connectLinear = async () => {
-    const tm = tokenManager();
-    const appUserId = loadSecrets(o.home).linear?.appUserId;
-    if (!tm || !appUserId) return false;
-    const api = new LinearApi(() => tm.get());
-    linearTracker = new LinearTracker(api, appUserId);
-    for (const p of projects) await linearTracker.warm(p.teamKey).catch((e: Error) => log(`warm ${p.teamKey}: ${e.message}`));
-    trackerSwitch.set(linearTracker);
-    return true;
-  };
 
-  const scheduler = new Scheduler(store, { dev: limits?.parallelSessions ?? 3, questions: limits?.questionSessions ?? 2 });
-  const runner: Runner = o.fakeRunner ? new FakeRunner() : new ClaudeCodeRunner({ transcriptsDir: paths.transcripts });
-  const workspaces = new GitWorkspaces({ root: paths.workspaces, knowledgeRepo: instance.knowledge?.repoPath });
-  const forge = githubApp
-    ? new GitHubAppForge({ ...githubApp, log })
-    : new GhCliForge();
-  if (githubApp) {
-    log(
-      `forge GitHub : GitHub App ${githubApp.appId} (jetons d'installation limités au dépôt du run` +
-        `${githubApp.installationId ? `, installation ${githubApp.installationId}` : ", installation résolue par dépôt"})`,
-    );
-  } else {
-    log('forge GitHub : CLI gh (repli de migration ; GH_TOKEN reste requis par les agents jusqu’à ORC-125)');
-  }
-  const kb = instance.knowledge ? new KnowledgeBase(instance.knowledge.repoPath) : undefined;
+    const reconciler = new Reconciler({ tracker: trackerSwitch, store, projects, submit, clock, log });
+    const timers = new TimerService(store, clock, submit, (e) => log(`timers: ${e.message}`));
+    const poller = new PrPoller({ store, forge, projects, submit, clock, log });
 
-  const orchestrator = new Orchestrator({
-    beforeRun: async () => {
-      if (kb) await kb.pull();
-    },
-    store,
-    clock,
-    bus,
-    scheduler,
-    tracker: trackerSwitch,
-    forge,
-    runner,
-    workspaces,
-    verify: runVerify,
-    projects,
-    packDir,
-    settingsPath: writeRunSettings(packDir, o.home),
-    dailyBudgetUsd: instance.limits.perDayUsd,
-    knowledgeConfigured: !!instance.knowledge,
-    agentEnv: (run) => ({
-      FACTORY_API: `http://127.0.0.1:${port}/agent`,
-      FACTORY_RUN_TOKEN: run.token,
-      FACTORY_TICKET: run.ticketId,
-      FACTORY_KNOWLEDGE: instance.knowledge?.repoPath ?? '',
-      FACTORY_ROOT: root,
-      PATH: `${join(root, 'bin')}:${process.env['PATH'] ?? ''}`,
-    }),
-  });
-  orchestrator.recover();
-  const submit = (e: Parameters<Orchestrator['submit']>[0]) => void orchestrator.submit(e);
+    const oauthStates = new Set<string>();
+    const app = createApp({
+      knowledgeSearch: kb ? (q) => kb.search(q) : undefined,
+      store,
+      bus,
+      clock,
+      submit,
+      isPaused: () => orchestrator.isPaused(),
+      blockTicket: (projectId, ticketId, reason) => orchestrator.blockTicket(projectId, ticketId, reason),
+      linearWebhook: ingest,
+      linearConnected: () => !!trackerSwitch.current,
+      tracker: trackerSwitch,
+      capacity: () => ({
+        dev: { used: scheduler.inUse('dev'), total: limits?.parallelSessions ?? 3 },
+        questions: { used: scheduler.inUse('questions'), total: limits?.questionSessions ?? 2 },
+      }),
+      dailyBudgetUsd: instance.limits.perDayUsd,
+      transcriptsDir: paths.transcripts,
+      webDir: existsSync(webDir) ? webDir : undefined,
+      uiPassword,
+      oauth: loadSecrets(o.home).linear
+        ? {
+            authorizeUrl: () => {
+              const state = randomBytes(16).toString('hex');
+              oauthStates.add(state);
+              return buildAuthorizeUrl({ clientId: loadSecrets(o.home).linear!.clientId, redirectUri: `${baseUrl}/oauth/callback`, state });
+            },
+            callback: async (code, state) => {
+              if (!oauthStates.delete(state)) throw new Error('état OAuth inconnu, relancez la connexion');
+              const s = loadSecrets(o.home);
+              const tokens = await exchangeCode({ clientId: s.linear!.clientId, clientSecret: s.linear!.clientSecret, code, redirectUri: `${baseUrl}/oauth/callback` });
+              saveSecrets(o.home, { ...s, linear: { ...s.linear!, ...tokens } });
+              const api = new LinearApi(async () => tokens.accessToken);
+              const who = await api.gql<{ viewer: { id: string }; organization: { id: string } }>(Q.viewer);
+              const s2 = loadSecrets(o.home);
+              saveSecrets(o.home, { ...s2, linear: { ...s2.linear!, appUserId: who.viewer.id, organizationId: who.organization.id } });
+              await connectLinear();
+              await orchestrator.announceRecovery();
+              for (const p of projects) {
+                const created = await linearTracker!.ensureSetup(p.teamKey, p.workflow.states, FACTORY_LABELS);
+                if (created.length) log(`Linear ${p.teamKey} : créé ${created.join(', ')}`);
+              }
+              reconciler.start();
+            },
+          }
+        : undefined,
+    });
 
-  const webhookSecret = () => loadSecrets(o.home).linear?.webhookSecret ?? '';
-  const ingest = createLinearIngest({
-    secret: webhookSecret,
-    submit,
-    ack: (sessionId) => trackerSwitch.activity(sessionId, { type: 'thought', body: 'Pris en compte.' }),
-    log,
-    ctx: {
-      projectIdForTeam: (k) => projects.find((p) => p.teamKey === k)?.id,
-      logicalFor: (pid, name) => {
-        const p = projects.find((x) => x.id === pid);
-        return p ? (logicalFromName(p.workflow.states, name) ?? null) : null;
-      },
-      stateNameById: (t, id) => linearTracker?.stateNameById(t, id),
-      labelNameById: (t, id) => linearTracker?.labelNameById(t, id),
-      isEcho: (k) => store.isEcho(k, clock.now()),
-      commands: (pid) => projects.find((p) => p.id === pid)?.workflow.commands ?? [],
-      now: () => clock.now(),
-    },
-  });
-
-  const reconciler = new Reconciler({ tracker: trackerSwitch, store, projects, submit, clock, log });
-  const timers = new TimerService(store, clock, submit);
-  const poller = new PrPoller({ store, forge, projects, submit, clock, log });
-
-  const oauthStates = new Set<string>();
-  const app = createApp({
-    knowledgeSearch: kb ? (q) => kb.search(q) : undefined,
-    store,
-    bus,
-    clock,
-    submit,
-    isPaused: () => orchestrator.isPaused(),
-    linearWebhook: ingest,
-    linearConnected: () => !!trackerSwitch.current,
-    tracker: trackerSwitch,
-    capacity: () => ({
-      dev: { used: scheduler.inUse('dev'), total: limits?.parallelSessions ?? 3 },
-      questions: { used: scheduler.inUse('questions'), total: limits?.questionSessions ?? 2 },
-    }),
-    dailyBudgetUsd: instance.limits.perDayUsd,
-    transcriptsDir: paths.transcripts,
-    webDir: existsSync(webDir) ? webDir : undefined,
-    uiPassword,
-    oauth: loadSecrets(o.home).linear
-      ? {
-          authorizeUrl: () => {
-            const state = randomBytes(16).toString('hex');
-            oauthStates.add(state);
-            return buildAuthorizeUrl({ clientId: loadSecrets(o.home).linear!.clientId, redirectUri: `${baseUrl}/oauth/callback`, state });
-          },
-          callback: async (code, state) => {
-            if (!oauthStates.delete(state)) throw new Error('état OAuth inconnu, relancez la connexion');
-            const s = loadSecrets(o.home);
-            const tokens = await exchangeCode({ clientId: s.linear!.clientId, clientSecret: s.linear!.clientSecret, code, redirectUri: `${baseUrl}/oauth/callback` });
-            saveSecrets(o.home, { ...s, linear: { ...s.linear!, ...tokens } });
-            const api = new LinearApi(async () => tokens.accessToken);
-            const who = await api.gql<{ viewer: { id: string }; organization: { id: string } }>(Q.viewer);
-            const s2 = loadSecrets(o.home);
-            saveSecrets(o.home, { ...s2, linear: { ...s2.linear!, appUserId: who.viewer.id, organizationId: who.organization.id } });
-            await connectLinear();
-            await orchestrator.announceRecovery();
-            for (const p of projects) {
-              const created = await linearTracker!.ensureSetup(p.teamKey, p.workflow.states, FACTORY_LABELS);
-              if (created.length) log(`Linear ${p.teamKey} : créé ${created.join(', ')}`);
-            }
-            reconciler.start();
-          },
-        }
-      : undefined,
-  });
-
-  const server = serve({ fetch: app.fetch, port, hostname: instance.host });
-  const relay = instance.relay.kind === 'smee' ? startSmeeRelay({ url: instance.relay.url, onWebhook: ingest, log }) : undefined;
-  timers.start();
-  const tickInterval = setInterval(() => {
-    orchestrator.tick().catch((e: unknown) => log(`tick: ${(e as Error).message}`));
-  }, 60_000);
-  tickInterval.unref();
-  poller.start();
-  if (await connectLinear()) {
-    await orchestrator.announceRecovery();
-    reconciler.start();
-  }
-  else log(`Linear non connecté : ouvrez ${baseUrl}/oauth/start`);
-  if (!isUsableWebhookSecret(webhookSecret()))
-    log('Attention : aucun secret de webhook Linear configuré, tout webhook sera refusé. Relancez factory init pour le renseigner.');
-  log(`${PRODUCT_NAME} écoute sur ${baseUrl}`);
-
-  return {
-    url: baseUrl,
-    async stop() {
+    const server = serve({ fetch: app.fetch, port, hostname: instance.host });
+    const relay = instance.relay.kind === 'smee' ? startSmeeRelay({ url: instance.relay.url, onWebhook: ingest, log }) : undefined;
+    let purgeInterval: NodeJS.Timeout | undefined;
+    let tickInterval: NodeJS.Timeout | undefined;
+    // Everything but the store, which the caller closes after: by stop(), or by a start that fails from here on.
+    const shutdown = async () => {
       clearInterval(tickInterval);
+      clearInterval(purgeInterval);
       relay?.close();
-      timers.stop();
-      poller.stop();
-      reconciler.stop();
+      // A pass under way finishes first, so it never reads or writes a closed store.
+      await Promise.all([timers.stop(), poller.stop(), reconciler.stop()]);
       orchestrator.stopAll();
       await orchestrator.idle();
       await new Promise<void>((resolve) => {
@@ -265,7 +258,44 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
         // Long-lived SSE streams (/api/events) would otherwise keep close() pending forever.
         (server as unknown as { closeAllConnections(): void }).closeAllConnections();
       });
-      store.close();
-    },
-  };
+    };
+    try {
+      timers.start();
+      // Transcripts are kept 30 days (ORC-132): purged at start, then daily.
+      const purge = () => {
+        const removed = purgeTranscripts(paths.transcripts, Date.now());
+        if (removed.length) log(`transcripts : ${removed.length} supprimé(s) après 30 jours`);
+      };
+      purge();
+      purgeInterval = setInterval(purge, 24 * 60 * 60 * 1000);
+      purgeInterval.unref();
+      tickInterval = setInterval(() => {
+        orchestrator.tick().catch((e: unknown) => log(`tick: ${(e as Error).message}`));
+      }, 60_000);
+      tickInterval.unref();
+      poller.start();
+      if (await connectLinear()) {
+        await orchestrator.announceRecovery();
+        reconciler.start();
+      }
+      else log(`Linear non connecté : ouvrez ${baseUrl}/oauth/start`);
+      if (!isUsableWebhookSecret(webhookSecret()))
+        log('Attention : aucun secret de webhook Linear configuré, tout webhook sera refusé. Relancez factory init pour le renseigner.');
+    } catch (err) {
+      await shutdown().catch((e: Error) => log(`arrêt après un démarrage manqué : ${e.message}`));
+      throw err;
+    }
+    log(`${PRODUCT_NAME} écoute sur ${baseUrl}`);
+
+    return {
+      url: baseUrl,
+      async stop() {
+        await shutdown();
+        await store.close();
+      },
+    };
+  } catch (err) {
+    await store.close().catch((e: Error) => log(`store : fermeture impossible (${e.message})`));
+    throw err;
+  }
 }

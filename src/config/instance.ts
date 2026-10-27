@@ -92,6 +92,12 @@ export function loadSecrets(home: string): Secrets {
   return existsSync(file) ? (JSON.parse(readFileSync(file, 'utf8')) as Secrets) : {};
 }
 
+/** The secret values of the secrets file (identifiers left out): masked in run transcripts. */
+export function secretValues(s: Secrets): string[] {
+  const l = s.linear;
+  return [l?.clientSecret, l?.webhookSecret, l?.accessToken, l?.refreshToken].filter((v): v is string => !!v);
+}
+
 export function saveSecrets(home: string, s: Secrets): void {
   ensureTree(home);
   const file = homePaths(home).secrets;

@@ -9,12 +9,22 @@ export class TimerService {
     private store: Store,
     private clock: Clock,
     private emit: (e: FactoryEvent) => void,
+    private onError: (err: Error) => void = () => {},
   ) {}
 
-  tick(): void {
+  private ticking: Promise<void> | undefined;
+
+  /** One pass at a time: a tick that finds a pass still running waits for it instead of starting another. */
+  tick(): Promise<void> {
+    this.ticking ??= this.fire().finally(() => (this.ticking = undefined));
+    return this.ticking;
+  }
+
+  private async fire(): Promise<void> {
     const now = this.clock.now();
-    for (const t of this.store.dueTimers(now)) {
-      this.store.deleteTimer(t.key);
+    for (const t of await this.store.dueTimers(now)) {
+      // Only the timer read here: the orchestrator may have re-armed the key meanwhile.
+      await this.store.deleteTimer(t.key, t.fireAt);
       this.emit({
         ...TRUSTED,
         id: `timer:${t.key}:${t.fireAt}`,
@@ -28,12 +38,14 @@ export class TimerService {
   }
 
   start(intervalMs = 1000): void {
-    this.stop();
-    this.handle = setInterval(() => this.tick(), intervalMs);
+    if (this.handle) clearInterval(this.handle);
+    this.handle = setInterval(() => void this.tick().catch((err: Error) => this.onError(err)), intervalMs);
   }
 
-  stop(): void {
+  /** No pass starts after it; resolves once the pass under way, if any, has finished. */
+  async stop(): Promise<void> {
     if (this.handle) clearInterval(this.handle);
     this.handle = undefined;
+    await this.ticking?.catch(() => {});
   }
 }

@@ -61,51 +61,56 @@ describe('stripMention', () => {
 });
 
 describe('mapLinearWebhook', () => {
-  it('maps a delegation', () => {
-    expect(mapLinearWebhook(fx('session-created-delegation'), 'd1', ctx())).toEqual([
+  it('maps a delegation', async () => {
+    expect(await mapLinearWebhook(fx('session-created-delegation'), 'd1', ctx())).toEqual([
       { id: 'linear:d1', type: 'ticket.delegated', at: 5000, schemaVersion: 2, taint: 'trusted', projectId: 'p', ticketId: 'REL-1',
         payload: { linearSessionId: 'as-1', promptContext: '<issue identifier="REL-1">Export</issue>' } },
     ]);
   });
-  it('maps a mention', () => {
-    expect(mapLinearWebhook(fx('session-created-mention'), 'd2', ctx())[0]).toMatchObject({
+  it('maps a mention', async () => {
+    expect((await mapLinearWebhook(fx('session-created-mention'), 'd2', ctx()))[0]).toMatchObject({
       type: 'session.mentioned', payload: { linearSessionId: 'as-2', body: 'tu penses quoi de cette approche ?', author: 'Lilian' },
     });
   });
-  it('maps a command', () => {
-    expect(mapLinearWebhook(fx('session-created-command'), 'd3', ctx())[0]).toMatchObject({
+  it('maps a command', async () => {
+    expect((await mapLinearWebhook(fx('session-created-command'), 'd3', ctx()))[0]).toMatchObject({
       type: 'command', payload: { name: 'retiens', body: 'les agrégats côté serveur', linearSessionId: 'as-3' },
     });
   });
-  it('maps a prompt and a stop', () => {
-    expect(mapLinearWebhook(fx('session-prompted'), 'd4', ctx())[0]).toMatchObject({
+  it('maps a prompt and a stop', async () => {
+    expect((await mapLinearWebhook(fx('session-prompted'), 'd4', ctx()))[0]).toMatchObject({
       type: 'session.prompted', payload: { linearSessionId: 'as-1', body: 'les boutons sont mal alignés', author: 'Lilian' },
     });
-    expect(mapLinearWebhook(fx('session-stop'), 'd5', ctx())[0]).toMatchObject({ type: 'session.stopped', payload: { linearSessionId: 'as-1' } });
+    expect((await mapLinearWebhook(fx('session-stop'), 'd5', ctx()))[0]).toMatchObject({ type: 'session.stopped', payload: { linearSessionId: 'as-1' } });
   });
-  it('maps a move and an added label', () => {
-    const out = mapLinearWebhook(fx('issue-moved-labeled'), 'd6', ctx());
+  it('maps a move and an added label', async () => {
+    const out = await mapLinearWebhook(fx('issue-moved-labeled'), 'd6', ctx());
     expect(out).toEqual([
       { id: 'linear:d6', type: 'status.changed', at: 5000, schemaVersion: 2, taint: 'trusted', projectId: 'p', ticketId: 'REL-1', payload: { from: 'human_review', to: 'ai_review' } },
       { id: 'linear:d6:label:l-resume', type: 'label.changed', at: 5000, schemaVersion: 2, taint: 'trusted', projectId: 'p', ticketId: 'REL-1', payload: { label: 'agent:reprendre', change: 'added' } },
     ]);
   });
-  it('keeps the label event id when the state change is an echo', () => {
-    const out = mapLinearWebhook(fx('issue-moved-labeled'), 'd6', ctx(['state:REL-1:AI Review']));
+  it('keeps the label event id when the state change is an echo', async () => {
+    const out = await mapLinearWebhook(fx('issue-moved-labeled'), 'd6', ctx(['state:REL-1:AI Review']));
     expect(out.map((e) => e.id)).toEqual(['linear:d6:label:l-resume']);
   });
-  it('keeps the label event id when the label is renamed', () => {
+  it('keeps the label event id when the label is renamed', async () => {
     const renamed = { ...ctx(), labelNameById: (_t: string, id: string) => ({ 'l-bug': 'bug', 'l-resume': 'agent:resume' })[id] };
-    const ids = (c: MapContext) => mapLinearWebhook(fx('issue-moved-labeled'), 'd6', c).map((e) => e.id);
-    expect(ids(renamed)).toEqual(ids(ctx()));
+    const ids = async (c: MapContext) => (await mapLinearWebhook(fx('issue-moved-labeled'), 'd6', c)).map((e) => e.id);
+    expect(await ids(renamed)).toEqual(await ids(ctx()));
   });
-  it('drops echoes of our own writes', () => {
-    expect(mapLinearWebhook(fx('issue-moved-labeled'), 'd7', ctx(['state:REL-1:AI Review', 'label:REL-1:agent:reprendre']))).toEqual([]);
+  it('drops echoes of our own writes', async () => {
+    expect(await mapLinearWebhook(fx('issue-moved-labeled'), 'd7', ctx(['state:REL-1:AI Review', 'label:REL-1:agent:reprendre']))).toEqual([]);
   });
-  it('ignores unknown teams', () => {
+  it('drops echoes found by an asynchronous lookup, as the store answers', async () => {
+    const echoes = ['state:REL-1:AI Review', 'label:REL-1:agent:reprendre'];
+    const c = { ...ctx(), isEcho: async (k: string) => echoes.includes(k) };
+    expect(await mapLinearWebhook(fx('issue-moved-labeled'), 'd9', c)).toEqual([]);
+  });
+  it('ignores unknown teams', async () => {
     const body = fx('session-prompted');
     body.agentSession.issue.identifier = 'OTHER-1';
-    expect(mapLinearWebhook(body, 'd8', ctx())).toEqual([]);
+    expect(await mapLinearWebhook(body, 'd8', ctx())).toEqual([]);
   });
 });
 
@@ -115,7 +120,7 @@ describe('ingest', () => {
     return { raw, sig: createHmac('sha256', 'sec').update(raw).digest('hex') };
   }
 
-  it('acks then submits a delegation', () => {
+  it('acks then submits a delegation', async () => {
     const order: string[] = [];
     const ingest = createLinearIngest({
       secret: () => 'sec',
@@ -125,7 +130,7 @@ describe('ingest', () => {
       log: () => {},
     });
     const { raw, sig } = signed(fx('session-created-delegation'));
-    expect(ingest(raw, { 'linear-signature': sig })).toEqual({ status: 200 });
+    expect(await ingest(raw, { 'linear-signature': sig })).toEqual({ status: 200 });
     expect(order).toEqual(['ack:as-1', 'submit:ticket.delegated']);
   });
 
@@ -139,62 +144,126 @@ describe('ingest', () => {
       ack: async (s) => void acks.push(s),
       log: () => {},
     });
-    const send = (body: unknown, headers: Record<string, string> = {}) => {
+    const send = async (body: unknown, headers: Record<string, string> = {}) => {
       const { raw, sig } = signed(body);
-      expect(ingest(raw, { ...headers, 'linear-signature': sig })).toEqual({ status: 200 });
+      expect(await ingest(raw, { ...headers, 'linear-signature': sig })).toEqual({ status: 200 });
     };
     return { ids, acks, send };
   }
 
   // A fresh ingest per call: the ids that reach the store, without the in-memory replay guard.
-  function idsOf(body: unknown, headers?: Record<string, string>): string[] {
+  async function idsOf(body: unknown, headers?: Record<string, string>): Promise<string[]> {
     const { ids, send } = make();
-    send(body, headers);
+    await send(body, headers);
     return ids;
   }
 
   it.each(['session-prompted', 'session-created-delegation', 'issue-moved-labeled'])(
     'derives %s event ids from the signed body only',
-    (name) => {
-      const first = idsOf(fx(name), { 'linear-delivery': 'd1' });
+    async (name) => {
+      const first = await idsOf(fx(name), { 'linear-delivery': 'd1' });
       expect(first.length).toBeGreaterThan(0);
-      expect(idsOf(fx(name), { 'linear-delivery': 'forged' })).toEqual(first);
-      expect(idsOf(fx(name))).toEqual(first);
-      expect(idsOf({ ...fx(name), webhookTimestamp: 1500 })).toEqual(first);
+      expect(await idsOf(fx(name), { 'linear-delivery': 'forged' })).toEqual(first);
+      expect(await idsOf(fx(name))).toEqual(first);
+      expect(await idsOf({ ...fx(name), webhookTimestamp: 1500 })).toEqual(first);
     },
   );
 
-  it('gives distinct ids to two different webhooks', () => {
+  it('gives distinct ids to two different webhooks', async () => {
     const prompted = fx('session-prompted');
     const moved = fx('issue-moved-labeled');
     const ids = [
-      ...idsOf(prompted),
-      ...idsOf({ ...prompted, agentActivity: { ...prompted.agentActivity, id: 'aa-2' } }),
-      ...idsOf(moved),
-      ...idsOf({ ...moved, data: { ...moved.data, updatedAt: '2026-10-15T10:00:01.000Z' } }),
+      ...(await idsOf(prompted)),
+      ...(await idsOf({ ...prompted, agentActivity: { ...prompted.agentActivity, id: 'aa-2' } })),
+      ...(await idsOf(moved)),
+      ...(await idsOf({ ...moved, data: { ...moved.data, updatedAt: '2026-10-15T10:00:01.000Z' } })),
     ];
     expect(ids).toHaveLength(6);
     expect(new Set(ids).size).toBe(ids.length);
   });
 
-  it('keeps the fallback id when Linear resends with a new webhookTimestamp', () => {
+  it('keeps the fallback id when Linear resends with a new webhookTimestamp', async () => {
     const { agentActivity: _, ...noActivityId } = fx('session-prompted');
     const body = { ...noActivityId, agentActivity: { content: { body: 'x' } } };
-    const first = idsOf(body);
+    const first = await idsOf(body);
     expect(first.length).toBe(1);
-    expect(idsOf({ ...body, webhookTimestamp: 1500 })).toEqual(first);
+    expect(await idsOf({ ...body, webhookTimestamp: 1500 })).toEqual(first);
   });
 
-  it('neither acks nor submits again a webhook replayed within the freshness window', () => {
+  it('neither acks nor submits again a webhook replayed within the freshness window', async () => {
     const { ids, acks, send } = make();
-    send(fx('session-created-delegation'), { 'linear-delivery': 'd1' });
-    send(fx('session-created-delegation'), { 'linear-delivery': 'forged' });
-    send({ ...fx('session-created-delegation'), webhookTimestamp: 1500 });
+    await send(fx('session-created-delegation'), { 'linear-delivery': 'd1' });
+    await send(fx('session-created-delegation'), { 'linear-delivery': 'forged' });
+    await send({ ...fx('session-created-delegation'), webhookTimestamp: 1500 });
     expect(acks).toEqual(['as-1']);
     expect(ids).toHaveLength(1);
   });
 
-  it('still drops a replay that is fresh when a later webhook purges the guard', () => {
+  it('submits once when the same webhook arrives twice while the echo lookup is pending', async () => {
+    const ids: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const ingest = createLinearIngest({
+      secret: () => 'sec',
+      ctx: { ...ctx(), now: () => 1000, isEcho: async () => (await gate, false) },
+      submit: (e: FactoryEvent) => void ids.push(e.id),
+      ack: async () => {},
+      log: () => {},
+    });
+    const { raw, sig } = signed(fx('issue-moved-labeled'));
+    const both = Promise.all([ingest(raw, { 'linear-signature': sig }), ingest(raw, { 'linear-signature': sig })]);
+    release();
+    expect(await both).toEqual([{ status: 200 }, { status: 200 }]);
+    expect(ids).toEqual(['linear:issue:u1:2026-10-15T10:00:00.000Z', 'linear:issue:u1:2026-10-15T10:00:00.000Z:label:l-resume']);
+  });
+
+  it('submits two webhooks in arrival order even when the echo lookup of the first is slower', async () => {
+    const ids: string[] = [];
+    let release!: () => void;
+    const slow = new Promise<void>((r) => (release = r));
+    const ingest = createLinearIngest({
+      secret: () => 'sec',
+      // The first webhook moves the ticket to AI Review, the second to Human Review; only the first lookup waits.
+      ctx: { ...ctx(), now: () => 1000, isEcho: async (k: string) => (k === 'state:REL-1:AI Review' ? (await slow, false) : false) },
+      submit: (e: FactoryEvent) => void ids.push(e.id),
+      ack: async () => {},
+      log: () => {},
+    });
+    const moved = fx('issue-moved-labeled');
+    const first = { ...moved, updatedFrom: { stateId: 's-hr' } };
+    const second = {
+      ...moved,
+      data: { ...moved.data, updatedAt: '2026-10-15T10:00:01.000Z', stateId: 's-hr', state: { id: 's-hr', name: 'Human Review' } },
+      updatedFrom: { stateId: 's-ai' },
+    };
+    const a = signed(first);
+    const b = signed(second);
+    const both = Promise.all([ingest(a.raw, { 'linear-signature': a.sig }), ingest(b.raw, { 'linear-signature': b.sig })]);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(ids).toEqual([]);
+    release();
+    await both;
+    expect(ids).toEqual(['linear:issue:u1:2026-10-15T10:00:00.000Z', 'linear:issue:u1:2026-10-15T10:00:01.000Z']);
+  });
+
+  it('keeps ingesting after a webhook whose echo lookup failed', async () => {
+    const ids: string[] = [];
+    let fail = true;
+    const ingest = createLinearIngest({
+      secret: () => 'sec',
+      ctx: { ...ctx(), now: () => 1000, isEcho: async () => { if (fail) throw new Error('store down'); return false; } },
+      submit: (e: FactoryEvent) => void ids.push(e.id),
+      ack: async () => {},
+      log: () => {},
+    });
+    const { raw, sig } = signed(fx('issue-moved-labeled'));
+    await expect(ingest(raw, { 'linear-signature': sig })).rejects.toThrow('store down');
+    fail = false;
+    expect(await ingest(raw, { 'linear-signature': sig })).toEqual({ status: 200 });
+    expect(ids).toHaveLength(2);
+  });
+
+  it('still drops a replay that is fresh when a later webhook purges the guard', async () => {
     let now = 1000;
     const ids: string[] = [];
     const ingest = createLinearIngest({
@@ -204,34 +273,34 @@ describe('ingest', () => {
       ack: async () => {},
       log: () => {},
     });
-    const send = (body: unknown) => {
+    const send = async (body: unknown) => {
       const { raw, sig } = signed(body);
-      return ingest(raw, { 'linear-signature': sig });
+      return await ingest(raw, { 'linear-signature': sig });
     };
     const first = fx('session-prompted');
-    send(first);
+    await send(first);
     now = 60_000;
-    send({ ...first, webhookTimestamp: 60_000, agentActivity: { ...first.agentActivity, id: 'aa-2' } });
+    await send({ ...first, webhookTimestamp: 60_000, agentActivity: { ...first.agentActivity, id: 'aa-2' } });
     now = 61_000;
-    expect(send(first)).toEqual({ status: 200 });
+    expect(await send(first)).toEqual({ status: 200 });
     expect(ids).toHaveLength(2);
   });
 
-  it('rejects a bad signature and a stale body', () => {
+  it('rejects a bad signature and a stale body', async () => {
     const submit = vi.fn();
     const ingest = createLinearIngest({ secret: () => 'sec', ctx: { ...ctx(), now: () => 999_999 }, submit, ack: async () => {}, log: () => {} });
     const { raw, sig } = signed(fx('session-prompted'));
-    expect(ingest(raw, { 'linear-signature': 'bad' })).toEqual({ status: 401 });
-    expect(ingest(raw, { 'linear-signature': sig })).toEqual({ status: 401 });
+    expect(await ingest(raw, { 'linear-signature': 'bad' })).toEqual({ status: 401 });
+    expect(await ingest(raw, { 'linear-signature': sig })).toEqual({ status: 401 });
     expect(submit).not.toHaveBeenCalled();
   });
 
-  it('rejects a fresh webhook forged with an empty secret', () => {
+  it('rejects a fresh webhook forged with an empty secret', async () => {
     const submit = vi.fn();
     const ingest = createLinearIngest({ secret: () => '', ctx: { ...ctx(), now: () => 2000 }, submit, ack: async () => {}, log: () => {} });
     const raw = JSON.stringify(fx('session-prompted'));
     const forged = createHmac('sha256', '').update(raw).digest('hex');
-    expect(ingest(raw, { 'linear-signature': forged })).toEqual({ status: 401 });
+    expect(await ingest(raw, { 'linear-signature': forged })).toEqual({ status: 401 });
     expect(submit).not.toHaveBeenCalled();
   });
 });

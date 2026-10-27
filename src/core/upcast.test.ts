@@ -42,10 +42,10 @@ describe('upcast', () => {
     expect(() => upcast({ ...v1.moved, schemaVersion: SCHEMA_VERSION + 1 })).toThrow(/newer/);
   });
 
-  it('makes a version 1 journal readable by decide, with the same decisions as the current events', () => {
+  it('makes a version 1 journal readable by decide, with the same decisions as the current events', async () => {
     const store = new SqliteStore(':memory:');
-    for (const e of Object.values(v1)) store.recordEvent(e as unknown as FactoryEvent);
-    const replayed = store.recentEvents(10).reverse().map((e) => upcast(e as StoredEvent));
+    for (const e of Object.values(v1)) await store.recordEvent(e as unknown as FactoryEvent);
+    const replayed = (await store.recentEvents(10)).reverse().map((e) => upcast(e as StoredEvent));
     expect(replayed.map((e) => e.type)).toEqual(['status.changed', 'label.changed', 'session.prompted']);
     const effects = replayed.map((e) => decide(ticket, e, workflow).effects.map((c) => c.kind));
     expect(effects).toEqual([['start_run'], ['stop_run', 'activity'], []]);
