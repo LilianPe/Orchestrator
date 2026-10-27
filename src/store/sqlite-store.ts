@@ -431,11 +431,15 @@ export class SqliteStore implements Store {
     this.db.prepare("DELETE FROM timers WHERE json_extract(data, '$.armedBy') = ?").run(eventId);
   }
 
+  /**
+   * Deduped by ticket + job. A request for an item being handed out takes the row back from its
+   * claim: the claim's finish no longer removes it, so the newer request stays in line.
+   */
   async enqueue(item: QueueItem): Promise<string> {
     this.db
       .prepare(
         `INSERT INTO queue (project_id, ticket_id, job, queue, rank, enqueued_at, data) VALUES (?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT DO UPDATE SET data = excluded.data, rank = excluded.rank`,
+         ON CONFLICT DO UPDATE SET data = excluded.data, rank = excluded.rank, lease = NULL, lease_until = NULL`,
       )
       .run(item.projectId, item.ticketId, item.job, item.queue, rank(item.priority), item.enqueuedAt, JSON.stringify(item));
     return `${item.projectId}:${item.ticketId}:${item.job}`;

@@ -700,7 +700,7 @@ export class PgStore implements AsyncStore {
           select id, status from outbox
           where ticket_id = ${item.ticketId}
             and effect = ${item.job}
-            and status in ('pending', 'running')
+            and status = 'pending'
             and payload->>'queue' is not null
           order by created_at, id
           limit 1
@@ -709,13 +709,12 @@ export class PgStore implements AsyncStore {
       );
       const current = existing.rows[0];
       if (current) {
-        // A deduped row keeps its place in line, as the SQLite queue keeps `enqueued_at`.
-        if (current.status === 'pending') {
-          await tx.execute(sql`
-            update outbox set payload = ${JSON.stringify(item)}::jsonb, updated_at = to_timestamp(${this.now() / 1000})
-            where id = ${current.id}
-          `);
-        }
+        // A deduped row keeps its place in line, as the SQLite queue keeps `enqueued_at`. A row being
+        // handed out is not one: its claim's finish would remove the newer request with it.
+        await tx.execute(sql`
+          update outbox set payload = ${JSON.stringify(item)}::jsonb, updated_at = to_timestamp(${this.now() / 1000})
+          where id = ${current.id}
+        `);
         return current.id;
       }
 

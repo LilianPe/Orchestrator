@@ -139,6 +139,15 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     expect((await s.claimQueued('dev', 60_000))!.item.ticketId).toBe('B');
   });
 
+  it('keeps a request queued while the same ticket+job is handed out: finishing the claim leaves it (ORC-150)', async () => {
+    const s = await store();
+    await s.enqueue(q({ ticketId: 'A', enqueuedAt: 1 }));
+    const claim = (await s.claimQueued('dev', 60_000))!;
+    await s.enqueue(q({ ticketId: 'A', enqueuedAt: 5, inputText: 'newer' }));
+    await s.finishQueued(claim);
+    expect((await s.listQueue()).map((i) => [i.ticketId, i.inputText])).toEqual([['A', 'newer']]);
+  });
+
   it('keeps inbox events in arrival order until processed, and dedups them by id (ORC-147)', async () => {
     const s = await store();
     const ev = (id: string, type = 'control.pause') => ({ id, type, at: 5, projectId: '*', payload: {} }) as FactoryEvent;

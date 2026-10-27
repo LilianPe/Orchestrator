@@ -738,16 +738,18 @@ export class Orchestrator {
       priority: t.priority,
       enqueuedAt: opts.enqueuedAt ?? this.d.clock.now(),
     };
+    // Handed out of the queue: back in line through its claim (`releaseQueued`), not as a new request.
+    const fromQueue = recorded !== undefined;
     if (job.queue === 'dev' && (t.activeRunId || t.verifyingRunId)) {
       await this.apply(t, { type: 'pending.set', job: { job: job.name, input: opts.input, inputText: opts.inputText, resume: opts.resume } });
       return 'done';
     }
     if (this.stopping || (await this.isPaused())) {
-      await this.d.scheduler.enqueue(item);
+      if (!fromQueue) await this.d.scheduler.enqueue(item);
       return 'queued';
     }
     if (await this.overBudget()) {
-      await this.d.scheduler.enqueue(item);
+      if (!fromQueue) await this.d.scheduler.enqueue(item);
       await this.noteBudget(project, ticketId);
       return 'queued';
     }
@@ -757,7 +759,7 @@ export class Orchestrator {
     const slot = this.d.scheduler.free(job.queue) > promised ? this.d.scheduler.tryAcquire(job.queue, key) : null;
     admitted?.();
     if (slot === null) {
-      await this.d.scheduler.enqueue(item);
+      if (!fromQueue) await this.d.scheduler.enqueue(item);
       return 'queued';
     }
     try {
