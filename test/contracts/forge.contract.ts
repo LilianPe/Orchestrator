@@ -77,7 +77,7 @@ export function describeForgeContract(name: string, make: () => ForgeSubject | P
 
     it('findPr gives none for checks it cannot read', async (ctx) => {
       const s = await subjectWith(make, () => ctx.skip(), 'unreadableChecks');
-      await expect(s.forge.findPr(s.repoPath, s.unreadableChecks)).resolves.toMatchObject({
+      expect(await resolved(s.forge.findPr(s.repoPath, s.unreadableChecks))).toMatchObject({
         branch: s.unreadableChecks, state: 'OPEN', checks: 'none', failedChecks: [],
       });
     });

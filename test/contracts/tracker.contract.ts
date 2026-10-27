@@ -1,6 +1,6 @@
 import { expect } from 'vitest';
 import type { ActivityInput, Tracker } from '../../src/adapters/tracker/types.js';
-import { describeContract, subjectWith, type ContractOptions } from './cases.js';
+import { describeContract, resolved, subjectWith, type ContractOptions } from './cases.js';
 
 /** What the implementation under test arranged for the suite. Docs: docs/ports/tracker.md. */
 export interface TrackerSubject {
@@ -96,7 +96,7 @@ export function describeTrackerContract(name: string, make: () => TrackerSubject
       const s = await subjectWith(make, () => ctx.skip(), 'states');
       await s.tracker.moveTo(s.issue, s.states[0]);
       await expect(s.tracker.moveTo(s.issue, 'No Such State 189')).rejects.toThrow();
-      expect((await s.tracker.getIssue(s.issue)).stateName).toBe(s.states[0]);
+      expect((await resolved(s.tracker.getIssue(s.issue))).stateName).toBe(s.states[0]);
     });
 
     it('setLabels writes the final set: replayable, unknown labels created, absent removals ignored', async (ctx) => {

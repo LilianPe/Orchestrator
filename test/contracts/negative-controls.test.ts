@@ -445,6 +445,21 @@ describeTrackerContract(
   { violates: [UNKNOWN_STATE] },
 );
 
+describeTrackerContract(
+  'a tracker whose moveTo loses the issue on a state the team does not have',
+  trackerThat(
+    class extends FakeTracker {
+      override async moveTo(identifier: string, stateName: string): Promise<void> {
+        const { teamKey } = await this.getIssue(identifier);
+        if (this.statesOf(teamKey).includes(stateName)) return super.moveTo(identifier, stateName);
+        this.issues.delete(identifier);
+        throw new Error(`unknown state ${stateName} for team ${teamKey}`);
+      }
+    },
+  ),
+  { violates: [UNKNOWN_STATE] },
+);
+
 const DELEGATED = 'listDelegated lists the team issues delegated to the app, and only them';
 
 describeTrackerContract(
