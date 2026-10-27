@@ -44,6 +44,10 @@ export function createHarness(
     knowledge?: boolean;
     /** An empty store to run on instead of the in-memory SQLite one (the Postgres scenarios of test/integration). */
     store?: Store;
+    /** Lease of a claimed outbox row (ORC-149); the orchestrator's default otherwise. */
+    effectLeaseMs?: number;
+    /** Retries of an inbox row whose processing throws (ORC-149); the orchestrator's default otherwise. */
+    processRetry?: { attempts: number; baseMs: number };
   } = {},
 ) {
   if (opts.projectYaml !== undefined && opts.preset) throw new Error('createHarness: pass projectYaml or preset, not both');
@@ -76,32 +80,34 @@ export function createHarness(
     activityIntervalMs: 0,
     knowledgeConfigured: opts.knowledge,
     inboxRetry: { attempts: 3, baseMs: 1 },
+    effectLeaseMs: opts.effectLeaseMs,
+    processRetry: opts.processRetry,
   });
   let orch = build();
   const timers = new TimerService(store, clock, (e) => orch.accept(e));
   let seq = 0;
 
   async function send<T extends EventType>(type: T, payload: EventPayloads[T], ticketId = 'REL-1'): Promise<void> {
-    await orch.submit({ id: `t-${++seq}`, type, at: clock.now(), projectId: 'p', ticketId, payload } as FactoryEvent);
-    await orch.idle();
+    await orch.accept({ id: `t-${++seq}`, type, at: clock.now(), projectId: 'p', ticketId, payload } as FactoryEvent);
+    await orch.drained();
   }
 
   async function advance(ms: number): Promise<void> {
     clock.advance(ms);
     runner.tick();
     await timers.tick();
-    await orch.idle();
+    await orch.drained();
   }
 
   /** Graceful shutdown, then a fresh orchestrator over the same store, as `factory up` does on restart. */
   async function restart(): Promise<void> {
     orch.stopAll();
-    await orch.idle();
+    await orch.drained();
     orch = build();
     await orch.recover();
     await orch.announceRecovery();
     await orch.replayInbox();
-    await orch.idle();
+    await orch.drained();
   }
 
   return {

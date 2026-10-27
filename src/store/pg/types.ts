@@ -30,5 +30,4 @@ export interface PutTicketOptions {
 export interface AsyncStore extends Store {
   putTicket(t: TicketState, options?: PutTicketOptions): Promise<void>;
   claim(queue: QueueName, now?: number): Promise<DequeuedEffect | undefined>;
-  completeEffect(id: string): Promise<void>;
 }

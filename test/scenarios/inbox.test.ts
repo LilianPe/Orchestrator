@@ -41,7 +41,7 @@ describe('inbox: written before the answer, processed from the inbox', () => {
     const acks: string[] = [];
     const { raw, headers } = signedDelegation();
     expect(await linearIngest((e) => h.orch.accept(e), acks)(raw, headers)).toEqual({ status: 200 });
-    await h.orch.idle();
+    await h.orch.drained();
     expect(acks).toEqual([]);
     expect(await delegations(h.store)).toHaveLength(1);
     expect(h.runner.requests).toHaveLength(runs);
@@ -59,13 +59,13 @@ describe('inbox: written before the answer, processed from the inbox', () => {
     const { raw, headers } = signedDelegation();
     // The answer is 200: the event is written; its processing fails afterwards.
     expect(await linearIngest((e) => h.orch.accept(e))(raw, headers)).toEqual({ status: 200 });
-    await h.orch.idle();
+    await h.orch.drained();
     expect(await h.store.getTicket('p', 'REL-1')).toBeUndefined();
     expect((await h.store.pendingInbox(10)).map((e) => e.type)).toEqual(['ticket.delegated']);
 
     // Not retried in a loop by the same process: a later event leaves it pending.
-    await h.orch.submit({ ...TRUSTED, id: 'ui:resume', type: 'control.resume', at: h.clock.now(), projectId: '*', payload: {} });
-    await h.orch.idle();
+    await h.orch.accept({ ...TRUSTED, id: 'ui:resume', type: 'control.resume', at: h.clock.now(), projectId: '*', payload: {} });
+    await h.orch.drained();
     expect((await h.store.pendingInbox(10)).map((e) => e.type)).toEqual(['ticket.delegated']);
 
     down = false;
@@ -118,19 +118,26 @@ describe('inbox: written before the answer, processed from the inbox', () => {
     expect(await h.store.pendingInbox(10)).toEqual([]);
   });
 
-  it('frees the slot of a run whose result is held behind a failed event of its ticket', async () => {
+  /** A SQLite store whose decision transaction throws for the events `fails` picks. */
+  function failingDecide(fails: (id: string) => boolean): SqliteStore {
     const inner = new SqliteStore(':memory:');
-    let failNext = false;
-    const store = Object.assign(Object.create(inner) as SqliteStore, {
-      putTicket: async (t: Parameters<SqliteStore['putTicket']>[0]) => {
-        if (failNext) {
-          failNext = false;
-          throw new Error('database down');
-        }
-        return inner.putTicket(t);
+    return Object.assign(Object.create(inner) as SqliteStore, {
+      decide: async (req: Parameters<SqliteStore['decide']>[0]) => {
+        if (fails(req.event.id)) throw new Error('database down');
+        return inner.decide(req);
       },
     });
-    const h = createHarness({ store, projectYaml: stringify({ version: 1, limits: { parallel_sessions: 1 } }) });
+  }
+
+  it('frees the slot of a run whose result is left behind a failed event of its ticket', async () => {
+    let failNext = false;
+    const store = failingDecide(() => {
+      const fail = failNext;
+      failNext = false;
+      return fail;
+    });
+    // No retry in this process: the failed event and those behind it wait for the next start.
+    const h = createHarness({ store, projectYaml: stringify({ version: 1, limits: { parallel_sessions: 1 } }), processRetry: { attempts: 1, baseMs: 1 } });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
     h.tracker.addIssue({ identifier: 'REL-2', title: 'Import CSV' });
     h.runner.enqueue({ hold: true });
@@ -139,34 +146,26 @@ describe('inbox: written before the answer, processed from the inbox', () => {
     failNext = true;
     await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'et le PDF ?', author: 'L' });
     h.runner.release(run!.runId);
-    await h.orch.idle();
+    await h.orch.drained();
     expect((await h.store.pendingInbox(10)).map((e) => e.type)).toEqual(['session.prompted', 'run.finished']);
     // The only dev slot is free again: another ticket starts its run.
     await h.send('ticket.delegated', { linearSessionId: 'ls-2' }, 'REL-2');
     expect(h.runner.requests).toHaveLength(2);
   });
 
-  it('settles at the next start, with its real result, a run whose result was written but not processed', async () => {
-    const inner = new SqliteStore(':memory:');
-    let failNext = false;
-    const store = Object.assign(Object.create(inner) as SqliteStore, {
-      // The crash between the inbox write and the processing: the result is not journaled yet.
-      recordEvent: async (e: Parameters<SqliteStore['recordEvent']>[0]) => {
-        if (failNext) {
-          failNext = false;
-          throw new Error('database down');
-        }
-        return inner.recordEvent(e);
-      },
-    });
-    const h = createHarness({ store, preset: testPreset() });
+  it('settles at the next start, with its real result, a run whose result was written but not decided', async () => {
+    // As a crash between the inbox write and the decision: the result is in the inbox only.
+    let down = false;
+    const store = failingDecide((id) => down && id.startsWith('attempt:'));
+    const h = createHarness({ store, preset: testPreset(), processRetry: { attempts: 1, baseMs: 1 } });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
     h.runner.enqueue({ hold: true });
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
-    failNext = true;
+    down = true;
     h.runner.release(h.runner.requests[0]!.runId);
-    await h.orch.idle();
+    await h.orch.drained();
     expect((await h.store.pendingInbox(10)).map((e) => e.type)).toEqual(['run.finished']);
+    down = false;
 
     // recover() runs before the replay: it must not block the ticket and fence the result.
     await h.restart();

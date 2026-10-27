@@ -170,7 +170,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     });
     await orchestrator.recover();
     // Every source writes its events to the inbox and gets the promise of the committed row
-    // (ORC-147); the orchestrator then processes them from the inbox.
+    // (ORC-147); the orchestrator's worker then decides them from the inbox (ORC-149).
     const accept = (e: FactoryEvent) => orchestrator.accept(e);
 
     const webhookSecret = () => loadSecrets(o.home).linear?.webhookSecret ?? '';
@@ -257,7 +257,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       // A pass under way finishes first, so it never reads or writes a closed store.
       await Promise.all([timers.stop(), poller.stop(), reconciler.stop()]);
       orchestrator.stopAll();
-      await orchestrator.idle();
+      await orchestrator.drained();
       await new Promise<void>((resolve) => {
         server.close(() => resolve());
         // Long-lived SSE streams (/api/events) would otherwise keep close() pending forever.
@@ -284,8 +284,10 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
         reconciler.start();
       }
       else log(`Linear non connecté : ouvrez ${baseUrl}/oauth/start`);
-      // Events written before a crash (or whose processing failed) are processed now, oldest first.
-      void orchestrator.replayInbox();
+      // The worker (ORC-149) executes the effects decided before a crash, then the events written
+      // before it (or whose processing failed), oldest first; it then polls the inbox and the outbox
+      // every second, for what another process wrote and for leases that expired.
+      orchestrator.startWorker().catch((e: unknown) => log(`inbox : ${(e as Error).message}`));
       if (!isUsableWebhookSecret(webhookSecret()))
         log('Attention : aucun secret de webhook Linear configuré, tout webhook sera refusé. Relancez factory init pour le renseigner.');
     } catch (err) {

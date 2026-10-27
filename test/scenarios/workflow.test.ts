@@ -62,7 +62,7 @@ describe('standard workflow', () => {
     await h.advance(180_000);
     expect(h.runner.requests).toHaveLength(2);
     h.runner.release(runningId);
-    await h.orch.idle();
+    await h.orch.drained();
     expect(h.runner.requests).toHaveLength(3);
     expect(h.runner.requests[2]!.prompt).toContain('aussi le titre');
   });
@@ -158,7 +158,7 @@ describe('standard workflow', () => {
       expect(h.tracker.activities('ls-9').at(-1)).toEqual({ type: 'response', body: 'Arrêté.' });
       expect(h.tracker.activities('ls-1').filter((a) => a.type === 'response')).toEqual([]);
       h.runner.release(devRunId);
-      await h.orch.idle();
+      await h.orch.drained();
     });
 
     it('a stop in the dev thread stops the dev run and blocks, leaving the question run alone', async () => {
@@ -170,7 +170,7 @@ describe('standard workflow', () => {
       expect((await h.ticket()).blocked).toBe(true);
       expect(h.tracker.activities('ls-1').at(-1)!.type).toBe('response');
       h.runner.release(askRunId);
-      await h.orch.idle();
+      await h.orch.drained();
     });
   });
 
@@ -329,7 +329,7 @@ describe('standard workflow', () => {
     expect(h.runner.requests).toHaveLength(1);
     expect(await h.store.listQueue()).toHaveLength(1);
     h.runner.release((await h.ticket('REL-1')).activeRunId!);
-    await h.orch.idle();
+    await h.orch.drained();
     expect(h.runner.requests).toHaveLength(2);
     expect(h.runner.requests[1]!.cwd).toBe('/tmp/factory-fake/p/REL-2');
   });

@@ -41,8 +41,9 @@ describe('Orchestrator', () => {
     tracker.addIssue({ identifier: 'REL-1', title: 'T', description: 'Exporter les audits en CSV depuis la liste des audits.' });
     await store.putTicket({ ...newTicketState('p', 'REL-1', 'T', 'done', 1), delegated: true, prState: 'MERGED', pendingJob: { job: 'dev-feedback' } });
     // A result settles the ticket: settle would start the pending job.
-    await orch.submit({ ...TRUSTED, id: 'v1', type: 'verify.passed', at: 1_000, projectId: 'p', ticketId: 'REL-1', payload: { runId: 'old', job: 'dev' } });
-    await orch.idle();
+    // Its settle is an outbox effect, run by the worker: startRun refuses the job all the same.
+    await orch.accept({ ...TRUSTED, id: 'v1', type: 'verify.passed', at: 1_000, projectId: 'p', ticketId: 'REL-1', payload: { runId: 'old', job: 'dev' } });
+    await orch.drained();
     expect(runner.requests).toEqual([]);
     expect((await store.getTicket('p', 'REL-1'))!.pendingJob).toBeUndefined();
     expect((await store.getTicket('p', 'REL-1'))!.blocked).toBe(false);
@@ -52,11 +53,11 @@ describe('Orchestrator', () => {
     const { store, tracker, orch } = setup({ hold: true });
     tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
     expect(await orch.accept(delegated())).toBe(true);
-    await orch.idle();
+    await orch.drained();
     expect(await store.getTicket('p', 'REL-1')).toBeUndefined();
     expect((await store.pendingInbox(10)).map((e) => e.id)).toEqual(['e1']);
     await orch.replayInbox();
-    await orch.idle();
+    await orch.drained();
     expect(await store.getTicket('p', 'REL-1')).toMatchObject({ delegated: true });
     expect(await store.pendingInbox(10)).toEqual([]);
   });
@@ -68,24 +69,26 @@ describe('Orchestrator', () => {
     const gate = new Promise<void>((r) => (release = r));
     const getIssue = tracker.getIssue.bind(tracker);
     tracker.getIssue = async (id: string) => (await gate, getIssue(id));
-    const order: string[] = [];
-    const delegation = orch.submit(delegated()).then(() => void order.push('event'));
-    const block = orch.blockTicket('p', 'REL-1', "Question posée par l'agent").then(() => void order.push('block'));
+    let blocked = false;
+    await orch.accept(delegated());
+    const block = orch.blockTicket('p', 'REL-1', "Question posée par l'agent").then(() => void (blocked = true));
     await new Promise((r) => setTimeout(r, 10));
-    expect(order).toEqual([]);
+    // The delegation waits for the tracker: the block waits behind it, in the ticket's task.
+    expect(blocked).toBe(false);
+    expect(await store.getTicket('p', 'REL-1')).toBeUndefined();
     release();
-    await Promise.all([delegation, block]);
-    await orch.idle();
-    expect(order).toEqual(['event', 'block']);
-    expect(await store.getTicket('p', 'REL-1')).toMatchObject({ blocked: true, blockReason: "Question posée par l'agent" });
+    await block;
+    await orch.drained();
+    // Applied after the delegation created the ticket: on top of it, not lost before it.
+    expect(await store.getTicket('p', 'REL-1')).toMatchObject({ delegated: true, blocked: true, blockReason: "Question posée par l'agent" });
   });
 
   it('ignores a duplicate event id', async () => {
     const { tracker, runner, orch } = setup();
     tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
-    await orch.submit(delegated());
-    await orch.submit(delegated());
-    await orch.idle();
+    await orch.accept(delegated());
+    await orch.accept(delegated());
+    await orch.drained();
     expect(runner.requests).toHaveLength(1);
   });
 
@@ -93,8 +96,8 @@ describe('Orchestrator', () => {
     const { store, tracker, orch } = setup();
     const issue = { title: 'Export CSV', logical: 'todo' as const, priority: 3 };
     const payload = { name: 'fais-le', body: '', linearSessionId: 'q1', author: 'L', issue };
-    await orch.submit({ id: 'c1', type: 'command', at: 1_000, projectId: 'p', ticketId: 'REL-1', payload } as FactoryEvent);
-    await orch.idle();
+    await orch.accept({ id: 'c1', type: 'command', at: 1_000, projectId: 'p', ticketId: 'REL-1', payload } as FactoryEvent);
+    await orch.drained();
     expect(await store.getTicket('p', 'REL-1')).toMatchObject({ title: 'Export CSV', priority: 3, questionSessionIds: ['q1'] });
     expect(tracker.calls.filter((c) => c.method === 'getIssue')).toEqual([]);
   });
@@ -102,8 +105,8 @@ describe('Orchestrator', () => {
   it('reads the tracker once to fill a creating event without a snapshot, and journals the filled event', async () => {
     const { store, tracker, orch } = setup();
     tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', stateName: 'In Progress', priority: 2 });
-    await orch.submit({ id: 'm1', type: 'session.mentioned', at: 1_000, projectId: 'p', ticketId: 'REL-1', payload: { linearSessionId: 'q1', body: '?', author: 'L' } } as FactoryEvent);
-    await orch.idle();
+    await orch.accept({ id: 'm1', type: 'session.mentioned', at: 1_000, projectId: 'p', ticketId: 'REL-1', payload: { linearSessionId: 'q1', body: '?', author: 'L' } } as FactoryEvent);
+    await orch.drained();
     expect(await store.getTicket('p', 'REL-1')).toMatchObject({ title: 'Export CSV', logical: 'dev', priority: 2 });
     const journaled = (await store.recentEvents(10)).find((e) => e.id === 'm1')!;
     expect(journaled.payload).toMatchObject({ issue: { title: 'Export CSV', logical: 'dev', priority: 2 } });
@@ -111,16 +114,16 @@ describe('Orchestrator', () => {
 
   it('ignores moves of tickets it does not manage', async () => {
     const { store, orch } = setup();
-    await orch.submit({ ...TRUSTED, id: 'm', type: 'status.changed', at: 1, projectId: 'p', ticketId: 'REL-9', payload: { from: 'todo', to: 'dev' } });
-    await orch.idle();
+    await orch.accept({ ...TRUSTED, id: 'm', type: 'status.changed', at: 1, projectId: 'p', ticketId: 'REL-9', payload: { from: 'todo', to: 'dev' } });
+    await orch.drained();
     expect(await store.getTicket('p', 'REL-9')).toBeUndefined();
   });
 
   it('passes the pack, settings and agent env to the runner', async () => {
     const { tracker, runner, orch } = setup();
     tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
-    await orch.submit(delegated());
-    await orch.idle();
+    await orch.accept(delegated());
+    await orch.drained();
     const r = runner.requests[0]!;
     expect(r.pluginDir.endsWith('packs/standard')).toBe(true);
     expect(r.settingsPath.endsWith('packs/standard/settings.json')).toBe(true);
@@ -132,7 +135,8 @@ describe('Orchestrator', () => {
     const { store, tracker, runner, orch } = setup();
     tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
     runner.enqueue({ hold: true });
-    await orch.submit(delegated());
+    await orch.accept(delegated());
+    await orch.drained();
     await orch.recover();
     const t = (await store.getTicket('p', 'REL-1'))!;
     expect(t.blocked).toBe(true);
@@ -144,11 +148,11 @@ describe('Orchestrator', () => {
     const { store, tracker, runner, orch } = setup();
     tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
     runner.enqueue({ hold: true });
-    await orch.submit(delegated());
-    await orch.idle();
+    await orch.accept(delegated());
+    await orch.drained();
     const runId = (await store.getTicket('p', 'REL-1'))!.activeRunId!;
     orch.stopAll();
-    await orch.idle();
+    await orch.drained();
     // A shutdown is not a user stop: the run is `interrupted` and the ticket keeps it for recover() on the next start.
     expect((await store.getRun(runId))!.status).toBe('interrupted');
     expect((await store.getTicket('p', 'REL-1'))!.activeRunId).toBe(runId);
@@ -169,8 +173,8 @@ describe('Orchestrator', () => {
     };
     const { store, tracker, orch, scheduler } = setup({ runner: rejecting });
     tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
-    await orch.submit(delegated());
-    await orch.idle();
+    await orch.accept(delegated());
+    await orch.drained();
     const t = (await store.getTicket('p', 'REL-1'))!;
     expect(t.blocked).toBe(true);
     expect(t.activeRunId).toBeUndefined();
@@ -182,8 +186,8 @@ describe('Orchestrator', () => {
   it('recover() blocks a ticket whose activeRunId points to a finished run', async () => {
     const { store, tracker, orch } = setup();
     tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
-    await orch.submit(delegated());
-    await orch.idle();
+    await orch.accept(delegated());
+    await orch.drained();
     const t = (await store.getTicket('p', 'REL-1'))!;
     t.activeRunId = (await store.runsByStatus('success'))[0]!.id;
     t.blocked = false;
@@ -198,8 +202,8 @@ describe('Orchestrator', () => {
   it('recover() blocks a ticket that was being verified', async () => {
     const { store, tracker, orch } = setup();
     tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
-    await orch.submit(delegated());
-    await orch.idle();
+    await orch.accept(delegated());
+    await orch.drained();
     const t = (await store.getTicket('p', 'REL-1'))!;
     t.verifyingRunId = 'r-x';
     t.blocked = false;
@@ -224,12 +228,12 @@ describe('Orchestrator', () => {
       },
     });
     tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
-    await orch.submit(delegated());
+    await orch.accept(delegated());
     await waitFor(async () => !!(await store.getTicket('p', 'REL-1'))?.verifyingRunId);
-    await orch.submit({ ...TRUSTED, id: 'stop', type: 'control.stop', at: 2, projectId: 'p', ticketId: 'REL-1', payload: {} });
-    expect((await store.getTicket('p', 'REL-1'))!.verifyingRunId).toBeUndefined();
+    await orch.accept({ ...TRUSTED, id: 'stop', type: 'control.stop', at: 2, projectId: 'p', ticketId: 'REL-1', payload: {} });
+    await waitFor(async () => (await store.getTicket('p', 'REL-1'))!.verifyingRunId === undefined);
     release();
-    await orch.idle();
+    await orch.drained();
     const moves = tracker.calls.filter((c) => c.method === 'moveTo').map((c) => c.args[1]);
     expect(moves).not.toContain('Human Review');
     expect((await store.getTicket('p', 'REL-1'))!.logical).not.toBe('human_review');
@@ -239,13 +243,13 @@ describe('Orchestrator', () => {
     const { store, tracker, runner, orch } = setup({ budget: 0.01 });
     tracker.addIssue({ identifier: 'REL-1', title: 'A' });
     tracker.addIssue({ identifier: 'REL-2', title: 'B' });
-    await orch.submit(delegated());
-    await orch.idle();
+    await orch.accept(delegated());
+    await orch.drained();
     expect(runner.requests).toHaveLength(1);
     const d2 = (id: string): FactoryEvent => ({ ...TRUSTED, id, type: 'ticket.delegated', at: 1_000, projectId: 'p', ticketId: 'REL-2', payload: { linearSessionId: 'ls-2' } });
-    await orch.submit(d2('e2'));
-    await orch.submit(d2('e3'));
-    await orch.idle();
+    await orch.accept(d2('e2'));
+    await orch.accept(d2('e3'));
+    await orch.drained();
     expect(runner.requests).toHaveLength(1);
     expect((await store.listQueue()).length).toBeGreaterThanOrEqual(1);
     const comments = tracker.calls.filter((c) => c.method === 'comment' && c.args[0] === 'REL-2');
@@ -257,9 +261,9 @@ describe('Orchestrator', () => {
     const { store, tracker, runner, orch } = setup();
     tracker.addIssue({ identifier: 'REL-1', title: 'A' });
     orch.stopAll();
-    await orch.submit(delegated());
+    await orch.accept(delegated());
     await orch.tick();
-    await orch.idle();
+    await orch.drained();
     expect(runner.requests).toHaveLength(0);
     expect(await store.listQueue()).toHaveLength(1);
   });
@@ -273,8 +277,8 @@ describe('Orchestrator', () => {
       if (++n > 1) throw new Error('linear down');
       return move(id, name);
     };
-    await orch.submit(delegated());
-    await orch.idle();
+    await orch.accept(delegated());
+    await orch.drained();
     const t = (await store.getTicket('p', 'REL-1'))!;
     expect(t.blocked).toBe(true);
     expect(t.blockReason).toBe('Erreur : linear down');
@@ -289,10 +293,10 @@ describe('Orchestrator', () => {
       tweak: (w) => { w.on['label.changed'] = [{ label: 'agent:x', do: 'stop', run: 'dev-feedback', debounceMs: 180_000 }]; },
     });
     tracker.addIssue({ identifier: 'REL-1', title: 'A' });
-    await orch.submit(delegated());
-    await orch.idle();
-    await orch.submit(labelled('agent:x'));
-    await orch.idle();
+    await orch.accept(delegated());
+    await orch.drained();
+    await orch.accept(labelled('agent:x'));
+    await orch.drained();
     expect((await store.dueTimers(Number.MAX_SAFE_INTEGER)).map((t) => t.key)).toEqual(['REL-1:dev-feedback']);
   });
 
@@ -302,10 +306,10 @@ describe('Orchestrator', () => {
     });
     tracker.addIssue({ identifier: 'REL-1', title: 'A' });
     tracker.comment = async () => { throw new Error('linear down'); };
-    await orch.submit(delegated());
-    await orch.idle();
-    await orch.submit(labelled('agent:y'));
-    await orch.idle();
+    await orch.accept(delegated());
+    await orch.drained();
+    await orch.accept(labelled('agent:y'));
+    await orch.drained();
     expect((await store.getTicket('p', 'REL-1'))!.blockReason).toBe('Erreur : linear down');
     expect(await store.dueTimers(Number.MAX_SAFE_INTEGER)).toEqual([]);
   });
