@@ -158,10 +158,16 @@ export interface Store {
   runsByStatus(status: RunRecord['status']): Promise<RunRecord[]>;
   findRunByToken(token: string): Promise<RunRecord | undefined>;
   putTimer(t: TimerRecord): Promise<void>;
+  /**
+   * The timers due at `now`, except those whose arming decision still has an effect to run
+   * (ORC-149): a timer never fires before the effects of its decision, and a failed one disarms it.
+   */
   dueTimers(now: number): Promise<TimerRecord[]>;
   /** With `fireAt`, deletes the timer only while it is still armed for that time: a re-armed timer stays. */
   deleteTimer(key: string, fireAt?: number): Promise<void>;
   deleteTimersFor(projectId: string, ticketId: string): Promise<void>;
+  /** Deletes the timers armed by the decision of an event (`armedBy`). */
+  deleteTimersArmedBy(eventId: string): Promise<void>;
   /** Queues an item (deduped by ticket + job) and returns its id. */
   enqueue(q: QueueItem): Promise<string>;
   /** Takes the next item of a queue out of the store: it is not handed out again. */

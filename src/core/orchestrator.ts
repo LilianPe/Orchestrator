@@ -85,6 +85,8 @@ interface StartOpts {
   inputText?: string;
   linearSessionId?: string;
   resume?: boolean;
+  /** A queued item's place in its queue, kept when it goes back there. */
+  enqueuedAt?: number;
 }
 
 /** Events after which `handle` settles the ticket: the pending job starts once nothing is in flight. */
@@ -516,9 +518,7 @@ export class Orchestrator {
     const { store } = this.d;
     this.log('error', `command ${row.effect.kind} for ${row.ticketId ?? '*'}: ${err.message}`);
     if (!row.ticketId || row.effect.kind === 'settle') return;
-    for (const t of await store.dueTimers(Number.MAX_SAFE_INTEGER)) {
-      if (t.armedBy === row.eventId) await store.deleteTimer(t.key, t.fireAt);
-    }
+    await store.deleteTimersArmedBy(row.eventId);
     const project = await this.runtimeFor(row.projectId, row.ticketId);
     if (project) await this.failTicket(project, row.ticketId, `Erreur : ${err.message}`);
   }
@@ -700,7 +700,7 @@ export class Orchestrator {
       linearSessionId: opts.linearSessionId,
       resume: opts.resume,
       priority: t.priority,
-      enqueuedAt: this.d.clock.now(),
+      enqueuedAt: opts.enqueuedAt ?? this.d.clock.now(),
     };
     if (job.queue === 'dev' && (t.activeRunId || t.verifyingRunId)) {
       await this.apply(t, { type: 'pending.set', job: { job: job.name, input: opts.input, inputText: opts.inputText, resume: opts.resume } });
@@ -713,7 +713,9 @@ export class Orchestrator {
       return;
     }
     const key = `${ticketId}:${job.queue}`;
-    const slot = this.d.scheduler.tryAcquire(job.queue, key);
+    // A start from a decision leaves alone the slots a drain promised to the items it dequeued.
+    const promised = admitted ? 0 : this.admitting[job.queue];
+    const slot = this.d.scheduler.free(job.queue) > promised ? this.d.scheduler.tryAcquire(job.queue, key) : null;
     admitted?.();
     if (slot === null) return this.d.scheduler.enqueue(item);
     try {

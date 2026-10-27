@@ -178,7 +178,8 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     expect(outcome).toMatchObject({ status: 'committed', seq: 1, effectIds: ['REL-1:1:1', 'REL-1:1:2'], known: undefined });
     expect(await s.recentEvents(10, 'REL-1')).toEqual([delegatedEvent('e1')]);
     expect(await s.getTicket('p', 'REL-1')).toMatchObject({ title: 'T+', workflowHash: 'h1' });
-    expect(await s.dueTimers(1000)).toEqual([{ key: 'REL-1:dev', projectId: 'p', ticketId: 'REL-1', job: 'dev', fireAt: 900, armedBy: 'e1' }]);
+    // Armed, but not due before the effects of its decision have run.
+    expect(await s.dueTimers(1000)).toEqual([]);
     expect((await s.listEffects('p', 'REL-1')).map((r) => [r.id, r.seq, r.i, r.effect.kind, r.status, r.eventId])).toEqual([
       ['REL-1:1:1', 1, 1, 'comment', 'pending', 'e1'],
       ['REL-1:1:2', 1, 2, 'labels', 'pending', 'e1'],
@@ -194,6 +195,7 @@ export function storeContract(store: () => Store | Promise<Store>): void {
       if (typeof row !== 'object') throw new Error('expected a claimed row');
       expect(await s.completeEffect(row.id, row.lease)).toBe(true);
     }
+    expect(await s.dueTimers(1000)).toEqual([{ key: 'REL-1:dev', projectId: 'p', ticketId: 'REL-1', job: 'dev', fireAt: 900, armedBy: 'e1' }]);
     const second = request(delegatedEvent('e2'));
     expect(await s.decide(second)).toMatchObject({ status: 'committed', seq: 2, effectIds: ['REL-1:2:1', 'REL-1:2:2'] });
     expect(second.seen.ticket).toMatchObject({ title: 'T+' });
@@ -250,6 +252,17 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     await s.decide(fresh);
     expect(fresh.seen.workflow).toEqual(v2);
     expect(await s.getWorkflowVersion('h2')).toEqual(v2);
+  });
+
+  it('deletes the timers armed by an event, and those of a ticket (ORC-149)', async () => {
+    const s = await store();
+    await s.putTimer({ key: 'REL-1:a', projectId: 'p', ticketId: 'REL-1', job: 'a', fireAt: 1, armedBy: 'e1' });
+    await s.putTimer({ key: 'REL-1:b', projectId: 'p', ticketId: 'REL-1', job: 'b', fireAt: 1, armedBy: 'e2' });
+    await s.putTimer({ key: 'REL-2:c', projectId: 'p', ticketId: 'REL-2', job: 'c', fireAt: 1 });
+    await s.deleteTimersArmedBy('e1');
+    expect((await s.dueTimers(10)).map((t) => t.key)).toEqual(['REL-1:b', 'REL-2:c']);
+    await s.deleteTimersFor('p', 'REL-1');
+    expect((await s.dueTimers(10)).map((t) => t.key)).toEqual(['REL-2:c']);
   });
 
   it('clears the ticket timers before arming the decision ones when asked (a stop, ORC-149)', async () => {

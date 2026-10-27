@@ -539,6 +539,10 @@ export class PgStore implements AsyncStore {
       select payload
       from timers
       where status = 'pending' and due_at <= to_timestamp(${now / 1000})
+        and not exists (
+          select 1 from outbox o
+          where o.payload->>'eventId' = timers.payload->>'armedBy' and o.status in ('pending', 'running')
+        )
       order by due_at, id
     `);
     return result.rows.map((row) => row.payload);
@@ -547,6 +551,10 @@ export class PgStore implements AsyncStore {
   async deleteTimer(key: string, fireAt?: number): Promise<void> {
     const armedAt = fireAt === undefined ? sql`` : sql`and (payload->>'fireAt')::double precision = ${fireAt}`;
     await this.db.execute(sql`delete from timers where id = ${key} and status = 'pending' ${armedAt}`);
+  }
+
+  async deleteTimersArmedBy(eventId: string): Promise<void> {
+    await this.db.execute(sql`delete from timers where status = 'pending' and payload->>'armedBy' = ${eventId}`);
   }
 
   async deleteTimersFor(projectId: string, ticketId: string): Promise<void> {

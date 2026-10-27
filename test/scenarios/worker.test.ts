@@ -245,4 +245,40 @@ on:
       expect(await h.store.getMeta('paused')).toBe('0');
     });
   });
+
+  it('keeps the slot a drain promised to a dequeued item from a start decided meanwhile, and the item its place', async () => {
+    const inner = new SqliteStore(':memory:');
+    let gate: Promise<void> | undefined;
+    let open!: () => void;
+    let reached = false;
+    // The drain's start of REL-2 reads its ticket first: held there, its slot is promised, not taken.
+    const store = Object.assign(Object.create(inner) as SqliteStore, {
+      getTicket: async (projectId: string, ticketId: string) => {
+        if (gate && ticketId === 'REL-2') {
+          reached = true;
+          await gate;
+        }
+        return inner.getTicket(projectId, ticketId);
+      },
+    });
+    const h = createHarness({ store, projectYaml: 'version: 1\nlimits:\n  parallel_sessions: 1\n' });
+    for (const id of ['REL-1', 'REL-2', 'REL-3']) h.tracker.addIssue({ identifier: id, title: `Ticket ${id}` });
+    h.runner.enqueue({ hold: true });
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    await h.send('ticket.delegated', { linearSessionId: 'ls-2' }, 'REL-2');
+    const queued = (await h.store.listQueue()).find((q) => q.ticketId === 'REL-2')!;
+    expect(queued).toBeDefined();
+
+    gate = new Promise<void>((r) => (open = r));
+    h.runner.release(h.runner.requests[0]!.runId);
+    await waitFor(() => reached);
+    await h.orch.accept({ ...TRUSTED, id: 'd3', type: 'ticket.delegated', at: h.clock.now(), projectId: 'p', ticketId: 'REL-3', payload: { linearSessionId: 'ls-3' } });
+    await waitFor(async () => (await h.store.listQueue()).some((q) => q.ticketId === 'REL-3'));
+    open();
+    await h.orch.drained();
+
+    const tickets = h.runner.requests.map((r) => r.cwd.split(/[\\/]/).pop());
+    expect(tickets.slice(0, 2)).toEqual(['REL-1', 'REL-2']);
+    expect((await h.store.listQueue()).find((q) => q.ticketId === 'REL-2')).toBeUndefined();
+  });
 });

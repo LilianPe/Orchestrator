@@ -271,10 +271,9 @@ export class SqliteStore implements Store {
   }
 
   private clearTimers(projectId: string, ticketId: string): void {
-    for (const r of this.db.prepare('SELECT key, data FROM timers').all() as { key: string; data: string }[]) {
-      const t = JSON.parse(r.data) as TimerRecord;
-      if (t.projectId === projectId && t.ticketId === ticketId) this.db.prepare('DELETE FROM timers WHERE key = ?').run(r.key);
-    }
+    this.db
+      .prepare("DELETE FROM timers WHERE json_extract(data, '$.projectId') = ? AND json_extract(data, '$.ticketId') = ?")
+      .run(projectId, ticketId);
   }
 
   async recordEvent(e: FactoryEvent): Promise<boolean> {
@@ -323,9 +322,14 @@ export class SqliteStore implements Store {
   }
 
   async dueTimers(now: number): Promise<TimerRecord[]> {
-    return (this.db.prepare('SELECT data FROM timers WHERE fire_at <= ? ORDER BY fire_at').all(now) as { data: string }[]).map((r) =>
-      JSON.parse(r.data),
-    );
+    const rows = this.db
+      .prepare(
+        `SELECT data FROM timers WHERE fire_at <= ? AND NOT EXISTS (
+           SELECT 1 FROM outbox WHERE outbox.event_id = json_extract(timers.data, '$.armedBy') AND outbox.status IN ('pending', 'running')
+         ) ORDER BY fire_at`,
+      )
+      .all(now) as { data: string }[];
+    return rows.map((r) => JSON.parse(r.data));
   }
 
   async deleteTimer(key: string, fireAt?: number): Promise<void> {
@@ -334,9 +338,11 @@ export class SqliteStore implements Store {
   }
 
   async deleteTimersFor(projectId: string, ticketId: string): Promise<void> {
-    for (const t of await this.dueTimers(Number.MAX_SAFE_INTEGER)) {
-      if (t.projectId === projectId && t.ticketId === ticketId) await this.deleteTimer(t.key);
-    }
+    this.clearTimers(projectId, ticketId);
+  }
+
+  async deleteTimersArmedBy(eventId: string): Promise<void> {
+    this.db.prepare("DELETE FROM timers WHERE json_extract(data, '$.armedBy') = ?").run(eventId);
   }
 
   async enqueue(item: QueueItem): Promise<string> {
