@@ -76,12 +76,14 @@ describe('standard pack', () => {
     );
   });
 
-  it('denies skipping the git hooks with --no-verify, at any place in the command', () => {
+  it('denies skipping the git hooks with --no-verify or -n, grouped (-nm) or late in the command', () => {
     const s = JSON.parse(readFileSync(join(pack, 'settings.json'), 'utf8'));
     expect(s.permissions.deny).toEqual(
       expect.arrayContaining([
         'Bash(git commit --no-verify:*)',
         'Bash(git commit -n:*)',
+        'Bash(git commit -n*)',
+        'Bash(git commit * -n*)',
         'Bash(git push --no-verify:*)',
         'Bash(git * --no-verify*)',
         'Bash(*--no-verify*)',
