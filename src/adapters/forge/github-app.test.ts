@@ -338,3 +338,88 @@ describe('GitHubAppForge secrets', () => {
     expect((error as Error).message).not.toContain('ghs_very_secret');
   });
 });
+
+describe('GitHubAppForge writes, idempotent (ORC-162)', () => {
+  const req = { branch: 'factory/REL-1', base: 'main', title: 'REL-1 : export', body: 'Ferme REL-1' };
+  const writes = (calls: Call[]) => calls.filter((c) => c.method !== 'GET' && !c.url.endsWith('/access_tokens'));
+
+  it('returns the open PR of the branch without creating one, and asks for open PRs only', async () => {
+    const { forge, calls } = makeForge([tokenRoute(42), pullsRoute([openPr()])], { installationId: 42 });
+    expect(await forge.ensurePr('/repo', req)).toEqual({ number: 7, url: 'https://github.com/acme/app/pull/7', deduplicated: true });
+    const list = new URL(calls.find((c) => c.url.includes('/pulls'))!.url);
+    expect(Object.fromEntries(list.searchParams)).toEqual({ head: 'acme:factory/REL-1', state: 'open', per_page: '1' });
+    expect(writes(calls)).toEqual([]);
+  });
+
+  it('creates the PR when the branch has no open one', async () => {
+    const { forge, calls } = makeForge(
+      [
+        tokenRoute(42),
+        (url, init) => (url.pathname === '/repos/acme/app/pulls' && init.method === 'POST' ? { status: 201, body: openPr({ number: 8, html_url: 'u8' }) } : undefined),
+        pullsRoute([]),
+      ],
+      { installationId: 42 },
+    );
+    expect(await forge.ensurePr('/repo', req)).toEqual({ number: 8, url: 'u8', deduplicated: false });
+    expect(writes(calls).map((c) => c.body)).toEqual([{ title: req.title, head: req.branch, base: 'main', body: req.body }]);
+  });
+
+  it('reads the open PR again when a concurrent replay opened it first (422), and rethrows a 422 with none behind it', async () => {
+    const pulls = (afterPost: unknown[]): Route => {
+      let posted = false;
+      return (url, init) => {
+        if (url.pathname !== '/repos/acme/app/pulls') return undefined;
+        if (init.method === 'GET') return { body: posted ? afterPost : [] };
+        posted = true;
+        return { status: 422, body: { message: 'Validation Failed' } };
+      };
+    };
+    const raced = makeForge([tokenRoute(42), pulls([openPr()])], { installationId: 42 });
+    expect(await raced.forge.ensurePr('/repo', req)).toEqual({ number: 7, url: 'https://github.com/acme/app/pull/7', deduplicated: true });
+    const invalid = makeForge([tokenRoute(42), pulls([])], { installationId: 42 });
+    await expect(invalid.forge.ensurePr('/repo', req)).rejects.toMatchObject({ status: 422 });
+  });
+
+  it('updates the check run of the sha that carries the external id instead of creating one', async () => {
+    const runs = [
+      { id: 11, name: 'factory/verify', status: 'completed', conclusion: 'failure', external_id: 'REL-1:2:1' },
+      { id: 12, name: 'factory/verify', status: 'in_progress', conclusion: null, external_id: 'REL-1:4:1' },
+    ];
+    const { forge, calls } = makeForge(
+      [
+        tokenRoute(42),
+        (url) => (url.pathname === '/repos/acme/app/commits/abc123/check-runs' ? { body: { check_runs: runs } } : undefined),
+        (url, init) => (url.pathname === '/repos/acme/app/check-runs/12' && init.method === 'PATCH' ? { body: { id: 12 } } : undefined),
+      ],
+      { installationId: 42 },
+    );
+    const out = await forge.upsertCheckRun('/repo', {
+      sha: 'abc123', name: 'factory/verify', externalId: 'REL-1:4:1', status: 'completed', conclusion: 'success', title: 'Vert', summary: '3 vérifications',
+    });
+    expect(out).toEqual({ id: 12, deduplicated: true });
+    const list = new URL(calls.find((c) => c.url.includes('/check-runs?'))!.url);
+    expect(Object.fromEntries(list.searchParams)).toEqual({ check_name: 'factory/verify', filter: 'all', per_page: '100' });
+    expect(writes(calls)).toEqual([
+      expect.objectContaining({
+        method: 'PATCH',
+        body: { name: 'factory/verify', external_id: 'REL-1:4:1', status: 'completed', conclusion: 'success', output: { title: 'Vert', summary: '3 vérifications' } },
+      }),
+    ]);
+  });
+
+  it('creates the check run on the sha, with the external id, when none carries it', async () => {
+    const { forge, calls } = makeForge(
+      [
+        tokenRoute(42),
+        (url) => (url.pathname === '/repos/acme/app/commits/abc123/check-runs' ? { body: { check_runs: [] } } : undefined),
+        (url, init) => (url.pathname === '/repos/acme/app/check-runs' && init.method === 'POST' ? { status: 201, body: { id: 21 } } : undefined),
+      ],
+      { installationId: 42 },
+    );
+    expect(await forge.upsertCheckRun('/repo', { sha: 'abc123', name: 'factory/verify', externalId: 'REL-1:4:1', status: 'in_progress' })).toEqual({
+      id: 21,
+      deduplicated: false,
+    });
+    expect(writes(calls).map((c) => c.body)).toEqual([{ name: 'factory/verify', external_id: 'REL-1:4:1', status: 'in_progress', head_sha: 'abc123' }]);
+  });
+});

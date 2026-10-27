@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { LinearApi, type FetchLike } from './api.js';
-import { LinearTracker } from './tracker.js';
+import { effectUuid, LinearTracker } from './tracker.js';
 
 type Handler = (vars: Record<string, any>) => unknown;
 
@@ -69,6 +69,72 @@ describe('LinearTracker', () => {
     await new LinearTracker(api, 'app-1').setLabels('REL-1', ['agent:stop'], ['bug']);
     expect(calls.find((c) => c.op === 'LabelCreate')!.vars).toEqual({ input: { name: 'agent:stop', teamId: 't-1', color: '#26b5ce' } });
     expect(calls.at(-1)!.vars).toEqual({ id: 'uuid-1', input: { addedLabelIds: ['l2'], removedLabelIds: ['l1'] } });
+  });
+
+  it('writes nothing when the labels already read as asked (a replayed effect, ORC-162)', async () => {
+    const { api, calls } = fakeLinear({
+      Issue: () => ({ issue: { ...node, labels: { nodes: [{ id: 'l1', name: 'bug' }, { id: 'l2', name: 'agent:pris' }] } } }),
+      TeamLabels: () => ({ issueLabels: { nodes: [{ id: 'l1', name: 'bug' }, { id: 'l2', name: 'agent:pris' }] } }),
+      IssueUpdate: () => ({ issueUpdate: { success: true } }),
+    });
+    const t = new LinearTracker(api, 'app-1');
+    await t.setLabels('REL-1', ['agent:pris'], ['agent:attente']);
+    expect(calls.map((c) => c.op)).toEqual(['Issue']);
+    await t.setLabels('REL-1', ['agent:pris'], ['bug']);
+    expect(calls.at(-1)).toEqual({ op: 'IssueUpdate', vars: { id: 'uuid-1', input: { addedLabelIds: [], removedLabelIds: ['l1'] } } });
+  });
+
+  it("keys an effect's comment by a client id and a marker, and finds it by either (ORC-162)", async () => {
+    const { api, calls } = fakeLinear({
+      Issue: () => ({ issue: node }),
+      CommentCreate: () => ({ commentCreate: { success: true } }),
+      EffectComment: () => ({ comments: { nodes: [{ id: 'c-9' }] } }),
+    });
+    const t = new LinearTracker(api, 'app-1');
+    await t.comment('REL-1', 'Pris en charge.', 'REL-1:1:2');
+    const id = effectUuid('comment', 'REL-1:1:2');
+    expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(calls.at(-1)).toEqual({
+      op: 'CommentCreate',
+      vars: { input: { issueId: 'uuid-1', id, body: 'Pris en charge.\n\n<!-- factory:effect=REL-1:1:2 -->' } },
+    });
+    expect(await t.findComment('REL-1', 'REL-1:1:2')).toBe('c-9');
+    expect(calls.at(-1)).toEqual({ op: 'EffectComment', vars: { issueId: 'uuid-1', id, marker: '<!-- factory:effect=REL-1:1:2 -->' } });
+    // Without an effect, a comment is written as before.
+    await t.comment('REL-1', 'Budget atteint.');
+    expect(calls.at(-1)!.vars).toEqual({ input: { issueId: 'uuid-1', body: 'Budget atteint.' } });
+  });
+
+  it("keys an effect's agent activity by a client id and finds it by that id (ORC-162)", async () => {
+    let found: { id: string }[] = [];
+    const { api, calls } = fakeLinear({
+      ActivityCreate: () => ({ agentActivityCreate: { success: true } }),
+      EffectActivity: () => ({ agentSession: { activities: { nodes: found } } }),
+    });
+    const t = new LinearTracker(api, 'app-1');
+    const id = effectUuid('activity', 'REL-1:3:1');
+    expect(id).not.toBe(effectUuid('comment', 'REL-1:3:1'));
+    expect(await t.findActivity('as-1', 'REL-1:3:1')).toBeUndefined();
+    await t.activity('as-1', { type: 'response', body: 'Fini' }, 'REL-1:3:1');
+    found = [{ id }];
+    expect(await t.findActivity('as-1', 'REL-1:3:1')).toBe(id);
+    expect(calls.map((c) => c.vars)).toEqual([
+      { sessionId: 'as-1', id },
+      { input: { agentSessionId: 'as-1', content: { type: 'response', body: 'Fini' }, id } },
+      { sessionId: 'as-1', id },
+    ]);
+  });
+
+  it('does not link a URL the session already links (ORC-162)', async () => {
+    const { api, calls } = fakeLinear({
+      SessionLinks: () => ({ agentSession: { externalLinks: [{ label: 'Pull request', url: 'https://github.com/a/b/pull/1' }] } }),
+      SessionUpdate: () => ({ agentSessionUpdate: { success: true } }),
+    });
+    const t = new LinearTracker(api, 'app-1');
+    await t.addExternalUrl('as-1', 'Pull request', 'https://github.com/a/b/pull/1');
+    expect(calls.map((c) => c.op)).toEqual(['SessionLinks']);
+    await t.addExternalUrl('as-1', 'Pull request', 'https://github.com/a/b/pull/2');
+    expect(calls.at(-1)).toEqual({ op: 'SessionUpdate', vars: { id: 'as-1', input: { addedExternalUrls: [{ label: 'Pull request', url: 'https://github.com/a/b/pull/2' }] } } });
   });
 
   it('ensureSetup creates only the missing states', async () => {

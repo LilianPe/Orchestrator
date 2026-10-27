@@ -13,6 +13,13 @@ export const Q = {
   search: `query Search($term: String!) { searchIssues(term: $term, first: 10) { nodes { identifier title url state { name } } } }`,
   issueUpdate: `mutation IssueUpdate($id: String!, $input: IssueUpdateInput!) { issueUpdate(id: $id, input: $input) { success } }`,
   commentCreate: `mutation CommentCreate($input: CommentCreateInput!) { commentCreate(input: $input) { success } }`,
+  /** The ticket's comment of an effect (ORC-162): by the id it was created with, or by its marker in case the id was not kept. */
+  effectComment: `query EffectComment($issueId: ID!, $id: ID!, $marker: String!) {
+    comments(first: 1, filter: { issue: { id: { eq: $issueId } }, or: [{ id: { eq: $id } }, { body: { contains: $marker } }] }) { nodes { id } } }`,
+  /** The session's activity of an effect (ORC-162): an activity has no body filter, only its id. */
+  effectActivity: `query EffectActivity($sessionId: String!, $id: ID!) {
+    agentSession(id: $sessionId) { activities(first: 1, filter: { id: { eq: $id } }) { nodes { id } } } }`,
+  sessionLinks: `query SessionLinks($id: String!) { agentSession(id: $id) { externalLinks { url } } }`,
   activityCreate: `mutation ActivityCreate($input: AgentActivityCreateInput!) { agentActivityCreate(input: $input) { success } }`,
   sessionUpdate: `mutation SessionUpdate($id: String!, $input: AgentSessionUpdateInput!) { agentSessionUpdate(id: $id, input: $input) { success } }`,
   sessionOnIssue: `mutation SessionOnIssue($input: AgentSessionCreateOnIssue!) { agentSessionCreateOnIssue(input: $input) { success agentSession { id } } }`,
