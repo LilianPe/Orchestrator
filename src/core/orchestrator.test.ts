@@ -41,8 +41,9 @@ describe('Orchestrator', () => {
     tracker.addIssue({ identifier: 'REL-1', title: 'T', description: 'Exporter les audits en CSV depuis la liste des audits.' });
     await store.putTicket({ ...newTicketState('p', 'REL-1', 'T', 'done', 1), delegated: true, prState: 'MERGED', pendingJob: { job: 'dev-feedback' } });
     // A result settles the ticket: settle would start the pending job.
-    await orch.submit({ ...TRUSTED, id: 'v1', type: 'verify.passed', at: 1_000, projectId: 'p', ticketId: 'REL-1', payload: { runId: 'old', job: 'dev' } });
-    await orch.idle();
+    // Its settle is an outbox effect, run by the worker: startRun refuses the job all the same.
+    await orch.accept({ ...TRUSTED, id: 'v1', type: 'verify.passed', at: 1_000, projectId: 'p', ticketId: 'REL-1', payload: { runId: 'old', job: 'dev' } });
+    await orch.drained();
     expect(runner.requests).toEqual([]);
     expect((await store.getTicket('p', 'REL-1'))!.pendingJob).toBeUndefined();
     expect((await store.getTicket('p', 'REL-1'))!.blocked).toBe(false);
