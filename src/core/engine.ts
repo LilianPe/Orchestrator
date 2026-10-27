@@ -43,6 +43,17 @@ function block(out: Decision, reason: string, body: string): Decision {
   return out;
 }
 
+/** The red-CI loop starts over with its whole bound (ORC-270); nothing is recorded when its count is already 0. */
+function resetRedCi(out: Decision, ticket: TicketState | undefined): void {
+  if ((ticket?.ciFixAttempts ?? 0) > 0) out.events.push({ type: 'ticket.patched', patch: { ciFixAttempts: 0 } });
+}
+
+/** Work starts again on a blocked ticket. Relaunched by anything but red CI itself (a reply, a label, a status change…), the red-CI count resets. */
+function unblock(out: Decision, event: FactoryEvent, ticket: TicketState): void {
+  out.events.push({ type: 'ticket.unblocked' });
+  if (event.type !== 'pr.checks_failed') resetRedCi(out, ticket);
+}
+
 /** A Linear session that carries questions (read-only answers), not the ticket's dev conversation. */
 export function isQuestionSession(ticket: TicketState | undefined, sessionId: string | undefined): boolean {
   if (!ticket || !sessionId) return false;
@@ -139,7 +150,7 @@ function appendFeedback(out: Decision, event: FactoryEvent<'session.prompted'>):
 
 function applyRule(out: Decision, rule: Rule, event: FactoryEvent, ticket: TicketState | undefined, workflow: Workflow): Decision {
   const job = rule.run ? workflow.jobs[rule.run]! : undefined;
-  if (job && !refusal(event, ticket, job) && ticket?.blocked) out.events.push({ type: 'ticket.unblocked' });
+  if (job && !refusal(event, ticket, job) && ticket?.blocked) unblock(out, event, ticket);
   if (rule.move) out.effects.push({ kind: 'move', to: rule.move });
   if (rule.labels) out.effects.push({ kind: 'labels', add: rule.labels.add, remove: rule.labels.remove });
   if (rule.comment) out.effects.push({ kind: 'comment', body: rule.comment });
@@ -164,6 +175,30 @@ function applyRule(out: Decision, rule: Rule, event: FactoryEvent, ticket: Ticke
     });
   }
   return out;
+}
+
+/**
+ * A rule that answers red CI with a run, bounded by `limits.ciFixAttempts` (I5, ORC-270): each run it
+ * starts is counted, and once the count reaches the bound the next red CI blocks the ticket instead of
+ * applying the rule. A green CI or a human relaunch (`unblock`) resets the count. A run the rule would
+ * not start anyway (merged PR, I8 b) is neither counted nor blocked.
+ */
+function fixRedCi(out: Decision, rule: Rule, event: FactoryEvent<'pr.checks_failed'>, ticket: TicketState | undefined, workflow: Workflow): Decision {
+  const job = workflow.jobs[rule.run!]!;
+  if (refusal(event, ticket, job)) return applyRule(out, rule, event, ticket, workflow);
+  const used = ticket?.ciFixAttempts ?? 0;
+  const bound = workflow.limits.ciFixAttempts;
+  if (used < bound) {
+    applyRule(out, rule, event, ticket, workflow);
+    out.events.push({ type: 'ticket.patched', patch: { ciFixAttempts: used + 1 } });
+    return out;
+  }
+  out.trace.push(`red CI: ${job.name} bound ${bound} reached`);
+  // Already blocked (by a rule without !blocked): the ticket keeps its reason and gets no second notice.
+  if (ticket?.blocked) return out;
+  const reason = `CI toujours en échec après ${bound} tentatives de ${job.name}.`;
+  const failures = event.payload.failures.map((f) => `- \`${f}\``);
+  return block(out, reason, [reason, ...failures, 'Répondez dans ce fil pour relancer.'].join('\n'));
 }
 
 const FENCED = 'fenced: ';
@@ -261,7 +296,7 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
     case 'debounce.fired': {
       const job = workflow.jobs[event.payload.job];
       if (!job) return out;
-      if (ticket?.blocked && !refusal(event, ticket, job)) out.events.push({ type: 'ticket.unblocked' });
+      if (ticket?.blocked && !refusal(event, ticket, job)) unblock(out, event, ticket);
       startRun(out, event, ticket, job, { input: job.input });
       return out;
     }
@@ -293,6 +328,10 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
       out.trace.push('built-in pr.merged: work cancelled');
       out.events.push({ type: 'work.cancelled' });
       out.effects.push({ kind: 'stop_run' });
+      break;
+    case 'pr.checks_passed':
+      // Green CI ends the red-CI loop: its count starts over (ORC-270). The rules of pr.checks_passed still apply.
+      resetRedCi(out, ticket);
       break;
     case 'pr.opened': {
       // A new PR (another number) reopens a delivered ticket; the same PR seen again leaves it as it is.
@@ -337,5 +376,7 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
     return out;
   }
   out.trace.push(`on.${event.type}[${index}]`);
-  return applyRule(out, rules[index]!, event, ticket, workflow);
+  const rule = rules[index]!;
+  if (event.type === 'pr.checks_failed' && rule.run) return fixRedCi(out, rule, event, ticket, workflow);
+  return applyRule(out, rule, event, ticket, workflow);
 }

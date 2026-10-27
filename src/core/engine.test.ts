@@ -382,6 +382,63 @@ describe('decide — built-ins', () => {
     expect(kinds(last)).toEqual({ events: ['ticket.blocked'], effects: ['activity'], timers: [] });
   });
 
+  describe('red CI loop bounded by limits.ci_fix_attempts (I5, ORC-270)', () => {
+    const red = ev('pr.checks_failed', { number: 3, url: 'u', branch: 'b', failures: ['test', 'lint'] });
+    const inReview = (patch: Partial<TicketState> = {}) => ticket({ logical: 'human_review', ...patch });
+
+    it('starts fix-ci and counts it while the count is under the bound', () => {
+      expect(workflow.limits.ciFixAttempts).toBe(2);
+      for (const used of [0, 1]) {
+        const out = decide(inReview({ ciFixAttempts: used }), red, workflow);
+        expect(out.events).toEqual([{ type: 'ticket.patched', patch: { ciFixAttempts: used + 1 } }]);
+        expect(out.effects).toEqual([{ kind: 'start_run', job: 'fix-ci', input: 'ci_failures', inputText: undefined, linearSessionId: undefined }]);
+      }
+    });
+
+    it('blocks once the bound is reached, with the checks still red and no fix-ci', () => {
+      const out = decide(inReview({ ciFixAttempts: 2 }), red, workflow);
+      const reason = 'CI toujours en échec après 2 tentatives de fix-ci.';
+      expect(out).toEqual(
+        decision({
+          events: [{ type: 'ticket.blocked', reason }],
+          effects: [{ kind: 'activity', type: 'elicitation', body: `${reason}\n- \`test\`\n- \`lint\`\nRépondez dans ce fil pour relancer.` }],
+        }),
+      );
+      // Blocked, the ticket gets no fix-ci from a later red CI either, and no second notice.
+      const after = reduce(reduce(inReview({ ciFixAttempts: 2 }), red), out.events[0]!);
+      expect(decide(after, red, workflow)).toEqual(decision());
+    });
+
+    it('ci_fix_attempts: 0 blocks at the first red CI', () => {
+      const wf = { ...workflow, limits: { ...workflow.limits, ciFixAttempts: 0 } };
+      expect(kinds(decide(inReview(), red, wf))).toEqual({ events: ['ticket.blocked'], effects: ['activity'], timers: [] });
+    });
+
+    it('a green CI resets the count, and records nothing when it is already 0', () => {
+      const green = ev('pr.checks_passed', { number: 3, url: 'u', branch: 'b' });
+      expect(decide(inReview({ ciFixAttempts: 2 }), green, workflow).events).toEqual([{ type: 'ticket.patched', patch: { ciFixAttempts: 0 } }]);
+      expect(decide(inReview(), green, workflow).events).toEqual([]);
+    });
+
+    it('a human who relaunches the blocked ticket resets the count', () => {
+      const blocked = inReview({ ciFixAttempts: 2, blocked: true, linearSessionId: 's1' });
+      const reply = decide(blocked, ev('session.prompted', { linearSessionId: 's1', body: 'corrige le lint', author: 'L' }), workflow);
+      expect(reply.events.map((e) => e.type)).toEqual(['feedback.appended', 'ticket.unblocked', 'ticket.patched']);
+      expect(reply.events[2]).toEqual({ type: 'ticket.patched', patch: { ciFixAttempts: 0 } });
+      const label = decide(blocked, ev('label.changed', { label: 'agent:reprendre', change: 'added' }), workflow);
+      expect(label.events).toEqual([{ type: 'ticket.unblocked' }, { type: 'ticket.patched', patch: { ciFixAttempts: 0 } }]);
+      const timer = decide(blocked, ev('debounce.fired', { job: 'dev-feedback' }), workflow);
+      expect(timer.events).toEqual([{ type: 'ticket.unblocked' }, { type: 'ticket.patched', patch: { ciFixAttempts: 0 } }]);
+    });
+
+    it('counts nothing when no fix-ci starts: no rule, or a merged PR', () => {
+      expect(decide(ticket({ logical: 'dev', ciFixAttempts: 1 }), red, workflow)).toEqual(decision());
+      const merged = decide(inReview({ prState: 'MERGED', ciFixAttempts: 1 }), red, workflow);
+      expect(merged).toEqual(decision());
+      expect(merged.trace).toContain('merged: refused fix-ci');
+    });
+  });
+
   it('debounce fired starts the job', () => {
     expect(decide(ticket({ logical: 'human_review' }), ev('debounce.fired', { job: 'dev-feedback' }), workflow)).toEqual(
       decision({ effects: [{ kind: 'start_run', job: 'dev-feedback', input: 'feedback' }] }),

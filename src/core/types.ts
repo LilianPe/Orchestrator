@@ -115,7 +115,7 @@ export type DecidedEvent =
   | { type: 'ticket.unblocked' }
   | {
       type: 'ticket.patched';
-      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId'>>;
+      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId'>>;
     }
   | { type: 'feedback.appended'; item: FeedbackItem }
   /** The ticket's dev work is stopped: nothing pending, no verification awaited. */
@@ -167,6 +167,11 @@ export interface TicketState {
   verifyingRunId?: string;
   pendingJob?: PendingJob;
   verifyAttempts: number;
+  /**
+   * Runs started by red CI (`pr.checks_failed`) since the last green CI or human relaunch, bounded by
+   * `limits.ciFixAttempts` (I5, ORC-270). The AI review loop does not share it yet (ORC-184, ORC-187).
+   */
+  ciFixAttempts: number;
   pendingFeedback: FeedbackItem[];
   priority: number;
   costUsd: number;
@@ -177,7 +182,7 @@ export interface TicketState {
 
 /** Fills fields added after a row was first persisted. */
 export function normalizeTicket(t: TicketState): TicketState {
-  return { ...t, delegated: t.delegated ?? false, questionSessionIds: t.questionSessionIds ?? [] };
+  return { ...t, delegated: t.delegated ?? false, questionSessionIds: t.questionSessionIds ?? [], ciFixAttempts: t.ciFixAttempts ?? 0 };
 }
 
 export function newTicketState(
@@ -197,6 +202,7 @@ export function newTicketState(
     questionSessionIds: [],
     blocked: false,
     verifyAttempts: 0,
+    ciFixAttempts: 0,
     pendingFeedback: [],
     priority,
     costUsd: 0,

@@ -185,27 +185,54 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
       TIMEOUT,
     );
 
-    /** Stand-in bound for the red-CI loop: the standard pack declares none; ORC-187 brings the preset's. */
-    const CI_RELAUNCHES = 2;
-    const redCiBounded = (s: Sequences): void => {
-      const fixes = effects(run(s)).filter((e) => e.kind === 'start_run' && e.job === 'fix-ci');
-      expect(fixes.length, 'fix-ci relaunches').toBeLessThanOrEqual(CI_RELAUNCHES + 1);
+    /**
+     * The red-CI loop of the pack, bounded by `limits.ci_fix_attempts` (ORC-270): between two resets
+     * (green CI, a human relaunch), red CI starts `fix-ci` at most that many times, and a red CI whose
+     * rule matches once the bound is reached starts nothing and blocks the ticket. The count is the
+     * model's, kept from the decisions; the ticket's `ciFixAttempts` must agree with it after every step.
+     */
+    const redCiBounded = (r: Run, bound: number): void => {
+      let fixes = 0;
+      for (const step of decided(r)) {
+        if (step.decision.events.some((e) => e.type === 'ticket.patched' && e.patch.ciFixAttempts === 0)) fixes = 0;
+        if (step.event.type !== 'pr.checks_failed') {
+          if (step.after) expect(step.after.ciFixAttempts, 'ciFixAttempts').toBe(fixes);
+          continue;
+        }
+        const fixCi = step.decision.effects.filter((e) => e.kind === 'start_run' && e.job === 'fix-ci');
+        fixes += fixCi.length;
+        expect(fixes, 'fix-ci relaunches').toBeLessThanOrEqual(bound);
+        if (step.after) expect(step.after.ciFixAttempts, 'ciFixAttempts').toBe(fixes);
+        if ((step.before?.ciFixAttempts ?? 0) < bound) continue;
+        expect(fixCi).toEqual([]);
+        const matched = step.decision.trace.includes('on.pr.checks_failed[0]');
+        const refused = step.decision.trace.includes('merged: refused fix-ci');
+        expect(step.decision.events.map((e) => e.type)).toEqual(matched && !refused ? ['ticket.blocked'] : []);
+      }
     };
-    it.fails(
-      `KNOWN VIOLATION — red CI relaunches fix-ci at most ${CI_RELAUNCHES} + 1 times (pr.checks_failed has no counter)`,
+    const ciBound = wf.limits.ciFixAttempts;
+    const redCiCounterexample = seq(
+      ...delegated(),
+      ext('status.changed', { from: 'todo', to: 'human_review' }),
+      ...Array.from({ length: ciBound + 2 }, () => ext('pr.checks_failed', { ...pr, failures: ['test'] })),
+    );
+
+    it(
+      'red CI relaunches fix-ci at most ci_fix_attempts times between two resets, and the next red CI blocks (ORC-270)',
       () => {
-        const counterexample = seq(
-          ...delegated(),
-          ext('status.changed', { from: 'todo', to: 'human_review' }),
-          ext('pr.checks_failed', { ...pr, failures: ['test'] }),
-          ext('pr.checks_failed', { ...pr, failures: ['test'] }),
-          ext('pr.checks_failed', { ...pr, failures: ['test'] }),
-          ext('pr.checks_failed', { ...pr, failures: ['test'] }),
+        fc.assert(
+          fc.property(sequences, fc.integer({ min: 0, max: 3 }), (s, bound) => redCiBounded(fold(s.withDuplicates, workflow(2, bound)), bound)),
+          params<[Sequences, number]>([[redCiCounterexample, ciBound]]),
         );
-        violated('fix-ci relaunches', redCiBounded, counterexample);
       },
       TIMEOUT,
     );
+
+    it(`the counterexample of ORC-173: ${ciBound} fix-ci, then the ticket is blocked for its red CI`, () => {
+      const r = run(redCiCounterexample);
+      expect(effects(r).filter((e) => e.kind === 'start_run' && e.job === 'fix-ci')).toHaveLength(ciBound);
+      expect(r.final).toMatchObject({ blocked: true, blockReason: `CI toujours en échec après ${ciBound} tentatives de fix-ci.`, ciFixAttempts: ciBound });
+    });
 
     it.todo('I5 — the AI review → fix loop is counted by the engine, with the same counter as red CI (ORC-184, preset bounds of ORC-187)');
   });
