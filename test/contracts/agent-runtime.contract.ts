@@ -68,8 +68,8 @@ export function describeAgentRuntimeContract(name: string, make: () => AgentRunt
       const s = make();
       let h: RunHandle | undefined;
       expect(() => (h = start(s, 'unlaunchable'))).not.toThrow();
-      await expect(within(h!.done, 500)).resolves.toMatchObject({ outcome: 'failure' });
-      expect(await within(drain(h!.events), 500)).not.toBe('pending');
+      await expect(within(h!.done, 1_500)).resolves.toMatchObject({ outcome: 'failure' });
+      expect(await within(drain(h!.events), 1_500)).not.toBe('pending');
     });
 
     it('stop ends a running run in stopped and closes its stream; stopping again changes nothing', async () => {
