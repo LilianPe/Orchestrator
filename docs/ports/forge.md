@@ -15,7 +15,14 @@ La forge de code, en lecture : la PR d'une branche, l'état de ses checks, ses f
 
 ## Idempotence
 
-Le port ne fait que lire. L'ouverture et la mise à jour de la PR passent par le [Publisher](publisher.md) ; les check runs (ligne « Check run » d'ORC-162, mise à jour par `external_id`) seront une nouvelle méthode, avec ORC-181.
+Le port `Forge` ne fait que lire. Les écritures de l'usine sont à part, dans `ForgeWriter` (même fichier, ORC-162), chacune idempotente ; elles ne sont pas encore appelées (le [Publisher](publisher.md), ORC-125, appellera `ensurePr`) et n'ont pas de suite de conformité :
+
+| Méthode | Ce qu'elle garantit | Rejouée |
+|---|---|---|
+| `ensurePr(repo, { branch, base, title, body })` | la PR **ouverte** de la branche, créée si la branche n'en a pas ; une PR fermée ou mergée n'est pas réutilisée | rend la même PR, `deduplicated: true` ; après une course perdue (422), relit la PR ouverte |
+| `upsertCheckRun(repo, { sha, name, externalId, status, … })` | le check run du sha qui porte `externalId`, créé ou mis à jour | met à jour le même check run, `deduplicated: true` |
+
+Seuls `GitHubAppForge` et `FakeForge` l'implémentent : GitHub ne laisse qu'une app créer un check run, pas le jeton utilisateur de `gh`. Détail et limites : [Idempotence des effets externes](../idempotence.md).
 
 ## Fencing
 

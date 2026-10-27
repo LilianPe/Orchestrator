@@ -62,6 +62,7 @@ Sans tokens, pour tester l'interface : `relais up --fake-runner`.
 
 ### Tester
 - [Tests et harnais](docs/tests.md) : écrire un scénario avec les faux adaptateurs, l'horloge simulée et le préréglage de test.
+- [Idempotence des effets externes](docs/idempotence.md) : la table des 7 effets (clé, déduplication, comportement en doublon), un test par ligne, ce que Linear, GitHub et Docker permettent.
 - [Contrats des ports](docs/ports/README.md) : une fiche par port (méthodes, idempotence, erreurs, fencing) et sa suite de conformité, à faire passer à tout nouvel adaptateur.
 
 ### Décisions
