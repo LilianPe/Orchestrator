@@ -1,6 +1,6 @@
 import type { JobSpec, Rule, Workflow } from '../config/workflow-schema.js';
 import { evalCondition } from './conditions.js';
-import { blockedByDeadLetter, deadLetterReason, type RepairAction } from './dead-letter.js';
+import { blockedByDeadLetter, deadLetterReason, REPAIR_LABELS, repairedEvent } from './dead-letter.js';
 import type { Decision, Effect } from './decision.js';
 import { reduce } from './reduce.js';
 import type { EventType, FactoryEvent, FeedbackItem, InputKind, Taint, TicketState, VerifyFailure } from './types.js';
@@ -267,17 +267,16 @@ function settledTicket(ticket: TicketState): string | undefined {
  * `force` records its facts (by `reduce`) without its decision, a `skip` drops it.
  */
 function repair(state: TicketState | undefined, event: FactoryEvent<'dead_letter.repaired'>, workflow: Workflow): Decision {
-  const { eventId, action, by, event: repaired } = event.payload;
+  const { eventId, action, by } = event.payload;
   const lifted = state !== undefined && blockedByDeadLetter(state, eventId);
   const base = lifted ? { ...state, blocked: false, blockReason: undefined } : state;
+  const repaired = repairedEvent(event);
   const out = action === 'replay' && repaired ? decide(base, repaired, workflow) : empty();
   // Pushed, not put first: the trace of a replayed event keeps its fence first (`isFenced`).
   out.trace.push(`built-in dead_letter.repaired: ${action} ${eventId}`);
   if (lifted) out.effects.push({ kind: 'activity', type: 'response', body: `Événement ${eventId} réparé par ${by} (${REPAIR_LABELS[action]}) : le ticket est débloqué.` });
   return out;
 }
-
-const REPAIR_LABELS: Record<RepairAction, string> = { replay: 'rejoué', skip: 'ignoré', force: 'forcé' };
 
 /** Pure: the same state, event and workflow always give the same decision. */
 export function decide(state: TicketState | undefined, event: FactoryEvent, workflow: Workflow): Decision {
@@ -362,7 +361,10 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
         return out;
       }
       const reason = deadLetterReason(event.payload);
-      out.events.push({ type: 'ticket.blocked', reason });
+      // Already blocked (another dead letter, a failed effect, the red-CI bound…): that reason stays, so that
+      // repairing this event does not lift a block that is not its own. The event is still announced.
+      if (ticket.blocked) out.trace.push(`dead_letter.added: ticket already blocked (${ticket.blockReason ?? 'no reason'}), reason kept`);
+      else out.events.push({ type: 'ticket.blocked', reason });
       out.effects.push({ kind: 'activity', type: 'error', body: `${reason} Un mainteneur peut le réparer : \`factory run repair ${ticket.ticketId}\`.` });
       return out;
     }

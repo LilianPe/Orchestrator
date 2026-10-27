@@ -54,4 +54,16 @@ describe('factory run repair (ORC-175)', () => {
     expect(await store.deadLetters()).toMatchObject([{ eventId: 'g1', status: 'skipped', resolvedBy: 'armand' }]);
     expect((await store.pendingInbox(10)).map((e) => e.id)).toEqual(['repair:g1:1']);
   });
+
+  it('refuses to skip the result of a run, which would leave the ticket running', async () => {
+    const finished = {
+      ...TRUSTED, id: 'f1', type: 'run.finished', at: 1, projectId: 'p', ticketId: 'REL-1',
+      payload: { runId: 'r1', job: 'dev', outcome: 'success', costUsd: 0, turns: 1, lastText: '' },
+    } as FactoryEvent;
+    const { store, lines, repair } = await withDeadLetters(finished);
+    expect(await repair('REL-1', 'skip')).toBe(1);
+    expect(lines.pop()).toMatch(/^f1 \(run\.finished\) termine un run .* Utilisez force/);
+    expect(await store.deadLetters('REL-1')).toMatchObject([{ status: 'open' }]);
+    expect(await repair('REL-1', 'force')).toBe(0);
+  });
 });

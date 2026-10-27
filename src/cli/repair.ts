@@ -2,7 +2,9 @@ import { userInfo } from 'node:os';
 import { join } from 'node:path';
 import { repoRoot } from '../app/root.js';
 import { homePaths } from '../config/instance.js';
-import { REPAIR_ACTIONS, type DeadLetter, type RepairAction } from '../core/dead-letter.js';
+import { REPAIR_ACTIONS, REPAIR_LABELS, type DeadLetter, type RepairAction } from '../core/dead-letter.js';
+import { SETTLES_RUN } from '../core/orchestrator.js';
+import type { EventType } from '../core/types.js';
 import { openStore } from '../store/open.js';
 import type { Store } from '../store/types.js';
 
@@ -12,8 +14,6 @@ export const REPAIR_USAGE = `Usage : factory run repair <ticket | événement> [
   skip         l'ignorer : il n'est jamais décidé
   force        enregistrer ses faits sans sa décision (aucun effet)
 Le ticket est débloqué ; la réparation passe par l'inbox et est journalisée.`;
-
-const LABELS: Record<RepairAction, string> = { replay: 'rejoué', skip: 'ignoré', force: 'forcé' };
 
 export interface RepairOptions {
   store: Store;
@@ -38,7 +38,10 @@ const line = (d: DeadLetter) =>
  */
 export async function runRepair(o: RepairOptions): Promise<number> {
   let found = await o.store.deadLetters(o.target);
-  if (found.length === 0) found = (await o.store.deadLetters()).filter((d) => d.eventId === o.target);
+  if (found.length === 0) {
+    const one = await o.store.getDeadLetter(o.target);
+    found = one ? [one] : [];
+  }
   if (found.length === 0) {
     o.print(`Aucun événement mis de côté pour ${o.target}.`);
     return 1;
@@ -66,12 +69,17 @@ export async function runRepair(o: RepairOptions): Promise<number> {
     for (const d of open) o.print(line(d));
     return 1;
   }
+  // A run's or a check's result frees the ticket's run: dropped, it would leave the ticket running for good.
+  if (action === 'skip' && SETTLES_RUN.has(chosen.event.type as EventType)) {
+    o.print(`${chosen.eventId} (${chosen.event.type}) termine un run ou ses vérifications : l'ignorer laisserait le ticket en cours. Utilisez force (ses faits sans sa décision) ou replay.`);
+    return 1;
+  }
   const repaired = await o.store.repairDeadLetter(chosen.eventId, action, o.by, o.now);
   if (!repaired) {
     o.print(`L'événement ${chosen.eventId} a été réparé entre-temps.`);
     return 1;
   }
-  o.print(`Événement ${chosen.eventId} (${chosen.event.type}) ${LABELS[action]} par ${o.by} : réparation journalisée, décidée au prochain passage du démon.`);
+  o.print(`Événement ${chosen.eventId} (${chosen.event.type}) ${REPAIR_LABELS[action]} par ${o.by} : réparation journalisée, décidée au prochain passage du démon.`);
   const left = open.length - 1;
   if (left > 0) o.print(`Encore ${left} événement${left > 1 ? 's' : ''} ouvert${left > 1 ? 's' : ''} pour ${o.target}.`);
   return 0;

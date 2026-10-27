@@ -64,7 +64,7 @@ const deadLettered: fc.Arbitrary<FactoryEvent> = fc.constantFrom(
 );
 const repair: fc.Arbitrary<EventPayloads['dead_letter.repaired']> = fc
   .record({ action: fc.constantFrom('replay' as const, 'skip' as const, 'force' as const), event: deadLettered })
-  .map(({ action, event }) => ({ eventId: DEAD_ID, action, by: 'ops', ...(action === 'skip' ? {} : { event }) }));
+  .map(({ action, event }) => ({ eventId: DEAD_ID, action, by: 'ops', event }));
 
 /** One arbitrary per event type: adding an event type to `EventPayloads` fails to compile until it is generated here. */
 const PAYLOADS: { [K in EventType]: fc.Arbitrary<EventPayloads[K]> } = {

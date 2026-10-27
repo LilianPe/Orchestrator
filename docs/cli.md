@@ -121,7 +121,7 @@ $ factory run repair REL-12 replay
 ```
 
 - `replay` : décider l'événement de nouveau, après un correctif ;
-- `skip` : l'ignorer ;
+- `skip` : l'ignorer (refusé pour un résultat de run ou de vérifications : utilisez `force`) ;
 - `force` : enregistrer ses faits sans sa décision (aucun effet).
 
 Le ticket est débloqué et la réparation journalisée (événement `dead_letter.repaired`, avec le nom de l'utilisateur). La commande écrit dans la base de l'instance (SQLite, ou Postgres avec `FACTORY_DATABASE_URL`) : le démon n'a pas besoin de tourner, il décide la réparation à son prochain passage. Un événement sans ticket se désigne par son id à la place de `<ID>`. Détails : [`exploitation.md`](exploitation.md#dead-letter-et-factory-run-repair-orc-175).

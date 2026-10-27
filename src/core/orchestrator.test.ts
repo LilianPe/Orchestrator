@@ -16,6 +16,7 @@ import { EventBus } from './bus.js';
 import { FakeClock } from './clock.js';
 import { Orchestrator } from './orchestrator.js';
 import { runRepair } from '../cli/repair.js';
+import type { StoredEvent } from './upcast.js';
 import type { EffectRetry } from '../runtime/outbox.js';
 import { Scheduler } from './scheduler.js';
 import { newTicketState, TRUSTED, type FactoryEvent } from './types.js';
@@ -382,6 +383,22 @@ describe('Orchestrator', () => {
         type: 'dead_letter.repaired',
         payload: { eventId: 'l1', action: 'replay', by: 'armand', event: { id: 'l1', type: 'label.changed' } },
       });
+    });
+
+    it('reopens the dead letter of an event its upcast refuses when it is forced: the command does not fail', async () => {
+      const { store, orch } = broken();
+      await orch.accept(delegated());
+      await orch.accept({ ...label('future'), schemaVersion: 99 } as unknown as StoredEvent);
+      await orch.drained();
+      expect(await store.deadLetters('REL-1')).toMatchObject([{ eventId: 'future', failures: 1, error: 'event future: schema version 99 is newer than 2' }]);
+      expect(await runRepair({ store, target: 'REL-1', action: 'force', by: 'armand', now: 3_000, print: () => {} })).toBe(0);
+      await orch.drained();
+      expect(await store.deadLetters('REL-1')).toMatchObject([{ eventId: 'future', status: 'open', failures: 2 }]);
+      expect((await store.getTicket('p', 'REL-1'))!.blocked).toBe(true);
+      // `skip` never upcasts it.
+      expect(await runRepair({ store, target: 'REL-1', action: 'skip', by: 'armand', now: 4_000, print: () => {} })).toBe(0);
+      await orch.drained();
+      expect((await store.getTicket('p', 'REL-1'))!.blocked).toBe(false);
     });
 
     it('dead-letters a replay that throws again on the same event, one failure more', async () => {

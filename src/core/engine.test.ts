@@ -528,11 +528,15 @@ describe('decide — dead letters (ORC-175)', () => {
     expect(decide(undefined, ev('dead_letter.added', added), workflow)).toEqual(decision());
     expect(decide(ticket({ logical: 'done' }), ev('dead_letter.added', added), workflow)).toEqual(decision());
     expect(decide(ticket({ blocked: true, blockReason: 'Arrêté à la demande' }), ev('dead_letter.added', added), workflow)).toEqual(decision());
+    // Already blocked for another reason: that reason stays (its repair would lift a block not its own), the event is announced.
+    expect(decide(ticket({ blocked: true, blockReason: 'Erreur : linear down' }), ev('dead_letter.added', added), workflow)).toEqual(
+      decision({ effects: [{ kind: 'activity', type: 'error', body: `${reason} Un mainteneur peut le réparer : \`factory run repair REL-1\`.` }] }),
+    );
   });
 
   it('a repair lifts the block of its event only, and says so', () => {
     const notice = { kind: 'activity' as const, type: 'response' as const, body: 'Événement l1 réparé par ops (ignoré) : le ticket est débloqué.' };
-    const skip = ev('dead_letter.repaired', { eventId: 'l1', action: 'skip', by: 'ops' });
+    const skip = ev('dead_letter.repaired', { eventId: 'l1', action: 'skip', by: 'ops', event: delegation });
     expect(decide(ticket({ blocked: true, blockReason: reason }), skip, workflow)).toEqual(decision({ effects: [notice] }));
     expect(reduce(ticket({ blocked: true, blockReason: reason }), skip)).toMatchObject({ blocked: false, blockReason: undefined });
     // Blocked for another reason (another event, a human stop): the block stays.

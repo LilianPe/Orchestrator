@@ -357,9 +357,9 @@ export class SqliteStore implements Store {
     });
   }
 
-  /** The result of an effect, to the inbox in the transaction that settles its row. */
+  /** An event the store writes itself (an effect's result, a dead letter's notice, a repair), in the transaction that causes it. */
   private appendResult(e: FactoryEvent): void {
-    this.db.prepare('INSERT OR IGNORE INTO inbox (id, received_at, data) VALUES (?, ?, ?)').run(e.id, Date.now(), JSON.stringify(e));
+    this.db.prepare('INSERT OR IGNORE INTO inbox (id, received_at, data) VALUES (?, ?, ?)').run(e.id, this.now(), JSON.stringify(e));
   }
 
   async deadLetter(row: StoredEvent, error: string, at: number): Promise<boolean> {
@@ -377,7 +377,7 @@ export class SqliteStore implements Store {
         )
         .run(event.id, event.projectId, event.ticketId ?? null, failures, error, at, at, JSON.stringify(event));
       const notice = deadLetterNotice({ event, error, failures }, at);
-      if (notice) this.db.prepare('INSERT OR IGNORE INTO inbox (id, received_at, data) VALUES (?, ?, ?)').run(notice.id, this.now(), JSON.stringify(notice));
+      if (notice) this.appendResult(notice);
       return true;
     });
   }
@@ -389,6 +389,11 @@ export class SqliteStore implements Store {
     return rows.map(deadLetterRow);
   }
 
+  async getDeadLetter(eventId: string): Promise<DeadLetter | undefined> {
+    const row = this.db.prepare('SELECT * FROM dead_letter WHERE event_id = ?').get(eventId) as unknown as DeadLetterSqlRow | undefined;
+    return row && deadLetterRow(row);
+  }
+
   async repairDeadLetter(eventId: string, action: RepairAction, by: string, at: number): Promise<DeadLetter | undefined> {
     return this.atomically(() => {
       const row = this.db.prepare(`SELECT * FROM dead_letter WHERE event_id = ? AND status = 'open'`).get(eventId) as unknown as DeadLetterSqlRow | undefined;
@@ -396,8 +401,7 @@ export class SqliteStore implements Store {
       const status = REPAIRED_STATUS[action];
       this.db.prepare('UPDATE dead_letter SET status = ?, resolved_by = ?, updated_at = ? WHERE event_id = ?').run(status, by, at, eventId);
       const dl = { ...deadLetterRow(row), status, resolvedBy: by };
-      const repair = repairEvent(dl, action, by, at);
-      this.db.prepare('INSERT OR IGNORE INTO inbox (id, received_at, data) VALUES (?, ?, ?)').run(repair.id, this.now(), JSON.stringify(repair));
+      this.appendResult(repairEvent(dl, action, by, at));
       return dl;
     });
   }

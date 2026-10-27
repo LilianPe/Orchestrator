@@ -1,4 +1,4 @@
-import { blockedByDeadLetter } from './dead-letter.js';
+import { blockedByDeadLetter, repairedEvent } from './dead-letter.js';
 import { CREATES_TICKET, newTicketState, type InternalEvent, type FactoryEvent, type IssueSnapshot, type TicketState } from './types.js';
 
 const MAX_QUESTION_SESSIONS = 50;
@@ -101,8 +101,8 @@ function isExternal(e: FactoryEvent | InternalEvent): e is FactoryEvent {
  * facts of the event it replays or forces, as that event would on the unblocked ticket.
  */
 function repaired(state: TicketState | undefined, e: FactoryEvent<'dead_letter.repaired'>): TicketState | undefined {
-  const { eventId, event } = e.payload;
-  const base = state && blockedByDeadLetter(state, eventId) ? { ...state, blocked: false, blockReason: undefined } : state;
+  const base = state && blockedByDeadLetter(state, e.payload.eventId) ? { ...state, blocked: false, blockReason: undefined } : state;
+  const event = repairedEvent(e);
   return event ? reduce(base, event) : base;
 }
 

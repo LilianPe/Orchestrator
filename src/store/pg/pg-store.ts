@@ -536,6 +536,12 @@ export class PgStore implements AsyncStore {
     return result.rows.map(deadLetterRow);
   }
 
+  async getDeadLetter(eventId: string): Promise<DeadLetter | undefined> {
+    const result = await this.db.execute<DeadLetterPgRow>(sql`select ${DEAD_LETTER_COLUMNS} from dead_letter where id = ${eventId}`);
+    const row = result.rows[0];
+    return row && deadLetterRow(row);
+  }
+
   async repairDeadLetter(eventId: string, action: RepairAction, by: string, at: number): Promise<DeadLetter | undefined> {
     const found = await this.db.execute<{ ticket_id: string | null }>(sql`select ticket_id from dead_letter where id = ${eventId}`);
     if (!found.rows[0]) return undefined;

@@ -610,9 +610,13 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     expect(await s.deadLetter(repair!, 'boom again', 70)).toBe(true);
     expect(await s.deadLetters('REL-1')).toMatchObject([{ eventId: 'e1', status: 'open', failures: 2, error: 'boom again' }]);
     expect((await s.pendingInbox(10)).map((e) => e.id)).toEqual(['dead-letter:e1:2']);
-    // A skip carries no event.
+    // A skip carries the event too: a skip whose decision throws reopens the same dead letter, not a new one.
     expect(await s.repairDeadLetter('e1', 'skip', 'lilian', 80)).toMatchObject({ status: 'skipped', resolvedBy: 'lilian', failures: 2 });
-    expect((await s.pendingInbox(10))[1]).toMatchObject({ id: 'repair:e1:2', payload: { eventId: 'e1', action: 'skip', by: 'lilian' } });
-    expect(((await s.pendingInbox(10))[1]!.payload as { event?: unknown }).event).toBeUndefined();
+    const skip = (await s.pendingInbox(10))[1]!;
+    expect(skip).toMatchObject({ id: 'repair:e1:2', payload: { eventId: 'e1', action: 'skip', by: 'lilian', event: delegatedEvent('e1') } });
+    expect(await s.deadLetter(skip, 'corrupt', 90)).toBe(true);
+    expect(await s.deadLetters()).toMatchObject([{ eventId: 'e1', status: 'open', failures: 3 }]);
+    expect(await s.getDeadLetter('e1')).toMatchObject({ eventId: 'e1', failures: 3, error: 'corrupt' });
+    expect(await s.getDeadLetter('nope')).toBeUndefined();
   });
 }

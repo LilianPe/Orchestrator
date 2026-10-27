@@ -17,6 +17,9 @@ export type DeadLetterStatus = 'open' | 'replayed' | 'skipped' | 'forced';
 
 export const REPAIRED_STATUS: Record<RepairAction, DeadLetterStatus> = { replay: 'replayed', skip: 'skipped', force: 'forced' };
 
+/** The action in French, for the operator and the ticket's session. */
+export const REPAIR_LABELS: Record<RepairAction, string> = { replay: 'rejoué', skip: 'ignoré', force: 'forcé' };
+
 export interface DeadLetter {
   eventId: string;
   projectId: string;
@@ -46,8 +49,7 @@ export function blockedByDeadLetter(t: TicketState, eventId: string): boolean {
 
 /** The event a dead-lettered row is about: a failed repair is the event it repairs, not a new dead letter. */
 export function deadLetteredEvent(row: StoredEvent): StoredEvent {
-  if (row.type !== 'dead_letter.repaired') return row;
-  return (row.payload as EventPayloads['dead_letter.repaired']).event ?? row;
+  return row.type === 'dead_letter.repaired' ? (row.payload as EventPayloads['dead_letter.repaired']).event : row;
 }
 
 /**
@@ -71,8 +73,8 @@ export function deadLetterNotice(dl: Pick<DeadLetter, 'event' | 'error' | 'failu
 
 /**
  * The repair of a dead letter, written to the inbox by `factory run repair` (`repair:<event id>:<failures>`)
- * and decided like any event, so the repair is journaled. `replay` carries the event to decide again,
- * `force` the event whose facts are recorded without its decision; `skip` carries none.
+ * and decided like any event, so the repair is journaled. It carries the event as stored, whatever
+ * the action: a repair whose decision throws reopens that event's dead letter.
  */
 export function repairEvent(dl: Pick<DeadLetter, 'event' | 'failures'>, action: RepairAction, by: string, at: number): FactoryEvent<'dead_letter.repaired'> {
   const { event } = dl;
@@ -83,11 +85,21 @@ export function repairEvent(dl: Pick<DeadLetter, 'event' | 'failures'>, action: 
     at,
     projectId: event.projectId,
     ...(event.ticketId === undefined ? {} : { ticketId: event.ticketId }),
-    payload: { eventId: event.id, action, by, ...(action === 'skip' ? {} : { event: upcast(event) }) },
+    payload: { eventId: event.id, action, by, event },
   };
 }
 
-/** The event a decision is about: the one a `replay` or `force` repair carries, else the event itself. */
+/**
+ * The event a `replay` or `force` repair applies, upcast (it may throw, as it did when it was
+ * dead-lettered: the repair is then dead-lettered in turn); none for a `skip`.
+ */
+export function repairedEvent(e: FactoryEvent<'dead_letter.repaired'>): FactoryEvent | undefined {
+  return e.payload.action === 'skip' ? undefined : upcast(e.payload.event);
+}
+
+/** The event a decision is about: the one a `replay` or `force` repair applies, else the event itself. */
 export function effectiveEvent(event: FactoryEvent): FactoryEvent {
-  return event.type === 'dead_letter.repaired' && event.payload.event ? effectiveEvent(event.payload.event) : event;
+  if (event.type !== 'dead_letter.repaired') return event;
+  const repaired = repairedEvent(event);
+  return repaired ? effectiveEvent(repaired) : event;
 }

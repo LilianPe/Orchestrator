@@ -290,6 +290,8 @@ export interface Store {
   deadLetter(row: StoredEvent, error: string, at: number): Promise<boolean>;
   /** The dead letters, of a ticket (any project) or all of them, open ones first, then oldest first. */
   deadLetters(ticketId?: string): Promise<DeadLetter[]>;
+  /** The dead letter of an event, by its id. */
+  getDeadLetter(eventId: string): Promise<DeadLetter | undefined>;
   /**
    * Repairs an open dead letter (`factory run repair`), in one transaction: its status becomes the
    * action's, and the repair event (`repairEvent`) is written to the inbox, decided and journaled like
