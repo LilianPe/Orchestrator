@@ -248,13 +248,14 @@ on:
 
   it('keeps the slot a drain promised to a dequeued item from a start decided meanwhile, and the item its place', async () => {
     const inner = new SqliteStore(':memory:');
-    let gate: Promise<void> | undefined;
     let open!: () => void;
+    const gate = new Promise<void>((r) => (open = r));
+    let gating = false;
     let reached = false;
     // The drain's start of REL-2 reads its ticket first: held there, its slot is promised, not taken.
     const store = Object.assign(Object.create(inner) as SqliteStore, {
       getTicket: async (projectId: string, ticketId: string) => {
-        if (gate && ticketId === 'REL-2') {
+        if (gating && ticketId === 'REL-2') {
           reached = true;
           await gate;
         }
@@ -269,7 +270,7 @@ on:
     const queued = (await h.store.listQueue()).find((q) => q.ticketId === 'REL-2')!;
     expect(queued).toBeDefined();
 
-    gate = new Promise<void>((r) => (open = r));
+    gating = true;
     h.runner.release(h.runner.requests[0]!.runId);
     await waitFor(() => reached);
     await h.orch.accept({ ...TRUSTED, id: 'd3', type: 'ticket.delegated', at: h.clock.now(), projectId: 'p', ticketId: 'REL-3', payload: { linearSessionId: 'ls-3' } });

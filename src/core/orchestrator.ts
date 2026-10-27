@@ -156,7 +156,7 @@ export class Orchestrator {
    */
   accept(event: FactoryEvent | StoredEvent): Promise<boolean> {
     const write = this.d.store.appendInbox(event).then((fresh) => {
-      if (fresh && this.dispatchOpen) this.kick();
+      if (fresh && this.dispatchOpen) this.worker.kickInBackground();
       return fresh;
     });
     // drained() waits for writes in flight too: their event is about to be processed.
@@ -168,9 +168,6 @@ export class Orchestrator {
     return write;
   }
 
-  private kick(): void {
-    this.worker.kick().catch((err: unknown) => this.log('error', `inbox: ${(err as Error).message}`));
-  }
 
   /**
    * Processes the inbox rows and outbox effects a previous process left (written, then a crash or

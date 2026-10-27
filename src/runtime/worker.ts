@@ -135,13 +135,18 @@ export class Worker {
     return pass;
   }
 
+  /** `kick` without waiting for it: a failed pass is logged, and the next one reads again. */
+  kickInBackground(): void {
+    this.kick().catch((err: unknown) => this.d.log('error', `worker: ${(err as Error).message}`));
+  }
+
   /** Polls the store (rows written by another process, leases expired): the daemon's loop. */
   start(intervalMs = 1000): void {
     this.stop();
     this.stopped = false;
     this.poller = setInterval(() => {
       this.waited.clear();
-      this.kick().catch((err: unknown) => this.d.log('error', `worker: ${(err as Error).message}`));
+      this.kickInBackground();
     }, intervalMs);
     this.poller.unref();
   }
@@ -167,7 +172,6 @@ export class Worker {
     const exclude = [...this.skipped, ...this.waited, ...this.queuedIds];
     for (const row of await this.d.store.pendingInbox(INBOX_BATCH, exclude)) {
       const key = ticketKey(row);
-      if (this.queuedIds.has(row.id)) continue;
       this.queuedIds.add(row.id);
       const rows = this.queued.get(key) ?? [];
       rows.push(row);
@@ -280,7 +284,7 @@ export class Worker {
     const timer = setTimeout(() => {
       this.retryTimers.delete(timer);
       this.skipped.delete(row.id);
-      this.kick().catch((e: unknown) => this.d.log('error', `worker: ${(e as Error).message}`));
+      this.kickInBackground();
     }, delay);
     timer.unref();
     this.retryTimers.add(timer);
@@ -298,7 +302,7 @@ export class Worker {
     this.holders.delete(key);
     for (const id of this.behind.get(key)?.keys() ?? []) this.skipped.delete(id);
     this.behind.delete(key);
-    this.kick().catch((e: unknown) => this.d.log('error', `worker: ${(e as Error).message}`));
+    this.kickInBackground();
   }
 
   private async runEffects(ref: TicketRef): Promise<'done' | 'busy'> {
