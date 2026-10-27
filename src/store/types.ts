@@ -57,7 +57,8 @@ export interface Store {
   enqueue(q: QueueItem): void;
   dequeue(queue: QueueName): QueueItem | undefined;
   listQueue(): QueueItem[];
-  removeFromQueue(projectId: string, ticketId: string): void;
+  /** Drops the ticket's queued runs, of every queue or of `queue` only. */
+  removeFromQueue(projectId: string, ticketId: string, queue?: QueueName): void;
   putEcho(key: string, until: number): void;
   isEcho(key: string, now: number): boolean;
   costSince(ts: number): number;

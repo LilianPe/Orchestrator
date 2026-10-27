@@ -12,7 +12,7 @@ import { EventBus } from './bus.js';
 import { FakeClock } from './clock.js';
 import { Orchestrator } from './orchestrator.js';
 import { Scheduler } from './scheduler.js';
-import { TRUSTED, type FactoryEvent } from './types.js';
+import { newTicketState, TRUSTED, type FactoryEvent } from './types.js';
 
 function setup(o: { runner?: Runner; verify?: Verifier; budget?: number; tweak?: (w: ReturnType<typeof loadWorkflow>) => void } = {}) {
   const packDir = join(import.meta.dirname, '../../packs/standard');
@@ -36,6 +36,18 @@ function setup(o: { runner?: Runner; verify?: Verifier; budget?: number; tweak?:
 const delegated = (id = 'e1'): FactoryEvent => ({ ...TRUSTED, id, type: 'ticket.delegated', at: 1_000, projectId: 'p', ticketId: 'REL-1', payload: { linearSessionId: 'ls-1' } });
 
 describe('Orchestrator', () => {
+  it('starts no dev job on a merged ticket, even one it holds outside decide (ORC-268)', async () => {
+    const { store, tracker, runner, orch } = setup();
+    tracker.addIssue({ identifier: 'REL-1', title: 'T', description: 'Exporter les audits en CSV depuis la liste des audits.' });
+    store.putTicket({ ...newTicketState('p', 'REL-1', 'T', 'done', 1), delegated: true, prState: 'MERGED', pendingJob: { job: 'dev-feedback' } });
+    // A result settles the ticket: settle would start the pending job.
+    await orch.submit({ ...TRUSTED, id: 'v1', type: 'verify.passed', at: 1_000, projectId: 'p', ticketId: 'REL-1', payload: { runId: 'old', job: 'dev' } });
+    await orch.idle();
+    expect(runner.requests).toEqual([]);
+    expect(store.getTicket('p', 'REL-1')!.pendingJob).toBeUndefined();
+    expect(store.getTicket('p', 'REL-1')!.blocked).toBe(false);
+  });
+
   it('ignores a duplicate event id', async () => {
     const { tracker, runner, orch } = setup();
     tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });

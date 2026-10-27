@@ -72,6 +72,26 @@ describe('PrPoller', () => {
     expect(logs.some((m) => m.includes('boom'))).toBe(true);
   });
 
+  it('watches a ticket moved to done before the merge was seen, until its PR is merged or closed (ORC-268)', async () => {
+    const { store, forge, events, poller } = setup();
+    const findPr = vi.spyOn(forge, 'findPr');
+    store.putTicket({ ...newTicketState('p', 'REL-1', 'T', 'done', 1), branch: 'b', prNumber: 7 });
+    forge.setPr('b', { number: 7, url: 'u', state: 'OPEN', checks: 'fail', failedChecks: ['t'] });
+    await poller.pollOnce();
+    expect(events).toEqual([]);
+    forge.setPr('b', { number: 7, url: 'u', state: 'MERGED', checks: 'none', failedChecks: [] });
+    await poller.pollOnce();
+    expect(events.map((e) => e.id)).toEqual(['pr:REL-1:7:merged']);
+    await poller.pollOnce();
+    expect(findPr).toHaveBeenCalledTimes(2);
+    // Taken back out of done, then done again: watched again.
+    store.putTicket({ ...store.getTicket('p', 'REL-1')!, logical: 'human_review' });
+    await poller.pollOnce();
+    store.putTicket({ ...store.getTicket('p', 'REL-1')!, logical: 'done' });
+    await poller.pollOnce();
+    expect(findPr).toHaveBeenCalledTimes(4);
+  });
+
   it('start() survives a rejecting pollOnce', async () => {
     vi.useFakeTimers();
     try {

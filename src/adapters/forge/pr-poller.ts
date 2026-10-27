@@ -31,7 +31,13 @@ export class PrPoller {
 
   private async pollTicket(t: TicketState): Promise<void> {
     {
-      if (!t.branch || t.logical === "done") return;
+      if (!t.branch) return;
+      // Done in Linear is not merged: Linear may move the ticket before a poll sees the merge, and only
+      // pr.merged marks it delivered (I8 b). A done ticket is watched until its PR is seen merged or closed.
+      const doneKey = `pr-final:${t.projectId}:${t.ticketId}`;
+      const done = t.logical === "done";
+      if (!done && this.d.store.getMeta(doneKey)) this.d.store.setMeta(doneKey, "");
+      if (done && (t.prState === "MERGED" || this.d.store.getMeta(doneKey))) return;
       const project = this.d.projects.find((p) => p.id === t.projectId);
       if (!project) return;
       let pr;
@@ -59,6 +65,7 @@ export class PrPoller {
           type: "pr.merged",
           payload,
         });
+        if (done) this.d.store.setMeta(doneKey, "1");
         return;
       }
       if (pr.state === "CLOSED") {
@@ -68,8 +75,10 @@ export class PrPoller {
           type: "pr.closed",
           payload,
         });
+        if (done) this.d.store.setMeta(doneKey, "1");
         return;
       }
+      if (done) return;
       const metaKey = `checks:${t.projectId}:${t.ticketId}`;
       if (pr.checks === "none") return;
       const last = this.d.store.getMeta(metaKey);

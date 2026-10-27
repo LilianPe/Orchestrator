@@ -128,8 +128,9 @@ export class SqliteStore implements Store {
     );
   }
 
-  removeFromQueue(projectId: string, ticketId: string): void {
-    this.db.prepare('DELETE FROM queue WHERE project_id = ? AND ticket_id = ?').run(projectId, ticketId);
+  removeFromQueue(projectId: string, ticketId: string, queue?: QueueName): void {
+    if (queue) this.db.prepare('DELETE FROM queue WHERE project_id = ? AND ticket_id = ? AND queue = ?').run(projectId, ticketId, queue);
+    else this.db.prepare('DELETE FROM queue WHERE project_id = ? AND ticket_id = ?').run(projectId, ticketId);
   }
 
   putEcho(key: string, until: number): void {
