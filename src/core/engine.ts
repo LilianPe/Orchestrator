@@ -94,7 +94,7 @@ function anyUntrusted(items: readonly FeedbackItem[]): boolean {
  * `Orchestrator.launch` applies it to every start (a `start_run`, the pending job by `settle`, the queue).
  */
 export function sensitivePathsAtLaunch(decided: readonly string[] | undefined, read: readonly FeedbackItem[]): readonly string[] | undefined {
-  if (!anyUntrusted(read)) return decided;
+  if (!anyUntrusted(read)) return decided?.length ? decided : undefined;
   return decided ? [...new Set([...decided, ...SENSITIVE_PATHS])] : SENSITIVE_PATHS;
 }
 

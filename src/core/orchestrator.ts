@@ -22,7 +22,7 @@ import {
 import type { EventBus } from './bus.js';
 import type { Clock } from './clock.js';
 import type { Effect, OutboxEffect } from './decision.js';
-import { decide, isFenced, refusesDevWork, sensitivePathsAtLaunch, taintedKnowledge } from './engine.js';
+import { decide, isFenced, refusesDevWork, sensitivePathsAtLaunch } from './engine.js';
 import { attemptLabels, packFingerprints } from './attempt-labels.js';
 import { pickupFailures } from './pickup.js';
 import { buildPrompt, formatFeedback, formatVerifyFailures } from './prompt.js';
@@ -110,6 +110,9 @@ interface StartOpts {
 /** Events after which `handle` settles the ticket: the pending job starts once nothing is in flight. */
 export const SETTLES_RUN: ReadonlySet<EventType> = new Set<EventType>(['run.finished', 'verify.passed', 'verify.failed']);
 const ECHO_MS = 60_000;
+/** A knowledge job refused at its launch: the event that started it was trusted, what it would read is not (I12). */
+const TAINTED_AT_LAUNCH = (job: string): string =>
+  `Je ne lance pas ${job} : ce job écrit dans la base de connaissances, et des retours qu'il lirait (fil ou commentaires de review) viennent d'une source non fiable.`;
 
 export function logicalFromName(states: Record<LogicalState, string>, name: string): LogicalState | undefined {
   return (Object.entries(states) as [LogicalState, string][]).find(([, n]) => n === name)?.[0];
@@ -839,28 +842,6 @@ export class Orchestrator {
       }
     }
 
-    // The feedback the run reads, taken at the launch whoever started it (a decision, settle, the queue):
-    // its taint completes the one the start was decided with (I12, ORC-274).
-    const kind = opts.input ?? job.input;
-    const read: FeedbackItem[] = [];
-    if (kind === 'feedback') {
-      read.push(...t.pendingFeedback);
-      // Review comments are external content: whoever can comment on the PR wrote them, and nothing
-      // authenticates them as the team's (ORC-160). Untrusted, whatever the forge says.
-      if (t.prNumber) {
-        const comments = await forge.unresolvedReviewComments(project.repoPath, t.prNumber);
-        read.push(...comments.map((c) => ({ ...c, taint: 'untrusted' as const })));
-      }
-    }
-    const sensitivePaths = sensitivePathsAtLaunch(opts.sensitivePaths, read);
-    if (sensitivePaths && job.workspace === 'knowledge') {
-      // As decide refuses it (I12), for what it could not see: untrusted content read at the launch.
-      this.d.scheduler.release(key);
-      this.log('warn', `refused ${job.name} on ${ticketId}: it would write the knowledge base from untrusted content`);
-      if (opts.linearSessionId) await tracker.activity(opts.linearSessionId, { type: 'response', body: taintedKnowledge(job.name) });
-      return;
-    }
-
     // Read while the workspace is prepared; a pack it cannot read gives null fingerprints (ORC-226).
     const pack = packFingerprints(this.d.packDir, (err) => this.log('warn', `attempt labels: pack not fingerprinted: ${err.message}`));
     const runId = this.newId();
@@ -882,6 +863,30 @@ export class Orchestrator {
 
     const linearSessionId = opts.linearSessionId ?? (await this.sessionFor(t));
     t = await this.ticket(project.id, ticketId);
+
+    // The feedback the run reads, taken at the launch whoever started it (a decision, settle, the queue):
+    // its taint completes the one the start was decided with (I12, ORC-274).
+    const kind = opts.input ?? job.input;
+    const read: FeedbackItem[] = [];
+    if (kind === 'feedback') {
+      read.push(...t.pendingFeedback);
+      // Review comments are external content: whoever can comment on the PR wrote them, and nothing
+      // authenticates them as the team's (ORC-160). Untrusted, whatever the forge says.
+      if (t.prNumber) {
+        const comments = await forge.unresolvedReviewComments(project.repoPath, t.prNumber);
+        read.push(...comments.map((c) => ({ ...c, taint: 'untrusted' as const })));
+      }
+    }
+    const sensitivePaths = sensitivePathsAtLaunch(opts.sensitivePaths, read);
+    if (sensitivePaths && job.workspace === 'knowledge') {
+      // As decide refuses it (I12), for what it could not see: untrusted content read at the launch.
+      this.d.scheduler.release(key);
+      this.log('warn', `refused ${job.name} on ${ticketId}: it would write the knowledge base from untrusted content`);
+      await tracker
+        .activity(linearSessionId, { type: 'response', body: TAINTED_AT_LAUNCH(job.name) })
+        .catch((err: Error) => this.log('warn', `could not answer ${ticketId}: ${err.message}`));
+      return;
+    }
 
     const wantsResume = opts.resume ?? job.session === 'resume';
     const resume = wantsResume && !!t.claudeSessionId;
