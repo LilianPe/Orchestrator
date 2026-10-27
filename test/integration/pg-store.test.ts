@@ -176,7 +176,7 @@ describe.skipIf(!url)('PgStore integration', () => {
     expect(kept.rows[0]?.workflow_hash).toBe('wf-1');
   });
 
-  it('deduplicates events and writes inbox + journal in one transaction', async () => {
+  it('deduplicates events in the journal, and leaves the inbox to appendInbox', async () => {
     const first = {
       id: 'e1',
       type: 'control.pause',
@@ -201,10 +201,7 @@ describe.skipIf(!url)('PgStore integration', () => {
     const counts = await pool.query<{ inbox: number; journal: number }>(
       `select (select count(*) from inbox)::int as inbox, (select count(*) from journal)::int as journal`,
     );
-    expect(counts.rows[0]).toEqual({ inbox: 2, journal: 2 });
-    // Journaled means handled: no inbox row is left for a replay to take as unprocessed.
-    const pending = await pool.query('select id from inbox where processed_at is null');
-    expect(pending.rows).toEqual([]);
+    expect(counts.rows[0]).toEqual({ inbox: 0, journal: 2 });
 
     const journal = await pool.query<{ event_id: string; seq: number; type: string }>(
       'select event_id, seq, type from journal where ticket_id = $1 order by seq',
@@ -229,34 +226,14 @@ describe.skipIf(!url)('PgStore integration', () => {
   });
 
   it('records the schema version the event carries in the inbox and journal columns', async () => {
-    await store.recordEvent({ ...TRUSTED, id: 'e-v2', type: 'control.pause', at: 1_000, projectId: 'p', ticketId: 'REL-1', payload: {} });
+    const event = { ...TRUSTED, id: 'e-v2', type: 'control.pause', at: 1_000, projectId: 'p', ticketId: 'REL-1', payload: {} } as const;
+    await store.appendInbox(event);
+    await store.recordEvent(event);
     const rows = await pool.query<{ inbox: number; journal: number }>(
       `select (select schema_version from inbox where event_id = 'e-v2') as inbox,
               (select schema_version from journal where event_id = 'e-v2') as journal`,
     );
     expect(rows.rows[0]).toEqual({ inbox: SCHEMA_VERSION, journal: SCHEMA_VERSION });
-  });
-
-  it('rolls the inbox insert back when the journal insert fails', async () => {
-    await pool.query(
-      `insert into journal (id, ticket_id, event_id, seq, type, payload, created_at)
-       values ('seed', 'REL-1', 'e-rollback', 1, 'control.pause', '{}'::jsonb, now())`,
-    );
-    await expect(
-      store.recordEvent({
-        id: 'e-rollback',
-        type: 'control.pause',
-        at: 1_000,
-        projectId: 'p',
-        ticketId: 'REL-1',
-        payload: {},
-      } as FactoryEvent),
-    ).rejects.toThrow();
-
-    const inbox = await pool.query<{ n: number }>(
-      `select count(*)::int as n from inbox where event_id = 'e-rollback'`,
-    );
-    expect(inbox.rows[0]?.n).toBe(0);
   });
 
   it('stores runs as attempts and computes cost since a timestamp', async () => {

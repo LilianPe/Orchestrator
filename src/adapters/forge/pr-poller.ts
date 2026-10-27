@@ -13,7 +13,8 @@ export class PrPoller {
       store: Store;
       forge: Forge;
       projects: ProjectRuntime[];
-      submit: (e: FactoryEvent) => void;
+      /** Writes the event to the inbox; awaited, so a failed write is reported and retried at the next poll. */
+      submit: (e: FactoryEvent) => unknown;
       clock: Clock;
       log: (m: string) => void;
     },
@@ -52,15 +53,15 @@ export class PrPoller {
       const base = { ...TRUSTED, at, projectId: t.projectId, ticketId: t.ticketId };
       const payload = { number: pr.number, url: pr.url, branch: pr.branch };
       if (t.prNumber !== pr.number)
-        this.d.submit({
+        await this.d.submit({
           ...base,
           id: `pr:${t.ticketId}:${pr.number}:opened`,
           type: "pr.opened",
           payload,
         });
       if (pr.state === "MERGED" || pr.state === "CLOSED") {
-        if (pr.state === "MERGED") this.d.submit({ ...base, id: `pr:${t.ticketId}:${pr.number}:merged`, type: "pr.merged", payload });
-        else this.d.submit({ ...base, id: `pr:${t.ticketId}:${pr.number}:closed`, type: "pr.closed", payload });
+        if (pr.state === "MERGED") await this.d.submit({ ...base, id: `pr:${t.ticketId}:${pr.number}:merged`, type: "pr.merged", payload });
+        else await this.d.submit({ ...base, id: `pr:${t.ticketId}:${pr.number}:closed`, type: "pr.closed", payload });
         if (done) await this.d.store.setMeta(finalKey, String(pr.number));
         return;
       }
@@ -71,14 +72,14 @@ export class PrPoller {
       if (pr.checks !== last) {
         const id = `pr:${t.ticketId}:${pr.number}:checks:${pr.checks}:${at}`;
         if (pr.checks === "fail")
-          this.d.submit({
+          await this.d.submit({
             ...base,
             id,
             type: "pr.checks_failed",
             payload: { ...payload, failures: pr.failedChecks },
           });
         else if (pr.checks === "pass")
-          this.d.submit({ ...base, id, type: "pr.checks_passed", payload });
+          await this.d.submit({ ...base, id, type: "pr.checks_passed", payload });
         await this.d.store.setMeta(metaKey, pr.checks);
       }
     }

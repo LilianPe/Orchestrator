@@ -26,6 +26,7 @@ import { SystemClock } from '../core/clock.js';
 import { logicalFromName, Orchestrator, type ProjectRuntime } from '../core/orchestrator.js';
 import { Scheduler } from '../core/scheduler.js';
 import { TimerService } from '../core/timers.js';
+import type { FactoryEvent } from '../core/types.js';
 import { runVerify } from '../core/verify.js';
 import { KnowledgeBase } from '../knowledge/kb.js';
 import { startSmeeRelay } from '../relay/smee.js';
@@ -139,6 +140,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     const kb = instance.knowledge ? new KnowledgeBase(instance.knowledge.repoPath) : undefined;
 
     const orchestrator = new Orchestrator({
+      // The sources start before Linear is connected: their events wait in the inbox until replayInbox().
+      holdInboxUntilReplay: true,
       beforeRun: async () => {
         if (kb) await kb.pull();
       },
@@ -166,12 +169,14 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       }),
     });
     await orchestrator.recover();
-    const submit = (e: Parameters<Orchestrator['submit']>[0]) => void orchestrator.submit(e);
+    // Every source writes its events to the inbox and gets the promise of the committed row
+    // (ORC-147); the orchestrator then processes them from the inbox.
+    const accept = (e: FactoryEvent) => orchestrator.accept(e);
 
     const webhookSecret = () => loadSecrets(o.home).linear?.webhookSecret ?? '';
     const ingest = createLinearIngest({
       secret: webhookSecret,
-      submit,
+      accept,
       ack: (sessionId) => trackerSwitch.activity(sessionId, { type: 'thought', body: 'Pris en compte.' }),
       log,
       ctx: {
@@ -188,9 +193,9 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       },
     });
 
-    const reconciler = new Reconciler({ tracker: trackerSwitch, store, projects, submit, clock, log });
-    const timers = new TimerService(store, clock, submit, (e) => log(`timers: ${e.message}`));
-    const poller = new PrPoller({ store, forge, projects, submit, clock, log });
+    const reconciler = new Reconciler({ tracker: trackerSwitch, store, projects, submit: accept, clock, log });
+    const timers = new TimerService(store, clock, accept, (e) => log(`timers: ${e.message}`));
+    const poller = new PrPoller({ store, forge, projects, submit: accept, clock, log });
 
     const oauthStates = new Set<string>();
     const app = createApp({
@@ -198,7 +203,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       store,
       bus,
       clock,
-      submit,
+      submit: accept,
       isPaused: () => orchestrator.isPaused(),
       blockTicket: (projectId, ticketId, reason) => orchestrator.blockTicket(projectId, ticketId, reason),
       linearWebhook: ingest,
@@ -279,6 +284,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
         reconciler.start();
       }
       else log(`Linear non connecté : ouvrez ${baseUrl}/oauth/start`);
+      // Events written before a crash (or whose processing failed) are processed now, oldest first.
+      void orchestrator.replayInbox();
       if (!isUsableWebhookSecret(webhookSecret()))
         log('Attention : aucun secret de webhook Linear configuré, tout webhook sera refusé. Relancez factory init pour le renseigner.');
     } catch (err) {

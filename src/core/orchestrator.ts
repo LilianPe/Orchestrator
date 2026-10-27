@@ -18,6 +18,7 @@ import { upcast, type StoredEvent } from './upcast.js';
 import type { Scheduler } from './scheduler.js';
 import {
   CREATES_TICKET,
+  type EventPayloads,
   type EventType,
   type InputKind,
   type InternalEvent,
@@ -60,6 +61,16 @@ export interface OrchestratorDeps {
   beforeRun?: (run: RunRecord) => Promise<void>;
   /** False when no knowledge repo is configured: `knowledge` jobs (learn, remember) are then skipped. Default true. */
   knowledgeConfigured?: boolean;
+  /**
+   * Retries of the inbox write of a run or check result (ORC-147): `attempts` writes in all, the
+   * n-th retry after `baseMs * 2^(n-1)`. Default 5 writes from 200 ms (about 3 s in all).
+   */
+  inboxRetry?: { attempts: number; baseMs: number };
+  /**
+   * The daemon's start: events accepted before `replayInbox()` are only written, not processed,
+   * so the inbox is not dispatched before the tracker is connected. Default false (tests).
+   */
+  holdInboxUntilReplay?: boolean;
 }
 
 interface StartOpts {
@@ -73,6 +84,8 @@ interface StartOpts {
 /** Events after which `handle` settles the ticket: the pending job starts once nothing is in flight. */
 export const SETTLES_RUN: ReadonlySet<EventType> = new Set<EventType>(['run.finished', 'verify.passed', 'verify.failed']);
 const ECHO_MS = 60_000;
+/** Inbox rows read per query by the dispatcher. */
+const INBOX_BATCH = 100;
 
 export function logicalFromName(states: Record<LogicalState, string>, name: string): LogicalState | undefined {
   return (Object.entries(states) as [LogicalState, string][]).find(([, n]) => n === name)?.[0];
@@ -98,18 +111,163 @@ export class Orchestrator {
   /** French notices for Linear, collected by recover() and posted once Linear is reachable. */
   private recoveryNotices: RecoveryNotice[] = [];
   private newId: () => string;
+  /** Inbox writes in flight (accept). */
+  private writes = new Set<Promise<void>>();
+  /** A dispatch pass is queued in the chain and has not started reading the inbox yet. */
+  private dispatchQueued = false;
+  /** False until `replayInbox()` when `holdInboxUntilReplay` is set: `accept` then only writes. */
+  private dispatchOpen: boolean;
+  /** Inbox rows whose processing failed in this process: left pending for the next start. */
+  private skipped = new Set<string>();
+  /**
+   * Tickets (`projectId:ticketId`) with a skipped row: their later rows are skipped too and stay
+   * pending, so the next start replays the ticket's events in order instead of processing the
+   * later ones without the failed one (a delegation that failed would make them "unmanaged").
+   */
+  private skippedTickets = new Set<string>();
 
   constructor(private d: OrchestratorDeps) {
     this.newId = d.newId ?? randomUUID;
+    this.dispatchOpen = !d.holdInboxUntilReplay;
   }
 
-  /** Accepts an event of any schema version: it is upcast before anything reads it. */
-  submit(event: FactoryEvent | StoredEvent): Promise<void> {
+  /**
+   * The one way in for an event (ORC-147): writes it to the inbox and resolves once the row is
+   * committed, then lets the dispatcher process it from the inbox. Resolves `false` for an id the
+   * inbox already holds (a duplicate: nothing more happens). Rejects when the write fails: the
+   * event was not taken, and the producer must report it (a webhook answers 500).
+   */
+  accept(event: FactoryEvent | StoredEvent): Promise<boolean> {
+    const write = this.d.store.appendInbox(event).then((fresh) => {
+      if (fresh && this.dispatchOpen) void this.dispatch();
+      return fresh;
+    });
+    // idle() waits for writes in flight too: their event is about to be dispatched.
+    const tracked: Promise<void> = write.then(
+      () => void this.writes.delete(tracked),
+      () => void this.writes.delete(tracked),
+    );
+    this.writes.add(tracked);
+    return write;
+  }
+
+  /**
+   * `accept`, then waits for the dispatcher to process the event. Accepts an event of any schema
+   * version: it is upcast when read back from the inbox. Never rejects: a failure is logged.
+   */
+  async submit(event: FactoryEvent | StoredEvent): Promise<void> {
+    try {
+      await this.accept(event);
+    } catch (err) {
+      this.log('error', `event ${event.id} (${event.type}) not written to the inbox: ${(err as Error).message}`);
+      return;
+    }
+    await this.chain;
+  }
+
+  /**
+   * Processes the inbox rows a previous process left unprocessed (written, then a crash or a
+   * failed handling), oldest first. `factory up` calls it once at start, after `recover()`.
+   */
+  replayInbox(): Promise<void> {
+    this.dispatchOpen = true;
+    return this.dispatch();
+  }
+
+  /**
+   * `submit` for the results the orchestrator produces itself (run finished, checks): nobody
+   * resends them, so a failed inbox write is retried with a bounded backoff before giving up with
+   * an error (the run's slot is then held until `recover()` at the next start).
+   */
+  private async submitResult(event: FactoryEvent): Promise<void> {
+    const { attempts, baseMs } = this.d.inboxRetry ?? { attempts: 5, baseMs: 200 };
+    for (let n = 1; ; n++) {
+      try {
+        await this.accept(event);
+        break;
+      } catch (err) {
+        if (n >= attempts) {
+          this.log('error', `event ${event.id} (${event.type}) not written to the inbox after ${n} attempts, lost: ${(err as Error).message}`);
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, baseMs * 2 ** (n - 1)));
+      }
+    }
+    await this.chain;
+  }
+
+  /**
+   * Reads the pending inbox rows and handles them one by one in the event chain, marking each
+   * processed once handled. A row whose handling throws stays pending and is skipped until the
+   * next start (no retry loop in the same process), and so are the later rows of its ticket; the
+   * per-ticket worker and the dead-letter replace this with ORC-149 and ORC-175.
+   *
+   * Only a failure before the event is journaled (`recordEvent`) is replayed faithfully: the
+   * journal, the projection, the effects and `markInboxProcessed` are separate writes, so after a
+   * failure or a crash past `recordEvent` the replay finds the event journaled, skips it as a
+   * duplicate and marks it processed: its remaining effects are lost. ORC-149's single decision
+   * transaction closes this.
+   */
+  private dispatch(): Promise<void> {
+    if (this.dispatchQueued) return this.chain;
+    this.dispatchQueued = true;
     const next = this.chain
-      .then(() => this.handle(upcast(event)))
-      .catch((err: unknown) => this.log('error', `event ${event.id} (${event.type}): ${(err as Error).message}`));
+      .then(async () => {
+        this.dispatchQueued = false;
+        const seen = new Set<string>();
+        for (;;) {
+          const rows = await this.d.store.pendingInbox(INBOX_BATCH, [...this.skipped]);
+          if (rows.length === 0) return;
+          for (const row of rows) {
+            if (seen.has(row.id)) {
+              // Handled, yet still pending: never loop on it.
+              this.skipped.add(row.id);
+              this.log('error', `event ${row.id} (${row.type}) still pending after its processing, skipped until the next start`);
+              continue;
+            }
+            seen.add(row.id);
+            const ticket = row.ticketId === undefined ? undefined : `${row.projectId}:${row.ticketId}`;
+            if (ticket !== undefined && this.skippedTickets.has(ticket)) {
+              this.skipped.add(row.id);
+              await this.freeSlot(row);
+              this.log('error', `event ${row.id} (${row.type}) kept in the inbox behind a failed event of ${row.ticketId}, for the next start`);
+              continue;
+            }
+            await this.process(row);
+          }
+          // A short batch was the last: what was accepted meanwhile queued a pass of its own.
+          if (rows.length < INBOX_BATCH) return;
+        }
+      })
+      .catch((err: unknown) => {
+        this.dispatchQueued = false;
+        this.log('error', `inbox: ${(err as Error).message}`);
+      });
     this.chain = next;
     return next;
+  }
+
+  private async process(row: StoredEvent): Promise<void> {
+    try {
+      await this.handle(upcast(row));
+      await this.d.store.markInboxProcessed(row.id);
+    } catch (err) {
+      this.skipped.add(row.id);
+      if (row.ticketId !== undefined) this.skippedTickets.add(`${row.projectId}:${row.ticketId}`);
+      this.log('error', `event ${row.id} (${row.type}): ${(err as Error).message} (kept in the inbox for the next start)`);
+      await this.freeSlot(row);
+    }
+  }
+
+  /**
+   * A run result left pending still frees its run's slot: held until the next start, it would
+   * otherwise keep the slot taken and, slot after slot, stop every launch. The slots are in memory,
+   * so the replay at the next start frees nothing twice.
+   */
+  private async freeSlot(event: FactoryEvent | StoredEvent): Promise<void> {
+    if (event.type !== 'run.finished') return;
+    const run = await this.d.store.getRun((event.payload as EventPayloads['run.finished']).runId).catch(() => undefined);
+    if (run) this.d.scheduler.release(`${run.ticketId}:${run.queue}`);
   }
 
   async idle(): Promise<void> {
@@ -117,11 +275,12 @@ export class Orchestrator {
       // Note: setImmediate is incompatible with fake timers (vi.useFakeTimers fakes it by default).
       // Let promise continuations of a just-released/finished runner settle before sampling the state.
       await new Promise<void>((resolve) => setImmediate(resolve));
+      await Promise.all(this.writes);
       const chain = this.chain;
       await chain;
       const pending = this.pendingBackground();
       await Promise.all(pending);
-      if (chain === this.chain && pending.length === 0 && this.pendingBackground().length === 0) return;
+      if (chain === this.chain && pending.length === 0 && this.writes.size === 0 && this.pendingBackground().length === 0) return;
     }
   }
 
@@ -132,9 +291,18 @@ export class Orchestrator {
   /**
    * Settles runs cut by a crash (`running`) or a shutdown (`interrupted`) and blocks their tickets.
    * The matching Linear notices are posted by announceRecovery().
+   *
+   * A run or check whose result is in the inbox, written before the crash and not yet processed,
+   * is left alone: the inbox replay settles it with its real result, which a block would fence.
    */
   async recover(): Promise<void> {
     const { store } = this.d;
+    const finished = new Set<string>();
+    const checked = new Set<string>();
+    for (const row of await store.pendingInbox(Number.MAX_SAFE_INTEGER)) {
+      if (row.type === 'run.finished') finished.add((row.payload as EventPayloads['run.finished']).runId);
+      if (row.type === 'verify.passed' || row.type === 'verify.failed') checked.add((row.payload as EventPayloads['verify.passed']).runId);
+    }
     const block = (t: TicketState, reason: string): Promise<TicketState> => {
       this.recoveryNotices.push({ ticket: { projectId: t.projectId, ticketId: t.ticketId }, type: 'elicitation', body: reason });
       return this.apply(t, { type: 'run.interrupted', reason });
@@ -151,19 +319,21 @@ export class Orchestrator {
       }
     }
     for (let t of await store.listTickets()) {
-      if (t.activeRunId) {
+      if (t.activeRunId && !finished.has(t.activeRunId)) {
         const r = await store.getRun(t.activeRunId);
         if (!r || r.status !== 'running') t = await block(t, `${PRODUCT_NAME} a redémarré pendant le run. Répondez dans le fil pour relancer.`);
       }
-      if (t.verifyingRunId) await block(t, `${PRODUCT_NAME} a redémarré pendant les vérifications. Répondez dans le fil pour relancer.`);
+      if (t.verifyingRunId && !checked.has(t.verifyingRunId)) await block(t, `${PRODUCT_NAME} a redémarré pendant les vérifications. Répondez dans le fil pour relancer.`);
     }
   }
 
   /**
    * Blocks a ticket from outside an event (the agent's question through /agent/ask). It runs in
-   * the event chain, so its read-modify-write never interleaves with an event's and overwrites it.
+   * the event chain, so its read-modify-write never interleaves with an event's and overwrites it,
+   * and after the events accepted before it (their inbox write in flight included).
    */
-  blockTicket(projectId: string, ticketId: string, reason: string): Promise<void> {
+  async blockTicket(projectId: string, ticketId: string, reason: string): Promise<void> {
+    await Promise.all(this.writes);
     const next = this.chain.then(async () => {
       const t = await this.d.store.getTicket(projectId, ticketId);
       if (t) await this.apply(t, { type: 'ticket.blocked', reason });
@@ -292,10 +462,7 @@ export class Orchestrator {
       return;
     }
 
-    if (event.type === 'run.finished') {
-      const run = await store.getRun(event.payload.runId);
-      if (run) this.d.scheduler.release(`${run.ticketId}:${run.queue}`);
-    }
+    await this.freeSlot(event);
     const decision = decide(known, event, project.workflow);
     if (isFenced(decision)) this.log('info', `ignored stale ${event.type} for ${event.ticketId ?? '*'}: ${decision.trace[0]}`);
     let next = reduce(known, event);
@@ -398,9 +565,9 @@ export class Orchestrator {
             const res = await this.d.verify(run.cwd, job.verify);
             const base = { ...TRUSTED, at: clock.now(), projectId: project.id, ticketId };
             const event: FactoryEvent = res.ok
-              ? { ...base, id: `verify:${run.id}`, type: 'verify.passed', payload: { runId: run.id, job: job.name } }
-              : { ...base, id: `verify:${run.id}`, type: 'verify.failed', payload: { runId: run.id, job: job.name, failures: res.failures } };
-            void this.submit(event);
+              ? { ...base, id: `check:${run.id}`, type: 'verify.passed', payload: { runId: run.id, job: job.name } }
+              : { ...base, id: `check:${run.id}`, type: 'verify.failed', payload: { runId: run.id, job: job.name, failures: res.failures } };
+            await this.submitResult(event);
           })(),
         );
         return;
@@ -674,9 +841,9 @@ export class Orchestrator {
       }
       result = { outcome: 'failure', costUsd: 0, turns: 0, lastText: message };
     }
-    await this.submit({
+    await this.submitResult({
       ...TRUSTED,
-      id: `run:${run.id}:finished`,
+      id: `attempt:${run.id}:finished`,
       type: 'run.finished',
       at: clock.now(),
       projectId: project.id,

@@ -75,9 +75,10 @@ export function createHarness(
     newId: () => `id-${++n}`,
     activityIntervalMs: 0,
     knowledgeConfigured: opts.knowledge,
+    inboxRetry: { attempts: 3, baseMs: 1 },
   });
   let orch = build();
-  const timers = new TimerService(store, clock, (e) => void orch.submit(e));
+  const timers = new TimerService(store, clock, (e) => orch.accept(e));
   let seq = 0;
 
   async function send<T extends EventType>(type: T, payload: EventPayloads[T], ticketId = 'REL-1'): Promise<void> {
@@ -99,6 +100,8 @@ export function createHarness(
     orch = build();
     await orch.recover();
     await orch.announceRecovery();
+    await orch.replayInbox();
+    await orch.idle();
   }
 
   return {

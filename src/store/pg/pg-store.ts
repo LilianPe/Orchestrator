@@ -3,6 +3,7 @@ import { sql } from 'drizzle-orm';
 import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
 import { normalizeTicket, type FactoryEvent, type QueueName, type TicketState } from '../../core/types.js';
+import type { StoredEvent } from '../../core/upcast.js';
 import type { QueueItem, RunRecord, TimerRecord } from '../types.js';
 import * as schema from './schema.js';
 import type { AsyncStore, DequeuedEffect, PutTicketOptions } from './types.js';
@@ -52,6 +53,7 @@ export class PgStore implements AsyncStore {
   private readonly db: NodePgDatabase<typeof schema>;
   private readonly ownsPool: boolean;
   private readonly clock: () => number;
+  private lastReceivedUs = 0;
 
   constructor(options: PgStoreOptions = {}) {
     if (options.pool) {
@@ -116,10 +118,55 @@ export class PgStore implements AsyncStore {
   }
 
   /**
-   * Appends to `inbox` and `journal` in one transaction. The second call for the same event id
-   * returns `false` without touching the journal (the ORC-147 idempotency contract). The inbox row
-   * is written processed: the event is handled as it is journaled, and an inbox replay (ORC-147)
-   * must not take these rows for unprocessed ones.
+   * `received_at` of the next inbox row, in microseconds: the clock, but strictly after the
+   * previous row, so the rows of one webhook (written within the same millisecond) keep their
+   * order in `pendingInbox`.
+   */
+  private nextReceivedUs(): number {
+    this.lastReceivedUs = Math.max(this.now() * 1000, this.lastReceivedUs + 1);
+    return this.lastReceivedUs;
+  }
+
+  /**
+   * Writes an event to `inbox`, committed before the call resolves (ORC-147). `on conflict do
+   * nothing` on the event id: a delivery received twice returns `false` the second time.
+   */
+  async appendInbox(event: FactoryEvent | StoredEvent): Promise<boolean> {
+    const receivedUs = this.nextReceivedUs();
+    const inserted = await this.db.execute(sql`
+      insert into inbox (id, event_id, type, payload, received_at, schema_version)
+      values (
+        ${event.id}, ${event.id}, ${event.type}, ${JSON.stringify(event)}::jsonb,
+        to_timestamp(0) + ${receivedUs}::double precision * interval '1 microsecond',
+        ${event.schemaVersion ?? 1}
+      )
+      on conflict do nothing
+      returning id
+    `);
+    return (inserted.rowCount ?? 0) > 0;
+  }
+
+  async pendingInbox(limit: number, exclude: readonly string[] = []): Promise<StoredEvent[]> {
+    const result = await this.db.execute<{ payload: StoredEvent }>(sql`
+      select payload from inbox
+      where processed_at is null and not (id = any(${sql.param([...exclude])}::text[]))
+      order by received_at, id
+      limit ${limit}
+    `);
+    return result.rows.map((row) => row.payload);
+  }
+
+  async markInboxProcessed(id: string): Promise<void> {
+    await this.db.execute(sql`
+      update inbox set processed_at = to_timestamp(${this.now() / 1000})
+      where id = ${id} and processed_at is null
+    `);
+  }
+
+  /**
+   * Appends to `journal`; every event reaches it from its inbox row (`appendInbox`, ORC-147). The
+   * second call for the same event id returns `false` without touching the journal: the journal's
+   * unique event id is the dedup key.
    *
    * The per-ticket journal sequence is allocated under a transaction-scoped advisory lock, so two
    * workers cannot pick the same `seq` for a ticket.
@@ -129,37 +176,20 @@ export class PgStore implements AsyncStore {
     // A row without a version predates versioning: version 1, as `upcast` reads it.
     const version = event.schemaVersion ?? 1;
     return this.db.transaction(async (tx) => {
-      const inserted = await tx.execute(
-        sql`
-          insert into inbox (id, event_id, type, payload, received_at, processed_at, schema_version)
-          values (
-            ${event.id}, ${event.id}, ${event.type}, ${JSON.stringify(event)}::jsonb,
-            to_timestamp(${now / 1000}), to_timestamp(${now / 1000}), ${version}
-          )
-          on conflict do nothing
-          returning id
-        `,
-      );
-      if ((inserted.rowCount ?? 0) === 0) return false;
-
       const ticketId = event.ticketId ?? null;
+      // Taken before the insert: a second call for the same event (same ticket) waits for the first
+      // to commit, then meets its journal row on the unique event id.
       await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${ticketId ?? '__global__'}))`);
-      const seqResult = await tx.execute<{ seq: number }>(
-        sql`
-          select coalesce(max(seq), 0) + 1 as seq
-          from journal
-          where ticket_id is not distinct from ${ticketId}
-        `,
-      );
-      const seq = Number(seqResult.rows[0]?.seq ?? 1);
-      await tx.execute(sql`
+      const inserted = await tx.execute(sql`
         insert into journal (id, ticket_id, event_id, seq, type, payload, schema_version, created_at)
-        values (
-          ${event.id}, ${ticketId}, ${event.id}, ${seq}, ${event.type},
+        select
+          ${event.id}, ${ticketId}, ${event.id}, coalesce(max(seq), 0) + 1, ${event.type},
           ${JSON.stringify(event)}::jsonb, ${version}, to_timestamp(${now / 1000})
-        )
+        from journal
+        where ticket_id is not distinct from ${ticketId}
+        on conflict (event_id) do nothing
       `);
-      return true;
+      return (inserted.rowCount ?? 0) > 0;
     });
   }
 
