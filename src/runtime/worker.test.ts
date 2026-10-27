@@ -1,7 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { newTicketState, type FactoryEvent } from '../core/types.js';
 import { SqliteStore } from '../store/sqlite-store.js';
 import type { DecisionRequest, OutboxRow } from '../store/types.js';
+import { effectBackoff } from './outbox.js';
 import { Worker, type WorkerDeps } from './worker.js';
 
 const event = (id: string): FactoryEvent =>
@@ -21,17 +22,19 @@ function setup(patch: Partial<WorkerDeps> = {}) {
       workflow: { hash: 'h', definition: {} },
       decide: (ticket) => ({
         ticket: ticket ?? newTicketState('p', 'REL-1', 'T', 'todo', 1),
-        effects: [
-          { kind: 'comment', body: `${e.id}/1` },
-          { kind: 'comment', body: `${e.id}/2` },
-        ],
+        // The result of an effect (ORC-150) decides nothing more.
+        effects: e.type.startsWith('effect.')
+          ? []
+          : [
+              { kind: 'comment', body: `${e.id}/1` },
+              { kind: 'comment', body: `${e.id}/2` },
+            ],
         timers: [],
         clearTimers: false,
       }),
     }),
     committed: async () => {},
     execute: async (row: OutboxRow) => void executed.push(row.id),
-    effectFailed: async () => {},
     ...patch,
   });
   return { store, worker, logs, executed };
@@ -56,7 +59,8 @@ describe('Worker', () => {
     await settled(worker);
     expect(executed).toEqual(['REL-1:1:1', 'REL-1:1:2', 'REL-1:2:1', 'REL-1:2:2']);
     expect(await store.pendingInbox(10)).toEqual([]);
-    expect(logs.filter((m) => m.includes('decided, but its follow-up failed: bus down'))).toHaveLength(2);
+    // Two events and the four results of their effects (ORC-150).
+    expect(logs.filter((m) => m.includes('decided, but its follow-up failed: bus down'))).toHaveLength(6);
   });
 
   it('leaves a row whose lease it lost to its new holder: neither done nor failed by the old one', async () => {
@@ -80,6 +84,111 @@ describe('Worker', () => {
     worker.stop();
     expect(logs.some((m) => m.includes('effect REL-1:1:1 done, but its lease went to another worker'))).toBe(true);
     expect((await store.listEffects('p', 'REL-1'))[0]).toMatchObject({ status: 'running', lease: (other as OutboxRow).lease });
+  });
+});
+
+describe('Worker: effects through the outbox executor (ORC-150)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('retries a failed effect after 1 s, then 2 s, on a fake clock: never before', async () => {
+    vi.useFakeTimers({ now: 1_000_000 });
+    const tries: number[] = [];
+    const { store, worker } = setup({
+      execute: async (row) => {
+        if (row.id !== 'REL-1:1:1') return;
+        tries.push(Date.now());
+        if (tries.length <= 2) throw new Error('Linear unreachable');
+      },
+    });
+    await store.appendInbox(event('e1'));
+    await worker.kick();
+    await settled(worker);
+    expect(tries).toEqual([1_000_000]);
+    // Not due yet: a pass (a poll) finds nothing to claim.
+    await vi.advanceTimersByTimeAsync(990);
+    expect(await worker.kick()).toBe(0);
+    expect(tries).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(20);
+    await settled(worker);
+    expect(tries).toHaveLength(2);
+    expect(tries[1]! - tries[0]!).toBeGreaterThanOrEqual(1_000);
+    expect(tries[1]! - tries[0]!).toBeLessThan(1_020);
+    await vi.advanceTimersByTimeAsync(1_990 - (tries[1]! - tries[0]! - 1_000));
+    expect(tries).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(30);
+    await settled(worker);
+    expect(tries).toHaveLength(3);
+    expect(tries[2]! - tries[1]!).toBeGreaterThanOrEqual(2_000);
+    // The row behind it waited, then ran; every result is decided.
+    expect((await store.listEffects('p', 'REL-1')).map((r) => [r.id, r.status, r.attempts])).toEqual([
+      ['REL-1:1:1', 'done', 3],
+      ['REL-1:1:2', 'done', 1],
+    ]);
+    expect(await store.pendingInbox(10)).toEqual([]);
+    expect((await store.recentEvents(10, 'REL-1')).map((e) => e.id).reverse()).toEqual(['e1', 'effect:REL-1:1:1', 'effect:REL-1:1:2']);
+    worker.stop();
+  });
+
+  it('lets an effect die after its last attempt, skips the rest of its decision, and decides its effect.failed', async () => {
+    const { store, worker, logs } = setup({
+      effectRetry: { attempts: 2, baseMs: 1, capMs: 1 },
+      execute: async (row) => {
+        if (row.id === 'REL-1:1:1') throw new Error('Linear down');
+      },
+    });
+    await store.appendInbox(event('e1'));
+    await worker.kick();
+    for (let i = 0; i < 50 && (await store.listEffects('p', 'REL-1'))[0]?.status !== 'dead'; i++) {
+      await new Promise((r) => setTimeout(r, 5));
+      await settled(worker);
+    }
+    await settled(worker);
+    expect((await store.listEffects('p', 'REL-1')).map((r) => [r.status, r.attempts])).toEqual([
+      ['dead', 2],
+      ['failed', 0],
+    ]);
+    const failed = (await store.recentEvents(10, 'REL-1')).find((e) => e.id === 'effect:REL-1:1:1');
+    expect(failed).toMatchObject({ type: 'effect.failed', payload: { error: 'Linear down', attempts: 2, kind: 'comment', eventId: 'e1' } });
+    expect(await store.pendingInbox(10)).toEqual([]);
+    expect(logs.some((m) => m.includes('effect REL-1:1:1 (comment): Linear down (attempt 1 of 2, retried in 1 ms)'))).toBe(true);
+    expect(logs.some((m) => m.includes('effect REL-1:1:1 (comment): Linear down (dead after 2 attempts'))).toBe(true);
+    worker.stop();
+  });
+});
+
+describe('effectBackoff', () => {
+  it('doubles from 1 s and stops at 5 min (ORC-129)', () => {
+    expect([1, 2, 3, 4, 7, 9, 12].map((n) => effectBackoff(n))).toEqual([1_000, 2_000, 4_000, 8_000, 64_000, 256_000, 300_000]);
+  });
+});
+
+describe('Worker.start: rows and effects (ORC-150)', () => {
+  it('retries a failed effect in process once started, besides a failed row', async () => {
+    let failures = 2;
+    const { store, worker, executed } = setup({
+      retry: { attempts: 5, baseMs: 5 },
+      effectRetry: { attempts: 3, baseMs: 5, capMs: 5 },
+      prepare: async (e) => {
+        if (failures-- > 0) throw new Error('Linear unreachable');
+        return e;
+      },
+      execute: async (row) => {
+        if (row.id === 'REL-1:1:1' && !executed.includes('failed-once')) {
+          executed.push('failed-once');
+          throw new Error('Linear unreachable');
+        }
+        executed.push(row.id);
+      },
+    });
+    worker.start(60_000);
+    await store.appendInbox(event('e1'));
+    await worker.kick();
+    for (let i = 0; i < 200 && !executed.includes('REL-1:1:2'); i++) await new Promise((r) => setTimeout(r, 5));
+    worker.stop();
+    await worker.settle();
+    expect(executed).toEqual(['failed-once', 'REL-1:1:1', 'REL-1:1:2']);
   });
 });
 

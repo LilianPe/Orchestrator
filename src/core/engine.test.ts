@@ -401,4 +401,22 @@ describe('decide — built-ins', () => {
     expect(decide(undefined, ev('control.pause', {}), workflow)).toEqual(decision({ effects: [{ kind: 'set_paused', paused: true }] }));
     expect(decide(undefined, ev('control.resume', {}), workflow)).toEqual(decision({ effects: [{ kind: 'set_paused', paused: false }] }));
   });
+
+  it('an effect result decides nothing; a dead effect blocks the ticket and says so once (ORC-150)', () => {
+    const result = { effectId: 'REL-1:1:2', kind: 'comment', eventId: 'd1', attempts: 8 };
+    expect(decide(ticket(), ev('effect.done', result), workflow)).toEqual(decision());
+    expect(decide(ticket(), ev('effect.failed', { ...result, error: 'Linear down' }), workflow)).toEqual(
+      decision({
+        events: [{ type: 'ticket.blocked', reason: 'Erreur : Linear down' }],
+        effects: [{ kind: 'activity', type: 'error', body: 'Erreur : Linear down' }],
+      }),
+    );
+    // The notice of a dead effect dies too: blocked, no new notice (no loop while the tracker is down).
+    expect(decide(ticket(), ev('effect.failed', { ...result, kind: 'activity', eventId: 'effect:REL-1:1:2', error: 'Linear down' }), workflow)).toEqual(
+      decision({ events: [{ type: 'ticket.blocked', reason: 'Erreur : Linear down' }] }),
+    );
+    // A step of the shell, or an unknown ticket: nothing to block.
+    expect(decide(ticket(), ev('effect.failed', { ...result, kind: 'settle', error: 'x' }), workflow)).toEqual(decision());
+    expect(decide(undefined, ev('effect.failed', { ...result, error: 'x' }), workflow)).toEqual(decision());
+  });
 });

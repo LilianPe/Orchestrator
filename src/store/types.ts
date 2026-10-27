@@ -1,6 +1,12 @@
 import type { OutboxEffect } from '../core/decision.js';
-import type { InputKind, QueueName, FactoryEvent, RunOutcome, TicketState } from '../core/types.js';
+import { TRUSTED, type InputKind, type QueueName, type FactoryEvent, type RunOutcome, type TicketState } from '../core/types.js';
 import type { StoredEvent } from '../core/upcast.js';
+
+/**
+ * Lease of a claimed outbox row or queue item (ORC-129): 60 s, renewed every 20 s by its holder
+ * while the effect runs. A holder that dies leaves the row to another once it expires.
+ */
+export const LEASE_MS = 60_000;
 
 export interface RunRecord {
   id: string;
@@ -96,9 +102,34 @@ export interface OutboxRow {
   seq: number;
   i: number;
   effect: OutboxEffect;
-  status: 'pending' | 'running' | 'done' | 'failed';
+  /**
+   * `pending` (new, or waiting for its retry), `running` (claimed), `done`, `dead` (out of
+   * attempts, ORC-150), `failed` (skipped: an earlier effect of its decision went dead).
+   */
+  status: 'pending' | 'running' | 'done' | 'failed' | 'dead';
+  /** Claims so far, this one included: a claim whose lease expired (its worker died) counts too. */
+  attempts: number;
+  /** The last failure of the effect (a retried or dead row). */
+  error?: string;
   /** The claim token of a running row, set by `claimEffect`: only its holder may renew or settle it. */
   lease?: string;
+}
+
+/**
+ * The inbox event that carries an outbox row's result back to the worker (ORC-150), written in the
+ * transaction that settles the row: `effect:<id>`, `effect.done` or `effect.failed` (dead).
+ */
+export function effectResult(row: Pick<OutboxRow, 'id' | 'projectId' | 'ticketId' | 'eventId' | 'effect' | 'attempts'>, at: number, error?: string): FactoryEvent {
+  const base = { effectId: row.id, kind: row.effect.kind, eventId: row.eventId, attempts: row.attempts };
+  const head = { ...TRUSTED, id: `effect:${row.id}`, at, projectId: row.projectId, ...(row.ticketId === undefined ? {} : { ticketId: row.ticketId }) };
+  return error === undefined ? { ...head, type: 'effect.done', payload: base } : { ...head, type: 'effect.failed', payload: { ...base, error } };
+}
+
+/** A queue item handed out under a lease (ORC-150): it stays in the queue until its start is recorded. */
+export interface QueueClaim {
+  id: string;
+  lease: string;
+  item: QueueItem;
 }
 
 /**
@@ -122,8 +153,9 @@ export interface Store {
   decide(req: DecisionRequest): Promise<DecisionOutcome>;
   /**
    * Claims the ticket's first unfinished outbox row, in `seq`, `i` order, under a lease of
-   * `leaseMs`: a pending row, or a running one whose lease expired (its worker died). `busy` when
-   * that row is running under a live lease: another worker is executing the ticket's effects.
+   * `leaseMs`, and counts the attempt: a pending row past its backoff, or a running one whose lease
+   * expired (its worker died). `busy` when that row cannot be taken now: running under a live
+   * lease, being claimed by another executor (`SKIP LOCKED` on Postgres), or waiting for its retry.
    */
   claimEffect(projectId: string, ticketId: string | undefined, leaseMs: number): Promise<OutboxRow | 'busy' | undefined>;
   /**
@@ -132,14 +164,29 @@ export interface Store {
    */
   renewEffect(id: string, lease: string, leaseMs: number): Promise<boolean>;
   /**
-   * Settles a running outbox row: done. Only under the claim token `lease`: false, and nothing
-   * changed, when the lease was lost to another worker. Without `lease`: the legacy queue rows
-   * of `claim` (Postgres).
+   * Settles a running outbox row: done, and its result `effect:<id>` (`effect.done`) written to the
+   * inbox in the same transaction (ORC-150). Only under the claim token `lease`: false, and nothing
+   * changed, when the lease was lost to another worker. Without `lease`: the legacy queue rows of
+   * `claim` (Postgres), no inbox event. `at`: the time of the result event (the store's clock by
+   * default; the orchestrator passes its own, the time of every event it writes).
    */
-  completeEffect(id: string, lease?: string): Promise<boolean>;
-  /** Settles a running outbox row: failed, not retried. Same guard as `completeEffect`. */
-  failEffect(id: string, lease: string): Promise<boolean>;
-  /** Tickets whose first unfinished outbox row is claimable (pending, or running under an expired lease). */
+  completeEffect(id: string, lease?: string, at?: number): Promise<boolean>;
+  /**
+   * A running outbox row failed and has attempts left: back to `pending`, claimable again in
+   * `delayMs` (the backoff), with its error. Same guard as `completeEffect`.
+   */
+  retryEffect(id: string, lease: string, error: string, delayMs: number): Promise<boolean>;
+  /**
+   * A running outbox row failed for the last time (ORC-150), in one transaction: the row goes
+   * `dead` with its error, the later rows of its decision are skipped (`failed`, `settle` aside),
+   * the timers its decision armed are deleted, and its result `effect:<id>` (`effect.failed`) is
+   * written to the inbox. Same guard as `completeEffect`.
+   */
+  failEffect(id: string, lease: string, error: string, at?: number): Promise<boolean>;
+  /**
+   * Tickets whose first unfinished outbox row is claimable: pending and past its backoff, or
+   * running under an expired lease.
+   */
   effectTickets(): Promise<{ projectId: string; ticketId?: string }[]>;
   /** The decision outbox rows of a ticket (`undefined`: of the events without a ticket), in order. */
   listEffects(projectId: string, ticketId?: string): Promise<OutboxRow[]>;
@@ -170,8 +217,19 @@ export interface Store {
   deleteTimersArmedBy(eventId: string): Promise<void>;
   /** Queues an item (deduped by ticket + job) and returns its id. */
   enqueue(q: QueueItem): Promise<string>;
-  /** Takes the next item of a queue out of the store: it is not handed out again. */
-  dequeue(queue: QueueName): Promise<QueueItem | undefined>;
+  /**
+   * Hands out the next item of a queue under a lease of `leaseMs` (ORC-150), without taking it out:
+   * an item handed out and lost before its start (a crash) is handed out again once the lease
+   * expires. Not an item another holder has under a live lease.
+   */
+  claimQueued(queue: QueueName, leaseMs: number): Promise<QueueClaim | undefined>;
+  /** Extends the lease of a handed-out item; false when the claim is no longer its holder's. */
+  renewQueued(claim: QueueClaim, leaseMs: number): Promise<boolean>;
+  /** The item's start is recorded (or the item is dropped): out of the queue for good. */
+  finishQueued(claim: QueueClaim): Promise<boolean>;
+  /** The item goes back in line, at its place (no free slot, paused, over budget). */
+  releaseQueued(claim: QueueClaim): Promise<boolean>;
+  /** Items waiting in line (not handed out). */
   listQueue(): Promise<QueueItem[]>;
   /** Drops the ticket's queued runs, of every queue or of `queue` only. */
   removeFromQueue(projectId: string, ticketId: string, queue?: QueueName): Promise<void>;

@@ -3,15 +3,17 @@ import { DatabaseSync } from 'node:sqlite';
 import type { OutboxEffect } from '../core/decision.js';
 import { normalizeTicket, type QueueName, type FactoryEvent, type TicketState } from '../core/types.js';
 import type { StoredEvent } from '../core/upcast.js';
-import type {
-  DecisionOutcome,
-  DecisionRequest,
-  OutboxRow,
-  QueueItem,
-  RunRecord,
-  Store,
-  TimerRecord,
-  WorkflowVersion,
+import {
+  effectResult,
+  type DecisionOutcome,
+  type DecisionRequest,
+  type OutboxRow,
+  type QueueClaim,
+  type QueueItem,
+  type RunRecord,
+  type Store,
+  type TimerRecord,
+  type WorkflowVersion,
 } from './types.js';
 
 const SCHEMA = `
@@ -33,6 +35,15 @@ CREATE INDEX IF NOT EXISTS outbox_event ON outbox (event_id);
 CREATE TABLE IF NOT EXISTS workflow_versions (hash TEXT PRIMARY KEY, definition TEXT NOT NULL);
 `;
 
+/** Columns added after their table was first created (ORC-150): `ALTER TABLE` on an older file. */
+const ADDED_COLUMNS: [table: string, column: string, definition: string][] = [
+  ['outbox', 'attempts', 'INTEGER NOT NULL DEFAULT 0'],
+  ['outbox', 'available_at', 'INTEGER NOT NULL DEFAULT 0'],
+  ['outbox', 'error', 'TEXT'],
+  ['queue', 'lease', 'TEXT'],
+  ['queue', 'lease_until', 'INTEGER'],
+];
+
 interface OutboxSqlRow {
   id: string;
   project_id: string;
@@ -43,6 +54,9 @@ interface OutboxSqlRow {
   status: OutboxRow['status'];
   lease_until: number | null;
   lease: string | null;
+  attempts: number;
+  available_at: number;
+  error: string | null;
   data: string;
 }
 
@@ -56,6 +70,8 @@ function outboxRow(r: OutboxSqlRow): OutboxRow {
     i: Number(r.i),
     effect: JSON.parse(r.data) as OutboxEffect,
     status: r.status,
+    attempts: Number(r.attempts),
+    ...(r.error === null ? {} : { error: r.error }),
     ...(r.lease === null ? {} : { lease: r.lease }),
   };
 }
@@ -74,6 +90,23 @@ export class SqliteStore implements Store {
     this.db = new DatabaseSync(path);
     this.db.exec('PRAGMA journal_mode = WAL;');
     this.db.exec(SCHEMA);
+    for (const [table, column, definition] of ADDED_COLUMNS) {
+      const columns = this.db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+      if (!columns.some((c) => c.name === column)) this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    }
+  }
+
+  /** Runs `f` in one transaction (`node:sqlite` is synchronous: nothing interleaves with it). */
+  private atomically<T>(f: () => T): T {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const out = f();
+      this.db.exec('COMMIT');
+      return out;
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
   }
 
   async getTicket(projectId: string, ticketId: string): Promise<TicketState | undefined> {
@@ -117,15 +150,7 @@ export class SqliteStore implements Store {
    * and the in-process worker keeps one task per ticket (the lock of the single process).
    */
   async decide(req: DecisionRequest): Promise<DecisionOutcome> {
-    this.db.exec('BEGIN IMMEDIATE');
-    try {
-      const outcome = this.decideIn(req, req.event.ticketId ?? null);
-      this.db.exec('COMMIT');
-      return outcome;
-    } catch (err) {
-      this.db.exec('ROLLBACK');
-      throw err;
-    }
+    return this.atomically(() => this.decideIn(req, req.event.ticketId ?? null));
   }
 
   private decideIn(req: DecisionRequest, ticketId: string | null): DecisionOutcome {
@@ -168,7 +193,9 @@ export class SqliteStore implements Store {
     const effectIds = plan.effects.map((effect, k) => {
       const id = `${ticketId ?? '*'}:${seq}:${k + 1}`;
       this.db
-        .prepare(`INSERT INTO outbox (id, project_id, ticket_id, event_id, seq, i, status, data) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)`)
+        .prepare(
+          `INSERT INTO outbox (id, project_id, ticket_id, event_id, seq, i, status, attempts, available_at, data) VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, 0, ?)`,
+        )
         .run(id, event.projectId, ticketId, event.id, seq, k + 1, JSON.stringify(effect));
       return id;
     });
@@ -196,9 +223,13 @@ export class SqliteStore implements Store {
     if (!row) return undefined;
     const now = Date.now();
     if (row.status === 'running' && (row.lease_until ?? 0) >= now) return 'busy';
+    // Waiting for its retry: the ticket's later rows wait behind it.
+    if (row.status === 'pending' && Number(row.available_at) > now) return 'busy';
     const lease = randomUUID();
-    this.db.prepare(`UPDATE outbox SET status = 'running', lease_until = ?, lease = ? WHERE id = ?`).run(now + leaseMs, lease, row.id);
-    return { ...outboxRow(row), status: 'running', lease };
+    this.db
+      .prepare(`UPDATE outbox SET status = 'running', lease_until = ?, lease = ?, attempts = attempts + 1 WHERE id = ?`)
+      .run(now + leaseMs, lease, row.id);
+    return { ...outboxRow(row), status: 'running', attempts: Number(row.attempts) + 1, lease };
   }
 
   async renewEffect(id: string, lease: string, leaseMs: number): Promise<boolean> {
@@ -208,34 +239,66 @@ export class SqliteStore implements Store {
     return Number(res.changes) === 1;
   }
 
-  async completeEffect(id: string, lease?: string): Promise<boolean> {
-    return this.settleEffect(id, 'done', lease);
+  /** The running row under `lease` (any running row without one), or undefined: the guard of every settlement. */
+  private heldRow(id: string, lease: string | undefined): OutboxSqlRow | undefined {
+    return this.db
+      .prepare(`SELECT * FROM outbox WHERE id = ? AND status = 'running' AND (? IS NULL OR lease = ?)`)
+      .get(id, lease ?? null, lease ?? null) as OutboxSqlRow | undefined;
   }
 
-  async failEffect(id: string, lease: string): Promise<boolean> {
-    return this.settleEffect(id, 'failed', lease);
+  async completeEffect(id: string, lease?: string, at = Date.now()): Promise<boolean> {
+    return this.atomically(() => {
+      const row = this.heldRow(id, lease);
+      if (!row) return false;
+      this.db.prepare(`UPDATE outbox SET status = 'done', lease_until = NULL WHERE id = ?`).run(id);
+      this.appendResult(effectResult(outboxRow(row), at));
+      return true;
+    });
   }
 
-  /** Settles a running row, only under its claim token when one is given. */
-  private settleEffect(id: string, status: 'done' | 'failed', lease: string | undefined): boolean {
+  async retryEffect(id: string, lease: string, error: string, delayMs: number): Promise<boolean> {
     const res = this.db
-      .prepare(`UPDATE outbox SET status = ?, lease_until = NULL WHERE id = ? AND status = 'running' AND (? IS NULL OR lease = ?)`)
-      .run(status, id, lease ?? null, lease ?? null);
+      .prepare(
+        `UPDATE outbox SET status = 'pending', lease = NULL, lease_until = NULL, available_at = ?, error = ? WHERE id = ? AND status = 'running' AND lease = ?`,
+      )
+      .run(Date.now() + delayMs, error, id, lease);
     return Number(res.changes) === 1;
   }
 
+  async failEffect(id: string, lease: string, error: string, at = Date.now()): Promise<boolean> {
+    return this.atomically(() => {
+      const row = this.heldRow(id, lease);
+      if (!row) return false;
+      this.db.prepare(`UPDATE outbox SET status = 'dead', lease_until = NULL, error = ? WHERE id = ?`).run(error, id);
+      this.db
+        .prepare(`UPDATE outbox SET status = 'failed' WHERE event_id = ? AND status = 'pending' AND json_extract(data, '$.kind') <> 'settle'`)
+        .run(row.event_id);
+      for (const r of this.db.prepare('SELECT key, data FROM timers').all() as { key: string; data: string }[]) {
+        if ((JSON.parse(r.data) as TimerRecord).armedBy === row.event_id) this.db.prepare('DELETE FROM timers WHERE key = ?').run(r.key);
+      }
+      this.appendResult(effectResult(outboxRow(row), at, error));
+      return true;
+    });
+  }
+
+  /** The result of an effect, to the inbox in the transaction that settles its row. */
+  private appendResult(e: FactoryEvent): void {
+    this.db.prepare('INSERT OR IGNORE INTO inbox (id, received_at, data) VALUES (?, ?, ?)').run(e.id, Date.now(), JSON.stringify(e));
+  }
+
   async effectTickets(): Promise<{ projectId: string; ticketId?: string }[]> {
+    const now = Date.now();
     const rows = this.db
       .prepare(
         `SELECT DISTINCT o.project_id, o.ticket_id FROM outbox o
-         WHERE (o.status = 'pending' OR (o.status = 'running' AND COALESCE(o.lease_until, 0) < ?))
+         WHERE ((o.status = 'pending' AND o.available_at <= ?) OR (o.status = 'running' AND COALESCE(o.lease_until, 0) < ?))
            AND NOT EXISTS (
              SELECT 1 FROM outbox p
              WHERE p.project_id = o.project_id AND p.ticket_id IS o.ticket_id AND p.status IN ('pending', 'running')
                AND (p.seq < o.seq OR (p.seq = o.seq AND p.i < o.i))
            )`,
       )
-      .all(Date.now()) as { project_id: string; ticket_id: string | null }[];
+      .all(now, now) as { project_id: string; ticket_id: string | null }[];
     return rows.map((r) => ({ projectId: r.project_id, ...(r.ticket_id === null ? {} : { ticketId: r.ticket_id }) }));
   }
 
@@ -358,19 +421,51 @@ export class SqliteStore implements Store {
     return `${item.projectId}:${item.ticketId}:${item.job}`;
   }
 
-  async dequeue(queue: QueueName): Promise<QueueItem | undefined> {
+  /** One process serves the SQLite store: the lease only brings back an item lost by a crash. */
+  async claimQueued(queue: QueueName, leaseMs: number): Promise<QueueClaim | undefined> {
+    const now = Date.now();
     const row = this.db
-      .prepare('SELECT project_id, ticket_id, job, data FROM queue WHERE queue = ? ORDER BY rank, enqueued_at LIMIT 1')
-      .get(queue) as { project_id: string; ticket_id: string; job: string; data: string } | undefined;
+      .prepare(
+        'SELECT project_id, ticket_id, job, data FROM queue WHERE queue = ? AND (lease_until IS NULL OR lease_until < ?) ORDER BY rank, enqueued_at LIMIT 1',
+      )
+      .get(queue, now) as { project_id: string; ticket_id: string; job: string; data: string } | undefined;
     if (!row) return undefined;
-    this.db.prepare('DELETE FROM queue WHERE project_id = ? AND ticket_id = ? AND job = ?').run(row.project_id, row.ticket_id, row.job);
-    return JSON.parse(row.data);
+    const lease = randomUUID();
+    this.db
+      .prepare('UPDATE queue SET lease = ?, lease_until = ? WHERE project_id = ? AND ticket_id = ? AND job = ?')
+      .run(lease, now + leaseMs, row.project_id, row.ticket_id, row.job);
+    return { id: `${row.project_id}:${row.ticket_id}:${row.job}`, lease, item: JSON.parse(row.data) as QueueItem };
+  }
+
+  async renewQueued(claim: QueueClaim, leaseMs: number): Promise<boolean> {
+    const { projectId, ticketId, job } = claim.item;
+    const res = this.db
+      .prepare('UPDATE queue SET lease_until = ? WHERE project_id = ? AND ticket_id = ? AND job = ? AND lease = ?')
+      .run(Date.now() + leaseMs, projectId, ticketId, job, claim.lease);
+    return Number(res.changes) === 1;
+  }
+
+  async finishQueued(claim: QueueClaim): Promise<boolean> {
+    const { projectId, ticketId, job } = claim.item;
+    const res = this.db
+      .prepare('DELETE FROM queue WHERE project_id = ? AND ticket_id = ? AND job = ? AND lease = ?')
+      .run(projectId, ticketId, job, claim.lease);
+    return Number(res.changes) === 1;
+  }
+
+  async releaseQueued(claim: QueueClaim): Promise<boolean> {
+    const { projectId, ticketId, job } = claim.item;
+    const res = this.db
+      .prepare('UPDATE queue SET lease = NULL, lease_until = NULL WHERE project_id = ? AND ticket_id = ? AND job = ? AND lease = ?')
+      .run(projectId, ticketId, job, claim.lease);
+    return Number(res.changes) === 1;
   }
 
   async listQueue(): Promise<QueueItem[]> {
-    return (this.db.prepare('SELECT data FROM queue ORDER BY rank, enqueued_at').all() as { data: string }[]).map((r) =>
-      JSON.parse(r.data),
-    );
+    const rows = this.db
+      .prepare('SELECT data FROM queue WHERE lease_until IS NULL OR lease_until < ? ORDER BY rank, enqueued_at')
+      .all(Date.now()) as { data: string }[];
+    return rows.map((r) => JSON.parse(r.data));
   }
 
   async removeFromQueue(projectId: string, ticketId: string, queue?: QueueName): Promise<void> {

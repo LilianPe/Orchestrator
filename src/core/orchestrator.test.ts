@@ -11,10 +11,13 @@ import { SqliteStore } from '../store/sqlite-store.js';
 import { EventBus } from './bus.js';
 import { FakeClock } from './clock.js';
 import { Orchestrator } from './orchestrator.js';
+import type { EffectRetry } from '../runtime/outbox.js';
 import { Scheduler } from './scheduler.js';
 import { newTicketState, TRUSTED, type FactoryEvent } from './types.js';
 
-function setup(o: { runner?: Runner; verify?: Verifier; budget?: number; hold?: boolean; tweak?: (w: ReturnType<typeof loadWorkflow>) => void } = {}) {
+function setup(
+  o: { runner?: Runner; verify?: Verifier; budget?: number; hold?: boolean; tweak?: (w: ReturnType<typeof loadWorkflow>) => void; effectRetry?: EffectRetry } = {},
+) {
   const packDir = join(import.meta.dirname, '../../packs/standard');
   const workflow = loadWorkflow({ packDir });
   o.tweak?.(workflow);
@@ -29,6 +32,8 @@ function setup(o: { runner?: Runner; verify?: Verifier; budget?: number; hold?: 
     tracker, forge: new FakeForge(), runner, workspaces: new FakeWorkspaces(), verify: o.verify ?? (async () => ({ ok: true, failures: [] })), dailyBudgetUsd: o.budget,
     projects: [{ id: 'p', repoPath: '/repo', teamKey: 'REL', workflow }], packDir,
     agentEnv: (r) => ({ FACTORY_RUN_TOKEN: r.token }), newId: () => `id-${++n}`, activityIntervalMs: 0, holdInboxUntilReplay: o.hold,
+    // One attempt: a failed effect dies at once (the retries have their own tests).
+    effectRetry: o.effectRetry ?? { attempts: 1, baseMs: 1, capMs: 1 },
   });
   return { store, tracker, runner: fakeRunner, orch, scheduler };
 }

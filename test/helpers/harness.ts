@@ -17,6 +17,7 @@ import { Scheduler } from '../../src/core/scheduler.js';
 import { TimerService } from '../../src/core/timers.js';
 import type { EventPayloads, EventType, FactoryEvent } from '../../src/core/types.js';
 import type { Verifier } from '../../src/core/verify.js';
+import type { EffectRetry } from '../../src/runtime/outbox.js';
 import { SqliteStore } from '../../src/store/sqlite-store.js';
 import type { Store } from '../../src/store/types.js';
 import type { TestPreset } from './test-preset.js';
@@ -48,6 +49,8 @@ export function createHarness(
     effectLeaseMs?: number;
     /** Retries of an inbox row whose processing throws (ORC-149); the orchestrator's default otherwise. */
     processRetry?: { attempts: number; baseMs: number };
+    /** Retries of an effect that throws (ORC-150); default one attempt: a failed effect dies at once and blocks its ticket. */
+    effectRetry?: EffectRetry;
   } = {},
 ) {
   if (opts.projectYaml !== undefined && opts.preset) throw new Error('createHarness: pass projectYaml or preset, not both');
@@ -82,6 +85,7 @@ export function createHarness(
     inboxRetry: { attempts: 3, baseMs: 1 },
     effectLeaseMs: opts.effectLeaseMs,
     processRetry: opts.processRetry,
+    effectRetry: opts.effectRetry ?? { attempts: 1, baseMs: 1, capMs: 1 },
   });
   let orch = build();
   const timers = new TimerService(store, clock, (e) => orch.accept(e));

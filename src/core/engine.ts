@@ -17,6 +17,7 @@ export function taintedKnowledge(job: string): string {
 
 const BUILT_IN = new Set<EventType>([
   'control.pause', 'control.resume', 'control.stop', 'run.finished', 'verify.passed', 'verify.failed', 'debounce.fired', 'pr.opened',
+  'effect.done', 'effect.failed',
 ]);
 
 function empty(): Decision {
@@ -261,6 +262,18 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
       if (!job) return out;
       if (ticket?.blocked && !refusal(event, ticket, job)) out.events.push({ type: 'ticket.unblocked' });
       startRun(out, event, ticket, job, { input: job.input });
+      return out;
+    }
+    case 'effect.done':
+      return out;
+    case 'effect.failed': {
+      // `settle` is a step of the shell, not an effect of the workflow: its failure is only logged.
+      const { kind, error, eventId } = event.payload;
+      if (kind === 'settle' || !ticket) return out;
+      const reason = `Erreur : ${error}`;
+      out.events.push({ type: 'ticket.blocked', reason });
+      // The error notice of a failed effect is not noticed again when it fails too: the tracker may be what fails.
+      if (!eventId.startsWith('effect:')) out.effects.push({ kind: 'activity', type: 'error', body: reason });
       return out;
     }
     case 'pr.merged':
