@@ -6,10 +6,13 @@ import type { OutboxEffect } from '../../core/decision.js';
 import { normalizeTicket, type FactoryEvent, type QueueName, type TicketState } from '../../core/types.js';
 import type { StoredEvent } from '../../core/upcast.js';
 import {
+  decisionRecord,
   effectResult,
   LEASE_MS,
   type DecisionOutcome,
+  type DecisionRecord,
   type DecisionRequest,
+  type JournalEntry,
   type OutboxRow,
   type QueueClaim,
   type QueueItem,
@@ -322,6 +325,13 @@ export class PgStore implements AsyncStore {
           ${JSON.stringify(event)}::jsonb, ${event.schemaVersion ?? 1}, to_timestamp(${now / 1000})
         )
       `);
+      await tx.execute(sql`
+        insert into decision_trace (id, ticket_id, event_id, decision, created_at)
+        values (
+          ${event.id}, ${outboxTicket(ticketId)}, ${event.id},
+          ${JSON.stringify(decisionRecord(event, seq, known, frozen, plan))}::jsonb, to_timestamp(${now / 1000})
+        )
+      `);
       if (plan.ticket) {
         if (plan.ticket.workflowHash === req.workflow.hash) {
           await tx.execute(sql`
@@ -362,6 +372,16 @@ export class PgStore implements AsyncStore {
 
   getWorkflowVersion(hash: string): Promise<WorkflowVersion | undefined> {
     return this.readWorkflow(this.db, hash);
+  }
+
+  async ticketJournal(projectId: string, ticketId?: string): Promise<JournalEntry[]> {
+    const result = await this.db.execute<{ event: StoredEvent; decision: DecisionRecord | null }>(sql`
+      select j.payload as event, d.decision from journal j
+      left join decision_trace d on d.event_id = j.event_id
+      where j.ticket_id is not distinct from ${ticketId ?? null} and j.payload->>'projectId' = ${projectId}
+      order by j.seq
+    `);
+    return result.rows.map((r) => ({ event: r.event, ...(r.decision === null ? {} : { decision: r.decision }) }));
   }
 
   /**

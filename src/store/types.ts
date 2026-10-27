@@ -77,6 +77,59 @@ export interface DecisionPlan {
   clearTimers: boolean;
   /** Why the decision did nothing, logged after the commit (a fenced result, an unmanaged ticket). */
   note?: string;
+  /** The decider's clock (`updatedAt` of the projection, base of the timers), recorded for replay (ORC-174). */
+  at?: number;
+  /** Why `decide` decided so (`Decision.trace`), recorded for replay (ORC-174). */
+  trace?: string[];
+}
+
+/**
+ * What the decision transaction recorded of a committed decision (ORC-174), beside its journal
+ * row: its inputs (the projection read under the lock, the frozen workflow version, the clock) and
+ * its outputs (the new projection, the outbox effects, the timers). The replay oracle runs the
+ * decision again from the inputs and compares the outputs, bit for bit.
+ */
+export interface DecisionRecord {
+  eventId: string;
+  projectId: string;
+  ticketId?: string;
+  seq: number;
+  /** `DecisionPlan.at`; absent when nothing decided (an event of an unknown project). */
+  at?: number;
+  /** The workflow version the decision ran on; empty when nothing decided (an unknown project). */
+  workflowHash: string;
+  /** The projection read under the ticket's lock, before the decision. */
+  before?: TicketState;
+  ticket?: TicketState;
+  effects: OutboxEffect[];
+  timers: TimerRecord[];
+  clearTimers: boolean;
+  trace?: string[];
+}
+
+/** The record of a committed decision, written in its transaction (ORC-174). */
+export function decisionRecord(event: FactoryEvent, seq: number, known: TicketState | undefined, workflow: WorkflowVersion, plan: DecisionPlan): DecisionRecord {
+  return {
+    eventId: event.id,
+    projectId: event.projectId,
+    ...(event.ticketId === undefined ? {} : { ticketId: event.ticketId }),
+    seq,
+    ...(plan.at === undefined ? {} : { at: plan.at }),
+    workflowHash: workflow.hash,
+    ...(known === undefined ? {} : { before: known }),
+    ...(plan.ticket === undefined ? {} : { ticket: plan.ticket }),
+    effects: plan.effects,
+    timers: plan.timers,
+    clearTimers: plan.clearTimers,
+    ...(plan.trace === undefined ? {} : { trace: plan.trace }),
+  };
+}
+
+/** A journal row of a ticket and, when a decision transaction journaled it (ORC-174), its decision. */
+export interface JournalEntry {
+  /** As journaled: an older engine may have written it in an older `schemaVersion`. */
+  event: StoredEvent;
+  decision?: DecisionRecord;
 }
 
 /**
@@ -216,6 +269,11 @@ export interface Store {
   effectTickets(): Promise<{ projectId: string; ticketId?: string }[]>;
   /** The decision outbox rows of a ticket (`undefined`: of the events without a ticket), in order. */
   listEffects(projectId: string, ticketId?: string): Promise<OutboxRow[]>;
+  /**
+   * The journal of a ticket (`undefined`: of the project's events without a ticket), in journal
+   * order, each row with the decision recorded with it (ORC-174): what `factory replay` exports.
+   */
+  ticketJournal(projectId: string, ticketId?: string): Promise<JournalEntry[]>;
   /** A workflow version a ticket is frozen on, by hash. */
   getWorkflowVersion(hash: string): Promise<WorkflowVersion | undefined>;
   /**
