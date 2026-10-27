@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { expect } from 'vitest';
 import type { SandboxProvider, SandboxRequest } from '../../src/adapters/sandbox/types.js';
+import { describeContract, resolved, type ContractOptions } from './cases.js';
 
 /** What the implementation under test arranged for the suite. Docs: docs/ports/sandbox-provider.md. */
 export interface SandboxSubject {
@@ -10,8 +11,8 @@ export interface SandboxSubject {
   active: () => Promise<string[]>;
 }
 
-export function describeSandboxContract(name: string, make: () => SandboxSubject | Promise<SandboxSubject>): void {
-  describe(`SandboxProvider contract: ${name}`, () => {
+export function describeSandboxContract(name: string, make: () => SandboxSubject | Promise<SandboxSubject>, options?: ContractOptions): void {
+  describeContract(`SandboxProvider contract: ${name}`, options, (it) => {
     it('create returns a live sandbox at the requested network level', async () => {
       const s = await make();
       for (const network of ['none', 'claude-api', 'limited', 'full'] as const) {
@@ -41,9 +42,9 @@ export function describeSandboxContract(name: string, make: () => SandboxSubject
     it('destroy is idempotent and ignores an unknown id', async () => {
       const s = await make();
       const sbx = await s.provider.create(s.request);
-      await s.provider.destroy(sbx.id);
-      await s.provider.destroy(sbx.id);
-      await s.provider.destroy('contract-no-such-sandbox');
+      await resolved(s.provider.destroy(sbx.id));
+      await resolved(s.provider.destroy(sbx.id));
+      await resolved(s.provider.destroy('contract-no-such-sandbox'));
       expect(await s.active()).toEqual([]);
     });
 

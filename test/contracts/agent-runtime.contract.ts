@@ -1,6 +1,6 @@
 import { expect } from 'vitest';
 import type { RunHandle, RunRequest, Runner, RunStreamEvent } from '../../src/adapters/runner/types.js';
-import { describeContract, type ContractOptions } from './cases.js';
+import { describeContract, resolved, type ContractOptions } from './cases.js';
 
 /**
  * The behaviours a case asks of the runtime: `success` and `failure` end on their own, `hang` runs until stopped or capped,
@@ -61,7 +61,7 @@ export function describeAgentRuntimeContract(name: string, make: () => AgentRunt
       const s = make();
       const h = start(s, 'failure');
       await drain(h.events);
-      expect((await h.done).outcome).toBe('failure');
+      expect((await resolved(h.done)).outcome).toBe('failure');
     });
 
     it('a run that cannot launch ends in failure: start does not throw, done does not reject, the stream closes', async () => {
@@ -106,7 +106,7 @@ export function describeAgentRuntimeContract(name: string, make: () => AgentRunt
       const h = start(s, script, { limits });
       s.elapse?.(elapse);
       try {
-        expect(await within(h.done, 1_500)).toMatchObject({ outcome: 'limit' });
+        expect(await within(resolved(h.done), 1_500)).toMatchObject({ outcome: 'limit' });
       } finally {
         h.stop();
       }

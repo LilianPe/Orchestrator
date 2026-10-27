@@ -1,7 +1,7 @@
 import { expect } from 'vitest';
 import type { FeedbackItem } from '../../src/core/types.js';
 import type { Forge } from '../../src/adapters/forge/types.js';
-import { describeContract, subjectWith, type ContractOptions } from './cases.js';
+import { describeContract, resolved, subjectWith, type ContractOptions } from './cases.js';
 
 /** What the implementation under test arranged for the suite. Docs: docs/ports/forge.md. */
 export interface ForgeSubject {
@@ -24,7 +24,7 @@ export function describeForgeContract(name: string, make: () => ForgeSubject | P
 
     it('findPr answers undefined for a branch without a PR', async () => {
       const s = await make();
-      expect(await s.forge.findPr(s.repoPath, s.missingBranch)).toBeUndefined();
+      expect(await resolved(s.forge.findPr(s.repoPath, s.missingBranch))).toBeUndefined();
     });
 
     it('findPr returns the branch PR, its checks consistent with the failed ones', async (ctx) => {
