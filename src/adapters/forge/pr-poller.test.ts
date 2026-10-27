@@ -75,7 +75,7 @@ describe('PrPoller', () => {
   it('watches a ticket moved to done before the merge was seen, until its PR is merged or closed (ORC-268)', async () => {
     const { store, forge, events, poller } = setup();
     const findPr = vi.spyOn(forge, 'findPr');
-    store.putTicket({ ...newTicketState('p', 'REL-1', 'T', 'done', 1), branch: 'b', prNumber: 7 });
+    await store.putTicket({ ...newTicketState('p', 'REL-1', 'T', 'done', 1), branch: 'b', prNumber: 7 });
     forge.setPr('b', { number: 7, url: 'u', state: 'OPEN', checks: 'fail', failedChecks: ['t'] });
     await poller.pollOnce();
     expect(events).toEqual([]);
@@ -85,15 +85,15 @@ describe('PrPoller', () => {
     await poller.pollOnce();
     expect(findPr).toHaveBeenCalledTimes(2);
     // Done again with the same PR: nothing new to watch. With a new PR: watched again.
-    store.putTicket({ ...store.getTicket('p', 'REL-1')!, logical: 'done' });
+    await store.putTicket({ ...(await store.getTicket('p', 'REL-1'))!, logical: 'done' });
     await poller.pollOnce();
     expect(findPr).toHaveBeenCalledTimes(2);
-    store.putTicket({ ...store.getTicket('p', 'REL-1')!, prNumber: 8 });
+    await store.putTicket({ ...(await store.getTicket('p', 'REL-1'))!, prNumber: 8 });
     forge.setPr('b', { number: 8, url: 'u8', state: 'OPEN', checks: 'none', failedChecks: [] });
     await poller.pollOnce();
     expect(findPr).toHaveBeenCalledTimes(3);
     // A done ticket whose PR was never seen has nothing to wait for.
-    store.putTicket({ ...newTicketState('p', 'REL-2', 'T', 'done', 1), branch: 'b2' });
+    await store.putTicket({ ...newTicketState('p', 'REL-2', 'T', 'done', 1), branch: 'b2' });
     await poller.pollOnce();
     expect(findPr).toHaveBeenCalledTimes(4);
     expect(findPr.mock.calls.map((c) => c[1])).toEqual(['b', 'b', 'b', 'b']);

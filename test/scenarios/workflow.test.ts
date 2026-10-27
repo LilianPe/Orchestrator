@@ -95,7 +95,7 @@ describe('standard workflow', () => {
     await h.advance(180_000);
     await h.send('label.changed', { label: 'agent:reprendre', change: 'added' });
     expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:dev', '/factory:learn']);
-    expect(h.ticket()).toMatchObject({ logical: 'done', prState: 'MERGED' });
+    expect(await h.ticket()).toMatchObject({ logical: 'done', prState: 'MERGED' });
     expect(h.workspaces.cleaned).toEqual(['REL-1']);
   });
 
@@ -105,7 +105,7 @@ describe('standard workflow', () => {
     await h.send('control.pause', {});
     await h.send('session.mentioned', { linearSessionId: 'ls-q', body: 'pourquoi ce choix ?', author: 'L' });
     await h.send('pr.merged', { number: 3, url: 'https://gh/pr/3', branch: 'factory/rel-1-export-csv' });
-    expect(h.store.listQueue().map((q) => q.job)).toEqual(['ask', 'learn']);
+    expect((await h.store.listQueue()).map((q) => q.job)).toEqual(['ask', 'learn']);
     await h.send('control.resume', {});
     expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:dev', '/factory:ask', '/factory:learn']);
   });

@@ -443,11 +443,12 @@ export class PgStore implements AsyncStore {
     return result.rows.map((row) => row.payload);
   }
 
-  async removeFromQueue(projectId: string, ticketId: string): Promise<void> {
+  async removeFromQueue(projectId: string, ticketId: string, queue?: QueueName): Promise<void> {
+    const ofQueue = queue === undefined ? sql`` : sql`and payload->>'queue' = ${queue}`;
     await this.db.execute(
       sql`
         delete from outbox
-        where ticket_id = ${ticketId} and status = 'pending' and payload->>'projectId' = ${projectId}
+        where ticket_id = ${ticketId} and status = 'pending' and payload->>'projectId' = ${projectId} ${ofQueue}
       `,
     );
   }

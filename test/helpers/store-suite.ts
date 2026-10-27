@@ -71,6 +71,17 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     expect(await s.dueTimers(1000)).toEqual([]);
   });
 
+  it("removes a ticket's queued runs, of one queue or of all (ORC-268)", async () => {
+    const s = await store();
+    await s.enqueue(q({ ticketId: 'A', job: 'dev', queue: 'dev' }));
+    await s.enqueue(q({ ticketId: 'A', job: 'ask', queue: 'questions' }));
+    await s.enqueue(q({ ticketId: 'B', job: 'dev', queue: 'dev' }));
+    await s.removeFromQueue('p', 'A', 'dev');
+    expect((await s.listQueue()).map((i) => `${i.ticketId}:${i.job}`).sort()).toEqual(['A:ask', 'B:dev']);
+    await s.removeFromQueue('p', 'A');
+    expect((await s.listQueue()).map((i) => `${i.ticketId}:${i.job}`)).toEqual(['B:dev']);
+  });
+
   it('orders the queue by priority then age, dedupes by ticket+job, and hands an item out once', async () => {
     const s = await store();
     await s.enqueue(q({ ticketId: 'A', priority: 0, enqueuedAt: 1 }));

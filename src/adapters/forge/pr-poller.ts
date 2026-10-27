@@ -37,7 +37,7 @@ export class PrPoller {
       // merged or closed (its number kept in `finalKey`, so a new PR is watched again).
       const finalKey = `pr-final:${t.projectId}:${t.ticketId}`;
       const done = t.logical === "done";
-      if (done && (!t.prNumber || t.prState === "MERGED" || this.d.store.getMeta(finalKey) === String(t.prNumber))) return;
+      if (done && (!t.prNumber || t.prState === "MERGED" || (await this.d.store.getMeta(finalKey)) === String(t.prNumber))) return;
       const project = this.d.projects.find((p) => p.id === t.projectId);
       if (!project) return;
       let pr;
@@ -61,7 +61,7 @@ export class PrPoller {
       if (pr.state === "MERGED" || pr.state === "CLOSED") {
         if (pr.state === "MERGED") this.d.submit({ ...base, id: `pr:${t.ticketId}:${pr.number}:merged`, type: "pr.merged", payload });
         else this.d.submit({ ...base, id: `pr:${t.ticketId}:${pr.number}:closed`, type: "pr.closed", payload });
-        if (done) this.d.store.setMeta(finalKey, String(pr.number));
+        if (done) await this.d.store.setMeta(finalKey, String(pr.number));
         return;
       }
       if (done) return;
