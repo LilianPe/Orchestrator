@@ -28,6 +28,11 @@ export interface RunRecord {
   cwd: string;
   /** What the attempt ran with, set at creation and never changed after (ORC-226). Absent on older records. */
   labels?: AttemptLabels;
+  /**
+   * Paths the attempt must not write, set at its launch from what it read (I12, ORC-274) and handed to
+   * the runner. Absent on a trusted attempt and on records older than ORC-274.
+   */
+  sensitivePaths?: readonly string[];
 }
 
 export interface TimerRecord {
@@ -49,6 +54,8 @@ export interface QueueItem {
   inputText?: string;
   linearSessionId?: string;
   resume?: boolean;
+  /** Those its start was decided with; the launch adds them when what the run reads then is untrusted (ORC-274). */
+  sensitivePaths?: readonly string[];
   priority: number;
   enqueuedAt: number;
 }

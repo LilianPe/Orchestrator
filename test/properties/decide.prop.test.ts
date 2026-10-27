@@ -13,7 +13,7 @@ import {
 } from '../../src/core/types.js';
 import { SqliteStore } from '../../src/store/sqlite-store.js';
 import { DEV_SESSION, PROJECT, sequences, TICKET, VERIFY_FAILURES, type Entry, type Sequences } from './events.js';
-import { decided, effects, fold, isDevStart, params, stepEffects, TIMEOUT, workflow, type Run, type Step } from './fold.js';
+import { decided, effects, fold, isDevStart, launches, params, readsFeedback, stepEffects, TIMEOUT, workflow, type Run, type Step } from './fold.js';
 
 /**
  * Invariants of `decide` (docs/decisions/ORC-138.md, I1 to I12) checked as properties over generated
@@ -21,8 +21,9 @@ import { decided, effects, fold, isDevStart, params, stepEffects, TIMEOUT, workf
  * `decide`/`reduce` can show; the part of an invariant whose mechanism does not exist yet is an
  * `it.todo` naming the ticket that brings it. A property that today's code violates is an `it.fails`
  * per minimal counterexample, which fails on every run, whatever the seed, and only with the expected
- * assertion (`violated`): when the code is fixed, the `it.fails` turns red and must become an `it`
- * that runs the property with the counterexample in its `examples`.
+ * assertion (catch the error and rethrow it only when its message starts with that assertion's label):
+ * when the code is fixed, the `it.fails` turns red and must become an `it` that runs the property with
+ * the counterexample in its `examples`. None is open today.
  */
 
 const wf = workflow();
@@ -67,19 +68,6 @@ const run = (s: Sequences): Run => fold(s.withDuplicates, wf);
 
 /** Runs started while handling a step: decided by `decide`, or the pending job started by `settle`. */
 const starts = (step: Step) => stepEffects(step).filter((e) => e.kind === 'start_run');
-
-/**
- * A known violation, for an `it.fails`: the property must fail on its counterexample with the
- * assertion labelled `label`. Any other outcome returns normally, so the `it.fails` turns red: the
- * code was fixed, or the property now breaks for another reason.
- */
-function violated(label: string, check: (s: Sequences) => void, counterexample: Sequences): void {
-  try {
-    check(counterexample);
-  } catch (err) {
-    if ((err as Error).message.startsWith(label)) throw err;
-  }
-}
 
 describe('decide — properties over generated sequences (ORC-173)', () => {
   it(
@@ -437,49 +425,34 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
     );
 
     /**
-     * A run that reads the pending feedback while part of it came from an untrusted event is sandboxed: the
-     * runs `decide` starts, and with `settle`, the pending job the orchestrator starts later too.
+     * A run that reads the pending feedback while part of it came from an untrusted event is launched with the
+     * sensitive paths, whoever starts it: `decide`, or `settle` on the pending job. Checked on the launches, as
+     * `Orchestrator.launch` hands them to the runner (ORC-274), not on the starts `decide` emits.
      */
-    const feedbackRunSandboxed = (settle: boolean) => (s: Sequences): void => {
+    const feedbackRunSandboxed = (s: Sequences): void => {
       let untrustedPending = false;
       for (const step of run(s).steps) {
-        if (step.kind === 'settled' && !settle) continue;
         if (step.kind === 'shell' && step.event.type === 'run.started' && step.event.feedbackConsumed) untrustedPending = false;
         if (step.kind === 'decided' && step.event.taint === 'untrusted' && step.decision.events.some((e) => e.type === 'feedback.appended')) {
           untrustedPending = true;
         }
-        for (const e of starts(step)) {
-          if (e.input === 'feedback' && untrustedPending) expect(e.sensitivePaths, 'feedback run without the sensitive paths').toEqual(SENSITIVE_PATHS);
+        for (const e of launches(step)) {
+          if (readsFeedback(e, wf) && untrustedPending) expect(e.sensitivePaths, 'feedback run without the sensitive paths').toEqual(SENSITIVE_PATHS);
         }
       }
     };
 
     it(
-      'untrusted feedback relayed by a later trusted event (debounce) still starts a sandboxed run (ORC-269)',
+      'untrusted feedback is launched with the sensitive paths, relayed by a later trusted event (ORC-269) or read by a job pending since before it came in (ORC-274)',
       () => {
-        // The runs decide starts; the pending job settle starts is the known violation below.
-        const counterexample = seq(...delegated('dev'), reply('untrusted'), ext('debounce.fired', { job: 'dev-feedback' }));
-        holds(feedbackRunSandboxed(false), [counterexample]);
-      },
-      TIMEOUT,
-    );
-
-    it.fails(
-      'KNOWN VIOLATION — untrusted feedback that arrives once its job is pending still starts a sandboxed run (settle)',
-      () => {
-        // Found by fast-check once the fold modelled settle: the pending job was decided before the untrusted
-        // reply came in, and settle starts it on all the pending feedback, the untrusted reply included. The
-        // pending job, the queue item and the launch carry no taint: it is to be computed at launch from what the
-        // run reads, with the sensitive paths taken to the runner's sandbox (ORC-151).
-        const counterexample = seq(
-          ...delegated('dev'),
-          runStarted(),
-          reply(),
-          ext('debounce.fired', { job: 'dev-feedback' }),
-          reply('untrusted'),
-          runFinished('failure'),
-        );
-        violated('feedback run without the sensitive paths', feedbackRunSandboxed(true), counterexample);
+        // Relayed by the debounce: decide starts the run on all the pending feedback.
+        const debounced = seq(...delegated('dev'), reply('untrusted'), ext('debounce.fired', { job: 'dev-feedback' }));
+        // Found by fast-check once the fold modelled settle: the pending job was decided before the untrusted reply
+        // came in, and settle starts it once the run's check passes, on all the pending feedback. The launch takes the
+        // taint of what it reads then. (A failed run blocks the ticket: startRun then refuses the pending job.)
+        const pending = (...end: Entry[]) => seq(...delegated('dev'), runStarted(), reply(), ext('debounce.fired', { job: 'dev-feedback' }), reply('untrusted'), ...end);
+        const settled = pending(runFinished('success'), ext('verify.passed', { runId: 'r1', job: 'dev' }));
+        holds(feedbackRunSandboxed, [debounced, settled, pending(runFinished('failure'))]);
       },
       TIMEOUT,
     );

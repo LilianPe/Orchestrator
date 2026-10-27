@@ -2,7 +2,7 @@ import type { JobSpec, Rule, Workflow } from '../config/workflow-schema.js';
 import { evalCondition } from './conditions.js';
 import type { Decision, Effect } from './decision.js';
 import { reduce } from './reduce.js';
-import type { EventType, FactoryEvent, InputKind, Taint, TicketState, VerifyFailure } from './types.js';
+import type { EventType, FactoryEvent, FeedbackItem, InputKind, Taint, TicketState, VerifyFailure } from './types.js';
 
 type StartRun = Extract<Effect, { kind: 'start_run' }>;
 
@@ -12,8 +12,10 @@ const STOPPED = 'Arrêté à la demande';
 /** Paths a run started from an untrusted event must not write; enforced by the runner's sandbox (ORC-151). */
 export const SENSITIVE_PATHS: readonly string[] = ['.github/**', '.factory/**', '.claude/**', 'CODEOWNERS', '.env*'];
 
-export function taintedKnowledge(job: string): string {
-  return `Je ne lance pas ${job} : ce job écrit dans la base de connaissances, et l'événement vient d'une source non fiable.`;
+/** The refusal of a knowledge job (I12): its event is untrusted, or what it would read at its launch is (ORC-274). */
+export function taintedKnowledge(job: string, source: 'event' | 'read' = 'event'): string {
+  const what = source === 'event' ? "l'événement vient" : "des retours qu'il lirait (fil ou commentaires de review) viennent";
+  return `Je ne lance pas ${job} : ce job écrit dans la base de connaissances, et ${what} d'une source non fiable.`;
 }
 
 const BUILT_IN = new Set<EventType>([
@@ -80,8 +82,21 @@ export function isQuestionSession(ticket: TicketState | undefined, sessionId: st
  */
 function runTaint(event: FactoryEvent, ticket: TicketState | undefined, input: InputKind | undefined): Taint {
   if (event.taint === 'untrusted') return 'untrusted';
-  const feedback = input === 'feedback' ? (ticket?.pendingFeedback ?? []) : [];
-  return feedback.some((f) => f.taint === 'untrusted') ? 'untrusted' : 'trusted';
+  return input === 'feedback' && anyUntrusted(ticket?.pendingFeedback ?? []) ? 'untrusted' : 'trusted';
+}
+
+function anyUntrusted(items: readonly FeedbackItem[]): boolean {
+  return items.some((f) => f.taint === 'untrusted');
+}
+
+/**
+ * The sensitive paths of a run at its launch (I12, ORC-274): when its start was decided with them, or
+ * when what the launch reads is untrusted. A launch reads the feedback when it starts, not when
+ * `decide` started it: a job kept pending or queued meanwhile reads the replies that came in since.
+ * `Orchestrator.launch` applies it to every start (a `start_run`, the pending job by `settle`, the queue).
+ */
+export function sensitivePathsAtLaunch(decided: readonly string[] | undefined, read: readonly FeedbackItem[]): readonly string[] | undefined {
+  return decided?.length || anyUntrusted(read) ? SENSITIVE_PATHS : undefined;
 }
 
 /**
