@@ -1,4 +1,5 @@
 import { Client } from 'pg';
+import { PG_TABLE_NAMES } from '../../src/store/pg/schema.js';
 
 /** The Postgres server of the integration project; empty skips its suites. */
 export const PG_URL = process.env['DATABASE_URL'] ?? process.env['TEST_DATABASE_URL'] ?? '';
@@ -27,6 +28,9 @@ export async function createTestDatabase(prefix: string): Promise<{ url: string;
     drop: () => onServer(PG_URL, (c) => c.query(`drop database if exists "${name}" with (force)`)).then(() => undefined),
   };
 }
+
+/** Empties every table of the engine schema, between the tests of a suite sharing one database. */
+export const TRUNCATE_ALL = `truncate table ${PG_TABLE_NAMES.map((name) => `"${name}"`).join(', ')} restart identity cascade`;
 
 export function queryOn<T>(connectionString: string, f: (c: Client) => Promise<T>): Promise<T> {
   return onServer(connectionString, f);

@@ -5,11 +5,10 @@ import { migratePgStore } from '../../src/store/pg/migrate.js';
 import { OUTBOX_LEASE_MS, PgStore } from '../../src/store/pg/pg-store.js';
 import { PG_TABLE_NAMES } from '../../src/store/pg/schema.js';
 import type { QueueItem, RunRecord } from '../../src/store/types.js';
+import { createTestDatabase, PG_URL, TRUNCATE_ALL as TRUNCATE } from '../helpers/pg-database.js';
 import { storeContract } from '../helpers/store-suite.js';
 
-const url = process.env['DATABASE_URL'] ?? process.env['TEST_DATABASE_URL'] ?? '';
-
-const TRUNCATE = `truncate table ${PG_TABLE_NAMES.map((name) => `"${name}"`).join(', ')} restart identity cascade`;
+const url = PG_URL;
 
 function queueItem(patch: Partial<QueueItem>): QueueItem {
   return {
@@ -43,11 +42,13 @@ function runRecord(patch: Partial<RunRecord> = {}): RunRecord {
 }
 
 describe.skipIf(!url)('PgStore integration', () => {
+  let db: Awaited<ReturnType<typeof createTestDatabase>>;
   let pool: Pool;
   let store: PgStore;
 
   beforeAll(async () => {
-    pool = new Pool({ connectionString: url, max: 4 });
+    db = await createTestDatabase('factory_pgstore');
+    pool = new Pool({ connectionString: db.url, max: 4 });
     await migratePgStore(pool);
     store = new PgStore({ pool, now: () => 1_000_000 });
   });
@@ -58,6 +59,7 @@ describe.skipIf(!url)('PgStore integration', () => {
 
   afterAll(async () => {
     await pool.end();
+    await db.drop();
   });
 
   it('applies the migration to an empty database and creates exactly the twelve tables', async () => {
@@ -211,6 +213,16 @@ describe.skipIf(!url)('PgStore integration', () => {
     ]);
     expect(await store.recentEvents(10)).toEqual([second, first]);
     expect(await store.recentEvents(1, 'REL-1')).toEqual([second]);
+  });
+
+  it('lists recent events newest recorded first, whatever their own `at`', async () => {
+    let now = 2_000_000;
+    const ticking = new PgStore({ pool, now: () => (now += 1_000) });
+    const a = { id: 'a', type: 'control.pause', at: 5_000, projectId: 'p', ticketId: 'REL-1', payload: {} } as FactoryEvent;
+    const b = { id: 'b', type: 'control.resume', at: 1.5, projectId: 'p', ticketId: 'REL-2', payload: {} } as FactoryEvent;
+    await ticking.recordEvent(a);
+    await ticking.recordEvent(b);
+    expect(await ticking.recentEvents(10)).toEqual([b, a]);
   });
 
   it('records the schema version the event carries in the inbox and journal columns', async () => {
@@ -388,15 +400,18 @@ describe.skipIf(!url)('PgStore integration', () => {
 });
 
 describe.skipIf(!url)('PgStore, Store contract', () => {
+  let db: Awaited<ReturnType<typeof createTestDatabase>>;
   let pool: Pool;
 
   beforeAll(async () => {
-    pool = new Pool({ connectionString: url, max: 4 });
+    db = await createTestDatabase('factory_contract');
+    pool = new Pool({ connectionString: db.url, max: 4 });
     await migratePgStore(pool);
   });
 
   afterAll(async () => {
     await pool.end();
+    await db.drop();
   });
 
   storeContract(async () => {

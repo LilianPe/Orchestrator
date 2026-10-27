@@ -22,6 +22,24 @@ describe.skipIf(!PG_URL)('openStore and the daemon on Postgres', () => {
     await db.drop();
   });
 
+  const tablesOf = (url: string) =>
+    queryOn(url, async (c) =>
+      (await c.query<{ name: string }>(`select table_name as name from information_schema.tables where table_schema = 'public'`)).rows.map((r) => r.name),
+    );
+
+  it('opens Postgres without migrating it with `migrate: false` (factory plan)', async () => {
+    const other = await createTestDatabase('factory_nomigrate');
+    try {
+      const sqlitePath = join(mkdtempSync(join(tmpdir(), 'factory-store-')), 'factory.db');
+      const { store, kind } = await openStore({ env: { [DATABASE_URL_ENV]: other.url }, sqlitePath, migrationsFolder, migrate: false });
+      expect(kind).toBe('postgres');
+      await store.close();
+      expect(await tablesOf(other.url)).toEqual([]);
+    } finally {
+      await other.drop();
+    }
+  });
+
   it('applies the migrations to an empty database, then again without change', async () => {
     const env = { [DATABASE_URL_ENV]: db.url };
     const sqlitePath = join(mkdtempSync(join(tmpdir(), 'factory-store-')), 'factory.db');
@@ -32,10 +50,7 @@ describe.skipIf(!PG_URL)('openStore and the daemon on Postgres', () => {
       expect(await store.listTickets()).toEqual([]);
       await store.close();
     }
-    const tables = await queryOn(db.url, async (c) =>
-      (await c.query<{ name: string }>(`select table_name as name from information_schema.tables where table_schema = 'public'`)).rows.map((r) => r.name),
-    );
-    expect(tables.sort()).toEqual([...PG_TABLE_NAMES].sort());
+    expect((await tablesOf(db.url)).sort()).toEqual([...PG_TABLE_NAMES].sort());
   });
 
   it('starts the daemon on Postgres when FACTORY_DATABASE_URL is set, and serves its state', async () => {

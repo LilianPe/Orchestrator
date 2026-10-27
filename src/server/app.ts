@@ -114,18 +114,26 @@ export function createApp(d: ServerDeps): Hono {
     }
   });
 
-  app.get('/api/state', async (c) =>
-    c.json({
-      paused: await d.isPaused(),
+  app.get('/api/state', async (c) => {
+    // Independent reads: one round trip's wait on Postgres, not five.
+    const [paused, tickets, queue, running, costTodayUsd] = await Promise.all([
+      d.isPaused(),
+      d.store.listTickets(),
+      d.store.listQueue(),
+      d.store.runsByStatus('running'),
+      d.store.costSince(startOfUtcDay(d.clock.now())),
+    ]);
+    return c.json({
+      paused,
       linearConnected: d.linearConnected(),
-      tickets: await d.store.listTickets(),
-      queue: await d.store.listQueue(),
-      activeRuns: (await d.store.runsByStatus('running')).map(publicRun),
-      costTodayUsd: await d.store.costSince(startOfUtcDay(d.clock.now())),
+      tickets,
+      queue,
+      activeRuns: running.map(publicRun),
+      costTodayUsd,
       budgetUsd: d.dailyBudgetUsd ?? null,
       capacity: d.capacity(),
-    }),
-  );
+    });
+  });
 
   app.get('/api/events/recent', async (c) => c.json(await d.store.recentEvents(100, c.req.query('ticket') || undefined)));
 
@@ -209,7 +217,11 @@ export function createApp(d: ServerDeps): Hono {
     const { text } = (await c.req.json()) as { text?: string };
     if (!text) return c.json({ error: 'text required' }, 400);
     if (run.linearSessionId) await d.tracker.activity(run.linearSessionId, { type: 'elicitation', body: text });
-    await d.blockTicket(run.projectId, run.ticketId, "Question posée par l'agent");
+    // Not awaited: the block waits its turn behind the events before it (a run's launch among them),
+    // and the agent must not wait minutes for an answer, nor ask again when its request times out.
+    d.blockTicket(run.projectId, run.ticketId, "Question posée par l'agent").catch((err: Error) =>
+      d.bus.publish({ kind: 'log', level: 'error', message: `ask ${run.ticketId}: ${err.message}`, at: d.clock.now() }),
+    );
     return c.json({ ok: true });
   });
   app.route('/agent', agent);

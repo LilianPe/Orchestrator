@@ -2,12 +2,9 @@ import { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { migratePgStore } from '../../src/store/pg/migrate.js';
 import { PgStore } from '../../src/store/pg/pg-store.js';
-import { PG_TABLE_NAMES } from '../../src/store/pg/schema.js';
 import { createHarness } from '../helpers/harness.js';
-import { createTestDatabase, PG_URL } from '../helpers/pg-database.js';
+import { createTestDatabase, PG_URL, TRUNCATE_ALL } from '../helpers/pg-database.js';
 import { testPreset } from '../helpers/test-preset.js';
-
-const TRUNCATE = `truncate table ${PG_TABLE_NAMES.map((name) => `"${name}"`).join(', ')} restart identity cascade`;
 
 // The orchestrator on PgStore, through the scenario harness: the daemon's path once
 // FACTORY_DATABASE_URL is set. The full harness moves to Postgres with ORC-228.
@@ -22,7 +19,7 @@ describe.skipIf(!PG_URL)('orchestrator on PgStore', () => {
   });
 
   beforeEach(async () => {
-    await pool.query(TRUNCATE);
+    await pool.query(TRUNCATE_ALL);
   });
 
   afterAll(async () => {

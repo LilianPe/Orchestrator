@@ -161,18 +161,22 @@ export class PgStore implements AsyncStore {
     });
   }
 
+  /**
+   * Newest recorded first, on the indexed `created_at` (the event's own `at` has no index); `seq`
+   * orders a ticket's events recorded in the same millisecond.
+   */
   async recentEvents(limit: number, ticketId?: string): Promise<FactoryEvent[]> {
     const result = ticketId
       ? await this.db.execute<{ payload: FactoryEvent }>(
           sql`
             select payload from journal
             where ticket_id = ${ticketId}
-            order by (payload->>'at')::bigint desc, created_at desc, seq desc
+            order by created_at desc, seq desc
             limit ${limit}
           `,
         )
       : await this.db.execute<{ payload: FactoryEvent }>(
-          sql`select payload from journal order by (payload->>'at')::bigint desc, created_at desc, seq desc limit ${limit}`,
+          sql`select payload from journal order by created_at desc, seq desc limit ${limit}`,
         );
     return result.rows.map((row) => row.payload);
   }
@@ -268,14 +272,8 @@ export class PgStore implements AsyncStore {
   }
 
   async deleteTimer(key: string, fireAt?: number): Promise<void> {
-    if (fireAt === undefined) {
-      await this.db.execute(sql`delete from timers where id = ${key} and status = 'pending'`);
-      return;
-    }
-    await this.db.execute(sql`
-      delete from timers
-      where id = ${key} and status = 'pending' and (payload->>'fireAt')::double precision = ${fireAt}
-    `);
+    const armedAt = fireAt === undefined ? sql`` : sql`and (payload->>'fireAt')::double precision = ${fireAt}`;
+    await this.db.execute(sql`delete from timers where id = ${key} and status = 'pending' ${armedAt}`);
   }
 
   async deleteTimersFor(projectId: string, ticketId: string): Promise<void> {

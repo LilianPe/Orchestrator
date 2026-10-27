@@ -30,7 +30,7 @@ async function setup(extra: { uiPassword?: string } = {}) {
     id: 'r1', projectId: 'p', ticketId: 'REL-1', job: 'dev', queue: 'dev', status: 'running', claudeSessionId: 'c', linearSessionId: 'ls-1',
     startedAt: 1, costUsd: 0.5, turns: 2, lastText: '', token: 'tok', cwd: '/w',
   });
-  return { app, store, tracker, submitted, linearWebhook, blockTicket, transcriptsDir, webDir };
+  return { app, store, bus, tracker, submitted, linearWebhook, blockTicket, transcriptsDir, webDir };
 }
 
 describe('server', () => {
@@ -74,6 +74,19 @@ describe('server', () => {
     expect(res.status).toBe(200);
     expect(tracker.activities('ls-1')).toEqual([{ type: 'elicitation', body: 'Quelle base ?' }]);
     expect(blockTicket).toHaveBeenCalledWith('p', 'REL-1', "Question posée par l'agent");
+  });
+
+  it('agent ask answers without waiting for the block, and reports a failed one', async () => {
+    const { app, blockTicket, bus } = await setup();
+    let fail!: (err: Error) => void;
+    blockTicket.mockImplementation(() => new Promise((_resolve, reject) => (fail = reject)));
+    const logs: string[] = [];
+    bus.subscribe((m) => m.kind === 'log' && logs.push(m.message));
+    const res = await app.request('/agent/ask', { method: 'POST', headers: { authorization: 'Bearer tok', 'content-type': 'application/json' }, body: JSON.stringify({ text: 'Quelle base ?' }) });
+    expect(res.status).toBe(200);
+    fail(new Error('store down'));
+    await new Promise((r) => setImmediate(r));
+    expect(logs).toEqual(['ask REL-1: store down']);
   });
 
   it('returns a transcript and serves the UI', async () => {
