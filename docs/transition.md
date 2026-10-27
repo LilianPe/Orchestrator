@@ -153,6 +153,15 @@ Le premier ticket cité est celui qui touche le module en premier ou le plus ; l
 | `src/adapters/checks/types.ts` | Port `CheckRunner` : vérifications hors de l'agent | garder | ORC-225, ORC-151 |
 | `src/adapters/checks/fake.ts` | `FakeCheckRunner` du harnais | garder | ORC-225 |
 
+### `src/checks/`
+
+| Module | Rôle | Statut | Ticket cible |
+|---|---|---|---|
+| `src/checks/deps.ts` | Contrôle `factory/dependances` : dépendances ajoutées (npm, PyPI) lues dans le contenu avant et après des manifestes, existence au registre et liste autorisée, bloquant ; liste des ajouts pour le journal de sécurité | garder | ORC-165, ORC-151 (appelé par `verify`), ORC-209 (liste autorisée dans `.factory/config.yml`), ORC-223 (journal de sécurité) |
+| `src/checks/registry.ts` | `PackageRegistry`, `HttpPackageRegistry` : registre npm et API JSON de PyPI, `fetch` et URL de base injectables | garder | ORC-165, ORC-213 (requêtes par le proxy de sortie) |
+| `src/checks/fake-registry.ts` | `FakePackageRegistry` des tests | garder | ORC-165 |
+| `src/checks/toml.ts` | Lecteur TOML minimal, pour `pyproject.toml` | garder | ORC-165, ORC-172 (Python) |
+
 ### `src/app/` et racine de `src/`
 
 | Module | Rôle | Statut | Ticket cible |
