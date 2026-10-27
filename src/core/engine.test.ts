@@ -2,7 +2,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { loadWorkflow } from '../config/load-workflow.js';
 import type { Decision } from './decision.js';
-import { decide, SENSITIVE_PATHS, taintedKnowledge } from './engine.js';
+import { decide, SENSITIVE_PATHS, sensitivePathsAtLaunch, taintedKnowledge } from './engine.js';
 import { reduce } from './reduce.js';
 import { newTicketState, type EventPayloads, type EventType, type FactoryEvent, type TicketState } from './types.js';
 
@@ -317,6 +317,14 @@ describe('decide — taint', () => {
     expect(decide(t, ev('ticket.delegated', {}), workflow).effects).toEqual([
       { kind: 'start_run', job: 'dev', input: undefined, inputText: undefined, linearSessionId: undefined },
     ]);
+  });
+
+  it('gives a launch the strongest of the sensitive paths its start was decided with and the taint of what it reads (ORC-274)', () => {
+    expect(sensitivePathsAtLaunch(undefined, [])).toBeUndefined();
+    expect(sensitivePathsAtLaunch(undefined, [...pending(), ...pending('trusted')])).toBeUndefined();
+    expect(sensitivePathsAtLaunch(undefined, pending('untrusted'))).toEqual(SENSITIVE_PATHS);
+    expect(sensitivePathsAtLaunch(SENSITIVE_PATHS, pending('trusted'))).toEqual(SENSITIVE_PATHS);
+    expect(sensitivePathsAtLaunch(['docs/**'], pending('untrusted'))).toEqual(['docs/**', ...SENSITIVE_PATHS]);
   });
 
   it('starts the verify relaunch through the taint rule (ORC-269)', () => {

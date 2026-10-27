@@ -20,6 +20,11 @@ export interface RunRequest {
   readOnly: boolean;
   limits: RunLimits;
   env: Record<string, string>;
+  /**
+   * Paths the run must not write: set when it reads untrusted content (I12, ORC-274). Carried, not
+   * enforced yet: `ClaudeCodeRunner` ignores it until the runner's sandbox does (ORC-151, ORC-204).
+   */
+  sensitivePaths?: readonly string[];
 }
 
 export interface RunResult {

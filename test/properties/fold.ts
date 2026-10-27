@@ -1,7 +1,7 @@
 import type { Parameters } from 'fast-check';
-import type { Workflow } from '../../src/config/workflow-schema.js';
+import type { JobSpec, Workflow } from '../../src/config/workflow-schema.js';
 import type { Decision, Effect } from '../../src/core/decision.js';
-import { decide, refusesDevWork } from '../../src/core/engine.js';
+import { decide, refusesDevWork, sensitivePathsAtLaunch } from '../../src/core/engine.js';
 import { SETTLES_RUN } from '../../src/core/orchestrator.js';
 import { reduce } from '../../src/core/reduce.js';
 import { CREATES_TICKET, type FactoryEvent, type InternalEvent, type ShellEvent, type TicketState } from '../../src/core/types.js';
@@ -64,9 +64,20 @@ type StartRun = Extract<Effect, { kind: 'start_run' }>;
  * One step of the fold: an external event decided, an event for a ticket not tracked yet (dropped as
  * `Orchestrator.handle` drops it), a duplicate dropped by the inbox, a fact of the shell, or the start
  * of the pending job by `Orchestrator.settle` once the run and its verification are over.
+ *
+ * `launches` (of a decided step) and `start` (of a settled one) are the runs launched, as
+ * `Orchestrator.launch` hands them to the runner: with the sensitive paths of what they read then.
  */
 export type Step =
-  | { kind: 'decided'; event: FactoryEvent; before: TicketState | undefined; after: TicketState | undefined; decision: Decision; journalEnd: number }
+  | {
+      kind: 'decided';
+      event: FactoryEvent;
+      before: TicketState | undefined;
+      after: TicketState | undefined;
+      decision: Decision;
+      launches: StartRun[];
+      journalEnd: number;
+    }
   | { kind: 'ignored'; event: FactoryEvent; before: undefined; after: undefined; journalEnd: number }
   | { kind: 'duplicate'; event: FactoryEvent; before: TicketState | undefined; after: TicketState | undefined; journalEnd: number }
   | { kind: 'shell'; event: InternalEvent; before: TicketState | undefined; after: TicketState | undefined; journalEnd: number }
@@ -91,16 +102,32 @@ function takesDevSlot(job: string, wf: Workflow): boolean {
   return wf.jobs[job]?.queue === 'dev';
 }
 
+/** `Orchestrator.startRun` refuses the start: dev work on a merged or undelegated ticket, or on a blocked one. */
+function refusesStart(state: TicketState, job: JobSpec): boolean {
+  return !!refusesDevWork(state, job) || (job.queue === 'dev' && state.blocked);
+}
+
+/**
+ * The run `Orchestrator.launch` hands the runner for a start: with the sensitive paths of the feedback it
+ * reads now (I12, ORC-274). The forge's review comments, untrusted too, are not modelled: no PR has any.
+ */
+function launch(start: StartRun, state: TicketState, wf: Workflow): StartRun {
+  const read = (start.input ?? wf.jobs[start.job]?.input) === 'feedback' ? state.pendingFeedback : [];
+  const sensitivePaths = sensitivePathsAtLaunch(start.sensitivePaths, read);
+  return deepFreeze(sensitivePaths ? { ...start, sensitivePaths } : start);
+}
+
 /**
  * The step of ORC-138: a duplicate id is dropped by the inbox, otherwise `decide` runs and `reduce`
  * applies the event then the decided events, as `Orchestrator.handle` does. Facts of the shell go
  * through `reduce` only, as `Orchestrator.apply` does. Every input is frozen first.
  *
- * Of what the orchestrator does around `decide`, the fold keeps what changes which run starts: the
- * facts of `move` and `cleanup`, `startRun` keeping a dev start for later (`pending.set`) while a run
- * or a verification is in flight, and `settle` starting that pending job after a run result. The
- * launch itself (`run.started`), timers, the scheduler queue and failed effects are not modelled: the
- * generator inserts their facts instead.
+ * Of what the orchestrator does around `decide`, the fold keeps what changes which run starts and
+ * what it reads: the facts of `move` and `cleanup`, `startRun` refusing a start or keeping a dev start
+ * for later (`pending.set`) while a run or a verification is in flight, `settle` starting that pending
+ * job after a run result, and the sensitive paths `launch` gives the run. The launch's own facts
+ * (`run.started`), timers, the scheduler queue and failed effects are not modelled: the generator
+ * inserts their facts instead.
  */
 export function fold(entries: readonly Entry[], wf: Workflow, inbox: Inbox = memoryInbox()): Run {
   const steps: Step[] = [];
@@ -136,7 +163,8 @@ export function fold(entries: readonly Entry[], wf: Workflow, inbox: Inbox = mem
     for (const e of decision.events) next = reduce(next, e);
     journal.push(event, ...decision.events);
     state = next && deepFreeze(next);
-    steps.push({ kind: 'decided', event, before, after: state, decision, journalEnd: journal.length });
+    const launches: StartRun[] = [];
+    steps.push({ kind: 'decided', event, before, after: state, decision, launches, journalEnd: journal.length });
     if (!state) continue;
     let launched = false;
     for (const e of decision.effects) {
@@ -144,10 +172,14 @@ export function fold(entries: readonly Entry[], wf: Workflow, inbox: Inbox = mem
       if (e.kind === 'move') record({ type: 'status.recorded', to: e.to });
       if (e.kind === 'cleanup') record({ type: 'workspace.released' });
       // `startRun`: a dev start it does not refuse, while the run or the verification of the slot is in flight, waits as the pending job;
-      // otherwise it launches, and its run (whose `run.started` is not modelled) holds the slot.
-      if (!isDevStart(e, wf) || refusesDevWork(state, wf.jobs[e.job]!)) continue;
-      if (state.activeRunId || state.verifyingRunId) record({ type: 'pending.set', job: { job: e.job, input: e.input, inputText: e.inputText, resume: e.resume } });
-      else launched = true;
+      // otherwise it launches, and a dev run (whose `run.started` is not modelled) holds the slot.
+      if (e.kind !== 'start_run' || refusesStart(state, wf.jobs[e.job]!)) continue;
+      if (isDevStart(e, wf) && (state.activeRunId || state.verifyingRunId)) {
+        record({ type: 'pending.set', job: { job: e.job, input: e.input, inputText: e.inputText, resume: e.resume, sensitivePaths: e.sensitivePaths } });
+        continue;
+      }
+      launches.push(launch(e, state, wf));
+      if (isDevStart(e, wf)) launched = true;
     }
     // `settle`: once nothing is in flight, the pending job starts, unless startRun refuses it.
     const pending = state.pendingJob;
@@ -155,8 +187,8 @@ export function fold(entries: readonly Entry[], wf: Workflow, inbox: Inbox = mem
     const settledFrom = state;
     record({ type: 'pending.cleared' });
     const job = wf.jobs[pending.job];
-    if (!job || refusesDevWork(state, job)) continue;
-    const start: StartRun = deepFreeze({ kind: 'start_run', ...pending });
+    if (!job || refusesStart(state, job)) continue;
+    const start = launch({ kind: 'start_run', ...pending }, state, wf);
     steps.push({ kind: 'settled', event, before: settledFrom, after: state, start, journalEnd: journal.length });
   }
   return { steps, journal, final: state };
@@ -171,6 +203,11 @@ export function decided(run: Run): Decided[] {
 /** What handling a step carried out: the decided effects, or the start of the pending job by `settle`. */
 export function stepEffects(step: Step): readonly Effect[] {
   return step.kind === 'decided' ? step.decision.effects : step.kind === 'settled' ? [step.start] : [];
+}
+
+/** The runs a step launched, as the runner gets them: decided starts that were not kept pending, or the pending job `settle` started. */
+export function launches(step: Step): readonly StartRun[] {
+  return step.kind === 'decided' ? step.launches : step.kind === 'settled' ? [step.start] : [];
 }
 
 /** The effects, in order, of every decided step, with the starts of pending jobs by `settle`. */

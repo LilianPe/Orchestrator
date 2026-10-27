@@ -2,7 +2,7 @@ import type { JobSpec, Rule, Workflow } from '../config/workflow-schema.js';
 import { evalCondition } from './conditions.js';
 import type { Decision, Effect } from './decision.js';
 import { reduce } from './reduce.js';
-import type { EventType, FactoryEvent, InputKind, Taint, TicketState, VerifyFailure } from './types.js';
+import type { EventType, FactoryEvent, FeedbackItem, InputKind, Taint, TicketState, VerifyFailure } from './types.js';
 
 type StartRun = Extract<Effect, { kind: 'start_run' }>;
 
@@ -80,8 +80,22 @@ export function isQuestionSession(ticket: TicketState | undefined, sessionId: st
  */
 function runTaint(event: FactoryEvent, ticket: TicketState | undefined, input: InputKind | undefined): Taint {
   if (event.taint === 'untrusted') return 'untrusted';
-  const feedback = input === 'feedback' ? (ticket?.pendingFeedback ?? []) : [];
-  return feedback.some((f) => f.taint === 'untrusted') ? 'untrusted' : 'trusted';
+  return input === 'feedback' && anyUntrusted(ticket?.pendingFeedback ?? []) ? 'untrusted' : 'trusted';
+}
+
+function anyUntrusted(items: readonly FeedbackItem[]): boolean {
+  return items.some((f) => f.taint === 'untrusted');
+}
+
+/**
+ * The sensitive paths of a run at its launch (I12, ORC-274): those its start was decided with, and all of
+ * them when what the launch reads is untrusted. A launch reads the feedback when it starts, not when
+ * `decide` started it: a job kept pending or queued meanwhile reads the replies that came in since.
+ * `Orchestrator.launch` applies it to every start (a `start_run`, the pending job by `settle`, the queue).
+ */
+export function sensitivePathsAtLaunch(decided: readonly string[] | undefined, read: readonly FeedbackItem[]): readonly string[] | undefined {
+  if (!anyUntrusted(read)) return decided;
+  return decided ? [...new Set([...decided, ...SENSITIVE_PATHS])] : SENSITIVE_PATHS;
 }
 
 /**

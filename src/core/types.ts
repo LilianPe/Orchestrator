@@ -122,7 +122,11 @@ export type DecidedEvent =
   | { type: 'work.cancelled' }
   | { type: 'verify.started'; runId: string };
 
-export type PendingJob = { job: string; input?: InputKind; inputText?: string; resume?: boolean };
+/**
+ * A dev start kept for when the slot frees. `sensitivePaths`: those its start was decided with; the launch
+ * adds them when what the run reads then is untrusted (I12, ORC-274).
+ */
+export type PendingJob = { job: string; input?: InputKind; inputText?: string; resume?: boolean; sensitivePaths?: readonly string[] };
 
 /** Facts the orchestrator records around an effect it carried out, applied to the ticket by `reduce`. */
 export type ShellEvent =

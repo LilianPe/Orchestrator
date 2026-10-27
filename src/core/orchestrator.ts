@@ -22,7 +22,7 @@ import {
 import type { EventBus } from './bus.js';
 import type { Clock } from './clock.js';
 import type { Effect, OutboxEffect } from './decision.js';
-import { decide, isFenced, refusesDevWork } from './engine.js';
+import { decide, isFenced, refusesDevWork, sensitivePathsAtLaunch, taintedKnowledge } from './engine.js';
 import { attemptLabels, packFingerprints } from './attempt-labels.js';
 import { pickupFailures } from './pickup.js';
 import { buildPrompt, formatFeedback, formatVerifyFailures } from './prompt.js';
@@ -33,6 +33,7 @@ import {
   CREATES_TICKET,
   type EventPayloads,
   type EventType,
+  type FeedbackItem,
   type InputKind,
   type InternalEvent,
   type IssueSnapshot,
@@ -100,6 +101,8 @@ interface StartOpts {
   inputText?: string;
   linearSessionId?: string;
   resume?: boolean;
+  /** Those the start was decided with: kept pending or queued with it, completed at the launch (ORC-274). */
+  sensitivePaths?: readonly string[];
   /** A queued item's place in its queue, kept when it goes back there. */
   enqueuedAt?: number;
 }
@@ -743,13 +746,17 @@ export class Orchestrator {
       inputText: opts.inputText,
       linearSessionId: opts.linearSessionId,
       resume: opts.resume,
+      sensitivePaths: opts.sensitivePaths,
       priority: t.priority,
       enqueuedAt: opts.enqueuedAt ?? this.d.clock.now(),
     };
     // Handed out of the queue: back in line through its claim (`releaseQueued`), not as a new request.
     const fromQueue = recorded !== undefined;
     if (job.queue === 'dev' && (t.activeRunId || t.verifyingRunId)) {
-      await this.apply(t, { type: 'pending.set', job: { job: job.name, input: opts.input, inputText: opts.inputText, resume: opts.resume } });
+      await this.apply(t, {
+        type: 'pending.set',
+        job: { job: job.name, input: opts.input, inputText: opts.inputText, resume: opts.resume, sensitivePaths: opts.sensitivePaths },
+      });
       return 'done';
     }
     // Back in line: through its claim for a start handed out of the queue, as a new request otherwise.
@@ -832,6 +839,28 @@ export class Orchestrator {
       }
     }
 
+    // The feedback the run reads, taken at the launch whoever started it (a decision, settle, the queue):
+    // its taint completes the one the start was decided with (I12, ORC-274).
+    const kind = opts.input ?? job.input;
+    const read: FeedbackItem[] = [];
+    if (kind === 'feedback') {
+      read.push(...t.pendingFeedback);
+      // Review comments are external content: whoever can comment on the PR wrote them, and nothing
+      // authenticates them as the team's (ORC-160). Untrusted, whatever the forge says.
+      if (t.prNumber) {
+        const comments = await forge.unresolvedReviewComments(project.repoPath, t.prNumber);
+        read.push(...comments.map((c) => ({ ...c, taint: 'untrusted' as const })));
+      }
+    }
+    const sensitivePaths = sensitivePathsAtLaunch(opts.sensitivePaths, read);
+    if (sensitivePaths && job.workspace === 'knowledge') {
+      // As decide refuses it (I12), for what it could not see: untrusted content read at the launch.
+      this.d.scheduler.release(key);
+      this.log('warn', `refused ${job.name} on ${ticketId}: it would write the knowledge base from untrusted content`);
+      if (opts.linearSessionId) await tracker.activity(opts.linearSessionId, { type: 'response', body: taintedKnowledge(job.name) });
+      return;
+    }
+
     // Read while the workspace is prepared; a pack it cannot read gives null fingerprints (ORC-226).
     const pack = packFingerprints(this.d.packDir, (err) => this.log('warn', `attempt labels: pack not fingerprinted: ${err.message}`));
     const runId = this.newId();
@@ -858,12 +887,9 @@ export class Orchestrator {
     const resume = wantsResume && !!t.claudeSessionId;
     const claudeSessionId = resume ? t.claudeSessionId! : this.newId();
 
-    const kind = opts.input ?? job.input;
     let input: { kind: InputKind; text: string } | undefined;
     if (kind === 'feedback') {
-      const items = [...t.pendingFeedback];
-      if (t.prNumber) items.push(...(await forge.unresolvedReviewComments(project.repoPath, t.prNumber)));
-      input = { kind, text: items.length ? formatFeedback(items) : '(aucun retour écrit : relisez la PR et le fil Linear)' };
+      input = { kind, text: read.length ? formatFeedback(read) : '(aucun retour écrit : relisez la PR et le fil Linear)' };
     } else if (kind === 'verify_failures') {
       input = { kind, text: formatVerifyFailures(JSON.parse(opts.inputText ?? '[]') as VerifyFailure[]) };
     } else if (kind === 'ci_failures') {
@@ -899,6 +925,7 @@ export class Orchestrator {
       token: this.newId(),
       cwd: ws.path,
       labels,
+      ...(sensitivePaths ? { sensitivePaths } : {}),
     };
     await store.putRun(run);
     await this.apply(t, { type: 'run.started', runId, job: job.name, queue: job.queue, claudeSessionId, feedbackConsumed: kind === 'feedback' });
@@ -920,6 +947,7 @@ export class Orchestrator {
       readOnly: job.workspace === 'trunk-readonly',
       limits: job.limits,
       env: { ...this.d.agentEnv(run), ...(ws.port !== undefined ? { PORT: String(ws.port) } : {}) },
+      ...(sensitivePaths ? { sensitivePaths } : {}),
     });
     this.handles.set(runId, handle);
     this.liveRuns.add(runId);
