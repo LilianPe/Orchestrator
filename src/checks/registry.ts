@@ -61,8 +61,11 @@ export class HttpPackageRegistry implements PackageRegistry {
     } catch (err) {
       return { status: 'unknown', reason: `${url}: ${err instanceof Error ? err.message : String(err)}` };
     }
-    if (res.status === 404) return { status: 'missing' };
-    if (res.status !== 200) return { status: 'unknown', reason: `${url}: HTTP ${res.status}` };
+    if (res.status !== 200) {
+      // Free the connection: the body of an error is not read.
+      await res.body?.cancel().catch(() => undefined);
+      return res.status === 404 ? { status: 'missing' } : { status: 'unknown', reason: `${url}: HTTP ${res.status}` };
+    }
     let body: unknown;
     try {
       body = await res.json();

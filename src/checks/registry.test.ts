@@ -52,4 +52,17 @@ describe('HttpPackageRegistry', () => {
     expect(await reg.lookup('npm', 'b')).toEqual({ status: 'unknown', reason: 'https://registry.npmjs.org/b: HTTP 503' });
     expect(await reg.lookup('pypi', 'c')).toEqual({ status: 'unknown', reason: 'https://pypi.org/pypi/c/json: response is not JSON' });
   });
+
+  it('cancels the body of a 404 or an error response instead of leaving the connection open', async () => {
+    const cancelled: string[] = [];
+    const fetchStub = async (input: string | URL | Request): Promise<Response> => {
+      const url = String(input);
+      const body = new ReadableStream({ cancel: () => void cancelled.push(url) });
+      return new Response(body, { status: url.endsWith('/missing') ? 404 : 500 });
+    };
+    const reg = new HttpPackageRegistry({ fetch: fetchStub as typeof fetch });
+    expect(await reg.lookup('npm', 'missing')).toEqual({ status: 'missing' });
+    expect(await reg.lookup('npm', 'broken')).toMatchObject({ status: 'unknown' });
+    expect(cancelled).toEqual(['https://registry.npmjs.org/missing', 'https://registry.npmjs.org/broken']);
+  });
 });
