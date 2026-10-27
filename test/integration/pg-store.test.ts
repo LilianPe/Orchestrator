@@ -399,13 +399,28 @@ describe.skipIf(!url)('PgStore, Store contract', () => {
     return new PgStore({ pool });
   });
 
-  it('takes a dequeued item out for good: no lease brings it back', async () => {
+  it('hands a queued item out under a lease until its start is recorded, and back in line when released or lost (ORC-150)', async () => {
     await pool.query(TRUNCATE);
-    const store = new PgStore({ pool, now: () => 1_000 });
+    let now = 1_000;
+    const store = new PgStore({ pool, now: () => now });
     const id = await store.enqueue(queueItem({ ticketId: 'ONCE', enqueuedAt: 500 }));
-    expect((await store.dequeue('dev'))?.ticketId).toBe('ONCE');
-    expect(await store.claim('dev', 1_000 + 10 * OUTBOX_LEASE_MS)).toBeUndefined();
-    expect(await store.dequeue('dev')).toBeUndefined();
+    const first = await store.claimQueued('dev', 60_000);
+    expect(first).toMatchObject({ id, item: { ticketId: 'ONCE' } });
+    expect(first!.item).not.toHaveProperty('lease');
+    // Handed out: out of the line, and nobody else gets it under the live lease.
+    expect(await store.listQueue()).toEqual([]);
+    expect(await store.claimQueued('dev', 60_000)).toBeUndefined();
+    expect(await store.releaseQueued(first!)).toBe(true);
+    expect((await store.listQueue()).map((q) => q.ticketId)).toEqual(['ONCE']);
+    // Lost by its holder (a crash): handed out again once the lease expires, under a new token.
+    const lost = await store.claimQueued('dev', 60_000);
+    now += 60_001;
+    const again = await store.claimQueued('dev', 60_000);
+    expect(again).toMatchObject({ id });
+    expect(await store.finishQueued(lost!)).toBe(false);
+    expect(await store.renewQueued(again!, 60_000)).toBe(true);
+    expect(await store.finishQueued(again!)).toBe(true);
+    expect(await store.claimQueued('dev', 60_000)).toBeUndefined();
     const row = await pool.query<{ status: string }>('select status from outbox where id = $1', [id]);
     expect(row.rows[0]?.status).toBe('done');
   });

@@ -1,4 +1,4 @@
-import type { QueueItem, Store } from '../store/types.js';
+import type { QueueClaim, QueueItem, Store } from '../store/types.js';
 import type { QueueName } from './types.js';
 
 export class Scheduler {
@@ -47,7 +47,8 @@ export class Scheduler {
     await this.store.enqueue(item);
   }
 
-  next(queue: QueueName): Promise<QueueItem | undefined> {
-    return this.store.dequeue(queue);
+  /** The next item of a queue, handed out under a lease until its start is recorded (ORC-150). */
+  next(queue: QueueName, leaseMs: number): Promise<QueueClaim | undefined> {
+    return this.store.claimQueued(queue, leaseMs);
   }
 }

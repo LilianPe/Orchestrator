@@ -122,13 +122,30 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     await s.enqueue(q({ ticketId: 'D', priority: 3, enqueuedAt: 4 }));
     await s.enqueue(q({ ticketId: 'B', priority: 3, enqueuedAt: 9 }));
     expect((await s.listQueue()).map((i) => i.ticketId)).toEqual(['C', 'B', 'D', 'A']);
-    expect((await s.dequeue('dev'))!.ticketId).toBe('C');
-    expect((await s.dequeue('dev'))!.ticketId).toBe('B');
-    expect((await s.dequeue('dev'))!.ticketId).toBe('D');
-    expect((await s.dequeue('dev'))!.ticketId).toBe('A');
-    expect(await s.dequeue('dev')).toBeUndefined();
-    expect(await s.dequeue('questions')).toBeUndefined();
+    const claims = [];
+    for (const expected of ['C', 'B', 'D', 'A']) {
+      const claim = (await s.claimQueued('dev', 60_000))!;
+      expect(claim.item.ticketId).toBe(expected);
+      claims.push(claim);
+    }
+    expect(await s.claimQueued('dev', 60_000)).toBeUndefined();
+    expect(await s.claimQueued('questions', 60_000)).toBeUndefined();
     expect(await s.listQueue()).toEqual([]);
+    // Released, an item is back at its place; finished, it is gone.
+    expect(await s.releaseQueued(claims[1]!)).toBe(true);
+    expect((await s.listQueue()).map((i) => i.ticketId)).toEqual(['B']);
+    for (const c of [claims[0]!, claims[2]!, claims[3]!]) expect(await s.finishQueued(c)).toBe(true);
+    expect(await s.finishQueued(claims[0]!)).toBe(false);
+    expect((await s.claimQueued('dev', 60_000))!.item.ticketId).toBe('B');
+  });
+
+  it('keeps a request queued while the same ticket+job is handed out: finishing the claim leaves it (ORC-150)', async () => {
+    const s = await store();
+    await s.enqueue(q({ ticketId: 'A', enqueuedAt: 1 }));
+    const claim = (await s.claimQueued('dev', 60_000))!;
+    await s.enqueue(q({ ticketId: 'A', enqueuedAt: 5, inputText: 'newer' }));
+    await s.finishQueued(claim);
+    expect((await s.listQueue()).map((i) => [i.ticketId, i.inputText])).toEqual([['A', 'newer']]);
   });
 
   it('keeps inbox events in arrival order until processed, and dedups them by id (ORC-147)', async () => {
@@ -295,14 +312,154 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     // The worker that lost the lease can neither renew nor settle the row its new holder runs.
     expect(await s.renewEffect('REL-1:1:2', oldLease, 60_000)).toBe(false);
     expect(await s.completeEffect('REL-1:1:2', oldLease)).toBe(false);
-    expect(await s.failEffect('REL-1:1:2', oldLease)).toBe(false);
+    expect(await s.failEffect('REL-1:1:2', oldLease, 'boom')).toBe(false);
+    expect(await s.retryEffect('REL-1:1:2', oldLease, 'boom', 0)).toBe(false);
     expect((await s.listEffects('p', 'REL-1')).map((r) => r.status)).toEqual(['done', 'running']);
     expect(await s.renewEffect('REL-1:1:2', newLease, 60_000)).toBe(true);
-    expect(await s.failEffect('REL-1:1:2', newLease)).toBe(true);
+    expect(await s.failEffect('REL-1:1:2', newLease, 'boom')).toBe(true);
     // A settled row is settled once.
     expect(await s.completeEffect('REL-1:1:2', newLease)).toBe(false);
     expect(await s.claimEffect('p', 'REL-1', 60_000)).toBeUndefined();
-    expect((await s.listEffects('p', 'REL-1')).map((r) => r.status)).toEqual(['done', 'failed']);
+    expect((await s.listEffects('p', 'REL-1')).map((r) => [r.status, r.attempts])).toEqual([
+      ['done', 1],
+      ['dead', 2],
+    ]);
+  });
+
+  it('lists a handed-out queue item again once its lease expired, and removes handed-out items of a stopped ticket (ORC-150)', async () => {
+    const s = await store();
+    await s.enqueue(q({ ticketId: 'A' }));
+    await s.enqueue(q({ ticketId: 'B', enqueuedAt: 2 }));
+    // A's holder died: its lease is over, the item is in line again.
+    expect(await s.claimQueued('dev', -1)).toMatchObject({ item: { ticketId: 'A' } });
+    expect((await s.listQueue()).map((i) => i.ticketId)).toEqual(['A', 'B']);
+    expect((await s.listQueue())[0]).not.toHaveProperty('lease');
+    // B is being started when its ticket is stopped: gone, and its claim cannot put it back.
+    const a = (await s.claimQueued('dev', 60_000))!;
+    const b = (await s.claimQueued('dev', 60_000))!;
+    expect([a.item.ticketId, b.item.ticketId]).toEqual(['A', 'B']);
+    await s.removeFromQueue('p', 'B');
+    expect(await s.releaseQueued(b)).toBe(false);
+    expect(await s.releaseQueued(a)).toBe(true);
+    expect((await s.listQueue()).map((i) => i.ticketId)).toEqual(['A']);
+  });
+
+  it('lets a stop of the ticket\'s work pass effects held back by their backoff, and cancels them (ORC-150)', async () => {
+    const s = await store();
+    await s.appendInbox(delegatedEvent('e1'));
+    await s.decide(request(delegatedEvent('e1')));
+    const row = await s.claimEffect('p', 'REL-1', 60_000);
+    if (typeof row !== 'object') throw new Error('expected a claimed row');
+    expect(await s.retryEffect(row.id, row.lease!, 'Linear down', 60_000)).toBe(true);
+    await s.appendInbox(delegatedEvent('e2'));
+    // Not a stop: it waits for the retry.
+    expect(await s.decide(request(delegatedEvent('e2'), { effects: [] }))).toMatchObject({ status: 'waiting' });
+    // A stop goes first: the held rows are cancelled, with no result to decide.
+    expect(await s.decide(request(delegatedEvent('e2'), { effects: [{ kind: 'stop_run' }], clearTimers: true }))).toMatchObject({
+      status: 'committed',
+      preempted: ['REL-1:1:1', 'REL-1:1:2'],
+    });
+    expect((await s.listEffects('p', 'REL-1')).map((r) => [r.id, r.status])).toEqual([
+      ['REL-1:1:1', 'failed'],
+      ['REL-1:1:2', 'failed'],
+      ['REL-1:2:1', 'pending'],
+    ]);
+    expect(await s.pendingInbox(10)).toEqual([]);
+    // A running effect still holds a stop: it ends on its own.
+    const stop = await s.claimEffect('p', 'REL-1', 60_000);
+    expect(stop).toMatchObject({ id: 'REL-1:2:1' });
+    await s.appendInbox(delegatedEvent('e3'));
+    expect(await s.decide(request(delegatedEvent('e3'), { effects: [{ kind: 'stop_run' }], clearTimers: true }))).toMatchObject({ status: 'waiting' });
+  });
+
+  it('lets a stop pass the results of the earlier effects of a decision held by a backoff (ORC-150)', async () => {
+    const s = await store();
+    await s.appendInbox(delegatedEvent('e1'));
+    await s.decide(request(delegatedEvent('e1')));
+    const done = await s.claimEffect('p', 'REL-1', 60_000);
+    if (typeof done !== 'object') throw new Error('expected a claimed row');
+    expect(await s.completeEffect(done.id, done.lease)).toBe(true);
+    const held = await s.claimEffect('p', 'REL-1', 60_000);
+    if (typeof held !== 'object') throw new Error('expected a claimed row');
+    expect(await s.retryEffect(held.id, held.lease!, 'Linear down', 60_000)).toBe(true);
+    // effect:REL-1:1:1 is in the inbox ahead of the stop, and waits for the retry like any event.
+    await s.appendInbox(delegatedEvent('e2'));
+    expect(await s.decide(request(delegatedEvent('e2'), { effects: [] }))).toMatchObject({ status: 'waiting' });
+    expect(await s.decide(request(delegatedEvent('e2'), { effects: [{ kind: 'stop_run' }], clearTimers: true }))).toMatchObject({
+      status: 'committed',
+      preempted: ['REL-1:1:2'],
+    });
+    expect((await s.pendingInbox(10)).map((e) => e.id)).toEqual(['effect:REL-1:1:1']);
+  });
+
+  it('writes the result of a done effect to the inbox as effect:<id>, with its row, in one transaction (ORC-150)', async () => {
+    const s = await store();
+    await s.appendInbox(delegatedEvent('e1'));
+    await s.decide(request(delegatedEvent('e1')));
+    const row = await s.claimEffect('p', 'REL-1', 60_000);
+    if (typeof row !== 'object') throw new Error('expected a claimed row');
+    expect(row.attempts).toBe(1);
+    expect(await s.completeEffect(row.id, row.lease)).toBe(true);
+    expect(await s.pendingInbox(10)).toEqual([
+      {
+        id: 'effect:REL-1:1:1', type: 'effect.done', at: expect.any(Number), schemaVersion: 2, taint: 'trusted', projectId: 'p', ticketId: 'REL-1',
+        payload: { effectId: 'REL-1:1:1', kind: 'comment', eventId: 'e1', attempts: 1 },
+      },
+    ]);
+    // Settled once: no second result.
+    expect(await s.completeEffect(row.id, row.lease)).toBe(false);
+    expect((await s.pendingInbox(10)).map((e) => e.id)).toEqual(['effect:REL-1:1:1']);
+  });
+
+  it("puts a failed effect back after its backoff, and the ticket's later rows behind it (ORC-150)", async () => {
+    const s = await store();
+    await s.appendInbox(delegatedEvent('e1'));
+    await s.decide(request(delegatedEvent('e1')));
+    const first = await s.claimEffect('p', 'REL-1', 60_000);
+    if (typeof first !== 'object') throw new Error('expected a claimed row');
+    // Due at once (a delay already over): claimable again, the attempt counted.
+    expect(await s.retryEffect(first.id, first.lease!, 'Linear down', -1)).toBe(true);
+    expect((await s.listEffects('p', 'REL-1'))[0]).toMatchObject({ status: 'pending', attempts: 1, error: 'Linear down' });
+    expect(await s.effectTickets()).toEqual([{ projectId: 'p', ticketId: 'REL-1' }]);
+    const again = await s.claimEffect('p', 'REL-1', 60_000);
+    if (typeof again !== 'object') throw new Error('expected a claimed row');
+    expect(again).toMatchObject({ id: 'REL-1:1:1', attempts: 2 });
+    // Pending, but not before its retry: nobody claims it, nor the row behind it.
+    expect(await s.retryEffect(again.id, again.lease!, 'Linear down', 60_000)).toBe(true);
+    expect(await s.claimEffect('p', 'REL-1', 60_000)).toBe('busy');
+    expect(await s.effectTickets()).toEqual([]);
+    // A retry is no result: nothing in the inbox.
+    expect(await s.pendingInbox(10)).toEqual([]);
+  });
+
+  it('lets a failed effect die in one transaction: rest of its decision skipped, its timers gone, effect:<id> in the inbox (ORC-150)', async () => {
+    const s = await store();
+    await s.appendInbox(delegatedEvent('e1'));
+    await s.decide(request(delegatedEvent('e1'), {
+      effects: [
+        { kind: 'comment', body: 'a' },
+        { kind: 'labels', add: ['x'], remove: [] },
+        { kind: 'settle' },
+      ],
+    }));
+    const row = await s.claimEffect('p', 'REL-1', 60_000);
+    if (typeof row !== 'object') throw new Error('expected a claimed row');
+    expect(await s.failEffect(row.id, row.lease!, 'Linear down')).toBe(true);
+    expect((await s.listEffects('p', 'REL-1')).map((r) => [r.id, r.status])).toEqual([
+      ['REL-1:1:1', 'dead'],
+      ['REL-1:1:2', 'failed'],
+      ['REL-1:1:3', 'pending'],
+    ]);
+    expect(await s.dueTimers(Number.MAX_SAFE_INTEGER)).toEqual([]);
+    expect(await s.pendingInbox(10)).toEqual([
+      expect.objectContaining({
+        id: 'effect:REL-1:1:1',
+        type: 'effect.failed',
+        payload: { effectId: 'REL-1:1:1', kind: 'comment', eventId: 'e1', attempts: 1, error: 'Linear down' },
+      }),
+    ]);
+    // The settle row still runs.
+    expect(await s.claimEffect('p', 'REL-1', 60_000)).toMatchObject({ id: 'REL-1:1:3' });
   });
 
   it('updates a ticket from its stored state, and leaves a missing one alone (ORC-149)', async () => {

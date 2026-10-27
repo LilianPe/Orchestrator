@@ -40,6 +40,16 @@ export interface IssueSnapshot {
   priority: number;
 }
 
+/** The result of an outbox effect, back through the inbox as `effect:<id>` (ORC-150). */
+export interface EffectResultPayload {
+  /** Outbox id of the effect, `ticket:seq:i`. */
+  effectId: string;
+  kind: string;
+  /** The event whose decision wrote the effect. */
+  eventId: string;
+  attempts: number;
+}
+
 export interface EventPayloads {
   'ticket.delegated': { linearSessionId?: string; promptContext?: string; issue?: IssueSnapshot };
   'ticket.undelegated': Record<string, never>;
@@ -63,6 +73,10 @@ export interface EventPayloads {
   'control.pause': Record<string, never>;
   'control.resume': Record<string, never>;
   'control.stop': Record<string, never>;
+  /** An outbox effect carried out (ORC-150). */
+  'effect.done': EffectResultPayload;
+  /** An outbox effect that failed on its last attempt (ORC-150): the ticket is blocked. */
+  'effect.failed': EffectResultPayload & { error: string };
 }
 
 export type EventType = keyof EventPayloads;

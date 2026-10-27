@@ -23,11 +23,10 @@ export interface PutTicketOptions {
 }
 
 /**
- * The `Store` port as Postgres serves it, plus the outbox operations the effect executors of
- * ORC-150 build on. `dequeue` (from `Store`) takes an item out for good, as the SQLite queue did;
- * `claim` hands it out under a lease instead, and `completeEffect` settles it.
+ * The `Store` port as Postgres serves it, plus the raw queue claim `claimQueued` builds on: `claim`
+ * hands a queue row out under a lease (`FOR UPDATE SKIP LOCKED`), and `completeEffect` settles it.
  */
 export interface AsyncStore extends Store {
   putTicket(t: TicketState, options?: PutTicketOptions): Promise<void>;
-  claim(queue: QueueName, now?: number): Promise<DequeuedEffect | undefined>;
+  claim(queue: QueueName, now?: number, leaseMs?: number, token?: string): Promise<DequeuedEffect | undefined>;
 }

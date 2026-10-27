@@ -6,9 +6,19 @@ import { ActivityRelay } from '../adapters/tracker/activity-relay.js';
 import type { Tracker } from '../adapters/tracker/types.js';
 import type { WorkspaceManager } from '../adapters/workspace/types.js';
 import type { JobSpec, Workflow } from '../config/workflow-schema.js';
+import type { EffectRetry } from '../runtime/outbox.js';
 import { Worker } from '../runtime/worker.js';
 import { workflowVersion } from '../runtime/workflow-version.js';
-import type { DecisionOutcome, DecisionPlan, DecisionRequest, OutboxRow, RunRecord, Store, WorkflowVersion } from '../store/types.js';
+import {
+  LEASE_MS,
+  type DecisionOutcome,
+  type DecisionPlan,
+  type DecisionRequest,
+  type OutboxRow,
+  type RunRecord,
+  type Store,
+  type WorkflowVersion,
+} from '../store/types.js';
 import type { EventBus } from './bus.js';
 import type { Clock } from './clock.js';
 import type { Effect, OutboxEffect } from './decision.js';
@@ -73,8 +83,10 @@ export interface OrchestratorDeps {
    * so the inbox is not dispatched before the tracker is connected. Default false (tests).
    */
   holdInboxUntilReplay?: boolean;
-  /** Lease of a claimed outbox row (ORC-149); default 60 s, renewed every 20 s while the effect runs. */
+  /** Lease of a claimed outbox row or queue item (ORC-149, ORC-150); default 60 s, renewed every 20 s while it runs. */
   effectLeaseMs?: number;
+  /** Retries of an effect that throws (ORC-150); default `EFFECT_RETRY` (8 attempts, 1 s doubled, 5 min at most). */
+  effectRetry?: EffectRetry;
   /** Retries of an inbox row whose processing throws (ORC-149); default `PROCESS_RETRY`. */
   processRetry?: { attempts: number; baseMs: number };
 }
@@ -141,10 +153,11 @@ export class Orchestrator {
       request: (event) => this.request(event),
       committed: (event, outcome) => this.committed(event, outcome),
       execute: (row) => this.execute(row),
-      effectFailed: (row, err) => this.effectFailed(row, err),
       leaseMs: d.effectLeaseMs,
       retry: d.processRetry,
       left: (row) => void this.freeSlot(row),
+      effectRetry: d.effectRetry,
+      now: () => d.clock.now(),
     });
   }
 
@@ -491,10 +504,17 @@ export class Orchestrator {
     }
     bus.publish({ kind: 'event', event });
     if (outcome.plan.note) this.log('info', outcome.plan.note);
+    if (outcome.preempted.length > 0) {
+      this.log('warn', `${event.type} ${event.id} cancelled the effects held back by their retry: ${outcome.preempted.join(', ')}`);
+    }
     if (outcome.plan.ticket) bus.publish({ kind: 'ticket', ticket: outcome.plan.ticket });
   }
 
-  /** Executes one outbox row of a decision, after its commit (the executors of ORC-150 take this over). */
+  /**
+   * Executes one outbox row of a decision, after its commit, for the outbox executor (ORC-150):
+   * throws when the effect failed. The executor retries it, then lets it die; its result comes back
+   * through the inbox (`effect:<id>`), and a dead one blocks the ticket by `decide`.
+   */
   private async execute(row: OutboxRow): Promise<void> {
     const project = await this.runtimeFor(row.projectId, row.ticketId);
     if (!project) return;
@@ -505,31 +525,6 @@ export class Orchestrator {
     }
     this.d.bus.publish({ kind: 'command', projectId: project.id, ticketId: row.ticketId, command: effect });
     await this.exec(project, row.ticketId, effect);
-  }
-
-  /**
-   * An effect threw: the worker skips the decision's later effects, and the ticket is blocked with
-   * the error. The timers the decision armed go too, as when they were armed after the effects.
-   */
-  private async effectFailed(row: OutboxRow, err: Error): Promise<void> {
-    const { store } = this.d;
-    this.log('error', `command ${row.effect.kind} for ${row.ticketId ?? '*'}: ${err.message}`);
-    if (!row.ticketId || row.effect.kind === 'settle') return;
-    await store.deleteTimersArmedBy(row.eventId);
-    const project = await this.runtimeFor(row.projectId, row.ticketId);
-    if (project) await this.failTicket(project, row.ticketId, `Erreur : ${err.message}`);
-  }
-
-  private async failTicket(project: ProjectRuntime, ticketId: string, reason: string): Promise<void> {
-    const found = await this.d.store.getTicket(project.id, ticketId);
-    if (!found) return;
-    const t = await this.apply(found, { type: 'ticket.blocked', reason });
-    try {
-      const session = await this.sessionFor(t);
-      await this.d.tracker.activity(session, { type: 'error', body: reason });
-    } catch (err) {
-      this.log('warn', `could not post error activity for ${ticketId}: ${(err as Error).message}`);
-    }
   }
 
   private async settle(project: ProjectRuntime, ticketId: string): Promise<void> {
@@ -554,14 +549,21 @@ export class Orchestrator {
    * Each item starts in its own ticket's task, without waiting for it (a long `prepare` holds only
    * that ticket); `admitting` counts the starts not past their slot yet, so a drain hands out no
    * more items than free slots.
+   *
+   * An item is handed out under a lease (ORC-150), renewed while its start runs, and leaves the
+   * queue only once its start is recorded (the run written) or it is dropped; it goes back in line
+   * when it gets no slot. A crash between the two leaves it in the queue: the next start hands it
+   * out again once the lease expires.
    */
   private async drainNow(queue: QueueName): Promise<void> {
     if (this.stopping) return;
+    const leaseMs = this.d.effectLeaseMs ?? LEASE_MS;
     const n = (await this.d.store.listQueue()).filter((q) => q.queue === queue).length;
     for (let i = 0; i < n; i++) {
       if ((await this.isPaused()) || (await this.overBudget()) || this.d.scheduler.free(queue) - this.admitting[queue] <= 0) return;
-      const item = await this.d.scheduler.next(queue);
-      if (!item) return;
+      const claim = await this.d.scheduler.next(queue, leaseMs);
+      if (!claim) return;
+      const item = claim.item;
       this.admitting[queue]++;
       let done = false;
       const admitted = () => {
@@ -569,12 +571,26 @@ export class Orchestrator {
         done = true;
         this.admitting[queue]--;
       };
+      const renew = setInterval(() => {
+        this.d.store.renewQueued(claim, leaseMs).catch((err: unknown) => this.log('warn', `lease of queued ${item.job} on ${item.ticketId}: ${(err as Error).message}`));
+      }, Math.max(1, Math.floor(leaseMs / 3)));
+      renew.unref();
+      let finished = false;
+      const taken = () => this.d.store.finishQueued(claim).then(() => void (finished = true));
       this.worker
         .exclusive(item, async () => {
           const project = await this.runtimeFor(item.projectId, item.ticketId);
-          if (project) await this.startRun(project, item.ticketId, item, admitted);
+          const outcome = project ? await this.startRun(project, item.ticketId, item, admitted, taken) : 'done';
+          clearInterval(renew);
+          if (outcome === 'queued') await this.d.store.releaseQueued(claim);
+          else if (!finished) await this.d.store.finishQueued(claim);
         })
-        .catch((err: unknown) => this.log('error', `start ${item.job} on ${item.ticketId}: ${(err as Error).message}`))
+        .catch(async (err: unknown) => {
+          clearInterval(renew);
+          this.log('error', `start ${item.job} on ${item.ticketId}: ${(err as Error).message}`);
+          // Back in line: the item is tried again at the next drain.
+          await this.d.store.releaseQueued(claim).catch(() => false);
+        })
         .finally(admitted);
     }
   }
@@ -593,7 +609,8 @@ export class Orchestrator {
     const t = await this.ticket(project.id, ticketId);
     switch (c.kind) {
       case 'start_run':
-        return this.startRun(project, ticketId, c);
+        await this.startRun(project, ticketId, c);
+        return;
       case 'stop_run': {
         if (c.linearSessionId) {
           for (const r of await store.runsByStatus('running')) {
@@ -667,17 +684,41 @@ export class Orchestrator {
     await this.apply(await this.ticket(project.id, t.ticketId), { type: 'status.recorded', to });
   }
 
-  /** `admitted` is called once the start took its slot, or will not take one (`drainNow`). */
-  private async startRun(project: ProjectRuntime, ticketId: string, opts: StartOpts, admitted?: () => void): Promise<void> {
+  /**
+   * `admitted` is called once the start took its slot, or will not take one (`drainNow`); `recorded`
+   * once the run is written. Resolves `queued` when the start went to the queue, `done` otherwise
+   * (started, set pending, refused or blocked).
+   */
+  private async startRun(
+    project: ProjectRuntime,
+    ticketId: string,
+    opts: StartOpts,
+    admitted?: () => void,
+    recorded?: () => Promise<void>,
+  ): Promise<'queued' | 'done'> {
     const job = project.workflow.jobs[opts.job];
-    if (!job) return this.log('error', `unknown job ${opts.job}`);
+    if (!job) {
+      this.log('error', `unknown job ${opts.job}`);
+      return 'done';
+    }
     const t = await this.ticket(project.id, ticketId);
     // As decide refuses it, also for the starts it does not see: the pending job by settle, the queue by drain.
     const refused = refusesDevWork(t, job);
     if (refused === 'undelegated') {
-      return this.log('warn', `refused ${job.name} on ${ticketId}: the ticket is not delegated to ${PRODUCT_NAME}`);
+      this.log('warn', `refused ${job.name} on ${ticketId}: the ticket is not delegated to ${PRODUCT_NAME}`);
+      return 'done';
     }
-    if (refused === 'merged') return this.log('info', `refused ${job.name} on ${ticketId}: its PR is merged`);
+    if (refused === 'merged') {
+      this.log('info', `refused ${job.name} on ${ticketId}: its PR is merged`);
+      return 'done';
+    }
+    // A decision that starts a dev job unblocks the ticket first: blocked now, it was blocked since
+    // (a failed launch whose notice failed, a stop, recover()), and a retried or queued start must
+    // not launch a run on it.
+    if (job.queue === 'dev' && t.blocked) {
+      this.log('warn', `refused ${job.name} on ${ticketId}: the ticket is blocked (${t.blockReason ?? 'no reason'})`);
+      return 'done';
+    }
     if (job.workspace === 'knowledge' && this.d.knowledgeConfigured === false) {
       this.log('info', `skipped ${job.name} on ${ticketId}: no knowledge repo configured`);
       if (opts.linearSessionId) {
@@ -685,7 +726,7 @@ export class Orchestrator {
           .activity(opts.linearSessionId, { type: 'response', body: `Aucune base de connaissance n'est configurée pour ${PRODUCT_NAME} : je ne peux rien retenir.` })
           .catch((err: Error) => this.log('warn', `could not answer ${ticketId}: ${err.message}`));
       }
-      return;
+      return 'done';
     }
     const item = {
       projectId: project.id,
@@ -699,24 +740,31 @@ export class Orchestrator {
       priority: t.priority,
       enqueuedAt: opts.enqueuedAt ?? this.d.clock.now(),
     };
+    // Handed out of the queue: back in line through its claim (`releaseQueued`), not as a new request.
+    const fromQueue = recorded !== undefined;
     if (job.queue === 'dev' && (t.activeRunId || t.verifyingRunId)) {
       await this.apply(t, { type: 'pending.set', job: { job: job.name, input: opts.input, inputText: opts.inputText, resume: opts.resume } });
-      return;
+      return 'done';
     }
-    if (this.stopping || (await this.isPaused())) return this.d.scheduler.enqueue(item);
+    // Back in line: through its claim for a start handed out of the queue, as a new request otherwise.
+    const requeue = async (): Promise<'queued'> => {
+      if (!fromQueue) await this.d.scheduler.enqueue(item);
+      return 'queued';
+    };
+    if (this.stopping || (await this.isPaused())) return requeue();
     if (await this.overBudget()) {
-      await this.d.scheduler.enqueue(item);
+      const queued = await requeue();
       await this.noteBudget(project, ticketId);
-      return;
+      return queued;
     }
     const key = `${ticketId}:${job.queue}`;
     // A start from a decision leaves alone the slots a drain promised to the items it dequeued.
     const promised = admitted ? 0 : this.admitting[job.queue];
     const slot = this.d.scheduler.free(job.queue) > promised ? this.d.scheduler.tryAcquire(job.queue, key) : null;
     admitted?.();
-    if (slot === null) return this.d.scheduler.enqueue(item);
+    if (slot === null) return requeue();
     try {
-      await this.launch(project, ticketId, job, opts, slot, key);
+      await this.launch(project, ticketId, job, opts, slot, key, recorded);
     } catch (err) {
       this.d.scheduler.release(key);
       let fresh = await this.ticket(project.id, ticketId);
@@ -728,9 +776,15 @@ export class Orchestrator {
       }
       const reason = `Erreur au lancement : ${(err as Error).message}`;
       fresh = await this.apply(fresh, ...events, { type: 'ticket.blocked', reason });
-      const session = opts.linearSessionId ?? (await this.sessionFor(fresh));
-      await this.d.tracker.activity(session, { type: 'error', body: reason });
+      // The ticket is blocked: a failed notice must not fail the effect, whose retry would start again.
+      try {
+        const session = opts.linearSessionId ?? (await this.sessionFor(fresh));
+        await this.d.tracker.activity(session, { type: 'error', body: reason });
+      } catch (e) {
+        this.log('warn', `could not post the launch error of ${ticketId}: ${(e as Error).message}`);
+      }
     }
+    return 'done';
   }
 
   private async noteBudget(project: ProjectRuntime, ticketId: string): Promise<void> {
@@ -744,7 +798,15 @@ export class Orchestrator {
     );
   }
 
-  private async launch(project: ProjectRuntime, ticketId: string, job: JobSpec, opts: StartOpts, slot: number, key: string): Promise<void> {
+  private async launch(
+    project: ProjectRuntime,
+    ticketId: string,
+    job: JobSpec,
+    opts: StartOpts,
+    slot: number,
+    key: string,
+    recorded?: () => Promise<void>,
+  ): Promise<void> {
     const { tracker, store, clock, workspaces, forge } = this.d;
     const wf = project.workflow;
     const issue = await tracker.getIssue(ticketId);
@@ -829,6 +891,10 @@ export class Orchestrator {
     };
     await store.putRun(run);
     await this.apply(t, { type: 'run.started', runId, job: job.name, queue: job.queue, claudeSessionId, feedbackConsumed: kind === 'feedback' });
+    // The run is written: a queued item it came from leaves the queue now (a crash from here on is recover()'s).
+    // Logged, not thrown: the run is launched either way, and a queue item left behind is refused
+    // when handed out again (its ticket has a run, or is blocked).
+    await recorded?.().catch((err: Error) => this.log('warn', `queued ${job.name} on ${ticketId} not taken out of the queue: ${err.message}`));
     if (this.d.beforeRun) await this.d.beforeRun(run).catch((err: Error) => this.log('warn', `beforeRun: ${err.message}`));
 
     const handle = this.d.runner.start({

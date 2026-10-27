@@ -5,12 +5,23 @@ import { Pool } from 'pg';
 import type { OutboxEffect } from '../../core/decision.js';
 import { normalizeTicket, type FactoryEvent, type QueueName, type TicketState } from '../../core/types.js';
 import type { StoredEvent } from '../../core/upcast.js';
-import type { DecisionOutcome, DecisionRequest, OutboxRow, QueueItem, RunRecord, TimerRecord, WorkflowVersion } from '../types.js';
+import {
+  effectResult,
+  LEASE_MS,
+  type DecisionOutcome,
+  type DecisionRequest,
+  type OutboxRow,
+  type QueueClaim,
+  type QueueItem,
+  type RunRecord,
+  type TimerRecord,
+  type WorkflowVersion,
+} from '../types.js';
 import * as schema from './schema.js';
 import type { AsyncStore, DequeuedEffect, PutTicketOptions } from './types.js';
 
-/** How long a `claim` keeps a row out of another worker's reach. */
-export const OUTBOX_LEASE_MS = 30_000;
+/** How long a `claim` keeps a row out of another worker's reach, by default (ORC-129: 60 s). */
+export const OUTBOX_LEASE_MS = LEASE_MS;
 
 export interface PgStoreOptions {
   connectionString?: string;
@@ -74,11 +85,23 @@ interface OutboxPayload {
   effect: OutboxEffect;
   /** Claim token of the running row (`claimEffect`). */
   lease?: string;
+  /** The last failure of the effect (ORC-150). */
+  error?: string;
 }
+
+/** Columns read for an outbox row. */
+const OUTBOX_COLUMNS = sql.raw(`id, status, attempts, payload`);
+
+type OutboxSqlRow = {
+  id: string;
+  status: OutboxRow['status'];
+  attempts: number;
+  payload: OutboxPayload;
+};
 
 type Tx = Parameters<Parameters<NodePgDatabase<typeof schema>['transaction']>[0]>[0];
 
-const outboxRow = (id: string, status: OutboxRow['status'], p: OutboxPayload): OutboxRow => ({
+const outboxRow = ({ id, status, attempts, payload: p }: OutboxSqlRow): OutboxRow => ({
   id,
   projectId: p.projectId,
   ...(p.ticketId === undefined ? {} : { ticketId: p.ticketId }),
@@ -87,6 +110,8 @@ const outboxRow = (id: string, status: OutboxRow['status'], p: OutboxPayload): O
   i: p.i,
   effect: p.effect,
   status,
+  attempts: Number(attempts),
+  ...(p.error === undefined ? {} : { error: p.error }),
   ...(p.lease === undefined ? {} : { lease: p.lease }),
 });
 
@@ -238,14 +263,30 @@ export class PgStore implements AsyncStore {
         limit 1
       `);
       const firstId = first.rows[0]?.id;
-      if (firstId !== undefined && firstId !== event.id) return { status: 'waiting', reason: `${firstId} comes first` };
-      const open = await tx.execute<{ id: string }>(sql`
-        select id from outbox
+      // Only results of done effects ahead: a stop may pass them, as it passes the effects in backoff.
+      let jumped = false;
+      if (firstId !== undefined && firstId !== event.id) {
+        const ahead = await tx.execute<{ type: string }>(sql`
+          select type from inbox
+          where processed_at is null and payload->>'projectId' = ${event.projectId}
+            and (payload->>'ticketId') is not distinct from ${ticketId}
+            and (received_at, id) < (select received_at, id from inbox where id = ${event.id})
+        `);
+        if (!ahead.rows.every((r) => r.type === 'effect.done')) return { status: 'waiting', reason: `${firstId} comes first` };
+        jumped = true;
+      }
+      // Locked: an executor claiming one of them right now finishes first, and is seen here.
+      const open = await tx.execute<{ id: string; status: string; later: boolean }>(sql`
+        select id, status, available_at > to_timestamp(${now / 1000}) as later from outbox
         where ticket_id = ${outboxTicket(ticketId)} and ${DECISION_ROW} and payload->>'projectId' = ${event.projectId}
           and status in ('pending', 'running')
-        limit 1
+        order by ${OUTBOX_ORDER}
+        for update
       `);
-      if (open.rows[0]) return { status: 'waiting', reason: `effect ${open.rows[0].id} is unfinished` };
+      // Held back by its backoff (nothing running): a stop of the ticket's work may go first (ORC-150).
+      const backedOff = open.rows.length > 0 && open.rows.every((r) => r.status === 'pending') && open.rows[0]!.later;
+      if (open.rows[0] && !backedOff) return { status: 'waiting', reason: `effect ${open.rows[0].id} is unfinished` };
+      if (jumped && !backedOff) return { status: 'waiting', reason: `${firstId} comes first` };
       const markProcessed = sql`update inbox set processed_at = to_timestamp(${now / 1000}) where id = ${event.id}`;
       if ((await tx.execute(sql`select 1 from journal where event_id = ${event.id} limit 1`)).rowCount) {
         await tx.execute(markProcessed);
@@ -256,6 +297,15 @@ export class PgStore implements AsyncStore {
       const frozen = known?.workflowHash && known.workflowHash !== req.workflow.hash ? await this.readWorkflow(tx, known.workflowHash) : req.workflow;
       if (!frozen) throw new Error(`workflow version ${known?.workflowHash} of ${ticketId} is not stored`);
       const plan = req.decide(known, frozen);
+      const preempted = open.rows.map((r) => r.id);
+      if (preempted.length > 0) {
+        if (!plan.clearTimers) return { status: 'waiting', reason: `effect ${preempted[0]} waits for its retry`, backoff: true };
+        await tx.execute(sql`
+          update outbox set status = 'failed', updated_at = to_timestamp(${now / 1000}),
+            payload = payload || jsonb_build_object('error', ${`cancelled by ${event.id}`}::text)
+          where id = any(${sql.param(preempted)}::text[])
+        `);
+      }
 
       const seqResult = await tx.execute<{ seq: number }>(
         sql`select coalesce(max(seq), 0) + 1 as seq from journal where ticket_id is not distinct from ${ticketId}`,
@@ -296,7 +346,7 @@ export class PgStore implements AsyncStore {
         effectIds.push(id);
       }
       await tx.execute(markProcessed);
-      return { status: 'committed', seq, effectIds, known, plan };
+      return { status: 'committed', seq, effectIds, known, plan, preempted };
     });
   }
 
@@ -311,24 +361,38 @@ export class PgStore implements AsyncStore {
   }
 
   /**
-   * The ticket's first unfinished decision row, claimed under a lease (`for update`: two workers
-   * never claim the same row). `busy` while another worker's lease on it is live.
+   * The ticket's first unfinished decision row, claimed under a lease (ORC-150). The head row is
+   * found without a lock, then locked with `FOR UPDATE SKIP LOCKED`: an executor never waits for
+   * another one, and two never claim the same row. Locking the head itself (not "the first row I
+   * can lock") keeps the ticket's effects in order: a locked head is `busy`, never skipped over.
    */
   async claimEffect(projectId: string, ticketId: string | undefined, leaseMs: number): Promise<OutboxRow | 'busy' | undefined> {
     const now = this.now();
     return this.db.transaction(async (tx) => {
-      const result = await tx.execute<{ id: string; status: OutboxRow['status']; live: boolean; payload: OutboxPayload }>(sql`
-        select id, status, coalesce(lease_until >= to_timestamp(${now / 1000}), false) as live, payload
-        from outbox
+      const head = await tx.execute<{ id: string }>(sql`
+        select id from outbox
         where ticket_id = ${outboxTicket(ticketId)} and ${DECISION_ROW} and payload->>'projectId' = ${projectId}
           and status in ('pending', 'running')
         order by ${OUTBOX_ORDER}
         limit 1
-        for update
       `);
-      const row = result.rows[0];
-      if (!row) return undefined;
+      const headId = head.rows[0]?.id;
+      if (headId === undefined) return undefined;
+      const locked = await tx.execute<OutboxSqlRow & { live: boolean; later: boolean }>(sql`
+        select ${OUTBOX_COLUMNS},
+          coalesce(lease_until >= to_timestamp(${now / 1000}), false) as live,
+          available_at > to_timestamp(${now / 1000}) as later
+        from outbox
+        where id = ${headId}
+        for update skip locked
+      `);
+      const row = locked.rows[0];
+      // Another executor holds it right now (claiming or settling it): not ours to take.
+      if (!row) return 'busy' as const;
+      // Settled between the two reads: the next head is for the next claim.
+      if (row.status !== 'pending' && row.status !== 'running') return 'busy' as const;
       if (row.status === 'running' && row.live) return 'busy' as const;
+      if (row.status === 'pending' && row.later) return 'busy' as const;
       const lease = randomUUID();
       await tx.execute(sql`
         update outbox set status = 'running', attempts = attempts + 1,
@@ -336,7 +400,7 @@ export class PgStore implements AsyncStore {
           payload = payload || jsonb_build_object('lease', ${lease}::text)
         where id = ${row.id}
       `);
-      return outboxRow(row.id, 'running', { ...row.payload, lease });
+      return outboxRow({ ...row, status: 'running', attempts: Number(row.attempts) + 1, payload: { ...row.payload, lease } });
     });
   }
 
@@ -349,43 +413,102 @@ export class PgStore implements AsyncStore {
     return (result.rowCount ?? 0) > 0;
   }
 
-  async failEffect(id: string, lease: string): Promise<boolean> {
-    return this.settleEffect(id, 'failed', lease);
+  /**
+   * Settles a running row under its claim, in one transaction with what goes with it (`then`). The
+   * ticket's lock is taken first, as `appendInbox` and `decide` do: the result event written to the
+   * inbox gets its `received_at` in commit order, and no decision of the ticket reads in between.
+   */
+  private async settleHeld<T>(
+    id: string,
+    lease: string | undefined,
+    then: (tx: Tx, row: OutboxSqlRow) => Promise<T>,
+  ): Promise<T | false> {
+    const ticket = await this.db.execute<{ ticket_id: string }>(sql`select ticket_id from outbox where id = ${id}`);
+    const ticketId = ticket.rows[0]?.ticket_id;
+    if (ticketId === undefined) return false;
+    return this.db.transaction(async (tx) => {
+      await tx.execute(ticketLock(ticketId === '*' ? null : ticketId));
+      const owned = lease === undefined ? sql`true` : sql`payload->>'lease' = ${lease}`;
+      const held = await tx.execute<OutboxSqlRow>(sql`
+        select ${OUTBOX_COLUMNS} from outbox where id = ${id} and status = 'running' and ${owned} for update
+      `);
+      const row = held.rows[0];
+      return row ? then(tx, row) : false;
+    });
   }
 
-  /** Settles a running row, only under its claim token when one is given (decision rows). */
-  private async settleEffect(id: string, status: 'done' | 'failed', lease: string | undefined): Promise<boolean> {
-    const owned = lease === undefined ? sql`true` : sql`payload->>'lease' = ${lease}`;
+  private async appendResult(tx: Tx, event: FactoryEvent): Promise<void> {
+    await tx.execute(sql`
+      insert into inbox (id, event_id, type, payload, received_at, schema_version)
+      values (${event.id}, ${event.id}, ${event.type}, ${JSON.stringify(event)}::jsonb, clock_timestamp(), ${event.schemaVersion})
+      on conflict do nothing
+    `);
+  }
+
+  async completeEffect(id: string, lease?: string, at?: number): Promise<boolean> {
+    const now = this.now();
+    return this.settleHeld(id, lease, async (tx, row) => {
+      await tx.execute(sql`update outbox set status = 'done', lease_until = null, updated_at = to_timestamp(${now / 1000}) where id = ${id}`);
+      // A decision row reports back to the inbox (ORC-150); a legacy queue row has nobody to tell.
+      if (lease !== undefined && 'effect' in row.payload) await this.appendResult(tx, effectResult(outboxRow(row), at ?? now));
+      return true;
+    });
+  }
+
+  async retryEffect(id: string, lease: string, error: string, delayMs: number): Promise<boolean> {
+    const now = this.now();
     const result = await this.db.execute(sql`
-      update outbox set status = ${status}, lease_until = null, updated_at = to_timestamp(${this.now() / 1000})
-      where id = ${id} and status = 'running' and ${owned}
+      update outbox set status = 'pending', lease_until = null,
+        available_at = to_timestamp(${(now + delayMs) / 1000}), updated_at = to_timestamp(${now / 1000}),
+        payload = (payload - 'lease') || jsonb_build_object('error', ${error}::text)
+      where id = ${id} and status = 'running' and payload->>'lease' = ${lease}
     `);
     return (result.rowCount ?? 0) > 0;
   }
 
-  /** Tickets whose first unfinished row is claimable: pending, or running under an expired lease. */
+  async failEffect(id: string, lease: string, error: string, at?: number): Promise<boolean> {
+    const now = this.now();
+    return this.settleHeld(id, lease, async (tx, row) => {
+      const stamp = sql`to_timestamp(${now / 1000})`;
+      await tx.execute(sql`
+        update outbox set status = 'dead', lease_until = null, updated_at = ${stamp},
+          payload = payload || jsonb_build_object('error', ${error}::text)
+        where id = ${id}
+      `);
+      await tx.execute(sql`
+        update outbox set status = 'failed', updated_at = ${stamp}
+        where ${DECISION_ROW} and payload->>'eventId' = ${row.payload.eventId} and status = 'pending' and effect <> 'settle'
+      `);
+      await tx.execute(sql`delete from timers where status = 'pending' and payload->>'armedBy' = ${row.payload.eventId}`);
+      await this.appendResult(tx, effectResult(outboxRow(row), at ?? now, error));
+      return true;
+    });
+  }
+
+  /** Tickets whose first unfinished row is claimable: pending past its backoff, or running under an expired lease. */
   async effectTickets(): Promise<{ projectId: string; ticketId?: string }[]> {
     const now = this.now();
     const result = await this.db.execute<{ project_id: string; ticket_id: string | null }>(sql`
       select project_id, ticket_id from (
         select distinct on (outbox.ticket_id, payload->>'projectId')
-          payload->>'projectId' as project_id, payload->>'ticketId' as ticket_id, status, lease_until
+          payload->>'projectId' as project_id, payload->>'ticketId' as ticket_id, status, lease_until, available_at
         from outbox
         where ${DECISION_ROW} and status in ('pending', 'running')
         order by outbox.ticket_id, payload->>'projectId', ${OUTBOX_ORDER}
       ) head
-      where status = 'pending' or coalesce(lease_until < to_timestamp(${now / 1000}), true)
+      where (status = 'pending' and available_at <= to_timestamp(${now / 1000}))
+        or (status = 'running' and coalesce(lease_until < to_timestamp(${now / 1000}), true))
     `);
     return result.rows.map((r) => ({ projectId: r.project_id, ...(r.ticket_id === null ? {} : { ticketId: r.ticket_id }) }));
   }
 
   async listEffects(projectId: string, ticketId?: string): Promise<OutboxRow[]> {
-    const result = await this.db.execute<{ id: string; status: OutboxRow['status']; payload: OutboxPayload }>(sql`
-      select id, status, payload from outbox
+    const result = await this.db.execute<OutboxSqlRow>(sql`
+      select ${OUTBOX_COLUMNS} from outbox
       where ticket_id = ${outboxTicket(ticketId)} and ${DECISION_ROW} and payload->>'projectId' = ${projectId}
       order by ${OUTBOX_ORDER}
     `);
-    return result.rows.map((r) => outboxRow(r.id, r.status, r.payload));
+    return result.rows.map(outboxRow);
   }
 
   /** Read-modify-write of the projection under the ticket's advisory lock. */
@@ -577,7 +700,7 @@ export class PgStore implements AsyncStore {
           select id, status from outbox
           where ticket_id = ${item.ticketId}
             and effect = ${item.job}
-            and status in ('pending', 'running')
+            and status = 'pending'
             and payload->>'queue' is not null
           order by created_at, id
           limit 1
@@ -586,13 +709,12 @@ export class PgStore implements AsyncStore {
       );
       const current = existing.rows[0];
       if (current) {
-        // A deduped row keeps its place in line, as the SQLite queue keeps `enqueued_at`.
-        if (current.status === 'pending') {
-          await tx.execute(sql`
-            update outbox set payload = ${JSON.stringify(item)}::jsonb, updated_at = to_timestamp(${this.now() / 1000})
-            where id = ${current.id}
-          `);
-        }
+        // A deduped row keeps its place in line, as the SQLite queue keeps `enqueued_at`. A row being
+        // handed out is not one: its claim's finish would remove the newer request with it.
+        await tx.execute(sql`
+          update outbox set payload = ${JSON.stringify(item)}::jsonb, updated_at = to_timestamp(${this.now() / 1000})
+          where id = ${current.id}
+        `);
         return current.id;
       }
 
@@ -624,37 +746,51 @@ export class PgStore implements AsyncStore {
   }
 
   /**
-   * The `Store` queue: takes the next pending item of a queue out for good (status `done`), in the
-   * SQLite order (priority, then age). Not gated by `available_at`: the legacy queue has no delay.
-   * `FOR UPDATE SKIP LOCKED` keeps two daemons from taking the same item.
+   * The `Store` queue (ORC-150): hands out the next item of a queue under a lease, in the SQLite
+   * order (priority, then age), with `FOR UPDATE SKIP LOCKED`: two daemons never take the same
+   * item, and an item whose holder died is handed out again once its lease expires. The claim
+   * token sits in `payload.lease` while the row is `running`.
    */
-  async dequeue(queue: QueueName): Promise<QueueItem | undefined> {
+  async claimQueued(queue: QueueName, leaseMs: number): Promise<QueueClaim | undefined> {
+    const lease = randomUUID();
+    const row = await this.claim(queue, this.now(), leaseMs, lease);
+    if (!row) return undefined;
+    const item: QueueItem & { lease?: string } = { ...row.payload };
+    delete item.lease;
+    return { id: row.id, lease, item };
+  }
+
+  async renewQueued(claim: QueueClaim, leaseMs: number): Promise<boolean> {
     const now = this.now();
-    return this.db.transaction(async (tx) => {
-      const result = await tx.execute<{ id: string; payload: QueueItem }>(sql`
-        select id, payload from outbox
-        where status = 'pending' and payload->>'queue' = ${queue}
-        order by ${QUEUE_ORDER}
-        limit 1
-        for update skip locked
-      `);
-      const row = result.rows[0];
-      if (!row) return undefined;
-      await tx.execute(sql`
-        update outbox set status = 'done', attempts = attempts + 1, lease_until = null,
-          updated_at = to_timestamp(${now / 1000})
-        where id = ${row.id}
-      `);
-      return row.payload;
-    });
+    const result = await this.db.execute(sql`
+      update outbox set lease_until = to_timestamp(${(now + leaseMs) / 1000}), updated_at = to_timestamp(${now / 1000})
+      where id = ${claim.id} and status = 'running' and payload->>'lease' = ${claim.lease}
+    `);
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  async finishQueued(claim: QueueClaim): Promise<boolean> {
+    return this.settleQueued(claim, 'done');
+  }
+
+  async releaseQueued(claim: QueueClaim): Promise<boolean> {
+    return this.settleQueued(claim, 'pending');
+  }
+
+  private async settleQueued(claim: QueueClaim, status: 'done' | 'pending'): Promise<boolean> {
+    const result = await this.db.execute(sql`
+      update outbox set status = ${status}, lease_until = null, payload = payload - 'lease', updated_at = to_timestamp(${this.now() / 1000})
+      where id = ${claim.id} and status = 'running' and payload->>'lease' = ${claim.lease}
+    `);
+    return (result.rowCount ?? 0) > 0;
   }
 
   /**
-   * Claims the next pending effect for a queue with `FOR UPDATE SKIP LOCKED`, marks it `running`
-   * and returns it with a lease. An expired lease makes the row claimable again; `completeEffect`
-   * settles it. Not used by the orchestrator yet: the outbox executors arrive with ORC-150.
+   * Claims the next pending item of a queue with `FOR UPDATE SKIP LOCKED`, marks it `running` and
+   * returns it with a lease (`leaseMs`, ORC-129: 60 s by default). An expired lease makes the row
+   * claimable again; `completeEffect` (or `finishQueued` / `releaseQueued` under `token`) settles it.
    */
-  async claim(queue: QueueName, now = this.now()): Promise<DequeuedEffect | undefined> {
+  async claim(queue: QueueName, now = this.now(), leaseMs = OUTBOX_LEASE_MS, token?: string): Promise<DequeuedEffect | undefined> {
     return this.db.transaction(async (tx) => {
       const result = await tx.execute<{
         id: string;
@@ -682,13 +818,15 @@ export class PgStore implements AsyncStore {
       const row = result.rows[0];
       if (!row) return undefined;
       const attempts = Number(row.attempts) + 1;
-      const leaseUntil = now + OUTBOX_LEASE_MS;
+      const leaseUntil = now + leaseMs;
+      const withToken = token === undefined ? sql`payload` : sql`payload || jsonb_build_object('lease', ${token}::text)`;
       await tx.execute(sql`
         update outbox set
           status = 'running',
           attempts = ${attempts},
           lease_until = to_timestamp(${leaseUntil / 1000}),
-          updated_at = to_timestamp(${now / 1000})
+          updated_at = to_timestamp(${now / 1000}),
+          payload = ${withToken}
         where id = ${row.id}
       `);
       return {
@@ -704,27 +842,26 @@ export class PgStore implements AsyncStore {
     });
   }
 
-  async completeEffect(id: string, lease?: string): Promise<boolean> {
-    return this.settleEffect(id, 'done', lease);
-  }
-
+  /** Items in line: pending, or handed out under a lease that expired (their holder died), as SQLite lists them. */
   async listQueue(): Promise<QueueItem[]> {
     const result = await this.db.execute<{ payload: QueueItem }>(
       sql`
-        select payload from outbox
-        where status = 'pending' and payload->>'queue' is not null
+        select payload - 'lease' as payload from outbox
+        where payload->>'queue' is not null
+          and (status = 'pending' or (status = 'running' and coalesce(lease_until < to_timestamp(${this.now() / 1000}), true)))
         order by ${QUEUE_ORDER}
       `,
     );
     return result.rows.map((row) => row.payload);
   }
 
+  /** Handed-out items too (a stop during their start): `releaseQueued` then finds nothing to put back. */
   async removeFromQueue(projectId: string, ticketId: string, queue?: QueueName): Promise<void> {
     const ofQueue = queue === undefined ? sql`` : sql`and payload->>'queue' = ${queue}`;
     await this.db.execute(
       sql`
         delete from outbox
-        where ticket_id = ${ticketId} and status = 'pending' and payload->>'projectId' = ${projectId}
+        where ticket_id = ${ticketId} and status in ('pending', 'running') and payload->>'projectId' = ${projectId}
           and payload->>'queue' is not null ${ofQueue}
       `,
     );

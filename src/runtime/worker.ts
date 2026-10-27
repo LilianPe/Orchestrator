@@ -1,11 +1,10 @@
 import type { FactoryEvent } from '../core/types.js';
 import { upcast, type StoredEvent } from '../core/upcast.js';
 import type { DecisionOutcome, DecisionRequest, OutboxRow, Store } from '../store/types.js';
+import { OutboxExecutor, type EffectRetry } from './outbox.js';
 
 /** Inbox rows read per pass. */
 const INBOX_BATCH = 100;
-/** Lease of a claimed outbox row, renewed every third of it while its effect runs (ORC-129: 60 s, renewed every 20 s). */
-export const EFFECT_LEASE_MS = 60_000;
 /**
  * Processings of a row that throws, in this process: the n-th retry after `baseMs * 3^(n-1)`
  * (2 s, 6 s, 18 s, 54 s: about 80 s in all). Past the last one, the row waits for the next start.
@@ -21,13 +20,15 @@ export interface WorkerDeps {
   request(event: FactoryEvent): DecisionRequest;
   /** After the commit, before the decision's effects: bus, logs, in-memory slots. */
   committed(event: FactoryEvent, outcome: Extract<DecisionOutcome, { status: 'committed' }>): Promise<void>;
-  /** Executes one outbox row. Throws when the effect failed. */
+  /** Executes one outbox row. Throws when the effect failed: the executor retries it, then lets it die (ORC-150). */
   execute(row: OutboxRow): Promise<void>;
-  /** An effect threw: the worker skips the decision's later effects (`settle` aside), then calls this. */
-  effectFailed(row: OutboxRow, err: Error): Promise<void>;
   leaseMs?: number;
   /** Retries of a row whose processing throws (`PROCESS_RETRY` by default). */
   retry?: { attempts: number; baseMs: number };
+  /** Retries of an effect that throws (`EFFECT_RETRY` by default). */
+  effectRetry?: EffectRetry;
+  /** The time of the effect results it writes to the inbox; the store's clock by default. */
+  now?: () => number;
   /** A row left for the next start: past its last retry, or behind such a row. Must not throw. */
   left?(row: StoredEvent): void;
 }
@@ -50,9 +51,11 @@ const whose = (r: TicketRef): string => r.ticketId ?? `the events without a tick
  *   order; tickets run side by side, so a long effect (`workspaces.prepare`, an `npm ci`) holds
  *   only its own ticket. Across processes, the store's ticket lock and its `waiting` outcome
  *   (an older row, or an unfinished effect, of the same ticket) keep the same order.
- * - **Effects after the commit.** Each outbox row is claimed under a lease renewed while it runs:
- *   a worker that dies leaves it to another once the lease expires. At least once: an effect cut
- *   after it acted runs again (idempotency per effect: ORC-162; executors, backoff: ORC-150).
+ * - **Effects after the commit.** The ticket's outbox rows go through the `OutboxExecutor`
+ *   (ORC-150): claimed under a lease renewed while they run, retried with a backoff, dead past
+ *   their last attempt, and each result written back to the inbox as `effect:<id>`, decided here
+ *   like any event. A worker that dies leaves its row to another once the lease expires. At least
+ *   once: an effect cut after it acted runs again (idempotency per effect: ORC-162).
  * - **A failure holds its ticket.** A row whose preparation or transaction throws stays pending
  *   and is retried with a backoff (`PROCESS_RETRY`); the later rows of its ticket (or, for an
  *   event without a ticket, of its project) wait behind it and go once it passes. Past the last
@@ -76,19 +79,37 @@ export class Worker {
   private retryTimers = new Set<NodeJS.Timeout>();
   private readonly retry: { attempts: number; baseMs: number };
   /** Rows that found another worker's row or effect first: retried at the next poll. */
-  private waited = new Set<string>();
-  /** Events with a failed effect: their later effects are skipped (in this process). */
-  private failedEvents = new Set<string>();
+  private waited = new Map<string, string>();
   private tasks = new Set<Promise<unknown>>();
   private pass: Promise<number> | undefined;
   private again = false;
   private poller: NodeJS.Timeout | undefined;
   private stopped = false;
-  private readonly leaseMs: number;
+  private readonly executor: OutboxExecutor;
 
   constructor(private d: WorkerDeps) {
-    this.leaseMs = d.leaseMs ?? EFFECT_LEASE_MS;
     this.retry = d.retry ?? PROCESS_RETRY;
+    this.executor = new OutboxExecutor({
+      store: d.store,
+      log: d.log,
+      execute: (row) => d.execute(row),
+      retryIn: (delayMs) => this.wakeIn(delayMs),
+      leaseMs: d.leaseMs,
+      retry: d.effectRetry,
+      now: d.now,
+    });
+  }
+
+  /** Looks at the store again in `delayMs` (an effect's retry is due), as the poll would. */
+  private wakeIn(delayMs: number): void {
+    if (this.stopped) return;
+    const timer = setTimeout(() => {
+      this.retryTimers.delete(timer);
+      this.waited.clear();
+      this.kick().catch((e: unknown) => this.d.log('error', `worker: ${(e as Error).message}`));
+    }, delayMs + 1);
+    timer.unref();
+    this.retryTimers.add(timer);
   }
 
   /**
@@ -169,7 +190,7 @@ export class Worker {
 
   private async scan(): Promise<number> {
     let n = 0;
-    const exclude = [...this.skipped, ...this.waited, ...this.queuedIds];
+    const exclude = [...this.skipped, ...this.waited.keys(), ...this.queuedIds];
     for (const row of await this.d.store.pendingInbox(INBOX_BATCH, exclude)) {
       const key = ticketKey(row);
       this.queuedIds.add(row.id);
@@ -203,12 +224,14 @@ export class Worker {
   /** The ticket's loop: its unfinished effects first, then its next row, until both are empty. */
   private async drainTicket(ref: TicketRef, key: string): Promise<void> {
     for (;;) {
-      if ((await this.runEffects(ref)) === 'busy') {
-        this.waitAll(key);
-        break;
-      }
+      const effects = await this.executor.runTicket(ref.projectId, ref.ticketId);
+      // Their results are in the inbox now: the next pass reads them.
+      if (effects.settled > 0) this.kickInBackground();
+      // Effects held (another worker's lease, a backoff): the next row still goes to the store, which
+      // lets a stop of the ticket's work pass a backoff (ORC-150) and answers `waiting` otherwise.
       const row = this.queued.get(key)?.shift();
       if (!row) break;
+      // `held`: only a backoff holds it, so the ticket's next row is tried (a stop passes them both).
       if ((await this.process(row, key)) === 'waiting') {
         this.waitAll(key);
         break;
@@ -223,12 +246,12 @@ export class Worker {
   private waitAll(key: string): void {
     for (const row of this.queued.get(key) ?? []) {
       this.queuedIds.delete(row.id);
-      this.waited.add(row.id);
+      this.waited.set(row.id, key);
     }
     this.queued.delete(key);
   }
 
-  private async process(row: StoredEvent, key: string): Promise<'done' | 'waiting'> {
+  private async process(row: StoredEvent, key: string): Promise<'done' | 'held' | 'waiting'> {
     try {
       const holder = this.holders.get(key);
       if (holder !== undefined && holder !== row.id) {
@@ -250,11 +273,12 @@ export class Worker {
         return 'done';
       }
       if (outcome.status === 'waiting') {
-        this.waited.add(row.id);
-        return 'waiting';
+        this.waited.set(row.id, key);
+        return outcome.backoff ? 'held' : 'waiting';
       }
       this.passed(row, key);
       if (outcome.status === 'committed') {
+        this.unwait(key);
         try {
           await this.d.committed(event, outcome);
         } catch (err) {
@@ -290,6 +314,20 @@ export class Worker {
     this.retryTimers.add(timer);
   }
 
+  /**
+   * A row of the ticket went through (a stop that cancelled a backoff, say): its rows that found it
+   * held are tried again now rather than at the next poll.
+   */
+  private unwait(key: string): void {
+    let any = false;
+    for (const [id, k] of this.waited) {
+      if (k !== key) continue;
+      this.waited.delete(id);
+      any = true;
+    }
+    if (any) this.kickInBackground();
+  }
+
   /** No retry left for this row in this process: it waits for the next start. */
   private givenUp(id: string): boolean {
     return (this.failures.get(id) ?? 0) >= this.retry.attempts || this.stopped;
@@ -303,47 +341,5 @@ export class Worker {
     for (const id of this.behind.get(key)?.keys() ?? []) this.skipped.delete(id);
     this.behind.delete(key);
     this.kickInBackground();
-  }
-
-  private async runEffects(ref: TicketRef): Promise<'done' | 'busy'> {
-    const { store } = this.d;
-    for (;;) {
-      const row = await store.claimEffect(ref.projectId, ref.ticketId, this.leaseMs);
-      if (row === undefined) return 'done';
-      if (row === 'busy') return 'busy';
-      const lease = row.lease ?? '';
-      if (this.failedEvents.has(row.eventId) && row.effect.kind !== 'settle') {
-        await store.failEffect(row.id, lease);
-        continue;
-      }
-      const renew = setInterval(() => {
-        store
-          .renewEffect(row.id, lease, this.leaseMs)
-          .then((held) => {
-            if (!held) this.d.log('warn', `effect ${row.id}: lease lost to another worker while it ran`);
-          })
-          .catch((err: unknown) => this.d.log('warn', `lease of ${row.id}: ${(err as Error).message}`));
-      }, Math.max(1, Math.floor(this.leaseMs / 3)));
-      renew.unref();
-      let failure: Error | undefined;
-      try {
-        await this.d.execute(row);
-      } catch (err) {
-        failure = err as Error;
-      } finally {
-        clearInterval(renew);
-      }
-      // Settled only under this claim: a worker that lost its lease leaves the row to its new holder.
-      if (failure) {
-        if (await store.failEffect(row.id, lease)) {
-          this.failedEvents.add(row.eventId);
-          await this.d.effectFailed(row, failure);
-        } else {
-          this.d.log('warn', `effect ${row.id} failed (${failure.message}), but its lease went to another worker: not settled here`);
-        }
-      } else if (!(await store.completeEffect(row.id, lease))) {
-        this.d.log('warn', `effect ${row.id} done, but its lease went to another worker: not settled here`);
-      }
-    }
   }
 }

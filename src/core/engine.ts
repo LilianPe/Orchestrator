@@ -7,6 +7,7 @@ import type { EventType, FactoryEvent, InputKind, Taint, TicketState, VerifyFail
 type StartRun = Extract<Effect, { kind: 'start_run' }>;
 
 const STOP_MESSAGE = 'Arrêté. Répondez dans ce fil ou posez le label agent:reprendre pour relancer.';
+const STOPPED = 'Arrêté à la demande';
 
 /** Paths a run started from an untrusted event must not write; enforced by the runner's sandbox (ORC-151). */
 export const SENSITIVE_PATHS: readonly string[] = ['.github/**', '.factory/**', '.claude/**', 'CODEOWNERS', '.env*'];
@@ -17,6 +18,7 @@ export function taintedKnowledge(job: string): string {
 
 const BUILT_IN = new Set<EventType>([
   'control.pause', 'control.resume', 'control.stop', 'run.finished', 'verify.passed', 'verify.failed', 'debounce.fired', 'pr.opened',
+  'effect.done', 'effect.failed',
 ]);
 
 function empty(): Decision {
@@ -24,7 +26,7 @@ function empty(): Decision {
 }
 
 function stop(out: Decision): Decision {
-  out.events.push({ type: 'work.cancelled' }, { type: 'ticket.blocked', reason: 'Arrêté à la demande' });
+  out.events.push({ type: 'work.cancelled' }, { type: 'ticket.blocked', reason: STOPPED });
   out.effects.push({ kind: 'stop_run' }, { kind: 'activity', type: 'response', body: STOP_MESSAGE });
   return out;
 }
@@ -261,6 +263,28 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
       if (!job) return out;
       if (ticket?.blocked && !refusal(event, ticket, job)) out.events.push({ type: 'ticket.unblocked' });
       startRun(out, event, ticket, job, { input: job.input });
+      return out;
+    }
+    case 'effect.done':
+      return out;
+    case 'effect.failed': {
+      // `settle` is a step of the shell, not an effect of the workflow: its failure is only logged.
+      const { kind, error, eventId } = event.payload;
+      if (kind === 'settle' || !ticket) return out;
+      // Nothing left to block: a delivered ticket, or one a human stopped (its reason stays).
+      if (ticket.logical === 'done' || ticket.prState === 'MERGED' || (ticket.blocked && ticket.blockReason === STOPPED)) {
+        out.trace.push(`effect.failed ignored: ticket ${ticket.logical === 'done' || ticket.prState === 'MERGED' ? 'delivered' : 'stopped'}`);
+        return out;
+      }
+      // The error notice of a block died: the ticket stays blocked for the reason the notice carried.
+      if (eventId.startsWith('effect:') && ticket.blocked) {
+        out.trace.push('effect.failed ignored: the notice of a block, which keeps its reason');
+        return out;
+      }
+      const reason = `Erreur : ${error}`;
+      out.events.push({ type: 'ticket.blocked', reason });
+      // The error notice of a failed effect is not noticed again when it fails too: the tracker may be what fails.
+      if (!eventId.startsWith('effect:')) out.effects.push({ kind: 'activity', type: 'error', body: reason });
       return out;
     }
     case 'pr.merged':
