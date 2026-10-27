@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { homePaths } from './instance.js';
 
-interface Settings {
+export interface Settings {
   permissions: { deny?: string[]; [k: string]: unknown };
   [k: string]: unknown;
 }
@@ -13,7 +13,18 @@ interface Settings {
  * `//` prefixes an absolute path in Claude Code permission rules.
  */
 export function buildRunSettings(pack: Settings, home: string): Settings {
-  const abs = `/${resolve(home)}`;
+  return withHomeDenies(pack, `/${resolve(home)}`);
+}
+
+/**
+ * The run settings with `<HOME>` in place of the instance's home: the same for every instance
+ * and OS, so attempts can be compared by configuration (ORC-226).
+ */
+export function runSettingsTemplate(pack: Settings): Settings {
+  return withHomeDenies(pack, '<HOME>');
+}
+
+function withHomeDenies(pack: Settings, abs: string): Settings {
   const deny = [
     ...(pack.permissions.deny ?? []),
     `Read(${abs}/secrets.json)`,

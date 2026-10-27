@@ -23,6 +23,7 @@ import type { EventBus } from './bus.js';
 import type { Clock } from './clock.js';
 import type { Effect, OutboxEffect } from './decision.js';
 import { decide, isFenced, refusesDevWork } from './engine.js';
+import { attemptLabels, packFingerprints } from './attempt-labels.js';
 import { pickupFailures } from './pickup.js';
 import { buildPrompt, formatFeedback, formatVerifyFailures } from './prompt.js';
 import { reduce } from './reduce.js';
@@ -89,6 +90,8 @@ export interface OrchestratorDeps {
   effectRetry?: EffectRetry;
   /** Retries of an inbox row whose processing throws (ORC-149); default `PROCESS_RETRY`. */
   processRetry?: { attempts: number; baseMs: number };
+  /** The factory build's commit, labelled on each attempt; defaults to `FACTORY_COMMIT`, else null (ORC-226). */
+  factoryCommit?: string | null;
 }
 
 interface StartOpts {
@@ -829,6 +832,8 @@ export class Orchestrator {
       }
     }
 
+    // Read while the workspace is prepared; a pack it cannot read gives null fingerprints (ORC-226).
+    const pack = packFingerprints(this.d.packDir, (err) => this.log('warn', `attempt labels: pack not fingerprinted: ${err.message}`));
     const runId = this.newId();
     const ws = await workspaces.prepare({
       projectId: project.id,
@@ -867,14 +872,16 @@ export class Orchestrator {
       input = { kind, text: opts.inputText ?? '' };
     }
 
-    const prompt = buildPrompt({
+    const promptInput = {
       skill: job.skill,
       issue: { identifier: issue.identifier, title: issue.title, description: issue.description, url: issue.url },
       branch: job.queue === 'dev' ? t.branch : undefined,
       prUrl: t.prUrl,
       input,
       reviewRounds: wf.limits.reviewRounds,
-    });
+    };
+    const prompt = buildPrompt(promptInput);
+    const labels = attemptLabels({ job, prompt, promptInput, workflow: wf, pack: await pack, factoryCommit: this.d.factoryCommit });
 
     const run: RunRecord = {
       id: runId,
@@ -891,6 +898,7 @@ export class Orchestrator {
       lastText: '',
       token: this.newId(),
       cwd: ws.path,
+      labels,
     };
     await store.putRun(run);
     await this.apply(t, { type: 'run.started', runId, job: job.name, queue: job.queue, claudeSessionId, feedbackConsumed: kind === 'feedback' });

@@ -6,7 +6,7 @@ import { OUTBOX_LEASE_MS, PgStore } from '../../src/store/pg/pg-store.js';
 import { PG_TABLE_NAMES } from '../../src/store/pg/schema.js';
 import type { QueueItem, RunRecord } from '../../src/store/types.js';
 import { createTestDatabase, PG_URL, TRUNCATE_ALL as TRUNCATE } from '../helpers/pg-database.js';
-import { storeContract } from '../helpers/store-suite.js';
+import { LABELS, storeContract } from '../helpers/store-suite.js';
 
 const url = PG_URL;
 
@@ -246,6 +246,43 @@ describe.skipIf(!url)('PgStore integration', () => {
     expect((await store.runsByStatus('success')).map((run) => run.id)).toEqual(['r2']);
     expect(await store.costSince(150)).toBe(1.5);
     expect(await store.costSince(0)).toBe(2);
+  });
+
+  it('writes the attempt labels to their columns at creation and never rewrites them (ORC-226)', async () => {
+    const labels = { ...LABELS, deliveredFactIds: ['f1', 'f2'], registryCommit: 'reg1' };
+    await store.putRun(runRecord({ labels }));
+    await store.putRun(runRecord({ labels: { ...labels, model: 'other', factoryCommit: 'zzz' }, status: 'success', costUsd: 3 }));
+
+    const row = await pool.query(
+      `select model, effort, fingerprints, image, risk, factory_version, factory_commit, registry_commit,
+              delivered_fact_ids, status, cost_usd
+       from attempts where id = 'r1'`,
+    );
+    expect(row.rows[0]).toEqual({
+      model: 'opus',
+      effort: null,
+      fingerprints: labels.fingerprints,
+      image: null,
+      risk: null,
+      factory_version: '0.1.0',
+      factory_commit: 'abc123',
+      registry_commit: 'reg1',
+      delivered_fact_ids: ['f1', 'f2'],
+      status: 'success',
+      cost_usd: 3,
+    });
+    expect((await store.getRun('r1'))?.labels).toEqual(labels);
+  });
+
+  it('leaves the label columns empty for a run stored without labels, and fills them with its first labels', async () => {
+    await store.putRun(runRecord());
+    const cols = async () =>
+      (await pool.query(`select model, fingerprints, factory_version, delivered_fact_ids from attempts where id = 'r1'`)).rows[0];
+    expect(await cols()).toEqual({ model: null, fingerprints: {}, factory_version: null, delivered_fact_ids: null });
+    const labels = { ...LABELS, deliveredFactIds: ['f1'] };
+    await store.putRun(runRecord({ labels }));
+    expect(await cols()).toEqual({ model: 'opus', fingerprints: LABELS.fingerprints, factory_version: '0.1.0', delivered_fact_ids: ['f1'] });
+    expect((await store.getRun('r1'))?.labels).toEqual(labels);
   });
 
   it('reads due timers without consuming them, and supports deletion', async () => {

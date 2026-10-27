@@ -1,4 +1,5 @@
 import { expect, it } from 'vitest';
+import type { AttemptLabels } from '../../src/core/attempt-labels.js';
 import { newTicketState, type FactoryEvent, type TicketState } from '../../src/core/types.js';
 import type { DecisionPlan, DecisionRequest, QueueItem, RunRecord, Store, WorkflowVersion } from '../../src/store/types.js';
 
@@ -41,12 +42,34 @@ function request(event: FactoryEvent, patch: Partial<DecisionPlan> = {}, workflo
   };
 }
 
+/** A labelled attempt as the orchestrator would store it (ORC-226). */
+export const LABELS: AttemptLabels = {
+  task: 'dev',
+  queue: 'dev',
+  model: 'opus',
+  factoryVersion: '0.1.0',
+  factoryCommit: 'abc123',
+  effort: null,
+  image: null,
+  risk: null,
+  registryCommit: null,
+  deliveredFactIds: null,
+  fingerprints: {
+    prompt: `sha256:${'1'.repeat(64)}`,
+    promptTemplate: `sha256:${'5'.repeat(64)}`,
+    skills: `sha256:${'2'.repeat(64)}`,
+    workflow: `sha256:${'3'.repeat(64)}`,
+    config: `sha256:${'4'.repeat(64)}`,
+    knowledgeIndex: null,
+  },
+};
+
 function q(patch: Partial<QueueItem>): QueueItem {
   return { projectId: 'p', ticketId: 'REL-1', job: 'dev', queue: 'dev', priority: 0, enqueuedAt: 1, ...patch };
 }
 
 /**
- * The `Store` contract both stores pass (ORC-132): the six SQLite store cases, run on any
+ * The `Store` contract both stores pass (ORC-132): the SQLite store cases, run on any
  * implementation. `store()` returns an empty store.
  */
 export function storeContract(store: () => Store | Promise<Store>): void {
@@ -76,6 +99,28 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     expect((await s.findRunByToken('t2'))!.id).toBe('r2');
     expect((await s.runsByStatus('running')).map((r) => r.id)).toEqual(['r1']);
     expect(await s.costSince(150)).toBe(1.5);
+  });
+
+  it('keeps every label of an attempt, as set when it was created (ORC-226)', async () => {
+    const s = await store();
+    await s.putRun(run({ labels: LABELS }));
+    expect((await s.getRun('r1'))!.labels).toEqual(LABELS);
+
+    const changed = { ...LABELS, model: 'other', fingerprints: { ...LABELS.fingerprints, prompt: 'sha256:changed' } };
+    await s.putRun(run({ labels: changed, status: 'success', costUsd: 2, turns: 4 }));
+    const after = (await s.getRun('r1'))!;
+    expect(after).toMatchObject({ status: 'success', costUsd: 2, turns: 4 });
+    expect(after.labels).toEqual(LABELS);
+    expect((await s.findRunByToken('t1'))!.labels).toEqual(LABELS);
+  });
+
+  it('still reads a run stored without labels', async () => {
+    const s = await store();
+    await s.putRun(run());
+    await s.putRun(run({ status: 'success' }));
+    const r = (await s.getRun('r1'))!;
+    expect(r.status).toBe('success');
+    expect(r.labels).toBeUndefined();
   });
 
   it('fires due timers', async () => {
