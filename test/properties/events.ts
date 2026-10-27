@@ -45,6 +45,13 @@ const logical = fc.constantFrom(...LOGICAL_STATES);
 const issue: fc.Arbitrary<IssueSnapshot> = fc.record({ title: fc.constant('Titre'), logical, priority: fc.integer({ min: 0, max: 2 }) });
 const pr: fc.Arbitrary<PrPayload> = fc.integer({ min: 1, max: 2 }).map((n) => ({ number: n, url: `https://forge/pr/${n}`, branch: 'agent/rel-1' }));
 const empty = fc.constant({} as Record<string, never>);
+/** The result of an outbox effect (ORC-150): of a decided event's effect, or of the error notice a dead effect posted. */
+const effectResult = fc.record({
+  effectId: fc.constantFrom('REL-1:1:1', 'REL-1:2:1'),
+  kind: fc.constantFrom('comment', 'labels', 'start_run', 'activity', 'settle'),
+  eventId: fc.constantFrom('ex-1', 'effect:REL-1:1:1'),
+  attempts: fc.constantFrom(1, 8),
+});
 
 /** One arbitrary per event type: adding an event type to `EventPayloads` fails to compile until it is generated here. */
 const PAYLOADS: { [K in EventType]: fc.Arbitrary<EventPayloads[K]> } = {
@@ -76,6 +83,8 @@ const PAYLOADS: { [K in EventType]: fc.Arbitrary<EventPayloads[K]> } = {
   'control.pause': empty,
   'control.resume': empty,
   'control.stop': empty,
+  'effect.done': effectResult,
+  'effect.failed': effectResult.map((r) => ({ ...r, error: 'Linear down' })),
 };
 
 const EVENT_TYPES = Object.keys(PAYLOADS) as EventType[];
@@ -92,6 +101,7 @@ const anyDraft: fc.Arbitrary<Draft> = fc.oneof(...EVENT_TYPES.map((t) => draftOf
  */
 const FACTORY_PRODUCED: ReadonlySet<EventType> = new Set<EventType>([
   'run.finished', 'verify.passed', 'verify.failed', 'debounce.fired', 'control.pause', 'control.resume', 'control.stop',
+  'effect.done', 'effect.failed',
 ]);
 
 /**
