@@ -30,7 +30,7 @@ Aucun au niveau du port : il n'a pas de notion de tentative. Les échos de nos p
 
 ## Ce que la suite demande à l'implémentation
 
-`TrackerSubject` : un ticket existant, un identifiant absent de la même équipe, et en option un terme de recherche, deux statuts de l'équipe, une équipe avec un ticket délégué et un non délégué, et `written`, qui relit ce que `comment`, `activity` et `addExternalUrl` ont écrit (le port ne sait pas le relire ; `FakeTracker` le fournit par `written()`). Les cas d'écriture ne tournent que si le sujet donne les deux statuts : jamais contre un espace partagé.
+`TrackerSubject` : un ticket existant, un identifiant absent de la même équipe, et en option un terme de recherche, deux statuts de l'équipe, une équipe avec un ticket délégué et un non délégué, et `written`, qui relit ce que `comment`, `ensureSession`, `activity` et `addExternalUrl` ont écrit (le port ne sait pas le relire ; `FakeTracker` le fournit par `written()`). Les cas d'écriture ne tournent que si le sujet donne les deux statuts : jamais contre un espace partagé.
 
 ## Écarts connus
 

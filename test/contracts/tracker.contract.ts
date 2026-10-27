@@ -15,9 +15,11 @@ export interface TrackerSubject {
   states?: [string, string];
   /** A team with one issue delegated to the app and one not; absent, the delegation case is skipped. */
   delegation?: { teamKey: string; delegated: string; notDelegated: string };
-  /** Reads back what `comment`, `activity` and `addExternalUrl` wrote, which the port cannot; absent, the effects case is skipped. */
+  /** Reads back what `comment`, `ensureSession`, `activity` and `addExternalUrl` wrote, which the port cannot; absent, the effects cases are skipped. */
   written?: {
     comments: (issue: string) => Promise<string[]>;
+    /** The agent sessions open on the issue. */
+    sessions: (issue: string) => Promise<string[]>;
     activities: (session: string) => Promise<ActivityInput[]>;
     externalUrls: (session: string) => Promise<{ label: string; url: string }[]>;
   };
@@ -116,6 +118,12 @@ export function describeTrackerContract(name: string, make: () => TrackerSubject
       for (const type of ['thought', 'response', 'elicitation', 'error'] as const) await s.tracker.activity(session, { type, body: type });
       await s.tracker.activity(session, { type: 'action', action: 'Lecture', parameter: 'README.md', result: 'ok', ephemeral: true });
       await s.tracker.addExternalUrl(session, 'Pull request', 'https://github.test/pr/1');
+    });
+
+    it('ensureSession opens an agent session on the issue', async (ctx) => {
+      const s = await subjectWith(make, () => ctx.skip(), 'states', 'written');
+      const session = await s.tracker.ensureSession(s.issue);
+      expect(await s.written.sessions(s.issue)).toContain(session);
     });
 
     it('comment, activity and addExternalUrl write their effect; replaying comment or activity writes it again', async (ctx) => {

@@ -194,6 +194,19 @@ describeTrackerContract(
 );
 
 describeTrackerContract(
+  'a tracker whose ensureSession opens no session',
+  trackerThat(
+    class extends FakeTracker {
+      override async ensureSession(identifier: string): Promise<string> {
+        await this.getIssue(identifier);
+        return 'session-never-opened';
+      }
+    },
+  ),
+  { violates: ['ensureSession opens an agent session on the issue'] },
+);
+
+describeTrackerContract(
   'a tracker whose addExternalUrl writes nothing',
   trackerThat(
     class extends FakeTracker {
