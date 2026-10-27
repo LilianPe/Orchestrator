@@ -68,7 +68,7 @@ export function describeAgentRuntimeContract(name: string, make: () => AgentRunt
       const s = make();
       let h: RunHandle | undefined;
       expect(() => (h = start(s, 'unlaunchable'))).not.toThrow();
-      await expect(within(h!.done, 1_500)).resolves.toMatchObject({ outcome: 'failure' });
+      expect(await within(resolved(h!.done), 1_500)).toMatchObject({ outcome: 'failure' });
       expect(await within(drain(h!.events), 1_500)).not.toBe('pending');
     });
 
@@ -106,7 +106,7 @@ export function describeAgentRuntimeContract(name: string, make: () => AgentRunt
       const h = start(s, script, { limits });
       s.elapse?.(elapse);
       try {
-        expect(await within(resolved(h.done), 1_500)).toMatchObject({ outcome: 'limit' });
+        expect(await within(resolved(h.done), s.elapse ? 100 : 1_500)).toMatchObject({ outcome: 'limit' });
       } finally {
         h.stop();
       }

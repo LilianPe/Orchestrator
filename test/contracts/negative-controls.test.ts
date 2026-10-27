@@ -10,7 +10,6 @@ import { Channel } from '../../src/adapters/runner/channel.js';
 import { FakeRunner, type FakeScript } from '../../src/adapters/runner/fake.js';
 import type { RunHandle, RunRequest, RunResult, RunStreamEvent } from '../../src/adapters/runner/types.js';
 import { FakeSandboxProvider } from '../../src/adapters/sandbox/fake.js';
-import type { Sandbox, SandboxRequest } from '../../src/adapters/sandbox/types.js';
 import { FakeTracker } from '../../src/adapters/tracker/fake.js';
 import type { TrackerIssue } from '../../src/adapters/tracker/types.js';
 import { FakeClock } from '../../src/core/clock.js';
@@ -28,12 +27,21 @@ import { describeTrackerContract, type TrackerSubject } from './tracker.contract
 const LAUNCH = 'a run that cannot launch ends in failure: start does not throw, done does not reject, the stream closes';
 const NOWHERE = '/contract-cannot-launch';
 
+const fakeScripts: Partial<Record<AgentScript, FakeScript>> = {
+  failure: { outcome: 'failure' },
+  hang: { hold: true },
+  chatty: { events: ['un', 'deux', 'trois'].map((text) => ({ kind: 'text', text })), turns: 3, hold: true },
+  unlaunchable: { events: [], outcome: 'failure' },
+};
+
 function runtimeThat(start: (inner: FakeRunner, req: RunRequest) => RunHandle): () => AgentRuntimeSubject {
   return () => {
-    const inner = new FakeRunner();
+    const clock = new FakeClock();
+    const inner = new FakeRunner(clock);
     return {
       runtime: { start: (req) => start(inner, req) },
-      script: (name) => (name === 'unlaunchable' ? (inner.enqueue({ events: [], outcome: 'failure' }), { cwd: NOWHERE }) : {}),
+      script: (name) => (inner.enqueue(fakeScripts[name] ?? {}), name === 'unlaunchable' ? { cwd: NOWHERE } : {}),
+      elapse: (ms) => (clock.advance(ms), inner.tick()),
     };
   };
 }
@@ -78,24 +86,6 @@ const FAILED = 'a failed run ends in failure';
 const DURATION_CAP = 'a run past its duration cap ends in limit';
 const TURN_CAP = 'a run past its turn cap ends in limit';
 
-const fakeScripts: Partial<Record<AgentScript, FakeScript>> = {
-  failure: { outcome: 'failure' },
-  hang: { hold: true },
-  chatty: { events: ['un', 'deux', 'trois'].map((text) => ({ kind: 'text', text })), turns: 3, hold: true },
-};
-
-function fakeRuntimeThat(start: (inner: FakeRunner, req: RunRequest) => RunHandle): () => AgentRuntimeSubject {
-  return () => {
-    const clock = new FakeClock();
-    const inner = new FakeRunner(clock);
-    return {
-      runtime: { start: (req) => start(inner, req) },
-      script: (name) => (inner.enqueue(fakeScripts[name] ?? {}), {}),
-      elapse: (ms) => (clock.advance(ms), inner.tick()),
-    };
-  };
-}
-
 const ending = (from: RunOutcome, end: (r: RunResult) => RunResult | Promise<RunResult>) => (inner: FakeRunner, req: RunRequest): RunHandle => {
   const h = inner.start(req);
   return { ...h, done: h.done.then((r) => (r.outcome === from ? end(r) : r)) };
@@ -103,37 +93,37 @@ const ending = (from: RunOutcome, end: (r: RunResult) => RunResult | Promise<Run
 
 describeAgentRuntimeContract(
   'a runtime that reports a failed run as a success',
-  fakeRuntimeThat(ending('failure', (r) => ({ ...r, outcome: 'success' }))),
+  runtimeThat(ending('failure', (r) => ({ ...r, outcome: 'success' }))),
   { violates: [FAILED] },
 );
 
 describeAgentRuntimeContract(
   'a runtime whose done rejects when the run fails',
-  fakeRuntimeThat(ending('failure', () => Promise.reject(new Error('claude exited with code 1')))),
+  runtimeThat(ending('failure', () => Promise.reject(new Error('claude exited with code 1')))),
   { violates: [FAILED] },
 );
 
 describeAgentRuntimeContract(
   'a runtime that ignores its duration cap',
-  fakeRuntimeThat((inner, req) => inner.start({ ...req, limits: { ...req.limits, durationMs: Infinity } })),
+  runtimeThat((inner, req) => inner.start({ ...req, limits: { ...req.limits, durationMs: Infinity } })),
   { violates: [DURATION_CAP] },
 );
 
 describeAgentRuntimeContract(
   'a runtime that ignores its turn cap',
-  fakeRuntimeThat((inner, req) => inner.start({ ...req, limits: { ...req.limits, turns: Infinity } })),
+  runtimeThat((inner, req) => inner.start({ ...req, limits: { ...req.limits, turns: Infinity } })),
   { violates: [TURN_CAP] },
 );
 
 describeAgentRuntimeContract(
   'a runtime that ends a capped run in failure',
-  fakeRuntimeThat(ending('limit', (r) => ({ ...r, outcome: 'failure' }))),
+  runtimeThat(ending('limit', (r) => ({ ...r, outcome: 'failure' }))),
   { violates: [DURATION_CAP, TURN_CAP] },
 );
 
 describeAgentRuntimeContract(
   'a runtime whose done rejects when a run hits its cap',
-  fakeRuntimeThat(ending('limit', () => Promise.reject(new Error('max turns reached')))),
+  runtimeThat(ending('limit', () => Promise.reject(new Error('max turns reached')))),
   { violates: [DURATION_CAP, TURN_CAP] },
 );
 
@@ -150,7 +140,7 @@ function checksThat(checks: CheckRunner, patch: Partial<CheckRunnerSubject> = {}
       { command: 'echo first failure; exit 1', exitCode: 1, output: 'first failure' },
       { command: 'echo second failure; exit 2', exitCode: 2, output: 'second failure' },
     ],
-    slow: 'sleep 1',
+    slow: 'sleep 0.5',
     unstartableCwd: join(cwd, 'missing'),
     ...patch,
   });
@@ -207,7 +197,7 @@ describeCheckRunnerContract(
 
 describeCheckRunnerContract(
   'a check runner that reports a failure as a pass',
-  checksThat(verifying(() => ({ ok: true, failures: [] }))),
+  checksThat({ run: async () => ({ ok: true, failures: [] }) }),
   { violates: [FAILING, IN_ORDER, TIMEOUT] },
 );
 
@@ -274,10 +264,8 @@ describeForgeContract(
   { violates: [UNREACHABLE] },
 );
 
-const unreadable = (findPr: Forge['findPr']): Partial<ForgeSubject> => ({
-  forge: { findPr, unresolvedReviewComments: async () => [] },
-  unreadableChecks: 'factory/rel-2-y',
-});
+const findingPr = (findPr: Forge['findPr']): Partial<ForgeSubject> => ({ forge: { findPr, unresolvedReviewComments: async () => [] } });
+const unreadable = (findPr: Forge['findPr']): Partial<ForgeSubject> => ({ ...findingPr(findPr), unreadableChecks: 'factory/rel-2-y' });
 
 describeForgeContract(
   'a forge that rejects checks it cannot read',
@@ -297,20 +285,13 @@ const NO_PR = 'findPr answers undefined for a branch without a PR';
 
 describeForgeContract(
   'a forge that finds a PR on every branch',
-  forgeThat({
-    forge: {
-      findPr: async (_repo, branch) => ({ number: 7, url: 'https://github.test/pr/7', state: 'OPEN', branch, checks: 'pass', failedChecks: [] }),
-      unresolvedReviewComments: async () => [],
-    },
-  }),
+  forgeThat(findingPr(async (_repo, branch) => ({ number: 7, url: 'https://github.test/pr/7', state: 'OPEN', branch, checks: 'pass', failedChecks: [] }))),
   { violates: [NO_PR] },
 );
 
 describeForgeContract(
   'a forge that rejects a branch without a PR',
-  forgeThat({
-    forge: { findPr: async (_repo, branch) => Promise.reject(new Error(`no pull requests found for branch "${branch}"`)), unresolvedReviewComments: async () => [] },
-  }),
+  forgeThat(findingPr(async (_repo, branch) => Promise.reject(new Error(`no pull requests found for branch "${branch}"`)))),
   { violates: [NO_PR] },
 );
 
@@ -512,14 +493,8 @@ describeSandboxContract(
   'a sandbox provider whose destroy rejects an id it never created',
   sandboxesThat(
     class extends FakeSandboxProvider {
-      private issued = new Set<string>();
-      override async create(req: SandboxRequest): Promise<Sandbox> {
-        const s = await super.create(req);
-        this.issued.add(s.id);
-        return s;
-      }
       override async destroy(id: string): Promise<void> {
-        if (!this.issued.has(id)) throw new Error(`no such container: ${id}`);
+        if (!this.active().some((s) => s.id === id) && !this.destroyed.includes(id)) throw new Error(`no such container: ${id}`);
         await super.destroy(id);
       }
     },

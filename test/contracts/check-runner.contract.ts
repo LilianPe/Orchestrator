@@ -70,7 +70,7 @@ export function describeCheckRunnerContract(
     it('a command that cannot start fails without an exit code, and run does not reject', async (ctx) => {
       const s = await subjectWith(make, () => ctx.skip(), 'unstartableCwd');
       const [fail] = s.fails;
-      const r = await s.checks.run(s.unstartableCwd, [s.pass, fail.command]).catch((e: unknown) => e);
+      const r = await resolved(s.checks.run(s.unstartableCwd, [s.pass, fail.command]));
       expect(r).toEqual({
         ok: false,
         failures: [expect.objectContaining({ command: s.pass, exitCode: null }), expect.objectContaining({ command: fail.command, exitCode: null })],
