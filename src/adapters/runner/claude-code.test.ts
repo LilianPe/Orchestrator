@@ -26,7 +26,7 @@ const scripts: Record<AgentScript, Partial<RunRequest>> = {
   failure: { env: { FAKE_CLAUDE_SCRIPT: fx('stream-error.jsonl') } },
   hang: { env: { FAKE_CLAUDE_SCRIPT: fx('stream-success.jsonl'), FAKE_CLAUDE_HANG: '1' } },
   chatty: { env: { FAKE_CLAUDE_SCRIPT: fx('stream-many-turns.jsonl'), FAKE_CLAUDE_HANG: '1' } },
-  unlaunchable: { cwd: join(tmpdir(), 'factory-contract-no-such-dir') },
+  unlaunchable: { cwd: join(mkdtempSync(join(tmpdir(), 'factory-contract-')), 'missing') },
 };
 
 const shared = runner().r;

@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, type TestContext } from 'vitest';
@@ -70,7 +70,7 @@ describeAgentRuntimeContract(
 
 const UNSTARTABLE = 'a command that cannot start fails without an exit code, and run does not reject';
 const REPLAY = 'replaying runs the commands again';
-const cwd = tmpdir();
+const cwd = mkdtempSync(join(tmpdir(), 'factory-negative-'));
 
 function checksThat(checks: CheckRunner, patch: Partial<CheckRunnerSubject> = {}): () => CheckRunnerSubject {
   return () => ({
@@ -81,7 +81,7 @@ function checksThat(checks: CheckRunner, patch: Partial<CheckRunnerSubject> = {}
       { command: 'exit 1', exitCode: 1, output: '' },
       { command: 'exit 2', exitCode: 2, output: '' },
     ],
-    unstartableCwd: join(cwd, 'factory-negative-no-such-dir'),
+    unstartableCwd: join(cwd, 'missing'),
     ...patch,
   });
 }
