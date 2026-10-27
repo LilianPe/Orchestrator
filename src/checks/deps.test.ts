@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { addedDependencies, checkDependencies, manifestKind, normalizePypiName, type AllowList, type ManifestChange } from './deps.js';
+import { addedDependencies, checkDependencies, manifestKind, MAX_PARALLEL_LOOKUPS, normalizePypiName, type AllowList, type ManifestChange } from './deps.js';
 import { FakePackageRegistry } from './fake-registry.js';
 
 const pkg = (sections: Record<string, Record<string, string>>): string => JSON.stringify({ name: 'app', version: '1.0.0', ...sections }, null, 2);
@@ -64,6 +64,7 @@ describe('checkDependencies (factory/dependances)', () => {
     expect(r).toEqual({
       check: 'factory/dependances',
       ok: true,
+      summary: '2 dépendance(s) ajoutée(s), présentes au registre et autorisées, ou locales : @types/node, typing-extensions.',
       findings: [],
       added: [
         { ecosystem: 'npm', name: '@types/node', declared: '@types/node', spec: '^24.0.0', source: 'registry', manifest: 'package.json' },
@@ -129,7 +130,7 @@ describe('checkDependencies (factory/dependances)', () => {
         change(
           'package.json',
           pkg({}),
-          pkg({ dependencies: { zod: 'github:colinhacks/zod', 'left-pad': 'git+https://example.test/left-pad.git', shared: 'workspace:*', util: 'file:../util' } }),
+          pkg({ dependencies: { zod: 'github:colinhacks/zod', 'left-pad': 'git+https://example.test/left-pad.git', shared: 'workspace:*', util: 'file:packages/util' } }),
         ),
         change('requirements.txt', '', 'requests @ https://example.test/requests-2.0.tar.gz\n-e .\n./libs/core\n'),
       ],
@@ -174,7 +175,7 @@ describe('addedDependencies', () => {
       change('requirements.txt', 'Django==4.2\nrequests\n', 'django==5.0\n'),
       change('pyproject.toml', '[project]\ndependencies = ["pytest"]\n', null),
     ]);
-    expect(r).toEqual({ added: [], unreadable: [] });
+    expect(r).toEqual({ added: [], directives: [], unreadable: [], unsupported: [] });
   });
 
   it('reads every dependency section of package.json', () => {
@@ -227,10 +228,10 @@ hypothesis = "*"
     expect(r.added.map((d) => `${d.name}:${d.source}`)).toEqual([
       'requests:registry',
       'typing-extensions:registry',
+      'coverage:registry',
       'pytest:registry',
       'ruff:remote',
       'mypy:registry',
-      'coverage:registry',
       'flask:registry',
       'black:registry',
       'mylib:local',
@@ -252,6 +253,8 @@ hypothesis = "*"
     ].join('\r\n');
     const r = addedDependencies([change('requirements-prod.txt', null, text)]);
     expect(r.added.map((d) => `${d.name}:${d.source}`)).toEqual(['numpy:registry', 'pandas:registry', 'x-lib:remote', 'y:remote']);
+    // `-c constraints.txt` is a requirements file read on its own; `base.txt` is not one.
+    expect(r.directives.map((d) => d.directive)).toEqual(['--index-url https://pypi.org/simple', '--requirement base.txt']);
   });
 
   it('reports a manifest unreadable after the change, and treats one unreadable before as empty', () => {
@@ -282,5 +285,245 @@ describe('manifestKind and names', () => {
     expect(normalizePypiName('Typing_Extensions')).toBe('typing-extensions');
     expect(normalizePypiName('zope.interface')).toBe('zope-interface');
     expect(normalizePypiName('A--B__C..d')).toBe('a-b-c-d');
+  });
+});
+
+describe('supply-chain bypasses (fail-closed)', () => {
+  const sources = (r: { added: { name: string; source: string }[] }): string[] => r.added.map((d) => `${d.name}:${d.source}`);
+
+  it('treats a git or path source pointed elsewhere as added, not a registry range bump', async () => {
+    const r = await checkDependencies({
+      changes: [
+        change(
+          'package.json',
+          pkg({ dependencies: { zod: 'github:colinhacks/zod#v3', util: 'file:packages/a', react: '^18' } }),
+          pkg({ dependencies: { zod: 'github:evil/zod#v3', util: 'file:packages/b', react: '^19' } }),
+        ),
+        change('requirements.txt', 'x @ git+https://example.test/x.git@v1\n', 'x @ git+https://evil.test/x.git@v1\n'),
+      ],
+      registry: registry(),
+      allowList: allowAll,
+    });
+    expect(r.added.map((d) => `${d.name}:${d.source}:${d.spec}`)).toEqual([
+      'zod:remote:github:evil/zod#v3',
+      'util:local:file:packages/b',
+      'x:remote:@ git+https://evil.test/x.git@v1',
+    ]);
+    expect(r.findings.filter((f) => f.reason === 'non_registry_source').map((f) => f.name)).toEqual(['zod', 'x']);
+  });
+
+  it('blocks added index options and includes of files it does not read, not the ones already there', async () => {
+    const before = '--index-url https://pypi.org/simple\nrequests\n';
+    const after = [
+      '--index-url https://pypi.org/simple',
+      '--extra-index-url https://evil.test/simple',
+      '-ihttps://evil.test/other',
+      '-f https://evil.test/wheels',
+      '--trusted-host evil.test',
+      '-r deps.lst',
+      '-r https://evil.test/reqs.txt',
+      '-r ../../outside/requirements.txt',
+      '-r base.txt',
+      '--pre',
+      '--require-hashes',
+      'requests',
+      '',
+    ].join('\n');
+    const r = await checkDependencies({ changes: [change('requirements/dev.txt', before, after)], registry: registry(), allowList: allowAll });
+    expect(r.findings.map((f) => [f.reason, f.manifest])).toEqual(Array(7).fill(['unchecked_directive', 'requirements/dev.txt']));
+    expect(r.findings.map((f) => /« (.*) »/.exec(f.message)![1])).toEqual([
+      '--extra-index-url https://evil.test/simple',
+      '--index-url https://evil.test/other',
+      '--find-links https://evil.test/wheels',
+      '--trusted-host evil.test',
+      '--requirement deps.lst',
+      '--requirement https://evil.test/reqs.txt',
+      '--requirement ../../outside/requirements.txt',
+    ]);
+  });
+
+  it('reads an editable requirement written without a space (`-egit+…`)', () => {
+    const r = addedDependencies([change('requirements.txt', null, '-egit+https://example.test/x.git#egg=xlib\n--editable=./libs/core\n')]);
+    expect(sources(r)).toEqual(['xlib:remote', './libs/core:local']);
+  });
+
+  it('reads the list form of tool.uv.sources, and an index source as remote', () => {
+    const toml = `
+[project]
+dependencies = ["torch", "ruff", "core", "plain"]
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu", marker = "sys_platform == 'linux'" }, { index = "pytorch-cpu" }]
+ruff = [{ path = "libs/ruff", marker = "os_name == 'nt'" }, { git = "https://github.com/astral-sh/ruff", marker = "os_name != 'nt'" }]
+core = [{ workspace = true }]
+plain = { extras = ["x"] }
+`;
+    expect(sources(addedDependencies([change('pyproject.toml', null, toml)]))).toEqual(['torch:remote', 'ruff:remote', 'core:local', 'plain:registry']);
+  });
+
+  it('reads build-system, PDM, Hatch and uv constraint and override requirements', () => {
+    const toml = `
+[build-system]
+requires = ["hatchling>=1.25", "hatch-evil"]
+
+[tool.pdm.dev-dependencies]
+lint = ["flake8"]
+
+[tool.hatch.envs.test]
+dependencies = ["pytest-cov"]
+extra-dependencies = ["pytest-mock"]
+
+[tool.uv]
+override-dependencies = ["werkzeug @ https://evil.test/w.whl"]
+constraint-dependencies = ["urllib3<3"]
+`;
+    expect(sources(addedDependencies([change('pyproject.toml', null, toml)]))).toEqual([
+      'hatchling:registry',
+      'hatch-evil:registry',
+      'urllib3:registry',
+      'werkzeug:remote',
+      'flake8:registry',
+      'pytest-cov:registry',
+      'pytest-mock:registry',
+    ]);
+  });
+
+  it('blocks added package indexes and dynamic dependencies of pyproject.toml', async () => {
+    const before = '[project]\nname = "x"\ndependencies = []\n';
+    const after = `
+[project]
+name = "x"
+dynamic = ["version", "dependencies"]
+
+[[tool.uv.index]]
+name = "internal"
+url = "https://evil.test/simple"
+
+[[tool.poetry.source]]
+name = "corp"
+url = "https://evil.test/corp"
+
+[tool.poetry.dependencies]
+requests = { version = "^2", source = "corp" }
+`;
+    const r = await checkDependencies({ changes: [change('pyproject.toml', before, after)], registry: registry(), allowList: allowAll });
+    expect(r.findings.map((f) => [f.reason, f.name])).toEqual([
+      ['unchecked_directive', undefined],
+      ['unchecked_directive', undefined],
+      ['unchecked_directive', undefined],
+      ['non_registry_source', 'requests'],
+    ]);
+    expect(r.findings.slice(0, 3).map((f) => /« (.*?) »/.exec(f.message)![1])).toEqual([
+      'project.dynamic: dependencies',
+      'tool.uv.index = [{"name":"internal","url":"https://evil.test/simple"}]',
+      'tool.poetry.source = [{"name":"corp","url":"https://evil.test/corp"}]',
+    ]);
+    // Unchanged, they add nothing.
+    expect(addedDependencies([change('pyproject.toml', after, after)])).toEqual({ added: [], directives: [], unreadable: [], unsupported: [] });
+  });
+
+  it('reads npm overrides, yarn resolutions and pnpm overrides: aliases and non-registry sources, not range pins', async () => {
+    const after = JSON.stringify({
+      dependencies: { react: '^19' },
+      overrides: { minimist: '1.2.8', foo: { '.': '1.0.0', bar: 'npm:lodahs@1' }, react: '$react', qs: 'github:evil/qs' },
+      resolutions: { '**/@scope/pkg': 'https://evil.test/pkg.tgz', 'a/b': '2.0.0' },
+      pnpm: { overrides: { 'x@1>y': 'npm:left-pad@^1', z: 'link:/opt/z' } },
+    });
+    const r = await checkDependencies({ changes: [change('package.json', pkg({ dependencies: { react: '^19' } }), after)], registry: registry(), allowList: allowAll });
+    expect(r.added.map((d) => `${d.declared}=${d.name}:${d.source}`)).toEqual([
+      'overrides foo > bar=lodahs:registry',
+      'overrides qs=qs:remote',
+      'resolutions **/@scope/pkg=@scope/pkg:remote',
+      'pnpm.overrides x@1>y=left-pad:registry',
+      'pnpm.overrides z=z:remote',
+    ]);
+    expect(r.findings.map((f) => [f.reason, f.name])).toEqual([
+      ['not_found', 'lodahs'],
+      ['non_registry_source', 'qs'],
+      ['not_allowed', 'qs'],
+      ['non_registry_source', '@scope/pkg'],
+      ['not_allowed', '@scope/pkg'],
+      ['non_registry_source', 'z'],
+      ['not_allowed', 'z'],
+    ]);
+  });
+
+  it('reads more requirements file names, and blocks a change to an install file it does not read', async () => {
+    for (const p of ['dev-requirements.txt', 'test_requirements.txt', 'requirements.in', 'constraints.txt', 'requirements/base.in']) {
+      expect(manifestKind(p)).toBe('requirements');
+    }
+    for (const p of ['setup.py', 'setup.cfg', 'Pipfile', 'sub/.npmrc', 'uv.toml', 'pip.conf', '.yarnrc.yml', 'pnpm-workspace.yaml']) {
+      expect(manifestKind(p)).toBe('unsupported');
+    }
+    const r = await checkDependencies({
+      changes: [
+        change('setup.py', 'setup(install_requires=[])\n', 'setup(install_requires=["evil"])\n'),
+        change('.npmrc', null, 'registry=https://evil.test/\n'),
+        change('setup.cfg', '[metadata]\n', '[metadata]\n'),
+        change('Pipfile', '[packages]\n', null),
+      ],
+      registry: registry(),
+      allowList: allowAll,
+    });
+    expect(r.findings.map((f) => [f.reason, f.manifest])).toEqual([
+      ['unsupported_manifest', 'setup.py'],
+      ['unsupported_manifest', '.npmrc'],
+    ]);
+  });
+
+  it('classes only paths inside the repository as local: absolute, home, drive and escaping paths block', async () => {
+    const r = await checkDependencies({
+      changes: [
+        change(
+          'web/package.json',
+          null,
+          pkg({ dependencies: { a: 'file:../shared', b: 'file:../../outside', c: '/opt/c', d: '~/d', e: 'file:///etc/e', f: 'link:../packages/f' } }),
+        ),
+        change('requirements.txt', null, '-e /home/me/lib\n~/lib2\nC:\\libs\\x\nfile:///tmp/y\n./ok\n../escape\nz @ file:///tmp/z.whl\n'),
+        change('svc/pyproject.toml', null, '[tool.poetry.dependencies]\ninside = { path = "../libs/in" }\nout = { path = "/srv/out" }\n'),
+      ],
+      registry: registry(),
+      allowList: allowAll,
+    });
+    expect(r.added.filter((d) => d.source === 'local').map((d) => d.declared)).toEqual(['a', 'f', './ok', 'inside']);
+    // A tilde range is a version, not a home path.
+    expect(sources(addedDependencies([change('package.json', null, pkg({ dependencies: { g: '~1.2.3' } }))]))).toEqual(['g:registry']);
+    expect(r.findings.filter((f) => f.reason === 'non_registry_source').map((f) => f.name)).toEqual([
+      'b',
+      'c',
+      'd',
+      'e',
+      '/home/me/lib',
+      '~/lib2',
+      'C:\\libs\\x',
+      'file:///tmp/y',
+      '../escape',
+      'z',
+      'out',
+    ]);
+  });
+
+  it(`asks the registry at most ${MAX_PARALLEL_LOOKUPS} requests at a time`, async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const slow = {
+      lookup: async (): Promise<{ status: 'found' }> => {
+        peak = Math.max(peak, ++inFlight);
+        await new Promise((resolve) => setTimeout(resolve, 2));
+        inFlight--;
+        return { status: 'found' };
+      },
+    };
+    const deps = Object.fromEntries(Array.from({ length: 30 }, (_, i) => [`pkg-${i}`, '1.0.0']));
+    const r = await checkDependencies({ changes: [change('package.json', null, pkg({ dependencies: deps }))], registry: slow, allowList: { npm: Object.keys(deps) } });
+    expect(r.ok).toBe(true);
+    expect(peak).toBe(MAX_PARALLEL_LOOKUPS);
+  });
+
+  it('summarises what blocks, in the CheckResult shape', async () => {
+    const r = await checkDependencies({ changes: [change('package.json', pkg({}), pkg({ dependencies: { lodahs: '1' } }))], registry: registry(), allowList: allowAll });
+    expect(r.summary).toBe(['1 constat(s) bloquant(s) :', '- npm « lodahs » (package.json) : paquet absent du registre npm.'].join('\n'));
+    const none = await checkDependencies({ changes: [], registry: registry() });
+    expect(none.summary).toBe('Aucune dépendance ajoutée.');
   });
 });
