@@ -97,8 +97,8 @@ Au moment d'un run `dev-feedback`, les fils de review **non résolus** sont lus 
 | Constat | Événement | Pack standard |
 |---|---|---|
 | Nouvelle PR pour la branche | `pr.opened` | URL ajoutée à la session Linear |
-| CI qui passe au rouge | `pr.checks_failed` (avec la liste des checks en échec) | `fix-ci` si le ticket est en *Human Review* ou *AI Review* et non bloqué |
-| CI qui passe au vert | `pr.checks_passed` | rien |
+| CI qui passe au rouge | `pr.checks_failed` (avec la liste des checks en échec) | `fix-ci` si le ticket est en *Human Review* ou *AI Review* et non bloqué, au plus `limits.ci_fix_attempts` fois de suite ; ensuite le ticket est bloqué ([`workflow.md`](workflow.md#limits)) |
+| CI qui passe au vert | `pr.checks_passed` | remet à zéro le compte des relances sur CI rouge |
 | PR mergée | `pr.merged` | *Done*, worktree supprimé, `learn` ; ensuite, plus aucun run de code sur le ticket |
 | PR fermée sans merge | `pr.closed` | rien |
 

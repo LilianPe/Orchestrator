@@ -85,6 +85,8 @@ describe('mon comportement', () => {
 - `build` : une étape d'agent (le job `dev`) ;
 - `verify` : une étape de contrôle (`fake:check`, exécutée par `h.checks`), bornée par `bounds.verifyAttempts`.
 
+`bounds.ciFixAttempts` (défaut 2, `limits.ci_fix_attempts`) borne la boucle de CI rouge : `fix-ci` lancé au plus N fois, puis la CI rouge suivante bloque le ticket. Il accepte 0, qui a un sens propre (bloquer dès la première CI rouge).
+
 `build` couvre aussi les jobs qui étendent `dev` (`dev-feedback`, `fix-ci`) : ils héritent de son `verify`, comme dans le moteur. Chaque run d'agent, retour humain ou CI rouge compris, est donc suivi d'un contrôle qui consomme la file de `h.checks` et le même compteur.
 
 Avec `verifyAttempts: N`, chaque échec de `verify` relance l'agent sur la même session, et le **N-ième échec bloque le ticket**. Un contrôle vert remet le compteur à zéro.
