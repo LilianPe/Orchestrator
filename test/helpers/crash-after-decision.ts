@@ -33,9 +33,10 @@ const store = Object.assign(Object.create(inner) as Store, {
     if (pending && ++claims === Number(killAt)) process.kill(process.pid, 'SIGKILL');
     return inner.claimEffect(projectId, ticketId, leaseMs);
   },
-  completeEffect: async (id: string) => {
-    await inner.completeEffect(id);
+  completeEffect: async (id: string, lease?: string) => {
+    const done = await inner.completeEffect(id, lease);
     appendFileSync(logFile, `${id}\n`);
+    return done;
   },
 });
 const h = createHarness({ store, projectYaml: CRASH_WORKFLOW });

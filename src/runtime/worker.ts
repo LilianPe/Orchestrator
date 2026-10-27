@@ -6,6 +6,11 @@ import type { DecisionOutcome, DecisionRequest, OutboxRow, Store } from '../stor
 const INBOX_BATCH = 100;
 /** Lease of a claimed outbox row, renewed every third of it while its effect runs (ORC-129: 60 s, renewed every 20 s). */
 export const EFFECT_LEASE_MS = 60_000;
+/**
+ * Processings of a row that throws, in this process: the n-th retry after `baseMs * 3^(n-1)`
+ * (2 s, 6 s, 18 s, 54 s: about 80 s in all). Past the last one, the row waits for the next start.
+ */
+export const PROCESS_RETRY = { attempts: 5, baseMs: 2_000 };
 
 export interface WorkerDeps {
   store: Store;
@@ -21,6 +26,8 @@ export interface WorkerDeps {
   /** An effect threw: the worker skips the decision's later effects (`settle` aside), then calls this. */
   effectFailed(row: OutboxRow, err: Error): Promise<void>;
   leaseMs?: number;
+  /** Retries of a row whose processing throws (`PROCESS_RETRY` by default). */
+  retry?: { attempts: number; baseMs: number };
 }
 
 interface TicketRef {
@@ -30,6 +37,8 @@ interface TicketRef {
 
 /** `projectId:ticketId`, `projectId:*` for an event without a ticket. */
 export const ticketKey = (r: TicketRef): string => `${r.projectId}:${r.ticketId ?? '*'}`;
+
+const whose = (r: TicketRef): string => r.ticketId ?? `the events without a ticket of ${r.projectId}`;
 
 /**
  * The worker of ORC-149: it takes the inbox rows and runs each one's decision transaction
@@ -42,9 +51,10 @@ export const ticketKey = (r: TicketRef): string => `${r.projectId}:${r.ticketId 
  * - **Effects after the commit.** Each outbox row is claimed under a lease renewed while it runs:
  *   a worker that dies leaves it to another once the lease expires. At least once: an effect cut
  *   after it acted runs again (idempotency per effect: ORC-162; executors, backoff: ORC-150).
- * - **A failure holds its ticket.** A row whose preparation or transaction throws stays pending,
- *   untouched by this process until the next start, and so do the later rows of its ticket
- *   (dead-letter: ORC-175).
+ * - **A failure holds its ticket.** A row whose preparation or transaction throws stays pending
+ *   and is retried with a backoff (`PROCESS_RETRY`); the later rows of its ticket (or, for an
+ *   event without a ticket, of its project) wait behind it and go once it passes. Past the last
+ *   retry, the row and those behind it wait for the next start (dead-letter: ORC-175).
  */
 export class Worker {
   /** Tail of each ticket's task chain: everything of a ticket runs after what was queued before. */
@@ -53,10 +63,16 @@ export class Worker {
   private draining = new Set<string>();
   private queued = new Map<string, StoredEvent[]>();
   private queuedIds = new Set<string>();
-  /** Rows whose processing threw in this process: pending until the next start. */
+  /** Rows left out of the passes: a failed row until its retry (or the next start), the rows behind it. */
   private skipped = new Set<string>();
-  /** Tickets with a skipped row: their later rows stay pending behind it. */
-  private held = new Set<string>();
+  /** Keys held by a failed row (its id): their later rows wait behind it. */
+  private holders = new Map<string, string>();
+  /** The rows waiting behind each held key, released once its failed row passes. */
+  private behind = new Map<string, Set<string>>();
+  /** Failed processings of each row in this process. */
+  private failures = new Map<string, number>();
+  private retryTimers = new Set<NodeJS.Timeout>();
+  private readonly retry: { attempts: number; baseMs: number };
   /** Rows that found another worker's row or effect first: retried at the next poll. */
   private waited = new Set<string>();
   /** Events with a failed effect: their later effects are skipped (in this process). */
@@ -65,10 +81,12 @@ export class Worker {
   private pass: Promise<number> | undefined;
   private again = false;
   private poller: NodeJS.Timeout | undefined;
+  private stopped = false;
   private readonly leaseMs: number;
 
   constructor(private d: WorkerDeps) {
     this.leaseMs = d.leaseMs ?? EFFECT_LEASE_MS;
+    this.retry = d.retry ?? PROCESS_RETRY;
   }
 
   /**
@@ -125,9 +143,13 @@ export class Worker {
     this.poller.unref();
   }
 
+  /** Stops polling and the pending retries: a stopped worker takes nothing up by itself. */
   stop(): void {
     if (this.poller) clearInterval(this.poller);
     this.poller = undefined;
+    for (const t of this.retryTimers) clearTimeout(t);
+    this.retryTimers.clear();
+    this.stopped = true;
   }
 
   /** Resolves once the tasks running now, and those they start, are done. */
@@ -200,11 +222,14 @@ export class Worker {
   }
 
   private async process(row: StoredEvent, key: string): Promise<'done' | 'waiting'> {
-    const hasTicket = row.ticketId !== undefined;
     try {
-      if (hasTicket && this.held.has(key)) {
+      const holder = this.holders.get(key);
+      if (holder !== undefined && holder !== row.id) {
         this.skipped.add(row.id);
-        this.d.log('error', `event ${row.id} (${row.type}) kept in the inbox behind a failed event of ${row.ticketId}, for the next start`);
+        const rows = this.behind.get(key) ?? new Set<string>();
+        rows.add(row.id);
+        this.behind.set(key, rows);
+        this.d.log('error', `event ${row.id} (${row.type}) kept in the inbox behind a failed event of ${whose(row)} (${holder})`);
         return 'done';
       }
       let outcome: DecisionOutcome;
@@ -213,20 +238,57 @@ export class Worker {
         event = await this.d.prepare(upcast(row));
         outcome = await this.d.store.decide(this.d.request(event));
       } catch (err) {
-        this.skipped.add(row.id);
-        if (hasTicket) this.held.add(key);
-        this.d.log('error', `event ${row.id} (${row.type}): ${(err as Error).message} (kept in the inbox for the next start)`);
+        this.failed(row, key, err as Error);
         return 'done';
       }
       if (outcome.status === 'waiting') {
         this.waited.add(row.id);
         return 'waiting';
       }
-      if (outcome.status === 'committed') await this.d.committed(event, outcome);
+      this.passed(row, key);
+      if (outcome.status === 'committed') {
+        try {
+          await this.d.committed(event, outcome);
+        } catch (err) {
+          // The decision is committed: its effects run all the same, right after.
+          this.d.log('error', `event ${row.id} (${row.type}) decided, but its follow-up failed: ${(err as Error).message}`);
+        }
+      }
       return 'done';
     } finally {
       this.queuedIds.delete(row.id);
     }
+  }
+
+  /** A row's processing threw: it holds its key, and is retried after a backoff while retries are left. */
+  private failed(row: StoredEvent, key: string, err: Error): void {
+    const n = (this.failures.get(row.id) ?? 0) + 1;
+    this.failures.set(row.id, n);
+    this.skipped.add(row.id);
+    this.holders.set(key, row.id);
+    if (n >= this.retry.attempts || this.stopped) {
+      this.d.log('error', `event ${row.id} (${row.type}): ${err.message} (kept in the inbox for the next start, after ${n} attempts)`);
+      return;
+    }
+    const delay = this.retry.baseMs * 3 ** (n - 1);
+    this.d.log('error', `event ${row.id} (${row.type}): ${err.message} (attempt ${n} of ${this.retry.attempts}, retried in ${Math.round(delay / 1000)} s)`);
+    const timer = setTimeout(() => {
+      this.retryTimers.delete(timer);
+      this.skipped.delete(row.id);
+      this.kick().catch((e: unknown) => this.d.log('error', `worker: ${(e as Error).message}`));
+    }, delay);
+    timer.unref();
+    this.retryTimers.add(timer);
+  }
+
+  /** A row went through: if it held its key, the rows behind it are taken up again. */
+  private passed(row: StoredEvent, key: string): void {
+    this.failures.delete(row.id);
+    if (this.holders.get(key) !== row.id) return;
+    this.holders.delete(key);
+    for (const id of this.behind.get(key) ?? []) this.skipped.delete(id);
+    this.behind.delete(key);
+    this.kick().catch((e: unknown) => this.d.log('error', `worker: ${(e as Error).message}`));
   }
 
   private async runEffects(ref: TicketRef): Promise<'done' | 'busy'> {
@@ -235,12 +297,18 @@ export class Worker {
       const row = await store.claimEffect(ref.projectId, ref.ticketId, this.leaseMs);
       if (row === undefined) return 'done';
       if (row === 'busy') return 'busy';
+      const lease = row.lease ?? '';
       if (this.failedEvents.has(row.eventId) && row.effect.kind !== 'settle') {
-        await store.failEffect(row.id);
+        await store.failEffect(row.id, lease);
         continue;
       }
       const renew = setInterval(() => {
-        store.renewEffect(row.id, this.leaseMs).catch((err: unknown) => this.d.log('warn', `lease of ${row.id}: ${(err as Error).message}`));
+        store
+          .renewEffect(row.id, lease, this.leaseMs)
+          .then((held) => {
+            if (!held) this.d.log('warn', `effect ${row.id}: lease lost to another worker while it ran`);
+          })
+          .catch((err: unknown) => this.d.log('warn', `lease of ${row.id}: ${(err as Error).message}`));
       }, Math.max(1, Math.floor(this.leaseMs / 3)));
       renew.unref();
       let failure: Error | undefined;
@@ -251,12 +319,16 @@ export class Worker {
       } finally {
         clearInterval(renew);
       }
+      // Settled only under this claim: a worker that lost its lease leaves the row to its new holder.
       if (failure) {
-        await store.failEffect(row.id);
-        this.failedEvents.add(row.eventId);
-        await this.d.effectFailed(row, failure);
-      } else {
-        await store.completeEffect(row.id);
+        if (await store.failEffect(row.id, lease)) {
+          this.failedEvents.add(row.eventId);
+          await this.d.effectFailed(row, failure);
+        } else {
+          this.d.log('warn', `effect ${row.id} failed (${failure.message}), but its lease went to another worker: not settled here`);
+        }
+      } else if (!(await store.completeEffect(row.id, lease))) {
+        this.d.log('warn', `effect ${row.id} done, but its lease went to another worker: not settled here`);
       }
     }
   }

@@ -119,7 +119,7 @@ Le premier ticket cité est celui qui touche le module en premier ou le plus ; l
 
 | Module | Rôle | Statut | Ticket cible |
 |---|---|---|---|
-| `src/runtime/worker.ts` | Worker de l'inbox : une tâche par ticket, transaction de décision du store par événement, effets de l'outbox exécutés après le commit sous bail renouvelé, ligne en échec gardée pour le démarrage suivant | garder | ORC-149, ORC-150 (exécuteurs d'outbox, backoff), ORC-175 (dead-letter), ORC-228 (harnais) |
+| `src/runtime/worker.ts` | Worker de l'inbox : une tâche par ticket, transaction de décision du store par événement, effets de l'outbox exécutés après le commit sous bail renouvelé et jeton de réclamation, ligne en échec retentée 5 fois puis gardée pour le démarrage suivant | garder | ORC-149, ORC-150 (exécuteurs d'outbox, backoff), ORC-175 (dead-letter), ORC-228 (harnais) |
 | `src/runtime/workflow-version.ts` | Hash sha256 du workflow (JSON canonique) : la version figée d'un ticket | garder | ORC-149, ORC-187 (préréglage en TypeScript) |
 
 ### `src/adapters/`

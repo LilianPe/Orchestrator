@@ -46,6 +46,8 @@ export function createHarness(
     store?: Store;
     /** Lease of a claimed outbox row (ORC-149); the orchestrator's default otherwise. */
     effectLeaseMs?: number;
+    /** Retries of an inbox row whose processing throws (ORC-149); the orchestrator's default otherwise. */
+    processRetry?: { attempts: number; baseMs: number };
   } = {},
 ) {
   if (opts.projectYaml !== undefined && opts.preset) throw new Error('createHarness: pass projectYaml or preset, not both');
@@ -79,6 +81,7 @@ export function createHarness(
     knowledgeConfigured: opts.knowledge,
     inboxRetry: { attempts: 3, baseMs: 1 },
     effectLeaseMs: opts.effectLeaseMs,
+    processRetry: opts.processRetry,
   });
   let orch = build();
   const timers = new TimerService(store, clock, (e) => orch.accept(e));

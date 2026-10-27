@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import type { OutboxEffect } from '../core/decision.js';
 import { normalizeTicket, type QueueName, type FactoryEvent, type TicketState } from '../core/types.js';
@@ -24,7 +25,7 @@ CREATE TABLE IF NOT EXISTS timers (key TEXT PRIMARY KEY, fire_at INTEGER NOT NUL
 CREATE TABLE IF NOT EXISTS queue (project_id TEXT, ticket_id TEXT, job TEXT, queue TEXT NOT NULL, rank INTEGER NOT NULL, enqueued_at INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY (project_id, ticket_id, job));
 CREATE TABLE IF NOT EXISTS echoes (key TEXT PRIMARY KEY, until INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS outbox (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, ticket_id TEXT, event_id TEXT NOT NULL, seq INTEGER NOT NULL, i INTEGER NOT NULL, status TEXT NOT NULL, lease_until INTEGER, data TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS outbox (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, ticket_id TEXT, event_id TEXT NOT NULL, seq INTEGER NOT NULL, i INTEGER NOT NULL, status TEXT NOT NULL, lease_until INTEGER, lease TEXT, data TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS outbox_open ON outbox (project_id, ticket_id, status, seq, i);
 CREATE TABLE IF NOT EXISTS workflow_versions (hash TEXT PRIMARY KEY, definition TEXT NOT NULL);
 `;
@@ -38,6 +39,7 @@ interface OutboxSqlRow {
   i: number;
   status: OutboxRow['status'];
   lease_until: number | null;
+  lease: string | null;
   data: string;
 }
 
@@ -51,6 +53,7 @@ function outboxRow(r: OutboxSqlRow): OutboxRow {
     i: Number(r.i),
     effect: JSON.parse(r.data) as OutboxEffect,
     status: r.status,
+    ...(r.lease === null ? {} : { lease: r.lease }),
   };
 }
 
@@ -190,20 +193,32 @@ export class SqliteStore implements Store {
     if (!row) return undefined;
     const now = Date.now();
     if (row.status === 'running' && (row.lease_until ?? 0) >= now) return 'busy';
-    this.db.prepare(`UPDATE outbox SET status = 'running', lease_until = ? WHERE id = ?`).run(now + leaseMs, row.id);
-    return { ...outboxRow(row), status: 'running' };
+    const lease = randomUUID();
+    this.db.prepare(`UPDATE outbox SET status = 'running', lease_until = ?, lease = ? WHERE id = ?`).run(now + leaseMs, lease, row.id);
+    return { ...outboxRow(row), status: 'running', lease };
   }
 
-  async renewEffect(id: string, leaseMs: number): Promise<void> {
-    this.db.prepare(`UPDATE outbox SET lease_until = ? WHERE id = ? AND status = 'running'`).run(Date.now() + leaseMs, id);
+  async renewEffect(id: string, lease: string, leaseMs: number): Promise<boolean> {
+    const res = this.db
+      .prepare(`UPDATE outbox SET lease_until = ? WHERE id = ? AND status = 'running' AND lease = ?`)
+      .run(Date.now() + leaseMs, id, lease);
+    return Number(res.changes) === 1;
   }
 
-  async completeEffect(id: string): Promise<void> {
-    this.db.prepare(`UPDATE outbox SET status = 'done', lease_until = NULL WHERE id = ?`).run(id);
+  async completeEffect(id: string, lease?: string): Promise<boolean> {
+    return this.settleEffect(id, 'done', lease);
   }
 
-  async failEffect(id: string): Promise<void> {
-    this.db.prepare(`UPDATE outbox SET status = 'failed', lease_until = NULL WHERE id = ?`).run(id);
+  async failEffect(id: string, lease: string): Promise<boolean> {
+    return this.settleEffect(id, 'failed', lease);
+  }
+
+  /** Settles a running row, only under its claim token when one is given. */
+  private settleEffect(id: string, status: 'done' | 'failed', lease: string | undefined): boolean {
+    const res = this.db
+      .prepare(`UPDATE outbox SET status = ?, lease_until = NULL WHERE id = ? AND status = 'running' AND (? IS NULL OR lease = ?)`)
+      .run(status, id, lease ?? null, lease ?? null);
+    return Number(res.changes) === 1;
   }
 
   async effectTickets(): Promise<{ projectId: string; ticketId?: string }[]> {

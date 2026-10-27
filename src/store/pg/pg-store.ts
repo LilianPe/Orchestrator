@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { sql } from 'drizzle-orm';
 import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
@@ -72,6 +72,8 @@ interface OutboxPayload {
   seq: number;
   i: number;
   effect: OutboxEffect;
+  /** Claim token of the running row (`claimEffect`). */
+  lease?: string;
 }
 
 type Tx = Parameters<Parameters<NodePgDatabase<typeof schema>['transaction']>[0]>[0];
@@ -85,6 +87,7 @@ const outboxRow = (id: string, status: OutboxRow['status'], p: OutboxPayload): O
   i: p.i,
   effect: p.effect,
   status,
+  ...(p.lease === undefined ? {} : { lease: p.lease }),
 });
 
 export class PgStore implements AsyncStore {
@@ -326,28 +329,38 @@ export class PgStore implements AsyncStore {
       const row = result.rows[0];
       if (!row) return undefined;
       if (row.status === 'running' && row.live) return 'busy' as const;
+      const lease = randomUUID();
       await tx.execute(sql`
         update outbox set status = 'running', attempts = attempts + 1,
-          lease_until = to_timestamp(${(now + leaseMs) / 1000}), updated_at = to_timestamp(${now / 1000})
+          lease_until = to_timestamp(${(now + leaseMs) / 1000}), updated_at = to_timestamp(${now / 1000}),
+          payload = payload || jsonb_build_object('lease', ${lease}::text)
         where id = ${row.id}
       `);
-      return outboxRow(row.id, 'running', row.payload);
+      return outboxRow(row.id, 'running', { ...row.payload, lease });
     });
   }
 
-  async renewEffect(id: string, leaseMs: number): Promise<void> {
+  async renewEffect(id: string, lease: string, leaseMs: number): Promise<boolean> {
     const now = this.now();
-    await this.db.execute(sql`
+    const result = await this.db.execute(sql`
       update outbox set lease_until = to_timestamp(${(now + leaseMs) / 1000}), updated_at = to_timestamp(${now / 1000})
-      where id = ${id} and status = 'running'
+      where id = ${id} and status = 'running' and payload->>'lease' = ${lease}
     `);
+    return (result.rowCount ?? 0) > 0;
   }
 
-  async failEffect(id: string): Promise<void> {
-    await this.db.execute(sql`
-      update outbox set status = 'failed', lease_until = null, updated_at = to_timestamp(${this.now() / 1000})
-      where id = ${id}
+  async failEffect(id: string, lease: string): Promise<boolean> {
+    return this.settleEffect(id, 'failed', lease);
+  }
+
+  /** Settles a running row, only under its claim token when one is given (decision rows). */
+  private async settleEffect(id: string, status: 'done' | 'failed', lease: string | undefined): Promise<boolean> {
+    const owned = lease === undefined ? sql`true` : sql`payload->>'lease' = ${lease}`;
+    const result = await this.db.execute(sql`
+      update outbox set status = ${status}, lease_until = null, updated_at = to_timestamp(${this.now() / 1000})
+      where id = ${id} and status = 'running' and ${owned}
     `);
+    return (result.rowCount ?? 0) > 0;
   }
 
   /** Tickets whose first unfinished row is claimable: pending, or running under an expired lease. */
@@ -683,11 +696,8 @@ export class PgStore implements AsyncStore {
     });
   }
 
-  async completeEffect(id: string): Promise<void> {
-    await this.db.execute(sql`
-      update outbox set status = 'done', lease_until = null, updated_at = to_timestamp(${this.now() / 1000})
-      where id = ${id}
-    `);
+  async completeEffect(id: string, lease?: string): Promise<boolean> {
+    return this.settleEffect(id, 'done', lease);
   }
 
   async listQueue(): Promise<QueueItem[]> {

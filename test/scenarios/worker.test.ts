@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { loadWorkflow } from '../../src/config/load-workflow.js';
 import { TRUSTED } from '../../src/core/types.js';
 import { SqliteStore } from '../../src/store/sqlite-store.js';
+import type { DecisionRequest } from '../../src/store/types.js';
 import type { WorkspaceRequest } from '../../src/adapters/workspace/types.js';
 import { CRASH_WORKFLOW, crashAfterDecision } from '../helpers/crash-workflow.js';
 import { createHarness, packDir } from '../helpers/harness.js';
@@ -157,5 +158,91 @@ on:
     await h.orch.drained();
     expect(h.runner.requests).toHaveLength(1);
     expect((await h.store.recentEvents(10, 'REL-1')).filter((x) => x.id === 'd1')).toHaveLength(1);
+  });
+
+  describe('a row whose processing throws', () => {
+    const delegation = (h: ReturnType<typeof createHarness>, id: string, ticketId = 'REL-1') =>
+      ({ ...TRUSTED, id, type: 'ticket.delegated' as const, at: h.clock.now(), projectId: 'p', ticketId, payload: { linearSessionId: `ls-${ticketId}` } });
+    const stop = (h: ReturnType<typeof createHarness>, id: string) =>
+      ({ ...TRUSTED, id, type: 'control.stop' as const, at: h.clock.now(), projectId: 'p', ticketId: 'REL-1', payload: {} });
+
+    it('is retried in the same process after a backoff, then lets the rows behind it through, in order', async () => {
+      const h = createHarness({ processRetry: { attempts: 4, baseMs: 5 } });
+      h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+      const getIssue = h.tracker.getIssue.bind(h.tracker);
+      let failures = 2;
+      h.tracker.getIssue = async (id: string) => {
+        if (failures > 0) {
+          failures--;
+          throw new Error('Linear unreachable');
+        }
+        return getIssue(id);
+      };
+      h.runner.enqueue({ hold: true });
+      await h.orch.accept(delegation(h, 'd1'));
+      // A stop behind the failed delegation is not lost: it goes once the delegation passes.
+      await h.orch.accept(stop(h, 's1'));
+      await waitFor(async () => (await h.store.pendingInbox(10)).length === 0);
+      await h.orch.drained();
+      const types = (await h.store.recentEvents(10, 'REL-1')).map((e) => e.id).reverse();
+      expect(types.slice(0, 2)).toEqual(['d1', 's1']);
+      expect(await h.ticket()).toMatchObject({ delegated: true, blocked: true, blockReason: 'Arrêté à la demande' });
+    });
+
+    it('waits for the next start past its last retry, with the rows of its ticket, other tickets aside', async () => {
+      const h = createHarness({ processRetry: { attempts: 3, baseMs: 1 } });
+      h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+      h.tracker.addIssue({ identifier: 'REL-2', title: 'Import CSV' });
+      const getIssue = h.tracker.getIssue.bind(h.tracker);
+      let down = true;
+      let tries = 0;
+      h.tracker.getIssue = async (id: string) => {
+        if (down && id === 'REL-1') {
+          tries++;
+          throw new Error('Linear unreachable');
+        }
+        return getIssue(id);
+      };
+      await h.orch.accept(delegation(h, 'd1'));
+      await h.orch.accept(stop(h, 's1'));
+      await waitFor(() => tries === 3);
+      await new Promise((r) => setTimeout(r, 30));
+      expect(tries).toBe(3);
+      await h.send('ticket.delegated', { linearSessionId: 'ls-2' }, 'REL-2');
+      expect(await h.ticket('REL-2')).toMatchObject({ delegated: true });
+      expect((await h.store.pendingInbox(10)).map((e) => e.id)).toEqual(['d1', 's1']);
+
+      down = false;
+      await h.restart();
+      expect((await h.store.recentEvents(10, 'REL-1')).map((e) => e.id).reverse().slice(0, 2)).toEqual(['d1', 's1']);
+      expect(await h.store.pendingInbox(10)).toEqual([]);
+    });
+
+    it('holds the later events without a ticket of its project too, instead of leaving them waiting unseen', async () => {
+      const inner = new SqliteStore(':memory:');
+      let broken = true;
+      const decided: string[] = [];
+      const store = Object.assign(Object.create(inner) as SqliteStore, {
+        decide: (req: DecisionRequest) => {
+          decided.push(req.event.id);
+          if (broken && req.event.id === 'g1') throw new Error('database hiccup');
+          return inner.decide(req);
+        },
+      });
+      const h = createHarness({ store, processRetry: { attempts: 1, baseMs: 1 } });
+      const global = (id: string, type: 'control.pause' | 'control.resume') =>
+        ({ ...TRUSTED, id, type, at: h.clock.now(), projectId: '*', payload: {} });
+      await h.orch.accept(global('g1', 'control.pause'));
+      await h.orch.accept(global('g2', 'control.resume'));
+      await h.orch.drained();
+      // g2 is held behind g1 by this process: never even sent to the store.
+      expect(decided).toEqual(['g1']);
+      expect((await h.store.pendingInbox(10)).map((e) => e.id)).toEqual(['g1', 'g2']);
+
+      broken = false;
+      await h.restart();
+      expect(decided.slice(1)).toEqual(['g1', 'g2']);
+      expect(await h.store.getMeta('paused')).toBe('0');
+    });
   });
 });

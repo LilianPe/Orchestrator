@@ -75,6 +75,8 @@ export interface OrchestratorDeps {
   holdInboxUntilReplay?: boolean;
   /** Lease of a claimed outbox row (ORC-149); default 60 s, renewed every 20 s while the effect runs. */
   effectLeaseMs?: number;
+  /** Retries of an inbox row whose processing throws (ORC-149); default `PROCESS_RETRY`. */
+  processRetry?: { attempts: number; baseMs: number };
 }
 
 interface StartOpts {
@@ -139,6 +141,7 @@ export class Orchestrator {
       execute: (row) => this.execute(row),
       effectFailed: (row, err) => this.effectFailed(row, err),
       leaseMs: d.effectLeaseMs,
+      retry: d.processRetry,
     });
   }
 
@@ -467,13 +470,16 @@ export class Orchestrator {
 
   /** After the commit, before the effects. */
   private async committed(event: FactoryEvent, outcome: Extract<DecisionOutcome, { status: 'committed' }>): Promise<void> {
-    const { store, bus, scheduler } = this.d;
+    const { bus, scheduler } = this.d;
+    // First, and without a store read: a finished run's slot is freed whatever follows.
+    if (event.type === 'run.finished' && outcome.known && event.ticketId) {
+      const hash = outcome.known.workflowHash;
+      const workflow = (hash && this.workflows.get(hash)) || this.project(event.projectId).workflow;
+      const queue = workflow.jobs[event.payload.job]?.queue;
+      if (queue) scheduler.release(`${event.ticketId}:${queue}`);
+    }
     bus.publish({ kind: 'event', event });
     if (outcome.plan.note) this.log('info', outcome.plan.note);
-    if (event.type === 'run.finished' && outcome.known) {
-      const run = await store.getRun(event.payload.runId);
-      if (run) scheduler.release(`${run.ticketId}:${run.queue}`);
-    }
     if (outcome.plan.ticket) bus.publish({ kind: 'ticket', ticket: outcome.plan.ticket });
   }
 

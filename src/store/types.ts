@@ -97,6 +97,8 @@ export interface OutboxRow {
   i: number;
   effect: OutboxEffect;
   status: 'pending' | 'running' | 'done' | 'failed';
+  /** The claim token of a running row, set by `claimEffect`: only its holder may renew or settle it. */
+  lease?: string;
 }
 
 /**
@@ -124,12 +126,19 @@ export interface Store {
    * that row is running under a live lease: another worker is executing the ticket's effects.
    */
   claimEffect(projectId: string, ticketId: string | undefined, leaseMs: number): Promise<OutboxRow | 'busy' | undefined>;
-  /** Extends the lease of a running outbox row while its effect runs. */
-  renewEffect(id: string, leaseMs: number): Promise<void>;
-  /** Settles an outbox row: done. */
-  completeEffect(id: string): Promise<void>;
-  /** Settles an outbox row: failed, not retried. */
-  failEffect(id: string): Promise<void>;
+  /**
+   * Extends the lease of a running outbox row while its effect runs. False when the row is no
+   * longer running under `lease` (its lease expired and another worker claimed it).
+   */
+  renewEffect(id: string, lease: string, leaseMs: number): Promise<boolean>;
+  /**
+   * Settles a running outbox row: done. Only under the claim token `lease`: false, and nothing
+   * changed, when the lease was lost to another worker. Without `lease`: the legacy queue rows
+   * of `claim` (Postgres).
+   */
+  completeEffect(id: string, lease?: string): Promise<boolean>;
+  /** Settles a running outbox row: failed, not retried. Same guard as `completeEffect`. */
+  failEffect(id: string, lease: string): Promise<boolean>;
   /** Tickets whose first unfinished outbox row is claimable (pending, or running under an expired lease). */
   effectTickets(): Promise<{ projectId: string; ticketId?: string }[]>;
   /** The decision outbox rows of a ticket (`undefined`: of the events without a ticket), in order. */

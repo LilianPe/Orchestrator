@@ -189,7 +189,11 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     // The next event of the ticket waits for the effects of this one.
     await s.appendInbox(delegatedEvent('e2'));
     expect(await s.decide(request(delegatedEvent('e2')))).toMatchObject({ status: 'waiting' });
-    for (const id of ['REL-1:1:1', 'REL-1:1:2']) await s.completeEffect(id);
+    for (let k = 0; k < 2; k++) {
+      const row = await s.claimEffect('p', 'REL-1', 60_000);
+      if (typeof row !== 'object') throw new Error('expected a claimed row');
+      expect(await s.completeEffect(row.id, row.lease)).toBe(true);
+    }
     const second = request(delegatedEvent('e2'));
     expect(await s.decide(second)).toMatchObject({ status: 'committed', seq: 2, effectIds: ['REL-1:2:1', 'REL-1:2:2'] });
     expect(second.seen.ticket).toMatchObject({ title: 'T+' });
@@ -262,16 +266,28 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     await s.decide(request(delegatedEvent('e1')));
     expect(await s.effectTickets()).toEqual([{ projectId: 'p', ticketId: 'REL-1' }]);
     const first = await s.claimEffect('p', 'REL-1', 60_000);
-    expect(first).toMatchObject({ id: 'REL-1:1:1', status: 'running', effect: { kind: 'comment', body: 'on e1' } });
+    expect(first).toMatchObject({ id: 'REL-1:1:1', status: 'running', effect: { kind: 'comment', body: 'on e1' }, lease: expect.any(String) });
     // The first row runs under a live lease: nobody else takes the ticket's effects.
     expect(await s.claimEffect('p', 'REL-1', 60_000)).toBe('busy');
     expect(await s.effectTickets()).toEqual([]);
-    await s.completeEffect('REL-1:1:1');
-    expect(await s.claimEffect('p', 'REL-1', -1_000)).toMatchObject({ id: 'REL-1:1:2' });
+    expect(await s.completeEffect('REL-1:1:1', (first as { lease: string }).lease)).toBe(true);
+    const lost = await s.claimEffect('p', 'REL-1', -1_000);
+    expect(lost).toMatchObject({ id: 'REL-1:1:2' });
     // Its lease is already over: the row is claimable again, by anyone (its worker died).
     expect(await s.effectTickets()).toEqual([{ projectId: 'p', ticketId: 'REL-1' }]);
-    expect(await s.claimEffect('p', 'REL-1', 60_000)).toMatchObject({ id: 'REL-1:1:2' });
-    await s.failEffect('REL-1:1:2');
+    const taken = await s.claimEffect('p', 'REL-1', 60_000);
+    expect(taken).toMatchObject({ id: 'REL-1:1:2' });
+    const [oldLease, newLease] = [(lost as { lease: string }).lease, (taken as { lease: string }).lease];
+    expect(newLease).not.toBe(oldLease);
+    // The worker that lost the lease can neither renew nor settle the row its new holder runs.
+    expect(await s.renewEffect('REL-1:1:2', oldLease, 60_000)).toBe(false);
+    expect(await s.completeEffect('REL-1:1:2', oldLease)).toBe(false);
+    expect(await s.failEffect('REL-1:1:2', oldLease)).toBe(false);
+    expect((await s.listEffects('p', 'REL-1')).map((r) => r.status)).toEqual(['done', 'running']);
+    expect(await s.renewEffect('REL-1:1:2', newLease, 60_000)).toBe(true);
+    expect(await s.failEffect('REL-1:1:2', newLease)).toBe(true);
+    // A settled row is settled once.
+    expect(await s.completeEffect('REL-1:1:2', newLease)).toBe(false);
     expect(await s.claimEffect('p', 'REL-1', 60_000)).toBeUndefined();
     expect((await s.listEffects('p', 'REL-1')).map((r) => r.status)).toEqual(['done', 'failed']);
   });
