@@ -76,6 +76,22 @@ describe('standard pack', () => {
     );
   });
 
+  it('denies skipping the git hooks with --no-verify or -n, grouped (-nm) or late in the command', () => {
+    const s = JSON.parse(readFileSync(join(pack, 'settings.json'), 'utf8'));
+    expect(s.permissions.deny).toEqual(
+      expect.arrayContaining([
+        'Bash(git commit --no-verify:*)',
+        'Bash(git commit -n:*)',
+        'Bash(git commit -n*)',
+        'Bash(git commit * -n*)',
+        'Bash(git push --no-verify:*)',
+        'Bash(git * --no-verify*)',
+        'Bash(*--no-verify*)',
+      ]),
+    );
+    expect(s.permissions.allow.filter((rule: string) => rule.includes('--no-verify'))).toEqual([]);
+  });
+
   it('hook injects the rules, and the knowledge index when present', () => {
     const plain = hook({ FACTORY_TICKET: 'REL-1' });
     expect(plain.hookEventName).toBe('SessionStart');

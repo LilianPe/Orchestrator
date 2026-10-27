@@ -71,6 +71,7 @@ Texte complet : `packs/standard/skills/<nom>/SKILL.md`.
 - `gh pr merge` : seuls les humains mergent ;
 - tout force-push : `git push --force`, `-f`, `--force-with-lease`, une option de force en milieu de commande, un refspec `+…` ;
 - tout push direct sur `main` ou `master` (`git push origin main`, `HEAD:main`…) ;
+- tout contournement des hooks git par `--no-verify` (`git commit --no-verify`, `git push --no-verify`, l'option en milieu de commande, ou toute commande qui la contient) ou par `-n` (`git commit -n`, `-nm`, `-m … -n` ; pas `-an`, que la syntaxe des motifs ne sait pas isoler) ; les règles explicites doublent le joker `*--no-verify*` au cas où la version de Claude Code n'appliquerait pas les jokers en début ou milieu de motif. Le scan du diff (`factory/anti-triche`, ORC-158) refuse aussi un `--no-verify` ajouté dans un fichier du dépôt, hors documentation, fichiers de test et règles de permission des réglages Claude ;
 - `git reset --hard origin…`, `rm -rf /` ;
 - la lecture de `~/.relais/**`.
 
