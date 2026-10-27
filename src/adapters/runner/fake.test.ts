@@ -14,6 +14,7 @@ const scripts: Record<AgentScript, FakeScript> = {
   failure: { outcome: 'failure' },
   hang: { hold: true },
   chatty: { events: ['un', 'deux', 'trois'].map((text) => ({ kind: 'text', text })), turns: 3, hold: true },
+  unlaunchable: { events: [], outcome: 'failure', turns: 0, costUsd: 0 },
 };
 
 describeAgentRuntimeContract(

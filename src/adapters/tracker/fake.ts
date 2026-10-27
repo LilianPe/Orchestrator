@@ -43,10 +43,34 @@ export class FakeTracker implements Tracker {
     return issue;
   }
 
+  private argsOf(method: string, target?: string): unknown[][] {
+    return this.calls.filter((c) => c.method === method && (!target || c.args[0] === target)).map((c) => c.args.slice(1));
+  }
+
   activities(sessionId?: string): ActivityInput[] {
-    return this.calls
-      .filter((c) => c.method === 'activity' && (!sessionId || c.args[0] === sessionId))
-      .map((c) => c.args[1] as ActivityInput);
+    return this.argsOf('activity', sessionId).map(([a]) => a as ActivityInput);
+  }
+
+  comments(identifier: string): string[] {
+    return this.argsOf('comment', identifier).map(([body]) => body as string);
+  }
+
+  agentSessions(identifier: string): string[] {
+    return this.argsOf('ensureSession', identifier).map(([id]) => id as string);
+  }
+
+  externalUrls(sessionId: string): { label: string; url: string }[] {
+    return this.argsOf('addExternalUrl', sessionId).map(([label, url]) => ({ label: label as string, url: url as string }));
+  }
+
+  /** What the comments, sessions, activities and links written so far read back as, in the shape the contract suite asks. */
+  written() {
+    return {
+      comments: async (identifier: string) => this.comments(identifier),
+      sessions: async (identifier: string) => this.agentSessions(identifier),
+      activities: async (sessionId: string) => this.activities(sessionId),
+      externalUrls: async (sessionId: string) => this.externalUrls(sessionId),
+    };
   }
 
   private record(method: string, ...args: unknown[]): void {
@@ -101,7 +125,8 @@ export class FakeTracker implements Tracker {
 
   async ensureSession(identifier: string): Promise<string> {
     this.must(identifier);
-    this.record('ensureSession', identifier);
-    return `fake-session-${++this.sessions}`;
+    const id = `fake-session-${++this.sessions}`;
+    this.record('ensureSession', identifier, id);
+    return id;
   }
 }

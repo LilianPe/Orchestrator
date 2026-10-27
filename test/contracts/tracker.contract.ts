@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
-import type { Tracker } from '../../src/adapters/tracker/types.js';
-import { subjectWith } from './cases.js';
+import { expect } from 'vitest';
+import type { ActivityInput, Tracker } from '../../src/adapters/tracker/types.js';
+import { describeContract, subjectWith, type ContractOptions } from './cases.js';
 
 /** What the implementation under test arranged for the suite. Docs: docs/ports/tracker.md. */
 export interface TrackerSubject {
@@ -15,10 +15,19 @@ export interface TrackerSubject {
   states?: [string, string];
   /** A team with one issue delegated to the app and one not; absent, the delegation case is skipped. */
   delegation?: { teamKey: string; delegated: string; notDelegated: string };
+  /** Reads back what `comment`, `ensureSession`, `activity` and `addExternalUrl` wrote, which the port cannot; absent, the effects cases are skipped. */
+  written?: {
+    comments: (issue: string) => Promise<string[]>;
+    /** The agent sessions open on the issue. */
+    sessions: (issue: string) => Promise<string[]>;
+    activities: (session: string) => Promise<ActivityInput[]>;
+    externalUrls: (session: string) => Promise<{ label: string; url: string }[]>;
+  };
 }
 
-export function describeTrackerContract(name: string, make: () => TrackerSubject | Promise<TrackerSubject>): void {
-  describe(`Tracker contract: ${name}`, () => {
+export function describeTrackerContract(name: string, make: () => TrackerSubject | Promise<TrackerSubject>, options?: ContractOptions): void {
+  describeContract(`Tracker contract: ${name}`, options, (it) => {
+
     it('getIssue returns the issue, its team being the identifier prefix', async () => {
       const s = await make();
       const issue = await s.tracker.getIssue(s.issue);
@@ -65,9 +74,13 @@ export function describeTrackerContract(name: string, make: () => TrackerSubject
     it('listDelegated lists the team issues delegated to the app, and only them', async (ctx) => {
       const s = await subjectWith(make, () => ctx.skip(), 'delegation');
       const { teamKey, delegated, notDelegated } = s.delegation;
-      const ids = (await s.tracker.listDelegated(teamKey)).map((i) => i.identifier);
+      // An issue of another team, or one that does not exist, would never be listed: « only them » would check nothing.
+      expect((await s.tracker.getIssue(notDelegated)).teamKey).toBe(teamKey);
+      const listed = await s.tracker.listDelegated(teamKey);
+      const ids = listed.map((i) => i.identifier);
       expect(ids).toContain(delegated);
       expect(ids).not.toContain(notDelegated);
+      expect(listed.every((i) => i.teamKey === teamKey)).toBe(true);
     });
 
     it('moveTo sets the state and replaying it changes nothing', async (ctx) => {
@@ -106,5 +119,33 @@ export function describeTrackerContract(name: string, make: () => TrackerSubject
       await s.tracker.activity(session, { type: 'action', action: 'Lecture', parameter: 'README.md', result: 'ok', ephemeral: true });
       await s.tracker.addExternalUrl(session, 'Pull request', 'https://github.test/pr/1');
     });
+
+    it('ensureSession opens an agent session on the issue', async (ctx) => {
+      const s = await subjectWith(make, () => ctx.skip(), 'states', 'written');
+      const session = await s.tracker.ensureSession(s.issue);
+      expect(await s.written.sessions(s.issue)).toContain(session);
+    });
+
+    it('comment, activity and addExternalUrl write their effect; replaying comment or activity writes it again', async (ctx) => {
+      const s = await subjectWith(make, () => ctx.skip(), 'states', 'written');
+      const body = 'Commentaire rejoué de la suite de conformité.';
+      const before = (await s.written.comments(s.issue)).filter((c) => c === body).length;
+      await s.tracker.comment(s.issue, body);
+      await s.tracker.comment(s.issue, body);
+      expect((await s.written.comments(s.issue)).filter((c) => c === body).length - before).toBe(2);
+
+      const session = await s.tracker.ensureSession(s.issue);
+      const activities: ActivityInput[] = [
+        ...(['thought', 'response', 'elicitation', 'error'] as const).map((type) => ({ type, body: `Activité ${type}.` })),
+        { type: 'action', action: 'Lecture', parameter: 'README.md', result: 'ok', ephemeral: true },
+        { type: 'action', action: 'Écriture', parameter: 'src/a.ts' },
+      ];
+      for (const a of [...activities, activities[0]!]) await s.tracker.activity(session, a);
+      expect((await s.written.activities(session)).slice(-7)).toEqual([...activities, activities[0]]);
+
+      await s.tracker.addExternalUrl(session, 'Pull request', 'https://github.test/pr/1');
+      expect(await s.written.externalUrls(session)).toContainEqual({ label: 'Pull request', url: 'https://github.test/pr/1' });
+    });
+
   });
 }
