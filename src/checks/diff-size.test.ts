@@ -105,16 +105,37 @@ describe('diffSizeCheck', () => {
   });
 
   it('leaves lockfiles out, wherever they are, and lists them', () => {
-    const locks = ['package-lock.json', 'web/pnpm-lock.yaml', 'yarn.lock', 'poetry.lock', 'uv.lock', 'Pipfile.lock', 'npm-shrinkwrap.json', 'bun.lock'];
+    const locks = ['package-lock.json', 'web/pnpm-lock.yaml', 'yarn.lock', 'poetry.lock', 'uv.lock', 'Pipfile.lock', 'npm-shrinkwrap.json', 'bun.lock', 'pylock.toml', 'pylock.dev.toml'];
     const diff = locks.map((p) => addedFile(p, 2000)).join('') + modifiedFile('package.json', 1, 0);
     const result = diffSizeCheck(diff);
     expect(result.ok).toBe(true);
     expect(result.size).toEqual({ files: 1, lines: 1 });
-    expect(result.summary).toContain(`${locks.length} fichier(s) de verrouillage non compté(s)`);
+    expect(result.summary).toContain(`${locks.length} fichier(s) généré(s) non compté(s)`);
   });
 
   it('counts a file only named like a lockfile', () => {
     expect(measureDiff(addedFile('src/package-lock.json.ts', 3)).size).toEqual({ files: 1, lines: 3 });
+  });
+
+  it('leaves drizzle-kit snapshots and journal out, not the migration', () => {
+    const diff = addedFile('drizzle/0001_labels.sql', 4) + addedFile('drizzle/meta/0001_snapshot.json', 1280) + modifiedFile('drizzle/meta/_journal.json', 7, 1);
+    expect(diffSizeCheck(diff)).toMatchObject({ ok: true, size: { files: 1, lines: 4 } });
+    expect(measureDiff(addedFile('src/0001_snapshot.json', 3)).size).toEqual({ files: 1, lines: 3 });
+  });
+
+  it('judges a copy by its new path: a test copied from code is a test', () => {
+    const copy = ['diff --git a/src/fixture.ts b/test/fixture.ts', 'similarity index 80%', 'copy from src/fixture.ts', 'copy to test/fixture.ts', '--- a/src/fixture.ts', '+++ b/test/fixture.ts', '@@ -1,1 +1,301 @@', ' context', ...Array.from({ length: 300 }, (_, i) => `+new ${i}`), ''].join('\n');
+    expect(measureDiff(copy).size).toEqual({ files: 0, lines: 0 });
+  });
+
+  it('keeps an agent-written path from breaking the summary', () => {
+    // git quotes a path with a newline or a backtick; parseDiff decodes it.
+    const path = String.raw`"src/a\n[ok](x)` + '`' + String.raw`b.ts"`;
+    const body = Array.from({ length: 401 }, (_, i) => `+line ${i}`);
+    const diff = [`diff --git ${path.replace('"src', '"a/src')} ${path.replace('"src', '"b/src')}`, 'new file mode 100644', '--- /dev/null', `+++ ${path.replace('"src', '"b/src')}`, '@@ -0,0 +1,401 @@', ...body, ''].join('\n');
+    const result = diffSizeCheck(diff);
+    expect(result.ok).toBe(false);
+    expect(result.summary).toContain('- `` src/a?[ok](x)`b.ts `` : 401 ligne(s)');
   });
 
   it('counts the test runner configuration: it is not a test', () => {
@@ -147,6 +168,15 @@ describe('resolveMaxDiff', () => {
   it('refuses to loosen a bound', () => {
     expect(() => resolveMaxDiff({ files: 16 })).toThrow(MaxDiffConfigError);
     expect(() => resolveMaxDiff({ lines: 401 })).toThrow(/max_diff\.lines = 401 .* 400 .* ne peut que resserrer/);
+  });
+
+  it('reads a null max_diff (`max_diff:` with no value) as no tightening', () => {
+    expect(resolveMaxDiff(null)).toEqual({ files: 15, lines: 400 });
+  });
+
+  it('refuses an unknown key rather than ignore a typo', () => {
+    expect(() => resolveMaxDiff({ file: 5 } as unknown as Partial<{ files: number }>)).toThrow(/clé\(s\) inconnue\(s\) file/);
+    expect(() => resolveMaxDiff([] as unknown as Partial<{ files: number }>)).toThrow(MaxDiffConfigError);
   });
 
   it('refuses a bound that is not a positive integer', () => {

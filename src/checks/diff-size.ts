@@ -3,9 +3,12 @@
 //
 // What counts, per file of the diff:
 // - a file counts once, its lines are added + removed lines: a deleted file counts with every removed line;
-// - a test file (the shared rule of test-files.ts) does not count, nor does a lockfile: the installer writes it, one
-//   added dependency rewrites hundreds of its lines, and what it adds is the dependency check's business (ORC-165);
-// - a rename or a copy is left out only when both its paths are left out: moving code into `test/` still counts;
+// - a test file (the shared rule of test-files.ts) does not count, nor does a file a tool writes whole and nobody
+//   reviews line by line: a lockfile (one added dependency rewrites hundreds of its lines) or a drizzle-kit migration
+//   snapshot (a 4-line migration comes with a 1,000-line snapshot). Both are known by name only, like tests. What a
+//   lockfile installs is not a size question: no check reads lockfiles yet (deps.ts reads the manifests);
+// - a renamed file is left out only when both its paths are: moving code into `test/` still counts. A copy is judged
+//   by its new path: the original does not change;
 // - a pure rename counts as one file with no line, a binary file as one file with no line.
 // Other generated files count: nothing in the diff says a file is generated.
 import { parseDiff, type DiffFile } from './diff.js';
@@ -15,9 +18,9 @@ import type { CheckResult } from './types.js';
 export const DIFF_SIZE_CHECK = 'factory/taille-du-diff';
 
 export interface MaxDiff {
-  /** Changed files outside tests and lockfiles. */
+  /** Changed files outside tests and generated files. */
   files: number;
-  /** Added + removed lines outside tests and lockfiles. */
+  /** Added + removed lines outside tests and generated files. */
   lines: number;
 }
 
@@ -34,8 +37,13 @@ export class MaxDiffConfigError extends Error {
  * validated by ORC-209, which can reuse this). A bound left out keeps its base value. Throws `MaxDiffConfigError`
  * on a bound above the base: the configuration can only tighten.
  */
-export function resolveMaxDiff(config: Partial<MaxDiff> = {}): MaxDiff {
+export function resolveMaxDiff(config?: Partial<MaxDiff> | null): MaxDiff {
   const limits: MaxDiff = { ...MAX_DIFF };
+  // `max_diff:` with no value reads as null in YAML: no tightening.
+  if (config === undefined || config === null) return limits;
+  if (typeof config !== 'object' || Array.isArray(config)) throw new MaxDiffConfigError('max_diff : un objet `{ files, lines }` est attendu.');
+  const unknown = Object.keys(config).filter((k) => k !== 'files' && k !== 'lines');
+  if (unknown.length > 0) throw new MaxDiffConfigError(`max_diff : clé(s) inconnue(s) ${unknown.join(', ')} ; seules \`files\` et \`lines\` existent.`);
   for (const key of ['files', 'lines'] as const) {
     const value = config[key];
     if (value === undefined) continue;
@@ -61,18 +69,24 @@ const LOCKFILES = new Set([
   'uv.lock',
   'Pipfile.lock',
   'pdm.lock',
+  'pylock.toml',
+  'deno.lock',
 ]);
 
-export function isLockfile(path: string): boolean {
-  return LOCKFILES.has(normalizePath(path).split('/').at(-1) ?? '');
+/** A lockfile (`package-lock.json`, `uv.lock`, `pylock.toml`, `pylock.<name>.toml`…), or drizzle-kit's `meta/NNNN_snapshot.json` and `meta/_journal.json`. */
+export function isGeneratedFile(path: string): boolean {
+  const segments = normalizePath(path).split('/');
+  const name = segments.at(-1) ?? '';
+  if (LOCKFILES.has(name) || /^pylock\.[^/]+\.toml$/.test(name)) return true;
+  return segments.at(-2) === 'meta' && (/^\d+_snapshot\.json$/.test(name) || name === '_journal.json');
 }
 
-type FileKind = 'code' | 'test' | 'lockfile';
+type FileKind = 'code' | 'test' | 'generated';
 
 function kindOf(file: DiffFile): FileKind {
-  const paths = [file.path, ...(file.oldPath !== undefined ? [file.oldPath] : [])];
-  if (paths.some((p) => !isTestFile(p) && !isLockfile(p))) return 'code';
-  return paths.some(isLockfile) ? 'lockfile' : 'test';
+  const paths = [file.path, ...(file.status === 'renamed' && file.oldPath !== undefined ? [file.oldPath] : [])];
+  if (paths.some((p) => !isTestFile(p) && !isGeneratedFile(p))) return 'code';
+  return paths.some(isGeneratedFile) ? 'generated' : 'test';
 }
 
 export interface CountedFile {
@@ -87,21 +101,21 @@ export interface DiffMeasure {
   counted: CountedFile[];
   /** Paths left out. */
   tests: string[];
-  lockfiles: string[];
+  generated: string[];
 }
 
 export function measureDiff(diff: string): DiffMeasure {
   const counted: CountedFile[] = [];
   const tests: string[] = [];
-  const lockfiles: string[] = [];
+  const generated: string[] = [];
   for (const file of parseDiff(diff)) {
     const kind = kindOf(file);
     if (kind === 'test') tests.push(file.path);
-    else if (kind === 'lockfile') lockfiles.push(file.path);
+    else if (kind === 'generated') generated.push(file.path);
     else counted.push({ path: file.path, lines: file.added.length + file.removed });
   }
   counted.sort((a, b) => b.lines - a.lines);
-  return { size: { files: counted.length, lines: counted.reduce((n, f) => n + f.lines, 0) }, counted, tests, lockfiles };
+  return { size: { files: counted.length, lines: counted.reduce((n, f) => n + f.lines, 0) }, counted, tests, generated };
 }
 
 export interface DiffSizeOptions {
@@ -115,13 +129,19 @@ export interface DiffSizeResult extends CheckResult {
   limits: MaxDiff;
 }
 
+// A path comes from the agent's diff: no control character, and a code span that survives a backtick.
+function mdCode(path: string): string {
+  const s = path.replace(/\p{Cc}/gu, '?');
+  return s.includes('`') ? `\`\` ${s} \`\`` : `\`${s}\``;
+}
+
 /** Files named in a blocking summary, biggest first: where a split would start. */
 const LISTED = 10;
 
 function leftOut(m: DiffMeasure): string {
   const parts = [
     ...(m.tests.length > 0 ? [`${m.tests.length} fichier(s) de test non compté(s)`] : []),
-    ...(m.lockfiles.length > 0 ? [`${m.lockfiles.length} fichier(s) de verrouillage non compté(s)`] : []),
+    ...(m.generated.length > 0 ? [`${m.generated.length} fichier(s) généré(s) non compté(s)`] : []),
   ];
   return parts.length > 0 ? ` (${parts.join(', ')})` : '';
 }
@@ -131,7 +151,7 @@ function blockedSummary(m: DiffMeasure, limits: MaxDiff): string {
     ...(m.size.files > limits.files ? [`${m.size.files} fichiers hors tests, au-delà de ${limits.files}`] : []),
     ...(m.size.lines > limits.lines ? [`${m.size.lines} lignes hors tests, au-delà de ${limits.lines}`] : []),
   ];
-  const biggest = m.counted.slice(0, LISTED).map((f) => `- \`${f.path}\` : ${f.lines} ligne(s)`);
+  const biggest = m.counted.slice(0, LISTED).map((f) => `- ${mdCode(f.path)} : ${f.lines} ligne(s)`);
   return [
     `Diff trop gros pour une PR : ${over.join(' ; ')}${leftOut(m)}.`,
     '',
