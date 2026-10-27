@@ -14,7 +14,7 @@ import { Orchestrator } from './orchestrator.js';
 import { Scheduler } from './scheduler.js';
 import { newTicketState, TRUSTED, type FactoryEvent } from './types.js';
 
-function setup(o: { runner?: Runner; verify?: Verifier; budget?: number; tweak?: (w: ReturnType<typeof loadWorkflow>) => void } = {}) {
+function setup(o: { runner?: Runner; verify?: Verifier; budget?: number; hold?: boolean; tweak?: (w: ReturnType<typeof loadWorkflow>) => void } = {}) {
   const packDir = join(import.meta.dirname, '../../packs/standard');
   const workflow = loadWorkflow({ packDir });
   o.tweak?.(workflow);
@@ -28,7 +28,7 @@ function setup(o: { runner?: Runner; verify?: Verifier; budget?: number; tweak?:
     store, clock: new FakeClock(1_000), bus: new EventBus(), scheduler,
     tracker, forge: new FakeForge(), runner, workspaces: new FakeWorkspaces(), verify: o.verify ?? (async () => ({ ok: true, failures: [] })), dailyBudgetUsd: o.budget,
     projects: [{ id: 'p', repoPath: '/repo', teamKey: 'REL', workflow }], packDir,
-    agentEnv: (r) => ({ FACTORY_RUN_TOKEN: r.token }), newId: () => `id-${++n}`, activityIntervalMs: 0,
+    agentEnv: (r) => ({ FACTORY_RUN_TOKEN: r.token }), newId: () => `id-${++n}`, activityIntervalMs: 0, holdInboxUntilReplay: o.hold,
   });
   return { store, tracker, runner: fakeRunner, orch, scheduler };
 }
@@ -46,6 +46,19 @@ describe('Orchestrator', () => {
     expect(runner.requests).toEqual([]);
     expect((await store.getTicket('p', 'REL-1'))!.pendingJob).toBeUndefined();
     expect((await store.getTicket('p', 'REL-1'))!.blocked).toBe(false);
+  });
+
+  it('with holdInboxUntilReplay, only writes the events accepted before replayInbox()', async () => {
+    const { store, tracker, orch } = setup({ hold: true });
+    tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+    expect(await orch.accept(delegated())).toBe(true);
+    await orch.idle();
+    expect(await store.getTicket('p', 'REL-1')).toBeUndefined();
+    expect((await store.pendingInbox(10)).map((e) => e.id)).toEqual(['e1']);
+    await orch.replayInbox();
+    await orch.idle();
+    expect(await store.getTicket('p', 'REL-1')).toMatchObject({ delegated: true });
+    expect(await store.pendingInbox(10)).toEqual([]);
   });
 
   it('blocks a ticket from outside an event only after the event in flight, never over it', async () => {

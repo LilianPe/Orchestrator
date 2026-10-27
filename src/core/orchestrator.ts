@@ -66,6 +66,11 @@ export interface OrchestratorDeps {
    * n-th retry after `baseMs * 2^(n-1)`. Default 5 writes from 200 ms (about 3 s in all).
    */
   inboxRetry?: { attempts: number; baseMs: number };
+  /**
+   * The daemon's start: events accepted before `replayInbox()` are only written, not processed,
+   * so the inbox is not dispatched before the tracker is connected. Default false (tests).
+   */
+  holdInboxUntilReplay?: boolean;
 }
 
 interface StartOpts {
@@ -110,6 +115,8 @@ export class Orchestrator {
   private writes = new Set<Promise<void>>();
   /** A dispatch pass is queued in the chain and has not started reading the inbox yet. */
   private dispatchQueued = false;
+  /** False until `replayInbox()` when `holdInboxUntilReplay` is set: `accept` then only writes. */
+  private dispatchOpen: boolean;
   /** Inbox rows whose processing failed in this process: left pending for the next start. */
   private skipped = new Set<string>();
   /**
@@ -121,6 +128,7 @@ export class Orchestrator {
 
   constructor(private d: OrchestratorDeps) {
     this.newId = d.newId ?? randomUUID;
+    this.dispatchOpen = !d.holdInboxUntilReplay;
   }
 
   /**
@@ -131,17 +139,13 @@ export class Orchestrator {
    */
   accept(event: FactoryEvent | StoredEvent): Promise<boolean> {
     const write = this.d.store.appendInbox(event).then((fresh) => {
-      if (fresh) void this.dispatch();
+      if (fresh && this.dispatchOpen) void this.dispatch();
       return fresh;
     });
     // idle() waits for writes in flight too: their event is about to be dispatched.
     const tracked: Promise<void> = write.then(
-      () => {
-        this.writes.delete(tracked);
-      },
-      () => {
-        this.writes.delete(tracked);
-      },
+      () => void this.writes.delete(tracked),
+      () => void this.writes.delete(tracked),
     );
     this.writes.add(tracked);
     return write;
@@ -166,6 +170,7 @@ export class Orchestrator {
    * failed handling), oldest first. `factory up` calls it once at start, after `recover()`.
    */
   replayInbox(): Promise<void> {
+    this.dispatchOpen = true;
     return this.dispatch();
   }
 
@@ -230,6 +235,8 @@ export class Orchestrator {
             }
             await this.process(row);
           }
+          // A short batch was the last: what was accepted meanwhile queued a pass of its own.
+          if (rows.length < INBOX_BATCH) return;
         }
       })
       .catch((err: unknown) => {
@@ -257,9 +264,9 @@ export class Orchestrator {
    * otherwise keep the slot taken and, slot after slot, stop every launch. The slots are in memory,
    * so the replay at the next start frees nothing twice.
    */
-  private async freeSlot(row: StoredEvent): Promise<void> {
-    if (row.type !== 'run.finished') return;
-    const run = await this.d.store.getRun((row.payload as EventPayloads['run.finished']).runId).catch(() => undefined);
+  private async freeSlot(event: FactoryEvent | StoredEvent): Promise<void> {
+    if (event.type !== 'run.finished') return;
+    const run = await this.d.store.getRun((event.payload as EventPayloads['run.finished']).runId).catch(() => undefined);
     if (run) this.d.scheduler.release(`${run.ticketId}:${run.queue}`);
   }
 
@@ -294,7 +301,7 @@ export class Orchestrator {
     const checked = new Set<string>();
     for (const row of await store.pendingInbox(Number.MAX_SAFE_INTEGER)) {
       if (row.type === 'run.finished') finished.add((row.payload as EventPayloads['run.finished']).runId);
-      if (row.type === 'verify.passed' || row.type === 'verify.failed') checked.add((row.payload as { runId: string }).runId);
+      if (row.type === 'verify.passed' || row.type === 'verify.failed') checked.add((row.payload as EventPayloads['verify.passed']).runId);
     }
     const block = (t: TicketState, reason: string): Promise<TicketState> => {
       this.recoveryNotices.push({ ticket: { projectId: t.projectId, ticketId: t.ticketId }, type: 'elicitation', body: reason });
@@ -455,10 +462,7 @@ export class Orchestrator {
       return;
     }
 
-    if (event.type === 'run.finished') {
-      const run = await store.getRun(event.payload.runId);
-      if (run) this.d.scheduler.release(`${run.ticketId}:${run.queue}`);
-    }
+    await this.freeSlot(event);
     const decision = decide(known, event, project.workflow);
     if (isFenced(decision)) this.log('info', `ignored stale ${event.type} for ${event.ticketId ?? '*'}: ${decision.trace[0]}`);
     let next = reduce(known, event);

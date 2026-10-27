@@ -177,27 +177,19 @@ export class PgStore implements AsyncStore {
     const version = event.schemaVersion ?? 1;
     return this.db.transaction(async (tx) => {
       const ticketId = event.ticketId ?? null;
-      // Taken before the dedup check: a second call for the same event (same ticket) waits for the
-      // first to commit, then sees its journal row.
+      // Taken before the insert: a second call for the same event (same ticket) waits for the first
+      // to commit, then meets its journal row on the unique event id.
       await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${ticketId ?? '__global__'}))`);
-      const journaled = await tx.execute(sql`select 1 from journal where event_id = ${event.id} limit 1`);
-      if ((journaled.rowCount ?? 0) > 0) return false;
-      const seqResult = await tx.execute<{ seq: number }>(
-        sql`
-          select coalesce(max(seq), 0) + 1 as seq
-          from journal
-          where ticket_id is not distinct from ${ticketId}
-        `,
-      );
-      const seq = Number(seqResult.rows[0]?.seq ?? 1);
-      await tx.execute(sql`
+      const inserted = await tx.execute(sql`
         insert into journal (id, ticket_id, event_id, seq, type, payload, schema_version, created_at)
-        values (
-          ${event.id}, ${ticketId}, ${event.id}, ${seq}, ${event.type},
+        select
+          ${event.id}, ${ticketId}, ${event.id}, coalesce(max(seq), 0) + 1, ${event.type},
           ${JSON.stringify(event)}::jsonb, ${version}, to_timestamp(${now / 1000})
-        )
+        from journal
+        where ticket_id is not distinct from ${ticketId}
+        on conflict (event_id) do nothing
       `);
-      return true;
+      return (inserted.rowCount ?? 0) > 0;
     });
   }
 
