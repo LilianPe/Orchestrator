@@ -276,6 +276,11 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
         out.trace.push(`effect.failed ignored: ticket ${ticket.logical === 'done' || ticket.prState === 'MERGED' ? 'delivered' : 'stopped'}`);
         return out;
       }
+      // The error notice of a block died: the ticket stays blocked for the reason the notice carried.
+      if (eventId.startsWith('effect:') && ticket.blocked) {
+        out.trace.push('effect.failed ignored: the notice of a block, which keeps its reason');
+        return out;
+      }
       const reason = `Erreur : ${error}`;
       out.events.push({ type: 'ticket.blocked', reason });
       // The error notice of a failed effect is not noticed again when it fails too: the tracker may be what fails.

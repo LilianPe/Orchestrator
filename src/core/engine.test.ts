@@ -415,6 +415,10 @@ describe('decide — built-ins', () => {
     expect(decide(ticket(), ev('effect.failed', { ...result, kind: 'activity', eventId: 'effect:REL-1:1:2', error: 'Linear down' }), workflow)).toEqual(
       decision({ events: [{ type: 'ticket.blocked', reason: 'Erreur : Linear down' }] }),
     );
+    // ... and on a ticket already blocked, the reason the notice carried stays.
+    expect(
+      decide(ticket({ blocked: true, blockReason: 'Erreur : disk full' }), ev('effect.failed', { ...result, kind: 'activity', eventId: 'effect:REL-1:1:2', error: 'Linear down' }), workflow),
+    ).toEqual(decision());
     // A step of the shell, or an unknown ticket: nothing to block.
     expect(decide(ticket(), ev('effect.failed', { ...result, kind: 'settle', error: 'x' }), workflow)).toEqual(decision());
     expect(decide(undefined, ev('effect.failed', { ...result, error: 'x' }), workflow)).toEqual(decision());
