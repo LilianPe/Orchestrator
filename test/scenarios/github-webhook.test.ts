@@ -158,6 +158,25 @@ describe('GitHub webhooks', () => {
     expect(await h.ticket()).toMatchObject({ logical: 'human_review', blocked: false, pendingFeedback: [] });
   });
 
+  it('cancels again a PR reopened, relaunched and closed again', async () => {
+    const h = createHarness();
+    await delegated(h);
+    const at = (s: string) => ({ ...pullRequestBody('closed'), pull_request: { ...pullRequestBody('closed').pull_request, closed_at: s } });
+    await post(h, 'pull_request', at('2026-10-28T10:00:00Z'));
+    expect(await h.ticket()).toMatchObject({ prState: 'CLOSED', blocked: true });
+    const reopened = pullRequestBody('reopened');
+    reopened.pull_request.updated_at = '2026-10-28T11:00:00Z';
+    await post(h, 'pull_request', reopened);
+    expect(await h.ticket()).toMatchObject({ prState: 'OPEN', blocked: true });
+    h.runner.enqueue({ hold: true });
+    await h.send('label.changed', { label: 'agent:reprendre', change: 'added' });
+    expect((await h.ticket()).activeRunId).toBeDefined();
+    await post(h, 'pull_request', at('2026-10-28T12:00:00Z'));
+    const t = await h.ticket();
+    expect(t).toMatchObject({ prState: 'CLOSED', blocked: true });
+    expect(t.activeRunId).toBeUndefined();
+  });
+
   it('ignores branches the factory does not track', async () => {
     const h = createHarness();
     await delegated(h);

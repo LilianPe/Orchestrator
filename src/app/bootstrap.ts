@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { serve } from '@hono/node-server';
 import { GhCliForge } from '../adapters/forge/gh-cli.js';
 import { GitHubAppForge } from '../adapters/forge/github-app.js';
-import { createGithubIngest } from '../adapters/forge/github-ingest.js';
+import { createGithubIngest, githubMapContext, githubRepoOf } from '../adapters/forge/github-ingest.js';
 import { PrPoller } from '../adapters/forge/pr-poller.js';
 import { ClaudeCodeRunner } from '../adapters/runner/claude-code.js';
 import { purgeTranscripts } from '../adapters/runner/transcript.js';
@@ -204,14 +204,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       secret: () => githubSecret,
       accept,
       log,
-      ctx: {
-        ticketForBranch: async (branch) => (await store.listTickets()).find((t) => t.branch === branch),
-        findPr: async (t) => {
-          const project = projects.find((p) => p.id === t.projectId);
-          return project && t.branch ? forge.findPr(project.repoPath, t.branch) : undefined;
-        },
-        now: () => clock.now(),
-      },
+      ctx: githubMapContext({ store, forge, projects, repoOf: githubRepoOf(), now: () => clock.now() }),
     });
 
     const oauthStates = new Set<string>();

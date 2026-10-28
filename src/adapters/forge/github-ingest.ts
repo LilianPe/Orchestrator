@@ -1,5 +1,55 @@
 import type { FactoryEvent } from '../../core/types.js';
+import type { Store } from '../../store/types.js';
+import { execCmd, mustExec, type Exec } from '../exec.js';
+import { parseGitHubRemote } from './github-app.js';
 import { mapGithubWebhook, verifyGithubSignature, type GithubMapContext } from './github-webhook.js';
+import type { Forge } from './types.js';
+
+/** `owner/name` of a checkout's `origin` on GitHub, read once per checkout; undefined when it is not on GitHub. */
+export function githubRepoOf(exec: Exec = execCmd): (repoPath: string) => Promise<string | undefined> {
+  const known = new Map<string, Promise<string | undefined>>();
+  return (repoPath) => {
+    let repo = known.get(repoPath);
+    if (!repo) {
+      repo = mustExec(exec, 'git', ['remote', 'get-url', 'origin'], { cwd: repoPath }).then((remote) => {
+        const r = parseGitHubRemote(remote);
+        return r && `${r.owner}/${r.name}`;
+      });
+      // A failed read is tried again at the next webhook.
+      repo.catch(() => known.delete(repoPath));
+      known.set(repoPath, repo);
+    }
+    return repo;
+  };
+}
+
+/**
+ * The daemon's mapping context: a ticket is the one whose branch the webhook names, in the project whose
+ * repository (`repoOf`, `owner/name`) sent it; a project whose repository is unknown matches nothing.
+ */
+export function githubMapContext(d: {
+  store: Pick<Store, 'listTickets'>;
+  forge: Pick<Forge, 'findPr'>;
+  projects: readonly { id: string; repoPath: string }[];
+  repoOf: (repoPath: string) => Promise<string | undefined>;
+  now: () => number;
+}): GithubMapContext {
+  const sameRepo = async (projectId: string, repo: string) => {
+    const project = d.projects.find((p) => p.id === projectId);
+    return !!project && (await d.repoOf(project.repoPath))?.toLowerCase() === repo.toLowerCase();
+  };
+  return {
+    ticketForBranch: async (repo, branch) => {
+      for (const t of await d.store.listTickets()) if (t.branch === branch && (await sameRepo(t.projectId, repo))) return t;
+      return undefined;
+    },
+    findPr: async (t) => {
+      const project = d.projects.find((p) => p.id === t.projectId);
+      return project && t.branch ? d.forge.findPr(project.repoPath, t.branch) : undefined;
+    },
+    now: d.now,
+  };
+}
 
 export interface GithubIngestDeps {
   /** `github.webhookSecret` of config.yaml, or `GH_WEBHOOK_SECRET`; empty refuses every webhook. */

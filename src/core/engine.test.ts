@@ -144,10 +144,17 @@ describe('decide — YAML rules of the standard pack', () => {
     expect(kinds(relaunched).effects).toContain('start_run');
   });
 
-  it('the close of another PR than the ticket\'s, or after its merge, cancels nothing (ORC-134)', () => {
+  it("the close of another PR than the ticket's, of a closed or merged PR, or of a done ticket cancels nothing (ORC-134)", () => {
     const closed = ev('pr.closed', { number: 3, url: 'u', branch: 'b' });
     expect(decide(ticket({ prNumber: 4, activeRunId: 'r1' }), closed, workflow).effects).toEqual([]);
     expect(decide(ticket({ prNumber: 3, prState: 'MERGED', logical: 'done' }), closed, workflow).effects).toEqual([]);
+    expect(decide(ticket({ prNumber: 3, logical: 'done' }), closed, workflow).effects).toEqual([]);
+    expect(decide(ticket({ prNumber: 3, prState: 'CLOSED', blocked: true }), closed, workflow).effects).toEqual([]);
+  });
+
+  it('the closed PR reopened is open again, without resetting the red-CI count (ORC-134)', () => {
+    const out = decide(ticket({ prNumber: 3, prState: 'CLOSED', ciFixAttempts: 1 }), ev('pr.opened', { number: 3, url: 'u', branch: 'b' }), workflow);
+    expect(out.events).toEqual([{ type: 'ticket.patched', patch: { prNumber: 3, prUrl: 'u', prState: 'OPEN' } }]);
   });
 
   it('a review or a conflict reaches decide without any reaction yet (ORC-190, ORC-146)', () => {

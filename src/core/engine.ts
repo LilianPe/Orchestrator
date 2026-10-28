@@ -357,10 +357,10 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
       break;
     case 'pr.closed': {
       // Closed without merge (ORC-134): the run is cancelled as by a stop, then the rules apply. The close
-      // of another PR than the ticket's, or after its merge, cancels nothing.
+      // of another PR than the ticket's, of one already closed or merged, or of a done ticket cancels nothing.
       const n = event.payload.number;
-      if (!ticket || ticket.prState === 'MERGED' || ticket.prNumber !== n) {
-        out.trace.push(`pr.closed: PR #${n} is not the ticket's open PR, nothing cancelled`);
+      if (!ticket || ticket.prNumber !== n || ticket.prState === 'MERGED' || ticket.prState === 'CLOSED' || ticket.logical === 'done') {
+        out.trace.push(`pr.closed: PR #${n} is not the open PR of a ticket at work, nothing cancelled`);
         break;
       }
       out.trace.push('built-in pr.closed: work cancelled');
@@ -387,10 +387,12 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
       if (ticket?.blocked && ticket.blockReason?.startsWith(RED_CI_BLOCKED)) out.events.push({ type: 'ticket.unblocked' });
       break;
     case 'pr.opened': {
-      // A new PR (another number) reopens a delivered ticket; the same PR seen again leaves it as it is.
-      const reopens = event.payload.number !== ticket?.prNumber;
+      // A new PR (another number) reopens a delivered ticket; the same PR seen again leaves it as it is,
+      // unless it was closed: reopened, it is open again (ORC-134).
+      const other = event.payload.number !== ticket?.prNumber;
+      const reopens = other || ticket?.prState === 'CLOSED';
       // Another PR is another red-CI loop: the count of the previous one does not carry over (ORC-270).
-      if (reopens) resetRedCi(out, ticket);
+      if (other) resetRedCi(out, ticket);
       out.events.push({
         type: 'ticket.patched',
         patch: { prNumber: event.payload.number, prUrl: event.payload.url, ...(reopens ? { prState: 'OPEN' as const } : {}) },

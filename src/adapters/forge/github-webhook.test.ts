@@ -2,14 +2,14 @@ import { createHmac } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { newTicketState, type FactoryEvent, type TicketState } from '../../core/types.js';
 import { BRANCH, checkRunBody, githubDelivery, pullRequestBody, pushBody } from '../../../test/helpers/github-webhook.js';
-import { createGithubIngest } from './github-ingest.js';
+import { createGithubIngest, githubRepoOf } from './github-ingest.js';
 import { checksEventId, mapGithubWebhook, verifyGithubSignature, type GithubMapContext } from './github-webhook.js';
 import type { PrInfo } from './types.js';
 
 const tracked = (patch: Partial<TicketState> = {}): TicketState => ({ ...newTicketState('p', 'REL-1', 'Export CSV', 'human_review', 0), branch: BRANCH, ...patch });
 
 function ctx(t: TicketState = tracked(), pr?: PrInfo): GithubMapContext {
-  return { ticketForBranch: async (b) => (b === t.branch ? t : undefined), findPr: async () => pr, now: () => 5 };
+  return { ticketForBranch: async (repo, b) => (repo === 'acme/app' && b === t.branch ? t : undefined), findPr: async () => pr, now: () => 5 };
 }
 
 const ids = (events: FactoryEvent[]) => events.map((e) => e.id);
@@ -41,8 +41,34 @@ describe('mapGithubWebhook', () => {
       { id: 'pr:REL-1:3:opened', type: 'pr.opened', at: 5, projectId: 'p', ticketId: 'REL-1', schemaVersion: 2, taint: 'trusted', payload: { number: 3, url: 'https://github.com/acme/app/pull/3', branch: BRANCH } },
       { id: 'pr:REL-1:3:merged', type: 'pr.merged', at: 5, projectId: 'p', ticketId: 'REL-1', schemaVersion: 2, taint: 'trusted', payload: { number: 3, url: 'https://github.com/acme/app/pull/3', branch: BRANCH } },
     ]);
-    expect(ids(await mapGithubWebhook('pull_request', pullRequestBody('closed'), ctx(tracked({ prNumber: 3 }))))).toEqual(['pr:REL-1:3:closed']);
+    expect(ids(await mapGithubWebhook('pull_request', pullRequestBody('closed'), ctx(tracked({ prNumber: 3 }))))).toEqual(['pr:REL-1:3:closed:2026-10-28T10:00:00Z']);
     expect(ids(await mapGithubWebhook('pull_request', pullRequestBody('opened'), ctx(tracked({ prNumber: 3 }))))).toEqual([]);
+  });
+
+  it("maps a reopening of the ticket's PR per reopening, and nothing for an old closed PR of the branch", async () => {
+    const t = tracked({ prNumber: 3, prState: 'CLOSED' });
+    expect(ids(await mapGithubWebhook('pull_request', pullRequestBody('reopened'), ctx(t)))).toEqual(['pr:REL-1:3:reopened:2026-10-28T10:00:00Z']);
+    const onNew = tracked({ prNumber: 4 });
+    expect(await mapGithubWebhook('pull_request', pullRequestBody('closed'), ctx(onNew))).toEqual([]);
+    expect(await mapGithubWebhook('pull_request', pullRequestBody('labeled', { state: 'closed' }), ctx(onNew))).toEqual([]);
+    // A new open PR on the branch is taken, as PrPoller takes the branch's latest PR.
+    expect(ids(await mapGithubWebhook('pull_request', pullRequestBody('opened'), ctx(onNew)))).toEqual(['pr:REL-1:3:opened']);
+  });
+
+  it('maps nothing for another repository, nor for a body of another shape', async () => {
+    const other = { ...pullRequestBody('closed', { merged: true }), repository: { full_name: 'evil/app', html_url: 'https://github.com/evil/app' } };
+    expect(await mapGithubWebhook('pull_request', other, ctx())).toEqual([]);
+    for (const [name, body] of [
+      ['pull_request', { action: 'closed', repository: { full_name: 'acme/app' } }],
+      ['pull_request', { action: 'closed', repository: { full_name: 'acme/app' }, pull_request: { number: 3 } }],
+      ['check_run', { action: 'completed', repository: { full_name: 'acme/app' } }],
+      ['check_suite', { action: 'completed', repository: { full_name: 'acme/app' }, check_suite: { head_sha: 'h', pull_requests: [{}] } }],
+      ['push', { repository: { full_name: 'acme/app' } }],
+      ['pull_request_review', { ...pullRequestBody('submitted'), review: null }],
+      ['pull_request', null],
+    ] as const) {
+      expect(await mapGithubWebhook(name, body, ctx()), name).toEqual([]);
+    }
   });
 
   it('maps a conflict with the base branch per head and base, only on an open PR', async () => {
@@ -60,6 +86,25 @@ describe('mapGithubWebhook', () => {
     }
     const suite = { ...checkRunBody('failure'), check_suite: { ...checkRunBody('failure').check_run, app: { name: 'GitHub Actions' } } };
     expect(await mapGithubWebhook('check_suite', suite, ctx(tracked({ prNumber: 3 })))).toMatchObject([{ payload: { failures: ['GitHub Actions'] } }]);
+  });
+
+  it('takes the verdict and the failed checks the forge reads on that head, and no red it reads otherwise', async () => {
+    const t = tracked({ prNumber: 3 });
+    const pr = (checks: PrInfo['checks'], failedChecks: string[] = []): PrInfo => ({ number: 3, url: 'https://pr/3', state: 'OPEN', branch: BRANCH, headSha: 'head1', checks, failedChecks });
+    expect(await mapGithubWebhook('check_run', checkRunBody('failure'), ctx(t, pr('fail', ['test', 'lint'])))).toMatchObject([{ payload: { failures: ['test', 'lint'], url: 'https://pr/3' } }]);
+    // A cancelled run superseded by a newer attempt: the forge reads the head pending, or green.
+    expect(await mapGithubWebhook('check_run', checkRunBody('cancelled'), ctx(t, pr('pending')))).toEqual([]);
+    expect(await mapGithubWebhook('check_run', checkRunBody('cancelled'), ctx(t, pr('pass')))).toEqual([]);
+    // Red does not wait on GitHub: the forge down, the failed check is reported alone.
+    const down: GithubMapContext = { ...ctx(t), findPr: async () => { throw new Error('GitHub down'); } };
+    expect(await mapGithubWebhook('check_run', checkRunBody('failure'), down)).toMatchObject([{ payload: { failures: ['test'] } }]);
+    await expect(mapGithubWebhook('check_run', checkRunBody('success'), down)).rejects.toThrow('GitHub down');
+  });
+
+  it('finds the tracked PR among the PRs of the checked commit', async () => {
+    const body = checkRunBody('failure');
+    body.check_run.pull_requests.unshift({ number: 9, head: { ref: 'feature/stacked', sha: 'head1' } });
+    expect(await mapGithubWebhook('check_run', body, ctx(tracked({ prNumber: 3 })))).toMatchObject([{ id: checksEventId('REL-1', 3, 'fail', 'head1') }]);
   });
 
   it('ignores a check on a head the PR has left, one not completed, and one on no PR', async () => {
@@ -109,6 +154,23 @@ describe('mapGithubWebhook', () => {
     expect(await mapGithubWebhook('pull_request', pullRequestBody('closed', { merged: true }), ctx(tracked({ branch: 'factory/rel-2-x' })))).toEqual([]);
     expect(await mapGithubWebhook('ping', { zen: 'Keep it simple' }, ctx())).toEqual([]);
     expect(await mapGithubWebhook('issues', { action: 'opened' }, ctx())).toEqual([]);
+  });
+});
+
+describe('githubRepoOf', () => {
+  it('reads owner/name of origin once per checkout, and again after a failed read', async () => {
+    const calls: string[] = [];
+    let fail = true;
+    const repoOf = githubRepoOf(async (_cmd, _args, opts) => {
+      calls.push(opts?.cwd ?? '');
+      if (fail) return { code: 1, stdout: '', stderr: 'no remote' };
+      return { code: 0, stdout: 'git@github.com:Acme/app.git\n', stderr: '' };
+    });
+    await expect(repoOf('/repo')).rejects.toThrow();
+    fail = false;
+    expect(await repoOf('/repo')).toBe('Acme/app');
+    expect(await repoOf('/repo')).toBe('Acme/app');
+    expect(calls).toEqual(['/repo', '/repo']);
   });
 });
 

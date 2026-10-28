@@ -3,7 +3,7 @@ import { createHmac } from 'node:crypto';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createGithubIngest } from '../../src/adapters/forge/github-ingest.js';
+import { createGithubIngest, githubMapContext } from '../../src/adapters/forge/github-ingest.js';
 import type { Forge } from '../../src/adapters/forge/types.js';
 import type { FactoryEvent } from '../../src/core/types.js';
 import type { Store } from '../../src/store/types.js';
@@ -36,6 +36,8 @@ export function pullRequestBody(action: string, pr: { number?: number; merged?: 
       number: n,
       html_url: `https://github.com/acme/app/pull/${n}`,
       state: pr.state ?? (action === 'closed' ? 'closed' : 'open'),
+      updated_at: '2026-10-28T10:00:00Z',
+      closed_at: action === 'closed' ? '2026-10-28T10:00:00Z' : null,
       merged: pr.merged ?? false,
       mergeable_state: pr.mergeable_state ?? 'clean',
       head: { ref: BRANCH, sha: pr.head ?? 'head1' },
@@ -71,11 +73,13 @@ export function githubIngest(store: Store, accept: (e: FactoryEvent) => Promise<
     secret: () => GH_SECRET,
     accept,
     log: () => {},
-    ctx: {
-      ticketForBranch: async (branch) => (await store.listTickets()).find((t) => t.branch === branch),
-      findPr: async (t) => (forge && t.branch ? forge.findPr('/repo', t.branch) : undefined),
+    ctx: githubMapContext({
+      store,
+      forge: forge ?? { findPr: async () => undefined },
+      projects: [{ id: 'p', repoPath: '/repo' }],
+      repoOf: async (repoPath) => (repoPath === '/repo' ? REPO.full_name : undefined),
       now,
-    },
+    }),
   });
 }
 

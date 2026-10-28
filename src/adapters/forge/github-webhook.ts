@@ -25,16 +25,22 @@ export function checksEventId(ticketId: string, prNumber: number, verdict: 'pass
 }
 
 export interface GithubMapContext {
-  /** The ticket the factory tracks on `branch`, matched as `PrPoller` matches it (the ticket's branch). */
-  ticketForBranch(branch: string): Promise<TicketState | undefined>;
+  /**
+   * The ticket the factory tracks on `branch` of repository `repo` (`owner/name`): matched as `PrPoller`
+   * matches it (the ticket's branch), within the project whose repository sent the webhook.
+   */
+  ticketForBranch(repo: string, branch: string): Promise<TicketState | undefined>;
   /** The ticket's PR as the forge reads it now: the verdict of all its checks, which one webhook does not carry. */
   findPr(ticket: TicketState): Promise<PrInfo | undefined>;
   now(): number;
 }
 
 type Draft = { id: string; type: FactoryEvent['type']; payload: unknown; taint?: Taint };
+type Mapped = { ticket?: TicketState; events: Draft[] };
 
+const NOTHING: Mapped = { events: [] };
 const isBot = (user: any): boolean => user?.type === 'Bot';
+const isPr = (pr: any): boolean => typeof pr?.number === 'number' && typeof pr.head?.ref === 'string' && typeof pr.head.sha === 'string';
 
 function prPayload(pr: any): PrPayload {
   return { number: pr.number, url: pr.html_url, branch: pr.head.ref };
@@ -48,60 +54,83 @@ function opened(t: TicketState, payload: PrPayload): Draft[] {
 function pullRequest(body: any, t: TicketState): Draft[] {
   const pr = body.pull_request;
   const payload = prPayload(pr);
-  const out = opened(t, payload);
   const n = payload.number;
+  // An old PR of the branch, closed before the ticket's current one: what happens to it says nothing of the ticket.
+  if (t.prNumber !== undefined && t.prNumber !== n && pr.state !== 'open') return [];
+  if (body.action === 'reopened' && t.prNumber === n) {
+    // Same PR, open again: `pr.opened` takes it back from `CLOSED`; the id is per reopening.
+    return [{ id: `pr:${t.ticketId}:${n}:reopened:${pr.updated_at ?? body.action}`, type: 'pr.opened', payload }];
+  }
+  const out = opened(t, payload);
   if (body.action === 'closed') {
+    // Per closing, so that a PR reopened then closed again is cancelled again; `PrPoller` keeps `:closed`.
     out.push(
       pr.merged
         ? { id: `pr:${t.ticketId}:${n}:merged`, type: 'pr.merged', payload }
-        : { id: `pr:${t.ticketId}:${n}:closed`, type: 'pr.closed', payload },
+        : { id: `pr:${t.ticketId}:${n}:closed:${pr.closed_at ?? ''}`, type: 'pr.closed', payload },
     );
     return out;
   }
   // GitHub computes mergeability after the event: `dirty` is seen on the events that come once it is known.
   if (pr.state === 'open' && pr.mergeable_state === 'dirty') {
     out.push({
-      id: `pr:${t.ticketId}:${n}:conflicted:${pr.head.sha}:${pr.base.sha}`,
+      id: `pr:${t.ticketId}:${n}:conflicted:${pr.head.sha}:${pr.base?.sha}`,
       type: 'pr.conflicted',
-      payload: { ...payload, headSha: pr.head.sha, baseRef: pr.base.ref },
+      payload: { ...payload, headSha: pr.head.sha, baseRef: pr.base?.ref },
     });
   }
   return out;
 }
 
-/** A completed check run or suite: red as soon as one fails; green only once the forge reads all of them green. */
-async function checks(body: any, kind: 'check_run' | 'check_suite', ctx: GithubMapContext): Promise<{ ticket?: TicketState; events: Draft[] }> {
-  if (body.action !== 'completed') return { events: [] };
-  const check = body[kind];
-  const ref = check.pull_requests?.[0];
-  const t = ref?.head?.ref ? await ctx.ticketForBranch(ref.head.ref) : undefined;
-  return t ? { ticket: t, events: await verdict(body, kind, check, ref, t, ctx) } : { events: [] };
+/** The tracked PR a check reports on: GitHub lists every open PR whose head is the checked commit. */
+async function checkedPr(repo: string, check: any, ctx: GithubMapContext): Promise<{ ticket: TicketState; ref: any } | undefined> {
+  for (const ref of Array.isArray(check?.pull_requests) ? check.pull_requests : []) {
+    if (typeof ref?.number !== 'number' || typeof ref.head?.ref !== 'string') continue;
+    const ticket = await ctx.ticketForBranch(repo, ref.head.ref);
+    if (ticket) return { ticket, ref };
+  }
+  return undefined;
 }
 
-async function verdict(body: any, kind: 'check_run' | 'check_suite', check: any, ref: any, t: TicketState, ctx: GithubMapContext): Promise<Draft[]> {
+/**
+ * A completed check run or suite. Its verdict is the PR's as the forge reads all its checks on that head
+ * (as `PrPoller` reads it): one green suite is not a green PR, and a cancelled run may have a newer
+ * attempt. Red does not wait on GitHub, though: when the forge does not answer, the failed check is
+ * reported alone.
+ */
+async function checks(body: any, kind: 'check_run' | 'check_suite', repo: string, ctx: GithubMapContext): Promise<Mapped> {
+  const check = body[kind];
+  if (body.action !== 'completed' || typeof check?.head_sha !== 'string') return NOTHING;
+  const found = await checkedPr(repo, check, ctx);
+  if (!found) return NOTHING;
+  const { ticket: t, ref } = found;
   // A report on a head the PR has left behind says nothing of the PR.
   const head: string = check.head_sha;
-  if (ref.head?.sha !== head) return [];
+  if (ref.head.sha !== head) return NOTHING;
   const bucket = checkRunBucket({ status: 'completed', conclusion: check.conclusion });
-  const payload: PrPayload = { number: ref.number, url: `${body.repository.html_url}/pull/${ref.number}`, branch: ref.head.ref };
-  if (bucket === 'fail') {
-    const name: string = kind === 'check_run' ? check.name : (check.app?.name ?? 'check suite');
-    return [
-      ...opened(t, payload),
-      { id: checksEventId(t.ticketId, payload.number, 'fail', head), type: 'pr.checks_failed', payload: { ...payload, failures: [name] } },
-    ];
+  if (bucket !== 'fail' && bucket !== 'pass') return NOTHING;
+  const payload: PrPayload = { number: ref.number, url: `${body.repository?.html_url}/pull/${ref.number}`, branch: ref.head.ref };
+  let pr: PrInfo | undefined;
+  try {
+    pr = await ctx.findPr(t);
+  } catch (err) {
+    if (bucket === 'pass') throw err;
   }
-  if (bucket !== 'pass') return [];
-  // One green suite is not a green PR: the others may still run or fail.
-  const pr = await ctx.findPr(t);
-  if (!pr || pr.number !== payload.number || pr.state !== 'OPEN' || pr.checks !== 'pass' || (pr.headSha && pr.headSha !== head)) return [];
-  const url = { ...payload, url: pr.url };
-  return [...opened(t, url), { id: checksEventId(t.ticketId, payload.number, 'pass', head), type: 'pr.checks_passed', payload: url }];
+  const same = pr && pr.number === payload.number && pr.state === 'OPEN' && (!pr.headSha || pr.headSha === head);
+  const read = same ? { ...payload, url: pr!.url } : payload;
+  if (bucket === 'fail') {
+    if (same && pr!.checks !== 'fail') return NOTHING;
+    const name: string = kind === 'check_run' ? check.name : (check.app?.name ?? 'check suite');
+    const failures = same && pr!.failedChecks.length ? pr!.failedChecks : [name];
+    return { ticket: t, events: [...opened(t, read), { id: checksEventId(t.ticketId, read.number, 'fail', head), type: 'pr.checks_failed', payload: { ...read, failures } }] };
+  }
+  if (!same || pr!.checks !== 'pass') return NOTHING;
+  return { ticket: t, events: [...opened(t, read), { id: checksEventId(t.ticketId, read.number, 'pass', head), type: 'pr.checks_passed', payload: read }] };
 }
 
 function push(body: any, t: TicketState, branch: string): Draft[] {
   // A deleted branch, or a push by a bot (the factory's GitHub App among them), is no human commit.
-  if (body.deleted || isBot(body.sender) || !body.after) return [];
+  if (body.deleted || isBot(body.sender) || typeof body.after !== 'string') return [];
   const author: string = body.sender?.login ?? body.pusher?.name ?? 'inconnu';
   return [
     {
@@ -116,7 +145,7 @@ function push(body: any, t: TicketState, branch: string): Draft[] {
 
 function review(body: any, t: TicketState, kind: 'review' | 'comment'): Draft[] {
   const item = kind === 'review' ? body.review : body.comment;
-  if (!item || isBot(item.user) || isBot(body.sender)) return [];
+  if (!item?.id || isBot(item.user) || isBot(body.sender)) return [];
   const text: string = item.body ?? '';
   const where = kind === 'comment' && item.path ? `${item.path}${item.line ? `:${item.line}` : ''} — ` : '';
   return [
@@ -137,17 +166,19 @@ function review(body: any, t: TicketState, kind: 'review' | 'comment'): Draft[] 
 }
 
 /** The ticket the webhook is about, and its events; nothing for a branch the factory does not track. */
-async function partials(name: string, body: any, ctx: GithubMapContext): Promise<{ ticket?: TicketState; events: Draft[] }> {
-  if (name === 'check_run' || name === 'check_suite') return checks(body, name, ctx);
+async function partials(name: string, body: any, ctx: GithubMapContext): Promise<Mapped> {
+  const repo = body?.repository?.full_name;
+  if (typeof repo !== 'string') return NOTHING;
+  if (name === 'check_run' || name === 'check_suite') return checks(body, name, repo, ctx);
   let branch: string | undefined;
   if (name === 'push') {
-    const ref: string = body.ref ?? '';
-    if (ref.startsWith('refs/heads/')) branch = ref.slice('refs/heads/'.length);
-  } else if (name === 'pull_request' || name === 'pull_request_review' || name === 'pull_request_review_comment') {
-    branch = body.pull_request?.head?.ref;
+    const ref = body.ref;
+    if (typeof ref === 'string' && ref.startsWith('refs/heads/')) branch = ref.slice('refs/heads/'.length);
+  } else if ((name === 'pull_request' || name === 'pull_request_review' || name === 'pull_request_review_comment') && isPr(body.pull_request)) {
+    branch = body.pull_request.head.ref;
   }
-  const ticket = branch ? await ctx.ticketForBranch(branch) : undefined;
-  if (!ticket) return { events: [] };
+  const ticket = branch ? await ctx.ticketForBranch(repo, branch) : undefined;
+  if (!ticket) return NOTHING;
   switch (name) {
     case 'push':
       return { ticket, events: push(body, ticket, branch!) };
@@ -164,7 +195,8 @@ async function partials(name: string, body: any, ctx: GithubMapContext): Promise
  * Events of a GitHub webhook, named by `X-GitHub-Event` (ORC-134). Ids come from the signed body (PR
  * number, head SHA, review or comment id), never from `X-GitHub-Delivery`, which the signature does
  * not cover: a replayed body, or the same fact reported by `PrPoller`, has the id the inbox already holds.
- * Only branches of tickets the factory tracks are read; anything else maps to nothing.
+ * Only branches of tickets the factory tracks, in their project's repository, are read; anything else,
+ * a body of another shape included, maps to nothing.
  */
 export async function mapGithubWebhook(name: string, body: any, ctx: GithubMapContext): Promise<FactoryEvent[]> {
   const { ticket, events } = await partials(name, body, ctx);
