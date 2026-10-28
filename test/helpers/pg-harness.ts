@@ -26,16 +26,19 @@ const never = new Promise<never>(() => {});
 
 /**
  * A store whose database is still being created: each call waits for it. Once the test is over,
- * calls left over by its background work (a run still streaming, a timer) never resolve, rather
- * than fail on a dropped database.
+ * calls left over by its background work (a run still streaming, a timer) never resolve, and
+ * those under way never answer, rather than fail on a dropped database.
  */
 function deferred(db: Database, store: Promise<Store>): Store {
+  const settle = (v: unknown) => (db.closed ? never : v);
   return new Proxy({} as Store, {
     get(_, prop) {
       if (typeof prop !== 'string' || prop === 'then') return undefined;
       return (...args: unknown[]) => {
         if (db.closed) return never;
-        return store.then((s) => (db.closed ? never : (s[prop as keyof Store] as (...a: unknown[]) => Promise<unknown>).apply(s, args)));
+        return store
+          .then((s) => (db.closed ? never : (s[prop as keyof Store] as (...a: unknown[]) => Promise<unknown>).apply(s, args)))
+          .then(settle, (err: unknown) => (db.closed ? never : Promise.reject(err)));
       };
     },
   });
@@ -52,7 +55,21 @@ function pgDatabase() {
   });
   const db: Database = { name, pool, closed: false };
   open.push(db);
-  return (now: () => number): Store => deferred(db, pool.then((p) => new PgStore({ pool: p, now })));
+  // One PgStore per database, reused by every life of the harness (its clock is the harness's).
+  let store: Store | undefined;
+  const onError = (err: Error) => {
+    if (!db.closed) console.error(`scenarios-pg ${name}: ${err.message}`);
+  };
+  return (now: () => number): Store => (store ??= deferred(db, pool.then((p) => new PgStore({ pool: p, now, onError }))));
+}
+
+async function drop(db: Database): Promise<void> {
+  try {
+    // Forced first: it ends the connections still held by the test's background work.
+    await queryOn(PG_URL, (c) => c.query(`drop database if exists "${db.name}" with (force)`));
+  } finally {
+    await db.pool.then((p) => p.end()).catch(() => {});
+  }
 }
 
 if (PG_URL) {
@@ -72,10 +89,7 @@ if (PG_URL) {
     const dbs = open;
     open = [];
     for (const db of dbs) db.closed = true;
-    for (const db of dbs) {
-      await (await db.pool).end();
-      await queryOn(PG_URL, (c) => c.query(`drop database if exists "${db.name}" with (force)`));
-    }
+    await Promise.all(dbs.map(drop));
   });
 
   afterAll(async () => {

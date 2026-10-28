@@ -68,8 +68,10 @@ export const harnessStoreKind = (): StoreKind => databases.kind;
 /**
  * A store as one process sees it: `kill()` is that process dying (`kill -9`). From then on none of
  * its calls reaches the database and none of their results comes back: a call not started never
- * starts; one under way finishes in the database (its commit was already sent) but its caller never
- * hears of it. The process's timers and pending promises are left as they are, frozen on the store.
+ * starts; one under way runs to its end in the database, but its caller never hears of it. That is
+ * a commit sent just before the death: a transaction cut before its commit, rolled back, is what a
+ * really killed process gives (ORC-163, `crash-after-decision.ts`). The process's timers and pending
+ * promises are left as they are, frozen on the store.
  */
 export function mortal(store: Store): { store: Store; kill(): void } {
   let dead = false;
@@ -80,10 +82,13 @@ export function mortal(store: Store): { store: Store; kill(): void } {
       if (typeof value !== 'function') return value;
       return (...args: unknown[]) => {
         if (dead) return never;
-        return (value as (...a: unknown[]) => Promise<unknown>).apply(target, args).then(
-          (v) => (dead ? never : v),
-          (err: unknown) => (dead ? never : Promise.reject(err)),
-        );
+        // A wrapper that throws or answers synchronously is handled like any store call.
+        return Promise.resolve()
+          .then(() => (value as (...a: unknown[]) => unknown).apply(target, args))
+          .then(
+            (v) => (dead ? never : v),
+            (err: unknown) => (dead ? never : Promise.reject(err)),
+          );
       };
     },
   });
@@ -96,7 +101,10 @@ export function createHarness(
     preset?: TestPreset;
     verify?: Verifier;
     knowledge?: boolean;
-    /** A store to run on instead of the harness's own database (the SQLite file a SIGKILLed child left). */
+    /**
+     * A store to run on instead of the harness's own database (the SQLite file a SIGKILLed child
+     * left). It keeps its own clock: `advance` then moves no lease or backoff of it.
+     */
     store?: Store;
     /** Wraps each store opened on the database (one that fails on purpose), whatever the database. */
     wrapStore?: (store: Store) => Store;
@@ -112,7 +120,6 @@ export function createHarness(
   const workflow = loadTestWorkflow(opts.projectYaml ?? opts.preset?.yaml);
   const clock = new FakeClock(Date.UTC(2026, 9, 10, 9, 0));
   const given = opts.store;
-  const storeKind: StoreKind = given ? (given instanceof SqliteStore ? 'sqlite' : 'postgres') : databases.kind;
   const database: HarnessDatabase = given ? () => given : databases.create();
   const connect = () => {
     const store = database(() => clock.now());
@@ -198,7 +205,7 @@ export function createHarness(
 
   return {
     clock, tracker, forge, runner, workspaces, checks, sandboxes, publisher,
-    send, advance, restart, project, storeKind,
+    send, advance, restart, project,
     get orch() {
       return orch;
     },
