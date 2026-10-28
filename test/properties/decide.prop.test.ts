@@ -477,7 +477,7 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
             expect(step.decision.events, 'refused event recorded a change').toEqual([]);
             expect(step.decision.timers, 'refused event armed a timer').toEqual([]);
             expect(step.launches, 'refused event launched a run').toEqual([]);
-            const answered = !!step.event.actor || 'linearSessionId' in step.event.payload;
+            const answered = !!step.event.actor || !!(step.event.payload as { linearSessionId?: string }).linearSessionId;
             expect(step.decision.effects, 'refusal not answered once').toHaveLength(answered ? 1 : 0);
             for (const e of step.decision.effects) expect(['activity', 'comment']).toContain(e.kind);
             expect(step.event.roles, 'refused an event whose roles were not resolved').toBeDefined();
