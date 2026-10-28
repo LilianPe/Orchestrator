@@ -95,7 +95,7 @@ Arrête le run du ticket `<ID>` (ex. `REL-12`) : SIGINT au processus Claude Code
 
 ### `factory replay <journal.json | dossier>...` (ORC-174)
 
-Rejoue des journaux de tickets exportés, sans instance ni réseau : chaque ligne du journal passe par les upcasters (`schemaVersion`), puis sa décision est refaite (`decide`, puis `reduce`) à partir de ce que la transaction de décision a enregistré (projection lue sous le verrou, version du workflow, horloge). Un dossier est lu en entier (`*.json`, par ordre de nom).
+Rejoue des journaux de tickets exportés, sans instance ni réseau : chaque ligne du journal passe par les upcasters (`schemaVersion`, et les minuteries enregistrées d'avant ORC-161 par `upcastTimer`), puis sa décision est refaite (`decide`, puis `reduce`) à partir de ce que la transaction de décision a enregistré (projection lue sous le verrou, version du workflow, horloge). Un dossier est lu en entier (`*.json`, par ordre de nom).
 
 - **Régression** (par défaut) : la projection, les effets, les minuteries et la remise à zéro des minuteries doivent ressortir **bit à bit** comme enregistrés (JSON canonique, clés triées). Chaque divergence est listée avec l'événement qui la porte. Code de sortie 0 sans divergence, 1 si un journal diverge, 2 sur une option inconnue, un journal illisible ou impossible à rejouer (version de workflow absente) ou un journal sans aucune décision ; les autres journaux du dossier sont rejoués quand même.
 - **What-if** (`--what-if <workflow.yml>`) : les décisions tournent sur ce workflow, posé sur le pack standard (`--pack <dossier>` pour un autre), au lieu des versions sur lesquelles les tickets étaient figés. Le rejeu s'arrête à la première divergence et la signale :

@@ -191,11 +191,11 @@ Ces types sont acceptés par le chargeur, mais Relais les traite en dur : une r�
 |---|---|
 | `run.finished` | Succès : vérifications si le job en a, sinon `on_success`. Échec ou limite : ticket bloqué (file `dev`) ou message d'erreur (file `questions`). Run arrêté : rien. Fin d'un run de la file `dev` après le merge de la PR : rien. |
 | `verify.passed` / `verify.failed` | `on_success`, ou nouvelle tentative, ou blocage (voir `verify`). Après le merge de la PR : rien. |
-| `debounce.fired` | Lance le job dont le délai `debounce` vient d'expirer (et débloque le ticket). |
+| `timer.fired` | Une minuterie posée par une décision arrive à échéance (événement `timer:<clé>:<échéance>` écrit dans l'inbox). Sorte `debounce` : lance le job dont le délai `debounce` vient d'expirer (et débloque le ticket). Les sortes `clarify.remind`, `clarify.expire` et `usage.reset` existent sans règle pour l'instant (ORC-210, ORC-215) : rien. |
 | `pr.opened` | Mémorise la PR et l'attache à la session Linear. |
 | `control.pause` / `control.resume` / `control.stop` | Pause / reprise de la file, arrêt d'un ticket (interface, `relais pause`, `relais resume`, `relais stop`). |
 
-Tout autre nom sous `on` est refusé (`on.<nom>: unknown event type`), sauf les deux anciens noms, encore acceptés comme alias : `ticket.moved` (lu comme `status.changed`) et `label.added` (lu comme `label.changed`). Un même fichier ne peut pas déclarer un événement sous ses deux noms : le chargement est refusé (`on.ticket.moved: same event as on.status.changed`).
+Tout autre nom sous `on` est refusé (`on.<nom>: unknown event type`), sauf les anciens noms, encore acceptés comme alias : `ticket.moved` (lu comme `status.changed`), `label.added` (lu comme `label.changed`) et `debounce.fired` (lu comme `timer.fired`). Un même fichier ne peut pas déclarer un événement sous ses deux noms : le chargement est refusé (`on.ticket.moved: same event as on.status.changed`).
 
 Les événements qui concernent un ticket que Relais ne suit pas encore sont ignorés, sauf `ticket.delegated`, `session.mentioned`, `session.prompted` et `command`, qui l'ajoutent au suivi.
 
@@ -223,7 +223,7 @@ Une règle sans condition correspond toujours.
 | `comment` | Publie ce texte en commentaire du ticket. |
 | `do` | `stop` : arrête le run en cours, vide les runs en attente et bloque le ticket (« Arrêté. Répondez dans ce fil ou posez le label agent:reprendre pour relancer. »). `cleanup` : supprime le worktree du ticket. `propose_delegate` : répond qu'il faut déléguer le ticket à Relais pour qu'il le développe. |
 | `run` | Lance le job de ce nom (doit exister dans `jobs`). Si le ticket était bloqué, il est débloqué d'abord. |
-| `debounce` | Avec `run` : au lieu de lancer tout de suite, programme le job après ce délai. Un nouvel événement correspondant avant l'expiration repousse le délai : des messages rapprochés donnent un seul run. `0s` = immédiat. |
+| `debounce` | Avec `run` : au lieu de lancer tout de suite, programme le job après ce délai. Un nouvel événement correspondant avant l'expiration repousse le délai : des messages rapprochés donnent un seul run. `0s` = immédiat. Le délai est une minuterie en base, écrite avec la décision : un redémarrage de Relais ne la perd pas. |
 
 Une règle sans action est valide : elle « consomme » l'événement sans rien faire (et empêche les règles suivantes de s'appliquer).
 
@@ -449,7 +449,7 @@ Relais valide le fichier au démarrage de `relais up` et refuse de démarrer s'i
 
 Pièges silencieux (aucune erreur) :
 - **Sous `limits`, `limits.per_run`, un `limits` de job, `workspace` et `tracker`, une clé inconnue est ignorée sans message.** `limits: { parallel: 5 }` est accepté et ne fait rien : relisez l'orthographe.
-- Une règle sur un événement du cycle de vie (`run.finished`, `verify.*`, `debounce.fired`, `pr.opened`, `control.*`) ne se déclenche jamais.
+- Une règle sur un événement du cycle de vie (`run.finished`, `verify.*`, `timer.fired`, `pr.opened`, `control.*`) ne se déclenche jamais.
 - `from` / `to` sur un autre événement que `status.changed` sont ignorés ; `label` ou `say` sur le mauvais événement rendent la règle inapplicable.
 - Un `say` avec une majuscule ne correspond jamais.
 - Déclarer `on.<événement>` dans le projet efface les règles du pack pour cet événement : recopiez celles que vous gardez.
