@@ -44,7 +44,8 @@ export interface Rework {
 
 /**
  * The measures of the MVP doc for one ticket (ORC-235), computed from what the store holds: the
- * journal, the attempts, the outbox and the inbox acks. None is read from what an agent wrote.
+ * journal, the attempts, the outbox and the inbox acks. None is read from what an agent wrote: the
+ * reverts and the CI cost (ORC-278) come from GitHub webhooks, as the ingestion resolved them.
  * A measure whose source does not reach the store yet is `null`, with the ticket that brings it.
  */
 export interface TicketMeasures {
@@ -70,11 +71,65 @@ export interface TicketMeasures {
    * the time spent needs the review loop of ORC-190 (start of each human review).
    */
   humanReviewMinutes: null;
-  /** Reverted within 14 days of the merge: the GitHub webhook (ORC-134) maps no push of the default branch; no ticket brings it yet. */
-  revertedWithin14Days: null;
-  /** CI cost of the ticket: the GitHub webhook (ORC-134) maps check verdicts, not workflow run durations; no ticket brings it yet. */
-  ciCostUsd: null;
+  /**
+   * A merged PR of the ticket reverted on the default branch within 14 days of its merge (ORC-278): a
+   * `default_branch.pushed` commit that reverts it, timed by the push (`pushedAt`, else when the factory
+   * received it). Null while not merged, and while no push of the default branch concerning the ticket is
+   * in the journal (its merge commit or a revert): without that source, `false` would be a guess.
+   */
+  revertedWithin14Days: boolean | null;
+  /** CI cost of the ticket (ORC-278): the durations of its workflow run attempts. Null while none is in the journal. */
+  ciCost: CiCost | null;
   messages: MessageMeasure[];
+}
+
+/** Workflow run attempts of a ticket's CI, summed per PR then for the ticket, one per run id and attempt (ORC-278). */
+export interface CiCost {
+  /** Sum of the attempts' durations (`run_started_at` to `updated_at` of the completed run), in milliseconds. */
+  durationMs: number;
+  runs: number;
+  /** Per PR, by number; `null` for runs on the branch before its PR was known. */
+  byPr: { number: number | null; durationMs: number; runs: number }[];
+}
+
+const REVERT_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
+
+/**
+ * Whether a merged PR of the ticket was reverted within 14 days of its merge (ORC-278); null without a
+ * push of the default branch about the ticket. Reads the numbers the ingestion resolved, never a message.
+ */
+function revertedWithin14Days(events: FactoryEvent[], mergedAt: number | null): boolean | null {
+  if (mergedAt === null) return null;
+  const merged = new Map<number, number>();
+  for (const e of events) if (e.type === 'pr.merged' && !merged.has(e.payload.number)) merged.set(e.payload.number, e.at);
+  let seen = false;
+  for (const e of events) {
+    if (e.type !== 'default_branch.pushed') continue;
+    seen = true;
+    const at = e.payload.pushedAt ?? e.at;
+    for (const c of e.payload.commits) {
+      const since = c.reverts === undefined ? undefined : merged.get(c.reverts);
+      if (since !== undefined && at - since <= REVERT_WINDOW_MS) return true;
+    }
+  }
+  return seen ? false : null;
+}
+
+/** The ticket's CI cost (ORC-278): each run attempt once, however many times it was journaled. */
+function ciCost(events: FactoryEvent[]): CiCost | null {
+  const runs = new Map<string, FactoryEvent<'ci.run_completed'>['payload']>();
+  for (const e of events) if (e.type === 'ci.run_completed') runs.set(`${e.payload.runId}:${e.payload.attempt}`, e.payload);
+  if (runs.size === 0) return null;
+  const byPr = new Map<number | null, { number: number | null; durationMs: number; runs: number }>();
+  for (const r of runs.values()) {
+    const key = r.number ?? null;
+    const pr = byPr.get(key) ?? { number: key, durationMs: 0, runs: 0 };
+    pr.durationMs += r.durationMs;
+    pr.runs += 1;
+    byPr.set(key, pr);
+  }
+  const prs = [...byPr.values()];
+  return { durationMs: prs.reduce((sum, p) => sum + p.durationMs, 0), runs: runs.size, byPr: prs };
 }
 
 type Message = FactoryEvent<MessageMeasure['type']>;
@@ -184,8 +239,8 @@ export function ticketMeasures(projectId: string, ticketId: string, facts: Measu
     firstTry: mergedAt === null ? null : reworks.length === 0,
     reworks: mergedAt === null ? [] : reworks,
     humanReviewMinutes: null,
-    revertedWithin14Days: null,
-    ciCostUsd: null,
+    revertedWithin14Days: revertedWithin14Days(events, mergedAt),
+    ciCost: ciCost(events),
     messages: messages.map(({ m, kind }) => messageMeasure(m, kind, outs, facts.acks[m.id])),
   };
 }

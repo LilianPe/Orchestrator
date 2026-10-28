@@ -3,16 +3,20 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { PrPoller } from '../../src/adapters/forge/pr-poller.js';
+import { measureTicket } from '../../src/core/measures.js';
 import { SqliteStore } from '../../src/store/sqlite-store.js';
 import { createHarness } from '../helpers/harness.js';
 import {
   BRANCH,
   checkRunBody,
   crashAfterGithubAck,
+  defaultPushBody,
   githubDelivery,
   githubIngest,
   pullRequestBody,
   pushBody,
+  sha,
+  workflowRunBody,
 } from '../helpers/github-webhook.js';
 
 type Harness = ReturnType<typeof createHarness>;
@@ -186,5 +190,58 @@ describe('GitHub webhooks', () => {
     expect(await post(h, 'push', pushBody({ login: 'lilian', type: 'User' }, 'abc', 'main'))).toEqual({ status: 200 });
     expect(await h.store.pendingInbox(10)).toEqual([]);
     expect(await events(h, 'pr.merged')).toEqual([]);
+  });
+});
+
+const DAY = 24 * 60 * 60 * 1000;
+
+/** ORC-278: pushes on the default branch and workflow runs reach the journal, and the measures read them. */
+describe('reverts within 14 days and CI cost, from GitHub webhooks', () => {
+  /** REL-1 in review, its CI run three times (a run re-run once, delivered twice), merged, its merge pushed on main. */
+  async function mergedWithCi(h: Harness) {
+    await delegated(h);
+    await post(h, 'workflow_run', workflowRunBody({ id: 101, attempt: 1, minutes: 3, number: 3 }));
+    await post(h, 'workflow_run', workflowRunBody({ id: 101, attempt: 2, minutes: 2, number: 3 }));
+    // GitHub redelivers the same attempt: the inbox already holds its id.
+    await post(h, 'workflow_run', workflowRunBody({ id: 101, attempt: 2, minutes: 2, number: 3 }));
+    await post(h, 'workflow_run', workflowRunBody({ id: 102, attempt: 1, minutes: 5, number: 3 }));
+    expect(await post(h, 'pull_request', pullRequestBody('closed', { merged: true, mergeSha: sha('a') }))).toEqual({ status: 200 });
+    expect(await h.ticket()).toMatchObject({ logical: 'done', prState: 'MERGED' });
+    const pushedAt = Math.floor(h.clock.now() / 1000);
+    await post(h, 'push', defaultPushBody(sha('a'), [{ id: sha('a'), message: 'Export CSV (#3)' }], pushedAt));
+  }
+
+  const revert = (at: number) =>
+    defaultPushBody(sha('b'), [{ id: sha('b'), message: `Revert "Export CSV (#3)"\n\nThis reverts commit ${sha('a')}.` }], Math.floor(at / 1000));
+
+  it('a revert of the merge commit pushed within 14 days counts; the CI cost sums every run attempt once', async () => {
+    const h = createHarness();
+    await mergedWithCi(h);
+    const before = await measureTicket(h.store, 'p', 'REL-1');
+    expect(before.revertedWithin14Days).toBe(false);
+    expect(before.ciCost).toEqual({ durationMs: 10 * 60_000, runs: 3, byPr: [{ number: 3, durationMs: 10 * 60_000, runs: 3 }] });
+    expect(await events(h, 'ci.run_completed')).toHaveLength(3);
+
+    await h.advance(9 * DAY);
+    const runs = h.runner.requests.length;
+    expect(await post(h, 'push', revert(h.clock.now()))).toEqual({ status: 200 });
+    expect((await events(h, 'default_branch.pushed')).reverse()).toMatchObject([
+      { payload: { commits: [{ merges: 3 }] } },
+      { taint: 'untrusted', payload: { commits: [{ sha: sha('b'), reverts: 3 }] } },
+    ]);
+    expect((await measureTicket(h.store, 'p', 'REL-1')).revertedWithin14Days).toBe(true);
+    // Recorded, nothing decided: no run starts on a delivered ticket.
+    expect(h.runner.requests).toHaveLength(runs);
+  });
+
+  it('a revert pushed after 14 days, or of a commit the factory did not merge, does not count', async () => {
+    const h = createHarness();
+    await mergedWithCi(h);
+    await h.advance(15 * DAY);
+    await post(h, 'push', revert(h.clock.now()));
+    const unrelated = defaultPushBody(sha('c'), [{ id: sha('c'), message: `Revert "fix"\n\nThis reverts commit ${sha('e')}.` }]);
+    await post(h, 'push', unrelated);
+    expect((await events(h, 'default_branch.pushed')).reverse().map((e) => e.id)).toEqual([`default-branch:REL-1:${sha('a')}`, `default-branch:REL-1:${sha('b')}`]);
+    expect((await measureTicket(h.store, 'p', 'REL-1')).revertedWithin14Days).toBe(false);
   });
 });
