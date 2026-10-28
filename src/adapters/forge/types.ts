@@ -23,16 +23,18 @@ export interface PrRequest {
 }
 
 /** A check run the factory publishes on a sha (ORC-162): `externalId` is the id of the effect that created it (ORC-138, point 5). */
-export interface CheckRunRequest {
+export type CheckRunRequest = {
   sha: string;
   name: string;
   externalId: string;
-  status: 'queued' | 'in_progress' | 'completed';
-  /** Required by GitHub once `status` is `completed`. */
-  conclusion?: 'success' | 'failure' | 'neutral' | 'cancelled' | 'skipped' | 'timed_out' | 'action_required';
+  /** The check's output; GitHub shows `name` as its title when only a summary is given. */
   title?: string;
   summary?: string;
-}
+} & (
+  | { status: 'queued' | 'in_progress'; conclusion?: undefined }
+  /** GitHub requires a conclusion once the check is completed. */
+  | { status: 'completed'; conclusion: 'success' | 'failure' | 'neutral' | 'cancelled' | 'skipped' | 'timed_out' | 'action_required' }
+);
 
 /**
  * What the factory itself writes on the forge, each write idempotent (ORC-162, docs/idempotence.md):

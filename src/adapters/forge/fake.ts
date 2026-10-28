@@ -1,9 +1,7 @@
 import type { FeedbackItem } from '../../core/types.js';
 import type { CheckRunRequest, Forge, ForgeWriter, PrInfo, PrRequest } from './types.js';
 
-export interface FakeCheckRun extends CheckRunRequest {
-  id: number;
-}
+export type FakeCheckRun = CheckRunRequest & { id: number };
 
 export class FakeForge implements Forge, ForgeWriter {
   private prs = new Map<string, PrInfo>();

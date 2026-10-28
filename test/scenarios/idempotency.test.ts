@@ -77,6 +77,10 @@ describe('idempotency table (ORC-162, docs/idempotence.md)', () => {
     await settled();
     expect(h.tracker.comments('REL-1')).toEqual(['Pris en charge.']);
     expect(await result()).toMatchObject({ kind: 'comment', deduplicated: true, ref: 'comment-REL-1-1' });
+    // The key is the effect id salted by the installation's id, drawn once and kept in the store.
+    const [key] = h.tracker.calls.filter((c) => c.method === 'comment').map((c) => c.args[2] as string);
+    expect(key).toBe(`REL-1:1:2@${await h.store.getMeta('instance-id')}`);
+    expect(key).toMatch(/^REL-1:1:2@[0-9a-f]{12}$/);
   });
 
   it('Commentaire (activité de session): a replayed agent activity finds its id and is not posted twice', async () => {

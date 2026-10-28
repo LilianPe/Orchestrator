@@ -398,12 +398,32 @@ describe('GitHubAppForge writes, idempotent (ORC-162)', () => {
     });
     expect(out).toEqual({ id: 12, deduplicated: true });
     const list = new URL(calls.find((c) => c.url.includes('/check-runs?'))!.url);
-    expect(Object.fromEntries(list.searchParams)).toEqual({ check_name: 'factory/verify', filter: 'all', per_page: '100' });
+    expect(Object.fromEntries(list.searchParams)).toEqual({ check_name: 'factory/verify', filter: 'all', per_page: '100', page: '1' });
     expect(writes(calls)).toEqual([
       expect.objectContaining({
         method: 'PATCH',
         body: { name: 'factory/verify', external_id: 'REL-1:4:1', status: 'completed', conclusion: 'success', output: { title: 'Vert', summary: '3 vérifications' } },
       }),
+    ]);
+  });
+
+  it('looks for the external id past the first page of check runs', async () => {
+    const page = (n: number) =>
+      Array.from({ length: n === 1 ? 100 : 1 }, (_, i) => ({ id: n * 1000 + i, name: 'factory/verify', status: 'completed', conclusion: 'failure', external_id: n === 2 ? 'REL-1:9:1' : `old-${i}` }));
+    const { forge, calls } = makeForge(
+      [
+        tokenRoute(42),
+        (url) =>
+          url.pathname === '/repos/acme/app/commits/abc123/check-runs' ? { body: { check_runs: page(Number(url.searchParams.get('page'))) } } : undefined,
+        (url, init) => (url.pathname === '/repos/acme/app/check-runs/2000' && init.method === 'PATCH' ? { body: { id: 2000 } } : undefined),
+      ],
+      { installationId: 42 },
+    );
+    const out = await forge.upsertCheckRun('/repo', { sha: 'abc123', name: 'factory/verify', externalId: 'REL-1:9:1', status: 'completed', conclusion: 'success', summary: 'Vert' });
+    expect(out).toEqual({ id: 2000, deduplicated: true });
+    // A summary alone still gets its output, titled by the check's name.
+    expect(writes(calls).map((c) => c.body)).toEqual([
+      { name: 'factory/verify', external_id: 'REL-1:9:1', status: 'completed', conclusion: 'success', output: { title: 'factory/verify', summary: 'Vert' } },
     ]);
   });
 

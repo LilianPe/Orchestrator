@@ -145,6 +145,11 @@ function statusBucket(state: string): string {
   return 'pending';
 }
 
+/** `/repos/{owner}/{name}`, encoded. */
+function repoApi(repo: GitHubRepoRef): string {
+  return `/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}`;
+}
+
 /** GitHub API failure with its status, so callers can fail closed on 404/403. */
 export class GitHubApiError extends Error {
   readonly status: number;
@@ -288,7 +293,7 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter 
     const query = new URLSearchParams({ head: `${repo.owner}:${branch}`, state: 'all', per_page: '1' });
     const pulls = await this.call<PullRequestDto[]>(
       'GET',
-      `/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}/pulls?${query}`,
+      `${repoApi(repo)}/pulls?${query}`,
       token,
     );
     const pr = pulls[0];
@@ -306,7 +311,7 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter 
   async ensurePr(repoPath: string, req: PrRequest): Promise<{ number: number; url: string; deduplicated: boolean }> {
     const repo = await this.repo(repoPath);
     const token = await this.installationToken(repo);
-    const base = `/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}/pulls`;
+    const base = `${repoApi(repo)}/pulls`;
     const openPr = async () => {
       const query = new URLSearchParams({ head: `${repo.owner}:${req.branch}`, state: 'open', per_page: '1' });
       const [pr] = await this.call<PullRequestDto[]>('GET', `${base}?${query}`, token);
@@ -329,21 +334,25 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter 
   /**
    * Creates the check run, or updates the one of the sha whose `external_id` is the request's
    * (ORC-162). GitHub has no filter on `external_id`: the sha's runs of that name are listed (all of
-   * them, `filter=all`, not only the latest) and matched here.
+   * them, `filter=all`, not only the latest, page by page) and matched here.
    */
   async upsertCheckRun(repoPath: string, req: CheckRunRequest): Promise<{ id: number; deduplicated: boolean }> {
     const repo = await this.repo(repoPath);
     const token = await this.installationToken(repo);
-    const base = `/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}`;
-    const query = new URLSearchParams({ check_name: req.name, filter: 'all', per_page: '100' });
-    const listed = await this.call<CheckRunsDto>('GET', `${base}/commits/${encodeURIComponent(req.sha)}/check-runs?${query}`, token);
-    const existing = listed.check_runs?.find((r) => r.external_id === req.externalId);
+    const base = repoApi(repo);
+    let existing: { id: number } | undefined;
+    for (let page = 1; !existing; page++) {
+      const query = new URLSearchParams({ check_name: req.name, filter: 'all', per_page: '100', page: String(page) });
+      const runs = (await this.call<CheckRunsDto>('GET', `${base}/commits/${encodeURIComponent(req.sha)}/check-runs?${query}`, token)).check_runs ?? [];
+      existing = runs.find((r) => r.external_id === req.externalId);
+      if (runs.length < 100) break;
+    }
     const body = {
       name: req.name,
       external_id: req.externalId,
       status: req.status,
       ...(req.conclusion ? { conclusion: req.conclusion } : {}),
-      ...(req.title ? { output: { title: req.title, summary: req.summary ?? '' } } : {}),
+      ...(req.title !== undefined || req.summary !== undefined ? { output: { title: req.title ?? req.name, summary: req.summary ?? '' } } : {}),
     };
     if (existing) {
       await this.call('PATCH', `${base}/check-runs/${existing.id}`, token, body);
@@ -381,7 +390,7 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter 
     sha: string,
     token: string,
   ): Promise<{ checks: PrInfo['checks']; failedChecks: string[] }> {
-    const base = `/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}/commits/${encodeURIComponent(sha)}`;
+    const base = `${repoApi(repo)}/commits/${encodeURIComponent(sha)}`;
     const [runs, statuses] = await Promise.all([
       this.call<CheckRunsDto>('GET', `${base}/check-runs?per_page=100`, token),
       this.call<StatusesDto>('GET', `${base}/status`, token),
