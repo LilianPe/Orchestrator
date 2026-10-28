@@ -2,6 +2,7 @@ import type { Clock } from "../../core/clock.js";
 import type { ProjectRuntime } from "../../core/orchestrator.js";
 import { TRUSTED, type FactoryEvent, type TicketState } from "../../core/types.js";
 import type { Store } from "../../store/types.js";
+import { checksEventId, prEventId } from "./github-webhook.js";
 import type { Forge } from "./types.js";
 
 export class PrPoller {
@@ -55,13 +56,13 @@ export class PrPoller {
       if (t.prNumber !== pr.number)
         await this.d.submit({
           ...base,
-          id: `pr:${t.ticketId}:${pr.number}:opened`,
+          id: prEventId(t.ticketId, pr.number, "opened"),
           type: "pr.opened",
           payload,
         });
       if (pr.state === "MERGED" || pr.state === "CLOSED") {
-        if (pr.state === "MERGED") await this.d.submit({ ...base, id: `pr:${t.ticketId}:${pr.number}:merged`, type: "pr.merged", payload });
-        else await this.d.submit({ ...base, id: `pr:${t.ticketId}:${pr.number}:closed`, type: "pr.closed", payload });
+        if (pr.state === "MERGED") await this.d.submit({ ...base, id: prEventId(t.ticketId, pr.number, "merged"), type: "pr.merged", payload });
+        else await this.d.submit({ ...base, id: prEventId(t.ticketId, pr.number, "closed"), type: "pr.closed", payload });
         if (done) await this.d.store.setMeta(finalKey, String(pr.number));
         return;
       }
@@ -70,7 +71,8 @@ export class PrPoller {
       if (pr.checks === "none") return;
       const last = await this.d.store.getMeta(metaKey);
       if (pr.checks !== last) {
-        const id = `pr:${t.ticketId}:${pr.number}:checks:${pr.checks}:${at}`;
+        // Per head SHA, as the GitHub webhook names it (ORC-134): the poll and the webhook report the same verdict once.
+        const id = checksEventId(t.ticketId, pr.number, pr.checks, pr.headSha ?? String(at));
         if (pr.checks === "fail")
           await this.d.submit({
             ...base,

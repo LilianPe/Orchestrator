@@ -98,7 +98,7 @@ Le premier ticket cité est celui qui touche le module en premier ou le plus ; l
 
 | Module | Rôle | Statut | Ticket cible |
 |---|---|---|---|
-| `src/core/engine.ts` | `decide(état, événement, wf)` pure : règles `on` du YAML et cas codés → `{events, effects, timers, trace}` ; résultat d'un effet `effect.done` (rien) ou `effect.failed` (ticket bloqué, ORC-150) ; `dead_letter.added` (ticket bloqué, message qui nomme l'événement) et `dead_letter.repaired` (bloc levé, événement rejoué ou non, ORC-175) | adapter | ORC-133 (fait : signature, fencing, taint : refus des jobs `knowledge`, `sensitivePaths` sur `start_run`), ORC-269 (fait : taint des retours en attente, tout `start_run` passe par la règle de taint), ORC-270 (fait : relances sur CI rouge bornées par `limits.ci_fix_attempts`, provisoire), ORC-274 (fait : `sensitivePathsAtLaunch`, taint au lancement), ORC-175 (fait : dead-letter et réparation), ORC-196 (commentaire de blocage standard), ORC-187 (préréglage), ORC-169 (règles `on` retirées) |
+| `src/core/engine.ts` | `decide(état, événement, wf)` pure : règles `on` du YAML et cas codés → `{events, effects, timers, trace}` ; résultat d'un effet `effect.done` (rien) ou `effect.failed` (ticket bloqué, ORC-150) ; `dead_letter.added` (ticket bloqué, message qui nomme l'événement) et `dead_letter.repaired` (bloc levé, événement rejoué ou non, ORC-175) | adapter | ORC-133 (fait : signature, fencing, taint : refus des jobs `knowledge`, `sensitivePaths` sur `start_run`), ORC-269 (fait : taint des retours en attente, tout `start_run` passe par la règle de taint), ORC-270 (fait : relances sur CI rouge bornées par `limits.ci_fix_attempts`, provisoire), ORC-274 (fait : `sensitivePathsAtLaunch`, taint au lancement), ORC-134 (fait : `pr.closed` annule le travail, `pr.reviewed` et `pr.conflicted` tracés sans réaction), ORC-175 (fait : dead-letter et réparation), ORC-196 (commentaire de blocage standard), ORC-187 (préréglage), ORC-169 (règles `on` retirées) |
 | `src/core/reduce.ts` | `reduce(état, événement)` pure : seul endroit qui change l'état d'un ticket ; une réparation lève le bloc de son événement puis applique ses faits (ORC-175) | garder | ORC-133, ORC-149 (worker), ORC-173 (propriétés), ORC-175 (fait : `dead_letter.repaired`) |
 | `src/core/dead-letter.ts` | Dead-letter (ORC-175) : raison de blocage qui nomme l'événement, événements `dead_letter.added` et `dead_letter.repaired` (ids `dead-letter:<id>:<n>`, `repair:<id>:<n>`), type `DeadLetter`, actions `replay`, `skip`, `force`, `effectiveEvent` (l'événement qu'une réparation rejoue ou force, lu par `planDecision`) | garder | ORC-175, ORC-196 (gabarit du commentaire de blocage) |
 | `src/core/upcast.ts` | `upcast` : relit un événement du journal écrit par une version antérieure (`schemaVersion`) | garder | ORC-133, ORC-174 (fait : l'oracle de rejeu passe chaque ligne par `upcast`) |
@@ -116,7 +116,7 @@ Le premier ticket cité est celui qui touche le module en premier ou le plus ; l
 | `src/core/naming.ts` | `slugify`, `branchName` (`factory/<id>-<slug>`) | adapter | ORC-167 (préfixe), ORC-136 et ORC-204 (`branchName` de Linear) |
 | `src/core/clock.ts` | `Clock`, `SystemClock`, `FakeClock` | garder | ORC-225, ORC-161 |
 | `src/core/duration.ts` | `parseDuration` (`3m`, `90m`…) | garder | ORC-177 (gardé si `factory.yml` garde des durées en texte) |
-| `src/core/types.ts` | `FactoryEvent` (`schemaVersion`, taint), `TicketState`, 6 états logiques ; événements `effect.done` et `effect.failed` (ORC-150), `dead_letter.added` et `dead_letter.repaired` (ORC-175) | adapter | ORC-133 (fait : `schemaVersion`, champ taint, renommages), ORC-269 (fait : taint de `FeedbackItem`), ORC-160 (taint posé à l'ingestion, acteur), ORC-180 (`humanInbox`), ORC-187 (états retirés) |
+| `src/core/types.ts` | `FactoryEvent` (`schemaVersion`, taint), `TicketState`, 6 états logiques ; événements `effect.done` et `effect.failed` (ORC-150), `pr.reviewed` et `pr.conflicted` (ORC-134), `dead_letter.added` et `dead_letter.repaired` (ORC-175) | adapter | ORC-133 (fait : `schemaVersion`, champ taint, renommages), ORC-269 (fait : taint de `FeedbackItem`), ORC-160 (taint posé à l'ingestion, acteur), ORC-180 (`humanInbox`), ORC-187 (états retirés) |
 
 ### `src/runtime/`
 
@@ -137,7 +137,9 @@ Le premier ticket cité est celui qui touche le module en premier ou le plus ; l
 | `src/adapters/forge/gh-cli.ts` | Forge par la CLI `gh` | retirer | ORC-181 (après ORC-124, GitHub App) |
 | `src/adapters/forge/github-app.ts` | Forge GitHub App : JWT RS256, jeton d'installation limité au dépôt, PR/checks/reviews en REST et GraphQL | garder | ORC-124 (remplace `gh-cli` après ORC-125), ORC-135 (authentification partagée) |
 | `src/adapters/forge/github-app-api.ts` | Lectures GitHub App de `factory doctor` : workflows et environnements protégés | garder | ORC-135 |
-| `src/adapters/forge/pr-poller.ts` | Relevé des PR toutes les 30 s | retirer | ORC-181, remplacé par ORC-134 (webhooks) et ORC-185 (réconciliation) |
+| `src/adapters/forge/pr-poller.ts` | Relevé des PR toutes les 30 s ; verdict de CI nommé par la tête de la PR, comme le webhook | retirer | ORC-181, remplacé par ORC-134 (fait : webhooks, gardé à côté) et ORC-185 (réconciliation) |
+| `src/adapters/forge/github-webhook.ts` | Webhook GitHub : signature `X-Hub-Signature-256`, `mapGithubWebhook` (PR mergée ou fermée, CI, conflit, push humain, review) par la branche du ticket, ids tirés du corps signé | garder | ORC-134 (fait), ORC-146 (conflits), ORC-159 (`push.human`), ORC-190 (reviews), ORC-222 (durcissement) |
+| `src/adapters/forge/github-ingest.ts` | Ingestion du webhook GitHub : inbox écrite avant la réponse (401 non signé, 500 écriture échouée) ; rattachement au ticket par branche et dépôt `origin` du projet | garder | ORC-134 (fait), ORC-221 (exposition derrière caddy) |
 | `src/adapters/runner/types.ts` | Port `Runner`, `RunHandle`, `RunRequest` (`sensitivePaths` porté, pas encore appliqué, ORC-274) | garder | ORC-204 (port gardé, application des chemins sensibles), ORC-189 (devient AgentRuntime) |
 | `src/adapters/runner/claude-code.ts` | `ClaudeCodeRunner` : `claude -p` en sous-processus sur l'hôte, transcripts masqués à l'écriture | adapter | ORC-136, ORC-204 (dans le runner isolé), ORC-205 (réglages imposés), ORC-217 (session sur volume), ORC-194 (`--max-budget-usd`), ORC-167 |
 | `src/adapters/runner/transcript.ts` | Masquage des secrets dans les transcripts, rétention de 30 jours et purge | garder | ORC-132 (suit les transcripts dans le runner isolé, ORC-204) |
@@ -176,6 +178,8 @@ Contrôles déterministes de `verify`, purs : ils lisent le diff `baseSha..SHA` 
 | `src/checks/diff.ts` | `parseDiff` : fichiers du diff unifié, lignes ajoutées numérotées, lignes retirées comptées | garder | ORC-158, ORC-145 (taille du diff), ORC-123 (tests ajoutés), ORC-131 |
 | `src/checks/test-files.ts` | Règle unique « fichier de test » (TS/JS et Python) et fichiers du harnais de test | garder | ORC-158, ORC-145 (lignes hors tests), ORC-123 (étape `tests`), ORC-131 (gel) |
 | `src/checks/anti-cheat.ts` | Scan des lignes ajoutées contre les quatre formes de triche, check `factory/anti-triche` | garder | ORC-158, ORC-151 (branché dans `verify`), ORC-131 (empreintes des tests gelés), ORC-225 (scénario « `.skip` ajouté ») |
+| `src/checks/diff-size.ts` | Contrôle `factory/taille-du-diff` : fichiers et lignes ajoutées + retirées hors tests et hors fichiers générés (verrouillage, instantanés drizzle-kit), comparés à `max_diff` (socle 15 fichiers, 400 lignes ; la configuration du dépôt ne peut que resserrer) ; au-delà, bloquant, avec une proposition de découpage et une question | garder | ORC-145, ORC-151 (appelé par `verify`), ORC-125 (pas de `publish` au-delà), ORC-209 (`max_diff` lu dans `.factory/config.yml`), ORC-196 (commentaire de blocage), ORC-142 (seuils mesurés) |
+| `src/checks/markdown.ts` | `mdCode` : texte écrit par l'agent (chemin, ligne trouvée) cité en code dans le résumé d'un check, caractères de contrôle neutralisés | garder | ORC-145, ORC-158 |
 | `src/checks/deps.ts` | Contrôle `factory/dependances` : dépendances ajoutées (npm, PyPI) lues dans le contenu avant et après des manifestes, existence au registre et liste autorisée, bloquant ; liste des ajouts pour le journal de sécurité | garder | ORC-165, ORC-151 (appelé par `verify`), ORC-209 (liste autorisée dans `.factory/config.yml`), ORC-223 (journal de sécurité) |
 | `src/checks/registry.ts` | `PackageRegistry`, `HttpPackageRegistry` : registre npm et API JSON de PyPI, `fetch` et URL de base injectables | garder | ORC-165, ORC-213 (requêtes par le proxy de sortie) |
 | `src/checks/fake-registry.ts` | `FakePackageRegistry` des tests | garder | ORC-165 |
@@ -208,7 +212,7 @@ Contrôles déterministes de `verify`, purs : ils lisent le diff `baseSha..SHA` 
 | Module | Rôle | Statut | Ticket cible |
 |---|---|---|---|
 | `src/config/instance.ts` | `config.yaml` et `secrets.json` de l'instance (zod) | adapter | ORC-209 (`factory.yml`), ORC-199 (`config.yaml` et `secrets.json` retirés), ORC-194 (`perDayUsd`), ORC-167 (`RELAIS_HOME`) |
-| `src/config/github-app.ts` | Résolution de la GitHub App (PEM ou chemin, repli `GH_APP_*`) | garder | ORC-124 (cible `factory.yml`, ORC-209) |
+| `src/config/github-app.ts` | Résolution de la GitHub App (PEM ou chemin, repli `GH_APP_*`) et du secret des webhooks GitHub (repli `GH_WEBHOOK_SECRET`, ORC-134) | garder | ORC-124 (cible `factory.yml`, ORC-209) |
 | `src/config/load-workflow.ts` | Fusion pack + `.factory/workflow.yml` | retirer | ORC-177 (remplacé par ORC-187 et ORC-209) |
 | `src/config/workflow-schema.ts` | Schéma zod de `workflow.yml` | retirer | ORC-177 |
 | `src/config/run-settings.ts` | `run-settings.json` : refus de lecture sur `FACTORY_HOME` | retirer | ORC-179, ORC-199 |
@@ -217,7 +221,7 @@ Contrôles déterministes de `verify`, purs : ils lisent le diff `baseSha..SHA` 
 
 | Module | Rôle | Statut | Ticket cible |
 |---|---|---|---|
-| `src/server/app.ts` | API Hono : interface, SSE, webhook Linear, `/agent/*`, pause/resume, mot de passe, CSRF | adapter | ORC-147 (fait : webhook et commandes de l'interface attendent l'écriture de l'inbox), ORC-192 (`/agent/*` retiré), ORC-200 (pause/resume retirés), ORC-223 (API du dashboard), ORC-222 (authentification nominative), ORC-134 (webhook GitHub) |
+| `src/server/app.ts` | API Hono : interface, SSE, webhook Linear, `/agent/*`, pause/resume, mot de passe, CSRF | adapter | ORC-147 (fait : webhook et commandes de l'interface attendent l'écriture de l'inbox), ORC-192 (`/agent/*` retiré), ORC-200 (pause/resume retirés), ORC-223 (API du dashboard), ORC-222 (authentification nominative), ORC-134 (fait : `POST /webhooks/github`) |
 | `src/server/static.ts` | Sert l'interface construite | garder | ORC-223 |
 
 ### `src/relay/`
