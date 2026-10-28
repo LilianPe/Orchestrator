@@ -120,7 +120,8 @@ export function parseGitHubRemote(remote: string): GitHubRepoRef | undefined {
   return owner && name ? { owner, name } : undefined;
 }
 
-function checkRunBucket(run: { status: string; conclusion: string | null }): string {
+/** Bucket of a check run, as `aggregateChecks` reads it; also read by the GitHub webhook (ORC-134). */
+export function checkRunBucket(run: { status: string; conclusion: string | null }): string {
   if (run.status !== 'completed') return 'pending';
   switch (run.conclusion) {
     case 'success':
@@ -295,7 +296,7 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge {
     if (!pr) return undefined;
     const state: PrInfo['state'] = pr.state === 'open' ? 'OPEN' : pr.merged_at ? 'MERGED' : 'CLOSED';
     const checks = state === 'OPEN' ? await this.checksFor(repo, pr.head.sha, token) : { checks: 'none' as const, failedChecks: [] };
-    return { number: pr.number, url: pr.html_url, state, branch: pr.head.ref, ...checks };
+    return { number: pr.number, url: pr.html_url, state, branch: pr.head.ref, headSha: pr.head.sha, ...checks };
   }
 
   async unresolvedReviewComments(repoPath: string, prNumber: number): Promise<FeedbackItem[]> {

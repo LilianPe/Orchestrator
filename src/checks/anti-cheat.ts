@@ -1,6 +1,7 @@
 // Deterministic scan of the diff `baseSha..SHA` against the four forms of cheating (ORC-158). No model: a finding is
 // a pattern on an ADDED line, so a removed line never blocks. Every finding blocks `factory/anti-triche`.
 import { parseDiff, type DiffFile } from './diff.js';
+import { mdCode } from './markdown.js';
 import { isTestFile, isTestHarnessFile, normalizePath } from './test-files.js';
 import type { CheckResult } from './types.js';
 
@@ -215,9 +216,6 @@ export function scanDiff(diff: string, options: AntiCheatOptions = {}): CheatFin
   }
   return findings;
 }
-
-// Markdown code span that survives a backtick in the matched text.
-const mdCode = (s: string): string => (s.includes('`') ? `\`\` ${s} \`\`` : `\`${s}\``);
 
 // GitHub refuses a check run summary over 65,535 characters; a long matched line is cut as well.
 const SUMMARY_LIMIT = 65_535;
