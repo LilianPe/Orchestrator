@@ -83,6 +83,20 @@ describe('replay oracle (ORC-174)', () => {
     expect(replayJournal(journal)).toMatchObject({ unrecorded: 1, replayed: journal.entries.length - 1, divergences: [] });
   });
 
+  it('replays a dead letter and its repair: the block, then the replayed event on the unblocked ticket (ORC-175)', async () => {
+    const journal = await record('dead-letter-then-repair');
+    const added = journal.entries.find((e) => e.event.type === 'dead_letter.added')!;
+    const repaired = journal.entries.find((e) => e.event.type === 'dead_letter.repaired')!;
+    expect(added.decision!.ticket).toMatchObject({ blocked: true });
+    expect(repaired.decision!.ticket).toMatchObject({ blocked: false, pendingFeedback: [expect.objectContaining({ body: 'et le mobile ?' })] });
+    // The dead-lettered reply itself is not journaled: only its repair, which carries it.
+    expect(journal.entries.map((e) => e.event.id)).not.toContain((repaired.event.payload as { eventId: string }).eventId);
+    expect(replayJournal(journal)).toMatchObject({ divergences: [], replayed: journal.entries.length });
+    // A repair recorded as a skip that replays as a replay is caught at its exact event.
+    (repaired.event.payload as { action: string }).action = 'skip';
+    expect(new Set(replayJournal(journal).divergences.map((d) => d.eventId))).toEqual(new Set([repaired.event.id]));
+  });
+
   it('refuses a journal whose workflow version is missing, and a file of another format', async () => {
     const journal = await record('review-merge-done');
     journal.workflows = {};

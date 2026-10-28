@@ -52,6 +52,19 @@ const effectResult = fc.record({
   eventId: fc.constantFrom('ex-1', 'effect:REL-1:1:1'),
   attempts: fc.constantFrom(1, 8),
 });
+/** The event a dead letter is about (ORC-175): a creating one, a human's status change, a merge, a run's end. */
+const DEAD_ID = 'dead-1';
+const deadEvent = (type: EventType, payload: unknown): FactoryEvent =>
+  ({ ...TRUSTED, id: DEAD_ID, type, at: 0, projectId: PROJECT, ticketId: TICKET, payload }) as FactoryEvent;
+const deadLettered: fc.Arbitrary<FactoryEvent> = fc.constantFrom(
+  deadEvent('ticket.delegated', { linearSessionId: DEV_SESSION, issue: { title: 'Titre', logical: 'todo', priority: 0 } }),
+  deadEvent('status.changed', { from: 'dev', to: 'human_review' }),
+  deadEvent('pr.merged', { number: 1, url: 'https://forge/pr/1', branch: 'agent/rel-1' }),
+  deadEvent('run.finished', { runId: 'r1', job: 'dev', outcome: 'success', costUsd: 0.5, turns: 3, lastText: 'fini' }),
+);
+const repair: fc.Arbitrary<EventPayloads['dead_letter.repaired']> = fc
+  .record({ action: fc.constantFrom('replay' as const, 'skip' as const, 'force' as const), event: deadLettered })
+  .map(({ action, event }) => ({ eventId: DEAD_ID, action, by: 'ops', event }));
 
 /** One arbitrary per event type: adding an event type to `EventPayloads` fails to compile until it is generated here. */
 const PAYLOADS: { [K in EventType]: fc.Arbitrary<EventPayloads[K]> } = {
@@ -87,6 +100,8 @@ const PAYLOADS: { [K in EventType]: fc.Arbitrary<EventPayloads[K]> } = {
   'control.stop': empty,
   'effect.done': effectResult,
   'effect.failed': effectResult.map((r) => ({ ...r, error: 'Linear down' })),
+  'dead_letter.added': deadLettered.map((e) => ({ eventId: e.id, eventType: e.type, error: 'boom', failures: 1 })),
+  'dead_letter.repaired': repair,
 };
 
 const EVENT_TYPES = Object.keys(PAYLOADS) as EventType[];
@@ -103,7 +118,7 @@ const anyDraft: fc.Arbitrary<Draft> = fc.oneof(...EVENT_TYPES.map((t) => draftOf
  */
 const FACTORY_PRODUCED: ReadonlySet<EventType> = new Set<EventType>([
   'run.finished', 'verify.passed', 'verify.failed', 'debounce.fired', 'control.pause', 'control.resume', 'control.stop',
-  'effect.done', 'effect.failed',
+  'effect.done', 'effect.failed', 'dead_letter.added', 'dead_letter.repaired',
 ]);
 
 /**

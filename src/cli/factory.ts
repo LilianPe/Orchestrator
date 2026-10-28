@@ -18,6 +18,7 @@ import { runInit } from './init.js';
 import { runDoctorCommand } from './doctor.js';
 import { formatPlan, planRows } from './plan.js';
 import { runReplayCommand } from './replay.js';
+import { runRepairCommand } from './repair.js';
 import { PRODUCT_NAME } from '../product.js';
 
 const USAGE = `Usage : factory <commande>
@@ -28,7 +29,8 @@ const USAGE = `Usage : factory <commande>
   status             état de l'instance en cours
   pause | resume     suspendre ou reprendre la file
   stop <ID>          arrêter le run d'un ticket
-  replay <journal>... rejouer des journaux exportés (régression bit à bit, --what-if <workflow.yml>, --export <ID>)`;
+  replay <journal>... rejouer des journaux exportés (régression bit à bit, --what-if <workflow.yml>, --export <ID>)
+  run repair <ID> [replay|skip|force] [<événement>]  réparer un événement mis de côté (dead-letter)`;
 
 /** Basic auth for an instance bound to a non-loopback host (FACTORY_UI_PASSWORD). */
 function uiAuth(): Record<string, string> {
@@ -127,6 +129,9 @@ async function main(): Promise<number> {
       console.log(`Arrêt demandé pour ${arg}.`);
       return 0;
     }
+    case 'run':
+      if (arg === 'repair') return runRepairCommand(home, positionals.slice(2));
+      break;
     default:
       break;
   }

@@ -1,5 +1,6 @@
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
+import { effectiveEvent } from '../../src/core/dead-letter.js';
 import { decide, isFenced, SENSITIVE_PATHS } from '../../src/core/engine.js';
 import { reduce } from '../../src/core/reduce.js';
 import {
@@ -300,9 +301,10 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
     it.todo('I8 (a) — the cancel event leads to the terminal status cancelled (no terminal status yet: run.cancel and statuses of ORC-133)');
 
     // A human takes the ticket back (moves it anywhere but done, delegates it again) or a new PR opens: it is no longer delivered.
+    // A repair that replays or forces such an event (ORC-175) is that event.
     const reopens = (step: Step): boolean => {
       if (step.kind !== 'decided') return false;
-      const e = step.event;
+      const e = effectiveEvent(step.event);
       if (e.type === 'ticket.delegated') return true;
       if (e.type === 'status.changed') return e.payload.to !== null && e.payload.to !== 'done';
       return e.type === 'pr.opened' && e.payload.number !== step.before?.prNumber;
@@ -312,7 +314,7 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
       for (const step of run(s).steps) {
         if (reopens(step)) merged = false;
         if (merged) expect(starts(step).filter((e) => isDevStart(e, wf)), 'dev run started after pr.merged').toEqual([]);
-        if (step.kind === 'decided' && step.event.type === 'pr.merged') merged = true;
+        if (step.kind === 'decided' && effectiveEvent(step.event).type === 'pr.merged') merged = true;
       }
     };
     it(

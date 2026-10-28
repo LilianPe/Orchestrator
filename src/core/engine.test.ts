@@ -2,7 +2,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { loadWorkflow } from '../config/load-workflow.js';
 import type { Decision } from './decision.js';
-import { decide, SENSITIVE_PATHS, sensitivePathsAtLaunch, taintedKnowledge } from './engine.js';
+import { decide, isFenced, SENSITIVE_PATHS, sensitivePathsAtLaunch, taintedKnowledge } from './engine.js';
 import { reduce } from './reduce.js';
 import { newTicketState, type EventPayloads, type EventType, type FactoryEvent, type TicketState } from './types.js';
 
@@ -548,5 +548,59 @@ describe('decide — built-ins', () => {
     expect(decide(ticket({ logical: 'done' }), ev('effect.failed', { ...result, error: 'x' }), workflow)).toEqual(decision());
     expect(decide(ticket({ prState: 'MERGED' }), ev('effect.failed', { ...result, error: 'x' }), workflow)).toEqual(decision());
     expect(decide(ticket({ blocked: true, blockReason: 'Arrêté à la demande' }), ev('effect.failed', { ...result, error: 'x' }), workflow)).toEqual(decision());
+  });
+});
+
+describe('decide — dead letters (ORC-175)', () => {
+  const added = { eventId: 'l1', eventType: 'label.changed', error: 'boom', failures: 1 };
+  const reason = 'Événement l1 mis de côté (label.changed) : sa décision a échoué (boom).';
+  const delegation = { ...ev('ticket.delegated', {}), id: 'l1' };
+
+  it('blocks the ticket of a dead-lettered event and says which event, once', () => {
+    expect(decide(ticket(), ev('dead_letter.added', added), workflow)).toEqual(
+      decision({
+        events: [{ type: 'ticket.blocked', reason }],
+        effects: [{ kind: 'activity', type: 'error', body: `${reason} Un mainteneur peut le réparer : \`factory run repair REL-1\`.` }],
+      }),
+    );
+    // An unknown ticket, a delivered or a stopped one: nothing to block.
+    expect(decide(undefined, ev('dead_letter.added', added), workflow)).toEqual(decision());
+    expect(decide(ticket({ logical: 'done' }), ev('dead_letter.added', added), workflow)).toEqual(decision());
+    expect(decide(ticket({ blocked: true, blockReason: 'Arrêté à la demande' }), ev('dead_letter.added', added), workflow)).toEqual(decision());
+    // Already blocked for another reason: that reason stays (its repair would lift a block not its own), the event is announced.
+    expect(decide(ticket({ blocked: true, blockReason: 'Erreur : linear down' }), ev('dead_letter.added', added), workflow)).toEqual(
+      decision({ effects: [{ kind: 'activity', type: 'error', body: `${reason} Un mainteneur peut le réparer : \`factory run repair REL-1\`.` }] }),
+    );
+  });
+
+  it('a repair lifts the block of its event only, and says so', () => {
+    const notice = { kind: 'activity' as const, type: 'response' as const, body: 'Événement l1 réparé par ops (ignoré) : le ticket est débloqué.' };
+    const skip = ev('dead_letter.repaired', { eventId: 'l1', action: 'skip', by: 'ops', event: delegation });
+    expect(decide(ticket({ blocked: true, blockReason: reason }), skip, workflow)).toEqual(decision({ effects: [notice] }));
+    expect(reduce(ticket({ blocked: true, blockReason: reason }), skip)).toMatchObject({ blocked: false, blockReason: undefined });
+    // Blocked for another reason (another event, a human stop): the block stays.
+    const other = ticket({ blocked: true, blockReason: 'Arrêté à la demande' });
+    expect(decide(other, skip, workflow)).toEqual(decision());
+    expect(reduce(other, skip)).toEqual(other);
+    const l10 = ticket({ blocked: true, blockReason: reason.replace('l1', 'l10') });
+    expect(reduce(l10, skip)).toEqual(l10);
+  });
+
+  it('replay decides the event again on the unblocked ticket; force records its facts without its decision', () => {
+    const blocked = ticket({ delegated: false, blocked: true, blockReason: reason });
+    const replay = ev('dead_letter.repaired', { eventId: 'l1', action: 'replay', by: 'ops', event: delegation });
+    // On the blocked ticket, the delegation would be ignored: the replay sees it unblocked and starts dev.
+    expect(kinds(decide(blocked, replay, workflow)).effects).toEqual(['start_run', 'activity']);
+    expect(reduce(blocked, replay)).toMatchObject({ delegated: true, blocked: false });
+    const force = ev('dead_letter.repaired', { eventId: 'l1', action: 'force', by: 'ops', event: delegation });
+    expect(kinds(decide(blocked, force, workflow)).effects).toEqual(['activity']);
+    expect(reduce(blocked, force)).toMatchObject({ delegated: true, blocked: false });
+  });
+
+  it('a replayed result of an inactive attempt is still fenced', () => {
+    const stale = { ...ev('run.finished', { runId: 'old', job: 'dev', outcome: 'success', costUsd: 0, turns: 1, lastText: '' }), id: 'l1' };
+    const out = decide(ticket({ activeRunId: 'new' }), ev('dead_letter.repaired', { eventId: 'l1', action: 'replay', by: 'ops', event: stale }), workflow);
+    expect(out.effects).toEqual([]);
+    expect(isFenced(out)).toBe(true);
   });
 });

@@ -1,4 +1,5 @@
 import type { AttemptLabels } from '../core/attempt-labels.js';
+import type { DeadLetter, RepairAction } from '../core/dead-letter.js';
 import type { OutboxEffect } from '../core/decision.js';
 import { TRUSTED, type InputKind, type QueueName, type FactoryEvent, type RunOutcome, type TicketState } from '../core/types.js';
 import type { StoredEvent } from '../core/upcast.js';
@@ -279,6 +280,24 @@ export interface Store {
    * order, each row with the decision recorded with it (ORC-174): what `factory replay` exports.
    */
   ticketJournal(projectId: string, ticketId?: string): Promise<JournalEntry[]>;
+  /**
+   * Sets aside an inbox row whose decision threw (ORC-175), in one transaction under the ticket's
+   * lock: the row is marked processed (it is not retried), its event (the one a failed repair carries,
+   * `deadLetteredEvent`) goes to `dead_letter`, open, its failures counted, and the event that blocks
+   * its ticket (`deadLetterNotice`) is written to the inbox. False, and nothing written, when the row
+   * is no longer pending (another worker processed it).
+   */
+  deadLetter(row: StoredEvent, error: string, at: number): Promise<boolean>;
+  /** The dead letters, of a ticket (any project) or all of them, open ones first, then oldest first. */
+  deadLetters(ticketId?: string): Promise<DeadLetter[]>;
+  /** The dead letter of an event, by its id. */
+  getDeadLetter(eventId: string): Promise<DeadLetter | undefined>;
+  /**
+   * Repairs an open dead letter (`factory run repair`), in one transaction: its status becomes the
+   * action's, and the repair event (`repairEvent`) is written to the inbox, decided and journaled like
+   * any event. `undefined`, and nothing written, when no open dead letter has this event id.
+   */
+  repairDeadLetter(eventId: string, action: RepairAction, by: string, at: number): Promise<DeadLetter | undefined>;
   /** A workflow version a ticket is frozen on, by hash. */
   getWorkflowVersion(hash: string): Promise<WorkflowVersion | undefined>;
   /**

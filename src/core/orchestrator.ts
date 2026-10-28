@@ -159,6 +159,7 @@ export class Orchestrator {
       leaseMs: d.effectLeaseMs,
       retry: d.processRetry,
       left: (row) => void this.freeSlot(row),
+      deadLettered: (row) => void this.freeSlot(row),
       effectRetry: d.effectRetry,
       now: () => d.clock.now(),
     });

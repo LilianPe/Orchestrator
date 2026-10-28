@@ -2,6 +2,15 @@ import { createHash, randomUUID } from 'node:crypto';
 import { sql } from 'drizzle-orm';
 import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
+import {
+  deadLetteredEvent,
+  deadLetterNotice,
+  REPAIRED_STATUS,
+  repairEvent,
+  type DeadLetter,
+  type DeadLetterStatus,
+  type RepairAction,
+} from '../../core/dead-letter.js';
 import type { OutboxEffect } from '../../core/decision.js';
 import { normalizeTicket, type FactoryEvent, type QueueName, type TicketState } from '../../core/types.js';
 import type { StoredEvent } from '../../core/upcast.js';
@@ -117,6 +126,29 @@ const outboxRow = ({ id, status, attempts, payload: p }: OutboxSqlRow): OutboxRo
   attempts: Number(attempts),
   ...(p.error === undefined ? {} : { error: p.error }),
   ...(p.lease === undefined ? {} : { lease: p.lease }),
+});
+
+const DEAD_LETTER_COLUMNS = sql.raw(`event_id, reason, payload, ticket_id, status, failures, resolved_by`);
+
+type DeadLetterPgRow = {
+  event_id: string;
+  reason: string;
+  payload: StoredEvent;
+  ticket_id: string | null;
+  status: DeadLetterStatus;
+  failures: number;
+  resolved_by: string | null;
+};
+
+const deadLetterRow = (r: DeadLetterPgRow): DeadLetter => ({
+  eventId: r.event_id,
+  projectId: r.payload.projectId,
+  ...(r.ticket_id === null ? {} : { ticketId: r.ticket_id }),
+  event: r.payload,
+  error: r.reason,
+  failures: Number(r.failures),
+  status: r.status,
+  ...(r.resolved_by === null ? {} : { resolvedBy: r.resolved_by }),
 });
 
 /** An attempt's label column on update: kept once the attempt has labels, else the write's (ORC-226). */
@@ -467,6 +499,67 @@ export class PgStore implements AsyncStore {
       values (${event.id}, ${event.id}, ${event.type}, ${JSON.stringify(event)}::jsonb, clock_timestamp(), ${event.schemaVersion})
       on conflict do nothing
     `);
+  }
+
+  async deadLetter(row: StoredEvent, error: string, at: number): Promise<boolean> {
+    const now = this.now();
+    return this.db.transaction(async (tx) => {
+      await tx.execute(ticketLock(row.ticketId));
+      const marked = await tx.execute(sql`
+        update inbox set processed_at = to_timestamp(${now / 1000}) where id = ${row.id} and processed_at is null
+      `);
+      if ((marked.rowCount ?? 0) === 0) return false;
+      const event = deadLetteredEvent(row);
+      const upserted = await tx.execute<{ failures: number }>(sql`
+        insert into dead_letter (id, event_id, reason, payload, ticket_id, status, failures, created_at, updated_at)
+        values (
+          ${event.id}, ${event.id}, ${error}, ${JSON.stringify(event)}::jsonb, ${event.ticketId ?? null}, 'open', 1,
+          to_timestamp(${at / 1000}), to_timestamp(${at / 1000})
+        )
+        on conflict (id) do update set
+          status = 'open', failures = dead_letter.failures + 1, reason = excluded.reason, updated_at = excluded.updated_at
+        returning failures
+      `);
+      const failures = Number(upserted.rows[0]!.failures);
+      const notice = deadLetterNotice({ event, error, failures }, at);
+      if (notice) await this.appendResult(tx, notice);
+      return true;
+    });
+  }
+
+  async deadLetters(ticketId?: string): Promise<DeadLetter[]> {
+    const result = await this.db.execute<DeadLetterPgRow>(sql`
+      select ${DEAD_LETTER_COLUMNS} from dead_letter
+      where ${ticketId ?? null}::text is null or ticket_id = ${ticketId ?? null}
+      order by status = 'open' desc, created_at, id
+    `);
+    return result.rows.map(deadLetterRow);
+  }
+
+  async getDeadLetter(eventId: string): Promise<DeadLetter | undefined> {
+    const result = await this.db.execute<DeadLetterPgRow>(sql`select ${DEAD_LETTER_COLUMNS} from dead_letter where id = ${eventId}`);
+    const row = result.rows[0];
+    return row && deadLetterRow(row);
+  }
+
+  async repairDeadLetter(eventId: string, action: RepairAction, by: string, at: number): Promise<DeadLetter | undefined> {
+    return this.db.transaction(async (tx) => {
+      const found = await tx.execute<{ ticket_id: string | null }>(sql`select ticket_id from dead_letter where id = ${eventId} and status = 'open'`);
+      if (!found.rows[0]) return undefined;
+      // The ticket's lock, as `appendInbox`: the repair gets its `received_at` in commit order.
+      await tx.execute(ticketLock(found.rows[0].ticket_id));
+      const status = REPAIRED_STATUS[action];
+      const updated = await tx.execute<DeadLetterPgRow>(sql`
+        update dead_letter set status = ${status}, resolved_by = ${by}, updated_at = to_timestamp(${at / 1000})
+        where id = ${eventId} and status = 'open'
+        returning ${DEAD_LETTER_COLUMNS}
+      `);
+      const row = updated.rows[0];
+      if (!row) return undefined;
+      const dl = deadLetterRow(row);
+      await this.appendResult(tx, repairEvent(dl, action, by, at));
+      return dl;
+    });
   }
 
   async completeEffect(id: string, lease?: string, at?: number): Promise<boolean> {

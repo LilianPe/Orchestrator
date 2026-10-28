@@ -18,6 +18,7 @@ Toutes les commandes `relais` lisent `RELAIS_HOME` (défaut `~/.relais`) et `con
 | `relais status` | État de l'instance en cours. | oui |
 | `relais pause` / `relais resume` | Suspendre / reprendre la file. | oui |
 | `relais stop <ID>` | Arrêter le run d'un ticket. | oui |
+| `factory run repair <ID> [replay\|skip\|force] [<événement>]` | Lister ou réparer les événements mis de côté (dead-letter) d'un ticket. | non (lit et écrit la base) |
 
 Les commandes qui demandent le démon appellent `http://127.0.0.1:<port>/api/…` avec le `port` de `config.yaml`. Si `RELAIS_UI_PASSWORD` est défini dans votre shell, elles l'envoient en HTTP Basic (nécessaire quand le démon écoute hors bouclage). En Docker, lancez-les dans le conteneur : `docker compose exec relais node dist/src/cli/relais.js status`.
 
@@ -107,6 +108,23 @@ test/replay/journals/check-failed-then-feedback.json : p/REL-1 : 4 décision(s) 
 ```
 
 `factory replay --export <ID> [--project <id>] [--out <fichier>]` écrit le journal d'un ticket de l'instance (store de `FACTORY_DATABASE_URL`, sinon `factory.db`, ouvert sans migration), avec les versions de workflow de ses décisions. `--project` est requis quand l'instance a plusieurs projets. Un ticket sans événement journalisé, ou une instance sans base, est refusé plutôt qu'exporté vide. Le format et la mise en CI : [`tests.md`](tests.md#loracle-de-rejeu).
+### `factory run repair <ID> [replay|skip|force] [<événement>]`
+
+Répare un événement dont la décision a échoué et que le démon a mis de côté (table `dead_letter`) en bloquant le ticket `<ID>`. Sans action, liste les événements mis de côté du ticket (ouverts et déjà réparés) ; avec une action, répare le seul ouvert, ou celui donné en dernier argument :
+
+```text
+$ factory run repair REL-12
+Événements mis de côté pour REL-12 :
+  l1  label.changed  ouvert  (1 échec) rule.when.every is not a function
+$ factory run repair REL-12 replay
+Événement l1 (label.changed) rejoué par armand : réparation journalisée, décidée au prochain passage du démon.
+```
+
+- `replay` : décider l'événement de nouveau, après un correctif ;
+- `skip` : l'ignorer (refusé pour un résultat de run ou de vérifications : utilisez `force`) ;
+- `force` : enregistrer ses faits sans sa décision (aucun effet).
+
+Le ticket est débloqué et la réparation journalisée (événement `dead_letter.repaired`, avec le nom de l'utilisateur). La commande écrit dans la base de l'instance (SQLite, ou Postgres avec `FACTORY_DATABASE_URL`) : le démon n'a pas besoin de tourner, il décide la réparation à son prochain passage. Un événement sans ticket se désigne par son id à la place de `<ID>`. Détails : [`exploitation.md`](exploitation.md#dead-letter-et-factory-run-repair-orc-175).
 
 ## `relais-agent` (côté agent)
 
