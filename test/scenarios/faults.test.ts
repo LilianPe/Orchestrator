@@ -110,6 +110,7 @@ const CASES: { label: string; spec: Omit<FaultSpec, 'mode'> }[] = [
   { label: 'effect, before its external call', spec: { point: 'effect.before' } },
   { label: 'run launch, before the runner starts it', spec: { point: 'effect.before', match: (i) => i.method === 'start' } },
   { label: 'idempotent effect (move), after its external call', spec: { point: 'effect.after', match: (i) => i.method === 'moveTo' } },
+  { label: 'run launch, before its run is written', spec: { point: 'run.write' } },
   { label: 'run launch, after the runner started it', spec: { point: 'effect.after', match: (i) => i.method === 'start' } },
   { label: 'effect completion', spec: { point: 'effect.complete' } },
   { label: 'timer firing, before its transaction', spec: { point: 'timer.fire' } },
@@ -165,16 +166,35 @@ describe('fault injection at each point of the chain (ORC-163)', () => {
   });
 
   /**
-   * Known gap, ORC-277, found by the chaos (seed 31 on Postgres): a question's run cut after it
-   * started is not a ticket's run, so recover() blocks nothing, posts « reposez la question », and
-   * the start taken up again past its lease launches the question a second time. ORC-162 marks a
-   * start only once it is handled (`effect:<key>:started`): a kill before the mark is not caught.
+   * ORC-277, found by the chaos (seed 31 on Postgres): a question's run cut after it started is not a
+   * ticket's run, so recover() blocks nothing and posts « reposez la question ». The start taken up
+   * again past its lease finds the run its mark names, written before the runner started it, and
+   * launches nothing: the question is asked once, and the only answer is the invitation to ask again.
    */
-  it.fails('kill at a question run launch, after the runner started it: asked twice until ORC-277', async () => {
+  it('kill at a question run launch, after the runner started it: asked once (ORC-277)', async () => {
     const ask = event('m1', 'session.mentioned', { linearSessionId: 'ls-q', body: 'pourquoi ?', author: 'L' });
-    const { report, faults } = await scenario({ point: 'effect.after', mode: 'kill', match: (i) => i.method === 'start' }, [{ send: ask }]);
+    const { h, report, faults } = await scenario({ point: 'effect.after', mode: 'kill', match: (i) => i.method === 'start' }, [{ send: ask }]);
     expect(faults.fired).toMatchObject({ point: 'effect.after', mode: 'kill' });
     expect(report.violations).toEqual([]);
     expect(report.atLeastOnce).toEqual([]);
+    expect(h.runner.requests).toHaveLength(1);
+    expect(h.tracker.activities('ls-q')).toEqual([
+      { type: 'error', body: expect.stringContaining('Reposez la question') as unknown },
+    ]);
+  });
+
+  /**
+   * ORC-277, the other side: a question's launch cut before its run is written. Its mark names a run
+   * that was never written, so nothing was launched: recover() has no run to settle and tells nobody
+   * to ask again, and the start taken up again launches the question once.
+   */
+  it('kill at a question run launch, before its run is written: launched once, no invitation to ask again (ORC-277)', async () => {
+    const ask = event('m1', 'session.mentioned', { linearSessionId: 'ls-q', body: 'pourquoi ?', author: 'L' });
+    const { h, report, faults } = await scenario({ point: 'run.write', mode: 'kill' }, [{ send: ask }]);
+    expect(faults.fired).toMatchObject({ point: 'run.write', mode: 'kill' });
+    expect(report.violations).toEqual([]);
+    expect(report.atLeastOnce).toEqual([]);
+    expect(h.runner.requests).toHaveLength(1);
+    expect(JSON.stringify(h.tracker.activities('ls-q'))).not.toContain('Reposez');
   });
 });

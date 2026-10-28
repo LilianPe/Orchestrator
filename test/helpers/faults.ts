@@ -42,6 +42,8 @@ export const FAULT_POINTS = [
   'timer.fired',
   /** Before the inbox write of a run's or a check's result, which nobody resends. */
   'run.result',
+  /** At a launch, before its run is first written (its start mark already names it, ORC-277). */
+  'run.write',
 ] as const;
 export type FaultPoint = (typeof FAULT_POINTS)[number];
 export type FaultMode = 'throw' | 'kill';
@@ -80,8 +82,6 @@ export interface VisibleCall {
   kind?: string;
   /** What tells two calls apart: the body, the run id… */
   detail: string;
-  /** The queue of a launched run (`start`). */
-  queue?: string;
 }
 
 /** The calls whose double would be seen in Linear or would launch a second agent; moves and labels are idempotent. */
@@ -161,7 +161,8 @@ export class Faults {
 export class FaultLife {
   /** The outbox row each ticket is executing in this life, between its claim and its settlement. */
   private current = new Map<string, OutboxRow>();
-  private runs = new Map<string, { ticketId: string; queue: string }>();
+  /** The ticket of each run this life wrote. */
+  private runs = new Map<string, string>();
   private sessionTickets = new Map<string, string>();
 
   constructor(
@@ -190,7 +191,7 @@ export class FaultLife {
   }
 
   /** Runs `act` (the external call) between the `effect.before` and `effect.after` points of the row it belongs to. */
-  private visible<T>(method: string, ticketId: string | undefined, detail: string, act: () => T, queue?: string): T {
+  private visible<T>(method: string, ticketId: string | undefined, detail: string, act: () => T): T {
     const row = this.rowOf(ticketId);
     const info: FaultInfo = { id: row?.id, effect: row?.effect.kind, ticketId: ticketId ?? row?.ticketId, method };
     if (row) this.fire('effect.before', info);
@@ -201,7 +202,6 @@ export class FaultLife {
         ...(info.ticketId === undefined ? {} : { ticketId: info.ticketId }),
         ...(row ? { row: row.id, kind: row.effect.kind } : {}),
         detail,
-        ...(queue === undefined ? {} : { queue }),
       });
       if (row) this.fire('effect.after', info);
     };
@@ -273,7 +273,8 @@ export class FaultLife {
         return fired;
       },
       putRun: async (r: RunRecord) => {
-        this.runs.set(r.id, { ticketId: r.ticketId, queue: r.queue });
+        if (r.status === 'running' && !this.runs.has(r.id)) this.fire('run.write', { id: r.id, ticketId: r.ticketId });
+        this.runs.set(r.id, r.ticketId);
         this.session(r.linearSessionId, r.ticketId);
         return inner.putRun(r);
       },
@@ -313,8 +314,7 @@ export class FaultLife {
   runner<T extends Runner>(inner: T): T {
     return override(inner, {
       start: (req: RunRequest) => {
-        const run = this.runs.get(req.runId);
-        return this.visible('start', run?.ticketId, req.runId, () => inner.start(req), run?.queue);
+        return this.visible('start', this.runs.get(req.runId), req.runId, () => inner.start(req));
       },
     } as Partial<Record<keyof T, unknown>>);
   }
@@ -391,11 +391,10 @@ export async function checkChain(
   for (const group of visibleDuplicates(opts.calls)) {
     const first = group[0]!;
     const line = `${first.method} ×${group.length} for ${first.row} (${first.kind}) in lives ${group.map((c) => c.life).join(', ')}: ${first.detail}`;
-    // A dev run launched twice is never the outbox's at-least-once: recover() blocks a ticket whose
-    // run was cut, and the start taken up again is refused. A question's run blocks nothing: its
-    // start taken up again launches it again when the kill fell before its mark (ORC-277).
-    const question = group.every((c) => c.queue === 'questions');
-    if (first.method === 'start' && !question) violations.push(`run launched twice: ${line}`);
+    // A run launched twice is never the outbox's at-least-once: a start taken up again finds the run
+    // its mark names, written before the runner started it, and launches nothing more; recover()
+    // settles that run (a ticket blocked, a question to ask again) (ORC-277).
+    if (first.method === 'start') violations.push(`run launched twice: ${line}`);
     else atLeastOnce.push(line);
   }
   return { violations, atLeastOnce };
