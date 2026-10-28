@@ -27,8 +27,8 @@ export class TimerService {
   constructor(
     private store: Store,
     private clock: Clock,
-    /** Told of each firing written to the inbox, to process it without waiting for the next poll. */
-    private fired: (e: FactoryEvent) => void = () => {},
+    /** Called after a firing is written to the inbox, so the worker processes it without waiting for its next poll. */
+    private wake: () => void = () => {},
     private onError: (err: Error) => void = () => {},
   ) {}
 
@@ -42,10 +42,16 @@ export class TimerService {
 
   private async fire(): Promise<void> {
     const now = this.clock.now();
+    let failed: unknown;
     for (const t of await this.store.dueTimers(now)) {
-      const event = timerEvent(t, now);
-      if (await this.store.fireTimer(t, event)) this.fired(event);
+      // A timer whose firing fails stays due for the next pass, and does not hold back the others.
+      try {
+        if (await this.store.fireTimer(t, timerEvent(t, now))) this.wake();
+      } catch (err) {
+        failed ??= err;
+      }
     }
+    if (failed !== undefined) throw failed;
   }
 
   start(intervalMs = 1000): void {

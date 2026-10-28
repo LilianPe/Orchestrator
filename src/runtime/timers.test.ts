@@ -24,8 +24,8 @@ describe('TimerService (ORC-161)', () => {
   it('fires a due timer once through the inbox, even after a second tick', async () => {
     const store = new SqliteStore(':memory:');
     const clock = new FakeClock(0);
-    const fired: FactoryEvent[] = [];
-    const svc = new TimerService(store, clock, (e) => fired.push(e));
+    let woken = 0;
+    const svc = new TimerService(store, clock, () => woken++);
     await store.putTimer({ ...timer, fireAt: 180_000 });
     await svc.tick();
     expect(await store.pendingInbox(10)).toEqual([]);
@@ -37,7 +37,7 @@ describe('TimerService (ORC-161)', () => {
       payload: { kind: 'debounce', payload: { job: 'dev-feedback' } },
     };
     expect(await store.pendingInbox(10)).toEqual([event]);
-    expect(fired).toEqual([event]);
+    expect(woken).toBe(1);
     expect(await store.dueTimers(Number.MAX_SAFE_INTEGER)).toEqual([]);
   });
 
@@ -71,13 +71,34 @@ describe('TimerService (ORC-161)', () => {
     expect(await store.dueTimers(1000)).toEqual([]);
   });
 
+  it('fires the other due timers when one firing fails, and reports the failure', async () => {
+    const inner = new SqliteStore(':memory:');
+    const other = { ...timer, key: 'REL-2:dev-feedback', ticketId: 'REL-2', fireAt: 200 };
+    await inner.putTimer(timer);
+    await inner.putTimer(other);
+    let down = true;
+    const store = Object.assign(Object.create(inner) as SqliteStore, {
+      fireTimer: async (t: TimerRecord, e: FactoryEvent) => {
+        if (down && t.key === timer.key) throw new Error('lock timeout');
+        return inner.fireTimer(t, e);
+      },
+    });
+    const svc = new TimerService(store, new FakeClock(500));
+    await expect(svc.tick()).rejects.toThrow('lock timeout');
+    expect(await ids(inner)).toEqual(['timer:REL-2:dev-feedback:200']);
+    expect(await inner.dueTimers(1000)).toEqual([timer]);
+    down = false;
+    await svc.tick();
+    expect(await ids(inner)).toEqual(['timer:REL-2:dev-feedback:200', 'timer:REL-1:dev-feedback:100']);
+  });
+
   it('runs one pass at a time, so overlapping ticks fire a timer once', async () => {
     const store = new SqliteStore(':memory:');
-    const fired: FactoryEvent[] = [];
-    const svc = new TimerService(store, new FakeClock(500), (e) => fired.push(e));
+    let woken = 0;
+    const svc = new TimerService(store, new FakeClock(500), () => woken++);
     await store.putTimer(timer);
     await Promise.all([svc.tick(), svc.tick()]);
-    expect(fired).toHaveLength(1);
+    expect(woken).toBe(1);
     expect(await ids(store)).toHaveLength(1);
   });
 
