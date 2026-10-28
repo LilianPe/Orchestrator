@@ -34,8 +34,9 @@ export function githubMapContext(d: {
   repoOf: (repoPath: string) => Promise<string | undefined>;
   now: () => number;
 }): GithubMapContext {
+  const projectOf = (id: string) => d.projects.find((p) => p.id === id);
   const sameRepo = async (projectId: string, repo: string) => {
-    const project = d.projects.find((p) => p.id === projectId);
+    const project = projectOf(projectId);
     return !!project && (await d.repoOf(project.repoPath))?.toLowerCase() === repo.toLowerCase();
   };
   return {
@@ -44,7 +45,7 @@ export function githubMapContext(d: {
       return undefined;
     },
     findPr: async (t) => {
-      const project = d.projects.find((p) => p.id === t.projectId);
+      const project = projectOf(t.projectId);
       return project && t.branch ? d.forge.findPr(project.repoPath, t.branch) : undefined;
     },
     now: d.now,

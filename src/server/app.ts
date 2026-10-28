@@ -23,7 +23,7 @@ export interface ServerDeps {
   blockTicket: (projectId: string, ticketId: string, reason: string) => Promise<void>;
   linearWebhook: (raw: string, headers: Record<string, string | undefined>) => { status: number } | Promise<{ status: number }>;
   /** The GitHub webhook (ORC-134): signature checked, events written to the inbox before the answer. */
-  githubWebhook?: (raw: string, headers: Record<string, string | undefined>) => Promise<{ status: number }>;
+  githubWebhook: (raw: string, headers: Record<string, string | undefined>) => Promise<{ status: number }>;
   oauth?: { authorizeUrl: () => string; callback: (code: string, state: string) => Promise<void> };
   linearConnected: () => boolean;
   tracker: Pick<Tracker, 'getIssue' | 'search' | 'activity'>;
@@ -100,15 +100,15 @@ export function createApp(d: ServerDeps): Hono {
     return next();
   });
 
-  const webhook = (handle: (raw: string, headers: Record<string, string | undefined>) => { status: number } | Promise<{ status: number }>) => async (c: Context) => {
+  const webhook = (handle: ServerDeps['linearWebhook']) => async (c: Context) => {
     const raw = await c.req.text();
     const headers: Record<string, string | undefined> = {};
     c.req.raw.headers.forEach((v, k) => (headers[k.toLowerCase()] = v));
     const { status } = await handle(raw, headers);
     return c.body(null, status as 200);
   };
-  app.post('/webhooks/linear', webhook((raw, headers) => d.linearWebhook(raw, headers)));
-  app.post('/webhooks/github', d.githubWebhook ? webhook(d.githubWebhook) : (c) => c.notFound());
+  app.post('/webhooks/linear', webhook(d.linearWebhook));
+  app.post('/webhooks/github', webhook(d.githubWebhook));
 
   app.get('/oauth/start', (c) => (d.oauth ? c.redirect(d.oauth.authorizeUrl()) : c.notFound()));
   app.get('/oauth/callback', async (c) => {

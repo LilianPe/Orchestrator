@@ -2,7 +2,7 @@ import type { Clock } from "../../core/clock.js";
 import type { ProjectRuntime } from "../../core/orchestrator.js";
 import { TRUSTED, type FactoryEvent, type TicketState } from "../../core/types.js";
 import type { Store } from "../../store/types.js";
-import { checksEventId } from "./github-webhook.js";
+import { checksEventId, prEventId } from "./github-webhook.js";
 import type { Forge } from "./types.js";
 
 export class PrPoller {
@@ -56,13 +56,13 @@ export class PrPoller {
       if (t.prNumber !== pr.number)
         await this.d.submit({
           ...base,
-          id: `pr:${t.ticketId}:${pr.number}:opened`,
+          id: prEventId(t.ticketId, pr.number, "opened"),
           type: "pr.opened",
           payload,
         });
       if (pr.state === "MERGED" || pr.state === "CLOSED") {
-        if (pr.state === "MERGED") await this.d.submit({ ...base, id: `pr:${t.ticketId}:${pr.number}:merged`, type: "pr.merged", payload });
-        else await this.d.submit({ ...base, id: `pr:${t.ticketId}:${pr.number}:closed`, type: "pr.closed", payload });
+        if (pr.state === "MERGED") await this.d.submit({ ...base, id: prEventId(t.ticketId, pr.number, "merged"), type: "pr.merged", payload });
+        else await this.d.submit({ ...base, id: prEventId(t.ticketId, pr.number, "closed"), type: "pr.closed", payload });
         if (done) await this.d.store.setMeta(finalKey, String(pr.number));
         return;
       }

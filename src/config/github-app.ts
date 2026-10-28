@@ -8,7 +8,6 @@ export interface GithubAppSettings {
   /** PEM content, never a path. */
   privateKey: string;
   installationId?: string;
-  webhookSecret?: string;
 }
 
 const PEM_HEADER = '-----BEGIN';
@@ -60,12 +59,10 @@ export function resolveGithubApp(config: InstanceConfig, env: NodeJS.ProcessEnv 
     );
   }
   const installationId = (fromConfig?.installationId ?? env['GH_APP_INSTALLATION_ID'] ?? '').trim() || undefined;
-  const webhookSecret = fromConfig?.webhookSecret?.trim() || undefined;
   return {
     appId,
     privateKey: readPrivateKey(key),
     ...(installationId ? { installationId } : {}),
-    ...(webhookSecret ? { webhookSecret } : {}),
   };
 }
 

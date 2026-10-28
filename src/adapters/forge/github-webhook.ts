@@ -1,26 +1,27 @@
-import { createHmac, timingSafeEqual } from 'node:crypto';
 import { TRUSTED, type FactoryEvent, type PrPayload, type Taint, type TicketState } from '../../core/types.js';
-import { isUsableWebhookSecret } from '../tracker/linear/webhook.js';
+import { verifyLinearSignature } from '../tracker/linear/webhook.js';
 import { checkRunBucket } from './github-app.js';
 import type { PrInfo } from './types.js';
 
 /**
- * `X-Hub-Signature-256` is `sha256=<hex HMAC-SHA256 of the raw body>`, compared in constant time as
- * `verifyLinearSignature` does. An empty secret refuses everything: anyone could sign with it.
+ * `X-Hub-Signature-256` is `sha256=<hex HMAC-SHA256 of the raw body>`: the HMAC Linear signs with, under a
+ * prefix. An empty secret refuses everything: anyone could sign with it.
  */
 export function verifyGithubSignature(raw: string, header: string | undefined, secret: string): boolean {
-  if (!isUsableWebhookSecret(secret) || !header) return false;
-  const m = /^sha256=([0-9a-f]{64})$/i.exec(header);
-  if (!m) return false;
-  const expected = createHmac('sha256', secret).update(raw).digest();
-  return timingSafeEqual(Buffer.from(m[1]!, 'hex'), expected);
+  const m = /^sha256=([0-9a-f]{64})$/i.exec(header ?? '');
+  return !!m && verifyLinearSignature(raw, m[1], secret);
 }
 
 /**
- * Id of a checks verdict on a PR's head: the webhook and `PrPoller` give the same verdict on the same
- * head the same id, so the inbox keeps it once whichever reports it first (ORC-134).
+ * Id of a fact on a ticket's PR: the webhook and `PrPoller` name the same fact the same way, so the
+ * inbox keeps it once whichever reports it first (ORC-134).
  */
-export function checksEventId(ticketId: string, prNumber: number, verdict: 'pass' | 'fail' | 'pending' | 'none', head: string): string {
+export function prEventId(ticketId: string, prNumber: number, fact: 'opened' | 'merged' | 'closed'): string {
+  return `pr:${ticketId}:${prNumber}:${fact}`;
+}
+
+/** Id of a checks verdict on a PR's head, shared by the webhook and `PrPoller` as `prEventId` is. */
+export function checksEventId(ticketId: string, prNumber: number, verdict: PrInfo['checks'], head: string): string {
   return `pr:${ticketId}:${prNumber}:checks:${verdict}:${head}`;
 }
 
@@ -48,7 +49,7 @@ function prPayload(pr: any): PrPayload {
 
 /** `pr.opened` first when the ticket does not know this PR yet, as `PrPoller` does. */
 function opened(t: TicketState, payload: PrPayload): Draft[] {
-  return t.prNumber === payload.number ? [] : [{ id: `pr:${t.ticketId}:${payload.number}:opened`, type: 'pr.opened', payload }];
+  return t.prNumber === payload.number ? [] : [{ id: prEventId(t.ticketId, payload.number, 'opened'), type: 'pr.opened', payload }];
 }
 
 function pullRequest(body: any, t: TicketState): Draft[] {
@@ -66,8 +67,8 @@ function pullRequest(body: any, t: TicketState): Draft[] {
     // Per closing, so that a PR reopened then closed again is cancelled again; `PrPoller` keeps `:closed`.
     out.push(
       pr.merged
-        ? { id: `pr:${t.ticketId}:${n}:merged`, type: 'pr.merged', payload }
-        : { id: `pr:${t.ticketId}:${n}:closed:${pr.closed_at ?? ''}`, type: 'pr.closed', payload },
+        ? { id: prEventId(t.ticketId, n, 'merged'), type: 'pr.merged', payload }
+        : { id: `${prEventId(t.ticketId, n, 'closed')}:${pr.closed_at ?? ''}`, type: 'pr.closed', payload },
     );
     return out;
   }
@@ -116,16 +117,17 @@ async function checks(body: any, kind: 'check_run' | 'check_suite', repo: string
   } catch (err) {
     if (bucket === 'pass') throw err;
   }
-  const same = pr && pr.number === payload.number && pr.state === 'OPEN' && (!pr.headSha || pr.headSha === head);
-  const read = same ? { ...payload, url: pr!.url } : payload;
-  if (bucket === 'fail') {
-    if (same && pr!.checks !== 'fail') return NOTHING;
-    const name: string = kind === 'check_run' ? check.name : (check.app?.name ?? 'check suite');
-    const failures = same && pr!.failedChecks.length ? pr!.failedChecks : [name];
-    return { ticket: t, events: [...opened(t, read), { id: checksEventId(t.ticketId, read.number, 'fail', head), type: 'pr.checks_failed', payload: { ...read, failures } }] };
-  }
-  if (!same || pr!.checks !== 'pass') return NOTHING;
-  return { ticket: t, events: [...opened(t, read), { id: checksEventId(t.ticketId, read.number, 'pass', head), type: 'pr.checks_passed', payload: read }] };
+  // The PR as the forge reads it on this head; undefined when it read nothing, or another PR or head.
+  const live = pr?.number === payload.number && pr.state === 'OPEN' && (!pr.headSha || pr.headSha === head) ? pr : undefined;
+  // Red without a reading of the forge is reported; green never is.
+  if (live ? live.checks !== bucket : bucket === 'pass') return NOTHING;
+  const read = live ? { ...payload, url: live.url } : payload;
+  const name: string = kind === 'check_run' ? check.name : (check.app?.name ?? 'check suite');
+  const verdict: Draft =
+    bucket === 'fail'
+      ? { id: checksEventId(t.ticketId, read.number, 'fail', head), type: 'pr.checks_failed', payload: { ...read, failures: live?.failedChecks.length ? live.failedChecks : [name] } }
+      : { id: checksEventId(t.ticketId, read.number, 'pass', head), type: 'pr.checks_passed', payload: read };
+  return { ticket: t, events: [...opened(t, read), verdict] };
 }
 
 function push(body: any, t: TicketState, branch: string): Draft[] {

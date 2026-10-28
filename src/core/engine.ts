@@ -28,9 +28,10 @@ function empty(): Decision {
   return { events: [], effects: [], timers: [], trace: [] };
 }
 
-function stop(out: Decision): Decision {
-  out.events.push({ type: 'work.cancelled' }, { type: 'ticket.blocked', reason: STOPPED });
-  out.effects.push({ kind: 'stop_run' }, { kind: 'activity', type: 'response', body: STOP_MESSAGE });
+/** The ticket's work stops and it is blocked for `reason` until a human relaunches it; `body` tells the session. */
+function stop(out: Decision, reason = STOPPED, body = STOP_MESSAGE): Decision {
+  out.events.push({ type: 'work.cancelled' }, { type: 'ticket.blocked', reason });
+  out.effects.push({ kind: 'stop_run' }, { kind: 'activity', type: 'response', body });
   return out;
 }
 
@@ -364,15 +365,8 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
         break;
       }
       out.trace.push('built-in pr.closed: work cancelled');
-      out.events.push(
-        { type: 'ticket.patched', patch: { prState: 'CLOSED' } },
-        { type: 'work.cancelled' },
-        { type: 'ticket.blocked', reason: `PR #${n} fermée sans merge` },
-      );
-      out.effects.push(
-        { kind: 'stop_run' },
-        { kind: 'activity', type: 'response', body: `La PR #${n} a été fermée sans merge : j'arrête le travail sur ce ticket. ${RELAUNCH}` },
-      );
+      out.events.push({ type: 'ticket.patched', patch: { prState: 'CLOSED' } });
+      stop(out, `PR #${n} fermée sans merge`, `La PR #${n} a été fermée sans merge : j'arrête le travail sur ce ticket. ${RELAUNCH}`);
       break;
     }
     case 'pr.reviewed':
