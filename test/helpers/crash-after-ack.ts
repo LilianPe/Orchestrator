@@ -6,13 +6,12 @@
  *   node --import tsx test/helpers/crash-after-ack.ts <sqlite file | postgres://…> <statusFile>
  */
 import { writeFileSync } from 'node:fs';
-import { PgStore } from '../../src/store/pg/pg-store.js';
-import { SqliteStore } from '../../src/store/sqlite-store.js';
 import { linearIngest, signedDelegation } from './linear-webhook.js';
+import { storeAt } from './store-at.js';
 
 const [target, statusFile] = process.argv.slice(2);
 if (!target || !statusFile) throw new Error('usage: crash-after-ack.ts <store> <statusFile>');
-const store = target.startsWith('postgres') ? new PgStore({ connectionString: target }) : new SqliteStore(target);
+const store = storeAt(target);
 const { raw, headers } = signedDelegation();
 const response = await linearIngest((e) => store.appendInbox(e))(raw, headers);
 writeFileSync(statusFile, JSON.stringify(response));

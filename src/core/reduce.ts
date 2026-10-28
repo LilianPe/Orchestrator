@@ -1,3 +1,4 @@
+import { liftDeadLetterBlock, repairedEvent } from './dead-letter.js';
 import { CREATES_TICKET, newTicketState, type InternalEvent, type FactoryEvent, type IssueSnapshot, type TicketState } from './types.js';
 
 const MAX_QUESTION_SESSIONS = 50;
@@ -95,8 +96,19 @@ function isExternal(e: FactoryEvent | InternalEvent): e is FactoryEvent {
   return 'id' in e;
 }
 
+/**
+ * A repair (ORC-175) lifts the block of its dead-lettered event, not another one, then records the
+ * facts of the event it replays or forces, as that event would on the unblocked ticket.
+ */
+function repaired(state: TicketState | undefined, e: FactoryEvent<'dead_letter.repaired'>): TicketState | undefined {
+  const base = liftDeadLetterBlock(state, e.payload.eventId);
+  const event = repairedEvent(e);
+  return event ? reduce(base, event) : base;
+}
+
 /** Pure: applies one event to a ticket's state and returns the new state; the input is never mutated. */
 export function reduce(state: TicketState | undefined, event: FactoryEvent | InternalEvent): TicketState | undefined {
+  if (isExternal(event) && event.type === 'dead_letter.repaired') return repaired(state, event);
   if (!state) {
     const created = isExternal(event) ? tracked(event) : undefined;
     return created && external(created, event as FactoryEvent);

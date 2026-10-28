@@ -174,12 +174,12 @@ Jobs du pack :
 | `session.prompted` | Réponse dans une session Linear de Relais. | Dans la session dev d'un ticket délégué, le message est toujours ajouté aux retours en attente (`input: feedback`), qu'une règle corresponde ou non : sans règle pour l'état du ticket (`todo`, `ai_review`, `ready`, `done` dans le pack), il attend le prochain run qui lit les retours (`input: feedback` : `dev-feedback` dans le pack). Dans une session de question, Relais lance directement `ask`, sans lire les règles. |
 | `session.stopped` | Bouton « stop » dans Linear, ou ticket retiré à l'agent. | Dans une session de question, Relais arrête la réponse en cours, sans lire les règles. |
 | `label.changed` | Un label est ajouté au ticket ou en est retiré (par un humain). | Filtrable avec `label`. Seul l'ajout correspond à une règle : un retrait entre dans l'inbox et le journal (`change: removed`) mais ne déclenche rien. |
-| `push.human` | Un humain pousse un commit sur la branche du ticket. | Aucune règle dans le pack. Relais ne reçoit pas encore cet événement (webhooks GitHub : ORC-134). |
+| `push.human` | Un humain pousse un commit sur la branche du ticket. | Aucune règle dans le pack. Reçu par le webhook GitHub `push` (compte qui n'est pas un bot), marqué non fiable ([`github.md`](github.md#webhooks-github)). |
 | `command` | `@relais <mot> …` quand `<mot>` est une valeur `say` de la liste `command`. | Filtrable avec `say`. |
 | `pr.checks_passed` | La CI de la PR passe. | Avant les règles, Relais remet à zéro le compte des relances sur CI rouge (`limits.ci_fix_attempts`) et lève le blocage dû à cette borne. |
 | `pr.checks_failed` | La CI de la PR échoue. | Une règle qui lance un run est bornée par `limits.ci_fix_attempts` : une fois la borne atteinte, Relais bloque le ticket au lieu d'appliquer la règle. |
 | `pr.merged` | La PR est mergée. | Avant les règles, Relais note la PR comme mergée et arrête le travail du ticket comme un `stop`, sans le bloquer : run `dev` en cours arrêté, runs en attente ou en file et minuteries `debounce` supprimés. Ensuite, plus aucun job de la file `dev` ne démarre sur le ticket, quelle que soit la règle, la minuterie ou l'attente qui le demande (`agent:reprendre`, réponse, CI rouge, job en attente ou en file) : le refus est seulement tracé, sans message dans Linear. La fin du run `dev` arrêté et ses vérifications sont ignorées. Les règles s'appliquent après l'arrêt : `done`, nettoyage et `learn` ne changent pas, et les jobs de la file `questions` (`learn`, `ask`) tournent toujours. Le ticket redevient actif quand un humain change son statut pour autre chose que *Done* (aussi quand Relais n'a pas pu le passer en *Done*), le délègue à nouveau, ou qu'une nouvelle PR (autre numéro) est relevée pour lui. Le relevé GitHub ne regarde plus un ticket en *Done* dont la PR est mergée : une nouvelle PR n'est vue qu'une fois le ticket sorti de *Done*. |
-| `pr.closed` | La PR est fermée sans merge. | — |
+| `pr.closed` | La PR est fermée sans merge. | Avant les règles, si c'est la PR connue du ticket, ouverte, et que le ticket n'est pas *Done*, Relais annule le travail du ticket : run `dev` en cours arrêté, job en attente et vérification attendue supprimés, ticket bloqué (« PR #n fermée sans merge ») avec un message dans la session. Un humain relance comme après un `stop` (réponse dans le fil, `agent:reprendre`) ; une nouvelle PR (autre numéro) est suivie comme toute PR, et la même PR rouverte redevient ouverte (`pr.opened`). |
 
 Le pack n'utilise pas `pr.checks_passed` ni `pr.closed` : vous pouvez y ajouter vos propres règles.
 
@@ -191,11 +191,11 @@ Ces types sont acceptés par le chargeur, mais Relais les traite en dur : une r�
 |---|---|
 | `run.finished` | Succès : vérifications si le job en a, sinon `on_success`. Échec ou limite : ticket bloqué (file `dev`) ou message d'erreur (file `questions`). Run arrêté : rien. Fin d'un run de la file `dev` après le merge de la PR : rien. |
 | `verify.passed` / `verify.failed` | `on_success`, ou nouvelle tentative, ou blocage (voir `verify`). Après le merge de la PR : rien. |
-| `debounce.fired` | Lance le job dont le délai `debounce` vient d'expirer (et débloque le ticket). |
+| `timer.fired` | Une minuterie posée par une décision arrive à échéance (événement `timer:<clé>:<échéance>` écrit dans l'inbox). Sorte `debounce` : lance le job dont le délai `debounce` vient d'expirer (et débloque le ticket). Les sortes `clarify.remind`, `clarify.expire` et `usage.reset` existent sans règle pour l'instant (ORC-210, ORC-215) : rien. |
 | `pr.opened` | Mémorise la PR et l'attache à la session Linear. |
 | `control.pause` / `control.resume` / `control.stop` | Pause / reprise de la file, arrêt d'un ticket (interface, `relais pause`, `relais resume`, `relais stop`). |
 
-Tout autre nom sous `on` est refusé (`on.<nom>: unknown event type`), sauf les deux anciens noms, encore acceptés comme alias : `ticket.moved` (lu comme `status.changed`) et `label.added` (lu comme `label.changed`). Un même fichier ne peut pas déclarer un événement sous ses deux noms : le chargement est refusé (`on.ticket.moved: same event as on.status.changed`).
+Tout autre nom sous `on` est refusé (`on.<nom>: unknown event type`), sauf les anciens noms, encore acceptés comme alias : `ticket.moved` (lu comme `status.changed`), `label.added` (lu comme `label.changed`) et `debounce.fired` (lu comme `timer.fired`). Un même fichier ne peut pas déclarer un événement sous ses deux noms : le chargement est refusé (`on.ticket.moved: same event as on.status.changed`).
 
 Les événements qui concernent un ticket que Relais ne suit pas encore sont ignorés, sauf `ticket.delegated`, `session.mentioned`, `session.prompted` et `command`, qui l'ajoutent au suivi.
 
@@ -223,7 +223,7 @@ Une règle sans condition correspond toujours.
 | `comment` | Publie ce texte en commentaire du ticket. |
 | `do` | `stop` : arrête le run en cours, vide les runs en attente et bloque le ticket (« Arrêté. Répondez dans ce fil ou posez le label agent:reprendre pour relancer. »). `cleanup` : supprime le worktree du ticket. `propose_delegate` : répond qu'il faut déléguer le ticket à Relais pour qu'il le développe. |
 | `run` | Lance le job de ce nom (doit exister dans `jobs`). Si le ticket était bloqué, il est débloqué d'abord. |
-| `debounce` | Avec `run` : au lieu de lancer tout de suite, programme le job après ce délai. Un nouvel événement correspondant avant l'expiration repousse le délai : des messages rapprochés donnent un seul run. `0s` = immédiat. |
+| `debounce` | Avec `run` : au lieu de lancer tout de suite, programme le job après ce délai. Un nouvel événement correspondant avant l'expiration repousse le délai : des messages rapprochés donnent un seul run. `0s` = immédiat. Le délai est une minuterie en base, écrite avec la décision : un redémarrage de Relais ne la perd pas. |
 
 Une règle sans action est valide : elle « consomme » l'événement sans rien faire (et empêche les règles suivantes de s'appliquer).
 
@@ -449,7 +449,7 @@ Relais valide le fichier au démarrage de `relais up` et refuse de démarrer s'i
 
 Pièges silencieux (aucune erreur) :
 - **Sous `limits`, `limits.per_run`, un `limits` de job, `workspace` et `tracker`, une clé inconnue est ignorée sans message.** `limits: { parallel: 5 }` est accepté et ne fait rien : relisez l'orthographe.
-- Une règle sur un événement du cycle de vie (`run.finished`, `verify.*`, `debounce.fired`, `pr.opened`, `control.*`) ne se déclenche jamais.
+- Une règle sur un événement du cycle de vie (`run.finished`, `verify.*`, `timer.fired`, `pr.opened`, `control.*`) ne se déclenche jamais.
 - `from` / `to` sur un autre événement que `status.changed` sont ignorés ; `label` ou `say` sur le mauvais événement rendent la règle inapplicable.
 - Un `say` avec une majuscule ne correspond jamais.
 - Déclarer `on.<événement>` dans le projet efface les règles du pack pour cet événement : recopiez celles que vous gardez.

@@ -2,15 +2,30 @@ import { createHash, randomUUID } from 'node:crypto';
 import { sql } from 'drizzle-orm';
 import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
+import {
+  deadLetteredEvent,
+  deadLetterNotice,
+  REPAIRED_STATUS,
+  repairEvent,
+  type DeadLetter,
+  type DeadLetterStatus,
+  type RepairAction,
+} from '../../core/dead-letter.js';
 import type { OutboxEffect } from '../../core/decision.js';
 import { normalizeTicket, type FactoryEvent, type QueueName, type TicketState } from '../../core/types.js';
-import type { StoredEvent } from '../../core/upcast.js';
+import { upcastTimer, type StoredEvent, type StoredTimer } from '../../core/upcast.js';
 import {
+  decidedOn,
+  decisionRecord,
   effectResult,
+  timerEvent,
   LEASE_MS,
   type DecisionOutcome,
+  type DecisionRecord,
   type DecisionRequest,
   type EffectOutcome,
+  type JournalEntry,
+  type MeasureFacts,
   type OutboxRow,
   type QueueClaim,
   type QueueItem,
@@ -53,9 +68,13 @@ const dateToMs = (value: Date | string | null): number => {
 
 const echoId = (key: string) => `echo:${key}`;
 
-/** Queue order of the SQLite store: priority 1 (urgent) first, 0 (none) after 4 (low), then age. */
+/**
+ * Queue order of the SQLite store: priority 1 (urgent) first, 0 (none) after 4 (low), then age, then
+ * arrival: `created_at` is the server's `clock_timestamp()` (as the inbox's `received_at`), so two
+ * items enqueued at the same instant keep their order, whatever their ids (ORC-228).
+ */
 const QUEUE_ORDER = sql.raw(
-  `case when (payload->>'priority')::int = 0 then 5 else coalesce((payload->>'priority')::int, 5) end, available_at, id`,
+  `case when (payload->>'priority')::int = 0 then 5 else coalesce((payload->>'priority')::int, 5) end, available_at, created_at, id`,
 );
 
 /** Key/value metadata kept in `workflow_versions` under a reserved id prefix, until ORC-178 removes it. */
@@ -114,6 +133,29 @@ const outboxRow = ({ id, status, attempts, payload: p }: OutboxSqlRow): OutboxRo
   attempts: Number(attempts),
   ...(p.error === undefined ? {} : { error: p.error }),
   ...(p.lease === undefined ? {} : { lease: p.lease }),
+});
+
+const DEAD_LETTER_COLUMNS = sql.raw(`event_id, reason, payload, ticket_id, status, failures, resolved_by`);
+
+type DeadLetterPgRow = {
+  event_id: string;
+  reason: string;
+  payload: StoredEvent;
+  ticket_id: string | null;
+  status: DeadLetterStatus;
+  failures: number;
+  resolved_by: string | null;
+};
+
+const deadLetterRow = (r: DeadLetterPgRow): DeadLetter => ({
+  eventId: r.event_id,
+  projectId: r.payload.projectId,
+  ...(r.ticket_id === null ? {} : { ticketId: r.ticket_id }),
+  event: r.payload,
+  error: r.reason,
+  failures: Number(r.failures),
+  status: r.status,
+  ...(r.resolved_by === null ? {} : { resolvedBy: r.resolved_by }),
 });
 
 /** An attempt's label column on update: kept once the attempt has labels, else the write's (ORC-226). */
@@ -207,16 +249,7 @@ export class PgStore implements AsyncStore {
   async appendInbox(event: FactoryEvent | StoredEvent): Promise<boolean> {
     return this.db.transaction(async (tx) => {
       await tx.execute(ticketLock(event.ticketId));
-      const inserted = await tx.execute(sql`
-        insert into inbox (id, event_id, type, payload, received_at, schema_version)
-        values (
-          ${event.id}, ${event.id}, ${event.type}, ${JSON.stringify(event)}::jsonb,
-          clock_timestamp(), ${event.schemaVersion ?? 1}
-        )
-        on conflict do nothing
-        returning id
-      `);
-      return (inserted.rowCount ?? 0) > 0;
+      return this.appendResult(tx, event);
     });
   }
 
@@ -323,16 +356,22 @@ export class PgStore implements AsyncStore {
           ${JSON.stringify(event)}::jsonb, ${event.schemaVersion ?? 1}, to_timestamp(${now / 1000})
         )
       `);
-      if (plan.ticket) {
-        if (plan.ticket.workflowHash === req.workflow.hash) {
-          await tx.execute(sql`
-            insert into workflow_versions (id, hash, definition, created_at)
-            values (${workflowId(req.workflow.hash)}, ${req.workflow.hash}, ${JSON.stringify(req.workflow.definition)}::jsonb, to_timestamp(${now / 1000}))
-            on conflict do nothing
-          `);
-        }
-        await this.writeTicket(tx, plan.ticket);
+      await tx.execute(sql`
+        insert into decision_trace (id, ticket_id, event_id, decision, created_at)
+        values (
+          ${event.id}, ${outboxTicket(ticketId)}, ${event.id},
+          ${JSON.stringify(decisionRecord(event, seq, known, decidedOn(req, frozen), plan))}::jsonb, to_timestamp(${now / 1000})
+        )
+      `);
+      // Every version a decision ran on is kept, projection written or not: its replay needs it (ORC-174).
+      if (req.workflow.hash !== '' && frozen.hash === req.workflow.hash) {
+        await tx.execute(sql`
+          insert into workflow_versions (id, hash, definition, created_at)
+          values (${workflowId(req.workflow.hash)}, ${req.workflow.hash}, ${JSON.stringify(req.workflow.definition)}::jsonb, to_timestamp(${now / 1000}))
+          on conflict do nothing
+        `);
       }
+      if (plan.ticket) await this.writeTicket(tx, plan.ticket);
       if (plan.clearTimers && ticketId !== null) {
         await tx.execute(sql`delete from timers where ticket_id = ${ticketId} and payload->>'projectId' = ${event.projectId}`);
       }
@@ -363,6 +402,16 @@ export class PgStore implements AsyncStore {
 
   getWorkflowVersion(hash: string): Promise<WorkflowVersion | undefined> {
     return this.readWorkflow(this.db, hash);
+  }
+
+  async ticketJournal(projectId: string, ticketId?: string): Promise<JournalEntry[]> {
+    const result = await this.db.execute<{ event: StoredEvent; decision: DecisionRecord | null }>(sql`
+      select j.payload as event, d.decision from journal j
+      left join decision_trace d on d.event_id = j.event_id
+      where j.ticket_id is not distinct from ${ticketId ?? null} and j.payload->>'projectId' = ${projectId}
+      order by j.seq
+    `);
+    return result.rows.map((r) => ({ event: r.event, ...(r.decision === null ? {} : { decision: r.decision }) }));
   }
 
   /**
@@ -442,12 +491,79 @@ export class PgStore implements AsyncStore {
     });
   }
 
-  private async appendResult(tx: Tx, event: FactoryEvent): Promise<void> {
-    await tx.execute(sql`
+  /**
+   * Writes an inbox row under the ticket's lock taken by the caller's transaction; false when the id is already
+   * there. Also an event the store writes itself (an effect's result, a dead letter's notice, a repair, a timer's firing).
+   */
+  private async appendResult(tx: Tx, event: FactoryEvent | StoredEvent): Promise<boolean> {
+    const inserted = await tx.execute(sql`
       insert into inbox (id, event_id, type, payload, received_at, schema_version)
-      values (${event.id}, ${event.id}, ${event.type}, ${JSON.stringify(event)}::jsonb, clock_timestamp(), ${event.schemaVersion})
+      values (${event.id}, ${event.id}, ${event.type}, ${JSON.stringify(event)}::jsonb, clock_timestamp(), ${event.schemaVersion ?? 1})
       on conflict do nothing
+      returning id
     `);
+    return (inserted.rowCount ?? 0) > 0;
+  }
+
+  async deadLetter(row: StoredEvent, error: string, at: number): Promise<boolean> {
+    const now = this.now();
+    return this.db.transaction(async (tx) => {
+      await tx.execute(ticketLock(row.ticketId));
+      const marked = await tx.execute(sql`
+        update inbox set processed_at = to_timestamp(${now / 1000}) where id = ${row.id} and processed_at is null
+      `);
+      if ((marked.rowCount ?? 0) === 0) return false;
+      const event = deadLetteredEvent(row);
+      const upserted = await tx.execute<{ failures: number }>(sql`
+        insert into dead_letter (id, event_id, reason, payload, ticket_id, status, failures, created_at, updated_at)
+        values (
+          ${event.id}, ${event.id}, ${error}, ${JSON.stringify(event)}::jsonb, ${event.ticketId ?? null}, 'open', 1,
+          to_timestamp(${at / 1000}), to_timestamp(${at / 1000})
+        )
+        on conflict (id) do update set
+          status = 'open', failures = dead_letter.failures + 1, reason = excluded.reason, updated_at = excluded.updated_at
+        returning failures
+      `);
+      const failures = Number(upserted.rows[0]!.failures);
+      const notice = deadLetterNotice({ event, error, failures }, at);
+      if (notice) await this.appendResult(tx, notice);
+      return true;
+    });
+  }
+
+  async deadLetters(ticketId?: string): Promise<DeadLetter[]> {
+    const result = await this.db.execute<DeadLetterPgRow>(sql`
+      select ${DEAD_LETTER_COLUMNS} from dead_letter
+      where ${ticketId ?? null}::text is null or ticket_id = ${ticketId ?? null}
+      order by status = 'open' desc, created_at, id
+    `);
+    return result.rows.map(deadLetterRow);
+  }
+
+  async getDeadLetter(eventId: string): Promise<DeadLetter | undefined> {
+    const result = await this.db.execute<DeadLetterPgRow>(sql`select ${DEAD_LETTER_COLUMNS} from dead_letter where id = ${eventId}`);
+    const row = result.rows[0];
+    return row && deadLetterRow(row);
+  }
+
+  async repairDeadLetter(eventId: string, action: RepairAction, by: string, at: number): Promise<DeadLetter | undefined> {
+    return this.db.transaction(async (tx) => {
+      const found = await tx.execute<{ ticket_id: string | null }>(sql`select ticket_id from dead_letter where id = ${eventId} and status = 'open'`);
+      if (!found.rows[0]) return undefined;
+      // The ticket's lock, as `appendInbox`: the repair gets its `received_at` in commit order.
+      await tx.execute(ticketLock(found.rows[0].ticket_id));
+      const status = REPAIRED_STATUS[action];
+      const updated = await tx.execute<DeadLetterPgRow>(sql`
+        update dead_letter set status = ${status}, resolved_by = ${by}, updated_at = to_timestamp(${at / 1000})
+        where id = ${eventId} and status = 'open'
+        returning ${DEAD_LETTER_COLUMNS}
+      `);
+      const row = updated.rows[0];
+      if (!row) return undefined;
+      const dl = deadLetterRow(row);
+      await this.appendResult(tx, repairEvent(dl, action, by, at));
+      return dl;
+    });
   }
 
   async completeEffect(id: string, lease?: string, at?: number, outcome?: EffectOutcome): Promise<boolean> {
@@ -587,19 +703,22 @@ export class PgStore implements AsyncStore {
     const endedAt = run.endedAt === undefined ? null : new Date(run.endedAt);
     const l = run.labels;
     const fact = l?.deliveredFactIds == null ? null : JSON.stringify(l.deliveredFactIds);
+    const tokens = run.tokens;
     // The first record with labels fixes them, in `data.labels` and in their columns alike: an
     // attempt's labels say what it was created with (ORC-226).
     await this.db.execute(sql`
       insert into attempts (
         id, ticket_id, step, model, effort, fingerprints, image, risk,
         factory_version, factory_commit, registry_commit, delivered_fact_ids,
-        started_at, ended_at, status, data, cost_usd
+        started_at, ended_at, status, data, cost_usd,
+        input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens
       ) values (
         ${run.id}, ${run.ticketId}, ${run.job}, ${l?.model ?? null}, ${l?.effort ?? null},
         ${JSON.stringify(l?.fingerprints ?? {})}::jsonb, ${l?.image ?? null}, ${l?.risk ?? null},
         ${l?.factoryVersion ?? null}, ${l?.factoryCommit ?? null}, ${l?.registryCommit ?? null}, ${fact}::jsonb,
         to_timestamp(${run.startedAt / 1000}), ${endedAt}, ${run.status},
-        ${JSON.stringify(run)}::jsonb, ${run.costUsd}
+        ${JSON.stringify(run)}::jsonb, ${run.costUsd},
+        ${tokens?.input ?? null}, ${tokens?.output ?? null}, ${tokens?.cacheRead ?? null}, ${tokens?.cacheCreation ?? null}
       )
       on conflict (id) do update set
         ticket_id = excluded.ticket_id,
@@ -620,7 +739,11 @@ export class PgStore implements AsyncStore {
           when attempts.data ? 'labels' then jsonb_set(excluded.data, '{labels}', attempts.data->'labels')
           else excluded.data
         end,
-        cost_usd = excluded.cost_usd
+        cost_usd = excluded.cost_usd,
+        input_tokens = excluded.input_tokens,
+        output_tokens = excluded.output_tokens,
+        cache_read_tokens = excluded.cache_read_tokens,
+        cache_creation_tokens = excluded.cache_creation_tokens
     `);
   }
 
@@ -656,6 +779,36 @@ export class PgStore implements AsyncStore {
     return Number(result.rows[0]?.total ?? 0);
   }
 
+  async markAcked(eventId: string, at: number): Promise<void> {
+    await this.db.execute(sql`update inbox set acked_at = to_timestamp(${at / 1000}) where id = ${eventId} and acked_at is null`);
+  }
+
+  /** Five reads side by side: the facts of a ticket for its measures, not a decision (no lock, no snapshot needed). */
+  async measureFacts(projectId: string, ticketId: string): Promise<MeasureFacts> {
+    const [events, runs, acked, ticket, effects] = await Promise.all([
+      this.db.execute<{ payload: FactoryEvent }>(sql`
+        select payload from journal where ticket_id = ${ticketId} and payload->>'projectId' = ${projectId} order by seq
+      `),
+      this.db.execute<{ data: RunRecord }>(sql`
+        select data from attempts where ticket_id = ${ticketId} and data->>'projectId' = ${projectId} order by started_at, id
+      `),
+      this.db.execute<{ id: string; at: string | number }>(sql`
+        select id, round(extract(epoch from acked_at) * 1000) as at from inbox
+        where acked_at is not null
+          and id in (select event_id from journal where ticket_id = ${ticketId} and payload->>'projectId' = ${projectId})
+      `),
+      this.getTicket(projectId, ticketId),
+      this.listEffects(projectId, ticketId),
+    ]);
+    return {
+      devSession: ticket?.linearSessionId,
+      events: events.rows.map((r) => r.payload),
+      runs: runs.rows.map((r) => r.data),
+      effects,
+      acks: Object.fromEntries(acked.rows.map((r) => [r.id, Number(r.at)])),
+    };
+  }
+
   async putTimer(timer: TimerRecord): Promise<void> {
     await this.writeTimer(this.db, timer);
   }
@@ -664,7 +817,7 @@ export class PgStore implements AsyncStore {
     await db.execute(sql`
       insert into timers (id, ticket_id, kind, due_at, payload, status, created_at)
       values (
-        ${timer.key}, ${timer.ticketId}, ${timer.job}, to_timestamp(${timer.fireAt / 1000}),
+        ${timer.key}, ${timer.ticketId}, ${timer.kind}, to_timestamp(${timer.fireAt / 1000}),
         ${JSON.stringify(timer)}::jsonb, 'pending', to_timestamp(${this.now() / 1000})
       )
       on conflict (id) do update set
@@ -677,12 +830,12 @@ export class PgStore implements AsyncStore {
   }
 
   /**
-   * Reads the due timers without changing them, as SQLite does: a timer stays due until
-   * `deleteTimer` removes it, so a pass cut before that (an error, a shutdown) fires it again on
-   * the next one. Its event id (`timer:<key>:<fireAt>`) makes the second firing a no-op.
+   * Reads the due timers without changing them, as SQLite does: a timer stays due until `fireTimer`
+   * fires it, so a pass cut before that (an error, a shutdown) finds it again on the next one. A
+   * row written before ORC-161 (a job, `kind` = the job's name) reads as a `debounce` of that job.
    */
   async dueTimers(now: number): Promise<TimerRecord[]> {
-    const result = await this.db.execute<{ payload: TimerRecord }>(sql`
+    const result = await this.db.execute<{ payload: StoredTimer }>(sql`
       select payload
       from timers
       where status = 'pending' and due_at <= to_timestamp(${now / 1000})
@@ -692,12 +845,24 @@ export class PgStore implements AsyncStore {
         )
       order by due_at, id
     `);
-    return result.rows.map((row) => row.payload);
+    return result.rows.map((row) => upcastTimer(row.payload));
   }
 
-  async deleteTimer(key: string, fireAt?: number): Promise<void> {
-    const armedAt = fireAt === undefined ? sql`` : sql`and (payload->>'fireAt')::double precision = ${fireAt}`;
-    await this.db.execute(sql`delete from timers where id = ${key} and status = 'pending' ${armedAt}`);
+  /**
+   * Under the ticket's lock, as `appendInbox`: the firing gets its `received_at` in commit order
+   * among the ticket's rows. The timer is deleted only as it was read (same `fireAt`).
+   */
+  async fireTimer(timer: TimerRecord, at: number): Promise<boolean> {
+    return this.db.transaction(async (tx) => {
+      await tx.execute(ticketLock(timer.ticketId));
+      const armed = await tx.execute(sql`
+        delete from timers
+        where id = ${timer.key} and status = 'pending' and (payload->>'fireAt')::double precision = ${timer.fireAt}
+        returning id
+      `);
+      if ((armed.rowCount ?? 0) === 0) return false;
+      return this.appendResult(tx, timerEvent(timer, at));
+    });
   }
 
   async deleteTimersArmedBy(eventId: string): Promise<void> {
@@ -762,7 +927,7 @@ export class PgStore implements AsyncStore {
           id, ticket_id, effect, payload, status, available_at, attempts, created_at, updated_at
         ) values (
           ${id}, ${item.ticketId}, ${item.job}, ${JSON.stringify(item)}::jsonb, 'pending',
-          ${availableAt}, 0, to_timestamp(${now / 1000}), to_timestamp(${now / 1000})
+          ${availableAt}, 0, clock_timestamp(), to_timestamp(${now / 1000})
         )
       `);
       return id;

@@ -1,7 +1,7 @@
 import { expect, it } from 'vitest';
 import type { AttemptLabels } from '../../src/core/attempt-labels.js';
-import { newTicketState, type FactoryEvent, type TicketState } from '../../src/core/types.js';
-import type { DecisionPlan, DecisionRequest, QueueItem, RunRecord, Store, WorkflowVersion } from '../../src/store/types.js';
+import { newTicketState, TRUSTED, type FactoryEvent, type TicketState } from '../../src/core/types.js';
+import { timerEvent, type DecisionPlan, type DecisionRequest, type QueueItem, type RunRecord, type Store, type WorkflowVersion } from '../../src/store/types.js';
 
 function run(patch: Partial<RunRecord> = {}): RunRecord {
   return {
@@ -34,7 +34,7 @@ function request(event: FactoryEvent, patch: Partial<DecisionPlan> = {}, workflo
           { kind: 'comment', body: `on ${event.id}` },
           { kind: 'labels', add: ['x'], remove: [] },
         ],
-        timers: [{ key: `${event.ticketId}:dev`, projectId: 'p', ticketId: event.ticketId!, job: 'dev', fireAt: 900, armedBy: event.id }],
+        timers: [{ key: `${event.ticketId}:dev`, projectId: 'p', ticketId: event.ticketId!, kind: 'debounce', payload: { job: 'dev' }, fireAt: 900, armedBy: event.id }],
         clearTimers: false,
         ...patch,
       };
@@ -114,6 +114,52 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     expect((await s.findRunByToken('t1'))!.labels).toEqual(LABELS);
   });
 
+  it('keeps the tokens an attempt reported (ORC-235)', async () => {
+    const s = await store();
+    const tokens = { input: 10, output: 20, cacheRead: 3_000_000_000, cacheCreation: 40 };
+    await s.putRun(run());
+    expect((await s.getRun('r1'))!.tokens).toBeUndefined();
+    await s.putRun(run({ status: 'success', tokens }));
+    expect((await s.getRun('r1'))!.tokens).toEqual(tokens);
+  });
+
+  it("gathers a ticket's measure facts: journal in order, its attempts, its outbox, the first ack of its events (ORC-235)", async () => {
+    const s = await store();
+    expect(await s.measureFacts('p', 'REL-1')).toEqual({ devSession: undefined, events: [], runs: [], effects: [], acks: {} });
+    await s.appendInbox(delegatedEvent('e1', 'REL-1', 10));
+    await s.appendInbox(delegatedEvent('e2', 'REL-1', 5));
+    await s.appendInbox(delegatedEvent('o1', 'REL-2'));
+    await s.markAcked('e1', 1_700_000_000_250);
+    await s.markAcked('e1', 1_700_000_009_000);
+    await s.markAcked('o1', 1_700_000_000_100);
+    await s.decide(request(delegatedEvent('e1', 'REL-1', 10)));
+    for (let k = 0; k < 2; k++) {
+      const row = await s.claimEffect('p', 'REL-1', 60_000);
+      if (typeof row !== 'object') throw new Error('expected a claimed row');
+      await s.completeEffect(row.id, row.lease, 20);
+    }
+    // e2 is decided after e1, then the results of e1's effects: the journal keeps that order, not the order of `at`.
+    await s.decide(request(delegatedEvent('e2', 'REL-1', 5), { effects: [] }));
+    for (const e of await s.pendingInbox(10)) {
+      if (e.ticketId !== 'REL-1') continue;
+      await s.decide({ event: e as FactoryEvent, workflow: WF, decide: (t) => ({ ticket: t, effects: [], timers: [], clearTimers: false }) });
+    }
+    await s.putRun(run({ id: 'r2', token: 't2', startedAt: 300 }));
+    await s.putRun(run());
+    await s.putRun(run({ id: 'r3', token: 't3', ticketId: 'REL-2' }));
+    await s.putRun(run({ id: 'r4', token: 't4', projectId: 'other' }));
+
+    const facts = await s.measureFacts('p', 'REL-1');
+    expect(facts.devSession).toBeUndefined();
+    expect(facts.events.map((e) => e.id)).toEqual(['e1', 'e2', 'effect:REL-1:1:1', 'effect:REL-1:1:2']);
+    expect(facts.runs.map((r) => r.id)).toEqual(['r1', 'r2']);
+    expect(facts.effects.map((r) => [r.id, r.status])).toEqual([
+      ['REL-1:1:1', 'done'],
+      ['REL-1:1:2', 'done'],
+    ]);
+    expect(facts.acks).toEqual({ e1: 1_700_000_000_250 });
+  });
+
   it('still reads a run stored without labels', async () => {
     const s = await store();
     await s.putRun(run());
@@ -125,27 +171,49 @@ export function storeContract(store: () => Store | Promise<Store>): void {
 
   it('fires due timers', async () => {
     const s = await store();
-    await s.putTimer({ key: 'REL-1:dev-feedback', projectId: 'p', ticketId: 'REL-1', job: 'dev-feedback', fireAt: 500 });
+    const timer = { key: 'REL-1:dev-feedback', projectId: 'p', ticketId: 'REL-1', kind: 'debounce' as const, payload: { job: 'dev-feedback' }, fireAt: 500 };
+    await s.putTimer(timer);
     expect(await s.dueTimers(499)).toEqual([]);
-    expect(await s.dueTimers(500)).toHaveLength(1);
-    await s.deleteTimer('REL-1:dev-feedback');
+    expect(await s.dueTimers(500)).toEqual([timer]);
+    expect(await s.fireTimer(timer, 500)).toBe(true);
     expect(await s.dueTimers(1000)).toEqual([]);
-    await s.putTimer({ key: 'REL-2:x', projectId: 'p', ticketId: 'REL-2', job: 'x', fireAt: 9e12 });
+    await s.putTimer({ key: 'REL-2:x', projectId: 'p', ticketId: 'REL-2', kind: 'debounce', payload: { job: 'x' }, fireAt: 9e12 });
     await s.deleteTimersFor('p', 'REL-2');
     expect(await s.dueTimers(Number.MAX_SAFE_INTEGER)).toEqual([]);
   });
 
-  it('keeps a due timer until it is deleted, and a re-armed timer when deleting the old firing', async () => {
+  it('fires a timer in one go: its event in the inbox, the timer gone, and nothing on a second firing (ORC-161)', async () => {
     const s = await store();
-    const timer = { key: 'REL-1:dev-feedback', projectId: 'p', ticketId: 'REL-1', job: 'dev-feedback', fireAt: 500 };
+    const timer = { key: 'REL-1:clarify', projectId: 'p', ticketId: 'REL-1', kind: 'clarify.remind' as const, payload: { linearSessionId: 'ls-2' }, fireAt: 500 };
     await s.putTimer(timer);
+    // Read twice: reading changes nothing, the timer stays due until it is fired.
     expect(await s.dueTimers(600)).toEqual([timer]);
     expect(await s.dueTimers(600)).toEqual([timer]);
+    const event = timerEvent(timer, 600);
+    expect(event).toMatchObject({ id: 'timer:REL-1:clarify:500', type: 'timer.fired', at: 600, payload: { kind: 'clarify.remind', payload: { linearSessionId: 'ls-2' } } });
+    expect(await s.fireTimer(timer, 600)).toBe(true);
+    expect(await s.pendingInbox(10)).toEqual([event]);
+    expect(await s.dueTimers(Number.MAX_SAFE_INTEGER)).toEqual([]);
+    // A pass that read the timer before it fired fires nothing more.
+    expect(await s.fireTimer(timer, 600)).toBe(false);
+    expect(await s.pendingInbox(10)).toEqual([event]);
+  });
+
+  it('fires only the timer as read: one pushed back or cleared meanwhile writes nothing (ORC-161)', async () => {
+    const s = await store();
+    const timer = { key: 'REL-1:dev-feedback', projectId: 'p', ticketId: 'REL-1', kind: 'debounce' as const, payload: { job: 'dev-feedback' }, fireAt: 500 };
+    await s.putTimer(timer);
+    const [read] = await s.dueTimers(600);
+    // Another reply pushes the debounce back between the read and the firing.
     await s.putTimer({ ...timer, fireAt: 900 });
-    await s.deleteTimer(timer.key, 500);
+    expect(await s.fireTimer(read!, 600)).toBe(false);
+    expect(await s.pendingInbox(10)).toEqual([]);
     expect(await s.dueTimers(1000)).toEqual([{ ...timer, fireAt: 900 }]);
-    await s.deleteTimer(timer.key, 900);
-    expect(await s.dueTimers(1000)).toEqual([]);
+    // A stop clears it between the read and the firing.
+    const [again] = await s.dueTimers(1000);
+    await s.deleteTimersFor('p', 'REL-1');
+    expect(await s.fireTimer(again!, 1000)).toBe(false);
+    expect(await s.pendingInbox(10)).toEqual([]);
   });
 
   it("removes a ticket's queued runs, of one queue or of all (ORC-268)", async () => {
@@ -157,6 +225,16 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     expect((await s.listQueue()).map((i) => `${i.ticketId}:${i.job}`).sort()).toEqual(['A:ask', 'B:dev']);
     await s.removeFromQueue('p', 'A');
     expect((await s.listQueue()).map((i) => `${i.ticketId}:${i.job}`)).toEqual(['B:dev']);
+  });
+
+  it('keeps the order of arrival of items of one priority enqueued at the same instant (ORC-228)', async () => {
+    const s = await store();
+    // Ids that sort the other way as text.
+    for (const ticketId of ['Z', 'M', 'A']) await s.enqueue(q({ ticketId, job: 'ask', queue: 'questions', enqueuedAt: 5 }));
+    expect((await s.listQueue()).map((i) => i.ticketId)).toEqual(['Z', 'M', 'A']);
+    const handed = [];
+    for (let i = 0; i < 3; i++) handed.push((await s.claimQueued('questions', 60_000))!.item.ticketId);
+    expect(handed).toEqual(['Z', 'M', 'A']);
   });
 
   it('orders the queue by priority then age, dedupes by ticket+job, and hands an item out once', async () => {
@@ -257,12 +335,66 @@ export function storeContract(store: () => Store | Promise<Store>): void {
       if (typeof row !== 'object') throw new Error('expected a claimed row');
       expect(await s.completeEffect(row.id, row.lease)).toBe(true);
     }
-    expect(await s.dueTimers(1000)).toEqual([{ key: 'REL-1:dev', projectId: 'p', ticketId: 'REL-1', job: 'dev', fireAt: 900, armedBy: 'e1' }]);
+    expect(await s.dueTimers(1000)).toEqual([{ key: 'REL-1:dev', projectId: 'p', ticketId: 'REL-1', kind: 'debounce', payload: { job: 'dev' }, fireAt: 900, armedBy: 'e1' }]);
     const second = request(delegatedEvent('e2'));
     expect(await s.decide(second)).toMatchObject({ status: 'committed', seq: 2, effectIds: ['REL-1:2:1', 'REL-1:2:2'] });
     expect(second.seen.ticket).toMatchObject({ title: 'T+' });
     // A row already processed is not decided again.
     expect(await s.decide(request(delegatedEvent('e2')))).toEqual({ status: 'processed' });
+  });
+
+  it('records each decision with its journal row, in its transaction: inputs and outputs, for replay (ORC-174)', async () => {
+    const s = await store();
+    await s.appendInbox(delegatedEvent('e1'));
+    await s.appendInbox(delegatedEvent('e2'));
+    const first = await s.decide(request(delegatedEvent('e1'), { effects: [{ kind: 'comment', body: 'x' }], at: 500, trace: ['why'] }));
+    if (first.status !== 'committed') throw new Error('expected a commit');
+    // Journaled outside a decision (a legacy path): no decision to replay.
+    expect(await s.recordEvent(delegatedEvent('legacy'))).toBe(true);
+    const claimed = await s.claimEffect('p', 'REL-1', 60_000);
+    if (typeof claimed !== 'object') throw new Error('expected a claimed row');
+    await s.completeEffect(claimed.id, claimed.lease);
+    const second = await s.decide(request(delegatedEvent('e2'), { effects: [], clearTimers: true }));
+    if (second.status !== 'committed') throw new Error('expected a commit');
+    // Another ticket's journal stays out.
+    await s.appendInbox(delegatedEvent('o1', 'REL-2'));
+    await s.decide(request(delegatedEvent('o1', 'REL-2')));
+
+    const journal = await s.ticketJournal('p', 'REL-1');
+    expect(journal.map((e) => [e.event.id, e.decision?.seq])).toEqual([['e1', 1], ['legacy', undefined], ['e2', second.seq]]);
+    expect(journal[0]!.event).toEqual(delegatedEvent('e1'));
+    expect(journal[0]!.decision).toEqual({
+      eventId: 'e1',
+      projectId: 'p',
+      ticketId: 'REL-1',
+      seq: 1,
+      at: 500,
+      workflowHash: 'h1',
+      ticket: first.plan.ticket,
+      effects: [{ kind: 'comment', body: 'x' }],
+      timers: first.plan.timers,
+      clearTimers: false,
+      trace: ['why'],
+    });
+    expect(journal[2]!.decision).toMatchObject({ before: first.plan.ticket, ticket: second.plan.ticket, effects: [], clearTimers: true });
+    expect(await s.ticketJournal('p', 'REL-9')).toEqual([]);
+    expect(await s.ticketJournal('other', 'REL-1')).toEqual([]);
+  });
+
+  it('records the version a decision ran on even without a projection, and none for an unknown project (ORC-174)', async () => {
+    const s = await store();
+    // An event ignored before the ticket is tracked: its version is kept, its replay needs it.
+    const h3: WorkflowVersion = { hash: 'h3', definition: { version: 1, name: 'v3' } };
+    await s.appendInbox(delegatedEvent('n1', 'REL-3'));
+    await s.decide(request(delegatedEvent('n1', 'REL-3'), { ticket: undefined, effects: [], timers: [] }, h3));
+    expect(await s.getWorkflowVersion('h3')).toEqual(h3);
+    expect((await s.ticketJournal('p', 'REL-3'))[0]!.decision).toMatchObject({ workflowHash: 'h3' });
+    // A tracked ticket whose project is gone: the orchestrator decides nothing, on no workflow.
+    await s.appendInbox(delegatedEvent('e1'));
+    await s.decide(request(delegatedEvent('e1'), { effects: [] }));
+    await s.appendInbox(delegatedEvent('e2'));
+    await s.decide({ event: delegatedEvent('e2'), workflow: { hash: '', definition: null }, decide: () => ({ effects: [], timers: [], clearTimers: false }) });
+    expect((await s.ticketJournal('p', 'REL-1'))[1]!.decision).toMatchObject({ eventId: 'e2', workflowHash: '' });
   });
 
   it('writes nothing when the decision throws before the commit (ORC-149)', async () => {
@@ -318,9 +450,9 @@ export function storeContract(store: () => Store | Promise<Store>): void {
 
   it('deletes the timers armed by an event, and those of a ticket (ORC-149)', async () => {
     const s = await store();
-    await s.putTimer({ key: 'REL-1:a', projectId: 'p', ticketId: 'REL-1', job: 'a', fireAt: 1, armedBy: 'e1' });
-    await s.putTimer({ key: 'REL-1:b', projectId: 'p', ticketId: 'REL-1', job: 'b', fireAt: 1, armedBy: 'e2' });
-    await s.putTimer({ key: 'REL-2:c', projectId: 'p', ticketId: 'REL-2', job: 'c', fireAt: 1 });
+    await s.putTimer({ key: 'REL-1:a', projectId: 'p', ticketId: 'REL-1', kind: 'debounce', payload: { job: 'a' }, fireAt: 1, armedBy: 'e1' });
+    await s.putTimer({ key: 'REL-1:b', projectId: 'p', ticketId: 'REL-1', kind: 'debounce', payload: { job: 'b' }, fireAt: 1, armedBy: 'e2' });
+    await s.putTimer({ key: 'REL-2:c', projectId: 'p', ticketId: 'REL-2', kind: 'debounce', payload: { job: 'c' }, fireAt: 1 });
     await s.deleteTimersArmedBy('e1');
     expect((await s.dueTimers(10)).map((t) => t.key)).toEqual(['REL-1:b', 'REL-2:c']);
     await s.deleteTimersFor('p', 'REL-1');
@@ -329,7 +461,7 @@ export function storeContract(store: () => Store | Promise<Store>): void {
 
   it('clears the ticket timers before arming the decision ones when asked (a stop, ORC-149)', async () => {
     const s = await store();
-    await s.putTimer({ key: 'REL-1:old', projectId: 'p', ticketId: 'REL-1', job: 'old', fireAt: 500 });
+    await s.putTimer({ key: 'REL-1:old', projectId: 'p', ticketId: 'REL-1', kind: 'debounce', payload: { job: 'old' }, fireAt: 500 });
     await s.appendInbox(delegatedEvent('e1'));
     await s.decide(request(delegatedEvent('e1'), { effects: [], clearTimers: true }));
     expect((await s.dueTimers(Number.MAX_SAFE_INTEGER)).map((t) => t.key)).toEqual(['REL-1:dev']);
@@ -447,7 +579,7 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     expect(await s.completeEffect(row.id, row.lease)).toBe(true);
     expect(await s.pendingInbox(10)).toEqual([
       {
-        id: 'effect:REL-1:1:1', type: 'effect.done', at: expect.any(Number), schemaVersion: 2, taint: 'trusted', projectId: 'p', ticketId: 'REL-1',
+        id: 'effect:REL-1:1:1', type: 'effect.done', at: expect.any(Number), schemaVersion: 3, taint: 'trusted', projectId: 'p', ticketId: 'REL-1',
         payload: { effectId: 'REL-1:1:1', kind: 'comment', eventId: 'e1', attempts: 1 },
       },
     ]);
@@ -526,5 +658,55 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     await s.putTicket(newTicketState('p', 'REL-1', 'T', 'todo', 1));
     expect(await s.updateTicket('p', 'REL-1', (t) => ({ ...t, blocked: true }))).toMatchObject({ blocked: true });
     expect(await s.getTicket('p', 'REL-1')).toMatchObject({ blocked: true });
+  });
+  it('sets a row whose decision threw aside in one transaction: dead letter, inbox mark, the blocking event (ORC-175)', async () => {
+    const s = await store();
+    await s.appendInbox(delegatedEvent('e1'));
+    await s.appendInbox(delegatedEvent('e2'));
+    expect(await s.deadLetter(delegatedEvent('e1'), 'boom', 50)).toBe(true);
+    // Once only: the row is no longer pending.
+    expect(await s.deadLetter(delegatedEvent('e1'), 'boom', 50)).toBe(false);
+    expect(await s.deadLetters('REL-1')).toEqual([
+      { eventId: 'e1', projectId: 'p', ticketId: 'REL-1', event: delegatedEvent('e1'), error: 'boom', failures: 1, status: 'open' },
+    ]);
+    expect(await s.deadLetters('REL-2')).toEqual([]);
+    expect((await s.deadLetters()).map((d) => d.eventId)).toEqual(['e1']);
+    // Not journaled, not pending: the row behind it is next, then the event that blocks the ticket.
+    expect(await s.recentEvents(10)).toEqual([]);
+    expect(await s.pendingInbox(10)).toEqual([
+      delegatedEvent('e2'),
+      { ...TRUSTED, id: 'dead-letter:e1:1', type: 'dead_letter.added', at: 50, projectId: 'p', ticketId: 'REL-1', payload: { eventId: 'e1', eventType: 'ticket.delegated', error: 'boom', failures: 1 } },
+    ]);
+  });
+
+  it('repairs an open dead letter once: its status, and the repair event in the inbox (ORC-175)', async () => {
+    const s = await store();
+    await s.appendInbox(delegatedEvent('e1'));
+    await s.deadLetter(delegatedEvent('e1'), 'boom', 50);
+    await s.markInboxProcessed('dead-letter:e1:1');
+    const repaired = await s.repairDeadLetter('e1', 'replay', 'armand', 60);
+    expect(repaired).toMatchObject({ eventId: 'e1', status: 'replayed', resolvedBy: 'armand', failures: 1 });
+    expect(await s.repairDeadLetter('e1', 'skip', 'armand', 61)).toBeUndefined();
+    expect(await s.repairDeadLetter('nope', 'skip', 'armand', 61)).toBeUndefined();
+    const [repair] = await s.pendingInbox(10);
+    expect(repair).toMatchObject({
+      id: 'repair:e1:1',
+      type: 'dead_letter.repaired',
+      at: 60,
+      ticketId: 'REL-1',
+      payload: { eventId: 'e1', action: 'replay', by: 'armand', event: { id: 'e1', type: 'ticket.delegated' } },
+    });
+    // The replay throws again: the same dead letter reopens, one failure more, with a new blocking event.
+    expect(await s.deadLetter(repair!, 'boom again', 70)).toBe(true);
+    expect(await s.deadLetters('REL-1')).toMatchObject([{ eventId: 'e1', status: 'open', failures: 2, error: 'boom again' }]);
+    expect((await s.pendingInbox(10)).map((e) => e.id)).toEqual(['dead-letter:e1:2']);
+    // A skip carries the event too: a skip whose decision throws reopens the same dead letter, not a new one.
+    expect(await s.repairDeadLetter('e1', 'skip', 'lilian', 80)).toMatchObject({ status: 'skipped', resolvedBy: 'lilian', failures: 2 });
+    const skip = (await s.pendingInbox(10))[1]!;
+    expect(skip).toMatchObject({ id: 'repair:e1:2', payload: { eventId: 'e1', action: 'skip', by: 'lilian', event: delegatedEvent('e1') } });
+    expect(await s.deadLetter(skip, 'corrupt', 90)).toBe(true);
+    expect(await s.deadLetters()).toMatchObject([{ eventId: 'e1', status: 'open', failures: 3 }]);
+    expect(await s.getDeadLetter('e1')).toMatchObject({ eventId: 'e1', failures: 3, error: 'corrupt' });
+    expect(await s.getDeadLetter('nope')).toBeUndefined();
   });
 }

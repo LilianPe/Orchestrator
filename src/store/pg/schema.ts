@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import {
+  bigint,
   check,
   doublePrecision,
   index,
@@ -39,6 +40,8 @@ export const inbox = pgTable(
     receivedAt: timestamp('received_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
     processedAt: timestamp('processed_at', { withTimezone: true, mode: 'date' }),
     schemaVersion: integer('schema_version').notNull().default(1),
+    /** First sign of life the factory gave for the event: the ack of its webhook (ORC-235). */
+    ackedAt: timestamp('acked_at', { withTimezone: true, mode: 'date' }),
   },
   (t) => [
     uniqueIndex('inbox_event_id_uq').on(t.eventId),
@@ -154,6 +157,11 @@ export const decisionTrace = pgTable(
   ],
 );
 
+/**
+ * Events whose decision threw (ORC-175), set aside instead of retried: `payload` is the inbox event,
+ * `reason` the error of its last failed decision. `status` stays `open` until `factory run repair`
+ * replays, skips or forces it; a replay that throws again reopens it and counts one more `failures`.
+ */
 export const deadLetter = pgTable(
   'dead_letter',
   {
@@ -161,11 +169,19 @@ export const deadLetter = pgTable(
     eventId: text('event_id').notNull(),
     reason: text('reason').notNull(),
     payload: jsonb('payload').$type<unknown>().notNull(),
+    ticketId: text('ticket_id'),
+    status: text('status').notNull().default('open'),
+    failures: integer('failures').notNull().default(1),
+    resolvedBy: text('resolved_by'),
     createdAt: createdAt(),
+    updatedAt: updatedAt(),
   },
   (t) => [
     uniqueIndex('dead_letter_event_id_uq').on(t.eventId),
     index('dead_letter_created_at_idx').on(t.createdAt),
+    index('dead_letter_ticket_status_idx').on(t.ticketId, t.status),
+    check('dead_letter_status_check', sql`${t.status} in ('open', 'replayed', 'skipped', 'forced')`),
+    check('dead_letter_failures_check', sql`${t.failures} >= 1`),
   ],
 );
 
@@ -206,6 +222,11 @@ export const attempts = pgTable(
     data: jsonb('data').$type<unknown>().notNull().default(sql`'{}'::jsonb`),
     /** Legacy run cost, queried by `costSince` until cost moves to attempts. */
     costUsd: doublePrecision('cost_usd').notNull().default(0),
+    /** Tokens `claude -p` reported for the attempt (ORC-235); null when it reported none. */
+    inputTokens: bigint('input_tokens', { mode: 'number' }),
+    outputTokens: bigint('output_tokens', { mode: 'number' }),
+    cacheReadTokens: bigint('cache_read_tokens', { mode: 'number' }),
+    cacheCreationTokens: bigint('cache_creation_tokens', { mode: 'number' }),
   },
   (t) => [
     index('attempts_ticket_id_idx').on(t.ticketId),
