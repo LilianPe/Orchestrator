@@ -316,7 +316,7 @@
             "priority": 0
           }
         },
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "taint": "trusted"
       },
       "decision": {
@@ -358,7 +358,7 @@
     },
     {
       "event": {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "taint": "trusted",
         "id": "effect:REL-1:1:1",
         "at": 1791622800000,
@@ -435,7 +435,7 @@
     },
     {
       "event": {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "taint": "trusted",
         "id": "attempt:id-1:finished",
         "type": "run.finished",
@@ -525,7 +525,7 @@
     },
     {
       "event": {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "taint": "trusted",
         "id": "effect:REL-1:3:1",
         "at": 1791622800000,
@@ -598,7 +598,7 @@
     },
     {
       "event": {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "taint": "trusted",
         "id": "effect:REL-1:3:2",
         "at": 1791622800000,
@@ -671,7 +671,7 @@
     },
     {
       "event": {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "taint": "trusted",
         "id": "effect:REL-1:3:3",
         "at": 1791622800000,
@@ -753,7 +753,7 @@
           "from": "human_review",
           "to": "ai_review"
         },
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "taint": "trusted"
       },
       "decision": {
@@ -820,7 +820,7 @@
     },
     {
       "event": {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "taint": "trusted",
         "id": "effect:REL-1:7:1",
         "at": 1791622800000,
@@ -897,7 +897,7 @@
     },
     {
       "event": {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "taint": "trusted",
         "id": "attempt:id-4:finished",
         "type": "run.finished",
@@ -987,7 +987,7 @@
     },
     {
       "event": {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "taint": "trusted",
         "id": "effect:REL-1:9:1",
         "at": 1791622800000,
@@ -1060,7 +1060,7 @@
     },
     {
       "event": {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "taint": "trusted",
         "id": "effect:REL-1:9:2",
         "at": 1791622800000,
@@ -1133,7 +1133,7 @@
     },
     {
       "event": {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "taint": "trusted",
         "id": "effect:REL-1:9:3",
         "at": 1791622800000,
@@ -1216,7 +1216,7 @@
           "url": "https://gh/pr/3",
           "branch": "factory/rel-1-export-csv"
         },
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "taint": "trusted"
       },
       "decision": {
@@ -1297,7 +1297,7 @@
     },
     {
       "event": {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "taint": "trusted",
         "id": "effect:REL-1:13:1",
         "at": 1791622800000,
@@ -1372,7 +1372,7 @@
     },
     {
       "event": {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "taint": "trusted",
         "id": "effect:REL-1:13:2",
         "at": 1791622800000,
@@ -1447,7 +1447,7 @@
     },
     {
       "event": {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "taint": "trusted",
         "id": "effect:REL-1:13:3",
         "at": 1791622800000,
@@ -1522,7 +1522,7 @@
     },
     {
       "event": {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "taint": "trusted",
         "id": "effect:REL-1:13:4",
         "at": 1791622800000,
@@ -1597,7 +1597,7 @@
     },
     {
       "event": {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "taint": "trusted",
         "id": "attempt:id-7:finished",
         "type": "run.finished",
@@ -1678,7 +1678,7 @@
     },
     {
       "event": {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "taint": "trusted",
         "id": "effect:REL-1:18:1",
         "at": 1791622800000,
