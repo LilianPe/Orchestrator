@@ -5,10 +5,10 @@ import { describe, expect, it } from 'vitest';
 import { loadWorkflow } from '../../src/config/load-workflow.js';
 import { TRUSTED, type FactoryEvent } from '../../src/core/types.js';
 import { SqliteStore } from '../../src/store/sqlite-store.js';
-import type { DecisionRequest } from '../../src/store/types.js';
+import type { DecisionRequest, Store } from '../../src/store/types.js';
 import type { WorkspaceRequest } from '../../src/adapters/workspace/types.js';
 import { CRASH_WORKFLOW, crashAfterDecision } from '../helpers/crash-workflow.js';
-import { createHarness, packDir } from '../helpers/harness.js';
+import { createHarness, harnessStoreKind, packDir } from '../helpers/harness.js';
 
 const waitFor = async (cond: () => boolean | Promise<boolean>): Promise<void> => {
   for (let i = 0; i < 400 && !(await cond()); i++) await new Promise((r) => setTimeout(r, 5));
@@ -19,8 +19,11 @@ const waitFor = async (cond: () => boolean | Promise<boolean>): Promise<void> =>
  * ORC-149: the worker decides each inbox row in one transaction (journal, projection, outbox,
  * timers, inbox mark), one task per ticket, and executes the outbox rows after the commit.
  */
+/** On a SQLite file: test/integration/worker-pg.test.ts kills the daemon on Postgres. */
+const onSqliteFile = harnessStoreKind() === 'postgres' ? it.skip : it;
+
 describe('worker: per-ticket lock and decision transaction', () => {
-  it.each([
+  onSqliteFile.each([
     { killAt: 1, done: [] as string[], label: 'before any effect' },
     { killAt: 2, done: ['REL-1:1:1'], label: 'after its first effect' },
   ])('loses no event and doubles no effect when killed with SIGKILL after the commit, $label', async ({ killAt, done }) => {
@@ -55,7 +58,7 @@ describe('worker: per-ticket lock and decision transaction', () => {
     expect(h.runner.requests).toHaveLength(1);
   });
 
-  it('writes nothing of a decision cut by SIGKILL before its commit, and decides it once at the next start', async () => {
+  onSqliteFile('writes nothing of a decision cut by SIGKILL before its commit, and decides it once at the next start', async () => {
     const file = join(mkdtempSync(join(tmpdir(), 'factory-worker-')), 'factory.db');
     expect(crashAfterDecision(file, 0).completed).toEqual([]);
 
@@ -220,17 +223,17 @@ on:
     });
 
     it('holds the later events without a ticket of its project too, instead of leaving them waiting unseen', async () => {
-      const inner = new SqliteStore(':memory:');
       let broken = true;
       const decided: string[] = [];
-      const store = Object.assign(Object.create(inner) as SqliteStore, {
-        decide: (req: DecisionRequest) => {
-          decided.push(req.event.id);
-          if (broken && req.event.id === 'g1') throw new Error('database hiccup');
-          return inner.decide(req);
-        },
-      });
-      const h = createHarness({ store, processRetry: { attempts: 1, baseMs: 1 } });
+      const wrapStore = (inner: Store) =>
+        Object.assign(Object.create(inner) as Store, {
+          decide: (req: DecisionRequest) => {
+            decided.push(req.event.id);
+            if (broken && req.event.id === 'g1') throw new Error('database hiccup');
+            return inner.decide(req);
+          },
+        });
+      const h = createHarness({ wrapStore, processRetry: { attempts: 1, baseMs: 1 } });
       const global = (id: string, type: 'control.pause' | 'control.resume') =>
         ({ ...TRUSTED, id, type, at: h.clock.now(), projectId: '*', payload: {} });
       await h.orch.accept(global('g1', 'control.pause'));
@@ -248,22 +251,22 @@ on:
   });
 
   it('keeps the slot a drain promised to a dequeued item from a start decided meanwhile, and the item its place', async () => {
-    const inner = new SqliteStore(':memory:');
     let open!: () => void;
     const gate = new Promise<void>((r) => (open = r));
     let gating = false;
     let reached = false;
     // The drain's start of REL-2 reads its ticket first: held there, its slot is promised, not taken.
-    const store = Object.assign(Object.create(inner) as SqliteStore, {
-      getTicket: async (projectId: string, ticketId: string) => {
-        if (gating && ticketId === 'REL-2') {
-          reached = true;
-          await gate;
-        }
-        return inner.getTicket(projectId, ticketId);
-      },
-    });
-    const h = createHarness({ store, projectYaml: 'version: 1\nlimits:\n  parallel_sessions: 1\n' });
+    const wrapStore = (inner: Store) =>
+      Object.assign(Object.create(inner) as Store, {
+        getTicket: async (projectId: string, ticketId: string) => {
+          if (gating && ticketId === 'REL-2') {
+            reached = true;
+            await gate;
+          }
+          return inner.getTicket(projectId, ticketId);
+        },
+      });
+    const h = createHarness({ wrapStore, projectYaml: 'version: 1\nlimits:\n  parallel_sessions: 1\n' });
     for (const id of ['REL-1', 'REL-2', 'REL-3']) h.tracker.addIssue({ identifier: id, title: `Ticket ${id}` });
     h.runner.enqueue({ hold: true });
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
@@ -321,17 +324,19 @@ describe('outbox executors: lease, backoff, results through the inbox', () => {
     const comment = h.tracker.comment.bind(h.tracker);
     const tries: number[] = [];
     h.tracker.comment = async (id: string, body: string) => {
-      tries.push(Date.now());
+      tries.push(h.clock.now());
       if (tries.length <= 2) throw new Error('Linear unreachable');
       return comment(id, body);
     };
     await h.orch.accept(delegation(h));
-    await waitFor(async () => (await h.store.listEffects('p', 'REL-1')).filter((r) => r.status === 'done').length >= 3);
     await h.orch.drained();
-    expect(tries).toHaveLength(3);
-    // 20 ms, then 40 ms: never before the backoff.
-    expect(tries[1]! - tries[0]!).toBeGreaterThanOrEqual(19);
-    expect(tries[2]! - tries[1]!).toBeGreaterThanOrEqual(39);
+    // 20 ms, then 40 ms on the simulated clock (ORC-228): never before the backoff.
+    for (const [ms, attempts] of [[19, 1], [1, 2], [39, 2], [1, 3]] as const) {
+      await h.advance(ms);
+      expect(tries).toHaveLength(attempts);
+    }
+    expect(tries[1]! - tries[0]!).toBe(20);
+    expect(tries[2]! - tries[1]!).toBe(40);
     expect((await h.store.listEffects('p', 'REL-1'))[1]).toMatchObject({ id: 'REL-1:1:2', status: 'done', attempts: 3, error: 'Linear unreachable' });
     expect(await h.ticket()).toMatchObject({ blocked: false });
     expect(h.runner.requests).toHaveLength(1);
@@ -345,8 +350,10 @@ describe('outbox executors: lease, backoff, results through the inbox', () => {
       throw new Error('Linear down');
     };
     await h.orch.accept(delegation(h));
-    await waitFor(async () => (await h.store.getTicket('p', 'REL-1'))?.blocked === true);
     await h.orch.drained();
+    expect(await h.ticket()).toMatchObject({ blocked: false });
+    // The retry is due 5 ms later on the simulated clock (ORC-228): it fails again, its last attempt.
+    await h.advance(5);
     expect((await h.store.listEffects('p', 'REL-1')).slice(0, 3).map((r) => [r.effect.kind, r.status])).toEqual([
       ['labels', 'done'],
       ['comment', 'dead'],
@@ -374,7 +381,7 @@ describe('outbox executors: lease, backoff, results through the inbox', () => {
     expect(await h.store.pendingInbox(10)).toEqual([]);
   });
 
-  it('takes up an effect cut by SIGKILL after it acted once its lease expires, and runs it again (criterion 2, at least once)', async () => {
+  onSqliteFile('takes up an effect cut by SIGKILL after it acted once its lease expires, and runs it again (criterion 2, at least once)', async () => {
     const file = join(mkdtempSync(join(tmpdir(), 'factory-worker-')), 'factory.db');
     const { completed } = crashAfterDecision(file, 'acted:1', 300);
     expect(completed).toEqual([]);
@@ -413,7 +420,7 @@ describe('outbox executors: lease, backoff, results through the inbox', () => {
     expect((await h.store.listQueue()).map((q) => q.ticketId)).toEqual(['REL-1']);
     // A daemon takes the item, then dies before the start is recorded.
     expect(await h.store.claimQueued('dev', 1)).toBeDefined();
-    await new Promise((r) => setTimeout(r, 5));
+    h.clock.advance(5);
     await h.store.setMeta('paused', '0');
     await h.orch.tick();
     await h.orch.drained();
