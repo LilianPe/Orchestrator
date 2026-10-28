@@ -197,4 +197,21 @@ describe('fault injection at each point of the chain (ORC-163)', () => {
     expect(h.runner.requests).toHaveLength(1);
     expect(JSON.stringify(h.tracker.activities('ls-q'))).not.toContain('Reposez');
   });
+
+  /**
+   * The same cut on a dev start: the ticket holds the run before it is written, so recover() blocks
+   * it and tells Linear, and the start taken up again launches nothing (refused on the blocked
+   * ticket). Never a ticket left delegated with no run, no block and no notice.
+   */
+  it('kill at a dev run launch, before its run is written: the ticket is blocked, nothing launched (ORC-277)', async () => {
+    const { h, report, faults } = await scenario({ point: 'run.write', mode: 'kill' }, [STEPS[0]!]);
+    expect(faults.fired).toMatchObject({ point: 'run.write', mode: 'kill' });
+    expect(report.violations).toEqual([]);
+    expect(report.atLeastOnce).toEqual([]);
+    expect(h.runner.requests).toHaveLength(0);
+    const t = await h.ticket();
+    expect(t.blocked).toBe(true);
+    expect(t.activeRunId).toBeUndefined();
+    expect(JSON.stringify(h.tracker.activities('ls-1'))).toContain('redémarré pendant le run');
+  });
 });

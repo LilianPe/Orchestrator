@@ -29,7 +29,7 @@ const TICKETS = Number(process.env['CHAOS_TICKETS'] ?? 20);
 /**
  * The visible doubles of the outbox's at least once (an effect cut after it acted runs again) fail
  * the run since each effect is idempotent (ORC-162); CHAOS_STRICT_EFFECTS=0 only prints them. A run
- * launched twice, a question's included (ORC-277), is a violation either way.
+ * launched twice for one outbox row, a question's included (ORC-277), is a violation either way.
  */
 const STRICT_EFFECTS = process.env['CHAOS_STRICT_EFFECTS'] !== '0';
 /** Events sent and not answered yet, at most: several in flight, as webhooks arrive. */
