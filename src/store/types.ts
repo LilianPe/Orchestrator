@@ -213,6 +213,19 @@ export function effectResult(row: Pick<OutboxRow, 'id' | 'projectId' | 'ticketId
   return error === undefined ? { ...head, type: 'effect.done', payload: base } : { ...head, type: 'effect.failed', payload: { ...base, error } };
 }
 
+/** The inbox event of a timer's firing (ORC-161), written by `fireTimer`: its id `timer:<key>:<fireAt>` names that firing, once. */
+export function timerEvent(t: TimerRecord, at: number): FactoryEvent<'timer.fired'> {
+  return {
+    ...TRUSTED,
+    id: `timer:${t.key}:${t.fireAt}`,
+    type: 'timer.fired',
+    at,
+    projectId: t.projectId,
+    ticketId: t.ticketId,
+    payload: { kind: t.kind, payload: t.payload } as FactoryEvent<'timer.fired'>['payload'],
+  };
+}
+
 /** A queue item handed out under a lease (ORC-150): it stays in the queue until its start is recorded. */
 export interface QueueClaim {
   id: string;
@@ -323,12 +336,12 @@ export interface Store {
    */
   dueTimers(now: number): Promise<TimerRecord[]>;
   /**
-   * Fires a due timer (ORC-161), in one transaction: writes its event (`timer:<key>:<fireAt>`) to the
-   * inbox and deletes the timer, both or neither. Only the timer as read: one re-armed for another
+   * Fires a due timer (ORC-161), in one transaction: writes its event (`timerEvent`, stamped `at`) to
+   * the inbox and deletes the timer, both or neither. Only the timer as read: one re-armed for another
    * time (pushed back) or deleted meanwhile (a stop) is left as it is, and nothing is written. True
    * when the inbox got a new row.
    */
-  fireTimer(timer: TimerRecord, event: FactoryEvent): Promise<boolean>;
+  fireTimer(timer: TimerRecord, at: number): Promise<boolean>;
   deleteTimersFor(projectId: string, ticketId: string): Promise<void>;
   /** Deletes the timers armed by the decision of an event (`armedBy`). */
   deleteTimersArmedBy(eventId: string): Promise<void>;

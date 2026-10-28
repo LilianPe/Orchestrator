@@ -1,19 +1,5 @@
 import type { Clock } from '../core/clock.js';
-import { TRUSTED, type FactoryEvent } from '../core/types.js';
-import type { Store, TimerRecord } from '../store/types.js';
-
-/** The event of a timer's firing (ORC-161): its id `timer:<key>:<fireAt>` names that firing, once. */
-export function timerEvent(t: TimerRecord, at: number): FactoryEvent<'timer.fired'> {
-  return {
-    ...TRUSTED,
-    id: `timer:${t.key}:${t.fireAt}`,
-    type: 'timer.fired',
-    at,
-    projectId: t.projectId,
-    ticketId: t.ticketId,
-    payload: { kind: t.kind, payload: t.payload } as FactoryEvent<'timer.fired'>['payload'],
-  };
-}
+import type { Store } from '../store/types.js';
 
 /**
  * Fires the timers in `timers` once due (ORC-161). Nothing lives in the process: the timers are
@@ -46,7 +32,7 @@ export class TimerService {
     for (const t of await this.store.dueTimers(now)) {
       // A timer whose firing fails stays due for the next pass, and does not hold back the others.
       try {
-        if (await this.store.fireTimer(t, timerEvent(t, now))) this.wake();
+        if (await this.store.fireTimer(t, now)) this.wake();
       } catch (err) {
         failed ??= err;
       }

@@ -1,4 +1,4 @@
-import type { InputKind, InternalEvent, LogicalState, TimerKind, TimerPayloads } from './types.js';
+import type { InputKind, InternalEvent, LogicalState, TimerFired } from './types.js';
 
 export type ActivityType = 'thought' | 'response' | 'elicitation' | 'error';
 
@@ -29,7 +29,7 @@ export type OutboxEffect = Effect | { kind: 'settle' };
  * A timer `decide` arms (ORC-161), due `ms` after the decision: its kind and what it carries. `slot`
  * names it within the ticket (key `<ticket>:<slot>`): arming a slot again pushes its timer back.
  */
-export type Timer = { [K in TimerKind]: { kind: K; slot: string; ms: number; payload: TimerPayloads[K] } }[TimerKind];
+export type Timer = TimerFired & { slot: string; ms: number };
 
 /** What `decide` returns: state changes for `reduce`, effects to run, timers to arm, and why. */
 export interface Decision {

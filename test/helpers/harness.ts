@@ -89,8 +89,7 @@ export function createHarness(
   });
   let orch = build();
   // Holds nothing between ticks (ORC-161): the timers live in the store, a restart loses none.
-  const timerService = () => new TimerService(store, clock, () => orch.wake());
-  let timers = timerService();
+  const timers = new TimerService(store, clock, () => orch.wake());
   let seq = 0;
 
   async function send<T extends EventType>(type: T, payload: EventPayloads[T], ticketId = 'REL-1'): Promise<void> {
@@ -110,7 +109,6 @@ export function createHarness(
     orch.stopAll();
     await Promise.all([orch.drained(), timers.stop()]);
     orch = build();
-    timers = timerService();
     await orch.recover();
     await orch.announceRecovery();
     await orch.replayInbox();

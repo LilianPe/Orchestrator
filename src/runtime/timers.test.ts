@@ -78,9 +78,9 @@ describe('TimerService (ORC-161)', () => {
     await inner.putTimer(other);
     let down = true;
     const store = Object.assign(Object.create(inner) as SqliteStore, {
-      fireTimer: async (t: TimerRecord, e: FactoryEvent) => {
+      fireTimer: async (t: TimerRecord, at: number) => {
         if (down && t.key === timer.key) throw new Error('lock timeout');
-        return inner.fireTimer(t, e);
+        return inner.fireTimer(t, at);
       },
     });
     const svc = new TimerService(store, new FakeClock(500));

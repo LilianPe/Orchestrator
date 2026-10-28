@@ -1,5 +1,5 @@
 import type { TimerRecord } from '../store/types.js';
-import { RENAMED_V1, SCHEMA_VERSION, type FactoryEvent, type Taint } from './types.js';
+import { RENAMED_V1, SCHEMA_VERSION, type FactoryEvent, type Taint, type TimerFired } from './types.js';
 
 /** An event as it may sit in the journal, whatever factory version wrote it. */
 export interface StoredEvent {
@@ -49,11 +49,11 @@ export function upcast(stored: StoredEvent): FactoryEvent {
  * A timer as `timers` or a recorded decision may hold it, whatever factory version wrote it: before
  * ORC-161, a timer was the debounce of a job (`job`, no `kind`).
  */
-export type StoredTimer = Omit<TimerRecord, 'kind' | 'payload'> & ({ kind: TimerRecord['kind']; payload: unknown } | { job: string });
+export type StoredTimer = Omit<TimerRecord, 'kind' | 'payload'> & (TimerFired | { job: string });
 
 /** Brings a stored timer to the generic shape (ORC-161): a job-bound one is a `debounce` of that job, key unchanged. */
 export function upcastTimer(stored: StoredTimer): TimerRecord {
-  if (!('job' in stored)) return stored as TimerRecord;
+  if (!('job' in stored)) return stored;
   const { job, ...rest } = stored;
   return { ...rest, kind: 'debounce', payload: { job } };
 }

@@ -173,7 +173,7 @@ export class Orchestrator {
    */
   accept(event: FactoryEvent | StoredEvent): Promise<boolean> {
     const write = this.d.store.appendInbox(event).then((fresh) => {
-      if (fresh && this.dispatchOpen) this.worker.kickInBackground();
+      if (fresh) this.wake();
       return fresh;
     });
     // drained() waits for writes in flight too: their event is about to be processed.

@@ -3,7 +3,6 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { newTicketState, SCHEMA_VERSION, TRUSTED, type FactoryEvent } from '../../src/core/types.js';
 import { migratePgStore } from '../../src/store/pg/migrate.js';
 import { OUTBOX_LEASE_MS, PgStore } from '../../src/store/pg/pg-store.js';
-import { timerEvent } from '../../src/runtime/timers.js';
 import { PG_TABLE_NAMES } from '../../src/store/pg/schema.js';
 import type { QueueItem, RunRecord } from '../../src/store/types.js';
 import { createTestDatabase, PG_URL, TRUNCATE_ALL as TRUNCATE } from '../helpers/pg-database.js';
@@ -299,7 +298,7 @@ describe.skipIf(!url)('PgStore integration', () => {
     expect(pending.rows[0]).toEqual({ status: 'pending', kind: 'debounce' });
 
     await store.putTimer({ ...timer, fireAt: 9_000 });
-    expect(await store.fireTimer({ ...timer, fireAt: 9_000 }, timerEvent({ ...timer, fireAt: 9_000 }, 10_000))).toBe(true);
+    expect(await store.fireTimer({ ...timer, fireAt: 9_000 }, 10_000)).toBe(true);
     expect(await store.dueTimers(10_000)).toEqual([]);
 
     await store.putTimer({ key: 'REL-2:x', projectId: 'p', ticketId: 'REL-2', kind: 'debounce', payload: { job: 'x' }, fireAt: 1_000 });
@@ -311,17 +310,16 @@ describe.skipIf(!url)('PgStore integration', () => {
   it('fires a timer in one transaction: an inbox write that fails keeps the timer (ORC-161)', async () => {
     const timer = { key: 'REL-1:clarify.expire', projectId: 'p', ticketId: 'REL-1', kind: 'clarify.expire' as const, payload: {}, fireAt: 5_000 };
     await store.putTimer(timer);
-    const event = timerEvent(timer, 5_000);
     await pool.query(`create function inbox_down() returns trigger language plpgsql as $$ begin raise exception 'inbox down'; end $$`);
     await pool.query('create trigger inbox_down before insert on inbox for each row execute function inbox_down()');
     try {
-      await expect(store.fireTimer(timer, event)).rejects.toThrow();
+      await expect(store.fireTimer(timer, 5_000)).rejects.toThrow();
       expect(await store.dueTimers(10_000)).toEqual([timer]);
     } finally {
       await pool.query('drop trigger inbox_down on inbox');
       await pool.query('drop function inbox_down()');
     }
-    expect(await store.fireTimer(timer, event)).toBe(true);
+    expect(await store.fireTimer(timer, 5_000)).toBe(true);
     expect((await store.pendingInbox(10)).map((e) => e.id)).toEqual(['timer:REL-1:clarify.expire:5000']);
     expect(await store.dueTimers(10_000)).toEqual([]);
   });
@@ -334,7 +332,7 @@ describe.skipIf(!url)('PgStore integration', () => {
     );
     const [due] = await store.dueTimers(10_000);
     expect(due).toEqual({ key: old.key, projectId: 'p', ticketId: 'REL-1', kind: 'debounce', payload: { job: 'dev-feedback' }, fireAt: 5_000, armedBy: 'e1' });
-    expect(await store.fireTimer(due!, timerEvent(due!, 10_000))).toBe(true);
+    expect(await store.fireTimer(due!, 10_000)).toBe(true);
     expect(await store.dueTimers(10_000)).toEqual([]);
   });
 

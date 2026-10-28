@@ -16,6 +16,7 @@ import {
   decidedOn,
   decisionRecord,
   effectResult,
+  timerEvent,
   type DecisionOutcome,
   type DecisionRecord,
   type JournalEntry,
@@ -165,14 +166,7 @@ export class SqliteStore implements Store {
 
   /** The inbox (ORC-147): `seq` keeps the arrival order, the unique id dedups. */
   async appendInbox(e: FactoryEvent | StoredEvent): Promise<boolean> {
-    return this.insertInbox(e);
-  }
-
-  private insertInbox(e: FactoryEvent | StoredEvent): boolean {
-    const res = this.db
-      .prepare('INSERT OR IGNORE INTO inbox (id, received_at, data) VALUES (?, ?, ?)')
-      .run(e.id, this.now(), JSON.stringify(e));
-    return Number(res.changes) === 1;
+    return this.appendResult(e);
   }
 
   async pendingInbox(limit: number, exclude: readonly string[] = []): Promise<StoredEvent[]> {
@@ -366,9 +360,13 @@ export class SqliteStore implements Store {
     });
   }
 
-  /** An event the store writes itself (an effect's result, a dead letter's notice, a repair), in the transaction that causes it. */
-  private appendResult(e: FactoryEvent): void {
-    this.db.prepare('INSERT OR IGNORE INTO inbox (id, received_at, data) VALUES (?, ?, ?)').run(e.id, this.now(), JSON.stringify(e));
+  /**
+   * Writes an inbox row; false when the id is already there. Also an event the store writes itself (an effect's
+   * result, a dead letter's notice, a repair, a timer's firing), in the transaction that causes it.
+   */
+  private appendResult(e: FactoryEvent | StoredEvent): boolean {
+    const res = this.db.prepare('INSERT OR IGNORE INTO inbox (id, received_at, data) VALUES (?, ?, ?)').run(e.id, this.now(), JSON.stringify(e));
+    return Number(res.changes) === 1;
   }
 
   async deadLetter(row: StoredEvent, error: string, at: number): Promise<boolean> {
@@ -529,11 +527,11 @@ export class SqliteStore implements Store {
     return rows.map((r) => upcastTimer(JSON.parse(r.data) as StoredTimer));
   }
 
-  async fireTimer(t: TimerRecord, event: FactoryEvent): Promise<boolean> {
+  async fireTimer(t: TimerRecord, at: number): Promise<boolean> {
     return this.atomically(() => {
       const armed = this.db.prepare('DELETE FROM timers WHERE key = ? AND fire_at = ?').run(t.key, t.fireAt);
       if (Number(armed.changes) !== 1) return false;
-      return this.insertInbox(event);
+      return this.appendResult(timerEvent(t, at));
     });
   }
 

@@ -1,8 +1,7 @@
 import { expect, it } from 'vitest';
 import type { AttemptLabels } from '../../src/core/attempt-labels.js';
 import { newTicketState, TRUSTED, type FactoryEvent, type TicketState } from '../../src/core/types.js';
-import { timerEvent } from '../../src/runtime/timers.js';
-import type { DecisionPlan, DecisionRequest, QueueItem, RunRecord, Store, WorkflowVersion } from '../../src/store/types.js';
+import { timerEvent, type DecisionPlan, type DecisionRequest, type QueueItem, type RunRecord, type Store, type WorkflowVersion } from '../../src/store/types.js';
 
 function run(patch: Partial<RunRecord> = {}): RunRecord {
   return {
@@ -130,7 +129,7 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     await s.putTimer(timer);
     expect(await s.dueTimers(499)).toEqual([]);
     expect(await s.dueTimers(500)).toEqual([timer]);
-    expect(await s.fireTimer(timer, timerEvent(timer, 500))).toBe(true);
+    expect(await s.fireTimer(timer, 500)).toBe(true);
     expect(await s.dueTimers(1000)).toEqual([]);
     await s.putTimer({ key: 'REL-2:x', projectId: 'p', ticketId: 'REL-2', kind: 'debounce', payload: { job: 'x' }, fireAt: 9e12 });
     await s.deleteTimersFor('p', 'REL-2');
@@ -146,11 +145,11 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     expect(await s.dueTimers(600)).toEqual([timer]);
     const event = timerEvent(timer, 600);
     expect(event).toMatchObject({ id: 'timer:REL-1:clarify:500', type: 'timer.fired', at: 600, payload: { kind: 'clarify.remind', payload: { linearSessionId: 'ls-2' } } });
-    expect(await s.fireTimer(timer, event)).toBe(true);
+    expect(await s.fireTimer(timer, 600)).toBe(true);
     expect(await s.pendingInbox(10)).toEqual([event]);
     expect(await s.dueTimers(Number.MAX_SAFE_INTEGER)).toEqual([]);
     // A pass that read the timer before it fired fires nothing more.
-    expect(await s.fireTimer(timer, event)).toBe(false);
+    expect(await s.fireTimer(timer, 600)).toBe(false);
     expect(await s.pendingInbox(10)).toEqual([event]);
   });
 
@@ -161,13 +160,13 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     const [read] = await s.dueTimers(600);
     // Another reply pushes the debounce back between the read and the firing.
     await s.putTimer({ ...timer, fireAt: 900 });
-    expect(await s.fireTimer(read!, timerEvent(read!, 600))).toBe(false);
+    expect(await s.fireTimer(read!, 600)).toBe(false);
     expect(await s.pendingInbox(10)).toEqual([]);
     expect(await s.dueTimers(1000)).toEqual([{ ...timer, fireAt: 900 }]);
     // A stop clears it between the read and the firing.
     const [again] = await s.dueTimers(1000);
     await s.deleteTimersFor('p', 'REL-1');
-    expect(await s.fireTimer(again!, timerEvent(again!, 1000))).toBe(false);
+    expect(await s.fireTimer(again!, 1000)).toBe(false);
     expect(await s.pendingInbox(10)).toEqual([]);
   });
 
