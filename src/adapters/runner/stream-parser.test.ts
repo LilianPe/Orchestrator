@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseStreamLine, summarizeToolInput } from './stream-parser.js';
+import { parseStreamLine, parseUsage, summarizeToolInput } from './stream-parser.js';
 
 describe('parseStreamLine', () => {
   it('parses init, assistant blocks, tool results and result', () => {
@@ -11,6 +11,19 @@ describe('parseStreamLine', () => {
     expect(parseStreamLine('{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.4,"num_turns":3,"result":"ok"}')).toEqual([
       { kind: 'result', isError: false, costUsd: 0.4, turns: 3, text: 'ok' },
     ]);
+  });
+  it('reads the token usage of the result line, and only a well-formed one (ORC-235)', () => {
+    const usage = '"usage":{"input_tokens":12,"cache_creation_input_tokens":300,"cache_read_input_tokens":4000,"output_tokens":56}';
+    expect(parseStreamLine(`{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.4,"num_turns":3,"result":"ok",${usage}}`)).toEqual([
+      { kind: 'result', isError: false, costUsd: 0.4, turns: 3, text: 'ok', tokens: { input: 12, output: 56, cacheRead: 4000, cacheCreation: 300 } },
+    ]);
+    // Cache counts are optional; a usage without input or output counts is no report.
+    expect(parseUsage({ input_tokens: 1, output_tokens: 2 })).toEqual({ input: 1, output: 2, cacheRead: 0, cacheCreation: 0 });
+    expect(parseUsage({ output_tokens: 2 })).toBeUndefined();
+    expect(parseUsage('12 tokens')).toBeUndefined();
+    expect(parseUsage(null)).toBeUndefined();
+    // The agent's text announcing a usage is not one.
+    expect(parseStreamLine('{"type":"result","subtype":"success","result":"usage: 10 input_tokens"}')[0]).not.toHaveProperty('tokens');
   });
   it('ignores garbage and unknown types', () => {
     expect(parseStreamLine('not json')).toEqual([]);

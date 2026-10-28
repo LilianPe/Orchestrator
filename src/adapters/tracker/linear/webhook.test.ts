@@ -150,6 +150,21 @@ describe('ingest', () => {
     expect(await ids()).toHaveLength(1);
   });
 
+  it('acks with the id of the event, so the daemon can record when (ORC-235)', async () => {
+    const acked: [string, string][] = [];
+    const { store } = inbox();
+    const ingest = createLinearIngest({
+      secret: () => 'sec',
+      ctx: { ...ctx(), now: () => 2000 },
+      accept: (e) => store.appendInbox(e),
+      ack: async (sessionId, eventId) => void acked.push([sessionId, eventId]),
+      log: () => {},
+    });
+    const delegation = signed(fx('session-created-delegation'));
+    expect(await ingest(delegation.raw, { 'linear-signature': delegation.sig })).toEqual({ status: 200 });
+    expect(acked).toEqual((await store.pendingInbox(10)).map((e) => ['as-1', e.id]));
+  });
+
   it('answers only once the inbox write is committed', async () => {
     let commit!: () => void;
     const committed = new Promise<void>((r) => (commit = r));
