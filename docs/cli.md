@@ -92,6 +92,22 @@ Linear : connecté · file : active · places dev 1/3 · coût du jour 2.40 $
 
 Arrête le run du ticket `<ID>` (ex. `REL-12`) : SIGINT au processus Claude Code, puis SIGKILL après 10 s. Le ticket est bloqué jusqu'à une réponse dans le fil Linear ou le label `agent:reprendre`. Équivalent au bouton « Stop » de l'interface, au « stop » de la session Linear et au label `agent:stop`.
 
+### `factory replay <journal.json | dossier>...` (ORC-174)
+
+Rejoue des journaux de tickets exportés, sans instance ni réseau : chaque ligne du journal passe par les upcasters (`schemaVersion`), puis sa décision est refaite (`decide`, puis `reduce`) à partir de ce que la transaction de décision a enregistré (projection lue sous le verrou, version du workflow, horloge). Un dossier est lu en entier (`*.json`, par ordre de nom).
+
+- **Régression** (par défaut) : la projection, les effets, les minuteries et la remise à zéro des minuteries doivent ressortir **bit à bit** comme enregistrés (JSON canonique, clés triées). Chaque divergence est listée avec l'événement qui la porte. Code de sortie 0 sans divergence, 1 si un journal diverge, 2 sur une option inconnue, un journal illisible ou impossible à rejouer (version de workflow absente) ou un journal sans aucune décision ; les autres journaux du dossier sont rejoués quand même.
+- **What-if** (`--what-if <workflow.yml>`) : les décisions tournent sur ce workflow, posé sur le pack standard (`--pack <dossier>` pour un autre), au lieu des versions sur lesquelles les tickets étaient figés. Le rejeu s'arrête à la première divergence et la signale :
+
+```
+test/replay/journals/check-failed-then-feedback.json : p/REL-1 : 4 décision(s) rejouée(s) — arrêt à la première divergence
+  événement check:id-1 (verify.failed, n° 4 du journal) : ticket.blockReason enregistré absent, rejoué "Vérifications toujours en échec après 1 tentatives."
+  événement check:id-1 (verify.failed, n° 4 du journal) : effects[0].kind enregistré "start_run", rejoué "activity"
+1 journal(aux) sur 1 divergent.
+```
+
+`factory replay --export <ID> [--project <id>] [--out <fichier>]` écrit le journal d'un ticket de l'instance (store de `FACTORY_DATABASE_URL`, sinon `factory.db`, ouvert sans migration), avec les versions de workflow de ses décisions. `--project` est requis quand l'instance a plusieurs projets. Un ticket sans événement journalisé, ou une instance sans base, est refusé plutôt qu'exporté vide. Le format et la mise en CI : [`tests.md`](tests.md#loracle-de-rejeu).
+
 ## `relais-agent` (côté agent)
 
 Pendant un run, Relais ajoute `bin/` de Relais au `PATH` et pose `RELAIS_API` et `RELAIS_RUN_TOKEN`. L'agent utilise alors :

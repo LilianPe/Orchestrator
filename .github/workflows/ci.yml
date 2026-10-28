@@ -13,6 +13,8 @@ jobs:
       - run: npm run typecheck
       - run: npm run lint
       - run: npm test
+      # The replay oracle (ORC-174), through the CLI: every journal of test/replay/journals gives back its decisions bit for bit.
+      - run: npm run test:replay
 
   properties:
     runs-on: ubuntu-latest

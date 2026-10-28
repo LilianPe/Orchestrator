@@ -2,7 +2,7 @@ import type { Parameters } from 'fast-check';
 import type { JobSpec, Workflow } from '../../src/config/workflow-schema.js';
 import type { Decision, Effect } from '../../src/core/decision.js';
 import { decide, refusesDevWork, sensitivePathsAtLaunch } from '../../src/core/engine.js';
-import { SETTLES_RUN } from '../../src/core/orchestrator.js';
+import { SETTLES_RUN } from '../../src/core/decision-plan.js';
 import { reduce } from '../../src/core/reduce.js';
 import { CREATES_TICKET, type FactoryEvent, type InternalEvent, type ShellEvent, type TicketState } from '../../src/core/types.js';
 import { loadTestWorkflow } from '../helpers/harness.js';

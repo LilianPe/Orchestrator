@@ -2,7 +2,8 @@ import { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { migratePgStore } from '../../src/store/pg/migrate.js';
 import { PgStore } from '../../src/store/pg/pg-store.js';
-import { createHarness } from '../helpers/harness.js';
+import { exportJournal, replayJournal } from '../../src/runtime/replay.js';
+import { createHarness, loadTestWorkflow } from '../helpers/harness.js';
 import { createTestDatabase, PG_URL, TRUNCATE_ALL } from '../helpers/pg-database.js';
 import { testPreset } from '../helpers/test-preset.js';
 
@@ -108,5 +109,20 @@ describe.skipIf(!PG_URL)('orchestrator on PgStore', () => {
     await h.orch.drained();
     expect(h.runner.requests).toHaveLength(1);
     expect(await h.orch.isPaused()).toBe(false);
+  });
+
+  it('records each decision in decision_trace: the exported journal replays bit for bit, and diverges under another preset (ORC-174)', async () => {
+    const h = harness({ preset: testPreset() });
+    h.checks.failNext('1 failed');
+    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    await h.send('label.changed', { label: 'agent:stop', change: 'added' });
+    const journal = await exportJournal(h.store, 'p', 'REL-1');
+    const traced = await pool.query<{ n: string }>(`select count(*) as n from decision_trace where ticket_id = 'REL-1'`);
+    expect(journal.entries.length).toBe(Number(traced.rows[0]!.n));
+    expect(journal.entries.every((e) => e.decision)).toBe(true);
+    expect(replayJournal(journal)).toMatchObject({ replayed: journal.entries.length, divergences: [] });
+    const whatIf = replayJournal(journal, { mode: 'what-if', workflow: loadTestWorkflow(testPreset({ verifyAttempts: 1 }).yaml) });
+    expect(whatIf.divergences[0]).toMatchObject({ eventType: 'verify.failed' });
   });
 });

@@ -4,8 +4,12 @@ import type { OutboxEffect } from '../core/decision.js';
 import { normalizeTicket, type QueueName, type FactoryEvent, type TicketState } from '../core/types.js';
 import type { StoredEvent } from '../core/upcast.js';
 import {
+  decidedOn,
+  decisionRecord,
   effectResult,
   type DecisionOutcome,
+  type DecisionRecord,
+  type JournalEntry,
   type DecisionRequest,
   type OutboxRow,
   type QueueClaim,
@@ -33,6 +37,7 @@ CREATE TABLE IF NOT EXISTS outbox (id TEXT PRIMARY KEY, project_id TEXT NOT NULL
 CREATE INDEX IF NOT EXISTS outbox_open ON outbox (project_id, ticket_id, status, seq, i);
 CREATE INDEX IF NOT EXISTS outbox_event ON outbox (event_id);
 CREATE TABLE IF NOT EXISTS workflow_versions (hash TEXT PRIMARY KEY, definition TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS decision_trace (event_id TEXT PRIMARY KEY, data TEXT NOT NULL);
 `;
 
 /** Columns added after their table was first created (ORC-150): `ALTER TABLE` on an older file. */
@@ -189,7 +194,8 @@ export class SqliteStore implements Store {
     }
 
     const known = ticketId === null ? undefined : this.ticketRow(event.projectId, ticketId);
-    const plan = req.decide(known, this.frozenWorkflow(known, req.workflow));
+    const frozen = this.frozenWorkflow(known, req.workflow);
+    const plan = req.decide(known, frozen);
     const preempted = open.map((r) => r.id);
     if (preempted.length > 0) {
       if (!plan.clearTimers) return { status: 'waiting', reason: `effect ${preempted[0]} waits for its retry`, backoff: true };
@@ -200,14 +206,16 @@ export class SqliteStore implements Store {
     const { n } = this.db.prepare('SELECT COUNT(*) AS n FROM events WHERE ticket_id IS ?').get(ticketId) as { n: number };
     const seq = Number(n) + 1;
     this.db.prepare('INSERT INTO events (id, at, ticket_id, data) VALUES (?, ?, ?, ?)').run(event.id, event.at, ticketId, JSON.stringify(event));
-    if (plan.ticket) {
-      if (plan.ticket.workflowHash === req.workflow.hash) {
-        this.db
-          .prepare('INSERT OR IGNORE INTO workflow_versions (hash, definition) VALUES (?, ?)')
-          .run(req.workflow.hash, JSON.stringify(req.workflow.definition));
-      }
-      this.writeTicket(plan.ticket);
+    this.db
+      .prepare('INSERT INTO decision_trace (event_id, data) VALUES (?, ?)')
+      .run(event.id, JSON.stringify(decisionRecord(event, seq, known, decidedOn(req, frozen), plan)));
+    // Every version a decision ran on is kept, projection written or not: its replay needs it (ORC-174).
+    if (req.workflow.hash !== '' && frozen.hash === req.workflow.hash) {
+      this.db
+        .prepare('INSERT OR IGNORE INTO workflow_versions (hash, definition) VALUES (?, ?)')
+        .run(req.workflow.hash, JSON.stringify(req.workflow.definition));
     }
+    if (plan.ticket) this.writeTicket(plan.ticket);
     if (plan.clearTimers && ticketId !== null) this.clearTimers(event.projectId, ticketId);
     for (const t of plan.timers) this.writeTimer(t);
     const effectIds = plan.effects.map((effect, k) => {
@@ -229,6 +237,19 @@ export class SqliteStore implements Store {
     const row = this.db.prepare('SELECT definition FROM workflow_versions WHERE hash = ?').get(hash) as { definition: string } | undefined;
     if (!row) throw new Error(`workflow version ${hash} of ${known.ticketId} is not stored`);
     return { hash, definition: JSON.parse(row.definition) as unknown };
+  }
+
+  async ticketJournal(projectId: string, ticketId?: string): Promise<JournalEntry[]> {
+    const rows = this.db
+      .prepare(
+        `SELECT e.data AS event, d.data AS decision FROM events e LEFT JOIN decision_trace d ON d.event_id = e.id
+         WHERE e.ticket_id IS ? AND json_extract(e.data, '$.projectId') = ? ORDER BY e.rowid`,
+      )
+      .all(ticketId ?? null, projectId) as { event: string; decision: string | null }[];
+    return rows.map((r) => ({
+      event: JSON.parse(r.event) as StoredEvent,
+      ...(r.decision === null ? {} : { decision: JSON.parse(r.decision) as DecisionRecord }),
+    }));
   }
 
   async getWorkflowVersion(hash: string): Promise<WorkflowVersion | undefined> {
