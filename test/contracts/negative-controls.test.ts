@@ -159,6 +159,17 @@ describeCheckRunnerContract(
 );
 
 describeCheckRunnerContract(
+  'a check runner that reports an exit code for a command that cannot start',
+  checksThat({
+    run: async (dir, commands, timeoutMs) =>
+      existsSync(dir)
+        ? runVerify(dir, commands, timeoutMs)
+        : { ok: false, failures: commands.map((command) => ({ command, exitCode: 127, output: `bash: ${dir}: No such file or directory` })) },
+  }),
+  { violates: [UNSTARTABLE] },
+);
+
+describeCheckRunnerContract(
   'a check runner that answers a replay from its cache',
   () => {
     const seen = new Set<string>();
