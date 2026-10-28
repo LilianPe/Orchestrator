@@ -69,19 +69,21 @@ function sessionAuthor(body: any): { id?: string; name?: string; external: boole
  * this id: an untrusted event has none to borrow.
  */
 export function signedActor(body: any): SignedActor {
+  let id: string | undefined;
+  let name: string | undefined;
   if (body?.type === 'AgentSessionEvent') {
     const a = sessionAuthor(body);
-    const trusted = a.id !== undefined && !a.external;
-    return trusted ? { id: a.id, taint: 'trusted', name: a.name ?? 'Humain' } : { taint: 'untrusted', name: a.name ?? 'Humain' };
+    id = a.external ? undefined : a.id;
+    name = a.name;
+  } else {
+    id = body?.actor?.type === 'user' ? idOf(body.actor.id) : undefined;
+    name = body?.actor?.name;
   }
-  const id = idOf(body?.actor?.id);
-  const name = body?.actor?.name ?? 'Humain';
-  return id && body.actor.type === 'user' ? { id, taint: 'trusted', name } : { taint: 'untrusted', name };
+  return id ? { id, taint: 'trusted', name: name ?? 'Humain' } : { taint: 'untrusted', name: name ?? 'Humain' };
 }
 
-function sessionEvents(body: any, projectId: string, ctx: MapContext): PartialEvent[] {
+function sessionEvents(body: any, author: string, projectId: string, ctx: MapContext): PartialEvent[] {
   const sessionId: string = body.agentSession.id;
-  const author = signedActor(body).name;
   if (body.action === 'created') {
     const comment = body.agentSession.comment;
     if (!comment) return [{ type: 'ticket.delegated', payload: { linearSessionId: sessionId, promptContext: body.promptContext } }];
@@ -150,9 +152,9 @@ export async function mapLinearWebhook(body: any, key: string, ctx: MapContext):
   const teamKey = identifier.split('-')[0]!;
   const projectId = ctx.projectIdForTeam(teamKey);
   if (!projectId) return [];
-  const partials = body.type === 'AgentSessionEvent' ? sessionEvents(body, projectId, ctx) : await issueEvents(body, identifier, teamKey, projectId, ctx);
+  const { id: actor, taint, name } = signedActor(body);
+  const partials = body.type === 'AgentSessionEvent' ? sessionEvents(body, name, projectId, ctx) : await issueEvents(body, identifier, teamKey, projectId, ctx);
   const at = ctx.now();
-  const { id: actor, taint } = signedActor(body);
   return partials.map(
     (p) =>
       ({
