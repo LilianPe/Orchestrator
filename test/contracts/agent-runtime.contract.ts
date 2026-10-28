@@ -77,17 +77,17 @@ export function describeAgentRuntimeContract(name: string, make: () => AgentRunt
       const h = start(s, 'hang');
       expect(await within(h.done, 100)).toBe('pending');
       h.stop();
-      h.stop();
-      expect((await h.done).outcome).toBe('stopped');
-      await drain(h.events);
+      expect(() => h.stop()).not.toThrow();
+      expect(await within(resolved(h.done), 1_500)).toMatchObject({ outcome: 'stopped' });
+      expect(await within(drain(h.events), 1_500)).not.toBe('pending');
     });
 
     it('stop after the end keeps the outcome', async () => {
       const s = make();
       const h = start(s, 'success');
       const r = await h.done;
-      h.stop();
-      expect(await h.done).toEqual(r);
+      expect(() => h.stop()).not.toThrow();
+      expect(await resolved(h.done)).toEqual(r);
     });
 
     it('runs are independent: stopping one leaves the other running', async () => {

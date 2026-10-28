@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { expect } from 'vitest';
 import type { PublishRequest, Publisher } from '../../src/adapters/publisher/types.js';
-import { subjectWith } from './cases.js';
+import { describeContract, subjectWith, type ContractOptions } from './cases.js';
 
 /** What the implementation under test arranged for the suite. Docs: docs/ports/publisher.md. */
 export interface PublisherSubject {
@@ -11,8 +11,8 @@ export interface PublisherSubject {
   end?: (branch: string, prNumber: number) => Promise<void>;
 }
 
-export function describePublisherContract(name: string, make: () => PublisherSubject | Promise<PublisherSubject>): void {
-  describe(`Publisher contract: ${name}`, () => {
+export function describePublisherContract(name: string, make: () => PublisherSubject | Promise<PublisherSubject>, options?: ContractOptions): void {
+  describeContract(`Publisher contract: ${name}`, options, (it) => {
     it('publish returns the PR of the branch and the sha it pushed', async () => {
       const s = await make();
       const p = await s.publisher.publish(s.request);

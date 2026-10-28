@@ -88,7 +88,7 @@ export function describeTrackerContract(name: string, make: () => TrackerSubject
       const [a, b] = s.states;
       await s.tracker.moveTo(s.issue, a);
       await s.tracker.moveTo(s.issue, b);
-      await s.tracker.moveTo(s.issue, b);
+      await resolved(s.tracker.moveTo(s.issue, b));
       expect((await s.tracker.getIssue(s.issue)).stateName).toBe(b);
     });
 
@@ -103,8 +103,8 @@ export function describeTrackerContract(name: string, make: () => TrackerSubject
       const s = await subjectWith(make, () => ctx.skip(), 'states');
       const before = (await s.tracker.getIssue(s.issue)).labels;
       await s.tracker.setLabels(s.issue, ['contract-a', 'contract-b'], []);
-      await s.tracker.setLabels(s.issue, ['contract-c'], ['contract-a', 'contract-never-set']);
-      await s.tracker.setLabels(s.issue, ['contract-c'], ['contract-a', 'contract-never-set']);
+      await resolved(s.tracker.setLabels(s.issue, ['contract-c'], ['contract-a', 'contract-never-set']));
+      await resolved(s.tracker.setLabels(s.issue, ['contract-c'], ['contract-a', 'contract-never-set']));
       const labels = (await s.tracker.getIssue(s.issue)).labels;
       expect([...labels].sort()).toEqual([...new Set([...before, 'contract-b', 'contract-c'])].sort());
     });
