@@ -28,6 +28,7 @@ Développement de l'interface : `npm run dev:web` lance Vite sur le port 5173 av
 | `GET /oauth/start` | Démarre la connexion Linear | mot de passe |
 | `GET /oauth/callback` | Retour OAuth de Linear | paramètre `state` aléatoire, à usage unique |
 | `POST /webhooks/linear` | Webhooks Linear | signature HMAC + fraîcheur 60 s |
+| `POST /webhooks/github` | Webhooks GitHub | signature HMAC `X-Hub-Signature-256` + déduplication par id d'événement |
 | `/agent/*` | API des agents (`relais-agent`) | jeton du run en cours (`Authorization: Bearer`) |
 
 ## Exposition réseau et mot de passe
@@ -38,7 +39,7 @@ Pour l'exposer (serveur, Docker), mettez `host: 0.0.0.0` (ou une adresse précis
 
 > host: 0.0.0.0 expose l'interface et l'API de Relais hors de cette machine. Définissez la variable d'environnement RELAIS_UI_PASSWORD (mot de passe de l'interface), ou remettez host: 127.0.0.1 dans config.yaml.
 
-Avec le mot de passe, tout passe par une authentification **HTTP Basic** (nom d'utilisateur libre, mot de passe = `RELAIS_UI_PASSWORD`, comparé en temps constant), sauf trois routes qui ont leur propre protection : `POST /webhooks/linear`, `GET /oauth/callback` et `/agent/*`. Vérification : `curl -i https://<domaine>/api/state` doit répondre 401.
+Avec le mot de passe, tout passe par une authentification **HTTP Basic** (nom d'utilisateur libre, mot de passe = `RELAIS_UI_PASSWORD`, comparé en temps constant), sauf quatre routes qui ont leur propre protection : `POST /webhooks/linear`, `POST /webhooks/github`, `GET /oauth/callback` et `/agent/*`. Vérification : `curl -i https://<domaine>/api/state` doit répondre 401.
 
 Les commandes `relais status|pause|resume|stop` envoient `RELAIS_UI_PASSWORD` si la variable est définie dans le shell.
 

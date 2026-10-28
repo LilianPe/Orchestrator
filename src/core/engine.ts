@@ -7,7 +7,8 @@ import type { EventType, FactoryEvent, FeedbackItem, InputKind, Taint, TicketSta
 
 type StartRun = Extract<Effect, { kind: 'start_run' }>;
 
-const STOP_MESSAGE = 'Arrêté. Répondez dans ce fil ou posez le label agent:reprendre pour relancer.';
+const RELAUNCH = 'Répondez dans ce fil ou posez le label agent:reprendre pour relancer.';
+const STOP_MESSAGE = `Arrêté. ${RELAUNCH}`;
 const STOPPED = 'Arrêté à la demande';
 
 /** Paths a run started from an untrusted event must not write; enforced by the runner's sandbox (ORC-151). */
@@ -28,9 +29,10 @@ function empty(): Decision {
   return { events: [], effects: [], timers: [], trace: [] };
 }
 
-function stop(out: Decision): Decision {
-  out.events.push({ type: 'work.cancelled' }, { type: 'ticket.blocked', reason: STOPPED });
-  out.effects.push({ kind: 'stop_run' }, { kind: 'activity', type: 'response', body: STOP_MESSAGE });
+/** The ticket's work stops and it is blocked for `reason` until a human relaunches it; `body` tells the session. */
+function stop(out: Decision, reason = STOPPED, body = STOP_MESSAGE): Decision {
+  out.events.push({ type: 'work.cancelled' }, { type: 'ticket.blocked', reason });
+  out.effects.push({ kind: 'stop_run' }, { kind: 'activity', type: 'response', body });
   return out;
 }
 
@@ -402,6 +404,24 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
       out.events.push({ type: 'work.cancelled' });
       out.effects.push({ kind: 'stop_run' });
       break;
+    case 'pr.closed': {
+      // Closed without merge (ORC-134): the run is cancelled as by a stop, then the rules apply. The close
+      // of another PR than the ticket's, of one already closed or merged, or of a done ticket cancels nothing.
+      const n = event.payload.number;
+      if (!ticket || ticket.prNumber !== n || ticket.prState === 'MERGED' || ticket.prState === 'CLOSED' || ticket.logical === 'done') {
+        out.trace.push(`pr.closed: PR #${n} is not the open PR of a ticket at work, nothing cancelled`);
+        break;
+      }
+      out.trace.push('built-in pr.closed: work cancelled');
+      out.events.push({ type: 'ticket.patched', patch: { prState: 'CLOSED' } });
+      stop(out, `PR #${n} fermée sans merge`, `La PR #${n} a été fermée sans merge : j'arrête le travail sur ce ticket. ${RELAUNCH}`);
+      break;
+    }
+    case 'pr.reviewed':
+    case 'pr.conflicted':
+      // In the inbox, but no reaction yet (ORC-190 for reviews, ORC-146 for conflicts): no rule applies to them.
+      out.trace.push(`${event.type}: no reaction yet`);
+      return out;
     case 'pr.checks_passed':
       // Green CI ends the red-CI loop: its count starts over (ORC-270). The rules of pr.checks_passed still apply.
       // A ticket blocked by the red-CI bound is no longer blocked for a reason that holds: the block is lifted.
@@ -409,10 +429,12 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
       if (ticket?.blocked && ticket.blockReason?.startsWith(RED_CI_BLOCKED)) out.events.push({ type: 'ticket.unblocked' });
       break;
     case 'pr.opened': {
-      // A new PR (another number) reopens a delivered ticket; the same PR seen again leaves it as it is.
-      const reopens = event.payload.number !== ticket?.prNumber;
+      // A new PR (another number) reopens a delivered ticket; the same PR seen again leaves it as it is,
+      // unless it was closed: reopened, it is open again (ORC-134).
+      const other = event.payload.number !== ticket?.prNumber;
+      const reopens = other || ticket?.prState === 'CLOSED';
       // Another PR is another red-CI loop: the count of the previous one does not carry over (ORC-270).
-      if (reopens) resetRedCi(out, ticket);
+      if (other) resetRedCi(out, ticket);
       out.events.push({
         type: 'ticket.patched',
         patch: { prNumber: event.payload.number, prUrl: event.payload.url, ...(reopens ? { prState: 'OPEN' as const } : {}) },

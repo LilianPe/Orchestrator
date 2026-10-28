@@ -96,6 +96,8 @@ const PAYLOADS: { [K in EventType]: fc.Arbitrary<EventPayloads[K]> } = {
   'pr.checks_failed': pr.map((p) => ({ ...p, failures: ['test'] })),
   'pr.merged': pr,
   'pr.closed': pr,
+  'pr.reviewed': fc.record({ pr, kind: fc.constantFrom('review' as const, 'comment' as const), author, body }).map(({ pr: p, ...r }) => ({ ...p, ...r })),
+  'pr.conflicted': pr.map((p) => ({ ...p, headSha: 'aaa', baseRef: 'main' })),
   'run.finished': fc.record({
     runId,
     job,
@@ -224,9 +226,9 @@ const debouncedReply: fc.Arbitrary<DraftEntry[]> = external(devReply).map((reply
 const human: fc.Arbitrary<Draft> = fc.oneof(draftOf('session.prompted'), draftOf('session.mentioned'), draftOf('command'), draftOf('label.changed'));
 const humanFragment: fc.Arbitrary<DraftEntry[]> = external(human).map((e) => [e]);
 
-/** The forge reports on the PR: red CI, green CI, merge. */
+/** The forge reports on the PR: red CI, green CI, merge, close without merge (ORC-134). */
 const forge: fc.Arbitrary<DraftEntry[]> = fc
-  .oneof(draftOf('pr.checks_failed'), draftOf('pr.checks_failed'), draftOf('pr.checks_passed'), draftOf('pr.opened'), draftOf('pr.merged'))
+  .oneof(draftOf('pr.checks_failed'), draftOf('pr.checks_failed'), draftOf('pr.checks_passed'), draftOf('pr.opened'), draftOf('pr.merged'), draftOf('pr.closed'))
   .map((d) => [{ kind: 'external', draft: d, untrusted: false }]);
 
 const fragment: fc.Arbitrary<DraftEntry[]> = fc.oneof(

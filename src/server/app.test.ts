@@ -21,9 +21,10 @@ async function setup(extra: { uiPassword?: string } = {}) {
   const webDir = mkdtempSync(join(tmpdir(), 'factory-web-'));
   writeFileSync(join(webDir, 'index.html'), '<h1>Factory</h1>');
   const linearWebhook = vi.fn(() => ({ status: 200 }));
+  const githubWebhook = vi.fn(async () => ({ status: 401 }));
   const blockTicket = vi.fn(async (_p: string, _t: string, _reason: string) => {});
   const app = createApp({
-    store, bus, clock: new FakeClock(10), submit: (e) => void submitted.push(e), isPaused: () => false, linearWebhook, blockTicket,
+    store, bus, clock: new FakeClock(10), submit: (e) => void submitted.push(e), isPaused: () => false, linearWebhook, githubWebhook, blockTicket,
     linearConnected: () => true, tracker, capacity: () => ({ dev: { used: 1, total: 3 }, questions: { used: 0, total: 2 } }),
     transcriptsDir, webDir, ...extra,
   });
@@ -32,7 +33,7 @@ async function setup(extra: { uiPassword?: string } = {}) {
     id: 'r1', projectId: 'p', ticketId: 'REL-1', job: 'dev', queue: 'dev', status: 'running', claudeSessionId: 'c', linearSessionId: 'ls-1',
     startedAt: 1, costUsd: 0.5, turns: 2, lastText: '', token: 'tok', cwd: '/w',
   });
-  return { app, store, bus, tracker, submitted, linearWebhook, blockTicket, transcriptsDir, webDir };
+  return { app, store, bus, tracker, submitted, linearWebhook, githubWebhook, blockTicket, transcriptsDir, webDir };
 }
 
 describe('server', () => {
@@ -41,6 +42,13 @@ describe('server', () => {
     const res = await app.request('/webhooks/linear', { method: 'POST', body: '{"x":1}', headers: { 'Linear-Signature': 'abc' } });
     expect(res.status).toBe(200);
     expect(linearWebhook).toHaveBeenCalledWith('{"x":1}', expect.objectContaining({ 'linear-signature': 'abc' }));
+  });
+
+  it('forwards raw GitHub webhooks with lower-cased headers and answers their status (ORC-134)', async () => {
+    const { app, githubWebhook } = await setup();
+    const res = await app.request('/webhooks/github', { method: 'POST', body: '{"x":1}', headers: { 'X-Hub-Signature-256': 'sha256=00', 'X-GitHub-Event': 'push' } });
+    expect(res.status).toBe(401);
+    expect(githubWebhook).toHaveBeenCalledWith('{"x":1}', expect.objectContaining({ 'x-hub-signature-256': 'sha256=00', 'x-github-event': 'push' }));
   });
 
   it('serves state without run tokens', async () => {
@@ -151,6 +159,8 @@ describe('server', () => {
     it('leaves the webhook, the OAuth callback and the run-token agent API open', async () => {
       const { app } = await setup({ uiPassword: 's3cret' });
       expect((await app.request('/webhooks/linear', { method: 'POST', body: '{}' })).status).toBe(200);
+      // Its own signature guards it: the answer is the ingestion's, never the UI password's.
+      expect((await app.request('/webhooks/github', { method: 'POST', body: '{}' })).headers.get('www-authenticate')).toBeNull();
       expect((await app.request('/oauth/callback?code=x&state=y')).status).not.toBe(401);
       expect((await app.request('/agent/issue/REL-1', { headers: { authorization: 'Bearer tok' } })).status).toBe(200);
     });

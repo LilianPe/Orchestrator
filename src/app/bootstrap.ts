@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { serve } from '@hono/node-server';
 import { GhCliForge } from '../adapters/forge/gh-cli.js';
 import { GitHubAppForge } from '../adapters/forge/github-app.js';
+import { createGithubIngest, githubMapContext, githubRepoOf } from '../adapters/forge/github-ingest.js';
 import { PrPoller } from '../adapters/forge/pr-poller.js';
 import { ClaudeCodeRunner } from '../adapters/runner/claude-code.js';
 import { purgeTranscripts } from '../adapters/runner/transcript.js';
@@ -18,7 +19,7 @@ import { LinearTracker } from '../adapters/tracker/linear/tracker.js';
 import { isUsableWebhookSecret } from '../adapters/tracker/linear/webhook.js';
 import { GitWorkspaces } from '../adapters/workspace/git-workspaces.js';
 import { homePaths, loadInstance, loadSecrets, saveSecrets, secretValues } from '../config/instance.js';
-import { resolveGithubApp } from '../config/github-app.js';
+import { githubWebhookSecret, resolveGithubApp } from '../config/github-app.js';
 import { writeRunSettings } from '../config/run-settings.js';
 import { loadWorkflow } from '../config/load-workflow.js';
 import { EventBus } from '../core/bus.js';
@@ -70,6 +71,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
   const port = o.port ?? instance.port;
   const baseUrl = instance.publicUrl ?? `http://localhost:${port}`;
   const githubApp = resolveGithubApp(instance, env);
+  const githubSecret = githubWebhookSecret(instance, env);
 
   const projects: ProjectRuntime[] = instance.projects.map((p) => {
     const projectFile = join(p.repoPath, '.factory/workflow.yml');
@@ -123,7 +125,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
 
     const scheduler = new Scheduler(store, { dev: limits?.parallelSessions ?? 3, questions: limits?.questionSessions ?? 2 });
     // The daemon's own secrets never enter a run's environment; masked all the same, should one surface.
-    const daemonSecrets = () => [...secretValues(loadSecrets(o.home)), ...(instance.github?.webhookSecret ? [instance.github.webhookSecret] : [])];
+    const daemonSecrets = () => [...secretValues(loadSecrets(o.home)), ...(githubSecret ? [githubSecret] : [])];
     const runner: Runner = o.fakeRunner ? new FakeRunner() : new ClaudeCodeRunner({ transcriptsDir: paths.transcripts, secrets: daemonSecrets });
     const workspaces = new GitWorkspaces({ root: paths.workspaces, knowledgeRepo: instance.knowledge?.repoPath });
     const forge = githubApp
@@ -196,6 +198,14 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     const reconciler = new Reconciler({ tracker: trackerSwitch, store, projects, submit: accept, clock, log });
     const timers = new TimerService(store, clock, () => orchestrator.wake(), (e) => log(`timers: ${e.message}`));
     const poller = new PrPoller({ store, forge, projects, submit: accept, clock, log });
+    // GitHub webhooks (ORC-134) write to the inbox beside the poll, which stays until ORC-185 and ORC-181:
+    // both name a fact the same way, so the inbox keeps it once.
+    const githubIngest = createGithubIngest({
+      secret: () => githubSecret,
+      accept,
+      log,
+      ctx: githubMapContext({ store, forge, projects, repoOf: githubRepoOf(), now: () => clock.now() }),
+    });
 
     const oauthStates = new Set<string>();
     const app = createApp({
@@ -207,6 +217,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       isPaused: () => orchestrator.isPaused(),
       blockTicket: (projectId, ticketId, reason) => orchestrator.blockTicket(projectId, ticketId, reason),
       linearWebhook: ingest,
+      githubWebhook: githubIngest,
       linearConnected: () => !!trackerSwitch.current,
       tracker: trackerSwitch,
       capacity: () => ({
@@ -290,6 +301,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       orchestrator.startWorker().catch((e: unknown) => log(`inbox : ${(e as Error).message}`));
       if (!isUsableWebhookSecret(webhookSecret()))
         log('Attention : aucun secret de webhook Linear configuré, tout webhook sera refusé. Relancez factory init pour le renseigner.');
+      if (!isUsableWebhookSecret(githubSecret))
+        log('Webhooks GitHub refusés : ni github.webhookSecret ni GH_WEBHOOK_SECRET ; seul le relevé des PR toutes les 30 s suit GitHub.');
     } catch (err) {
       await shutdown().catch((e: Error) => log(`arrêt après un démarrage manqué : ${e.message}`));
       throw err;
