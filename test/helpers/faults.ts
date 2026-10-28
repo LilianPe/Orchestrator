@@ -44,6 +44,8 @@ export const FAULT_POINTS = [
   'run.result',
   /** At a launch, before its run is first written (its start mark already names it, ORC-277). */
   'run.write',
+  /** At a launch, after its run is first written, before the runner starts it, whoever launched it: an outbox row or a drain of the queue (ORC-277). */
+  'run.written',
 ] as const;
 export type FaultPoint = (typeof FAULT_POINTS)[number];
 export type FaultMode = 'throw' | 'kill';
@@ -273,10 +275,12 @@ export class FaultLife {
         return fired;
       },
       putRun: async (r: RunRecord) => {
-        if (r.status === 'running' && !this.runs.has(r.id)) this.fire('run.write', { id: r.id, ticketId: r.ticketId });
+        const first = r.status === 'running' && !this.runs.has(r.id);
+        if (first) this.fire('run.write', { id: r.id, ticketId: r.ticketId });
         this.runs.set(r.id, r.ticketId);
         this.session(r.linearSessionId, r.ticketId);
-        return inner.putRun(r);
+        await inner.putRun(r);
+        if (first) this.fire('run.written', { id: r.id, ticketId: r.ticketId });
       },
       // What an effect reads before it posts (its ticket's session, its run's): a new life that takes
       // up a dead one's effect has decided nothing on that ticket yet.

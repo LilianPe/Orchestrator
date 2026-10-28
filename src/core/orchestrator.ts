@@ -112,13 +112,14 @@ interface StartOpts {
   sensitivePaths?: readonly string[];
   /** A queued item's place in its queue, kept when it goes back there. */
   enqueuedAt?: number;
+  /** The start mark its launch names its run in (ORC-277, `startHandled`): an outbox effect's, or its queued item's. */
+  startMark?: string;
 }
 
-/** Where a start comes from, besides its options: a drain's hooks, an outbox effect's start mark. */
+/** A drain's hooks on a start it hands out of the queue (`startRun`). */
 interface StartFrom {
   admitted?: () => void;
   recorded?: () => Promise<void>;
-  mark?: string;
 }
 
 const ECHO_MS = 60_000;
@@ -311,10 +312,7 @@ export class Orchestrator {
     const cut = [...(await store.runsByStatus('running')), ...(await store.runsByStatus('interrupted'))];
     for (const run of cut) {
       await store.putRun({ ...run, status: run.status === 'interrupted' ? 'stopped' : 'failure', endedAt: run.endedAt ?? this.d.clock.now() });
-      // A question's start taken up again from the outbox finds this run through its mark and does
-      // not launch it again (ORC-277): asking again is the one way to an answer, and the only notice.
-      // A question handed out of the queue has no mark: cut before it left the queue, it is handed
-      // out again after its lease (a known gap, docs/idempotence.md).
+      // Its start, taken up again, does not launch it again (`startHandled`, ORC-277): this is the only notice.
       if (run.queue === 'questions' && run.linearSessionId) {
         this.recoveryNotices.push({
           sessionId: run.linearSessionId,
@@ -638,7 +636,9 @@ export class Orchestrator {
       this.worker
         .exclusive(item, async () => {
           const project = await this.runtimeFor(item.projectId, item.ticketId);
-          const outcome = project ? await this.startRun(project, item.ticketId, item, { admitted, recorded: taken }) : 'done';
+          // Launched before a crash cut it before it left the queue: recover()'s, not launched again (ORC-277).
+          const launched = item.startMark !== undefined && (await this.startHandled(item.startMark));
+          const outcome = project && !launched ? await this.startRun(project, item.ticketId, item, { admitted, recorded: taken }) : 'done';
           clearInterval(renew);
           if (outcome === 'queued') await this.d.store.releaseQueued(claim);
           else if (!finished) await this.d.store.finishQueued(claim);
@@ -672,14 +672,11 @@ export class Orchestrator {
     const t = await this.ticket(project.id, ticketId);
     switch (c.kind) {
       case 'start_run': {
-        // Marked once the start is handled (launched, set pending or queued): a replay (a lost lease)
-        // must not set the same start pending behind it, which would call the model a second time.
-        // A launch marks it earlier, with its run's id, just before the run is written (ORC-277): a
-        // crash after that write is recover()'s (a ticket blocked, a question to ask again), and a
-        // replay that finds the run launches nothing more, a question's run included.
+        // A replay (a lost lease) must not start again what was handled: launched, set pending
+        // behind the run it started, or queued (`startHandled`).
         const mark = `effect:${key.id}:started`;
         if (key.replay && (await this.startHandled(mark))) return { deduplicated: true };
-        await this.startRun(project, ticketId, c, { mark });
+        await this.startRun(project, ticketId, { ...c, startMark: mark });
         await store.setMeta(mark, '1');
         return;
       }
@@ -769,8 +766,7 @@ export class Orchestrator {
 
   /**
    * `admitted` is called once the start took its slot, or will not take one (`drainNow`); `recorded`
-   * once the run is written. `mark` is the start mark of the outbox effect it carries out, written
-   * with the run's id at the launch (ORC-277). Resolves `queued` when the start went to the queue, `done` otherwise
+   * once the run is written. Resolves `queued` when the start went to the queue, `done` otherwise
    * (started, set pending, refused or blocked).
    */
   private async startRun(
@@ -812,6 +808,8 @@ export class Orchestrator {
       }
       return 'done';
     }
+    // Handed out of the queue: back in line through its claim (`releaseQueued`), not as a new request.
+    const fromQueue = recorded !== undefined;
     const item = {
       projectId: project.id,
       ticketId,
@@ -824,9 +822,9 @@ export class Orchestrator {
       sensitivePaths: opts.sensitivePaths,
       priority: t.priority,
       enqueuedAt: opts.enqueuedAt ?? this.d.clock.now(),
+      // Its own mark, not the effect's: the effect's is `1` once the start is queued.
+      startMark: opts.startMark === undefined || fromQueue ? opts.startMark : `${opts.startMark}:queued`,
     };
-    // Handed out of the queue: back in line through its claim (`releaseQueued`), not as a new request.
-    const fromQueue = recorded !== undefined;
     if (job.queue === 'dev' && (t.activeRunId || t.verifyingRunId)) {
       await this.apply(t, {
         type: 'pending.set',
@@ -852,7 +850,7 @@ export class Orchestrator {
     admitted?.();
     if (slot === null) return requeue();
     try {
-      await this.launch(project, ticketId, job, opts, slot, key, from);
+      await this.launch(project, ticketId, job, opts, slot, key, recorded);
     } catch (err) {
       this.d.scheduler.release(key);
       let fresh = await this.ticket(project.id, ticketId);
@@ -876,9 +874,11 @@ export class Orchestrator {
   }
 
   /**
-   * Whether the start an effect's mark names was handled: `1` once it is (launched, set pending,
-   * queued, refused), a run's id from the launch on. A run id whose run was never written is a launch
-   * cut before it: not handled, the start runs again.
+   * Whether the start a mark (`StartOpts.startMark`) names was handled (ORC-277). A launch writes the
+   * mark with its run's id before it puts the run on the ticket and writes it; an outbox effect sets
+   * it to `1` once its start is handled. A run id whose run was never written is a launch cut before
+   * it, which nothing launched: the start runs again. A written run, even never started by the
+   * runner, is recover()'s (a dev ticket blocked, a question to ask again): never launched again.
    */
   private async startHandled(mark: string): Promise<boolean> {
     const value = await this.d.store.getMeta(mark);
@@ -904,7 +904,7 @@ export class Orchestrator {
     opts: StartOpts,
     slot: number,
     key: string,
-    from: StartFrom,
+    recorded?: () => Promise<void>,
   ): Promise<void> {
     const { tracker, store, clock, workspaces, forge } = this.d;
     const wf = project.workflow;
@@ -1015,18 +1015,15 @@ export class Orchestrator {
       labels,
       sensitivePaths,
     };
-    // The effect's start mark names the run before it is written (ORC-277): a crash before the
-    // write leaves a mark without a run, and the replayed start launches it; after, the replay finds
-    // it and launches nothing. The ticket holds the run before it is written, so recover() blocks a
-    // dev ticket whatever the cut (its run missing or still `running`); a dev start is never left
-    // without a run, a block or a launch.
-    if (from.mark) await store.setMeta(from.mark, runId);
+    // The mark, then the ticket, then the run (`startHandled`, ORC-277): a dev ticket holds its run
+    // before the run is written, so recover() blocks it whichever write a crash falls after.
+    if (opts.startMark) await store.setMeta(opts.startMark, runId);
     await this.apply(t, { type: 'run.started', runId, job: job.name, queue: job.queue, claudeSessionId, feedbackConsumed: kind === 'feedback' });
     await store.putRun(run);
     // The run is written: a queued item it came from leaves the queue now (a crash from here on is recover()'s).
     // Logged, not thrown: the run is launched either way, and a queue item left behind is refused
-    // when handed out again (its ticket has a run, or is blocked).
-    await from.recorded?.().catch((err: Error) => this.log('warn', `queued ${job.name} on ${ticketId} not taken out of the queue: ${err.message}`));
+    // when handed out again (its ticket has a run, or is blocked, or its mark names this run).
+    await recorded?.().catch((err: Error) => this.log('warn', `queued ${job.name} on ${ticketId} not taken out of the queue: ${err.message}`));
     if (this.d.beforeRun) await this.d.beforeRun(run).catch((err: Error) => this.log('warn', `beforeRun: ${err.message}`));
 
     const handle = this.d.runner.start({

@@ -64,6 +64,11 @@ export interface QueueItem {
   sensitivePaths?: readonly string[];
   priority: number;
   enqueuedAt: number;
+  /**
+   * The start mark its launch writes its run's id in (ORC-277), for an item queued by an outbox
+   * effect: a launch cut before the item left the queue is not launched again when handed out.
+   */
+  startMark?: string;
 }
 
 /** A workflow definition and its hash (`workflowHash`): what a ticket's run is frozen on (ORC-149). */
