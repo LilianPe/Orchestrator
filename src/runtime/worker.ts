@@ -1,3 +1,4 @@
+import { deadLetteredEvent } from '../core/dead-letter.js';
 import type { FactoryEvent } from '../core/types.js';
 import { upcast, type StoredEvent } from '../core/upcast.js';
 import type { DecisionOutcome, DecisionRequest, OutboxRow, Store } from '../store/types.js';
@@ -6,10 +7,30 @@ import { OutboxExecutor, type EffectRetry } from './outbox.js';
 /** Inbox rows read per pass. */
 const INBOX_BATCH = 100;
 /**
- * Processings of a row that throws, in this process: the n-th retry after `baseMs * 3^(n-1)`
- * (2 s, 6 s, 18 s, 54 s: about 80 s in all). Past the last one, the row waits for the next start.
+ * Processings of a row whose preparation or store transaction throws (the tracker or the database
+ * down), in this process: the n-th retry after `baseMs * 3^(n-1)` (2 s, 6 s, 18 s, 54 s: about 80 s
+ * in all). Past the last one, the row waits for the next start. A decision that throws is not
+ * retried: it is dead-lettered (ORC-175).
  */
 export const PROCESS_RETRY = { attempts: 5, baseMs: 2_000 };
+
+/**
+ * What the event itself makes throw, whatever the infrastructure: its upcast, or its decision
+ * (`decide`, `reduce`). Pure functions of the event and the stored state, they would throw again.
+ */
+class PoisonEvent extends Error {}
+
+function toError(err: unknown): Error {
+  return err instanceof Error ? err : new Error(String(err));
+}
+
+function poisonOn<T>(f: () => T): T {
+  try {
+    return f();
+  } catch (err) {
+    throw new PoisonEvent(toError(err).message, { cause: err });
+  }
+}
 
 export interface WorkerDeps {
   store: Store;
@@ -31,6 +52,8 @@ export interface WorkerDeps {
   now?: () => number;
   /** A row left for the next start: past its last retry, or behind such a row. Must not throw. */
   left?(row: StoredEvent): void;
+  /** A row set aside in `dead_letter`, its decision having thrown (ORC-175). Must not throw. */
+  deadLettered?(row: StoredEvent): void;
 }
 
 interface TicketRef {
@@ -56,10 +79,14 @@ const whose = (r: TicketRef): string => r.ticketId ?? `the events without a tick
  *   their last attempt, and each result written back to the inbox as `effect:<id>`, decided here
  *   like any event. A worker that dies leaves its row to another once the lease expires. At least
  *   once: an effect cut after it acted runs again (idempotency per effect: ORC-162).
- * - **A failure holds its ticket.** A row whose preparation or transaction throws stays pending
- *   and is retried with a backoff (`PROCESS_RETRY`); the later rows of its ticket (or, for an
- *   event without a ticket, of its project) wait behind it and go once it passes. Past the last
- *   retry, the row and those behind it wait for the next start (dead-letter: ORC-175).
+ * - **A failure holds its ticket.** A row whose preparation or store transaction throws (the
+ *   tracker, the database) stays pending and is retried with a backoff (`PROCESS_RETRY`); the later
+ *   rows of its ticket (or, for an event without a ticket, of its project) wait behind it and go
+ *   once it passes. Past the last retry, the row and those behind it wait for the next start.
+ * - **A poison event is dead-lettered (ORC-175).** A row whose upcast or decision (`decide`,
+ *   `reduce`) throws would throw again: it is not retried. It goes to `dead_letter`, marked
+ *   processed, with the event that blocks its ticket written to the inbox, in one transaction; the
+ *   rows behind it go on. `factory run repair` replays, skips or forces it.
  */
 export class Worker {
   /** Tail of each ticket's task chain: everything of a ticket runs after what was queued before. */
@@ -105,8 +132,7 @@ export class Worker {
     if (this.stopped) return;
     const timer = setTimeout(() => {
       this.retryTimers.delete(timer);
-      this.waited.clear();
-      this.kick().catch((e: unknown) => this.d.log('error', `worker: ${(e as Error).message}`));
+      this.pollInBackground();
     }, delayMs + 1);
     timer.unref();
     this.retryTimers.add(timer);
@@ -165,11 +191,21 @@ export class Worker {
   start(intervalMs = 1000): void {
     this.stop();
     this.stopped = false;
-    this.poller = setInterval(() => {
-      this.waited.clear();
-      this.kickInBackground();
-    }, intervalMs);
+    this.poller = setInterval(() => this.pollInBackground(), intervalMs);
     this.poller.unref();
+  }
+
+  /**
+   * One poll of `start`'s loop, awaited: the rows that found their ticket held (another worker's
+   * effect, a backoff) are tried again, with what another process wrote and the expired leases.
+   */
+  poll(): Promise<number> {
+    this.waited.clear();
+    return this.kick();
+  }
+
+  private pollInBackground(): void {
+    this.poll().catch((err: unknown) => this.d.log('error', `worker: ${(err as Error).message}`));
   }
 
   /** Stops polling and the pending retries: a stopped worker takes nothing up by itself. */
@@ -192,12 +228,7 @@ export class Worker {
     let n = 0;
     const exclude = [...this.skipped, ...this.waited.keys(), ...this.queuedIds];
     for (const row of await this.d.store.pendingInbox(INBOX_BATCH, exclude)) {
-      const key = ticketKey(row);
-      this.queuedIds.add(row.id);
-      const rows = this.queued.get(key) ?? [];
-      rows.push(row);
-      this.queued.set(key, rows);
-      this.drain(row);
+      this.queue(row);
       n++;
     }
     for (const ref of await this.d.store.effectTickets()) {
@@ -206,6 +237,17 @@ export class Worker {
       n++;
     }
     return n;
+  }
+
+  /** Queues a row on its ticket's task, once. */
+  private queue(row: StoredEvent): void {
+    if (this.queuedIds.has(row.id)) return;
+    const key = ticketKey(row);
+    this.queuedIds.add(row.id);
+    const rows = this.queued.get(key) ?? [];
+    rows.push(row);
+    this.queued.set(key, rows);
+    this.drain(row);
   }
 
   private drain(ref: TicketRef): void {
@@ -264,12 +306,15 @@ export class Worker {
         return 'done';
       }
       let outcome: DecisionOutcome;
-      let event: FactoryEvent;
+      let event: FactoryEvent | undefined;
       try {
-        event = await this.d.prepare(upcast(row));
-        outcome = await this.d.store.decide(this.d.request(event));
+        event = await this.d.prepare(poisonOn(() => upcast(row)));
+        const req = this.d.request(event);
+        outcome = await this.d.store.decide({ ...req, decide: (ticket, workflow) => poisonOn(() => req.decide(ticket, workflow)) });
       } catch (err) {
-        this.failed(row, key, err as Error);
+        // Set aside as prepared (its snapshot filled), so that a replay decides what was decided.
+        if (err instanceof PoisonEvent) await this.deadLetter(event ?? row, key, err);
+        else this.failed(row, key, toError(err));
         return 'done';
       }
       if (outcome.status === 'waiting') {
@@ -292,6 +337,30 @@ export class Worker {
     }
   }
 
+  /**
+   * The row's decision threw (ORC-175): retried, it would throw again. It is set aside in
+   * `dead_letter` and marked processed, and the event that blocks its ticket is written to the inbox,
+   * in one transaction; the rows behind it go on. A store that cannot write the dead letter (down)
+   * leaves the row to the retries of `failed`: nothing is lost.
+   */
+  private async deadLetter(row: StoredEvent, key: string, err: PoisonEvent): Promise<void> {
+    let written: boolean;
+    try {
+      written = await this.d.store.deadLetter(row, err.message, this.d.now?.() ?? Date.now());
+    } catch (writeErr) {
+      this.failed(row, key, new Error(`${err.message}; not dead-lettered: ${toError(writeErr).message}`));
+      return;
+    }
+    // Not written: another worker processed the row meanwhile. Either way, the rows behind it go on.
+    this.passed(row, key);
+    if (!written) return;
+    const set = deadLetteredEvent(row);
+    this.d.log('error', `event ${set.id} (${set.type}) dead-lettered, its decision threw: ${err.message} (repair: factory run repair ${set.ticketId ?? set.id})`);
+    this.d.deadLettered?.(row);
+    // The event that blocks the ticket is in the inbox now.
+    this.kickInBackground();
+  }
+
   /** A row's processing threw: it holds its key, and is retried after a backoff while retries are left. */
   private failed(row: StoredEvent, key: string, err: Error): void {
     const n = (this.failures.get(row.id) ?? 0) + 1;
@@ -308,6 +377,10 @@ export class Worker {
     const timer = setTimeout(() => {
       this.retryTimers.delete(timer);
       this.skipped.delete(row.id);
+      // Queued as read, not left to the next scan: a transaction that committed after all (the
+      // answer to its COMMIT lost) left the row processed, out of the scans, and only its own
+      // processing (`processed`) lets the rows behind it go (ORC-163).
+      this.queue(row);
       this.kickInBackground();
     }, delay);
     timer.unref();

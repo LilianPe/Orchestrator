@@ -1,14 +1,18 @@
 import { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { runRepair } from '../../src/cli/repair.js';
+import type { TicketState } from '../../src/core/types.js';
 import { migratePgStore } from '../../src/store/pg/migrate.js';
 import { PgStore } from '../../src/store/pg/pg-store.js';
-import { createHarness } from '../helpers/harness.js';
+import { exportJournal, replayJournal } from '../../src/runtime/replay.js';
+import { createHarness, loadTestWorkflow } from '../helpers/harness.js';
 import { createTestDatabase, PG_URL, TRUNCATE_ALL } from '../helpers/pg-database.js';
 import { expectFirstRunMeasures, firstRun } from '../helpers/measures-scenario.js';
 import { testPreset } from '../helpers/test-preset.js';
 
 // The orchestrator on PgStore, through the scenario harness: the daemon's path once
-// FACTORY_DATABASE_URL is set. The full harness moves to Postgres with ORC-228.
+// FACTORY_DATABASE_URL is set. Every scenario of test/scenarios also runs on Postgres (the
+// `scenarios-pg` project, ORC-228); these check the tables themselves.
 describe.skipIf(!PG_URL)('orchestrator on PgStore', () => {
   let db: Awaited<ReturnType<typeof createTestDatabase>>;
   let pool: Pool;
@@ -106,6 +110,36 @@ describe.skipIf(!PG_URL)('orchestrator on PgStore', () => {
     expect((await h.ticket()).blocked).toBe(false);
   });
 
+  it('dead-letters an event whose reduce throws, blocks the ticket, and replays it with factory run repair (ORC-175)', async () => {
+    const h = harness();
+    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+    h.runner.enqueue({ hold: true });
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    // A corrupt projection: recording a reply in it throws, every time.
+    const good = await h.ticket();
+    await h.store.putTicket({ ...good, pendingFeedback: null as unknown as TicketState['pendingFeedback'] });
+    await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'et le mobile ?', author: 'L' });
+    const dead = await pool.query<{ event_id: string; status: string; failures: number; ticket_id: string }>(
+      `select event_id, status, failures, ticket_id from dead_letter`,
+    );
+    expect(dead.rows).toEqual([{ event_id: 't-2', status: 'open', failures: 1, ticket_id: 'REL-1' }]);
+    expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: expect.stringMatching(/^Événement t-2 mis de côté \(session\.prompted\)/) });
+    expect(await h.store.pendingInbox(10)).toEqual([]);
+
+    await h.store.putTicket({ ...(await h.ticket()), pendingFeedback: [] });
+    expect(await runRepair({ store: h.store, target: 'REL-1', action: 'replay', by: 'armand', now: h.clock.now(), print: () => {} })).toBe(0);
+    await h.orch.drained();
+    expect(await h.ticket()).toMatchObject({ blocked: false, pendingFeedback: [expect.objectContaining({ body: 'et le mobile ?' })] });
+    const journal = await pool.query<{ event_id: string; type: string }>(
+      `select event_id, type from journal where ticket_id = 'REL-1' and type like 'dead_letter.%' order by seq`,
+    );
+    expect(journal.rows).toEqual([
+      { event_id: 'dead-letter:t-2:1', type: 'dead_letter.added' },
+      { event_id: 'repair:t-2:1', type: 'dead_letter.repaired' },
+    ]);
+    expect((await pool.query(`select status, resolved_by from dead_letter`)).rows).toEqual([{ status: 'replayed', resolved_by: 'armand' }]);
+  });
+
   it('pauses the queue through meta and drains it on resume', async () => {
     const h = harness();
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
@@ -117,5 +151,20 @@ describe.skipIf(!PG_URL)('orchestrator on PgStore', () => {
     await h.orch.drained();
     expect(h.runner.requests).toHaveLength(1);
     expect(await h.orch.isPaused()).toBe(false);
+  });
+
+  it('records each decision in decision_trace: the exported journal replays bit for bit, and diverges under another preset (ORC-174)', async () => {
+    const h = harness({ preset: testPreset() });
+    h.checks.failNext('1 failed');
+    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    await h.send('label.changed', { label: 'agent:stop', change: 'added' });
+    const journal = await exportJournal(h.store, 'p', 'REL-1');
+    const traced = await pool.query<{ n: string }>(`select count(*) as n from decision_trace where ticket_id = 'REL-1'`);
+    expect(journal.entries.length).toBe(Number(traced.rows[0]!.n));
+    expect(journal.entries.every((e) => e.decision)).toBe(true);
+    expect(replayJournal(journal)).toMatchObject({ replayed: journal.entries.length, divergences: [] });
+    const whatIf = replayJournal(journal, { mode: 'what-if', workflow: loadTestWorkflow(testPreset({ verifyAttempts: 1 }).yaml) });
+    expect(whatIf.divergences[0]).toMatchObject({ eventType: 'verify.failed' });
   });
 });

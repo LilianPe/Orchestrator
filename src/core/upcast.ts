@@ -1,4 +1,5 @@
-import { RENAMED_V1, SCHEMA_VERSION, type FactoryEvent, type Taint } from './types.js';
+import type { TimerRecord } from '../store/types.js';
+import { RENAMED_V1, SCHEMA_VERSION, type FactoryEvent, type Taint, type TimerFired } from './types.js';
 
 /** An event as it may sit in the journal, whatever factory version wrote it. */
 export interface StoredEvent {
@@ -23,6 +24,12 @@ const UPCASTERS: Record<number, (e: StoredEvent) => StoredEvent> = {
     // A row that does carry a taint keeps it: an unversioned producer must not launder an untrusted event.
     taint: e.taint ?? 'trusted',
   }),
+  // Version 3 (ORC-161): the debounce of a job is one kind of the generic timer.
+  2: (e) => ({
+    ...e,
+    ...(e.type === 'debounce.fired' ? { type: 'timer.fired', payload: { kind: 'debounce', payload: e.payload } } : {}),
+    schemaVersion: 3,
+  }),
 };
 
 export function upcast(stored: StoredEvent): FactoryEvent {
@@ -36,4 +43,17 @@ export function upcast(stored: StoredEvent): FactoryEvent {
     version += 1;
   }
   return e as FactoryEvent;
+}
+
+/**
+ * A timer as `timers` or a recorded decision may hold it, whatever factory version wrote it: before
+ * ORC-161, a timer was the debounce of a job (`job`, no `kind`).
+ */
+export type StoredTimer = Omit<TimerRecord, 'kind' | 'payload'> & (TimerFired | { job: string });
+
+/** Brings a stored timer to the generic shape (ORC-161): a job-bound one is a `debounce` of that job, key unchanged. */
+export function upcastTimer(stored: StoredTimer): TimerRecord {
+  if (!('job' in stored)) return stored;
+  const { job, ...rest } = stored;
+  return { ...rest, kind: 'debounce', payload: { job } };
 }

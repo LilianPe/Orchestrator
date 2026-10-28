@@ -64,7 +64,7 @@ describe('stripMention', () => {
 describe('mapLinearWebhook', () => {
   it('maps a delegation', async () => {
     expect(await mapLinearWebhook(fx('session-created-delegation'), 'd1', ctx())).toEqual([
-      { id: 'linear:d1', type: 'ticket.delegated', at: 5000, schemaVersion: 2, taint: 'trusted', projectId: 'p', ticketId: 'REL-1',
+      { id: 'linear:d1', type: 'ticket.delegated', at: 5000, schemaVersion: 3, taint: 'trusted', projectId: 'p', ticketId: 'REL-1',
         payload: { linearSessionId: 'as-1', promptContext: '<issue identifier="REL-1">Export</issue>' } },
     ]);
   });
@@ -87,8 +87,8 @@ describe('mapLinearWebhook', () => {
   it('maps a move and an added label', async () => {
     const out = await mapLinearWebhook(fx('issue-moved-labeled'), 'd6', ctx());
     expect(out).toEqual([
-      { id: 'linear:d6', type: 'status.changed', at: 5000, schemaVersion: 2, taint: 'trusted', projectId: 'p', ticketId: 'REL-1', payload: { from: 'human_review', to: 'ai_review' } },
-      { id: 'linear:d6:label:l-resume', type: 'label.changed', at: 5000, schemaVersion: 2, taint: 'trusted', projectId: 'p', ticketId: 'REL-1', payload: { label: 'agent:reprendre', change: 'added' } },
+      { id: 'linear:d6', type: 'status.changed', at: 5000, schemaVersion: 3, taint: 'trusted', projectId: 'p', ticketId: 'REL-1', payload: { from: 'human_review', to: 'ai_review' } },
+      { id: 'linear:d6:label:l-resume', type: 'label.changed', at: 5000, schemaVersion: 3, taint: 'trusted', projectId: 'p', ticketId: 'REL-1', payload: { label: 'agent:reprendre', change: 'added' } },
     ]);
   });
   it('keeps the label event id when the state change is an echo', async () => {

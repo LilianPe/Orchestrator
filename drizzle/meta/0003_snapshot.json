@@ -1,6 +1,6 @@
 {
-  "id": "15a97d43-5bdd-4163-8d97-bbaf596e4179",
-  "prevId": "f439e390-ea07-4ab0-be64-dc6e01ddf9cd",
+  "id": "b0297ccb-3ec7-428e-b5aa-411fcb6d5606",
+  "prevId": "faf60427-c503-4d19-b05b-bc256ea5f484",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -331,8 +331,41 @@
           "primaryKey": false,
           "notNull": true
         },
+        "ticket_id": {
+          "name": "ticket_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'open'"
+        },
+        "failures": {
+          "name": "failures",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        },
+        "resolved_by": {
+          "name": "resolved_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": true,
@@ -369,13 +402,43 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "dead_letter_ticket_status_idx": {
+          "name": "dead_letter_ticket_status_idx",
+          "columns": [
+            {
+              "expression": "ticket_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "dead_letter_status_check": {
+          "name": "dead_letter_status_check",
+          "value": "\"dead_letter\".\"status\" in ('open', 'replayed', 'skipped', 'forced')"
+        },
+        "dead_letter_failures_check": {
+          "name": "dead_letter_failures_check",
+          "value": "\"dead_letter\".\"failures\" >= 1"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.decision_trace": {

@@ -19,17 +19,19 @@ export class WorkflowError extends Error {}
 const EVENT_TYPES: readonly string[] = [
   'ticket.delegated', 'session.mentioned', 'session.prompted', 'session.stopped', 'status.changed', 'label.changed',
   'push.human', 'command', 'pr.opened', 'pr.checks_passed', 'pr.checks_failed', 'pr.merged', 'pr.closed', 'run.finished',
-  'verify.passed', 'verify.failed', 'debounce.fired', 'control.pause', 'control.resume', 'control.stop',
+  'verify.passed', 'verify.failed', 'timer.fired', 'control.pause', 'control.resume', 'control.stop',
 ];
 
-/** Event names of version 1 are still accepted as `on` keys. */
+/** Former event names, still accepted as `on` keys: those of version 1, and `debounce.fired` of version 2 (ORC-161). */
+const FORMER_NAMES: Readonly<Record<string, EventType>> = { ...RENAMED_V1, 'debounce.fired': 'timer.fired' };
+
 function renameOn(file: string, raw: RawWorkflow): RawWorkflow {
   if (!raw.on) return raw;
   const on = raw.on;
-  for (const [former, current] of Object.entries(RENAMED_V1)) {
+  for (const [former, current] of Object.entries(FORMER_NAMES)) {
     if (former in on && current in on) throw new WorkflowError(`${file}: on.${former}: same event as on.${current}, keep only one`);
   }
-  return { ...raw, on: Object.fromEntries(Object.entries(on).map(([k, rules]) => [RENAMED_V1[k] ?? k, rules])) };
+  return { ...raw, on: Object.fromEntries(Object.entries(on).map(([k, rules]) => [FORMER_NAMES[k] ?? k, rules])) };
 }
 
 function readRaw(file: string): RawWorkflow {

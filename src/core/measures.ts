@@ -33,10 +33,11 @@ export interface MessageMeasure {
  * Why a merged ticket was not ready at the first try: an event of the journal before the merge,
  * never the agent's text. `feedback` is a human reply in the dev session (a requested change, or an
  * answer to the agent's own question: either way the first try needed a human); `sent_back` a human
- * moving the ticket back to dev once handed over.
+ * moving the ticket back to dev once handed over; `changes_requested` a GitHub review asking for changes
+ * (ORC-134). A review comment alone, or a conflict with the base branch (`pr.conflicted`), is not one.
  */
 export interface Rework {
-  cause: 'pr.checks_failed' | 'verify.failed' | 'push.human' | 'feedback' | 'sent_back';
+  cause: 'pr.checks_failed' | 'verify.failed' | 'push.human' | 'feedback' | 'sent_back' | 'changes_requested';
   /** Id of the journal event. */
   id: string;
 }
@@ -64,11 +65,14 @@ export interface TicketMeasures {
    */
   firstTry: boolean | null;
   reworks: Rework[];
-  /** Minutes of human review: no GitHub review event reaches the journal yet (ORC-134, ORC-190). */
+  /**
+   * Minutes of human review: `pr.reviewed` (ORC-134) says when a review was posted, not how long it took;
+   * the time spent needs the review loop of ORC-190 (start of each human review).
+   */
   humanReviewMinutes: null;
-  /** Reverted within 14 days of the merge: no push or revert event of the default branch yet (ORC-134). */
+  /** Reverted within 14 days of the merge: the GitHub webhook (ORC-134) maps no push of the default branch; no ticket brings it yet. */
   revertedWithin14Days: null;
-  /** CI cost of the ticket: no workflow run (duration, minutes) reaches the journal yet (ORC-134). */
+  /** CI cost of the ticket: the GitHub webhook (ORC-134) maps check verdicts, not workflow run durations; no ticket brings it yet. */
   ciCostUsd: null;
   messages: MessageMeasure[];
 }
@@ -134,6 +138,8 @@ function rework(e: FactoryEvent, ticket: TicketState): Rework | undefined {
       return { cause: e.type, id: e.id };
     case 'session.prompted':
       return isQuestionSession(ticket, e.payload.linearSessionId) ? undefined : { cause: 'feedback', id: e.id };
+    case 'pr.reviewed':
+      return e.payload.kind === 'review' && e.payload.state?.toLowerCase() === 'changes_requested' ? { cause: 'changes_requested', id: e.id } : undefined;
     case 'status.changed':
       return e.payload.to === 'dev' && e.payload.from !== null && HANDED_OVER.has(e.payload.from) ? { cause: 'sent_back', id: e.id } : undefined;
     default:

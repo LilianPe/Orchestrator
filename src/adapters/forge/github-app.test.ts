@@ -220,6 +220,7 @@ describe('GitHubAppForge.findPr', () => {
       url: 'https://github.com/acme/app/pull/7',
       state: 'OPEN',
       branch: 'factory/REL-1',
+      headSha: 'abc123',
       checks,
       failedChecks,
     });

@@ -34,13 +34,20 @@ describe('ticketMeasures (ORC-235)', () => {
         ev('d', 'ticket.delegated', 0, { linearSessionId: 'ls' }),
         ev('f', 'run.finished', 10, { runId: 'r1', job: 'dev', outcome: 'success', costUsd: 1, turns: 1, lastText: claim }),
         ev('ci', 'pr.checks_failed', 20, { number: 1, url: 'u', branch: 'b', failures: ['t'] }),
+        ev('rc', 'pr.reviewed', 21, { number: 1, url: 'u', branch: 'b', kind: 'comment', author: 'h', body: 'pourquoi ?' }),
+        ev('rv', 'pr.reviewed', 22, { number: 1, url: 'u', branch: 'b', kind: 'review', author: 'h', body: 'renomme', state: 'changes_requested' }),
+        ev('cf', 'pr.conflicted', 23, { number: 1, url: 'u', branch: 'b', headSha: 's', baseRef: 'main' }),
         ev('m', 'pr.merged', 30, { number: 1, url: 'u', branch: 'b' }),
       ],
       runs: [run({ lastText: claim, tokens: { input: 1, output: 2, cacheRead: 3, cacheCreation: 4 } })],
     });
     const quiet = { ...base, runs: [run({ tokens: { input: 1, output: 2, cacheRead: 3, cacheCreation: 4 } })], events: base.events.map((e) => (e.type === 'run.finished' ? { ...e, payload: { ...e.payload, lastText: '' } } : e)) };
     expect(ticketMeasures('p', 'REL-1', base)).toEqual(ticketMeasures('p', 'REL-1', quiet as MeasureFacts));
-    expect(ticketMeasures('p', 'REL-1', base)).toMatchObject({ firstTry: false, reworks: [{ cause: 'pr.checks_failed', id: 'ci' }], tokens: { input: 1 } });
+    expect(ticketMeasures('p', 'REL-1', base)).toMatchObject({
+      firstTry: false,
+      reworks: [{ cause: 'pr.checks_failed', id: 'ci' }, { cause: 'changes_requested', id: 'rv' }],
+      tokens: { input: 1 },
+    });
   });
 
   it('counts only reworks before the merge, and a move to dev from todo is none', () => {

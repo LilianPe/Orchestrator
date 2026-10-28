@@ -18,6 +18,7 @@ Toutes les commandes `relais` lisent `RELAIS_HOME` (défaut `~/.relais`) et `con
 | `relais status` | État de l'instance en cours. | oui |
 | `relais pause` / `relais resume` | Suspendre / reprendre la file. | oui |
 | `relais stop <ID>` | Arrêter le run d'un ticket. | oui |
+| `factory run repair <ID> [replay\|skip\|force] [<événement>]` | Lister ou réparer les événements mis de côté (dead-letter) d'un ticket. | non (lit et écrit la base) |
 
 Les commandes qui demandent le démon appellent `http://127.0.0.1:<port>/api/…` avec le `port` de `config.yaml`. Si `RELAIS_UI_PASSWORD` est défini dans votre shell, elles l'envoient en HTTP Basic (nécessaire quand le démon écoute hors bouclage). En Docker, lancez-les dans le conteneur : `docker compose exec relais node dist/src/cli/relais.js status`.
 
@@ -91,6 +92,39 @@ Linear : connecté · file : active · places dev 1/3 · coût du jour 2.40 $
 ### `relais stop <ID>`
 
 Arrête le run du ticket `<ID>` (ex. `REL-12`) : SIGINT au processus Claude Code, puis SIGKILL après 10 s. Le ticket est bloqué jusqu'à une réponse dans le fil Linear ou le label `agent:reprendre`. Équivalent au bouton « Stop » de l'interface, au « stop » de la session Linear et au label `agent:stop`.
+
+### `factory replay <journal.json | dossier>...` (ORC-174)
+
+Rejoue des journaux de tickets exportés, sans instance ni réseau : chaque ligne du journal passe par les upcasters (`schemaVersion`, et les minuteries enregistrées d'avant ORC-161 par `upcastTimer`), puis sa décision est refaite (`decide`, puis `reduce`) à partir de ce que la transaction de décision a enregistré (projection lue sous le verrou, version du workflow, horloge). Un dossier est lu en entier (`*.json`, par ordre de nom).
+
+- **Régression** (par défaut) : la projection, les effets, les minuteries et la remise à zéro des minuteries doivent ressortir **bit à bit** comme enregistrés (JSON canonique, clés triées). Chaque divergence est listée avec l'événement qui la porte. Code de sortie 0 sans divergence, 1 si un journal diverge, 2 sur une option inconnue, un journal illisible ou impossible à rejouer (version de workflow absente) ou un journal sans aucune décision ; les autres journaux du dossier sont rejoués quand même.
+- **What-if** (`--what-if <workflow.yml>`) : les décisions tournent sur ce workflow, posé sur le pack standard (`--pack <dossier>` pour un autre), au lieu des versions sur lesquelles les tickets étaient figés. Le rejeu s'arrête à la première divergence et la signale :
+
+```
+test/replay/journals/check-failed-then-feedback.json : p/REL-1 : 4 décision(s) rejouée(s) — arrêt à la première divergence
+  événement check:id-1 (verify.failed, n° 4 du journal) : ticket.blockReason enregistré absent, rejoué "Vérifications toujours en échec après 1 tentatives."
+  événement check:id-1 (verify.failed, n° 4 du journal) : effects[0].kind enregistré "start_run", rejoué "activity"
+1 journal(aux) sur 1 divergent.
+```
+
+`factory replay --export <ID> [--project <id>] [--out <fichier>]` écrit le journal d'un ticket de l'instance (store de `FACTORY_DATABASE_URL`, sinon `factory.db`, ouvert sans migration), avec les versions de workflow de ses décisions. `--project` est requis quand l'instance a plusieurs projets. Un ticket sans événement journalisé, ou une instance sans base, est refusé plutôt qu'exporté vide. Le format et la mise en CI : [`tests.md`](tests.md#loracle-de-rejeu).
+### `factory run repair <ID> [replay|skip|force] [<événement>]`
+
+Répare un événement dont la décision a échoué et que le démon a mis de côté (table `dead_letter`) en bloquant le ticket `<ID>`. Sans action, liste les événements mis de côté du ticket (ouverts et déjà réparés) ; avec une action, répare le seul ouvert, ou celui donné en dernier argument :
+
+```text
+$ factory run repair REL-12
+Événements mis de côté pour REL-12 :
+  l1  label.changed  ouvert  (1 échec) rule.when.every is not a function
+$ factory run repair REL-12 replay
+Événement l1 (label.changed) rejoué par armand : réparation journalisée, décidée au prochain passage du démon.
+```
+
+- `replay` : décider l'événement de nouveau, après un correctif ;
+- `skip` : l'ignorer (refusé pour un résultat de run ou de vérifications : utilisez `force`) ;
+- `force` : enregistrer ses faits sans sa décision (aucun effet).
+
+Le ticket est débloqué et la réparation journalisée (événement `dead_letter.repaired`, avec le nom de l'utilisateur). La commande écrit dans la base de l'instance (SQLite, ou Postgres avec `FACTORY_DATABASE_URL`) : le démon n'a pas besoin de tourner, il décide la réparation à son prochain passage. Un événement sans ticket se désigne par son id à la place de `<ID>`. Détails : [`exploitation.md`](exploitation.md#dead-letter-et-factory-run-repair-orc-175).
 
 ## `relais-agent` (côté agent)
 
