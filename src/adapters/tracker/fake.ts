@@ -1,3 +1,4 @@
+import type { TeamDirectory } from '../roles/types.js';
 import type { ActivityInput, SearchHit, Tracker, TrackerIssue } from './types.js';
 
 const snapshot = (i: TrackerIssue): TrackerIssue => ({ ...i, labels: [...i.labels] });
@@ -5,13 +6,14 @@ const snapshot = (i: TrackerIssue): TrackerIssue => ({ ...i, labels: [...i.label
 /** The states of packs/standard/workflow.yml, the catalogue every team has unless a test declares another. */
 export const STANDARD_STATES = ['Todo', 'In Progress', 'Human Review', 'AI Review', 'Ready to Merge', 'Done'] as const;
 
-export class FakeTracker implements Tracker {
+export class FakeTracker implements Tracker, TeamDirectory {
   issues = new Map<string, TrackerIssue>();
   calls: { method: string; args: unknown[] }[] = [];
   private sessions = 0;
   private teamStates = new Map<string, readonly string[]>();
   /** Group of each grouped label, by name: labels of a group are exclusive, as in Linear (ORC-160). */
   private labelGroups = new Map<string, string>();
+  private members = new Map<string, readonly string[]>();
 
   constructor(private readonly defaultStates: readonly string[] = STANDARD_STATES) {}
 
@@ -22,6 +24,11 @@ export class FakeTracker implements Tracker {
   /** Declares a label group: adding one of `labels` takes the others off the ticket. */
   setLabelGroup(group: string, labels: readonly string[]): void {
     for (const l of labels) this.labelGroups.set(l, group);
+  }
+
+  /** The Linear user ids of the team's active members (ORC-186); none until set. */
+  setTeamMembers(teamKey: string, ids: readonly string[]): void {
+    this.members.set(teamKey, [...ids]);
   }
 
   statesOf(teamKey: string): readonly string[] {
@@ -96,6 +103,11 @@ export class FakeTracker implements Tracker {
 
   async listDelegated(teamKey: string): Promise<TrackerIssue[]> {
     return [...this.issues.values()].filter((i) => i.teamKey === teamKey && i.delegateId).map(snapshot);
+  }
+
+  async teamMembers(teamKey: string): Promise<string[]> {
+    this.record('teamMembers', teamKey);
+    return [...(this.members.get(teamKey) ?? [])];
   }
 
   async search(term: string): Promise<SearchHit[]> {

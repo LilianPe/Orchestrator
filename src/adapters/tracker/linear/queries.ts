@@ -9,6 +9,9 @@ export const Q = {
   teamStates: `query TeamStates($teamKey: String!) { workflowStates(first: 100, filter: { team: { key: { eq: $teamKey } } }) { nodes { id name type position } } }`,
   teamLabels: `query TeamLabels($teamKey: String!) { issueLabels(first: 250, filter: { team: { key: { eq: $teamKey } } }) { nodes { id name parent { id } } } }`,
   team: `query Team($key: String!) { teams(filter: { key: { eq: $key } }) { nodes { id key name } } }`,
+  /** The members of a team (ORC-186), a page at a time; `active` is false for a deactivated user. */
+  teamMembers: `query TeamMembers($key: String!, $after: String) { teams(filter: { key: { eq: $key } }) { nodes {
+    members(first: 250, after: $after) { nodes { id active } pageInfo { hasNextPage endCursor } } } } }`,
   viewer: `query Viewer { viewer { id name } organization { id name } }`,
   search: `query Search($term: String!) { searchIssues(term: $term, first: 10) { nodes { identifier title url state { name } } } }`,
   issueUpdate: `mutation IssueUpdate($id: String!, $input: IssueUpdateInput!) { issueUpdate(id: $id, input: $input) { success } }`,

@@ -1,5 +1,6 @@
 import type { FeedbackItem } from '../../core/types.js';
 import { execCmd, mustExec, type Exec } from '../exec.js';
+import type { RepoPermission, RepoPermissions } from '../roles/types.js';
 import type { Forge, PrInfo } from './types.js';
 
 export function aggregateChecks(buckets: string[]): PrInfo['checks'] {
@@ -9,12 +10,32 @@ export function aggregateChecks(buckets: string[]): PrInfo['checks'] {
   return 'pass';
 }
 
+const PERMISSIONS: readonly RepoPermission[] = ['admin', 'maintain', 'write', 'triage', 'read', 'none'];
+
+/**
+ * What `GET /repos/{owner}/{repo}/collaborators/{user}/permission` answers (ORC-186): its `role_name`
+ * when it is a known one (`maintain`, `triage`), else the base `permission` (a custom role keeps its base).
+ */
+export function toRepoPermission(dto: { permission?: string; role_name?: string } | undefined): RepoPermission {
+  const known = (v: string | undefined) => PERMISSIONS.find((p) => p === v);
+  return known(dto?.role_name) ?? known(dto?.permission) ?? 'none';
+}
+
 const THREADS_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) { pullRequest(number: $number) { reviewThreads(first: 100) { nodes {
     isResolved comments(first: 1) { nodes { author { login } body createdAt path line } } } } } } }`;
 
-export class GhCliForge implements Forge {
+export class GhCliForge implements Forge, RepoPermissions {
   constructor(private exec: Exec = execCmd) {}
+
+  /** A user's permission on the repo (ORC-186), as the GitHub App forge reads it, through `gh api`; `none` for a login GitHub does not know. */
+  async repoPermission(repoPath: string, login: string): Promise<RepoPermission> {
+    const args = ['api', `repos/{owner}/{repo}/collaborators/${encodeURIComponent(login)}/permission`];
+    const r = await this.exec('gh', args, { cwd: repoPath });
+    if (r.code !== 0 && /HTTP 404/.test(r.stderr)) return 'none';
+    if (r.code !== 0) throw new Error(`gh ${args.join(' ')}: ${r.stderr.trim() || r.stdout.trim()}`);
+    return toRepoPermission(JSON.parse(r.stdout) as { permission?: string; role_name?: string });
+  }
 
   async findPr(repoPath: string, branch: string): Promise<PrInfo | undefined> {
     const out = await mustExec(

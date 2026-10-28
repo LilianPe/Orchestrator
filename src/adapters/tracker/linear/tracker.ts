@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { LogicalState } from '../../../core/types.js';
+import type { TeamDirectory } from '../../roles/types.js';
 import { effectMarker, type ActivityInput, type SearchHit, type Tracker, type TrackerIssue } from '../types.js';
 import type { LinearApi } from './api.js';
 import { Q } from './queries.js';
@@ -71,7 +72,11 @@ function toIssue(n: IssueNode): TrackerIssue {
   };
 }
 
-export class LinearTracker implements Tracker {
+interface MembersPage {
+  teams: { nodes: { members: { nodes: { id: string; active: boolean }[]; pageInfo: { hasNextPage: boolean; endCursor: string | null } } }[] };
+}
+
+export class LinearTracker implements Tracker, TeamDirectory {
   private states = new Map<string, StateNode[]>();
   private labels = new Map<string, Map<string, string>>();
   /** Group of each team label read, by label id (label ids are unique across teams). */
@@ -103,6 +108,23 @@ export class LinearTracker implements Tracker {
     if (!id) throw new Error(`Équipe Linear introuvable : ${teamKey}`);
     this.teamIds.set(teamKey, id);
     return id;
+  }
+
+  /**
+   * The ids of the team's active members (ORC-186), read each time, every page: the role resolver keeps
+   * them a short while, never this adapter. An unknown team is an error, not an empty team.
+   */
+  async teamMembers(teamKey: string): Promise<string[]> {
+    const ids: string[] = [];
+    let after: string | null = null;
+    for (;;) {
+      const page: MembersPage = await this.api.gql<MembersPage>(Q.teamMembers, { key: teamKey, after });
+      const team = page.teams.nodes[0];
+      if (!team) throw new Error(`Équipe Linear introuvable : ${teamKey}`);
+      ids.push(...team.members.nodes.filter((m) => m.active).map((m) => m.id));
+      if (!team.members.pageInfo.hasNextPage || !team.members.pageInfo.endCursor) return ids;
+      after = team.members.pageInfo.endCursor;
+    }
   }
 
   private async teamStates(teamKey: string, refresh = false): Promise<StateNode[]> {

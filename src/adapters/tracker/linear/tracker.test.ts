@@ -36,6 +36,22 @@ describe('LinearTracker', () => {
     });
   });
 
+  it('reads the active members of a team, every page (ORC-186)', async () => {
+    const page = (ids: [string, boolean][], next: string | null) => ({
+      teams: { nodes: [{ members: { nodes: ids.map(([id, active]) => ({ id, active })), pageInfo: { hasNextPage: next !== null, endCursor: next } } }] },
+    });
+    const { api, calls } = fakeLinear({
+      TeamMembers: (v) => (v['after'] === null ? page([['u-1', true], ['u-gone', false]], 'c1') : page([['u-2', true]], null)),
+    });
+    expect(await new LinearTracker(api, 'app-1').teamMembers('REL')).toEqual(['u-1', 'u-2']);
+    expect(calls.map((c) => c.vars)).toEqual([{ key: 'REL', after: null }, { key: 'REL', after: 'c1' }]);
+  });
+
+  it('fails on an unknown team rather than give it no member', async () => {
+    const { api } = fakeLinear({ TeamMembers: () => ({ teams: { nodes: [] } }) });
+    await expect(new LinearTracker(api, 'app-1').teamMembers('NOPE')).rejects.toThrow('Équipe Linear introuvable : NOPE');
+  });
+
   it('moves by state name', async () => {
     const { api, calls } = fakeLinear({ Issue: () => ({ issue: node }), TeamStates: () => states, IssueUpdate: () => ({ issueUpdate: { success: true } }) });
     await new LinearTracker(api, 'app-1').moveTo('REL-1', 'In Progress');

@@ -1,7 +1,8 @@
 import { createPrivateKey, createSign } from 'node:crypto';
 import { execCmd, mustExec, type Exec } from '../exec.js';
 import type { FeedbackItem } from '../../core/types.js';
-import { aggregateChecks } from './gh-cli.js';
+import { aggregateChecks, toRepoPermission } from './gh-cli.js';
+import type { RepoPermission, RepoPermissions } from '../roles/types.js';
 import type { CheckRunRequest, Forge, ForgeWriter, PrInfo, PrRequest } from './types.js';
 
 export interface GitHubRepoRef {
@@ -286,7 +287,25 @@ export class GitHubAppAuth {
   }
 }
 
-export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter {
+export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter, RepoPermissions {
+  /**
+   * A user's permission on the repo (ORC-186), with the installation token: the app needs only the
+   * `metadata: read` permission. A login GitHub does not know gets `none`; any other failure throws.
+   */
+  async repoPermission(repoPath: string, login: string): Promise<RepoPermission> {
+    try {
+      const dto = await this.request<{ permission?: string; role_name?: string }>(
+        repoPath,
+        'GET',
+        (repo) => `${repoApi(repo)}/collaborators/${encodeURIComponent(login)}/permission`,
+      );
+      return toRepoPermission(dto);
+    } catch (err) {
+      if (err instanceof GitHubApiError && err.status === 404) return 'none';
+      throw err;
+    }
+  }
+
   async findPr(repoPath: string, branch: string): Promise<PrInfo | undefined> {
     const repo = await this.repo(repoPath);
     const token = await this.installationToken(repo);

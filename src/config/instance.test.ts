@@ -22,6 +22,16 @@ describe('instance config', () => {
     expect(loadInstance(home)).toEqual(cfg);
   });
 
+  it("reads a project's authorization designations and its Linear → GitHub logins (ORC-186), with defaults for what is left out", () => {
+    const home = mkdtempSync(join(tmpdir(), 'factory-home-'));
+    const project = { id: 'perso', repoPath: '/code/perso', linearTeamKey: 'REL', authz: { validators: ['user-v'], githubLogins: { 'user-v': 'v-gh' } } };
+    saveInstance(home, { port: 4100, host: '127.0.0.1', relay: { kind: 'none' }, projects: [project as never], limits: {} });
+    expect(loadInstance(home).projects[0]!.authz).toEqual({ maintainers: [], validators: ['user-v'], githubLogins: { 'user-v': 'v-gh' } });
+    expect(() => saveInstance(home, { port: 4100, host: 'h', relay: { kind: 'none' }, projects: [{ ...project, authz: { maintainers: [''] } } as never], limits: {} })).toThrow(
+      /projects\.0\.authz\.maintainers\.0/,
+    );
+  });
+
   it('writes secrets with mode 600', () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-home-'));
     expect(loadSecrets(home)).toEqual({});

@@ -1,20 +1,32 @@
 import type { FeedbackItem } from '../../core/types.js';
+import type { RepoPermission, RepoPermissions } from '../roles/types.js';
 import type { CheckRunRequest, Forge, ForgeWriter, PrInfo, PrRequest } from './types.js';
 
 export type FakeCheckRun = CheckRunRequest & { id: number };
 
-export class FakeForge implements Forge, ForgeWriter {
+export class FakeForge implements Forge, ForgeWriter, RepoPermissions {
   private prs = new Map<string, PrInfo>();
   /** The PRs `ensurePr` opened, in order. */
   opened: (PrRequest & { number: number })[] = [];
   /** The check runs on the forge, as GitHub keeps them: by id, with their sha and external id. */
   checkRuns: FakeCheckRun[] = [];
   private comments = new Map<number, FeedbackItem[]>();
+  private permissions = new Map<string, RepoPermission>();
   /** A forge that does not answer: every read rejects. */
   offline = false;
 
   setPr(branch: string, pr: Omit<PrInfo, 'branch'>): void {
     this.prs.set(branch, { ...pr, branch });
+  }
+
+  /** A GitHub user's permission on the repo (ORC-186); `none` until set. */
+  setRepoPermission(login: string, permission: RepoPermission): void {
+    this.permissions.set(login, permission);
+  }
+
+  async repoPermission(_repoPath: string, login: string): Promise<RepoPermission> {
+    this.answer();
+    return this.permissions.get(login) ?? 'none';
   }
 
   setReviewComments(prNumber: number, items: FeedbackItem[]): void {
