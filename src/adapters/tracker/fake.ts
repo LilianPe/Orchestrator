@@ -10,11 +10,18 @@ export class FakeTracker implements Tracker {
   calls: { method: string; args: unknown[] }[] = [];
   private sessions = 0;
   private teamStates = new Map<string, readonly string[]>();
+  /** Group of each grouped label, by name: labels of a group are exclusive, as in Linear (ORC-160). */
+  private labelGroups = new Map<string, string>();
 
   constructor(private readonly defaultStates: readonly string[] = STANDARD_STATES) {}
 
   setStates(teamKey: string, states: readonly string[]): void {
     this.teamStates.set(teamKey, states);
+  }
+
+  /** Declares a label group: adding one of `labels` takes the others off the ticket. */
+  setLabelGroup(group: string, labels: readonly string[]): void {
+    for (const l of labels) this.labelGroups.set(l, group);
   }
 
   statesOf(teamKey: string): readonly string[] {
@@ -104,10 +111,18 @@ export class FakeTracker implements Tracker {
     i.stateName = stateName;
   }
 
-  /** As the Linear adapter: a write only when the labels change, so a replay records nothing (ORC-162). */
+  /**
+   * As the Linear adapter: a write only when the labels change, so a replay records nothing (ORC-162);
+   * adding a label of a group takes the group's other labels off (ORC-160).
+   */
   async setLabels(identifier: string, add: string[], remove: string[]): Promise<void> {
     const i = this.must(identifier);
-    const next = [...new Set([...i.labels.filter((l) => !remove.includes(l)), ...add])];
+    const groups = new Set(add.map((l) => this.labelGroups.get(l)).filter((g) => g !== undefined));
+    const off = (l: string) => {
+      const group = this.labelGroups.get(l);
+      return remove.includes(l) || (group !== undefined && groups.has(group));
+    };
+    const next = [...new Set([...i.labels.filter((l) => add.includes(l) || !off(l)), ...add])];
     if (next.length === i.labels.length && next.every((l) => i.labels.includes(l))) return;
     this.record('setLabels', identifier, add, remove);
     i.labels = next;

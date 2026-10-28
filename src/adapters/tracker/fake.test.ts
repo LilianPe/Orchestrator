@@ -55,6 +55,16 @@ describe('FakeTracker', () => {
     await expect(t.moveTo('REL-1', 'Blocked')).rejects.toThrow('unknown state Blocked for team REL');
   });
 
+  it('takes off the other labels of a group when it adds one, and writes nothing on a replay (ORC-160)', async () => {
+    const t = new FakeTracker();
+    t.setLabelGroup('prio', ['prio:basse', 'prio:haute']);
+    t.addIssue({ identifier: 'REL-1', labels: ['bug', 'prio:basse'] });
+    await t.setLabels('REL-1', ['prio:haute'], []);
+    expect((await t.getIssue('REL-1')).labels.sort()).toEqual(['bug', 'prio:haute']);
+    await t.setLabels('REL-1', ['prio:haute'], []);
+    expect(t.calls.filter((c) => c.method === 'setLabels')).toHaveLength(1);
+  });
+
   it('names the unknown issue in its error', async () => {
     await expect(new FakeTracker().getIssue('NOPE-1')).rejects.toThrow('unknown issue NOPE-1');
   });
