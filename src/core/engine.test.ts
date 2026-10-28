@@ -9,7 +9,7 @@ import { newTicketState, type EventPayloads, type EventType, type FactoryEvent, 
 const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../packs/standard') });
 
 function ev<T extends EventType>(type: T, payload: EventPayloads[T]): FactoryEvent {
-  return { id: `e-${type}`, type, at: 1000, projectId: 'p', ticketId: 'REL-1', schemaVersion: 2, taint: 'trusted', payload } as FactoryEvent;
+  return { id: `e-${type}`, type, at: 1000, projectId: 'p', ticketId: 'REL-1', schemaVersion: 3, taint: 'trusted', payload } as FactoryEvent;
 }
 function ticket(patch: Partial<TicketState> = {}): TicketState {
   return { ...newTicketState('p', 'REL-1', 'Titre', 'todo', 0), delegated: true, ...patch };
@@ -41,7 +41,7 @@ describe('decide — YAML rules of the standard pack', () => {
     expect(out).toEqual(
       decision({
         events: [{ type: 'feedback.appended', item: { author: 'Lilian', body: 'boutons mal alignés', at: 1000, source: 'session', taint: 'trusted' } }],
-        timers: [{ kind: 'debounce', job: 'dev-feedback', ms: 180_000 }],
+        timers: [{ kind: 'debounce', slot: 'dev-feedback', ms: 180_000, payload: { job: 'dev-feedback' } }],
       }),
     );
   });
@@ -177,7 +177,7 @@ describe('decide — after the merge (ORC-268)', () => {
 
   it('no rule nor timer starts dev work on a merged ticket', () => {
     expect(devStarts(decide(merged({ logical: 'human_review' }), ev('pr.checks_failed', { number: 3, url: 'u', branch: 'b', failures: ['test'] }), workflow))).toEqual([]);
-    expect(decide(merged(), ev('debounce.fired', { job: 'dev-feedback' }), workflow)).toEqual(decision());
+    expect(decide(merged(), ev('timer.fired', { kind: 'debounce', payload: { job: 'dev-feedback' } }), workflow)).toEqual(decision());
     const reply = decide(merged({ logical: 'human_review', linearSessionId: 's1' }), ev('session.prompted', { linearSessionId: 's1', body: 'encore ?', author: 'L' }), workflow);
     expect(kinds(reply)).toEqual({ events: ['feedback.appended'], effects: [], timers: [] });
   });
@@ -296,7 +296,7 @@ describe('decide — taint', () => {
 
   it('starts a feedback run relayed by a trusted debounce with the sensitive paths when untrusted feedback is pending (ORC-269)', () => {
     const t = ticket({ logical: 'human_review', pendingFeedback: [...pending('trusted'), ...pending('untrusted')] });
-    expect(decide(t, ev('debounce.fired', { job: 'dev-feedback' }), workflow).effects).toEqual([
+    expect(decide(t, ev('timer.fired', { kind: 'debounce', payload: { job: 'dev-feedback' } }), workflow).effects).toEqual([
       { kind: 'start_run', job: 'dev-feedback', input: 'feedback', sensitivePaths: SENSITIVE_PATHS },
     ]);
   });
@@ -309,7 +309,7 @@ describe('decide — taint', () => {
 
   it('reads a pending item written before ORC-269, without taint, as trusted, as upcast reads a version 1 event', () => {
     const t = ticket({ logical: 'human_review', pendingFeedback: pending() });
-    expect(decide(t, ev('debounce.fired', { job: 'dev-feedback' }), workflow).effects[0]).not.toHaveProperty('sensitivePaths');
+    expect(decide(t, ev('timer.fired', { kind: 'debounce', payload: { job: 'dev-feedback' } }), workflow).effects[0]).not.toHaveProperty('sensitivePaths');
   });
 
   it('leaves out the pending feedback taint when the run does not consume the feedback', () => {
@@ -334,7 +334,7 @@ describe('decide — taint', () => {
 
   it('refuses a debounced knowledge run that would consume untrusted feedback, and leaves the ticket blocked (ORC-269)', () => {
     const wf = { ...workflow, jobs: { ...workflow.jobs, remember: { ...workflow.jobs['remember']!, input: 'feedback' as const } } };
-    const out = decide(ticket({ blocked: true, pendingFeedback: pending('untrusted') }), ev('debounce.fired', { job: 'remember' }), wf);
+    const out = decide(ticket({ blocked: true, pendingFeedback: pending('untrusted') }), ev('timer.fired', { kind: 'debounce', payload: { job: 'remember' } }), wf);
     expect(kinds(out)).toEqual({ events: [], effects: ['activity'], timers: [] });
     expect(out.effects[0]).toMatchObject({ body: taintedKnowledge('remember') });
   });
@@ -453,7 +453,7 @@ describe('decide — built-ins', () => {
       const moved = decide(blocked, ev('status.changed', { from: 'human_review', to: 'dev' }), workflow);
       expect(moved.events).toEqual([{ type: 'ticket.unblocked' }, { type: 'ticket.patched', patch: { ciFixAttempts: 0 } }]);
       // A timer armed before the block is no human relaunch: it would undo the bound.
-      const timer = decide(blocked, ev('debounce.fired', { job: 'dev-feedback' }), workflow);
+      const timer = decide(blocked, ev('timer.fired', { kind: 'debounce', payload: { job: 'dev-feedback' } }), workflow);
       expect(timer.events).toEqual([{ type: 'ticket.unblocked' }]);
     });
 
@@ -466,9 +466,17 @@ describe('decide — built-ins', () => {
   });
 
   it('debounce fired starts the job', () => {
-    expect(decide(ticket({ logical: 'human_review' }), ev('debounce.fired', { job: 'dev-feedback' }), workflow)).toEqual(
+    expect(decide(ticket({ logical: 'human_review' }), ev('timer.fired', { kind: 'debounce', payload: { job: 'dev-feedback' } }), workflow)).toEqual(
       decision({ effects: [{ kind: 'start_run', job: 'dev-feedback', input: 'feedback' }] }),
     );
+  });
+
+  it('decides nothing yet on the clarify and usage-limit timers, whose rules are ORC-210 and ORC-215 (ORC-161)', () => {
+    for (const kind of ['clarify.remind', 'clarify.expire', 'usage.reset'] as const) {
+      const out = decide(ticket({ logical: 'dev', blocked: true }), ev('timer.fired', { kind, payload: {} }), workflow);
+      expect(out).toEqual(decision());
+      expect(out.trace).toContain(`timer.fired ${kind}: no rule decides it yet`);
+    }
   });
 
   it('pr.opened records and links the PR', () => {

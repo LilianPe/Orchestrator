@@ -19,7 +19,7 @@ import { runRepair } from '../cli/repair.js';
 import type { StoredEvent } from './upcast.js';
 import type { EffectRetry } from '../runtime/outbox.js';
 import { Scheduler } from './scheduler.js';
-import { newTicketState, TRUSTED, type FactoryEvent } from './types.js';
+import { newTicketState, SCHEMA_VERSION, TRUSTED, type FactoryEvent } from './types.js';
 
 const packDir = join(import.meta.dirname, '../../packs/standard');
 
@@ -390,7 +390,7 @@ describe('Orchestrator', () => {
       await orch.accept(delegated());
       await orch.accept({ ...label('future'), schemaVersion: 99 } as unknown as StoredEvent);
       await orch.drained();
-      expect(await store.deadLetters('REL-1')).toMatchObject([{ eventId: 'future', failures: 1, error: 'event future: schema version 99 is newer than 2' }]);
+      expect(await store.deadLetters('REL-1')).toMatchObject([{ eventId: 'future', failures: 1, error: `event future: schema version 99 is newer than ${SCHEMA_VERSION}` }]);
       expect(await runRepair({ store, target: 'REL-1', action: 'force', by: 'armand', now: 3_000, print: () => {} })).toBe(0);
       await orch.drained();
       expect(await store.deadLetters('REL-1')).toMatchObject([{ eventId: 'future', status: 'open', failures: 2 }]);

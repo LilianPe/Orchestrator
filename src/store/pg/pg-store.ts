@@ -13,7 +13,7 @@ import {
 } from '../../core/dead-letter.js';
 import type { OutboxEffect } from '../../core/decision.js';
 import { normalizeTicket, type FactoryEvent, type QueueName, type TicketState } from '../../core/types.js';
-import type { StoredEvent } from '../../core/upcast.js';
+import { upcastTimer, type StoredEvent, type StoredTimer } from '../../core/upcast.js';
 import {
   decidedOn,
   decisionRecord,
@@ -242,17 +242,22 @@ export class PgStore implements AsyncStore {
   async appendInbox(event: FactoryEvent | StoredEvent): Promise<boolean> {
     return this.db.transaction(async (tx) => {
       await tx.execute(ticketLock(event.ticketId));
-      const inserted = await tx.execute(sql`
-        insert into inbox (id, event_id, type, payload, received_at, schema_version)
-        values (
-          ${event.id}, ${event.id}, ${event.type}, ${JSON.stringify(event)}::jsonb,
-          clock_timestamp(), ${event.schemaVersion ?? 1}
-        )
-        on conflict do nothing
-        returning id
-      `);
-      return (inserted.rowCount ?? 0) > 0;
+      return this.insertInbox(tx, event);
     });
+  }
+
+  /** The inbox row of an event, under its ticket's lock taken by the caller's transaction. */
+  private async insertInbox(tx: Tx, event: FactoryEvent | StoredEvent): Promise<boolean> {
+    const inserted = await tx.execute(sql`
+      insert into inbox (id, event_id, type, payload, received_at, schema_version)
+      values (
+        ${event.id}, ${event.id}, ${event.type}, ${JSON.stringify(event)}::jsonb,
+        clock_timestamp(), ${event.schemaVersion ?? 1}
+      )
+      on conflict do nothing
+      returning id
+    `);
+    return (inserted.rowCount ?? 0) > 0;
   }
 
   async pendingInbox(limit: number, exclude: readonly string[] = []): Promise<StoredEvent[]> {
@@ -776,7 +781,7 @@ export class PgStore implements AsyncStore {
     await db.execute(sql`
       insert into timers (id, ticket_id, kind, due_at, payload, status, created_at)
       values (
-        ${timer.key}, ${timer.ticketId}, ${timer.job}, to_timestamp(${timer.fireAt / 1000}),
+        ${timer.key}, ${timer.ticketId}, ${timer.kind}, to_timestamp(${timer.fireAt / 1000}),
         ${JSON.stringify(timer)}::jsonb, 'pending', to_timestamp(${this.now() / 1000})
       )
       on conflict (id) do update set
@@ -789,9 +794,9 @@ export class PgStore implements AsyncStore {
   }
 
   /**
-   * Reads the due timers without changing them, as SQLite does: a timer stays due until
-   * `deleteTimer` removes it, so a pass cut before that (an error, a shutdown) fires it again on
-   * the next one. Its event id (`timer:<key>:<fireAt>`) makes the second firing a no-op.
+   * Reads the due timers without changing them, as SQLite does: a timer stays due until `fireTimer`
+   * fires it, so a pass cut before that (an error, a shutdown) finds it again on the next one. A
+   * row written before ORC-161 (a job, `kind` = the job's name) reads as a `debounce` of that job.
    */
   async dueTimers(now: number): Promise<TimerRecord[]> {
     const result = await this.db.execute<{ payload: TimerRecord }>(sql`
@@ -804,12 +809,24 @@ export class PgStore implements AsyncStore {
         )
       order by due_at, id
     `);
-    return result.rows.map((row) => row.payload);
+    return result.rows.map((row) => upcastTimer(row.payload as StoredTimer));
   }
 
-  async deleteTimer(key: string, fireAt?: number): Promise<void> {
-    const armedAt = fireAt === undefined ? sql`` : sql`and (payload->>'fireAt')::double precision = ${fireAt}`;
-    await this.db.execute(sql`delete from timers where id = ${key} and status = 'pending' ${armedAt}`);
+  /**
+   * Under the ticket's lock, as `appendInbox`: the firing gets its `received_at` in commit order
+   * among the ticket's rows. The timer is deleted only as it was read (same `fireAt`).
+   */
+  async fireTimer(timer: TimerRecord, event: FactoryEvent): Promise<boolean> {
+    return this.db.transaction(async (tx) => {
+      await tx.execute(ticketLock(event.ticketId));
+      const armed = await tx.execute(sql`
+        delete from timers
+        where id = ${timer.key} and status = 'pending' and (payload->>'fireAt')::double precision = ${timer.fireAt}
+        returning id
+      `);
+      if ((armed.rowCount ?? 0) === 0) return false;
+      return this.insertInbox(tx, event);
+    });
   }
 
   async deleteTimersArmedBy(eventId: string): Promise<void> {

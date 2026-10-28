@@ -1,6 +1,7 @@
 import { expect, it } from 'vitest';
 import type { AttemptLabels } from '../../src/core/attempt-labels.js';
 import { newTicketState, TRUSTED, type FactoryEvent, type TicketState } from '../../src/core/types.js';
+import { timerEvent } from '../../src/runtime/timers.js';
 import type { DecisionPlan, DecisionRequest, QueueItem, RunRecord, Store, WorkflowVersion } from '../../src/store/types.js';
 
 function run(patch: Partial<RunRecord> = {}): RunRecord {
@@ -34,7 +35,7 @@ function request(event: FactoryEvent, patch: Partial<DecisionPlan> = {}, workflo
           { kind: 'comment', body: `on ${event.id}` },
           { kind: 'labels', add: ['x'], remove: [] },
         ],
-        timers: [{ key: `${event.ticketId}:dev`, projectId: 'p', ticketId: event.ticketId!, job: 'dev', fireAt: 900, armedBy: event.id }],
+        timers: [{ key: `${event.ticketId}:dev`, projectId: 'p', ticketId: event.ticketId!, kind: 'debounce', payload: { job: 'dev' }, fireAt: 900, armedBy: event.id }],
         clearTimers: false,
         ...patch,
       };
@@ -125,27 +126,49 @@ export function storeContract(store: () => Store | Promise<Store>): void {
 
   it('fires due timers', async () => {
     const s = await store();
-    await s.putTimer({ key: 'REL-1:dev-feedback', projectId: 'p', ticketId: 'REL-1', job: 'dev-feedback', fireAt: 500 });
+    const timer = { key: 'REL-1:dev-feedback', projectId: 'p', ticketId: 'REL-1', kind: 'debounce' as const, payload: { job: 'dev-feedback' }, fireAt: 500 };
+    await s.putTimer(timer);
     expect(await s.dueTimers(499)).toEqual([]);
-    expect(await s.dueTimers(500)).toHaveLength(1);
-    await s.deleteTimer('REL-1:dev-feedback');
+    expect(await s.dueTimers(500)).toEqual([timer]);
+    expect(await s.fireTimer(timer, timerEvent(timer, 500))).toBe(true);
     expect(await s.dueTimers(1000)).toEqual([]);
-    await s.putTimer({ key: 'REL-2:x', projectId: 'p', ticketId: 'REL-2', job: 'x', fireAt: 9e12 });
+    await s.putTimer({ key: 'REL-2:x', projectId: 'p', ticketId: 'REL-2', kind: 'debounce', payload: { job: 'x' }, fireAt: 9e12 });
     await s.deleteTimersFor('p', 'REL-2');
     expect(await s.dueTimers(Number.MAX_SAFE_INTEGER)).toEqual([]);
   });
 
-  it('keeps a due timer until it is deleted, and a re-armed timer when deleting the old firing', async () => {
+  it('fires a timer in one go: its event in the inbox, the timer gone, and nothing on a second firing (ORC-161)', async () => {
     const s = await store();
-    const timer = { key: 'REL-1:dev-feedback', projectId: 'p', ticketId: 'REL-1', job: 'dev-feedback', fireAt: 500 };
+    const timer = { key: 'REL-1:clarify', projectId: 'p', ticketId: 'REL-1', kind: 'clarify.remind' as const, payload: { linearSessionId: 'ls-2' }, fireAt: 500 };
     await s.putTimer(timer);
+    // Read twice: reading changes nothing, the timer stays due until it is fired.
     expect(await s.dueTimers(600)).toEqual([timer]);
     expect(await s.dueTimers(600)).toEqual([timer]);
+    const event = timerEvent(timer, 600);
+    expect(event).toMatchObject({ id: 'timer:REL-1:clarify:500', type: 'timer.fired', at: 600, payload: { kind: 'clarify.remind', payload: { linearSessionId: 'ls-2' } } });
+    expect(await s.fireTimer(timer, event)).toBe(true);
+    expect(await s.pendingInbox(10)).toEqual([event]);
+    expect(await s.dueTimers(Number.MAX_SAFE_INTEGER)).toEqual([]);
+    // A pass that read the timer before it fired fires nothing more.
+    expect(await s.fireTimer(timer, event)).toBe(false);
+    expect(await s.pendingInbox(10)).toEqual([event]);
+  });
+
+  it('fires only the timer as read: one pushed back or cleared meanwhile writes nothing (ORC-161)', async () => {
+    const s = await store();
+    const timer = { key: 'REL-1:dev-feedback', projectId: 'p', ticketId: 'REL-1', kind: 'debounce' as const, payload: { job: 'dev-feedback' }, fireAt: 500 };
+    await s.putTimer(timer);
+    const [read] = await s.dueTimers(600);
+    // Another reply pushes the debounce back between the read and the firing.
     await s.putTimer({ ...timer, fireAt: 900 });
-    await s.deleteTimer(timer.key, 500);
+    expect(await s.fireTimer(read!, timerEvent(read!, 600))).toBe(false);
+    expect(await s.pendingInbox(10)).toEqual([]);
     expect(await s.dueTimers(1000)).toEqual([{ ...timer, fireAt: 900 }]);
-    await s.deleteTimer(timer.key, 900);
-    expect(await s.dueTimers(1000)).toEqual([]);
+    // A stop clears it between the read and the firing.
+    const [again] = await s.dueTimers(1000);
+    await s.deleteTimersFor('p', 'REL-1');
+    expect(await s.fireTimer(again!, timerEvent(again!, 1000))).toBe(false);
+    expect(await s.pendingInbox(10)).toEqual([]);
   });
 
   it("removes a ticket's queued runs, of one queue or of all (ORC-268)", async () => {
@@ -257,7 +280,7 @@ export function storeContract(store: () => Store | Promise<Store>): void {
       if (typeof row !== 'object') throw new Error('expected a claimed row');
       expect(await s.completeEffect(row.id, row.lease)).toBe(true);
     }
-    expect(await s.dueTimers(1000)).toEqual([{ key: 'REL-1:dev', projectId: 'p', ticketId: 'REL-1', job: 'dev', fireAt: 900, armedBy: 'e1' }]);
+    expect(await s.dueTimers(1000)).toEqual([{ key: 'REL-1:dev', projectId: 'p', ticketId: 'REL-1', kind: 'debounce', payload: { job: 'dev' }, fireAt: 900, armedBy: 'e1' }]);
     const second = request(delegatedEvent('e2'));
     expect(await s.decide(second)).toMatchObject({ status: 'committed', seq: 2, effectIds: ['REL-1:2:1', 'REL-1:2:2'] });
     expect(second.seen.ticket).toMatchObject({ title: 'T+' });
@@ -372,9 +395,9 @@ export function storeContract(store: () => Store | Promise<Store>): void {
 
   it('deletes the timers armed by an event, and those of a ticket (ORC-149)', async () => {
     const s = await store();
-    await s.putTimer({ key: 'REL-1:a', projectId: 'p', ticketId: 'REL-1', job: 'a', fireAt: 1, armedBy: 'e1' });
-    await s.putTimer({ key: 'REL-1:b', projectId: 'p', ticketId: 'REL-1', job: 'b', fireAt: 1, armedBy: 'e2' });
-    await s.putTimer({ key: 'REL-2:c', projectId: 'p', ticketId: 'REL-2', job: 'c', fireAt: 1 });
+    await s.putTimer({ key: 'REL-1:a', projectId: 'p', ticketId: 'REL-1', kind: 'debounce', payload: { job: 'a' }, fireAt: 1, armedBy: 'e1' });
+    await s.putTimer({ key: 'REL-1:b', projectId: 'p', ticketId: 'REL-1', kind: 'debounce', payload: { job: 'b' }, fireAt: 1, armedBy: 'e2' });
+    await s.putTimer({ key: 'REL-2:c', projectId: 'p', ticketId: 'REL-2', kind: 'debounce', payload: { job: 'c' }, fireAt: 1 });
     await s.deleteTimersArmedBy('e1');
     expect((await s.dueTimers(10)).map((t) => t.key)).toEqual(['REL-1:b', 'REL-2:c']);
     await s.deleteTimersFor('p', 'REL-1');
@@ -383,7 +406,7 @@ export function storeContract(store: () => Store | Promise<Store>): void {
 
   it('clears the ticket timers before arming the decision ones when asked (a stop, ORC-149)', async () => {
     const s = await store();
-    await s.putTimer({ key: 'REL-1:old', projectId: 'p', ticketId: 'REL-1', job: 'old', fireAt: 500 });
+    await s.putTimer({ key: 'REL-1:old', projectId: 'p', ticketId: 'REL-1', kind: 'debounce', payload: { job: 'old' }, fireAt: 500 });
     await s.appendInbox(delegatedEvent('e1'));
     await s.decide(request(delegatedEvent('e1'), { effects: [], clearTimers: true }));
     expect((await s.dueTimers(Number.MAX_SAFE_INTEGER)).map((t) => t.key)).toEqual(['REL-1:dev']);
@@ -501,7 +524,7 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     expect(await s.completeEffect(row.id, row.lease)).toBe(true);
     expect(await s.pendingInbox(10)).toEqual([
       {
-        id: 'effect:REL-1:1:1', type: 'effect.done', at: expect.any(Number), schemaVersion: 2, taint: 'trusted', projectId: 'p', ticketId: 'REL-1',
+        id: 'effect:REL-1:1:1', type: 'effect.done', at: expect.any(Number), schemaVersion: 3, taint: 'trusted', projectId: 'p', ticketId: 'REL-1',
         payload: { effectId: 'REL-1:1:1', kind: 'comment', eventId: 'e1', attempts: 1 },
       },
     ]);

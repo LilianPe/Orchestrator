@@ -20,7 +20,7 @@ export function taintedKnowledge(job: string, source: 'event' | 'read' = 'event'
 }
 
 const BUILT_IN = new Set<EventType>([
-  'control.pause', 'control.resume', 'control.stop', 'run.finished', 'verify.passed', 'verify.failed', 'debounce.fired', 'pr.opened',
+  'control.pause', 'control.resume', 'control.stop', 'run.finished', 'verify.passed', 'verify.failed', 'timer.fired', 'pr.opened',
   'effect.done', 'effect.failed', 'dead_letter.added',
 ]);
 
@@ -191,7 +191,7 @@ function applyRule(out: Decision, rule: Rule, event: FactoryEvent, ticket: Ticke
   }
   if (!job) return out;
   if (rule.debounceMs && rule.debounceMs > 0 && !refusal(event, ticket, job)) {
-    out.timers.push({ kind: 'debounce', job: job.name, ms: rule.debounceMs });
+    out.timers.push({ kind: 'debounce', slot: job.name, ms: rule.debounceMs, payload: { job: job.name } });
   } else {
     const threaded = event.type === 'session.mentioned' || event.type === 'command';
     startRun(out, event, ticket, job, {
@@ -343,8 +343,14 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
       const reason = `Vérifications toujours en échec après ${workflow.limits.verifyAttempts} tentatives.`;
       return block(out, reason, `${reason}\n${formatFailuresShort(failures)}\nRépondez dans ce fil pour relancer.`);
     }
-    case 'debounce.fired': {
-      const job = workflow.jobs[event.payload.job];
+    case 'timer.fired': {
+      const fired = event.payload;
+      if (fired.kind !== 'debounce') {
+        // Armed by no rule yet: the clarify reminder and block are ORC-210's, the usage-limit wait ORC-215's.
+        out.trace.push(`timer.fired ${fired.kind}: no rule decides it yet`);
+        return out;
+      }
+      const job = workflow.jobs[fired.payload.job];
       if (!job) return out;
       if (ticket?.blocked && !refusal(event, ticket, job)) unblock(out, event, ticket);
       startRun(out, event, ticket, job, { input: job.input });

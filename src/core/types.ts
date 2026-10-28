@@ -52,6 +52,28 @@ export interface EffectResultPayload {
   attempts: number;
 }
 
+/**
+ * What each kind of timer carries (ORC-161). `decide` arms a timer (`Decision.timers`), the decision
+ * transaction writes it to `timers`, and its firing comes back through the inbox as `timer.fired`.
+ *
+ * - `debounce`: a rule with `debounce` regroups the messages that come in before it fires, then starts `job`.
+ * - `clarify.remind` / `clarify.expire`: the reminder of a `clarify` question at 24 h, then the block at
+ *   72 h, in the question's session; the rules that arm and decide them are ORC-210's.
+ * - `usage.reset`: the reset of a subscription's usage limit, after which the waiting runs resume; the
+ *   rule is ORC-215's.
+ */
+export interface TimerPayloads {
+  debounce: { job: string };
+  'clarify.remind': { linearSessionId?: string };
+  'clarify.expire': { linearSessionId?: string };
+  'usage.reset': { account?: string };
+}
+
+export type TimerKind = keyof TimerPayloads;
+
+/** A timer's kind and what it carries: what `timer.fired` brings back to `decide`. */
+export type TimerFired = { [K in TimerKind]: { kind: K; payload: TimerPayloads[K] } }[TimerKind];
+
 export interface EventPayloads {
   'ticket.delegated': { linearSessionId?: string; promptContext?: string; issue?: IssueSnapshot };
   'ticket.undelegated': Record<string, never>;
@@ -71,7 +93,8 @@ export interface EventPayloads {
   'run.finished': { runId: string; job: string; outcome: RunOutcome; costUsd: number; turns: number; lastText: string };
   'verify.passed': { runId: string; job: string };
   'verify.failed': { runId: string; job: string; failures: VerifyFailure[] };
-  'debounce.fired': { job: string };
+  /** A timer armed by a decision, fired through the inbox with id `timer:<key>:<fireAt>` (ORC-161). */
+  'timer.fired': TimerFired;
   'control.pause': Record<string, never>;
   'control.resume': Record<string, never>;
   'control.stop': Record<string, never>;
@@ -97,8 +120,11 @@ export const CREATES_TICKET: ReadonlySet<EventType> = new Set<EventType>(['ticke
 /** Event names of schema version 1, renamed in version 2. */
 export const RENAMED_V1: Readonly<Record<string, EventType>> = { 'ticket.moved': 'status.changed', 'label.added': 'label.changed' };
 
-/** Version of the event shape; `upcast` brings older journal rows up to it. */
-export const SCHEMA_VERSION = 2;
+/**
+ * Version of the event shape; `upcast` brings older journal rows up to it. Version 3 (ORC-161):
+ * `debounce.fired { job }` became `timer.fired { kind: 'debounce', payload: { job } }`.
+ */
+export const SCHEMA_VERSION = 3;
 
 /** `untrusted`: the event carries content from a source the factory does not trust. */
 export type Taint = 'trusted' | 'untrusted';

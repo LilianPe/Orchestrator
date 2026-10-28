@@ -11,7 +11,7 @@ import {
 } from '../core/dead-letter.js';
 import type { OutboxEffect } from '../core/decision.js';
 import { normalizeTicket, type QueueName, type FactoryEvent, type TicketState } from '../core/types.js';
-import type { StoredEvent } from '../core/upcast.js';
+import { upcastTimer, type StoredEvent, type StoredTimer } from '../core/upcast.js';
 import {
   decidedOn,
   decisionRecord,
@@ -165,6 +165,10 @@ export class SqliteStore implements Store {
 
   /** The inbox (ORC-147): `seq` keeps the arrival order, the unique id dedups. */
   async appendInbox(e: FactoryEvent | StoredEvent): Promise<boolean> {
+    return this.insertInbox(e);
+  }
+
+  private insertInbox(e: FactoryEvent | StoredEvent): boolean {
     const res = this.db
       .prepare('INSERT OR IGNORE INTO inbox (id, received_at, data) VALUES (?, ?, ?)')
       .run(e.id, this.now(), JSON.stringify(e));
@@ -522,12 +526,15 @@ export class SqliteStore implements Store {
          ) ORDER BY fire_at`,
       )
       .all(now) as { data: string }[];
-    return rows.map((r) => JSON.parse(r.data));
+    return rows.map((r) => upcastTimer(JSON.parse(r.data) as StoredTimer));
   }
 
-  async deleteTimer(key: string, fireAt?: number): Promise<void> {
-    if (fireAt === undefined) this.db.prepare('DELETE FROM timers WHERE key = ?').run(key);
-    else this.db.prepare('DELETE FROM timers WHERE key = ? AND fire_at = ?').run(key, fireAt);
+  async fireTimer(t: TimerRecord, event: FactoryEvent): Promise<boolean> {
+    return this.atomically(() => {
+      const armed = this.db.prepare('DELETE FROM timers WHERE key = ? AND fire_at = ?').run(t.key, t.fireAt);
+      if (Number(armed.changes) !== 1) return false;
+      return this.insertInbox(event);
+    });
   }
 
   async deleteTimersFor(projectId: string, ticketId: string): Promise<void> {

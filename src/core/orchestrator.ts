@@ -185,6 +185,10 @@ export class Orchestrator {
     return write;
   }
 
+  /** An inbox row was written outside `accept` (a timer's firing, ORC-161): the worker processes it now. */
+  wake(): void {
+    if (this.dispatchOpen) this.worker.kickInBackground();
+  }
 
   /**
    * Processes the inbox rows and outbox effects a previous process left (written, then a crash or

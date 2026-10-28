@@ -3,7 +3,7 @@ import { reduce } from './reduce.js';
 import { newTicketState, normalizeTicket, type EventPayloads, type EventType, type InternalEvent, type FactoryEvent, type TicketState } from './types.js';
 
 function ev<T extends EventType>(type: T, payload: EventPayloads[T]): FactoryEvent {
-  return { id: `e-${type}`, type, at: 1000, projectId: 'p', ticketId: 'REL-1', schemaVersion: 2, taint: 'trusted', payload } as FactoryEvent;
+  return { id: `e-${type}`, type, at: 1000, projectId: 'p', ticketId: 'REL-1', schemaVersion: 3, taint: 'trusted', payload } as FactoryEvent;
 }
 function ticket(patch: Partial<TicketState> = {}): TicketState {
   return { ...newTicketState('p', 'REL-1', 'Titre', 'todo', 0), ...patch };

@@ -1,7 +1,7 @@
 import type { AttemptLabels } from '../core/attempt-labels.js';
 import type { DeadLetter, RepairAction } from '../core/dead-letter.js';
 import type { OutboxEffect } from '../core/decision.js';
-import { TRUSTED, type InputKind, type QueueName, type FactoryEvent, type RunOutcome, type TicketState } from '../core/types.js';
+import { TRUSTED, type InputKind, type TimerFired, type QueueName, type FactoryEvent, type RunOutcome, type TicketState } from '../core/types.js';
 import type { StoredEvent } from '../core/upcast.js';
 
 /**
@@ -36,15 +36,18 @@ export interface RunRecord {
   sensitivePaths?: readonly string[];
 }
 
-export interface TimerRecord {
+/**
+ * An armed timer (ORC-161): a kind and what it carries (`TimerFired`), due at `fireAt`. One timer per
+ * `key` (`<ticket>:<slot>`): a decision that arms the same key again pushes it back.
+ */
+export type TimerRecord = TimerFired & {
   key: string;
   projectId: string;
   ticketId: string;
-  job: string;
   fireAt: number;
   /** Id of the event whose decision armed the timer (ORC-149): a failed effect of that decision disarms it. */
   armedBy?: string;
-}
+};
 
 export interface QueueItem {
   projectId: string;
@@ -314,12 +317,18 @@ export interface Store {
   findRunByToken(token: string): Promise<RunRecord | undefined>;
   putTimer(t: TimerRecord): Promise<void>;
   /**
-   * The timers due at `now`, except those whose arming decision still has an effect to run
-   * (ORC-149): a timer never fires before the effects of its decision, and a failed one disarms it.
+   * The timers due at `now`, oldest first, except those whose arming decision still has an effect
+   * to run (ORC-149): a timer never fires before the effects of its decision, and a failed one
+   * disarms it. Reading changes nothing: a timer stays due until `fireTimer` fires it.
    */
   dueTimers(now: number): Promise<TimerRecord[]>;
-  /** With `fireAt`, deletes the timer only while it is still armed for that time: a re-armed timer stays. */
-  deleteTimer(key: string, fireAt?: number): Promise<void>;
+  /**
+   * Fires a due timer (ORC-161), in one transaction: writes its event (`timer:<key>:<fireAt>`) to the
+   * inbox and deletes the timer, both or neither. Only the timer as read: one re-armed for another
+   * time (pushed back) or deleted meanwhile (a stop) is left as it is, and nothing is written. True
+   * when the inbox got a new row.
+   */
+  fireTimer(timer: TimerRecord, event: FactoryEvent): Promise<boolean>;
   deleteTimersFor(projectId: string, ticketId: string): Promise<void>;
   /** Deletes the timers armed by the decision of an event (`armedBy`). */
   deleteTimersArmedBy(eventId: string): Promise<void>;

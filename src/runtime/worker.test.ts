@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { newTicketState, type FactoryEvent } from '../core/types.js';
+import { newTicketState, SCHEMA_VERSION, type FactoryEvent } from '../core/types.js';
 import type { StoredEvent } from '../core/upcast.js';
 import { SqliteStore } from '../store/sqlite-store.js';
 import type { DecisionRequest, OutboxRow } from '../store/types.js';
@@ -256,7 +256,7 @@ describe('Worker: a decision that throws is dead-lettered (ORC-175)', () => {
     await store.appendInbox(future);
     await worker.kick();
     await settled(worker);
-    expect(await store.deadLetters('REL-1')).toMatchObject([{ eventId: 'future', error: 'event future: schema version 99 is newer than 2' }]);
+    expect(await store.deadLetters('REL-1')).toMatchObject([{ eventId: 'future', error: `event future: schema version 99 is newer than ${SCHEMA_VERSION}` }]);
   });
 
   it('keeps the row and retries it when the dead letter cannot be written: nothing is lost', async () => {
