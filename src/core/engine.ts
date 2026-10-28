@@ -1,4 +1,5 @@
 import type { JobSpec, Rule, Workflow } from '../config/workflow-schema.js';
+import { allowed, DEFAULT_MATRIX, refusalMessage, type AuthzAction, type AuthzMatrix, type Channel } from './authz.js';
 import { evalCondition } from './conditions.js';
 import type { Decision, Effect } from './decision.js';
 import { reduce } from './reduce.js';
@@ -167,11 +168,40 @@ function ruleMatches(rule: Rule, event: FactoryEvent, ticket: TicketState | unde
 
 /** Records a reply in the ticket's dev session: it waits in pendingFeedback for the next run that consumes it (I6). */
 function appendFeedback(out: Decision, event: FactoryEvent<'session.prompted'>): void {
-  out.events.push({
-    type: 'feedback.appended',
-    item: { author: event.payload.author, body: event.payload.body, at: event.at, source: 'session', taint: event.taint },
-  });
+  const item = { author: event.payload.author, body: event.payload.body, at: event.at, source: 'session' as const, taint: event.taint };
+  out.events.push({ type: 'feedback.appended', item: event.actor ? { ...item, authorId: event.actor } : item });
 }
+
+/** Prefix of the trace of a refused action (ORC-186): the orchestrator logs it. */
+export const AUTHZ_REFUSED = 'authz: refused ';
+
+/**
+ * Checks the matrix on the event's signed actor and the roles journaled with it (ORC-186). A refusal is
+ * traced and answered where the human acted: in the session of the event when it has one, else in a
+ * comment on the ticket; both go through the outbox, keyed by their effect id (ORC-162). An event
+ * without resolved roles (the factory's own, or journaled before ORC-186) is not checked.
+ */
+function authorize(out: Decision, event: FactoryEvent, ticket: TicketState | undefined, action: AuthzAction, channel: Channel, matrix: AuthzMatrix): boolean {
+  if (event.roles === undefined) return true;
+  const verdict = allowed({ action, channel }, event.actor, ticket, matrix, event.roles);
+  if (verdict.ok) return true;
+  out.trace.push(`${AUTHZ_REFUSED}${action} to ${event.actor ?? 'an unsigned actor'} (${verdict.reason}, roles: ${event.roles.join(', ') || 'none'})`);
+  const body = refusalMessage(action, matrix, verdict.reason);
+  const sessionId = (event.payload as { linearSessionId?: string }).linearSessionId;
+  out.effects.push(sessionId ? { kind: 'activity', type: 'response', body, linearSessionId: sessionId } : { kind: 'comment', body });
+  return false;
+}
+
+/**
+ * Human events the matrix may check (ORC-186): the orchestrator resolves their actor's roles before the
+ * decision, and journals them with the event.
+ */
+export const CHECKED_EVENTS: ReadonlySet<EventType> = new Set<EventType>([
+  'ticket.delegated', 'session.mentioned', 'command', 'session.prompted', 'label.changed', 'status.changed',
+]);
+
+/** A human acting on a run, by a rule (a label, a status change): relaunching it when the ticket is blocked, triggering it otherwise. */
+const ruleAction = (ticket: TicketState | undefined): AuthzAction => (ticket?.blocked ? 'relaunch_blocked' : 'trigger');
 
 function applyRule(out: Decision, rule: Rule, event: FactoryEvent, ticket: TicketState | undefined, workflow: Workflow): Decision {
   const job = rule.run ? workflow.jobs[rule.run]! : undefined;
@@ -254,8 +284,14 @@ function afterMerge(state: TicketState | undefined, event: FactoryEvent, workflo
   return workflow.jobs[event.payload.job]?.queue === 'dev' ? `merged: ignored run.finished for run ${event.payload.runId}` : undefined;
 }
 
-/** Pure: the same state, event and workflow always give the same decision. */
-export function decide(state: TicketState | undefined, event: FactoryEvent, workflow: Workflow): Decision {
+/** Events that trigger the agent (ORC-186): a delegation, a mention, a command. */
+const TRIGGERS = new Set<EventType>(['ticket.delegated', 'session.mentioned', 'command']);
+
+/**
+ * Pure: the same state, event, workflow and matrix always give the same decision. The authorization
+ * `matrix` (ORC-186) is the default one until the `factory/default` preset declares it (ORC-187).
+ */
+export function decide(state: TicketState | undefined, event: FactoryEvent, workflow: Workflow, matrix: AuthzMatrix = DEFAULT_MATRIX): Decision {
   const out = empty();
   const fence = staleAttempt(state, event, workflow);
   if (fence) {
@@ -270,6 +306,14 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
   // Rules read the ticket as it is once the event's own facts are recorded (new status, delegation…).
   const ticket = reduce(state, event);
   if (BUILT_IN.has(event.type)) out.trace.push(`built-in ${event.type}`);
+  if (TRIGGERS.has(event.type)) {
+    // The event's facts stay recorded (Linear did delegate, the session exists): only the factory's answer is refused.
+    if (!authorize(out, event, ticket, 'trigger', 'linear', matrix)) return out;
+    // The run's initiator, and its requester: who delegated it, as Linear signed it.
+    if (event.type === 'ticket.delegated' && event.actor && ticket && ticket.initiatorId !== event.actor) {
+      out.events.push({ type: 'ticket.patched', patch: { initiatorId: event.actor } });
+    }
+  }
   switch (event.type) {
     case 'control.pause':
       out.effects.push({ kind: 'set_paused', paused: true });
@@ -388,11 +432,15 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
     }
     case 'session.prompted':
       if (isQuestionSession(ticket, event.payload.linearSessionId)) {
+        // Only who may answer the agent may ask the answering agent a question.
+        if (!authorize(out, event, ticket, 'answer_clarify', 'linear_session', matrix)) return out;
         out.trace.push('built-in session.prompted (question session)');
         const ask = workflow.jobs['ask'];
         if (ask) startRun(out, event, ticket, ask, { input: 'thread', inputText: event.payload.body, linearSessionId: event.payload.linearSessionId });
         return out;
       }
+      // In the dev session, a reply relaunches a blocked ticket, or answers the agent; a refused one is not kept.
+      if (!authorize(out, event, ticket, ticket?.blocked ? 'relaunch_blocked' : 'answer_clarify', 'linear_session', matrix)) return out;
       // A reply in the dev session is kept whether a rule matches or not (I6).
       if (ticket) appendFeedback(out, event);
       break;
@@ -408,6 +456,10 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
   }
   out.trace.push(`on.${event.type}[${index}]`);
   const rule = rules[index]!;
+  // A label or a status change that starts a run (relaunch, rework, review) is a human action on the run.
+  if (rule.run && (event.type === 'label.changed' || event.type === 'status.changed') && !authorize(out, event, ticket, ruleAction(ticket), 'linear', matrix)) {
+    return out;
+  }
   if (event.type === 'pr.checks_failed' && rule.run) return fixRedCi(out, rule, event, ticket, workflow);
   return applyRule(out, rule, event, ticket, workflow);
 }

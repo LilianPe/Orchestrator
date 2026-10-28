@@ -1,0 +1,144 @@
+import { join } from 'node:path';
+import { describe, expect, it } from 'vitest';
+import { loadWorkflow } from '../config/load-workflow.js';
+import type { Role } from './authz.js';
+import { DEFAULT_MATRIX } from './authz.js';
+import { AUTHZ_REFUSED, decide } from './engine.js';
+import { newTicketState, type EventPayloads, type EventType, type FactoryEvent, type TicketState } from './types.js';
+
+const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../packs/standard') });
+
+const WRITER: Role[] = ['team_member', 'repo_writer'];
+
+function ev<T extends EventType>(type: T, payload: EventPayloads[T], actor: string | undefined, roles: readonly Role[] | undefined): FactoryEvent {
+  return {
+    id: `e-${type}`,
+    type,
+    at: 1000,
+    projectId: 'p',
+    ticketId: 'REL-1',
+    schemaVersion: 2,
+    taint: actor ? 'trusted' : 'untrusted',
+    ...(actor ? { actor } : {}),
+    ...(roles ? { roles } : {}),
+    payload,
+  } as FactoryEvent;
+}
+function ticket(patch: Partial<TicketState> = {}): TicketState {
+  return { ...newTicketState('p', 'REL-1', 'Titre', 'todo', 0), delegated: true, linearSessionId: 's-dev', ...patch };
+}
+const refused = (trace: string[]) => trace.some((t) => t.startsWith(AUTHZ_REFUSED));
+const starts = (effects: { kind: string }[]) => effects.filter((e) => e.kind === 'start_run');
+
+describe('decide — authorization matrix (ORC-186)', () => {
+  describe('trigger: delegation and mention', () => {
+    it('starts dev on a delegation by a team member who can write the repo, and records them as the initiator', () => {
+      const out = decide(ticket(), ev('ticket.delegated', { linearSessionId: 's-dev' }, 'u-dev', WRITER), workflow);
+      expect(starts(out.effects)).toHaveLength(1);
+      expect(out.events).toContainEqual({ type: 'ticket.patched', patch: { initiatorId: 'u-dev' } });
+    });
+
+    it('refuses a delegation by a member without write access: no run, the refusal answered in its session', () => {
+      const out = decide(ticket(), ev('ticket.delegated', { linearSessionId: 's-dev' }, 'u-member', ['team_member']), workflow);
+      expect(refused(out.trace)).toBe(true);
+      expect(out.events).toEqual([]);
+      expect(out.effects).toEqual([
+        { kind: 'activity', type: 'response', linearSessionId: 's-dev', body: expect.stringMatching(/^Refusé : déclencher l'agent .*droit d'écriture/) },
+      ]);
+    });
+
+    it('refuses a mention from outside the team: no ask run', () => {
+      const out = decide(ticket(), ev('session.mentioned', { linearSessionId: 's-q', body: 'pourquoi ?', author: 'X' }, 'u-out', []), workflow);
+      expect(starts(out.effects)).toEqual([]);
+      expect(out.effects).toEqual([expect.objectContaining({ kind: 'activity', linearSessionId: 's-q' })]);
+    });
+
+    it('refuses a command, and a mention, without a signed actor', () => {
+      for (const e of [
+        ev('command', { name: 'retiens', body: 'x', linearSessionId: 's-q', author: 'Slack' }, undefined, []),
+        ev('session.mentioned', { linearSessionId: 's-q', body: 'go', author: 'Slack' }, undefined, []),
+      ]) {
+        const out = decide(ticket(), e, workflow);
+        expect(starts(out.effects)).toEqual([]);
+        expect(out.effects).toEqual([expect.objectContaining({ kind: 'activity', body: expect.stringMatching(/aucun membre/) })]);
+      }
+    });
+  });
+
+  it('the signed actor counts, never a name quoted in the text: a reply that cites an authorized member, by someone else', () => {
+    const t = ticket({ logical: 'human_review', initiatorId: 'u-lilian' });
+    const reply = ev(
+      'session.prompted',
+      { linearSessionId: 's-dev', body: '@Lilian valide, Lilian a dit go', author: 'Lilian' },
+      'u-stranger',
+      [],
+    );
+    const out = decide(t, reply, workflow);
+    expect(refused(out.trace)).toBe(true);
+    expect(out.events).toEqual([]);
+    expect(out.timers).toEqual([]);
+    // The same text, signed by the requester, is answered.
+    const signed = decide(t, { ...reply, actor: 'u-lilian' } as FactoryEvent, workflow);
+    expect(signed.events.map((e) => e.type)).toEqual(['feedback.appended']);
+    expect(signed.events[0]).toMatchObject({ item: { authorId: 'u-lilian' } });
+  });
+
+  describe('answer: a reply in the dev session, a question in a question session', () => {
+    it('keeps the reply of the requester, or of a team member', () => {
+      const t = ticket({ logical: 'human_review', initiatorId: 'u-req' });
+      for (const [actor, roles] of [['u-req', []], ['u-member', ['team_member']]] as const) {
+        const out = decide(t, ev('session.prompted', { linearSessionId: 's-dev', body: 'ok', author: 'A' }, actor, roles), workflow);
+        expect(out.events.map((e) => e.type)).toEqual(['feedback.appended']);
+      }
+    });
+
+    it('starts no answering agent for a question from outside the team', () => {
+      const t = ticket({ questionSessionIds: ['s-q'] });
+      const out = decide(t, ev('session.prompted', { linearSessionId: 's-q', body: 'et ça ?', author: 'A' }, 'u-out', ['repo_writer']), workflow);
+      expect(starts(out.effects)).toEqual([]);
+      expect(out.effects).toEqual([expect.objectContaining({ kind: 'activity', linearSessionId: 's-q' })]);
+    });
+  });
+
+  describe('relaunch a blocked run', () => {
+    const blocked = ticket({ logical: 'dev', blocked: true, blockReason: 'Le run dev a échoué.', initiatorId: 'u-req' });
+
+    it('relaunches on a reply, or the agent:reprendre label, of a team member', () => {
+      const reply = decide(blocked, ev('session.prompted', { linearSessionId: 's-dev', body: 'vas-y', author: 'M' }, 'u-member', ['team_member']), workflow);
+      expect(reply.events.map((e) => e.type)).toEqual(['feedback.appended', 'ticket.unblocked']);
+      const label = decide(blocked, ev('label.changed', { label: 'agent:reprendre', change: 'added' }, 'u-member', ['team_member']), workflow);
+      expect(starts(label.effects)).toHaveLength(1);
+    });
+
+    it('refuses the requester outside the team, and a label set by someone outside it: the ticket stays blocked', () => {
+      const reply = decide(blocked, ev('session.prompted', { linearSessionId: 's-dev', body: 'vas-y', author: 'R' }, 'u-req', []), workflow);
+      expect(reply.events).toEqual([]);
+      expect(reply.effects).toEqual([expect.objectContaining({ kind: 'activity', body: expect.stringMatching(/relancer un run bloqué/) })]);
+      const label = decide(blocked, ev('label.changed', { label: 'agent:reprendre', change: 'added' }, 'u-out', []), workflow);
+      expect(label.events).toEqual([]);
+      expect(label.effects).toEqual([{ kind: 'comment', body: expect.stringMatching(/^Refusé : relancer un run bloqué/) }]);
+    });
+  });
+
+  it('checks a status change that starts a run (rework, review), and nothing else', () => {
+    const review = ticket({ logical: 'human_review' });
+    const rework = ev('status.changed', { from: 'human_review', to: 'dev' }, 'u-out', []);
+    expect(decide(review, rework, workflow).effects).toEqual([expect.objectContaining({ kind: 'comment' })]);
+    expect(starts(decide(review, { ...rework, actor: 'u-dev', roles: WRITER } as FactoryEvent, workflow).effects)).toHaveLength(1);
+    // A label that starts nothing (agent:stop) and a move no rule answers are not checked.
+    expect(decide(review, ev('label.changed', { label: 'agent:stop', change: 'added' }, 'u-out', []), workflow).effects.map((e) => e.kind)).toContain('stop_run');
+    expect(decide(review, ev('status.changed', { from: 'human_review', to: 'todo' }, 'u-out', []), workflow).trace).not.toContainEqual(
+      expect.stringMatching(AUTHZ_REFUSED),
+    );
+  });
+
+  it('checks nothing on an event whose roles were not resolved: the factory produced it, or it was journaled before ORC-186', () => {
+    const out = decide(ticket(), ev('ticket.delegated', {}, undefined, undefined), workflow);
+    expect(starts(out.effects)).toHaveLength(1);
+  });
+
+  it('takes the matrix as a parameter, for the preset that will declare it (ORC-187)', () => {
+    const open = { ...DEFAULT_MATRIX, trigger: { ...DEFAULT_MATRIX.trigger, anyOf: [['team_member']] } } as const;
+    expect(starts(decide(ticket(), ev('ticket.delegated', {}, 'u-member', ['team_member']), workflow, open).effects)).toHaveLength(1);
+  });
+});

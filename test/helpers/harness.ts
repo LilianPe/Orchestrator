@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import { FakeCheckRunner } from '../../src/adapters/checks/fake.js';
 import { FakeForge } from '../../src/adapters/forge/fake.js';
 import { FakePublisher } from '../../src/adapters/publisher/fake.js';
+import { CachedRoleResolver } from '../../src/adapters/roles/cached.js';
+import type { ProjectAuthz } from '../../src/adapters/roles/types.js';
 import { FakeRunner } from '../../src/adapters/runner/fake.js';
 import { FakeSandboxProvider } from '../../src/adapters/sandbox/fake.js';
 import { FakeTracker } from '../../src/adapters/tracker/fake.js';
@@ -15,7 +17,7 @@ import { FakeClock } from '../../src/core/clock.js';
 import { Orchestrator } from '../../src/core/orchestrator.js';
 import { Scheduler } from '../../src/core/scheduler.js';
 import { TimerService } from '../../src/core/timers.js';
-import type { EventPayloads, EventType, FactoryEvent } from '../../src/core/types.js';
+import type { EventPayloads, EventType, FactoryEvent, Taint } from '../../src/core/types.js';
 import type { Verifier } from '../../src/core/verify.js';
 import type { EffectRetry } from '../../src/runtime/outbox.js';
 import { SqliteStore } from '../../src/store/sqlite-store.js';
@@ -51,6 +53,11 @@ export function createHarness(
     processRetry?: { attempts: number; baseMs: number };
     /** Retries of an effect that throws (ORC-150); default one attempt: a failed effect dies at once and blocks its ticket. */
     effectRetry?: EffectRetry;
+    /**
+     * The project's designations (ORC-186): given, the orchestrator resolves the roles of human events
+     * through the harness's tracker (team members) and forge (repo permissions), and checks the matrix.
+     */
+    authz?: Partial<Pick<ProjectAuthz, 'maintainers' | 'validators' | 'githubLogins'>>;
   } = {},
 ) {
   if (opts.projectYaml !== undefined && opts.preset) throw new Error('createHarness: pass projectYaml or preset, not both');
@@ -65,6 +72,8 @@ export function createHarness(
   const sandboxes = new FakeSandboxProvider();
   const publisher = new FakePublisher(forge);
   const project = { id: 'p', repoPath: '/repo', teamKey: 'REL', workflow };
+  const authz = opts.authz && { teamKey: 'REL', repoPath: '/repo', maintainers: [], validators: [], githubLogins: {}, ...opts.authz };
+  const roles = authz && new CachedRoleResolver({ projects: (id) => (id === 'p' ? authz : undefined), team: tracker, repo: forge, now: () => clock.now() });
   let n = 0;
   const build = () => new Orchestrator({
     store,
@@ -86,13 +95,15 @@ export function createHarness(
     effectLeaseMs: opts.effectLeaseMs,
     processRetry: opts.processRetry,
     effectRetry: opts.effectRetry ?? { attempts: 1, baseMs: 1, capMs: 1 },
+    roles,
   });
   let orch = build();
   const timers = new TimerService(store, clock, (e) => orch.accept(e));
   let seq = 0;
 
-  async function send<T extends EventType>(type: T, payload: EventPayloads[T], ticketId = 'REL-1'): Promise<void> {
-    await orch.accept({ id: `t-${++seq}`, type, at: clock.now(), projectId: 'p', ticketId, payload } as FactoryEvent);
+  /** `signed`: the event's signed actor and taint, as the Linear ingestion stamps them (ORC-160). */
+  async function send<T extends EventType>(type: T, payload: EventPayloads[T], ticketId = 'REL-1', signed: { actor?: string; taint?: Taint } = {}): Promise<void> {
+    await orch.accept({ id: `t-${++seq}`, type, at: clock.now(), projectId: 'p', ticketId, ...signed, payload } as FactoryEvent);
     await orch.drained();
   }
 

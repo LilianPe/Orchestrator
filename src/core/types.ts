@@ -1,3 +1,5 @@
+import type { Role } from './authz.js';
+
 export const LOGICAL_STATES = ['todo', 'dev', 'human_review', 'ai_review', 'ready', 'done'] as const;
 export type LogicalState = (typeof LOGICAL_STATES)[number];
 export function isLogicalState(v: string): v is LogicalState {
@@ -9,7 +11,10 @@ export type InputKind = 'feedback' | 'ci_failures' | 'thread' | 'verify_failures
 export type QueueName = 'dev' | 'questions';
 
 export interface FeedbackItem {
+  /** The author's name, for the prompt. */
   author: string;
+  /** Signed actor of the event that brought the item (ORC-186); absent on items from the forge or written before. */
+  authorId?: string;
   body: string;
   at: number;
   source: 'session' | 'review' | 'label' | 'verify' | 'ci';
@@ -119,6 +124,13 @@ export type FactoryEvent<T extends EventType = EventType> = {
      * version bump, older rows lack it.
      */
     actor?: string;
+    /**
+     * Roles of `actor` on the project, resolved before the decision for a human event (ORC-186) and
+     * journaled with it, so that a replay checks the matrix on the same roles. Empty without an actor.
+     * Absent on what the factory produces and on rows journaled before ORC-186: `decide` checks no
+     * authorization on them.
+     */
+    roles?: readonly Role[];
     payload: EventPayloads[K];
   };
 }[T];
@@ -129,7 +141,7 @@ export type DecidedEvent =
   | { type: 'ticket.unblocked' }
   | {
       type: 'ticket.patched';
-      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId'>>;
+      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId'>>;
     }
   | { type: 'feedback.appended'; item: FeedbackItem }
   /** The ticket's dev work is stopped: nothing pending, no verification awaited. */
@@ -190,6 +202,11 @@ export interface TicketState {
    * `limits.ciFixAttempts` (I5, ORC-270). The AI review loop does not share it yet (ORC-184, ORC-187).
    */
   ciFixAttempts: number;
+  /**
+   * Signed actor of the last authorized delegation (ORC-186): the run's initiator, who never validates
+   * its spec, and its requester, who may answer it.
+   */
+  initiatorId?: string;
   pendingFeedback: FeedbackItem[];
   priority: number;
   costUsd: number;

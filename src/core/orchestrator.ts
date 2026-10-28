@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import type { Forge } from '../adapters/forge/types.js';
+import type { RoleResolver } from '../adapters/roles/types.js';
 import type { RunHandle, RunResult, Runner } from '../adapters/runner/types.js';
 import { ActivityRelay } from '../adapters/tracker/activity-relay.js';
 import { labelEchoKey, type ActivityInput, type Tracker } from '../adapters/tracker/types.js';
@@ -23,7 +24,7 @@ import {
 import type { EventBus } from './bus.js';
 import type { Clock } from './clock.js';
 import type { Effect, OutboxEffect } from './decision.js';
-import { decide, isFenced, refusesDevWork, sensitivePathsAtLaunch, taintedKnowledge } from './engine.js';
+import { AUTHZ_REFUSED, CHECKED_EVENTS, decide, isFenced, refusesDevWork, sensitivePathsAtLaunch, taintedKnowledge } from './engine.js';
 import { attemptLabels, packFingerprints } from './attempt-labels.js';
 import { pickupFailures } from './pickup.js';
 import { buildPrompt, formatFeedback, formatVerifyFailures } from './prompt.js';
@@ -94,6 +95,12 @@ export interface OrchestratorDeps {
   processRetry?: { attempts: number; baseMs: number };
   /** The factory build's commit, labelled on each attempt; defaults to `FACTORY_COMMIT`, else null (ORC-226). */
   factoryCommit?: string | null;
+  /**
+   * Resolves the roles of a human event's signed actor before its decision (ORC-186): `decide` then
+   * checks the authorization matrix on them. Without it (tests), no event carries roles and nothing is
+   * checked; the daemon always passes one.
+   */
+  roles?: RoleResolver;
 }
 
 interface StartOpts {
@@ -118,6 +125,12 @@ const INSTANCE_KEY = 'instance-id';
 interface EffectKey {
   id: string;
   replay: boolean;
+}
+
+/** The log line of an action the matrix refused (ORC-186). */
+function refusedNote(event: FactoryEvent, trace: readonly string[]): string | undefined {
+  const refused = trace.find((t) => t.startsWith(AUTHZ_REFUSED));
+  return refused && `${event.type} ${event.id} on ${event.ticketId ?? '*'}: ${refused}`;
 }
 
 export function logicalFromName(states: Record<LogicalState, string>, name: string): LogicalState | undefined {
@@ -165,7 +178,7 @@ export class Orchestrator {
     this.worker = new Worker({
       store: d.store,
       log: (level, message) => this.log(level, message),
-      prepare: (event) => this.withSnapshot(event),
+      prepare: async (event) => this.withRoles(await this.withSnapshot(event)),
       request: (event) => this.request(event),
       committed: (event, outcome) => this.committed(event, outcome),
       execute: (row) => this.execute(row),
@@ -457,6 +470,18 @@ export class Orchestrator {
     return { ...event, payload: { ...payload, issue: { title: issue.title, logical, priority: issue.priority } } } as FactoryEvent;
   }
 
+  /**
+   * A human event gets its actor's roles before its decision (ORC-186), journaled with it, so that
+   * `decide` stays pure and a replay checks the matrix on the same roles. No actor, no roles: the
+   * event is then refused whatever it asks. A resolution that fails throws: the event waits and is
+   * retried, never decided on roles that may be wrong.
+   */
+  private async withRoles(event: FactoryEvent): Promise<FactoryEvent> {
+    const resolver = this.d.roles;
+    if (!resolver || event.roles !== undefined || event.projectId === '*' || !CHECKED_EVENTS.has(event.type)) return event;
+    return { ...event, roles: event.actor ? await resolver.rolesOf(event.projectId, event.actor) : [] };
+  }
+
   /** The decision transaction of an event (ORC-149): `decide` runs in the store, under the ticket's lock. */
   private request(event: FactoryEvent): DecisionRequest {
     const project = event.projectId === '*' ? this.d.projects[0] : this.project(event.projectId);
@@ -494,7 +519,9 @@ export class Orchestrator {
             : [],
           // A stop deletes the ticket's timers before this decision arms its own, as `stop_run` did.
           clearTimers: decision.effects.some((c) => c.kind === 'stop_run' && !c.linearSessionId),
-          note: isFenced(decision) ? `ignored stale ${event.type} for ${event.ticketId ?? '*'}: ${decision.trace[0]}` : undefined,
+          note: isFenced(decision)
+            ? `ignored stale ${event.type} for ${event.ticketId ?? '*'}: ${decision.trace[0]}`
+            : refusedNote(event, decision.trace),
         };
       },
     };
