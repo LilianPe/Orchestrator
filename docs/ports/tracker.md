@@ -14,7 +14,7 @@ Le suivi des tickets : lire un ticket, le déplacer, l'étiqueter, commenter, et
 | `listDelegated(teamKey)` | les tickets de l'équipe délégués à l'app, et seulement eux | lecture | — |
 | `search(term)` | les tickets que le terme trouve, dont ceux qui l'ont dans leur titre, avec URL et statut | lecture | — |
 | `moveTo(id, statut)` | le ticket est dans ce statut | sans effet de plus | rejette sur un ticket inconnu ; sur un statut que l'équipe n'a pas, rejette et laisse le statut |
-| `setLabels(id, add, remove)` | l'état final : `add` posés (créés s'ils manquent), `remove` retirés ; retirer un label absent est ignoré ; rien n'est écrit si le ticket l'a déjà | n'écrit rien | rejette sur un ticket inconnu |
+| `setLabels(id, add, remove)` | l'état final : `add` posés (créés s'ils manquent), `remove` retirés ; retirer un label absent est ignoré ; un label d'un groupe exclusif (groupe de labels Linear, `FakeTracker.setLabelGroup`) retire les autres labels de son groupe ; rien n'est écrit si le ticket l'a déjà | n'écrit rien | rejette sur un ticket inconnu |
 | `comment(id, corps, effectId?)` | un commentaire sur le ticket ; avec `effectId`, il porte `<!-- factory:effect=<id> -->` (et, chez Linear, un id client dérivé de l'effet) | **écrit un second commentaire** : l'appelant cherche d'abord avec `findComment` | rejette sur un ticket inconnu |
 | `findComment(id, effectId)` | l'id du commentaire du ticket écrit pour cet effet, `undefined` sinon | lecture | rejette sur un ticket inconnu |
 | `ensureSession(id)` | un identifiant de session d'agent sur le ticket | peut ouvrir une autre session | rejette sur un ticket inconnu |
