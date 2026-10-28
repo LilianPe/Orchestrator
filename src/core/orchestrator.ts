@@ -304,6 +304,8 @@ export class Orchestrator {
     const cut = [...(await store.runsByStatus('running')), ...(await store.runsByStatus('interrupted'))];
     for (const run of cut) {
       await store.putRun({ ...run, status: run.status === 'interrupted' ? 'stopped' : 'failure', endedAt: run.endedAt ?? this.d.clock.now() });
+      // Nothing launches a question's cut run again, not even its start taken up again (its mark
+      // names this run, ORC-277): asking again is the one way to an answer, and the only notice.
       if (run.queue === 'questions' && run.linearSessionId) {
         this.recoveryNotices.push({
           sessionId: run.linearSessionId,
@@ -663,11 +665,12 @@ export class Orchestrator {
       case 'start_run': {
         // Marked once the start is handled (launched, set pending or queued): a replay (a lost lease)
         // must not set the same start pending behind it, which would call the model a second time.
-        // A crash between the start and this mark kills the run too: recover() blocks the ticket, and a
-        // replayed dev start is refused on it.
+        // A launch marks it earlier, with its run's id, just before the run is written (ORC-277): a
+        // crash after that write is recover()'s (a ticket blocked, a question to ask again), and a
+        // replay that finds the run launches nothing more, a question's run included.
         const mark = `effect:${key.id}:started`;
-        if (key.replay && (await store.getMeta(mark)) !== undefined) return { deduplicated: true };
-        await this.startRun(project, ticketId, c);
+        if (key.replay && (await this.startHandled(mark))) return { deduplicated: true };
+        await this.startRun(project, ticketId, c, undefined, undefined, mark);
         await store.setMeta(mark, '1');
         return;
       }
@@ -766,6 +769,7 @@ export class Orchestrator {
     opts: StartOpts,
     admitted?: () => void,
     recorded?: () => Promise<void>,
+    mark?: string,
   ): Promise<'queued' | 'done'> {
     const job = project.workflow.jobs[opts.job];
     if (!job) {
@@ -839,7 +843,7 @@ export class Orchestrator {
     admitted?.();
     if (slot === null) return requeue();
     try {
-      await this.launch(project, ticketId, job, opts, slot, key, recorded);
+      await this.launch(project, ticketId, job, opts, slot, key, recorded, mark);
     } catch (err) {
       this.d.scheduler.release(key);
       let fresh = await this.ticket(project.id, ticketId);
@@ -862,6 +866,17 @@ export class Orchestrator {
     return 'done';
   }
 
+  /**
+   * Whether the start an effect's mark names was handled: `1` once it is (launched, set pending,
+   * queued, refused), a run's id from the launch on. A run id whose run was never written is a launch
+   * cut before it: not handled, the start runs again.
+   */
+  private async startHandled(mark: string): Promise<boolean> {
+    const value = await this.d.store.getMeta(mark);
+    if (value === undefined) return false;
+    return value === '1' || (await this.d.store.getRun(value)) !== undefined;
+  }
+
   private async noteBudget(project: ProjectRuntime, ticketId: string): Promise<void> {
     const day = new Date(this.d.clock.now()).toISOString().slice(0, 10);
     const key = `budget:${day}:${project.id}:${ticketId}`;
@@ -881,6 +896,7 @@ export class Orchestrator {
     slot: number,
     key: string,
     recorded?: () => Promise<void>,
+    mark?: string,
   ): Promise<void> {
     const { tracker, store, clock, workspaces, forge } = this.d;
     const wf = project.workflow;
@@ -991,6 +1007,9 @@ export class Orchestrator {
       labels,
       sensitivePaths,
     };
+    // The effect's start mark names the run before it is written (ORC-277): a crash before the
+    // write leaves a mark without a run, and the replayed start launches it; after, the replay finds it.
+    if (mark) await store.setMeta(mark, runId);
     await store.putRun(run);
     await this.apply(t, { type: 'run.started', runId, job: job.name, queue: job.queue, claudeSessionId, feedbackConsumed: kind === 'feedback' });
     // The run is written: a queued item it came from leaves the queue now (a crash from here on is recover()'s).
