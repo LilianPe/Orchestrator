@@ -1,6 +1,5 @@
 import fc from 'fast-check';
 import type { Role } from '../../src/core/authz.js';
-import { CHECKED_EVENTS } from '../../src/core/engine.js';
 import {
   LOGICAL_STATES,
   TRUSTED,
@@ -112,6 +111,8 @@ export const ACTORS: Readonly<Record<string, readonly Role[]>> = {
   'u-member': ['team_member'],
   'u-out': ['repo_writer'],
 };
+/** Events a human sends through Linear: the orchestrator may resolve roles for them (`mayCheck`). */
+const HUMAN: ReadonlySet<EventType> = new Set<EventType>(['ticket.delegated', 'session.mentioned', 'command', 'session.prompted', 'label.changed', 'status.changed']);
 const signedBy: fc.Arbitrary<Signed | undefined> = fc.oneof(
   { arbitrary: fc.constant(undefined), weight: 6 },
   { arbitrary: fc.constantFrom(...Object.keys(ACTORS)).map((actor): Signed => ({ actor, roles: ACTORS[actor]! })), weight: 2 },
@@ -135,7 +136,7 @@ const FACTORY_PRODUCED: ReadonlySet<EventType> = new Set<EventType>([
 const external = (draft: fc.Arbitrary<Draft>): fc.Arbitrary<DraftEntry> =>
   fc.record({ draft, roll: fc.integer({ min: 0, max: 4 }), signed: signedBy }).map(({ draft: d, roll, signed }): DraftEntry => {
     const untrusted = roll === 0 && !FACTORY_PRODUCED.has(d.type);
-    if (!signed || !CHECKED_EVENTS.has(d.type)) return { kind: 'external', draft: d, untrusted };
+    if (!signed || !HUMAN.has(d.type)) return { kind: 'external', draft: d, untrusted };
     // An untrusted event has no signed actor (ORC-160): its roles, resolved for nobody, are none.
     return { kind: 'external', draft: d, untrusted, signed: untrusted ? { roles: [] } : signed };
   });

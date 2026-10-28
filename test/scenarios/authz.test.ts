@@ -85,6 +85,19 @@ describe('authorization matrix, end to end (ORC-186)', () => {
     expect(h.tracker.activities('as-q2')).toEqual([{ type: 'response', body: expect.stringMatching(/^Refusé/) }]);
   });
 
+  it('does not wait on Linear or GitHub for an event the matrix will not check', async () => {
+    const h = setup();
+    await h.send('ticket.delegated', { linearSessionId: 'as-1' }, 'REL-1', { actor: 'user-lilian' });
+    h.forge.offline = true;
+    h.tracker.teamMembers = async () => {
+      throw new Error('Linear unreachable');
+    };
+    await h.send('label.changed', { label: 'agent:reprendre', change: 'removed' }, 'REL-1', { actor: 'user-lilian' });
+    await h.send('status.changed', { from: 'dev', to: 'human_review' }, 'REL-1', { actor: 'user-lilian' });
+    expect(await h.store.pendingInbox(10)).toEqual([]);
+    expect(await h.ticket()).toMatchObject({ logical: 'human_review' });
+  });
+
   it('holds the event while its roles cannot be read, and never decides it without them', async () => {
     const h = setup();
     h.forge.offline = true;

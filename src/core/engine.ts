@@ -178,8 +178,10 @@ export const AUTHZ_REFUSED = 'authz: refused ';
 /**
  * Checks the matrix on the event's signed actor and the roles journaled with it (ORC-186). A refusal is
  * traced and answered where the human acted: in the session of the event when it has one, else in a
- * comment on the ticket; both go through the outbox, keyed by their effect id (ORC-162). An event
- * without resolved roles (the factory's own, or journaled before ORC-186) is not checked.
+ * comment on the ticket; both go through the outbox, keyed by their effect id (ORC-162). An event with
+ * neither a signed actor nor a session (a delegation or a move the reconciliation found, a change by an
+ * integration) names no human to answer: its refusal is only traced, and logged. An event without
+ * resolved roles (the factory's own, or journaled before ORC-186) is not checked.
  */
 function authorize(out: Decision, event: FactoryEvent, ticket: TicketState | undefined, action: AuthzAction, channel: Channel, matrix: AuthzMatrix): boolean {
   if (event.roles === undefined) return true;
@@ -188,17 +190,37 @@ function authorize(out: Decision, event: FactoryEvent, ticket: TicketState | und
   out.trace.push(`${AUTHZ_REFUSED}${action} to ${event.actor ?? 'an unsigned actor'} (${verdict.reason}, roles: ${event.roles.join(', ') || 'none'})`);
   const body = refusalMessage(action, matrix, verdict.reason);
   const sessionId = (event.payload as { linearSessionId?: string }).linearSessionId;
-  out.effects.push(sessionId ? { kind: 'activity', type: 'response', body, linearSessionId: sessionId } : { kind: 'comment', body });
+  if (sessionId) out.effects.push({ kind: 'activity', type: 'response', body, linearSessionId: sessionId });
+  else if (event.actor) out.effects.push({ kind: 'comment', body });
   return false;
 }
 
 /**
- * Human events the matrix may check (ORC-186): the orchestrator resolves their actor's roles before the
- * decision, and journals them with the event.
+ * Whether `decide` may check the matrix on `event` under `workflow` (ORC-186): the orchestrator resolves
+ * the actor's roles, and journals them, only then, so that an event the matrix never checks (a label
+ * taken off, a move no `run` rule answers) does not wait on Linear or GitHub. It may say yes for an
+ * event `decide` ends up not checking (a rule's `when` is not read here), never the other way round:
+ * an event without roles is not checked.
  */
-export const CHECKED_EVENTS: ReadonlySet<EventType> = new Set<EventType>([
-  'ticket.delegated', 'session.mentioned', 'command', 'session.prompted', 'label.changed', 'status.changed',
-]);
+export function mayCheck(event: FactoryEvent, workflow: Workflow): boolean {
+  switch (event.type) {
+    case 'ticket.delegated':
+    case 'session.mentioned':
+    case 'command':
+    case 'session.prompted':
+      return true;
+    case 'label.changed': {
+      const { label, change } = event.payload;
+      return change === 'added' && (workflow.on['label.changed'] ?? []).some((r) => !!r.run && (r.label === undefined || r.label === label));
+    }
+    case 'status.changed': {
+      const { from, to } = event.payload;
+      return (workflow.on['status.changed'] ?? []).some((r) => !!r.run && (!r.from || r.from === from) && (!r.to || r.to === to));
+    }
+    default:
+      return false;
+  }
+}
 
 /** A human acting on a run, by a rule (a label, a status change): relaunching it when the ticket is blocked, triggering it otherwise. */
 const ruleAction = (ticket: TicketState | undefined): AuthzAction => (ticket?.blocked ? 'relaunch_blocked' : 'trigger');

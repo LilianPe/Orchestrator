@@ -1,6 +1,6 @@
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
-import { AUTHZ_REFUSED, decide, isFenced, SENSITIVE_PATHS } from '../../src/core/engine.js';
+import { AUTHZ_REFUSED, decide, isFenced, mayCheck, SENSITIVE_PATHS } from '../../src/core/engine.js';
 import { reduce } from '../../src/core/reduce.js';
 import {
   TRUSTED,
@@ -469,7 +469,7 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
     const isRefusal = (step: Decided) => step.decision.trace.some((t) => t.startsWith(AUTHZ_REFUSED));
 
     it(
-      'a refused human event changes no work: no run, no timer, no feedback, no unblock, only its answer, once',
+      'a refused human event changes no work: no run, no timer, no feedback, no unblock, only its answer, once, to a signed actor or in a session',
       () => {
         holds((s) => {
           for (const step of decided(run(s))) {
@@ -477,9 +477,12 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
             expect(step.decision.events, 'refused event recorded a change').toEqual([]);
             expect(step.decision.timers, 'refused event armed a timer').toEqual([]);
             expect(step.launches, 'refused event launched a run').toEqual([]);
-            expect(step.decision.effects, 'refusal not answered once').toHaveLength(1);
-            expect(['activity', 'comment']).toContain(step.decision.effects[0]!.kind);
+            const answered = !!step.event.actor || 'linearSessionId' in step.event.payload;
+            expect(step.decision.effects, 'refusal not answered once').toHaveLength(answered ? 1 : 0);
+            for (const e of step.decision.effects) expect(['activity', 'comment']).toContain(e.kind);
             expect(step.event.roles, 'refused an event whose roles were not resolved').toBeDefined();
+            // The orchestrator resolves roles only where `mayCheck` says the matrix may be checked.
+            expect(mayCheck(step.event, wf), `${step.event.type} refused where the orchestrator resolves no roles`).toBe(true);
           }
         });
       },

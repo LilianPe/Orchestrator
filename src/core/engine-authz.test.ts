@@ -1,9 +1,8 @@
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { loadWorkflow } from '../config/load-workflow.js';
-import type { Role } from './authz.js';
-import { DEFAULT_MATRIX } from './authz.js';
-import { AUTHZ_REFUSED, decide } from './engine.js';
+import { DEFAULT_MATRIX, type Role } from './authz.js';
+import { AUTHZ_REFUSED, decide, mayCheck } from './engine.js';
 import { newTicketState, type EventPayloads, type EventType, type FactoryEvent, type TicketState } from './types.js';
 
 const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../packs/standard') });
@@ -130,6 +129,27 @@ describe('decide — authorization matrix (ORC-186)', () => {
     expect(decide(review, ev('status.changed', { from: 'human_review', to: 'todo' }, 'u-out', []), workflow).trace).not.toContainEqual(
       expect.stringMatching(AUTHZ_REFUSED),
     );
+  });
+
+  it('answers no one when the refused event has neither a signed actor nor a session: a reconciled delegation, an integration', () => {
+    const reconciled = decide(ticket({ delegated: false }), ev('ticket.delegated', {}, undefined, []), workflow);
+    expect(refused(reconciled.trace)).toBe(true);
+    expect(reconciled.effects).toEqual([]);
+    const integration = decide(ticket({ logical: 'human_review' }), ev('status.changed', { from: 'human_review', to: 'dev' }, undefined, []), workflow);
+    expect(refused(integration.trace)).toBe(true);
+    expect(integration.effects).toEqual([]);
+  });
+
+  it('says which events the matrix may check, so the orchestrator resolves roles only for them', () => {
+    const e = <T extends EventType>(type: T, payload: EventPayloads[T]) => ev(type, payload, 'u', undefined);
+    expect(mayCheck(e('ticket.delegated', {}), workflow)).toBe(true);
+    expect(mayCheck(e('session.prompted', { linearSessionId: 's', body: '', author: 'A' }), workflow)).toBe(true);
+    expect(mayCheck(e('label.changed', { label: 'agent:reprendre', change: 'added' }), workflow)).toBe(true);
+    expect(mayCheck(e('label.changed', { label: 'agent:reprendre', change: 'removed' }), workflow)).toBe(false);
+    expect(mayCheck(e('label.changed', { label: 'agent:stop', change: 'added' }), workflow)).toBe(false);
+    expect(mayCheck(e('status.changed', { from: 'human_review', to: 'dev' }), workflow)).toBe(true);
+    expect(mayCheck(e('status.changed', { from: 'dev', to: 'human_review' }), workflow)).toBe(false);
+    expect(mayCheck(e('session.stopped', {}), workflow)).toBe(false);
   });
 
   it('checks nothing on an event whose roles were not resolved: the factory produced it, or it was journaled before ORC-186', () => {

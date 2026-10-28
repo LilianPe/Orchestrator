@@ -24,7 +24,7 @@ import {
 import type { EventBus } from './bus.js';
 import type { Clock } from './clock.js';
 import type { Effect, OutboxEffect } from './decision.js';
-import { AUTHZ_REFUSED, CHECKED_EVENTS, decide, isFenced, refusesDevWork, sensitivePathsAtLaunch, taintedKnowledge } from './engine.js';
+import { AUTHZ_REFUSED, decide, isFenced, mayCheck, refusesDevWork, sensitivePathsAtLaunch, taintedKnowledge } from './engine.js';
 import { attemptLabels, packFingerprints } from './attempt-labels.js';
 import { pickupFailures } from './pickup.js';
 import { buildPrompt, formatFeedback, formatVerifyFailures } from './prompt.js';
@@ -471,14 +471,19 @@ export class Orchestrator {
   }
 
   /**
-   * A human event gets its actor's roles before its decision (ORC-186), journaled with it, so that
-   * `decide` stays pure and a replay checks the matrix on the same roles. No actor, no roles: the
-   * event is then refused whatever it asks. A resolution that fails throws: the event waits and is
-   * retried, never decided on roles that may be wrong.
+   * A human event `decide` may check gets its actor's roles before its decision (ORC-186), journaled
+   * with it, so that `decide` stays pure and a replay checks the matrix on the same roles. No actor, no
+   * roles: the event is then refused whatever it asks. A resolution that fails throws: the event waits
+   * and is retried, never decided on roles that may be wrong. An event the matrix will not check (on a
+   * ticket the factory does not track, or that no rule with a run answers in the ticket's workflow)
+   * gets none, and never waits on Linear or GitHub.
    */
   private async withRoles(event: FactoryEvent): Promise<FactoryEvent> {
     const resolver = this.d.roles;
-    if (!resolver || event.roles !== undefined || event.projectId === '*' || !CHECKED_EVENTS.has(event.type)) return event;
+    if (!resolver || event.roles !== undefined || event.projectId === '*' || !event.ticketId) return event;
+    if (!CREATES_TICKET.has(event.type) && !(await this.d.store.getTicket(event.projectId, event.ticketId))) return event;
+    const project = await this.runtimeFor(event.projectId, event.ticketId);
+    if (!project || !mayCheck(event, project.workflow)) return event;
     return { ...event, roles: event.actor ? await resolver.rolesOf(event.projectId, event.actor) : [] };
   }
 
