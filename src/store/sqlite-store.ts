@@ -123,7 +123,7 @@ const rank = (priority: number) => (priority === 0 ? 5 : priority);
 export class SqliteStore implements Store {
   private db: DatabaseSync;
 
-  /** `now` stamps the inbox rows, like PgStore's injectable clock. */
+  /** `now` is the store's clock, like PgStore's injectable one: inbox stamps, leases, backoffs, due rows. */
   constructor(
     path: string,
     private readonly now: () => number = () => Date.now(),
@@ -225,7 +225,7 @@ export class SqliteStore implements Store {
       .prepare(`SELECT id, status, available_at FROM outbox WHERE project_id = ? AND ticket_id IS ? AND status IN ('pending', 'running') ORDER BY seq, i`)
       .all(event.projectId, ticketId) as { id: string; status: string; available_at: number }[];
     // Held back by its backoff (nothing running): a stop of the ticket's work may go first (ORC-150).
-    const backedOff = open.length > 0 && open.every((r) => r.status === 'pending') && Number(open[0]!.available_at) > Date.now();
+    const backedOff = open.length > 0 && open.every((r) => r.status === 'pending') && Number(open[0]!.available_at) > this.now();
     if (open.length > 0 && !backedOff) return { status: 'waiting', reason: `effect ${open[0]!.id} is unfinished` };
     if (jumped && !backedOff) return { status: 'waiting', reason: `${first!.id} comes first` };
     if (this.db.prepare('SELECT 1 FROM events WHERE id = ?').get(event.id)) {
@@ -302,7 +302,7 @@ export class SqliteStore implements Store {
       .prepare(`SELECT * FROM outbox WHERE project_id = ? AND ticket_id IS ? AND status IN ('pending', 'running') ORDER BY seq, i LIMIT 1`)
       .get(projectId, ticketId ?? null) as OutboxSqlRow | undefined;
     if (!row) return undefined;
-    const now = Date.now();
+    const now = this.now();
     if (row.status === 'running' && (row.lease_until ?? 0) >= now) return 'busy';
     // Waiting for its retry: the ticket's later rows wait behind it.
     if (row.status === 'pending' && Number(row.available_at) > now) return 'busy';
@@ -316,7 +316,7 @@ export class SqliteStore implements Store {
   async renewEffect(id: string, lease: string, leaseMs: number): Promise<boolean> {
     const res = this.db
       .prepare(`UPDATE outbox SET lease_until = ? WHERE id = ? AND status = 'running' AND lease = ?`)
-      .run(Date.now() + leaseMs, id, lease);
+      .run(this.now() + leaseMs, id, lease);
     return Number(res.changes) === 1;
   }
 
@@ -327,7 +327,7 @@ export class SqliteStore implements Store {
       .get(id, lease ?? null, lease ?? null) as OutboxSqlRow | undefined;
   }
 
-  async completeEffect(id: string, lease?: string, at = Date.now()): Promise<boolean> {
+  async completeEffect(id: string, lease?: string, at = this.now()): Promise<boolean> {
     return this.atomically(() => {
       const row = this.heldRow(id, lease);
       if (!row) return false;
@@ -342,11 +342,11 @@ export class SqliteStore implements Store {
       .prepare(
         `UPDATE outbox SET status = 'pending', lease = NULL, lease_until = NULL, available_at = ?, error = ? WHERE id = ? AND status = 'running' AND lease = ?`,
       )
-      .run(Date.now() + delayMs, error, id, lease);
+      .run(this.now() + delayMs, error, id, lease);
     return Number(res.changes) === 1;
   }
 
-  async failEffect(id: string, lease: string, error: string, at = Date.now()): Promise<boolean> {
+  async failEffect(id: string, lease: string, error: string, at = this.now()): Promise<boolean> {
     return this.atomically(() => {
       const row = this.heldRow(id, lease);
       if (!row) return false;
@@ -413,7 +413,7 @@ export class SqliteStore implements Store {
   }
 
   async effectTickets(): Promise<{ projectId: string; ticketId?: string }[]> {
-    const now = Date.now();
+    const now = this.now();
     const rows = this.db
       .prepare(
         `SELECT DISTINCT o.project_id, o.ticket_id FROM outbox o
@@ -563,7 +563,7 @@ export class SqliteStore implements Store {
 
   /** One process serves the SQLite store: the lease only brings back an item lost by a crash. */
   async claimQueued(queue: QueueName, leaseMs: number): Promise<QueueClaim | undefined> {
-    const now = Date.now();
+    const now = this.now();
     const row = this.db
       .prepare(
         'SELECT project_id, ticket_id, job, data FROM queue WHERE queue = ? AND (lease_until IS NULL OR lease_until < ?) ORDER BY rank, enqueued_at LIMIT 1',
@@ -581,7 +581,7 @@ export class SqliteStore implements Store {
     const { projectId, ticketId, job } = claim.item;
     const res = this.db
       .prepare('UPDATE queue SET lease_until = ? WHERE project_id = ? AND ticket_id = ? AND job = ? AND lease = ?')
-      .run(Date.now() + leaseMs, projectId, ticketId, job, claim.lease);
+      .run(this.now() + leaseMs, projectId, ticketId, job, claim.lease);
     return Number(res.changes) === 1;
   }
 
@@ -604,7 +604,7 @@ export class SqliteStore implements Store {
   async listQueue(): Promise<QueueItem[]> {
     const rows = this.db
       .prepare('SELECT data FROM queue WHERE lease_until IS NULL OR lease_until < ? ORDER BY rank, enqueued_at')
-      .all(Date.now()) as { data: string }[];
+      .all(this.now()) as { data: string }[];
     return rows.map((r) => JSON.parse(r.data));
   }
 

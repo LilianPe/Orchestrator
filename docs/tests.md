@@ -1,6 +1,6 @@
 # Tests et harnais
 
-Relais se teste sans vrais services : un **harnais** monte l'orchestrateur sur une horloge simulée, un store SQLite en mémoire et un faux adaptateur par port. Cette page explique comment écrire un scénario avec lui.
+Relais se teste sans vrais services : un **harnais** monte l'orchestrateur (son worker, ses exécuteurs d'outbox, ses minuteries en base) sur une horloge simulée, une base de test (SQLite en mémoire, ou Postgres dans le projet `scenarios-pg`) et un faux adaptateur par port. Cette page explique comment écrire un scénario avec lui.
 
 - Tests unitaires : à côté du code (`*.test.ts`).
 - Scénarios : `test/scenarios/` (le harnais, `test/helpers/harness.ts`).
@@ -14,15 +14,18 @@ Pendant le travail, lancez seulement les tests des fichiers touchés : `npx vite
 
 ## Les trois projets Vitest
 
-`vitest.config.ts` déclare trois projets, pour que la CI rapide reste rapide :
+`vitest.config.ts` déclare quatre projets, pour que la CI rapide reste rapide :
 
 | Projet | Commande | Ce qu'il couvre |
 |---|---|---|
 | `unit` | `npm test` | unitaires, scénarios et bout en bout (sauté sans `FACTORY_E2E=1`) |
 | `integration` | `npm run test:integration` | `test/integration/`, avec `DATABASE_URL` (Postgres) |
+| `scenarios-pg` | `npm run test:integration` | les scénarios de `test/scenarios/` une seconde fois, chaque harnais sur une base Postgres à lui (ORC-228), avec `DATABASE_URL` |
 | `isolation` | `npm run test:isolation` | `test/isolation/`, avec `FACTORY_ISOLATION=1` et un moteur rootless |
 
-`npm run test:all` lance les trois. Sans `DATABASE_URL`, les tests d'intégration se sautent ; sans `FACTORY_ISOLATION=1`, les tests d'isolation se sautent. La CI (`.github/workflows/ci.yml`) lance le projet `unit` avec typecheck et lint, les tests de propriétés sur 10 000 séquences (job `properties`), le rejeu des journaux enregistrés (`npm run test:replay` dans le job `test`, voir plus bas), puis Postgres en service pour `integration` et Podman rootless pour `isolation`. Aucun secret n'est défini dans les workflows.
+`npm run test:all` lance les quatre. Sans `DATABASE_URL`, les tests d'intégration et `scenarios-pg` se sautent ; sans `FACTORY_ISOLATION=1`, les tests d'isolation se sautent. La CI (`.github/workflows/ci.yml`) lance le projet `unit` avec typecheck et lint, les tests de propriétés sur 10 000 séquences (job `properties`), le rejeu des journaux enregistrés (`npm run test:replay` dans le job `test`, voir plus bas), puis Postgres en service pour `integration` et `scenarios-pg` (même job, `npm run test:integration`) et Podman rootless pour `isolation`. Aucun secret n'est défini dans les workflows.
+
+**Les scénarios sur Postgres (ORC-228).** Le projet `scenarios-pg` reprend les fichiers de `test/scenarios/` avec `test/helpers/pg-harness.ts` en fichier de setup : chaque `createHarness()` y reçoit sa propre base, clonée (`create database … template`) d'une base migrée une fois par fichier, et supprimée à la fin du test. Les deux stores passent ainsi les mêmes scénarios sans changer une ligne de ceux-ci. Ils tournent dans le job `integration`, qui a déjà Postgres, plutôt que dans `test` : le job rapide garde SQLite (quelques secondes), le second passage coûte environ 30 s de plus au job `integration`. Les quelques scénarios écrits pour un fichier SQLite tué par SIGKILL (`harnessStoreKind() === 'postgres'` les saute) ont leur équivalent Postgres dans `test/integration/`.
 
 ## Les faux adaptateurs
 
@@ -52,7 +55,7 @@ Ces interfaces sont **minimales** : elles portent ce dont les faux ont besoin. L
 
 ## L'horloge simulée
 
-`h.clock` est une `FakeClock`. `await h.advance(ms)` avance l'horloge, termine en `limit` les runs tenus dont le plafond de durée est atteint, déclenche les minuteries échues de la table `timers` (`TimerService.tick`, qui écrit `timer.fired` dans l'inbox ; aujourd'hui seul le debounce en pose par une règle) et attend que l'orchestrateur ait tout traité. Aucun scénario n'attend de vrai délai.
+`h.clock` est une `FakeClock`, que le store lit aussi : baux de l'outbox et de la file, backoffs, lignes échues. `await h.advance(ms)` avance l'horloge, termine en `limit` les runs tenus dont le plafond de durée est atteint, déclenche les minuteries échues de la table `timers` (`TimerService.tick`, qui écrit `timer.fired` dans l'inbox ; aujourd'hui seul le debounce en pose par une règle), fait passer le worker comme sa boucle le ferait (`orch.poll()` : effets dont le backoff ou le bail a expiré, lignes qui les attendaient) et attend que l'orchestrateur ait tout traité. Aucun scénario n'attend de vrai délai : un backoff de 20 ms se passe par `h.advance(20)`.
 
 ## Écrire un scénario
 
@@ -74,8 +77,8 @@ describe('mon comportement', () => {
 
 - `h.tracker.addIssue({ identifier, title })` pose une description par défaut assez longue. Une description passée au faux doit faire au moins 30 caractères : sinon le contrôle de prise en charge du pack standard (`has_description`) bloque le ticket et aucun run ne démarre.
 - `h.send(type, payload, ticketId?)` soumet un événement (ticket `REL-1` par défaut) et attend la fin de son traitement.
-- `await h.ticket()` lit l'état du ticket dans le store (asynchrone, comme tout le store). `createHarness({ store })` fait tourner le harnais sur un autre store vide : `test/integration/orchestrator-pg.test.ts` l'utilise avec `PgStore`.
-- `h.restart()` arrête proprement l'orchestrateur et en relance un neuf sur le même store, comme `relais up` au redémarrage.
+- `await h.ticket()` lit l'état du ticket dans le store (asynchrone, comme tout le store). `createHarness({ store })` fait tourner le harnais sur un store donné plutôt que sur sa base (le fichier SQLite qu'un processus tué a laissé) ; ce store garde sa propre horloge, `advance` n'en fait donc expirer ni bail ni backoff. `createHarness({ wrapStore })` enveloppe le store de la base, quelle qu'elle soit (un store qui échoue exprès) : c'est la forme à préférer, le scénario passe alors sur les deux stores.
+- `h.restart()` arrête proprement l'orchestrateur et en relance un neuf sur la même base, comme `relais up` au redémarrage. `h.restart({ mode: 'brutal' })` jette le processus comme un `kill -9` : ni arrêt, ni attente, ni nettoyage. Son store est coupé (`mortal` dans `harness.ts`) : ses appels non partis ne partent jamais, ceux en cours finissent en base sans que personne n'en reçoive le résultat ; ses promesses et ses minuteries restent figées. Un autre processus repart sur la même base ; les effets que le mort avait réclamés y restent `running` jusqu'à l'expiration de leur bail, qui se passe par `h.advance`. `h.store` et `h.orch` sont toujours ceux du processus vivant. Exemple : `test/scenarios/restart.test.ts` (événement dans l'inbox non décidé, effet réclamé à moitié fait, minuterie échue, puis rien de perdu ni de doublon visible).
 - `h.checks.holdNext()` garde le prochain contrôle en cours et rend la fonction qui le termine (vert par défaut, ou le résultat passé). `h.send` et `h.advance` attendent la fin des contrôles en cours : n'attendez l'envoi qu'après avoir relâché le contrôle, et observez l'état intermédiaire avec `vi.waitFor` (exemple dans `test/scenarios/harness.test.ts`).
 - `createHarness({ projectYaml })` surcharge le `workflow.yml` du pack standard, comme le fichier `.relais/workflow.yml` d'un projet.
 
@@ -148,8 +151,8 @@ Chaque scénario est livré par le ticket qui livre le comportement qu'il teste,
 | `.skip` ajouté | ORC-158 | `h.checks`, puis `h.publisher` quand l'usine poussera |
 | Config de tests modifiée | ORC-131 | `h.checks`, puis `h.publisher` quand l'usine poussera |
 | Réponse humaine pendant un run | ORC-180 | `h.runner` (`hold`), `h.advance` |
-| Redémarrage pendant un contrôle | ORC-220 | `h.store` (contrôle en cours posé à la main), `h.restart()` |
+| Redémarrage pendant un contrôle | ORC-220 | `h.checks.holdNext()`, `h.restart({ mode: 'brutal' })` |
 | Budget épuisé | ORC-216 | `h.runner` (`turns`, `costUsd`, `outcome: 'limit'`) |
 | Délégation retirée | ORC-227 | `h.tracker`, `h.runner` (`hold`), `h.sandboxes` |
 
-`h.restart()` est un arrêt propre : il attend la fin des contrôles en cours. Un redémarrage **pendant** un contrôle s'écrit donc aujourd'hui en posant l'état du contrôle dans `h.store` avant `h.restart()` ; le redémarrage brutal du harnais arrive avec ORC-228.
+`h.restart()` est un arrêt propre : il attend la fin des contrôles en cours. Un redémarrage **pendant** un contrôle s'écrit avec `h.restart({ mode: 'brutal' })` (ORC-228), le contrôle tenu par `h.checks.holdNext()`. Les points de coupure injectables à chaque étape de la chaîne et le chaos `kill -9` sur 500 événements sont ORC-163.

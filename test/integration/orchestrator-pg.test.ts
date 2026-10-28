@@ -10,7 +10,8 @@ import { createTestDatabase, PG_URL, TRUNCATE_ALL } from '../helpers/pg-database
 import { testPreset } from '../helpers/test-preset.js';
 
 // The orchestrator on PgStore, through the scenario harness: the daemon's path once
-// FACTORY_DATABASE_URL is set. The full harness moves to Postgres with ORC-228.
+// FACTORY_DATABASE_URL is set. Every scenario of test/scenarios also runs on Postgres (the
+// `scenarios-pg` project, ORC-228); these check the tables themselves.
 describe.skipIf(!PG_URL)('orchestrator on PgStore', () => {
   let db: Awaited<ReturnType<typeof createTestDatabase>>;
   let pool: Pool;

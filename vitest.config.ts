@@ -21,6 +21,17 @@ export default defineConfig({
         },
       },
       {
+        // The scenarios again, each harness on a Postgres database of its own (ORC-228): run with
+        // the integration project, skipped without DATABASE_URL.
+        test: {
+          name: 'scenarios-pg',
+          include: ['test/scenarios/**/*.test.ts'],
+          setupFiles: ['test/helpers/pg-harness.ts'],
+          environment: 'node',
+          testTimeout: 30000,
+        },
+      },
+      {
         test: {
           name: 'isolation',
           include: ['test/isolation/**/*.test.ts'],

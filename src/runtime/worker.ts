@@ -132,8 +132,7 @@ export class Worker {
     if (this.stopped) return;
     const timer = setTimeout(() => {
       this.retryTimers.delete(timer);
-      this.waited.clear();
-      this.kick().catch((e: unknown) => this.d.log('error', `worker: ${(e as Error).message}`));
+      this.pollInBackground();
     }, delayMs + 1);
     timer.unref();
     this.retryTimers.add(timer);
@@ -192,11 +191,21 @@ export class Worker {
   start(intervalMs = 1000): void {
     this.stop();
     this.stopped = false;
-    this.poller = setInterval(() => {
-      this.waited.clear();
-      this.kickInBackground();
-    }, intervalMs);
+    this.poller = setInterval(() => this.pollInBackground(), intervalMs);
     this.poller.unref();
+  }
+
+  /**
+   * One poll of `start`'s loop, awaited: the rows that found their ticket held (another worker's
+   * effect, a backoff) are tried again, with what another process wrote and the expired leases.
+   */
+  poll(): Promise<number> {
+    this.waited.clear();
+    return this.kick();
+  }
+
+  private pollInBackground(): void {
+    this.poll().catch((err: unknown) => this.d.log('error', `worker: ${(err as Error).message}`));
   }
 
   /** Stops polling and the pending retries: a stopped worker takes nothing up by itself. */

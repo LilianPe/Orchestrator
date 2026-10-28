@@ -16,7 +16,7 @@
     "build": "tsc -p tsconfig.build.json && vite build --config web/vite.config.ts",
     "test": "vitest run --project unit",
     "test:all": "vitest run",
-    "test:integration": "vitest run --project integration",
+    "test:integration": "vitest run --project integration --project scenarios-pg",
     "test:isolation": "vitest run --project isolation",
     "test:properties": "vitest run --project unit test/properties",
     "test:replay": "tsx src/cli/factory.ts replay test/replay/journals",
