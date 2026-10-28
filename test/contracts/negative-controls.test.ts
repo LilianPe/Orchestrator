@@ -10,7 +10,7 @@ import { Channel } from '../../src/adapters/runner/channel.js';
 import { FakeRunner, type FakeScript } from '../../src/adapters/runner/fake.js';
 import type { RunHandle, RunRequest, RunResult, RunStreamEvent } from '../../src/adapters/runner/types.js';
 import { FakePublisher } from '../../src/adapters/publisher/fake.js';
-import type { Publisher } from '../../src/adapters/publisher/types.js';
+import type { Publication, Publisher } from '../../src/adapters/publisher/types.js';
 import { FakeSandboxProvider } from '../../src/adapters/sandbox/fake.js';
 import type { Sandbox, SandboxRequest } from '../../src/adapters/sandbox/types.js';
 import { FakeTracker } from '../../src/adapters/tracker/fake.js';
@@ -144,7 +144,7 @@ describeAgentRuntimeContract(
 describeAgentRuntimeContract(
   'a runtime whose stop does nothing',
   runtimeThat((inner, req) => ({ ...inner.start(req), stop: () => {} })),
-  { violates: [STOP] },
+  { violates: [STOP, INDEPENDENT] },
 );
 
 describeAgentRuntimeContract(
@@ -643,12 +643,12 @@ describeTrackerContract(
 );
 
 describeTrackerContract(
-  'a tracker whose setLabels creates no label',
+  'a tracker whose setLabels drops the labels the team does not have yet',
   trackerThat(
     class extends FakeTracker {
       override async setLabels(identifier: string, add: string[], remove: string[]): Promise<void> {
-        const { labels } = await this.getIssue(identifier);
-        await super.setLabels(identifier, add.filter((l) => labels.includes(l)), remove);
+        const known = new Set([...this.issues.values()].flatMap((i) => i.labels));
+        await super.setLabels(identifier, add.filter((l) => known.has(l)), remove);
       }
     },
   ),
@@ -811,7 +811,16 @@ describePublisherContract(
 
 describePublisherContract(
   'a publisher that keeps answering a merged PR',
-  publishersThat(() => new FakePublisher()),
+  publishersThat(() => {
+    const prs = new Map<string, Publication>();
+    return {
+      publish: async (req) => {
+        const pr = prs.get(req.branch) ?? { prNumber: prs.size + 1, url: `https://github.test/pr/${prs.size + 1}`, sha: req.sha };
+        prs.set(req.branch, pr);
+        return { ...pr, sha: req.sha };
+      },
+    };
+  }),
   { violates: [REOPEN] },
 );
 

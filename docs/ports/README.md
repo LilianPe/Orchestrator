@@ -33,7 +33,7 @@ Chaque garantie d'erreur ou d'effet d'une fiche a son cas. Pour une panne, le su
 
 ## Contrôles négatifs
 
-Un cas qui passe contre tous les sujets ne prouve rien s'il passerait aussi contre un sujet qui viole sa garantie. `test/contracts/negative-controls.test.ts` lance chaque cas d'erreur et chaque cas d'effet des suites (rejeu, idempotence, indépendance, arrêt), et « seulement eux » de `listDelegated`, contre des sujets qui violent chacun une garantie exprès : le cas doit y échouer sur une assertion. Ce qu'ils couvrent, par port :
+Un cas qui passe contre tous les sujets ne prouve rien s'il passerait aussi contre un sujet qui viole sa garantie. `test/contracts/negative-controls.test.ts` lance chaque cas d'erreur des suites, chaque cas de rejeu, d'idempotence, d'indépendance et d'arrêt, les effets des écritures du Tracker et « seulement eux » de `listDelegated`, contre des sujets qui violent chacun une garantie exprès : le cas doit y échouer sur une assertion. Ce qu'ils couvrent, par port :
 
 | Port | Cas sous contrôle |
 |---|---|
@@ -44,7 +44,7 @@ Un cas qui passe contre tous les sujets ne prouve rien s'il passerait aussi cont
 | SandboxProvider | `destroy` d'un id inconnu ou déjà détruit, `create` rejoué, une sandbox par run, une nouvelle après `destroy` |
 | Publisher | republier une branche, une PR par branche, une nouvelle PR après merge ou fermeture |
 
-Les sujets fautifs de chaque cas sont nommés par les titres de `negative-controls.test.ts`.
+Les sujets fautifs de chaque cas sont nommés par les titres de `negative-controls.test.ts`. Les cas du chemin nominal n'ont pas de contrôle : un run qui réussit, une commande qui passe, un premier `publish`, un premier `create` et son niveau de réseau, les lectures nominales du Tracker et de la Forge (`getIssue`, `search`, `findPr` qui trouve la PR, instantanés).
 
 Un cas qui attend une réponse du port (un résultat, un `undefined`, un `destroy` ou un rejeu sans effet) la lit par `resolved` (`test/contracts/cases.ts`) : un sujet qui rejette au lieu de répondre y échoue sur une assertion, pas sur sa propre erreur. Tout rejet y compte, un `TypeError` du sujet fautif compris, par exception à la règle du paragraphe suivant : un contrôle qui passe ainsi ne dit pas s'il a touché la garantie visée.
 

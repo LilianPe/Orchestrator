@@ -95,10 +95,10 @@ export function describeAgentRuntimeContract(name: string, make: () => AgentRunt
       const a = start(s, 'hang');
       const b = start(s, 'hang');
       a.stop();
-      expect((await a.done).outcome).toBe('stopped');
+      expect(await within(resolved(a.done), 1_500)).toMatchObject({ outcome: 'stopped' });
       expect(await within(b.done, 100)).toBe('pending');
       b.stop();
-      expect((await b.done).outcome).toBe('stopped');
+      expect(await within(resolved(b.done), 1_500)).toMatchObject({ outcome: 'stopped' });
     });
 
     const endsInLimit = async (script: AgentScript, limits: RunRequest['limits'], elapse = 0) => {

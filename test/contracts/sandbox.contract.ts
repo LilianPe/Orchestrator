@@ -26,7 +26,7 @@ export function describeSandboxContract(name: string, make: () => SandboxSubject
     it('create replayed for the same run returns its sandbox instead of a second one', async () => {
       const s = await make();
       const first = await s.provider.create(s.request);
-      const replay = await s.provider.create(s.request);
+      const replay = await resolved(s.provider.create(s.request));
       expect(replay).toEqual(first);
       expect(await s.active()).toEqual([first.id]);
     });
