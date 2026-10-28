@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { FactoryEvent } from '../../src/core/types.js';
+import { TRUSTED, type FactoryEvent } from '../../src/core/types.js';
+import { exportJournal } from '../../src/runtime/replay.js';
 import { checkChain, FaultError, Faults, settled, type FaultSpec } from '../helpers/faults.js';
 import { createHarness } from '../helpers/harness.js';
 
@@ -11,6 +12,9 @@ type Step = { send: FactoryEvent } | { advance: number };
 
 const event = (id: string, type: FactoryEvent['type'], payload: object): FactoryEvent =>
   ({ id, type, at: 0, projectId: 'p', ticketId: 'REL-1', payload }) as FactoryEvent;
+
+/** A question in its own session (ORC-277). */
+const ASK = event('m1', 'session.mentioned', { linearSessionId: 'ls-q', body: 'pourquoi ?', author: 'L' });
 
 /** Delegation, a run, a reply in human review, its debounce, the feedback run. */
 const STEPS: Step[] = [
@@ -110,6 +114,8 @@ const CASES: { label: string; spec: Omit<FaultSpec, 'mode'> }[] = [
   { label: 'effect, before its external call', spec: { point: 'effect.before' } },
   { label: 'run launch, before the runner starts it', spec: { point: 'effect.before', match: (i) => i.method === 'start' } },
   { label: 'idempotent effect (move), after its external call', spec: { point: 'effect.after', match: (i) => i.method === 'moveTo' } },
+  { label: 'run launch, before its run is written', spec: { point: 'run.write' } },
+  { label: 'run launch, its run written, before the runner starts it', spec: { point: 'run.written' } },
   { label: 'run launch, after the runner started it', spec: { point: 'effect.after', match: (i) => i.method === 'start' } },
   { label: 'effect completion', spec: { point: 'effect.complete' } },
   { label: 'timer firing, before its transaction', spec: { point: 'timer.fire' } },
@@ -165,16 +171,76 @@ describe('fault injection at each point of the chain (ORC-163)', () => {
   });
 
   /**
-   * Known gap, ORC-277, found by the chaos (seed 31 on Postgres): a question's run cut after it
-   * started is not a ticket's run, so recover() blocks nothing, posts « reposez la question », and
-   * the start taken up again past its lease launches the question a second time. ORC-162 marks a
-   * start only once it is handled (`effect:<key>:started`): a kill before the mark is not caught.
+   * ORC-277, found by the chaos (seed 31 on Postgres): a question's run cut after it started is not a
+   * ticket's run, so recover() blocks nothing and posts « reposez la question ». The start taken up
+   * again past its lease finds the run its mark names, written before the runner started it, and
+   * launches nothing: the question is asked once, and the only answer is the invitation to ask again.
    */
-  it.fails('kill at a question run launch, after the runner started it: asked twice until ORC-277', async () => {
-    const ask = event('m1', 'session.mentioned', { linearSessionId: 'ls-q', body: 'pourquoi ?', author: 'L' });
-    const { report, faults } = await scenario({ point: 'effect.after', mode: 'kill', match: (i) => i.method === 'start' }, [{ send: ask }]);
+  it('kill at a question run launch, after the runner started it: asked once (ORC-277)', async () => {
+    const { h, report, faults } = await scenario({ point: 'effect.after', mode: 'kill', match: (i) => i.method === 'start' }, [{ send: ASK }]);
     expect(faults.fired).toMatchObject({ point: 'effect.after', mode: 'kill' });
     expect(report.violations).toEqual([]);
     expect(report.atLeastOnce).toEqual([]);
+    expect(h.runner.requests).toHaveLength(1);
+    expect(h.tracker.activities('ls-q')).toEqual([
+      { type: 'error', body: expect.stringContaining('Reposez la question') as unknown },
+    ]);
+  });
+
+  /**
+   * ORC-277, the other side: a question's launch cut before its run is written. Its mark names a run
+   * that was never written, so nothing was launched: recover() has no run to settle and tells nobody
+   * to ask again, and the start taken up again launches the question once.
+   */
+  it('kill at a question run launch, before its run is written: launched once, no invitation to ask again (ORC-277)', async () => {
+    const { h, report, faults } = await scenario({ point: 'run.write', mode: 'kill' }, [{ send: ASK }]);
+    expect(faults.fired).toMatchObject({ point: 'run.write', mode: 'kill' });
+    expect(report.violations).toEqual([]);
+    expect(report.atLeastOnce).toEqual([]);
+    expect(h.runner.requests).toHaveLength(1);
+    expect(JSON.stringify(h.tracker.activities('ls-q'))).not.toContain('Reposez');
+  });
+
+  /**
+   * The same cut on a dev start: the ticket holds the run before it is written, so recover() blocks
+   * it and tells Linear, and the start taken up again launches nothing (refused on the blocked
+   * ticket). Never a ticket left delegated with no run, no block and no notice.
+   */
+  it('kill at a dev run launch, before its run is written: the ticket is blocked, nothing launched (ORC-277)', async () => {
+    const { h, report, faults } = await scenario({ point: 'run.write', mode: 'kill' }, [STEPS[0]!]);
+    expect(faults.fired).toMatchObject({ point: 'run.write', mode: 'kill' });
+    expect(report.violations).toEqual([]);
+    expect(report.atLeastOnce).toEqual([]);
+    expect(h.runner.requests).toHaveLength(0);
+    const t = await h.ticket();
+    expect(t.blocked).toBe(true);
+    expect(t.activeRunId).toBeUndefined();
+    expect(JSON.stringify(h.tracker.activities('ls-1'))).toContain('redémarré pendant le run');
+  });
+
+  /**
+   * ORC-277 through the queue: a question queued while the factory is paused, handed out at the
+   * resume and cut once its run is written, before it left the queue. Handed out again after its
+   * lease, its own mark names the run: not launched, and « reposez la question » is the only answer.
+   */
+  it('kill at a queued question launch, its run written, before it left the queue: not launched again (ORC-277)', async () => {
+    const control = (id: string, type: 'control.pause' | 'control.resume') => ({ ...TRUSTED, id, type, at: 0, projectId: '*', payload: {} }) as FactoryEvent;
+    const { h, report, faults } = await scenario({ point: 'run.written', mode: 'kill' }, [
+      { send: control('g1', 'control.pause') },
+      { send: ASK },
+      { send: control('g2', 'control.resume') },
+    ]);
+    expect(faults.fired).toMatchObject({ point: 'run.written', mode: 'kill' });
+    // The checker reads project p's journals; the controls are the installation's (`*`), journaled there once.
+    expect(report.violations.filter((v) => !/^lost: g[12] /.test(v))).toEqual([]);
+    expect((await exportJournal(h.store, '*')).entries.map((e) => e.event.id).filter((id) => /^g/.test(id))).toEqual(['g1', 'g2']);
+    expect(report.atLeastOnce).toEqual([]);
+    // Its lease expires, and the daemon's tick hands it out again.
+    h.clock.advance(LEASE_MS + 1);
+    await h.orch.tick();
+    await h.orch.drained();
+    expect(h.runner.requests).toHaveLength(0);
+    expect(h.tracker.activities('ls-q')).toEqual([{ type: 'error', body: expect.stringContaining('Reposez la question') as unknown }]);
+    expect(await h.store.listQueue()).toEqual([]);
   });
 });
