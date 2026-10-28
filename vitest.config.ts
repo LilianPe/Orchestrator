@@ -7,7 +7,7 @@ export default defineConfig({
         test: {
           name: 'unit',
           include: ['src/**/*.test.ts', 'test/**/*.test.ts', 'web/src/**/*.test.ts'],
-          exclude: ['test/integration/**', 'test/isolation/**'],
+          exclude: ['test/integration/**', 'test/isolation/**', 'test/chaos/**'],
           environment: 'node',
           testTimeout: 15000,
         },
@@ -29,6 +29,16 @@ export default defineConfig({
           setupFiles: ['test/helpers/pg-harness.ts'],
           environment: 'node',
           testTimeout: 30000,
+        },
+      },
+      {
+        // A real daemon killed with SIGKILL at random moments (ORC-163): on Postgres with DATABASE_URL,
+        // on a SQLite file otherwise. Its own CI job, with CHAOS_EVENTS=500 (docs/tests.md).
+        test: {
+          name: 'chaos',
+          include: ['test/chaos/**/*.test.ts'],
+          environment: 'node',
+          testTimeout: 30 * 60_000,
         },
       },
       {
