@@ -158,6 +158,18 @@ describe('recorded journals (test/replay/journals)', () => {
     expect(new Set(replayJournal(journal).divergences.map((d) => d.eventId))).toEqual(new Set([delegations[0]!.event.id]));
   });
 
+  it('journals CI run attempts, the merge commit and the default-branch pushes, decided as facts only (ORC-278)', () => {
+    const journal = readJournal(readFileSync(join(dir, 'merge-revert-ci.json'), 'utf8'));
+    const of = (type: string) => journal.entries.filter((e) => e.event.type === type);
+    expect(of('ci.run_completed').map((e) => e.event.id)).toEqual(['ci:REL-1:101:1', 'ci:REL-1:101:2']);
+    expect(of('pr.merged')[0]!.event.payload).toMatchObject({ mergeSha: 'a'.repeat(40), headSha: 'head1' });
+    expect(of('default_branch.pushed').map((e) => (e.event.payload as { commits: object[] }).commits)).toMatchObject([[{ merges: 3 }], [{ reverts: 3 }]]);
+    for (const e of [...of('ci.run_completed'), ...of('default_branch.pushed')]) {
+      expect(e.decision).toMatchObject({ effects: [], timers: [], trace: [`${e.event.type}: recorded for the measures`] });
+    }
+    expect(replayJournal(journal)).toMatchObject({ divergences: [], replayed: journal.entries.length });
+  });
+
   it.each(files)('%s replays identical bit for bit', (file) => {
     const report = replayJournal(readJournal(readFileSync(join(dir, file), 'utf8'), file));
     expect(report.divergences).toEqual([]);
