@@ -13,9 +13,15 @@ interface IssueNode {
   priority: number;
   createdAt: string;
   state: { id: string; name: string; type: string };
-  labels: { nodes: { id: string; name: string }[] };
+  labels: { nodes: LabelNode[] };
   delegate: { id: string } | null;
   team: { id: string; key: string };
+}
+/** `parent`: the label group, whose labels are exclusive in Linear (one per issue). */
+interface LabelNode {
+  id: string;
+  name: string;
+  parent?: { id: string } | null;
 }
 interface StateNode {
   id: string;
@@ -68,6 +74,8 @@ function toIssue(n: IssueNode): TrackerIssue {
 export class LinearTracker implements Tracker {
   private states = new Map<string, StateNode[]>();
   private labels = new Map<string, Map<string, string>>();
+  /** Group of each team label read, by label id (label ids are unique across teams). */
+  private labelGroups = new Map<string, string>();
   private teamIds = new Map<string, string>();
   private issueIds = new Map<string, string>();
 
@@ -106,8 +114,12 @@ export class LinearTracker implements Tracker {
 
   private async teamLabels(teamKey: string, refresh = false): Promise<Map<string, string>> {
     if (!refresh && this.labels.has(teamKey)) return this.labels.get(teamKey)!;
-    const { issueLabels } = await this.api.gql<{ issueLabels: { nodes: { id: string; name: string }[] } }>(Q.teamLabels, { teamKey });
+    const { issueLabels } = await this.api.gql<{ issueLabels: { nodes: LabelNode[] } }>(Q.teamLabels, { teamKey });
     const map = new Map(issueLabels.nodes.map((l) => [l.name, l.id]));
+    for (const l of issueLabels.nodes) {
+      if (l.parent?.id) this.labelGroups.set(l.id, l.parent.id);
+      else this.labelGroups.delete(l.id);
+    }
     this.labels.set(teamKey, map);
     return map;
   }
@@ -162,14 +174,33 @@ export class LinearTracker implements Tracker {
     return issueLabelCreate.issueLabel.id;
   }
 
-  /** Reads the ticket's labels first and writes only what differs: a replay writes nothing (ORC-162). */
+  /**
+   * Reads the ticket's labels first and writes only what differs: a replay writes nothing (ORC-162).
+   * Labels of a Linear group are exclusive (ORC-160): adding one takes off the ticket's other labels
+   * of its group, as Linear's interface does, so the final state does not depend on what was there.
+   * Before adding a label, the team's labels are read again: a group made since the start counts.
+   * Two labels of one group in `add` cannot both hold: refused, rather than one picked silently.
+   */
   async setLabels(identifier: string, add: string[], remove: string[]): Promise<void> {
     const team = teamOf(identifier);
     const issue = await this.node(identifier);
-    const has = new Set(issue.labels.nodes.map((l) => l.name));
+    const has = new Map(issue.labels.nodes.map((l) => [l.name, l]));
+    if (add.some((name) => !has.has(name))) await this.teamLabels(team, true);
     const addedLabelIds: string[] = [];
-    for (const name of add) if (!has.has(name)) addedLabelIds.push(await this.labelId(team, name));
-    const removedLabelIds = issue.labels.nodes.filter((l) => remove.includes(l.name) && !add.includes(l.name)).map((l) => l.id);
+    const groups = new Map<string, string>();
+    for (const name of add) {
+      const present = has.get(name);
+      const id = present?.id ?? (await this.labelId(team, name));
+      if (!present) addedLabelIds.push(id);
+      const group = present?.parent?.id ?? this.labelGroups.get(id);
+      if (!group) continue;
+      const other = groups.get(group);
+      if (other !== undefined && other !== name) throw new Error(`Labels exclusifs demandés ensemble : "${other}" et "${name}" (même groupe Linear)`);
+      groups.set(group, name);
+    }
+    const removedLabelIds = issue.labels.nodes
+      .filter((l) => !add.includes(l.name) && (remove.includes(l.name) || (l.parent?.id !== undefined && groups.has(l.parent.id))))
+      .map((l) => l.id);
     if (addedLabelIds.length === 0 && removedLabelIds.length === 0) return;
     await this.api.gql(Q.issueUpdate, { id: issue.id, input: { addedLabelIds, removedLabelIds } });
   }

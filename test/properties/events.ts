@@ -135,6 +135,14 @@ const FACTORY_PRODUCED: ReadonlySet<EventType> = new Set<EventType>([
   'effect.done', 'effect.failed', 'dead_letter.added', 'dead_letter.repaired',
 ]);
 
+/** Events the GitHub ingestion always marks untrusted: what nobody in the factory verified (ORC-134). */
+const ALWAYS_UNTRUSTED: ReadonlySet<EventType> = new Set<EventType>(['push.human', 'pr.reviewed']);
+
+/** Events of the Linear ingestion: a trusted one carries the signed user's id, an untrusted one none (ORC-160). */
+const FROM_LINEAR: ReadonlySet<EventType> = new Set<EventType>([
+  'ticket.delegated', 'session.mentioned', 'session.prompted', 'session.stopped', 'command', 'status.changed', 'label.changed',
+]);
+
 /**
  * One time in five untrusted, when the event can be: enough to exercise the taint rules (I12) without
  * drowning the rest. Only single events and human messages draw their taint here; the scripted
@@ -142,7 +150,11 @@ const FACTORY_PRODUCED: ReadonlySet<EventType> = new Set<EventType>([
  */
 const external = (draft: fc.Arbitrary<Draft>): fc.Arbitrary<DraftEntry> =>
   fc.record({ draft, roll: fc.integer({ min: 0, max: 4 }) }).map(
-    ({ draft: d, roll }): DraftEntry => ({ kind: 'external', draft: d, untrusted: roll === 0 && !FACTORY_PRODUCED.has(d.type) }),
+    ({ draft: d, roll }): DraftEntry => ({
+      kind: 'external',
+      draft: d,
+      untrusted: ALWAYS_UNTRUSTED.has(d.type) || (roll === 0 && !FACTORY_PRODUCED.has(d.type)),
+    }),
   );
 
 const shell: fc.Arbitrary<ShellEvent> = fc.oneof(
@@ -268,7 +280,7 @@ function stamp(drafts: DraftEntry[]): Entry[] {
       projectId: PROJECT,
       ticketId: TICKET,
       ...TRUSTED,
-      ...(d.untrusted ? { taint: 'untrusted' } : {}),
+      ...(d.untrusted ? { taint: 'untrusted' } : FROM_LINEAR.has(d.draft.type) ? { actor: 'user-lilian' } : {}),
       payload: d.draft.payload,
     } as FactoryEvent;
     return { kind: 'external', event };

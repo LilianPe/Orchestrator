@@ -64,7 +64,7 @@ describe('stripMention', () => {
 describe('mapLinearWebhook', () => {
   it('maps a delegation', async () => {
     expect(await mapLinearWebhook(fx('session-created-delegation'), 'd1', ctx())).toEqual([
-      { id: 'linear:d1', type: 'ticket.delegated', at: 5000, schemaVersion: 3, taint: 'trusted', projectId: 'p', ticketId: 'REL-1',
+      { id: 'linear:d1', type: 'ticket.delegated', at: 5000, schemaVersion: 3, taint: 'trusted', actor: 'user-lilian', projectId: 'p', ticketId: 'REL-1',
         payload: { linearSessionId: 'as-1', promptContext: '<issue identifier="REL-1">Export</issue>' } },
     ]);
   });
@@ -87,8 +87,8 @@ describe('mapLinearWebhook', () => {
   it('maps a move and an added label', async () => {
     const out = await mapLinearWebhook(fx('issue-moved-labeled'), 'd6', ctx());
     expect(out).toEqual([
-      { id: 'linear:d6', type: 'status.changed', at: 5000, schemaVersion: 3, taint: 'trusted', projectId: 'p', ticketId: 'REL-1', payload: { from: 'human_review', to: 'ai_review' } },
-      { id: 'linear:d6:label:l-resume', type: 'label.changed', at: 5000, schemaVersion: 3, taint: 'trusted', projectId: 'p', ticketId: 'REL-1', payload: { label: 'agent:reprendre', change: 'added' } },
+      { id: 'linear:d6', type: 'status.changed', at: 5000, schemaVersion: 3, taint: 'trusted', actor: 'user-lilian', projectId: 'p', ticketId: 'REL-1', payload: { from: 'human_review', to: 'ai_review' } },
+      { id: 'linear:d6:label:l-resume', type: 'label.changed', at: 5000, schemaVersion: 3, taint: 'trusted', actor: 'user-lilian', projectId: 'p', ticketId: 'REL-1', payload: { label: 'agent:reprendre', change: 'added' } },
     ]);
   });
   it('keeps the label event id when the state change is an echo', async () => {
@@ -108,6 +108,80 @@ describe('mapLinearWebhook', () => {
     const c = { ...ctx(), isEcho: async (k: string) => echoes.includes(k) };
     expect(await mapLinearWebhook(fx('issue-moved-labeled'), 'd9', c)).toEqual([]);
   });
+  it('maps a removed label as label.changed, and drops the echo of a removal the factory made (ORC-160)', async () => {
+    const removed = { ...fx('issue-moved-labeled'), data: { ...fx('issue-moved-labeled').data, labelIds: ['l-resume'] }, updatedFrom: { labelIds: ['l-bug'] } };
+    expect(await mapLinearWebhook(removed, 'd10', ctx())).toEqual([
+      { id: 'linear:d10:label:l-resume', type: 'label.changed', at: 5000, schemaVersion: 3, taint: 'trusted', actor: 'user-lilian', projectId: 'p', ticketId: 'REL-1', payload: { label: 'agent:reprendre', change: 'added' } },
+      { id: 'linear:d10:label:l-bug', type: 'label.changed', at: 5000, schemaVersion: 3, taint: 'trusted', actor: 'user-lilian', projectId: 'p', ticketId: 'REL-1', payload: { label: 'bug', change: 'removed' } },
+    ]);
+    // An addition's echo does not hide a removal of the same label, nor the other way round.
+    expect((await mapLinearWebhook(removed, 'd10', ctx(['label-removed:REL-1:bug']))).map((e) => e.payload)).toEqual([{ label: 'agent:reprendre', change: 'added' }]);
+    expect((await mapLinearWebhook(removed, 'd10', ctx(['label:REL-1:bug']))).map((e) => e.payload)).toEqual([
+      { label: 'agent:reprendre', change: 'added' },
+      { label: 'bug', change: 'removed' },
+    ]);
+  });
+
+  describe('signed actor and taint (ORC-160)', () => {
+    it.each([
+      ['session-created-delegation', 'ticket.delegated'],
+      ['session-created-mention', 'session.mentioned'],
+      ['session-created-command', 'command'],
+      ['session-prompted', 'session.prompted'],
+      ['session-stop', 'session.stopped'],
+      ['issue-moved-labeled', 'status.changed'],
+    ])('trusts %s written by a workspace user and carries their Linear id', async (name, type) => {
+      expect((await mapLinearWebhook(fx(name), 'k', ctx()))[0]).toMatchObject({ type, actor: 'user-lilian', taint: 'trusted' });
+    });
+
+    it('marks a reply without a signed user id untrusted, the name quoted in it notwithstanding', async () => {
+      const body = fx('session-prompted');
+      body.agentActivity.user = { name: 'Lilian' };
+      const [e] = await mapLinearWebhook(body, 'k', ctx());
+      expect(e).toMatchObject({ type: 'session.prompted', taint: 'untrusted', payload: { author: 'Lilian' } });
+      expect(e).not.toHaveProperty('actor');
+    });
+
+    it("names a reply without a user after no one else: not after the session's first comment", async () => {
+      const body = fx('session-prompted');
+      delete body.agentActivity.user;
+      body.agentSession.comment = { id: 'c1', body: '@factory', user: { id: 'user-lilian', name: 'Lilian' } };
+      expect((await mapLinearWebhook(body, 'k', ctx()))[0]).toMatchObject({ taint: 'untrusted', payload: { author: 'Humain' } });
+    });
+
+    it('marks a mention that came through a bot or from outside the workspace untrusted', async () => {
+      for (const extra of [{ botActor: { name: 'Slack' } }, { externalUser: { name: 'client@example.com' } }]) {
+        const body = fx('session-created-mention');
+        Object.assign(body.agentSession.comment, extra);
+        // The user id the comment carries is not lent to text a bot relayed: no actor for ORC-186 to authorize.
+        const [e] = await mapLinearWebhook(body, 'k', ctx());
+        expect(e).toMatchObject({ type: 'session.mentioned', taint: 'untrusted' });
+        expect(e).not.toHaveProperty('actor');
+      }
+      const anonymous = fx('session-created-mention');
+      delete anonymous.agentSession.comment.user;
+      expect((await mapLinearWebhook(anonymous, 'k', ctx()))[0]).toMatchObject({ type: 'session.mentioned', taint: 'untrusted' });
+    });
+
+    it('marks an issue change made by an integration or an OAuth app untrusted, and one without an actor', async () => {
+      for (const actor of [{ id: 'int-1', type: 'Integration', name: 'Jira' }, { id: 'app-2', type: 'OauthClient', name: 'Zapier' }]) {
+        const out = await mapLinearWebhook({ ...fx('issue-moved-labeled'), actor }, 'k', ctx());
+        expect(out.map((e) => [e.type, e.taint, e.actor])).toEqual([
+          ['status.changed', 'untrusted', undefined],
+          ['label.changed', 'untrusted', undefined],
+        ]);
+      }
+      const { actor: _, ...noActor } = fx('issue-moved-labeled');
+      expect((await mapLinearWebhook(noActor, 'k', ctx())).map((e) => e.taint)).toEqual(['untrusted', 'untrusted']);
+    });
+
+    it('takes the user id Linear gives as a bare field when the user object is absent', async () => {
+      const body = fx('session-prompted');
+      body.agentActivity = { ...body.agentActivity, user: undefined, userId: 'user-2' };
+      expect((await mapLinearWebhook(body, 'k', ctx()))[0]).toMatchObject({ actor: 'user-2', taint: 'trusted' });
+    });
+  });
+
   it('ignores unknown teams', async () => {
     const body = fx('session-prompted');
     body.agentSession.issue.identifier = 'OTHER-1';
@@ -290,6 +364,19 @@ describe('ingest', () => {
     await after.send({ ...fx('session-created-delegation'), webhookTimestamp: 1500 });
     expect(after.acks).toEqual([]);
     expect(await after.ids()).toEqual([]);
+  });
+
+  it('keeps the taint and the actor of an event through the inbox, as decide reads them (ORC-160)', async () => {
+    const { store, send } = make();
+    const body = fx('session-prompted');
+    body.agentActivity.user = { name: 'Lilian' };
+    await send(body);
+    await send(fx('issue-moved-labeled'));
+    expect((await store.pendingInbox(100)).map((e) => [e.type, e.taint, e.actor])).toEqual([
+      ['session.prompted', 'untrusted', undefined],
+      ['status.changed', 'trusted', 'user-lilian'],
+      ['label.changed', 'trusted', 'user-lilian'],
+    ]);
   });
 
   it('writes once when the same webhook arrives twice while the echo lookup is pending', async () => {

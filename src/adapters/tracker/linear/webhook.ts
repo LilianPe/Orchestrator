@@ -1,5 +1,6 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
-import { TRUSTED, type LogicalState, type FactoryEvent } from '../../../core/types.js';
+import { labelEchoKey } from '../types.js';
+import { SCHEMA_VERSION, type LogicalState, type FactoryEvent, type Taint } from '../../../core/types.js';
 
 export function isUsableWebhookSecret(secret: unknown): boolean {
   return typeof secret === 'string' && secret.trim() !== '';
@@ -35,11 +36,53 @@ export function stripMention(body: string): string {
 
 type PartialEvent = { type: FactoryEvent['type']; payload: unknown; suffix?: string };
 
-function author(body: any): string {
-  return body.agentActivity?.user?.name ?? body.agentSession?.comment?.user?.name ?? body.agentSession?.creator?.name ?? 'Humain';
+/** Who did what a webhook reports, as the signed body says it. */
+export interface SignedActor {
+  /** Linear id of the workspace user who did it; absent when Linear names none (then `untrusted`). */
+  id?: string;
+  taint: Taint;
+  /** The author's name, for messages: taken from the same object as `id`. */
+  name: string;
 }
 
-function sessionEvents(body: any, projectId: string, ctx: MapContext): PartialEvent[] {
+const idOf = (v: unknown): string | undefined => (typeof v === 'string' && v !== '' ? v : undefined);
+
+/** Who wrote what a session webhook carries: the reply, the comment that opened the session, or its creator. */
+function sessionAuthor(body: any): { id?: string; name?: string; external: boolean } {
+  const s = body.agentSession ?? {};
+  const [obj, id] =
+    body.action === 'prompted'
+      ? [body.agentActivity, idOf(body.agentActivity?.user?.id) ?? idOf(body.agentActivity?.userId)]
+      : s.comment
+        ? [s.comment, idOf(s.comment.user?.id) ?? idOf(s.comment.userId)]
+        : [s, idOf(s.creator?.id) ?? idOf(s.creatorId)];
+  const name = obj?.user?.name ?? obj?.creator?.name;
+  return { id, name, external: !!(obj?.botActor || obj?.externalUser || obj?.externalUserId) };
+}
+
+/**
+ * The actor of a signed webhook (ORC-160). Trusted, with its id, only when Linear names a workspace
+ * user as the author: a reply or a mention by a member, a delegation, a change made in Linear by a
+ * user. Untrusted, without an id, when no user is named, when an integration or an OAuth app did it
+ * (`actor.type`), or when the comment came through a bot or from outside the workspace (`botActor`,
+ * `externalUser`: Slack, email, customer requests). Who may do what is ORC-186's matrix, checked on
+ * this id: an untrusted event has none to borrow.
+ */
+export function signedActor(body: any): SignedActor {
+  let id: string | undefined;
+  let name: string | undefined;
+  if (body?.type === 'AgentSessionEvent') {
+    const a = sessionAuthor(body);
+    id = a.external ? undefined : a.id;
+    name = a.name;
+  } else {
+    id = body?.actor?.type === 'user' ? idOf(body.actor.id) : undefined;
+    name = body?.actor?.name;
+  }
+  return id ? { id, taint: 'trusted', name: name ?? 'Humain' } : { taint: 'untrusted', name: name ?? 'Humain' };
+}
+
+function sessionEvents(body: any, author: string, projectId: string, ctx: MapContext): PartialEvent[] {
   const sessionId: string = body.agentSession.id;
   if (body.action === 'created') {
     const comment = body.agentSession.comment;
@@ -47,13 +90,13 @@ function sessionEvents(body: any, projectId: string, ctx: MapContext): PartialEv
     const text = stripMention(comment.body ?? '');
     const [first = '', ...rest] = text.split(/\s+/);
     if (ctx.commands(projectId).includes(first.toLowerCase())) {
-      return [{ type: 'command', payload: { name: first.toLowerCase(), body: rest.join(' '), linearSessionId: sessionId, author: author(body) } }];
+      return [{ type: 'command', payload: { name: first.toLowerCase(), body: rest.join(' '), linearSessionId: sessionId, author } }];
     }
-    return [{ type: 'session.mentioned', payload: { linearSessionId: sessionId, body: text, author: author(body) } }];
+    return [{ type: 'session.mentioned', payload: { linearSessionId: sessionId, body: text, author } }];
   }
   if (body.action === 'prompted') {
     if (body.agentActivity?.signal === 'stop') return [{ type: 'session.stopped', payload: { linearSessionId: sessionId } }];
-    return [{ type: 'session.prompted', payload: { linearSessionId: sessionId, body: body.agentActivity?.content?.body ?? '', author: author(body) } }];
+    return [{ type: 'session.prompted', payload: { linearSessionId: sessionId, body: body.agentActivity?.content?.body ?? '', author } }];
   }
   return [];
 }
@@ -74,10 +117,17 @@ async function issueEvents(body: any, identifier: string, teamKey: string, proje
     }
   }
   if (Array.isArray(from.labelIds) && Array.isArray(data.labelIds)) {
-    for (const id of data.labelIds as string[]) {
-      if ((from.labelIds as string[]).includes(id)) continue;
+    const before = from.labelIds as string[];
+    const after = data.labelIds as string[];
+    const changes = [
+      ...after.filter((id) => !before.includes(id)).map((id) => ({ id, change: 'added' as const })),
+      ...before.filter((id) => !after.includes(id)).map((id) => ({ id, change: 'removed' as const })),
+    ];
+    for (const { id, change } of changes) {
       const name = ctx.labelNameById(teamKey, id);
-      if (name && !(await ctx.isEcho(`label:${identifier}:${name}`))) out.push({ type: 'label.changed', payload: { label: name, change: 'added' }, suffix: `:label:${id}` });
+      if (name && !(await ctx.isEcho(labelEchoKey(identifier, name, change)))) {
+        out.push({ type: 'label.changed', payload: { label: name, change }, suffix: `:label:${id}` });
+      }
     }
   }
   return out;
@@ -102,9 +152,21 @@ export async function mapLinearWebhook(body: any, key: string, ctx: MapContext):
   const teamKey = identifier.split('-')[0]!;
   const projectId = ctx.projectIdForTeam(teamKey);
   if (!projectId) return [];
-  const partials = body.type === 'AgentSessionEvent' ? sessionEvents(body, projectId, ctx) : await issueEvents(body, identifier, teamKey, projectId, ctx);
+  const { id: actor, taint, name } = signedActor(body);
+  const partials = body.type === 'AgentSessionEvent' ? sessionEvents(body, name, projectId, ctx) : await issueEvents(body, identifier, teamKey, projectId, ctx);
   const at = ctx.now();
   return partials.map(
-    (p) => ({ ...TRUSTED, id: `linear:${key}${p.suffix ?? ''}`, type: p.type, at, projectId, ticketId: identifier, payload: p.payload }) as FactoryEvent,
+    (p) =>
+      ({
+        id: `linear:${key}${p.suffix ?? ''}`,
+        type: p.type,
+        at,
+        projectId,
+        ticketId: identifier,
+        schemaVersion: SCHEMA_VERSION,
+        taint,
+        ...(actor ? { actor } : {}),
+        payload: p.payload,
+      }) as FactoryEvent,
   );
 }

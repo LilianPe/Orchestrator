@@ -175,6 +175,13 @@ export type FactoryEvent<T extends EventType = EventType> = {
     ticketId?: string;
     schemaVersion: typeof SCHEMA_VERSION;
     taint: Taint;
+    /**
+     * Tracker id of the signed actor (the Linear user who replied, delegated, moved…), from the signed
+     * webhook body (ORC-160); absent on an untrusted event and on what the factory produces itself.
+     * Authorizations are checked on it, never on a name quoted in the text (ORC-186). Optional: no
+     * version bump, older rows lack it.
+     */
+    actor?: string;
     payload: EventPayloads[K];
   };
 }[T];

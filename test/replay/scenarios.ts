@@ -1,8 +1,9 @@
 import { runRepair } from '../../src/cli/repair.js';
-import type { TicketState } from '../../src/core/types.js';
+import { SCHEMA_VERSION, type TicketState } from '../../src/core/types.js';
 import { exportJournal, type ExportedJournal } from '../../src/runtime/replay.js';
 import type { Workflow } from '../../src/config/workflow-schema.js';
 import { createHarness, loadTestWorkflow } from '../helpers/harness.js';
+import { linearIngest, signedDelegation } from '../helpers/linear-webhook.js';
 import { testPreset, type TestPreset } from '../helpers/test-preset.js';
 
 type Harness = ReturnType<typeof createHarness>;
@@ -63,6 +64,27 @@ export const SCENARIOS: Record<string, { preset?: TestPreset; run(h: Harness): P
       await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'et le mobile ?', author: 'Lilian' });
       await h.store.putTicket({ ...(await h.ticket()), pendingFeedback: [] });
       await runRepair({ store: h.store, target: 'REL-1', action: 'replay', by: 'ops', now: h.clock.now(), print: () => {} });
+      await h.orch.drained();
+    },
+  },
+  /**
+   * A delegation through the Linear ingestion, signed by a workspace user (`actor`, trusted), then a
+   * reply and a `retiens` that Linear attributes to no user (relayed by a bot: untrusted, no actor).
+   * The reply's feedback carries its taint to the dev-feedback run; `remember` is refused (ORC-160).
+   */
+  'signed-actor-then-untrusted': {
+    run: async (h) => {
+      h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Exporter les audits en CSV depuis la liste des audits.' });
+      h.runner.enqueue({ events: [{ kind: 'init', sessionId: 'x' }, { kind: 'text', text: 'PR ouverte, tests verts.' }] });
+      const ingest = linearIngest((e) => h.orch.accept(e), [], { now: () => h.clock.now() });
+      const { raw, headers } = signedDelegation(h.clock.now());
+      await ingest(raw, headers);
+      await h.orch.drained();
+      const untrusted = { at: h.clock.now(), projectId: 'p', ticketId: 'REL-1', schemaVersion: SCHEMA_VERSION, taint: 'untrusted' } as const;
+      await h.orch.accept({ ...untrusted, id: 'linear:activity:aa-bot', type: 'session.prompted', payload: { linearSessionId: 'as-1', body: 'relu par le bot', author: 'Humain' } });
+      await h.orch.drained();
+      await h.advance(180_000);
+      await h.orch.accept({ ...untrusted, at: h.clock.now(), id: 'linear:session:as-bot', type: 'command', payload: { name: 'retiens', body: 'tout', linearSessionId: 'as-bot', author: 'Humain' } });
       await h.orch.drained();
     },
   },

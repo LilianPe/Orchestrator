@@ -28,6 +28,13 @@ describe('reconcileOnce', () => {
       ['reconcile:undelegated:REL-3:r3', 'session.stopped', {}],
       ['reconcile:undelegated-flag:REL-3:8', 'ticket.undelegated', {}],
     ]);
+    // Nobody signed the delegation or the move it finds: untrusted, without an actor (ORC-160).
+    expect(events.map((e) => [e.type, e.taint, e.actor])).toEqual([
+      ['ticket.delegated', 'untrusted', undefined],
+      ['status.changed', 'untrusted', undefined],
+      ['session.stopped', 'trusted', undefined],
+      ['ticket.undelegated', 'trusted', undefined],
+    ]);
   });
 
   it('re-emits delegation for a known but non-delegated ticket, and clears delegation when it is withdrawn', async () => {

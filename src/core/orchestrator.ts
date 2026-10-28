@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import type { Forge } from '../adapters/forge/types.js';
 import type { RunHandle, RunResult, Runner } from '../adapters/runner/types.js';
 import { ActivityRelay } from '../adapters/tracker/activity-relay.js';
-import type { ActivityInput, Tracker } from '../adapters/tracker/types.js';
+import { labelEchoKey, type ActivityInput, type Tracker } from '../adapters/tracker/types.js';
 import type { WorkspaceManager } from '../adapters/workspace/types.js';
 import type { JobSpec, Workflow } from '../config/workflow-schema.js';
 import type { EffectRetry } from '../runtime/outbox.js';
@@ -677,7 +677,8 @@ export class Orchestrator {
       case 'move':
         return this.move(project, t, c.to);
       case 'labels': {
-        for (const l of c.add) await store.putEcho(`label:${ticketId}:${l}`, clock.now() + ECHO_MS);
+        for (const l of c.add) await store.putEcho(labelEchoKey(ticketId, l, 'added'), clock.now() + ECHO_MS);
+        for (const l of c.remove) await store.putEcho(labelEchoKey(ticketId, l, 'removed'), clock.now() + ECHO_MS);
         await tracker.setLabels(ticketId, c.add, c.remove);
         return;
       }
