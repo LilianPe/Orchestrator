@@ -39,7 +39,7 @@ Variables **posées par Relais** dans l'environnement de chaque run (à ne pas d
 | `host` | texte | `127.0.0.1` | Adresse d'écoute. Toute valeur hors bouclage (`localhost`, `127.x.x.x`, `::1`) exige `RELAIS_UI_PASSWORD`. En Docker : `0.0.0.0`. |
 | `publicUrl` | URL | — | URL publique de Relais (tunnel ou domaine). Si elle est définie, elle sert de base aux URL de callback OAuth (`<publicUrl>/oauth/callback`) et de webhook (`<publicUrl>/webhooks/linear`), et `relais init` ne crée pas de canal smee. Sans elle : `http://localhost:<port>`. |
 | `relay` | `{ kind: smee, url: <URL> }` ou `{ kind: none }` | `{ kind: none }` | Relais des webhooks Linear. `relais init` crée un canal smee.io quand il n'y a ni `publicUrl` ni relais. Voir [`linear.md`](linear.md#3-webhooks--smee-ou-url-publique). |
-| `projects` | liste de `{ id, repoPath, linearTeamKey }` | `[]` | Un projet = un dépôt local + une équipe Linear. Voir [`projets-et-workspaces.md`](projets-et-workspaces.md). |
+| `projects` | liste de `{ id, repoPath, linearTeamKey, authz? }` | `[]` | Un projet = un dépôt local + une équipe Linear. Voir [`projets-et-workspaces.md`](projets-et-workspaces.md). `authz` : voir [Autorisations](#autorisations). |
 | `limits.perDayUsd` | nombre > 0 | — (pas de plafond) | Budget journalier de toute l'instance, en dollars. Voir [Budget journalier](#budget-journalier). |
 | `knowledge.repoPath` | chemin | — | Clone local du dépôt de base de connaissance. Absent : les jobs `learn` et `remember` sont ignorés et `relais-agent kb search` ne renvoie rien. |
 | `github` | `{ appId, privateKey, installationId?, webhookSecret? }` | — | GitHub App du démon. Absent : repli sur la CLI `gh`. Voir [GitHub App](#github-app). |
@@ -56,6 +56,12 @@ projects:
   - id: mon-app
     repoPath: /home/moi/code/mon-app
     linearTeamKey: APP
+    authz: # facultatif, voir « Autorisations »
+      maintainers: [6f1c2e0a-0000-4000-8000-000000000001]
+      validators: [6f1c2e0a-0000-4000-8000-000000000002]
+      githubLogins:
+        6f1c2e0a-0000-4000-8000-000000000001: lilian-gh
+        6f1c2e0a-0000-4000-8000-000000000002: armand-gh
 limits:
   perDayUsd: 40
 knowledge:
@@ -82,6 +88,20 @@ Les variables `GH_APP_ID`, `GH_APP_KEY` et `GH_APP_INSTALLATION_ID` servent de r
 Le démon échange un JWT RS256 contre un **jeton d'installation limité au dépôt** demandé, le garde en mémoire au plus une heure (marge de sécurité de 60 s) et ne le transmet jamais aux runs. Permissions, création de l'App et rotation de clé : [`github.md`](github.md#github-app-recommandé).
 
 > **Cible.** La section vit encore dans `config.yaml` : le passage à `factory.yml` est suivi par ORC-209. Les variables d'environnement resteront le repli pour Docker et les installations existantes.
+
+### Autorisations
+
+`projects[].authz` donne les rôles de la [matrice d'autorisations](linear.md#autorisations--qui-peut-faire-quoi) qu'aucune source ne fournit (ORC-186). Tout s'écrit en **ids d'utilisateur Linear** (UUID, par exemple `query { users { nodes { id name } } }` dans l'explorateur GraphQL de Linear) : ce sont les ids que portent les webhooks signés.
+
+| Clé | Type | Défaut | Effet |
+|---|---|---|---|
+| `authz.maintainers` | liste d'ids Linear | `[]` | Mainteneurs désignés : eux seuls pourront `/refreeze` (branché par ORC-131). |
+| `authz.validators` | liste d'ids Linear | `[]` | Valideurs désignés : eux seuls pourront valider une spec, jamais celle d'un run qu'ils ont lancé (branché par ORC-212). |
+| `authz.githubLogins` | table id Linear → login GitHub | `{}` | Le login GitHub de chaque utilisateur Linear dont les droits sur le dépôt comptent. Sans entrée, un utilisateur n'a aucun droit GitHub, donc ne peut pas déclencher l'agent ni (avec ORC-148) merger par *Done*. |
+
+Les membres de l'équipe Linear et les droits GitHub ne se configurent pas : ils sont lus (Linear, puis la GitHub App ou `gh`) et relus toutes les 60 s. L'App n'a besoin que de *Metadata* en lecture pour lire la permission d'un utilisateur.
+
+> **Cible.** Ces désignations passeront dans `.factory/config.yml` (ORC-209), et la matrice elle-même dans le préréglage `factory/default` (ORC-187).
 
 ### Budget journalier
 
