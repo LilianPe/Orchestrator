@@ -1,5 +1,6 @@
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
+import { effectiveEvent } from '../../src/core/dead-letter.js';
 import { AUTHZ_REFUSED, decide, isFenced, mayCheck, SENSITIVE_PATHS } from '../../src/core/engine.js';
 import { reduce } from '../../src/core/reduce.js';
 import {
@@ -12,7 +13,7 @@ import {
   type TicketState,
 } from '../../src/core/types.js';
 import { SqliteStore } from '../../src/store/sqlite-store.js';
-import { DEV_SESSION, PROJECT, sequences, TICKET, VERIFY_FAILURES, type Entry, type Sequences } from './events.js';
+import { DEBOUNCE, DEV_SESSION, PROJECT, sequences, TICKET, VERIFY_FAILURES, type Entry, type Sequences } from './events.js';
 import { decided, effects, fold, isDevStart, launches, params, readsFeedback, stepEffects, TIMEOUT, workflow, type Run, type Step } from './fold.js';
 
 /**
@@ -304,9 +305,10 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
     it.todo('I8 (a) — the cancel event leads to the terminal status cancelled (no terminal status yet: run.cancel and statuses of ORC-133)');
 
     // A human takes the ticket back (moves it anywhere but done, delegates it again) or a new PR opens: it is no longer delivered.
+    // A repair that replays or forces such an event (ORC-175) is that event.
     const reopens = (step: Step): boolean => {
       if (step.kind !== 'decided') return false;
-      const e = step.event;
+      const e = effectiveEvent(step.event);
       if (e.type === 'ticket.delegated') return true;
       if (e.type === 'status.changed') return e.payload.to !== null && e.payload.to !== 'done';
       return e.type === 'pr.opened' && e.payload.number !== step.before?.prNumber;
@@ -316,7 +318,7 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
       for (const step of run(s).steps) {
         if (reopens(step)) merged = false;
         if (merged) expect(starts(step).filter((e) => isDevStart(e, wf)), 'dev run started after pr.merged').toEqual([]);
-        if (step.kind === 'decided' && step.event.type === 'pr.merged') merged = true;
+        if (step.kind === 'decided' && effectiveEvent(step.event).type === 'pr.merged') merged = true;
       }
     };
     it(
@@ -332,8 +334,8 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
           runFinished('success'),
           ext('verify.failed', { runId: 'r1', job: 'dev', failures: VERIFY_FAILURES }),
         );
-        const debounced = seq(...delegated('dev'), reply(), ext('pr.merged', pr), ext('debounce.fired', { job: 'dev-feedback' }));
-        const pending = seq(...delegated('dev'), runStarted(), reply(), ext('debounce.fired', { job: 'dev-feedback' }), ext('pr.merged', pr), runFinished('failure'));
+        const debounced = seq(...delegated('dev'), reply(), ext('pr.merged', pr), ext('timer.fired', DEBOUNCE));
+        const pending = seq(...delegated('dev'), runStarted(), reply(), ext('timer.fired', DEBOUNCE), ext('pr.merged', pr), runFinished('failure'));
         holds(noDevRunAfterMerge, [relaunched, inFlight, debounced, pending]);
       },
       TIMEOUT,
@@ -450,11 +452,11 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
       'untrusted feedback is launched with the sensitive paths, relayed by a later trusted event (ORC-269) or read by a job pending since before it came in (ORC-274)',
       () => {
         // Relayed by the debounce: decide starts the run on all the pending feedback.
-        const debounced = seq(...delegated('dev'), reply('untrusted'), ext('debounce.fired', { job: 'dev-feedback' }));
+        const debounced = seq(...delegated('dev'), reply('untrusted'), ext('timer.fired', DEBOUNCE));
         // Found by fast-check once the fold modelled settle: the pending job was decided before the untrusted reply
         // came in, and settle starts it once the run's check passes, on all the pending feedback. The launch takes the
         // taint of what it reads then. (A failed run blocks the ticket: startRun then refuses the pending job.)
-        const pending = (...end: Entry[]) => seq(...delegated('dev'), runStarted(), reply(), ext('debounce.fired', { job: 'dev-feedback' }), reply('untrusted'), ...end);
+        const pending = (...end: Entry[]) => seq(...delegated('dev'), runStarted(), reply(), ext('timer.fired', DEBOUNCE), reply('untrusted'), ...end);
         const settled = pending(runFinished('success'), ext('verify.passed', { runId: 'r1', job: 'dev' }));
         holds(feedbackRunSandboxed, [debounced, settled, pending(runFinished('failure'))]);
       },
@@ -496,7 +498,9 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
           for (const step of decided(run(s))) {
             if (step.event.roles === undefined || isRefusal(step)) continue;
             const unchecked = decide(step.before, { ...step.event, roles: undefined } as FactoryEvent, wf);
-            expect({ ...step.decision, trace: [] }).toEqual({ ...unchecked, trace: [] });
+            // Only a checked delegation names the run's initiator: the one event an unchecked decision leaves out.
+            const initiator = (e: InternalEvent) => e.type === 'ticket.patched' && 'initiatorId' in e.patch;
+            expect({ ...step.decision, events: step.decision.events.filter((e) => !initiator(e)), trace: [] }).toEqual({ ...unchecked, trace: [] });
           }
         });
       },

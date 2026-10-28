@@ -1,13 +1,28 @@
 import { randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
+import {
+  deadLetteredEvent,
+  deadLetterNotice,
+  REPAIRED_STATUS,
+  repairEvent,
+  type DeadLetter,
+  type DeadLetterStatus,
+  type RepairAction,
+} from '../core/dead-letter.js';
 import type { OutboxEffect } from '../core/decision.js';
 import { normalizeTicket, type QueueName, type FactoryEvent, type TicketState } from '../core/types.js';
-import type { StoredEvent } from '../core/upcast.js';
+import { upcastTimer, type StoredEvent, type StoredTimer } from '../core/upcast.js';
 import {
+  decidedOn,
+  decisionRecord,
   effectResult,
+  timerEvent,
   type DecisionOutcome,
+  type DecisionRecord,
+  type JournalEntry,
   type DecisionRequest,
   type EffectOutcome,
+  type MeasureFacts,
   type OutboxRow,
   type QueueClaim,
   type QueueItem,
@@ -34,7 +49,34 @@ CREATE TABLE IF NOT EXISTS outbox (id TEXT PRIMARY KEY, project_id TEXT NOT NULL
 CREATE INDEX IF NOT EXISTS outbox_open ON outbox (project_id, ticket_id, status, seq, i);
 CREATE INDEX IF NOT EXISTS outbox_event ON outbox (event_id);
 CREATE TABLE IF NOT EXISTS workflow_versions (hash TEXT PRIMARY KEY, definition TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS decision_trace (event_id TEXT PRIMARY KEY, data TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS dead_letter (event_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, ticket_id TEXT, status TEXT NOT NULL, failures INTEGER NOT NULL, error TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, resolved_by TEXT, data TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS dead_letter_ticket ON dead_letter (ticket_id, status);
 `;
+
+interface DeadLetterSqlRow {
+  event_id: string;
+  project_id: string;
+  ticket_id: string | null;
+  status: DeadLetterStatus;
+  failures: number;
+  error: string;
+  resolved_by: string | null;
+  data: string;
+}
+
+function deadLetterRow(r: DeadLetterSqlRow): DeadLetter {
+  return {
+    eventId: r.event_id,
+    projectId: r.project_id,
+    ...(r.ticket_id === null ? {} : { ticketId: r.ticket_id }),
+    event: JSON.parse(r.data) as StoredEvent,
+    error: r.error,
+    failures: Number(r.failures),
+    status: r.status,
+    ...(r.resolved_by === null ? {} : { resolvedBy: r.resolved_by }),
+  };
+}
 
 /** Columns added after their table was first created (ORC-150): `ALTER TABLE` on an older file. */
 const ADDED_COLUMNS: [table: string, column: string, definition: string][] = [
@@ -43,6 +85,7 @@ const ADDED_COLUMNS: [table: string, column: string, definition: string][] = [
   ['outbox', 'error', 'TEXT'],
   ['queue', 'lease', 'TEXT'],
   ['queue', 'lease_until', 'INTEGER'],
+  ['inbox', 'acked_at', 'INTEGER'],
 ];
 
 interface OutboxSqlRow {
@@ -83,13 +126,15 @@ const rank = (priority: number) => (priority === 0 ? 5 : priority);
 export class SqliteStore implements Store {
   private db: DatabaseSync;
 
-  /** `now` stamps the inbox rows, like PgStore's injectable clock. */
+  /** `now` is the store's clock, like PgStore's injectable one: inbox stamps, leases, backoffs, due rows. */
   constructor(
     path: string,
     private readonly now: () => number = () => Date.now(),
   ) {
     this.db = new DatabaseSync(path);
     this.db.exec('PRAGMA journal_mode = WAL;');
+    // `factory run repair` writes to the daemon's file from another process (ORC-175): wait for its lock.
+    this.db.exec('PRAGMA busy_timeout = 5000;');
     this.db.exec(SCHEMA);
     for (const [table, column, definition] of ADDED_COLUMNS) {
       const columns = this.db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
@@ -124,10 +169,7 @@ export class SqliteStore implements Store {
 
   /** The inbox (ORC-147): `seq` keeps the arrival order, the unique id dedups. */
   async appendInbox(e: FactoryEvent | StoredEvent): Promise<boolean> {
-    const res = this.db
-      .prepare('INSERT OR IGNORE INTO inbox (id, received_at, data) VALUES (?, ?, ?)')
-      .run(e.id, this.now(), JSON.stringify(e));
-    return Number(res.changes) === 1;
+    return this.appendResult(e);
   }
 
   async pendingInbox(limit: number, exclude: readonly string[] = []): Promise<StoredEvent[]> {
@@ -142,7 +184,12 @@ export class SqliteStore implements Store {
   }
 
   async markInboxProcessed(id: string): Promise<void> {
-    this.db.prepare('UPDATE inbox SET processed_at = ? WHERE id = ? AND processed_at IS NULL').run(this.now(), id);
+    this.markProcessed(id);
+  }
+
+  /** False when the row was no longer pending. */
+  private markProcessed(id: string): boolean {
+    return Number(this.db.prepare('UPDATE inbox SET processed_at = ? WHERE id = ? AND processed_at IS NULL').run(this.now(), id).changes) === 1;
   }
 
   /**
@@ -181,7 +228,7 @@ export class SqliteStore implements Store {
       .prepare(`SELECT id, status, available_at FROM outbox WHERE project_id = ? AND ticket_id IS ? AND status IN ('pending', 'running') ORDER BY seq, i`)
       .all(event.projectId, ticketId) as { id: string; status: string; available_at: number }[];
     // Held back by its backoff (nothing running): a stop of the ticket's work may go first (ORC-150).
-    const backedOff = open.length > 0 && open.every((r) => r.status === 'pending') && Number(open[0]!.available_at) > Date.now();
+    const backedOff = open.length > 0 && open.every((r) => r.status === 'pending') && Number(open[0]!.available_at) > this.now();
     if (open.length > 0 && !backedOff) return { status: 'waiting', reason: `effect ${open[0]!.id} is unfinished` };
     if (jumped && !backedOff) return { status: 'waiting', reason: `${first!.id} comes first` };
     if (this.db.prepare('SELECT 1 FROM events WHERE id = ?').get(event.id)) {
@@ -190,7 +237,8 @@ export class SqliteStore implements Store {
     }
 
     const known = ticketId === null ? undefined : this.ticketRow(event.projectId, ticketId);
-    const plan = req.decide(known, this.frozenWorkflow(known, req.workflow));
+    const frozen = this.frozenWorkflow(known, req.workflow);
+    const plan = req.decide(known, frozen);
     const preempted = open.map((r) => r.id);
     if (preempted.length > 0) {
       if (!plan.clearTimers) return { status: 'waiting', reason: `effect ${preempted[0]} waits for its retry`, backoff: true };
@@ -201,14 +249,16 @@ export class SqliteStore implements Store {
     const { n } = this.db.prepare('SELECT COUNT(*) AS n FROM events WHERE ticket_id IS ?').get(ticketId) as { n: number };
     const seq = Number(n) + 1;
     this.db.prepare('INSERT INTO events (id, at, ticket_id, data) VALUES (?, ?, ?, ?)').run(event.id, event.at, ticketId, JSON.stringify(event));
-    if (plan.ticket) {
-      if (plan.ticket.workflowHash === req.workflow.hash) {
-        this.db
-          .prepare('INSERT OR IGNORE INTO workflow_versions (hash, definition) VALUES (?, ?)')
-          .run(req.workflow.hash, JSON.stringify(req.workflow.definition));
-      }
-      this.writeTicket(plan.ticket);
+    this.db
+      .prepare('INSERT INTO decision_trace (event_id, data) VALUES (?, ?)')
+      .run(event.id, JSON.stringify(decisionRecord(event, seq, known, decidedOn(req, frozen), plan)));
+    // Every version a decision ran on is kept, projection written or not: its replay needs it (ORC-174).
+    if (req.workflow.hash !== '' && frozen.hash === req.workflow.hash) {
+      this.db
+        .prepare('INSERT OR IGNORE INTO workflow_versions (hash, definition) VALUES (?, ?)')
+        .run(req.workflow.hash, JSON.stringify(req.workflow.definition));
     }
+    if (plan.ticket) this.writeTicket(plan.ticket);
     if (plan.clearTimers && ticketId !== null) this.clearTimers(event.projectId, ticketId);
     for (const t of plan.timers) this.writeTimer(t);
     const effectIds = plan.effects.map((effect, k) => {
@@ -232,6 +282,19 @@ export class SqliteStore implements Store {
     return { hash, definition: JSON.parse(row.definition) as unknown };
   }
 
+  async ticketJournal(projectId: string, ticketId?: string): Promise<JournalEntry[]> {
+    const rows = this.db
+      .prepare(
+        `SELECT e.data AS event, d.data AS decision FROM events e LEFT JOIN decision_trace d ON d.event_id = e.id
+         WHERE e.ticket_id IS ? AND json_extract(e.data, '$.projectId') = ? ORDER BY e.rowid`,
+      )
+      .all(ticketId ?? null, projectId) as { event: string; decision: string | null }[];
+    return rows.map((r) => ({
+      event: JSON.parse(r.event) as StoredEvent,
+      ...(r.decision === null ? {} : { decision: JSON.parse(r.decision) as DecisionRecord }),
+    }));
+  }
+
   async getWorkflowVersion(hash: string): Promise<WorkflowVersion | undefined> {
     const row = this.db.prepare('SELECT definition FROM workflow_versions WHERE hash = ?').get(hash) as { definition: string } | undefined;
     return row ? { hash, definition: JSON.parse(row.definition) as unknown } : undefined;
@@ -242,7 +305,7 @@ export class SqliteStore implements Store {
       .prepare(`SELECT * FROM outbox WHERE project_id = ? AND ticket_id IS ? AND status IN ('pending', 'running') ORDER BY seq, i LIMIT 1`)
       .get(projectId, ticketId ?? null) as OutboxSqlRow | undefined;
     if (!row) return undefined;
-    const now = Date.now();
+    const now = this.now();
     if (row.status === 'running' && (row.lease_until ?? 0) >= now) return 'busy';
     // Waiting for its retry: the ticket's later rows wait behind it.
     if (row.status === 'pending' && Number(row.available_at) > now) return 'busy';
@@ -256,7 +319,7 @@ export class SqliteStore implements Store {
   async renewEffect(id: string, lease: string, leaseMs: number): Promise<boolean> {
     const res = this.db
       .prepare(`UPDATE outbox SET lease_until = ? WHERE id = ? AND status = 'running' AND lease = ?`)
-      .run(Date.now() + leaseMs, id, lease);
+      .run(this.now() + leaseMs, id, lease);
     return Number(res.changes) === 1;
   }
 
@@ -267,7 +330,7 @@ export class SqliteStore implements Store {
       .get(id, lease ?? null, lease ?? null) as OutboxSqlRow | undefined;
   }
 
-  async completeEffect(id: string, lease?: string, at = Date.now(), outcome?: EffectOutcome): Promise<boolean> {
+  async completeEffect(id: string, lease?: string, at = this.now(), outcome?: EffectOutcome): Promise<boolean> {
     return this.atomically(() => {
       const row = this.heldRow(id, lease);
       if (!row) return false;
@@ -282,11 +345,11 @@ export class SqliteStore implements Store {
       .prepare(
         `UPDATE outbox SET status = 'pending', lease = NULL, lease_until = NULL, available_at = ?, error = ? WHERE id = ? AND status = 'running' AND lease = ?`,
       )
-      .run(Date.now() + delayMs, error, id, lease);
+      .run(this.now() + delayMs, error, id, lease);
     return Number(res.changes) === 1;
   }
 
-  async failEffect(id: string, lease: string, error: string, at = Date.now()): Promise<boolean> {
+  async failEffect(id: string, lease: string, error: string, at = this.now()): Promise<boolean> {
     return this.atomically(() => {
       const row = this.heldRow(id, lease);
       if (!row) return false;
@@ -300,13 +363,60 @@ export class SqliteStore implements Store {
     });
   }
 
-  /** The result of an effect, to the inbox in the transaction that settles its row. */
-  private appendResult(e: FactoryEvent): void {
-    this.db.prepare('INSERT OR IGNORE INTO inbox (id, received_at, data) VALUES (?, ?, ?)').run(e.id, Date.now(), JSON.stringify(e));
+  /**
+   * Writes an inbox row; false when the id is already there. Also an event the store writes itself (an effect's
+   * result, a dead letter's notice, a repair, a timer's firing), in the transaction that causes it.
+   */
+  private appendResult(e: FactoryEvent | StoredEvent): boolean {
+    const res = this.db.prepare('INSERT OR IGNORE INTO inbox (id, received_at, data) VALUES (?, ?, ?)').run(e.id, this.now(), JSON.stringify(e));
+    return Number(res.changes) === 1;
+  }
+
+  async deadLetter(row: StoredEvent, error: string, at: number): Promise<boolean> {
+    return this.atomically(() => {
+      if (!this.markProcessed(row.id)) return false;
+      const event = deadLetteredEvent(row);
+      const upserted = this.db
+        .prepare(
+          `INSERT INTO dead_letter (event_id, project_id, ticket_id, status, failures, error, created_at, updated_at, data)
+           VALUES (?, ?, ?, 'open', 1, ?, ?, ?, ?)
+           ON CONFLICT (event_id) DO UPDATE SET status = 'open', failures = dead_letter.failures + 1, error = excluded.error, updated_at = excluded.updated_at
+           RETURNING failures`,
+        )
+        .get(event.id, event.projectId, event.ticketId ?? null, error, at, at, JSON.stringify(event)) as { failures: number };
+      const failures = Number(upserted.failures);
+      const notice = deadLetterNotice({ event, error, failures }, at);
+      if (notice) this.appendResult(notice);
+      return true;
+    });
+  }
+
+  async deadLetters(ticketId?: string): Promise<DeadLetter[]> {
+    const rows = this.db
+      .prepare(`SELECT * FROM dead_letter WHERE ? IS NULL OR ticket_id = ? ORDER BY status = 'open' DESC, created_at, event_id`)
+      .all(ticketId ?? null, ticketId ?? null) as unknown as DeadLetterSqlRow[];
+    return rows.map(deadLetterRow);
+  }
+
+  async getDeadLetter(eventId: string): Promise<DeadLetter | undefined> {
+    const row = this.db.prepare('SELECT * FROM dead_letter WHERE event_id = ?').get(eventId) as unknown as DeadLetterSqlRow | undefined;
+    return row && deadLetterRow(row);
+  }
+
+  async repairDeadLetter(eventId: string, action: RepairAction, by: string, at: number): Promise<DeadLetter | undefined> {
+    return this.atomically(() => {
+      const row = this.db.prepare(`SELECT * FROM dead_letter WHERE event_id = ? AND status = 'open'`).get(eventId) as unknown as DeadLetterSqlRow | undefined;
+      if (!row) return undefined;
+      const status = REPAIRED_STATUS[action];
+      this.db.prepare('UPDATE dead_letter SET status = ?, resolved_by = ?, updated_at = ? WHERE event_id = ?').run(status, by, at, eventId);
+      const dl = { ...deadLetterRow(row), status, resolvedBy: by };
+      this.appendResult(repairEvent(dl, action, by, at));
+      return dl;
+    });
   }
 
   async effectTickets(): Promise<{ projectId: string; ticketId?: string }[]> {
-    const now = Date.now();
+    const now = this.now();
     const rows = this.db
       .prepare(
         `SELECT DISTINCT o.project_id, o.ticket_id FROM outbox o
@@ -417,12 +527,15 @@ export class SqliteStore implements Store {
          ) ORDER BY fire_at`,
       )
       .all(now) as { data: string }[];
-    return rows.map((r) => JSON.parse(r.data));
+    return rows.map((r) => upcastTimer(JSON.parse(r.data) as StoredTimer));
   }
 
-  async deleteTimer(key: string, fireAt?: number): Promise<void> {
-    if (fireAt === undefined) this.db.prepare('DELETE FROM timers WHERE key = ?').run(key);
-    else this.db.prepare('DELETE FROM timers WHERE key = ? AND fire_at = ?').run(key, fireAt);
+  async fireTimer(t: TimerRecord, at: number): Promise<boolean> {
+    return this.atomically(() => {
+      const armed = this.db.prepare('DELETE FROM timers WHERE key = ? AND fire_at = ?').run(t.key, t.fireAt);
+      if (Number(armed.changes) !== 1) return false;
+      return this.appendResult(timerEvent(t, at));
+    });
   }
 
   async deleteTimersFor(projectId: string, ticketId: string): Promise<void> {
@@ -453,7 +566,7 @@ export class SqliteStore implements Store {
 
   /** One process serves the SQLite store: the lease only brings back an item lost by a crash. */
   async claimQueued(queue: QueueName, leaseMs: number): Promise<QueueClaim | undefined> {
-    const now = Date.now();
+    const now = this.now();
     const row = this.db
       .prepare(
         'SELECT project_id, ticket_id, job, data FROM queue WHERE queue = ? AND (lease_until IS NULL OR lease_until < ?) ORDER BY rank, enqueued_at LIMIT 1',
@@ -471,7 +584,7 @@ export class SqliteStore implements Store {
     const { projectId, ticketId, job } = claim.item;
     const res = this.db
       .prepare('UPDATE queue SET lease_until = ? WHERE project_id = ? AND ticket_id = ? AND job = ? AND lease = ?')
-      .run(Date.now() + leaseMs, projectId, ticketId, job, claim.lease);
+      .run(this.now() + leaseMs, projectId, ticketId, job, claim.lease);
     return Number(res.changes) === 1;
   }
 
@@ -494,7 +607,7 @@ export class SqliteStore implements Store {
   async listQueue(): Promise<QueueItem[]> {
     const rows = this.db
       .prepare('SELECT data FROM queue WHERE lease_until IS NULL OR lease_until < ? ORDER BY rank, enqueued_at')
-      .all(Date.now()) as { data: string }[];
+      .all(this.now()) as { data: string }[];
     return rows.map((r) => JSON.parse(r.data));
   }
 
@@ -514,6 +627,32 @@ export class SqliteStore implements Store {
   async costSince(ts: number): Promise<number> {
     const row = this.db.prepare('SELECT COALESCE(SUM(cost_usd), 0) AS total FROM runs WHERE started_at >= ?').get(ts) as { total: number };
     return row.total;
+  }
+
+  async markAcked(eventId: string, at: number): Promise<void> {
+    this.db.prepare('UPDATE inbox SET acked_at = ? WHERE id = ? AND acked_at IS NULL').run(at, eventId);
+  }
+
+  async measureFacts(projectId: string, ticketId: string): Promise<MeasureFacts> {
+    const events = this.db
+      .prepare(`SELECT data FROM events WHERE ticket_id = ? AND json_extract(data, '$.projectId') = ? ORDER BY rowid`)
+      .all(ticketId, projectId) as { data: string }[];
+    const runs = this.db
+      .prepare(`SELECT data FROM runs WHERE json_extract(data, '$.projectId') = ? AND json_extract(data, '$.ticketId') = ? ORDER BY started_at, rowid`)
+      .all(projectId, ticketId) as { data: string }[];
+    const acked = this.db
+      .prepare(
+        `SELECT id, acked_at FROM inbox WHERE acked_at IS NOT NULL
+           AND id IN (SELECT id FROM events WHERE ticket_id = ? AND json_extract(data, '$.projectId') = ?)`,
+      )
+      .all(ticketId, projectId) as { id: string; acked_at: number }[];
+    return {
+      devSession: this.ticketRow(projectId, ticketId)?.linearSessionId,
+      events: events.map((r) => JSON.parse(r.data) as FactoryEvent),
+      runs: runs.map((r) => JSON.parse(r.data) as RunRecord),
+      effects: await this.listEffects(projectId, ticketId),
+      acks: Object.fromEntries(acked.map((r) => [r.id, Number(r.acked_at)])),
+    };
   }
 
   async getMeta(key: string): Promise<string | undefined> {

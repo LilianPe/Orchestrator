@@ -1,12 +1,13 @@
 import type { RunLimits } from '../../config/workflow-schema.js';
-import type { RunOutcome } from '../../core/types.js';
+import type { RunOutcome, TokenUsage } from '../../core/types.js';
 
 export type RunStreamEvent =
   | { kind: 'init'; sessionId: string }
   | { kind: 'text'; text: string }
   | { kind: 'tool'; name: string; input: string }
   | { kind: 'tool_result'; isError: boolean }
-  | { kind: 'result'; isError: boolean; costUsd: number; turns: number; text: string };
+  /** `tokens`: the `usage` of the result line, absent when the CLI reported none (ORC-235). */
+  | { kind: 'result'; isError: boolean; costUsd: number; turns: number; text: string; tokens?: TokenUsage };
 
 export interface RunRequest {
   runId: string;
@@ -32,6 +33,8 @@ export interface RunResult {
   costUsd: number;
   turns: number;
   lastText: string;
+  /** What the runtime reported it used (ORC-235), never what the agent wrote; absent when it reported nothing. */
+  tokens?: TokenUsage;
 }
 
 export interface RunHandle {

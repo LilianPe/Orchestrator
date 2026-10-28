@@ -31,24 +31,49 @@ export function crashAfterAck(target: string): { response: { status: number }; e
 const SECRET = 'inbox-test-secret';
 const NOW = 1_000;
 
-/** A signed Linear delegation of REL-1 (session as-1), as Linear posts it. */
-export function signedDelegation(): { raw: string; headers: Record<string, string> } {
-  const raw = JSON.stringify({
+const sign = (body: unknown) => {
+  const raw = JSON.stringify(body);
+  return { raw, headers: { 'linear-signature': createHmac('sha256', SECRET).update(raw).digest('hex') } };
+};
+
+/** A signed Linear delegation of REL-1 (session as-1), as Linear posts it at `at`. */
+export function signedDelegation(at = NOW): { raw: string; headers: Record<string, string> } {
+  return sign({
     type: 'AgentSessionEvent',
     action: 'created',
-    webhookTimestamp: NOW,
-    agentSession: { id: 'as-1', issue: { id: 'u1', identifier: 'REL-1', title: 'Export CSV' }, comment: null, creator: { name: 'Lilian' } },
+    webhookTimestamp: at,
+    agentSession: { id: 'as-1', issue: { id: 'u1', identifier: 'REL-1', title: 'Export CSV' }, comment: null, creator: { id: 'user-lilian', name: 'Lilian' } },
     promptContext: '<issue identifier="REL-1">Export CSV</issue>',
   });
-  return { raw, headers: { 'linear-signature': createHmac('sha256', SECRET).update(raw).digest('hex') } };
 }
 
-/** The daemon's Linear ingestion for project `p` (team REL), writing through `accept`. */
-export function linearIngest(accept: (e: FactoryEvent) => Promise<boolean>, acks: string[] = []) {
+/** A signed mention of the agent in a comment of REL-1 (a question, new session `sessionId`), posted at `at`. */
+export function signedMention(sessionId: string, body: string, at = NOW): { raw: string; headers: Record<string, string> } {
+  return sign({
+    type: 'AgentSessionEvent',
+    action: 'created',
+    webhookTimestamp: at,
+    agentSession: { id: sessionId, issue: { id: 'u1', identifier: 'REL-1', title: 'Export CSV' }, comment: { id: `c-${sessionId}`, body, user: { id: 'user-lilian', name: 'Lilian' } } },
+  });
+}
+
+/**
+ * The daemon's Linear ingestion for project `p` (team REL), writing through `accept`. `acked` and
+ * `now` as the daemon wires them: what follows a posted ack (the daemon records its time), the
+ * clock (default 1000).
+ */
+export function linearIngest(
+  accept: (e: FactoryEvent) => Promise<boolean>,
+  acks: string[] = [],
+  opts: { acked?: (eventId: string) => Promise<void>; now?: () => number } = {},
+) {
   return createLinearIngest({
     secret: () => SECRET,
     accept,
-    ack: async (sessionId) => void acks.push(sessionId),
+    ack: async (sessionId, eventId) => {
+      acks.push(sessionId);
+      await opts.acked?.(eventId);
+    },
     log: () => {},
     ctx: {
       projectIdForTeam: (k) => (k === 'REL' ? 'p' : undefined),
@@ -57,7 +82,7 @@ export function linearIngest(accept: (e: FactoryEvent) => Promise<boolean>, acks
       labelNameById: () => undefined,
       isEcho: () => false,
       commands: () => [],
-      now: () => NOW,
+      now: opts.now ?? (() => NOW),
     },
   });
 }

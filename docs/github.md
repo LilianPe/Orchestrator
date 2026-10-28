@@ -1,6 +1,6 @@
 # GitHub
 
-Relais parle à GitHub à travers **git** et une **GitHub App d'usine**. Le démon utilise l'App quand elle est configurée ; sinon il retombe sur la CLI **`gh`** (repli de migration). Les agents continuent d'utiliser `gh` et `GH_TOKEN` tant que ORC-125 n'a pas retiré cette dépendance. Il n'y a pas de webhook GitHub : le démon **relève** les PR toutes les 30 s pour suivre la CI, les reviews et les merges.
+Relais parle à GitHub à travers **git** et une **GitHub App d'usine**. Le démon utilise l'App quand elle est configurée ; sinon il retombe sur la CLI **`gh`** (repli de migration). Les agents continuent d'utiliser `gh` et `GH_TOKEN` tant que ORC-125 n'a pas retiré cette dépendance. Le démon suit les PR de deux façons, qui écrivent les mêmes événements dans l'inbox : les **webhooks GitHub** (`POST /webhooks/github`, dès que leur secret est configuré, voir [Webhooks GitHub](#webhooks-github)) et le **relevé** des PR toutes les 30 s, gardé jusqu'à la réconciliation GitHub (ORC-185) et son retrait (ORC-181).
 
 ## Authentification du démon
 
@@ -29,7 +29,7 @@ Une valeur de `config.yaml` l'emporte sur la variable d'environnement. Si une se
 #### Créer l'App
 
 1. GitHub → **Settings → Developer settings → GitHub Apps → New GitHub App**.
-2. Renseignez un nom et une URL. **Désactivez le webhook** : Relais n'en a pas besoin.
+2. Renseignez un nom et une URL. **Webhook** : actif, URL `<publicUrl>/webhooks/github`, secret = la valeur de `github.webhookSecret` (ou `GH_WEBHOOK_SECRET`) ; événements : *Pull request*, *Pull request review*, *Pull request review comment*, *Check run*, *Check suite*, *Push*. Sans URL publique, laissez-le désactivé : le relevé toutes les 30 s suit les PR seul.
 3. Dans **Repository permissions**, appliquez le manifeste [`github-app-manifest.json`](github-app-manifest.json) :
    - **Contents** : lecture/écriture ;
    - **Pull requests** : lecture/écriture ;
@@ -104,11 +104,33 @@ Au moment d'un run `dev-feedback`, les fils de review **non résolus** sont lus 
 | CI qui passe au rouge | `pr.checks_failed` (avec la liste des checks en échec) | `fix-ci` si le ticket est en *Human Review* ou *AI Review* et non bloqué, au plus `limits.ci_fix_attempts` fois de suite ; ensuite le ticket est bloqué ([`workflow.md`](workflow.md#limits)) |
 | CI qui passe au vert | `pr.checks_passed` | remet à zéro le compte des relances sur CI rouge et lève le blocage dû à cette borne |
 | PR mergée | `pr.merged` | *Done*, worktree supprimé, `learn` ; ensuite, plus aucun run de code sur le ticket |
-| PR fermée sans merge | `pr.closed` | rien |
+| PR fermée sans merge | `pr.closed` | le travail du ticket est annulé (voir [`workflow.md`](workflow.md#événements-configurables)) |
 
 Un changement d'état de CI n'est signalé qu'une fois (pas à chaque relevé). Les commentaires de review **non résolus** de la PR sont relus au moment d'un run `dev-feedback` (entrée `feedback`) : résolvez un fil sur GitHub pour qu'il ne soit plus renvoyé à l'agent.
 
-Pas de webhook GitHub : il faut jusqu'à 30 s pour qu'un merge ou une CI soit pris en compte.
+Sans webhook GitHub, il faut jusqu'à 30 s pour qu'un merge ou une CI soit pris en compte. Un verdict de CI est nommé par la tête de la PR (`pr:<ticket>:<n>:checks:<fail|pass>:<sha>`) : le relevé et le webhook qui voient le même verdict sur le même commit l'écrivent une seule fois dans l'inbox, et un verdict rouge revu sur le même commit après un vert (CI relancée) n'est pas signalé une seconde fois. Avec la CLI `gh`, la tête est lue dans `headRefOid`.
+
+## Webhooks GitHub
+
+`POST /webhooks/github` reçoit les webhooks de l'App (ORC-134) :
+
+- **signature** : `X-Hub-Signature-256` doit valoir `sha256=` suivi du HMAC-SHA256 du corps brut avec le secret, comparé en temps constant ; sinon refus (401) et **rien n'est écrit**. Le secret vient de `github.webhookSecret` dans `config.yaml`, sinon de la variable `GH_WEBHOOK_SECRET`. Sans secret (ou un secret fait d'espaces), **tous** les webhooks GitHub sont refusés, et `relais up` le signale au démarrage ;
+- **inbox écrite avant la réponse** (ORC-147) : un 200 veut dire « écrit » ; si le démon tombe juste après, même avec `kill -9`, l'événement est traité au démarrage suivant. Si l'écriture échoue, la réponse est 500 : GitHub ne renvoie pas seul une livraison en échec, renvoyez-la depuis l'onglet *Advanced* de l'App, ou laissez le relevé la rattraper ;
+- **déduplication et rejeu** : l'id de chaque événement vient du corps signé (numéro de PR, SHA, id de la review ou du commentaire), jamais de `X-GitHub-Delivery`, que la signature ne couvre pas (il sert seulement au journal). Une livraison renvoyée, un corps rejoué, ou le même fait vu par le relevé, porte un id que l'inbox a déjà : il n'est pas retraité. GitHub ne signe pas d'horodatage : il n'y a pas de contrôle de fraîcheur, la déduplication en base en tient lieu ;
+- **rattachement au ticket** : par la branche de la PR (ou du push), comme le relevé, et par le dépôt : `repository.full_name` doit être le dépôt `origin` du projet du ticket (lu une fois par `git remote get-url origin`). Seule une branche d'un ticket suivi, dans le dépôt de son projet, produit un événement ; tout le reste (autre dépôt où l'App est installée, autre branche, corps d'une autre forme) est accepté (200) et ignoré. Une PR plus ancienne de la branche, déjà fermée, est ignorée aussi.
+
+| Webhook | Événement dans l'inbox | Réaction |
+|---|---|---|
+| `pull_request` fermée avec `merged: true` | `pr.merged` (précédé de `pr.opened` si le ticket ne connaît pas la PR) | comme pour le relevé |
+| `pull_request` fermée sans merge | `pr.closed`, un par fermeture | travail du ticket annulé |
+| `pull_request` rouverte (la PR du ticket) | `pr.opened`, un par réouverture | la PR redevient ouverte ; le ticket reste bloqué jusqu'à une relance humaine |
+| `pull_request` ouverte avec `mergeable_state: dirty` | `pr.conflicted` (tête et base) | aucune pour l'instant (ORC-146) |
+| `check_run` / `check_suite` terminé en échec (`failure`, `timed_out`, `cancelled`, `action_required`, `stale`, `startup_failure`) sur la tête de la PR | `pr.checks_failed`, avec la liste des checks en échec que la forge lit sur cette tête ; rien si elle lit cette tête en cours ou au vert (run annulé puis relancé) ; si elle ne répond pas, le check du webhook seul | celle du pack, bornée par `limits.ci_fix_attempts` |
+| `check_run` / `check_suite` terminé au vert | `pr.checks_passed`, seulement quand la forge lit alors **tous** les checks de cette tête au vert ; si elle ne répond pas, 500 | celle du pack |
+| `push` sur la branche du ticket par un compte qui n'est pas un bot | `push.human` (non fiable) | aucune pour l'instant (ORC-159) |
+| `pull_request_review` soumise, `pull_request_review_comment` créé, par un humain | `pr.reviewed` (non fiable) | aucune pour l'instant (ORC-190) |
+
+Un check sur un commit que la PR a quitté est ignoré. Une lecture de la forge en retard sur le webhook (check encore lu « en cours ») ne laisse rien passer : le relevé rattrape le verdict. Les webhooks sont traités un par un, dans l'ordre d'arrivée : une lecture lente de la forge retarde les réponses suivantes. Les statuts de commit (`status`) ne passent que par le relevé. Un conflit n'apparaît que sur un webhook `pull_request` où GitHub a déjà calculé la fusionnabilité : un conflit créé par un push sur la branche par défaut, sans événement sur la PR, attend la réconciliation (ORC-185). Tant que les agents poussent avec `GH_TOKEN` (ORC-125), leurs pushes viennent d'un compte utilisateur et arrivent donc comme `push.human`, sans effet aujourd'hui. `pr.conflicted` et `pr.reviewed` ne sont pas des clés acceptées sous `on` : le moteur les trace sans réagir.
 
 ## Branches
 

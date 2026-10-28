@@ -3,7 +3,7 @@ import type { Workflow } from '../config/workflow-schema.js';
 import type { WorkflowVersion } from '../store/types.js';
 
 /** JSON with sorted keys: the same workflow always gives the same text, whatever its key order. */
-function canonical(value: unknown): string {
+export function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
   if (value !== null && typeof value === 'object') {
     const entries = Object.entries(value as Record<string, unknown>)

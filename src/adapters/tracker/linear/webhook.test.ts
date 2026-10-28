@@ -64,7 +64,7 @@ describe('stripMention', () => {
 describe('mapLinearWebhook', () => {
   it('maps a delegation', async () => {
     expect(await mapLinearWebhook(fx('session-created-delegation'), 'd1', ctx())).toEqual([
-      { id: 'linear:d1', type: 'ticket.delegated', at: 5000, schemaVersion: 2, taint: 'trusted', actor: 'user-lilian', projectId: 'p', ticketId: 'REL-1',
+      { id: 'linear:d1', type: 'ticket.delegated', at: 5000, schemaVersion: 3, taint: 'trusted', actor: 'user-lilian', projectId: 'p', ticketId: 'REL-1',
         payload: { linearSessionId: 'as-1', promptContext: '<issue identifier="REL-1">Export</issue>' } },
     ]);
   });
@@ -87,8 +87,8 @@ describe('mapLinearWebhook', () => {
   it('maps a move and an added label', async () => {
     const out = await mapLinearWebhook(fx('issue-moved-labeled'), 'd6', ctx());
     expect(out).toEqual([
-      { id: 'linear:d6', type: 'status.changed', at: 5000, schemaVersion: 2, taint: 'trusted', actor: 'user-lilian', projectId: 'p', ticketId: 'REL-1', payload: { from: 'human_review', to: 'ai_review' } },
-      { id: 'linear:d6:label:l-resume', type: 'label.changed', at: 5000, schemaVersion: 2, taint: 'trusted', actor: 'user-lilian', projectId: 'p', ticketId: 'REL-1', payload: { label: 'agent:reprendre', change: 'added' } },
+      { id: 'linear:d6', type: 'status.changed', at: 5000, schemaVersion: 3, taint: 'trusted', actor: 'user-lilian', projectId: 'p', ticketId: 'REL-1', payload: { from: 'human_review', to: 'ai_review' } },
+      { id: 'linear:d6:label:l-resume', type: 'label.changed', at: 5000, schemaVersion: 3, taint: 'trusted', actor: 'user-lilian', projectId: 'p', ticketId: 'REL-1', payload: { label: 'agent:reprendre', change: 'added' } },
     ]);
   });
   it('keeps the label event id when the state change is an echo', async () => {
@@ -111,8 +111,8 @@ describe('mapLinearWebhook', () => {
   it('maps a removed label as label.changed, and drops the echo of a removal the factory made (ORC-160)', async () => {
     const removed = { ...fx('issue-moved-labeled'), data: { ...fx('issue-moved-labeled').data, labelIds: ['l-resume'] }, updatedFrom: { labelIds: ['l-bug'] } };
     expect(await mapLinearWebhook(removed, 'd10', ctx())).toEqual([
-      { id: 'linear:d10:label:l-resume', type: 'label.changed', at: 5000, schemaVersion: 2, taint: 'trusted', actor: 'user-lilian', projectId: 'p', ticketId: 'REL-1', payload: { label: 'agent:reprendre', change: 'added' } },
-      { id: 'linear:d10:label:l-bug', type: 'label.changed', at: 5000, schemaVersion: 2, taint: 'trusted', actor: 'user-lilian', projectId: 'p', ticketId: 'REL-1', payload: { label: 'bug', change: 'removed' } },
+      { id: 'linear:d10:label:l-resume', type: 'label.changed', at: 5000, schemaVersion: 3, taint: 'trusted', actor: 'user-lilian', projectId: 'p', ticketId: 'REL-1', payload: { label: 'agent:reprendre', change: 'added' } },
+      { id: 'linear:d10:label:l-bug', type: 'label.changed', at: 5000, schemaVersion: 3, taint: 'trusted', actor: 'user-lilian', projectId: 'p', ticketId: 'REL-1', payload: { label: 'bug', change: 'removed' } },
     ]);
     // An addition's echo does not hide a removal of the same label, nor the other way round.
     expect((await mapLinearWebhook(removed, 'd10', ctx(['label-removed:REL-1:bug']))).map((e) => e.payload)).toEqual([{ label: 'agent:reprendre', change: 'added' }]);
@@ -222,6 +222,21 @@ describe('ingest', () => {
     expect(await ingest(raw, { 'linear-signature': sig })).toEqual({ status: 200 });
     expect(order).toEqual(['inbox:ticket.delegated', 'ack:as-1']);
     expect(await ids()).toHaveLength(1);
+  });
+
+  it('acks with the id of the event, so the daemon can record when (ORC-235)', async () => {
+    const acked: [string, string][] = [];
+    const { store } = inbox();
+    const ingest = createLinearIngest({
+      secret: () => 'sec',
+      ctx: { ...ctx(), now: () => 2000 },
+      accept: (e) => store.appendInbox(e),
+      ack: async (sessionId, eventId) => void acked.push([sessionId, eventId]),
+      log: () => {},
+    });
+    const delegation = signed(fx('session-created-delegation'));
+    expect(await ingest(delegation.raw, { 'linear-signature': delegation.sig })).toEqual({ status: 200 });
+    expect(acked).toEqual((await store.pendingInbox(10)).map((e) => ['as-1', e.id]));
   });
 
   it('answers only once the inbox write is committed', async () => {

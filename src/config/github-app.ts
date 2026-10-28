@@ -8,7 +8,6 @@ export interface GithubAppSettings {
   /** PEM content, never a path. */
   privateKey: string;
   installationId?: string;
-  webhookSecret?: string;
 }
 
 const PEM_HEADER = '-----BEGIN';
@@ -60,11 +59,17 @@ export function resolveGithubApp(config: InstanceConfig, env: NodeJS.ProcessEnv 
     );
   }
   const installationId = (fromConfig?.installationId ?? env['GH_APP_INSTALLATION_ID'] ?? '').trim() || undefined;
-  const webhookSecret = fromConfig?.webhookSecret?.trim() || undefined;
   return {
     appId,
     privateKey: readPrivateKey(key),
     ...(installationId ? { installationId } : {}),
-    ...(webhookSecret ? { webhookSecret } : {}),
   };
+}
+
+/**
+ * Secret of the GitHub webhooks (ORC-134): `github.webhookSecret` of config.yaml, else the
+ * `GH_WEBHOOK_SECRET` env var. Empty when neither is set: every GitHub webhook is then refused.
+ */
+export function githubWebhookSecret(config: InstanceConfig, env: NodeJS.ProcessEnv = process.env): string {
+  return config.github?.webhookSecret?.trim() || env['GH_WEBHOOK_SECRET']?.trim() || '';
 }

@@ -1,13 +1,15 @@
 import type { JobSpec, Rule, Workflow } from '../config/workflow-schema.js';
 import { allowed, DEFAULT_MATRIX, refusalMessage, type AuthzAction, type AuthzMatrix, type Channel } from './authz.js';
 import { evalCondition } from './conditions.js';
+import { deadLetterReason, liftDeadLetterBlock, REPAIR_LABELS, repairedEvent } from './dead-letter.js';
 import type { Decision, Effect } from './decision.js';
 import { reduce } from './reduce.js';
 import type { EventType, FactoryEvent, FeedbackItem, InputKind, Taint, TicketState, VerifyFailure } from './types.js';
 
 type StartRun = Extract<Effect, { kind: 'start_run' }>;
 
-const STOP_MESSAGE = 'Arrêté. Répondez dans ce fil ou posez le label agent:reprendre pour relancer.';
+const RELAUNCH = 'Répondez dans ce fil ou posez le label agent:reprendre pour relancer.';
+const STOP_MESSAGE = `Arrêté. ${RELAUNCH}`;
 const STOPPED = 'Arrêté à la demande';
 
 /** Paths a run started from an untrusted event must not write; enforced by the runner's sandbox (ORC-151). */
@@ -20,17 +22,18 @@ export function taintedKnowledge(job: string, source: 'event' | 'read' = 'event'
 }
 
 const BUILT_IN = new Set<EventType>([
-  'control.pause', 'control.resume', 'control.stop', 'run.finished', 'verify.passed', 'verify.failed', 'debounce.fired', 'pr.opened',
-  'effect.done', 'effect.failed',
+  'control.pause', 'control.resume', 'control.stop', 'run.finished', 'verify.passed', 'verify.failed', 'timer.fired', 'pr.opened',
+  'effect.done', 'effect.failed', 'dead_letter.added',
 ]);
 
 function empty(): Decision {
   return { events: [], effects: [], timers: [], trace: [] };
 }
 
-function stop(out: Decision): Decision {
-  out.events.push({ type: 'work.cancelled' }, { type: 'ticket.blocked', reason: STOPPED });
-  out.effects.push({ kind: 'stop_run' }, { kind: 'activity', type: 'response', body: STOP_MESSAGE });
+/** The ticket's work stops and it is blocked for `reason` until a human relaunches it; `body` tells the session. */
+function stop(out: Decision, reason = STOPPED, body = STOP_MESSAGE): Decision {
+  out.events.push({ type: 'work.cancelled' }, { type: 'ticket.blocked', reason });
+  out.effects.push({ kind: 'stop_run' }, { kind: 'activity', type: 'response', body });
   return out;
 }
 
@@ -240,7 +243,7 @@ function applyRule(out: Decision, rule: Rule, event: FactoryEvent, ticket: Ticke
   }
   if (!job) return out;
   if (rule.debounceMs && rule.debounceMs > 0 && !refusal(event, ticket, job)) {
-    out.timers.push({ kind: 'debounce', job: job.name, ms: rule.debounceMs });
+    out.timers.push({ kind: 'debounce', slot: job.name, ms: rule.debounceMs, payload: { job: job.name } });
   } else {
     const threaded = event.type === 'session.mentioned' || event.type === 'command';
     startRun(out, event, ticket, job, {
@@ -304,6 +307,29 @@ function afterMerge(state: TicketState | undefined, event: FactoryEvent, workflo
   return workflow.jobs[event.payload.job]?.queue === 'dev' ? `merged: ignored run.finished for run ${event.payload.runId}` : undefined;
 }
 
+/** Delivered (`done`, PR merged) or stopped by a human (its reason stays): a failure blocks it no more. */
+function settledTicket(ticket: TicketState): string | undefined {
+  if (ticket.logical === 'done' || ticket.prState === 'MERGED') return 'delivered';
+  return ticket.blocked && ticket.blockReason === STOPPED ? 'stopped' : undefined;
+}
+
+/**
+ * A dead-lettered event repaired by `factory run repair` (ORC-175). The block of that event is lifted
+ * first (`reduce` does the same), then a `replay` decides the event again on the unblocked ticket; a
+ * `force` records its facts (by `reduce`) without its decision, a `skip` drops it.
+ */
+function repair(state: TicketState | undefined, event: FactoryEvent<'dead_letter.repaired'>, workflow: Workflow): Decision {
+  const { eventId, action, by } = event.payload;
+  const base = liftDeadLetterBlock(state, eventId);
+  const lifted = base !== state;
+  const repaired = repairedEvent(event);
+  const out = action === 'replay' && repaired ? decide(base, repaired, workflow) : empty();
+  // Pushed, not put first: the trace of a replayed event keeps its fence first (`isFenced`).
+  out.trace.push(`built-in dead_letter.repaired: ${action} ${eventId}`);
+  if (lifted) out.effects.push({ kind: 'activity', type: 'response', body: `Événement ${eventId} réparé par ${by} (${REPAIR_LABELS[action]}) : le ticket est débloqué.` });
+  return out;
+}
+
 /** Events that trigger the agent (ORC-186): a delegation, a mention, a command. */
 const TRIGGERS = new Set<EventType>(['ticket.delegated', 'session.mentioned', 'command']);
 
@@ -312,6 +338,7 @@ const TRIGGERS = new Set<EventType>(['ticket.delegated', 'session.mentioned', 'c
  * `matrix` (ORC-186) is the default one until the `factory/default` preset declares it (ORC-187).
  */
 export function decide(state: TicketState | undefined, event: FactoryEvent, workflow: Workflow, matrix: AuthzMatrix = DEFAULT_MATRIX): Decision {
+  if (event.type === 'dead_letter.repaired') return repair(state, event, workflow);
   const out = empty();
   const fence = staleAttempt(state, event, workflow);
   if (fence) {
@@ -329,8 +356,9 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
   if (TRIGGERS.has(event.type)) {
     // The event's facts stay recorded (Linear did delegate, the session exists): only the factory's answer is refused.
     if (!authorize(out, event, ticket, 'trigger', 'linear', matrix)) return out;
-    // The run's initiator, and its requester: who delegated it, as Linear signed it.
-    if (event.type === 'ticket.delegated' && event.actor && ticket && ticket.initiatorId !== event.actor) {
+    // The run's initiator, and its requester: who delegated it, as Linear signed it and the matrix allowed it.
+    // Only a checked delegation names one: a row journaled before ORC-186 replays as it was decided.
+    if (event.type === 'ticket.delegated' && event.roles !== undefined && event.actor && ticket && ticket.initiatorId !== event.actor) {
       out.events.push({ type: 'ticket.patched', patch: { initiatorId: event.actor } });
     }
   }
@@ -382,8 +410,14 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
       const reason = `Vérifications toujours en échec après ${workflow.limits.verifyAttempts} tentatives.`;
       return block(out, reason, `${reason}\n${formatFailuresShort(failures)}\nRépondez dans ce fil pour relancer.`);
     }
-    case 'debounce.fired': {
-      const job = workflow.jobs[event.payload.job];
+    case 'timer.fired': {
+      const fired = event.payload;
+      if (fired.kind !== 'debounce') {
+        // Armed by no rule yet: the clarify reminder and block are ORC-210's, the usage-limit wait ORC-215's.
+        out.trace.push(`timer.fired ${fired.kind}: no rule decides it yet`);
+        return out;
+      }
+      const job = workflow.jobs[fired.payload.job];
       if (!job) return out;
       if (ticket?.blocked && !refusal(event, ticket, job)) unblock(out, event, ticket);
       startRun(out, event, ticket, job, { input: job.input });
@@ -393,13 +427,30 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
       // A replay that found its effect already made (ORC-162): nothing to decide, but it stays visible.
       if (event.payload.deduplicated) out.trace.push(`effect ${event.payload.effectId} deduplicated${event.payload.ref ? ` (${event.payload.ref})` : ''}`);
       return out;
+    case 'dead_letter.added': {
+      // An event without a ticket, or a ticket the factory does not track: the dead letter waits for its repair.
+      if (!ticket) return out;
+      const settled = settledTicket(ticket);
+      if (settled) {
+        out.trace.push(`dead_letter.added ignored: ticket ${settled}`);
+        return out;
+      }
+      const reason = deadLetterReason(event.payload);
+      // Already blocked (another dead letter, a failed effect, the red-CI bound…): that reason stays, so that
+      // repairing this event does not lift a block that is not its own. The event is still announced.
+      if (ticket.blocked) out.trace.push(`dead_letter.added: ticket already blocked (${ticket.blockReason ?? 'no reason'}), reason kept`);
+      else out.events.push({ type: 'ticket.blocked', reason });
+      out.effects.push({ kind: 'activity', type: 'error', body: `${reason} Un mainteneur peut le réparer : \`factory run repair ${ticket.ticketId}\`.` });
+      return out;
+    }
     case 'effect.failed': {
       // `settle` is a step of the shell, not an effect of the workflow: its failure is only logged.
       const { kind, error, eventId } = event.payload;
       if (kind === 'settle' || !ticket) return out;
       // Nothing left to block: a delivered ticket, or one a human stopped (its reason stays).
-      if (ticket.logical === 'done' || ticket.prState === 'MERGED' || (ticket.blocked && ticket.blockReason === STOPPED)) {
-        out.trace.push(`effect.failed ignored: ticket ${ticket.logical === 'done' || ticket.prState === 'MERGED' ? 'delivered' : 'stopped'}`);
+      const settled = settledTicket(ticket);
+      if (settled) {
+        out.trace.push(`effect.failed ignored: ticket ${settled}`);
         return out;
       }
       // The error notice of a block died: the ticket stays blocked for the reason the notice carried.
@@ -420,6 +471,24 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
       out.events.push({ type: 'work.cancelled' });
       out.effects.push({ kind: 'stop_run' });
       break;
+    case 'pr.closed': {
+      // Closed without merge (ORC-134): the run is cancelled as by a stop, then the rules apply. The close
+      // of another PR than the ticket's, of one already closed or merged, or of a done ticket cancels nothing.
+      const n = event.payload.number;
+      if (!ticket || ticket.prNumber !== n || ticket.prState === 'MERGED' || ticket.prState === 'CLOSED' || ticket.logical === 'done') {
+        out.trace.push(`pr.closed: PR #${n} is not the open PR of a ticket at work, nothing cancelled`);
+        break;
+      }
+      out.trace.push('built-in pr.closed: work cancelled');
+      out.events.push({ type: 'ticket.patched', patch: { prState: 'CLOSED' } });
+      stop(out, `PR #${n} fermée sans merge`, `La PR #${n} a été fermée sans merge : j'arrête le travail sur ce ticket. ${RELAUNCH}`);
+      break;
+    }
+    case 'pr.reviewed':
+    case 'pr.conflicted':
+      // In the inbox, but no reaction yet (ORC-190 for reviews, ORC-146 for conflicts): no rule applies to them.
+      out.trace.push(`${event.type}: no reaction yet`);
+      return out;
     case 'pr.checks_passed':
       // Green CI ends the red-CI loop: its count starts over (ORC-270). The rules of pr.checks_passed still apply.
       // A ticket blocked by the red-CI bound is no longer blocked for a reason that holds: the block is lifted.
@@ -427,10 +496,12 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
       if (ticket?.blocked && ticket.blockReason?.startsWith(RED_CI_BLOCKED)) out.events.push({ type: 'ticket.unblocked' });
       break;
     case 'pr.opened': {
-      // A new PR (another number) reopens a delivered ticket; the same PR seen again leaves it as it is.
-      const reopens = event.payload.number !== ticket?.prNumber;
+      // A new PR (another number) reopens a delivered ticket; the same PR seen again leaves it as it is,
+      // unless it was closed: reopened, it is open again (ORC-134).
+      const other = event.payload.number !== ticket?.prNumber;
+      const reopens = other || ticket?.prState === 'CLOSED';
       // Another PR is another red-CI loop: the count of the previous one does not carry over (ORC-270).
-      if (reopens) resetRedCi(out, ticket);
+      if (other) resetRedCi(out, ticket);
       out.events.push({
         type: 'ticket.patched',
         patch: { prNumber: event.payload.number, prUrl: event.payload.url, ...(reopens ? { prState: 'OPEN' as const } : {}) },

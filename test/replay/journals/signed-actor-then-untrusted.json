@@ -1,0 +1,1411 @@
+{
+  "format": 1,
+  "projectId": "p",
+  "ticketId": "REL-1",
+  "workflows": {
+    "2ec224e50ed209cb7b47004a8c26f0f6d5be0b5768d0d7173a6b853c4d6a2657": {
+      "version": 1,
+      "tracker": {
+        "kind": "linear",
+        "pickup": {
+          "checks": [
+            "has_description",
+            "not_started"
+          ]
+        }
+      },
+      "states": {
+        "todo": "Todo",
+        "dev": "In Progress",
+        "human_review": "Human Review",
+        "ai_review": "AI Review",
+        "ready": "Ready to Merge",
+        "done": "Done"
+      },
+      "limits": {
+        "parallelSessions": 3,
+        "questionSessions": 2,
+        "perRun": {
+          "turns": 150,
+          "durationMs": 5400000,
+          "usd": 5
+        },
+        "verifyAttempts": 2,
+        "ciFixAttempts": 2,
+        "reviewRounds": 5
+      },
+      "workspace": {
+        "setup": [],
+        "portBase": 4200
+      },
+      "commands": [
+        "retiens",
+        "fais-le"
+      ],
+      "on": {
+        "ticket.delegated": [
+          {
+            "when": [
+              {
+                "kind": "state_in",
+                "values": [
+                  "todo",
+                  "dev"
+                ]
+              },
+              {
+                "kind": "blocked",
+                "negate": true
+              }
+            ],
+            "whenSrc": "state in [todo, dev] && !blocked",
+            "run": "dev"
+          }
+        ],
+        "status.changed": [
+          {
+            "from": "human_review",
+            "to": "dev",
+            "run": "dev-feedback"
+          },
+          {
+            "to": "ai_review",
+            "run": "review"
+          }
+        ],
+        "session.prompted": [
+          {
+            "when": [
+              {
+                "kind": "blocked",
+                "negate": false
+              }
+            ],
+            "whenSrc": "blocked",
+            "run": "dev-feedback",
+            "debounceMs": 0
+          },
+          {
+            "when": [
+              {
+                "kind": "state_in",
+                "values": [
+                  "dev",
+                  "human_review"
+                ]
+              }
+            ],
+            "whenSrc": "state in [dev, human_review]",
+            "run": "dev-feedback",
+            "debounceMs": 180000
+          }
+        ],
+        "session.mentioned": [
+          {
+            "run": "ask"
+          }
+        ],
+        "command": [
+          {
+            "say": "retiens",
+            "run": "remember"
+          },
+          {
+            "say": "fais-le",
+            "do": "propose_delegate"
+          }
+        ],
+        "label.changed": [
+          {
+            "label": "agent:reprendre",
+            "run": "dev-feedback"
+          },
+          {
+            "label": "agent:stop",
+            "do": "stop"
+          }
+        ],
+        "session.stopped": [
+          {
+            "do": "stop"
+          }
+        ],
+        "pr.checks_failed": [
+          {
+            "when": [
+              {
+                "kind": "state_in",
+                "values": [
+                  "human_review",
+                  "ai_review"
+                ]
+              },
+              {
+                "kind": "blocked",
+                "negate": true
+              }
+            ],
+            "whenSrc": "state in [human_review, ai_review] && !blocked",
+            "run": "fix-ci"
+          }
+        ],
+        "pr.merged": [
+          {
+            "run": "learn",
+            "move": "done",
+            "do": "cleanup"
+          }
+        ]
+      },
+      "jobs": {
+        "dev": {
+          "name": "dev",
+          "queue": "dev",
+          "model": "sonnet",
+          "workspace": "worktree",
+          "session": "new",
+          "skill": "factory:dev",
+          "verify": [],
+          "pickup": true,
+          "limits": {
+            "turns": 150,
+            "durationMs": 5400000,
+            "usd": 5
+          },
+          "onStart": {
+            "move": "dev"
+          },
+          "onSuccess": {
+            "move": "human_review",
+            "post": "summary"
+          }
+        },
+        "dev-feedback": {
+          "name": "dev-feedback",
+          "queue": "dev",
+          "model": "sonnet",
+          "workspace": "worktree",
+          "session": "resume",
+          "skill": "factory:feedback",
+          "input": "feedback",
+          "verify": [],
+          "pickup": false,
+          "limits": {
+            "turns": 150,
+            "durationMs": 5400000,
+            "usd": 5
+          },
+          "onStart": {},
+          "onSuccess": {
+            "post": "reply"
+          }
+        },
+        "fix-ci": {
+          "name": "fix-ci",
+          "queue": "dev",
+          "model": "sonnet",
+          "workspace": "worktree",
+          "session": "resume",
+          "skill": "factory:fix-ci",
+          "input": "ci_failures",
+          "verify": [],
+          "pickup": false,
+          "limits": {
+            "turns": 150,
+            "durationMs": 5400000,
+            "usd": 5
+          },
+          "onStart": {},
+          "onSuccess": {
+            "post": "reply"
+          }
+        },
+        "review": {
+          "name": "review",
+          "queue": "dev",
+          "model": "opus",
+          "workspace": "worktree",
+          "session": "new",
+          "skill": "factory:review",
+          "verify": [],
+          "pickup": false,
+          "limits": {
+            "turns": 150,
+            "durationMs": 5400000,
+            "usd": 5
+          },
+          "onStart": {},
+          "onSuccess": {
+            "move": "ready",
+            "post": "synthesis"
+          }
+        },
+        "ask": {
+          "name": "ask",
+          "queue": "questions",
+          "model": "sonnet",
+          "workspace": "trunk-readonly",
+          "session": "new",
+          "skill": "factory:ask",
+          "input": "thread",
+          "verify": [],
+          "pickup": false,
+          "limits": {
+            "turns": 30,
+            "durationMs": 300000,
+            "usd": 0.5
+          },
+          "onStart": {},
+          "onSuccess": {
+            "post": "reply"
+          }
+        },
+        "learn": {
+          "name": "learn",
+          "queue": "questions",
+          "model": "haiku",
+          "workspace": "knowledge",
+          "session": "new",
+          "skill": "factory:learn",
+          "verify": [],
+          "pickup": false,
+          "limits": {
+            "turns": 40,
+            "durationMs": 600000,
+            "usd": 0.5
+          },
+          "onStart": {},
+          "onSuccess": {}
+        },
+        "remember": {
+          "name": "remember",
+          "queue": "questions",
+          "model": "haiku",
+          "workspace": "knowledge",
+          "session": "new",
+          "skill": "factory:learn",
+          "input": "thread",
+          "verify": [],
+          "pickup": false,
+          "limits": {
+            "turns": 40,
+            "durationMs": 600000,
+            "usd": 0.5
+          },
+          "onStart": {},
+          "onSuccess": {
+            "post": "reply"
+          }
+        }
+      }
+    }
+  },
+  "entries": [
+    {
+      "event": {
+        "id": "linear:session:as-1",
+        "type": "ticket.delegated",
+        "at": 1791622800000,
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "schemaVersion": 3,
+        "taint": "trusted",
+        "actor": "user-lilian",
+        "payload": {
+          "linearSessionId": "as-1",
+          "promptContext": "<issue identifier=\"REL-1\">Export CSV</issue>",
+          "issue": {
+            "title": "Export CSV",
+            "logical": "todo",
+            "priority": 0
+          }
+        }
+      },
+      "decision": {
+        "eventId": "linear:session:as-1",
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "seq": 1,
+        "at": 1791622800000,
+        "workflowHash": "2ec224e50ed209cb7b47004a8c26f0f6d5be0b5768d0d7173a6b853c4d6a2657",
+        "ticket": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "todo",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "pendingFeedback": [],
+          "priority": 0,
+          "costUsd": 0,
+          "updatedAt": 1791622800000,
+          "linearSessionId": "as-1",
+          "workflowHash": "2ec224e50ed209cb7b47004a8c26f0f6d5be0b5768d0d7173a6b853c4d6a2657"
+        },
+        "effects": [
+          {
+            "kind": "start_run",
+            "job": "dev"
+          }
+        ],
+        "timers": [],
+        "clearTimers": false,
+        "trace": [
+          "on.ticket.delegated[0]"
+        ]
+      }
+    },
+    {
+      "event": {
+        "schemaVersion": 3,
+        "taint": "trusted",
+        "id": "effect:REL-1:1:1",
+        "at": 1791622800000,
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "type": "effect.done",
+        "payload": {
+          "effectId": "REL-1:1:1",
+          "kind": "start_run",
+          "eventId": "linear:session:as-1",
+          "attempts": 1
+        }
+      },
+      "decision": {
+        "eventId": "effect:REL-1:1:1",
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "seq": 2,
+        "at": 1791622800000,
+        "workflowHash": "2ec224e50ed209cb7b47004a8c26f0f6d5be0b5768d0d7173a6b853c4d6a2657",
+        "before": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "dev",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "pendingFeedback": [],
+          "priority": 0,
+          "costUsd": 0,
+          "updatedAt": 1791622800000,
+          "linearSessionId": "as-1",
+          "workflowHash": "2ec224e50ed209cb7b47004a8c26f0f6d5be0b5768d0d7173a6b853c4d6a2657",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "factory/rel-1-export-csv",
+          "activeRunId": "id-1",
+          "activeJob": "dev",
+          "claudeSessionId": "id-2"
+        },
+        "ticket": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "dev",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "pendingFeedback": [],
+          "priority": 0,
+          "costUsd": 0,
+          "updatedAt": 1791622800000,
+          "linearSessionId": "as-1",
+          "workflowHash": "2ec224e50ed209cb7b47004a8c26f0f6d5be0b5768d0d7173a6b853c4d6a2657",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "factory/rel-1-export-csv",
+          "activeRunId": "id-1",
+          "activeJob": "dev",
+          "claudeSessionId": "id-2"
+        },
+        "effects": [],
+        "timers": [],
+        "clearTimers": false,
+        "trace": [
+          "built-in effect.done"
+        ]
+      }
+    },
+    {
+      "event": {
+        "schemaVersion": 3,
+        "taint": "trusted",
+        "id": "attempt:id-1:finished",
+        "type": "run.finished",
+        "at": 1791622800000,
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "payload": {
+          "runId": "id-1",
+          "job": "dev",
+          "outcome": "success",
+          "costUsd": 0.1,
+          "turns": 1,
+          "lastText": "PR ouverte, tests verts."
+        }
+      },
+      "decision": {
+        "eventId": "attempt:id-1:finished",
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "seq": 3,
+        "at": 1791622800000,
+        "workflowHash": "2ec224e50ed209cb7b47004a8c26f0f6d5be0b5768d0d7173a6b853c4d6a2657",
+        "before": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "dev",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "pendingFeedback": [],
+          "priority": 0,
+          "costUsd": 0,
+          "updatedAt": 1791622800000,
+          "linearSessionId": "as-1",
+          "workflowHash": "2ec224e50ed209cb7b47004a8c26f0f6d5be0b5768d0d7173a6b853c4d6a2657",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "factory/rel-1-export-csv",
+          "activeRunId": "id-1",
+          "activeJob": "dev",
+          "claudeSessionId": "id-2"
+        },
+        "ticket": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "dev",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "pendingFeedback": [],
+          "priority": 0,
+          "costUsd": 0.1,
+          "updatedAt": 1791622800000,
+          "linearSessionId": "as-1",
+          "workflowHash": "2ec224e50ed209cb7b47004a8c26f0f6d5be0b5768d0d7173a6b853c4d6a2657",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "factory/rel-1-export-csv",
+          "claudeSessionId": "id-2"
+        },
+        "effects": [
+          {
+            "kind": "move",
+            "to": "human_review"
+          },
+          {
+            "kind": "post_output",
+            "style": "summary",
+            "runId": "id-1"
+          },
+          {
+            "kind": "settle"
+          }
+        ],
+        "timers": [],
+        "clearTimers": false,
+        "trace": [
+          "built-in run.finished"
+        ]
+      }
+    },
+    {
+      "event": {
+        "schemaVersion": 3,
+        "taint": "trusted",
+        "id": "effect:REL-1:3:1",
+        "at": 1791622800000,
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "type": "effect.done",
+        "payload": {
+          "effectId": "REL-1:3:1",
+          "kind": "move",
+          "eventId": "attempt:id-1:finished",
+          "attempts": 1
+        }
+      },
+      "decision": {
+        "eventId": "effect:REL-1:3:1",
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "seq": 4,
+        "at": 1791622800000,
+        "workflowHash": "2ec224e50ed209cb7b47004a8c26f0f6d5be0b5768d0d7173a6b853c4d6a2657",
+        "before": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "human_review",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "pendingFeedback": [],
+          "priority": 0,
+          "costUsd": 0.1,
+          "updatedAt": 1791622800000,
+          "linearSessionId": "as-1",
+          "workflowHash": "2ec224e50ed209cb7b47004a8c26f0f6d5be0b5768d0d7173a6b853c4d6a2657",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "factory/rel-1-export-csv",
+          "claudeSessionId": "id-2"
+        },
+        "ticket": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "human_review",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "pendingFeedback": [],
+          "priority": 0,
+          "costUsd": 0.1,
+          "updatedAt": 1791622800000,
+          "linearSessionId": "as-1",
+          "workflowHash": "2ec224e50ed209cb7b47004a8c26f0f6d5be0b5768d0d7173a6b853c4d6a2657",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "factory/rel-1-export-csv",
+          "claudeSessionId": "id-2"
+        },
+        "effects": [],
+        "timers": [],
+        "clearTimers": false,
+        "trace": [
+          "built-in effect.done"
+        ]
+      }
+    },
+    {
+      "event": {
+        "schemaVersion": 3,
+        "taint": "trusted",
+        "id": "effect:REL-1:3:2",
+        "at": 1791622800000,
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "type": "effect.done",
+        "payload": {
+          "effectId": "REL-1:3:2",
+          "kind": "post_output",
+          "eventId": "attempt:id-1:finished",
+          "attempts": 1
+        }
+      },
+      "decision": {
+        "eventId": "effect:REL-1:3:2",
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "seq": 5,
+        "at": 1791622800000,
+        "workflowHash": "2ec224e50ed209cb7b47004a8c26f0f6d5be0b5768d0d7173a6b853c4d6a2657",
+        "before": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "human_review",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "pendingFeedback": [],
+          "priority": 0,
+          "costUsd": 0.1,
+          "updatedAt": 1791622800000,
+          "linearSessionId": "as-1",
+          "workflowHash": "2ec224e50ed209cb7b47004a8c26f0f6d5be0b5768d0d7173a6b853c4d6a2657",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "factory/rel-1-export-csv",
+          "claudeSessionId": "id-2"
+        },
+        "ticket": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "human_review",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "pendingFeedback": [],
+          "priority": 0,
+          "costUsd": 0.1,
+          "updatedAt": 1791622800000,
+          "linearSessionId": "as-1",
+          "workflowHash": "2ec224e50ed209cb7b47004a8c26f0f6d5be0b5768d0d7173a6b853c4d6a2657",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "factory/rel-1-export-csv",
+          "claudeSessionId": "id-2"
+        },
+        "effects": [],
+        "timers": [],
+        "clearTimers": false,
+        "trace": [
+          "built-in effect.done"
+        ]
+      }
+    },
+    {
+      "event": {
+        "schemaVersion": 3,
+        "taint": "trusted",
+        "id": "effect:REL-1:3:3",
+        "at": 1791622800000,
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "type": "effect.done",
+        "payload": {
+          "effectId": "REL-1:3:3",
+          "kind": "settle",
+          "eventId": "attempt:id-1:finished",
+          "attempts": 1
+        }
+      },
+      "decision": {
+        "eventId": "effect:REL-1:3:3",
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "seq": 6,
+        "at": 1791622800000,
+        "workflowHash": "2ec224e50ed209cb7b47004a8c26f0f6d5be0b5768d0d7173a6b853c4d6a2657",
+        "before": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "human_review",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "pendingFeedback": [],
+          "priority": 0,
+          "costUsd": 0.1,
+          "updatedAt": 1791622800000,
+          "linearSessionId": "as-1",
+          "workflowHash": "2ec224e50ed209cb7b47004a8c26f0f6d5be0b5768d0d7173a6b853c4d6a2657",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "factory/rel-1-export-csv",
+          "claudeSessionId": "id-2"
+        },
+        "ticket": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "human_review",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "pendingFeedback": [],
+          "priority": 0,
+          "costUsd": 0.1,
+          "updatedAt": 1791622800000,
+          "linearSessionId": "as-1",
+          "workflowHash": "2ec224e50ed209cb7b47004a8c26f0f6d5be0b5768d0d7173a6b853c4d6a2657",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "factory/rel-1-export-csv",
+          "claudeSessionId": "id-2"
+        },
+        "effects": [],
+        "timers": [],
+        "clearTimers": false,
+        "trace": [
+          "built-in effect.done"
+        ]
+      }
+    },
+    {
+      "event": {
+        "at": 1791622800000,
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "schemaVersion": 3,
+        "taint": "untrusted",
+        "id": "linear:activity:aa-bot",
+        "type": "session.prompted",
+        "payload": {
+          "linearSessionId": "as-1",
+          "body": "relu par le bot",
+          "author": "Humain"
+        }
+      },
+      "decision": {
+        "eventId": "linear:activity:aa-bot",
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "seq": 7,
+        "at": 1791622800000,
+        "workflowHash": "2ec224e50ed209cb7b47004a8c26f0f6d5be0b5768d0d7173a6b853c4d6a2657",
+        "before": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "human_review",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "pendingFeedback": [],
+          "priority": 0,
+          "costUsd": 0.1,
+          "updatedAt": 1791622800000,
+          "linearSessionId": "as-1",
+          "workflowHash": "2ec224e50ed209cb7b47004a8c26f0f6d5be0b5768d0d7173a6b853c4d6a2657",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "factory/rel-1-export-csv",
+          "claudeSessionId": "id-2"
+        },
+        "ticket": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "human_review",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "pendingFeedback": [
+            {
+              "author": "Humain",
+              "body": "relu par le bot",
+              "at": 1791622800000,
+              "source": "session",
+              "taint": "untrusted"
+            }
+          ],
+          "priority": 0,
+          "costUsd": 0.1,
+          "updatedAt": 1791622800000,
+          "linearSessionId": "as-1",
+          "workflowHash": "2ec224e50ed209cb7b47004a8c26f0f6d5be0b5768d0d7173a6b853c4d6a2657",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "factory/rel-1-export-csv",
+          "claudeSessionId": "id-2"
+        },
+        "effects": [],
+        "timers": [
+          {
+            "key": "REL-1:dev-feedback",
+            "projectId": "p",
+            "ticketId": "REL-1",
+            "kind": "debounce",
+            "payload": {
+              "job": "dev-feedback"
+            },
+            "fireAt": 1791622980000,
+            "armedBy": "linear:activity:aa-bot"
+          }
+        ],
+        "clearTimers": false,
+        "trace": [
+          "on.session.prompted[1]"
+        ]
+      }
+    },
+    {
+      "event": {
+        "schemaVersion": 3,
+        "taint": "trusted",
+        "id": "timer:REL-1:dev-feedback:1791622980000",
+        "type": "timer.fired",
+        "at": 1791622980000,
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "payload": {
+          "kind": "debounce",
+          "payload": {
+            "job": "dev-feedback"
+          }
+        }
+      },
+      "decision": {
+        "eventId": "timer:REL-1:dev-feedback:1791622980000",
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "seq": 8,
+        "at": 1791622980000,
+        "workflowHash": "2ec224e50ed209cb7b47004a8c26f0f6d5be0b5768d0d7173a6b853c4d6a2657",
+        "before": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "human_review",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "pendingFeedback": [
+            {
+              "author": "Humain",
+              "body": "relu par le bot",
+              "at": 1791622800000,
+              "source": "session",
+              "taint": "untrusted"
+            }
+          ],
+          "priority": 0,
+          "costUsd": 0.1,
+          "updatedAt": 1791622800000,
+          "linearSessionId": "as-1",
+          "workflowHash": "2ec224e50ed209cb7b47004a8c26f0f6d5be0b5768d0d7173a6b853c4d6a2657",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "factory/rel-1-export-csv",
+          "claudeSessionId": "id-2"
+        },
+        "ticket": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "human_review",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "pendingFeedback": [
+            {
+              "author": "Humain",
+              "body": "relu par le bot",
+              "at": 1791622800000,
+              "source": "session",
+              "taint": "untrusted"
+            }
+          ],
+          "priority": 0,
+          "costUsd": 0.1,
+          "updatedAt": 1791622980000,
+          "linearSessionId": "as-1",
+          "workflowHash": "2ec224e50ed209cb7b47004a8c26f0f6d5be0b5768d0d7173a6b853c4d6a2657",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "factory/rel-1-export-csv",
+          "claudeSessionId": "id-2"
+        },
+        "effects": [
+          {
+            "kind": "start_run",
+            "job": "dev-feedback",
+            "input": "feedback",
+            "sensitivePaths": [
+              ".github/**",
+              ".factory/**",
+              ".claude/**",
+              "CODEOWNERS",
+              ".env*"
+            ]
+          }
+        ],
+        "timers": [],
+        "clearTimers": false,
+        "trace": [
+          "built-in timer.fired"
+        ]
+      }
+    },
+    {
+      "event": {
+        "schemaVersion": 3,
+        "taint": "trusted",
+        "id": "effect:REL-1:8:1",
+        "at": 1791622980000,
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "type": "effect.done",
+        "payload": {
+          "effectId": "REL-1:8:1",
+          "kind": "start_run",
+          "eventId": "timer:REL-1:dev-feedback:1791622980000",
+          "attempts": 1
+        }
+      },
+      "decision": {
+        "eventId": "effect:REL-1:8:1",
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "seq": 9,
+        "at": 1791622980000,
+        "workflowHash": "2ec224e50ed209cb7b47004a8c26f0f6d5be0b5768d0d7173a6b853c4d6a2657",
+        "before": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "human_review",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "pendingFeedback": [],
+          "priority": 0,
+          "costUsd": 0.1,
+          "updatedAt": 1791622980000,
+          "linearSessionId": "as-1",
+          "workflowHash": "2ec224e50ed209cb7b47004a8c26f0f6d5be0b5768d0d7173a6b853c4d6a2657",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "factory/rel-1-export-csv",
+          "claudeSessionId": "id-2",
+          "activeRunId": "id-4",
+          "activeJob": "dev-feedback"
+        },
+        "ticket": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "human_review",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "pendingFeedback": [],
+          "priority": 0,
+          "costUsd": 0.1,
+          "updatedAt": 1791622980000,
+          "linearSessionId": "as-1",
+          "workflowHash": "2ec224e50ed209cb7b47004a8c26f0f6d5be0b5768d0d7173a6b853c4d6a2657",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "factory/rel-1-export-csv",
+          "claudeSessionId": "id-2",
+          "activeRunId": "id-4",
+          "activeJob": "dev-feedback"
+        },
+        "effects": [],
+        "timers": [],
+        "clearTimers": false,
+        "trace": [
+          "built-in effect.done"
+        ]
+      }
+    },
+    {
+      "event": {
+        "schemaVersion": 3,
+        "taint": "trusted",
+        "id": "attempt:id-4:finished",
+        "type": "run.finished",
+        "at": 1791622980000,
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "payload": {
+          "runId": "id-4",
+          "job": "dev-feedback",
+          "outcome": "success",
+          "costUsd": 0.1,
+          "turns": 1,
+          "lastText": "Terminé."
+        }
+      },
+      "decision": {
+        "eventId": "attempt:id-4:finished",
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "seq": 10,
+        "at": 1791622980000,
+        "workflowHash": "2ec224e50ed209cb7b47004a8c26f0f6d5be0b5768d0d7173a6b853c4d6a2657",
+        "before": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "human_review",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "pendingFeedback": [],
+          "priority": 0,
+          "costUsd": 0.1,
+          "updatedAt": 1791622980000,
+          "linearSessionId": "as-1",
+          "workflowHash": "2ec224e50ed209cb7b47004a8c26f0f6d5be0b5768d0d7173a6b853c4d6a2657",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "factory/rel-1-export-csv",
+          "claudeSessionId": "id-2",
+          "activeRunId": "id-4",
+          "activeJob": "dev-feedback"
+        },
+        "ticket": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "human_review",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "pendingFeedback": [],
+          "priority": 0,
+          "costUsd": 0.2,
+          "updatedAt": 1791622980000,
+          "linearSessionId": "as-1",
+          "workflowHash": "2ec224e50ed209cb7b47004a8c26f0f6d5be0b5768d0d7173a6b853c4d6a2657",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "factory/rel-1-export-csv",
+          "claudeSessionId": "id-2"
+        },
+        "effects": [
+          {
+            "kind": "post_output",
+            "style": "reply",
+            "runId": "id-4"
+          },
+          {
+            "kind": "settle"
+          }
+        ],
+        "timers": [],
+        "clearTimers": false,
+        "trace": [
+          "built-in run.finished"
+        ]
+      }
+    },
+    {
+      "event": {
+        "schemaVersion": 3,
+        "taint": "trusted",
+        "id": "effect:REL-1:10:1",
+        "at": 1791622980000,
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "type": "effect.done",
+        "payload": {
+          "effectId": "REL-1:10:1",
+          "kind": "post_output",
+          "eventId": "attempt:id-4:finished",
+          "attempts": 1
+        }
+      },
+      "decision": {
+        "eventId": "effect:REL-1:10:1",
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "seq": 11,
+        "at": 1791622980000,
+        "workflowHash": "2ec224e50ed209cb7b47004a8c26f0f6d5be0b5768d0d7173a6b853c4d6a2657",
+        "before": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "human_review",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "pendingFeedback": [],
+          "priority": 0,
+          "costUsd": 0.2,
+          "updatedAt": 1791622980000,
+          "linearSessionId": "as-1",
+          "workflowHash": "2ec224e50ed209cb7b47004a8c26f0f6d5be0b5768d0d7173a6b853c4d6a2657",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "factory/rel-1-export-csv",
+          "claudeSessionId": "id-2"
+        },
+        "ticket": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "human_review",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "pendingFeedback": [],
+          "priority": 0,
+          "costUsd": 0.2,
+          "updatedAt": 1791622980000,
+          "linearSessionId": "as-1",
+          "workflowHash": "2ec224e50ed209cb7b47004a8c26f0f6d5be0b5768d0d7173a6b853c4d6a2657",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "factory/rel-1-export-csv",
+          "claudeSessionId": "id-2"
+        },
+        "effects": [],
+        "timers": [],
+        "clearTimers": false,
+        "trace": [
+          "built-in effect.done"
+        ]
+      }
+    },
+    {
+      "event": {
+        "schemaVersion": 3,
+        "taint": "trusted",
+        "id": "effect:REL-1:10:2",
+        "at": 1791622980000,
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "type": "effect.done",
+        "payload": {
+          "effectId": "REL-1:10:2",
+          "kind": "settle",
+          "eventId": "attempt:id-4:finished",
+          "attempts": 1
+        }
+      },
+      "decision": {
+        "eventId": "effect:REL-1:10:2",
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "seq": 12,
+        "at": 1791622980000,
+        "workflowHash": "2ec224e50ed209cb7b47004a8c26f0f6d5be0b5768d0d7173a6b853c4d6a2657",
+        "before": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "human_review",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "pendingFeedback": [],
+          "priority": 0,
+          "costUsd": 0.2,
+          "updatedAt": 1791622980000,
+          "linearSessionId": "as-1",
+          "workflowHash": "2ec224e50ed209cb7b47004a8c26f0f6d5be0b5768d0d7173a6b853c4d6a2657",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "factory/rel-1-export-csv",
+          "claudeSessionId": "id-2"
+        },
+        "ticket": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "human_review",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "pendingFeedback": [],
+          "priority": 0,
+          "costUsd": 0.2,
+          "updatedAt": 1791622980000,
+          "linearSessionId": "as-1",
+          "workflowHash": "2ec224e50ed209cb7b47004a8c26f0f6d5be0b5768d0d7173a6b853c4d6a2657",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "factory/rel-1-export-csv",
+          "claudeSessionId": "id-2"
+        },
+        "effects": [],
+        "timers": [],
+        "clearTimers": false,
+        "trace": [
+          "built-in effect.done"
+        ]
+      }
+    },
+    {
+      "event": {
+        "at": 1791622980000,
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "schemaVersion": 3,
+        "taint": "untrusted",
+        "id": "linear:session:as-bot",
+        "type": "command",
+        "payload": {
+          "name": "retiens",
+          "body": "tout",
+          "linearSessionId": "as-bot",
+          "author": "Humain"
+        }
+      },
+      "decision": {
+        "eventId": "linear:session:as-bot",
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "seq": 13,
+        "at": 1791622980000,
+        "workflowHash": "2ec224e50ed209cb7b47004a8c26f0f6d5be0b5768d0d7173a6b853c4d6a2657",
+        "before": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "human_review",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "pendingFeedback": [],
+          "priority": 0,
+          "costUsd": 0.2,
+          "updatedAt": 1791622980000,
+          "linearSessionId": "as-1",
+          "workflowHash": "2ec224e50ed209cb7b47004a8c26f0f6d5be0b5768d0d7173a6b853c4d6a2657",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "factory/rel-1-export-csv",
+          "claudeSessionId": "id-2"
+        },
+        "ticket": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "human_review",
+          "delegated": true,
+          "questionSessionIds": [
+            "as-bot"
+          ],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "pendingFeedback": [],
+          "priority": 0,
+          "costUsd": 0.2,
+          "updatedAt": 1791622980000,
+          "linearSessionId": "as-1",
+          "workflowHash": "2ec224e50ed209cb7b47004a8c26f0f6d5be0b5768d0d7173a6b853c4d6a2657",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "factory/rel-1-export-csv",
+          "claudeSessionId": "id-2"
+        },
+        "effects": [
+          {
+            "kind": "activity",
+            "type": "response",
+            "body": "Je ne lance pas remember : ce job écrit dans la base de connaissances, et l'événement vient d'une source non fiable.",
+            "linearSessionId": "as-bot"
+          }
+        ],
+        "timers": [],
+        "clearTimers": false,
+        "trace": [
+          "on.command[0]",
+          "taint: refused remember"
+        ]
+      }
+    },
+    {
+      "event": {
+        "schemaVersion": 3,
+        "taint": "trusted",
+        "id": "effect:REL-1:13:1",
+        "at": 1791622980000,
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "type": "effect.done",
+        "payload": {
+          "effectId": "REL-1:13:1",
+          "kind": "activity",
+          "eventId": "linear:session:as-bot",
+          "attempts": 1
+        }
+      },
+      "decision": {
+        "eventId": "effect:REL-1:13:1",
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "seq": 14,
+        "at": 1791622980000,
+        "workflowHash": "2ec224e50ed209cb7b47004a8c26f0f6d5be0b5768d0d7173a6b853c4d6a2657",
+        "before": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "human_review",
+          "delegated": true,
+          "questionSessionIds": [
+            "as-bot"
+          ],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "pendingFeedback": [],
+          "priority": 0,
+          "costUsd": 0.2,
+          "updatedAt": 1791622980000,
+          "linearSessionId": "as-1",
+          "workflowHash": "2ec224e50ed209cb7b47004a8c26f0f6d5be0b5768d0d7173a6b853c4d6a2657",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "factory/rel-1-export-csv",
+          "claudeSessionId": "id-2"
+        },
+        "ticket": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "human_review",
+          "delegated": true,
+          "questionSessionIds": [
+            "as-bot"
+          ],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "pendingFeedback": [],
+          "priority": 0,
+          "costUsd": 0.2,
+          "updatedAt": 1791622980000,
+          "linearSessionId": "as-1",
+          "workflowHash": "2ec224e50ed209cb7b47004a8c26f0f6d5be0b5768d0d7173a6b853c4d6a2657",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "factory/rel-1-export-csv",
+          "claudeSessionId": "id-2"
+        },
+        "effects": [],
+        "timers": [],
+        "clearTimers": false,
+        "trace": [
+          "built-in effect.done"
+        ]
+      }
+    }
+  ]
+}

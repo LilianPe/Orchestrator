@@ -54,6 +54,50 @@ describe('standard workflow', () => {
     expect(h.tracker.activities('ls-1').at(-1)).toEqual({ type: 'response', body: 'Corrigé dans abc123.' });
   });
 
+  it('criterion 4 across a restart: the debounce armed before it fires once its 3 minutes are up (ORC-161)', async () => {
+    const h = createHarness();
+    await delegatedAndInReview(h);
+    h.runner.enqueue({ events: [{ kind: 'text', text: 'Corrigé.' }] });
+    await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'boutons mal alignés', author: 'Lilian' });
+    // Written by the decision of the reply, with its journal row: nothing of it lives in the process.
+    expect((await h.store.dueTimers(Number.MAX_SAFE_INTEGER)).map((t) => [t.key, t.kind, t.payload])).toEqual([
+      ['REL-1:dev-feedback', 'debounce', { job: 'dev-feedback' }],
+    ]);
+    await h.advance(60_000);
+    await h.restart();
+    await h.advance(119_000);
+    expect(h.runner.requests).toHaveLength(1);
+    await h.advance(1_000);
+    await h.advance(180_000);
+    expect(h.runner.requests).toHaveLength(2);
+    expect(h.runner.requests[1]!.prompt).toContain('boutons mal alignés');
+    const fired = (await h.store.recentEvents(100, 'REL-1')).filter((e) => e.type === 'timer.fired');
+    expect(fired.map((e) => e.id)).toEqual([expect.stringMatching(/^timer:REL-1:dev-feedback:\d+$/)]);
+    expect(await h.store.dueTimers(Number.MAX_SAFE_INTEGER)).toEqual([]);
+  });
+
+  it('fires a timer at +24 h and another at +72 h each once through the inbox, decided without effect until their rules (ORC-161)', async () => {
+    const h = createHarness();
+    await delegatedAndInReview(h);
+    const start = h.clock.now();
+    const HOUR = 3_600_000;
+    // The clarify rules that arm them are ORC-210's: the timers are put as its decision would write them.
+    await h.store.putTimer({ key: 'REL-1:clarify.remind', projectId: 'p', ticketId: 'REL-1', kind: 'clarify.remind', payload: { linearSessionId: 'ls-1' }, fireAt: start + 24 * HOUR });
+    await h.store.putTimer({ key: 'REL-1:clarify.expire', projectId: 'p', ticketId: 'REL-1', kind: 'clarify.expire', payload: { linearSessionId: 'ls-1' }, fireAt: start + 72 * HOUR });
+    const before = await h.ticket();
+    const requests = h.runner.requests.length;
+    const firedAt: Record<string, number> = {};
+    for (let hour = 1; hour <= 100; hour++) {
+      await h.advance(HOUR);
+      for (const e of await h.store.recentEvents(100, 'REL-1')) if (e.type === 'timer.fired') firedAt[e.id] ??= hour;
+    }
+    expect(firedAt).toEqual({ [`timer:REL-1:clarify.remind:${start + 24 * HOUR}`]: 24, [`timer:REL-1:clarify.expire:${start + 72 * HOUR}`]: 72 });
+    expect((await h.store.recentEvents(100, 'REL-1')).filter((e) => e.type === 'timer.fired')).toHaveLength(2);
+    expect(await h.store.pendingInbox(10)).toEqual([]);
+    expect(h.runner.requests).toHaveLength(requests);
+    expect(await h.ticket()).toMatchObject({ logical: before.logical, blocked: before.blocked });
+  });
+
   it('criterion 4b: a reply during a running feedback run is queued and runs after it', async () => {
     const h = createHarness();
     await delegatedAndInReview(h);

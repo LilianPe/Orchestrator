@@ -1,6 +1,7 @@
 import type { AttemptLabels } from '../core/attempt-labels.js';
+import type { DeadLetter, RepairAction } from '../core/dead-letter.js';
 import type { OutboxEffect } from '../core/decision.js';
-import { TRUSTED, type EffectResultPayload, type InputKind, type QueueName, type FactoryEvent, type RunOutcome, type TicketState } from '../core/types.js';
+import { TRUSTED, type EffectResultPayload, type InputKind, type TimerFired, type QueueName, type FactoryEvent, type RunOutcome, type TicketState, type TokenUsage } from '../core/types.js';
 import type { StoredEvent } from '../core/upcast.js';
 
 /**
@@ -33,17 +34,22 @@ export interface RunRecord {
    * the runner. Absent on a trusted attempt and on records older than ORC-274.
    */
   sensitivePaths?: readonly string[];
+  /** Tokens the runner reported at the end of the attempt (ORC-235); absent when it reported none. */
+  tokens?: TokenUsage;
 }
 
-export interface TimerRecord {
+/**
+ * An armed timer (ORC-161): a kind and what it carries (`TimerFired`), due at `fireAt`. One timer per
+ * `key` (`<ticket>:<slot>`): a decision that arms the same key again pushes it back.
+ */
+export type TimerRecord = TimerFired & {
   key: string;
   projectId: string;
   ticketId: string;
-  job: string;
   fireAt: number;
   /** Id of the event whose decision armed the timer (ORC-149): a failed effect of that decision disarms it. */
   armedBy?: string;
-}
+};
 
 export interface QueueItem {
   projectId: string;
@@ -77,6 +83,64 @@ export interface DecisionPlan {
   clearTimers: boolean;
   /** Why the decision did nothing, logged after the commit (a fenced result, an unmanaged ticket). */
   note?: string;
+  /** The decider's clock (`updatedAt` of the projection, base of the timers), recorded for replay (ORC-174). */
+  at?: number;
+  /** Why `decide` decided so (`Decision.trace`), recorded for replay (ORC-174). */
+  trace?: string[];
+}
+
+/**
+ * What the decision transaction recorded of a committed decision (ORC-174), beside its journal
+ * row: its inputs (the projection read under the lock, the frozen workflow version, the clock) and
+ * its outputs (the new projection, the outbox effects, the timers). The replay oracle runs the
+ * decision again from the inputs and compares the outputs, bit for bit.
+ */
+export interface DecisionRecord {
+  eventId: string;
+  projectId: string;
+  ticketId?: string;
+  seq: number;
+  /** `DecisionPlan.at`; absent when nothing decided (an event of an unknown project). */
+  at?: number;
+  /** The workflow version the decision ran on; empty when nothing decided (an unknown project). */
+  workflowHash: string;
+  /** The projection read under the ticket's lock, before the decision. */
+  before?: TicketState;
+  ticket?: TicketState;
+  effects: OutboxEffect[];
+  timers: TimerRecord[];
+  clearTimers: boolean;
+  trace?: string[];
+}
+
+/** The hash a decision ran on: the frozen version, or none when the request had no workflow (an unknown project). */
+export function decidedOn(req: DecisionRequest, frozen: WorkflowVersion): string {
+  return req.workflow.hash === '' ? '' : frozen.hash;
+}
+
+/** The record of a committed decision, written in its transaction (ORC-174). */
+export function decisionRecord(event: FactoryEvent, seq: number, known: TicketState | undefined, workflowHash: string, plan: DecisionPlan): DecisionRecord {
+  return {
+    eventId: event.id,
+    projectId: event.projectId,
+    ...(event.ticketId === undefined ? {} : { ticketId: event.ticketId }),
+    seq,
+    ...(plan.at === undefined ? {} : { at: plan.at }),
+    workflowHash,
+    ...(known === undefined ? {} : { before: known }),
+    ...(plan.ticket === undefined ? {} : { ticket: plan.ticket }),
+    effects: plan.effects,
+    timers: plan.timers,
+    clearTimers: plan.clearTimers,
+    ...(plan.trace === undefined ? {} : { trace: plan.trace }),
+  };
+}
+
+/** A journal row of a ticket and, when a decision transaction journaled it (ORC-174), its decision. */
+export interface JournalEntry {
+  /** As journaled: an older engine may have written it in an older `schemaVersion`. */
+  event: StoredEvent;
+  decision?: DecisionRecord;
 }
 
 /**
@@ -162,6 +226,36 @@ export function effectResult(
   return error === undefined ? { ...head, type: 'effect.done', payload: base } : { ...head, type: 'effect.failed', payload: { ...base, error } };
 }
 
+/**
+ * What the measures of a ticket are computed from (ORC-235): facts the store keeps anyway, plus
+ * the time each inbox event was acked.
+ */
+export interface MeasureFacts {
+  /** The ticket's dev session as its projection knows it: the factory may have linked it, which the journal does not hold. */
+  devSession: string | undefined;
+  /** The ticket's journal, in order. */
+  events: FactoryEvent[];
+  /** The ticket's attempts, oldest first. */
+  runs: RunRecord[];
+  /** The ticket's decision outbox rows, in order. */
+  effects: OutboxRow[];
+  /** Ack time of the ticket's inbox events that were acked (`markAcked`), by event id. */
+  acks: Record<string, number>;
+}
+
+/** The inbox event of a timer's firing (ORC-161), written by `fireTimer`: its id `timer:<key>:<fireAt>` names that firing, once. */
+export function timerEvent(t: TimerRecord, at: number): FactoryEvent<'timer.fired'> {
+  return {
+    ...TRUSTED,
+    id: `timer:${t.key}:${t.fireAt}`,
+    type: 'timer.fired',
+    at,
+    projectId: t.projectId,
+    ticketId: t.ticketId,
+    payload: { kind: t.kind, payload: t.payload } as FactoryEvent<'timer.fired'>['payload'],
+  };
+}
+
 /** A queue item handed out under a lease (ORC-150): it stays in the queue until its start is recorded. */
 export interface QueueClaim {
   id: string;
@@ -228,6 +322,29 @@ export interface Store {
   effectTickets(): Promise<{ projectId: string; ticketId?: string }[]>;
   /** The decision outbox rows of a ticket (`undefined`: of the events without a ticket), in order. */
   listEffects(projectId: string, ticketId?: string): Promise<OutboxRow[]>;
+  /**
+   * The journal of a ticket (`undefined`: of the project's events without a ticket), in journal
+   * order, each row with the decision recorded with it (ORC-174): what `factory replay` exports.
+   */
+  ticketJournal(projectId: string, ticketId?: string): Promise<JournalEntry[]>;
+  /**
+   * Sets aside an inbox row whose decision threw (ORC-175), in one transaction under the ticket's
+   * lock: the row is marked processed (it is not retried), its event (the one a failed repair carries,
+   * `deadLetteredEvent`) goes to `dead_letter`, open, its failures counted, and the event that blocks
+   * its ticket (`deadLetterNotice`) is written to the inbox. False, and nothing written, when the row
+   * is no longer pending (another worker processed it).
+   */
+  deadLetter(row: StoredEvent, error: string, at: number): Promise<boolean>;
+  /** The dead letters, of a ticket (any project) or all of them, open ones first, then oldest first. */
+  deadLetters(ticketId?: string): Promise<DeadLetter[]>;
+  /** The dead letter of an event, by its id. */
+  getDeadLetter(eventId: string): Promise<DeadLetter | undefined>;
+  /**
+   * Repairs an open dead letter (`factory run repair`), in one transaction: its status becomes the
+   * action's, and the repair event (`repairEvent`) is written to the inbox, decided and journaled like
+   * any event. `undefined`, and nothing written, when no open dead letter has this event id.
+   */
+  repairDeadLetter(eventId: string, action: RepairAction, by: string, at: number): Promise<DeadLetter | undefined>;
   /** A workflow version a ticket is frozen on, by hash. */
   getWorkflowVersion(hash: string): Promise<WorkflowVersion | undefined>;
   /**
@@ -244,12 +361,18 @@ export interface Store {
   findRunByToken(token: string): Promise<RunRecord | undefined>;
   putTimer(t: TimerRecord): Promise<void>;
   /**
-   * The timers due at `now`, except those whose arming decision still has an effect to run
-   * (ORC-149): a timer never fires before the effects of its decision, and a failed one disarms it.
+   * The timers due at `now`, oldest first, except those whose arming decision still has an effect
+   * to run (ORC-149): a timer never fires before the effects of its decision, and a failed one
+   * disarms it. Reading changes nothing: a timer stays due until `fireTimer` fires it.
    */
   dueTimers(now: number): Promise<TimerRecord[]>;
-  /** With `fireAt`, deletes the timer only while it is still armed for that time: a re-armed timer stays. */
-  deleteTimer(key: string, fireAt?: number): Promise<void>;
+  /**
+   * Fires a due timer (ORC-161), in one transaction: writes its event (`timerEvent`, stamped `at`) to
+   * the inbox and deletes the timer, both or neither. Only the timer as read: one re-armed for another
+   * time (pushed back) or deleted meanwhile (a stop) is left as it is, and nothing is written. True
+   * when the inbox got a new row.
+   */
+  fireTimer(timer: TimerRecord, at: number): Promise<boolean>;
   deleteTimersFor(projectId: string, ticketId: string): Promise<void>;
   /** Deletes the timers armed by the decision of an event (`armedBy`). */
   deleteTimersArmedBy(eventId: string): Promise<void>;
@@ -277,6 +400,13 @@ export interface Store {
   putEcho(key: string, until: number): Promise<void>;
   isEcho(key: string, now: number): Promise<boolean>;
   costSince(ts: number): Promise<number>;
+  /**
+   * Records the first sign of life the factory gave for an inbox event (ORC-235): the ack of its
+   * webhook, at `at`. A later call leaves the first time.
+   */
+  markAcked(eventId: string, at: number): Promise<void>;
+  /** The facts the measures of a ticket are computed from (ORC-235). */
+  measureFacts(projectId: string, ticketId: string): Promise<MeasureFacts>;
   getMeta(key: string): Promise<string | undefined>;
   setMeta(key: string, value: string): Promise<void>;
   close(): Promise<void>;

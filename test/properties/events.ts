@@ -55,6 +55,33 @@ const effectResult = fc.record({
   eventId: fc.constantFrom('ex-1', 'effect:REL-1:1:1'),
   attempts: fc.constantFrom(1, 8),
 });
+/** The event a dead letter is about (ORC-175): a creating one, a human's status change, a merge, a run's end. */
+const DEAD_ID = 'dead-1';
+const deadEvent = (type: EventType, payload: unknown): FactoryEvent =>
+  ({ ...TRUSTED, id: DEAD_ID, type, at: 0, projectId: PROJECT, ticketId: TICKET, payload }) as FactoryEvent;
+const deadLettered: fc.Arbitrary<FactoryEvent> = fc.constantFrom(
+  deadEvent('ticket.delegated', { linearSessionId: DEV_SESSION, issue: { title: 'Titre', logical: 'todo', priority: 0 } }),
+  deadEvent('status.changed', { from: 'dev', to: 'human_review' }),
+  deadEvent('pr.merged', { number: 1, url: 'https://forge/pr/1', branch: 'agent/rel-1' }),
+  deadEvent('run.finished', { runId: 'r1', job: 'dev', outcome: 'success', costUsd: 0.5, turns: 3, lastText: 'fini' }),
+);
+const repair: fc.Arbitrary<EventPayloads['dead_letter.repaired']> = fc
+  .record({ action: fc.constantFrom('replay' as const, 'skip' as const, 'force' as const), event: deadLettered })
+  .map(({ action, event }) => ({ eventId: DEAD_ID, action, by: 'ops', event }));
+
+/** The debounce of the feedback job firing: what a reply in the dev session arms. */
+export const DEBOUNCE: EventPayloads['timer.fired'] = { kind: 'debounce', payload: { job: 'dev-feedback' } };
+
+/**
+ * A timer firing (ORC-161): mostly a debounce, sometimes a clarify reminder or block or a usage-limit
+ * reset, which no rule decides yet (ORC-210, ORC-215).
+ */
+const timerFired: fc.Arbitrary<EventPayloads['timer.fired']> = fc.oneof(
+  { arbitrary: fc.record({ job }).map((payload) => ({ kind: 'debounce' as const, payload })), weight: 3 },
+  { arbitrary: fc.record({ linearSessionId: session }).map((payload) => ({ kind: 'clarify.remind' as const, payload })), weight: 1 },
+  { arbitrary: fc.record({ linearSessionId: session }).map((payload) => ({ kind: 'clarify.expire' as const, payload })), weight: 1 },
+  { arbitrary: fc.constant({ kind: 'usage.reset' as const, payload: {} }), weight: 1 },
+);
 
 /** One arbitrary per event type: adding an event type to `EventPayloads` fails to compile until it is generated here. */
 const PAYLOADS: { [K in EventType]: fc.Arbitrary<EventPayloads[K]> } = {
@@ -72,6 +99,8 @@ const PAYLOADS: { [K in EventType]: fc.Arbitrary<EventPayloads[K]> } = {
   'pr.checks_failed': pr.map((p) => ({ ...p, failures: ['test'] })),
   'pr.merged': pr,
   'pr.closed': pr,
+  'pr.reviewed': fc.record({ pr, kind: fc.constantFrom('review' as const, 'comment' as const), author, body }).map(({ pr: p, ...r }) => ({ ...p, ...r })),
+  'pr.conflicted': pr.map((p) => ({ ...p, headSha: 'aaa', baseRef: 'main' })),
   'run.finished': fc.record({
     runId,
     job,
@@ -82,12 +111,14 @@ const PAYLOADS: { [K in EventType]: fc.Arbitrary<EventPayloads[K]> } = {
   }),
   'verify.passed': fc.record({ runId, job }),
   'verify.failed': fc.record({ runId, job, failures: fc.constant(VERIFY_FAILURES) }),
-  'debounce.fired': fc.record({ job }),
+  'timer.fired': timerFired,
   'control.pause': empty,
   'control.resume': empty,
   'control.stop': empty,
   'effect.done': effectResult,
   'effect.failed': effectResult.map((r) => ({ ...r, error: 'Linear down' })),
+  'dead_letter.added': deadLettered.map((e) => ({ eventId: e.id, eventType: e.type, error: 'boom', failures: 1 })),
+  'dead_letter.repaired': repair,
 };
 
 const EVENT_TYPES = Object.keys(PAYLOADS) as EventType[];
@@ -124,8 +155,16 @@ const signedBy: fc.Arbitrary<Signed | undefined> = fc.oneof(
  * their producers stamp them `TRUSTED`. Only events that carry content from outside can be untrusted.
  */
 const FACTORY_PRODUCED: ReadonlySet<EventType> = new Set<EventType>([
-  'run.finished', 'verify.passed', 'verify.failed', 'debounce.fired', 'control.pause', 'control.resume', 'control.stop',
-  'effect.done', 'effect.failed',
+  'run.finished', 'verify.passed', 'verify.failed', 'timer.fired', 'control.pause', 'control.resume', 'control.stop',
+  'effect.done', 'effect.failed', 'dead_letter.added', 'dead_letter.repaired',
+]);
+
+/** Events the GitHub ingestion always marks untrusted: what nobody in the factory verified (ORC-134). */
+const ALWAYS_UNTRUSTED: ReadonlySet<EventType> = new Set<EventType>(['push.human', 'pr.reviewed']);
+
+/** Events of the Linear ingestion: a trusted one carries the signed user's id, an untrusted one none (ORC-160). */
+const FROM_LINEAR: ReadonlySet<EventType> = new Set<EventType>([
+  'ticket.delegated', 'session.mentioned', 'session.prompted', 'session.stopped', 'command', 'status.changed', 'label.changed',
 ]);
 
 /**
@@ -135,7 +174,7 @@ const FACTORY_PRODUCED: ReadonlySet<EventType> = new Set<EventType>([
  */
 const external = (draft: fc.Arbitrary<Draft>): fc.Arbitrary<DraftEntry> =>
   fc.record({ draft, roll: fc.integer({ min: 0, max: 4 }), signed: signedBy }).map(({ draft: d, roll, signed }): DraftEntry => {
-    const untrusted = roll === 0 && !FACTORY_PRODUCED.has(d.type);
+    const untrusted = ALWAYS_UNTRUSTED.has(d.type) || (roll === 0 && !FACTORY_PRODUCED.has(d.type));
     if (!signed || !HUMAN.has(d.type)) return { kind: 'external', draft: d, untrusted };
     // An untrusted event has no signed actor (ORC-160): its roles, resolved for nobody, are none.
     return { kind: 'external', draft: d, untrusted, signed: untrusted ? { roles: [] } : signed };
@@ -215,16 +254,16 @@ const redCi: fc.Arbitrary<DraftEntry[]> = fc
 const devReply: fc.Arbitrary<Draft> = PAYLOADS['session.prompted'].map((p) => ({ type: 'session.prompted', payload: { ...p, linearSessionId: DEV_SESSION } }));
 const debouncedReply: fc.Arbitrary<DraftEntry[]> = external(devReply).map((reply): DraftEntry[] => [
   reply,
-  { kind: 'external', draft: { type: 'debounce.fired', payload: { job: 'dev-feedback' } }, untrusted: false },
+  { kind: 'external', draft: { type: 'timer.fired', payload: DEBOUNCE }, untrusted: false },
 ]);
 
 /** A human talks to the factory: in the dev session, in a question session, through a label. */
 const human: fc.Arbitrary<Draft> = fc.oneof(draftOf('session.prompted'), draftOf('session.mentioned'), draftOf('command'), draftOf('label.changed'));
 const humanFragment: fc.Arbitrary<DraftEntry[]> = external(human).map((e) => [e]);
 
-/** The forge reports on the PR: red CI, green CI, merge. */
+/** The forge reports on the PR: red CI, green CI, merge, close without merge (ORC-134). */
 const forge: fc.Arbitrary<DraftEntry[]> = fc
-  .oneof(draftOf('pr.checks_failed'), draftOf('pr.checks_failed'), draftOf('pr.checks_passed'), draftOf('pr.opened'), draftOf('pr.merged'))
+  .oneof(draftOf('pr.checks_failed'), draftOf('pr.checks_failed'), draftOf('pr.checks_passed'), draftOf('pr.opened'), draftOf('pr.merged'), draftOf('pr.closed'))
   .map((d) => [{ kind: 'external', draft: d, untrusted: false }]);
 
 const fragment: fc.Arbitrary<DraftEntry[]> = fc.oneof(
@@ -265,8 +304,9 @@ function stamp(drafts: DraftEntry[]): Entry[] {
       projectId: PROJECT,
       ticketId: TICKET,
       ...TRUSTED,
-      ...(d.untrusted ? { taint: 'untrusted' } : {}),
-      ...(d.signed?.actor ? { actor: d.signed.actor } : {}),
+      // As the ingestion stamps them (ORC-160): an untrusted event has no actor; a trusted Linear one has
+      // its signed actor, and the roles resolved for it when the orchestrator checks the matrix (ORC-186).
+      ...(d.untrusted ? { taint: 'untrusted' } : { ...(FROM_LINEAR.has(d.draft.type) ? { actor: 'user-lilian' } : {}), ...(d.signed?.actor ? { actor: d.signed.actor } : {}) }),
       ...(d.signed ? { roles: d.signed.roles } : {}),
       payload: d.draft.payload,
     } as FactoryEvent;

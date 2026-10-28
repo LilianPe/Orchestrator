@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { loadWorkflow } from '../config/load-workflow.js';
 import { DEFAULT_MATRIX, type Role } from './authz.js';
 import { AUTHZ_REFUSED, decide, mayCheck } from './engine.js';
-import { newTicketState, type EventPayloads, type EventType, type FactoryEvent, type TicketState } from './types.js';
+import { newTicketState, SCHEMA_VERSION, type EventPayloads, type EventType, type FactoryEvent, type TicketState } from './types.js';
 
 const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../packs/standard') });
 
@@ -16,7 +16,7 @@ function ev<T extends EventType>(type: T, payload: EventPayloads[T], actor: stri
     at: 1000,
     projectId: 'p',
     ticketId: 'REL-1',
-    schemaVersion: 2,
+    schemaVersion: SCHEMA_VERSION,
     taint: actor ? 'trusted' : 'untrusted',
     ...(actor ? { actor } : {}),
     ...(roles ? { roles } : {}),
