@@ -5,11 +5,10 @@ import { join } from 'node:path';
 import { Pool } from 'pg';
 import { describe, expect, it } from 'vitest';
 import { migratePgStore } from '../../src/store/pg/migrate.js';
-import { PgStore } from '../../src/store/pg/pg-store.js';
 import { SqliteStore } from '../../src/store/sqlite-store.js';
-import type { Store } from '../../src/store/types.js';
-import { checkChain, type VisibleCall } from '../helpers/faults.js';
+import { allEffects, checkChain, settled, type VisibleCall } from '../helpers/faults.js';
 import { createTestDatabase, PG_URL } from '../helpers/pg-database.js';
+import { storeAt } from '../helpers/store-at.js';
 import { CHAOS_LEASE_MS, chaosEvents, rng, ticketIds, type ChaosEvent, type ChaosMessage, type DaemonMessage } from './events.js';
 
 /**
@@ -88,13 +87,6 @@ function readCalls(file: string): VisibleCall[] {
     .map((line) => JSON.parse(line) as VisibleCall);
 }
 
-async function quiet(store: Store): Promise<boolean> {
-  if ((await store.pendingInbox(1)).length > 0) return false;
-  const effects = (await Promise.all([...ticketIds(TICKETS), undefined].map((t) => store.listEffects('p', t)))).flat();
-  if (effects.some((r) => r.status === 'pending' || r.status === 'running')) return false;
-  return (await store.listQueue()).length === 0;
-}
-
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 describe('chaos: kill -9 at random moments (ORC-163)', () => {
@@ -170,8 +162,11 @@ describe('chaos: kill -9 at random moments (ORC-163)', () => {
             sendAt = Date.now() + sendGap() * 2 * SEND_MS;
           }
           await new Promise<void>((resolve) => {
-            wake = resolve;
-            setTimeout(resolve, Math.max(1, Math.min(killAt, sendAt) - Date.now()));
+            const timer = setTimeout(resolve, Math.max(1, Math.min(killAt, sendAt) - Date.now()));
+            wake = () => {
+              clearTimeout(timer);
+              resolve();
+            };
           });
         }
         if (!died) {
@@ -186,9 +181,9 @@ describe('chaos: kill -9 at random moments (ORC-163)', () => {
       }
 
       // No more kills: the last daemon settles everything, the clock moving past debounces and leases.
-      const store: Store = PG_URL ? new PgStore({ connectionString: target, max: 2 }) : new SqliteStore(target);
+      const store = storeAt(target, { max: 2 });
       try {
-        for (let i = 0; i < 300 && !(await quiet(store)); i++) {
+        for (let i = 0; i < 300 && !(await settled(store, 'p', ticketIds(TICKETS))); i++) {
           now += CHAOS_LEASE_MS;
           daemon.send({ type: 'clock', now });
           await sleep(100);
@@ -197,7 +192,7 @@ describe('chaos: kill -9 at random moments (ORC-163)', () => {
         await daemon.exited;
         const report = await checkChain(store, { projectId: 'p', tickets: ticketIds(TICKETS), acked, calls: readCalls(calls) });
         // What the kills cut: effects taken up again by the next daemon, runs settled by its recover().
-        const effects = (await Promise.all([...ticketIds(TICKETS), undefined].map((t) => store.listEffects('p', t)))).flat();
+        const effects = await allEffects(store, 'p', ticketIds(TICKETS));
         const retaken = effects.filter((r) => r.attempts > 1).length;
         const cutRuns = (await store.runsByStatus('failure')).length;
         const summary = `seed ${SEED}: ${EVENTS} events, ${kills} kill(s), ${life} daemon(s), ${resent} event(s) sent again, ${retaken} of ${effects.length} effect(s) taken up again, ${cutRuns} run(s) cut`;

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { FactoryEvent } from '../../src/core/types.js';
-import { checkChain, FaultError, Faults, type FaultSpec } from '../helpers/faults.js';
+import { checkChain, FaultError, Faults, settled, type FaultSpec } from '../helpers/faults.js';
 import { createHarness } from '../helpers/harness.js';
 
 const LEASE_MS = 60_000;
@@ -32,9 +32,7 @@ async function settle(h: Harness): Promise<void> {
     // The retries of a failed processing are real timers of a few milliseconds.
     await new Promise((resolve) => setTimeout(resolve, 5));
     await advance(h, LEASE_MS);
-    const effects = [...(await h.store.listEffects('p', 'REL-1')), ...(await h.store.listEffects('p'))];
-    const busy = effects.some((r) => r.status === 'pending' || r.status === 'running');
-    if (!busy && (await h.store.pendingInbox(1)).length === 0) return;
+    if (await settled(h.store, 'p', ['REL-1'])) return;
   }
 }
 

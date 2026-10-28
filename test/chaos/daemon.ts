@@ -18,24 +18,25 @@ import { appendFileSync } from 'node:fs';
 import { FakeClock } from '../../src/core/clock.js';
 import type { FactoryEvent } from '../../src/core/types.js';
 import { TimerService } from '../../src/runtime/timers.js';
-import { PgStore } from '../../src/store/pg/pg-store.js';
-import { SqliteStore } from '../../src/store/sqlite-store.js';
 import { Faults } from '../helpers/faults.js';
+import { CRASH_WORKFLOW } from '../helpers/crash-workflow.js';
 import { createHarness } from '../helpers/harness.js';
-import { CHAOS_LEASE_MS, CHAOS_WORKFLOW, ticketIds, type ChaosMessage, type DaemonMessage } from './events.js';
+import { storeAt } from '../helpers/store-at.js';
+import { CHAOS_LEASE_MS, ticketIds, type ChaosMessage, type DaemonMessage } from './events.js';
 
 const [target, callsFile, life, now, tickets] = process.argv.slice(2);
 if (!target || !callsFile || !life || !now || !tickets) throw new Error('usage: daemon.ts <store> <calls> <life> <now> <tickets>');
 
 const send = (m: DaemonMessage): void => void process.send?.(m);
 const clock = new FakeClock(Number(now));
-const store = target.startsWith('postgres') ? new PgStore({ connectionString: target, now: () => clock.now(), max: 4 }) : new SqliteStore(target, () => clock.now());
+const store = storeAt(target, { now: () => clock.now(), max: 4 });
 const faults = new Faults(undefined, (call) => appendFileSync(callsFile, `${JSON.stringify({ ...call, life: Number(life) })}\n`));
 const h = createHarness({
   store,
   clock,
   faults,
-  projectYaml: CHAOS_WORKFLOW,
+  // A delegation labels, comments and starts the run: a comment posted twice is the double the chaos looks for.
+  projectYaml: CRASH_WORKFLOW,
   effectLeaseMs: CHAOS_LEASE_MS,
   processRetry: { attempts: 5, baseMs: 20 },
   effectRetry: { attempts: 8, baseMs: 10, capMs: 100 },

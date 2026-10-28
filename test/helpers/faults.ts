@@ -80,6 +80,8 @@ export interface VisibleCall {
   kind?: string;
   /** What tells two calls apart: the body, the run id… */
   detail: string;
+  /** The queue of a launched run (`start`). */
+  queue?: string;
 }
 
 /** The calls whose double would be seen in Linear or would launch a second agent; moves and labels are idempotent. */
@@ -188,7 +190,7 @@ export class FaultLife {
   }
 
   /** Runs `act` (the external call) between the `effect.before` and `effect.after` points of the row it belongs to. */
-  private visible<T>(method: string, ticketId: string | undefined, detail: string, act: () => T): T {
+  private visible<T>(method: string, ticketId: string | undefined, detail: string, act: () => T, queue?: string): T {
     const row = this.rowOf(ticketId);
     const info: FaultInfo = { id: row?.id, effect: row?.effect.kind, ticketId: ticketId ?? row?.ticketId, method };
     if (row) this.fire('effect.before', info);
@@ -199,6 +201,7 @@ export class FaultLife {
         ...(info.ticketId === undefined ? {} : { ticketId: info.ticketId }),
         ...(row ? { row: row.id, kind: row.effect.kind } : {}),
         detail,
+        ...(queue === undefined ? {} : { queue }),
       });
       if (row) this.fire('effect.after', info);
     };
@@ -311,23 +314,37 @@ export class FaultLife {
     return override(inner, {
       start: (req: RunRequest) => {
         const run = this.runs.get(req.runId);
-        return this.visible('start', run?.ticketId, JSON.stringify({ runId: req.runId, queue: run?.queue }), () => inner.start(req));
+        return this.visible('start', run?.ticketId, req.runId, () => inner.start(req), run?.queue);
       },
     } as Partial<Record<keyof T, unknown>>);
   }
 }
 
 /** The calls of `calls` that repeat a visible call of the same outbox row: a visible effect done twice. */
-export function visibleDuplicates(calls: readonly VisibleCall[]): VisibleCall[][] {
+function visibleDuplicates(calls: readonly VisibleCall[]): VisibleCall[][] {
   const byRow = new Map<string, VisibleCall[]>();
   for (const c of calls) {
     if (!c.row || !VISIBLE.has(c.method)) continue;
     // The same call again (a run's relay posting two different texts is no double); any second
     // launch of a row is a double, whatever its fresh run id.
     const key = JSON.stringify([c.row, c.method, c.method === 'start' ? '' : c.detail]);
-    byRow.set(key, [...(byRow.get(key) ?? []), c]);
+    const group = byRow.get(key);
+    if (group) group.push(c);
+    else byRow.set(key, [c]);
   }
   return [...byRow.values()].filter((group) => group.length > 1);
+}
+
+/** Every outbox row of the project: its tickets' and its rows without a ticket (`listEffects` gives one or the other). */
+export async function allEffects(store: Store, projectId: string, tickets: readonly string[]): Promise<OutboxRow[]> {
+  return (await Promise.all([...tickets, undefined].map((t) => store.listEffects(projectId, t)))).flat();
+}
+
+/** Nothing left to do: no inbox row pending, no outbox row pending or running, nothing queued. */
+export async function settled(store: Store, projectId: string, tickets: readonly string[]): Promise<boolean> {
+  if ((await store.pendingInbox(1)).length > 0) return false;
+  if ((await allEffects(store, projectId, tickets)).some((r) => r.status === 'pending' || r.status === 'running')) return false;
+  return (await store.listQueue()).length === 0;
 }
 
 export interface ChainReport {
@@ -355,11 +372,11 @@ export async function checkChain(
   const dead = await store.deadLetters();
   if (dead.length > 0) violations.push(`dead letters: ${dead.map((d) => d.event.id).join(', ')}`);
 
+  for (const row of await allEffects(store, opts.projectId, opts.tickets)) {
+    if (row.status === 'pending' || row.status === 'running' || row.status === 'dead') violations.push(`outbox: ${row.id} (${row.effect.kind}) left ${row.status}`);
+  }
   const journaled = new Map<string, number>();
   for (const ticketId of [...opts.tickets, undefined]) {
-    for (const row of await store.listEffects(opts.projectId, ticketId)) {
-      if (row.status === 'pending' || row.status === 'running' || row.status === 'dead') violations.push(`outbox: ${row.id} (${row.effect.kind}) left ${row.status}`);
-    }
     const journal = await exportJournal(store, opts.projectId, ticketId);
     for (const e of journal.entries) journaled.set(e.event.id, (journaled.get(e.event.id) ?? 0) + 1);
     const replay = replayJournal(journal);
@@ -377,7 +394,7 @@ export async function checkChain(
     // A dev run launched twice is never the outbox's at-least-once: recover() blocks a ticket whose
     // run was cut, and the start taken up again is refused. A question's run blocks nothing: its
     // start taken up again launches it again, until a start is idempotent (ORC-162).
-    const question = group.every((c) => (JSON.parse(c.detail) as { queue?: string }).queue === 'questions');
+    const question = group.every((c) => c.queue === 'questions');
     if (first.method === 'start' && !question) violations.push(`run launched twice: ${line}`);
     else atLeastOnce.push(line);
   }

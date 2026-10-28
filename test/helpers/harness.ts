@@ -179,27 +179,23 @@ export function createHarness(
     const view = opts.faults?.life(() => kill());
     const life = mortal(view ? view.store(store) : store);
     kill = life.kill;
-    return {
-      ...life,
+    const outside = {
       tracker: life.gate(view ? view.tracker(tracker) : tracker),
       runner: life.gate(view ? view.runner(runner) : runner),
       forge: life.gate(forge),
       workspaces: life.gate(workspaces),
       verify: life.gate(checks.run),
     };
+    return { ...life, outside };
   };
   let life = connect();
   let n = 0;
-  const build = ({ store, ...outside }: ReturnType<typeof connect>) => new Orchestrator({
+  const build = ({ store, outside }: ReturnType<typeof connect>) => new Orchestrator({
     store,
     clock,
     bus: new EventBus(),
     scheduler: new Scheduler(store, { dev: workflow.limits.parallelSessions, questions: workflow.limits.questionSessions }),
-    tracker: outside.tracker,
-    forge: outside.forge,
-    runner: outside.runner,
-    workspaces: outside.workspaces,
-    verify: outside.verify,
+    ...outside,
     projects: [project],
     packDir,
     agentEnv: (r) => ({ FACTORY_RUN_TOKEN: r.token }),

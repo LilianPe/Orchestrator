@@ -3,17 +3,6 @@ import type { EventType } from '../../src/core/types.js';
 /** Lease of a claimed outbox row in the chaos daemon, on the simulated clock: the driver moves past it after each kill. */
 export const CHAOS_LEASE_MS = 60_000;
 
-/**
- * The standard pack, with a delegation that also labels the issue and comments on it: a comment
- * posted twice is the visible double the chaos looks for.
- */
-export const CHAOS_WORKFLOW = `
-version: 1
-on:
-  ticket.delegated:
-    - { when: "state in [todo, dev] && !blocked", labels: { add: ["agent:pris"], remove: [] }, comment: "Pris en charge.", run: dev }
-`;
-
 /** An event from Linear, as the driver sends it: the daemon stamps it with its clock. */
 export interface ChaosEvent {
   id: string;
