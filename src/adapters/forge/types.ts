@@ -5,6 +5,8 @@ export interface PrInfo {
   url: string;
   state: 'OPEN' | 'MERGED' | 'CLOSED';
   branch: string;
+  /** SHA of the PR's head commit, when the forge reads it: the checks verdict is per head (ORC-134). */
+  headSha?: string;
   checks: 'pending' | 'pass' | 'fail' | 'none';
   failedChecks: string[];
 }

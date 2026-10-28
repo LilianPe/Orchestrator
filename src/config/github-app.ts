@@ -68,3 +68,11 @@ export function resolveGithubApp(config: InstanceConfig, env: NodeJS.ProcessEnv 
     ...(webhookSecret ? { webhookSecret } : {}),
   };
 }
+
+/**
+ * Secret of the GitHub webhooks (ORC-134): `github.webhookSecret` of config.yaml, else the
+ * `GH_WEBHOOK_SECRET` env var. Empty when neither is set: every GitHub webhook is then refused.
+ */
+export function githubWebhookSecret(config: InstanceConfig, env: NodeJS.ProcessEnv = process.env): string {
+  return config.github?.webhookSecret?.trim() || env['GH_WEBHOOK_SECRET']?.trim() || '';
+}

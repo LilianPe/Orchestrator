@@ -20,10 +20,10 @@ export class GhCliForge implements Forge {
     const out = await mustExec(
       this.exec,
       'gh',
-      ['pr', 'list', '--head', branch, '--state', 'all', '--json', 'number,url,state,headRefName', '--limit', '1'],
+      ['pr', 'list', '--head', branch, '--state', 'all', '--json', 'number,url,state,headRefName,headRefOid', '--limit', '1'],
       { cwd: repoPath },
     );
-    const [pr] = JSON.parse(out) as { number: number; url: string; state: PrInfo['state']; headRefName: string }[];
+    const [pr] = JSON.parse(out) as { number: number; url: string; state: PrInfo['state']; headRefName: string; headRefOid?: string }[];
     if (!pr) return undefined;
     let checks: PrInfo['checks'] = 'none';
     let failedChecks: string[] = [];
@@ -37,7 +37,7 @@ export class GhCliForge implements Forge {
         checks = 'none';
       }
     }
-    return { number: pr.number, url: pr.url, state: pr.state, branch: pr.headRefName, checks, failedChecks };
+    return { number: pr.number, url: pr.url, state: pr.state, branch: pr.headRefName, ...(pr.headRefOid ? { headSha: pr.headRefOid } : {}), checks, failedChecks };
   }
 
   async unresolvedReviewComments(repoPath: string, prNumber: number): Promise<FeedbackItem[]> {

@@ -22,6 +22,8 @@ export interface ServerDeps {
   /** Blocks a ticket through the orchestrator's event chain (Orchestrator.blockTicket). */
   blockTicket: (projectId: string, ticketId: string, reason: string) => Promise<void>;
   linearWebhook: (raw: string, headers: Record<string, string | undefined>) => { status: number } | Promise<{ status: number }>;
+  /** The GitHub webhook (ORC-134): signature checked, events written to the inbox before the answer. */
+  githubWebhook?: (raw: string, headers: Record<string, string | undefined>) => Promise<{ status: number }>;
   oauth?: { authorizeUrl: () => string; callback: (code: string, state: string) => Promise<void> };
   linearConnected: () => boolean;
   tracker: Pick<Tracker, 'getIssue' | 'search' | 'activity'>;
@@ -59,7 +61,7 @@ function basicPassword(header: string | undefined): string | undefined {
 }
 
 function isPublicPath(method: string, path: string): boolean {
-  return (method === 'POST' && path === '/webhooks/linear') || (method === 'GET' && path === '/oauth/callback') || path === '/agent' || path.startsWith('/agent/');
+  return (method === 'POST' && (path === '/webhooks/linear' || path === '/webhooks/github')) || (method === 'GET' && path === '/oauth/callback') || path === '/agent' || path.startsWith('/agent/');
 }
 
 function publicRun({ token: _t, ...rest }: RunRecord) {
@@ -98,13 +100,15 @@ export function createApp(d: ServerDeps): Hono {
     return next();
   });
 
-  app.post('/webhooks/linear', async (c) => {
+  const webhook = (handle: (raw: string, headers: Record<string, string | undefined>) => { status: number } | Promise<{ status: number }>) => async (c: Context) => {
     const raw = await c.req.text();
     const headers: Record<string, string | undefined> = {};
     c.req.raw.headers.forEach((v, k) => (headers[k.toLowerCase()] = v));
-    const { status } = await d.linearWebhook(raw, headers);
+    const { status } = await handle(raw, headers);
     return c.body(null, status as 200);
-  });
+  };
+  app.post('/webhooks/linear', webhook((raw, headers) => d.linearWebhook(raw, headers)));
+  app.post('/webhooks/github', d.githubWebhook ? webhook(d.githubWebhook) : (c) => c.notFound());
 
   app.get('/oauth/start', (c) => (d.oauth ? c.redirect(d.oauth.authorizeUrl()) : c.notFound()));
   app.get('/oauth/callback', async (c) => {
