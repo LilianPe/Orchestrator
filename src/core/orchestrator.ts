@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import type { Forge } from '../adapters/forge/types.js';
+import type { RoleResolver } from '../adapters/roles/types.js';
 import type { RunHandle, RunResult, Runner } from '../adapters/runner/types.js';
 import { ActivityRelay } from '../adapters/tracker/activity-relay.js';
 import { labelEchoKey, type ActivityInput, type Tracker } from '../adapters/tracker/types.js';
@@ -23,7 +24,7 @@ import type { EventBus } from './bus.js';
 import type { Clock } from './clock.js';
 import type { Effect } from './decision.js';
 import { NO_PLAN, planDecision } from './decision-plan.js';
-import { refusesDevWork, sensitivePathsAtLaunch, taintedKnowledge } from './engine.js';
+import { HUMAN_EVENTS, mayCheck, refusesDevWork, sensitivePathsAtLaunch, taintedKnowledge } from './engine.js';
 import { attemptLabels, packFingerprints } from './attempt-labels.js';
 import { pickupFailures } from './pickup.js';
 import { buildPrompt, formatFeedback, formatVerifyFailures } from './prompt.js';
@@ -93,6 +94,12 @@ export interface OrchestratorDeps {
   processRetry?: { attempts: number; baseMs: number };
   /** The factory build's commit, labelled on each attempt; defaults to `FACTORY_COMMIT`, else null (ORC-226). */
   factoryCommit?: string | null;
+  /**
+   * Resolves the roles of a human event's signed actor before its decision (ORC-186): `decide` then
+   * checks the authorization matrix on them. Without it (tests), no event carries roles and nothing is
+   * checked; the daemon always passes one.
+   */
+  roles?: RoleResolver;
 }
 
 interface StartOpts {
@@ -162,7 +169,7 @@ export class Orchestrator {
     this.worker = new Worker({
       store: d.store,
       log: (level, message) => this.log(level, message),
-      prepare: (event) => this.withSnapshot(event),
+      prepare: async (event) => this.withRoles(await this.withSnapshot(event)),
       request: (event) => this.request(event),
       committed: (event, outcome) => this.committed(event, outcome),
       execute: (row) => this.execute(row),
@@ -433,10 +440,11 @@ export class Orchestrator {
   }
 
   /** The project as a ticket sees it: with the workflow version the ticket is frozen on. */
-  private async runtimeFor(projectId: string, ticketId: string | undefined): Promise<ProjectRuntime | undefined> {
+  /** `known`: the ticket, when the caller has just read it (`null`: read, and not tracked). */
+  private async runtimeFor(projectId: string, ticketId: string | undefined, known?: TicketState | null): Promise<ProjectRuntime | undefined> {
     const project = projectId === '*' ? this.d.projects[0] : this.project(projectId);
     if (!project || !ticketId) return project;
-    const hash = (await this.d.store.getTicket(project.id, ticketId))?.workflowHash;
+    const hash = (known === undefined ? await this.d.store.getTicket(project.id, ticketId) : known)?.workflowHash;
     if (!hash || hash === this.currentVersion(project).hash) return project;
     let workflow = this.workflows.get(hash);
     if (!workflow) {
@@ -465,6 +473,24 @@ export class Orchestrator {
     const issue = await this.d.tracker.getIssue(event.ticketId);
     const logical = logicalFromName(project.workflow.states, issue.stateName) ?? 'todo';
     return { ...event, payload: { ...payload, issue: { title: issue.title, logical, priority: issue.priority } } } as FactoryEvent;
+  }
+
+  /**
+   * A human event `decide` may check gets its actor's roles before its decision (ORC-186), journaled
+   * with it, so that `decide` stays pure and a replay checks the matrix on the same roles. No actor, no
+   * roles: the event is then refused whatever it asks. A resolution that fails throws: the event waits
+   * and is retried, never decided on roles that may be wrong. An event the matrix will not check (on a
+   * ticket the factory does not track, or that no rule with a run answers in the ticket's workflow)
+   * gets none, and never waits on Linear or GitHub.
+   */
+  private async withRoles(event: FactoryEvent): Promise<FactoryEvent> {
+    const resolver = this.d.roles;
+    if (!resolver || event.roles !== undefined || event.projectId === '*' || !event.ticketId || !HUMAN_EVENTS.has(event.type)) return event;
+    const known = await this.d.store.getTicket(event.projectId, event.ticketId);
+    if (!known && !CREATES_TICKET.has(event.type)) return event;
+    const project = await this.runtimeFor(event.projectId, event.ticketId, known ?? null);
+    if (!project || !mayCheck(event, project.workflow)) return event;
+    return { ...event, roles: event.actor ? await resolver.rolesOf(event.projectId, event.actor) : [] };
   }
 
   /** The decision transaction of an event (ORC-149): `decide` runs in the store, under the ticket's lock. */

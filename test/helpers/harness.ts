@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import { FakeCheckRunner } from '../../src/adapters/checks/fake.js';
 import { FakeForge } from '../../src/adapters/forge/fake.js';
 import { FakePublisher } from '../../src/adapters/publisher/fake.js';
+import { CachedRoleResolver } from '../../src/adapters/roles/cached.js';
+import type { ProjectAuthz } from '../../src/adapters/roles/types.js';
 import { FakeRunner } from '../../src/adapters/runner/fake.js';
 import { FakeSandboxProvider } from '../../src/adapters/sandbox/fake.js';
 import { FakeTracker } from '../../src/adapters/tracker/fake.js';
@@ -15,7 +17,7 @@ import { FakeClock } from '../../src/core/clock.js';
 import { Orchestrator } from '../../src/core/orchestrator.js';
 import { Scheduler } from '../../src/core/scheduler.js';
 import { TimerService } from '../../src/runtime/timers.js';
-import type { EventPayloads, EventType, FactoryEvent } from '../../src/core/types.js';
+import type { EventPayloads, EventType, FactoryEvent, Taint } from '../../src/core/types.js';
 import type { Verifier } from '../../src/core/verify.js';
 import type { EffectRetry } from '../../src/runtime/outbox.js';
 import { SqliteStore } from '../../src/store/sqlite-store.js';
@@ -150,6 +152,11 @@ export function createHarness(
     /** Retries of an effect that throws (ORC-150); default one attempt: a failed effect dies at once and blocks its ticket. */
     effectRetry?: EffectRetry;
     /**
+     * The project's designations (ORC-186): given, the orchestrator resolves the roles of human events
+     * through the harness's tracker (team members) and forge (repo permissions), and checks the matrix.
+     */
+    authz?: Partial<Pick<ProjectAuthz, 'maintainers' | 'validators' | 'githubLogins'>>;
+    /**
      * The fault planned along the chain, and the ledger of the visible calls (ORC-163): each life of
      * the harness gets its store and its tracker and runner wrapped by it (`faults.ts`).
      */
@@ -171,6 +178,7 @@ export function createHarness(
   const sandboxes = new FakeSandboxProvider();
   const publisher = new FakePublisher(forge);
   const project = { id: 'p', repoPath: '/repo', teamKey: 'REL', workflow };
+  const authz = opts.authz && { teamKey: 'REL', repoPath: '/repo', maintainers: [], validators: [], githubLogins: {}, ...opts.authz };
   /** One life of the process: its store and its adapters, all of them silent once it is killed. */
   const connect = () => {
     let store = database(() => clock.now());
@@ -190,7 +198,7 @@ export function createHarness(
   };
   let life = connect();
   let n = 0;
-  const build = ({ store, outside }: ReturnType<typeof connect>) => new Orchestrator({
+  const build = ({ store, outside, gate }: ReturnType<typeof connect>) => new Orchestrator({
     store,
     clock,
     bus: new EventBus(),
@@ -206,6 +214,8 @@ export function createHarness(
     effectLeaseMs: opts.effectLeaseMs,
     processRetry: opts.processRetry,
     effectRetry: opts.effectRetry ?? { attempts: 1, baseMs: 1, capMs: 1 },
+    // Each life resolves roles through its own adapters and keeps its own cache, as a process does.
+    roles: authz && new CachedRoleResolver({ projects: (id) => (id === 'p' ? authz : undefined), team: gate(tracker), repo: outside.forge, now: () => clock.now() }),
   });
   let orch = build(life);
   // Holds nothing between ticks (ORC-161): the timers live in the store, a restart loses none.
@@ -213,8 +223,9 @@ export function createHarness(
   let timers = timerService(life.store);
   let seq = 0;
 
-  async function send<T extends EventType>(type: T, payload: EventPayloads[T], ticketId = 'REL-1'): Promise<void> {
-    await orch.accept({ id: `t-${++seq}`, type, at: clock.now(), projectId: 'p', ticketId, payload } as FactoryEvent);
+  /** `signed`: the event's signed actor and taint, as the Linear ingestion stamps them (ORC-160). */
+  async function send<T extends EventType>(type: T, payload: EventPayloads[T], ticketId = 'REL-1', signed: { actor?: string; taint?: Taint } = {}): Promise<void> {
+    await orch.accept({ id: `t-${++seq}`, type, at: clock.now(), projectId: 'p', ticketId, ...signed, payload } as FactoryEvent);
     await orch.drained();
   }
 

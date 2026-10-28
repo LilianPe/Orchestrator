@@ -1,5 +1,6 @@
 import type { FeedbackItem } from '../../core/types.js';
 import { execCmd, mustExec, type Exec } from '../exec.js';
+import { REPO_PERMISSIONS, type RepoPermission, type RepoPermissions } from '../roles/types.js';
 import type { Forge, PrInfo } from './types.js';
 
 export function aggregateChecks(buckets: string[]): PrInfo['checks'] {
@@ -9,12 +10,31 @@ export function aggregateChecks(buckets: string[]): PrInfo['checks'] {
   return 'pass';
 }
 
+/**
+ * What `GET /repos/{owner}/{repo}/collaborators/{user}/permission` answers (ORC-186): its `role_name`
+ * when it is a known one (`maintain`, `triage`), else the base `permission` (a custom role keeps its base).
+ */
+export function toRepoPermission(dto: { permission?: string; role_name?: string } | undefined): RepoPermission {
+  const known = (v: string | undefined) => REPO_PERMISSIONS.find((p) => p === v);
+  return known(dto?.role_name) ?? known(dto?.permission) ?? 'none';
+}
+
 const THREADS_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) { pullRequest(number: $number) { reviewThreads(first: 100) { nodes {
     isResolved comments(first: 1) { nodes { author { login } body createdAt path line } } } } } } }`;
 
-export class GhCliForge implements Forge {
+export class GhCliForge implements Forge, RepoPermissions {
   constructor(private exec: Exec = execCmd) {}
+
+  /**
+   * A user's permission on the repo (ORC-186), as the GitHub App forge reads it, through `gh api`. Every
+   * failure throws, a 404 included: `gh` gives the same 404 for a login GitHub does not know and for a
+   * repo its account cannot see, and the second is a configuration error, not a refusal.
+   */
+  async repoPermission(repoPath: string, login: string): Promise<RepoPermission> {
+    const out = await mustExec(this.exec, 'gh', ['api', `repos/{owner}/{repo}/collaborators/${encodeURIComponent(login)}/permission`], { cwd: repoPath });
+    return toRepoPermission(JSON.parse(out) as { permission?: string; role_name?: string });
+  }
 
   async findPr(repoPath: string, branch: string): Promise<PrInfo | undefined> {
     const out = await mustExec(

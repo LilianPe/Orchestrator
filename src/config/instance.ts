@@ -4,7 +4,23 @@ import { join } from 'node:path';
 import { parse, stringify } from 'yaml';
 import { z } from 'zod';
 
-const projectSchema = z.object({ id: z.string().min(1), repoPath: z.string().min(1), linearTeamKey: z.string().min(1) });
+/**
+ * The roles of a project no source gives (ORC-186), by Linear user id, until `.factory/config.yml`
+ * (ORC-209): designated maintainers (`/refreeze`) and spec validators, and the GitHub login of each
+ * Linear user whose rights on the repo count (Linear gives none the factory can read).
+ */
+const authzSchema = z.object({
+  maintainers: z.array(z.string().min(1)).default([]),
+  validators: z.array(z.string().min(1)).default([]),
+  githubLogins: z.record(z.string().min(1), z.string().min(1)).default({}),
+});
+
+const projectSchema = z.object({
+  id: z.string().min(1),
+  repoPath: z.string().min(1),
+  linearTeamKey: z.string().min(1),
+  authz: authzSchema.optional(),
+});
 
 const idSchema = z.union([z.string().min(1), z.number().int().positive()]).transform(String);
 

@@ -2,12 +2,18 @@ import type { Workflow } from '../config/workflow-schema.js';
 import type { DecisionPlan, TimerRecord } from '../store/types.js';
 import { effectiveEvent } from './dead-letter.js';
 import type { OutboxEffect } from './decision.js';
-import { decide, isFenced } from './engine.js';
+import { AUTHZ_REFUSED, decide, isFenced } from './engine.js';
 import { reduce } from './reduce.js';
 import { CREATES_TICKET, type EventType, type FactoryEvent, type TicketState } from './types.js';
 
 /** Events after which `handle` settles the ticket: the pending job starts once nothing is in flight. */
 export const SETTLES_RUN: ReadonlySet<EventType> = new Set<EventType>(['run.finished', 'verify.passed', 'verify.failed']);
+
+/** The log line of an action the authorization matrix refused (ORC-186); the refusal itself is in the trace. */
+function refusedNote(event: FactoryEvent, trace: readonly string[]): string | undefined {
+  const refused = trace.find((t) => t.startsWith(AUTHZ_REFUSED));
+  return refused && `${event.type} ${event.id} on ${event.ticketId ?? '*'}: ${refused}`;
+}
 
 /** A decision that writes nothing (an event of an unknown project). */
 export const NO_PLAN: DecisionPlan = { effects: [], timers: [], clearTimers: false };
@@ -60,6 +66,6 @@ export function planDecision({ event, known, workflow, hash, now }: PlanInput): 
     clearTimers: decision.effects.some((c) => c.kind === 'stop_run' && !c.linearSessionId),
     at: now,
     trace: decision.trace,
-    note: isFenced(decision) ? `ignored stale ${event.type} for ${event.ticketId ?? '*'}: ${decision.trace[0]}` : undefined,
+    note: isFenced(decision) ? `ignored stale ${event.type} for ${event.ticketId ?? '*'}: ${decision.trace[0]}` : refusedNote(event, decision.trace),
   };
 }

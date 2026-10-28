@@ -1,3 +1,4 @@
+import type { Role } from './authz.js';
 import type { TimerRecord } from '../store/types.js';
 import { RENAMED_V1, SCHEMA_VERSION, type FactoryEvent, type Taint, type TimerFired } from './types.js';
 
@@ -11,6 +12,8 @@ export interface StoredEvent {
   schemaVersion?: number;
   taint?: Taint;
   actor?: string;
+  /** Roles of `actor` journaled with a human event (ORC-186). */
+  roles?: readonly Role[];
   payload: unknown;
 }
 

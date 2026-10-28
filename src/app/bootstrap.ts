@@ -6,6 +6,7 @@ import { GhCliForge } from '../adapters/forge/gh-cli.js';
 import { GitHubAppForge } from '../adapters/forge/github-app.js';
 import { createGithubIngest, githubMapContext, githubRepoOf } from '../adapters/forge/github-ingest.js';
 import { PrPoller } from '../adapters/forge/pr-poller.js';
+import { CachedRoleResolver } from '../adapters/roles/cached.js';
 import { ClaudeCodeRunner } from '../adapters/runner/claude-code.js';
 import { purgeTranscripts } from '../adapters/runner/transcript.js';
 import { FakeRunner } from '../adapters/runner/fake.js';
@@ -140,6 +141,18 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       log('forge GitHub : CLI gh (repli de migration ; GH_TOKEN reste requis par les agents jusqu’à ORC-125)');
     }
     const kb = instance.knowledge ? new KnowledgeBase(instance.knowledge.repoPath) : undefined;
+    // The roles of a human event's signed actor (ORC-186): Linear team members and GitHub rights, read
+    // again past their TTL, and the designations of config.yaml.
+    const roles = new CachedRoleResolver({
+      projects: (id) => {
+        const p = instance.projects.find((x) => x.id === id);
+        return p && { teamKey: p.linearTeamKey, repoPath: p.repoPath, maintainers: [], validators: [], githubLogins: {}, ...p.authz };
+      },
+      team: {
+        teamMembers: (teamKey) => (linearTracker ? linearTracker.teamMembers(teamKey) : Promise.reject(new Error('Linear non connecté'))),
+      },
+      repo: forge,
+    });
 
     const orchestrator = new Orchestrator({
       // The sources start before Linear is connected: their events wait in the inbox until replayInbox().
@@ -161,6 +174,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       settingsPath: writeRunSettings(packDir, o.home),
       dailyBudgetUsd: instance.limits.perDayUsd,
       knowledgeConfigured: !!instance.knowledge,
+      roles,
       agentEnv: (run) => ({
         FACTORY_API: `http://127.0.0.1:${port}/agent`,
         FACTORY_RUN_TOKEN: run.token,

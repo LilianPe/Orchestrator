@@ -83,6 +83,10 @@ Sur chaque dépôt confié à Relais, le compte `gh` doit pouvoir :
 
 Avec un jeton à granularité fine : *Contents* lecture/écriture, *Pull requests* lecture/écriture, *Actions* et *Checks* lecture, *Metadata* lecture. Avec un jeton classique : scope `repo` (et `workflow` seulement si les agents doivent modifier `.github/workflows`, ce que le skill `fix-ci` leur interdit). Pour `relais init` → « Créer un dépôt relais-knowledge », le compte doit aussi pouvoir créer un dépôt.
 
+## Droits des humains
+
+La [matrice d'autorisations](linear.md#autorisations--qui-peut-faire-quoi) (ORC-186) lit la permission d'un utilisateur sur le dépôt (`GET /repos/{owner}/{repo}/collaborators/{login}/permission`), par la GitHub App (permission *Metadata* en lecture, déjà demandée) ou, en repli, par `gh api`. Le login GitHub de chaque utilisateur Linear se déclare dans `config.yaml` (`projects[].authz.githubLogins`, voir [configuration](configuration.md#autorisations)). Une permission lue est gardée 60 s.
+
 ## Ce que Relais relève
 
 Toutes les 30 s, pour chaque ticket suivi qui a une branche et n'est pas `done` (un ticket passé en `done` avant que le relevé voie le merge de sa PR connue reste relevé, pour le seul merge ou la fermeture de cette PR, jusqu'à ce qu'il les voie : Linear peut le passer en *Done* avant, et seul `pr.merged` arrête le travail de code) :

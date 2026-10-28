@@ -444,3 +444,42 @@ describe('GitHubAppForge writes, idempotent (ORC-162)', () => {
     expect(writes(calls).map((c) => c.body)).toEqual([{ name: 'factory/verify', external_id: 'REL-1:4:1', status: 'in_progress', head_sha: 'abc123' }]);
   });
 });
+
+describe('GitHubAppForge.repoPermission (ORC-186)', () => {
+  const permissionRoute = (login: string, status: number, body: unknown): Route => (url) =>
+    url.pathname === `/repos/acme/app/collaborators/${login}/permission` ? { status, body } : undefined;
+
+  it("reads a user's role on the repo with the installation token", async () => {
+    const calls: Call[] = [];
+    const { forge } = makeForge(
+      [
+        installationRoute(42),
+        tokenRoute(42),
+        permissionRoute('dev', 200, { permission: 'write', role_name: 'maintain' }),
+        permissionRoute('reader', 200, { permission: 'read', role_name: 'read' }),
+        permissionRoute('custom', 200, { permission: 'write', role_name: 'release-manager' }),
+      ],
+      { calls },
+    );
+    expect(await forge.repoPermission('/repo', 'dev')).toBe('maintain');
+    expect(await forge.repoPermission('/repo', 'reader')).toBe('read');
+    expect(await forge.repoPermission('/repo', 'custom')).toBe('write');
+    expect(calls.find((c) => c.url.includes('/collaborators/'))!.headers.authorization).toBe('Bearer ghs_test_token');
+  });
+
+  it('gives none to a login GitHub does not know, and throws on any other failure', async () => {
+    const { forge } = makeForge([
+      installationRoute(42),
+      tokenRoute(42),
+      permissionRoute('ghost', 404, { message: 'Not Found' }),
+      permissionRoute('down', 502, { message: 'Bad Gateway' }),
+    ]);
+    expect(await forge.repoPermission('/repo', 'ghost')).toBe('none');
+    await expect(forge.repoPermission('/repo', 'down')).rejects.toThrow(/502/);
+  });
+
+  it('throws, never answers none, when the app is not installed on the repo', async () => {
+    const { forge } = makeForge([(url) => (url.pathname === '/repos/acme/app/installation' ? { status: 404, body: { message: 'Not Found' } } : undefined)]);
+    await expect(forge.repoPermission('/repo', 'dev')).rejects.toThrow(/installation.*404/);
+  });
+});

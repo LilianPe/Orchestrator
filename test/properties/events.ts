@@ -1,4 +1,5 @@
 import fc from 'fast-check';
+import type { Role } from '../../src/core/authz.js';
 import {
   LOGICAL_STATES,
   TRUSTED,
@@ -34,7 +35,9 @@ export type Entry = { kind: 'external'; event: FactoryEvent } | { kind: 'shell';
 
 /** An external event before it gets its id, time and taint. */
 type Draft = { [K in EventType]: { type: K; payload: EventPayloads[K] } }[EventType];
-type DraftEntry = { kind: 'external'; draft: Draft; untrusted: boolean } | { kind: 'shell'; event: ShellEvent };
+/** `signed`: the signed actor and the roles the orchestrator resolved for it (ORC-186); absent, the event is not checked. */
+type Signed = { actor?: string; roles: readonly Role[] };
+type DraftEntry = { kind: 'external'; draft: Draft; untrusted: boolean; signed?: Signed } | { kind: 'shell'; event: ShellEvent };
 
 const session = fc.constantFrom(DEV_SESSION, 's-q1', 's-q2');
 const author = fc.constantFrom('lilian', 'armand');
@@ -127,6 +130,27 @@ function draftOf<K extends EventType>(type: K): fc.Arbitrary<Draft> {
 const anyDraft: fc.Arbitrary<Draft> = fc.oneof(...EVENT_TYPES.map((t) => draftOf(t)));
 
 /**
+ * Who signed a human event and the roles resolved for them (ORC-186), one time in three: a member who
+ * can write and merge (`u-dev`, who signs the opening delegation one time in four: the requester then),
+ * a member without GitHub rights, a GitHub writer outside the team, someone with no role, or no actor
+ * at all. The other events carry no roles, as those journaled before ORC-186, and keep exercising the
+ * rest of `decide` unchecked.
+ */
+export const ACTORS: Readonly<Record<string, readonly Role[]>> = {
+  'u-none': [],
+  'u-dev': ['team_member', 'repo_writer', 'repo_merger'],
+  'u-member': ['team_member'],
+  'u-out': ['repo_writer'],
+};
+/** Events a human sends through Linear: the orchestrator may resolve roles for them (`mayCheck`). */
+const HUMAN: ReadonlySet<EventType> = new Set<EventType>(['ticket.delegated', 'session.mentioned', 'command', 'session.prompted', 'label.changed', 'status.changed']);
+const signedBy: fc.Arbitrary<Signed | undefined> = fc.oneof(
+  { arbitrary: fc.constant(undefined), weight: 6 },
+  { arbitrary: fc.constantFrom(...Object.keys(ACTORS)).map((actor): Signed => ({ actor, roles: ACTORS[actor]! })), weight: 2 },
+  { arbitrary: fc.constant<Signed>({ roles: [] }), weight: 1 },
+);
+
+/**
  * Events the factory produces itself (its runner, its checks, its timers, its UI): always trusted, as
  * their producers stamp them `TRUSTED`. Only events that carry content from outside can be untrusted.
  */
@@ -149,13 +173,12 @@ const FROM_LINEAR: ReadonlySet<EventType> = new Set<EventType>([
  * fragments below (attempt, verify loop, red CI, forge reports) stay trusted.
  */
 const external = (draft: fc.Arbitrary<Draft>): fc.Arbitrary<DraftEntry> =>
-  fc.record({ draft, roll: fc.integer({ min: 0, max: 4 }) }).map(
-    ({ draft: d, roll }): DraftEntry => ({
-      kind: 'external',
-      draft: d,
-      untrusted: ALWAYS_UNTRUSTED.has(d.type) || (roll === 0 && !FACTORY_PRODUCED.has(d.type)),
-    }),
-  );
+  fc.record({ draft, roll: fc.integer({ min: 0, max: 4 }), signed: signedBy }).map(({ draft: d, roll, signed }): DraftEntry => {
+    const untrusted = ALWAYS_UNTRUSTED.has(d.type) || (roll === 0 && !FACTORY_PRODUCED.has(d.type));
+    if (!signed || !HUMAN.has(d.type)) return { kind: 'external', draft: d, untrusted };
+    // An untrusted event has no signed actor (ORC-160): its roles, resolved for nobody, are none.
+    return { kind: 'external', draft: d, untrusted, signed: untrusted ? { roles: [] } : signed };
+  });
 
 const shell: fc.Arbitrary<ShellEvent> = fc.oneof(
   fc.record({
@@ -257,11 +280,12 @@ const fragment: fc.Arbitrary<DraftEntry[]> = fc.oneof(
 /** Delegation first, most of the time: rules for a delegated ticket are the bulk of the workflow. */
 const opening: fc.Arbitrary<DraftEntry[]> = fc.oneof(
   {
-    arbitrary: fc.constantFrom('todo' as const, 'dev' as const).map((l): DraftEntry[] => [
+    arbitrary: fc.record({ l: fc.constantFrom('todo' as const, 'dev' as const), signed: fc.integer({ min: 0, max: 3 }) }).map(({ l, signed }): DraftEntry[] => [
       {
         kind: 'external',
         draft: { type: 'ticket.delegated', payload: { linearSessionId: DEV_SESSION, issue: { title: 'Titre', logical: l, priority: 0 } } },
         untrusted: false,
+        ...(signed === 0 ? { signed: { actor: 'u-dev', roles: ACTORS['u-dev']! } } : {}),
       },
       { kind: 'shell', event: { type: 'session.linked', linearSessionId: DEV_SESSION } },
     ]),
@@ -280,7 +304,10 @@ function stamp(drafts: DraftEntry[]): Entry[] {
       projectId: PROJECT,
       ticketId: TICKET,
       ...TRUSTED,
-      ...(d.untrusted ? { taint: 'untrusted' } : FROM_LINEAR.has(d.draft.type) ? { actor: 'user-lilian' } : {}),
+      // As the ingestion stamps them (ORC-160): an untrusted event has no actor; a trusted Linear one has
+      // its signed actor, and the roles resolved for it when the orchestrator checks the matrix (ORC-186).
+      ...(d.untrusted ? { taint: 'untrusted' } : { ...(FROM_LINEAR.has(d.draft.type) ? { actor: 'user-lilian' } : {}), ...(d.signed?.actor ? { actor: d.signed.actor } : {}) }),
+      ...(d.signed ? { roles: d.signed.roles } : {}),
       payload: d.draft.payload,
     } as FactoryEvent;
     return { kind: 'external', event };

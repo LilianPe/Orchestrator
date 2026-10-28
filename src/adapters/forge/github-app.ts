@@ -1,7 +1,8 @@
 import { createPrivateKey, createSign } from 'node:crypto';
 import { execCmd, mustExec, type Exec } from '../exec.js';
 import type { FeedbackItem } from '../../core/types.js';
-import { aggregateChecks } from './gh-cli.js';
+import { aggregateChecks, toRepoPermission } from './gh-cli.js';
+import type { RepoPermission, RepoPermissions } from '../roles/types.js';
 import type { CheckRunRequest, Forge, ForgeWriter, PrInfo, PrRequest } from './types.js';
 
 export interface GitHubRepoRef {
@@ -287,7 +288,26 @@ export class GitHubAppAuth {
   }
 }
 
-export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter {
+export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter, RepoPermissions {
+  /**
+   * A user's permission on the repo (ORC-186), with the installation token: the app needs only the
+   * `metadata: read` permission. Once the token is in hand, the repo is one the app sees: a 404 then
+   * means a login GitHub does not know, which gets `none`. Any other failure throws, a 404 on the
+   * repo or the installation included (an app not installed is a configuration error, not a refusal).
+   */
+  async repoPermission(repoPath: string, login: string): Promise<RepoPermission> {
+    const repo = await this.repo(repoPath);
+    const token = await this.installationToken(repo);
+    try {
+      return toRepoPermission(
+        await this.call<{ permission?: string; role_name?: string }>('GET', `${repoApi(repo)}/collaborators/${encodeURIComponent(login)}/permission`, token),
+      );
+    } catch (err) {
+      if (err instanceof GitHubApiError && err.status === 404) return 'none';
+      throw err;
+    }
+  }
+
   async findPr(repoPath: string, branch: string): Promise<PrInfo | undefined> {
     const repo = await this.repo(repoPath);
     const token = await this.installationToken(repo);

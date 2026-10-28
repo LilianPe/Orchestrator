@@ -153,6 +153,29 @@ describe.skipIf(!PG_URL)('orchestrator on PgStore', () => {
     expect(await h.orch.isPaused()).toBe(false);
   });
 
+  it('journals the roles a human event was decided on, and answers a refusal once across a restart (ORC-186)', async () => {
+    const h = harness({ authz: { githubLogins: { 'user-dev': 'dev-gh' } } });
+    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+    h.tracker.setTeamMembers('REL', ['user-dev', 'user-member']);
+    h.forge.setRepoPermission('dev-gh', 'write');
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' }, 'REL-1', { actor: 'user-member' });
+    expect(h.runner.requests).toEqual([]);
+    expect(h.tracker.activities('ls-1')).toEqual([{ type: 'response', body: expect.stringMatching(/^Refusé/) }]);
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' }, 'REL-1', { actor: 'user-dev' });
+    expect(h.runner.requests).toHaveLength(1);
+    const journal = await pool.query<{ payload: { actor?: string; roles?: string[] } }>(
+      `select payload from journal where ticket_id = 'REL-1' and type = 'ticket.delegated' order by seq`,
+    );
+    expect(journal.rows.map((r) => [r.payload.actor, r.payload.roles])).toEqual([
+      ['user-member', ['team_member']],
+      ['user-dev', ['team_member', 'repo_writer', 'repo_merger']],
+    ]);
+    await h.restart();
+    const refusals = h.tracker.activities('ls-1').filter((a) => 'body' in a && a.body.startsWith('Refusé'));
+    expect(refusals).toHaveLength(1);
+    expect(await h.ticket()).toMatchObject({ initiatorId: 'user-dev' });
+  });
+
   it('records each decision in decision_trace: the exported journal replays bit for bit, and diverges under another preset (ORC-174)', async () => {
     const h = harness({ preset: testPreset() });
     h.checks.failNext('1 failed');

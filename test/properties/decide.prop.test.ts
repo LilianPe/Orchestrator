@@ -1,7 +1,7 @@
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import { effectiveEvent } from '../../src/core/dead-letter.js';
-import { decide, isFenced, SENSITIVE_PATHS } from '../../src/core/engine.js';
+import { AUTHZ_REFUSED, decide, isFenced, mayCheck, SENSITIVE_PATHS } from '../../src/core/engine.js';
 import { reduce } from '../../src/core/reduce.js';
 import {
   TRUSTED,
@@ -245,7 +245,7 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
     );
 
     it(
-      'a reply in the dev session of a delegated ticket is recorded or delivered, whatever its status (ORC-267)',
+      'a reply in the dev session of a delegated ticket is recorded or delivered, whatever its status (ORC-267), or refused and answered (ORC-186)',
       () => {
         const counterexample = seq(...delegated(), reply());
         holds((s) => {
@@ -254,7 +254,11 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
             if (e.type !== 'session.prompted' || !step.after?.delegated || e.payload.linearSessionId !== step.after.linearSessionId) continue;
             const recorded = step.decision.events.some((x) => x.type === 'feedback.appended' && x.item.body === e.payload.body);
             const delivered = step.decision.effects.some((x) => x.kind === 'start_run' && x.inputText === e.payload.body);
-            expect(recorded || delivered, 'reply in the dev session recorded or delivered').toBe(true);
+            // A reply the matrix refuses is not lost either: its author gets the refusal in the session.
+            const refused =
+              step.decision.trace.some((t) => t.startsWith(AUTHZ_REFUSED)) &&
+              step.decision.effects.some((x) => x.kind === 'activity' && x.linearSessionId === e.payload.linearSessionId);
+            expect(recorded || delivered || refused, 'reply in the dev session recorded, delivered or refused').toBe(true);
           }
         }, [counterexample]);
       },
@@ -460,5 +464,65 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
     );
 
     it.todo('I12 — sensitive paths and taint from the workflow and the ingestion, frozen tests included (ORC-160, ORC-131)');
+  });
+
+  describe('ORC-186 — authorization matrix, checked on the signed actor', () => {
+    type Decided = ReturnType<typeof decided>[number];
+    const isRefusal = (step: Decided) => step.decision.trace.some((t) => t.startsWith(AUTHZ_REFUSED));
+
+    it(
+      'a refused human event changes no work: no run, no timer, no feedback, no unblock, only its answer, once, to a signed actor or in a session',
+      () => {
+        holds((s) => {
+          for (const step of decided(run(s))) {
+            if (!isRefusal(step)) continue;
+            expect(step.decision.events, 'refused event recorded a change').toEqual([]);
+            expect(step.decision.timers, 'refused event armed a timer').toEqual([]);
+            expect(step.launches, 'refused event launched a run').toEqual([]);
+            const answered = !!step.event.actor || !!(step.event.payload as { linearSessionId?: string }).linearSessionId;
+            expect(step.decision.effects, 'refusal not answered once').toHaveLength(answered ? 1 : 0);
+            for (const e of step.decision.effects) expect(['activity', 'comment']).toContain(e.kind);
+            expect(step.event.roles, 'refused an event whose roles were not resolved').toBeDefined();
+            // The orchestrator resolves roles only where `mayCheck` says the matrix may be checked.
+            expect(mayCheck(step.event, wf), `${step.event.type} refused where the orchestrator resolves no roles`).toBe(true);
+          }
+        });
+      },
+      TIMEOUT,
+    );
+
+    it(
+      'an allowed human event is decided as if the matrix did not exist: the check only ever takes away',
+      () => {
+        holds((s) => {
+          for (const step of decided(run(s))) {
+            if (step.event.roles === undefined || isRefusal(step)) continue;
+            const unchecked = decide(step.before, { ...step.event, roles: undefined } as FactoryEvent, wf);
+            // Only a checked delegation names the run's initiator: the one event an unchecked decision leaves out.
+            const initiator = (e: InternalEvent) => e.type === 'ticket.patched' && 'initiatorId' in e.patch;
+            expect({ ...step.decision, events: step.decision.events.filter((e) => !initiator(e)), trace: [] }).toEqual({ ...unchecked, trace: [] });
+          }
+        });
+      },
+      TIMEOUT,
+    );
+
+    it(
+      'without a signed actor, nothing that would start, relaunch or feed a run goes through',
+      () => {
+        holds((s) => {
+          for (const step of decided(run(s))) {
+            if (step.event.roles === undefined || step.event.actor) continue;
+            const unchecked = decide(step.before, { ...step.event, roles: undefined } as FactoryEvent, wf);
+            const acts =
+              unchecked.effects.some((e) => e.kind === 'start_run') ||
+              unchecked.timers.length > 0 ||
+              unchecked.events.some((e) => e.type === 'feedback.appended' || e.type === 'ticket.unblocked');
+            if (acts) expect(isRefusal(step), `${step.event.type} went through without a signed actor`).toBe(true);
+          }
+        });
+      },
+      TIMEOUT,
+    );
   });
 });

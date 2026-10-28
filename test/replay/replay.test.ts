@@ -138,6 +138,26 @@ describe('recorded journals (test/replay/journals)', () => {
     expect(replayJournal(journal).divergences).toEqual([]);
   });
 
+  it('journals the roles each human event was decided on, and replays a refusal and an allowed action the same (ORC-186)', () => {
+    const journal = readJournal(readFileSync(join(dir, 'authz-refused-then-allowed.json'), 'utf8'));
+    const delegations = journal.entries.filter((e) => e.event.type === 'ticket.delegated');
+    expect(delegations.map((e) => [e.event.actor, e.event.roles])).toEqual([
+      ['user-armand', ['team_member']],
+      ['user-lilian', ['team_member', 'repo_writer', 'repo_merger']],
+    ]);
+    expect(delegations[0]!.decision?.trace).toContainEqual(expect.stringMatching(/^authz: refused trigger to user-armand/));
+    expect(delegations[0]!.decision?.effects).toEqual([expect.objectContaining({ kind: 'activity', linearSessionId: 'ls-1', body: expect.stringMatching(/^Refusé/) })]);
+    expect(delegations[1]!.decision?.effects).toContainEqual(expect.objectContaining({ kind: 'start_run', job: 'dev' }));
+    const replies = journal.entries.filter((e) => e.event.type === 'session.prompted');
+    expect(replies.map((e) => e.event.actor)).toEqual(['user-stranger', 'user-armand']);
+    expect(replies[0]!.decision?.trace).toContainEqual(expect.stringMatching(/^authz: refused answer_clarify to user-stranger/));
+    expect(replies[1]!.decision?.ticket?.pendingFeedback.map((f) => f.body)).toEqual(['le bouton export est mal placé']);
+    expect(replayJournal(journal)).toMatchObject({ divergences: [], replayed: journal.entries.length });
+    // A refusal recorded on other roles is caught at its exact event: the roles are part of what is replayed.
+    delegations[0]!.event.roles = ['team_member', 'repo_writer'];
+    expect(new Set(replayJournal(journal).divergences.map((d) => d.eventId))).toEqual(new Set([delegations[0]!.event.id]));
+  });
+
   it.each(files)('%s replays identical bit for bit', (file) => {
     const report = replayJournal(readJournal(readFileSync(join(dir, file), 'utf8'), file));
     expect(report.divergences).toEqual([]);
