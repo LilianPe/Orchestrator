@@ -7,6 +7,7 @@ import {
   effectResult,
   type DecisionOutcome,
   type DecisionRequest,
+  type MeasureFacts,
   type OutboxRow,
   type QueueClaim,
   type QueueItem,
@@ -42,6 +43,7 @@ const ADDED_COLUMNS: [table: string, column: string, definition: string][] = [
   ['outbox', 'error', 'TEXT'],
   ['queue', 'lease', 'TEXT'],
   ['queue', 'lease_until', 'INTEGER'],
+  ['inbox', 'acked_at', 'INTEGER'],
 ];
 
 interface OutboxSqlRow {
@@ -513,6 +515,31 @@ export class SqliteStore implements Store {
   async costSince(ts: number): Promise<number> {
     const row = this.db.prepare('SELECT COALESCE(SUM(cost_usd), 0) AS total FROM runs WHERE started_at >= ?').get(ts) as { total: number };
     return row.total;
+  }
+
+  async markAcked(eventId: string, at: number): Promise<void> {
+    this.db.prepare('UPDATE inbox SET acked_at = ? WHERE id = ? AND acked_at IS NULL').run(at, eventId);
+  }
+
+  async measureFacts(projectId: string, ticketId: string): Promise<MeasureFacts> {
+    const events = this.db
+      .prepare(`SELECT data FROM events WHERE ticket_id = ? AND json_extract(data, '$.projectId') = ? ORDER BY rowid`)
+      .all(ticketId, projectId) as { data: string }[];
+    const runs = this.db
+      .prepare(`SELECT data FROM runs WHERE json_extract(data, '$.projectId') = ? AND json_extract(data, '$.ticketId') = ? ORDER BY started_at, rowid`)
+      .all(projectId, ticketId) as { data: string }[];
+    const acked = this.db
+      .prepare(
+        `SELECT id, acked_at FROM inbox WHERE acked_at IS NOT NULL AND json_extract(data, '$.projectId') = ? AND json_extract(data, '$.ticketId') = ?`,
+      )
+      .all(projectId, ticketId) as { id: string; acked_at: number }[];
+    return {
+      ticket: this.ticketRow(projectId, ticketId),
+      events: events.map((r) => JSON.parse(r.data) as FactoryEvent),
+      runs: runs.map((r) => JSON.parse(r.data) as RunRecord),
+      effects: await this.listEffects(projectId, ticketId),
+      acks: Object.fromEntries(acked.map((r) => [r.id, Number(r.acked_at)])),
+    };
   }
 
   async getMeta(key: string): Promise<string | undefined> {

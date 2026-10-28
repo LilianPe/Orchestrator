@@ -4,6 +4,7 @@ import { migratePgStore } from '../../src/store/pg/migrate.js';
 import { PgStore } from '../../src/store/pg/pg-store.js';
 import { createHarness } from '../helpers/harness.js';
 import { createTestDatabase, PG_URL, TRUNCATE_ALL } from '../helpers/pg-database.js';
+import { expectFirstRunMeasures, firstRun } from '../helpers/measures-scenario.js';
 import { testPreset } from '../helpers/test-preset.js';
 
 // The orchestrator on PgStore, through the scenario harness: the daemon's path once
@@ -28,6 +29,14 @@ describe.skipIf(!PG_URL)('orchestrator on PgStore', () => {
   });
 
   const harness = (opts: Parameters<typeof createHarness>[0] = {}) => createHarness({ ...opts, store: new PgStore({ pool }) });
+
+  it('writes the measures of the first run, the same as on SQLite (ORC-235)', async () => {
+    expectFirstRunMeasures(await firstRun(harness()));
+    const attempts = await pool.query<{ step: string; input_tokens: string | null }>(`select step, input_tokens from attempts order by started_at, id`);
+    expect(attempts.rows.filter((r) => r.input_tokens !== null).map((r) => r.step).sort()).toEqual(['ask', 'dev', 'review']);
+    const acked = await pool.query(`select type from inbox where acked_at is not null order by type`);
+    expect(acked.rows.map((r) => r.type)).toEqual(['session.mentioned', 'ticket.delegated']);
+  });
 
   it('takes a delegated ticket through a failed then a passing check to human review', async () => {
     const h = harness({ preset: testPreset() });

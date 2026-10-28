@@ -12,7 +12,7 @@ Lancer un agent sur un prompt, suivre son flux, l'arrêter, et lire son issue. C
 |---|---|---|---|
 | `start(req)` | un run, et son `RunHandle` | un second `start` lance un second run | ne lève pas : un échec de lancement finit en `failure` |
 | `handle.events` | les événements du flux, dans l'ordre ; le flux se ferme quand le run finit | — | — |
-| `handle.done` | l'issue : `success`, `failure`, `stopped` ou `limit`, le coût (≥ 0), les tours (≥ 1 sur un succès), le dernier texte de l'agent | — | ne rejette pas |
+| `handle.done` | l'issue : `success`, `failure`, `stopped` ou `limit`, le coût (≥ 0), les tours (≥ 1 sur un succès), le dernier texte de l'agent, et l'usage en tokens quand le runtime le rend (`tokens`, ORC-235 ; `claude -p` : `usage` de sa ligne `result`), jamais lu dans le texte de l'agent | — | ne rejette pas |
 | `handle.stop()` | le run finit en `stopped` | sans effet ; après la fin, l'issue ne change pas | — |
 
 Un run qui dépasse `limits.durationMs` ou `limits.turns` finit en `limit`. Deux runs sont indépendants : arrêter l'un laisse l'autre tourner.

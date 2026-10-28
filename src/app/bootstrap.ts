@@ -178,6 +178,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       secret: webhookSecret,
       accept,
       ack: (sessionId) => trackerSwitch.activity(sessionId, { type: 'thought', body: 'Pris en compte.' }),
+      acked: (eventId) => store.markAcked(eventId, clock.now()),
       log,
       ctx: {
         projectIdForTeam: (k) => projects.find((p) => p.teamKey === k)?.id,

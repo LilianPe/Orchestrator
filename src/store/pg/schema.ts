@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import {
+  bigint,
   check,
   doublePrecision,
   index,
@@ -39,6 +40,8 @@ export const inbox = pgTable(
     receivedAt: timestamp('received_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
     processedAt: timestamp('processed_at', { withTimezone: true, mode: 'date' }),
     schemaVersion: integer('schema_version').notNull().default(1),
+    /** First sign of life the factory gave for the event: the ack of its webhook (ORC-235). */
+    ackedAt: timestamp('acked_at', { withTimezone: true, mode: 'date' }),
   },
   (t) => [
     uniqueIndex('inbox_event_id_uq').on(t.eventId),
@@ -206,6 +209,11 @@ export const attempts = pgTable(
     data: jsonb('data').$type<unknown>().notNull().default(sql`'{}'::jsonb`),
     /** Legacy run cost, queried by `costSince` until cost moves to attempts. */
     costUsd: doublePrecision('cost_usd').notNull().default(0),
+    /** Tokens `claude -p` reported for the attempt (ORC-235); null when it reported none. */
+    inputTokens: bigint('input_tokens', { mode: 'number' }),
+    outputTokens: bigint('output_tokens', { mode: 'number' }),
+    cacheReadTokens: bigint('cache_read_tokens', { mode: 'number' }),
+    cacheCreationTokens: bigint('cache_creation_tokens', { mode: 'number' }),
   },
   (t) => [
     index('attempts_ticket_id_idx').on(t.ticketId),

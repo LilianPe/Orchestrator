@@ -150,6 +150,32 @@ describe('ingest', () => {
     expect(await ids()).toHaveLength(1);
   });
 
+  it('records the ack of an event once posted, and not when posting it fails (ORC-235)', async () => {
+    const recorded: string[] = [];
+    let fail = false;
+    const { store } = inbox();
+    const ingest = createLinearIngest({
+      secret: () => 'sec',
+      ctx: { ...ctx(), now: () => 2000 },
+      accept: (e) => store.appendInbox(e),
+      ack: async () => {
+        if (fail) throw new Error('linear down');
+      },
+      acked: async (id) => void recorded.push(id),
+      log: () => {},
+    });
+    const delegation = signed(fx('session-created-delegation'));
+    expect(await ingest(delegation.raw, { 'linear-signature': delegation.sig })).toEqual({ status: 200 });
+    await vi.waitFor(() => expect(recorded).toHaveLength(1));
+    expect(recorded).toEqual((await store.pendingInbox(10)).map((e) => e.id));
+    fail = true;
+    const mention = signed(fx('session-created-mention'));
+    expect(await ingest(mention.raw, { 'linear-signature': mention.sig })).toEqual({ status: 200 });
+    expect(await store.pendingInbox(10)).toHaveLength(2);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(recorded).toHaveLength(1);
+  });
+
   it('answers only once the inbox write is committed', async () => {
     let commit!: () => void;
     const committed = new Promise<void>((r) => (commit = r));

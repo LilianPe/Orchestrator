@@ -125,7 +125,7 @@ export class ClaudeCodeRunner implements Runner {
         // It becomes the run's lastText, stored and posted to Linear: the stream's text is masked
         // already, stderr and a spawn error are masked here.
         const text = result?.text || lastText || maskTranscriptLine(spawnError ? spawnError.message : stderr.trim().slice(-2000), secrets);
-        transcript.end(() => resolve({ outcome, costUsd: result?.costUsd ?? 0, turns: result?.turns ?? assistantTurns, lastText: text }));
+        transcript.end(() => resolve({ outcome, costUsd: result?.costUsd ?? 0, turns: result?.turns ?? assistantTurns, lastText: text, ...(result?.tokens ? { tokens: result.tokens } : {}) }));
       };
       child.on('error', (err) => finish(err));
       child.on('close', () => finish());

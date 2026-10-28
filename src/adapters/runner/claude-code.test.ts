@@ -55,7 +55,9 @@ describe('ClaudeCodeRunner', () => {
     const h = r.start(rq);
     const events = await drain(h.events);
     expect(events.map((e) => e.kind)).toEqual(['init', 'text', 'tool', 'tool_result', 'text', 'result']);
-    expect(await h.done).toEqual({ outcome: 'success', costUsd: 0.42, turns: 3, lastText: 'PR ouverte.' });
+    expect(await h.done).toEqual({
+      outcome: 'success', costUsd: 0.42, turns: 3, lastText: 'PR ouverte.', tokens: { input: 20, output: 400, cacheRead: 9000, cacheCreation: 1000 },
+    });
     expect(readFileSync(join(transcriptsDir, `${rq.runId}.jsonl`), 'utf8').trim().split('\n')).toHaveLength(5);
     expect(JSON.parse(readFileSync(argsFile, 'utf8'))).toContain('--setting-sources');
   });

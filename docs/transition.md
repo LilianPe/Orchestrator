@@ -114,6 +114,7 @@ Le premier ticket cité est celui qui touche le module en premier ou le plus ; l
 | `src/core/naming.ts` | `slugify`, `branchName` (`factory/<id>-<slug>`) | adapter | ORC-167 (préfixe), ORC-136 et ORC-204 (`branchName` de Linear) |
 | `src/core/clock.ts` | `Clock`, `SystemClock`, `FakeClock` | garder | ORC-225, ORC-161 |
 | `src/core/duration.ts` | `parseDuration` (`3m`, `90m`…) | garder | ORC-177 (gardé si `factory.yml` garde des durées en texte) |
+| `src/core/measures.ts` | Mesures du doc MVP calculées depuis les faits de la base (journal, tentatives, outbox, accusés de réception), jamais depuis le texte d'un agent : tokens, premier essai, délais de signe de vie et de réponse ; mesures sans source encore à `null` avec le ticket qui l'apportera | garder | ORC-235 (fait), ORC-223 (affichage), ORC-216 (limite d'usage), ORC-134/ORC-190 (relecture humaine, reverts, coût de CI), ORC-160/ORC-180 (accusé de réception en effet d'outbox) |
 | `src/core/types.ts` | `FactoryEvent` (`schemaVersion`, taint), `TicketState`, 6 états logiques ; événements `effect.done` et `effect.failed` (ORC-150) | adapter | ORC-133 (fait : `schemaVersion`, champ taint, renommages), ORC-269 (fait : taint de `FeedbackItem`), ORC-160 (taint posé à l'ingestion, acteur), ORC-180 (`humanInbox`), ORC-187 (états retirés) |
 
 ### `src/runtime/`
@@ -135,10 +136,10 @@ Le premier ticket cité est celui qui touche le module en premier ou le plus ; l
 | `src/adapters/forge/github-app.ts` | Forge GitHub App : JWT RS256, jeton d'installation limité au dépôt, PR/checks/reviews en REST et GraphQL | garder | ORC-124 (remplace `gh-cli` après ORC-125), ORC-135 (authentification partagée) |
 | `src/adapters/forge/github-app-api.ts` | Lectures GitHub App de `factory doctor` : workflows et environnements protégés | garder | ORC-135 |
 | `src/adapters/forge/pr-poller.ts` | Relevé des PR toutes les 30 s | retirer | ORC-181, remplacé par ORC-134 (webhooks) et ORC-185 (réconciliation) |
-| `src/adapters/runner/types.ts` | Port `Runner`, `RunHandle`, `RunRequest` (`sensitivePaths` porté, pas encore appliqué, ORC-274) | garder | ORC-204 (port gardé, application des chemins sensibles), ORC-189 (devient AgentRuntime) |
+| `src/adapters/runner/types.ts` | Port `Runner`, `RunHandle`, `RunRequest` (`sensitivePaths` porté, pas encore appliqué, ORC-274) ; `RunResult.tokens`, usage rendu par le runtime (ORC-235) | garder | ORC-204 (port gardé, application des chemins sensibles), ORC-189 (devient AgentRuntime) |
 | `src/adapters/runner/claude-code.ts` | `ClaudeCodeRunner` : `claude -p` en sous-processus sur l'hôte, transcripts masqués à l'écriture | adapter | ORC-136, ORC-204 (dans le runner isolé), ORC-205 (réglages imposés), ORC-217 (session sur volume), ORC-194 (`--max-budget-usd`), ORC-167 |
 | `src/adapters/runner/transcript.ts` | Masquage des secrets dans les transcripts, rétention de 30 jours et purge | garder | ORC-132 (suit les transcripts dans le runner isolé, ORC-204) |
-| `src/adapters/runner/stream-parser.ts` | Lecture du stream-json de Claude Code | adapter | ORC-136 (usage en tokens), gardé par ORC-204 |
+| `src/adapters/runner/stream-parser.ts` | Lecture du stream-json de Claude Code ; `usage` de la ligne `result` en tokens (ORC-235) | adapter | ORC-235 (fait : usage en tokens), ORC-136, gardé par ORC-204 |
 | `src/adapters/runner/channel.ts` | File asynchrone qui porte le flux d'un `RunHandle` | garder | ORC-204 (suit le port `Runner`) |
 | `src/adapters/runner/fake.ts` | `FakeRunner` du harnais | garder | ORC-204, ORC-225 |
 | `src/adapters/runner/fixtures/` | Données de test : faux `claude` et flux stream-json | garder | ORC-136 (suivent le runner) |
@@ -149,7 +150,7 @@ Le premier ticket cité est celui qui touche le module en premier ou le plus ; l
 | `src/adapters/tracker/linear/queries.ts` | Documents GraphQL | adapter | ORC-160 (marqueur de commentaire), ORC-171 (`agentSessionUpdate` avec plan) |
 | `src/adapters/tracker/linear/tracker.ts` | `LinearTracker` (cache, `ensureSetup`) | adapter | ORC-160 (commentaires et labels idempotents), ORC-201 (plus de « Ready to Merge » ni `agent:*`), ORC-170 |
 | `src/adapters/tracker/linear/webhook.ts` | Signature, fraîcheur, `deliveryKey`, `mapLinearWebhook` | adapter | ORC-160 (`status.changed`, `label.changed`, taint), ORC-147, ORC-171 |
-| `src/adapters/tracker/linear/ingest.ts` | Ingestion : vérifie, écrit dans l'inbox (dédoublonnage par id en base), ack, puis répond | adapter | ORC-147 (fait : inbox écrite avant la réponse, 500 si l'écriture échoue), ORC-160 (ack en effet d'outbox, taint) |
+| `src/adapters/tracker/linear/ingest.ts` | Ingestion : vérifie, écrit dans l'inbox (dédoublonnage par id en base), ack (son heure enregistrée sur la ligne d'inbox, ORC-235), puis répond | adapter | ORC-147 (fait : inbox écrite avant la réponse, 500 si l'écriture échoue), ORC-235 (fait : heure de l'ack), ORC-160 (ack en effet d'outbox, taint) |
 | `src/adapters/tracker/linear/reconcile.ts` | Réconciliation Linear toutes les 30 s | adapter | ORC-185 (5 min, timer en base, inbox) |
 | `src/adapters/tracker/linear/oauth.ts` | OAuth Linear, jetons rafraîchis écrits dans `secrets.json` | adapter | ORC-222 (secrets scellés), ORC-199 (`secrets.json` retiré) |
 | `src/adapters/tracker/linear/fixtures/` | Données de test : webhooks Linear | garder | ORC-160 (suivent `webhook.ts`) |
@@ -192,10 +193,10 @@ Contrôles déterministes de `verify`, purs : ils lisent le diff `baseSha..SHA` 
 
 | Module | Rôle | Statut | Ticket cible |
 |---|---|---|---|
-| `src/store/types.ts` | Port `Store` asynchrone, servi par `SqliteStore` et `PgStore` ; transaction de décision, outbox des décisions et versions de workflow (ORC-149) ; réclamation, nouvel essai, mort et résultat `effect:<id>` d'un effet, file `queue` sous bail (ORC-150) | adapter | ORC-178 (`queue`, `echoes`, `costSince` retirés) |
+| `src/store/types.ts` | Port `Store` asynchrone, servi par `SqliteStore` et `PgStore` ; transaction de décision, outbox des décisions et versions de workflow (ORC-149) ; réclamation, nouvel essai, mort et résultat `effect:<id>` d'un effet, file `queue` sous bail (ORC-150) ; faits des mesures (`measureFacts`) et heure d'accusé de réception (`markAcked`, ORC-235) | adapter | ORC-178 (`queue`, `echoes`, `costSince` retirés) |
 | `src/store/open.ts` | Choix du store au démarrage : `PgStore` et migrations quand `FACTORY_DATABASE_URL` est défini, `SqliteStore` sinon | adapter | ORC-178 (plus que Postgres) |
 | `src/store/sqlite-store.ts` | `SqliteStore` sur `node:sqlite`, derrière le port asynchrone | retirer | retrait ORC-178 |
-| `src/store/pg/schema.ts` | Schéma Drizzle des 12 tables du moteur | garder | ORC-132 |
+| `src/store/pg/schema.ts` | Schéma Drizzle des 12 tables du moteur ; tokens des tentatives et `inbox.acked_at` (migration `0003_measures`, ORC-235) | garder | ORC-132, ORC-235 |
 | `src/store/pg/types.ts` | `AsyncStore` (le port `Store` plus la réclamation brute d'une ligne de file, `claim`) et `DequeuedEffect` | garder | ORC-132, ORC-178 (`queue` retirée) |
 | `src/store/pg/pg-store.ts` | `PgStore` sur Postgres, store du démon quand `FACTORY_DATABASE_URL` est défini | garder | ORC-132 |
 | `src/store/pg/migrate.ts` | Application des migrations Drizzle | garder | ORC-132 |

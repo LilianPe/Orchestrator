@@ -1,3 +1,4 @@
+import type { TokenUsage } from '../../core/measures.js';
 import type { RunStreamEvent } from './types.js';
 
 export function summarizeToolInput(input: unknown): string {
@@ -6,6 +7,21 @@ export function summarizeToolInput(input: unknown): string {
     for (const k of ['command', 'file_path', 'pattern', 'url', 'path']) if (typeof o[k] === 'string') return (o[k] as string).slice(0, 200);
   }
   return (JSON.stringify(input) ?? '').slice(0, 200);
+}
+
+const count = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : 0);
+
+/** The `usage` of a `result` line (ORC-235): undefined unless it carries input and output counts. */
+export function parseUsage(usage: unknown): TokenUsage | undefined {
+  if (!usage || typeof usage !== 'object') return undefined;
+  const u = usage as Record<string, unknown>;
+  if (typeof u['input_tokens'] !== 'number' || typeof u['output_tokens'] !== 'number') return undefined;
+  return {
+    input: count(u['input_tokens']),
+    output: count(u['output_tokens']),
+    cacheRead: count(u['cache_read_input_tokens']),
+    cacheCreation: count(u['cache_creation_input_tokens']),
+  };
 }
 
 function blocks(obj: any): any[] {
@@ -35,7 +51,8 @@ export function parseStreamLine(line: string): RunStreamEvent[] {
       return blocks(obj)
         .filter((b: any) => b?.type === 'tool_result')
         .map((b: any) => ({ kind: 'tool_result', isError: !!b.is_error }) as RunStreamEvent);
-    case 'result':
+    case 'result': {
+      const tokens = parseUsage(obj.usage);
       return [
         {
           kind: 'result',
@@ -43,8 +60,10 @@ export function parseStreamLine(line: string): RunStreamEvent[] {
           costUsd: obj.total_cost_usd ?? 0,
           turns: obj.num_turns ?? 0,
           text: typeof obj.result === 'string' ? obj.result : '',
+          ...(tokens ? { tokens } : {}),
         },
       ];
+    }
     default:
       return [];
   }

@@ -10,6 +10,8 @@ export interface IngestDeps {
    */
   accept: (e: FactoryEvent) => Promise<boolean>;
   ack: (sessionId: string) => Promise<void>;
+  /** Records that the event got its ack, once posted: the first sign of life a measure reads (ORC-235). */
+  acked?: (eventId: string) => Promise<void>;
   log: (m: string) => void;
 }
 
@@ -40,7 +42,11 @@ export function createLinearIngest(d: IngestDeps) {
         // A duplicate (already in the inbox) is neither acked nor processed again.
         if (!(await d.accept(e))) continue;
         const sessionId = (e.payload as { linearSessionId?: string }).linearSessionId;
-        if (ACKED.has(e.type) && sessionId) d.ack(sessionId).catch((err: Error) => d.log(`ack failed: ${err.message}`));
+        if (ACKED.has(e.type) && sessionId) {
+          d.ack(sessionId)
+            .then(() => d.acked?.(e.id))
+            .catch((err: Error) => d.log(`ack failed: ${err.message}`));
+        }
       }
     });
     tail = turn.catch(() => undefined);
