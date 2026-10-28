@@ -655,6 +655,18 @@ export class SqliteStore implements Store {
     };
   }
 
+  async mergedPrOf(projectId: string, sha: string): Promise<{ ticketId: string; number: number } | undefined> {
+    const row = this.db
+      .prepare(
+        `SELECT ticket_id, json_extract(data, '$.payload.number') AS number FROM events
+          WHERE json_extract(data, '$.type') = 'pr.merged' AND json_extract(data, '$.projectId') = ? AND ticket_id IS NOT NULL
+            AND (json_extract(data, '$.payload.mergeSha') = ? OR json_extract(data, '$.payload.headSha') = ?)
+          ORDER BY rowid LIMIT 1`,
+      )
+      .get(projectId, sha, sha) as { ticket_id: string; number: number } | undefined;
+    return row && { ticketId: row.ticket_id, number: Number(row.number) };
+  }
+
   async getMeta(key: string): Promise<string | undefined> {
     const row = this.db.prepare('SELECT value FROM meta WHERE key = ?').get(key) as { value: string } | undefined;
     return row?.value;

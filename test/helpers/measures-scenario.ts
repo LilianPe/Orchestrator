@@ -71,5 +71,6 @@ export function expectFirstRunMeasures(m: TicketMeasures): void {
   ]);
   expect(m.messages[1]!.answerMs).toBeGreaterThanOrEqual(ANSWER_MS);
   // No source in the store yet: empty, not guessed.
-  expect(m).toMatchObject({ usageLimitShare: null, humanReviewMinutes: null, revertedWithin14Days: null, ciCostUsd: null });
+  expect(m).toMatchObject({ usageLimitShare: null, humanReviewMinutes: null, revertedWithin14Days: null, ciCost: null });
+  expect(m.revertWindowEndsAt).toBe(m.mergedAt! + 14 * 24 * 60 * 60 * 1000);
 }

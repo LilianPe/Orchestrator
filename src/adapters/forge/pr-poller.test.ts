@@ -32,9 +32,11 @@ describe('PrPoller', () => {
     expect(events).toHaveLength(3);
     expect(events[2]!.type).toBe('pr.opened');
 
-    forge.setPr('b', { number: 7, url: 'u7', state: 'MERGED', checks: 'none', failedChecks: [] });
+    forge.setPr('b', { number: 7, url: 'u7', state: 'MERGED', headSha: 'h7', mergeSha: 'm7', mergedAt: 77, checks: 'none', failedChecks: [] });
     await poller.pollOnce();
     expect(events.at(-1)!.id).toBe('pr:REL-1:7:merged');
+    // The merge commit and head, as the webhook records them: what a revert names (ORC-278).
+    expect(events.at(-1)!.payload).toMatchObject({ number: 7, headSha: 'h7', mergeSha: 'm7', mergedAt: 77 });
   });
   function setup(submit?: (e: FactoryEvent) => void, log: (m: string) => void = () => {}) {
     const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../../packs/standard') });

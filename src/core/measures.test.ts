@@ -23,7 +23,7 @@ describe('ticketMeasures (ORC-235)', () => {
   it('is empty for a ticket with no facts', () => {
     expect(ticketMeasures('p', 'REL-1', facts({}))).toEqual({
       projectId: 'p', ticketId: 'REL-1', mergedAt: null, tokens: null, attempts: 0, attemptsWithoutTokens: 0, usageLimitShare: null,
-      firstTry: null, reworks: [], humanReviewMinutes: null, revertedWithin14Days: null, ciCostUsd: null, messages: [],
+      firstTry: null, reworks: [], humanReviewMinutes: null, revertedWithin14Days: null, revertWindowEndsAt: null, ciCost: null, messages: [],
     });
   });
 
@@ -120,5 +120,72 @@ describe('ticketMeasures (ORC-235)', () => {
       ['q1', 50, 50],
       ['q2', 40, null],
     ]);
+  });
+});
+
+const DAY = 24 * 60 * 60 * 1000;
+const merged = (at: number, number = 3) => ev(`m${number}`, 'pr.merged', at, { number, url: 'u', branch: 'b', mergeSha: `merge${number}` });
+const pushed = (id: string, at: number, commits: EventPayloads['default_branch.pushed']['commits'], pushedAt?: number) =>
+  ev(id, 'default_branch.pushed', at, { branch: 'main', before: 'a', after: id, ...(pushedAt === undefined ? {} : { pushedAt }), commits });
+const ciRun = (runId: number, attempt: number, durationMs: number, number?: number) =>
+  ev(`ci:REL-1:${runId}:${attempt}`, 'ci.run_completed', 0, {
+    ...(number === undefined ? {} : { number }), branch: 'b', headSha: 'h', runId, attempt, workflow: 'ci', conclusion: 'success',
+    startedAt: 1_000, completedAt: 1_000 + durationMs, durationMs,
+  });
+
+describe('reverts within 14 days and CI cost (ORC-278)', () => {
+  const landed = { sha: 'merge3', message: 'Export CSV (#3)', author: 'lilian', merges: 3 };
+
+  it('counts a revert of a merged PR of the ticket pushed within 14 days of its merge', () => {
+    const m = ticketMeasures('p', 'REL-1', facts({
+      events: [merged(1_000), pushed('p1', 1_100, [landed]), pushed('p2', 9 * DAY, [{ sha: 'r', message: 'Revert "Export CSV"', author: 'armand', reverts: 3 }])],
+    }));
+    expect(m.revertedWithin14Days).toBe(true);
+  });
+
+  it('does not count a revert pushed after 14 days, timed by the push rather than by its arrival', () => {
+    const late = [{ sha: 'r', message: 'Revert', author: 'armand', reverts: 3 }];
+    expect(ticketMeasures('p', 'REL-1', facts({ events: [merged(1_000), pushed('p2', 15 * DAY, late)] })).revertedWithin14Days).toBe(false);
+    // Received late, pushed on day 14: it counts.
+    expect(ticketMeasures('p', 'REL-1', facts({ events: [merged(1_000), pushed('p2', 30 * DAY, late, 1_000 + 14 * DAY)] })).revertedWithin14Days).toBe(true);
+  });
+
+  it("measures the 14 days from GitHub's merge time when the journal has it, not from when the merge was received", () => {
+    // Received 10 days late (the daemon was down): merged on GitHub at 1 000.
+    const late = ev('m3', 'pr.merged', 10 * DAY, { number: 3, url: 'u', branch: 'b', mergedAt: 1_000 });
+    const revert = [{ sha: 'r', message: 'Revert', author: 'armand', reverts: 3 }];
+    const m = ticketMeasures('p', 'REL-1', facts({ events: [late, pushed('p2', 22 * DAY, revert, 22 * DAY)] }));
+    expect(m).toMatchObject({ revertedWithin14Days: false, revertWindowEndsAt: 1_000 + 14 * DAY });
+  });
+
+  it('does not count a revert of another PR, nor of one the ticket did not merge', () => {
+    const other = [{ sha: 'r', message: 'Revert', author: 'armand', reverts: 4 }];
+    expect(ticketMeasures('p', 'REL-1', facts({ events: [merged(1_000), pushed('p2', 2 * DAY, other)] })).revertedWithin14Days).toBe(false);
+  });
+
+  it('stays null while not merged, and while no push of the default branch about the ticket is in the journal', () => {
+    expect(ticketMeasures('p', 'REL-1', facts({ events: [pushed('p1', 1_100, [landed])] })).revertedWithin14Days).toBeNull();
+    expect(ticketMeasures('p', 'REL-1', facts({ events: [merged(1_000)] })).revertedWithin14Days).toBeNull();
+    expect(ticketMeasures('p', 'REL-1', facts({ events: [merged(1_000), pushed('p1', 1_100, [landed])] })).revertedWithin14Days).toBe(false);
+  });
+
+  it('never reads a commit message: only the PR number the ingestion resolved', () => {
+    const says = [{ sha: 'x', message: 'This reverts commit merge3.\nReverts acme/app#3', author: 'agent' }];
+    expect(ticketMeasures('p', 'REL-1', facts({ events: [merged(1_000), pushed('p1', 2_000, says)] })).revertedWithin14Days).toBe(false);
+  });
+
+  it('sums the CI run attempts per PR and for the ticket, each run id and attempt once', () => {
+    const m = ticketMeasures('p', 'REL-1', facts({
+      events: [ciRun(10, 1, 60_000), ciRun(11, 1, 120_000, 3), ciRun(11, 2, 90_000, 3), ciRun(11, 2, 90_000, 3), ciRun(12, 1, 30_000, 4)],
+    }));
+    expect(m.ciCost).toEqual({
+      durationMs: 300_000,
+      runs: 4,
+      byPr: [
+        { number: null, durationMs: 60_000, runs: 1 },
+        { number: 3, durationMs: 210_000, runs: 2 },
+        { number: 4, durationMs: 30_000, runs: 1 },
+      ],
+    });
   });
 });

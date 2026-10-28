@@ -97,10 +97,35 @@ const PAYLOADS: { [K in EventType]: fc.Arbitrary<EventPayloads[K]> } = {
   'pr.opened': pr,
   'pr.checks_passed': pr,
   'pr.checks_failed': pr.map((p) => ({ ...p, failures: ['test'] })),
-  'pr.merged': pr,
+  // With or without the merge and head commits (ORC-278): rows from before it, and the poller with `gh`, lack them.
+  'pr.merged': fc.record({ pr, shas: fc.constantFrom({}, { headSha: 'aaa' }, { mergeSha: 'ccc', headSha: 'aaa' }) }).map(({ pr: p, shas }) => ({ ...p, ...shas })),
   'pr.closed': pr,
   'pr.reviewed': fc.record({ pr, kind: fc.constantFrom('review' as const, 'comment' as const), author, body }).map(({ pr: p, ...r }) => ({ ...p, ...r })),
   'pr.conflicted': pr.map((p) => ({ ...p, headSha: 'aaa', baseRef: 'main' })),
+  // A push on the default branch that lands or reverts one of the ticket's PRs, and a CI run attempt (ORC-278).
+  'default_branch.pushed': fc
+    .record({ number: fc.integer({ min: 1, max: 2 }), relation: fc.constantFrom('merges' as const, 'reverts' as const), pushedAt: fc.option(fc.constant(5_000), { nil: undefined }) })
+    .map(({ number, relation, pushedAt }) => ({
+      branch: 'main',
+      before: 'b0',
+      after: 'b1',
+      ...(pushedAt === undefined ? {} : { pushedAt }),
+      commits: [{ sha: 'ddd', message: relation === 'merges' ? `Titre (#${number})` : `Revert "Titre"`, author: 'lilian', [relation]: number }],
+    })),
+  'ci.run_completed': fc
+    .record({ number: fc.option(fc.integer({ min: 1, max: 2 }), { nil: undefined }), runId: fc.constantFrom(1, 2), attempt: fc.constantFrom(1, 2) })
+    .map(({ number, runId, attempt }) => ({
+      ...(number === undefined ? {} : { number }),
+      branch: 'agent/rel-1',
+      headSha: 'aaa',
+      runId,
+      attempt,
+      workflow: 'ci',
+      conclusion: 'success',
+      startedAt: 1_000,
+      completedAt: 61_000,
+      durationMs: 60_000,
+    })),
   'run.finished': fc.record({
     runId,
     job,

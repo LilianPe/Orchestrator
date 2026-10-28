@@ -40,10 +40,18 @@ export class GhCliForge implements Forge, RepoPermissions {
     const out = await mustExec(
       this.exec,
       'gh',
-      ['pr', 'list', '--head', branch, '--state', 'all', '--json', 'number,url,state,headRefName,headRefOid', '--limit', '1'],
+      ['pr', 'list', '--head', branch, '--state', 'all', '--json', 'number,url,state,headRefName,headRefOid,mergeCommit,mergedAt', '--limit', '1'],
       { cwd: repoPath },
     );
-    const [pr] = JSON.parse(out) as { number: number; url: string; state: PrInfo['state']; headRefName: string; headRefOid?: string }[];
+    const [pr] = JSON.parse(out) as {
+      number: number;
+      url: string;
+      state: PrInfo['state'];
+      headRefName: string;
+      headRefOid?: string;
+      mergeCommit?: { oid?: string } | null;
+      mergedAt?: string | null;
+    }[];
     if (!pr) return undefined;
     let checks: PrInfo['checks'] = 'none';
     let failedChecks: string[] = [];
@@ -57,7 +65,17 @@ export class GhCliForge implements Forge, RepoPermissions {
         checks = 'none';
       }
     }
-    return { number: pr.number, url: pr.url, state: pr.state, branch: pr.headRefName, ...(pr.headRefOid ? { headSha: pr.headRefOid } : {}), checks, failedChecks };
+    return {
+      number: pr.number,
+      url: pr.url,
+      state: pr.state,
+      branch: pr.headRefName,
+      ...(pr.headRefOid ? { headSha: pr.headRefOid } : {}),
+      ...(pr.state === 'MERGED' && pr.mergeCommit?.oid ? { mergeSha: pr.mergeCommit.oid } : {}),
+      ...(pr.state === 'MERGED' && pr.mergedAt && Number.isFinite(Date.parse(pr.mergedAt)) ? { mergedAt: Date.parse(pr.mergedAt) } : {}),
+      checks,
+      failedChecks,
+    };
   }
 
   async unresolvedReviewComments(repoPath: string, prNumber: number): Promise<FeedbackItem[]> {

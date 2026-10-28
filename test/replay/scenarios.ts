@@ -3,6 +3,7 @@ import { SCHEMA_VERSION, type TicketState } from '../../src/core/types.js';
 import { exportJournal, type ExportedJournal } from '../../src/runtime/replay.js';
 import type { Workflow } from '../../src/config/workflow-schema.js';
 import { createHarness, loadTestWorkflow } from '../helpers/harness.js';
+import { defaultPushBody, githubDelivery, githubIngest, pullRequestBody, sha, workflowRunBody } from '../helpers/github-webhook.js';
 import { linearIngest, signedDelegation } from '../helpers/linear-webhook.js';
 import { testPreset, type TestPreset } from '../helpers/test-preset.js';
 
@@ -109,7 +110,31 @@ export const SCENARIOS: Record<string, { preset?: TestPreset; authz?: HarnessAut
       await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'le bouton export est mal placé', author: 'Armand' }, 'REL-1', { actor: 'user-armand' });
     },
   },
+  /**
+   * Two CI run attempts, the merge with its merge commit, that commit pushed on the default branch, then
+   * its revert three days later, all through the GitHub webhook: recorded for the measures, nothing
+   * decided (ORC-278).
+   */
+  'merge-revert-ci': {
+    run: async (h) => {
+      await delegated(h);
+      await github(h, 'workflow_run', workflowRunBody({ id: 101, attempt: 1, minutes: 3, number: 3 }));
+      await github(h, 'workflow_run', workflowRunBody({ id: 101, attempt: 2, minutes: 2, number: 3 }));
+      await github(h, 'pull_request', pullRequestBody('closed', { merged: true, mergeSha: sha('a'), mergedAt: new Date(h.clock.now()).toISOString() }));
+      await github(h, 'push', defaultPushBody(sha('a'), [{ id: sha('a'), message: 'Export CSV (#3)', byGithub: true }], Math.floor(h.clock.now() / 1000)));
+      await h.advance(3 * 24 * 60 * 60 * 1000);
+      const revert = `Revert "Export CSV (#3)"\n\nThis reverts commit ${sha('a')}.`;
+      await github(h, 'push', defaultPushBody(sha('b'), [{ id: sha('b'), message: revert }], Math.floor(h.clock.now() / 1000)));
+    },
+  },
 };
+
+/** Posts a signed GitHub delivery through the daemon's ingestion, then lets the worker decide it. */
+async function github(h: Harness, name: string, body: unknown): Promise<void> {
+  const { raw, headers } = githubDelivery(name, body);
+  await githubIngest(h.store, (e) => h.orch.accept(e), h.forge, () => h.clock.now())(raw, headers);
+  await h.orch.drained();
+}
 
 /** The workflow a scenario runs on today: the standard pack under its preset. */
 export function scenarioWorkflow(name: string): Workflow {
