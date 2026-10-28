@@ -12,9 +12,15 @@ import { useHarnessDatabases } from './harness.js';
 import { createTestDatabase, PG_URL, queryOn } from './pg-database.js';
 
 let template: Awaited<ReturnType<typeof createTestDatabase>> | undefined;
+interface Database {
+  name: string;
+  pool: Promise<Pool>;
+  /** Set once its test is over. */
+  closed: boolean;
+}
+
 /** The databases of the current test: dropped once it ends. */
-let open: { name: string; pool: Promise<Pool> }[] = [];
-let closed = false;
+let open: Database[] = [];
 let n = 0;
 const never = new Promise<never>(() => {});
 
@@ -23,27 +29,30 @@ const never = new Promise<never>(() => {});
  * calls left over by its background work (a run still streaming, a timer) never resolve, rather
  * than fail on a dropped database.
  */
-function deferred(store: Promise<Store>): Store {
+function deferred(db: Database, store: Promise<Store>): Store {
   return new Proxy({} as Store, {
     get(_, prop) {
       if (typeof prop !== 'string' || prop === 'then') return undefined;
       return (...args: unknown[]) => {
-        if (closed) return never;
-        return store.then((s) => (closed ? never : (s[prop as keyof Store] as (...a: unknown[]) => Promise<unknown>).apply(s, args)));
+        if (db.closed) return never;
+        return store.then((s) => (db.closed ? never : (s[prop as keyof Store] as (...a: unknown[]) => Promise<unknown>).apply(s, args)));
       };
     },
   });
 }
 
 function pgDatabase() {
-  const name = `${template!.name}_${++n}`;
-  const pool = queryOn(PG_URL, (c) => c.query(`create database "${name}" template "${template!.name}"`)).then(() => {
+  if (!template) throw new Error('scenarios-pg: create the harness inside a test, once the template database exists');
+  const from = template.name;
+  const name = `${from}_${++n}`;
+  const pool = queryOn(PG_URL, (c) => c.query(`create database "${name}" template "${from}"`)).then(() => {
     const u = new URL(PG_URL);
     u.pathname = `/${name}`;
     return new Pool({ connectionString: u.toString(), max: 4 });
   });
-  open.push({ name, pool });
-  return (now: () => number): Store => deferred(pool.then((p) => new PgStore({ pool: p, now })));
+  const db: Database = { name, pool, closed: false };
+  open.push(db);
+  return (now: () => number): Store => deferred(db, pool.then((p) => new PgStore({ pool: p, now })));
 }
 
 if (PG_URL) {
@@ -59,14 +68,10 @@ if (PG_URL) {
     }
   });
 
-  beforeEach(() => {
-    closed = false;
-  });
-
   afterEach(async () => {
-    closed = true;
     const dbs = open;
     open = [];
+    for (const db of dbs) db.closed = true;
     for (const db of dbs) {
       await (await db.pool).end();
       await queryOn(PG_URL, (c) => c.query(`drop database if exists "${db.name}" with (force)`));
