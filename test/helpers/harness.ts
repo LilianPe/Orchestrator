@@ -20,6 +20,7 @@ import type { Verifier } from '../../src/core/verify.js';
 import type { EffectRetry } from '../../src/runtime/outbox.js';
 import { SqliteStore } from '../../src/store/sqlite-store.js';
 import type { Store } from '../../src/store/types.js';
+import type { Faults } from './faults.js';
 import type { TestPreset } from './test-preset.js';
 
 export const packDir = join(import.meta.dirname, '../../packs/standard');
@@ -70,10 +71,15 @@ export const harnessStoreKind = (): StoreKind => databases.kind;
  * its calls reaches the database and none of their results comes back: a call not started never
  * starts; one under way runs to its end in the database, but its caller never hears of it. That is
  * a commit sent just before the death: a transaction cut before its commit, rolled back, is what a
- * really killed process gives (ORC-163, `crash-after-decision.ts`). The process's timers and pending
+ * really killed process gives (ORC-163, `crash-after-decision.ts`, and the `decide.after` fault of
+ * `faults.ts`, which throws inside the transaction as it kills). The process's timers and pending
  * promises are left as they are, frozen on the store.
+ *
+ * `gate` puts an adapter of the same process behind the same death (ORC-163): once killed, the
+ * process calls nothing outside any more (no comment, no activity, no run), and a call under way
+ * that acted never answers.
  */
-export function mortal(store: Store): { store: Store; kill(): void } {
+export function mortal(store: Store): { store: Store; kill(): void; gate<T extends object>(target: T): T } {
   let dead = false;
   const never = new Promise<never>(() => {});
   const proxy = new Proxy(store, {
@@ -92,7 +98,36 @@ export function mortal(store: Store): { store: Store; kill(): void } {
       };
     },
   });
-  return { store: proxy, kill: () => void (dead = true) };
+  /** A call of the live process, as it answers (synchronously or not); nothing once it is dead. */
+  const call = (f: (...a: unknown[]) => unknown, self: unknown, args: unknown[]): unknown => {
+    if (dead) return never;
+    let result: unknown;
+    try {
+      result = f.apply(self, args);
+    } catch (err) {
+      if (dead) return never;
+      throw err;
+    }
+    if (dead) return never;
+    if (result instanceof Promise) {
+      return result.then(
+        (v: unknown) => (dead ? never : v),
+        (err: unknown) => (dead ? never : Promise.reject(err)),
+      );
+    }
+    return result;
+  };
+  const gate = <T extends object>(target: T): T =>
+    new Proxy(target, {
+      apply: (t, self, args: unknown[]) => call(t as (...a: unknown[]) => unknown, self, args),
+      get(t, prop) {
+        // Read at each call: a test that replaces an adapter's method (`h.tracker.moveTo = …`) is seen.
+        const value: unknown = Reflect.get(t, prop, t);
+        if (typeof value !== 'function') return value;
+        return (...args: unknown[]) => call(value as (...a: unknown[]) => unknown, t, args);
+      },
+    });
+  return { store: proxy, kill: () => void (dead = true), gate };
 }
 
 export function createHarness(
@@ -114,18 +149,20 @@ export function createHarness(
     processRetry?: { attempts: number; baseMs: number };
     /** Retries of an effect that throws (ORC-150); default one attempt: a failed effect dies at once and blocks its ticket. */
     effectRetry?: EffectRetry;
+    /**
+     * The fault planned along the chain, and the ledger of the visible calls (ORC-163): each life of
+     * the harness gets its store and its tracker and runner wrapped by it (`faults.ts`).
+     */
+    faults?: Faults;
+    /** The simulated clock, for a process that must go on from a time another one reached (the chaos daemon). */
+    clock?: FakeClock;
   } = {},
 ) {
   if (opts.projectYaml !== undefined && opts.preset) throw new Error('createHarness: pass projectYaml or preset, not both');
   const workflow = loadTestWorkflow(opts.projectYaml ?? opts.preset?.yaml);
-  const clock = new FakeClock(Date.UTC(2026, 9, 10, 9, 0));
+  const clock = opts.clock ?? new FakeClock(Date.UTC(2026, 9, 10, 9, 0));
   const given = opts.store;
   const database: HarnessDatabase = given ? () => given : databases.create();
-  const connect = () => {
-    const store = database(() => clock.now());
-    return mortal(opts.wrapStore ? opts.wrapStore(store) : store);
-  };
-  let life = connect();
   const tracker = new FakeTracker(Object.values(workflow.states));
   const forge = new FakeForge();
   const runner = new FakeRunner(clock);
@@ -134,17 +171,31 @@ export function createHarness(
   const sandboxes = new FakeSandboxProvider();
   const publisher = new FakePublisher(forge);
   const project = { id: 'p', repoPath: '/repo', teamKey: 'REL', workflow };
+  /** One life of the process: its store and its adapters, all of them silent once it is killed. */
+  const connect = () => {
+    let store = database(() => clock.now());
+    if (opts.wrapStore) store = opts.wrapStore(store);
+    let kill = () => {};
+    const view = opts.faults?.life(() => kill());
+    const life = mortal(view ? view.store(store) : store);
+    kill = life.kill;
+    const outside = {
+      tracker: life.gate(view ? view.tracker(tracker) : tracker),
+      runner: life.gate(view ? view.runner(runner) : runner),
+      forge: life.gate(forge),
+      workspaces: life.gate(workspaces),
+      verify: life.gate(checks.run),
+    };
+    return { ...life, outside };
+  };
+  let life = connect();
   let n = 0;
-  const build = (store: Store) => new Orchestrator({
+  const build = ({ store, outside }: ReturnType<typeof connect>) => new Orchestrator({
     store,
     clock,
     bus: new EventBus(),
     scheduler: new Scheduler(store, { dev: workflow.limits.parallelSessions, questions: workflow.limits.questionSessions }),
-    tracker,
-    forge,
-    runner,
-    workspaces,
-    verify: checks.run,
+    ...outside,
     projects: [project],
     packDir,
     agentEnv: (r) => ({ FACTORY_RUN_TOKEN: r.token }),
@@ -156,7 +207,7 @@ export function createHarness(
     processRetry: opts.processRetry,
     effectRetry: opts.effectRetry ?? { attempts: 1, baseMs: 1, capMs: 1 },
   });
-  let orch = build(life.store);
+  let orch = build(life);
   // Holds nothing between ticks (ORC-161): the timers live in the store, a restart loses none.
   const timerService = (store: Store) => new TimerService(store, clock, () => orch.wake());
   let timers = timerService(life.store);
@@ -195,7 +246,7 @@ export function createHarness(
       life.kill();
     }
     life = connect();
-    orch = build(life.store);
+    orch = build(life);
     timers = timerService(life.store);
     await orch.recover();
     await orch.announceRecovery();

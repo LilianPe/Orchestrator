@@ -74,9 +74,10 @@ Pages des tickets de décision : question, options, preuves, recommandation, pui
 
 ```bash
 npm test                  # unitaires et scénarios (projet vitest `unit`)
-npm run test:all          # les trois projets vitest
+npm run test:all          # tous les projets vitest
 npm run test:integration  # Postgres (DATABASE_URL requis)
 npm run test:isolation    # moteur rootless (FACTORY_ISOLATION=1)
+npm run test:chaos        # démon tué par kill -9 au hasard (CHAOS_EVENTS=500 et DATABASE_URL comme la CI)
 NUM_RUNS=10000 npm run test:properties  # invariants de decide sur 10 000 séquences, comme la CI
 npm run typecheck         # types du démon et de l'interface
 npm run lint

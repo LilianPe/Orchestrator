@@ -51,6 +51,33 @@ jobs:
       - run: npm ci
       - run: npm run test:integration
 
+  # ORC-163: a real daemon killed with SIGKILL at random moments over 500 events, on Postgres
+  # (docs/tests.md). Its own job: about a minute and a half, in parallel with the others.
+  chaos:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: factory
+          POSTGRES_PASSWORD: factory
+          POSTGRES_DB: factory_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U factory -d factory_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://factory:factory@127.0.0.1:5432/factory_test
+      CHAOS_EVENTS: "500"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm }
+      - run: npm ci
+      - run: npm run test:chaos
+
   isolation:
     runs-on: ubuntu-latest
     env:

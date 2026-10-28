@@ -9,12 +9,13 @@ Relais se teste sans vrais services : un **harnais** monte l'orchestrateur (son 
 - Isolation : `test/isolation/` (moteur de conteneurs rootless).
 - Propriétés de `decide` : `test/properties/` (fast-check).
 - Rejeu des journaux enregistrés : `test/replay/` (ORC-174).
+- Injection de pannes : `test/scenarios/faults.test.ts` ; chaos `kill -9` : `test/chaos/` (ORC-163).
 
 Pendant le travail, lancez seulement les tests des fichiers touchés : `npx vitest run test/scenarios/harness.test.ts`.
 
-## Les trois projets Vitest
+## Les projets Vitest
 
-`vitest.config.ts` déclare quatre projets, pour que la CI rapide reste rapide :
+`vitest.config.ts` déclare cinq projets, pour que la CI rapide reste rapide :
 
 | Projet | Commande | Ce qu'il couvre |
 |---|---|---|
@@ -22,8 +23,9 @@ Pendant le travail, lancez seulement les tests des fichiers touchés : `npx vite
 | `integration` | `npm run test:integration` | `test/integration/`, avec `DATABASE_URL` (Postgres) |
 | `scenarios-pg` | `npm run test:integration` | les scénarios de `test/scenarios/` une seconde fois, chaque harnais sur une base Postgres à lui (ORC-228), avec `DATABASE_URL` |
 | `isolation` | `npm run test:isolation` | `test/isolation/`, avec `FACTORY_ISOLATION=1` et un moteur rootless |
+| `chaos` | `npm run test:chaos` | `test/chaos/` : un vrai démon tué par SIGKILL au hasard (ORC-163), sur Postgres avec `DATABASE_URL`, sur un fichier SQLite sinon |
 
-`npm run test:all` lance les quatre. Sans `DATABASE_URL`, les tests d'intégration et `scenarios-pg` se sautent ; sans `FACTORY_ISOLATION=1`, les tests d'isolation se sautent. La CI (`.github/workflows/ci.yml`) lance le projet `unit` avec typecheck et lint, les tests de propriétés sur 10 000 séquences (job `properties`), le rejeu des journaux enregistrés (`npm run test:replay` dans le job `test`, voir plus bas), puis Postgres en service pour `integration` et `scenarios-pg` (même job, `npm run test:integration`) et Podman rootless pour `isolation`. Aucun secret n'est défini dans les workflows.
+`npm run test:all` lance les cinq. Sans `DATABASE_URL`, les tests d'intégration et `scenarios-pg` se sautent ; sans `FACTORY_ISOLATION=1`, les tests d'isolation se sautent. La CI (`.github/workflows/ci.yml`) lance le projet `unit` avec typecheck et lint, les tests de propriétés sur 10 000 séquences (job `properties`), le rejeu des journaux enregistrés (`npm run test:replay` dans le job `test`, voir plus bas), puis Postgres en service pour `integration` et `scenarios-pg` (même job, `npm run test:integration`) et pour le chaos sur 500 événements (job `chaos`, voir plus bas), et Podman rootless pour `isolation`. Aucun secret n'est défini dans les workflows.
 
 **Les scénarios sur Postgres (ORC-228).** Le projet `scenarios-pg` reprend les fichiers de `test/scenarios/` avec `test/helpers/pg-harness.ts` en fichier de setup : chaque `createHarness()` y reçoit sa propre base, clonée (`create database … template`) d'une base migrée une fois par fichier, et supprimée à la fin du test. Les deux stores passent ainsi les mêmes scénarios sans changer une ligne de ceux-ci. Ils tournent dans le job `integration`, qui a déjà Postgres, plutôt que dans `test` : le job rapide garde SQLite (quelques secondes), le second passage coûte environ 30 s de plus au job `integration`. Les quelques scénarios écrits pour un fichier SQLite tué par SIGKILL (`harnessStoreKind() === 'postgres'` les saute) ont leur équivalent Postgres dans `test/integration/`.
 
@@ -78,7 +80,7 @@ describe('mon comportement', () => {
 - `h.tracker.addIssue({ identifier, title })` pose une description par défaut assez longue. Une description passée au faux doit faire au moins 30 caractères : sinon le contrôle de prise en charge du pack standard (`has_description`) bloque le ticket et aucun run ne démarre.
 - `h.send(type, payload, ticketId?)` soumet un événement (ticket `REL-1` par défaut) et attend la fin de son traitement.
 - `await h.ticket()` lit l'état du ticket dans le store (asynchrone, comme tout le store). `createHarness({ store })` fait tourner le harnais sur un store donné plutôt que sur sa base (le fichier SQLite qu'un processus tué a laissé) ; ce store garde sa propre horloge, `advance` n'en fait donc expirer ni bail ni backoff. `createHarness({ wrapStore })` enveloppe le store de la base, quelle qu'elle soit (un store qui échoue exprès) : c'est la forme à préférer, le scénario passe alors sur les deux stores.
-- `h.restart()` arrête proprement l'orchestrateur et en relance un neuf sur la même base, comme `relais up` au redémarrage. `h.restart({ mode: 'brutal' })` jette le processus comme un `kill -9` : ni arrêt, ni attente, ni nettoyage. Son store est coupé (`mortal` dans `harness.ts`) : ses appels non partis ne partent jamais, ceux en cours finissent en base sans que personne n'en reçoive le résultat ; ses promesses et ses minuteries restent figées. Un autre processus repart sur la même base ; les effets que le mort avait réclamés y restent `running` jusqu'à l'expiration de leur bail, qui se passe par `h.advance`. `h.store` et `h.orch` sont toujours ceux du processus vivant. Exemple : `test/scenarios/restart.test.ts` (événement dans l'inbox non décidé, effet réclamé à moitié fait, minuterie échue, puis rien de perdu ni de doublon visible).
+- `h.restart()` arrête proprement l'orchestrateur et en relance un neuf sur la même base, comme `relais up` au redémarrage. `h.restart({ mode: 'brutal' })` jette le processus comme un `kill -9` : ni arrêt, ni attente, ni nettoyage. Son store est coupé (`mortal` dans `harness.ts`) : ses appels non partis ne partent jamais, ceux en cours finissent en base sans que personne n'en reçoive le résultat ; ses promesses et ses minuteries restent figées. Ses adaptateurs le sont aussi (`gate`, ORC-163) : un processus mort ne commente plus, ne poste plus d'activité, ne lance plus de run. Un autre processus repart sur la même base ; les effets que le mort avait réclamés y restent `running` jusqu'à l'expiration de leur bail, qui se passe par `h.advance`. `h.store` et `h.orch` sont toujours ceux du processus vivant. Exemple : `test/scenarios/restart.test.ts` (événement dans l'inbox non décidé, effet réclamé à moitié fait, minuterie échue, puis rien de perdu ni de doublon visible).
 - `h.checks.holdNext()` garde le prochain contrôle en cours et rend la fonction qui le termine (vert par défaut, ou le résultat passé). `h.send` et `h.advance` attendent la fin des contrôles en cours : n'attendez l'envoi qu'après avoir relâché le contrôle, et observez l'état intermédiaire avec `vi.waitFor` (exemple dans `test/scenarios/harness.test.ts`).
 - `createHarness({ projectYaml })` surcharge le `workflow.yml` du pack standard, comme le fichier `.relais/workflow.yml` d'un projet.
 
@@ -141,6 +143,46 @@ Le rejeu en régression refait chaque décision sur la version du workflow sur l
 
 **Ajouter des journaux réels.** Sur une instance : `factory replay --export <ID> --out test/replay/journals/<id>.json` (avec `FACTORY_HOME` et, en Postgres, `FACTORY_DATABASE_URL` de l'instance). Un journal contient le texte des événements (titre du ticket, réponses dans le fil, commentaires) : relisez-le avant de le committer, ou ne gardez que des tickets sans contenu sensible. Un journal réel est rejoué en régression ; son what-if contre le préréglage de son projet se lance à la main (`factory replay <journal> --what-if <.factory/workflow.yml du projet>`). Seules les décisions prises depuis ORC-174 sont enregistrées : d'un ticket plus ancien, seules les dernières décisions sont comparées.
 
+## L'injection de pannes et le chaos `kill -9`
+
+ORC-163 coupe la chaîne à chacun de ses maillons et vérifie qu'après la coupure, puis la reprise, **aucun événement n'est perdu** et **aucun effet n'est fait deux fois de façon visible**.
+
+**Les points de coupure** (`test/helpers/faults.ts`). Rien n'est ajouté au code de production : chaque point est une enveloppe d'un port que le harnais donne à l'orchestrateur (le store, le faux tracker, le faux runner), posée par `createHarness({ faults })`. Un `Faults` porte au plus une panne prévue, `{ point, mode, match?, nth? }` : au n-ième passage du point (filtré par `match`, sur l'événement ou l'effet), elle lève une `FaultError` (`throw`) ou tue le processus (`kill` : le `mortal` de sa vie meurt, comme sous `kill -9`, et l'appel ne répond jamais). Les points, dans l'ordre de la chaîne :
+
+| Point | Où |
+|---|---|
+| `webhook.accept` | avant l'écriture dans l'inbox d'un événement venu de l'extérieur : le producteur n'a pas de réponse |
+| `inbox.write` | après l'écriture d'une ligne d'inbox, avant que son auteur l'apprenne : la réponse est perdue |
+| `decide.before` | transaction de décision, avant `decide` |
+| `decide.after` | dans la transaction, après `decide`, avant le COMMIT : annulée (un `kill` y lève aussi, pour que la base annule, comme pour un vrai processus tué) |
+| `decide.commit` | après le COMMIT, avant que le worker l'apprenne |
+| `outbox.claim` | après la réclamation d'une ligne d'outbox (son bail validé) |
+| `effect.before`, `effect.after` | autour de l'appel externe d'un effet (faux tracker ou runner), attribué à la ligne d'outbox en cours |
+| `effect.complete` | après la validation de la fin de la ligne (son résultat `effect:<id>` dans l'inbox) |
+| `timer.fire`, `timer.fired` | avant la transaction qui déclenche une minuterie échue, après son COMMIT |
+| `run.result` | avant l'écriture dans l'inbox du résultat d'un run ou d'un contrôle |
+
+`test/scenarios/faults.test.ts` joue un scénario (délégation, run, réponse en revue humaine, son debounce, le run de retour) sous chaque point, en `throw` puis en `kill`, sur SQLite et, dans `scenarios-pg`, sur Postgres. Le pilote se comporte en producteur : un événement sans réponse est renvoyé avec le même id, comme Linear renvoie un webhook ; un processus tué est remplacé par un autre sur la même base (`restart({ mode: 'brutal' })`), puis l'horloge passe les baux et les backoffs.
+
+**Le vérificateur** (`checkChain`). Une fois tout retombé : chaque événement acquitté est journalisé exactement une fois ; l'inbox, l'outbox (ni `pending`, ni `running`, ni `dead`) et les dead letters sont vides ; le journal de chaque ticket, exporté, est rejoué bit pour bit par l'oracle (ORC-174), chaque ligne avec sa décision ; aucun appel visible (commentaire, activité, lien, lancement de run) n'est fait deux fois pour la même ligne d'outbox. Les appels au faux tracker et au faux runner sont attribués à la ligne d'outbox que le processus exécutait (le registre de `Faults`) ; déplacer un ticket ou poser une étiquette est idempotent et n'est pas compté. Un run de dev lancé deux fois pour une même ligne est une violation : `recover()` bloque le ticket dont le run a été coupé, et le départ repris est refusé. Un autre effet visible refait est classé à part (`atLeastOnce`) : c'est l'« au moins une fois » de l'outbox, qu'ORC-162 referme en rendant chaque effet idempotent ; le run d'une question y est aussi, car il ne bloque aucun ticket et son départ repris relance la question. Tant qu'ORC-162 n'est pas fusionné, les cas qui le montrent (`post_output` coupé après son appel externe, run d'une question coupé après son lancement) sont des `it.fails`, à passer en `it` ensuite.
+
+**Le chaos** (`test/chaos/`). `daemon.ts` est un vrai processus : l'orchestrateur, son worker, ses exécuteurs d'outbox et ses minuteries sur Postgres (ou un fichier SQLite), avec les faux adaptateurs, démarré comme `factory up` (`recover`, avis de reprise, minuteries, `tick`, boucle du worker). Ses runs durent quelques dizaines de millisecondes, pour que des coupures tombent pendant. Le pilote (`chaos.test.ts`) lui envoie par IPC des événements Linear sur 20 tickets (délégations, réponses, questions, `agent:stop`, `agent:reprendre`, passage en revue IA), plus vite qu'il ne les traite, et le tue par `SIGKILL` à un moment tiré au hasard après chaque démarrage (`TerminateProcess` sous Windows), puis en relance un sur la même base, l'horloge simulée avancée au-delà du bail des réclamations du mort. Un événement est acquitté après son écriture dans l'inbox ; un événement sans réponse est renvoyé au démon suivant. Chaque appel visible est ajouté, au moment où il agit, à un fichier qui survit aux processus. À la fin, sans plus de coupure, le dernier démon finit le travail, puis `checkChain` vérifie la même chose que pour les points de coupure. Contrairement au `mortal` du harnais, la coupure est celle du noyau : une transaction en cours est annulée par la base.
+
+| Variable | Défaut | Rôle |
+|---|---|---|
+| `CHAOS_EVENTS` | 100 | événements envoyés ; une coupure tous les dix, au moins trois |
+| `CHAOS_SEED` | aléatoire | graine des événements et des délais de coupure, affichée à chaque passage |
+| `CHAOS_TICKETS` | 20 | tickets sur lesquels les événements se répartissent |
+| `CHAOS_STRICT_EFFECTS` | absent | `1` : un effet visible refait (`atLeastOnce`) fait aussi échouer ; à activer une fois ORC-162 fusionné |
+
+```bash
+npm run test:chaos                                              # 100 événements, sur un fichier SQLite
+DATABASE_URL=postgres://… CHAOS_EVENTS=500 npm run test:chaos   # comme le job `chaos` de la CI
+DATABASE_URL=postgres://… CHAOS_SEED=4242 npm run test:chaos    # rejoue une graine
+```
+
+**Pourquoi un job CI à lui, à 500 événements.** Le critère d'ORC-163 est 500 événements sur Postgres, dans un job dédié. 500 événements, c'est une cinquantaine de coupures et autant de démarrages d'un processus `tsx` : environ une minute et demie sur un poste, trop pour le job `test`, qui reste sur SQLite et en quelques secondes. Le job `chaos` tourne en parallèle des autres, avec son propre Postgres : il n'allonge pas la PR au-delà du job le plus lent, et chaque PR passe le critère entier plutôt qu'une version réduite. La graine change à chaque passage, pour explorer d'autres moments de coupure, et s'affiche dans le message d'échec. Les moments exacts où tombent les coupures dépendent de la machine : rejouer une graine redonne les mêmes événements et les mêmes délais, pas forcément le même entrelacement. En local, le défaut de 100 événements tourne en une vingtaine de secondes.
+
 ## Les sept scénarios obligatoires
 
 Chaque scénario est livré par le ticket qui livre le comportement qu'il teste, avec les faux et l'horloge ci-dessus :
@@ -155,4 +197,4 @@ Chaque scénario est livré par le ticket qui livre le comportement qu'il teste,
 | Budget épuisé | ORC-216 | `h.runner` (`turns`, `costUsd`, `outcome: 'limit'`) |
 | Délégation retirée | ORC-227 | `h.tracker`, `h.runner` (`hold`), `h.sandboxes` |
 
-`h.restart()` est un arrêt propre : il attend la fin des contrôles en cours. Un redémarrage **pendant** un contrôle s'écrit avec `h.restart({ mode: 'brutal' })` (ORC-228), le contrôle tenu par `h.checks.holdNext()`. Les points de coupure injectables à chaque étape de la chaîne et le chaos `kill -9` sur 500 événements sont ORC-163.
+`h.restart()` est un arrêt propre : il attend la fin des contrôles en cours. Un redémarrage **pendant** un contrôle s'écrit avec `h.restart({ mode: 'brutal' })` (ORC-228), le contrôle tenu par `h.checks.holdNext()`. Les points de coupure injectables à chaque étape de la chaîne et le chaos `kill -9` sur 500 événements (ORC-163) sont décrits plus haut.

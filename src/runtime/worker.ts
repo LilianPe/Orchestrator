@@ -228,12 +228,7 @@ export class Worker {
     let n = 0;
     const exclude = [...this.skipped, ...this.waited.keys(), ...this.queuedIds];
     for (const row of await this.d.store.pendingInbox(INBOX_BATCH, exclude)) {
-      const key = ticketKey(row);
-      this.queuedIds.add(row.id);
-      const rows = this.queued.get(key) ?? [];
-      rows.push(row);
-      this.queued.set(key, rows);
-      this.drain(row);
+      this.queue(row);
       n++;
     }
     for (const ref of await this.d.store.effectTickets()) {
@@ -242,6 +237,17 @@ export class Worker {
       n++;
     }
     return n;
+  }
+
+  /** Queues a row on its ticket's task, once. */
+  private queue(row: StoredEvent): void {
+    if (this.queuedIds.has(row.id)) return;
+    const key = ticketKey(row);
+    this.queuedIds.add(row.id);
+    const rows = this.queued.get(key) ?? [];
+    rows.push(row);
+    this.queued.set(key, rows);
+    this.drain(row);
   }
 
   private drain(ref: TicketRef): void {
@@ -371,6 +377,10 @@ export class Worker {
     const timer = setTimeout(() => {
       this.retryTimers.delete(timer);
       this.skipped.delete(row.id);
+      // Queued as read, not left to the next scan: a transaction that committed after all (the
+      // answer to its COMMIT lost) left the row processed, out of the scans, and only its own
+      // processing (`processed`) lets the rows behind it go (ORC-163).
+      this.queue(row);
       this.kickInBackground();
     }, delay);
     timer.unref();
