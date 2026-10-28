@@ -10,15 +10,14 @@
  *   node --import tsx test/helpers/crash-after-decision.ts <sqlite file | postgres://…> <killAt> <logFile> [leaseMs]
  */
 import { appendFileSync } from 'node:fs';
-import { PgStore } from '../../src/store/pg/pg-store.js';
-import { SqliteStore } from '../../src/store/sqlite-store.js';
 import type { DecisionRequest, Store } from '../../src/store/types.js';
 import { CRASH_WORKFLOW } from './crash-workflow.js';
 import { createHarness } from './harness.js';
+import { storeAt } from './store-at.js';
 
 const [target, killAt, logFile, leaseMs] = process.argv.slice(2);
 if (!target || !killAt || !logFile) throw new Error('usage: crash-after-decision.ts <store> <killAt> <logFile>');
-const inner: Store = target.startsWith('postgres') ? new PgStore({ connectionString: target }) : new SqliteStore(target);
+const inner = storeAt(target);
 let claims = 0;
 let settled = 0;
 const actedAt = killAt.startsWith('acted:') ? Number(killAt.slice('acted:'.length)) : undefined;

@@ -12,7 +12,6 @@ import { workflowVersion } from '../runtime/workflow-version.js';
 import {
   LEASE_MS,
   type DecisionOutcome,
-  type DecisionPlan,
   type DecisionRequest,
   type EffectOutcome,
   type OutboxRow,
@@ -22,8 +21,9 @@ import {
 } from '../store/types.js';
 import type { EventBus } from './bus.js';
 import type { Clock } from './clock.js';
-import type { Effect, OutboxEffect } from './decision.js';
-import { decide, isFenced, refusesDevWork, sensitivePathsAtLaunch, taintedKnowledge } from './engine.js';
+import type { Effect } from './decision.js';
+import { NO_PLAN, planDecision } from './decision-plan.js';
+import { refusesDevWork, sensitivePathsAtLaunch, taintedKnowledge } from './engine.js';
 import { attemptLabels, packFingerprints } from './attempt-labels.js';
 import { pickupFailures } from './pickup.js';
 import { buildPrompt, formatFeedback, formatVerifyFailures } from './prompt.js';
@@ -33,7 +33,6 @@ import type { Scheduler } from './scheduler.js';
 import {
   CREATES_TICKET,
   type EventPayloads,
-  type EventType,
   type FeedbackItem,
   type InputKind,
   type InternalEvent,
@@ -108,8 +107,6 @@ interface StartOpts {
   enqueuedAt?: number;
 }
 
-/** Events after which `handle` settles the ticket: the pending job starts once nothing is in flight. */
-export const SETTLES_RUN: ReadonlySet<EventType> = new Set<EventType>(['run.finished', 'verify.passed', 'verify.failed']);
 const ECHO_MS = 60_000;
 /** The `meta` key of the installation's id (`instanceId`). */
 const INSTANCE_KEY = 'instance-id';
@@ -172,6 +169,7 @@ export class Orchestrator {
       leaseMs: d.effectLeaseMs,
       retry: d.processRetry,
       left: (row) => void this.freeSlot(row),
+      deadLettered: (row) => void this.freeSlot(row),
       effectRetry: d.effectRetry,
       now: () => d.clock.now(),
     });
@@ -185,7 +183,7 @@ export class Orchestrator {
    */
   accept(event: FactoryEvent | StoredEvent): Promise<boolean> {
     const write = this.d.store.appendInbox(event).then((fresh) => {
-      if (fresh && this.dispatchOpen) this.worker.kickInBackground();
+      if (fresh) this.wake();
       return fresh;
     });
     // drained() waits for writes in flight too: their event is about to be processed.
@@ -197,6 +195,10 @@ export class Orchestrator {
     return write;
   }
 
+  /** An inbox row was written outside `accept` (a timer's firing, ORC-161): the worker processes it now. */
+  wake(): void {
+    if (this.dispatchOpen) this.worker.kickInBackground();
+  }
 
   /**
    * Processes the inbox rows and outbox effects a previous process left (written, then a crash or
@@ -206,6 +208,14 @@ export class Orchestrator {
   async replayInbox(): Promise<void> {
     this.dispatchOpen = true;
     await this.worker.kick();
+  }
+
+  /**
+   * One poll of the worker's loop (`startWorker`), for a caller that drives its own clock: the
+   * scenario harness's `advance` (ORC-228), as the poller would once the simulated time passed.
+   */
+  async poll(): Promise<void> {
+    if (this.dispatchOpen && !this.stopping) await this.worker.poll();
   }
 
   /** `replayInbox`, then polls the store: rows written by another process, leases that expired. */
@@ -461,42 +471,11 @@ export class Orchestrator {
   private request(event: FactoryEvent): DecisionRequest {
     const project = event.projectId === '*' ? this.d.projects[0] : this.project(event.projectId);
     const now = this.d.clock.now();
-    const none: DecisionPlan = { effects: [], timers: [], clearTimers: false };
-    if (!project) return { event, workflow: { hash: '', definition: null }, decide: () => none };
+    if (!project) return { event, workflow: { hash: '', definition: null }, decide: () => NO_PLAN };
     return {
       event,
       workflow: this.currentVersion(project),
-      decide: (known, version) => {
-        const workflow = this.workflowOf(version);
-        if (event.projectId === '*') return { ...none, effects: decide(undefined, event, workflow).effects };
-        if (!known && event.ticketId && !CREATES_TICKET.has(event.type)) {
-          return { ...none, note: `ignored ${event.type} for unmanaged ticket ${event.ticketId}` };
-        }
-        const decision = decide(known, event, workflow);
-        let next = reduce(known, event);
-        for (const e of decision.events) next = reduce(next, e);
-        const ticket = next && { ...next, updatedAt: now, workflowHash: version.hash };
-        const effects: OutboxEffect[] = [...decision.effects];
-        // After the effects, as before: start the ticket's pending job, then drain the queues.
-        if (ticket && SETTLES_RUN.has(event.type)) effects.push({ kind: 'settle' });
-        return {
-          ticket,
-          effects,
-          timers: ticket
-            ? decision.timers.map((t) => ({
-                key: `${ticket.ticketId}:${t.job}`,
-                projectId: project.id,
-                ticketId: ticket.ticketId,
-                job: t.job,
-                fireAt: now + t.ms,
-                armedBy: event.id,
-              }))
-            : [],
-          // A stop deletes the ticket's timers before this decision arms its own, as `stop_run` did.
-          clearTimers: decision.effects.some((c) => c.kind === 'stop_run' && !c.linearSessionId),
-          note: isFenced(decision) ? `ignored stale ${event.type} for ${event.ticketId ?? '*'}: ${decision.trace[0]}` : undefined,
-        };
-      },
+      decide: (known, version) => planDecision({ event, known, workflow: this.workflowOf(version), hash: version.hash, now }),
     };
   }
 

@@ -154,6 +154,11 @@ export const decisionTrace = pgTable(
   ],
 );
 
+/**
+ * Events whose decision threw (ORC-175), set aside instead of retried: `payload` is the inbox event,
+ * `reason` the error of its last failed decision. `status` stays `open` until `factory run repair`
+ * replays, skips or forces it; a replay that throws again reopens it and counts one more `failures`.
+ */
 export const deadLetter = pgTable(
   'dead_letter',
   {
@@ -161,11 +166,19 @@ export const deadLetter = pgTable(
     eventId: text('event_id').notNull(),
     reason: text('reason').notNull(),
     payload: jsonb('payload').$type<unknown>().notNull(),
+    ticketId: text('ticket_id'),
+    status: text('status').notNull().default('open'),
+    failures: integer('failures').notNull().default(1),
+    resolvedBy: text('resolved_by'),
     createdAt: createdAt(),
+    updatedAt: updatedAt(),
   },
   (t) => [
     uniqueIndex('dead_letter_event_id_uq').on(t.eventId),
     index('dead_letter_created_at_idx').on(t.createdAt),
+    index('dead_letter_ticket_status_idx').on(t.ticketId, t.status),
+    check('dead_letter_status_check', sql`${t.status} in ('open', 'replayed', 'skipped', 'forced')`),
+    check('dead_letter_failures_check', sql`${t.failures} >= 1`),
   ],
 );
 

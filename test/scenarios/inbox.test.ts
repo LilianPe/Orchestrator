@@ -6,7 +6,7 @@ import { stringify } from 'yaml';
 import { TRUSTED } from '../../src/core/types.js';
 import { SqliteStore } from '../../src/store/sqlite-store.js';
 import type { Store } from '../../src/store/types.js';
-import { createHarness } from '../helpers/harness.js';
+import { createHarness, harnessStoreKind } from '../helpers/harness.js';
 import { crashAfterAck, linearIngest, signedDelegation } from '../helpers/linear-webhook.js';
 import { testPreset } from '../helpers/test-preset.js';
 
@@ -18,7 +18,8 @@ const delegations = async (store: Store) => (await store.recentEvents(50, 'REL-1
  * processes the event, once.
  */
 describe('inbox: written before the answer, processed from the inbox', () => {
-  it('processes once, after a restart, a delegation acked by a daemon killed with SIGKILL before processing it', async () => {
+  // On a SQLite file; test/integration/inbox-pg.test.ts kills the daemon on Postgres.
+  it.skipIf(harnessStoreKind() === 'postgres')('processes once, after a restart, a delegation acked by a daemon killed with SIGKILL before processing it', async () => {
     const file = join(mkdtempSync(join(tmpdir(), 'factory-inbox-')), 'factory.db');
     const { response, exited } = crashAfterAck(file);
     expect(response).toEqual({ status: 200 });
@@ -118,26 +119,26 @@ describe('inbox: written before the answer, processed from the inbox', () => {
     expect(await h.store.pendingInbox(10)).toEqual([]);
   });
 
-  /** A SQLite store whose decision transaction throws for the events `fails` picks. */
-  function failingDecide(fails: (id: string) => boolean): SqliteStore {
-    const inner = new SqliteStore(':memory:');
-    return Object.assign(Object.create(inner) as SqliteStore, {
-      decide: async (req: Parameters<SqliteStore['decide']>[0]) => {
-        if (fails(req.event.id)) throw new Error('database down');
-        return inner.decide(req);
-      },
-    });
+  /** The harness's store, whose decision transaction throws for the events `fails` picks. */
+  function failingDecide(fails: (id: string) => boolean): (inner: Store) => Store {
+    return (inner) =>
+      Object.assign(Object.create(inner) as Store, {
+        decide: async (req: Parameters<Store['decide']>[0]) => {
+          if (fails(req.event.id)) throw new Error('database down');
+          return inner.decide(req);
+        },
+      });
   }
 
   it('frees the slot of a run whose result is left behind a failed event of its ticket', async () => {
     let failNext = false;
-    const store = failingDecide(() => {
+    const wrapStore = failingDecide(() => {
       const fail = failNext;
       failNext = false;
       return fail;
     });
     // No retry in this process: the failed event and those behind it wait for the next start.
-    const h = createHarness({ store, projectYaml: stringify({ version: 1, limits: { parallel_sessions: 1 } }), processRetry: { attempts: 1, baseMs: 1 } });
+    const h = createHarness({ wrapStore, projectYaml: stringify({ version: 1, limits: { parallel_sessions: 1 } }), processRetry: { attempts: 1, baseMs: 1 } });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
     h.tracker.addIssue({ identifier: 'REL-2', title: 'Import CSV' });
     h.runner.enqueue({ hold: true });
@@ -156,8 +157,8 @@ describe('inbox: written before the answer, processed from the inbox', () => {
   it('settles at the next start, with its real result, a run whose result was written but not decided', async () => {
     // As a crash between the inbox write and the decision: the result is in the inbox only.
     let down = false;
-    const store = failingDecide((id) => down && id.startsWith('attempt:'));
-    const h = createHarness({ store, preset: testPreset(), processRetry: { attempts: 1, baseMs: 1 } });
+    const wrapStore = failingDecide((id) => down && id.startsWith('attempt:'));
+    const h = createHarness({ wrapStore, preset: testPreset(), processRetry: { attempts: 1, baseMs: 1 } });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
     h.runner.enqueue({ hold: true });
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
@@ -173,37 +174,37 @@ describe('inbox: written before the answer, processed from the inbox', () => {
     expect(await h.store.pendingInbox(10)).toEqual([]);
   });
 
-  /** A SQLite store whose inbox write fails `failures` times for the ids matching `pattern`. */
-  function flakyInbox(pattern: RegExp, failures: number): SqliteStore {
-    const inner = new SqliteStore(':memory:');
-    return Object.assign(Object.create(inner) as SqliteStore, {
-      appendInbox: async (e: Parameters<SqliteStore['appendInbox']>[0]) => {
-        if (pattern.test(e.id) && failures > 0) {
-          failures--;
-          throw new Error('database down');
-        }
-        return inner.appendInbox(e);
-      },
-    });
+  /** The harness's store, whose inbox write fails `failures` times for the ids matching `pattern`. */
+  function flakyInbox(pattern: RegExp, failures: number): (inner: Store) => Store {
+    return (inner) =>
+      Object.assign(Object.create(inner) as Store, {
+        appendInbox: async (e: Parameters<Store['appendInbox']>[0]) => {
+          if (pattern.test(e.id) && failures > 0) {
+            failures--;
+            throw new Error('database down');
+          }
+          return inner.appendInbox(e);
+        },
+      });
   }
 
   it('retries the inbox write of run and check results until it goes through', async () => {
     // The harness retries 3 times: two failures for the check, then two for the run result.
-    const h = createHarness({ store: flakyInbox(/^check:/, 2), preset: testPreset() });
+    const h = createHarness({ wrapStore: flakyInbox(/^check:/, 2), preset: testPreset() });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
     const ids = (await h.store.recentEvents(50, 'REL-1')).map((e) => e.id);
     expect(ids.filter((id) => /^(attempt|check):/.test(id))).toHaveLength(2);
     expect(await h.ticket()).toMatchObject({ logical: 'human_review', blocked: false });
 
-    const h2 = createHarness({ store: flakyInbox(/^attempt:/, 2) });
+    const h2 = createHarness({ wrapStore: flakyInbox(/^attempt:/, 2) });
     h2.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
     await h2.send('ticket.delegated', { linearSessionId: 'ls-1' });
     expect((await h2.store.recentEvents(50, 'REL-1')).map((e) => e.type)).toContain('run.finished');
   });
 
   it('gives up on a run result after the last attempt without throwing, and leaves the run unsettled', async () => {
-    const h = createHarness({ store: flakyInbox(/^attempt:/, Infinity) });
+    const h = createHarness({ wrapStore: flakyInbox(/^attempt:/, Infinity) });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
     expect((await h.store.recentEvents(50, 'REL-1')).map((e) => e.type)).not.toContain('run.finished');

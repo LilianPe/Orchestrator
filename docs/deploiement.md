@@ -38,6 +38,7 @@ Les dépôts sous `repos/` doivent avoir un remote **HTTPS** (`https://github.co
 | `ANTHROPIC_API_KEY` | oui | Authentification de Claude Code. |
 | `GH_TOKEN` | oui | `gh` et push HTTPS. Droits : [`github.md`](github.md#permissions-nécessaires). |
 | `RELAIS_UI_PASSWORD` | oui | Mot de passe de l'interface (le conteneur écoute hors bouclage). |
+| `GH_WEBHOOK_SECRET` | non | Secret des webhooks GitHub (`<publicUrl>/webhooks/github`) quand `github.webhookSecret` n'est pas dans `config.yaml`. Absent : webhooks GitHub refusés, le relevé des PR suit seul ([`github.md`](github.md#webhooks-github)). |
 | `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL` | non | Identité des commits (`Relais`, `relais@localhost` par défaut) ; compose les recopie dans `GIT_COMMITTER_*`. |
 
 `docker compose` refuse de démarrer si une variable obligatoire manque. Mettez-les dans un fichier `.env` à côté de `compose.yaml` (non versionné) ou dans l'environnement du shell.
