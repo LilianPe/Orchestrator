@@ -1,7 +1,7 @@
 import type { AttemptLabels } from '../core/attempt-labels.js';
 import type { DeadLetter, RepairAction } from '../core/dead-letter.js';
 import type { OutboxEffect } from '../core/decision.js';
-import { TRUSTED, type InputKind, type TimerFired, type QueueName, type FactoryEvent, type RunOutcome, type TicketState, type TokenUsage } from '../core/types.js';
+import { TRUSTED, type EffectResultPayload, type InputKind, type TimerFired, type QueueName, type FactoryEvent, type RunOutcome, type TicketState, type TokenUsage } from '../core/types.js';
 import type { StoredEvent } from '../core/upcast.js';
 
 /**
@@ -206,11 +206,22 @@ export interface OutboxRow {
 }
 
 /**
+ * What an executed effect reports beyond success (ORC-162): `deduplicated` when it found the effect
+ * already made by an earlier execution and wrote nothing, `ref` for the object made or found.
+ */
+export type EffectOutcome = Pick<EffectResultPayload, 'deduplicated' | 'ref'>;
+
+/**
  * The inbox event that carries an outbox row's result back to the worker (ORC-150), written in the
  * transaction that settles the row: `effect:<id>`, `effect.done` or `effect.failed` (dead).
  */
-export function effectResult(row: Pick<OutboxRow, 'id' | 'projectId' | 'ticketId' | 'eventId' | 'effect' | 'attempts'>, at: number, error?: string): FactoryEvent {
-  const base = { effectId: row.id, kind: row.effect.kind, eventId: row.eventId, attempts: row.attempts };
+export function effectResult(
+  row: Pick<OutboxRow, 'id' | 'projectId' | 'ticketId' | 'eventId' | 'effect' | 'attempts'>,
+  at: number,
+  error?: string,
+  outcome?: EffectOutcome,
+): FactoryEvent {
+  const base: EffectResultPayload = { effectId: row.id, kind: row.effect.kind, eventId: row.eventId, attempts: row.attempts, ...outcome };
   const head = { ...TRUSTED, id: `effect:${row.id}`, at, projectId: row.projectId, ...(row.ticketId === undefined ? {} : { ticketId: row.ticketId }) };
   return error === undefined ? { ...head, type: 'effect.done', payload: base } : { ...head, type: 'effect.failed', payload: { ...base, error } };
 }
@@ -288,9 +299,10 @@ export interface Store {
    * inbox in the same transaction (ORC-150). Only under the claim token `lease`: false, and nothing
    * changed, when the lease was lost to another worker. Without `lease`: the legacy queue rows of
    * `claim` (Postgres), no inbox event. `at`: the time of the result event (the store's clock by
-   * default; the orchestrator passes its own, the time of every event it writes).
+   * default; the orchestrator passes its own, the time of every event it writes). `outcome`: what
+   * the result carries beyond success, a replay found already made (ORC-162).
    */
-  completeEffect(id: string, lease?: string, at?: number): Promise<boolean>;
+  completeEffect(id: string, lease?: string, at?: number, outcome?: EffectOutcome): Promise<boolean>;
   /**
    * A running outbox row failed and has attempts left: back to `pending`, claimable again in
    * `delayMs` (the backoff), with its error. Same guard as `completeEffect`.

@@ -23,14 +23,33 @@ export interface SearchHit {
   stateName: string;
 }
 
+/** The marker a comment written for an outbox effect carries in its body (ORC-162): invisible once rendered. */
+export function effectMarker(effectId: string): string {
+  return `<!-- factory:effect=${effectId} -->`;
+}
+
+/**
+ * Writes are keyed by the outbox effect id (`ticket:seq:i`) when they come from an effect (ORC-162):
+ * an effect replayed after it acted looks for what its first execution wrote before writing again
+ * (`findComment`, `findActivity`), and the writes that set a final state (`moveTo`, `setLabels`,
+ * `addExternalUrl`) do nothing when it is already there. See docs/idempotence.md.
+ */
 export interface Tracker {
   getIssue(identifier: string): Promise<TrackerIssue>;
   listDelegated(teamKey: string): Promise<TrackerIssue[]>;
   search(term: string): Promise<SearchHit[]>;
   moveTo(identifier: string, stateName: string): Promise<void>;
+  /** Final state: adds `add`, takes off `remove`; writes nothing when the ticket already reads so. */
   setLabels(identifier: string, add: string[], remove: string[]): Promise<void>;
-  comment(identifier: string, body: string): Promise<void>;
-  activity(sessionId: string, a: ActivityInput): Promise<void>;
+  /** With `effectId`, the comment carries `effectMarker(effectId)`, for `findComment` to find it. */
+  comment(identifier: string, body: string, effectId?: string): Promise<void>;
+  /** The id of the ticket's comment written for `effectId`, if there is one. */
+  findComment(identifier: string, effectId: string): Promise<string | undefined>;
+  /** With `effectId`, the activity is written under an id derived from it, for `findActivity` to find it. */
+  activity(sessionId: string, a: ActivityInput, effectId?: string): Promise<void>;
+  /** The id of the session's activity written for `effectId`, if there is one. */
+  findActivity(sessionId: string, effectId: string): Promise<string | undefined>;
+  /** Adds the link to the session; nothing when the session already has this URL. */
   addExternalUrl(sessionId: string, label: string, url: string): Promise<void>;
   ensureSession(identifier: string): Promise<string>;
 }

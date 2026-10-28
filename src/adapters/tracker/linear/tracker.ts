@@ -1,5 +1,6 @@
+import { createHash } from 'node:crypto';
 import type { LogicalState } from '../../../core/types.js';
-import type { ActivityInput, SearchHit, Tracker, TrackerIssue } from '../types.js';
+import { effectMarker, type ActivityInput, type SearchHit, type Tracker, type TrackerIssue } from '../types.js';
 import type { LinearApi } from './api.js';
 import { Q } from './queries.js';
 
@@ -33,6 +34,20 @@ const STATE_TYPES: Record<LogicalState, string> = {
 };
 
 const teamOf = (identifier: string) => identifier.split('-')[0]!;
+
+/**
+ * The id a comment or an activity of an outbox effect is created with (ORC-162): Linear takes a
+ * client id in UUID v4 format on `commentCreate` and `agentActivityCreate`, so a replay finds the
+ * object by it. A sha256 of the effect id with the version and variant bits of a v4: the same effect
+ * always gets the same id.
+ */
+export function effectUuid(kind: 'comment' | 'activity', effectId: string): string {
+  const h = createHash('sha256').update(`factory:${kind}:${effectId}`).digest();
+  h[6] = (h[6]! & 0x0f) | 0x40;
+  h[8] = (h[8]! & 0x3f) | 0x80;
+  const x = h.subarray(0, 16).toString('hex');
+  return `${x.slice(0, 8)}-${x.slice(8, 12)}-${x.slice(12, 16)}-${x.slice(16, 20)}-${x.slice(20)}`;
+}
 
 function toIssue(n: IssueNode): TrackerIssue {
   return {
@@ -147,31 +162,58 @@ export class LinearTracker implements Tracker {
     return issueLabelCreate.issueLabel.id;
   }
 
+  /** Reads the ticket's labels first and writes only what differs: a replay writes nothing (ORC-162). */
   async setLabels(identifier: string, add: string[], remove: string[]): Promise<void> {
     const team = teamOf(identifier);
-    const id = await this.issueId(identifier);
+    const issue = await this.node(identifier);
+    const has = new Set(issue.labels.nodes.map((l) => l.name));
     const addedLabelIds: string[] = [];
-    for (const name of add) addedLabelIds.push(await this.labelId(team, name));
-    const labels = await this.teamLabels(team);
-    const removedLabelIds = remove.map((n) => labels.get(n)).filter((x): x is string => !!x);
-    await this.api.gql(Q.issueUpdate, { id, input: { addedLabelIds, removedLabelIds } });
+    for (const name of add) if (!has.has(name)) addedLabelIds.push(await this.labelId(team, name));
+    const removedLabelIds = issue.labels.nodes.filter((l) => remove.includes(l.name) && !add.includes(l.name)).map((l) => l.id);
+    if (addedLabelIds.length === 0 && removedLabelIds.length === 0) return;
+    await this.api.gql(Q.issueUpdate, { id: issue.id, input: { addedLabelIds, removedLabelIds } });
   }
 
-  async comment(identifier: string, body: string): Promise<void> {
-    await this.api.gql(Q.commentCreate, { input: { issueId: await this.issueId(identifier), body } });
+  async comment(identifier: string, body: string, effectId?: string): Promise<void> {
+    const input: Record<string, unknown> = { issueId: await this.issueId(identifier), body };
+    if (effectId !== undefined) {
+      input['id'] = effectUuid('comment', effectId);
+      input['body'] = `${body}\n\n${effectMarker(effectId)}`;
+    }
+    await this.api.gql(Q.commentCreate, { input });
   }
 
-  async activity(sessionId: string, a: ActivityInput): Promise<void> {
+  async findComment(identifier: string, effectId: string): Promise<string | undefined> {
+    const { comments } = await this.api.gql<{ comments: { nodes: { id: string }[] } }>(Q.effectComment, {
+      issueId: await this.issueId(identifier),
+      id: effectUuid('comment', effectId),
+      marker: effectMarker(effectId),
+    });
+    return comments.nodes[0]?.id;
+  }
+
+  async activity(sessionId: string, a: ActivityInput, effectId?: string): Promise<void> {
     const content =
       a.type === 'action'
         ? { type: 'action', action: a.action, parameter: a.parameter, ...(a.result ? { result: a.result } : {}) }
         : { type: a.type, body: a.body };
     const input: Record<string, unknown> = { agentSessionId: sessionId, content };
     if (a.ephemeral) input['ephemeral'] = true;
+    if (effectId !== undefined) input['id'] = effectUuid('activity', effectId);
     await this.api.gql(Q.activityCreate, { input });
   }
 
+  async findActivity(sessionId: string, effectId: string): Promise<string | undefined> {
+    const { agentSession } = await this.api.gql<{ agentSession: { activities: { nodes: { id: string }[] } } | null }>(Q.effectActivity, {
+      sessionId,
+      id: effectUuid('activity', effectId),
+    });
+    return agentSession?.activities.nodes[0]?.id;
+  }
+
   async addExternalUrl(sessionId: string, label: string, url: string): Promise<void> {
+    const { agentSession } = await this.api.gql<{ agentSession: { externalLinks: { url: string }[] } | null }>(Q.sessionLinks, { id: sessionId });
+    if (agentSession?.externalLinks.some((l) => l.url === url)) return;
     await this.api.gql(Q.sessionUpdate, { id: sessionId, input: { addedExternalUrls: [{ label, url }] } });
   }
 

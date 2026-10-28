@@ -152,11 +152,11 @@ describe('fault injection at each point of the chain (ORC-163)', () => {
     });
 
     /**
-     * Known gap, ORC-162 (#57): the outbox is at least once, and a cut between the external call and
-     * the completion runs the effect again. A run's output posted twice in Linear is a visible double
-     * until each effect is idempotent. Becomes an `it` once ORC-162 is merged.
+     * The outbox is at least once: a cut between the external call and the completion runs the
+     * effect again. The replay finds the activity its first execution posted (ORC-162) and posts
+     * nothing more.
      */
-    it.fails('at a visible effect (post_output), after its external call: posted twice until ORC-162', async () => {
+    it('at a visible effect (post_output), after its external call: posted once (ORC-162)', async () => {
       const { report, faults } = await scenario({ point: 'effect.after', mode, match: (i) => i.effect === 'post_output' });
       expect(faults.fired).toMatchObject({ point: 'effect.after', mode });
       expect(report.violations).toEqual([]);
@@ -165,12 +165,12 @@ describe('fault injection at each point of the chain (ORC-163)', () => {
   });
 
   /**
-   * Known gap, ORC-162 (#57), found by the chaos (seed 31 on Postgres): a question's run cut after
-   * it started is not a ticket's run, so recover() blocks nothing, posts « reposez la question »,
-   * and the start taken up again past its lease launches the question a second time. Becomes an
-   * `it` once a start_run is idempotent.
+   * Known gap, ORC-277, found by the chaos (seed 31 on Postgres): a question's run cut after it
+   * started is not a ticket's run, so recover() blocks nothing, posts « reposez la question », and
+   * the start taken up again past its lease launches the question a second time. ORC-162 marks a
+   * start only once it is handled (`effect:<key>:started`): a kill before the mark is not caught.
    */
-  it.fails('kill at a question run launch, after the runner started it: asked twice until ORC-162', async () => {
+  it.fails('kill at a question run launch, after the runner started it: asked twice until ORC-277', async () => {
     const ask = event('m1', 'session.mentioned', { linearSessionId: 'ls-q', body: 'pourquoi ?', author: 'L' });
     const { report, faults } = await scenario({ point: 'effect.after', mode: 'kill', match: (i) => i.method === 'start' }, [{ send: ask }]);
     expect(faults.fired).toMatchObject({ point: 'effect.after', mode: 'kill' });

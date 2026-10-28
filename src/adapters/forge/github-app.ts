@@ -2,7 +2,7 @@ import { createPrivateKey, createSign } from 'node:crypto';
 import { execCmd, mustExec, type Exec } from '../exec.js';
 import type { FeedbackItem } from '../../core/types.js';
 import { aggregateChecks } from './gh-cli.js';
-import type { Forge, PrInfo } from './types.js';
+import type { CheckRunRequest, Forge, ForgeWriter, PrInfo, PrRequest } from './types.js';
 
 export interface GitHubRepoRef {
   owner: string;
@@ -51,7 +51,7 @@ interface PullRequestDto {
 }
 
 interface CheckRunsDto {
-  check_runs?: { name: string; status: string; conclusion: string | null }[];
+  check_runs?: { id: number; name: string; status: string; conclusion: string | null; external_id?: string | null }[];
 }
 
 interface StatusesDto {
@@ -144,6 +144,11 @@ function statusBucket(state: string): string {
   if (state === 'success') return 'pass';
   if (state === 'failure' || state === 'error') return 'fail';
   return 'pending';
+}
+
+/** `/repos/{owner}/{name}`, encoded. */
+function repoApi(repo: GitHubRepoRef): string {
+  return `/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}`;
 }
 
 /** GitHub API failure with its status, so callers can fail closed on 404/403. */
@@ -282,14 +287,14 @@ export class GitHubAppAuth {
   }
 }
 
-export class GitHubAppForge extends GitHubAppAuth implements Forge {
+export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter {
   async findPr(repoPath: string, branch: string): Promise<PrInfo | undefined> {
     const repo = await this.repo(repoPath);
     const token = await this.installationToken(repo);
     const query = new URLSearchParams({ head: `${repo.owner}:${branch}`, state: 'all', per_page: '1' });
     const pulls = await this.call<PullRequestDto[]>(
       'GET',
-      `/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}/pulls?${query}`,
+      `${repoApi(repo)}/pulls?${query}`,
       token,
     );
     const pr = pulls[0];
@@ -297,6 +302,65 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge {
     const state: PrInfo['state'] = pr.state === 'open' ? 'OPEN' : pr.merged_at ? 'MERGED' : 'CLOSED';
     const checks = state === 'OPEN' ? await this.checksFor(repo, pr.head.sha, token) : { checks: 'none' as const, failedChecks: [] };
     return { number: pr.number, url: pr.html_url, state, branch: pr.head.ref, headSha: pr.head.sha, ...checks };
+  }
+
+  /**
+   * Looks for the branch's open PR before creating one (ORC-162). If a PR opened between the two
+   * (a concurrent replay), GitHub answers 422: the open PR is read again and returned. A 422 with no
+   * open PR behind it (another validation error) is thrown as is.
+   */
+  async ensurePr(repoPath: string, req: PrRequest): Promise<{ number: number; url: string; deduplicated: boolean }> {
+    const repo = await this.repo(repoPath);
+    const token = await this.installationToken(repo);
+    const base = `${repoApi(repo)}/pulls`;
+    const openPr = async () => {
+      const query = new URLSearchParams({ head: `${repo.owner}:${req.branch}`, state: 'open', per_page: '1' });
+      const [pr] = await this.call<PullRequestDto[]>('GET', `${base}?${query}`, token);
+      return pr && { number: pr.number, url: pr.html_url, deduplicated: true };
+    };
+    const found = await openPr();
+    if (found) return found;
+    try {
+      const pr = await this.call<PullRequestDto>('POST', base, token, { title: req.title, head: req.branch, base: req.base, body: req.body });
+      return { number: pr.number, url: pr.html_url, deduplicated: false };
+    } catch (err) {
+      if (err instanceof GitHubApiError && err.status === 422) {
+        const raced = await openPr();
+        if (raced) return raced;
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Creates the check run, or updates the one of the sha whose `external_id` is the request's
+   * (ORC-162). GitHub has no filter on `external_id`: the sha's runs of that name are listed (all of
+   * them, `filter=all`, not only the latest, page by page) and matched here.
+   */
+  async upsertCheckRun(repoPath: string, req: CheckRunRequest): Promise<{ id: number; deduplicated: boolean }> {
+    const repo = await this.repo(repoPath);
+    const token = await this.installationToken(repo);
+    const base = repoApi(repo);
+    let existing: { id: number } | undefined;
+    for (let page = 1; !existing; page++) {
+      const query = new URLSearchParams({ check_name: req.name, filter: 'all', per_page: '100', page: String(page) });
+      const runs = (await this.call<CheckRunsDto>('GET', `${base}/commits/${encodeURIComponent(req.sha)}/check-runs?${query}`, token)).check_runs ?? [];
+      existing = runs.find((r) => r.external_id === req.externalId);
+      if (runs.length < 100) break;
+    }
+    const body = {
+      name: req.name,
+      external_id: req.externalId,
+      status: req.status,
+      ...(req.conclusion ? { conclusion: req.conclusion } : {}),
+      ...(req.title !== undefined || req.summary !== undefined ? { output: { title: req.title ?? req.name, summary: req.summary ?? '' } } : {}),
+    };
+    if (existing) {
+      await this.call('PATCH', `${base}/check-runs/${existing.id}`, token, body);
+      return { id: existing.id, deduplicated: true };
+    }
+    const created = await this.call<{ id: number }>('POST', `${base}/check-runs`, token, { ...body, head_sha: req.sha });
+    return { id: created.id, deduplicated: false };
   }
 
   async unresolvedReviewComments(repoPath: string, prNumber: number): Promise<FeedbackItem[]> {
@@ -327,7 +391,7 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge {
     sha: string,
     token: string,
   ): Promise<{ checks: PrInfo['checks']; failedChecks: string[] }> {
-    const base = `/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}/commits/${encodeURIComponent(sha)}`;
+    const base = `${repoApi(repo)}/commits/${encodeURIComponent(sha)}`;
     const [runs, statuses] = await Promise.all([
       this.call<CheckRunsDto>('GET', `${base}/check-runs?per_page=100`, token),
       this.call<StatusesDto>('GET', `${base}/status`, token),

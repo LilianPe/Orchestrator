@@ -69,6 +69,13 @@ export interface EffectResultPayload {
   /** The event whose decision wrote the effect. */
   eventId: string;
   attempts: number;
+  /**
+   * Set when this execution found the effect already made by an earlier one (a replay, ORC-162):
+   * nothing was written again, and `ref` names what was found (ORC-138, option B3).
+   */
+  deduplicated?: true;
+  /** The external object the effect made or found (a comment id, a PR number…), when the adapter tells it. */
+  ref?: string;
 }
 
 /**

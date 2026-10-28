@@ -21,6 +21,7 @@ import {
   type DecisionRecord,
   type JournalEntry,
   type DecisionRequest,
+  type EffectOutcome,
   type MeasureFacts,
   type OutboxRow,
   type QueueClaim,
@@ -329,12 +330,12 @@ export class SqliteStore implements Store {
       .get(id, lease ?? null, lease ?? null) as OutboxSqlRow | undefined;
   }
 
-  async completeEffect(id: string, lease?: string, at = this.now()): Promise<boolean> {
+  async completeEffect(id: string, lease?: string, at = this.now(), outcome?: EffectOutcome): Promise<boolean> {
     return this.atomically(() => {
       const row = this.heldRow(id, lease);
       if (!row) return false;
       this.db.prepare(`UPDATE outbox SET status = 'done', lease_until = NULL WHERE id = ?`).run(id);
-      this.appendResult(effectResult(outboxRow(row), at));
+      this.appendResult(effectResult(outboxRow(row), at, undefined, outcome));
       return true;
     });
   }

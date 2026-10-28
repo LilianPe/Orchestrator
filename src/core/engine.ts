@@ -359,6 +359,8 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
       return out;
     }
     case 'effect.done':
+      // A replay that found its effect already made (ORC-162): nothing to decide, but it stays visible.
+      if (event.payload.deduplicated) out.trace.push(`effect ${event.payload.effectId} deduplicated${event.payload.ref ? ` (${event.payload.ref})` : ''}`);
       return out;
     case 'dead_letter.added': {
       // An event without a ticket, or a ticket the factory does not track: the dead letter waits for its repair.

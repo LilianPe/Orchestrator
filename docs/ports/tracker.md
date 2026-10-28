@@ -14,15 +14,17 @@ Le suivi des tickets : lire un ticket, le déplacer, l'étiqueter, commenter, et
 | `listDelegated(teamKey)` | les tickets de l'équipe délégués à l'app, et seulement eux | lecture | — |
 | `search(term)` | les tickets que le terme trouve, dont ceux qui l'ont dans leur titre, avec URL et statut | lecture | — |
 | `moveTo(id, statut)` | le ticket est dans ce statut | sans effet de plus | rejette sur un ticket inconnu ; sur un statut que l'équipe n'a pas, rejette et laisse le statut |
-| `setLabels(id, add, remove)` | l'état final : `add` posés (créés s'ils manquent), `remove` retirés ; retirer un label absent est ignoré | sans effet de plus | rejette sur un ticket inconnu |
-| `comment(id, corps)` | un commentaire sur le ticket | **écrit un second commentaire** | rejette sur un ticket inconnu |
+| `setLabels(id, add, remove)` | l'état final : `add` posés (créés s'ils manquent), `remove` retirés ; retirer un label absent est ignoré ; rien n'est écrit si le ticket l'a déjà | n'écrit rien | rejette sur un ticket inconnu |
+| `comment(id, corps, effectId?)` | un commentaire sur le ticket ; avec `effectId`, il porte `<!-- factory:effect=<id> -->` (et, chez Linear, un id client dérivé de l'effet) | **écrit un second commentaire** : l'appelant cherche d'abord avec `findComment` | rejette sur un ticket inconnu |
+| `findComment(id, effectId)` | l'id du commentaire du ticket écrit pour cet effet, `undefined` sinon | lecture | rejette sur un ticket inconnu |
 | `ensureSession(id)` | un identifiant de session d'agent sur le ticket | peut ouvrir une autre session | rejette sur un ticket inconnu |
-| `activity(session, a)` | une activité dans la session (`thought`, `response`, `elicitation`, `error`, `action`, éphémère ou non) | écrit une seconde activité | non spécifié (le faux accepte une session inconnue) |
-| `addExternalUrl(session, label, url)` | un lien sur la session | non spécifié | non spécifié |
+| `activity(session, a, effectId?)` | une activité dans la session (`thought`, `response`, `elicitation`, `error`, `action`, éphémère ou non) ; avec `effectId`, sous un id dérivé de l'effet | écrit une seconde activité : l'appelant cherche d'abord avec `findActivity` | non spécifié (le faux accepte une session inconnue) |
+| `findActivity(session, effectId)` | l'id de l'activité de la session écrite pour cet effet, `undefined` sinon | lecture | non spécifié |
+| `addExternalUrl(session, label, url)` | un lien sur la session ; rien si la session a déjà cette URL | n'écrit rien | non spécifié |
 
 ## Idempotence
 
-Les écritures rejouables sans dommage sont celles qui écrivent un état final : `moveTo` et `setLabels`. `comment`, `activity` et `ensureSession` ne le sont pas aujourd'hui : un rejeu écrit en double. La cible est dans ORC-162 (commentaire marqué `<!-- factory:effect=<id> -->`, cherché avant d'écrire, par une nouvelle méthode du port) et ORC-160 (ingestion). La suite ne vérifie que ce que le port promet aujourd'hui ; elle gagnera ces cas avec ces tickets.
+Les écritures rejouables sans dommage sont celles qui écrivent un état final : `moveTo`, `setLabels` et `addExternalUrl`. `comment` et `activity` d'un effet de l'outbox sont clés par l'id de l'effet (ORC-162) : le moteur cherche avec `findComment` / `findActivity` avant d'écrire, et un rejeu n'écrit rien. Sans `effectId` (avis de reprise, réponses hors outbox, relais du flux d'un run), ou pour `ensureSession`, un rejeu écrit en double. Le détail, et ce que l'API Linear permet, est dans [Idempotence des effets externes](../idempotence.md) ; ces cas sont testés par `test/scenarios/idempotency.test.ts` et `linear/tracker.test.ts`, pas encore par la suite de conformité (ORC-189).
 
 ## Fencing
 

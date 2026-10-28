@@ -104,22 +104,39 @@ export class FakeTracker implements Tracker {
     i.stateName = stateName;
   }
 
+  /** As the Linear adapter: a write only when the labels change, so a replay records nothing (ORC-162). */
   async setLabels(identifier: string, add: string[], remove: string[]): Promise<void> {
-    this.record('setLabels', identifier, add, remove);
     const i = this.must(identifier);
-    i.labels = [...new Set([...i.labels.filter((l) => !remove.includes(l)), ...add])];
+    const next = [...new Set([...i.labels.filter((l) => !remove.includes(l)), ...add])];
+    if (next.length === i.labels.length && next.every((l) => i.labels.includes(l))) return;
+    this.record('setLabels', identifier, add, remove);
+    i.labels = next;
   }
 
-  async comment(identifier: string, body: string): Promise<void> {
+  /** The effect id, when given, is recorded after the body: `comments()` reads the bodies as written by the factory. */
+  async comment(identifier: string, body: string, effectId?: string): Promise<void> {
     this.must(identifier);
-    this.record('comment', identifier, body);
+    this.record('comment', identifier, body, ...(effectId === undefined ? [] : [effectId]));
   }
 
-  async activity(sessionId: string, a: ActivityInput): Promise<void> {
-    this.record('activity', sessionId, a);
+  async findComment(identifier: string, effectId: string): Promise<string | undefined> {
+    this.must(identifier);
+    const n = this.argsOf('comment', identifier).findIndex(([, e]) => e === effectId);
+    return n < 0 ? undefined : `comment-${identifier}-${n + 1}`;
   }
 
+  async activity(sessionId: string, a: ActivityInput, effectId?: string): Promise<void> {
+    this.record('activity', sessionId, a, ...(effectId === undefined ? [] : [effectId]));
+  }
+
+  async findActivity(sessionId: string, effectId: string): Promise<string | undefined> {
+    const n = this.argsOf('activity', sessionId).findIndex(([, e]) => e === effectId);
+    return n < 0 ? undefined : `activity-${sessionId}-${n + 1}`;
+  }
+
+  /** As the Linear adapter: a URL the session already links is not added again. */
   async addExternalUrl(sessionId: string, label: string, url: string): Promise<void> {
+    if (this.externalUrls(sessionId).some((l) => l.url === url)) return;
     this.record('addExternalUrl', sessionId, label, url);
   }
 

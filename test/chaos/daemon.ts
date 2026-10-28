@@ -10,15 +10,19 @@
  *
  * Each visible call to the fake tracker and runner is appended to `<calls>` (JSON lines) as it acts,
  * attributed to the outbox row being executed (`faults.ts`): the file outlives the process, so the
- * driver sees every effect any life made, the one cut by SIGKILL included.
+ * driver sees every effect any life made, the one cut by SIGKILL included. The same file is the
+ * memory of the fake Linear: a life starts with the comments, activities, links, labels and statuses
+ * the earlier lives wrote, as the real Linear keeps them across a restart of the daemon, so that a
+ * replayed effect finds what its first execution wrote (ORC-162).
  *
  *   node --import tsx test/chaos/daemon.ts <sqlite file | postgres://…> <calls> <life> <now> <tickets>
  */
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync } from 'node:fs';
 import { FakeClock } from '../../src/core/clock.js';
 import type { FactoryEvent } from '../../src/core/types.js';
+import type { FakeTracker } from '../../src/adapters/tracker/fake.js';
 import { TimerService } from '../../src/runtime/timers.js';
-import { Faults } from '../helpers/faults.js';
+import { Faults, type VisibleCall } from '../helpers/faults.js';
 import { CRASH_WORKFLOW } from '../helpers/crash-workflow.js';
 import { createHarness } from '../helpers/harness.js';
 import { storeAt } from '../helpers/store-at.js';
@@ -42,6 +46,17 @@ const h = createHarness({
   effectRetry: { attempts: 8, baseMs: 10, capMs: 100 },
 });
 for (const id of ticketIds(Number(tickets))) h.tracker.addIssue({ identifier: id, title: `Ticket ${id}` });
+/** The tracker writes of the earlier lives, played again on this life's fake (the raw one: not recorded again). */
+const REMEMBERED = new Set(['comment', 'activity', 'addExternalUrl', 'setLabels', 'moveTo']);
+if (existsSync(callsFile)) {
+  for (const line of readFileSync(callsFile, 'utf8').split('\n')) {
+    if (!line) continue;
+    const call = JSON.parse(line) as VisibleCall;
+    if (!REMEMBERED.has(call.method)) continue;
+    const write = h.tracker[call.method as keyof FakeTracker] as (...args: unknown[]) => Promise<unknown>;
+    await write.apply(h.tracker, JSON.parse(call.detail) as unknown[]);
+  }
+}
 // Runs that last a few tens of milliseconds, so that kills cut some of them; no text from them: the
 // relay posts nothing, and each visible activity is an effect's.
 h.runner.enqueue(...Array.from({ length: 10_000 }, () => ({ events: [], hold: true })));

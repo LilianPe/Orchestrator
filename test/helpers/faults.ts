@@ -393,7 +393,7 @@ export async function checkChain(
     const line = `${first.method} ×${group.length} for ${first.row} (${first.kind}) in lives ${group.map((c) => c.life).join(', ')}: ${first.detail}`;
     // A dev run launched twice is never the outbox's at-least-once: recover() blocks a ticket whose
     // run was cut, and the start taken up again is refused. A question's run blocks nothing: its
-    // start taken up again launches it again, until a start is idempotent (ORC-162).
+    // start taken up again launches it again when the kill fell before its mark (ORC-277).
     const question = group.every((c) => c.queue === 'questions');
     if (first.method === 'start' && !question) violations.push(`run launched twice: ${line}`);
     else atLeastOnce.push(line);

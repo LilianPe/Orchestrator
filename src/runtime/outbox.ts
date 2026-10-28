@@ -1,4 +1,4 @@
-import { LEASE_MS, type OutboxRow, type Store } from '../store/types.js';
+import { LEASE_MS, type EffectOutcome, type OutboxRow, type Store } from '../store/types.js';
 
 /** Lease of a claimed outbox row, renewed every third of it while its effect runs (ORC-129: 60 s, renewed every 20 s). */
 export const EFFECT_LEASE_MS = LEASE_MS;
@@ -24,8 +24,11 @@ export function effectBackoff(attempt: number, retry: EffectRetry = EFFECT_RETRY
 export interface OutboxExecutorDeps {
   store: Store;
   log: (level: 'info' | 'warn' | 'error', message: string) => void;
-  /** Carries out one outbox row (the adapters behind it). Throws when the effect failed. */
-  execute(row: OutboxRow): Promise<void>;
+  /**
+   * Carries out one outbox row (the adapters behind it). Throws when the effect failed. May tell
+   * that it found the effect already made by an earlier execution (ORC-162): its result says so.
+   */
+  execute(row: OutboxRow): Promise<EffectOutcome | void>;
   /** A row went back to `pending` for its retry in `delayMs`: whoever polls should look again then. */
   retryIn(delayMs: number): void;
   leaseMs?: number;
@@ -47,7 +50,8 @@ export interface OutboxExecutorDeps {
  *   decision blocks the ticket. All of it in one transaction: nothing of it is kept in memory.
  *
  * At least once: an effect cut after it acted (a crash, a lost lease) runs again under its next
- * claim. Making each external effect idempotent is ORC-162.
+ * claim. Each external effect is idempotent, keyed by the row id (ORC-162, docs/idempotence.md): a
+ * replay that finds it already made writes nothing and settles as done, `deduplicated`.
  */
 export class OutboxExecutor {
   readonly leaseMs: number;
@@ -90,8 +94,9 @@ export class OutboxExecutor {
     }, Math.max(1, Math.floor(this.leaseMs / 3)));
     renew.unref();
     let failure: Error | undefined;
+    let outcome: EffectOutcome | undefined;
     try {
-      await this.d.execute(row);
+      outcome = (await this.d.execute(row)) ?? undefined;
     } catch (err) {
       // A non-Error throw still has a message to store and to report.
       failure = err instanceof Error ? err : new Error(String(err));
@@ -100,7 +105,7 @@ export class OutboxExecutor {
     }
     // Settled only under this claim: a worker that lost its lease leaves the row to its new holder.
     if (!failure) {
-      if (await store.completeEffect(row.id, lease, this.d.now?.())) return 'done';
+      if (await store.completeEffect(row.id, lease, this.d.now?.(), outcome)) return 'done';
       this.d.log('warn', `effect ${row.id} done, but its lease went to another worker: not settled here`);
       return 'lost';
     }

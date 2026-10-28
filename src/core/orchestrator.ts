@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import type { Forge } from '../adapters/forge/types.js';
 import type { RunHandle, RunResult, Runner } from '../adapters/runner/types.js';
 import { ActivityRelay } from '../adapters/tracker/activity-relay.js';
-import type { Tracker } from '../adapters/tracker/types.js';
+import type { ActivityInput, Tracker } from '../adapters/tracker/types.js';
 import type { WorkspaceManager } from '../adapters/workspace/types.js';
 import type { JobSpec, Workflow } from '../config/workflow-schema.js';
 import type { EffectRetry } from '../runtime/outbox.js';
@@ -13,6 +13,7 @@ import {
   LEASE_MS,
   type DecisionOutcome,
   type DecisionRequest,
+  type EffectOutcome,
   type OutboxRow,
   type RunRecord,
   type Store,
@@ -107,6 +108,14 @@ interface StartOpts {
 }
 
 const ECHO_MS = 60_000;
+/** The `meta` key of the installation's id (`instanceId`). */
+const INSTANCE_KEY = 'instance-id';
+
+/** An outbox effect's idempotency key (ORC-162): `<ticket:seq:i>@<installation>`, and whether the row runs again. */
+interface EffectKey {
+  id: string;
+  replay: boolean;
+}
 
 export function logicalFromName(states: Record<LogicalState, string>, name: string): LogicalState | undefined {
   return (Object.entries(states) as [LogicalState, string][]).find(([, n]) => n === name)?.[0];
@@ -145,6 +154,7 @@ export class Orchestrator {
   private admitting: Record<QueueName, number> = { dev: 0, questions: 0 };
   /** Drains run one at a time. */
   private draining: Promise<void> = Promise.resolve();
+  private instance: Promise<string> | undefined;
 
   constructor(private d: OrchestratorDeps) {
     this.newId = d.newId ?? randomUUID;
@@ -503,7 +513,7 @@ export class Orchestrator {
    * throws when the effect failed. The executor retries it, then lets it die; its result comes back
    * through the inbox (`effect:<id>`), and a dead one blocks the ticket by `decide`.
    */
-  private async execute(row: OutboxRow): Promise<void> {
+  private async execute(row: OutboxRow): Promise<EffectOutcome | void> {
     const project = await this.runtimeFor(row.projectId, row.ticketId);
     if (!project) return;
     const effect = row.effect;
@@ -512,7 +522,30 @@ export class Orchestrator {
       return;
     }
     this.d.bus.publish({ kind: 'command', projectId: project.id, ticketId: row.ticketId, command: effect });
-    await this.exec(project, row.ticketId, effect);
+    const key: EffectKey = { id: `${row.id}@${await this.instanceId()}`, replay: row.attempts > 1 };
+    const outcome = await this.exec(project, row.ticketId, effect, key);
+    if (outcome?.deduplicated) this.log('info', `effect ${row.id} (${effect.kind}) already made${outcome.ref ? ` (${outcome.ref})` : ''}: not written again`);
+    return outcome;
+  }
+
+  /**
+   * This installation's id, drawn once and kept in the store: it salts the keys of the effects
+   * written outside (ORC-162), so that another instance on the same Linear workspace, or this one
+   * after its journal restarted from zero, never takes an effect of its own for one of theirs.
+   */
+  private instanceId(): Promise<string> {
+    this.instance ??= (async () => {
+      const known = await this.d.store.getMeta(INSTANCE_KEY);
+      if (known) return known;
+      await this.d.store.setMeta(INSTANCE_KEY, randomUUID().replaceAll('-', '').slice(0, 12));
+      // Read back: of two daemons starting together on one store, both keep the one written last.
+      return (await this.d.store.getMeta(INSTANCE_KEY))!;
+    })().catch((err: unknown) => {
+      // Not kept: the next effect reads the store again.
+      this.instance = undefined;
+      throw err;
+    });
+    return this.instance;
   }
 
   private async settle(project: ProjectRuntime, ticketId: string): Promise<void> {
@@ -583,7 +616,12 @@ export class Orchestrator {
     }
   }
 
-  private async exec(project: ProjectRuntime, ticketId: string | undefined, c: Effect): Promise<void> {
+  /**
+   * `key`: the idempotency key of the effect (ORC-162, docs/idempotence.md). Only a replay (a row
+   * claimed before) looks for what an earlier execution wrote: a first execution has nothing to find.
+   * A replay that finds the effect already made writes nothing and says so.
+   */
+  private async exec(project: ProjectRuntime, ticketId: string | undefined, c: Effect, key: EffectKey): Promise<EffectOutcome | void> {
     const { store, tracker, clock } = this.d;
     if (c.kind === 'set_paused') {
       await store.setMeta('paused', c.paused ? '1' : '0');
@@ -596,9 +634,17 @@ export class Orchestrator {
     if (!ticketId) return;
     const t = await this.ticket(project.id, ticketId);
     switch (c.kind) {
-      case 'start_run':
+      case 'start_run': {
+        // Marked once the start is handled (launched, set pending or queued): a replay (a lost lease)
+        // must not set the same start pending behind it, which would call the model a second time.
+        // A crash between the start and this mark kills the run too: recover() blocks the ticket, and a
+        // replayed dev start is refused on it.
+        const mark = `effect:${key.id}:started`;
+        if (key.replay && (await store.getMeta(mark)) !== undefined) return { deduplicated: true };
         await this.startRun(project, ticketId, c);
+        await store.setMeta(mark, '1');
         return;
+      }
       case 'stop_run': {
         if (c.linearSessionId) {
           for (const r of await store.runsByStatus('running')) {
@@ -635,18 +681,21 @@ export class Orchestrator {
         await tracker.setLabels(ticketId, c.add, c.remove);
         return;
       }
-      case 'comment':
-        return tracker.comment(ticketId, c.body);
+      case 'comment': {
+        const found = key.replay ? await tracker.findComment(ticketId, key.id) : undefined;
+        if (found !== undefined) return { deduplicated: true, ref: found };
+        return tracker.comment(ticketId, c.body, key.id);
+      }
       case 'activity': {
         const fromRun = c.runId ? (await store.getRun(c.runId))?.linearSessionId : undefined;
         const session = c.linearSessionId ?? fromRun ?? (await this.sessionFor(t));
-        return tracker.activity(session, { type: c.type, body: c.body });
+        return this.activityOnce(session, { type: c.type, body: c.body }, key);
       }
       case 'post_output': {
         const run = await store.getRun(c.runId);
         if (!run) return;
         const session = run.linearSessionId ?? (await this.sessionFor(t));
-        return tracker.activity(session, { type: 'response', body: run.lastText.trim() || 'Terminé.' });
+        return this.activityOnce(session, { type: 'response', body: run.lastText.trim() || 'Terminé.' }, key);
       }
       case 'link_pr':
         if (t.linearSessionId) await tracker.addExternalUrl(t.linearSessionId, 'Pull request', c.url);
@@ -656,6 +705,13 @@ export class Orchestrator {
         await this.apply(await this.ticket(project.id, ticketId), { type: 'workspace.released' });
         return;
     }
+  }
+
+  /** An activity of an outbox effect, written unless its first execution already wrote it (ORC-162). */
+  private async activityOnce(session: string, a: ActivityInput, key: EffectKey): Promise<EffectOutcome | void> {
+    const found = key.replay ? await this.d.tracker.findActivity(session, key.id) : undefined;
+    if (found !== undefined) return { deduplicated: true, ref: found };
+    await this.d.tracker.activity(session, a, key.id);
   }
 
   private async sessionFor(t: TicketState): Promise<string> {
