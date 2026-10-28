@@ -70,10 +70,12 @@ function pullRequest(body: any, t: TicketState): Draft[] {
   const out = opened(t, payload);
   if (body.action === 'closed') {
     // Per closing, so that a PR reopened then closed again is cancelled again; `PrPoller` keeps `:closed`.
-    // The merge commit and the head merged: what a revert on the default branch names (ORC-278).
+    // The merge commit and the head merged, what a revert on the default branch names, and when GitHub merged it (ORC-278).
+    const mergedAt = Date.parse(pr.merged_at);
     const shas = {
       ...(typeof pr.merge_commit_sha === 'string' ? { mergeSha: pr.merge_commit_sha } : {}),
       headSha: pr.head.sha,
+      ...(Number.isFinite(mergedAt) ? { mergedAt } : {}),
     };
     out.push(
       pr.merged
@@ -155,67 +157,108 @@ function push(body: any, t: TicketState, branch: string): Draft[] {
   ];
 }
 
-/** Subject of the commit GitHub writes when it merges PR `#n`: `Merge pull request #n from …`, or `<title> (#n)` for a squash. */
-const MERGED_PR = /^Merge pull request #(\d+) from |\(#(\d+)\)$/;
+/** Subjects GitHub writes when it merges PR `#n`: a merge commit, or `<title> (#n)` for a squash. */
+const MERGE_COMMIT = /^Merge pull request #(\d+) from /;
+const SQUASH = /\(#(\d+)\)$/;
 /** `git revert`, and the revert GitHub's button commits: `This reverts commit <full sha>`. */
 const REVERTS_SHA = /\bThis reverts commit ([0-9a-f]{40})\b/gi;
 /** The body of a PR opened by GitHub's revert button, kept in its squash commit: `Reverts owner/name#n`. */
 const REVERTS_PR = /^Reverts ([\w.-]+\/[\w.-]+)#(\d+)\b/gm;
 
 type TicketPr = { ticket: TicketState; number: number };
+type Commit = { sha: string; message: string; author: string; byGithub: boolean };
+/**
+ * How a commit lands a factory PR: `merge`, a merge commit, brings the PR's own commits along; `rebase`,
+ * found by its journaled merge or head commit, is one of them; `squash` is alone.
+ */
+type Landing = TicketPr & { how: 'merge' | 'squash' | 'rebase' };
 
-/** The tracked ticket and PR a commit of the default branch lands, when known: by its subject, else by the journaled merges. */
-async function landedPr(repo: string, c: { sha: string; message: string }, ctx: GithubMapContext): Promise<TicketPr | undefined> {
-  const m = MERGED_PR.exec(c.message.split('\n', 1)[0]!.trim());
-  if (m) {
-    const number = Number(m[1] ?? m[2]);
-    const ticket = await ctx.ticketForPr(repo, number);
-    if (ticket) return { ticket, number };
-  }
-  return ctx.mergedPrOf(repo, c.sha);
+/** `f`, asked once per key. */
+function once<K, V>(f: (k: K) => Promise<V>): (k: K) => Promise<V> {
+  const asked = new Map<K, Promise<V>>();
+  return (k) => {
+    let v = asked.get(k);
+    if (!v) asked.set(k, (v = f(k)));
+    return v;
+  };
 }
 
-/** The tracked tickets and merged PRs a commit's message says it reverts. */
-async function revertedPrs(repo: string, message: string, ctx: GithubMapContext): Promise<TicketPr[]> {
-  const out: TicketPr[] = [];
+/** The lookups of one push, each asked once however many commits name the same PR or SHA. */
+function memo(repo: string, ctx: GithubMapContext) {
+  return { ticketForPr: once((n: number) => ctx.ticketForPr(repo, n)), mergedPrOf: once((sha: string) => ctx.mergedPrOf(repo, sha)) };
+}
+type Lookups = ReturnType<typeof memo>;
+
+/**
+ * The tracked ticket and PR a commit of the default branch lands, when known: by the subject GitHub wrote
+ * (committed by GitHub itself, `web-flow`: a subject a human or an agent typed is not read), else by the
+ * journaled merge or head commit of the PR.
+ */
+async function landing(c: Commit, look: Lookups): Promise<Landing | undefined> {
+  const subject = c.message.split('\n', 1)[0]!.trim();
+  const merge = c.byGithub ? MERGE_COMMIT.exec(subject) : null;
+  const squash = c.byGithub && !merge ? SQUASH.exec(subject) : null;
+  const n = merge?.[1] ?? squash?.[1];
+  if (n !== undefined) {
+    const ticket = await look.ticketForPr(Number(n));
+    if (ticket) return { ticket, number: Number(n), how: merge ? 'merge' : 'squash' };
+  }
+  const found = await look.mergedPrOf(c.sha);
+  return found && { ...found, how: 'rebase' };
+}
+
+/** The tracked tickets and merged PRs a commit's message says it reverts, each once. */
+async function revertedPrs(repo: string, message: string, look: Lookups): Promise<TicketPr[]> {
+  const out = new Map<string, TicketPr>();
+  const keep = (pr: TicketPr) => out.set(`${pr.ticket.projectId}:${pr.ticket.ticketId}:${pr.number}`, pr);
   for (const [, sha] of message.matchAll(REVERTS_SHA)) {
-    const found = await ctx.mergedPrOf(repo, sha!.toLowerCase());
-    if (found) out.push(found);
+    const found = await look.mergedPrOf(sha!.toLowerCase());
+    if (found) keep(found);
   }
   for (const [, named, n] of message.matchAll(REVERTS_PR)) {
     if (named!.toLowerCase() !== repo.toLowerCase()) continue;
-    const ticket = await ctx.ticketForPr(repo, Number(n));
-    if (ticket) out.push({ ticket, number: Number(n) });
+    const ticket = await look.ticketForPr(Number(n));
+    if (ticket) keep({ ticket, number: Number(n) });
   }
-  return out;
+  return [...out.values()];
 }
 
 /**
  * A push on the repository's default branch (ORC-278): one `default_branch.pushed` per tracked ticket it
  * concerns, with the commits that land its PR (`merges`) or revert one of its merged PRs (`reverts`).
- * A push that lands a factory PR carries that PR's own commits, written by the agent: no revert is read
- * in it. The messages are kept as written; only the numbers resolved here are measured.
+ * A commit that lands a factory PR is the agent's work (a squash keeps its commit messages): no revert
+ * is read in it. A merge commit or a rebase of a factory PR brings that PR's own commits along: no
+ * revert is read in the whole push. The messages are kept as written; only the numbers resolved here
+ * are measured.
  */
 async function defaultBranchPush(body: any, repo: string, ctx: GithubMapContext): Promise<Mapped> {
   if (body.deleted || typeof body.after !== 'string' || !Array.isArray(body.commits)) return NOTHING;
-  const commits = (body.commits as any[])
+  const commits: Commit[] = (body.commits as any[])
     .filter((c) => typeof c?.id === 'string' && typeof c.message === 'string')
-    .map((c) => ({ sha: c.id as string, message: c.message as string, author: String(c.author?.username ?? c.author?.name ?? 'inconnu') }));
+    .map((c) => ({
+      sha: c.id,
+      message: c.message,
+      author: String(c.author?.username ?? c.author?.name ?? 'inconnu'),
+      byGithub: c.committer?.username === 'web-flow',
+    }));
+  const look = memo(repo, ctx);
   const concerned = new Map<string, { ticket: TicketState; commits: PushedCommit[] }>();
-  const add = ({ ticket }: TicketPr, commit: PushedCommit) => {
+  const add = ({ ticket }: TicketPr, { byGithub: _, ...c }: Commit, relation: Pick<PushedCommit, 'merges' | 'reverts'>) => {
     const key = `${ticket.projectId}:${ticket.ticketId}`;
     const entry = concerned.get(key) ?? { ticket, commits: [] };
-    entry.commits.push(commit);
+    entry.commits.push({ ...c, ...relation });
     concerned.set(key, entry);
   };
-  const landed: [typeof commits[number], TicketPr][] = [];
+  const landed = new Map<string, Landing>();
   for (const c of commits) {
-    const pr = await landedPr(repo, c, ctx);
-    if (pr) landed.push([c, pr]);
+    const pr = await landing(c, look);
+    if (pr) landed.set(c.sha, pr);
   }
-  for (const [c, pr] of landed) add(pr, { ...c, merges: pr.number });
-  if (landed.length === 0) {
-    for (const c of commits) for (const pr of await revertedPrs(repo, c.message, ctx)) add(pr, { ...c, reverts: pr.number });
+  const bringsAgentCommits = [...landed.values()].some((l) => l.how !== 'squash');
+  for (const c of commits) {
+    const pr = landed.get(c.sha);
+    if (pr) add(pr, c, { merges: pr.number });
+    else if (!bringsAgentCommits) for (const reverted of await revertedPrs(repo, c.message, look)) add(reverted, c, { reverts: reverted.number });
   }
   const pushedAt = typeof body.repository?.pushed_at === 'number' ? body.repository.pushed_at * 1000 : undefined;
   const branch = String(body.ref).slice('refs/heads/'.length);
@@ -233,14 +276,13 @@ async function defaultBranchPush(body: any, repo: string, ctx: GithubMapContext)
 /**
  * A completed attempt of a workflow run on a tracked ticket's branch (ORC-278), for its CI cost. Its
  * duration is `run_started_at` (start of this attempt) to `updated_at` (its completion, on this
- * webhook): the webhook carries both, so no API call is made. A run of a fork, whose branch may bear a
- * ticket's name, is not the factory's CI.
+ * webhook): the webhook carries both, so no API call is made.
  */
 async function workflowRun(body: any, repo: string, ctx: GithubMapContext): Promise<Mapped> {
   const run = body.workflow_run;
   if (body.action !== 'completed' || typeof run?.id !== 'number' || typeof run.head_branch !== 'string' || typeof run.head_sha !== 'string') return NOTHING;
-  const from = run.head_repository?.full_name;
-  if (typeof from === 'string' && from.toLowerCase() !== repo.toLowerCase()) return NOTHING;
+  // A run of a fork (or of a deleted one, `head_repository: null`), whose branch may bear a ticket's name, is not the factory's CI.
+  if (String(run.head_repository?.full_name).toLowerCase() !== repo.toLowerCase()) return NOTHING;
   const startedAt = Date.parse(run.run_started_at);
   const completedAt = Date.parse(run.updated_at);
   if (!Number.isFinite(startedAt) || !Number.isFinite(completedAt) || completedAt < startedAt) return NOTHING;
@@ -248,7 +290,8 @@ async function workflowRun(body: any, repo: string, ctx: GithubMapContext): Prom
   if (!ticket) return NOTHING;
   const attempt = typeof run.run_attempt === 'number' ? run.run_attempt : 1;
   const listed = (Array.isArray(run.pull_requests) ? run.pull_requests : []).find((p: any) => typeof p?.number === 'number' && p.head?.ref === run.head_branch);
-  const number: number | undefined = listed?.number ?? ticket.prNumber;
+  // Without a PR listed by GitHub, the ticket's PR if it is open: a closed one is not what the run tests.
+  const number: number | undefined = listed?.number ?? (ticket.prState === 'OPEN' ? ticket.prNumber : undefined);
   const payload: CiRunPayload = {
     ...(number === undefined ? {} : { number }),
     branch: run.head_branch,

@@ -73,11 +73,15 @@ export interface TicketMeasures {
   humanReviewMinutes: null;
   /**
    * A merged PR of the ticket reverted on the default branch within 14 days of its merge (ORC-278): a
-   * `default_branch.pushed` commit that reverts it, timed by the push (`pushedAt`, else when the factory
-   * received it). Null while not merged, and while no push of the default branch concerning the ticket is
-   * in the journal (its merge commit or a revert): without that source, `false` would be a guess.
+   * `default_branch.pushed` commit that reverts it, timed by the push (`pushedAt`) against GitHub's merge
+   * time (`mergedAt`), both on GitHub's clock (else when the factory received each). Null while not
+   * merged, and while no push of the default branch concerning the ticket is in the journal (its merge
+   * commit or a revert): without that source, `false` would be a guess. `false` is final only from
+   * `revertWindowEndsAt`.
    */
   revertedWithin14Days: boolean | null;
+  /** End of the 14 days after the first merge (`mergedAt` of GitHub, else of the journal); null while not merged. */
+  revertWindowEndsAt: number | null;
   /** CI cost of the ticket (ORC-278): the durations of its workflow run attempts. Null while none is in the journal. */
   ciCost: CiCost | null;
   messages: MessageMeasure[];
@@ -98,10 +102,13 @@ const REVERT_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
  * Whether a merged PR of the ticket was reverted within 14 days of its merge (ORC-278); null without a
  * push of the default branch about the ticket. Reads the numbers the ingestion resolved, never a message.
  */
+/** When a PR was merged: GitHub's time when the source read it, else when the factory received the merge. */
+const mergeTime = (e: FactoryEvent<'pr.merged'>): number => e.payload.mergedAt ?? e.at;
+
 function revertedWithin14Days(events: FactoryEvent[], mergedAt: number | null): boolean | null {
   if (mergedAt === null) return null;
   const merged = new Map<number, number>();
-  for (const e of events) if (e.type === 'pr.merged' && !merged.has(e.payload.number)) merged.set(e.payload.number, e.at);
+  for (const e of events) if (e.type === 'pr.merged' && !merged.has(e.payload.number)) merged.set(e.payload.number, mergeTime(e));
   let seen = false;
   for (const e of events) {
     if (e.type !== 'default_branch.pushed') continue;
@@ -214,12 +221,16 @@ export function ticketMeasures(projectId: string, ticketId: string, facts: Measu
   // projection knows.
   let ticket: TicketState = { ...newTicketState(projectId, ticketId, '', 'todo', 0), linearSessionId: facts.devSession };
   let mergedAt: number | null = null;
+  let firstMerge: FactoryEvent<'pr.merged'> | undefined;
   const reworks: Rework[] = [];
   const messages: { m: Message; kind: MessageKind }[] = [];
   for (const e of events) {
     ticket = reduce(ticket, e) ?? ticket;
     if (mergedAt === null) {
-      if (e.type === 'pr.merged') mergedAt = e.at;
+      if (e.type === 'pr.merged') {
+        mergedAt = e.at;
+        firstMerge = e;
+      }
       const r = rework(e, ticket);
       if (r) reworks.push(r);
     }
@@ -240,6 +251,7 @@ export function ticketMeasures(projectId: string, ticketId: string, facts: Measu
     reworks: mergedAt === null ? [] : reworks,
     humanReviewMinutes: null,
     revertedWithin14Days: revertedWithin14Days(events, mergedAt),
+    revertWindowEndsAt: firstMerge ? mergeTime(firstMerge) + REVERT_WINDOW_MS : null,
     ciCost: ciCost(events),
     messages: messages.map(({ m, kind }) => messageMeasure(m, kind, outs, facts.acks[m.id])),
   };

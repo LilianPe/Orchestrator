@@ -994,7 +994,8 @@
           "url": "https://github.com/acme/app/pull/3",
           "branch": "factory/rel-1-export-csv",
           "mergeSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-          "headSha": "head1"
+          "headSha": "head1",
+          "mergedAt": 1791622800000
         }
       },
       "decision": {

@@ -158,24 +158,27 @@ describe('mapGithubWebhook', () => {
   });
 
   it('records the merge commit and the head of a merged PR, which a revert names (ORC-278)', async () => {
-    const [, merged] = await mapGithubWebhook('pull_request', pullRequestBody('closed', { merged: true, mergeSha: sha('a') }), ctx());
-    expect(merged).toMatchObject({ type: 'pr.merged', payload: { number: 3, mergeSha: sha('a'), headSha: 'head1' } });
+    const body = pullRequestBody('closed', { merged: true, mergeSha: sha('a'), mergedAt: '2026-10-28T09:59:00Z' });
+    const [, merged] = await mapGithubWebhook('pull_request', body, ctx());
+    expect(merged).toMatchObject({ type: 'pr.merged', payload: { number: 3, mergeSha: sha('a'), headSha: 'head1', mergedAt: Date.parse('2026-10-28T09:59:00Z') } });
   });
 
   describe('push on the default branch (ORC-278)', () => {
     const t = tracked({ prNumber: 3, prState: 'MERGED' });
     const merges = { [sha('a')]: 3, head1: 3 };
 
-    it("maps the commit that lands the ticket's PR, by its subject or its journaled merge commit", async () => {
-      const squash = await mapGithubWebhook('push', defaultPushBody(sha('a'), [{ id: sha('a'), message: 'Export CSV (#3)\n\n* commit' }]), ctx(t));
+    it("maps the commit that lands the ticket's PR, by the subject GitHub wrote or its journaled merge commit", async () => {
+      const squash = await mapGithubWebhook('push', defaultPushBody(sha('a'), [{ id: sha('a'), message: 'Export CSV (#3)\n\n* commit', byGithub: true }]), ctx(t));
       expect(squash).toEqual([
         {
           id: `default-branch:REL-1:${sha('a')}`, type: 'default_branch.pushed', at: 5, projectId: 'p', ticketId: 'REL-1', schemaVersion: SCHEMA_VERSION, taint: 'untrusted',
           payload: { branch: 'main', before: 'b0', after: sha('a'), pushedAt: 1_800_000_000_000, commits: [{ sha: sha('a'), message: 'Export CSV (#3)\n\n* commit', author: 'armand', merges: 3 }] },
         },
       ]);
-      const merge = await mapGithubWebhook('push', defaultPushBody(sha('a'), [{ id: sha('a'), message: `Merge pull request #3 from acme/${BRANCH}` }]), ctx(t));
+      const merge = await mapGithubWebhook('push', defaultPushBody(sha('a'), [{ id: sha('a'), message: `Merge pull request #3 from acme/${BRANCH}`, byGithub: true }]), ctx(t));
       expect(merge[0]?.payload).toMatchObject({ commits: [{ merges: 3 }] });
+      // The same subject typed by someone else than GitHub lands nothing.
+      expect(await mapGithubWebhook('push', defaultPushBody(sha('a'), [{ id: sha('a'), message: 'Export CSV (#3)' }]), ctx(t))).toEqual([]);
       // A rebase merge: no PR in the subject, the journaled merge commit names it.
       const rebased = await mapGithubWebhook('push', defaultPushBody(sha('a'), [{ id: sha('a'), message: 'feat: export' }]), ctx(t, undefined, merges));
       expect(rebased[0]?.payload).toMatchObject({ commits: [{ sha: sha('a'), merges: 3 }] });
@@ -186,8 +189,12 @@ describe('mapGithubWebhook', () => {
       expect(await mapGithubWebhook('push', gitRevert, ctx(t, undefined, merges))).toMatchObject([
         { id: `default-branch:REL-1:${sha('b')}`, type: 'default_branch.pushed', taint: 'untrusted', payload: { commits: [{ sha: sha('b'), reverts: 3 }] } },
       ]);
-      const button = defaultPushBody(sha('c'), [{ id: sha('c'), message: 'Revert "Export CSV" (#9)\n\nReverts acme/app#3' }]);
+      const button = defaultPushBody(sha('c'), [{ id: sha('c'), message: 'Revert "Export CSV" (#9)\n\nReverts acme/app#3', byGithub: true }]);
       expect(await mapGithubWebhook('push', button, ctx(t))).toMatchObject([{ payload: { commits: [{ reverts: 3 }] } }]);
+      // Both forms in one message: the commit is listed once.
+      const both = defaultPushBody(sha('c'), [{ id: sha('c'), message: `Revert "Export CSV" (#9)\n\nReverts acme/app#3\nThis reverts commit ${sha('a')}.`, byGithub: true }]);
+      expect((await mapGithubWebhook('push', both, ctx(t, undefined, merges)))[0]?.payload).toMatchObject({ commits: [{ sha: sha('c'), reverts: 3 }] });
+      expect(((await mapGithubWebhook('push', both, ctx(t, undefined, merges)))[0]?.payload as { commits: unknown[] }).commits).toHaveLength(1);
       const unrelated = defaultPushBody(sha('d'), [
         { id: sha('d'), message: `Revert "fix"\n\nThis reverts commit ${sha('e')}.` },
         { id: sha('f'), message: 'Revert "x" (#9)\n\nReverts evil/app#3' },
@@ -196,14 +203,26 @@ describe('mapGithubWebhook', () => {
       expect(await mapGithubWebhook('push', unrelated, ctx(t, undefined, merges))).toEqual([]);
     });
 
-    it("reads no revert in a push that lands a factory PR: that PR's commits are the agent's", async () => {
+    const other = tracked({ ticketId: 'REL-2', prNumber: 4, branch: 'factory/rel-2-x' });
+    const two: GithubMapContext = { ...ctx(t, undefined, merges), ticketForPr: async (_r, n) => (n === 4 ? other : n === 3 ? t : undefined) };
+
+    it("reads no revert in a push that merges a factory PR with a merge commit: that PR's commits are the agent's", async () => {
       const landing = defaultPushBody(sha('2'), [
         { id: sha('3'), message: `chore: undo\n\nThis reverts commit ${sha('a')}.`, author: 'factory' },
-        { id: sha('2'), message: 'Merge pull request #4 from acme/factory/rel-2-x' },
+        { id: sha('2'), message: 'Merge pull request #4 from acme/factory/rel-2-x', byGithub: true },
       ]);
-      const other = tracked({ ticketId: 'REL-2', prNumber: 4, branch: 'factory/rel-2-x' });
-      const both: GithubMapContext = { ...ctx(t, undefined, merges), ticketForPr: async (_r, n) => (n === 4 ? other : n === 3 ? t : undefined) };
-      expect(await mapGithubWebhook('push', landing, both)).toMatchObject([{ ticketId: 'REL-2', payload: { commits: [{ sha: sha('2'), merges: 4 }] } }]);
+      expect(await mapGithubWebhook('push', landing, two)).toMatchObject([{ ticketId: 'REL-2', payload: { commits: [{ sha: sha('2'), merges: 4 }] } }]);
+    });
+
+    it("reads no revert in the squash of a factory PR, which keeps the agent's messages, but still in the other commits of the push", async () => {
+      const squash = { id: sha('2'), message: `Export (#4)\n\n* chore: undo\n\nThis reverts commit ${sha('a')}.`, byGithub: true };
+      expect(await mapGithubWebhook('push', defaultPushBody(sha('2'), [squash]), two)).toMatchObject([{ ticketId: 'REL-2', payload: { commits: [{ merges: 4 }] } }]);
+      // A human pushing a revert with a cherry-pick whose subject names another PR: the cherry-pick lands nothing, the revert counts.
+      const direct = defaultPushBody(sha('4'), [
+        { id: sha('4'), message: `Revert "Export CSV (#3)"\n\nThis reverts commit ${sha('a')}.` },
+        { id: sha('5'), message: 'Fix parser (#4)' },
+      ]);
+      expect(await mapGithubWebhook('push', direct, two)).toMatchObject([{ ticketId: 'REL-1', payload: { commits: [{ sha: sha('4'), reverts: 3 }] } }]);
     });
 
     it('maps nothing for a deleted default branch, a push of another repository, or another branch than the default', async () => {
@@ -227,13 +246,17 @@ describe('mapGithubWebhook', () => {
         },
       ]);
       // GitHub lists no PR on the run: the ticket's PR, when it has one.
-      expect((await mapGithubWebhook('workflow_run', workflowRunBody(), ctx(tracked({ prNumber: 3 }))))[0]?.payload).toMatchObject({ number: 3 });
+      expect((await mapGithubWebhook('workflow_run', workflowRunBody(), ctx(tracked({ prNumber: 3, prState: 'OPEN' }))))[0]?.payload).toMatchObject({ number: 3 });
+      // Not a closed one, nor none.
+      expect((await mapGithubWebhook('workflow_run', workflowRunBody(), ctx(tracked({ prNumber: 3, prState: 'CLOSED' }))))[0]?.payload).not.toHaveProperty('number');
       expect((await mapGithubWebhook('workflow_run', workflowRunBody(), ctx()))[0]?.payload).not.toHaveProperty('number');
     });
 
     it('maps nothing for a run not completed, of a fork, on an untracked branch, or without its times', async () => {
       expect(await mapGithubWebhook('workflow_run', workflowRunBody({ action: 'in_progress' }), ctx())).toEqual([]);
       expect(await mapGithubWebhook('workflow_run', workflowRunBody({ fork: true }), ctx())).toEqual([]);
+      const run = workflowRunBody();
+      expect(await mapGithubWebhook('workflow_run', { ...run, workflow_run: { ...run.workflow_run, head_repository: null } }, ctx())).toEqual([]);
       expect(await mapGithubWebhook('workflow_run', workflowRunBody({ branch: 'main' }), ctx())).toEqual([]);
       const body = workflowRunBody();
       expect(await mapGithubWebhook('workflow_run', { ...body, workflow_run: { ...body.workflow_run, run_started_at: null } }, ctx())).toEqual([]);

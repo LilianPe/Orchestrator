@@ -23,7 +23,7 @@ describe('ticketMeasures (ORC-235)', () => {
   it('is empty for a ticket with no facts', () => {
     expect(ticketMeasures('p', 'REL-1', facts({}))).toEqual({
       projectId: 'p', ticketId: 'REL-1', mergedAt: null, tokens: null, attempts: 0, attemptsWithoutTokens: 0, usageLimitShare: null,
-      firstTry: null, reworks: [], humanReviewMinutes: null, revertedWithin14Days: null, ciCost: null, messages: [],
+      firstTry: null, reworks: [], humanReviewMinutes: null, revertedWithin14Days: null, revertWindowEndsAt: null, ciCost: null, messages: [],
     });
   });
 
@@ -148,6 +148,14 @@ describe('reverts within 14 days and CI cost (ORC-278)', () => {
     expect(ticketMeasures('p', 'REL-1', facts({ events: [merged(1_000), pushed('p2', 15 * DAY, late)] })).revertedWithin14Days).toBe(false);
     // Received late, pushed on day 14: it counts.
     expect(ticketMeasures('p', 'REL-1', facts({ events: [merged(1_000), pushed('p2', 30 * DAY, late, 1_000 + 14 * DAY)] })).revertedWithin14Days).toBe(true);
+  });
+
+  it("measures the 14 days from GitHub's merge time when the journal has it, not from when the merge was received", () => {
+    // Received 10 days late (the daemon was down): merged on GitHub at 1 000.
+    const late = ev('m3', 'pr.merged', 10 * DAY, { number: 3, url: 'u', branch: 'b', mergedAt: 1_000 });
+    const revert = [{ sha: 'r', message: 'Revert', author: 'armand', reverts: 3 }];
+    const m = ticketMeasures('p', 'REL-1', facts({ events: [late, pushed('p2', 22 * DAY, revert, 22 * DAY)] }));
+    expect(m).toMatchObject({ revertedWithin14Days: false, revertWindowEndsAt: 1_000 + 14 * DAY });
   });
 
   it('does not count a revert of another PR, nor of one the ticket did not merge', () => {

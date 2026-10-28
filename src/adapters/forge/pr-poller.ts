@@ -61,8 +61,12 @@ export class PrPoller {
           payload,
         });
       if (pr.state === "MERGED" || pr.state === "CLOSED") {
-        // The merge commit and head the forge reads, as the webhook records them (ORC-278).
-        const shas = { ...(pr.mergeSha ? { mergeSha: pr.mergeSha } : {}), ...(pr.headSha ? { headSha: pr.headSha } : {}) };
+        // The merge commit, head and merge time the forge reads, as the webhook records them (ORC-278).
+        const shas = {
+          ...(pr.mergeSha ? { mergeSha: pr.mergeSha } : {}),
+          ...(pr.headSha ? { headSha: pr.headSha } : {}),
+          ...(pr.mergedAt !== undefined && Number.isFinite(pr.mergedAt) ? { mergedAt: pr.mergedAt } : {}),
+        };
         if (pr.state === "MERGED") await this.d.submit({ ...base, id: prEventId(t.ticketId, pr.number, "merged"), type: "pr.merged", payload: { ...payload, ...shas } });
         else await this.d.submit({ ...base, id: prEventId(t.ticketId, pr.number, "closed"), type: "pr.closed", payload });
         if (done) await this.d.store.setMeta(finalKey, String(pr.number));

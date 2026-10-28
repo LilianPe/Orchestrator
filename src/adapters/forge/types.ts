@@ -9,6 +9,8 @@ export interface PrInfo {
   headSha?: string;
   /** SHA of the commit a merged PR put on its base branch, when the forge reads it: a revert names it (ORC-278). */
   mergeSha?: string;
+  /** When a merged PR was merged, on the forge's clock (ORC-278). */
+  mergedAt?: number;
   checks: 'pending' | 'pass' | 'fail' | 'none';
   failedChecks: string[];
 }

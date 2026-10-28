@@ -205,10 +205,11 @@ describe('reverts within 14 days and CI cost, from GitHub webhooks', () => {
     // GitHub redelivers the same attempt: the inbox already holds its id.
     await post(h, 'workflow_run', workflowRunBody({ id: 101, attempt: 2, minutes: 2, number: 3 }));
     await post(h, 'workflow_run', workflowRunBody({ id: 102, attempt: 1, minutes: 5, number: 3 }));
-    expect(await post(h, 'pull_request', pullRequestBody('closed', { merged: true, mergeSha: sha('a') }))).toEqual({ status: 200 });
+    const mergedAt = new Date(h.clock.now()).toISOString();
+    expect(await post(h, 'pull_request', pullRequestBody('closed', { merged: true, mergeSha: sha('a'), mergedAt }))).toEqual({ status: 200 });
     expect(await h.ticket()).toMatchObject({ logical: 'done', prState: 'MERGED' });
     const pushedAt = Math.floor(h.clock.now() / 1000);
-    await post(h, 'push', defaultPushBody(sha('a'), [{ id: sha('a'), message: 'Export CSV (#3)' }], pushedAt));
+    await post(h, 'push', defaultPushBody(sha('a'), [{ id: sha('a'), message: 'Export CSV (#3)', byGithub: true }], pushedAt));
   }
 
   const revert = (at: number) =>

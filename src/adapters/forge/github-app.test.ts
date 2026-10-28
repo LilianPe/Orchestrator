@@ -241,7 +241,7 @@ describe('GitHubAppForge.findPr', () => {
       ],
       { calls },
     );
-    expect(await forge.findPr('/repo', 'factory/REL-1')).toMatchObject({ state: 'MERGED', checks: 'none', mergeSha: 'm1' });
+    expect(await forge.findPr('/repo', 'factory/REL-1')).toMatchObject({ state: 'MERGED', checks: 'none', mergeSha: 'm1', mergedAt: Date.parse('2026-10-22T09:00:00Z') });
     expect(calls.some((c) => c.url.includes('/check-runs'))).toBe(false);
   });
 

@@ -28,7 +28,7 @@ export function githubDelivery(name: string, body: unknown, secret = GH_SECRET):
 /** A `pull_request` body on the ticket's branch. */
 export function pullRequestBody(
   action: string,
-  pr: { number?: number; merged?: boolean; state?: string; mergeable_state?: string; head?: string; mergeSha?: string } = {},
+  pr: { number?: number; merged?: boolean; state?: string; mergeable_state?: string; head?: string; mergeSha?: string; mergedAt?: string } = {},
 ) {
   const n = pr.number ?? 3;
   return {
@@ -44,6 +44,7 @@ export function pullRequestBody(
       merged: pr.merged ?? false,
       mergeable_state: pr.mergeable_state ?? 'clean',
       ...(pr.mergeSha ? { merge_commit_sha: pr.mergeSha } : {}),
+      ...(pr.mergedAt ? { merged_at: pr.mergedAt } : {}),
       head: { ref: BRANCH, sha: pr.head ?? 'head1' },
       base: { ref: 'main', sha: 'base1' },
     },
@@ -75,7 +76,7 @@ export function pushBody(sender: { login: string; type: string }, after = 'c0ffe
 export const sha = (c: string): string => c.repeat(40);
 
 /** A push of `commits` on the default branch (`main`), pushed at `pushedAt` (unix seconds, as GitHub sends it). */
-export function defaultPushBody(after: string, commits: { id: string; message: string; author?: string }[], pushedAt = 1_800_000_000) {
+export function defaultPushBody(after: string, commits: { id: string; message: string; author?: string; byGithub?: boolean }[], pushedAt = 1_800_000_000) {
   return {
     ref: 'refs/heads/main',
     before: 'b0',
@@ -84,7 +85,13 @@ export function defaultPushBody(after: string, commits: { id: string; message: s
     repository: { ...REPO, pushed_at: pushedAt },
     pusher: { name: 'armand' },
     sender: { login: 'armand', type: 'User' },
-    commits: commits.map((c) => ({ id: c.id, message: c.message, author: { name: c.author ?? 'Armand', username: c.author ?? 'armand' } })),
+    commits: commits.map((c) => ({
+      id: c.id,
+      message: c.message,
+      author: { name: c.author ?? 'Armand', username: c.author ?? 'armand' },
+      // GitHub commits what its merge button writes as `web-flow`.
+      committer: c.byGithub ? { name: 'GitHub', username: 'web-flow' } : { name: c.author ?? 'Armand', username: c.author ?? 'armand' },
+    })),
   };
 }
 

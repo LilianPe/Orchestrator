@@ -149,10 +149,11 @@ export interface EventPayloads {
   'pr.checks_failed': PrPayload & { failures: string[] };
   /**
    * `mergeSha` (the commit the merge put on the base branch) and `headSha` (the PR's head when merged),
-   * when the source reads them (ORC-278): a revert on the default branch names one of them. Optional: no
-   * version bump, older rows and a forge that does not read them lack them.
+   * when the source reads them (ORC-278): a revert on the default branch names one of them. `mergedAt`:
+   * when GitHub merged it, on GitHub's clock, as the push of a revert is. Optional: no version bump,
+   * older rows and a forge that does not read them lack them.
    */
-  'pr.merged': PrPayload & { mergeSha?: string; headSha?: string };
+  'pr.merged': PrPayload & { mergeSha?: string; headSha?: string; mergedAt?: number };
   /** The PR is closed without merge: the ticket's dev work is cancelled (ORC-134). */
   'pr.closed': PrPayload;
   /**
