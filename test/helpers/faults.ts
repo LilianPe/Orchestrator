@@ -127,7 +127,8 @@ export class Faults {
     this.killed = new Promise((resolve) => (this.onKilled = resolve));
   }
 
-  private hit(point: FaultPoint, info: FaultInfo, kill: () => void): void {
+  /** A hit of `point` in the life that `kill` ends: throws, and kills it first, when the planned fault fires there. */
+  fire(point: FaultPoint, info: FaultInfo, kill: () => void): void {
     const spec = this.spec;
     if (!spec || this.fired || spec.point !== point || (spec.match && !spec.match(info))) return;
     if (++this.hits < (spec.nth ?? 1)) return;
@@ -148,12 +149,7 @@ export class Faults {
     return new FaultLife(this, this.lives++, kill);
   }
 
-  /** @internal */
-  fire(point: FaultPoint, info: FaultInfo, kill: () => void): void {
-    this.hit(point, info, kill);
-  }
-
-  /** @internal */
+  /** A visible call made by one of the lives. */
   record(call: VisibleCall): void {
     this.calls.push(call);
     this.sink(call);
@@ -163,7 +159,7 @@ export class Faults {
 export class FaultLife {
   /** The outbox row each ticket is executing in this life, between its claim and its settlement. */
   private current = new Map<string, OutboxRow>();
-  private runTickets = new Map<string, string>();
+  private runs = new Map<string, { ticketId: string; queue: string }>();
   private sessionTickets = new Map<string, string>();
 
   constructor(
@@ -174,6 +170,11 @@ export class FaultLife {
 
   private fire(point: FaultPoint, info: FaultInfo): void {
     this.faults.fire(point, info, this.kill);
+  }
+
+  /** Learns which ticket a Linear session belongs to: an activity names its session, not its ticket. */
+  private session(sessionId: unknown, ticketId: string | undefined): void {
+    if (typeof sessionId === 'string' && ticketId !== undefined) this.sessionTickets.set(sessionId, ticketId);
   }
 
   private settled(id: string): void {
@@ -219,8 +220,7 @@ export class FaultLife {
       },
       decide: async (req: DecisionRequest) => {
         const info = eventInfo(req.event);
-        const session = (req.event.payload as { linearSessionId?: unknown }).linearSessionId;
-        if (typeof session === 'string' && req.event.ticketId) this.sessionTickets.set(session, req.event.ticketId);
+        this.session((req.event.payload as { linearSessionId?: unknown }).linearSessionId, req.event.ticketId);
         this.fire('decide.before', info);
         const outcome = await inner.decide({
           ...req,
@@ -232,8 +232,7 @@ export class FaultLife {
           },
         });
         if (outcome.status === 'committed') {
-          const t = outcome.plan.ticket;
-          if (t?.linearSessionId) this.sessionTickets.set(t.linearSessionId, t.ticketId);
+          this.session(outcome.plan.ticket?.linearSessionId, outcome.plan.ticket?.ticketId);
           this.fire('decide.commit', info);
         }
         return outcome;
@@ -242,6 +241,7 @@ export class FaultLife {
         const row = await inner.claimEffect(projectId, ticketId, leaseMs);
         if (row && row !== 'busy') {
           this.current.set(row.ticketId ?? '*', row);
+          this.session((row.effect as { linearSessionId?: unknown }).linearSessionId, row.ticketId);
           this.fire('outbox.claim', { id: row.id, effect: row.effect.kind, ticketId: row.ticketId });
         }
         return row;
@@ -250,7 +250,8 @@ export class FaultLife {
         const row = [...this.current.values()].find((r) => r.id === id);
         const done = await inner.completeEffect(id, lease, at);
         this.settled(id);
-        this.fire('effect.complete', { id, effect: row?.effect.kind, ticketId: row?.ticketId });
+        // Nothing committed when its lease went to another: no completion to cut after.
+        if (done) this.fire('effect.complete', { id, effect: row?.effect.kind, ticketId: row?.ticketId });
         return done;
       },
       retryEffect: async (id: string, lease: string, error: string, delayMs: number) => {
@@ -269,9 +270,21 @@ export class FaultLife {
         return fired;
       },
       putRun: async (r: RunRecord) => {
-        this.runTickets.set(r.id, r.ticketId);
-        if (r.linearSessionId) this.sessionTickets.set(r.linearSessionId, r.ticketId);
+        this.runs.set(r.id, { ticketId: r.ticketId, queue: r.queue });
+        this.session(r.linearSessionId, r.ticketId);
         return inner.putRun(r);
+      },
+      // What an effect reads before it posts (its ticket's session, its run's): a new life that takes
+      // up a dead one's effect has decided nothing on that ticket yet.
+      getTicket: async (projectId: string, ticketId: string) => {
+        const t = await inner.getTicket(projectId, ticketId);
+        this.session(t?.linearSessionId, t?.ticketId);
+        return t;
+      },
+      getRun: async (id: string) => {
+        const r = await inner.getRun(id);
+        this.session(r?.linearSessionId, r?.ticketId);
+        return r;
       },
     });
   }
@@ -286,12 +299,20 @@ export class FaultLife {
         return this.visible(method, ticketId, detail, () => (inner[method as keyof T] as (...a: unknown[]) => unknown).apply(inner, args));
       };
     }
+    overrides['ensureSession'] = async (identifier: string) => {
+      const session = await inner.ensureSession(identifier);
+      this.session(session, identifier);
+      return session;
+    };
     return override(inner, overrides as Partial<Record<keyof T, unknown>>);
   }
 
   runner<T extends Runner>(inner: T): T {
     return override(inner, {
-      start: (req: RunRequest) => this.visible('start', this.runTickets.get(req.runId), req.runId, () => inner.start(req)),
+      start: (req: RunRequest) => {
+        const run = this.runs.get(req.runId);
+        return this.visible('start', run?.ticketId, JSON.stringify({ runId: req.runId, queue: run?.queue }), () => inner.start(req));
+      },
     } as Partial<Record<keyof T, unknown>>);
   }
 }
@@ -301,8 +322,9 @@ export function visibleDuplicates(calls: readonly VisibleCall[]): VisibleCall[][
   const byRow = new Map<string, VisibleCall[]>();
   for (const c of calls) {
     if (!c.row || !VISIBLE.has(c.method)) continue;
-    // The same call again: a run's relay posting two different texts is no double.
-    const key = JSON.stringify([c.row, c.method, c.detail]);
+    // The same call again (a run's relay posting two different texts is no double); any second
+    // launch of a row is a double, whatever its fresh run id.
+    const key = JSON.stringify([c.row, c.method, c.method === 'start' ? '' : c.detail]);
     byRow.set(key, [...(byRow.get(key) ?? []), c]);
   }
   return [...byRow.values()].filter((group) => group.length > 1);
@@ -336,7 +358,6 @@ export async function checkChain(
   const journaled = new Map<string, number>();
   for (const ticketId of [...opts.tickets, undefined]) {
     for (const row of await store.listEffects(opts.projectId, ticketId)) {
-      if (row.ticketId !== ticketId) continue;
       if (row.status === 'pending' || row.status === 'running' || row.status === 'dead') violations.push(`outbox: ${row.id} (${row.effect.kind}) left ${row.status}`);
     }
     const journal = await exportJournal(store, opts.projectId, ticketId);
@@ -352,9 +373,12 @@ export async function checkChain(
   const atLeastOnce: string[] = [];
   for (const group of visibleDuplicates(opts.calls)) {
     const first = group[0]!;
-    const line = `${first.method} ×${group.length} for ${first.row ? `${first.row} (${first.kind})` : `run ${first.detail}`} in lives ${group.map((c) => c.life).join(', ')}: ${first.detail}`;
-    // A run launched twice is never the outbox's at-least-once: recover() blocks a ticket whose run was cut.
-    if (first.method === 'start') violations.push(`run launched twice: ${line}`);
+    const line = `${first.method} ×${group.length} for ${first.row} (${first.kind}) in lives ${group.map((c) => c.life).join(', ')}: ${first.detail}`;
+    // A dev run launched twice is never the outbox's at-least-once: recover() blocks a ticket whose
+    // run was cut, and the start taken up again is refused. A question's run blocks nothing: its
+    // start taken up again launches it again, until a start is idempotent (ORC-162).
+    const question = group.every((c) => (JSON.parse(c.detail) as { queue?: string }).queue === 'questions');
+    if (first.method === 'start' && !question) violations.push(`run launched twice: ${line}`);
     else atLeastOnce.push(line);
   }
   return { violations, atLeastOnce };

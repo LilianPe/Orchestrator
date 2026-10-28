@@ -90,7 +90,8 @@ function readCalls(file: string): VisibleCall[] {
 
 async function quiet(store: Store): Promise<boolean> {
   if ((await store.pendingInbox(1)).length > 0) return false;
-  if ((await store.listEffects('p')).some((r) => r.status === 'pending' || r.status === 'running')) return false;
+  const effects = (await Promise.all([...ticketIds(TICKETS), undefined].map((t) => store.listEffects('p', t)))).flat();
+  if (effects.some((r) => r.status === 'pending' || r.status === 'running')) return false;
   return (await store.listQueue()).length === 0;
 }
 
@@ -113,8 +114,10 @@ describe('chaos: kill -9 at random moments (ORC-163)', () => {
       await new SqliteStore(target).close();
     }
 
-    const random = rng(SEED);
-    const events = chaosEvents(random, EVENTS, TICKETS);
+    // One stream each: how many send gaps are drawn before a kill depends on the machine's timing.
+    const events = chaosEvents(rng(SEED), EVENTS, TICKETS);
+    const killDelay = rng(SEED + 1);
+    const sendGap = rng(SEED + 2);
     const acked = new Set<string>();
     const inFlight = new Map<string, ChaosEvent>();
     let now = Date.UTC(2026, 9, 10, 9, 0);
@@ -147,7 +150,7 @@ describe('chaos: kill -9 at random moments (ORC-163)', () => {
       // random moment after each start: while it answers, decides, executes, fires timers.
       while (acked.size < EVENTS || kills < KILLS) {
         const current = daemon;
-        const killAt = Date.now() + KILL_MS[0] + random() * (KILL_MS[1] - KILL_MS[0]);
+        const killAt = Date.now() + KILL_MS[0] + killDelay() * (KILL_MS[1] - KILL_MS[0]);
         let died = false;
         void current.exited.then(() => {
           died = true;
@@ -164,7 +167,7 @@ describe('chaos: kill -9 at random moments (ORC-163)', () => {
             const e = events[cursor++]!;
             inFlight.set(e.id, e);
             current.send({ type: 'event', event: e });
-            sendAt = Date.now() + random() * 2 * SEND_MS;
+            sendAt = Date.now() + sendGap() * 2 * SEND_MS;
           }
           await new Promise<void>((resolve) => {
             wake = resolve;

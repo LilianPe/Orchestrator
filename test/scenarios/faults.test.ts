@@ -32,27 +32,34 @@ async function settle(h: Harness): Promise<void> {
     // The retries of a failed processing are real timers of a few milliseconds.
     await new Promise((resolve) => setTimeout(resolve, 5));
     await advance(h, LEASE_MS);
-    const effects = await h.store.listEffects('p');
+    const effects = [...(await h.store.listEffects('p', 'REL-1')), ...(await h.store.listEffects('p'))];
     const busy = effects.some((r) => r.status === 'pending' || r.status === 'running');
     if (!busy && (await h.store.pendingInbox(1)).length === 0) return;
   }
 }
 
 /**
- * Plays `STEPS` as a producer would: an event not answered (the write failed, the process died
- * before answering) is sent again with the same id, as Linear resends a webhook. A process killed by
- * the fault is replaced by another on the same database (`restart({ mode: 'brutal' })`). Returns the
- * ids of the events answered.
+ * Plays `steps`, then lets everything settle, as a producer would: an event not answered (the write
+ * failed, the process died before answering) is sent again with the same id, as Linear resends a
+ * webhook. A process killed by the fault, whichever step it hit, is replaced by another on the same
+ * database (`restart({ mode: 'brutal' })`), which finishes the step: an event not answered is sent
+ * again, a move of the clock is completed (the time passed already, its tick is played again).
+ * Returns the ids of the events answered.
  */
-async function drive(h: Harness, faults: Faults): Promise<Set<string>> {
+async function drive(h: Harness, faults: Faults, steps: Step[]): Promise<Set<string>> {
   const acked = new Set<string>();
   const killed = faults.killed.then(() => 'killed' as const);
   let restarted = false;
-  for (const step of STEPS) {
+  for (const step of [...steps, 'settle' as const]) {
+    let after = false;
     for (;;) {
       const run = (async () => {
+        if (step === 'settle') {
+          await settle(h);
+          return 'done' as const;
+        }
         if ('advance' in step) {
-          await advance(h, step.advance);
+          await advance(h, after ? 0 : step.advance);
           return 'done' as const;
         }
         try {
@@ -68,17 +75,17 @@ async function drive(h: Harness, faults: Faults): Promise<Set<string>> {
       const outcome = restarted ? await run : await Promise.race([run, killed]);
       if (outcome === 'killed') {
         restarted = true;
+        after = true;
         await h.restart({ mode: 'brutal' });
-        if ('send' in step && !acked.has(step.send.id)) continue;
+        if (step === 'settle' || !('send' in step) || !acked.has(step.send.id)) continue;
       } else if (outcome === 'unanswered') continue;
       break;
     }
   }
-  await settle(h);
   return acked;
 }
 
-async function scenario(spec?: FaultSpec) {
+async function scenario(spec?: FaultSpec, steps = STEPS) {
   const faults = new Faults(spec);
   const h = createHarness({
     faults,
@@ -88,7 +95,7 @@ async function scenario(spec?: FaultSpec) {
   });
   h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
   h.runner.enqueue({ events: [{ kind: 'text', text: 'PR ouverte.' }] }, { events: [{ kind: 'text', text: 'Corrigé.' }] });
-  const acked = await drive(h, faults);
+  const acked = await drive(h, faults, steps);
   const report = await checkChain(h.store, { projectId: 'p', tickets: ['REL-1'], acked, calls: faults.calls });
   return { h, faults, acked, report };
 }
@@ -111,6 +118,9 @@ const CASES: { label: string; spec: Omit<FaultSpec, 'mode'> }[] = [
   { label: 'timer firing, after its commit', spec: { point: 'timer.fired' } },
   { label: 'run result write', spec: { point: 'run.result' } },
   { label: 'run result, written, unanswered', spec: { point: 'inbox.write', match: (i) => i.eventType === 'run.finished' } },
+  // Late in the scenario: the feedback run's result and output, while the clock moves.
+  { label: 'decision of the second run result, after the commit', spec: { point: 'decide.commit', match: (i) => i.eventType === 'run.finished', nth: 2 } },
+  { label: 'completion of the second run output', spec: { point: 'effect.complete', match: (i) => i.effect === 'post_output', nth: 2 } },
 ];
 
 describe('fault injection at each point of the chain (ORC-163)', () => {
@@ -154,5 +164,19 @@ describe('fault injection at each point of the chain (ORC-163)', () => {
       expect(report.violations).toEqual([]);
       expect(report.atLeastOnce).toEqual([]);
     });
+  });
+
+  /**
+   * Known gap, ORC-162 (#57), found by the chaos (seed 31 on Postgres): a question's run cut after
+   * it started is not a ticket's run, so recover() blocks nothing, posts « reposez la question »,
+   * and the start taken up again past its lease launches the question a second time. Becomes an
+   * `it` once a start_run is idempotent.
+   */
+  it.fails('kill at a question run launch, after the runner started it: asked twice until ORC-162', async () => {
+    const ask = event('m1', 'session.mentioned', { linearSessionId: 'ls-q', body: 'pourquoi ?', author: 'L' });
+    const { report, faults } = await scenario({ point: 'effect.after', mode: 'kill', match: (i) => i.method === 'start' }, [{ send: ask }]);
+    expect(faults.fired).toMatchObject({ point: 'effect.after', mode: 'kill' });
+    expect(report.violations).toEqual([]);
+    expect(report.atLeastOnce).toEqual([]);
   });
 });
