@@ -290,16 +290,17 @@ export class GitHubAppAuth {
 export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter, RepoPermissions {
   /**
    * A user's permission on the repo (ORC-186), with the installation token: the app needs only the
-   * `metadata: read` permission. A login GitHub does not know gets `none`; any other failure throws.
+   * `metadata: read` permission. Once the token is in hand, the repo is one the app sees: a 404 then
+   * means a login GitHub does not know, which gets `none`. Any other failure throws, a 404 on the
+   * repo or the installation included (an app not installed is a configuration error, not a refusal).
    */
   async repoPermission(repoPath: string, login: string): Promise<RepoPermission> {
+    const repo = await this.repo(repoPath);
+    const token = await this.installationToken(repo);
     try {
-      const dto = await this.request<{ permission?: string; role_name?: string }>(
-        repoPath,
-        'GET',
-        (repo) => `${repoApi(repo)}/collaborators/${encodeURIComponent(login)}/permission`,
+      return toRepoPermission(
+        await this.call<{ permission?: string; role_name?: string }>('GET', `${repoApi(repo)}/collaborators/${encodeURIComponent(login)}/permission`, token),
       );
-      return toRepoPermission(dto);
     } catch (err) {
       if (err instanceof GitHubApiError && err.status === 404) return 'none';
       throw err;

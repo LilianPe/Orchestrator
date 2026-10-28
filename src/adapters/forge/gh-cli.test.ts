@@ -85,7 +85,7 @@ describe('GhCliForge', () => {
 });
 
 describe('GhCliForge.repoPermission (ORC-186)', () => {
-  it("reads a user's role on the repo through gh api, none for a login GitHub does not know", async () => {
+  it("reads a user's role on the repo through gh api, and throws on any failure, a 404 included", async () => {
     const forge = new GhCliForge(async (_cmd, args) => {
       const path = args[1]!;
       if (path.includes('/dev/')) return { stdout: JSON.stringify({ permission: 'admin', role_name: 'admin' }), stderr: '', code: 0 };
@@ -93,7 +93,7 @@ describe('GhCliForge.repoPermission (ORC-186)', () => {
       return { stdout: '', stderr: 'error connecting to api.github.com', code: 1 };
     });
     expect(await forge.repoPermission('/repo', 'dev')).toBe('admin');
-    expect(await forge.repoPermission('/repo', 'ghost')).toBe('none');
+    await expect(forge.repoPermission('/repo', 'ghost')).rejects.toThrow(/HTTP 404/);
     await expect(forge.repoPermission('/repo', 'down')).rejects.toThrow(/error connecting/);
   });
 });

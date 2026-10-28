@@ -26,6 +26,8 @@ export interface CachedRoleResolverOptions {
  */
 export class CachedRoleResolver implements RoleResolver {
   private readonly cache = new Map<string, { value: unknown; until: number }>();
+  /** Reads under way: concurrent resolutions share one read per key. */
+  private readonly inflight = new Map<string, Promise<unknown>>();
   private readonly ttlMs: number;
   private readonly now: () => number;
 
@@ -34,27 +36,34 @@ export class CachedRoleResolver implements RoleResolver {
     this.now = o.now ?? Date.now;
   }
 
-  private async cached<T>(key: string, read: () => Promise<T>): Promise<T> {
+  private cached<T>(key: string, read: () => Promise<T>): Promise<T> {
     const now = this.now();
     const hit = this.cache.get(key);
-    if (hit && hit.until > now) return hit.value as T;
-    const value = await read();
-    this.cache.set(key, { value, until: now + this.ttlMs });
-    return value;
+    if (hit && hit.until > now) return Promise.resolve(hit.value as T);
+    const pending = this.inflight.get(key);
+    if (pending) return pending as Promise<T>;
+    const request = read()
+      .then((value) => {
+        this.cache.set(key, { value, until: now + this.ttlMs });
+        return value;
+      })
+      .finally(() => this.inflight.delete(key));
+    this.inflight.set(key, request);
+    return request;
   }
 
   async rolesOf(projectId: string, actorId: string): Promise<Role[]> {
     const p = this.o.projects(projectId);
     if (!p) return [];
-    const roles: Role[] = [];
-    const members = await this.cached(`team:${p.teamKey}`, async () => new Set(await this.o.team.teamMembers(p.teamKey)));
-    if (members.has(actorId)) roles.push('team_member');
     const login = p.githubLogins[actorId];
     const repo = this.o.repo;
-    if (login && repo) {
-      const permission = await this.cached(`repo:${p.repoPath}:${login}`, () => repo.repoPermission(p.repoPath, login));
-      if (WRITES.has(permission)) roles.push('repo_writer', 'repo_merger');
-    }
+    const [members, permission] = await Promise.all([
+      this.cached(`team:${p.teamKey}`, async () => new Set(await this.o.team.teamMembers(p.teamKey))),
+      login && repo ? this.cached(`repo:${p.repoPath}:${login}`, () => repo.repoPermission(p.repoPath, login)) : undefined,
+    ]);
+    const roles: Role[] = [];
+    if (members.has(actorId)) roles.push('team_member');
+    if (permission && WRITES.has(permission)) roles.push('repo_writer', 'repo_merger');
     if (p.maintainers.includes(actorId)) roles.push('maintainer');
     if (p.validators.includes(actorId)) roles.push('validator');
     return roles;

@@ -65,6 +65,12 @@ describe('CachedRoleResolver (ORC-186)', () => {
     expect(await roles.rolesOf('p', 'u-dev')).toContain('repo_merger');
   });
 
+  it('shares one read per source among concurrent resolutions', async () => {
+    const { roles, tracker } = setup();
+    await Promise.all([roles.rolesOf('p', 'u-dev'), roles.rolesOf('p', 'u-reader'), roles.rolesOf('p', 'u-maint')]);
+    expect(tracker.calls.filter((c) => c.method === 'teamMembers')).toHaveLength(1);
+  });
+
   it('gives no GitHub right without a permission source', async () => {
     const tracker = new FakeTracker();
     tracker.setTeamMembers('REL', ['u-dev']);

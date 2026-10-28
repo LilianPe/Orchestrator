@@ -28,13 +28,14 @@ const THREADS_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
 export class GhCliForge implements Forge, RepoPermissions {
   constructor(private exec: Exec = execCmd) {}
 
-  /** A user's permission on the repo (ORC-186), as the GitHub App forge reads it, through `gh api`; `none` for a login GitHub does not know. */
+  /**
+   * A user's permission on the repo (ORC-186), as the GitHub App forge reads it, through `gh api`. Every
+   * failure throws, a 404 included: `gh` gives the same 404 for a login GitHub does not know and for a
+   * repo its account cannot see, and the second is a configuration error, not a refusal.
+   */
   async repoPermission(repoPath: string, login: string): Promise<RepoPermission> {
-    const args = ['api', `repos/{owner}/{repo}/collaborators/${encodeURIComponent(login)}/permission`];
-    const r = await this.exec('gh', args, { cwd: repoPath });
-    if (r.code !== 0 && /HTTP 404/.test(r.stderr)) return 'none';
-    if (r.code !== 0) throw new Error(`gh ${args.join(' ')}: ${r.stderr.trim() || r.stdout.trim()}`);
-    return toRepoPermission(JSON.parse(r.stdout) as { permission?: string; role_name?: string });
+    const out = await mustExec(this.exec, 'gh', ['api', `repos/{owner}/{repo}/collaborators/${encodeURIComponent(login)}/permission`], { cwd: repoPath });
+    return toRepoPermission(JSON.parse(out) as { permission?: string; role_name?: string });
   }
 
   async findPr(repoPath: string, branch: string): Promise<PrInfo | undefined> {

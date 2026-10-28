@@ -476,4 +476,9 @@ describe('GitHubAppForge.repoPermission (ORC-186)', () => {
     expect(await forge.repoPermission('/repo', 'ghost')).toBe('none');
     await expect(forge.repoPermission('/repo', 'down')).rejects.toThrow(/502/);
   });
+
+  it('throws, never answers none, when the app is not installed on the repo', async () => {
+    const { forge } = makeForge([(url) => (url.pathname === '/repos/acme/app/installation' ? { status: 404, body: { message: 'Not Found' } } : undefined)]);
+    await expect(forge.repoPermission('/repo', 'dev')).rejects.toThrow(/installation.*404/);
+  });
 });
