@@ -24,7 +24,7 @@ import {
 import type { EventBus } from './bus.js';
 import type { Clock } from './clock.js';
 import type { Effect, OutboxEffect } from './decision.js';
-import { AUTHZ_REFUSED, decide, isFenced, mayCheck, refusesDevWork, sensitivePathsAtLaunch, taintedKnowledge } from './engine.js';
+import { AUTHZ_REFUSED, decide, HUMAN_EVENTS, isFenced, mayCheck, refusesDevWork, sensitivePathsAtLaunch, taintedKnowledge } from './engine.js';
 import { attemptLabels, packFingerprints } from './attempt-labels.js';
 import { pickupFailures } from './pickup.js';
 import { buildPrompt, formatFeedback, formatVerifyFailures } from './prompt.js';
@@ -436,10 +436,11 @@ export class Orchestrator {
   }
 
   /** The project as a ticket sees it: with the workflow version the ticket is frozen on. */
-  private async runtimeFor(projectId: string, ticketId: string | undefined): Promise<ProjectRuntime | undefined> {
+  /** `known`: the ticket, when the caller has just read it (`null`: read, and not tracked). */
+  private async runtimeFor(projectId: string, ticketId: string | undefined, known?: TicketState | null): Promise<ProjectRuntime | undefined> {
     const project = projectId === '*' ? this.d.projects[0] : this.project(projectId);
     if (!project || !ticketId) return project;
-    const hash = (await this.d.store.getTicket(project.id, ticketId))?.workflowHash;
+    const hash = (known === undefined ? await this.d.store.getTicket(project.id, ticketId) : known)?.workflowHash;
     if (!hash || hash === this.currentVersion(project).hash) return project;
     let workflow = this.workflows.get(hash);
     if (!workflow) {
@@ -480,9 +481,10 @@ export class Orchestrator {
    */
   private async withRoles(event: FactoryEvent): Promise<FactoryEvent> {
     const resolver = this.d.roles;
-    if (!resolver || event.roles !== undefined || event.projectId === '*' || !event.ticketId) return event;
-    if (!CREATES_TICKET.has(event.type) && !(await this.d.store.getTicket(event.projectId, event.ticketId))) return event;
-    const project = await this.runtimeFor(event.projectId, event.ticketId);
+    if (!resolver || event.roles !== undefined || event.projectId === '*' || !event.ticketId || !HUMAN_EVENTS.has(event.type)) return event;
+    const known = await this.d.store.getTicket(event.projectId, event.ticketId);
+    if (!known && !CREATES_TICKET.has(event.type)) return event;
+    const project = await this.runtimeFor(event.projectId, event.ticketId, known ?? null);
     if (!project || !mayCheck(event, project.workflow)) return event;
     return { ...event, roles: event.actor ? await resolver.rolesOf(event.projectId, event.actor) : [] };
   }

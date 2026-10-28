@@ -1,6 +1,6 @@
 import type { FeedbackItem } from '../../core/types.js';
 import { execCmd, mustExec, type Exec } from '../exec.js';
-import type { RepoPermission, RepoPermissions } from '../roles/types.js';
+import { REPO_PERMISSIONS, type RepoPermission, type RepoPermissions } from '../roles/types.js';
 import type { Forge, PrInfo } from './types.js';
 
 export function aggregateChecks(buckets: string[]): PrInfo['checks'] {
@@ -10,14 +10,12 @@ export function aggregateChecks(buckets: string[]): PrInfo['checks'] {
   return 'pass';
 }
 
-const PERMISSIONS: readonly RepoPermission[] = ['admin', 'maintain', 'write', 'triage', 'read', 'none'];
-
 /**
  * What `GET /repos/{owner}/{repo}/collaborators/{user}/permission` answers (ORC-186): its `role_name`
  * when it is a known one (`maintain`, `triage`), else the base `permission` (a custom role keeps its base).
  */
 export function toRepoPermission(dto: { permission?: string; role_name?: string } | undefined): RepoPermission {
-  const known = (v: string | undefined) => PERMISSIONS.find((p) => p === v);
+  const known = (v: string | undefined) => REPO_PERMISSIONS.find((p) => p === v);
   return known(dto?.role_name) ?? known(dto?.permission) ?? 'none';
 }
 

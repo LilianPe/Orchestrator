@@ -147,7 +147,8 @@ export function formatFailuresShort(failures: VerifyFailure[]): string {
   return failures.map((f) => `- \`${f.command}\` (code ${f.exitCode ?? 'timeout'})`).join('\n');
 }
 
-function ruleMatches(rule: Rule, event: FactoryEvent, ticket: TicketState | undefined, activeJob: string | undefined): boolean {
+/** What a rule asks of the event itself (status moved, label, command), its `when` on the ticket left out. */
+function eventMatches(rule: Rule, event: FactoryEvent): boolean {
   if (event.type === 'status.changed') {
     if (rule.from && rule.from !== event.payload.from) return false;
     if (rule.to && rule.to !== event.payload.to) return false;
@@ -155,7 +156,11 @@ function ruleMatches(rule: Rule, event: FactoryEvent, ticket: TicketState | unde
   // Rules under label.changed see additions only, as under label.added before the rename.
   if (event.type === 'label.changed' && event.payload.change !== 'added') return false;
   if (rule.label !== undefined && (event.type !== 'label.changed' || event.payload.label !== rule.label)) return false;
-  if (rule.say !== undefined && (event.type !== 'command' || event.payload.name !== rule.say)) return false;
+  return rule.say === undefined || (event.type === 'command' && event.payload.name === rule.say);
+}
+
+function ruleMatches(rule: Rule, event: FactoryEvent, ticket: TicketState | undefined, activeJob: string | undefined): boolean {
+  if (!eventMatches(rule, event)) return false;
   if (rule.when) {
     return evalCondition(rule.when, {
       state: ticket?.logical ?? 'todo',
@@ -168,8 +173,10 @@ function ruleMatches(rule: Rule, event: FactoryEvent, ticket: TicketState | unde
 
 /** Records a reply in the ticket's dev session: it waits in pendingFeedback for the next run that consumes it (I6). */
 function appendFeedback(out: Decision, event: FactoryEvent<'session.prompted'>): void {
-  const item = { author: event.payload.author, body: event.payload.body, at: event.at, source: 'session' as const, taint: event.taint };
-  out.events.push({ type: 'feedback.appended', item: event.actor ? { ...item, authorId: event.actor } : item });
+  out.events.push({
+    type: 'feedback.appended',
+    item: { author: event.payload.author, authorId: event.actor, body: event.payload.body, at: event.at, source: 'session', taint: event.taint },
+  });
 }
 
 /** Prefix of the trace of a refused action (ORC-186): the orchestrator logs it. */
@@ -203,24 +210,15 @@ function authorize(out: Decision, event: FactoryEvent, ticket: TicketState | und
  * an event without roles is not checked.
  */
 export function mayCheck(event: FactoryEvent, workflow: Workflow): boolean {
-  switch (event.type) {
-    case 'ticket.delegated':
-    case 'session.mentioned':
-    case 'command':
-    case 'session.prompted':
-      return true;
-    case 'label.changed': {
-      const { label, change } = event.payload;
-      return change === 'added' && (workflow.on['label.changed'] ?? []).some((r) => !!r.run && (r.label === undefined || r.label === label));
-    }
-    case 'status.changed': {
-      const { from, to } = event.payload;
-      return (workflow.on['status.changed'] ?? []).some((r) => !!r.run && (!r.from || r.from === from) && (!r.to || r.to === to));
-    }
-    default:
-      return false;
-  }
+  if (!HUMAN_EVENTS.has(event.type)) return false;
+  if (event.type !== 'label.changed' && event.type !== 'status.changed') return true;
+  return (workflow.on[event.type] ?? []).some((r) => !!r.run && eventMatches(r, event));
 }
+
+/** The events a human sends that the matrix may check (`mayCheck`): a cheap filter before any read. */
+export const HUMAN_EVENTS: ReadonlySet<EventType> = new Set<EventType>([
+  'ticket.delegated', 'session.mentioned', 'command', 'session.prompted', 'label.changed', 'status.changed',
+]);
 
 /** A human acting on a run, by a rule (a label, a status change): relaunching it when the ticket is blocked, triggering it otherwise. */
 const ruleAction = (ticket: TicketState | undefined): AuthzAction => (ticket?.blocked ? 'relaunch_blocked' : 'trigger');

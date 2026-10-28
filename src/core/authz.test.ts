@@ -49,7 +49,7 @@ describe('authorization matrix (ORC-186)', () => {
     it('refuses the initiator sending /approve, even when designated validator', () => {
       const verdict = check('validate_spec', 'linear_session', INITIATOR, ['validator', 'team_member', 'maintainer']);
       expect(verdict).toEqual({ ok: false, reason: 'initiator' });
-      expect(refusalMessage('validate_spec', DEFAULT_MATRIX, verdict.ok ? undefined : verdict.reason)).toMatch(/jamais .*initiat/);
+      expect(refusalMessage('validate_spec', DEFAULT_MATRIX, 'initiator')).toMatch(/jamais .*initiat/);
     });
     it('refuses a team member who is not a validator', () => {
       expect(check('validate_spec', 'linear_session', MEMBER, ['team_member', 'repo_writer']).ok).toBe(false);

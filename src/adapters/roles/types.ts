@@ -15,7 +15,8 @@ export interface TeamDirectory {
 }
 
 /** A GitHub user's permission on a repository, as `GET /repos/{owner}/{repo}/collaborators/{user}/permission` gives it. */
-export type RepoPermission = 'admin' | 'maintain' | 'write' | 'triage' | 'read' | 'none';
+export const REPO_PERMISSIONS = ['admin', 'maintain', 'write', 'triage', 'read', 'none'] as const;
+export type RepoPermission = (typeof REPO_PERMISSIONS)[number];
 
 /** Reads a user's permission on the repo of `repoPath` (the GitHub App forge, the `gh` forge, `FakeForge`). */
 export interface RepoPermissions {

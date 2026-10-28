@@ -108,7 +108,7 @@ export function allowed(
 }
 
 /** The refusal answered in the ticket (French). It names no one: the actor knows who they are. */
-export function refusalMessage(action: AuthzAction, matrix: AuthzMatrix, reason: RefusalReason | undefined): string {
+export function refusalMessage(action: AuthzAction, matrix: AuthzMatrix, reason: RefusalReason): string {
   const row = matrix[action];
   const why =
     reason === 'unsigned'
