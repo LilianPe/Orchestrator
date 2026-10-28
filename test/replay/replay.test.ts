@@ -113,6 +113,20 @@ describe('recorded journals (test/replay/journals)', () => {
     expect(files.some((f) => f.includes('.v1.'))).toBe(true);
   });
 
+  // Kept as the engine before ORC-161 recorded it; `npm run replay:record` does not write it again.
+  it('replays a journal of schema version 2: its debounce.fired and job-bound timers read as the generic timer (ORC-161)', () => {
+    const journal = readJournal(readFileSync(join(dir, 'check-failed-then-feedback.v2.json'), 'utf8'));
+    const fired = journal.entries.filter((e) => e.event.type === 'debounce.fired');
+    expect(fired).toHaveLength(1);
+    expect(journal.entries.flatMap((e) => e.decision?.timers ?? []).every((t) => 'job' in t && !('kind' in t))).toBe(true);
+    const report = replayJournal(journal);
+    expect(report).toMatchObject({ upcast: journal.entries.length, divergences: [] });
+    expect(report.replayed).toBe(journal.entries.length);
+    // As the journal recorded today has it.
+    const today = readJournal(readFileSync(join(dir, 'check-failed-then-feedback.json'), 'utf8'));
+    expect(today.entries.filter((e) => e.event.type === 'timer.fired').map((e) => e.event.payload)).toEqual([{ kind: 'debounce', payload: { job: 'dev-feedback' } }]);
+  });
+
   it.each(files)('%s replays identical bit for bit', (file) => {
     const report = replayJournal(readJournal(readFileSync(join(dir, file), 'utf8'), file));
     expect(report.divergences).toEqual([]);
@@ -122,7 +136,7 @@ describe('recorded journals (test/replay/journals)', () => {
   // Regression replays each decision on the workflow version it was frozen on, kept in the journal: a
   // change of the pack or of a preset shows only against the workflow of today, hence this what-if pass.
   it.each(files)('%s decides the same under the standard pack and its preset as they are today', (file) => {
-    const scenario = file.replace(/(\.v1)?\.json$/, '');
+    const scenario = file.replace(/(\.v\d+)?\.json$/, '');
     expect(Object.keys(SCENARIOS)).toContain(scenario);
     const report = replayJournal(readJournal(readFileSync(join(dir, file), 'utf8'), file), { mode: 'what-if', workflow: scenarioWorkflow(scenario) });
     expect(report.divergences).toEqual([]);

@@ -66,6 +66,20 @@ const repair: fc.Arbitrary<EventPayloads['dead_letter.repaired']> = fc
   .record({ action: fc.constantFrom('replay' as const, 'skip' as const, 'force' as const), event: deadLettered })
   .map(({ action, event }) => ({ eventId: DEAD_ID, action, by: 'ops', event }));
 
+/** The debounce of the feedback job firing: what a reply in the dev session arms. */
+export const DEBOUNCE: EventPayloads['timer.fired'] = { kind: 'debounce', payload: { job: 'dev-feedback' } };
+
+/**
+ * A timer firing (ORC-161): mostly a debounce, sometimes a clarify reminder or block or a usage-limit
+ * reset, which no rule decides yet (ORC-210, ORC-215).
+ */
+const timerFired: fc.Arbitrary<EventPayloads['timer.fired']> = fc.oneof(
+  { arbitrary: fc.record({ job }).map((payload) => ({ kind: 'debounce' as const, payload })), weight: 3 },
+  { arbitrary: fc.record({ linearSessionId: session }).map((payload) => ({ kind: 'clarify.remind' as const, payload })), weight: 1 },
+  { arbitrary: fc.record({ linearSessionId: session }).map((payload) => ({ kind: 'clarify.expire' as const, payload })), weight: 1 },
+  { arbitrary: fc.constant({ kind: 'usage.reset' as const, payload: {} }), weight: 1 },
+);
+
 /** One arbitrary per event type: adding an event type to `EventPayloads` fails to compile until it is generated here. */
 const PAYLOADS: { [K in EventType]: fc.Arbitrary<EventPayloads[K]> } = {
   'ticket.delegated': fc.record({ linearSessionId: fc.option(session, { nil: undefined }), issue }),
@@ -94,7 +108,7 @@ const PAYLOADS: { [K in EventType]: fc.Arbitrary<EventPayloads[K]> } = {
   }),
   'verify.passed': fc.record({ runId, job }),
   'verify.failed': fc.record({ runId, job, failures: fc.constant(VERIFY_FAILURES) }),
-  'debounce.fired': fc.record({ job }),
+  'timer.fired': timerFired,
   'control.pause': empty,
   'control.resume': empty,
   'control.stop': empty,
@@ -117,7 +131,7 @@ const anyDraft: fc.Arbitrary<Draft> = fc.oneof(...EVENT_TYPES.map((t) => draftOf
  * their producers stamp them `TRUSTED`. Only events that carry content from outside can be untrusted.
  */
 const FACTORY_PRODUCED: ReadonlySet<EventType> = new Set<EventType>([
-  'run.finished', 'verify.passed', 'verify.failed', 'debounce.fired', 'control.pause', 'control.resume', 'control.stop',
+  'run.finished', 'verify.passed', 'verify.failed', 'timer.fired', 'control.pause', 'control.resume', 'control.stop',
   'effect.done', 'effect.failed', 'dead_letter.added', 'dead_letter.repaired',
 ]);
 
@@ -205,7 +219,7 @@ const redCi: fc.Arbitrary<DraftEntry[]> = fc
 const devReply: fc.Arbitrary<Draft> = PAYLOADS['session.prompted'].map((p) => ({ type: 'session.prompted', payload: { ...p, linearSessionId: DEV_SESSION } }));
 const debouncedReply: fc.Arbitrary<DraftEntry[]> = external(devReply).map((reply): DraftEntry[] => [
   reply,
-  { kind: 'external', draft: { type: 'debounce.fired', payload: { job: 'dev-feedback' } }, untrusted: false },
+  { kind: 'external', draft: { type: 'timer.fired', payload: DEBOUNCE }, untrusted: false },
 ]);
 
 /** A human talks to the factory: in the dev session, in a question session, through a label. */

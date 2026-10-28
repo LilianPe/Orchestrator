@@ -1,6 +1,6 @@
 import { createHmac } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { newTicketState, type FactoryEvent, type TicketState } from '../../core/types.js';
+import { newTicketState, SCHEMA_VERSION, type FactoryEvent, type TicketState } from '../../core/types.js';
 import { BRANCH, checkRunBody, githubDelivery, pullRequestBody, pushBody } from '../../../test/helpers/github-webhook.js';
 import { createGithubIngest, githubRepoOf } from './github-ingest.js';
 import { checksEventId, mapGithubWebhook, verifyGithubSignature, type GithubMapContext } from './github-webhook.js';
@@ -38,8 +38,8 @@ describe('mapGithubWebhook', () => {
   it('maps a merge, preceded by pr.opened for a PR the ticket does not know, with the ids of PrPoller', async () => {
     const out = await mapGithubWebhook('pull_request', pullRequestBody('closed', { merged: true }), ctx());
     expect(out).toEqual([
-      { id: 'pr:REL-1:3:opened', type: 'pr.opened', at: 5, projectId: 'p', ticketId: 'REL-1', schemaVersion: 2, taint: 'trusted', payload: { number: 3, url: 'https://github.com/acme/app/pull/3', branch: BRANCH } },
-      { id: 'pr:REL-1:3:merged', type: 'pr.merged', at: 5, projectId: 'p', ticketId: 'REL-1', schemaVersion: 2, taint: 'trusted', payload: { number: 3, url: 'https://github.com/acme/app/pull/3', branch: BRANCH } },
+      { id: 'pr:REL-1:3:opened', type: 'pr.opened', at: 5, projectId: 'p', ticketId: 'REL-1', schemaVersion: SCHEMA_VERSION, taint: 'trusted', payload: { number: 3, url: 'https://github.com/acme/app/pull/3', branch: BRANCH } },
+      { id: 'pr:REL-1:3:merged', type: 'pr.merged', at: 5, projectId: 'p', ticketId: 'REL-1', schemaVersion: SCHEMA_VERSION, taint: 'trusted', payload: { number: 3, url: 'https://github.com/acme/app/pull/3', branch: BRANCH } },
     ]);
     expect(ids(await mapGithubWebhook('pull_request', pullRequestBody('closed'), ctx(tracked({ prNumber: 3 }))))).toEqual(['pr:REL-1:3:closed:2026-10-28T10:00:00Z']);
     expect(ids(await mapGithubWebhook('pull_request', pullRequestBody('opened'), ctx(tracked({ prNumber: 3 }))))).toEqual([]);

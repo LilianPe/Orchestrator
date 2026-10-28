@@ -4,7 +4,7 @@ import { loadWorkflow } from '../config/load-workflow.js';
 import { SqliteStore } from '../store/sqlite-store.js';
 import { decide } from './engine.js';
 import { newTicketState, SCHEMA_VERSION, type FactoryEvent } from './types.js';
-import { upcast, type StoredEvent } from './upcast.js';
+import { upcast, upcastTimer, type StoredEvent } from './upcast.js';
 
 const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../packs/standard') });
 const ticket = { ...newTicketState('p', 'REL-1', 'T', 'human_review', 0), delegated: true };
@@ -49,5 +49,22 @@ describe('upcast', () => {
     expect(replayed.map((e) => e.type)).toEqual(['status.changed', 'label.changed', 'session.prompted']);
     const effects = replayed.map((e) => decide(ticket, e, workflow).effects.map((c) => c.kind));
     expect(effects).toEqual([['start_run'], ['stop_run', 'activity'], []]);
+  });
+
+  it('reads the debounce of a job (versions 1 and 2) as a timer.fired of kind debounce, with the same decision (ORC-161)', () => {
+    const v2 = { id: 'timer:REL-1:dev-feedback:180000', type: 'debounce.fired', at: 180_000, projectId: 'p', ticketId: 'REL-1', schemaVersion: 2, taint: 'trusted' as const, payload: { job: 'dev-feedback' } };
+    const timer = { type: 'timer.fired', schemaVersion: SCHEMA_VERSION, payload: { kind: 'debounce', payload: { job: 'dev-feedback' } } };
+    expect(upcast(v2)).toEqual({ ...v2, ...timer });
+    const { schemaVersion: _v, taint: _t, ...unversioned } = v2;
+    expect(upcast(unversioned)).toEqual({ ...v2, ...timer });
+    expect(decide(ticket, upcast(v2), workflow).effects).toEqual([{ kind: 'start_run', job: 'dev-feedback', input: 'feedback' }]);
+  });
+
+  it('reads a job-bound timer as a debounce of that job, key unchanged, and a generic one as it is (ORC-161)', () => {
+    const old = { key: 'REL-1:dev-feedback', projectId: 'p', ticketId: 'REL-1', job: 'dev-feedback', fireAt: 900, armedBy: 'e1' };
+    const { job: _j, ...rest } = old;
+    const generic = { ...rest, kind: 'debounce' as const, payload: { job: 'dev-feedback' } };
+    expect(upcastTimer(old)).toEqual(generic);
+    expect(upcastTimer(generic)).toBe(generic);
   });
 });

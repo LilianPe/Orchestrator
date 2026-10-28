@@ -13,7 +13,7 @@ import {
   type TicketState,
 } from '../../src/core/types.js';
 import { SqliteStore } from '../../src/store/sqlite-store.js';
-import { DEV_SESSION, PROJECT, sequences, TICKET, VERIFY_FAILURES, type Entry, type Sequences } from './events.js';
+import { DEBOUNCE, DEV_SESSION, PROJECT, sequences, TICKET, VERIFY_FAILURES, type Entry, type Sequences } from './events.js';
 import { decided, effects, fold, isDevStart, launches, params, readsFeedback, stepEffects, TIMEOUT, workflow, type Run, type Step } from './fold.js';
 
 /**
@@ -330,8 +330,8 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
           runFinished('success'),
           ext('verify.failed', { runId: 'r1', job: 'dev', failures: VERIFY_FAILURES }),
         );
-        const debounced = seq(...delegated('dev'), reply(), ext('pr.merged', pr), ext('debounce.fired', { job: 'dev-feedback' }));
-        const pending = seq(...delegated('dev'), runStarted(), reply(), ext('debounce.fired', { job: 'dev-feedback' }), ext('pr.merged', pr), runFinished('failure'));
+        const debounced = seq(...delegated('dev'), reply(), ext('pr.merged', pr), ext('timer.fired', DEBOUNCE));
+        const pending = seq(...delegated('dev'), runStarted(), reply(), ext('timer.fired', DEBOUNCE), ext('pr.merged', pr), runFinished('failure'));
         holds(noDevRunAfterMerge, [relaunched, inFlight, debounced, pending]);
       },
       TIMEOUT,
@@ -448,11 +448,11 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
       'untrusted feedback is launched with the sensitive paths, relayed by a later trusted event (ORC-269) or read by a job pending since before it came in (ORC-274)',
       () => {
         // Relayed by the debounce: decide starts the run on all the pending feedback.
-        const debounced = seq(...delegated('dev'), reply('untrusted'), ext('debounce.fired', { job: 'dev-feedback' }));
+        const debounced = seq(...delegated('dev'), reply('untrusted'), ext('timer.fired', DEBOUNCE));
         // Found by fast-check once the fold modelled settle: the pending job was decided before the untrusted reply
         // came in, and settle starts it once the run's check passes, on all the pending feedback. The launch takes the
         // taint of what it reads then. (A failed run blocks the ticket: startRun then refuses the pending job.)
-        const pending = (...end: Entry[]) => seq(...delegated('dev'), runStarted(), reply(), ext('debounce.fired', { job: 'dev-feedback' }), reply('untrusted'), ...end);
+        const pending = (...end: Entry[]) => seq(...delegated('dev'), runStarted(), reply(), ext('timer.fired', DEBOUNCE), reply('untrusted'), ...end);
         const settled = pending(runFinished('success'), ext('verify.passed', { runId: 'r1', job: 'dev' }));
         holds(feedbackRunSandboxed, [debounced, settled, pending(runFinished('failure'))]);
       },

@@ -316,7 +316,7 @@
             "priority": 0
           }
         },
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "taint": "trusted"
       },
       "decision": {
@@ -358,7 +358,7 @@
     },
     {
       "event": {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "taint": "trusted",
         "id": "effect:REL-1:1:1",
         "at": 1791622800000,
@@ -435,7 +435,7 @@
     },
     {
       "event": {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "taint": "trusted",
         "id": "attempt:id-1:finished",
         "type": "run.finished",
@@ -525,7 +525,7 @@
     },
     {
       "event": {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "taint": "trusted",
         "id": "effect:REL-1:3:1",
         "at": 1791622800000,
@@ -598,7 +598,7 @@
     },
     {
       "event": {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "taint": "trusted",
         "id": "effect:REL-1:3:2",
         "at": 1791622800000,
@@ -671,7 +671,7 @@
     },
     {
       "event": {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "taint": "trusted",
         "id": "effect:REL-1:3:3",
         "at": 1791622800000,
@@ -744,7 +744,7 @@
     },
     {
       "event": {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "taint": "trusted",
         "id": "dead-letter:t-2:1",
         "type": "dead_letter.added",
@@ -824,7 +824,7 @@
     },
     {
       "event": {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "taint": "trusted",
         "id": "effect:REL-1:7:1",
         "at": 1791622800000,
@@ -899,7 +899,7 @@
     },
     {
       "event": {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "taint": "trusted",
         "id": "repair:t-2:1",
         "type": "dead_letter.repaired",
@@ -921,7 +921,7 @@
               "body": "et le mobile ?",
               "author": "Lilian"
             },
-            "schemaVersion": 2,
+            "schemaVersion": 3,
             "taint": "trusted"
           }
         }
@@ -996,7 +996,10 @@
             "key": "REL-1:dev-feedback",
             "projectId": "p",
             "ticketId": "REL-1",
-            "job": "dev-feedback",
+            "kind": "debounce",
+            "payload": {
+              "job": "dev-feedback"
+            },
             "fireAt": 1791622980000,
             "armedBy": "repair:t-2:1"
           }
@@ -1010,7 +1013,7 @@
     },
     {
       "event": {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "taint": "trusted",
         "id": "effect:REL-1:9:1",
         "at": 1791622800000,

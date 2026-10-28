@@ -14,7 +14,7 @@ import { EventBus } from '../../src/core/bus.js';
 import { FakeClock } from '../../src/core/clock.js';
 import { Orchestrator } from '../../src/core/orchestrator.js';
 import { Scheduler } from '../../src/core/scheduler.js';
-import { TimerService } from '../../src/core/timers.js';
+import { TimerService } from '../../src/runtime/timers.js';
 import type { EventPayloads, EventType, FactoryEvent } from '../../src/core/types.js';
 import type { Verifier } from '../../src/core/verify.js';
 import type { EffectRetry } from '../../src/runtime/outbox.js';
@@ -88,7 +88,8 @@ export function createHarness(
     effectRetry: opts.effectRetry ?? { attempts: 1, baseMs: 1, capMs: 1 },
   });
   let orch = build();
-  const timers = new TimerService(store, clock, (e) => orch.accept(e));
+  // Holds nothing between ticks (ORC-161): the timers live in the store, a restart loses none.
+  const timers = new TimerService(store, clock, () => orch.wake());
   let seq = 0;
 
   async function send<T extends EventType>(type: T, payload: EventPayloads[T], ticketId = 'REL-1'): Promise<void> {
@@ -106,7 +107,7 @@ export function createHarness(
   /** Graceful shutdown, then a fresh orchestrator over the same store, as `factory up` does on restart. */
   async function restart(): Promise<void> {
     orch.stopAll();
-    await orch.drained();
+    await Promise.all([orch.drained(), timers.stop()]);
     orch = build();
     await orch.recover();
     await orch.announceRecovery();

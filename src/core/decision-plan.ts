@@ -1,5 +1,5 @@
 import type { Workflow } from '../config/workflow-schema.js';
-import type { DecisionPlan } from '../store/types.js';
+import type { DecisionPlan, TimerRecord } from '../store/types.js';
 import { effectiveEvent } from './dead-letter.js';
 import type { OutboxEffect } from './decision.js';
 import { decide, isFenced } from './engine.js';
@@ -47,14 +47,14 @@ export function planDecision({ event, known, workflow, hash, now }: PlanInput): 
     ticket,
     effects,
     timers: ticket
-      ? decision.timers.map((t) => ({
-          key: `${ticket.ticketId}:${t.job}`,
+      ? decision.timers.map(({ slot, ms, ...fired }) => ({
+          key: `${ticket.ticketId}:${slot}`,
           projectId: event.projectId,
           ticketId: ticket.ticketId,
-          job: t.job,
-          fireAt: now + t.ms,
+          ...fired,
+          fireAt: now + ms,
           armedBy: event.id,
-        }))
+        }) as TimerRecord)
       : [],
     // A stop deletes the ticket's timers before this decision arms its own, as `stop_run` did.
     clearTimers: decision.effects.some((c) => c.kind === 'stop_run' && !c.linearSessionId),

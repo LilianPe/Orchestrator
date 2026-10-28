@@ -26,7 +26,7 @@ import { EventBus } from '../core/bus.js';
 import { SystemClock } from '../core/clock.js';
 import { logicalFromName, Orchestrator, type ProjectRuntime } from '../core/orchestrator.js';
 import { Scheduler } from '../core/scheduler.js';
-import { TimerService } from '../core/timers.js';
+import { TimerService } from '../runtime/timers.js';
 import type { FactoryEvent } from '../core/types.js';
 import { runVerify } from '../core/verify.js';
 import { KnowledgeBase } from '../knowledge/kb.js';
@@ -196,7 +196,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     });
 
     const reconciler = new Reconciler({ tracker: trackerSwitch, store, projects, submit: accept, clock, log });
-    const timers = new TimerService(store, clock, accept, (e) => log(`timers: ${e.message}`));
+    const timers = new TimerService(store, clock, () => orchestrator.wake(), (e) => log(`timers: ${e.message}`));
     const poller = new PrPoller({ store, forge, projects, submit: accept, clock, log });
     // GitHub webhooks (ORC-134) write to the inbox beside the poll, which stays until ORC-185 and ORC-181:
     // both name a fact the same way, so the inbox keeps it once.

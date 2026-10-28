@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { PrPoller } from '../adapters/forge/pr-poller.js';
 import { Orchestrator } from '../core/orchestrator.js';
-import { TimerService } from '../core/timers.js';
+import { TimerService } from '../runtime/timers.js';
 import { saveInstance, saveSecrets } from '../config/instance.js';
 import { startFactory } from './bootstrap.js';
 import { SqliteStore } from '../store/sqlite-store.js';
