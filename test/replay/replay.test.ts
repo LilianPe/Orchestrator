@@ -127,6 +127,17 @@ describe('recorded journals (test/replay/journals)', () => {
     expect(today.entries.filter((e) => e.event.type === 'timer.fired').map((e) => e.event.payload)).toEqual([{ kind: 'debounce', payload: { job: 'dev-feedback' } }]);
   });
 
+  it("keeps a signed actor and an untrusted event's taint through the journal, and their decisions (ORC-160)", () => {
+    const journal = readJournal(readFileSync(join(dir, 'signed-actor-then-untrusted.json'), 'utf8'));
+    const by = (type: string) => journal.entries.find((e) => e.event.type === type)!;
+    expect(by('ticket.delegated').event).toMatchObject({ taint: 'trusted', actor: 'user-lilian' });
+    expect(by('session.prompted').event).toMatchObject({ taint: 'untrusted' });
+    expect(by('session.prompted').event).not.toHaveProperty('actor');
+    expect(by('timer.fired').decision?.effects).toEqual([expect.objectContaining({ kind: 'start_run', job: 'dev-feedback', sensitivePaths: expect.any(Array) })]);
+    expect(by('command').decision?.trace).toContain('taint: refused remember');
+    expect(replayJournal(journal).divergences).toEqual([]);
+  });
+
   it.each(files)('%s replays identical bit for bit', (file) => {
     const report = replayJournal(readJournal(readFileSync(join(dir, file), 'utf8'), file));
     expect(report.divergences).toEqual([]);

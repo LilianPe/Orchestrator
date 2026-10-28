@@ -42,7 +42,7 @@ export function signedDelegation(at = NOW): { raw: string; headers: Record<strin
     type: 'AgentSessionEvent',
     action: 'created',
     webhookTimestamp: at,
-    agentSession: { id: 'as-1', issue: { id: 'u1', identifier: 'REL-1', title: 'Export CSV' }, comment: null, creator: { name: 'Lilian' } },
+    agentSession: { id: 'as-1', issue: { id: 'u1', identifier: 'REL-1', title: 'Export CSV' }, comment: null, creator: { id: 'user-lilian', name: 'Lilian' } },
     promptContext: '<issue identifier="REL-1">Export CSV</issue>',
   });
 }
@@ -53,7 +53,7 @@ export function signedMention(sessionId: string, body: string, at = NOW): { raw:
     type: 'AgentSessionEvent',
     action: 'created',
     webhookTimestamp: at,
-    agentSession: { id: sessionId, issue: { id: 'u1', identifier: 'REL-1', title: 'Export CSV' }, comment: { id: `c-${sessionId}`, body, user: { name: 'Lilian' } } },
+    agentSession: { id: sessionId, issue: { id: 'u1', identifier: 'REL-1', title: 'Export CSV' }, comment: { id: `c-${sessionId}`, body, user: { id: 'user-lilian', name: 'Lilian' } } },
   });
 }
 
