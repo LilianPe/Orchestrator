@@ -200,6 +200,14 @@ export class Orchestrator {
     await this.worker.kick();
   }
 
+  /**
+   * One poll of the worker's loop (`startWorker`), for a caller that drives its own clock: the
+   * scenario harness's `advance` (ORC-228), as the poller would once the simulated time passed.
+   */
+  async poll(): Promise<void> {
+    if (this.dispatchOpen && !this.stopping) await this.worker.poll();
+  }
+
   /** `replayInbox`, then polls the store: rows written by another process, leases that expired. */
   startWorker(intervalMs = 1000): Promise<void> {
     this.worker.start(intervalMs);

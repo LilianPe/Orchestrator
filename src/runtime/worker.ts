@@ -199,6 +199,15 @@ export class Worker {
     this.poller.unref();
   }
 
+  /**
+   * One poll of `start`'s loop, awaited: the rows that found their ticket held (another worker's
+   * effect, a backoff) are tried again, with what another process wrote and the expired leases.
+   */
+  poll(): Promise<number> {
+    this.waited.clear();
+    return this.kick();
+  }
+
   /** Stops polling and the pending retries: a stopped worker takes nothing up by itself. */
   stop(): void {
     if (this.poller) clearInterval(this.poller);
