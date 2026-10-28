@@ -104,6 +104,22 @@ describe('LinearTracker', () => {
     onIssue = [{ id: 'l-low', name: 'prio:basse', parent: group }, { id: 'l-high', name: 'prio:haute', parent: group }];
     await t.setLabels('REL-1', ['prio:haute'], []);
     expect(calls.at(-1)).toEqual({ op: 'IssueUpdate', vars: { id: 'uuid-1', input: { addedLabelIds: [], removedLabelIds: ['l-low'] } } });
+    await expect(t.setLabels('REL-1', ['prio:basse', 'prio:haute'], [])).rejects.toThrow('"prio:basse" et "prio:haute"');
+  });
+
+  it('reads the team labels again before adding one, so a group made since the start counts (ORC-160)', async () => {
+    let teamLabels: { id: string; name: string; parent?: { id: string } }[] = [{ id: 'l-low', name: 'prio:basse' }, { id: 'l-high', name: 'prio:haute' }];
+    const { api, calls } = fakeLinear({
+      Issue: () => ({ issue: { ...node, labels: { nodes: [{ id: 'l-low', name: 'prio:basse', parent: { id: 'g' } }] } } }),
+      TeamStates: () => states,
+      TeamLabels: () => ({ issueLabels: { nodes: teamLabels } }),
+      IssueUpdate: () => ({ issueUpdate: { success: true } }),
+    });
+    const t = new LinearTracker(api, 'app-1');
+    await t.warm('REL');
+    teamLabels = teamLabels.map((l) => ({ ...l, parent: { id: 'g' } }));
+    await t.setLabels('REL-1', ['prio:haute'], []);
+    expect(calls.at(-1)).toEqual({ op: 'IssueUpdate', vars: { id: 'uuid-1', input: { addedLabelIds: ['l-high'], removedLabelIds: ['l-low'] } } });
   });
 
   it("keys an effect's comment by a client id and a marker, and finds it by either (ORC-162)", async () => {

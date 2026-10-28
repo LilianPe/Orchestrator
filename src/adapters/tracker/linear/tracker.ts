@@ -116,7 +116,10 @@ export class LinearTracker implements Tracker {
     if (!refresh && this.labels.has(teamKey)) return this.labels.get(teamKey)!;
     const { issueLabels } = await this.api.gql<{ issueLabels: { nodes: LabelNode[] } }>(Q.teamLabels, { teamKey });
     const map = new Map(issueLabels.nodes.map((l) => [l.name, l.id]));
-    for (const l of issueLabels.nodes) if (l.parent?.id) this.labelGroups.set(l.id, l.parent.id);
+    for (const l of issueLabels.nodes) {
+      if (l.parent?.id) this.labelGroups.set(l.id, l.parent.id);
+      else this.labelGroups.delete(l.id);
+    }
     this.labels.set(teamKey, map);
     return map;
   }
@@ -175,19 +178,25 @@ export class LinearTracker implements Tracker {
    * Reads the ticket's labels first and writes only what differs: a replay writes nothing (ORC-162).
    * Labels of a Linear group are exclusive (ORC-160): adding one takes off the ticket's other labels
    * of its group, as Linear's interface does, so the final state does not depend on what was there.
+   * Before adding a label, the team's labels are read again: a group made since the start counts.
+   * Two labels of one group in `add` cannot both hold: refused, rather than one picked silently.
    */
   async setLabels(identifier: string, add: string[], remove: string[]): Promise<void> {
     const team = teamOf(identifier);
     const issue = await this.node(identifier);
     const has = new Map(issue.labels.nodes.map((l) => [l.name, l]));
+    if (add.some((name) => !has.has(name))) await this.teamLabels(team, true);
     const addedLabelIds: string[] = [];
-    const groups = new Set<string>();
+    const groups = new Map<string, string>();
     for (const name of add) {
       const present = has.get(name);
       const id = present?.id ?? (await this.labelId(team, name));
       if (!present) addedLabelIds.push(id);
       const group = present?.parent?.id ?? this.labelGroups.get(id);
-      if (group) groups.add(group);
+      if (!group) continue;
+      const other = groups.get(group);
+      if (other !== undefined && other !== name) throw new Error(`Labels exclusifs demandés ensemble : "${other}" et "${name}" (même groupe Linear)`);
+      groups.set(group, name);
     }
     const removedLabelIds = issue.labels.nodes
       .filter((l) => !add.includes(l.name) && (remove.includes(l.name) || (l.parent?.id !== undefined && groups.has(l.parent.id))))

@@ -63,6 +63,7 @@ describe('FakeTracker', () => {
     expect((await t.getIssue('REL-1')).labels.sort()).toEqual(['bug', 'prio:haute']);
     await t.setLabels('REL-1', ['prio:haute'], []);
     expect(t.calls.filter((c) => c.method === 'setLabels')).toHaveLength(1);
+    await expect(t.setLabels('REL-1', ['prio:basse', 'prio:haute'], [])).rejects.toThrow('prio:basse and prio:haute');
   });
 
   it('names the unknown issue in its error', async () => {

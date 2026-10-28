@@ -142,11 +142,21 @@ describe('mapLinearWebhook', () => {
       expect(e).not.toHaveProperty('actor');
     });
 
+    it("names a reply without a user after no one else: not after the session's first comment", async () => {
+      const body = fx('session-prompted');
+      delete body.agentActivity.user;
+      body.agentSession.comment = { id: 'c1', body: '@factory', user: { id: 'user-lilian', name: 'Lilian' } };
+      expect((await mapLinearWebhook(body, 'k', ctx()))[0]).toMatchObject({ taint: 'untrusted', payload: { author: 'Humain' } });
+    });
+
     it('marks a mention that came through a bot or from outside the workspace untrusted', async () => {
       for (const extra of [{ botActor: { name: 'Slack' } }, { externalUser: { name: 'client@example.com' } }]) {
         const body = fx('session-created-mention');
         Object.assign(body.agentSession.comment, extra);
-        expect((await mapLinearWebhook(body, 'k', ctx()))[0]).toMatchObject({ type: 'session.mentioned', taint: 'untrusted', actor: 'user-lilian' });
+        // The user id the comment carries is not lent to text a bot relayed: no actor for ORC-186 to authorize.
+        const [e] = await mapLinearWebhook(body, 'k', ctx());
+        expect(e).toMatchObject({ type: 'session.mentioned', taint: 'untrusted' });
+        expect(e).not.toHaveProperty('actor');
       }
       const anonymous = fx('session-created-mention');
       delete anonymous.agentSession.comment.user;
@@ -157,8 +167,8 @@ describe('mapLinearWebhook', () => {
       for (const actor of [{ id: 'int-1', type: 'Integration', name: 'Jira' }, { id: 'app-2', type: 'OauthClient', name: 'Zapier' }]) {
         const out = await mapLinearWebhook({ ...fx('issue-moved-labeled'), actor }, 'k', ctx());
         expect(out.map((e) => [e.type, e.taint, e.actor])).toEqual([
-          ['status.changed', 'untrusted', actor.id],
-          ['label.changed', 'untrusted', actor.id],
+          ['status.changed', 'untrusted', undefined],
+          ['label.changed', 'untrusted', undefined],
         ]);
       }
       const { actor: _, ...noActor } = fx('issue-moved-labeled');

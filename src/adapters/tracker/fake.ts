@@ -113,11 +113,18 @@ export class FakeTracker implements Tracker {
 
   /**
    * As the Linear adapter: a write only when the labels change, so a replay records nothing (ORC-162);
-   * adding a label of a group takes the group's other labels off (ORC-160).
+   * adding a label of a group takes the group's other labels off, two of one group are refused (ORC-160).
    */
   async setLabels(identifier: string, add: string[], remove: string[]): Promise<void> {
     const i = this.must(identifier);
-    const groups = new Set(add.map((l) => this.labelGroups.get(l)).filter((g) => g !== undefined));
+    const groups = new Map<string, string>();
+    for (const l of add) {
+      const group = this.labelGroups.get(l);
+      if (group === undefined) continue;
+      const other = groups.get(group);
+      if (other !== undefined && other !== l) throw new Error(`exclusive labels asked together: ${other} and ${l} (group ${group})`);
+      groups.set(group, l);
+    }
     const off = (l: string) => {
       const group = this.labelGroups.get(l);
       return remove.includes(l) || (group !== undefined && groups.has(group));

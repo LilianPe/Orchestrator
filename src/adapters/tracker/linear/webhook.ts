@@ -36,62 +36,65 @@ export function stripMention(body: string): string {
 
 type PartialEvent = { type: FactoryEvent['type']; payload: unknown; suffix?: string };
 
-/** Who did what a webhook reports, as the signed body says it: their Linear id, and whether the factory trusts what they wrote. */
+/** Who did what a webhook reports, as the signed body says it. */
 export interface SignedActor {
+  /** Linear id of the workspace user who did it; absent when Linear names none (then `untrusted`). */
   id?: string;
   taint: Taint;
+  /** The author's name, for messages: taken from the same object as `id`. */
+  name: string;
 }
 
 const idOf = (v: unknown): string | undefined => (typeof v === 'string' && v !== '' ? v : undefined);
 
+/** Who wrote what a session webhook carries: the reply, the comment that opened the session, or its creator. */
+function sessionAuthor(body: any): { id?: string; name?: string; external: boolean } {
+  const s = body.agentSession ?? {};
+  const [obj, id] =
+    body.action === 'prompted'
+      ? [body.agentActivity, idOf(body.agentActivity?.user?.id) ?? idOf(body.agentActivity?.userId)]
+      : s.comment
+        ? [s.comment, idOf(s.comment.user?.id) ?? idOf(s.comment.userId)]
+        : [s, idOf(s.creator?.id) ?? idOf(s.creatorId)];
+  const name = obj?.user?.name ?? obj?.creator?.name;
+  return { id, name, external: !!(obj?.botActor || obj?.externalUser || obj?.externalUserId) };
+}
+
 /**
- * The actor of a signed webhook (ORC-160). Trusted only when Linear names a workspace user as its
- * author: a reply or a mention by a member, a delegation, a change made in Linear by a user.
- * Untrusted when no user is named, when an integration or an OAuth app did it (`actor.type`), or
- * when the comment comes through a bot or from outside the workspace (`botActor`, `externalUser`:
- * Slack, email, customer requests). Who may do what is ORC-186's matrix, checked on this id.
+ * The actor of a signed webhook (ORC-160). Trusted, with its id, only when Linear names a workspace
+ * user as the author: a reply or a mention by a member, a delegation, a change made in Linear by a
+ * user. Untrusted, without an id, when no user is named, when an integration or an OAuth app did it
+ * (`actor.type`), or when the comment came through a bot or from outside the workspace (`botActor`,
+ * `externalUser`: Slack, email, customer requests). Who may do what is ORC-186's matrix, checked on
+ * this id: an untrusted event has none to borrow.
  */
 export function signedActor(body: any): SignedActor {
   if (body?.type === 'AgentSessionEvent') {
-    const s = body.agentSession ?? {};
-    let author: any;
-    let id: string | undefined;
-    if (body.action === 'prompted') {
-      author = body.agentActivity;
-      id = idOf(author?.user?.id) ?? idOf(author?.userId);
-    } else if (s.comment) {
-      author = s.comment;
-      id = idOf(author.user?.id) ?? idOf(author.userId);
-    } else {
-      author = s;
-      id = idOf(s.creator?.id) ?? idOf(s.creatorId);
-    }
-    const external = !!(author?.botActor || author?.externalUser || author?.externalUserId);
-    return { id, taint: id && !external ? 'trusted' : 'untrusted' };
+    const a = sessionAuthor(body);
+    const trusted = a.id !== undefined && !a.external;
+    return trusted ? { id: a.id, taint: 'trusted', name: a.name ?? 'Humain' } : { taint: 'untrusted', name: a.name ?? 'Humain' };
   }
   const id = idOf(body?.actor?.id);
-  return { id, taint: id && body.actor.type === 'user' ? 'trusted' : 'untrusted' };
-}
-
-function author(body: any): string {
-  return body.agentActivity?.user?.name ?? body.agentSession?.comment?.user?.name ?? body.agentSession?.creator?.name ?? 'Humain';
+  const name = body?.actor?.name ?? 'Humain';
+  return id && body.actor.type === 'user' ? { id, taint: 'trusted', name } : { taint: 'untrusted', name };
 }
 
 function sessionEvents(body: any, projectId: string, ctx: MapContext): PartialEvent[] {
   const sessionId: string = body.agentSession.id;
+  const author = signedActor(body).name;
   if (body.action === 'created') {
     const comment = body.agentSession.comment;
     if (!comment) return [{ type: 'ticket.delegated', payload: { linearSessionId: sessionId, promptContext: body.promptContext } }];
     const text = stripMention(comment.body ?? '');
     const [first = '', ...rest] = text.split(/\s+/);
     if (ctx.commands(projectId).includes(first.toLowerCase())) {
-      return [{ type: 'command', payload: { name: first.toLowerCase(), body: rest.join(' '), linearSessionId: sessionId, author: author(body) } }];
+      return [{ type: 'command', payload: { name: first.toLowerCase(), body: rest.join(' '), linearSessionId: sessionId, author } }];
     }
-    return [{ type: 'session.mentioned', payload: { linearSessionId: sessionId, body: text, author: author(body) } }];
+    return [{ type: 'session.mentioned', payload: { linearSessionId: sessionId, body: text, author } }];
   }
   if (body.action === 'prompted') {
     if (body.agentActivity?.signal === 'stop') return [{ type: 'session.stopped', payload: { linearSessionId: sessionId } }];
-    return [{ type: 'session.prompted', payload: { linearSessionId: sessionId, body: body.agentActivity?.content?.body ?? '', author: author(body) } }];
+    return [{ type: 'session.prompted', payload: { linearSessionId: sessionId, body: body.agentActivity?.content?.body ?? '', author } }];
   }
   return [];
 }
