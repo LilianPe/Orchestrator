@@ -29,7 +29,7 @@ Une valeur de `config.yaml` l'emporte sur la variable d'environnement. Si une se
 #### Créer l'App
 
 1. GitHub → **Settings → Developer settings → GitHub Apps → New GitHub App**.
-2. Renseignez un nom et une URL. **Webhook** : actif, URL `<publicUrl>/webhooks/github`, secret = la valeur de `github.webhookSecret` (ou `GH_WEBHOOK_SECRET`) ; événements : *Pull request*, *Pull request review*, *Pull request review comment*, *Check run*, *Check suite*, *Push*. Sans URL publique, laissez-le désactivé : le relevé toutes les 30 s suit les PR seul.
+2. Renseignez un nom et une URL. **Webhook** : actif, URL `<publicUrl>/webhooks/github`, secret = la valeur de `github.webhookSecret` (ou `GH_WEBHOOK_SECRET`) ; événements : *Pull request*, *Pull request review*, *Pull request review comment*, *Check run*, *Check suite*, *Push*, *Workflow run* (ces deux derniers servent aussi aux mesures de reverts et de coût de CI, voir [Webhooks GitHub](#webhooks-github) ; *Workflow run* demande la permission *Actions* en lecture, déjà dans le manifeste). Sans URL publique, laissez-le désactivé : le relevé toutes les 30 s suit les PR seul.
 3. Dans **Repository permissions**, appliquez le manifeste [`github-app-manifest.json`](github-app-manifest.json) :
    - **Contents** : lecture/écriture ;
    - **Pull requests** : lecture/écriture ;
@@ -121,7 +121,7 @@ Sans webhook GitHub, il faut jusqu'à 30 s pour qu'un merge ou une CI soit pris 
 
 | Webhook | Événement dans l'inbox | Réaction |
 |---|---|---|
-| `pull_request` fermée avec `merged: true` | `pr.merged` (précédé de `pr.opened` si le ticket ne connaît pas la PR) | comme pour le relevé |
+| `pull_request` fermée avec `merged: true` | `pr.merged` (précédé de `pr.opened` si le ticket ne connaît pas la PR), avec le commit de merge (`mergeSha`, `merge_commit_sha`) et la tête mergée (`headSha`) ; le relevé les donne aussi quand la forge les lit | comme pour le relevé |
 | `pull_request` fermée sans merge | `pr.closed`, un par fermeture | travail du ticket annulé |
 | `pull_request` rouverte (la PR du ticket) | `pr.opened`, un par réouverture | la PR redevient ouverte ; le ticket reste bloqué jusqu'à une relance humaine |
 | `pull_request` ouverte avec `mergeable_state: dirty` | `pr.conflicted` (tête et base) | aucune pour l'instant (ORC-146) |
@@ -129,8 +129,19 @@ Sans webhook GitHub, il faut jusqu'à 30 s pour qu'un merge ou une CI soit pris 
 | `check_run` / `check_suite` terminé au vert | `pr.checks_passed`, seulement quand la forge lit alors **tous** les checks de cette tête au vert ; si elle ne répond pas, 500 | celle du pack |
 | `push` sur la branche du ticket par un compte qui n'est pas un bot | `push.human` (non fiable) | aucune pour l'instant (ORC-159) |
 | `pull_request_review` soumise, `pull_request_review_comment` créé, par un humain | `pr.reviewed` (non fiable) | aucune pour l'instant (ORC-190) |
+| `push` sur la branche par défaut du dépôt (`repository.default_branch`) dont un commit merge une PR d'un ticket suivi, ou revert une PR mergée d'un ticket | `default_branch.pushed` (non fiable), un par ticket concerné, avec ses seuls commits concernés (SHA, message, auteur, `merges` ou `reverts` : numéro de la PR) et l'heure du push (`repository.pushed_at`) | aucune : lu par les mesures (revert à 14 jours, ORC-278) |
+| `workflow_run` terminé (`completed`) sur la branche d'un ticket suivi, dans le dépôt du projet (pas une fork) | `ci.run_completed` (non fiable), un par run et par essai (`ci:<ticket>:<run id>:<run_attempt>`), avec la PR, la tête, la conclusion et la durée | aucune : lu par les mesures (coût de CI, ORC-278) |
 
-Un check sur un commit que la PR a quitté est ignoré. Une lecture de la forge en retard sur le webhook (check encore lu « en cours ») ne laisse rien passer : le relevé rattrape le verdict. Les webhooks sont traités un par un, dans l'ordre d'arrivée : une lecture lente de la forge retarde les réponses suivantes. Les statuts de commit (`status`) ne passent que par le relevé. Un conflit n'apparaît que sur un webhook `pull_request` où GitHub a déjà calculé la fusionnabilité : un conflit créé par un push sur la branche par défaut, sans événement sur la PR, attend la réconciliation (ORC-185). Tant que les agents poussent avec `GH_TOKEN` (ORC-125), leurs pushes viennent d'un compte utilisateur et arrivent donc comme `push.human`, sans effet aujourd'hui. `pr.conflicted` et `pr.reviewed` ne sont pas des clés acceptées sous `on` : le moteur les trace sans réagir.
+Un check sur un commit que la PR a quitté est ignoré. Une lecture de la forge en retard sur le webhook (check encore lu « en cours ») ne laisse rien passer : le relevé rattrape le verdict. Les webhooks sont traités un par un, dans l'ordre d'arrivée : une lecture lente de la forge retarde les réponses suivantes. Les statuts de commit (`status`) ne passent que par le relevé. Un conflit n'apparaît que sur un webhook `pull_request` où GitHub a déjà calculé la fusionnabilité : un conflit créé par un push sur la branche par défaut, sans événement sur la PR, attend la réconciliation (ORC-185). Tant que les agents poussent avec `GH_TOKEN` (ORC-125), leurs pushes viennent d'un compte utilisateur et arrivent donc comme `push.human`, sans effet aujourd'hui. `pr.conflicted`, `pr.reviewed`, `default_branch.pushed` et `ci.run_completed` ne sont pas des clés acceptées sous `on` : le moteur les trace sans réagir.
+
+**Push de la branche par défaut et runs de CI (ORC-278).** Un push sur la branche par défaut n'a pas de branche de ticket : chaque commit est rattaché par ce que GitHub en écrit, jamais par le texte d'un agent lu comme une affirmation :
+
+- un commit **merge** une PR d'un ticket suivi quand son sujet est celui que GitHub écrit au merge (`Merge pull request #<n> from …`, ou `<titre> (#<n>)` pour un squash ; le dernier `(#<n>)` est celui que GitHub ajoute) et que `<n>` est la PR d'un ticket du projet, ou quand son SHA est le commit de merge ou la tête d'une PR dont le `pr.merged` est au journal (merge par rebase) ;
+- un commit **revert** une PR mergée quand son message contient `This reverts commit <sha complet>` (`git revert`, et le commit du bouton *Revert* de GitHub) et que ce SHA est le commit de merge ou la tête d'un `pr.merged` journalisé du projet (`Store.mergedPrOf`), ou `Reverts <owner>/<dépôt>#<n>` (corps de la PR du bouton *Revert*, gardé par un squash) pour une PR `<n>` d'un ticket du dépôt ;
+- un push qui merge une PR de l'usine apporte aussi les commits de cette PR, écrits par l'agent : aucun revert n'y est lu ;
+- un push sans commit concerné ne produit rien. L'id `default-branch:<ticket>:<after>` dédoublonne une livraison renvoyée.
+
+Le push du merge peut arriver avant le `pr.merged` du même merge : il est alors rattaché par son sujet ; un merge par rebase arrivé avant n'est pas vu, et la mesure de revert du ticket reste vide tant qu'aucun push ne le concerne. La durée d'un run de CI est celle de son essai, de `run_started_at` (début de cet essai, pas du premier) à `updated_at` du webhook `completed` : le webhook porte les deux, sans appel à l'API. Les minutes facturées (`GET /actions/runs/{id}/timing`) ne sont pas lues : GitHub retire ces points d'accès d'usage, et ils demanderaient un appel par run ; la durée de l'essai est le temps d'horloge du workflow, pas la somme de ses jobs en parallèle ni l'arrondi à la minute de la facture. Un run sans PR listée par GitHub est compté sur la PR du ticket au moment du webhook, s'il en a une.
 
 ## Branches
 
