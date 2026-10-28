@@ -9,6 +9,7 @@ export interface StoredEvent {
   ticketId?: string;
   schemaVersion?: number;
   taint?: Taint;
+  actor?: string;
   payload: unknown;
 }
 

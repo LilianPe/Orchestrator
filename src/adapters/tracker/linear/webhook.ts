@@ -1,5 +1,6 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
-import { TRUSTED, type LogicalState, type FactoryEvent } from '../../../core/types.js';
+import { labelEchoKey } from '../types.js';
+import { SCHEMA_VERSION, type LogicalState, type FactoryEvent, type Taint } from '../../../core/types.js';
 
 export function isUsableWebhookSecret(secret: unknown): boolean {
   return typeof secret === 'string' && secret.trim() !== '';
@@ -34,6 +35,43 @@ export function stripMention(body: string): string {
 }
 
 type PartialEvent = { type: FactoryEvent['type']; payload: unknown; suffix?: string };
+
+/** Who did what a webhook reports, as the signed body says it: their Linear id, and whether the factory trusts what they wrote. */
+export interface SignedActor {
+  id?: string;
+  taint: Taint;
+}
+
+const idOf = (v: unknown): string | undefined => (typeof v === 'string' && v !== '' ? v : undefined);
+
+/**
+ * The actor of a signed webhook (ORC-160). Trusted only when Linear names a workspace user as its
+ * author: a reply or a mention by a member, a delegation, a change made in Linear by a user.
+ * Untrusted when no user is named, when an integration or an OAuth app did it (`actor.type`), or
+ * when the comment comes through a bot or from outside the workspace (`botActor`, `externalUser`:
+ * Slack, email, customer requests). Who may do what is ORC-186's matrix, checked on this id.
+ */
+export function signedActor(body: any): SignedActor {
+  if (body?.type === 'AgentSessionEvent') {
+    const s = body.agentSession ?? {};
+    let author: any;
+    let id: string | undefined;
+    if (body.action === 'prompted') {
+      author = body.agentActivity;
+      id = idOf(author?.user?.id) ?? idOf(author?.userId);
+    } else if (s.comment) {
+      author = s.comment;
+      id = idOf(author.user?.id) ?? idOf(author.userId);
+    } else {
+      author = s;
+      id = idOf(s.creator?.id) ?? idOf(s.creatorId);
+    }
+    const external = !!(author?.botActor || author?.externalUser || author?.externalUserId);
+    return { id, taint: id && !external ? 'trusted' : 'untrusted' };
+  }
+  const id = idOf(body?.actor?.id);
+  return { id, taint: id && body.actor.type === 'user' ? 'trusted' : 'untrusted' };
+}
 
 function author(body: any): string {
   return body.agentActivity?.user?.name ?? body.agentSession?.comment?.user?.name ?? body.agentSession?.creator?.name ?? 'Humain';
@@ -74,10 +112,17 @@ async function issueEvents(body: any, identifier: string, teamKey: string, proje
     }
   }
   if (Array.isArray(from.labelIds) && Array.isArray(data.labelIds)) {
-    for (const id of data.labelIds as string[]) {
-      if ((from.labelIds as string[]).includes(id)) continue;
+    const before = from.labelIds as string[];
+    const after = data.labelIds as string[];
+    const changes = [
+      ...after.filter((id) => !before.includes(id)).map((id) => ({ id, change: 'added' as const })),
+      ...before.filter((id) => !after.includes(id)).map((id) => ({ id, change: 'removed' as const })),
+    ];
+    for (const { id, change } of changes) {
       const name = ctx.labelNameById(teamKey, id);
-      if (name && !(await ctx.isEcho(`label:${identifier}:${name}`))) out.push({ type: 'label.changed', payload: { label: name, change: 'added' }, suffix: `:label:${id}` });
+      if (name && !(await ctx.isEcho(labelEchoKey(identifier, name, change)))) {
+        out.push({ type: 'label.changed', payload: { label: name, change }, suffix: `:label:${id}` });
+      }
     }
   }
   return out;
@@ -104,7 +149,19 @@ export async function mapLinearWebhook(body: any, key: string, ctx: MapContext):
   if (!projectId) return [];
   const partials = body.type === 'AgentSessionEvent' ? sessionEvents(body, projectId, ctx) : await issueEvents(body, identifier, teamKey, projectId, ctx);
   const at = ctx.now();
+  const { id: actor, taint } = signedActor(body);
   return partials.map(
-    (p) => ({ ...TRUSTED, id: `linear:${key}${p.suffix ?? ''}`, type: p.type, at, projectId, ticketId: identifier, payload: p.payload }) as FactoryEvent,
+    (p) =>
+      ({
+        id: `linear:${key}${p.suffix ?? ''}`,
+        type: p.type,
+        at,
+        projectId,
+        ticketId: identifier,
+        schemaVersion: SCHEMA_VERSION,
+        taint,
+        ...(actor ? { actor } : {}),
+        payload: p.payload,
+      }) as FactoryEvent,
   );
 }

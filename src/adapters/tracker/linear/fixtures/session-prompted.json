@@ -1,3 +1,3 @@
 { "type": "AgentSessionEvent", "action": "prompted", "webhookTimestamp": 1000,
   "agentSession": { "id": "as-1", "issue": { "id": "u1", "identifier": "REL-1" } },
-  "agentActivity": { "id": "aa-1", "content": { "type": "prompt", "body": "les boutons sont mal alignés" }, "user": { "name": "Lilian" } } }
+  "agentActivity": { "id": "aa-1", "content": { "type": "prompt", "body": "les boutons sont mal alignés" }, "user": { "id": "user-lilian", "name": "Lilian" } } }

@@ -28,6 +28,11 @@ export function effectMarker(effectId: string): string {
   return `<!-- factory:effect=${effectId} -->`;
 }
 
+/** The echo key of a label the factory itself added or took off (`putEcho`), for the webhook of its own write to be dropped. */
+export function labelEchoKey(identifier: string, label: string, change: 'added' | 'removed'): string {
+  return change === 'added' ? `label:${identifier}:${label}` : `label-removed:${identifier}:${label}`;
+}
+
 /**
  * Writes are keyed by the outbox effect id (`ticket:seq:i`) when they come from an effect (ORC-162):
  * an effect replayed after it acted looks for what its first execution wrote before writing again
