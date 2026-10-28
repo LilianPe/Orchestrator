@@ -28,12 +28,10 @@ const SEED = Number(process.env['CHAOS_SEED'] ?? Date.now() % 100_000);
 const TICKETS = Number(process.env['CHAOS_TICKETS'] ?? 20);
 /**
  * The visible doubles of the outbox's at least once (an effect cut after it acted runs again) fail
- * the run since each effect is idempotent (ORC-162); CHAOS_STRICT_EFFECTS=0 only prints them. A
- * question launched again after a kill cut its start is the known gap ORC-277: printed, never failing.
+ * the run since each effect is idempotent (ORC-162); CHAOS_STRICT_EFFECTS=0 only prints them. A run
+ * launched twice for one outbox row, a question's included (ORC-277), is a violation either way.
  */
 const STRICT_EFFECTS = process.env['CHAOS_STRICT_EFFECTS'] !== '0';
-/** The double of ORC-277 (a question's run launched again): the only visible double `checkChain` files as at least once for a start. */
-const knownGap = (line: string): boolean => line.startsWith('start ×');
 /** Events sent and not answered yet, at most: several in flight, as webhooks arrive. */
 const WINDOW = 8;
 /** Delay between a daemon's start and its kill, drawn in this range (wall clock). */
@@ -202,7 +200,7 @@ describe('chaos: kill -9 at random moments (ORC-163)', () => {
         expect(kills, summary).toBeGreaterThan(0);
         expect(acked.size, summary).toBe(EVENTS);
         expect(report.violations, summary).toEqual([]);
-        if (STRICT_EFFECTS) expect(report.atLeastOnce.filter((l) => !knownGap(l)), summary).toEqual([]);
+        if (STRICT_EFFECTS) expect(report.atLeastOnce, summary).toEqual([]);
       } finally {
         await store.close();
       }
