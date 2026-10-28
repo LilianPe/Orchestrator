@@ -1,5 +1,5 @@
 import { FakeClock, type Clock } from '../../core/clock.js';
-import type { RunOutcome } from '../../core/types.js';
+import type { RunOutcome, TokenUsage } from '../../core/types.js';
 import { Channel } from './channel.js';
 import type { RunHandle, RunRequest, RunResult, Runner, RunStreamEvent } from './types.js';
 
@@ -8,6 +8,8 @@ export interface FakeScript {
   outcome?: RunOutcome;
   costUsd?: number;
   turns?: number;
+  /** Usage the run reports, as `claude -p` does in its result line (ORC-235); none by default. */
+  tokens?: TokenUsage;
   hold?: boolean;
 }
 
@@ -53,7 +55,7 @@ export class FakeRunner implements Runner {
     const done: Promise<RunResult> = held.then(() => {
       ch.close();
       this.live.delete(req.runId);
-      return { outcome: forced ?? s.outcome ?? 'success', costUsd: s.costUsd ?? 0.1, turns, lastText };
+      return { outcome: forced ?? s.outcome ?? 'success', costUsd: s.costUsd ?? 0.1, turns, lastText, ...(s.tokens ? { tokens: s.tokens } : {}) };
     });
     return { events: ch, done, stop: () => end('stopped') };
   }

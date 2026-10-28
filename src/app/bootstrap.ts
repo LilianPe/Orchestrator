@@ -179,7 +179,11 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     const ingest = createLinearIngest({
       secret: webhookSecret,
       accept,
-      ack: (sessionId) => trackerSwitch.activity(sessionId, { type: 'thought', body: 'Pris en compte.' }),
+      // The time the ack was posted is the first sign of life a measure reads (ORC-235).
+      ack: async (sessionId, eventId) => {
+        await trackerSwitch.activity(sessionId, { type: 'thought', body: 'Pris en compte.' });
+        await store.markAcked(eventId, clock.now()).catch((err: Error) => log(`ack of ${eventId} posted, its time not recorded: ${err.message}`));
+      },
       log,
       ctx: {
         projectIdForTeam: (k) => projects.find((p) => p.teamKey === k)?.id,

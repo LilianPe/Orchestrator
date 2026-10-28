@@ -25,6 +25,7 @@ import {
   type DecisionRequest,
   type EffectOutcome,
   type JournalEntry,
+  type MeasureFacts,
   type OutboxRow,
   type QueueClaim,
   type QueueItem,
@@ -702,19 +703,22 @@ export class PgStore implements AsyncStore {
     const endedAt = run.endedAt === undefined ? null : new Date(run.endedAt);
     const l = run.labels;
     const fact = l?.deliveredFactIds == null ? null : JSON.stringify(l.deliveredFactIds);
+    const tokens = run.tokens;
     // The first record with labels fixes them, in `data.labels` and in their columns alike: an
     // attempt's labels say what it was created with (ORC-226).
     await this.db.execute(sql`
       insert into attempts (
         id, ticket_id, step, model, effort, fingerprints, image, risk,
         factory_version, factory_commit, registry_commit, delivered_fact_ids,
-        started_at, ended_at, status, data, cost_usd
+        started_at, ended_at, status, data, cost_usd,
+        input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens
       ) values (
         ${run.id}, ${run.ticketId}, ${run.job}, ${l?.model ?? null}, ${l?.effort ?? null},
         ${JSON.stringify(l?.fingerprints ?? {})}::jsonb, ${l?.image ?? null}, ${l?.risk ?? null},
         ${l?.factoryVersion ?? null}, ${l?.factoryCommit ?? null}, ${l?.registryCommit ?? null}, ${fact}::jsonb,
         to_timestamp(${run.startedAt / 1000}), ${endedAt}, ${run.status},
-        ${JSON.stringify(run)}::jsonb, ${run.costUsd}
+        ${JSON.stringify(run)}::jsonb, ${run.costUsd},
+        ${tokens?.input ?? null}, ${tokens?.output ?? null}, ${tokens?.cacheRead ?? null}, ${tokens?.cacheCreation ?? null}
       )
       on conflict (id) do update set
         ticket_id = excluded.ticket_id,
@@ -735,7 +739,11 @@ export class PgStore implements AsyncStore {
           when attempts.data ? 'labels' then jsonb_set(excluded.data, '{labels}', attempts.data->'labels')
           else excluded.data
         end,
-        cost_usd = excluded.cost_usd
+        cost_usd = excluded.cost_usd,
+        input_tokens = excluded.input_tokens,
+        output_tokens = excluded.output_tokens,
+        cache_read_tokens = excluded.cache_read_tokens,
+        cache_creation_tokens = excluded.cache_creation_tokens
     `);
   }
 
@@ -769,6 +777,36 @@ export class PgStore implements AsyncStore {
       `,
     );
     return Number(result.rows[0]?.total ?? 0);
+  }
+
+  async markAcked(eventId: string, at: number): Promise<void> {
+    await this.db.execute(sql`update inbox set acked_at = to_timestamp(${at / 1000}) where id = ${eventId} and acked_at is null`);
+  }
+
+  /** Five reads side by side: the facts of a ticket for its measures, not a decision (no lock, no snapshot needed). */
+  async measureFacts(projectId: string, ticketId: string): Promise<MeasureFacts> {
+    const [events, runs, acked, ticket, effects] = await Promise.all([
+      this.db.execute<{ payload: FactoryEvent }>(sql`
+        select payload from journal where ticket_id = ${ticketId} and payload->>'projectId' = ${projectId} order by seq
+      `),
+      this.db.execute<{ data: RunRecord }>(sql`
+        select data from attempts where ticket_id = ${ticketId} and data->>'projectId' = ${projectId} order by started_at, id
+      `),
+      this.db.execute<{ id: string; at: string | number }>(sql`
+        select id, round(extract(epoch from acked_at) * 1000) as at from inbox
+        where acked_at is not null
+          and id in (select event_id from journal where ticket_id = ${ticketId} and payload->>'projectId' = ${projectId})
+      `),
+      this.getTicket(projectId, ticketId),
+      this.listEffects(projectId, ticketId),
+    ]);
+    return {
+      devSession: ticket?.linearSessionId,
+      events: events.rows.map((r) => r.payload),
+      runs: runs.rows.map((r) => r.data),
+      effects,
+      acks: Object.fromEntries(acked.rows.map((r) => [r.id, Number(r.at)])),
+    };
   }
 
   async putTimer(timer: TimerRecord): Promise<void> {

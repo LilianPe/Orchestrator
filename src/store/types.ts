@@ -1,7 +1,7 @@
 import type { AttemptLabels } from '../core/attempt-labels.js';
 import type { DeadLetter, RepairAction } from '../core/dead-letter.js';
 import type { OutboxEffect } from '../core/decision.js';
-import { TRUSTED, type EffectResultPayload, type InputKind, type TimerFired, type QueueName, type FactoryEvent, type RunOutcome, type TicketState } from '../core/types.js';
+import { TRUSTED, type EffectResultPayload, type InputKind, type TimerFired, type QueueName, type FactoryEvent, type RunOutcome, type TicketState, type TokenUsage } from '../core/types.js';
 import type { StoredEvent } from '../core/upcast.js';
 
 /**
@@ -34,6 +34,8 @@ export interface RunRecord {
    * the runner. Absent on a trusted attempt and on records older than ORC-274.
    */
   sensitivePaths?: readonly string[];
+  /** Tokens the runner reported at the end of the attempt (ORC-235); absent when it reported none. */
+  tokens?: TokenUsage;
 }
 
 /**
@@ -224,6 +226,23 @@ export function effectResult(
   return error === undefined ? { ...head, type: 'effect.done', payload: base } : { ...head, type: 'effect.failed', payload: { ...base, error } };
 }
 
+/**
+ * What the measures of a ticket are computed from (ORC-235): facts the store keeps anyway, plus
+ * the time each inbox event was acked.
+ */
+export interface MeasureFacts {
+  /** The ticket's dev session as its projection knows it: the factory may have linked it, which the journal does not hold. */
+  devSession: string | undefined;
+  /** The ticket's journal, in order. */
+  events: FactoryEvent[];
+  /** The ticket's attempts, oldest first. */
+  runs: RunRecord[];
+  /** The ticket's decision outbox rows, in order. */
+  effects: OutboxRow[];
+  /** Ack time of the ticket's inbox events that were acked (`markAcked`), by event id. */
+  acks: Record<string, number>;
+}
+
 /** The inbox event of a timer's firing (ORC-161), written by `fireTimer`: its id `timer:<key>:<fireAt>` names that firing, once. */
 export function timerEvent(t: TimerRecord, at: number): FactoryEvent<'timer.fired'> {
   return {
@@ -381,6 +400,13 @@ export interface Store {
   putEcho(key: string, until: number): Promise<void>;
   isEcho(key: string, now: number): Promise<boolean>;
   costSince(ts: number): Promise<number>;
+  /**
+   * Records the first sign of life the factory gave for an inbox event (ORC-235): the ack of its
+   * webhook, at `at`. A later call leaves the first time.
+   */
+  markAcked(eventId: string, at: number): Promise<void>;
+  /** The facts the measures of a ticket are computed from (ORC-235). */
+  measureFacts(projectId: string, ticketId: string): Promise<MeasureFacts>;
   getMeta(key: string): Promise<string | undefined>;
   setMeta(key: string, value: string): Promise<void>;
   close(): Promise<void>;

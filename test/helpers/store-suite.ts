@@ -114,6 +114,52 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     expect((await s.findRunByToken('t1'))!.labels).toEqual(LABELS);
   });
 
+  it('keeps the tokens an attempt reported (ORC-235)', async () => {
+    const s = await store();
+    const tokens = { input: 10, output: 20, cacheRead: 3_000_000_000, cacheCreation: 40 };
+    await s.putRun(run());
+    expect((await s.getRun('r1'))!.tokens).toBeUndefined();
+    await s.putRun(run({ status: 'success', tokens }));
+    expect((await s.getRun('r1'))!.tokens).toEqual(tokens);
+  });
+
+  it("gathers a ticket's measure facts: journal in order, its attempts, its outbox, the first ack of its events (ORC-235)", async () => {
+    const s = await store();
+    expect(await s.measureFacts('p', 'REL-1')).toEqual({ devSession: undefined, events: [], runs: [], effects: [], acks: {} });
+    await s.appendInbox(delegatedEvent('e1', 'REL-1', 10));
+    await s.appendInbox(delegatedEvent('e2', 'REL-1', 5));
+    await s.appendInbox(delegatedEvent('o1', 'REL-2'));
+    await s.markAcked('e1', 1_700_000_000_250);
+    await s.markAcked('e1', 1_700_000_009_000);
+    await s.markAcked('o1', 1_700_000_000_100);
+    await s.decide(request(delegatedEvent('e1', 'REL-1', 10)));
+    for (let k = 0; k < 2; k++) {
+      const row = await s.claimEffect('p', 'REL-1', 60_000);
+      if (typeof row !== 'object') throw new Error('expected a claimed row');
+      await s.completeEffect(row.id, row.lease, 20);
+    }
+    // e2 is decided after e1, then the results of e1's effects: the journal keeps that order, not the order of `at`.
+    await s.decide(request(delegatedEvent('e2', 'REL-1', 5), { effects: [] }));
+    for (const e of await s.pendingInbox(10)) {
+      if (e.ticketId !== 'REL-1') continue;
+      await s.decide({ event: e as FactoryEvent, workflow: WF, decide: (t) => ({ ticket: t, effects: [], timers: [], clearTimers: false }) });
+    }
+    await s.putRun(run({ id: 'r2', token: 't2', startedAt: 300 }));
+    await s.putRun(run());
+    await s.putRun(run({ id: 'r3', token: 't3', ticketId: 'REL-2' }));
+    await s.putRun(run({ id: 'r4', token: 't4', projectId: 'other' }));
+
+    const facts = await s.measureFacts('p', 'REL-1');
+    expect(facts.devSession).toBeUndefined();
+    expect(facts.events.map((e) => e.id)).toEqual(['e1', 'e2', 'effect:REL-1:1:1', 'effect:REL-1:1:2']);
+    expect(facts.runs.map((r) => r.id)).toEqual(['r1', 'r2']);
+    expect(facts.effects.map((r) => [r.id, r.status])).toEqual([
+      ['REL-1:1:1', 'done'],
+      ['REL-1:1:2', 'done'],
+    ]);
+    expect(facts.acks).toEqual({ e1: 1_700_000_000_250 });
+  });
+
   it('still reads a run stored without labels', async () => {
     const s = await store();
     await s.putRun(run());

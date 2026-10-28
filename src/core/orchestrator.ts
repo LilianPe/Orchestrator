@@ -1017,6 +1017,7 @@ export class Orchestrator {
         costUsd: result.costUsd,
         turns: result.turns,
         lastText: result.lastText,
+        ...(result.tokens ? { tokens: result.tokens } : {}),
       });
       // Shutdown, not a user stop: keep the ticket's activeRunId so the next start's recover() blocks it and tells Linear.
       if (interrupted) return;

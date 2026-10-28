@@ -55,9 +55,23 @@ describe('ClaudeCodeRunner', () => {
     const h = r.start(rq);
     const events = await drain(h.events);
     expect(events.map((e) => e.kind)).toEqual(['init', 'text', 'tool', 'tool_result', 'text', 'result']);
-    expect(await h.done).toEqual({ outcome: 'success', costUsd: 0.42, turns: 3, lastText: 'PR ouverte.' });
+    expect(await h.done).toEqual({
+      outcome: 'success', costUsd: 0.42, turns: 3, lastText: 'PR ouverte.', tokens: { input: 20, output: 400, cacheRead: 9000, cacheCreation: 1000 },
+    });
     expect(readFileSync(join(transcriptsDir, `${rq.runId}.jsonl`), 'utf8').trim().split('\n')).toHaveLength(5);
     expect(JSON.parse(readFileSync(argsFile, 'utf8'))).toContain('--setting-sources');
+  });
+
+  it('keeps the usage of the streamed messages when a run ends without a result line (ORC-235)', async () => {
+    const { r } = runner();
+    const h = r.start(req({}, { FAKE_CLAUDE_SCRIPT: fx('stream-usage-no-result.jsonl'), FAKE_CLAUDE_HANG: '1' }));
+    const events: string[] = [];
+    for await (const e of h.events) {
+      events.push(e.kind);
+      if (events.length === 5) h.stop();
+    }
+    // msg_1 counted once, with its last usage line.
+    expect(await h.done).toMatchObject({ outcome: 'stopped', tokens: { input: 30, output: 37, cacheRead: 3000, cacheCreation: 100 } });
   });
 
   it('reports failure on an error result', async () => {
