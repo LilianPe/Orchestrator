@@ -237,11 +237,11 @@ describe('GitHubAppForge.findPr', () => {
       [
         installationRoute(),
         tokenRoute(42),
-        pullsRoute([openPr({ state: 'closed', merged_at: '2026-10-22T09:00:00Z' })]),
+        pullsRoute([openPr({ state: 'closed', merged_at: '2026-10-22T09:00:00Z', merge_commit_sha: 'm1' })]),
       ],
       { calls },
     );
-    expect(await forge.findPr('/repo', 'factory/REL-1')).toMatchObject({ state: 'MERGED', checks: 'none' });
+    expect(await forge.findPr('/repo', 'factory/REL-1')).toMatchObject({ state: 'MERGED', checks: 'none', mergeSha: 'm1' });
     expect(calls.some((c) => c.url.includes('/check-runs'))).toBe(false);
   });
 

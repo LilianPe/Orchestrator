@@ -61,9 +61,9 @@ describe('GhCliForge', () => {
   it('returns undefined without PR and skips checks for merged PRs', async () => {
     expect(await new GhCliForge(fakeExec({ 'gh pr list': { stdout: '[]' } })).findPr('/r', 'b')).toBeUndefined();
     const merged = await new GhCliForge(
-      fakeExec({ 'gh pr list': { stdout: JSON.stringify([{ number: 2, url: 'u', state: 'MERGED', headRefName: 'b' }]) } }),
+      fakeExec({ 'gh pr list': { stdout: JSON.stringify([{ number: 2, url: 'u', state: 'MERGED', headRefName: 'b', mergeCommit: { oid: 'm2' } }]) } }),
     ).findPr('/r', 'b');
-    expect(merged).toMatchObject({ state: 'MERGED', checks: 'none' });
+    expect(merged).toMatchObject({ state: 'MERGED', checks: 'none', mergeSha: 'm2' });
   });
 
   it('lists unresolved review threads as feedback', async () => {

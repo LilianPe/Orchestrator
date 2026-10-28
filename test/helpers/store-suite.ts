@@ -160,6 +160,27 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     expect(facts.acks).toEqual({ e1: 1_700_000_000_250 });
   });
 
+  it('finds the ticket and PR a merge or head commit belongs to, from the journaled merges of the project (ORC-278)', async () => {
+    const s = await store();
+    const merge = (id: string, ticketId: string, payload: object, projectId = 'p'): FactoryEvent =>
+      ({ ...TRUSTED, id, type: 'pr.merged', at: 10, projectId, ticketId, payload: { url: 'u', branch: 'b', ...payload } }) as FactoryEvent;
+    const record = async (e: FactoryEvent) => {
+      await s.appendInbox(e);
+      await s.decide({ event: e, workflow: WF, decide: (t) => ({ ticket: t ?? newTicketState(e.projectId, e.ticketId!, 'T', 'done', 0), effects: [], timers: [], clearTimers: false }) });
+    };
+    await record(merge('m1', 'REL-1', { number: 3, mergeSha: 'aaa', headSha: 'bbb' }));
+    await record(merge('m2', 'REL-2', { number: 4, headSha: 'ccc' }));
+    await record(merge('m3', 'REL-9', { number: 9, mergeSha: 'ddd' }, 'other'));
+    // Still in the inbox: not a merge the journal holds.
+    await s.appendInbox(merge('m4', 'REL-4', { number: 5, mergeSha: 'eee' }));
+    expect(await s.mergedPrOf('p', 'aaa')).toEqual({ ticketId: 'REL-1', number: 3 });
+    expect(await s.mergedPrOf('p', 'bbb')).toEqual({ ticketId: 'REL-1', number: 3 });
+    expect(await s.mergedPrOf('p', 'ccc')).toEqual({ ticketId: 'REL-2', number: 4 });
+    expect(await s.mergedPrOf('p', 'ddd')).toBeUndefined();
+    expect(await s.mergedPrOf('p', 'eee')).toBeUndefined();
+    expect(await s.mergedPrOf('p', 'zzz')).toBeUndefined();
+  });
+
   it('still reads a run stored without labels', async () => {
     const s = await store();
     await s.putRun(run());

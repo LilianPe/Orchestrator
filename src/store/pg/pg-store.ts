@@ -809,6 +809,17 @@ export class PgStore implements AsyncStore {
     };
   }
 
+  async mergedPrOf(projectId: string, sha: string): Promise<{ ticketId: string; number: number } | undefined> {
+    const result = await this.db.execute<{ ticket_id: string; number: string | number }>(sql`
+      select ticket_id, payload->'payload'->>'number' as number from journal
+      where type = 'pr.merged' and payload->>'projectId' = ${projectId} and ticket_id is not null
+        and (payload->'payload'->>'mergeSha' = ${sha} or payload->'payload'->>'headSha' = ${sha})
+      order by created_at, seq limit 1
+    `);
+    const row = result.rows[0];
+    return row && { ticketId: row.ticket_id, number: Number(row.number) };
+  }
+
   async putTimer(timer: TimerRecord): Promise<void> {
     await this.writeTimer(this.db, timer);
   }

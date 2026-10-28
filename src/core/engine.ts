@@ -489,6 +489,11 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
       // In the inbox, but no reaction yet (ORC-190 for reviews, ORC-146 for conflicts): no rule applies to them.
       out.trace.push(`${event.type}: no reaction yet`);
       return out;
+    case 'default_branch.pushed':
+    case 'ci.run_completed':
+      // Facts for the measures (ORC-278): a revert of the ticket's PR, a CI run's duration. Nothing to decide.
+      out.trace.push(`${event.type}: recorded for the measures`);
+      return out;
     case 'pr.checks_passed':
       // Green CI ends the red-CI loop: its count starts over (ORC-270). The rules of pr.checks_passed still apply.
       // A ticket blocked by the red-CI bound is no longer blocked for a reason that holds: the block is lifted.

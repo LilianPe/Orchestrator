@@ -24,11 +24,12 @@ export function githubRepoOf(exec: Exec = execCmd): (repoPath: string) => Promis
 }
 
 /**
- * The daemon's mapping context: a ticket is the one whose branch the webhook names, in the project whose
- * repository (`repoOf`, `owner/name`) sent it; a project whose repository is unknown matches nothing.
+ * The daemon's mapping context: a ticket is the one whose branch (or PR, or journaled merge commit, for
+ * a push on the default branch) the webhook names, in the project whose repository (`repoOf`,
+ * `owner/name`) sent it; a project whose repository is unknown matches nothing.
  */
 export function githubMapContext(d: {
-  store: Pick<Store, 'listTickets'>;
+  store: Pick<Store, 'listTickets' | 'getTicket' | 'mergedPrOf'>;
   forge: Pick<Forge, 'findPr'>;
   projects: readonly { id: string; repoPath: string }[];
   repoOf: (repoPath: string) => Promise<string | undefined>;
@@ -42,6 +43,19 @@ export function githubMapContext(d: {
   return {
     ticketForBranch: async (repo, branch) => {
       for (const t of await d.store.listTickets()) if (t.branch === branch && (await sameRepo(t.projectId, repo))) return t;
+      return undefined;
+    },
+    ticketForPr: async (repo, number) => {
+      for (const t of await d.store.listTickets()) if (t.prNumber === number && (await sameRepo(t.projectId, repo))) return t;
+      return undefined;
+    },
+    mergedPrOf: async (repo, sha) => {
+      for (const project of d.projects) {
+        if (!(await sameRepo(project.id, repo))) continue;
+        const found = await d.store.mergedPrOf(project.id, sha);
+        const ticket = found && (await d.store.getTicket(project.id, found.ticketId));
+        if (found && ticket) return { ticket, number: found.number };
+      }
       return undefined;
     },
     findPr: async (t) => {

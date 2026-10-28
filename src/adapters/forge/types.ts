@@ -7,6 +7,8 @@ export interface PrInfo {
   branch: string;
   /** SHA of the PR's head commit, when the forge reads it: the checks verdict is per head (ORC-134). */
   headSha?: string;
+  /** SHA of the commit a merged PR put on its base branch, when the forge reads it: a revert names it (ORC-278). */
+  mergeSha?: string;
   checks: 'pending' | 'pass' | 'fail' | 'none';
   failedChecks: string[];
 }

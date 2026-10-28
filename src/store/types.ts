@@ -407,6 +407,11 @@ export interface Store {
   markAcked(eventId: string, at: number): Promise<void>;
   /** The facts the measures of a ticket are computed from (ORC-235). */
   measureFacts(projectId: string, ticketId: string): Promise<MeasureFacts>;
+  /**
+   * The ticket and PR whose journaled merge (`pr.merged`) has `sha` as its merge commit or head
+   * (ORC-278): what a revert on the default branch names. The first such merge of the project.
+   */
+  mergedPrOf(projectId: string, sha: string): Promise<{ ticketId: string; number: number } | undefined>;
   getMeta(key: string): Promise<string | undefined>;
   setMeta(key: string, value: string): Promise<void>;
   close(): Promise<void>;

@@ -58,6 +58,35 @@ export interface PrPayload {
   branch: string;
 }
 
+/** A commit of a push on the default branch, and what it is to the ticket's PRs (ORC-278). */
+export interface PushedCommit {
+  sha: string;
+  message: string;
+  author: string;
+  /** Number of the ticket's PR this commit lands on the default branch (its merge or squash commit), when known. */
+  merges?: number;
+  /** Number of the ticket's merged PR this commit reverts, read from its message (`This reverts commit <sha>`, `Reverts owner/repo#N`). */
+  reverts?: number;
+}
+
+/**
+ * One attempt of a workflow run (ORC-278). `durationMs` is `completedAt - startedAt`: the run's
+ * `run_started_at` (the start of this attempt) to its `updated_at` on the `completed` webhook.
+ */
+export interface CiRunPayload {
+  /** The PR the run is for: the one GitHub lists on the run for the branch, else the ticket's PR when the run came in. */
+  number?: number;
+  branch: string;
+  headSha: string;
+  runId: number;
+  attempt: number;
+  workflow: string;
+  conclusion: string | null;
+  startedAt: number;
+  completedAt: number;
+  durationMs: number;
+}
+
 /** What the factory needs to start tracking a ticket, read from the tracker when the event comes in. */
 export interface IssueSnapshot {
   title: string;
@@ -118,7 +147,12 @@ export interface EventPayloads {
   'pr.opened': PrPayload;
   'pr.checks_passed': PrPayload;
   'pr.checks_failed': PrPayload & { failures: string[] };
-  'pr.merged': PrPayload;
+  /**
+   * `mergeSha` (the commit the merge put on the base branch) and `headSha` (the PR's head when merged),
+   * when the source reads them (ORC-278): a revert on the default branch names one of them. Optional: no
+   * version bump, older rows and a forge that does not read them lack them.
+   */
+  'pr.merged': PrPayload & { mergeSha?: string; headSha?: string };
   /** The PR is closed without merge: the ticket's dev work is cancelled (ORC-134). */
   'pr.closed': PrPayload;
   /**
@@ -128,6 +162,17 @@ export interface EventPayloads {
   'pr.reviewed': PrPayload & { kind: 'review' | 'comment'; author: string; body: string; state?: string };
   /** The PR conflicts with its base branch, seen by the GitHub webhook (ORC-134). No reaction yet: `decide` traces it (ORC-146). */
   'pr.conflicted': PrPayload & { headSha: string; baseRef: string };
+  /**
+   * A push on the project's default branch that concerns the ticket (ORC-278): only its commits that merge
+   * the ticket's PR (`merges`) or revert it (`reverts`), by number. Untrusted: messages are written by
+   * whoever commits. No reaction: the measures read it (`revertedWithin14Days`).
+   */
+  'default_branch.pushed': { branch: string; before: string; after: string; pushedAt?: number; commits: PushedCommit[] };
+  /**
+   * A completed attempt of a GitHub Actions workflow run on the ticket's branch (ORC-278), one per run id
+   * and attempt. Untrusted: the workflow is a file of the branch. No reaction: the measures sum it (`ciCost`).
+   */
+  'ci.run_completed': CiRunPayload;
   'run.finished': { runId: string; job: string; outcome: RunOutcome; costUsd: number; turns: number; lastText: string };
   'verify.passed': { runId: string; job: string };
   'verify.failed': { runId: string; job: string; failures: VerifyFailure[] };
