@@ -6,7 +6,8 @@ import type { EventType, FactoryEvent, FeedbackItem, InputKind, Taint, TicketSta
 
 type StartRun = Extract<Effect, { kind: 'start_run' }>;
 
-const STOP_MESSAGE = 'Arrêté. Répondez dans ce fil ou posez le label agent:reprendre pour relancer.';
+const RELAUNCH = 'Répondez dans ce fil ou posez le label agent:reprendre pour relancer.';
+const STOP_MESSAGE = `Arrêté. ${RELAUNCH}`;
 const STOPPED = 'Arrêté à la demande';
 
 /** Paths a run started from an untrusted event must not write; enforced by the runner's sandbox (ORC-151). */
@@ -354,6 +355,31 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
       out.events.push({ type: 'work.cancelled' });
       out.effects.push({ kind: 'stop_run' });
       break;
+    case 'pr.closed': {
+      // Closed without merge (ORC-134): the run is cancelled as by a stop, then the rules apply. The close
+      // of another PR than the ticket's, or after its merge, cancels nothing.
+      const n = event.payload.number;
+      if (!ticket || ticket.prState === 'MERGED' || ticket.prNumber !== n) {
+        out.trace.push(`pr.closed: PR #${n} is not the ticket's open PR, nothing cancelled`);
+        break;
+      }
+      out.trace.push('built-in pr.closed: work cancelled');
+      out.events.push(
+        { type: 'ticket.patched', patch: { prState: 'CLOSED' } },
+        { type: 'work.cancelled' },
+        { type: 'ticket.blocked', reason: `PR #${n} fermée sans merge` },
+      );
+      out.effects.push(
+        { kind: 'stop_run' },
+        { kind: 'activity', type: 'response', body: `La PR #${n} a été fermée sans merge : j'arrête le travail sur ce ticket. ${RELAUNCH}` },
+      );
+      break;
+    }
+    case 'pr.reviewed':
+    case 'pr.conflicted':
+      // In the inbox, but no reaction yet (ORC-190 for reviews, ORC-146 for conflicts): no rule applies to them.
+      out.trace.push(`${event.type}: no reaction yet`);
+      return out;
     case 'pr.checks_passed':
       // Green CI ends the red-CI loop: its count starts over (ORC-270). The rules of pr.checks_passed still apply.
       // A ticket blocked by the red-CI bound is no longer blocked for a reason that holds: the block is lifted.
