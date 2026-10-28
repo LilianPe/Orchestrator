@@ -214,6 +214,27 @@ describe('Worker.start', () => {
     await worker.settle();
     expect(executed).toEqual(['REL-1:1:1', 'REL-1:1:2']);
   });
+
+  it('lets the rows behind a decision go once its retry finds it committed (the answer to its COMMIT lost, ORC-163)', async () => {
+    let lost = 1;
+    const { store, worker, executed } = setup({ retry: { attempts: 5, baseMs: 1 } });
+    const decide = store.decide.bind(store);
+    store.decide = async (req) => {
+      const outcome = await decide(req);
+      // Committed, but the connection drops before the answer: the worker sees an error.
+      if (lost-- > 0) throw new Error('Connection terminated unexpectedly');
+      return outcome;
+    };
+    await store.appendInbox(event('e1'));
+    await store.appendInbox(event('e2'));
+    worker.start(60_000);
+    await worker.kick();
+    for (let i = 0; i < 200 && (await store.pendingInbox(10)).length > 0; i++) await new Promise((r) => setTimeout(r, 5));
+    worker.stop();
+    await worker.settle();
+    expect(await store.pendingInbox(10)).toEqual([]);
+    expect(executed).toEqual(['REL-1:1:1', 'REL-1:1:2', 'REL-1:2:1', 'REL-1:2:2']);
+  });
 });
 
 describe('Worker: a decision that throws is dead-lettered (ORC-175)', () => {
