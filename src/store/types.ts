@@ -1,7 +1,6 @@
 import type { AttemptLabels } from '../core/attempt-labels.js';
-import type { TokenUsage } from '../core/measures.js';
 import type { OutboxEffect } from '../core/decision.js';
-import { TRUSTED, type InputKind, type QueueName, type FactoryEvent, type RunOutcome, type TicketState } from '../core/types.js';
+import { TRUSTED, type InputKind, type QueueName, type FactoryEvent, type RunOutcome, type TicketState, type TokenUsage } from '../core/types.js';
 import type { StoredEvent } from '../core/upcast.js';
 
 /**
@@ -159,8 +158,8 @@ export function effectResult(row: Pick<OutboxRow, 'id' | 'projectId' | 'ticketId
  * the time each inbox event was acked.
  */
 export interface MeasureFacts {
-  /** The ticket's projection, undefined when the factory never tracked it. */
-  ticket: TicketState | undefined;
+  /** The ticket's dev session as its projection knows it: the factory may have linked it, which the journal does not hold. */
+  devSession: string | undefined;
   /** The ticket's journal, in order. */
   events: FactoryEvent[];
   /** The ticket's attempts, oldest first. */

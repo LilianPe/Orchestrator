@@ -59,7 +59,8 @@ export function signedMention(sessionId: string, body: string, at = NOW): { raw:
 
 /**
  * The daemon's Linear ingestion for project `p` (team REL), writing through `accept`. `acked` and
- * `now` as the daemon wires them: the recording of a posted ack, the clock (default 1000).
+ * `now` as the daemon wires them: what follows a posted ack (the daemon records its time), the
+ * clock (default 1000).
  */
 export function linearIngest(
   accept: (e: FactoryEvent) => Promise<boolean>,
@@ -69,8 +70,10 @@ export function linearIngest(
   return createLinearIngest({
     secret: () => SECRET,
     accept,
-    ack: async (sessionId) => void acks.push(sessionId),
-    acked: opts.acked,
+    ack: async (sessionId, eventId) => {
+      acks.push(sessionId);
+      await opts.acked?.(eventId);
+    },
     log: () => {},
     ctx: {
       projectIdForTeam: (k) => (k === 'REL' ? 'p' : undefined),

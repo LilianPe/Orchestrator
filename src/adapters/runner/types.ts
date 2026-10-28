@@ -1,6 +1,5 @@
 import type { RunLimits } from '../../config/workflow-schema.js';
-import type { TokenUsage } from '../../core/measures.js';
-import type { RunOutcome } from '../../core/types.js';
+import type { RunOutcome, TokenUsage } from '../../core/types.js';
 
 export type RunStreamEvent =
   | { kind: 'init'; sessionId: string }

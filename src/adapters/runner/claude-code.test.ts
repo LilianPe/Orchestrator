@@ -62,6 +62,18 @@ describe('ClaudeCodeRunner', () => {
     expect(JSON.parse(readFileSync(argsFile, 'utf8'))).toContain('--setting-sources');
   });
 
+  it('keeps the usage of the streamed messages when a run ends without a result line (ORC-235)', async () => {
+    const { r } = runner();
+    const h = r.start(req({}, { FAKE_CLAUDE_SCRIPT: fx('stream-usage-no-result.jsonl'), FAKE_CLAUDE_HANG: '1' }));
+    const events: string[] = [];
+    for await (const e of h.events) {
+      events.push(e.kind);
+      if (events.length === 5) h.stop();
+    }
+    // msg_1 counted once, with its last usage line.
+    expect(await h.done).toMatchObject({ outcome: 'stopped', tokens: { input: 30, output: 37, cacheRead: 3000, cacheCreation: 100 } });
+  });
+
   it('reports failure on an error result', async () => {
     const { r } = runner();
     const h = r.start(req({}, { FAKE_CLAUDE_SCRIPT: fx('stream-error.jsonl') }));

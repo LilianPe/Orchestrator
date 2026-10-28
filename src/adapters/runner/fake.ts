@@ -1,6 +1,5 @@
 import { FakeClock, type Clock } from '../../core/clock.js';
-import type { TokenUsage } from '../../core/measures.js';
-import type { RunOutcome } from '../../core/types.js';
+import type { RunOutcome, TokenUsage } from '../../core/types.js';
 import { Channel } from './channel.js';
 import type { RunHandle, RunRequest, RunResult, Runner, RunStreamEvent } from './types.js';
 

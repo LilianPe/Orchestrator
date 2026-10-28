@@ -2,9 +2,9 @@ import { spawn } from 'node:child_process';
 import { createWriteStream, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
-import type { RunOutcome } from '../../core/types.js';
+import { addTokens, NO_TOKENS, type RunOutcome, type TokenUsage } from '../../core/types.js';
 import { Channel } from './channel.js';
-import { parseStreamLine } from './stream-parser.js';
+import { parseStreamLine, parseUsage } from './stream-parser.js';
 import { maskTranscriptLine, transcriptSecrets } from './transcript.js';
 import type { RunHandle, RunRequest, RunResult, Runner, RunStreamEvent } from './types.js';
 
@@ -66,6 +66,9 @@ export class ClaudeCodeRunner implements Runner {
     let lastText = '';
     let stderr = '';
     let result: Extract<RunStreamEvent, { kind: 'result' }> | undefined;
+    // Usage of each model message as it streams, by message id (its lines repeat it): the tokens of a
+    // run that ends without a result line (stopped, capped, killed) are not lost (ORC-235).
+    const usage = new Map<string, TokenUsage>();
     let stopped = false;
     let limited = false;
 
@@ -99,8 +102,10 @@ export class ClaudeCodeRunner implements Runner {
       try {
         const line = maskTranscriptLine(unmasked, secrets);
         transcript.write(line + '\n');
-        const raw = JSON.parse(line) as { type?: string; subtype?: string };
+        const raw = JSON.parse(line) as { type?: string; subtype?: string; message?: { id?: unknown; usage?: unknown } };
         if (raw?.type === 'assistant' && ++assistantTurns > req.limits.turns) limit();
+        const used = raw?.type === 'assistant' && typeof raw.message?.id === 'string' ? parseUsage(raw.message.usage) : undefined;
+        if (used) usage.set(raw.message!.id as string, used);
         if (raw?.type === 'result' && typeof raw.subtype === 'string' && raw.subtype.includes('max')) limited = true;
         for (const ev of parseStreamLine(line)) {
           if (ev.kind === 'text' && ev.text.trim()) lastText = ev.text;
@@ -125,7 +130,8 @@ export class ClaudeCodeRunner implements Runner {
         // It becomes the run's lastText, stored and posted to Linear: the stream's text is masked
         // already, stderr and a spawn error are masked here.
         const text = result?.text || lastText || maskTranscriptLine(spawnError ? spawnError.message : stderr.trim().slice(-2000), secrets);
-        transcript.end(() => resolve({ outcome, costUsd: result?.costUsd ?? 0, turns: result?.turns ?? assistantTurns, lastText: text, ...(result?.tokens ? { tokens: result.tokens } : {}) }));
+        const tokens = result?.tokens ?? (usage.size ? [...usage.values()].reduce(addTokens, NO_TOKENS) : undefined);
+        transcript.end(() => resolve({ outcome, costUsd: result?.costUsd ?? 0, turns: result?.turns ?? assistantTurns, lastText: text, ...(tokens ? { tokens } : {}) }));
       };
       child.on('error', (err) => finish(err));
       child.on('close', () => finish());

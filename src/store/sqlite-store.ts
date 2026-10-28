@@ -530,11 +530,12 @@ export class SqliteStore implements Store {
       .all(projectId, ticketId) as { data: string }[];
     const acked = this.db
       .prepare(
-        `SELECT id, acked_at FROM inbox WHERE acked_at IS NOT NULL AND json_extract(data, '$.projectId') = ? AND json_extract(data, '$.ticketId') = ?`,
+        `SELECT id, acked_at FROM inbox WHERE acked_at IS NOT NULL
+           AND id IN (SELECT id FROM events WHERE ticket_id = ? AND json_extract(data, '$.projectId') = ?)`,
       )
-      .all(projectId, ticketId) as { id: string; acked_at: number }[];
+      .all(ticketId, projectId) as { id: string; acked_at: number }[];
     return {
-      ticket: this.ticketRow(projectId, ticketId),
+      devSession: this.ticketRow(projectId, ticketId)?.linearSessionId,
       events: events.map((r) => JSON.parse(r.data) as FactoryEvent),
       runs: runs.map((r) => JSON.parse(r.data) as RunRecord),
       effects: await this.listEffects(projectId, ticketId),

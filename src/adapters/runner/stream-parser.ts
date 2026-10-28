@@ -1,4 +1,4 @@
-import type { TokenUsage } from '../../core/measures.js';
+import type { TokenUsage } from '../../core/types.js';
 import type { RunStreamEvent } from './types.js';
 
 export function summarizeToolInput(input: unknown): string {
@@ -11,7 +11,7 @@ export function summarizeToolInput(input: unknown): string {
 
 const count = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : 0);
 
-/** The `usage` of a `result` line (ORC-235): undefined unless it carries input and output counts. */
+/** A `usage` object of the stream, of a `result` line or of a model message (ORC-235): undefined unless it carries input and output counts. */
 export function parseUsage(usage: unknown): TokenUsage | undefined {
   if (!usage || typeof usage !== 'object') return undefined;
   const u = usage as Record<string, unknown>;

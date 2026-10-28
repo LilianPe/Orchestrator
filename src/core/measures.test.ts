@@ -17,7 +17,7 @@ const run = (patch: Partial<RunRecord>): RunRecord => ({
   costUsd: 0, turns: 1, lastText: '', token: 't', cwd: '/w', ...patch,
 });
 
-const facts = (patch: Partial<MeasureFacts>): MeasureFacts => ({ ticket: undefined, events: [], runs: [], effects: [], acks: {}, ...patch });
+const facts = (patch: Partial<MeasureFacts>): MeasureFacts => ({ devSession: undefined, events: [], runs: [], effects: [], acks: {}, ...patch });
 
 describe('ticketMeasures (ORC-235)', () => {
   it('is empty for a ticket with no facts', () => {
@@ -81,6 +81,37 @@ describe('ticketMeasures (ORC-235)', () => {
       expect.objectContaining({ eventId: 'q', kind: 'question', signOfLifeMs: 30, answerMs: 300 }),
       // The reply of a1, posted before q2, answers q only.
       expect.objectContaining({ eventId: 'q2', kind: 'question', signOfLifeMs: 200, answerMs: 2_000 }),
+    ]);
+  });
+
+  it('tells question sessions from the dev session as the engine does, and reads old journal rows upcast', () => {
+    const m = ticketMeasures('p', 'REL-1', facts({
+      events: [
+        ev('d', 'ticket.delegated', 0, { linearSessionId: 'ls' }),
+        // Another session Linear opened on the delegated ticket: the engine answers it as a question.
+        ev('b', 'session.prompted', 5, { linearSessionId: 'other', body: '?', author: 'h' }),
+        // A row of schema version 1: `ticket.moved` is `status.changed` now.
+        { id: 'old', type: 'ticket.moved', at: 6, projectId: 'p', ticketId: 'REL-1', payload: { from: 'human_review', to: 'dev' } } as unknown as FactoryEvent,
+        ev('m', 'pr.merged', 10, { number: 1, url: 'u', branch: 'b' }),
+      ],
+    }));
+    expect(m.messages.map((x) => x.kind)).toEqual(['delegation', 'question']);
+    expect(m.reworks).toEqual([{ cause: 'sent_back', id: 'old' }]);
+  });
+
+  it('does not take an error of an earlier run as the answer to a later question', () => {
+    const m = ticketMeasures('p', 'REL-1', facts({
+      events: [
+        ev('q1', 'session.mentioned', 0, { linearSessionId: 'qs', body: '?', author: 'h' }),
+        ev('q2', 'session.prompted', 10, { linearSessionId: 'qs', body: '??', author: 'h' }),
+        done('REL-1:3:1', 50),
+      ],
+      runs: [run({ id: 'a1', queue: 'questions', job: 'ask', linearSessionId: 'qs', startedAt: 1, status: 'failure' })],
+      effects: [row('REL-1:3:1', { kind: 'activity', type: 'error', body: 'échec', runId: 'a1' })],
+    }));
+    expect(m.messages.map((x) => [x.eventId, x.signOfLifeMs, x.answerMs])).toEqual([
+      ['q1', 50, 50],
+      ['q2', 40, null],
     ]);
   });
 });

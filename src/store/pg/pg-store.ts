@@ -667,22 +667,28 @@ export class PgStore implements AsyncStore {
     await this.db.execute(sql`update inbox set acked_at = to_timestamp(${at / 1000}) where id = ${eventId} and acked_at is null`);
   }
 
+  /** Five reads side by side: the facts of a ticket for its measures, not a decision (no lock, no snapshot needed). */
   async measureFacts(projectId: string, ticketId: string): Promise<MeasureFacts> {
-    const events = await this.db.execute<{ payload: FactoryEvent }>(sql`
-      select payload from journal where ticket_id = ${ticketId} and payload->>'projectId' = ${projectId} order by seq
-    `);
-    const runs = await this.db.execute<{ data: RunRecord }>(sql`
-      select data from attempts where ticket_id = ${ticketId} and data->>'projectId' = ${projectId} order by started_at, id
-    `);
-    const acked = await this.db.execute<{ id: string; at: string | number }>(sql`
-      select id, round(extract(epoch from acked_at) * 1000) as at from inbox
-      where acked_at is not null and payload->>'ticketId' = ${ticketId} and payload->>'projectId' = ${projectId}
-    `);
+    const [events, runs, acked, ticket, effects] = await Promise.all([
+      this.db.execute<{ payload: FactoryEvent }>(sql`
+        select payload from journal where ticket_id = ${ticketId} and payload->>'projectId' = ${projectId} order by seq
+      `),
+      this.db.execute<{ data: RunRecord }>(sql`
+        select data from attempts where ticket_id = ${ticketId} and data->>'projectId' = ${projectId} order by started_at, id
+      `),
+      this.db.execute<{ id: string; at: string | number }>(sql`
+        select id, round(extract(epoch from acked_at) * 1000) as at from inbox
+        where acked_at is not null
+          and id in (select event_id from journal where ticket_id = ${ticketId} and payload->>'projectId' = ${projectId})
+      `),
+      this.getTicket(projectId, ticketId),
+      this.listEffects(projectId, ticketId),
+    ]);
     return {
-      ticket: await this.getTicket(projectId, ticketId),
+      devSession: ticket?.linearSessionId,
       events: events.rows.map((r) => r.payload),
       runs: runs.rows.map((r) => r.data),
-      effects: await this.listEffects(projectId, ticketId),
+      effects,
       acks: Object.fromEntries(acked.rows.map((r) => [r.id, Number(r.at)])),
     };
   }

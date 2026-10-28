@@ -27,7 +27,7 @@ describe('measures of the MVP doc, from the first run (ORC-235)', () => {
     expect(m.reworks.map((r) => r.cause)).toEqual(['pr.checks_failed', 'feedback']);
   });
 
-  it('a failed dev run and a human sending the ticket back to dev are reworks too', async () => {
+  it('a reply that relaunches a failed dev run and a human sending the ticket back to dev are reworks too', async () => {
     const h = createHarness();
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Exporter les audits en CSV.' });
     h.runner.enqueue({ outcome: 'failure' }, {});
@@ -37,6 +37,6 @@ describe('measures of the MVP doc, from the first run (ORC-235)', () => {
     await h.send('status.changed', { from: 'human_review', to: 'dev' });
     await h.send('pr.merged', { number: 3, url: 'https://gh/pr/3', branch: 'factory/rel-1-export-csv' });
     const m = await measureTicket(h.store, 'p', 'REL-1');
-    expect(m.reworks.map((r) => r.cause).sort()).toEqual(['feedback', 'run.failure', 'sent_back']);
+    expect(m.reworks.map((r) => r.cause)).toEqual(['feedback', 'sent_back']);
   });
 });

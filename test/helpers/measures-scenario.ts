@@ -1,5 +1,6 @@
 import { expect } from 'vitest';
 import { measureTicket, type TicketMeasures } from '../../src/core/measures.js';
+import { addTokens, NO_TOKENS } from '../../src/core/types.js';
 import type { createHarness } from './harness.js';
 import { linearIngest, signedDelegation, signedMention } from './linear-webhook.js';
 
@@ -61,12 +62,7 @@ export function expectFirstRunMeasures(m: TicketMeasures): void {
   // Dev, ask, review and learn: the learn run reports no usage, and is counted apart.
   expect(m.attempts).toBe(4);
   expect(m.attemptsWithoutTokens).toBe(1);
-  expect(m.tokens).toEqual({
-    input: DEV_TOKENS.input + ASK_TOKENS.input + REVIEW_TOKENS.input,
-    output: DEV_TOKENS.output + ASK_TOKENS.output + REVIEW_TOKENS.output,
-    cacheRead: DEV_TOKENS.cacheRead + ASK_TOKENS.cacheRead + REVIEW_TOKENS.cacheRead,
-    cacheCreation: DEV_TOKENS.cacheCreation + ASK_TOKENS.cacheCreation + REVIEW_TOKENS.cacheCreation,
-  });
+  expect(m.tokens).toEqual([DEV_TOKENS, ASK_TOKENS, REVIEW_TOKENS].reduce(addTokens, NO_TOKENS));
   expect(m.firstTry).toBe(true);
   expect(m.reworks).toEqual([]);
   expect(m.messages).toEqual([

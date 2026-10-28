@@ -125,7 +125,7 @@ export function storeContract(store: () => Store | Promise<Store>): void {
 
   it("gathers a ticket's measure facts: journal in order, its attempts, its outbox, the first ack of its events (ORC-235)", async () => {
     const s = await store();
-    expect(await s.measureFacts('p', 'REL-1')).toEqual({ ticket: undefined, events: [], runs: [], effects: [], acks: {} });
+    expect(await s.measureFacts('p', 'REL-1')).toEqual({ devSession: undefined, events: [], runs: [], effects: [], acks: {} });
     await s.appendInbox(delegatedEvent('e1', 'REL-1', 10));
     await s.appendInbox(delegatedEvent('e2', 'REL-1', 5));
     await s.appendInbox(delegatedEvent('o1', 'REL-2'));
@@ -150,7 +150,7 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     await s.putRun(run({ id: 'r4', token: 't4', projectId: 'other' }));
 
     const facts = await s.measureFacts('p', 'REL-1');
-    expect(facts.ticket).toMatchObject({ ticketId: 'REL-1', title: 'T++' });
+    expect(facts.devSession).toBeUndefined();
     expect(facts.events.map((e) => e.id)).toEqual(['e1', 'e2', 'effect:REL-1:1:1', 'effect:REL-1:1:2']);
     expect(facts.runs.map((r) => r.id)).toEqual(['r1', 'r2']);
     expect(facts.effects.map((r) => [r.id, r.status])).toEqual([

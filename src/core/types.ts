@@ -5,6 +5,25 @@ export function isLogicalState(v: string): v is LogicalState {
 }
 
 export type RunOutcome = 'success' | 'failure' | 'stopped' | 'limit';
+
+/**
+ * Tokens of a run as `claude -p` reports them in its `result` line (`usage`), never as the agent
+ * writes them (ORC-235). `cacheRead` and `cacheCreation` are input tokens read from or written to
+ * the prompt cache, apart from `input`.
+ */
+export interface TokenUsage {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheCreation: number;
+}
+
+export const NO_TOKENS: TokenUsage = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 };
+
+export function addTokens(a: TokenUsage, b: TokenUsage): TokenUsage {
+  return { input: a.input + b.input, output: a.output + b.output, cacheRead: a.cacheRead + b.cacheRead, cacheCreation: a.cacheCreation + b.cacheCreation };
+}
+
 export type InputKind = 'feedback' | 'ci_failures' | 'thread' | 'verify_failures';
 export type QueueName = 'dev' | 'questions';
 
