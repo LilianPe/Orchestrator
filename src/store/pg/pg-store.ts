@@ -66,9 +66,13 @@ const dateToMs = (value: Date | string | null): number => {
 
 const echoId = (key: string) => `echo:${key}`;
 
-/** Queue order of the SQLite store: priority 1 (urgent) first, 0 (none) after 4 (low), then age. */
+/**
+ * Queue order of the SQLite store: priority 1 (urgent) first, 0 (none) after 4 (low), then age, then
+ * arrival: `created_at` is the server's `clock_timestamp()` (as the inbox's `received_at`), so two
+ * items enqueued at the same instant keep their order, whatever their ids (ORC-228).
+ */
 const QUEUE_ORDER = sql.raw(
-  `case when (payload->>'priority')::int = 0 then 5 else coalesce((payload->>'priority')::int, 5) end, available_at, id`,
+  `case when (payload->>'priority')::int = 0 then 5 else coalesce((payload->>'priority')::int, 5) end, available_at, created_at, id`,
 );
 
 /** Key/value metadata kept in `workflow_versions` under a reserved id prefix, until ORC-178 removes it. */
@@ -884,7 +888,7 @@ export class PgStore implements AsyncStore {
           id, ticket_id, effect, payload, status, available_at, attempts, created_at, updated_at
         ) values (
           ${id}, ${item.ticketId}, ${item.job}, ${JSON.stringify(item)}::jsonb, 'pending',
-          ${availableAt}, 0, to_timestamp(${now / 1000}), to_timestamp(${now / 1000})
+          ${availableAt}, 0, clock_timestamp(), to_timestamp(${now / 1000})
         )
       `);
       return id;
