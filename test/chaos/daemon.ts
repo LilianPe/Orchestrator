@@ -26,7 +26,7 @@ import { Faults, type VisibleCall } from '../helpers/faults.js';
 import { CRASH_WORKFLOW } from '../helpers/crash-workflow.js';
 import { createHarness } from '../helpers/harness.js';
 import { storeAt } from '../helpers/store-at.js';
-import { CHAOS_LEASE_MS, ticketIds, type ChaosMessage, type DaemonMessage } from './events.js';
+import { CHAOS_LEASE_MS, CHAOS_MEMBER, ticketIds, type ChaosMessage, type DaemonMessage } from './events.js';
 
 const [target, callsFile, life, now, tickets] = process.argv.slice(2);
 if (!target || !callsFile || !life || !now || !tickets) throw new Error('usage: daemon.ts <store> <calls> <life> <now> <tickets>');
@@ -44,7 +44,11 @@ const h = createHarness({
   effectLeaseMs: CHAOS_LEASE_MS,
   processRetry: { attempts: 5, baseMs: 20 },
   effectRetry: { attempts: 8, baseMs: 10, capMs: 100 },
+  // The matrix is checked on each event's signed actor (ORC-186): its refusals go through the outbox too.
+  authz: { githubLogins: { [CHAOS_MEMBER]: 'dev-gh' } },
 });
+h.tracker.setTeamMembers('REL', [CHAOS_MEMBER]);
+h.forge.setRepoPermission('dev-gh', 'write');
 for (const id of ticketIds(Number(tickets))) h.tracker.addIssue({ identifier: id, title: `Ticket ${id}` });
 /** The tracker writes of the earlier lives, played again on this life's fake (the raw one: not recorded again). */
 const REMEMBERED = new Set(['comment', 'activity', 'addExternalUrl', 'setLabels', 'moveTo']);

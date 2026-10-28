@@ -9,8 +9,15 @@ export interface ChaosEvent {
   type: EventType;
   projectId: string;
   ticketId: string;
+  /** The signed Linear actor (ORC-186): `CHAOS_MEMBER`, or now and then `CHAOS_OUTSIDER`, whose actions the matrix refuses. */
+  actor: string;
   payload: object;
 }
+
+/** A team member with write access on the repo: the matrix allows what they do (ORC-186). */
+export const CHAOS_MEMBER = 'user-dev';
+/** Someone outside the team: each of their delegations, replies, mentions and relaunches is refused and answered. */
+export const CHAOS_OUTSIDER = 'user-out';
 
 /** From the driver to the daemon. */
 export type ChaosMessage = { type: 'event'; event: ChaosEvent } | { type: 'clock'; now: number };
@@ -34,7 +41,8 @@ export function rng(seed: number): () => number {
 /**
  * `count` events from Linear over `tickets` tickets, drawn from `random`: each ticket is delegated
  * first, then gets replies, questions, label changes (a stop, a restart), moves to AI review, and
- * now and then its delegation again (a webhook resent by Linear under a new delivery id).
+ * now and then its delegation again (a webhook resent by Linear under a new delivery id). One event in
+ * seven is signed by someone outside the team: its refusal is an effect like any other (ORC-186).
  */
 export function chaosEvents(random: () => number, count: number, tickets: number): ChaosEvent[] {
   const ids = ticketIds(tickets);
@@ -43,7 +51,8 @@ export function chaosEvents(random: () => number, count: number, tickets: number
   for (let n = 1; n <= count; n++) {
     const ticketId = ids[Math.floor(random() * ids.length)]!;
     const linearSessionId = `ls-${ticketId}`;
-    const base = { id: `c-${n}`, projectId: 'p', ticketId };
+    // From the event's number, not from `random`: a seed draws the same events as before ORC-186.
+    const base = { id: `c-${n}`, projectId: 'p', ticketId, actor: n % 7 === 0 ? CHAOS_OUTSIDER : CHAOS_MEMBER };
     const r = random();
     let event: ChaosEvent;
     if (!delegated.has(ticketId) || r < 0.1) {
