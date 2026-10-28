@@ -128,6 +128,45 @@ describe('decide — YAML rules of the standard pack', () => {
     expect(kinds(out).effects).toEqual(['stop_run', 'move', 'cleanup', 'start_run']);
     expect(out.effects[3]).toMatchObject({ job: 'learn' });
   });
+
+  it('a PR closed without merge cancels the run: stopped, nothing pending, blocked until a human relaunches (ORC-134)', () => {
+    const t = ticket({ logical: 'human_review', prNumber: 3, activeRunId: 'r1', pendingJob: { job: 'dev-feedback' } });
+    const out = decide(t, ev('pr.closed', { number: 3, url: 'u', branch: 'b' }), workflow);
+    expect(out.events).toEqual([
+      { type: 'ticket.patched', patch: { prState: 'CLOSED' } },
+      { type: 'work.cancelled' },
+      { type: 'ticket.blocked', reason: 'PR #3 fermée sans merge' },
+    ]);
+    expect(kinds(out).effects).toEqual(['stop_run', 'activity']);
+    const after = out.events.reduce<TicketState>((s, e) => reduce(s, e)!, t);
+    const relaunched = decide(after, ev('label.changed', { label: 'agent:reprendre', change: 'added' }), workflow);
+    expect(relaunched.events).toContainEqual({ type: 'ticket.unblocked' });
+    expect(kinds(relaunched).effects).toContain('start_run');
+  });
+
+  it("the close of another PR than the ticket's, of a closed or merged PR, or of a done ticket cancels nothing (ORC-134)", () => {
+    const closed = ev('pr.closed', { number: 3, url: 'u', branch: 'b' });
+    expect(decide(ticket({ prNumber: 4, activeRunId: 'r1' }), closed, workflow).effects).toEqual([]);
+    expect(decide(ticket({ prNumber: 3, prState: 'MERGED', logical: 'done' }), closed, workflow).effects).toEqual([]);
+    expect(decide(ticket({ prNumber: 3, logical: 'done' }), closed, workflow).effects).toEqual([]);
+    expect(decide(ticket({ prNumber: 3, prState: 'CLOSED', blocked: true }), closed, workflow).effects).toEqual([]);
+  });
+
+  it('the closed PR reopened is open again, without resetting the red-CI count (ORC-134)', () => {
+    const out = decide(ticket({ prNumber: 3, prState: 'CLOSED', ciFixAttempts: 1 }), ev('pr.opened', { number: 3, url: 'u', branch: 'b' }), workflow);
+    expect(out.events).toEqual([{ type: 'ticket.patched', patch: { prNumber: 3, prUrl: 'u', prState: 'OPEN' } }]);
+  });
+
+  it('a review or a conflict reaches decide without any reaction yet (ORC-190, ORC-146)', () => {
+    const pr = { number: 3, url: 'u', branch: 'b' };
+    const reviewed = { ...ev('pr.reviewed', { ...pr, kind: 'review' as const, author: 'L', body: 'renomme' }), taint: 'untrusted' as const };
+    const wf = { ...workflow, on: { ...workflow.on, 'pr.reviewed': [{ run: 'dev-feedback' }], 'pr.conflicted': [{ run: 'dev-feedback' }] } };
+    for (const e of [reviewed, ev('pr.conflicted', { ...pr, headSha: 'h', baseRef: 'main' })]) {
+      const out = decide(ticket({ logical: 'human_review', prNumber: 3 }), e, wf);
+      expect(out).toEqual(decision());
+      expect(out.trace).toEqual([`${e.type}: no reaction yet`]);
+    }
+  });
 });
 
 describe('decide — after the merge (ORC-268)', () => {

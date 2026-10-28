@@ -89,7 +89,15 @@ export interface EventPayloads {
   'pr.checks_passed': PrPayload;
   'pr.checks_failed': PrPayload & { failures: string[] };
   'pr.merged': PrPayload;
+  /** The PR is closed without merge: the ticket's dev work is cancelled (ORC-134). */
   'pr.closed': PrPayload;
+  /**
+   * A human review on the PR, or a comment on its diff, from the GitHub webhook (ORC-134). Untrusted:
+   * its body is written by whoever can review. No reaction yet: `decide` traces it (ORC-190).
+   */
+  'pr.reviewed': PrPayload & { kind: 'review' | 'comment'; author: string; body: string; state?: string };
+  /** The PR conflicts with its base branch, seen by the GitHub webhook (ORC-134). No reaction yet: `decide` traces it (ORC-146). */
+  'pr.conflicted': PrPayload & { headSha: string; baseRef: string };
   'run.finished': { runId: string; job: string; outcome: RunOutcome; costUsd: number; turns: number; lastText: string };
   'verify.passed': { runId: string; job: string };
   'verify.failed': { runId: string; job: string; failures: VerifyFailure[] };

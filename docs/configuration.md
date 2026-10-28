@@ -75,7 +75,7 @@ La section `github` configure l'identité du **démon** sur GitHub. Elle est fac
 | `github.appId` | texte ou entier | — | App ID de la GitHub App. |
 | `github.privateKey` | texte | — | Clé privée PEM **inline**, ou chemin vers un fichier `.pem` (recommandé, mode `0600`). |
 | `github.installationId` | texte ou entier | découverte par dépôt | Installation à utiliser. Absent : le démon appelle `GET /repos/{owner}/{repo}/installation`. |
-| `github.webhookSecret` | texte | — | Réservé aux futurs webhooks GitHub ; non utilisé par le relevé actuel. |
+| `github.webhookSecret` | texte | `GH_WEBHOOK_SECRET` | Secret des webhooks GitHub (`POST /webhooks/github`, signature `X-Hub-Signature-256`). Absent : la variable `GH_WEBHOOK_SECRET` ; sans l'un ni l'autre, tout webhook GitHub est refusé (401). Voir [`github.md`](github.md#webhooks-github). |
 
 Les variables `GH_APP_ID`, `GH_APP_KEY` et `GH_APP_INSTALLATION_ID` servent de repli, champ par champ. Une configuration partielle (`appId` sans clé, ou l'inverse) empêche le démarrage : Relais ne bascule pas silencieusement sur `gh`.
 

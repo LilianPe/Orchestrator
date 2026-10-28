@@ -2,7 +2,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { resolveGithubApp } from './github-app.js';
+import { githubWebhookSecret, resolveGithubApp } from './github-app.js';
 import { loadInstance, saveInstance, type InstanceConfig } from './instance.js';
 
 const PEM = '-----BEGIN PRIVATE KEY-----\nMIIBfake\n-----END PRIVATE KEY-----';
@@ -48,6 +48,14 @@ describe('GitHub App configuration', () => {
   it('fails fast on a partial configuration rather than silently using gh', () => {
     expect(() => resolveGithubApp(base(), { GH_APP_ID: '123' })).toThrow(/incomplète/);
     expect(() => resolveGithubApp(base(), { GH_APP_KEY: PEM })).toThrow(/incomplète/);
+  });
+
+  it('reads the GitHub webhook secret from config.yaml, else GH_WEBHOOK_SECRET, else none (ORC-134)', () => {
+    const app = { appId: '7', privateKey: PEM };
+    expect(githubWebhookSecret({ ...base(), github: { ...app, webhookSecret: ' conf ' } }, { GH_WEBHOOK_SECRET: 'env' })).toBe('conf');
+    expect(githubWebhookSecret({ ...base(), github: { ...app, webhookSecret: '' } }, { GH_WEBHOOK_SECRET: 'env' })).toBe('env');
+    expect(githubWebhookSecret(base(), { GH_WEBHOOK_SECRET: ' env ' })).toBe('env');
+    expect(githubWebhookSecret(base(), {})).toBe('');
   });
 
   it('accepts a numeric app id from YAML', () => {
