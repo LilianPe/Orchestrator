@@ -1,6 +1,6 @@
 import type { FeedbackItem } from '../../core/types.js';
 import type { RepoPermission, RepoPermissions } from '../roles/types.js';
-import type { CheckRunRequest, Forge, ForgeWriter, PrInfo, PrRequest } from './types.js';
+import type { CheckRunRequest, Forge, ForgeWriter, MergeResult, PrInfo, PrRequest } from './types.js';
 
 export type FakeCheckRun = CheckRunRequest & { id: number };
 
@@ -57,6 +57,22 @@ export class FakeForge implements Forge, ForgeWriter, RepoPermissions {
     this.opened.push({ ...req, number });
     this.setPr(req.branch, { number, url, state: 'OPEN', checks: 'pending', failedChecks: [] });
     return { number, url, deduplicated: false };
+  }
+
+  /** The merges asked (ORC-148), with the head each one required. */
+  merges: { number: number; sha: string }[] = [];
+
+  /** As GitHub: merged only if the PR's head is still `sha`; a PR already merged on it is found again. */
+  async mergePr(_repoPath: string, number: number, sha: string): Promise<MergeResult> {
+    this.answer();
+    const pr = [...this.prs.values()].find((p) => p.number === number);
+    if (!pr) throw new Error(`no PR #${number}`);
+    if (pr.state === 'MERGED' && pr.headSha === sha) return { merged: true, deduplicated: true };
+    if (pr.headSha !== sha) return { merged: false, reason: 'head_moved' };
+    if (pr.state !== 'OPEN' || pr.checks === 'fail') return { merged: false, reason: 'not_mergeable', message: 'Pull Request is not mergeable' };
+    this.merges.push({ number, sha });
+    this.prs.set(pr.branch, { ...pr, state: 'MERGED' });
+    return { merged: true, deduplicated: false };
   }
 
   async upsertCheckRun(_repoPath: string, req: CheckRunRequest): Promise<{ id: number; deduplicated: boolean }> {

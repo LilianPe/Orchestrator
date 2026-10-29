@@ -3,7 +3,7 @@ import { execCmd, mustExec, type Exec } from '../exec.js';
 import type { FeedbackItem } from '../../core/types.js';
 import { aggregateChecks, toRepoPermission } from './gh-cli.js';
 import type { RepoPermission, RepoPermissions } from '../roles/types.js';
-import type { CheckRunRequest, Forge, ForgeWriter, PrInfo, PrRequest } from './types.js';
+import type { CheckRunRequest, Forge, ForgeWriter, MergeResult, PrInfo, PrRequest } from './types.js';
 
 export interface GitHubRepoRef {
   owner: string;
@@ -156,11 +156,14 @@ function repoApi(repo: GitHubRepoRef): string {
 /** GitHub API failure with its status, so callers can fail closed on 404/403. */
 export class GitHubApiError extends Error {
   readonly status: number;
+  /** GitHub's own `message`, for an answer worth repeating to a human (a merge refused). */
+  readonly apiMessage?: string;
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, apiMessage?: string) {
     super(message);
     this.name = 'GitHubApiError';
     this.status = status;
+    if (apiMessage) this.apiMessage = apiMessage;
   }
 }
 
@@ -271,7 +274,7 @@ export class GitHubAppAuth {
         typeof data === 'object' && data !== null && 'message' in data
           ? String((data as { message: unknown }).message)
           : text.slice(0, 200);
-      throw new GitHubApiError(res.status, `GitHub API ${method} ${path.split('?')[0]}: ${res.status}${message ? ` ${message}` : ''}`);
+      throw new GitHubApiError(res.status, `GitHub API ${method} ${path.split('?')[0]}: ${res.status}${message ? ` ${message}` : ''}`, message || undefined);
     }
     return data as T;
   }
@@ -324,6 +327,23 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
     const checks = state === 'OPEN' ? await this.checksFor(repo, pr.head.sha, token) : { checks: 'none' as const, failedChecks: [] };
     const merged = state === 'MERGED' ? { ...(pr.merge_commit_sha ? { mergeSha: pr.merge_commit_sha } : {}), mergedAt: Date.parse(pr.merged_at!) } : {};
     return { number: pr.number, url: pr.html_url, state, branch: pr.head.ref, headSha: pr.head.sha, ...merged, ...checks };
+  }
+
+  async mergePr(repoPath: string, number: number, sha: string): Promise<MergeResult> {
+    const repo = await this.repo(repoPath);
+    const token = await this.installationToken(repo);
+    const url = `${repoApi(repo)}/pulls/${number}`;
+    // A replay: the first call merged it on that head. Merged on another head is not ours to call merged.
+    const pr = await this.call<PullRequestDto>('GET', url, token);
+    if (pr.merged_at && pr.head.sha === sha) return { merged: true, deduplicated: true };
+    try {
+      await this.call('PUT', `${url}/merge`, token, { sha });
+      return { merged: true, deduplicated: false };
+    } catch (err) {
+      if (err instanceof GitHubApiError && err.status === 409) return { merged: false, reason: 'head_moved' };
+      if (err instanceof GitHubApiError && err.status === 405) return { merged: false, reason: 'not_mergeable', message: err.apiMessage ?? err.message };
+      throw err;
+    }
   }
 
   /**

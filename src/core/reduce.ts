@@ -64,7 +64,8 @@ function internal(t: TicketState, e: InternalEvent): TicketState {
     case 'verify.started':
       return { ...t, verifyingRunId: e.runId };
     case 'status.recorded':
-      return { ...t, logical: e.to };
+      // The commit under human review is the one shown at this move; any other move leaves it unreviewed.
+      return { ...t, logical: e.to, reviewSha: e.to === 'human_review' ? e.reviewSha : undefined };
     case 'session.linked':
       return { ...t, linearSessionId: e.linearSessionId };
     case 'pending.set':

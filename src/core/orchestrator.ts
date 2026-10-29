@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
-import type { Forge } from '../adapters/forge/types.js';
+import type { Forge, ForgeWriter, MergeResult } from '../adapters/forge/types.js';
 import type { RoleResolver } from '../adapters/roles/types.js';
 import type { RunHandle, RunResult, Runner } from '../adapters/runner/types.js';
 import { ActivityRelay } from '../adapters/tracker/activity-relay.js';
@@ -64,6 +64,8 @@ export interface OrchestratorDeps {
   forge: Forge;
   /** One reconciliation of a project (ORC-185): Linear and GitHub compared to the factory's state, into the inbox. */
   reconcile?: (project: ProjectRuntime) => Promise<void>;
+  /** The factory's writes on the forge (ORC-148: the merge); absent with the `gh` CLI, which merges nothing. */
+  forgeWriter?: ForgeWriter;
   runner: Runner;
   workspaces: WorkspaceManager;
   verify: Verifier;
@@ -725,6 +727,8 @@ export class Orchestrator {
       }
       case 'move':
         return this.move(project, t, c.to);
+      case 'merge':
+        return this.merge(project, t, c.sha, key);
       case 'labels':
         return this.setLabels(ticketId, c.add, c.remove);
       case 'comment': {
@@ -796,7 +800,54 @@ export class Orchestrator {
     if (!stateName) throw new Error(`no status for "${to}" in the workflow of ${project.id}`);
     await this.d.store.putEcho(`state:${t.ticketId}:${stateName}`, this.d.clock.now() + ECHO_MS);
     await this.d.tracker.moveTo(t.ticketId, stateName);
-    await this.apply(await this.ticket(project.id, t.ticketId), { type: 'status.recorded', to });
+    const reviewSha = to === 'human_review' ? await this.headShown(project, t) : undefined;
+    await this.apply(await this.ticket(project.id, t.ticketId), { type: 'status.recorded', to, ...(reviewSha ? { reviewSha } : {}) });
+  }
+
+  /**
+   * The head of the ticket's open PR as the factory shows it in Human Review (ORC-148): the only commit a Done merges.
+   * Unread (no branch, no PR, the forge down), none is recorded, and a Done sends the ticket back here to record it.
+   */
+  private async headShown(project: ProjectRuntime, t: TicketState): Promise<string | undefined> {
+    if (!t.branch) return undefined;
+    try {
+      const pr = await this.d.forge.findPr(project.repoPath, t.branch);
+      return pr?.state === 'OPEN' ? pr.headSha : undefined;
+    } catch (err) {
+      this.log('warn', `head of ${t.ticketId}'s PR unread at Human Review: ${(err as Error).message}`);
+      return undefined;
+    }
+  }
+
+  /**
+   * The `merge` effect (ORC-148). The forge is read first, as only it knows the checks of the reviewed commit: the
+   * PR still open, its head still that commit, its checks green. Then merged with that head imposed, so a push in
+   * between is refused by GitHub itself. A refusal reaches the human through `pr.merge_refused`.
+   */
+  private async merge(project: ProjectRuntime, t: TicketState, sha: string, key: EffectKey): Promise<EffectOutcome | void> {
+    if (t.prNumber === undefined || !t.branch) return;
+    const writer = this.d.forgeWriter;
+    const pr = await this.d.forge.findPr(project.repoPath, t.branch);
+    let reason: string | undefined;
+    if (pr?.state === 'MERGED' && pr.headSha === sha) return { deduplicated: true };
+    if (!writer) reason = "la GitHub App de l'usine est requise pour merger";
+    else if (pr?.state !== 'OPEN') reason = "la PR n'est plus ouverte";
+    else if (pr.headSha !== sha) reason = 'la branche a reçu un push depuis la review';
+    else if (pr.checks !== 'pass') reason = `les checks du commit relu ne sont pas verts (${pr.failedChecks.join(', ') || pr.checks})`;
+    else {
+      const res: MergeResult = await writer.mergePr(project.repoPath, t.prNumber, sha);
+      if (res.merged) return res.deduplicated ? { deduplicated: true } : undefined;
+      reason = res.reason === 'head_moved' ? 'la branche a reçu un push depuis la review' : `GitHub refuse le merge (${res.message})`;
+    }
+    await this.submitResult({
+      ...TRUSTED,
+      id: `merge-refused:${key.id}`,
+      type: 'pr.merge_refused',
+      at: this.d.clock.now(),
+      projectId: project.id,
+      ticketId: t.ticketId,
+      payload: { number: t.prNumber, url: t.prUrl ?? '', branch: t.branch ?? '', reason },
+    });
   }
 
   /**

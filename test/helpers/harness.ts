@@ -193,6 +193,7 @@ export function createHarness(
       tracker: life.gate(view ? view.tracker(tracker) : tracker),
       runner: life.gate(view ? view.runner(runner) : runner),
       forge: life.gate(forge),
+      forgeWriter: life.gate(forge),
       workspaces: life.gate(workspaces),
       verify: life.gate(checks.run),
     };

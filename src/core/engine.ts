@@ -218,6 +218,8 @@ function authorize(out: Decision, event: FactoryEvent, ticket: TicketState | und
 export function mayCheck(event: FactoryEvent, workflow: Workflow): boolean {
   if (!HUMAN_EVENTS.has(event.type)) return false;
   if (event.type !== 'label.changed' && event.type !== 'status.changed') return true;
+  // A move to Done may merge (ORC-148): its actor is always checked.
+  if (event.type === 'status.changed' && event.payload.to === 'done') return true;
   return (workflow.on[event.type] ?? []).some((r) => !!r.run && eventMatches(r, event));
 }
 
@@ -301,6 +303,32 @@ export const reconcileTicket = (projectId: string): string => `_reconcile.${proj
 export const isReconcileTicket = (ticketId: string | undefined): boolean => !!ticketId?.startsWith('_reconcile.');
 /** The reconciliation's cadence (ORC-185): a safety net behind the webhooks. */
 export const RECONCILE_MS = 5 * 60_000;
+
+/** The ticket goes back to Human Review (ORC-148): nothing merged, `reason` answered in the ticket. */
+function backToReview(out: Decision, reason: string): Decision {
+  out.trace.push(`not merged: ${reason}`);
+  out.effects.push({ kind: 'move', to: 'human_review' }, { kind: 'comment', body: `${reason} Le ticket repasse en Human Review.` });
+  return out;
+}
+
+/**
+ * A human moved the ticket of an open PR to Done (ORC-148): the factory merges, on the commit shown in Human Review,
+ * only if the signed actor may merge (matrix, `done_merge`); the merge effect then checks the forge itself (head
+ * still that commit, its checks green), as only the forge knows them for that commit. Otherwise nothing is merged and
+ * the ticket goes back to Human Review with the reason. A move with no resolved actor never merges: the matrix
+ * lets an unchecked event through, a merge must not.
+ */
+function doneMerge(out: Decision, event: FactoryEvent<'status.changed'>, state: TicketState, matrix: AuthzMatrix): Decision {
+  if (event.roles === undefined || !event.actor) return backToReview(out, "Je ne merge pas : le passage en Done n'a pas d'acteur vérifié.");
+  if (!authorize(out, event, state, 'done_merge', 'linear', matrix)) {
+    out.effects.push({ kind: 'move', to: 'human_review' });
+    return out;
+  }
+  if (!state.reviewSha) return backToReview(out, "Je ne merge pas : aucun commit relu n'est enregistré pour ce ticket ; je le remets en Human Review pour l'enregistrer.");
+  out.trace.push(`done: merge PR #${state.prNumber} on ${state.reviewSha}`);
+  out.effects.push({ kind: 'merge', sha: state.reviewSha });
+  return out;
+}
 
 const FENCED = 'fenced: ';
 
@@ -415,6 +443,9 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
     out.events.push({ type: 'work.cancelled' });
     out.effects.push({ kind: 'stop_run' });
     return out;
+  }
+  if (event.type === 'status.changed' && event.payload.to === 'done' && state?.delegated && state.prNumber !== undefined && state.prState === 'OPEN') {
+    return doneMerge(out, event, state, matrix);
   }
   if (TRIGGERS.has(event.type)) {
     // The event's facts stay recorded (Linear did delegate, the session exists): only the factory's answer is refused.
@@ -559,6 +590,8 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       stop(out, `PR #${n} fermée sans merge`, `La PR #${n} a été fermée sans merge : j'arrête le travail sur ce ticket. ${RELAUNCH}`);
       break;
     }
+    case 'pr.merge_refused':
+      return backToReview(out, `Je n'ai pas mergé la PR #${event.payload.number} : ${event.payload.reason}.`);
     case 'pr.reviewed':
     case 'pr.conflicted':
       // In the inbox, but no reaction yet (ORC-190 for reviews, ORC-146 for conflicts): no rule applies to them.

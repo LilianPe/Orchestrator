@@ -340,6 +340,38 @@ describe('GitHubAppForge secrets', () => {
   });
 });
 
+describe('GitHubAppForge.mergePr (ORC-148)', () => {
+  const pullRoute = (pr: Record<string, unknown>): Route => (url, init) => (url.pathname === '/repos/acme/app/pulls/7' && init.method === 'GET' ? { body: pr } : undefined);
+  const mergeRoute = (status: number, body: unknown): Route => (url, init) => (url.pathname === '/repos/acme/app/pulls/7/merge' && init.method === 'PUT' ? { status, body } : undefined);
+
+  it('merges with the expected head sha, so GitHub refuses a head that moved', async () => {
+    const { forge, calls } = makeForge([tokenRoute(42), pullRoute(openPr()), mergeRoute(200, { merged: true, sha: 'm1' })], { installationId: 42 });
+    expect(await forge.mergePr('/repo', 7, 'abc123')).toEqual({ merged: true, deduplicated: false });
+    expect(calls.find((c) => c.method === 'PUT')!.body).toEqual({ sha: 'abc123' });
+  });
+
+  it('answers a head moved since the review as a refusal, not an error', async () => {
+    const { forge } = makeForge([tokenRoute(42), pullRoute(openPr({ head: { ref: 'factory/REL-1', sha: 'new999' } })), mergeRoute(409, { message: 'Head branch was modified.' })], { installationId: 42 });
+    expect(await forge.mergePr('/repo', 7, 'abc123')).toEqual({ merged: false, reason: 'head_moved' });
+  });
+
+  it('answers a PR GitHub will not merge (conflict, required checks) as a refusal with its message', async () => {
+    const { forge } = makeForge([tokenRoute(42), pullRoute(openPr()), mergeRoute(405, { message: 'Pull Request is not mergeable' })], { installationId: 42 });
+    expect(await forge.mergePr('/repo', 7, 'abc123')).toEqual({ merged: false, reason: 'not_mergeable', message: 'Pull Request is not mergeable' });
+  });
+
+  it('a replay finds the PR already merged on that head and writes nothing', async () => {
+    const { forge, calls } = makeForge([tokenRoute(42), pullRoute(openPr({ state: 'closed', merged_at: '2026-10-30T10:00:00Z' }))], { installationId: 42 });
+    expect(await forge.mergePr('/repo', 7, 'abc123')).toEqual({ merged: true, deduplicated: true });
+    expect(calls.some((c) => c.method === 'PUT')).toBe(false);
+  });
+
+  it('throws on another error, so the effect is retried', async () => {
+    const { forge } = makeForge([tokenRoute(42), pullRoute(openPr()), mergeRoute(502, { message: 'Bad gateway' })], { installationId: 42 });
+    await expect(forge.mergePr('/repo', 7, 'abc123')).rejects.toMatchObject({ status: 502 });
+  });
+});
+
 describe('GitHubAppForge writes, idempotent (ORC-162)', () => {
   const req = { branch: 'factory/REL-1', base: 'main', title: 'REL-1 : export', body: 'Ferme REL-1' };
   const writes = (calls: Call[]) => calls.filter((c) => c.method !== 'GET' && !c.url.endsWith('/access_tokens'));

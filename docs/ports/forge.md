@@ -21,6 +21,7 @@ Le port `Forge` ne fait que lire. Les écritures de l'usine sont à part, dans `
 |---|---|---|
 | `ensurePr(repo, { branch, base, title, body })` | la PR **ouverte** de la branche, créée si la branche n'en a pas ; une PR fermée ou mergée n'est pas réutilisée | rend la même PR, `deduplicated: true` ; après une course perdue (422), relit la PR ouverte |
 | `upsertCheckRun(repo, { sha, name, externalId, status, … })` | le check run du sha qui porte `externalId`, créé ou mis à jour | met à jour le même check run, `deduplicated: true` |
+| `mergePr(repo, n, sha)` (ORC-148) | merge la PR seulement si sa tête est encore `sha` (GitHub le vérifie dans le même appel) ; un refus pour une raison à dire à l'humain est une **réponse** : `head_moved` (409), `not_mergeable` avec le message de GitHub (405) ; toute autre erreur est levée, pour que l'effet soit rejoué | PR déjà mergée sur `sha` : `{ merged: true, deduplicated: true }`, aucune écriture |
 
 Seuls `GitHubAppForge` et `FakeForge` l'implémentent : GitHub ne laisse qu'une app créer un check run, pas le jeton utilisateur de `gh`. Détail et limites : [Idempotence des effets externes](../idempotence.md).
 

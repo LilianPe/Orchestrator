@@ -17,6 +17,8 @@ export type Effect =
   | { kind: 'link_pr'; url: string }
   /** Compare Linear and GitHub to the factory's state and write what a lost webhook missed to the inbox (ORC-185). */
   | { kind: 'reconcile' }
+  /** Merge the ticket's PR if its head is still `sha` (ORC-148), by the factory's GitHub App. */
+  | { kind: 'merge'; sha: string }
   | { kind: 'cleanup' }
   | { kind: 'set_paused'; paused: boolean };
 

@@ -166,6 +166,8 @@ export interface EventPayloads {
   'pr.reviewed': PrPayload & { kind: 'review' | 'comment'; author: string; body: string; state?: string };
   /** The PR conflicts with its base branch, seen by the GitHub webhook (ORC-134). No reaction yet: `decide` traces it (ORC-146). */
   'pr.conflicted': PrPayload & { headSha: string; baseRef: string };
+  /** The factory's merge refused by GitHub (ORC-148): a push since the review, a PR not mergeable. `reason` is for the human. */
+  'pr.merge_refused': PrPayload & { reason: string };
   /**
    * A push on the project's default branch that concerns the ticket (ORC-278): only its commits that merge
    * the ticket's PR (`merges`) or revert it (`reverts`), by number. Untrusted: messages are written by
@@ -269,7 +271,8 @@ export type PendingJob = { job: string; input?: InputKind; inputText?: string; r
 /** Facts the orchestrator records around an effect it carried out, applied to the ticket by `reduce`. */
 export type ShellEvent =
   /** The factory itself moved the ticket in the tracker. */
-  | { type: 'status.recorded'; to: LogicalState }
+  /** `reviewSha`: the PR's head when the factory moves the ticket to Human Review, the commit the human reviews (ORC-148). */
+  | { type: 'status.recorded'; to: LogicalState; reviewSha?: string }
   | { type: 'session.linked'; linearSessionId: string }
   | { type: 'pending.set'; job: PendingJob }
   | { type: 'pending.cleared' }
@@ -301,6 +304,8 @@ export interface TicketState {
   prUrl?: string;
   prChecks?: 'pending' | 'pass' | 'fail' | 'none';
   prState?: 'OPEN' | 'MERGED' | 'CLOSED';
+  /** The commit shown to the human reviewer, recorded at the move to Human Review: the only one a Done merges (ORC-148). */
+  reviewSha?: string;
   worktreePath?: string;
   port?: number;
   activeRunId?: string;
