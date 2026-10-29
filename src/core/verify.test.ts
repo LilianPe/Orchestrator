@@ -60,6 +60,15 @@ describe('runVerify', () => {
     expect(execFileSync('git', ['status', '--porcelain'], { cwd: dir, encoding: 'utf8' })).toBe('?? a.txt\n');
   });
 
+  it('writes no object into the repository', async () => {
+    const dir = repo();
+    const objects = () => execFileSync('git', ['count-objects'], { cwd: dir, encoding: 'utf8' });
+    const before = objects();
+    writeFileSync(join(dir, 'c.txt'), 'more\n');
+    expect((await runVerify(dir, ['exit 1'])).tree).toBeDefined();
+    expect(objects()).toBe(before);
+  });
+
   it('has no fingerprint outside a git worktree', async () => {
     const res = await runVerify(mkdtempSync(join(tmpdir(), 'factory-nogit-')), ['exit 1']);
     expect(res.tree).toBeUndefined();

@@ -149,7 +149,7 @@ Les vérifications (`verify`) : chaque commande est lancée dans le worktree (`b
 - Toutes passent : `on_success` s'applique.
 - Une échoue et il reste des tentatives : Relais relance **le même job** en reprenant la session, avec la sortie des commandes en échec (fin de sortie, 8 000 caractères au plus).
 - Après `limits.verify_attempts` passes en échec : le ticket est bloqué et Relais poste la liste des commandes en échec dans la session.
-- Même échec trois fois de suite (mêmes commandes en échec, mêmes codes de sortie, contenu du worktree inchangé) : le ticket est bloqué avec la cause « Boucle », même s'il reste des passes. L'empreinte du worktree est l'arbre git de son contenu, fichiers non suivis compris, calculé sans toucher à son index. Hors d'un dépôt git, cette garde ne s'applique pas. Sa borne vient du préréglage et ne se règle pas dans `workflow.yml`.
+- Même échec trois fois de suite (mêmes commandes en échec, mêmes codes de sortie, contenu du worktree inchangé) : le ticket est bloqué avec la cause « Boucle », même s'il reste des passes. L'empreinte du worktree est l'arbre git de son contenu, fichiers non suivis compris, calculée sans toucher à son index ni à ses objets (60 s au plus). Les fichiers que les contrôles écrivent doivent être ignorés par git (`coverage/`, rapports) : sinon l'empreinte change à chaque passe et la garde ne se déclenche jamais, sans jamais bloquer à tort. Le compte repart à zéro sur un contrôle vert ou une relance humaine. Hors d'un dépôt git, cette garde ne s'applique pas. Sa borne vient du préréglage et ne se règle pas dans `workflow.yml`.
 
 Jobs du pack :
 

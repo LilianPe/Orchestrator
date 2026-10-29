@@ -307,7 +307,7 @@ export interface TicketState {
   pendingJob?: PendingJob;
   verifyAttempts: number;
   /** The last failed check (worktree and failed commands) and how many times in a row it came back (ORC-187). */
-  repeatedFailure?: { signature: string; count: number };
+  repeatedFailure?: { signature: string; count: number } | null;
   /**
    * Runs started by red CI (`pr.checks_failed`) since the last green CI or human relaunch, bounded by
    * `limits.ciFixAttempts` (I5, ORC-270). The AI review loop does not share it yet (ORC-184, ORC-187).

@@ -5,7 +5,7 @@ import { parseCondition } from '../core/conditions.js';
 import { parseDuration } from '../core/duration.js';
 import { RENAMED_V1, type EventType, type LogicalState } from '../core/types.js';
 import { factoryDefault } from '../presets/factory-default.js';
-import { compilePreset } from '../presets/preset.js';
+import { compilePreset, type Preset } from '../presets/preset.js';
 import {
   rawWorkflowSchema,
   type JobSpec,
@@ -112,9 +112,17 @@ function buildJob(name: string, raw: RawJob, perRun: RunLimits): JobSpec {
   };
 }
 
+// Compiled once, at load: a preset that breaks an invariant of the core never reaches the engine.
+const preset = compilePreset(factoryDefault).preset;
+
+/** The limit of a counter of the preset, which the engine still reads through `limits` (ORC-187). */
+export function presetBound(p: Preset, counter: string): number {
+  const found = Object.hasOwn(p.counters, counter) ? p.counters[counter] : undefined;
+  if (!found) throw new WorkflowError(`preset ${p.name}: counter ${counter} is missing`);
+  return found.limit;
+}
+
 export function loadWorkflow(opts: { packDir: string; projectFile?: string }): Workflow {
-  // Compiled at every load: a preset that breaks an invariant of the core never reaches the engine.
-  const { preset } = compilePreset(factoryDefault);
   const pack = readRaw(join(opts.packDir, 'workflow.yml'));
   const project = opts.projectFile ? readRaw(opts.projectFile) : undefined;
   const raw = mergeRaw(pack, project);
@@ -174,8 +182,8 @@ export function loadWorkflow(opts: { packDir: string; projectFile?: string }): W
       perRun,
       // Bounds of the factory/default preset (ORC-187); the YAML keys still override them until ORC-177.
       // `verifyAttempts` counts every check: the preset's returns to the run, plus the first one.
-      verifyAttempts: raw.limits?.verify_attempts ?? preset.counters['verify']!.limit + 1,
-      ciFixAttempts: raw.limits?.ci_fix_attempts ?? preset.counters['review_ci']!.limit,
+      verifyAttempts: raw.limits?.verify_attempts ?? presetBound(preset, 'verify') + 1,
+      ciFixAttempts: raw.limits?.ci_fix_attempts ?? presetBound(preset, 'review_ci'),
       repeatedFailures: preset.sameFailure.limit,
       reviewRounds: raw.limits?.review_rounds ?? 5,
     },

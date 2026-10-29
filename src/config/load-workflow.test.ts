@@ -2,7 +2,8 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { loadWorkflow, WorkflowError } from './load-workflow.js';
+import { factoryDefault } from '../presets/factory-default.js';
+import { loadWorkflow, presetBound, WorkflowError } from './load-workflow.js';
 
 const packDir = join(import.meta.dirname, '../../packs/standard');
 
@@ -111,6 +112,10 @@ on:
     expect(wf.limits.verifyAttempts).toBe(4);
     expect(wf.limits.ciFixAttempts).toBe(2);
     expect(wf.limits.repeatedFailures).toBe(3);
+  });
+
+  it('names the preset counter it cannot find', () => {
+    expect(() => presetBound({ ...factoryDefault, counters: {} }, 'verify')).toThrow(/counter verify/);
   });
 
   it('reads limits.ci_fix_attempts, 0 included, and refuses a negative bound (ORC-270)', () => {

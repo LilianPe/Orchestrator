@@ -62,12 +62,15 @@ function resetRedCi(out: Decision, ticket: TicketState | undefined): void {
 
 /**
  * Work starts again on a blocked ticket. Relaunched by a human (a reply, a label, a status change), the
- * red-CI count resets; by a machine event (a timer, red CI itself), it does not, or a timer armed before
+ * red-CI count and the « Boucle » guard reset; by a machine event (a timer, red CI itself), it does not, or a timer armed before
  * the block would undo it.
  */
 function unblock(out: Decision, event: FactoryEvent, ticket: TicketState): void {
   out.events.push({ type: 'ticket.unblocked' });
-  if (HUMAN_RELAUNCH.has(event.type)) resetRedCi(out, ticket);
+  if (!HUMAN_RELAUNCH.has(event.type)) return;
+  resetRedCi(out, ticket);
+  // The « Boucle » guard starts over too (ORC-187); `null`, not undefined, survives the JSON of the journal.
+  if (ticket.repeatedFailure) out.events.push({ type: 'ticket.patched', patch: { repeatedFailure: null } });
 }
 
 /** A Linear session that carries questions (read-only answers), not the ticket's dev conversation. */
@@ -280,12 +283,12 @@ function fixRedCi(out: Decision, rule: Rule, event: FactoryEvent<'pr.checks_fail
 }
 
 /**
- * The failed check seen again (ORC-187): same failed commands and exit codes on the same worktree content.
+ * The failed check seen again (ORC-187): same job, same failed commands and exit codes, same worktree content.
  * The output is left out, as it carries times and paths. Without a fingerprint of the worktree, nothing is tracked.
  */
-function repeatedFailure(ticket: TicketState | undefined, payload: EventPayloads['verify.failed']): TicketState['repeatedFailure'] {
+function repeatedFailure(ticket: TicketState | undefined, payload: EventPayloads['verify.failed']): { signature: string; count: number } | undefined {
   if (!payload.tree) return undefined;
-  const signature = `${payload.tree}|${payload.failures.map((f) => `${f.command}:${f.exitCode}`).join(',')}`;
+  const signature = `${payload.job}|${payload.tree}|${payload.failures.map((f) => `${f.command}:${f.exitCode}`).join(',')}`;
   const previous = ticket?.repeatedFailure;
   return { signature, count: previous?.signature === signature ? previous.count + 1 : 1 };
 }
@@ -406,7 +409,7 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
     case 'verify.passed': {
       const job = workflow.jobs[event.payload.job];
       if (!job) return out;
-      out.events.push({ type: 'ticket.patched', patch: { verifyAttempts: 0, ...(ticket?.repeatedFailure ? { repeatedFailure: undefined } : {}) } });
+      out.events.push({ type: 'ticket.patched', patch: { verifyAttempts: 0, ...(ticket?.repeatedFailure ? { repeatedFailure: null } : {}) } });
       return success(out, job, event.payload.runId);
     }
     case 'verify.failed': {
