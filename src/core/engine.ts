@@ -355,19 +355,28 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
   const out = decideEvent(state, event, workflow, matrix);
   // A dead notice or label means the tracker is down: nothing more is written to it (no loop, ORC-150).
   const trackerDown = event.type === 'effect.failed' && (event.payload.kind === 'activity' || event.payload.kind === 'labels');
-  if (!trackerDown) blockedLabel(out, state);
+  if (!trackerDown) blockedLabel(out, state, event);
   return out;
 }
 
 /** Label put next to the status while the factory waits for a human (ORC-170). */
 export const BLOCKED_LABEL = 'Bloqué';
 
-/** The label follows the decision's blocks: put on when the ticket gets blocked, taken off when it no longer is. */
-function blockedLabel(out: Decision, state: TicketState | undefined): void {
-  const blocks = out.events.some((e) => e.type === 'ticket.blocked');
-  const lifts = out.events.some((e) => e.type === 'ticket.unblocked');
-  if (blocks && !lifts && !state?.blocked) out.effects.push({ kind: 'labels', add: [BLOCKED_LABEL], remove: [] });
-  else if (lifts && !blocks && state?.blocked) out.effects.push({ kind: 'labels', add: [], remove: [BLOCKED_LABEL] });
+/**
+ * The label follows the ticket's blocked flag from before the event to after the decision, however it
+ * changed: a block or unblock decided here, or a lift made by `reduce` itself (a repair, a cancellation).
+ */
+function blockedLabel(out: Decision, state: TicketState | undefined, event: FactoryEvent): void {
+  if (!state) return;
+  const after = out.events.reduce<TicketState | undefined>((t, e) => reduce(t, e), reduce(state, event));
+  const label = blockedLabelChange(state.blocked, after?.blocked ?? false);
+  if (label) out.effects.push(label);
+}
+
+/** The `labels` effect that keeps the label in step with a change of the blocked flag, if it changed. */
+export function blockedLabelChange(before: boolean, after: boolean): Extract<Decision['effects'][number], { kind: 'labels' }> | undefined {
+  if (before === after) return undefined;
+  return after ? { kind: 'labels', add: [BLOCKED_LABEL], remove: [] } : { kind: 'labels', add: [], remove: [BLOCKED_LABEL] };
 }
 
 function decideEvent(state: TicketState | undefined, event: FactoryEvent, workflow: Workflow, matrix: AuthzMatrix): Decision {
@@ -387,7 +396,12 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
   const ticket = reduce(state, event);
   if (BUILT_IN.has(event.type)) out.trace.push(`built-in ${event.type}`);
   if (event.type === 'status.changed' && event.payload.cancelled) {
-    // A ticket cancelled by a human (ORC-170): its work stops, and nothing waits for an answer.
+    // A ticket cancelled by a human (ORC-170): its work stops, and nothing waits for an answer (`reduce`
+    // drops the block and the pending replies). A ticket the factory does not work on has nothing to stop.
+    if (!state?.delegated) {
+      out.trace.push('status.changed: ticket cancelled, not delegated: nothing to stop');
+      return out;
+    }
     out.trace.push('status.changed: ticket cancelled, work cancelled');
     out.events.push({ type: 'work.cancelled' });
     out.effects.push({ kind: 'stop_run' });

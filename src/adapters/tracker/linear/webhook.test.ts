@@ -16,6 +16,7 @@ function ctx(echoes: string[] = []): MapContext {
     projectIdForTeam: (k) => (k === 'REL' ? 'p' : undefined),
     logicalFor: (_p, name) => LOGICAL[name] ?? null,
     stateNameById: (_t, id) => NAMES[id],
+    stateTypeById: (_t, id) => (id === 's-x' ? 'canceled' : 'started'),
     labelNameById: (_t, id) => ({ 'l-bug': 'bug', 'l-resume': 'agent:reprendre' })[id],
     isEcho: (k) => echoes.includes(k),
     commands: () => ['retiens', 'fais-le'],
@@ -127,6 +128,14 @@ describe('mapLinearWebhook', () => {
     body.data = { ...body.data, stateId: 's-x', state: { id: 's-x', name: 'Canceled', type: 'canceled' }, labelIds: body.updatedFrom.labelIds };
     const [e] = await mapLinearWebhook(body, 'k', ctx());
     expect(e).toMatchObject({ type: 'status.changed', payload: { from: 'human_review', to: null, cancelled: true } });
+  });
+
+  it('reads the canceled type from the cache when the payload carries no state object', async () => {
+    const body = fx('issue-moved-labeled');
+    const { state: _s, ...data } = body.data;
+    body.data = { ...data, stateId: 's-x', labelIds: body.updatedFrom.labelIds };
+    const [e] = await mapLinearWebhook(body, 'k', { ...ctx(), stateNameById: (_t, id) => ({ ...NAMES, 's-x': 'Canceled' })[id] });
+    expect(e).toMatchObject({ type: 'status.changed', payload: { to: null, cancelled: true } });
   });
 
   describe('signed actor and taint (ORC-160)', () => {

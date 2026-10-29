@@ -23,6 +23,8 @@ export interface MapContext {
   projectIdForTeam(teamKey: string): string | undefined;
   logicalFor(projectId: string, stateName: string): LogicalState | null;
   stateNameById(teamKey: string, stateId: string): string | undefined;
+  /** Linear type of a state (`canceled`, `completed`…), from the team's cache. */
+  stateTypeById(teamKey: string, stateId: string): string | undefined;
   labelNameById(teamKey: string, labelId: string): string | undefined;
   /** May read the store, hence the promise. */
   isEcho(key: string): boolean | Promise<boolean>;
@@ -115,7 +117,7 @@ async function issueEvents(body: any, identifier: string, teamKey: string, proje
         payload: {
           from: fromName ? ctx.logicalFor(projectId, fromName) : null,
           to: ctx.logicalFor(projectId, toName),
-          ...(data.state?.type === 'canceled' ? { cancelled: true as const } : {}),
+          ...((data.state?.type ?? ctx.stateTypeById(teamKey, data.stateId)) === 'canceled' ? { cancelled: true as const } : {}),
         },
       });
     }

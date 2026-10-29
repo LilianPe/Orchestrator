@@ -90,10 +90,22 @@ describe('decide — YAML rules of the standard pack', () => {
   });
 
   describe('statuses of the MVP (ORC-170)', () => {
+    const cancelled = ev('status.changed', { from: 'dev', to: null, cancelled: true });
+
     it('a ticket cancelled by a human cancels its run, without blocking it', () => {
-      const out = decide(ticket({ logical: 'dev', activeRunId: 'r1' }), ev('status.changed', { from: 'dev', to: null, cancelled: true }), workflow);
+      const out = decide(ticket({ logical: 'dev', delegated: true, activeRunId: 'r1' }), cancelled, workflow);
       expect(out.events).toEqual([{ type: 'work.cancelled' }]);
       expect(out.effects).toEqual([{ kind: 'stop_run' }]);
+    });
+
+    it('a cancelled ticket waits for nobody: unblocked, label off, pending replies dropped', () => {
+      const waiting = ticket({ logical: 'dev', delegated: true, blocked: true, blockReason: 'x', pendingFeedback: [{ body: 'b', author: 'L', at: 1, source: 'session' }] });
+      expect(reduce(waiting, cancelled)).toMatchObject({ blocked: false, pendingFeedback: [] });
+      expect(decide(waiting, cancelled, workflow).effects).toContainEqual({ kind: 'labels', add: [], remove: ['Bloqué'] });
+    });
+
+    it('cancelling a ticket the factory does not work on decides nothing', () => {
+      expect(decide(ticket({ logical: 'dev', delegated: false }), cancelled, workflow).effects).toEqual([]);
     });
 
     it('a block puts the label Bloqué next to the status, an unblock takes it off', () => {
@@ -655,7 +667,8 @@ describe('decide — dead letters (ORC-175)', () => {
   it('a repair lifts the block of its event only, and says so', () => {
     const notice = { kind: 'activity' as const, type: 'response' as const, body: 'Événement l1 réparé par ops (ignoré) : le ticket est débloqué.' };
     const skip = ev('dead_letter.repaired', { eventId: 'l1', action: 'skip', by: 'ops', event: delegation });
-    expect(decide(ticket({ blocked: true, blockReason: reason }), skip, workflow)).toEqual(decision({ effects: [notice] }));
+    // The lift happens in reduce, without ticket.unblocked: the label still comes off (ORC-170).
+    expect(decide(ticket({ blocked: true, blockReason: reason }), skip, workflow)).toEqual(decision({ effects: [notice, { kind: 'labels', add: [], remove: ['Bloqué'] }] }));
     expect(reduce(ticket({ blocked: true, blockReason: reason }), skip)).toMatchObject({ blocked: false, blockReason: undefined });
     // Blocked for another reason (another event, a human stop): the block stays.
     const other = ticket({ blocked: true, blockReason: 'Arrêté à la demande' });
@@ -669,10 +682,10 @@ describe('decide — dead letters (ORC-175)', () => {
     const blocked = ticket({ delegated: false, blocked: true, blockReason: reason });
     const replay = ev('dead_letter.repaired', { eventId: 'l1', action: 'replay', by: 'ops', event: delegation });
     // On the blocked ticket, the delegation would be ignored: the replay sees it unblocked and starts dev.
-    expect(kinds(decide(blocked, replay, workflow)).effects).toEqual(['start_run', 'activity']);
+    expect(kinds(decide(blocked, replay, workflow)).effects).toEqual(['start_run', 'activity', 'labels']);
     expect(reduce(blocked, replay)).toMatchObject({ delegated: true, blocked: false });
     const force = ev('dead_letter.repaired', { eventId: 'l1', action: 'force', by: 'ops', event: delegation });
-    expect(kinds(decide(blocked, force, workflow)).effects).toEqual(['activity']);
+    expect(kinds(decide(blocked, force, workflow)).effects).toEqual(['activity', 'labels']);
     expect(reduce(blocked, force)).toMatchObject({ delegated: true, blocked: false });
   });
 

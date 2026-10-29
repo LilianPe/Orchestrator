@@ -24,7 +24,7 @@ import type { EventBus } from './bus.js';
 import type { Clock } from './clock.js';
 import type { Effect } from './decision.js';
 import { NO_PLAN, planDecision } from './decision-plan.js';
-import { BLOCKED_LABEL, HUMAN_EVENTS, mayCheck, refusesDevWork, sensitivePathsAtLaunch, taintedKnowledge } from './engine.js';
+import { blockedLabelChange, HUMAN_EVENTS, mayCheck, refusesDevWork, sensitivePathsAtLaunch, taintedKnowledge } from './engine.js';
 import { attemptLabels, packFingerprints } from './attempt-labels.js';
 import { pickupFailures } from './pickup.js';
 import { buildPrompt, formatFeedback, formatVerifyFailures } from './prompt.js';
@@ -340,10 +340,7 @@ export class Orchestrator {
     await this.worker.kick();
     await this.worker.exclusive({ projectId, ticketId }, async () => {
       const t = await this.d.store.getTicket(projectId, ticketId);
-      if (!t) return;
-      await this.apply(t, { type: 'ticket.blocked', reason });
-      // Blocked outside a decision: the label `decide` puts on its own blocks is put here (ORC-170).
-      if (!t.blocked) await this.setLabels(ticketId, [BLOCKED_LABEL], []);
+      if (t) await this.apply(t, { type: 'ticket.blocked', reason });
     });
   }
 
@@ -422,12 +419,19 @@ export class Orchestrator {
       for (const e of events) next = reduce(next, e)!;
       return { ...next, updatedAt: now };
     };
-    let next = await this.d.store.updateTicket(t.projectId, t.ticketId, step);
+    let before = t.blocked;
+    let next = await this.d.store.updateTicket(t.projectId, t.ticketId, (from) => ((before = from.blocked), step(from)));
     if (!next) {
       next = step(t);
       await this.d.store.putTicket(next);
     }
     this.d.bus.publish({ kind: 'ticket', ticket: next });
+    // Blocked or unblocked outside a decision (recover, a launch error, a refused pickup): the label
+    // `decide` keeps in step with its own changes follows here (ORC-170). A failed write does not undo the change.
+    const label = blockedLabelChange(before, next.blocked);
+    if (label) {
+      await this.setLabels(t.ticketId, label.add, label.remove).catch((e: Error) => this.log('warn', `could not set the label of ${t.ticketId}: ${e.message}`));
+    }
     return next;
   }
 
@@ -869,13 +873,11 @@ export class Orchestrator {
         if (!this.handles.has(fresh.activeRunId)) events.push({ type: 'run.cleared' });
       }
       const reason = `Erreur au lancement : ${(err as Error).message}`;
-      const wasBlocked = fresh.blocked;
       fresh = await this.apply(fresh, ...events, { type: 'ticket.blocked', reason });
       // The ticket is blocked: a failed notice must not fail the effect, whose retry would start again.
       try {
         const session = opts.linearSessionId ?? (await this.sessionFor(fresh));
         await this.d.tracker.activity(session, { type: 'error', body: reason });
-        if (!wasBlocked) await this.setLabels(ticketId, [BLOCKED_LABEL], []);
       } catch (e) {
         this.log('warn', `could not post the launch error of ${ticketId}: ${(e as Error).message}`);
       }
@@ -925,7 +927,6 @@ export class Orchestrator {
       const failures = await pickupFailures(wf.tracker.pickup.checks, issue, project.repoPath, workspaces);
       if (failures.length) {
         this.d.scheduler.release(key);
-        if (!t.blocked) await this.setLabels(ticketId, [BLOCKED_LABEL], []);
         t = await this.apply(t, { type: 'ticket.blocked', reason: failures.join(' ') });
         const session = await this.sessionFor(t);
         await tracker.activity(session, {

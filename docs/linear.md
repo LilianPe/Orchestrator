@@ -122,7 +122,7 @@ Les statuts absents sont créés à la connexion. Si vos colonnes portent d'autr
 
 Les déplacements faits par Relais lui-même sont reconnus (pendant 60 s) et ne redéclenchent pas de règle.
 
-Un ticket passé par un humain dans un statut de type *Canceled* annule son run (arrêt, file et réponses en attente abandonnées), sans le bloquer (ORC-170).
+Un ticket délégué passé par un humain dans un statut de type *Canceled* annule son run (arrêt, file et réponses en attente abandonnées) ; il n'est pas bloqué, et un blocage en cours est levé avec son label (ORC-170).
 
 Tant qu'un ticket est **bloqué** (l'usine attend une réponse), le label `Bloqué` est posé à côté de son statut ; il est retiré quand le ticket repart. Relais le crée à la connexion, avec `agent:reprendre` et `agent:stop`.
 

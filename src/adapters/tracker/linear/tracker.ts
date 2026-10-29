@@ -155,6 +155,10 @@ export class LinearTracker implements Tracker, TeamDirectory {
     return this.states.get(teamKey)?.find((s) => s.id === id)?.name;
   }
 
+  stateTypeById(teamKey: string, id: string): string | undefined {
+    return this.states.get(teamKey)?.find((s) => s.id === id)?.type;
+  }
+
   labelNameById(teamKey: string, id: string): string | undefined {
     for (const [name, lid] of this.labels.get(teamKey) ?? []) if (lid === id) return name;
     return undefined;

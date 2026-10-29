@@ -207,6 +207,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
           return p ? (logicalFromName(p.workflow.states, name) ?? null) : null;
         },
         stateNameById: (t, id) => linearTracker?.stateNameById(t, id),
+        stateTypeById: (t, id) => linearTracker?.stateTypeById(t, id),
         labelNameById: (t, id) => linearTracker?.labelNameById(t, id),
         isEcho: (k) => store.isEcho(k, clock.now()),
         commands: (pid) => projects.find((p) => p.id === pid)?.workflow.commands ?? [],

@@ -169,7 +169,9 @@ export function loadWorkflow(opts: { packDir: string; projectFile?: string }): W
   for (const s of required) if (!states?.[s]) throw new WorkflowError(`states.${s}: required`);
   const moves: [string, LogicalState | undefined][] = [
     ...Object.values(jobs).flatMap((j) => [[`jobs.${j.name}.on_start.move`, j.onStart.move], [`jobs.${j.name}.on_success.move`, j.onSuccess.move]] as [string, LogicalState | undefined][]),
-    ...Object.entries(on).flatMap(([type, rules]) => rules!.map((r, i) => [`on.${type}[${i}].move`, r.move] as [string, LogicalState | undefined])),
+    ...Object.entries(on).flatMap(([type, rules]) =>
+      rules!.flatMap((r, i) => (['move', 'from', 'to'] as const).map((k) => [`on.${type}[${i}].${k}`, r[k]] as [string, LogicalState | undefined])),
+    ),
   ];
   for (const [path, to] of moves) if (to && !states![to]) throw new WorkflowError(`${path}: no status for "${to}"`);
 

@@ -1071,6 +1071,13 @@
             "kind": "activity",
             "type": "response",
             "body": "Événement t-2 réparé par ops (rejoué) : le ticket est débloqué."
+          },
+          {
+            "kind": "labels",
+            "add": [],
+            "remove": [
+              "Bloqué"
+            ]
           }
         ],
         "timers": [
@@ -1114,6 +1121,95 @@
         "projectId": "p",
         "ticketId": "REL-1",
         "seq": 11,
+        "at": 1791622800000,
+        "workflowHash": "fcefa2408dc6bb6cb41eaa14bf9231993f045bbcf347fa7f9cb89a60eed4d94a",
+        "before": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "human_review",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "pendingFeedback": [
+            {
+              "author": "Lilian",
+              "body": "et le mobile ?",
+              "at": 1791622800000,
+              "source": "session",
+              "taint": "trusted"
+            }
+          ],
+          "priority": 0,
+          "costUsd": 0.1,
+          "updatedAt": 1791622800000,
+          "linearSessionId": "ls-1",
+          "workflowHash": "fcefa2408dc6bb6cb41eaa14bf9231993f045bbcf347fa7f9cb89a60eed4d94a",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "factory/rel-1-export-csv",
+          "claudeSessionId": "id-2"
+        },
+        "ticket": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "human_review",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "pendingFeedback": [
+            {
+              "author": "Lilian",
+              "body": "et le mobile ?",
+              "at": 1791622800000,
+              "source": "session",
+              "taint": "trusted"
+            }
+          ],
+          "priority": 0,
+          "costUsd": 0.1,
+          "updatedAt": 1791622800000,
+          "linearSessionId": "ls-1",
+          "workflowHash": "fcefa2408dc6bb6cb41eaa14bf9231993f045bbcf347fa7f9cb89a60eed4d94a",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "factory/rel-1-export-csv",
+          "claudeSessionId": "id-2"
+        },
+        "effects": [],
+        "timers": [],
+        "clearTimers": false,
+        "trace": [
+          "built-in effect.done"
+        ]
+      }
+    },
+    {
+      "event": {
+        "schemaVersion": 3,
+        "taint": "trusted",
+        "id": "effect:REL-1:10:2",
+        "at": 1791622800000,
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "type": "effect.done",
+        "payload": {
+          "effectId": "REL-1:10:2",
+          "kind": "labels",
+          "eventId": "repair:t-2:1",
+          "attempts": 1
+        }
+      },
+      "decision": {
+        "eventId": "effect:REL-1:10:2",
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "seq": 12,
         "at": 1791622800000,
         "workflowHash": "fcefa2408dc6bb6cb41eaa14bf9231993f045bbcf347fa7f9cb89a60eed4d94a",
         "before": {
