@@ -1,0 +1,167 @@
+import { createHash } from 'node:crypto';
+import type { NetworkLevel } from '../adapters/sandbox/types.js';
+import { canonical } from '../runtime/workflow-version.js';
+
+/** A preset (ORC-187): typed steps chained by `next`, every way back bounded by a counter. */
+export interface Preset {
+  name: string;
+  entry: string;
+  steps: Step[];
+  /** Limits of the failure edges, per run. Past the limit, the run is Blocked. */
+  counters: Record<string, { limit: number }>;
+  /** Same command, same failure, unchanged diff: past `limit` occurrences the run is Blocked with this cause. */
+  sameFailure: { limit: number; cause: 'boucle' };
+  /** Where a red CI goes from any step, the merge gate included: it never restarts `fix` outside this counter. */
+  redCi: FailureEdge;
+}
+
+export interface FailureEdge {
+  goto: string;
+  counter: string;
+}
+
+export type Effort = 'low' | 'medium' | 'high';
+/** What sent the run to `fix`, which picks its skill. */
+export type FixCause = 'ci' | 'review' | 'human';
+
+interface BaseStep {
+  id: string;
+  /** Next step on success; null ends the run. */
+  next: string | null;
+  onFailure?: FailureEdge;
+  network?: NetworkLevel;
+}
+
+interface AgentFields {
+  model: string;
+  effort: Effort;
+  /** Turn cap of the step: the budget ceiling until token caps exist (ORC-216). */
+  maxTurns: number;
+  network: NetworkLevel;
+}
+
+export type Step =
+  | (BaseStep & AgentFields & { type: 'agent_step'; skill?: string; writesCode?: boolean; optional?: boolean })
+  | (BaseStep & AgentFields & { type: 'fix'; skills: Record<FixCause, string> })
+  | (BaseStep & AgentFields & { type: 'review'; skill: string; readOnly: boolean })
+  | (BaseStep & { type: 'verify'; mode: 'red' | 'freeze' | 'full'; network: NetworkLevel })
+  | (BaseStep & { type: 'spec_check'; network: NetworkLevel })
+  | (BaseStep & { type: 'human_gate'; gate: 'spec' | 'merge' })
+  | (BaseStep & { type: 'publish'; mode: 'push' | 'merge' });
+
+export interface CompileOptions {
+  /** Network level chosen by the repository; a step can only narrow it. */
+  repoNetwork?: NetworkLevel;
+}
+
+export interface CompiledPreset {
+  preset: Preset;
+  /** sha256 of the canonical JSON: the version a run is frozen on. */
+  hash: string;
+}
+
+export class PresetError extends Error {
+  constructor(readonly violations: string[]) {
+    super(`invalid preset:\n- ${violations.join('\n- ')}`);
+  }
+}
+
+const NETWORK_RANK: Record<NetworkLevel, number> = { none: 0, 'claude-api': 1, limited: 2, full: 3 };
+
+/** Checks the invariants of the core and hashes the preset; throws a PresetError listing every violation. */
+export function compilePreset(preset: Preset, options: CompileOptions = {}): CompiledPreset {
+  const repoNetwork = options.repoNetwork ?? 'limited';
+  const byId = new Map(preset.steps.map((s) => [s.id, s]));
+  const violations: string[] = [];
+
+  if (!byId.has(preset.entry)) violations.push(`entry ${preset.entry} is not a step`);
+  if (byId.size !== preset.steps.length) violations.push('step ids must be unique');
+  for (const [name, { limit }] of Object.entries(preset.counters)) {
+    if (!isPositiveInt(limit)) violations.push(`counter ${name}: limit must be a positive integer`);
+  }
+  if (!isPositiveInt(preset.sameFailure.limit)) violations.push('sameFailure: limit must be a positive integer');
+  checkEdge('redCi', preset.redCi);
+
+  for (const s of preset.steps) {
+    const where = `step ${s.id}`;
+    if (s.next !== null && !byId.has(s.next)) violations.push(`${where}: next ${s.next} is not a step`);
+    if (s.onFailure) checkEdge(where, s.onFailure);
+    if (s.network) {
+      if (s.network === 'full') violations.push(`${where}: network full is reserved for setup`);
+      else if (NETWORK_RANK[s.network] > NETWORK_RANK[repoNetwork]) {
+        violations.push(`${where}: network ${s.network} is wider than the repository level ${repoNetwork}`);
+      }
+    }
+    if (s.type === 'verify' && s.network !== 'none') violations.push(`${where}: a verify step must run with network none`);
+    if (s.type === 'review') {
+      if (!s.readOnly) violations.push(`${where}: a review step must be read-only`);
+      if (NETWORK_RANK[s.network] > NETWORK_RANK['claude-api']) violations.push(`${where}: a review step runs with network claude-api at most`);
+    }
+    if ((s.type === 'agent_step' || s.type === 'fix' || s.type === 'review') && !isPositiveInt(s.maxTurns)) {
+      violations.push(`${where}: maxTurns must be a positive integer`);
+    }
+  }
+
+  // Bounded cycles: every failure edge carries a counter, so the success edges alone must not loop.
+  const cycle = findCycle(preset, byId);
+  if (cycle) violations.push(`unbounded cycle through ${cycle.join(' → ')}`);
+
+  // Tests frozen before the build: no step that writes code is reachable while skipping every freeze.
+  const writers = preset.steps.filter((s) => s.type === 'fix' || (s.type === 'agent_step' && s.writesCode));
+  const unfrozen = reachable(preset, byId, [preset.entry], (s) => s.type === 'verify' && s.mode === 'freeze');
+  for (const s of writers) if (unfrozen.has(s.id)) violations.push(`step ${s.id}: reachable without freezing the tests first`);
+
+  // Merge gate: from written code, a merge is only reachable through a human merge gate.
+  const ungated = reachable(preset, byId, writers.map((s) => s.id), (s) => s.type === 'human_gate' && s.gate === 'merge');
+  for (const s of preset.steps) {
+    if (s.type === 'publish' && s.mode === 'merge' && ungated.has(s.id)) violations.push(`step ${s.id}: reachable from written code without a merge gate`);
+  }
+
+  if (violations.length > 0) throw new PresetError(violations);
+  return { preset, hash: createHash('sha256').update(canonical(preset)).digest('hex') };
+
+  function checkEdge(where: string, edge: FailureEdge) {
+    if (!byId.has(edge.goto)) violations.push(`${where}: goto ${edge.goto} is not a step`);
+    if (!preset.counters[edge.counter]) violations.push(`${where}: counter ${edge.counter} is not declared`);
+  }
+}
+
+function isPositiveInt(n: number): boolean {
+  return Number.isInteger(n) && n > 0;
+}
+
+function edges(s: Step, preset: Preset): string[] {
+  const out = s.next === null ? [] : [s.next];
+  if (s.onFailure) out.push(s.onFailure.goto);
+  // A CI exists once a PR does: on publication and at the merge gate.
+  if (s.type === 'publish' || (s.type === 'human_gate' && s.gate === 'merge')) out.push(preset.redCi.goto);
+  return out;
+}
+
+/** Steps reachable from `starts` by success and failure edges, never entering a step that `stops` matches. */
+function reachable(preset: Preset, byId: Map<string, Step>, starts: string[], stops: (s: Step) => boolean): Set<string> {
+  const seen = new Set<string>();
+  const queue = [...starts];
+  while (queue.length > 0) {
+    const s = byId.get(queue.pop()!);
+    if (!s || seen.has(s.id) || stops(s)) continue;
+    seen.add(s.id);
+    queue.push(...edges(s, preset));
+  }
+  return seen;
+}
+
+/** A cycle of `next` edges, as the list of its steps closed on the first one, or null. */
+function findCycle(preset: Preset, byId: Map<string, Step>): string[] | null {
+  const done = new Set<string>();
+  for (const start of preset.steps) {
+    const path: string[] = [];
+    for (let id: string | null = start.id; id !== null && byId.has(id) && !done.has(id); id = byId.get(id)!.next) {
+      const at = path.indexOf(id);
+      if (at >= 0) return [...path.slice(at), id];
+      path.push(id);
+    }
+    for (const id of path) done.add(id);
+  }
+  return null;
+}

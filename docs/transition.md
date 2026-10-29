@@ -128,6 +128,8 @@ Le premier ticket cité est celui qui touche le module en premier ou le plus ; l
 | `src/runtime/replay.ts` | Oracle de rejeu : export du journal d'un ticket avec ses décisions enregistrées, rejeu par les upcasters puis `planDecision`, comparaison bit à bit (régression) ou arrêt à la première divergence sur un autre workflow (what-if) | garder | ORC-174 (fait), ORC-231 (rejeu des tickets fermés avec l'agent) |
 | `src/runtime/timers.ts` | `TimerService` : relève les timers échus de la table `timers` et les déclenche par `Store.fireTimer` (`timer:<clé>:<échéance>` dans l'inbox et timer supprimé, une transaction) ; une minuterie qui échoue ne retient pas les autres ; rien en mémoire, un redémarrage n'en perd aucun | garder | ORC-161 (fait), ORC-210 (relance `clarify` à 24 h, Bloqué à 72 h), ORC-215 (attente sur limite d'usage), ORC-185 (réconciliation planifiée par timer) |
 | `src/runtime/workflow-version.ts` | Hash sha256 du workflow (JSON canonique, aussi la forme que compare le rejeu) : la version figée d'un ticket | garder | ORC-149, ORC-187 (préréglage en TypeScript) |
+| `src/presets/preset.ts` | Types du préréglage (étapes typées, `next`, `onFailure` à compteur, `redCi`, `sameFailure`) et `compilePreset` : invariants du socle vérifiés, hash sha256 du JSON canonique | garder | ORC-187 (fait : partie A, pas encore lu par le moteur), ORC-187 partie B (le moteur prend ses bornes dans le préréglage) |
+| `src/presets/factory-default.ts` | Le préréglage `factory/default` : enchaînement du doc MVP, table des bornes, modèle, effort, tours et réseau par étape | garder | ORC-187, ORC-216 (plafonds en tokens) |
 
 ### `src/adapters/`
 
