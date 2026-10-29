@@ -24,7 +24,7 @@ import type { EventBus } from './bus.js';
 import type { Clock } from './clock.js';
 import type { Effect } from './decision.js';
 import { NO_PLAN, planDecision } from './decision-plan.js';
-import { HUMAN_EVENTS, mayCheck, refusesDevWork, sensitivePathsAtLaunch, taintedKnowledge } from './engine.js';
+import { BLOCKED_LABEL, HUMAN_EVENTS, mayCheck, refusesDevWork, sensitivePathsAtLaunch, taintedKnowledge } from './engine.js';
 import { attemptLabels, packFingerprints } from './attempt-labels.js';
 import { pickupFailures } from './pickup.js';
 import { buildPrompt, formatFeedback, formatVerifyFailures } from './prompt.js';
@@ -132,7 +132,7 @@ interface EffectKey {
   replay: boolean;
 }
 
-export function logicalFromName(states: Record<LogicalState, string>, name: string): LogicalState | undefined {
+export function logicalFromName(states: Workflow['states'], name: string): LogicalState | undefined {
   return (Object.entries(states) as [LogicalState, string][]).find(([, n]) => n === name)?.[0];
 }
 
@@ -340,7 +340,10 @@ export class Orchestrator {
     await this.worker.kick();
     await this.worker.exclusive({ projectId, ticketId }, async () => {
       const t = await this.d.store.getTicket(projectId, ticketId);
-      if (t) await this.apply(t, { type: 'ticket.blocked', reason });
+      if (!t) return;
+      await this.apply(t, { type: 'ticket.blocked', reason });
+      // Blocked outside a decision: the label `decide` puts on its own blocks is put here (ORC-170).
+      if (!t.blocked) await this.setLabels(ticketId, [BLOCKED_LABEL], []);
     });
   }
 
@@ -711,12 +714,8 @@ export class Orchestrator {
       }
       case 'move':
         return this.move(project, t, c.to);
-      case 'labels': {
-        for (const l of c.add) await store.putEcho(labelEchoKey(ticketId, l, 'added'), clock.now() + ECHO_MS);
-        for (const l of c.remove) await store.putEcho(labelEchoKey(ticketId, l, 'removed'), clock.now() + ECHO_MS);
-        await tracker.setLabels(ticketId, c.add, c.remove);
-        return;
-      }
+      case 'labels':
+        return this.setLabels(ticketId, c.add, c.remove);
       case 'comment': {
         const found = key.replay ? await tracker.findComment(ticketId, key.id) : undefined;
         if (found !== undefined) return { deduplicated: true, ref: found };
@@ -757,8 +756,17 @@ export class Orchestrator {
     return s;
   }
 
+  /** Labels written by the factory, echoed so that their webhook is not read as a human's change. */
+  private async setLabels(ticketId: string, add: string[], remove: string[]): Promise<void> {
+    for (const l of add) await this.d.store.putEcho(labelEchoKey(ticketId, l, 'added'), this.d.clock.now() + ECHO_MS);
+    for (const l of remove) await this.d.store.putEcho(labelEchoKey(ticketId, l, 'removed'), this.d.clock.now() + ECHO_MS);
+    await this.d.tracker.setLabels(ticketId, add, remove);
+  }
+
   private async move(project: ProjectRuntime, t: TicketState, to: LogicalState): Promise<void> {
     const stateName = project.workflow.states[to];
+    // The loader refuses a move to an undeclared status; a version frozen before it may still hold one.
+    if (!stateName) throw new Error(`no status for "${to}" in the workflow of ${project.id}`);
     await this.d.store.putEcho(`state:${t.ticketId}:${stateName}`, this.d.clock.now() + ECHO_MS);
     await this.d.tracker.moveTo(t.ticketId, stateName);
     await this.apply(await this.ticket(project.id, t.ticketId), { type: 'status.recorded', to });
@@ -861,11 +869,13 @@ export class Orchestrator {
         if (!this.handles.has(fresh.activeRunId)) events.push({ type: 'run.cleared' });
       }
       const reason = `Erreur au lancement : ${(err as Error).message}`;
+      const wasBlocked = fresh.blocked;
       fresh = await this.apply(fresh, ...events, { type: 'ticket.blocked', reason });
       // The ticket is blocked: a failed notice must not fail the effect, whose retry would start again.
       try {
         const session = opts.linearSessionId ?? (await this.sessionFor(fresh));
         await this.d.tracker.activity(session, { type: 'error', body: reason });
+        if (!wasBlocked) await this.setLabels(ticketId, [BLOCKED_LABEL], []);
       } catch (e) {
         this.log('warn', `could not post the launch error of ${ticketId}: ${(e as Error).message}`);
       }
@@ -915,6 +925,7 @@ export class Orchestrator {
       const failures = await pickupFailures(wf.tracker.pickup.checks, issue, project.repoPath, workspaces);
       if (failures.length) {
         this.d.scheduler.release(key);
+        if (!t.blocked) await this.setLabels(ticketId, [BLOCKED_LABEL], []);
         t = await this.apply(t, { type: 'ticket.blocked', reason: failures.join(' ') });
         const session = await this.sessionFor(t);
         await tracker.activity(session, {

@@ -33,7 +33,7 @@ Linear peut refuser une URL de callback en `http://localhost` : dans ce cas, exp
 À la connexion, Relais :
 
 - enregistre les jetons, l'identifiant de l'agent (`appUserId`) et de l'organisation ;
-- **crée dans chaque équipe configurée les statuts manquants** (voir § 5) et les labels `agent:reprendre` et `agent:stop` ;
+- **crée dans chaque équipe configurée les statuts manquants** (voir § 5) et les labels `agent:reprendre`, `agent:stop` et `Bloqué` ;
 - poste les messages de reprise en attente (runs interrompus par un redémarrage) ;
 - démarre la réconciliation (toutes les 30 s).
 
@@ -69,7 +69,7 @@ La **réconciliation** relit toutes les 30 s les tickets délégués de chaque �
 | **Déléguer** un ticket à `relais` (champ « délégué » du ticket) | Session d'agent ouverte, « Pris en compte. » en quelques secondes, contrôles de prise en charge, puis run `dev` : statut *In Progress*, PR ouverte, statut *Human Review*, résumé dans la session. |
 | Répondre dans la session de l'agent | Retours regroupés : un run `dev-feedback` 3 minutes après le dernier message (immédiat si le ticket est bloqué). |
 | Déplacer de *Human Review* vers *In Progress* | Run `dev-feedback` (retours de la PR et du fil). |
-| Déplacer vers *AI Review* | Run `review` (boucle de review IA), puis *Ready to Merge*. |
+| Déplacer vers *AI Review* | Run `review` (boucle de review IA), puis retour en *Human Review* pour la relecture humaine. |
 | `@relais <question>` dans un commentaire | Réponse en lecture seule (`ask`), y compris sur un ticket non délégué. |
 | `@relais retiens <fait>` | PR dans le dépôt de connaissance (`remember`). |
 | `@relais fais-le` | Rappelle qu'il faut déléguer le ticket. |
@@ -108,7 +108,7 @@ Les membres Linear et les permissions GitHub sont gardés **60 s** puis relus : 
 
 ## 5. États, colonnes et labels
 
-Relais raisonne en six **états logiques** associés par nom aux statuts de l'équipe :
+Relais raisonne en cinq **états logiques** associés par nom aux statuts de l'équipe (« Ready to Merge » n'existe plus depuis ORC-170) :
 
 | État logique | Statut Linear (pack) | Type Linear donné s'il est créé |
 |---|---|---|
@@ -116,12 +116,15 @@ Relais raisonne en six **états logiques** associés par nom aux statuts de l'é
 | `dev` | In Progress | `started` |
 | `human_review` | Human Review | `started` |
 | `ai_review` | AI Review | `started` |
-| `ready` | Ready to Merge | `started` |
 | `done` | Done | `completed` |
 
 Les statuts absents sont créés à la connexion. Si vos colonnes portent d'autres noms, déclarez-les dans `states` de `.relais/workflow.yml` **avant** de connecter Linear ([`workflow.md`](workflow.md#states)), sinon Relais crée les noms du pack à côté des vôtres.
 
 Les déplacements faits par Relais lui-même sont reconnus (pendant 60 s) et ne redéclenchent pas de règle.
+
+Un ticket passé par un humain dans un statut de type *Canceled* annule son run (arrêt, file et réponses en attente abandonnées), sans le bloquer (ORC-170).
+
+Tant qu'un ticket est **bloqué** (l'usine attend une réponse), le label `Bloqué` est posé à côté de son statut ; il est retiré quand le ticket repart. Relais le crée à la connexion, avec `agent:reprendre` et `agent:stop`.
 
 ## 6. Équipes et projets
 

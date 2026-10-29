@@ -352,6 +352,25 @@ const TRIGGERS = new Set<EventType>(['ticket.delegated', 'session.mentioned', 'c
  * `matrix` (ORC-186) is the default one until the `factory/default` preset declares it (ORC-187).
  */
 export function decide(state: TicketState | undefined, event: FactoryEvent, workflow: Workflow, matrix: AuthzMatrix = DEFAULT_MATRIX): Decision {
+  const out = decideEvent(state, event, workflow, matrix);
+  // A dead notice or label means the tracker is down: nothing more is written to it (no loop, ORC-150).
+  const trackerDown = event.type === 'effect.failed' && (event.payload.kind === 'activity' || event.payload.kind === 'labels');
+  if (!trackerDown) blockedLabel(out, state);
+  return out;
+}
+
+/** Label put next to the status while the factory waits for a human (ORC-170). */
+export const BLOCKED_LABEL = 'Bloqué';
+
+/** The label follows the decision's blocks: put on when the ticket gets blocked, taken off when it no longer is. */
+function blockedLabel(out: Decision, state: TicketState | undefined): void {
+  const blocks = out.events.some((e) => e.type === 'ticket.blocked');
+  const lifts = out.events.some((e) => e.type === 'ticket.unblocked');
+  if (blocks && !lifts && !state?.blocked) out.effects.push({ kind: 'labels', add: [BLOCKED_LABEL], remove: [] });
+  else if (lifts && !blocks && state?.blocked) out.effects.push({ kind: 'labels', add: [], remove: [BLOCKED_LABEL] });
+}
+
+function decideEvent(state: TicketState | undefined, event: FactoryEvent, workflow: Workflow, matrix: AuthzMatrix): Decision {
   if (event.type === 'dead_letter.repaired') return repair(state, event, workflow);
   const out = empty();
   const fence = staleAttempt(state, event, workflow);
@@ -367,6 +386,13 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
   // Rules read the ticket as it is once the event's own facts are recorded (new status, delegation…).
   const ticket = reduce(state, event);
   if (BUILT_IN.has(event.type)) out.trace.push(`built-in ${event.type}`);
+  if (event.type === 'status.changed' && event.payload.cancelled) {
+    // A ticket cancelled by a human (ORC-170): its work stops, and nothing waits for an answer.
+    out.trace.push('status.changed: ticket cancelled, work cancelled');
+    out.events.push({ type: 'work.cancelled' });
+    out.effects.push({ kind: 'stop_run' });
+    return out;
+  }
   if (TRIGGERS.has(event.type)) {
     // The event's facts stay recorded (Linear did delegate, the session exists): only the factory's answer is refused.
     if (!authorize(out, event, ticket, 'trigger', 'linear', matrix)) return out;

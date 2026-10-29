@@ -24,6 +24,7 @@ import { githubWebhookSecret, resolveGithubApp } from '../config/github-app.js';
 import { writeRunSettings } from '../config/run-settings.js';
 import { loadWorkflow } from '../config/load-workflow.js';
 import { EventBus } from '../core/bus.js';
+import { BLOCKED_LABEL } from '../core/engine.js';
 import { SystemClock } from '../core/clock.js';
 import { logicalFromName, Orchestrator, type ProjectRuntime } from '../core/orchestrator.js';
 import { Scheduler } from '../core/scheduler.js';
@@ -52,7 +53,7 @@ export function isLoopbackHost(host: string): boolean {
   return h === 'localhost' || h === '::1' || /^127\.\d+\.\d+\.\d+$/.test(h);
 }
 
-const FACTORY_LABELS = ['agent:reprendre', 'agent:stop'];
+const FACTORY_LABELS = ['agent:reprendre', 'agent:stop', BLOCKED_LABEL];
 
 export async function startFactory(o: BootOptions): Promise<{ url: string; stop(): Promise<void> }> {
   const log = o.log ?? ((m: string) => console.log(`[factoryd] ${m}`));

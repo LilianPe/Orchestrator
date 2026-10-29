@@ -106,6 +106,18 @@ on:
     ).toThrow(/on\.session\.prompted\[0\]\.when/);
   });
 
+  it('has no Ready to Merge status: the AI review hands the PR to the human review (ORC-170)', () => {
+    const wf = loadWorkflow({ packDir });
+    expect(Object.values(wf.states)).not.toContain('Ready to Merge');
+    expect(wf.states.ready).toBeUndefined();
+    expect(wf.jobs['review']!.onSuccess.move).toBe('human_review');
+  });
+
+  it('refuses a move to a status the workflow does not declare', () => {
+    const file = projectFile('version: 1\njobs:\n  review: { on_success: { move: ready } }\n');
+    expect(() => loadWorkflow({ packDir, projectFile: file })).toThrow(/jobs\.review\.on_success\.move: no status for "ready"/);
+  });
+
   it('takes its loop bounds from the factory/default preset (ORC-187)', () => {
     const wf = loadWorkflow({ packDir });
     // 3 returns to the run after a failed check: the 4th failure blocks, so 4 attempts in all.

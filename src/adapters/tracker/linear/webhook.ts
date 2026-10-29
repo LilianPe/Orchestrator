@@ -112,7 +112,11 @@ async function issueEvents(body: any, identifier: string, teamKey: string, proje
     if (toName && !(await ctx.isEcho(`state:${identifier}:${toName}`))) {
       out.push({
         type: 'status.changed',
-        payload: { from: fromName ? ctx.logicalFor(projectId, fromName) : null, to: ctx.logicalFor(projectId, toName) },
+        payload: {
+          from: fromName ? ctx.logicalFor(projectId, fromName) : null,
+          to: ctx.logicalFor(projectId, toName),
+          ...(data.state?.type === 'canceled' ? { cancelled: true as const } : {}),
+        },
       });
     }
   }

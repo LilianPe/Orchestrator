@@ -122,6 +122,13 @@ describe('mapLinearWebhook', () => {
     ]);
   });
 
+  it('marks a move to a state of type canceled (ORC-170)', async () => {
+    const body = fx('issue-moved-labeled');
+    body.data = { ...body.data, stateId: 's-x', state: { id: 's-x', name: 'Canceled', type: 'canceled' }, labelIds: body.updatedFrom.labelIds };
+    const [e] = await mapLinearWebhook(body, 'k', ctx());
+    expect(e).toMatchObject({ type: 'status.changed', payload: { from: 'human_review', to: null, cancelled: true } });
+  });
+
   describe('signed actor and taint (ORC-160)', () => {
     it.each([
       ['session-created-delegation', 'ticket.delegated'],
