@@ -79,6 +79,7 @@ export function linearIngest(
       projectIdForTeam: (k) => (k === 'REL' ? 'p' : undefined),
       logicalFor: () => null,
       stateNameById: () => undefined,
+      stateTypeById: () => undefined,
       labelNameById: () => undefined,
       isEcho: () => false,
       commands: () => [],

@@ -113,14 +113,14 @@ describe('standard workflow', () => {
     expect(h.runner.requests[2]!.prompt).toContain('aussi le titre');
   });
 
-  it('criterion 5: AI review -> ready -> merge -> done, cleanup, learn', async () => {
+  it('criterion 5: AI review -> Human Review (no Ready to Merge, ORC-170) -> merge -> done, cleanup, learn', async () => {
     const h = createHarness();
     await delegatedAndInReview(h);
     h.runner.enqueue({ events: [{ kind: 'text', text: 'Synthèse : 2 rounds, CI verte.' }] });
     await h.send('status.changed', { from: 'human_review', to: 'ai_review' });
     expect(h.runner.requests[1]).toMatchObject({ model: 'opus', resume: false });
     expect(h.runner.requests[1]!.prompt).toContain('Rounds de review max : 5');
-    expect((await h.ticket()).logical).toBe('ready');
+    expect((await h.ticket()).logical).toBe('human_review');
     expect(h.tracker.activities('ls-1').at(-1)).toEqual({ type: 'response', body: 'Synthèse : 2 rounds, CI verte.' });
     await h.send('pr.merged', { number: 3, url: 'https://gh/pr/3', branch: 'factory/rel-1-export-csv' });
     expect((await h.ticket()).logical).toBe('done');
@@ -412,6 +412,8 @@ describe('standard workflow', () => {
     expect((await h.ticket()).blocked).toBe(true);
     const last = h.tracker.activities('ls-1').at(-1)!;
     expect(last.type).toBe('elicitation');
+    // Blocked outside a decision, the ticket still shows the label next to its status (ORC-170).
+    expect((await h.tracker.getIssue('REL-1')).labels).toContain('Bloqué');
   });
 });
 

@@ -147,7 +147,8 @@ export interface JobSpec {
 export interface Workflow {
   version: 1;
   tracker: { kind: 'linear'; team?: string; pickup: { checks: PickupCheck[] } };
-  states: Record<LogicalState, string>;
+  /** `ready` (« Ready to Merge ») is gone from the pack (ORC-170): optional, for the versions frozen with it. */
+  states: Record<Exclude<LogicalState, 'ready'>, string> & { ready?: string };
   limits: Limits;
   workspace: { setup: string[]; portBase: number };
   commands: string[];

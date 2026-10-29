@@ -139,7 +139,8 @@ export interface EventPayloads {
   'session.mentioned': { linearSessionId: string; body: string; author: string; issue?: IssueSnapshot };
   'session.prompted': { linearSessionId: string; body: string; author: string; issue?: IssueSnapshot };
   'session.stopped': { linearSessionId?: string };
-  'status.changed': { from: LogicalState | null; to: LogicalState | null };
+  /** `cancelled`: the new status is of type canceled in Linear (ORC-170). */
+  'status.changed': { from: LogicalState | null; to: LogicalState | null; cancelled?: true };
   'label.changed': { label: string; change: 'added' | 'removed' };
   /** A commit pushed by a human on the ticket's branch. */
   'push.human': { branch: string; sha: string; author: string };

@@ -65,7 +65,7 @@ Les contrôles :
 Si un contrôle échoue, le ticket est bloqué et Relais répond dans la session Linear avec la liste des problèmes (« Je ne peux pas commencer ce ticket… Corrigez puis répondez dans ce fil »). `relais plan` affiche, pour chaque ticket délégué, s'il serait pris ou non, et pourquoi.
 
 ### `states`
-Associe les six **états logiques** de Relais aux noms exacts des colonnes (statuts) Linear de l'équipe :
+Associe les cinq **états logiques** de Relais aux noms exacts des colonnes (statuts) Linear de l'équipe :
 
 | État logique | Pack |
 |---|---|
@@ -73,10 +73,9 @@ Associe les six **états logiques** de Relais aux noms exacts des colonnes (stat
 | `dev` | `In Progress` |
 | `human_review` | `Human Review` |
 | `ai_review` | `AI Review` |
-| `ready` | `Ready to Merge` |
 | `done` | `Done` |
 
-Vous pouvez n'en redéfinir qu'une partie ; après fusion, les six doivent avoir un nom. Aucun autre nom d'état n'est accepté. Lors de « Connecter Linear », Relais crée dans l'équipe les statuts manquants. Un statut Linear qui n'est associé à aucun état logique est vu comme « inconnu » : un déplacement vers lui produit un `status.changed` avec `to` vide, que les règles `from`/`to` ne reconnaissent pas.
+Vous pouvez n'en redéfinir qu'une partie ; après fusion, les cinq doivent avoir un nom. `ready` (« Ready to Merge ») n'est plus déclaré par le pack (ORC-170) ; un `move` vers un état sans nom est refusé au chargement, avec le chemin de la clé. Aucun autre nom d'état n'est accepté. Lors de « Connecter Linear », Relais crée dans l'équipe les statuts manquants. Un statut Linear qui n'est associé à aucun état logique est vu comme « inconnu » : un déplacement vers lui produit un `status.changed` avec `to` vide, que les règles `from`/`to` ne reconnaissent pas.
 
 ### `limits`
 | Clé | Type | Défaut | Effet quand la limite est atteinte |
@@ -158,7 +157,7 @@ Jobs du pack :
 | `dev` | dev | sonnet | Premier développement ; passe le ticket en `dev` au départ, en `human_review` à la fin, et publie un résumé. |
 | `dev-feedback` | dev | sonnet | Étend `dev` : reprend la session pour traiter les retours. |
 | `fix-ci` | dev | sonnet | Étend `dev-feedback` : corrige la CI. |
-| `review` | dev | opus | Review IA en session neuve, puis passe en `ready`. |
+| `review` | dev | opus | Review IA en session neuve, puis repasse en `human_review`. |
 | `ask` | questions | sonnet | Répond aux questions en lecture seule (30 tours, 5 min, 0,5 $). |
 | `learn` | questions | haiku | Après un merge, alimente la base de connaissance. |
 | `remember` | questions | haiku | Étend `learn` : retient ce qu'on lui demande (`@relais retiens …`). |
@@ -263,7 +262,7 @@ Une condition est une suite d'**atomes** reliés par `&&` (tous doivent être vr
 | `!blocked` | Il ne l'est pas. |
 | `job == <nom>` | Le job du run `dev` en cours sur le ticket est `<nom>`. |
 
-`<état>` est l'un des six états logiques (`todo`, `dev`, `human_review`, `ai_review`, `ready`, `done`), jamais un nom de colonne Linear. Pour un événement sans ticket connu, l'état vaut `todo` et `blocked` est faux.
+`<état>` est l'un des états logiques (`todo`, `dev`, `human_review`, `ai_review`, `done`, et `ready` pour un workflow qui le déclare encore), jamais un nom de colonne Linear. Pour un événement sans ticket connu, l'état vaut `todo` et `blocked` est faux.
 
 Valides :
 

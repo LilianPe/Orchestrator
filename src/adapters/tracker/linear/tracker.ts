@@ -155,6 +155,10 @@ export class LinearTracker implements Tracker, TeamDirectory {
     return this.states.get(teamKey)?.find((s) => s.id === id)?.name;
   }
 
+  stateTypeById(teamKey: string, id: string): string | undefined {
+    return this.states.get(teamKey)?.find((s) => s.id === id)?.type;
+  }
+
   labelNameById(teamKey: string, id: string): string | undefined {
     for (const [name, lid] of this.labels.get(teamKey) ?? []) if (lid === id) return name;
     return undefined;
@@ -278,12 +282,12 @@ export class LinearTracker implements Tracker, TeamDirectory {
     return agentSessionCreateOnIssue.agentSession.id;
   }
 
-  async ensureSetup(teamKey: string, states: Record<LogicalState, string>, labels: string[]): Promise<string[]> {
+  async ensureSetup(teamKey: string, states: Partial<Record<LogicalState, string>>, labels: string[]): Promise<string[]> {
     const created: string[] = [];
     const existing = new Set((await this.teamStates(teamKey, true)).map((s) => s.name));
     const teamId = await this.teamId(teamKey);
-    for (const [logical, name] of Object.entries(states) as [LogicalState, string][]) {
-      if (existing.has(name)) continue;
+    for (const [logical, name] of Object.entries(states) as [LogicalState, string | undefined][]) {
+      if (!name || existing.has(name)) continue;
       await this.api.gql(Q.stateCreate, { input: { name, teamId, type: STATE_TYPES[logical], color: '#5e6ad2' } });
       created.push(name);
     }

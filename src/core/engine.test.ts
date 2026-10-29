@@ -48,7 +48,7 @@ describe('decide — YAML rules of the standard pack', () => {
 
   it('relaunches immediately when blocked', () => {
     const out = decide(ticket({ logical: 'dev', blocked: true, linearSessionId: 's1' }), ev('session.prompted', { linearSessionId: 's1', body: 'oui, vas-y', author: 'L' }), workflow);
-    expect(kinds(out)).toEqual({ events: ['feedback.appended', 'ticket.unblocked'], effects: ['start_run'], timers: [] });
+    expect(kinds(out)).toEqual({ events: ['feedback.appended', 'ticket.unblocked'], effects: ['start_run', 'labels'], timers: [] });
     expect(out.effects[0]).toMatchObject({ job: 'dev-feedback', input: 'feedback' });
   });
 
@@ -89,6 +89,38 @@ describe('decide — YAML rules of the standard pack', () => {
     expect(out).toEqual(decision({ effects: [{ kind: 'start_run', job: 'dev-feedback', input: 'feedback', inputText: undefined, linearSessionId: undefined }] }));
   });
 
+  describe('statuses of the MVP (ORC-170)', () => {
+    const cancelled = ev('status.changed', { from: 'dev', to: null, cancelled: true });
+
+    it('a ticket cancelled by a human cancels its run, without blocking it', () => {
+      const out = decide(ticket({ logical: 'dev', delegated: true, activeRunId: 'r1' }), cancelled, workflow);
+      expect(out.events).toEqual([{ type: 'work.cancelled' }]);
+      expect(out.effects).toEqual([{ kind: 'stop_run' }]);
+    });
+
+    it('a cancelled ticket waits for nobody: unblocked, label off, pending replies dropped', () => {
+      const waiting = ticket({ logical: 'dev', delegated: true, blocked: true, blockReason: 'x', pendingFeedback: [{ body: 'b', author: 'L', at: 1, source: 'session' }] });
+      expect(reduce(waiting, cancelled)).toMatchObject({ blocked: false, pendingFeedback: [] });
+      expect(decide(waiting, cancelled, workflow).effects).toContainEqual({ kind: 'labels', add: [], remove: ['Bloqué'] });
+    });
+
+    it('cancelling a ticket the factory does not work on decides nothing', () => {
+      expect(decide(ticket({ logical: 'dev', delegated: false }), cancelled, workflow).effects).toEqual([]);
+    });
+
+    it('a block puts the label Bloqué next to the status, an unblock takes it off', () => {
+      const blocked = decide(ticket({ activeRunId: 'r1' }), ev('run.finished', { runId: 'r1', job: 'dev', outcome: 'failure', costUsd: 0, turns: 1, lastText: '' }), workflow);
+      expect(blocked.effects).toContainEqual({ kind: 'labels', add: ['Bloqué'], remove: [] });
+      const relaunched = decide(ticket({ logical: 'dev', blocked: true, linearSessionId: 's1' }), ev('session.prompted', { linearSessionId: 's1', body: 'vas-y', author: 'L' }), workflow);
+      expect(relaunched.effects).toContainEqual({ kind: 'labels', add: [], remove: ['Bloqué'] });
+    });
+
+    it('does not put the label again on a ticket already blocked', () => {
+      const out = decide(ticket({ blocked: true, activeRunId: 'r1' }), ev('run.finished', { runId: 'r1', job: 'dev', outcome: 'failure', costUsd: 0, turns: 1, lastText: '' }), workflow);
+      expect(out.effects.filter((e) => e.kind === 'labels')).toEqual([]);
+    });
+  });
+
   it('moving to ai_review runs review', () => {
     const out = decide(ticket({ logical: 'ai_review' }), ev('status.changed', { from: 'human_review', to: 'ai_review' }), workflow);
     expect(out.effects[0]).toMatchObject({ kind: 'start_run', job: 'review' });
@@ -106,7 +138,7 @@ describe('decide — YAML rules of the standard pack', () => {
 
   it('the agent:stop label stops', () => {
     const out = decide(ticket({ logical: 'dev' }), ev('label.changed', { label: 'agent:stop', change: 'added' }), workflow);
-    expect(kinds(out)).toEqual({ events: ['work.cancelled', 'ticket.blocked'], effects: ['stop_run', 'activity'], timers: [] });
+    expect(kinds(out)).toEqual({ events: ['work.cancelled', 'ticket.blocked'], effects: ['stop_run', 'activity', 'labels'], timers: [] });
   });
 
   it('a label rule matches only the addition of the label', () => {
@@ -137,7 +169,7 @@ describe('decide — YAML rules of the standard pack', () => {
       { type: 'work.cancelled' },
       { type: 'ticket.blocked', reason: 'PR #3 fermée sans merge' },
     ]);
-    expect(kinds(out).effects).toEqual(['stop_run', 'activity']);
+    expect(kinds(out).effects).toEqual(['stop_run', 'activity', 'labels']);
     const after = out.events.reduce<TicketState>((s, e) => reduce(s, e)!, t);
     const relaunched = decide(after, ev('label.changed', { label: 'agent:reprendre', change: 'added' }), workflow);
     expect(relaunched.events).toContainEqual({ type: 'ticket.unblocked' });
@@ -416,7 +448,7 @@ describe('decide — built-ins', () => {
 
   it('run limit blocks and asks', () => {
     const out = decide(ticket({ activeRunId: 'r1' }), ev('run.finished', { runId: 'r1', job: 'dev', outcome: 'limit', costUsd: 5, turns: 150, lastText: '' }), workflow);
-    expect(kinds(out)).toEqual({ events: ['ticket.blocked'], effects: ['activity'], timers: [] });
+    expect(kinds(out)).toEqual({ events: ['ticket.blocked'], effects: ['activity', 'labels'], timers: [] });
     expect(out.effects[0]).toMatchObject({ type: 'elicitation' });
   });
 
@@ -428,7 +460,7 @@ describe('decide — built-ins', () => {
     const third = decide(ticket({ verifyAttempts: 2, verifyingRunId: 'r3' }), ev('verify.failed', { runId: 'r3', job: 'dev', failures }), workflow);
     expect(third.effects[0]).toMatchObject({ kind: 'start_run', job: 'dev', input: 'verify_failures' });
     const fourth = decide(ticket({ verifyAttempts: 3, verifyingRunId: 'r4' }), ev('verify.failed', { runId: 'r4', job: 'dev', failures }), workflow);
-    expect(kinds(fourth)).toEqual({ events: ['ticket.blocked'], effects: ['activity'], timers: [] });
+    expect(kinds(fourth)).toEqual({ events: ['ticket.blocked'], effects: ['activity', 'labels'], timers: [] });
   });
 
   describe('same command, same failure, unchanged diff (ORC-187)', () => {
@@ -444,7 +476,7 @@ describe('decide — built-ins', () => {
       }
       expect(t.repeatedFailure).toMatchObject({ count: 2 });
       const third = decide({ ...t, verifyingRunId: 'r3' }, failed('r3', 'abc'), workflow);
-      expect(kinds(third)).toEqual({ events: ['ticket.patched', 'ticket.blocked'], effects: ['activity'], timers: [] });
+      expect(kinds(third)).toEqual({ events: ['ticket.patched', 'ticket.blocked'], effects: ['activity', 'labels'], timers: [] });
       expect(third.events[1]).toMatchObject({ type: 'ticket.blocked', reason: expect.stringMatching(/^Boucle :/) });
     });
 
@@ -497,7 +529,7 @@ describe('decide — built-ins', () => {
       expect(out).toEqual(
         decision({
           events: [{ type: 'ticket.blocked', reason }],
-          effects: [{ kind: 'activity', type: 'elicitation', body: `${reason}\n- \`test\`\n- \`lint\`\nRépondez dans ce fil pour relancer.` }],
+          effects: [{ kind: 'activity', type: 'elicitation', body: `${reason}\n- \`test\`\n- \`lint\`\nRépondez dans ce fil pour relancer.` }, { kind: 'labels', add: ['Bloqué'], remove: [] }],
         }),
       );
       // Blocked, the ticket gets no fix-ci from a later red CI either, and no second notice.
@@ -507,7 +539,7 @@ describe('decide — built-ins', () => {
 
     it('ci_fix_attempts: 0 blocks at the first red CI', () => {
       const wf = { ...workflow, limits: { ...workflow.limits, ciFixAttempts: 0 } };
-      expect(kinds(decide(inReview(), red, wf))).toEqual({ events: ['ticket.blocked'], effects: ['activity'], timers: [] });
+      expect(kinds(decide(inReview(), red, wf))).toEqual({ events: ['ticket.blocked'], effects: ['activity', 'labels'], timers: [] });
     });
 
     it('a green CI resets the count, and records nothing when it is already 0', () => {
@@ -587,13 +619,15 @@ describe('decide — built-ins', () => {
     expect(decide(ticket(), ev('effect.failed', { ...result, error: 'Linear down' }), workflow)).toEqual(
       decision({
         events: [{ type: 'ticket.blocked', reason: 'Erreur : Linear down' }],
-        effects: [{ kind: 'activity', type: 'error', body: 'Erreur : Linear down' }],
+        effects: [{ kind: 'activity', type: 'error', body: 'Erreur : Linear down' }, { kind: 'labels', add: ['Bloqué'], remove: [] }],
       }),
     );
     // The notice of a dead effect dies too: blocked, no new notice (no loop while the tracker is down).
     expect(decide(ticket(), ev('effect.failed', { ...result, kind: 'activity', eventId: 'effect:REL-1:1:2', error: 'Linear down' }), workflow)).toEqual(
       decision({ events: [{ type: 'ticket.blocked', reason: 'Erreur : Linear down' }] }),
     );
+    // Nor a label: a dead label is the same tracker down (ORC-170).
+    expect(decide(ticket(), ev('effect.failed', { ...result, kind: 'labels', error: 'Linear down' }), workflow).effects.filter((e) => e.kind === 'labels')).toEqual([]);
     // ... and on a ticket already blocked, the reason the notice carried stays.
     expect(
       decide(ticket({ blocked: true, blockReason: 'Erreur : disk full' }), ev('effect.failed', { ...result, kind: 'activity', eventId: 'effect:REL-1:1:2', error: 'Linear down' }), workflow),
@@ -617,7 +651,7 @@ describe('decide — dead letters (ORC-175)', () => {
     expect(decide(ticket(), ev('dead_letter.added', added), workflow)).toEqual(
       decision({
         events: [{ type: 'ticket.blocked', reason }],
-        effects: [{ kind: 'activity', type: 'error', body: `${reason} Un mainteneur peut le réparer : \`factory run repair REL-1\`.` }],
+        effects: [{ kind: 'activity', type: 'error', body: `${reason} Un mainteneur peut le réparer : \`factory run repair REL-1\`.` }, { kind: 'labels', add: ['Bloqué'], remove: [] }],
       }),
     );
     // An unknown ticket, a delivered or a stopped one: nothing to block.
@@ -633,7 +667,8 @@ describe('decide — dead letters (ORC-175)', () => {
   it('a repair lifts the block of its event only, and says so', () => {
     const notice = { kind: 'activity' as const, type: 'response' as const, body: 'Événement l1 réparé par ops (ignoré) : le ticket est débloqué.' };
     const skip = ev('dead_letter.repaired', { eventId: 'l1', action: 'skip', by: 'ops', event: delegation });
-    expect(decide(ticket({ blocked: true, blockReason: reason }), skip, workflow)).toEqual(decision({ effects: [notice] }));
+    // The lift happens in reduce, without ticket.unblocked: the label still comes off (ORC-170).
+    expect(decide(ticket({ blocked: true, blockReason: reason }), skip, workflow)).toEqual(decision({ effects: [notice, { kind: 'labels', add: [], remove: ['Bloqué'] }] }));
     expect(reduce(ticket({ blocked: true, blockReason: reason }), skip)).toMatchObject({ blocked: false, blockReason: undefined });
     // Blocked for another reason (another event, a human stop): the block stays.
     const other = ticket({ blocked: true, blockReason: 'Arrêté à la demande' });
@@ -647,10 +682,10 @@ describe('decide — dead letters (ORC-175)', () => {
     const blocked = ticket({ delegated: false, blocked: true, blockReason: reason });
     const replay = ev('dead_letter.repaired', { eventId: 'l1', action: 'replay', by: 'ops', event: delegation });
     // On the blocked ticket, the delegation would be ignored: the replay sees it unblocked and starts dev.
-    expect(kinds(decide(blocked, replay, workflow)).effects).toEqual(['start_run', 'activity']);
+    expect(kinds(decide(blocked, replay, workflow)).effects).toEqual(['start_run', 'activity', 'labels']);
     expect(reduce(blocked, replay)).toMatchObject({ delegated: true, blocked: false });
     const force = ev('dead_letter.repaired', { eventId: 'l1', action: 'force', by: 'ops', event: delegation });
-    expect(kinds(decide(blocked, force, workflow)).effects).toEqual(['activity']);
+    expect(kinds(decide(blocked, force, workflow)).effects).toEqual(['activity', 'labels']);
     expect(reduce(blocked, force)).toMatchObject({ delegated: true, blocked: false });
   });
 

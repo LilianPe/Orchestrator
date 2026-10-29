@@ -21,6 +21,8 @@ function external(t: TicketState, e: FactoryEvent): TicketState {
       return { ...t, questionSessionIds: [...t.questionSessionIds.filter((s) => s !== id), id].slice(-MAX_QUESTION_SESSIONS) };
     }
     case 'status.changed': {
+      // Cancelled (ORC-170): nothing waits for a human any longer, and the replies kept for a next run are dropped.
+      if (e.payload.cancelled) return { ...t, blocked: false, blockReason: undefined, pendingFeedback: [] };
       const to = e.payload.to;
       if (!to) return t;
       // A human moves a merged ticket anywhere but done (the factory's own moves are no status.changed): it is

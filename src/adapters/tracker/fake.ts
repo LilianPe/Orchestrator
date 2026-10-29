@@ -4,7 +4,7 @@ import type { ActivityInput, SearchHit, Tracker, TrackerIssue } from './types.js
 const snapshot = (i: TrackerIssue): TrackerIssue => ({ ...i, labels: [...i.labels] });
 
 /** The states of packs/standard/workflow.yml, the catalogue every team has unless a test declares another. */
-export const STANDARD_STATES = ['Todo', 'In Progress', 'Human Review', 'AI Review', 'Ready to Merge', 'Done'] as const;
+export const STANDARD_STATES = ['Todo', 'In Progress', 'Human Review', 'AI Review', 'Done'] as const;
 
 export class FakeTracker implements Tracker, TeamDirectory {
   issues = new Map<string, TrackerIssue>();

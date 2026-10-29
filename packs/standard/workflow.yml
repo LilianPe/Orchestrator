@@ -8,7 +8,6 @@ states:
   dev: "In Progress"
   human_review: "Human Review"
   ai_review: "AI Review"
-  ready: "Ready to Merge"
   done: "Done"
 limits:
   parallel_sessions: 3
@@ -70,7 +69,7 @@ jobs:
     workspace: worktree
     session: new
     skill: "factory:review"
-    on_success: { move: ready, post: synthesis }
+    on_success: { move: human_review, post: synthesis }
   ask:
     queue: questions
     model: sonnet

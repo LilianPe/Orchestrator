@@ -216,6 +216,8 @@ describe('fault injection at each point of the chain (ORC-163)', () => {
     expect(t.blocked).toBe(true);
     expect(t.activeRunId).toBeUndefined();
     expect(JSON.stringify(h.tracker.activities('ls-1'))).toContain('redémarré pendant le run');
+    // Blocked by recover(), outside any decision: the label is put all the same (ORC-170).
+    expect((await h.tracker.getIssue('REL-1')).labels).toContain('Bloqué');
   });
 
   /**

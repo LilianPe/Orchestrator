@@ -33,12 +33,12 @@ describe('loadWorkflow', () => {
 version: 1
 on:
   ticket.moved:
-    - { to: ready, comment: "prêt" }
+    - { to: human_review, comment: "prêt" }
   label.added:
     - { label: "agent:audit", comment: "audit" }
 `),
     });
-    expect(wf.on['status.changed']).toEqual([expect.objectContaining({ to: 'ready', comment: 'prêt' })]);
+    expect(wf.on['status.changed']).toEqual([expect.objectContaining({ to: 'human_review', comment: 'prêt' })]);
     expect(wf.on['label.changed']).toEqual([expect.objectContaining({ label: 'agent:audit' })]);
     expect(Object.keys(wf.on)).not.toContain('ticket.moved');
   });
@@ -104,6 +104,23 @@ on:
 `),
       }),
     ).toThrow(/on\.session\.prompted\[0\]\.when/);
+  });
+
+  it('has no Ready to Merge status: the AI review hands the PR to the human review (ORC-170)', () => {
+    const wf = loadWorkflow({ packDir });
+    expect(Object.values(wf.states)).not.toContain('Ready to Merge');
+    expect(wf.states.ready).toBeUndefined();
+    expect(wf.jobs['review']!.onSuccess.move).toBe('human_review');
+  });
+
+  it('refuses a move to a status the workflow does not declare', () => {
+    const file = projectFile('version: 1\njobs:\n  review: { on_success: { move: ready } }\n');
+    expect(() => loadWorkflow({ packDir, projectFile: file })).toThrow(/jobs\.review\.on_success\.move: no status for "ready"/);
+  });
+
+  it('refuses a status rule on a status the workflow does not declare', () => {
+    const file = projectFile('version: 1\non:\n  status.changed:\n    - { to: ready, run: review }\n');
+    expect(() => loadWorkflow({ packDir, projectFile: file })).toThrow(/on\.status\.changed\[\d+\]\.to: no status for "ready"/);
   });
 
   it('takes its loop bounds from the factory/default preset (ORC-187)', () => {

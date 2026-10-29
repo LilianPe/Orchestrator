@@ -12,7 +12,7 @@ npm ci && npm run build && npm link
 Dans le dépôt de test : `relais init`. Suivre les instructions (app OAuth Linear, webhook = URL smee affichée, catégories Agent session events + Issues + Comments). Vérifier `~/.relais/config.yaml`, `~/.relais/secrets.json` (mode 600), `.relais/workflow.yml`.
 
 ## 2. up et connexion (critère 2)
-`relais up`, ouvrir http://localhost:4100, cliquer « Connecter Linear ». Attendu : page « Linear est connecté », statuts Human Review / AI Review / Ready to Merge et labels agent:* créés dans l'équipe, bouton remplacé par l'état « en direct ».
+`relais up`, ouvrir http://localhost:4100, cliquer « Connecter Linear ». Attendu : page « Linear est connecté », statuts Human Review / AI Review et labels agent:* et Bloqué créés dans l'équipe, bouton remplacé par l'état « en direct ».
 Si Linear refuse l'URL de callback localhost : noter l'erreur, utiliser `cloudflared tunnel --url http://localhost:4100` le temps de l'installation et mettre l'URL publique dans `publicUrl`.
 
 ## 3. Délégation (critère 3)
@@ -23,7 +23,7 @@ Vérifier dans `~/.relais/relais.db` qu'aucun événement n'a été rejeté pour
 Écrire deux remarques dans le fil à moins d'une minute d'écart. Attendu : une seule reprise 3 minutes après la dernière, même session Claude (même id dans l'interface), réponse avec le commit.
 
 ## 5. Review IA puis merge (critère 5)
-Passer le ticket en AI Review. Attendu : session neuve, synthèse, statut Ready to Merge. Merger la PR sur GitHub. Attendu en < 1 min : statut Done, worktree supprimé de `~/.relais/workspaces`, run learn lancé.
+Passer le ticket en AI Review. Attendu : session neuve, synthèse, statut Human Review. Merger la PR sur GitHub. Attendu en < 1 min : statut Done, worktree supprimé de `~/.relais/workspaces`, run learn lancé.
 
 ## 6. Questions et mémoire (critère 6)
 Sur un autre ticket : `@relais où est géré X ?` → réponse en lecture seule. `@relais retiens <fait>` → PR dans relais-knowledge. La merger, puis poser une question liée : la réponse cite la fiche.

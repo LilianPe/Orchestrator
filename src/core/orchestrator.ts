@@ -24,7 +24,7 @@ import type { EventBus } from './bus.js';
 import type { Clock } from './clock.js';
 import type { Effect } from './decision.js';
 import { NO_PLAN, planDecision } from './decision-plan.js';
-import { HUMAN_EVENTS, mayCheck, refusesDevWork, sensitivePathsAtLaunch, taintedKnowledge } from './engine.js';
+import { blockedLabelChange, HUMAN_EVENTS, mayCheck, refusesDevWork, sensitivePathsAtLaunch, taintedKnowledge } from './engine.js';
 import { attemptLabels, packFingerprints } from './attempt-labels.js';
 import { pickupFailures } from './pickup.js';
 import { buildPrompt, formatFeedback, formatVerifyFailures } from './prompt.js';
@@ -132,7 +132,7 @@ interface EffectKey {
   replay: boolean;
 }
 
-export function logicalFromName(states: Record<LogicalState, string>, name: string): LogicalState | undefined {
+export function logicalFromName(states: Workflow['states'], name: string): LogicalState | undefined {
   return (Object.entries(states) as [LogicalState, string][]).find(([, n]) => n === name)?.[0];
 }
 
@@ -419,12 +419,19 @@ export class Orchestrator {
       for (const e of events) next = reduce(next, e)!;
       return { ...next, updatedAt: now };
     };
-    let next = await this.d.store.updateTicket(t.projectId, t.ticketId, step);
+    let before = t.blocked;
+    let next = await this.d.store.updateTicket(t.projectId, t.ticketId, (from) => ((before = from.blocked), step(from)));
     if (!next) {
       next = step(t);
       await this.d.store.putTicket(next);
     }
     this.d.bus.publish({ kind: 'ticket', ticket: next });
+    // Blocked or unblocked outside a decision (recover, a launch error, a refused pickup): the label
+    // `decide` keeps in step with its own changes follows here (ORC-170). A failed write does not undo the change.
+    const label = blockedLabelChange(before, next.blocked);
+    if (label) {
+      await this.setLabels(t.ticketId, label.add, label.remove).catch((e: Error) => this.log('warn', `could not set the label of ${t.ticketId}: ${e.message}`));
+    }
     return next;
   }
 
@@ -711,12 +718,8 @@ export class Orchestrator {
       }
       case 'move':
         return this.move(project, t, c.to);
-      case 'labels': {
-        for (const l of c.add) await store.putEcho(labelEchoKey(ticketId, l, 'added'), clock.now() + ECHO_MS);
-        for (const l of c.remove) await store.putEcho(labelEchoKey(ticketId, l, 'removed'), clock.now() + ECHO_MS);
-        await tracker.setLabels(ticketId, c.add, c.remove);
-        return;
-      }
+      case 'labels':
+        return this.setLabels(ticketId, c.add, c.remove);
       case 'comment': {
         const found = key.replay ? await tracker.findComment(ticketId, key.id) : undefined;
         if (found !== undefined) return { deduplicated: true, ref: found };
@@ -757,8 +760,17 @@ export class Orchestrator {
     return s;
   }
 
+  /** Labels written by the factory, echoed so that their webhook is not read as a human's change. */
+  private async setLabels(ticketId: string, add: string[], remove: string[]): Promise<void> {
+    for (const l of add) await this.d.store.putEcho(labelEchoKey(ticketId, l, 'added'), this.d.clock.now() + ECHO_MS);
+    for (const l of remove) await this.d.store.putEcho(labelEchoKey(ticketId, l, 'removed'), this.d.clock.now() + ECHO_MS);
+    await this.d.tracker.setLabels(ticketId, add, remove);
+  }
+
   private async move(project: ProjectRuntime, t: TicketState, to: LogicalState): Promise<void> {
     const stateName = project.workflow.states[to];
+    // The loader refuses a move to an undeclared status; a version frozen before it may still hold one.
+    if (!stateName) throw new Error(`no status for "${to}" in the workflow of ${project.id}`);
     await this.d.store.putEcho(`state:${t.ticketId}:${stateName}`, this.d.clock.now() + ECHO_MS);
     await this.d.tracker.moveTo(t.ticketId, stateName);
     await this.apply(await this.ticket(project.id, t.ticketId), { type: 'status.recorded', to });
