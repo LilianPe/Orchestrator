@@ -50,6 +50,10 @@ Démarre le démon au premier plan : serveur HTTP (interface, API, webhooks, OAu
 
 `--fake-runner` : remplace Claude Code par un runner simulé qui répond « Terminé. » sans rien coûter. Pour tester l'interface et le câblage Linear.
 
+### `factory validate [repo]`
+
+Vérifie le `.factory/config.yml` du dépôt (le dépôt courant par défaut) contre le socle : une configuration ajoute des contrôles ou des interdits, elle n'en retire jamais. Sortie 1 avec une ligne par violation (clé inconnue, motif négatif, `max_diff` élargi, réseau `full`), 0 sinon ou sans fichier. Ne demande pas d'instance. Voir [configuration du dépôt](configuration-depot.md) (ORC-209).
+
 ### `factory doctor [repo]`
 
 Contrôle avant de confier un dépôt : refuse (code retour `1`) une CI qui peut exposer des secrets à une branche `factory/*` sans approbation humaine, et accepte (code `0`) une CI sans secrets ou dont les jobs à secrets sont sous un environnement protégé avec required reviewers.

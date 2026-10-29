@@ -218,6 +218,7 @@ Contrôles déterministes de `verify`, purs : ils lisent le diff `baseSha..SHA` 
 | Module | Rôle | Statut | Ticket cible |
 |---|---|---|---|
 | `src/config/instance.ts` | `config.yaml` et `secrets.json` de l'instance (zod) ; `projects[].authz` : mainteneurs, valideurs, logins GitHub des utilisateurs Linear (ORC-186) | adapter | ORC-209 (`factory.yml`, où passent les désignations d'`authz`), ORC-199 (`config.yaml` et `secrets.json` retirés), ORC-194 (`perDayUsd`), ORC-167 (`RELAIS_HOME`) |
+| `src/config/repo-config.ts` | Schéma de `.factory/config.yml` (zod) fusionné sur le socle : clé inconnue, motif négatif, `max_diff` élargi et réseau `full` refusés ; chemins interdits du socle toujours gardés | garder | ORC-209 (fait : partie A ; B : `factory.yml` ; C : lecture sur la branche par défaut, `.factory/**` interdit à l'agent) |
 | `src/config/github-app.ts` | Résolution de la GitHub App (PEM ou chemin, repli `GH_APP_*`) et du secret des webhooks GitHub (repli `GH_WEBHOOK_SECRET`, ORC-134) | garder | ORC-124 (cible `factory.yml`, ORC-209) |
 | `src/config/load-workflow.ts` | Fusion pack + `.factory/workflow.yml` | retirer | ORC-177 (remplacé par ORC-187 et ORC-209) |
 | `src/config/workflow-schema.ts` | Schéma zod de `workflow.yml` | retirer | ORC-177 |
@@ -248,6 +249,7 @@ Contrôles déterministes de `verify`, purs : ils lisent le diff `baseSha..SHA` 
 |---|---|---|---|
 | `src/cli/factory.ts` | CLI `factory` : `init`, `doctor`, `up`, `plan`, `status`, `pause`, `resume`, `stop`, `replay`, `run repair` | adapter | ORC-167 (`factory`), ORC-135 (`doctor`), ORC-174 (`replay`), ORC-175 (`run repair`), ORC-200 (`plan`, `pause`, `resume`, `--fake-runner` retirés), ORC-220 (`status`, `stop`) |
 | `src/cli/doctor.ts` | `factory doctor` : refuse un dépôt dont la CI peut exposer des secrets aux branches `factory/*` sans approbation humaine | adapter | ORC-135, ORC-208 (intégration à `init`) |
+| `src/cli/validate.ts` | `factory validate [repo]` : `.factory/config.yml` vérifié contre le socle, une ligne par violation | garder | ORC-209, ORC-216 (pire cas des budgets) |
 | `src/cli/init.ts` | Assistant `init` (app OAuth, smee, base de connaissance, `.factory/workflow.yml`) | adapter | ORC-208 (GitHub App, `factory.yml`, détection), ORC-177, ORC-193, ORC-200 |
 | `src/cli/replay.ts` | `factory replay` : rejoue des journaux exportés (régression bit à bit, `--what-if`), `--export` d'un ticket de l'instance | garder | ORC-174 (fait) |
 | `src/cli/plan.ts` | `factory plan` : tickets délégués qui seraient pris | retirer | ORC-200 |
