@@ -65,30 +65,19 @@ export async function reconcileOnce(d: ReconcileDeps): Promise<void> {
   }
 }
 
+/** One pass at a time over every project: the connection to Linear. The cadence is the reconciliation's timer in the store (ORC-185). */
 export class Reconciler {
-  private handle: NodeJS.Timeout | undefined;
-  /** One pass at a time: an interval that finds a pass still running skips its turn. */
   private passing: Promise<void> | undefined;
   constructor(private d: ReconcileDeps) {}
-  private pass(): void {
+  /** A pass now; one already under way is joined, not doubled. */
+  once(): Promise<void> {
     this.passing ??= reconcileOnce(this.d)
       .catch((e: Error) => this.d.log(`reconcile: ${e.message}`))
       .finally(() => (this.passing = undefined));
+    return this.passing;
   }
-  /** One pass now (the connection to Linear); the cadence is the reconciliation's timer in the store (ORC-185). */
-  once(): Promise<void> {
-    this.pass();
-    return this.passing ?? Promise.resolve();
-  }
-  start(intervalMs = 30_000): void {
-    if (this.handle) clearInterval(this.handle);
-    this.pass();
-    this.handle = setInterval(() => this.pass(), intervalMs);
-  }
-  /** No pass starts after it; resolves once the pass under way, if any, has finished. */
+  /** Resolves once the pass under way, if any, has finished. */
   async stop(): Promise<void> {
-    if (this.handle) clearInterval(this.handle);
-    this.handle = undefined;
     await this.passing;
   }
 }

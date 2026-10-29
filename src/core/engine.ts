@@ -293,8 +293,12 @@ function repeatedFailure(ticket: TicketState | undefined, payload: EventPayloads
   return { signature, count: previous?.signature === signature ? previous.count + 1 : 1 };
 }
 
-/** The pseudo-ticket that carries a project's reconciliation timer (ORC-185): timers live per ticket. */
-export const RECONCILE_TICKET = '_reconcile';
+/**
+ * The pseudo-ticket that carries a project's reconciliation timer (ORC-185): timers live per ticket, keyed by the
+ * ticket alone, so each project has its own (`_reconcile.<project>`) and their keys never collide.
+ */
+export const reconcileTicket = (projectId: string): string => `_reconcile.${projectId}`;
+export const isReconcileTicket = (ticketId: string | undefined): boolean => !!ticketId?.startsWith('_reconcile.');
 /** The reconciliation's cadence (ORC-185): a safety net behind the webhooks. */
 export const RECONCILE_MS = 5 * 60_000;
 

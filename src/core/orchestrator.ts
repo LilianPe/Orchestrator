@@ -24,7 +24,7 @@ import type { EventBus } from './bus.js';
 import type { Clock } from './clock.js';
 import type { Effect } from './decision.js';
 import { NO_PLAN, planDecision } from './decision-plan.js';
-import { blockedLabelChange, HUMAN_EVENTS, mayCheck, RECONCILE_TICKET, refusesDevWork, sensitivePathsAtLaunch, taintedKnowledge } from './engine.js';
+import { blockedLabelChange, HUMAN_EVENTS, mayCheck, RECONCILE_MS, reconcileTicket, refusesDevWork, sensitivePathsAtLaunch, taintedKnowledge } from './engine.js';
 import { attemptLabels, packFingerprints } from './attempt-labels.js';
 import { pickupFailures } from './pickup.js';
 import { buildPrompt, formatFeedback, formatVerifyFailures } from './prompt.js';
@@ -678,7 +678,8 @@ export class Orchestrator {
       return;
     }
     if (c.kind === 'reconcile') {
-      await this.d.reconcile?.(project);
+      // Never fails: a dead effect would disarm the next timer its decision armed, and stop the 5-minute chain.
+      await this.d.reconcile?.(project).catch((err: Error) => this.log('warn', `reconcile ${project.id}: ${err.message}`));
       return;
     }
     if (!ticketId) return;
@@ -774,15 +775,17 @@ export class Orchestrator {
   }
 
   /**
-   * Plans each project's reconciliation in the store (ORC-185), due now, unless a timer already plans it (a
-   * restart): its firings then arm the next ones, every `RECONCILE_MS`.
+   * Plans each project's reconciliation in the store (ORC-185), in `RECONCILE_MS` (the connection to Linear passes
+   * at once), unless a timer already plans it (a restart): its firings then arm the next ones. The timer of a
+   * project gone from the configuration is deleted: it would fire for a project the factory no longer knows.
    */
   async armReconciliation(): Promise<void> {
-    const key = `${RECONCILE_TICKET}:reconcile`;
-    const planned = new Set((await this.d.store.dueTimers(Number.MAX_SAFE_INTEGER)).map((t) => `${t.projectId}/${t.key}`));
+    const timers = (await this.d.store.dueTimers(Number.MAX_SAFE_INTEGER)).filter((t) => t.kind === 'reconcile');
+    for (const t of timers) if (!this.d.projects.some((p) => p.id === t.projectId)) await this.d.store.deleteTimersFor(t.projectId, t.ticketId);
     for (const p of this.d.projects) {
-      if (planned.has(`${p.id}/${key}`)) continue;
-      await this.d.store.putTimer({ key, projectId: p.id, ticketId: RECONCILE_TICKET, kind: 'reconcile', payload: {}, fireAt: this.d.clock.now() });
+      const ticketId = reconcileTicket(p.id);
+      if (timers.some((t) => t.ticketId === ticketId)) continue;
+      await this.d.store.putTimer({ key: `${ticketId}:reconcile`, projectId: p.id, ticketId, kind: 'reconcile', payload: {}, fireAt: this.d.clock.now() + RECONCILE_MS });
     }
     this.wake();
   }

@@ -62,18 +62,28 @@ describe('bootstrap', () => {
     await expect(startFactory({ home, fakeRunner: true, log: () => {}, env: {} })).rejects.toThrow(/github\.private_key : la variable d’environnement GH_APP_KEY/);
   });
 
-  it('plans the reconciliation of each project in the store at start, once (ORC-185)', async () => {
+  it('plans the reconciliation of each project in the store at start, once, and drops a removed project\'s (ORC-185)', async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
-    const repo = mkdtempSync(join(tmpdir(), 'factory-repo-'));
-    saveInstance(home, { port: 4193, host: '127.0.0.1', relay: { kind: 'none' }, projects: [{ id: 'p', repoPath: repo, linearTeamKey: 'REL' }], limits: {} });
-    for (let start = 0; start < 2; start++) {
+    const project = (id: string, key: string) => ({ id, repoPath: mkdtempSync(join(tmpdir(), 'factory-repo-')), linearTeamKey: key });
+    const planned = async () => {
+      const store = new SqliteStore(join(home, 'factory.db'));
+      const timers = (await store.dueTimers(Number.MAX_SAFE_INTEGER)).filter((t) => t.kind === 'reconcile').map((t) => [t.projectId, t.key]);
+      store.close();
+      return timers.sort();
+    };
+    const start = async (projects: ReturnType<typeof project>[]) => {
+      saveInstance(home, { port: 4193, host: '127.0.0.1', relay: { kind: 'none' }, projects, limits: {} });
       const app = await startFactory({ home, fakeRunner: true, log: () => {}, env: {} });
       await app.stop();
-    }
-    const store = new SqliteStore(join(home, 'factory.db'));
-    const planned = (await store.dueTimers(Number.MAX_SAFE_INTEGER)).filter((t) => t.kind === 'reconcile');
-    store.close();
-    expect(planned.map((t) => [t.projectId, t.key])).toEqual([['p', '_reconcile:reconcile']]);
+    };
+    const a = project('a', 'AAA');
+    const b = project('b', 'BBB');
+    await start([a, b]);
+    await start([a, b]);
+    // One timer per project: their keys never collide, and a restart arms no second one.
+    expect(await planned()).toEqual([['a', '_reconcile.a:reconcile'], ['b', '_reconcile.b:reconcile']]);
+    await start([a]);
+    expect(await planned()).toEqual([['a', '_reconcile.a:reconcile']]);
   });
 
   it('falls back to the gh CLI when no GitHub App is configured', async () => {

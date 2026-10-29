@@ -226,10 +226,10 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     const poller = new PrPoller({ store, forge, projects, submit: accept, clock, log });
     reconcileProject = async (p) => {
       await reconcileOnce({ tracker: trackerSwitch, store, projects: [p], submit: accept, clock, log });
-      await poller.pollOnce();
+      await poller.pollOnce(p.id);
     };
-    // GitHub webhooks (ORC-134) write to the inbox beside the poll, which stays until ORC-185 and ORC-181:
-    // both name a fact the same way, so the inbox keeps it once.
+    // GitHub webhooks (ORC-134) write to the inbox beside the poll (each reconciliation, ORC-185; every 30 s without
+    // webhooks, until ORC-181): both name a fact the same way, so the inbox keeps it once.
     const githubIngest = createGithubIngest({
       secret: () => githubSecret,
       accept,
@@ -279,8 +279,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
                 const created = await linearTracker!.ensureSetup(p.teamKey, p.workflow.states, FACTORY_LABELS);
                 if (created.length) log(`Linear ${p.teamKey} : créé ${created.join(', ')}`);
               }
-              // At the connection, without waiting for the timer: what Linear holds is read at once.
-              await reconciler.once();
+              // At the connection, without waiting for the timer: what Linear holds is read at once, in the background.
+              void reconciler.once();
             },
           }
         : undefined,
@@ -324,7 +324,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       if (!isUsableWebhookSecret(githubSecret)) poller.start();
       if (await connectLinear()) {
         await orchestrator.announceRecovery();
-        await reconciler.once();
+        void reconciler.once();
       }
       else log(`Linear non connecté : ouvrez ${baseUrl}/oauth/start`);
       // The worker (ORC-149) executes the effects decided before a crash, then the events written

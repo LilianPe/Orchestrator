@@ -126,7 +126,7 @@ export interface TimerPayloads {
   'clarify.remind': { linearSessionId?: string };
   'clarify.expire': { linearSessionId?: string };
   'usage.reset': { account?: string };
-  /** The project's reconciliation (ORC-185), every 5 minutes, on its own pseudo-ticket (`RECONCILE_TICKET`). */
+  /** The project's reconciliation (ORC-185), every 5 minutes, on its own pseudo-ticket (`reconcileTicket(project)`). */
   reconcile: Record<string, never>;
 }
 

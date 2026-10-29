@@ -2,7 +2,8 @@ import type { Workflow } from '../config/workflow-schema.js';
 import type { DecisionPlan, TimerRecord } from '../store/types.js';
 import { effectiveEvent } from './dead-letter.js';
 import type { OutboxEffect } from './decision.js';
-import { AUTHZ_REFUSED, decide, isFenced, RECONCILE_TICKET } from './engine.js';
+import { AUTHZ_REFUSED, decide, isFenced, isReconcileTicket } from './engine.js';
+import type { Decision } from './decision.js';
 import { reduce } from './reduce.js';
 import { CREATES_TICKET, type EventType, type FactoryEvent, type TicketState } from './types.js';
 
@@ -40,10 +41,9 @@ export function planDecision({ event, known, workflow, hash, now }: PlanInput): 
   // A repair that replays or forces an event (ORC-175) is planned as that event would be.
   const decided = effectiveEvent(event);
   // The project's reconciliation (ORC-185): no ticket to manage, but its effect runs and its next timer is armed.
-  if (event.ticketId === RECONCILE_TICKET) {
+  if (event.ticketId && isReconcileTicket(event.ticketId)) {
     const d = decide(undefined, event, workflow);
-    const timers = d.timers.map(({ slot, ms, ...fired }) => ({ key: `${RECONCILE_TICKET}:${slot}`, projectId: event.projectId, ticketId: RECONCILE_TICKET, ...fired, fireAt: now + ms, armedBy: event.id }) as TimerRecord);
-    return { ...NO_PLAN, effects: d.effects, timers, at: now, trace: d.trace };
+    return { ...NO_PLAN, effects: d.effects, timers: timerRecords(d, event, event.ticketId, now), at: now, trace: d.trace };
   }
   if (!known && event.ticketId && !CREATES_TICKET.has(decided.type)) {
     return { ...NO_PLAN, at: now, note: `ignored ${event.type} for unmanaged ticket ${event.ticketId}` };
@@ -58,20 +58,16 @@ export function planDecision({ event, known, workflow, hash, now }: PlanInput): 
   return {
     ticket,
     effects,
-    timers: ticket
-      ? decision.timers.map(({ slot, ms, ...fired }) => ({
-          key: `${ticket.ticketId}:${slot}`,
-          projectId: event.projectId,
-          ticketId: ticket.ticketId,
-          ...fired,
-          fireAt: now + ms,
-          armedBy: event.id,
-        }) as TimerRecord)
-      : [],
+    timers: ticket ? timerRecords(decision, event, ticket.ticketId, now) : [],
     // A stop deletes the ticket's timers before this decision arms its own, as `stop_run` did.
     clearTimers: decision.effects.some((c) => c.kind === 'stop_run' && !c.linearSessionId),
     at: now,
     trace: decision.trace,
     note: isFenced(decision) ? `ignored stale ${event.type} for ${event.ticketId ?? '*'}: ${decision.trace[0]}` : refusedNote(event, decision.trace),
   };
+}
+
+/** The timers a decision arms, as the store keeps them: keyed `<ticket>:<slot>`, due `ms` from now, armed by the event. */
+function timerRecords(decision: Decision, event: FactoryEvent, ticketId: string, now: number): TimerRecord[] {
+  return decision.timers.map(({ slot, ms, ...fired }) => ({ key: `${ticketId}:${slot}`, projectId: event.projectId, ticketId, ...fired, fireAt: now + ms, armedBy: event.id }) as TimerRecord);
 }

@@ -2,7 +2,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { loadWorkflow } from '../config/load-workflow.js';
 import type { Decision } from './decision.js';
-import { decide, isFenced, RECONCILE_MS, RECONCILE_TICKET, SENSITIVE_PATHS, sensitivePathsAtLaunch, taintedKnowledge } from './engine.js';
+import { decide, isFenced, RECONCILE_MS, reconcileTicket, SENSITIVE_PATHS, sensitivePathsAtLaunch, taintedKnowledge } from './engine.js';
 import { reduce } from './reduce.js';
 import { newTicketState, type EventPayloads, type EventType, type FactoryEvent, type TicketState } from './types.js';
 
@@ -90,7 +90,7 @@ describe('decide — YAML rules of the standard pack', () => {
   });
 
   it('a reconciliation timer reconciles the project and arms the next one in 5 minutes (ORC-185)', () => {
-    const fired = { ...ev('timer.fired', { kind: 'reconcile', payload: {} }), ticketId: RECONCILE_TICKET } as FactoryEvent;
+    const fired = { ...ev('timer.fired', { kind: 'reconcile', payload: {} }), ticketId: reconcileTicket('p') } as FactoryEvent;
     expect(decide(undefined, fired, workflow)).toEqual(
       decision({ effects: [{ kind: 'reconcile' }], timers: [{ kind: 'reconcile', payload: {}, slot: 'reconcile', ms: RECONCILE_MS }] }),
     );
