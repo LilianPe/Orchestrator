@@ -146,7 +146,7 @@ Relancer `relais init` avec le **même** client ID conserve les jetons ; avec un
 
 ## `factory.yml` (ORC-209)
 
-`<FACTORY_HOME>/factory.yml` est la configuration serveur de l'usine. Il est **facultatif** et coexiste avec `config.yaml` et `secrets.json` jusqu'à leur retrait (ORC-199). Tout secret s'y écrit `env:NOM` et se lit dans l'environnement du démon : un secret en clair est refusé. Un fichier invalide empêche `factory up` de démarrer, avec le chemin de la clé fautive.
+`<FACTORY_HOME>/factory.yml` est la configuration serveur de l'usine. Il est **facultatif** et coexiste avec `config.yaml` et `secrets.json` jusqu'à leur retrait (ORC-199). Tout secret s'y écrit `env:NOM` et se lit dans l'environnement du démon : un secret en clair est refusé. Il est lu **une fois, au démarrage** : un fichier invalide empêche `factory up` de démarrer, avec le chemin de la clé fautive, et une modification faite pendant que le démon tourne ne compte qu'au prochain démarrage. Seuls `factory up`, `factory doctor` (GitHub App) et `factory plan` (identifiants Linear) le lisent, avec l'environnement du démon ; les autres commandes (`status`, `stop`, `init`…) s'en passent, et marchent donc dans un shell qui n'a pas ses variables.
 
 ```yaml
 linear:   { app_client_id: env:LINEAR_CLIENT_ID, client_secret: env:LINEAR_CLIENT_SECRET, webhook_secret: env:LINEAR_WEBHOOK_SECRET }
@@ -167,7 +167,7 @@ repos:
 
 | Section | Effet aujourd'hui |
 | -- | -- |
-| `github` | **Appliquée** : remplace `github` de `config.yaml` (App, clé, secret des webhooks). |
+| `github` | **Appliquée** : ses clés remplacent celles de `github` dans `config.yaml` ; une clé qu'il ne déclare pas (`installation_id`, `webhook_secret`) reste celle de `config.yaml`. |
 | `linear` | **Appliquée** : `app_client_id`, `client_secret` et `webhook_secret` remplacent ceux de `secrets.json`. Les jetons OAuth restent dans `secrets.json`, écrits par « Connecter Linear ». |
 | `claude` | Validée, pas encore lue : comptes et choix du compte avec ORC-215, effort par étape avec ORC-136. |
 | `concurrency` | Validée, pas encore lue : la file prend encore `parallel_sessions`. |

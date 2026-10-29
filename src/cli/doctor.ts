@@ -7,6 +7,7 @@ import {
 } from '../adapters/forge/github-app-api.js';
 import type { HttpClient } from '../adapters/forge/github-app.js';
 import { resolveGithubApp } from '../config/github-app.js';
+import { loadFactoryYml } from '../config/factory-yml.js';
 import { effectiveInstance } from '../config/instance.js';
 
 const FACTORY_BRANCH = /^factory\//;
@@ -483,7 +484,7 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
   const out = options.out ?? ((line) => console.log(line));
   let githubApp;
   try {
-    githubApp = resolveGithubApp(effectiveInstance(options.home, options.env), options.env);
+    githubApp = resolveGithubApp(effectiveInstance(options.home, loadFactoryYml(options.home, options.env)), options.env);
   } catch (error) {
     out(errorMessage(error));
     return 1;

@@ -2,6 +2,7 @@ import { mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { loadFactoryYml } from './factory-yml.js';
 import {
   daemonSecretValues,
   effectiveInstance,
@@ -76,15 +77,21 @@ describe('factory.yml over the instance files (ORC-209, part B)', () => {
   it('takes the GitHub App from factory.yml, and never writes it to config.yaml', () => {
     const h = home('github: { app_id: 42, private_key: env:GH_APP_KEY }\n');
     saveInstance(h, loadInstance(h));
-    expect(effectiveInstance(h, env).github).toMatchObject({ appId: '42', privateKey: env.GH_APP_KEY });
+    expect(effectiveInstance(h, loadFactoryYml(h, env)).github).toMatchObject({ appId: '42', privateKey: env.GH_APP_KEY });
     expect(loadInstance(h).github).toBeUndefined();
     expect(readFileSync(homePaths(h).config, 'utf8')).not.toContain('PRIVATE KEY');
+  });
+
+  it('keeps the GitHub fields of config.yaml that factory.yml leaves out', () => {
+    const h = home('github: { app_id: 42, private_key: env:GH_APP_KEY }\n');
+    saveInstance(h, { ...loadInstance(h), github: { appId: '1', privateKey: '/k.pem', installationId: '77', webhookSecret: 'gh-webhook-secret-xyz' } });
+    expect(effectiveInstance(h, loadFactoryYml(h, env)).github).toEqual({ appId: '42', privateKey: env.GH_APP_KEY, installationId: '77', webhookSecret: 'gh-webhook-secret-xyz' });
   });
 
   it('takes the static Linear values from factory.yml, the OAuth tokens from secrets.json', () => {
     const h = home('linear: { app_client_id: env:LINEAR_CLIENT_ID, client_secret: env:LINEAR_CLIENT_SECRET, webhook_secret: env:LINEAR_WEBHOOK_SECRET }\n');
     saveSecrets(h, { linear: { clientId: 'old', clientSecret: 'old', webhookSecret: 'old-webhook-secret', accessToken: 'tok' } });
-    expect(linearSettings(h, env)).toMatchObject({ clientId: 'yml-client', clientSecret: 'yml-secret', webhookSecret: 'yml-webhook-secret-1', accessToken: 'tok' });
+    expect(linearSettings(h, loadFactoryYml(h, env))).toMatchObject({ clientId: 'yml-client', clientSecret: 'yml-secret', webhookSecret: 'yml-webhook-secret-1', accessToken: 'tok' });
   });
 
   it('saves refreshed tokens without copying a secret of the environment to secrets.json', () => {
@@ -93,11 +100,11 @@ describe('factory.yml over the instance files (ORC-209, part B)', () => {
     const stored = readFileSync(homePaths(h).secrets, 'utf8');
     expect(stored).toContain('new');
     expect(stored).not.toContain('yml-secret');
-    expect(linearSettings(h, env)).toMatchObject({ clientSecret: 'yml-secret', accessToken: 'new' });
+    expect(linearSettings(h, loadFactoryYml(h, env))).toMatchObject({ clientSecret: 'yml-secret', accessToken: 'new' });
   });
 
   it('masks the secrets of factory.yml in run transcripts too', () => {
     const h = home('linear: { app_client_id: env:LINEAR_CLIENT_ID, client_secret: env:LINEAR_CLIENT_SECRET, webhook_secret: env:LINEAR_WEBHOOK_SECRET }\n');
-    expect(daemonSecretValues(h, env)).toEqual(expect.arrayContaining(['yml-secret', 'yml-webhook-secret-1']));
+    expect(daemonSecretValues(h, loadFactoryYml(h, env))).toEqual(expect.arrayContaining(['yml-secret', 'yml-webhook-secret-1']));
   });
 });

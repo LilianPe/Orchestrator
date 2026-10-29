@@ -78,6 +78,27 @@ describe('factory.yml (ORC-209, part B)', () => {
     ]);
   });
 
+  it('names the required keys of a section that are missing or empty', () => {
+    expect(violations('claude: { runtime: claude-code, accounts: [{ name: a, token: env:CLAUDE_TOKEN_1 }] }\ngithub: { app_id: 42, private_key: }\n')).toEqual([
+      'github.private_key : requis',
+      'claude.active : requis',
+      'claude.default_model : requis',
+    ]);
+  });
+
+  it('does not blame the active account when the accounts themselves are malformed', () => {
+    expect(violations('claude: { runtime: claude-code, accounts: [{ name: a, token: env:CLAUDE_TOKEN_1, extra: 1 }], active: a, default_model: m }\n')).toEqual([
+      'claude.accounts : `[{ name, token }]` attendu',
+    ]);
+  });
+
+  it('refuses an env: reference whose name is not a variable name', () => {
+    expect(violations('linear: { webhook_secret: "env:" }\ngithub: { app_id: 1, private_key: "env: GH_APP_KEY" }\n')).toEqual([
+      'linear.webhook_secret : « env: » ne nomme pas une variable (`env:NOM`)',
+      'github.private_key : « env: GH_APP_KEY » ne nomme pas une variable (`env:NOM`)',
+    ]);
+  });
+
   it('refuses an active account that is not declared', () => {
     expect(violations('claude: { runtime: claude-code, accounts: [{ name: a, token: env:CLAUDE_TOKEN_1 }], active: b, default_model: m }\n')).toEqual([
       'claude.active : « b » n’est pas un des comptes déclarés (a)',

@@ -47,6 +47,7 @@ const SECTIONS: Record<string, string[]> = {
 const effort = z.enum(['low', 'medium', 'high']);
 const counts = z.record(z.string(), z.number().int().positive());
 const REPO = /^[\w.-]+\/[\w.-]+$/;
+const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 export function loadFactoryYml(home: string, env: NodeJS.ProcessEnv = process.env): FactoryYml | undefined {
   const file = join(home, 'factory.yml');
@@ -90,6 +91,10 @@ export function parseFactoryYml(text: string, env: NodeJS.ProcessEnv = process.e
       return secret ? undefined : text;
     }
     const name = text.slice(4);
+    if (!ENV_NAME.test(name)) {
+      violations.push(`${path} : « ${text} » ne nomme pas une variable (\`env:NOM\`)`);
+      return undefined;
+    }
     const resolved = env[name];
     if (resolved === undefined || resolved === '') violations.push(`${path} : la variable d’environnement ${name} n’est pas définie`);
     return resolved || undefined;
@@ -113,19 +118,21 @@ export function parseFactoryYml(text: string, env: NodeJS.ProcessEnv = process.e
   if (github) {
     const appId = value('github.app_id', github['app_id']);
     const privateKey = value('github.private_key', github['private_key'], true);
-    if (github['app_id'] === undefined) violations.push('github.app_id : requis');
-    if (github['private_key'] === undefined) violations.push('github.private_key : requis');
+    // `== null`: an empty value (`private_key:`) is as missing as an absent one.
+    if (github['app_id'] == null) violations.push('github.app_id : requis');
+    if (github['private_key'] == null) violations.push('github.private_key : requis');
     const installationId = value('github.installation_id', github['installation_id']);
     const webhookSecret = value('github.webhook_secret', github['webhook_secret'], true);
     if (appId && privateKey) out.github = { appId, privateKey, ...(installationId ? { installationId } : {}), ...(webhookSecret ? { webhookSecret } : {}) };
   }
   const claude = section('claude');
   if (claude) {
-    const accounts = (leaf('claude.accounts', claude['accounts'], z.array(z.strictObject({ name: z.string().min(1), token: z.string() })), '`[{ name, token }]` attendu') ?? []).map(
-      (a, i) => ({ name: a.name, token: value(`claude.accounts[${i}].token`, a.token, true) ?? '' }),
-    );
+    for (const key of ['accounts', 'active', 'default_model']) if (claude[key] == null) violations.push(`claude.${key} : requis`);
+    const declared = leaf('claude.accounts', claude['accounts'], z.array(z.strictObject({ name: z.string().min(1), token: z.string() })), '`[{ name, token }]` attendu');
+    const accounts = (declared ?? []).map((a, i) => ({ name: a.name, token: value(`claude.accounts[${i}].token`, a.token, true) ?? '' }));
     const active = leaf('claude.active', claude['active'], z.string().min(1), 'un nom de compte est attendu');
-    if (active && !accounts.some((a) => a.name === active)) {
+    // Only against well-formed accounts: a malformed list already has its own violation.
+    if (active && declared && !accounts.some((a) => a.name === active)) {
       violations.push(`claude.active : « ${active} » n’est pas un des comptes déclarés (${accounts.map((a) => a.name).join(', ')})`);
     }
     const defaultModel = leaf('claude.default_model', claude['default_model'], z.string().min(1), 'un modèle est attendu');

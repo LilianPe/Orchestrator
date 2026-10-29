@@ -19,6 +19,7 @@ import { Reconciler } from '../adapters/tracker/linear/reconcile.js';
 import { LinearTracker } from '../adapters/tracker/linear/tracker.js';
 import { isUsableWebhookSecret } from '../adapters/tracker/linear/webhook.js';
 import { GitWorkspaces } from '../adapters/workspace/git-workspaces.js';
+import { loadFactoryYml } from '../config/factory-yml.js';
 import { daemonSecretValues, effectiveInstance, homePaths, linearSettings, saveLinearTokens } from '../config/instance.js';
 import { githubWebhookSecret, resolveGithubApp } from '../config/github-app.js';
 import { writeRunSettings } from '../config/run-settings.js';
@@ -61,8 +62,10 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
   const packDir = join(root, 'packs/standard');
   const webDir = join(root, 'web/dist');
   const env = o.env ?? process.env;
-  // config.yaml with what factory.yml declares over it (ORC-209); an invalid factory.yml stops the start here.
-  const instance = effectiveInstance(o.home, env);
+  // factory.yml read once (ORC-209): an invalid file stops the start here, and an edit made while the daemon
+  // runs is never half-read by a request; config.yaml with what it declares over it.
+  const yml = loadFactoryYml(o.home, env);
+  const instance = effectiveInstance(o.home, yml);
   const uiPassword = isLoopbackHost(instance.host) ? undefined : env['FACTORY_UI_PASSWORD'] || undefined;
   if (!isLoopbackHost(instance.host) && !uiPassword) {
     throw new Error(
@@ -100,13 +103,13 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     const trackerSwitch = new TrackerSwitch(port);
     let linearTracker: LinearTracker | undefined;
     const tokenManager = () => {
-      const linear = linearSettings(o.home, env);
+      const linear = linearSettings(o.home, yml);
       if (!linear) return undefined;
       return new TokenManager({
         clientId: linear.clientId,
         clientSecret: linear.clientSecret,
         load: () => {
-          const l = linearSettings(o.home, env);
+          const l = linearSettings(o.home, yml);
           return l?.accessToken ? { accessToken: l.accessToken, refreshToken: l.refreshToken, expiresAt: l.expiresAt } : undefined;
         },
         save: (t) => saveLinearTokens(o.home, t),
@@ -114,7 +117,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     };
     const connectLinear = async () => {
       const tm = tokenManager();
-      const appUserId = linearSettings(o.home, env)?.appUserId;
+      const appUserId = linearSettings(o.home, yml)?.appUserId;
       if (!tm || !appUserId) return false;
       const api = new LinearApi(() => tm.get());
       linearTracker = new LinearTracker(api, appUserId);
@@ -125,7 +128,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
 
     const scheduler = new Scheduler(store, { dev: limits?.parallelSessions ?? 3, questions: limits?.questionSessions ?? 2 });
     // The daemon's own secrets never enter a run's environment; masked all the same, should one surface.
-    const daemonSecrets = () => [...daemonSecretValues(o.home, env), ...(githubSecret ? [githubSecret] : [])];
+    const daemonSecrets = () => [...daemonSecretValues(o.home, yml), ...(githubSecret ? [githubSecret] : [])];
     const runner: Runner = o.fakeRunner ? new FakeRunner() : new ClaudeCodeRunner({ transcriptsDir: paths.transcripts, secrets: daemonSecrets });
     const workspaces = new GitWorkspaces({ root: paths.workspaces, knowledgeRepo: instance.knowledge?.repoPath });
     const forge = githubApp
@@ -188,7 +191,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     // (ORC-147); the orchestrator's worker then decides them from the inbox (ORC-149).
     const accept = (e: FactoryEvent) => orchestrator.accept(e);
 
-    const webhookSecret = () => linearSettings(o.home, env)?.webhookSecret ?? '';
+    const webhookSecret = () => linearSettings(o.home, yml)?.webhookSecret ?? '';
     const ingest = createLinearIngest({
       secret: webhookSecret,
       accept,
@@ -246,16 +249,16 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       transcriptsDir: paths.transcripts,
       webDir: existsSync(webDir) ? webDir : undefined,
       uiPassword,
-      oauth: linearSettings(o.home, env)
+      oauth: linearSettings(o.home, yml)
         ? {
             authorizeUrl: () => {
               const state = randomBytes(16).toString('hex');
               oauthStates.add(state);
-              return buildAuthorizeUrl({ clientId: linearSettings(o.home, env)!.clientId, redirectUri: `${baseUrl}/oauth/callback`, state });
+              return buildAuthorizeUrl({ clientId: linearSettings(o.home, yml)!.clientId, redirectUri: `${baseUrl}/oauth/callback`, state });
             },
             callback: async (code, state) => {
               if (!oauthStates.delete(state)) throw new Error('état OAuth inconnu, relancez la connexion');
-              const s = linearSettings(o.home, env)!;
+              const s = linearSettings(o.home, yml)!;
               const tokens = await exchangeCode({ clientId: s.clientId, clientSecret: s.clientSecret, code, redirectUri: `${baseUrl}/oauth/callback` });
               saveLinearTokens(o.home, tokens);
               const api = new LinearApi(async () => tokens.accessToken);
