@@ -14,7 +14,12 @@ export function canonical(value: unknown): string {
   return JSON.stringify(value) ?? 'null';
 }
 
+/** sha256 of the canonical JSON: the hash of a workflow or a preset version. */
+export function hashCanonical(value: unknown): string {
+  return createHash('sha256').update(canonical(value)).digest('hex');
+}
+
 /** The version a ticket is frozen on (ORC-149): the workflow and the sha256 of its canonical JSON. */
 export function workflowVersion(workflow: Workflow): WorkflowVersion & { definition: Workflow } {
-  return { hash: createHash('sha256').update(canonical(workflow)).digest('hex'), definition: workflow };
+  return { hash: hashCanonical(workflow), definition: workflow };
 }
