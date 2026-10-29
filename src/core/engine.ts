@@ -4,7 +4,7 @@ import { evalCondition } from './conditions.js';
 import { deadLetterReason, liftDeadLetterBlock, REPAIR_LABELS, repairedEvent } from './dead-letter.js';
 import type { Decision, Effect } from './decision.js';
 import { reduce } from './reduce.js';
-import type { EventType, FactoryEvent, FeedbackItem, InputKind, Taint, TicketState, VerifyFailure } from './types.js';
+import type { EventPayloads, EventType, FactoryEvent, FeedbackItem, InputKind, Taint, TicketState, VerifyFailure } from './types.js';
 
 type StartRun = Extract<Effect, { kind: 'start_run' }>;
 
@@ -279,6 +279,17 @@ function fixRedCi(out: Decision, rule: Rule, event: FactoryEvent<'pr.checks_fail
   return block(out, reason, [reason, ...failures, 'Répondez dans ce fil pour relancer.'].join('\n'));
 }
 
+/**
+ * The failed check seen again (ORC-187): same failed commands and exit codes on the same worktree content.
+ * The output is left out, as it carries times and paths. Without a fingerprint of the worktree, nothing is tracked.
+ */
+function repeatedFailure(ticket: TicketState | undefined, payload: EventPayloads['verify.failed']): TicketState['repeatedFailure'] {
+  if (!payload.tree) return undefined;
+  const signature = `${payload.tree}|${payload.failures.map((f) => `${f.command}:${f.exitCode}`).join(',')}`;
+  const previous = ticket?.repeatedFailure;
+  return { signature, count: previous?.signature === signature ? previous.count + 1 : 1 };
+}
+
 const FENCED = 'fenced: ';
 
 export function isFenced(d: Decision): boolean {
@@ -395,14 +406,20 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
     case 'verify.passed': {
       const job = workflow.jobs[event.payload.job];
       if (!job) return out;
-      out.events.push({ type: 'ticket.patched', patch: { verifyAttempts: 0 } });
+      out.events.push({ type: 'ticket.patched', patch: { verifyAttempts: 0, ...(ticket?.repeatedFailure ? { repeatedFailure: undefined } : {}) } });
       return success(out, job, event.payload.runId);
     }
     case 'verify.failed': {
       const used = ticket?.verifyAttempts ?? 0;
       const { failures, job } = event.payload;
+      const repeated = repeatedFailure(ticket, event.payload);
+      if (repeated && repeated.count >= (workflow.limits.repeatedFailures ?? Infinity)) {
+        out.events.push({ type: 'ticket.patched', patch: { repeatedFailure: repeated } });
+        const reason = `Boucle : même échec ${repeated.count} fois de suite, sans changement du code.`;
+        return block(out, reason, `${reason}\n${formatFailuresShort(failures)}\nRépondez dans ce fil pour relancer.`);
+      }
       if (used + 1 < workflow.limits.verifyAttempts) {
-        out.events.push({ type: 'ticket.patched', patch: { verifyAttempts: used + 1 } });
+        out.events.push({ type: 'ticket.patched', patch: { verifyAttempts: used + 1, ...(repeated ? { repeatedFailure: repeated } : {}) } });
         const spec = workflow.jobs[job];
         if (spec) startRun(out, event, ticket, spec, { input: 'verify_failures', inputText: JSON.stringify(failures), resume: true });
         return out;

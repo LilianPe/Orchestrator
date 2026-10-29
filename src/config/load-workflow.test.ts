@@ -105,6 +105,14 @@ on:
     ).toThrow(/on\.session\.prompted\[0\]\.when/);
   });
 
+  it('takes its loop bounds from the factory/default preset (ORC-187)', () => {
+    const wf = loadWorkflow({ packDir });
+    // 3 returns to the run after a failed check: the 4th failure blocks, so 4 attempts in all.
+    expect(wf.limits.verifyAttempts).toBe(4);
+    expect(wf.limits.ciFixAttempts).toBe(2);
+    expect(wf.limits.repeatedFailures).toBe(3);
+  });
+
   it('reads limits.ci_fix_attempts, 0 included, and refuses a negative bound (ORC-270)', () => {
     const bound = (n: number) => loadWorkflow({ packDir, projectFile: projectFile(`version: 1\nlimits: { ci_fix_attempts: ${n} }\n`) }).limits.ciFixAttempts;
     expect(bound(0)).toBe(0);

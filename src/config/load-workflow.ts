@@ -4,6 +4,8 @@ import { parse } from 'yaml';
 import { parseCondition } from '../core/conditions.js';
 import { parseDuration } from '../core/duration.js';
 import { RENAMED_V1, type EventType, type LogicalState } from '../core/types.js';
+import { factoryDefault } from '../presets/factory-default.js';
+import { compilePreset } from '../presets/preset.js';
 import {
   rawWorkflowSchema,
   type JobSpec,
@@ -111,6 +113,8 @@ function buildJob(name: string, raw: RawJob, perRun: RunLimits): JobSpec {
 }
 
 export function loadWorkflow(opts: { packDir: string; projectFile?: string }): Workflow {
+  // Compiled at every load: a preset that breaks an invariant of the core never reaches the engine.
+  const { preset } = compilePreset(factoryDefault);
   const pack = readRaw(join(opts.packDir, 'workflow.yml'));
   const project = opts.projectFile ? readRaw(opts.projectFile) : undefined;
   const raw = mergeRaw(pack, project);
@@ -168,8 +172,11 @@ export function loadWorkflow(opts: { packDir: string; projectFile?: string }): W
       parallelSessions: raw.limits?.parallel_sessions ?? 3,
       questionSessions: raw.limits?.question_sessions ?? 2,
       perRun,
-      verifyAttempts: raw.limits?.verify_attempts ?? 2,
-      ciFixAttempts: raw.limits?.ci_fix_attempts ?? 2,
+      // Bounds of the factory/default preset (ORC-187); the YAML keys still override them until ORC-177.
+      // `verifyAttempts` counts every check: the preset's returns to the run, plus the first one.
+      verifyAttempts: raw.limits?.verify_attempts ?? preset.counters['verify']!.limit + 1,
+      ciFixAttempts: raw.limits?.ci_fix_attempts ?? preset.counters['review_ci']!.limit,
+      repeatedFailures: preset.sameFailure.limit,
       reviewRounds: raw.limits?.review_rounds ?? 5,
     },
     workspace: { setup: raw.workspace?.setup ?? [], portBase: raw.workspace?.ports?.base ?? 4200 },

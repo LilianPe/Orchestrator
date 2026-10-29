@@ -1,6 +1,6 @@
 # Le préréglage `factory/default`
 
-Le préréglage décrit, en TypeScript, l'enchaînement des étapes d'un run et la borne de chaque boucle. Il remplacera les 6 états et les règles `on` de [`workflow.yml`](workflow.md) (ORC-187). Le moteur le lira à partir de la PR B d'ORC-187 ; tant que ce n'est pas fait, `workflow.yml` pilote encore les runs.
+Le préréglage décrit, en TypeScript, l'enchaînement des étapes d'un run et la borne de chaque boucle. Il remplacera les 6 états et les règles `on` de [`workflow.yml`](workflow.md) (ORC-187). Les règles `on` de `workflow.yml` pilotent encore les runs, mais le moteur prend déjà ses bornes dans le préréglage, compilé à chaque chargement du workflow (voir « Ce que le moteur lit déjà »).
 
 Code : `src/presets/preset.ts` (types et compilateur), `src/presets/factory-default.ts` (la définition).
 
@@ -30,7 +30,7 @@ Chaque étape a un type : `spec_check`, `agent_step`, `verify` (modes `red`, `fr
 
 Une CI rouge est l'échec d'un push : tant que la PR est ouverte, y compris pendant la porte de merge, elle part vers `fix` sur le compteur `review_ci` (`redCi`, seule source de cette règle). Aucune réaction ne relance `fix` hors de ce compteur. Une PR mergée n'a plus de retour arrière.
 
-`verify` et `verify_fix` partagent le compteur `verify`. Le moteur actuel remet ce compteur à zéro quand une vérification passe : les 3 retours comptent des échecs consécutifs. La PR B d'ORC-187 tranchera si ce comportement reste.
+`verify` et `verify_fix` partagent le compteur `verify`, remis à zéro quand une vérification passe : les 3 retours comptent des échecs consécutifs. Le total reste borné, car le nombre de passages par `verify` l'est par les autres compteurs.
 
 ## Modèles, effort, tours, réseau
 
@@ -47,6 +47,18 @@ Une CI rouge est l'échec d'un push : tant que la PR est ouverte, y compris pend
 Les tours des étapes que le doc MVP ne chiffre pas reprennent l'ancien `per_run.turns: 150`. Les plafonds en tokens restent à fixer (ORC-216).
 
 Le niveau de réseau se choisit par dépôt (Limité par défaut) ; une étape peut seulement le resserrer. Une étape déclarée au-dessus du niveau du dépôt fait échouer la compilation.
+
+## Ce que le moteur lit déjà
+
+`loadWorkflow` compile le préréglage puis reporte ses bornes dans `limits`, qui est figé avec la version du workflow de chaque ticket (ORC-149). Un ticket garde donc les bornes avec lesquelles il a démarré.
+
+| Borne du préréglage | Dans le workflow chargé | Effet |
+| -- | -- | -- |
+| `counters.verify` (3) | `limits.verifyAttempts` = 4 | 3 retours au run après un contrôle en échec ; le 4e échec bloque |
+| `counters.review_ci` (2) | `limits.ciFixAttempts` = 2 | 2 relances `fix-ci` sur CI rouge ; la suivante bloque. Les tours de review IA rejoindront ce compteur avec ORC-184 |
+| `sameFailure` (3) | `limits.repeatedFailures` = 3 | même échec sur un worktree inchangé, 3 fois de suite : Bloqué, cause « Boucle » |
+
+`verify_attempts` et `ci_fix_attempts` de `workflow.yml` surchargent encore les deux premières, jusqu'au retrait du YAML (ORC-177).
 
 ## Compilation et version
 

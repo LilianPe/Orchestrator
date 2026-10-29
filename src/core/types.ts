@@ -176,7 +176,8 @@ export interface EventPayloads {
   'ci.run_completed': CiRunPayload;
   'run.finished': { runId: string; job: string; outcome: RunOutcome; costUsd: number; turns: number; lastText: string };
   'verify.passed': { runId: string; job: string };
-  'verify.failed': { runId: string; job: string; failures: VerifyFailure[] };
+  /** `tree`: fingerprint of the worktree content when the check failed, absent outside git (ORC-187). */
+  'verify.failed': { runId: string; job: string; failures: VerifyFailure[]; tree?: string };
   /** A timer armed by a decision, fired through the inbox with id `timer:<key>:<fireAt>` (ORC-161). */
   'timer.fired': TimerFired;
   'control.pause': Record<string, never>;
@@ -249,7 +250,7 @@ export type DecidedEvent =
   | { type: 'ticket.unblocked' }
   | {
       type: 'ticket.patched';
-      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId'>>;
+      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId'>>;
     }
   | { type: 'feedback.appended'; item: FeedbackItem }
   /** The ticket's dev work is stopped: nothing pending, no verification awaited. */
@@ -305,6 +306,8 @@ export interface TicketState {
   verifyingRunId?: string;
   pendingJob?: PendingJob;
   verifyAttempts: number;
+  /** The last failed check (worktree and failed commands) and how many times in a row it came back (ORC-187). */
+  repeatedFailure?: { signature: string; count: number };
   /**
    * Runs started by red CI (`pr.checks_failed`) since the last green CI or human relaunch, bounded by
    * `limits.ciFixAttempts` (I5, ORC-270). The AI review loop does not share it yet (ORC-184, ORC-187).
