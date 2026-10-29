@@ -44,7 +44,7 @@ Sans tokens, pour tester l'interface : `relais up --fake-runner`.
 - [Déploiement](docs/deploiement.md) : Docker, service longue durée, arrêt propre et mise à jour.
 
 ### Configurer
-- [Configuration du démon](docs/configuration.md) : variables d'environnement, `config.yaml`, `secrets.json`, budget journalier, ports, secrets.
+- [Configuration du démon](docs/configuration.md) : variables d'environnement, `config.yaml`, `secrets.json`, `factory.yml` (secrets en `env:`), budget journalier, ports, secrets.
 - [Personnaliser `workflow.yml`](docs/workflow.md) : événements, jobs, modèles, limites, vérifications, recettes.
 - [Configuration du dépôt (`.factory/config.yml`)](docs/configuration-depot.md) : clés, ce qu'une configuration ne peut pas retirer au socle, `factory validate`.
 - [Le préréglage `factory/default`](docs/preset.md) : étapes typées, bornes des boucles, compteur unique review + CI rouge, modèles et réseau par étape, invariants vérifiés à la compilation, hash.

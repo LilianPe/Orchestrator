@@ -8,7 +8,8 @@ import { TokenManager } from '../adapters/tracker/linear/oauth.js';
 import { LinearTracker } from '../adapters/tracker/linear/tracker.js';
 import { startFactory } from '../app/bootstrap.js';
 import { repoRoot } from '../app/root.js';
-import { homePaths, loadInstance, loadSecrets, factoryHome, saveSecrets } from '../config/instance.js';
+import { FactoryYmlError, loadFactoryYml } from '../config/factory-yml.js';
+import { homePaths, linearSettings, loadInstance, factoryHome, saveLinearTokens } from '../config/instance.js';
 import { loadWorkflow } from '../config/load-workflow.js';
 import { createSmeeChannel } from '../relay/smee.js';
 import { openStore } from '../store/open.js';
@@ -51,6 +52,7 @@ async function main(): Promise<number> {
   });
   const [cmd, arg] = positionals;
   const home = factoryHome();
+  // config.yaml only: factory.yml and its env: secrets are the daemon's, a plain shell may lack them.
   const cfg = loadInstance(home);
   const api = `http://127.0.0.1:${cfg.port}`;
 
@@ -87,7 +89,14 @@ async function main(): Promise<number> {
       return 0;
     }
     case 'plan': {
-      const linear = loadSecrets(home).linear;
+      let linear;
+      try {
+        linear = linearSettings(home, loadFactoryYml(home));
+      } catch (err) {
+        if (!(err instanceof FactoryYmlError)) throw err;
+        console.log(`${err.message}\n(plan lit les identifiants Linear de factory.yml : lancez-le avec l'environnement du démon.)`);
+        return 1;
+      }
       if (!linear?.accessToken || !linear.appUserId) {
         console.log('Linear non connecté : lancez `factory up` puis connectez Linear.');
         return 1;
@@ -96,7 +105,7 @@ async function main(): Promise<number> {
         clientId: linear.clientId,
         clientSecret: linear.clientSecret,
         load: () => ({ accessToken: linear.accessToken!, refreshToken: linear.refreshToken, expiresAt: linear.expiresAt }),
-        save: (t) => saveSecrets(home, { ...loadSecrets(home), linear: { ...linear, ...t } }),
+        save: (t) => saveLinearTokens(home, t),
       });
       const tracker = new LinearTracker(new LinearApi(() => tm.get()), linear.appUserId);
       const packDir = join(repoRoot(), 'packs/standard');
