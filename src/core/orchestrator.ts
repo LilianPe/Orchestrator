@@ -726,7 +726,7 @@ export class Orchestrator {
         return;
       }
       case 'move':
-        return this.move(project, t, c.to);
+        return this.move(project, t, c.to, c.keepReviewSha);
       case 'merge':
         return this.merge(project, t, c.sha, key);
       case 'labels':
@@ -794,13 +794,14 @@ export class Orchestrator {
     this.wake();
   }
 
-  private async move(project: ProjectRuntime, t: TicketState, to: LogicalState): Promise<void> {
+  private async move(project: ProjectRuntime, t: TicketState, to: LogicalState, keepReviewSha?: boolean): Promise<void> {
     const stateName = project.workflow.states[to];
     // The loader refuses a move to an undeclared status; a version frozen before it may still hold one.
     if (!stateName) throw new Error(`no status for "${to}" in the workflow of ${project.id}`);
     await this.d.store.putEcho(`state:${t.ticketId}:${stateName}`, this.d.clock.now() + ECHO_MS);
     await this.d.tracker.moveTo(t.ticketId, stateName);
-    const reviewSha = to === 'human_review' ? await this.headShown(project, t) : undefined;
+    // Only a move that concludes the factory's work records the commit shown; a move back keeps the reviewed one.
+    const reviewSha = to !== 'human_review' ? undefined : keepReviewSha ? t.reviewSha : await this.headShown(project, t);
     await this.apply(await this.ticket(project.id, t.ticketId), { type: 'status.recorded', to, ...(reviewSha ? { reviewSha } : {}) });
   }
 
@@ -825,12 +826,14 @@ export class Orchestrator {
    * between is refused by GitHub itself. A refusal reaches the human through `pr.merge_refused`.
    */
   private async merge(project: ProjectRuntime, t: TicketState, sha: string, key: EffectKey): Promise<EffectOutcome | void> {
-    if (t.prNumber === undefined || !t.branch) return;
+    if (t.prNumber === undefined) return;
     const writer = this.d.forgeWriter;
-    const pr = await this.d.forge.findPr(project.repoPath, t.branch);
+    const pr = t.branch ? await this.d.forge.findPr(project.repoPath, t.branch) : undefined;
     let reason: string | undefined;
-    if (pr?.state === 'MERGED' && pr.headSha === sha) return { deduplicated: true };
-    if (!writer) reason = "la GitHub App de l'usine est requise pour merger";
+    if (pr?.number === t.prNumber && pr.state === 'MERGED' && pr.headSha === sha) return { deduplicated: true };
+    if (!t.branch) reason = 'la branche du ticket est inconnue';
+    else if (pr && pr.number !== t.prNumber) reason = `la PR de la branche (#${pr.number}) n'est pas celle du ticket (#${t.prNumber})`;
+    else if (!writer) reason = "la GitHub App de l'usine est requise pour merger";
     else if (pr?.state !== 'OPEN') reason = "la PR n'est plus ouverte";
     else if (pr.headSha !== sha) reason = 'la branche a reçu un push depuis la review';
     else if (pr.checks !== 'pass') reason = `les checks du commit relu ne sont pas verts (${pr.failedChecks.join(', ') || pr.checks})`;

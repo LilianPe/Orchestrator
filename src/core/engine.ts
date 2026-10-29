@@ -307,7 +307,8 @@ export const RECONCILE_MS = 5 * 60_000;
 /** The ticket goes back to Human Review (ORC-148): nothing merged, `reason` answered in the ticket. */
 function backToReview(out: Decision, reason: string): Decision {
   out.trace.push(`not merged: ${reason}`);
-  out.effects.push({ kind: 'move', to: 'human_review' }, { kind: 'comment', body: `${reason} Le ticket repasse en Human Review.` });
+  // The commit under review stays the one shown: a head pushed since is never taken as reviewed.
+  out.effects.push({ kind: 'move', to: 'human_review', keepReviewSha: true }, { kind: 'comment', body: `${reason} Le ticket repasse en Human Review.` });
   return out;
 }
 
@@ -319,12 +320,18 @@ function backToReview(out: Decision, reason: string): Decision {
  * lets an unchecked event through, a merge must not.
  */
 function doneMerge(out: Decision, event: FactoryEvent<'status.changed'>, state: TicketState, matrix: AuthzMatrix): Decision {
-  if (event.roles === undefined || !event.actor) return backToReview(out, "Je ne merge pas : le passage en Done n'a pas d'acteur vérifié.");
-  if (!authorize(out, event, state, 'done_merge', 'linear', matrix)) {
-    out.effects.push({ kind: 'move', to: 'human_review' });
+  // No signed actor (Linear's GitHub integration after a merge on GitHub, the reconciliation): no human decision.
+  if (event.roles === undefined || !event.actor) {
+    out.trace.push('done: no signed actor, no merge');
     return out;
   }
-  if (!state.reviewSha) return backToReview(out, "Je ne merge pas : aucun commit relu n'est enregistré pour ce ticket ; je le remets en Human Review pour l'enregistrer.");
+  if (!authorize(out, event, state, 'done_merge', 'linear', matrix)) {
+    out.effects.push({ kind: 'move', to: 'human_review', keepReviewSha: true });
+    return out;
+  }
+  if (!state.reviewSha) {
+    return backToReview(out, "Je ne merge pas : aucun commit relu n'est enregistré pour ce ticket ; répondez dans le fil pour que l'agent repasse par la vérification.");
+  }
   out.trace.push(`done: merge PR #${state.prNumber} on ${state.reviewSha}`);
   out.effects.push({ kind: 'merge', sha: state.reviewSha });
   return out;
@@ -444,7 +451,9 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
     out.effects.push({ kind: 'stop_run' });
     return out;
   }
-  if (event.type === 'status.changed' && event.payload.to === 'done' && state?.delegated && state.prNumber !== undefined && state.prState === 'OPEN') {
+  // A Done from Human Review only: during dev or the AI review it is no review decision, and the rules apply as before.
+  const reviewed = state?.delegated && state.logical === 'human_review' && state.prNumber !== undefined && state.prState === 'OPEN';
+  if (event.type === 'status.changed' && event.payload.to === 'done' && reviewed) {
     return doneMerge(out, event, state, matrix);
   }
   if (TRIGGERS.has(event.type)) {

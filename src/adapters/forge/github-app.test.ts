@@ -342,21 +342,29 @@ describe('GitHubAppForge secrets', () => {
 
 describe('GitHubAppForge.mergePr (ORC-148)', () => {
   const pullRoute = (pr: Record<string, unknown>): Route => (url, init) => (url.pathname === '/repos/acme/app/pulls/7' && init.method === 'GET' ? { body: pr } : undefined);
+  const repoRoute = (allowed: Record<string, boolean> = {}): Route => (url, init) =>
+    url.pathname === '/repos/acme/app' && init.method === 'GET' ? { body: { allow_merge_commit: true, allow_squash_merge: true, allow_rebase_merge: true, ...allowed } } : undefined;
   const mergeRoute = (status: number, body: unknown): Route => (url, init) => (url.pathname === '/repos/acme/app/pulls/7/merge' && init.method === 'PUT' ? { status, body } : undefined);
 
   it('merges with the expected head sha, so GitHub refuses a head that moved', async () => {
-    const { forge, calls } = makeForge([tokenRoute(42), pullRoute(openPr()), mergeRoute(200, { merged: true, sha: 'm1' })], { installationId: 42 });
+    const { forge, calls } = makeForge([tokenRoute(42), pullRoute(openPr()), repoRoute(), mergeRoute(200, { merged: true, sha: 'm1' })], { installationId: 42 });
     expect(await forge.mergePr('/repo', 7, 'abc123')).toEqual({ merged: true, deduplicated: false });
-    expect(calls.find((c) => c.method === 'PUT')!.body).toEqual({ sha: 'abc123' });
+    expect(calls.find((c) => c.method === 'PUT')!.body).toEqual({ sha: 'abc123', merge_method: 'merge' });
+  });
+
+  it('merges with a method the repository allows: squash when merge commits are off', async () => {
+    const { forge, calls } = makeForge([tokenRoute(42), pullRoute(openPr()), repoRoute({ allow_merge_commit: false }), mergeRoute(200, { merged: true })], { installationId: 42 });
+    await forge.mergePr('/repo', 7, 'abc123');
+    expect(calls.find((c) => c.method === 'PUT')!.body).toEqual({ sha: 'abc123', merge_method: 'squash' });
   });
 
   it('answers a head moved since the review as a refusal, not an error', async () => {
-    const { forge } = makeForge([tokenRoute(42), pullRoute(openPr({ head: { ref: 'factory/REL-1', sha: 'new999' } })), mergeRoute(409, { message: 'Head branch was modified.' })], { installationId: 42 });
+    const { forge } = makeForge([tokenRoute(42), pullRoute(openPr({ head: { ref: 'factory/REL-1', sha: 'new999' } })), repoRoute(), mergeRoute(409, { message: 'Head branch was modified.' })], { installationId: 42 });
     expect(await forge.mergePr('/repo', 7, 'abc123')).toEqual({ merged: false, reason: 'head_moved' });
   });
 
   it('answers a PR GitHub will not merge (conflict, required checks) as a refusal with its message', async () => {
-    const { forge } = makeForge([tokenRoute(42), pullRoute(openPr()), mergeRoute(405, { message: 'Pull Request is not mergeable' })], { installationId: 42 });
+    const { forge } = makeForge([tokenRoute(42), pullRoute(openPr()), repoRoute(), mergeRoute(405, { message: 'Pull Request is not mergeable' })], { installationId: 42 });
     expect(await forge.mergePr('/repo', 7, 'abc123')).toEqual({ merged: false, reason: 'not_mergeable', message: 'Pull Request is not mergeable' });
   });
 
@@ -367,7 +375,7 @@ describe('GitHubAppForge.mergePr (ORC-148)', () => {
   });
 
   it('throws on another error, so the effect is retried', async () => {
-    const { forge } = makeForge([tokenRoute(42), pullRoute(openPr()), mergeRoute(502, { message: 'Bad gateway' })], { installationId: 42 });
+    const { forge } = makeForge([tokenRoute(42), pullRoute(openPr()), repoRoute(), mergeRoute(502, { message: 'Bad gateway' })], { installationId: 42 });
     await expect(forge.mergePr('/repo', 7, 'abc123')).rejects.toMatchObject({ status: 502 });
   });
 });

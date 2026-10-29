@@ -36,7 +36,8 @@ function inReview(patch: Partial<TicketState> = {}): TicketState {
   };
 }
 const done = (actor = 'u-lead', roles: readonly Role[] | undefined = MERGER) => ev('status.changed', { from: 'human_review', to: 'done' }, actor, roles);
-const backToReview = (body: RegExp) => [{ kind: 'move', to: 'human_review' }, { kind: 'comment', body: expect.stringMatching(body) }];
+/** Back to Human Review, the reviewed commit kept: a move that concludes no work of the factory records none. */
+const backToReview = (body: RegExp) => [{ kind: 'move', to: 'human_review', keepReviewSha: true }, { kind: 'comment', body: expect.stringMatching(body) }];
 
 describe('decide — Done by a human merges the PR (ORC-148)', () => {
   it('merges, on the commit shown in Human Review, when a human with the merge right moves the ticket to Done', () => {
@@ -48,16 +49,24 @@ describe('decide — Done by a human merges the PR (ORC-148)', () => {
     const out = decide(inReview(), done('u-dev', ['team_member', 'repo_writer']), workflow);
     expect(out.effects.some((e) => e.kind === 'merge')).toBe(false);
     expect(out.trace.some((t) => t.startsWith(AUTHZ_REFUSED))).toBe(true);
-    expect(out.effects).toEqual([{ kind: 'comment', body: expect.stringContaining('passer le ticket en Done') }, { kind: 'move', to: 'human_review' }]);
+    expect(out.effects).toEqual([{ kind: 'comment', body: expect.stringContaining('passer le ticket en Done') }, { kind: 'move', to: 'human_review', keepReviewSha: true }]);
   });
 
-  it('a move to Done with no signed actor or no resolved roles never merges', () => {
-    expect(decide(inReview(), ev('status.changed', { from: 'human_review', to: 'done' }, 'u-lead'), workflow).effects).toEqual(backToReview(/acteur/));
-    expect(decide(inReview(), ev('status.changed', { from: 'human_review', to: 'done' }), workflow).effects).toEqual(backToReview(/acteur/));
+  it('a move to Done with no signed actor or no resolved roles is no human decision: never merged, left as it is', () => {
+    // Linear's GitHub integration after a merge on GitHub, the reconciliation: the ticket is not sent back.
+    expect(decide(inReview(), ev('status.changed', { from: 'human_review', to: 'done' }, 'u-lead'), workflow).effects).toEqual([]);
+    expect(decide(inReview(), ev('status.changed', { from: 'human_review', to: 'done' }), workflow).effects).toEqual([]);
+  });
+
+  it('a Done while the ticket is not in Human Review (dev, AI review) is no review decision: no merge, the rules as before', () => {
+    for (const logical of ['dev', 'ai_review'] as const) {
+      const out = decide(inReview({ logical, activeRunId: 'r1' }), ev('status.changed', { from: logical, to: 'done' }, 'u-lead', MERGER), workflow);
+      expect(out.effects.some((e) => e.kind === 'merge' || e.kind === 'move'), logical).toBe(false);
+    }
   });
 
   it('no commit recorded at the passage in Human Review: nothing merged, back to Human Review to record it', () => {
-    expect(decide(inReview({ reviewSha: undefined }), done(), workflow).effects).toEqual(backToReview(/commit relu/));
+    expect(decide(inReview({ reviewSha: undefined }), done(), workflow).effects).toEqual(backToReview(/aucun commit relu.*répondez dans le fil/));
   });
 
   it('GitHub refusing the merge (a push since the review) sends the ticket back to Human Review with the reason', () => {

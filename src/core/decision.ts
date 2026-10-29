@@ -9,7 +9,8 @@ export type Effect =
   /** Without linearSessionId: stop the ticket's dev work. With it: stop only the runs of that (question) session. */
   | { kind: 'stop_run'; linearSessionId?: string }
   | { kind: 'run_verify'; runId: string; job: string }
-  | { kind: 'move'; to: LogicalState }
+  /** `keepReviewSha`: a move back to Human Review that concludes no work of the factory keeps the reviewed commit (ORC-148). */
+  | { kind: 'move'; to: LogicalState; keepReviewSha?: true }
   | { kind: 'labels'; add: string[]; remove: string[] }
   | { kind: 'comment'; body: string }
   | { kind: 'activity'; type: ActivityType; body: string; linearSessionId?: string; runId?: string }

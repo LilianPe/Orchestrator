@@ -336,8 +336,11 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
     // A replay: the first call merged it on that head. Merged on another head is not ours to call merged.
     const pr = await this.call<PullRequestDto>('GET', url, token);
     if (pr.merged_at && pr.head.sha === sha) return { merged: true, deduplicated: true };
+    // A method the repository allows, a merge commit first: a squash-only repository refuses the others (405).
+    const settings = await this.call<{ allow_merge_commit?: boolean; allow_squash_merge?: boolean; allow_rebase_merge?: boolean }>('GET', repoApi(repo), token);
+    const method = settings.allow_merge_commit !== false ? 'merge' : settings.allow_squash_merge !== false ? 'squash' : 'rebase';
     try {
-      await this.call('PUT', `${url}/merge`, token, { sha });
+      await this.call('PUT', `${url}/merge`, token, { sha, merge_method: method });
       return { merged: true, deduplicated: false };
     } catch (err) {
       if (err instanceof GitHubApiError && err.status === 409) return { merged: false, reason: 'head_moved' };

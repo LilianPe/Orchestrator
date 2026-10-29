@@ -50,8 +50,19 @@ describe('Done by a human, merge by the factory (ORC-148)', () => {
     expect(h.forge.merges).toEqual([]);
     expect(comments(h).at(-1)).toMatch(/push depuis la review/);
     expect(lastMove(h)).toBe('Human Review');
-    // Moved back by the factory, the new head is the commit under review now: the next Done merges it.
-    expect((await h.ticket()).reviewSha).toBe('def456');
+    // Moved back, the reviewed commit stays the one shown: the pushed head is never taken as reviewed, so a second Done
+    // is refused the same way until the factory's own work moves the ticket to Human Review again.
+    expect((await h.ticket()).reviewSha).toBe('abc123');
+    await h.send('status.changed', { from: 'human_review', to: 'done' }, 'REL-1', { actor: 'user-lilian' });
+    expect(h.forge.merges).toEqual([]);
+  });
+
+  it('refuses to merge another PR than the ticket\'s, found on its branch', async () => {
+    const h = await inHumanReview();
+    h.forge.setPr(BRANCH, { number: 5, url: 'https://github.com/acme/app/pull/5', state: 'OPEN', headSha: 'abc123', checks: 'pass', failedChecks: [] });
+    await h.send('status.changed', { from: 'human_review', to: 'done' }, 'REL-1', { actor: 'user-lilian' });
+    expect(h.forge.merges).toEqual([]);
+    expect(comments(h).at(-1)).toMatch(/la PR de la branche \(#5\) n'est pas celle du ticket \(#3\)/);
   });
 
   it('merges nothing on a red check, and says why', async () => {
