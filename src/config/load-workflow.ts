@@ -4,6 +4,8 @@ import { parse } from 'yaml';
 import { parseCondition } from '../core/conditions.js';
 import { parseDuration } from '../core/duration.js';
 import { RENAMED_V1, type EventType, type LogicalState } from '../core/types.js';
+import { factoryDefault } from '../presets/factory-default.js';
+import { compilePreset, type Preset } from '../presets/preset.js';
 import {
   rawWorkflowSchema,
   type JobSpec,
@@ -110,6 +112,16 @@ function buildJob(name: string, raw: RawJob, perRun: RunLimits): JobSpec {
   };
 }
 
+// Compiled once, at load: a preset that breaks an invariant of the core never reaches the engine.
+const preset = compilePreset(factoryDefault).preset;
+
+/** The limit of a counter of the preset, which the engine still reads through `limits` (ORC-187). */
+export function presetBound(p: Preset, counter: string): number {
+  const found = Object.hasOwn(p.counters, counter) ? p.counters[counter] : undefined;
+  if (!found) throw new WorkflowError(`preset ${p.name}: counter ${counter} is missing`);
+  return found.limit;
+}
+
 export function loadWorkflow(opts: { packDir: string; projectFile?: string }): Workflow {
   const pack = readRaw(join(opts.packDir, 'workflow.yml'));
   const project = opts.projectFile ? readRaw(opts.projectFile) : undefined;
@@ -168,8 +180,11 @@ export function loadWorkflow(opts: { packDir: string; projectFile?: string }): W
       parallelSessions: raw.limits?.parallel_sessions ?? 3,
       questionSessions: raw.limits?.question_sessions ?? 2,
       perRun,
-      verifyAttempts: raw.limits?.verify_attempts ?? 2,
-      ciFixAttempts: raw.limits?.ci_fix_attempts ?? 2,
+      // Bounds of the factory/default preset (ORC-187); the YAML keys still override them until ORC-177.
+      // `verifyAttempts` counts every check: the preset's returns to the run, plus the first one.
+      verifyAttempts: raw.limits?.verify_attempts ?? presetBound(preset, 'verify') + 1,
+      ciFixAttempts: raw.limits?.ci_fix_attempts ?? presetBound(preset, 'review_ci'),
+      repeatedFailures: preset.sameFailure.limit,
       reviewRounds: raw.limits?.review_rounds ?? 5,
     },
     workspace: { setup: raw.workspace?.setup ?? [], portBase: raw.workspace?.ports?.base ?? 4200 },

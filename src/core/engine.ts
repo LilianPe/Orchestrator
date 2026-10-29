@@ -4,7 +4,7 @@ import { evalCondition } from './conditions.js';
 import { deadLetterReason, liftDeadLetterBlock, REPAIR_LABELS, repairedEvent } from './dead-letter.js';
 import type { Decision, Effect } from './decision.js';
 import { reduce } from './reduce.js';
-import type { EventType, FactoryEvent, FeedbackItem, InputKind, Taint, TicketState, VerifyFailure } from './types.js';
+import type { EventPayloads, EventType, FactoryEvent, FeedbackItem, InputKind, Taint, TicketState, VerifyFailure } from './types.js';
 
 type StartRun = Extract<Effect, { kind: 'start_run' }>;
 
@@ -62,12 +62,15 @@ function resetRedCi(out: Decision, ticket: TicketState | undefined): void {
 
 /**
  * Work starts again on a blocked ticket. Relaunched by a human (a reply, a label, a status change), the
- * red-CI count resets; by a machine event (a timer, red CI itself), it does not, or a timer armed before
+ * red-CI count and the « Boucle » guard reset; by a machine event (a timer, red CI itself), it does not, or a timer armed before
  * the block would undo it.
  */
 function unblock(out: Decision, event: FactoryEvent, ticket: TicketState): void {
   out.events.push({ type: 'ticket.unblocked' });
-  if (HUMAN_RELAUNCH.has(event.type)) resetRedCi(out, ticket);
+  if (!HUMAN_RELAUNCH.has(event.type)) return;
+  resetRedCi(out, ticket);
+  // The « Boucle » guard starts over too (ORC-187); `null`, not undefined, survives the JSON of the journal.
+  if (ticket.repeatedFailure) out.events.push({ type: 'ticket.patched', patch: { repeatedFailure: null } });
 }
 
 /** A Linear session that carries questions (read-only answers), not the ticket's dev conversation. */
@@ -279,6 +282,17 @@ function fixRedCi(out: Decision, rule: Rule, event: FactoryEvent<'pr.checks_fail
   return block(out, reason, [reason, ...failures, 'Répondez dans ce fil pour relancer.'].join('\n'));
 }
 
+/**
+ * The failed check seen again (ORC-187): same job, same failed commands and exit codes, same worktree content.
+ * The output is left out, as it carries times and paths. Without a fingerprint of the worktree, nothing is tracked.
+ */
+function repeatedFailure(ticket: TicketState | undefined, payload: EventPayloads['verify.failed']): { signature: string; count: number } | undefined {
+  if (!payload.tree) return undefined;
+  const signature = `${payload.job}|${payload.tree}|${payload.failures.map((f) => `${f.command}:${f.exitCode}`).join(',')}`;
+  const previous = ticket?.repeatedFailure;
+  return { signature, count: previous?.signature === signature ? previous.count + 1 : 1 };
+}
+
 const FENCED = 'fenced: ';
 
 export function isFenced(d: Decision): boolean {
@@ -395,14 +409,20 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
     case 'verify.passed': {
       const job = workflow.jobs[event.payload.job];
       if (!job) return out;
-      out.events.push({ type: 'ticket.patched', patch: { verifyAttempts: 0 } });
+      out.events.push({ type: 'ticket.patched', patch: { verifyAttempts: 0, ...(ticket?.repeatedFailure ? { repeatedFailure: null } : {}) } });
       return success(out, job, event.payload.runId);
     }
     case 'verify.failed': {
       const used = ticket?.verifyAttempts ?? 0;
       const { failures, job } = event.payload;
+      const repeated = repeatedFailure(ticket, event.payload);
+      if (repeated && repeated.count >= (workflow.limits.repeatedFailures ?? Infinity)) {
+        out.events.push({ type: 'ticket.patched', patch: { repeatedFailure: repeated } });
+        const reason = `Boucle : même échec ${repeated.count} fois de suite, sans changement du code.`;
+        return block(out, reason, `${reason}\n${formatFailuresShort(failures)}\nRépondez dans ce fil pour relancer.`);
+      }
       if (used + 1 < workflow.limits.verifyAttempts) {
-        out.events.push({ type: 'ticket.patched', patch: { verifyAttempts: used + 1 } });
+        out.events.push({ type: 'ticket.patched', patch: { verifyAttempts: used + 1, ...(repeated ? { repeatedFailure: repeated } : {}) } });
         const spec = workflow.jobs[job];
         if (spec) startRun(out, event, ticket, spec, { input: 'verify_failures', inputText: JSON.stringify(failures), resume: true });
         return out;

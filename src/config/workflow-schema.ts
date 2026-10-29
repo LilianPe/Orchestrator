@@ -106,6 +106,11 @@ export interface Limits {
   verifyAttempts: number;
   /** Runs red CI may start before the next red CI blocks the ticket (I5, ORC-270); 0 blocks at the first. */
   ciFixAttempts: number;
+  /**
+   * Same failed commands on an unchanged worktree, N times in a row: blocked, cause « boucle » (ORC-187).
+   * Absent from versions frozen before it, which keep deciding without it.
+   */
+  repeatedFailures?: number;
   reviewRounds: number;
 }
 

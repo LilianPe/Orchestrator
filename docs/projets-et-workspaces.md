@@ -56,7 +56,7 @@ Ce qui **n'est pas** nettoyé automatiquement (à faire à la main si l'espace d
 ### `workspace.setup` et vérifications
 
 - `setup` : préparer un worktree neuf (dépendances, fichiers générés). Lancé à la création seulement.
-- `jobs.<job>.verify` : contrôles lancés par **Relais** (pas par l'agent) après chaque run réussi, 15 minutes maximum par commande. En cas d'échec, Relais relance le job avec la sortie d'erreur, puis bloque le ticket après `limits.verify_attempts` passes.
+- `jobs.<job>.verify` : contrôles lancés par **Relais** (pas par l'agent) après chaque run réussi, 15 minutes maximum par commande. En cas d'échec, Relais relance le job avec la sortie d'erreur, puis bloque le ticket après `limits.verify_attempts` passes (4 par défaut, borne du préréglage), ou dès le troisième échec identique sur un worktree inchangé (cause « Boucle »).
 
 Détails et exemples : [`workflow.md`](workflow.md#workspace).
 

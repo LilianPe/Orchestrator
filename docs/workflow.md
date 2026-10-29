@@ -86,9 +86,11 @@ Vous pouvez n'en redéfinir qu'une partie ; après fusion, les six doivent avoir
 | `per_run.turns` | entier > 0 | 150 | Nombre de messages de l'assistant dans un run. Au-delà, le run est interrompu ; son résultat est `limit`. |
 | `per_run.duration` | durée | `90m` | Durée maximale d'un run, même résultat `limit`. |
 | `per_run.usd` | nombre > 0 | 5 | Passé à Claude Code (`--max-budget-usd`) ; quand Claude Code s'arrête sur ce plafond, le résultat est `limit`. |
-| `verify_attempts` | entier ≥ 0 | 2 | Nombre de passes de vérification avant de bloquer le ticket (voir `jobs.*.verify`). `0` et `1` bloquent dès le premier échec. |
-| `ci_fix_attempts` | entier ≥ 0 | 2 | Nombre de runs qu'une CI rouge (`pr.checks_failed`) peut lancer avant que la CI rouge suivante bloque le ticket (voir ci-dessous). `0` bloque dès la première CI rouge. |
+| `verify_attempts` | entier ≥ 0 | 4 (préréglage) | Nombre de passes de vérification avant de bloquer le ticket (voir `jobs.*.verify`). `0` et `1` bloquent dès le premier échec. Par défaut, la borne du [préréglage `factory/default`](preset.md) : 3 retours au run, le 4e échec bloque. |
+| `ci_fix_attempts` | entier ≥ 0 | 2 (préréglage) | Nombre de runs qu'une CI rouge (`pr.checks_failed`) peut lancer avant que la CI rouge suivante bloque le ticket (voir ci-dessous). `0` bloque dès la première CI rouge. |
 | `review_rounds` | entier > 0 | 5 | Indiqué au skill de review dans son prompt (« Rounds de review max : 5 ») ; seulement pour les jobs dont le skill se termine par `:review`. C'est le skill qui respecte ce nombre, Relais ne le compte pas. |
+
+Les défauts de `verify_attempts` et `ci_fix_attempts` viennent du [préréglage `factory/default`](preset.md) (ORC-187) ; le pack ne les déclare plus. Ces deux clés restent une surcharge possible jusqu'au retrait de `workflow.yml` (ORC-177).
 
 `per_run` est la limite par défaut de **tous** les jobs ; chaque job peut la remplacer champ par champ avec son propre `limits`.
 
@@ -147,6 +149,7 @@ Les vérifications (`verify`) : chaque commande est lancée dans le worktree (`b
 - Toutes passent : `on_success` s'applique.
 - Une échoue et il reste des tentatives : Relais relance **le même job** en reprenant la session, avec la sortie des commandes en échec (fin de sortie, 8 000 caractères au plus).
 - Après `limits.verify_attempts` passes en échec : le ticket est bloqué et Relais poste la liste des commandes en échec dans la session.
+- Même échec trois fois de suite (mêmes commandes en échec, mêmes codes de sortie, contenu du worktree inchangé) : le ticket est bloqué avec la cause « Boucle », même s'il reste des passes. L'empreinte du worktree est l'arbre git de son contenu, fichiers non suivis compris, calculée sans toucher à son index ni à ses objets (60 s au plus). Les fichiers que les contrôles écrivent doivent être ignorés par git (`coverage/`, rapports) : sinon l'empreinte change à chaque passe et la garde ne se déclenche jamais, sans jamais bloquer à tort. Le compte repart à zéro sur un contrôle vert ou une relance humaine. Hors d'un dépôt git, cette garde ne s'applique pas. Sa borne vient du préréglage et ne se règle pas dans `workflow.yml`.
 
 Jobs du pack :
 

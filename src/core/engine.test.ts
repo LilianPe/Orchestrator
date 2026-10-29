@@ -420,13 +420,62 @@ describe('decide — built-ins', () => {
     expect(out.effects[0]).toMatchObject({ type: 'elicitation' });
   });
 
-  it('verify failure resumes until the cap, then blocks', () => {
+  it('verify failure goes back to the run 3 times, then the 4th failure blocks (preset bound, ORC-187)', () => {
     const failures = [{ command: 'npm test', exitCode: 1, output: 'boom' }];
     const first = decide(ticket({ verifyAttempts: 0, verifyingRunId: 'r1' }), ev('verify.failed', { runId: 'r1', job: 'dev', failures }), workflow);
     expect(first.events).toEqual([{ type: 'ticket.patched', patch: { verifyAttempts: 1 } }]);
     expect(first.effects[0]).toMatchObject({ kind: 'start_run', job: 'dev', input: 'verify_failures', resume: true });
-    const last = decide(ticket({ verifyAttempts: 1, verifyingRunId: 'r2' }), ev('verify.failed', { runId: 'r2', job: 'dev', failures }), workflow);
-    expect(kinds(last)).toEqual({ events: ['ticket.blocked'], effects: ['activity'], timers: [] });
+    const third = decide(ticket({ verifyAttempts: 2, verifyingRunId: 'r3' }), ev('verify.failed', { runId: 'r3', job: 'dev', failures }), workflow);
+    expect(third.effects[0]).toMatchObject({ kind: 'start_run', job: 'dev', input: 'verify_failures' });
+    const fourth = decide(ticket({ verifyAttempts: 3, verifyingRunId: 'r4' }), ev('verify.failed', { runId: 'r4', job: 'dev', failures }), workflow);
+    expect(kinds(fourth)).toEqual({ events: ['ticket.blocked'], effects: ['activity'], timers: [] });
+  });
+
+  describe('same command, same failure, unchanged diff (ORC-187)', () => {
+    const failures = [{ command: 'npm test', exitCode: 1, output: 'boom at 12:00' }];
+    const failed = (runId: string, tree?: string, f = failures) => ev('verify.failed', { runId, job: 'dev', failures: f, ...(tree ? { tree } : {}) });
+
+    it('blocks with the cause « boucle » at the third occurrence', () => {
+      let t = ticket({ verifyingRunId: 'r1' });
+      for (const [i, runId] of ['r1', 'r2'].entries()) {
+        const out = decide({ ...t, verifyingRunId: runId }, failed(runId, 'abc'), workflow);
+        expect(out.effects[0], `occurrence ${i + 1}`).toMatchObject({ kind: 'start_run' });
+        t = out.events.reduce<TicketState>((s, e) => reduce(s, e)!, { ...t, verifyingRunId: runId });
+      }
+      expect(t.repeatedFailure).toMatchObject({ count: 2 });
+      const third = decide({ ...t, verifyingRunId: 'r3' }, failed('r3', 'abc'), workflow);
+      expect(kinds(third)).toEqual({ events: ['ticket.patched', 'ticket.blocked'], effects: ['activity'], timers: [] });
+      expect(third.events[1]).toMatchObject({ type: 'ticket.blocked', reason: expect.stringMatching(/^Boucle :/) });
+    });
+
+    it('starts over when the diff changes, the failed command changes, or the check passes', () => {
+      const seen = ticket({ verifyingRunId: 'r3', repeatedFailure: { signature: 'dev|abc|npm test:1', count: 2 } });
+      expect(decide(seen, failed('r3', 'def'), workflow).events[0]).toEqual({ type: 'ticket.patched', patch: { verifyAttempts: 1, repeatedFailure: { signature: 'dev|def|npm test:1', count: 1 } } });
+      const lint = [{ command: 'npm run lint', exitCode: 1, output: '' }];
+      expect(decide(seen, failed('r3', 'abc', lint), workflow).events[0]).toMatchObject({ patch: { repeatedFailure: { count: 1 } } });
+      // null, not undefined: the reset must survive the JSON of the journal.
+      expect(decide(seen, ev('verify.passed', { runId: 'r3', job: 'dev' }), workflow).events[0]).toStrictEqual({ type: 'ticket.patched', patch: { verifyAttempts: 0, repeatedFailure: null } });
+    });
+
+    it('counts each job apart', () => {
+      const once = decide(ticket({ verifyingRunId: 'r1' }), failed('r1', 'abc'), workflow);
+      const seen = once.events.reduce<TicketState>((s, e) => reduce(s, e)!, ticket({ verifyingRunId: 'r2' }));
+      const same = decide(seen, failed('r2', 'abc'), workflow);
+      const other = decide(seen, ev('verify.failed', { runId: 'r2', job: 'dev-feedback', failures, tree: 'abc' }), workflow);
+      expect(same.events[0]).toMatchObject({ patch: { repeatedFailure: { count: 2 } } });
+      expect(other.events[0]).toMatchObject({ patch: { repeatedFailure: { count: 1 } } });
+    });
+
+    it('gives the whole bound back when a human relaunches the ticket', () => {
+      const looped = ticket({ logical: 'dev', blocked: true, linearSessionId: 's1', repeatedFailure: { signature: 'dev|abc|npm test:1', count: 3 } });
+      const out = decide(looped, ev('session.prompted', { linearSessionId: 's1', body: 'réessaie', author: 'L' }), workflow);
+      expect(out.events).toContainEqual({ type: 'ticket.patched', patch: { repeatedFailure: null } });
+    });
+
+    it('is not tracked without a fingerprint of the worktree', () => {
+      const out = decide(ticket({ verifyingRunId: 'r1' }), failed('r1'), workflow);
+      expect(out.events).toEqual([{ type: 'ticket.patched', patch: { verifyAttempts: 1 } }]);
+    });
   });
 
   describe('red CI loop bounded by limits.ci_fix_attempts (I5, ORC-270)', () => {
