@@ -1,5 +1,6 @@
 import { parse } from 'yaml';
 import { z } from 'zod';
+import type { NetworkLevel } from '../adapters/sandbox/types.js';
 import { MaxDiffConfigError, resolveMaxDiff, type MaxDiff } from '../checks/diff-size.js';
 
 /**
@@ -25,6 +26,17 @@ export interface RepoConfig {
 /** The repository picks its level; `full` is reserved to `setup`, never for the agent. */
 export type RepoNetworkLevel = 'none' | 'limited' | 'custom';
 
+/**
+ * The repository's level as the preset's steps are checked against (`compilePreset({ repoNetwork })`): `custom`
+ * is `limited` with the repository's own hosts, so its ceiling is `limited`.
+ */
+export function repoNetworkCeiling(config: RepoConfig): NetworkLevel {
+  return config.network.level === 'none' ? 'none' : 'limited';
+}
+
+/** A host name: no wildcard, no range, no path (a `*` or a `0.0.0.0/0` would be `full` in disguise). */
+const HOST = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/i;
+
 const PRESET = 'factory/default@1.0';
 /** The factory's own configuration: the agent never edits what verifies it. */
 export const SOCLE_FORBIDDEN_PATHS: readonly string[] = Object.freeze(['.factory/**']);
@@ -38,6 +50,8 @@ export class RepoConfigError extends Error {
 const KEYS = ['extends', 'setup', 'commands', 'services', 'sensitive_paths', 'budgets', 'max_diff', 'feature_flags', 'visual_paths', 'network'];
 const strings = z.array(z.string().min(1));
 
+const at = (path: PropertyKey[]): string => path.map((p) => (typeof p === 'number' ? `[${p}]` : `.${String(p)}`)).join('');
+
 /** Validates a `.factory/config.yml` (undefined: no file) and merges it over the socle; throws a RepoConfigError listing every violation. */
 export function parseRepoConfig(text: string | undefined): RepoConfig {
   let raw: unknown;
@@ -50,26 +64,29 @@ export function parseRepoConfig(text: string | undefined): RepoConfig {
   if (typeof raw !== 'object' || Array.isArray(raw)) throw new RepoConfigError(['un objet YAML est attendu']);
   const r = raw as Record<string, unknown>;
   const violations: string[] = [];
-  const read = <T>(key: string, schema: z.ZodType<T>, expected: string): T | undefined => {
+  // `expected` for the value as a whole, `element` for one of its entries, named by its path (`sensitive_paths[1]`).
+  const read = <T>(key: string, schema: z.ZodType<T>, expected: string, element = expected): T | undefined => {
     if (r[key] === undefined || r[key] === null) return undefined;
     const res = schema.safeParse(r[key]);
     if (res.success) return res.data;
-    violations.push(`${key} : ${expected}`);
+    const path = res.error.issues[0]?.path ?? [];
+    violations.push(path.length === 0 ? `${key} : ${expected}` : `${key}${at(path)} : ${element}`);
     return undefined;
   };
 
-  if (r['extends'] !== undefined && r['extends'] !== PRESET) violations.push(`extends : seul \`${PRESET}\` existe au MVP`);
+  if (r['extends'] !== undefined && r['extends'] !== null && r['extends'] !== PRESET) violations.push(`extends : seul \`${PRESET}\` existe au MVP`);
   for (const key of Object.keys(r)) {
     if (!KEYS.includes(key)) violations.push(`${key} : clé inconnue ; la configuration du dépôt ajoute des contrôles ou des interdits, elle n’en retire jamais au socle`);
   }
   const setup = read('setup', z.string().min(1), 'une commande est attendue');
-  const commands = read('commands', z.record(z.string(), z.string().min(1)), 'un objet `nom: commande` est attendu');
-  const services = read('services', strings, 'un tableau est attendu');
-  const sensitivePaths = read('sensitive_paths', strings, 'un tableau de chemins est attendu');
-  const visualPaths = read('visual_paths', strings, 'un tableau de chemins est attendu');
+  const commands = read('commands', z.record(z.string(), z.string().min(1)), 'un objet `nom: commande` est attendu', 'une commande non vide est attendue');
+  const services = read('services', strings, 'un tableau est attendu', 'un nom de service non vide est attendu');
+  const sensitivePaths = read('sensitive_paths', strings, 'un tableau de chemins est attendu', 'un chemin non vide est attendu');
+  const visualPaths = read('visual_paths', strings, 'un tableau de chemins est attendu', 'un chemin non vide est attendu');
   for (const [key, paths] of [['sensitive_paths', sensitivePaths], ['visual_paths', visualPaths]] as const) {
     paths?.forEach((p, i) => {
-      if (p.startsWith('!')) violations.push(`${key}[${i}] : « ${p} » retirerait un chemin ; on ne peut qu’en ajouter`);
+      // Anywhere in the pattern: `!x` and the extglob `src/!(auth)/**` both carve a hole.
+      if (p.includes('!')) violations.push(`${key}[${i}] : « ${p} » retirerait un chemin ; on ne peut qu’en ajouter`);
     });
   }
   const budgets = read('budgets', z.strictObject({ per_ticket_tokens: z.number().int().positive().optional() }), '`{ per_ticket_tokens }` entier positif attendu');
@@ -80,7 +97,7 @@ export function parseRepoConfig(text: string | undefined): RepoConfig {
     maxDiff = resolveMaxDiff(r['max_diff'] as Partial<MaxDiff> | null | undefined);
   } catch (err) {
     if (!(err instanceof MaxDiffConfigError)) throw err;
-    violations.push(`max_diff : ${err.message}`);
+    violations.push(err.message);
   }
 
   if (violations.length > 0) throw new RepoConfigError(violations);
@@ -111,6 +128,9 @@ function networkOf(raw: unknown, violations: string[]): RepoConfig['network'] {
   if (level === 'full') violations.push('network.level : `full` est réservé à `setup`, jamais pour l’agent');
   else if (level !== undefined && level !== 'none' && level !== 'limited' && level !== 'custom') violations.push(`network.level : « ${level} » inconnu (none, limited, custom)`);
   else if (level) network.level = level;
+  allow?.forEach((host, i) => {
+    if (!HOST.test(host)) violations.push(`network.allow[${i}] : « ${host} » n’est pas un nom d’hôte ; les jokers et les plages sont refusés`);
+  });
   if (allow) network.allow = allow;
   return network;
 }

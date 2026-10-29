@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { parseRepoConfig, RepoConfigError, SOCLE_FORBIDDEN_PATHS } from './repo-config.js';
+import { compilePreset } from '../presets/preset.js';
+import { factoryDefault } from '../presets/factory-default.js';
+import { parseRepoConfig, RepoConfigError, repoNetworkCeiling, SOCLE_FORBIDDEN_PATHS } from './repo-config.js';
 
 function violations(yaml: string): string[] {
   try {
@@ -73,7 +75,7 @@ describe('parseRepoConfig (.factory/config.yml, ORC-209)', () => {
 
     it('refuses a max_diff wider than the socle', () => {
       expect(violations('max_diff: { files: 20 }\n')).toEqual([
-        'max_diff : max_diff.files = 20 dépasse le socle 15 : la configuration du dépôt ne peut que resserrer `max_diff`.',
+        'max_diff.files = 20 dépasse le socle 15 : la configuration du dépôt ne peut que resserrer `max_diff`.',
       ]);
     });
 
@@ -85,16 +87,49 @@ describe('parseRepoConfig (.factory/config.yml, ORC-209)', () => {
       expect(violations('network: { level: full }\n')).toEqual(['network.level : `full` est réservé à `setup`, jamais pour l’agent']);
     });
 
+    it('refuses a host wildcard or a network range, which would be full in disguise', () => {
+      expect(violations('network: { level: custom, allow: ["docs.exemple.com", "*", "*.com", "0.0.0.0/0"] }\n')).toEqual([
+        'network.allow[1] : « * » n’est pas un nom d’hôte ; les jokers et les plages sont refusés',
+        'network.allow[2] : « *.com » n’est pas un nom d’hôte ; les jokers et les plages sont refusés',
+        'network.allow[3] : « 0.0.0.0/0 » n’est pas un nom d’hôte ; les jokers et les plages sont refusés',
+      ]);
+    });
+
+    it('refuses a negation anywhere in a path, extglob included', () => {
+      expect(violations('sensitive_paths: ["src/!(auth)/**"]\n')).toEqual([
+        'sensitive_paths[0] : « src/!(auth)/** » retirerait un chemin ; on ne peut qu’en ajouter',
+      ]);
+    });
+
     it('refuses a preset other than factory/default', () => {
       expect(violations('extends: factory/fast@1.0\n')).toEqual(['extends : seul `factory/default@1.0` existe au MVP']);
     });
+  });
+
+  it('reads an empty value as absent, extends included', () => {
+    expect(parseRepoConfig('extends:\nsetup:\n').extends).toBe('factory/default@1.0');
+  });
+
+  it('names the element that fails, not only its key', () => {
+    expect(violations('sensitive_paths: ["src/**", ""]\ncommands: { test: "" }\n')).toEqual([
+      'commands.test : une commande non vide est attendue',
+      'sensitive_paths[1] : un chemin non vide est attendu',
+    ]);
+  });
+
+  it('maps its network level onto the levels of the preset, so the step check keeps working', () => {
+    expect(repoNetworkCeiling(parseRepoConfig('network: { level: custom, allow: [docs.exemple.com] }\n'))).toBe('limited');
+    expect(repoNetworkCeiling(parseRepoConfig(undefined))).toBe('limited');
+    expect(repoNetworkCeiling(parseRepoConfig('network: { level: none }\n'))).toBe('none');
+    // A ceiling the preset can be compiled against: build at limited is refused under none.
+    expect(() => compilePreset(factoryDefault, { repoNetwork: repoNetworkCeiling(parseRepoConfig('network: { level: none }\n')) })).toThrow(/wider than the repository level none/);
   });
 
   it('lists every violation with the path of its key', () => {
     expect(violations('network: { level: full }\nmax_diff: { files: 99 }\nservices: postgres\n')).toEqual([
       'services : un tableau est attendu',
       'network.level : `full` est réservé à `setup`, jamais pour l’agent',
-      'max_diff : max_diff.files = 99 dépasse le socle 15 : la configuration du dépôt ne peut que resserrer `max_diff`.',
+      'max_diff.files = 99 dépasse le socle 15 : la configuration du dépôt ne peut que resserrer `max_diff`.',
     ]);
   });
 

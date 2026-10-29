@@ -31,8 +31,31 @@ describe('factory validate (ORC-209)', () => {
     expect(out).toEqual([
       '.factory/config.yml refusé :',
       '- network.level : `full` est réservé à `setup`, jamais pour l’agent',
-      '- max_diff : max_diff.files = 99 dépasse le socle 15 : la configuration du dépôt ne peut que resserrer `max_diff`.',
+      '- max_diff.files = 99 dépasse le socle 15 : la configuration du dépôt ne peut que resserrer `max_diff`.',
     ]);
+  });
+
+  it('refuses a config.yaml, which the factory would never read', () => {
+    const dir = repo();
+    mkdirSync(join(dir, '.factory'));
+    writeFileSync(join(dir, '.factory/config.yaml'), 'network: { level: full }\n');
+    const { code, out } = run(dir);
+    expect(code).toBe(1);
+    expect(out.join('\n')).toContain('.factory/config.yaml : renommez-le en .factory/config.yml');
+  });
+
+  it('reports an unreadable file as a violation, not a crash', () => {
+    const dir = repo();
+    mkdirSync(join(dir, '.factory/config.yml'), { recursive: true });
+    const { code, out } = run(dir);
+    expect(code).toBe(1);
+    expect(out[1]).toMatch(/^- illisible : /);
+  });
+
+  it('refuses an option where the repository path goes', () => {
+    const out: string[] = [];
+    expect(runValidateCommand({ repoPath: '--json', out: (l) => out.push(l) })).toBe(1);
+    expect(out).toEqual(['Usage : factory validate [repo] (aucune option)']);
   });
 
   it('says the socle applies when the repository has no file', () => {

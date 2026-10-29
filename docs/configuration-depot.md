@@ -41,10 +41,12 @@ Une configuration **ajoute** des contrôles ou des interdits, elle n'en **retire
 - une clé inconnue, comme `checks: { disable: [...] }` : rien ne peut éteindre un contrôle du socle, et une clé ignorée en silence laisserait croire le contraire ;
 - un motif négatif (`!…`) dans `sensitive_paths` ou `visual_paths` : il retirerait un chemin ;
 - un `max_diff` plus large que le socle (15 fichiers, 400 lignes) ;
-- `network.level: full`, réservé à `setup`, jamais pour l'agent ;
+- `network.level: full`, réservé à `setup`, jamais pour l'agent ; et dans `network.allow`, tout ce qui n'est pas un nom d'hôte (`*`, `*.com`, `0.0.0.0/0`) : un joker ou une plage reviendrait à `full` ;
 - un autre préréglage que `factory/default@1.0`.
 
 Les chemins interdits du socle (`.factory/**`) restent toujours interdits à l'agent, quoi que le fichier déclare.
+
+`custom` est `limited` avec les hôtes du dépôt : c'est le plafond `limited` contre lequel les étapes du préréglage sont vérifiées ; `none` est le plafond `none`.
 
 ## Vérifier
 
@@ -53,4 +55,4 @@ factory validate            # le dépôt courant
 factory validate ../mon-depot
 ```
 
-Code de sortie 0 si le fichier est valide (ou absent), 1 sinon, avec une ligne par violation.
+Code de sortie 0 si le fichier est valide (ou absent), 1 sinon, avec une ligne par violation et le chemin de l'élément fautif (`sensitive_paths[1]`, `commands.test`). Un `.factory/config.yaml` est refusé : l'usine ne lit que `config.yml`.
