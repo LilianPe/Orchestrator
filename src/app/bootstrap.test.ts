@@ -43,6 +43,25 @@ describe('bootstrap', () => {
     expect(logs.join('\n')).not.toContain('PRIVATE KEY');
   });
 
+  it('takes the GitHub App from factory.yml, its key from the environment (ORC-209)', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
+    const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+    const pem = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+    saveInstance(home, { port: 4191, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
+    writeFileSync(join(home, 'factory.yml'), 'github: { app_id: 456, private_key: env:GH_APP_KEY }\n');
+    const logs: string[] = [];
+    const app = await startFactory({ home, fakeRunner: true, log: (m) => void logs.push(m), env: { GH_APP_KEY: pem } });
+    await app.stop();
+    expect(logs.some((m) => m.includes('GitHub App 456'))).toBe(true);
+  });
+
+  it('refuses to start on an invalid factory.yml, naming the key', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
+    saveInstance(home, { port: 4192, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
+    writeFileSync(join(home, 'factory.yml'), 'github: { app_id: 456, private_key: env:GH_APP_KEY }\n');
+    await expect(startFactory({ home, fakeRunner: true, log: () => {}, env: {} })).rejects.toThrow(/github\.private_key : la variable d’environnement GH_APP_KEY/);
+  });
+
   it('falls back to the gh CLI when no GitHub App is configured', async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
     saveInstance(home, { port: 4189, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });

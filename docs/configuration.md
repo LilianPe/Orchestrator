@@ -144,6 +144,38 @@ Le coût du jour et le plafond sont affichés dans l'interface et par `relais st
 
 Relancer `relais init` avec le **même** client ID conserve les jetons ; avec un autre, il faut reconnecter Linear.
 
+## `factory.yml` (ORC-209)
+
+`<FACTORY_HOME>/factory.yml` est la configuration serveur de l'usine. Il est **facultatif** et coexiste avec `config.yaml` et `secrets.json` jusqu'à leur retrait (ORC-199). Tout secret s'y écrit `env:NOM` et se lit dans l'environnement du démon : un secret en clair est refusé. Un fichier invalide empêche `factory up` de démarrer, avec le chemin de la clé fautive.
+
+```yaml
+linear:   { app_client_id: env:LINEAR_CLIENT_ID, client_secret: env:LINEAR_CLIENT_SECRET, webhook_secret: env:LINEAR_WEBHOOK_SECRET }
+github:   { app_id: env:GH_APP_ID, private_key: env:GH_APP_KEY, webhook_secret: env:GH_WEBHOOK_SECRET }
+claude:
+  runtime: claude-code
+  accounts:
+    - { name: compte-1, token: env:CLAUDE_TOKEN_1 }
+  active: compte-1
+  default_model: claude-sonnet-5-5
+  per_step: { review: claude-opus-5-5 }
+  effort: { default: medium, per_step: { spec_draft: high, review: high } }
+concurrency: 1
+budgets: { max_turns: { build: 150, fix: 60, review: 25 }, on_usage_limit: wait }
+repos:
+  - { linear_team: ORC, github: LilianPe/Orchestrator }
+```
+
+| Section | Effet aujourd'hui |
+| -- | -- |
+| `github` | **Appliquée** : remplace `github` de `config.yaml` (App, clé, secret des webhooks). |
+| `linear` | **Appliquée** : `app_client_id`, `client_secret` et `webhook_secret` remplacent ceux de `secrets.json`. Les jetons OAuth restent dans `secrets.json`, écrits par « Connecter Linear ». |
+| `claude` | Validée, pas encore lue : comptes et choix du compte avec ORC-215, effort par étape avec ORC-136. |
+| `concurrency` | Validée, pas encore lue : la file prend encore `parallel_sessions`. |
+| `budgets` | Validée, pas encore lue : appliquée par ORC-216. |
+| `repos` | Validée, pas encore lue : `projects[].repoPath` de `config.yaml` reste la copie de travail tant que le runner ne clone pas lui-même (ORC-204). |
+
+`factory.yml` n'est lu qu'à la lecture : `init` et l'écriture des jetons ne recopient jamais une de ses valeurs dans `config.yaml` ou `secrets.json`. Ses secrets sont masqués dans les transcripts des runs, comme ceux de `secrets.json`.
+
 ## Ce qui ne sort pas du démon
 
 Le démon détient les secrets ; les runs Claude Code n'en ont pas besoin et ne doivent pas y accéder.

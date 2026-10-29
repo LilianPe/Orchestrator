@@ -8,7 +8,7 @@ import { TokenManager } from '../adapters/tracker/linear/oauth.js';
 import { LinearTracker } from '../adapters/tracker/linear/tracker.js';
 import { startFactory } from '../app/bootstrap.js';
 import { repoRoot } from '../app/root.js';
-import { homePaths, loadInstance, loadSecrets, factoryHome, saveSecrets } from '../config/instance.js';
+import { effectiveInstance, homePaths, linearSettings, factoryHome, saveLinearTokens } from '../config/instance.js';
 import { loadWorkflow } from '../config/load-workflow.js';
 import { createSmeeChannel } from '../relay/smee.js';
 import { openStore } from '../store/open.js';
@@ -51,7 +51,7 @@ async function main(): Promise<number> {
   });
   const [cmd, arg] = positionals;
   const home = factoryHome();
-  const cfg = loadInstance(home);
+  const cfg = effectiveInstance(home);
   const api = `http://127.0.0.1:${cfg.port}`;
 
   switch (cmd) {
@@ -87,7 +87,7 @@ async function main(): Promise<number> {
       return 0;
     }
     case 'plan': {
-      const linear = loadSecrets(home).linear;
+      const linear = linearSettings(home);
       if (!linear?.accessToken || !linear.appUserId) {
         console.log('Linear non connecté : lancez `factory up` puis connectez Linear.');
         return 1;
@@ -96,7 +96,7 @@ async function main(): Promise<number> {
         clientId: linear.clientId,
         clientSecret: linear.clientSecret,
         load: () => ({ accessToken: linear.accessToken!, refreshToken: linear.refreshToken, expiresAt: linear.expiresAt }),
-        save: (t) => saveSecrets(home, { ...loadSecrets(home), linear: { ...linear, ...t } }),
+        save: (t) => saveLinearTokens(home, t),
       });
       const tracker = new LinearTracker(new LinearApi(() => tm.get()), linear.appUserId);
       const packDir = join(repoRoot(), 'packs/standard');

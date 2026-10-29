@@ -7,7 +7,7 @@ import {
 } from '../adapters/forge/github-app-api.js';
 import type { HttpClient } from '../adapters/forge/github-app.js';
 import { resolveGithubApp } from '../config/github-app.js';
-import { loadInstance } from '../config/instance.js';
+import { effectiveInstance } from '../config/instance.js';
 
 const FACTORY_BRANCH = /^factory\//;
 /** Representative factory branch names: enough to decide whether a filter can reach the factory space. */
@@ -483,7 +483,7 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
   const out = options.out ?? ((line) => console.log(line));
   let githubApp;
   try {
-    githubApp = resolveGithubApp(loadInstance(options.home), options.env);
+    githubApp = resolveGithubApp(effectiveInstance(options.home, options.env), options.env);
   } catch (error) {
     out(errorMessage(error));
     return 1;

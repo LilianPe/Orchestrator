@@ -218,6 +218,7 @@ Contrôles déterministes de `verify`, purs : ils lisent le diff `baseSha..SHA` 
 | Module | Rôle | Statut | Ticket cible |
 |---|---|---|---|
 | `src/config/instance.ts` | `config.yaml` et `secrets.json` de l'instance (zod) ; `projects[].authz` : mainteneurs, valideurs, logins GitHub des utilisateurs Linear (ORC-186) | adapter | ORC-209 (`factory.yml`, où passent les désignations d'`authz`), ORC-199 (`config.yaml` et `secrets.json` retirés), ORC-194 (`perDayUsd`), ORC-167 (`RELAIS_HOME`) |
+| `src/config/factory-yml.ts` | `factory.yml` du serveur (zod) : secrets en `env:NOM` résolus, clé fautive nommée ; appliqué à la lecture (`effectiveInstance`, `linearSettings`), jamais recopié | garder | ORC-209 (fait : partie B), ORC-215 (comptes Claude), ORC-216 (budgets), ORC-204 (`repos` sans clone local), ORC-199 (retrait de `config.yaml`) |
 | `src/config/repo-config.ts` | Schéma de `.factory/config.yml` (zod) fusionné sur le socle : clé inconnue, motif négatif, `max_diff` élargi et réseau `full` refusés ; chemins interdits du socle toujours gardés | garder | ORC-209 (fait : partie A ; B : `factory.yml` ; C : lecture sur la branche par défaut, `.factory/**` interdit à l'agent) |
 | `src/config/github-app.ts` | Résolution de la GitHub App (PEM ou chemin, repli `GH_APP_*`) et du secret des webhooks GitHub (repli `GH_WEBHOOK_SECRET`, ORC-134) | garder | ORC-124 (cible `factory.yml`, ORC-209) |
 | `src/config/load-workflow.ts` | Fusion pack + `.factory/workflow.yml` | retirer | ORC-177 (remplacé par ORC-187 et ORC-209) |
