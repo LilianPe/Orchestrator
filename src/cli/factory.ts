@@ -19,10 +19,12 @@ import { runDoctorCommand } from './doctor.js';
 import { formatPlan, planRows } from './plan.js';
 import { runReplayCommand } from './replay.js';
 import { runRepairCommand } from './repair.js';
+import { runValidateCommand } from './validate.js';
 import { PRODUCT_NAME } from '../product.js';
 
 const USAGE = `Usage : factory <commande>
   init               configurer ${PRODUCT_NAME} pour le dépôt courant
+  validate [repo]    vérifier .factory/config.yml contre le socle (il ne peut qu'ajouter)
   doctor [repo] [--json] refuser un dépôt dont la CI peut exposer des secrets aux branches de l'usine
   up [--fake-runner] démarrer ${PRODUCT_NAME} (interface sur http://localhost:4100)
   plan               voir quels tickets délégués seraient pris
@@ -41,6 +43,8 @@ function uiAuth(): Record<string, string> {
 async function main(): Promise<number> {
   // Its own options, and no instance needed to replay a file (the CI has none).
   if (process.argv[2] === 'replay') return runReplayCommand(process.argv.slice(3));
+  // A repository file only: no instance needed either.
+  if (process.argv[2] === 'validate') return runValidateCommand({ repoPath: process.argv[3] ?? process.cwd(), out: (l) => console.log(l) });
   const { positionals, values } = parseArgs({
     allowPositionals: true,
     options: { 'fake-runner': { type: 'boolean' }, json: { type: 'boolean' } },
