@@ -2,7 +2,7 @@ import type { Workflow } from '../config/workflow-schema.js';
 import type { DecisionPlan, TimerRecord } from '../store/types.js';
 import { effectiveEvent } from './dead-letter.js';
 import type { OutboxEffect } from './decision.js';
-import { AUTHZ_REFUSED, decide, isFenced } from './engine.js';
+import { AUTHZ_REFUSED, decide, isFenced, RECONCILE_TICKET } from './engine.js';
 import { reduce } from './reduce.js';
 import { CREATES_TICKET, type EventType, type FactoryEvent, type TicketState } from './types.js';
 
@@ -39,6 +39,12 @@ export function planDecision({ event, known, workflow, hash, now }: PlanInput): 
   if (event.projectId === '*') return { ...NO_PLAN, effects: decide(undefined, event, workflow).effects, at: now };
   // A repair that replays or forces an event (ORC-175) is planned as that event would be.
   const decided = effectiveEvent(event);
+  // The project's reconciliation (ORC-185): no ticket to manage, but its effect runs and its next timer is armed.
+  if (event.ticketId === RECONCILE_TICKET) {
+    const d = decide(undefined, event, workflow);
+    const timers = d.timers.map(({ slot, ms, ...fired }) => ({ key: `${RECONCILE_TICKET}:${slot}`, projectId: event.projectId, ticketId: RECONCILE_TICKET, ...fired, fireAt: now + ms, armedBy: event.id }) as TimerRecord);
+    return { ...NO_PLAN, effects: d.effects, timers, at: now, trace: d.trace };
+  }
   if (!known && event.ticketId && !CREATES_TICKET.has(decided.type)) {
     return { ...NO_PLAN, at: now, note: `ignored ${event.type} for unmanaged ticket ${event.ticketId}` };
   }

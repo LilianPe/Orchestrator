@@ -62,6 +62,20 @@ describe('bootstrap', () => {
     await expect(startFactory({ home, fakeRunner: true, log: () => {}, env: {} })).rejects.toThrow(/github\.private_key : la variable d’environnement GH_APP_KEY/);
   });
 
+  it('plans the reconciliation of each project in the store at start, once (ORC-185)', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
+    const repo = mkdtempSync(join(tmpdir(), 'factory-repo-'));
+    saveInstance(home, { port: 4193, host: '127.0.0.1', relay: { kind: 'none' }, projects: [{ id: 'p', repoPath: repo, linearTeamKey: 'REL' }], limits: {} });
+    for (let start = 0; start < 2; start++) {
+      const app = await startFactory({ home, fakeRunner: true, log: () => {}, env: {} });
+      await app.stop();
+    }
+    const store = new SqliteStore(join(home, 'factory.db'));
+    const planned = (await store.dueTimers(Number.MAX_SAFE_INTEGER)).filter((t) => t.kind === 'reconcile');
+    store.close();
+    expect(planned.map((t) => [t.projectId, t.key])).toEqual([['p', '_reconcile:reconcile']]);
+  });
+
   it('falls back to the gh CLI when no GitHub App is configured', async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
     saveInstance(home, { port: 4189, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });

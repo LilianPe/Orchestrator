@@ -38,7 +38,7 @@ Les commandes qui demandent le démon appellent `http://127.0.0.1:<port>/api/…
 
 ### `relais up`
 
-Démarre le démon au premier plan : serveur HTTP (interface, API, webhooks, OAuth), relais smee, minuteries, relevé des PR toutes les 30 s, réconciliation Linear toutes les 30 s, réévaluation de la file toutes les minutes. Affiche `Relais tourne : <url>`.
+Démarre le démon au premier plan : serveur HTTP (interface, API, webhooks, OAuth), relais smee, minuteries, réconciliation Linear et GitHub toutes les 5 minutes par minuterie en base (relevé des PR toutes les 30 s si les webhooks GitHub sont refusés), réévaluation de la file toutes les minutes. Affiche `Relais tourne : <url>`.
 
 - Écrit `<RELAIS_HOME>/run-settings.json` (voir [`configuration.md`](configuration.md#ce-qui-ne-sort-pas-du-démon)).
 - Clôt les runs interrompus par un arrêt ou un crash précédent et bloque leurs tickets (voir [`exploitation.md`](exploitation.md#arrêt-redémarrage-et-runs-interrompus)).

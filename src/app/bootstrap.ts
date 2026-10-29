@@ -15,7 +15,7 @@ import { LinearApi } from '../adapters/tracker/linear/api.js';
 import { createLinearIngest } from '../adapters/tracker/linear/ingest.js';
 import { buildAuthorizeUrl, exchangeCode, TokenManager } from '../adapters/tracker/linear/oauth.js';
 import { Q } from '../adapters/tracker/linear/queries.js';
-import { Reconciler } from '../adapters/tracker/linear/reconcile.js';
+import { Reconciler, reconcileOnce } from '../adapters/tracker/linear/reconcile.js';
 import { LinearTracker } from '../adapters/tracker/linear/tracker.js';
 import { isUsableWebhookSecret } from '../adapters/tracker/linear/webhook.js';
 import { GitWorkspaces } from '../adapters/workspace/git-workspaces.js';
@@ -156,7 +156,10 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       repo: forge,
     });
 
+    // Filled once the reconciler and the poll exist, below: the reconciliation's timer (ORC-185) runs both.
+    let reconcileProject: (p: ProjectRuntime) => Promise<void> = async () => {};
     const orchestrator = new Orchestrator({
+      reconcile: (p) => reconcileProject(p),
       // The sources start before Linear is connected: their events wait in the inbox until replayInbox().
       holdInboxUntilReplay: true,
       beforeRun: async () => {
@@ -187,6 +190,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       }),
     });
     await orchestrator.recover();
+    // Planned in the store, every 5 minutes (ORC-185): a restart finds the timer and arms no second one.
+    await orchestrator.armReconciliation();
     // Every source writes its events to the inbox and gets the promise of the committed row
     // (ORC-147); the orchestrator's worker then decides them from the inbox (ORC-149).
     const accept = (e: FactoryEvent) => orchestrator.accept(e);
@@ -219,6 +224,10 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     const reconciler = new Reconciler({ tracker: trackerSwitch, store, projects, submit: accept, clock, log });
     const timers = new TimerService(store, clock, () => orchestrator.wake(), (e) => log(`timers: ${e.message}`));
     const poller = new PrPoller({ store, forge, projects, submit: accept, clock, log });
+    reconcileProject = async (p) => {
+      await reconcileOnce({ tracker: trackerSwitch, store, projects: [p], submit: accept, clock, log });
+      await poller.pollOnce();
+    };
     // GitHub webhooks (ORC-134) write to the inbox beside the poll, which stays until ORC-185 and ORC-181:
     // both name a fact the same way, so the inbox keeps it once.
     const githubIngest = createGithubIngest({
@@ -270,7 +279,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
                 const created = await linearTracker!.ensureSetup(p.teamKey, p.workflow.states, FACTORY_LABELS);
                 if (created.length) log(`Linear ${p.teamKey} : créé ${created.join(', ')}`);
               }
-              reconciler.start();
+              // At the connection, without waiting for the timer: what Linear holds is read at once.
+              await reconciler.once();
             },
           }
         : undefined,
@@ -309,10 +319,12 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
         orchestrator.tick().catch((e: unknown) => log(`tick: ${(e as Error).message}`));
       }, 60_000);
       tickInterval.unref();
-      poller.start();
+      // The GitHub webhooks carry the PRs (ORC-134), the 5-minute reconciliation catches what they lose (ORC-185);
+      // without webhooks a merge would wait 5 minutes, so the 30-second poll stays (ORC-181 removes it).
+      if (!isUsableWebhookSecret(githubSecret)) poller.start();
       if (await connectLinear()) {
         await orchestrator.announceRecovery();
-        reconciler.start();
+        await reconciler.once();
       }
       else log(`Linear non connecté : ouvrez ${baseUrl}/oauth/start`);
       // The worker (ORC-149) executes the effects decided before a crash, then the events written

@@ -75,6 +75,11 @@ export class Reconciler {
       .catch((e: Error) => this.d.log(`reconcile: ${e.message}`))
       .finally(() => (this.passing = undefined));
   }
+  /** One pass now (the connection to Linear); the cadence is the reconciliation's timer in the store (ORC-185). */
+  once(): Promise<void> {
+    this.pass();
+    return this.passing ?? Promise.resolve();
+  }
   start(intervalMs = 30_000): void {
     if (this.handle) clearInterval(this.handle);
     this.pass();

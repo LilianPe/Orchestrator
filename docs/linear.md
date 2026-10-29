@@ -35,7 +35,7 @@ Linear peut refuser une URL de callback en `http://localhost` : dans ce cas, exp
 - enregistre les jetons, l'identifiant de l'agent (`appUserId`) et de l'organisation ;
 - **crée dans chaque équipe configurée les statuts manquants** (voir § 5) et les labels `agent:reprendre`, `agent:stop` et `Bloqué` ;
 - poste les messages de reprise en attente (runs interrompus par un redémarrage) ;
-- démarre la réconciliation (toutes les 30 s).
+- lance une réconciliation tout de suite ; ensuite, elle passe toutes les 5 minutes (ORC-185).
 
 Le jeton est rafraîchi automatiquement. Aux démarrages suivants, Relais se reconnecte seul avec les jetons de `secrets.json`. `relais status` et l'interface indiquent si Linear est connecté.
 
@@ -60,7 +60,9 @@ Un canal smee est public : n'importe qui connaissant l'URL peut y lire les évé
 
 **Limite du relais smee : il ne transmet pas les octets d'origine.** smee.io décode le JSON reçu de Linear et ne relaie que l'objet décodé ; Relais le ré-encode (`JSON.stringify`) avant de vérifier la signature. Le résultat est identique aux octets signés tant que Linear envoie un JSON compact produit par `JSON.stringify`, ce qui est le cas aujourd'hui (validé à la recette du 11/10) : accents, emojis, `\n`, guillemets et nombres ordinaires passent. Il diffère, et le webhook est refusé en 401, si le corps contient des espaces ou une indentation, des échappements facultatifs (`\/`, `\u00e9`), des nombres écrits autrement que ne les écrirait `JSON.stringify` (par exemple `1.0`, `1e3`, `-0`, `0.30000000000000001` au lieu de `0.3`, `9007199254740993`, `1000000000000000000000` au lieu de `1e+21`), des clés en double ou des clés numériques hors de l'ordre de `JSON.stringify`. Dans ce cas, le journal affiche `relay: webhook rejected with 401 (…)` avec les trois causes possibles (secret faux, horloge décalée, corps non reproductible) ; si le secret et l'horloge sont bons, passez en `publicUrl`.
 
-La **réconciliation** relit toutes les 30 s les tickets délégués de chaque équipe (au plus 100 par équipe, hors statuts terminés ou annulés) et rattrape trois choses manquées : une délégation ; un retrait (ticket qui n'est plus délégué ou qui est passé dans un statut terminé ou annulé : son run en cours est arrêté par la règle `session.stopped` du workflow, présente dans le pack standard) ; un changement entre statuts déclarés dans `workflow.states` et non terminaux. Tout le reste n'arrive que par webhook et se perd si le webhook est manqué ou refusé : réponses dans la session, mentions et commandes `@relais`, arrêt demandé dans la session, labels ajoutés, et le passage en terminé ou annulé en tant que changement de statut (seul le retrait est rattrapé).
+La **réconciliation** relit toutes les 5 minutes les tickets délégués de chaque équipe (au plus 100 par équipe, hors statuts terminés ou annulés) et rattrape trois choses manquées : une délégation ; un retrait (ticket qui n'est plus délégué ou qui est passé dans un statut terminé ou annulé : son run en cours est arrêté par la règle `session.stopped` du workflow, présente dans le pack standard) ; un changement entre statuts déclarés dans `workflow.states` et non terminaux. Tout le reste n'arrive que par webhook et se perd si le webhook est manqué ou refusé : réponses dans la session, mentions et commandes `@relais`, arrêt demandé dans la session, labels ajoutés, et le passage en terminé ou annulé en tant que changement de statut (seul le retrait est rattrapé).
+
+Sa cadence est une **minuterie en base** (ORC-185) : un pseudo-ticket `_reconcile` par projet porte la minuterie `reconcile`, posée au démarrage du démon si elle manque (un redémarrage n'en arme pas une seconde) et réarmée à chaque passage. Chaque passage relit aussi les PR (voir [GitHub](github.md)) ; ce qu'il rattrape entre dans l'inbox comme tout événement, avec un id déterministe, donc un événement déjà reçu par webhook n'est pas traité deux fois.
 
 ## 4. Utiliser l'agent au quotidien
 

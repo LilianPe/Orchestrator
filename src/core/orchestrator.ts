@@ -24,7 +24,7 @@ import type { EventBus } from './bus.js';
 import type { Clock } from './clock.js';
 import type { Effect } from './decision.js';
 import { NO_PLAN, planDecision } from './decision-plan.js';
-import { blockedLabelChange, HUMAN_EVENTS, mayCheck, refusesDevWork, sensitivePathsAtLaunch, taintedKnowledge } from './engine.js';
+import { blockedLabelChange, HUMAN_EVENTS, mayCheck, RECONCILE_TICKET, refusesDevWork, sensitivePathsAtLaunch, taintedKnowledge } from './engine.js';
 import { attemptLabels, packFingerprints } from './attempt-labels.js';
 import { pickupFailures } from './pickup.js';
 import { buildPrompt, formatFeedback, formatVerifyFailures } from './prompt.js';
@@ -62,6 +62,8 @@ export interface OrchestratorDeps {
   scheduler: Scheduler;
   tracker: Tracker;
   forge: Forge;
+  /** One reconciliation of a project (ORC-185): Linear and GitHub compared to the factory's state, into the inbox. */
+  reconcile?: (project: ProjectRuntime) => Promise<void>;
   runner: Runner;
   workspaces: WorkspaceManager;
   verify: Verifier;
@@ -675,6 +677,10 @@ export class Orchestrator {
       }
       return;
     }
+    if (c.kind === 'reconcile') {
+      await this.d.reconcile?.(project);
+      return;
+    }
     if (!ticketId) return;
     const t = await this.ticket(project.id, ticketId);
     switch (c.kind) {
@@ -765,6 +771,20 @@ export class Orchestrator {
     for (const l of add) await this.d.store.putEcho(labelEchoKey(ticketId, l, 'added'), this.d.clock.now() + ECHO_MS);
     for (const l of remove) await this.d.store.putEcho(labelEchoKey(ticketId, l, 'removed'), this.d.clock.now() + ECHO_MS);
     await this.d.tracker.setLabels(ticketId, add, remove);
+  }
+
+  /**
+   * Plans each project's reconciliation in the store (ORC-185), due now, unless a timer already plans it (a
+   * restart): its firings then arm the next ones, every `RECONCILE_MS`.
+   */
+  async armReconciliation(): Promise<void> {
+    const key = `${RECONCILE_TICKET}:reconcile`;
+    const planned = new Set((await this.d.store.dueTimers(Number.MAX_SAFE_INTEGER)).map((t) => `${t.projectId}/${t.key}`));
+    for (const p of this.d.projects) {
+      if (planned.has(`${p.id}/${key}`)) continue;
+      await this.d.store.putTimer({ key, projectId: p.id, ticketId: RECONCILE_TICKET, kind: 'reconcile', payload: {}, fireAt: this.d.clock.now() });
+    }
+    this.wake();
   }
 
   private async move(project: ProjectRuntime, t: TicketState, to: LogicalState): Promise<void> {

@@ -126,6 +126,8 @@ export interface TimerPayloads {
   'clarify.remind': { linearSessionId?: string };
   'clarify.expire': { linearSessionId?: string };
   'usage.reset': { account?: string };
+  /** The project's reconciliation (ORC-185), every 5 minutes, on its own pseudo-ticket (`RECONCILE_TICKET`). */
+  reconcile: Record<string, never>;
 }
 
 export type TimerKind = keyof TimerPayloads;

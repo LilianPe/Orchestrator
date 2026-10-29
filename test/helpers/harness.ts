@@ -14,7 +14,7 @@ import { loadWorkflow } from '../../src/config/load-workflow.js';
 import type { Workflow } from '../../src/config/workflow-schema.js';
 import { EventBus } from '../../src/core/bus.js';
 import { FakeClock } from '../../src/core/clock.js';
-import { Orchestrator } from '../../src/core/orchestrator.js';
+import { Orchestrator, type ProjectRuntime } from '../../src/core/orchestrator.js';
 import { Scheduler } from '../../src/core/scheduler.js';
 import { TimerService } from '../../src/runtime/timers.js';
 import type { EventPayloads, EventType, FactoryEvent, Taint } from '../../src/core/types.js';
@@ -163,6 +163,8 @@ export function createHarness(
     faults?: Faults;
     /** The simulated clock, for a process that must go on from a time another one reached (the chaos daemon). */
     clock?: FakeClock;
+    /** One reconciliation of a project (ORC-185), run by the `reconcile` effect of its timer. */
+    reconcile?: (project: ProjectRuntime) => Promise<void>;
   } = {},
 ) {
   if (opts.projectYaml !== undefined && opts.preset) throw new Error('createHarness: pass projectYaml or preset, not both');
@@ -215,6 +217,7 @@ export function createHarness(
     processRetry: opts.processRetry,
     effectRetry: opts.effectRetry ?? { attempts: 1, baseMs: 1, capMs: 1 },
     // Each life resolves roles through its own adapters and keeps its own cache, as a process does.
+    reconcile: opts.reconcile,
     roles: authz && new CachedRoleResolver({ projects: (id) => (id === 'p' ? authz : undefined), team: gate(tracker), repo: outside.forge, now: () => clock.now() }),
   });
   let orch = build(life);
