@@ -1,6 +1,5 @@
-import { createHash } from 'node:crypto';
 import type { NetworkLevel } from '../adapters/sandbox/types.js';
-import { canonical } from '../runtime/workflow-version.js';
+import { hashCanonical } from '../runtime/workflow-version.js';
 
 /** A preset (ORC-187): typed steps chained by `next`, every way back bounded by a counter. */
 export interface Preset {
@@ -11,7 +10,10 @@ export interface Preset {
   counters: Record<string, { limit: number }>;
   /** Same command, same failure, unchanged diff: past `limit` occurrences the run is Blocked with this cause. */
   sameFailure: { limit: number; cause: 'boucle' };
-  /** Where a red CI goes from any step, the merge gate included: it never restarts `fix` outside this counter. */
+  /**
+   * Where a red CI goes, from any step while the PR is open (the merge gate included): it is the failure of
+   * a push, and it never restarts `fix` outside this counter.
+   */
   redCi: FailureEdge;
 }
 
@@ -23,6 +25,8 @@ export interface FailureEdge {
 export type Effort = 'low' | 'medium' | 'high';
 /** What sent the run to `fix`, which picks its skill. */
 export type FixCause = 'ci' | 'review' | 'human';
+/** What an agent step writes: only `code` must wait for the frozen tests. Required, so that omitting it never passes. */
+export type Writes = 'nothing' | 'spec' | 'tests' | 'code';
 
 interface BaseStep {
   id: string;
@@ -41,7 +45,7 @@ interface AgentFields {
 }
 
 export type Step =
-  | (BaseStep & AgentFields & { type: 'agent_step'; skill?: string; writesCode?: boolean; optional?: boolean })
+  | (BaseStep & AgentFields & { type: 'agent_step'; writes: Writes; skill?: string; optional?: boolean })
   | (BaseStep & AgentFields & { type: 'fix'; skills: Record<FixCause, string> })
   | (BaseStep & AgentFields & { type: 'review'; skill: string; readOnly: boolean })
   | (BaseStep & { type: 'verify'; mode: 'red' | 'freeze' | 'full'; network: NetworkLevel })
@@ -97,6 +101,7 @@ export function compilePreset(preset: Preset, options: CompileOptions = {}): Com
       if (!s.readOnly) violations.push(`${where}: a review step must be read-only`);
       if (NETWORK_RANK[s.network] > NETWORK_RANK['claude-api']) violations.push(`${where}: a review step runs with network claude-api at most`);
     }
+    if (s.type === 'agent_step' && !s.writes) violations.push(`${where}: an agent step must declare what it writes`);
     if ((s.type === 'agent_step' || s.type === 'fix' || s.type === 'review') && !isPositiveInt(s.maxTurns)) {
       violations.push(`${where}: maxTurns must be a positive integer`);
     }
@@ -107,7 +112,7 @@ export function compilePreset(preset: Preset, options: CompileOptions = {}): Com
   if (cycle) violations.push(`unbounded cycle through ${cycle.join(' → ')}`);
 
   // Tests frozen before the build: no step that writes code is reachable while skipping every freeze.
-  const writers = preset.steps.filter((s) => s.type === 'fix' || (s.type === 'agent_step' && s.writesCode));
+  const writers = preset.steps.filter((s) => s.type === 'fix' || (s.type === 'agent_step' && s.writes === 'code'));
   const unfrozen = reachable(preset, byId, [preset.entry], (s) => s.type === 'verify' && s.mode === 'freeze');
   for (const s of writers) if (unfrozen.has(s.id)) violations.push(`step ${s.id}: reachable without freezing the tests first`);
 
@@ -118,11 +123,11 @@ export function compilePreset(preset: Preset, options: CompileOptions = {}): Com
   }
 
   if (violations.length > 0) throw new PresetError(violations);
-  return { preset, hash: createHash('sha256').update(canonical(preset)).digest('hex') };
+  return { preset, hash: hashCanonical(preset) };
 
   function checkEdge(where: string, edge: FailureEdge) {
     if (!byId.has(edge.goto)) violations.push(`${where}: goto ${edge.goto} is not a step`);
-    if (!preset.counters[edge.counter]) violations.push(`${where}: counter ${edge.counter} is not declared`);
+    if (!Object.hasOwn(preset.counters, edge.counter)) violations.push(`${where}: counter ${edge.counter} is not declared`);
   }
 }
 
@@ -133,8 +138,8 @@ function isPositiveInt(n: number): boolean {
 function edges(s: Step, preset: Preset): string[] {
   const out = s.next === null ? [] : [s.next];
   if (s.onFailure) out.push(s.onFailure.goto);
-  // A CI exists once a PR does: on publication and at the merge gate.
-  if (s.type === 'publish' || (s.type === 'human_gate' && s.gate === 'merge')) out.push(preset.redCi.goto);
+  // A red CI fails a push, and reaches the merge gate while the PR waits there; a merged PR has no way back.
+  if ((s.type === 'publish' && s.mode === 'push') || (s.type === 'human_gate' && s.gate === 'merge')) out.push(preset.redCi.goto);
   return out;
 }
 

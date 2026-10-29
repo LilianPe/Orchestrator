@@ -64,7 +64,7 @@ describe('factory/default', () => {
 
   it('counts the AI review rounds and a red CI on one counter', () => {
     expect(step(factoryDefault, 'review').onFailure).toEqual({ goto: 'fix', counter: 'review_ci' });
-    expect(step(factoryDefault, 'publish').onFailure).toEqual({ goto: 'fix', counter: 'review_ci' });
+    expect(step(factoryDefault, 'publish').onFailure).toBeUndefined();
     expect(factoryDefault.redCi).toEqual({ goto: 'fix', counter: 'review_ci' });
     expect(step(factoryDefault, 'human_review').onFailure).toEqual({ goto: 'fix', counter: 'human_review' });
   });
@@ -165,6 +165,24 @@ describe('compilePreset', () => {
     const p = clone();
     (step(p, 'build') as { maxTurns: number }).maxTurns = 0;
     expect(violations(p)).toContain('step build: maxTurns must be a positive integer');
+  });
+
+  it('refuses a counter name inherited from Object', () => {
+    const p = clone();
+    step(p, 'verify').onFailure = { goto: 'build', counter: 'toString' };
+    expect(violations(p)).toContain('step verify: counter toString is not declared');
+  });
+
+  it('makes every agent step say what it writes', () => {
+    const p = clone();
+    delete (step(p, 'build') as { writes?: string }).writes;
+    expect(violations(p)).toContain('step build: an agent step must declare what it writes');
+  });
+
+  it('refuses a step writing code before the tests are frozen', () => {
+    const p = clone();
+    (step(p, 'tests') as { writes: string }).writes = 'code';
+    expect(violations(p)).toContain('step tests: reachable without freezing the tests first');
   });
 
   it('refuses a link to an unknown step', () => {

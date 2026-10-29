@@ -14,7 +14,7 @@ intake → clarify (si le ticket est flou) → spec_draft → spec_check → spe
 
 Après publication, une seule étape `fix` sert toutes les boucles : `fix → verify_fix → publish → review IA → human_review`. Son skill dépend de la cause : `factory:fix-ci` pour une CI rouge, `factory:feedback` pour une review IA ou des retours humains.
 
-Chaque étape a un type : `spec_check`, `agent_step`, `verify` (modes `red`, `freeze`, `full`), `review`, `fix`, `human_gate` (porte `spec` ou `merge`), `publish` (modes `push`, `merge`). Une étape a une suite en cas de succès (`next`) et, si elle peut échouer, un retour arrière (`onFailure`) qui consomme un compteur.
+Chaque étape a un type : `spec_check`, `agent_step`, `verify` (modes `red`, `freeze`, `full`), `review`, `fix`, `human_gate` (porte `spec` ou `merge`), `publish` (modes `push`, `merge`). Une étape a une suite en cas de succès (`next`) et, si elle peut échouer, un retour arrière (`onFailure`) qui consomme un compteur. Toute étape `agent_step` déclare ce qu'elle écrit (`writes` : `nothing`, `spec`, `tests` ou `code`) : un oubli fait échouer la compilation.
 
 ## Bornes
 
@@ -28,7 +28,9 @@ Chaque étape a un type : `spec_check`, `agent_step`, `verify` (modes `red`, `fr
 | Retours humains → `fix` | `human_review` | 3, distincts des tours IA | Bloqué |
 | Même commande, même échec, diff inchangé | `sameFailure` | 3 | Bloqué, cause « boucle » |
 
-Une CI rouge, y compris pendant la porte de merge, part vers `fix` sur le compteur `review_ci` (`redCi`) : aucune réaction ne relance `fix` hors de ce compteur.
+Une CI rouge est l'échec d'un push : tant que la PR est ouverte, y compris pendant la porte de merge, elle part vers `fix` sur le compteur `review_ci` (`redCi`, seule source de cette règle). Aucune réaction ne relance `fix` hors de ce compteur. Une PR mergée n'a plus de retour arrière.
+
+`verify` et `verify_fix` partagent le compteur `verify`. Le moteur actuel remet ce compteur à zéro quand une vérification passe : les 3 retours comptent des échecs consécutifs. La PR B d'ORC-187 tranchera si ce comportement reste.
 
 ## Modèles, effort, tours, réseau
 
@@ -51,7 +53,7 @@ Le niveau de réseau se choisit par dépôt (Limité par défaut) ; une étape p
 `compilePreset(preset, { repoNetwork })` vérifie les invariants du socle et renvoie le hash du préréglage, ou lève une `PresetError` qui liste toutes les violations :
 
 - **cycles bornés** : les liens `next` seuls ne forment aucun cycle, et chaque retour arrière nomme un compteur déclaré, de limite entière positive ;
-- **gel des tests avant le build** : aucune étape qui écrit du code (`build`, `fix`) n'est atteignable sans passer par un `verify` en mode `freeze` ;
+- **gel des tests avant le build** : aucune étape qui écrit du code (`fix`, ou `agent_step` avec `writes: code`) n'est atteignable sans passer par un `verify` en mode `freeze` ;
 - **porte de merge** : depuis du code écrit, un `publish` en mode `merge` n'est atteignable qu'à travers une porte humaine `merge` ;
 - **relecteur en lecture seule** : toute étape `review` est en lecture seule, réseau API Claude au plus ;
 - **contrôles hors réseau** : toute étape `verify` tourne sans réseau ;
