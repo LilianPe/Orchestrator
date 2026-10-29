@@ -33,21 +33,22 @@ Chaque garantie d'erreur ou d'effet d'une fiche a son cas. Pour une panne, le su
 
 ## Contrôles négatifs
 
-Un cas qui passe contre tous les sujets ne prouve rien s'il passerait aussi contre un sujet qui viole sa garantie. `test/contracts/negative-controls.test.ts` lance chaque cas d'erreur des suites, les cas d'effet ajoutés par ORC-265 et « seulement eux » de `listDelegated`, contre des sujets qui violent chacun une garantie exprès : le cas doit y échouer sur une assertion. Ce qu'ils couvrent, par port :
+Un cas qui passe contre tous les sujets ne prouve rien s'il passerait aussi contre un sujet qui viole sa garantie. `test/contracts/negative-controls.test.ts` lance chaque cas d'erreur des suites, chaque cas de rejeu, d'idempotence, d'indépendance et d'arrêt, les effets des écritures du Tracker et « seulement eux » de `listDelegated`, contre des sujets qui violent chacun une garantie exprès : le cas doit y échouer sur une assertion. Ce qu'ils couvrent, par port :
 
 | Port | Cas sous contrôle |
 |---|---|
-| AgentRuntime | run en échec, run qui ne peut pas démarrer, plafonds de durée et de tours |
+| AgentRuntime | run en échec, run qui ne peut pas démarrer, plafonds de durée et de tours, `stop` (pendant le run, rejoué, après la fin), runs indépendants |
 | CheckRunner | commande en échec (code, sortie, ordre), délai dépassé, commande qui ne démarre pas, rejeu |
 | Forge | branche sans PR, forge injoignable, checks illisibles |
-| Tracker | ticket inconnu en lecture et en écriture, statut absent de la team, effets des écritures, `ensureSession`, `listDelegated` |
-| SandboxProvider | `destroy` d'un id inconnu ou déjà détruit |
+| Tracker | ticket inconnu en lecture et en écriture, statut absent de la team, `moveTo` rejoué, état final de `setLabels`, effets des écritures, `ensureSession`, `listDelegated` |
+| SandboxProvider | `destroy` d'un id inconnu ou déjà détruit, `create` rejoué, une sandbox par run, une nouvelle après `destroy` |
+| Publisher | republier une branche, une PR par branche, une nouvelle PR après merge ou fermeture |
 
-Les sujets fautifs de chaque cas sont nommés par les titres de `negative-controls.test.ts`.
+Les sujets fautifs de chaque cas sont nommés par les titres de `negative-controls.test.ts`. Les cas du chemin nominal n'ont pas de contrôle : un run qui réussit, une commande qui passe, un premier `publish`, un premier `create` et son niveau de réseau, les lectures nominales du Tracker et de la Forge (`getIssue`, `search`, `findPr` qui trouve la PR, instantanés).
 
-Un cas d'erreur qui attend une réponse du port (un résultat, un `undefined`, un `destroy` sans effet) la lit par `resolved` (`test/contracts/cases.ts`) : un sujet qui rejette au lieu de répondre y échoue sur une assertion, pas sur sa propre erreur. Tout rejet y compte, un `TypeError` du sujet fautif compris, par exception à la règle du paragraphe suivant : un contrôle qui passe ainsi ne dit pas s'il a touché la garantie visée.
+Un cas qui attend une réponse du port (un résultat, un `undefined`, un `destroy` ou un rejeu sans effet) la lit par `resolved` (`test/contracts/cases.ts`) : un sujet qui rejette au lieu de répondre y échoue sur une assertion, pas sur sa propre erreur. Tout rejet y compte, un `TypeError` du sujet fautif compris, par exception à la règle du paragraphe suivant : un contrôle qui passe ainsi ne dit pas s'il a touché la garantie visée.
 
-Les suites Tracker, Forge, AgentRuntime, CheckRunner et SandboxProvider déclarent leurs cas par `describeContract` (`test/contracts/cases.ts`). Leur troisième argument, `{ violates: [noms de cas] }`, les met dans ce mode : seuls ces cas tournent, et chacun ne passe que s'il échoue sur une assertion (une autre erreur, un `TypeError` du sujet par exemple, fait échouer le contrôle, de même qu'un sujet qui n'a pas le champ dont le cas a besoin, au lieu de le sauter). Un nom qui ne désigne aucun cas, ou une liste vide, fait échouer le fichier, pour qu'un cas renommé ne laisse pas son contrôle tourner à vide. Un nouveau cas d'erreur ou d'effet arrive avec son contrôle. La suite Publisher n'a pas encore cet argument : elle n'a pas de cas d'erreur, et ses cas d'effet, antérieurs à ORC-265, n'ont pas encore de contrôle ; le premier passera par `describeContract`.
+Toutes les suites déclarent leurs cas par `describeContract` (`test/contracts/cases.ts`). Leur troisième argument, `{ violates: [noms de cas] }`, les met dans ce mode : seuls ces cas tournent, et chacun ne passe que s'il échoue sur une assertion (une autre erreur, un `TypeError` du sujet par exemple, fait échouer le contrôle, de même qu'un sujet qui n'a pas le champ dont le cas a besoin, au lieu de le sauter). Un nom qui ne désigne aucun cas, ou une liste vide, fait échouer le fichier, pour qu'un cas renommé ne laisse pas son contrôle tourner à vide. Un nouveau cas d'erreur ou d'effet arrive avec son contrôle.
 
 ## Écarts connus
 

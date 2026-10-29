@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { expect } from 'vitest';
 import type { PublishRequest, Publisher } from '../../src/adapters/publisher/types.js';
-import { subjectWith } from './cases.js';
+import { describeContract, resolved, subjectWith, type ContractOptions } from './cases.js';
 
 /** What the implementation under test arranged for the suite. Docs: docs/ports/publisher.md. */
 export interface PublisherSubject {
@@ -11,8 +11,8 @@ export interface PublisherSubject {
   end?: (branch: string, prNumber: number) => Promise<void>;
 }
 
-export function describePublisherContract(name: string, make: () => PublisherSubject | Promise<PublisherSubject>): void {
-  describe(`Publisher contract: ${name}`, () => {
+export function describePublisherContract(name: string, make: () => PublisherSubject | Promise<PublisherSubject>, options?: ContractOptions): void {
+  describeContract(`Publisher contract: ${name}`, options, (it) => {
     it('publish returns the PR of the branch and the sha it pushed', async () => {
       const s = await make();
       const p = await s.publisher.publish(s.request);
@@ -24,10 +24,10 @@ export function describePublisherContract(name: string, make: () => PublisherSub
     it('republishing a branch updates its PR instead of opening a second one', async () => {
       const s = await make();
       const first = await s.publisher.publish(s.request);
-      const replay = await s.publisher.publish(s.request);
+      const replay = await resolved(s.publisher.publish(s.request));
       const sha = `${s.request.sha}-next`;
       expect(replay).toEqual(first);
-      expect(await s.publisher.publish({ ...s.request, sha })).toEqual({ ...first, sha });
+      expect(await resolved(s.publisher.publish({ ...s.request, sha }))).toEqual({ ...first, sha });
     });
 
     it('each branch gets its own PR', async () => {
@@ -44,7 +44,7 @@ export function describePublisherContract(name: string, make: () => PublisherSub
       const next = { ...s.request, sha: `${s.request.sha}-next` };
       const second = await s.publisher.publish(next);
       expect(second.prNumber).not.toBe(first.prNumber);
-      expect(await s.publisher.publish(next)).toEqual(second);
+      expect(await resolved(s.publisher.publish(next))).toEqual(second);
     });
   });
 }

@@ -9,7 +9,10 @@ import type { Forge } from '../../src/adapters/forge/types.js';
 import { Channel } from '../../src/adapters/runner/channel.js';
 import { FakeRunner, type FakeScript } from '../../src/adapters/runner/fake.js';
 import type { RunHandle, RunRequest, RunResult, RunStreamEvent } from '../../src/adapters/runner/types.js';
+import { FakePublisher } from '../../src/adapters/publisher/fake.js';
+import type { Publication, Publisher } from '../../src/adapters/publisher/types.js';
 import { FakeSandboxProvider } from '../../src/adapters/sandbox/fake.js';
+import type { Sandbox, SandboxRequest } from '../../src/adapters/sandbox/types.js';
 import { FakeTracker } from '../../src/adapters/tracker/fake.js';
 import type { TrackerIssue } from '../../src/adapters/tracker/types.js';
 import { FakeClock } from '../../src/core/clock.js';
@@ -19,6 +22,7 @@ import { describeAgentRuntimeContract, type AgentRuntimeSubject, type AgentScrip
 import { asNegativeControl, contractCases } from './cases.js';
 import { describeCheckRunnerContract, type CheckRunnerSubject } from './check-runner.contract.js';
 import { describeForgeContract, type ForgeSubject } from './forge.contract.js';
+import { describePublisherContract, type PublisherSubject } from './publisher.contract.js';
 import { describeSandboxContract, type SandboxSubject } from './sandbox.contract.js';
 import { describeTrackerContract, type TrackerSubject } from './tracker.contract.js';
 
@@ -125,6 +129,100 @@ describeAgentRuntimeContract(
   'a runtime whose done rejects when a run hits its cap',
   runtimeThat(ending('limit', () => Promise.reject(new Error('max turns reached')))),
   { violates: [DURATION_CAP, TURN_CAP] },
+);
+
+const STOP = 'stop ends a running run in stopped and closes its stream; stopping again changes nothing';
+const STOP_AFTER_END = 'stop after the end keeps the outcome';
+const INDEPENDENT = 'runs are independent: stopping one leaves the other running';
+
+describeAgentRuntimeContract(
+  'a runtime whose stop ends the run in failure',
+  runtimeThat(ending('stopped', (r) => ({ ...r, outcome: 'failure' }))),
+  { violates: [STOP, INDEPENDENT] },
+);
+
+describeAgentRuntimeContract(
+  'a runtime whose stop does nothing',
+  runtimeThat((inner, req) => ({ ...inner.start(req), stop: () => {} })),
+  { violates: [STOP, INDEPENDENT] },
+);
+
+describeAgentRuntimeContract(
+  'a runtime whose stream stays open after stop',
+  runtimeThat((inner, req) => ({ ...inner.start(req), events: new Channel<RunStreamEvent>() })),
+  { violates: [STOP] },
+);
+
+describeAgentRuntimeContract(
+  'a runtime whose second stop throws',
+  runtimeThat((inner, req) => {
+    const h = inner.start(req);
+    let stopped = false;
+    return {
+      ...h,
+      stop: () => {
+        if (stopped) throw new Error('run already stopped');
+        stopped = true;
+        h.stop();
+      },
+    };
+  }),
+  { violates: [STOP] },
+);
+
+/** A handle that knows when its run has ended, for the subjects that misbehave on a stop after the end. */
+const onceEnded = (inner: FakeRunner, req: RunRequest, handle: (h: RunHandle, ended: () => boolean) => RunHandle): RunHandle => {
+  const h = inner.start(req);
+  let ended = false;
+  void h.done.then(() => (ended = true));
+  return handle(h, () => ended);
+};
+
+describeAgentRuntimeContract(
+  'a runtime whose stop throws once the run has ended',
+  runtimeThat((inner, req) =>
+    onceEnded(inner, req, (h, ended) => ({
+      ...h,
+      stop: () => {
+        if (ended()) throw new Error('run already finished');
+        h.stop();
+      },
+    })),
+  ),
+  { violates: [STOP_AFTER_END] },
+);
+
+describeAgentRuntimeContract(
+  'a runtime that rewrites the outcome of an ended run it is asked to stop',
+  runtimeThat((inner, req) =>
+    onceEnded(inner, req, (h, ended) => {
+      let stoppedLate = false;
+      return {
+        events: h.events,
+        get done() {
+          return stoppedLate ? h.done.then((r) => ({ ...r, outcome: 'stopped' as const })) : h.done;
+        },
+        stop: () => {
+          if (ended()) stoppedLate = true;
+          h.stop();
+        },
+      };
+    }),
+  ),
+  { violates: [STOP_AFTER_END] },
+);
+
+describeAgentRuntimeContract(
+  'a runtime whose stop stops every run',
+  () => {
+    const handles: RunHandle[] = [];
+    return runtimeThat((inner, req) => {
+      const h = inner.start(req);
+      handles.push(h);
+      return { ...h, stop: () => handles.forEach((x) => x.stop()) };
+    })();
+  },
+  { violates: [INDEPENDENT] },
 );
 
 const UNSTARTABLE = 'a command that cannot start fails without an exit code, and run does not reject';
@@ -489,6 +587,87 @@ describeTrackerContract(
   { violates: [DELEGATED] },
 );
 
+const MOVE = 'moveTo sets the state and replaying it changes nothing';
+const LABELS = 'setLabels writes the final set: replayable, unknown labels created, absent removals ignored';
+
+describeTrackerContract(
+  'a tracker whose moveTo writes nothing',
+  trackerThat(
+    class extends FakeTracker {
+      override async moveTo(identifier: string): Promise<void> {
+        await this.getIssue(identifier);
+      }
+    },
+  ),
+  { violates: [MOVE] },
+);
+
+describeTrackerContract(
+  'a tracker whose replayed moveTo rejects',
+  trackerThat(
+    class extends FakeTracker {
+      override async moveTo(identifier: string, stateName: string): Promise<void> {
+        if ((await this.getIssue(identifier)).stateName === stateName) throw new Error(`${identifier} is already in ${stateName}`);
+        await super.moveTo(identifier, stateName);
+      }
+    },
+  ),
+  { violates: [MOVE] },
+);
+
+describeTrackerContract(
+  'a tracker whose setLabels ignores the removals',
+  trackerThat(
+    class extends FakeTracker {
+      override async setLabels(identifier: string, add: string[]): Promise<void> {
+        await super.setLabels(identifier, add, []);
+      }
+    },
+  ),
+  { violates: [LABELS] },
+);
+
+describeTrackerContract(
+  'a tracker whose setLabels rejects the removal of a label the issue does not have',
+  trackerThat(
+    class extends FakeTracker {
+      override async setLabels(identifier: string, add: string[], remove: string[]): Promise<void> {
+        const { labels } = await this.getIssue(identifier);
+        const absent = remove.find((l) => !labels.includes(l));
+        if (absent) throw new Error(`label ${absent} is not on ${identifier}`);
+        await super.setLabels(identifier, add, remove);
+      }
+    },
+  ),
+  { violates: [LABELS] },
+);
+
+describeTrackerContract(
+  'a tracker whose setLabels drops the labels the team does not have yet',
+  trackerThat(
+    class extends FakeTracker {
+      override async setLabels(identifier: string, add: string[], remove: string[]): Promise<void> {
+        const known = new Set([...this.issues.values()].flatMap((i) => i.labels));
+        await super.setLabels(identifier, add.filter((l) => known.has(l)), remove);
+      }
+    },
+  ),
+  { violates: [LABELS] },
+);
+
+describeTrackerContract(
+  'a tracker whose replayed setLabels takes off the labels it adds again',
+  trackerThat(
+    class extends FakeTracker {
+      override async setLabels(identifier: string, add: string[], remove: string[]): Promise<void> {
+        const { labels } = await this.getIssue(identifier);
+        await super.setLabels(identifier, add.filter((l) => !labels.includes(l)), [...remove, ...add.filter((l) => labels.includes(l))]);
+      }
+    },
+  ),
+  { violates: [LABELS] },
+);
+
 const UNKNOWN_ID = 'destroy is idempotent and ignores an unknown id';
 
 function sandboxesThat(Provider: new () => FakeSandboxProvider): () => SandboxSubject {
@@ -526,6 +705,123 @@ describeSandboxContract(
     },
   ),
   { violates: [UNKNOWN_ID] },
+);
+
+const CREATE_REPLAY = 'create replayed for the same run returns its sandbox instead of a second one';
+const SANDBOX_PER_RUN = 'each run gets its own sandbox';
+const RECREATE = 'after destroy, create for the same run gives a new sandbox';
+
+describeSandboxContract(
+  'a sandbox provider whose replayed create opens a second sandbox',
+  sandboxesThat(
+    class extends FakeSandboxProvider {
+      override async create(req: SandboxRequest): Promise<Sandbox> {
+        return super.create({ ...req, runId: `${req.runId}#${this.created.length}` });
+      }
+    },
+  ),
+  { violates: [CREATE_REPLAY] },
+);
+
+describeSandboxContract(
+  'a sandbox provider that keeps one sandbox per ticket',
+  sandboxesThat(
+    class extends FakeSandboxProvider {
+      override async create(req: SandboxRequest): Promise<Sandbox> {
+        return super.create({ ...req, runId: req.ticketId });
+      }
+    },
+  ),
+  { violates: [SANDBOX_PER_RUN] },
+);
+
+describeSandboxContract(
+  'a sandbox provider that names a sandbox after its run',
+  sandboxesThat(
+    class extends FakeSandboxProvider {
+      private named = new Map<string, Sandbox>();
+
+      override async create(req: SandboxRequest): Promise<Sandbox> {
+        const sandbox = this.named.get(req.runId) ?? { id: `factory-${req.runId}`, network: req.network };
+        this.named.set(req.runId, sandbox);
+        return { ...sandbox };
+      }
+
+      override async destroy(id: string): Promise<void> {
+        for (const [runId, s] of this.named) if (s.id === id) this.named.delete(runId);
+      }
+
+      override active(): Sandbox[] {
+        return [...this.named.values()].map((s) => ({ ...s }));
+      }
+    },
+  ),
+  { violates: [RECREATE] },
+);
+
+const REPUBLISH = 'republishing a branch updates its PR instead of opening a second one';
+const PR_PER_BRANCH = 'each branch gets its own PR';
+const REOPEN = 'once the branch PR is merged or closed, publishing opens a new one';
+
+function publishersThat(publisher: (forge: FakeForge) => Publisher): () => PublisherSubject {
+  return () => {
+    const forge = new FakeForge();
+    return {
+      publisher: publisher(forge),
+      request: { projectId: 'p', repoPath: '/repo', ticketId: 'REL-1', branch: 'factory/rel-1-x', sha: 'aaa', title: 'feat: x', body: 'b' },
+      end: async (branch, prNumber) =>
+        forge.setPr(branch, { number: prNumber, url: `https://github.test/pr/${prNumber}`, state: 'MERGED', checks: 'pass', failedChecks: [] }),
+    };
+  };
+}
+
+describePublisherContract(
+  'a publisher that opens a new PR at each publish',
+  publishersThat(() => {
+    let opened = 0;
+    return { publish: async (req) => ({ prNumber: ++opened, url: `https://github.test/pr/${opened}`, sha: req.sha }) };
+  }),
+  { violates: [REPUBLISH, REOPEN] },
+);
+
+describePublisherContract(
+  'a publisher whose republish answers the first sha it pushed',
+  publishersThat((forge) => {
+    const inner = new FakePublisher(forge);
+    const first = new Map<string, string>();
+    return {
+      publish: async (req) => {
+        const p = await inner.publish(req);
+        if (!first.has(req.branch)) first.set(req.branch, p.sha);
+        return { ...p, sha: first.get(req.branch)! };
+      },
+    };
+  }),
+  { violates: [REPUBLISH] },
+);
+
+describePublisherContract(
+  'a publisher that keeps one PR per ticket',
+  publishersThat((forge) => {
+    const inner = new FakePublisher(forge);
+    return { publish: (req) => inner.publish({ ...req, branch: req.ticketId }) };
+  }),
+  { violates: [PR_PER_BRANCH] },
+);
+
+describePublisherContract(
+  'a publisher that keeps answering a merged PR',
+  publishersThat(() => {
+    const prs = new Map<string, Publication>();
+    return {
+      publish: async (req) => {
+        const pr = prs.get(req.branch) ?? { prNumber: prs.size + 1, url: `https://github.test/pr/${prs.size + 1}`, sha: req.sha };
+        prs.set(req.branch, pr);
+        return { ...pr, sha: req.sha };
+      },
+    };
+  }),
+  { violates: [REOPEN] },
 );
 
 describe('contractCases', () => {

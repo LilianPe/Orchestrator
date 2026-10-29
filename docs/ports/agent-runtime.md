@@ -29,6 +29,8 @@ Un `RunHandle` appartient à un seul `start`, donc à un seul `runId` : la suite
 
 `AgentRuntimeSubject` : le runtime, en option `elapse(ms)`, qui avance son horloge (absent, la suite attend en temps réel ; présent, un run plafonné doit finir en `limit` dans les 100 ms qui suivent), et `script(nom)`, qui prépare le prochain run à se comporter comme `success`, `failure`, `hang` (tourne jusqu'à l'arrêt ou au plafond), `chatty` (enchaîne au moins trois tours) ou `unlaunchable` (ne peut pas démarrer : `ClaudeCodeRunner` le lance dans un dossier absent), et rend ce que sa requête doit porter pour ça (le faux `claude` lit son script dans l'environnement).
 
+La suite attend l'issue d'un run qui ne peut pas démarrer, ou d'un run arrêté par `stop`, au plus 1,5 s, et la fermeture de son flux autant. Un runtime qui laisse un délai de grâce avant de tuer son processus le règle plus court pour la suite : `ClaudeCodeRunner` attend `killGraceMs` (10 s par défaut) et sa suite le met à 500 ms.
+
 ## Hypothèse sur le point ouvert (ORC-155)
 
 ORC-155 décidera si ce port devient une abstraction du harness (Claude Code ou un autre). La suite ne tranche pas : elle traite le runtime en boîte noire, et ne regarde ni les champs propres à Claude de `RunRequest` (`claudeSessionId`, `pluginDir`, `settingsPath`) ni les arguments de la CLI (testés à part, `buildClaudeArgs`). Un second runtime la passe tant que `start`, `RunHandle` et les quatre issues gardent leur forme ; si ORC-155 change cette forme, la suite change avec le port.
