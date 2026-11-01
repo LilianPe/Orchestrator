@@ -94,6 +94,8 @@ Toutes les 5 minutes avec la réconciliation (ORC-185), et toutes les 30 s quand
 - `GET /repos/{owner}/{repo}/pulls?head={owner}:{branche}&state=all` : la PR de la branche (ouverte, mergée, fermée) ;
 - si elle est ouverte, `GET /repos/{owner}/{repo}/commits/{sha}/check-runs` et `GET /repos/{owner}/{repo}/commits/{sha}/status` : état agrégé de la CI (`fail` si un check échoue ou est annulé, `pending` si un check tourne, `pass` sinon, `none` sans check).
 
+Un **push humain** dont le webhook s'est perdu n'est pas rattrapé : le relevé lit la tête de la PR, mais l'usine ne retient pas la tête qu'elle a poussée elle-même, et tant que les agents poussent avec `GH_TOKEN` (ORC-125) leurs pushes ne se distinguent pas de ceux d'un humain (suite d'ORC-185).
+
 Au moment d'un run `dev-feedback`, les fils de review **non résolus** sont lus en GraphQL (`reviewThreads`) et transformés en retours pour l'agent.
 
 Événements produits (voir [`workflow.md`](workflow.md#3-les-règles-on)) :
