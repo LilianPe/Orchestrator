@@ -293,6 +293,15 @@ function repeatedFailure(ticket: TicketState | undefined, payload: EventPayloads
   return { signature, count: previous?.signature === signature ? previous.count + 1 : 1 };
 }
 
+/**
+ * The pseudo-ticket that carries a project's reconciliation timer (ORC-185): timers live per ticket, keyed by the
+ * ticket alone, so each project has its own (`_reconcile.<project>`) and their keys never collide.
+ */
+export const reconcileTicket = (projectId: string): string => `_reconcile.${projectId}`;
+export const isReconcileTicket = (ticketId: string | undefined): boolean => !!ticketId?.startsWith('_reconcile.');
+/** The reconciliation's cadence (ORC-185): a safety net behind the webhooks. */
+export const RECONCILE_MS = 5 * 60_000;
+
 const FENCED = 'fenced: ';
 
 export function isFenced(d: Decision): boolean {
@@ -472,6 +481,12 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
     }
     case 'timer.fired': {
       const fired = event.payload;
+      if (fired.kind === 'reconcile') {
+        // The project's reconciliation (ORC-185): it runs, and the next one is armed, so the cadence lives in the store.
+        out.effects.push({ kind: 'reconcile' });
+        out.timers.push({ kind: 'reconcile', payload: {}, slot: 'reconcile', ms: RECONCILE_MS });
+        return out;
+      }
       if (fired.kind !== 'debounce') {
         // Armed by no rule yet: the clarify reminder and block are ORC-210's, the usage-limit wait ORC-215's.
         out.trace.push(`timer.fired ${fired.kind}: no rule decides it yet`);

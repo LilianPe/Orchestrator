@@ -21,8 +21,10 @@ export class PrPoller {
     },
   ) {}
 
-  async pollOnce(): Promise<void> {
+  /** One pass, over every project's tickets, or `projectId`'s only (its reconciliation, ORC-185). */
+  async pollOnce(projectId?: string): Promise<void> {
     for (const t of await this.d.store.listTickets()) {
+      if (projectId !== undefined && t.projectId !== projectId) continue;
       try {
         await this.pollTicket(t);
       } catch (err) {

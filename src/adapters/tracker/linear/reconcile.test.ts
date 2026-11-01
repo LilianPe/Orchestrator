@@ -56,7 +56,7 @@ describe('reconcileOnce', () => {
 });
 
 describe('Reconciler', () => {
-  it('stop() resolves once the pass under way has finished, and starts none after', async () => {
+  it('stop() resolves once the pass under way has finished; a pass asked meanwhile joins it', async () => {
     const tracker = new FakeTracker();
     tracker.addIssue({ identifier: 'REL-1', delegateId: 'app' });
     let release!: () => void;
@@ -68,7 +68,9 @@ describe('Reconciler', () => {
       store: new SqliteStore(':memory:'), projects: [{ id: 'p', repoPath: '/r', teamKey: 'REL', workflow }],
       submit: (e) => events.push(e), clock: new FakeClock(100), log: () => {},
     });
-    reconciler.start(5);
+    void reconciler.once();
+    // A second pass asked while one runs joins it: one pass, not two.
+    void reconciler.once();
     await new Promise((r) => setTimeout(r, 30));
     let stopped = false;
     const stop = reconciler.stop().then(() => (stopped = true));

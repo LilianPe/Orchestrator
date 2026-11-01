@@ -24,7 +24,7 @@ import type { EventBus } from './bus.js';
 import type { Clock } from './clock.js';
 import type { Effect } from './decision.js';
 import { NO_PLAN, planDecision } from './decision-plan.js';
-import { blockedLabelChange, HUMAN_EVENTS, mayCheck, refusesDevWork, sensitivePathsAtLaunch, taintedKnowledge } from './engine.js';
+import { blockedLabelChange, HUMAN_EVENTS, mayCheck, RECONCILE_MS, reconcileTicket, refusesDevWork, sensitivePathsAtLaunch, taintedKnowledge } from './engine.js';
 import { attemptLabels, packFingerprints } from './attempt-labels.js';
 import { pickupFailures } from './pickup.js';
 import { buildPrompt, formatFeedback, formatVerifyFailures } from './prompt.js';
@@ -62,6 +62,8 @@ export interface OrchestratorDeps {
   scheduler: Scheduler;
   tracker: Tracker;
   forge: Forge;
+  /** One reconciliation of a project (ORC-185): Linear and GitHub compared to the factory's state, into the inbox. */
+  reconcile?: (project: ProjectRuntime) => Promise<void>;
   runner: Runner;
   workspaces: WorkspaceManager;
   verify: Verifier;
@@ -675,6 +677,11 @@ export class Orchestrator {
       }
       return;
     }
+    if (c.kind === 'reconcile') {
+      // Never fails: a dead effect would disarm the next timer its decision armed, and stop the 5-minute chain.
+      await this.d.reconcile?.(project).catch((err: Error) => this.log('warn', `reconcile ${project.id}: ${err.message}`));
+      return;
+    }
     if (!ticketId) return;
     const t = await this.ticket(project.id, ticketId);
     switch (c.kind) {
@@ -765,6 +772,22 @@ export class Orchestrator {
     for (const l of add) await this.d.store.putEcho(labelEchoKey(ticketId, l, 'added'), this.d.clock.now() + ECHO_MS);
     for (const l of remove) await this.d.store.putEcho(labelEchoKey(ticketId, l, 'removed'), this.d.clock.now() + ECHO_MS);
     await this.d.tracker.setLabels(ticketId, add, remove);
+  }
+
+  /**
+   * Plans each project's reconciliation in the store (ORC-185), in `RECONCILE_MS` (the connection to Linear passes
+   * at once), unless a timer already plans it (a restart): its firings then arm the next ones. The timer of a
+   * project gone from the configuration is deleted: it would fire for a project the factory no longer knows.
+   */
+  async armReconciliation(): Promise<void> {
+    const timers = (await this.d.store.dueTimers(Number.MAX_SAFE_INTEGER)).filter((t) => t.kind === 'reconcile');
+    for (const t of timers) if (!this.d.projects.some((p) => p.id === t.projectId)) await this.d.store.deleteTimersFor(t.projectId, t.ticketId);
+    for (const p of this.d.projects) {
+      const ticketId = reconcileTicket(p.id);
+      if (timers.some((t) => t.ticketId === ticketId)) continue;
+      await this.d.store.putTimer({ key: `${ticketId}:reconcile`, projectId: p.id, ticketId, kind: 'reconcile', payload: {}, fireAt: this.d.clock.now() + RECONCILE_MS });
+    }
+    this.wake();
   }
 
   private async move(project: ProjectRuntime, t: TicketState, to: LogicalState): Promise<void> {

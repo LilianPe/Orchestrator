@@ -2,7 +2,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { loadWorkflow } from '../config/load-workflow.js';
 import type { Decision } from './decision.js';
-import { decide, isFenced, SENSITIVE_PATHS, sensitivePathsAtLaunch, taintedKnowledge } from './engine.js';
+import { decide, isFenced, RECONCILE_MS, reconcileTicket, SENSITIVE_PATHS, sensitivePathsAtLaunch, taintedKnowledge } from './engine.js';
 import { reduce } from './reduce.js';
 import { newTicketState, type EventPayloads, type EventType, type FactoryEvent, type TicketState } from './types.js';
 
@@ -87,6 +87,14 @@ describe('decide — YAML rules of the standard pack', () => {
   it('moves human_review -> dev runs dev-feedback', () => {
     const out = decide(ticket({ logical: 'dev' }), ev('status.changed', { from: 'human_review', to: 'dev' }), workflow);
     expect(out).toEqual(decision({ effects: [{ kind: 'start_run', job: 'dev-feedback', input: 'feedback', inputText: undefined, linearSessionId: undefined }] }));
+  });
+
+  it('a reconciliation timer reconciles the project and arms the next one in 5 minutes (ORC-185)', () => {
+    const fired = { ...ev('timer.fired', { kind: 'reconcile', payload: {} }), ticketId: reconcileTicket('p') } as FactoryEvent;
+    expect(decide(undefined, fired, workflow)).toEqual(
+      decision({ effects: [{ kind: 'reconcile' }], timers: [{ kind: 'reconcile', payload: {}, slot: 'reconcile', ms: RECONCILE_MS }] }),
+    );
+    expect(RECONCILE_MS).toBe(5 * 60_000);
   });
 
   describe('statuses of the MVP (ORC-170)', () => {

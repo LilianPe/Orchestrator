@@ -15,6 +15,8 @@ export type Effect =
   | { kind: 'activity'; type: ActivityType; body: string; linearSessionId?: string; runId?: string }
   | { kind: 'post_output'; style: 'summary' | 'reply' | 'synthesis'; runId: string }
   | { kind: 'link_pr'; url: string }
+  /** Compare Linear and GitHub to the factory's state and write what a lost webhook missed to the inbox (ORC-185). */
+  | { kind: 'reconcile' }
   | { kind: 'cleanup' }
   | { kind: 'set_paused'; paused: boolean };
 
