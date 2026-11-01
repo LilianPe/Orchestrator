@@ -810,7 +810,8 @@ export class Orchestrator {
 
   /**
    * The head of the ticket's open PR as the factory shows it in Human Review (ORC-148): the only commit a Done merges.
-   * Unread (no branch, no PR, the forge down), none is recorded, and a Done sends the ticket back here to record it.
+   * Unread (no branch, no PR, the forge down), none is recorded: a Done is refused until the factory moves the
+   * ticket to Human Review again (the AI review's success).
    */
   private async headShown(project: ProjectRuntime, t: TicketState): Promise<string | undefined> {
     if (!t.branch) return undefined;
