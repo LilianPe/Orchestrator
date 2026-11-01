@@ -254,12 +254,19 @@ describe('ingest', () => {
   it('records the labels an issue webhook reads, echoes included, once its events are in the inbox (ORC-185)', async () => {
     const recorded: unknown[][] = [];
     const body = { ...fx('issue-moved-labeled'), webhookTimestamp: 2000 };
-    const c = { ...ctx(['label:REL-1:agent:reprendre']), now: () => 2000, recordLabels: async (...a: unknown[]) => void recorded.push(a) };
+    // `lost` was added by a webhook that never came: this one only adds agent:reprendre, so `lost` stays unknown.
+    const c = { ...ctx(['label:REL-1:agent:reprendre']), now: () => 2000, knownLabels: async () => ['bug'], recordLabels: async (...a: unknown[]) => void recorded.push(a) };
     const { raw, sig } = signed(body);
     const ok = createLinearIngest({ secret: () => 'sec', ctx: c, accept: async () => true, ack: async () => {}, log: () => {} });
     expect(await ok(raw, { 'linear-signature': sig })).toEqual({ status: 200 });
-    const names = body.data.labelIds.map((id: string) => c.labelNameById('REL', id));
-    expect(recorded).toEqual([['p', 'REL-1', names, Date.parse(body.data.updatedAt)]]);
+    expect(recorded).toEqual([['p', 'REL-1', ['bug', 'agent:reprendre'], Date.parse(body.data.updatedAt)]]);
+    recorded.length = 0;
+    // A lost label in the full list is not recorded: the reconciliation still reports it.
+    const withLost = { ...body, data: { ...body.data, labelIds: ['l-bug', 'l-resume', 'l-lost'] }, updatedFrom: { labelIds: ['l-bug', 'l-lost'] }, webhookTimestamp: 2000 };
+    const s2 = signed(withLost);
+    const lost = createLinearIngest({ secret: () => 'sec', ctx: { ...c, labelNameById: (_t: string, id: string) => ({ 'l-bug': 'bug', 'l-resume': 'agent:reprendre', 'l-lost': 'lost' })[id] }, accept: async () => true, ack: async () => {}, log: () => {} });
+    expect(await lost(s2.raw, { 'linear-signature': s2.sig })).toEqual({ status: 200 });
+    expect(recorded).toEqual([['p', 'REL-1', ['bug', 'agent:reprendre'], Date.parse(body.data.updatedAt)]]);
     recorded.length = 0;
     const failing = createLinearIngest({ secret: () => 'sec', ctx: c, accept: async () => Promise.reject(new Error('disk')), ack: async () => {}, log: () => {} });
     expect(await failing(raw, { 'linear-signature': sig })).toEqual({ status: 500 });

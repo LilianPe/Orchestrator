@@ -153,15 +153,26 @@ function issueIdentifier(body: any): string | undefined {
  * reconciliation compares Linear with. Nothing when one of them is not in the team's cache yet.
  */
 export async function recordIssueLabels(body: any, ctx: MapContext): Promise<void> {
-  if (body?.type !== 'Issue' || !Array.isArray(body.data?.labelIds) || !ctx.recordLabels) return;
+  if (body?.type !== 'Issue' || body.action !== 'update' || !ctx.recordLabels || !ctx.knownLabels) return;
+  // Only the webhook's own label changes: its full label list may hold one whose webhook was lost, which
+  // the reconciliation must still report (a description edit carries every label too).
+  const from = body.updatedFrom?.labelIds;
+  if (!Array.isArray(from) || !Array.isArray(body.data?.labelIds)) return;
   const identifier = issueIdentifier(body);
   if (!identifier) return;
   const teamKey = identifier.split('-')[0]!;
   const projectId = ctx.projectIdForTeam(teamKey);
-  if (!projectId) return;
-  const names = (body.data.labelIds as unknown[]).map((id) => (typeof id === 'string' ? ctx.labelNameById(teamKey, id) : undefined));
   const at = Date.parse(body.data.updatedAt);
-  if (Number.isFinite(at) && names.every((n): n is string => !!n)) await ctx.recordLabels(projectId, identifier, names, at);
+  if (!projectId || !Number.isFinite(at)) return;
+  // Never read yet: the reconciliation's first pass records them.
+  const known = await ctx.knownLabels(projectId, identifier);
+  if (!known) return;
+  const next = new Set(known);
+  for (const { label: id, change } of labelChanges(from as string[], body.data.labelIds as string[])) {
+    const name = ctx.labelNameById(teamKey, id);
+    if (name) change === 'added' ? next.add(name) : next.delete(name);
+  }
+  await ctx.recordLabels(projectId, identifier, [...next], at);
 }
 
 // Linear-Delivery is outside the HMAC: the dedup key must come from the signed body.
