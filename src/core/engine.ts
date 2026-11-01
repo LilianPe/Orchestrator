@@ -341,13 +341,20 @@ function doneMerge(out: Decision, event: FactoryEvent<'status.changed'>, state: 
  * The factory's merge refused (ORC-148). For a push since the review, the new commits go through the AI review again:
  * the ticket moves to AI Review and the job of the workflow's `to: ai_review` rule starts here, as a move by the
  * factory emits no `status.changed`; its success shows the new head in Human Review, the commit the next Done merges.
- * Any other refusal, or a workflow with no AI review, goes back to Human Review, the reviewed commit kept.
+ * Only the rule's `run` is read. Any other refusal, a blocked ticket (it waits for a human) or a workflow with no AI
+ * review goes back to Human Review, the reviewed commit kept. A refusal that arrives once a human moved the ticket on
+ * from Done (an effect replayed late) is only answered: the ticket stays where the human put it.
  */
 function mergeRefused(out: Decision, event: FactoryEvent<'pr.merge_refused'>, ticket: TicketState | undefined, workflow: Workflow): Decision {
   const refused = `Je n'ai pas mergé la PR #${event.payload.number} : ${event.payload.reason}.`;
+  if (ticket?.logical !== 'done') {
+    out.trace.push(`not merged: ${event.payload.reason}, the ticket left where it is`);
+    out.effects.push({ kind: 'comment', body: refused });
+    return out;
+  }
   const rule = (workflow.on['status.changed'] ?? []).find((r) => r.to === 'ai_review' && !r.from && r.run);
   const job = rule && workflow.states.ai_review ? workflow.jobs[rule.run!] : undefined;
-  if (!event.payload.headMoved || !job) return backToReview(out, refused);
+  if (!event.payload.headMoved || !job || ticket.blocked) return backToReview(out, refused);
   out.trace.push(`not merged: ${event.payload.reason}, back to the AI review`);
   out.effects.push({ kind: 'move', to: 'ai_review' }, { kind: 'comment', body: `${refused} Les nouveaux commits repassent par la review IA.` });
   startRun(out, event, ticket, job, { input: job.input });

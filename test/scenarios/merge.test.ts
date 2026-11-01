@@ -66,6 +66,7 @@ describe('Done by a human, merge by the factory (ORC-148)', () => {
     vi.spyOn(h.forge, 'findPr').mockResolvedValueOnce(shown);
     await h.send('status.changed', { from: 'human_review', to: 'done' }, 'REL-1', { actor: 'user-lilian' });
     expect(h.forge.merges).toEqual([]);
+    expect((await h.store.getRun(h.runner.requests.at(-1)!.runId))?.job).toBe('review');
     expect(comments(h).some((c) => /push depuis la review.*repassent par la review IA/.test(c))).toBe(true);
     expect((await h.ticket()).reviewSha).toBe('def456');
   });
