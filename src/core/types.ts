@@ -166,8 +166,11 @@ export interface EventPayloads {
   'pr.reviewed': PrPayload & { kind: 'review' | 'comment'; author: string; body: string; state?: string };
   /** The PR conflicts with its base branch, seen by the GitHub webhook (ORC-134). No reaction yet: `decide` traces it (ORC-146). */
   'pr.conflicted': PrPayload & { headSha: string; baseRef: string };
-  /** The factory's merge refused by GitHub (ORC-148): a push since the review, a PR not mergeable. `reason` is for the human. */
-  'pr.merge_refused': PrPayload & { reason: string };
+  /**
+   * The factory's merge refused (ORC-148): a push since the review, a PR not mergeable. `reason` is for the human;
+   * `headMoved`: refused for a push since the review, whose new commits go through the AI review again.
+   */
+  'pr.merge_refused': PrPayload & { reason: string; headMoved?: true };
   /**
    * A push on the project's default branch that concerns the ticket (ORC-278): only its commits that merge
    * the ticket's PR (`merges`) or revert it (`reverts`), by number. Untrusted: messages are written by

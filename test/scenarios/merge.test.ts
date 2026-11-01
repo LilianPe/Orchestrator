@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createHarness } from '../helpers/harness.js';
 
 /**
@@ -43,18 +43,31 @@ describe('Done by a human, merge by the factory (ORC-148)', () => {
     expect(lastMove(h)).toBe('Human Review');
   });
 
-  it('merges nothing after a push since the review: GitHub refuses, back to Human Review with the reason', async () => {
+  it('merges nothing after a push since the review: the new commits go through the AI review, then the next Done merges them', async () => {
     const h = await inHumanReview();
     h.forge.setPr(BRANCH, { ...PR, state: 'OPEN', headSha: 'def456', checks: 'pass', failedChecks: [] });
+    h.runner.enqueue({ events: [{ kind: 'init', sessionId: 'y' }, { kind: 'text', text: 'Rien à redire.' }] });
     await h.send('status.changed', { from: 'human_review', to: 'done' }, 'REL-1', { actor: 'user-lilian' });
     expect(h.forge.merges).toEqual([]);
-    expect(comments(h).at(-1)).toMatch(/push depuis la review/);
+    expect(comments(h).some((c) => /push depuis la review.*repassent par la review IA/.test(c))).toBe(true);
+    expect((await h.store.getRun(h.runner.requests.at(-1)!.runId))?.job).toBe('review');
+    // The review done, the factory shows the pushed head in Human Review: that commit is now the reviewed one.
     expect(lastMove(h)).toBe('Human Review');
-    // Moved back, the reviewed commit stays the one shown: the pushed head is never taken as reviewed, so a second Done
-    // is refused the same way until the factory's own work moves the ticket to Human Review again.
-    expect((await h.ticket()).reviewSha).toBe('abc123');
+    expect((await h.ticket()).reviewSha).toBe('def456');
+    await h.send('status.changed', { from: 'human_review', to: 'done' }, 'REL-1', { actor: 'user-lilian' });
+    expect(h.forge.merges).toEqual([{ number: 3, sha: 'def456' }]);
+  });
+
+  it('a push between the factory\'s reading and its merge, refused by GitHub, also goes through the AI review', async () => {
+    const h = await inHumanReview();
+    const shown = await h.forge.findPr('', BRANCH);
+    h.forge.setPr(BRANCH, { ...PR, state: 'OPEN', headSha: 'def456', checks: 'pass', failedChecks: [] });
+    // The factory still reads the reviewed head; GitHub, given that head, refuses the merge (409).
+    vi.spyOn(h.forge, 'findPr').mockResolvedValueOnce(shown);
     await h.send('status.changed', { from: 'human_review', to: 'done' }, 'REL-1', { actor: 'user-lilian' });
     expect(h.forge.merges).toEqual([]);
+    expect(comments(h).some((c) => /push depuis la review.*repassent par la review IA/.test(c))).toBe(true);
+    expect((await h.ticket()).reviewSha).toBe('def456');
   });
 
   it('refuses to merge another PR than the ticket\'s, found on its branch', async () => {
@@ -73,5 +86,14 @@ describe('Done by a human, merge by the factory (ORC-148)', () => {
     expect(h.forge.merges).toEqual([]);
     expect(comments(h).at(-1)).toMatch(/checks du commit relu ne sont pas verts \(test\)/);
     expect(lastMove(h)).toBe('Human Review');
+  });
+
+  it('writes nothing on the forge when a human cancels the ticket: its PR stays open', async () => {
+    // Two tickets may share one PR: the factory never closes nor merges a PR for a cancelled ticket.
+    const h = await inHumanReview();
+    const writes = (['ensurePr', 'mergePr', 'upsertCheckRun'] as const).map((m) => vi.spyOn(h.forge, m));
+    await h.send('status.changed', { from: 'human_review', to: null, cancelled: true }, 'REL-1', { actor: 'user-lilian' });
+    for (const w of writes) expect(w).not.toHaveBeenCalled();
+    expect((await h.forge.findPr('', BRANCH))?.state).toBe('OPEN');
   });
 });

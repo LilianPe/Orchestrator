@@ -830,18 +830,21 @@ export class Orchestrator {
     const writer = this.d.forgeWriter;
     const pr = t.branch ? await this.d.forge.findPr(project.repoPath, t.branch) : undefined;
     let reason: string | undefined;
+    let headMoved = false;
     if (pr?.number === t.prNumber && pr.state === 'MERGED' && pr.headSha === sha) return { deduplicated: true };
     if (!t.branch) reason = 'la branche du ticket est inconnue';
     else if (pr && pr.number !== t.prNumber) reason = `la PR de la branche (#${pr.number}) n'est pas celle du ticket (#${t.prNumber})`;
     else if (!writer) reason = "la GitHub App de l'usine est requise pour merger";
     else if (pr?.state !== 'OPEN') reason = "la PR n'est plus ouverte";
-    else if (pr.headSha !== sha) reason = 'la branche a reçu un push depuis la review';
+    else if (pr.headSha !== sha) headMoved = true;
     else if (pr.checks !== 'pass') reason = `les checks du commit relu ne sont pas verts (${pr.failedChecks.join(', ') || pr.checks})`;
     else {
       const res: MergeResult = await writer.mergePr(project.repoPath, t.prNumber, sha);
       if (res.merged) return res.deduplicated ? { deduplicated: true } : undefined;
-      reason = res.reason === 'head_moved' ? 'la branche a reçu un push depuis la review' : `GitHub refuse le merge (${res.message})`;
+      if (res.reason === 'head_moved') headMoved = true;
+      else reason = `GitHub refuse le merge (${res.message})`;
     }
+    if (headMoved) reason = 'la branche a reçu un push depuis la review';
     await this.submitResult({
       ...TRUSTED,
       id: `merge-refused:${key.id}`,
@@ -849,7 +852,7 @@ export class Orchestrator {
       at: this.d.clock.now(),
       projectId: project.id,
       ticketId: t.ticketId,
-      payload: { number: t.prNumber, url: t.prUrl ?? '', branch: t.branch ?? '', reason },
+      payload: { number: t.prNumber, url: t.prUrl ?? '', branch: t.branch ?? '', reason: reason ?? '', ...(headMoved ? { headMoved: true as const } : {}) },
     });
   }
 

@@ -69,9 +69,31 @@ describe('decide — Done by a human merges the PR (ORC-148)', () => {
     expect(decide(inReview({ reviewSha: undefined }), done(), workflow).effects).toEqual(backToReview(/aucun commit relu.*répondez dans le fil/));
   });
 
-  it('GitHub refusing the merge (a push since the review) sends the ticket back to Human Review with the reason', () => {
-    const out = decide(inReview({ logical: 'done' }), ev('pr.merge_refused', { number: 7, url: 'u', branch: 'b', reason: 'la branche a reçu un push depuis la review' }), workflow);
-    expect(out.effects).toEqual(backToReview(/push depuis la review/));
+  const pushed = { number: 7, url: 'u', branch: 'b', reason: 'la branche a reçu un push depuis la review', headMoved: true } as const;
+
+  it('a merge refused for a push since the review sends the new commits through the AI review, not straight to Human Review', () => {
+    // A move by the factory emits no status.changed, so the review is started here, not by the rule `to: ai_review`.
+    const out = decide(inReview({ logical: 'done' }), { ...ev('pr.merge_refused', pushed), taint: 'trusted' }, workflow);
+    expect(out.effects).toEqual([
+      { kind: 'move', to: 'ai_review' },
+      { kind: 'comment', body: expect.stringMatching(/push depuis la review.*repassent par la review IA/) },
+      { kind: 'start_run', job: 'review' },
+    ]);
+  });
+
+  it('a merge refused for a push, in a workflow with no AI review, goes back to Human Review with the reason', () => {
+    const noReview = { ...workflow, on: { ...workflow.on, 'status.changed': (workflow.on['status.changed'] ?? []).filter((r) => r.to !== 'ai_review') } };
+    expect(decide(inReview({ logical: 'done' }), ev('pr.merge_refused', pushed), noReview).effects).toEqual(backToReview(/push depuis la review/));
+  });
+
+  it('a merge refused for another reason (PR not mergeable) sends the ticket back to Human Review, the reviewed commit kept', () => {
+    const out = decide(inReview({ logical: 'done' }), ev('pr.merge_refused', { number: 7, url: 'u', branch: 'b', reason: 'GitHub refuse le merge (conflit)' }), workflow);
+    expect(out.effects).toEqual(backToReview(/GitHub refuse le merge \(conflit\)/));
+  });
+
+  it('a ticket cancelled in Human Review writes nothing on the forge: no merge, its PR left open', () => {
+    const out = decide(inReview(), ev('status.changed', { from: 'human_review', to: null, cancelled: true }, 'u-lead', MERGER), workflow);
+    expect(out.effects).toEqual([{ kind: 'stop_run' }]);
   });
 
   it('leaves a Done without an open PR to the rules, as before', () => {
