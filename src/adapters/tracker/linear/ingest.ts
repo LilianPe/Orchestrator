@@ -1,5 +1,5 @@
 import type { FactoryEvent } from '../../../core/types.js';
-import { deliveryKey, isFresh, mapLinearWebhook, verifyLinearSignature, type MapContext } from './webhook.js';
+import { deliveryKey, isFresh, mapLinearWebhook, recordIssueLabels, verifyLinearSignature, type MapContext } from './webhook.js';
 
 export interface IngestDeps {
   secret: () => string;
@@ -43,6 +43,8 @@ export function createLinearIngest(d: IngestDeps) {
         const sessionId = (e.payload as { linearSessionId?: string }).linearSessionId;
         if (ACKED.has(e.type) && sessionId) d.ack(sessionId, e.id).catch((err: Error) => d.log(`ack failed: ${err.message}`));
       }
+      // Only once the events are written: a webhook sent again must not find its change already known.
+      await recordIssueLabels(body, d.ctx).catch((err: Error) => d.log(`labels not recorded: ${err.message}`));
     });
     tail = turn.catch(() => undefined);
     try {

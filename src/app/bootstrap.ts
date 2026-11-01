@@ -16,6 +16,7 @@ import { LinearApi } from '../adapters/tracker/linear/api.js';
 import { createLinearIngest } from '../adapters/tracker/linear/ingest.js';
 import { buildAuthorizeUrl, exchangeCode, TokenManager } from '../adapters/tracker/linear/oauth.js';
 import { Q } from '../adapters/tracker/linear/queries.js';
+import { knownLabels, recordLabels } from '../adapters/tracker/linear/labels.js';
 import { Reconciler, reconcileOnce } from '../adapters/tracker/linear/reconcile.js';
 import { LinearTracker } from '../adapters/tracker/linear/tracker.js';
 import { isUsableWebhookSecret } from '../adapters/tracker/linear/webhook.js';
@@ -262,6 +263,11 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
         isEcho: (k) => store.isEcho(k, clock.now()),
         commands: (pid) => projects.find((p) => p.id === pid)?.workflow.commands ?? [],
         now: () => clock.now(),
+        knownLabels: (pid, id) => knownLabels(store, pid, id),
+        // Tickets the factory tracks only: the reconciliation compares no other.
+        recordLabels: async (pid, id, labels) => {
+          if (await store.getTicket(pid, id)) await recordLabels(store, pid, id, labels);
+        },
       },
     });
 

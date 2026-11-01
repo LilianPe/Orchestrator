@@ -6,6 +6,7 @@ import { decide } from '../../../core/engine.js';
 import { newTicketState, type FactoryEvent } from '../../../core/types.js';
 import { SqliteStore } from '../../../store/sqlite-store.js';
 import { FakeTracker, STANDARD_STATES } from '../fake.js';
+import { knownLabels } from './labels.js';
 import { Reconciler, reconcileOnce } from './reconcile.js';
 
 const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../../../packs/standard') });
@@ -126,6 +127,49 @@ describe('reconcileOnce — done and cancelled (ORC-185)', () => {
   });
 });
 
+describe('reconcileOnce — labels (ORC-185)', () => {
+  const projects = [{ id: 'p', repoPath: '/r', teamKey: 'REL', workflow }];
+  async function pass(tracker: FakeTracker, store: SqliteStore) {
+    const events: FactoryEvent[] = [];
+    await reconcileOnce({ tracker, store, projects, submit: (e) => events.push(e), clock: new FakeClock(100), log: () => {} });
+    return events;
+  }
+  async function setup() {
+    const tracker = new FakeTracker();
+    const store = new SqliteStore(':memory:');
+    tracker.addIssue({ identifier: 'REL-1', delegateId: 'app', stateName: 'In Progress', labels: ['bug'] });
+    await store.putTicket({ ...newTicketState('p', 'REL-1', 'T', 'dev', 3), delegated: true });
+    return { tracker, store };
+  }
+
+  it('first records the labels it reads, without reporting any of them', async () => {
+    const { tracker, store } = await setup();
+    expect(await pass(tracker, store)).toEqual([]);
+    expect(await knownLabels(store, 'p', 'REL-1')).toEqual(['bug']);
+  });
+
+  it('then catches up a label added or taken off whose webhook was lost, once, unsigned', async () => {
+    const { tracker, store } = await setup();
+    await pass(tracker, store);
+    tracker.issues.get('REL-1')!.labels = ['agent:reprendre'];
+    const events = await pass(tracker, store);
+    expect(events.map((e) => [e.id, e.type, e.payload, e.taint, e.actor])).toEqual([
+      ['reconcile:label:REL-1:agent:reprendre:added:3', 'label.changed', { label: 'agent:reprendre', change: 'added' }, 'untrusted', undefined],
+      ['reconcile:label:REL-1:bug:removed:3', 'label.changed', { label: 'bug', change: 'removed' }, 'untrusted', undefined],
+    ]);
+    expect(await pass(tracker, store)).toEqual([]);
+  });
+
+  it('a label the factory itself just wrote is not reported as a human change', async () => {
+    const { tracker, store } = await setup();
+    await pass(tracker, store);
+    tracker.issues.get('REL-1')!.labels = ['bug', 'Bloqué'];
+    await store.putEcho('label:REL-1:Bloqué', 1_000);
+    expect(await pass(tracker, store)).toEqual([]);
+    expect(await knownLabels(store, 'p', 'REL-1')).toEqual(['Bloqué', 'bug']);
+  });
+});
+
 describe('Reconciler', () => {
   it('stop() resolves once the pass under way has finished; a pass asked meanwhile joins it', async () => {
     const tracker = new FakeTracker();
@@ -135,7 +179,7 @@ describe('Reconciler', () => {
     let passes = 0;
     const events: FactoryEvent[] = [];
     const reconciler = new Reconciler({
-      tracker: { listDelegated: async (k) => (passes++, await gate, tracker.listDelegated(k)) },
+      tracker: { listDelegated: async (k) => (passes++, await gate, tracker.listDelegated(k)), getIssue: (id) => tracker.getIssue(id) },
       store: new SqliteStore(':memory:'), projects: [{ id: 'p', repoPath: '/r', teamKey: 'REL', workflow }],
       submit: (e) => events.push(e), clock: new FakeClock(100), log: () => {},
     });

@@ -1,8 +1,9 @@
 import type { Clock } from '../../../core/clock.js';
 import { logicalFromName, type ProjectRuntime } from '../../../core/orchestrator.js';
-import { SCHEMA_VERSION, TRUSTED, type FactoryEvent } from '../../../core/types.js';
+import { SCHEMA_VERSION, TRUSTED, type FactoryEvent, type TicketState } from '../../../core/types.js';
 import type { Store } from '../../../store/types.js';
-import type { Tracker, TrackerIssue } from '../types.js';
+import { labelEchoKey, type Tracker, type TrackerIssue } from '../types.js';
+import { knownLabels, labelChanges, recordLabels } from './labels.js';
 
 export interface ReconcileDeps {
   tracker: Pick<Tracker, 'listDelegated' | 'getIssue'>;
@@ -21,6 +22,25 @@ export interface ReconcileDeps {
  */
 const UNSIGNED = { schemaVersion: SCHEMA_VERSION, taint: 'untrusted' } as const;
 
+/** The label changes of a delegated ticket since the factory last read its labels; the first reading only records them. */
+async function catchUpLabels(d: ReconcileDeps, projectId: string, issue: TrackerIssue, t: TicketState, at: number): Promise<void> {
+  const known = await knownLabels(d.store, projectId, issue.identifier);
+  for (const c of known ? labelChanges(known, issue.labels) : []) {
+    // The factory's own write, whose webhook has not come yet: no human change.
+    if (await d.store.isEcho(labelEchoKey(issue.identifier, c.label, c.change), at)) continue;
+    await d.submit({
+      ...UNSIGNED,
+      id: `reconcile:label:${issue.identifier}:${c.label}:${c.change}:${t.updatedAt}`,
+      type: 'label.changed',
+      at,
+      projectId,
+      ticketId: issue.identifier,
+      payload: c,
+    });
+  }
+  await recordLabels(d.store, projectId, issue.identifier, issue.labels);
+}
+
 export async function reconcileOnce(d: ReconcileDeps): Promise<void> {
   for (const p of d.projects) {
     try {
@@ -35,6 +55,7 @@ export async function reconcileOnce(d: ReconcileDeps): Promise<void> {
           // An untracked ticket: the snapshot spares the orchestrator a second read of the tracker.
           const payload = t ? {} : { issue: { title: issue.title, logical, priority: issue.priority } };
           await d.submit({ ...UNSIGNED, id, type: 'ticket.delegated', at, projectId: p.id, ticketId: issue.identifier, payload });
+          await recordLabels(d.store, p.id, issue.identifier, issue.labels);
           continue;
         }
         const to = logicalFromName(p.workflow.states, issue.stateName);
@@ -49,6 +70,7 @@ export async function reconcileOnce(d: ReconcileDeps): Promise<void> {
             payload: { from: t.logical, to },
           });
         }
+        await catchUpLabels(d, p.id, issue, t, at);
       }
       for (const t of await d.store.listTickets()) {
         if (t.projectId !== p.id || delegated.has(t.ticketId)) continue;

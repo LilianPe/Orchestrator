@@ -109,6 +109,17 @@ describe('mapLinearWebhook', () => {
     const c = { ...ctx(), isEcho: async (k: string) => echoes.includes(k) };
     expect(await mapLinearWebhook(fx('issue-moved-labeled'), 'd9', c)).toEqual([]);
   });
+  it('drops a label change the factory already knows, caught up by the reconciliation first (ORC-185)', async () => {
+    const removed = { ...fx('issue-moved-labeled'), data: { ...fx('issue-moved-labeled').data, labelIds: ['l-resume'] }, updatedFrom: { labelIds: ['l-bug'] } };
+    const known = (labels: string[] | undefined) => ({ ...ctx(), knownLabels: async () => labels });
+    expect(await mapLinearWebhook(removed, 'd11', known(['agent:reprendre']))).toEqual([]);
+    expect((await mapLinearWebhook(removed, 'd11', known(['bug']))).map((e) => e.payload)).toEqual([
+      { label: 'agent:reprendre', change: 'added' },
+      { label: 'bug', change: 'removed' },
+    ]);
+    expect(await mapLinearWebhook(removed, 'd11', known(undefined))).toHaveLength(2);
+  });
+
   it('maps a removed label as label.changed, and drops the echo of a removal the factory made (ORC-160)', async () => {
     const removed = { ...fx('issue-moved-labeled'), data: { ...fx('issue-moved-labeled').data, labelIds: ['l-resume'] }, updatedFrom: { labelIds: ['l-bug'] } };
     expect(await mapLinearWebhook(removed, 'd10', ctx())).toEqual([
@@ -238,6 +249,22 @@ describe('ingest', () => {
     expect(await ingest(raw, { 'linear-signature': sig })).toEqual({ status: 200 });
     expect(order).toEqual(['inbox:ticket.delegated', 'ack:as-1']);
     expect(await ids()).toHaveLength(1);
+  });
+
+  it('records the labels an issue webhook reads, echoes included, once its events are in the inbox (ORC-185)', async () => {
+    const recorded: unknown[][] = [];
+    const body = { ...fx('issue-moved-labeled'), webhookTimestamp: 2000 };
+    const c = { ...ctx(['label:REL-1:agent:reprendre']), now: () => 2000, recordLabels: async (...a: unknown[]) => void recorded.push(a) };
+    const { raw, sig } = signed(body);
+    const ok = createLinearIngest({ secret: () => 'sec', ctx: c, accept: async () => true, ack: async () => {}, log: () => {} });
+    expect(await ok(raw, { 'linear-signature': sig })).toEqual({ status: 200 });
+    const names = body.data.labelIds.map((id: string) => c.labelNameById('REL', id));
+    expect(recorded).toEqual([['p', 'REL-1', names]]);
+    recorded.length = 0;
+    const failing = createLinearIngest({ secret: () => 'sec', ctx: c, accept: async () => Promise.reject(new Error('disk')), ack: async () => {}, log: () => {} });
+    expect(await failing(raw, { 'linear-signature': sig })).toEqual({ status: 500 });
+    // Not in the inbox: Linear sends it again, and it must not be taken for a change already known then.
+    expect(recorded).toEqual([]);
   });
 
   it('acks with the id of the event, so the daemon can record when (ORC-235)', async () => {

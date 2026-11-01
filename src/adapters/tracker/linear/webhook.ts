@@ -30,6 +30,10 @@ export interface MapContext {
   isEcho(key: string): boolean | Promise<boolean>;
   commands(projectId: string): string[];
   now(): number;
+  /** The ticket's labels as the factory last read them (ORC-185); undefined when it never did. */
+  knownLabels?(projectId: string, identifier: string): Promise<string[] | undefined>;
+  /** Records the ticket's labels as an issue webhook reads them, once its events are in the inbox. */
+  recordLabels?(projectId: string, identifier: string, labels: string[]): Promise<void>;
 }
 
 export function stripMention(body: string): string {
@@ -129,14 +133,38 @@ async function issueEvents(body: any, identifier: string, teamKey: string, proje
       ...after.filter((id) => !before.includes(id)).map((id) => ({ id, change: 'added' as const })),
       ...before.filter((id) => !after.includes(id)).map((id) => ({ id, change: 'removed' as const })),
     ];
+    // A change the factory already knows was caught up by the reconciliation first (ORC-185).
+    const known = changes.length ? await ctx.knownLabels?.(projectId, identifier) : undefined;
     for (const { id, change } of changes) {
       const name = ctx.labelNameById(teamKey, id);
+      if (name && known && known.includes(name) === (change === 'added')) continue;
       if (name && !(await ctx.isEcho(labelEchoKey(identifier, name, change)))) {
         out.push({ type: 'label.changed', payload: { label: name, change }, suffix: `:label:${id}` });
       }
     }
   }
   return out;
+}
+
+function issueIdentifier(body: any): string | undefined {
+  if (body?.type === 'AgentSessionEvent') return body.agentSession?.issue?.identifier;
+  if (body?.type === 'Issue') return body.data?.identifier ?? (body.data?.team?.key ? `${body.data.team.key}-${body.data.number}` : undefined);
+  return undefined;
+}
+
+/**
+ * Records the labels an issue webhook reads (ORC-185), the factory's own echoes included: what the
+ * reconciliation compares Linear with. Nothing when one of them is not in the team's cache yet.
+ */
+export async function recordIssueLabels(body: any, ctx: MapContext): Promise<void> {
+  if (body?.type !== 'Issue' || !Array.isArray(body.data?.labelIds) || !ctx.recordLabels) return;
+  const identifier = issueIdentifier(body);
+  if (!identifier) return;
+  const teamKey = identifier.split('-')[0]!;
+  const projectId = ctx.projectIdForTeam(teamKey);
+  if (!projectId) return;
+  const names = (body.data.labelIds as unknown[]).map((id) => (typeof id === 'string' ? ctx.labelNameById(teamKey, id) : undefined));
+  if (names.every((n): n is string => !!n)) await ctx.recordLabels(projectId, identifier, names);
 }
 
 // Linear-Delivery is outside the HMAC: the dedup key must come from the signed body.
@@ -151,9 +179,7 @@ export function deliveryKey(body: any): string {
 }
 
 export async function mapLinearWebhook(body: any, key: string, ctx: MapContext): Promise<FactoryEvent[]> {
-  let identifier: string | undefined;
-  if (body?.type === 'AgentSessionEvent') identifier = body.agentSession?.issue?.identifier;
-  else if (body?.type === 'Issue') identifier = body.data?.identifier ?? (body.data?.team?.key ? `${body.data.team.key}-${body.data.number}` : undefined);
+  const identifier = issueIdentifier(body);
   if (!identifier) return [];
   const teamKey = identifier.split('-')[0]!;
   const projectId = ctx.projectIdForTeam(teamKey);
