@@ -102,7 +102,10 @@ export class FakeTracker implements Tracker, TeamDirectory {
   }
 
   async listDelegated(teamKey: string): Promise<TrackerIssue[]> {
-    return [...this.issues.values()].filter((i) => i.teamKey === teamKey && i.delegateId).map(snapshot);
+    // As Linear's query: a completed or canceled issue is not listed, delegated or not.
+    return [...this.issues.values()]
+      .filter((i) => i.teamKey === teamKey && i.delegateId && i.stateType !== 'completed' && i.stateType !== 'canceled')
+      .map(snapshot);
   }
 
   async teamMembers(teamKey: string): Promise<string[]> {

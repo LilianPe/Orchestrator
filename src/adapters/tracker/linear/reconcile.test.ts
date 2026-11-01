@@ -2,9 +2,10 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { loadWorkflow } from '../../../config/load-workflow.js';
 import { FakeClock } from '../../../core/clock.js';
+import { decide } from '../../../core/engine.js';
 import { newTicketState, type FactoryEvent } from '../../../core/types.js';
 import { SqliteStore } from '../../../store/sqlite-store.js';
-import { FakeTracker } from '../fake.js';
+import { FakeTracker, STANDARD_STATES } from '../fake.js';
 import { Reconciler, reconcileOnce } from './reconcile.js';
 
 const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../../../packs/standard') });
@@ -15,6 +16,7 @@ describe('reconcileOnce', () => {
     const store = new SqliteStore(':memory:');
     tracker.addIssue({ identifier: 'REL-1', delegateId: 'app' });
     tracker.addIssue({ identifier: 'REL-2', delegateId: 'app', stateName: 'AI Review' });
+    tracker.addIssue({ identifier: 'REL-3', stateName: 'In Progress' });
     await store.putTicket({ ...newTicketState('p', 'REL-2', 'T', 'human_review', 7), delegated: true });
     await store.putTicket({ ...newTicketState('p', 'REL-3', 'T', 'dev', 8), delegated: true, activeRunId: 'r3' });
     const events: FactoryEvent[] = [];
@@ -41,6 +43,7 @@ describe('reconcileOnce', () => {
     const tracker = new FakeTracker();
     const store = new SqliteStore(':memory:');
     tracker.addIssue({ identifier: 'REL-4', delegateId: 'app' });
+    tracker.addIssue({ identifier: 'REL-5', stateName: 'Human Review' });
     await store.putTicket({ ...newTicketState('p', 'REL-4', 'T', 'todo', 4) });
     await store.putTicket({ ...newTicketState('p', 'REL-5', 'T', 'human_review', 5), delegated: true });
     const events: FactoryEvent[] = [];
@@ -52,6 +55,74 @@ describe('reconcileOnce', () => {
       ['reconcile:delegated:REL-4:4', 'ticket.delegated'],
       ['reconcile:undelegated-flag:REL-5:5', 'ticket.undelegated'],
     ]);
+  });
+});
+
+describe('reconcileOnce — done and cancelled (ORC-185)', () => {
+  const projects = [{ id: 'p', repoPath: '/r', teamKey: 'REL', workflow }];
+  async function pass(tracker: FakeTracker, store: SqliteStore, log: (m: string) => void = () => {}) {
+    const events: FactoryEvent[] = [];
+    await reconcileOnce({ tracker, store, projects, submit: (e) => events.push(e), clock: new FakeClock(100), log });
+    return events;
+  }
+
+  it('catches up a ticket moved to Done whose webhook was lost, unsigned, and never undelegates it', async () => {
+    const tracker = new FakeTracker();
+    const store = new SqliteStore(':memory:');
+    tracker.addIssue({ identifier: 'REL-6', delegateId: 'app', stateName: 'Done', stateType: 'completed' });
+    await store.putTicket({ ...newTicketState('p', 'REL-6', 'T', 'human_review', 6), delegated: true });
+    const events = await pass(tracker, store);
+    expect(events.map((e) => [e.id, e.type, e.payload, e.taint, e.actor])).toEqual([
+      ['reconcile:moved:REL-6:Done:6', 'status.changed', { from: 'human_review', to: 'done' }, 'untrusted', undefined],
+    ]);
+  });
+
+  it('catches up a cancelled ticket: its work is stopped, then its delegation cleared', async () => {
+    const tracker = new FakeTracker();
+    tracker.setStates('REL', [...STANDARD_STATES, 'Canceled']);
+    const store = new SqliteStore(':memory:');
+    tracker.addIssue({ identifier: 'REL-7', delegateId: 'app', stateName: 'Canceled', stateType: 'canceled' });
+    await store.putTicket({ ...newTicketState('p', 'REL-7', 'T', 'dev', 7), delegated: true, activeRunId: 'r7' });
+    const events = await pass(tracker, store);
+    expect(events.map((e) => [e.id, e.type, e.payload, e.taint])).toEqual([
+      ['reconcile:cancelled:REL-7:Canceled:7', 'status.changed', { from: 'dev', to: null, cancelled: true }, 'untrusted'],
+      ['reconcile:undelegated-flag:REL-7:7', 'ticket.undelegated', {}, 'trusted'],
+    ]);
+  });
+
+  it('a Done already received (done in the store) is not caught up again, nor read from Linear', async () => {
+    const tracker = new FakeTracker();
+    const store = new SqliteStore(':memory:');
+    tracker.addIssue({ identifier: 'REL-8', delegateId: 'app', stateName: 'Done', stateType: 'completed' });
+    await store.putTicket({ ...newTicketState('p', 'REL-8', 'T', 'done', 8), delegated: true });
+    expect(await pass(tracker, store)).toEqual([]);
+    expect(tracker.calls.filter((c) => c.method === 'getIssue')).toEqual([]);
+  });
+
+  it('a ticket Linear does not answer for is left as it is this pass, not undelegated', async () => {
+    const tracker = new FakeTracker();
+    const store = new SqliteStore(':memory:');
+    await store.putTicket({ ...newTicketState('p', 'REL-9', 'T', 'dev', 9), delegated: true, activeRunId: 'r9' });
+    const logs: string[] = [];
+    expect(await pass(tracker, store, (m) => logs.push(m))).toEqual([]);
+    expect(logs.join()).toContain('REL-9');
+  });
+
+  it('a Done or a cancel it catches up never asks for a merge nor any write on the forge', async () => {
+    const tracker = new FakeTracker();
+    tracker.setStates('REL', [...STANDARD_STATES, 'Canceled']);
+    const store = new SqliteStore(':memory:');
+    tracker.addIssue({ identifier: 'REL-6', delegateId: 'app', stateName: 'Done', stateType: 'completed' });
+    tracker.addIssue({ identifier: 'REL-7', delegateId: 'app', stateName: 'Canceled', stateType: 'canceled' });
+    const reviewed = { ...newTicketState('p', 'REL-6', 'T', 'human_review', 6), delegated: true, branch: 'b6', prNumber: 6, prUrl: 'u', prState: 'OPEN' as const };
+    const working = { ...newTicketState('p', 'REL-7', 'T', 'dev', 7), delegated: true, branch: 'b7', prNumber: 7, prUrl: 'u', prState: 'OPEN' as const, activeRunId: 'r7' };
+    await store.putTicket(reviewed);
+    await store.putTicket(working);
+    const events = await pass(tracker, store);
+    expect(events.map((e) => [e.ticketId, e.type])).toEqual([['REL-6', 'status.changed'], ['REL-7', 'status.changed'], ['REL-7', 'ticket.undelegated']]);
+    const effects = events.flatMap((e) => decide(e.ticketId === 'REL-6' ? reviewed : working, e, workflow).effects.map((f) => f.kind));
+    // A stop and the Linear labels only: nothing the forge is asked to write, no run started.
+    expect(effects.filter((k) => k !== 'stop_run' && k !== 'labels')).toEqual([]);
   });
 });
 

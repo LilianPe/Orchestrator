@@ -2,10 +2,10 @@ import type { Clock } from '../../../core/clock.js';
 import { logicalFromName, type ProjectRuntime } from '../../../core/orchestrator.js';
 import { SCHEMA_VERSION, TRUSTED, type FactoryEvent } from '../../../core/types.js';
 import type { Store } from '../../../store/types.js';
-import type { Tracker } from '../types.js';
+import type { Tracker, TrackerIssue } from '../types.js';
 
 export interface ReconcileDeps {
-  tracker: Pick<Tracker, 'listDelegated'>;
+  tracker: Pick<Tracker, 'listDelegated' | 'getIssue'>;
   store: Store;
   projects: ProjectRuntime[];
   /** Writes the event to the inbox; awaited. */
@@ -52,10 +52,41 @@ export async function reconcileOnce(d: ReconcileDeps): Promise<void> {
       }
       for (const t of await d.store.listTickets()) {
         if (t.projectId !== p.id || delegated.has(t.ticketId)) continue;
-        if (t.activeRunId) {
+        const undelegate = t.delegated && t.logical !== 'done';
+        if (!t.activeRunId && !undelegate) continue;
+        // Out of the list: done, cancelled or no longer delegated, which only the issue itself tells apart.
+        let issue: TrackerIssue;
+        try {
+          issue = await d.tracker.getIssue(t.ticketId);
+        } catch (err) {
+          d.log(`reconcile ${t.ticketId}: ${(err as Error).message}`);
+          continue;
+        }
+        if (issue.stateType === 'completed') {
+          // As the webhook would have said it: a move, unsigned, that neither stops the run nor undelegates.
+          const to = logicalFromName(p.workflow.states, issue.stateName);
+          if (to && to !== t.logical && !(await d.store.isEcho(`state:${t.ticketId}:${issue.stateName}`, at))) {
+            await d.submit({ ...UNSIGNED, id: `reconcile:moved:${t.ticketId}:${issue.stateName}:${t.updatedAt}`, type: 'status.changed', at, projectId: p.id, ticketId: t.ticketId, payload: { from: t.logical, to } });
+          }
+          continue;
+        }
+        if (issue.stateType === 'canceled') {
+          // The cancel stops the work itself (ORC-170); the delegation cleared after it, no later pass reads the ticket again.
+          await d.submit({
+            ...UNSIGNED,
+            id: `reconcile:cancelled:${t.ticketId}:${issue.stateName}:${t.updatedAt}`,
+            type: 'status.changed',
+            at,
+            projectId: p.id,
+            ticketId: t.ticketId,
+            payload: { from: t.logical, to: logicalFromName(p.workflow.states, issue.stateName) ?? null, cancelled: true },
+          });
+        } else if (issue.delegateId) {
+          continue;
+        } else if (t.activeRunId) {
           await d.submit({ ...TRUSTED, id: `reconcile:undelegated:${t.ticketId}:${t.activeRunId}`, type: 'session.stopped', at, projectId: p.id, ticketId: t.ticketId, payload: {} });
         }
-        if (t.delegated && t.logical !== 'done') {
+        if (undelegate) {
           await d.submit({ ...TRUSTED, id: `reconcile:undelegated-flag:${t.ticketId}:${t.updatedAt}`, type: 'ticket.undelegated', at, projectId: p.id, ticketId: t.ticketId, payload: {} });
         }
       }
