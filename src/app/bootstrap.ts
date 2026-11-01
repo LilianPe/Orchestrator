@@ -263,10 +263,10 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
         isEcho: (k) => store.isEcho(k, clock.now()),
         commands: (pid) => projects.find((p) => p.id === pid)?.workflow.commands ?? [],
         now: () => clock.now(),
-        knownLabels: (pid, id) => knownLabels(store, pid, id),
+        knownLabels: async (pid, id) => (await knownLabels(store, pid, id))?.labels,
         // Tickets the factory tracks only: the reconciliation compares no other.
-        recordLabels: async (pid, id, labels) => {
-          if (await store.getTicket(pid, id)) await recordLabels(store, pid, id, labels);
+        recordLabels: async (pid, id, labels, at) => {
+          if (await store.getTicket(pid, id)) await recordLabels(store, pid, id, labels, at);
         },
       },
     });

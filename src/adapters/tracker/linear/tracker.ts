@@ -13,6 +13,7 @@ interface IssueNode {
   url: string;
   priority: number;
   createdAt: string;
+  updatedAt?: string;
   state: { id: string; name: string; type: string };
   labels: { nodes: LabelNode[] };
   delegate: { id: string } | null;
@@ -69,6 +70,7 @@ function toIssue(n: IssueNode): TrackerIssue {
     teamKey: n.team.key,
     priority: n.priority,
     createdAt: Date.parse(n.createdAt),
+    ...(n.updatedAt && Number.isFinite(Date.parse(n.updatedAt)) ? { updatedAt: Date.parse(n.updatedAt) } : {}),
   };
 }
 

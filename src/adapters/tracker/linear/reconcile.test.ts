@@ -6,7 +6,7 @@ import { decide } from '../../../core/engine.js';
 import { newTicketState, type FactoryEvent } from '../../../core/types.js';
 import { SqliteStore } from '../../../store/sqlite-store.js';
 import { FakeTracker, STANDARD_STATES } from '../fake.js';
-import { knownLabels } from './labels.js';
+import { knownLabels, recordLabels } from './labels.js';
 import { Reconciler, reconcileOnce } from './reconcile.js';
 
 const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../../../packs/standard') });
@@ -91,6 +91,35 @@ describe('reconcileOnce — done and cancelled (ORC-185)', () => {
     ]);
   });
 
+  it('a Done stops the run under way, and a delegation withdrawn with it is cleared', async () => {
+    const tracker = new FakeTracker();
+    const store = new SqliteStore(':memory:');
+    tracker.addIssue({ identifier: 'REL-6', stateName: 'Done', stateType: 'completed' });
+    await store.putTicket({ ...newTicketState('p', 'REL-6', 'T', 'dev', 6), delegated: true, activeRunId: 'r6' });
+    expect((await pass(tracker, store)).map((e) => [e.id, e.type])).toEqual([
+      ['reconcile:moved:REL-6:Done:6', 'status.changed'],
+      ['reconcile:undelegated:REL-6:r6', 'session.stopped'],
+      ['reconcile:undelegated-flag:REL-6:6', 'ticket.undelegated'],
+    ]);
+  });
+
+  it('a Done already received still stops a run left under way, as before', async () => {
+    const tracker = new FakeTracker();
+    const store = new SqliteStore(':memory:');
+    tracker.addIssue({ identifier: 'REL-6', delegateId: 'app', stateName: 'Done', stateType: 'completed' });
+    await store.putTicket({ ...newTicketState('p', 'REL-6', 'T', 'done', 6), delegated: true, activeRunId: 'r6' });
+    expect((await pass(tracker, store)).map((e) => [e.id, e.type])).toEqual([['reconcile:undelegated:REL-6:r6', 'session.stopped']]);
+  });
+
+  it('a cancel on a ticket the factory no longer counts as delegated only stops its run', async () => {
+    const tracker = new FakeTracker();
+    tracker.setStates('REL', [...STANDARD_STATES, 'Canceled']);
+    const store = new SqliteStore(':memory:');
+    tracker.addIssue({ identifier: 'REL-7', delegateId: 'app', stateName: 'Canceled', stateType: 'canceled' });
+    await store.putTicket({ ...newTicketState('p', 'REL-7', 'T', 'dev', 7), delegated: false, activeRunId: 'r7' });
+    expect((await pass(tracker, store)).map((e) => [e.id, e.type])).toEqual([['reconcile:undelegated:REL-7:r7', 'session.stopped']]);
+  });
+
   it('a Done already received (done in the store) is not caught up again, nor read from Linear', async () => {
     const tracker = new FakeTracker();
     const store = new SqliteStore(':memory:');
@@ -145,7 +174,7 @@ describe('reconcileOnce — labels (ORC-185)', () => {
   it('first records the labels it reads, without reporting any of them', async () => {
     const { tracker, store } = await setup();
     expect(await pass(tracker, store)).toEqual([]);
-    expect(await knownLabels(store, 'p', 'REL-1')).toEqual(['bug']);
+    expect(await knownLabels(store, 'p', 'REL-1')).toEqual({ labels: ['bug'], at: 0 });
   });
 
   it('then catches up a label added or taken off whose webhook was lost, once, unsigned', async () => {
@@ -160,13 +189,23 @@ describe('reconcileOnce — labels (ORC-185)', () => {
     expect(await pass(tracker, store)).toEqual([]);
   });
 
+  it('labels a webhook recorded after Linear was read are newer: nothing is reported, nothing overwritten', async () => {
+    const { tracker, store } = await setup();
+    tracker.issues.get('REL-1')!.updatedAt = 100;
+    await pass(tracker, store);
+    // The webhook of an addition, made after the pass read Linear, came in between.
+    await recordLabels(store, 'p', 'REL-1', ['agent:reprendre', 'bug'], 200);
+    expect(await pass(tracker, store)).toEqual([]);
+    expect(await knownLabels(store, 'p', 'REL-1')).toEqual({ labels: ['agent:reprendre', 'bug'], at: 200 });
+  });
+
   it('a label the factory itself just wrote is not reported as a human change', async () => {
     const { tracker, store } = await setup();
     await pass(tracker, store);
     tracker.issues.get('REL-1')!.labels = ['bug', 'Bloqué'];
     await store.putEcho('label:REL-1:Bloqué', 1_000);
     expect(await pass(tracker, store)).toEqual([]);
-    expect(await knownLabels(store, 'p', 'REL-1')).toEqual(['Bloqué', 'bug']);
+    expect((await knownLabels(store, 'p', 'REL-1'))?.labels).toEqual(['Bloqué', 'bug']);
   });
 });
 

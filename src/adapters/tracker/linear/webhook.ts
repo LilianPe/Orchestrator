@@ -32,8 +32,8 @@ export interface MapContext {
   now(): number;
   /** The ticket's labels as the factory last read them (ORC-185); undefined when it never did. */
   knownLabels?(projectId: string, identifier: string): Promise<string[] | undefined>;
-  /** Records the ticket's labels as an issue webhook reads them, once its events are in the inbox. */
-  recordLabels?(projectId: string, identifier: string, labels: string[]): Promise<void>;
+  /** Records the ticket's labels as an issue webhook reads them at `at` (the issue's `updatedAt`), once its events are in the inbox. */
+  recordLabels?(projectId: string, identifier: string, labels: string[], at: number): Promise<void>;
 }
 
 export function stripMention(body: string): string {
@@ -164,7 +164,8 @@ export async function recordIssueLabels(body: any, ctx: MapContext): Promise<voi
   const projectId = ctx.projectIdForTeam(teamKey);
   if (!projectId) return;
   const names = (body.data.labelIds as unknown[]).map((id) => (typeof id === 'string' ? ctx.labelNameById(teamKey, id) : undefined));
-  if (names.every((n): n is string => !!n)) await ctx.recordLabels(projectId, identifier, names);
+  const at = Date.parse(body.data.updatedAt);
+  if (Number.isFinite(at) && names.every((n): n is string => !!n)) await ctx.recordLabels(projectId, identifier, names, at);
 }
 
 // Linear-Delivery is outside the HMAC: the dedup key must come from the signed body.

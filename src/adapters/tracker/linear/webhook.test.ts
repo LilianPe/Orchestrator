@@ -259,7 +259,7 @@ describe('ingest', () => {
     const ok = createLinearIngest({ secret: () => 'sec', ctx: c, accept: async () => true, ack: async () => {}, log: () => {} });
     expect(await ok(raw, { 'linear-signature': sig })).toEqual({ status: 200 });
     const names = body.data.labelIds.map((id: string) => c.labelNameById('REL', id));
-    expect(recorded).toEqual([['p', 'REL-1', names]]);
+    expect(recorded).toEqual([['p', 'REL-1', names, Date.parse(body.data.updatedAt)]]);
     recorded.length = 0;
     const failing = createLinearIngest({ secret: () => 'sec', ctx: c, accept: async () => Promise.reject(new Error('disk')), ack: async () => {}, log: () => {} });
     expect(await failing(raw, { 'linear-signature': sig })).toEqual({ status: 500 });

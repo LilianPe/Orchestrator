@@ -10,6 +10,8 @@ export interface TrackerIssue {
   teamKey: string;
   priority: number;
   createdAt: number;
+  /** When Linear last changed the issue, when read: orders what the factory reads of its labels (ORC-185). */
+  updatedAt?: number;
 }
 
 export type ActivityInput =

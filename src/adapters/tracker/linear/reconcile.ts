@@ -24,8 +24,11 @@ const UNSIGNED = { schemaVersion: SCHEMA_VERSION, taint: 'untrusted' } as const;
 
 /** The label changes of a delegated ticket since the factory last read its labels; the first reading only records them. */
 async function catchUpLabels(d: ReconcileDeps, projectId: string, issue: TrackerIssue, t: TicketState, at: number): Promise<void> {
+  const read = issue.updatedAt ?? 0;
   const known = await knownLabels(d.store, projectId, issue.identifier);
-  for (const c of known ? labelChanges(known, issue.labels) : []) {
+  // A webhook recorded a newer state of the issue than this pass read: it is the one to keep.
+  if (known && known.at > read) return;
+  for (const c of known ? labelChanges(known.labels, issue.labels) : []) {
     // The factory's own write, whose webhook has not come yet: no human change.
     if (await d.store.isEcho(labelEchoKey(issue.identifier, c.label, c.change), at)) continue;
     await d.submit({
@@ -38,7 +41,7 @@ async function catchUpLabels(d: ReconcileDeps, projectId: string, issue: Tracker
       payload: c,
     });
   }
-  await recordLabels(d.store, projectId, issue.identifier, issue.labels);
+  await recordLabels(d.store, projectId, issue.identifier, issue.labels, read);
 }
 
 export async function reconcileOnce(d: ReconcileDeps): Promise<void> {
@@ -55,7 +58,7 @@ export async function reconcileOnce(d: ReconcileDeps): Promise<void> {
           // An untracked ticket: the snapshot spares the orchestrator a second read of the tracker.
           const payload = t ? {} : { issue: { title: issue.title, logical, priority: issue.priority } };
           await d.submit({ ...UNSIGNED, id, type: 'ticket.delegated', at, projectId: p.id, ticketId: issue.identifier, payload });
-          await recordLabels(d.store, p.id, issue.identifier, issue.labels);
+          await recordLabels(d.store, p.id, issue.identifier, issue.labels, issue.updatedAt ?? 0);
           continue;
         }
         const to = logicalFromName(p.workflow.states, issue.stateName);
@@ -84,16 +87,19 @@ export async function reconcileOnce(d: ReconcileDeps): Promise<void> {
           d.log(`reconcile ${t.ticketId}: ${(err as Error).message}`);
           continue;
         }
+        const terminal = issue.stateType === 'completed' || issue.stateType === 'canceled';
+        // Still delegated and open: past the list's first page, nothing to catch up.
+        if (!terminal && issue.delegateId) continue;
         if (issue.stateType === 'completed') {
-          // As the webhook would have said it: a move, unsigned, that neither stops the run nor undelegates.
+          // Unsigned, as the move a webhook would have reported: it never merges (only a signed human decides it).
           const to = logicalFromName(p.workflow.states, issue.stateName);
           if (to && to !== t.logical && !(await d.store.isEcho(`state:${t.ticketId}:${issue.stateName}`, at))) {
             await d.submit({ ...UNSIGNED, id: `reconcile:moved:${t.ticketId}:${issue.stateName}:${t.updatedAt}`, type: 'status.changed', at, projectId: p.id, ticketId: t.ticketId, payload: { from: t.logical, to } });
           }
-          continue;
         }
-        if (issue.stateType === 'canceled') {
-          // The cancel stops the work itself (ORC-170); the delegation cleared after it, no later pass reads the ticket again.
+        // A cancel stops the work of a delegated ticket itself (ORC-170); `decide` stops nothing on another.
+        const cancel = issue.stateType === 'canceled' && t.delegated;
+        if (cancel) {
           await d.submit({
             ...UNSIGNED,
             id: `reconcile:cancelled:${t.ticketId}:${issue.stateName}:${t.updatedAt}`,
@@ -103,12 +109,11 @@ export async function reconcileOnce(d: ReconcileDeps): Promise<void> {
             ticketId: t.ticketId,
             payload: { from: t.logical, to: logicalFromName(p.workflow.states, issue.stateName) ?? null, cancelled: true },
           });
-        } else if (issue.delegateId) {
-          continue;
         } else if (t.activeRunId) {
           await d.submit({ ...TRUSTED, id: `reconcile:undelegated:${t.ticketId}:${t.activeRunId}`, type: 'session.stopped', at, projectId: p.id, ticketId: t.ticketId, payload: {} });
         }
-        if (undelegate) {
+        // Cleared after a cancel too: no later pass reads the cancelled ticket again.
+        if (undelegate && (cancel || !issue.delegateId)) {
           await d.submit({ ...TRUSTED, id: `reconcile:undelegated-flag:${t.ticketId}:${t.updatedAt}`, type: 'ticket.undelegated', at, projectId: p.id, ticketId: t.ticketId, payload: {} });
         }
       }

@@ -1,4 +1,4 @@
-const ISSUE_FIELDS = `id identifier title description url priority createdAt
+const ISSUE_FIELDS = `id identifier title description url priority createdAt updatedAt
   state { id name type } labels { nodes { id name parent { id } } } delegate { id } team { id key }`;
 
 export const Q = {
