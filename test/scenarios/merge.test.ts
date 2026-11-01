@@ -115,6 +115,15 @@ describe('Done by a human, merge by the factory (ORC-148)', () => {
     expect(lastMove(h)).toBe('Human Review');
   });
 
+  it('a PR merged on GitHub meanwhile, on another head, is no refusal: the ticket stays in Done', async () => {
+    const h = await inHumanReview();
+    h.forge.setPr(BRANCH, { ...PR, state: 'MERGED', headSha: 'def456', checks: 'pass', failedChecks: [] });
+    await h.send('status.changed', { from: 'human_review', to: 'done' }, 'REL-1', { actor: 'user-lilian' });
+    expect(h.forge.merges).toEqual([]);
+    expect(comments(h).some((c) => /pas mergé/.test(c))).toBe(false);
+    expect((await h.ticket()).logical).toBe('done');
+  });
+
   it('writes nothing on the forge when a human cancels the ticket: its PR stays open', async () => {
     // Two tickets may share one PR: the factory never closes nor merges a PR for a cancelled ticket.
     const h = await inHumanReview();

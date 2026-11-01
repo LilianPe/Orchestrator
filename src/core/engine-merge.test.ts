@@ -96,6 +96,10 @@ describe('decide — Done by a human merges the PR (ORC-148)', () => {
     expect(out.effects.some((e) => e.kind === 'start_run' || (e.kind === 'move' && e.to === 'ai_review'))).toBe(false);
   });
 
+  it('a merge refused once the PR is known merged (on GitHub, meanwhile) leaves the delivered ticket as it is', () => {
+    expect(decide(inReview({ logical: 'done', prState: 'MERGED' }), { ...ev('pr.merge_refused', pushed), taint: 'trusted' }, workflow).effects).toEqual([]);
+  });
+
   it('a merge refused for another reason (PR not mergeable) sends the ticket back to Human Review, the reviewed commit kept', () => {
     const out = decide(inReview({ logical: 'done' }), ev('pr.merge_refused', { number: 7, url: 'u', branch: 'b', reason: 'GitHub refuse le merge (conflit)' }), workflow);
     expect(out.effects).toEqual(backToReview(/GitHub refuse le merge \(conflit\)/));

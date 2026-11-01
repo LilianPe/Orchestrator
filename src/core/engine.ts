@@ -343,10 +343,16 @@ function doneMerge(out: Decision, event: FactoryEvent<'status.changed'>, state: 
  * factory emits no `status.changed`; its success shows the new head in Human Review, the commit the next Done merges.
  * Only the matching rule's `run` is applied. Any other refusal, a blocked ticket (it waits for a human) or a workflow with no AI
  * review goes back to Human Review, the reviewed commit kept. A refusal that arrives once a human moved the ticket on
- * from Done (an effect replayed late) is only answered: the ticket stays where the human put it.
+ * from Done (an effect replayed late) is only answered: the ticket stays where the human put it. A PR known merged
+ * meanwhile (on GitHub) is delivered: nothing is answered.
  */
 function mergeRefused(out: Decision, event: FactoryEvent<'pr.merge_refused'>, ticket: TicketState | undefined, workflow: Workflow): Decision {
   const refused = `Je n'ai pas mergé la PR #${event.payload.number} : ${event.payload.reason}.`;
+  if (ticket?.prState === 'MERGED') {
+    // Merged on GitHub meanwhile: delivered, nothing to answer nor to move.
+    out.trace.push(`not merged: ${event.payload.reason}, but the PR is merged`);
+    return out;
+  }
   if (ticket?.logical !== 'done') {
     out.trace.push(`not merged: ${event.payload.reason}, the ticket left where it is`);
     out.effects.push({ kind: 'comment', body: refused });

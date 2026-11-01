@@ -838,7 +838,12 @@ export class Orchestrator {
     const writer = this.d.forgeWriter;
     const pr = t.branch ? await this.d.forge.findPr(project.repoPath, t.branch) : undefined;
     let reason: string;
-    if (pr?.number === t.prNumber && pr.state === 'MERGED' && pr.headSha === sha) return { deduplicated: true };
+    if (pr?.number === t.prNumber && pr.state === 'MERGED') {
+      if (pr.headSha === sha) return { deduplicated: true };
+      // Merged on GitHub meanwhile, on another head: no refusal to answer, the merge's own events deliver the ticket.
+      this.log('info', `merge of ${t.ticketId} dropped: PR #${pr.number} already merged on ${pr.headSha}`);
+      return;
+    }
     if (!t.branch) reason = 'la branche du ticket est inconnue';
     else if (pr && pr.number !== t.prNumber) reason = `la PR de la branche (#${pr.number}) n'est pas celle du ticket (#${t.prNumber})`;
     else if (!writer) reason = "la GitHub App de l'usine est requise pour merger";
