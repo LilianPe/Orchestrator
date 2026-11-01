@@ -110,6 +110,8 @@ describe('decide — Done by a human merges the PR (ORC-148)', () => {
   it('a merge effect that died (GitHub down past its retries) sends the ticket back to Human Review: Done no longer says merged', () => {
     const failed = { ...ev('effect.failed', { effectId: 'REL-1:4:0', kind: 'merge', eventId: 'e-status.changed', attempts: 8, error: 'GitHub API PUT /pulls/7/merge: 502' }), taint: 'trusted' as const };
     expect(decide(inReview({ logical: 'done' }), failed, workflow).effects).toEqual(backToReview(/pas pu merger la PR #7 : GitHub API PUT \/pulls\/7\/merge: 502/));
+    // Once a human took the ticket out of Done, the dead merge is only answered: no block, the ticket where the human put it.
+    expect(decide(inReview({ logical: 'human_review' }), failed, workflow)).toMatchObject({ events: [], effects: [{ kind: 'comment', body: expect.stringMatching(/pas pu merger la PR #7/) }] });
     // A ticket delivered after all (merged on GitHub) is left as it is.
     expect(decide(inReview({ logical: 'done', prState: 'MERGED' }), failed, workflow).effects).toEqual([]);
   });
