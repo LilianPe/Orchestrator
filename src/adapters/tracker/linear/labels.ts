@@ -28,8 +28,9 @@ export async function knownLabels(store: Pick<Store, 'getMeta'>, projectId: stri
 
 export async function recordLabels(store: Pick<Store, 'getMeta' | 'setMeta'>, projectId: string, ticketId: string, labels: readonly string[], at: number): Promise<void> {
   const kept = await knownLabels(store, projectId, ticketId);
-  if (kept && kept.at > at) return;
-  await store.setMeta(key(projectId, ticketId), JSON.stringify({ labels: [...new Set(labels)].sort(), at }));
+  const sorted = [...new Set(labels)].sort();
+  if (kept && (kept.at > at || (kept.at === at && kept.labels.join('\n') === sorted.join('\n')))) return;
+  await store.setMeta(key(projectId, ticketId), JSON.stringify({ labels: sorted, at }));
 }
 
 /** What `known` lacks or has too, as label changes: what a webhook would have reported. */

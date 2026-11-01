@@ -1,5 +1,6 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
-import { labelEchoKey } from '../types.js';
+import { labelEchoKey, stateEchoKey } from '../types.js';
+import { labelChanges } from './labels.js';
 import { SCHEMA_VERSION, type LogicalState, type FactoryEvent, type Taint } from '../../../core/types.js';
 
 export function isUsableWebhookSecret(secret: unknown): boolean {
@@ -115,7 +116,7 @@ async function issueEvents(body: any, identifier: string, teamKey: string, proje
   if (from.stateId !== undefined) {
     const toName: string | undefined = data.state?.name ?? ctx.stateNameById(teamKey, data.stateId);
     const fromName = ctx.stateNameById(teamKey, from.stateId);
-    if (toName && !(await ctx.isEcho(`state:${identifier}:${toName}`))) {
+    if (toName && !(await ctx.isEcho(stateEchoKey(identifier, toName)))) {
       out.push({
         type: 'status.changed',
         payload: {
@@ -127,12 +128,7 @@ async function issueEvents(body: any, identifier: string, teamKey: string, proje
     }
   }
   if (Array.isArray(from.labelIds) && Array.isArray(data.labelIds)) {
-    const before = from.labelIds as string[];
-    const after = data.labelIds as string[];
-    const changes = [
-      ...after.filter((id) => !before.includes(id)).map((id) => ({ id, change: 'added' as const })),
-      ...before.filter((id) => !after.includes(id)).map((id) => ({ id, change: 'removed' as const })),
-    ];
+    const changes = labelChanges(from.labelIds as string[], data.labelIds as string[]).map(({ label: id, change }) => ({ id, change }));
     // A change the factory already knows was caught up by the reconciliation first (ORC-185).
     const known = changes.length ? await ctx.knownLabels?.(projectId, identifier) : undefined;
     for (const { id, change } of changes) {

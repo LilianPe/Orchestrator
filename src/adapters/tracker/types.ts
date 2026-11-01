@@ -30,6 +30,11 @@ export function effectMarker(effectId: string): string {
   return `<!-- factory:effect=${effectId} -->`;
 }
 
+/** The echo key of a status the factory itself moved the ticket to (`putEcho`), for the webhook of its own move to be dropped. */
+export function stateEchoKey(identifier: string, stateName: string): string {
+  return `state:${identifier}:${stateName}`;
+}
+
 /** The echo key of a label the factory itself added or took off (`putEcho`), for the webhook of its own write to be dropped. */
 export function labelEchoKey(identifier: string, label: string, change: 'added' | 'removed'): string {
   return change === 'added' ? `label:${identifier}:${label}` : `label-removed:${identifier}:${label}`;
