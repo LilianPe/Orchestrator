@@ -361,7 +361,8 @@ function mergeRefused(out: Decision, event: FactoryEvent<'pr.merge_refused'>, ti
   // The rule a human's move from Done to AI Review would apply, read on the ticket as it would then be.
   const moved: FactoryEvent<'status.changed'> = { ...event, type: 'status.changed', payload: { from: 'done', to: 'ai_review' } };
   const inAiReview = { ...ticket, logical: 'ai_review' as const };
-  const run = (workflow.on['status.changed'] ?? []).find((r) => r.run && ruleAllowed(r, moved, inAiReview, workflow) && ruleMatches(r, moved, inAiReview, ticket.activeJob))?.run;
+  // The first rule that matches, as `decideEvent` picks it: one with no run listed first starts no review.
+  const run = (workflow.on['status.changed'] ?? []).find((r) => ruleAllowed(r, moved, inAiReview, workflow) && ruleMatches(r, moved, inAiReview, ticket.activeJob))?.run;
   const job = run && workflow.states.ai_review ? workflow.jobs[run] : undefined;
   if (!event.payload.headMoved || !job || ticket.blocked) return backToReview(out, refused);
   out.trace.push(`not merged: ${event.payload.reason}, back to the AI review`);

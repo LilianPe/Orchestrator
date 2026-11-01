@@ -86,6 +86,12 @@ describe('decide — Done by a human merges the PR (ORC-148)', () => {
     expect(decide(inReview({ logical: 'done' }), ev('pr.merge_refused', pushed), noReview).effects).toEqual(backToReview(/push depuis la review/));
   });
 
+  it('a merge refused for a push applies the rule a human\'s move to AI Review would: the first that matches, run or not', () => {
+    // A rule with no run listed first answers a human's move with no review: so does the refusal.
+    const first = { ...workflow, on: { ...workflow.on, 'status.changed': [{ from: 'done', to: 'ai_review' }, ...(workflow.on['status.changed'] ?? [])] } } as typeof workflow;
+    expect(decide(inReview({ logical: 'done' }), { ...ev('pr.merge_refused', pushed), taint: 'trusted' }, first).effects).toEqual(backToReview(/push depuis la review/));
+  });
+
   it('a merge refused for a push on a blocked ticket goes back to Human Review: a blocked ticket waits for a human', () => {
     const out = decide(inReview({ logical: 'done', blocked: true, blockReason: 'x' }), { ...ev('pr.merge_refused', pushed), taint: 'trusted' }, workflow);
     expect(out.effects).toEqual(backToReview(/push depuis la review/));
