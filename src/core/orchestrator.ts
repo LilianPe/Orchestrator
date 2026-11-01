@@ -826,10 +826,15 @@ export class Orchestrator {
   /**
    * The `merge` effect (ORC-148). The forge is read first, as only it knows the checks of the reviewed commit: the
    * PR still open, its head still that commit, its checks green. Then merged with that head imposed, so a push in
-   * between is refused by GitHub itself. A refusal reaches the human through `pr.merge_refused`.
+   * between is refused by GitHub itself. A refusal reaches the human through `pr.merge_refused`, and is decided once:
+   * its mark, written before the event, makes a replay (a lost lease, a failed inbox write) send the same refusal
+   * again (the inbox drops the copy by its id) instead of reading the forge anew, where checks green since would merge.
    */
   private async merge(project: ProjectRuntime, t: TicketState, sha: string, key: EffectKey): Promise<EffectOutcome | void> {
     if (t.prNumber === undefined) return;
+    const mark = `effect:${key.id}:refused`;
+    const refused = key.replay ? await this.d.store.getMeta(mark) : undefined;
+    if (refused) return this.refuseMerge(project, t, key, refused);
     const writer = this.d.forgeWriter;
     const pr = t.branch ? await this.d.forge.findPr(project.repoPath, t.branch) : undefined;
     let reason: string;
@@ -845,14 +850,20 @@ export class Orchestrator {
       if (res.merged) return res.deduplicated ? { deduplicated: true } : undefined;
       reason = res.reason === 'head_moved' ? PUSHED : `GitHub refuse le merge (${res.message})`;
     }
-    await this.submitResult({
+    await this.d.store.setMeta(mark, reason);
+    await this.refuseMerge(project, t, key, reason);
+  }
+
+  /** The `pr.merge_refused` of a merge effect, keyed by it. A failed write throws, so that the outbox retries the effect. */
+  private async refuseMerge(project: ProjectRuntime, t: TicketState, key: EffectKey, reason: string): Promise<void> {
+    await this.accept({
       ...TRUSTED,
       id: `merge-refused:${key.id}`,
       type: 'pr.merge_refused',
       at: this.d.clock.now(),
       projectId: project.id,
       ticketId: t.ticketId,
-      payload: { number: t.prNumber, url: t.prUrl ?? '', branch: t.branch ?? '', reason, headMoved: reason === PUSHED },
+      payload: { number: t.prNumber!, url: t.prUrl ?? '', branch: t.branch ?? '', reason, headMoved: reason === PUSHED },
     });
   }
 

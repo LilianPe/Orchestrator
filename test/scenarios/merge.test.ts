@@ -10,8 +10,8 @@ type Harness = ReturnType<typeof createHarness>;
 const BRANCH = 'factory/rel-1-export-csv';
 const PR = { number: 3, url: 'https://github.com/acme/app/pull/3' };
 
-async function inHumanReview(): Promise<Harness> {
-  const h = createHarness({ authz: { githubLogins: { 'user-lilian': 'lilian-gh', 'user-armand': 'armand-gh' } } });
+async function inHumanReview(opts: Parameters<typeof createHarness>[0] = {}): Promise<Harness> {
+  const h = createHarness({ ...opts, authz: { githubLogins: { 'user-lilian': 'lilian-gh', 'user-armand': 'armand-gh' } } });
   h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Exporter les audits en CSV depuis la liste des audits.' });
   h.tracker.setTeamMembers('REL', ['user-lilian', 'user-armand']);
   h.forge.setRepoPermission('lilian-gh', 'write');
@@ -86,6 +86,32 @@ describe('Done by a human, merge by the factory (ORC-148)', () => {
     await h.send('status.changed', { from: 'human_review', to: 'done' }, 'REL-1', { actor: 'user-lilian' });
     expect(h.forge.merges).toEqual([]);
     expect(comments(h).at(-1)).toMatch(/checks du commit relu ne sont pas verts \(test\)/);
+    expect(lastMove(h)).toBe('Human Review');
+  });
+
+  it('a refusal is decided once: its effect replayed after the checks turned green still answers it, never merges', async () => {
+    // The refusal's inbox write fails three times: the effect is retried (a replay), and by then the checks are green.
+    let failures = 3;
+    const h = await inHumanReview({
+      effectRetry: { attempts: 6, baseMs: 1, capMs: 1 },
+      wrapStore: (store) => {
+        const append = store.appendInbox.bind(store);
+        store.appendInbox = async (e) => {
+          if (e.id.startsWith('merge-refused:') && failures > 0) {
+            failures--;
+            throw new Error('inbox unavailable');
+          }
+          return append(e);
+        };
+        return store;
+      },
+    });
+    h.forge.setPr(BRANCH, { ...PR, state: 'OPEN', headSha: 'abc123', checks: 'pending', failedChecks: [] });
+    await h.send('status.changed', { from: 'human_review', to: 'done' }, 'REL-1', { actor: 'user-lilian' });
+    h.forge.setPr(BRANCH, { ...PR, state: 'OPEN', headSha: 'abc123', checks: 'pass', failedChecks: [] });
+    for (let i = 0; i < 6; i++) await h.advance(10);
+    expect(h.forge.merges).toEqual([]);
+    expect(comments(h).at(-1)).toMatch(/checks du commit relu ne sont pas verts \(pending\)/);
     expect(lastMove(h)).toBe('Human Review');
   });
 
