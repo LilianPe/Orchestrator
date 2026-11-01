@@ -150,6 +150,9 @@ type RecoveryNotice = ({ ticket: { projectId: string; ticketId: string } } | { s
   body: string;
 };
 
+/** Why the factory's merge is refused when the PR's head moved since the review (ORC-148). */
+const PUSHED = 'la branche a reçu un push depuis la review';
+
 export class Orchestrator {
   private background = new Map<Promise<void>, string | undefined>();
   /** Runs whose event stream is still open (the runner is working, nothing for the factory to do): drained() does not wait for them. */
@@ -829,22 +832,19 @@ export class Orchestrator {
     if (t.prNumber === undefined) return;
     const writer = this.d.forgeWriter;
     const pr = t.branch ? await this.d.forge.findPr(project.repoPath, t.branch) : undefined;
-    let reason: string | undefined;
-    let headMoved = false;
+    let reason: string;
     if (pr?.number === t.prNumber && pr.state === 'MERGED' && pr.headSha === sha) return { deduplicated: true };
     if (!t.branch) reason = 'la branche du ticket est inconnue';
     else if (pr && pr.number !== t.prNumber) reason = `la PR de la branche (#${pr.number}) n'est pas celle du ticket (#${t.prNumber})`;
     else if (!writer) reason = "la GitHub App de l'usine est requise pour merger";
     else if (pr?.state !== 'OPEN') reason = "la PR n'est plus ouverte";
-    else if (pr.headSha !== sha) headMoved = true;
+    else if (pr.headSha !== sha) reason = PUSHED;
     else if (pr.checks !== 'pass') reason = `les checks du commit relu ne sont pas verts (${pr.failedChecks.join(', ') || pr.checks})`;
     else {
       const res: MergeResult = await writer.mergePr(project.repoPath, t.prNumber, sha);
       if (res.merged) return res.deduplicated ? { deduplicated: true } : undefined;
-      if (res.reason === 'head_moved') headMoved = true;
-      else reason = `GitHub refuse le merge (${res.message})`;
+      reason = res.reason === 'head_moved' ? PUSHED : `GitHub refuse le merge (${res.message})`;
     }
-    if (headMoved) reason = 'la branche a reçu un push depuis la review';
     await this.submitResult({
       ...TRUSTED,
       id: `merge-refused:${key.id}`,
@@ -852,7 +852,7 @@ export class Orchestrator {
       at: this.d.clock.now(),
       projectId: project.id,
       ticketId: t.ticketId,
-      payload: { number: t.prNumber, url: t.prUrl ?? '', branch: t.branch ?? '', reason: reason ?? '', ...(headMoved ? { headMoved: true as const } : {}) },
+      payload: { number: t.prNumber, url: t.prUrl ?? '', branch: t.branch ?? '', reason, headMoved: reason === PUSHED },
     });
   }
 

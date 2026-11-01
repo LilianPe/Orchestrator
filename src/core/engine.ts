@@ -341,7 +341,7 @@ function doneMerge(out: Decision, event: FactoryEvent<'status.changed'>, state: 
  * The factory's merge refused (ORC-148). For a push since the review, the new commits go through the AI review again:
  * the ticket moves to AI Review and the job of the workflow's `to: ai_review` rule starts here, as a move by the
  * factory emits no `status.changed`; its success shows the new head in Human Review, the commit the next Done merges.
- * Only the rule's `run` is read. Any other refusal, a blocked ticket (it waits for a human) or a workflow with no AI
+ * Only the matching rule's `run` is applied. Any other refusal, a blocked ticket (it waits for a human) or a workflow with no AI
  * review goes back to Human Review, the reviewed commit kept. A refusal that arrives once a human moved the ticket on
  * from Done (an effect replayed late) is only answered: the ticket stays where the human put it.
  */
@@ -352,8 +352,11 @@ function mergeRefused(out: Decision, event: FactoryEvent<'pr.merge_refused'>, ti
     out.effects.push({ kind: 'comment', body: refused });
     return out;
   }
-  const rule = (workflow.on['status.changed'] ?? []).find((r) => r.to === 'ai_review' && !r.from && r.run);
-  const job = rule && workflow.states.ai_review ? workflow.jobs[rule.run!] : undefined;
+  // The rule a human's move from Done to AI Review would apply, read on the ticket as it would then be.
+  const moved: FactoryEvent<'status.changed'> = { ...event, type: 'status.changed', payload: { from: 'done', to: 'ai_review' } };
+  const inAiReview = { ...ticket, logical: 'ai_review' as const };
+  const run = (workflow.on['status.changed'] ?? []).find((r) => r.run && ruleAllowed(r, moved, inAiReview, workflow) && ruleMatches(r, moved, inAiReview, ticket.activeJob))?.run;
+  const job = run && workflow.states.ai_review ? workflow.jobs[run] : undefined;
   if (!event.payload.headMoved || !job || ticket.blocked) return backToReview(out, refused);
   out.trace.push(`not merged: ${event.payload.reason}, back to the AI review`);
   out.effects.push({ kind: 'move', to: 'ai_review' }, { kind: 'comment', body: `${refused} Les nouveaux commits repassent par la review IA.` });

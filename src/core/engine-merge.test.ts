@@ -69,7 +69,7 @@ describe('decide — Done by a human merges the PR (ORC-148)', () => {
     expect(decide(inReview({ reviewSha: undefined }), done(), workflow).effects).toEqual(backToReview(/aucun commit relu.*répondez dans le fil/));
   });
 
-  const pushed = { number: 7, url: 'u', branch: 'b', reason: 'la branche a reçu un push depuis la review', headMoved: true } as const;
+  const pushed = { number: 7, url: 'u', branch: 'b', reason: 'la branche a reçu un push depuis la review', headMoved: true };
 
   it('a merge refused for a push since the review sends the new commits through the AI review, not straight to Human Review', () => {
     // A move by the factory emits no status.changed, so the review is started here, not by the rule `to: ai_review`.

@@ -170,7 +170,7 @@ export interface EventPayloads {
    * The factory's merge refused (ORC-148): a push since the review, a PR not mergeable. `reason` is for the human;
    * `headMoved`: refused for a push since the review, whose new commits go through the AI review again.
    */
-  'pr.merge_refused': PrPayload & { reason: string; headMoved?: true };
+  'pr.merge_refused': PrPayload & { reason: string; headMoved?: boolean };
   /**
    * A push on the project's default branch that concerns the ticket (ORC-278): only its commits that merge
    * the ticket's PR (`merges`) or revert it (`reverts`), by number. Untrusted: messages are written by
