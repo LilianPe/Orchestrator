@@ -595,6 +595,10 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       // `settle` is a step of the shell, not an effect of the workflow: its failure is only logged.
       const { kind, error, eventId } = event.payload;
       if (kind === 'settle' || !ticket) return out;
+      // A Done whose merge died (ORC-148) is not delivered: the human hears it, the ticket back in Human Review.
+      if (kind === 'merge' && ticket.logical === 'done' && ticket.prState !== 'MERGED') {
+        return backToReview(out, `Je n'ai pas pu merger la PR #${ticket.prNumber} : ${error}.`);
+      }
       // Nothing left to block: a delivered ticket, or one a human stopped (its reason stays).
       const settled = settledTicket(ticket);
       if (settled) {
