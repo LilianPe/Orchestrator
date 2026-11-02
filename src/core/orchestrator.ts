@@ -55,7 +55,7 @@ import {
   type VerifyFailure,
   TRUSTED,
 } from './types.js';
-import type { Verifier } from './verify.js';
+import { VERIFY_TIMEOUT_MS, type Verifier } from './verify.js';
 import { PRODUCT_NAME } from '../product.js';
 
 export interface ProjectRuntime {
@@ -391,7 +391,7 @@ export class Orchestrator {
     const sessionDir = join(this.d.sessionsDir, project.id, ticketId);
     mkdirSync(sessionDir, { recursive: true });
     const gitDir = await this.d.workspaces.gitCommonDir(ws.path);
-    return sandboxes.create({
+    const sandbox = await sandboxes.create({
       runId,
       ticketId,
       workspacePath: ws.path,
@@ -405,6 +405,9 @@ export class Orchestrator {
         ...(this.d.sandboxMounts ?? []),
       ],
     });
+    // The level is the one asked, not one enforced: every level but `none` is an open bridge until ORC-213.
+    if (sandbox.network !== 'none') this.log('warn', `sandbox ${sandbox.id} de ${ticketId} : réseau ${sandbox.network} demandé, réseau ouvert provisoire jusqu'à ORC-213`);
+    return sandbox;
   }
 
   private settingsPath(): string {
@@ -412,31 +415,28 @@ export class Orchestrator {
   }
 
   /**
-   * The repository's `setup` in a worktree just made: in its sandbox, on the host without one. A
-   * failure removes the worktree, so the next attempt makes it again and runs `setup` again.
+   * The repository's `setup` in a worktree just made: in its sandbox, on the host without one. It
+   * throws on a failure; the launch then removes the worktree, so the next attempt runs it again.
    */
-  private async runSetup(project: ProjectRuntime, ticketId: string, ws: Workspace, sandbox: Sandbox | undefined): Promise<void> {
+  private async runSetup(project: ProjectRuntime, ws: Workspace, sandbox: Sandbox | undefined): Promise<void> {
     const commands = project.workflow.workspace.setup;
     let failed: string | undefined;
     if (sandbox) {
       // ponytail: setup shares the attempt's `claude-api` sandbox, an open network until ORC-213; it gets
       // a `full` sandbox of its own once the network levels are real.
       for (const command of commands) {
-        if ((await this.d.sandboxes!.exec(sandbox.id, ['bash', '-lc', command])).code !== 0) {
-          failed = command;
-          break;
-        }
+        // The host's cap (runVerify), by coreutils' `timeout` in the image: 124 is its exit on expiry.
+        const argv = ['timeout', String(VERIFY_TIMEOUT_MS / 1000), 'bash', '-lc', command];
+        const { code } = await this.d.sandboxes!.exec(sandbox.id, argv);
+        if (code === 124) failed = `${command} (délai de ${VERIFY_TIMEOUT_MS / 60_000} min dépassé)`;
+        else if (code !== 0) failed = command;
+        if (failed !== undefined) break;
       }
     } else {
       const res = await this.d.verify(ws.path, commands);
       if (!res.ok) failed = res.failures[0]!.command;
     }
-    if (failed === undefined) return;
-    if (sandbox) await this.destroySandbox(sandbox.id);
-    await this.d.workspaces
-      .cleanup(project.id, project.repoPath, ticketId)
-      .catch((err: Error) => this.log('warn', `worktree of ${ticketId} not removed after its failed setup: ${err.message}`));
-    throw new Error(`Le setup du worktree a échoué : ${failed}`);
+    if (failed !== undefined) throw new Error(`Le setup du worktree a échoué : ${failed}`);
   }
 
   /**
@@ -1159,11 +1159,13 @@ export class Orchestrator {
       portBase: wf.workspace.portBase,
       runId,
     });
-    const sandbox = this.d.sandboxes && (await this.openSandbox(this.d.sandboxes, project, ticketId, ws, runId));
+    // A fresh worktree is not set up until its setup succeeds: a launch ending before removes it, or
+    // the next prepare would find it there (not fresh) and setup would never run.
+    let setUp = !(ws.fresh && wf.workspace.setup.length);
+    let sandbox: Sandbox | undefined;
     // Until pump has it, the sandbox is the launch's: whatever ends the launch before destroys it.
     let handedOver = false;
     try {
-      if (ws.fresh && wf.workspace.setup.length) await this.runSetup(project, ticketId, ws, sandbox);
       t = await this.ticket(project.id, ticketId);
       if (job.queue === 'dev') t = await this.apply(t, { type: 'workspace.prepared', path: ws.path, port: ws.port, branch: ws.branch });
       if (job.onStart.move && t.logical !== job.onStart.move) await this.move(project, t, job.onStart.move);
@@ -1195,6 +1197,11 @@ export class Orchestrator {
           .catch((err: Error) => this.log('warn', `could not answer ${ticketId}: ${err.message}`));
         return;
       }
+
+      // Opened after the cheap exits above, right before the setup and the run that need it.
+      sandbox = this.d.sandboxes && (await this.openSandbox(this.d.sandboxes, project, ticketId, ws, runId));
+      if (!setUp) await this.runSetup(project, ws, sandbox);
+      setUp = true;
 
       const wantsResume = opts.resume ?? job.session === 'resume';
       const resume = wantsResume && !!t.claudeSessionId;
@@ -1271,7 +1278,13 @@ export class Orchestrator {
       this.track(this.pump(project, run, handle, sandbox?.id), runId);
       handedOver = true;
     } finally {
+      // The sandbox first: it mounts the worktree.
       if (sandbox && !handedOver) await this.destroySandbox(sandbox.id);
+      if (!setUp) {
+        await workspaces
+          .cleanup(project.id, project.repoPath, ticketId)
+          .catch((err: Error) => this.log('warn', `worktree of ${ticketId} not removed after a launch that did not set it up: ${err.message}`));
+      }
     }
   }
 

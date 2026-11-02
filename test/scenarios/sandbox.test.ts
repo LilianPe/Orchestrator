@@ -50,7 +50,7 @@ describe('a disposable sandbox per attempt', () => {
   it('runs setup in the sandbox of a fresh worktree only', async () => {
     const h = createHarness({ sandboxed: true, projectYaml: SETUP });
     await delegate(h);
-    expect(h.sandboxes.execs).toEqual([{ id: 'sbx-1', argv: ['bash', '-lc', 'npm ci'] }]);
+    expect(h.sandboxes.execs).toEqual([{ id: 'sbx-1', argv: ['timeout', '900', 'bash', '-lc', 'npm ci'] }]);
     expect(h.checks.calls.some((c) => c.commands.includes('npm ci'))).toBe(false);
     await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'reprends', author: 'L' });
     await h.advance(600_000);
@@ -67,6 +67,58 @@ describe('a disposable sandbox per attempt', () => {
     expect(h.workspaces.cleaned).toEqual(['REL-1']);
     expect(await h.ticket()).toMatchObject({ blocked: true });
     expect(h.tracker.activities('ls-1').at(-1)).toMatchObject({ type: 'error', body: 'Erreur au lancement : Le setup du worktree a échoué : npm ci' });
+  });
+
+  it('a setup command over the verify timeout fails the setup as a timeout', async () => {
+    const h = createHarness({ sandboxed: true, projectYaml: SETUP });
+    h.sandboxes.execResult = () => ({ stdout: '', stderr: '', code: 124 });
+    await delegate(h);
+    expect(h.runner.requests).toEqual([]);
+    expect(h.workspaces.cleaned).toEqual(['REL-1']);
+    expect(h.tracker.activities('ls-1').at(-1)).toMatchObject({
+      type: 'error',
+      body: 'Erreur au lancement : Le setup du worktree a échoué : npm ci (délai de 15 min dépassé)',
+    });
+  });
+
+  it.each([
+    ['the sandbox cannot be opened', (h: ReturnType<typeof createHarness>) => {
+      h.sandboxes.create = async () => Promise.reject(new Error('engine down'));
+    }],
+    ['setup cannot be run in it', (h: ReturnType<typeof createHarness>) => {
+      h.sandboxes.exec = async () => Promise.reject(new Error('exec refused'));
+    }],
+  ])('when %s, a fresh worktree is removed so the next attempt runs setup again', async (_, fault) => {
+    const h = createHarness({ sandboxed: true, projectYaml: SETUP });
+    const { create, exec } = h.sandboxes;
+    fault(h);
+    await delegate(h);
+    expect(h.runner.requests).toEqual([]);
+    expect(h.sandboxes.active()).toEqual([]);
+    expect(h.workspaces.cleaned).toEqual(['REL-1']);
+    expect(await h.ticket()).toMatchObject({ blocked: true });
+    Object.assign(h.sandboxes, { create, exec });
+    await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'reprends', author: 'L' });
+    await h.advance(600_000);
+    expect(h.runner.requests).toHaveLength(1);
+    expect(h.sandboxes.execs.map((e) => e.argv.at(-1))).toEqual(['npm ci']);
+  });
+
+  it('opens no sandbox for a launch that ends before its run, and removes the fresh worktree it did not set up', async () => {
+    const h = createHarness({ sandboxed: true, projectYaml: SETUP });
+    const moveTo = h.tracker.moveTo.bind(h.tracker);
+    h.tracker.moveTo = async () => Promise.reject(new Error('linear down'));
+    await delegate(h);
+    expect(h.sandboxes.created).toEqual([]);
+    expect(h.workspaces.cleaned).toEqual(['REL-1']);
+    expect(await h.ticket()).toMatchObject({ blocked: true });
+    h.tracker.moveTo = moveTo;
+  });
+
+  it('logs a sandbox opened with a network, provisional until ORC-213', async () => {
+    const h = createHarness({ sandboxed: true });
+    await delegate(h);
+    expect(h.logs).toContainEqual({ level: 'warn', message: expect.stringContaining('ORC-213') as string });
   });
 
   it('without a sandbox, setup runs on the host as before', async () => {
