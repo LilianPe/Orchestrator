@@ -1,7 +1,6 @@
 import { existsSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { branchName } from '../../core/naming.js';
-import { runVerify, type Verifier } from '../../core/verify.js';
 import { execCmd, mustExec, type Exec } from '../exec.js';
 import type { Workspace, WorkspaceManager, WorkspaceRequest } from './types.js';
 
@@ -11,11 +10,9 @@ function assertSafe(id: string): void {
 
 export class GitWorkspaces implements WorkspaceManager {
   private exec: Exec;
-  private verify: Verifier;
 
-  constructor(private o: { root: string; knowledgeRepo?: string; exec?: Exec; verify?: Verifier }) {
+  constructor(private o: { root: string; knowledgeRepo?: string; exec?: Exec }) {
     this.exec = o.exec ?? execCmd;
-    this.verify = o.verify ?? runVerify;
   }
 
   private git(repo: string, ...args: string[]): Promise<string> {
@@ -50,14 +47,7 @@ export class GitWorkspaces implements WorkspaceManager {
     } else {
       await this.git(req.repoPath, 'worktree', 'add', '--no-track', '-b', branch, path, `origin/${await this.trunk(req.repoPath)}`);
     }
-    if (req.setup.length) {
-      const res = await this.verify(path, req.setup);
-      if (!res.ok) {
-        await this.exec('git', ['-C', req.repoPath, 'worktree', 'remove', '--force', path]).catch(() => undefined);
-        throw new Error(`Le setup du worktree a échoué : ${res.failures[0]!.command}`);
-      }
-    }
-    return { path, port, branch };
+    return { path, port, branch, fresh: true };
   }
 
   private async trunkWorkspace(req: WorkspaceRequest): Promise<Workspace> {
@@ -94,6 +84,10 @@ export class GitWorkspaces implements WorkspaceManager {
     if (!existsSync(path)) return undefined;
     const r = await this.exec('git', ['-C', path, 'rev-parse', 'HEAD']);
     return r.code === 0 ? r.stdout.trim() : undefined;
+  }
+
+  async gitCommonDir(path: string): Promise<string> {
+    return (await this.git(path, 'rev-parse', '--path-format=absolute', '--git-common-dir')).trim();
   }
 
   async remoteBranchExists(repoPath: string, prefix: string): Promise<boolean> {

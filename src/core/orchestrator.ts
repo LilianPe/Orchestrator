@@ -1,11 +1,21 @@
 import { randomUUID } from 'node:crypto';
+import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Forge, ForgeWriter, MergeResult } from '../adapters/forge/types.js';
 import type { RoleResolver } from '../adapters/roles/types.js';
 import type { RunHandle, RunResult, Runner } from '../adapters/runner/types.js';
+import {
+  DEFAULT_REQUIREMENTS,
+  PACK_TARGET,
+  SANDBOX_HOME,
+  WORKSPACE_TARGET,
+  type Sandbox,
+  type SandboxMount,
+  type SandboxProvider,
+} from '../adapters/sandbox/types.js';
 import { ActivityRelay } from '../adapters/tracker/activity-relay.js';
 import { labelEchoKey, type ActivityInput, type Tracker } from '../adapters/tracker/types.js';
-import type { WorkspaceManager } from '../adapters/workspace/types.js';
+import type { Workspace, WorkspaceManager } from '../adapters/workspace/types.js';
 import type { JobSpec, Workflow } from '../config/workflow-schema.js';
 import type { EffectRetry } from '../runtime/outbox.js';
 import { Worker } from '../runtime/worker.js';
@@ -73,6 +83,15 @@ export interface OrchestratorDeps {
   packDir: string;
   /** `--settings` file for runs; defaults to <packDir>/settings.json. */
   settingsPath?: string;
+  /**
+   * Each attempt runs in a sandbox of its own (ORC-204), made at its launch and destroyed when it
+   * ends; `setup` runs there too. Absent: runs and `setup` on the host (fake runner, tests).
+   */
+  sandboxes?: SandboxProvider;
+  /** Where each ticket's Claude session dir lives on the host (`<sessionsDir>/<project>/<ticket>`); required with `sandboxes`. */
+  sessionsDir?: string;
+  /** Other host paths every sandbox mounts (the factory's install, for `factory-agent`). */
+  sandboxMounts?: readonly SandboxMount[];
   agentEnv: (run: RunRecord) => Record<string, string>;
   dailyBudgetUsd?: number;
   newId?: () => string;
@@ -149,6 +168,9 @@ type RecoveryNotice = ({ ticket: { projectId: string; ticketId: string } } | { s
   type: 'elicitation' | 'error';
   body: string;
 };
+
+/** Where a sandboxed run reads its `--settings` file, next to the pack (ORC-204). */
+export const SETTINGS_TARGET = '/factory/settings.json';
 
 /** Why the factory's merge is refused when the PR's head moved since the review (ORC-148). */
 const PUSHED = 'la branche a reçu un push depuis la review';
@@ -306,6 +328,7 @@ export class Orchestrator {
    */
   async recover(): Promise<void> {
     const { store } = this.d;
+    await this.destroyDeadSandboxes();
     const finished = new Set<string>();
     const checked = new Set<string>();
     for (const row of await store.pendingInbox(Number.MAX_SAFE_INTEGER)) {
@@ -335,6 +358,85 @@ export class Orchestrator {
       }
       if (t.verifyingRunId && !checked.has(t.verifyingRunId)) await block(t, `${PRODUCT_NAME} a redémarré pendant les vérifications. Répondez dans le fil pour relancer.`);
     }
+  }
+
+  /** The sandboxes a crash left behind (ORC-204): every one whose attempt this process is not running. */
+  private async destroyDeadSandboxes(): Promise<void> {
+    const sandboxes = this.d.sandboxes;
+    if (!sandboxes) return;
+    let live: Awaited<ReturnType<SandboxProvider['list']>>;
+    try {
+      live = await sandboxes.list();
+    } catch (err) {
+      this.log('error', `sandboxes not listed, those of dead attempts are left: ${(err as Error).message}`);
+      return;
+    }
+    for (const { runId, sandbox } of live) if (!this.handles.has(runId)) await this.destroySandbox(sandbox.id);
+  }
+
+  /** Logged, never thrown: a sandbox left behind is recover()'s at the next start. */
+  private async destroySandbox(id: string): Promise<void> {
+    await this.d.sandboxes?.destroy(id).catch((err: Error) => this.log('error', `sandbox ${id} not destroyed: ${err.message}`));
+  }
+
+  /**
+   * The attempt's sandbox (ORC-204): the worktree, the git dir its `.git` file points into (at the
+   * same path, so git works there; it shows the repository's other refs until ORC-205), the ticket's
+   * Claude session dir as `~/.claude` (`--resume` across attempts), the pack and the run settings
+   * read-only. A `trunk-readonly` job gets its worktree read-write too: only `--permission-mode plan`
+   * keeps it from writing, as on the host. `claude-api` is an open network until ORC-213.
+   */
+  private async openSandbox(sandboxes: SandboxProvider, project: ProjectRuntime, ticketId: string, ws: Workspace, runId: string): Promise<Sandbox> {
+    if (!this.d.sessionsDir) throw new Error('sessionsDir is required with sandboxes');
+    const sessionDir = join(this.d.sessionsDir, project.id, ticketId);
+    mkdirSync(sessionDir, { recursive: true });
+    const gitDir = await this.d.workspaces.gitCommonDir(ws.path);
+    return sandboxes.create({
+      runId,
+      ticketId,
+      workspacePath: ws.path,
+      network: 'claude-api',
+      requirements: DEFAULT_REQUIREMENTS,
+      mounts: [
+        { host: gitDir, target: gitDir, readOnly: false },
+        { host: sessionDir, target: `${SANDBOX_HOME}/.claude`, readOnly: false },
+        { host: this.d.packDir, target: PACK_TARGET, readOnly: true },
+        { host: this.settingsPath(), target: SETTINGS_TARGET, readOnly: true },
+        ...(this.d.sandboxMounts ?? []),
+      ],
+    });
+  }
+
+  private settingsPath(): string {
+    return this.d.settingsPath ?? join(this.d.packDir, 'settings.json');
+  }
+
+  /**
+   * The repository's `setup` in a worktree just made: in its sandbox, on the host without one. A
+   * failure removes the worktree, so the next attempt makes it again and runs `setup` again.
+   */
+  private async runSetup(project: ProjectRuntime, ticketId: string, ws: Workspace, sandbox: Sandbox | undefined): Promise<void> {
+    const commands = project.workflow.workspace.setup;
+    let failed: string | undefined;
+    if (sandbox) {
+      // ponytail: setup shares the attempt's `claude-api` sandbox, an open network until ORC-213; it gets
+      // a `full` sandbox of its own once the network levels are real.
+      for (const command of commands) {
+        if ((await this.d.sandboxes!.exec(sandbox.id, ['sh', '-c', command])).code !== 0) {
+          failed = command;
+          break;
+        }
+      }
+    } else {
+      const res = await this.d.verify(ws.path, commands);
+      if (!res.ok) failed = res.failures[0]!.command;
+    }
+    if (failed === undefined) return;
+    if (sandbox) await this.destroySandbox(sandbox.id);
+    await this.d.workspaces
+      .cleanup(project.id, project.repoPath, ticketId)
+      .catch((err: Error) => this.log('warn', `worktree of ${ticketId} not removed after its failed setup: ${err.message}`));
+    throw new Error(`Le setup du worktree a échoué : ${failed}`);
   }
 
   /**
@@ -1055,116 +1157,126 @@ export class Orchestrator {
       kind: job.workspace,
       slot,
       portBase: wf.workspace.portBase,
-      setup: wf.workspace.setup,
       runId,
     });
-    t = await this.ticket(project.id, ticketId);
-    if (job.queue === 'dev') t = await this.apply(t, { type: 'workspace.prepared', path: ws.path, port: ws.port, branch: ws.branch });
-    if (job.onStart.move && t.logical !== job.onStart.move) await this.move(project, t, job.onStart.move);
-    t = await this.ticket(project.id, ticketId);
+    const sandbox = this.d.sandboxes && (await this.openSandbox(this.d.sandboxes, project, ticketId, ws, runId));
+    // Until pump has it, the sandbox is the launch's: whatever ends the launch before destroys it.
+    let handedOver = false;
+    try {
+      if (ws.fresh && wf.workspace.setup.length) await this.runSetup(project, ticketId, ws, sandbox);
+      t = await this.ticket(project.id, ticketId);
+      if (job.queue === 'dev') t = await this.apply(t, { type: 'workspace.prepared', path: ws.path, port: ws.port, branch: ws.branch });
+      if (job.onStart.move && t.logical !== job.onStart.move) await this.move(project, t, job.onStart.move);
+      t = await this.ticket(project.id, ticketId);
 
-    const linearSessionId = opts.linearSessionId ?? (await this.sessionFor(t));
-    t = await this.ticket(project.id, ticketId);
+      const linearSessionId = opts.linearSessionId ?? (await this.sessionFor(t));
+      t = await this.ticket(project.id, ticketId);
 
-    // The feedback the run reads, taken at the launch whoever started it (a decision, settle, the queue):
-    // its taint completes the one the start was decided with (I12, ORC-274).
-    const kind = opts.input ?? job.input;
-    const read: FeedbackItem[] = [];
-    if (kind === 'feedback') {
-      read.push(...t.pendingFeedback);
-      // Review comments are external content: whoever can comment on the PR wrote them, and nothing
-      // authenticates them as the team's (ORC-160). Untrusted, whatever the forge says.
-      if (t.prNumber) {
-        const comments = await forge.unresolvedReviewComments(project.repoPath, t.prNumber);
-        read.push(...comments.map((c) => ({ ...c, taint: 'untrusted' as const })));
+      // The feedback the run reads, taken at the launch whoever started it (a decision, settle, the queue):
+      // its taint completes the one the start was decided with (I12, ORC-274).
+      const kind = opts.input ?? job.input;
+      const read: FeedbackItem[] = [];
+      if (kind === 'feedback') {
+        read.push(...t.pendingFeedback);
+        // Review comments are external content: whoever can comment on the PR wrote them, and nothing
+        // authenticates them as the team's (ORC-160). Untrusted, whatever the forge says.
+        if (t.prNumber) {
+          const comments = await forge.unresolvedReviewComments(project.repoPath, t.prNumber);
+          read.push(...comments.map((c) => ({ ...c, taint: 'untrusted' as const })));
+        }
       }
+      const sensitivePaths = sensitivePathsAtLaunch(opts.sensitivePaths, read);
+      if (sensitivePaths && job.workspace === 'knowledge') {
+        // As decide refuses it (I12), for what it could not see: untrusted content read at the launch.
+        this.d.scheduler.release(key);
+        this.log('warn', `refused ${job.name} on ${ticketId}: it would write the knowledge base from untrusted content`);
+        await tracker
+          .activity(linearSessionId, { type: 'response', body: taintedKnowledge(job.name, 'read') })
+          .catch((err: Error) => this.log('warn', `could not answer ${ticketId}: ${err.message}`));
+        return;
+      }
+
+      const wantsResume = opts.resume ?? job.session === 'resume';
+      const resume = wantsResume && !!t.claudeSessionId;
+      const claudeSessionId = resume ? t.claudeSessionId! : this.newId();
+
+      let input: { kind: InputKind; text: string } | undefined;
+      if (kind === 'feedback') {
+        input = { kind, text: read.length ? formatFeedback(read) : '(aucun retour écrit : relisez la PR et le fil Linear)' };
+      } else if (kind === 'verify_failures') {
+        input = { kind, text: formatVerifyFailures(JSON.parse(opts.inputText ?? '[]') as VerifyFailure[]) };
+      } else if (kind === 'ci_failures') {
+        input = { kind, text: opts.inputText ?? 'La CI de la PR est en échec. Lancez `gh pr checks` pour le détail.' };
+      } else if (kind === 'thread') {
+        input = { kind, text: opts.inputText ?? '' };
+      }
+
+      const promptInput = {
+        skill: job.skill,
+        issue: { identifier: issue.identifier, title: issue.title, description: issue.description, url: issue.url },
+        branch: job.queue === 'dev' ? t.branch : undefined,
+        prUrl: t.prUrl,
+        input,
+        reviewRounds: wf.limits.reviewRounds,
+      };
+      const prompt = buildPrompt(promptInput);
+      const labels = attemptLabels({ job, prompt, promptInput, workflow: wf, pack: await pack, factoryCommit: this.d.factoryCommit });
+
+      const run: RunRecord = {
+        id: runId,
+        projectId: project.id,
+        ticketId,
+        job: job.name,
+        queue: job.queue,
+        status: 'running',
+        claudeSessionId,
+        linearSessionId,
+        startedAt: clock.now(),
+        costUsd: 0,
+        turns: 0,
+        lastText: '',
+        token: this.newId(),
+        cwd: ws.path,
+        labels,
+        sensitivePaths,
+      };
+      // The mark, then the ticket, then the run (`startHandled`, ORC-277): a dev ticket holds its run
+      // before the run is written, so recover() blocks it whichever write a crash falls after.
+      if (opts.startMark) await store.setMeta(opts.startMark, runId);
+      await this.apply(t, { type: 'run.started', runId, job: job.name, queue: job.queue, claudeSessionId, feedbackConsumed: kind === 'feedback' });
+      await store.putRun(run);
+      // The run is written: a queued item it came from leaves the queue now (a crash from here on is recover()'s).
+      // Logged, not thrown: the run is launched either way, and a queue item left behind is refused
+      // when handed out again (its ticket has a run, or is blocked, or its mark names this run).
+      await recorded?.().catch((err: Error) => this.log('warn', `queued ${job.name} on ${ticketId} not taken out of the queue: ${err.message}`));
+      if (this.d.beforeRun) await this.d.beforeRun(run).catch((err: Error) => this.log('warn', `beforeRun: ${err.message}`));
+
+      const handle = this.d.runner.start({
+        runId,
+        cwd: sandbox ? WORKSPACE_TARGET : ws.path,
+        prompt,
+        claudeSessionId,
+        resume,
+        model: job.model,
+        pluginDir: sandbox ? PACK_TARGET : this.d.packDir,
+        settingsPath: sandbox ? SETTINGS_TARGET : this.settingsPath(),
+        readOnly: job.workspace === 'trunk-readonly',
+        limits: job.limits,
+        env: { ...this.d.agentEnv(run), ...(ws.port !== undefined ? { PORT: String(ws.port) } : {}) },
+        sensitivePaths,
+        ...(sandbox ? { sandboxId: sandbox.id } : {}),
+      });
+      this.handles.set(runId, handle);
+      this.liveRuns.add(runId);
+      this.track(this.pump(project, run, handle, sandbox?.id), runId);
+      handedOver = true;
+    } finally {
+      if (sandbox && !handedOver) await this.destroySandbox(sandbox.id);
     }
-    const sensitivePaths = sensitivePathsAtLaunch(opts.sensitivePaths, read);
-    if (sensitivePaths && job.workspace === 'knowledge') {
-      // As decide refuses it (I12), for what it could not see: untrusted content read at the launch.
-      this.d.scheduler.release(key);
-      this.log('warn', `refused ${job.name} on ${ticketId}: it would write the knowledge base from untrusted content`);
-      await tracker
-        .activity(linearSessionId, { type: 'response', body: taintedKnowledge(job.name, 'read') })
-        .catch((err: Error) => this.log('warn', `could not answer ${ticketId}: ${err.message}`));
-      return;
-    }
-
-    const wantsResume = opts.resume ?? job.session === 'resume';
-    const resume = wantsResume && !!t.claudeSessionId;
-    const claudeSessionId = resume ? t.claudeSessionId! : this.newId();
-
-    let input: { kind: InputKind; text: string } | undefined;
-    if (kind === 'feedback') {
-      input = { kind, text: read.length ? formatFeedback(read) : '(aucun retour écrit : relisez la PR et le fil Linear)' };
-    } else if (kind === 'verify_failures') {
-      input = { kind, text: formatVerifyFailures(JSON.parse(opts.inputText ?? '[]') as VerifyFailure[]) };
-    } else if (kind === 'ci_failures') {
-      input = { kind, text: opts.inputText ?? 'La CI de la PR est en échec. Lancez `gh pr checks` pour le détail.' };
-    } else if (kind === 'thread') {
-      input = { kind, text: opts.inputText ?? '' };
-    }
-
-    const promptInput = {
-      skill: job.skill,
-      issue: { identifier: issue.identifier, title: issue.title, description: issue.description, url: issue.url },
-      branch: job.queue === 'dev' ? t.branch : undefined,
-      prUrl: t.prUrl,
-      input,
-      reviewRounds: wf.limits.reviewRounds,
-    };
-    const prompt = buildPrompt(promptInput);
-    const labels = attemptLabels({ job, prompt, promptInput, workflow: wf, pack: await pack, factoryCommit: this.d.factoryCommit });
-
-    const run: RunRecord = {
-      id: runId,
-      projectId: project.id,
-      ticketId,
-      job: job.name,
-      queue: job.queue,
-      status: 'running',
-      claudeSessionId,
-      linearSessionId,
-      startedAt: clock.now(),
-      costUsd: 0,
-      turns: 0,
-      lastText: '',
-      token: this.newId(),
-      cwd: ws.path,
-      labels,
-      sensitivePaths,
-    };
-    // The mark, then the ticket, then the run (`startHandled`, ORC-277): a dev ticket holds its run
-    // before the run is written, so recover() blocks it whichever write a crash falls after.
-    if (opts.startMark) await store.setMeta(opts.startMark, runId);
-    await this.apply(t, { type: 'run.started', runId, job: job.name, queue: job.queue, claudeSessionId, feedbackConsumed: kind === 'feedback' });
-    await store.putRun(run);
-    // The run is written: a queued item it came from leaves the queue now (a crash from here on is recover()'s).
-    // Logged, not thrown: the run is launched either way, and a queue item left behind is refused
-    // when handed out again (its ticket has a run, or is blocked, or its mark names this run).
-    await recorded?.().catch((err: Error) => this.log('warn', `queued ${job.name} on ${ticketId} not taken out of the queue: ${err.message}`));
-    if (this.d.beforeRun) await this.d.beforeRun(run).catch((err: Error) => this.log('warn', `beforeRun: ${err.message}`));
-
-    const handle = this.d.runner.start({
-      runId,
-      cwd: ws.path,
-      prompt,
-      claudeSessionId,
-      resume,
-      model: job.model,
-      pluginDir: this.d.packDir,
-      settingsPath: this.d.settingsPath ?? join(this.d.packDir, 'settings.json'),
-      readOnly: job.workspace === 'trunk-readonly',
-      limits: job.limits,
-      env: { ...this.d.agentEnv(run), ...(ws.port !== undefined ? { PORT: String(ws.port) } : {}) },
-      sensitivePaths,
-    });
-    this.handles.set(runId, handle);
-    this.liveRuns.add(runId);
-    this.track(this.pump(project, run, handle), runId);
   }
 
-  private async pump(project: ProjectRuntime, run: RunRecord, handle: RunHandle): Promise<void> {
+  /** Streams a run to its end, destroys its sandbox whatever the outcome, then writes its result to the inbox. */
+  private async pump(project: ProjectRuntime, run: RunRecord, handle: RunHandle, sandboxId?: string): Promise<void> {
     const { tracker, bus, store, clock } = this.d;
     let result: RunResult;
     try {
@@ -1211,6 +1323,8 @@ export class Orchestrator {
         this.log('error', `could not record failure of run ${run.id}: ${(e as Error).message}`);
       }
       result = { outcome: 'failure', costUsd: 0, turns: 0, lastText: message };
+    } finally {
+      if (sandboxId) await this.destroySandbox(sandboxId);
     }
     await this.submitResult({
       ...TRUSTED,
