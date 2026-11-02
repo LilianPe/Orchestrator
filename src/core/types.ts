@@ -1,3 +1,4 @@
+import type { AgentOutput, AttemptOutcome } from './agent-output.js';
 import type { Role } from './authz.js';
 import type { StoredEvent } from './upcast.js';
 
@@ -182,7 +183,12 @@ export interface EventPayloads {
    * and attempt. Untrusted: the workflow is a file of the branch. No reaction: the measures sum it (`ciCost`).
    */
   'ci.run_completed': CiRunPayload;
-  'run.finished': { runId: string; job: string; outcome: RunOutcome; costUsd: number; turns: number; lastText: string };
+  /**
+   * `attempt`: the closed outcome of the attempt (ORC-289), from `outcome`, the runner's own failure and
+   * what `submit_result` recorded (`output`, when valid). Optional: no version bump, rows written before
+   * it lack both and decide on `outcome` as before.
+   */
+  'run.finished': { runId: string; job: string; outcome: RunOutcome; costUsd: number; turns: number; lastText: string; attempt?: AttemptOutcome; output?: AgentOutput };
   'verify.passed': { runId: string; job: string };
   /** `tree`: fingerprint of the worktree content when the check failed, absent outside git (ORC-187). */
   'verify.failed': { runId: string; job: string; failures: VerifyFailure[]; tree?: string };

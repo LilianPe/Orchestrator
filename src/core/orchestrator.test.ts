@@ -298,7 +298,8 @@ describe('Orchestrator', () => {
     });
     tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
     await orch.accept(delegated());
-    await waitFor(async () => !!(await store.getTicket('p', 'REL-1'))?.verifyingRunId);
+    // The daemon's poll: a run.finished that came in while its launch still held the ticket waits for it.
+    await waitFor(async () => (await orch.poll(), !!(await store.getTicket('p', 'REL-1'))?.verifyingRunId));
     await orch.accept({ ...TRUSTED, id: 'stop', type: 'control.stop', at: 2, projectId: 'p', ticketId: 'REL-1', payload: {} });
     await waitFor(async () => (await store.getTicket('p', 'REL-1'))!.verifyingRunId === undefined);
     release();
