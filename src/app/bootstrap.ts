@@ -57,10 +57,9 @@ export function isLoopbackHost(host: string): boolean {
 
 const FACTORY_LABELS = ['agent:reprendre', 'agent:stop', BLOCKED_LABEL];
 
-/** Where a sandbox sees the factory's install, the knowledge base, and the PATH of its image (ORC-204). */
+/** Where a sandbox sees the factory's install and the knowledge base (ORC-204); its image puts `/factory/app/bin` on its PATH. */
 const SANDBOX_ROOT = '/factory/app';
 const SANDBOX_KNOWLEDGE = '/factory/knowledge';
-const SANDBOX_PATH = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
 
 export async function startFactory(o: BootOptions): Promise<{ url: string; stop(): Promise<void> }> {
   const log = o.log ?? ((m: string) => console.log(`[factoryd] ${m}`));
@@ -200,7 +199,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       ...(sandboxes
         ? {
             sandboxes,
-            sessionsDir: join(o.home, 'sessions'),
+            sessionsDir: paths.sessions,
             // factory-agent runs from the factory's install, read-only: only what it needs, never the whole root,
             // which can hold a `.env` or a dev FACTORY_HOME. The knowledge base, read-only, for the session-start hook.
             sandboxMounts: [
@@ -213,14 +212,22 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
             ],
           }
         : {}),
-      // In a sandbox, paths of the sandbox and its own PATH: no host path reaches it.
+      // In a sandbox, paths of the sandbox and the PATH of its image: no host path reaches it.
       agentEnv: (run) => ({
-        FACTORY_API: sandboxes ? `http://${sandboxAgentHost}:${agentPort}/agent` : `http://127.0.0.1:${port}/agent`,
         FACTORY_RUN_TOKEN: run.token,
         FACTORY_TICKET: run.ticketId,
-        FACTORY_KNOWLEDGE: instance.knowledge ? (sandboxes ? SANDBOX_KNOWLEDGE : instance.knowledge.repoPath) : '',
-        FACTORY_ROOT: sandboxes ? SANDBOX_ROOT : root,
-        PATH: sandboxes ? `${SANDBOX_ROOT}/bin:${SANDBOX_PATH}` : `${join(root, 'bin')}:${process.env['PATH'] ?? ''}`,
+        ...(sandboxes
+          ? {
+              FACTORY_API: `http://${sandboxAgentHost}:${agentPort}/agent`,
+              FACTORY_KNOWLEDGE: instance.knowledge ? SANDBOX_KNOWLEDGE : '',
+              FACTORY_ROOT: SANDBOX_ROOT,
+            }
+          : {
+              FACTORY_API: `http://127.0.0.1:${port}/agent`,
+              FACTORY_KNOWLEDGE: instance.knowledge?.repoPath ?? '',
+              FACTORY_ROOT: root,
+              PATH: `${join(root, 'bin')}:${process.env['PATH'] ?? ''}`,
+            }),
       }),
     });
     await orchestrator.recover();

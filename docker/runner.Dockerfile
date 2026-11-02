@@ -10,4 +10,6 @@ RUN git config --system --add safe.directory '*'
 # HOME of whatever uid runs the container; sticky, so a run cannot remove another's files.
 RUN mkdir -p /home/factory && chmod 1777 /home/factory
 ENV HOME=/home/factory
+# The factory install is mounted read-only at /factory/app (ORC-204): `factory-agent` is on the PATH of every run.
+ENV PATH=/factory/app/bin:$PATH
 WORKDIR /work

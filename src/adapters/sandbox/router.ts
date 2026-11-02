@@ -36,8 +36,8 @@ export class SandboxRouter implements SandboxProvider {
     if (existing) {
       const b = this.owner.get(existing.id)!;
       if (existing.network !== req.network) throw new Error(`sandbox of ${req.runId} has network ${existing.network}, asked ${req.network}`);
-      const missing = [...(RANK[existing.level] < RANK[req.requirements.minLevel] ? [`level >= ${req.requirements.minLevel}`] : []), ...unmet(b, req.requirements)];
-      if (missing.length) throw new Error(`sandbox of ${req.runId} does not satisfy the requirements: ${b.name} lacks ${[...new Set(missing)].join(', ')}`);
+      const missing = unmet(b, req.requirements);
+      if (missing.length) throw new Error(`sandbox of ${req.runId} does not satisfy the requirements: ${b.name} lacks ${missing.join(', ')}`);
       return existing;
     }
     const chosen = this.backends.find((b) => unmet(b, req.requirements).length === 0);

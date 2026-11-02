@@ -74,3 +74,5 @@ export interface SandboxProvider {
 export const SANDBOX_HOME = '/home/factory';
 /** Where the pack (plugin dir, run settings) is mounted read-only. */
 export const PACK_TARGET = '/factory/pack';
+/** Where the run settings file is mounted read-only. */
+export const SETTINGS_TARGET = '/factory/settings.json';

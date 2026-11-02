@@ -76,12 +76,14 @@ export function homePaths(home: string) {
     transcripts: join(home, 'transcripts'),
     workspaces: join(home, 'workspaces'),
     logs: join(home, 'logs'),
+    /** Each ticket's Claude session dir, mounted as `~/.claude` of its sandboxes (ORC-204). */
+    sessions: join(home, 'sessions'),
   };
 }
 
 function ensureTree(home: string): void {
   const p = homePaths(home);
-  for (const dir of [home, p.transcripts, p.workspaces, p.logs]) mkdirSync(dir, { recursive: true });
+  for (const dir of [home, p.transcripts, p.workspaces, p.logs, p.sessions]) mkdirSync(dir, { recursive: true });
 }
 
 function validate(raw: unknown): InstanceConfig {

@@ -8,6 +8,7 @@ import {
   DEFAULT_REQUIREMENTS,
   PACK_TARGET,
   SANDBOX_HOME,
+  SETTINGS_TARGET,
   WORKSPACE_TARGET,
   type Sandbox,
   type SandboxMount,
@@ -170,7 +171,6 @@ type RecoveryNotice = ({ ticket: { projectId: string; ticketId: string } } | { s
 };
 
 /** Where a sandboxed run reads its `--settings` file, next to the pack (ORC-204). */
-export const SETTINGS_TARGET = '/factory/settings.json';
 
 /** Why the factory's merge is refused when the PR's head moved since the review (ORC-148). */
 const PUSHED = 'la branche a reçu un push depuis la review';
@@ -371,7 +371,7 @@ export class Orchestrator {
       this.log('error', `sandboxes not listed, those of dead attempts are left: ${(err as Error).message}`);
       return;
     }
-    for (const { runId, sandbox } of live) if (!this.handles.has(runId)) await this.destroySandbox(sandbox.id);
+    await Promise.all(live.filter(({ runId }) => !this.handles.has(runId)).map(({ sandbox }) => this.destroySandbox(sandbox.id)));
   }
 
   /** Logged, never thrown: a sandbox left behind is recover()'s at the next start. */
@@ -420,7 +420,9 @@ export class Orchestrator {
    */
   private async runSetup(project: ProjectRuntime, ws: Workspace, sandbox: Sandbox | undefined): Promise<void> {
     const commands = project.workflow.workspace.setup;
-    let failed: string | undefined;
+    const fail = (what: string): never => {
+      throw new Error(`Le setup du worktree a échoué : ${what}`);
+    };
     if (sandbox) {
       // ponytail: setup shares the attempt's `claude-api` sandbox, an open network until ORC-213; it gets
       // a `full` sandbox of its own once the network levels are real.
@@ -428,15 +430,13 @@ export class Orchestrator {
         // The host's cap (runVerify), by coreutils' `timeout` in the image: 124 is its exit on expiry.
         const argv = ['timeout', String(VERIFY_TIMEOUT_MS / 1000), 'bash', '-lc', command];
         const { code } = await this.d.sandboxes!.exec(sandbox.id, argv);
-        if (code === 124) failed = `${command} (délai de ${VERIFY_TIMEOUT_MS / 60_000} min dépassé)`;
-        else if (code !== 0) failed = command;
-        if (failed !== undefined) break;
+        if (code === 124) fail(`${command} (délai de ${VERIFY_TIMEOUT_MS / 60_000} min dépassé)`);
+        if (code !== 0) fail(command);
       }
     } else {
       const res = await this.d.verify(ws.path, commands);
-      if (!res.ok) failed = res.failures[0]!.command;
+      if (!res.ok) fail(res.failures[0]!.command);
     }
-    if (failed !== undefined) throw new Error(`Le setup du worktree a échoué : ${failed}`);
   }
 
   /**
