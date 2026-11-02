@@ -23,7 +23,7 @@ export interface ContainerSandboxOptions {
   agentHost?: string;
   /** The daemon's: its containers carry it, and its lookups see only those, so another daemon on the same engine is left alone. */
   instance?: string;
-  /** Per container (ORC-218): a fork bomb or a memory hog in one attempt must not starve the others. */
+  /** Per container (ORC-218): a fork bomb or a memory hog in one attempt must not starve the others. No swap: a hog is killed, not thrashing the host. */
   limits?: typeof LIMITS;
 }
 
@@ -182,7 +182,7 @@ function sandbox(c: Info): Sandbox {
 }
 
 function limitArgs(l: typeof LIMITS): string[] {
-  return ['--pids-limit', String(l.pids), '--memory', l.memory, '--cpus', String(l.cpus)];
+  return ['--pids-limit', String(l.pids), '--memory', l.memory, '--memory-swap', l.memory, '--cpus', String(l.cpus)];
 }
 
 function mountArg(m: SandboxMount): string {
