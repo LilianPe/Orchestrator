@@ -92,8 +92,10 @@ export async function reconcileOnce(d: ReconcileDeps): Promise<void> {
         } else if (t.activeRunId) {
           await emit(t, TRUSTED, `reconcile:undelegated:${t.ticketId}:${t.activeRunId}`, 'session.stopped', {});
         }
+        // A completed status the workflow does not call done moves nothing: cleared as before, or every pass reads it again.
+        const unmapped = issue.stateType === 'completed' && logicalFromName(p.workflow.states, issue.stateName) !== 'done';
         // Cleared after a cancel too: no later pass reads the cancelled ticket again.
-        if (undelegate && (cancel || !issue.delegateId)) await emit(t, TRUSTED, `reconcile:undelegated-flag:${t.ticketId}:${t.updatedAt}`, 'ticket.undelegated', {});
+        if (undelegate && (cancel || unmapped || !issue.delegateId)) await emit(t, TRUSTED, `reconcile:undelegated-flag:${t.ticketId}:${t.updatedAt}`, 'ticket.undelegated', {});
       }
     } catch (err) {
       d.log(`reconcile ${p.id}: ${(err as Error).message}`);

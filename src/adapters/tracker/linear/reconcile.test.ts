@@ -103,6 +103,15 @@ describe('reconcileOnce — done and cancelled (ORC-185)', () => {
     ]);
   });
 
+  it('a completed status the workflow does not map to done clears the delegation, as before, so the ticket is not read again each pass', async () => {
+    const tracker = new FakeTracker();
+    tracker.setStates('REL', [...STANDARD_STATES, 'Released']);
+    const store = new SqliteStore(':memory:');
+    tracker.addIssue({ identifier: 'REL-6', delegateId: 'app', stateName: 'Released', stateType: 'completed' });
+    await store.putTicket({ ...newTicketState('p', 'REL-6', 'T', 'human_review', 6), delegated: true });
+    expect((await pass(tracker, store)).map((e) => [e.id, e.type])).toEqual([['reconcile:undelegated-flag:REL-6:6', 'ticket.undelegated']]);
+  });
+
   it('a Done already received still stops a run left under way, as before', async () => {
     const tracker = new FakeTracker();
     const store = new SqliteStore(':memory:');
