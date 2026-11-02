@@ -486,6 +486,13 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
     out.effects.push({ kind: 'stop_run' });
     return out;
   }
+  // A move to the status the ticket already holds changes nothing: it is the webhook of the factory's own move, come
+  // after its echo expired (ORC-148: the move to AI Review after a push must not start a second review). The
+  // reconciliation compares the same way (a Linear status equal to `logical` is no change).
+  if (event.type === 'status.changed' && state && event.payload.to && event.payload.to === state.logical) {
+    out.trace.push(`status.changed: already ${state.logical}, the echo of the factory's own move`);
+    return out;
+  }
   // A Done from Human Review only: during dev or the AI review it is no review decision, and the rules apply as before.
   const reviewed = state?.delegated && state.logical === 'human_review' && state.prNumber !== undefined && state.prState === 'OPEN';
   if (event.type === 'status.changed' && event.payload.to === 'done' && reviewed) {

@@ -82,6 +82,13 @@ describe('decide — Done by a human merges the PR (ORC-148)', () => {
     ]);
   });
 
+  it('the webhook of the factory\'s own move to AI Review, arrived after its echo expired, starts no second review', () => {
+    // Linear's webhook of the move mergeRefused made, signed by the factory's app user, late: the ticket is in AI Review already.
+    const late = ev('status.changed', { from: 'done', to: 'ai_review' }, 'u-factory-app', MERGER);
+    const out = decide(inReview({ logical: 'ai_review', activeRunId: 'r1', activeJob: 'review' }), late, workflow);
+    expect(out.effects).toEqual([]);
+  });
+
   it('a merge refused for a push, in a workflow with no AI review, goes back to Human Review with the reason', () => {
     const noReview = { ...workflow, on: { ...workflow.on, 'status.changed': (workflow.on['status.changed'] ?? []).filter((r) => r.to !== 'ai_review') } };
     expect(decide(inReview({ logical: 'done' }), ev('pr.merge_refused', pushed), noReview).effects).toEqual(backToReview(/push depuis la review/));

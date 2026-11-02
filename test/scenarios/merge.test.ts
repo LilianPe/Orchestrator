@@ -63,6 +63,19 @@ describe('Done by a human, merge by the factory (ORC-148)', () => {
     expect(h.forge.merges).toEqual([{ number: 3, sha: 'def456' }]);
   });
 
+  it('the late webhook of the factory\'s move to AI Review (after its 60 s echo) starts no second review', async () => {
+    const h = await inHumanReview();
+    h.forge.setPr(BRANCH, { ...PR, state: 'OPEN', headSha: 'def456', checks: 'pass', failedChecks: [] });
+    h.runner.enqueue({ events: [{ kind: 'init', sessionId: 'y' }], hold: true });
+    await h.send('status.changed', { from: 'human_review', to: 'done' }, 'REL-1', { actor: 'user-lilian' });
+    const runs = h.runner.requests.length;
+    await h.advance(61_000);
+    await h.send('status.changed', { from: 'done', to: 'ai_review' }, 'REL-1', { actor: 'user-lilian' });
+    expect(h.runner.requests).toHaveLength(runs);
+    expect(await h.store.listQueue()).toEqual([]);
+    expect((await h.ticket()).pendingJob).toBeUndefined();
+  });
+
   it('a push between the factory\'s reading and its merge, refused by GitHub, also goes through the AI review', async () => {
     const h = await inHumanReview();
     const shown = await h.forge.findPr('', BRANCH);
