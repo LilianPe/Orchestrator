@@ -1,0 +1,3 @@
+# LF everywhere, whatever the checkout's core.autocrlf: bin/ scripts run in Linux containers
+# (`bash\r` otherwise) and the docs tests compare files line by line.
+* text=auto eol=lf
