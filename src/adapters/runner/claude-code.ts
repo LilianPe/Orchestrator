@@ -6,6 +6,7 @@ import { addTokens, NO_TOKENS, type RunOutcome, type TokenUsage } from '../../co
 import { Channel } from './channel.js';
 import { parseStreamLine, parseUsage } from './stream-parser.js';
 import { maskTranscriptLine, transcriptSecrets } from './transcript.js';
+import type { SandboxProvider } from '../sandbox/types.js';
 import type { RunHandle, RunRequest, RunResult, Runner, RunStreamEvent } from './types.js';
 
 export interface ClaudeRunnerOptions {
@@ -14,7 +15,12 @@ export interface ClaudeRunnerOptions {
   killGraceMs?: number;
   /** Secrets held outside the environment (the daemon's secrets file), masked like the environment's. */
   secrets?: () => readonly string[];
+  /** Where a run with a `sandboxId` executes (ORC-204); without it such a run is refused, never run on the host. */
+  sandboxes?: SandboxProvider;
 }
+
+/** Daemon variables a sandboxed `claude` needs to authenticate; the rest of the host env stays out of the container. */
+const SANDBOX_AUTH = ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY', 'ANTHROPIC_BASE_URL'];
 
 export function buildClaudeArgs(req: RunRequest): string[] {
   const args = [
@@ -50,17 +56,26 @@ export class ClaudeCodeRunner implements Runner {
   }
 
   start(req: RunRequest): RunHandle {
-    const [cmd, ...prefix] = this.o.command ?? ['claude'];
-    const child = spawn(cmd!, [...prefix, ...buildClaudeArgs(req)], {
-      cwd: req.cwd,
-      env: childEnv(process.env, req.env),
-      stdio: ['ignore', 'pipe', 'pipe'],
-      detached: true,
-    });
-    const transcript = createWriteStream(join(this.o.transcriptsDir, `${req.runId}.jsonl`), { flags: 'a' });
     // Masked as read: the transcript, the stream events (SSE, Linear) and the final text never
     // hold a secret value the daemon or the run knows of.
     const secrets = transcriptSecrets({ ...process.env, ...req.env }, this.o.secrets?.());
+    const env = childEnv(process.env, req.env);
+    let argv = [...(this.o.command ?? ['claude']), ...buildClaudeArgs(req)];
+    let cwd = req.cwd;
+    if (req.sandboxId !== undefined) {
+      try {
+        if (!this.o.sandboxes) throw new Error(`run ${req.runId} asks for sandbox ${req.sandboxId} but the runner has no sandbox provider`);
+        const named = Object.fromEntries(Object.entries(env).filter(([k]) => k in req.env || SANDBOX_AUTH.includes(k)));
+        // The host process (`docker exec`) gets the values in its env; the command only names them.
+        argv = this.o.sandboxes.spawnCommand(req.sandboxId, argv, { cwd: req.cwd, env: named });
+        cwd = process.cwd(); // req.cwd is a path in the sandbox
+      } catch (e) {
+        return failed(maskTranscriptLine(e instanceof Error ? e.message : String(e), secrets));
+      }
+    }
+    const [cmd, ...args] = argv;
+    const child = spawn(cmd!, args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+    const transcript = createWriteStream(join(this.o.transcriptsDir, `${req.runId}.jsonl`), { flags: 'a' });
     const ch = new Channel<RunStreamEvent>();
     let assistantTurns = 0;
     let lastText = '';
@@ -72,6 +87,8 @@ export class ClaudeCodeRunner implements Runner {
     let stopped = false;
     let limited = false;
 
+    // Sandboxed, this kills the `docker exec` client, not `claude` in the container: the orchestrator
+    // destroys the sandbox at the end of the run, which ends it.
     const signal = (sig: NodeJS.Signals) => {
       try {
         if (child.pid === undefined) throw new Error('no pid');
@@ -147,4 +164,11 @@ export class ClaudeCodeRunner implements Runner {
       },
     };
   }
+}
+
+/** A run refused before any spawn: no events, a failure carrying why. */
+function failed(lastText: string): RunHandle {
+  const ch = new Channel<RunStreamEvent>();
+  ch.close();
+  return { events: ch, done: Promise.resolve({ outcome: 'failure', costUsd: 0, turns: 0, lastText }), stop: () => {} };
 }
