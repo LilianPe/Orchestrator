@@ -1,3 +1,4 @@
+import { DEFAULT_REQUIREMENTS } from '../../src/adapters/sandbox/types.js';
 import { existsSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -675,7 +676,7 @@ function sandboxesThat(Provider: new () => FakeSandboxProvider): () => SandboxSu
     const provider = new Provider();
     return {
       provider,
-      request: { runId: 'r1', ticketId: 'REL-1', workspacePath: '/w', network: 'none' },
+      request: { runId: 'r1', ticketId: 'REL-1', workspacePath: '/w', network: 'none', requirements: DEFAULT_REQUIREMENTS, mounts: [] },
       active: async () => provider.active().map((s) => s.id),
     };
   };
@@ -742,7 +743,7 @@ describeSandboxContract(
       private named = new Map<string, Sandbox>();
 
       override async create(req: SandboxRequest): Promise<Sandbox> {
-        const sandbox = this.named.get(req.runId) ?? { id: `factory-${req.runId}`, network: req.network };
+        const sandbox = this.named.get(req.runId) ?? { id: `factory-${req.runId}`, network: req.network, level: 'L3' as const };
         this.named.set(req.runId, sandbox);
         return { ...sandbox };
       }
