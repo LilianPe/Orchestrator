@@ -47,7 +47,7 @@ describe('buildClaudeArgs', () => {
   it('starts a new session', () => {
     expect(buildClaudeArgs(req())).toEqual([
       '-p', '/factory:dev\n\n## Ticket', '--output-format', 'stream-json', '--verbose', '--session-id', 'uuid-1', '--model', 'sonnet',
-      '--plugin-dir', '/pack', '--settings', '/pack/settings.json', '--setting-sources', 'project,local', '--max-budget-usd', '5',
+      '--plugin-dir', '/pack', '--settings', '/pack/settings.json', '--setting-sources', '', '--strict-mcp-config', '--max-budget-usd', '5',
     ]);
   });
   it('resumes read-only', () => {

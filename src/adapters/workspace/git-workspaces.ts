@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { branchName } from '../../core/naming.js';
 import { execCmd, mustExec, type Exec } from '../exec.js';
@@ -88,6 +88,18 @@ export class GitWorkspaces implements WorkspaceManager {
 
   async gitCommonDir(path: string): Promise<string> {
     return (await this.git(path, 'rev-parse', '--path-format=absolute', '--git-common-dir')).trim();
+  }
+
+  /**
+   * Removed from the working tree, its tracked files marked skip-worktree: the agent's session cannot load
+   * them, and `git status`, `add -A` or `commit -a` neither see nor commit them as deleted, so a PR never
+   * drops the repo's `.claude/`. The index entries stay, so a rebase or merge still carries them.
+   */
+  async resetClaudeDir(path: string): Promise<void> {
+    const tracked = (await this.git(path, 'ls-files', '-z', '--', '.claude')).split('\0').filter(Boolean);
+    // ponytail: on the command line, fine for a .claude/ of a few hundred files; `--stdin -z` past that.
+    if (tracked.length) await this.git(path, 'update-index', '--skip-worktree', '--', ...tracked);
+    rmSync(join(path, '.claude'), { recursive: true, force: true });
   }
 
   async remoteBranchExists(repoPath: string, prefix: string): Promise<boolean> {

@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -99,6 +99,33 @@ describe('GitWorkspaces', () => {
     await ws.cleanup('p', repo, 'REL-1');
     expect(existsSync(w2.path)).toBe(true);
   });
+
+  it("hides the repository's .claude/ from a worktree, its tracked files neither deleted nor committed (ORC-284)", async () => {
+    const { repo, root } = fixtureRepo();
+    mkdirSync(join(repo, '.claude', 'skills', 'piege'), { recursive: true });
+    writeFileSync(join(repo, '.claude', 'settings.json'), '{}\n');
+    writeFileSync(join(repo, '.claude', 'skills', 'piege', 'SKILL.md'), 'piege\n');
+    git(repo, 'add', '.');
+    git(repo, 'commit', '-m', 'claude');
+    git(repo, 'push');
+    const ws = new GitWorkspaces({ root });
+    const w = await ws.prepare(req(repo));
+    writeFileSync(join(w.path, '.claude', 'settings.local.json'), '{}\n');
+    await ws.resetClaudeDir(w.path);
+    await ws.resetClaudeDir(w.path);
+    expect(existsSync(join(w.path, '.claude'))).toBe(false);
+    expect(git(w.path, 'status', '--porcelain')).toBe('');
+    git(w.path, 'config', 'user.email', 't@t');
+    git(w.path, 'config', 'user.name', 't');
+    writeFileSync(join(w.path, 'README.md'), 'changed\n');
+    git(w.path, 'add', '-A');
+    git(w.path, 'commit', '-am', 'work');
+    expect(git(w.path, 'ls-tree', '-r', '--name-only', 'HEAD')).toContain('.claude/settings.json');
+    // A repository without one: nothing to do.
+    const plain = fixtureRepo();
+    const ws2 = new GitWorkspaces({ root: plain.root });
+    await expect(ws2.resetClaudeDir((await ws2.prepare(req(plain.repo))).path)).resolves.toBeUndefined();
+  }, 60_000);
 
   it('rejects unsafe identifiers', async () => {
     const { repo, root } = fixtureRepo();
