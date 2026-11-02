@@ -277,6 +277,7 @@ Contrôles déterministes de `verify`, purs : ils lisent le diff `baseSha..SHA` 
 | `packs/standard/settings.json` | Réglages Claude Code des runs (`acceptEdits`, `git push`, `gh`…) | adapter | ORC-191, ORC-205 (deny-list imposée), ORC-181 |
 | `packs/standard/.claude-plugin/plugin.json` | Plugin `factory` | adapter | ORC-167 (nom), ORC-191 |
 | `packs/standard/hooks/hooks.json`, `packs/standard/hooks/session-start.mjs` | Hook de démarrage : règles, méthode, index de la base | adapter | ORC-191 (plus de `FACTORY_*` ni `factory-agent`), ORC-232 (index injecté par le `systemPrompt`), ORC-205 |
+| `packs/standard/hooks/pre-tool-use.mjs` | Hook `PreToolUse` : refus des commandes interdites, journal des refus, drapeau `FACTORY_DENY_PUSH` | garder | ORC-285, ORC-125 (drapeau activé quand le push sort des skills) |
 | `packs/standard/skills/{dev,feedback,review,ask}/` | Skills de job | adapter | ORC-191 (une consigne par étape, fin par `submit_result`), ORC-187 |
 | `packs/standard/skills/{fix-ci,learn}/` | Skills de job sans équivalent au MVP | retirer | ORC-191, ORC-193 (`learn`) |
 | `packs/standard/skills/{tdd,debugging,verification,code-review,receiving-review}/` | Skills de méthode | garder | ORC-191 (relus pour retirer push et CI) |
