@@ -1209,7 +1209,7 @@ export class Orchestrator {
       if (!setUp) await this.runSetup(project, ws, sandbox);
       setUp = true;
       // In each run's prompt, not the system prompt: read again at each attempt, never frozen at a resume
-      // (ORC-128). Before the reset below, which removes `.claude/` and its CLAUDE.md.
+      // (ORC-128). The reset below keeps `.claude/CLAUDE.md`: the order does not matter.
       const conventions = readConventions(ws.path);
       // After the setup, which is the repository's and could write one; the session loads none anyway
       // (`--setting-sources ""`): defence in depth, for what ORC-128 did not trap (ORC-284).
