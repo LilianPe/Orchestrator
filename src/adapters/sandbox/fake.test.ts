@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { describeSandboxContract } from '../../../test/contracts/sandbox.contract.js';
+import { describeSandboxContract, EXEC_PROBE } from '../../../test/contracts/sandbox.contract.js';
 import { FakeSandboxProvider } from './fake.js';
 import { DEFAULT_REQUIREMENTS } from './types.js';
 
 describeSandboxContract('FakeSandboxProvider', () => {
   const provider = new FakeSandboxProvider();
+  // The fake runs nothing: it answers what a real sandbox does.
+  provider.execResult = () => EXEC_PROBE.result;
   return {
     provider,
     request: { runId: 'r1', ticketId: 'REL-1', workspacePath: '/w', network: 'none', requirements: DEFAULT_REQUIREMENTS, mounts: [] },
