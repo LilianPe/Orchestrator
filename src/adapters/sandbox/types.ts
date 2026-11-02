@@ -57,7 +57,9 @@ export interface SandboxProvider {
   exec(id: string, argv: readonly string[], opts?: SandboxExecOptions): Promise<ExecResult>;
   /**
    * The host command (`[cmd, ...args]`) that runs `argv` in the sandbox with stdio attached, for a
-   * runner that streams its output (`ClaudeCodeRunner`). Throws on an unknown sandbox.
+   * runner that streams its output (`ClaudeCodeRunner`). Throws on an unknown sandbox. `opts.env`
+   * values never appear in the command: it names the variables (`-e NAME`), and the caller spawns it
+   * with them in its environment, so no secret shows in the host's process list.
    */
   spawnCommand(id: string, argv: readonly string[], opts?: SandboxExecOptions): string[];
   /** The live sandbox of an attempt, by its label; none once destroyed. */
@@ -67,3 +69,8 @@ export interface SandboxProvider {
   /** Idempotent: an unknown or destroyed id is ignored. */
   destroy(id: string): Promise<void>;
 }
+
+/** `HOME` of the sandbox user, whatever its uid: the ticket's Claude session dir is mounted at `${SANDBOX_HOME}/.claude`. */
+export const SANDBOX_HOME = '/home/factory';
+/** Where the pack (plugin dir, run settings) is mounted read-only. */
+export const PACK_TARGET = '/factory/pack';

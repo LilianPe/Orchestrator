@@ -26,6 +26,11 @@ export interface RunRequest {
    * enforced yet: `ClaudeCodeRunner` ignores it until the runner's sandbox does (ORC-151, ORC-204).
    */
   sensitivePaths?: readonly string[];
+  /**
+   * The sandbox the run executes in (ORC-204): `claude` runs there through `SandboxProvider.spawnCommand`,
+   * and `cwd`, `pluginDir` and `settingsPath` are paths in the sandbox. Absent: on the host (fake runner, tests).
+   */
+  sandboxId?: string;
 }
 
 export interface RunResult {
