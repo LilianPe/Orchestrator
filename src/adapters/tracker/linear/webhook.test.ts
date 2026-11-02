@@ -117,7 +117,7 @@ describe('mapLinearWebhook', () => {
   });
   it('drops a label change the factory already knows, caught up by the reconciliation first (ORC-185)', async () => {
     const removed = { ...fx('issue-moved-labeled'), data: { ...fx('issue-moved-labeled').data, labelIds: ['l-resume'] }, updatedFrom: { labelIds: ['l-bug'] } };
-    const known = (labels: string[] | undefined) => ({ ...ctx(), knownLabels: async () => labels });
+    const known = (labels: string[] | undefined) => ({ ...ctx(), knownLabels: async () => (labels ? { labels, at: 0 } : undefined) });
     expect(await mapLinearWebhook(removed, 'd11', known(['agent:reprendre']))).toEqual([]);
     expect((await mapLinearWebhook(removed, 'd11', known(['bug']))).map((e) => e.payload)).toEqual([
       { label: 'agent:reprendre', change: 'added' },
@@ -261,7 +261,7 @@ describe('ingest', () => {
     const recorded: unknown[][] = [];
     const body = { ...fx('issue-moved-labeled'), webhookTimestamp: 2000 };
     // `lost` was added by a webhook that never came: this one only adds agent:reprendre, so `lost` stays unknown.
-    const c = { ...ctx(['label:REL-1:agent:reprendre']), now: () => 2000, knownLabels: async () => ['bug'], recordLabels: async (...a: unknown[]) => void recorded.push(a) };
+    const c = { ...ctx(['label:REL-1:agent:reprendre']), now: () => 2000, knownLabels: async () => ({ labels: ['bug'], at: 0 }), recordLabels: async (...a: unknown[]) => void recorded.push(a) };
     const { raw, sig } = signed(body);
     const ok = createLinearIngest({ secret: () => 'sec', ctx: c, accept: async () => true, ack: async () => {}, log: () => {} });
     expect(await ok(raw, { 'linear-signature': sig })).toEqual({ status: 200 });
@@ -294,7 +294,7 @@ describe('ingest', () => {
     const c = {
       ...ctx(),
       now: () => 2000,
-      knownLabels: async (pid: string, id: string) => (await knownLabels(store, pid, id))?.labels,
+      knownLabels: (pid: string, id: string) => knownLabels(store, pid, id),
       recordLabels: (pid: string, id: string, labels: string[], at: number) => recordLabels(store, pid, id, labels, at),
     };
     const ingest = createLinearIngest({ secret: () => 'sec', ctx: c, serial: labelsTurn, accept: async (e) => (await gate, accept(e)), ack: async () => {}, log: () => {} });
@@ -311,6 +311,30 @@ describe('ingest', () => {
     expect(await webhook).toEqual({ status: 200 });
     await reconciled;
     expect((await ids()).filter((id) => id.includes('label'))).toHaveLength(1);
+  });
+
+  it('a label webhook come after a newer one still adds its change to the known labels: the reconciliation does not report it again (ORC-185)', async () => {
+    const { store, ids } = inbox();
+    const base = fx('issue-moved-labeled');
+    await store.putTicket({ ...newTicketState('p', 'REL-1', 'T', 'ai_review', 1), delegated: true });
+    await recordLabels(store, 'p', 'REL-1', [], 5);
+    const c = {
+      ...ctx(),
+      now: () => 2000,
+      knownLabels: (pid: string, id: string) => knownLabels(store, pid, id),
+      recordLabels: (pid: string, id: string, labels: string[], at: number) => recordLabels(store, pid, id, labels, at),
+    };
+    const ingest = createLinearIngest({ secret: () => 'sec', ctx: c, accept: (e) => store.appendInbox(e), ack: async () => {}, log: () => {} });
+    // W1 (bug added at 10) arrives after W2 (agent:reprendre added at 20).
+    const w = (updatedAt: number, labelIds: string[], from: string[]) =>
+      signed({ ...base, webhookTimestamp: 2000, data: { ...base.data, updatedAt: new Date(updatedAt).toISOString(), labelIds }, updatedFrom: { labelIds: from } });
+    for (const { raw, sig } of [w(20, ['l-bug', 'l-resume'], ['l-bug']), w(10, ['l-bug'], [])]) expect(await ingest(raw, { 'linear-signature': sig })).toEqual({ status: 200 });
+    expect(await knownLabels(store, 'p', 'REL-1')).toEqual({ labels: ['agent:reprendre', 'bug'], at: 20 });
+    const tracker = new FakeTracker();
+    tracker.addIssue({ identifier: 'REL-1', delegateId: 'app', stateName: 'AI Review', labels: ['bug', 'agent:reprendre'], updatedAt: 20 });
+    const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../../../packs/standard') });
+    await reconcileOnce({ tracker, store, projects: [{ id: 'p', repoPath: '/r', teamKey: 'REL', workflow }], submit: (e) => store.appendInbox(e), clock: new FakeClock(2000), log: () => {} });
+    expect((await ids()).filter((id) => id.startsWith('reconcile:label'))).toEqual([]);
   });
 
   it('acks with the id of the event, so the daemon can record when (ORC-235)', async () => {

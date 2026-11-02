@@ -1,6 +1,6 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { labelEchoKey, stateEchoKey } from '../types.js';
-import { labelChanges } from './labels.js';
+import { labelChanges, type KnownLabels } from './labels.js';
 import { SCHEMA_VERSION, type LogicalState, type FactoryEvent, type Taint } from '../../../core/types.js';
 
 export function isUsableWebhookSecret(secret: unknown): boolean {
@@ -31,9 +31,9 @@ export interface MapContext {
   isEcho(key: string): boolean | Promise<boolean>;
   commands(projectId: string): string[];
   now(): number;
-  /** The ticket's labels as the factory last read them (ORC-185); undefined when it never did. */
-  knownLabels?(projectId: string, identifier: string): Promise<string[] | undefined>;
-  /** Records the ticket's labels as an issue webhook reads them at `at` (the issue's `updatedAt`), once its events are in the inbox. */
+  /** The ticket's labels as the factory last read them, and when (ORC-185); undefined when it never did. */
+  knownLabels?(projectId: string, identifier: string): Promise<KnownLabels | undefined>;
+  /** Records the ticket's labels as known at `at` (an issue's `updatedAt`), once the webhook's events are in the inbox. */
   recordLabels?(projectId: string, identifier: string, labels: string[], at: number): Promise<void>;
 }
 
@@ -133,7 +133,7 @@ async function issueEvents(body: any, identifier: string, teamKey: string, proje
     const known = changes.length ? await ctx.knownLabels?.(projectId, identifier) : undefined;
     for (const { id, change } of changes) {
       const name = ctx.labelNameById(teamKey, id);
-      if (name && known && known.includes(name) === (change === 'added')) continue;
+      if (name && known && known.labels.includes(name) === (change === 'added')) continue;
       if (name && !(await ctx.isEcho(labelEchoKey(identifier, name, change)))) {
         out.push({ type: 'label.changed', payload: { label: name, change }, suffix: `:label:${id}` });
       }
@@ -149,8 +149,9 @@ function issueIdentifier(body: any): string | undefined {
 }
 
 /**
- * Records the labels an issue webhook reads (ORC-185), the factory's own echoes included: what the
- * reconciliation compares Linear with. Nothing when one of them is not in the team's cache yet.
+ * Applies an issue webhook's own label changes to the labels the factory knows (ORC-185), the factory's
+ * own echoes included: what the reconciliation compares Linear with. A label the team's cache cannot
+ * name is left out; nothing is recorded for a ticket never read yet.
  */
 export async function recordIssueLabels(body: any, ctx: MapContext): Promise<void> {
   if (body?.type !== 'Issue' || body.action !== 'update' || !ctx.recordLabels || !ctx.knownLabels) return;
@@ -167,12 +168,13 @@ export async function recordIssueLabels(body: any, ctx: MapContext): Promise<voi
   // Never read yet: the reconciliation's first pass records them.
   const known = await ctx.knownLabels(projectId, identifier);
   if (!known) return;
-  const next = new Set(known);
+  const next = new Set(known.labels);
   for (const { label: id, change } of labelChanges(from as string[], body.data.labelIds as string[])) {
     const name = ctx.labelNameById(teamKey, id);
     if (name) change === 'added' ? next.add(name) : next.delete(name);
   }
-  await ctx.recordLabels(projectId, identifier, [...next], at);
+  // A webhook come late still adds what it reported, at the newer date: dropped, its change would be reported again.
+  await ctx.recordLabels(projectId, identifier, [...next], Math.max(at, known.at));
 }
 
 // Linear-Delivery is outside the HMAC: the dedup key must come from the signed body.
