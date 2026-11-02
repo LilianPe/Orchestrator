@@ -374,6 +374,25 @@ describe('GitHubAppForge.mergePr (ORC-148)', () => {
     expect(calls.some((c) => c.method === 'PUT')).toBe(false);
   });
 
+  // A head with no check (ORC-148): merged only in a repository with no CI, its base commit unchecked too.
+  const baseChecks = (runs: unknown[]): Route[] => [
+    (url) => (url.pathname === '/repos/acme/app/commits/base999/check-runs' ? { body: { check_runs: runs } } : undefined),
+    (url) => (url.pathname === '/repos/acme/app/commits/base999/status' ? { body: { statuses: [] } } : undefined),
+  ];
+  const withBase = openPr({ base: { ref: 'main', sha: 'base999' } });
+
+  it('merges an unchecked head when the base has no check either: a repository with no CI', async () => {
+    const { forge, calls } = makeForge([tokenRoute(42), pullRoute(withBase), repoRoute(), ...baseChecks([]), mergeRoute(200, { merged: true })], { installationId: 42 });
+    expect(await forge.mergePr('/repo', 7, 'abc123', { unchecked: true })).toEqual({ merged: true, deduplicated: false });
+    expect(calls.some((c) => c.method === 'PUT')).toBe(true);
+  });
+
+  it('refuses an unchecked head when the base has checks: its CI has not run on it yet', async () => {
+    const { forge, calls } = makeForge([tokenRoute(42), pullRoute(withBase), repoRoute(), ...baseChecks([{ id: 1, name: 'test', status: 'completed', conclusion: 'success' }])], { installationId: 42 });
+    expect(await forge.mergePr('/repo', 7, 'abc123', { unchecked: true })).toEqual({ merged: false, reason: 'checks_missing' });
+    expect(calls.some((c) => c.method === 'PUT')).toBe(false);
+  });
+
   it('throws on another error, so the effect is retried', async () => {
     const { forge } = makeForge([tokenRoute(42), pullRoute(openPr()), repoRoute(), mergeRoute(502, { message: 'Bad gateway' })], { installationId: 42 });
     await expect(forge.mergePr('/repo', 7, 'abc123')).rejects.toMatchObject({ status: 502 });

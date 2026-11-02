@@ -50,6 +50,7 @@ interface PullRequestDto {
   merged_at: string | null;
   merge_commit_sha?: string | null;
   head: { ref: string; sha: string };
+  base?: { ref: string; sha: string };
 }
 
 interface CheckRunsDto {
@@ -329,7 +330,7 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
     return { number: pr.number, url: pr.html_url, state, branch: pr.head.ref, headSha: pr.head.sha, ...merged, ...checks };
   }
 
-  async mergePr(repoPath: string, number: number, sha: string): Promise<MergeResult> {
+  async mergePr(repoPath: string, number: number, sha: string, opts: { unchecked?: boolean } = {}): Promise<MergeResult> {
     const repo = await this.repo(repoPath);
     const token = await this.installationToken(repo);
     const url = `${repoApi(repo)}/pulls/${number}`;
@@ -339,6 +340,10 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
     // A method the repository allows, a merge commit first: a squash-only repository refuses the others (405).
     const settings = await this.call<{ allow_merge_commit?: boolean; allow_squash_merge?: boolean; allow_rebase_merge?: boolean }>('GET', repoApi(repo), token);
     const method = settings.allow_merge_commit !== false ? 'merge' : settings.allow_squash_merge !== false ? 'squash' : 'rebase';
+    // A head with no check merges only in a repository with no CI: a base commit with checks says its CI has not run yet.
+    if (opts.unchecked && (!pr.base || (await this.checksFor(repo, pr.base.sha, token)).checks !== 'none')) {
+      return { merged: false, reason: 'checks_missing' };
+    }
     try {
       await this.call('PUT', `${url}/merge`, token, { sha, merge_method: method });
       return { merged: true, deduplicated: false };

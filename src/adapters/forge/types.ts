@@ -54,14 +54,17 @@ export type CheckRunRequest = {
 export type MergeResult =
   | { merged: true; deduplicated: boolean }
   | { merged: false; reason: 'head_moved' }
+  /** Asked `unchecked` (the head has no check) in a repository whose base has checks: its CI has not run on the head. */
+  | { merged: false; reason: 'checks_missing' }
   | { merged: false; reason: 'not_mergeable'; message: string };
 
 export interface ForgeWriter {
   /**
    * Merges the PR if its head is still `sha`, the commit shown to the human reviewer: GitHub checks it in the same
-   * call. A PR already merged on that head is found by a replay, and nothing is written again.
+   * call. A PR already merged on that head is found by a replay, and nothing is written again. `unchecked`: the head
+   * has no check at all; merged only if the PR's base commit has none either (a repository with no CI).
    */
-  mergePr(repoPath: string, number: number, sha: string): Promise<MergeResult>;
+  mergePr(repoPath: string, number: number, sha: string, opts?: { unchecked?: boolean }): Promise<MergeResult>;
   /** Opens the branch's PR, or returns its open one: never a second open PR for the branch. A closed or merged one is not reused (ORC-138, point 7). */
   ensurePr(repoPath: string, req: PrRequest): Promise<{ number: number; url: string; deduplicated: boolean }>;
   /** Creates the check run, or updates the one of the sha that carries `externalId`. */

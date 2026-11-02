@@ -61,15 +61,18 @@ export class FakeForge implements Forge, ForgeWriter, RepoPermissions {
 
   /** The merges asked (ORC-148), with the head each one required. */
   merges: { number: number; sha: string }[] = [];
+  /** The checks of the PRs' base commit: `none` is a repository with no CI (ORC-148). */
+  baseChecks: PrInfo['checks'] = 'none';
 
   /** As GitHub: merged only if the PR's head is still `sha`; a PR already merged on it is found again. */
-  async mergePr(_repoPath: string, number: number, sha: string): Promise<MergeResult> {
+  async mergePr(_repoPath: string, number: number, sha: string, opts: { unchecked?: boolean } = {}): Promise<MergeResult> {
     this.answer();
     const pr = [...this.prs.values()].find((p) => p.number === number);
     if (!pr) throw new Error(`no PR #${number}`);
     if (pr.state === 'MERGED' && pr.headSha === sha) return { merged: true, deduplicated: true };
     if (pr.headSha !== sha) return { merged: false, reason: 'head_moved' };
     if (pr.state !== 'OPEN' || pr.checks === 'fail') return { merged: false, reason: 'not_mergeable', message: 'Pull Request is not mergeable' };
+    if (opts.unchecked && this.baseChecks !== 'none') return { merged: false, reason: 'checks_missing' };
     this.merges.push({ number, sha });
     this.prs.set(pr.branch, { ...pr, state: 'MERGED' });
     return { merged: true, deduplicated: false };

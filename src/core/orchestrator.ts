@@ -854,11 +854,17 @@ export class Orchestrator {
     else if (!writer) reason = "la GitHub App de l'usine est requise pour merger";
     else if (pr?.state !== 'OPEN') reason = "la PR n'est plus ouverte";
     else if (pr.headSha !== sha) reason = PUSHED;
-    else if (pr.checks !== 'pass') reason = `les checks du commit relu ne sont pas verts (${pr.failedChecks.join(', ') || pr.checks})`;
+    else if (pr.checks !== 'pass' && pr.checks !== 'none') reason = `les checks du commit relu ne sont pas verts (${pr.failedChecks.join(', ') || pr.checks})`;
     else {
-      const res: MergeResult = await writer.mergePr(project.repoPath, t.prNumber, sha);
+      // No check at all: the forge merges only in a repository with no CI (the PR's base has no check either).
+      const res: MergeResult = await writer.mergePr(project.repoPath, t.prNumber, sha, pr.checks === 'none' ? { unchecked: true } : undefined);
       if (res.merged) return res.deduplicated ? { deduplicated: true } : undefined;
-      reason = res.reason === 'head_moved' ? PUSHED : `GitHub refuse le merge (${res.message})`;
+      reason =
+        res.reason === 'head_moved'
+          ? PUSHED
+          : res.reason === 'checks_missing'
+            ? "aucun check n'a tourné sur le commit relu, alors que la base de la PR en a (CI pas encore lancée ?)"
+            : `GitHub refuse le merge (${res.message})`;
     }
     await this.d.store.setMeta(mark, reason);
     await this.refuseMerge(project, t, key, reason);
