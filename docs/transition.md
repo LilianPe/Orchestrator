@@ -193,6 +193,14 @@ Contrôles déterministes de `verify`, purs : ils lisent le diff `baseSha..SHA` 
 | `src/checks/fake-registry.ts` | `FakePackageRegistry` des tests | garder | ORC-165 |
 | `src/checks/toml.ts` | Lecteur TOML minimal, pour `pyproject.toml` | garder | ORC-165, ORC-172 (Python) |
 
+### `src/publish/`
+
+Sortie du travail de l'agent : aucun outil de l'usine ne tourne sur un arbre écrit par l'agent.
+
+| Module | Rôle | Statut | Ticket cible |
+|---|---|---|---|
+| `src/publish/extract.ts` | `extractWork` : bundle git complet de la branche créé dans le sandbox (dossier monté à `BUNDLE_TARGET`), vérifié puis cloné sur l'hôte sans checkout, sans hook, fsmonitor ni configuration système ou globale ; tête du clone comparée au SHA lu dans le sandbox, aucun clone laissé sur un échec | garder | ORC-286, ORC-205, ORC-125 (diff lu dans le clone), ORC-151 |
+
 ### `src/app/` et racine de `src/`
 
 | Module | Rôle | Statut | Ticket cible |
