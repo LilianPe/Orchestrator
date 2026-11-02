@@ -114,6 +114,22 @@ describe('ClaudeCodeRunner in a sandbox (ORC-204)', () => {
     expect(opts).toEqual({ cwd: '/work', env: { ...runEnv, ANTHROPIC_API_KEY: 'sk-test' } });
   });
 
+  it('spawns the engine CLI with the daemon PATH, and hands the sandbox PATH to the command in the container', async () => {
+    vi.stubEnv('PATH', process.env['PATH'] + '-daemon');
+    const { sandboxes, id, spawnCommand } = await sandbox();
+    // The fake runs on the host: it drops the `env PATH=...` prefix a real engine runs in the container.
+    spawnCommand.mockImplementation((_, argv) => argv.slice(2));
+    const { r, transcriptsDir } = runner(sandboxes);
+    const pathFile = join(transcriptsDir, 'path.txt');
+    const runEnv = { FAKE_CLAUDE_SCRIPT: fx('stream-success.jsonl'), FAKE_CLAUDE_PATH: pathFile, PATH: '/factory/bin:/usr/bin' };
+    const rq = req({ sandboxId: id, cwd: '/work' }, runEnv);
+    expect(await r.start(rq).done).toMatchObject({ outcome: 'success' });
+    const [, argv, opts] = spawnCommand.mock.calls[0]! as Parameters<SandboxProvider['spawnCommand']>;
+    expect(argv).toEqual(['env', 'PATH=/factory/bin:/usr/bin', process.execPath, fx('fake-claude.mjs'), ...buildClaudeArgs(rq)]);
+    expect(opts!.env).not.toHaveProperty('PATH');
+    expect(readFileSync(pathFile, 'utf8')).toBe(process.env['PATH']);
+  });
+
   it('refuses a sandboxed run without a sandbox provider, spawning nothing', async () => {
     const { r, transcriptsDir } = runner();
     const argsFile = join(transcriptsDir, 'args.txt');

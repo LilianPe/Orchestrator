@@ -59,15 +59,19 @@ export class ClaudeCodeRunner implements Runner {
     // Masked as read: the transcript, the stream events (SSE, Linear) and the final text never
     // hold a secret value the daemon or the run knows of.
     const secrets = transcriptSecrets({ ...process.env, ...req.env }, this.o.secrets?.());
-    const env = childEnv(process.env, req.env);
+    let env = childEnv(process.env, req.env);
     let argv = [...(this.o.command ?? ['claude']), ...buildClaudeArgs(req)];
     let cwd = req.cwd;
     if (req.sandboxId !== undefined) {
       try {
         if (!this.o.sandboxes) throw new Error(`run ${req.runId} asks for sandbox ${req.sandboxId} but the runner has no sandbox provider`);
-        const named = Object.fromEntries(Object.entries(env).filter(([k]) => k in req.env || SANDBOX_AUTH.includes(k)));
+        const named = Object.fromEntries(Object.entries(env).filter(([k]) => k !== 'PATH' && (k in req.env || SANDBOX_AUTH.includes(k))));
+        // req.env.PATH is the sandbox's: the host's `docker` is found on the daemon's, the command in
+        // the container gets it through `env` (no secret in it, so on the command line is fine).
+        const inner = req.env['PATH'] !== undefined ? ['env', `PATH=${req.env['PATH']}`, ...argv] : argv;
         // The host process (`docker exec`) gets the values in its env; the command only names them.
-        argv = this.o.sandboxes.spawnCommand(req.sandboxId, argv, { cwd: req.cwd, env: named });
+        argv = this.o.sandboxes.spawnCommand(req.sandboxId, inner, { cwd: req.cwd, env: named });
+        env = childEnv(process.env, named);
         cwd = process.cwd(); // req.cwd is a path in the sandbox
       } catch (e) {
         return failed(maskTranscriptLine(e instanceof Error ? e.message : String(e), secrets));
