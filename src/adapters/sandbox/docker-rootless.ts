@@ -21,10 +21,13 @@ export interface ContainerSandboxOptions {
   gid: number;
   /** What `host.docker.internal` resolves to, for the agent API; `host-gateway` does not always reach the daemon under Docker Desktop in WSL. */
   agentHost?: string;
+  /** The daemon's: its containers carry it, and its lookups see only those, so another daemon on the same engine is left alone. */
+  instance?: string;
 }
 
 const ATTEMPT = 'factory.attempt';
 const NETWORK = 'factory.network';
+const INSTANCE = 'factory.instance';
 
 /** Where the engines listen. A mount of one of them, or of a directory above one, hands the agent the engine, so root on the host. */
 const SOCKETS = ['/var/run/docker.sock', '/run/docker.sock', '/var/run/podman/podman.sock', '/run/podman/podman.sock'];
@@ -68,6 +71,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
     const args = [
       'run', '-d',
       '--label', `${ATTEMPT}=${req.runId}`, '--label', `factory.ticket=${req.ticketId}`, '--label', `${NETWORK}=${req.network}`,
+      ...(this.opts.instance ? ['--label', `${INSTANCE}=${this.opts.instance}`] : []),
       '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
       // keep-id maps the daemon's uid into the user namespace, so files written in /work are the daemon's on the host.
       ...(this.podman ? ['--userns=keep-id'] : []), '--user', `${this.opts.uid}:${this.opts.gid}`,
@@ -77,7 +81,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
       ...this.networkArgs(req.network),
       this.opts.image, 'sleep', 'infinity',
     ];
-    const id = (await mustExec(this.run, this.opts.cli, args)).trim();
+    const id = (await this.must(args)).trim();
     this.known.add(id);
     return { id, network: req.network, level: 'L3' };
   }
@@ -98,7 +102,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
     const [c] = await this.inspect([id]);
     if (!c?.running) throw new Error(`container sandbox: no live container ${id}`);
     // Values go through the environment, not the command line: secrets stay out of the host's process list.
-    const r = await this.run(this.opts.cli, ['exec', ...this.execFlags(opts), id, ...argv], opts.env ? { env: opts.env } : undefined);
+    const r = await this.engine(['exec', ...this.execFlags(opts), id, ...argv], opts.env ? { env: opts.env } : undefined);
     // 125 is the engine failing, not the command (126/127 are the command's own, kept as results).
     if (r.code === 125) throw new Error(`container sandbox: exec in ${id}: ${r.stderr.trim()}`);
     return r;
@@ -107,7 +111,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
   /** Sync, so it checks the ids this provider has seen, not the engine: the spawned exec fails on a container that died since. */
   spawnCommand(id: string, argv: readonly string[], opts: SandboxExecOptions = {}): string[] {
     if (!this.known.has(id)) throw new Error(`container sandbox: unknown sandbox ${id}`);
-    return [this.opts.cli, 'exec', '-i', ...this.execFlags(opts), id, ...argv];
+    return [this.opts.cli, ...this.global(), 'exec', '-i', ...this.execFlags(opts), id, ...argv];
   }
 
   async findByAttempt(runId: string): Promise<Sandbox | undefined> {
@@ -121,7 +125,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
   }
 
   async destroy(id: string): Promise<void> {
-    const r = await this.run(this.opts.cli, ['rm', '-f', id]);
+    const r = await this.engine(['rm', '-f', id]);
     if (r.code !== 0 && !/no such container/i.test(r.stderr)) throw new Error(`container sandbox: rm ${id}: ${r.stderr.trim()}`);
     this.known.delete(id);
   }
@@ -135,15 +139,29 @@ export class ContainerSandboxProvider implements SandboxProvider {
     return ['-w', opts.cwd ?? WORKSPACE_TARGET, ...Object.keys(opts.env ?? {}).flatMap((k) => ['-e', k])];
   }
 
+  /** Podman prints its own warnings (cgroup manager fallback...) on stderr, mixed with the command's: errors only. */
+  private global(): string[] {
+    return this.podman ? ['--log-level=error'] : [];
+  }
+
+  private engine(args: string[], opts?: { env?: Record<string, string> }): Promise<ExecResult> {
+    return this.run(this.opts.cli, [...this.global(), ...args], opts);
+  }
+
+  private must(args: string[]): Promise<string> {
+    return mustExec(this.run, this.opts.cli, [...this.global(), ...args]);
+  }
+
   private async byLabel(label: string): Promise<Info[]> {
-    const ids = (await mustExec(this.run, this.opts.cli, ['ps', '-a', '-q', '--no-trunc', '--filter', `label=${label}`])).split('\n').filter(Boolean);
+    const mine = this.opts.instance ? ['--filter', `label=${INSTANCE}=${this.opts.instance}`] : [];
+    const ids = (await this.must(['ps', '-a', '-q', '--no-trunc', '--filter', `label=${label}`, ...mine])).split('\n').filter(Boolean);
     return ids.length ? this.inspect(ids) : [];
   }
 
   /** `inspect` rather than `ps --format`: its labels are a map under both engines. A missing id prints nothing and is skipped. */
   private async inspect(ids: string[]): Promise<Info[]> {
     const format = `{{.Id}}\t{{.State.Running}}\t{{index .Config.Labels "${ATTEMPT}"}}\t{{index .Config.Labels "${NETWORK}"}}`;
-    const r = await this.run(this.opts.cli, ['inspect', '--format', format, ...ids]);
+    const r = await this.engine(['inspect', '--format', format, ...ids]);
     return r.stdout
       .split('\n')
       .filter(Boolean)

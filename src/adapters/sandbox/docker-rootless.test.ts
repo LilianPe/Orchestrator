@@ -5,12 +5,16 @@ import { DEFAULT_REQUIREMENTS, type SandboxRequest } from './types.js';
 
 const ok = (stdout = ''): ExecResult => ({ stdout, stderr: '', code: 0 });
 
-/** A scripted engine: `answer` gets the args after the cli and says what the cli prints. */
+/** Podman's global flag, before every subcommand. */
+const QUIET = '--log-level=error';
+const sub = (args: string[]) => (args[0] === QUIET ? args.slice(1) : args);
+
+/** A scripted engine: `answer` gets the args after the cli (and podman's global flag) and says what the cli prints. */
 function engine(answer: (args: string[]) => ExecResult) {
   const calls: { cmd: string; args: string[]; env?: Record<string, string> }[] = [];
   const exec: Exec = async (cmd, args, opts) => {
     calls.push({ cmd, args, ...(opts?.env ? { env: opts.env } : {}) });
-    return answer(args);
+    return answer(sub(args));
   };
   return { calls, exec };
 }
@@ -30,7 +34,7 @@ const inspectLine = (id: string, running: boolean, runId: string, network: strin
 
 /** An engine with no container yet: `run` prints the new id. */
 const empty = () => engine((a) => (a[0] === 'run' ? ok('c1\n') : ok()));
-const runArgs = (calls: { args: string[] }[]) => calls.find((c) => c.args[0] === 'run')!.args;
+const runArgs = (calls: { args: string[] }[]) => calls.map((c) => sub(c.args)).find((a) => a[0] === 'run')!;
 
 describe('ContainerSandboxProvider.create', () => {
   it('looks the attempt up by label, then runs a locked-down container under the daemon uid', async () => {
@@ -191,10 +195,61 @@ describe('ContainerSandboxProvider.spawnCommand', () => {
     expect(() => p.spawnCommand('c1', ['true'])).toThrow(/unknown sandbox/);
     await p.create(req());
     expect(p.spawnCommand('c1', ['claude', '-p', 'hi'], { env: { CLAUDE_CODE_OAUTH_TOKEN: 'secret', A: 'b' } })).toEqual([
-      'podman', 'exec', '-i', '-w', '/work', '-e', 'CLAUDE_CODE_OAUTH_TOKEN', '-e', 'A', 'c1', 'claude', '-p', 'hi',
+      'podman', QUIET, 'exec', '-i', '-w', '/work', '-e', 'CLAUDE_CODE_OAUTH_TOKEN', '-e', 'A', 'c1', 'claude', '-p', 'hi',
     ]);
     await p.destroy('c1');
     expect(() => p.spawnCommand('c1', ['true'])).toThrow(/unknown sandbox/);
+  });
+});
+
+describe('ContainerSandboxProvider under podman', () => {
+  it('passes --log-level=error before every subcommand: its warnings would land in the command stderr', async () => {
+    const e = engine((a) => {
+      if (a[0] === 'run') return ok('c1\n');
+      if (a[0] === 'ps') return ok(e.calls.some((c) => sub(c.args)[0] === 'run') ? 'c1\n' : '');
+      if (a[0] === 'inspect') return ok(inspectLine('c1', true, 'r1', 'none'));
+      return ok();
+    });
+    const p = new ContainerSandboxProvider({ ...opts, cli: 'podman', exec: e.exec });
+    await p.create(req());
+    await p.exec('c1', ['true']);
+    await p.list();
+    await p.findByAttempt('r1');
+    await p.destroy('c1');
+    expect(new Set(e.calls.map((c) => sub(c.args)[0]))).toEqual(new Set(['ps', 'run', 'inspect', 'exec', 'rm']));
+    expect(e.calls.every((c) => c.args[0] === QUIET)).toBe(true);
+  });
+
+  it('leaves docker without it', async () => {
+    const e = empty();
+    await new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: e.exec }).create(req());
+    expect(e.calls.some((c) => c.args.includes(QUIET))).toBe(false);
+  });
+});
+
+describe('ContainerSandboxProvider with an instance (several daemons on one engine)', () => {
+  const mine = 'label=factory.instance=abc123';
+
+  it('labels its containers with the instance and looks up only those', async () => {
+    const e = empty();
+    const p = new ContainerSandboxProvider({ ...opts, cli: 'docker', instance: 'abc123', exec: e.exec });
+    await p.create(req());
+    await p.findByAttempt('r1');
+    await p.list();
+    const a = runArgs(e.calls);
+    expect(a.slice(a.indexOf('factory.instance=abc123') - 1, a.indexOf('factory.instance=abc123') + 1)).toEqual(['--label', 'factory.instance=abc123']);
+    const ps = e.calls.filter((c) => c.args[0] === 'ps').map((c) => c.args);
+    expect(ps).toEqual([
+      ['ps', '-a', '-q', '--no-trunc', '--filter', 'label=factory.attempt=r1', '--filter', mine],
+      ['ps', '-a', '-q', '--no-trunc', '--filter', 'label=factory.attempt=r1', '--filter', mine],
+      ['ps', '-a', '-q', '--no-trunc', '--filter', 'label=factory.attempt', '--filter', mine],
+    ]);
+  });
+
+  it('adds no instance label nor filter without one', async () => {
+    const e = empty();
+    await new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: e.exec }).create(req());
+    expect(e.calls.flatMap((c) => c.args).some((x) => x.includes('factory.instance'))).toBe(false);
   });
 });
 
