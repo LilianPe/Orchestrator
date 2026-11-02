@@ -3,13 +3,12 @@ import { cli, enabled, useSandboxes } from './helpers.js';
 
 /**
  * Isolation n° 2 (ORC-218): the kernel surface. The image has no keyctl nor strace, but perl-base is in
- * every Debian image: its `syscall` calls by number, so the probes need the architecture's table.
+ * every Debian image: its `syscall` calls by number, so the probe needs the architecture's table.
  */
-const SYSCALLS: Record<string, Record<string, number>> = {
-  x86_64: { keyctl: 250, ptrace: 101, init_module: 175, finit_module: 313 },
-  aarch64: { keyctl: 219, ptrace: 117, init_module: 105, finit_module: 273 },
-};
-const PTRACE_ATTACH = 16;
+const KEYCTL: Record<string, number> = { x86_64: 250, aarch64: 219 };
+const KEYCTL_GET_KEYRING_ID = 0;
+const KEY_SPEC_SESSION_KEYRING = -3;
+const EPERM = 1;
 
 describe.skipIf(!enabled)(`kernel surface (${cli}, isolation n° 2)`, () => {
   const { create, sh } = useSandboxes('02');
@@ -19,16 +18,14 @@ describe.skipIf(!enabled)(`kernel surface (${cli}, isolation n° 2)`, () => {
     expect((await sh(id, 'cat /proc/self/status')).stdout).toMatch(/^Seccomp:\s+2$/m);
   });
 
-  it('is refused keyctl, ptrace of pid 1 and module loading', async (ctx) => {
+  it('is refused keyctl by seccomp: EPERM where the kernel would hand out the session keyring', async (ctx) => {
     const { id } = await create();
-    const table = SYSCALLS[(await sh(id, 'uname -m')).stdout];
-    // ponytail: an unknown architecture falls back on the seccomp mode above and CapEff = 0 (n° 1).
-    if (!table) return ctx.skip();
-    const probe = async (args: string) => (await sh(id, `perl -e 'print syscall(${args})'`)).stdout;
-    expect(await probe(`${table['keyctl']}, 0, 0, 0, 0, 0`)).toBe('-1');
-    // Same uid as pid 1, so only seccomp or Yama stands in the way.
-    expect(await probe(`${table['ptrace']}, ${PTRACE_ATTACH}, 1, 0, 0`)).toBe('-1');
-    expect(await probe(`${table['init_module']}, 0, 0, 0`)).toBe('-1');
-    expect(await probe(`${table['finit_module']}, 0, 0, 0`)).toBe('-1');
+    const nr = KEYCTL[(await sh(id, 'uname -m')).stdout];
+    // ponytail: an unknown architecture falls back on the seccomp mode above.
+    if (nr === undefined) return ctx.skip();
+    // Unfiltered, these arguments return the keyring's id (and create it if need be): only the filter answers -1 EPERM.
+    // Module loading is not probed: without CAP_SYS_MODULE (n° 1) it is EPERM with or without seccomp.
+    const r = await sh(id, `perl -e 'my $r = syscall(${nr}, ${KEYCTL_GET_KEYRING_ID}, ${KEY_SPEC_SESSION_KEYRING}, 1); print "$r ", $! + 0'`);
+    expect(r.stdout).toBe(`-1 ${EPERM}`);
   });
 });

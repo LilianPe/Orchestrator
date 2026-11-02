@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { defaultLimits } from '../../src/adapters/sandbox/docker-rootless.js';
 import { cli, enabled, useSandboxes } from './helpers.js';
 
 /**
@@ -10,21 +11,24 @@ describe.skipIf(!enabled)(`resource exhaustion (${cli}, isolation n° 9)`, () =>
   const defaults = useSandboxes('09');
   const small = useSandboxes('09-small', { limits: { pids: 64, memory: '128m', cpus: 1 } });
 
-  it('caps every sandbox by default: 512 processes, 4 GiB and no swap, 2 cpus', async () => {
+  it('caps every sandbox by default: 512 processes, 4 GiB and no swap, 2 cpus (fewer on a smaller host)', async () => {
     const { id } = await defaults.create();
     expect((await defaults.sh(id, 'cat /sys/fs/cgroup/pids.max /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory.swap.max /sys/fs/cgroup/cpu.max')).stdout.split('\n')).toEqual([
       '512',
       String(4 * 1024 ** 3),
       '0',
-      '200000 100000',
+      `${defaultLimits().cpus! * 100000} 100000`,
     ]);
   });
 
   it('stops a fork bomb at its pids limit, the neighbour still answering', async () => {
     const a = await small.create();
     const b = await small.create();
-    // More sleepers than the limit: the shell's forks start failing once it is reached.
-    const bomb = await small.sh(a.id, 'for i in $(seq 200); do sleep 300 & done');
+    // More sleepers than the limit: the shell's forks start failing once it is reached. The sleepers write
+    // nowhere, so they do not hold the exec's pipes: it returns with the shell, its own error on stderr.
+    const started = Date.now();
+    const bomb = await small.sh(a.id, 'for i in $(seq 200); do sleep 300 >/dev/null 2>&1 & done');
+    expect(Date.now() - started).toBeLessThan(30_000);
     expect(bomb.stderr).toMatch(/fork/i);
     const t = Date.now();
     expect((await small.provider.exec(b.id, ['true'])).code).toBe(0);

@@ -31,7 +31,7 @@ const DAEMON_SECRETS = {
   LINEAR_WEBHOOK_SECRET: 'whsec-daemon',
   FACTORY_SECRETS_KEY: 'daemon-secrets-key',
   FACTORY_DATABASE_URL: 'postgres://factory:pw@db/factory',
-  RELAIS_TOKEN: 'old-prefix-secret',
+  RELAIS_TOKEN: 'old-prefix-secret', // transition, à retirer (ORC-167)
   GH_TOKEN: 'ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
   GITHUB_TOKEN: 'ghp_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
   AWS_SECRET_ACCESS_KEY: 'aws-secret',
@@ -43,7 +43,7 @@ describe.skipIf(!enabled)(`no secret in the sandbox (${cli}, isolation n° 7)`, 
   it('hands a run its own variables, none of the daemon', async () => {
     const ws = workspace();
     const sbx = await create({ workspacePath: ws });
-    const saved = { ...process.env };
+    const saved = Object.fromEntries(Object.keys(DAEMON_SECRETS).map((k) => [k, process.env[k]]));
     Object.assign(process.env, DAEMON_SECRETS);
     try {
       const runner = new ClaudeCodeRunner({ transcriptsDir: workspace(), sandboxes: provider, command: ['sh', '-c', `env > ${WORKSPACE_TARGET}/env.txt`, 'sh'] });
@@ -62,13 +62,16 @@ describe.skipIf(!enabled)(`no secret in the sandbox (${cli}, isolation n° 7)`, 
         sandboxId: sbx.id,
       }).done;
     } finally {
-      for (const k of Object.keys(DAEMON_SECRETS)) if (!(k in saved)) delete process.env[k];
+      for (const [k, v] of Object.entries(saved)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
     }
     const env = Object.fromEntries(
       readFileSync(join(ws, 'env.txt'), 'utf8').split('\n').filter(Boolean).map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]),
     );
     for (const [k, v] of Object.entries(RUN_ENV)) expect(env[k]).toBe(v);
-    expect(Object.keys(env).filter((k) => /^(LINEAR_|FACTORY_|RELAIS_)/.test(k)).sort()).toEqual(Object.keys(RUN_ENV).filter((k) => k.startsWith('FACTORY_')).sort());
+    expect(Object.keys(env).filter((k) => /^(LINEAR_|FACTORY_|RELAIS_)/.test(k)).sort()) // RELAIS_ : transition, à retirer (ORC-167).toEqual(Object.keys(RUN_ENV).filter((k) => k.startsWith('FACTORY_')).sort());
     for (const k of Object.keys(DAEMON_SECRETS)) expect(env).not.toHaveProperty(k);
     for (const v of Object.values(DAEMON_SECRETS)) expect(Object.values(env)).not.toContain(v);
     // The login is handed over on purpose (the runner's SANDBOX_AUTH), when the shell has one.

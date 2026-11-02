@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Exec, ExecResult } from '../exec.js';
-import { ContainerSandboxProvider } from './docker-rootless.js';
+import { ContainerSandboxProvider, defaultLimits, isPodman } from './docker-rootless.js';
 import { DEFAULT_REQUIREMENTS, type SandboxRequest } from './types.js';
 
 const ok = (stdout = ''): ExecResult => ({ stdout, stderr: '', code: 0 });
@@ -47,7 +47,7 @@ describe('ContainerSandboxProvider.create', () => {
       'run', '-d',
       '--label', 'factory.attempt=r1', '--label', 'factory.ticket=ORC-1', '--label', 'factory.network=none',
       '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
-      '--pids-limit', '512', '--memory', '4g', '--memory-swap', '4g', '--cpus', '2',
+      '--pids-limit', '512', '--memory', '4g', '--memory-swap', '4g', '--cpus', String(defaultLimits().cpus),
       '--user', '1000:1000',
       '-e', 'HOME=/home/factory',
       '--mount', 'type=bind,source=/home/d/wt/orc-1,target=/work',
@@ -63,6 +63,28 @@ describe('ContainerSandboxProvider.create', () => {
     await new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: e.exec, limits: { pids: 64, memory: '256m', cpus: 0.5 } }).create(req());
     const a = runArgs(e.calls);
     expect(a.slice(a.indexOf('--pids-limit'), a.indexOf('--pids-limit') + 8)).toEqual(['--pids-limit', '64', '--memory', '256m', '--memory-swap', '256m', '--cpus', '0.5']);
+  });
+
+  it('drops each limit left undefined, the swap with the memory', async () => {
+    const e = empty();
+    await new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: e.exec, limits: { cpus: 1 } }).create(req());
+    const a = runArgs(e.calls);
+    expect(a).not.toContain('--pids-limit');
+    expect(a).not.toContain('--memory');
+    expect(a).not.toContain('--memory-swap');
+    expect(a.slice(a.indexOf('--cpus'), a.indexOf('--cpus') + 2)).toEqual(['--cpus', '1']);
+    const none = empty();
+    await new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: none.exec, limits: {} }).create(req());
+    expect(runArgs(none.calls).filter((x) => /^--(pids-limit|memory|memory-swap|cpus)$/.test(x))).toEqual([]);
+  });
+
+  it('asks for no more cpus than the host has: 2 at most', () => {
+    expect(defaultLimits(1)).toEqual({ pids: 512, memory: '4g', cpus: 1 });
+    expect(defaultLimits(16).cpus).toBe(2);
+  });
+
+  it('knows podman by its basename', () => {
+    expect([isPodman('podman'), isPodman('/usr/bin/podman-remote'), isPodman('docker'), isPodman('/opt/podman/bin/docker')]).toEqual([true, true, false, false]);
   });
 
   it('keeps the uid under podman with --userns=keep-id', async () => {

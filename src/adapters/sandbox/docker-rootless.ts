@@ -1,3 +1,4 @@
+import { availableParallelism } from 'node:os';
 import { basename } from 'node:path';
 import { execCmd, mustExec, type Exec, type ExecResult } from '../exec.js';
 import {
@@ -24,10 +25,26 @@ export interface ContainerSandboxOptions {
   /** The daemon's: its containers carry it, and its lookups see only those, so another daemon on the same engine is left alone. */
   instance?: string;
   /** Per container (ORC-218): a fork bomb or a memory hog in one attempt must not starve the others. No swap: a hog is killed, not thrashing the host. */
-  limits?: typeof LIMITS;
+  limits?: SandboxLimits;
 }
 
-const LIMITS = { pids: 512, memory: '4g', cpus: 2 };
+/** An undefined limit is left out of `run`: the engine's own (none), for a host whose cgroups lack that controller. */
+export interface SandboxLimits {
+  pids?: number | undefined;
+  /** In the engine's syntax: `4g`, `512m`. */
+  memory?: string | undefined;
+  cpus?: number | undefined;
+}
+
+/** 2 cpus, or fewer on a smaller host: the engine refuses more than it has. */
+export function defaultLimits(cpus = availableParallelism()): SandboxLimits {
+  return { pids: 512, memory: '4g', cpus: Math.min(2, cpus) };
+}
+
+/** By name or path, as the daemon and the isolation tests both tell the engines apart. */
+export function isPodman(cli: string): boolean {
+  return basename(cli).startsWith('podman');
+}
 
 const ATTEMPT = 'factory.attempt';
 const NETWORK = 'factory.network';
@@ -52,7 +69,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
 
   constructor(private readonly opts: ContainerSandboxOptions) {
     this.run = opts.exec ?? execCmd;
-    this.podman = basename(opts.cli).startsWith('podman');
+    this.podman = isPodman(opts.cli);
   }
 
   async create(req: SandboxRequest): Promise<Sandbox> {
@@ -77,7 +94,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
       '--label', `${ATTEMPT}=${req.runId}`, '--label', `factory.ticket=${req.ticketId}`, '--label', `${NETWORK}=${req.network}`,
       ...(this.opts.instance ? ['--label', `${INSTANCE}=${this.opts.instance}`] : []),
       '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
-      ...limitArgs(this.opts.limits ?? LIMITS),
+      ...limitArgs(this.opts.limits ?? defaultLimits()),
       // keep-id maps the daemon's uid into the user namespace, so files written in /work are the daemon's on the host.
       ...(this.podman ? ['--userns=keep-id'] : []), '--user', `${this.opts.uid}:${this.opts.gid}`,
       '-e', `HOME=${SANDBOX_HOME}`,
@@ -181,8 +198,12 @@ function sandbox(c: Info): Sandbox {
   return { id: c.id, network: c.network, level: 'L3' };
 }
 
-function limitArgs(l: typeof LIMITS): string[] {
-  return ['--pids-limit', String(l.pids), '--memory', l.memory, '--memory-swap', l.memory, '--cpus', String(l.cpus)];
+function limitArgs(l: SandboxLimits): string[] {
+  return [
+    ...(l.pids === undefined ? [] : ['--pids-limit', String(l.pids)]),
+    ...(l.memory === undefined ? [] : ['--memory', l.memory, '--memory-swap', l.memory]),
+    ...(l.cpus === undefined ? [] : ['--cpus', String(l.cpus)]),
+  ];
 }
 
 function mountArg(m: SandboxMount): string {
