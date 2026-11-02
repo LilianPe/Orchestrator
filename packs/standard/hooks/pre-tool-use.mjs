@@ -173,7 +173,7 @@ const input = call.tool_input ?? {};
 const command = String(input.command ?? input.query ?? '');
 const hit = rule(tool, command, process.env.FACTORY_DENY_PUSH === '1');
 if (hit) {
-  journal({ at: new Date().toISOString(), tool, command, rule: hit });
+  journal({ at: new Date().toISOString(), tool, command, rule: hit, ticket: process.env.FACTORY_TICKET ?? null });
   const permissionDecisionReason = `Refusé par l'usine (règle ${hit}) : cette commande est interdite dans un run.`;
   process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason } }));
 }

@@ -55,7 +55,7 @@ describe('PreToolUse guard of the standard pack', () => {
       const r = bash(sample(rule));
       expect(r.denied, `${rule} → ${sample(rule)}`).toBe(true);
       expect(r.lines).toHaveLength(1);
-      expect(r.lines[0]).toEqual({ at: expect.any(String), tool: 'Bash', command: sample(rule), rule: expect.any(String) });
+      expect(r.lines[0]).toEqual({ at: expect.any(String), tool: 'Bash', command: sample(rule), rule: expect.any(String), ticket: null });
     }
     // The other denies are tools or paths Claude Code refuses itself; the guard only sees Bash and WebSearch.
     expect(deny.filter((r) => !r.startsWith('Bash('))).toEqual(['WebSearch', 'Read(~/.factory/**)']);
@@ -64,7 +64,7 @@ describe('PreToolUse guard of the standard pack', () => {
   it('refuses WebSearch', () => {
     const r = guard({ query: 'x' }, {}, 'WebSearch');
     expect(r.denied).toBe(true);
-    expect(r.lines).toEqual([{ at: expect.any(String), tool: 'WebSearch', command: 'x', rule: 'web-search' }]);
+    expect(r.lines).toEqual([{ at: expect.any(String), tool: 'WebSearch', command: 'x', rule: 'web-search', ticket: null }]);
   });
 
   it.each([
@@ -121,7 +121,7 @@ describe('PreToolUse guard of the standard pack', () => {
     const r = bash(command);
     expect(r.denied).toBe(true);
     expect(r.reason).toContain(rule);
-    expect(r.lines).toEqual([{ at: expect.any(String), tool: 'Bash', command, rule }]);
+    expect(r.lines).toEqual([{ at: expect.any(String), tool: 'Bash', command, rule, ticket: null }]);
   });
 
   it.each([
@@ -150,9 +150,15 @@ describe('PreToolUse guard of the standard pack', () => {
       expect(bash(command).denied, command).toBe(false);
       const r = bash(command, { FACTORY_DENY_PUSH: '1' });
       expect(r.denied, command).toBe(true);
-      expect(r.lines).toEqual([{ at: expect.any(String), tool: 'Bash', command, rule: expect.stringMatching(/^(push|gh-write)$/) }]);
+      expect(r.lines).toEqual([{ at: expect.any(String), tool: 'Bash', command, rule: expect.stringMatching(/^(push|gh-write)$/), ticket: null }]);
     }
     expect(bash('gh pr view 3', { FACTORY_DENY_PUSH: '1' }).denied).toBe(false);
+  });
+
+  it('journals the ticket of the run', () => {
+    expect(bash('rm -rf /', { FACTORY_TICKET: 'REL-7' }).lines).toEqual([
+      { at: expect.any(String), tool: 'Bash', command: 'rm -rf /', rule: 'rm-root', ticket: 'REL-7' },
+    ]);
   });
 
   it('journals under CLAUDE_CONFIG_DIR without FACTORY_REFUSALS_LOG, and never fails on an unwritable log', () => {
