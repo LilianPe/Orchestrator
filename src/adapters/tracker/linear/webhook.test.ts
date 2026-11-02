@@ -5,6 +5,12 @@ import { describe, expect, it, vi } from 'vitest';
 import type { FactoryEvent } from '../../../core/types.js';
 import { SqliteStore } from '../../../store/sqlite-store.js';
 import { createLinearIngest } from './ingest.js';
+import { loadWorkflow } from '../../../config/load-workflow.js';
+import { FakeClock } from '../../../core/clock.js';
+import { newTicketState } from '../../../core/types.js';
+import { FakeTracker } from '../fake.js';
+import { knownLabels, recordLabels, serial } from './labels.js';
+import { reconcileOnce } from './reconcile.js';
 import { isFresh, isUsableWebhookSecret, mapLinearWebhook, stripMention, verifyLinearSignature, type MapContext } from './webhook.js';
 
 const fx = (name: string) => JSON.parse(readFileSync(join(import.meta.dirname, 'fixtures', `${name}.json`), 'utf8'));
@@ -272,6 +278,39 @@ describe('ingest', () => {
     expect(await failing(raw, { 'linear-signature': sig })).toEqual({ status: 500 });
     // Not in the inbox: Linear sends it again, and it must not be taken for a change already known then.
     expect(recorded).toEqual([]);
+  });
+
+  it('a reconciliation pass that runs while a webhook writes its label change waits for it: the change is reported once (ORC-185)', async () => {
+    const { store, accept, ids } = inbox();
+    const body = { ...fx('issue-moved-labeled'), webhookTimestamp: 2000 };
+    const updatedAt = Date.parse(body.data.updatedAt);
+    await store.putTicket({ ...newTicketState('p', 'REL-1', 'T', 'ai_review', 1), delegated: true });
+    await recordLabels(store, 'p', 'REL-1', ['bug'], updatedAt - 1000);
+    const tracker = new FakeTracker();
+    tracker.addIssue({ identifier: 'REL-1', delegateId: 'app', stateName: 'AI Review', labels: ['bug', 'agent:reprendre'], updatedAt });
+    const labelsTurn = serial();
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const c = {
+      ...ctx(),
+      now: () => 2000,
+      knownLabels: async (pid: string, id: string) => (await knownLabels(store, pid, id))?.labels,
+      recordLabels: (pid: string, id: string, labels: string[], at: number) => recordLabels(store, pid, id, labels, at),
+    };
+    const ingest = createLinearIngest({ secret: () => 'sec', ctx: c, serial: labelsTurn, accept: async (e) => (await gate, accept(e)), ack: async () => {}, log: () => {} });
+    const { raw, sig } = signed(body);
+    const webhook = ingest(raw, { 'linear-signature': sig });
+    await new Promise((r) => setTimeout(r, 10));
+    const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../../../packs/standard') });
+    const reconciled = reconcileOnce({
+      tracker, store, projects: [{ id: 'p', repoPath: '/r', teamKey: 'REL', workflow }], serial: labelsTurn,
+      submit: (e) => store.appendInbox(e), clock: new FakeClock(2000), log: () => {},
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    release();
+    expect(await webhook).toEqual({ status: 200 });
+    await reconciled;
+    expect((await ids()).filter((id) => id.includes('label'))).toHaveLength(1);
   });
 
   it('acks with the id of the event, so the daemon can record when (ORC-235)', async () => {

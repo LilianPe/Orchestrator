@@ -3,7 +3,7 @@ import { logicalFromName, type ProjectRuntime } from '../../../core/orchestrator
 import { SCHEMA_VERSION, TRUSTED, type EventPayloads, type EventType, type FactoryEvent, type TicketState } from '../../../core/types.js';
 import type { Store } from '../../../store/types.js';
 import { labelEchoKey, stateEchoKey, type Tracker, type TrackerIssue } from '../types.js';
-import { knownLabels, labelChanges, recordLabels } from './labels.js';
+import { knownLabels, labelChanges, recordLabels, type Serial } from './labels.js';
 
 export interface ReconcileDeps {
   tracker: Pick<Tracker, 'listDelegated' | 'getIssue'>;
@@ -13,6 +13,8 @@ export interface ReconcileDeps {
   submit: (e: FactoryEvent) => unknown;
   clock: Clock;
   log: (m: string) => void;
+  /** The webhook's turn, shared around the known labels (ORC-185), so one change is not reported by both. */
+  serial?: Serial;
 }
 
 /**
@@ -68,7 +70,8 @@ export async function reconcileOnce(d: ReconcileDeps): Promise<void> {
           continue;
         }
         await catchUpMove(d, emit, p, t, issue.stateName, at);
-        await catchUpLabels(d, emit, p.id, issue, t, at);
+        const inTurn: Serial = d.serial ?? ((task) => task());
+        await inTurn(() => catchUpLabels(d, emit, p.id, issue, t, at));
       }
       for (const t of await d.store.listTickets()) {
         if (t.projectId !== p.id || delegated.has(t.ticketId)) continue;

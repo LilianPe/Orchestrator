@@ -40,3 +40,20 @@ export function labelChanges(known: readonly string[], now: readonly string[]): 
     ...known.filter((l) => !now.includes(l)).map((label) => ({ label, change: 'removed' as const })),
   ];
 }
+
+/** Runs its tasks one at a time, in call order; a failed one does not stop the next. */
+export type Serial = <T>(task: () => Promise<T>) => Promise<T>;
+
+/**
+ * One turn for the webhook and the reconciliation around the known labels (ORC-185): each reads the
+ * reading, writes its events and records the new reading before the other reads it, so one change is
+ * not reported by both.
+ */
+export function serial(): Serial {
+  let tail: Promise<unknown> = Promise.resolve();
+  return <T>(task: () => Promise<T>) => {
+    const run = tail.then(task);
+    tail = run.catch(() => undefined);
+    return run;
+  };
+}
