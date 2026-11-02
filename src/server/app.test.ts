@@ -152,6 +152,67 @@ describe('server', () => {
     expect(await res.json()).toEqual([{ type: 'system' }]);
   });
 
+  describe('factory MCP (ORC-288)', () => {
+    const output = { status: 'done', summary: 'Export ajouté', tests_added: ['export.test.ts'], why: 'demandé', assumptions: [], risks: [], untested: [], review_hints: [] };
+    const rpc = (app: Awaited<ReturnType<typeof setup>>['app'], body: unknown, token = 'tok') =>
+      agentOnly(app)(new Request('http://172.17.0.1:4101/agent/mcp', { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', accept: 'application/json, text/event-stream' }, body: JSON.stringify(body) }));
+    const call = async (app: Awaited<ReturnType<typeof setup>>['app'], name: string, args: unknown) =>
+      (await (await rpc(app, { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name, arguments: args } })).json()).result;
+
+    it('initializes, echoing a known protocol version, and acknowledges the initialized notification', async () => {
+      const { app } = await setup();
+      const res = await (await rpc(app, { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'claude-code', version: '2' } } })).json();
+      expect(res).toMatchObject({ jsonrpc: '2.0', id: 1, result: { protocolVersion: '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'factory' } } });
+      const unknown = await (await rpc(app, { jsonrpc: '2.0', id: 2, method: 'initialize', params: { protocolVersion: '1999-01-01' } })).json();
+      expect(unknown.result.protocolVersion).toBe('2025-11-25');
+      const note = await rpc(app, { jsonrpc: '2.0', method: 'notifications/initialized' });
+      expect(note.status).toBe(202);
+      expect(await note.text()).toBe('');
+      expect(await (await rpc(app, { jsonrpc: '2.0', id: 4, method: 'ping' })).json()).toEqual({ jsonrpc: '2.0', id: 4, result: {} });
+    });
+
+    it('lists exactly submit_result, with the output JSON Schema, and ask', async () => {
+      const { app } = await setup();
+      const { tools } = (await (await rpc(app, { jsonrpc: '2.0', id: 1, method: 'tools/list' })).json()).result;
+      expect(tools.map((t: { name: string }) => t.name)).toEqual(['submit_result', 'ask']);
+      expect(tools[0].inputSchema).toMatchObject({ type: 'object', required: expect.arrayContaining(['status', 'summary', 'review_hints']), additionalProperties: false });
+      expect(tools[1].inputSchema).toMatchObject({ type: 'object', required: ['text'] });
+    });
+
+    it('submit_result stores a valid output for the run of the token, the last one winning', async () => {
+      const { app, store } = await setup();
+      expect(await call(app, 'submit_result', { ...output, summary: 'premier' })).toEqual({ content: [{ type: 'text', text: 'Résultat enregistré.' }] });
+      await call(app, 'submit_result', output);
+      expect(JSON.parse((await store.getMeta('agent-output:r1'))!)).toEqual(output);
+    });
+
+    it('submit_result refuses an invalid output, naming the fields, and stores nothing', async () => {
+      const { app, store } = await setup();
+      const res = await call(app, 'submit_result', { ...output, status: 'blocked', summary: '' });
+      expect(res.isError).toBe(true);
+      expect(res.content[0].text).toContain('summary');
+      expect(res.content[0].text).toContain('question');
+      expect(await store.getMeta('agent-output:r1')).toBeUndefined();
+    });
+
+    it('ask posts an elicitation and blocks the ticket, like /agent/ask', async () => {
+      const { app, tracker, blockTicket } = await setup();
+      expect((await call(app, 'ask', { text: 'Quelle base ?' })).isError).toBeUndefined();
+      expect(tracker.activities('ls-1')).toEqual([{ type: 'elicitation', body: 'Quelle base ?' }]);
+      expect(blockTicket).toHaveBeenCalledWith('p', 'REL-1', "Question posée par l'agent");
+      expect((await call(app, 'ask', {})).isError).toBe(true);
+    });
+
+    it('answers 401 without a valid run token, -32601 on an unknown method, -32602 on an unknown tool', async () => {
+      const { app } = await setup();
+      expect((await rpc(app, { jsonrpc: '2.0', id: 1, method: 'tools/list' }, 'nope')).status).toBe(401);
+      const unknown = await (await rpc(app, { jsonrpc: '2.0', id: 7, method: 'server/discover' })).json();
+      expect(unknown).toMatchObject({ jsonrpc: '2.0', id: 7, error: { code: -32601 } });
+      const tool = await (await rpc(app, { jsonrpc: '2.0', id: 8, method: 'tools/call', params: { name: 'rm', arguments: {} } })).json();
+      expect(tool.error.code).toBe(-32602);
+    });
+  });
+
   describe('UI password (non-loopback host)', () => {
     const basic = (p: string) => ({ authorization: `Basic ${Buffer.from(`admin:${p}`).toString('base64')}` });
 

@@ -244,6 +244,12 @@ Sortie du travail de l'agent : aucun outil de l'usine ne tourne sur un arbre éc
 | `src/server/app.ts` | API Hono : interface, SSE, webhook Linear, `/agent/*`, pause/resume, mot de passe, CSRF | adapter | ORC-147 (fait : webhook et commandes de l'interface attendent l'écriture de l'inbox), ORC-192 (`/agent/*` retiré), ORC-200 (pause/resume retirés), ORC-223 (API du dashboard), ORC-222 (authentification nominative), ORC-134 (fait : `POST /webhooks/github`) |
 | `src/server/static.ts` | Sert l'interface construite | garder | ORC-223 |
 
+### `src/api/`
+
+| Module | Rôle | Statut | Ticket cible |
+|---|---|---|---|
+| `src/api/mcp.ts` | MCP de l'usine (`POST /agent/mcp`, JSON-RPC) : `submit_result` range le résultat validé du run, `ask` | garder | ORC-288 (fait), ORC-188 (`kb_search`), ORC-192 (`ask` seul canal) |
+
 ### `src/relay/`
 
 | Module | Rôle | Statut | Ticket cible |

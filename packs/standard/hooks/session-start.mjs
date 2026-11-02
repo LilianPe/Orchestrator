@@ -12,6 +12,7 @@ const RULES = `# Règles de l'usine (toujours actives)
 - Pour Linear, utilise uniquement : \`factory-agent issue <ID>\`, \`factory-agent search "<texte>"\`, \`factory-agent kb search "<mots>"\`.
 - S'il te manque une décision, pose UNE question avec \`factory-agent ask "<question>"\`, puis termine ton tour sans rien inventer.
 - Ton dernier message est publié tel quel dans Linear : il doit se lire sans le reste de la conversation.
+- Termine toujours ton tour par l'outil \`mcp__factory__submit_result\` (statut, résumé, tests ajoutés, hypothèses, risques) : l'usine ne lit que lui. S'il refuse le résultat, corrige les champs qu'il nomme et renvoie-le.
 
 # Méthode (skills du pack)
 Avant chaque étape, charge le skill de méthode qui s'applique et suis-le, même quand la tâche paraît simple :

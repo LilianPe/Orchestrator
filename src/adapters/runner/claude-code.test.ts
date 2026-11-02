@@ -47,8 +47,15 @@ describe('buildClaudeArgs', () => {
   it('starts a new session', () => {
     expect(buildClaudeArgs(req())).toEqual([
       '-p', '/factory:dev\n\n## Ticket', '--output-format', 'stream-json', '--verbose', '--session-id', 'uuid-1', '--model', 'sonnet',
-      '--plugin-dir', '/pack', '--settings', '/pack/settings.json', '--setting-sources', '', '--strict-mcp-config', '--max-budget-usd', '5',
+      '--plugin-dir', '/pack', '--settings', '/pack/settings.json', '--setting-sources', '', '--strict-mcp-config', '--mcp-config', expect.any(String), '--max-budget-usd', '5',
     ]);
+  });
+  it("loads the factory's MCP only, its token read from the run's env, never on the command line (ORC-288)", () => {
+    const args = buildClaudeArgs(req({}, { FACTORY_RUN_TOKEN: 'tok-secret', FACTORY_API: 'http://127.0.0.1:4100/agent' }));
+    expect(JSON.parse(args[args.indexOf('--mcp-config') + 1]!)).toEqual({
+      mcpServers: { factory: { type: 'http', url: '${FACTORY_API}/mcp', headers: { Authorization: 'Bearer ${FACTORY_RUN_TOKEN}' } } },
+    });
+    expect(args.join(' ')).not.toContain('tok-secret');
   });
   it('resumes read-only', () => {
     const args = buildClaudeArgs(req({ resume: true, readOnly: true }));

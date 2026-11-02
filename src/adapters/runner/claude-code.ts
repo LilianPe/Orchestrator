@@ -22,6 +22,15 @@ export interface ClaudeRunnerOptions {
 /** Daemon variables a sandboxed `claude` needs to authenticate; the rest of the host env stays out of the container. */
 const SANDBOX_AUTH = ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY', 'ANTHROPIC_BASE_URL'];
 
+/**
+ * The factory's MCP (`POST /agent/mcp`, ORC-288). Claude Code expands `${VAR}` in a `--mcp-config`'s
+ * url and headers from its own env (checked on 2.1.316): the run token stays out of the command line,
+ * which the host's process list shows. Both variables come with the run's env (`agentEnv`).
+ */
+const FACTORY_MCP = JSON.stringify({
+  mcpServers: { factory: { type: 'http', url: '${FACTORY_API}/mcp', headers: { Authorization: 'Bearer ${FACTORY_RUN_TOKEN}' } } },
+});
+
 export function buildClaudeArgs(req: RunRequest): string[] {
   const args = [
     '-p', req.prompt,
@@ -32,9 +41,10 @@ export function buildClaudeArgs(req: RunRequest): string[] {
     '--plugin-dir', req.pluginDir,
     '--settings', req.settingsPath,
     // Nothing of the repository's: no settings, hooks, skills, CLAUDE.md, nor .mcp.json, nor the account's
-    // claude.ai connectors (ORC-128, measured on 2.1.306). The factory's MCP comes with --mcp-config (ORC-188).
+    // claude.ai connectors (ORC-128, measured on 2.1.306). Only the factory's MCP is loaded (ORC-188).
     '--setting-sources', '',
     '--strict-mcp-config',
+    '--mcp-config', FACTORY_MCP,
     '--max-budget-usd', String(req.limits.usd),
   ];
   if (req.readOnly) args.push('--permission-mode', 'plan');

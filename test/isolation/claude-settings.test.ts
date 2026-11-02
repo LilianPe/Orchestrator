@@ -73,7 +73,8 @@ describe.skipIf(!enabled)('claude -p loads nothing of the repository (isolation 
     const init = events.find((e) => e['type'] === 'system' && e['subtype'] === 'init');
     const result = events.find((e) => e['type'] === 'result');
     expect(init, r.stderr).toBeDefined();
-    expect(init!['mcp_servers']).toEqual([]);
+    // The factory's alone (ORC-288): unreachable here, but declared.
+    expect((init!['mcp_servers'] as { name: string }[]).map((s) => s.name)).toEqual(['factory']);
     expect(init!['skills']).not.toContain('piege');
     expect(JSON.stringify(init)).not.toContain('piege');
     expect(readdirSync(witness)).toEqual([]);

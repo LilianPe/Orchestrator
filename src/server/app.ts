@@ -9,6 +9,7 @@ import type { Clock } from '../core/clock.js';
 import { pendingLabels } from '../core/attempt-labels.js';
 import { TRUSTED, type FactoryEvent } from '../core/types.js';
 import type { RunRecord, Store } from '../store/types.js';
+import { handleMcp } from '../api/mcp.js';
 import { readStatic } from './static.js';
 import { PRODUCT_NAME } from '../product.js';
 
@@ -228,17 +229,29 @@ export function createApp(d: ServerDeps): Hono {
   });
   agent.get('/search', async (c) => c.json(await d.tracker.search(c.req.query('q') ?? '')));
   agent.get('/kb/search', async (c) => c.json(d.knowledgeSearch ? await d.knowledgeSearch(c.req.query('q') ?? '') : []));
-  agent.post('/ask', async (c) => {
-    const run = c.get('run');
-    const { text } = (await c.req.json()) as { text?: string };
-    if (!text) return c.json({ error: 'text required' }, 400);
+  const ask = async (run: RunRecord, text: string) => {
     if (run.linearSessionId) await d.tracker.activity(run.linearSessionId, { type: 'elicitation', body: text });
     // Not awaited: the block waits its turn behind the events before it (a run's launch among them),
     // and the agent must not wait minutes for an answer, nor ask again when its request times out.
     d.blockTicket(run.projectId, run.ticketId, "Question posée par l'agent").catch((err: Error) =>
       d.bus.publish({ kind: 'log', level: 'error', message: `ask ${run.ticketId}: ${err.message}`, at: d.clock.now() }),
     );
+  };
+  agent.post('/ask', async (c) => {
+    const { text } = (await c.req.json()) as { text?: string };
+    if (!text) return c.json({ error: 'text required' }, 400);
+    await ask(c.get('run'), text);
     return c.json({ ok: true });
+  });
+  agent.post('/mcp', async (c) => {
+    let msg: unknown;
+    try {
+      msg = await c.req.json();
+    } catch {
+      return c.json({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } }, 400);
+    }
+    const res = await handleMcp(msg, c.get('run'), { store: d.store, ask });
+    return res ? c.json(res) : c.body(null, 202);
   });
   app.route('/agent', agent);
 
