@@ -11,6 +11,7 @@ import { ClaudeCodeRunner } from '../adapters/runner/claude-code.js';
 import { purgeTranscripts } from '../adapters/runner/transcript.js';
 import { FakeRunner } from '../adapters/runner/fake.js';
 import type { Runner } from '../adapters/runner/types.js';
+import type { SandboxProvider } from '../adapters/sandbox/types.js';
 import { LinearApi } from '../adapters/tracker/linear/api.js';
 import { createLinearIngest } from '../adapters/tracker/linear/ingest.js';
 import { buildAuthorizeUrl, exchangeCode, TokenManager } from '../adapters/tracker/linear/oauth.js';
@@ -34,7 +35,7 @@ import type { FactoryEvent } from '../core/types.js';
 import { runVerify } from '../core/verify.js';
 import { KnowledgeBase } from '../knowledge/kb.js';
 import { startSmeeRelay } from '../relay/smee.js';
-import { createApp } from '../server/app.js';
+import { agentOnly, createApp } from '../server/app.js';
 import { openStore } from '../store/open.js';
 import { repoRoot } from './root.js';
 import { TrackerSwitch } from './tracker-switch.js';
@@ -56,6 +57,11 @@ export function isLoopbackHost(host: string): boolean {
 
 const FACTORY_LABELS = ['agent:reprendre', 'agent:stop', BLOCKED_LABEL];
 
+/** Where a sandbox sees the factory's install, the knowledge base, and the PATH of its image (ORC-204). */
+const SANDBOX_ROOT = '/factory/app';
+const SANDBOX_KNOWLEDGE = '/factory/knowledge';
+const SANDBOX_PATH = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
+
 export async function startFactory(o: BootOptions): Promise<{ url: string; stop(): Promise<void> }> {
   const log = o.log ?? ((m: string) => console.log(`[factoryd] ${m}`));
   const root = repoRoot();
@@ -76,6 +82,10 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
   const paths = homePaths(o.home);
   const port = o.port ?? instance.port;
   const baseUrl = instance.publicUrl ?? `http://localhost:${port}`;
+  // The agent API's own listener, for the sandboxes (ORC-204): the UI stays where `host` puts it.
+  const agentPort = Number(env['FACTORY_AGENT_PORT'] || port + 1);
+  const agentListenHost = env['FACTORY_AGENT_HOST'] || '0.0.0.0';
+  const sandboxAgentHost = env['FACTORY_SANDBOX_AGENT_HOST'] || 'host.docker.internal';
   const githubApp = resolveGithubApp(instance, env);
   const githubSecret = githubWebhookSecret(instance, env);
 
@@ -129,6 +139,12 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     const scheduler = new Scheduler(store, { dev: limits?.parallelSessions ?? 3, questions: limits?.questionSessions ?? 2 });
     // The daemon's own secrets never enter a run's environment; masked all the same, should one surface.
     const daemonSecrets = () => [...daemonSecretValues(o.home, yml), ...(githubSecret ? [githubSecret] : [])];
+    // A container per attempt (ORC-204) when FACTORY_CONTAINER_CLI is set; --fake-runner stays on the host.
+    // ORC-204 wiring: makeSandboxes() — once src/app/sandbox-wiring.ts lands (router, container backend), in place of `undefined`:
+    // const sandboxes = o.fakeRunner ? undefined : makeSandboxes(env, { agentHost: sandboxAgentHost });
+    const sandboxes = undefined as SandboxProvider | undefined;
+    if (!o.fakeRunner && !sandboxes) log("Attention : FACTORY_CONTAINER_CLI absent, les runs tournent sur l'hôte, sans isolation.");
+    // ORC-204 wiring: pass `sandboxes` to ClaudeCodeRunner as well ({ ..., sandboxes }).
     const runner: Runner = o.fakeRunner ? new FakeRunner() : new ClaudeCodeRunner({ transcriptsDir: paths.transcripts, secrets: daemonSecrets });
     const workspaces = new GitWorkspaces({ root: paths.workspaces, knowledgeRepo: instance.knowledge?.repoPath });
     const forge = githubApp
@@ -182,13 +198,30 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       dailyBudgetUsd: instance.limits.perDayUsd,
       knowledgeConfigured: !!instance.knowledge,
       roles,
+      ...(sandboxes
+        ? {
+            sandboxes,
+            sessionsDir: join(o.home, 'sessions'),
+            // factory-agent runs from the factory's install, read-only: only what it needs, never the whole root,
+            // which can hold a `.env` or a dev FACTORY_HOME. The knowledge base, read-only, for the session-start hook.
+            sandboxMounts: [
+              ...['bin', 'package.json', 'node_modules', existsSync(join(root, 'dist')) ? 'dist' : 'src'].map((p) => ({
+                host: join(root, p),
+                target: `${SANDBOX_ROOT}/${p}`,
+                readOnly: true,
+              })),
+              ...(instance.knowledge ? [{ host: instance.knowledge.repoPath, target: SANDBOX_KNOWLEDGE, readOnly: true }] : []),
+            ],
+          }
+        : {}),
+      // In a sandbox, paths of the sandbox and its own PATH: no host path reaches it.
       agentEnv: (run) => ({
-        FACTORY_API: `http://127.0.0.1:${port}/agent`,
+        FACTORY_API: sandboxes ? `http://${sandboxAgentHost}:${agentPort}/agent` : `http://127.0.0.1:${port}/agent`,
         FACTORY_RUN_TOKEN: run.token,
         FACTORY_TICKET: run.ticketId,
-        FACTORY_KNOWLEDGE: instance.knowledge?.repoPath ?? '',
-        FACTORY_ROOT: root,
-        PATH: `${join(root, 'bin')}:${process.env['PATH'] ?? ''}`,
+        FACTORY_KNOWLEDGE: instance.knowledge ? (sandboxes ? SANDBOX_KNOWLEDGE : instance.knowledge.repoPath) : '',
+        FACTORY_ROOT: sandboxes ? SANDBOX_ROOT : root,
+        PATH: sandboxes ? `${SANDBOX_ROOT}/bin:${SANDBOX_PATH}` : `${join(root, 'bin')}:${process.env['PATH'] ?? ''}`,
       }),
     });
     await orchestrator.recover();
@@ -289,6 +322,9 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     });
 
     const server = serve({ fetch: app.fetch, port, hostname: instance.host });
+    // Only with sandboxes: the agent API off the loopback, for them alone (ORC-204).
+    const agentServer = sandboxes ? serve({ fetch: agentOnly(app), port: agentPort, hostname: agentListenHost }) : undefined;
+    if (agentServer) log(`API agent des sandboxes : ${agentListenHost}:${agentPort}, jointe en http://${sandboxAgentHost}:${agentPort}/agent`);
     const relay = instance.relay.kind === 'smee' ? startSmeeRelay({ url: instance.relay.url, onWebhook: ingest, log }) : undefined;
     let purgeInterval: NodeJS.Timeout | undefined;
     let tickInterval: NodeJS.Timeout | undefined;
@@ -301,11 +337,13 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       await Promise.all([timers.stop(), poller.stop(), reconciler.stop()]);
       orchestrator.stopAll();
       await orchestrator.drained();
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-        // Long-lived SSE streams (/api/events) would otherwise keep close() pending forever.
-        (server as unknown as { closeAllConnections(): void }).closeAllConnections();
-      });
+      const close = (s: typeof server) =>
+        new Promise<void>((resolve) => {
+          s.close(() => resolve());
+          // Long-lived SSE streams (/api/events) would otherwise keep close() pending forever.
+          (s as unknown as { closeAllConnections(): void }).closeAllConnections();
+        });
+      await Promise.all([close(server), ...(agentServer ? [close(agentServer)] : [])]);
     };
     try {
       timers.start();
