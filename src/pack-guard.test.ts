@@ -3,8 +3,8 @@ import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { packDir as pack } from '../test/helpers/harness.js';
 
-const pack = join(import.meta.dirname, '../packs/standard');
 const deny: string[] = JSON.parse(readFileSync(join(pack, 'settings.json'), 'utf8')).permissions.deny;
 
 /** Runs the PreToolUse hook on one tool call, as Claude Code does: the call as JSON on stdin. */

@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { buildClaudeArgs, childEnv } from '../../src/adapters/runner/claude-code.js';
 import { CLAUDE_RUN_ENV } from '../../src/core/orchestrator.js';
+import { packDir as pack } from '../helpers/harness.js';
 
 /**
  * Isolation test n° 11 (ORC-205, ORC-284): ORC-128's trapped repository, replayed against the real
@@ -14,7 +15,6 @@ import { CLAUDE_RUN_ENV } from '../../src/core/orchestrator.js';
  * test checks the options alone, the reset being defence in depth.
  */
 const enabled = process.env['FACTORY_ISOLATION'] === '1' && !!(process.env['CLAUDE_CODE_OAUTH_TOKEN'] || process.env['ANTHROPIC_API_KEY']);
-const pack = join(import.meta.dirname, '../../packs/standard');
 
 const base = mkdtempSync(join(tmpdir(), 'factory-iso11-'));
 const repo = join(base, 'repo');

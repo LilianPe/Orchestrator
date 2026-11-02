@@ -50,10 +50,10 @@ describe('extractWork', () => {
   it('clones the branch from a bundle, at the SHA the sandbox reported, without a checkout', async () => {
     const { repo, args } = await setup();
     const out = await extractWork(args);
-    expect(out).toEqual({ clonePath: args.cloneDir, sha: git(repo, 'rev-parse', BRANCH) });
-    expect(git(out.clonePath, 'log', '--format=%s', 'HEAD')).toBe('two\none');
-    expect(git(out.clonePath, 'show', 'HEAD:a.txt')).toBe('two');
-    expect(existsSync(join(out.clonePath, 'a.txt'))).toBe(false);
+    expect(out).toEqual({ sha: git(repo, 'rev-parse', BRANCH) });
+    expect(git(args.cloneDir, 'log', '--format=%s', 'HEAD')).toBe('two\none');
+    expect(git(args.cloneDir, 'show', 'HEAD:a.txt')).toBe('two');
+    expect(existsSync(join(args.cloneDir, 'a.txt'))).toBe(false);
   });
 
   it('runs no hook, fsmonitor or filter, neither the agent repo’s nor the host’s', async () => {
@@ -80,9 +80,9 @@ describe('extractWork', () => {
     }
     vi.stubEnv('GIT_CONFIG_GLOBAL', join(base, 'hostile.gitconfig'));
 
-    const out = await extractWork(args);
+    await extractWork(args);
     expect(existsSync(witness)).toBe(false);
-    expect(git(out.clonePath, 'show', 'HEAD:a.txt')).toBe('two');
+    expect(git(args.cloneDir, 'show', 'HEAD:a.txt')).toBe('two');
 
     // The traps are live: a plain clone of the same bundle springs them.
     git(base, 'clone', '-q', '--branch', BRANCH, join(args.bundleDir, 'work.bundle'), join(base, 'plain'));

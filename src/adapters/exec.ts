@@ -19,7 +19,7 @@ export const execCmd: Exec = (cmd, args, opts = {}) =>
     child.on('close', (code) => resolve({ stdout, stderr, code: code ?? 1 }));
   });
 
-export async function mustExec(exec: Exec, cmd: string, args: string[], opts?: { cwd?: string }): Promise<string> {
+export async function mustExec(exec: Exec, cmd: string, args: string[], opts?: { cwd?: string; env?: Record<string, string> }): Promise<string> {
   const r = await exec(cmd, args, opts);
   if (r.code !== 0) throw new Error(`${cmd} ${args.join(' ')}: ${r.stderr.trim() || r.stdout.trim()}`);
   return r.stdout;

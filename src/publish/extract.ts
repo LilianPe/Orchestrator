@@ -1,7 +1,7 @@
 import { existsSync, lstatSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { devNull, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { execCmd, type Exec } from '../adapters/exec.js';
+import { execCmd, mustExec, type Exec } from '../adapters/exec.js';
 import type { SandboxProvider } from '../adapters/sandbox/types.js';
 
 /**
@@ -12,6 +12,8 @@ import type { SandboxProvider } from '../adapters/sandbox/types.js';
  */
 export const BUNDLE_TARGET = '/factory/bundle';
 const BUNDLE = 'work.bundle';
+/** No hook, no fsmonitor: on each host git command (`-c`), and in the clone's own config (`--config`). */
+const HARDENING = [`core.hooksPath=${devNull}`, 'core.fsmonitor=false'];
 
 export interface ExtractRequest {
   sandboxes: SandboxProvider;
@@ -28,9 +30,10 @@ export interface ExtractRequest {
 /**
  * The agent's commits on `branch`, out of its sandbox into a fresh clone (ORC-286): no factory tool
  * ever runs on a tree the agent wrote. The clone has no checkout (no smudge filter, no checkout
- * hook): callers read objects (`git diff a b`, `git show sha:path`), not files.
+ * hook): callers read objects (`git diff a b`, `git show sha:path`), not files. Returns the branch head;
+ * the clone is at `cloneDir`.
  */
-export async function extractWork(o: ExtractRequest): Promise<{ clonePath: string; sha: string }> {
+export async function extractWork(o: ExtractRequest): Promise<{ sha: string }> {
   const ref = `refs/heads/${o.branch}`;
   const inSandbox = async (...args: string[]) => {
     const r = await o.sandboxes.exec(o.sandboxId, ['git', ...args]);
@@ -52,11 +55,8 @@ export async function extractWork(o: ExtractRequest): Promise<{ clonePath: strin
   writeFileSync(globalConfig, '');
   const env = { GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: globalConfig, GIT_CEILING_DIRECTORIES: dirname(scratch) };
   const exec = o.exec ?? execCmd;
-  const onHost = async (...args: string[]) => {
-    const r = await exec('git', ['-c', `core.hooksPath=${devNull}`, '-c', 'core.fsmonitor=false', ...args], { cwd: scratch, env });
-    if (r.code !== 0) throw new Error(`git ${args.join(' ')}: ${r.stderr.trim()}`);
-    return r.stdout.trim();
-  };
+  const onHost = async (...args: string[]) =>
+    (await mustExec(exec, 'git', [...HARDENING.flatMap((c) => ['-c', c]), ...args], { cwd: scratch, env })).trim();
   try {
     // `bundle verify` wants a repository even for a bundle without prerequisites: an empty one of ours.
     const empty = join(scratch, 'empty.git');
@@ -64,11 +64,11 @@ export async function extractWork(o: ExtractRequest): Promise<{ clonePath: strin
     await onHost('-C', empty, 'bundle', 'verify', '--quiet', bundle);
     // fsck: the agent wrote these objects. --config keeps the hardening in the clone's own config,
     // for whoever runs git in it next.
-    await onHost('-c', 'transfer.fsckObjects=true', 'clone', '--quiet', '--no-checkout','--template=', `--branch=${o.branch}`,
-      '--config', `core.hooksPath=${devNull}`, '--config', 'core.fsmonitor=false', '--', bundle, o.cloneDir);
+    await onHost('-c', 'transfer.fsckObjects=true', 'clone', '--quiet', '--no-checkout', '--template=', `--branch=${o.branch}`,
+      ...HARDENING.flatMap((c) => ['--config', c]), '--', bundle, o.cloneDir);
     const head = await onHost('-C', o.cloneDir, 'rev-parse', 'HEAD');
     if (head !== sha) throw new Error(`bundle head ${head} is not the branch head ${sha} reported by the sandbox`);
-    return { clonePath: o.cloneDir, sha };
+    return { sha };
   } catch (e) {
     rmSync(o.cloneDir, { recursive: true, force: true });
     throw e;

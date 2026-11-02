@@ -50,6 +50,8 @@ export function buildPrompt(p: PromptInput): string {
 }
 
 const CONVENTIONS_TAG = 'conventions-du-depot';
+/** The closing tag in any case and spacing; the tag has no regex metacharacter. */
+const CONVENTIONS_END = new RegExp(`<\\s*/\\s*${CONVENTIONS_TAG}`, 'gi');
 /** Bytes, all files together. Proposal: the cap is settled with the prompt budget (ORC-254). */
 export const CONVENTIONS_MAX = 8000;
 
@@ -89,9 +91,9 @@ export function readConventions(dir: string): string | undefined {
       budget -= n;
       more += Math.max(0, st.size - n);
       const text = new TextDecoder().decode(buf.subarray(0, n), { stream: true }).trimEnd();
-      if (text) parts.push(`### ${name}\n${text.replace(/<\s*\/\s*conventions-du-depot/gi, '</…')}`);
+      if (text) parts.push(`### ${name}\n${text.replace(CONVENTIONS_END, '</…')}`);
     } catch {
-      continue;
+      // skipped, see above
     }
   }
   if (!parts.length) return undefined;

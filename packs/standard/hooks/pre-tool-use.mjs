@@ -55,8 +55,7 @@ function commands(s) {
     else if (c === '|' && s[i + 1] === '&') {
       cut('|'); // |& pipes stdout and stderr
       i++;
-    } else if (c === '|' && s[i + 1] !== '|') cut('|');
-    else if (';&|()`\n'.includes(c)) {
+    } else if (';&|()`\n'.includes(c)) {
       const twice = '|&'.includes(c) && s[i + 1] === c;
       cut(twice ? c + c : c);
       if (twice) i++;
@@ -108,14 +107,18 @@ function git(words) {
 /** The ref a push refspec writes: `+HEAD:refs/heads/main` → `main`. */
 const dest = (spec) => spec.replace(/^\+/, '').split(':').pop().replace(/^(refs\/)?heads\//, '');
 
-const SHELLS = /^(sh|bash|zsh|dash|ksh)$/;
-const FETCH = /^(curl|wget)$/;
+const SHELL_NAMES = 'sh|bash|zsh|dash|ksh';
+const FETCH_NAMES = 'curl|wget';
+const SHELLS = new RegExp(`^(${SHELL_NAMES})$`);
+const FETCH = new RegExp(`^(${FETCH_NAMES})$`);
+/** `bash <(curl …)`, `sh -c "$(wget …)"`: a fetch substituted into a shell, matched on the raw command. */
+const SUBST_TO_SHELL = new RegExp(String.raw`\b(${SHELL_NAMES})\b[^|;&]*[<$]\(\s*(${FETCH_NAMES})\b`);
 
 function rule(tool, command, denyPush) {
   if (tool === 'WebSearch') return 'web-search';
   if (/--no-verify/.test(command)) return 'no-verify';
   if (/docker\.sock|podman\.sock|DOCKER_HOST|CONTAINER_HOST/.test(command)) return 'container-socket';
-  if (/\b(sh|bash|zsh|dash|ksh)\b[^|;&]*[<$]\(\s*(curl|wget)\b/.test(command)) return 'pipe-to-shell';
+  if (SUBST_TO_SHELL.test(command)) return 'pipe-to-shell';
   let fetched = false;
   for (const { op, words: raw } of commands(command)) {
     const words = strip(raw);
@@ -129,8 +132,8 @@ function rule(tool, command, denyPush) {
     const inner = payload === undefined ? null : rule(tool, payload, denyPush);
     if (inner) return inner;
     if (args.includes('--no-verify')) return 'no-verify';
-    if (prog === 'rm' && args.some((a) => /^-[^-]*[rR]/.test(a) || a === '--recursive') && args.some((a) => a === '/' || a === '/*')) return 'rm-root';
-    if (prog === 'rm' && args.includes('--no-preserve-root')) return 'rm-root';
+    if (prog === 'rm' && (args.includes('--no-preserve-root')
+      || (args.some((a) => /^-[^-]*[rR]/.test(a) || a === '--recursive') && args.some((a) => a === '/' || a === '/*')))) return 'rm-root';
     if (prog === 'gh') {
       const sub = args.filter((a, i) => !a.startsWith('-') && !/^(-R|--repo)$/.test(args[i - 1])).slice(0, 2).join(' ');
       if (sub === 'pr merge') return 'merge';
