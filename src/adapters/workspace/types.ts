@@ -25,6 +25,8 @@ export interface WorkspaceManager {
   remoteBranchExists(repoPath: string, prefix: string): Promise<boolean>;
   /** The commit a worktree's run ended on (ORC-148: only it may be recorded as reviewed); none for a path that is no worktree. */
   head(path: string): Promise<string | undefined>;
+  /** Hides the repository's `.claude/` from a worktree before each session (ORC-284), without its PR deleting it. */
+  resetClaudeDir(path: string): Promise<void>;
   /** The absolute git dir a worktree's `.git` file points into (ORC-204: mounted in its sandbox for git to work there). */
   gitCommonDir(path: string): Promise<string>;
 }

@@ -31,7 +31,10 @@ export function buildClaudeArgs(req: RunRequest): string[] {
     '--model', req.model,
     '--plugin-dir', req.pluginDir,
     '--settings', req.settingsPath,
-    '--setting-sources', 'project,local',
+    // Nothing of the repository's: no settings, hooks, skills, CLAUDE.md, nor .mcp.json, nor the account's
+    // claude.ai connectors (ORC-128, measured on 2.1.306). The factory's MCP comes with --mcp-config (ORC-188).
+    '--setting-sources', '',
+    '--strict-mcp-config',
     '--max-budget-usd', String(req.limits.usd),
   ];
   if (req.readOnly) args.push('--permission-mode', 'plan');

@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { DEFAULT_REQUIREMENTS, PACK_TARGET, SANDBOX_HOME, WORKSPACE_TARGET } from '../../src/adapters/sandbox/types.js';
 import { createHarness, packDir } from '../helpers/harness.js';
 
+const RUN_FLAGS = { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1', DISABLE_TELEMETRY: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' };
 const SETUP = 'version: 1\nworkspace:\n  setup: ["npm ci"]\n  ports: { base: 4200 }\n';
 
 function delegate(h: ReturnType<typeof createHarness>) {
@@ -34,6 +35,9 @@ describe('a disposable sandbox per attempt', () => {
     });
     expect(existsSync(sessionDir)).toBe(true);
     expect(h.runner.requests[0]).toMatchObject({ sandboxId: 'sbx-1', cwd: WORKSPACE_TARGET, pluginDir: PACK_TARGET, settingsPath: '/factory/settings.json' });
+    // ORC-284: the ticket's session dir as Claude's whole config dir, no auto-memory, no telemetry; the repo's .claude/ hidden.
+    expect(h.runner.requests[0]!.env).toMatchObject({ CLAUDE_CONFIG_DIR: `${SANDBOX_HOME}/.claude`, ...RUN_FLAGS });
+    expect(h.workspaces.resetClaude).toEqual(['/tmp/factory-fake/p/REL-1']);
     expect(h.sandboxes.destroyed).toEqual(['sbx-1']);
     expect(h.sandboxes.active()).toEqual([]);
     expect(await h.ticket()).toMatchObject({ logical: 'human_review', blocked: false });
@@ -126,6 +130,10 @@ describe('a disposable sandbox per attempt', () => {
     await delegate(h);
     expect(h.checks.calls[0]).toEqual({ cwd: '/tmp/factory-fake/p/REL-1', commands: ['npm ci'] });
     expect(h.runner.requests[0]!.sandboxId).toBeUndefined();
+    // The daemon's own Claude config dir (and its login) on the host: there is no ticket session dir there.
+    expect(h.runner.requests[0]!.env).toMatchObject(RUN_FLAGS);
+    expect(h.runner.requests[0]!.env).not.toHaveProperty('CLAUDE_CONFIG_DIR');
+    expect(h.workspaces.resetClaude).toEqual(['/tmp/factory-fake/p/REL-1']);
   });
 
   it('recover destroys the sandboxes of attempts that are no longer running', async () => {

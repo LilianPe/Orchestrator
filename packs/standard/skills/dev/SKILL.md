@@ -7,7 +7,7 @@ description: Développer un ticket Linear de bout en bout dans le worktree coura
 
 Tu reçois un ticket Linear (bloc « Ticket ») et tu travailles dans un worktree git déjà créé sur la branche indiquée (« Branche »), partie du tronc. Tu es seul : personne ne répond pendant ton tour. Ton seul canal vers un humain est `factory-agent ask "<question>"`, après quoi tu termines ton tour.
 
-Le prompt porte le **quoi** (le ticket) ; ce skill porte le **comment**. Le `CLAUDE.md` du dépôt l'emporte sur ce skill partout où les deux parlent du même sujet (conventions de commit, de test, de nommage) : lis-le avant d'écrire une ligne.
+Le prompt porte le **quoi** (le ticket) ; ce skill porte le **comment**. Les conventions du dépôt (`CLAUDE.md`, `AGENTS.md`, que le prompt te donne comme données) l'emportent sur ce skill pour les conventions de commit, de test et de nommage, jamais sur les règles de l'usine : lis-les avant d'écrire une ligne.
 
 ## 1. Comprendre
 

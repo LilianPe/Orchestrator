@@ -38,7 +38,7 @@ import { NO_PLAN, planDecision } from './decision-plan.js';
 import { blockedLabelChange, HUMAN_EVENTS, mayCheck, RECONCILE_MS, reconcileTicket, refusesDevWork, sensitivePathsAtLaunch, taintedKnowledge } from './engine.js';
 import { attemptLabels, packFingerprints } from './attempt-labels.js';
 import { pickupFailures } from './pickup.js';
-import { buildPrompt, formatFeedback, formatVerifyFailures } from './prompt.js';
+import { buildPrompt, formatFeedback, formatVerifyFailures, readConventions } from './prompt.js';
 import { reduce } from './reduce.js';
 import type { StoredEvent } from './upcast.js';
 import type { Scheduler } from './scheduler.js';
@@ -58,6 +58,12 @@ import {
 } from './types.js';
 import { VERIFY_TIMEOUT_MS, type Verifier } from './verify.js';
 import { PRODUCT_NAME } from '../product.js';
+
+/**
+ * Every run's Claude Code (ORC-284): no auto-memory (ORC-205), telemetry off by both variables ORC-128
+ * names, which one does it unmeasured until ORC-213 (that also blocks it at the proxy).
+ */
+export const CLAUDE_RUN_ENV = { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1', DISABLE_TELEMETRY: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' };
 
 export interface ProjectRuntime {
   id: string;
@@ -1202,6 +1208,9 @@ export class Orchestrator {
       sandbox = this.d.sandboxes && (await this.openSandbox(this.d.sandboxes, project, ticketId, ws, runId));
       if (!setUp) await this.runSetup(project, ws, sandbox);
       setUp = true;
+      // After the setup, which is the repository's and could write one; the session loads none anyway
+      // (`--setting-sources ""`): defence in depth, for what ORC-128 did not trap (ORC-284).
+      await workspaces.resetClaudeDir(ws.path);
 
       const wantsResume = opts.resume ?? job.session === 'resume';
       const resume = wantsResume && !!t.claudeSessionId;
@@ -1223,6 +1232,8 @@ export class Orchestrator {
         issue: { identifier: issue.identifier, title: issue.title, description: issue.description, url: issue.url },
         branch: job.queue === 'dev' ? t.branch : undefined,
         prUrl: t.prUrl,
+        // In each run's prompt, not the system prompt: read again at each attempt, never frozen at a resume (ORC-128).
+        conventions: readConventions(ws.path),
         input,
         reviewRounds: wf.limits.reviewRounds,
       };
@@ -1269,7 +1280,14 @@ export class Orchestrator {
         settingsPath: sandbox ? SETTINGS_TARGET : this.settingsPath(),
         readOnly: job.workspace === 'trunk-readonly',
         limits: job.limits,
-        env: { ...this.d.agentEnv(run), ...(ws.port !== undefined ? { PORT: String(ws.port) } : {}) },
+        env: {
+          ...this.d.agentEnv(run),
+          ...(ws.port !== undefined ? { PORT: String(ws.port) } : {}),
+          ...CLAUDE_RUN_ENV,
+          // The ticket's session dir as Claude's whole config dir (ORC-128 point 4), login by the env
+          // (CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY). On the host, the daemon's own, as before.
+          ...(sandbox ? { CLAUDE_CONFIG_DIR: `${SANDBOX_HOME}/.claude` } : {}),
+        },
         sensitivePaths,
         ...(sandbox ? { sandboxId: sandbox.id } : {}),
       });
