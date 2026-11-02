@@ -340,6 +340,103 @@ describe('GitHubAppForge secrets', () => {
   });
 });
 
+describe('GitHubAppForge.mergePr (ORC-148)', () => {
+  const pullRoute = (pr: Record<string, unknown>): Route => (url, init) => (url.pathname === '/repos/acme/app/pulls/7' && init.method === 'GET' ? { body: pr } : undefined);
+  const repoRoute = (allowed: Record<string, boolean> = {}): Route => (url, init) =>
+    url.pathname === '/repos/acme/app' && init.method === 'GET' ? { body: { allow_merge_commit: true, allow_squash_merge: true, allow_rebase_merge: true, ...allowed } } : undefined;
+  const mergeRoute = (status: number, body: unknown): Route => (url, init) => (url.pathname === '/repos/acme/app/pulls/7/merge' && init.method === 'PUT' ? { status, body } : undefined);
+
+  it('merges with the expected head sha, so GitHub refuses a head that moved', async () => {
+    const { forge, calls } = makeForge([tokenRoute(42), pullRoute(openPr()), repoRoute(), mergeRoute(200, { merged: true, sha: 'm1' })], { installationId: 42 });
+    expect(await forge.mergePr('/repo', 7, 'abc123')).toEqual({ merged: true, deduplicated: false });
+    expect(calls.find((c) => c.method === 'PUT')!.body).toEqual({ sha: 'abc123', merge_method: 'merge' });
+  });
+
+  it('merges with a method the repository allows: squash when merge commits are off', async () => {
+    const { forge, calls } = makeForge([tokenRoute(42), pullRoute(openPr()), repoRoute({ allow_merge_commit: false }), mergeRoute(200, { merged: true })], { installationId: 42 });
+    await forge.mergePr('/repo', 7, 'abc123');
+    expect(calls.find((c) => c.method === 'PUT')!.body).toEqual({ sha: 'abc123', merge_method: 'squash' });
+  });
+
+  it('answers a head moved since the review as a refusal, not an error', async () => {
+    const { forge } = makeForge([tokenRoute(42), pullRoute(openPr({ head: { ref: 'factory/REL-1', sha: 'new999' } })), repoRoute(), mergeRoute(409, { message: 'Head branch was modified.' })], { installationId: 42 });
+    expect(await forge.mergePr('/repo', 7, 'abc123')).toEqual({ merged: false, reason: 'head_moved' });
+  });
+
+  it('answers a PR GitHub will not merge (conflict, required checks) as a refusal with its message', async () => {
+    const { forge } = makeForge([tokenRoute(42), pullRoute(openPr()), repoRoute(), mergeRoute(405, { message: 'Pull Request is not mergeable' })], { installationId: 42 });
+    expect(await forge.mergePr('/repo', 7, 'abc123')).toEqual({ merged: false, reason: 'not_mergeable', message: 'Pull Request is not mergeable' });
+  });
+
+  it('a replay finds the PR already merged on that head and writes nothing', async () => {
+    const { forge, calls } = makeForge([tokenRoute(42), pullRoute(openPr({ state: 'closed', merged_at: '2026-10-30T10:00:00Z' }))], { installationId: 42 });
+    expect(await forge.mergePr('/repo', 7, 'abc123')).toEqual({ merged: true, deduplicated: true });
+    expect(calls.some((c) => c.method === 'PUT')).toBe(false);
+  });
+
+  // A head with no check (ORC-148): merged only in a repository with no CI, its base commit unchecked too.
+  const baseChecks = (runs: unknown[]): Route[] => [
+    (url) => (url.pathname === '/repos/acme/app/commits/base999/check-runs' ? { body: { check_runs: runs } } : undefined),
+    (url) => (url.pathname === '/repos/acme/app/commits/base999/status' ? { body: { statuses: [] } } : undefined),
+  ];
+  const withBase = openPr({ base: { ref: 'main', sha: 'base999' } });
+  const headChecks = (runs: unknown[]): Route[] => [
+    (url) => (url.pathname === '/repos/acme/app/commits/abc123/check-runs' ? { body: { check_runs: runs } } : undefined),
+    (url) => (url.pathname === '/repos/acme/app/commits/abc123/status' ? { body: { statuses: [] } } : undefined),
+  ];
+  const workflows = (list: { state: string; path?: string }[]): Route => (url) => (url.pathname === '/repos/acme/app/actions/workflows' ? { body: { total_count: list.length, workflows: list } } : undefined);
+  const noCi = (): Route[] => [...headChecks([]), workflows([]), ...baseChecks([])];
+
+  it('merges an unchecked head when the base has no check either: a repository with no CI', async () => {
+    const { forge, calls } = makeForge([tokenRoute(42), pullRoute(withBase), repoRoute(), ...noCi(), mergeRoute(200, { merged: true })], { installationId: 42 });
+    expect(await forge.mergePr('/repo', 7, 'abc123', { unchecked: true })).toEqual({ merged: true, deduplicated: false });
+    expect(calls.some((c) => c.method === 'PUT')).toBe(true);
+  });
+
+  it('refuses an unchecked head when the base has checks: its CI has not run on it yet', async () => {
+    const { forge, calls } = makeForge([tokenRoute(42), pullRoute(withBase), repoRoute(), ...headChecks([]), workflows([]), ...baseChecks([{ id: 1, name: 'test', status: 'completed', conclusion: 'success' }])], { installationId: 42 });
+    expect(await forge.mergePr('/repo', 7, 'abc123', { unchecked: true })).toEqual({ merged: false, reason: 'checks_missing' });
+    expect(calls.some((c) => c.method === 'PUT')).toBe(false);
+  });
+
+  it('refuses an unchecked head in a repository with an active Actions workflow: a CI on pull_request leaves main unchecked', async () => {
+    const { forge, calls } = makeForge([tokenRoute(42), pullRoute(withBase), repoRoute(), ...headChecks([]), workflows([{ state: 'active', path: '.github/workflows/ci.yml' }]), ...baseChecks([])], { installationId: 42 });
+    expect(await forge.mergePr('/repo', 7, 'abc123', { unchecked: true })).toEqual({ merged: false, reason: 'checks_missing' });
+    expect(calls.some((c) => c.method === 'PUT')).toBe(false);
+  });
+
+  it('refuses an unchecked head whose checks appeared since the factory read it', async () => {
+    const { forge, calls } = makeForge([tokenRoute(42), pullRoute(withBase), repoRoute(), ...headChecks([{ id: 2, name: 'test', status: 'in_progress', conclusion: null }]), workflows([]), ...baseChecks([])], { installationId: 42 });
+    expect(await forge.mergePr('/repo', 7, 'abc123', { unchecked: true })).toEqual({ merged: false, reason: 'checks_missing' });
+    expect(calls.some((c) => c.method === 'PUT')).toBe(false);
+  });
+
+  it('an unchecked head read as moved is a head moved, answered without a merge: never an unchecked merge on a stale read', async () => {
+    // GitHub's read may lag (or the head came back to abc123): a PUT with abc123 would merge it unchecked.
+    const moved = openPr({ head: { ref: 'factory/REL-1', sha: 'new999' }, base: { ref: 'main', sha: 'base999' } });
+    const { forge, calls } = makeForge([tokenRoute(42), pullRoute(moved), repoRoute(), mergeRoute(200, { merged: true })], { installationId: 42 });
+    expect(await forge.mergePr('/repo', 7, 'abc123', { unchecked: true })).toEqual({ merged: false, reason: 'head_moved' });
+    expect(calls.some((c) => c.method === 'PUT')).toBe(false);
+  });
+
+  it('GitHub\'s own dynamic workflows (Pages, Dependabot) are no CI', async () => {
+    const dynamic = [{ state: 'active', path: 'dynamic/pages/pages-build-deployment' }, { state: 'active', path: 'dynamic/dependabot/dependabot-updates' }];
+    const { forge } = makeForge([tokenRoute(42), pullRoute(withBase), repoRoute(), ...headChecks([]), workflows(dynamic), ...baseChecks([]), mergeRoute(200, { merged: true })], { installationId: 42 });
+    expect(await forge.mergePr('/repo', 7, 'abc123', { unchecked: true })).toEqual({ merged: true, deduplicated: false });
+  });
+
+  it('workflows unreadable (Actions permission missing, 403): an answer, taken as a CI, not an error', async () => {
+    const denied: Route = (url) => (url.pathname === '/repos/acme/app/actions/workflows' ? { status: 403, body: { message: 'Resource not accessible by integration' } } : undefined);
+    const { forge } = makeForge([tokenRoute(42), pullRoute(withBase), repoRoute(), ...headChecks([]), denied, ...baseChecks([])], { installationId: 42 });
+    expect(await forge.mergePr('/repo', 7, 'abc123', { unchecked: true })).toEqual({ merged: false, reason: 'checks_missing' });
+  });
+
+  it('throws on another error, so the effect is retried', async () => {
+    const { forge } = makeForge([tokenRoute(42), pullRoute(openPr()), repoRoute(), mergeRoute(502, { message: 'Bad gateway' })], { installationId: 42 });
+    await expect(forge.mergePr('/repo', 7, 'abc123')).rejects.toMatchObject({ status: 502 });
+  });
+});
+
 describe('GitHubAppForge writes, idempotent (ORC-162)', () => {
   const req = { branch: 'factory/REL-1', base: 'main', title: 'REL-1 : export', body: 'Ferme REL-1' };
   const writes = (calls: Call[]) => calls.filter((c) => c.method !== 'GET' && !c.url.endsWith('/access_tokens'));

@@ -3,7 +3,7 @@ import { allowed, DEFAULT_MATRIX, refusalMessage, type AuthzAction, type AuthzMa
 import { evalCondition } from './conditions.js';
 import { deadLetterReason, liftDeadLetterBlock, REPAIR_LABELS, repairedEvent } from './dead-letter.js';
 import type { Decision, Effect } from './decision.js';
-import { reduce } from './reduce.js';
+import { isOwnMoveEcho, reduce } from './reduce.js';
 import type { EventPayloads, EventType, FactoryEvent, FeedbackItem, InputKind, Taint, TicketState, VerifyFailure } from './types.js';
 
 type StartRun = Extract<Effect, { kind: 'start_run' }>;
@@ -218,6 +218,8 @@ function authorize(out: Decision, event: FactoryEvent, ticket: TicketState | und
 export function mayCheck(event: FactoryEvent, workflow: Workflow): boolean {
   if (!HUMAN_EVENTS.has(event.type)) return false;
   if (event.type !== 'label.changed' && event.type !== 'status.changed') return true;
+  // A move to Done may merge (ORC-148): its actor is always checked.
+  if (event.type === 'status.changed' && event.payload.to === 'done') return true;
   return (workflow.on[event.type] ?? []).some((r) => !!r.run && eventMatches(r, event));
 }
 
@@ -301,6 +303,74 @@ export const reconcileTicket = (projectId: string): string => `_reconcile.${proj
 export const isReconcileTicket = (ticketId: string | undefined): boolean => !!ticketId?.startsWith('_reconcile.');
 /** The reconciliation's cadence (ORC-185): a safety net behind the webhooks. */
 export const RECONCILE_MS = 5 * 60_000;
+
+/** The ticket goes back to Human Review (ORC-148): nothing merged, `reason` answered in the ticket. */
+function backToReview(out: Decision, reason: string): Decision {
+  out.trace.push(`not merged: ${reason}`);
+  // The commit under review stays the one shown: a head pushed since is never taken as reviewed.
+  out.effects.push({ kind: 'move', to: 'human_review', keepReviewSha: true }, { kind: 'comment', body: `${reason} Le ticket repasse en Human Review.` });
+  return out;
+}
+
+/**
+ * A human moved the ticket of an open PR to Done (ORC-148): the factory merges, on the commit shown in Human Review,
+ * only if the signed actor may merge (matrix, `done_merge`); the merge effect then checks the forge itself (head
+ * still that commit, its checks green), as only the forge knows them for that commit. Otherwise nothing is merged and
+ * the ticket goes back to Human Review with the reason. A move with no resolved actor never merges: the matrix
+ * lets an unchecked event through, a merge must not.
+ */
+function doneMerge(out: Decision, event: FactoryEvent<'status.changed'>, state: TicketState, matrix: AuthzMatrix): Decision {
+  // No signed actor (Linear's GitHub integration after a merge on GitHub, the reconciliation): no human decision.
+  if (event.roles === undefined || !event.actor) {
+    out.trace.push('done: no signed actor, no merge');
+    return out;
+  }
+  if (!authorize(out, event, state, 'done_merge', 'linear', matrix)) {
+    out.effects.push({ kind: 'move', to: 'human_review', keepReviewSha: true });
+    return out;
+  }
+  if (!state.reviewSha) {
+    // Only the end of the factory's own work in Human Review records one (a review, a dev run): a reply, a refusal do not.
+    return backToReview(out, "Je ne merge pas : aucun commit relu n'est enregistré pour ce ticket (l'usine n'en retient un qu'à la fin de son propre travail, une review IA ou un dev qui ramène le ticket en Human Review, et seulement si la tête de la PR est le commit sur lequel ce travail s'est terminé ; un renvoi en Human Review après un refus n'en retient pas). Passez le ticket en AI Review : la review IA le ramène en Human Review sur la tête de la PR, qui devient le commit relu.");
+  }
+  out.trace.push(`done: merge PR #${state.prNumber} on ${state.reviewSha}`);
+  out.effects.push({ kind: 'merge', sha: state.reviewSha });
+  return out;
+}
+
+/**
+ * The factory's merge refused (ORC-148). For a push since the review, the new commits go through the AI review again:
+ * the ticket moves to AI Review and the job of the workflow's `to: ai_review` rule starts here, as a move by the
+ * factory emits no `status.changed`; its success shows the new head in Human Review, the commit the next Done merges.
+ * Only the matching rule's `run` is applied. Any other refusal, a blocked ticket (it waits for a human) or a workflow with no AI
+ * review goes back to Human Review, the reviewed commit kept. A refusal that arrives once a human moved the ticket on
+ * from Done (an effect replayed late) is only answered: the ticket stays where the human put it. A PR known merged
+ * meanwhile (on GitHub) is delivered: nothing is answered.
+ */
+function mergeRefused(out: Decision, event: FactoryEvent<'pr.merge_refused'>, ticket: TicketState | undefined, workflow: Workflow): Decision {
+  const refused = `Je n'ai pas mergé la PR #${event.payload.number} : ${event.payload.reason}.`;
+  if (ticket?.prState === 'MERGED') {
+    // Merged on GitHub meanwhile: delivered, nothing to answer nor to move.
+    out.trace.push(`not merged: ${event.payload.reason}, but the PR is merged`);
+    return out;
+  }
+  if (ticket?.logical !== 'done') {
+    out.trace.push(`not merged: ${event.payload.reason}, the ticket left where it is`);
+    out.effects.push({ kind: 'comment', body: refused });
+    return out;
+  }
+  // The rule a human's move from Done to AI Review would apply, read on the ticket as it would then be.
+  const moved: FactoryEvent<'status.changed'> = { ...event, type: 'status.changed', payload: { from: 'done', to: 'ai_review' } };
+  const inAiReview = { ...ticket, logical: 'ai_review' as const };
+  // The first rule that matches, as `decideEvent` picks it: one with no run listed first starts no review.
+  const run = (workflow.on['status.changed'] ?? []).find((r) => ruleAllowed(r, moved, inAiReview, workflow) && ruleMatches(r, moved, inAiReview, ticket.activeJob))?.run;
+  const job = run && workflow.states.ai_review ? workflow.jobs[run] : undefined;
+  if (!event.payload.headMoved || !job || ticket.blocked) return backToReview(out, refused);
+  out.trace.push(`not merged: ${event.payload.reason}, back to the AI review`);
+  out.effects.push({ kind: 'move', to: 'ai_review' }, { kind: 'comment', body: `${refused} Les nouveaux commits repassent par la review IA.` });
+  startRun(out, event, ticket, job, { input: job.input });
+  return out;
+}
 
 const FENCED = 'fenced: ';
 
@@ -416,6 +486,17 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
     out.effects.push({ kind: 'stop_run' });
     return out;
   }
+  // The late webhook of the factory's own move decides nothing (ORC-148: the move to AI Review after a push must not
+  // start a second review).
+  if (isOwnMoveEcho(state, event)) {
+    out.trace.push(`status.changed: already ${state?.logical}, the echo of the factory's own move`);
+    return out;
+  }
+  // A Done from Human Review only: during dev or the AI review it is no review decision, and the rules apply as before.
+  const reviewed = state?.delegated && state.logical === 'human_review' && state.prNumber !== undefined && state.prState === 'OPEN';
+  if (event.type === 'status.changed' && event.payload.to === 'done' && reviewed) {
+    return doneMerge(out, event, state, matrix);
+  }
   if (TRIGGERS.has(event.type)) {
     // The event's facts stay recorded (Linear did delegate, the session exists): only the factory's answer is refused.
     if (!authorize(out, event, ticket, 'trigger', 'linear', matrix)) return out;
@@ -522,6 +603,15 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       // `settle` is a step of the shell, not an effect of the workflow: its failure is only logged.
       const { kind, error, eventId } = event.payload;
       if (kind === 'settle' || !ticket) return out;
+      // A Done whose merge died (ORC-148) is not delivered: the human hears it, the ticket back in Human Review. Once a
+      // human took it out of Done meanwhile, the merge was given up: only answered, as a late refusal is.
+      if (kind === 'merge' && ticket.prState !== 'MERGED') {
+        const failed = `Je n'ai pas pu merger la PR #${ticket.prNumber} : ${error}.`;
+        if (ticket.logical === 'done') return backToReview(out, failed);
+        out.trace.push(`merge died, the ticket left Done (${ticket.logical}): answered only`);
+        out.effects.push({ kind: 'comment', body: failed });
+        return out;
+      }
       // Nothing left to block: a delivered ticket, or one a human stopped (its reason stays).
       const settled = settledTicket(ticket);
       if (settled) {
@@ -559,6 +649,8 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       stop(out, `PR #${n} fermée sans merge`, `La PR #${n} a été fermée sans merge : j'arrête le travail sur ce ticket. ${RELAUNCH}`);
       break;
     }
+    case 'pr.merge_refused':
+      return mergeRefused(out, event, ticket, workflow);
     case 'pr.reviewed':
     case 'pr.conflicted':
       // In the inbox, but no reaction yet (ORC-190 for reviews, ORC-146 for conflicts): no rule applies to them.

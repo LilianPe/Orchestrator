@@ -22,12 +22,14 @@ function external(t: TicketState, e: FactoryEvent): TicketState {
     }
     case 'status.changed': {
       // Cancelled (ORC-170): nothing waits for a human any longer, and the replies kept for a next run are dropped.
-      if (e.payload.cancelled) return { ...t, blocked: false, blockReason: undefined, pendingFeedback: [] };
+      // Any human move, a cancel or an unmapped status included, ends the status the factory put the ticket in.
+      if (e.payload.cancelled) return { ...t, blocked: false, blockReason: undefined, pendingFeedback: [], recordedStatus: undefined };
+      if (isOwnMoveEcho(t, e)) return t;
       const to = e.payload.to;
-      if (!to) return t;
+      if (!to) return { ...t, recordedStatus: undefined };
       // A human moves a merged ticket anywhere but done (the factory's own moves are no status.changed): it is
       // reopened, out of done or, when the factory's move to done failed, out of the status it stayed in.
-      const next = { ...t, logical: to };
+      const next = { ...t, logical: to, recordedStatus: undefined };
       return to === 'done' ? next : reopened(next);
     }
     case 'run.finished': {
@@ -64,7 +66,8 @@ function internal(t: TicketState, e: InternalEvent): TicketState {
     case 'verify.started':
       return { ...t, verifyingRunId: e.runId };
     case 'status.recorded':
-      return { ...t, logical: e.to };
+      // The commit under human review is the one shown at this move; any other move leaves it unreviewed.
+      return { ...t, logical: e.to, recordedStatus: e.to, reviewSha: e.to === 'human_review' ? e.reviewSha : undefined };
     case 'session.linked':
       return { ...t, linearSessionId: e.linearSessionId };
     case 'pending.set':
@@ -106,6 +109,18 @@ function repaired(state: TicketState | undefined, e: FactoryEvent<'dead_letter.r
   const base = liftDeadLetterBlock(state, e.payload.eventId);
   const event = repairedEvent(e);
   return event ? reduce(base, event) : base;
+}
+
+/**
+ * The Linear webhook of the factory's own move, come after its echo expired (ORC-148): a move to the status the
+ * factory put the ticket in, while it is still there and no human moved it since. It records nothing (`reduce`) and
+ * decides nothing (`decide`). Only a status the factory recorded: `logical` alone may be a fallback (an unmapped
+ * Linear status reads as todo), and a human move to it is a move.
+ */
+export function isOwnMoveEcho(t: TicketState | undefined, e: FactoryEvent | InternalEvent): boolean {
+  if (e.type !== 'status.changed' || !t?.recordedStatus) return false;
+  const { to, cancelled } = (e as FactoryEvent<'status.changed'>).payload;
+  return !cancelled && to === t.recordedStatus && t.logical === t.recordedStatus;
 }
 
 /** Pure: applies one event to a ticket's state and returns the new state; the input is never mutated. */

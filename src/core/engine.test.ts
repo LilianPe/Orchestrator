@@ -85,7 +85,7 @@ describe('decide — YAML rules of the standard pack', () => {
   });
 
   it('moves human_review -> dev runs dev-feedback', () => {
-    const out = decide(ticket({ logical: 'dev' }), ev('status.changed', { from: 'human_review', to: 'dev' }), workflow);
+    const out = decide(ticket({ logical: 'human_review' }), ev('status.changed', { from: 'human_review', to: 'dev' }), workflow);
     expect(out).toEqual(decision({ effects: [{ kind: 'start_run', job: 'dev-feedback', input: 'feedback', inputText: undefined, linearSessionId: undefined }] }));
   });
 
@@ -130,7 +130,7 @@ describe('decide — YAML rules of the standard pack', () => {
   });
 
   it('moving to ai_review runs review', () => {
-    const out = decide(ticket({ logical: 'ai_review' }), ev('status.changed', { from: 'human_review', to: 'ai_review' }), workflow);
+    const out = decide(ticket({ logical: 'human_review' }), ev('status.changed', { from: 'human_review', to: 'ai_review' }), workflow);
     expect(out.effects[0]).toMatchObject({ kind: 'start_run', job: 'review' });
   });
 
@@ -383,7 +383,7 @@ describe('decide — taint', () => {
   it('applies the taint of the pending feedback to a run started by a trusted rule that consumes it (ORC-269)', () => {
     const t = ticket({ logical: 'dev', pendingFeedback: pending('untrusted') });
     expect(decide(t, ev('label.changed', { label: 'agent:reprendre', change: 'added' }), workflow).effects[0]).toMatchObject({ job: 'dev-feedback', sensitivePaths: SENSITIVE_PATHS });
-    expect(decide(t, ev('status.changed', { from: 'human_review', to: 'dev' }), workflow).effects[0]).toMatchObject({ job: 'dev-feedback', sensitivePaths: SENSITIVE_PATHS });
+    expect(decide({ ...t, logical: 'human_review' }, ev('status.changed', { from: 'human_review', to: 'dev' }), workflow).effects[0]).toMatchObject({ job: 'dev-feedback', sensitivePaths: SENSITIVE_PATHS });
   });
 
   it('reads a pending item written before ORC-269, without taint, as trusted, as upcast reads a version 1 event', () => {

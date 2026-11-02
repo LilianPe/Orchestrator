@@ -171,6 +171,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       scheduler,
       tracker: trackerSwitch,
       forge,
+      // Only the GitHub App merges (ORC-148): with the gh CLI, a Done goes back to Human Review with the reason.
+      ...(forge instanceof GitHubAppForge ? { forgeWriter: forge } : {}),
       runner,
       workspaces,
       verify: runVerify,

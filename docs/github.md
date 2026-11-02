@@ -104,6 +104,7 @@ Au moment d'un run `dev-feedback`, les fils de review **non résolus** sont lus 
 | CI qui passe au rouge | `pr.checks_failed` (avec la liste des checks en échec) | `fix-ci` si le ticket est en *Human Review* ou *AI Review* et non bloqué, au plus `limits.ci_fix_attempts` fois de suite ; ensuite le ticket est bloqué ([`workflow.md`](workflow.md#limits)) |
 | CI qui passe au vert | `pr.checks_passed` | remet à zéro le compte des relances sur CI rouge et lève le blocage dû à cette borne |
 | PR mergée | `pr.merged` | *Done*, worktree supprimé, `learn` ; ensuite, plus aucun run de code sur le ticket |
+| Merge de l'usine refusé (ORC-148) | `pr.merge_refused` | push depuis la review : retour en *AI Review*, review IA relancée sur les nouveaux commits ; autre refus (PR non mergeable…) : retour en *Human Review* avec la raison |
 | PR fermée sans merge | `pr.closed` | le travail du ticket est annulé (voir [`workflow.md`](workflow.md#événements-configurables)) |
 
 Un changement d'état de CI n'est signalé qu'une fois (pas à chaque relevé). Les commentaires de review **non résolus** de la PR sont relus au moment d'un run `dev-feedback` (entrée `feedback`) : résolvez un fil sur GitHub pour qu'il ne soit plus renvoyé à l'agent.

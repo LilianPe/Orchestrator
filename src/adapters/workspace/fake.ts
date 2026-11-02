@@ -5,6 +5,8 @@ export class FakeWorkspaces implements WorkspaceManager {
   prepared: WorkspaceRequest[] = [];
   cleaned: string[] = [];
   remoteBranches = new Set<string>();
+  /** The commit each worktree is on, by path, as a test sets it (a run's commits, a fetch). */
+  heads = new Map<string, string>();
 
   async prepare(req: WorkspaceRequest): Promise<Workspace> {
     this.prepared.push(req);
@@ -19,6 +21,10 @@ export class FakeWorkspaces implements WorkspaceManager {
 
   async cleanup(_projectId: string, _repoPath: string, ticketId: string): Promise<void> {
     this.cleaned.push(ticketId);
+  }
+
+  async head(path: string): Promise<string | undefined> {
+    return this.heads.get(path);
   }
 
   async remoteBranchExists(_repoPath: string, prefix: string): Promise<boolean> {

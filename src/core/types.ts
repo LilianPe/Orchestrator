@@ -167,6 +167,11 @@ export interface EventPayloads {
   /** The PR conflicts with its base branch, seen by the GitHub webhook (ORC-134). No reaction yet: `decide` traces it (ORC-146). */
   'pr.conflicted': PrPayload & { headSha: string; baseRef: string };
   /**
+   * The factory's merge refused (ORC-148): a push since the review, a PR not mergeable. `reason` is for the human;
+   * `headMoved`: refused for a push since the review, whose new commits go through the AI review again.
+   */
+  'pr.merge_refused': PrPayload & { reason: string; headMoved?: boolean };
+  /**
    * A push on the project's default branch that concerns the ticket (ORC-278): only its commits that merge
    * the ticket's PR (`merges`) or revert it (`reverts`), by number. Untrusted: messages are written by
    * whoever commits. No reaction: the measures read it (`revertedWithin14Days`).
@@ -269,7 +274,8 @@ export type PendingJob = { job: string; input?: InputKind; inputText?: string; r
 /** Facts the orchestrator records around an effect it carried out, applied to the ticket by `reduce`. */
 export type ShellEvent =
   /** The factory itself moved the ticket in the tracker. */
-  | { type: 'status.recorded'; to: LogicalState }
+  /** `reviewSha`: the PR's head when the factory moves the ticket to Human Review, the commit the human reviews (ORC-148). */
+  | { type: 'status.recorded'; to: LogicalState; reviewSha?: string }
   | { type: 'session.linked'; linearSessionId: string }
   | { type: 'pending.set'; job: PendingJob }
   | { type: 'pending.cleared' }
@@ -301,6 +307,10 @@ export interface TicketState {
   prUrl?: string;
   prChecks?: 'pending' | 'pass' | 'fail' | 'none';
   prState?: 'OPEN' | 'MERGED' | 'CLOSED';
+  /** The commit shown to the human reviewer, recorded at the move to Human Review: the only one a Done merges (ORC-148). */
+  reviewSha?: string;
+  /** The status the factory itself moved the ticket to, while no human moved it since: its late webhook is an echo (ORC-148). */
+  recordedStatus?: LogicalState;
   worktreePath?: string;
   port?: number;
   activeRunId?: string;

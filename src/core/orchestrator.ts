@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
-import type { Forge } from '../adapters/forge/types.js';
+import type { Forge, ForgeWriter, MergeResult } from '../adapters/forge/types.js';
 import type { RoleResolver } from '../adapters/roles/types.js';
 import type { RunHandle, RunResult, Runner } from '../adapters/runner/types.js';
 import { ActivityRelay } from '../adapters/tracker/activity-relay.js';
@@ -64,6 +64,8 @@ export interface OrchestratorDeps {
   forge: Forge;
   /** One reconciliation of a project (ORC-185): Linear and GitHub compared to the factory's state, into the inbox. */
   reconcile?: (project: ProjectRuntime) => Promise<void>;
+  /** The factory's writes on the forge (ORC-148: the merge); absent with the `gh` CLI, which merges nothing. */
+  forgeWriter?: ForgeWriter;
   runner: Runner;
   workspaces: WorkspaceManager;
   verify: Verifier;
@@ -147,6 +149,9 @@ type RecoveryNotice = ({ ticket: { projectId: string; ticketId: string } } | { s
   type: 'elicitation' | 'error';
   body: string;
 };
+
+/** Why the factory's merge is refused when the PR's head moved since the review (ORC-148). */
+const PUSHED = 'la branche a reçu un push depuis la review';
 
 export class Orchestrator {
   private background = new Map<Promise<void>, string | undefined>();
@@ -724,7 +729,9 @@ export class Orchestrator {
         return;
       }
       case 'move':
-        return this.move(project, t, c.to);
+        return this.move(project, t, c.to, c.keepReviewSha);
+      case 'merge':
+        return this.merge(project, t, c.sha, key);
       case 'labels':
         return this.setLabels(ticketId, c.add, c.remove);
       case 'comment': {
@@ -790,13 +797,90 @@ export class Orchestrator {
     this.wake();
   }
 
-  private async move(project: ProjectRuntime, t: TicketState, to: LogicalState): Promise<void> {
+  private async move(project: ProjectRuntime, t: TicketState, to: LogicalState, keepReviewSha?: boolean): Promise<void> {
     const stateName = project.workflow.states[to];
     // The loader refuses a move to an undeclared status; a version frozen before it may still hold one.
     if (!stateName) throw new Error(`no status for "${to}" in the workflow of ${project.id}`);
     await this.d.store.putEcho(`state:${t.ticketId}:${stateName}`, this.d.clock.now() + ECHO_MS);
     await this.d.tracker.moveTo(t.ticketId, stateName);
-    await this.apply(await this.ticket(project.id, t.ticketId), { type: 'status.recorded', to });
+    // Only a move that concludes the factory's work records the commit shown; a move back keeps the reviewed one.
+    const reviewSha = to !== 'human_review' ? undefined : keepReviewSha ? t.reviewSha : await this.headShown(project, t);
+    await this.apply(await this.ticket(project.id, t.ticketId), { type: 'status.recorded', to, ...(reviewSha ? { reviewSha } : {}) });
+  }
+
+  /**
+   * The head of the ticket's open PR as the factory shows it in Human Review (ORC-148): the only commit a Done merges.
+   * Recorded only when it is the commit the ticket's worktree ended its run on: a head pushed meanwhile, which the
+   * run (a review) never read, is no reviewed commit. Unread (no branch, no PR, no worktree, the forge down) or
+   * different, none is recorded: a Done is refused until the factory moves the ticket to Human Review again.
+   */
+  private async headShown(project: ProjectRuntime, t: TicketState): Promise<string | undefined> {
+    if (!t.branch || !t.worktreePath) return undefined;
+    try {
+      const [pr, local] = await Promise.all([this.d.forge.findPr(project.repoPath, t.branch), this.d.workspaces.head(t.worktreePath)]);
+      if (pr?.state !== 'OPEN' || !pr.headSha) return undefined;
+      if (pr.headSha === local) return pr.headSha;
+      this.log('warn', `head of ${t.ticketId}'s PR (${pr.headSha}) is not the commit its run ended on (${local ?? 'unread'}): no reviewed commit`);
+      return undefined;
+    } catch (err) {
+      this.log('warn', `head of ${t.ticketId}'s PR unread at Human Review: ${(err as Error).message}`);
+      return undefined;
+    }
+  }
+
+  /**
+   * The `merge` effect (ORC-148). The forge is read first, as only it knows the checks of the reviewed commit: the
+   * PR still open, its head still that commit, its checks green. Then merged with that head imposed, so a push in
+   * between is refused by GitHub itself. A refusal reaches the human through `pr.merge_refused`, and is decided once:
+   * its mark, written before the event, makes a replay (a lost lease, a failed inbox write) send the same refusal
+   * again (the inbox drops the copy by its id) instead of reading the forge anew, where checks green since would merge.
+   */
+  private async merge(project: ProjectRuntime, t: TicketState, sha: string, key: EffectKey): Promise<EffectOutcome | void> {
+    if (t.prNumber === undefined) return;
+    const mark = `effect:${key.id}:refused`;
+    const refused = key.replay ? await this.d.store.getMeta(mark) : undefined;
+    if (refused) return this.refuseMerge(project, t, key, refused);
+    const writer = this.d.forgeWriter;
+    const pr = t.branch ? await this.d.forge.findPr(project.repoPath, t.branch) : undefined;
+    let reason: string;
+    if (pr?.number === t.prNumber && pr.state === 'MERGED') {
+      if (pr.headSha === sha) return { deduplicated: true };
+      // Merged on GitHub meanwhile, on another head: no refusal to answer, the merge's own events deliver the ticket.
+      this.log('info', `merge of ${t.ticketId} dropped: PR #${pr.number} already merged on ${pr.headSha}`);
+      return;
+    }
+    if (!t.branch) reason = 'la branche du ticket est inconnue';
+    else if (pr && pr.number !== t.prNumber) reason = `la PR de la branche (#${pr.number}) n'est pas celle du ticket (#${t.prNumber})`;
+    else if (!writer) reason = "la GitHub App de l'usine est requise pour merger";
+    else if (pr?.state !== 'OPEN') reason = "la PR n'est plus ouverte";
+    else if (pr.headSha !== sha) reason = PUSHED;
+    else if (pr.checks !== 'pass' && pr.checks !== 'none') reason = `les checks du commit relu ne sont pas verts (${pr.failedChecks.join(', ') || pr.checks})`;
+    else {
+      // No check at all: the forge merges only in a repository with no CI (`mergePr`, `unchecked`).
+      const res: MergeResult = await writer.mergePr(project.repoPath, t.prNumber, sha, pr.checks === 'none' ? { unchecked: true } : undefined);
+      if (res.merged) return res.deduplicated ? { deduplicated: true } : undefined;
+      reason =
+        res.reason === 'head_moved'
+          ? PUSHED
+          : res.reason === 'checks_missing'
+            ? "aucun check n'a tourné sur le commit relu, alors que le dépôt a une CI ou que l'usine ne peut pas vérifier qu'il n'en a pas (CI pas encore lancée, checks qui viennent d'apparaître, ou GitHub App sans la permission Actions en lecture)"
+            : `GitHub refuse le merge (${res.message})`;
+    }
+    await this.d.store.setMeta(mark, reason);
+    await this.refuseMerge(project, t, key, reason);
+  }
+
+  /** The `pr.merge_refused` of a merge effect, keyed by it. A failed write throws, so that the outbox retries the effect. */
+  private async refuseMerge(project: ProjectRuntime, t: TicketState, key: EffectKey, reason: string): Promise<void> {
+    await this.accept({
+      ...TRUSTED,
+      id: `merge-refused:${key.id}`,
+      type: 'pr.merge_refused',
+      at: this.d.clock.now(),
+      projectId: project.id,
+      ticketId: t.ticketId,
+      payload: { number: t.prNumber!, url: t.prUrl ?? '', branch: t.branch ?? '', reason, headMoved: reason === PUSHED },
+    });
   }
 
   /**

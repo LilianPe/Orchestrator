@@ -1,6 +1,6 @@
 import type { FeedbackItem } from '../../core/types.js';
 import type { RepoPermission, RepoPermissions } from '../roles/types.js';
-import type { CheckRunRequest, Forge, ForgeWriter, PrInfo, PrRequest } from './types.js';
+import type { CheckRunRequest, Forge, ForgeWriter, MergeResult, PrInfo, PrRequest } from './types.js';
 
 export type FakeCheckRun = CheckRunRequest & { id: number };
 
@@ -57,6 +57,27 @@ export class FakeForge implements Forge, ForgeWriter, RepoPermissions {
     this.opened.push({ ...req, number });
     this.setPr(req.branch, { number, url, state: 'OPEN', checks: 'pending', failedChecks: [] });
     return { number, url, deduplicated: false };
+  }
+
+  /** The merges asked (ORC-148), with the head each one required. */
+  merges: { number: number; sha: string }[] = [];
+  /** The checks of the PRs' base commit: `none` is a repository with no CI (ORC-148). */
+  baseChecks: PrInfo['checks'] = 'none';
+  /** The repository's own active Actions workflows: one is a CI, even one that never checks the base (ORC-148). */
+  ciWorkflows = 0;
+
+  /** As GitHub: merged only if the PR's head is still `sha`; a PR already merged on it is found again. */
+  async mergePr(_repoPath: string, number: number, sha: string, opts: { unchecked?: boolean } = {}): Promise<MergeResult> {
+    this.answer();
+    const pr = [...this.prs.values()].find((p) => p.number === number);
+    if (!pr) throw new Error(`no PR #${number}`);
+    if (pr.state === 'MERGED' && pr.headSha === sha) return { merged: true, deduplicated: true };
+    if (pr.headSha !== sha) return { merged: false, reason: 'head_moved' };
+    if (pr.state !== 'OPEN' || pr.checks === 'fail') return { merged: false, reason: 'not_mergeable', message: 'Pull Request is not mergeable' };
+    if (opts.unchecked && (pr.checks !== 'none' || this.ciWorkflows > 0 || this.baseChecks !== 'none')) return { merged: false, reason: 'checks_missing' };
+    this.merges.push({ number, sha });
+    this.prs.set(pr.branch, { ...pr, state: 'MERGED' });
+    return { merged: true, deduplicated: false };
   }
 
   async upsertCheckRun(_repoPath: string, req: CheckRunRequest): Promise<{ id: number; deduplicated: boolean }> {

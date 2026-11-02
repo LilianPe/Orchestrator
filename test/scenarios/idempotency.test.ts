@@ -152,6 +152,14 @@ describe('idempotency table (ORC-162, docs/idempotence.md)', () => {
     expect(reopened.number).not.toBe(first.number);
   });
 
+  it('Merge: a replayed merge finds the PR already merged on the reviewed head and merges nothing twice', async () => {
+    const forge = new FakeForge();
+    forge.setPr('factory/rel-1', { number: 3, url: 'u', state: 'OPEN', headSha: 'abc123', checks: 'pass', failedChecks: [] });
+    expect(await forge.mergePr('/repo', 3, 'abc123')).toEqual({ merged: true, deduplicated: false });
+    expect(await forge.mergePr('/repo', 3, 'abc123')).toEqual({ merged: true, deduplicated: true });
+    expect(forge.merges).toHaveLength(1);
+  });
+
   it('Check run: a replayed check run with the same external_id updates it instead of creating a second one', async () => {
     const forge = new FakeForge();
     const run = { sha: 'abc123', name: 'factory/verify', externalId: 'REL-1:4:1' };

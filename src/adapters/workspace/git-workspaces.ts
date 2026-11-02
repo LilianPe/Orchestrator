@@ -90,6 +90,12 @@ export class GitWorkspaces implements WorkspaceManager {
     if (existsSync(path)) await this.git(repoPath, 'worktree', 'remove', '--force', path);
   }
 
+  async head(path: string): Promise<string | undefined> {
+    if (!existsSync(path)) return undefined;
+    const r = await this.exec('git', ['-C', path, 'rev-parse', 'HEAD']);
+    return r.code === 0 ? r.stdout.trim() : undefined;
+  }
+
   async remoteBranchExists(repoPath: string, prefix: string): Promise<boolean> {
     const out = await this.git(repoPath, 'ls-remote', '--heads', 'origin');
     return out
