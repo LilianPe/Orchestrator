@@ -54,7 +54,7 @@ export type CheckRunRequest = {
 export type MergeResult =
   | { merged: true; deduplicated: boolean }
   | { merged: false; reason: 'head_moved' }
-  /** Asked `unchecked` (the head has no check) in a repository with a CI: it has not run on the head yet. */
+  /** Asked `unchecked` (the head has no check) in a repository with a CI, or one whose workflows are unreadable. */
   | { merged: false; reason: 'checks_missing' }
   | { merged: false; reason: 'not_mergeable'; message: string };
 

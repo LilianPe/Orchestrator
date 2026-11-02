@@ -863,7 +863,7 @@ export class Orchestrator {
         res.reason === 'head_moved'
           ? PUSHED
           : res.reason === 'checks_missing'
-            ? "aucun check n'a tourné sur le commit relu, alors que le dépôt a une CI (pas encore lancée, ou ses checks viennent d'apparaître)"
+            ? "aucun check n'a tourné sur le commit relu, alors que le dépôt a une CI ou que l'usine ne peut pas vérifier qu'il n'en a pas (CI pas encore lancée, checks qui viennent d'apparaître, ou GitHub App sans la permission Actions en lecture)"
             : `GitHub refuse le merge (${res.message})`;
     }
     await this.d.store.setMeta(mark, reason);

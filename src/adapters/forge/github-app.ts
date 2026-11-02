@@ -340,8 +340,11 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
     // A method the repository allows, a merge commit first: a squash-only repository refuses the others (405).
     const settings = await this.call<{ allow_merge_commit?: boolean; allow_squash_merge?: boolean; allow_rebase_merge?: boolean }>('GET', repoApi(repo), token);
     const method = settings.allow_merge_commit !== false ? 'merge' : settings.allow_squash_merge !== false ? 'squash' : 'rebase';
-    // A head that moved is refused by GitHub itself (409), whatever its checks: the push goes through the AI review again.
-    if (opts.unchecked && pr.head.sha === sha && !(await this.withoutCi(repo, pr, token))) return { merged: false, reason: 'checks_missing' };
+    if (opts.unchecked) {
+      // Read as moved, answered as moved, with no PUT: a stale read must never let an unchecked head merge unverified.
+      if (pr.head.sha !== sha) return { merged: false, reason: 'head_moved' };
+      if (!(await this.withoutCi(repo, pr, token))) return { merged: false, reason: 'checks_missing' };
+    }
     try {
       await this.call('PUT', `${url}/merge`, token, { sha, merge_method: method });
       return { merged: true, deduplicated: false };

@@ -111,7 +111,6 @@ function repaired(state: TicketState | undefined, e: FactoryEvent<'dead_letter.r
   return event ? reduce(base, event) : base;
 }
 
-/** Pure: applies one event to a ticket's state and returns the new state; the input is never mutated. */
 /**
  * The Linear webhook of the factory's own move, come after its echo expired (ORC-148): a move to the status the
  * factory put the ticket in, while it is still there and no human moved it since. It records nothing (`reduce`) and
@@ -124,6 +123,7 @@ export function isOwnMoveEcho(t: TicketState | undefined, e: FactoryEvent | Inte
   return !cancelled && to === t.recordedStatus && t.logical === t.recordedStatus;
 }
 
+/** Pure: applies one event to a ticket's state and returns the new state; the input is never mutated. */
 export function reduce(state: TicketState | undefined, event: FactoryEvent | InternalEvent): TicketState | undefined {
   if (isExternal(event) && event.type === 'dead_letter.repaired') return repaired(state, event);
   if (!state) {

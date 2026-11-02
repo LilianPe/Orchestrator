@@ -411,10 +411,12 @@ describe('GitHubAppForge.mergePr (ORC-148)', () => {
     expect(calls.some((c) => c.method === 'PUT')).toBe(false);
   });
 
-  it('an unchecked head that moved is a head moved (409), not a CI that has not run', async () => {
+  it('an unchecked head read as moved is a head moved, answered without a merge: never an unchecked merge on a stale read', async () => {
+    // GitHub's read may lag (or the head came back to abc123): a PUT with abc123 would merge it unchecked.
     const moved = openPr({ head: { ref: 'factory/REL-1', sha: 'new999' }, base: { ref: 'main', sha: 'base999' } });
-    const { forge } = makeForge([tokenRoute(42), pullRoute(moved), repoRoute(), workflows([{ state: 'active', path: '.github/workflows/ci.yml' }]), mergeRoute(409, { message: 'Head branch was modified.' })], { installationId: 42 });
+    const { forge, calls } = makeForge([tokenRoute(42), pullRoute(moved), repoRoute(), mergeRoute(200, { merged: true })], { installationId: 42 });
     expect(await forge.mergePr('/repo', 7, 'abc123', { unchecked: true })).toEqual({ merged: false, reason: 'head_moved' });
+    expect(calls.some((c) => c.method === 'PUT')).toBe(false);
   });
 
   it('GitHub\'s own dynamic workflows (Pages, Dependabot) are no CI', async () => {
