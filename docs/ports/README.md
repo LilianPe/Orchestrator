@@ -7,7 +7,7 @@ Le moteur ne parle au monde que par six ports. Chacun a une **fiche** (ce que to
 | Tracker | `Tracker` | [tracker.md](tracker.md) | `test/contracts/tracker.contract.ts` | `FakeTracker` ; `LinearTracker` en live, lecture seule |
 | Forge | `Forge` | [forge.md](forge.md) | `test/contracts/forge.contract.ts` | `FakeForge`, `GhCliForge` (sur un `gh` scripté) ; `GhCliForge` en live |
 | Publisher | `Publisher` | [publisher.md](publisher.md) | `test/contracts/publisher.contract.ts` | `FakePublisher` |
-| SandboxProvider | `SandboxProvider` | [sandbox-provider.md](sandbox-provider.md) | `test/contracts/sandbox.contract.ts` | `FakeSandboxProvider` |
+| SandboxProvider | `SandboxProvider` | [sandbox-provider.md](sandbox-provider.md) | `test/contracts/sandbox.contract.ts` | `FakeSandboxProvider`, `SandboxRouter`, `ContainerSandboxProvider` (tests d'isolation) |
 | CheckRunner | `CheckRunner` | [check-runner.md](check-runner.md) | `test/contracts/check-runner.contract.ts` | `FakeCheckRunner`, `runVerify` |
 | AgentRuntime | `Runner` | [agent-runtime.md](agent-runtime.md) | `test/contracts/agent-runtime.contract.ts` | `FakeRunner`, `ClaudeCodeRunner` (faux CLI `claude`) |
 
@@ -20,8 +20,8 @@ Une suite est une fonction `describe<Port>Contract(nom, make)`. `make` est appel
 ```ts
 import { describeSandboxContract } from '../../../test/contracts/sandbox.contract.js';
 
-describeSandboxContract('PodmanSandboxProvider', () => ({
-  provider: new PodmanSandboxProvider(/* … */),
+describeSandboxContract('ContainerSandboxProvider', () => ({
+  provider: new ContainerSandboxProvider({ cli: 'podman', /* … */ }),
   request: { runId: 'r1', ticketId: 'ORC-1', workspacePath: '/w', network: 'none' },
   active: async () => listContainersLabelled('factory.run'),
 }));
@@ -41,7 +41,7 @@ Un cas qui passe contre tous les sujets ne prouve rien s'il passerait aussi cont
 | CheckRunner | commande en échec (code, sortie, ordre), délai dépassé, commande qui ne démarre pas, rejeu |
 | Forge | branche sans PR, forge injoignable, checks illisibles |
 | Tracker | ticket inconnu en lecture et en écriture, statut absent de la team, `moveTo` rejoué, état final de `setLabels`, effets des écritures, `ensureSession`, `listDelegated` |
-| SandboxProvider | `destroy` d'un id inconnu ou déjà détruit, `create` rejoué, une sandbox par run, une nouvelle après `destroy` |
+| SandboxProvider | `destroy` d'un id inconnu ou déjà détruit, `create` rejoué, une sandbox par run, une nouvelle après `destroy`, `exec` (résultat, id inconnu), `spawnCommand` sur un id inconnu, `findByAttempt`, `list`, refus d'une exigence non satisfaite |
 | Publisher | republier une branche, une PR par branche, une nouvelle PR après merge ou fermeture |
 
 Les sujets fautifs de chaque cas sont nommés par les titres de `negative-controls.test.ts`. Les cas du chemin nominal n'ont pas de contrôle : un run qui réussit, une commande qui passe, un premier `publish`, un premier `create` et son niveau de réseau, les lectures nominales du Tracker et de la Forge (`getIssue`, `search`, `findPr` qui trouve la PR, instantanés).
