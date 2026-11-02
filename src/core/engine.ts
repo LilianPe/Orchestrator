@@ -330,8 +330,8 @@ function doneMerge(out: Decision, event: FactoryEvent<'status.changed'>, state: 
     return out;
   }
   if (!state.reviewSha) {
-    // Only the factory's own move to Human Review records one (a review, a dev run that ends there): a reply does not.
-    return backToReview(out, "Je ne merge pas : aucun commit relu n'est enregistré pour ce ticket (l'usine n'en retient un que quand elle passe elle-même le ticket en Human Review). Passez le ticket en AI Review : la review IA le ramène en Human Review sur la tête de la PR, qui devient le commit relu.");
+    // Only the end of the factory's own work in Human Review records one (a review, a dev run): a reply, a refusal do not.
+    return backToReview(out, "Je ne merge pas : aucun commit relu n'est enregistré pour ce ticket (l'usine n'en retient un qu'à la fin de son propre travail, une review IA ou un dev qui ramène le ticket en Human Review, et seulement si la tête de la PR est le commit sur lequel ce travail s'est terminé ; un renvoi en Human Review après un refus n'en retient pas). Passez le ticket en AI Review : la review IA le ramène en Human Review sur la tête de la PR, qui devient le commit relu.");
   }
   out.trace.push(`done: merge PR #${state.prNumber} on ${state.reviewSha}`);
   out.effects.push({ kind: 'merge', sha: state.reviewSha });
