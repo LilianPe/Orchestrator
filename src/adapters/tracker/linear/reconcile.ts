@@ -43,7 +43,8 @@ async function catchUpLabels(d: ReconcileDeps, emit: Emit, projectId: string, is
   for (const c of changes) {
     // The factory's own write, whose webhook has not come yet: no human change.
     if (await d.store.isEcho(labelEchoKey(issue.identifier, c.label, c.change), at)) continue;
-    await emit(t, UNSIGNED, `reconcile:label:${issue.identifier}:${c.label}:${c.change}:${t.updatedAt}`, 'label.changed', c);
+    // Keyed by Linear's version of the issue: a label put back later is a new change, not a duplicate.
+    await emit(t, UNSIGNED, `reconcile:label:${issue.identifier}:${c.label}:${c.change}:${issue.updatedAt ?? t.updatedAt}`, 'label.changed', c);
   }
   await recordLabels(d.store, projectId, issue.identifier, issue.labels, read);
 }

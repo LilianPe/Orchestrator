@@ -198,6 +198,20 @@ describe('reconcileOnce — labels (ORC-185)', () => {
     expect(await pass(tracker, store)).toEqual([]);
   });
 
+  it('a label taken off and put back with no change of the ticket in the factory gets a new id each time Linear changes', async () => {
+    const { tracker, store } = await setup();
+    const issue = tracker.issues.get('REL-1')!;
+    issue.updatedAt = 10;
+    await pass(tracker, store);
+    const ids: string[] = [];
+    for (const [labels, at] of [[['bug', 'x'], 20], [['bug'], 30], [['bug', 'x'], 40]] as const) {
+      issue.labels = [...labels];
+      issue.updatedAt = at;
+      ids.push(...(await pass(tracker, store)).map((e) => e.id));
+    }
+    expect(ids).toEqual(['reconcile:label:REL-1:x:added:20', 'reconcile:label:REL-1:x:removed:30', 'reconcile:label:REL-1:x:added:40']);
+  });
+
   it('labels a webhook recorded after Linear was read are newer: nothing is reported, nothing overwritten', async () => {
     const { tracker, store } = await setup();
     tracker.issues.get('REL-1')!.updatedAt = 100;
