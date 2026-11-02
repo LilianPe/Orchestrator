@@ -2,6 +2,10 @@ name: ci
 on:
   push: { branches: [main] }
   pull_request:
+  # ORC-218: a runc, crun, Podman or kernel bump on the runner image is not announced. A weekly run
+  # catches it, a manual one follows a bump of anything the sandbox stands on (docs/tests.md).
+  schedule: [{ cron: '0 5 * * 1' }]
+  workflow_dispatch:
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -81,8 +85,9 @@ jobs:
   isolation:
     runs-on: ubuntu-latest
     env:
-      XDG_RUNTIME_DIR: /tmp/podman-runtime
       FACTORY_ISOLATION: "1"
+      # Isolation n° 11 runs a real claude -p when this secret is set, and is skipped without it (forks too).
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -90,12 +95,19 @@ jobs:
       - name: Install rootless Podman
         run: |
           sudo apt-get update
-          sudo apt-get install -y podman uidmap slirp4netns fuse-overlayfs
+          sudo apt-get install -y podman uidmap slirp4netns fuse-overlayfs dbus-user-session
           sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
           sudo usermod --add-subuids 100000-165535 --add-subgids 100000-165535 "$USER"
-          mkdir -p "$XDG_RUNTIME_DIR"
-          chmod 700 "$XDG_RUNTIME_DIR"
+          # A systemd user session: Podman's cgroup manager is then systemd, and the user's cgroup gets the
+          # pids, memory and cpu controllers the sandboxes' limits need (isolation n° 9).
+          sudo loginctl enable-linger "$USER"
+          export XDG_RUNTIME_DIR="/run/user/$(id -u)" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u)/bus"
+          for _ in $(seq 30); do [ -S "/run/user/$(id -u)/bus" ] && break; sleep 1; done
+          echo "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS" >> "$GITHUB_ENV"
           podman system migrate
-          podman info --format '{{.Host.Security.Rootless}}'
+          podman info --format '{{.Host.Security.Rootless}} {{.Host.CgroupManager}} {{.Host.CgroupControllers}}'
       - run: npm ci
+      - if: env.CLAUDE_CODE_OAUTH_TOKEN != ''
+        run: npm install -g @anthropic-ai/claude-code
       - run: npm run test:isolation
