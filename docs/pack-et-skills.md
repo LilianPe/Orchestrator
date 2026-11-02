@@ -14,7 +14,7 @@ packs/standard/
 └── skills/<nom>/SKILL.md        # skills de job (un par type de run) et skills de méthode
 ```
 
-Chaque run lance Claude Code avec `--plugin-dir packs/standard` (les skills deviennent `/relais:<nom>`), `--settings <RELAIS_HOME>/run-settings.json` et `--setting-sources project,local`. Conséquence de cette dernière option : les réglages **utilisateur** de Claude Code (`~/.claude/settings.json`) ne s'appliquent pas aux runs ; ceux du dépôt (`.claude/settings.json`, `.claude/settings.local.json`) s'appliquent.
+Chaque run lance Claude Code avec `--plugin-dir packs/standard` (les skills deviennent `/relais:<nom>`), `--settings <RELAIS_HOME>/run-settings.json` `--setting-sources ""` et `--strict-mcp-config` (ORC-284, options mesurées par ORC-128). Aucun réglage de Claude Code ne vient d'ailleurs que de l'usine : ni ceux de l'utilisateur (`~/.claude/settings.json`), ni ceux du dépôt (`.claude/settings.json`, `.claude/settings.local.json`, `.mcp.json`, skills, agents et commandes de `.claude/`). Le `.claude/` du worktree est retiré avant chaque session ([`interface-et-securite.md`](interface-et-securite.md)).
 
 Le comportement (quel skill, quand, avec quel modèle) se règle dans `.relais/workflow.yml` : voir [`workflow.md`](workflow.md).
 
@@ -58,7 +58,7 @@ Texte complet : `packs/standard/skills/<nom>/SKILL.md`.
 
 - le ticket courant (`RELAIS_TICKET`) ;
 - les règles : messages Linear en français, ne jamais merger ni force-pusher, ne rien modifier hors du répertoire de travail, ne jamais déclarer fini sans tests lancés et lus, passer par `relais-agent` pour Linear, poser **une** question avec `relais-agent ask` plutôt qu'inventer, dernier message lisible seul ;
-- la méthode : avant chaque étape, charger le skill de méthode qui s'applique (`relais:tdd`, `relais:debugging`, `relais:verification`, `relais:code-review`, `relais:receiving-review`), le `CLAUDE.md` du dépôt l'emportant en cas de contradiction ; si l'outil Skill est indisponible, lire le fichier du skill (le hook donne le chemin absolu du dossier `skills/`) ;
+- la méthode : avant chaque étape, charger le skill de méthode qui s'applique (`relais:tdd`, `relais:debugging`, `relais:verification`, `relais:code-review`, `relais:receiving-review`), le `CLAUDE.md` du dépôt l'emportant sur le style seulement, jamais sur les règles de l'usine ; si l'outil Skill est indisponible, lire le fichier du skill (le hook donne le chemin absolu du dossier `skills/`) ;
 - si `RELAIS_KNOWLEDGE` est défini et contient `INDEX.md` : l'index de la base de connaissance (8 000 caractères au plus) et le chemin des fiches.
 
 ## Permissions
@@ -108,8 +108,8 @@ Pourquoi `git merge` est autorisé : une branche déjà poussée ne peut pas êt
 Du plus simple au plus profond :
 
 1. **Régler le comportement** sans toucher au pack : `.relais/workflow.yml` du dépôt (modèles, limites, vérifications, règles, jobs). Voir [`workflow.md`](workflow.md#6-recettes).
-2. **Donner du contexte au dépôt** : `CLAUDE.md` et `docs/agent/*.md` sont lus par les skills `dev`, `review` et `ask`. Le `CLAUDE.md` l'emporte sur les skills du pack là où ils parlent du même sujet : c'est l'endroit pour vos conventions de commit, de test, de nommage, ou pour durcir la méthode (« lancer toujours la suite X avant de pousser »). Les réglages Claude Code du dépôt (`.claude/settings.json`) s'appliquent aux runs.
-3. **Ajouter un skill** pour un nouveau job : un skill de projet `.claude/skills/<nom>/SKILL.md` versionné dans le dépôt, référencé par `skill: "<nom>"` dans un job de `.relais/workflow.yml`. Exemple complet : [`workflow.md`](workflow.md#ajouter-un-job-personnalisé-avec-son-propre-skill).
+2. **Donner du contexte au dépôt** : l'usine lit `CLAUDE.md` et `AGENTS.md` et les met dans le prompt de chaque run comme données (8 000 caractères au plus, ORC-284) ; `docs/agent/*.md` est lu par les skills `dev`, `review` et `ask`. C'est l'endroit pour vos conventions de commit, de test, de nommage : elles l'emportent sur le style des skills, jamais sur les règles de l'usine. Les réglages Claude Code du dépôt (`.claude/settings.json`) ne s'appliquent pas aux runs.
+3. **Ajouter un skill** pour un nouveau job : depuis ORC-284, un skill de projet (`.claude/skills/<nom>/SKILL.md` du dépôt) **n'est plus chargé** par les runs ; ajoutez le skill au pack (point 4). L'ancienne façon, un skill de projet référencé par `skill: "<nom>"` dans un job de `.relais/workflow.yml`, ne marche plus. Exemple complet : [`workflow.md`](workflow.md#ajouter-un-job-personnalisé-avec-son-propre-skill).
 4. **Modifier le pack** lui-même : éditer `packs/standard/` (skills, hook, permissions) dans votre copie de Relais. Cela s'applique à tous les projets de l'instance ; redémarrez `relais up` pour régénérer `run-settings.json`. Pour changer la méthode de toute l'équipe (seuils des niveaux de review, commandes de vérification, règles de TDD), éditez le skill de méthode concerné : tous les skills de job qui le chargent suivent. Ajouter un skill de méthode : un dossier `skills/<nom>/SKILL.md`, cité comme `relais:<nom>` depuis un skill de job ou le hook.
 
 Relais charge toujours `packs/standard` : `extends` dans `workflow.yml` n'a pas d'effet et il n'existe pas encore de mécanisme pour choisir un autre pack. Pour un « pack » d'équipe, maintenez une copie de Relais avec votre `packs/standard/`.
