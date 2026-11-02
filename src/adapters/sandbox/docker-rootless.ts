@@ -40,6 +40,8 @@ interface Info {
 export class ContainerSandboxProvider implements SandboxProvider {
   private readonly run: Exec;
   private readonly podman: boolean;
+  /** Ids seen through create, findByAttempt or list: `spawnCommand` is sync and checks against them (after a restart, list() first). */
+  private readonly known = new Set<string>();
 
   constructor(private readonly opts: ContainerSandboxOptions) {
     this.run = opts.exec ?? execCmd;
@@ -60,7 +62,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
         continue;
       }
       if (c.network !== req.network) throw new Error(`container sandbox: run ${req.runId} has network ${c.network}, asked ${req.network}`);
-      return sandbox(c);
+      return this.seen(c);
     }
 
     const args = [
@@ -76,6 +78,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
       this.opts.image, 'sleep', 'infinity',
     ];
     const id = (await mustExec(this.run, this.opts.cli, args)).trim();
+    this.known.add(id);
     return { id, network: req.network, level: 'L3' };
   }
 
@@ -101,25 +104,31 @@ export class ContainerSandboxProvider implements SandboxProvider {
     return r;
   }
 
-  /** Sync, so it cannot check the container is alive: it throws only on an empty id, and the spawned exec fails on a dead one. */
+  /** Sync, so it checks the ids this provider has seen, not the engine: the spawned exec fails on a container that died since. */
   spawnCommand(id: string, argv: readonly string[], opts: SandboxExecOptions = {}): string[] {
-    if (!id) throw new Error('container sandbox: empty id');
+    if (!this.known.has(id)) throw new Error(`container sandbox: unknown sandbox ${id}`);
     return [this.opts.cli, 'exec', '-i', ...this.execFlags(opts), id, ...argv];
   }
 
   async findByAttempt(runId: string): Promise<Sandbox | undefined> {
     const c = (await this.byLabel(`${ATTEMPT}=${runId}`)).find((x) => x.running);
-    return c && sandbox(c);
+    return c && this.seen(c);
   }
 
   /** Stopped containers too: they are still attempts' leftovers for recover() to destroy. */
   async list(): Promise<{ runId: string; sandbox: Sandbox }[]> {
-    return (await this.byLabel(ATTEMPT)).map((c) => ({ runId: c.runId, sandbox: sandbox(c) }));
+    return (await this.byLabel(ATTEMPT)).map((c) => ({ runId: c.runId, sandbox: this.seen(c) }));
   }
 
   async destroy(id: string): Promise<void> {
     const r = await this.run(this.opts.cli, ['rm', '-f', id]);
     if (r.code !== 0 && !/no such container/i.test(r.stderr)) throw new Error(`container sandbox: rm ${id}: ${r.stderr.trim()}`);
+    this.known.delete(id);
+  }
+
+  private seen(c: Info): Sandbox {
+    this.known.add(c.id);
+    return sandbox(c);
   }
 
   private execFlags(opts: SandboxExecOptions): string[] {

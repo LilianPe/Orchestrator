@@ -185,12 +185,16 @@ describe('ContainerSandboxProvider.exec', () => {
 });
 
 describe('ContainerSandboxProvider.spawnCommand', () => {
-  it('builds an attached exec with variable names only', () => {
-    const p = new ContainerSandboxProvider({ ...opts, cli: 'podman', exec: empty().exec });
+  it('builds an attached exec with variable names only, for a sandbox it made', async () => {
+    const e = engine((x) => ok(x[0] === 'run' ? 'c1\n' : ''));
+    const p = new ContainerSandboxProvider({ ...opts, cli: 'podman', exec: e.exec });
+    expect(() => p.spawnCommand('c1', ['true'])).toThrow(/unknown sandbox/);
+    await p.create(req());
     expect(p.spawnCommand('c1', ['claude', '-p', 'hi'], { env: { CLAUDE_CODE_OAUTH_TOKEN: 'secret', A: 'b' } })).toEqual([
       'podman', 'exec', '-i', '-w', '/work', '-e', 'CLAUDE_CODE_OAUTH_TOKEN', '-e', 'A', 'c1', 'claude', '-p', 'hi',
     ]);
-    expect(() => p.spawnCommand('', ['true'])).toThrow();
+    await p.destroy('c1');
+    expect(() => p.spawnCommand('c1', ['true'])).toThrow(/unknown sandbox/);
   });
 });
 
