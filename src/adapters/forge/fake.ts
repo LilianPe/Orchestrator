@@ -63,6 +63,8 @@ export class FakeForge implements Forge, ForgeWriter, RepoPermissions {
   merges: { number: number; sha: string }[] = [];
   /** The checks of the PRs' base commit: `none` is a repository with no CI (ORC-148). */
   baseChecks: PrInfo['checks'] = 'none';
+  /** The repository's active Actions workflows: one is a CI, even one that never checks the base (ORC-148). */
+  ciWorkflows = 0;
 
   /** As GitHub: merged only if the PR's head is still `sha`; a PR already merged on it is found again. */
   async mergePr(_repoPath: string, number: number, sha: string, opts: { unchecked?: boolean } = {}): Promise<MergeResult> {
@@ -72,7 +74,7 @@ export class FakeForge implements Forge, ForgeWriter, RepoPermissions {
     if (pr.state === 'MERGED' && pr.headSha === sha) return { merged: true, deduplicated: true };
     if (pr.headSha !== sha) return { merged: false, reason: 'head_moved' };
     if (pr.state !== 'OPEN' || pr.checks === 'fail') return { merged: false, reason: 'not_mergeable', message: 'Pull Request is not mergeable' };
-    if (opts.unchecked && this.baseChecks !== 'none') return { merged: false, reason: 'checks_missing' };
+    if (opts.unchecked && (pr.checks !== 'none' || this.ciWorkflows > 0 || this.baseChecks !== 'none')) return { merged: false, reason: 'checks_missing' };
     this.merges.push({ number, sha });
     this.prs.set(pr.branch, { ...pr, state: 'MERGED' });
     return { merged: true, deduplicated: false };

@@ -380,15 +380,33 @@ describe('GitHubAppForge.mergePr (ORC-148)', () => {
     (url) => (url.pathname === '/repos/acme/app/commits/base999/status' ? { body: { statuses: [] } } : undefined),
   ];
   const withBase = openPr({ base: { ref: 'main', sha: 'base999' } });
+  const headChecks = (runs: unknown[]): Route[] => [
+    (url) => (url.pathname === '/repos/acme/app/commits/abc123/check-runs' ? { body: { check_runs: runs } } : undefined),
+    (url) => (url.pathname === '/repos/acme/app/commits/abc123/status' ? { body: { statuses: [] } } : undefined),
+  ];
+  const workflows = (list: { state: string }[]): Route => (url) => (url.pathname === '/repos/acme/app/actions/workflows' ? { body: { total_count: list.length, workflows: list } } : undefined);
+  const noCi = (): Route[] => [...headChecks([]), workflows([]), ...baseChecks([])];
 
   it('merges an unchecked head when the base has no check either: a repository with no CI', async () => {
-    const { forge, calls } = makeForge([tokenRoute(42), pullRoute(withBase), repoRoute(), ...baseChecks([]), mergeRoute(200, { merged: true })], { installationId: 42 });
+    const { forge, calls } = makeForge([tokenRoute(42), pullRoute(withBase), repoRoute(), ...noCi(), mergeRoute(200, { merged: true })], { installationId: 42 });
     expect(await forge.mergePr('/repo', 7, 'abc123', { unchecked: true })).toEqual({ merged: true, deduplicated: false });
     expect(calls.some((c) => c.method === 'PUT')).toBe(true);
   });
 
   it('refuses an unchecked head when the base has checks: its CI has not run on it yet', async () => {
-    const { forge, calls } = makeForge([tokenRoute(42), pullRoute(withBase), repoRoute(), ...baseChecks([{ id: 1, name: 'test', status: 'completed', conclusion: 'success' }])], { installationId: 42 });
+    const { forge, calls } = makeForge([tokenRoute(42), pullRoute(withBase), repoRoute(), ...headChecks([]), workflows([]), ...baseChecks([{ id: 1, name: 'test', status: 'completed', conclusion: 'success' }])], { installationId: 42 });
+    expect(await forge.mergePr('/repo', 7, 'abc123', { unchecked: true })).toEqual({ merged: false, reason: 'checks_missing' });
+    expect(calls.some((c) => c.method === 'PUT')).toBe(false);
+  });
+
+  it('refuses an unchecked head in a repository with an active Actions workflow: a CI on pull_request leaves main unchecked', async () => {
+    const { forge, calls } = makeForge([tokenRoute(42), pullRoute(withBase), repoRoute(), ...headChecks([]), workflows([{ state: 'active' }]), ...baseChecks([])], { installationId: 42 });
+    expect(await forge.mergePr('/repo', 7, 'abc123', { unchecked: true })).toEqual({ merged: false, reason: 'checks_missing' });
+    expect(calls.some((c) => c.method === 'PUT')).toBe(false);
+  });
+
+  it('refuses an unchecked head whose checks appeared since the factory read it', async () => {
+    const { forge, calls } = makeForge([tokenRoute(42), pullRoute(withBase), repoRoute(), ...headChecks([{ id: 2, name: 'test', status: 'in_progress', conclusion: null }]), workflows([]), ...baseChecks([])], { installationId: 42 });
     expect(await forge.mergePr('/repo', 7, 'abc123', { unchecked: true })).toEqual({ merged: false, reason: 'checks_missing' });
     expect(calls.some((c) => c.method === 'PUT')).toBe(false);
   });

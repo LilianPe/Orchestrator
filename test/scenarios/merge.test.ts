@@ -173,6 +173,15 @@ describe('Done by a human, merge by the factory (ORC-148)', () => {
     expect(lastMove(h)).toBe('Human Review');
   });
 
+  it('merges nothing on a PR with no check in a repository whose Actions CI runs on pull requests only', async () => {
+    const h = await inHumanReview();
+    h.forge.setPr(BRANCH, { ...PR, state: 'OPEN', headSha: 'abc123', checks: 'none', failedChecks: [] });
+    h.forge.ciWorkflows = 1;
+    await h.send('status.changed', { from: 'human_review', to: 'done' }, 'REL-1', { actor: 'user-lilian' });
+    expect(h.forge.merges).toEqual([]);
+    expect(comments(h).at(-1)).toMatch(/aucun check n'a tourné sur le commit relu/);
+  });
+
   it('writes nothing on the forge when a human cancels the ticket: its PR stays open', async () => {
     // Two tickets may share one PR: the factory never closes nor merges a PR for a cancelled ticket.
     const h = await inHumanReview();

@@ -340,10 +340,7 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
     // A method the repository allows, a merge commit first: a squash-only repository refuses the others (405).
     const settings = await this.call<{ allow_merge_commit?: boolean; allow_squash_merge?: boolean; allow_rebase_merge?: boolean }>('GET', repoApi(repo), token);
     const method = settings.allow_merge_commit !== false ? 'merge' : settings.allow_squash_merge !== false ? 'squash' : 'rebase';
-    // A head with no check merges only in a repository with no CI: a base commit with checks says its CI has not run yet.
-    if (opts.unchecked && (!pr.base || (await this.checksFor(repo, pr.base.sha, token)).checks !== 'none')) {
-      return { merged: false, reason: 'checks_missing' };
-    }
+    if (opts.unchecked && !(await this.withoutCi(repo, pr, token))) return { merged: false, reason: 'checks_missing' };
     try {
       await this.call('PUT', `${url}/merge`, token, { sha, merge_method: method });
       return { merged: true, deduplicated: false };
@@ -434,6 +431,21 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
           source: 'review' as const,
         };
       });
+  }
+
+  /**
+   * Whether an unchecked head is one of a repository with no CI (ORC-148): the head still has no check, the repository
+   * no active Actions workflow (a CI on `pull_request` only leaves the base unchecked), and the PR's base commit no check
+   * either (a CI outside Actions that checks the base). Anything unread or unknown says CI.
+   */
+  private async withoutCi(repo: GitHubRepoRef, pr: PullRequestDto, token: string): Promise<boolean> {
+    if (!pr.base) return false;
+    const [head, workflows, base] = await Promise.all([
+      this.checksFor(repo, pr.head.sha, token),
+      this.call<{ workflows?: { state: string }[] }>('GET', `${repoApi(repo)}/actions/workflows?per_page=100`, token),
+      this.checksFor(repo, pr.base.sha, token),
+    ]);
+    return head.checks === 'none' && !(workflows.workflows ?? []).some((w) => w.state === 'active') && base.checks === 'none';
   }
 
   private async checksFor(
