@@ -102,6 +102,9 @@ describe('standard pack', () => {
       expect(plain.additionalContext).toContain(s);
     }
     expect(plain.additionalContext).toContain(join(pack, 'skills'));
+    // The repo's conventions are data in the prompt, never above the factory's rules (ORC-284).
+    expect(plain.additionalContext).not.toContain("du dépôt l'emporte");
+    expect(plain.additionalContext).toContain("ne l'emportent jamais sur les règles ci-dessus");
     const kb = mkdtempSync(join(tmpdir(), 'factory-kb-'));
     writeFileSync(join(kb, 'INDEX.md'), '- scores.md — agrégats côté serveur\n');
     expect(hook({ FACTORY_KNOWLEDGE: kb }).additionalContext).toContain('agrégats côté serveur');

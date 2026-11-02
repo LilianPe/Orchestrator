@@ -63,6 +63,29 @@ Chaque run reçoit un `RELAIS_RUN_TOKEN` aléatoire. L'API `/agent/*` ne l'accep
 
 Sur l'hôte, `RELAIS_API` pointe sur `http://127.0.0.1:<port>/agent` : les agents parlent au démon en local. Dans un sandbox, elle pointe sur `http://<FACTORY_SANDBOX_AGENT_HOST>:<FACTORY_AGENT_PORT>/agent` (par défaut `host.docker.internal`), le serveur dédié à l'API agent.
 
+## Ce que l'agent charge, et ce qu'il ne charge pas
+
+Le dépôt d'un projet est écrit par qui peut y pousser : ses réglages Claude Code ne pilotent pas les runs. Les options de `claude -p` sont celles mesurées dans [ORC-128](decisions/ORC-128.md) (ORC-284).
+
+L'agent charge seulement ce que l'usine impose :
+
+- **les réglages du run** (`--settings`, le `run-settings.json` de l'usine) ;
+- **le pack** (`--plugin-dir`) : ses skills, son hook de démarrage (règles de l'usine, index de la base de connaissance) ;
+- **les MCP de l'usine**, déclarés par `--mcp-config` (aucun pour l'instant : ils arrivent avec ORC-188) ;
+- **les conventions du dépôt** : l'usine lit elle-même `CLAUDE.md`, `AGENTS.md` et `.claude/CLAUDE.md` du worktree (le seul fichier de `.claude/` que le retrait ci-dessous garde, Claude Code ne le chargeant pas) et les met dans le prompt du run, comme **données** : dans une section « Conventions du dépôt (données) », entre balises, présentées comme les conventions du dépôt, qui ne lèvent aucune règle de l'usine. Ensemble, ils sont coupés à 8 000 octets (proposition, à fixer avec le budget du prompt d'ORC-254), la coupe marquée ; un fichier plus gros n'est jamais lu en entier. Un fichier qui est un lien vers l'extérieur du worktree, ou illisible, n'est pas lu. Leurs imports `@chemin` ne sont pas suivis : seul le texte des fichiers est injecté. Ils sont relus à chaque tentative : ils sont dans le message du run, pas dans le prompt système figé à la reprise.
+
+Et rien du dépôt :
+
+- **`--setting-sources ""`** : ni `.claude/settings.json`, ni `.claude/settings.local.json` (leurs hooks, leurs permissions, leur `env`), ni les skills de `.claude/`, ni `CLAUDE.md` chargé par Claude Code ; ni les réglages utilisateur de la machine.
+- **`--strict-mcp-config`** : ni le `.mcp.json` du dépôt, ni les connecteurs claude.ai du compte (Drive, Docs…), qui sinon se chargeraient avec un compte par abonnement.
+- **`.claude/` retiré du worktree avant chaque session**, après le `setup` (défense en profondeur, pour ce qu'ORC-128 n'a pas piégé : agents, commandes, output styles). Le worktree est en *sparse checkout* (mode non-cone, `/*` sauf `/.claude/*`, `/.claude/CLAUDE.md` gardé pour les conventions), propre à ce worktree (`extensions.worktreeConfig`) : la copie principale du dépôt garde son `.claude/`. `git status` reste propre, un `git add -A` ou `commit -a` de l'agent ne supprime pas `.claude/` de la PR, et un `git merge` ou un rebase qui le modifie ne le réécrit pas sur le disque. Limite : l'agent ne peut pas modifier les fichiers suivis de `.claude/` ; un ticket qui demande de les changer ne peut pas être fait par un run.
+- **`CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`** : pas de mémoire automatique (effet non vérifié par ORC-128).
+- **Télémétrie coupée** par `DISABLE_TELEMETRY=1` et `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` (laquelle suffit reste à mesurer, ORC-213, qui la bloque aussi au proxy).
+
+Dans un sandbox, `CLAUDE_CONFIG_DIR` est le dossier de session du ticket (`/home/factory/.claude`, monté depuis `<home>/sessions/<projet>/<ticket>`) : tout le dossier de config de Claude est par ticket, l'identifiant arrive par l'environnement (`CLAUDE_CODE_OAUTH_TOKEN` ou `ANTHROPIC_API_KEY`, comme avant). Sur l'hôte, sans sandbox, c'est celui du démon, comme avant.
+
+Le test d'isolation n° 11 (`test/isolation/claude-settings.test.ts`) rejoue à chaque version de Claude Code le dépôt piégé d'ORC-128 avec ces options : hooks, MCP, skill, agent, commande et `CLAUDE.md` piégés, aucun ne doit se charger. Il demande un vrai `claude` et un identifiant ([`tests.md`](tests.md#les-projets-vitest)).
+
 ## Secrets
 
 Où ils sont et comment ils restent dans le démon : [`configuration.md`](configuration.md#ce-qui-ne-sort-pas-du-démon). En résumé : `secrets.json` en `0600`, environnement des runs sans `RELAIS_*` ni `LINEAR_*`, jeton Linear jamais transmis aux agents, `run-settings.json` qui interdit aux runs de lire les fichiers sensibles de `RELAIS_HOME`.

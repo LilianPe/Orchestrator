@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { branchName } from '../../core/naming.js';
 import { execCmd, mustExec, type Exec } from '../exec.js';
@@ -88,6 +88,24 @@ export class GitWorkspaces implements WorkspaceManager {
 
   async gitCommonDir(path: string): Promise<string> {
     return (await this.git(path, 'rev-parse', '--path-format=absolute', '--git-common-dir')).trim();
+  }
+
+  /**
+   * Left out of the worktree's sparse checkout but for `.claude/CLAUDE.md`, which the factory reads as the
+   * repo's conventions (`readConventions`) and the session does not load (`--setting-sources ""`, ORC-128).
+   * The rest: the agent's session cannot load it, `git status`, `add -A`
+   * or `commit -a` neither see nor commit it as deleted, so a PR never drops the repo's `.claude/`, and a
+   * merge or rebase that changes it does not write it back (skip-worktree alone did). The index keeps it.
+   * Sparse checkout is per worktree (`extensions.worktreeConfig`, set by git): the repo's own checkout keeps
+   * its `.claude/`. The rm takes what the checkout does not own (an untracked settings.local.json).
+   * `!/.claude/*`, not `!/.claude/`: git re-includes a file only if its parent directory is not excluded.
+   */
+  async resetClaudeDir(path: string): Promise<void> {
+    await this.git(path, 'sparse-checkout', 'set', '--no-cone', '/*', '!/.claude/*', '/.claude/CLAUDE.md');
+    const dir = join(path, '.claude');
+    const entries = existsSync(dir) ? readdirSync(dir) : [];
+    if (!entries.includes('CLAUDE.md')) rmSync(dir, { recursive: true, force: true });
+    else for (const e of entries) if (e !== 'CLAUDE.md') rmSync(join(dir, e), { recursive: true, force: true });
   }
 
   async remoteBranchExists(repoPath: string, prefix: string): Promise<boolean> {

@@ -7,13 +7,14 @@ packs/standard/
 ├── .claude-plugin/plugin.json   # plugin « relais » → skills relais:<nom>
 ├── workflow.yml                 # comportement par défaut (événements, jobs, limites)
 ├── settings.json                # permissions des runs
-├── hooks/hooks.json             # hook SessionStart
+├── hooks/hooks.json             # hooks SessionStart et PreToolUse
 ├── hooks/session-start.mjs      # règles toujours actives, méthode, index de la base de connaissance
+├── hooks/pre-tool-use.mjs       # refus des commandes interdites, journal des refus
 ├── NOTICE.md                    # origine de la méthode (superpowers, MIT)
 └── skills/<nom>/SKILL.md        # skills de job (un par type de run) et skills de méthode
 ```
 
-Chaque run lance Claude Code avec `--plugin-dir packs/standard` (les skills deviennent `/relais:<nom>`), `--settings <RELAIS_HOME>/run-settings.json` et `--setting-sources project,local`. Conséquence de cette dernière option : les réglages **utilisateur** de Claude Code (`~/.claude/settings.json`) ne s'appliquent pas aux runs ; ceux du dépôt (`.claude/settings.json`, `.claude/settings.local.json`) s'appliquent.
+Chaque run lance Claude Code avec `--plugin-dir packs/standard` (les skills deviennent `/relais:<nom>`), `--settings <RELAIS_HOME>/run-settings.json` `--setting-sources ""` et `--strict-mcp-config` (ORC-284, options mesurées par ORC-128). Aucun réglage de Claude Code ne vient d'ailleurs que de l'usine : ni ceux de l'utilisateur (`~/.claude/settings.json`), ni ceux du dépôt (`.claude/settings.json`, `.claude/settings.local.json`, `.mcp.json`, skills, agents et commandes de `.claude/`). Le `.claude/` du worktree est retiré avant chaque session ([`interface-et-securite.md`](interface-et-securite.md)).
 
 Le comportement (quel skill, quand, avec quel modèle) se règle dans `.relais/workflow.yml` : voir [`workflow.md`](workflow.md).
 
@@ -57,7 +58,7 @@ Texte complet : `packs/standard/skills/<nom>/SKILL.md`.
 
 - le ticket courant (`RELAIS_TICKET`) ;
 - les règles : messages Linear en français, ne jamais merger ni force-pusher, ne rien modifier hors du répertoire de travail, ne jamais déclarer fini sans tests lancés et lus, passer par `relais-agent` pour Linear, poser **une** question avec `relais-agent ask` plutôt qu'inventer, dernier message lisible seul ;
-- la méthode : avant chaque étape, charger le skill de méthode qui s'applique (`relais:tdd`, `relais:debugging`, `relais:verification`, `relais:code-review`, `relais:receiving-review`), le `CLAUDE.md` du dépôt l'emportant en cas de contradiction ; si l'outil Skill est indisponible, lire le fichier du skill (le hook donne le chemin absolu du dossier `skills/`) ;
+- la méthode : avant chaque étape, charger le skill de méthode qui s'applique (`relais:tdd`, `relais:debugging`, `relais:verification`, `relais:code-review`, `relais:receiving-review`), le `CLAUDE.md` du dépôt l'emportant sur le style seulement, jamais sur les règles de l'usine ; si l'outil Skill est indisponible, lire le fichier du skill (le hook donne le chemin absolu du dossier `skills/`) ;
 - si `RELAIS_KNOWLEDGE` est défini et contient `INDEX.md` : l'index de la base de connaissance (8 000 caractères au plus) et le chemin des fiches.
 
 ## Permissions
@@ -73,6 +74,9 @@ Texte complet : `packs/standard/skills/<nom>/SKILL.md`.
 - tout push direct sur `main` ou `master` (`git push origin main`, `HEAD:main`…) ;
 - tout contournement des hooks git par `--no-verify` (`git commit --no-verify`, `git push --no-verify`, l'option en milieu de commande, ou toute commande qui la contient) ou par `-n` (`git commit -n`, `-nm`, `-m … -n` ; pas `-an`, que la syntaxe des motifs ne sait pas isoler) ; les règles explicites doublent le joker `*--no-verify*` au cas où la version de Claude Code n'appliquerait pas les jokers en début ou milieu de motif. Le scan du diff (`factory/anti-triche`, ORC-158) refuse aussi un `--no-verify` ajouté dans un fichier du dépôt, hors documentation, fichiers de test et règles de permission des réglages Claude ;
 - `git reset --hard origin…`, `rm -rf /` ;
+- un téléchargement envoyé à un shell : `curl … | sh`, `wget … | bash` ;
+- toute commande qui mentionne la socket Docker ou Podman (`docker.sock`, `podman.sock`) ou les variables qui y mènent (`DOCKER_HOST`, `CONTAINER_HOST`) : elle donnerait la main sur l'hôte depuis le conteneur du run ;
+- l'outil `WebSearch` : la recherche tourne chez Anthropic, hors de la vue du proxy de sortie ([ORC-128](decisions/ORC-128.md), point 1). `WebFetch` reste permis : il passe par le proxy ;
 - la lecture de `~/.relais/**`.
 
 Au démarrage, Relais complète ces refus pour le **vrai** `RELAIS_HOME` (même hors de `~/.relais`, par exemple `/data` en Docker) et écrit le résultat dans `<RELAIS_HOME>/run-settings.json` : lecture/édition de `secrets.json`, lecture de `relais.db*`, `transcripts/**`, `logs/**`, et toute commande qui mentionne `secrets.json` ou `relais.db`. Voir [`configuration.md`](configuration.md#ce-qui-ne-sort-pas-du-démon).
@@ -81,6 +85,22 @@ Ces règles sont une première barrière, pas une garantie : protégez la branch
 
 Les runs `trunk-readonly` (questions) tournent en plus avec `--permission-mode plan`.
 
+### Hook PreToolUse et journal des refus
+
+Les motifs du `deny` sont des jokers sur le texte de la commande : un espace en trop, des guillemets (`git commit "--no-verify"`), un `sudo`, un `git -C dépôt` ou un `bash -c "…"` les déjouent. Et Claude Code découpe une commande composée avant d'appliquer ses règles : `curl … | sh` n'y est vu que morceau par morceau. `hooks/pre-tool-use.mjs` (hook `PreToolUse` sur `Bash` et `WebSearch`) refait donc les mêmes refus sur la commande analysée : mots et guillemets comme un shell (échappements POSIX entre guillemets doubles, `\` en fin de ligne), opérateurs (`|`, `|&`, `&&`, `;`…), préfixes (`VAR=…`, `sudo -u x`, `env -i`, `timeout 10`, `nice`, `nohup`, `command`) et options globales de `git` (`-C`, `--git-dir`…) et de `gh` (`-R`) ignorés avec leurs valeurs. Le texte entre guillemets est une donnée (`git commit -m "git push --force …"` passe) ; seuls la charge d'un `sh|bash|zsh|dash|ksh -c`, les arguments d'`eval` et une substitution `$(…)` sont relus comme commandes. Il refuse aussi `rm -fr /`, `rm -r -f /*`, `git commit -anm …`, `bash <(curl …)`, `sh -c "$(curl …)"`, un téléchargement envoyé à un shell quels que soient ses arguments (`curl … | bash -s x`), `git push --mirror` (`force-push`), `git push --all` et tout refspec qui écrit `main`/`master` (`HEAD:refs/heads/main`, `:main`, `--delete origin main` : `push-trunk`).
+
+Chaque refus est une règle nommée (`no-verify`, `commit-no-verify`, `force-push`, `push-trunk`, `merge`, `reset-origin`, `rm-root`, `pipe-to-shell`, `container-socket`, `web-search`, et avec le drapeau : `push`, `gh-write`). L'agent reçoit le nom de la règle dans le motif du refus, et le hook écrit une ligne JSON `{"at", "tool", "command", "rule", "ticket"}` (`ticket` : `$FACTORY_TICKET`, `null` hors d'un run) dans le **journal des refus** :
+
+1. `$FACTORY_REFUSALS_LOG` s'il est défini (le démon le transmet aux runs quand il l'a ; c'est un chemin vu du run, donc du conteneur en sandbox) ;
+2. sinon `$CLAUDE_CONFIG_DIR/factory-refusals.jsonl` (le répertoire de configuration Claude du ticket) ;
+3. sinon `~/.claude/factory-refusals.jsonl`.
+
+Les dossiers sont créés ; un journal impossible à écrire n'empêche ni le refus ni la session.
+
+**Drapeau `FACTORY_DENY_PUSH=1`** (environnement du démon, transmis aux runs) : le hook refuse en plus tout `git push` et les écritures `gh` (`gh pr create`, `gh pr edit`, `gh run rerun` ; `gh pr merge` l'est toujours), journalisés de la même façon. Désactivé par défaut : les skills du pack poussent et ouvrent leurs PR eux-mêmes jusqu'à ORC-125. Voir [`configuration.md`](configuration.md#variables-denvironnement).
+
+`src/pack-guard.test.ts` donne au hook, sur son entrée standard, un vrai appel `PreToolUse` pour chaque `Bash(…)` du `deny` de `settings.json` et vérifie le refus et la ligne de journal : un motif ajouté au `deny` sans règle dans le hook fait échouer le test.
+
 Pourquoi `git merge` est autorisé : une branche déjà poussée ne peut pas être rebasée, puisque le force-push est refusé. Les skills `feedback`, `fix-ci` et `review` intègrent donc la base par une fusion (`git merge --no-edit origin/<base>`) quand elle est en conflit ou qu'elle a bougé ; seul `dev`, avant son premier push, rebase. `git merge-tree` sert au contrôle de conflit sans toucher à l'arbre, `git ls-remote` à vérifier qu'un push a bien atteint le distant.
 
 ## Personnaliser
@@ -88,8 +108,8 @@ Pourquoi `git merge` est autorisé : une branche déjà poussée ne peut pas êt
 Du plus simple au plus profond :
 
 1. **Régler le comportement** sans toucher au pack : `.relais/workflow.yml` du dépôt (modèles, limites, vérifications, règles, jobs). Voir [`workflow.md`](workflow.md#6-recettes).
-2. **Donner du contexte au dépôt** : `CLAUDE.md` et `docs/agent/*.md` sont lus par les skills `dev`, `review` et `ask`. Le `CLAUDE.md` l'emporte sur les skills du pack là où ils parlent du même sujet : c'est l'endroit pour vos conventions de commit, de test, de nommage, ou pour durcir la méthode (« lancer toujours la suite X avant de pousser »). Les réglages Claude Code du dépôt (`.claude/settings.json`) s'appliquent aux runs.
-3. **Ajouter un skill** pour un nouveau job : un skill de projet `.claude/skills/<nom>/SKILL.md` versionné dans le dépôt, référencé par `skill: "<nom>"` dans un job de `.relais/workflow.yml`. Exemple complet : [`workflow.md`](workflow.md#ajouter-un-job-personnalisé-avec-son-propre-skill).
+2. **Donner du contexte au dépôt** : l'usine lit `CLAUDE.md`, `AGENTS.md` et `.claude/CLAUDE.md` et les met dans le prompt de chaque run comme données (8 000 octets au plus, imports `@chemin` non suivis, ORC-284) ; `docs/agent/*.md` est lu par les skills `dev`, `review` et `ask`. C'est l'endroit pour vos conventions de commit, de test, de nommage : elles l'emportent sur le style des skills, jamais sur les règles de l'usine. Les réglages Claude Code du dépôt (`.claude/settings.json`) ne s'appliquent pas aux runs.
+3. **Ajouter un skill** pour un nouveau job : depuis ORC-284, un skill de projet (`.claude/skills/<nom>/SKILL.md` du dépôt) **n'est plus chargé** par les runs ; ajoutez le skill au pack (point 4). L'ancienne façon, un skill de projet référencé par `skill: "<nom>"` dans un job de `.relais/workflow.yml`, ne marche plus. Exemple complet : [`workflow.md`](workflow.md#ajouter-un-job-personnalisé-avec-son-propre-skill).
 4. **Modifier le pack** lui-même : éditer `packs/standard/` (skills, hook, permissions) dans votre copie de Relais. Cela s'applique à tous les projets de l'instance ; redémarrez `relais up` pour régénérer `run-settings.json`. Pour changer la méthode de toute l'équipe (seuils des niveaux de review, commandes de vérification, règles de TDD), éditez le skill de méthode concerné : tous les skills de job qui le chargent suivent. Ajouter un skill de méthode : un dossier `skills/<nom>/SKILL.md`, cité comme `relais:<nom>` depuis un skill de job ou le hook.
 
 Relais charge toujours `packs/standard` : `extends` dans `workflow.yml` n'a pas d'effet et il n'existe pas encore de mécanisme pour choisir un autre pack. Pour un « pack » d'équipe, maintenez une copie de Relais avec votre `packs/standard/`.

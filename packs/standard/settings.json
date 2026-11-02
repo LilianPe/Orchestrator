@@ -34,6 +34,13 @@
       "Bash(*--no-verify*)",
       "Bash(git reset --hard origin:*)",
       "Bash(rm -rf /:*)",
+      "Bash(curl *|*sh*)",
+      "Bash(wget *|*sh*)",
+      "Bash(*docker.sock*)",
+      "Bash(*podman.sock*)",
+      "Bash(*DOCKER_HOST*)",
+      "Bash(*CONTAINER_HOST*)",
+      "WebSearch",
       "Read(~/.factory/**)"
     ]
   }

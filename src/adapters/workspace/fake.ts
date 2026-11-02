@@ -7,6 +7,8 @@ export class FakeWorkspaces implements WorkspaceManager {
   remoteBranches = new Set<string>();
   /** The commit each worktree is on, by path, as a test sets it (a run's commits, a fetch). */
   heads = new Map<string, string>();
+  /** Worktrees whose `.claude/` was reset, in order. */
+  resetClaude: string[] = [];
   /** Ticket worktrees that exist: the first prepare of one is `fresh`, until its cleanup. */
   private made = new Set<string>();
 
@@ -27,6 +29,10 @@ export class FakeWorkspaces implements WorkspaceManager {
 
   async head(path: string): Promise<string | undefined> {
     return this.heads.get(path);
+  }
+
+  async resetClaudeDir(path: string): Promise<void> {
+    this.resetClaude.push(path);
   }
 
   async gitCommonDir(): Promise<string> {
