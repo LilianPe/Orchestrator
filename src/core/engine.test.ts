@@ -1,6 +1,7 @@
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { loadWorkflow } from '../config/load-workflow.js';
+import type { AgentOutput, AttemptOutcome } from './agent-output.js';
 import type { Decision } from './decision.js';
 import { decide, isFenced, RECONCILE_MS, reconcileTicket, SENSITIVE_PATHS, sensitivePathsAtLaunch, taintedKnowledge } from './engine.js';
 import { reduce } from './reduce.js';
@@ -469,6 +470,46 @@ describe('decide — built-ins', () => {
     expect(third.effects[0]).toMatchObject({ kind: 'start_run', job: 'dev', input: 'verify_failures' });
     const fourth = decide(ticket({ verifyAttempts: 3, verifyingRunId: 'r4' }), ev('verify.failed', { runId: 'r4', job: 'dev', failures }), workflow);
     expect(kinds(fourth)).toEqual({ events: ['ticket.blocked'], effects: ['activity', 'labels'], timers: [] });
+  });
+
+  describe('closed outcome of the attempt (ORC-289)', () => {
+    const output: AgentOutput = { status: 'done', summary: 'Export CSV ajouté.', tests_added: [], why: '', assumptions: [], risks: [], untested: [], review_hints: [] };
+    const finished = (attempt: AttemptOutcome, extra: Partial<EventPayloads['run.finished']> = {}) =>
+      ev('run.finished', { runId: 'r1', job: 'dev', outcome: 'success', costUsd: 1, turns: 3, lastText: 'ok', attempt, ...extra });
+    const dev = ticket({ logical: 'dev', activeRunId: 'r1' });
+    const today = (outcome: 'success' | 'failure' | 'limit') => decide(dev, ev('run.finished', { runId: 'r1', job: 'dev', outcome, costUsd: 1, turns: 3, lastText: 'ok' }), workflow);
+    const structured = { ...workflow, jobs: { ...workflow.jobs, dev: { ...workflow.jobs['dev']!, structuredOutput: true } } };
+
+    it('succeeded decides as a success, timeout as a cap', () => {
+      expect(decide(dev, finished('succeeded', { output, outcome: 'failure' }), workflow)).toEqual(today('success'));
+      expect(decide(dev, finished('timeout', { outcome: 'limit' }), workflow)).toEqual(today('limit'));
+    });
+
+    it('failed decides as a failure, but a success without output stays a success until the job is structured', () => {
+      expect(decide(dev, finished('failed', { outcome: 'failure' }), workflow)).toEqual(today('failure'));
+      expect(decide(dev, finished('failed'), workflow)).toEqual(today('success'));
+      const out = decide(dev, finished('failed'), structured);
+      expect(kinds(out)).toEqual({ events: ['ticket.blocked'], effects: ['activity', 'labels'], timers: [] });
+    });
+
+    it('errored blocks on the infrastructure and starts no correction run', () => {
+      const out = decide(dev, finished('errored', { outcome: 'failure' }), workflow);
+      expect(kinds(out)).toEqual({ events: ['ticket.blocked'], effects: ['activity', 'labels'], timers: [] });
+      expect(out.events[0]).toMatchObject({ reason: expect.stringContaining("panne d'infrastructure, l'agent n'est pas en cause") });
+    });
+
+    it('needs_input blocks with the question, spec_impossible with the justification', () => {
+      const asked = decide(dev, finished('needs_input', { output: { ...output, status: 'blocked', question: 'Quel séparateur ?' } }), workflow);
+      expect(kinds(asked)).toEqual({ events: ['ticket.blocked'], effects: ['activity', 'labels'], timers: [] });
+      expect(asked.effects[0]).toMatchObject({ type: 'elicitation', body: expect.stringContaining('Quel séparateur ?') });
+      const contested = decide(dev, finished('spec_impossible', { output: { ...output, status: 'blocked', reason: 'spec_impossible', question: 'Les critères se contredisent.' } }), workflow);
+      expect(contested.events[0]).toMatchObject({ type: 'ticket.blocked', reason: expect.stringContaining('conteste') });
+      expect(contested.effects[0]).toMatchObject({ type: 'elicitation', body: expect.stringContaining('Les critères se contredisent.') });
+    });
+
+    it('a stopped run stays ignored, whatever its attempt', () => {
+      expect(decide(dev, finished('errored', { outcome: 'stopped' }), workflow)).toEqual(decision());
+    });
   });
 
   describe('same command, same failure, unchanged diff (ORC-187)', () => {

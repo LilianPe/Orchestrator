@@ -106,6 +106,7 @@ function buildJob(name: string, raw: RawJob, perRun: RunLimits): JobSpec {
     input: raw.input,
     verify: raw.verify ?? [],
     pickup: raw.pickup ?? false,
+    structuredOutput: raw.structured_output,
     limits: limits(raw.limits, perRun),
     onStart: raw.on_start ?? {},
     onSuccess: raw.on_success ?? {},

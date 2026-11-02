@@ -4,7 +4,7 @@ import { evalCondition } from './conditions.js';
 import { deadLetterReason, liftDeadLetterBlock, REPAIR_LABELS, repairedEvent } from './dead-letter.js';
 import type { Decision, Effect } from './decision.js';
 import { isOwnMoveEcho, reduce } from './reduce.js';
-import type { EventPayloads, EventType, FactoryEvent, FeedbackItem, InputKind, Taint, TicketState, VerifyFailure } from './types.js';
+import type { EventPayloads, EventType, FactoryEvent, FeedbackItem, InputKind, RunOutcome, Taint, TicketState, VerifyFailure } from './types.js';
 
 type StartRun = Extract<Effect, { kind: 'start_run' }>;
 
@@ -47,6 +47,37 @@ function block(out: Decision, reason: string, body: string): Decision {
   out.events.push({ type: 'ticket.blocked', reason });
   out.effects.push({ kind: 'activity', type: 'elicitation', body });
   return out;
+}
+
+/**
+ * A dev run's end read through its closed outcome (ORC-289): the `RunOutcome` it decides as, or the block
+ * it ends in. Without `attempt` (rows written before it), `outcome` decides as before. `errored` is the
+ * infrastructure's: blocked, never handed back to the agent. A success without output stays a success
+ * until the job is `structuredOutput` (ORC-191/ORC-192 make every agent submit).
+ */
+function attemptDecision(p: EventPayloads['run.finished'], job: JobSpec): RunOutcome | { reason: string; body: string } {
+  const question = p.output?.question ?? '';
+  switch (p.attempt) {
+    case 'succeeded':
+      return 'success';
+    case 'failed':
+      return p.outcome === 'success' && !job.structuredOutput ? 'success' : 'failure';
+    case 'timeout':
+      return 'limit';
+    case 'errored': {
+      const reason = `Le run ${job.name} s'est interrompu : panne d'infrastructure, l'agent n'est pas en cause.`;
+      return { reason, body: `${reason} Répondez dans ce fil pour que je reprenne.` };
+    }
+    case 'needs_input':
+      return { reason: "En attente d'une réponse à la question de l'agent.", body: `${question}\n\nRépondez dans ce fil pour que je reprenne.` };
+    case 'spec_impossible':
+      return {
+        reason: "L'agent conteste le ticket : il ne peut pas le réaliser honnêtement tel qu'il est écrit.",
+        body: `Je ne peux pas réaliser ce ticket tel qu'il est écrit : ${question}\n\nCorrigez le ticket ou répondez dans ce fil pour que je reprenne.`,
+      };
+    default:
+      return p.outcome;
+  }
 }
 
 /** Prefix of the block reason of the red-CI bound: a green CI lifts that block (ORC-270). */
@@ -516,9 +547,12 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
     case 'control.stop':
       return stop(out);
     case 'run.finished': {
-      const { outcome, job: jobName, runId } = event.payload;
+      const { job: jobName, runId } = event.payload;
       const job = workflow.jobs[jobName];
-      if (!job || outcome === 'stopped') return out;
+      if (!job || event.payload.outcome === 'stopped') return out;
+      const closed = job.queue === 'dev' ? attemptDecision(event.payload, job) : event.payload.outcome;
+      if (typeof closed === 'object') return block(out, closed.reason, closed.body);
+      const outcome = closed;
       if (outcome === 'success' && ticket?.blocked && job.queue === 'dev') return out;
       if (outcome === 'success') {
         if (job.verify.length === 0) return success(out, job, runId);

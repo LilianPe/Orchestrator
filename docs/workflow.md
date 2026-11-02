@@ -134,9 +134,10 @@ Un job décrit **comment** lancer un run de Claude Code. Champs :
 | `input` | `feedback`, `ci_failures`, `thread`, `verify_failures` | — | Section ajoutée au prompt (voir ci-dessous). |
 | `verify` | liste de commandes | `[]` | Lancées après un run réussi (voir ci-dessous). |
 | `pickup` | booléen | `false` | Si `true`, applique `tracker.pickup.checks` avant le premier run du ticket (quand aucune session Claude n'existe encore). |
+| `structured_output` | booléen | absent | **Provisoire** (ORC-289, jusqu'à ce qu'ORC-191/ORC-192 fassent appeler `submit_result` à tout agent) : si `true`, un run de la file `dev` qui se termine sans sortie valide est un échec. Absent, il reste un succès. |
 | `limits` | `{ turns, duration, usd }`, chacun facultatif | `limits.per_run` | Remplace les limites par run pour ce job. |
 | `on_start` | `{ move: <état logique> }` | `{}` | Déplace le ticket au lancement du run (s'il n'y est pas déjà). |
-| `on_success` | `{ move: <état logique>, post: summary \| reply \| synthesis }` | `{}` | Après un run réussi (et des vérifications réussies) : déplace le ticket et/ou publie le dernier message du run dans la session Linear. Aujourd'hui les trois valeurs de `post` produisent le même effet ; le nom documente l'intention. |
+| `on_success` | `{ move: <état logique>, post: summary \| reply \| synthesis }` | `{}` | Après un run réussi (et des vérifications réussies) : déplace le ticket et/ou publie dans la session Linear le message composé depuis la sortie de l'agent (`submit_result` : résumé, pourquoi, risques, non testé, points à relire), ou à défaut le dernier message du run. Aujourd'hui les trois valeurs de `post` produisent le même effet ; le nom documente l'intention. |
 
 Les valeurs de `input` :
 - `feedback` : les messages du fil Linear accumulés depuis le dernier run, plus les commentaires de review non résolus de la PR (titre « Retours à traiter »).
@@ -191,7 +192,7 @@ Ces types sont acceptés par le chargeur, mais Relais les traite en dur : une r�
 
 | Événement | Comportement fixe |
 |---|---|
-| `run.finished` | Succès : vérifications si le job en a, sinon `on_success`. Échec ou limite : ticket bloqué (file `dev`) ou message d'erreur (file `questions`). Run arrêté : rien. Fin d'un run de la file `dev` après le merge de la PR : rien. |
+| `run.finished` | Succès : vérifications si le job en a, sinon `on_success`. Échec ou limite : ticket bloqué (file `dev`) ou message d'erreur (file `questions`). File `dev`, selon l'issue de la tentative (ORC-289) : question de l'agent (`needs_input`) ou ticket contesté (`spec_impossible`), ticket bloqué avec la question ou la justification ; panne de l'infrastructure (`errored`), ticket bloqué, sans run de correction. Run arrêté : rien. Fin d'un run de la file `dev` après le merge de la PR : rien. |
 | `verify.passed` / `verify.failed` | `on_success`, ou nouvelle tentative, ou blocage (voir `verify`). Après le merge de la PR : rien. |
 | `timer.fired` | Une minuterie posée par une décision arrive à échéance (événement `timer:<clé>:<échéance>` écrit dans l'inbox). Sorte `debounce` : lance le job dont le délai `debounce` vient d'expirer (et débloque le ticket). Les sortes `clarify.remind`, `clarify.expire` et `usage.reset` existent sans règle pour l'instant (ORC-210, ORC-215) : rien. |
 | `pr.opened` | Mémorise la PR et l'attache à la session Linear. |

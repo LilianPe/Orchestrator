@@ -31,6 +31,7 @@ import {
   type Store,
   type WorkflowVersion,
 } from '../store/types.js';
+import { attemptOutcome, parseAgentOutput, type AgentOutput } from './agent-output.js';
 import type { EventBus } from './bus.js';
 import type { Clock } from './clock.js';
 import type { Effect } from './decision.js';
@@ -64,6 +65,33 @@ import { PRODUCT_NAME } from '../product.js';
  * names, which one does it unmeasured until ORC-213 (that also blocks it at the proxy).
  */
 export const CLAUDE_RUN_ENV = { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1', DISABLE_TELEMETRY: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' };
+
+/** Where the factory MCP's `submit_result` keeps a run's validated output (ORC-288). */
+export const agentOutputKey = (runId: string): string => `agent-output:${runId}`;
+
+/** The run's output, validated again: absent, unreadable or invalid, the agent submitted none (ORC-289). */
+async function storedOutput(store: Store, runId: string): Promise<AgentOutput | undefined> {
+  const raw = await store.getMeta(agentOutputKey(runId)).catch(() => undefined);
+  if (raw === undefined) return undefined;
+  try {
+    const parsed = parseAgentOutput(JSON.parse(raw));
+    return parsed.ok ? parsed.output : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The message posted for a run that submitted its output: composed by the factory from it, never the agent's last text (ORC-289). */
+export function formatAgentOutput(o: AgentOutput): string {
+  const list = (title: string, items: string[]) => (items.length ? [`**${title}**\n${items.map((i) => `- ${i}`).join('\n')}`] : []);
+  return [
+    o.summary,
+    ...(o.why ? [`**Pourquoi** : ${o.why}`] : []),
+    ...list('Risques', o.risks),
+    ...list('Non testé', o.untested),
+    ...list('À relire', o.review_hints.map((h) => `\`${h.file}\` : ${h.reason}`)),
+  ].join('\n\n');
+}
 
 export interface ProjectRuntime {
   id: string;
@@ -856,7 +884,8 @@ export class Orchestrator {
         const run = await store.getRun(c.runId);
         if (!run) return;
         const session = run.linearSessionId ?? (await this.sessionFor(t));
-        return this.activityOnce(session, { type: 'response', body: run.lastText.trim() || 'Terminé.' }, key);
+        const output = await storedOutput(store, c.runId);
+        return this.activityOnce(session, { type: 'response', body: output ? formatAgentOutput(output) : run.lastText.trim() || 'Terminé.' }, key);
       }
       case 'link_pr':
         if (t.linearSessionId) await tracker.addExternalUrl(t.linearSessionId, 'Pull request', c.url);
@@ -1312,6 +1341,7 @@ export class Orchestrator {
   private async pump(project: ProjectRuntime, run: RunRecord, handle: RunHandle, sandboxId?: string): Promise<void> {
     const { tracker, bus, store, clock } = this.d;
     let result: RunResult;
+    let infraError = false;
     try {
       const relay = new ActivityRelay(
         (a) => (run.linearSessionId ? tracker.activity(run.linearSessionId, a) : Promise.resolve()),
@@ -1356,9 +1386,12 @@ export class Orchestrator {
         this.log('error', `could not record failure of run ${run.id}: ${(e as Error).message}`);
       }
       result = { outcome: 'failure', costUsd: 0, turns: 0, lastText: message };
+      // The runner broke (stream, sandbox): nothing for the agent to fix (ORC-289).
+      infraError = true;
     } finally {
       if (sandboxId) await this.destroySandbox(sandboxId);
     }
+    const output = await storedOutput(store, run.id);
     await this.submitResult({
       ...TRUSTED,
       id: `attempt:${run.id}:finished`,
@@ -1373,6 +1406,8 @@ export class Orchestrator {
         costUsd: result.costUsd,
         turns: result.turns,
         lastText: result.lastText,
+        attempt: attemptOutcome({ outcome: result.outcome, infraError }, output),
+        ...(output ? { output } : {}),
       },
     });
   }
