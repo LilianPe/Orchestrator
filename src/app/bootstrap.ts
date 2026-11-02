@@ -11,7 +11,7 @@ import { ClaudeCodeRunner } from '../adapters/runner/claude-code.js';
 import { purgeTranscripts } from '../adapters/runner/transcript.js';
 import { FakeRunner } from '../adapters/runner/fake.js';
 import type { Runner } from '../adapters/runner/types.js';
-import type { SandboxProvider } from '../adapters/sandbox/types.js';
+import { makeSandboxes } from './sandbox-wiring.js';
 import { LinearApi } from '../adapters/tracker/linear/api.js';
 import { createLinearIngest } from '../adapters/tracker/linear/ingest.js';
 import { buildAuthorizeUrl, exchangeCode, TokenManager } from '../adapters/tracker/linear/oauth.js';
@@ -140,12 +140,11 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     // The daemon's own secrets never enter a run's environment; masked all the same, should one surface.
     const daemonSecrets = () => [...daemonSecretValues(o.home, yml), ...(githubSecret ? [githubSecret] : [])];
     // A container per attempt (ORC-204) when FACTORY_CONTAINER_CLI is set; --fake-runner stays on the host.
-    // ORC-204 wiring: makeSandboxes() — once src/app/sandbox-wiring.ts lands (router, container backend), in place of `undefined`:
-    // const sandboxes = o.fakeRunner ? undefined : makeSandboxes(env, { agentHost: sandboxAgentHost });
-    const sandboxes = undefined as SandboxProvider | undefined;
+    const sandboxes = o.fakeRunner ? undefined : makeSandboxes(env);
     if (!o.fakeRunner && !sandboxes) log("Attention : FACTORY_CONTAINER_CLI absent, les runs tournent sur l'hôte, sans isolation.");
-    // ORC-204 wiring: pass `sandboxes` to ClaudeCodeRunner as well ({ ..., sandboxes }).
-    const runner: Runner = o.fakeRunner ? new FakeRunner() : new ClaudeCodeRunner({ transcriptsDir: paths.transcripts, secrets: daemonSecrets });
+    const runner: Runner = o.fakeRunner
+      ? new FakeRunner()
+      : new ClaudeCodeRunner({ transcriptsDir: paths.transcripts, secrets: daemonSecrets, ...(sandboxes ? { sandboxes } : {}) });
     const workspaces = new GitWorkspaces({ root: paths.workspaces, knowledgeRepo: instance.knowledge?.repoPath });
     const forge = githubApp
       ? new GitHubAppForge({ ...githubApp, log })

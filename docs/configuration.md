@@ -22,6 +22,7 @@ Les deux fichiers d'instance sont lus **au démarrage** de `relais up` : redéma
 | `FACTORY_AGENT_PORT` | `relais up` | port de l'interface + 1 | Port du serveur qui ne sert que `/agent/*`, pour les conteneurs. Démarré seulement avec `FACTORY_CONTAINER_CLI`. | non |
 | `FACTORY_AGENT_HOST` | `relais up` | `0.0.0.0` | Adresse d'écoute de ce serveur. Elle doit être joignable depuis le réseau des conteneurs ; l'interface, elle, reste sur `host`. | non |
 | `FACTORY_SANDBOX_AGENT_HOST` | `relais up` | `host.docker.internal` | Nom ou adresse du démon vu depuis un conteneur, dans le `RELAIS_API` des runs (`http://<hôte>:<FACTORY_AGENT_PORT>/agent`). À changer quand `host-gateway` ne mène pas au démon (Docker Desktop sous WSL). | non |
+| `FACTORY_SANDBOX_GATEWAY` | `relais up` | (vide : `host-gateway` du moteur) | Adresse IP vers laquelle `host.docker.internal` pointe dans le conteneur (`--add-host`). À poser quand `host-gateway` ne mène pas au démon. | non |
 | `ANTHROPIC_API_KEY` | `claude` (hérité par les runs) | — | Authentification de Claude Code si vous n'utilisez pas `claude login`. Obligatoire en Docker. | **oui** |
 | `GH_TOKEN` | `gh`, les agents et, en Docker, git via `gh auth setup-git` | — | Authentification GitHub des agents et du repli `gh` du démon. Obligatoire en Docker tant que ORC-125 n'a pas retiré `gh`. | **oui** |
 | `GH_APP_ID` | démon (repli de `github.appId`) | — | Identifiant de la GitHub App d'usine. | non |
