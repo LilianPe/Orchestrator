@@ -171,6 +171,15 @@ describe('server', () => {
       expect(await (await rpc(app, { jsonrpc: '2.0', id: 4, method: 'ping' })).json()).toEqual({ jsonrpc: '2.0', id: 4, result: {} });
     });
 
+    it('answers any method but POST with 405 Allow: POST, never the UI', async () => {
+      const { app } = await setup();
+      for (const method of ['GET', 'DELETE']) {
+        const res = await agentOnly(app)(new Request('http://172.17.0.1:4101/agent/mcp', { method, headers: { authorization: 'Bearer tok' } }));
+        expect(res.status).toBe(405);
+        expect(res.headers.get('allow')).toBe('POST');
+      }
+    });
+
     it('lists exactly submit_result, with the output JSON Schema, and ask', async () => {
       const { app } = await setup();
       const { tools } = (await (await rpc(app, { jsonrpc: '2.0', id: 1, method: 'tools/list' })).json()).result;

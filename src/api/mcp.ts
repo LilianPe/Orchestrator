@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { agentOutputSchema, parseAgentOutput } from '../core/agent-output.js';
+import { agentOutputKey, agentOutputSchema, parseAgentOutput } from '../core/agent-output.js';
 import type { RunRecord, Store } from '../store/types.js';
 import { PRODUCT_NAME } from '../product.js';
 
@@ -38,7 +38,7 @@ async function callTool(name: unknown, args: Record<string, unknown>, run: RunRe
     const parsed = parseAgentOutput(args);
     if (!parsed.ok) return text(`Résultat refusé, à corriger : ${parsed.error}`, true);
     // The contract with the engine (ORC-188 part C): the run's output, read when the run ends.
-    await d.store.setMeta(`agent-output:${run.id}`, JSON.stringify(parsed.output));
+    await d.store.setMeta(agentOutputKey(run.id), JSON.stringify(parsed.output));
     return text('Résultat enregistré.');
   }
   if (name === 'ask') {

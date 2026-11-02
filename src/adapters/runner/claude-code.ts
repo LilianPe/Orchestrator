@@ -165,7 +165,7 @@ export class ClaudeCodeRunner implements Runner {
         // already, stderr and a spawn error are masked here.
         const text = result?.text || lastText || maskTranscriptLine(spawnError ? spawnError.message : stderr.trim().slice(-2000), secrets);
         const tokens = result?.tokens ?? (usage.size ? [...usage.values()].reduce(addTokens, NO_TOKENS) : undefined);
-        transcript.end(() => resolve({ outcome, costUsd: result?.costUsd ?? 0, turns: result?.turns ?? assistantTurns, lastText: text, ...(tokens ? { tokens } : {}) }));
+        transcript.end(() => resolve({ outcome, costUsd: result?.costUsd ?? 0, turns: result?.turns ?? assistantTurns, lastText: text, ...(tokens ? { tokens } : {}), ...(spawnError ? { infra: true as const } : {}) }));
       };
       child.on('error', (err) => finish(err));
       child.on('close', () => finish());
@@ -187,5 +187,5 @@ export class ClaudeCodeRunner implements Runner {
 function failed(lastText: string): RunHandle {
   const ch = new Channel<RunStreamEvent>();
   ch.close();
-  return { events: ch, done: Promise.resolve({ outcome: 'failure', costUsd: 0, turns: 0, lastText }), stop: () => {} };
+  return { events: ch, done: Promise.resolve({ outcome: 'failure', costUsd: 0, turns: 0, lastText, infra: true }), stop: () => {} };
 }

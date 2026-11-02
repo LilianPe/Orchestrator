@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { AgentOutput } from '../../src/core/agent-output.js';
+import { agentOutputKey, type AgentOutput } from '../../src/core/agent-output.js';
+import type { Store } from '../../src/store/types.js';
 import { createHarness } from '../helpers/harness.js';
 
 const done: AgentOutput = {
@@ -13,19 +14,19 @@ const done: AgentOutput = {
   review_hints: [{ file: 'src/export.ts', reason: "l'échappement des virgules" }],
 };
 
-function delegated() {
-  const h = createHarness();
+function delegated(wrapStore?: (s: Store) => Store) {
+  const h = createHarness(wrapStore ? { wrapStore } : {});
   h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Exporter les audits en CSV depuis la liste des audits.' });
   return h;
 }
 
 /** Delegates REL-1 with a held dev run, records what its `submit_result` would (ORC-288), then ends it. */
-async function devRun(output: unknown) {
-  const h = delegated();
+async function devRun(output: unknown, wrapStore?: (s: Store) => Store) {
+  const h = delegated(wrapStore);
   h.runner.enqueue({ hold: true, events: [{ kind: 'text', text: 'Texte libre de fin.' }] });
   await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
   const runId = (await h.ticket()).activeRunId!;
-  await h.store.setMeta(`agent-output:${runId}`, JSON.stringify(output));
+  await h.store.setMeta(agentOutputKey(runId), JSON.stringify(output));
   h.runner.release(runId);
   await h.advance(0);
   return h;
@@ -67,5 +68,35 @@ describe('the closed outcome of an attempt decides its end (ORC-289)', () => {
     const h = await devRun({ status: 'done' });
     expect(await h.ticket()).toMatchObject({ logical: 'human_review', blocked: false });
     expect(h.tracker.activities('ls-1').at(-1)).toEqual({ type: 'response', body: 'Texte libre de fin.' });
+  });
+
+  it("a reply (a feedback run) posts the agent's answer, not the output template", async () => {
+    const h = await devRun(done);
+    h.runner.enqueue({ hold: true, events: [{ kind: 'text', text: 'Corrigé : les boutons sont alignés.' }] });
+    await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'boutons mal alignés', author: 'L' });
+    await h.advance(180_000); // the reply's debounce
+    const runId = h.runner.requests[1]!.runId;
+    await h.store.setMeta(agentOutputKey(runId), JSON.stringify(done));
+    h.runner.release(runId);
+    await h.advance(0);
+    expect(h.tracker.activities('ls-1').at(-1)).toEqual({ type: 'response', body: 'Corrigé : les boutons sont alignés.' });
+  });
+
+  it('an unreadable output store is the infrastructure: errored, not « no output »', async () => {
+    const h = await devRun(done, (inner) =>
+      Object.assign(Object.create(inner) as Store, {
+        getMeta: (k: string) => (k.startsWith('agent-output:') ? Promise.reject(new Error('database down')) : inner.getMeta(k)),
+      }),
+    );
+    expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: expect.stringContaining("panne d'infrastructure") });
+  });
+
+  it('a failure after the run ended (recording it) does not turn a finished attempt into errored', async () => {
+    const h = await devRun(done, (inner) =>
+      Object.assign(Object.create(inner) as Store, {
+        putRun: (r: Parameters<Store['putRun']>[0]) => (r.endedAt !== undefined ? Promise.reject(new Error('database down')) : inner.putRun(r)),
+      }),
+    );
+    expect(await h.ticket()).toMatchObject({ logical: 'human_review', blocked: false });
   });
 });

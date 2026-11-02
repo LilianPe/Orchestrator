@@ -40,6 +40,8 @@ export interface RunResult {
   lastText: string;
   /** What the runtime reported it used (ORC-235), never what the agent wrote; absent when it reported nothing. */
   tokens?: TokenUsage;
+  /** The runner or its sandbox broke (refused before the spawn, spawn error): nothing for the agent to fix (ORC-289). */
+  infra?: true;
 }
 
 export interface RunHandle {

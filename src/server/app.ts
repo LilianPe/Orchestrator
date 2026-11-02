@@ -253,6 +253,8 @@ export function createApp(d: ServerDeps): Hono {
     const res = await handleMcp(msg, c.get('run'), { store: d.store, ask });
     return res ? c.json(res) : c.body(null, 202);
   });
+  // No SSE stream to GET: the MCP transport's answer for a server that offers none.
+  agent.all('/mcp', (c) => c.body(null, 405, { Allow: 'POST' }));
   app.route('/agent', agent);
 
   app.get('*', (c) => {

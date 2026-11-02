@@ -61,6 +61,11 @@ describe('standard pack', () => {
     expect(s.permissions.allow).toContain('Bash(factory-agent:*)');
   });
 
+  it("allows the factory MCP's tools, that a headless run would refuse otherwise (ORC-188)", () => {
+    const s = JSON.parse(readFileSync(join(pack, 'settings.json'), 'utf8'));
+    expect(s.permissions.allow).toEqual(expect.arrayContaining(['mcp__factory__submit_result', 'mcp__factory__ask']));
+  });
+
   it('denies force pushes and pushes to the trunk written mid-command', () => {
     const s = JSON.parse(readFileSync(join(pack, 'settings.json'), 'utf8'));
     expect(s.permissions.deny).toEqual(

@@ -65,7 +65,7 @@ Sur l'hôte, `RELAIS_API` pointe sur `http://127.0.0.1:<port>/agent` : les agent
 
 ## MCP de l'usine
 
-`POST /agent/mcp` est un serveur MCP (HTTP « Streamable », réponses JSON seulement, un message par requête), derrière le même jeton de run que le reste de `/agent/*`, servi aussi par le serveur dédié aux sandboxes. Deux outils (ORC-288) :
+`POST /agent/mcp` est un serveur MCP (HTTP « Streamable », réponses JSON seulement, un message par requête ; toute autre méthode reçoit `405` avec `Allow: POST`, pas de flux SSE), derrière le même jeton de run que le reste de `/agent/*`, servi aussi par le serveur dédié aux sandboxes. Deux outils (ORC-288) :
 
 - **`submit_result`** : l'agent y rend son résultat, au format d'`agentOutputSchema` (`src/core/agent-output.ts`), dont le schéma JSON est l'`inputSchema` de l'outil. Un résultat valide est rangé pour **le run du jeton** (méta `agent-output:<run>`), le dernier envoi l'emporte ; un résultat invalide est refusé (`isError`) avec les champs fautifs, pour que l'agent le corrige pendant son run.
 - **`ask`** : comme `POST /agent/ask` (question dans Linear, ticket bloqué), qui reste jusqu'à ORC-192.

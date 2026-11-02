@@ -30,6 +30,9 @@ export const agentOutputSchema = z
 
 export type AgentOutput = z.infer<typeof agentOutputSchema>;
 
+/** Where the factory MCP's `submit_result` keeps a run's validated output (ORC-288). */
+export const agentOutputKey = (runId: string): string => `agent-output:${runId}`;
+
 /** Closed outcomes of an agent attempt (doc MVP). `errored` is infrastructure: never sent back to the agent to fix. */
 export type AttemptOutcome = 'succeeded' | 'failed' | 'noop' | 'needs_input' | 'timeout' | 'spec_impossible' | 'errored';
 
@@ -44,14 +47,15 @@ export function parseAgentOutput(raw: unknown): { ok: true; output: AgentOutput 
  * The attempt's outcome, from how the runner ended and what `submit_result` recorded (ORC-188):
  * - the runner broke (launch error, broken stream, sandbox down) → `errored`;
  * - a cap (duration or turns) → `timeout`; a stop → `errored` too: nothing for the agent to fix;
- * - no valid output → `failed`;
- * - otherwise the output's status: `done` → `succeeded`, `blocked` → `needs_input` or `spec_impossible`.
+ * - no valid output, or a `done` from a run that failed → `failed`;
+ * - otherwise the output's status: `done` → `succeeded`, `blocked` → `needs_input` or `spec_impossible`
+ *   (even if the run then failed: the question it asked still waits for its answer).
  * `noop` has no source yet: a step that finds nothing to do will say so (ponytail: add a status when one does).
  */
 export function attemptOutcome(run: { outcome: RunOutcome; infraError?: boolean }, output: AgentOutput | undefined): AttemptOutcome {
   if (run.infraError || run.outcome === 'stopped') return 'errored';
   if (run.outcome === 'limit') return 'timeout';
-  if (!output) return 'failed';
+  if (!output || (output.status === 'done' && run.outcome !== 'success')) return 'failed';
   if (output.status === 'done') return 'succeeded';
   return output.reason === 'spec_impossible' ? 'spec_impossible' : 'needs_input';
 }

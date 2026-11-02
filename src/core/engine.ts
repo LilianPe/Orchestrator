@@ -2,6 +2,7 @@ import type { JobSpec, Rule, Workflow } from '../config/workflow-schema.js';
 import { allowed, DEFAULT_MATRIX, refusalMessage, type AuthzAction, type AuthzMatrix, type Channel } from './authz.js';
 import { evalCondition } from './conditions.js';
 import { deadLetterReason, liftDeadLetterBlock, REPAIR_LABELS, repairedEvent } from './dead-letter.js';
+import type { AgentOutput } from './agent-output.js';
 import type { Decision, Effect } from './decision.js';
 import { isOwnMoveEcho, reduce } from './reduce.js';
 import type { EventPayloads, EventType, FactoryEvent, FeedbackItem, InputKind, RunOutcome, Taint, TicketState, VerifyFailure } from './types.js';
@@ -37,9 +38,9 @@ function stop(out: Decision, reason = STOPPED, body = STOP_MESSAGE): Decision {
   return out;
 }
 
-function success(out: Decision, job: JobSpec, runId: string): Decision {
+function success(out: Decision, job: JobSpec, runId: string, output?: AgentOutput): Decision {
   if (job.onSuccess.move) out.effects.push({ kind: 'move', to: job.onSuccess.move });
-  if (job.onSuccess.post) out.effects.push({ kind: 'post_output', style: job.onSuccess.post, runId });
+  if (job.onSuccess.post) out.effects.push({ kind: 'post_output', style: job.onSuccess.post, runId, ...(output ? { output } : {}) });
   return out;
 }
 
@@ -551,13 +552,15 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       const job = workflow.jobs[jobName];
       if (!job || event.payload.outcome === 'stopped') return out;
       const closed = job.queue === 'dev' ? attemptDecision(event.payload, job) : event.payload.outcome;
-      if (typeof closed === 'object') return block(out, closed.reason, closed.body);
+      // Already blocked (the agent asked through `ask`, a human's stop…): it keeps its reason and gets no second notice.
+      if (typeof closed === 'object') return ticket?.blocked ? out : block(out, closed.reason, closed.body);
       const outcome = closed;
       if (outcome === 'success' && ticket?.blocked && job.queue === 'dev') return out;
+      const { output } = event.payload;
       if (outcome === 'success') {
-        if (job.verify.length === 0) return success(out, job, runId);
+        if (job.verify.length === 0) return success(out, job, runId, output);
         out.events.push({ type: 'verify.started', runId });
-        out.effects.push({ kind: 'run_verify', runId, job: jobName });
+        out.effects.push({ kind: 'run_verify', runId, job: jobName, ...(output ? { output } : {}) });
         return out;
       }
       if (job.queue === 'questions') {
@@ -574,7 +577,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       const job = workflow.jobs[event.payload.job];
       if (!job) return out;
       out.events.push({ type: 'ticket.patched', patch: { verifyAttempts: 0, ...(ticket?.repeatedFailure ? { repeatedFailure: null } : {}) } });
-      return success(out, job, event.payload.runId);
+      return success(out, job, event.payload.runId, event.payload.output);
     }
     case 'verify.failed': {
       const used = ticket?.verifyAttempts ?? 0;

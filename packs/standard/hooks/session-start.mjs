@@ -11,7 +11,7 @@ const RULES = `# Règles de l'usine (toujours actives)
 - Ne déclare jamais un travail fini sans avoir lancé les tests concernés et lu leur résultat.
 - Pour Linear, utilise uniquement : \`factory-agent issue <ID>\`, \`factory-agent search "<texte>"\`, \`factory-agent kb search "<mots>"\`.
 - S'il te manque une décision, pose UNE question avec \`factory-agent ask "<question>"\`, puis termine ton tour sans rien inventer.
-- Ton dernier message est publié tel quel dans Linear : il doit se lire sans le reste de la conversation.
+- Quand tu réponds à un retour ou à une question, ton dernier message est la réponse publiée dans Linear : il doit se lire sans le reste de la conversation. À la fin d'un travail, c'est ton résultat \`submit_result\` que l'usine publie ; ton dernier message ne l'est que si tu n'en as rendu aucun.
 - Termine toujours ton tour par l'outil \`mcp__factory__submit_result\` (statut, résumé, tests ajoutés, hypothèses, risques) : l'usine ne lit que lui. S'il refuse le résultat, corrige les champs qu'il nomme et renvoie-le.
 
 # Méthode (skills du pack)

@@ -1,3 +1,4 @@
+import type { AgentOutput } from './agent-output.js';
 import type { InputKind, InternalEvent, LogicalState, TimerFired } from './types.js';
 
 export type ActivityType = 'thought' | 'response' | 'elicitation' | 'error';
@@ -8,13 +9,14 @@ export type Effect =
   | { kind: 'start_run'; job: string; input?: InputKind; inputText?: string; linearSessionId?: string; resume?: boolean; sensitivePaths?: readonly string[] }
   /** Without linearSessionId: stop the ticket's dev work. With it: stop only the runs of that (question) session. */
   | { kind: 'stop_run'; linearSessionId?: string }
-  | { kind: 'run_verify'; runId: string; job: string }
+  /** `output`: the run's validated output (ORC-289), carried to its `post_output`; absent when it submitted none. */
+  | { kind: 'run_verify'; runId: string; job: string; output?: AgentOutput }
   /** `keepReviewSha`: a move back to Human Review that concludes no work of the factory keeps the reviewed commit (ORC-148). */
   | { kind: 'move'; to: LogicalState; keepReviewSha?: true }
   | { kind: 'labels'; add: string[]; remove: string[] }
   | { kind: 'comment'; body: string }
   | { kind: 'activity'; type: ActivityType; body: string; linearSessionId?: string; runId?: string }
-  | { kind: 'post_output'; style: 'summary' | 'reply' | 'synthesis'; runId: string }
+  | { kind: 'post_output'; style: 'summary' | 'reply' | 'synthesis'; runId: string; output?: AgentOutput }
   | { kind: 'link_pr'; url: string }
   /** Compare Linear and GitHub to the factory's state and write what a lost webhook missed to the inbox (ORC-185). */
   | { kind: 'reconcile' }

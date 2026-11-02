@@ -11,7 +11,8 @@
       "Bash(gh run view:*)", "Bash(gh run list:*)", "Bash(gh run rerun:*)",
       "Bash(npm:*)", "Bash(npx:*)", "Bash(node:*)", "Bash(pnpm:*)", "Bash(yarn:*)",
       "Bash(ls:*)", "Bash(cat:*)", "Bash(grep:*)", "Bash(rg:*)", "Bash(find:*)", "Bash(head:*)", "Bash(tail:*)", "Bash(wc:*)", "Bash(sleep:*)",
-      "Bash(factory-agent:*)"
+      "Bash(factory-agent:*)",
+      "mcp__factory__submit_result", "mcp__factory__ask"
     ],
     "deny": [
       "Bash(gh pr merge:*)",

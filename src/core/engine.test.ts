@@ -481,7 +481,7 @@ describe('decide — built-ins', () => {
     const structured = { ...workflow, jobs: { ...workflow.jobs, dev: { ...workflow.jobs['dev']!, structuredOutput: true } } };
 
     it('succeeded decides as a success, timeout as a cap', () => {
-      expect(decide(dev, finished('succeeded', { output, outcome: 'failure' }), workflow)).toEqual(today('success'));
+      expect(decide(dev, finished('succeeded'), workflow)).toEqual(today('success'));
       expect(decide(dev, finished('timeout', { outcome: 'limit' }), workflow)).toEqual(today('limit'));
     });
 
@@ -505,6 +505,23 @@ describe('decide — built-ins', () => {
       const contested = decide(dev, finished('spec_impossible', { output: { ...output, status: 'blocked', reason: 'spec_impossible', question: 'Les critères se contredisent.' } }), workflow);
       expect(contested.events[0]).toMatchObject({ type: 'ticket.blocked', reason: expect.stringContaining('conteste') });
       expect(contested.effects[0]).toMatchObject({ type: 'elicitation', body: expect.stringContaining('Les critères se contredisent.') });
+    });
+
+    it('a ticket already blocked (the agent asked) is not blocked again nor told twice', () => {
+      const blocked = ticket({ logical: 'dev', activeRunId: 'r1', blocked: true, blockReason: "En attente d'une réponse" });
+      const asked = { ...output, status: 'blocked' as const, question: 'Quel séparateur ?' };
+      expect(decide(blocked, finished('needs_input', { output: asked }), workflow)).toEqual(decision());
+      expect(decide(blocked, finished('spec_impossible', { output: { ...asked, reason: 'spec_impossible' } }), workflow)).toEqual(decision());
+      expect(decide(blocked, finished('errored', { outcome: 'failure' }), workflow)).toEqual(decision());
+    });
+
+    it('post_output carries the validated output, through verify too; omitted without one', () => {
+      expect(decide(dev, finished('succeeded', { output }), workflow).effects).toContainEqual({ kind: 'post_output', style: 'summary', runId: 'r1', output });
+      expect(today('success').effects).toContainEqual({ kind: 'post_output', style: 'summary', runId: 'r1' });
+      const verified = { ...workflow, jobs: { ...workflow.jobs, dev: { ...workflow.jobs['dev']!, verify: ['npm test'] } } };
+      expect(decide(dev, finished('succeeded', { output }), verified).effects).toContainEqual({ kind: 'run_verify', runId: 'r1', job: 'dev', output });
+      const passed = decide(ticket({ verifyingRunId: 'r1' }), ev('verify.passed', { runId: 'r1', job: 'dev', output }), verified);
+      expect(passed.effects).toContainEqual({ kind: 'post_output', style: 'summary', runId: 'r1', output });
     });
 
     it('a stopped run stays ignored, whatever its attempt', () => {

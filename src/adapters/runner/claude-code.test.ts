@@ -96,7 +96,17 @@ describe('ClaudeCodeRunner', () => {
     const { r } = runner();
     const h = r.start(req({}, { FAKE_CLAUDE_SCRIPT: fx('stream-error.jsonl') }));
     await drain(h.events);
-    expect(await h.done).toMatchObject({ outcome: 'failure', lastText: 'Je tente.' });
+    const done = await h.done;
+    expect(done).toMatchObject({ outcome: 'failure', lastText: 'Je tente.' });
+    // The agent's failure, not the runner's (ORC-289).
+    expect(done).not.toHaveProperty('infra');
+  });
+
+  it('marks a spawn error as the infrastructure (ORC-289)', async () => {
+    const { r } = runner();
+    const h = r.start(req({ cwd: join(mkdtempSync(join(tmpdir(), 'factory-tr-')), 'missing') }));
+    await drain(h.events);
+    expect(await h.done).toMatchObject({ outcome: 'failure', infra: true });
   });
 });
 
@@ -142,7 +152,7 @@ describe('ClaudeCodeRunner in a sandbox (ORC-204)', () => {
     const argsFile = join(transcriptsDir, 'args.txt');
     const h = r.start(req({ sandboxId: 'sbx-1' }, { FAKE_CLAUDE_SCRIPT: fx('stream-success.jsonl'), FAKE_CLAUDE_ARGS: argsFile }));
     expect(await drain(h.events)).toEqual([]);
-    expect(await h.done).toMatchObject({ outcome: 'failure', lastText: expect.stringContaining('sandbox') });
+    expect(await h.done).toMatchObject({ outcome: 'failure', lastText: expect.stringContaining('sandbox'), infra: true });
     expect(existsSync(argsFile)).toBe(false);
   });
 
@@ -151,7 +161,7 @@ describe('ClaudeCodeRunner in a sandbox (ORC-204)', () => {
     const { r } = runner(sandboxes);
     const h = r.start(req({ sandboxId: 'sbx-404' }, { FAKE_CLAUDE_SCRIPT: fx('stream-success.jsonl') }));
     await drain(h.events);
-    expect(await h.done).toMatchObject({ outcome: 'failure', lastText: expect.stringContaining('sbx-404') });
+    expect(await h.done).toMatchObject({ outcome: 'failure', lastText: expect.stringContaining('sbx-404'), infra: true });
   });
 });
 

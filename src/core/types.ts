@@ -189,7 +189,7 @@ export interface EventPayloads {
    * it lack both and decide on `outcome` as before.
    */
   'run.finished': { runId: string; job: string; outcome: RunOutcome; costUsd: number; turns: number; lastText: string; attempt?: AttemptOutcome; output?: AgentOutput };
-  'verify.passed': { runId: string; job: string };
+  'verify.passed': { runId: string; job: string; output?: AgentOutput };
   /** `tree`: fingerprint of the worktree content when the check failed, absent outside git (ORC-187). */
   'verify.failed': { runId: string; job: string; failures: VerifyFailure[]; tree?: string };
   /** A timer armed by a decision, fired through the inbox with id `timer:<key>:<fireAt>` (ORC-161). */

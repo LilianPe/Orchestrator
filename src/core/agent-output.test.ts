@@ -27,7 +27,10 @@ describe('attemptOutcome', () => {
   const blocked = (reason?: 'needs_input' | 'spec_impossible'): AgentOutput => ({ ...done, status: 'blocked', question: '?', ...(reason ? { reason } : {}) });
   it.each([
     [{ outcome: 'success' as const }, done, 'succeeded'],
-    [{ outcome: 'failure' as const }, done, 'succeeded'],
+    // A done claimed by a run that failed is not a success; a question asked before failing still holds.
+    [{ outcome: 'failure' as const }, done, 'failed'],
+    [{ outcome: 'failure' as const }, blocked(), 'needs_input'],
+    [{ outcome: 'failure' as const }, blocked('spec_impossible'), 'spec_impossible'],
     [{ outcome: 'success' as const }, blocked(), 'needs_input'],
     [{ outcome: 'success' as const }, blocked('needs_input'), 'needs_input'],
     [{ outcome: 'success' as const }, blocked('spec_impossible'), 'spec_impossible'],
