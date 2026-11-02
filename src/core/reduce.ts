@@ -27,7 +27,7 @@ function external(t: TicketState, e: FactoryEvent): TicketState {
       if (!to) return t;
       // A human moves a merged ticket anywhere but done (the factory's own moves are no status.changed): it is
       // reopened, out of done or, when the factory's move to done failed, out of the status it stayed in.
-      const next = { ...t, logical: to };
+      const next = { ...t, logical: to, recordedStatus: undefined };
       return to === 'done' ? next : reopened(next);
     }
     case 'run.finished': {
@@ -65,7 +65,7 @@ function internal(t: TicketState, e: InternalEvent): TicketState {
       return { ...t, verifyingRunId: e.runId };
     case 'status.recorded':
       // The commit under human review is the one shown at this move; any other move leaves it unreviewed.
-      return { ...t, logical: e.to, reviewSha: e.to === 'human_review' ? e.reviewSha : undefined };
+      return { ...t, logical: e.to, recordedStatus: e.to, reviewSha: e.to === 'human_review' ? e.reviewSha : undefined };
     case 'session.linked':
       return { ...t, linearSessionId: e.linearSessionId };
     case 'pending.set':

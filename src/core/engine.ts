@@ -486,10 +486,11 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
     out.effects.push({ kind: 'stop_run' });
     return out;
   }
-  // A move to the status the ticket already holds changes nothing: it is the webhook of the factory's own move, come
-  // after its echo expired (ORC-148: the move to AI Review after a push must not start a second review). The
-  // reconciliation compares the same way (a Linear status equal to `logical` is no change).
-  if (event.type === 'status.changed' && state && event.payload.to && event.payload.to === state.logical) {
+  // A move to the status the factory itself put the ticket in, no human having moved it since, changes nothing: it is
+  // the webhook of the factory's own move, come after its echo expired (ORC-148: the move to AI Review after a push
+  // must not start a second review). Only a status the factory recorded: `logical` alone may be a fallback (an
+  // unmapped Linear status reads as todo), and a human move to it is a move.
+  if (event.type === 'status.changed' && state?.recordedStatus && event.payload.to === state.recordedStatus && state.logical === state.recordedStatus) {
     out.trace.push(`status.changed: already ${state.logical}, the echo of the factory's own move`);
     return out;
   }

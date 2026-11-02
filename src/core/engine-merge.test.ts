@@ -85,8 +85,21 @@ describe('decide — Done by a human merges the PR (ORC-148)', () => {
   it('the webhook of the factory\'s own move to AI Review, arrived after its echo expired, starts no second review', () => {
     // Linear's webhook of the move mergeRefused made, signed by the factory's app user, late: the ticket is in AI Review already.
     const late = ev('status.changed', { from: 'done', to: 'ai_review' }, 'u-factory-app', MERGER);
-    const out = decide(inReview({ logical: 'ai_review', activeRunId: 'r1', activeJob: 'review' }), late, workflow);
+    const out = decide(inReview({ logical: 'ai_review', recordedStatus: 'ai_review', activeRunId: 'r1', activeJob: 'review' }), late, workflow);
     expect(out.effects).toEqual([]);
+  });
+
+  it('a human move to the status the ticket is read in, but the factory never moved it to, is a move: the rules apply', () => {
+    // A ticket tracked from an unmapped status (Backlog) reads as todo; a human then moves it to Todo.
+    const toTodo = { ...workflow, on: { ...workflow.on, 'status.changed': [{ to: 'todo', run: 'dev' }, ...(workflow.on['status.changed'] ?? [])] } } as typeof workflow;
+    const out = decide(inReview({ logical: 'todo', prNumber: undefined, prState: undefined }), ev('status.changed', { from: null, to: 'todo' }, 'u-lead', MERGER), toTodo);
+    expect(out.effects).toEqual([expect.objectContaining({ kind: 'start_run', job: 'dev' })]);
+  });
+
+  it('remembers the status the factory moved the ticket to, until a human moves it', () => {
+    const moved = reduce(inReview({ logical: 'done' }), { type: 'status.recorded', to: 'ai_review' })!;
+    expect(moved.recordedStatus).toBe('ai_review');
+    expect(reduce(moved, ev('status.changed', { from: 'ai_review', to: 'dev' }, 'u-lead'))!.recordedStatus).toBeUndefined();
   });
 
   it('a merge refused for a push, in a workflow with no AI review, goes back to Human Review with the reason', () => {

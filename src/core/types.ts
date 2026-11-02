@@ -309,6 +309,8 @@ export interface TicketState {
   prState?: 'OPEN' | 'MERGED' | 'CLOSED';
   /** The commit shown to the human reviewer, recorded at the move to Human Review: the only one a Done merges (ORC-148). */
   reviewSha?: string;
+  /** The status the factory itself moved the ticket to, while no human moved it since: its late webhook is an echo (ORC-148). */
+  recordedStatus?: LogicalState;
   worktreePath?: string;
   port?: number;
   activeRunId?: string;
