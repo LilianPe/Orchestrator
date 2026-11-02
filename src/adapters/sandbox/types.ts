@@ -39,7 +39,7 @@ export const WORKSPACE_TARGET = '/work';
 
 export interface Sandbox {
   id: string;
-  /** The level actually applied; can differ from the request only by a documented gap (claude-api open until ORC-213). */
+  /** The level asked (the contract compares it on a replay), not the one applied: every level but `none` is an open bridge until ORC-213. */
   network: NetworkLevel;
   level: IsolationLevel;
 }
