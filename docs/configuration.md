@@ -23,6 +23,7 @@ Les deux fichiers d'instance sont lus **au démarrage** de `relais up` : redéma
 | `FACTORY_AGENT_HOST` | `relais up` | `0.0.0.0` | Adresse d'écoute de ce serveur. Elle doit être joignable depuis le réseau des conteneurs ; l'interface, elle, reste sur `host`. | non |
 | `FACTORY_SANDBOX_AGENT_HOST` | `relais up` | `host.docker.internal` | Nom ou adresse du démon vu depuis un conteneur, dans le `RELAIS_API` des runs (`http://<hôte>:<FACTORY_AGENT_PORT>/agent`). À changer quand `host-gateway` ne mène pas au démon (Docker Desktop sous WSL). | non |
 | `FACTORY_SANDBOX_GATEWAY` | `relais up` | (vide : `host-gateway` du moteur) | Adresse IP vers laquelle `host.docker.internal` pointe dans le conteneur (`--add-host`). À poser quand `host-gateway` ne mène pas au démon. | non |
+| `FACTORY_DENY_PUSH` | `relais up` | — | `1` : le démon la transmet aux runs, et le hook `PreToolUse` du pack y refuse aussi `git push` et les écritures `gh` (`gh pr create`, `gh pr edit`, `gh pr merge`, `gh run rerun`), avec une ligne au journal des refus. Toute autre valeur : rien n'est transmis, les skills du pack poussent et ouvrent leurs PR (jusqu'à ORC-125). Voir [`pack-et-skills.md`](pack-et-skills.md#hook-pretooluse-et-journal-des-refus). | non |
 | `ANTHROPIC_API_KEY` | `claude` (hérité par les runs) | — | Authentification de Claude Code si vous n'utilisez pas `claude login`. Obligatoire en Docker. | **oui** |
 | `GH_TOKEN` | `gh`, les agents et, en Docker, git via `gh auth setup-git` | — | Authentification GitHub des agents et du repli `gh` du démon. Obligatoire en Docker tant que ORC-125 n'a pas retiré `gh`. | **oui** |
 | `GH_APP_ID` | démon (repli de `github.appId`) | — | Identifiant de la GitHub App d'usine. | non |
@@ -33,7 +34,7 @@ Les deux fichiers d'instance sont lus **au démarrage** de `relais up` : redéma
 
 Variables réservées aux tests (sans effet sur le démon) : `LINEAR_API_KEY` (test live des requêtes Linear), `FACTORY_E2E=1` (test du pack avec le vrai `claude`). Voir [`recette.md`](recette.md#vérifications-live-optionnelles).
 
-Variables **posées par Relais** dans l'environnement de chaque run (à ne pas définir vous-même) : `RELAIS_API`, `RELAIS_RUN_TOKEN`, `RELAIS_TICKET`, `RELAIS_KNOWLEDGE`, `RELAIS_ROOT`, `PATH` et, pour la file `dev`, `PORT`. Voir [« Ce qui ne sort pas du démon »](#ce-qui-ne-sort-pas-du-démon). Dans un conteneur, ces chemins sont ceux du conteneur : `RELAIS_ROOT=/factory/app` (le `bin/` de Relais et ce qu'il lui faut, montés en lecture seule), `RELAIS_KNOWLEDGE=/factory/knowledge` (en lecture seule), et un `PATH` propre au conteneur, jamais celui de l'hôte.
+Variables **posées par Relais** dans l'environnement de chaque run (à ne pas définir vous-même) : `RELAIS_API`, `RELAIS_RUN_TOKEN`, `RELAIS_TICKET`, `RELAIS_KNOWLEDGE`, `RELAIS_ROOT`, `PATH`, `FACTORY_DENY_PUSH` quand le démon l'a à `1` et, pour la file `dev`, `PORT`. Voir [« Ce qui ne sort pas du démon »](#ce-qui-ne-sort-pas-du-démon). Dans un conteneur, ces chemins sont ceux du conteneur : `RELAIS_ROOT=/factory/app` (le `bin/` de Relais et ce qu'il lui faut, montés en lecture seule), `RELAIS_KNOWLEDGE=/factory/knowledge` (en lecture seule), et un `PATH` propre au conteneur, jamais celui de l'hôte.
 
 ## `config.yaml`
 

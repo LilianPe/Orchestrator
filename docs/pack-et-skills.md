@@ -7,8 +7,9 @@ packs/standard/
 ├── .claude-plugin/plugin.json   # plugin « relais » → skills relais:<nom>
 ├── workflow.yml                 # comportement par défaut (événements, jobs, limites)
 ├── settings.json                # permissions des runs
-├── hooks/hooks.json             # hook SessionStart
+├── hooks/hooks.json             # hooks SessionStart et PreToolUse
 ├── hooks/session-start.mjs      # règles toujours actives, méthode, index de la base de connaissance
+├── hooks/pre-tool-use.mjs       # refus des commandes interdites, journal des refus
 ├── NOTICE.md                    # origine de la méthode (superpowers, MIT)
 └── skills/<nom>/SKILL.md        # skills de job (un par type de run) et skills de méthode
 ```
@@ -73,6 +74,9 @@ Texte complet : `packs/standard/skills/<nom>/SKILL.md`.
 - tout push direct sur `main` ou `master` (`git push origin main`, `HEAD:main`…) ;
 - tout contournement des hooks git par `--no-verify` (`git commit --no-verify`, `git push --no-verify`, l'option en milieu de commande, ou toute commande qui la contient) ou par `-n` (`git commit -n`, `-nm`, `-m … -n` ; pas `-an`, que la syntaxe des motifs ne sait pas isoler) ; les règles explicites doublent le joker `*--no-verify*` au cas où la version de Claude Code n'appliquerait pas les jokers en début ou milieu de motif. Le scan du diff (`factory/anti-triche`, ORC-158) refuse aussi un `--no-verify` ajouté dans un fichier du dépôt, hors documentation, fichiers de test et règles de permission des réglages Claude ;
 - `git reset --hard origin…`, `rm -rf /` ;
+- un téléchargement envoyé à un shell : `curl … | sh`, `wget … | bash` ;
+- toute commande qui mentionne la socket Docker ou Podman (`docker.sock`, `podman.sock`) ou les variables qui y mènent (`DOCKER_HOST`, `CONTAINER_HOST`) : elle donnerait la main sur l'hôte depuis le conteneur du run ;
+- l'outil `WebSearch` : la recherche tourne chez Anthropic, hors de la vue du proxy de sortie ([ORC-128](decisions/ORC-128.md), point 1). `WebFetch` reste permis : il passe par le proxy ;
 - la lecture de `~/.relais/**`.
 
 Au démarrage, Relais complète ces refus pour le **vrai** `RELAIS_HOME` (même hors de `~/.relais`, par exemple `/data` en Docker) et écrit le résultat dans `<RELAIS_HOME>/run-settings.json` : lecture/édition de `secrets.json`, lecture de `relais.db*`, `transcripts/**`, `logs/**`, et toute commande qui mentionne `secrets.json` ou `relais.db`. Voir [`configuration.md`](configuration.md#ce-qui-ne-sort-pas-du-démon).
@@ -80,6 +84,22 @@ Au démarrage, Relais complète ces refus pour le **vrai** `RELAIS_HOME` (même 
 Ces règles sont une première barrière, pas une garantie : protégez la branche par défaut côté GitHub ([`github.md`](github.md#protection-de-branche-fortement-conseillée)). La recette vérifie que la version de Claude Code installée applique bien les jokers en milieu de motif ([`recette.md`](recette.md)).
 
 Les runs `trunk-readonly` (questions) tournent en plus avec `--permission-mode plan`.
+
+### Hook PreToolUse et journal des refus
+
+Les motifs du `deny` sont des jokers sur le texte de la commande : un espace en trop, des guillemets (`git commit "--no-verify"`), un `sudo`, un `git -C dépôt` ou un `bash -c "…"` les déjouent. Et Claude Code découpe une commande composée avant d'appliquer ses règles : `curl … | sh` n'y est vu que morceau par morceau. `hooks/pre-tool-use.mjs` (hook `PreToolUse` sur `Bash` et `WebSearch`) refait donc les mêmes refus sur la commande analysée : mots et guillemets comme un shell, opérateurs (`|`, `&&`, `;`…), commandes entre guillemets relues, préfixes (`VAR=…`, `sudo`, `env`) et options de `git` ignorés. Il refuse aussi `rm -fr /`, `rm -r -f /*`, `git commit -anm …`, `bash <(curl …)` et `sh -c "$(curl …)"`.
+
+Chaque refus est une règle nommée (`no-verify`, `commit-no-verify`, `force-push`, `push-trunk`, `merge`, `reset-origin`, `rm-root`, `pipe-to-shell`, `container-socket`, `web-search`, et avec le drapeau : `push`, `gh-write`). L'agent reçoit le nom de la règle dans le motif du refus, et le hook écrit une ligne JSON `{"at", "tool", "command", "rule"}` dans le **journal des refus** :
+
+1. `$FACTORY_REFUSALS_LOG` s'il est défini ;
+2. sinon `$CLAUDE_CONFIG_DIR/factory-refusals.jsonl` (le répertoire de configuration Claude du ticket) ;
+3. sinon `~/.claude/factory-refusals.jsonl`.
+
+Les dossiers sont créés ; un journal impossible à écrire n'empêche ni le refus ni la session.
+
+**Drapeau `FACTORY_DENY_PUSH=1`** (environnement du démon, transmis aux runs) : le hook refuse en plus tout `git push` et les écritures `gh` (`gh pr create`, `gh pr edit`, `gh run rerun` ; `gh pr merge` l'est toujours), journalisés de la même façon. Désactivé par défaut : les skills du pack poussent et ouvrent leurs PR eux-mêmes jusqu'à ORC-125. Voir [`configuration.md`](configuration.md#variables-denvironnement).
+
+`src/pack-guard.test.ts` donne au hook, sur son entrée standard, un vrai appel `PreToolUse` pour chaque `Bash(…)` du `deny` de `settings.json` et vérifie le refus et la ligne de journal : un motif ajouté au `deny` sans règle dans le hook fait échouer le test.
 
 Pourquoi `git merge` est autorisé : une branche déjà poussée ne peut pas être rebasée, puisque le force-push est refusé. Les skills `feedback`, `fix-ci` et `review` intègrent donc la base par une fusion (`git merge --no-edit origin/<base>`) quand elle est en conflit ou qu'elle a bougé ; seul `dev`, avant son premier push, rebase. `git merge-tree` sert au contrôle de conflit sans toucher à l'arbre, `git ls-remote` à vérifier qu'un push a bien atteint le distant.
 

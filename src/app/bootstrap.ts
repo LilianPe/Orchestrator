@@ -216,6 +216,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       agentEnv: (run) => ({
         FACTORY_RUN_TOKEN: run.token,
         FACTORY_TICKET: run.ticketId,
+        // Read by the pack's PreToolUse hook (ORC-285); the runner keeps every other FACTORY_* in the daemon.
+        ...(env['FACTORY_DENY_PUSH'] === '1' ? { FACTORY_DENY_PUSH: '1' } : {}),
         ...(sandboxes
           ? {
               FACTORY_API: `http://${sandboxAgentHost}:${agentPort}/agent`,
