@@ -50,7 +50,7 @@ describe('a disposable sandbox per attempt', () => {
   it('runs setup in the sandbox of a fresh worktree only', async () => {
     const h = createHarness({ sandboxed: true, projectYaml: SETUP });
     await delegate(h);
-    expect(h.sandboxes.execs).toEqual([{ id: 'sbx-1', argv: ['sh', '-c', 'npm ci'] }]);
+    expect(h.sandboxes.execs).toEqual([{ id: 'sbx-1', argv: ['bash', '-lc', 'npm ci'] }]);
     expect(h.checks.calls.some((c) => c.commands.includes('npm ci'))).toBe(false);
     await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'reprends', author: 'L' });
     await h.advance(600_000);

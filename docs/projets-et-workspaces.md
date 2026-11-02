@@ -45,7 +45,7 @@ Chaque job déclare un type d'espace de travail (`workspace` dans [`workflow.md`
 Cycle de vie d'un worktree de ticket :
 
 1. **Création** au premier run : `git fetch origin`, puis `git worktree add` sur la branche du ticket (réutilise une branche locale ou distante du même nom, sinon la crée depuis `origin/<branche par défaut>`).
-2. **Setup** : les commandes `workspace.setup` (ex. `npm ci`) sont lancées une fois, dans l'ordre, via `bash -lc`. Si l'une échoue, le worktree est supprimé et le ticket bloqué (« Erreur au lancement : Le setup du worktree a échoué : <commande> ») ; le run suivant recommence de zéro.
+2. **Setup** : les commandes `workspace.setup` (ex. `npm ci`) sont lancées une fois, dans l'ordre, via `bash -lc`, dans le conteneur de la tentative quand `FACTORY_CONTAINER_CLI` est défini, sur l'hôte sinon. Si l'une échoue, le worktree est supprimé et le ticket bloqué (« Erreur au lancement : Le setup du worktree a échoué : <commande> ») ; le run suivant recommence de zéro.
 3. **Réutilisation** : les runs suivants du ticket (retours, CI, review) reprennent le même worktree, sans setup.
 4. **Nettoyage** : au merge de la PR (règle `pr.merged` → `do: cleanup`), `git worktree remove --force`. La branche locale reste dans `repoPath`.
 

@@ -17,6 +17,11 @@ Les deux fichiers d'instance sont lus **au démarrage** de `relais up` : redéma
 | `RELAIS_HOME` | toutes les commandes `relais` | `$HOME/.relais` | Répertoire de l'instance (voir [`installation.md`](installation.md#le-répertoire-home-du-démon)). | non |
 | `RELAIS_UI_PASSWORD` | `relais up`, `relais status/pause/resume/stop` | — | Mot de passe HTTP Basic de l'interface et de l'API. **Obligatoire** dès que `host` n'est pas une adresse de bouclage : sans lui, `relais up` refuse de démarrer. Ignoré quand `host` est en bouclage. Voir [`interface-et-securite.md`](interface-et-securite.md). | **oui** |
 | `FACTORY_DATABASE_URL` | `relais up`, `relais plan` | — | Chaîne de connexion Postgres (`postgres://utilisateur:mot-de-passe@hôte:5432/base`). Définie, le démon garde son état dans Postgres (`PgStore`) et applique les migrations Drizzle de `drizzle/` au démarrage (`relais plan` la lit sans la migrer) ; une base injoignable empêche le démarrage, sans repli sur SQLite. Absente : base SQLite `relais.db`, jusqu'à son retrait (ORC-178). Jamais transmise aux runs (préfixe `FACTORY_`), jamais écrite dans le journal du démon. | **oui** |
+| `FACTORY_CONTAINER_CLI` | `relais up` | — | `docker` ou `podman`. Définie, chaque tentative tourne dans un conteneur jetable (ORC-204) : créé à son lancement, détruit à sa fin, et ceux qu'un crash a laissés le sont au démarrage suivant. Le `setup` du dépôt y tourne aussi. Absente : les runs tournent sur l'hôte, sans isolation, et le démon l'écrit au démarrage. Sans effet avec `--fake-runner`. Voir [`interface-et-securite.md`](interface-et-securite.md#limites-connues). | non |
+| `FACTORY_RUNNER_IMAGE` | `relais up` | — | Image des conteneurs de run (node, git, claude). Requise avec `FACTORY_CONTAINER_CLI`. | non |
+| `FACTORY_AGENT_PORT` | `relais up` | port de l'interface + 1 | Port du serveur qui ne sert que `/agent/*`, pour les conteneurs. Démarré seulement avec `FACTORY_CONTAINER_CLI`. | non |
+| `FACTORY_AGENT_HOST` | `relais up` | `0.0.0.0` | Adresse d'écoute de ce serveur. Elle doit être joignable depuis le réseau des conteneurs ; l'interface, elle, reste sur `host`. | non |
+| `FACTORY_SANDBOX_AGENT_HOST` | `relais up` | `host.docker.internal` | Nom ou adresse du démon vu depuis un conteneur, dans le `RELAIS_API` des runs (`http://<hôte>:<FACTORY_AGENT_PORT>/agent`). À changer quand `host-gateway` ne mène pas au démon (Docker Desktop sous WSL). | non |
 | `ANTHROPIC_API_KEY` | `claude` (hérité par les runs) | — | Authentification de Claude Code si vous n'utilisez pas `claude login`. Obligatoire en Docker. | **oui** |
 | `GH_TOKEN` | `gh`, les agents et, en Docker, git via `gh auth setup-git` | — | Authentification GitHub des agents et du repli `gh` du démon. Obligatoire en Docker tant que ORC-125 n'a pas retiré `gh`. | **oui** |
 | `GH_APP_ID` | démon (repli de `github.appId`) | — | Identifiant de la GitHub App d'usine. | non |
@@ -27,7 +32,7 @@ Les deux fichiers d'instance sont lus **au démarrage** de `relais up` : redéma
 
 Variables réservées aux tests (sans effet sur le démon) : `LINEAR_API_KEY` (test live des requêtes Linear), `FACTORY_E2E=1` (test du pack avec le vrai `claude`). Voir [`recette.md`](recette.md#vérifications-live-optionnelles).
 
-Variables **posées par Relais** dans l'environnement de chaque run (à ne pas définir vous-même) : `RELAIS_API`, `RELAIS_RUN_TOKEN`, `RELAIS_TICKET`, `RELAIS_KNOWLEDGE`, `RELAIS_ROOT`, `PATH` et, pour la file `dev`, `PORT`. Voir [« Ce qui ne sort pas du démon »](#ce-qui-ne-sort-pas-du-démon).
+Variables **posées par Relais** dans l'environnement de chaque run (à ne pas définir vous-même) : `RELAIS_API`, `RELAIS_RUN_TOKEN`, `RELAIS_TICKET`, `RELAIS_KNOWLEDGE`, `RELAIS_ROOT`, `PATH` et, pour la file `dev`, `PORT`. Voir [« Ce qui ne sort pas du démon »](#ce-qui-ne-sort-pas-du-démon). Dans un conteneur, ces chemins sont ceux du conteneur : `RELAIS_ROOT=/factory/app` (le `bin/` de Relais et ce qu'il lui faut, montés en lecture seule), `RELAIS_KNOWLEDGE=/factory/knowledge` (en lecture seule), et un `PATH` propre au conteneur, jamais celui de l'hôte.
 
 ## `config.yaml`
 

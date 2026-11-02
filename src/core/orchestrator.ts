@@ -422,7 +422,7 @@ export class Orchestrator {
       // ponytail: setup shares the attempt's `claude-api` sandbox, an open network until ORC-213; it gets
       // a `full` sandbox of its own once the network levels are real.
       for (const command of commands) {
-        if ((await this.d.sandboxes!.exec(sandbox.id, ['sh', '-c', command])).code !== 0) {
+        if ((await this.d.sandboxes!.exec(sandbox.id, ['bash', '-lc', command])).code !== 0) {
           failed = command;
           break;
         }

@@ -31,6 +31,8 @@ Développement de l'interface : `npm run dev:web` lance Vite sur le port 5173 av
 | `POST /webhooks/github` | Webhooks GitHub | signature HMAC `X-Hub-Signature-256` + déduplication par id d'événement |
 | `/agent/*` | API des agents (`relais-agent`) | jeton du run en cours (`Authorization: Bearer`) |
 
+Avec les sandboxes (`FACTORY_CONTAINER_CLI`, voir [`configuration.md`](configuration.md#variables-denvironnement)), un **second serveur** ne sert que `/agent/*`, avec les mêmes routes et le même jeton de run, sur `FACTORY_AGENT_PORT` (port de l'interface + 1) et `FACTORY_AGENT_HOST` (`0.0.0.0`) : les conteneurs ne joignent pas la boucle locale du démon. Toute autre route y répond 404. L'interface reste à l'adresse de `host`.
+
 ## Exposition réseau et mot de passe
 
 Par défaut Relais écoute sur `127.0.0.1` : seule la machine locale y accède, sans mot de passe.
@@ -59,7 +61,7 @@ Chaque run reçoit un `RELAIS_RUN_TOKEN` aléatoire. L'API `/agent/*` ne l'accep
 - peut chercher des tickets, chercher dans la base de connaissance et poser une question dans la session du ticket ;
 - n'apparaît pas dans `/api/state`.
 
-`RELAIS_API` pointe toujours sur `http://127.0.0.1:<port>/agent` : les agents parlent au démon en local.
+Sur l'hôte, `RELAIS_API` pointe sur `http://127.0.0.1:<port>/agent` : les agents parlent au démon en local. Dans un sandbox, elle pointe sur `http://<FACTORY_SANDBOX_AGENT_HOST>:<FACTORY_AGENT_PORT>/agent` (par défaut `host.docker.internal`), le serveur dédié à l'API agent.
 
 ## Secrets
 
@@ -67,7 +69,11 @@ Où ils sont et comment ils restent dans le démon : [`configuration.md`](config
 
 ## Limites connues
 
-- **Même utilisateur système.** Les runs tournent sous le même utilisateur que le démon. Les refus de Claude Code sont indicatifs : un agent qui exécute du code (`node -e …`, autorisé par le pack) peut lire `secrets.json` ou `relais.db`. Une injection dans un ticket ou un commentaire pourrait l'y pousser. **Ne confiez pas à Relais des tickets écrits par des personnes non fiables** tant que les runs ne tournent pas sous un utilisateur séparé.
+- **Sans sandbox, même utilisateur système.** Sans `FACTORY_CONTAINER_CLI`, les runs tournent sur l'hôte sous le même utilisateur que le démon (le démon l'écrit au démarrage : « les runs tournent sur l'hôte, sans isolation »). Les refus de Claude Code sont indicatifs : un agent qui exécute du code (`node -e …`, autorisé par le pack) peut lire `secrets.json` ou `relais.db`. Une injection dans un ticket ou un commentaire pourrait l'y pousser. **Ne confiez pas à Relais des tickets écrits par des personnes non fiables** tant que les runs ne tournent pas sous un utilisateur séparé.
+- **Sandbox : réseau ouvert, provisoirement.** Chaque tentative tourne dans un conteneur créé pour elle et détruit après (ORC-204). Il demande le niveau `claude-api`, mais tant que le proxy de sortie n'existe pas (ORC-213), le conteneur a le réseau ouvert du moteur. Le `setup` du dépôt tourne dans le même conteneur, sur ce même réseau.
+- **Sandbox : le `.git` commun du dépôt est monté.** Pour que git marche dans le worktree, le dossier git commun du dépôt est monté en lecture-écriture, au même chemin que sur l'hôte. Le conteneur voit donc les autres refs et branches du dépôt, et peut les modifier. Le miroir en lecture seule et la sortie par `git bundle` fermeront cet écart (ORC-205).
+- **Sandbox : `trunk-readonly` monté en lecture-écriture.** Le port monte toujours le worktree en écriture ; un job `trunk-readonly` n'est retenu que par `--permission-mode plan`, comme sur l'hôte.
+- **Sandbox : rootless vérifié seulement en CI et sur le serveur.** En développement (Docker Desktop sous WSL), le moteur n'est pas rootless. Le job CI `isolation` (Podman rootless) et le serveur le vérifient.
 - **Secrets transmis aux runs.** `ANTHROPIC_API_KEY`, `GH_TOKEN` et les autres variables du démon hors `RELAIS_*`/`LINEAR_*` sont visibles des agents (ils en ont besoin). Donnez au compte GitHub les droits minimaux ([`github.md`](github.md#permissions-nécessaires)).
 - **Canal smee public.** Le contenu des webhooks transite par smee.io et y est lisible par qui connaît l'URL ([`linear.md`](linear.md#3-webhooks--smee-ou-url-publique)).
 - **Merge.** Seule la protection de branche GitHub garantit que l'agent ne merge pas ([`github.md`](github.md#protection-de-branche-fortement-conseillée)).
