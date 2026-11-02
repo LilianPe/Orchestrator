@@ -169,6 +169,8 @@ Le premier ticket cité est celui qui touche le module en premier ou le plus ; l
 | `src/adapters/workspace/fake.ts` | `FakeWorkspaces` | adapter | ORC-189 (suit son port vers `SandboxProvider`, dont ORC-225 a posé le faux à côté), ORC-204 |
 | `src/adapters/sandbox/types.ts` | Port `SandboxProvider`, niveaux réseau | garder | ORC-225, ORC-189 |
 | `src/adapters/sandbox/fake.ts` | `FakeSandboxProvider` du harnais | garder | ORC-225 |
+| `src/adapters/sandbox/router.ts` | `SandboxRouter` : choisit le backend qui satisfait les exigences, refuse sinon | garder | ORC-204 |
+| `src/adapters/sandbox/docker-rootless.ts` | Backend conteneur `L3` (CLI `docker` ou `podman`), un conteneur par tentative | garder | ORC-204, ORC-213 (réseau `claude-api` ouvert jusque-là), ORC-205 (`.git` monté) |
 | `src/adapters/publisher/types.ts` | Port `Publisher` : pousse le sha vérifié, ouvre ou met à jour la PR | garder | ORC-225 |
 | `src/adapters/publisher/fake.ts` | `FakePublisher` du harnais | garder | ORC-225 |
 | `src/adapters/checks/types.ts` | Port `CheckRunner` : vérifications hors de l'agent | garder | ORC-225, ORC-151 |
@@ -196,6 +198,7 @@ Contrôles déterministes de `verify`, purs : ils lisent le diff `baseSha..SHA` 
 | Module | Rôle | Statut | Ticket cible |
 |---|---|---|---|
 | `src/app/bootstrap.ts` | Câblage du démon (store, adaptateurs, orchestrateur, serveur, variables `FACTORY_*`) ; résolveur des rôles (ORC-186) | adapter | ORC-147 (fait : toutes les sources écrivent dans l'inbox, rejeu au démarrage), ORC-149 (fait : worker démarré avec relève toutes les secondes), ORC-167, ORC-179 (`PORT`), ORC-192, ORC-201, câblage restant retiré par ORC-169 |
+| `src/app/sandbox-wiring.ts` | Sandboxes des vrais runs depuis `FACTORY_CONTAINER_CLI`, id d'instance tiré de `FACTORY_HOME` | garder | ORC-204 |
 | `src/app/root.ts` | Trouve la racine du dépôt par le `package.json` nommé `factory` | adapter | ORC-167 (le renommage du paquet le casse, le ticket ne le nomme pas) |
 | `src/app/tracker-switch.ts` | `Tracker` de substitution tant que Linear n'est pas connecté par OAuth | garder | ORC-208, ORC-162 (méthodes du port suivies) |
 | `src/version.ts` | Version du paquet | garder | ORC-167 |

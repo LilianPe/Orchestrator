@@ -1,3 +1,4 @@
+import { DEFAULT_REQUIREMENTS } from '../../src/adapters/sandbox/types.js';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -174,7 +175,7 @@ describe('idempotency table (ORC-162, docs/idempotence.md)', () => {
 
   it('Conteneur (pending ORC-204): a replayed create for the same attempt finds its sandbox and makes no second one', async () => {
     const sandboxes = new FakeSandboxProvider();
-    const req = { runId: 'run-1', ticketId: 'REL-1', workspacePath: '/w', network: 'none' as const };
+    const req = { runId: 'run-1', ticketId: 'REL-1', workspacePath: '/w', network: 'none' as const, requirements: DEFAULT_REQUIREMENTS, mounts: [] };
     const first = await sandboxes.create(req);
     expect(await sandboxes.create(req)).toEqual(first);
     expect(sandboxes.active()).toEqual([first]);

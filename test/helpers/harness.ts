@@ -165,6 +165,8 @@ export function createHarness(
     clock?: FakeClock;
     /** One reconciliation of a project (ORC-185), run by the `reconcile` effect of its timer. */
     reconcile?: (project: ProjectRuntime) => Promise<void>;
+    /** Runs in `sandboxes` (ORC-204), the ticket's session dirs in a temporary dir; on the host otherwise. */
+    sandboxed?: boolean;
   } = {},
 ) {
   if (opts.projectYaml !== undefined && opts.preset) throw new Error('createHarness: pass projectYaml or preset, not both');
@@ -179,6 +181,9 @@ export function createHarness(
   const checks = new FakeCheckRunner(opts.verify);
   const sandboxes = new FakeSandboxProvider();
   const publisher = new FakePublisher(forge);
+  const sessionsDir = opts.sandboxed ? mkdtempSync(join(tmpdir(), 'factory-sessions-')) : undefined;
+  /** The orchestrator's log lines, every life of it. */
+  const logs: { level: string; message: string }[] = [];
   const project = { id: 'p', repoPath: '/repo', teamKey: 'REL', workflow };
   const authz = opts.authz && { teamKey: 'REL', repoPath: '/repo', maintainers: [], validators: [], githubLogins: {}, ...opts.authz };
   /** One life of the process: its store and its adapters, all of them silent once it is killed. */
@@ -196,6 +201,7 @@ export function createHarness(
       forgeWriter: life.gate(forge),
       workspaces: life.gate(workspaces),
       verify: life.gate(checks.run),
+      ...(sessionsDir ? { sandboxes: life.gate(sandboxes), sessionsDir } : {}),
     };
     return { ...life, outside };
   };
@@ -204,7 +210,11 @@ export function createHarness(
   const build = ({ store, outside, gate }: ReturnType<typeof connect>) => new Orchestrator({
     store,
     clock,
-    bus: new EventBus(),
+    bus: (() => {
+      const bus = new EventBus();
+      bus.subscribe((m) => void (m.kind === 'log' && logs.push({ level: m.level, message: m.message })));
+      return bus;
+    })(),
     scheduler: new Scheduler(store, { dev: workflow.limits.parallelSessions, questions: workflow.limits.questionSessions }),
     ...outside,
     projects: [project],
@@ -270,7 +280,7 @@ export function createHarness(
   }
 
   return {
-    clock, tracker, forge, runner, workspaces, checks, sandboxes, publisher,
+    clock, tracker, forge, runner, workspaces, checks, sandboxes, publisher, sessionsDir, logs,
     send, advance, restart, project,
     get orch() {
       return orch;

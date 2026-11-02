@@ -1,3 +1,4 @@
+import { DEFAULT_REQUIREMENTS } from '../../src/adapters/sandbox/types.js';
 import { describe, expect, it, vi } from 'vitest';
 import { createHarness } from '../helpers/harness.js';
 import { testPreset } from '../helpers/test-preset.js';
@@ -75,7 +76,7 @@ describe('harness: new port fakes and the test preset', () => {
     const h = createHarness({ preset: testPreset() });
     await delegate(h);
     const { branch } = await h.ticket();
-    const sandbox = await h.sandboxes.create({ runId: 'r-verify', ticketId: 'REL-1', workspacePath: '/tmp/factory-fake/p/REL-1', network: 'none' });
+    const sandbox = await h.sandboxes.create({ runId: 'r-verify', ticketId: 'REL-1', workspacePath: '/tmp/factory-fake/p/REL-1', network: 'none', requirements: DEFAULT_REQUIREMENTS, mounts: [] });
     expect(h.sandboxes.active()).toEqual([sandbox]);
     await h.sandboxes.destroy(sandbox.id);
     const pub = await h.publisher.publish({

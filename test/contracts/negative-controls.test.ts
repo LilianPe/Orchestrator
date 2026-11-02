@@ -1,3 +1,4 @@
+import { DEFAULT_REQUIREMENTS } from '../../src/adapters/sandbox/types.js';
 import { existsSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,13 +7,14 @@ import { FakeCheckRunner } from '../../src/adapters/checks/fake.js';
 import type { CheckRunner } from '../../src/adapters/checks/types.js';
 import { FakeForge } from '../../src/adapters/forge/fake.js';
 import type { Forge } from '../../src/adapters/forge/types.js';
+import type { ExecResult } from '../../src/adapters/exec.js';
 import { Channel } from '../../src/adapters/runner/channel.js';
 import { FakeRunner, type FakeScript } from '../../src/adapters/runner/fake.js';
 import type { RunHandle, RunRequest, RunResult, RunStreamEvent } from '../../src/adapters/runner/types.js';
 import { FakePublisher } from '../../src/adapters/publisher/fake.js';
 import type { Publication, Publisher } from '../../src/adapters/publisher/types.js';
 import { FakeSandboxProvider } from '../../src/adapters/sandbox/fake.js';
-import type { Sandbox, SandboxRequest } from '../../src/adapters/sandbox/types.js';
+import type { Sandbox, SandboxRequest, SandboxRequirements } from '../../src/adapters/sandbox/types.js';
 import { FakeTracker } from '../../src/adapters/tracker/fake.js';
 import type { TrackerIssue } from '../../src/adapters/tracker/types.js';
 import { FakeClock } from '../../src/core/clock.js';
@@ -23,7 +25,7 @@ import { asNegativeControl, contractCases } from './cases.js';
 import { describeCheckRunnerContract, type CheckRunnerSubject } from './check-runner.contract.js';
 import { describeForgeContract, type ForgeSubject } from './forge.contract.js';
 import { describePublisherContract, type PublisherSubject } from './publisher.contract.js';
-import { describeSandboxContract, type SandboxSubject } from './sandbox.contract.js';
+import { describeSandboxContract, EXEC_PROBE, type SandboxSubject } from './sandbox.contract.js';
 import { describeTrackerContract, type TrackerSubject } from './tracker.contract.js';
 
 // Each subject breaks one guarantee on purpose: the case that checks it must fail against it.
@@ -670,13 +672,15 @@ describeTrackerContract(
 
 const UNKNOWN_ID = 'destroy is idempotent and ignores an unknown id';
 
-function sandboxesThat(Provider: new () => FakeSandboxProvider): () => SandboxSubject {
+function sandboxesThat(Provider: new () => FakeSandboxProvider, extra: Partial<SandboxSubject> = {}): () => SandboxSubject {
   return () => {
     const provider = new Provider();
+    provider.execResult = () => EXEC_PROBE.result;
     return {
       provider,
-      request: { runId: 'r1', ticketId: 'REL-1', workspacePath: '/w', network: 'none' },
+      request: { runId: 'r1', ticketId: 'REL-1', workspacePath: '/w', network: 'none', requirements: DEFAULT_REQUIREMENTS, mounts: [] },
       active: async () => provider.active().map((s) => s.id),
+      ...extra,
     };
   };
 }
@@ -742,7 +746,7 @@ describeSandboxContract(
       private named = new Map<string, Sandbox>();
 
       override async create(req: SandboxRequest): Promise<Sandbox> {
-        const sandbox = this.named.get(req.runId) ?? { id: `factory-${req.runId}`, network: req.network };
+        const sandbox = this.named.get(req.runId) ?? { id: `factory-${req.runId}`, network: req.network, level: 'L3' as const };
         this.named.set(req.runId, sandbox);
         return { ...sandbox };
       }
@@ -757,6 +761,101 @@ describeSandboxContract(
     },
   ),
   { violates: [RECREATE] },
+);
+
+const EXEC = 'exec returns the exit code and the output, a non-zero exit included';
+const EXEC_UNKNOWN = 'exec rejects on an unknown or destroyed sandbox';
+const SPAWN_UNKNOWN = 'spawnCommand throws on an unknown sandbox';
+const FIND = 'findByAttempt finds the live sandbox of a run, and nothing once it is destroyed';
+const LIST = 'list holds each live sandbox with its run, and no destroyed one';
+const REFUSE = 'create rejects requirements nothing satisfies, naming the unmet one, and makes no sandbox';
+
+describeSandboxContract(
+  'a sandbox provider whose exec reports success whatever the command did',
+  sandboxesThat(
+    class extends FakeSandboxProvider {
+      override async exec(id: string, argv: readonly string[]): Promise<ExecResult> {
+        return { ...(await super.exec(id, argv)), code: 0 };
+      }
+    },
+  ),
+  { violates: [EXEC] },
+);
+
+describeSandboxContract(
+  'a sandbox provider whose exec answers for a sandbox it does not have',
+  sandboxesThat(
+    class extends FakeSandboxProvider {
+      override async exec(): Promise<ExecResult> {
+        return { stdout: '', stderr: '', code: 0 };
+      }
+    },
+  ),
+  { violates: [EXEC_UNKNOWN] },
+);
+
+describeSandboxContract(
+  'a sandbox provider whose spawnCommand builds a command for a sandbox it does not have',
+  sandboxesThat(
+    class extends FakeSandboxProvider {
+      override spawnCommand(_id: string, argv: readonly string[]): string[] {
+        return [...argv];
+      }
+    },
+  ),
+  { violates: [SPAWN_UNKNOWN] },
+);
+
+describeSandboxContract(
+  'a sandbox provider that still finds an attempt by its label once destroyed',
+  sandboxesThat(
+    class extends FakeSandboxProvider {
+      private byRun = new Map<string, Sandbox>();
+
+      override async create(req: SandboxRequest): Promise<Sandbox> {
+        const sandbox = await super.create(req);
+        this.byRun.set(req.runId, sandbox);
+        return sandbox;
+      }
+
+      override async findByAttempt(runId: string): Promise<Sandbox | undefined> {
+        return this.byRun.get(runId);
+      }
+    },
+  ),
+  { violates: [FIND] },
+);
+
+describeSandboxContract(
+  'a sandbox provider whose list loses the run of each sandbox',
+  sandboxesThat(
+    class extends FakeSandboxProvider {
+      override async list(): Promise<{ runId: string; sandbox: Sandbox }[]> {
+        return (await super.list()).map(({ sandbox }) => ({ runId: sandbox.id, sandbox }));
+      }
+    },
+  ),
+  { violates: [LIST] },
+);
+
+const L5: SandboxRequirements = { minLevel: 'L5', browser: false, services: [] };
+
+describeSandboxContract('a sandbox provider that falls back to a weaker sandbox than required', sandboxesThat(FakeSandboxProvider, { unsatisfiable: { requirements: L5, unmet: /L5/ } }), {
+  violates: [REFUSE],
+});
+
+describeSandboxContract(
+  'a sandbox provider whose refusal does not name the unmet requirement',
+  sandboxesThat(
+    class extends FakeSandboxProvider {
+      override async create(req: SandboxRequest): Promise<Sandbox> {
+        if (req.requirements.minLevel !== 'L3') throw new Error('sandbox refused');
+        return super.create(req);
+      }
+    },
+    { unsatisfiable: { requirements: L5, unmet: /L5/ } },
+  ),
+  { violates: [REFUSE] },
 );
 
 const REPUBLISH = 'republishing a branch updates its PR instead of opening a second one';

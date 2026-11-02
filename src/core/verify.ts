@@ -44,7 +44,10 @@ function runOne(cwd: string, command: string, timeoutMs: number): Promise<{ exit
   });
 }
 
-export const runVerify: Verifier = async (cwd, commands, timeoutMs = 15 * 60_000) => {
+/** Each command's cap, on the host and (setup) in a sandbox. */
+export const VERIFY_TIMEOUT_MS = 15 * 60_000;
+
+export const runVerify: Verifier = async (cwd, commands, timeoutMs = VERIFY_TIMEOUT_MS) => {
   const failures: VerifyFailure[] = [];
   for (const command of commands) {
     const { exitCode, output } = await runOne(cwd, command, timeoutMs);

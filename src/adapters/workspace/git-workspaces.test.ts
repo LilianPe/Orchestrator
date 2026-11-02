@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { GitWorkspaces } from './git-workspaces.js';
 
@@ -24,17 +24,17 @@ function fixtureRepo() {
 }
 
 const req = (repo: string, patch: object = {}) => ({
-  projectId: 'p', repoPath: repo, ticketId: 'REL-1', title: 'Export CSV', kind: 'worktree' as const, slot: 1, portBase: 4200, setup: [], runId: 'abcdef123456', ...patch,
+  projectId: 'p', repoPath: repo, ticketId: 'REL-1', title: 'Export CSV', kind: 'worktree' as const, slot: 1, portBase: 4200, runId: 'abcdef123456', ...patch,
 });
 
 describe('GitWorkspaces', () => {
-  it('creates, reuses and removes a ticket worktree', async () => {
+  it('creates (fresh), reuses (not fresh) and removes a ticket worktree', async () => {
     const { repo, root } = fixtureRepo();
     const ws = new GitWorkspaces({ root });
     const w = await ws.prepare(req(repo));
-    expect(w).toEqual({ path: join(root, 'p', 'REL-1'), port: 4201, branch: 'factory/rel-1-export-csv' });
+    expect(w).toEqual({ path: join(root, 'p', 'REL-1'), port: 4201, branch: 'factory/rel-1-export-csv', fresh: true });
     expect(git(w.path, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('factory/rel-1-export-csv');
-    expect(await ws.prepare(req(repo))).toEqual(w);
+    expect(await ws.prepare(req(repo))).toEqual({ ...w, fresh: undefined });
     await ws.cleanup('p', repo, 'REL-1');
     expect(existsSync(w.path)).toBe(false);
   });
@@ -70,22 +70,13 @@ describe('GitWorkspaces', () => {
     expect(existsSync(join(k.path, 'README.md'))).toBe(true);
   });
 
-  it('fails clearly when setup fails', async () => {
+  it('reads the git common dir of a worktree as an absolute path, the one its .git file points into (ORC-204)', async () => {
     const { repo, root } = fixtureRepo();
     const ws = new GitWorkspaces({ root });
-    await expect(ws.prepare(req(repo, { setup: ['exit 2'] }))).rejects.toThrow('Le setup du worktree a échoué : exit 2');
-  });
-
-  it('removes the worktree when setup fails so a retry re-runs setup', async () => {
-    const { base, repo, root } = fixtureRepo();
-    const flag = join(base, 'flag');
-    const setup = [`test -f ${flag} || exit 2`];
-    const ws = new GitWorkspaces({ root });
-    await expect(ws.prepare(req(repo, { setup }))).rejects.toThrow('Le setup du worktree a échoué');
-    expect(existsSync(join(root, 'p', 'REL-1'))).toBe(false);
-    writeFileSync(flag, 'ok');
-    const w = await ws.prepare(req(repo, { setup }));
-    expect(existsSync(w.path)).toBe(true);
+    const w = await ws.prepare(req(repo));
+    const dir = await ws.gitCommonDir(w.path);
+    expect(isAbsolute(dir)).toBe(true);
+    expect(realpathSync(dir)).toBe(realpathSync(join(repo, '.git')));
   });
 
   it('keeps unpushed local commits when re-preparing after cleanup', async () => {

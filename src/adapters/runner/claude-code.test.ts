@@ -1,8 +1,10 @@
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { describeAgentRuntimeContract, drain, type AgentScript } from '../../../test/contracts/agent-runtime.contract.js';
+import { FakeSandboxProvider } from '../sandbox/fake.js';
+import type { SandboxProvider } from '../sandbox/types.js';
 import { buildClaudeArgs, childEnv, ClaudeCodeRunner } from './claude-code.js';
 import type { RunRequest } from './types.js';
 
@@ -16,9 +18,18 @@ function req(patch: Partial<RunRequest> = {}, env: Record<string, string> = {}):
   };
 }
 
-function runner() {
+function runner(sandboxes?: FakeSandboxProvider) {
   const transcriptsDir = mkdtempSync(join(tmpdir(), 'factory-tr-'));
-  return { transcriptsDir, r: new ClaudeCodeRunner({ transcriptsDir, command: [process.execPath, fx('fake-claude.mjs')], killGraceMs: 500 }) };
+  return {
+    transcriptsDir,
+    r: new ClaudeCodeRunner({ transcriptsDir, command: [process.execPath, fx('fake-claude.mjs')], killGraceMs: 500, ...(sandboxes ? { sandboxes } : {}) }),
+  };
+}
+
+async function sandbox() {
+  const sandboxes = new FakeSandboxProvider();
+  const { id } = await sandboxes.create({ runId: 'r', ticketId: 'ORC-1', workspacePath: '/w', network: 'claude-api', requirements: { minLevel: 'L3', browser: false, services: [] }, mounts: [] });
+  return { sandboxes, id, spawnCommand: vi.spyOn(sandboxes, 'spawnCommand') };
 }
 
 const scripts: Record<AgentScript, Partial<RunRequest>> = {
@@ -79,6 +90,61 @@ describe('ClaudeCodeRunner', () => {
     const h = r.start(req({}, { FAKE_CLAUDE_SCRIPT: fx('stream-error.jsonl') }));
     await drain(h.events);
     expect(await h.done).toMatchObject({ outcome: 'failure', lastText: 'Je tente.' });
+  });
+});
+
+describe('ClaudeCodeRunner in a sandbox (ORC-204)', () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it('runs claude through spawnCommand, naming the run env and the auth variables only', async () => {
+    vi.stubEnv('SOME_DAEMON_VAR', 'leak');
+    vi.stubEnv('ANTHROPIC_API_KEY', 'sk-test');
+    const { sandboxes, id, spawnCommand } = await sandbox();
+    const { r } = runner(sandboxes);
+    const runEnv = { FAKE_CLAUDE_SCRIPT: fx('stream-success.jsonl'), FACTORY_RUN_TOKEN: 't' };
+    // cwd is a sandbox path: the host spawn must not use it.
+    const rq = req({ sandboxId: id, cwd: '/work' }, runEnv);
+    const h = r.start(rq);
+    expect((await drain(h.events)).map((e) => e.kind)).toEqual(['init', 'text', 'tool', 'tool_result', 'text', 'result']);
+    expect(await h.done).toMatchObject({ outcome: 'success', lastText: 'PR ouverte.' });
+    expect(spawnCommand).toHaveBeenCalledOnce();
+    const [sid, argv, opts] = spawnCommand.mock.calls[0]! as Parameters<SandboxProvider['spawnCommand']>;
+    expect(sid).toBe(id);
+    expect(argv).toEqual([process.execPath, fx('fake-claude.mjs'), ...buildClaudeArgs(rq)]);
+    expect(opts).toEqual({ cwd: '/work', env: { ...runEnv, ANTHROPIC_API_KEY: 'sk-test' } });
+  });
+
+  it('spawns the engine CLI with the daemon PATH, and hands the sandbox PATH to the command in the container', async () => {
+    vi.stubEnv('PATH', process.env['PATH'] + '-daemon');
+    const { sandboxes, id, spawnCommand } = await sandbox();
+    // The fake runs on the host: it drops the `env PATH=...` prefix a real engine runs in the container.
+    spawnCommand.mockImplementation((_, argv) => argv.slice(2));
+    const { r, transcriptsDir } = runner(sandboxes);
+    const pathFile = join(transcriptsDir, 'path.txt');
+    const runEnv = { FAKE_CLAUDE_SCRIPT: fx('stream-success.jsonl'), FAKE_CLAUDE_PATH: pathFile, PATH: '/factory/bin:/usr/bin' };
+    const rq = req({ sandboxId: id, cwd: '/work' }, runEnv);
+    expect(await r.start(rq).done).toMatchObject({ outcome: 'success' });
+    const [, argv, opts] = spawnCommand.mock.calls[0]! as Parameters<SandboxProvider['spawnCommand']>;
+    expect(argv).toEqual(['env', 'PATH=/factory/bin:/usr/bin', process.execPath, fx('fake-claude.mjs'), ...buildClaudeArgs(rq)]);
+    expect(opts!.env).not.toHaveProperty('PATH');
+    expect(readFileSync(pathFile, 'utf8')).toBe(process.env['PATH']);
+  });
+
+  it('refuses a sandboxed run without a sandbox provider, spawning nothing', async () => {
+    const { r, transcriptsDir } = runner();
+    const argsFile = join(transcriptsDir, 'args.txt');
+    const h = r.start(req({ sandboxId: 'sbx-1' }, { FAKE_CLAUDE_SCRIPT: fx('stream-success.jsonl'), FAKE_CLAUDE_ARGS: argsFile }));
+    expect(await drain(h.events)).toEqual([]);
+    expect(await h.done).toMatchObject({ outcome: 'failure', lastText: expect.stringContaining('sandbox') });
+    expect(existsSync(argsFile)).toBe(false);
+  });
+
+  it('fails the run on an unknown sandbox', async () => {
+    const { sandboxes } = await sandbox();
+    const { r } = runner(sandboxes);
+    const h = r.start(req({ sandboxId: 'sbx-404' }, { FAKE_CLAUDE_SCRIPT: fx('stream-success.jsonl') }));
+    await drain(h.events);
+    expect(await h.done).toMatchObject({ outcome: 'failure', lastText: expect.stringContaining('sbx-404') });
   });
 });
 
