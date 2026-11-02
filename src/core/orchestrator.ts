@@ -1208,6 +1208,9 @@ export class Orchestrator {
       sandbox = this.d.sandboxes && (await this.openSandbox(this.d.sandboxes, project, ticketId, ws, runId));
       if (!setUp) await this.runSetup(project, ws, sandbox);
       setUp = true;
+      // In each run's prompt, not the system prompt: read again at each attempt, never frozen at a resume
+      // (ORC-128). Before the reset below, which removes `.claude/` and its CLAUDE.md.
+      const conventions = readConventions(ws.path);
       // After the setup, which is the repository's and could write one; the session loads none anyway
       // (`--setting-sources ""`): defence in depth, for what ORC-128 did not trap (ORC-284).
       await workspaces.resetClaudeDir(ws.path);
@@ -1232,8 +1235,7 @@ export class Orchestrator {
         issue: { identifier: issue.identifier, title: issue.title, description: issue.description, url: issue.url },
         branch: job.queue === 'dev' ? t.branch : undefined,
         prUrl: t.prUrl,
-        // In each run's prompt, not the system prompt: read again at each attempt, never frozen at a resume (ORC-128).
-        conventions: readConventions(ws.path),
+        conventions,
         input,
         reviewRounds: wf.limits.reviewRounds,
       };

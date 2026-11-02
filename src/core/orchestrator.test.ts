@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -32,6 +32,7 @@ function setup(
     settingsPath?: string;
     tweak?: (w: ReturnType<typeof loadWorkflow>) => void;
     effectRetry?: EffectRetry;
+    workspaces?: FakeWorkspaces;
   } = {},
 ) {
   const workflow = loadWorkflow({ packDir });
@@ -44,7 +45,7 @@ function setup(
   let n = 0;
   const orch = new Orchestrator({
     store, clock: new FakeClock(1_000), bus: new EventBus(), scheduler,
-    tracker, forge: new FakeForge(), runner, workspaces: new FakeWorkspaces(), verify: o.verify ?? (async () => ({ ok: true, failures: [] })), dailyBudgetUsd: o.budget,
+    tracker, forge: new FakeForge(), runner, workspaces: o.workspaces ?? new FakeWorkspaces(), verify: o.verify ?? (async () => ({ ok: true, failures: [] })), dailyBudgetUsd: o.budget,
     projects: [{ id: 'p', repoPath: '/repo', teamKey: 'REL', workflow }], packDir, settingsPath: o.settingsPath,
     agentEnv: (r) => ({ FACTORY_RUN_TOKEN: r.token }), newId: () => `id-${++n}`, activityIntervalMs: 0, holdInboxUntilReplay: o.hold, factoryCommit: 'cafe42',
     // One attempt: a failed effect dies at once (the retries have their own tests).
@@ -149,6 +150,21 @@ describe('Orchestrator', () => {
     expect(r.settingsPath.endsWith('packs/standard/settings.json')).toBe(true);
     expect(r.env['FACTORY_RUN_TOKEN']).toBeDefined();
     expect(r.env['PORT']).toBe('4200');
+  });
+
+  it('reads the conventions before it resets .claude/, which holds one of them (ORC-284)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'factory-ws-'));
+    mkdirSync(join(dir, '.claude'));
+    writeFileSync(join(dir, '.claude', 'CLAUDE.md'), 'local conventions');
+    const workspaces = new FakeWorkspaces();
+    const prepare = workspaces.prepare.bind(workspaces);
+    workspaces.prepare = async (req) => ({ ...(await prepare(req)), path: dir });
+    workspaces.resetClaudeDir = async (path) => rmSync(join(path, '.claude'), { recursive: true, force: true });
+    const { tracker, runner, orch } = setup({ workspaces });
+    tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+    await orch.accept(delegated());
+    await orch.drained();
+    expect(runner.requests[0]!.prompt).toContain('### .claude/CLAUDE.md\nlocal conventions');
   });
 
   it('labels the attempt it launches, and the labels outlive the run settling (ORC-226)', async () => {
