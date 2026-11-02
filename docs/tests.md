@@ -6,7 +6,7 @@ Relais se teste sans vrais services : un **harnais** monte l'orchestrateur (son 
 - Scénarios : `test/scenarios/` (le harnais, `test/helpers/harness.ts`).
 - Bout en bout : `test/e2e/`.
 - Intégration : `test/integration/` (Postgres).
-- Isolation : `test/isolation/` (moteur de conteneurs rootless).
+- Isolation : `test/isolation/` (moteur de conteneurs rootless ; et le test n° 11, un vrai `claude -p` sur un dépôt piégé).
 - Propriétés de `decide` : `test/properties/` (fast-check).
 - Rejeu des journaux enregistrés : `test/replay/` (ORC-174).
 - Injection de pannes : `test/scenarios/faults.test.ts` ; chaos `kill -9` : `test/chaos/` (ORC-163).
@@ -22,7 +22,7 @@ Pendant le travail, lancez seulement les tests des fichiers touchés : `npx vite
 | `unit` | `npm test` | unitaires, scénarios et bout en bout (sauté sans `FACTORY_E2E=1`) |
 | `integration` | `npm run test:integration` | `test/integration/`, avec `DATABASE_URL` (Postgres) |
 | `scenarios-pg` | `npm run test:integration` | les scénarios de `test/scenarios/` une seconde fois, chaque harnais sur une base Postgres à lui (ORC-228), avec `DATABASE_URL` |
-| `isolation` | `npm run test:isolation` | `test/isolation/`, avec `FACTORY_ISOLATION=1` et un moteur rootless |
+| `isolation` | `npm run test:isolation` | `test/isolation/`, avec `FACTORY_ISOLATION=1` et un moteur rootless ; le test n° 11 (`claude-settings.test.ts`) demande en plus `claude` et un identifiant (`CLAUDE_CODE_OAUTH_TOKEN` ou `ANTHROPIC_API_KEY`), sans quoi il se saute, en CI comme ailleurs |
 | `chaos` | `npm run test:chaos` | `test/chaos/` : un vrai démon tué par SIGKILL au hasard (ORC-163), sur Postgres avec `DATABASE_URL`, sur un fichier SQLite sinon |
 
 `npm run test:all` lance les cinq. Sans `DATABASE_URL`, les tests d'intégration et `scenarios-pg` se sautent ; sans `FACTORY_ISOLATION=1`, les tests d'isolation se sautent. La CI (`.github/workflows/ci.yml`) lance le projet `unit` avec typecheck et lint, les tests de propriétés sur 10 000 séquences (job `properties`), le rejeu des journaux enregistrés (`npm run test:replay` dans le job `test`, voir plus bas), puis Postgres en service pour `integration` et `scenarios-pg` (même job, `npm run test:integration`) et pour le chaos sur 500 événements (job `chaos`, voir plus bas), et Podman rootless pour `isolation`. Aucun secret n'est défini dans les workflows.
