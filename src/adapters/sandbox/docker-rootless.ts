@@ -23,7 +23,11 @@ export interface ContainerSandboxOptions {
   agentHost?: string;
   /** The daemon's: its containers carry it, and its lookups see only those, so another daemon on the same engine is left alone. */
   instance?: string;
+  /** Per container (ORC-218): a fork bomb or a memory hog in one attempt must not starve the others. */
+  limits?: typeof LIMITS;
 }
+
+const LIMITS = { pids: 512, memory: '4g', cpus: 2 };
 
 const ATTEMPT = 'factory.attempt';
 const NETWORK = 'factory.network';
@@ -73,6 +77,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
       '--label', `${ATTEMPT}=${req.runId}`, '--label', `factory.ticket=${req.ticketId}`, '--label', `${NETWORK}=${req.network}`,
       ...(this.opts.instance ? ['--label', `${INSTANCE}=${this.opts.instance}`] : []),
       '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
+      ...limitArgs(this.opts.limits ?? LIMITS),
       // keep-id maps the daemon's uid into the user namespace, so files written in /work are the daemon's on the host.
       ...(this.podman ? ['--userns=keep-id'] : []), '--user', `${this.opts.uid}:${this.opts.gid}`,
       '-e', `HOME=${SANDBOX_HOME}`,
@@ -174,6 +179,10 @@ export class ContainerSandboxProvider implements SandboxProvider {
 
 function sandbox(c: Info): Sandbox {
   return { id: c.id, network: c.network, level: 'L3' };
+}
+
+function limitArgs(l: typeof LIMITS): string[] {
+  return ['--pids-limit', String(l.pids), '--memory', l.memory, '--cpus', String(l.cpus)];
 }
 
 function mountArg(m: SandboxMount): string {

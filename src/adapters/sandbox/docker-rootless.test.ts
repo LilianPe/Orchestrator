@@ -47,6 +47,7 @@ describe('ContainerSandboxProvider.create', () => {
       'run', '-d',
       '--label', 'factory.attempt=r1', '--label', 'factory.ticket=ORC-1', '--label', 'factory.network=none',
       '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
+      '--pids-limit', '512', '--memory', '4g', '--cpus', '2',
       '--user', '1000:1000',
       '-e', 'HOME=/home/factory',
       '--mount', 'type=bind,source=/home/d/wt/orc-1,target=/work',
@@ -55,6 +56,13 @@ describe('ContainerSandboxProvider.create', () => {
       '--network', 'none',
       'factory-runner:1', 'sleep', 'infinity',
     ]);
+  });
+
+  it('caps processes, memory and cpus, as configured', async () => {
+    const e = empty();
+    await new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: e.exec, limits: { pids: 64, memory: '256m', cpus: 0.5 } }).create(req());
+    const a = runArgs(e.calls);
+    expect(a.slice(a.indexOf('--pids-limit'), a.indexOf('--pids-limit') + 6)).toEqual(['--pids-limit', '64', '--memory', '256m', '--cpus', '0.5']);
   });
 
   it('keeps the uid under podman with --userns=keep-id', async () => {
