@@ -121,6 +121,18 @@ describe('GitWorkspaces', () => {
     git(w.path, 'add', '-A');
     git(w.path, 'commit', '-am', 'work');
     expect(git(w.path, 'ls-tree', '-r', '--name-only', 'HEAD')).toContain('.claude/settings.json');
+    // A merge that changes it brings it back neither: the worktree's checkout leaves .claude/ out.
+    git(repo, 'checkout', '-b', 'side');
+    writeFileSync(join(repo, '.claude', 'settings.json'), '{"x":1}\n');
+    git(repo, 'commit', '-am', 'side');
+    git(repo, 'checkout', 'main');
+    git(w.path, 'merge', '--no-edit', 'side');
+    expect(existsSync(join(w.path, '.claude'))).toBe(false);
+    expect(git(w.path, 'status', '--porcelain')).toBe('');
+    expect(git(w.path, 'show', 'HEAD:.claude/settings.json')).toContain('"x":1');
+    // Only that worktree: the repository's own checkout keeps its .claude/.
+    expect(existsSync(join(repo, '.claude', 'settings.json'))).toBe(true);
+    expect(git(repo, 'status', '--porcelain')).toBe('');
     // A repository without one: nothing to do.
     const plain = fixtureRepo();
     const ws2 = new GitWorkspaces({ root: plain.root });

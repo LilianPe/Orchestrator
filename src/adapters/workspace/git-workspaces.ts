@@ -91,14 +91,14 @@ export class GitWorkspaces implements WorkspaceManager {
   }
 
   /**
-   * Removed from the working tree, its tracked files marked skip-worktree: the agent's session cannot load
-   * them, and `git status`, `add -A` or `commit -a` neither see nor commit them as deleted, so a PR never
-   * drops the repo's `.claude/`. The index entries stay, so a rebase or merge still carries them.
+   * Left out of the worktree's sparse checkout: the agent's session cannot load it, `git status`, `add -A`
+   * or `commit -a` neither see nor commit it as deleted, so a PR never drops the repo's `.claude/`, and a
+   * merge or rebase that changes it does not write it back (skip-worktree alone did). The index keeps it.
+   * Sparse checkout is per worktree (`extensions.worktreeConfig`, set by git): the repo's own checkout keeps
+   * its `.claude/`. The rm takes what the checkout does not own (an untracked settings.local.json).
    */
   async resetClaudeDir(path: string): Promise<void> {
-    const tracked = (await this.git(path, 'ls-files', '-z', '--', '.claude')).split('\0').filter(Boolean);
-    // ponytail: on the command line, fine for a .claude/ of a few hundred files; `--stdin -z` past that.
-    if (tracked.length) await this.git(path, 'update-index', '--skip-worktree', '--', ...tracked);
+    await this.git(path, 'sparse-checkout', 'set', '--no-cone', '/*', '!/.claude/');
     rmSync(join(path, '.claude'), { recursive: true, force: true });
   }
 
