@@ -1,6 +1,7 @@
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import { effectiveEvent } from '../../src/core/dead-letter.js';
+import type { Role } from '../../src/core/authz.js';
 import { AUTHZ_REFUSED, decide, isFenced, mayCheck, SENSITIVE_PATHS } from '../../src/core/engine.js';
 import { reduce } from '../../src/core/reduce.js';
 import {
@@ -469,6 +470,23 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
   describe('ORC-186 — authorization matrix, checked on the signed actor', () => {
     type Decided = ReturnType<typeof decided>[number];
     const isRefusal = (step: Decided) => step.decision.trace.some((t) => t.startsWith(AUTHZ_REFUSED));
+    // A human's move to Done is a merge decision (ORC-148): refused, the ticket also goes back to Human Review, the
+    // reviewed commit kept (no work: Linear shows it in Done, nothing merged); unchecked (no roles), it never merges.
+    const isDone = (step: Decided) => step.event.type === 'status.changed' && (step.event.payload as { to?: string | null }).to === 'done';
+    const backToReview = (e: Decided['decision']['effects'][number]) => e.kind === 'move' && e.to === 'human_review' && e.keepReviewSha === true;
+    // A delegated ticket in Human Review, its PR open and its reviewed commit recorded, then two humans move it to Done.
+    const doneBy = (actor: string, roles: Role[]): Entry => {
+      n += 1;
+      const event = { id: `ex-${n}`, type: 'status.changed', at: 1_000 * n, projectId: PROJECT, ticketId: TICKET, ...TRUSTED, actor, roles, payload: { from: 'human_review', to: 'done' } };
+      return { kind: 'external', event: event as FactoryEvent };
+    };
+    const reviewedDone = seq(
+      ...delegated('dev'),
+      ext('pr.opened', pr),
+      sh({ type: 'status.recorded', to: 'human_review', reviewSha: 'abc123' }),
+      doneBy('u-dev', ['team_member', 'repo_writer']),
+      doneBy('u-lead', ['team_member', 'repo_writer', 'repo_merger']),
+    );
 
     it(
       'a refused human event changes no work: no run, no timer, no feedback, no unblock, only its answer, once, to a signed actor or in a session',
@@ -480,13 +498,14 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
             expect(step.decision.timers, 'refused event armed a timer').toEqual([]);
             expect(step.launches, 'refused event launched a run').toEqual([]);
             const answered = !!step.event.actor || !!(step.event.payload as { linearSessionId?: string }).linearSessionId;
-            expect(step.decision.effects, 'refusal not answered once').toHaveLength(answered ? 1 : 0);
-            for (const e of step.decision.effects) expect(['activity', 'comment']).toContain(e.kind);
+            const answers = step.decision.effects.filter((e) => !(isDone(step) && backToReview(e)));
+            expect(answers, 'refusal not answered once').toHaveLength(answered ? 1 : 0);
+            for (const e of answers) expect(['activity', 'comment']).toContain(e.kind);
             expect(step.event.roles, 'refused an event whose roles were not resolved').toBeDefined();
             // The orchestrator resolves roles only where `mayCheck` says the matrix may be checked.
             expect(mayCheck(step.event, wf), `${step.event.type} refused where the orchestrator resolves no roles`).toBe(true);
           }
-        });
+        }, [reviewedDone]);
       },
       TIMEOUT,
     );
@@ -498,11 +517,16 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
           for (const step of decided(run(s))) {
             if (step.event.roles === undefined || isRefusal(step)) continue;
             const unchecked = decide(step.before, { ...step.event, roles: undefined } as FactoryEvent, wf);
+            // A merge needs a checked actor: an unchecked Done never merges, the one decision the check adds to.
+            if (isDone(step)) {
+              expect(unchecked.effects.some((e) => e.kind === 'merge'), 'an unchecked Done merged').toBe(false);
+              continue;
+            }
             // Only a checked delegation names the run's initiator: the one event an unchecked decision leaves out.
             const initiator = (e: InternalEvent) => e.type === 'ticket.patched' && 'initiatorId' in e.patch;
             expect({ ...step.decision, events: step.decision.events.filter((e) => !initiator(e)), trace: [] }).toEqual({ ...unchecked, trace: [] });
           }
-        });
+        }, [reviewedDone]);
       },
       TIMEOUT,
     );
