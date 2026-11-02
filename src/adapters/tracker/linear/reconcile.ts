@@ -52,6 +52,8 @@ async function catchUpLabels(d: ReconcileDeps, emit: Emit, projectId: string, is
 }
 
 export async function reconcileOnce(d: ReconcileDeps): Promise<void> {
+  // Every read and write of the known labels, in the webhook's turn.
+  const inTurn: Serial = d.serial ?? ((task) => task());
   for (const p of d.projects) {
     try {
       const issues = await d.tracker.listDelegated(p.teamKey);
@@ -66,11 +68,10 @@ export async function reconcileOnce(d: ReconcileDeps): Promise<void> {
           // An untracked ticket: the snapshot spares the orchestrator a second read of the tracker.
           const payload = t ? {} : { issue: { title: issue.title, logical, priority: issue.priority } };
           await emit({ ticketId: issue.identifier }, UNSIGNED, id, 'ticket.delegated', payload);
-          await recordLabels(d.store, p.id, issue.identifier, issue.labels, issue.updatedAt ?? 0);
+          await inTurn(() => recordLabels(d.store, p.id, issue.identifier, issue.labels, issue.updatedAt ?? 0));
           continue;
         }
         await catchUpMove(d, emit, p, t, issue.stateName, at);
-        const inTurn: Serial = d.serial ?? ((task) => task());
         await inTurn(() => catchUpLabels(d, emit, p.id, issue, t, at));
       }
       for (const t of await d.store.listTickets()) {

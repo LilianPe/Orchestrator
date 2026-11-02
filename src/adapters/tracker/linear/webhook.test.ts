@@ -337,6 +337,39 @@ describe('ingest', () => {
     expect((await ids()).filter((id) => id.startsWith('reconcile:label'))).toEqual([]);
   });
 
+  it('the labels a pass records on a delegation found again wait for a webhook recording under way: a newer reading is not overwritten (ORC-185)', async () => {
+    const { store } = inbox();
+    const base = fx('issue-moved-labeled');
+    await store.putTicket({ ...newTicketState('p', 'REL-1', 'T', 'ai_review', 1), delegated: false });
+    await recordLabels(store, 'p', 'REL-1', ['bug'], 10);
+    const labelsTurn = serial();
+    const c = {
+      ...ctx(),
+      now: () => 2000,
+      knownLabels: (pid: string, id: string) => knownLabels(store, pid, id),
+      recordLabels: (pid: string, id: string, labels: string[], at: number) => recordLabels(store, pid, id, labels, at),
+    };
+    const ingest = createLinearIngest({ secret: () => 'sec', ctx: c, serial: labelsTurn, accept: (e) => store.appendInbox(e), ack: async () => {}, log: () => {} });
+    const { raw, sig } = signed({ ...base, webhookTimestamp: 2000, data: { ...base.data, updatedAt: new Date(30).toISOString(), labelIds: ['l-bug', 'l-resume'] }, updatedFrom: { labelIds: ['l-bug'] } });
+    // The pass reads the kept labels, then the webhook comes before it writes its own reading.
+    let webhook: Promise<unknown> | undefined;
+    const passStore = Object.create(store) as SqliteStore;
+    passStore.getMeta = async (k: string) => {
+      const v = await store.getMeta(k);
+      if (k.startsWith('linear-labels:') && !webhook) {
+        webhook = ingest(raw, { 'linear-signature': sig });
+        await new Promise((r) => setTimeout(r, 20));
+      }
+      return v;
+    };
+    const tracker = new FakeTracker();
+    tracker.addIssue({ identifier: 'REL-1', delegateId: 'app', stateName: 'AI Review', labels: ['bug'], updatedAt: 20 });
+    const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../../../packs/standard') });
+    await reconcileOnce({ tracker, store: passStore, projects: [{ id: 'p', repoPath: '/r', teamKey: 'REL', workflow }], serial: labelsTurn, submit: (e) => store.appendInbox(e), clock: new FakeClock(2000), log: () => {} });
+    await webhook;
+    expect(await knownLabels(store, 'p', 'REL-1')).toEqual({ labels: ['agent:reprendre', 'bug'], at: 30 });
+  });
+
   it('acks with the id of the event, so the daemon can record when (ORC-235)', async () => {
     const acked: [string, string][] = [];
     const { store } = inbox();
