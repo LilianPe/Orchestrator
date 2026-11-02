@@ -179,7 +179,7 @@ describe('Done by a human, merge by the factory (ORC-148)', () => {
     h.forge.ciWorkflows = 1;
     await h.send('status.changed', { from: 'human_review', to: 'done' }, 'REL-1', { actor: 'user-lilian' });
     expect(h.forge.merges).toEqual([]);
-    expect(comments(h).at(-1)).toMatch(/aucun check n'a tourné sur le commit relu/);
+    expect(comments(h).at(-1)).toMatch(/aucun check n'a tourné sur le commit relu, alors que le dépôt a une CI/);
   });
 
   it('writes nothing on the forge when a human cancels the ticket: its PR stays open', async () => {

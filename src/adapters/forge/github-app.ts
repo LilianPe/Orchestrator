@@ -340,7 +340,8 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
     // A method the repository allows, a merge commit first: a squash-only repository refuses the others (405).
     const settings = await this.call<{ allow_merge_commit?: boolean; allow_squash_merge?: boolean; allow_rebase_merge?: boolean }>('GET', repoApi(repo), token);
     const method = settings.allow_merge_commit !== false ? 'merge' : settings.allow_squash_merge !== false ? 'squash' : 'rebase';
-    if (opts.unchecked && !(await this.withoutCi(repo, pr, token))) return { merged: false, reason: 'checks_missing' };
+    // A head that moved is refused by GitHub itself (409), whatever its checks: the push goes through the AI review again.
+    if (opts.unchecked && pr.head.sha === sha && !(await this.withoutCi(repo, pr, token))) return { merged: false, reason: 'checks_missing' };
     try {
       await this.call('PUT', `${url}/merge`, token, { sha, merge_method: method });
       return { merged: true, deduplicated: false };
@@ -435,17 +436,22 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
 
   /**
    * Whether an unchecked head is one of a repository with no CI (ORC-148): the head still has no check, the repository
-   * no active Actions workflow (a CI on `pull_request` only leaves the base unchecked), and the PR's base commit no check
-   * either (a CI outside Actions that checks the base). Anything unread or unknown says CI.
+   * no active Actions workflow of its own (a CI on `pull_request` only leaves the base unchecked; GitHub's dynamic
+   * workflows, Pages or Dependabot, are no CI), and the PR's base commit no check either (a CI outside Actions that
+   * checks the base). Workflows unreadable (Actions permission missing) say CI.
    */
   private async withoutCi(repo: GitHubRepoRef, pr: PullRequestDto, token: string): Promise<boolean> {
     if (!pr.base) return false;
     const [head, workflows, base] = await Promise.all([
       this.checksFor(repo, pr.head.sha, token),
-      this.call<{ workflows?: { state: string }[] }>('GET', `${repoApi(repo)}/actions/workflows?per_page=100`, token),
+      this.call<{ workflows?: { state: string; path?: string }[] }>('GET', `${repoApi(repo)}/actions/workflows?per_page=100`, token).catch((err: unknown) => {
+        if (err instanceof GitHubApiError && (err.status === 403 || err.status === 404)) return undefined;
+        throw err;
+      }),
       this.checksFor(repo, pr.base.sha, token),
     ]);
-    return head.checks === 'none' && !(workflows.workflows ?? []).some((w) => w.state === 'active') && base.checks === 'none';
+    const ci = !workflows || (workflows.workflows ?? []).some((w) => w.state === 'active' && !w.path?.startsWith('dynamic/'));
+    return head.checks === 'none' && !ci && base.checks === 'none';
   }
 
   private async checksFor(

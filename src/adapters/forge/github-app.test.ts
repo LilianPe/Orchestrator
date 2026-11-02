@@ -384,7 +384,7 @@ describe('GitHubAppForge.mergePr (ORC-148)', () => {
     (url) => (url.pathname === '/repos/acme/app/commits/abc123/check-runs' ? { body: { check_runs: runs } } : undefined),
     (url) => (url.pathname === '/repos/acme/app/commits/abc123/status' ? { body: { statuses: [] } } : undefined),
   ];
-  const workflows = (list: { state: string }[]): Route => (url) => (url.pathname === '/repos/acme/app/actions/workflows' ? { body: { total_count: list.length, workflows: list } } : undefined);
+  const workflows = (list: { state: string; path?: string }[]): Route => (url) => (url.pathname === '/repos/acme/app/actions/workflows' ? { body: { total_count: list.length, workflows: list } } : undefined);
   const noCi = (): Route[] => [...headChecks([]), workflows([]), ...baseChecks([])];
 
   it('merges an unchecked head when the base has no check either: a repository with no CI', async () => {
@@ -400,7 +400,7 @@ describe('GitHubAppForge.mergePr (ORC-148)', () => {
   });
 
   it('refuses an unchecked head in a repository with an active Actions workflow: a CI on pull_request leaves main unchecked', async () => {
-    const { forge, calls } = makeForge([tokenRoute(42), pullRoute(withBase), repoRoute(), ...headChecks([]), workflows([{ state: 'active' }]), ...baseChecks([])], { installationId: 42 });
+    const { forge, calls } = makeForge([tokenRoute(42), pullRoute(withBase), repoRoute(), ...headChecks([]), workflows([{ state: 'active', path: '.github/workflows/ci.yml' }]), ...baseChecks([])], { installationId: 42 });
     expect(await forge.mergePr('/repo', 7, 'abc123', { unchecked: true })).toEqual({ merged: false, reason: 'checks_missing' });
     expect(calls.some((c) => c.method === 'PUT')).toBe(false);
   });
@@ -409,6 +409,24 @@ describe('GitHubAppForge.mergePr (ORC-148)', () => {
     const { forge, calls } = makeForge([tokenRoute(42), pullRoute(withBase), repoRoute(), ...headChecks([{ id: 2, name: 'test', status: 'in_progress', conclusion: null }]), workflows([]), ...baseChecks([])], { installationId: 42 });
     expect(await forge.mergePr('/repo', 7, 'abc123', { unchecked: true })).toEqual({ merged: false, reason: 'checks_missing' });
     expect(calls.some((c) => c.method === 'PUT')).toBe(false);
+  });
+
+  it('an unchecked head that moved is a head moved (409), not a CI that has not run', async () => {
+    const moved = openPr({ head: { ref: 'factory/REL-1', sha: 'new999' }, base: { ref: 'main', sha: 'base999' } });
+    const { forge } = makeForge([tokenRoute(42), pullRoute(moved), repoRoute(), workflows([{ state: 'active', path: '.github/workflows/ci.yml' }]), mergeRoute(409, { message: 'Head branch was modified.' })], { installationId: 42 });
+    expect(await forge.mergePr('/repo', 7, 'abc123', { unchecked: true })).toEqual({ merged: false, reason: 'head_moved' });
+  });
+
+  it('GitHub\'s own dynamic workflows (Pages, Dependabot) are no CI', async () => {
+    const dynamic = [{ state: 'active', path: 'dynamic/pages/pages-build-deployment' }, { state: 'active', path: 'dynamic/dependabot/dependabot-updates' }];
+    const { forge } = makeForge([tokenRoute(42), pullRoute(withBase), repoRoute(), ...headChecks([]), workflows(dynamic), ...baseChecks([]), mergeRoute(200, { merged: true })], { installationId: 42 });
+    expect(await forge.mergePr('/repo', 7, 'abc123', { unchecked: true })).toEqual({ merged: true, deduplicated: false });
+  });
+
+  it('workflows unreadable (Actions permission missing, 403): an answer, taken as a CI, not an error', async () => {
+    const denied: Route = (url) => (url.pathname === '/repos/acme/app/actions/workflows' ? { status: 403, body: { message: 'Resource not accessible by integration' } } : undefined);
+    const { forge } = makeForge([tokenRoute(42), pullRoute(withBase), repoRoute(), ...headChecks([]), denied, ...baseChecks([])], { installationId: 42 });
+    expect(await forge.mergePr('/repo', 7, 'abc123', { unchecked: true })).toEqual({ merged: false, reason: 'checks_missing' });
   });
 
   it('throws on another error, so the effect is retried', async () => {

@@ -63,7 +63,7 @@ export class FakeForge implements Forge, ForgeWriter, RepoPermissions {
   merges: { number: number; sha: string }[] = [];
   /** The checks of the PRs' base commit: `none` is a repository with no CI (ORC-148). */
   baseChecks: PrInfo['checks'] = 'none';
-  /** The repository's active Actions workflows: one is a CI, even one that never checks the base (ORC-148). */
+  /** The repository's own active Actions workflows: one is a CI, even one that never checks the base (ORC-148). */
   ciWorkflows = 0;
 
   /** As GitHub: merged only if the PR's head is still `sha`; a PR already merged on it is found again. */
