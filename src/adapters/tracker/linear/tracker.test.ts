@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { LinearApi, type FetchLike } from './api.js';
+import { IssueNotFoundError } from '../types.js';
 import { effectUuid, LinearTracker } from './tracker.js';
 
 type Handler = (vars: Record<string, any>) => unknown;
@@ -34,6 +35,19 @@ describe('LinearTracker', () => {
       identifier: 'REL-1', title: 'Export', description: 'Desc', url: 'https://linear.app/x/REL-1', stateName: 'Todo', stateType: 'unstarted',
       labels: ['bug'], delegateId: 'app-1', teamKey: 'REL', priority: 2, createdAt: Date.parse('2026-10-10T08:00:00.000Z'),
     });
+  });
+
+  it('tells an issue Linear does not have from a read error', async () => {
+    const answering = (errors: unknown[]): LinearApi =>
+      new LinearApi(async () => 'tok', async () => ({ ok: true, status: 200, json: async () => ({ data: null, errors }) }));
+    // What Linear answers for an unknown or deleted issue: an error, not `issue: null`.
+    const notFound = { message: 'Entity not found: Issue', extensions: { type: 'invalid input', userPresentableMessage: 'Could not find referenced Issue.' } };
+    await expect(new LinearTracker(answering([notFound]), 'app-1').getIssue('REL-9')).rejects.toBeInstanceOf(IssueNotFoundError);
+    const { api } = fakeLinear({ Issue: () => ({ issue: null }) });
+    await expect(new LinearTracker(api, 'app-1').getIssue('REL-9')).rejects.toBeInstanceOf(IssueNotFoundError);
+    const other = new LinearTracker(answering([{ message: 'Rate limit exceeded' }]), 'app-1').getIssue('REL-9');
+    await expect(other).rejects.toThrow('Rate limit exceeded');
+    await expect(other).rejects.not.toBeInstanceOf(IssueNotFoundError);
   });
 
   it('reads the active members of a team, every page (ORC-186)', async () => {

@@ -2,7 +2,7 @@ import type { Clock } from '../../../core/clock.js';
 import { logicalFromName, type ProjectRuntime } from '../../../core/orchestrator.js';
 import { SCHEMA_VERSION, TRUSTED, type EventPayloads, type EventType, type FactoryEvent, type TicketState } from '../../../core/types.js';
 import type { Store } from '../../../store/types.js';
-import { labelEchoKey, stateEchoKey, type Tracker, type TrackerIssue } from '../types.js';
+import { IssueNotFoundError, labelEchoKey, stateEchoKey, type Tracker, type TrackerIssue } from '../types.js';
 import { knownLabels, labelChanges, recordLabels, type Serial } from './labels.js';
 
 export interface ReconcileDeps {
@@ -79,28 +79,30 @@ export async function reconcileOnce(d: ReconcileDeps): Promise<void> {
         const undelegate = t.delegated && t.logical !== 'done';
         if (!t.activeRunId && !undelegate) continue;
         // Out of the list: done, cancelled or no longer delegated, which only the issue itself tells apart.
-        let issue: TrackerIssue;
+        // Undefined: deleted in Linear, so no longer delegated, as before ORC-185.
+        let issue: TrackerIssue | undefined;
         try {
           issue = await d.tracker.getIssue(t.ticketId);
         } catch (err) {
           d.log(`reconcile ${t.ticketId}: ${(err as Error).message}`);
-          continue;
+          // A read error (network, Linear down) says nothing of the ticket: left as it is this pass.
+          if (!(err instanceof IssueNotFoundError)) continue;
         }
         // Still delegated and open: past the list's first page, nothing to catch up.
-        if (issue.delegateId && issue.stateType !== 'completed' && issue.stateType !== 'canceled') continue;
-        if (issue.stateType === 'completed') await catchUpMove(d, emit, p, t, issue.stateName, at);
+        if (issue?.delegateId && issue.stateType !== 'completed' && issue.stateType !== 'canceled') continue;
+        if (issue?.stateType === 'completed') await catchUpMove(d, emit, p, t, issue.stateName, at);
         // A cancel stops the work of a delegated ticket itself (ORC-170); `decide` stops nothing on another.
-        const cancel = issue.stateType === 'canceled' && t.delegated;
-        if (cancel) {
+        const cancel = issue?.stateType === 'canceled' && t.delegated;
+        if (issue && cancel) {
           const to = logicalFromName(p.workflow.states, issue.stateName) ?? null;
           await emit(t, UNSIGNED, `reconcile:cancelled:${t.ticketId}:${issue.stateName}:${t.updatedAt}`, 'status.changed', { from: t.logical, to, cancelled: true });
         } else if (t.activeRunId) {
           await emit(t, TRUSTED, `reconcile:undelegated:${t.ticketId}:${t.activeRunId}`, 'session.stopped', {});
         }
         // A completed status the workflow does not call done is no move to done: the delegation is cleared, as before, or every pass reads it again.
-        const unmapped = issue.stateType === 'completed' && logicalFromName(p.workflow.states, issue.stateName) !== 'done';
+        const unmapped = issue?.stateType === 'completed' && logicalFromName(p.workflow.states, issue.stateName) !== 'done';
         // Cleared after a cancel too: no later pass reads the cancelled ticket again.
-        if (undelegate && (cancel || unmapped || !issue.delegateId)) await emit(t, TRUSTED, `reconcile:undelegated-flag:${t.ticketId}:${t.updatedAt}`, 'ticket.undelegated', {});
+        if (undelegate && (cancel || unmapped || !issue?.delegateId)) await emit(t, TRUSTED, `reconcile:undelegated-flag:${t.ticketId}:${t.updatedAt}`, 'ticket.undelegated', {});
       }
     } catch (err) {
       d.log(`reconcile ${p.id}: ${(err as Error).message}`);

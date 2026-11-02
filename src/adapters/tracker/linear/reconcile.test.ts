@@ -140,11 +140,23 @@ describe('reconcileOnce — done and cancelled (ORC-185)', () => {
 
   it('a ticket Linear does not answer for is left as it is this pass, not undelegated', async () => {
     const tracker = new FakeTracker();
+    // A read error (network, Linear down) says nothing of the ticket.
+    tracker.getIssue = () => Promise.reject(new Error('fetch failed'));
     const store = new SqliteStore(':memory:');
     await store.putTicket({ ...newTicketState('p', 'REL-9', 'T', 'dev', 9), delegated: true, activeRunId: 'r9' });
     const logs: string[] = [];
     expect(await pass(tracker, store, (m) => logs.push(m))).toEqual([]);
     expect(logs.join()).toContain('REL-9');
+  });
+
+  it('a ticket deleted in Linear is undelegated and its run stopped, as before', async () => {
+    const tracker = new FakeTracker();
+    const store = new SqliteStore(':memory:');
+    await store.putTicket({ ...newTicketState('p', 'REL-9', 'T', 'dev', 9), delegated: true, activeRunId: 'r9' });
+    expect((await pass(tracker, store)).map((e) => [e.id, e.type])).toEqual([
+      ['reconcile:undelegated:REL-9:r9', 'session.stopped'],
+      ['reconcile:undelegated-flag:REL-9:9', 'ticket.undelegated'],
+    ]);
   });
 
   it('a Done or a cancel it catches up never asks for a merge nor any write on the forge', async () => {

@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
 import type { LogicalState } from '../../../core/types.js';
 import type { TeamDirectory } from '../../roles/types.js';
-import { effectMarker, type ActivityInput, type SearchHit, type Tracker, type TrackerIssue } from '../types.js';
-import type { LinearApi } from './api.js';
+import { effectMarker, IssueNotFoundError, type ActivityInput, type SearchHit, type Tracker, type TrackerIssue } from '../types.js';
+import { LinearApiError, type LinearApi, type LinearGqlError } from './api.js';
 import { Q } from './queries.js';
 
 interface IssueNode {
@@ -42,6 +42,9 @@ const STATE_TYPES: Record<LogicalState, string> = {
 };
 
 const teamOf = (identifier: string) => identifier.split('-')[0]!;
+
+/** Linear's answer for an issue it does not have: `Entity not found: Issue`, shown as `Could not find referenced Issue.` */
+const isNotFound = (e: LinearGqlError) => /Entity not found|Could not find referenced/.test(`${e.message} ${e.extensions?.userPresentableMessage ?? ''}`);
 
 /**
  * The id a comment or an activity of an outbox effect is created with (ORC-162): Linear takes a
@@ -92,8 +95,14 @@ export class LinearTracker implements Tracker, TeamDirectory {
   ) {}
 
   private async node(identifier: string): Promise<IssueNode> {
-    const { issue } = await this.api.gql<{ issue: IssueNode | null }>(Q.issue, { id: identifier });
-    if (!issue) throw new Error(`Ticket Linear introuvable : ${identifier}`);
+    let issue: IssueNode | null = null;
+    try {
+      ({ issue } = await this.api.gql<{ issue: IssueNode | null }>(Q.issue, { id: identifier }));
+    } catch (err) {
+      // Linear answers an unknown or deleted issue with an error, not with null.
+      if (!(err instanceof LinearApiError && err.errors.some(isNotFound))) throw err;
+    }
+    if (!issue) throw new IssueNotFoundError(`Ticket Linear introuvable : ${identifier}`);
     this.issueIds.set(identifier, issue.id);
     return issue;
   }

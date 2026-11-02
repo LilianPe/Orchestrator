@@ -1,5 +1,5 @@
 import type { TeamDirectory } from '../roles/types.js';
-import type { ActivityInput, SearchHit, Tracker, TrackerIssue } from './types.js';
+import { IssueNotFoundError, type ActivityInput, type SearchHit, type Tracker, type TrackerIssue } from './types.js';
 
 const snapshot = (i: TrackerIssue): TrackerIssue => ({ ...i, labels: [...i.labels] });
 
@@ -93,7 +93,7 @@ export class FakeTracker implements Tracker, TeamDirectory {
 
   private must(identifier: string): TrackerIssue {
     const i = this.issues.get(identifier);
-    if (!i) throw new Error(`unknown issue ${identifier}`);
+    if (!i) throw new IssueNotFoundError(`unknown issue ${identifier}`);
     return i;
   }
 
