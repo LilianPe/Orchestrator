@@ -810,14 +810,18 @@ export class Orchestrator {
 
   /**
    * The head of the ticket's open PR as the factory shows it in Human Review (ORC-148): the only commit a Done merges.
-   * Unread (no branch, no PR, the forge down), none is recorded: a Done is refused until the factory moves the
-   * ticket to Human Review again (the AI review's success).
+   * Recorded only when it is the commit the ticket's worktree ended its run on: a head pushed meanwhile, which the
+   * run (a review) never read, is no reviewed commit. Unread (no branch, no PR, no worktree, the forge down) or
+   * different, none is recorded: a Done is refused until the factory moves the ticket to Human Review again.
    */
   private async headShown(project: ProjectRuntime, t: TicketState): Promise<string | undefined> {
-    if (!t.branch) return undefined;
+    if (!t.branch || !t.worktreePath) return undefined;
     try {
-      const pr = await this.d.forge.findPr(project.repoPath, t.branch);
-      return pr?.state === 'OPEN' ? pr.headSha : undefined;
+      const [pr, local] = await Promise.all([this.d.forge.findPr(project.repoPath, t.branch), this.d.workspaces.head(t.worktreePath)]);
+      if (pr?.state !== 'OPEN' || !pr.headSha) return undefined;
+      if (pr.headSha === local) return pr.headSha;
+      this.log('warn', `head of ${t.ticketId}'s PR (${pr.headSha}) is not the commit its run ended on (${local ?? 'unread'}): no reviewed commit`);
+      return undefined;
     } catch (err) {
       this.log('warn', `head of ${t.ticketId}'s PR unread at Human Review: ${(err as Error).message}`);
       return undefined;

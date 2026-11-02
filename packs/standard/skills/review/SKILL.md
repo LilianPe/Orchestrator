@@ -11,8 +11,9 @@ Tu mènes la PR de la branche courante à un état propre : review, corrections,
 
 1. État de la PR : `gh pr view <branche> --json number,state,baseRefName,mergeable,mergeStateStatus,url`. PR fermée ou mergée : arrête-toi et dis-le dans ton dernier message.
 2. `git status` : rien d'inattendu en cours (des modifications non commitées qui ne sont pas les tiennes : arrête-toi et dis-le, ne les écrase pas).
-3. Lis le ticket (ce que la PR doit faire), le `CLAUDE.md` du dépôt et `docs/agent/` : les règles qui serviront à juger les corrections.
-4. Ouvre ton **registre des décisions** (dans tes notes de session, pas dans le dépôt) : une ligne par décision, `<clé> — <décision> — <raison> — round <n>`, où la clé est l'endroit (fichier + fonction, phrase de doc) ou le mécanisme touché. Chaque correction, constat refusé ou point à trancher y entre.
+3. Ramène les commits poussés sur la branche depuis ton worktree (un humain a pu pousser pendant la review) : `git fetch origin`, puis `git merge --ff-only origin/<branche>`. Tu relis ainsi la tête de la PR, celle que l'usine retiendra comme relue : si ton dernier commit n'est pas la tête de la PR à la fin du run, rien n'est retenu et le *Done* qui suit ne merge pas. Avance rapide impossible (la branche distante a divergé de la tienne) : arrête-toi et dis-le, ne force rien.
+4. Lis le ticket (ce que la PR doit faire), le `CLAUDE.md` du dépôt et `docs/agent/` : les règles qui serviront à juger les corrections.
+5. Ouvre ton **registre des décisions** (dans tes notes de session, pas dans le dépôt) : une ligne par décision, `<clé> — <décision> — <raison> — round <n>`, où la clé est l'endroit (fichier + fonction, phrase de doc) ou le mécanisme touché. Chaque correction, constat refusé ou point à trancher y entre.
 
 ## 1. Round 1 : tout le diff, au niveau qu'il mérite
 

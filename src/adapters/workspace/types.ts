@@ -22,4 +22,6 @@ export interface WorkspaceManager {
   prepare(req: WorkspaceRequest): Promise<Workspace>;
   cleanup(projectId: string, repoPath: string, ticketId: string): Promise<void>;
   remoteBranchExists(repoPath: string, prefix: string): Promise<boolean>;
+  /** The commit a worktree's run ended on (ORC-148: only it may be recorded as reviewed); none for a path that is no worktree. */
+  head(path: string): Promise<string | undefined>;
 }

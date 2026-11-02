@@ -9,6 +9,7 @@ import { createHarness } from '../helpers/harness.js';
 type Harness = ReturnType<typeof createHarness>;
 const BRANCH = 'factory/rel-1-export-csv';
 const PR = { number: 3, url: 'https://github.com/acme/app/pull/3' };
+const WORKTREE = '/tmp/factory-fake/p/REL-1';
 
 async function inHumanReview(opts: Parameters<typeof createHarness>[0] = {}): Promise<Harness> {
   const h = createHarness({ ...opts, authz: { githubLogins: { 'user-lilian': 'lilian-gh', 'user-armand': 'armand-gh' } } });
@@ -18,6 +19,8 @@ async function inHumanReview(opts: Parameters<typeof createHarness>[0] = {}): Pr
   h.forge.setRepoPermission('armand-gh', 'read');
   // The agent's PR, green, on its head: the commit the factory shows when it moves the ticket to Human Review.
   h.forge.setPr(BRANCH, { ...PR, state: 'OPEN', headSha: 'abc123', checks: 'pass', failedChecks: [] });
+  // The agent's worktree ends its run on that head too: the forge's head is recorded only when it is the run's.
+  h.workspaces.heads.set(WORKTREE, 'abc123');
   h.runner.enqueue({ events: [{ kind: 'init', sessionId: 'x' }, { kind: 'text', text: 'PR ouverte.' }] });
   await h.send('ticket.delegated', { linearSessionId: 'ls-1' }, 'REL-1', { actor: 'user-lilian' });
   await h.send('pr.opened', { ...PR, branch: BRANCH });
@@ -46,6 +49,8 @@ describe('Done by a human, merge by the factory (ORC-148)', () => {
   it('merges nothing after a push since the review: the new commits go through the AI review, then the next Done merges them', async () => {
     const h = await inHumanReview();
     h.forge.setPr(BRANCH, { ...PR, state: 'OPEN', headSha: 'def456', checks: 'pass', failedChecks: [] });
+    // The review's first step brings the push into its worktree (`git merge --ff-only`): it ends its run on def456.
+    h.workspaces.heads.set(WORKTREE, 'def456');
     h.runner.enqueue({ events: [{ kind: 'init', sessionId: 'y' }, { kind: 'text', text: 'Rien à redire.' }] });
     await h.send('status.changed', { from: 'human_review', to: 'done' }, 'REL-1', { actor: 'user-lilian' });
     expect(h.forge.merges).toEqual([]);
@@ -64,11 +69,25 @@ describe('Done by a human, merge by the factory (ORC-148)', () => {
     h.forge.setPr(BRANCH, { ...PR, state: 'OPEN', headSha: 'def456', checks: 'pass', failedChecks: [] });
     // The factory still reads the reviewed head; GitHub, given that head, refuses the merge (409).
     vi.spyOn(h.forge, 'findPr').mockResolvedValueOnce(shown);
+    h.workspaces.heads.set(WORKTREE, 'def456');
     await h.send('status.changed', { from: 'human_review', to: 'done' }, 'REL-1', { actor: 'user-lilian' });
     expect(h.forge.merges).toEqual([]);
     expect((await h.store.getRun(h.runner.requests.at(-1)!.runId))?.job).toBe('review');
     expect(comments(h).some((c) => /push depuis la review.*repassent par la review IA/.test(c))).toBe(true);
     expect((await h.ticket()).reviewSha).toBe('def456');
+  });
+
+  it('a review that ended on another commit than the PR\'s head records none: the next Done merges nothing', async () => {
+    const h = await inHumanReview();
+    h.forge.setPr(BRANCH, { ...PR, state: 'OPEN', headSha: 'def456', checks: 'pass', failedChecks: [] });
+    // The review did not bring the push into its worktree: it read abc123, the forge shows def456.
+    h.runner.enqueue({ events: [{ kind: 'init', sessionId: 'y' }, { kind: 'text', text: 'Rien à redire.' }] });
+    await h.send('status.changed', { from: 'human_review', to: 'done' }, 'REL-1', { actor: 'user-lilian' });
+    expect(lastMove(h)).toBe('Human Review');
+    expect((await h.ticket()).reviewSha).toBeUndefined();
+    await h.send('status.changed', { from: 'human_review', to: 'done' }, 'REL-1', { actor: 'user-lilian' });
+    expect(h.forge.merges).toEqual([]);
+    expect(comments(h).at(-1)).toMatch(/aucun commit relu/);
   });
 
   it('refuses to merge another PR than the ticket\'s, found on its branch', async () => {

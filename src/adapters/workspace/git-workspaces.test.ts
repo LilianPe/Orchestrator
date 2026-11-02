@@ -52,6 +52,14 @@ describe('GitWorkspaces', () => {
     expect(await ws.remoteBranchExists(repo, 'factory/rel-2-')).toBe(false);
   });
 
+  it('reads the HEAD of a worktree, none for a path that is not one (ORC-148)', async () => {
+    const { repo, root } = fixtureRepo();
+    const ws = new GitWorkspaces({ root });
+    const w = await ws.prepare(req(repo));
+    expect(await ws.head(w.path)).toBe(git(w.path, 'rev-parse', 'HEAD'));
+    expect(await ws.head(join(root, 'nowhere'))).toBeUndefined();
+  });
+
   it('prepares the read-only trunk and a knowledge worktree', async () => {
     const { repo, root } = fixtureRepo();
     const kb = fixtureRepo();
