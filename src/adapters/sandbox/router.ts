@@ -1,0 +1,87 @@
+import type { ExecResult } from '../exec.js';
+import type { IsolationLevel, Sandbox, SandboxExecOptions, SandboxProvider, SandboxRequest, SandboxRequirements } from './types.js';
+
+export interface SandboxBackend {
+  name: string;
+  provider: SandboxProvider;
+  capabilities: { level: IsolationLevel; browser: boolean; services: readonly string[] };
+}
+
+const RANK: Record<IsolationLevel, number> = { L3: 3, L4: 4, L5: 5 };
+
+/** What `b` lacks of `req`, in the words of the refusal; empty when it satisfies all of it. */
+function unmet(b: SandboxBackend, req: SandboxRequirements): string[] {
+  const { level, browser, services } = b.capabilities;
+  return [
+    ...(RANK[level] < RANK[req.minLevel] ? [`level >= ${req.minLevel}`] : []),
+    ...(req.browser && !browser ? ['browser'] : []),
+    ...req.services.filter((s) => !services.includes(s)).map((s) => `service ${s}`),
+  ];
+}
+
+/**
+ * Picks the backend of each sandbox from the requirements (ORC-204), and refuses when none satisfies
+ * them: a weaker backend is never a fallback. Each id goes back to the backend that made it.
+ */
+export class SandboxRouter implements SandboxProvider {
+  /** In memory only: after a daemon restart, `list` and `findByAttempt` fill it again from the backends. */
+  private owner = new Map<string, SandboxBackend>();
+
+  constructor(private readonly backends: readonly SandboxBackend[]) {}
+
+  async create(req: SandboxRequest): Promise<Sandbox> {
+    // A replayed create can land after a restart, or after the backend list changed: the run's sandbox wins.
+    const existing = await this.findByAttempt(req.runId);
+    if (existing) return existing;
+    const chosen = this.backends.find((b) => unmet(b, req.requirements).length === 0);
+    if (!chosen) {
+      const why = this.backends.map((b) => `${b.name} lacks ${unmet(b, req.requirements).join(', ')}`).join('; ');
+      throw new Error(`no sandbox backend satisfies the requirements of ${req.runId}: ${why || 'no backend'}`);
+    }
+    const sandbox = await chosen.provider.create(req);
+    this.owner.set(sandbox.id, chosen);
+    return sandbox;
+  }
+
+  async exec(id: string, argv: readonly string[], opts?: SandboxExecOptions): Promise<ExecResult> {
+    return this.ownerOf(id).provider.exec(id, argv, opts);
+  }
+
+  spawnCommand(id: string, argv: readonly string[], opts?: SandboxExecOptions): string[] {
+    return this.ownerOf(id).provider.spawnCommand(id, argv, opts);
+  }
+
+  async findByAttempt(runId: string): Promise<Sandbox | undefined> {
+    for (const b of this.backends) {
+      const sandbox = await b.provider.findByAttempt(runId);
+      if (!sandbox) continue;
+      this.owner.set(sandbox.id, b);
+      return sandbox;
+    }
+    return undefined;
+  }
+
+  async list(): Promise<{ runId: string; sandbox: Sandbox }[]> {
+    const all = [];
+    for (const b of this.backends) {
+      for (const l of await b.provider.list()) {
+        this.owner.set(l.sandbox.id, b);
+        all.push(l);
+      }
+    }
+    return all;
+  }
+
+  async destroy(id: string): Promise<void> {
+    const b = this.owner.get(id);
+    if (!b) return;
+    await b.provider.destroy(id);
+    this.owner.delete(id);
+  }
+
+  private ownerOf(id: string): SandboxBackend {
+    const b = this.owner.get(id);
+    if (!b) throw new Error(`unknown sandbox ${id}`);
+    return b;
+  }
+}
