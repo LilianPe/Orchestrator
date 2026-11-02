@@ -32,7 +32,14 @@ export class SandboxRouter implements SandboxProvider {
   async create(req: SandboxRequest): Promise<Sandbox> {
     // A replayed create can land after a restart, or after the backend list changed: the run's sandbox wins.
     const existing = await this.findByAttempt(req.runId);
-    if (existing) return existing;
+    // Never handed back if it is not what was asked: the run would get another network or a weaker isolation.
+    if (existing) {
+      const b = this.owner.get(existing.id)!;
+      if (existing.network !== req.network) throw new Error(`sandbox of ${req.runId} has network ${existing.network}, asked ${req.network}`);
+      const missing = [...(RANK[existing.level] < RANK[req.requirements.minLevel] ? [`level >= ${req.requirements.minLevel}`] : []), ...unmet(b, req.requirements)];
+      if (missing.length) throw new Error(`sandbox of ${req.runId} does not satisfy the requirements: ${b.name} lacks ${[...new Set(missing)].join(', ')}`);
+      return existing;
+    }
     const chosen = this.backends.find((b) => unmet(b, req.requirements).length === 0);
     if (!chosen) {
       const why = this.backends.map((b) => `${b.name} lacks ${unmet(b, req.requirements).join(', ')}`).join('; ');

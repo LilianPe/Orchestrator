@@ -53,6 +53,17 @@ describe('SandboxRouter', () => {
     expect(await router.exec(held.id, ['true'])).toEqual(EXEC_PROBE.result);
   });
 
+  it('a replayed create refuses the sandbox of the run at another network, or on a backend short of the requirements', async () => {
+    const weak = backend('weak');
+    const strong = backend('strong', { level: 'L4', browser: true, services: [] });
+    await weak.provider.create(request);
+    const router = new SandboxRouter([weak, strong]);
+    await expect(router.create({ ...request, network: 'full' })).rejects.toThrow(/r1 has network none, asked full/);
+    await expect(router.create({ ...request, requirements: { ...DEFAULT_REQUIREMENTS, minLevel: 'L4' } })).rejects.toThrow(/r1 .*weak lacks level >= L4/);
+    await expect(router.create({ ...request, requirements: { ...DEFAULT_REQUIREMENTS, browser: true } })).rejects.toThrow(/r1 .*weak lacks browser/);
+    expect(strong.provider.created).toEqual([]);
+  });
+
   it('dispatches exec, spawnCommand and destroy to the backend that made the sandbox', async () => {
     const a = backend('a');
     const b = backend('b', { level: 'L3', browser: true, services: [] });
