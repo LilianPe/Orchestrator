@@ -96,6 +96,23 @@ describe('decide — Done by a human merges the PR (ORC-148)', () => {
     expect(out.effects).toEqual([expect.objectContaining({ kind: 'start_run', job: 'dev' })]);
   });
 
+  it('a human who cancels, or moves to an unmapped status, then back to AI Review starts the review again', () => {
+    const inAi = reduce(inReview({ logical: 'done' }), { type: 'status.recorded', to: 'ai_review' })!;
+    for (const away of [{ from: 'ai_review', to: null, cancelled: true }, { from: 'ai_review', to: null }] as const) {
+      const left = reduce(inAi, ev('status.changed', away, 'u-lead'))!;
+      const back = decide(left, ev('status.changed', { from: null, to: 'ai_review' }, 'u-lead', MERGER), workflow);
+      expect(back.effects, JSON.stringify(away)).toEqual([expect.objectContaining({ kind: 'start_run', job: 'review' })]);
+    }
+  });
+
+  it('the dropped echo records nothing: a second copy of the factory\'s move is an echo too', () => {
+    const inAi = reduce(inReview({ logical: 'done', activeRunId: 'r1', activeJob: 'review' }), { type: 'status.recorded', to: 'ai_review' })!;
+    const late = ev('status.changed', { from: 'done', to: 'ai_review' }, 'u-factory-app', MERGER);
+    const after = reduce(inAi, late)!;
+    expect(after.recordedStatus).toBe('ai_review');
+    expect(decide(after, { ...late, id: 'e-again' }, workflow).effects).toEqual([]);
+  });
+
   it('remembers the status the factory moved the ticket to, until a human moves it', () => {
     const moved = reduce(inReview({ logical: 'done' }), { type: 'status.recorded', to: 'ai_review' })!;
     expect(moved.recordedStatus).toBe('ai_review');

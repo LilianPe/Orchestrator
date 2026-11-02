@@ -3,7 +3,7 @@ import { allowed, DEFAULT_MATRIX, refusalMessage, type AuthzAction, type AuthzMa
 import { evalCondition } from './conditions.js';
 import { deadLetterReason, liftDeadLetterBlock, REPAIR_LABELS, repairedEvent } from './dead-letter.js';
 import type { Decision, Effect } from './decision.js';
-import { reduce } from './reduce.js';
+import { isOwnMoveEcho, reduce } from './reduce.js';
 import type { EventPayloads, EventType, FactoryEvent, FeedbackItem, InputKind, Taint, TicketState, VerifyFailure } from './types.js';
 
 type StartRun = Extract<Effect, { kind: 'start_run' }>;
@@ -486,12 +486,10 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
     out.effects.push({ kind: 'stop_run' });
     return out;
   }
-  // A move to the status the factory itself put the ticket in, no human having moved it since, changes nothing: it is
-  // the webhook of the factory's own move, come after its echo expired (ORC-148: the move to AI Review after a push
-  // must not start a second review). Only a status the factory recorded: `logical` alone may be a fallback (an
-  // unmapped Linear status reads as todo), and a human move to it is a move.
-  if (event.type === 'status.changed' && state?.recordedStatus && event.payload.to === state.recordedStatus && state.logical === state.recordedStatus) {
-    out.trace.push(`status.changed: already ${state.logical}, the echo of the factory's own move`);
+  // The late webhook of the factory's own move decides nothing (ORC-148: the move to AI Review after a push must not
+  // start a second review).
+  if (isOwnMoveEcho(state, event)) {
+    out.trace.push(`status.changed: already ${state?.logical}, the echo of the factory's own move`);
     return out;
   }
   // A Done from Human Review only: during dev or the AI review it is no review decision, and the rules apply as before.
