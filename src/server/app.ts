@@ -64,6 +64,14 @@ function isPublicPath(method: string, path: string): boolean {
   return (method === 'POST' && (path === '/webhooks/linear' || path === '/webhooks/github')) || (method === 'GET' && path === '/oauth/callback') || path === '/agent' || path.startsWith('/agent/');
 }
 
+/**
+ * The agent API alone (ORC-204), for the listener the sandboxes reach off the loopback: every other
+ * path answers 404. Node's server has already resolved `..` in the URL Hono routes on.
+ */
+export function agentOnly(app: Hono): (req: Request) => Response | Promise<Response> {
+  return (req) => (new URL(req.url).pathname.startsWith('/agent/') ? app.fetch(req) : new Response('Not Found', { status: 404 }));
+}
+
 function publicRun({ token: _t, ...rest }: RunRecord) {
   // The labels still null, with the tickets that will fill them, as known now (ORC-226).
   return rest.labels ? { ...rest, labels: { ...rest.labels, pending: pendingLabels(rest.labels) } } : rest;

@@ -9,7 +9,7 @@ import { newTicketState, type FactoryEvent } from '../core/types.js';
 import { SqliteStore } from '../store/sqlite-store.js';
 import { LABELS } from '../../test/helpers/store-suite.js';
 import { pendingLabels } from '../core/attempt-labels.js';
-import { createApp } from './app.js';
+import { agentOnly, createApp } from './app.js';
 
 async function setup(extra: { uiPassword?: string } = {}) {
   const store = new SqliteStore(':memory:');
@@ -87,6 +87,17 @@ describe('server', () => {
     const ok = await app.request('/agent/issue/REL-1', { headers: { authorization: 'Bearer tok' } });
     expect((await ok.json()).identifier).toBe('REL-1');
     expect((await app.request('/agent/issue/REL-2', { headers: { authorization: 'Bearer tok' } })).status).toBe(403);
+  });
+
+  it('the agent listener serves the agent API, with its run token, and nothing else (ORC-204)', async () => {
+    const { app } = await setup({ uiPassword: 'pw' });
+    const fetch = agentOnly(app);
+    const get = (path: string, token = 'tok') => fetch(new Request(`http://172.17.0.1:4101${path}`, { headers: { authorization: `Bearer ${token}` } }));
+    expect((await (await get('/agent/issue/REL-1')).json()).identifier).toBe('REL-1');
+    expect((await get('/agent/issue/REL-1', 'nope')).status).toBe(401);
+    for (const path of ['/api/state', '/', '/webhooks/linear', '/agent/../api/state', '/agent%2F..%2Fapi/state', '/agent']) {
+      expect((await get(path)).status, path).toBe(404);
+    }
   });
 
   it('agent ask posts an elicitation and blocks the ticket through the orchestrator', async () => {

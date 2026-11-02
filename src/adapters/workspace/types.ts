@@ -8,7 +8,6 @@ export interface WorkspaceRequest {
   kind: WorkspaceKind;
   slot: number;
   portBase: number;
-  setup: string[];
   runId: string;
 }
 
@@ -16,6 +15,8 @@ export interface Workspace {
   path: string;
   port?: number;
   branch?: string;
+  /** True when `prepare` just created the worktree: the repository's `setup` is then the caller's to run (ORC-204). */
+  fresh?: boolean;
 }
 
 export interface WorkspaceManager {
@@ -24,4 +25,6 @@ export interface WorkspaceManager {
   remoteBranchExists(repoPath: string, prefix: string): Promise<boolean>;
   /** The commit a worktree's run ended on (ORC-148: only it may be recorded as reviewed); none for a path that is no worktree. */
   head(path: string): Promise<string | undefined>;
+  /** The absolute git dir a worktree's `.git` file points into (ORC-204: mounted in its sandbox for git to work there). */
+  gitCommonDir(path: string): Promise<string>;
 }
