@@ -99,6 +99,10 @@ function buildJob(name: string, raw: RawJob, perRun: RunLimits): JobSpec {
   const missing = (k: string): never => {
     throw new WorkflowError(`jobs.${name}.${k}: required`);
   };
+  // Conservative (ORC-217): only the implementer (`dev` queue) resumes, and mounts, the ticket session.
+  if (raw.queue === 'questions' && raw.session === 'resume') {
+    throw new WorkflowError(`jobs.${name}.session: a questions job cannot resume the ticket session, only a dev job can`);
+  }
   return {
     name,
     queue: need('queue'),

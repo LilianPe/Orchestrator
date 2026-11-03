@@ -10,6 +10,8 @@ import type { StoredEvent } from '../core/upcast.js';
  */
 export const LEASE_MS = 60_000;
 
+export type SessionRole = 'implementer' | 'reviewer' | 'answerer';
+
 export interface RunRecord {
   id: string;
   projectId: string;
@@ -19,6 +21,11 @@ export interface RunRecord {
   /** `interrupted`: cut by a daemon shutdown; recover() settles it on the next start. */
   status: 'running' | 'interrupted' | RunOutcome;
   claudeSessionId: string;
+  /**
+   * Whose session `claudeSessionId` is (ORC-217): the implementer's is the ticket's, resumed across
+   * attempts; a reviewer's or an answerer's is fresh. Absent on knowledge runs and older records.
+   */
+  sessionRole?: SessionRole;
   linearSessionId?: string;
   startedAt: number;
   endedAt?: number;

@@ -5,7 +5,7 @@ description: Écrire seulement les tests des critères d'acceptation d'un ticket
 
 # factory:tests
 
-Tu reçois un ticket Linear (bloc « Ticket ») dans un worktree git déjà créé sur la branche indiquée. Ton seul travail : **écrire les tests qui traduisent ses critères d'acceptation, et rien d'autre**, puis les commiter. Le code viendra à l'étape suivante (`factory:dev`), dans une autre session.
+Tu reçois un ticket Linear (bloc « Ticket ») dans un worktree git déjà créé sur la branche indiquée. Ton seul travail : **écrire les tests qui traduisent ses critères d'acceptation, et rien d'autre**, puis les commiter. Le code viendra à l'étape suivante (`factory:dev`), qui reprendra ta session.
 
 ## Faire
 

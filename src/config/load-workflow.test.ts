@@ -155,4 +155,10 @@ on:
       loadWorkflow({ packDir, projectFile: projectFile('version: 1\non:\n  ticket.delegated:\n    - { run: nope }\n') }),
     ).toThrow(WorkflowError);
   });
+
+  it('rejects a questions job that resumes the session: only the implementer resumes the ticket session (ORC-217)', () => {
+    expect(() =>
+      loadWorkflow({ packDir, projectFile: projectFile('version: 1\njobs:\n  ask:\n    session: resume\n') }),
+    ).toThrow(/jobs\.ask\.session: a questions job cannot resume/);
+  });
 });

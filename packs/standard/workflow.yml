@@ -57,6 +57,8 @@ jobs:
   tests:
     extends: dev
     skill: "factory:tests"
+    # The implementer's: the ticket session starts here, a return to the step and `dev` resume it (ORC-217).
+    session: resume
     pickup: false
     red: { command: "npm test --", mode: measure }
     on_success: { run: dev }

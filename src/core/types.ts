@@ -289,7 +289,16 @@ export type ShellEvent =
   | { type: 'pending.cleared' }
   | { type: 'workspace.prepared'; path: string; port?: number; branch?: string }
   | { type: 'workspace.released' }
-  | { type: 'run.started'; runId: string; job: string; queue: QueueName; claudeSessionId: string; feedbackConsumed: boolean }
+  | {
+      type: 'run.started';
+      runId: string;
+      job: string;
+      queue: QueueName;
+      claudeSessionId: string;
+      feedbackConsumed: boolean;
+      /** `false` on a run out of the ticket session (a review): the ticket does not take its session (ORC-217). Absent before. */
+      ticketSession?: false;
+    }
   /** The active run is gone without a `run.finished` (launch failure). */
   | { type: 'run.cleared' }
   /** The factory restarted while the ticket had a run or a verification in flight. */
