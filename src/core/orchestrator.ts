@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Forge, ForgeWriter, MergeResult } from '../adapters/forge/types.js';
 import type { RoleResolver } from '../adapters/roles/types.js';
@@ -7,6 +7,7 @@ import type { RunHandle, RunResult, Runner } from '../adapters/runner/types.js';
 import {
   DEFAULT_REQUIREMENTS,
   PACK_TARGET,
+  REFUSALS_TARGET,
   SANDBOX_HOME,
   SETTINGS_TARGET,
   WORKSPACE_TARGET,
@@ -28,6 +29,7 @@ import {
   type EffectOutcome,
   type OutboxRow,
   type RunRecord,
+  type SessionRole,
   type Store,
   type WorkflowVersion,
 } from '../store/types.js';
@@ -125,6 +127,12 @@ export interface OrchestratorDeps {
   sandboxes?: SandboxProvider;
   /** Where each ticket's Claude session dir lives on the host (`<sessionsDir>/<project>/<ticket>`); required with `sandboxes`. */
   sessionsDir?: string;
+  /**
+   * Per-run host dirs (`<runsDir>/<runId>`, ORC-217): `refusals/`, the hook's refusals log of every
+   * sandboxed run, kept 30 days; `claude/`, the `~/.claude` of a run out of the ticket session, removed
+   * with its sandbox. Required with `sandboxes`.
+   */
+  runsDir?: string;
   /** Other host paths every sandbox mounts (the factory's install, for `factory-agent`). */
   sandboxMounts?: readonly SandboxMount[];
   agentEnv: (run: RunRecord) => Record<string, string>;
@@ -192,6 +200,17 @@ interface EffectKey {
 
 export function logicalFromName(states: Workflow['states'], name: string): LogicalState | undefined {
   return (Object.entries(states) as [LogicalState, string][]).find(([, n]) => n === name)?.[0];
+}
+
+/**
+ * The session role of an attempt (ORC-217): the ticket session is the implementer's, any other `dev`-queue
+ * session a reviewer's, a read-only question the answerer's.
+ * ponytail: read from the job's shape, not declared in the workflow; a `role:` per job if a pack needs another.
+ */
+function roleOf(job: JobSpec, ticketSession: boolean): SessionRole | undefined {
+  if (ticketSession) return 'implementer';
+  if (job.queue === 'dev') return 'reviewer';
+  return job.workspace === 'trunk-readonly' ? 'answerer' : undefined;
 }
 
 function startOfUtcDay(ts: number): number {
@@ -405,25 +424,34 @@ export class Orchestrator {
       this.log('error', `sandboxes not listed, those of dead attempts are left: ${(err as Error).message}`);
       return;
     }
-    await Promise.all(live.filter(({ runId }) => !this.handles.has(runId)).map(({ sandbox }) => this.destroySandbox(sandbox.id)));
+    await Promise.all(live.filter(({ runId }) => !this.handles.has(runId)).map(({ sandbox, runId }) => this.destroySandbox(sandbox.id, runId)));
   }
 
-  /** Logged, never thrown: a sandbox left behind is recover()'s at the next start. */
-  private async destroySandbox(id: string): Promise<void> {
+  /**
+   * Logged, never thrown: a sandbox left behind is recover()'s at the next start. The run's own
+   * `~/.claude` goes with it (a dir left by a failed removal is purged with the run's dir, at 30 days).
+   */
+  private async destroySandbox(id: string, runId: string): Promise<void> {
     await this.d.sandboxes?.destroy(id).catch((err: Error) => this.log('error', `sandbox ${id} not destroyed: ${err.message}`));
+    if (this.d.runsDir) rmSync(join(this.d.runsDir, runId, 'claude'), { recursive: true, force: true });
   }
 
   /**
    * The attempt's sandbox (ORC-204): the worktree, the git dir its `.git` file points into (at the
    * same path, so git works there; it shows the repository's other refs until ORC-205), the ticket's
-   * Claude session dir as `~/.claude` (`--resume` across attempts), the pack and the run settings
-   * read-only. A `trunk-readonly` job gets its worktree read-write too: only `--permission-mode plan`
-   * keeps it from writing, as on the host. `claude-api` is an open network until ORC-213.
+   * Claude session dir as `~/.claude` (`--resume` across attempts) when the attempt runs the ticket
+   * session, else an empty per-run dir there, removed with the sandbox: a review or a question starts in
+   * a fresh context that never sees the ticket's (ORC-217). The run's refusals dir, read-write, so the
+   * hook's log outlives the sandbox. The pack and the run settings read-only.
+   * A `trunk-readonly` job gets its worktree read-write too: only `--permission-mode plan` keeps it
+   * from writing, as on the host. `claude-api` is an open network until ORC-213.
    */
-  private async openSandbox(sandboxes: SandboxProvider, project: ProjectRuntime, ticketId: string, ws: Workspace, runId: string): Promise<Sandbox> {
-    if (!this.d.sessionsDir) throw new Error('sessionsDir is required with sandboxes');
-    const sessionDir = join(this.d.sessionsDir, project.id, ticketId);
-    mkdirSync(sessionDir, { recursive: true });
+  private async openSandbox(sandboxes: SandboxProvider, project: ProjectRuntime, ticketId: string, ws: Workspace, runId: string, ticketSession: boolean): Promise<Sandbox> {
+    if (!this.d.sessionsDir || !this.d.runsDir) throw new Error('sessionsDir and runsDir are required with sandboxes');
+    const runDir = join(this.d.runsDir, runId);
+    const claudeDir = ticketSession ? join(this.d.sessionsDir, project.id, ticketId) : join(runDir, 'claude');
+    const refusalsDir = join(runDir, 'refusals');
+    for (const dir of [claudeDir, refusalsDir]) mkdirSync(dir, { recursive: true });
     const gitDir = await this.d.workspaces.gitCommonDir(ws.path);
     const sandbox = await sandboxes.create({
       runId,
@@ -433,7 +461,8 @@ export class Orchestrator {
       requirements: DEFAULT_REQUIREMENTS,
       mounts: [
         { host: gitDir, target: gitDir, readOnly: false },
-        { host: sessionDir, target: `${SANDBOX_HOME}/.claude`, readOnly: false },
+        { host: claudeDir, target: `${SANDBOX_HOME}/.claude`, readOnly: false },
+        { host: refusalsDir, target: REFUSALS_TARGET, readOnly: false },
         { host: this.d.packDir, target: PACK_TARGET, readOnly: true },
         { host: this.settingsPath(), target: SETTINGS_TARGET, readOnly: true },
         ...(this.d.sandboxMounts ?? []),
@@ -1234,8 +1263,15 @@ export class Orchestrator {
         return;
       }
 
+      // The implementer's run (a `dev` from scratch or a resume) runs the ticket session: resumed when the
+      // ticket has one, else made here and taken by the ticket. A review or a question never does (ORC-217).
+      const ticketSession = job.queue === 'dev' && (opts.resume ?? (job.session === 'resume' || job.pickup));
+      const resume = ticketSession && !!t.claudeSessionId;
+      const claudeSessionId = resume ? t.claudeSessionId! : this.newId();
+      const sessionRole = roleOf(job, ticketSession);
+
       // Opened after the cheap exits above, right before the setup and the run that need it.
-      sandbox = this.d.sandboxes && (await this.openSandbox(this.d.sandboxes, project, ticketId, ws, runId));
+      sandbox = this.d.sandboxes && (await this.openSandbox(this.d.sandboxes, project, ticketId, ws, runId, ticketSession));
       if (!setUp) await this.runSetup(project, ws, sandbox);
       setUp = true;
       // In each run's prompt, not the system prompt: read again at each attempt, never frozen at a resume
@@ -1244,10 +1280,6 @@ export class Orchestrator {
       // After the setup, which is the repository's and could write one; the session loads none anyway
       // (`--setting-sources ""`): defence in depth, for what ORC-128 did not trap (ORC-284).
       await workspaces.resetClaudeDir(ws.path);
-
-      const wantsResume = opts.resume ?? job.session === 'resume';
-      const resume = wantsResume && !!t.claudeSessionId;
-      const claudeSessionId = resume ? t.claudeSessionId! : this.newId();
 
       let input: { kind: InputKind; text: string } | undefined;
       if (kind === 'feedback') {
@@ -1280,6 +1312,7 @@ export class Orchestrator {
         queue: job.queue,
         status: 'running',
         claudeSessionId,
+        sessionRole,
         linearSessionId,
         startedAt: clock.now(),
         costUsd: 0,
@@ -1293,7 +1326,7 @@ export class Orchestrator {
       // The mark, then the ticket, then the run (`startHandled`, ORC-277): a dev ticket holds its run
       // before the run is written, so recover() blocks it whichever write a crash falls after.
       if (opts.startMark) await store.setMeta(opts.startMark, runId);
-      await this.apply(t, { type: 'run.started', runId, job: job.name, queue: job.queue, claudeSessionId, feedbackConsumed: kind === 'feedback' });
+      await this.apply(t, { type: 'run.started', runId, job: job.name, queue: job.queue, claudeSessionId, feedbackConsumed: kind === 'feedback', ...(ticketSession ? {} : { ticketSession: false as const }) });
       await store.putRun(run);
       // The run is written: a queued item it came from leaves the queue now (a crash from here on is recover()'s).
       // Logged, not thrown: the run is launched either way, and a queue item left behind is refused
@@ -1314,9 +1347,11 @@ export class Orchestrator {
         limits: job.limits,
         env: {
           ...this.d.agentEnv(run),
+          // In a sandbox, the run's refusals log, on the host: it outlives the sandbox (ORC-217).
+          ...(sandbox ? { FACTORY_REFUSALS_LOG: `${REFUSALS_TARGET}/refusals.jsonl` } : {}),
           ...(ws.port !== undefined ? { PORT: String(ws.port) } : {}),
           ...CLAUDE_RUN_ENV,
-          // The ticket's session dir as Claude's whole config dir (ORC-128 point 4), login by the env
+          // The ticket's session dir (out of the ticket session, the run's own) as Claude's whole config dir (ORC-128 point 4), login by the env
           // (CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY). On the host, the daemon's own, as before.
           ...(sandbox ? { CLAUDE_CONFIG_DIR: `${SANDBOX_HOME}/.claude` } : {}),
         },
@@ -1329,7 +1364,7 @@ export class Orchestrator {
       handedOver = true;
     } finally {
       // The sandbox first: it mounts the worktree.
-      if (sandbox && !handedOver) await this.destroySandbox(sandbox.id);
+      if (sandbox && !handedOver) await this.destroySandbox(sandbox.id, runId);
       if (!setUp) {
         await workspaces
           .cleanup(project.id, project.repoPath, ticketId)
@@ -1395,7 +1430,7 @@ export class Orchestrator {
         result = { outcome: 'failure', costUsd: 0, turns: 0, lastText: message, infra: true };
       }
     } finally {
-      if (sandboxId) await this.destroySandbox(sandboxId);
+      if (sandboxId) await this.destroySandbox(sandboxId, run.id);
     }
     let output: AgentOutput | undefined;
     let unreadable = false;

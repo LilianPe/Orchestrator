@@ -182,6 +182,7 @@ export function createHarness(
   const sandboxes = new FakeSandboxProvider();
   const publisher = new FakePublisher(forge);
   const sessionsDir = opts.sandboxed ? mkdtempSync(join(tmpdir(), 'factory-sessions-')) : undefined;
+  const runsDir = opts.sandboxed ? mkdtempSync(join(tmpdir(), 'factory-runs-')) : undefined;
   /** The orchestrator's log lines, every life of it. */
   const logs: { level: string; message: string }[] = [];
   const project = { id: 'p', repoPath: '/repo', teamKey: 'REL', workflow };
@@ -201,7 +202,7 @@ export function createHarness(
       forgeWriter: life.gate(forge),
       workspaces: life.gate(workspaces),
       verify: life.gate(checks.run),
-      ...(sessionsDir ? { sandboxes: life.gate(sandboxes), sessionsDir } : {}),
+      ...(sessionsDir ? { sandboxes: life.gate(sandboxes), sessionsDir, runsDir } : {}),
     };
     return { ...life, outside };
   };
@@ -280,7 +281,7 @@ export function createHarness(
   }
 
   return {
-    clock, tracker, forge, runner, workspaces, checks, sandboxes, publisher, sessionsDir, logs,
+    clock, tracker, forge, runner, workspaces, checks, sandboxes, publisher, sessionsDir, runsDir, logs,
     send, advance, restart, project,
     get orch() {
       return orch;

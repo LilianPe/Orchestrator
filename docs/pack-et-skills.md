@@ -91,8 +91,8 @@ Les motifs du `deny` sont des jokers sur le texte de la commande : un espace en 
 
 Chaque refus est une règle nommée (`no-verify`, `commit-no-verify`, `force-push`, `push-trunk`, `merge`, `reset-origin`, `rm-root`, `pipe-to-shell`, `container-socket`, `web-search`, et avec le drapeau : `push`, `gh-write`). L'agent reçoit le nom de la règle dans le motif du refus, et le hook écrit une ligne JSON `{"at", "tool", "command", "rule", "ticket"}` (`ticket` : `$FACTORY_TICKET`, `null` hors d'un run) dans le **journal des refus** :
 
-1. `$FACTORY_REFUSALS_LOG` s'il est défini (le démon le transmet aux runs quand il l'a ; c'est un chemin vu du run, donc du conteneur en sandbox) ;
-2. sinon `$CLAUDE_CONFIG_DIR/factory-refusals.jsonl` (le répertoire de configuration Claude du ticket) ;
+1. `$FACTORY_REFUSALS_LOG` s'il est défini. En sandbox, Relais le pose toujours à `/factory/refusals/refusals.jsonl`, monté depuis `<RELAIS_HOME>/runs/<runId>/refusals/` : le journal de chaque run (review et question comprises) survit au conteneur, et il est purgé à 30 jours (ORC-217). Sur l'hôte, le démon le transmet aux runs quand il l'a ;
+2. sinon `$CLAUDE_CONFIG_DIR/factory-refusals.jsonl` (le répertoire de configuration Claude du run) ;
 3. sinon `~/.claude/factory-refusals.jsonl`.
 
 Les dossiers sont créés ; un journal impossible à écrire n'empêche ni le refus ni la session.

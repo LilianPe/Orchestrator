@@ -1,5 +1,6 @@
-import { readdirSync, statSync, unlinkSync } from 'node:fs';
+import { readdirSync, rmSync, statSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
+import type { Store } from '../../store/types.js';
 
 /** How long a run transcript is kept (ORC-132): the daemon purges older ones. */
 export const TRANSCRIPT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
@@ -58,6 +59,8 @@ export function maskTranscriptLine(line: string, secrets: readonly string[]): st
   return out;
 }
 
+const stale = (path: string, now: number): boolean => statSync(path).mtimeMs + TRANSCRIPT_RETENTION_MS <= now;
+
 /** Deletes the transcripts whose last write is older than the retention; returns the deleted file names. */
 export function purgeTranscripts(dir: string, now: number): string[] {
   let names: string[];
@@ -71,12 +74,59 @@ export function purgeTranscripts(dir: string, now: number): string[] {
     if (!name.endsWith('.jsonl')) continue;
     const file = join(dir, name);
     try {
-      if (statSync(file).mtimeMs + TRANSCRIPT_RETENTION_MS <= now) {
+      if (stale(file, now)) {
         unlinkSync(file);
         removed.push(name);
       }
     } catch {
       // gone meanwhile, or unreadable: the next purge retries
+    }
+  }
+  return removed;
+}
+
+const dirs = (dir: string): string[] => {
+  try {
+    return readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name);
+  } catch {
+    return [];
+  }
+};
+
+/** Deletes the per-run dirs (`<runs>/<runId>`: refusals log, ORC-217) last changed 30 days ago or more; returns their names. */
+export function purgeRunDirs(dir: string, now: number): string[] {
+  return dirs(dir).filter((name) => {
+    try {
+      if (!stale(join(dir, name), now)) return false;
+      rmSync(join(dir, name), { recursive: true, force: true });
+      return true;
+    } catch {
+      return false; // gone meanwhile, or unreadable: the next purge retries
+    }
+  });
+}
+
+/**
+ * Deletes the session dirs (`<sessions>/<project>/<ticket>`, ORC-217) of the closed tickets (done, or
+ * their PR closed without merge, in the store's projection) whose dir was last changed 30 days ago or
+ * more; returns them as `<project>/<ticket>`. A ticket the store does not know is left.
+ */
+export async function purgeSessionDirs(dir: string, now: number, store: Pick<Store, 'getTicket'>): Promise<string[]> {
+  const closed = async (projectId: string, ticketId: string) => {
+    const t = await store.getTicket(projectId, ticketId);
+    return !!t && (t.logical === 'done' || t.prState === 'CLOSED');
+  };
+  const removed: string[] = [];
+  for (const project of dirs(dir)) {
+    for (const ticket of dirs(join(dir, project))) {
+      const path = join(dir, project, ticket);
+      try {
+        if (!stale(path, now) || !(await closed(project, ticket))) continue;
+        rmSync(path, { recursive: true, force: true });
+        removed.push(`${project}/${ticket}`);
+      } catch {
+        // gone meanwhile, or unreadable: the next purge retries
+      }
     }
   }
   return removed;

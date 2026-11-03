@@ -1,7 +1,7 @@
-import { existsSync } from 'node:fs';
+import { existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_REQUIREMENTS, PACK_TARGET, SANDBOX_HOME, WORKSPACE_TARGET } from '../../src/adapters/sandbox/types.js';
+import { DEFAULT_REQUIREMENTS, PACK_TARGET, REFUSALS_TARGET, SANDBOX_HOME, WORKSPACE_TARGET } from '../../src/adapters/sandbox/types.js';
 import { createHarness, packDir } from '../helpers/harness.js';
 
 const RUN_FLAGS = { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1', DISABLE_TELEMETRY: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' };
@@ -29,6 +29,7 @@ describe('a disposable sandbox per attempt', () => {
       mounts: [
         { host: '/repo/.git', target: '/repo/.git', readOnly: false },
         { host: sessionDir, target: `${SANDBOX_HOME}/.claude`, readOnly: false },
+        { host: join(h.runsDir!, req!.runId, 'refusals'), target: REFUSALS_TARGET, readOnly: false },
         { host: packDir, target: PACK_TARGET, readOnly: true },
         { host: join(packDir, 'settings.json'), target: '/factory/settings.json', readOnly: true },
       ],
@@ -141,5 +142,96 @@ describe('a disposable sandbox per attempt', () => {
     const orphan = await h.sandboxes.create({ runId: 'gone', ticketId: 'REL-9', workspacePath: '/w', network: 'claude-api', requirements: DEFAULT_REQUIREMENTS, mounts: [] });
     await h.restart({ mode: 'brutal' });
     expect(h.sandboxes.destroyed).toEqual([orphan.id]);
+  });
+});
+
+/** ORC-217: the ticket's Claude session lives in its session dir; a review or a question starts afresh. */
+describe('the ticket session across attempts', () => {
+  type H = ReturnType<typeof createHarness>;
+  const claudeDir = `${SANDBOX_HOME}/.claude`;
+  /** The host dir mounted as `~/.claude` of the i-th sandbox. */
+  const claudeHost = (h: H, i: number) => h.sandboxes.created[i]!.mounts.find((m) => m.target === claudeDir)?.host;
+  const ticketDir = (h: H) => join(h.sessionsDir!, 'p', 'REL-1');
+  const runClaude = (h: H, i: number) => join(h.runsDir!, h.runner.requests[i]!.runId, 'claude');
+  const roles = (h: H) => Promise.all(h.runner.requests.map(async (r) => (await h.store.getRun(r.runId))?.sessionRole));
+
+  it('a reply resumes the ticket session, with the same session dir mounted in both attempts', async () => {
+    const h = createHarness({ sandboxed: true });
+    await delegate(h);
+    await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'reprends', author: 'L' });
+    await h.advance(180_000);
+    const [dev, feedback] = h.runner.requests;
+    expect(feedback).toMatchObject({ resume: true, claudeSessionId: dev!.claudeSessionId });
+    expect([claudeHost(h, 0), claudeHost(h, 1)]).toEqual([ticketDir(h), ticketDir(h)]);
+    expect((await h.ticket()).claudeSessionId).toBe(dev!.claudeSessionId);
+    expect(await roles(h)).toEqual(['implementer', 'implementer']);
+  });
+
+  it('a review starts a new session in a per-run ~/.claude, removed with its sandbox; the feedback after it resumes the ticket session', async () => {
+    const h = createHarness({ sandboxed: true });
+    await delegate(h);
+    await h.send('status.changed', { from: 'human_review', to: 'ai_review' });
+    await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'reprends', author: 'L' });
+    await h.advance(180_000);
+    const [dev, review, feedback] = h.runner.requests;
+    expect(review!.prompt.startsWith('/factory:review\n')).toBe(true);
+    expect(review).toMatchObject({ resume: false });
+    expect(review!.claudeSessionId).not.toBe(dev!.claudeSessionId);
+    expect(claudeHost(h, 1)).toBe(runClaude(h, 1));
+    expect(existsSync(runClaude(h, 1))).toBe(false);
+    expect(review!.env).toMatchObject({ CLAUDE_CONFIG_DIR: claudeDir });
+    expect(feedback).toMatchObject({ resume: true, claudeSessionId: dev!.claudeSessionId });
+    expect(claudeHost(h, 2)).toBe(ticketDir(h));
+    expect(await roles(h)).toEqual(['implementer', 'reviewer', 'implementer']);
+  });
+
+  it('a review as the first run of a ticket neither mounts nor becomes the ticket session', async () => {
+    const h = createHarness({ sandboxed: true });
+    // A description too short for the pickup checks: delegated, blocked, no dev run, no session.
+    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'court' });
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    await h.send('status.changed', { from: 'todo', to: 'ai_review' });
+    expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:review']);
+    expect(claudeHost(h, 0)).toBe(runClaude(h, 0));
+    expect(existsSync(ticketDir(h))).toBe(false);
+    expect((await h.ticket()).claudeSessionId).toBeUndefined();
+    expect(await roles(h)).toEqual(['reviewer']);
+  });
+
+  it('a re-delegated dev resumes the ticket session', async () => {
+    const h = createHarness({ sandboxed: true });
+    await delegate(h);
+    await h.send('status.changed', { from: 'human_review', to: 'todo' });
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    const [dev, again] = h.runner.requests;
+    expect(again!.prompt.startsWith('/factory:dev\n')).toBe(true);
+    expect(again).toMatchObject({ resume: true, claudeSessionId: dev!.claudeSessionId });
+    expect(claudeHost(h, 1)).toBe(ticketDir(h));
+    expect(await roles(h)).toEqual(['implementer', 'implementer']);
+  });
+
+  it('a question starts a new session in a per-run ~/.claude', async () => {
+    const h = createHarness({ sandboxed: true });
+    await delegate(h);
+    await h.send('session.mentioned', { linearSessionId: 'ls-9', body: 'où est calculé le score ?', author: 'L' });
+    const [dev, ask] = h.runner.requests;
+    expect(ask!.prompt.startsWith('/factory:ask\n')).toBe(true);
+    expect(ask!.claudeSessionId).not.toBe(dev!.claudeSessionId);
+    expect(claudeHost(h, 1)).toBe(runClaude(h, 1));
+    expect(await roles(h)).toEqual(['implementer', 'answerer']);
+  });
+
+  it("every sandboxed run's refusals log is on the host, and outlives its sandbox", async () => {
+    const h = createHarness({ sandboxed: true });
+    await delegate(h);
+    await h.send('status.changed', { from: 'human_review', to: 'ai_review' });
+    for (const [i, r] of h.runner.requests.entries()) {
+      expect(r.env).toMatchObject({ FACTORY_REFUSALS_LOG: `${REFUSALS_TARGET}/refusals.jsonl` });
+      const refusals = h.sandboxes.created[i]!.mounts.find((m) => m.target === REFUSALS_TARGET)!;
+      expect(refusals).toEqual({ host: join(h.runsDir!, r.runId, 'refusals'), target: REFUSALS_TARGET, readOnly: false });
+      writeFileSync(join(refusals.host, 'refusals.jsonl'), '{}\n');
+    }
+    expect(h.sandboxes.active()).toEqual([]);
+    for (const r of h.runner.requests) expect(existsSync(join(h.runsDir!, r.runId, 'refusals', 'refusals.jsonl'))).toBe(true);
   });
 });
