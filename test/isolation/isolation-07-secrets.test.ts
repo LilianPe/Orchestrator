@@ -71,7 +71,8 @@ describe.skipIf(!enabled)(`no secret in the sandbox (${cli}, isolation n° 7)`, 
       readFileSync(join(ws, 'env.txt'), 'utf8').split('\n').filter(Boolean).map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]),
     );
     for (const [k, v] of Object.entries(RUN_ENV)) expect(env[k]).toBe(v);
-    expect(Object.keys(env).filter((k) => /^(LINEAR_|FACTORY_|RELAIS_)/.test(k)).sort()) // RELAIS_ : transition, à retirer (ORC-167).toEqual(Object.keys(RUN_ENV).filter((k) => k.startsWith('FACTORY_')).sort());
+    const daemonOnly = /^(LINEAR_|FACTORY_|RELAIS_)/; // RELAIS_ : transition, à retirer (ORC-167)
+    expect(Object.keys(env).filter((k) => daemonOnly.test(k)).sort()).toEqual(Object.keys(RUN_ENV).filter((k) => k.startsWith('FACTORY_')).sort());
     for (const k of Object.keys(DAEMON_SECRETS)) expect(env).not.toHaveProperty(k);
     for (const v of Object.values(DAEMON_SECRETS)) expect(Object.values(env)).not.toContain(v);
     // The login is handed over on purpose (the runner's SANDBOX_AUTH), when the shell has one.
