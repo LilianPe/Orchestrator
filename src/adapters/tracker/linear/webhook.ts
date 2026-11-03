@@ -171,7 +171,9 @@ export async function recordIssueLabels(body: any, ctx: MapContext): Promise<voi
   const next = new Set(known.labels);
   for (const { label: id, change } of labelChanges(from as string[], body.data.labelIds as string[])) {
     const name = ctx.labelNameById(teamKey, id);
-    if (name) change === 'added' ? next.add(name) : next.delete(name);
+    if (!name) continue;
+    if (change === 'added') next.add(name);
+    else next.delete(name);
   }
   // A webhook come late still adds what it reported, at the newer date: dropped, its change would be reported again.
   await ctx.recordLabels(projectId, identifier, [...next], Math.max(at, known.at));
