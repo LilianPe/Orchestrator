@@ -8,6 +8,7 @@ import type { Decision, Effect } from './decision.js';
 import { PRODUCT_NAME } from '../product.js';
 import { CUT_RELAUNCHES, CUT_WINDOW_MS } from '../store/types.js';
 import { isOwnMoveEcho, reduce } from './reduce.js';
+import { REPO_LABEL } from './routing.js';
 import type { EventPayloads, EventType, FactoryEvent, FeedbackItem, InputKind, RunOutcome, Taint, TicketState, VerifyFailure } from './types.js';
 
 type StartRun = Extract<Effect, { kind: 'start_run' }>;
@@ -610,6 +611,18 @@ export function blockedLabelChange(before: boolean, after: boolean): Extract<Dec
   return after ? { kind: 'labels', add: [BLOCKED_LABEL], remove: [] } : { kind: 'labels', add: [], remove: [BLOCKED_LABEL] };
 }
 
+/** Block reason of a delegation whose repo is not known (ORC-291). */
+const UNROUTED = 'Dépôt à préciser : cette équipe Linear a plusieurs dépôts.';
+
+/** A delegation in a team of several repos, without a `repo:` label: blocked, the human told how to choose. */
+function unrouted(out: Decision, state: TicketState | undefined, repos: readonly string[]): Decision {
+  const labels = repos.map((r) => `\`${REPO_LABEL}${r}\``).join(', ');
+  block(out, UNROUTED, `${UNROUTED} Ajoutez au ticket le label de son dépôt (${labels}), puis déléguez-le de nouveau.`);
+  // A new ticket: `blockedLabel` sees no state before it and puts no label.
+  if (!state) out.effects.push(blockedLabelChange(false, true)!);
+  return out;
+}
+
 function decideEvent(state: TicketState | undefined, event: FactoryEvent, workflow: Workflow, matrix: AuthzMatrix): Decision {
   if (event.type === 'dead_letter.repaired') return repair(state, event, workflow);
   const out = empty();
@@ -825,6 +838,13 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       stop(out, `PR #${n} fermée sans merge`, `La PR #${n} a été fermée sans merge : j'arrête le travail sur ce ticket. ${RELAUNCH}`);
       break;
     }
+    case 'ticket.delegated':
+      if (event.payload.repos) return unrouted(out, state, event.payload.repos);
+      break;
+    case 'ticket.undelegated':
+      // Delegated again with its `repo:` label, the ticket went to its repo: here nothing waits any longer (ORC-291).
+      if (ticket?.blocked && ticket.blockReason === UNROUTED) out.events.push({ type: 'ticket.unblocked' });
+      break;
     case 'pr.merge_refused':
       return mergeRefused(out, event, ticket, workflow);
     case 'pr.reviewed':

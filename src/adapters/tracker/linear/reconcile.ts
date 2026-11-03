@@ -1,5 +1,6 @@
 import type { Clock } from '../../../core/clock.js';
 import { logicalFromName, type ProjectRuntime } from '../../../core/orchestrator.js';
+import { routeTicket } from '../../../core/routing.js';
 import { SCHEMA_VERSION, TRUSTED, type EventPayloads, type EventType, type FactoryEvent, type TicketState } from '../../../core/types.js';
 import type { Store } from '../../../store/types.js';
 import { IssueNotFoundError, labelEchoKey, stateEchoKey, type Tracker, type TrackerIssue } from '../types.js';
@@ -8,7 +9,10 @@ import { knownLabels, labelChanges, recordLabels, type Serial } from './labels.j
 export interface ReconcileDeps {
   tracker: Pick<Tracker, 'listDelegated' | 'getIssue'>;
   store: Store;
+  /** Every project: a team's tickets are shared out among its projects (ORC-291). */
   projects: ProjectRuntime[];
+  /** Only this project's pass; the others still route. */
+  only?: string;
   /** Writes the event to the inbox; awaited. */
   submit: (e: FactoryEvent) => unknown;
   clock: Clock;
@@ -55,18 +59,25 @@ export async function reconcileOnce(d: ReconcileDeps): Promise<void> {
   // Every read and write of the known labels, in the webhook's turn.
   const inTurn: Serial = d.serial ?? ((task) => task());
   for (const p of d.projects) {
+    if (d.only && p.id !== d.only) continue;
     try {
-      const issues = await d.tracker.listDelegated(p.teamKey);
+      const team = d.projects.filter((x) => x.teamKey === p.teamKey).map((x) => x.id);
+      const routed = (await d.tracker.listDelegated(p.teamKey)).map((issue) => ({ ...issue, ...routeTicket(team, issue.labels) }));
+      const issues = routed.filter((issue) => issue.projectId === p.id);
+      const elsewhere = new Set(routed.filter((issue) => issue.projectId !== p.id).map((issue) => issue.identifier));
       const at = d.clock.now();
       const emit: Emit = async (t, base, id, type, payload) => d.submit({ ...base, id, type, at, projectId: p.id, ticketId: t.ticketId, payload } as FactoryEvent);
       const delegated = new Set(issues.map((i) => i.identifier));
       for (const issue of issues) {
         const t = await d.store.getTicket(p.id, issue.identifier);
         if (!t || !t.delegated) {
-          const id = t ? `reconcile:delegated:${issue.identifier}:${t.updatedAt}` : `reconcile:delegated:${issue.identifier}`;
+          const { repos } = issue;
+          // Unrouted, its own id: the delegation to its repo, once labelled, must not be taken for a duplicate.
+          const kind = repos ? 'unrouted' : 'delegated';
+          const id = t ? `reconcile:${kind}:${issue.identifier}:${t.updatedAt}` : `reconcile:${kind}:${issue.identifier}`;
           const logical = logicalFromName(p.workflow.states, issue.stateName) ?? 'todo';
           // An untracked ticket: the snapshot spares the orchestrator a second read of the tracker.
-          const payload = t ? {} : { issue: { title: issue.title, logical, priority: issue.priority } };
+          const payload = { ...(t ? {} : { issue: { title: issue.title, logical, priority: issue.priority } }), ...(repos ? { repos } : {}) };
           await emit({ ticketId: issue.identifier }, UNSIGNED, id, 'ticket.delegated', payload);
           await inTurn(() => recordLabels(d.store, p.id, issue.identifier, issue.labels, issue.updatedAt ?? 0));
           continue;
@@ -78,6 +89,12 @@ export async function reconcileOnce(d: ReconcileDeps): Promise<void> {
         if (t.projectId !== p.id || delegated.has(t.ticketId)) continue;
         const undelegate = t.delegated && t.logical !== 'done';
         if (!t.activeRunId && !undelegate) continue;
+        // Listed under another repo of the team: it leaves this one, nothing of the issue to read or to catch up here.
+        if (elsewhere.has(t.ticketId)) {
+          if (t.activeRunId) await emit(t, TRUSTED, `reconcile:undelegated:${t.ticketId}:${t.activeRunId}`, 'session.stopped', {});
+          if (undelegate) await emit(t, TRUSTED, `reconcile:undelegated-flag:${t.ticketId}:${t.updatedAt}`, 'ticket.undelegated', {});
+          continue;
+        }
         // Out of the list: done, cancelled or no longer delegated, which only the issue itself tells apart.
         // Undefined: deleted in Linear, so no longer delegated, as before ORC-185.
         let issue: TrackerIssue | undefined;

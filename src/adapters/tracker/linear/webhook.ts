@@ -2,6 +2,7 @@ import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { REFREEZE } from '../../../checks/freeze.js';
 import { labelEchoKey, stateEchoKey } from '../types.js';
 import { labelChanges, type KnownLabels } from './labels.js';
+import { routeTicket } from '../../../core/routing.js';
 import { SCHEMA_VERSION, type LogicalState, type FactoryEvent, type Taint } from '../../../core/types.js';
 
 export function isUsableWebhookSecret(secret: unknown): boolean {
@@ -22,7 +23,10 @@ export function isFresh(body: { webhookTimestamp?: number }, now: number): boole
 }
 
 export interface MapContext {
-  projectIdForTeam(teamKey: string): string | undefined;
+  /** The projects of a Linear team, in config order (ORC-291). */
+  projectsOfTeam(teamKey: string): string[];
+  /** A ticket's label names, read from Linear: only when its team has several projects. */
+  labelsOf(identifier: string): Promise<string[]>;
   logicalFor(projectId: string, stateName: string): LogicalState | null;
   stateNameById(teamKey: string, stateId: string): string | undefined;
   /** Linear type of a state (`canceled`, `completed`…), from the team's cache. */
@@ -154,6 +158,16 @@ async function issueEvents(body: any, identifier: string, teamKey: string, proje
   return out;
 }
 
+/** The project of the ticket a webhook is about, and the choice to make when it names none (ORC-291). */
+async function routeOf(body: any, identifier: string, teamKey: string, ctx: MapContext): Promise<{ projectId: string; repos?: string[] } | undefined> {
+  const team = ctx.projectsOfTeam(teamKey);
+  if (team.length === 0) return undefined;
+  // Several repos in the team: the ticket's `repo:` label picks one. An issue change carries its labels.
+  const carried: { name: string }[] | undefined = body.type === 'Issue' ? body.data?.labels : undefined;
+  const labels = team.length === 1 ? [] : (carried?.map((l) => l.name) ?? (await ctx.labelsOf(identifier)));
+  return routeTicket(team, labels);
+}
+
 function issueIdentifier(body: any): string | undefined {
   if (body?.type === 'AgentSessionEvent') return body.agentSession?.issue?.identifier;
   if (body?.type === 'Issue') return body.data?.identifier ?? (body.data?.team?.key ? `${body.data.team.key}-${body.data.number}` : undefined);
@@ -174,7 +188,7 @@ export async function recordIssueLabels(body: any, ctx: MapContext): Promise<voi
   const identifier = issueIdentifier(body);
   if (!identifier) return;
   const teamKey = identifier.split('-')[0]!;
-  const projectId = ctx.projectIdForTeam(teamKey);
+  const projectId = (await routeOf(body, identifier, teamKey, ctx))?.projectId;
   const at = Date.parse(body.data.updatedAt);
   if (!projectId || !Number.isFinite(at)) return;
   // Never read yet: the reconciliation's first pass records them.
@@ -206,10 +220,13 @@ export async function mapLinearWebhook(body: any, key: string, ctx: MapContext):
   const identifier = issueIdentifier(body);
   if (!identifier) return [];
   const teamKey = identifier.split('-')[0]!;
-  const projectId = ctx.projectIdForTeam(teamKey);
-  if (!projectId) return [];
+  const route = await routeOf(body, identifier, teamKey, ctx);
+  if (!route) return [];
+  const { projectId, repos } = route;
   const { id: actor, taint, name } = signedActor(body);
-  const partials = body.type === 'AgentSessionEvent' ? sessionEvents(body, name, projectId, ctx) : await issueEvents(body, identifier, teamKey, projectId, ctx);
+  let partials = body.type === 'AgentSessionEvent' ? sessionEvents(body, name, projectId, ctx) : await issueEvents(body, identifier, teamKey, projectId, ctx);
+  // Its repo unknown, only a delegation passes, to be blocked with the choice: nothing else must work in a repo picked by default.
+  if (repos) partials = partials.filter((p) => p.type === 'ticket.delegated').map((p) => ({ ...p, payload: { ...(p.payload as object), repos } }));
   const at = ctx.now();
   return partials.map(
     (p) =>

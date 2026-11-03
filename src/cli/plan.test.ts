@@ -8,6 +8,19 @@ import { SqliteStore } from '../store/sqlite-store.js';
 import { formatPlan, planRows } from './plan.js';
 
 describe('plan', () => {
+  it('lists a ticket of a team with several repos once, under its repo, or as not taken when it names none (ORC-291)', async () => {
+    const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../packs/standard') });
+    const tracker = new FakeTracker();
+    tracker.addIssue({ identifier: 'REL-1', delegateId: 'a', labels: ['repo:api'] });
+    tracker.addIssue({ identifier: 'REL-2', delegateId: 'a' });
+    const projects = ['web', 'api'].map((id) => ({ id, repoPath: `/${id}`, teamKey: 'REL', workflow }));
+    const rows = await planRows({ tracker, store: new SqliteStore(':memory:'), projects, workspaces: new FakeWorkspaces() });
+    expect(rows.map((r) => [r.identifier, r.status, r.reasons])).toEqual([
+      ['REL-2', 'pas pris', ['dépôt à préciser (repo:web, repo:api)']],
+      ['REL-1', 'pris', []],
+    ]);
+  });
+
   it('classifies delegated tickets by priority', async () => {
     const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../packs/standard') });
     const tracker = new FakeTracker();

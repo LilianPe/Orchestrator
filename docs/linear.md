@@ -96,6 +96,8 @@ Ce qui ne déclenche rien : un *Done* sans acteur signé (l'intégration GitHub 
 
 Après le merge de la PR (détecté par le relevé GitHub) : statut *Done*, worktree supprimé, run `learn`. Le run de code encore en cours est arrêté, et ce qui attendait (file, réponse en `debounce`) est abandonné. Ensuite, plus aucun travail de code ne démarre sur le ticket : `agent:reprendre` ou une réponse dans la session ne relancent rien (une réponse est seulement gardée). Pour reprendre le ticket, changez son statut pour autre chose que *Done* (aussi quand Relais n'a pas pu le passer en *Done*) ou déléguez-le à nouveau.
 
+Une équipe qui a plusieurs dépôts : chaque ticket désigne le sien par un label `repo:<id>` ([`projets-et-workspaces.md`](projets-et-workspaces.md#une-équipe-plusieurs-dépôts)).
+
 Seuls les tickets **délégués** à l'agent reçoivent du travail de code ; une mention sur un ticket non délégué ne donne qu'une réponse. Tout ce comportement se change dans `.relais/workflow.yml` : [`workflow.md`](workflow.md). Les contrôles avant de prendre un ticket (description d'au moins 30 caractères, pas de branche existante…) sont décrits dans [`workflow.md`](workflow.md#tracker) ; `relais plan` les applique à blanc.
 
 Un ticket bloqué (échec, plafond, question, stop, bail expiré deux fois, trop de relances après coupure) attend un humain : répondez dans la session ou posez `agent:reprendre`.

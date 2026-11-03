@@ -57,6 +57,27 @@ describe('reconcileOnce', () => {
       ['reconcile:undelegated-flag:REL-5:5', 'ticket.undelegated'],
     ]);
   });
+
+  it('gives each ticket of a team with several repos to the repo its label names, the others to the first with the choice (ORC-291)', async () => {
+    const tracker = new FakeTracker();
+    const store = new SqliteStore(':memory:');
+    tracker.addIssue({ identifier: 'REL-1', delegateId: 'app', labels: ['repo:api'] });
+    tracker.addIssue({ identifier: 'REL-2', delegateId: 'app' });
+    // Blocked in the first repo before its label was put: it is no longer that repo's.
+    await store.putTicket({ ...newTicketState('web', 'REL-1', 'T', 'todo', 3), delegated: true, blocked: true });
+    const events: FactoryEvent[] = [];
+    const projects = ['web', 'api'].map((id) => ({ id, repoPath: `/${id}`, teamKey: 'REL', workflow }));
+    await reconcileOnce({ tracker, store, projects, submit: (e) => events.push(e), clock: new FakeClock(100), log: () => {} });
+    expect(events.map((e) => [e.projectId, e.id, (e.payload as { repos?: string[] }).repos])).toEqual([
+      ['web', 'reconcile:unrouted:REL-2', ['web', 'api']],
+      ['web', 'reconcile:undelegated-flag:REL-1:3', undefined],
+      ['api', 'reconcile:delegated:REL-1', undefined],
+    ]);
+    // One project's pass (the reconciliation timer's) still routes among all of them.
+    events.length = 0;
+    await reconcileOnce({ tracker, store, projects, only: 'api', submit: (e) => events.push(e), clock: new FakeClock(100), log: () => {} });
+    expect(events.map((e) => e.id)).toEqual(['reconcile:delegated:REL-1']);
+  });
 });
 
 describe('reconcileOnce — done and cancelled (ORC-185)', () => {

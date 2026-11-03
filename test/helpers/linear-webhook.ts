@@ -76,7 +76,8 @@ export function linearIngest(
     },
     log: () => {},
     ctx: {
-      projectIdForTeam: (k) => (k === 'REL' ? 'p' : undefined),
+      projectsOfTeam: (k) => (k === 'REL' ? ['p'] : []),
+      labelsOf: async () => [],
       logicalFor: () => null,
       stateNameById: () => undefined,
       stateTypeById: () => undefined,

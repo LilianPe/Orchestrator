@@ -139,7 +139,8 @@ export type TimerKind = keyof TimerPayloads;
 export type TimerFired = { [K in TimerKind]: { kind: K; payload: TimerPayloads[K] } }[TimerKind];
 
 export interface EventPayloads {
-  'ticket.delegated': { linearSessionId?: string; promptContext?: string; issue?: IssueSnapshot };
+  /** `repos`: the team has several and the ticket names none (ORC-291); the delegation then waits for a human's choice. */
+  'ticket.delegated': { linearSessionId?: string; promptContext?: string; issue?: IssueSnapshot; repos?: string[] };
   'ticket.undelegated': Record<string, never>;
   'session.mentioned': { linearSessionId: string; body: string; author: string; issue?: IssueSnapshot };
   'session.prompted': { linearSessionId: string; body: string; author: string; issue?: IssueSnapshot };

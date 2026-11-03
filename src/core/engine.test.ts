@@ -949,3 +949,18 @@ describe('decide — dead letters (ORC-175)', () => {
     expect(isFenced(out)).toBe(true);
   });
 });
+
+describe('decide — a ticket whose repo is not known (ORC-291)', () => {
+  const unrouted = ev('ticket.delegated', { issue: { title: 'T', logical: 'todo', priority: 0 }, repos: ['web', 'api'] });
+
+  it('blocks the delegation, labels it and asks which repo, listing them', () => {
+    const out = decide(undefined, unrouted, workflow);
+    expect(kinds(out)).toEqual({ events: ['ticket.blocked'], effects: ['activity', 'labels'], timers: [] });
+    expect(out.effects[0]).toMatchObject({ type: 'elicitation', body: expect.stringContaining('`repo:web`, `repo:api`') });
+  });
+
+  it('lifts that block once the ticket is no longer delegated here: it went to its repo', () => {
+    const blocked = reduce(reduce(undefined, unrouted), decide(undefined, unrouted, workflow).events[0]!)!;
+    expect(kinds(decide(blocked, ev('ticket.undelegated', {}), workflow))).toEqual({ events: ['ticket.unblocked'], effects: ['labels'], timers: [] });
+  });
+});

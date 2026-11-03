@@ -13,7 +13,7 @@ projects:
 
 Règles :
 
-- une équipe Linear = un dépôt (les webhooks sont routés par clé d'équipe ; une équipe sans projet est ignorée) ;
+- les tickets sont routés par clé d'équipe ; une équipe sans projet est ignorée. Une équipe peut avoir plusieurs projets : voir [Une équipe, plusieurs dépôts](#une-équipe-plusieurs-dépôts) ;
 - le comportement de chaque projet vient de son `.relais/workflow.yml` ([`workflow.md`](workflow.md)), lu dans la copie de travail `repoPath` au démarrage ;
 - `repoPath` doit être un clone avec `origin` : Relais y fait `git fetch origin` et y attache les worktrees. Vous pouvez continuer à y travailler, mais n'y supprimez pas les branches `relais/…` en cours.
 
@@ -27,6 +27,17 @@ relais init        # même clé d'application Linear : répondez avec les mêmes
 `init` ajoute le projet (ou remplace celui qui a le même `repoPath`) et crée son `.relais/workflow.yml`. Redémarrez ensuite `relais up` : les statuts et labels sont créés dans la nouvelle équipe à la prochaine connexion Linear (bouton « Connecter Linear » ou `/oauth/start`).
 
 > Les capacités des files (`parallel_sessions`, `question_sessions`) sont globales et lues dans le workflow du **premier** projet de la liste. Les autres réglages sont propres à chaque projet.
+
+### Une équipe, plusieurs dépôts
+
+Plusieurs projets peuvent déclarer le même `linearTeamKey`. Le ticket désigne alors son dépôt par un label **`repo:<id>`**, où `<id>` est l'`id` du projet dans `config.yaml` (casse indifférente) : `repo:api` envoie le ticket au projet `api`. Créez ces labels dans l'équipe Linear.
+
+- Équipe à un seul projet : rien ne change, le label est inutile et ignoré.
+- Équipe à plusieurs projets, ticket sans label `repo:` qui en nomme un : la délégation est bloquée (label « Bloqué ») et la session Linear répond avec la liste des labels possibles. Le ticket est rangé sous le **premier** projet de l'équipe (ordre de `config.yaml`) en attendant ; les autres événements Linear de ce ticket (réponses, labels, statuts) sont ignorés, pour qu'aucun travail ne parte dans un dépôt choisi par défaut.
+- Pour débloquer : ajoutez le label `repo:<id>`, puis déléguez de nouveau le ticket (retirez l'agent puis remettez-le). La réconciliation retire ensuite le ticket du premier projet et lève son blocage.
+- Plusieurs labels `repo:` valides : le premier projet de la liste parmi eux gagne. Un ticket qui touche plusieurs dépôts se découpe en un sous-ticket par dépôt.
+
+`relais plan` liste chaque ticket une fois, sous son projet, et marque « dépôt à préciser » ceux qui n'en nomment aucun.
 
 ### Retirer un projet
 

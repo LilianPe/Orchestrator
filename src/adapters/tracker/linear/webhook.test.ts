@@ -19,7 +19,8 @@ const LOGICAL: Record<string, any> = { 'Human Review': 'human_review', 'AI Revie
 
 function ctx(echoes: string[] = []): MapContext {
   return {
-    projectIdForTeam: (k) => (k === 'REL' ? 'p' : undefined),
+    projectsOfTeam: (k) => (k === 'REL' ? ['p'] : []),
+    labelsOf: async () => [],
     logicalFor: (_p, name) => LOGICAL[name] ?? null,
     stateNameById: (_t, id) => NAMES[id],
     stateTypeById: (_t, id) => (id === 's-x' ? 'canceled' : 'started'),
@@ -233,6 +234,35 @@ describe('mapLinearWebhook', () => {
     const body = fx('session-prompted');
     body.agentSession.issue.identifier = 'OTHER-1';
     expect(await mapLinearWebhook(body, 'd8', ctx())).toEqual([]);
+  });
+
+  describe('a team with several repos (ORC-291)', () => {
+    const twoRepos = (labels: string[], read: string[] = []): MapContext => ({
+      ...ctx(),
+      projectsOfTeam: (k) => (k === 'REL' ? ['web', 'api'] : []),
+      labelsOf: async (id) => (read.push(id), labels),
+    });
+
+    it('sends a delegation to the repo its repo: label names, read from Linear', async () => {
+      const read: string[] = [];
+      expect(await mapLinearWebhook(fx('session-created-delegation'), 'd1', twoRepos(['repo:api'], read))).toMatchObject([{ type: 'ticket.delegated', projectId: 'api' }]);
+      expect(read).toEqual(['REL-1']);
+    });
+
+    it('takes the labels an issue change carries, without reading Linear', async () => {
+      const body = { ...fx('issue-moved-labeled') };
+      body.data = { ...body.data, labels: [{ id: 'l-api', name: 'repo:api' }] };
+      const out = await mapLinearWebhook(body, 'd6', twoRepos([]));
+      expect(out.map((e) => e.projectId)).toEqual(['api', 'api']);
+    });
+
+    it('without a label, a delegation goes to the first repo with the list to choose from; anything else is dropped', async () => {
+      expect(await mapLinearWebhook(fx('session-created-delegation'), 'd1', twoRepos(['bug']))).toMatchObject([
+        { type: 'ticket.delegated', projectId: 'web', payload: { linearSessionId: 'as-1', repos: ['web', 'api'] } },
+      ]);
+      expect(await mapLinearWebhook(fx('session-prompted'), 'd4', twoRepos([]))).toEqual([]);
+      expect(await mapLinearWebhook(fx('issue-moved-labeled'), 'd6', twoRepos([]))).toEqual([]);
+    });
   });
 });
 
