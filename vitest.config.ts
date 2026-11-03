@@ -45,6 +45,7 @@ export default defineConfig({
         test: {
           name: 'isolation',
           include: ['test/isolation/**/*.test.ts'],
+          globalSetup: ['test/isolation/global-setup.ts'],
           environment: 'node',
           testTimeout: 120000,
         },

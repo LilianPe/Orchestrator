@@ -4,7 +4,7 @@ FROM node:24.22.1-bookworm-slim
 RUN apt-get update \
  && apt-get install -y --no-install-recommends git ca-certificates \
  && rm -rf /var/lib/apt/lists/*
-RUN npm install -g @anthropic-ai/claude-code
+RUN npm install -g @anthropic-ai/claude-code@2.1.316
 # The worktree is bind-mounted under the daemon's uid, unknown to the image.
 RUN git config --system --add safe.directory '*'
 # HOME of whatever uid runs the container; sticky, so a run cannot remove another's files.
