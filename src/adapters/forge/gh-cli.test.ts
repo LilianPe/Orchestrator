@@ -65,6 +65,19 @@ describe('GhCliForge', () => {
     });
   });
 
+  it.each([
+    ['an entry that is not an object', '[null]'],
+    ['an entry without a bucket', '[{"name":"ci"}]'],
+  ])('reads checks listing %s as none, not as green', async (_case, stdout) => {
+    const forge = new GhCliForge(
+      fakeExec({
+        'gh pr list': { stdout: JSON.stringify([{ number: 7, url: 'https://gh/7', state: 'OPEN', headRefName: 'b' }]) },
+        'gh pr checks 7': { stdout },
+      }),
+    );
+    expect(await forge.findPr('/r', 'b')).toMatchObject({ checks: 'none', failedChecks: [] });
+  });
+
   it('returns undefined without PR and skips checks for merged PRs', async () => {
     expect(await new GhCliForge(fakeExec({ 'gh pr list': { stdout: '[]' } })).findPr('/r', 'b')).toBeUndefined();
     const merged = await new GhCliForge(

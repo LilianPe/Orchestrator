@@ -16,10 +16,16 @@ export function aggregateChecks(buckets: string[]): PrInfo['checks'] {
  */
 const NO_CHECKS = /^no checks reported on the '.*' branch$/m;
 
-function parseChecks(stdout: string): { name: string; bucket: string }[] | undefined {
+type Check = { name: string; bucket: string };
+
+const isCheck = (c: unknown): c is Check =>
+  typeof c === 'object' && c !== null && typeof (c as Check).name === 'string' && typeof (c as Check).bucket === 'string';
+
+/** The checks `gh pr checks --json name,bucket` lists, or undefined when its output is not such a list. */
+function parseChecks(stdout: string): Check[] | undefined {
   try {
     const list: unknown = JSON.parse(stdout);
-    return Array.isArray(list) ? (list as { name: string; bucket: string }[]) : undefined;
+    return Array.isArray(list) && list.every(isCheck) ? list : undefined;
   } catch {
     return undefined;
   }
