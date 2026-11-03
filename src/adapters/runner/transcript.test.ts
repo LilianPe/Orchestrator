@@ -1,10 +1,11 @@
-import { existsSync, mkdtempSync, readFileSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { drain } from '../../../test/contracts/agent-runtime.contract.js';
 import { ClaudeCodeRunner } from './claude-code.js';
-import { MASK, maskTranscriptLine, purgeTranscripts, transcriptSecrets } from './transcript.js';
+import type { TicketState } from '../../core/types.js';
+import { MASK, maskTranscriptLine, purgeRunDirs, purgeSessionDirs, purgeTranscripts, transcriptSecrets } from './transcript.js';
 
 const DAY = 24 * 60 * 60 * 1000;
 const fx = (n: string) => join(import.meta.dirname, 'fixtures', n);
@@ -86,6 +87,46 @@ describe('transcript retention', () => {
 
   it('purges nothing from a missing folder', () => {
     expect(purgeTranscripts(join(tmpdir(), 'factory-no-such-dir-'), Date.now())).toEqual([]);
+  });
+
+  const now = Date.UTC(2026, 9, 26);
+  /** A dir under `root`, last changed `ageMs` before `now`. */
+  const aged = (root: string, path: string, ageMs: number) => {
+    const dir = join(root, path);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'f.jsonl'), '{}\n');
+    const t = (now - ageMs) / 1000;
+    utimesSync(dir, t, t);
+    return dir;
+  };
+
+  it('purges the per-run dirs (refusals log) older than 30 days (ORC-217)', () => {
+    const root = mkdtempSync(join(tmpdir(), 'factory-runs-'));
+    const old = aged(root, 'r-old', 30 * DAY);
+    const young = aged(root, 'r-young', 30 * DAY - 60_000);
+    expect(purgeRunDirs(root, now)).toEqual(['r-old']);
+    expect([existsSync(old), existsSync(young)]).toEqual([false, true]);
+    expect(purgeRunDirs(join(tmpdir(), 'factory-no-such-dir-'), now)).toEqual([]);
+  });
+
+  it('purges the session dirs of closed tickets older than 30 days, and leaves open or unknown tickets (ORC-217)', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'factory-sessions-'));
+    const tickets: Record<string, Partial<TicketState>> = {
+      'p/DONE': { logical: 'done' },
+      'p/YOUNG': { logical: 'done' },
+      'p/CLOSED': { logical: 'human_review', prState: 'CLOSED' },
+      'p/OPEN': { logical: 'human_review', prState: 'OPEN' },
+    };
+    const store = { getTicket: async (p: string, t: string) => tickets[`${p}/${t}`] as TicketState | undefined };
+    const dirs = {
+      done: aged(root, 'p/DONE', 30 * DAY),
+      young: aged(root, 'p/YOUNG', 30 * DAY - 60_000),
+      closed: aged(root, 'p/CLOSED', 40 * DAY),
+      open: aged(root, 'p/OPEN', 90 * DAY),
+      unknown: aged(root, 'p/GONE', 90 * DAY),
+    };
+    expect((await purgeSessionDirs(root, now, store)).sort()).toEqual(['p/CLOSED', 'p/DONE']);
+    expect(Object.fromEntries(Object.entries(dirs).map(([k, d]) => [k, existsSync(d)]))).toEqual({ done: false, young: true, closed: false, open: true, unknown: true });
   });
 });
 

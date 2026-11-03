@@ -81,7 +81,8 @@ function internal(t: TicketState, e: InternalEvent): TicketState {
     case 'run.started': {
       const out = e.feedbackConsumed ? { ...t, pendingFeedback: [] } : { ...t };
       if (e.queue !== 'dev') return out;
-      return { ...out, activeRunId: e.runId, activeJob: e.job, claudeSessionId: t.claudeSessionId ?? e.claudeSessionId };
+      const claudeSessionId = e.ticketSession === false ? t.claudeSessionId : (t.claudeSessionId ?? e.claudeSessionId);
+      return { ...out, activeRunId: e.runId, activeJob: e.job, claudeSessionId };
     }
     case 'run.cleared':
       return { ...t, activeRunId: undefined, activeJob: undefined };
