@@ -65,7 +65,7 @@ Texte complet : `packs/standard/skills/<nom>/SKILL.md`.
 
 `packs/standard/settings.json` fixe `defaultMode: acceptEdits` et :
 
-**Autorisé** sans confirmation : lecture, édition et recherche de fichiers ; `git status|diff|log|show|add|commit|push|fetch|rebase|checkout|switch|branch|rev-parse|merge-base|merge-tree|merge|revert|rev-list|ls-remote` ; `gh pr create|view|list|checks|diff|edit` ; `gh run view|list|rerun` ; `npm`, `npx`, `node`, `pnpm`, `yarn` ; `ls`, `cat`, `grep`, `rg`, `find`, `head`, `tail`, `wc`, `sleep` ; `relais-agent`.
+**Autorisé** sans confirmation : lecture, édition et recherche de fichiers ; `git status|diff|log|show|add|commit|push|fetch|rebase|checkout|switch|branch|rev-parse|merge-base|merge-tree|merge|revert|rev-list|ls-remote` ; `gh pr create|view|list|checks|diff|edit` ; `gh run view|list|rerun` ; `npm`, `npx`, `node`, `pnpm`, `yarn` ; `ls`, `cat`, `grep`, `rg`, `find`, `head`, `tail`, `wc`, `sleep` ; `relais-agent` ; les outils `submit_result` et `ask` du MCP de l'usine (`mcp__factory__…`), que `claude -p` refuserait sinon.
 
 **Refusé** :
 
@@ -83,7 +83,7 @@ Au démarrage, Relais complète ces refus pour le **vrai** `RELAIS_HOME` (même 
 
 Ces règles sont une première barrière, pas une garantie : protégez la branche par défaut côté GitHub ([`github.md`](github.md#protection-de-branche-fortement-conseillée)). La recette vérifie que la version de Claude Code installée applique bien les jokers en milieu de motif ([`recette.md`](recette.md)).
 
-Les runs `trunk-readonly` (questions) tournent en plus avec `--permission-mode plan`.
+Les runs `trunk-readonly` (questions) tournent en plus avec `--permission-mode plan`. Limite connue, non mesurée : le mode plan peut refuser un outil MCP qui n'est pas en lecture seule malgré l'`allow`, donc `submit_result` et `ask` dans ces runs ; leur réponse reste alors leur dernier message (`post: reply`). À vérifier sur la version installée ([`recette.md`](recette.md)).
 
 ### Hook PreToolUse et journal des refus
 

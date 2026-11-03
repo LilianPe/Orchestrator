@@ -11,6 +11,8 @@ export interface FakeScript {
   /** Usage the run reports, as `claude -p` does in its result line (ORC-235); none by default. */
   tokens?: TokenUsage;
   hold?: boolean;
+  /** The run's end rejects with this message, as a broken stream or a sandbox gone does. */
+  fail?: string;
 }
 
 /** Turn and duration caps hold as on the real runtime: turns on the scripted count, duration on `clock`, checked at each `tick`. */
@@ -55,6 +57,7 @@ export class FakeRunner implements Runner {
     const done: Promise<RunResult> = held.then(() => {
       ch.close();
       this.live.delete(req.runId);
+      if (s.fail) throw new Error(s.fail);
       return { outcome: forced ?? s.outcome ?? 'success', costUsd: s.costUsd ?? 0.1, turns, lastText, ...(s.tokens ? { tokens: s.tokens } : {}) };
     });
     return { events: ch, done, stop: () => end('stopped') };
