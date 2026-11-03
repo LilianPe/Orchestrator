@@ -2,8 +2,8 @@ import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { REFREEZE } from '../../../checks/freeze.js';
 import { labelEchoKey, stateEchoKey } from '../types.js';
 import { labelChanges, type KnownLabels } from './labels.js';
-import { routeTicket } from '../../../core/routing.js';
-import { SCHEMA_VERSION, type LogicalState, type FactoryEvent, type Taint } from '../../../core/types.js';
+import { holds, resolveRoute, type Route } from '../../../core/routing.js';
+import { SCHEMA_VERSION, type LogicalState, type FactoryEvent, type Taint, type TicketState } from '../../../core/types.js';
 
 export function isUsableWebhookSecret(secret: unknown): boolean {
   return typeof secret === 'string' && secret.trim() !== '';
@@ -25,8 +25,10 @@ export function isFresh(body: { webhookTimestamp?: number }, now: number): boole
 export interface MapContext {
   /** The projects of a Linear team, in config order (ORC-291). */
   projectsOfTeam(teamKey: string): string[];
-  /** A ticket's label names, read from Linear: only when its team has several projects. */
+  /** A ticket's label names, read from Linear: only to route a new session on a ticket no project holds. */
   labelsOf(identifier: string): Promise<string[]>;
+  /** The ticket a project stores, read only when its team has several projects. */
+  ticket(projectId: string, identifier: string): Promise<TicketState | undefined>;
   logicalFor(projectId: string, stateName: string): LogicalState | null;
   stateNameById(teamKey: string, stateId: string): string | undefined;
   /** Linear type of a state (`canceled`, `completed`…), from the team's cache. */
@@ -158,14 +160,18 @@ async function issueEvents(body: any, identifier: string, teamKey: string, proje
   return out;
 }
 
-/** The project of the ticket a webhook is about, and the choice to make when it names none (ORC-291). */
-async function routeOf(body: any, identifier: string, teamKey: string, ctx: MapContext): Promise<{ projectId: string; repos?: string[] } | undefined> {
+/**
+ * The project of the ticket a webhook is about (ORC-291). Several repos in the team: the project holding the
+ * ticket keeps it; a new session on a ticket none holds (a delegation, a mention, a command) is routed by its
+ * `repo:` label, read from Linear only then.
+ */
+async function routeOf(body: any, identifier: string, teamKey: string, ctx: MapContext): Promise<Route | undefined> {
   const team = ctx.projectsOfTeam(teamKey);
   if (team.length === 0) return undefined;
-  // Several repos in the team: the ticket's `repo:` label picks one. An issue change carries its labels.
-  const carried: { name: string }[] | undefined = body.type === 'Issue' ? body.data?.labels : undefined;
-  const labels = team.length === 1 ? [] : (carried?.map((l) => l.name) ?? (await ctx.labelsOf(identifier)));
-  return routeTicket(team, labels);
+  if (team.length === 1) return { projectId: team[0]! };
+  const stored = (await Promise.all(team.map((p) => ctx.ticket(p, identifier)))).filter((t) => t !== undefined);
+  const routes = body.type === 'AgentSessionEvent' && body.action === 'created' && !stored.some(holds);
+  return resolveRoute(team, stored, routes ? await ctx.labelsOf(identifier) : undefined);
 }
 
 function issueIdentifier(body: any): string | undefined {
@@ -225,8 +231,8 @@ export async function mapLinearWebhook(body: any, key: string, ctx: MapContext):
   const { projectId, repos } = route;
   const { id: actor, taint, name } = signedActor(body);
   let partials = body.type === 'AgentSessionEvent' ? sessionEvents(body, name, projectId, ctx) : await issueEvents(body, identifier, teamKey, projectId, ctx);
-  // Its repo unknown, only a delegation passes, to be blocked with the choice: nothing else must work in a repo picked by default.
-  if (repos) partials = partials.filter((p) => p.type === 'ticket.delegated').map((p) => ({ ...p, payload: { ...(p.payload as object), repos } }));
+  // The choice to make goes with the event: `decide` blocks the delegation, answers the rest.
+  if (repos) partials = partials.map((p) => ({ ...p, payload: { ...(p.payload as object), repos } }));
   const at = ctx.now();
   return partials.map(
     (p) =>

@@ -78,6 +78,7 @@ export function linearIngest(
     ctx: {
       projectsOfTeam: (k) => (k === 'REL' ? ['p'] : []),
       labelsOf: async () => [],
+      ticket: async () => undefined,
       logicalFor: () => null,
       stateNameById: () => undefined,
       stateTypeById: () => undefined,

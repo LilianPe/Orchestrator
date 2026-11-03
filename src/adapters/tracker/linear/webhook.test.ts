@@ -2,12 +2,11 @@ import { createHmac } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import type { FactoryEvent } from '../../../core/types.js';
+import { newTicketState, type FactoryEvent, type TicketState } from '../../../core/types.js';
 import { SqliteStore } from '../../../store/sqlite-store.js';
 import { createLinearIngest } from './ingest.js';
 import { loadWorkflow } from '../../../config/load-workflow.js';
 import { FakeClock } from '../../../core/clock.js';
-import { newTicketState } from '../../../core/types.js';
 import { FakeTracker } from '../fake.js';
 import { knownLabels, recordLabels, serial } from './labels.js';
 import { reconcileOnce } from './reconcile.js';
@@ -21,6 +20,7 @@ function ctx(echoes: string[] = []): MapContext {
   return {
     projectsOfTeam: (k) => (k === 'REL' ? ['p'] : []),
     labelsOf: async () => [],
+    ticket: async () => undefined,
     logicalFor: (_p, name) => LOGICAL[name] ?? null,
     stateNameById: (_t, id) => NAMES[id],
     stateTypeById: (_t, id) => (id === 's-x' ? 'canceled' : 'started'),
@@ -237,31 +237,43 @@ describe('mapLinearWebhook', () => {
   });
 
   describe('a team with several repos (ORC-291)', () => {
-    const twoRepos = (labels: string[], read: string[] = []): MapContext => ({
+    const twoRepos = (labels: string[], o: { read?: string[]; stored?: TicketState[] } = {}): MapContext => ({
       ...ctx(),
       projectsOfTeam: (k) => (k === 'REL' ? ['web', 'api'] : []),
-      labelsOf: async (id) => (read.push(id), labels),
+      labelsOf: async (id) => (o.read?.push(id), labels),
+      ticket: async (p, id) => o.stored?.find((t) => t.projectId === p && t.ticketId === id),
     });
+    const held = { ...newTicketState('web', 'REL-1', 'T', 'dev', 0), delegated: true };
 
-    it('sends a delegation to the repo its repo: label names, read from Linear', async () => {
+    it('sends a delegation of a ticket no project holds to the repo its repo: label names, read from Linear', async () => {
       const read: string[] = [];
-      expect(await mapLinearWebhook(fx('session-created-delegation'), 'd1', twoRepos(['repo:api'], read))).toMatchObject([{ type: 'ticket.delegated', projectId: 'api' }]);
+      expect(await mapLinearWebhook(fx('session-created-delegation'), 'd1', twoRepos(['repo:api'], { read }))).toMatchObject([{ type: 'ticket.delegated', projectId: 'api' }]);
       expect(read).toEqual(['REL-1']);
     });
 
-    it('takes the labels an issue change carries, without reading Linear', async () => {
-      const body = { ...fx('issue-moved-labeled') };
-      body.data = { ...body.data, labels: [{ id: 'l-api', name: 'repo:api' }] };
-      const out = await mapLinearWebhook(body, 'd6', twoRepos([]));
-      expect(out.map((e) => e.projectId)).toEqual(['api', 'api']);
+    it('sends everything about a ticket a project holds to that project, whatever its labels, without reading Linear', async () => {
+      const read: string[] = [];
+      for (const name of ['session-created-delegation', 'session-prompted', 'issue-moved-labeled']) {
+        const out = await mapLinearWebhook(fx(name), 'd', twoRepos(['repo:api'], { read, stored: [held] }));
+        expect(out.map((e) => e.projectId)).toContain('web');
+        expect(out.map((e) => e.projectId)).not.toContain('api');
+      }
+      expect(read).toEqual([]);
     });
 
-    it('without a label, a delegation goes to the first repo with the list to choose from; anything else is dropped', async () => {
+    it('without a label, a new session goes to the first repo with the choice to make', async () => {
       expect(await mapLinearWebhook(fx('session-created-delegation'), 'd1', twoRepos(['bug']))).toMatchObject([
         { type: 'ticket.delegated', projectId: 'web', payload: { linearSessionId: 'as-1', repos: ['web', 'api'] } },
       ]);
-      expect(await mapLinearWebhook(fx('session-prompted'), 'd4', twoRepos([]))).toEqual([]);
-      expect(await mapLinearWebhook(fx('issue-moved-labeled'), 'd6', twoRepos([]))).toEqual([]);
+      expect(await mapLinearWebhook(fx('session-created-mention'), 'd2', twoRepos([]))).toMatchObject([{ type: 'session.mentioned', projectId: 'web', payload: { repos: ['web', 'api'] } }]);
+    });
+
+    it('drops what reaches a ticket no project knows, without reading Linear: there is nothing to route', async () => {
+      const labelsOf = async (): Promise<string[]> => {
+        throw new Error('Linear down');
+      };
+      expect(await mapLinearWebhook(fx('session-prompted'), 'd4', { ...twoRepos([]), labelsOf })).toEqual([]);
+      expect(await mapLinearWebhook(fx('issue-moved-labeled'), 'd6', { ...twoRepos([]), labelsOf })).toEqual([]);
     });
   });
 });

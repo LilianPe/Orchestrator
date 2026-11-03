@@ -8,7 +8,7 @@ import type { Decision, Effect } from './decision.js';
 import { PRODUCT_NAME } from '../product.js';
 import { CUT_RELAUNCHES, CUT_WINDOW_MS } from '../store/types.js';
 import { isOwnMoveEcho, reduce } from './reduce.js';
-import { REPO_LABEL } from './routing.js';
+import { holds, isUnrouted, REPO_LABEL, unroutedReason } from './routing.js';
 import type { EventPayloads, EventType, FactoryEvent, FeedbackItem, InputKind, RunOutcome, Taint, TicketState, VerifyFailure } from './types.js';
 
 type StartRun = Extract<Effect, { kind: 'start_run' }>;
@@ -587,7 +587,9 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
   const out = decideEvent(state, event, workflow, matrix);
   // A dead notice or label means the tracker is down: nothing more is written to it (no loop, ORC-150).
   const trackerDown = event.type === 'effect.failed' && (event.payload.kind === 'activity' || event.payload.kind === 'labels');
-  if (!trackerDown) blockedLabel(out, state, event);
+  // An undelegation that lifts a repo choice while the issue's ticket in its repo is blocked leaves the label (ORC-291).
+  const keepLabel = event.type === 'ticket.undelegated' && event.payload.keepLabel;
+  if (!trackerDown && !keepLabel) blockedLabel(out, state, event);
   return out;
 }
 
@@ -611,15 +613,29 @@ export function blockedLabelChange(before: boolean, after: boolean): Extract<Dec
   return after ? { kind: 'labels', add: [BLOCKED_LABEL], remove: [] } : { kind: 'labels', add: [], remove: [BLOCKED_LABEL] };
 }
 
-/** Block reason of a delegation whose repo is not known (ORC-291). */
-const UNROUTED = 'Dépôt à préciser : cette équipe Linear a plusieurs dépôts.';
-
-/** A delegation in a team of several repos, without a `repo:` label: blocked, the human told how to choose. */
-function unrouted(out: Decision, state: TicketState | undefined, repos: readonly string[]): Decision {
-  const labels = repos.map((r) => `\`${REPO_LABEL}${r}\``).join(', ');
-  block(out, UNROUTED, `${UNROUTED} Ajoutez au ticket le label de son dépôt (${labels}), puis déléguez-le de nouveau.`);
-  // A new ticket: `blockedLabel` sees no state before it and puts no label.
-  if (!state) out.effects.push(blockedLabelChange(false, true)!);
+/**
+ * A ticket whose repo is to be chosen (ORC-291): an event that carries the choice (`repos`) or reaches a ticket
+ * blocked for it. A delegation blocks it, or asks again when it is already blocked (its reason kept); a mention,
+ * a command, a reply or a stop is answered with the same question; anything else decides nothing, so that no
+ * rule starts work in a repo picked by default. `undefined`: the event is not such a one.
+ */
+function unrouted(state: TicketState | undefined, event: FactoryEvent): Decision | undefined {
+  const repos = (event.payload as { repos?: string[] }).repos;
+  if (!repos && (!isUnrouted(state) || event.type === 'ticket.undelegated')) return undefined;
+  const out = empty();
+  const body = repos ? unroutedReason(repos) : state!.blockReason!;
+  if (event.type === 'ticket.delegated' && repos) {
+    if (state?.blocked) out.effects.push({ kind: 'activity', type: 'elicitation', body });
+    else block(out, body, body);
+    // A new ticket: `blockedLabel` sees no state before it and puts no label.
+    if (!state) out.effects.push(blockedLabelChange(false, true)!);
+    return out;
+  }
+  const sessionId = (event.payload as { linearSessionId?: string }).linearSessionId;
+  if (sessionId && ['session.mentioned', 'command', 'session.prompted', 'session.stopped'].includes(event.type)) {
+    out.effects.push({ kind: 'activity', type: 'response', body, linearSessionId: sessionId });
+  }
+  out.trace.push(`${event.type}: repo to choose first`);
   return out;
 }
 
@@ -638,6 +654,8 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
   }
   // Rules read the ticket as it is once the event's own facts are recorded (new status, delegation…).
   const ticket = reduce(state, event);
+  const waiting = unrouted(state, event);
+  if (waiting) return waiting;
   if (BUILT_IN.has(event.type)) out.trace.push(`built-in ${event.type}`);
   if (event.type === 'status.changed' && event.payload.cancelled) {
     // A ticket cancelled by a human (ORC-170): its work stops, and nothing waits for an answer (`reduce`
@@ -838,13 +856,19 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       stop(out, `PR #${n} fermée sans merge`, `La PR #${n} a été fermée sans merge : j'arrête le travail sur ce ticket. ${RELAUNCH}`);
       break;
     }
-    case 'ticket.delegated':
-      if (event.payload.repos) return unrouted(out, state, event.payload.repos);
-      break;
     case 'ticket.undelegated':
       // Delegated again with its `repo:` label, the ticket went to its repo: here nothing waits any longer (ORC-291).
-      if (ticket?.blocked && ticket.blockReason === UNROUTED) out.events.push({ type: 'ticket.unblocked' });
+      if (isUnrouted(ticket)) out.events.push({ type: 'ticket.unblocked' });
       break;
+    case 'label.changed': {
+      // Routing is sticky (ORC-291): a ticket at work stays in its repo, whatever `repo:` label is added.
+      const { label, change } = event.payload;
+      const lower = label.toLowerCase();
+      if (change === 'added' && ticket && holds(ticket) && lower.startsWith(REPO_LABEL) && lower !== `${REPO_LABEL}${event.projectId}`.toLowerCase()) {
+        out.effects.push({ kind: 'comment', body: `Ce ticket reste sur le dépôt ${event.projectId} : le dépôt ne change pas en cours de route. Pour le changer, arrêtez le travail, retirez la délégation, puis déléguez de nouveau.` });
+      }
+      break;
+    }
     case 'pr.merge_refused':
       return mergeRefused(out, event, ticket, workflow);
     case 'pr.reviewed':

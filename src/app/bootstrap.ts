@@ -273,6 +273,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       ctx: {
         projectsOfTeam: (k) => projects.filter((p) => p.teamKey === k).map((p) => p.id),
         labelsOf: async (id) => (await trackerSwitch.getIssue(id)).labels,
+        ticket: (pid, id) => store.getTicket(pid, id),
         logicalFor: (pid, name) => {
           const p = projects.find((x) => x.id === pid);
           return p ? (logicalFromName(p.workflow.states, name) ?? null) : null;

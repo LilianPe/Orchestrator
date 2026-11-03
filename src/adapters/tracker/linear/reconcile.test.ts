@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { loadWorkflow } from '../../../config/load-workflow.js';
 import { FakeClock } from '../../../core/clock.js';
 import { decide } from '../../../core/engine.js';
+import { unroutedReason } from '../../../core/routing.js';
 import { newTicketState, type FactoryEvent } from '../../../core/types.js';
 import { SqliteStore } from '../../../store/sqlite-store.js';
 import { FakeTracker, STANDARD_STATES } from '../fake.js';
@@ -26,10 +27,10 @@ describe('reconcileOnce', () => {
       submit: (e) => events.push(e), clock: new FakeClock(100), log: () => {},
     });
     expect(events.map((e) => [e.id, e.type, e.payload])).toEqual([
-      ['reconcile:delegated:REL-1', 'ticket.delegated', { issue: { title: 'Ticket', logical: 'todo', priority: 0 } }],
-      ['reconcile:moved:REL-2:AI Review:7', 'status.changed', { from: 'human_review', to: 'ai_review' }],
-      ['reconcile:undelegated:REL-3:r3', 'session.stopped', {}],
-      ['reconcile:undelegated-flag:REL-3:8', 'ticket.undelegated', {}],
+      ['reconcile:delegated:p:REL-1', 'ticket.delegated', { issue: { title: 'Ticket', logical: 'todo', priority: 0 } }],
+      ['reconcile:moved:p:REL-2:AI Review:7', 'status.changed', { from: 'human_review', to: 'ai_review' }],
+      ['reconcile:undelegated:p:REL-3:r3', 'session.stopped', {}],
+      ['reconcile:undelegated-flag:p:REL-3:8', 'ticket.undelegated', {}],
     ]);
     // Nobody signed the delegation or the move it finds: untrusted, without an actor (ORC-160).
     expect(events.map((e) => [e.type, e.taint, e.actor])).toEqual([
@@ -53,30 +54,54 @@ describe('reconcileOnce', () => {
       submit: (e) => events.push(e), clock: new FakeClock(100), log: () => {},
     });
     expect(events.map((e) => [e.id, e.type])).toEqual([
-      ['reconcile:delegated:REL-4:4', 'ticket.delegated'],
-      ['reconcile:undelegated-flag:REL-5:5', 'ticket.undelegated'],
+      ['reconcile:delegated:p:REL-4:4', 'ticket.delegated'],
+      ['reconcile:undelegated-flag:p:REL-5:5', 'ticket.undelegated'],
     ]);
   });
 
-  it('gives each ticket of a team with several repos to the repo its label names, the others to the first with the choice (ORC-291)', async () => {
-    const tracker = new FakeTracker();
-    const store = new SqliteStore(':memory:');
-    tracker.addIssue({ identifier: 'REL-1', delegateId: 'app', labels: ['repo:api'] });
-    tracker.addIssue({ identifier: 'REL-2', delegateId: 'app' });
-    // Blocked in the first repo before its label was put: it is no longer that repo's.
-    await store.putTicket({ ...newTicketState('web', 'REL-1', 'T', 'todo', 3), delegated: true, blocked: true });
-    const events: FactoryEvent[] = [];
+  describe('a team with several repos (ORC-291)', () => {
     const projects = ['web', 'api'].map((id) => ({ id, repoPath: `/${id}`, teamKey: 'REL', workflow }));
-    await reconcileOnce({ tracker, store, projects, submit: (e) => events.push(e), clock: new FakeClock(100), log: () => {} });
-    expect(events.map((e) => [e.projectId, e.id, (e.payload as { repos?: string[] }).repos])).toEqual([
-      ['web', 'reconcile:unrouted:REL-2', ['web', 'api']],
-      ['web', 'reconcile:undelegated-flag:REL-1:3', undefined],
-      ['api', 'reconcile:delegated:REL-1', undefined],
-    ]);
-    // One project's pass (the reconciliation timer's) still routes among all of them.
-    events.length = 0;
-    await reconcileOnce({ tracker, store, projects, only: 'api', submit: (e) => events.push(e), clock: new FakeClock(100), log: () => {} });
-    expect(events.map((e) => e.id)).toEqual(['reconcile:delegated:REL-1']);
+    const pass = async (tracker: FakeTracker, store: SqliteStore, only?: string) => {
+      const events: FactoryEvent[] = [];
+      let reads = 0;
+      const counted = { listDelegated: (k: string) => (reads++, tracker.listDelegated(k)), getIssue: (id: string) => tracker.getIssue(id) };
+      await reconcileOnce({ tracker: counted, store, projects, only, submit: (e) => events.push(e), clock: new FakeClock(100), log: () => {} });
+      return { events: events.map((e) => [e.projectId, e.id, e.payload]), reads };
+    };
+
+    it('reads the team once, gives a new ticket to the repo its label names, the others to the first with the choice', async () => {
+      const tracker = new FakeTracker();
+      tracker.addIssue({ identifier: 'REL-1', delegateId: 'app', labels: ['repo:api'] });
+      tracker.addIssue({ identifier: 'REL-2', delegateId: 'app' });
+      const { events, reads } = await pass(tracker, new SqliteStore(':memory:'));
+      expect(reads).toBe(1);
+      expect(events).toEqual([
+        ['web', 'reconcile:unrouted:web:REL-2', { issue: expect.any(Object), repos: ['web', 'api'] }],
+        ['api', 'reconcile:delegated:api:REL-1', { issue: expect.any(Object) }],
+      ]);
+    });
+
+    it('is sticky: a ticket at work in a repo stays there whatever its label now says; one pass routes among all', async () => {
+      const tracker = new FakeTracker();
+      tracker.addIssue({ identifier: 'REL-1', delegateId: 'app', labels: ['repo:api'], stateName: 'In Progress' });
+      const store = new SqliteStore(':memory:');
+      await store.putTicket({ ...newTicketState('web', 'REL-1', 'T', 'dev', 3), delegated: true, activeRunId: 'r1' });
+      expect((await pass(tracker, store)).events).toEqual([]);
+      expect((await pass(tracker, store, 'api')).events).toEqual([]);
+    });
+
+    it('takes a ticket that waited for its repo out of the first once labelled, its Bloqué label kept while its repo blocks it', async () => {
+      const tracker = new FakeTracker();
+      tracker.addIssue({ identifier: 'REL-1', delegateId: 'app', labels: ['repo:api'] });
+      const store = new SqliteStore(':memory:');
+      await store.putTicket({ ...newTicketState('web', 'REL-1', 'T', 'todo', 3), delegated: true, blocked: true, blockReason: unroutedReason(['web', 'api']) });
+      expect((await pass(tracker, store)).events).toEqual([
+        ['web', 'reconcile:undelegated-flag:web:REL-1:3', {}],
+        ['api', 'reconcile:delegated:api:REL-1', { issue: expect.any(Object) }],
+      ]);
+      await store.putTicket({ ...newTicketState('api', 'REL-1', 'T', 'dev', 4), blocked: true, blockReason: 'Tests rouges' });
+      expect((await pass(tracker, store)).events[0]).toEqual(['web', 'reconcile:undelegated-flag:web:REL-1:3', { keepLabel: true }]);
+    });
   });
 });
 
@@ -95,7 +120,7 @@ describe('reconcileOnce — done and cancelled (ORC-185)', () => {
     await store.putTicket({ ...newTicketState('p', 'REL-6', 'T', 'human_review', 6), delegated: true });
     const events = await pass(tracker, store);
     expect(events.map((e) => [e.id, e.type, e.payload, e.taint, e.actor])).toEqual([
-      ['reconcile:moved:REL-6:Done:6', 'status.changed', { from: 'human_review', to: 'done' }, 'untrusted', undefined],
+      ['reconcile:moved:p:REL-6:Done:6', 'status.changed', { from: 'human_review', to: 'done' }, 'untrusted', undefined],
     ]);
   });
 
@@ -107,8 +132,8 @@ describe('reconcileOnce — done and cancelled (ORC-185)', () => {
     await store.putTicket({ ...newTicketState('p', 'REL-7', 'T', 'dev', 7), delegated: true, activeRunId: 'r7' });
     const events = await pass(tracker, store);
     expect(events.map((e) => [e.id, e.type, e.payload, e.taint])).toEqual([
-      ['reconcile:cancelled:REL-7:Canceled:7', 'status.changed', { from: 'dev', to: null, cancelled: true }, 'untrusted'],
-      ['reconcile:undelegated-flag:REL-7:7', 'ticket.undelegated', {}, 'trusted'],
+      ['reconcile:cancelled:p:REL-7:Canceled:7', 'status.changed', { from: 'dev', to: null, cancelled: true }, 'untrusted'],
+      ['reconcile:undelegated-flag:p:REL-7:7', 'ticket.undelegated', {}, 'trusted'],
     ]);
   });
 
@@ -118,9 +143,9 @@ describe('reconcileOnce — done and cancelled (ORC-185)', () => {
     tracker.addIssue({ identifier: 'REL-6', stateName: 'Done', stateType: 'completed' });
     await store.putTicket({ ...newTicketState('p', 'REL-6', 'T', 'dev', 6), delegated: true, activeRunId: 'r6' });
     expect((await pass(tracker, store)).map((e) => [e.id, e.type])).toEqual([
-      ['reconcile:moved:REL-6:Done:6', 'status.changed'],
-      ['reconcile:undelegated:REL-6:r6', 'session.stopped'],
-      ['reconcile:undelegated-flag:REL-6:6', 'ticket.undelegated'],
+      ['reconcile:moved:p:REL-6:Done:6', 'status.changed'],
+      ['reconcile:undelegated:p:REL-6:r6', 'session.stopped'],
+      ['reconcile:undelegated-flag:p:REL-6:6', 'ticket.undelegated'],
     ]);
   });
 
@@ -130,7 +155,7 @@ describe('reconcileOnce — done and cancelled (ORC-185)', () => {
     const store = new SqliteStore(':memory:');
     tracker.addIssue({ identifier: 'REL-6', delegateId: 'app', stateName: 'Released', stateType: 'completed' });
     await store.putTicket({ ...newTicketState('p', 'REL-6', 'T', 'human_review', 6), delegated: true });
-    expect((await pass(tracker, store)).map((e) => [e.id, e.type])).toEqual([['reconcile:undelegated-flag:REL-6:6', 'ticket.undelegated']]);
+    expect((await pass(tracker, store)).map((e) => [e.id, e.type])).toEqual([['reconcile:undelegated-flag:p:REL-6:6', 'ticket.undelegated']]);
   });
 
   it('a Done already received still stops a run left under way, as before', async () => {
@@ -138,7 +163,7 @@ describe('reconcileOnce — done and cancelled (ORC-185)', () => {
     const store = new SqliteStore(':memory:');
     tracker.addIssue({ identifier: 'REL-6', delegateId: 'app', stateName: 'Done', stateType: 'completed' });
     await store.putTicket({ ...newTicketState('p', 'REL-6', 'T', 'done', 6), delegated: true, activeRunId: 'r6' });
-    expect((await pass(tracker, store)).map((e) => [e.id, e.type])).toEqual([['reconcile:undelegated:REL-6:r6', 'session.stopped']]);
+    expect((await pass(tracker, store)).map((e) => [e.id, e.type])).toEqual([['reconcile:undelegated:p:REL-6:r6', 'session.stopped']]);
   });
 
   it('a cancel on a ticket the factory no longer counts as delegated only stops its run', async () => {
@@ -147,7 +172,7 @@ describe('reconcileOnce — done and cancelled (ORC-185)', () => {
     const store = new SqliteStore(':memory:');
     tracker.addIssue({ identifier: 'REL-7', delegateId: 'app', stateName: 'Canceled', stateType: 'canceled' });
     await store.putTicket({ ...newTicketState('p', 'REL-7', 'T', 'dev', 7), delegated: false, activeRunId: 'r7' });
-    expect((await pass(tracker, store)).map((e) => [e.id, e.type])).toEqual([['reconcile:undelegated:REL-7:r7', 'session.stopped']]);
+    expect((await pass(tracker, store)).map((e) => [e.id, e.type])).toEqual([['reconcile:undelegated:p:REL-7:r7', 'session.stopped']]);
   });
 
   it('a Done already received (done in the store) is not caught up again, nor read from Linear', async () => {
@@ -175,8 +200,8 @@ describe('reconcileOnce — done and cancelled (ORC-185)', () => {
     const store = new SqliteStore(':memory:');
     await store.putTicket({ ...newTicketState('p', 'REL-9', 'T', 'dev', 9), delegated: true, activeRunId: 'r9' });
     expect((await pass(tracker, store)).map((e) => [e.id, e.type])).toEqual([
-      ['reconcile:undelegated:REL-9:r9', 'session.stopped'],
-      ['reconcile:undelegated-flag:REL-9:9', 'ticket.undelegated'],
+      ['reconcile:undelegated:p:REL-9:r9', 'session.stopped'],
+      ['reconcile:undelegated-flag:p:REL-9:9', 'ticket.undelegated'],
     ]);
   });
 
@@ -225,8 +250,8 @@ describe('reconcileOnce — labels (ORC-185)', () => {
     tracker.issues.get('REL-1')!.labels = ['agent:reprendre'];
     const events = await pass(tracker, store);
     expect(events.map((e) => [e.id, e.type, e.payload, e.taint, e.actor])).toEqual([
-      ['reconcile:label:REL-1:agent:reprendre:added:3', 'label.changed', { label: 'agent:reprendre', change: 'added' }, 'untrusted', undefined],
-      ['reconcile:label:REL-1:bug:removed:3', 'label.changed', { label: 'bug', change: 'removed' }, 'untrusted', undefined],
+      ['reconcile:label:p:REL-1:agent:reprendre:added:3', 'label.changed', { label: 'agent:reprendre', change: 'added' }, 'untrusted', undefined],
+      ['reconcile:label:p:REL-1:bug:removed:3', 'label.changed', { label: 'bug', change: 'removed' }, 'untrusted', undefined],
     ]);
     expect(await pass(tracker, store)).toEqual([]);
   });
@@ -242,7 +267,7 @@ describe('reconcileOnce — labels (ORC-185)', () => {
       issue.updatedAt = at;
       ids.push(...(await pass(tracker, store)).map((e) => e.id));
     }
-    expect(ids).toEqual(['reconcile:label:REL-1:x:added:20', 'reconcile:label:REL-1:x:removed:30', 'reconcile:label:REL-1:x:added:40']);
+    expect(ids).toEqual(['reconcile:label:p:REL-1:x:added:20', 'reconcile:label:p:REL-1:x:removed:30', 'reconcile:label:p:REL-1:x:added:40']);
   });
 
   it('labels a webhook recorded after Linear was read are newer: nothing is reported, nothing overwritten', async () => {
@@ -289,6 +314,6 @@ describe('Reconciler', () => {
     release();
     await stop;
     expect(passes).toBe(1);
-    expect(events.map((e) => e.id)).toEqual(['reconcile:delegated:REL-1']);
+    expect(events.map((e) => e.id)).toEqual(['reconcile:delegated:p:REL-1']);
   });
 });
