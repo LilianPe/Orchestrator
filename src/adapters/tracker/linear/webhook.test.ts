@@ -85,6 +85,13 @@ describe('mapLinearWebhook', () => {
       type: 'command', payload: { name: 'retiens', body: 'les agrégats côté serveur', linearSessionId: 'as-3' },
     });
   });
+  it('maps /refreeze as a command whatever the workflow declares (ORC-131)', async () => {
+    const body = fx('session-created-command');
+    body.agentSession.comment.body = '[@factory](https://linear.app/x/profiles/factory) /refreeze le test de l’export était faux';
+    expect((await mapLinearWebhook(body, 'd3', ctx()))[0]).toMatchObject({
+      type: 'command', actor: 'user-lilian', payload: { name: '/refreeze', body: 'le test de l’export était faux', linearSessionId: 'as-3' },
+    });
+  });
   it('maps a prompt and a stop', async () => {
     expect((await mapLinearWebhook(fx('session-prompted'), 'd4', ctx()))[0]).toMatchObject({
       type: 'session.prompted', payload: { linearSessionId: 'as-1', body: 'les boutons sont mal alignés', author: 'Lilian' },

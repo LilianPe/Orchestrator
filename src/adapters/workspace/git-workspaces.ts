@@ -109,6 +109,7 @@ export class GitWorkspaces implements WorkspaceManager {
       return r.code === 0 ? r.stdout : undefined;
     };
     return {
+      head,
       changed,
       existsAtBase: async (paths) => {
         if (paths.length === 0) return new Set();
@@ -118,6 +119,7 @@ export class GitWorkspaces implements WorkspaceManager {
       },
       showAtBase: (p) => show(base, p),
       showAtHead: (p) => show(head, p),
+      filesAtHead: async () => (await this.git(repoPath, 'ls-tree', '-r', '--name-only', '-z', head)).split('\0').filter(Boolean),
     };
   }
 

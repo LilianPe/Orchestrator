@@ -95,6 +95,18 @@ Le drapeau vit dans le job, figé avec la version du workflow de chaque ticket :
 
 Le job `tests` du pack est inactif tant qu'aucune règle ne le lance : un dépôt l'active en faisant démarrer la délégation par lui (`ticket.delegated: - { when: "state in [todo, dev] && !blocked", run: tests }`). Les jobs sans `red` gardent le flux `dev` d'avant.
 
+## Gel des tests et du harnais (ORC-131)
+
+Après `red`, l'usine gèle ce qui juge l'agent : les tests que l'étape `tests` a commités et le harnais qui les lance (`src/checks/freeze.ts`). Le gel **bloque dès le premier ticket**, en mode mesure du rouge compris : seul un retour à `tests` en mode bloquant le reporte au rouge suivant.
+
+**Ce qui est gelé**, lu sur le dépôt de l'usine au commit de fin de l'étape, jamais dans le worktree de l'agent : les tests de l'étape, et partout dans le dépôt les fichiers du harnais : `vitest.config.*`, `jest.config.*`, leurs `setup` et `workspace`, `setupTests.*`, `tsconfig*.json`, le script `test` de chaque `package.json`, `conftest.py`, `pytest.ini`, la section `[tool.pytest…]` de `pyproject.toml`. Chaque fichier a son empreinte sha256 (de son contenu, ou de la seule partie lue par les tests pour les deux manifestes). Le gel (commit et empreintes) est dans l'état du ticket (`frozenTests`), posé par l'événement journalisé qui l'a lu : qui et quand sont dans le journal.
+
+**Le contrôle.** Une fois le gel posé, chaque run du ticket dans son worktree (`dev`, `dev-feedback`, `fix-ci`, `review`) passe par la vérification, même sans commande `verify` : l'usine lit les fichiers changés depuis le commit du gel jusqu'à la tête de la branche. Un fichier gelé modifié ou supprimé (un `skip` ou un `only` ajouté est une modification), ou un fichier du harnais ajouté, fait échouer `factory/tests-gelés` : la vérification échoue, le run repart avec le résumé, puis le ticket est Bloqué au bout de `verify`, sans passer en Human Review. Le contrôle ne regarde pas l'auteur : un commit humain sur un test gelé échoue de la même façon. Un contrôle qui ne peut pas lire la branche échoue aussi : le gel ne s'ouvre jamais sur une panne. Un second passage par `tests` ajoute ses nouveaux fichiers au gel, sans toucher à ceux déjà gelés.
+
+**`/refreeze`.** Seule sortie du gel : un mainteneur désigné (matrice d'ORC-186) mentionne l'agent dans le ticket avec `/refreeze`. Avant la décision, l'usine lit le gel à la tête de la branche (les fichiers déjà gelés et le harnais) et le journalise avec la commande ; accepté, il remplace l'ancien et la réponse dans le ticket donne le commit ; la vérification suivante part de lui. Refusé (autre rôle, acteur non signé, ou aucun rôle résolu), la commande est journalisée (`authz: refused refreeze …`) et répondue dans le ticket, et le gel ne bouge pas. Le regel ne relance rien : un ticket Bloqué se relance comme d'habitude.
+
+**Pas encore** : le check publié sur la PR (ORC-125) et `verify` en clone neuf (ORC-151) ; les fichiers non commités du worktree ne sont pas lus (un test laissé non commité n'est pas gelé) ; `/refreeze` depuis un commentaire de PR ; la table `freezes` séparée du journal ; le scan des tests désactivés hors fichiers gelés reste celui d'`anti-triche` (ORC-158).
+
 ## Compilation et version
 
 `compilePreset(preset, { repoNetwork })` vérifie les invariants du socle et renvoie le hash du préréglage, ou lève une `PresetError` qui liste toutes les violations :

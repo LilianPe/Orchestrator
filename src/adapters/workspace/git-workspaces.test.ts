@@ -85,6 +85,8 @@ describe('GitWorkspaces', () => {
     expect(await diff.showAtBase('src/export.ts')).toBe('export const other = 1;\n');
     expect(await diff.showAtHead('export.test.ts')).toBe('x\n');
     expect(await diff.showAtBase('export.test.ts')).toBeUndefined();
+    expect(diff.head).toBe(await ws.head(w.path));
+    expect(await diff.filesAtHead()).toContain('export.test.ts');
     expect((await ws.uncommitted(w.path)).sort()).toEqual(['draft.ts', 'src/export.ts']);
     expect(await ws.stepDiff(repo, join(root, 'nowhere'), base)).toBeUndefined();
   });

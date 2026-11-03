@@ -1,4 +1,5 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
+import { REFREEZE } from '../../../checks/freeze.js';
 import { labelEchoKey, stateEchoKey } from '../types.js';
 import { labelChanges, type KnownLabels } from './labels.js';
 import { SCHEMA_VERSION, type LogicalState, type FactoryEvent, type Taint } from '../../../core/types.js';
@@ -96,7 +97,8 @@ function sessionEvents(body: any, author: string, projectId: string, ctx: MapCon
     if (!comment) return [{ type: 'ticket.delegated', payload: { linearSessionId: sessionId, promptContext: body.promptContext } }];
     const text = stripMention(comment.body ?? '');
     const [first = '', ...rest] = text.split(/\s+/);
-    if (ctx.commands(projectId).includes(first.toLowerCase())) {
+    // `/refreeze` is the factory's own (ORC-131), not a workflow rule's.
+    if ([REFREEZE, ...ctx.commands(projectId)].includes(first.toLowerCase())) {
       return [{ type: 'command', payload: { name: first.toLowerCase(), body: rest.join(' '), linearSessionId: sessionId, author } }];
     }
     return [{ type: 'session.mentioned', payload: { linearSessionId: sessionId, body: text, author } }];
