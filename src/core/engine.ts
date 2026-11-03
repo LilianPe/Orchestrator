@@ -49,12 +49,17 @@ function success(out: Decision, at: { event: FactoryEvent; ticket: TicketState |
 
 /**
  * The `red` check found no red for the right reason (ORC-123). In measure mode the run goes on, and the decision's
- * trace says what the check would have blocked; a step that wrote something else than tests fails all the same. In
- * blocking mode, the job goes back with the verdict, `red.attempts` checks at most, then the ticket is blocked.
+ * trace says what the check would have blocked, a step outside the tests (`scope`) included: measuring never blocks.
+ * In blocking mode, the job goes back with the verdict, `red.attempts` checks at most, then the ticket is blocked.
+ * A check that could not run (`infra`) is no verdict: blocked in both modes, the agent never resumed for it.
  */
 function redFailed(out: Decision, at: { event: FactoryEvent<'verify.failed'>; ticket: TicketState | undefined; workflow: Workflow }, job: JobSpec, red: NonNullable<JobSpec['red']>): Decision {
   const { red: cause = 'error', failures, runId } = at.event.payload;
-  if (red.mode === 'measure' && cause !== 'scope') {
+  if (cause === 'infra') {
+    const reason = `Le contrôle du rouge de ${job.name} n'a pas pu tourner : panne d'infrastructure, l'agent n'est pas en cause.`;
+    return block(out, reason, `${reason}\n${failures[0]?.output ?? ''}\nRépondez dans ce fil pour que je reprenne.`);
+  }
+  if (red.mode === 'measure') {
     out.trace.push(`red: aurait bloqué (${cause}), mode mesure : le run continue`);
     return success(out, at, job, runId);
   }
@@ -127,6 +132,8 @@ function unblock(out: Decision, event: FactoryEvent, ticket: TicketState): void 
   resetRedCi(out, ticket);
   // The « Boucle » guard starts over too (ORC-187); `null`, not undefined, survives the JSON of the journal.
   if (ticket.repeatedFailure) out.events.push({ type: 'ticket.patched', patch: { repeatedFailure: null } });
+  // The red loop too (ORC-123).
+  if (ticket.redAttempts) out.events.push({ type: 'ticket.patched', patch: { redAttempts: 0 } });
 }
 
 /** A Linear session that carries questions (read-only answers), not the ticket's dev conversation. */

@@ -34,6 +34,7 @@ describe('ticketMeasures (ORC-235)', () => {
         ev('v1', 'verify.failed', 10, { runId: 'r1', job: 'tests', failures, red: 'compile' }),
         ev('v2', 'verify.passed', 20, { runId: 'r2', job: 'tests', red: 'assertion' }),
         ev('v3', 'verify.passed', 30, { runId: 'r3', job: 'dev' }),
+        ev('v4', 'verify.failed', 35, { runId: 'r4', job: 'tests', failures, red: 'infra' }),
         ev('m', 'pr.merged', 40, { number: 1, url: 'u', branch: 'b' }),
       ],
     }));

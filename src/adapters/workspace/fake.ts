@@ -1,5 +1,5 @@
 import { branchName } from '../../core/naming.js';
-import type { TrunkDiff, Workspace, WorkspaceManager, WorkspaceRequest } from './types.js';
+import type { StepDiff, Workspace, WorkspaceManager, WorkspaceRequest } from './types.js';
 
 export class FakeWorkspaces implements WorkspaceManager {
   prepared: WorkspaceRequest[] = [];
@@ -31,12 +31,23 @@ export class FakeWorkspaces implements WorkspaceManager {
     return this.heads.get(path);
   }
 
-  /** What each worktree's commits changed since the trunk, and the paths at baseSha, as a test sets them (ORC-123). */
-  trunkDiffs = new Map<string, { changed: TrunkDiff['changed']; atBase?: string[] }>();
+  /** What the tests step changed in each worktree, as a test sets it (ORC-123): files at the base and the head by content. */
+  steps = new Map<string, { changed: StepDiff['changed']; base?: Record<string, string>; head?: Record<string, string>; uncommitted?: string[] }>();
 
-  async sinceTrunk(_repoPath: string, path: string): Promise<TrunkDiff | undefined> {
-    const d = this.trunkDiffs.get(path);
-    return d && { changed: d.changed, existsAtBase: async (p) => d.atBase?.includes(p) ?? false };
+  async stepDiff(_repoPath: string, path: string): Promise<StepDiff | undefined> {
+    const d = this.steps.get(path);
+    if (!d) return undefined;
+    const base = d.base ?? {};
+    return {
+      changed: d.changed,
+      existsAtBase: async (paths) => new Set(paths.filter((p) => p in base || Object.keys(base).some((f) => f.startsWith(`${p}/`)))),
+      showAtBase: async (p) => base[p],
+      showAtHead: async (p) => d.head?.[p],
+    };
+  }
+
+  async uncommitted(path: string): Promise<string[]> {
+    return this.steps.get(path)?.uncommitted ?? [];
   }
 
   async resetClaudeDir(path: string): Promise<void> {

@@ -7,8 +7,9 @@ const WORKTREE = '/tmp/factory-fake/p/REL-1';
 const SYNTAX = 'FAIL src/export.test.ts\nError: Transform failed with 1 error';
 
 /** A project whose delegation runs the `tests` step first (ORC-123), its red check in `mode`. */
-function harness(mode: 'measure' | 'blocking' = 'measure') {
+function harness(mode: 'measure' | 'blocking' = 'measure', sandboxed = false) {
   const h = createHarness({
+    sandboxed,
     projectYaml: `version: 1
 on:
   ticket.delegated:
@@ -19,7 +20,8 @@ jobs:
 `,
   });
   h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Exporter les audits en CSV depuis la liste des audits.' });
-  h.workspaces.trunkDiffs.set(WORKTREE, { changed: [{ path: 'src/export.test.ts', deleted: false }] });
+  h.workspaces.heads.set(WORKTREE, 'base-sha');
+  h.workspaces.steps.set(WORKTREE, { changed: [{ path: 'src/export.test.ts', deleted: false }] });
   return h;
 }
 
@@ -47,22 +49,47 @@ describe('the tests step and the red check (ORC-123)', () => {
     expect((await measureTicket(h.store, 'p', 'REL-1')).red).toEqual([{ id: expect.any(String), verified: false, cause: 'compile' }]);
   });
 
-  it('in blocking mode, 2 unverified reds block the ticket', async () => {
+  it('in blocking mode, the 3rd unverified red blocks the ticket (2 returns to the tests step)', async () => {
     const h = harness('blocking');
-    h.checks.failNext(SYNTAX);
-    h.checks.failNext(SYNTAX);
+    for (let i = 0; i < 3; i++) h.checks.failNext(SYNTAX);
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
-    expect(skills(h)).toEqual(['/factory:tests', '/factory:tests']);
+    expect(skills(h)).toEqual(['/factory:tests', '/factory:tests', '/factory:tests']);
     expect(h.runner.requests[1]).toMatchObject({ resume: true });
-    expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Rouge non vérifié après 2 tentatives de tests.' });
+    expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Rouge non vérifié après 3 tentatives de tests.' });
   });
 
-  it('a tests step that touched a file outside the tests fails, without running anything', async () => {
-    const h = harness();
-    h.workspaces.trunkDiffs.set(WORKTREE, { changed: [{ path: 'src/export.test.ts', deleted: false }, { path: 'src/export.ts', deleted: false }] });
+  it('in blocking mode, a tests step that touched a file outside the tests fails, without running anything', async () => {
+    const h = harness('blocking');
+    h.workspaces.steps.set(WORKTREE, { changed: [{ path: 'src/export.test.ts', deleted: false }], uncommitted: ['src/export.ts'] });
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
     expect(h.checks.calls).toEqual([]);
-    expect(skills(h)).toEqual(['/factory:tests', '/factory:tests']);
+    expect(skills(h)).toEqual(['/factory:tests', '/factory:tests', '/factory:tests']);
     expect(await h.ticket()).toMatchObject({ blocked: true });
+  });
+
+  it('in measure mode, the same step is recorded « aurait bloqué (scope) » and the build goes on', async () => {
+    const h = harness();
+    h.workspaces.steps.set(WORKTREE, { changed: [{ path: 'src/export.test.ts', deleted: false }, { path: 'src/export.ts', deleted: false }] });
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    expect(skills(h)).toEqual(['/factory:tests', '/factory:dev']);
+    expect(await traces(h)).toContain('red: aurait bloqué (scope), mode mesure : le run continue');
+  });
+
+  it('a red check that cannot read the step blocks on the infrastructure, without resuming the agent', async () => {
+    const h = harness();
+    h.workspaces.steps.clear();
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    expect(skills(h)).toEqual(['/factory:tests']);
+    expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: expect.stringContaining("panne d'infrastructure") });
+  });
+
+  it('with sandboxes, reads the uncommitted files and runs the tests in a sandbox of its own, without network', async () => {
+    const h = harness('measure', true);
+    h.sandboxes.execResult = (argv) => (argv[0] === 'git' ? { stdout: '', stderr: '', code: 0 } : { stdout: 'AssertionError: expected 1 to be 2', stderr: '', code: 1 });
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    expect(h.sandboxes.execs.map((e) => e.argv.at(-1))).toContain("npm test -- 'src/export.test.ts'");
+    expect(h.checks.calls).toEqual([]);
+    expect(skills(h)).toEqual(['/factory:tests', '/factory:dev']);
+    expect((await measureTicket(h.store, 'p', 'REL-1')).red).toEqual([{ id: expect.any(String), verified: true, cause: 'assertion' }]);
   });
 });

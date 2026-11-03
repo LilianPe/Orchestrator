@@ -150,7 +150,7 @@ export interface JobSpec {
   /**
    * The `red` factory check after the job (ORC-123) instead of `verify`: its added tests must fail for the right
    * reason. `measure` records what it would have blocked and goes on; `blocking` sends the job back, `attempts`
-   * checks at most (counter `red` of the preset), then blocks. Absent from the jobs and versions without it.
+   * checks at most (the preset counter `red` + 1), then blocks; a check that could not run blocks in both. Absent from the jobs and versions without it.
    */
   red?: { command: string; mode: 'measure' | 'blocking'; attempts: number };
   limits: RunLimits;

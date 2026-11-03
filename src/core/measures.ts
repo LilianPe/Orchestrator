@@ -197,7 +197,8 @@ function messageMeasure(m: Message, kind: MessageKind, outs: Output[], ack: numb
 function redVerdicts(events: FactoryEvent[]): TicketMeasures['red'] {
   const out: TicketMeasures['red'] = [];
   for (const e of events) {
-    if ((e.type === 'verify.passed' || e.type === 'verify.failed') && e.payload.red) out.push({ id: e.id, verified: e.type === 'verify.passed', cause: e.payload.red });
+    // A check that could not run (`infra`) is no verdict on the tests.
+    if ((e.type === 'verify.passed' || e.type === 'verify.failed') && e.payload.red && e.payload.red !== 'infra') out.push({ id: e.id, verified: e.type === 'verify.passed', cause: e.payload.red });
   }
   return out;
 }

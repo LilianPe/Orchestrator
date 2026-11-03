@@ -110,7 +110,8 @@ function buildJob(name: string, raw: RawJob, perRun: RunLimits): JobSpec {
     verify: raw.verify ?? [],
     pickup: raw.pickup ?? false,
     structuredOutput: raw.structured_output,
-    ...(raw.red ? { red: { command: raw.red.command ?? missing('red.command'), mode: raw.red.mode ?? 'measure', attempts: presetBound(preset, 'red') } } : {}),
+    // `attempts` counts every check, as `verifyAttempts`: the preset's returns to the job, plus the first one.
+    ...(raw.red ? { red: { command: raw.red.command ?? missing('red.command'), mode: raw.red.mode ?? 'measure', attempts: presetBound(preset, 'red') + 1 } } : {}),
     limits: limits(raw.limits, perRun),
     onStart: raw.on_start ?? {},
     onSuccess: raw.on_success ?? {},
