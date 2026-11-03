@@ -371,6 +371,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       const purge = () => {
         const removed = purgeTranscripts(paths.transcripts, Date.now());
         if (removed.length) log(`transcripts : ${removed.length} supprimé(s) après 30 jours`);
+        // The egress journals (ORC-213), `*.jsonl` too: the same 30 days.
+        purgeTranscripts(paths.network, Date.now());
       };
       purge();
       purgeInterval = setInterval(purge, 24 * 60 * 60 * 1000);
