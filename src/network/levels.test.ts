@@ -6,6 +6,10 @@ const repo = (yaml?: string) => parseRepoConfig(yaml);
 const limited: EgressPolicy = { level: 'limited', allow: [] };
 
 describe('stepPolicy', () => {
+  it('lowercases the repository hosts, as the proxy matches them', () => {
+    expect(stepPolicy(repo('network: { level: custom, allow: [Docs.Exemple.com] }\n')).allow).toEqual(['docs.exemple.com']);
+  });
+
   it('is limited by default, the repository hosts only for custom', () => {
     expect(stepPolicy(repo())).toEqual(limited);
     expect(stepPolicy(repo('network: { level: limited, allow: [docs.exemple.com] }\n'))).toEqual(limited);
@@ -39,9 +43,9 @@ describe('allowConnect (a TLS tunnel: the host only)', () => {
     expect(allowConnect(limited, 'docs.exemple.com')).toEqual({ ok: false, reason: expect.stringMatching(/not allowed/) as string });
   });
 
-  it('never tunnels a host with a write API: plain HTTP through the proxy, which sees the method', () => {
-    for (const host of ['github.com', 'api.github.com', 'registry.npmjs.org', 'pypi.org']) {
-      expect(allowConnect(limited, host)).toEqual({ ok: false, reason: expect.stringMatching(/http:\/\//) as string });
+  it('opens GitHub and the registries too: the proxy decrypts them and checks each request', () => {
+    for (const host of ['github.com', 'api.github.com', 'registry.npmjs.org', 'registry.yarnpkg.com', 'pypi.org']) {
+      expect(allowConnect(limited, host)).toEqual({ ok: true });
     }
   });
 
@@ -76,6 +80,15 @@ describe('allowRequest (plain HTTP: the method and the path are seen)', () => {
     expect(allowRequest(limited, 'api.anthropic.com', 'POST', '/v1/messages').ok).toBe(true);
     expect(allowRequest({ level: 'limited', allow: ['docs.exemple.com'] }, 'docs.exemple.com', 'OPTIONS', '/').ok).toBe(true);
     expect(allowRequest({ level: 'limited', allow: ['docs.exemple.com'] }, 'docs.exemple.com', 'DELETE', '/').ok).toBe(false);
+  });
+
+  it('lets Claude Code refresh its OAuth token, and write nothing else to the auth hosts', () => {
+    const claude = { level: 'claude-api' as const, allow: [] };
+    expect(allowRequest(claude, 'console.anthropic.com', 'POST', '/v1/oauth/token').ok).toBe(true);
+    expect(allowRequest(claude, 'platform.claude.com', 'POST', '/v1/oauth/token?x=1').ok).toBe(true);
+    expect(allowRequest(claude, 'console.anthropic.com', 'POST', '/v1/other').ok).toBe(false);
+    expect(allowRequest(claude, 'nodejs.org', 'GET', '/').ok).toBe(false);
+    expect(allowRequest({ level: 'none', allow: [] }, 'console.anthropic.com', 'POST', '/v1/oauth/token').ok).toBe(false);
   });
 
   it('follows the level', () => {

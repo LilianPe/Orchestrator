@@ -1,9 +1,12 @@
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { createServer, request, type Server } from 'node:http';
-import { connect, type AddressInfo } from 'node:net';
+import { createServer as createHttpsServer } from 'node:https';
+import { connect, type AddressInfo, type LookupFunction, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { connect as tlsConnect } from 'node:tls';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { LeafIssuer, loadOrCreateCa } from './ca.js';
 import { EgressProxy, isPrivate, type EgressEntry } from './proxy.js';
 
 let dir = '';
@@ -11,12 +14,36 @@ let proxy: EgressProxy;
 let agent: Server;
 let agentPort = 0;
 
+/** A docs host of its own, `docs.test`, on HTTPS under a CA the proxy's upstream trusts in these tests. */
+const upDir = mkdtempSync(join(tmpdir(), 'egress-up-'));
+const upCa = loadOrCreateCa(join(upDir, 'ca'));
+const upIssuer = new LeafIssuer(upCa);
+const upstream = createHttpsServer({ SNICallback: (name, cb) => cb(null, upIssuer.context(name)) }, (req, res) => {
+  req.resume();
+  req.on('end', () => res.end(`up ${req.method} ${req.headers.host} ${req.url}`));
+});
+const toLocal = ((_h: string, opts: { all?: boolean }, cb: (e: null, a: unknown, f?: number) => void) =>
+  opts.all ? cb(null, [{ address: '127.0.0.1', family: 4 }]) : cb(null, '127.0.0.1', 4)) as unknown as LookupFunction;
+
+beforeAll(async () => {
+  await new Promise<void>((ok) => upstream.listen(0, '127.0.0.1', ok));
+});
+afterAll(async () => {
+  await new Promise((ok) => upstream.close(ok));
+  rmSync(upDir, { recursive: true, force: true });
+});
+
 beforeEach(async () => {
   dir = mkdtempSync(join(tmpdir(), 'egress-'));
   agent = createServer((req, res) => res.end(`agent ${req.method} ${req.url}`));
   await new Promise<void>((ok) => agent.listen(0, '127.0.0.1', ok));
   agentPort = (agent.address() as AddressInfo).port;
-  proxy = new EgressProxy({ dir, agentApi: { host: 'host.docker.internal', port: 4101, to: { host: '127.0.0.1', port: agentPort } } });
+  proxy = new EgressProxy({
+    dir,
+    caDir: join(dir, 'ca'),
+    agentApi: { host: 'host.docker.internal', port: 4101, to: { host: '127.0.0.1', port: agentPort } },
+    upstream: { ca: upCa.certPem, lookup: toLocal, port: (upstream.address() as AddressInfo).port },
+  });
 });
 
 afterEach(async () => {
@@ -37,81 +64,130 @@ function viaProxy(socketPath: string, method: string, url: string): Promise<{ st
   });
 }
 
-/** A CONNECT through the run's socket: the proxy's status line. */
-function tunnel(socketPath: string, target: string): Promise<string> {
+/** A CONNECT through the run's socket: the proxy's status line, and the socket. */
+function tunnel(socketPath: string, target: string): Promise<{ line: string; socket: Socket }> {
   return new Promise((ok, ko) => {
     const s = connect(socketPath, () => s.write(`CONNECT ${target} HTTP/1.1\r\nHost: ${target}\r\n\r\n`));
-    s.once('data', (d: Buffer) => {
-      ok(String(d).split('\r\n')[0]!);
-      s.destroy();
-    });
+    s.once('data', (d: Buffer) => ok({ line: String(d).split('\r\n')[0]!, socket: s }));
     s.on('error', ko);
+  });
+}
+
+const status = async (socketPath: string, target: string) => {
+  const { line, socket } = await tunnel(socketPath, target);
+  socket.destroy();
+  return line;
+};
+
+/** An HTTPS request inside a CONNECT, trusting the factory CA as a sandbox does. */
+async function viaTls(socketPath: string, host: string, method: string, path: string, headers: Record<string, string> = {}, alpn = ['http/1.1']) {
+  const { line, socket } = await tunnel(socketPath, `${host}:443`);
+  expect(line).toBe('HTTP/1.1 200 Connection Established');
+  const tls = tlsConnect({ socket, servername: host, ca: readFileSync(proxy.caCertPath, 'utf8'), ALPNProtocols: alpn });
+  return new Promise<{ status: number; body: string }>((ok, ko) => {
+    tls.on('error', ko);
+    const req = request({ createConnection: () => tls, method, path, headers: { host, ...headers } }, (res) => {
+      let body = '';
+      res.on('data', (c: Buffer) => (body += c));
+      res.on('end', () => ok({ status: res.statusCode ?? 0, body }));
+    });
+    req.on('error', ko).end();
   });
 }
 
 const journal = async (runId: string): Promise<EgressEntry[]> => {
   // Written when the connection closes, a tick after the client sees its end.
-  await new Promise((r) => setTimeout(r, 50));
-  return readFileSync(proxy.journalPath(runId), 'utf8').trim().split('\n').map((l) => JSON.parse(l) as EgressEntry);
+  await new Promise((r) => setTimeout(r, 100));
+  return readFileSync(proxy.journalPath(runId), 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l) as EgressEntry);
 };
+
+const docs = { level: 'limited' as const, allow: ['docs.test'] };
 
 describe('EgressProxy', () => {
   it('refuses a tunnel the policy refuses, and journals it', async () => {
     const sock = await proxy.open('run-1', { level: 'limited', allow: [] });
-    expect(await tunnel(sock, 'evil.example:443')).toBe('HTTP/1.1 403 Forbidden');
-    expect(await tunnel(sock, 'github.com:443')).toBe('HTTP/1.1 403 Forbidden');
+    expect(await status(sock, 'evil.example:443')).toBe('HTTP/1.1 403 Forbidden');
+    expect(await status(sock, 'statsig.anthropic.com:443')).toBe('HTTP/1.1 403 Forbidden');
     expect(await journal('run-1')).toEqual([
       expect.objectContaining({ method: 'CONNECT', host: 'evil.example', ok: false, reason: expect.stringMatching(/not allowed/) as string }),
-      expect.objectContaining({ method: 'CONNECT', host: 'github.com', ok: false }),
+      expect.objectContaining({ method: 'CONNECT', host: 'statsig.anthropic.com', ok: false }),
     ]);
   });
 
-  it('refuses a write to GitHub, and journals it', async () => {
+  it('decrypts an allowed tunnel: a GET passes, journaled with its path, a POST is refused', async () => {
+    const sock = await proxy.open('run-1', docs);
+    expect(await viaTls(sock, 'docs.test', 'GET', '/page?token=s3cr3t')).toEqual({ status: 200, body: 'up GET docs.test /page?token=s3cr3t' });
+    const post = await viaTls(sock, 'docs.test', 'POST', '/form');
+    expect(post.status).toBe(403);
+    expect(post.body).toMatch(/GET, HEAD and OPTIONS only/);
+    const entries = await journal('run-1');
+    expect(entries).toEqual([
+      expect.objectContaining({ method: 'GET', host: 'docs.test', path: '/page', ok: true }),
+      expect.objectContaining({ method: 'POST', host: 'docs.test', path: '/form', ok: false }),
+    ]);
+    expect(entries[0]!.down).toBeGreaterThan(0);
+    expect(JSON.stringify(entries)).not.toContain('s3cr3t');
+  });
+
+  it('sends the host it checked upstream, whatever Host the client sets (no fronting)', async () => {
+    const sock = await proxy.open('run-1', docs);
+    expect((await viaTls(sock, 'docs.test', 'GET', '/', { host: 'evil.example' })).body).toBe('up GET docs.test /');
+  });
+
+  it('speaks HTTP/1.1 alone: an h2-only client is refused, and journaled', async () => {
+    const sock = await proxy.open('run-1', docs);
+    await expect(viaTls(sock, 'docs.test', 'GET', '/', {}, ['h2'])).rejects.toThrow();
+    expect(await journal('run-1')).toContainEqual(expect.objectContaining({ host: 'docs.test', ok: false }));
+  });
+
+  it('refuses a plain write to GitHub, and journals it', async () => {
     const sock = await proxy.open('run-1', { level: 'limited', allow: [] });
     const r = await viaProxy(sock, 'POST', 'http://api.github.com/gists');
     expect(r.status).toBe(403);
-    expect(r.body).toMatch(/GET, HEAD and OPTIONS only/);
-    expect(await journal('run-1')).toEqual([expect.objectContaining({ method: 'POST', host: 'api.github.com', ok: false })]);
+    expect(await journal('run-1')).toEqual([expect.objectContaining({ method: 'POST', host: 'api.github.com', path: '/gists', ok: false })]);
   });
 
   it('tunnels only to port 443 below full', async () => {
     const sock = await proxy.open('run-1', { level: 'limited', allow: [] });
-    expect(await tunnel(sock, 'nodejs.org:22')).toBe('HTTP/1.1 403 Forbidden');
+    expect(await status(sock, 'nodejs.org:22')).toBe('HTTP/1.1 403 Forbidden');
   });
 
   it('never reaches a private address, even at full', async () => {
     const sock = await proxy.open('run-1', { level: 'full', allow: [] });
-    expect(await tunnel(sock, `127.0.0.1:${agentPort}`)).toBe('HTTP/1.1 403 Forbidden');
-    expect(await tunnel(sock, 'localhost:443')).toBe('HTTP/1.1 502 Bad Gateway');
+    expect(await status(sock, `127.0.0.1:${agentPort}`)).toBe('HTTP/1.1 403 Forbidden');
+    expect((await viaProxy(sock, 'GET', 'http://localhost/')).status).toBe(502);
     expect((await viaProxy(sock, 'GET', 'http://169.254.169.254/latest/meta-data/')).status).toBe(403);
     expect((await journal('run-1')).map((e) => e.ok)).toEqual([false, false, false]);
   });
 
   it('tells private addresses from public ones', () => {
-    for (const a of ['10.1.2.3', '127.0.0.1', '169.254.169.254', '172.17.0.1', '192.168.1.1', '100.64.0.1', '::1', 'fd00::1', 'fe80::1', '::ffff:10.0.0.1', '::ffff:127.0.0.1']) {
+    const inside = ['10.1.2.3', '127.0.0.1', '169.254.169.254', '172.17.0.1', '192.168.1.1', '100.64.0.1', '192.0.0.8', '198.18.0.1', '224.0.0.1', '240.0.0.1'];
+    for (const a of [...inside, '::1', 'fd00::1', 'fe80::1', '::ffff:10.0.0.1', '::ffff:127.0.0.1', '64:ff9b::a00:1', '2002:a00:1::1']) {
       expect(isPrivate(a), a).toBe(true);
     }
     for (const a of ['104.16.10.34', '1.1.1.1', '2606:4700::1111']) expect(isPrivate(a), a).toBe(false);
   });
 
-  it('forwards the agent API to the daemon, every method, at any level but none', async () => {
+  it('forwards the agent API to the daemon, every method, at any level but none, plain or tunnelled', async () => {
     const sock = await proxy.open('run-1', { level: 'claude-api', allow: [] });
-    expect(await viaProxy(sock, 'POST', 'http://host.docker.internal:4101/agent/ask')).toEqual({ status: 200, body: 'agent POST /agent/ask' });
+    expect(await viaProxy(sock, 'POST', 'http://host.docker.internal:4101/agent/mcp')).toEqual({ status: 200, body: 'agent POST /agent/mcp' });
     expect(await journal('run-1')).toEqual([
-      expect.objectContaining({ method: 'POST', host: 'host.docker.internal', ok: true, down: 'agent POST /agent/ask'.length }),
+      expect.objectContaining({ method: 'POST', host: 'host.docker.internal', path: '/agent/mcp', ok: true, down: 'agent POST /agent/mcp'.length }),
     ]);
-    expect(await tunnel(sock, 'host.docker.internal:4101')).toBe('HTTP/1.1 200 Connection Established');
+    expect(await status(sock, 'host.docker.internal:4101')).toBe('HTTP/1.1 200 Connection Established');
     const none = await proxy.open('run-2', { level: 'none', allow: [] });
-    expect(await tunnel(none, 'host.docker.internal:4101')).toBe('HTTP/1.1 403 Forbidden');
     expect((await viaProxy(none, 'GET', 'http://host.docker.internal:4101/agent/issue')).status).toBe(403);
+    expect(await status(none, 'host.docker.internal:4101')).toBe('HTTP/1.1 403 Forbidden');
   });
 
   it('keeps one socket per run, the same on a replay, gone once closed', async () => {
     const a = await proxy.open('run-1', { level: 'limited', allow: [] });
     expect(await proxy.open('run-1', { level: 'limited', allow: [] })).toBe(a);
+    expect(proxy.isOpen('run-1')).toBe(true);
     expect(await proxy.open('run-2', { level: 'limited', allow: [] })).not.toBe(a);
     await proxy.close('run-1');
     await proxy.close('run-1');
+    expect(proxy.isOpen('run-1')).toBe(false);
     await expect(tunnel(a, 'nodejs.org:443')).rejects.toThrow();
   });
 });
