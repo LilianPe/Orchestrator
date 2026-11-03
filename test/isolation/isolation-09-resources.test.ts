@@ -22,8 +22,7 @@ describe.skipIf(!enabled)(`resource exhaustion (${cli}, isolation n° 9)`, () =>
   });
 
   it('stops a fork bomb at its pids limit, the neighbour still answering', async () => {
-    const a = await small.create();
-    const b = await small.create();
+    const [a, b] = await Promise.all([small.create(), small.create()]);
     // More sleepers than the limit: the shell's forks start failing once it is reached. The sleepers write
     // nowhere, so they do not hold the exec's pipes: it returns with the shell, its own error on stderr.
     const started = Date.now();
@@ -36,8 +35,7 @@ describe.skipIf(!enabled)(`resource exhaustion (${cli}, isolation n° 9)`, () =>
   });
 
   it('OOM-kills a memory hog (137), the neighbour still answering', async () => {
-    const a = await small.create();
-    const b = await small.create();
+    const [a, b] = await Promise.all([small.create(), small.create()]);
     const hog = await small.sh(a.id, `node -e 'const a = []; for (;;) a.push(Buffer.alloc(16 << 20, 1))'`);
     expect(hog.code).toBe(137);
     expect((await small.provider.exec(b.id, ['true'])).code).toBe(0);

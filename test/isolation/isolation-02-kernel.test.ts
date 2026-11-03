@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { cli, enabled, useSandboxes } from './helpers.js';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { cli, enabled, podman, useSandboxes } from './helpers.js';
 
 /**
  * Isolation n° 2 (ORC-218): the kernel surface. The image has no keyctl nor strace, but perl-base is in
@@ -12,14 +12,18 @@ const EPERM = 1;
 
 describe.skipIf(!enabled)(`kernel surface (${cli}, isolation n° 2)`, () => {
   const { create, sh } = useSandboxes('02');
+  // ponytail: one container for the file, every check only reads it or is refused a change.
+  let id = '';
+  beforeAll(async () => {
+    ({ id } = await create());
+  });
 
   it('runs under a seccomp filter', async () => {
-    const { id } = await create();
     expect((await sh(id, 'cat /proc/self/status')).stdout).toMatch(/^Seccomp:\s+2$/m);
   });
 
-  it('is refused keyctl by seccomp: EPERM where the kernel would hand out the session keyring', async (ctx) => {
-    const { id } = await create();
+  // Docker's default seccomp profile refuses keyctl; Podman's allows it, so the probe is Docker's only.
+  it.skipIf(podman)('is refused keyctl by seccomp: EPERM where the kernel would hand out the session keyring', async (ctx) => {
     const nr = KEYCTL[(await sh(id, 'uname -m')).stdout];
     // ponytail: an unknown architecture falls back on the seccomp mode above.
     if (nr === undefined) return ctx.skip();

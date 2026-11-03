@@ -21,8 +21,7 @@ describe.skipIf(!enabled)(`no leak between runs (${cli}, isolation n° 10)`, () 
   it("shows a sandbox nothing of its neighbour's, and a new run only its ticket's mounts", async () => {
     const one = ticket('ISO-10A');
     const two = ticket('ISO-10B');
-    const a = await one();
-    const b = await two();
+    const [a, b] = await Promise.all([one(), two()]);
     expect((await sh(a.id, WRITE)).code).toBe(0);
     expect(await seen(b.id)).toEqual([]);
 
