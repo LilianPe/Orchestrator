@@ -78,6 +78,18 @@ describe('GhCliForge', () => {
     expect(await forge.findPr('/r', 'b')).toMatchObject({ checks: 'none', failedChecks: [] });
   });
 
+  it("rejects with gh pr checks' own failure when gh answers the PR but not its checks", async () => {
+    const forge = new GhCliForge(
+      fakeExec({
+        'gh pr list': { stdout: JSON.stringify([{ number: 10, url: 'https://gh/10', state: 'OPEN', headRefName: 'b' }]) },
+        'gh pr checks 10': { stdout: '', stderr: 'Post "https://api.github.com/graphql": dial tcp: connection refused\n', code: 1 },
+      }),
+    );
+    await expect(forge.findPr('/r', 'b')).rejects.toThrow(
+      'gh pr checks 10 --json name,bucket: Post "https://api.github.com/graphql": dial tcp: connection refused',
+    );
+  });
+
   it('names the gh version required when gh has no --json on pr checks', async () => {
     const forge = new GhCliForge(
       fakeExec({
