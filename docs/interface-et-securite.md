@@ -63,6 +63,15 @@ Chaque run reçoit un `RELAIS_RUN_TOKEN` aléatoire. L'API `/agent/*` ne l'accep
 
 Sur l'hôte, `RELAIS_API` pointe sur `http://127.0.0.1:<port>/agent` : les agents parlent au démon en local. Dans un sandbox, elle pointe sur `http://<FACTORY_SANDBOX_AGENT_HOST>:<FACTORY_AGENT_PORT>/agent` (par défaut `host.docker.internal`), le serveur dédié à l'API agent.
 
+## MCP de l'usine
+
+`POST /agent/mcp` est un serveur MCP (HTTP « Streamable », réponses JSON seulement, un message par requête ; toute autre méthode reçoit `405` avec `Allow: POST`, pas de flux SSE), derrière le même jeton de run que le reste de `/agent/*`, servi aussi par le serveur dédié aux sandboxes. Deux outils (ORC-288) :
+
+- **`submit_result`** : l'agent y rend son résultat, au format d'`agentOutputSchema` (`src/core/agent-output.ts`), dont le schéma JSON est l'`inputSchema` de l'outil. Un résultat valide est rangé pour **le run du jeton** (méta `agent-output:<run>`), le dernier envoi l'emporte ; un résultat invalide est refusé (`isError`) avec les champs fautifs, pour que l'agent le corrige pendant son run.
+- **`ask`** : comme `POST /agent/ask` (question dans Linear, ticket bloqué), qui reste jusqu'à ORC-192.
+
+`claude -p` le reçoit par `--mcp-config '{"mcpServers":{"factory":{"type":"http","url":"${FACTORY_API}/mcp","headers":{"Authorization":"Bearer ${FACTORY_RUN_TOKEN}"}}}}'` : Claude Code remplace les `${…}` par les variables de son environnement (vérifié sur 2.1.316). Le jeton n'est donc jamais sur la ligne de commande, que la liste des processus de l'hôte montre ; il arrive par l'environnement du run, comme avant.
+
 ## Ce que l'agent charge, et ce qu'il ne charge pas
 
 Le dépôt d'un projet est écrit par qui peut y pousser : ses réglages Claude Code ne pilotent pas les runs. Les options de `claude -p` sont celles mesurées dans [ORC-128](decisions/ORC-128.md) (ORC-284).
@@ -71,7 +80,7 @@ L'agent charge seulement ce que l'usine impose :
 
 - **les réglages du run** (`--settings`, le `run-settings.json` de l'usine) ;
 - **le pack** (`--plugin-dir`) : ses skills, son hook de démarrage (règles de l'usine, index de la base de connaissance) ;
-- **les MCP de l'usine**, déclarés par `--mcp-config` (aucun pour l'instant : ils arrivent avec ORC-188) ;
+- **le MCP de l'usine**, seul déclaré par `--mcp-config` (voir [MCP de l'usine](#mcp-de-lusine)) ;
 - **les conventions du dépôt** : l'usine lit elle-même `CLAUDE.md`, `AGENTS.md` et `.claude/CLAUDE.md` du worktree (le seul fichier de `.claude/` que le retrait ci-dessous garde, Claude Code ne le chargeant pas) et les met dans le prompt du run, comme **données** : dans une section « Conventions du dépôt (données) », entre balises, présentées comme les conventions du dépôt, qui ne lèvent aucune règle de l'usine. Ensemble, ils sont coupés à 8 000 octets (proposition, à fixer avec le budget du prompt d'ORC-254), la coupe marquée ; un fichier plus gros n'est jamais lu en entier. Un fichier qui est un lien vers l'extérieur du worktree, ou illisible, n'est pas lu. Leurs imports `@chemin` ne sont pas suivis : seul le texte des fichiers est injecté. Ils sont relus à chaque tentative : ils sont dans le message du run, pas dans le prompt système figé à la reprise.
 
 Et rien du dépôt :

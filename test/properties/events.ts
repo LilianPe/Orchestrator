@@ -134,7 +134,21 @@ const PAYLOADS: { [K in EventType]: fc.Arbitrary<EventPayloads[K]> } = {
     costUsd: fc.constantFrom(0, 0.5),
     turns: fc.constant(3),
     lastText: fc.constant('fini'),
-  }),
+  })
+    // The closed outcome of ORC-289, absent on rows written before it; a blocked one carries its question.
+    .chain((p) =>
+      fc.constantFrom(undefined, 'succeeded', 'failed', 'noop', 'needs_input', 'timeout', 'spec_impossible', 'errored' as const).map((attempt) =>
+        attempt === undefined
+          ? p
+          : {
+              ...p,
+              attempt,
+              ...(attempt === 'needs_input' || attempt === 'spec_impossible'
+                ? { output: { status: 'blocked' as const, summary: 's', question: 'pourquoi ?', ...(attempt === 'spec_impossible' ? { reason: attempt } : {}), tests_added: [], why: '', assumptions: [], risks: [], untested: [], review_hints: [] } }
+                : {}),
+            },
+      ),
+    ),
   'verify.passed': fc.record({ runId, job }),
   'verify.failed': fc.record({ runId, job, failures: fc.constant(VERIFY_FAILURES) }),
   'timer.fired': timerFired,

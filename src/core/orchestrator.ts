@@ -31,6 +31,7 @@ import {
   type Store,
   type WorkflowVersion,
 } from '../store/types.js';
+import { agentOutputKey, attemptOutcome, parseAgentOutput, type AgentOutput } from './agent-output.js';
 import type { EventBus } from './bus.js';
 import type { Clock } from './clock.js';
 import type { Effect } from './decision.js';
@@ -64,6 +65,33 @@ import { PRODUCT_NAME } from '../product.js';
  * names, which one does it unmeasured until ORC-213 (that also blocks it at the proxy).
  */
 export const CLAUDE_RUN_ENV = { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1', DISABLE_TELEMETRY: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' };
+
+/**
+ * The run's output, validated again: absent or invalid, the agent submitted none (ORC-289). A store
+ * that cannot be read rejects: that is the infrastructure's, not the agent's.
+ */
+async function storedOutput(store: Store, runId: string): Promise<AgentOutput | undefined> {
+  const raw = await store.getMeta(agentOutputKey(runId));
+  if (raw === undefined) return undefined;
+  try {
+    const parsed = parseAgentOutput(JSON.parse(raw));
+    return parsed.ok ? parsed.output : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The message posted for a run that submitted its output: composed by the factory from it, never the agent's last text (ORC-289). */
+function formatAgentOutput(o: AgentOutput): string {
+  const list = (title: string, items: string[]) => (items.length ? [`**${title}**\n${items.map((i) => `- ${i}`).join('\n')}`] : []);
+  return [
+    o.summary,
+    ...(o.why ? [`**Pourquoi** : ${o.why}`] : []),
+    ...list('Risques', o.risks),
+    ...list('Non testé', o.untested),
+    ...list('À relire', o.review_hints.map((h) => `\`${h.file}\` : ${h.reason}`)),
+  ].join('\n\n');
+}
 
 export interface ProjectRuntime {
   id: string;
@@ -829,7 +857,7 @@ export class Orchestrator {
             const res = await this.d.verify(run.cwd, job.verify);
             const base = { ...TRUSTED, at: clock.now(), projectId: project.id, ticketId };
             const event: FactoryEvent = res.ok
-              ? { ...base, id: `check:${run.id}`, type: 'verify.passed', payload: { runId: run.id, job: job.name } }
+              ? { ...base, id: `check:${run.id}`, type: 'verify.passed', payload: { runId: run.id, job: job.name, ...(c.output ? { output: c.output } : {}) } }
               : { ...base, id: `check:${run.id}`, type: 'verify.failed', payload: { runId: run.id, job: job.name, failures: res.failures, ...(res.tree ? { tree: res.tree } : {}) } };
             await this.submitResult(event);
           })(),
@@ -856,7 +884,9 @@ export class Orchestrator {
         const run = await store.getRun(c.runId);
         if (!run) return;
         const session = run.linearSessionId ?? (await this.sessionFor(t));
-        return this.activityOnce(session, { type: 'response', body: run.lastText.trim() || 'Terminé.' }, key);
+        // The template stands for the dev's end of work only: a reply (feedback, a question) is the agent's own answer.
+        const body = c.output && c.style === 'summary' ? formatAgentOutput(c.output) : run.lastText.trim() || 'Terminé.';
+        return this.activityOnce(session, { type: 'response', body }, key);
       }
       case 'link_pr':
         if (t.linearSessionId) await tracker.addExternalUrl(t.linearSessionId, 'Pull request', c.url);
@@ -1311,7 +1341,7 @@ export class Orchestrator {
   /** Streams a run to its end, destroys its sandbox whatever the outcome, then writes its result to the inbox. */
   private async pump(project: ProjectRuntime, run: RunRecord, handle: RunHandle, sandboxId?: string): Promise<void> {
     const { tracker, bus, store, clock } = this.d;
-    let result: RunResult;
+    let result: RunResult | undefined;
     try {
       const relay = new ActivityRelay(
         (a) => (run.linearSessionId ? tracker.activity(run.linearSessionId, a) : Promise.resolve()),
@@ -1324,7 +1354,7 @@ export class Orchestrator {
       }
       this.liveRuns.delete(run.id);
       result = await handle.done;
-      await relay.flush();
+      await relay.flush().catch((err: Error) => this.log('warn', `run ${run.id}: last activities not relayed: ${err.message}`));
       this.handles.delete(run.id);
       const rec = (await store.getRun(run.id)) ?? run;
       const interrupted = this.stopping && result.outcome === 'stopped';
@@ -1341,23 +1371,39 @@ export class Orchestrator {
       if (interrupted) return;
     } catch (err) {
       const message = (err as Error).message;
-      this.liveRuns.delete(run.id);
-      this.log('error', `run ${run.id} failed: ${message}`);
-      try {
-        handle.stop();
-      } catch {
-        /* best effort */
+      if (result) {
+        // The attempt ended: recording it failed, not the agent nor the runner (ORC-289).
+        this.handles.delete(run.id);
+        this.log('error', `run ${run.id} ended, but was not recorded: ${message}`);
+        if (this.stopping && result.outcome === 'stopped') return;
+      } else {
+        this.liveRuns.delete(run.id);
+        this.log('error', `run ${run.id} failed: ${message}`);
+        try {
+          handle.stop();
+        } catch {
+          /* best effort */
+        }
+        this.handles.delete(run.id);
+        try {
+          const rec = (await store.getRun(run.id)) ?? run;
+          await store.putRun({ ...rec, status: 'failure', endedAt: clock.now(), lastText: message });
+        } catch (e) {
+          this.log('error', `could not record failure of run ${run.id}: ${(e as Error).message}`);
+        }
+        // The runner broke (stream, sandbox): nothing for the agent to fix (ORC-289).
+        result = { outcome: 'failure', costUsd: 0, turns: 0, lastText: message, infra: true };
       }
-      this.handles.delete(run.id);
-      try {
-        const rec = (await store.getRun(run.id)) ?? run;
-        await store.putRun({ ...rec, status: 'failure', endedAt: clock.now(), lastText: message });
-      } catch (e) {
-        this.log('error', `could not record failure of run ${run.id}: ${(e as Error).message}`);
-      }
-      result = { outcome: 'failure', costUsd: 0, turns: 0, lastText: message };
     } finally {
       if (sandboxId) await this.destroySandbox(sandboxId);
+    }
+    let output: AgentOutput | undefined;
+    let unreadable = false;
+    try {
+      output = await storedOutput(store, run.id);
+    } catch (err) {
+      this.log('error', `output of run ${run.id} not read: ${(err as Error).message}`);
+      unreadable = true;
     }
     await this.submitResult({
       ...TRUSTED,
@@ -1373,6 +1419,8 @@ export class Orchestrator {
         costUsd: result.costUsd,
         turns: result.turns,
         lastText: result.lastText,
+        attempt: attemptOutcome({ outcome: result.outcome, infraError: result.infra || unreadable }, output),
+        ...(output ? { output } : {}),
       },
     });
   }

@@ -34,6 +34,7 @@ export const rawJobSchema = z
     input: z.enum(['feedback', 'ci_failures', 'thread', 'verify_failures']).optional(),
     verify: z.array(z.string()).optional(),
     pickup: z.boolean().optional(),
+    structured_output: z.boolean().optional(),
     limits: rawLimits.optional(),
     on_start: z.object({ move: logical.optional() }).strict().optional(),
     on_success: z
@@ -139,6 +140,12 @@ export interface JobSpec {
   input?: InputKind;
   verify: string[];
   pickup: boolean;
+  /**
+   * The job's agent always calls `submit_result` (ORC-289): a success without output is a failure.
+   * ponytail: provisional, off by default until ORC-191/ORC-192 rewrite the pack so every agent submits;
+   * then the gate goes and `attempt` decides alone. Absent from versions frozen before it.
+   */
+  structuredOutput?: boolean;
   limits: RunLimits;
   onStart: { move?: LogicalState };
   onSuccess: { move?: LogicalState; post?: 'summary' | 'reply' | 'synthesis' };

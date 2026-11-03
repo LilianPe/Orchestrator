@@ -2,9 +2,10 @@ import type { JobSpec, Rule, Workflow } from '../config/workflow-schema.js';
 import { allowed, DEFAULT_MATRIX, refusalMessage, type AuthzAction, type AuthzMatrix, type Channel } from './authz.js';
 import { evalCondition } from './conditions.js';
 import { deadLetterReason, liftDeadLetterBlock, REPAIR_LABELS, repairedEvent } from './dead-letter.js';
+import type { AgentOutput } from './agent-output.js';
 import type { Decision, Effect } from './decision.js';
 import { isOwnMoveEcho, reduce } from './reduce.js';
-import type { EventPayloads, EventType, FactoryEvent, FeedbackItem, InputKind, Taint, TicketState, VerifyFailure } from './types.js';
+import type { EventPayloads, EventType, FactoryEvent, FeedbackItem, InputKind, RunOutcome, Taint, TicketState, VerifyFailure } from './types.js';
 
 type StartRun = Extract<Effect, { kind: 'start_run' }>;
 
@@ -37,9 +38,9 @@ function stop(out: Decision, reason = STOPPED, body = STOP_MESSAGE): Decision {
   return out;
 }
 
-function success(out: Decision, job: JobSpec, runId: string): Decision {
+function success(out: Decision, job: JobSpec, runId: string, output?: AgentOutput): Decision {
   if (job.onSuccess.move) out.effects.push({ kind: 'move', to: job.onSuccess.move });
-  if (job.onSuccess.post) out.effects.push({ kind: 'post_output', style: job.onSuccess.post, runId });
+  if (job.onSuccess.post) out.effects.push({ kind: 'post_output', style: job.onSuccess.post, runId, ...(output ? { output } : {}) });
   return out;
 }
 
@@ -47,6 +48,37 @@ function block(out: Decision, reason: string, body: string): Decision {
   out.events.push({ type: 'ticket.blocked', reason });
   out.effects.push({ kind: 'activity', type: 'elicitation', body });
   return out;
+}
+
+/**
+ * A dev run's end read through its closed outcome (ORC-289): the `RunOutcome` it decides as, or the block
+ * it ends in. Without `attempt` (rows written before it), `outcome` decides as before. `errored` is the
+ * infrastructure's: blocked, never handed back to the agent. A success without output stays a success
+ * until the job is `structuredOutput` (ORC-191/ORC-192 make every agent submit).
+ */
+function attemptDecision(p: EventPayloads['run.finished'], job: JobSpec): RunOutcome | { reason: string; body: string } {
+  const question = p.output?.question ?? '';
+  switch (p.attempt) {
+    case 'succeeded':
+      return 'success';
+    case 'failed':
+      return p.outcome === 'success' && !job.structuredOutput ? 'success' : 'failure';
+    case 'timeout':
+      return 'limit';
+    case 'errored': {
+      const reason = `Le run ${job.name} s'est interrompu : panne d'infrastructure, l'agent n'est pas en cause.`;
+      return { reason, body: `${reason} Répondez dans ce fil pour que je reprenne.` };
+    }
+    case 'needs_input':
+      return { reason: "En attente d'une réponse à la question de l'agent.", body: `${question}\n\nRépondez dans ce fil pour que je reprenne.` };
+    case 'spec_impossible':
+      return {
+        reason: "L'agent conteste le ticket : il ne peut pas le réaliser honnêtement tel qu'il est écrit.",
+        body: `Je ne peux pas réaliser ce ticket tel qu'il est écrit : ${question}\n\nCorrigez le ticket ou répondez dans ce fil pour que je reprenne.`,
+      };
+    default:
+      return p.outcome;
+  }
 }
 
 /** Prefix of the block reason of the red-CI bound: a green CI lifts that block (ORC-270). */
@@ -516,14 +548,17 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
     case 'control.stop':
       return stop(out);
     case 'run.finished': {
-      const { outcome, job: jobName, runId } = event.payload;
+      const { job: jobName, runId, output } = event.payload;
       const job = workflow.jobs[jobName];
-      if (!job || outcome === 'stopped') return out;
+      if (!job || event.payload.outcome === 'stopped') return out;
+      const outcome = job.queue === 'dev' ? attemptDecision(event.payload, job) : event.payload.outcome;
+      // Already blocked (the agent asked through `ask`, a human's stop…): it keeps its reason and gets no second notice.
+      if (typeof outcome === 'object') return ticket?.blocked ? out : block(out, outcome.reason, outcome.body);
       if (outcome === 'success' && ticket?.blocked && job.queue === 'dev') return out;
       if (outcome === 'success') {
-        if (job.verify.length === 0) return success(out, job, runId);
+        if (job.verify.length === 0) return success(out, job, runId, output);
         out.events.push({ type: 'verify.started', runId });
-        out.effects.push({ kind: 'run_verify', runId, job: jobName });
+        out.effects.push({ kind: 'run_verify', runId, job: jobName, ...(output ? { output } : {}) });
         return out;
       }
       if (job.queue === 'questions') {
@@ -540,7 +575,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       const job = workflow.jobs[event.payload.job];
       if (!job) return out;
       out.events.push({ type: 'ticket.patched', patch: { verifyAttempts: 0, ...(ticket?.repeatedFailure ? { repeatedFailure: null } : {}) } });
-      return success(out, job, event.payload.runId);
+      return success(out, job, event.payload.runId, event.payload.output);
     }
     case 'verify.failed': {
       const used = ticket?.verifyAttempts ?? 0;
