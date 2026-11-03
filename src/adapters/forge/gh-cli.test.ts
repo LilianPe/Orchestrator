@@ -78,6 +78,17 @@ describe('GhCliForge', () => {
     expect(await forge.findPr('/r', 'b')).toMatchObject({ checks: 'none', failedChecks: [] });
   });
 
+  it('names the gh version required when gh has no --json on pr checks', async () => {
+    const forge = new GhCliForge(
+      fakeExec({
+        'gh pr list': { stdout: JSON.stringify([{ number: 7, url: 'https://gh/7', state: 'OPEN', headRefName: 'b' }]) },
+        // What gh 2.45 answers.
+        'gh pr checks 7': { stdout: '', stderr: 'unknown flag: --json\n\nUsage:  gh pr checks [<number> | <url> | <branch>] [flags]\n', code: 1 },
+      }),
+    );
+    await expect(forge.findPr('/r', 'b')).rejects.toThrow(/^gh pr checks 7 --json name,bucket: this gh has no --json on pr checks, gh 2\.50 or later is required$/);
+  });
+
   it('returns undefined without PR and skips checks for merged PRs', async () => {
     expect(await new GhCliForge(fakeExec({ 'gh pr list': { stdout: '[]' } })).findPr('/r', 'b')).toBeUndefined();
     const merged = await new GhCliForge(

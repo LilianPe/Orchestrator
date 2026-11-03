@@ -15,6 +15,8 @@ export function aggregateChecks(buckets: string[]): PrInfo['checks'] {
  * auth); only this stderr line tells the first apart. Checks that fail or are pending still come as JSON.
  */
 const NO_CHECKS = /^no checks reported on the '.*' branch$/m;
+/** A gh older than 2.50 has no `--json` on `pr checks`: it answers this, then its usage, exit 1. */
+const NO_JSON_FLAG = /^unknown flag: --json$/m;
 
 type Check = { name: string; bucket: string };
 
@@ -84,6 +86,7 @@ export class GhCliForge implements Forge, RepoPermissions {
         checks = aggregateChecks(list.map((c) => c.bucket));
         failedChecks = list.filter((c) => c.bucket === 'fail' || c.bucket === 'cancel').map((c) => c.name);
       } else if (r.code !== 0 && !NO_CHECKS.test(r.stderr)) {
+        if (NO_JSON_FLAG.test(r.stderr)) throw new Error(`gh ${args.join(' ')}: this gh has no --json on pr checks, gh 2.50 or later is required`);
         throw execFailure('gh', args, r);
       }
     }
