@@ -48,6 +48,14 @@ describe('LinearTracker', () => {
     const other = new LinearTracker(answering([{ message: 'Rate limit exceeded' }]), 'app-1').getIssue('REL-9');
     await expect(other).rejects.toThrow('Rate limit exceeded');
     await expect(other).rejects.not.toBeInstanceOf(IssueNotFoundError);
+    // An error about another entity than the issue is a read error too.
+    const team = new LinearTracker(answering([{ message: 'Entity not found: Team' }]), 'app-1').getIssue('REL-9');
+    await expect(team).rejects.not.toBeInstanceOf(IssueNotFoundError);
+  });
+
+  it('takes an issue in the trash (deleted, kept 30 days by Linear) for one it does not have', async () => {
+    const { api } = fakeLinear({ Issue: () => ({ issue: { ...node, trashed: true } }) });
+    await expect(new LinearTracker(api, 'app-1').getIssue('REL-1')).rejects.toBeInstanceOf(IssueNotFoundError);
   });
 
   it('reads the active members of a team, every page (ORC-186)', async () => {

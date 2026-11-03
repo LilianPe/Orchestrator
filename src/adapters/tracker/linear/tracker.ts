@@ -14,6 +14,8 @@ interface IssueNode {
   priority: number;
   createdAt: string;
   updatedAt?: string;
+  /** In the trash: deleted, until Linear purges it 30 days later. */
+  trashed?: boolean | null;
   state: { id: string; name: string; type: string };
   labels: { nodes: LabelNode[] };
   delegate: { id: string } | null;
@@ -44,7 +46,7 @@ const STATE_TYPES: Record<LogicalState, string> = {
 const teamOf = (identifier: string) => identifier.split('-')[0]!;
 
 /** Linear's answer for an issue it does not have: `Entity not found: Issue`, shown as `Could not find referenced Issue.` */
-const isNotFound = (e: LinearGqlError) => /Entity not found|Could not find referenced/.test(`${e.message} ${e.extensions?.userPresentableMessage ?? ''}`);
+const isNotFound = (e: LinearGqlError) => /Entity not found: Issue\b|Could not find referenced Issue\b/.test(`${e.message} ${e.extensions?.userPresentableMessage ?? ''}`);
 
 /**
  * The id a comment or an activity of an outbox effect is created with (ORC-162): Linear takes a
@@ -176,7 +178,10 @@ export class LinearTracker implements Tracker, TeamDirectory {
   }
 
   async getIssue(identifier: string): Promise<TrackerIssue> {
-    return toIssue(await this.node(identifier));
+    const issue = await this.node(identifier);
+    // Deleted in Linear: kept in the trash, and still answered, for 30 days.
+    if (issue.trashed) throw new IssueNotFoundError(`Ticket Linear supprimé : ${identifier}`);
+    return toIssue(issue);
   }
 
   async listDelegated(teamKey: string): Promise<TrackerIssue[]> {
