@@ -1,3 +1,4 @@
+import type { RedCause } from '../checks/red.js';
 import type { MeasureFacts, Store } from '../store/types.js';
 import { isQuestionSession } from './engine.js';
 import { reduce } from './reduce.js';
@@ -85,6 +86,11 @@ export interface TicketMeasures {
   /** CI cost of the ticket (ORC-278): the durations of its workflow run attempts. Null while none is in the journal. */
   ciCost: CiCost | null;
   messages: MessageMeasure[];
+  /**
+   * Verdicts of the `red` check (ORC-123), in journal order: what it would have blocked in measure mode is each one
+   * not `verified`. Its returns to the tests step are measured here, not as reworks.
+   */
+  red: { id: string; verified: boolean; cause: RedCause }[];
 }
 
 /** Workflow run attempts of a ticket's CI, summed per PR then for the ticket, one per run id and attempt (ORC-278). */
@@ -188,14 +194,24 @@ function messageMeasure(m: Message, kind: MessageKind, outs: Output[], ack: numb
   };
 }
 
+function redVerdicts(events: FactoryEvent[]): TicketMeasures['red'] {
+  const out: TicketMeasures['red'] = [];
+  for (const e of events) {
+    // A check that could not run (`infra`) is no verdict on the tests.
+    if ((e.type === 'verify.passed' || e.type === 'verify.failed') && e.payload.red && e.payload.red !== 'infra') out.push({ id: e.id, verified: e.type === 'verify.passed', cause: e.payload.red });
+  }
+  return out;
+}
+
 /** States a human sends a ticket back to dev from: its work had been handed over. */
 const HANDED_OVER = new Set<LogicalState>(['human_review', 'ai_review', 'ready', 'done']);
 
 /** The rework an event of the journal is, if any; `ticket` is the ticket once the event applied. */
 function rework(e: FactoryEvent, ticket: TicketState): Rework | undefined {
   switch (e.type) {
-    case 'pr.checks_failed':
     case 'verify.failed':
+      return e.payload.red ? undefined : { cause: e.type, id: e.id };
+    case 'pr.checks_failed':
     case 'push.human':
       return { cause: e.type, id: e.id };
     case 'session.prompted':
@@ -254,6 +270,7 @@ export function ticketMeasures(projectId: string, ticketId: string, facts: Measu
     revertWindowEndsAt: firstMerge ? mergeTime(firstMerge) + REVERT_WINDOW_MS : null,
     ciCost: ciCost(events),
     messages: messages.map(({ m, kind }) => messageMeasure(m, kind, outs, facts.acks[m.id])),
+    red: redVerdicts(events),
   };
 }
 

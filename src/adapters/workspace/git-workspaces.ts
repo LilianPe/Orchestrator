@@ -2,10 +2,21 @@ import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { branchName } from '../../core/naming.js';
 import { execCmd, mustExec, type Exec } from '../exec.js';
-import type { Workspace, WorkspaceManager, WorkspaceRequest } from './types.js';
+import type { StepDiff, Workspace, WorkspaceManager, WorkspaceRequest } from './types.js';
 
 function assertSafe(id: string): void {
   if (/[\\/]/.test(id) || id.includes('..')) throw new Error(`Identifiant invalide : ${id}`);
+}
+
+/** The paths of `git status --porcelain -z`, a rename's or copy's both sides included (ORC-123). */
+export function parseStatus(out: string): string[] {
+  const fields = out.split('\0').filter(Boolean);
+  const paths: string[] = [];
+  for (let i = 0; i < fields.length; i++) {
+    paths.push(fields[i]!.slice(3));
+    if (/^[RC]/.test(fields[i]!)) paths.push(fields[++i]!);
+  }
+  return paths;
 }
 
 export class GitWorkspaces implements WorkspaceManager {
@@ -84,6 +95,34 @@ export class GitWorkspaces implements WorkspaceManager {
     if (!existsSync(path)) return undefined;
     const r = await this.exec('git', ['-C', path, 'rev-parse', 'HEAD']);
     return r.code === 0 ? r.stdout.trim() : undefined;
+  }
+
+  async stepDiff(repoPath: string, path: string, base: string): Promise<StepDiff | undefined> {
+    const head = await this.head(path);
+    if (!head) return undefined;
+    // Without renames, a source file moved into a test is its deletion: a change outside the tests.
+    const fields = (await this.git(repoPath, 'diff', '--name-status', '--no-renames', '-z', base, head)).split('\0').filter(Boolean);
+    const changed: StepDiff['changed'] = [];
+    for (let i = 0; i + 1 < fields.length; i += 2) changed.push({ path: fields[i + 1]!, deleted: fields[i] === 'D' });
+    const show = async (rev: string, p: string) => {
+      const r = await this.exec('git', ['-C', repoPath, 'show', `${rev}:${p}`]);
+      return r.code === 0 ? r.stdout : undefined;
+    };
+    return {
+      changed,
+      existsAtBase: async (paths) => {
+        if (paths.length === 0) return new Set();
+        // One process for every candidate: the files at the base under these paths.
+        const listed = (await this.git(repoPath, '--literal-pathspecs', 'ls-tree', '-r', '--name-only', '-z', base, '--', ...paths)).split('\0');
+        return new Set(paths.filter((p) => listed.some((f) => f === p || f.startsWith(`${p}/`))));
+      },
+      showAtBase: (p) => show(base, p),
+      showAtHead: (p) => show(head, p),
+    };
+  }
+
+  async uncommitted(path: string): Promise<string[]> {
+    return parseStatus(await this.git(path, 'status', '--porcelain', '-z', '--untracked-files=all'));
   }
 
   async gitCommonDir(path: string): Promise<string> {

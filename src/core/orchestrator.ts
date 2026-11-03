@@ -11,6 +11,7 @@ import {
   SANDBOX_HOME,
   SETTINGS_TARGET,
   WORKSPACE_TARGET,
+  type NetworkLevel,
   type Sandbox,
   type SandboxMount,
   type SandboxProvider,
@@ -61,6 +62,12 @@ import {
 } from './types.js';
 import { VERIFY_TIMEOUT_MS, type Verifier } from './verify.js';
 import { PRODUCT_NAME } from '../product.js';
+import { checkRed, type RedDeps, type RedResult } from '../checks/red.js';
+import { parseStatus } from '../adapters/workspace/git-workspaces.js';
+import type { ExecResult } from '../adapters/exec.js';
+
+/** Meta key of the head a ticket's tests step started on (ORC-123). */
+const redBaseKey = (projectId: string, ticketId: string): string => `red-base:${projectId}:${ticketId}`;
 
 /**
  * Every run's Claude Code (ORC-284): no auto-memory (ORC-205), telemetry off by both variables ORC-128
@@ -446,7 +453,7 @@ export class Orchestrator {
    * A `trunk-readonly` job gets its worktree read-write too: only `--permission-mode plan` keeps it
    * from writing, as on the host. `claude-api` is an open network until ORC-213.
    */
-  private async openSandbox(sandboxes: SandboxProvider, project: ProjectRuntime, ticketId: string, ws: Workspace, runId: string, ticketSession: boolean): Promise<Sandbox> {
+  private async openSandbox(sandboxes: SandboxProvider, project: ProjectRuntime, ticketId: string, ws: Workspace, runId: string, ticketSession: boolean, network: NetworkLevel = 'claude-api'): Promise<Sandbox> {
     if (!this.d.sessionsDir || !this.d.runsDir) throw new Error('sessionsDir and runsDir are required with sandboxes');
     const runDir = join(this.d.runsDir, runId);
     const claudeDir = ticketSession ? join(this.d.sessionsDir, project.id, ticketId) : join(runDir, 'claude');
@@ -457,7 +464,7 @@ export class Orchestrator {
       runId,
       ticketId,
       workspacePath: ws.path,
-      network: 'claude-api',
+      network,
       requirements: DEFAULT_REQUIREMENTS,
       mounts: [
         { host: gitDir, target: gitDir, readOnly: false },
@@ -490,15 +497,59 @@ export class Orchestrator {
       // ponytail: setup shares the attempt's `claude-api` sandbox, an open network until ORC-213; it gets
       // a `full` sandbox of its own once the network levels are real.
       for (const command of commands) {
-        // The host's cap (runVerify), by coreutils' `timeout` in the image: 124 is its exit on expiry.
-        const argv = ['timeout', String(VERIFY_TIMEOUT_MS / 1000), 'bash', '-lc', command];
-        const { code } = await this.d.sandboxes!.exec(sandbox.id, argv);
+        const { code } = await this.execCapped(sandbox.id, command);
         if (code === 124) fail(`${command} (délai de ${VERIFY_TIMEOUT_MS / 60_000} min dépassé)`);
         if (code !== 0) fail(command);
       }
     } else {
       const res = await this.d.verify(ws.path, commands);
       if (!res.ok) fail(res.failures[0]!.command);
+    }
+  }
+
+  /** `command` in a sandbox under the host's cap (runVerify), by coreutils' `timeout` in the image: 124 is its exit on expiry. */
+  private execCapped(sandboxId: string, command: string): Promise<ExecResult> {
+    return this.d.sandboxes!.exec(sandboxId, ['timeout', String(VERIFY_TIMEOUT_MS / 1000), 'bash', '-lc', command]);
+  }
+
+  /**
+   * The `red` check of a finished `tests` run (ORC-123): the step's commits from the head it started on, read on the
+   * factory's repository; its uncommitted files and its tests run in a sandbox of their own without network, on the
+   * host as `verify` without sandboxes. A check that cannot run gives no verdict on the tests: `infra`.
+   */
+  private async checkRed(project: ProjectRuntime, run: RunRecord, command: string): Promise<RedResult> {
+    const sandboxes = this.d.sandboxes;
+    const redRunId = `${run.id}-red`;
+    let sandbox: Sandbox | undefined;
+    try {
+      const base = await this.d.store.getMeta(redBaseKey(project.id, run.ticketId));
+      if (!base) throw new Error("le commit de départ de l'étape n'est pas enregistré");
+      const diff = await this.d.workspaces.stepDiff(project.repoPath, run.cwd, base);
+      if (!diff) throw new Error(`aucun worktree à ${run.cwd}`);
+      let uncommitted: string[];
+      let runTests: RedDeps['run'];
+      if (!sandboxes) {
+        uncommitted = await this.d.workspaces.uncommitted(run.cwd);
+        runTests = async (cmd) => {
+          const res = await this.d.verify(run.cwd, [cmd]);
+          return res.ok ? { exitCode: 0, output: '' } : { exitCode: res.failures[0]!.exitCode, output: res.failures[0]!.output };
+        };
+      } else {
+        // Not the ticket session: an empty per-run `~/.claude`, as any run that does not resume it.
+        const box = (sandbox = await this.openSandbox(sandboxes, project, run.ticketId, { path: run.cwd }, redRunId, false, 'none'));
+        const status = await sandboxes.exec(box.id, ['git', 'status', '--porcelain', '-z', '--untracked-files=all']);
+        if (status.code !== 0) throw new Error(`git status : ${status.stderr.trim()}`);
+        uncommitted = parseStatus(status.stdout);
+        runTests = async (cmd) => {
+          const r = await this.execCapped(box.id, cmd);
+          return { exitCode: r.code === 124 ? null : r.code, output: r.stdout + r.stderr };
+        };
+      }
+      return await checkRed(command, { ...diff, uncommitted, run: runTests });
+    } catch (err) {
+      return { verified: false, cause: 'infra', command: '', exitCode: null, detail: `Le contrôle du rouge n'a pas pu tourner : ${(err as Error).message}` };
+    } finally {
+      if (sandbox) await this.destroySandbox(sandbox.id, redRunId);
     }
   }
 
@@ -883,6 +934,17 @@ export class Orchestrator {
         if (!run || !job) return;
         this.track(
           (async () => {
+            if (job.red) {
+              const red = await this.checkRed(project, run, job.red.command);
+              const base = { ...TRUSTED, at: clock.now(), projectId: project.id, ticketId, id: `check:${run.id}` };
+              const failures = [{ command: red.command || 'factory/red', exitCode: red.exitCode, output: red.detail }];
+              await this.submitResult(
+                red.verified
+                  ? { ...base, type: 'verify.passed', payload: { runId: run.id, job: job.name, red: red.cause, ...(c.output ? { output: c.output } : {}) } }
+                  : { ...base, type: 'verify.failed', payload: { runId: run.id, job: job.name, failures, red: red.cause } },
+              );
+              return;
+            }
             const res = await this.d.verify(run.cwd, job.verify);
             const base = { ...TRUSTED, at: clock.now(), projectId: project.id, ticketId };
             const event: FactoryEvent = res.ok
@@ -1280,6 +1342,9 @@ export class Orchestrator {
       // After the setup, which is the repository's and could write one; the session loads none anyway
       // (`--setting-sources ""`): defence in depth, for what ORC-128 did not trap (ORC-284).
       await workspaces.resetClaudeDir(ws.path);
+      // The head the tests step starts on (ORC-123): its red check reads the step's own commits from it. A return
+      // to the step keeps the first one, so its earlier commits still count.
+      if (job.red && kind !== 'verify_failures') await store.setMeta(redBaseKey(project.id, ticketId), (await workspaces.head(ws.path)) ?? '');
 
       let input: { kind: InputKind; text: string } | undefined;
       if (kind === 'feedback') {
