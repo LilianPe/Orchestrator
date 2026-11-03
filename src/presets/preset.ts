@@ -1,4 +1,5 @@
 import type { NetworkLevel } from '../adapters/sandbox/types.js';
+import { NETWORK_RANK } from '../network/levels.js';
 import { hashCanonical } from '../runtime/workflow-version.js';
 
 /** A preset (ORC-187): typed steps chained by `next`, every way back bounded by a counter. */
@@ -69,8 +70,6 @@ export class PresetError extends Error {
     super(`invalid preset:\n- ${violations.join('\n- ')}`);
   }
 }
-
-const NETWORK_RANK: Record<NetworkLevel, number> = { none: 0, 'claude-api': 1, limited: 2, full: 3 };
 
 /** Checks the invariants of the core and hashes the preset; throws a PresetError listing every violation. */
 export function compilePreset(preset: Preset, options: CompileOptions = {}): CompiledPreset {

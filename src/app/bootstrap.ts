@@ -11,6 +11,7 @@ import { ClaudeCodeRunner } from '../adapters/runner/claude-code.js';
 import { purgeRunDirs, purgeSessionDirs, purgeTranscripts } from '../adapters/runner/transcript.js';
 import { FakeRunner } from '../adapters/runner/fake.js';
 import type { Runner } from '../adapters/runner/types.js';
+import { EgressProxy } from '../network/proxy.js';
 import { instanceId, makeSandboxes } from './sandbox-wiring.js';
 import { LinearApi } from '../adapters/tracker/linear/api.js';
 import { createLinearIngest } from '../adapters/tracker/linear/ingest.js';
@@ -83,7 +84,9 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
   const baseUrl = instance.publicUrl ?? `http://localhost:${port}`;
   // The agent API's own listener, for the sandboxes (ORC-204): the UI stays where `host` puts it.
   const agentPort = Number(env['FACTORY_AGENT_PORT'] || port + 1);
-  const agentListenHost = env['FACTORY_AGENT_HOST'] || '0.0.0.0';
+  // On the loopback: the sandboxes reach it through the egress proxy, in this process (ORC-213).
+  const agentListenHost = env['FACTORY_AGENT_HOST'] || '127.0.0.1';
+  // The name the sandboxes use for it, resolved by the proxy alone: a sandbox resolves nothing.
   const sandboxAgentHost = env['FACTORY_SANDBOX_AGENT_HOST'] || 'host.docker.internal';
   const githubApp = resolveGithubApp(instance, env);
   const githubSecret = githubWebhookSecret(instance, env);
@@ -139,7 +142,14 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     // The daemon's own secrets never enter a run's environment; masked all the same, should one surface.
     const daemonSecrets = () => [...daemonSecretValues(o.home, yml), ...(githubSecret ? [githubSecret] : [])];
     // A container per attempt (ORC-204) when FACTORY_CONTAINER_CLI is set; --fake-runner stays on the host.
-    const sandboxes = o.fakeRunner ? undefined : makeSandboxes(env, instanceId(o.home));
+    // The sandboxes' only way out (ORC-213): it applies each run's network level and journals its connections.
+    const egress = new EgressProxy({
+      dir: paths.network,
+      caDir: paths.egressCa,
+      log,
+      agentApi: { host: sandboxAgentHost, port: agentPort, to: { host: agentListenHost === '0.0.0.0' ? '127.0.0.1' : agentListenHost, port: agentPort } },
+    });
+    const sandboxes = o.fakeRunner ? undefined : makeSandboxes(env, instanceId(o.home), egress);
     if (!o.fakeRunner && !sandboxes) log("Attention : FACTORY_CONTAINER_CLI absent, les runs tournent sur l'hôte, sans isolation.");
     const runner: Runner = o.fakeRunner
       ? new FakeRunner()
@@ -332,7 +342,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     });
 
     const server = serve({ fetch: app.fetch, port, hostname: instance.host });
-    // Only with sandboxes: the agent API off the loopback, for them alone (ORC-204).
+    // Only with sandboxes: the agent API on a listener of its own, for them alone (ORC-204), reached through the egress proxy.
     const agentServer = sandboxes ? serve({ fetch: agentOnly(app), port: agentPort, hostname: agentListenHost }) : undefined;
     if (agentServer) log(`API agent des sandboxes : ${agentListenHost}:${agentPort}, jointe en http://${sandboxAgentHost}:${agentPort}/agent`);
     const relay = instance.relay.kind === 'smee' ? startSmeeRelay({ url: instance.relay.url, onWebhook: ingest, log }) : undefined;
@@ -347,6 +357,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       await Promise.all([timers.stop(), poller.stop(), reconciler.stop()]);
       orchestrator.stopAll();
       await orchestrator.drained();
+      await egress.closeAll();
       const close = (s: typeof server) =>
         new Promise<void>((resolve) => {
           s.close(() => resolve());
@@ -369,6 +380,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
           (sessions) => sessions.length && log(`sessions : ${sessions.length} supprimée(s), tickets clos depuis 30 jours`),
           (e: unknown) => log(`sessions purge: ${(e as Error).message}`),
         );
+        // The egress journals (ORC-213), `*.jsonl` too: the same 30 days.
+        purgeTranscripts(paths.network, now);
       };
       purge();
       purgeInterval = setInterval(purge, 24 * 60 * 60 * 1000);

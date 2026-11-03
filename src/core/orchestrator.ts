@@ -71,7 +71,7 @@ const redBaseKey = (projectId: string, ticketId: string): string => `red-base:${
 
 /**
  * Every run's Claude Code (ORC-284): no auto-memory (ORC-205), telemetry off by both variables ORC-128
- * names, which one does it unmeasured until ORC-213 (that also blocks it at the proxy).
+ * names, which one does it unmeasured; in a sandbox the egress proxy blocks it anyway (ORC-213).
  */
 export const CLAUDE_RUN_ENV = { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1', DISABLE_TELEMETRY: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' };
 
@@ -451,16 +451,19 @@ export class Orchestrator {
    * a fresh context that never sees the ticket's (ORC-217). The run's refusals dir, read-write, so the
    * hook's log outlives the sandbox. The pack and the run settings read-only.
    * A `trunk-readonly` job gets its worktree read-write too: only `--permission-mode plan` keeps it
-   * from writing, as on the host. `claude-api` is an open network until ORC-213.
+   * from writing, as on the host. The network is applied by the egress proxy (ORC-213): `limited`, the
+   * doc's default, for the agent; `none` for a check (the red sandbox).
+   * ponytail: every agent run `limited`, `allow` empty; `stepPolicy` (src/network/levels.ts) takes over
+   * once ORC-209 C reads the repository's config at the launch.
    */
-  private async openSandbox(sandboxes: SandboxProvider, project: ProjectRuntime, ticketId: string, ws: Workspace, runId: string, ticketSession: boolean, network: NetworkLevel = 'claude-api'): Promise<Sandbox> {
+  private async openSandbox(sandboxes: SandboxProvider, project: ProjectRuntime, ticketId: string, ws: Workspace, runId: string, ticketSession: boolean, network: NetworkLevel = 'limited'): Promise<Sandbox> {
     if (!this.d.sessionsDir || !this.d.runsDir) throw new Error('sessionsDir and runsDir are required with sandboxes');
     const runDir = join(this.d.runsDir, runId);
     const claudeDir = ticketSession ? join(this.d.sessionsDir, project.id, ticketId) : join(runDir, 'claude');
     const refusalsDir = join(runDir, 'refusals');
     for (const dir of [claudeDir, refusalsDir]) mkdirSync(dir, { recursive: true });
     const gitDir = await this.d.workspaces.gitCommonDir(ws.path);
-    const sandbox = await sandboxes.create({
+    return sandboxes.create({
       runId,
       ticketId,
       workspacePath: ws.path,
@@ -475,9 +478,6 @@ export class Orchestrator {
         ...(this.d.sandboxMounts ?? []),
       ],
     });
-    // The level is the one asked, not one enforced: every level but `none` is an open bridge until ORC-213.
-    if (sandbox.network !== 'none') this.log('warn', `sandbox ${sandbox.id} de ${ticketId} : réseau ${sandbox.network} demandé, réseau ouvert provisoire jusqu'à ORC-213`);
-    return sandbox;
   }
 
   private settingsPath(): string {
@@ -494,8 +494,8 @@ export class Orchestrator {
       throw new Error(`Le setup du worktree a échoué : ${what}`);
     };
     if (sandbox) {
-      // ponytail: setup shares the attempt's `claude-api` sandbox, an open network until ORC-213; it gets
-      // a `full` sandbox of its own once the network levels are real.
+      // ponytail: setup shares the attempt's sandbox, so its `limited` network (registries, GitHub read);
+      // a `full` sandbox of its own for setup when a repository needs more.
       for (const command of commands) {
         const { code } = await this.execCapped(sandbox.id, command);
         if (code === 124) fail(`${command} (délai de ${VERIFY_TIMEOUT_MS / 60_000} min dépassé)`);
