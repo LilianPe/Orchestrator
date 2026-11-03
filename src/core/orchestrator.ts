@@ -390,18 +390,20 @@ export class Orchestrator {
    * same path, so git works there; it shows the repository's other refs until ORC-205), the ticket's
    * Claude session dir as `~/.claude` (`--resume` across attempts), the pack and the run settings
    * read-only. A `trunk-readonly` job gets its worktree read-write too: only `--permission-mode plan`
-   * keeps it from writing, as on the host. `claude-api` is an open network until ORC-213.
+   * keeps it from writing, as on the host. Network `limited`, the doc's default, applied by the egress
+   * proxy (ORC-213); the repository's `network` (level, `allow`) joins once its config is read at the
+   * launch (ORC-209 C), each step's level with the preset's steps.
    */
   private async openSandbox(sandboxes: SandboxProvider, project: ProjectRuntime, ticketId: string, ws: Workspace, runId: string): Promise<Sandbox> {
     if (!this.d.sessionsDir) throw new Error('sessionsDir is required with sandboxes');
     const sessionDir = join(this.d.sessionsDir, project.id, ticketId);
     mkdirSync(sessionDir, { recursive: true });
     const gitDir = await this.d.workspaces.gitCommonDir(ws.path);
-    const sandbox = await sandboxes.create({
+    return sandboxes.create({
       runId,
       ticketId,
       workspacePath: ws.path,
-      network: 'claude-api',
+      network: 'limited',
       requirements: DEFAULT_REQUIREMENTS,
       mounts: [
         { host: gitDir, target: gitDir, readOnly: false },
@@ -411,9 +413,6 @@ export class Orchestrator {
         ...(this.d.sandboxMounts ?? []),
       ],
     });
-    // The level is the one asked, not one enforced: every level but `none` is an open bridge until ORC-213.
-    if (sandbox.network !== 'none') this.log('warn', `sandbox ${sandbox.id} de ${ticketId} : réseau ${sandbox.network} demandé, réseau ouvert provisoire jusqu'à ORC-213`);
-    return sandbox;
   }
 
   private settingsPath(): string {
@@ -430,8 +429,8 @@ export class Orchestrator {
       throw new Error(`Le setup du worktree a échoué : ${what}`);
     };
     if (sandbox) {
-      // ponytail: setup shares the attempt's `claude-api` sandbox, an open network until ORC-213; it gets
-      // a `full` sandbox of its own once the network levels are real.
+      // ponytail: setup shares the attempt's sandbox, so its `limited` network (registries, GitHub read);
+      // a `full` sandbox of its own for setup when a repository needs more.
       for (const command of commands) {
         // The host's cap (runVerify), by coreutils' `timeout` in the image: 124 is its exit on expiry.
         const argv = ['timeout', String(VERIFY_TIMEOUT_MS / 1000), 'bash', '-lc', command];

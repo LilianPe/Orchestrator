@@ -79,6 +79,7 @@ Quatre tests parlent à de vrais services. Ils sont dans le glob de `vitest.conf
 | `src/adapters/tracker/linear/queries.live.test.ts` | `LINEAR_API_KEY` définie (`describe.skipIf(!key)`) | sauté |
 | `src/adapters/tracker/linear/tracker.live.test.ts` | `FACTORY_LIVE_LINEAR_TOKEN` et `FACTORY_LIVE_LINEAR_ISSUE` définies (ORC-189, suite de conformité Tracker, lecture seule) | sauté |
 | `src/adapters/forge/gh-cli.live.test.ts` | `FACTORY_LIVE_GH_REPO`, `FACTORY_LIVE_GH_BRANCH` et `FACTORY_LIVE_GH_PR` définies (ORC-189, suite de conformité Forge, lecture seule) | sauté |
+| `test/isolation/network.test.ts` | Proxy de sortie sur un vrai moteur : registre npm et doc passent et sont journalisés, hôte hors liste et écriture GitHub refusés, ni DNS ni TCP ni UDP direct, rien en `none` | garder | ORC-213, ORC-219 |
 | `test/e2e/pack.e2e.test.ts` | `FACTORY_E2E=1` (`describe.skipIf(process.env['FACTORY_E2E'] !== '1')`, `RELAIS_E2E` avant ORC-167) | sauté |
 
 Sur le run de référence, avant ORC-189, le journal de la CI montre `queries.live.test.ts` et `pack.e2e.test.ts` « 1 skipped » (40 fichiers passés, 2 sautés, 250 tests passés, 2 sautés). Un ticket qui ajoute un test live suit la même règle : une variable d'environnement le lance, la CI ne la définit pas.
@@ -170,7 +171,7 @@ Le premier ticket cité est celui qui touche le module en premier ou le plus ; l
 | `src/adapters/sandbox/types.ts` | Port `SandboxProvider`, niveaux réseau | garder | ORC-225, ORC-189 |
 | `src/adapters/sandbox/fake.ts` | `FakeSandboxProvider` du harnais | garder | ORC-225 |
 | `src/adapters/sandbox/router.ts` | `SandboxRouter` : choisit le backend qui satisfait les exigences, refuse sinon | garder | ORC-204 |
-| `src/adapters/sandbox/docker-rootless.ts` | Backend conteneur `L3` (CLI `docker` ou `podman`), un conteneur par tentative | garder | ORC-204, ORC-213 (réseau `claude-api` ouvert jusque-là), ORC-205 (`.git` monté) |
+| `src/adapters/sandbox/docker-rootless.ts` | Backend conteneur `L3` (CLI `docker` ou `podman`), un conteneur par tentative, toujours en `--network none` ; avec le proxy de sortie, le socket du run monté, un relais en PID 1 et les variables `HTTP(S)_PROXY` | garder | ORC-204, ORC-213 (fait : proxy de sortie), ORC-205 (`.git` monté) |
 | `src/adapters/publisher/types.ts` | Port `Publisher` : pousse le sha vérifié, ouvre ou met à jour la PR | garder | ORC-225 |
 | `src/adapters/publisher/fake.ts` | `FakePublisher` du harnais | garder | ORC-225 |
 | `src/adapters/checks/types.ts` | Port `CheckRunner` : vérifications hors de l'agent | garder | ORC-225, ORC-151 |
@@ -200,6 +201,15 @@ Sortie du travail de l'agent : aucun outil de l'usine ne tourne sur un arbre éc
 | Module | Rôle | Statut | Ticket cible |
 |---|---|---|---|
 | `src/publish/extract.ts` | `extractWork` : bundle git complet de la branche créé dans le sandbox (dossier monté à `BUNDLE_TARGET`), vérifié puis cloné sur l'hôte sans checkout, sans hook, fsmonitor ni configuration système ou globale ; tête du clone comparée au SHA lu dans le sandbox, aucun clone laissé sur un échec | garder | ORC-286, ORC-205, ORC-125 (diff lu dans le clone), ORC-151 |
+
+### `src/network/`
+
+Sortie réseau des sandboxes (ORC-213, [décision](decisions/ORC-213.md)).
+
+| Module | Rôle | Statut | Ticket cible |
+|---|---|---|---|
+| `src/network/levels.ts` | Niveaux de réseau (`none`, `claude-api`, `limited`, `full`), resserrement par étape, `full` refusé à l'agent ; listes (API Claude, hôtes inspectés, hôtes tunnelés) ; décision par hôte (tunnel) et par méthode et chemin (HTTP en clair) | garder | ORC-213, ORC-209 C (`network` du dépôt lu au lancement), ORC-219 (tests 3 à 6) |
+| `src/network/proxy.ts` | `EgressProxy` : un socket Unix par run, `CONNECT` et HTTP en clair renvoyé en HTTPS, adresses privées refusées, API agent relayée, journal JSONL par run (`<home>/network/<run>.jsonl`) | garder | ORC-213, journal en base et au tableau de bord (ticket à ouvrir), interception TLS (point ouvert de la décision) |
 
 ### `src/app/` et racine de `src/`
 
@@ -302,6 +312,7 @@ Sortie du travail de l'agent : aucun outil de l'usine ne tourne sur un arbre éc
 | `test/chaos/` | Chaos : un vrai démon tué par SIGKILL au hasard pendant 500 événements, sur Postgres (job CI `chaos`) ; un événement sur sept signé hors de l'équipe, refusé par la matrice (ORC-186) | garder | ORC-163, ORC-162 (fait : strict par défaut, faux tracker qui garde les écritures des vies précédentes), ORC-277 (fait : la question relancée fait échouer, plus de cas à part) |
 | `test/scenarios/workflow.test.ts` | Scénarios de bout en bout sur le harnais (22 `it` au départ) | adapter | ORC-169 (chaque scénario réécrit ou marqué abandonné), ORC-225, ORC-228, ORC-187 |
 | `test/replay/` | Journaux enregistrés (`journals/`, format de `factory replay --export`) que la CI rejoue, scénarios du harnais qui les produisent (`npm run replay:record`) ; `authz-refused-then-allowed` : rôles journalisés, un refus et une action autorisée (ORC-186) | garder | ORC-174, ORC-186 (fait) (fait : journaux tirés des scénarios), journaux réels exportés d'une instance à ajouter dès qu'une instance tourne sur le moteur (ORC-233) |
+| `test/isolation/network.test.ts` | Proxy de sortie sur un vrai moteur : registre npm et doc passent et sont journalisés, hôte hors liste et écriture GitHub refusés, ni DNS ni TCP ni UDP direct, rien en `none` | garder | ORC-213, ORC-219 |
 | `test/e2e/pack.e2e.test.ts` | Test du pack avec le vrai `claude` (live, voir plus haut) | adapter | ORC-191 (renommé, `git push` refusé) |
 
 ## À trancher

@@ -31,7 +31,7 @@ Développement de l'interface : `npm run dev:web` lance Vite sur le port 5173 av
 | `POST /webhooks/github` | Webhooks GitHub | signature HMAC `X-Hub-Signature-256` + déduplication par id d'événement |
 | `/agent/*` | API des agents (`relais-agent`) | jeton du run en cours (`Authorization: Bearer`) |
 
-Avec les sandboxes (`FACTORY_CONTAINER_CLI`, voir [`configuration.md`](configuration.md#variables-denvironnement)), un **second serveur** ne sert que `/agent/*`, avec les mêmes routes et le même jeton de run, sur `FACTORY_AGENT_PORT` (port de l'interface + 1) et `FACTORY_AGENT_HOST` (`0.0.0.0`) : les conteneurs ne joignent pas la boucle locale du démon. Toute autre route y répond 404. L'interface reste à l'adresse de `host`.
+Avec les sandboxes (`FACTORY_CONTAINER_CLI`, voir [`configuration.md`](configuration.md#variables-denvironnement)), un **second serveur** ne sert que `/agent/*`, avec les mêmes routes et le même jeton de run, sur `FACTORY_AGENT_PORT` (port de l'interface + 1) et `FACTORY_AGENT_HOST` (`127.0.0.1`) : les conteneurs, sans réseau, le joignent par le proxy de sortie du démon (voir [plus bas](#réseau-des-sandboxes)). Toute autre route y répond 404. L'interface reste à l'adresse de `host`.
 
 ## Exposition réseau et mot de passe
 
@@ -61,7 +61,7 @@ Chaque run reçoit un `RELAIS_RUN_TOKEN` aléatoire. L'API `/agent/*` ne l'accep
 - peut chercher des tickets, chercher dans la base de connaissance et poser une question dans la session du ticket ;
 - n'apparaît pas dans `/api/state`.
 
-Sur l'hôte, `RELAIS_API` pointe sur `http://127.0.0.1:<port>/agent` : les agents parlent au démon en local. Dans un sandbox, elle pointe sur `http://<FACTORY_SANDBOX_AGENT_HOST>:<FACTORY_AGENT_PORT>/agent` (par défaut `host.docker.internal`), le serveur dédié à l'API agent.
+Sur l'hôte, `RELAIS_API` pointe sur `http://127.0.0.1:<port>/agent` : les agents parlent au démon en local. Dans un sandbox, elle pointe sur `http://<FACTORY_SANDBOX_AGENT_HOST>:<FACTORY_AGENT_PORT>/agent` (par défaut `host.docker.internal`) : un nom que le conteneur ne résout pas, que le proxy de sortie reconnaît et relaie vers le serveur dédié à l'API agent.
 
 ## Ce que l'agent charge, et ce qu'il ne charge pas
 
@@ -80,11 +80,30 @@ Et rien du dépôt :
 - **`--strict-mcp-config`** : ni le `.mcp.json` du dépôt, ni les connecteurs claude.ai du compte (Drive, Docs…), qui sinon se chargeraient avec un compte par abonnement.
 - **`.claude/` retiré du worktree avant chaque session**, après le `setup` (défense en profondeur, pour ce qu'ORC-128 n'a pas piégé : agents, commandes, output styles). Le worktree est en *sparse checkout* (mode non-cone, `/*` sauf `/.claude/*`, `/.claude/CLAUDE.md` gardé pour les conventions), propre à ce worktree (`extensions.worktreeConfig`) : la copie principale du dépôt garde son `.claude/`. `git status` reste propre, un `git add -A` ou `commit -a` de l'agent ne supprime pas `.claude/` de la PR, et un `git merge` ou un rebase qui le modifie ne le réécrit pas sur le disque. Limite : l'agent ne peut pas modifier les fichiers suivis de `.claude/` ; un ticket qui demande de les changer ne peut pas être fait par un run.
 - **`CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`** : pas de mémoire automatique (effet non vérifié par ORC-128).
-- **Télémétrie coupée** par `DISABLE_TELEMETRY=1` et `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` (laquelle suffit reste à mesurer, ORC-213, qui la bloque aussi au proxy).
+- **Télémétrie coupée** par `DISABLE_TELEMETRY=1` et `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` (laquelle suffit reste à mesurer) ; dans un sandbox, le proxy de sortie la bloque de toute façon : seul `api.anthropic.com` est permis pour Claude.
 
 Dans un sandbox, `CLAUDE_CONFIG_DIR` est le dossier de session du ticket (`/home/factory/.claude`, monté depuis `<home>/sessions/<projet>/<ticket>`) : tout le dossier de config de Claude est par ticket, l'identifiant arrive par l'environnement (`CLAUDE_CODE_OAUTH_TOKEN` ou `ANTHROPIC_API_KEY`, comme avant). Sur l'hôte, sans sandbox, c'est celui du démon, comme avant.
 
 Le test d'isolation n° 11 (`test/isolation/claude-settings.test.ts`) rejoue à chaque version de Claude Code le dépôt piégé d'ORC-128 avec ces options : hooks, MCP, skill, agent, commande et `CLAUDE.md` piégés, aucun ne doit se charger. Il demande un vrai `claude` et un identifiant ([`tests.md`](tests.md#les-projets-vitest)).
+
+## Réseau des sandboxes
+
+Décision et options : [ORC-213](decisions/ORC-213.md). Chaque conteneur tourne en **`--network none`**, quel que soit le niveau : ni route, ni DNS, ni UDP. Sa seule sortie est le **socket Unix de son run**, ouvert par le proxy de sortie du démon (`src/network/proxy.ts`) et monté en `/run/factory/egress.sock`. Un relais (PID 1 du conteneur) l'expose en `127.0.0.1:3128`, et `HTTP_PROXY`/`HTTPS_PROXY` y pointent ; un outil qui ignore ces variables n'a aucun réseau.
+
+Le proxy applique le niveau du run :
+
+| Niveau | Ce qui passe |
+|---|---|
+| `none` | Rien, pas même l'API agent (`verify`). |
+| `claude-api` | `api.anthropic.com` et l'API agent. |
+| `limited` (défaut des runs) | Le précédent ; npm et PyPI ; GitHub en lecture ; une liste de domaines de doc (`src/network/levels.ts`). Méthodes GET, HEAD et OPTIONS seulement, sauf vers l'API Claude. |
+| `custom` (dépôt) | `limited` plus les hôtes de `network.allow`. |
+| `full` | Tout : réservé à `setup`, refusé pour l'agent. |
+
+- **Hôtes à API d'écriture inspectés** (`github.com`, `api.github.com`, `registry.npmjs.org`, `pypi.org`) : jamais tunnelés. Le conteneur les joint en `http://` (git par `url.<http>.insteadOf`, npm par `npm_config_registry`, pip par `PIP_INDEX_URL`), le proxy voit la méthode et le chemin, refuse toute écriture (`git push`, gist, publication), puis continue en HTTPS. Seul `git fetch` (POST vers `git-upload-pack`) est permis en plus.
+- **Autres hôtes permis, tunnelés** (`CONNECT`, port 443 seulement) : API Claude, téléchargements (`files.pythonhosted.org`, `codeload.github.com`…), docs, `network.allow`. TLS de bout en bout : seul l'hôte est vérifié.
+- **Jamais d'adresse privée** (boucle locale, réseaux privés, `169.254.0.0/16` des métadonnées cloud), même en `full`, même par un nom qui y mène.
+- **Journal** : chaque connexion et chaque refus, avec l'hôte, la méthode, les octets envoyés et reçus et la raison d'un refus, dans `<home>/network/<run>.jsonl`.
 
 ## Secrets
 
@@ -93,12 +112,14 @@ Où ils sont et comment ils restent dans le démon : [`configuration.md`](config
 ## Limites connues
 
 - **Sans sandbox, même utilisateur système.** Sans `FACTORY_CONTAINER_CLI`, les runs tournent sur l'hôte sous le même utilisateur que le démon (le démon l'écrit au démarrage : « les runs tournent sur l'hôte, sans isolation »). Les refus de Claude Code sont indicatifs : un agent qui exécute du code (`node -e …`, autorisé par le pack) peut lire `secrets.json` ou `relais.db`. Une injection dans un ticket ou un commentaire pourrait l'y pousser. **Ne confiez pas à Relais des tickets écrits par des personnes non fiables** tant que les runs ne tournent pas sous un utilisateur séparé.
-- **Sandbox : réseau ouvert, provisoirement.** Chaque tentative tourne dans un conteneur créé pour elle et détruit après (ORC-204). Il demande le niveau `claude-api`, mais tant que le proxy de sortie n'existe pas (ORC-213), le conteneur a le réseau ouvert du moteur. Le `setup` du dépôt tourne dans le même conteneur, sur ce même réseau.
+- **Sandbox : méthodes non vues dans un tunnel TLS.** Vers un hôte tunnelé (docs, téléchargements, `network.allow`), le proxy ne voit que l'hôte : un POST y passe. Ces hôtes sont choisis sans API d'écriture, mais un domaine de `network.allow` peut en avoir une. Seule une interception TLS par une autorité de l'usine fermerait l'écart ; c'est le point ouvert d'[ORC-213](decisions/ORC-213.md).
+- **Sandbox : un outil qui force `https://` vers GitHub ou les registres est refusé.** Le `WebFetch` de Claude Code passe en HTTPS : il ne lit pas `github.com`. Une dépendance npm en `git+https://` vers un autre hôte que `github.com` échoue aussi.
+- **Sandbox : un niveau par run, `network` du dépôt pas encore lu.** Tous les runs prennent `limited`. Le `network` de `.factory/config.yml` (niveau, `allow`) et le niveau de chaque étape du préréglage s'appliqueront quand la config du dépôt sera lue au lancement (ORC-209 C). Le `setup` tourne dans le conteneur du run, à son niveau (`limited`), pas en `full`.
+- **Sandbox : journal réseau en fichier.** Le journal des connexions est un JSONL par run dans `<home>/network/`, pas encore en base ni au tableau de bord.
 - **Sandbox : le `.git` commun du dépôt est monté.** Pour que git marche dans le worktree, le dossier git commun du dépôt est monté en lecture-écriture, au même chemin que sur l'hôte. Le conteneur voit donc les autres refs et branches du dépôt, et peut les modifier. Le miroir en lecture seule et la sortie par `git bundle` fermeront cet écart (ORC-205).
 - **Sandbox : `trunk-readonly` monté en lecture-écriture.** Le port monte toujours le worktree en écriture ; un job `trunk-readonly` n'est retenu que par `--permission-mode plan`, comme sur l'hôte.
 - **Sandbox : rootless vérifié seulement en CI et sur le serveur.** En développement (Docker Desktop sous WSL), le moteur n'est pas rootless. Le job CI `isolation` (Podman rootless) et le serveur le vérifient.
 - **Sandbox : `verify` tourne encore sur l'hôte.** Les commandes `verify` d'un job (`job.verify`, effet `run_verify`) s'exécutent sur l'hôte, sous l'utilisateur du démon, sur le code que l'agent vient d'écrire. Elles passeront dans un sandbox avec ORC-151.
-- **Sandbox : l'API agent écoute sur le réseau.** Le serveur `/agent` écoute sur `FACTORY_AGENT_HOST`, `0.0.0.0` par défaut : il est joignable depuis le réseau, protégé seulement par le jeton du run. Sur un serveur, donnez-lui l'adresse du pont du moteur (par exemple `172.17.0.1` pour Docker, l'adresse de la passerelle de son réseau pour Podman).
 - **Sandbox : une session commencée sur l'hôte ne reprend pas dans le conteneur.** Un ticket dont la session Claude a été ouverte sur l'hôte (avant l'activation des sandboxes) n'a pas cette session dans le dossier monté en `~/.claude` : son prochain run de reprise échoue une fois. Bloquez-le, ou relancez-le à neuf.
 - **Secrets transmis aux runs.** `ANTHROPIC_API_KEY`, `GH_TOKEN` et les autres variables du démon hors `RELAIS_*`/`LINEAR_*` sont visibles des agents (ils en ont besoin). Donnez au compte GitHub les droits minimaux ([`github.md`](github.md#permissions-nécessaires)).
 - **Canal smee public.** Le contenu des webhooks transite par smee.io et y est lisible par qui connaît l'URL ([`linear.md`](linear.md#3-webhooks--smee-ou-url-publique)).

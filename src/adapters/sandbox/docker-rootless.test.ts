@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { EgressPolicy } from '../../network/levels.js';
 import type { Exec, ExecResult } from '../exec.js';
 import { ContainerSandboxProvider } from './docker-rootless.js';
 import { DEFAULT_REQUIREMENTS, type SandboxRequest } from './types.js';
@@ -30,6 +31,21 @@ const req = (over: Partial<SandboxRequest> = {}): SandboxRequest => ({
 });
 
 const opts = { image: 'factory-runner:1', uid: 1000, gid: 1000 };
+
+/** The proxy as the provider sees it: a socket per run, opened and closed. */
+function fakeEgress() {
+  const opened: { runId: string; policy: EgressPolicy }[] = [];
+  const closed: string[] = [];
+  return {
+    opened,
+    closed,
+    open: async (runId: string, policy: EgressPolicy) => {
+      opened.push({ runId, policy });
+      return `/home/d/.factory/network/${runId}.sock`;
+    },
+    close: async (runId: string) => void closed.push(runId),
+  };
+}
 const inspectLine = (id: string, running: boolean, runId: string, network: string) => `${id}\t${running}\t${runId}\t${network}\n`;
 
 /** An engine with no container yet: `run` prints the new id. */
@@ -65,34 +81,44 @@ describe('ContainerSandboxProvider.create', () => {
     expect(a.slice(a.indexOf('--userns=keep-id'), a.indexOf('--userns=keep-id') + 3)).toEqual(['--userns=keep-id', '--user', '1000:1000']);
   });
 
-  it('opens the default bridge and maps host.docker.internal for any level but none (gap until ORC-213)', async () => {
+  it('runs --network none at every level without an egress proxy: nothing gets out', async () => {
     for (const network of ['claude-api', 'limited', 'full'] as const) {
       const e = empty();
       const sbx = await new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: e.exec }).create(req({ network }));
       expect(sbx.network).toBe(network);
       const a = runArgs(e.calls);
-      expect(a).not.toContain('--network');
-      expect(a).toContain('--add-host=host.docker.internal:host-gateway');
-      expect(a).toContain(`factory.network=${network}`);
+      expect(a.slice(a.indexOf('--network'), a.indexOf('--network') + 2)).toEqual(['--network', 'none']);
+      expect(a.slice(-2)).toEqual(['sleep', 'infinity']);
+      expect(a.some((x) => /PROXY|add-host/i.test(x))).toBe(false);
     }
-    const e = empty();
-    await new ContainerSandboxProvider({ ...opts, cli: 'docker', agentHost: '172.17.0.1', exec: e.exec }).create(req({ network: 'full' }));
-    expect(runArgs(e.calls)).toContain('--add-host=host.docker.internal:172.17.0.1');
   });
 
-  it('leaves podman its own host.docker.internal entry unless an agent host is set', async () => {
+  it('with an egress proxy: --network none, the run’s socket mounted, the relay in front of it, tools pointed at it', async () => {
     const e = empty();
-    await new ContainerSandboxProvider({ ...opts, cli: 'podman', exec: e.exec }).create(req({ network: 'claude-api' }));
-    expect(runArgs(e.calls).some((x) => x.startsWith('--add-host'))).toBe(false);
-    const f = empty();
-    await new ContainerSandboxProvider({ ...opts, cli: 'podman', agentHost: '10.0.2.2', exec: f.exec }).create(req({ network: 'claude-api' }));
-    expect(runArgs(f.calls)).toContain('--add-host=host.docker.internal:10.0.2.2');
+    const egress = fakeEgress();
+    const p = new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: e.exec, egress });
+    await p.create(req({ network: 'limited', allow: ['docs.exemple.com'] }));
+    expect(egress.opened).toEqual([{ runId: 'r1', policy: { level: 'limited', allow: ['docs.exemple.com'] } }]);
+    const a = runArgs(e.calls);
+    expect(a).toContain('type=bind,source=/home/d/.factory/network/r1.sock,target=/run/factory/egress.sock');
+    expect(a.slice(a.indexOf('--network'), a.indexOf('--network') + 2)).toEqual(['--network', 'none']);
+    for (const v of ['HTTPS_PROXY=http://127.0.0.1:3128', 'http_proxy=http://127.0.0.1:3128', 'NO_PROXY=localhost,127.0.0.1', 'NODE_USE_ENV_PROXY=1', 'npm_config_registry=http://registry.npmjs.org/', 'GIT_CONFIG_VALUE_0=https://github.com/']) {
+      expect(a).toContain(v);
+    }
+    expect(a.slice(-3, -1)).toEqual(['node', '-e']);
+    expect(a.at(-1)).toMatch(/listen\(3128, *'127\.0\.0\.1'\)/);
   });
 
-  it('maps no agent host under --network none', async () => {
-    const e = empty();
-    await new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: e.exec }).create(req());
-    expect(runArgs(e.calls).some((x) => x.startsWith('--add-host'))).toBe(false);
+  it('closes the run’s egress when its container is destroyed, or never runs', async () => {
+    const e = engine((a) => (a[0] === 'inspect' ? ok(inspectLine('c1', true, 'r1', 'limited')) : a[0] === 'run' ? ok('c1\n') : ok()));
+    const egress = fakeEgress();
+    const p = new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: e.exec, egress });
+    await p.destroy('c1');
+    expect(egress.closed).toEqual(['r1']);
+    const failing = engine((a) => (a[0] === 'run' ? { stdout: '', stderr: 'no such image', code: 125 } : ok()));
+    const f = fakeEgress();
+    await expect(new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: failing.exec, egress: f }).create(req())).rejects.toThrow(/no such image/);
+    expect(f.closed).toEqual(['r1']);
   });
 
   it('returns the live container of the attempt instead of running a second one', async () => {

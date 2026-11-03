@@ -24,7 +24,7 @@ describe('a disposable sandbox per attempt', () => {
       runId: h.runner.requests[0]!.runId,
       ticketId: 'REL-1',
       workspacePath: '/tmp/factory-fake/p/REL-1',
-      network: 'claude-api',
+      network: 'limited',
       requirements: DEFAULT_REQUIREMENTS,
       mounts: [
         { host: '/repo/.git', target: '/repo/.git', readOnly: false },
@@ -117,12 +117,6 @@ describe('a disposable sandbox per attempt', () => {
     expect(h.workspaces.cleaned).toEqual(['REL-1']);
     expect(await h.ticket()).toMatchObject({ blocked: true });
     h.tracker.moveTo = moveTo;
-  });
-
-  it('logs a sandbox opened with a network, provisional until ORC-213', async () => {
-    const h = createHarness({ sandboxed: true });
-    await delegate(h);
-    expect(h.logs).toContainEqual({ level: 'warn', message: expect.stringContaining('ORC-213') as string });
   });
 
   it('without a sandbox, setup runs on the host as before', async () => {

@@ -1,4 +1,5 @@
 import { basename } from 'node:path';
+import type { EgressProxy } from '../../network/proxy.js';
 import { execCmd, mustExec, type Exec, type ExecResult } from '../exec.js';
 import {
   SANDBOX_HOME,
@@ -19,8 +20,11 @@ export interface ContainerSandboxOptions {
   /** The daemon's: the agent's files stay the daemon's, which commits and pushes them after the run. */
   uid: number;
   gid: number;
-  /** What `host.docker.internal` resolves to, for the agent API; `host-gateway` does not always reach the daemon under Docker Desktop in WSL. */
-  agentHost?: string;
+  /**
+   * The factory's egress proxy (ORC-213): each sandbox gets its run's socket and nothing else. Without
+   * it a sandbox reaches nothing, whatever its level.
+   */
+  egress?: Pick<EgressProxy, 'open' | 'close'>;
   /** The daemon's: its containers carry it, and its lookups see only those, so another daemon on the same engine is left alone. */
   instance?: string;
 }
@@ -28,6 +32,32 @@ export interface ContainerSandboxOptions {
 const ATTEMPT = 'factory.attempt';
 const NETWORK = 'factory.network';
 const INSTANCE = 'factory.instance';
+
+/** Where the run's proxy socket is mounted, and where the relay in front of it listens. */
+const EGRESS_SOCKET = '/run/factory/egress.sock';
+const PROXY = 'http://127.0.0.1:3128';
+/** PID 1 of a sandbox with an egress: TCP on the loopback to the proxy's socket, so every tool can use HTTP(S)_PROXY. */
+const RELAY = `const net=require('net');net.createServer((c)=>{const u=net.connect('${EGRESS_SOCKET}');c.pipe(u).pipe(c);c.on('error',()=>u.destroy());u.on('error',()=>c.destroy())}).listen(3128,'127.0.0.1')`;
+/**
+ * The proxy's address for every tool, and the `http://` form of the hosts it never tunnels
+ * (`INSPECTED` in src/network/levels.ts), so it sees their methods. A tool that goes to their
+ * `https://` form anyway is refused: the proxy does not tunnel them.
+ */
+const EGRESS_ENV = [
+  ...['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy'].map((k) => `${k}=${PROXY}`),
+  'NO_PROXY=localhost,127.0.0.1',
+  'no_proxy=localhost,127.0.0.1',
+  // Node's own fetch (factory-agent) reads the variables above only with it.
+  'NODE_USE_ENV_PROXY=1',
+  'npm_config_registry=http://registry.npmjs.org/',
+  // Its POST would be refused at every install.
+  'npm_config_audit=false',
+  'PIP_INDEX_URL=http://pypi.org/simple/',
+  'PIP_TRUSTED_HOST=pypi.org',
+  'GIT_CONFIG_COUNT=1',
+  'GIT_CONFIG_KEY_0=url.http://github.com/.insteadOf',
+  'GIT_CONFIG_VALUE_0=https://github.com/',
+];
 
 /** Where the engines listen. A mount of one of them, or of a directory above one, hands the agent the engine, so root on the host. */
 const SOCKETS = ['/var/run/docker.sock', '/run/docker.sock', '/var/run/podman/podman.sock', '/run/podman/podman.sock'];
@@ -65,8 +95,11 @@ export class ContainerSandboxProvider implements SandboxProvider {
         continue;
       }
       if (c.network !== req.network) throw new Error(`container sandbox: run ${req.runId} has network ${c.network}, asked ${req.network}`);
+      // A no-op for a run this process opened; a live container from before a restart is recover()'s to destroy.
+      await this.opts.egress?.open(req.runId, { level: req.network, allow: req.allow ?? [] });
       return this.seen(c);
     }
+    const egress = this.opts.egress && (await this.opts.egress.open(req.runId, { level: req.network, allow: req.allow ?? [] }));
 
     const args = [
       'run', '-d',
@@ -77,25 +110,21 @@ export class ContainerSandboxProvider implements SandboxProvider {
       ...(this.podman ? ['--userns=keep-id'] : []), '--user', `${this.opts.uid}:${this.opts.gid}`,
       '-e', `HOME=${SANDBOX_HOME}`,
       ...mounts.flatMap((m) => ['--mount', m]),
+      ...(egress ? ['--mount', mountArg({ host: egress, target: EGRESS_SOCKET, readOnly: false }), ...EGRESS_ENV.flatMap((v) => ['-e', v])] : []),
       '--workdir', WORKSPACE_TARGET,
-      ...this.networkArgs(req.network),
-      this.opts.image, 'sleep', 'infinity',
+      // Always: no route, no DNS, no UDP. The level is the proxy's to apply (ORC-213).
+      '--network', 'none',
+      this.opts.image, ...(egress ? ['node', '-e', RELAY] : ['sleep', 'infinity']),
     ];
-    const id = (await this.must(args)).trim();
+    let id: string;
+    try {
+      id = (await this.must(args)).trim();
+    } catch (err) {
+      await this.opts.egress?.close(req.runId);
+      throw err;
+    }
     this.known.add(id);
     return { id, network: req.network, level: 'L3' };
-  }
-
-  /**
-   * PROVISIONAL until ORC-213 (egress proxy): every level but `none` gets the engine's default bridge,
-   * open to the internet, because `claude -p` must reach the Anthropic API. The level is returned as
-   * asked; docs/interface-et-securite.md lists the gap.
-   */
-  private networkArgs(network: NetworkLevel): string[] {
-    if (network === 'none') return ['--network', 'none'];
-    // Podman adds host.docker.internal itself, and its `host-gateway` only came in 5.3.
-    if (this.podman && !this.opts.agentHost) return [];
-    return [`--add-host=host.docker.internal:${this.opts.agentHost ?? 'host-gateway'}`];
   }
 
   async exec(id: string, argv: readonly string[], opts: SandboxExecOptions = {}): Promise<ExecResult> {
@@ -125,9 +154,11 @@ export class ContainerSandboxProvider implements SandboxProvider {
   }
 
   async destroy(id: string): Promise<void> {
+    const runId = this.opts.egress && (await this.inspect([id]))[0]?.runId;
     const r = await this.engine(['rm', '-f', id]);
     if (r.code !== 0 && !/no such container/i.test(r.stderr)) throw new Error(`container sandbox: rm ${id}: ${r.stderr.trim()}`);
     this.known.delete(id);
+    if (runId) await this.opts.egress?.close(runId);
   }
 
   private seen(c: Info): Sandbox {

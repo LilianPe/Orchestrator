@@ -78,6 +78,8 @@ export function homePaths(home: string) {
     logs: join(home, 'logs'),
     /** Each ticket's Claude session dir, mounted as `~/.claude` of its sandboxes (ORC-204). */
     sessions: join(home, 'sessions'),
+    /** The egress proxy's socket and connection journal of each sandboxed run (ORC-213). */
+    network: join(home, 'network'),
   };
 }
 

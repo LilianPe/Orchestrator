@@ -64,9 +64,9 @@ describe.skipIf(!enabled)(`container sandbox (${cli})`, () => {
     expect(await interfaces(sbx.id)).toEqual(['lo']);
   });
 
-  it('opens the bridge for the other levels (provisional until ORC-213)', async () => {
-    const sbx = await provider.create(request({ network: 'claude-api' }));
-    expect((await interfaces(sbx.id)).filter((i) => i !== 'lo')).not.toEqual([]);
+  it('applies --network none at the other levels too: only the egress proxy lets anything out (ORC-213)', async () => {
+    const sbx = await provider.create(request({ network: 'limited' }));
+    expect(await interfaces(sbx.id)).toEqual(['lo']);
   });
 
   it('shows no engine socket', async () => {

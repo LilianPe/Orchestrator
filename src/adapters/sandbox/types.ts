@@ -29,7 +29,10 @@ export interface SandboxRequest {
   ticketId: string;
   /** The run's worktree, mounted read-write at `WORKSPACE_TARGET`. */
   workspacePath: string;
+  /** Applied by the egress proxy (ORC-213): the sandbox itself is always `--network none`. */
   network: NetworkLevel;
+  /** The repository's own hosts (`network.allow` of a `custom` repository), at `limited`. */
+  allow?: readonly string[];
   requirements: SandboxRequirements;
   /** Other host paths the run needs (git common dir, Claude session dir, pack): nothing else is mounted. */
   mounts: readonly SandboxMount[];
@@ -39,7 +42,7 @@ export const WORKSPACE_TARGET = '/work';
 
 export interface Sandbox {
   id: string;
-  /** The level asked (the contract compares it on a replay), not the one applied: every level but `none` is an open bridge until ORC-213. */
+  /** The level asked (the contract compares it on a replay), applied by the egress proxy. */
   network: NetworkLevel;
   level: IsolationLevel;
 }
