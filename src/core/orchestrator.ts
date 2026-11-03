@@ -431,6 +431,8 @@ export class Orchestrator {
       runId,
       ticketId,
       workspacePath: ws.path,
+      // ponytail: every run `limited`, `allow` empty; `stepPolicy` (src/network/levels.ts) takes over once
+      // ORC-209 C reads the repository's config at the launch.
       network: 'limited',
       requirements: DEFAULT_REQUIREMENTS,
       mounts: [

@@ -80,6 +80,8 @@ export function homePaths(home: string) {
     sessions: join(home, 'sessions'),
     /** The egress proxy's socket and connection journal of each sandboxed run (ORC-213). */
     network: join(home, 'network'),
+    /** The egress CA (ORC-213): its key is the daemon's, never mounted in a sandbox. */
+    egressCa: join(home, 'egress-ca'),
   };
 }
 

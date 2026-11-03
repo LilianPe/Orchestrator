@@ -33,17 +33,24 @@ const req = (over: Partial<SandboxRequest> = {}): SandboxRequest => ({
 const opts = { image: 'factory-runner:1', uid: 1000, gid: 1000 };
 
 /** The proxy as the provider sees it: a socket per run, opened and closed. */
-function fakeEgress() {
+function fakeEgress(live: string[] = []) {
   const opened: { runId: string; policy: EgressPolicy }[] = [];
   const closed: string[] = [];
+  const open = new Set(live);
   return {
     opened,
     closed,
+    caCertPath: '/home/d/.factory/egress-ca/ca.crt',
+    isOpen: (runId: string) => open.has(runId),
     open: async (runId: string, policy: EgressPolicy) => {
       opened.push({ runId, policy });
+      open.add(runId);
       return `/home/d/.factory/network/${runId}.sock`;
     },
-    close: async (runId: string) => void closed.push(runId),
+    close: async (runId: string) => {
+      closed.push(runId);
+      open.delete(runId);
+    },
   };
 }
 const inspectLine = (id: string, running: boolean, runId: string, network: string) => `${id}\t${running}\t${runId}\t${network}\n`;
@@ -123,7 +130,7 @@ describe('ContainerSandboxProvider.create', () => {
     }
   });
 
-  it('with an egress proxy: --network none, the run’s socket mounted, the relay in front of it, tools pointed at it', async () => {
+  it('with an egress proxy: --network none, the run’s socket and the CA mounted, the relay in front, tools pointed at both', async () => {
     const e = empty();
     const egress = fakeEgress();
     const p = new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: e.exec, egress });
@@ -131,24 +138,43 @@ describe('ContainerSandboxProvider.create', () => {
     expect(egress.opened).toEqual([{ runId: 'r1', policy: { level: 'limited', allow: ['docs.exemple.com'] } }]);
     const a = runArgs(e.calls);
     expect(a).toContain('type=bind,source=/home/d/.factory/network/r1.sock,target=/run/factory/egress.sock');
+    expect(a).toContain('type=bind,source=/home/d/.factory/egress-ca/ca.crt,target=/run/factory/egress-ca.crt,readonly');
+    expect(a.some((x) => x.includes('ca.key'))).toBe(false);
     expect(a.slice(a.indexOf('--network'), a.indexOf('--network') + 2)).toEqual(['--network', 'none']);
-    for (const v of ['HTTPS_PROXY=http://127.0.0.1:3128', 'http_proxy=http://127.0.0.1:3128', 'NO_PROXY=localhost,127.0.0.1', 'NODE_USE_ENV_PROXY=1', 'npm_config_registry=http://registry.npmjs.org/', 'GIT_CONFIG_VALUE_0=https://github.com/']) {
+    for (const v of ['HTTPS_PROXY=http://127.0.0.1:3128', 'http_proxy=http://127.0.0.1:3128', 'NO_PROXY=localhost,127.0.0.1', 'NODE_USE_ENV_PROXY=1', 'NODE_EXTRA_CA_CERTS=/run/factory/egress-ca.crt', 'GIT_SSL_CAINFO=/run/factory/egress-ca.crt', 'YARN_HTTPS_PROXY=http://127.0.0.1:3128']) {
       expect(a).toContain(v);
     }
     expect(a.slice(-3, -1)).toEqual(['node', '-e']);
     expect(a.at(-1)).toMatch(/listen\(3128, *'127\.0\.0\.1'\)/);
   });
 
-  it('closes the run’s egress when its container is destroyed, or never runs', async () => {
-    const e = engine((a) => (a[0] === 'inspect' ? ok(inspectLine('c1', true, 'r1', 'limited')) : a[0] === 'run' ? ok('c1\n') : ok()));
+  it('closes the run’s egress when its container is destroyed, from the run it knows, or when it never runs', async () => {
+    const e = empty();
     const egress = fakeEgress();
     const p = new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: e.exec, egress });
+    await p.create(req());
     await p.destroy('c1');
     expect(egress.closed).toEqual(['r1']);
+    expect(e.calls.map((c) => c.args[0])).toEqual(['ps', 'run', 'rm']);
     const failing = engine((a) => (a[0] === 'run' ? { stdout: '', stderr: 'no such image', code: 125 } : ok()));
     const f = fakeEgress();
     await expect(new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: failing.exec, egress: f }).create(req())).rejects.toThrow(/no such image/);
     expect(f.closed).toEqual(['r1']);
+  });
+
+  it('replaces a live container whose egress this process does not hold (a daemon restart): its socket is dead', async () => {
+    const e = engine((a) => {
+      if (a[0] === 'ps') return ok('c9\n');
+      if (a[0] === 'inspect') return ok(inspectLine('c9', true, 'r1', 'limited'));
+      if (a[0] === 'run') return ok('c10\n');
+      return ok();
+    });
+    const stale = new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: e.exec, egress: fakeEgress() });
+    expect(await stale.findByAttempt('r1')).toBeUndefined();
+    expect((await stale.create(req({ network: 'limited' }))).id).toBe('c10');
+    expect(e.calls.map((c) => c.args.slice(0, 2).join(' '))).toContain('rm -f');
+    const live = new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: e.exec, egress: fakeEgress(['r1']) });
+    expect(await live.findByAttempt('r1')).toEqual({ id: 'c9', network: 'limited', level: 'L3' });
   });
 
   it('returns the live container of the attempt instead of running a second one', async () => {

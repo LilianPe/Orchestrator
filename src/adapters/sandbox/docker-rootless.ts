@@ -25,7 +25,7 @@ export interface ContainerSandboxOptions {
    * The factory's egress proxy (ORC-213): each sandbox gets its run's socket and nothing else. Without
    * it a sandbox reaches nothing, whatever its level.
    */
-  egress?: Pick<EgressProxy, 'open' | 'close'>;
+  egress?: Pick<EgressProxy, 'open' | 'close' | 'isOpen' | 'caCertPath'>;
   /** The daemon's: its containers carry it, and its lookups see only those, so another daemon on the same engine is left alone. */
   instance?: string;
   /** Per container (ORC-218): a fork bomb or a memory hog in one attempt must not starve the others. No swap: a hog is killed, not thrashing the host. */
@@ -56,28 +56,26 @@ const INSTANCE = 'factory.instance';
 
 /** Where the run's proxy socket is mounted, and where the relay in front of it listens. */
 const EGRESS_SOCKET = '/run/factory/egress.sock';
+/** The factory CA's certificate, read-only: the only authority the sandbox's tools trust (the proxy decrypts every tunnel). */
+const EGRESS_CA = '/run/factory/egress-ca.crt';
 const PROXY = 'http://127.0.0.1:3128';
 /** PID 1 of a sandbox with an egress: TCP on the loopback to the proxy's socket, so every tool can use HTTP(S)_PROXY. */
 const RELAY = `const net=require('net');net.createServer((c)=>{const u=net.connect('${EGRESS_SOCKET}');c.pipe(u).pipe(c);c.on('error',()=>u.destroy());u.on('error',()=>c.destroy())}).listen(3128,'127.0.0.1')`;
 /**
- * The proxy's address for every tool, and the `http://` form of the hosts it never tunnels
- * (`INSPECTED` in src/network/levels.ts), so it sees their methods. A tool that goes to their
- * `https://` form anyway is refused: the proxy does not tunnel them.
+ * The proxy's address for every tool, and the factory CA as its trust: Node (claude, npm, yarn,
+ * factory-agent), OpenSSL (curl, Python), pip, git.
  */
 const EGRESS_ENV = [
-  ...['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy'].map((k) => `${k}=${PROXY}`),
+  ...['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'YARN_HTTP_PROXY', 'YARN_HTTPS_PROXY'].map((k) => `${k}=${PROXY}`),
   'NO_PROXY=localhost,127.0.0.1',
   'no_proxy=localhost,127.0.0.1',
   // Node's own fetch (factory-agent) reads the variables above only with it.
   'NODE_USE_ENV_PROXY=1',
-  'npm_config_registry=http://registry.npmjs.org/',
+  ...['NODE_EXTRA_CA_CERTS', 'SSL_CERT_FILE', 'CURL_CA_BUNDLE', 'REQUESTS_CA_BUNDLE', 'PIP_CERT', 'GIT_SSL_CAINFO', 'npm_config_cafile', 'YARN_CAFILE', 'YARN_HTTPS_CA_FILE_PATH'].map(
+    (k) => `${k}=${EGRESS_CA}`,
+  ),
   // Its POST would be refused at every install.
   'npm_config_audit=false',
-  'PIP_INDEX_URL=http://pypi.org/simple/',
-  'PIP_TRUSTED_HOST=pypi.org',
-  'GIT_CONFIG_COUNT=1',
-  'GIT_CONFIG_KEY_0=url.http://github.com/.insteadOf',
-  'GIT_CONFIG_VALUE_0=https://github.com/',
 ];
 
 /** Where the engines listen. A mount of one of them, or of a directory above one, hands the agent the engine, so root on the host. */
@@ -94,8 +92,11 @@ interface Info {
 export class ContainerSandboxProvider implements SandboxProvider {
   private readonly run: Exec;
   private readonly podman: boolean;
-  /** Ids seen through create, findByAttempt or list: `spawnCommand` is sync and checks against them (after a restart, list() first). */
-  private readonly known = new Set<string>();
+  /**
+   * Ids seen through create, findByAttempt or list, with their run: `spawnCommand` is sync and checks
+   * against them (after a restart, list() first), `destroy` closes the run's egress from it.
+   */
+  private readonly known = new Map<string, string>();
 
   constructor(private readonly opts: ContainerSandboxOptions) {
     this.run = opts.exec ?? execCmd;
@@ -111,13 +112,12 @@ export class ContainerSandboxProvider implements SandboxProvider {
     const mounts = [{ host: req.workspacePath, target: WORKSPACE_TARGET, readOnly: false }, ...req.mounts].map(mountArg);
 
     for (const c of await this.byLabel(`${ATTEMPT}=${req.runId}`)) {
-      if (!c.running) {
+      // Stopped, or from before a restart: its egress socket is gone (the mount holds an unlinked inode).
+      if (!this.usable(c)) {
         await this.destroy(c.id);
         continue;
       }
       if (c.network !== req.network) throw new Error(`container sandbox: run ${req.runId} has network ${c.network}, asked ${req.network}`);
-      // A no-op for a run this process opened; a live container from before a restart is recover()'s to destroy.
-      await this.opts.egress?.open(req.runId, { level: req.network, allow: req.allow ?? [] });
       return this.seen(c);
     }
     const egress = this.opts.egress && (await this.opts.egress.open(req.runId, { level: req.network, allow: req.allow ?? [] }));
@@ -132,7 +132,13 @@ export class ContainerSandboxProvider implements SandboxProvider {
       ...(this.podman ? ['--userns=keep-id'] : []), '--user', `${this.opts.uid}:${this.opts.gid}`,
       '-e', `HOME=${SANDBOX_HOME}`,
       ...mounts.flatMap((m) => ['--mount', m]),
-      ...(egress ? ['--mount', mountArg({ host: egress, target: EGRESS_SOCKET, readOnly: false }), ...EGRESS_ENV.flatMap((v) => ['-e', v])] : []),
+      ...(egress
+        ? [
+            '--mount', mountArg({ host: egress, target: EGRESS_SOCKET, readOnly: false }),
+            '--mount', mountArg({ host: this.opts.egress!.caCertPath, target: EGRESS_CA, readOnly: true }),
+            ...EGRESS_ENV.flatMap((v) => ['-e', v]),
+          ]
+        : []),
       '--workdir', WORKSPACE_TARGET,
       // Always: no route, no DNS, no UDP. The level is the proxy's to apply (ORC-213).
       '--network', 'none',
@@ -145,7 +151,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
       await this.opts.egress?.close(req.runId);
       throw err;
     }
-    this.known.add(id);
+    this.known.set(id, req.runId);
     return { id, network: req.network, level: 'L3' };
   }
 
@@ -166,7 +172,8 @@ export class ContainerSandboxProvider implements SandboxProvider {
   }
 
   async findByAttempt(runId: string): Promise<Sandbox | undefined> {
-    const c = (await this.byLabel(`${ATTEMPT}=${runId}`)).find((x) => x.running);
+    // A container this provider cannot use is not handed back: the router then asks create(), which replaces it.
+    const c = (await this.byLabel(`${ATTEMPT}=${runId}`)).find((x) => this.usable(x));
     return c && this.seen(c);
   }
 
@@ -176,7 +183,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
   }
 
   async destroy(id: string): Promise<void> {
-    const runId = this.opts.egress && (await this.inspect([id]))[0]?.runId;
+    const runId = this.known.get(id);
     const r = await this.engine(['rm', '-f', id]);
     if (r.code !== 0 && !/no such container/i.test(r.stderr)) throw new Error(`container sandbox: rm ${id}: ${r.stderr.trim()}`);
     this.known.delete(id);
@@ -184,8 +191,13 @@ export class ContainerSandboxProvider implements SandboxProvider {
   }
 
   private seen(c: Info): Sandbox {
-    this.known.add(c.id);
+    this.known.set(c.id, c.runId);
     return sandbox(c);
+  }
+
+  /** Running, and with its egress listening in this process if it has one. */
+  private usable(c: Info): boolean {
+    return c.running && (!this.opts.egress || this.opts.egress.isOpen(c.runId));
   }
 
   private execFlags(opts: SandboxExecOptions): string[] {
