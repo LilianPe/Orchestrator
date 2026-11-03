@@ -1,5 +1,5 @@
 import type { FeedbackItem } from '../../core/types.js';
-import { execCmd, mustExec, type Exec } from '../exec.js';
+import { execCmd, execFailure, mustExec, type Exec } from '../exec.js';
 import { REPO_PERMISSIONS, type RepoPermission, type RepoPermissions } from '../roles/types.js';
 import type { Forge, PrInfo } from './types.js';
 
@@ -78,7 +78,7 @@ export class GhCliForge implements Forge, RepoPermissions {
         checks = aggregateChecks(list.map((c) => c.bucket));
         failedChecks = list.filter((c) => c.bucket === 'fail' || c.bucket === 'cancel').map((c) => c.name);
       } else if (r.code !== 0 && !NO_CHECKS.test(r.stderr)) {
-        throw new Error(`gh ${args.join(' ')}: ${r.stderr.trim() || r.stdout.trim()}`);
+        throw execFailure('gh', args, r);
       }
     }
     return {

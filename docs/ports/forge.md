@@ -10,7 +10,7 @@ La forge de code, en lecture : la PR d'une branche, l'état de ses checks, ses f
 
 | Méthode | Ce qu'elle garantit | Rejouée | Erreur |
 |---|---|---|---|
-| `findPr(repo, branche)` | `undefined` sans PR ; sinon la PR de la branche (numéro, URL `https://`, état `OPEN`/`MERGED`/`CLOSED`), `checks` parmi `pending`/`pass`/`fail`/`none`, `failedChecks` non vide exactement quand `checks` vaut `fail` ; une copie | lecture : même réponse | rejette si la forge ne répond pas, y compris quand elle rend la PR mais pas ses checks (ORC-272) ; une PR ouverte sans aucun check donne `none`, des checks illisibles aussi |
+| `findPr(repo, branche)` | `undefined` sans PR ; sinon la PR de la branche (numéro, URL `https://`, état `OPEN`/`MERGED`/`CLOSED`), `checks` parmi `pending`/`pass`/`fail`/`none`, `failedChecks` non vide exactement quand `checks` vaut `fail` ; une copie | lecture : même réponse | rejette si la forge ne répond pas, y compris quand elle rend la PR mais pas ses checks ; une PR ouverte sans aucun check donne `none`, des checks illisibles aussi |
 | `unresolvedReviewComments(repo, n)` | les fils de review non résolus, en `FeedbackItem` de source `review` (auteur, corps, date) ; une copie | lecture | rejette si la forge ne répond pas |
 
 ## Idempotence
