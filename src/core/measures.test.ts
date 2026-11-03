@@ -23,8 +23,22 @@ describe('ticketMeasures (ORC-235)', () => {
   it('is empty for a ticket with no facts', () => {
     expect(ticketMeasures('p', 'REL-1', facts({}))).toEqual({
       projectId: 'p', ticketId: 'REL-1', mergedAt: null, tokens: null, attempts: 0, attemptsWithoutTokens: 0, usageLimitShare: null,
-      firstTry: null, reworks: [], humanReviewMinutes: null, revertedWithin14Days: null, revertWindowEndsAt: null, ciCost: null, messages: [],
+      firstTry: null, reworks: [], humanReviewMinutes: null, revertedWithin14Days: null, revertWindowEndsAt: null, ciCost: null, messages: [], red: [],
     });
+  });
+
+  it('lists the verdicts of the red check, which are not reworks (ORC-123)', () => {
+    const failures = [{ command: 'npm test -- a.test.ts', exitCode: 1, output: 'SyntaxError' }];
+    const m = ticketMeasures('p', 'REL-1', facts({
+      events: [
+        ev('v1', 'verify.failed', 10, { runId: 'r1', job: 'tests', failures, red: 'compile' }),
+        ev('v2', 'verify.passed', 20, { runId: 'r2', job: 'tests', red: 'assertion' }),
+        ev('v3', 'verify.passed', 30, { runId: 'r3', job: 'dev' }),
+        ev('m', 'pr.merged', 40, { number: 1, url: 'u', branch: 'b' }),
+      ],
+    }));
+    expect(m.red).toEqual([{ id: 'v1', verified: false, cause: 'compile' }, { id: 'v2', verified: true, cause: 'assertion' }]);
+    expect(m).toMatchObject({ firstTry: true, reworks: [] });
   });
 
   it('never reads what the agent wrote: its last text and run.finished claim nothing', () => {

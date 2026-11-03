@@ -61,6 +61,25 @@ describe('GitWorkspaces', () => {
     expect(await ws.head(join(root, 'nowhere'))).toBeUndefined();
   });
 
+  it('lists what the worktree commits changed since the trunk, and reads paths at baseSha (ORC-123)', async () => {
+    const { repo, root } = fixtureRepo();
+    const ws = new GitWorkspaces({ root });
+    const w = await ws.prepare(req(repo));
+    git(w.path, 'config', 'user.email', 't@t');
+    git(w.path, 'config', 'user.name', 't');
+    writeFileSync(join(w.path, 'export.test.ts'), 'x\n');
+    git(w.path, 'rm', '-q', 'README.md');
+    git(w.path, 'add', '.');
+    git(w.path, 'commit', '-m', 'tests');
+    // Uncommitted: not the step's work.
+    writeFileSync(join(w.path, 'draft.ts'), 'x\n');
+    const diff = (await ws.sinceTrunk(repo, w.path))!;
+    expect(diff.changed).toEqual([{ path: 'README.md', deleted: true }, { path: 'export.test.ts', deleted: false }]);
+    expect(await diff.existsAtBase('README.md')).toBe(true);
+    expect(await diff.existsAtBase('export.test.ts')).toBe(false);
+    expect(await ws.sinceTrunk(repo, join(root, 'nowhere'))).toBeUndefined();
+  });
+
   it('prepares the read-only trunk and a knowledge worktree', async () => {
     const { repo, root } = fixtureRepo();
     const kb = fixtureRepo();

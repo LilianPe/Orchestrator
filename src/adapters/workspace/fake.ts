@@ -1,5 +1,5 @@
 import { branchName } from '../../core/naming.js';
-import type { Workspace, WorkspaceManager, WorkspaceRequest } from './types.js';
+import type { TrunkDiff, Workspace, WorkspaceManager, WorkspaceRequest } from './types.js';
 
 export class FakeWorkspaces implements WorkspaceManager {
   prepared: WorkspaceRequest[] = [];
@@ -29,6 +29,14 @@ export class FakeWorkspaces implements WorkspaceManager {
 
   async head(path: string): Promise<string | undefined> {
     return this.heads.get(path);
+  }
+
+  /** What each worktree's commits changed since the trunk, and the paths at baseSha, as a test sets them (ORC-123). */
+  trunkDiffs = new Map<string, { changed: TrunkDiff['changed']; atBase?: string[] }>();
+
+  async sinceTrunk(_repoPath: string, path: string): Promise<TrunkDiff | undefined> {
+    const d = this.trunkDiffs.get(path);
+    return d && { changed: d.changed, existsAtBase: async (p) => d.atBase?.includes(p) ?? false };
   }
 
   async resetClaudeDir(path: string): Promise<void> {

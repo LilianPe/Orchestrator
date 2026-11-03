@@ -38,10 +38,34 @@ function stop(out: Decision, reason = STOPPED, body = STOP_MESSAGE): Decision {
   return out;
 }
 
-function success(out: Decision, job: JobSpec, runId: string, output?: AgentOutput): Decision {
+/** The job's `on_success`, its `run` included (ORC-123: `tests` starts `dev`). */
+function success(out: Decision, at: { event: FactoryEvent; ticket: TicketState | undefined; workflow: Workflow }, job: JobSpec, runId: string, output?: AgentOutput): Decision {
   if (job.onSuccess.move) out.effects.push({ kind: 'move', to: job.onSuccess.move });
   if (job.onSuccess.post) out.effects.push({ kind: 'post_output', style: job.onSuccess.post, runId, ...(output ? { output } : {}) });
+  const next = job.onSuccess.run ? at.workflow.jobs[job.onSuccess.run] : undefined;
+  if (next) startRun(out, at.event, at.ticket, next, { input: next.input });
   return out;
+}
+
+/**
+ * The `red` check found no red for the right reason (ORC-123). In measure mode the run goes on, and the decision's
+ * trace says what the check would have blocked; a step that wrote something else than tests fails all the same. In
+ * blocking mode, the job goes back with the verdict, `red.attempts` checks at most, then the ticket is blocked.
+ */
+function redFailed(out: Decision, at: { event: FactoryEvent<'verify.failed'>; ticket: TicketState | undefined; workflow: Workflow }, job: JobSpec, red: NonNullable<JobSpec['red']>): Decision {
+  const { red: cause = 'error', failures, runId } = at.event.payload;
+  if (red.mode === 'measure' && cause !== 'scope') {
+    out.trace.push(`red: aurait bloqué (${cause}), mode mesure : le run continue`);
+    return success(out, at, job, runId);
+  }
+  const used = at.ticket?.redAttempts ?? 0;
+  if (used + 1 < red.attempts) {
+    out.events.push({ type: 'ticket.patched', patch: { redAttempts: used + 1 } });
+    startRun(out, at.event, at.ticket, job, { input: 'verify_failures', inputText: JSON.stringify(failures), resume: true });
+    return out;
+  }
+  const reason = `Rouge non vérifié après ${red.attempts} tentatives de ${job.name}.`;
+  return block(out, reason, `${reason}\n${formatFailuresShort(failures)}\nRépondez dans ce fil pour relancer.`);
 }
 
 function block(out: Decision, reason: string, body: string): Decision {
@@ -556,7 +580,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       if (typeof outcome === 'object') return ticket?.blocked ? out : block(out, outcome.reason, outcome.body);
       if (outcome === 'success' && ticket?.blocked && job.queue === 'dev') return out;
       if (outcome === 'success') {
-        if (job.verify.length === 0) return success(out, job, runId, output);
+        if (job.verify.length === 0 && !job.red) return success(out, { event, ticket, workflow }, job, runId, output);
         out.events.push({ type: 'verify.started', runId });
         out.effects.push({ kind: 'run_verify', runId, job: jobName, ...(output ? { output } : {}) });
         return out;
@@ -574,12 +598,15 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
     case 'verify.passed': {
       const job = workflow.jobs[event.payload.job];
       if (!job) return out;
-      out.events.push({ type: 'ticket.patched', patch: { verifyAttempts: 0, ...(ticket?.repeatedFailure ? { repeatedFailure: null } : {}) } });
-      return success(out, job, event.payload.runId, event.payload.output);
+      const patch = { verifyAttempts: 0, ...(ticket?.repeatedFailure ? { repeatedFailure: null } : {}), ...(ticket?.redAttempts ? { redAttempts: 0 } : {}) };
+      out.events.push({ type: 'ticket.patched', patch });
+      return success(out, { event, ticket, workflow }, job, event.payload.runId, event.payload.output);
     }
     case 'verify.failed': {
       const used = ticket?.verifyAttempts ?? 0;
       const { failures, job } = event.payload;
+      const checked = workflow.jobs[job];
+      if (checked?.red) return redFailed(out, { event, ticket, workflow }, checked, checked.red);
       const repeated = repeatedFailure(ticket, event.payload);
       if (repeated && repeated.count >= (workflow.limits.repeatedFailures ?? Infinity)) {
         out.events.push({ type: 'ticket.patched', patch: { repeatedFailure: repeated } });

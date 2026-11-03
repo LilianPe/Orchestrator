@@ -708,6 +708,44 @@ describe('decide — built-ins', () => {
   });
 });
 
+describe('decide — the tests step and the red check (ORC-123)', () => {
+  const blocking = { ...workflow, jobs: { ...workflow.jobs, tests: { ...workflow.jobs['tests']!, red: { ...workflow.jobs['tests']!.red!, mode: 'blocking' as const } } } };
+  const unverified = (runId: string, red: 'compile' | 'scope' = 'compile') =>
+    ev('verify.failed', { runId, job: 'tests', failures: [{ command: 'npm test -- a.test.ts', exitCode: 1, output: 'SyntaxError' }], red });
+
+  it('asks for the red check after the tests step, which has no verify commands', () => {
+    const out = decide(ticket({ activeRunId: 'r1' }), ev('run.finished', { runId: 'r1', job: 'tests', outcome: 'success', costUsd: 1, turns: 3, lastText: 'ok' }), workflow);
+    expect(out).toEqual(decision({ events: [{ type: 'verify.started', runId: 'r1' }], effects: [{ kind: 'run_verify', runId: 'r1', job: 'tests' }] }));
+  });
+
+  it('a verified red starts the build', () => {
+    const out = decide(ticket({ verifyingRunId: 'r1', redAttempts: 1 }), ev('verify.passed', { runId: 'r1', job: 'tests', red: 'assertion' }), workflow);
+    expect(out.events).toEqual([{ type: 'ticket.patched', patch: { verifyAttempts: 0, redAttempts: 0 } }]);
+    expect(out.effects).toEqual([{ kind: 'start_run', job: 'dev', input: undefined }]);
+  });
+
+  it('in measure mode, an unverified red is traced « aurait bloqué » and the build starts all the same', () => {
+    const out = decide(ticket({ verifyingRunId: 'r1' }), unverified('r1'), workflow);
+    expect(out.events).toEqual([]);
+    expect(out.effects).toEqual([{ kind: 'start_run', job: 'dev', input: undefined }]);
+    expect(out.trace).toContain('red: aurait bloqué (compile), mode mesure : le run continue');
+  });
+
+  it('in blocking mode, an unverified red goes back to the tests step once, then the 2nd blocks (counter red)', () => {
+    const first = decide(ticket({ verifyingRunId: 'r1' }), unverified('r1'), blocking);
+    expect(first.events).toEqual([{ type: 'ticket.patched', patch: { redAttempts: 1 } }]);
+    expect(first.effects[0]).toMatchObject({ kind: 'start_run', job: 'tests', input: 'verify_failures', resume: true });
+    const second = decide(ticket({ verifyingRunId: 'r2', redAttempts: 1 }), unverified('r2'), blocking);
+    expect(kinds(second)).toEqual({ events: ['ticket.blocked'], effects: ['activity', 'labels'], timers: [] });
+    expect(second.events[0]).toMatchObject({ reason: 'Rouge non vérifié après 2 tentatives de tests.' });
+  });
+
+  it('a tests step that wrote something else than tests fails, even in measure mode', () => {
+    const out = decide(ticket({ verifyingRunId: 'r1' }), unverified('r1', 'scope'), workflow);
+    expect(out.effects[0]).toMatchObject({ kind: 'start_run', job: 'tests', input: 'verify_failures' });
+  });
+});
+
 describe('decide — dead letters (ORC-175)', () => {
   const added = { eventId: 'l1', eventType: 'label.changed', error: 'boom', failures: 1 };
   const reason = 'Événement l1 mis de côté (label.changed) : sa décision a échoué (boom).';

@@ -12,7 +12,7 @@ export const factoryDefault: Preset = {
   counters: {
     spec_check: { limit: 1 },
     spec_review: { limit: 3 },
-    // Past 2, Blocked, or `spec_impossible` once the red check exists (ORC-123).
+    // The red check's checks in blocking mode, the job's `red.attempts`: the 2nd unverified red blocks (ORC-123).
     red: { limit: 2 },
     verify: { limit: 3 },
     review_ci: { limit: 2 },

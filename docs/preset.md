@@ -22,7 +22,7 @@ Chaque étape a un type : `spec_check`, `agent_step`, `verify` (modes `red`, `fr
 | -- | -- | -- | -- |
 | `spec_check` échoue → `spec_draft` | `spec_check` | 1 | Bloqué |
 | `spec_review` « Modifier » → `spec_draft` | `spec_review` | 3 | Bloqué |
-| Rouge non vérifié → `tests` | `red` | 2 | Bloqué (ou `spec_impossible`, ORC-123) |
+| Rouge non vérifié → `tests` | `red` | 2 contrôles en mode bloquant (le 2e rouge non vérifié bloque) | Bloqué ; l'agent peut aussi rendre `spec_impossible` |
 | `verify` échoue → `build` (ou `verify_fix` → `fix`) | `verify` | 3 | Bloqué |
 | Review IA ou CI rouge → `fix` | `review_ci` | 2, un seul compteur par run | Bloqué |
 | Retours humains → `fix` | `human_review` | 3, distincts des tours IA | Bloqué |
@@ -57,8 +57,38 @@ Le niveau de réseau se choisit par dépôt (Limité par défaut) ; une étape p
 | `counters.verify` (3) | `limits.verifyAttempts` = 4 | 3 retours au run après un contrôle en échec ; le 4e échec bloque |
 | `counters.review_ci` (2) | `limits.ciFixAttempts` = 2 | 2 relances `fix-ci` sur CI rouge ; la suivante bloque. Les tours de review IA rejoindront ce compteur avec ORC-184 |
 | `sameFailure` (3) | `limits.repeatedFailures` = 3 | même échec sur un worktree inchangé, 3 fois de suite : Bloqué, cause « Boucle » |
+| `counters.red` (2) | `jobs.<job>.red.attempts` = 2 | en mode bloquant, un rouge non vérifié renvoie à `tests` ; le 2e bloque |
 
 `verify_attempts` et `ci_fix_attempts` de `workflow.yml` surchargent encore les deux premières, jusqu'au retrait du YAML (ORC-177).
+
+## Étape `tests` et contrôle `red` (ORC-123)
+
+L'étape `tests` (agent, skill `factory:tests`, Sonnet, effort medium, réseau du dépôt) écrit **seulement** les tests qui traduisent les critères d'acceptation, et les commite. L'usine ne la croit pas sur parole : le contrôle `red` (`src/checks/red.ts`) constate lui-même.
+
+1. Il lit les fichiers changés par les commits de l'étape depuis le tronc (`baseSha` : leur merge-base avec `origin/<tronc>`), sur le dépôt de l'usine. Un fichier qui n'est pas un test (règle unique de `src/checks/test-files.ts`) fait échouer l'étape, sans rien lancer.
+2. Il lance les seuls tests ajoutés ou modifiés avec la commande du job (`red.command`, `npm test --` dans le pack), là où `verify` lance ses commandes.
+3. Il classe la sortie (vitest, jest, pytest) :
+
+| Sortie | Cause | Rouge |
+| -- | -- | -- |
+| échec sur une assertion (`AssertionError`, `expect(received)`, `E assert`) | `assertion` | vérifié |
+| « Cannot find module » (TypeScript) ou `ModuleNotFoundError` (Python) vers un chemin absent à `baseSha` (`git cat-file -e`) | `missing_module` | vérifié |
+| même erreur vers un chemin présent à `baseSha`, ou vers un paquet | `module_at_base` | refusé |
+| erreur de syntaxe, de compilation, de chargement ou de collecte | `compile` | refusé |
+| échec sans assertion (erreur à l'exécution), délai dépassé | `error` | refusé |
+| aucun test lancé, ou aucun test commité | `no_tests` | refusé |
+| tests déjà verts | `passing` | refusé |
+| fichier hors tests modifié | `scope` | refusé |
+
+Le verdict revient comme le résultat de `verify` : `verify.passed` ou `verify.failed`, avec le champ `red` qui porte la cause. Un rouge vérifié démarre le job suivant (`on_success.run`, `dev` dans le pack).
+
+**Mode mesure.** Sur les 20 premiers tickets, le contrôle est en mode mesure : un rouge non vérifié ne bloque pas, la décision porte la trace « red: aurait bloqué (<cause>), mode mesure : le run continue », et le build démarre. Seul `scope` fait échouer l'étape dans les deux modes. Les verdicts sont dans les mesures du ticket (`red` de `TicketMeasures`, ORC-235) : un rouge non `verified` est ce que le contrôle aurait bloqué.
+
+**Mode bloquant.** Un rouge non vérifié renvoie à `tests` (session reprise, verdict en entrée), borné par le compteur `red`, puis Bloqué.
+
+Le drapeau vit dans le job, figé avec la version du workflow de chaque ticket : `jobs.tests.red.mode: measure | blocking` (`measure` par défaut). Le passer en `blocking` dans `.factory/workflow.yml`, après validation sur les tickets dorés (ORC-236).
+
+Le job `tests` du pack est inactif tant qu'aucune règle ne le lance : un dépôt l'active en faisant démarrer la délégation par lui (`ticket.delegated: - { when: "state in [todo, dev] && !blocked", run: tests }`). Les jobs sans `red` gardent le flux `dev` d'avant.
 
 ## Compilation et version
 

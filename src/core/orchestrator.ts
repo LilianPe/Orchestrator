@@ -59,6 +59,7 @@ import {
 } from './types.js';
 import { VERIFY_TIMEOUT_MS, type Verifier } from './verify.js';
 import { PRODUCT_NAME } from '../product.js';
+import { checkRed, type RedResult } from '../checks/red.js';
 
 /**
  * Every run's Claude Code (ORC-284): no auto-memory (ORC-205), telemetry off by both variables ORC-128
@@ -474,6 +475,27 @@ export class Orchestrator {
   }
 
   /**
+   * The `red` check of a finished `tests` run (ORC-123): its commits since the trunk, read on the factory's
+   * repository, then its added tests run where `verify` runs its commands. A failure to read is no verdict on the
+   * tests: an `error`, which the mode decides on like any other.
+   */
+  private async checkRed(project: ProjectRuntime, run: RunRecord, command: string): Promise<RedResult> {
+    try {
+      const diff = await this.d.workspaces.sinceTrunk(project.repoPath, run.cwd);
+      if (!diff) throw new Error(`aucun worktree à ${run.cwd}`);
+      return await checkRed(command, {
+        ...diff,
+        run: async (cmd) => {
+          const res = await this.d.verify(run.cwd, [cmd]);
+          return res.ok ? { exitCode: 0, output: '' } : { exitCode: res.failures[0]!.exitCode, output: res.failures[0]!.output };
+        },
+      });
+    } catch (err) {
+      return { verified: false, cause: 'error', command: '', exitCode: null, detail: `Le contrôle du rouge n'a pas pu tourner : ${(err as Error).message}` };
+    }
+  }
+
+  /**
    * Blocks a ticket from outside an event (the agent's question through /agent/ask). It runs in
    * the ticket's worker task, so its read-modify-write never interleaves with a decision's, and
    * after the events accepted before it (their inbox write in flight included).
@@ -854,6 +876,17 @@ export class Orchestrator {
         if (!run || !job) return;
         this.track(
           (async () => {
+            if (job.red) {
+              const red = await this.checkRed(project, run, job.red.command);
+              const base = { ...TRUSTED, at: clock.now(), projectId: project.id, ticketId, id: `check:${run.id}` };
+              const failures = [{ command: red.command || 'factory/red', exitCode: red.exitCode, output: red.detail }];
+              await this.submitResult(
+                red.verified
+                  ? { ...base, type: 'verify.passed', payload: { runId: run.id, job: job.name, red: red.cause, ...(c.output ? { output: c.output } : {}) } }
+                  : { ...base, type: 'verify.failed', payload: { runId: run.id, job: job.name, failures, red: red.cause } },
+              );
+              return;
+            }
             const res = await this.d.verify(run.cwd, job.verify);
             const base = { ...TRUSTED, at: clock.now(), projectId: project.id, ticketId };
             const event: FactoryEvent = res.ok

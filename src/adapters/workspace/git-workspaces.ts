@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { branchName } from '../../core/naming.js';
 import { execCmd, mustExec, type Exec } from '../exec.js';
-import type { Workspace, WorkspaceManager, WorkspaceRequest } from './types.js';
+import type { TrunkDiff, Workspace, WorkspaceManager, WorkspaceRequest } from './types.js';
 
 function assertSafe(id: string): void {
   if (/[\\/]/.test(id) || id.includes('..')) throw new Error(`Identifiant invalide : ${id}`);
@@ -84,6 +84,17 @@ export class GitWorkspaces implements WorkspaceManager {
     if (!existsSync(path)) return undefined;
     const r = await this.exec('git', ['-C', path, 'rev-parse', 'HEAD']);
     return r.code === 0 ? r.stdout.trim() : undefined;
+  }
+
+  async sinceTrunk(repoPath: string, path: string): Promise<TrunkDiff | undefined> {
+    const head = await this.head(path);
+    if (!head) return undefined;
+    const base = (await this.git(repoPath, 'merge-base', `origin/${await this.trunk(repoPath)}`, head)).trim();
+    // Without renames, a source file moved into a test is its deletion: a change outside the tests.
+    const fields = (await this.git(repoPath, 'diff', '--name-status', '--no-renames', '-z', base, head)).split('\0').filter(Boolean);
+    const changed: TrunkDiff['changed'] = [];
+    for (let i = 0; i + 1 < fields.length; i += 2) changed.push({ path: fields[i + 1]!, deleted: fields[i] === 'D' });
+    return { changed, existsAtBase: async (p) => (await this.exec('git', ['-C', repoPath, 'cat-file', '-e', `${base}:${p}`])).code === 0 };
   }
 
   async gitCommonDir(path: string): Promise<string> {

@@ -35,10 +35,11 @@ export const rawJobSchema = z
     verify: z.array(z.string()).optional(),
     pickup: z.boolean().optional(),
     structured_output: z.boolean().optional(),
+    red: z.object({ command: z.string().min(1), mode: z.enum(['measure', 'blocking']) }).partial().strict().optional(),
     limits: rawLimits.optional(),
     on_start: z.object({ move: logical.optional() }).strict().optional(),
     on_success: z
-      .object({ move: logical.optional(), post: z.enum(['summary', 'reply', 'synthesis']).optional() })
+      .object({ move: logical.optional(), post: z.enum(['summary', 'reply', 'synthesis']).optional(), run: z.string().optional() })
       .strict()
       .optional(),
   })
@@ -146,9 +147,16 @@ export interface JobSpec {
    * then the gate goes and `attempt` decides alone. Absent from versions frozen before it.
    */
   structuredOutput?: boolean;
+  /**
+   * The `red` factory check after the job (ORC-123) instead of `verify`: its added tests must fail for the right
+   * reason. `measure` records what it would have blocked and goes on; `blocking` sends the job back, `attempts`
+   * checks at most (counter `red` of the preset), then blocks. Absent from the jobs and versions without it.
+   */
+  red?: { command: string; mode: 'measure' | 'blocking'; attempts: number };
   limits: RunLimits;
   onStart: { move?: LogicalState };
-  onSuccess: { move?: LogicalState; post?: 'summary' | 'reply' | 'synthesis' };
+  /** `run`: the job started once this one succeeded (ORC-123: `tests` then `dev`). */
+  onSuccess: { move?: LogicalState; post?: 'summary' | 'reply' | 'synthesis'; run?: string };
 }
 
 export interface Workflow {

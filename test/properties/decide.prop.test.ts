@@ -157,10 +157,11 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
             for (const step of decided(r)) {
               const reset = step.decision.events.some((e) => e.type === 'ticket.patched' && e.patch.verifyAttempts === 0);
               if (reset) relaunches = 0;
-              const resumed = step.decision.effects.filter((e) => e.kind === 'start_run' && e.input === 'verify_failures');
+              // The red check's returns have their own counter: the next property.
+              const resumed = step.decision.effects.filter((e) => e.kind === 'start_run' && e.input === 'verify_failures' && !w.jobs[e.job]?.red);
               relaunches += resumed.length;
               expect(relaunches).toBeLessThanOrEqual(attempts - 1);
-              if (step.event.type === 'verify.failed' && !isFenced(step.decision)) {
+              if (step.event.type === 'verify.failed' && !isFenced(step.decision) && !w.jobs[step.event.payload.job]?.red) {
                 const used = step.before?.verifyAttempts ?? 0;
                 if (used + 1 >= attempts) {
                   expect(resumed).toEqual([]);
@@ -170,6 +171,33 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
             }
           }),
           params<[Sequences, number]>(),
+        );
+      },
+      TIMEOUT,
+    );
+
+    it(
+      'the red check in blocking mode sends the tests step back at most red.attempts - 1 times, then blocks (ORC-123)',
+      () => {
+        const base = workflow();
+        const tests = base.jobs['tests']!;
+        const w = { ...base, jobs: { ...base.jobs, tests: { ...tests, red: { ...tests.red!, mode: 'blocking' as const } } } };
+        const bound = tests.red!.attempts;
+        fc.assert(
+          fc.property(sequences, (s) => {
+            let relaunches = 0;
+            for (const step of decided(fold(s.withDuplicates, w))) {
+              if (step.decision.events.some((e) => e.type === 'ticket.patched' && e.patch.redAttempts === 0)) relaunches = 0;
+              const resumed = step.decision.effects.filter((e) => e.kind === 'start_run' && e.job === 'tests' && e.input === 'verify_failures');
+              relaunches += resumed.length;
+              expect(relaunches).toBeLessThanOrEqual(bound - 1);
+              if (step.event.type === 'verify.failed' && step.event.payload.job === 'tests' && !isFenced(step.decision) && (step.before?.redAttempts ?? 0) + 1 >= bound) {
+                expect(resumed).toEqual([]);
+                expect(step.decision.events.map((e) => e.type)).toContain('ticket.blocked');
+              }
+            }
+          }),
+          params<[Sequences]>(),
         );
       },
       TIMEOUT,
