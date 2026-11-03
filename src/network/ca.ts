@@ -1,4 +1,4 @@
-import { generateKeyPairSync, randomBytes } from 'node:crypto';
+import { generateKeyPair, randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { isIP } from 'node:net';
 import { join } from 'node:path';
@@ -16,12 +16,12 @@ export interface FactoryCa {
 const DAY = 24 * 60 * 60 * 1000;
 
 /** `<dir>/ca.crt` and `<dir>/ca.key` (0600), made at the first call. */
-export function loadOrCreateCa(dir: string): FactoryCa {
+export async function loadOrCreateCa(dir: string): Promise<FactoryCa> {
   const certPath = join(dir, 'ca.crt');
   const keyPath = join(dir, 'ca.key');
   if (existsSync(certPath) && existsSync(keyPath)) return { certPem: readFileSync(certPath, 'utf8'), keyPem: readFileSync(keyPath, 'utf8'), certPath };
   mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const { publicKey, privateKey } = rsa();
+  const { publicKey, privateKey } = await rsa();
   const cert = forge.pki.createCertificate();
   cert.publicKey = forge.pki.publicKeyFromPem(publicKey);
   cert.serialNumber = serial();
@@ -42,16 +42,22 @@ export function loadOrCreateCa(dir: string): FactoryCa {
   return { certPem, keyPem: privateKey, certPath };
 }
 
-/** Leaf certificates signed by the CA, one per host, cached; one key for all of them. */
+/**
+ * Leaf certificates signed by the CA, one per host, cached; one key for all of them, made once. A
+ * miss costs one forge signature (milliseconds, on the event loop); a hit is free.
+ */
 export class LeafIssuer {
-  private readonly key = rsa();
   private readonly caCert: forge.pki.Certificate;
   private readonly caKey: forge.pki.rsa.PrivateKey;
   private readonly cache = new Map<string, { ctx: SecureContext; pem: string; until: number }>();
 
-  constructor(ca: FactoryCa) {
+  private constructor(ca: FactoryCa, private readonly key: { publicKey: string; privateKey: string }) {
     this.caCert = forge.pki.certificateFromPem(ca.certPem);
     this.caKey = forge.pki.privateKeyFromPem(ca.keyPem);
+  }
+
+  static async create(ca: FactoryCa): Promise<LeafIssuer> {
+    return new LeafIssuer(ca, await rsa());
   }
 
   /** The TLS context the proxy presents for `host`. */
@@ -90,8 +96,13 @@ export class LeafIssuer {
   }
 }
 
-function rsa() {
-  return generateKeyPairSync('rsa', { modulusLength: 2048, publicKeyEncoding: { type: 'spki', format: 'pem' }, privateKeyEncoding: { type: 'pkcs8', format: 'pem' } });
+/** Off the event loop: an RSA key takes tens of milliseconds. */
+function rsa(): Promise<{ publicKey: string; privateKey: string }> {
+  return new Promise((ok, ko) =>
+    generateKeyPair('rsa', { modulusLength: 2048, publicKeyEncoding: { type: 'spki', format: 'pem' }, privateKeyEncoding: { type: 'pkcs8', format: 'pem' } }, (err, publicKey, privateKey) =>
+      err ? ko(err) : ok({ publicKey, privateKey }),
+    ),
+  );
 }
 
 /** A positive serial: 16 random bytes, the first below 0x80. */

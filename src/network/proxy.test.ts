@@ -16,10 +16,13 @@ let agentPort = 0;
 
 /** A docs host of its own, `docs.test`, on HTTPS under a CA the proxy's upstream trusts in these tests. */
 const upDir = mkdtempSync(join(tmpdir(), 'egress-up-'));
-const upCa = loadOrCreateCa(join(upDir, 'ca'));
-const upIssuer = new LeafIssuer(upCa);
+const upCa = await loadOrCreateCa(join(upDir, 'ca'));
+const upIssuer = await LeafIssuer.create(upCa);
 const upstream = createHttpsServer({ SNICallback: (name, cb) => cb(null, upIssuer.context(name)) }, (req, res) => {
   req.resume();
+  // Half a body, then the connection cut; or a response that never ends.
+  if (req.url === '/cut') return void res.writeHead(200, { 'content-length': '100' }).write('half', () => res.destroy());
+  if (req.url === '/slow') return void res.writeHead(200).write('start');
   req.on('end', () => res.end(`up ${req.method} ${req.headers.host} ${req.url}`));
 });
 const toLocal = ((_h: string, opts: { all?: boolean }, cb: (e: null, a: unknown, f?: number) => void) =>
@@ -90,6 +93,7 @@ async function viaTls(socketPath: string, host: string, method: string, path: st
       let body = '';
       res.on('data', (c: Buffer) => (body += c));
       res.on('end', () => ok({ status: res.statusCode ?? 0, body }));
+      res.on('close', () => res.complete || ko(new Error('response cut')));
     });
     req.on('error', ko).end();
   });
@@ -160,12 +164,13 @@ describe('EgressProxy', () => {
     expect((await journal('run-1')).map((e) => e.ok)).toEqual([false, false, false]);
   });
 
-  it('tells private addresses from public ones', () => {
+  it('tells private addresses from public ones, an IPv4 embedded in an IPv6 included', () => {
     const inside = ['10.1.2.3', '127.0.0.1', '169.254.169.254', '172.17.0.1', '192.168.1.1', '100.64.0.1', '192.0.0.8', '198.18.0.1', '224.0.0.1', '240.0.0.1'];
-    for (const a of [...inside, '::1', 'fd00::1', 'fe80::1', '::ffff:10.0.0.1', '::ffff:127.0.0.1', '64:ff9b::a00:1', '2002:a00:1::1']) {
+    const embedded = ['::ffff:10.0.0.1', '::ffff:127.0.0.1', '::ffff:169.254.169.254', '::a00:1', '::ffff:0:a00:1', '64:ff9b::a00:1', '2002:a00:1::1'];
+    for (const a of [...inside, ...embedded, '::1', 'fd00::1', 'fe80::1', 'fec0::1', '100::1']) {
       expect(isPrivate(a), a).toBe(true);
     }
-    for (const a of ['104.16.10.34', '1.1.1.1', '2606:4700::1111']) expect(isPrivate(a), a).toBe(false);
+    for (const a of ['104.16.10.34', '1.1.1.1', '::ffff:1.1.1.1', '2606:4700::1111']) expect(isPrivate(a), a).toBe(false);
   });
 
   it('forwards the agent API to the daemon, every method, at any level but none, plain or tunnelled', async () => {
@@ -178,6 +183,42 @@ describe('EgressProxy', () => {
     const none = await proxy.open('run-2', { level: 'none', allow: [] });
     expect((await viaProxy(none, 'GET', 'http://host.docker.internal:4101/agent/issue')).status).toBe(403);
     expect(await status(none, 'host.docker.internal:4101')).toBe('HTTP/1.1 403 Forbidden');
+  });
+
+  it('matches the host whatever its case or trailing dot, and journals it normalised', async () => {
+    const sock = await proxy.open('run-1', docs);
+    expect((await viaTls(sock, 'DOCS.Test.', 'GET', '/a')).body).toBe('up GET docs.test /a');
+    expect(await journal('run-1')).toEqual([expect.objectContaining({ host: 'docs.test', path: '/a', ok: true })]);
+  });
+
+  it('journals an upstream cut mid-body as a failure, and ends the client’s response', async () => {
+    const sock = await proxy.open('run-1', docs);
+    await expect(viaTls(sock, 'docs.test', 'GET', '/cut')).rejects.toThrow();
+    expect(await journal('run-1')).toEqual([expect.objectContaining({ path: '/cut', ok: false })]);
+  });
+
+  it('journals what is in flight when the run closes', async () => {
+    const sock = await proxy.open('run-1', docs);
+    const { socket } = await tunnel(sock, 'docs.test:443');
+    const tls = tlsConnect({ socket, servername: 'docs.test', ca: readFileSync(proxy.caCertPath, 'utf8') });
+    const started = new Promise<void>((ok) => request({ createConnection: () => tls, path: '/slow', headers: { host: 'docs.test' } }, () => ok()).on('error', () => {}).end());
+    await started;
+    const path = proxy.journalPath('run-1');
+    await proxy.close('run-1');
+    expect(readFileSync(path, 'utf8')).toContain('"path":"/slow"');
+  });
+
+  it('pipes another port as is at full, never to a private address', async () => {
+    const sock = await proxy.open('run-1', { level: 'full', allow: [] });
+    expect(await status(sock, 'localhost:22')).toBe('HTTP/1.1 502 Bad Gateway');
+    expect(await journal('run-1')).toEqual([expect.objectContaining({ method: 'CONNECT', host: 'localhost', port: 22, ok: false, reason: expect.stringMatching(/private/) as string })]);
+  });
+
+  it('shares one socket between concurrent opens, and refuses another policy for an open run', async () => {
+    const [a, b] = await Promise.all([proxy.open('run-1', docs), proxy.open('run-1', docs)]);
+    expect(a).toBe(b);
+    await expect(proxy.open('run-1', { level: 'full', allow: [] })).rejects.toThrow(/open at limited/);
+    await expect(proxy.open('run-1', { level: 'limited', allow: [] })).rejects.toThrow(/docs.test/);
   });
 
   it('keeps one socket per run, the same on a replay, gone once closed', async () => {
