@@ -171,7 +171,7 @@ Le premier ticket cité est celui qui touche le module en premier ou le plus ; l
 | `src/adapters/sandbox/types.ts` | Port `SandboxProvider`, niveaux réseau | garder | ORC-225, ORC-189 |
 | `src/adapters/sandbox/fake.ts` | `FakeSandboxProvider` du harnais | garder | ORC-225 |
 | `src/adapters/sandbox/router.ts` | `SandboxRouter` : choisit le backend qui satisfait les exigences, refuse sinon | garder | ORC-204 |
-| `src/adapters/sandbox/docker-rootless.ts` | Backend conteneur `L3` (CLI `docker` ou `podman`), un conteneur par tentative, toujours en `--network none` ; avec le proxy de sortie, le socket du run monté, un relais en PID 1 et les variables `HTTP(S)_PROXY` | garder | ORC-204, ORC-213 (fait : proxy de sortie), ORC-205 (`.git` monté) |
+| `src/adapters/sandbox/docker-rootless.ts` | Backend conteneur `L3` (CLI `docker` ou `podman`), un conteneur par tentative, toujours en `--network none` ; avec le proxy de sortie, le socket du run et le certificat de l'autorité de sortie montés, un relais en PID 1, les variables `HTTP(S)_PROXY` et d'autorité ; un conteneur dont le socket n'est pas de ce processus est refait | garder | ORC-204, ORC-213 (fait : proxy de sortie), ORC-205 (`.git` monté) |
 | `src/adapters/publisher/types.ts` | Port `Publisher` : pousse le sha vérifié, ouvre ou met à jour la PR | garder | ORC-225 |
 | `src/adapters/publisher/fake.ts` | `FakePublisher` du harnais | garder | ORC-225 |
 | `src/adapters/checks/types.ts` | Port `CheckRunner` : vérifications hors de l'agent | garder | ORC-225, ORC-151 |
@@ -208,8 +208,9 @@ Sortie réseau des sandboxes (ORC-213, [décision](decisions/ORC-213.md)).
 
 | Module | Rôle | Statut | Ticket cible |
 |---|---|---|---|
-| `src/network/levels.ts` | Niveaux de réseau (`none`, `claude-api`, `limited`, `full`), resserrement par étape, `full` refusé à l'agent ; listes (API Claude, hôtes inspectés, hôtes tunnelés) ; décision par hôte (tunnel) et par méthode et chemin (HTTP en clair) | garder | ORC-213, ORC-209 C (`network` du dépôt lu au lancement), ORC-219 (tests 3 à 6) |
-| `src/network/proxy.ts` | `EgressProxy` : un socket Unix par run, `CONNECT` et HTTP en clair renvoyé en HTTPS, adresses privées refusées, API agent relayée, journal JSONL par run (`<home>/network/<run>.jsonl`) | garder | ORC-213, journal en base et au tableau de bord (ticket à ouvrir), interception TLS (point ouvert de la décision) |
+| `src/network/levels.ts` | Niveaux de réseau (`none`, `claude-api`, `limited`, `full`), resserrement par étape, `full` refusé à l'agent ; listes (API Claude, renouvellement OAuth, hôtes `limited`) ; décision par hôte (`CONNECT`) puis par méthode et chemin (chaque requête) | garder | ORC-213, ORC-209 C (`network` du dépôt lu au lancement), ORC-219 (tests 3 à 6) |
+| `src/network/proxy.ts` | `EgressProxy` : un socket Unix par run, chaque `CONNECT` déchiffré (HTTP/1.1 seulement) et chaque requête vérifiée puis renvoyée en TLS vérifié, HTTP en clair renvoyé en HTTPS, adresses privées refusées, API agent relayée, journal JSONL par run (`<home>/network/<run>.jsonl`) | garder | ORC-213, journal en base et au tableau de bord (ticket à ouvrir) |
+| `src/network/ca.ts` | Autorité de sortie de l'usine (`<home>/egress-ca/`, clé en `0600`) et certificats par hôte qu'elle signe (`node-forge`), en cache | garder | ORC-213 |
 
 ### `src/app/` et racine de `src/`
 

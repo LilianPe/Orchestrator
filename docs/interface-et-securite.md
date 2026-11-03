@@ -104,15 +104,18 @@ Le proxy applique le niveau du run :
 | Niveau | Ce qui passe |
 |---|---|
 | `none` | Rien, pas même l'API agent (`verify`). |
-| `claude-api` | `api.anthropic.com` et l'API agent. |
-| `limited` (défaut des runs) | Le précédent ; npm et PyPI ; GitHub en lecture ; une liste de domaines de doc (`src/network/levels.ts`). Méthodes GET, HEAD et OPTIONS seulement, sauf vers l'API Claude. |
+| `claude-api` | `api.anthropic.com`, le renouvellement du jeton OAuth de Claude Code (POST `/v1/oauth/token` de `console.anthropic.com` et `platform.claude.com`) et l'API agent. |
+| `limited` (défaut des runs) | Le précédent ; npm, Yarn et PyPI ; GitHub en lecture ; une liste de domaines de doc (`src/network/levels.ts`). Méthodes GET, HEAD et OPTIONS seulement, sauf vers l'API Claude. |
 | `custom` (dépôt) | `limited` plus les hôtes de `network.allow`. |
 | `full` | Tout : réservé à `setup`, refusé pour l'agent. |
 
-- **Hôtes à API d'écriture inspectés** (`github.com`, `api.github.com`, `registry.npmjs.org`, `pypi.org`) : jamais tunnelés. Le conteneur les joint en `http://` (git par `url.<http>.insteadOf`, npm par `npm_config_registry`, pip par `PIP_INDEX_URL`), le proxy voit la méthode et le chemin, refuse toute écriture (`git push`, gist, publication), puis continue en HTTPS. Seul `git fetch` (POST vers `git-upload-pack`) est permis en plus.
-- **Autres hôtes permis, tunnelés** (`CONNECT`, port 443 seulement) : API Claude, téléchargements (`files.pythonhosted.org`, `codeload.github.com`…), docs, `network.allow`. TLS de bout en bout : seul l'hôte est vérifié.
+- **Chaque tunnel est déchiffré** (`CONNECT`, port 443 seulement, sauf en `full`). Le proxy présente un certificat de l'**autorité de l'usine** pour l'hôte demandé, lit chaque requête, vérifie la méthode et le chemin, puis continue en TLS vers le vrai hôte, son certificat vérifié par le magasin de Node. Le conteneur ne fait confiance qu'à cette autorité : son certificat est monté en lecture seule en `/run/factory/egress-ca.crt`, et `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `REQUESTS_CA_BUNDLE`, `PIP_CERT`, `GIT_SSL_CAINFO`, `npm_config_cafile` et les variables de Yarn y pointent. Sa clé reste dans `<home>/egress-ca/` (`0600`) et n'est jamais montée.
+- **Écritures refusées partout** : `git push`, gist, publication d'un paquet, POST vers une doc ou un hôte de `network.allow`. Seul `git fetch` (POST vers `git-upload-pack` de `github.com`) est permis en plus. L'API Claude garde toutes ses méthodes, journalisées comme le reste.
+- **HTTP/1.1 seulement** dans un tunnel : un client qui n'offre que HTTP/2, une mise à niveau (WebSocket) ou autre chose que HTTP sont refusés et journalisés.
+- **Hôte vérifié = hôte joint** : la requête part vers la cible du `CONNECT`, avec cet hôte en `Host`, quel que soit l'en-tête envoyé par le conteneur.
 - **Jamais d'adresse privée** (boucle locale, réseaux privés, `169.254.0.0/16` des métadonnées cloud), même en `full`, même par un nom qui y mène.
-- **Journal** : chaque connexion et chaque refus, avec l'hôte, la méthode, les octets envoyés et reçus et la raison d'un refus, dans `<home>/network/<run>.jsonl`.
+- **Journal** : chaque requête et chaque refus, avec l'hôte, la méthode, le chemin (sans sa requête, qui peut porter un jeton), les octets envoyés et reçus et la raison d'un refus, dans `<home>/network/<run>.jsonl`.
+- **Après un redémarrage du démon**, un conteneur encore vivant a un socket mort : il est détruit et refait, jamais repris.
 
 ## Secrets
 
@@ -121,9 +124,10 @@ Où ils sont et comment ils restent dans le démon : [`configuration.md`](config
 ## Limites connues
 
 - **Sans sandbox, même utilisateur système.** Sans `FACTORY_CONTAINER_CLI`, les runs tournent sur l'hôte sous le même utilisateur que le démon (le démon l'écrit au démarrage : « les runs tournent sur l'hôte, sans isolation »). Les refus de Claude Code sont indicatifs : un agent qui exécute du code (`node -e …`, autorisé par le pack) peut lire `secrets.json` ou `relais.db`. Une injection dans un ticket ou un commentaire pourrait l'y pousser. **Ne confiez pas à Relais des tickets écrits par des personnes non fiables** tant que les runs ne tournent pas sous un utilisateur séparé.
-- **Sandbox : méthodes non vues dans un tunnel TLS.** Vers un hôte tunnelé (docs, téléchargements, `network.allow`), le proxy ne voit que l'hôte : un POST y passe. Ces hôtes sont choisis sans API d'écriture, mais un domaine de `network.allow` peut en avoir une. Seule une interception TLS par une autorité de l'usine fermerait l'écart ; c'est le point ouvert d'[ORC-213](decisions/ORC-213.md).
-- **Sandbox : un outil qui force `https://` vers GitHub ou les registres est refusé.** Le `WebFetch` de Claude Code passe en HTTPS : il ne lit pas `github.com`. Une dépendance npm en `git+https://` vers un autre hôte que `github.com` échoue aussi.
-- **Sandbox : un niveau par run, `network` du dépôt pas encore lu.** Tous les runs prennent `limited`. Le `network` de `.factory/config.yml` (niveau, `allow`) et le niveau de chaque étape du préréglage s'appliqueront quand la config du dépôt sera lue au lancement (ORC-209 C). Le `setup` tourne dans le conteneur du run, à son niveau (`limited`), pas en `full`.
+- **Sandbox : la clé de l'autorité de sortie est un secret du démon.** Qui la lit (`<home>/egress-ca/ca.key`) peut se faire passer pour n'importe quel site auprès des sandboxes de cette instance, pas au-delà : rien d'autre ne fait confiance à cette autorité. Un run sans sandbox, sur l'hôte, peut la lire comme `secrets.json`.
+- **Sandbox : un client qui épingle un certificat échoue.** Il refuse le certificat de l'usine : la connexion échoue, journalisée (fermé par défaut). De même un outil qui ignore les variables d'autorité ci-dessus.
+- **Sandbox : redirection vers un hôte hors liste.** Une redirection (`git`, `npm`, `fetch`) vers un hôte que le niveau n'a pas est refusée comme une connexion directe : un dépôt GitHub renommé, ou un paquet servi depuis un autre CDN, échoue.
+- **Sandbox : un niveau par run, `network` du dépôt pas encore lu.** Tous les runs prennent `limited`. Le `network` de `.factory/config.yml` (niveau, `allow`) et le niveau de chaque étape du préréglage s'appliqueront quand la config du dépôt sera lue au lancement (ORC-209 C). Le `setup` tourne dans le conteneur du run, à son niveau (`limited`), pas en `full` : un `setup` qui sort de la liste échoue.
 - **Sandbox : journal réseau en fichier.** Le journal des connexions est un JSONL par run dans `<home>/network/`, pas encore en base ni au tableau de bord.
 - **Sandbox : le `.git` commun du dépôt est monté.** Pour que git marche dans le worktree, le dossier git commun du dépôt est monté en lecture-écriture, au même chemin que sur l'hôte. Le conteneur voit donc les autres refs et branches du dépôt, et peut les modifier. Le miroir en lecture seule et la sortie par `git bundle` fermeront cet écart (ORC-205).
 - **Sandbox : `trunk-readonly` monté en lecture-écriture.** Le port monte toujours le worktree en écriture ; un job `trunk-readonly` n'est retenu que par `--permission-mode plan`, comme sur l'hôte.
