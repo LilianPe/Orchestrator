@@ -131,6 +131,14 @@ on:
     expect(wf.limits.repeatedFailures).toBe(3);
   });
 
+  it('reads the tests job: the red check in measure mode, 3 checks (the preset counter red: 2 returns), then dev (ORC-123)', () => {
+    const tests = loadWorkflow({ packDir }).jobs['tests']!;
+    expect(tests).toMatchObject({ skill: 'factory:tests', red: { command: 'npm test --', mode: 'measure', attempts: 3 }, onSuccess: { run: 'dev' } });
+    const blocking = loadWorkflow({ packDir, projectFile: projectFile('version: 1\njobs:\n  tests:\n    red: { mode: blocking }\n') });
+    expect(blocking.jobs['tests']!.red).toMatchObject({ command: 'npm test --', mode: 'blocking' });
+    expect(() => loadWorkflow({ packDir, projectFile: projectFile('version: 1\njobs:\n  tests:\n    on_success: { run: nope }\n') })).toThrow(/on_success.run/);
+  });
+
   it('names the preset counter it cannot find', () => {
     expect(() => presetBound({ ...factoryDefault, counters: {} }, 'verify')).toThrow(/counter verify/);
   });

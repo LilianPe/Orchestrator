@@ -61,6 +61,34 @@ describe('GitWorkspaces', () => {
     expect(await ws.head(join(root, 'nowhere'))).toBeUndefined();
   });
 
+  it('lists what the commits since a base changed, reads paths at the base and the head, and the uncommitted files (ORC-123)', async () => {
+    const { repo, root } = fixtureRepo();
+    const ws = new GitWorkspaces({ root });
+    const w = await ws.prepare(req(repo));
+    git(w.path, 'config', 'user.email', 't@t');
+    git(w.path, 'config', 'user.name', 't');
+    mkdirSync(join(w.path, 'src'));
+    writeFileSync(join(w.path, 'src', 'export.ts'), 'export const other = 1;\n');
+    git(w.path, 'add', '.');
+    git(w.path, 'commit', '-m', 'earlier dev work');
+    // The step starts here: only its own commits count.
+    const base = git(w.path, 'rev-parse', 'HEAD');
+    writeFileSync(join(w.path, 'export.test.ts'), 'x\n');
+    git(w.path, 'rm', '-q', 'README.md');
+    git(w.path, 'add', '.');
+    git(w.path, 'commit', '-m', 'tests');
+    writeFileSync(join(w.path, 'draft.ts'), 'x\n');
+    writeFileSync(join(w.path, 'src', 'export.ts'), 'changed\n');
+    const diff = (await ws.stepDiff(repo, w.path, base))!;
+    expect(diff.changed).toEqual([{ path: 'README.md', deleted: true }, { path: 'export.test.ts', deleted: false }]);
+    expect(await diff.existsAtBase(['README.md', 'src', 'src/export.ts', 'export.test.ts', 'src/nope.ts'])).toEqual(new Set(['README.md', 'src', 'src/export.ts']));
+    expect(await diff.showAtBase('src/export.ts')).toBe('export const other = 1;\n');
+    expect(await diff.showAtHead('export.test.ts')).toBe('x\n');
+    expect(await diff.showAtBase('export.test.ts')).toBeUndefined();
+    expect((await ws.uncommitted(w.path)).sort()).toEqual(['draft.ts', 'src/export.ts']);
+    expect(await ws.stepDiff(repo, join(root, 'nowhere'), base)).toBeUndefined();
+  });
+
   it('prepares the read-only trunk and a knowledge worktree', async () => {
     const { repo, root } = fixtureRepo();
     const kb = fixtureRepo();

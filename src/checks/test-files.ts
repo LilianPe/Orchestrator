@@ -28,6 +28,12 @@ export function isTestFile(path: string): boolean {
   return TEST_NAME.some((re) => re.test(name)) || segments.slice(0, -1).some((s) => TEST_DIR.has(s));
 }
 
+/** A file the test runner runs, by its name: not a helper, a fixture or `conftest.py` under a test directory (ORC-123). */
+export function isTestSpec(path: string): boolean {
+  const name = parts(path).at(-1) ?? '';
+  return name !== 'conftest.py' && TEST_NAME.some((re) => re.test(name));
+}
+
 export function isTestHarnessFile(path: string): boolean {
   const name = parts(path).at(-1) ?? '';
   return HARNESS_NAME.some((re) => re.test(name));

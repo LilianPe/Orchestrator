@@ -1,5 +1,5 @@
 import { branchName } from '../../core/naming.js';
-import type { Workspace, WorkspaceManager, WorkspaceRequest } from './types.js';
+import type { StepDiff, Workspace, WorkspaceManager, WorkspaceRequest } from './types.js';
 
 export class FakeWorkspaces implements WorkspaceManager {
   prepared: WorkspaceRequest[] = [];
@@ -29,6 +29,25 @@ export class FakeWorkspaces implements WorkspaceManager {
 
   async head(path: string): Promise<string | undefined> {
     return this.heads.get(path);
+  }
+
+  /** What the tests step changed in each worktree, as a test sets it (ORC-123): files at the base and the head by content. */
+  steps = new Map<string, { changed: StepDiff['changed']; base?: Record<string, string>; head?: Record<string, string>; uncommitted?: string[] }>();
+
+  async stepDiff(_repoPath: string, path: string): Promise<StepDiff | undefined> {
+    const d = this.steps.get(path);
+    if (!d) return undefined;
+    const base = d.base ?? {};
+    return {
+      changed: d.changed,
+      existsAtBase: async (paths) => new Set(paths.filter((p) => p in base || Object.keys(base).some((f) => f.startsWith(`${p}/`)))),
+      showAtBase: async (p) => base[p],
+      showAtHead: async (p) => d.head?.[p],
+    };
+  }
+
+  async uncommitted(path: string): Promise<string[]> {
+    return this.steps.get(path)?.uncommitted ?? [];
   }
 
   async resetClaudeDir(path: string): Promise<void> {

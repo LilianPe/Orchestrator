@@ -96,6 +96,9 @@ function buildJob(name: string, raw: RawJob, perRun: RunLimits): JobSpec {
     if (v === undefined) throw new WorkflowError(`jobs.${name}.${String(k)}: required`);
     return v as NonNullable<RawJob[K]>;
   };
+  const missing = (k: string): never => {
+    throw new WorkflowError(`jobs.${name}.${k}: required`);
+  };
   // Conservative (ORC-217): only the implementer (`dev` queue) resumes, and mounts, the ticket session.
   if (raw.queue === 'questions' && raw.session === 'resume') {
     throw new WorkflowError(`jobs.${name}.session: a questions job cannot resume the ticket session, only a dev job can`);
@@ -111,6 +114,8 @@ function buildJob(name: string, raw: RawJob, perRun: RunLimits): JobSpec {
     verify: raw.verify ?? [],
     pickup: raw.pickup ?? false,
     structuredOutput: raw.structured_output,
+    // `attempts` counts every check, as `verifyAttempts`: the preset's returns to the job, plus the first one.
+    ...(raw.red ? { red: { command: raw.red.command ?? missing('red.command'), mode: raw.red.mode ?? 'measure', attempts: presetBound(preset, 'red') + 1 } } : {}),
     limits: limits(raw.limits, perRun),
     onStart: raw.on_start ?? {},
     onSuccess: raw.on_success ?? {},
@@ -136,6 +141,10 @@ export function loadWorkflow(opts: { packDir: string; projectFile?: string }): W
   const rawJobs = raw.jobs ?? {};
   const jobs: Record<string, JobSpec> = {};
   for (const name of Object.keys(rawJobs)) jobs[name] = buildJob(name, resolveJob(name, rawJobs), perRun);
+
+  for (const j of Object.values(jobs)) {
+    if (j.onSuccess.run && !jobs[j.onSuccess.run]) throw new WorkflowError(`jobs.${j.name}.on_success.run: unknown job "${j.onSuccess.run}"`);
+  }
 
   const on: Partial<Record<EventType, Rule[]>> = {};
   for (const [type, rules] of Object.entries(raw.on ?? {})) {

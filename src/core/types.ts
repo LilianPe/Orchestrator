@@ -1,6 +1,7 @@
 import type { AgentOutput, AttemptOutcome } from './agent-output.js';
 import type { Role } from './authz.js';
 import type { StoredEvent } from './upcast.js';
+import type { RedCause } from '../checks/red.js';
 
 export const LOGICAL_STATES = ['todo', 'dev', 'human_review', 'ai_review', 'ready', 'done'] as const;
 export type LogicalState = (typeof LOGICAL_STATES)[number];
@@ -189,9 +190,10 @@ export interface EventPayloads {
    * it lack both and decide on `outcome` as before.
    */
   'run.finished': { runId: string; job: string; outcome: RunOutcome; costUsd: number; turns: number; lastText: string; attempt?: AttemptOutcome; output?: AgentOutput };
-  'verify.passed': { runId: string; job: string; output?: AgentOutput };
+  /** `red`: the cause of the `red` check's verdict (ORC-123), for a job checked by it instead of `verify`. */
+  'verify.passed': { runId: string; job: string; output?: AgentOutput; red?: RedCause };
   /** `tree`: fingerprint of the worktree content when the check failed, absent outside git (ORC-187). */
-  'verify.failed': { runId: string; job: string; failures: VerifyFailure[]; tree?: string };
+  'verify.failed': { runId: string; job: string; failures: VerifyFailure[]; tree?: string; red?: RedCause };
   /** A timer armed by a decision, fired through the inbox with id `timer:<key>:<fireAt>` (ORC-161). */
   'timer.fired': TimerFired;
   'control.pause': Record<string, never>;
@@ -264,7 +266,7 @@ export type DecidedEvent =
   | { type: 'ticket.unblocked' }
   | {
       type: 'ticket.patched';
-      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId'>>;
+      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId'>>;
     }
   | { type: 'feedback.appended'; item: FeedbackItem }
   /** The ticket's dev work is stopped: nothing pending, no verification awaited. */
@@ -334,6 +336,8 @@ export interface TicketState {
   verifyingRunId?: string;
   pendingJob?: PendingJob;
   verifyAttempts: number;
+  /** Unverified reds in blocking mode since the last verified one, bounded by the job's `red.attempts` (ORC-123). Absent before it. */
+  redAttempts?: number;
   /** The last failed check (worktree and failed commands) and how many times in a row it came back (ORC-187). */
   repeatedFailure?: { signature: string; count: number } | null;
   /**

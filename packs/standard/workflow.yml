@@ -51,6 +51,17 @@ jobs:
     verify: []
     on_start: { move: dev }
     on_success: { move: human_review, post: summary }
+  # The `tests` step of factory/default (ORC-123): tests of the acceptance criteria only, then the `red`
+  # check, then `dev`. Off until a rule runs it (`ticket.delegated: run: tests`); `red.mode: blocking`
+  # once the golden tickets validate it.
+  tests:
+    extends: dev
+    skill: "factory:tests"
+    # The implementer's: the ticket session starts here, a return to the step and `dev` resume it (ORC-217).
+    session: resume
+    pickup: false
+    red: { command: "npm test --", mode: measure }
+    on_success: { run: dev }
   dev-feedback:
     extends: dev
     session: resume
