@@ -160,6 +160,10 @@ describe('ContainerSandboxProvider.create', () => {
     const f = fakeEgress();
     await expect(new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: failing.exec, egress: f }).create(req())).rejects.toThrow(/no such image/);
     expect(f.closed).toEqual(['r1']);
+    // A failure while building the run's arguments closes it too.
+    const g = { ...fakeEgress(), get caCertPath(): string { throw new Error('no CA'); } };
+    await expect(new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: empty().exec, egress: g }).create(req())).rejects.toThrow(/no CA/);
+    expect(g.closed).toEqual(['r1']);
   });
 
   it('replaces a live container whose egress this process does not hold (a daemon restart): its socket is dead', async () => {

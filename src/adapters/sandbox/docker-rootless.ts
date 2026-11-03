@@ -121,8 +121,19 @@ export class ContainerSandboxProvider implements SandboxProvider {
       return this.seen(c);
     }
     const egress = this.opts.egress && (await this.opts.egress.open(req.runId, { level: req.network, allow: req.allow ?? [] }));
+    // From the open on, any failure closes the run's egress: no socket left listening for nothing.
+    try {
+      const id = (await this.must(this.runArgs(req, mounts, egress))).trim();
+      this.known.set(id, req.runId);
+      return { id, network: req.network, level: 'L3' };
+    } catch (err) {
+      await this.opts.egress?.close(req.runId);
+      throw err;
+    }
+  }
 
-    const args = [
+  private runArgs(req: SandboxRequest, mounts: string[], egress: string | undefined): string[] {
+    return [
       'run', '-d',
       '--label', `${ATTEMPT}=${req.runId}`, '--label', `factory.ticket=${req.ticketId}`, '--label', `${NETWORK}=${req.network}`,
       ...(this.opts.instance ? ['--label', `${INSTANCE}=${this.opts.instance}`] : []),
@@ -144,15 +155,6 @@ export class ContainerSandboxProvider implements SandboxProvider {
       '--network', 'none',
       this.opts.image, ...(egress ? ['node', '-e', RELAY] : ['sleep', 'infinity']),
     ];
-    let id: string;
-    try {
-      id = (await this.must(args)).trim();
-    } catch (err) {
-      await this.opts.egress?.close(req.runId);
-      throw err;
-    }
-    this.known.set(id, req.runId);
-    return { id, network: req.network, level: 'L3' };
   }
 
   async exec(id: string, argv: readonly string[], opts: SandboxExecOptions = {}): Promise<ExecResult> {
