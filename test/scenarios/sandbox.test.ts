@@ -143,3 +143,52 @@ describe('a disposable sandbox per attempt', () => {
     expect(h.sandboxes.destroyed).toEqual([orphan.id]);
   });
 });
+
+/** ORC-217: the ticket's Claude session lives in its session dir; a review or a question starts afresh. */
+describe('the ticket session across attempts', () => {
+  const claudeDir = `${SANDBOX_HOME}/.claude`;
+  const mountsSessionDir = (h: ReturnType<typeof createHarness>, i: number) =>
+    h.sandboxes.created[i]!.mounts.some((m) => m.host === join(h.sessionsDir!, 'p', 'REL-1') && m.target === claudeDir);
+  const roles = (h: ReturnType<typeof createHarness>) => Promise.all(h.runner.requests.map(async (r) => (await h.store.getRun(r.runId))?.sessionRole));
+
+  it('a reply resumes the ticket session, with the same session dir mounted in both attempts', async () => {
+    const h = createHarness({ sandboxed: true });
+    await delegate(h);
+    await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'reprends', author: 'L' });
+    await h.advance(180_000);
+    const [dev, feedback] = h.runner.requests;
+    expect(feedback).toMatchObject({ resume: true, claudeSessionId: dev!.claudeSessionId });
+    expect([mountsSessionDir(h, 0), mountsSessionDir(h, 1)]).toEqual([true, true]);
+    expect((await h.ticket()).claudeSessionId).toBe(dev!.claudeSessionId);
+    expect(await roles(h)).toEqual(['implementer', 'implementer']);
+  });
+
+  it('a review starts a new session without the ticket session dir; the feedback after it resumes the ticket session', async () => {
+    const h = createHarness({ sandboxed: true });
+    await delegate(h);
+    await h.send('status.changed', { from: 'human_review', to: 'ai_review' });
+    await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'reprends', author: 'L' });
+    await h.advance(180_000);
+    const [dev, review, feedback] = h.runner.requests;
+    expect(review!.prompt.startsWith('/factory:review\n')).toBe(true);
+    expect(review).toMatchObject({ resume: false });
+    expect(review!.claudeSessionId).not.toBe(dev!.claudeSessionId);
+    // Its config dir is the sandbox's own `~/.claude`, gone with the sandbox: a fresh context.
+    expect(mountsSessionDir(h, 1)).toBe(false);
+    expect(review!.env).toMatchObject({ CLAUDE_CONFIG_DIR: claudeDir });
+    expect(feedback).toMatchObject({ resume: true, claudeSessionId: dev!.claudeSessionId });
+    expect(mountsSessionDir(h, 2)).toBe(true);
+    expect(await roles(h)).toEqual(['implementer', 'reviewer', 'implementer']);
+  });
+
+  it('a question starts a new session without the ticket session dir', async () => {
+    const h = createHarness({ sandboxed: true });
+    await delegate(h);
+    await h.send('session.mentioned', { linearSessionId: 'ls-9', body: 'où est calculé le score ?', author: 'L' });
+    const [dev, ask] = h.runner.requests;
+    expect(ask!.prompt.startsWith('/factory:ask\n')).toBe(true);
+    expect(ask!.claudeSessionId).not.toBe(dev!.claudeSessionId);
+    expect(mountsSessionDir(h, 1)).toBe(false);
+    expect(await roles(h)).toEqual(['implementer', 'answerer']);
+  });
+});

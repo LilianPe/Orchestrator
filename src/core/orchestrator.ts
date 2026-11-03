@@ -28,6 +28,7 @@ import {
   type EffectOutcome,
   type OutboxRow,
   type RunRecord,
+  type SessionRole,
   type Store,
   type WorkflowVersion,
 } from '../store/types.js';
@@ -192,6 +193,16 @@ interface EffectKey {
 
 export function logicalFromName(states: Workflow['states'], name: string): LogicalState | undefined {
   return (Object.entries(states) as [LogicalState, string][]).find(([, n]) => n === name)?.[0];
+}
+
+/**
+ * The session role of an attempt (ORC-217): the ticket session's (or a `dev` from scratch, `pickup`)
+ * is the implementer's, any other `dev`-queue session a reviewer's, a read-only question the answerer's.
+ * ponytail: read from the job's shape, not declared in the workflow; a `role:` per job if a pack needs another.
+ */
+function roleOf(job: JobSpec, ticketSession: boolean): SessionRole | undefined {
+  if (job.queue === 'dev') return ticketSession || job.pickup ? 'implementer' : 'reviewer';
+  return job.workspace === 'trunk-readonly' ? 'answerer' : undefined;
 }
 
 function startOfUtcDay(ts: number): number {
@@ -416,14 +427,16 @@ export class Orchestrator {
   /**
    * The attempt's sandbox (ORC-204): the worktree, the git dir its `.git` file points into (at the
    * same path, so git works there; it shows the repository's other refs until ORC-205), the ticket's
-   * Claude session dir as `~/.claude` (`--resume` across attempts), the pack and the run settings
-   * read-only. A `trunk-readonly` job gets its worktree read-write too: only `--permission-mode plan`
-   * keeps it from writing, as on the host. `claude-api` is an open network until ORC-213.
+   * Claude session dir as `~/.claude` (`--resume` across attempts) when the attempt runs the ticket
+   * session, the pack and the run settings read-only. Any other attempt (a review, a question) gets the
+   * sandbox's own `~/.claude`, gone with it: a fresh context that never sees the ticket's (ORC-217).
+   * A `trunk-readonly` job gets its worktree read-write too: only `--permission-mode plan` keeps it
+   * from writing, as on the host. `claude-api` is an open network until ORC-213.
    */
-  private async openSandbox(sandboxes: SandboxProvider, project: ProjectRuntime, ticketId: string, ws: Workspace, runId: string): Promise<Sandbox> {
+  private async openSandbox(sandboxes: SandboxProvider, project: ProjectRuntime, ticketId: string, ws: Workspace, runId: string, ticketSession: boolean): Promise<Sandbox> {
     if (!this.d.sessionsDir) throw new Error('sessionsDir is required with sandboxes');
     const sessionDir = join(this.d.sessionsDir, project.id, ticketId);
-    mkdirSync(sessionDir, { recursive: true });
+    if (ticketSession) mkdirSync(sessionDir, { recursive: true });
     const gitDir = await this.d.workspaces.gitCommonDir(ws.path);
     const sandbox = await sandboxes.create({
       runId,
@@ -433,7 +446,7 @@ export class Orchestrator {
       requirements: DEFAULT_REQUIREMENTS,
       mounts: [
         { host: gitDir, target: gitDir, readOnly: false },
-        { host: sessionDir, target: `${SANDBOX_HOME}/.claude`, readOnly: false },
+        ...(ticketSession ? [{ host: sessionDir, target: `${SANDBOX_HOME}/.claude`, readOnly: false }] : []),
         { host: this.d.packDir, target: PACK_TARGET, readOnly: true },
         { host: this.settingsPath(), target: SETTINGS_TARGET, readOnly: true },
         ...(this.d.sandboxMounts ?? []),
@@ -1234,8 +1247,15 @@ export class Orchestrator {
         return;
       }
 
+      const wantsResume = opts.resume ?? job.session === 'resume';
+      const resume = wantsResume && !!t.claudeSessionId;
+      const claudeSessionId = resume ? t.claudeSessionId! : this.newId();
+      // The session the ticket keeps (`reduce` adopts the first `dev` run's): resumed, or about to be made.
+      const ticketSession = resume || (!t.claudeSessionId && job.queue === 'dev');
+      const sessionRole = roleOf(job, ticketSession);
+
       // Opened after the cheap exits above, right before the setup and the run that need it.
-      sandbox = this.d.sandboxes && (await this.openSandbox(this.d.sandboxes, project, ticketId, ws, runId));
+      sandbox = this.d.sandboxes && (await this.openSandbox(this.d.sandboxes, project, ticketId, ws, runId, ticketSession));
       if (!setUp) await this.runSetup(project, ws, sandbox);
       setUp = true;
       // In each run's prompt, not the system prompt: read again at each attempt, never frozen at a resume
@@ -1244,10 +1264,6 @@ export class Orchestrator {
       // After the setup, which is the repository's and could write one; the session loads none anyway
       // (`--setting-sources ""`): defence in depth, for what ORC-128 did not trap (ORC-284).
       await workspaces.resetClaudeDir(ws.path);
-
-      const wantsResume = opts.resume ?? job.session === 'resume';
-      const resume = wantsResume && !!t.claudeSessionId;
-      const claudeSessionId = resume ? t.claudeSessionId! : this.newId();
 
       let input: { kind: InputKind; text: string } | undefined;
       if (kind === 'feedback') {
@@ -1280,6 +1296,7 @@ export class Orchestrator {
         queue: job.queue,
         status: 'running',
         claudeSessionId,
+        ...(sessionRole ? { sessionRole } : {}),
         linearSessionId,
         startedAt: clock.now(),
         costUsd: 0,
@@ -1316,7 +1333,7 @@ export class Orchestrator {
           ...this.d.agentEnv(run),
           ...(ws.port !== undefined ? { PORT: String(ws.port) } : {}),
           ...CLAUDE_RUN_ENV,
-          // The ticket's session dir as Claude's whole config dir (ORC-128 point 4), login by the env
+          // The ticket's session dir (or, out of the ticket session, the sandbox's own) as Claude's whole config dir (ORC-128 point 4), login by the env
           // (CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY). On the host, the daemon's own, as before.
           ...(sandbox ? { CLAUDE_CONFIG_DIR: `${SANDBOX_HOME}/.claude` } : {}),
         },
