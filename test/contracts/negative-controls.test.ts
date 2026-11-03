@@ -481,6 +481,19 @@ describeTrackerContract(
 );
 
 describeTrackerContract(
+  'a tracker whose getIssue rejects an unknown issue with a plain error, as a read error',
+  trackerThat(
+    class extends FakeTracker {
+      override async getIssue(identifier: string): Promise<TrackerIssue> {
+        if (!this.issues.has(identifier)) throw new Error(`unknown issue ${identifier}`);
+        return super.getIssue(identifier);
+      }
+    },
+  ),
+  { violates: [UNKNOWN_READ] },
+);
+
+describeTrackerContract(
   'a tracker whose moveTo ignores an unknown issue',
   trackerThat(
     class extends FakeTracker {
