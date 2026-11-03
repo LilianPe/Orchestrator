@@ -1,0 +1,113 @@
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { describe, expect, it } from 'vitest';
+import { readSecurityLog, refusalSummary, REFUSAL_RULES } from './security-log.js';
+
+const RUN = { runId: 'r1', projectId: 'p', ticketId: 'REL-1', at: 5 };
+
+function files(egress: string[] | undefined, refusals: string[] | undefined) {
+  const dir = mkdtempSync(join(tmpdir(), 'factory-seclog-'));
+  const paths = { egress: join(dir, 'r1.jsonl'), refusals: join(dir, 'refusals.jsonl') };
+  if (egress) writeFileSync(paths.egress, egress.join('\n') + '\n');
+  if (refusals) writeFileSync(paths.refusals, refusals.join('\n') + '\n');
+  return paths;
+}
+
+const egressLine = (patch: object = {}) =>
+  JSON.stringify({ at: '2026-11-03T10:00:00.000Z', up: 10, down: 20, method: 'GET', host: 'registry.npmjs.org', path: '/x', ok: true, ...patch });
+const refusalLine = (patch: object = {}) =>
+  JSON.stringify({ at: '2026-11-03T10:00:01.000Z', tool: 'Bash', command: 'git push --force', rule: 'force-push', ticket: 'REL-1', ...patch });
+
+describe('the security log of a run (ORC-296)', () => {
+  it('reads both journals, stamped with the run and its ticket', () => {
+    const log = readSecurityLog(RUN, files([egressLine(), egressLine({ method: 'CONNECT', host: 'evil.example', path: undefined, port: 22, ok: false, reason: 'port 22 refused' })], [refusalLine()]));
+    expect(log).toEqual({
+      ...RUN,
+      egress: [
+        { at: Date.parse('2026-11-03T10:00:00.000Z'), method: 'GET', host: 'registry.npmjs.org', path: '/x', ok: true, up: 10, down: 20 },
+        { at: Date.parse('2026-11-03T10:00:00.000Z'), method: 'CONNECT', host: 'evil.example', port: 22, ok: false, reason: 'port 22 refused', up: 10, down: 20 },
+      ],
+      refusals: [{ at: Date.parse('2026-11-03T10:00:01.000Z'), tool: 'Bash', rule: 'force-push', command: 'git push --force' }],
+      skipped: { egress: 0, refusals: 0 },
+    });
+  });
+
+  it('is empty when a journal is missing', () => {
+    expect(readSecurityLog(RUN, { ...files(undefined, undefined) })).toMatchObject({ egress: [], refusals: [], skipped: { egress: 0, refusals: 0 } });
+    expect(readSecurityLog(RUN, { refusals: files(undefined, undefined).refusals })).toMatchObject({ egress: [], skipped: { egress: 0 } });
+  });
+
+  it('skips and counts the malformed or forged lines, and goes on', () => {
+    const log = readSecurityLog(
+      RUN,
+      files(
+        ['not json', egressLine({ ok: 'yes' }), egressLine({ host: 'a\u0000b' }), egressLine()],
+        [
+          '{',
+          '[]',
+          refusalLine({ rule: 'made-up' }),
+          refusalLine({ ticket: 'REL-2' }),
+          refusalLine({ tool: 'Write' }),
+          refusalLine({ at: 'yesterday' }),
+          refusalLine({ command: 'echo \u0000' }),
+          refusalLine({ rule: 'push-trunk' }),
+        ],
+      ),
+    );
+    expect(log.egress).toHaveLength(1);
+    expect(log.refusals.map((r) => r.rule)).toEqual(['push-trunk']);
+    expect(log.skipped).toEqual({ egress: 3, refusals: 7 });
+  });
+
+  it('caps a long command, and counts what is past the size cap as one skipped line', () => {
+    const paths = files(undefined, [refusalLine({ command: 'x'.repeat(5000) }), ...Array.from({ length: 30_000 }, () => refusalLine())]);
+    const log = readSecurityLog(RUN, paths);
+    expect(log.refusals[0]!.command).toHaveLength(2000);
+    expect(log.refusals.length).toBeLessThan(30_001);
+    // The lines read, the cut one and the rest: one skipped line for all that was not read.
+    expect(log.refusals.length + log.skipped.refusals).toBeLessThan(30_001);
+    expect(log.skipped.refusals).toBeGreaterThanOrEqual(1);
+  });
+
+  it('reads no refusals log that is not a plain file (a dir, a link the agent made)', () => {
+    const paths = files(undefined, undefined);
+    mkdirSync(paths.refusals);
+    expect(readSecurityLog(RUN, paths)).toMatchObject({ refusals: [], skipped: { refusals: 1 } });
+  });
+
+  it('knows every rule of the pack hook', () => {
+    const hook = readFileSync(join(import.meta.dirname, '../../packs/standard/hooks/pre-tool-use.mjs'), 'utf8');
+    const returned = new Set([...hook.matchAll(/return '([a-z-]+)'/g)].map((m) => m[1]));
+    expect([...returned].sort()).toEqual([...REFUSAL_RULES].sort());
+  });
+});
+
+describe('the refusals summary posted in the ticket session (ORC-296)', () => {
+  const log = (patch: object = {}) => ({ ...RUN, egress: [], refusals: [], skipped: { egress: 0, refusals: 0 }, ...patch });
+  const refusal = (rule: string) => ({ at: 1, tool: 'Bash', rule, command: 'git push origin main --token=SECRET' });
+  const refused = (host: string) => ({ at: 1, method: 'GET', host, ok: false, reason: 'host not allowed', up: 0, down: 0 });
+
+  it('says nothing for a run without a refusal', () => {
+    expect(refusalSummary(log({ egress: [{ ...refused('a.example'), ok: true }] }))).toBeUndefined();
+  });
+
+  it('counts the refusals per rule and names the refused hosts, never a command', () => {
+    const body = refusalSummary(
+      log({
+        refusals: [refusal('push-trunk'), refusal('pipe-to-shell'), refusal('push-trunk')],
+        egress: [refused('evil.example'), refused('evil.example'), refused('x.org'), refused('<b>@everyone</b>')],
+        skipped: { egress: 0, refusals: 2 },
+      }),
+    )!;
+    expect(body).toContain('`push-trunk` : 2');
+    expect(body).toContain('`pipe-to-shell` : 1');
+    expect(body).toContain('`evil.example` (2)');
+    expect(body).toContain('`x.org` (1)');
+    expect(body).toContain('1 autre');
+    expect(body).toContain('2 lignes');
+    expect(body).not.toContain('SECRET');
+    expect(body).not.toContain('git push');
+    expect(body).not.toContain('everyone');
+  });
+});

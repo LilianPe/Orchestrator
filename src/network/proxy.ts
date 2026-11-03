@@ -131,7 +131,7 @@ export class EgressProxy {
     return PIPE ? `\\\\.\\pipe\\factory-egress-${name}` : join(this.o.dir, `${name}.sock`);
   }
 
-  // TODO(dashboard): the journal goes to the base and the security log of the dashboard; a JSONL per run until then.
+  /** A JSONL per run, read into the base when the run's sandbox is destroyed (ORC-296), purged at 30 days. */
   journalPath(runId: string): string {
     if (!/^[\w.-]+$/.test(runId)) throw new Error(`egress: invalid run id ${runId}`);
     return join(this.o.dir, `${runId}.jsonl`);
