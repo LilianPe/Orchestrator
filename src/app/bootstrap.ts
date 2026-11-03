@@ -8,7 +8,7 @@ import { createGithubIngest, githubMapContext, githubRepoOf } from '../adapters/
 import { PrPoller } from '../adapters/forge/pr-poller.js';
 import { CachedRoleResolver } from '../adapters/roles/cached.js';
 import { ClaudeCodeRunner } from '../adapters/runner/claude-code.js';
-import { purgeTranscripts } from '../adapters/runner/transcript.js';
+import { purgeRunDirs, purgeSessionDirs, purgeTranscripts } from '../adapters/runner/transcript.js';
 import { FakeRunner } from '../adapters/runner/fake.js';
 import type { Runner } from '../adapters/runner/types.js';
 import { EgressProxy } from '../network/proxy.js';
@@ -210,6 +210,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
         ? {
             sandboxes,
             sessionsDir: paths.sessions,
+            runsDir: paths.runs,
             // factory-agent runs from the factory's install, read-only: only what it needs, never the whole root,
             // which can hold a `.env` or a dev FACTORY_HOME. The knowledge base, read-only, for the session-start hook.
             sandboxMounts: [
@@ -367,12 +368,20 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     };
     try {
       timers.start();
-      // Transcripts are kept 30 days (ORC-132): purged at start, then daily.
+      // Transcripts are kept 30 days (ORC-132), the per-run dirs and the closed tickets' sessions too (ORC-217):
+      // purged at start, then daily.
       const purge = () => {
-        const removed = purgeTranscripts(paths.transcripts, Date.now());
+        const now = Date.now();
+        const removed = purgeTranscripts(paths.transcripts, now);
         if (removed.length) log(`transcripts : ${removed.length} supprimé(s) après 30 jours`);
+        const runs = purgeRunDirs(paths.runs, now);
+        if (runs.length) log(`runs : ${runs.length} dossier(s) supprimé(s) après 30 jours`);
+        purgeSessionDirs(paths.sessions, now, store).then(
+          (sessions) => sessions.length && log(`sessions : ${sessions.length} supprimée(s), tickets clos depuis 30 jours`),
+          (e: unknown) => log(`sessions purge: ${(e as Error).message}`),
+        );
         // The egress journals (ORC-213), `*.jsonl` too: the same 30 days.
-        purgeTranscripts(paths.network, Date.now());
+        purgeTranscripts(paths.network, now);
       };
       purge();
       purgeInterval = setInterval(purge, 24 * 60 * 60 * 1000);

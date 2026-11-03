@@ -4,7 +4,8 @@ import { cli, enabled, useSandboxes } from './helpers.js';
 
 /**
  * Isolation n° 10 (ORC-218): nothing crosses from one run to another but what is mounted, as the
- * orchestrator mounts it (openSandbox): the worktree at /work and the ticket's session dir at ~/.claude.
+ * orchestrator mounts it (openSandbox): the worktree at /work and, for the implementer, the ticket's
+ * session dir at ~/.claude (any other run gets an empty per-run dir there, ORC-217).
  * $HOME itself is not writable in the public node image: a write that fails leaks nothing either.
  */
 const WRITE = `touch /work/leak /tmp/leak ${SANDBOX_HOME}/.claude/leak; touch ${SANDBOX_HOME}/leak 2>/dev/null; true`;

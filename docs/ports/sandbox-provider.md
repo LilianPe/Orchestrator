@@ -15,7 +15,7 @@ Le ticket donnait `WorkspaceManager` → SandboxProvider. ORC-225 a posé `Sandb
 
 | Méthode | Ce qu'elle garantit | Rejouée | Erreur |
 |---|---|---|---|
-| `create(req)` | un sandbox vivant pour `req.runId`, qui porte le niveau réseau demandé (`req.network` ; ce qui est appliqué : l'écart ci-dessous), sur un backend qui satisfait `req.requirements` | même `runId` : rend le sandbox existant, n'en crée pas de second (le routeur rejette s'il n'a pas ce niveau réseau ou ne satisfait pas les exigences) | rejette, en nommant l'exigence non satisfaite, quand aucun backend ne les satisfait toutes ; aucun sandbox n'est créé |
+| `create(req)` | un sandbox vivant pour `req.runId`, qui porte le niveau réseau demandé (`req.network`, appliqué par le proxy de sortie, ci-dessous), sur un backend qui satisfait `req.requirements` | même `runId` : rend le sandbox existant, n'en crée pas de second (le routeur rejette s'il n'a pas ce niveau réseau ou ne satisfait pas les exigences) | rejette, en nommant l'exigence non satisfaite, quand aucun backend ne les satisfait toutes ; aucun sandbox n'est créé |
 | `exec(id, argv, opts?)` | lance `argv` dans le sandbox jusqu'au bout et rend son code de sortie, `stdout` et `stderr` ; `cwd` vaut `/work` par défaut | relance la commande | rejette sur un id inconnu ou détruit ; un code non nul est un résultat, pas un rejet |
 | `spawnCommand(id, argv, opts?)` | la commande hôte qui lance `argv` dans le sandbox, stdio attaché, pour un runner qui lit sa sortie au fil de l'eau ; les valeurs de `opts.env` n'y figurent jamais (seuls les noms, `-e NOM`) | même commande | lève sur un id inconnu |
 | `findByAttempt(runId)` | le sandbox vivant de la tentative, par son label | sans effet | `undefined` quand il n'y en a pas, ou plus après `destroy` |
@@ -58,6 +58,6 @@ Le cas `exec` lance `EXEC_PROBE` (`sh -c`, qui écrit sur les deux sorties et so
 
 ## Écarts connus
 
-- **Réseau `claude-api` provisoirement ouvert, jusqu'à ORC-213.** `claude -p` doit joindre l'API Anthropic, et le proxy de sortie n'existe pas encore. Le backend conteneur accorde donc `claude-api`, `limited` et `full` par un réseau ouvert (le pont par défaut du moteur), pont provisoire jusqu'à ORC-213. Le `Sandbox` rendu porte le niveau **demandé**, pas celui appliqué : le contrat l'exige (un `create` rejoué compare ce niveau). L'orchestrateur écrit un avertissement dans le journal à chaque sandbox ouvert à un autre niveau que `none`. Un `create` qui demande `none` obtient bien `--network none`.
+- **Réseau appliqué par le proxy de sortie (ORC-213).** Le backend conteneur tourne toujours en `--network none`. Avec le proxy de l'usine, il monte le socket du run et le certificat de l'autorité de sortie, et c'est le proxy qui applique le niveau ; sans proxy, rien ne sort, quel que soit le niveau. Le `Sandbox` rendu porte le niveau demandé (un `create` rejoué le compare). Un conteneur vivant dont le socket n'est pas tenu par ce processus (démon redémarré) n'est pas rendu : il est détruit et refait. Voir [interface-et-securite.md](../interface-et-securite.md#réseau-des-sandboxes).
 - `FakeSandboxProvider` ne regarde pas les exigences : il crée toujours un sandbox `L3`. Le refus est vérifié sur le routeur.
 - `FakeSandboxProvider.create` créait un sandbox à chaque appel : il rend celui du run depuis ORC-189.

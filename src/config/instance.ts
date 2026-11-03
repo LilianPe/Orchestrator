@@ -78,6 +78,8 @@ export function homePaths(home: string) {
     logs: join(home, 'logs'),
     /** Each ticket's Claude session dir, mounted as `~/.claude` of its sandboxes (ORC-204). */
     sessions: join(home, 'sessions'),
+    /** Each sandboxed run's own dir: its refusals log, its `~/.claude` out of the ticket session (ORC-217). */
+    runs: join(home, 'runs'),
     /** The egress proxy's socket and connection journal of each sandboxed run (ORC-213). */
     network: join(home, 'network'),
     /** The egress CA (ORC-213): its key is the daemon's, never mounted in a sandbox. */
@@ -87,7 +89,7 @@ export function homePaths(home: string) {
 
 function ensureTree(home: string): void {
   const p = homePaths(home);
-  for (const dir of [home, p.transcripts, p.workspaces, p.logs, p.sessions]) mkdirSync(dir, { recursive: true });
+  for (const dir of [home, p.transcripts, p.workspaces, p.logs, p.sessions, p.runs]) mkdirSync(dir, { recursive: true });
 }
 
 function validate(raw: unknown): InstanceConfig {
