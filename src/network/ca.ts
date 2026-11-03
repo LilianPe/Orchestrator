@@ -49,15 +49,22 @@ export async function loadOrCreateCa(dir: string): Promise<FactoryCa> {
 export class LeafIssuer {
   private readonly caCert: forge.pki.Certificate;
   private readonly caKey: forge.pki.rsa.PrivateKey;
+  /** Parsed once: the same for every leaf. */
+  private readonly leafPublic: forge.pki.rsa.PublicKey;
+  private readonly caKeyId: string;
   private readonly cache = new Map<string, { ctx: SecureContext; pem: string; until: number }>();
 
   private constructor(ca: FactoryCa, private readonly key: { publicKey: string; privateKey: string }) {
     this.caCert = forge.pki.certificateFromPem(ca.certPem);
     this.caKey = forge.pki.privateKeyFromPem(ca.keyPem);
+    this.leafPublic = forge.pki.publicKeyFromPem(key.publicKey);
+    this.caKeyId = this.caCert.generateSubjectKeyIdentifier().getBytes();
   }
 
-  static async create(ca: FactoryCa): Promise<LeafIssuer> {
-    return new LeafIssuer(ca, await rsa());
+  /** The leaf key is made while the CA loads: neither waits on the other. */
+  static async create(ca: FactoryCa | Promise<FactoryCa>): Promise<LeafIssuer> {
+    const [c, key] = await Promise.all([ca, rsa()]);
+    return new LeafIssuer(c, key);
   }
 
   /** The TLS context the proxy presents for `host`. */
@@ -74,7 +81,7 @@ export class LeafIssuer {
     const hit = this.cache.get(host);
     if (hit && hit.until > Date.now()) return hit;
     const cert = forge.pki.createCertificate();
-    cert.publicKey = forge.pki.publicKeyFromPem(this.key.publicKey);
+    cert.publicKey = this.leafPublic;
     cert.serialNumber = serial();
     cert.validity.notBefore = new Date(Date.now() - DAY);
     cert.validity.notAfter = new Date(Date.now() + 30 * DAY);
@@ -85,12 +92,15 @@ export class LeafIssuer {
       { name: 'keyUsage', digitalSignature: true, keyEncipherment: true, critical: true },
       { name: 'extKeyUsage', serverAuth: true },
       { name: 'subjectAltName', altNames: [isIP(host) ? { type: 7, ip: host } : { type: 2, value: host }] },
-      { name: 'authorityKeyIdentifier', keyIdentifier: this.caCert.generateSubjectKeyIdentifier().getBytes() },
+      { name: 'authorityKeyIdentifier', keyIdentifier: this.caKeyId },
     ]);
     cert.sign(this.caKey, forge.md.sha256.create());
     const pem = forge.pki.certificateToPem(cert);
     // Issued for 30 days, renewed after 7: a long-lived daemon never presents an expired one.
     const entry = { ctx: createSecureContext({ key: this.key.privateKey, cert: pem }), pem, until: Date.now() + 7 * DAY };
+    this.cache.delete(host);
+    // ponytail: a cap, the oldest out first; at `full` every host would otherwise stay for the daemon's life.
+    if (this.cache.size >= 1000) this.cache.delete(this.cache.keys().next().value!);
     this.cache.set(host, entry);
     return entry;
   }

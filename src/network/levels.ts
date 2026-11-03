@@ -84,7 +84,8 @@ export function allowRequest(p: EgressPolicy, host: string, method: string, path
   return refuse(`${method} ${h}${pathname} refused: GET, HEAD and OPTIONS only`);
 }
 
-function norm(host: string): string {
+/** Lowercase, no trailing dot: the one spelling the lists, the proxy's certificate, Host and journal see. */
+export function norm(host: string): string {
   return host.toLowerCase().replace(/\.$/, '');
 }
 

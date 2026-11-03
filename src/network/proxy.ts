@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { pipeline, type Duplex } from 'node:stream';
 import { TLSSocket } from 'node:tls';
 import { LeafIssuer, loadOrCreateCa, type FactoryCa } from './ca.js';
-import { allowConnect, allowRequest, type EgressPolicy, type Verdict } from './levels.js';
+import { allowConnect, allowRequest, norm, type EgressPolicy, type Verdict } from './levels.js';
 
 /** One line of a run's egress journal: every request, allowed or refused (ORC-213). */
 export interface EgressEntry {
@@ -91,6 +91,12 @@ const targets = new WeakMap<object, { host: string; port: number }>();
 /** Tunnels that carried a request: their end is that request's, journaled with it. */
 const served = new WeakSet<object>();
 
+/** ponytail: Windows named pipes, for the unit tests only; sandboxes need a Linux daemon (a Unix socket file). */
+const PIPE = process.platform === 'win32';
+
+/** HTTP/1.1 alone: an h2-only client fails the handshake, and is journaled by clientError. */
+const ALPN = ({ protocols }: { protocols: string[] }) => (protocols.includes('http/1.1') ? 'http/1.1' : undefined);
+
 const samePolicy = (a: EgressPolicy, b: EgressPolicy) => a.level === b.level && a.allow.length === b.allow.length && a.allow.every((h, i) => h === b.allow[i]);
 
 /**
@@ -103,23 +109,26 @@ const samePolicy = (a: EgressPolicy, b: EgressPolicy) => a.level === b.level && 
  */
 export class EgressProxy {
   private readonly runs = new Map<string, Run>();
-  private leavesReady?: Promise<{ ca: FactoryCa; issuer: LeafIssuer }>;
-  private ca?: FactoryCa;
-  private issuer?: LeafIssuer;
+  /** The CA and its leaves, made at the first open. */
+  private tlsReady?: Promise<void>;
+  private tls?: { ca: FactoryCa; issuer: LeafIssuer };
+  /** The agent API's name in the sandbox, normalised as every CONNECT host is. */
+  private readonly agentHost?: string;
 
-  constructor(private readonly o: EgressProxyOptions) {}
+  constructor(private readonly o: EgressProxyOptions) {
+    if (o.agentApi) this.agentHost = norm(o.agentApi.host);
+  }
 
   /** The CA certificate the sandboxes mount: there once a run was opened. */
   get caCertPath(): string {
-    if (!this.ca) throw new Error('egress: no run opened yet, so no CA');
-    return this.ca.certPath;
+    if (!this.tls) throw new Error('egress: no run opened yet, so no CA');
+    return this.tls.ca.certPath;
   }
 
   socketPath(runId: string): string {
     // Hashed: a Unix socket path is capped near 108 bytes.
     const name = createHash('sha256').update(`${this.o.dir}\0${runId}`).digest('hex').slice(0, 16);
-    // ponytail: a named pipe on Windows, for the unit tests only; sandboxes need a Linux daemon.
-    return process.platform === 'win32' ? `\\\\.\\pipe\\factory-egress-${name}` : join(this.o.dir, `${name}.sock`);
+    return PIPE ? `\\\\.\\pipe\\factory-egress-${name}` : join(this.o.dir, `${name}.sock`);
   }
 
   // TODO(dashboard): the journal goes to the base and the security log of the dashboard; a JSONL per run until then.
@@ -164,8 +173,12 @@ export class EgressProxy {
   }
 
   private async listen(run: Run, path: string): Promise<void> {
-    await this.leaves();
-    if (process.platform !== 'win32') rmSync(path, { force: true }); // left by a crash
+    this.tlsReady ??= (async () => {
+      const ca = loadOrCreateCa(this.o.caDir);
+      this.tls = { ca: await ca, issuer: await LeafIssuer.create(ca) };
+    })();
+    await this.tlsReady;
+    if (!PIPE) rmSync(path, { force: true }); // left by a crash
     run.server.on('request', (req: IncomingMessage, res: ServerResponse) => this.forward(run, req, res));
     run.server.on('connect', (req: IncomingMessage, client: Duplex, head: Buffer) => this.tunnel(run, req, client, head));
     run.mitm.on('request', (req: IncomingMessage, res: ServerResponse) => this.decrypted(run, req, res));
@@ -181,7 +194,7 @@ export class EgressProxy {
     });
     await new Promise<void>((ok, ko) => run.server.once('error', ko).listen(path, ok));
     // The sandbox runs under the daemon's uid: no one else on the host opens it.
-    if (process.platform !== 'win32') chmodSync(path, 0o600);
+    if (!PIPE) chmodSync(path, 0o600);
   }
 
   /** Idempotent: an unknown run is ignored. What was in flight is journaled before the journal ends. */
@@ -204,28 +217,17 @@ export class EgressProxy {
       new Promise<void>((ok) => run.server.close(() => ok())),
       new Promise<void>((ok) => run.journal.end(() => ok())),
     ]);
-    if (process.platform !== 'win32') rmSync(this.socketPath(runId), { force: true });
+    if (!PIPE) rmSync(this.socketPath(runId), { force: true });
   }
 
   async closeAll(): Promise<void> {
     await Promise.all([...this.runs.keys()].map((id) => this.close(id)));
   }
 
-  private leaves(): Promise<{ ca: FactoryCa; issuer: LeafIssuer }> {
-    this.leavesReady ??= (async () => {
-      const ca = await loadOrCreateCa(this.o.caDir);
-      const issuer = await LeafIssuer.create(ca);
-      this.ca = ca;
-      this.issuer = issuer;
-      return { ca, issuer };
-    })();
-    return this.leavesReady;
-  }
-
   /** Where the daemon listens for the agent API, when `host:port` is its name in the sandbox. */
   private agent(host: string, port: number): { host: string; port: number } | undefined {
     const a = this.o.agentApi;
-    return a && host === a.host.toLowerCase() && port === a.port ? a.to : undefined;
+    return a && host === this.agentHost && port === a.port ? a.to : undefined;
   }
 
   /** Never throws, never blocks: a journal that fails is logged, the run goes on. */
@@ -265,9 +267,8 @@ export class EgressProxy {
     if (head.length) client.unshift(head);
     const tls = new TLSSocket(client as Socket, {
       isServer: true,
-      secureContext: this.issuer!.context(host),
-      // HTTP/1.1 alone: an h2-only client fails the handshake, and is journaled by clientError.
-      ALPNCallback: ({ protocols }: { protocols: string[] }) => (protocols.includes('http/1.1') ? 'http/1.1' : undefined),
+      secureContext: this.tls!.issuer.context(host),
+      ALPNCallback: ALPN,
     } as ConstructorParameters<typeof TLSSocket>[1]);
     targets.set(tls, { host, port });
     run.sockets.add(tls);
@@ -312,16 +313,7 @@ export class EgressProxy {
     const path = req.url ?? '/';
     const v = check(t.host, allowRequest(run.policy, t.host, method, path));
     if (!v.ok) return this.refuse(run, res, method, t.host, path, v.reason);
-    const out = httpsRequest({
-      host: t.host,
-      port: this.o.upstream?.port ?? t.port,
-      method,
-      path,
-      headers: { ...hopless(req), host: authority(t.host, t.port, 443) },
-      ...(isIP(t.host) ? {} : { servername: t.host }),
-      lookup: this.o.upstream?.lookup ?? publicLookup,
-      ...(this.o.upstream ? { ca: this.o.upstream.ca } : {}),
-    });
+    const out = httpsRequest({ ...this.tlsTo(t.host, t.port), method, path, headers: { ...hopless(req), host: authority(t.host, t.port, 443) } });
     this.relay(run, req, res, out, method, t.host, path);
   }
 
@@ -344,14 +336,19 @@ export class EgressProxy {
       ? agentVerdict(run.policy)
       : check(host, port === 80 || run.policy.level === 'full' ? allowRequest(run.policy, host, method, path) : { ok: false, reason: `port ${port} refused` });
     if (!v.ok) return this.refuse(run, res, method, host, path, v.reason);
-    const full = run.policy.level === 'full';
-    const opts = { method, path, headers: { ...hopless(req), host: agent ? authority(host, port, 80) : authority(host, full ? port : 443, full ? 80 : 443) } };
-    const out = agent
-      ? httpRequest({ ...opts, ...agent })
-      : full
-        ? httpRequest({ ...opts, host, port, lookup: publicLookup })
-        : httpsRequest({ ...opts, host, port: 443, ...(isIP(host) ? {} : { servername: host }), lookup: this.o.upstream?.lookup ?? publicLookup, ...(this.o.upstream ? { ca: this.o.upstream.ca } : {}) });
+    // Below full the port is 80 (checked above), so the Host is the bare host either way.
+    const opts = { method, path, headers: { ...hopless(req), host: authority(host, port, 80) } };
+    let out: ClientRequest;
+    if (agent) out = httpRequest({ ...opts, ...agent });
+    else if (run.policy.level === 'full') out = httpRequest({ ...opts, host, port, lookup: publicLookup });
+    else out = httpsRequest({ ...opts, ...this.tlsTo(host, 443) });
     this.relay(run, req, res, out, method, host, path);
+  }
+
+  /** Where a checked request goes over TLS: the host's real certificate verified, no private address. */
+  private tlsTo(host: string, port: number) {
+    const u = this.o.upstream;
+    return { host, port: u?.port ?? port, ...(isIP(host) ? {} : { servername: host }), lookup: u?.lookup ?? publicLookup, ...(u ? { ca: u.ca } : {}) };
   }
 
   private refuse(run: Run, res: ServerResponse, method: string, host: string, path: string, reason: string): void {
@@ -415,9 +412,6 @@ function authority(host: string, port: number, defaultPort: number): string {
 }
 
 const pathOf = (path: string) => path.split('?')[0]!;
-
-/** Lowercase, no trailing dot: the one spelling the lists, the certificate, the Host and the journal see. */
-const norm = (host: string) => host.toLowerCase().replace(/\.$/, '');
 
 /** `host:port` of a CONNECT, IPv6 in brackets, the host normalised. */
 function target(authority: string): { hostname: string; port: number } {
