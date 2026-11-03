@@ -186,8 +186,10 @@ export class LinearTracker implements Tracker, TeamDirectory {
 
   async listDelegated(teamKey: string): Promise<TrackerIssue[]> {
     const { issues } = await this.api.gql<{ issues: { nodes: IssueNode[] } }>(Q.delegated, { teamKey, appUserId: this.appUserId });
-    for (const n of issues.nodes) this.issueIds.set(n.identifier, n.id);
-    return issues.nodes.map(toIssue);
+    // A deleted issue is not delegated, as getIssue says, even if the query still lists it from the trash.
+    const live = issues.nodes.filter((n) => !n.trashed);
+    for (const n of live) this.issueIds.set(n.identifier, n.id);
+    return live.map(toIssue);
   }
 
   async search(term: string): Promise<SearchHit[]> {

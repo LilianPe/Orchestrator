@@ -53,6 +53,11 @@ describe('LinearTracker', () => {
     await expect(team).rejects.not.toBeInstanceOf(IssueNotFoundError);
   });
 
+  it('lists no issue in the trash among the delegated ones', async () => {
+    const { api } = fakeLinear({ Delegated: () => ({ issues: { nodes: [node, { ...node, id: 'uuid-2', identifier: 'REL-2', trashed: true }] } }) });
+    expect((await new LinearTracker(api, 'app-1').listDelegated('REL')).map((i) => i.identifier)).toEqual(['REL-1']);
+  });
+
   it('takes an issue in the trash (deleted, kept 30 days by Linear) for one it does not have', async () => {
     const { api } = fakeLinear({ Issue: () => ({ issue: { ...node, trashed: true } }) });
     await expect(new LinearTracker(api, 'app-1').getIssue('REL-1')).rejects.toBeInstanceOf(IssueNotFoundError);
