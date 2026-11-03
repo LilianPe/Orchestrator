@@ -109,12 +109,12 @@ Le proxy applique le niveau du run :
 | `custom` (dépôt) | `limited` plus les hôtes de `network.allow`. |
 | `full` | Tout : réservé à `setup`, refusé pour l'agent. |
 
-- **Chaque tunnel est déchiffré** (`CONNECT`, port 443 seulement, sauf en `full`). Le proxy présente un certificat de l'**autorité de l'usine** pour l'hôte demandé, lit chaque requête, vérifie la méthode et le chemin, puis continue en TLS vers le vrai hôte, son certificat vérifié par le magasin de Node. Le conteneur ne fait confiance qu'à cette autorité : son certificat est monté en lecture seule en `/run/factory/egress-ca.crt`, et `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `REQUESTS_CA_BUNDLE`, `PIP_CERT`, `GIT_SSL_CAINFO`, `npm_config_cafile` et les variables de Yarn y pointent. Sa clé reste dans `<home>/egress-ca/` (`0600`) et n'est jamais montée.
+- **Chaque tunnel est déchiffré** (`CONNECT`, port 443 seulement ; en `full`, un autre port est relayé tel quel en TCP, journalisé). Le proxy présente un certificat de l'**autorité de l'usine** pour l'hôte demandé, lit chaque requête, vérifie la méthode et le chemin, puis continue en TLS vers le vrai hôte, son certificat vérifié par le magasin de Node. Le conteneur ne fait confiance qu'à cette autorité : son certificat est monté en lecture seule en `/run/factory/egress-ca.crt`, et `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `REQUESTS_CA_BUNDLE`, `PIP_CERT`, `GIT_SSL_CAINFO`, `npm_config_cafile` et les variables de Yarn y pointent. Sa clé reste dans `<home>/egress-ca/` (`0600`) et n'est jamais montée.
 - **Écritures refusées partout** : `git push`, gist, publication d'un paquet, POST vers une doc ou un hôte de `network.allow`. Seul `git fetch` (POST vers `git-upload-pack` de `github.com`) est permis en plus. L'API Claude garde toutes ses méthodes, journalisées comme le reste.
 - **HTTP/1.1 seulement** dans un tunnel : un client qui n'offre que HTTP/2, une mise à niveau (WebSocket) ou autre chose que HTTP sont refusés et journalisés.
 - **Hôte vérifié = hôte joint** : la requête part vers la cible du `CONNECT`, avec cet hôte en `Host`, quel que soit l'en-tête envoyé par le conteneur.
 - **Jamais d'adresse privée** (boucle locale, réseaux privés, `169.254.0.0/16` des métadonnées cloud), même en `full`, même par un nom qui y mène.
-- **Journal** : chaque requête et chaque refus, avec l'hôte, la méthode, le chemin (sans sa requête, qui peut porter un jeton), les octets envoyés et reçus et la raison d'un refus, dans `<home>/network/<run>.jsonl`.
+- **Journal** : chaque requête et chaque refus, avec l'hôte, la méthode, le chemin (sans sa requête, qui peut porter un jeton), les octets envoyés et reçus et la raison d'un refus, dans `<home>/network/<run>.jsonl`, purgé après 30 jours comme les transcripts.
 - **Après un redémarrage du démon**, un conteneur encore vivant a un socket mort : il est détruit et refait, jamais repris.
 
 ## Secrets

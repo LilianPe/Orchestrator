@@ -1,30 +1,46 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { build } from 'esbuild';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { NetworkLevel, Sandbox } from '../../src/adapters/sandbox/types.js';
-import type { EgressEntry } from '../../src/network/proxy.js';
+import { EgressProxy, type EgressEntry } from '../../src/network/proxy.js';
 import { cli, enabled, image, useSandboxes } from './helpers.js';
 
 /**
- * ORC-213: the sandbox runs `--network none` and gets out through the egress proxy alone. The proxy
- * runs in a container of its own, on the engine's side: a Unix socket made on a Windows or macOS
- * host does not cross into Docker Desktop's VM, and the daemon is a Linux one anyway.
+ * ORC-213: the sandbox runs `--network none` and gets out through the egress proxy alone.
+ *
+ * On Linux (the CI, the server) the proxy runs in this process, as in the daemon: its socket, made by
+ * this user, bind-mounted into the sandbox, which runs as this user (`--userns=keep-id` under Podman).
+ * Elsewhere (Docker Desktop on Windows or macOS) a host Unix socket does not cross into the engine's
+ * VM: the proxy runs in a helper container, its socket shared from that container's volume. Under
+ * rootless Podman that helper would not do: its socket belongs to a sub-uid of the user namespace,
+ * which the sandbox's keep-id user cannot open.
  */
+const inProcess = process.platform === 'linux';
 const helper = `isolation-egress-${Date.now()}`;
 const levels: NetworkLevel[] = ['limited', 'none'];
 let bundleDir = '';
-/** The runs' sockets on the engine's side, by run id, and the CA certificate there. */
-let sockets: Record<string, string> = {};
-let caCertPath = '';
+/** The proxy the provider opens runs on: the real one in this process, or the helper's sockets. */
+let impl: Pick<EgressProxy, 'open' | 'close' | 'isOpen' | 'caCertPath'>;
+let readJournal: (runId: string) => string = () => '';
+let agentServer: Server | undefined;
 
 const engine = (args: string[]) => execFileSync(cli, args, { encoding: 'utf8', timeout: 300_000 }).trim();
 
 describe.skipIf(!enabled)(`egress proxy (${cli})`, () => {
   const { create, request, sh } = useSandboxes('net', {
-    egress: { open: async (runId) => sockets[runId]!, close: async () => {}, isOpen: () => true, get caCertPath() { return caCertPath; } },
+    egress: {
+      open: (runId, policy) => impl.open(runId, policy),
+      close: (runId) => impl.close(runId),
+      isOpen: (runId) => impl.isOpen(runId),
+      get caCertPath() {
+        return impl.caCertPath;
+      },
+    },
   });
   const runIds = Object.fromEntries(levels.map((l) => [l, request().runId])) as Record<NetworkLevel, string>;
   const sbx: Partial<Record<NetworkLevel, Sandbox>> = {};
@@ -36,7 +52,7 @@ describe.skipIf(!enabled)(`egress proxy (${cli})`, () => {
   const fetchIn = (url: string, method = 'GET') =>
     `node -e "fetch('${url}',{method:'${method}'}).then(r=>console.log(r.status),e=>{console.log('ERR',e.cause?.code??e.message);process.exit(3)})"`;
   const journal = (level: NetworkLevel): EgressEntry[] => {
-    const text = engine(['exec', helper, 'sh', '-c', `cat /run/egress/${runIds[level]}.jsonl 2>/dev/null || true`]);
+    const text = readJournal(runIds[level]).trim();
     return text ? text.split('\n').map((l) => JSON.parse(l) as EgressEntry) : [];
   };
   /** The relay is the container's PID 1: up a moment after the container. */
@@ -45,7 +61,19 @@ describe.skipIf(!enabled)(`egress proxy (${cli})`, () => {
     expect((await run(level, `for i in $(seq 50); do ${probe} && exit 0; sleep 0.1; done; exit 1`)).code).toBe(0);
   };
 
-  beforeAll(async () => {
+  /** The daemon's way: the proxy here, a stand-in agent API on the loopback. */
+  async function startInProcess(): Promise<void> {
+    bundleDir = mkdtempSync(join(tmpdir(), 'factory-egress-'));
+    agentServer = createServer((req, res) => res.end(`agent ${req.method} ${req.url}`));
+    await new Promise<void>((ok) => agentServer!.listen(0, '127.0.0.1', ok));
+    const to = { host: '127.0.0.1', port: (agentServer.address() as AddressInfo).port };
+    const proxy = new EgressProxy({ dir: join(bundleDir, 'network'), caDir: join(bundleDir, 'ca'), agentApi: { host: 'host.docker.internal', port: 4101, to } });
+    impl = proxy;
+    readJournal = (runId) => (existsSync(proxy.journalPath(runId)) ? readFileSync(proxy.journalPath(runId), 'utf8') : '');
+  }
+
+  /** Docker Desktop's way: the proxy in a helper container, its sockets in that container's volume. */
+  async function startHelper(): Promise<void> {
     bundleDir = mkdtempSync(join(tmpdir(), 'factory-egress-'));
     // The proxy as the daemon runs it, one socket per run handed to the sandbox user, and a stand-in agent API.
     await build({
@@ -93,17 +121,25 @@ describe.skipIf(!enabled)(`egress proxy (${cli})`, () => {
     if (!Object.keys(names).length) throw new Error(`egress proxy not up:\n${engine(['logs', helper])}`);
     // The anonymous volume, as the engine names it: a bind of a file in it reaches the socket.
     const volume = engine(['inspect', '--format', '{{range .Mounts}}{{if eq .Destination "/run/egress"}}{{.Source}}{{end}}{{end}}', helper]);
-    sockets = Object.fromEntries(Object.entries(names).map(([id, name]) => [id, `${volume}/${name}`]));
-    caCertPath = `${volume}/ca/ca.crt`;
+    const sockets = Object.fromEntries(Object.entries(names).map(([id, name]) => [id, `${volume}/${name}`]));
+    impl = { open: async (runId) => sockets[runId]!, close: async () => {}, isOpen: () => true, caCertPath: `${volume}/ca/ca.crt` };
+    readJournal = (runId) => engine(['exec', helper, 'sh', '-c', `cat /run/egress/${runId}.jsonl 2>/dev/null || true`]);
+  }
+
+  beforeAll(async () => {
+    await (inProcess ? startInProcess() : startHelper());
     for (const level of levels) {
       sbx[level] = await create({ runId: runIds[level], network: level });
       await relayUp(level);
     }
   }, 300_000);
 
-  afterAll(() => {
-    // With its anonymous volume; the sandboxes are useSandboxes'.
-    execFileSync(cli, ['rm', '-f', '-v', helper], { stdio: 'ignore' });
+  afterAll(async () => {
+    // The sandboxes are useSandboxes'; the helper goes with its anonymous volume.
+    if (inProcess) {
+      await (impl as EgressProxy | undefined)?.closeAll();
+      await new Promise((ok) => (agentServer ? agentServer.close(ok) : ok(undefined)));
+    } else execFileSync(cli, ['rm', '-f', '-v', helper], { stdio: 'ignore' });
     if (bundleDir) rmSync(bundleDir, { recursive: true, force: true });
   }, 120_000);
 
