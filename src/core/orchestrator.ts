@@ -82,7 +82,7 @@ async function storedOutput(store: Store, runId: string): Promise<AgentOutput | 
 }
 
 /** The message posted for a run that submitted its output: composed by the factory from it, never the agent's last text (ORC-289). */
-export function formatAgentOutput(o: AgentOutput): string {
+function formatAgentOutput(o: AgentOutput): string {
   const list = (title: string, items: string[]) => (items.length ? [`**${title}**\n${items.map((i) => `- ${i}`).join('\n')}`] : []);
   return [
     o.summary,

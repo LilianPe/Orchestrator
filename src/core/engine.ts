@@ -548,15 +548,13 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
     case 'control.stop':
       return stop(out);
     case 'run.finished': {
-      const { job: jobName, runId } = event.payload;
+      const { job: jobName, runId, output } = event.payload;
       const job = workflow.jobs[jobName];
       if (!job || event.payload.outcome === 'stopped') return out;
-      const closed = job.queue === 'dev' ? attemptDecision(event.payload, job) : event.payload.outcome;
+      const outcome = job.queue === 'dev' ? attemptDecision(event.payload, job) : event.payload.outcome;
       // Already blocked (the agent asked through `ask`, a human's stop…): it keeps its reason and gets no second notice.
-      if (typeof closed === 'object') return ticket?.blocked ? out : block(out, closed.reason, closed.body);
-      const outcome = closed;
+      if (typeof outcome === 'object') return ticket?.blocked ? out : block(out, outcome.reason, outcome.body);
       if (outcome === 'success' && ticket?.blocked && job.queue === 'dev') return out;
-      const { output } = event.payload;
       if (outcome === 'success') {
         if (job.verify.length === 0) return success(out, job, runId, output);
         out.events.push({ type: 'verify.started', runId });
