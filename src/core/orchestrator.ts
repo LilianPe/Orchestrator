@@ -450,7 +450,8 @@ export class Orchestrator {
     if (!this.d.sessionsDir || !this.d.runsDir) throw new Error('sessionsDir and runsDir are required with sandboxes');
     const runDir = join(this.d.runsDir, runId);
     const claudeDir = ticketSession ? join(this.d.sessionsDir, project.id, ticketId) : join(runDir, 'claude');
-    for (const dir of [claudeDir, join(runDir, 'refusals')]) mkdirSync(dir, { recursive: true });
+    const refusalsDir = join(runDir, 'refusals');
+    for (const dir of [claudeDir, refusalsDir]) mkdirSync(dir, { recursive: true });
     const gitDir = await this.d.workspaces.gitCommonDir(ws.path);
     const sandbox = await sandboxes.create({
       runId,
@@ -461,7 +462,7 @@ export class Orchestrator {
       mounts: [
         { host: gitDir, target: gitDir, readOnly: false },
         { host: claudeDir, target: `${SANDBOX_HOME}/.claude`, readOnly: false },
-        { host: join(runDir, 'refusals'), target: REFUSALS_TARGET, readOnly: false },
+        { host: refusalsDir, target: REFUSALS_TARGET, readOnly: false },
         { host: this.d.packDir, target: PACK_TARGET, readOnly: true },
         { host: this.settingsPath(), target: SETTINGS_TARGET, readOnly: true },
         ...(this.d.sandboxMounts ?? []),

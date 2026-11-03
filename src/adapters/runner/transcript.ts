@@ -59,6 +59,8 @@ export function maskTranscriptLine(line: string, secrets: readonly string[]): st
   return out;
 }
 
+const stale = (path: string, now: number): boolean => statSync(path).mtimeMs + TRANSCRIPT_RETENTION_MS <= now;
+
 /** Deletes the transcripts whose last write is older than the retention; returns the deleted file names. */
 export function purgeTranscripts(dir: string, now: number): string[] {
   let names: string[];
@@ -72,7 +74,7 @@ export function purgeTranscripts(dir: string, now: number): string[] {
     if (!name.endsWith('.jsonl')) continue;
     const file = join(dir, name);
     try {
-      if (statSync(file).mtimeMs + TRANSCRIPT_RETENTION_MS <= now) {
+      if (stale(file, now)) {
         unlinkSync(file);
         removed.push(name);
       }
@@ -82,8 +84,6 @@ export function purgeTranscripts(dir: string, now: number): string[] {
   }
   return removed;
 }
-
-const stale = (path: string, now: number): boolean => statSync(path).mtimeMs + TRANSCRIPT_RETENTION_MS <= now;
 
 const dirs = (dir: string): string[] => {
   try {
