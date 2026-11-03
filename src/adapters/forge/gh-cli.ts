@@ -11,6 +11,21 @@ export function aggregateChecks(buckets: string[]): PrInfo['checks'] {
 }
 
 /**
+ * `gh pr checks` exits 1 with an empty stdout both for a PR without any check and for a failure (network,
+ * auth); only this stderr line tells the first apart. Checks that fail or are pending still come as JSON.
+ */
+const NO_CHECKS = /^no checks reported on the '.*' branch$/m;
+
+function parseChecks(stdout: string): { name: string; bucket: string }[] | undefined {
+  try {
+    const list: unknown = JSON.parse(stdout);
+    return Array.isArray(list) ? (list as { name: string; bucket: string }[]) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * What `GET /repos/{owner}/{repo}/collaborators/{user}/permission` answers (ORC-186): its `role_name`
  * when it is a known one (`maintain`, `triage`), else the base `permission` (a custom role keeps its base).
  */
@@ -56,13 +71,14 @@ export class GhCliForge implements Forge, RepoPermissions {
     let checks: PrInfo['checks'] = 'none';
     let failedChecks: string[] = [];
     if (pr.state === 'OPEN') {
-      const r = await this.exec('gh', ['pr', 'checks', String(pr.number), '--json', 'name,bucket'], { cwd: repoPath });
-      try {
-        const list = JSON.parse(r.stdout || '[]') as { name: string; bucket: string }[];
+      const args = ['pr', 'checks', String(pr.number), '--json', 'name,bucket'];
+      const r = await this.exec('gh', args, { cwd: repoPath });
+      const list = parseChecks(r.stdout);
+      if (list) {
         checks = aggregateChecks(list.map((c) => c.bucket));
         failedChecks = list.filter((c) => c.bucket === 'fail' || c.bucket === 'cancel').map((c) => c.name);
-      } catch {
-        checks = 'none';
+      } else if (r.code !== 0 && !NO_CHECKS.test(r.stderr)) {
+        throw new Error(`gh ${args.join(' ')}: ${r.stderr.trim() || r.stdout.trim()}`);
       }
     }
     return {

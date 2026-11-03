@@ -17,6 +17,10 @@ export interface ForgeSubject {
   unreachable?: Forge;
   /** The branch of an open PR whose checks the forge answers in a form that cannot be read; absent, the case is skipped. */
   unreadableChecks?: string;
+  /** The branch of an open PR that has no check at all; absent, the case is skipped. */
+  noChecks?: string;
+  /** The branch of an open PR that the forge finds but whose checks it then fails to answer; absent, the case is skipped. */
+  checksDown?: string;
 }
 
 export function describeForgeContract(name: string, make: () => ForgeSubject | Promise<ForgeSubject>, options?: ContractOptions): void {
@@ -80,6 +84,18 @@ export function describeForgeContract(name: string, make: () => ForgeSubject | P
       expect(await resolved(s.forge.findPr(s.repoPath, s.unreadableChecks))).toMatchObject({
         branch: s.unreadableChecks, state: 'OPEN', checks: 'none', failedChecks: [],
       });
+    });
+
+    it('findPr gives none for an open PR without any check', async (ctx) => {
+      const s = await subjectWith(make, () => ctx.skip(), 'noChecks');
+      expect(await resolved(s.forge.findPr(s.repoPath, s.noChecks))).toMatchObject({
+        branch: s.noChecks, state: 'OPEN', checks: 'none', failedChecks: [],
+      });
+    });
+
+    it('findPr rejects when the forge answers the PR but not its checks', async (ctx) => {
+      const s = await subjectWith(make, () => ctx.skip(), 'checksDown');
+      await expect(s.forge.findPr(s.repoPath, s.checksDown)).rejects.toThrow();
     });
 
   });

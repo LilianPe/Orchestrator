@@ -3,12 +3,12 @@ import { describeForgeContract } from '../../../test/contracts/forge.contract.js
 import type { Exec } from '../exec.js';
 import { aggregateChecks, GhCliForge } from './gh-cli.js';
 
-function fakeExec(map: Record<string, { stdout: string; code?: number }>): Exec {
+function fakeExec(map: Record<string, { stdout: string; stderr?: string; code?: number }>): Exec {
   return async (cmd, args) => {
     const key = [cmd, ...args].join(' ');
     const hit = Object.entries(map).find(([k]) => key.startsWith(k));
     if (!hit) throw new Error(`unexpected: ${key}`);
-    return { stdout: hit[1].stdout, stderr: '', code: hit[1].code ?? 0 };
+    return { stdout: hit[1].stdout, stderr: hit[1].stderr ?? '', code: hit[1].code ?? 0 };
   };
 }
 
@@ -22,7 +22,12 @@ describeForgeContract('GhCliForge (scripted gh)', () => ({
       'gh pr list --head factory/rel-1-x ': { stdout: pr(7, 'factory/rel-1-x') },
       'gh pr checks 7 ': { stdout: JSON.stringify([{ name: 'test', bucket: 'fail' }, { name: 'lint', bucket: 'pass' }]), code: 1 },
       'gh pr list --head factory/rel-2-y ': { stdout: pr(8, 'factory/rel-2-y') },
-      'gh pr checks 8 ': { stdout: 'no checks reported on the branch', code: 1 },
+      'gh pr checks 8 ': { stdout: 'not json' },
+      // What gh 2.63 and 2.103 answer: exit 1, nothing on stdout, for a PR without checks as for a failure.
+      'gh pr list --head factory/rel-3-z ': { stdout: pr(9, 'factory/rel-3-z') },
+      'gh pr checks 9 ': { stdout: '', stderr: "no checks reported on the 'factory/rel-3-z' branch\n", code: 1 },
+      'gh pr list --head factory/rel-4-w ': { stdout: pr(10, 'factory/rel-4-w') },
+      'gh pr checks 10 ': { stdout: '', stderr: 'Post "https://api.github.com/graphql": dial tcp: connection refused\n', code: 1 },
       'gh repo view': { stdout: JSON.stringify({ owner: { login: 'me' }, name: 'app' }) },
       'gh api graphql': { stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [thread] } } } } }) },
     }),
@@ -33,6 +38,8 @@ describeForgeContract('GhCliForge (scripted gh)', () => ({
   unresolved: [{ author: 'alice', body: 'src/a.ts:3 — renommer', at: Date.parse('2026-10-10T10:00:00Z'), source: 'review' }],
   unreachable: new GhCliForge(async () => ({ stdout: '', stderr: 'error connecting to api.github.com', code: 1 })),
   unreadableChecks: 'factory/rel-2-y',
+  noChecks: 'factory/rel-3-z',
+  checksDown: 'factory/rel-4-w',
 }));
 
 describe('aggregateChecks', () => {

@@ -392,6 +392,31 @@ describeForgeContract(
   { violates: [UNREADABLE] },
 );
 
+const NO_CHECKS = 'findPr gives none for an open PR without any check';
+const CHECKS_DOWN = 'findPr rejects when the forge answers the PR but not its checks';
+const openPr = (branch: string) => ({ number: 9, url: 'https://github.test/pr/9', state: 'OPEN' as const, branch, failedChecks: [] });
+
+describeForgeContract(
+  'a forge that reads checks it failed to fetch as none',
+  forgeThat({ ...findingPr(async (_repo, branch) => ({ ...openPr(branch), checks: 'none' })), checksDown: 'factory/rel-4-w' }),
+  { violates: [CHECKS_DOWN] },
+);
+
+describeForgeContract(
+  'a forge that rejects an open PR without any check',
+  forgeThat({
+    ...findingPr(async (_repo, branch) => Promise.reject(new Error(`no checks reported on the '${branch}' branch`))),
+    noChecks: 'factory/rel-3-z',
+  }),
+  { violates: [NO_CHECKS] },
+);
+
+describeForgeContract(
+  'a forge that reports an open PR without any check as pending',
+  forgeThat({ ...findingPr(async (_repo, branch) => ({ ...openPr(branch), checks: 'pending' })), noChecks: 'factory/rel-3-z' }),
+  { violates: [NO_CHECKS] },
+);
+
 const NO_PR = 'findPr answers undefined for a branch without a PR';
 
 describeForgeContract(
