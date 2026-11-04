@@ -58,6 +58,8 @@ function setup(
   return { store, tracker, runner: fakeRunner, orch, scheduler, bus };
 }
 
+const mentioned = (ticketId: string): FactoryEvent =>
+  ({ id: 'm1', type: 'session.mentioned', at: 1_000, projectId: 'p', ticketId, payload: { linearSessionId: 'q1', body: '?', author: 'L' } }) as FactoryEvent;
 const delegated = (id = 'e1'): FactoryEvent => ({ ...TRUSTED, id, type: 'ticket.delegated', at: 1_000, projectId: 'p', ticketId: 'REL-1', payload: { linearSessionId: 'ls-1' } });
 
 describe('Orchestrator', () => {
@@ -151,32 +153,24 @@ describe('Orchestrator', () => {
     const { store, tracker, runner, orch, bus } = setup({ processRetry: { attempts: 3, baseMs: 1 } });
     const logs: string[] = [];
     bus.subscribe((m) => void (m.kind === 'log' && logs.push(m.message)));
-    let reads = 0;
-    const getIssue = tracker.getIssue.bind(tracker);
-    tracker.getIssue = async (id: string) => (reads++, getIssue(id));
-    await orch.accept({ id: 'm1', type: 'session.mentioned', at: 1_000, projectId: 'p', ticketId: 'REL-9', payload: { linearSessionId: 'q1', body: '?', author: 'L' } } as FactoryEvent);
+    const getIssue = vi.spyOn(tracker, 'getIssue');
+    await orch.accept(mentioned('REL-9'));
     await orch.drained();
-    await new Promise((r) => setTimeout(r, 20));
-    expect(reads).toBe(1);
+    expect(getIssue).toHaveBeenCalledTimes(1);
+    // Retried, it would still be in the inbox: a failed row stays there until its last attempt.
     expect(await store.pendingInbox(10)).toEqual([]);
     expect((await store.recentEvents(10)).map((e) => e.id)).toContain('m1');
     expect(await store.getTicket('p', 'REL-9')).toBeUndefined();
     expect(runner.requests).toEqual([]);
-    expect(logs.some((l) => l.includes('REL-9') && /not found|introuvable/.test(l))).toBe(true);
-    expect(logs.some((l) => /attempt \d+ of/.test(l))).toBe(false);
+    expect(logs.some((l) => l.includes('REL-9') && l.includes('not found in the tracker'))).toBe(true);
   });
 
   it('still retries a creating event whose snapshot read fails for another reason (ORC-302)', async () => {
     const { store, tracker, orch } = setup({ processRetry: { attempts: 3, baseMs: 1 } });
-    tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
-    let reads = 0;
-    tracker.getIssue = async () => {
-      reads++;
-      throw new Error('fetch failed: ECONNRESET');
-    };
-    await orch.accept({ id: 'm1', type: 'session.mentioned', at: 1_000, projectId: 'p', ticketId: 'REL-1', payload: { linearSessionId: 'q1', body: '?', author: 'L' } } as FactoryEvent);
+    const getIssue = vi.spyOn(tracker, 'getIssue').mockRejectedValue(new Error('fetch failed: ECONNRESET'));
+    await orch.accept(mentioned('REL-1'));
     await orch.drained();
-    await vi.waitFor(() => expect(reads).toBe(3));
+    await vi.waitFor(() => expect(getIssue).toHaveBeenCalledTimes(3), { interval: 1 });
     expect((await store.pendingInbox(10)).map((e) => e.id)).toEqual(['m1']);
   });
 

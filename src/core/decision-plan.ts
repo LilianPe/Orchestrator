@@ -48,12 +48,12 @@ export function planDecision({ event, known, workflow, hash, now }: PlanInput): 
   if (!known && event.ticketId && !CREATES_TICKET.has(decided.type)) {
     return { ...NO_PLAN, at: now, note: `ignored ${event.type} for unmanaged ticket ${event.ticketId}` };
   }
-  // No snapshot to start tracking from: `withSnapshot` leaves none when the tracker no longer finds the issue (ORC-302).
-  if (!known && event.ticketId && !(decided.payload as { issue?: unknown }).issue) {
+  let next = reduce(known, event);
+  // A creating event that starts tracking nothing has no snapshot: `withSnapshot` leaves none when the tracker no longer finds the issue (ORC-302).
+  if (!known && !next && event.ticketId) {
     return { ...NO_PLAN, at: now, note: `ignored ${event.type} for unmanaged ticket ${event.ticketId}: no snapshot of the issue (not found in the tracker?)` };
   }
   const decision = decide(known, event, workflow);
-  let next = reduce(known, event);
   for (const e of decision.events) next = reduce(next, e);
   const ticket = next && { ...next, updatedAt: now, workflowHash: hash };
   const effects: OutboxEffect[] = [...decision.effects];
