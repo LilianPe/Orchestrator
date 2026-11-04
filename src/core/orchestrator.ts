@@ -716,7 +716,7 @@ export class Orchestrator {
       issue = await this.d.tracker.getIssue(event.ticketId);
     } catch (err) {
       if (!(err instanceof IssueNotFoundError)) throw err;
-      this.log('warn', `event ${event.id} (${event.type}): ${event.ticketId} not found in the tracker, dropped: ${err.message}`);
+      this.log('warn', `event ${event.id} (${event.type}): ${event.ticketId} not found in the tracker, left without a snapshot: ${err.message}`);
       return event;
     }
     const logical = logicalFromName(project.workflow.states, issue.stateName) ?? 'todo';

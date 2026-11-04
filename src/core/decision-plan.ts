@@ -51,7 +51,7 @@ export function planDecision({ event, known, workflow, hash, now }: PlanInput): 
   let next = reduce(known, event);
   // A creating event that starts tracking nothing has no snapshot: `withSnapshot` leaves none when the tracker no longer finds the issue (ORC-302).
   if (!known && !next && event.ticketId) {
-    return { ...NO_PLAN, at: now, note: `ignored ${event.type} for unmanaged ticket ${event.ticketId}: no snapshot of the issue (not found in the tracker?)` };
+    return { ...NO_PLAN, at: now, note: `ignored ${event.type} for unmanaged ticket ${event.ticketId}: no snapshot of the issue to start tracking it from` };
   }
   const decision = decide(known, event, workflow);
   for (const e of decision.events) next = reduce(next, e);

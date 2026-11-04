@@ -164,7 +164,7 @@ describe('Orchestrator', () => {
     // Decided without the snapshot, the mention would plan a `start_run` on a ticket nothing tracks.
     expect(await store.listEffects('p', 'REL-9')).toEqual([]);
     expect(runner.requests).toEqual([]);
-    expect(logs.some((l) => l.includes('REL-9') && l.includes('not found in the tracker, dropped'))).toBe(true);
+    expect(logs.some((l) => l.includes('REL-9') && l.includes('not found in the tracker, left without a snapshot'))).toBe(true);
   });
 
   it('still retries a creating event whose snapshot read fails for another reason (ORC-302)', async () => {
