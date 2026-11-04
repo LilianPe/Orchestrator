@@ -274,7 +274,7 @@ export type DecidedEvent =
   | { type: 'ticket.unblocked' }
   | {
       type: 'ticket.patched';
-      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches'>>;
+      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches'>>;
     }
   | { type: 'feedback.appended'; item: FeedbackItem }
   /** The ticket's dev work is stopped: nothing pending, no verification awaited. */
@@ -357,6 +357,11 @@ export interface TicketState {
   ciFixAttempts: number;
   /** Relaunches of an expired lease since an attempt last ended or a human relaunched (ORC-220). Absent before it. */
   leaseRelaunches?: number;
+  /**
+   * When each automatic relaunch after a cut was decided (`run.lost`, `verify.lost`), those still in the window
+   * at the last one (ORC-220). Only a human relaunch empties it. Absent until the first: journals from before it replay as they were.
+   */
+  cutRelaunches?: number[];
   /**
    * Signed actor of the last authorized delegation (ORC-186): the run's initiator, who never validates
    * its spec, and its requester, who may answer it.

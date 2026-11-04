@@ -14,6 +14,13 @@ export const LEASE_MS = 60_000;
 export const RUN_BEAT_MS = 30_000;
 /** Lease of an attempt: three beats, as for an outbox row (`LEASE_MS`), so one missed beat is no expiry. */
 export const RUN_LEASE_MS = 3 * RUN_BEAT_MS;
+/**
+ * Automatic relaunches after a cut, per ticket and per sliding window (ORC-220): a crash loop must not launch an
+ * agent at each restart, without limit and out of the budget's reach. Read by `decide`: changing them changes what
+ * a replay of a `run.lost` or a `verify.lost` decides, as any change of the engine does (ORC-174).
+ */
+export const CUT_RELAUNCHES = 3;
+export const CUT_WINDOW_MS = 3_600_000;
 
 export type SessionRole = 'implementer' | 'reviewer' | 'answerer';
 

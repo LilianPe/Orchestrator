@@ -97,7 +97,7 @@ Après le merge de la PR (détecté par le relevé GitHub) : statut *Done*, work
 
 Seuls les tickets **délégués** à l'agent reçoivent du travail de code ; une mention sur un ticket non délégué ne donne qu'une réponse. Tout ce comportement se change dans `.relais/workflow.yml` : [`workflow.md`](workflow.md). Les contrôles avant de prendre un ticket (description d'au moins 30 caractères, pas de branche existante…) sont décrits dans [`workflow.md`](workflow.md#tracker) ; `relais plan` les applique à blanc.
 
-Un ticket bloqué (échec, plafond, question, stop, bail expiré deux fois) attend un humain : répondez dans la session ou posez `agent:reprendre`.
+Un ticket bloqué (échec, plafond, question, stop, bail expiré deux fois, trop de relances après coupure) attend un humain : répondez dans la session ou posez `agent:reprendre`.
 
 ### Autorisations : qui peut faire quoi
 

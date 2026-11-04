@@ -2,7 +2,9 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { TRUSTED, type FactoryEvent } from '../../src/core/types.js';
-import { RUN_BEAT_MS, RUN_LEASE_MS } from '../../src/store/types.js';
+import { CUT_BOUND_REASON } from '../../src/core/engine.js';
+import { exportJournal, replayJournal } from '../../src/runtime/replay.js';
+import { CUT_RELAUNCHES, CUT_WINDOW_MS, RUN_BEAT_MS, RUN_LEASE_MS } from '../../src/store/types.js';
 import { Faults } from '../helpers/faults.js';
 import { createHarness, heldRun } from '../helpers/harness.js';
 import { testPreset } from '../helpers/test-preset.js';
@@ -235,6 +237,103 @@ describe('a restart during a run', () => {
     expect(h.runner.requests).toHaveLength(1);
     expect(await h.ticket()).toMatchObject({ logical: 'human_review', blocked: false });
     expect(h.tracker.activities('ls-1').at(-1)).toEqual({ type: 'response', body: 'PR ouverte.' });
+  });
+});
+
+/** A crash loop must not launch an agent at each restart, without limit and out of the budget's reach. */
+describe('the bound of the relaunches after a cut', () => {
+  /** The active attempt dies with the daemon, the next one held: one more cut. */
+  async function cut(h: H, ms = 60_000): Promise<void> {
+    h.runner.forget((await h.ticket()).activeRunId!);
+    h.runner.enqueue({ hold: true });
+    h.clock.advance(ms);
+    await h.restart({ mode: 'brutal' });
+  }
+
+  it('a crash loop: N cuts in the window give N relaunches, the next one blocks, with its reason and no agent', async () => {
+    const h = createHarness();
+    await heldRun(h);
+    for (let i = 1; i <= CUT_RELAUNCHES; i++) {
+      await cut(h);
+      expect(h.runner.requests).toHaveLength(1 + i);
+      expect((await h.ticket()).blocked).toBe(false);
+    }
+    await cut(h);
+    expect(h.runner.requests).toHaveLength(1 + CUT_RELAUNCHES);
+    const t = await h.ticket();
+    expect(t).toMatchObject({ blocked: true });
+    expect(t.blockReason).toMatch(CUT_BOUND_REASON);
+    expect(t.activeRunId).toBeUndefined();
+    expect(h.tracker.activities('ls-1').at(-1)).toMatchObject({ type: 'elicitation', body: expect.stringMatching(CUT_BOUND_REASON) });
+    expect((await h.tracker.getIssue('REL-1')).labels).toContain('Bloqué');
+    // Replayed bit for bit, the block included.
+    const replay = replayJournal(await exportJournal(h.store, 'p', 'REL-1'));
+    expect(replay.divergences).toEqual([]);
+    expect(replay.unrecorded).toBe(0);
+  });
+
+  it('a cut after the window is started again', async () => {
+    const h = createHarness();
+    await heldRun(h);
+    for (let i = 0; i < CUT_RELAUNCHES; i++) await cut(h);
+    await cut(h, CUT_WINDOW_MS);
+    expect(h.runner.requests).toHaveLength(2 + CUT_RELAUNCHES);
+    expect((await h.ticket()).blocked).toBe(false);
+    expect((await h.ticket()).cutRelaunches).toHaveLength(1);
+  });
+
+  it('a daemon restarted again and again beside a living attempt relaunches nothing and counts nothing', async () => {
+    const h = createHarness();
+    const runId = await heldRun(h);
+    for (let i = 0; i <= CUT_RELAUNCHES + 1; i++) await h.restart({ mode: 'brutal' });
+    expect(h.runner.requests).toHaveLength(1);
+    const t = await h.ticket();
+    expect(t).toMatchObject({ activeRunId: runId, blocked: false });
+    expect(t.cutRelaunches).toBeUndefined();
+  });
+
+  it('an attempt that ends between two cuts gives nothing back: a loop that finishes a step now and then still stops', async () => {
+    const h = createHarness();
+    await heldRun(h);
+    await cut(h);
+    const relaunched = (await h.ticket()).activeRunId!;
+    h.runner.release(relaunched);
+    await h.orch.drained();
+    expect(await h.ticket()).toMatchObject({ logical: 'human_review', cutRelaunches: [expect.any(Number)] });
+  });
+
+  it('only a human relaunch gives the bound back', async () => {
+    const h = createHarness();
+    await heldRun(h);
+    for (let i = 0; i <= CUT_RELAUNCHES; i++) await cut(h);
+    expect((await h.ticket()).blocked).toBe(true);
+    h.runner.enqueue({ hold: true });
+    await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'reprends', author: 'L' });
+    await h.advance(180_000);
+    expect(await h.ticket()).toMatchObject({ blocked: false, cutRelaunches: [] });
+    const runs = h.runner.requests.length;
+    await cut(h);
+    expect(h.runner.requests).toHaveLength(runs + 1);
+  });
+
+  it('a check cut again and again: the same bound, and the ticket no longer waits for a verdict', async () => {
+    const h = createHarness({ preset: testPreset() });
+    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+    h.checks.holdNext();
+    void h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    await vi.waitFor(() => expect(h.checks.calls).toHaveLength(1));
+    for (let i = 1; i <= CUT_RELAUNCHES; i++) {
+      h.checks.holdNext();
+      h.clock.advance(1_000);
+      void h.restart({ mode: 'brutal' });
+      await vi.waitFor(() => expect(h.checks.calls).toHaveLength(1 + i));
+    }
+    h.clock.advance(1_000);
+    await h.restart({ mode: 'brutal' });
+    expect(h.checks.calls).toHaveLength(1 + CUT_RELAUNCHES);
+    const t = await h.ticket();
+    expect(t.blockReason).toMatch(CUT_BOUND_REASON);
+    expect(t.verifyingRunId).toBeUndefined();
   });
 });
 
