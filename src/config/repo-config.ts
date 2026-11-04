@@ -66,7 +66,7 @@ const RESERVED = new RegExp(
     [
       'HOME', 'USER', 'SHELL', 'PWD', 'PATH', 'PORT', 'ENV', 'BASH_ENV', 'LD_.*', 'NODE_OPTIONS', 'NODE_PATH', 'PYTHONPATH', 'PYTHONSTARTUP',
       '(HTTP|HTTPS|ALL|NO|FTP)_PROXY', 'NODE_USE_ENV_PROXY', 'NODE_EXTRA_CA_CERTS', 'NODE_TLS_REJECT_UNAUTHORIZED', 'SSL_CERT_.*', 'CURL_CA_BUNDLE', 'REQUESTS_CA_BUNDLE',
-      'ANTHROPIC_.*', 'CLAUDE.*', 'DISABLE_TELEMETRY', 'FACTORY_.*', 'RELAIS_.*', 'LINEAR_.*', 'GH_.*', 'GITHUB_.*', 'GIT_.*',
+      'ANTHROPIC_.*', 'CLAUDE.*', 'DISABLE_TELEMETRY', 'FACTORY_.*', 'RELAIS_.*', 'LINEAR_.*', 'GH_.*', 'GITHUB_.*', 'GIT_.*', // RELAIS_ : transition, à retirer (ORC-167)
       'NPM_CONFIG_.*', 'YARN_.*', 'PIP_.*', 'UV_.*',
     ].join('|') +
     ')$',

@@ -76,7 +76,7 @@ describe('parseRepoConfig (.factory/config.yml, ORC-209)', () => {
       // What would change the agent's identity or where its token goes.
       'ANTHROPIC_BASE_URL', 'ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CONFIG_DIR', 'FACTORY_API', 'HOME',
       // The factory's and the forge's own: never a repository's to ask for.
-      'GH_TOKEN', 'GITHUB_TOKEN', 'LINEAR_API_KEY', 'RELAIS_TOKEN',
+      'GH_TOKEN', 'GITHUB_TOKEN', 'LINEAR_API_KEY', 'RELAIS_TOKEN', // RELAIS_ : transition, à retirer (ORC-167)
       // The hardening of the setup.
       'NPM_CONFIG_IGNORE_SCRIPTS', 'UV_NO_BUILD', 'YARN_ENABLE_SCRIPTS', 'PIP_ONLY_BINARY',
     ])('refuses to hand the runner %s, in either list', (name) => {
