@@ -397,7 +397,7 @@ export async function checkChain(
     const line = `${first.method} ×${group.length} for ${first.row} (${first.kind}) in lives ${group.map((c) => c.life).join(', ')}: ${first.detail}`;
     // A run launched twice is never the outbox's at-least-once: a start taken up again finds the run
     // its mark names, written before the runner started it, and launches nothing more; recover()
-    // settles that run (a ticket blocked, a question to ask again) (ORC-277).
+    // takes that run up (ORC-277): its step starts again under a row of its own, a question is asked again by its human (ORC-220).
     if (first.method === 'start') violations.push(`run launched twice: ${line}`);
     else atLeastOnce.push(line);
   }

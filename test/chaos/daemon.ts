@@ -61,13 +61,14 @@ if (existsSync(callsFile)) {
     await write.apply(h.tracker, JSON.parse(call.detail) as unknown[]);
   }
 }
-// Runs that last a few tens of milliseconds, so that kills cut some of them; no text from them: the
-// relay posts nothing, and each visible activity is an effect's.
+// Runs that last a few tens of milliseconds, or up to CHAOS_RUN_MS, so that kills cut some of them; no
+// text from them: the relay posts nothing, and each visible activity is an effect's.
+const RUN_MS = Number(process.env['CHAOS_RUN_MS'] ?? 150);
 h.runner.enqueue(...Array.from({ length: 10_000 }, () => ({ events: [], hold: true })));
 const start = h.runner.start.bind(h.runner);
 h.runner.start = (req) => {
   const handle = start(req);
-  setTimeout(() => h.runner.release(req.runId), 10 + Math.random() * 150);
+  setTimeout(() => h.runner.release(req.runId), 10 + Math.random() * RUN_MS);
   return handle;
 };
 

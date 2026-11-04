@@ -19,7 +19,8 @@ import { CHAOS_LEASE_MS, chaosEvents, rng, ticketIds, type ChaosEvent, type Chao
  * SQLite file otherwise. Unlike the harness's `mortal`, the kill is the kernel's: a transaction under
  * way at the kill is rolled back by the database, never committed.
  *
- * CHAOS_EVENTS (100 by default, 500 in the CI's chaos job), CHAOS_SEED, CHAOS_TICKETS. A failure
+ * CHAOS_EVENTS (100 by default, 500 in the CI's chaos job), CHAOS_SEED, CHAOS_TICKETS, CHAOS_RUN_MS (the runs'
+ * longest duration: longer, the kills cut more of them and more steps start again, ORC-220). A failure
  * prints its seed: CHAOS_SEED=<seed> plays the same events and the same kill delays again (the
  * moments they land on in the processing still depend on the machine).
  */
@@ -195,7 +196,8 @@ describe('chaos: kill -9 at random moments (ORC-163)', () => {
         const effects = await allEffects(store, 'p', ticketIds(TICKETS));
         const retaken = effects.filter((r) => r.attempts > 1).length;
         const cutRuns = (await store.runsByStatus('failure')).length;
-        const summary = `seed ${SEED}: ${EVENTS} events, ${kills} kill(s), ${life} daemon(s), ${resent} event(s) sent again, ${retaken} of ${effects.length} effect(s) taken up again, ${cutRuns} run(s) cut`;
+        const relaunches = effects.filter((r) => r.effect.kind === 'start_run' && r.effect.relaunchOf).length;
+        const summary = `seed ${SEED}: ${EVENTS} events, ${kills} kill(s), ${life} daemon(s), ${resent} event(s) sent again, ${retaken} of ${effects.length} effect(s) taken up again, ${cutRuns} run(s) cut, ${relaunches} step(s) started again`;
         console.log(`chaos ${summary}; at-least-once doubles: ${report.atLeastOnce.length}${report.atLeastOnce.map((l) => `\n  ${l}`).join('')}`);
         expect(kills, summary).toBeGreaterThan(0);
         expect(acked.size, summary).toBe(EVENTS);

@@ -1536,6 +1536,8 @@ export class Orchestrator {
       await recorded?.().catch((err: Error) => this.log('warn', `queued ${job.name} on ${ticketId} not taken out of the queue: ${err.message}`));
       if (this.d.beforeRun) await this.d.beforeRun(run).catch((err: Error) => this.log('warn', `beforeRun: ${err.message}`));
 
+      // Its lease starts here: until now the launch is alive by itself, however long `beforeRun` took. A failure leaves it to the next beat.
+      await store.renewRun(runId, clock.now() + RUN_LEASE_MS).catch((err: Error) => this.log('warn', `lease of run ${runId} not written: ${err.message}`));
       const handle = this.d.runner.start({
         runId,
         cwd: sandbox ? WORKSPACE_TARGET : ws.path,
@@ -1564,8 +1566,6 @@ export class Orchestrator {
       this.liveRuns.add(runId);
       this.track(this.pump(run, handle, sandbox?.id), runId);
       handedOver = true;
-      // Its lease starts here: until now the launch is alive by itself, however long `beforeRun` takes. A failure leaves it to the next beat.
-      await store.renewRun(runId, clock.now() + RUN_LEASE_MS).catch((err: Error) => this.log('warn', `lease of run ${runId} not written: ${err.message}`));
     } finally {
       // The sandbox first: it mounts the worktree.
       if (sandbox && !handedOver) await this.destroySandbox(sandbox.id, runId);

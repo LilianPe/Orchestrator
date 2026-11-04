@@ -174,6 +174,7 @@ ORC-163 coupe la chaîne à chacun de ses maillons et vérifie qu'après la coup
 | `CHAOS_EVENTS` | 100 | événements envoyés ; une coupure tous les dix, au moins trois |
 | `CHAOS_SEED` | aléatoire | graine des événements et des délais de coupure, affichée à chaque passage |
 | `CHAOS_TICKETS` | 20 | tickets sur lesquels les événements se répartissent |
+| `CHAOS_RUN_MS` | 150 | durée maximale d'un run : plus longue, les coupures en coupent plus et plus d'étapes sont relancées (ORC-220) |
 | `CHAOS_STRICT_EFFECTS` | strict | un effet visible refait (`atLeastOnce`) fait échouer (ORC-162) ; `0` : il est seulement affiché. Un run lancé deux fois pour une même ligne d'outbox, question comprise (ORC-277), échoue toujours |
 
 ```bash
