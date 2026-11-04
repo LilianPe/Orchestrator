@@ -117,6 +117,7 @@ Le premier ticket cité est celui qui touche le module en premier ou le plus ; l
 | `src/core/naming.ts` | `slugify`, `branchName` (`factory/<id>-<slug>`) | adapter | ORC-167 (préfixe), ORC-136 et ORC-204 (`branchName` de Linear) |
 | `src/core/clock.ts` | `Clock`, `SystemClock`, `FakeClock` | garder | ORC-225, ORC-161 |
 | `src/core/duration.ts` | `parseDuration` (`3m`, `90m`…) | garder | ORC-177 (gardé si `factory.yml` garde des durées en texte) |
+| `src/core/block-cause.ts` | Cause d'un blocage lue dans sa raison, pour le Flux | garder | ORC-297, ORC-300 (Pareto) |
 | `src/core/measures.ts` | Mesures du doc MVP calculées depuis les faits de la base (journal, tentatives, outbox, accusés de réception), jamais depuis le texte d'un agent : tokens, premier essai, délais de signe de vie et de réponse, revert à 14 jours et coût de CI (durée des runs par PR puis par ticket) ; mesures sans source encore à `null` avec le ticket qui l'apportera | garder | ORC-235 (fait), ORC-278 (fait : reverts et coût de CI), ORC-223 (affichage), ORC-216 (limite d'usage), ORC-190 (relecture humaine), ORC-160/ORC-180 (accusé de réception en effet d'outbox), ORC-123 (fait : verdicts du contrôle `red`, hors reprises) |
 | `src/core/types.ts` | `FactoryEvent` (`schemaVersion`, taint, `actor` signé), `TicketState`, 6 états logiques ; événements `effect.done` (avec `deduplicated` et `ref` d'un doublon, ORC-162) et `effect.failed` (ORC-150), `pr.reviewed` et `pr.conflicted` (ORC-134), `default_branch.pushed` et `ci.run_completed`, `mergeSha`, `headSha` et `mergedAt` facultatifs de `pr.merged` (ORC-278, sans changement de version), `dead_letter.added` et `dead_letter.repaired` (ORC-175) ; `timer.fired` et les sortes de timer `TimerPayloads` (ORC-161, schéma version 3) | adapter | ORC-162 (fait), ORC-133 (fait : `schemaVersion`, champ taint, renommages), ORC-161 (fait : `timer.fired`), ORC-269 (fait : taint de `FeedbackItem`), ORC-160 (fait : taint posé à l'ingestion Linear, `actor`), ORC-186 (fait : `roles` journalisés avec l'événement, `initiatorId` du ticket, `authorId` d'un retour), ORC-278 (fait : push de la branche par défaut, runs de CI), ORC-289 (fait : `attempt` et `output` facultatifs de `run.finished`, sans changement de version), ORC-180 (`humanInbox`), ORC-187 (états retirés), ORC-123 (fait : `red` facultatif de `verify.passed`/`verify.failed`, `redAttempts` du ticket, sans changement de version) |
 
@@ -253,7 +254,8 @@ Sortie réseau des sandboxes (ORC-213, [décision](decisions/ORC-213.md)).
 
 | Module | Rôle | Statut | Ticket cible |
 |---|---|---|---|
-| `src/server/app.ts` | API Hono : interface, SSE, webhook Linear, `/agent/*`, pause/resume, mot de passe, CSRF | adapter | ORC-147 (fait : webhook et commandes de l'interface attendent l'écriture de l'inbox), ORC-192 (`/agent/*` retiré), ORC-200 (pause/resume retirés), ORC-223 (API du dashboard), ORC-222 (authentification nominative), ORC-134 (fait : `POST /webhooks/github`) |
+| `src/server/app.ts` | API Hono : interface, SSE, webhook Linear, `/agent/*`, pause/resume, mot de passe, CSRF | adapter | ORC-147 (fait : webhook et commandes de l'interface attendent l'écriture de l'inbox), ORC-192 (`/agent/*` retiré), ORC-200 (pause/resume retirés), ORC-223 (API du dashboard ; fait : `GET /api/flow`, ORC-297), ORC-222 (authentification nominative), ORC-134 (fait : `POST /webhooks/github`) |
+| `src/server/flow.ts` | Le Flux du dashboard : Needs you, Working, Done, champ par champ, sans jeton de run | garder | ORC-297, ORC-177 (l'étape du préréglage), ORC-212 (porte de spec) |
 | `src/server/static.ts` | Sert l'interface construite | garder | ORC-223 |
 
 ### `src/api/`
@@ -291,7 +293,7 @@ Sortie réseau des sandboxes (ORC-213, [décision](decisions/ORC-213.md)).
 
 | Module | Rôle | Statut | Ticket cible |
 |---|---|---|---|
-| `web/src/App.tsx` | Interface : en-tête (places, file, coût du jour), tickets, session en direct, journal | adapter | ORC-223 (Flux, Détail d'un run, Vue d'ensemble), ORC-194 (coût en tokens) |
+| `web/src/App.tsx`, `web/src/Flow.tsx` | Interface : en-tête (places, file, coût du jour), Flux (ORC-297), session en direct, journal | adapter | ORC-223 (Détail d'un run, Vue d'ensemble), ORC-194 (coût en tokens) |
 | `web/src/state.ts` | Reducer de l'état de l'interface | adapter | ORC-223 |
 | `web/src/api.ts`, `web/src/types.ts` | Appels à `/api/*` et SSE, types des vues (6 états, coût en USD) | adapter | ORC-223 (API lues depuis Postgres), ORC-194 |
 | `web/src/main.tsx`, `web/src/styles.css`, `web/src/vite-env.d.ts`, `web/index.html`, `web/vite.config.ts`, `web/tsconfig.json` | Point d'entrée, styles, build Vite | garder | ORC-223 |

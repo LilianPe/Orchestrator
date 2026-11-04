@@ -39,6 +39,41 @@ export interface Snapshot {
   capacity: { dev: { used: number; total: number }; questions: { used: number; total: number } };
 }
 
+/** `BlockCause` of src/core/block-cause.ts. */
+export type BlockCause = 'question' | 'contested' | 'red' | 'infra' | 'limit' | 'loop' | 'failed' | 'pickup' | 'dead_letter' | 'stopped' | 'other';
+
+export interface FlowTicketView {
+  projectId: string;
+  ticketId: string;
+  title: string;
+  prUrl?: string;
+  updatedAt: number;
+}
+
+export interface WorkingRunView extends FlowTicketView {
+  runId: string;
+  step: string;
+  verifying: boolean;
+  stoppable: boolean;
+  durationMs: number;
+  tokens: { input: number; output: number; cacheRead: number; cacheCreation: number } | null;
+  attemptsWithoutTokens: number;
+  costUsd: number;
+}
+
+/** `GET /api/flow`: `Flow` of src/server/flow.ts. */
+export interface FlowView {
+  needsYou: {
+    blocked: { cause: BlockCause; tickets: (FlowTicketView & { reason: string })[] }[];
+    humanReview: FlowTicketView[];
+    gates: (FlowTicketView & { gate: 'merge' })[];
+  };
+  working: WorkingRunView[];
+  queued: { projectId: string; ticketId: string; title: string; job: string }[];
+  done: FlowTicketView[];
+  others: FlowTicketView[];
+}
+
 export type RunLine =
   | { kind: 'init'; sessionId: string }
   | { kind: 'text'; text: string }

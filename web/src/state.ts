@@ -1,9 +1,13 @@
-import type { BusMessage, EventView, RunLine, Snapshot, TicketView } from './types.js';
+import type { BusMessage, EventView, FlowView, RunLine, Snapshot } from './types.js';
 
 export interface UiState {
   connected: boolean;
   snapshot?: Snapshot;
-  tickets: Record<string, TicketView>;
+  flow?: FlowView;
+  /** When `flow` was received: its durations go on from there. */
+  flowAt: number;
+  /** Bumped by each ticket update: the page reads the Flux again. */
+  flowStale: number;
   runLines: Record<string, RunLine[]>;
   events: EventView[];
   logs: { level: string; message: string; at: number }[];
@@ -12,30 +16,26 @@ export interface UiState {
 
 export type Action =
   | { type: 'snapshot'; snapshot: Snapshot }
+  | { type: 'flow'; flow: FlowView; at: number }
   | { type: 'bus'; message: BusMessage }
   | { type: 'select'; runId?: string }
   | { type: 'connection'; connected: boolean };
 
-export const initialState: UiState = { connected: false, tickets: {}, runLines: {}, events: [], logs: [] };
-
-const key = (t: TicketView) => `${t.projectId}/${t.ticketId}`;
+export const initialState: UiState = { connected: false, flowAt: 0, flowStale: 0, runLines: {}, events: [], logs: [] };
 
 export function reducer(s: UiState, a: Action): UiState {
   switch (a.type) {
     case 'snapshot':
-      return {
-        ...s,
-        snapshot: a.snapshot,
-        tickets: Object.fromEntries(a.snapshot.tickets.map((t) => [key(t), t])),
-        selectedRun: s.selectedRun ?? a.snapshot.activeRuns[0]?.id,
-      };
+      return { ...s, snapshot: a.snapshot, selectedRun: s.selectedRun ?? a.snapshot.activeRuns[0]?.id };
+    case 'flow':
+      return { ...s, flow: a.flow, flowAt: a.at };
     case 'select':
       return { ...s, selectedRun: a.runId };
     case 'connection':
       return { ...s, connected: a.connected };
     case 'bus': {
       const m = a.message;
-      if (m.kind === 'ticket') return { ...s, tickets: { ...s.tickets, [key(m.ticket)]: m.ticket } };
+      if (m.kind === 'ticket') return { ...s, flowStale: s.flowStale + 1 };
       if (m.kind === 'run') {
         const lines = [...(s.runLines[m.runId] ?? []), m.ev].slice(-400);
         return { ...s, runLines: { ...s.runLines, [m.runId]: lines }, selectedRun: s.selectedRun ?? m.runId };
