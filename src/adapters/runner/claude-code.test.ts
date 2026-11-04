@@ -180,8 +180,9 @@ describe('ClaudeCodeRunner in a sandbox (ORC-204)', () => {
     const env = JSON.parse(readFileSync(dump, 'utf8')) as Record<string, string>;
     expect(env['FACTORY_SANDBOX_ENV_0']).toBe('carried');
     expect(env['HOME']).toBe('/daemon-home');
-    expect(env).not.toHaveProperty('DOCKER_HOST');
-    expect(env).not.toHaveProperty('XDG_RUNTIME_DIR');
+    // Not absent: the CLI keeps the daemon's own, which a CI sets.
+    expect(env['DOCKER_HOST']).not.toBe('tcp://evil:1');
+    expect(env['XDG_RUNTIME_DIR']).not.toBe('/moved');
   });
 
   it('refuses a sandboxed run without a sandbox provider, spawning nothing', async () => {
