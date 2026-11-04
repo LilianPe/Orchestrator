@@ -105,7 +105,7 @@ export class Worker {
   private failures = new Map<string, number>();
   private retryTimers = new Set<NodeJS.Timeout>();
   private readonly retry: { attempts: number; baseMs: number };
-  /** Rows that found another worker's row or effect first: retried at the next poll. */
+  /** Rows that found a row or an effect of their ticket first: retried at the next poll, or once this worker settles it. */
   private waited = new Map<string, string>();
   private tasks = new Set<Promise<unknown>>();
   private pass: Promise<number> | undefined;
@@ -267,8 +267,12 @@ export class Worker {
   private async drainTicket(ref: TicketRef, key: string): Promise<void> {
     for (;;) {
       const effects = await this.executor.runTicket(ref.projectId, ref.ticketId);
-      // Their results are in the inbox now: the next pass reads them.
-      if (effects.settled > 0) this.kickInBackground();
+      // Their results are in the inbox now, and the rows that found them unfinished can go: the next
+      // pass reads them all, oldest first, without waiting for a poll (ORC-290).
+      if (effects.settled > 0) {
+        this.unwait(key);
+        this.kickInBackground();
+      }
       // Effects held (another worker's lease, a backoff): the next row still goes to the store, which
       // lets a stop of the ticket's work pass a backoff (ORC-150) and answers `waiting` otherwise.
       const row = this.queued.get(key)?.shift();
@@ -388,8 +392,8 @@ export class Worker {
   }
 
   /**
-   * A row of the ticket went through (a stop that cancelled a backoff, say): its rows that found it
-   * held are tried again now rather than at the next poll.
+   * A row of the ticket went through (a stop that cancelled a backoff, say), or an effect of the
+   * ticket settled here: its rows that found it held are tried again now rather than at the next poll.
    */
   private unwait(key: string): void {
     let any = false;

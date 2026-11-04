@@ -365,6 +365,53 @@ describe('outbox executors: lease, backoff, results through the inbox', () => {
     expect(h.tracker.activities().filter((a) => a.type === 'error').map((a) => ('body' in a ? a.body : ''))).toEqual(['Erreur : Linear down']);
   });
 
+  it('decides the effect.failed of an effect it let die at once, even when the result ahead of it was parked as the backoff ended (ORC-290)', async () => {
+    let hold = false;
+    let reached!: () => void;
+    const claiming = new Promise<void>((r) => (reached = r));
+    let release!: () => void;
+    const answer = new Promise<void>((r) => (release = r));
+    const h = createHarness({
+      projectYaml: CRASH_WORKFLOW,
+      // A backoff no real timer reaches during the test: only the polls below move the worker.
+      effectRetry: { attempts: 2, baseMs: 60_000, capMs: 60_000 },
+      wrapStore: (store) =>
+        new Proxy(store, {
+          get(target, prop, receiver) {
+            if (prop !== 'claimEffect') return Reflect.get(target, prop, receiver) as unknown;
+            return async (...args: Parameters<Store['claimEffect']>) => {
+              const claimed = await target.claimEffect(...args);
+              if (hold) {
+                hold = false;
+                reached();
+                await answer;
+              }
+              return claimed;
+            };
+          },
+        }),
+    });
+    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+    h.tracker.comment = async () => {
+      throw new Error('Linear down');
+    };
+    await h.orch.accept(delegation(h));
+    await h.orch.drained();
+    // A poll is on its way: its claim found the backoff still running, but its answer comes late.
+    hold = true;
+    void h.orch.poll();
+    await claiming;
+    // The backoff ends: the result of the labels goes to the store while the comment is due, and is parked.
+    h.clock.advance(60_000);
+    await h.orch.poll();
+    release();
+    await h.orch.drained();
+    expect((await h.store.listEffects('p', 'REL-1')).slice(0, 2).map((r) => r.status)).toEqual(['done', 'dead']);
+    // No poll since the effect died: its death alone lets what waited behind it go.
+    expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Erreur : Linear down' });
+    expect(await h.store.pendingInbox(10)).toEqual([]);
+  });
+
   it('does not loop when the error notice of a dead effect dies too', async () => {
     const h = createHarness({ projectYaml: CRASH_WORKFLOW });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
