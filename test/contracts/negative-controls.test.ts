@@ -416,16 +416,17 @@ describeForgeContract(
 );
 
 const UNKNOWN_BUCKET = 'findPr gives neither pass nor none for checks with a state it does not know';
+const withUnknownBucket = (findPr: Forge['findPr']): Partial<ForgeSubject> => ({ ...findingPr(findPr), unknownBucket: 'factory/rel-5-v' });
 
 describeForgeContract(
   'a forge that counts a check in a state it does not know as passed',
-  forgeThat({ ...findingPr(async (_repo, branch) => ({ ...openPr(branch), checks: 'pass' })), unknownBucket: 'factory/rel-5-v' }),
+  forgeThat(withUnknownBucket(async (_repo, branch) => ({ ...openPr(branch), checks: 'pass' }))),
   { violates: [UNKNOWN_BUCKET] },
 );
 
 describeForgeContract(
   'a forge that reads a check in a state it does not know as no check at all',
-  forgeThat({ ...findingPr(async (_repo, branch) => ({ ...openPr(branch), checks: 'none' })), unknownBucket: 'factory/rel-5-v' }),
+  forgeThat(withUnknownBucket(async (_repo, branch) => ({ ...openPr(branch), checks: 'none' }))),
   { violates: [UNKNOWN_BUCKET] },
 );
 
