@@ -24,8 +24,19 @@ export interface FactoryYml {
   concurrency?: number;
   /** Read and validated; enforced by ORC-216. */
   budgets?: { perStepTokens?: Record<string, number>; perTicketTokens?: number; maxTurns?: Record<string, number>; onUsageLimit?: 'wait' };
-  /** Read and validated; `projects[].repoPath` of config.yaml stays the working copy until the runner clones (ORC-204). */
-  repos?: { linearTeam: string; github: string }[];
+  /**
+   * `projects[].repoPath` of config.yaml stays the working copy until the runner clones (ORC-204). `env` and
+   * `secrets` are the values of what the repository's `.factory/config.yml` declares (ORC-211).
+   */
+  repos?: { linearTeam: string; github: string; env?: Record<string, string>; secrets?: Record<string, string> }[];
+}
+
+/** Sealing purges the files that hold a secret: a value this short would be found in many that do not. */
+const MIN_REPO_SECRET_LENGTH = 8;
+
+/** The token of the account `claude.active` names: the only credential a runner gets (ORC-211). ORC-215 owns the choice of the account. */
+export function activeClaudeToken(yml: FactoryYml | undefined): string | undefined {
+  return yml?.claude?.accounts.find((a) => a.name === yml.claude?.active)?.token || undefined;
 }
 
 type Effort = 'low' | 'medium' | 'high';
@@ -170,12 +181,26 @@ export function parseFactoryYml(text: string, env: NodeJS.ProcessEnv = process.e
       ...(onUsageLimit ? { onUsageLimit } : {}),
     };
   }
-  const repos = leaf('repos', r['repos'], z.array(z.strictObject({ linear_team: z.string().min(1), github: z.string() })), '`[{ linear_team, github }]` attendu');
+  const repos = leaf(
+    'repos',
+    r['repos'],
+    z.array(z.strictObject({ linear_team: z.string().min(1), github: z.string(), env: z.record(z.string(), z.unknown()).optional(), secrets: z.record(z.string(), z.unknown()).optional() })),
+    '`[{ linear_team, github, env, secrets }]` attendu',
+  );
   if (repos) {
-    repos.forEach((repo, i) => {
+    out.repos = repos.map((repo, i) => {
       if (!REPO.test(repo.github)) violations.push(`repos[${i}].github : \`<org>/<dépôt>\` attendu`);
+      const resolved = (key: 'env' | 'secrets') => {
+        const entries = Object.entries(repo[key] ?? {}).map(([name, v]) => {
+          const path = `repos[${i}].${key}.${name}`;
+          const text = value(path, v, key === 'secrets');
+          if (key === 'secrets' && text !== undefined && text.length < MIN_REPO_SECRET_LENGTH) violations.push(`${path} : au moins ${MIN_REPO_SECRET_LENGTH} caractères attendus`);
+          return [name, text] as const;
+        });
+        return Object.fromEntries(entries.filter((e): e is [string, string] => e[1] !== undefined));
+      };
+      return { linearTeam: repo.linear_team, github: repo.github, ...(repo.env ? { env: resolved('env') } : {}), ...(repo.secrets ? { secrets: resolved('secrets') } : {}) };
     });
-    out.repos = repos.map((repo) => ({ linearTeam: repo.linear_team, github: repo.github }));
   }
 
   if (violations.length > 0) throw new FactoryYmlError(violations);

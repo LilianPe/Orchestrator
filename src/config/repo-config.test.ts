@@ -46,6 +46,8 @@ describe('parseRepoConfig (.factory/config.yml, ORC-209)', () => {
       expect(parseRepoConfig(text)).toEqual({
         extends: 'factory/default@1.0',
         commands: {},
+        env: [],
+        setupSecrets: [],
         services: [],
         sensitivePaths: [],
         forbiddenPaths: [...SOCLE_FORBIDDEN_PATHS],
@@ -54,6 +56,55 @@ describe('parseRepoConfig (.factory/config.yml, ORC-209)', () => {
         visualPaths: [],
       });
     }
+  });
+
+  describe('the variables a repository declares (ORC-211)', () => {
+    const refused = (text: string): string[] => {
+      try {
+        parseRepoConfig(text);
+        return [];
+      } catch (err) {
+        return (err as RepoConfigError).violations;
+      }
+    };
+
+    it('reads names, never values', () => {
+      expect(parseRepoConfig('env: [NODE_ENV]\nsetup_secrets: [REGISTRY_TOKEN]\n')).toMatchObject({ env: ['NODE_ENV'], setupSecrets: ['REGISTRY_TOKEN'] });
+      expect(refused('env: { NODE_ENV: test }\n')).toEqual(['env : un tableau de noms de variables est attendu']);
+    });
+
+    it.each(['lower_case', 'WITH-DASH', '1DIGIT', 'A=B'])('refuses %s, which is no variable name', (name) => {
+      expect(refused(`env: ["${name}"]\n`).join()).toContain(`env[0] : « ${name} »`);
+    });
+
+    it.each([
+      // What would take the sandbox's egress or trust away from the proxy.
+      'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY', 'SSL_CERT_FILE', 'NODE_EXTRA_CA_CERTS', 'CURL_CA_BUNDLE', 'REQUESTS_CA_BUNDLE', 'NODE_TLS_REJECT_UNAUTHORIZED',
+      // What would run code in every process of the sandbox.
+      'PATH', 'LD_PRELOAD', 'NODE_OPTIONS', 'BASH_ENV', 'PYTHONPATH',
+      // What would change the agent's identity or where its token goes.
+      'ANTHROPIC_BASE_URL', 'ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CONFIG_DIR', 'FACTORY_API', 'HOME',
+      // The factory's and the forge's own: never a repository's to ask for.
+      'GH_TOKEN', 'GITHUB_TOKEN', 'LINEAR_API_KEY', 'RELAIS_TOKEN',
+      // The hardening of the setup.
+      'NPM_CONFIG_IGNORE_SCRIPTS', 'UV_NO_BUILD', 'YARN_ENABLE_SCRIPTS', 'PIP_ONLY_BINARY',
+    ])('refuses to hand the runner %s, in either list', (name) => {
+      expect(refused(`env: [${name}]\n`).join()).toContain('réservé');
+      expect(refused(`setup_secrets: [${name}]\n`).join()).toContain('réservé');
+    });
+
+    it.each(['API_TOKEN', 'STRIPE_SECRET', 'DB_PASSWORD', 'SIGNING_KEY', 'DATABASE_URL'])('refuses %s as a variable of the agent: a secret goes under setup_secrets', (name) => {
+      expect(refused(`env: [${name}]\n`).join()).toContain('setup_secrets');
+      expect(refused(`setup_secrets: [${name}]\n`)).toEqual([]);
+    });
+
+    it('takes the token of a private registry for the setup', () => {
+      expect(parseRepoConfig('setup_secrets: [NPM_TOKEN]\n').setupSecrets).toEqual(['NPM_TOKEN']);
+    });
+
+    it('refuses a name in both lists: the agent would see what the setup seals', () => {
+      expect(refused('env: [SAME]\nsetup_secrets: [SAME]\n').join()).toContain('SAME');
+    });
   });
 
   it('always keeps the forbidden paths of the socle, whatever the file adds', () => {
