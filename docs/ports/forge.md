@@ -39,6 +39,6 @@ Sans objet : aucune écriture.
 
 ## Écarts connus
 
-- `GitHubAppForge` ne lance pas encore cette suite, et lit toujours une réponse de checks sans liste (`check_runs` ou `statuses` absent) comme aucun check, au lieu de rejeter : ORC-273.
+- `GitHubAppForge` ne lance pas encore cette suite, et lit toujours une liste de checks absente de la réponse de GitHub (`check_runs` ou `statuses`) comme une liste vide, au lieu de rejeter : les checks qui y manquent sortent du verdict, qui peut alors valoir `none`, ou `pass` si l'autre liste est verte (ORC-273).
 
 `FakeForge` rendait ses objets internes : il rend des copies depuis ORC-189, comme `FakeTracker`.
