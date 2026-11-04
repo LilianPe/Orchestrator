@@ -1,5 +1,5 @@
 import type { FeedbackItem } from '../../core/types.js';
-import { execCmd, mustExec, type Exec } from '../exec.js';
+import { execCmd, execFailure, mustExec, type Exec } from '../exec.js';
 import { REPO_PERMISSIONS, type RepoPermission, type RepoPermissions } from '../roles/types.js';
 import type { Forge, PrInfo } from './types.js';
 
@@ -8,6 +8,29 @@ export function aggregateChecks(buckets: string[]): PrInfo['checks'] {
   if (buckets.some((b) => b === 'fail' || b === 'cancel')) return 'fail';
   if (buckets.some((b) => b === 'pending')) return 'pending';
   return 'pass';
+}
+
+/**
+ * `gh pr checks` exits 1 with an empty stdout both for a PR without any check and for a failure (network,
+ * auth); only this stderr line tells the first apart. Checks that fail or are pending still come as JSON.
+ */
+const NO_CHECKS = /^no checks reported on the '.*' branch$/m;
+/** A gh older than 2.50 has no `--json` on `pr checks`: it answers this, then its usage, exit 1. */
+const NO_JSON_FLAG = /^unknown flag: --json$/m;
+
+type Check = { name: string; bucket: string };
+
+const isCheck = (c: unknown): c is Check =>
+  typeof c === 'object' && c !== null && typeof (c as Check).name === 'string' && typeof (c as Check).bucket === 'string';
+
+/** The checks `gh pr checks --json name,bucket` lists, or undefined when its output is not such a list. */
+function parseChecks(stdout: string): Check[] | undefined {
+  try {
+    const list: unknown = JSON.parse(stdout);
+    return Array.isArray(list) && list.every(isCheck) ? list : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -56,13 +79,15 @@ export class GhCliForge implements Forge, RepoPermissions {
     let checks: PrInfo['checks'] = 'none';
     let failedChecks: string[] = [];
     if (pr.state === 'OPEN') {
-      const r = await this.exec('gh', ['pr', 'checks', String(pr.number), '--json', 'name,bucket'], { cwd: repoPath });
-      try {
-        const list = JSON.parse(r.stdout || '[]') as { name: string; bucket: string }[];
+      const args = ['pr', 'checks', String(pr.number), '--json', 'name,bucket'];
+      const r = await this.exec('gh', args, { cwd: repoPath });
+      const list = parseChecks(r.stdout);
+      if (list) {
         checks = aggregateChecks(list.map((c) => c.bucket));
         failedChecks = list.filter((c) => c.bucket === 'fail' || c.bucket === 'cancel').map((c) => c.name);
-      } catch {
-        checks = 'none';
+      } else if (r.code !== 0 && !NO_CHECKS.test(r.stderr)) {
+        if (NO_JSON_FLAG.test(r.stderr)) throw new Error(`gh ${args.join(' ')}: this gh has no --json on pr checks, gh 2.50 or later is required`);
+        throw execFailure('gh', args, r);
       }
     }
     return {
