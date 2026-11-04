@@ -415,6 +415,14 @@ describeForgeContract(
   { violates: [NO_CHECKS] },
 );
 
+const UNKNOWN_BUCKET = 'findPr never gives pass for checks with a state it does not know';
+
+describeForgeContract(
+  'a forge that counts a check in a state it does not know as passed',
+  forgeThat({ ...findingPr(async (_repo, branch) => ({ ...openPr(branch), checks: 'pass' })), unknownBucket: 'factory/rel-5-v' }),
+  { violates: [UNKNOWN_BUCKET] },
+);
+
 const NO_PR = 'findPr answers undefined for a branch without a PR';
 
 describeForgeContract(

@@ -3,11 +3,15 @@ import { execCmd, execFailure, mustExec, type Exec } from '../exec.js';
 import { REPO_PERMISSIONS, type RepoPermission, type RepoPermissions } from '../roles/types.js';
 import type { Forge, PrInfo } from './types.js';
 
+/**
+ * A bucket gh does not document (empty, or new in a later version) is neither green nor red: it reads as `pending`,
+ * which a merge refuses and the PR poller does not report, never as `pass` (ORC-303).
+ */
 export function aggregateChecks(buckets: string[]): PrInfo['checks'] {
   if (buckets.length === 0) return 'none';
   if (buckets.some((b) => b === 'fail' || b === 'cancel')) return 'fail';
-  if (buckets.some((b) => b === 'pending')) return 'pending';
-  return 'pass';
+  if (buckets.every((b) => b === 'pass' || b === 'skipping')) return 'pass';
+  return 'pending';
 }
 
 /**
