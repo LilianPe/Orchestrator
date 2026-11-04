@@ -3,7 +3,7 @@
   "projectId": "p",
   "ticketId": "REL-1",
   "workflows": {
-    "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152": {
+    "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690": {
       "version": 1,
       "tracker": {
         "kind": "linear",
@@ -182,6 +182,34 @@
             "post": "summary"
           }
         },
+        "tests": {
+          "name": "tests",
+          "queue": "dev",
+          "model": "sonnet",
+          "workspace": "worktree",
+          "session": "resume",
+          "skill": "factory:tests",
+          "verify": [
+            "fake:check"
+          ],
+          "pickup": false,
+          "red": {
+            "command": "npm test --",
+            "mode": "measure",
+            "attempts": 3
+          },
+          "limits": {
+            "turns": 150,
+            "durationMs": 5400000,
+            "usd": 5
+          },
+          "onStart": {
+            "move": "dev"
+          },
+          "onSuccess": {
+            "run": "dev"
+          }
+        },
         "dev-feedback": {
           "name": "dev-feedback",
           "queue": "dev",
@@ -331,7 +359,7 @@
         "ticketId": "REL-1",
         "seq": 1,
         "at": 1791622800000,
-        "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+        "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
         "ticket": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -347,7 +375,7 @@
           "costUsd": 0,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152"
+          "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690"
         },
         "effects": [
           {
@@ -384,7 +412,7 @@
         "ticketId": "REL-1",
         "seq": 2,
         "at": 1791622800000,
-        "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+        "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -400,10 +428,11 @@
           "costUsd": 0,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+          "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "factory/rel-1-export-csv",
+          "recordedStatus": "dev",
           "activeRunId": "id-1",
           "activeJob": "dev",
           "claudeSessionId": "id-2"
@@ -423,10 +452,11 @@
           "costUsd": 0,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+          "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "factory/rel-1-export-csv",
+          "recordedStatus": "dev",
           "activeRunId": "id-1",
           "activeJob": "dev",
           "claudeSessionId": "id-2"
@@ -454,7 +484,8 @@
           "outcome": "success",
           "costUsd": 0.1,
           "turns": 1,
-          "lastText": "PR ouverte, tests verts."
+          "lastText": "PR ouverte, tests verts.",
+          "attempt": "failed"
         }
       },
       "decision": {
@@ -463,7 +494,7 @@
         "ticketId": "REL-1",
         "seq": 3,
         "at": 1791622800000,
-        "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+        "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -479,10 +510,11 @@
           "costUsd": 0,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+          "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "factory/rel-1-export-csv",
+          "recordedStatus": "dev",
           "activeRunId": "id-1",
           "activeJob": "dev",
           "claudeSessionId": "id-2"
@@ -502,10 +534,11 @@
           "costUsd": 0.1,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+          "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "factory/rel-1-export-csv",
+          "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "verifyingRunId": "id-1"
         },
@@ -553,7 +586,7 @@
         "ticketId": "REL-1",
         "seq": 4,
         "at": 1791622800000,
-        "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+        "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -569,10 +602,11 @@
           "costUsd": 0.1,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+          "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "factory/rel-1-export-csv",
+          "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "verifyingRunId": "id-1"
         },
@@ -591,10 +625,11 @@
           "costUsd": 0.1,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+          "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "factory/rel-1-export-csv",
+          "recordedStatus": "dev",
           "claudeSessionId": "id-2"
         },
         "effects": [
@@ -638,7 +673,7 @@
         "ticketId": "REL-1",
         "seq": 5,
         "at": 1791622800000,
-        "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+        "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -654,10 +689,11 @@
           "costUsd": 0.1,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+          "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "factory/rel-1-export-csv",
+          "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "activeRunId": "id-4",
           "activeJob": "dev"
@@ -677,10 +713,11 @@
           "costUsd": 0.1,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+          "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "factory/rel-1-export-csv",
+          "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "activeRunId": "id-4",
           "activeJob": "dev"
@@ -715,7 +752,7 @@
         "ticketId": "REL-1",
         "seq": 6,
         "at": 1791622800000,
-        "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+        "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -731,10 +768,11 @@
           "costUsd": 0.1,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+          "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "factory/rel-1-export-csv",
+          "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "activeRunId": "id-4",
           "activeJob": "dev"
@@ -754,10 +792,11 @@
           "costUsd": 0.1,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+          "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "factory/rel-1-export-csv",
+          "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "activeRunId": "id-4",
           "activeJob": "dev"
@@ -792,7 +831,7 @@
         "ticketId": "REL-1",
         "seq": 7,
         "at": 1791622800000,
-        "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+        "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -808,10 +847,11 @@
           "costUsd": 0.1,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+          "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "factory/rel-1-export-csv",
+          "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "activeRunId": "id-4",
           "activeJob": "dev"
@@ -831,10 +871,11 @@
           "costUsd": 0.1,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+          "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "factory/rel-1-export-csv",
+          "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "activeRunId": "id-4",
           "activeJob": "dev"
@@ -862,7 +903,8 @@
           "outcome": "success",
           "costUsd": 0.1,
           "turns": 1,
-          "lastText": "Terminé."
+          "lastText": "Terminé.",
+          "attempt": "failed"
         }
       },
       "decision": {
@@ -871,7 +913,7 @@
         "ticketId": "REL-1",
         "seq": 8,
         "at": 1791622800000,
-        "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+        "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -887,10 +929,11 @@
           "costUsd": 0.1,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+          "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "factory/rel-1-export-csv",
+          "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "activeRunId": "id-4",
           "activeJob": "dev"
@@ -910,10 +953,11 @@
           "costUsd": 0.2,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+          "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "factory/rel-1-export-csv",
+          "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "verifyingRunId": "id-4"
         },
@@ -956,7 +1000,7 @@
         "ticketId": "REL-1",
         "seq": 9,
         "at": 1791622800000,
-        "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+        "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -972,10 +1016,11 @@
           "costUsd": 0.2,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+          "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "factory/rel-1-export-csv",
+          "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "verifyingRunId": "id-4"
         },
@@ -994,10 +1039,11 @@
           "costUsd": 0.2,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+          "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "factory/rel-1-export-csv",
+          "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "verifyingRunId": "id-4"
         },
@@ -1031,7 +1077,7 @@
         "ticketId": "REL-1",
         "seq": 10,
         "at": 1791622800000,
-        "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+        "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -1047,10 +1093,11 @@
           "costUsd": 0.2,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+          "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "factory/rel-1-export-csv",
+          "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "verifyingRunId": "id-4"
         },
@@ -1069,10 +1116,11 @@
           "costUsd": 0.2,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+          "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "factory/rel-1-export-csv",
+          "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "verifyingRunId": "id-4"
         },
@@ -1104,7 +1152,7 @@
         "ticketId": "REL-1",
         "seq": 11,
         "at": 1791622800000,
-        "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+        "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -1120,10 +1168,11 @@
           "costUsd": 0.2,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+          "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "factory/rel-1-export-csv",
+          "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "verifyingRunId": "id-4"
         },
@@ -1142,10 +1191,11 @@
           "costUsd": 0.2,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+          "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "factory/rel-1-export-csv",
+          "recordedStatus": "dev",
           "claudeSessionId": "id-2"
         },
         "effects": [
@@ -1191,7 +1241,7 @@
         "ticketId": "REL-1",
         "seq": 12,
         "at": 1791622800000,
-        "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+        "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -1207,10 +1257,11 @@
           "costUsd": 0.2,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+          "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "factory/rel-1-export-csv",
+          "recordedStatus": "human_review",
           "claudeSessionId": "id-2"
         },
         "ticket": {
@@ -1228,10 +1279,11 @@
           "costUsd": 0.2,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+          "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "factory/rel-1-export-csv",
+          "recordedStatus": "human_review",
           "claudeSessionId": "id-2"
         },
         "effects": [],
@@ -1264,7 +1316,7 @@
         "ticketId": "REL-1",
         "seq": 13,
         "at": 1791622800000,
-        "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+        "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -1280,10 +1332,11 @@
           "costUsd": 0.2,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+          "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "factory/rel-1-export-csv",
+          "recordedStatus": "human_review",
           "claudeSessionId": "id-2"
         },
         "ticket": {
@@ -1301,10 +1354,11 @@
           "costUsd": 0.2,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+          "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "factory/rel-1-export-csv",
+          "recordedStatus": "human_review",
           "claudeSessionId": "id-2"
         },
         "effects": [],
@@ -1337,7 +1391,7 @@
         "ticketId": "REL-1",
         "seq": 14,
         "at": 1791622800000,
-        "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+        "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -1353,10 +1407,11 @@
           "costUsd": 0.2,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+          "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "factory/rel-1-export-csv",
+          "recordedStatus": "human_review",
           "claudeSessionId": "id-2"
         },
         "ticket": {
@@ -1374,10 +1429,11 @@
           "costUsd": 0.2,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+          "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "factory/rel-1-export-csv",
+          "recordedStatus": "human_review",
           "claudeSessionId": "id-2"
         },
         "effects": [],
@@ -1410,7 +1466,7 @@
         "ticketId": "REL-1",
         "seq": 15,
         "at": 1791622800000,
-        "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+        "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -1426,10 +1482,11 @@
           "costUsd": 0.2,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+          "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "factory/rel-1-export-csv",
+          "recordedStatus": "human_review",
           "claudeSessionId": "id-2"
         },
         "ticket": {
@@ -1447,10 +1504,11 @@
           "costUsd": 0.2,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+          "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "factory/rel-1-export-csv",
+          "recordedStatus": "human_review",
           "claudeSessionId": "id-2"
         },
         "effects": [],
@@ -1482,7 +1540,7 @@
         "ticketId": "REL-1",
         "seq": 16,
         "at": 1791622800000,
-        "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+        "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -1498,10 +1556,11 @@
           "costUsd": 0.2,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+          "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "factory/rel-1-export-csv",
+          "recordedStatus": "human_review",
           "claudeSessionId": "id-2"
         },
         "ticket": {
@@ -1527,10 +1586,11 @@
           "costUsd": 0.2,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+          "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "factory/rel-1-export-csv",
+          "recordedStatus": "human_review",
           "claudeSessionId": "id-2"
         },
         "effects": [],
@@ -1574,7 +1634,7 @@
         "ticketId": "REL-1",
         "seq": 17,
         "at": 1791622860000,
-        "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+        "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -1598,10 +1658,11 @@
           "costUsd": 0.2,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+          "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "factory/rel-1-export-csv",
+          "recordedStatus": "human_review",
           "claudeSessionId": "id-2"
         },
         "ticket": {
@@ -1634,10 +1695,11 @@
           "costUsd": 0.2,
           "updatedAt": 1791622860000,
           "linearSessionId": "ls-1",
-          "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+          "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "factory/rel-1-export-csv",
+          "recordedStatus": "human_review",
           "claudeSessionId": "id-2"
         },
         "effects": [],
@@ -1682,7 +1744,7 @@
         "ticketId": "REL-1",
         "seq": 18,
         "at": 1791623040000,
-        "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+        "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -1713,10 +1775,11 @@
           "costUsd": 0.2,
           "updatedAt": 1791622860000,
           "linearSessionId": "ls-1",
-          "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+          "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "factory/rel-1-export-csv",
+          "recordedStatus": "human_review",
           "claudeSessionId": "id-2"
         },
         "ticket": {
@@ -1749,10 +1812,11 @@
           "costUsd": 0.2,
           "updatedAt": 1791623040000,
           "linearSessionId": "ls-1",
-          "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+          "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "factory/rel-1-export-csv",
+          "recordedStatus": "human_review",
           "claudeSessionId": "id-2"
         },
         "effects": [
@@ -1791,7 +1855,7 @@
         "ticketId": "REL-1",
         "seq": 19,
         "at": 1791623040000,
-        "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+        "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -1807,10 +1871,11 @@
           "costUsd": 0.2,
           "updatedAt": 1791623040000,
           "linearSessionId": "ls-1",
-          "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+          "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "factory/rel-1-export-csv",
+          "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
           "activeRunId": "id-6",
           "activeJob": "dev-feedback"
@@ -1830,10 +1895,11 @@
           "costUsd": 0.2,
           "updatedAt": 1791623040000,
           "linearSessionId": "ls-1",
-          "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+          "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "factory/rel-1-export-csv",
+          "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
           "activeRunId": "id-6",
           "activeJob": "dev-feedback"
@@ -1861,7 +1927,8 @@
           "outcome": "success",
           "costUsd": 0.1,
           "turns": 1,
-          "lastText": "Corrigé."
+          "lastText": "Corrigé.",
+          "attempt": "failed"
         }
       },
       "decision": {
@@ -1870,7 +1937,7 @@
         "ticketId": "REL-1",
         "seq": 20,
         "at": 1791623040000,
-        "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+        "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -1886,10 +1953,11 @@
           "costUsd": 0.2,
           "updatedAt": 1791623040000,
           "linearSessionId": "ls-1",
-          "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+          "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "factory/rel-1-export-csv",
+          "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
           "activeRunId": "id-6",
           "activeJob": "dev-feedback"
@@ -1909,10 +1977,11 @@
           "costUsd": 0.30000000000000004,
           "updatedAt": 1791623040000,
           "linearSessionId": "ls-1",
-          "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+          "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "factory/rel-1-export-csv",
+          "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
           "verifyingRunId": "id-6"
         },
@@ -1955,7 +2024,7 @@
         "ticketId": "REL-1",
         "seq": 21,
         "at": 1791623040000,
-        "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+        "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -1971,10 +2040,11 @@
           "costUsd": 0.30000000000000004,
           "updatedAt": 1791623040000,
           "linearSessionId": "ls-1",
-          "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+          "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "factory/rel-1-export-csv",
+          "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
           "verifyingRunId": "id-6"
         },
@@ -1993,10 +2063,11 @@
           "costUsd": 0.30000000000000004,
           "updatedAt": 1791623040000,
           "linearSessionId": "ls-1",
-          "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+          "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "factory/rel-1-export-csv",
+          "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
           "verifyingRunId": "id-6"
         },
@@ -2028,7 +2099,7 @@
         "ticketId": "REL-1",
         "seq": 22,
         "at": 1791623040000,
-        "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+        "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -2044,10 +2115,11 @@
           "costUsd": 0.30000000000000004,
           "updatedAt": 1791623040000,
           "linearSessionId": "ls-1",
-          "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+          "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "factory/rel-1-export-csv",
+          "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
           "verifyingRunId": "id-6"
         },
@@ -2066,10 +2138,11 @@
           "costUsd": 0.30000000000000004,
           "updatedAt": 1791623040000,
           "linearSessionId": "ls-1",
-          "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+          "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "factory/rel-1-export-csv",
+          "recordedStatus": "human_review",
           "claudeSessionId": "id-2"
         },
         "effects": [
@@ -2111,7 +2184,7 @@
         "ticketId": "REL-1",
         "seq": 23,
         "at": 1791623040000,
-        "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+        "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -2127,10 +2200,11 @@
           "costUsd": 0.30000000000000004,
           "updatedAt": 1791623040000,
           "linearSessionId": "ls-1",
-          "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+          "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "factory/rel-1-export-csv",
+          "recordedStatus": "human_review",
           "claudeSessionId": "id-2"
         },
         "ticket": {
@@ -2148,10 +2222,11 @@
           "costUsd": 0.30000000000000004,
           "updatedAt": 1791623040000,
           "linearSessionId": "ls-1",
-          "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+          "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "factory/rel-1-export-csv",
+          "recordedStatus": "human_review",
           "claudeSessionId": "id-2"
         },
         "effects": [],
@@ -2184,7 +2259,7 @@
         "ticketId": "REL-1",
         "seq": 24,
         "at": 1791623040000,
-        "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+        "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -2200,10 +2275,11 @@
           "costUsd": 0.30000000000000004,
           "updatedAt": 1791623040000,
           "linearSessionId": "ls-1",
-          "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+          "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "factory/rel-1-export-csv",
+          "recordedStatus": "human_review",
           "claudeSessionId": "id-2"
         },
         "ticket": {
@@ -2221,10 +2297,11 @@
           "costUsd": 0.30000000000000004,
           "updatedAt": 1791623040000,
           "linearSessionId": "ls-1",
-          "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+          "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "factory/rel-1-export-csv",
+          "recordedStatus": "human_review",
           "claudeSessionId": "id-2"
         },
         "effects": [],
@@ -2257,7 +2334,7 @@
         "ticketId": "REL-1",
         "seq": 25,
         "at": 1791623040000,
-        "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+        "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -2273,10 +2350,11 @@
           "costUsd": 0.30000000000000004,
           "updatedAt": 1791623040000,
           "linearSessionId": "ls-1",
-          "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+          "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "factory/rel-1-export-csv",
+          "recordedStatus": "human_review",
           "claudeSessionId": "id-2"
         },
         "ticket": {
@@ -2294,10 +2372,11 @@
           "costUsd": 0.30000000000000004,
           "updatedAt": 1791623040000,
           "linearSessionId": "ls-1",
-          "workflowHash": "45b691f01d3e7db14be9a9d1fccaaa266dc8f743a39ece7ac45b7b86104b9152",
+          "workflowHash": "d100172dbf74f67712912de65c9198295ec68c98c59323efc8388c6ef281b690",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "factory/rel-1-export-csv",
+          "recordedStatus": "human_review",
           "claudeSessionId": "id-2"
         },
         "effects": [],
