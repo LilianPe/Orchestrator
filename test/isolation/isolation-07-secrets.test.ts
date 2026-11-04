@@ -3,10 +3,10 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { execCmd } from '../../src/adapters/exec.js';
 import { ClaudeCodeRunner } from '../../src/adapters/runner/claude-code.js';
-import { SANDBOX_HOME, WORKSPACE_TARGET } from '../../src/adapters/sandbox/types.js';
+import { SANDBOX_HOME, WORKSPACE_TARGET, type Sandbox } from '../../src/adapters/sandbox/types.js';
 import { parseRepoConfig } from '../../src/config/repo-config.js';
 import { repoVariables } from '../../src/config/repo-variables.js';
 import { CLAUDE_RUN_ENV } from '../../src/core/orchestrator.js';
@@ -63,7 +63,6 @@ const GIT_TARGET = '/git-dir';
  */
 const LEAKY_SETUP = `
   set -e
-  cat /etc/hostname > ${WORKSPACE_TARGET}/setup-container.txt
   printf '%s' "$REPO_TOKEN" | sha256sum | cut -d' ' -f1 > ${WORKSPACE_TARGET}/secret-seen.txt
   echo "TOKEN=$REPO_TOKEN" > ${WORKSPACE_TARGET}/.env
   mkdir -p ${WORKSPACE_TARGET}/deep/er && echo "//registry/:_authToken=$REPO_TOKEN" > ${WORKSPACE_TARGET}/deep/er/.npmrc
@@ -72,9 +71,9 @@ const LEAKY_SETUP = `
   echo "$REPO_TOKEN" > "$HOME/.npmrc"
   if (echo "$REPO_TOKEN" > ${GIT_TARGET}/config.leak) 2> ${WORKSPACE_TARGET}/git-write-error.txt; then :; fi
   nohup sh -c 'sleep 900' > /dev/null 2>&1 &
-  # Read at once, its environ is often still empty (measured: 27 reads of 30): it waits for the process to hold the secret.
-  export HOLDER=$!
-  timeout 10 sh -c 'until tr "\\0" "\\n" < /proc/$HOLDER/environ | grep -qF "$REPO_TOKEN"; do sleep 0.1; done'
+  holder=$!
+  sleep 0.2
+  kill -0 "$holder"
   echo 'export const kept = 1;' > ${WORKSPACE_TARGET}/kept.ts
 `;
 
@@ -162,9 +161,11 @@ describe.skipIf(!enabled)(`no secret in the sandbox (${cli}, isolation n° 7)`, 
     const runId = `${prefix}-sealed`;
     const mounts = [{ host: gitDir, target: GIT_TARGET, readOnly: true }];
     let purged: string[];
+    let setupContainer: string;
 
     // Once for the whole describe: a setup that did not really run fails it all, no test passes with nothing to find.
     beforeAll(async () => {
+      const made = vi.spyOn(provider, 'create');
       ({ purged } = await runSealedSetup(provider, {
         runId,
         ticketId: 'ISO-7',
@@ -175,6 +176,8 @@ describe.skipIf(!enabled)(`no secret in the sandbox (${cli}, isolation n° 7)`, 
         secrets: { REPO_TOKEN: REPO_SECRET },
         now: new Date(),
       }));
+      setupContainer = (await made.mock.results[0]!.value as Sandbox).id;
+      made.mockRestore();
       // It really had it: the witness a discriminating test needs.
       expect(readFileSync(join(ws, 'secret-seen.txt'), 'utf8').trim()).toBe(createHash('sha256').update(REPO_SECRET).digest('hex'));
     }, 240_000);
@@ -187,14 +190,15 @@ describe.skipIf(!enabled)(`no secret in the sandbox (${cli}, isolation n° 7)`, 
     });
 
     it('its container is gone, with what it left out of the worktree', async () => {
-      // Its id as it saw it from inside: the container did exist.
-      const id = readFileSync(join(ws, 'setup-container.txt'), 'utf8').trim();
-      expect(id).toMatch(/^[0-9a-f]{12}$/);
+      expect(setupContainer).toMatch(/^[0-9a-f]{64}$/);
       expect(await provider.findByAttempt(`${runId}-setup`)).toBeUndefined();
+      const live = await create();
       const all = execFileSync(cli, ['ps', '-a', '--no-trunc', '--format', '{{.ID}} {{.Labels}}'], { encoding: 'utf8' });
       expect(all).not.toContain(`${runId}-setup`);
-      expect(all).not.toContain(id);
-    });
+      expect(all).not.toContain(setupContainer);
+      // The listing shows what is there: a negative control.
+      expect(all).toContain(live.id);
+    }, 240_000);
 
     it('gives the command its env under its own names, with no trace of the transport', async () => {
       const r = await provider.exec((await create()).id, ['sh', '-c', 'printf "%s|%s|" "$HOME" "$MULTI"; env | grep -c FACTORY_SANDBOX_ENV; true'], { env: { HOME: '/tmp/moved', MULTI: 'a "b"\n$c' } });
@@ -223,6 +227,10 @@ describe.skipIf(!enabled)(`no secret in the sandbox (${cli}, isolation n° 7)`, 
       await sh(sbx.id, `echo '${REPO_SECRET}' > ${WORKSPACE_TARGET}/control.txt`);
       expect(await search(REPO_SECRET)).toContain('control.txt');
       await sh(sbx.id, `rm ${WORKSPACE_TARGET}/control.txt`);
+      // And what is held by a process: reading an environ fails in silence above.
+      await provider.exec(sbx.id, ['sh', '-c', "nohup sh -c 'sleep 77' > /dev/null 2>&1 &"], { env: { REPO_TOKEN: REPO_SECRET } });
+      expect(await search(REPO_SECRET)).toMatch(/\/proc\/\d+/);
+      expect((await sh(sbx.id, `for p in /proc/[0-9]*; do tr '\\0' ' ' < "$p/cmdline" 2>/dev/null; echo; done`)).stdout).toContain('sleep 77');
     }, 240_000);
 
     it('the engine holds it neither in the agent container nor in any image layer', async () => {
