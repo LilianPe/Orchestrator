@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { execCmd } from '../../src/adapters/exec.js';
 import { ClaudeCodeRunner } from '../../src/adapters/runner/claude-code.js';
 import { SANDBOX_HOME, WORKSPACE_TARGET } from '../../src/adapters/sandbox/types.js';
@@ -56,17 +56,25 @@ const DAEMON_SECRETS = {
 const REPO_SECRET = 'repo-secret-for-the-setup-Zx81';
 const encoded = Buffer.from(REPO_SECRET).toString('base64');
 
-/** What a repository's setup can do with its secret: write it wherever it can, and leave a process holding it. */
 const GIT_TARGET = '/git-dir';
+/**
+ * What a repository's setup can do with its secret: write it wherever it can, and leave a process holding
+ * it. `set -e`: a leak that does not happen fails the setup, so no test below passes for lack of a leak.
+ */
 const LEAKY_SETUP = `
+  set -e
+  cat /etc/hostname > ${WORKSPACE_TARGET}/setup-container.txt
   printf '%s' "$REPO_TOKEN" | sha256sum | cut -d' ' -f1 > ${WORKSPACE_TARGET}/secret-seen.txt
   echo "TOKEN=$REPO_TOKEN" > ${WORKSPACE_TARGET}/.env
   mkdir -p ${WORKSPACE_TARGET}/deep/er && echo "//registry/:_authToken=$REPO_TOKEN" > ${WORKSPACE_TARGET}/deep/er/.npmrc
   printf '%s' "$REPO_TOKEN" | base64 > ${WORKSPACE_TARGET}/deep/encoded.txt
   echo "$REPO_TOKEN" > /tmp/left-in-tmp.txt
   echo "$REPO_TOKEN" > "$HOME/.npmrc"
-  (echo "$REPO_TOKEN" > ${GIT_TARGET}/config.leak) 2>/dev/null; echo $? > ${WORKSPACE_TARGET}/git-write-exit.txt
+  if (echo "$REPO_TOKEN" > ${GIT_TARGET}/config.leak) 2> ${WORKSPACE_TARGET}/git-write-error.txt; then :; fi
   nohup sh -c 'sleep 900' > /dev/null 2>&1 &
+  # Read at once, its environ is often still empty (measured: 27 reads of 30): it waits for the process to hold the secret.
+  export HOLDER=$!
+  timeout 10 sh -c 'until tr "\\0" "\\n" < /proc/$HOLDER/environ | grep -qF "$REPO_TOKEN"; do sleep 0.1; done'
   echo 'export const kept = 1;' > ${WORKSPACE_TARGET}/kept.ts
 `;
 
@@ -153,9 +161,11 @@ describe.skipIf(!enabled)(`no secret in the sandbox (${cli}, isolation n° 7)`, 
     const ws = workspace();
     const runId = `${prefix}-sealed`;
     const mounts = [{ host: gitDir, target: GIT_TARGET, readOnly: true }];
+    let purged: string[];
 
-    it('gives the setup its secret, then none of it is left on the disk', async () => {
-      const setup = await runSealedSetup(provider, {
+    // Once for the whole describe: a setup that did not really run fails it all, no test passes with nothing to find.
+    beforeAll(async () => {
+      ({ purged } = await runSealedSetup(provider, {
         runId,
         ticketId: 'ISO-7',
         workspacePath: ws,
@@ -164,19 +174,26 @@ describe.skipIf(!enabled)(`no secret in the sandbox (${cli}, isolation n° 7)`, 
         env: {},
         secrets: { REPO_TOKEN: REPO_SECRET },
         now: new Date(),
-      });
+      }));
       // It really had it: the witness a discriminating test needs.
       expect(readFileSync(join(ws, 'secret-seen.txt'), 'utf8').trim()).toBe(createHash('sha256').update(REPO_SECRET).digest('hex'));
-      expect(setup.purged.map((p) => p.slice(ws.length + 1).replaceAll('\\', '/')).sort()).toEqual(['.env', 'deep/encoded.txt', 'deep/er/.npmrc']);
+    }, 240_000);
+
+    it('leaves none of the secret on the disk, and what the setup made without it', () => {
+      expect(purged.map((p) => p.slice(ws.length + 1).replaceAll('\\', '/')).sort()).toEqual(['.env', 'deep/encoded.txt', 'deep/er/.npmrc']);
       for (const f of ['.env', 'deep/er/.npmrc', 'deep/encoded.txt']) expect(existsSync(join(ws, f))).toBe(false);
       // What it made without the secret stays: the setup's work is not lost.
       expect(readFileSync(join(ws, 'kept.ts'), 'utf8')).toContain('kept');
-    }, 240_000);
+    });
 
     it('its container is gone, with what it left out of the worktree', async () => {
+      // Its id as it saw it from inside: the container did exist.
+      const id = readFileSync(join(ws, 'setup-container.txt'), 'utf8').trim();
+      expect(id).toMatch(/^[0-9a-f]{12}$/);
       expect(await provider.findByAttempt(`${runId}-setup`)).toBeUndefined();
       const all = execFileSync(cli, ['ps', '-a', '--no-trunc', '--format', '{{.ID}} {{.Labels}}'], { encoding: 'utf8' });
       expect(all).not.toContain(`${runId}-setup`);
+      expect(all).not.toContain(id);
     });
 
     it('gives the command its env under its own names, with no trace of the transport', async () => {
@@ -185,7 +202,8 @@ describe.skipIf(!enabled)(`no secret in the sandbox (${cli}, isolation n° 7)`, 
     }, 240_000);
 
     it('could not write in the git dir: read-only for it', () => {
-      expect(readFileSync(join(ws, 'git-write-exit.txt'), 'utf8').trim()).not.toBe('0');
+      // By this reason: the write would fail as well on a dir that is not mounted.
+      expect(readFileSync(join(ws, 'git-write-error.txt'), 'utf8')).toMatch(/read-only file system/i);
       expect(existsSync(join(gitDir, 'config.leak'))).toBe(false);
     });
 
@@ -220,7 +238,7 @@ describe.skipIf(!enabled)(`no secret in the sandbox (${cli}, isolation n° 7)`, 
     }, 240_000);
 
     it('does not give the secret to the engine on its command line, nor the container\'s env to its process', async () => {
-      await runSealedSetup(recorded, { runId: `${runId}-argv`, ticketId: 'ISO-7', workspacePath: workspace(), mounts, commands: ['true'], env: {}, secrets: { REPO_TOKEN: REPO_SECRET }, now: new Date() });
+      await runSealedSetup(recorded, { runId: `${runId}-argv`, ticketId: 'ISO-7', workspacePath: workspace(), mounts, commands: ['test -n "$REPO_TOKEN"'], env: {}, secrets: { REPO_TOKEN: REPO_SECRET }, now: new Date() });
       expect(engineArgs.flat().join(' ')).not.toContain(REPO_SECRET);
       expect(engineArgs.flat().join(' ')).toContain('REPO_TOKEN');
       // The HOME of the setup moves the rootless engine's storage: the CLI never sees it.
