@@ -351,7 +351,7 @@ describeCheckRunnerContract(
 );
 
 const UNREACHABLE = 'findPr and unresolvedReviewComments reject when the forge does not answer';
-const UNREADABLE = 'findPr gives none for checks it cannot read';
+const UNREADABLE = 'findPr rejects for checks it cannot read';
 
 function forgeThat(patch: Partial<ForgeSubject>): () => ForgeSubject {
   return () => {
@@ -379,8 +379,10 @@ const findingPr = (findPr: Forge['findPr']): Partial<ForgeSubject> => ({ forge: 
 const unreadable = (findPr: Forge['findPr']): Partial<ForgeSubject> => ({ ...findingPr(findPr), unreadableChecks: 'factory/rel-2-y' });
 
 describeForgeContract(
-  'a forge that rejects checks it cannot read',
-  forgeThat(unreadable(async () => Promise.reject(new SyntaxError('Unexpected token n in JSON')))),
+  'a forge that reads checks it cannot read as none',
+  forgeThat(
+    unreadable(async (_repo, branch) => ({ number: 8, url: 'https://github.test/pr/8', state: 'OPEN', branch, checks: 'none', failedChecks: [] })),
+  ),
   { violates: [UNREADABLE] },
 );
 

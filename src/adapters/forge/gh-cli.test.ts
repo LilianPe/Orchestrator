@@ -74,16 +74,40 @@ describe('GhCliForge', () => {
   });
 
   it.each([
-    ['an entry that is not an object', '[null]'],
-    ['an entry without a bucket', '[{"name":"ci"}]'],
-  ])('reads checks listing %s as none, not as green', async (_case, stdout) => {
+    ['an entry that is not an object', 0, '[null]'],
+    ['an entry without a bucket', 0, '[{"name":"ci"}]'],
+    ['a null bucket', 0, '[{"name":"ci","bucket":null}]'],
+    ['nothing', 0, ''],
+    ['an object, not a list', 1, '{"name":"ci","bucket":"pass"}'],
+  ])('rejects, naming the command and its output, when gh pr checks lists %s (exit %i)', async (_case, code, stdout) => {
     const forge = new GhCliForge(
       fakeExec({
         'gh pr list': { stdout: JSON.stringify([{ number: 7, url: 'https://gh/7', state: 'OPEN', headRefName: 'b' }]) },
-        'gh pr checks 7': { stdout },
+        'gh pr checks 7': { stdout, code },
       }),
     );
-    expect(await forge.findPr('/r', 'b')).toMatchObject({ checks: 'none', failedChecks: [] });
+    await expect(forge.findPr('/r', 'b')).rejects.toThrow(`gh pr checks 7 --json name,bucket: unreadable output, not a list of checks: ${JSON.stringify(stdout)}`);
+  });
+
+  it('cuts a long unreadable output in its error', async () => {
+    const forge = new GhCliForge(
+      fakeExec({
+        'gh pr list': { stdout: JSON.stringify([{ number: 7, url: 'https://gh/7', state: 'OPEN', headRefName: 'b' }]) },
+        'gh pr checks 7': { stdout: `<html>${'x'.repeat(1000)}` },
+      }),
+    );
+    const err = await forge.findPr('/r', 'b').catch((e: Error) => e);
+    expect((err as Error).message).toMatch(/: "<html>x{194}"…$/);
+  });
+
+  it('rejects a PR without checks whose stdout is not empty, as gh never answers it', async () => {
+    const forge = new GhCliForge(
+      fakeExec({
+        'gh pr list': { stdout: JSON.stringify([{ number: 9, url: 'https://gh/9', state: 'OPEN', headRefName: 'b' }]) },
+        'gh pr checks 9': { stdout: 'garbage', stderr: "no checks reported on the 'b' branch\n", code: 1 },
+      }),
+    );
+    await expect(forge.findPr('/r', 'b')).rejects.toThrow('unreadable output, not a list of checks: "garbage"');
   });
 
   it("rejects with gh pr checks' own failure when gh answers the PR but not its checks", async () => {

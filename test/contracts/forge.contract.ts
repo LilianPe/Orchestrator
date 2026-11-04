@@ -81,11 +81,9 @@ export function describeForgeContract(name: string, make: () => ForgeSubject | P
       await expect(s.unreachable.unresolvedReviewComments(s.repoPath, s.pr?.number ?? 1)).rejects.toThrow();
     });
 
-    it('findPr gives none for checks it cannot read', async (ctx) => {
+    it('findPr rejects for checks it cannot read', async (ctx) => {
       const s = await subjectWith(make, () => ctx.skip(), 'unreadableChecks');
-      expect(await resolved(s.forge.findPr(s.repoPath, s.unreadableChecks))).toMatchObject({
-        branch: s.unreadableChecks, state: 'OPEN', checks: 'none', failedChecks: [],
-      });
+      await expect(s.forge.findPr(s.repoPath, s.unreadableChecks)).rejects.toThrow();
     });
 
     it('findPr gives none for an open PR without any check', async (ctx) => {
