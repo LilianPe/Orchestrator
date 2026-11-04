@@ -41,7 +41,7 @@ const excerpt = (out: string) => {
 
 /**
  * The checks `gh pr checks --json name,bucket` lists. Output that is not such a list throws, never reads as
- * `none`: that would open the merge of a PR without CI (ORC-305). The PR poller logs the error and retries.
+ * `none`, a PR without CI, for which the PR poller sends no checks event (ORC-305). It logs the error and retries.
  */
 function parseChecks(args: string[], r: ExecResult): Check[] {
   let list: unknown;
