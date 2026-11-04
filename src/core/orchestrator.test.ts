@@ -58,8 +58,9 @@ function setup(
   return { store, tracker, runner: fakeRunner, orch, scheduler, bus };
 }
 
-const mentioned = (ticketId: string): FactoryEvent =>
-  ({ id: 'm1', type: 'session.mentioned', at: 1_000, projectId: 'p', ticketId, payload: { linearSessionId: 'q1', body: '?', author: 'L' } }) as FactoryEvent;
+const mentioned = (ticketId: string): FactoryEvent => ({
+  ...TRUSTED, id: 'm1', type: 'session.mentioned', at: 1_000, projectId: 'p', ticketId, payload: { linearSessionId: 'q1', body: '?', author: 'L' },
+});
 const delegated = (id = 'e1'): FactoryEvent => ({ ...TRUSTED, id, type: 'ticket.delegated', at: 1_000, projectId: 'p', ticketId: 'REL-1', payload: { linearSessionId: 'ls-1' } });
 
 describe('Orchestrator', () => {
