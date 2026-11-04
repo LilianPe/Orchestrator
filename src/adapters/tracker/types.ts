@@ -10,6 +10,8 @@ export interface TrackerIssue {
   teamKey: string;
   priority: number;
   createdAt: number;
+  /** When Linear last changed the issue, when read: orders what the factory reads of its labels (ORC-185). */
+  updatedAt?: number;
 }
 
 export type ActivityInput =
@@ -28,10 +30,18 @@ export function effectMarker(effectId: string): string {
   return `<!-- factory:effect=${effectId} -->`;
 }
 
+/** The echo key of a status the factory itself moved the ticket to (`putEcho`), for the webhook of its own move to be dropped. */
+export function stateEchoKey(identifier: string, stateName: string): string {
+  return `state:${identifier}:${stateName}`;
+}
+
 /** The echo key of a label the factory itself added or took off (`putEcho`), for the webhook of its own write to be dropped. */
 export function labelEchoKey(identifier: string, label: string, change: 'added' | 'removed'): string {
   return change === 'added' ? `label:${identifier}:${label}` : `label-removed:${identifier}:${label}`;
 }
+
+/** The tracker has no such issue (deleted, or never existed): an answer about the issue, unlike a read error. */
+export class IssueNotFoundError extends Error {}
 
 /**
  * Writes are keyed by the outbox effect id (`ticket:seq:i`) when they come from an effect (ORC-162):

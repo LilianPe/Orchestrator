@@ -17,6 +17,7 @@ import { LinearApi } from '../adapters/tracker/linear/api.js';
 import { createLinearIngest } from '../adapters/tracker/linear/ingest.js';
 import { buildAuthorizeUrl, exchangeCode, TokenManager } from '../adapters/tracker/linear/oauth.js';
 import { Q } from '../adapters/tracker/linear/queries.js';
+import { knownLabels, recordLabels, serial } from '../adapters/tracker/linear/labels.js';
 import { Reconciler, reconcileOnce } from '../adapters/tracker/linear/reconcile.js';
 import { LinearTracker } from '../adapters/tracker/linear/tracker.js';
 import { isUsableWebhookSecret } from '../adapters/tracker/linear/webhook.js';
@@ -252,7 +253,10 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     const accept = (e: FactoryEvent) => orchestrator.accept(e);
 
     const webhookSecret = () => linearSettings(o.home, yml)?.webhookSecret ?? '';
+    // One turn for the webhook and the reconciliation around the known labels (ORC-185).
+    const labelsTurn = serial();
     const ingest = createLinearIngest({
+      serial: labelsTurn,
       secret: webhookSecret,
       accept,
       // The time the ack was posted is the first sign of life a measure reads (ORC-235).
@@ -273,14 +277,19 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
         isEcho: (k) => store.isEcho(k, clock.now()),
         commands: (pid) => projects.find((p) => p.id === pid)?.workflow.commands ?? [],
         now: () => clock.now(),
+        knownLabels: (pid, id) => knownLabels(store, pid, id),
+        // Tickets the factory tracks only: the reconciliation compares no other.
+        recordLabels: async (pid, id, labels, at) => {
+          if (await store.getTicket(pid, id)) await recordLabels(store, pid, id, labels, at);
+        },
       },
     });
 
-    const reconciler = new Reconciler({ tracker: trackerSwitch, store, projects, submit: accept, clock, log });
+    const reconciler = new Reconciler({ tracker: trackerSwitch, store, projects, submit: accept, clock, log, serial: labelsTurn });
     const timers = new TimerService(store, clock, () => orchestrator.wake(), (e) => log(`timers: ${e.message}`));
     const poller = new PrPoller({ store, forge, projects, submit: accept, clock, log });
     reconcileProject = async (p) => {
-      await reconcileOnce({ tracker: trackerSwitch, store, projects: [p], submit: accept, clock, log });
+      await reconcileOnce({ tracker: trackerSwitch, store, projects: [p], submit: accept, clock, log, serial: labelsTurn });
       await poller.pollOnce(p.id);
     };
     // GitHub webhooks (ORC-134) write to the inbox beside the poll (each reconciliation, ORC-185; every 30 s without

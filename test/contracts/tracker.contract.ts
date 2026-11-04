@@ -1,5 +1,5 @@
 import { expect } from 'vitest';
-import type { ActivityInput, Tracker } from '../../src/adapters/tracker/types.js';
+import { IssueNotFoundError, type ActivityInput, type Tracker } from '../../src/adapters/tracker/types.js';
 import { describeContract, resolved, subjectWith, type ContractOptions } from './cases.js';
 
 /** What the implementation under test arranged for the suite. Docs: docs/ports/tracker.md. */
@@ -50,7 +50,8 @@ export function describeTrackerContract(name: string, make: () => TrackerSubject
 
     it('getIssue rejects an unknown issue', async () => {
       const s = await make();
-      await expect(s.tracker.getIssue(s.missing)).rejects.toThrow();
+      // A dedicated error: the reconciliation treats an issue the tracker does not have as no longer delegated (ORC-185).
+      await expect(s.tracker.getIssue(s.missing)).rejects.toBeInstanceOf(IssueNotFoundError);
     });
 
     it('every write rejects an unknown issue', async (ctx) => {

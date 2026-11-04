@@ -17,7 +17,7 @@ import {
   type SandboxProvider,
 } from '../adapters/sandbox/types.js';
 import { ActivityRelay } from '../adapters/tracker/activity-relay.js';
-import { labelEchoKey, type ActivityInput, type Tracker } from '../adapters/tracker/types.js';
+import { labelEchoKey, stateEchoKey, type ActivityInput, type Tracker } from '../adapters/tracker/types.js';
 import type { Workspace, WorkspaceManager } from '../adapters/workspace/types.js';
 import type { JobSpec, Workflow } from '../config/workflow-schema.js';
 import type { EffectRetry } from '../runtime/outbox.js';
@@ -1030,7 +1030,7 @@ export class Orchestrator {
     const stateName = project.workflow.states[to];
     // The loader refuses a move to an undeclared status; a version frozen before it may still hold one.
     if (!stateName) throw new Error(`no status for "${to}" in the workflow of ${project.id}`);
-    await this.d.store.putEcho(`state:${t.ticketId}:${stateName}`, this.d.clock.now() + ECHO_MS);
+    await this.d.store.putEcho(stateEchoKey(t.ticketId, stateName), this.d.clock.now() + ECHO_MS);
     await this.d.tracker.moveTo(t.ticketId, stateName);
     // Only a move that concludes the factory's work records the commit shown; a move back keeps the reviewed one.
     const reviewSha = to !== 'human_review' ? undefined : keepReviewSha ? t.reviewSha : await this.headShown(project, t);

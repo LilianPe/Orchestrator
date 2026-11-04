@@ -10,7 +10,7 @@ Le suivi des tickets : lire un ticket, le déplacer, l'étiqueter, commenter, et
 
 | Méthode | Ce qu'elle garantit | Rejouée | Erreur |
 |---|---|---|---|
-| `getIssue(id)` | le ticket, `teamKey` = préfixe de l'identifiant ; une copie que l'appelant peut modifier | lecture | rejette sur un ticket inconnu |
+| `getIssue(id)` | le ticket, `teamKey` = préfixe de l'identifiant ; une copie que l'appelant peut modifier | lecture | rejette sur un ticket inconnu avec `IssueNotFoundError`, distincte d'une erreur de lecture |
 | `listDelegated(teamKey)` | les tickets de l'équipe délégués à l'app, et seulement eux | lecture | — |
 | `search(term)` | les tickets que le terme trouve, dont ceux qui l'ont dans leur titre, avec URL et statut | lecture | — |
 | `moveTo(id, statut)` | le ticket est dans ce statut | sans effet de plus | rejette sur un ticket inconnu ; sur un statut que l'équipe n'a pas, rejette et laisse le statut |
