@@ -106,9 +106,7 @@ export class Worker {
   private retryTimers = new Set<NodeJS.Timeout>();
   private readonly retry: { attempts: number; baseMs: number };
   /** Rows that found a row or an effect of their ticket first: retried at the next poll, or by `unwait`. */
-  private waited = new Map<string, string>();
-  /** Keys whose parked rows `unwait` released since their last `waiting`: see `waitAll`. */
-  private released = new Set<string>();
+  private waited = new Map<string, StoredEvent>();
   private tasks = new Set<Promise<unknown>>();
   private pass: Promise<number> | undefined;
   private again = false;
@@ -269,10 +267,10 @@ export class Worker {
   private async drainTicket(ref: TicketRef, key: string): Promise<void> {
     for (;;) {
       const effects = await this.executor.runTicket(ref.projectId, ref.ticketId);
-      // Their results are in the inbox now, and the rows that found them unfinished can go: the next
-      // pass reads them all, oldest first, without waiting for a poll (ORC-290).
+      // Their results are in the inbox now: the next pass reads them. With no effect left open, the
+      // rows that found them unfinished go first, without waiting for a poll (ORC-290).
       if (effects.settled > 0) {
-        this.unwait(key);
+        if (effects.status === 'done') this.unwait(key);
         this.kickInBackground();
       }
       // Effects held (another worker's lease, a backoff): the next row still goes to the store, which
@@ -281,7 +279,7 @@ export class Worker {
       if (!row) break;
       // `held`: only a backoff holds it, so the ticket's next row is tried (a stop passes them both).
       if ((await this.process(row, key)) === 'waiting') {
-        this.waitAll(key, row);
+        this.waitAll(key);
         break;
       }
     }
@@ -290,21 +288,13 @@ export class Worker {
     this.queued.delete(key);
   }
 
-  /**
-   * `row` found its ticket held: the rows queued behind it wait with it for the next poll, or for
-   * `unwait`. Unless rows were released since the ticket's last `waiting`: they joined the queue
-   * behind younger ones, so what `row` found ahead may be one of them (ORC-290). Then nothing is
-   * parked, and the next pass reads the ticket's rows again, oldest first.
-   */
-  private waitAll(key: string, row: StoredEvent): void {
-    const reread = this.released.delete(key);
-    if (reread) this.waited.delete(row.id);
-    for (const r of this.queued.get(key) ?? []) {
-      this.queuedIds.delete(r.id);
-      if (!reread) this.waited.set(r.id, key);
+  /** Something holds the ticket (another worker, an older row, an effect): its queued rows wait for the next poll, or for `unwait`. */
+  private waitAll(key: string): void {
+    for (const row of this.queued.get(key) ?? []) {
+      this.queuedIds.delete(row.id);
+      this.waited.set(row.id, row);
     }
     this.queued.delete(key);
-    if (reread && !this.stopped) this.kickInBackground();
   }
 
   private async process(row: StoredEvent, key: string): Promise<'done' | 'held' | 'waiting'> {
@@ -332,12 +322,12 @@ export class Worker {
         return 'done';
       }
       if (outcome.status === 'waiting') {
-        this.waited.set(row.id, key);
+        this.waited.set(row.id, row);
         return outcome.backoff ? 'held' : 'waiting';
       }
       this.passed(row, key);
       if (outcome.status === 'committed') {
-        if (this.unwait(key)) this.kickInBackground();
+        this.unwait(key);
         try {
           await this.d.committed(event, outcome);
         } catch (err) {
@@ -402,18 +392,19 @@ export class Worker {
   }
 
   /**
-   * A row of the ticket went through (a stop that cancelled a backoff, say), or an effect of the
-   * ticket settled here: its rows that found it held are tried again now rather than at the next poll.
+   * A row of the ticket went through (a stop that cancelled a backoff, say), or its last open effect
+   * settled here: its rows that found it held are tried again now rather than at the next poll. They
+   * go at the head of its queue, ahead of the younger rows read while they were parked (ORC-290). Only
+   * from the ticket's own task: none of its rows is at the store now.
    */
-  private unwait(key: string): boolean {
-    let any = false;
-    for (const [id, k] of this.waited) {
-      if (k !== key) continue;
-      this.waited.delete(id);
-      any = true;
+  private unwait(key: string): void {
+    const rows = [...this.waited.values()].filter((row) => ticketKey(row) === key);
+    if (rows.length === 0) return;
+    for (const row of rows) {
+      this.waited.delete(row.id);
+      this.queuedIds.add(row.id);
     }
-    if (any) this.released.add(key);
-    return any;
+    this.queued.set(key, [...rows, ...(this.queued.get(key) ?? [])]);
   }
 
   /** No retry left for this row in this process: it waits for the next start. */
