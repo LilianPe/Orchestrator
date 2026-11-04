@@ -107,7 +107,7 @@ describe('GhCliForge', () => {
         'gh pr checks 9': { stdout: 'garbage', stderr: "no checks reported on the 'b' branch\n", code: 1 },
       }),
     );
-    await expect(forge.findPr('/r', 'b')).rejects.toThrow('unreadable output, not a list of checks: "garbage"');
+    await expect(forge.findPr('/r', 'b')).rejects.toThrow(`unreadable output, not a list of checks: "garbage" (exit 1: no checks reported on the 'b' branch)`);
   });
 
   it("rejects with gh pr checks' own failure when gh answers the PR but not its checks", async () => {

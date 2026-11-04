@@ -94,7 +94,8 @@ export class GhCliForge implements Forge, RepoPermissions {
         failedChecks = list.filter((c) => c.bucket === 'fail' || c.bucket === 'cancel').map((c) => c.name);
       } else if (r.code === 0 || r.stdout.trim() !== '') {
         // Never `none`: that opens the merge of a PR without CI (ORC-305). The PR poller logs this and retries.
-        throw new Error(`gh ${args.join(' ')}: unreadable output, not a list of checks: ${excerpt(r.stdout)}`);
+        const exit = r.code === 0 ? '' : ` (exit ${r.code}${r.stderr.trim() ? `: ${r.stderr.trim()}` : ''})`;
+        throw new Error(`gh ${args.join(' ')}: unreadable output, not a list of checks: ${excerpt(r.stdout)}${exit}`);
       } else if (!NO_CHECKS.test(r.stderr)) {
         if (NO_JSON_FLAG.test(r.stderr)) throw new Error(`gh ${args.join(' ')}: this gh has no --json on pr checks, gh 2.50 or later is required`);
         throw execFailure('gh', args, r);
