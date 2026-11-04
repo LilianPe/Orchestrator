@@ -191,13 +191,15 @@ export function parseFactoryYml(text: string, env: NodeJS.ProcessEnv = process.e
     out.repos = repos.map((repo, i) => {
       if (!REPO.test(repo.github)) violations.push(`repos[${i}].github : \`<org>/<dépôt>\` attendu`);
       const resolved = (key: 'env' | 'secrets') => {
-        const entries = Object.entries(repo[key] ?? {}).map(([name, v]) => {
+        const out: Record<string, string> = {};
+        for (const [name, v] of Object.entries(repo[key] ?? {})) {
           const path = `repos[${i}].${key}.${name}`;
           const text = value(path, v, key === 'secrets');
-          if (key === 'secrets' && text !== undefined && text.length < MIN_REPO_SECRET_LENGTH) violations.push(`${path} : au moins ${MIN_REPO_SECRET_LENGTH} caractères attendus`);
-          return [name, text] as const;
-        });
-        return Object.fromEntries(entries.filter((e): e is [string, string] => e[1] !== undefined));
+          if (text === undefined) continue;
+          if (key === 'secrets' && text.length < MIN_REPO_SECRET_LENGTH) violations.push(`${path} : au moins ${MIN_REPO_SECRET_LENGTH} caractères attendus`);
+          out[name] = text;
+        }
+        return out;
       };
       return { linearTeam: repo.linear_team, github: repo.github, ...(repo.env ? { env: resolved('env') } : {}), ...(repo.secrets ? { secrets: resolved('secrets') } : {}) };
     });

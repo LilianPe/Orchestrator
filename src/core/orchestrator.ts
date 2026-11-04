@@ -61,16 +61,16 @@ import {
   type VerifyFailure,
   TRUSTED,
 } from './types.js';
-import { cappedCommand, runSealedSetup } from './sealed-setup.js';
-import type { Verifier } from './verify.js';
+import { runSealedSetup } from './sealed-setup.js';
+import { cappedCommand, type Verifier } from './verify.js';
 import { PRODUCT_NAME } from '../product.js';
 import { checkRed, type RedDeps, type RedResult } from '../checks/red.js';
 import { parseStatus } from '../adapters/workspace/git-workspaces.js';
 
 /** Meta key of the head a ticket's tests step started on (ORC-123). */
 const redBaseKey = (projectId: string, ticketId: string): string => `red-base:${projectId}:${ticketId}`;
-/** Set while a worktree may hold a repository's secret (ORC-211): a daemon killed before the seal leaves it, and the next launch runs setup and seal again. */
-const unsealedKey = (path: string): string => `setup-unsealed:${path}`;
+/** Set while a fresh worktree is not set up and sealed (ORC-211): a daemon killed before the end leaves it, and the next launch makes the worktree anew. */
+const setupPendingKey = (path: string): string => `setup-pending:${path}`;
 
 /**
  * Every run's Claude Code (ORC-284): no auto-memory (ORC-205), telemetry off by both variables ORC-128
@@ -498,15 +498,13 @@ export class Orchestrator {
     const commands = project.workflow.workspace.setup;
     const sandboxes = this.d.sandboxes;
     if (!sandboxes) {
-      const res = await this.d.verify(ws.path, commands);
+      const res = await this.d.verify(ws.path, commands, undefined, vars.env);
       if (!res.ok) throw new Error(`Le setup du worktree a échoué : ${res.failures[0]!.command}`);
       return;
     }
     // On commits a previous agent wrote, `setup` runs code nobody reviewed: no secret for it. A setup that needs one fails.
     const secrets = ws.ahead ? {} : vars.setupSecrets;
     if (ws.ahead && Object.keys(vars.setupSecrets).length) this.log('warn', `setup of ${ticketId}: its branch has commits beyond the default branch, the repository's secrets are withheld`);
-    const sealed = Object.keys(secrets).length > 0;
-    if (sealed) await this.d.store.setMeta(unsealedKey(ws.path), '1');
     const gitDir = await this.d.workspaces.gitCommonDir(ws.path);
     const { purged } = await runSealedSetup(sandboxes, {
       runId,
@@ -519,7 +517,6 @@ export class Orchestrator {
       now: new Date(this.d.clock.now()),
     });
     if (purged.length) this.log('warn', `setup of ${ticketId}: secret found and purged in ${purged.join(', ')}`);
-    if (sealed) await this.d.store.setMeta(unsealedKey(ws.path), '');
   }
 
   /** What the runner gets of the repository (ORC-211): none when it cannot be read, the launch goes on. */
@@ -549,8 +546,9 @@ export class Orchestrator {
       let runTests: RedDeps['run'];
       if (!sandboxes) {
         uncommitted = await this.d.workspaces.uncommitted(run.cwd);
+        const { env } = await this.repoVariablesOf(project);
         runTests = async (cmd) => {
-          const res = await this.d.verify(run.cwd, [cmd]);
+          const res = await this.d.verify(run.cwd, [cmd], undefined, env);
           return res.ok ? { exitCode: 0, output: '' } : { exitCode: res.failures[0]!.exitCode, output: res.failures[0]!.output };
         };
       } else {
@@ -966,7 +964,7 @@ export class Orchestrator {
               );
               return;
             }
-            const res = await this.d.verify(run.cwd, job.verify);
+            const res = await this.d.verify(run.cwd, job.verify, undefined, (await this.repoVariablesOf(project)).env);
             const base = { ...TRUSTED, at: clock.now(), projectId: project.id, ticketId };
             const event: FactoryEvent = res.ok
               ? { ...base, id: `check:${run.id}`, type: 'verify.passed', payload: { runId: run.id, job: job.name, ...(c.output ? { output: c.output } : {}) } }
@@ -1299,11 +1297,11 @@ export class Orchestrator {
     const runId = this.newId();
     const asked = { projectId: project.id, repoPath: project.repoPath, ticketId, title: issue.title, kind: job.workspace, slot, portBase: wf.workspace.portBase, runId };
     let ws = await workspaces.prepare(asked);
-    // Left by a daemon killed before the seal (ORC-211): this worktree may hold a secret, perhaps one the
+    // Left by a daemon killed before the end of its setup (ORC-211): half installed, perhaps holding a secret the
     // configuration no longer names, so sealing it again proves nothing. It is made anew; no agent has worked in it.
-    if (await store.getMeta(unsealedKey(ws.path))) {
+    if (await store.getMeta(setupPendingKey(ws.path))) {
       await workspaces.cleanup(project.id, project.repoPath, ticketId);
-      await store.setMeta(unsealedKey(ws.path), '');
+      await store.setMeta(setupPendingKey(ws.path), '');
       ws = await workspaces.prepare(asked);
     }
     // A fresh worktree is not set up until its setup succeeds: a launch ending before removes it, or
@@ -1353,7 +1351,11 @@ export class Orchestrator {
       const sessionRole = roleOf(job, ticketSession);
 
       const vars = await this.repoVariablesOf(project);
-      if (!setUp) await this.runSetup(project, ticketId, ws, runId, vars);
+      if (!setUp) {
+        await store.setMeta(setupPendingKey(ws.path), '1');
+        await this.runSetup(project, ticketId, ws, runId, vars);
+        await store.setMeta(setupPendingKey(ws.path), '');
+      }
       setUp = true;
       // Opened after the cheap exits above and after the setup, whose container is gone by now (ORC-211).
       sandbox = this.d.sandboxes && (await this.openSandbox(this.d.sandboxes, project, ticketId, ws, runId, ticketSession));

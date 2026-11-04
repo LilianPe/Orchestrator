@@ -68,7 +68,7 @@ function engineEnv(base: NodeJS.ProcessEnv, named: Record<string, string>): Reco
  * to work. Everything else stays in the daemon.
  * Transition: `GH_TOKEN` until the agents stop pushing (ORC-125), `ANTHROPIC_API_KEY` until the host runs go (ORC-179).
  */
-const HOST_LOGIN = ['CLAUDE_CONFIG_DIR', CLAUDE_TOKEN, 'ANTHROPIC_API_KEY', 'GH_TOKEN', 'GH_HOST'];
+const HOST_LOGIN = ['CLAUDE_CONFIG_DIR', CLAUDE_TOKEN, 'ANTHROPIC_API_KEY', 'GH_TOKEN', 'GH_HOST', 'SSH_AUTH_SOCK', 'GIT_SSH_COMMAND'];
 
 /** The env of a run on the host; `token`, the chosen account, replaces any other login. */
 export function childEnv(base: NodeJS.ProcessEnv, run: Record<string, string>, token?: string): Record<string, string> {

@@ -6,6 +6,7 @@ import { FakeSandboxProvider } from '../adapters/sandbox/fake.js';
 import { RELEASE_AGE_DAYS, runSealedSetup, sealSecrets, setupEnv, YARN1_NO_SCRIPTS } from './sealed-setup.js';
 
 const SECRET = 's3cr3t-value/with+chars';
+const NOW = new Date('2026-11-04T12:00:00.000Z');
 
 function tree(files: Record<string, string | Buffer>): string {
   const root = mkdtempSync(join(tmpdir(), 'factory-seal-'));
@@ -73,8 +74,6 @@ describe('sealSecrets', () => {
 });
 
 describe('setupEnv', () => {
-  const NOW = new Date('2026-11-04T12:00:00.000Z');
-
   it('cuts the install scripts of npm, pnpm and Yarn, and the source packages of pip and uv', () => {
     expect(setupEnv(NOW)).toMatchObject({
       npm_config_ignore_scripts: 'true',
@@ -103,7 +102,6 @@ describe('setupEnv', () => {
 });
 
 describe('runSealedSetup', () => {
-  const NOW = new Date('2026-11-04T12:00:00.000Z');
   const request = (workspacePath: string, over: Partial<Parameters<typeof runSealedSetup>[1]> = {}) => ({
     runId: 'r1',
     ticketId: 'REL-1',
@@ -127,15 +125,16 @@ describe('runSealedSetup', () => {
     const sandboxes = new FakeSandboxProvider();
     await runSealedSetup(sandboxes, request(tree({})));
     expect(sandboxes.execs).toEqual([
-      { id: 'sbx-1', argv: YARN1_NO_SCRIPTS },
+      { id: 'sbx-1', argv: YARN1_NO_SCRIPTS, opts: { env: { HOME: setupEnv(NOW)['HOME']! } } },
       { id: 'sbx-1', argv: ['timeout', '900', 'bash', '-lc', 'npm ci'], opts: { env: { NODE_ENV: 'test', NPM_TOKEN: SECRET, ...setupEnv(NOW) } } },
     ]);
   });
 
-  it('goes on when the rc file of Yarn 1 cannot be written', async () => {
+  it('fails when the rc file of Yarn 1 cannot be written: its install scripts would run with the secrets', async () => {
     const sandboxes = new FakeSandboxProvider();
-    sandboxes.execResult = (argv) => ({ stdout: '', stderr: '', code: argv === YARN1_NO_SCRIPTS ? 1 : 0 });
-    await expect(runSealedSetup(sandboxes, request(tree({})))).resolves.toEqual({ purged: [] });
+    sandboxes.execResult = (argv) => ({ stdout: '', stderr: 'read-only', code: argv === YARN1_NO_SCRIPTS ? 1 : 0 });
+    await expect(runSealedSetup(sandboxes, request(tree({})))).rejects.toThrow('Yarn 1');
+    expect(sandboxes.active()).toEqual([]);
   });
 
   it('the hardening wins over a variable of the same name', async () => {
@@ -164,7 +163,7 @@ describe('runSealedSetup', () => {
   it('a failed command still destroys the container and purges the disk, and says which command', async () => {
     const root = tree({ '.env': SECRET });
     const sandboxes = new FakeSandboxProvider();
-    sandboxes.execResult = () => ({ stdout: '', stderr: 'boom', code: 1 });
+    sandboxes.execResult = (argv) => ({ stdout: '', stderr: 'boom', code: argv[0] === 'timeout' ? 1 : 0 });
     await expect(runSealedSetup(sandboxes, request(root, { commands: ['npm ci', 'never'] }))).rejects.toThrow('Le setup du worktree a échoué : npm ci');
     expect(sandboxes.execs.map((e) => e.argv.at(-1))).not.toContain('never');
     expect(sandboxes.active()).toEqual([]);
@@ -173,7 +172,7 @@ describe('runSealedSetup', () => {
 
   it('a command over its cap fails as a timeout', async () => {
     const sandboxes = new FakeSandboxProvider();
-    sandboxes.execResult = () => ({ stdout: '', stderr: '', code: 124 });
+    sandboxes.execResult = (argv) => ({ stdout: '', stderr: '', code: argv[0] === 'timeout' ? 124 : 0 });
     await expect(runSealedSetup(sandboxes, request(tree({})))).rejects.toThrow('npm ci (délai de 15 min dépassé)');
   });
 

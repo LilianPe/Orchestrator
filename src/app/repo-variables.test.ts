@@ -65,11 +65,8 @@ describe('makeRepoVariables (ORC-211)', () => {
     expect(vars).toEqual({ env: {}, setupSecrets: {}, missing: [] });
   });
 
-  it('gives nothing on an invalid config, and logs why', async () => {
-    const log: string[] = [];
-    const vars = await makeRepoVariables({ yml: YML, exec: git({ head: 'origin/main', config: 'env: [PATH]\n' }).exec, log: (m) => log.push(m) })(PROJECT);
-    expect(vars).toEqual(NO_REPO_VARIABLES);
-    expect(log.join()).toContain('env[0]');
+  it('rejects on an invalid config, naming the fault, for the caller to log', async () => {
+    await expect(makeRepoVariables({ yml: YML, exec: git({ head: 'origin/main', config: 'env: [PATH]\n' }).exec, log: () => {} })(PROJECT)).rejects.toThrow('env[0]');
   });
 
   it('logs by name what the repository declares and the server does not give', async () => {
@@ -78,10 +75,8 @@ describe('makeRepoVariables (ORC-211)', () => {
     expect(log.join()).toContain('API_URL');
   });
 
-  it('gives nothing when git fails, without failing the launch', async () => {
+  it('rejects when git fails, for the caller to log', async () => {
     const exec: Exec = async () => Promise.reject(new Error('no git'));
-    const log: string[] = [];
-    expect(await makeRepoVariables({ yml: YML, exec, log: (m) => log.push(m) })(PROJECT)).toEqual(NO_REPO_VARIABLES);
-    expect(log.join()).toContain('no git');
+    await expect(makeRepoVariables({ yml: YML, exec, log: () => {} })(PROJECT)).rejects.toThrow('no git');
   });
 });

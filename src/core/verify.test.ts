@@ -30,10 +30,16 @@ describe('runVerify', () => {
     vi.stubEnv('ORG_REGISTRY_TOKEN', 'repo-secret');
     vi.stubEnv('CLAUDE_CODE_OAUTH_TOKEN', 'claude-token');
     vi.stubEnv('GH_TOKEN', 'gh-token');
+    vi.stubEnv('SSH_AUTH_SOCK', '/ssh-agent');
     vi.stubEnv('LANG', 'C');
-    const res = await runVerify(process.cwd(), ['echo "[$ORG_REGISTRY_TOKEN$CLAUDE_CODE_OAUTH_TOKEN$GH_TOKEN|$LANG]"; exit 1']);
+    const res = await runVerify(process.cwd(), ['echo "[$ORG_REGISTRY_TOKEN$CLAUDE_CODE_OAUTH_TOKEN$GH_TOKEN$SSH_AUTH_SOCK|$LANG]"; exit 1']);
     vi.unstubAllEnvs();
     expect(res.failures[0]!.output).toContain('[|C]');
+  });
+
+  it('gives its commands the variables the repository declares', async () => {
+    const res = await runVerify(process.cwd(), ['echo "[$API_URL]"; exit 1'], undefined, { API_URL: 'https://api' });
+    expect(res.failures[0]!.output).toContain('[https://api]');
   });
 
   it('times out', async () => {

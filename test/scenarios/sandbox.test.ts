@@ -78,7 +78,7 @@ describe('a disposable sandbox per attempt', () => {
 
   it('a failed setup destroys the sandbox, removes the worktree and blocks the ticket, without a run', async () => {
     const h = createHarness({ sandboxed: true, projectYaml: SETUP });
-    h.sandboxes.execResult = () => ({ stdout: '', stderr: 'boom', code: 1 });
+    h.sandboxes.execResult = (argv) => ({ stdout: '', stderr: 'boom', code: argv[0] === 'timeout' ? 1 : 0 });
     await delegate(h);
     expect(h.runner.requests).toEqual([]);
     expect(h.sandboxes.active()).toEqual([]);
@@ -89,7 +89,7 @@ describe('a disposable sandbox per attempt', () => {
 
   it('a setup command over the verify timeout fails the setup as a timeout', async () => {
     const h = createHarness({ sandboxed: true, projectYaml: SETUP });
-    h.sandboxes.execResult = () => ({ stdout: '', stderr: '', code: 124 });
+    h.sandboxes.execResult = (argv) => ({ stdout: '', stderr: '', code: argv[0] === 'timeout' ? 124 : 0 });
     await delegate(h);
     expect(h.runner.requests).toEqual([]);
     expect(h.workspaces.cleaned).toEqual(['REL-1']);
@@ -191,7 +191,7 @@ describe('a disposable sandbox per attempt', () => {
       ['the secrets are still declared', VARS],
       // Sealing again could not find a value it no longer knows: only a new worktree is sure.
       ['the secrets are gone from the configuration', { env: {}, setupSecrets: {}, missing: [] }],
-    ])('a worktree left unsealed by a crash is removed and made anew, when %s', async (_, after) => {
+    ])('a worktree whose setup a crash cut is removed and made anew, when %s', async (_, after) => {
       let declared = VARS as typeof after;
       const h = createHarness({ sandboxed: true, projectYaml: SETUP, repoVariables: async () => declared });
       await delegate(h);
@@ -199,12 +199,12 @@ describe('a disposable sandbox per attempt', () => {
       expect(h.workspaces.cleaned).toEqual([]);
       // The mark a daemon killed between the setup's start and its seal leaves behind.
       declared = after;
-      await h.store.setMeta('setup-unsealed:/tmp/factory-fake/p/REL-1', '1');
+      await h.store.setMeta('setup-pending:/tmp/factory-fake/p/REL-1', '1');
       await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'reprends', author: 'L' });
       await h.advance(600_000);
       expect(h.workspaces.cleaned).toEqual(['REL-1']);
       expect(setups(h)).toHaveLength(2);
-      expect(await h.store.getMeta('setup-unsealed:/tmp/factory-fake/p/REL-1')).toBe('');
+      expect(await h.store.getMeta('setup-pending:/tmp/factory-fake/p/REL-1')).toBe('');
       // Sealed: the next run does not set up again.
       await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'encore', author: 'L' });
       await h.advance(600_000);
@@ -220,10 +220,17 @@ describe('a disposable sandbox per attempt', () => {
       expect(h.logs.map((l) => l.message).join()).toContain('withheld');
     });
 
-    it('leaves no mark behind a setup that has no secret', async () => {
+    it('marks the worktree while its setup runs, with or without a secret, and lifts the mark at its end', async () => {
       const h = createHarness({ sandboxed: true, projectYaml: SETUP });
+      let during: string | undefined;
+      const exec = h.sandboxes.exec.bind(h.sandboxes);
+      h.sandboxes.exec = async (id, argv, opts) => {
+        during ??= await h.store.getMeta('setup-pending:/tmp/factory-fake/p/REL-1');
+        return exec(id, argv, opts);
+      };
       await delegate(h);
-      expect(await h.store.getMeta('setup-unsealed:/tmp/factory-fake/p/REL-1')).toBeUndefined();
+      expect(during).toBe('1');
+      expect(await h.store.getMeta('setup-pending:/tmp/factory-fake/p/REL-1')).toBe('');
     });
 
     it('a reading of the variables that fails leaves the run without them', async () => {

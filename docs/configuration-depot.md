@@ -28,7 +28,7 @@ network: { level: limited, allow: ["docs.exemple.com"] }   # none | limited (dé
 | `extends` | texte | `factory/default@1.0` | Le préréglage ; seul `factory/default@1.0` existe au MVP. |
 | `setup` | commande | aucune | Préparation du dépôt (installation, migrations). |
 | `commands` | `nom: commande` | `{}` | Les contrôles du dépôt (`lint`, `typecheck`, `test`…). |
-| `env` | liste de noms | `[]` | Variables que le runner reçoit : `setup`, agent et contrôle du rouge. Voir [Variables et secrets](#variables-et-secrets). |
+| `env` | liste de noms | `[]` | Variables que le runner reçoit : `setup`, agent, contrôle du rouge, et `verify` tant qu'il tourne sur l'hôte. Voir [Variables et secrets](#variables-et-secrets). |
 | `setup_secrets` | liste de noms | `[]` | Secrets que le `setup` seul reçoit, scellés avant que l'agent démarre. |
 | `services` | liste | `[]` | Services à démarrer à côté du runner (`postgres`…). |
 | `sensitive_paths` | liste de motifs | `[]` | Chemins dont la modification marque le run (relecture renforcée). |
@@ -46,7 +46,7 @@ Sont refusés : un nom qui n'est pas en majuscules, chiffres et `_` ; les noms r
 
 ## Le `setup`
 
-Le `setup` tourne dans un conteneur à lui, au niveau réseau `limited`, avec le worktree en écriture et le dossier git du dépôt en **lecture seule** : une commande qui écrit dans `.git` (`git submodule update`, `git lfs pull`, un hook posé par husky) échoue. Ce conteneur est détruit à la fin, avec son `$HOME` et son `/tmp` : l'agent ne retrouve que ce que le `setup` a écrit dans le worktree.
+Le `setup` tourne dans un conteneur à lui, au niveau réseau `limited`, avec le worktree en écriture et le dossier git du dépôt en **lecture seule** : une commande qui écrit dans `.git` (`git submodule update`, `git lfs pull`, un hook posé par husky) échoue. Ce conteneur est détruit à la fin, avec son `$HOME` (`/tmp/setup-home`) et son `/tmp` : l'agent ne retrouve que ce que le `setup` a écrit dans le worktree.
 
 Il s'exécute sous ces réglages, posés par l'environnement :
 

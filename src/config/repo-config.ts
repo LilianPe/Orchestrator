@@ -1,5 +1,6 @@
 import { parse } from 'yaml';
 import { z } from 'zod';
+import { SECRET_NAME } from '../adapters/runner/transcript.js';
 import type { NetworkLevel } from '../adapters/sandbox/types.js';
 import { MaxDiffConfigError, resolveMaxDiff, type MaxDiff } from '../checks/diff-size.js';
 
@@ -70,8 +71,6 @@ const RESERVED = new RegExp(
     ].join('|') +
     ')$',
 );
-/** The name of a secret, as the transcripts' mask knows it: under `env`, the agent would see it. */
-const SECRET_SHAPED = /(TOKEN|SECRET|PASSWORD|PASSWD|_PASS|_PWD|APIKEY|_KEY|CREDENTIALS?|DATABASE_URL)$/;
 
 const at = (path: PropertyKey[]): string => path.map((p) => (typeof p === 'number' ? `[${p}]` : `.${String(p)}`)).join('');
 
@@ -109,7 +108,7 @@ export function parseRepoConfig(text: string | undefined): RepoConfig {
     names?.forEach((name, i) => {
       if (!VARIABLE.test(name)) violations.push(`${key}[${i}] : « ${name} » n’est pas un nom de variable (majuscules, chiffres, _)`);
       else if (RESERVED.test(name)) violations.push(`${key}[${i}] : « ${name} » est réservé à l’usine`);
-      else if (key === 'env' && SECRET_SHAPED.test(name)) violations.push(`${key}[${i}] : « ${name} » a le nom d’un secret, que l’agent verrait ; un secret se déclare sous setup_secrets`);
+      else if (key === 'env' && SECRET_NAME.test(name)) violations.push(`${key}[${i}] : « ${name} » a le nom d’un secret, que l’agent verrait ; un secret se déclare sous setup_secrets`);
       else if (key === 'env' && setupSecrets?.includes(name)) violations.push(`${key}[${i}] : « ${name} » est aussi sous setup_secrets, que l’agent ne doit pas voir`);
     });
   }

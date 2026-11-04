@@ -207,7 +207,7 @@ describe('childEnv: a run on the host (ORC-211)', () => {
   });
 
   it('keeps GH_TOKEN and ANTHROPIC_API_KEY on the host until the agents stop pushing (ORC-125) and the host runs go (ORC-179)', () => {
-    expect(childEnv({ GH_TOKEN: 'g', ANTHROPIC_API_KEY: 'k' }, {})).toEqual({ GH_TOKEN: 'g', ANTHROPIC_API_KEY: 'k' });
+    expect(childEnv({ GH_TOKEN: 'g', ANTHROPIC_API_KEY: 'k', SSH_AUTH_SOCK: '/s' }, {})).toEqual({ GH_TOKEN: 'g', ANTHROPIC_API_KEY: 'k', SSH_AUTH_SOCK: '/s' });
   });
 
   it('the chosen account replaces any other login of the daemon', () => {

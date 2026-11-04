@@ -1,7 +1,7 @@
 import { open, readdir, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { DEFAULT_REQUIREMENTS, type SandboxMount, type SandboxProvider } from '../adapters/sandbox/types.js';
-import { VERIFY_TIMEOUT_MS } from './verify.js';
+import { cappedCommand, VERIFY_TIMEOUT_MS } from './verify.js';
 
 /**
  * A version younger than this is refused at install (ORC-211): a package compromised and published this
@@ -9,16 +9,20 @@ import { VERIFY_TIMEOUT_MS } from './verify.js';
  */
 export const RELEASE_AGE_DAYS = 7;
 
+const SETUP_HOME = '/tmp/setup-home';
+
 /**
  * What every `setup` runs under, by the environment since `setup` is the repository's own command line:
  * no install script (npm, pnpm, Yarn), wheels only (pip, uv, which still builds the project itself),
  * nothing younger than `RELEASE_AGE_DAYS`. Measured on npm 11.19, pnpm 10.20, Yarn 1.22 and 4.5, uv 0.13:
  * pnpm reads `npm_config_*` and not `pnpm_config_*`; `npm ci` keeps its lockfile whatever `before` says;
  * `YARN_IGNORE_SCRIPTS`, which Yarn 1 would read, makes Yarn 4 refuse to run (see `YARN1_NO_SCRIPTS`).
+ * `HOME` under `/tmp`: writable on any image, and gone with the container.
  */
 export function setupEnv(now: Date): Record<string, string> {
   const cutoff = new Date(now.getTime() - RELEASE_AGE_DAYS * 86_400_000).toISOString();
   return {
+    HOME: SETUP_HOME,
     npm_config_ignore_scripts: 'true',
     YARN_ENABLE_SCRIPTS: 'false',
     PIP_ONLY_BINARY: ':all:',
@@ -60,11 +64,10 @@ function spellings(secret: string): Buffer[] {
   return [...new Set(forms)].map((f) => Buffer.from(f));
 }
 
-async function holdsOne(path: string, needles: readonly Buffer[]): Promise<boolean> {
-  const overlap = Math.max(...needles.map((n) => n.length)) - 1;
+/** `buffer`, of `CHUNK + overlap` bytes, is the caller's: one for the whole scan, not a megabyte per file of a `node_modules`. */
+async function holdsOne(path: string, needles: readonly Buffer[], buffer: Buffer, overlap: number): Promise<boolean> {
   const file = await open(path, 'r');
   try {
-    const buffer = Buffer.alloc(CHUNK + overlap);
     let kept = 0;
     for (;;) {
       const { bytesRead } = await file.read(buffer, kept, CHUNK);
@@ -89,6 +92,8 @@ export async function sealSecrets(roots: readonly string[], secrets: readonly st
   const needles = secrets.filter(Boolean).flatMap(spellings);
   const purged: string[] = [];
   if (!needles.length) return purged;
+  const overlap = Math.max(...needles.map((n) => n.length)) - 1;
+  const buffer = Buffer.alloc(CHUNK + overlap);
   const pending = [...roots];
   for (let dir = pending.pop(); dir !== undefined; dir = pending.pop()) {
     let entries;
@@ -102,7 +107,7 @@ export async function sealSecrets(roots: readonly string[], secrets: readonly st
       const path = join(dir, entry.name);
       if (entry.isDirectory()) pending.push(path);
       if (!entry.isFile()) continue;
-      const found = await holdsOne(path, needles).catch(() => true);
+      const found = await holdsOne(path, needles, buffer, overlap).catch(() => true);
       if (!found) continue;
       await unlink(path);
       purged.push(path);
@@ -142,26 +147,19 @@ export async function runSealedSetup(sandboxes: SandboxProvider, req: SealedSetu
     mounts: req.mounts,
   });
   const env = { ...req.env, ...req.secrets, ...setupEnv(req.now) };
-  let failure: Error | undefined;
+  let purged: string[];
   try {
-    // Its exit does not matter: an image with no writable `$HOME` has no Yarn config either.
-    await sandboxes.exec(box.id, YARN1_NO_SCRIPTS);
+    const rc = await sandboxes.exec(box.id, YARN1_NO_SCRIPTS, { env: { HOME: SETUP_HOME } });
+    if (rc.code !== 0) throw new Error(`Le setup du worktree a échoué : scripts de Yarn 1 non coupés (${rc.stderr.trim()})`);
     for (const command of req.commands) {
       const { code } = await sandboxes.exec(box.id, cappedCommand(command), { env });
       if (code === 124) throw new Error(`Le setup du worktree a échoué : ${command} (délai de ${VERIFY_TIMEOUT_MS / 60_000} min dépassé)`);
       if (code !== 0) throw new Error(`Le setup du worktree a échoué : ${command}`);
     }
-  } catch (err) {
-    failure = err as Error;
+  } finally {
+    // Its failure wins over the setup's: a container still alive holds the secret and can still write it, no agent may start.
+    await sandboxes.destroy(box.id);
+    purged = await sealSecrets([req.workspacePath], Object.values(req.secrets));
   }
-  // Not caught: a container still alive holds the secret and can still write it, no agent may start.
-  await sandboxes.destroy(box.id);
-  const purged = await sealSecrets([req.workspacePath], Object.values(req.secrets));
-  if (failure) throw failure;
   return { purged };
-}
-
-/** `command` in a sandbox under the host's cap (runVerify), by coreutils' `timeout` in the image: 124 is its exit on expiry. */
-export function cappedCommand(command: string): string[] {
-  return ['timeout', String(VERIFY_TIMEOUT_MS / 1000), 'bash', '-lc', command];
 }

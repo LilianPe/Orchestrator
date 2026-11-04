@@ -22,7 +22,7 @@ import { cli, enabled, image, useSandboxes } from './helpers.js';
  * docker/runner.Dockerfile), the public node image otherwise.
  */
 const TOKEN = /ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-ant-[A-Za-z0-9_-]{10,}|xox[abprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}/;
-/** The shape of a credential's name, as the transcripts' mask knows it. */
+/** The shape of a credential's name: this test's own, an oracle independent of the mask's and the config's. */
 const CREDENTIAL_NAME = /(TOKEN|SECRET|PASSWORD|PASSWD|_PASS|_PWD|APIKEY|_KEY|CREDENTIALS?|DATABASE_URL)$/i;
 
 const CHOSEN_ACCOUNT = 'sk-ant-oat01-chosen-account-token';
@@ -64,7 +64,7 @@ const LEAKY_SETUP = `
   mkdir -p ${WORKSPACE_TARGET}/deep/er && echo "//registry/:_authToken=$REPO_TOKEN" > ${WORKSPACE_TARGET}/deep/er/.npmrc
   printf '%s' "$REPO_TOKEN" | base64 > ${WORKSPACE_TARGET}/deep/encoded.txt
   echo "$REPO_TOKEN" > /tmp/left-in-tmp.txt
-  mkdir -p "$HOME" 2>/dev/null; echo "$REPO_TOKEN" > "$HOME/.npmrc" 2>/dev/null
+  echo "$REPO_TOKEN" > "$HOME/.npmrc"
   (echo "$REPO_TOKEN" > ${GIT_TARGET}/config.leak) 2>/dev/null; echo $? > ${WORKSPACE_TARGET}/git-write-exit.txt
   nohup sh -c 'sleep 900' > /dev/null 2>&1 &
   echo 'export const kept = 1;' > ${WORKSPACE_TARGET}/kept.ts
@@ -149,12 +149,11 @@ describe.skipIf(!enabled)(`no secret in the sandbox (${cli}, isolation n° 7)`, 
     const gitDir = mkdtempSync(join(tmpdir(), 'factory-iso-git-'));
     afterAll(() => rmSync(gitDir, { recursive: true, force: true }));
     const ws = workspace();
-    const runId = `isolation-07-${prefix}-sealed`;
+    const runId = `${prefix}-sealed`;
     const mounts = [{ host: gitDir, target: GIT_TARGET, readOnly: true }];
-    let setup: Awaited<ReturnType<typeof runSealedSetup>>;
 
     it('gives the setup its secret, then none of it is left on the disk', async () => {
-      setup = await runSealedSetup(provider, {
+      const setup = await runSealedSetup(provider, {
         runId,
         ticketId: 'ISO-7',
         workspacePath: ws,
@@ -227,7 +226,7 @@ describe.skipIf(!enabled)(`no secret in the sandbox (${cli}, isolation n° 7)`, 
     writeFileSync(join(ws, 'package.json'), JSON.stringify({ name: 'app', version: '1.0.0' }));
     // No registry here: a local tarball with no dependency, which is all it takes to run a postinstall.
     const install = `export npm_config_cache=/tmp/npm-cache npm_config_audit=false npm_config_fund=false; (cd ${WORKSPACE_TARGET}/dep && npm pack --silent > /dev/null) && cd ${WORKSPACE_TARGET} && npm install ./dep/dep-1.0.0.tgz --no-save`;
-    await runSealedSetup(provider, { runId: `isolation-07-${prefix}-scripts`, ticketId: 'ISO-7', workspacePath: ws, mounts: [], commands: [install], env: {}, secrets: {}, now: new Date() });
+    await runSealedSetup(provider, { runId: `${prefix}-scripts`, ticketId: 'ISO-7', workspacePath: ws, mounts: [], commands: [install], env: {}, secrets: {}, now: new Date() });
     expect(existsSync(join(ws, 'node_modules', 'dep', 'package.json'))).toBe(true);
     expect(existsSync(join(ws, 'POSTINSTALL_RAN'))).toBe(false);
     // The control: the same install, without the hardening, runs it. The test would pass for nothing otherwise.
@@ -236,6 +235,22 @@ describe.skipIf(!enabled)(`no secret in the sandbox (${cli}, isolation n° 7)`, 
     const r = await provider.exec(control.id, ['bash', '-c', install]);
     expect(r.code, r.stderr).toBe(0);
     expect(existsSync(join(ws, 'POSTINSTALL_RAN'))).toBe(true);
+  }, 240_000);
+
+  it('runs no install script under Yarn 1, which the node images ship, as it does without', async () => {
+    const ws = workspace();
+    mkdirSync(join(ws, 'dep'));
+    writeFileSync(join(ws, 'dep', 'package.json'), JSON.stringify({ name: 'dep', version: '1.0.0', scripts: { postinstall: `touch ${WORKSPACE_TARGET}/YARN_POSTINSTALL_RAN` } }));
+    writeFileSync(join(ws, 'package.json'), JSON.stringify({ name: 'app', version: '1.0.0' }));
+    const install = `export YARN_CACHE_FOLDER=/tmp/yarn-cache; cd ${WORKSPACE_TARGET} && yarn add file:./dep --no-lockfile --silent`;
+    await runSealedSetup(provider, { runId: `${prefix}-yarn`, ticketId: 'ISO-7', workspacePath: ws, mounts: [], commands: [install], env: {}, secrets: {}, now: new Date() });
+    expect(existsSync(join(ws, 'node_modules', 'dep', 'package.json'))).toBe(true);
+    expect(existsSync(join(ws, 'YARN_POSTINSTALL_RAN'))).toBe(false);
+    const control = await create({ workspacePath: ws });
+    rmSync(join(ws, 'node_modules'), { recursive: true, force: true });
+    const r = await provider.exec(control.id, ['bash', '-c', `export HOME=/tmp/h; mkdir -p $HOME; ${install}`]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(join(ws, 'YARN_POSTINSTALL_RAN'))).toBe(true);
   }, 240_000);
 
   it('has no token in its image layers nor its config', () => {

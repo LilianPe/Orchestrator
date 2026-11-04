@@ -59,22 +59,13 @@ describe('parseRepoConfig (.factory/config.yml, ORC-209)', () => {
   });
 
   describe('the variables a repository declares (ORC-211)', () => {
-    const refused = (text: string): string[] => {
-      try {
-        parseRepoConfig(text);
-        return [];
-      } catch (err) {
-        return (err as RepoConfigError).violations;
-      }
-    };
-
     it('reads names, never values', () => {
       expect(parseRepoConfig('env: [NODE_ENV]\nsetup_secrets: [REGISTRY_TOKEN]\n')).toMatchObject({ env: ['NODE_ENV'], setupSecrets: ['REGISTRY_TOKEN'] });
-      expect(refused('env: { NODE_ENV: test }\n')).toEqual(['env : un tableau de noms de variables est attendu']);
+      expect(violations('env: { NODE_ENV: test }\n')).toEqual(['env : un tableau de noms de variables est attendu']);
     });
 
     it.each(['lower_case', 'WITH-DASH', '1DIGIT', 'A=B'])('refuses %s, which is no variable name', (name) => {
-      expect(refused(`env: ["${name}"]\n`).join()).toContain(`env[0] : « ${name} »`);
+      expect(violations(`env: ["${name}"]\n`).join()).toContain(`env[0] : « ${name} »`);
     });
 
     it.each([
@@ -89,13 +80,13 @@ describe('parseRepoConfig (.factory/config.yml, ORC-209)', () => {
       // The hardening of the setup.
       'NPM_CONFIG_IGNORE_SCRIPTS', 'UV_NO_BUILD', 'YARN_ENABLE_SCRIPTS', 'PIP_ONLY_BINARY',
     ])('refuses to hand the runner %s, in either list', (name) => {
-      expect(refused(`env: [${name}]\n`).join()).toContain('réservé');
-      expect(refused(`setup_secrets: [${name}]\n`).join()).toContain('réservé');
+      expect(violations(`env: [${name}]\n`).join()).toContain('réservé');
+      expect(violations(`setup_secrets: [${name}]\n`).join()).toContain('réservé');
     });
 
     it.each(['API_TOKEN', 'STRIPE_SECRET', 'DB_PASSWORD', 'SIGNING_KEY', 'DATABASE_URL'])('refuses %s as a variable of the agent: a secret goes under setup_secrets', (name) => {
-      expect(refused(`env: [${name}]\n`).join()).toContain('setup_secrets');
-      expect(refused(`setup_secrets: [${name}]\n`)).toEqual([]);
+      expect(violations(`env: [${name}]\n`).join()).toContain('setup_secrets');
+      expect(violations(`setup_secrets: [${name}]\n`)).toEqual([]);
     });
 
     it('takes the token of a private registry for the setup', () => {
@@ -103,7 +94,7 @@ describe('parseRepoConfig (.factory/config.yml, ORC-209)', () => {
     });
 
     it('refuses a name in both lists: the agent would see what the setup seals', () => {
-      expect(refused('env: [SAME]\nsetup_secrets: [SAME]\n').join()).toContain('SAME');
+      expect(violations('env: [SAME]\nsetup_secrets: [SAME]\n').join()).toContain('SAME');
     });
   });
 

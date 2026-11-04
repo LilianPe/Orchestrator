@@ -8,7 +8,7 @@ export interface RepoVariables {
   missing: string[];
 }
 
-export const NO_REPO_VARIABLES: RepoVariables = Object.freeze({ env: Object.freeze({}), setupSecrets: Object.freeze({}), missing: Object.freeze([]) as unknown as string[] });
+export const NO_REPO_VARIABLES: RepoVariables = { env: {}, setupSecrets: {}, missing: [] };
 
 /**
  * A variable passes when the repository declares its name and the server gives its value. The repository
@@ -19,7 +19,7 @@ export function repoVariables(config: RepoConfig, server: { env?: Record<string,
   const out: RepoVariables = { env: {}, setupSecrets: {}, missing: [] };
   const pick = (names: readonly string[], from: Record<string, string> | undefined, into: Record<string, string>) => {
     for (const name of names) {
-      const value = from && Object.hasOwn(from, name) ? from[name] : undefined;
+      const value = from?.[name];
       if (value === undefined) out.missing.push(name);
       else into[name] = value;
     }
