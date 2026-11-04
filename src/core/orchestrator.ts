@@ -17,7 +17,7 @@ import {
   type SandboxProvider,
 } from '../adapters/sandbox/types.js';
 import { ActivityRelay } from '../adapters/tracker/activity-relay.js';
-import { labelEchoKey, stateEchoKey, type ActivityInput, type Tracker } from '../adapters/tracker/types.js';
+import { IssueNotFoundError, labelEchoKey, stateEchoKey, type ActivityInput, type Tracker, type TrackerIssue } from '../adapters/tracker/types.js';
 import type { Workspace, WorkspaceManager } from '../adapters/workspace/types.js';
 import type { JobSpec, Workflow } from '../config/workflow-schema.js';
 import type { EffectRetry } from '../runtime/outbox.js';
@@ -703,13 +703,22 @@ export class Orchestrator {
   /**
    * An event that starts tracking a ticket must carry its snapshot, so that `decide` and a replay of the
    * journal never read the tracker. A producer that could not fill it gets it filled here, before journaling.
+   * An issue the tracker no longer finds (deleted meanwhile, ORC-302) leaves it without one: its decision
+   * ignores it, journaled, instead of retrying a read that would fail again. Any other read error throws: retried.
    */
   private async withSnapshot(event: FactoryEvent): Promise<FactoryEvent> {
     if (event.projectId === '*' || !event.ticketId || !CREATES_TICKET.has(event.type)) return event;
     const payload = event.payload as { issue?: IssueSnapshot };
     if (payload.issue || (await this.d.store.getTicket(event.projectId, event.ticketId))) return event;
     const project = this.project(event.projectId);
-    const issue = await this.d.tracker.getIssue(event.ticketId);
+    let issue: TrackerIssue;
+    try {
+      issue = await this.d.tracker.getIssue(event.ticketId);
+    } catch (err) {
+      if (!(err instanceof IssueNotFoundError)) throw err;
+      this.log('warn', `event ${event.id} (${event.type}): ${event.ticketId} not found in the tracker, dropped: ${err.message}`);
+      return event;
+    }
     const logical = logicalFromName(project.workflow.states, issue.stateName) ?? 'todo';
     return { ...event, payload: { ...payload, issue: { title: issue.title, logical, priority: issue.priority } } } as FactoryEvent;
   }

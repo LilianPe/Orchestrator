@@ -48,6 +48,10 @@ export function planDecision({ event, known, workflow, hash, now }: PlanInput): 
   if (!known && event.ticketId && !CREATES_TICKET.has(decided.type)) {
     return { ...NO_PLAN, at: now, note: `ignored ${event.type} for unmanaged ticket ${event.ticketId}` };
   }
+  // No snapshot to start tracking from: the tracker no longer found the issue (ORC-302, `withSnapshot`).
+  if (!known && event.ticketId && !(decided.payload as { issue?: unknown }).issue) {
+    return { ...NO_PLAN, at: now, note: `ignored ${event.type} for ${event.ticketId}: no snapshot of the issue, not found in the tracker` };
+  }
   const decision = decide(known, event, workflow);
   let next = reduce(known, event);
   for (const e of decision.events) next = reduce(next, e);
