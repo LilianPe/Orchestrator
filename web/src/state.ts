@@ -6,6 +6,8 @@ export interface UiState {
   flow?: FlowView;
   /** When `flow` was received: its durations go on from there. */
   flowAt: number;
+  /** The last read of the Flux failed: `flow`, if any, is out of date. */
+  flowFailed: boolean;
   /** Bumped by each ticket update: the page reads the Flux again. */
   flowStale: number;
   runLines: Record<string, RunLine[]>;
@@ -17,18 +19,21 @@ export interface UiState {
 export type Action =
   | { type: 'snapshot'; snapshot: Snapshot }
   | { type: 'flow'; flow: FlowView; at: number }
+  | { type: 'flowFailed' }
   | { type: 'bus'; message: BusMessage }
   | { type: 'select'; runId?: string }
   | { type: 'connection'; connected: boolean };
 
-export const initialState: UiState = { connected: false, flowAt: 0, flowStale: 0, runLines: {}, events: [], logs: [] };
+export const initialState: UiState = { connected: false, flowAt: 0, flowFailed: false, flowStale: 0, runLines: {}, events: [], logs: [] };
 
 export function reducer(s: UiState, a: Action): UiState {
   switch (a.type) {
     case 'snapshot':
       return { ...s, snapshot: a.snapshot, selectedRun: s.selectedRun ?? a.snapshot.activeRuns[0]?.id };
     case 'flow':
-      return { ...s, flow: a.flow, flowAt: a.at };
+      return { ...s, flow: a.flow, flowAt: a.at, flowFailed: false };
+    case 'flowFailed':
+      return { ...s, flowFailed: true };
     case 'select':
       return { ...s, selectedRun: a.runId };
     case 'connection':

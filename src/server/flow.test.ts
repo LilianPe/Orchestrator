@@ -56,6 +56,27 @@ describe('buildFlow (ORC-297)', () => {
       expect(f.needsYou.blocked[0]!.tickets.map((t) => t.ticketId)).toEqual(['A', 'B']);
     });
 
+    it('keeps a PR in Needs you during a question run: the agent answers, it does not work on the PR', () => {
+      const f = flow({
+        tickets: [ticket('A', { logical: 'human_review' }), ticket('B', { logical: 'ready' })],
+        running: [run('r1', 'A', { job: 'ask', queue: 'questions' }), run('r2', 'B', { job: 'ask', queue: 'questions' })],
+      });
+      expect(f.needsYou.humanReview.map((t) => t.ticketId)).toEqual(['A']);
+      expect(f.needsYou.gates.map((t) => t.ticketId)).toEqual(['B']);
+      expect(f.working.map((w) => w.ticketId)).toEqual(['A', 'B']);
+      expect(f.others).toEqual([]);
+    });
+
+    it('does not ask a human for a PR whose agent job waits for a slot; a queued question leaves it there', () => {
+      const f = flow({
+        tickets: [ticket('A', { logical: 'human_review' }), ticket('B', { logical: 'human_review' })],
+        queue: [queued('A', { job: 'fix-ci' }), queued('B', { job: 'ask', queue: 'questions' })],
+      });
+      expect(f.needsYou.humanReview.map((t) => t.ticketId)).toEqual(['B']);
+      expect(f.queued.map((q) => q.ticketId)).toEqual(['A', 'B']);
+      expect(f.others).toEqual([]);
+    });
+
     it('does not ask a human for a PR the agent is still working on', () => {
       const f = flow({
         tickets: [ticket('A', { logical: 'human_review', activeRunId: 'r1' }), ticket('B', { logical: 'human_review', verifyingRunId: 'r2' })],
@@ -76,7 +97,7 @@ describe('buildFlow (ORC-297)', () => {
         measures: new Map([['p/A', { tokens, attemptsWithoutTokens: 1 }]]),
       });
       expect(f.working).toEqual([
-        { projectId: 'p', ticketId: 'A', title: 'Titre A', updatedAt: NOW, runId: 'r1', step: 'dev-feedback', verifying: false, stoppable: true, durationMs: 5000, tokens, attemptsWithoutTokens: 0, costUsd: 0.5 },
+        { projectId: 'p', ticketId: 'A', title: 'Titre A', runId: 'r1', step: 'dev-feedback', verifying: false, stoppable: true, durationMs: 5000, measured: true, tokens, attemptsWithoutTokens: 0, costUsd: 0.5 },
       ]);
     });
 
@@ -91,7 +112,7 @@ describe('buildFlow (ORC-297)', () => {
 
     it('serves no tokens when the measures of the ticket could not be read', () => {
       const f = flow({ tickets: [ticket('A', { activeRunId: 'r1', costUsd: 0.5 })], running: [run('r1', 'A')] });
-      expect(f.working[0]).toMatchObject({ tokens: null, attemptsWithoutTokens: 0, costUsd: 0.5 });
+      expect(f.working[0]).toMatchObject({ measured: false, tokens: null, attemptsWithoutTokens: 0, costUsd: 0.5 });
     });
 
     it('offers Stop on the ticket\'s active run only, as the Tickets table did: not on a question run', () => {
@@ -114,7 +135,7 @@ describe('buildFlow (ORC-297)', () => {
 
     it('lists what waits for a slot, without what the queue item carries', () => {
       const f = flow({ tickets: [ticket('A')], queue: [queued('A', { job: 'fix-ci', inputText: 'contenu du ticket' })] });
-      expect(f.queued).toEqual([{ projectId: 'p', ticketId: 'A', title: 'Titre A', job: 'fix-ci' }]);
+      expect(f.queued).toEqual([{ ticketId: 'A', job: 'fix-ci' }]);
       expect(JSON.stringify(f)).not.toContain('contenu du ticket');
     });
   });
@@ -129,7 +150,7 @@ describe('buildFlow (ORC-297)', () => {
         ],
       });
       expect(f.done.map((t) => t.ticketId)).toEqual(['B', 'A']);
-      expect(f.done[1]).toMatchObject({ prUrl: 'https://gh/pr/1', updatedAt: NOW - 2 * DAY });
+      expect(f.done[1]).toEqual({ projectId: 'p', ticketId: 'A', title: 'Titre A', prUrl: 'https://gh/pr/1' });
     });
 
     it('stops at 20', () => {

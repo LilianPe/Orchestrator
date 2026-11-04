@@ -1,7 +1,7 @@
 import { PRODUCT_NAME } from '../product.js';
 
 /** Why a ticket waits for a human, in the order the Flux shows the causes (ORC-297). */
-export const BLOCK_CAUSES = ['question', 'contested', 'red', 'infra', 'limit', 'loop', 'failed', 'pickup', 'dead_letter', 'stopped', 'other'] as const;
+export const BLOCK_CAUSES = ['question', 'contested', 'red', 'infra', 'limit', 'loop', 'failed', 'pickup', 'dead_letter', 'pr_closed', 'stopped', 'other'] as const;
 export type BlockCause = (typeof BLOCK_CAUSES)[number];
 
 /**
@@ -25,6 +25,7 @@ const CAUSES: readonly (readonly [Exclude<BlockCause, 'other'>, RegExp])[] = [
   ['pickup', /^La description (fait moins de|ne contient pas de)/],
   ['pickup', /^Une branche .+ existe déjà sur origin\./],
   ['dead_letter', /^Événement .+ mis de côté /],
+  ['pr_closed', /^PR #\d+ fermée sans merge$/],
   ['stopped', /^Arrêté à la demande$/],
 ];
 

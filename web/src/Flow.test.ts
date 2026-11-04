@@ -5,9 +5,9 @@ import { Flow, formatDuration, formatTokens, tokensCell } from './Flow.js';
 import type { FlowView, WorkingRunView } from './types.js';
 
 const EMPTY: FlowView = { needsYou: { blocked: [], humanReview: [], gates: [] }, working: [], queued: [], done: [], others: [] };
-const base = { projectId: 'p', ticketId: 'REL-1', title: 'Export', updatedAt: 1 };
+const base = { projectId: 'p', ticketId: 'REL-1', title: 'Export' };
 const running: WorkingRunView = {
-  ...base, runId: 'r1', step: 'dev-feedback', verifying: false, stoppable: true, durationMs: 65_000, tokens: { input: 1_000, output: 2_000, cacheRead: 30_000, cacheCreation: 4_000 }, attemptsWithoutTokens: 0, costUsd: 0.5,
+  ...base, runId: 'r1', step: 'dev-feedback', verifying: false, stoppable: true, durationMs: 65_000, measured: true, tokens: { input: 1_000, output: 2_000, cacheRead: 30_000, cacheCreation: 4_000 }, attemptsWithoutTokens: 0, costUsd: 0.5,
 };
 const page = (flow: Partial<FlowView>, elapsedMs = 0) =>
   renderToStaticMarkup(createElement(Flow, { flow: { ...EMPTY, ...flow }, elapsedMs, onSelect: () => undefined, onStop: () => undefined }));
@@ -30,6 +30,12 @@ describe('formats', () => {
     expect(tokensCell({ ...running, attemptsWithoutTokens: 2 }).text).toBe('≥ 37,0 k');
     expect(tokensCell({ ...running, tokens: null }).text).toBe('— (0,50 $)');
     expect(tokensCell({ ...running, tokens: null, costUsd: 0 }).text).toBe('—');
+  });
+
+  it('tokensCell: a read error is not a fact about the ticket', () => {
+    const cell = tokensCell({ ...running, measured: false, tokens: null, attemptsWithoutTokens: 0 });
+    expect(cell.text).toBe('?');
+    expect(cell.title).toContain('illisibles');
   });
 });
 
@@ -80,7 +86,7 @@ describe('Flow', () => {
 
   it('shows the queue, the finished tickets and the other tickets', () => {
     const html = page({
-      queued: [{ projectId: 'p', ticketId: 'REL-4', title: 'En file', job: 'fix-ci' }],
+      queued: [{ ticketId: 'REL-4', job: 'fix-ci' }],
       done: [{ ...base, ticketId: 'REL-5', prUrl: 'https://gh/pr/5' }],
       others: [{ ...base, ticketId: 'REL-6' }],
     });

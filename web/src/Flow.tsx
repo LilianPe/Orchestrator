@@ -1,4 +1,5 @@
-import type { BlockCause, FlowTicketView, FlowView, WorkingRunView } from './types.js';
+import type { BlockCause } from '../../src/core/block-cause.js';
+import type { FlowTicketView, FlowView, WorkingRunView } from './types.js';
 
 const CAUSE_LABELS: Record<BlockCause, string> = {
   question: 'Question de l’agent',
@@ -10,6 +11,7 @@ const CAUSE_LABELS: Record<BlockCause, string> = {
   failed: 'Run en échec',
   pickup: 'Prise en charge refusée',
   dead_letter: 'Événement mis de côté',
+  pr_closed: 'PR fermée sans merge',
   stopped: 'Arrêté à la demande',
   other: 'Autre cause',
 };
@@ -35,6 +37,7 @@ export function formatTokens(n: number): string {
 
 /** The measure of the ticket; the cost in dollars is what exists when no attempt reported tokens (ORC-216). */
 export function tokensCell(run: WorkingRunView): { text: string; title: string } {
+  if (!run.measured) return { text: '?', title: 'Les mesures de ce ticket sont illisibles : voir le journal.' };
   if (!run.tokens) {
     return { text: run.costUsd > 0 ? `— (${run.costUsd.toFixed(2).replace('.', ',')} $)` : '—', title: 'Aucune tentative terminée n’a rapporté ses tokens.' };
   }

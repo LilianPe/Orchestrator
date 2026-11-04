@@ -38,6 +38,7 @@ describe('blockCause (ORC-297)', () => {
     ['infra', () => reasonOf(ticket({ verifyingRunId: 'r1' }), ev('verify.failed', { runId: 'r1', job: 'tests', red: 'infra', failures: [failure] }))],
     ['stopped', () => reasonOf(ticket({ activeRunId: 'r1' }), ev('control.stop', {}))],
     ['infra', () => reasonOf(ticket(), ev('effect.failed', { effectId: 'x:1:1', kind: 'comment', eventId: 'e1', attempts: 8, error: 'boom' }))],
+    ['pr_closed', () => reasonOf(ticket({ activeRunId: 'r1', prNumber: 3, prState: 'OPEN' }), ev('pr.closed', { number: 3, url: 'u', branch: 'b' }))],
     ['dead_letter', () => reasonOf(ticket(), ev('dead_letter.added', { eventId: 'e9', eventType: 'pr.opened', error: 'boom', failures: 1 }))],
   ] as const)('%s, for a reason decide writes', (cause, reason) => {
     expect(blockCause(reason())).toBe(cause);

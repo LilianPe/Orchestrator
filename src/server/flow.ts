@@ -11,7 +11,6 @@ export interface FlowTicket {
   ticketId: string;
   title: string;
   prUrl?: string;
-  updatedAt: number;
 }
 
 export interface WorkingRun extends FlowTicket {
@@ -23,6 +22,8 @@ export interface WorkingRun extends FlowTicket {
   /** The ticket's active run: what Stop stops. */
   stoppable: boolean;
   durationMs: number;
+  /** False when the ticket's measures could not be read: `tokens` then says nothing. */
+  measured: boolean;
   /** Of the ticket, over its attempts that ended: a run reports its usage when it ends (ORC-235). Null when none did. */
   tokens: TokenUsage | null;
   /** Finished attempts `tokens` leaves out: they reported no usage. */
@@ -43,7 +44,7 @@ export interface Flow {
     gates: (FlowTicket & { gate: 'merge' })[];
   };
   working: WorkingRun[];
-  queued: { projectId: string; ticketId: string; title: string; job: string }[];
+  queued: { ticketId: string; job: string }[];
   done: FlowTicket[];
   /** Unfinished tickets in none of the above (no run, nothing asked of a human): still reachable. */
   others: FlowTicket[];
@@ -67,16 +68,15 @@ const flowTicket = (t: TicketState): FlowTicket => ({
   ticketId: t.ticketId,
   title: t.title,
   ...(t.prUrl === undefined ? {} : { prUrl: t.prUrl }),
-  updatedAt: t.updatedAt,
 });
 
 const oldestFirst = (a: TicketState, b: TicketState) => a.updatedAt - b.updatedAt;
 
 export function buildFlow({ now, tickets, running, verifying, queue, measures }: FlowInput): Flow {
   const byKey = new Map(tickets.map((t) => [flowKey(t), t]));
-  const atWork = new Set([...running, ...verifying].map(flowKey));
-  const inQueue = new Set(queue.map(flowKey));
-  const waiting = tickets.filter((t) => !t.blocked && !atWork.has(flowKey(t))).sort(oldestFirst);
+  // A question run or a queued question leaves a PR where it is: the agent answers, it does not change the PR.
+  const devQueued = new Set(queue.filter((q) => q.queue === 'dev').map(flowKey));
+  const waiting = tickets.filter((t) => !t.blocked && !t.activeRunId && !t.verifyingRunId && !devQueued.has(flowKey(t))).sort(oldestFirst);
 
   const blocked = tickets.filter((t) => t.blocked).sort(oldestFirst);
   const causes = BLOCK_CAUSES.flatMap((cause) => {
@@ -91,8 +91,8 @@ export function buildFlow({ now, tickets, running, verifying, queue, measures }:
     .sort((a, b) => b.updatedAt - a.updatedAt)
     .slice(0, DONE_LIMIT);
 
-  const shown = new Set([...humanReview, ...gates, ...done].map(flowKey));
-  const others = waiting.filter((t) => t.logical !== 'done' && !shown.has(flowKey(t)) && !inQueue.has(flowKey(t))).sort((a, b) => b.updatedAt - a.updatedAt);
+  const shown = new Set([...humanReview, ...gates, ...running, ...verifying, ...queue].map(flowKey));
+  const others = tickets.filter((t) => !t.blocked && t.logical !== 'done' && !shown.has(flowKey(t))).sort((a, b) => b.updatedAt - a.updatedAt);
 
   const runningByTicket = (key: string) => running.filter((r) => flowKey(r) === key).length;
   const workingRun = (run: RunRecord, isVerifying: boolean): WorkingRun => {
@@ -103,13 +103,13 @@ export function buildFlow({ now, tickets, running, verifying, queue, measures }:
       projectId: run.projectId,
       ticketId: run.ticketId,
       title: ticket?.title ?? '',
-      updatedAt: ticket?.updatedAt ?? run.startedAt,
       ...(ticket?.prUrl === undefined ? {} : { prUrl: ticket.prUrl }),
       runId: run.id,
       step: run.job,
       verifying: isVerifying,
       stoppable: !isVerifying && ticket?.activeRunId === run.id,
       durationMs: now - run.startedAt,
+      measured: measure !== undefined,
       tokens: measure?.tokens ?? null,
       attemptsWithoutTokens: measure ? Math.max(0, measure.attemptsWithoutTokens - runningByTicket(key)) : 0,
       costUsd: ticket?.costUsd ?? 0,
@@ -123,7 +123,7 @@ export function buildFlow({ now, tickets, running, verifying, queue, measures }:
   return {
     needsYou: { blocked: causes, humanReview: humanReview.map(flowTicket), gates: gates.map((t) => ({ ...flowTicket(t), gate: 'merge' as const })) },
     working,
-    queued: queue.map((q) => ({ projectId: q.projectId, ticketId: q.ticketId, title: byKey.get(flowKey(q))?.title ?? '', job: q.job })),
+    queued: queue.map((q) => ({ ticketId: q.ticketId, job: q.job })),
     done: done.map(flowTicket),
     others: others.map(flowTicket),
   };

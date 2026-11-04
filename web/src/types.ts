@@ -1,3 +1,5 @@
+import type { BlockCause } from '../../src/core/block-cause.js';
+
 export type Logical = 'todo' | 'dev' | 'human_review' | 'ai_review' | 'ready' | 'done';
 
 export interface TicketView {
@@ -39,15 +41,11 @@ export interface Snapshot {
   capacity: { dev: { used: number; total: number }; questions: { used: number; total: number } };
 }
 
-/** `BlockCause` of src/core/block-cause.ts. */
-export type BlockCause = 'question' | 'contested' | 'red' | 'infra' | 'limit' | 'loop' | 'failed' | 'pickup' | 'dead_letter' | 'stopped' | 'other';
-
 export interface FlowTicketView {
   projectId: string;
   ticketId: string;
   title: string;
   prUrl?: string;
-  updatedAt: number;
 }
 
 export interface WorkingRunView extends FlowTicketView {
@@ -56,6 +54,7 @@ export interface WorkingRunView extends FlowTicketView {
   verifying: boolean;
   stoppable: boolean;
   durationMs: number;
+  measured: boolean;
   tokens: { input: number; output: number; cacheRead: number; cacheCreation: number } | null;
   attemptsWithoutTokens: number;
   costUsd: number;
@@ -69,7 +68,7 @@ export interface FlowView {
     gates: (FlowTicketView & { gate: 'merge' })[];
   };
   working: WorkingRunView[];
-  queued: { projectId: string; ticketId: string; title: string; job: string }[];
+  queued: { ticketId: string; job: string }[];
   done: FlowTicketView[];
   others: FlowTicketView[];
 }

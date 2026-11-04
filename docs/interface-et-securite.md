@@ -8,9 +8,9 @@ Ce qu'elle montre, en direct :
 
 - **En-tête** : places occupées (`dev`, `questions`), longueur de la file, coût du jour et budget, indicateur « en direct » ; boutons **Connecter Linear** (tant que Linear n'est pas connecté) et **Pause / Reprendre**.
 - **Flux** (ORC-297), lu sur `GET /api/flow` à l'ouverture, à chaque changement d'un ticket et toutes les 10 s :
-  - **Needs you** : ce qui attend un humain. Les tickets bloqués, groupés par cause (question de l'agent, ticket contesté, rouge non vérifié, panne d'infrastructure, plafond, boucle, run en échec, prise en charge refusée, événement mis de côté, arrêt, autre cause), chacun avec sa raison ; les PR en Human Review ; les portes en attente (`ready`, pour un workflow qui le déclare encore ; la porte de spec viendra avec ORC-212). Le plus ancien d'abord. Une PR sur laquelle l'agent travaille encore n'y est pas : elle est dans Working.
+  - **Needs you** : ce qui attend un humain. Les tickets bloqués, groupés par cause (question de l'agent, ticket contesté, rouge non vérifié, panne d'infrastructure, plafond, boucle, run en échec, prise en charge refusée, événement mis de côté, PR fermée sans merge, arrêt, autre cause), chacun avec sa raison ; les PR en Human Review ; les portes en attente (`ready`, pour un workflow qui le déclare encore ; la porte de spec viendra avec ORC-212). Le plus ancien d'abord, selon la dernière activité du ticket. Une PR sur laquelle l'agent travaille encore, ou dont le run attend une place, n'y est pas ; une question posée à l'agent l'y laisse. Un ticket bloqué dont le run tourne encore est aux deux endroits.
   - **Working** : chaque run en cours et chaque vérification en cours, avec son étape (le job du run), sa durée et les tokens du ticket ; bouton **Stop** sur le run actif d'un ticket. Cliquer un identifiant ouvre son run. Les tickets en file sont listés dessous.
-  - **Done** : les tickets terminés depuis moins de 7 jours, 20 au plus, puis les autres tickets non terminés, repliés (**Autres tickets suivis**).
+  - **Done** : les tickets terminés dont la dernière activité date de moins de 7 jours, 20 au plus, puis les autres tickets non terminés, repliés (**Autres tickets suivis**).
 - **Session en direct** : la sortie du run sélectionné (texte, appels d'outils), reçue en direct depuis l'ouverture de la page. Le transcript complet d'un run reste disponible par l'API (`/api/runs/<id>/transcript`) et dans `<RELAIS_HOME>/transcripts/`.
 - **Journal** : les derniers messages du démon et les événements reçus.
 
@@ -18,7 +18,7 @@ Le direct passe par un flux **SSE** (`GET /api/events`) avec un `ping` toutes le
 
 Développement de l'interface : `npm run dev:web` lance Vite sur le port 5173 avec un proxy de `/api` et `/oauth` vers `http://127.0.0.1:4100` (un `relais up` doit tourner).
 
-**Les tokens du Flux** sont la mesure d'ORC-235 : la somme des tentatives terminées du ticket. Un run ne rapporte son usage qu'à sa fin : celui en cours n'y est pas encore, ce que la page dit sous le tableau. `≥` signale des tentatives terminées sans mesure ; `—` qu'aucune n'en a, avec le coût en dollars s'il existe, jusqu'à ORC-216. Le nombre affiché additionne entrée, sortie, cache lu et cache écrit ; le détail est au survol.
+**Les tokens du Flux** sont la mesure d'ORC-235 : la somme des tentatives terminées du ticket. Un run ne rapporte son usage qu'à sa fin : celui en cours n'y est pas encore, ce que la page dit sous le tableau. `≥` signale des tentatives terminées sans mesure ; `—` qu'aucune n'en a, avec le coût en dollars s'il existe, jusqu'à ORC-216 ; `?` que les mesures du ticket n'ont pas pu être lues (l'erreur est au journal). Si la lecture du Flux échoue, un bandeau le dit et les durées s'arrêtent. Le nombre affiché additionne entrée, sortie, cache lu et cache écrit ; le détail est au survol.
 
 **La cause d'un blocage** est lue dans sa raison (`src/core/block-cause.ts`), sur le début de phrase que l'usine écrit. Une raison inconnue tombe dans « Autre cause », affichée telle quelle. Un nouveau motif de blocage s'ajoute à cette table et à son test.
 

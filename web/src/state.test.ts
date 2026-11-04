@@ -25,6 +25,16 @@ describe('reducer', () => {
     expect(s.flowAt).toBe(42);
   });
 
+  it('says when the Flux could not be read, keeps the last one, and forgets it at the next read (ORC-297)', () => {
+    const flow: FlowView = { needsYou: { blocked: [], humanReview: [], gates: [] }, working: [], queued: [], done: [], others: [] };
+    let s = reducer(initialState, { type: 'flow', flow, at: 42 });
+    s = reducer(s, { type: 'flowFailed' });
+    expect(s.flowFailed).toBe(true);
+    expect(s.flow).toBe(flow);
+    s = reducer(s, { type: 'flow', flow, at: 43 });
+    expect(s.flowFailed).toBe(false);
+  });
+
   it('marks the Flux stale on a ticket update: the page reads it again (ORC-297)', () => {
     let s = reducer(initialState, { type: 'snapshot', snapshot });
     const stale = s.flowStale;
