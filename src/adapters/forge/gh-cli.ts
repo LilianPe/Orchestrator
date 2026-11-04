@@ -3,11 +3,15 @@ import { execCmd, execFailure, mustExec, type Exec } from '../exec.js';
 import { REPO_PERMISSIONS, type RepoPermission, type RepoPermissions } from '../roles/types.js';
 import type { Forge, PrInfo } from './types.js';
 
+/**
+ * A bucket outside pass/skipping/fail/cancel/pending (empty, or new) is never green: it reads as `pending` (ORC-303), so the
+ * PR poller sends no `pr.checks_passed`, and a merge, which reads checks through `GitHubAppForge` (it shares this aggregate), refuses.
+ */
 export function aggregateChecks(buckets: string[]): PrInfo['checks'] {
   if (buckets.length === 0) return 'none';
   if (buckets.some((b) => b === 'fail' || b === 'cancel')) return 'fail';
-  if (buckets.some((b) => b === 'pending')) return 'pending';
-  return 'pass';
+  if (buckets.every((b) => b === 'pass' || b === 'skipping')) return 'pass';
+  return 'pending';
 }
 
 /**
