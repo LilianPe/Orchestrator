@@ -105,6 +105,7 @@ export function describeForgeContract(name: string, make: () => ForgeSubject | P
       const pr = await resolved(s.forge.findPr(s.repoPath, s.unknownBucket));
       expect(pr).toMatchObject({ branch: s.unknownBucket, state: 'OPEN' });
       expect(['pending', 'fail']).toContain(pr!.checks);
+      expect(pr!.failedChecks.length > 0).toBe(pr!.checks === 'fail');
     });
 
   });

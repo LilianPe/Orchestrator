@@ -430,6 +430,12 @@ describeForgeContract(
   { violates: [UNKNOWN_BUCKET] },
 );
 
+describeForgeContract(
+  'a forge that reads a check in a state it does not know as failed without naming a failed check',
+  forgeThat(withUnknownBucket(async (_repo, branch) => ({ ...openPr(branch), checks: 'fail' }))),
+  { violates: [UNKNOWN_BUCKET] },
+);
+
 const NO_PR = 'findPr answers undefined for a branch without a PR';
 
 describeForgeContract(
