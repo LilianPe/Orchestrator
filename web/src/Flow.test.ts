@@ -63,7 +63,7 @@ describe('Flow', () => {
   });
 
   it('shows the PRs in Human Review with their link, and the gates', () => {
-    const html = page({ needsYou: { ...EMPTY.needsYou, humanReview: [{ ...base, prUrl: 'https://gh/pr/1' }], gates: [{ ...base, ticketId: 'REL-2', gate: 'merge' }] } });
+    const html = page({ needsYou: { ...EMPTY.needsYou, humanReview: [{ ...base, prUrl: 'https://gh/pr/1' }], gates: [{ ...base, ticketId: 'REL-2' }] } });
     expect(html).toContain('PR en Human Review');
     expect(html).toContain('href="https://gh/pr/1"');
     expect(html).toContain('Porte de merge');

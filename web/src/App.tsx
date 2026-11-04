@@ -68,7 +68,7 @@ export function App() {
     return () => clearTimeout(timer);
   }, [s.flowStale, loadFlow]);
 
-  const stop = (run: WorkingRunView) => void post(`/api/tickets/${run.projectId}/${run.ticketId}/stop`).then(loadFlow);
+  const stop = (run: WorkingRunView) => void post(`/api/tickets/${run.projectId}/${run.ticketId}/stop`);
 
   const snap = s.snapshot;
   const lines = s.selectedRun ? (s.runLines[s.selectedRun] ?? []) : [];

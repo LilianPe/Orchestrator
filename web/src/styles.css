@@ -44,7 +44,6 @@ a { color: var(--agent); }
 .ticket-head .pr { margin-left: 4px; }
 .reason { display: block; color: var(--muted); font-size: 13px; }
 .step { font-family: ui-monospace, monospace; font-size: 12px; white-space: nowrap; }
-.working table { margin-bottom: 0; }
 .actions { width: 1%; text-align: right; }
 .actions button { padding: 1px 10px; }
 .actions button:hover { color: var(--danger); border-color: var(--danger); }

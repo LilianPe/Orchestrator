@@ -1,20 +1,5 @@
 import type { BlockCause } from '../../src/core/block-cause.js';
 
-export type Logical = 'todo' | 'dev' | 'human_review' | 'ai_review' | 'ready' | 'done';
-
-export interface TicketView {
-  projectId: string;
-  ticketId: string;
-  title: string;
-  logical: Logical;
-  blocked: boolean;
-  blockReason?: string;
-  activeRunId?: string;
-  prUrl?: string;
-  costUsd: number;
-  updatedAt: number;
-}
-
 export interface RunView {
   id: string;
   ticketId: string;
@@ -33,7 +18,6 @@ export interface QueueView {
 export interface Snapshot {
   paused: boolean;
   linearConnected: boolean;
-  tickets: TicketView[];
   queue: QueueView[];
   activeRuns: RunView[];
   costTodayUsd: number;
@@ -60,12 +44,12 @@ export interface WorkingRunView extends FlowTicketView {
   costUsd: number;
 }
 
-/** `GET /api/flow`: `Flow` of src/server/flow.ts. */
+/** `GET /api/flow`: `Flow` of src/server/flow.ts, which the web's types cannot import (it reaches Node's). */
 export interface FlowView {
   needsYou: {
     blocked: { cause: BlockCause; tickets: (FlowTicketView & { reason: string })[] }[];
     humanReview: FlowTicketView[];
-    gates: (FlowTicketView & { gate: 'merge' })[];
+    gates: FlowTicketView[];
   };
   working: WorkingRunView[];
   queued: { ticketId: string; job: string }[];
@@ -93,5 +77,5 @@ export type BusMessage =
   | { kind: 'event'; event: EventView }
   | { kind: 'command'; projectId: string; ticketId?: string; command: { kind: string } }
   | { kind: 'run'; runId: string; ticketId: string; ev: RunLine }
-  | { kind: 'ticket'; ticket: TicketView }
+  | { kind: 'ticket' }
   | { kind: 'log'; level: 'info' | 'warn' | 'error'; message: string; at: number };

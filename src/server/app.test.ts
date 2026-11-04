@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { FakeTracker } from '../adapters/tracker/fake.js';
+import { blockCause } from '../core/block-cause.js';
 import { EventBus } from '../core/bus.js';
 import { FakeClock } from '../core/clock.js';
 import { newTicketState, TRUSTED, type FactoryEvent } from '../core/types.js';
@@ -88,6 +89,12 @@ describe('server', () => {
       expect(body.working).toEqual([expect.objectContaining({ runId: 'r1', tokens: null })]);
       expect(body.needsYou.blocked).toHaveLength(1);
       expect(logs).toEqual([expect.stringContaining('journal illisible')]);
+    });
+
+    it('names the cause of the block an agent asks for', async () => {
+      const { app, blockTicket } = await setup();
+      await app.request('/agent/ask', { method: 'POST', headers: { authorization: 'Bearer tok' }, body: JSON.stringify({ text: 'Laquelle ?' }) });
+      expect(blockCause(blockTicket.mock.calls[0]![2])).toBe('question');
     });
 
     it('asks for the password, as the other routes of the interface', async () => {

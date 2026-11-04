@@ -16,8 +16,6 @@ const CAUSE_LABELS: Record<BlockCause, string> = {
   other: 'Autre cause',
 };
 
-const GATE_LABELS = { merge: 'Porte de merge' } as const;
-
 const pad = (n: number) => String(n).padStart(2, '0');
 
 export function formatDuration(ms: number): string {
@@ -28,7 +26,7 @@ export function formatDuration(ms: number): string {
   return `${Math.floor(minutes / 60)} h ${pad(minutes % 60)} min`;
 }
 
-const decimal = (n: number) => n.toFixed(1).replace('.', ',');
+const decimal = (n: number, digits = 1) => n.toFixed(digits).replace('.', ',');
 
 export function formatTokens(n: number): string {
   if (n < 1_000) return String(n);
@@ -39,7 +37,7 @@ export function formatTokens(n: number): string {
 export function tokensCell(run: WorkingRunView): { text: string; title: string } {
   if (!run.measured) return { text: '?', title: 'Les mesures de ce ticket sont illisibles : voir le journal.' };
   if (!run.tokens) {
-    return { text: run.costUsd > 0 ? `— (${run.costUsd.toFixed(2).replace('.', ',')} $)` : '—', title: 'Aucune tentative terminée n’a rapporté ses tokens.' };
+    return { text: run.costUsd > 0 ? `— (${decimal(run.costUsd, 2)} $)` : '—', title: 'Aucune tentative terminée n’a rapporté ses tokens.' };
   }
   const { input, output, cacheRead, cacheCreation } = run.tokens;
   const missing = run.attemptsWithoutTokens > 0 ? `${run.attemptsWithoutTokens} tentative(s) terminée(s) sans mesure. ` : '';
@@ -56,10 +54,14 @@ function PrLink({ url }: { url?: string }) {
 function TicketRow({ ticket, detail }: { ticket: FlowTicketView; detail?: string }) {
   return (
     <li>
-      <span className="ticket-head"><strong className="id">{ticket.ticketId}</strong> <span className="title">{ticket.title}</span> <PrLink url={ticket.prUrl} /></span>
+      <span className="ticket-head"><strong className="id">{ticket.ticketId}</strong> {ticket.title} <PrLink url={ticket.prUrl} /></span>
       {detail && <span className="reason">{detail}</span>}
     </li>
   );
+}
+
+function TicketList({ tickets }: { tickets: { ticket: FlowTicketView; detail?: string }[] }) {
+  return <ul>{tickets.map(({ ticket, detail }) => <TicketRow key={`${ticket.projectId}/${ticket.ticketId}`} ticket={ticket} detail={detail} />)}</ul>;
 }
 
 function Group({ label, tone, tickets }: { label: string; tone: 'blocked' | 'human'; tickets: { ticket: FlowTicketView; detail?: string }[] }) {
@@ -67,7 +69,7 @@ function Group({ label, tone, tickets }: { label: string; tone: 'blocked' | 'hum
     <div className={`group ${tone}`}>
       <h3>{label}</h3>
       <span className="count">{tickets.length}</span>
-      <ul>{tickets.map(({ ticket, detail }) => <TicketRow key={`${ticket.projectId}/${ticket.ticketId}`} ticket={ticket} detail={detail} />)}</ul>
+      <TicketList tickets={tickets} />
     </div>
   );
 }
@@ -83,13 +85,13 @@ export function Flow({ flow, elapsedMs, selectedRun, onSelect, onStop }: {
   const { blocked, humanReview, gates } = flow.needsYou;
   const waiting = blocked.reduce((sum, g) => sum + g.tickets.length, humanReview.length + gates.length);
   return (
-    <div className="flow">
+    <>
       <section className={waiting ? 'needs active' : 'needs'}>
         <h2>Needs you{waiting > 0 && <span className="count">{waiting}</span>}</h2>
         {!waiting && <p className="empty">Rien n’attend un humain.</p>}
         {blocked.map((g) => <Group key={g.cause} label={CAUSE_LABELS[g.cause]} tone="blocked" tickets={g.tickets.map((ticket) => ({ ticket, detail: ticket.reason === CAUSE_LABELS[g.cause] ? undefined : ticket.reason }))} />)}
         {humanReview.length > 0 && <Group label="PR en Human Review" tone="human" tickets={humanReview.map((ticket) => ({ ticket }))} />}
-        {gates.length > 0 && <Group label="Portes en attente" tone="human" tickets={gates.map((ticket) => ({ ticket, detail: GATE_LABELS[ticket.gate] }))} />}
+        {gates.length > 0 && <Group label="Portes en attente" tone="human" tickets={gates.map((ticket) => ({ ticket, detail: 'Porte de merge' }))} />}
       </section>
       <section className="working">
         <h2>Working{flow.working.length > 0 && <span className="count">{flow.working.length}</span>}</h2>
@@ -121,14 +123,14 @@ export function Flow({ flow, elapsedMs, selectedRun, onSelect, onStop }: {
       </section>
       <section className="done">
         <h2>Done</h2>
-        {flow.done.length > 0 ? <ul>{flow.done.map((t) => <TicketRow key={`${t.projectId}/${t.ticketId}`} ticket={t} />)}</ul> : <p className="empty">Aucun ticket terminé cette semaine.</p>}
+        {flow.done.length > 0 ? <TicketList tickets={flow.done.map((ticket) => ({ ticket }))} /> : <p className="empty">Aucun ticket terminé cette semaine.</p>}
         {flow.others.length > 0 && (
           <details>
             <summary>Autres tickets suivis ({flow.others.length})</summary>
-            <ul>{flow.others.map((t) => <TicketRow key={`${t.projectId}/${t.ticketId}`} ticket={t} />)}</ul>
+            <TicketList tickets={flow.others.map((ticket) => ({ ticket }))} />
           </details>
         )}
       </section>
-    </div>
+    </>
   );
 }

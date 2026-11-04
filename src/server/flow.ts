@@ -41,7 +41,7 @@ export interface Flow {
     blocked: { cause: BlockCause; tickets: (FlowTicket & { reason: string })[] }[];
     humanReview: FlowTicket[];
     /** The merge gate of a workflow that still declares `ready`; the spec gate comes with ORC-212. */
-    gates: (FlowTicket & { gate: 'merge' })[];
+    gates: FlowTicket[];
   };
   working: WorkingRun[];
   queued: { ticketId: string; job: string }[];
@@ -79,9 +79,14 @@ export function buildFlow({ now, tickets, running, verifying, queue, measures }:
   const waiting = tickets.filter((t) => !t.blocked && !t.activeRunId && !t.verifyingRunId && !devQueued.has(flowKey(t))).sort(oldestFirst);
 
   const blocked = tickets.filter((t) => t.blocked).sort(oldestFirst);
+  const byCause = new Map<BlockCause, (FlowTicket & { reason: string })[]>();
+  for (const t of blocked) {
+    const cause = blockCause(t.blockReason);
+    byCause.set(cause, [...(byCause.get(cause) ?? []), { ...flowTicket(t), reason: t.blockReason ?? '' }]);
+  }
   const causes = BLOCK_CAUSES.flatMap((cause) => {
-    const of = blocked.filter((t) => blockCause(t.blockReason) === cause);
-    return of.length ? [{ cause, tickets: of.map((t) => ({ ...flowTicket(t), reason: t.blockReason ?? '' })) }] : [];
+    const tickets = byCause.get(cause);
+    return tickets ? [{ cause, tickets }] : [];
   });
 
   const humanReview = waiting.filter((t) => t.logical === 'human_review');
@@ -94,7 +99,6 @@ export function buildFlow({ now, tickets, running, verifying, queue, measures }:
   const shown = new Set([...humanReview, ...gates, ...running, ...verifying, ...queue].map(flowKey));
   const others = tickets.filter((t) => !t.blocked && t.logical !== 'done' && !shown.has(flowKey(t))).sort((a, b) => b.updatedAt - a.updatedAt);
 
-  const runningByTicket = (key: string) => running.filter((r) => flowKey(r) === key).length;
   const workingRun = (run: RunRecord, isVerifying: boolean): WorkingRun => {
     const key = flowKey(run);
     const ticket = byKey.get(key);
@@ -111,7 +115,7 @@ export function buildFlow({ now, tickets, running, verifying, queue, measures }:
       durationMs: now - run.startedAt,
       measured: measure !== undefined,
       tokens: measure?.tokens ?? null,
-      attemptsWithoutTokens: measure ? Math.max(0, measure.attemptsWithoutTokens - runningByTicket(key)) : 0,
+      attemptsWithoutTokens: measure?.attemptsWithoutTokens ?? 0,
       costUsd: ticket?.costUsd ?? 0,
     };
   };
@@ -121,7 +125,7 @@ export function buildFlow({ now, tickets, running, verifying, queue, measures }:
   );
 
   return {
-    needsYou: { blocked: causes, humanReview: humanReview.map(flowTicket), gates: gates.map((t) => ({ ...flowTicket(t), gate: 'merge' as const })) },
+    needsYou: { blocked: causes, humanReview: humanReview.map(flowTicket), gates: gates.map(flowTicket) },
     working,
     queued: queue.map((q) => ({ ticketId: q.ticketId, job: q.job })),
     done: done.map(flowTicket),

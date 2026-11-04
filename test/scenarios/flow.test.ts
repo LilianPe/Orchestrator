@@ -47,6 +47,25 @@ describe('the Flux on the engine (ORC-297)', () => {
     expect(f.needsYou.blocked).toEqual([{ cause: 'stopped', tickets: [expect.objectContaining({ ticketId: 'REL-1' })] }]);
   });
 
+  it('a restart during a run, then during a check, and a launch that fails: infrastructure, in the words the shell writes', async () => {
+    const h = createHarness();
+    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Exporter les audits en CSV depuis la liste des audits.' });
+    h.runner.enqueue({ hold: true });
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    await h.restart();
+    const during = await flowOf(h)();
+    expect(during.needsYou.blocked).toEqual([{ cause: 'infra', tickets: [expect.objectContaining({ ticketId: 'REL-1', reason: expect.stringContaining('a redémarré pendant le run') })] }]);
+
+    h.tracker.addIssue({ identifier: 'REL-2', title: 'Import CSV', description: 'Importer les audits en CSV depuis la liste des audits.' });
+    h.workspaces.prepare = async () => {
+      throw new Error('git fetch a échoué');
+    };
+    await h.send('ticket.delegated', { linearSessionId: 'ls-2' }, 'REL-2');
+    const launch = await flowOf(h)();
+    expect(launch.needsYou.blocked[0].tickets.map((t: { ticketId: string; reason: string }) => [t.ticketId, t.reason.split(' : ')[0]])).toContainEqual(['REL-2', 'Erreur au lancement']);
+    expect(launch.needsYou.blocked.map((g: { cause: string }) => g.cause)).toEqual(['infra']);
+  });
+
   it('a ticket handed over to a human, then merged: from Human Review to Done', async () => {
     const h = createHarness();
     const flow = flowOf(h);

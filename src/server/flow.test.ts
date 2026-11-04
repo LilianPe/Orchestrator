@@ -46,7 +46,7 @@ describe('buildFlow (ORC-297)', () => {
       });
       expect(f.needsYou.humanReview.map((t) => t.ticketId)).toEqual(['B', 'A']);
       expect(f.needsYou.humanReview[1]!.prUrl).toBe('https://gh/pr/1');
-      expect(f.needsYou.gates).toEqual([expect.objectContaining({ ticketId: 'C', gate: 'merge', prUrl: 'https://gh/pr/3' })]);
+      expect(f.needsYou.gates).toEqual([expect.objectContaining({ ticketId: 'C', prUrl: 'https://gh/pr/3' })]);
     });
 
     it('shows a blocked ticket once, under its block, wherever it is in the workflow', () => {
@@ -94,20 +94,20 @@ describe('buildFlow (ORC-297)', () => {
       const f = flow({
         tickets: [ticket('A', { activeRunId: 'r1', costUsd: 0.5 })],
         running: [run('r1', 'A', { job: 'dev-feedback' })],
-        measures: new Map([['p/A', { tokens, attemptsWithoutTokens: 1 }]]),
+        measures: new Map([['p/A', { tokens, attemptsWithoutTokens: 0 }]]),
       });
       expect(f.working).toEqual([
         { projectId: 'p', ticketId: 'A', title: 'Titre A', runId: 'r1', step: 'dev-feedback', verifying: false, stoppable: true, durationMs: 5000, measured: true, tokens, attemptsWithoutTokens: 0, costUsd: 0.5 },
       ]);
     });
 
-    it('counts apart the finished attempts that reported no usage, not the one still running', () => {
+    it('counts apart the finished attempts that reported no usage', () => {
       const f = flow({
         tickets: [ticket('A', { activeRunId: 'r1' })],
         running: [run('r1', 'A')],
         measures: new Map([['p/A', { tokens: null, attemptsWithoutTokens: 3 }]]),
       });
-      expect(f.working[0]).toMatchObject({ tokens: null, attemptsWithoutTokens: 2 });
+      expect(f.working[0]).toMatchObject({ tokens: null, attemptsWithoutTokens: 3 });
     });
 
     it('serves no tokens when the measures of the ticket could not be read', () => {

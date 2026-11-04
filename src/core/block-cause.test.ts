@@ -1,10 +1,12 @@
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import type { TrackerIssue } from '../adapters/tracker/types.js';
+import type { WorkspaceManager } from '../adapters/workspace/types.js';
 import { loadWorkflow } from '../config/load-workflow.js';
-import { PRODUCT_NAME } from '../product.js';
 import { blockCause } from './block-cause.js';
 import { deadLetterReason } from './dead-letter.js';
 import { decide } from './engine.js';
+import { pickupFailures } from './pickup.js';
 import { newTicketState, type EventPayloads, type EventType, type FactoryEvent, type TicketState } from './types.js';
 
 const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../packs/standard') });
@@ -44,14 +46,15 @@ describe('blockCause (ORC-297)', () => {
     expect(blockCause(reason())).toBe(cause);
   });
 
-  it('classifies the reasons written outside decide', () => {
-    expect(blockCause("Question posée par l'agent")).toBe('question');
-    expect(blockCause('Erreur au lancement : git fetch a échoué')).toBe('infra');
-    expect(blockCause(`${PRODUCT_NAME} a redémarré pendant le run. Répondez dans le fil pour relancer.`)).toBe('infra');
-    expect(blockCause(`${PRODUCT_NAME} a redémarré pendant les vérifications. Répondez dans le fil pour relancer.`)).toBe('infra');
-    expect(blockCause('La description fait moins de 30 caractères.')).toBe('pickup');
-    expect(blockCause('Une branche factory/rel-1-… existe déjà sur origin.')).toBe('pickup');
-    expect(blockCause("La description ne contient pas de critères d'acceptation.")).toBe('pickup');
+  it('classifies what the pickup check writes', async () => {
+    const issue = { identifier: 'REL-1', description: '' } as TrackerIssue;
+    const workspaces = { remoteBranchExists: async () => true } as unknown as WorkspaceManager;
+    const failures = await pickupFailures(['has_description', 'not_started', 'has_acceptance_criteria'], issue, '/repo', workspaces);
+    expect(failures).toHaveLength(3);
+    expect(failures.map(blockCause)).toEqual(['pickup', 'pickup', 'pickup']);
+  });
+
+  it('classifies a dead letter', () => {
     expect(blockCause(deadLetterReason({ eventId: 'e9', eventType: 'pr.opened', error: 'boom', failures: 1 }))).toBe('dead_letter');
   });
 

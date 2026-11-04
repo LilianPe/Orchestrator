@@ -1,13 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { initialState, reducer } from './state.js';
-import type { FlowView, Snapshot, TicketView } from './types.js';
-
-const ticket = (patch: Partial<TicketView> = {}): TicketView => ({
-  projectId: 'p', ticketId: 'REL-1', title: 'Export', logical: 'dev', blocked: false, costUsd: 0, updatedAt: 1, ...patch,
-});
+import type { FlowView, Snapshot } from './types.js';
 
 const snapshot: Snapshot = {
-  paused: false, linearConnected: true, tickets: [ticket()], queue: [], activeRuns: [{ id: 'r1', ticketId: 'REL-1', job: 'dev', startedAt: 1, turns: 0, costUsd: 0 }],
+  paused: false, linearConnected: true, queue: [], activeRuns: [{ id: 'r1', ticketId: 'REL-1', job: 'dev', startedAt: 1, turns: 0, costUsd: 0 }],
   costTodayUsd: 1.5, budgetUsd: 20, capacity: { dev: { used: 1, total: 3 }, questions: { used: 0, total: 2 } },
 };
 
@@ -40,7 +36,7 @@ describe('reducer', () => {
     const stale = s.flowStale;
     s = reducer(s, { type: 'bus', message: { kind: 'event', event: { id: 'e1', type: 'status.changed', at: 5, projectId: 'p', ticketId: 'REL-1', payload: {} } } });
     expect(s.flowStale).toBe(stale);
-    s = reducer(s, { type: 'bus', message: { kind: 'ticket', ticket: ticket({ logical: 'human_review' }) } });
+    s = reducer(s, { type: 'bus', message: { kind: 'ticket' } });
     expect(s.flowStale).toBe(stale + 1);
   });
 

@@ -57,7 +57,7 @@ export interface TicketMeasures {
   /** Sum over the ticket's attempts that reported their usage; null when none did. */
   tokens: TokenUsage | null;
   attempts: number;
-  /** Attempts without a usage report (a launch failure, a runner that reports none, a run older than ORC-235): `tokens` leaves them out. */
+  /** Ended attempts without a usage report (a launch failure, a runner that reports none, a run older than ORC-235): `tokens` leaves them out. One still running reports at its end. */
   attemptsWithoutTokens: number;
   /** Share of the usage limit consumed: no limit in tokens yet (ORC-216). */
   usageLimitShare: null;
@@ -261,7 +261,7 @@ export function ticketMeasures(projectId: string, ticketId: string, facts: Measu
     mergedAt,
     tokens: withTokens.length ? withTokens.reduce((sum, r) => addTokens(sum, r.tokens!), NO_TOKENS) : null,
     attempts: facts.runs.length,
-    attemptsWithoutTokens: facts.runs.length - withTokens.length,
+    attemptsWithoutTokens: facts.runs.filter((r) => r.tokens === undefined && r.status !== 'running').length,
     usageLimitShare: null,
     firstTry: mergedAt === null ? null : reworks.length === 0,
     reworks: mergedAt === null ? [] : reworks,
