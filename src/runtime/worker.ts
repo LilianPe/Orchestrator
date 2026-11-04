@@ -105,7 +105,7 @@ export class Worker {
   private failures = new Map<string, number>();
   private retryTimers = new Set<NodeJS.Timeout>();
   private readonly retry: { attempts: number; baseMs: number };
-  /** Rows that found a row or an effect of their ticket first: retried at the next poll, or once this worker settles it. */
+  /** Rows that found a row or an effect of their ticket first: retried at the next poll, or by `unwait`. */
   private waited = new Map<string, string>();
   private tasks = new Set<Promise<unknown>>();
   private pass: Promise<number> | undefined;
@@ -279,7 +279,7 @@ export class Worker {
       if (!row) break;
       // `held`: only a backoff holds it, so the ticket's next row is tried (a stop passes them both).
       if ((await this.process(row, key)) === 'waiting') {
-        this.waitAll(key);
+        this.requeue(key);
         break;
       }
     }
@@ -288,13 +288,17 @@ export class Worker {
     this.queued.delete(key);
   }
 
-  /** Another worker holds the ticket: its queued rows wait for the next poll. */
-  private waitAll(key: string): void {
-    for (const row of this.queued.get(key) ?? []) {
-      this.queuedIds.delete(row.id);
-      this.waited.set(row.id, key);
-    }
+  /**
+   * A row found its ticket held, and only it waits: the rows queued after it may be older, even the
+   * very row it found ahead (ORC-290). They go back to the next pass, which reads them oldest first.
+   * So a parked row has had its own answer, within its ticket's chain: whatever held it, if settled
+   * here, is settled after that answer, and `unwait` then finds it.
+   */
+  private requeue(key: string): void {
+    const rows = this.queued.get(key) ?? [];
+    for (const row of rows) this.queuedIds.delete(row.id);
     this.queued.delete(key);
+    if (rows.length > 0) this.kickInBackground();
   }
 
   private async process(row: StoredEvent, key: string): Promise<'done' | 'held' | 'waiting'> {

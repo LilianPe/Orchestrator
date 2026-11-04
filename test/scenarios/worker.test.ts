@@ -412,6 +412,62 @@ describe('outbox executors: lease, backoff, results through the inbox', () => {
     expect(await h.store.pendingInbox(10)).toEqual([]);
   });
 
+  it('goes on, oldest first, when a younger row queued ahead of the released ones parks them again (ORC-290)', async () => {
+    let decidingYounger!: () => void;
+    const deciding = new Promise<void>((r) => (decidingYounger = r));
+    let answerYounger!: () => void;
+    const answer = new Promise<void>((r) => (answerYounger = r));
+    const h = createHarness({
+      projectYaml: CRASH_WORKFLOW,
+      effectRetry: { attempts: 2, baseMs: 60_000, capMs: 60_000 },
+      wrapStore: (store) =>
+        new Proxy(store, {
+          get(target, prop, receiver) {
+            if (prop !== 'decide') return Reflect.get(target, prop, receiver) as unknown;
+            return async (req: Parameters<Store['decide']>[0]) => {
+              const outcome = await target.decide(req);
+              if (req.event.id === 'younger') {
+                decidingYounger();
+                await answer;
+              }
+              return outcome;
+            };
+          },
+        }),
+    });
+    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+    let tries = 0;
+    let lastTry!: () => void;
+    const trying = new Promise<void>((r) => (lastTry = r));
+    let failLastTry!: () => void;
+    const failed = new Promise<void>((r) => (failLastTry = r));
+    h.tracker.comment = async () => {
+      if (++tries === 2) {
+        lastTry();
+        await failed;
+      }
+      throw new Error('Linear down');
+    };
+    await h.orch.accept(delegation(h));
+    await h.orch.drained();
+    // The result of the labels is parked behind the comment's backoff. The backoff ends, without a
+    // poll to release it: the comment's last attempt runs, and a younger row is queued meanwhile.
+    h.clock.advance(60_000);
+    h.orch.wake();
+    await trying;
+    await h.orch.accept({ ...TRUSTED, id: 'younger', type: 'status.changed', at: h.clock.now(), projectId: 'p', ticketId: 'REL-1', payload: { from: 'todo', to: 'todo' } });
+    await h.orch.replayInbox();
+    failLastTry();
+    // The younger row goes first in the queue, finds the labels' result ahead of it, and comes back
+    // after the pass has queued that result behind it.
+    await deciding;
+    await h.orch.replayInbox();
+    answerYounger();
+    await h.orch.drained();
+    expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Erreur : Linear down' });
+    expect(await h.store.pendingInbox(10)).toEqual([]);
+  });
+
   it('does not loop when the error notice of a dead effect dies too', async () => {
     const h = createHarness({ projectYaml: CRASH_WORKFLOW });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
