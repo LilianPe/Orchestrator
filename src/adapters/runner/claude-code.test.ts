@@ -120,7 +120,7 @@ describe('ClaudeCodeRunner attached to an attempt of a dead daemon', () => {
   };
   const attach = { limits: { turns: 50, durationMs: 60_000, usd: 5 }, elapsedMs: 0, env: {} };
   const writerDead = async (transcriptsDir: string, runId: string) => {
-    const pid = Number(readFileSync(join(liveDir(transcriptsDir), runId, 'pid'), 'utf8'));
+    const pid = Number(readFileSync(join(liveDir(transcriptsDir), runId, 'pid'), 'utf8').split(' ')[0]);
     await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow(), { timeout: 5_000 });
   };
 
@@ -146,6 +146,22 @@ describe('ClaudeCodeRunner attached to an attempt of a dead daemon', () => {
     const h = r.attach({ ...attach, runId: 'r-ended' })!;
     expect(await drain(h.events)).toEqual([]);
     expect(await h.done).toMatchObject({ outcome: 'success', lastText: 'PR ouverte.' });
+  });
+
+  it('a result line wins over a duration spent during the cut: the attempt ended in time, whoever read it late', { timeout: 30_000 }, async () => {
+    const { r, transcriptsDir } = runner();
+    orphan(transcriptsDir, 'r-late', { FAKE_CLAUDE_SCRIPT: fx('stream-success.jsonl') });
+    await writerDead(transcriptsDir, 'r-late');
+    expect(await r.attach({ ...attach, runId: 'r-late', elapsedMs: 3_600_000 })!.done).toMatchObject({ outcome: 'success' });
+  });
+
+  it('a pid another process took since is no writer: nothing to take up, nothing to signal', { timeout: 30_000 }, async () => {
+    const { r, transcriptsDir } = runner();
+    orphan(transcriptsDir, 'r-reused', { FAKE_CLAUDE_SCRIPT: fx('stream-usage-no-result.jsonl') });
+    await writerDead(transcriptsDir, 'r-reused');
+    // This test's own process, under a start that is not its own: the pid is alive, and not the writer's.
+    writeFileSync(join(liveDir(transcriptsDir), 'r-reused', 'pid'), `${process.pid} not-its-start`);
+    expect(r.attach({ ...attach, runId: 'r-reused' })).toBeUndefined();
   });
 
   it('has nothing to take up from a writer dead without a result, nor from a run it never saw', { timeout: 30_000 }, async () => {

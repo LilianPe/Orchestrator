@@ -84,6 +84,27 @@ function pidAlive(pid: number): boolean {
   }
 }
 
+/** When the process started, as the kernel counts it: a pid taken by another process since has another. Linux only: elsewhere, unknown. */
+function startTime(pid: number): string | undefined {
+  try {
+    return readFileSync(`/proc/${pid}/stat`, 'utf8').split(') ').pop()!.split(' ')[19];
+  } catch {
+    return undefined;
+  }
+}
+
+/** The pid file: `<pid> <start>`, the start when the platform tells it. */
+function readWriter(file: string): { pid: number; start: string | undefined } | undefined {
+  if (!existsSync(file)) return undefined;
+  const [pid, start] = readFileSync(file, 'utf8').split(' ');
+  return { pid: Number(pid), start };
+}
+
+/** Alive, and still that process. */
+function writerAlive(w: { pid: number; start: string | undefined }): boolean {
+  return pidAlive(w.pid) && (w.start === undefined || w.start === startTime(w.pid));
+}
+
 function hasResultLine(text: string): boolean {
   return text.split('\n').some((line) => {
     try {
@@ -100,9 +121,9 @@ interface Followed {
   limits: RunRequest['limits'];
   secrets: readonly string[];
   remainingMs: number;
-  /** Set on a start: it tells its own end. Otherwise `pid` is watched. */
+  /** Set on a start: it tells its own end. Otherwise `writer` is watched. */
   child?: ChildProcess;
-  pid?: number;
+  writer?: { pid: number; start: string | undefined };
   /** Taken up: what the attempt wrote so far counts, and was relayed or is lost to the relay. */
   attached: boolean;
 }
@@ -146,7 +167,7 @@ export class ClaudeCodeRunner implements Runner {
       closeSync(out);
       closeSync(err);
     }
-    if (child.pid !== undefined) writeFileSync(join(dir, 'pid'), String(child.pid), { mode: 0o600 });
+    if (child.pid !== undefined) writeFileSync(join(dir, 'pid'), [child.pid, startTime(child.pid)].filter((x) => x !== undefined).join(' '), { mode: 0o600 });
     return this.follow({ runId: req.runId, limits: req.limits, secrets, remainingMs: req.limits.durationMs, child, attached: false });
   }
 
@@ -157,13 +178,14 @@ export class ClaudeCodeRunner implements Runner {
   attach(req: AttachRequest): RunHandle | undefined {
     const dir = this.dir(req.runId);
     if (!existsSync(join(dir, 'stream'))) return undefined;
-    const pid = existsSync(join(dir, 'pid')) ? Number(readFileSync(join(dir, 'pid'), 'utf8')) : undefined;
-    if ((pid === undefined || !pidAlive(pid)) && !hasResultLine(readFileSync(join(dir, 'stream'), 'utf8'))) {
+    const read = readWriter(join(dir, 'pid'));
+    const writer = read && writerAlive(read) ? read : undefined;
+    if (!writer && !hasResultLine(readFileSync(join(dir, 'stream'), 'utf8'))) {
       rmSync(dir, { recursive: true, force: true });
       return undefined;
     }
     const secrets = transcriptSecrets({ ...process.env, ...req.env }, this.o.secrets?.());
-    return this.follow({ runId: req.runId, limits: req.limits, secrets, remainingMs: req.limits.durationMs - req.elapsedMs, ...(pid === undefined ? {} : { pid }), attached: true });
+    return this.follow({ runId: req.runId, limits: req.limits, secrets, remainingMs: req.limits.durationMs - req.elapsedMs, ...(writer ? { writer } : {}), attached: true });
   }
 
   private dir(runId: string): string {
@@ -172,7 +194,7 @@ export class ClaudeCodeRunner implements Runner {
 
   private follow(a: Followed): RunHandle {
     const dir = this.dir(a.runId);
-    const pid = a.child?.pid ?? a.pid;
+    const pid = a.child?.pid ?? a.writer?.pid;
     // Taken up, the whole stream is read again: the transcript is written anew from it.
     const transcript = createWriteStream(join(this.o.transcriptsDir, `${a.runId}.jsonl`), { flags: a.attached ? 'w' : 'a' });
     const ch = new Channel<RunStreamEvent>();
@@ -257,6 +279,8 @@ export class ClaudeCodeRunner implements Runner {
       }
     };
     if (a.attached) read(false);
+    // Ended with a result while no daemon read it: the time since, the cut's, is no overrun.
+    if (a.attached && result && !a.writer) clearTimeout(timer);
 
     const done = new Promise<RunResult>((resolve) => {
       let finished = false;
@@ -286,7 +310,7 @@ export class ClaudeCodeRunner implements Runner {
       const poll = setInterval(() => {
         read(true);
         // Not its parent: its end is seen by its pid, once what it wrote is read.
-        if (!a.child && (pid === undefined || !pidAlive(pid))) finish();
+        if (!a.child && (!a.writer || !writerAlive(a.writer))) finish();
       }, POLL_MS);
       poll.unref();
       a.child?.on('error', (err) => finish(err));

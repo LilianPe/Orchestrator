@@ -75,6 +75,54 @@ describe('a restart during a run', () => {
     expect((await h.tracker.getIssue('REL-1')).labels).not.toContain('Bloqué');
   });
 
+  it('an attempt its ticket no longer holds is not taken up, even alive: it is closed, its sandbox destroyed', async () => {
+    const h = createHarness({ sandboxed: true });
+    const runId = await running(h);
+    await h.store.putTicket({ ...(await h.ticket()), activeRunId: undefined, activeJob: undefined });
+    await h.restart({ mode: 'brutal' });
+    expect((await h.store.getRun(runId))!.status).toBe('failure');
+    expect(h.sandboxes.destroyed).toEqual(['sbx-1']);
+    expect(h.runner.requests).toHaveLength(1);
+  });
+
+  it('an attempt that ends as it is reattached keeps its real result, whatever recover() read before', async () => {
+    const h = createHarness();
+    const runId = await running(h);
+    const attach = h.runner.attach.bind(h.runner);
+    h.runner.attach = (req) => {
+      const handle = attach(req);
+      h.runner.release(runId);
+      return handle;
+    };
+    await h.restart({ mode: 'brutal' });
+    expect((await h.store.getRun(runId))!.status).toBe('success');
+    expect(h.runner.requests).toHaveLength(1);
+    expect(await h.ticket()).toMatchObject({ logical: 'human_review', blocked: false });
+  });
+
+  it('a start out of the queue without an effect, cut once launched, is not handed out to run again', async () => {
+    const faults = new Faults({ point: 'run.written', mode: 'kill', nth: 2 });
+    const h = createHarness({ faults, effectLeaseMs: 60_000 });
+    const first = await running(h);
+    const control = (id: string, type: 'control.pause' | 'control.resume') => h.orch.accept({ ...TRUSTED, id, type, at: h.clock.now(), projectId: '*', payload: {} } as FactoryEvent);
+    await h.store.putTicket({ ...(await h.ticket()), pendingJob: { job: 'dev-feedback', resume: true } });
+    await control('g1', 'control.pause');
+    await h.orch.drained();
+    // Its end settles the ticket, whose pending job goes to the queue: paused, and started by no effect.
+    h.runner.release(first);
+    await h.orch.drained();
+    expect((await h.store.listQueue()).map((q) => q.job)).toEqual(['dev-feedback']);
+    await control('g2', 'control.resume');
+    await faults.killed;
+    await h.restart({ mode: 'brutal' });
+    await h.advance(60_001);
+    await h.orch.tick();
+    await h.orch.drained();
+    // The first attempt, then the relaunch of the one cut before the runner: never the queue item again.
+    expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:dev', '/factory:feedback']);
+    expect(await h.store.listQueue()).toEqual([]);
+  });
+
   it('a clean shutdown: the step starts again from the ticket session (`interrupted`, never a block)', async () => {
     const h = createHarness();
     const runId = await running(h);
@@ -247,6 +295,39 @@ describe('the lease of an attempt', () => {
     expect((await h.ticket()).activeRunId).not.toBe(first);
   });
 
+  it('the attempt it stops may end before its loss is written: the step does start again', async () => {
+    const h = createHarness({ sandboxed: true });
+    const first = await running(h);
+    h.runner.enqueue({ hold: true });
+    h.runner.mute(first);
+    // The engine answers slowly: the stopped attempt has all the time to end before `run.lost` is written.
+    const find = h.sandboxes.findByAttempt.bind(h.sandboxes);
+    h.sandboxes.findByAttempt = async (id) => {
+      await new Promise((r) => setTimeout(r, 30));
+      return find(id);
+    };
+    await h.advance(RUN_LEASE_MS + 1);
+    await h.orch.drained();
+    expect(h.runner.requests).toHaveLength(2);
+    expect((await h.ticket()).activeRunId).not.toBe(first);
+    expect((await h.ticket()).blocked).toBe(false);
+  });
+
+  it('an engine that does not answer relaunches nothing: the old attempt may still be there, and the next beat looks again', async () => {
+    const h = createHarness({ sandboxed: true });
+    const first = await running(h);
+    h.runner.enqueue({ hold: true });
+    const find = h.sandboxes.findByAttempt.bind(h.sandboxes);
+    h.sandboxes.findByAttempt = async () => Promise.reject(new Error('engine down'));
+    await h.advance(RUN_LEASE_MS + 1);
+    expect(h.runner.requests).toHaveLength(1);
+    expect((await h.ticket()).activeRunId).toBe(first);
+    h.sandboxes.findByAttempt = find;
+    h.runner.mute(first);
+    await h.advance(1);
+    expect(h.runner.requests).toHaveLength(2);
+  });
+
   it('a slot follows the relaunch: the replaced attempt ends without freeing the one that took its place', async () => {
     const h = createHarness();
     const first = await running(h);
@@ -320,6 +401,22 @@ describe('a restart during a check', () => {
     await h.advance(0);
     expect((await h.store.recentEvents(50, 'REL-1')).filter((e) => e.id === `check:${verifying}`)).toHaveLength(1);
     expect(h.checks.calls).toHaveLength(2);
+  });
+
+  it('a second kill during the check run again: it runs a third time, the ticket is not left waiting for a verdict', async () => {
+    const h = createHarness({ preset: testPreset() });
+    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+    h.checks.holdNext();
+    void h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    await vi.waitFor(() => expect(h.checks.calls).toHaveLength(1));
+    h.checks.holdNext();
+    void h.restart({ mode: 'brutal' });
+    await vi.waitFor(() => expect(h.checks.calls).toHaveLength(2));
+    h.clock.advance(1_000);
+    await h.restart({ mode: 'brutal' });
+    expect(h.checks.calls).toHaveLength(3);
+    expect(await h.ticket()).toMatchObject({ logical: 'human_review', blocked: false });
+    expect((await h.ticket()).verifyingRunId).toBeUndefined();
   });
 
   it('a verdict written before the kill is decided as it is: no second check', async () => {

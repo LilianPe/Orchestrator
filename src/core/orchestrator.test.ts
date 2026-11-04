@@ -279,7 +279,7 @@ describe('Orchestrator', () => {
     t.verifyingRunId = run.id;
     await store.putTicket(t);
     await orch.recover();
-    expect((await store.pendingInbox(10)).find((e) => e.id === `check:${run.id}:lost`)).toMatchObject({ type: 'verify.lost', payload: { runId: run.id, job: run.job } });
+    expect((await store.pendingInbox(10)).find((e) => e.id.startsWith(`check:${run.id}:lost`))).toMatchObject({ type: 'verify.lost', payload: { runId: run.id, job: run.job } });
     expect((await store.getTicket('p', 'REL-1'))!.blocked).toBe(false);
   });
 
