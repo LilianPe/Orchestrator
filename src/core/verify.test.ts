@@ -26,7 +26,8 @@ describe('runVerify', () => {
     ]);
   });
 
-  it('gives its commands no credential of the daemon: they run what the agent wrote (ORC-211)', async () => {
+  // Not on Windows: the output of its `bash` does not come back here, as for the test above.
+  it.skipIf(process.platform === 'win32')('gives its commands no credential of the daemon: they run what the agent wrote (ORC-211)', async () => {
     vi.stubEnv('ORG_REGISTRY_TOKEN', 'repo-secret');
     vi.stubEnv('CLAUDE_CODE_OAUTH_TOKEN', 'claude-token');
     vi.stubEnv('GH_TOKEN', 'gh-token');
@@ -37,7 +38,7 @@ describe('runVerify', () => {
     expect(res.failures[0]!.output).toContain('[|C]');
   });
 
-  it('gives its commands the variables the repository declares', async () => {
+  it.skipIf(process.platform === 'win32')('gives its commands the variables the repository declares', async () => {
     const res = await runVerify(process.cwd(), ['echo "[$API_URL]"; exit 1'], undefined, { API_URL: 'https://api' });
     expect(res.failures[0]!.output).toContain('[https://api]');
   });
