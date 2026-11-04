@@ -3,15 +3,26 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { TRUSTED, type FactoryEvent } from '../../src/core/types.js';
 import { CUT_BOUND_REASON } from '../../src/core/engine.js';
-import { exportJournal, replayJournal } from '../../src/runtime/replay.js';
 import { CUT_RELAUNCHES, CUT_WINDOW_MS, RUN_BEAT_MS, RUN_LEASE_MS } from '../../src/store/types.js';
-import { Faults } from '../helpers/faults.js';
+import { checkChain, Faults } from '../helpers/faults.js';
 import { createHarness, heldRun } from '../helpers/harness.js';
 import { testPreset } from '../helpers/test-preset.js';
 
 type H = ReturnType<typeof createHarness>;
 
 const claudeDir = (h: H) => join(h.sessionsDir!, 'p', 'REL-1');
+
+/**
+ * The n-th check is running and its effect is settled. A kill before that leaves the outbox row to its lease
+ * (the row replays it), which a slower database shows: these scenarios are about the check, not that row.
+ */
+async function checking(h: H, n: number): Promise<void> {
+  await vi.waitFor(async () => {
+    expect(h.checks.calls).toHaveLength(n);
+    const rows = await h.store.listEffects('p', 'REL-1');
+    expect(rows.filter((row) => row.effect.kind === 'run_verify' && row.status !== 'done')).toEqual([]);
+  });
+}
 
 /** The container of the attempt is gone, and its process with no way to say it: no more beats. */
 async function lose(h: H, runId: string): Promise<void> {
@@ -251,7 +262,8 @@ describe('the bound of the relaunches after a cut', () => {
   }
 
   it('a crash loop: N cuts in the window give N relaunches, the next one blocks, with its reason and no agent', async () => {
-    const h = createHarness();
+    const faults = new Faults();
+    const h = createHarness({ faults });
     await heldRun(h);
     for (let i = 1; i <= CUT_RELAUNCHES; i++) {
       await cut(h);
@@ -266,10 +278,8 @@ describe('the bound of the relaunches after a cut', () => {
     expect(t.activeRunId).toBeUndefined();
     expect(h.tracker.activities('ls-1').at(-1)).toMatchObject({ type: 'elicitation', body: expect.stringMatching(CUT_BOUND_REASON) });
     expect((await h.tracker.getIssue('REL-1')).labels).toContain('Bloqué');
-    // Replayed bit for bit, the block included.
-    const replay = replayJournal(await exportJournal(h.store, 'p', 'REL-1'));
-    expect(replay.divergences).toEqual([]);
-    expect(replay.unrecorded).toBe(0);
+    // A normal outcome for the checker of the chaos, strict as it is: nothing lost, nothing doubled, replayed bit for bit.
+    expect(await checkChain(h.store, { projectId: 'p', tickets: ['REL-1'], acked: [], calls: faults.calls })).toEqual({ violations: [], atLeastOnce: [] });
   });
 
   it('a cut after the window is started again', async () => {
@@ -321,12 +331,12 @@ describe('the bound of the relaunches after a cut', () => {
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
     h.checks.holdNext();
     void h.send('ticket.delegated', { linearSessionId: 'ls-1' });
-    await vi.waitFor(() => expect(h.checks.calls).toHaveLength(1));
+    await checking(h, 1);
     for (let i = 1; i <= CUT_RELAUNCHES; i++) {
       h.checks.holdNext();
       h.clock.advance(1_000);
       void h.restart({ mode: 'brutal' });
-      await vi.waitFor(() => expect(h.checks.calls).toHaveLength(1 + i));
+      await checking(h, 1 + i);
     }
     h.clock.advance(1_000);
     await h.restart({ mode: 'brutal' });
@@ -476,7 +486,7 @@ describe('a restart during a check', () => {
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
     const release = h.checks.holdNext();
     void h.send('ticket.delegated', { linearSessionId: 'ls-1' });
-    await vi.waitFor(() => expect(h.checks.calls).toHaveLength(1));
+    await checking(h, 1);
     const verifying = (await h.ticket()).verifyingRunId!;
     expect(verifying).toBeDefined();
     const runs = h.runner.requests.length;
@@ -501,10 +511,10 @@ describe('a restart during a check', () => {
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
     h.checks.holdNext();
     void h.send('ticket.delegated', { linearSessionId: 'ls-1' });
-    await vi.waitFor(() => expect(h.checks.calls).toHaveLength(1));
+    await checking(h, 1);
     h.checks.holdNext();
     void h.restart({ mode: 'brutal' });
-    await vi.waitFor(() => expect(h.checks.calls).toHaveLength(2));
+    await checking(h, 2);
     h.clock.advance(1_000);
     await h.restart({ mode: 'brutal' });
     expect(h.checks.calls).toHaveLength(3);
@@ -517,7 +527,7 @@ describe('a restart during a check', () => {
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
     const hold = h.checks.holdNext();
     void h.send('ticket.delegated', { linearSessionId: 'ls-1' });
-    await vi.waitFor(() => expect(h.checks.calls).toHaveLength(1));
+    await checking(h, 1);
     const t = await h.ticket();
     await h.store.appendInbox({ ...TRUSTED, id: `check:${t.verifyingRunId}`, type: 'verify.passed', at: h.clock.now(), projectId: 'p', ticketId: 'REL-1', payload: { runId: t.verifyingRunId!, job: t.activeJob ?? 'dev' } });
     await h.restart({ mode: 'brutal' });
