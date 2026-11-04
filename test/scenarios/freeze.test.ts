@@ -36,7 +36,8 @@ on:
   h.checks.failNext('AssertionError: expected 1 to be 2');
   h.runner.enqueue({}, { hold: true });
   await h.send('ticket.delegated', { linearSessionId: 'as-1' }, 'REL-1', { actor: LEAD });
-  expect(Object.keys((await h.ticket()).frozenTests!.files)).toEqual(['src/export.test.ts', 'vitest.config.ts']);
+  // Sorted: a projection read from jsonb has its keys by length, not as written, and nothing reads the freeze in order.
+  expect(Object.keys((await h.ticket()).frozenTests!.files).sort()).toEqual(['src/export.test.ts', 'vitest.config.ts']);
   return h;
 }
 
