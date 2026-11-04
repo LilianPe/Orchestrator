@@ -98,6 +98,19 @@ describe('GhCliForge', () => {
     await expect(answeringChecks({ stdout: `<html>${'x'.repeat(1000)}` }).findPr('/r', 'b')).rejects.toThrow(/: "<html>x{194}"…$/);
   });
 
+  it("keeps gh's stderr in the error even on exit 0, cut like the output", async () => {
+    await expect(answeringChecks({ stdout: 'garbage', stderr: 'A new release of gh is available\n' }).findPr('/r', 'b')).rejects.toThrow(
+      /: "garbage" \(exit 0: A new release of gh is available\)$/,
+    );
+    await expect(answeringChecks({ stdout: 'garbage', stderr: 'y'.repeat(1000), code: 1 }).findPr('/r', 'b')).rejects.toThrow(
+      /: "garbage" \(exit 1: y{200}…\)$/,
+    );
+  });
+
+  it('never cuts a character in two in its excerpt', async () => {
+    await expect(answeringChecks({ stdout: `${'x'.repeat(199)}😀tail` }).findPr('/r', 'b')).rejects.toThrow(/: "x{199}"…$/);
+  });
+
   it('rejects a PR without checks whose stdout is not empty, as gh never answers it', async () => {
     await expect(
       answeringChecks({ stdout: 'garbage', stderr: "no checks reported on the 'b' branch\n", code: 1 }).findPr('/r', 'b'),

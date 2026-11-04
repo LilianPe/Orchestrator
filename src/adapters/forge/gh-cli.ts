@@ -28,7 +28,16 @@ const isCheck = (c: unknown): c is Check =>
   typeof c === 'object' && c !== null && typeof (c as Check).name === 'string' && typeof (c as Check).bucket === 'string';
 
 const EXCERPT = 200;
-const excerpt = (out: string) => JSON.stringify(out.slice(0, EXCERPT)) + (out.length > EXCERPT ? '…' : '');
+/** The first EXCERPT code units of `s`, one less rather than half a character, `…` when cut. */
+function cut(s: string): { head: string; more: string } {
+  if (s.length <= EXCERPT) return { head: s, more: '' };
+  const end = /[\uD800-\uDBFF]/.test(s[EXCERPT - 1]!) ? EXCERPT - 1 : EXCERPT;
+  return { head: s.slice(0, end), more: '…' };
+}
+const excerpt = (out: string) => {
+  const { head, more } = cut(out);
+  return JSON.stringify(head) + more;
+};
 
 /**
  * The checks `gh pr checks --json name,bucket` lists. Output that is not such a list throws, never reads as
@@ -42,8 +51,8 @@ function parseChecks(args: string[], r: ExecResult): Check[] {
     list = undefined;
   }
   if (Array.isArray(list) && list.every(isCheck)) return list;
-  const stderr = r.stderr.trim();
-  const exit = r.code === 0 ? '' : ` (exit ${r.code}${stderr && `: ${stderr}`})`;
+  const stderr = cut(r.stderr.trim());
+  const exit = r.code === 0 && !stderr.head ? '' : ` (exit ${r.code}${stderr.head && `: ${stderr.head}${stderr.more}`})`;
   throw new Error(`gh ${args.join(' ')}: unreadable output, not a list of checks: ${excerpt(r.stdout)}${exit}`);
 }
 
