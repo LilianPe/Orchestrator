@@ -1,11 +1,12 @@
-import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { describeAgentRuntimeContract, drain, type AgentScript } from '../../../test/contracts/agent-runtime.contract.js';
 import { FakeSandboxProvider } from '../sandbox/fake.js';
 import type { SandboxProvider } from '../sandbox/types.js';
-import { buildClaudeArgs, childEnv, ClaudeCodeRunner } from './claude-code.js';
+import { buildClaudeArgs, childEnv, ClaudeCodeRunner, liveDir } from './claude-code.js';
 import type { RunRequest } from './types.js';
 
 const fx = (n: string) => join(import.meta.dirname, 'fixtures', n);
@@ -107,6 +108,64 @@ describe('ClaudeCodeRunner', () => {
     const h = r.start(req({ cwd: join(mkdtempSync(join(tmpdir(), 'factory-tr-')), 'missing') }));
     await drain(h.events);
     expect(await h.done).toMatchObject({ outcome: 'failure', infra: true });
+  });
+});
+
+/** ORC-220: the attempt's writer outlives the daemon that started it, which `start-and-die.ts` is, killed for real. */
+describe('ClaudeCodeRunner attached to an attempt of a dead daemon', () => {
+  const gated = (transcriptsDir: string) => ({ FAKE_CLAUDE_SCRIPT: fx('stream-success.jsonl'), FAKE_CLAUDE_GATE: join(transcriptsDir, 'gate') });
+  const orphan = (transcriptsDir: string, runId: string, env: Record<string, string>) => {
+    const died = spawnSync(process.execPath, ['--import', 'tsx', fx('start-and-die.ts'), transcriptsDir, runId, fx('fake-claude.mjs'), JSON.stringify(env)], { stdio: 'ignore' });
+    expect(died.status === 0).toBe(false);
+  };
+  const attach = { limits: { turns: 50, durationMs: 60_000, usd: 5 }, elapsedMs: 0, env: {} };
+  const writerDead = async (transcriptsDir: string, runId: string) => {
+    const pid = Number(readFileSync(join(liveDir(transcriptsDir), runId, 'pid'), 'utf8'));
+    await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow(), { timeout: 5_000 });
+  };
+
+  it('follows it from now on: only the new events, the real result, a whole transcript, once', { timeout: 30_000 }, async () => {
+    const { r, transcriptsDir } = runner();
+    orphan(transcriptsDir, 'r-alive', gated(transcriptsDir));
+    await vi.waitFor(() => expect(readFileSync(join(liveDir(transcriptsDir), 'r-alive', 'stream'), 'utf8').trim().split('\n')).toHaveLength(4), { timeout: 5_000 });
+    const h = r.attach({ ...attach, runId: 'r-alive' })!;
+    expect(h).toBeDefined();
+    writeFileSync(join(transcriptsDir, 'gate'), '');
+    const events = await drain(h.events);
+    // The lines before the kill were relayed by the dead daemon, or are lost to the relay: never twice.
+    expect(events.map((e) => e.kind)).toEqual(['result']);
+    expect(await h.done).toEqual({ outcome: 'success', costUsd: 0.42, turns: 3, lastText: 'PR ouverte.', tokens: { input: 20, output: 400, cacheRead: 9000, cacheCreation: 1000 } });
+    expect(readFileSync(join(transcriptsDir, 'r-alive.jsonl'), 'utf8').trim().split('\n')).toHaveLength(5);
+    expect(existsSync(join(liveDir(transcriptsDir), 'r-alive'))).toBe(false);
+  });
+
+  it('takes the result of an attempt that ended while no daemon read it', { timeout: 30_000 }, async () => {
+    const { r, transcriptsDir } = runner();
+    orphan(transcriptsDir, 'r-ended', { FAKE_CLAUDE_SCRIPT: fx('stream-success.jsonl') });
+    await writerDead(transcriptsDir, 'r-ended');
+    const h = r.attach({ ...attach, runId: 'r-ended' })!;
+    expect(await drain(h.events)).toEqual([]);
+    expect(await h.done).toMatchObject({ outcome: 'success', lastText: 'PR ouverte.' });
+  });
+
+  it('has nothing to take up from a writer dead without a result, nor from a run it never saw', { timeout: 30_000 }, async () => {
+    const { r, transcriptsDir } = runner();
+    orphan(transcriptsDir, 'r-cut', { FAKE_CLAUDE_SCRIPT: fx('stream-usage-no-result.jsonl') });
+    await writerDead(transcriptsDir, 'r-cut');
+    expect(r.attach({ ...attach, runId: 'r-cut' })).toBeUndefined();
+    expect(existsSync(join(liveDir(transcriptsDir), 'r-cut'))).toBe(false);
+    expect(r.attach({ ...attach, runId: 'r-never' })).toBeUndefined();
+  });
+
+  it('stops it, and counts the duration already spent', { timeout: 30_000 }, async () => {
+    const { r, transcriptsDir } = runner();
+    const hanging = { FAKE_CLAUDE_SCRIPT: fx('stream-usage-no-result.jsonl'), FAKE_CLAUDE_HANG: '1' };
+    orphan(transcriptsDir, 'r-stop', hanging);
+    const stopped = r.attach({ ...attach, runId: 'r-stop' })!;
+    stopped.stop();
+    expect(await stopped.done).toMatchObject({ outcome: 'stopped' });
+    orphan(transcriptsDir, 'r-over', hanging);
+    expect(await r.attach({ ...attach, runId: 'r-over', elapsedMs: 60_000 })!.done).toMatchObject({ outcome: 'limit' });
   });
 });
 

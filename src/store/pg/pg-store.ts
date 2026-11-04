@@ -747,6 +747,14 @@ export class PgStore implements AsyncStore {
     `);
   }
 
+  async renewRun(id: string, until: number): Promise<boolean> {
+    const result = await this.db.execute(sql`
+      update attempts set data = jsonb_set(data, '{leaseUntil}', to_jsonb(${until}::bigint))
+      where id = ${id} and status = 'running'
+    `);
+    return (result.rowCount ?? 0) > 0;
+  }
+
   async getRun(id: string): Promise<RunRecord | undefined> {
     const result = await this.db.execute<{ data: RunRecord }>(
       sql`select data from attempts where id = ${id} limit 1`,

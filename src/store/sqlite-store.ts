@@ -499,6 +499,11 @@ export class SqliteStore implements Store {
       .run(r.id, r.status, r.token, r.startedAt, r.costUsd, JSON.stringify(r));
   }
 
+  async renewRun(id: string, until: number): Promise<boolean> {
+    const res = this.db.prepare(`UPDATE runs SET data = json_set(data, '$.leaseUntil', ?) WHERE id = ? AND status = 'running'`).run(until, id);
+    return Number(res.changes) === 1;
+  }
+
   async getRun(id: string): Promise<RunRecord | undefined> {
     const row = this.db.prepare('SELECT data FROM runs WHERE id = ?').get(id) as { data: string } | undefined;
     return row ? JSON.parse(row.data) : undefined;

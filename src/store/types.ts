@@ -10,6 +10,11 @@ import type { StoredEvent } from '../core/upcast.js';
  */
 export const LEASE_MS = 60_000;
 
+/** The heartbeat of an attempt (ORC-220): every 30 s, as the MVP doc says. */
+export const RUN_BEAT_MS = 30_000;
+/** Lease of an attempt: three beats, as for an outbox row (`LEASE_MS`), so one missed beat is no expiry. */
+export const RUN_LEASE_MS = 3 * RUN_BEAT_MS;
+
 export type SessionRole = 'implementer' | 'reviewer' | 'answerer';
 
 export interface RunRecord {
@@ -43,6 +48,10 @@ export interface RunRecord {
   sensitivePaths?: readonly string[];
   /** Tokens the runner reported at the end of the attempt (ORC-235); absent when it reported none. */
   tokens?: TokenUsage;
+  /** Renewed by the heartbeat while the attempt lives (ORC-220, `renewRun`); absent on older records. */
+  leaseUntil?: number;
+  /** What the attempt was given to read (ORC-220): a relaunch of its step reads the same, the feedback it consumed included. */
+  input?: { kind: InputKind; text: string };
 }
 
 /**
@@ -69,6 +78,8 @@ export interface QueueItem {
   resume?: boolean;
   /** Those its start was decided with; the launch adds them when what the run reads then is untrusted (ORC-274). */
   sensitivePaths?: readonly string[];
+  /** The lost attempt whose step it starts again (ORC-220). */
+  relaunchOf?: string;
   priority: number;
   enqueuedAt: number;
   /**
@@ -368,6 +379,8 @@ export interface Store {
   recordEvent(e: FactoryEvent): Promise<boolean>;
   recentEvents(limit: number, ticketId?: string): Promise<FactoryEvent[]>;
   putRun(r: RunRecord): Promise<void>;
+  /** The heartbeat of an attempt (ORC-220): its lease up to `until`. False when it is no longer `running`: nothing is written. */
+  renewRun(id: string, until: number): Promise<boolean>;
   getRun(id: string): Promise<RunRecord | undefined>;
   runsByStatus(status: RunRecord['status']): Promise<RunRecord[]>;
   findRunByToken(token: string): Promise<RunRecord | undefined>;

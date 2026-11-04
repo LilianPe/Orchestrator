@@ -762,6 +762,71 @@ describe('decide — the tests step and the red check (ORC-123)', () => {
   });
 });
 
+describe('decide — an attempt lost (ORC-220)', () => {
+  const lost = (cause: 'restart' | 'lease', runId = 'r1') => ev('run.lost', { runId, job: 'dev', cause });
+  const active = (patch: Partial<TicketState> = {}) => ticket({ logical: 'dev', delegated: true, activeRunId: 'r1', activeJob: 'dev', ...patch });
+
+  it('a dev attempt cut by a restart is started again, and the lease bound is untouched', () => {
+    const out = decide(active({ leaseRelaunches: 1 }), lost('restart'), workflow);
+    expect(out.effects).toContainEqual({ kind: 'start_run', job: 'dev', relaunchOf: 'r1' });
+    expect(out.events).toEqual([]);
+  });
+
+  it('the first expired lease relaunches once and counts it; the second blocks', () => {
+    const first = decide(active(), lost('lease'), workflow);
+    expect(first.effects).toContainEqual({ kind: 'start_run', job: 'dev', relaunchOf: 'r1' });
+    expect(first.events).toEqual([{ type: 'ticket.patched', patch: { leaseRelaunches: 1 } }]);
+    const second = decide(active({ activeRunId: 'r2', leaseRelaunches: 1 }), lost('lease', 'r2'), workflow);
+    expect(second.effects.some((e) => e.kind === 'start_run')).toBe(false);
+    expect(second.events).toEqual([{ type: 'ticket.blocked', reason: expect.stringContaining('bail') }]);
+    expect(second.effects).toContainEqual(expect.objectContaining({ kind: 'activity', type: 'elicitation' }));
+    expect(second.effects).toContainEqual({ kind: 'labels', add: ['Bloqué'], remove: [] });
+  });
+
+  it('is fenced for an attempt that is not the active one', () => {
+    const out = decide(active({ activeRunId: 'r2' }), lost('restart'), workflow);
+    expect(isFenced(out)).toBe(true);
+    expect(out.effects).toEqual([]);
+  });
+
+  it.each([
+    ['blocked', { blocked: true, blockReason: 'Arrêté à la demande' }],
+    ['not delegated', { delegated: false }],
+    ['merged', { prState: 'MERGED' as const }],
+  ])('a ticket %s is not started again, and no longer holds the attempt', (_, patch) => {
+    const t = active(patch);
+    expect(decide(t, lost('restart'), workflow).effects).toEqual([]);
+    expect(reduce(t, lost('restart'))).toMatchObject({ activeRunId: undefined, activeJob: undefined });
+  });
+
+  it('a question lost is told in its own thread, never started again, and leaves the ticket alone', () => {
+    const question = ev('run.lost', { runId: 'q1', job: 'ask', cause: 'restart' });
+    const out = decide(active({ logical: 'todo', delegated: false, activeRunId: 'r0' }), question, workflow);
+    expect(out.effects).toEqual([{ kind: 'activity', type: 'error', body: expect.stringContaining('Reposez la question'), runId: 'q1' }]);
+    expect(reduce(active({ activeRunId: 'r0' }), question)).toMatchObject({ activeRunId: 'r0' });
+  });
+
+  it('a finished attempt gives the lease bound back, a human relaunch too', () => {
+    const done = decide(active({ leaseRelaunches: 1 }), ev('run.finished', { runId: 'r1', job: 'dev', outcome: 'failure', costUsd: 0, turns: 1, lastText: '' }), workflow);
+    expect(done.events).toContainEqual({ type: 'ticket.patched', patch: { leaseRelaunches: 0 } });
+    const human = decide(ticket({ logical: 'dev', delegated: true, blocked: true, linearSessionId: 's1', leaseRelaunches: 1 }), ev('session.prompted', { linearSessionId: 's1', body: 'vas-y', author: 'L' }), workflow);
+    expect(human.events).toContainEqual({ type: 'ticket.patched', patch: { leaseRelaunches: 0 } });
+  });
+
+  it('a check lost runs again, carrying the output of its run', () => {
+    const output = { status: 'done', summary: 's', tests_added: [], why: '', assumptions: [], risks: [], untested: [], review_hints: [] } as never;
+    const out = decide(active({ activeRunId: undefined, verifyingRunId: 'r1' }), ev('verify.lost', { runId: 'r1', job: 'dev', output }), workflow);
+    expect(out.effects).toEqual([{ kind: 'run_verify', runId: 'r1', job: 'dev', output }]);
+    expect(reduce(active({ verifyingRunId: 'r1' }), ev('verify.lost', { runId: 'r1', job: 'dev' }))).toMatchObject({ verifyingRunId: 'r1' });
+  });
+
+  it('a check lost is fenced when it is not the one awaited', () => {
+    const out = decide(active({ verifyingRunId: 'r2' }), ev('verify.lost', { runId: 'r1', job: 'dev' }), workflow);
+    expect(isFenced(out)).toBe(true);
+    expect(out.effects).toEqual([]);
+  });
+});
+
 describe('decide — dead letters (ORC-175)', () => {
   const added = { eventId: 'l1', eventType: 'label.changed', error: 'boom', failures: 1 };
   const reason = 'Événement l1 mis de côté (label.changed) : sa décision a échoué (boom).';

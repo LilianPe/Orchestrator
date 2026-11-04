@@ -92,6 +92,19 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     expect(await s.recentEvents(10)).toEqual([later, e]);
   });
 
+  it('renews the lease of a running attempt, and of no other (ORC-220)', async () => {
+    const s = await store();
+    await s.putRun(run({ leaseUntil: 1_000 }));
+    await s.putRun(run({ id: 'r2', token: 't2', status: 'success', leaseUntil: 1_000 }));
+    expect(await s.renewRun('r1', 2_000)).toBe(true);
+    expect(await s.renewRun('r2', 2_000)).toBe(false);
+    expect(await s.renewRun('none', 2_000)).toBe(false);
+    expect((await s.getRun('r1'))!.leaseUntil).toBe(2_000);
+    expect((await s.getRun('r2'))!.leaseUntil).toBe(1_000);
+    // The record stays whole: the lease is a field of it.
+    expect((await s.findRunByToken((await s.getRun('r1'))!.token))!.id).toBe('r1');
+  });
+
   it('stores runs and finds them by token and status', async () => {
     const s = await store();
     await s.putRun(run());

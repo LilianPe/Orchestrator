@@ -1,8 +1,8 @@
 /**
  * The daemon the chaos test kills (ORC-163): the orchestrator, its worker, its outbox executor and
  * its timers on a real store (Postgres, or a SQLite file), with the fake adapters of the harness,
- * started as `factory up` starts it (`recover`, the recovery notices, the timers, the tick, the
- * worker's poll). The driver (`chaos.test.ts`) talks to it over IPC:
+ * started as `factory up` starts it (`recover`, the timers, the tick, the heartbeat, the worker's
+ * poll). Its runs die with it, as containers lost: each life starts their steps again. The driver (`chaos.test.ts`) talks to it over IPC:
  *
  * - `{ type: 'event', event }`: accepted (written to the inbox), then answered `{ type: 'ack', id }`,
  *   as a webhook is answered 200; `{ type: 'nack', id }` if the write failed;
@@ -88,6 +88,6 @@ await h.orch.recover();
 const timers = new TimerService(h.store, clock, () => h.orch.wake(), (err) => log(`timers: ${err.message}`));
 timers.start(20);
 setInterval(() => void h.orch.tick(), 50);
-await h.orch.announceRecovery();
+setInterval(() => h.orch.supervise().catch((err: Error) => log(`heartbeat: ${err.message}`)), 50);
 await h.orch.startWorker(20);
 send({ type: 'ready' });

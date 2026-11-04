@@ -15,6 +15,7 @@ import { createSmeeChannel } from '../relay/smee.js';
 import { openStore } from '../store/open.js';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { runStatusCommand, runStopCommand } from './control.js';
 import { runInit } from './init.js';
 import { runDoctorCommand } from './doctor.js';
 import { formatPlan, planRows } from './plan.js';
@@ -119,29 +120,16 @@ async function main(): Promise<number> {
       await store.close();
       return 0;
     }
-    case 'status': {
-      const s = (await (await fetch(`${api}/api/state`, { headers: uiAuth() })).json()) as any;
-      console.log(`Linear : ${s.linearConnected ? 'connecté' : 'non connecté'} · file : ${s.paused ? 'en pause' : 'active'} · places dev ${s.capacity.dev.used}/${s.capacity.dev.total} · coût du jour ${s.costTodayUsd.toFixed(2)} $`);
-      for (const t of s.tickets) console.log(`  ${t.ticketId}  ${t.logical}${t.blocked ? ' (bloqué)' : ''}  ${t.title}`);
-      return 0;
-    }
+    case 'status':
+      return runStatusCommand({ api, headers: uiAuth(), out: (l) => console.log(l), now: () => Date.now() });
     case 'pause':
     case 'resume':
       await fetch(`${api}/api/control/${cmd}`, { method: 'POST', headers: uiAuth() });
       console.log(cmd === 'pause' ? 'File en pause.' : 'File relancée.');
       return 0;
-    case 'stop': {
+    case 'stop':
       if (!arg) break;
-      const s = (await (await fetch(`${api}/api/state`, { headers: uiAuth() })).json()) as any;
-      const t = s.tickets.find((x: any) => x.ticketId === arg);
-      if (!t) {
-        console.log(`Ticket ${arg} inconnu de ${PRODUCT_NAME}.`);
-        return 1;
-      }
-      await fetch(`${api}/api/tickets/${t.projectId}/${arg}/stop`, { method: 'POST', headers: uiAuth() });
-      console.log(`Arrêt demandé pour ${arg}.`);
-      return 0;
-    }
+      return runStopCommand({ api, headers: uiAuth(), out: (l) => console.log(l), now: () => Date.now() }, arg);
     case 'run':
       if (arg === 'repair') return runRepairCommand(home, positionals.slice(2));
       break;

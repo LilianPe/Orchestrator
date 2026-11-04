@@ -117,7 +117,7 @@ Adaptez `PATH` à l'emplacement réel de `node` (nvm, fnm…), `claude` et `gh` 
 
 Laissez au moins 15 s au démon pour s'arrêter (Docker en laisse 10 par défaut : `docker compose stop -t 30` ou `stop_grace_period: 30s` dans `compose.yaml`).
 
-Au démarrage suivant, Relais reprend la main sur ce qui a été coupé (par un arrêt ou un crash) ; détails dans [`exploitation.md`](exploitation.md#arrêt-redémarrage-et-runs-interrompus). Les demandes en file, les minuteries (retours regroupés) et l'état de pause sont conservés dans `relais.db`.
+Au démarrage suivant, Relais reprend seul ce qui a été coupé (par un arrêt ou un crash) : aucun ticket n'est bloqué pour autant ; détails dans [`exploitation.md`](exploitation.md#arrêt-redémarrage-et-runs-interrompus). Les demandes en file, les minuteries (retours regroupés) et l'état de pause sont conservés dans `relais.db`.
 
 ## Mise à jour
 

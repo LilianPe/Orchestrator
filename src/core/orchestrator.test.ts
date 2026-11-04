@@ -211,19 +211,6 @@ describe('Orchestrator', () => {
     }
   });
 
-  it('recover() blocks tickets whose run was interrupted', async () => {
-    const { store, tracker, runner, orch } = setup();
-    tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
-    runner.enqueue({ hold: true });
-    await orch.accept(delegated());
-    await orch.drained();
-    await orch.recover();
-    const t = (await store.getTicket('p', 'REL-1'))!;
-    expect(t.blocked).toBe(true);
-    expect(t.activeRunId).toBeUndefined();
-    expect(await store.runsByStatus('running')).toEqual([]);
-  });
-
   it('stopAll() then idle() waits until the interrupted run is persisted', async () => {
     const { store, tracker, runner, orch } = setup();
     tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
@@ -233,7 +220,7 @@ describe('Orchestrator', () => {
     const runId = (await store.getTicket('p', 'REL-1'))!.activeRunId!;
     orch.stopAll();
     await orch.drained();
-    // A shutdown is not a user stop: the run is `interrupted` and the ticket keeps it for recover() on the next start.
+    // A shutdown is not a user stop: the run is `interrupted` and the ticket keeps it for recover(), which starts its step again.
     expect((await store.getRun(runId))!.status).toBe('interrupted');
     expect((await store.getTicket('p', 'REL-1'))!.activeRunId).toBe(runId);
   });
@@ -263,36 +250,52 @@ describe('Orchestrator', () => {
     expect(await store.runsByStatus('running')).toEqual([]);
   });
 
-  it('recover() blocks a ticket whose activeRunId points to a finished run', async () => {
+  // Was: blocked. A run that really ended has a result: it is delivered (ORC-220), never run again.
+  it('recover() delivers the result of a finished run its ticket still holds', async () => {
     const { store, tracker, orch } = setup();
     tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
     await orch.accept(delegated());
     await orch.drained();
     const t = (await store.getTicket('p', 'REL-1'))!;
-    t.activeRunId = (await store.runsByStatus('success'))[0]!.id;
+    const run = (await store.runsByStatus('success'))[0]!;
+    const finished = (await store.recentEvents(50, 'REL-1')).find((e) => e.type === 'run.finished')!;
+    t.activeRunId = 'r-unsent';
     t.blocked = false;
     await store.putTicket(t);
+    await store.putRun({ ...run, id: 'r-unsent', token: 't-unsent' });
     await orch.recover();
-    const after = (await store.getTicket('p', 'REL-1'))!;
-    expect(after.blocked).toBe(true);
-    expect(after.activeRunId).toBeUndefined();
-    expect(after.blockReason).toContain('redémarré');
+    expect((await store.pendingInbox(10)).find((e) => e.id === 'attempt:r-unsent:finished')).toMatchObject({ type: 'run.finished', payload: { runId: 'r-unsent', outcome: 'success', job: (finished.payload as { job: string }).job } });
+    expect((await store.getTicket('p', 'REL-1'))!.blocked).toBe(false);
   });
 
-  it('recover() blocks a ticket that was being verified', async () => {
+  // Was: blocked. The check runs again on the same attempt (ORC-220), whose verdict keeps its id.
+  it('recover() takes up a check whose verdict never came', async () => {
+    const { store, tracker, orch } = setup();
+    tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+    await orch.accept(delegated());
+    await orch.drained();
+    const t = (await store.getTicket('p', 'REL-1'))!;
+    const run = (await store.runsByStatus('success'))[0]!;
+    t.verifyingRunId = run.id;
+    await store.putTicket(t);
+    await orch.recover();
+    expect((await store.pendingInbox(10)).find((e) => e.id === `check:${run.id}:lost`)).toMatchObject({ type: 'verify.lost', payload: { runId: run.id, job: run.job } });
+    expect((await store.getTicket('p', 'REL-1'))!.blocked).toBe(false);
+  });
+
+  // Was: blocked. Nothing says what to check: the wait ends, and the ticket is not held for a verdict that cannot come.
+  it('recover() drops a check that names a run never written', async () => {
     const { store, tracker, orch } = setup();
     tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
     await orch.accept(delegated());
     await orch.drained();
     const t = (await store.getTicket('p', 'REL-1'))!;
     t.verifyingRunId = 'r-x';
-    t.blocked = false;
     await store.putTicket(t);
     await orch.recover();
     const after = (await store.getTicket('p', 'REL-1'))!;
-    expect(after.blocked).toBe(true);
+    expect(after.blocked).toBe(false);
     expect(after.verifyingRunId).toBeUndefined();
-    expect(after.blockReason).toContain('vérifications');
   });
 
   it('ignores a verification result that arrives after the ticket was stopped', async () => {

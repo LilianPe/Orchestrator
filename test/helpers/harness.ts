@@ -253,6 +253,8 @@ export function createHarness(
     clock.advance(ms);
     runner.tick();
     await timers.tick();
+    // The heartbeat, as the daemon's would by then: the leases of the attempts (ORC-220).
+    await orch.supervise();
     // The worker's poll, as the daemon's loop would by then: rows held by a backoff or a lease go again.
     await orch.poll();
     await orch.drained();
@@ -275,7 +277,6 @@ export function createHarness(
     orch = build(life);
     timers = timerService(life.store);
     await orch.recover();
-    await orch.announceRecovery();
     await orch.replayInbox();
     await orch.drained();
   }

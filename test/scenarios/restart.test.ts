@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Store } from '../../src/store/types.js';
 import { createHarness, mortal } from '../helpers/harness.js';
-import { testPreset } from '../helpers/test-preset.js';
 
 const LEASE_MS = 600_000;
 const DEBOUNCE_MS = 180_000;
@@ -90,24 +89,7 @@ describe('a brutal restart in the middle of the processing', () => {
     const written = h.tracker.calls.filter((c) => c.method === 'activity' || c.method === 'comment').map((c) => JSON.stringify(c.args));
     expect(new Set(written).size).toBe(written.length);
   });
-
-  it("during a check: the new process blocks the ticket, and the dead process's result never lands", async () => {
-    const h = createHarness({ preset: testPreset() });
-    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
-    const release = h.checks.holdNext();
-    void h.send('ticket.delegated', { linearSessionId: 'ls-1' });
-    await vi.waitFor(() => expect(h.checks.calls).toHaveLength(1));
-    const verifying = (await h.ticket()).verifyingRunId;
-    expect(verifying).toBeDefined();
-
-    await h.restart({ mode: 'brutal' });
-    expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: expect.stringContaining('pendant les vérifications') });
-    // The check ends in the dead process: its result goes to a store that no longer answers.
-    release();
-    await h.advance(0);
-    expect((await h.store.recentEvents(50, 'REL-1')).map((e) => e.id)).not.toContain(`check:${verifying}`);
-    expect(await h.ticket()).toMatchObject({ blocked: true });
-  });
+  // A restart during a check, which blocked the ticket here until ORC-220: test/scenarios/recovery.test.ts.
 });
 
 describe('mortal', () => {

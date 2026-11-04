@@ -46,7 +46,7 @@ const delegated = (logical: 'todo' | 'dev' = 'todo') => [
   sh({ type: 'session.linked', linearSessionId: DEV_SESSION }),
 ];
 const pr = { number: 1, url: 'https://forge/pr/1', branch: 'agent/rel-1' };
-const runStarted = () => sh({ type: 'run.started', runId: 'r1', job: 'dev', queue: 'dev', claudeSessionId: 'claude-1', feedbackConsumed: false });
+const runStarted = () => sh({ type: 'run.started', runId: 'r1', job: 'dev', queue: 'dev', claudeSessionId: 'claude-1' });
 const runFinished = (outcome: 'success' | 'failure') => ext('run.finished', { runId: 'r1', job: 'dev', outcome, costUsd: 0.5, turns: 3, lastText: 'fini' });
 const reply = (taint: 'trusted' | 'untrusted' = 'trusted') => ext('session.prompted', { linearSessionId: DEV_SESSION, body: 'ok', author: 'lilian' }, taint);
 
@@ -266,7 +266,7 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
             const kept = step.before?.pendingFeedback ?? [];
             const now = step.after?.pendingFeedback ?? [];
             if (kept.every((f) => now.includes(f))) continue;
-            expect(step.kind === 'shell' && step.event.type === 'run.started' && step.event.feedbackConsumed).toBe(true);
+            expect(step.kind === 'shell' && step.event.type === 'feedback.consumed').toBe(true);
           }
         });
       },
@@ -438,6 +438,40 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
       TIMEOUT,
     );
 
+    it(
+      'run.lost of a dev job and verify.lost for a run that is not the awaited one emit nothing (ORC-220)',
+      () => {
+        holds((s) => {
+          for (const step of decided(run(s))) {
+            const e = step.event;
+            const stale =
+              (e.type === 'run.lost' && wf.jobs[e.payload.job]?.queue === 'dev' && e.payload.runId !== step.before?.activeRunId) ||
+              (e.type === 'verify.lost' && e.payload.runId !== step.before?.verifyingRunId);
+            if (!stale) continue;
+            expect({ ...step.decision, trace: [] }).toEqual({ events: [], effects: [], timers: [], trace: [] });
+          }
+        });
+      },
+      TIMEOUT,
+    );
+
+    it(
+      'an expired lease relaunches at most once: never a start while the ticket already used its relaunch, and a restart never counts (ORC-220)',
+      () => {
+        holds((s) => {
+          for (const step of decided(run(s))) {
+            const e = step.event;
+            if (e.type !== 'run.lost' || wf.jobs[e.payload.job]?.queue !== 'dev') continue;
+            const started = step.decision.effects.some((c) => c.kind === 'start_run');
+            if (e.payload.cause === 'restart') expect(step.decision.events.some((x) => x.type === 'ticket.blocked')).toBe(false);
+            if (e.payload.cause === 'lease' && (step.before?.leaseRelaunches ?? 0) >= 1) expect(started).toBe(false);
+            if (step.before?.blocked) expect(started).toBe(false);
+          }
+        });
+      },
+      TIMEOUT,
+    );
+
     it.todo('I11 — attempt:<id>:finished, check:… and effect:<id> fenced by activeAttempts and the attempt’s last SHA (ORC-133)');
   });
 
@@ -467,7 +501,7 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
     const feedbackRunSandboxed = (s: Sequences): void => {
       let untrustedPending = false;
       for (const step of run(s).steps) {
-        if (step.kind === 'shell' && step.event.type === 'run.started' && step.event.feedbackConsumed) untrustedPending = false;
+        if (step.kind === 'shell' && step.event.type === 'feedback.consumed') untrustedPending = false;
         if (step.kind === 'decided' && step.event.taint === 'untrusted' && step.decision.events.some((e) => e.type === 'feedback.appended')) {
           untrustedPending = true;
         }

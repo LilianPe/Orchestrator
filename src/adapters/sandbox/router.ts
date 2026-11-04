@@ -68,6 +68,16 @@ export class SandboxRouter implements SandboxProvider {
     return undefined;
   }
 
+  async reattach(runId: string): Promise<Sandbox | undefined> {
+    for (const b of this.backends) {
+      const sandbox = await b.provider.reattach(runId);
+      if (!sandbox) continue;
+      this.owner.set(sandbox.id, b);
+      return sandbox;
+    }
+    return undefined;
+  }
+
   async list(): Promise<{ runId: string; sandbox: Sandbox }[]> {
     const all = [];
     for (const b of this.backends) {

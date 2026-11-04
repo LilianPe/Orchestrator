@@ -34,7 +34,6 @@ Linear peut refuser une URL de callback en `http://localhost` : dans ce cas, exp
 
 - enregistre les jetons, l'identifiant de l'agent (`appUserId`) et de l'organisation ;
 - **crée dans chaque équipe configurée les statuts manquants** (voir § 5) et les labels `agent:reprendre`, `agent:stop` et `Bloqué` ;
-- poste les messages de reprise en attente (runs interrompus par un redémarrage) ;
 - lance une réconciliation tout de suite ; ensuite, elle passe toutes les 5 minutes (ORC-185).
 
 Le jeton est rafraîchi automatiquement. Aux démarrages suivants, Relais se reconnecte seul avec les jetons de `secrets.json`. `relais status` et l'interface indiquent si Linear est connecté.
@@ -98,7 +97,7 @@ Après le merge de la PR (détecté par le relevé GitHub) : statut *Done*, work
 
 Seuls les tickets **délégués** à l'agent reçoivent du travail de code ; une mention sur un ticket non délégué ne donne qu'une réponse. Tout ce comportement se change dans `.relais/workflow.yml` : [`workflow.md`](workflow.md). Les contrôles avant de prendre un ticket (description d'au moins 30 caractères, pas de branche existante…) sont décrits dans [`workflow.md`](workflow.md#tracker) ; `relais plan` les applique à blanc.
 
-Un ticket bloqué (échec, plafond, question, stop, redémarrage) attend un humain : répondez dans la session ou posez `agent:reprendre`.
+Un ticket bloqué (échec, plafond, question, stop, bail expiré deux fois) attend un humain : répondez dans la session ou posez `agent:reprendre`.
 
 ### Autorisations : qui peut faire quoi
 
