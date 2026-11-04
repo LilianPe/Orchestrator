@@ -54,13 +54,13 @@ export function buildClaudeArgs(req: RunRequest): string[] {
   return args;
 }
 
-/** The engine's CLI (`docker exec`) runs on the host with the daemon's env, for its own use: a variable enters the container only by `-e NAME`. */
+/** The engine's CLI (`docker exec`) runs on the host with the daemon's env, for its own use: nothing of it enters the container but what `carried` names. */
 const DAEMON_ONLY = /^(LINEAR_|FACTORY_|RELAIS_)/; // RELAIS_ : transition, à retirer (ORC-167)
 
-function engineEnv(base: NodeJS.ProcessEnv, named: Record<string, string>): Record<string, string> {
+function engineEnv(base: NodeJS.ProcessEnv, carriers: Record<string, string>): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(base)) if (v !== undefined && !DAEMON_ONLY.test(k)) env[k] = v;
-  return { ...env, ...named };
+  return { ...env, ...carriers };
 }
 
 /**
@@ -104,9 +104,10 @@ export class ClaudeCodeRunner implements Runner {
         // req.env.PATH is the sandbox's: the host's `docker` is found on the daemon's, the command in
         // the container gets it through `env` (no secret in it, so on the command line is fine).
         const inner = sandboxPath !== undefined ? ['env', `PATH=${sandboxPath}`, ...argv] : argv;
-        // The host process (`docker exec`) gets the values in its env; the command only names them.
-        argv = this.o.sandboxes.spawnCommand(req.sandboxId, inner, { cwd: req.cwd, env: named });
-        env = engineEnv(process.env, named);
+        // The host process (`docker exec`) gets what the provider says, never the container's env as it is.
+        const spawned = this.o.sandboxes.spawnCommand(req.sandboxId, inner, { cwd: req.cwd, env: named });
+        argv = spawned.command;
+        env = engineEnv(process.env, spawned.env);
         cwd = process.cwd(); // req.cwd is a path in the sandbox
       } catch (e) {
         return failed(maskTranscriptLine(e instanceof Error ? e.message : String(e), secrets));

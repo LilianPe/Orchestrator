@@ -173,7 +173,7 @@ Le premier ticket cité est celui qui touche le module en premier ou le plus ; l
 | `src/adapters/sandbox/types.ts` | Port `SandboxProvider`, niveaux réseau | garder | ORC-225, ORC-189 |
 | `src/adapters/sandbox/fake.ts` | `FakeSandboxProvider` du harnais | garder | ORC-225 |
 | `src/adapters/sandbox/router.ts` | `SandboxRouter` : choisit le backend qui satisfait les exigences, refuse sinon | garder | ORC-204 |
-| `src/adapters/sandbox/docker-rootless.ts` | Backend conteneur `L3` (CLI `docker` ou `podman`), un conteneur par tentative, toujours en `--network none` ; avec le proxy de sortie, le socket du run et le certificat de l'autorité de sortie montés, un relais en PID 1, les variables `HTTP(S)_PROXY` et d'autorité ; un conteneur dont le socket n'est pas de ce processus est refait | garder | ORC-204, ORC-213 (fait : proxy de sortie), ORC-205 (`.git` monté) |
+| `src/adapters/sandbox/docker-rootless.ts` | Backend conteneur `L3` (CLI `docker` ou `podman`), un conteneur par tentative, toujours en `--network none` ; avec le proxy de sortie, le socket du run et le certificat de l'autorité de sortie montés, un relais en PID 1, les variables `HTTP(S)_PROXY` et d'autorité ; un conteneur dont le socket n'est pas de ce processus est refait ; l'environnement d'un `exec` transporté sous des noms neutres, jamais lu par le moteur (ORC-211) | garder | ORC-204, ORC-213 (fait : proxy de sortie), ORC-205 (`.git` monté) |
 | `src/adapters/publisher/types.ts` | Port `Publisher` : pousse le sha vérifié, ouvre ou met à jour la PR | garder | ORC-225 |
 | `src/adapters/publisher/fake.ts` | `FakePublisher` du harnais | garder | ORC-225 |
 | `src/adapters/checks/types.ts` | Port `CheckRunner` : vérifications hors de l'agent | garder | ORC-225, ORC-151 |

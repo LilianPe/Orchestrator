@@ -75,9 +75,11 @@ describe.skipIf(!enabled)(`no secret in the sandbox (${cli}, isolation n° 7)`, 
   const prefix = `iso-07-${Date.now()}`;
   /** The engine's calls, recorded on the way through. */
   const engineArgs: string[][] = [];
+  const engineEnvs: Record<string, string>[] = [];
   const { provider: recorded } = useSandboxes('07-argv', {
     exec: (cmd, args, opts) => {
       engineArgs.push(args);
+      if (opts?.env) engineEnvs.push(opts.env);
       return execCmd(cmd, args, opts);
     },
   });
@@ -177,6 +179,11 @@ describe.skipIf(!enabled)(`no secret in the sandbox (${cli}, isolation n° 7)`, 
       expect(all).not.toContain(`${runId}-setup`);
     });
 
+    it('gives the command its env under its own names, with no trace of the transport', async () => {
+      const r = await provider.exec((await create()).id, ['sh', '-c', 'printf "%s|%s|" "$HOME" "$MULTI"; env | grep -c FACTORY_SANDBOX_ENV; true'], { env: { HOME: '/tmp/moved', MULTI: 'a "b"\n$c' } });
+      expect(r.stdout.trim()).toBe('/tmp/moved|a "b"\n$c|0');
+    }, 240_000);
+
     it('could not write in the git dir: read-only for it', () => {
       expect(readFileSync(join(ws, 'git-write-exit.txt'), 'utf8').trim()).not.toBe('0');
       expect(existsSync(join(gitDir, 'config.leak'))).toBe(false);
@@ -212,10 +219,13 @@ describe.skipIf(!enabled)(`no secret in the sandbox (${cli}, isolation n° 7)`, 
       expect(images.trim()).toBe('');
     }, 240_000);
 
-    it('does not give the secret to the engine on its command line', async () => {
+    it('does not give the secret to the engine on its command line, nor the container\'s env to its process', async () => {
       await runSealedSetup(recorded, { runId: `${runId}-argv`, ticketId: 'ISO-7', workspacePath: workspace(), mounts, commands: ['true'], env: {}, secrets: { REPO_TOKEN: REPO_SECRET }, now: new Date() });
       expect(engineArgs.flat().join(' ')).not.toContain(REPO_SECRET);
-      expect(engineArgs.flat()).toContain('REPO_TOKEN');
+      expect(engineArgs.flat().join(' ')).toContain('REPO_TOKEN');
+      // The HOME of the setup moves the rootless engine's storage: the CLI never sees it.
+      expect(engineEnvs.length).toBeGreaterThan(0);
+      for (const env of engineEnvs) expect(Object.keys(env).filter((k) => !k.startsWith('FACTORY_SANDBOX_ENV_'))).toEqual([]);
     }, 240_000);
   });
 

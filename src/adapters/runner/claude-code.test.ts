@@ -158,7 +158,7 @@ describe('ClaudeCodeRunner in a sandbox (ORC-204)', () => {
     vi.stubEnv('PATH', process.env['PATH'] + '-daemon');
     const { sandboxes, id, spawnCommand } = await sandbox();
     // The fake runs on the host: it drops the `env PATH=...` prefix a real engine runs in the container.
-    spawnCommand.mockImplementation((_, argv) => argv.slice(2));
+    spawnCommand.mockImplementation((_, argv, o) => ({ command: argv.slice(2), env: o!.env! }));
     const { r, transcriptsDir } = runner(sandboxes);
     const pathFile = join(transcriptsDir, 'path.txt');
     const runEnv = { FAKE_CLAUDE_SCRIPT: fx('stream-success.jsonl'), FAKE_CLAUDE_PATH: pathFile, PATH: '/factory/bin:/usr/bin' };
@@ -168,6 +168,20 @@ describe('ClaudeCodeRunner in a sandbox (ORC-204)', () => {
     expect(argv).toEqual(['env', 'PATH=/factory/bin:/usr/bin', process.execPath, fx('fake-claude.mjs'), ...buildClaudeArgs(rq)]);
     expect(opts!.env).not.toHaveProperty('PATH');
     expect(readFileSync(pathFile, 'utf8')).toBe(process.env['PATH']);
+  });
+
+  it('spawns the engine CLI with what the provider says, never with the env of the container (ORC-211)', async () => {
+    vi.stubEnv('HOME', '/daemon-home');
+    const { sandboxes, id, spawnCommand } = await sandbox();
+    const { r, transcriptsDir } = runner(sandboxes);
+    const dump = join(transcriptsDir, 'cli-env.json').replaceAll('\\', '/');
+    spawnCommand.mockReturnValue({ command: [process.execPath, '-e', `require('fs').writeFileSync('${dump}', JSON.stringify(process.env))`], env: { FACTORY_SANDBOX_ENV_0: 'carried' } });
+    await r.start(req({ sandboxId: id, cwd: '/work' }, { HOME: '/tmp/setup-home', DOCKER_HOST: 'tcp://evil:1', XDG_RUNTIME_DIR: '/moved' })).done;
+    const env = JSON.parse(readFileSync(dump, 'utf8')) as Record<string, string>;
+    expect(env['FACTORY_SANDBOX_ENV_0']).toBe('carried');
+    expect(env['HOME']).toBe('/daemon-home');
+    expect(env).not.toHaveProperty('DOCKER_HOST');
+    expect(env).not.toHaveProperty('XDG_RUNTIME_DIR');
   });
 
   it('refuses a sandboxed run without a sandbox provider, spawning nothing', async () => {

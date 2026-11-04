@@ -834,8 +834,8 @@ describeSandboxContract(
   'a sandbox provider whose spawnCommand builds a command for a sandbox it does not have',
   sandboxesThat(
     class extends FakeSandboxProvider {
-      override spawnCommand(_id: string, argv: readonly string[]): string[] {
-        return [...argv];
+      override spawnCommand(_id: string, argv: readonly string[]) {
+        return { command: [...argv], env: {} };
       }
     },
   ),
