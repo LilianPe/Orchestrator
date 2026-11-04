@@ -107,6 +107,8 @@ export class Worker {
   private readonly retry: { attempts: number; baseMs: number };
   /** Rows that found a row or an effect of their ticket first: retried at the next poll, or by `unwait`. */
   private waited = new Map<string, string>();
+  /** Keys whose parked rows `unwait` released since their last `waiting`: see `waitAll`. */
+  private released = new Set<string>();
   private tasks = new Set<Promise<unknown>>();
   private pass: Promise<number> | undefined;
   private again = false;
@@ -279,7 +281,7 @@ export class Worker {
       if (!row) break;
       // `held`: only a backoff holds it, so the ticket's next row is tried (a stop passes them both).
       if ((await this.process(row, key)) === 'waiting') {
-        this.requeue(key);
+        this.waitAll(key, row);
         break;
       }
     }
@@ -289,16 +291,20 @@ export class Worker {
   }
 
   /**
-   * A row found its ticket held, and only it waits: the rows queued after it may be older, even the
-   * very row it found ahead (ORC-290). They go back to the next pass, which reads them oldest first.
-   * So a parked row has had its own answer, within its ticket's chain: whatever held it, if settled
-   * here, is settled after that answer, and `unwait` then finds it.
+   * `row` found its ticket held: the rows queued behind it wait with it for the next poll, or for
+   * `unwait`. Unless rows were released since the ticket's last `waiting`: they joined the queue
+   * behind younger ones, so what `row` found ahead may be one of them (ORC-290). Then nothing is
+   * parked, and the next pass reads the ticket's rows again, oldest first.
    */
-  private requeue(key: string): void {
-    const rows = this.queued.get(key) ?? [];
-    for (const row of rows) this.queuedIds.delete(row.id);
+  private waitAll(key: string, row: StoredEvent): void {
+    const reread = this.released.delete(key);
+    if (reread) this.waited.delete(row.id);
+    for (const r of this.queued.get(key) ?? []) {
+      this.queuedIds.delete(r.id);
+      if (!reread) this.waited.set(r.id, key);
+    }
     this.queued.delete(key);
-    if (rows.length > 0) this.kickInBackground();
+    if (reread && !this.stopped) this.kickInBackground();
   }
 
   private async process(row: StoredEvent, key: string): Promise<'done' | 'held' | 'waiting'> {
@@ -331,7 +337,7 @@ export class Worker {
       }
       this.passed(row, key);
       if (outcome.status === 'committed') {
-        this.unwait(key);
+        if (this.unwait(key)) this.kickInBackground();
         try {
           await this.d.committed(event, outcome);
         } catch (err) {
@@ -399,14 +405,15 @@ export class Worker {
    * A row of the ticket went through (a stop that cancelled a backoff, say), or an effect of the
    * ticket settled here: its rows that found it held are tried again now rather than at the next poll.
    */
-  private unwait(key: string): void {
+  private unwait(key: string): boolean {
     let any = false;
     for (const [id, k] of this.waited) {
       if (k !== key) continue;
       this.waited.delete(id);
       any = true;
     }
-    if (any) this.kickInBackground();
+    if (any) this.released.add(key);
+    return any;
   }
 
   /** No retry left for this row in this process: it waits for the next start. */
