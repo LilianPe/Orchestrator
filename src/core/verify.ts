@@ -3,6 +3,7 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:f
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
+import { systemEnv } from '../adapters/exec.js';
 import type { VerifyFailure } from './types.js';
 
 export interface VerifyResult {
@@ -16,7 +17,8 @@ export type Verifier = (cwd: string, commands: string[], timeoutMs?: number) => 
 
 function runOne(cwd: string, command: string, timeoutMs: number): Promise<{ exitCode: number | null; output: string }> {
   return new Promise((resolve) => {
-    const child = spawn('bash', ['-lc', command], { cwd, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+    // No credential of the daemon: these commands run what the agent wrote (ORC-211).
+    const child = spawn('bash', ['-lc', command], { cwd, env: systemEnv(process.env), stdio: ['ignore', 'pipe', 'pipe'], detached: true });
     let output = '';
     let done = false;
     const finish = (exitCode: number | null, extra = ''): void => {

@@ -17,6 +17,8 @@ export interface Workspace {
   branch?: string;
   /** True when `prepare` just created the worktree: the repository's `setup` is then the caller's to run (ORC-204). */
   fresh?: boolean;
+  /** True when a fresh worktree came on commits beyond the default branch, a previous agent's: its `setup` then runs code nobody reviewed, and gets no secret (ORC-211). */
+  ahead?: boolean;
 }
 
 /** What a step's commits changed, read on the factory's repository (ORC-123): the `red` check's view of the step. */

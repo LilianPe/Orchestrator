@@ -3,6 +3,7 @@ import { createWriteStream, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { addTokens, NO_TOKENS, type RunOutcome, type TokenUsage } from '../../core/types.js';
+import { systemEnv } from '../exec.js';
 import { Channel } from './channel.js';
 import { parseStreamLine, parseUsage } from './stream-parser.js';
 import { maskTranscriptLine, transcriptSecrets } from './transcript.js';
@@ -63,16 +64,16 @@ function engineEnv(base: NodeJS.ProcessEnv, named: Record<string, string>): Reco
 }
 
 /**
- * What a run on the host gets of the daemon's env (ORC-211), for `claude`, `git` and `gh` to work: the
- * system, the commit identity, its login. Everything else stays in the daemon.
+ * What a run on the host gets of the daemon's env beyond the system (ORC-211), for `claude`, `git` and `gh`
+ * to work. Everything else stays in the daemon.
  * Transition: `GH_TOKEN` until the agents stop pushing (ORC-125), `ANTHROPIC_API_KEY` until the host runs go (ORC-179).
  */
-const HOST_ENV = /^(PATH|HOME|USER|LOGNAME|SHELL|TERM|LANG|LANGUAGE|LC_\w+|TZ|TMPDIR|TEMP|TMP|XDG_\w+|SSH_AUTH_SOCK|HTTPS?_PROXY|NO_PROXY|https?_proxy|no_proxy|NODE_EXTRA_CA_CERTS|GIT_(AUTHOR|COMMITTER)_(NAME|EMAIL)|CLAUDE_CONFIG_DIR|CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_API_KEY|GH_TOKEN|SystemRoot|SYSTEMROOT|WINDIR|windir|ComSpec|COMSPEC|PATHEXT|USERPROFILE|APPDATA|LOCALAPPDATA|ProgramData|ProgramFiles|PROGRAMFILES)$/;
+const HOST_LOGIN = ['CLAUDE_CONFIG_DIR', CLAUDE_TOKEN, 'ANTHROPIC_API_KEY', 'GH_TOKEN', 'GH_HOST'];
 
 /** The env of a run on the host; `token`, the chosen account, replaces any other login. */
 export function childEnv(base: NodeJS.ProcessEnv, run: Record<string, string>, token?: string): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const [k, v] of Object.entries(base)) if (v !== undefined && HOST_ENV.test(k)) env[k] = v;
+  const env = systemEnv(base);
+  for (const k of HOST_LOGIN) if (base[k] !== undefined) env[k] = base[k];
   if (token) {
     delete env['ANTHROPIC_API_KEY'];
     env[CLAUDE_TOKEN] = token;

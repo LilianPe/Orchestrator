@@ -26,6 +26,12 @@ export function setupEnv(now: Date): Record<string, string> {
     npm_config_minimum_release_age: String(RELEASE_AGE_DAYS * 24 * 60),
     npm_config_before: cutoff,
     UV_EXCLUDE_NEWER: cutoff,
+    // An agent before this setup could write in the repository's git dir (ORC-205): no hook of its runs with the secrets.
+    GIT_CONFIG_COUNT: '2',
+    GIT_CONFIG_KEY_0: 'core.hooksPath',
+    GIT_CONFIG_VALUE_0: '/dev/null',
+    GIT_CONFIG_KEY_1: 'core.fsmonitor',
+    GIT_CONFIG_VALUE_1: 'false',
   };
 }
 
@@ -34,9 +40,23 @@ export const YARN1_NO_SCRIPTS = ['sh', '-c', `mkdir -p "$HOME" && printf 'ignore
 
 const CHUNK = 1024 * 1024;
 
+/**
+ * Base64 of the secret inside a longer value (`_auth`, a Docker config: `base64(user:token)`): at each of
+ * the three alignments, without the characters at its edges, which its neighbours change. In both alphabets.
+ */
+function embeddedBase64(secret: string): string[] {
+  return [0, 1, 2].flatMap((before) => {
+    const b64 = Buffer.concat([Buffer.alloc(before), Buffer.from(secret)]).toString('base64');
+    const left = [0, 2, 3][before]!;
+    const over = (before + Buffer.byteLength(secret)) % 3;
+    const core = b64.slice(left, over ? over - 3 - 1 : undefined);
+    return [core, core.replaceAll('+', '-').replaceAll('/', '_')];
+  });
+}
+
 /** The secret as written, and as the tools that store one write it: base64, in a URL, in JSON. */
 function spellings(secret: string): Buffer[] {
-  const forms = [secret, Buffer.from(secret).toString('base64'), encodeURIComponent(secret), JSON.stringify(secret).slice(1, -1)];
+  const forms = [secret, ...embeddedBase64(secret), encodeURIComponent(secret), JSON.stringify(secret).slice(1, -1)];
   return [...new Set(forms)].map((f) => Buffer.from(f));
 }
 

@@ -51,14 +51,17 @@ export class GitWorkspaces implements WorkspaceManager {
     const branch = branchName(req.ticketId, req.title);
     const has = async (ref: string) =>
       (await this.exec('git', ['-C', req.repoPath, 'rev-parse', '--verify', '--quiet', ref])).code === 0;
+    const trunk = `origin/${await this.trunk(req.repoPath)}`;
     if (await has(`refs/heads/${branch}`)) {
       await this.git(req.repoPath, 'worktree', 'add', path, branch);
     } else if (await has(`refs/remotes/origin/${branch}`)) {
       await this.git(req.repoPath, 'worktree', 'add', path, '-b', branch, `origin/${branch}`);
     } else {
-      await this.git(req.repoPath, 'worktree', 'add', '--no-track', '-b', branch, path, `origin/${await this.trunk(req.repoPath)}`);
+      await this.git(req.repoPath, 'worktree', 'add', '--no-track', '-b', branch, path, trunk);
+      return { path, port, branch, fresh: true };
     }
-    return { path, port, branch, fresh: true };
+    const ahead = (await this.git(path, 'rev-list', '--count', `${trunk}..HEAD`)).trim() !== '0';
+    return { path, port, branch, fresh: true, ...(ahead ? { ahead } : {}) };
   }
 
   private async trunkWorkspace(req: WorkspaceRequest): Promise<Workspace> {

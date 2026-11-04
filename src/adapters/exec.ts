@@ -19,6 +19,18 @@ export const execCmd: Exec = (cmd, args, opts = {}) =>
     child.on('close', (code) => resolve({ stdout, stderr, code: code ?? 1 }));
   });
 
+/**
+ * What a process on the host needs of the daemon's env to work, and no credential: the system, the commit
+ * identity, the proxy and the trust of the machine. For what runs code the daemon did not write (ORC-211).
+ */
+const SYSTEM_ENV = /^(PATH|HOME|USER|LOGNAME|SHELL|TERM|LANG|LANGUAGE|LC_\w+|TZ|TMPDIR|TEMP|TMP|XDG_\w+|SSH_AUTH_SOCK|GIT_SSH_COMMAND|HTTPS?_PROXY|NO_PROXY|https?_proxy|no_proxy|NODE_EXTRA_CA_CERTS|SSL_CERT_FILE|GIT_(AUTHOR|COMMITTER)_(NAME|EMAIL)|SystemRoot|SYSTEMROOT|WINDIR|windir|ComSpec|COMSPEC|PATHEXT|USERPROFILE|APPDATA|LOCALAPPDATA|ProgramData|ProgramFiles|PROGRAMFILES)$/;
+
+export function systemEnv(base: NodeJS.ProcessEnv): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [k, v] of Object.entries(base)) if (v !== undefined && SYSTEM_ENV.test(k)) env[k] = v;
+  return env;
+}
+
 export function execFailure(cmd: string, args: string[], r: ExecResult): Error {
   return new Error(`${cmd} ${args.join(' ')}: ${r.stderr.trim() || r.stdout.trim() || `exit ${r.code}`}`);
 }

@@ -31,6 +31,12 @@ describe('sealSecrets', () => {
     expect(readFileSync(join(root, 'src/kept.ts'), 'utf8')).toContain('a = 1');
   });
 
+  it.each(['', 'u:', 'us:', 'user:', 'a-longer-user:'])('finds the secret inside a base64 credential, after %j', async (prefix) => {
+    const value = Buffer.from(`${prefix}${SECRET}`);
+    const root = tree({ std: value.toString('base64'), url: value.toString('base64url'), suffixed: Buffer.from(`${prefix}${SECRET}:x`).toString('base64'), other: Buffer.from(`${prefix}not-the-value`).toString('base64') });
+    expect((await sealSecrets([root], [SECRET])).map((p) => p.slice(root.length + 1)).sort()).toEqual(['std', 'suffixed', 'url']);
+  });
+
   it('finds a secret across two read chunks of a large file', async () => {
     const before = Buffer.alloc(1024 * 1024 - 5, 'x');
     const root = tree({ 'big.bin': Buffer.concat([before, Buffer.from(SECRET), Buffer.alloc(100, 'y')]) });
@@ -76,6 +82,10 @@ describe('setupEnv', () => {
       PIP_ONLY_BINARY: ':all:',
       UV_NO_BUILD: '1',
     });
+  });
+
+  it('runs no hook of the git dir an earlier agent could write', () => {
+    expect(setupEnv(NOW)).toMatchObject({ GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'core.hooksPath', GIT_CONFIG_VALUE_0: '/dev/null', GIT_CONFIG_KEY_1: 'core.fsmonitor', GIT_CONFIG_VALUE_1: 'false' });
   });
 
   it('never sets YARN_IGNORE_SCRIPTS: Yarn 4 refuses to run under it', () => {

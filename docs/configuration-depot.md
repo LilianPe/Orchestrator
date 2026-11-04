@@ -28,7 +28,7 @@ network: { level: limited, allow: ["docs.exemple.com"] }   # none | limited (dé
 | `extends` | texte | `factory/default@1.0` | Le préréglage ; seul `factory/default@1.0` existe au MVP. |
 | `setup` | commande | aucune | Préparation du dépôt (installation, migrations). |
 | `commands` | `nom: commande` | `{}` | Les contrôles du dépôt (`lint`, `typecheck`, `test`…). |
-| `env` | liste de noms | `[]` | Variables que le runner reçoit, `setup` et agent. Voir [Variables et secrets](#variables-et-secrets). |
+| `env` | liste de noms | `[]` | Variables que le runner reçoit : `setup`, agent et contrôle du rouge. Voir [Variables et secrets](#variables-et-secrets). |
 | `setup_secrets` | liste de noms | `[]` | Secrets que le `setup` seul reçoit, scellés avant que l'agent démarre. |
 | `services` | liste | `[]` | Services à démarrer à côté du runner (`postgres`…). |
 | `sensitive_paths` | liste de motifs | `[]` | Chemins dont la modification marque le run (relecture renforcée). |
@@ -58,7 +58,11 @@ Il s'exécute sous ces réglages, posés par l'environnement :
 
 Une commande du dépôt peut passer outre (`--ignore-scripts=false`) : ces réglages protègent d'une dépendance, pas du dépôt lui-même.
 
-Après le `setup`, avant l'agent, `sealSecrets` supprime tout fichier du worktree qui contient une valeur de `setup_secrets`, telle quelle ou encodée en base64, dans une URL ou en JSON. Un secret haché, ou encodé autrement, n'est pas reconnu : ne le laissez pas dans le worktree sous une autre forme.
+Conséquence du conteneur à part : ce qu'un outil range dans `$HOME` disparaît. Un projet Yarn PnP avec son cache global, un virtualenv Poetry sous `~/.cache`, des navigateurs Playwright doivent s'installer dans le worktree, sinon l'agent ne les retrouve pas.
+
+Après le `setup`, avant l'agent, `sealSecrets` supprime tout fichier du worktree qui contient une valeur de `setup_secrets` : telle quelle, en base64, seule ou dans une valeur plus longue (`user:jeton`), dans une URL ou en JSON. Un secret haché, chiffré, ou en base64 coupé en lignes n'est pas reconnu : ne le laissez pas dans le worktree sous une autre forme.
+
+Le `setup` ne reçoit **aucun secret** quand sa branche a des commits au-delà de la branche par défaut (un ticket repris après la suppression de son worktree) : il exécuterait du code qu'aucun humain n'a relu. Un `setup` qui a besoin d'un secret échoue alors, et le ticket se bloque.
 
 ## Ce qu'une configuration ne peut pas faire
 

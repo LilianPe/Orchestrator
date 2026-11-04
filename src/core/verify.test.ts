@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { runVerify } from './verify.js';
 
 function repo(): string {
@@ -24,6 +24,16 @@ describe('runVerify', () => {
       { command: 'echo boom >&2; exit 3', exitCode: 3, output: 'boom\n' },
       { command: 'exit 1', exitCode: 1, output: '' },
     ]);
+  });
+
+  it('gives its commands no credential of the daemon: they run what the agent wrote (ORC-211)', async () => {
+    vi.stubEnv('ORG_REGISTRY_TOKEN', 'repo-secret');
+    vi.stubEnv('CLAUDE_CODE_OAUTH_TOKEN', 'claude-token');
+    vi.stubEnv('GH_TOKEN', 'gh-token');
+    vi.stubEnv('LANG', 'C');
+    const res = await runVerify(process.cwd(), ['echo "[$ORG_REGISTRY_TOKEN$CLAUDE_CODE_OAUTH_TOKEN$GH_TOKEN|$LANG]"; exit 1']);
+    vi.unstubAllEnvs();
+    expect(res.failures[0]!.output).toContain('[|C]');
   });
 
   it('times out', async () => {

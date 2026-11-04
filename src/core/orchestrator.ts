@@ -66,7 +66,6 @@ import type { Verifier } from './verify.js';
 import { PRODUCT_NAME } from '../product.js';
 import { checkRed, type RedDeps, type RedResult } from '../checks/red.js';
 import { parseStatus } from '../adapters/workspace/git-workspaces.js';
-import type { ExecResult } from '../adapters/exec.js';
 
 /** Meta key of the head a ticket's tests step started on (ORC-123). */
 const redBaseKey = (projectId: string, ticketId: string): string => `red-base:${projectId}:${ticketId}`;
@@ -503,7 +502,10 @@ export class Orchestrator {
       if (!res.ok) throw new Error(`Le setup du worktree a échoué : ${res.failures[0]!.command}`);
       return;
     }
-    const sealed = Object.keys(vars.setupSecrets).length > 0;
+    // On commits a previous agent wrote, `setup` runs code nobody reviewed: no secret for it. A setup that needs one fails.
+    const secrets = ws.ahead ? {} : vars.setupSecrets;
+    if (ws.ahead && Object.keys(vars.setupSecrets).length) this.log('warn', `setup of ${ticketId}: its branch has commits beyond the default branch, the repository's secrets are withheld`);
+    const sealed = Object.keys(secrets).length > 0;
     if (sealed) await this.d.store.setMeta(unsealedKey(ws.path), '1');
     const gitDir = await this.d.workspaces.gitCommonDir(ws.path);
     const { purged } = await runSealedSetup(sandboxes, {
@@ -513,15 +515,20 @@ export class Orchestrator {
       mounts: [{ host: gitDir, target: gitDir, readOnly: true }],
       commands,
       env: vars.env,
-      secrets: vars.setupSecrets,
+      secrets,
       now: new Date(this.d.clock.now()),
     });
     if (purged.length) this.log('warn', `setup of ${ticketId}: secret found and purged in ${purged.join(', ')}`);
     if (sealed) await this.d.store.setMeta(unsealedKey(ws.path), '');
   }
 
-  private execCapped(sandboxId: string, command: string): Promise<ExecResult> {
-    return this.d.sandboxes!.exec(sandboxId, cappedCommand(command));
+  /** What the runner gets of the repository (ORC-211): none when it cannot be read, the launch goes on. */
+  private async repoVariablesOf(project: ProjectRuntime): Promise<RepoVariables> {
+    if (!this.d.repoVariables) return NO_REPO_VARIABLES;
+    return this.d.repoVariables(project).catch((err: Error) => {
+      this.log('warn', `${project.id}: repository variables not read: ${err.message}`);
+      return NO_REPO_VARIABLES;
+    });
   }
 
   /**
@@ -549,11 +556,13 @@ export class Orchestrator {
       } else {
         // Not the ticket session: an empty per-run `~/.claude`, as any run that does not resume it.
         const box = (sandbox = await this.openSandbox(sandboxes, project, run.ticketId, { path: run.cwd }, redRunId, false, 'none'));
+        // The tests must fail on the missing behaviour, not on a variable the repository declares (ORC-211).
+        const { env } = await this.repoVariablesOf(project);
         const status = await sandboxes.exec(box.id, ['git', 'status', '--porcelain', '-z', '--untracked-files=all']);
         if (status.code !== 0) throw new Error(`git status : ${status.stderr.trim()}`);
         uncommitted = parseStatus(status.stdout);
         runTests = async (cmd) => {
-          const r = await this.execCapped(box.id, cmd);
+          const r = await sandboxes.exec(box.id, cappedCommand(cmd), { env });
           return { exitCode: r.code === 124 ? null : r.code, output: r.stdout + r.stderr };
         };
       }
@@ -1288,16 +1297,15 @@ export class Orchestrator {
     // Read while the workspace is prepared; a pack it cannot read gives null fingerprints (ORC-226).
     const pack = packFingerprints(this.d.packDir, (err) => this.log('warn', `attempt labels: pack not fingerprinted: ${err.message}`));
     const runId = this.newId();
-    const ws = await workspaces.prepare({
-      projectId: project.id,
-      repoPath: project.repoPath,
-      ticketId,
-      title: issue.title,
-      kind: job.workspace,
-      slot,
-      portBase: wf.workspace.portBase,
-      runId,
-    });
+    const asked = { projectId: project.id, repoPath: project.repoPath, ticketId, title: issue.title, kind: job.workspace, slot, portBase: wf.workspace.portBase, runId };
+    let ws = await workspaces.prepare(asked);
+    // Left by a daemon killed before the seal (ORC-211): this worktree may hold a secret, perhaps one the
+    // configuration no longer names, so sealing it again proves nothing. It is made anew; no agent has worked in it.
+    if (await store.getMeta(unsealedKey(ws.path))) {
+      await workspaces.cleanup(project.id, project.repoPath, ticketId);
+      await store.setMeta(unsealedKey(ws.path), '');
+      ws = await workspaces.prepare(asked);
+    }
     // A fresh worktree is not set up until its setup succeeds: a launch ending before removes it, or
     // the next prepare would find it there (not fresh) and setup would never run.
     let setUp = !(ws.fresh && wf.workspace.setup.length);
@@ -1344,12 +1352,7 @@ export class Orchestrator {
       const claudeSessionId = resume ? t.claudeSessionId! : this.newId();
       const sessionRole = roleOf(job, ticketSession);
 
-      const vars = (await this.d.repoVariables?.(project).catch((err: Error) => {
-        this.log('warn', `${project.id}: repository variables not read: ${err.message}`);
-        return undefined;
-      })) ?? NO_REPO_VARIABLES;
-      // Left by a daemon killed before the seal: this worktree may hold a secret, and only a seal lifts it.
-      if (wf.workspace.setup.length && (await store.getMeta(unsealedKey(ws.path)))) setUp = false;
+      const vars = await this.repoVariablesOf(project);
       if (!setUp) await this.runSetup(project, ticketId, ws, runId, vars);
       setUp = true;
       // Opened after the cheap exits above and after the setup, whose container is gone by now (ORC-211).

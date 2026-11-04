@@ -2,14 +2,13 @@ import { existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_REQUIREMENTS, PACK_TARGET, REFUSALS_TARGET, SANDBOX_HOME, WORKSPACE_TARGET } from '../../src/adapters/sandbox/types.js';
-import { YARN1_NO_SCRIPTS } from '../../src/core/sealed-setup.js';
 import { createHarness, packDir } from '../helpers/harness.js';
 
 const RUN_FLAGS = { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1', DISABLE_TELEMETRY: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' };
 const SETUP = 'version: 1\nworkspace:\n  setup: ["npm ci"]\n  ports: { base: 4200 }\n';
 
 /** The repository's own setup commands, without the rc file of Yarn 1 that comes before them. */
-const setups = (h: ReturnType<typeof createHarness>) => h.sandboxes.execs.filter((e) => e.argv !== YARN1_NO_SCRIPTS && e.argv[0] === 'timeout');
+const setups = (h: ReturnType<typeof createHarness>) => h.sandboxes.execs.filter((e) => e.argv[0] === 'timeout');
 
 function delegate(h: ReturnType<typeof createHarness>) {
   h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
@@ -188,20 +187,37 @@ describe('a disposable sandbox per attempt', () => {
       expect(await h.ticket()).toMatchObject({ blocked: true });
     });
 
-    it('a worktree left unsealed by a crash is not handed to an agent: its setup runs and seals again', async () => {
-      const h = createHarness({ sandboxed: true, projectYaml: SETUP, repoVariables });
+    it.each([
+      ['the secrets are still declared', VARS],
+      // Sealing again could not find a value it no longer knows: only a new worktree is sure.
+      ['the secrets are gone from the configuration', { env: {}, setupSecrets: {}, missing: [] }],
+    ])('a worktree left unsealed by a crash is removed and made anew, when %s', async (_, after) => {
+      let declared = VARS as typeof after;
+      const h = createHarness({ sandboxed: true, projectYaml: SETUP, repoVariables: async () => declared });
       await delegate(h);
       expect(setups(h)).toHaveLength(1);
+      expect(h.workspaces.cleaned).toEqual([]);
       // The mark a daemon killed between the setup's start and its seal leaves behind.
+      declared = after;
       await h.store.setMeta('setup-unsealed:/tmp/factory-fake/p/REL-1', '1');
       await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'reprends', author: 'L' });
       await h.advance(600_000);
+      expect(h.workspaces.cleaned).toEqual(['REL-1']);
       expect(setups(h)).toHaveLength(2);
       expect(await h.store.getMeta('setup-unsealed:/tmp/factory-fake/p/REL-1')).toBe('');
       // Sealed: the next run does not set up again.
       await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'encore', author: 'L' });
       await h.advance(600_000);
       expect(setups(h)).toHaveLength(2);
+    });
+
+    it('withholds the secrets from a setup on commits a previous agent wrote, and says so', async () => {
+      const h = createHarness({ sandboxed: true, projectYaml: SETUP, repoVariables });
+      h.workspaces.ahead.add('REL-1');
+      await delegate(h);
+      expect(setups(h)[0]!.opts!.env).toMatchObject({ NODE_ENV: 'test' });
+      expect(setups(h)[0]!.opts!.env).not.toHaveProperty('REGISTRY_TOKEN');
+      expect(h.logs.map((l) => l.message).join()).toContain('withheld');
     });
 
     it('leaves no mark behind a setup that has no secret', async () => {

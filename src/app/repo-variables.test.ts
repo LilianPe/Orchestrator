@@ -36,6 +36,18 @@ describe('makeRepoVariables (ORC-211)', () => {
     expect(vars.setupSecrets).toEqual({ REGISTRY_TOKEN: 'registry-secret' });
   });
 
+  it('gives nothing to a remote of the same path on another host', async () => {
+    const { exec, calls } = git({ origin: 'https://gitlab.exemple.com/org/app.git', config: CONFIG });
+    expect(await makeRepoVariables({ yml: YML, exec, log: () => {} })(PROJECT)).toEqual(NO_REPO_VARIABLES);
+    expect(calls.some((c) => c.includes('show'))).toBe(false);
+  });
+
+  it('gives nothing to a project of another team, whatever its origin says', async () => {
+    const { exec, calls } = git({ head: 'origin/main', config: CONFIG });
+    expect(await makeRepoVariables({ yml: YML, exec, log: () => {} })({ ...PROJECT, teamKey: 'OTHER' })).toEqual(NO_REPO_VARIABLES);
+    expect(calls).toEqual([]);
+  });
+
   it('gives nothing to a repository with no entry in factory.yml, and reads nothing of it', async () => {
     const { exec, calls } = git({ origin: 'https://github.com/org/other.git', config: CONFIG });
     expect(await makeRepoVariables({ yml: YML, exec, log: () => {} })(PROJECT)).toEqual(NO_REPO_VARIABLES);
