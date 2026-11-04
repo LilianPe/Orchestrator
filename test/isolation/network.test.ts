@@ -69,11 +69,12 @@ describe.skipIf(!enabled)(`egress proxy (${cli})`, () => {
     agentServer = createServer((req, res) => res.end(`agent ${req.method} ${req.url}`));
     await new Promise<void>((ok) => agentServer!.listen(0, '127.0.0.1', ok));
     const to = { host: '127.0.0.1', port: (agentServer.address() as AddressInfo).port };
-    const proxy = new EgressProxy({ dir: join(bundleDir, 'network'), caDir: join(bundleDir, 'ca'), agentApi: { host: 'host.docker.internal', port: 4101, to } });
+    const make = () => new EgressProxy({ dir: join(bundleDir, 'network'), caDir: join(bundleDir, 'ca'), agentApi: { host: 'host.docker.internal', port: 4101, to } });
+    const proxy = make();
     impl = proxy;
     readJournal = (runId) => (existsSync(proxy.journalPath(runId)) ? readFileSync(proxy.journalPath(runId), 'utf8') : '');
     rebind = async () => {
-      const again = new EgressProxy({ dir: join(bundleDir, 'network'), caDir: join(bundleDir, 'ca'), agentApi: { host: 'host.docker.internal', port: 4101, to } });
+      const again = make();
       for (const level of levels) await again.open(runIds[level], { level, allow: [] });
     };
   }
@@ -91,7 +92,8 @@ describe.skipIf(!enabled)(`egress proxy (${cli})`, () => {
           import { EgressProxy } from './src/network/proxy.ts';
           const [dir, uid, gid, ...runs] = process.argv.slice(2);
           createServer((req, res) => res.end('agent ' + req.method + ' ' + req.url)).listen(4101, '127.0.0.1');
-          const proxy = new EgressProxy({ dir, caDir: dir + '/ca', agentApi: { host: 'host.docker.internal', port: 4101, to: { host: '127.0.0.1', port: 4101 } } });
+          const make = () => new EgressProxy({ dir, caDir: dir + '/ca', agentApi: { host: 'host.docker.internal', port: 4101, to: { host: '127.0.0.1', port: 4101 } } });
+          const proxy = make();
           (async () => {
             const names = {};
             for (const r of runs) {
@@ -104,7 +106,7 @@ describe.skipIf(!enabled)(`egress proxy (${cli})`, () => {
             console.log(JSON.stringify(names));
           })();
           process.on('SIGUSR1', async () => {
-            const again = new EgressProxy({ dir, caDir: dir + '/ca', agentApi: { host: 'host.docker.internal', port: 4101, to: { host: '127.0.0.1', port: 4101 } } });
+            const again = make();
             for (const r of runs) {
               const [id, level] = r.split('=');
               const path = await again.open(id, { level, allow: [] });

@@ -234,28 +234,6 @@ function lostEvent(run: Pick<RunRecord, 'id' | 'projectId' | 'ticketId' | 'job'>
   return { ...TRUSTED, id: `attempt:${run.id}:lost`, type: 'run.lost', at, projectId: run.projectId, ticketId: run.ticketId, payload: { runId: run.id, job: run.job, cause } };
 }
 
-/** The result of an attempt, whoever sends it: its pump, or recover() when the process died between the two (ORC-220). */
-function finishedEvent(run: RunRecord, result: RunResult, output: AgentOutput | undefined, unreadable: boolean, at: number): FactoryEvent<'run.finished'> {
-  return {
-    ...TRUSTED,
-    id: `attempt:${run.id}:finished`,
-    type: 'run.finished',
-    at,
-    projectId: run.projectId,
-    ticketId: run.ticketId,
-    payload: {
-      runId: run.id,
-      job: run.job,
-      outcome: result.outcome,
-      costUsd: result.costUsd,
-      turns: result.turns,
-      lastText: result.lastText,
-      attempt: attemptOutcome({ outcome: result.outcome, infraError: result.infra || unreadable }, output),
-      ...(output ? { output } : {}),
-    },
-  };
-}
-
 /** Whether Claude Code holds the session in this config dir: `--resume` fails without it, `--session-id` with it (ORC-128, calls 9 and 10). */
 function sessionSaved(configDir: string, sessionId: string): boolean {
   const projects = join(configDir, 'projects');
@@ -270,12 +248,6 @@ export class Orchestrator {
   /** Runs whose event stream is still open (the runner is working, nothing for the factory to do): drained() does not wait for them. */
   private liveRuns = new Set<string>();
   private handles = new Map<string, RunHandle>();
-  /** Attempts written and not yet handed to the runner: the heartbeat counts them alive (a long `beforeRun`). */
-  private launching = new Set<string>();
-  /** Attempts whose lease expired under this process (ORC-220): their slot went to what replaces them. */
-  private replaced = new Set<string>();
-  /** Checks running in this process: a check taken up again (a replayed effect, `verify.lost`) does not run beside it. */
-  private checking = new Set<string>();
   private beating = false;
   private stopping = false;
   private newId: () => string;
@@ -427,15 +399,18 @@ export class Orchestrator {
    * A run or check whose result is in the inbox, written before the crash and not yet processed, is
    * left alone: the inbox replay settles it with its real result. Everything goes through the inbox,
    * written before the status it replaces, so a kill at any point leaves it to the next recover(), and
-   * the id of the event keeps it once. Nothing is woken here: the worker starts after, on the sandboxes
+   * the event is written once (by its id; a check, which can be cut again under one run, by the scan of the
+   * inbox). Nothing is woken here: the worker starts after, on the sandboxes
    * of the dead attempts destroyed.
    */
   async recover(): Promise<void> {
     const { store, clock } = this.d;
     const cut = await store.runsByStatus('running');
+    const tickets = await store.listTickets();
+    const ticketOf = (run: RunRecord) => tickets.find((x) => x.projectId === run.projectId && x.ticketId === run.ticketId);
     // By what was taken up, not by the handles: an attempt found ended is gone from them as soon as it is attached.
     const attached = new Set<string>();
-    for (const run of cut) if (await this.attach(run)) attached.add(run.id);
+    for (const run of cut) if (await this.attach(run, ticketOf(run))) attached.add(run.id);
     await this.destroyDeadSandboxes();
     const settled = new Set<string>();
     const checked = new Set<string>();
@@ -443,13 +418,11 @@ export class Orchestrator {
       if (row.type === 'run.finished' || row.type === 'run.lost') settled.add((row.payload as EventPayloads['run.lost']).runId);
       if (row.type === 'verify.passed' || row.type === 'verify.failed' || row.type === 'verify.lost') checked.add((row.payload as EventPayloads['verify.lost']).runId);
     }
-    const tickets = await store.listTickets();
     const interrupted = await store.runsByStatus('interrupted');
     for (const run of [...cut, ...interrupted]) {
       if (attached.has(run.id)) continue;
-      const t = tickets.find((x) => x.projectId === run.projectId && x.ticketId === run.ticketId);
       // A dev attempt its ticket no longer holds (stopped, replaced) leaves nothing to start again.
-      const lost = run.queue === 'dev' ? t?.activeRunId === run.id : run.linearSessionId !== undefined;
+      const lost = run.queue === 'dev' ? ticketOf(run)?.activeRunId === run.id : run.linearSessionId !== undefined;
       if (lost && !settled.has(run.id)) {
         await store.appendInbox(lostEvent(run, 'restart', clock.now()));
         settled.add(run.id);
@@ -466,14 +439,13 @@ export class Orchestrator {
    * Its ticket still holds it, its sandbox still runs and its runner can take it up: the attempt goes on
    * under this process. A dev attempt the ticket let go of is not taken up, alive or not: another may have its place.
    */
-  private async attach(run: RunRecord): Promise<boolean> {
+  private async attach(run: RunRecord, ticket: TicketState | undefined): Promise<boolean> {
     const { sandboxes, runner, clock, store, scheduler } = this.d;
-    if (this.handles.has(run.id)) return true;
+    if (run.queue === 'dev' && ticket?.activeRunId !== run.id) return false;
     try {
-      const project = await this.runtimeFor(run.projectId, run.ticketId);
+      const project = await this.runtimeFor(run.projectId, run.ticketId, ticket ?? null);
       const job = project?.workflow.jobs[run.job];
       if (!project || !job || !runner.attach) return false;
-      if (run.queue === 'dev' && (await store.getTicket(run.projectId, run.ticketId))?.activeRunId !== run.id) return false;
       const sandbox = sandboxes && (await sandboxes.reattach(run.id));
       if (sandboxes && !sandbox) return false;
       const handle = runner.attach({ runId: run.id, limits: job.limits, elapsedMs: clock.now() - run.startedAt, env: this.d.agentEnv(run) });
@@ -483,7 +455,7 @@ export class Orchestrator {
       await store.renewRun(run.id, clock.now() + RUN_LEASE_MS);
       this.handles.set(run.id, handle);
       this.liveRuns.add(run.id);
-      this.track(this.pump(project, run, handle, sandbox?.id), run.id);
+      this.track(this.pump(run, handle, sandbox?.id), run.id);
       this.log('info', `run ${run.id} of ${run.ticketId} still alive: reattached`);
       return true;
     } catch (err) {
@@ -497,14 +469,7 @@ export class Orchestrator {
     const { store, clock } = this.d;
     const run = await store.getRun(runId);
     if (run) {
-      let output: AgentOutput | undefined;
-      let unreadable = false;
-      try {
-        output = await storedOutput(store, runId);
-      } catch {
-        unreadable = true;
-      }
-      await store.appendInbox(finishedEvent(run, { outcome: run.status as RunOutcome, costUsd: run.costUsd, turns: run.turns, lastText: run.lastText }, output, unreadable, clock.now()));
+      await store.appendInbox(await this.finishedFor(run, { outcome: run.status as RunOutcome, costUsd: run.costUsd, turns: run.turns, lastText: run.lastText }));
       return;
     }
     // Nothing else will take it up (a pending job started by `settle` has no mark): `run.lost`, on the job the ticket holds.
@@ -514,9 +479,14 @@ export class Orchestrator {
     else await store.appendInbox(lostEvent({ id: runId, projectId: t.projectId, ticketId: t.ticketId, job: t.activeJob }, 'restart', clock.now()));
   }
 
-  /** The check of an attempt cut with the process that ran it: run again, unless nothing says what it checked. */
+  /**
+   * The check of an attempt cut with the process that ran it: run again, unless its effect is still
+   * to come (the outbox replays it), or nothing says what it checked.
+   */
   private async recoverCheck(t: TicketState, runId: string): Promise<void> {
     const { store, clock } = this.d;
+    const rows = await store.listEffects(t.projectId, t.ticketId);
+    if (rows.some((r) => r.effect.kind === 'run_verify' && r.effect.runId === runId && (r.status === 'pending' || r.status === 'running'))) return;
     const run = await store.getRun(runId);
     if (!run) {
       this.log('warn', `verification of ${t.ticketId} names a run never written (${runId}): dropped`);
@@ -547,22 +517,19 @@ export class Orchestrator {
     this.beating = true;
     try {
       const { store, clock } = this.d;
-      for (const [runId, handle] of this.handles) {
-        if (await this.alive(runId, handle)) await store.renewRun(runId, clock.now() + RUN_LEASE_MS);
+      for (const runId of this.handles.keys()) {
+        if (await this.alive(runId)) await store.renewRun(runId, clock.now() + RUN_LEASE_MS);
       }
-      for (const runId of this.launching) await store.renewRun(runId, clock.now() + RUN_LEASE_MS);
       for (const run of await store.runsByStatus('running')) {
-        if (run.leaseUntil === undefined || run.leaseUntil >= clock.now() || this.replaced.has(run.id)) continue;
-        await this.leaseExpired(run);
+        if (run.leaseUntil !== undefined && run.leaseUntil < clock.now()) await this.leaseExpired(run);
       }
     } finally {
       this.beating = false;
     }
   }
 
-  /** The process behind the attempt, and its sandbox: an engine that does not answer counts as neither. */
-  private async alive(runId: string, handle: RunHandle): Promise<boolean> {
-    if (handle.alive?.() === false) return false;
+  /** Its sandbox still runs: an engine that does not answer counts as no. Without sandboxes, a held attempt lives until its process ends it. */
+  private async alive(runId: string): Promise<boolean> {
     if (!this.d.sandboxes) return true;
     try {
       return (await this.d.sandboxes.findByAttempt(runId)) !== undefined;
@@ -573,36 +540,29 @@ export class Orchestrator {
   }
 
   /**
-   * The attempt is ended first, its sandbox with it, seen gone: the relaunch must not meet it on the same
-   * session and the same worktree. An engine that does not answer, or still shows it, relaunches nothing: the
-   * next beat looks again. Then `run.lost`; the slot goes with it. The attempt's own end says nothing: stopped
-   * here, it would clear the ticket before its loss is decided (`pump`), and a real result is fenced and frees
-   * nothing (`replaced`).
+   * An engine that does not answer relaunches nothing: the old attempt may still be there, the next beat
+   * looks again. Otherwise the attempt is closed first: its own end, which destroying its sandbox brings
+   * at once, then sends nothing (`pump`), and `run.lost` alone speaks for it. Its sandbox goes before the
+   * relaunch can meet it on the same session and the same worktree; the slot goes with it.
    */
-  private async leaseExpired(run: RunRecord): Promise<void> {
+  private async leaseExpired(expired: RunRecord): Promise<void> {
     const { store, sandboxes, clock, scheduler } = this.d;
+    let box: Sandbox | undefined;
     try {
-      const box = await sandboxes?.findByAttempt(run.id);
-      if (box) {
-        await this.destroySandbox(box.id, run.id);
-        if (await sandboxes?.findByAttempt(run.id)) throw new Error('its sandbox is still there');
-      }
+      box = await sandboxes?.findByAttempt(expired.id);
     } catch (err) {
-      this.log('warn', `lease of run ${run.id} of ${run.ticketId} expired, not relaunched yet: ${(err as Error).message}`);
+      this.log('warn', `lease of run ${expired.id} of ${expired.ticketId} expired, not relaunched yet: ${(err as Error).message}`);
       return;
     }
+    // Read again: it may have ended, or been seen alive, while the engine was asked.
+    const run = await store.getRun(expired.id);
+    if (run?.status !== 'running') return;
     this.log('warn', `lease of run ${run.id} of ${run.ticketId} expired`);
-    this.replaced.add(run.id);
-    const handle = this.handles.get(run.id);
-    try {
-      handle?.stop();
-    } catch {
-      /* best effort: its sandbox is gone */
-    }
+    await store.putRun({ ...run, status: 'failure', endedAt: clock.now() });
+    if (box) await this.destroySandbox(box.id, run.id);
+    this.handles.get(run.id)?.stop();
     scheduler.release(`${run.ticketId}:${run.queue}`);
     if (run.queue === 'dev' || run.linearSessionId !== undefined) await this.submitResult(lostEvent(run, 'lease', clock.now()));
-    // Without a handle, no pump will close it.
-    if (!handle) await store.putRun({ ...run, status: 'failure', endedAt: clock.now() });
   }
 
   /** The sandboxes a crash left behind (ORC-204): every one whose attempt this process is not running. */
@@ -914,14 +874,14 @@ export class Orchestrator {
   private async freeSlot(row: StoredEvent): Promise<void> {
     if (row.type !== 'run.finished') return;
     const run = await this.d.store.getRun((row.payload as EventPayloads['run.finished']).runId).catch(() => undefined);
-    if (run && !this.replaced.has(run.id)) this.d.scheduler.release(`${run.ticketId}:${run.queue}`);
+    if (run) this.d.scheduler.release(`${run.ticketId}:${run.queue}`);
   }
 
   /** After the commit, before the effects. */
   private async committed(event: FactoryEvent, outcome: Extract<DecisionOutcome, { status: 'committed' }>): Promise<void> {
     const { bus, scheduler } = this.d;
     // First, and without a store read: a finished run's slot is freed whatever follows.
-    if (event.type === 'run.finished' && outcome.known && event.ticketId && !this.replaced.has(event.payload.runId)) {
+    if (event.type === 'run.finished' && outcome.known && event.ticketId) {
       const hash = outcome.known.workflowHash;
       const workflow = (hash && this.workflows.get(hash)) || this.project(event.projectId).workflow;
       const queue = workflow.jobs[event.payload.job]?.queue;
@@ -1093,8 +1053,8 @@ export class Orchestrator {
       case 'run_verify': {
         const run = await store.getRun(c.runId);
         const job = project.workflow.jobs[c.job];
-        if (!run || !job || this.checking.has(run.id)) return;
-        this.checking.add(run.id);
+        // No longer awaited (a stop, a verdict): a replayed effect checks nothing.
+        if (!run || !job || t.verifyingRunId !== c.runId) return;
         this.track(
           (async () => {
             if (job.red) {
@@ -1114,7 +1074,7 @@ export class Orchestrator {
               ? { ...base, id: `check:${run.id}`, type: 'verify.passed', payload: { runId: run.id, job: job.name, ...(c.output ? { output: c.output } : {}) } }
               : { ...base, id: `check:${run.id}`, type: 'verify.failed', payload: { runId: run.id, job: job.name, failures: res.failures, ...(res.tree ? { tree: res.tree } : {}) } };
             await this.submitResult(event);
-          })().finally(() => this.checking.delete(run.id)),
+          })(),
         );
         return;
       }
@@ -1471,9 +1431,9 @@ export class Orchestrator {
       const from = opts.relaunchOf ? await store.getRun(opts.relaunchOf) : undefined;
       // The feedback the run reads, taken at the launch whoever started it (a decision, settle, the queue):
       // its taint completes the one the start was decided with (I12, ORC-274).
-      const kind = from ? from.input?.kind : (opts.input ?? job.input);
+      const kind = from ? undefined : (opts.input ?? job.input);
       const read: FeedbackItem[] = [];
-      if (kind === 'feedback' && !from) {
+      if (kind === 'feedback') {
         read.push(...t.pendingFeedback);
         // Review comments are external content: whoever can comment on the PR wrote them, and nothing
         // authenticates them as the team's (ORC-160). Untrusted, whatever the forge says.
@@ -1561,7 +1521,6 @@ export class Orchestrator {
         cwd: ws.path,
         labels,
         sensitivePaths,
-        leaseUntil: clock.now() + RUN_LEASE_MS,
         ...(input ? { input } : {}),
       };
       // The mark, then the ticket, then the run (`startHandled`, ORC-277): a dev ticket holds its run before
@@ -1569,9 +1528,8 @@ export class Orchestrator {
       // on the ticket until the run that read it is written: a launch cut before reads it again.
       if (opts.startMark) await store.setMeta(opts.startMark, runId);
       await this.apply(t, { type: 'run.started', runId, job: job.name, queue: job.queue, claudeSessionId, ...(ticketSession ? {} : { ticketSession: false as const }) });
-      this.launching.add(runId);
       await store.putRun(run);
-      if (kind === 'feedback' && !from) await this.apply(await this.ticket(project.id, ticketId), { type: 'feedback.consumed' });
+      if (kind === 'feedback') await this.apply(await this.ticket(project.id, ticketId), { type: 'feedback.consumed' });
       // The run is written: a queued item it came from leaves the queue now (a crash from here on is recover()'s).
       // Logged, not thrown: the run is launched either way, and a queue item left behind is refused
       // when handed out again (its ticket has a run, or is blocked, or its mark names this run).
@@ -1604,10 +1562,11 @@ export class Orchestrator {
       });
       this.handles.set(runId, handle);
       this.liveRuns.add(runId);
-      this.track(this.pump(project, run, handle, sandbox?.id), runId);
+      this.track(this.pump(run, handle, sandbox?.id), runId);
       handedOver = true;
+      // Its lease starts here: until now the launch is alive by itself, however long `beforeRun` takes. A failure leaves it to the next beat.
+      await store.renewRun(runId, clock.now() + RUN_LEASE_MS).catch((err: Error) => this.log('warn', `lease of run ${runId} not written: ${err.message}`));
     } finally {
-      this.launching.delete(runId);
       // The sandbox first: it mounts the worktree.
       if (sandbox && !handedOver) await this.destroySandbox(sandbox.id, runId);
       if (!setUp) {
@@ -1619,7 +1578,7 @@ export class Orchestrator {
   }
 
   /** Streams a run to its end, destroys its sandbox whatever the outcome, then writes its result to the inbox. */
-  private async pump(project: ProjectRuntime, run: RunRecord, handle: RunHandle, sandboxId?: string): Promise<void> {
+  private async pump(run: RunRecord, handle: RunHandle, sandboxId?: string): Promise<void> {
     const { tracker, bus, store, clock } = this.d;
     let result: RunResult | undefined;
     try {
@@ -1638,27 +1597,26 @@ export class Orchestrator {
       this.handles.delete(run.id);
       const rec = (await store.getRun(run.id)) ?? run;
       const interrupted = this.stopping && result.outcome === 'stopped';
-      // Stopped for its lease: `run.lost` tells it. Recorded as a failure, so that a kill before `run.lost` is written
-      // leaves recover() a result that blocks and tells the human, never a ticket waiting for nothing.
-      const replaced = this.replaced.has(run.id) && result.outcome === 'stopped';
+      // Closed before its end (`leaseExpired`): `run.lost` speaks for it. What it spent is still recorded.
+      const closed = rec.status !== 'running';
       await store.putRun({
         ...rec,
-        status: interrupted ? 'interrupted' : replaced ? 'failure' : result.outcome,
-        endedAt: clock.now(),
+        status: closed ? rec.status : interrupted ? 'interrupted' : result.outcome,
+        endedAt: rec.endedAt ?? clock.now(),
         costUsd: result.costUsd,
         turns: result.turns,
         lastText: result.lastText,
         ...(result.tokens ? { tokens: result.tokens } : {}),
       });
       // Shutdown, not a user stop: keep the ticket's activeRunId so the next start's recover() starts its step again.
-      if (interrupted || replaced) return;
+      if (interrupted || closed) return;
     } catch (err) {
       const message = (err as Error).message;
       if (result) {
         // The attempt ended: recording it failed, not the agent nor the runner (ORC-289).
         this.handles.delete(run.id);
         this.log('error', `run ${run.id} ended, but was not recorded: ${message}`);
-        if ((this.stopping || this.replaced.has(run.id)) && result.outcome === 'stopped') return;
+        if (this.stopping && result.outcome === 'stopped') return;
       } else {
         this.liveRuns.delete(run.id);
         this.log('error', `run ${run.id} failed: ${message}`);
@@ -1670,6 +1628,7 @@ export class Orchestrator {
         this.handles.delete(run.id);
         try {
           const rec = (await store.getRun(run.id)) ?? run;
+          if (rec.status !== 'running') return;
           await store.putRun({ ...rec, status: 'failure', endedAt: clock.now(), lastText: message });
         } catch (e) {
           this.log('error', `could not record failure of run ${run.id}: ${(e as Error).message}`);
@@ -1680,14 +1639,36 @@ export class Orchestrator {
     } finally {
       if (sandboxId) await this.destroySandbox(sandboxId, run.id);
     }
+    await this.submitResult(await this.finishedFor(run, result));
+  }
+
+  /** The result of an attempt, whoever sends it: its pump, or recover() when the process died between the two (ORC-220). */
+  private async finishedFor(run: RunRecord, result: RunResult): Promise<FactoryEvent<'run.finished'>> {
     let output: AgentOutput | undefined;
     let unreadable = false;
     try {
-      output = await storedOutput(store, run.id);
+      output = await storedOutput(this.d.store, run.id);
     } catch (err) {
       this.log('error', `output of run ${run.id} not read: ${(err as Error).message}`);
       unreadable = true;
     }
-    await this.submitResult(finishedEvent({ ...run, projectId: project.id }, result, output, unreadable, clock.now()));
+    return {
+      ...TRUSTED,
+      id: `attempt:${run.id}:finished`,
+      type: 'run.finished',
+      at: this.d.clock.now(),
+      projectId: run.projectId,
+      ticketId: run.ticketId,
+      payload: {
+        runId: run.id,
+        job: run.job,
+        outcome: result.outcome,
+        costUsd: result.costUsd,
+        turns: result.turns,
+        lastText: result.lastText,
+        attempt: attemptOutcome({ outcome: result.outcome, infraError: result.infra || unreadable }, output),
+        ...(output ? { output } : {}),
+      },
+    };
   }
 }

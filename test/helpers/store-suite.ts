@@ -96,9 +96,9 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     const s = await store();
     await s.putRun(run({ leaseUntil: 1_000 }));
     await s.putRun(run({ id: 'r2', token: 't2', status: 'success', leaseUntil: 1_000 }));
-    expect(await s.renewRun('r1', 2_000)).toBe(true);
-    expect(await s.renewRun('r2', 2_000)).toBe(false);
-    expect(await s.renewRun('none', 2_000)).toBe(false);
+    await s.renewRun('r1', 2_000);
+    await s.renewRun('r2', 2_000);
+    await s.renewRun('none', 2_000);
     expect((await s.getRun('r1'))!.leaseUntil).toBe(2_000);
     expect((await s.getRun('r2'))!.leaseUntil).toBe(1_000);
     // The record stays whole: the lease is a field of it.

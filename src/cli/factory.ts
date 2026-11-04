@@ -56,6 +56,7 @@ async function main(): Promise<number> {
   // config.yaml only: factory.yml and its env: secrets are the daemon's, a plain shell may lack them.
   const cfg = loadInstance(home);
   const api = `http://127.0.0.1:${cfg.port}`;
+  const control = { api, headers: uiAuth(), out: (l: string) => console.log(l) };
 
   switch (cmd) {
     case 'init': {
@@ -121,7 +122,7 @@ async function main(): Promise<number> {
       return 0;
     }
     case 'status':
-      return runStatusCommand({ api, headers: uiAuth(), out: (l) => console.log(l), now: () => Date.now() });
+      return runStatusCommand(control);
     case 'pause':
     case 'resume':
       await fetch(`${api}/api/control/${cmd}`, { method: 'POST', headers: uiAuth() });
@@ -129,7 +130,7 @@ async function main(): Promise<number> {
       return 0;
     case 'stop':
       if (!arg) break;
-      return runStopCommand({ api, headers: uiAuth(), out: (l) => console.log(l), now: () => Date.now() }, arg);
+      return runStopCommand(control, arg);
     case 'run':
       if (arg === 'repair') return runRepairCommand(home, positionals.slice(2));
       break;

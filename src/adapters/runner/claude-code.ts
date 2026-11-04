@@ -71,8 +71,15 @@ export function childEnv(base: NodeJS.ProcessEnv, run: Record<string, string>): 
  */
 export const liveDir = (transcriptsDir: string): string => join(transcriptsDir, 'live');
 
-/** How often the stream file is read for what the attempt wrote since. */
-const POLL_MS = 50;
+/** How often the stream file is read for what the attempt wrote since: the relay (SSE, Linear) needs no better. */
+const POLL_MS = 250;
+
+/** The process that writes an attempt's stream. */
+interface Writer {
+  pid: number;
+  /** When the platform tells it (`startTime`). */
+  start: string | undefined;
+}
 
 function pidAlive(pid: number): boolean {
   try {
@@ -94,25 +101,19 @@ function startTime(pid: number): string | undefined {
 }
 
 /** The pid file: `<pid> <start>`, the start when the platform tells it. */
-function readWriter(file: string): { pid: number; start: string | undefined } | undefined {
+function readWriter(file: string): Writer | undefined {
   if (!existsSync(file)) return undefined;
   const [pid, start] = readFileSync(file, 'utf8').split(' ');
   return { pid: Number(pid), start };
 }
 
 /** Alive, and still that process. */
-function writerAlive(w: { pid: number; start: string | undefined }): boolean {
+function writerAlive(w: Writer): boolean {
   return pidAlive(w.pid) && (w.start === undefined || w.start === startTime(w.pid));
 }
 
 function hasResultLine(text: string): boolean {
-  return text.split('\n').some((line) => {
-    try {
-      return (JSON.parse(line) as { type?: string })?.type === 'result';
-    } catch {
-      return false;
-    }
-  });
+  return text.split('\n').some((line) => parseStreamLine(line).some((e) => e.kind === 'result'));
 }
 
 /** What `follow` needs of an attempt, started now or by an earlier process. */
@@ -121,11 +122,10 @@ interface Followed {
   limits: RunRequest['limits'];
   secrets: readonly string[];
   remainingMs: number;
-  /** Set on a start: it tells its own end. Otherwise `writer` is watched. */
+  /** Set on a start: it tells its own end. Absent, the attempt is taken up: what it wrote so far counts, and was relayed or is lost to the relay. */
   child?: ChildProcess;
-  writer?: { pid: number; start: string | undefined };
-  /** Taken up: what the attempt wrote so far counts, and was relayed or is lost to the relay. */
-  attached: boolean;
+  /** Taken up: watched by its pid, absent when it ended already. */
+  writer?: Writer;
 }
 
 export class ClaudeCodeRunner implements Runner {
@@ -168,7 +168,7 @@ export class ClaudeCodeRunner implements Runner {
       closeSync(err);
     }
     if (child.pid !== undefined) writeFileSync(join(dir, 'pid'), [child.pid, startTime(child.pid)].filter((x) => x !== undefined).join(' '), { mode: 0o600 });
-    return this.follow({ runId: req.runId, limits: req.limits, secrets, remainingMs: req.limits.durationMs, child, attached: false });
+    return this.follow({ runId: req.runId, limits: req.limits, secrets, remainingMs: req.limits.durationMs, child });
   }
 
   /**
@@ -185,7 +185,7 @@ export class ClaudeCodeRunner implements Runner {
       return undefined;
     }
     const secrets = transcriptSecrets({ ...process.env, ...req.env }, this.o.secrets?.());
-    return this.follow({ runId: req.runId, limits: req.limits, secrets, remainingMs: req.limits.durationMs - req.elapsedMs, ...(writer ? { writer } : {}), attached: true });
+    return this.follow({ runId: req.runId, limits: req.limits, secrets, remainingMs: req.limits.durationMs - req.elapsedMs, ...(writer ? { writer } : {}) });
   }
 
   private dir(runId: string): string {
@@ -196,7 +196,7 @@ export class ClaudeCodeRunner implements Runner {
     const dir = this.dir(a.runId);
     const pid = a.child?.pid ?? a.writer?.pid;
     // Taken up, the whole stream is read again: the transcript is written anew from it.
-    const transcript = createWriteStream(join(this.o.transcriptsDir, `${a.runId}.jsonl`), { flags: a.attached ? 'w' : 'a' });
+    const transcript = createWriteStream(join(this.o.transcriptsDir, `${a.runId}.jsonl`), { flags: a.child ? 'a' : 'w' });
     const ch = new Channel<RunStreamEvent>();
     let assistantTurns = 0;
     let lastText = '';
@@ -278,9 +278,9 @@ export class ClaudeCodeRunner implements Runner {
         closeSync(fd);
       }
     };
-    if (a.attached) read(false);
+    if (!a.child) read(false);
     // Ended with a result while no daemon read it: the time since, the cut's, is no overrun.
-    if (a.attached && result && !a.writer) clearTimeout(timer);
+    if (!a.child && result && !a.writer) clearTimeout(timer);
 
     const done = new Promise<RunResult>((resolve) => {
       let finished = false;

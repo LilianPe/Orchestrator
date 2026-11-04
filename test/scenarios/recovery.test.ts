@@ -4,26 +4,30 @@ import { describe, expect, it, vi } from 'vitest';
 import { TRUSTED, type FactoryEvent } from '../../src/core/types.js';
 import { RUN_BEAT_MS, RUN_LEASE_MS } from '../../src/store/types.js';
 import { Faults } from '../helpers/faults.js';
-import { createHarness } from '../helpers/harness.js';
+import { createHarness, heldRun } from '../helpers/harness.js';
 import { testPreset } from '../helpers/test-preset.js';
 
 type H = ReturnType<typeof createHarness>;
 
 const claudeDir = (h: H) => join(h.sessionsDir!, 'p', 'REL-1');
 
-/** REL-1 delegated, its dev run held by the runner: it stays `running` until released. */
-async function running(h: H): Promise<string> {
-  h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
-  h.runner.enqueue({ hold: true });
-  await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
-  return (await h.ticket()).activeRunId!;
+/** The container of the attempt is gone, and its process with no way to say it: no more beats. */
+async function lose(h: H, runId: string): Promise<void> {
+  await h.sandboxes.destroy((await h.sandboxes.findByAttempt(runId))!.id);
+}
+
+/** Claude Code's file of the ticket's session: `--resume` finds it. */
+function saved(h: H): void {
+  const dir = join(claudeDir(h), 'projects', '-work');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, `${h.runner.requests[0]!.claudeSessionId}.jsonl`), '{}\n');
 }
 
 /** ORC-220, criterion 2: `factoryd` killed, then restarted; the ticket goes on without anybody. */
 describe('a restart during a run', () => {
   it('kill -9 with the attempt still alive: the supervisor reattaches to it and takes its real result', async () => {
     const h = createHarness();
-    const runId = await running(h);
+    const runId = await heldRun(h);
     await h.restart({ mode: 'brutal' });
     // Nothing launched again, nothing closed: the same attempt, still active, in a free-standing process.
     expect(h.runner.requests).toHaveLength(1);
@@ -38,7 +42,7 @@ describe('a restart during a run', () => {
 
   it('kill -9 with the attempt alive in a sandbox: the same sandbox stays, and goes once the attempt ends', async () => {
     const h = createHarness({ sandboxed: true });
-    const runId = await running(h);
+    const runId = await heldRun(h);
     await h.restart({ mode: 'brutal' });
     expect(h.sandboxes.destroyed).toEqual([]);
     expect(h.sandboxes.active()).toHaveLength(1);
@@ -50,7 +54,7 @@ describe('a restart during a run', () => {
 
   it('the attached attempt holds its slot, and a stop reaches it', async () => {
     const h = createHarness();
-    const runId = await running(h);
+    const runId = await heldRun(h);
     await h.restart({ mode: 'brutal' });
     await h.orch.accept({ ...TRUSTED, id: 'stop', type: 'control.stop', at: h.clock.now(), projectId: 'p', ticketId: 'REL-1', payload: {} });
     await h.orch.drained();
@@ -62,7 +66,7 @@ describe('a restart during a run', () => {
 
   it('kill -9 with the attempt gone: the step is launched again on the ticket session, without a human', async () => {
     const h = createHarness();
-    const runId = await running(h);
+    const runId = await heldRun(h);
     const [first] = h.runner.requests;
     h.runner.forget(runId);
     h.runner.enqueue({ events: [{ kind: 'text', text: 'Repris.' }] });
@@ -77,7 +81,7 @@ describe('a restart during a run', () => {
 
   it('an attempt its ticket no longer holds is not taken up, even alive: it is closed, its sandbox destroyed', async () => {
     const h = createHarness({ sandboxed: true });
-    const runId = await running(h);
+    const runId = await heldRun(h);
     await h.store.putTicket({ ...(await h.ticket()), activeRunId: undefined, activeJob: undefined });
     await h.restart({ mode: 'brutal' });
     expect((await h.store.getRun(runId))!.status).toBe('failure');
@@ -87,7 +91,7 @@ describe('a restart during a run', () => {
 
   it('an attempt that ends as it is reattached keeps its real result, whatever recover() read before', async () => {
     const h = createHarness();
-    const runId = await running(h);
+    const runId = await heldRun(h);
     const attach = h.runner.attach.bind(h.runner);
     h.runner.attach = (req) => {
       const handle = attach(req);
@@ -103,7 +107,7 @@ describe('a restart during a run', () => {
   it('a start out of the queue without an effect, cut once launched, is not handed out to run again', async () => {
     const faults = new Faults({ point: 'run.written', mode: 'kill', nth: 2 });
     const h = createHarness({ faults, effectLeaseMs: 60_000 });
-    const first = await running(h);
+    const first = await heldRun(h);
     const control = (id: string, type: 'control.pause' | 'control.resume') => h.orch.accept({ ...TRUSTED, id, type, at: h.clock.now(), projectId: '*', payload: {} } as FactoryEvent);
     await h.store.putTicket({ ...(await h.ticket()), pendingJob: { job: 'dev-feedback', resume: true } });
     await control('g1', 'control.pause');
@@ -125,7 +129,7 @@ describe('a restart during a run', () => {
 
   it('a clean shutdown: the step starts again from the ticket session (`interrupted`, never a block)', async () => {
     const h = createHarness();
-    const runId = await running(h);
+    const runId = await heldRun(h);
     h.runner.enqueue({ events: [{ kind: 'text', text: 'Repris.' }] });
     await h.restart();
     expect((await h.store.getRun(runId))!.status).toBe('stopped');
@@ -155,7 +159,7 @@ describe('a restart during a run', () => {
 
   it('a first run whose session was never written starts it under the same id: --resume would fail on it (ORC-128, call 9)', async () => {
     const h = createHarness({ sandboxed: true });
-    const runId = await running(h);
+    const runId = await heldRun(h);
     h.runner.forget(runId);
     h.runner.enqueue({ events: [{ kind: 'text', text: 'Repris.' }] });
     await h.restart({ mode: 'brutal' });
@@ -165,10 +169,9 @@ describe('a restart during a run', () => {
 
   it('a session already written is resumed: --session-id would fail on it (ORC-128, call 10)', async () => {
     const h = createHarness({ sandboxed: true });
-    const runId = await running(h);
+    const runId = await heldRun(h);
     const session = h.runner.requests[0]!.claudeSessionId;
-    mkdirSync(join(claudeDir(h), 'projects', '-work'), { recursive: true });
-    writeFileSync(join(claudeDir(h), 'projects', '-work', `${session}.jsonl`), '{}\n');
+    saved(h);
     h.runner.forget(runId);
     h.runner.enqueue({ events: [{ kind: 'text', text: 'Repris.' }] });
     await h.restart({ mode: 'brutal' });
@@ -210,7 +213,7 @@ describe('a restart during a run', () => {
 
   it('a ticket a human stopped while its run was cut is not started again', async () => {
     const h = createHarness();
-    const runId = await running(h);
+    const runId = await heldRun(h);
     h.runner.forget(runId);
     await h.orch.accept({ ...TRUSTED, id: 'stop', type: 'control.stop', at: h.clock.now(), projectId: 'p', ticketId: 'REL-1', payload: {} });
     await h.orch.drained();
@@ -239,7 +242,7 @@ describe('a restart during a run', () => {
 describe('the lease of an attempt', () => {
   it('stays renewed while the attempt lives, whatever the time it takes', async () => {
     const h = createHarness();
-    const runId = await running(h);
+    const runId = await heldRun(h);
     const before = (await h.store.getRun(runId))!.leaseUntil!;
     for (let i = 0; i < 10; i++) await h.advance(RUN_BEAT_MS);
     expect((await h.store.getRun(runId))!.leaseUntil).toBeGreaterThan(before);
@@ -248,10 +251,11 @@ describe('the lease of an attempt', () => {
   });
 
   it('expires once: one relaunch on the ticket session; a second time: blocked', async () => {
-    const h = createHarness();
-    const first = await running(h);
+    const h = createHarness({ sandboxed: true });
+    const first = await heldRun(h);
+    saved(h);
     h.runner.enqueue({ hold: true });
-    h.runner.mute(first);
+    await lose(h, first);
     for (let i = 0; i < 3; i++) await h.advance(RUN_BEAT_MS);
     // The lease still runs: a beat missed is not an expiry.
     expect(h.runner.requests).toHaveLength(1);
@@ -262,7 +266,7 @@ describe('the lease of an attempt', () => {
     expect(second).not.toBe(first);
     expect(await h.ticket()).toMatchObject({ blocked: false, leaseRelaunches: 1 });
 
-    h.runner.mute(second);
+    await lose(h, second);
     await h.advance(RUN_LEASE_MS + 1);
     expect(h.runner.requests).toHaveLength(2);
     const t = await h.ticket();
@@ -274,10 +278,10 @@ describe('the lease of an attempt', () => {
   });
 
   it('a relaunched attempt that ends gives the bound back', async () => {
-    const h = createHarness();
-    const first = await running(h);
+    const h = createHarness({ sandboxed: true });
+    const first = await heldRun(h);
     h.runner.enqueue({ hold: true });
-    h.runner.mute(first);
+    await lose(h, first);
     await h.advance(RUN_LEASE_MS + 1);
     const second = (await h.ticket()).activeRunId!;
     h.runner.release(second);
@@ -285,54 +289,44 @@ describe('the lease of an attempt', () => {
     expect(await h.ticket()).toMatchObject({ logical: 'human_review', blocked: false, leaseRelaunches: 0 });
   });
 
-  it('expires when the sandbox of a living process is gone', async () => {
+  it('the attempt it ends may end before its loss is written: the step does start again', async () => {
     const h = createHarness({ sandboxed: true });
-    const first = await running(h);
+    const first = await heldRun(h);
     h.runner.enqueue({ hold: true });
-    await h.sandboxes.destroy('sbx-1');
-    await h.advance(RUN_LEASE_MS + 1);
-    expect(h.runner.requests).toHaveLength(2);
-    expect((await h.ticket()).activeRunId).not.toBe(first);
-  });
-
-  it('the attempt it stops may end before its loss is written: the step does start again', async () => {
-    const h = createHarness({ sandboxed: true });
-    const first = await running(h);
-    h.runner.enqueue({ hold: true });
-    h.runner.mute(first);
-    // The engine answers slowly: the stopped attempt has all the time to end before `run.lost` is written.
-    const find = h.sandboxes.findByAttempt.bind(h.sandboxes);
-    h.sandboxes.findByAttempt = async (id) => {
-      await new Promise((r) => setTimeout(r, 30));
-      return find(id);
+    await lose(h, first);
+    // Its process ends at once, and the store is slow to write the loss: its own end must say nothing.
+    const accept = h.orch.accept.bind(h.orch);
+    h.orch.accept = async (e) => {
+      if (e.type === 'run.lost') await new Promise((r) => setTimeout(r, 30));
+      return accept(e);
     };
     await h.advance(RUN_LEASE_MS + 1);
     await h.orch.drained();
     expect(h.runner.requests).toHaveLength(2);
     expect((await h.ticket()).activeRunId).not.toBe(first);
     expect((await h.ticket()).blocked).toBe(false);
+    expect((await h.store.getRun(first))!.status).toBe('failure');
   });
 
-  it('an engine that does not answer relaunches nothing: the old attempt may still be there, and the next beat looks again', async () => {
+  it('an engine that does not answer relaunches nothing: the attempt may well be alive, as the next beat finds', async () => {
     const h = createHarness({ sandboxed: true });
-    const first = await running(h);
-    h.runner.enqueue({ hold: true });
+    const first = await heldRun(h);
     const find = h.sandboxes.findByAttempt.bind(h.sandboxes);
     h.sandboxes.findByAttempt = async () => Promise.reject(new Error('engine down'));
     await h.advance(RUN_LEASE_MS + 1);
     expect(h.runner.requests).toHaveLength(1);
     expect((await h.ticket()).activeRunId).toBe(first);
     h.sandboxes.findByAttempt = find;
-    h.runner.mute(first);
     await h.advance(1);
-    expect(h.runner.requests).toHaveLength(2);
+    expect(h.runner.requests).toHaveLength(1);
+    expect((await h.store.getRun(first))!.leaseUntil).toBeGreaterThan(h.clock.now());
   });
 
   it('a slot follows the relaunch: the replaced attempt ends without freeing the one that took its place', async () => {
-    const h = createHarness();
-    const first = await running(h);
+    const h = createHarness({ sandboxed: true });
+    const first = await heldRun(h);
     h.runner.enqueue({ hold: true });
-    h.runner.mute(first);
+    await lose(h, first);
     await h.advance(RUN_LEASE_MS + 1);
     const second = (await h.ticket()).activeRunId!;
     await h.orch.drained();
@@ -352,10 +346,10 @@ describe('the lease of an attempt', () => {
 /** ORC-220, criterion 3: fencing. */
 describe('a replaced attempt', () => {
   it('its late result is ignored: the attempt that replaced it stays active', async () => {
-    const h = createHarness();
-    const first = await running(h);
+    const h = createHarness({ sandboxed: true });
+    const first = await heldRun(h);
     h.runner.enqueue({ hold: true });
-    h.runner.mute(first);
+    await lose(h, first);
     await h.advance(RUN_LEASE_MS + 1);
     const second = (await h.ticket()).activeRunId!;
     const late: FactoryEvent = { ...TRUSTED, id: `late:${first}`, type: 'run.finished', at: h.clock.now(), projectId: 'p', ticketId: 'REL-1', payload: { runId: first, job: 'dev', outcome: 'success', costUsd: 0, turns: 1, lastText: 'trop tard' } };
@@ -368,7 +362,7 @@ describe('a replaced attempt', () => {
 
   it('a late « lost » of an attempt no longer active relaunches nothing', async () => {
     const h = createHarness();
-    await running(h);
+    await heldRun(h);
     const lost: FactoryEvent = { ...TRUSTED, id: 'lost:old', type: 'run.lost', at: h.clock.now(), projectId: 'p', ticketId: 'REL-1', payload: { runId: 'old', job: 'dev', cause: 'lease' } };
     await h.orch.accept(lost);
     await h.orch.drained();

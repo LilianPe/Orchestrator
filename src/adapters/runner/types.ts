@@ -48,8 +48,6 @@ export interface RunHandle {
   readonly events: AsyncIterable<RunStreamEvent>;
   readonly done: Promise<RunResult>;
   stop(): void;
-  /** Whether the process behind the attempt still lives: the heartbeat renews its lease on it (ORC-220). Assumed alive when absent. */
-  alive?(): boolean;
 }
 
 /** What the supervisor knows of an attempt started by an earlier process (ORC-220). */

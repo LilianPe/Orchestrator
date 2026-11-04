@@ -379,8 +379,8 @@ export interface Store {
   recordEvent(e: FactoryEvent): Promise<boolean>;
   recentEvents(limit: number, ticketId?: string): Promise<FactoryEvent[]>;
   putRun(r: RunRecord): Promise<void>;
-  /** The heartbeat of an attempt (ORC-220): its lease up to `until`. False when it is no longer `running`: nothing is written. */
-  renewRun(id: string, until: number): Promise<boolean>;
+  /** The heartbeat of an attempt (ORC-220): its lease up to `until`. Nothing is written once it is no longer `running`. */
+  renewRun(id: string, until: number): Promise<void>;
   getRun(id: string): Promise<RunRecord | undefined>;
   runsByStatus(status: RunRecord['status']): Promise<RunRecord[]>;
   findRunByToken(token: string): Promise<RunRecord | undefined>;

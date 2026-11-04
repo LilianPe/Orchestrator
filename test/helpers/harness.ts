@@ -40,6 +40,14 @@ export function loadTestWorkflow(projectYaml?: string): Workflow {
   }
 }
 
+/** REL-1 delegated, its dev run held by the runner: it stays `running` until released. */
+export async function heldRun(h: ReturnType<typeof createHarness>): Promise<string> {
+  h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+  h.runner.enqueue({ hold: true });
+  await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+  return (await h.ticket()).activeRunId!;
+}
+
 export type StoreKind = 'sqlite' | 'postgres';
 
 /**
