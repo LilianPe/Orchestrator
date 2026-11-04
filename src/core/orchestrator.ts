@@ -19,6 +19,7 @@ import {
 import { ActivityRelay } from '../adapters/tracker/activity-relay.js';
 import { labelEchoKey, stateEchoKey, type ActivityInput, type Tracker } from '../adapters/tracker/types.js';
 import type { Workspace, WorkspaceManager } from '../adapters/workspace/types.js';
+import { NO_REPO_VARIABLES, type RepoVariables } from '../config/repo-variables.js';
 import type { JobSpec, Workflow } from '../config/workflow-schema.js';
 import type { EffectRetry } from '../runtime/outbox.js';
 import { Worker } from '../runtime/worker.js';
@@ -60,7 +61,8 @@ import {
   type VerifyFailure,
   TRUSTED,
 } from './types.js';
-import { VERIFY_TIMEOUT_MS, type Verifier } from './verify.js';
+import { cappedCommand, runSealedSetup } from './sealed-setup.js';
+import type { Verifier } from './verify.js';
 import { PRODUCT_NAME } from '../product.js';
 import { checkRed, type RedDeps, type RedResult } from '../checks/red.js';
 import { parseStatus } from '../adapters/workspace/git-workspaces.js';
@@ -68,6 +70,8 @@ import type { ExecResult } from '../adapters/exec.js';
 
 /** Meta key of the head a ticket's tests step started on (ORC-123). */
 const redBaseKey = (projectId: string, ticketId: string): string => `red-base:${projectId}:${ticketId}`;
+/** Set while a worktree may hold a repository's secret (ORC-211): a daemon killed before the seal leaves it, and the next launch runs setup and seal again. */
+const unsealedKey = (path: string): string => `setup-unsealed:${path}`;
 
 /**
  * Every run's Claude Code (ORC-284): no auto-memory (ORC-205), telemetry off by both variables ORC-128
@@ -143,6 +147,8 @@ export interface OrchestratorDeps {
   /** Other host paths every sandbox mounts (the factory's install, for `factory-agent`). */
   sandboxMounts?: readonly SandboxMount[];
   agentEnv: (run: RunRecord) => Record<string, string>;
+  /** What the runner gets of the repository, at each launch (ORC-211). Absent: nothing. */
+  repoVariables?: (project: ProjectRuntime) => Promise<RepoVariables>;
   dailyBudgetUsd?: number;
   newId?: () => string;
   activityIntervalMs?: number;
@@ -485,31 +491,37 @@ export class Orchestrator {
   }
 
   /**
-   * The repository's `setup` in a worktree just made: in its sandbox, on the host without one. It
-   * throws on a failure; the launch then removes the worktree, so the next attempt runs it again.
+   * The repository's `setup` in a worktree just made: in a sandbox of its own, gone and sealed before the
+   * agent's is opened (ORC-211), on the host without sandboxes, where it gets no secret. It throws on a
+   * failure; the launch then removes the worktree, so the next attempt runs it again.
    */
-  private async runSetup(project: ProjectRuntime, ws: Workspace, sandbox: Sandbox | undefined): Promise<void> {
+  private async runSetup(project: ProjectRuntime, ticketId: string, ws: Workspace, runId: string, vars: RepoVariables): Promise<void> {
     const commands = project.workflow.workspace.setup;
-    const fail = (what: string): never => {
-      throw new Error(`Le setup du worktree a échoué : ${what}`);
-    };
-    if (sandbox) {
-      // ponytail: setup shares the attempt's sandbox, so its `limited` network (registries, GitHub read);
-      // a `full` sandbox of its own for setup when a repository needs more.
-      for (const command of commands) {
-        const { code } = await this.execCapped(sandbox.id, command);
-        if (code === 124) fail(`${command} (délai de ${VERIFY_TIMEOUT_MS / 60_000} min dépassé)`);
-        if (code !== 0) fail(command);
-      }
-    } else {
+    const sandboxes = this.d.sandboxes;
+    if (!sandboxes) {
       const res = await this.d.verify(ws.path, commands);
-      if (!res.ok) fail(res.failures[0]!.command);
+      if (!res.ok) throw new Error(`Le setup du worktree a échoué : ${res.failures[0]!.command}`);
+      return;
     }
+    const sealed = Object.keys(vars.setupSecrets).length > 0;
+    if (sealed) await this.d.store.setMeta(unsealedKey(ws.path), '1');
+    const gitDir = await this.d.workspaces.gitCommonDir(ws.path);
+    const { purged } = await runSealedSetup(sandboxes, {
+      runId,
+      ticketId,
+      workspacePath: ws.path,
+      mounts: [{ host: gitDir, target: gitDir, readOnly: true }],
+      commands,
+      env: vars.env,
+      secrets: vars.setupSecrets,
+      now: new Date(this.d.clock.now()),
+    });
+    if (purged.length) this.log('warn', `setup of ${ticketId}: secret found and purged in ${purged.join(', ')}`);
+    if (sealed) await this.d.store.setMeta(unsealedKey(ws.path), '');
   }
 
-  /** `command` in a sandbox under the host's cap (runVerify), by coreutils' `timeout` in the image: 124 is its exit on expiry. */
   private execCapped(sandboxId: string, command: string): Promise<ExecResult> {
-    return this.d.sandboxes!.exec(sandboxId, ['timeout', String(VERIFY_TIMEOUT_MS / 1000), 'bash', '-lc', command]);
+    return this.d.sandboxes!.exec(sandboxId, cappedCommand(command));
   }
 
   /**
@@ -1332,10 +1344,16 @@ export class Orchestrator {
       const claudeSessionId = resume ? t.claudeSessionId! : this.newId();
       const sessionRole = roleOf(job, ticketSession);
 
-      // Opened after the cheap exits above, right before the setup and the run that need it.
-      sandbox = this.d.sandboxes && (await this.openSandbox(this.d.sandboxes, project, ticketId, ws, runId, ticketSession));
-      if (!setUp) await this.runSetup(project, ws, sandbox);
+      const vars = (await this.d.repoVariables?.(project).catch((err: Error) => {
+        this.log('warn', `${project.id}: repository variables not read: ${err.message}`);
+        return undefined;
+      })) ?? NO_REPO_VARIABLES;
+      // Left by a daemon killed before the seal: this worktree may hold a secret, and only a seal lifts it.
+      if (wf.workspace.setup.length && (await store.getMeta(unsealedKey(ws.path)))) setUp = false;
+      if (!setUp) await this.runSetup(project, ticketId, ws, runId, vars);
       setUp = true;
+      // Opened after the cheap exits above and after the setup, whose container is gone by now (ORC-211).
+      sandbox = this.d.sandboxes && (await this.openSandbox(this.d.sandboxes, project, ticketId, ws, runId, ticketSession));
       // In each run's prompt, not the system prompt: read again at each attempt, never frozen at a resume
       // (ORC-128). The reset below keeps `.claude/CLAUDE.md`: the order does not matter.
       const conventions = readConventions(ws.path);
@@ -1411,6 +1429,8 @@ export class Orchestrator {
         readOnly: job.workspace === 'trunk-readonly',
         limits: job.limits,
         env: {
+          // First: a variable of the repository never replaces one of the factory. Never its secrets (ORC-211).
+          ...vars.env,
           ...this.d.agentEnv(run),
           // In a sandbox, the run's refusals log, on the host: it outlives the sandbox (ORC-217).
           ...(sandbox ? { FACTORY_REFUSALS_LOG: `${REFUSALS_TARGET}/refusals.jsonl` } : {}),
