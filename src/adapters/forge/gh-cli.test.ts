@@ -28,9 +28,8 @@ describeForgeContract('GhCliForge (scripted gh)', () => ({
       'gh pr checks 9 ': { stdout: '', stderr: "no checks reported on the 'factory/rel-3-z' branch\n", code: 1 },
       'gh pr list --head factory/rel-4-w ': { stdout: pr(10, 'factory/rel-4-w') },
       'gh pr checks 10 ': { stdout: '', stderr: 'Post "https://api.github.com/graphql": dial tcp: connection refused\n', code: 1 },
-      // A bucket gh does not document (empty, or new in a later version) next to green ones.
       'gh pr list --head factory/rel-5-v ': { stdout: pr(11, 'factory/rel-5-v') },
-      'gh pr checks 11 ': { stdout: JSON.stringify([{ name: 'lint', bucket: 'pass' }, { name: 'deploy', bucket: 'stale' }, { name: 'docs', bucket: '' }]) },
+      'gh pr checks 11 ': { stdout: JSON.stringify([{ name: 'lint', bucket: 'pass' }, { name: 'deploy', bucket: 'mystery' }, { name: 'docs', bucket: '' }]) },
       'gh repo view': { stdout: JSON.stringify({ owner: { login: 'me' }, name: 'app' }) },
       'gh api graphql': { stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [thread] } } } } }) },
     }),
@@ -54,10 +53,10 @@ describe('aggregateChecks', () => {
     [['pending', 'fail'], 'fail'],
     [['cancel'], 'fail'],
     [['skipping'], 'pass'],
-    [['pass', 'stale'], 'pending'],
+    [['pass', 'mystery'], 'pending'],
     [['pass', ''], 'pending'],
-    [['skipping', 'stale'], 'pending'],
-    [['stale', 'fail'], 'fail'],
+    [['skipping', 'mystery'], 'pending'],
+    [['mystery', 'fail'], 'fail'],
   ])('%j -> %s', (b, r) => expect(aggregateChecks(b as string[])).toBe(r));
 });
 

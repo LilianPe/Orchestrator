@@ -100,11 +100,11 @@ export function describeForgeContract(name: string, make: () => ForgeSubject | P
       await expect(s.forge.findPr(s.repoPath, s.checksDown)).rejects.toThrow();
     });
 
-    it('findPr never gives pass for checks with a state it does not know', async (ctx) => {
+    it('findPr gives neither pass nor none for checks with a state it does not know', async (ctx) => {
       const s = await subjectWith(make, () => ctx.skip(), 'unknownBucket');
       const pr = await resolved(s.forge.findPr(s.repoPath, s.unknownBucket));
       expect(pr).toMatchObject({ branch: s.unknownBucket, state: 'OPEN' });
-      expect(pr!.checks).not.toBe('pass');
+      expect(['pending', 'fail']).toContain(pr!.checks);
     });
 
   });
