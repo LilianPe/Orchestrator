@@ -1,5 +1,5 @@
 import type { FeedbackItem } from '../../core/types.js';
-import { execCmd, execFailure, mustExec, type Exec } from '../exec.js';
+import { execCmd, execFailure, mustExec, type Exec, type ExecResult } from '../exec.js';
 import { REPO_PERMISSIONS, type RepoPermission, type RepoPermissions } from '../roles/types.js';
 import type { Forge, PrInfo } from './types.js';
 
@@ -27,18 +27,25 @@ type Check = { name: string; bucket: string };
 const isCheck = (c: unknown): c is Check =>
   typeof c === 'object' && c !== null && typeof (c as Check).name === 'string' && typeof (c as Check).bucket === 'string';
 
-/** The checks `gh pr checks --json name,bucket` lists, or undefined when its output is not such a list. */
-function parseChecks(stdout: string): Check[] | undefined {
-  try {
-    const list: unknown = JSON.parse(stdout);
-    return Array.isArray(list) && list.every(isCheck) ? list : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 const EXCERPT = 200;
 const excerpt = (out: string) => JSON.stringify(out.slice(0, EXCERPT)) + (out.length > EXCERPT ? '…' : '');
+
+/**
+ * The checks `gh pr checks --json name,bucket` lists. Output that is not such a list throws, never reads as
+ * `none`: that would open the merge of a PR without CI (ORC-305). The PR poller logs the error and retries.
+ */
+function parseChecks(args: string[], r: ExecResult): Check[] {
+  let list: unknown;
+  try {
+    list = JSON.parse(r.stdout);
+  } catch {
+    list = undefined;
+  }
+  if (Array.isArray(list) && list.every(isCheck)) return list;
+  const stderr = r.stderr.trim();
+  const exit = r.code === 0 ? '' : ` (exit ${r.code}${stderr && `: ${stderr}`})`;
+  throw new Error(`gh ${args.join(' ')}: unreadable output, not a list of checks: ${excerpt(r.stdout)}${exit}`);
+}
 
 /**
  * What `GET /repos/{owner}/{repo}/collaborators/{user}/permission` answers (ORC-186): its `role_name`
@@ -88,17 +95,15 @@ export class GhCliForge implements Forge, RepoPermissions {
     if (pr.state === 'OPEN') {
       const args = ['pr', 'checks', String(pr.number), '--json', 'name,bucket'];
       const r = await this.exec('gh', args, { cwd: repoPath });
-      const list = parseChecks(r.stdout);
-      if (list) {
+      if (r.code !== 0 && r.stdout.trim() === '') {
+        if (!NO_CHECKS.test(r.stderr)) {
+          if (NO_JSON_FLAG.test(r.stderr)) throw new Error(`gh ${args.join(' ')}: this gh has no --json on pr checks, gh 2.50 or later is required`);
+          throw execFailure('gh', args, r);
+        }
+      } else {
+        const list = parseChecks(args, r);
         checks = aggregateChecks(list.map((c) => c.bucket));
         failedChecks = list.filter((c) => c.bucket === 'fail' || c.bucket === 'cancel').map((c) => c.name);
-      } else if (r.code === 0 || r.stdout.trim() !== '') {
-        // Never `none`: that opens the merge of a PR without CI (ORC-305). The PR poller logs this and retries.
-        const exit = r.code === 0 ? '' : ` (exit ${r.code}${r.stderr.trim() ? `: ${r.stderr.trim()}` : ''})`;
-        throw new Error(`gh ${args.join(' ')}: unreadable output, not a list of checks: ${excerpt(r.stdout)}${exit}`);
-      } else if (!NO_CHECKS.test(r.stderr)) {
-        if (NO_JSON_FLAG.test(r.stderr)) throw new Error(`gh ${args.join(' ')}: this gh has no --json on pr checks, gh 2.50 or later is required`);
-        throw execFailure('gh', args, r);
       }
     }
     return {
