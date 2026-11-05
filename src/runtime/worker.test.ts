@@ -91,6 +91,30 @@ describe('Worker', () => {
   });
 });
 
+describe('Worker: rows held by another worker', () => {
+  it('asks the store for the oldest row only, poll after poll: the rows behind it wait with it (ORC-290)', async () => {
+    const prepared: string[] = [];
+    const { store, worker } = setup({
+      prepare: async (e) => {
+        prepared.push(e.id);
+        return e;
+      },
+    });
+    await store.appendInbox(event('e1'));
+    await store.decide(twoComments(event('e1')));
+    // Another worker runs the first effect of e1, under its lease.
+    expect(await store.claimEffect('p', 'REL-1', 60_000)).toMatchObject({ id: 'REL-1:1:1' });
+    await store.appendInbox(event('e2'));
+    await store.appendInbox(event('e3'));
+    await worker.kick();
+    await worker.settle();
+    await worker.poll();
+    await worker.settle();
+    expect(prepared).toEqual(['e2', 'e2']);
+    worker.stop();
+  });
+});
+
 describe('Worker: effects through the outbox executor (ORC-150)', () => {
   afterEach(() => {
     vi.useRealTimers();

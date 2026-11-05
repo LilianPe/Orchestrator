@@ -19,6 +19,12 @@ export function parseStatus(out: string): string[] {
   return paths;
 }
 
+/** The default branch as `origin/<name>`; `origin/main` when the clone does not know it. */
+export async function originHead(exec: Exec, repo: string): Promise<string> {
+  const r = await exec('git', ['-C', repo, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD']);
+  return r.code === 0 ? r.stdout.trim() : 'origin/main';
+}
+
 export class GitWorkspaces implements WorkspaceManager {
   private exec: Exec;
 
@@ -28,11 +34,6 @@ export class GitWorkspaces implements WorkspaceManager {
 
   private git(repo: string, ...args: string[]): Promise<string> {
     return mustExec(this.exec, 'git', ['-C', repo, ...args]);
-  }
-
-  private async trunk(repo: string): Promise<string> {
-    const r = await this.exec('git', ['-C', repo, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD']);
-    return r.code === 0 ? r.stdout.trim().replace(/^origin\//, '') : 'main';
   }
 
   async prepare(req: WorkspaceRequest): Promise<Workspace> {
@@ -51,20 +52,26 @@ export class GitWorkspaces implements WorkspaceManager {
     const branch = branchName(req.ticketId, req.title);
     const has = async (ref: string) =>
       (await this.exec('git', ['-C', req.repoPath, 'rev-parse', '--verify', '--quiet', ref])).code === 0;
+    const trunk = await originHead(this.exec, req.repoPath);
+    let ahead = false;
     if (await has(`refs/heads/${branch}`)) {
       await this.git(req.repoPath, 'worktree', 'add', path, branch);
+      ahead = true;
     } else if (await has(`refs/remotes/origin/${branch}`)) {
       await this.git(req.repoPath, 'worktree', 'add', path, '-b', branch, `origin/${branch}`);
+      ahead = true;
     } else {
-      await this.git(req.repoPath, 'worktree', 'add', '--no-track', '-b', branch, path, `origin/${await this.trunk(req.repoPath)}`);
+      await this.git(req.repoPath, 'worktree', 'add', '--no-track', '-b', branch, path, trunk);
     }
-    return { path, port, branch, fresh: true };
+    // On a branch that already existed: only its commits beyond the default branch count.
+    ahead &&= (await this.git(path, 'rev-list', '--count', `${trunk}..HEAD`)).trim() !== '0';
+    return { path, port, branch, fresh: true, ...(ahead ? { ahead } : {}) };
   }
 
   private async trunkWorkspace(req: WorkspaceRequest): Promise<Workspace> {
     const path = join(this.o.root, req.projectId, '_trunk');
     await this.git(req.repoPath, 'fetch', 'origin');
-    const ref = `origin/${await this.trunk(req.repoPath)}`;
+    const ref = await originHead(this.exec, req.repoPath);
     if (existsSync(path)) await this.git(path, 'checkout', '-f', '--detach', ref);
     else {
       mkdirSync(dirname(path), { recursive: true });
@@ -80,7 +87,7 @@ export class GitWorkspaces implements WorkspaceManager {
     const path = join(this.o.root, '_kb', req.runId);
     const branch = `learn/${req.ticketId.toLowerCase()}-${req.runId.slice(0, 8)}`;
     mkdirSync(dirname(path), { recursive: true });
-    await this.git(kb, 'worktree', 'add', '-b', branch, path, `origin/${await this.trunk(kb)}`);
+    await this.git(kb, 'worktree', 'add', '-b', branch, path, await originHead(this.exec, kb));
     return { path, branch };
   }
 

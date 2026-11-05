@@ -7,7 +7,7 @@ import { GitHubAppForge } from '../adapters/forge/github-app.js';
 import { createGithubIngest, githubMapContext, githubRepoOf } from '../adapters/forge/github-ingest.js';
 import { PrPoller } from '../adapters/forge/pr-poller.js';
 import { CachedRoleResolver } from '../adapters/roles/cached.js';
-import { ClaudeCodeRunner } from '../adapters/runner/claude-code.js';
+import { ClaudeCodeRunner, liveDir } from '../adapters/runner/claude-code.js';
 import { purgeRunDirs, purgeSessionDirs, purgeTranscripts } from '../adapters/runner/transcript.js';
 import { FakeRunner } from '../adapters/runner/fake.js';
 import type { Runner } from '../adapters/runner/types.js';
@@ -22,7 +22,8 @@ import { Reconciler, reconcileOnce } from '../adapters/tracker/linear/reconcile.
 import { LinearTracker } from '../adapters/tracker/linear/tracker.js';
 import { isUsableWebhookSecret } from '../adapters/tracker/linear/webhook.js';
 import { GitWorkspaces } from '../adapters/workspace/git-workspaces.js';
-import { loadFactoryYml } from '../config/factory-yml.js';
+import { activeClaudeToken, loadFactoryYml } from '../config/factory-yml.js';
+import { makeRepoVariables } from './repo-variables.js';
 import { daemonSecretValues, effectiveInstance, homePaths, linearSettings, saveLinearTokens } from '../config/instance.js';
 import { githubWebhookSecret, resolveGithubApp } from '../config/github-app.js';
 import { writeRunSettings } from '../config/run-settings.js';
@@ -39,6 +40,7 @@ import { KnowledgeBase } from '../knowledge/kb.js';
 import { startSmeeRelay } from '../relay/smee.js';
 import { agentOnly, createApp } from '../server/app.js';
 import { openStore } from '../store/open.js';
+import { RUN_BEAT_MS } from '../store/types.js';
 import { repoRoot } from './root.js';
 import { TrackerSwitch } from './tracker-switch.js';
 import { PRODUCT_NAME } from '../product.js';
@@ -152,9 +154,11 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     });
     const sandboxes = o.fakeRunner ? undefined : makeSandboxes(env, instanceId(o.home), egress);
     if (!o.fakeRunner && !sandboxes) log("Attention : FACTORY_CONTAINER_CLI absent, les runs tournent sur l'hôte, sans isolation.");
+    const claudeToken = activeClaudeToken(yml);
+    if (sandboxes && !claudeToken && !env['CLAUDE_CODE_OAUTH_TOKEN']) log('Attention : aucun jeton Claude (claude.active de factory.yml, ou CLAUDE_CODE_OAUTH_TOKEN) : les runs sandboxés ne pourront pas s’authentifier.');
     const runner: Runner = o.fakeRunner
       ? new FakeRunner()
-      : new ClaudeCodeRunner({ transcriptsDir: paths.transcripts, secrets: daemonSecrets, ...(sandboxes ? { sandboxes } : {}) });
+      : new ClaudeCodeRunner({ transcriptsDir: paths.transcripts, secrets: daemonSecrets, claudeToken: () => claudeToken, ...(sandboxes ? { sandboxes } : {}) });
     const workspaces = new GitWorkspaces({ root: paths.workspaces, knowledgeRepo: instance.knowledge?.repoPath });
     const forge = githubApp
       ? new GitHubAppForge({ ...githubApp, log })
@@ -207,6 +211,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       dailyBudgetUsd: instance.limits.perDayUsd,
       knowledgeConfigured: !!instance.knowledge,
       roles,
+      repoVariables: makeRepoVariables({ yml, log }),
       ...(sandboxes
         ? {
             sandboxes,
@@ -338,7 +343,6 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
               const who = await api.gql<{ viewer: { id: string }; organization: { id: string } }>(Q.viewer);
               saveLinearTokens(o.home, { appUserId: who.viewer.id, organizationId: who.organization.id });
               await connectLinear();
-              await orchestrator.announceRecovery();
               for (const p of projects) {
                 const created = await linearTracker!.ensureSetup(p.teamKey, p.workflow.states, FACTORY_LABELS);
                 if (created.length) log(`Linear ${p.teamKey} : créé ${created.join(', ')}`);
@@ -357,9 +361,11 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     const relay = instance.relay.kind === 'smee' ? startSmeeRelay({ url: instance.relay.url, onWebhook: ingest, log }) : undefined;
     let purgeInterval: NodeJS.Timeout | undefined;
     let tickInterval: NodeJS.Timeout | undefined;
+    let beatInterval: NodeJS.Timeout | undefined;
     // Everything but the store, which the caller closes after: by stop(), or by a start that fails from here on.
     const shutdown = async () => {
       clearInterval(tickInterval);
+      clearInterval(beatInterval);
       clearInterval(purgeInterval);
       relay?.close();
       // A pass under way finishes first, so it never reads or writes a closed store.
@@ -385,6 +391,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
         if (removed.length) log(`transcripts : ${removed.length} supprimé(s) après 30 jours`);
         const runs = purgeRunDirs(paths.runs, now);
         if (runs.length) log(`runs : ${runs.length} dossier(s) supprimé(s) après 30 jours`);
+        // Raw streams a crash left and nothing took up (ORC-220).
+        purgeRunDirs(liveDir(paths.transcripts), now);
         purgeSessionDirs(paths.sessions, now, store).then(
           (sessions) => sessions.length && log(`sessions : ${sessions.length} supprimée(s), tickets clos depuis 30 jours`),
           (e: unknown) => log(`sessions purge: ${(e as Error).message}`),
@@ -399,13 +407,15 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
         orchestrator.tick().catch((e: unknown) => log(`tick: ${(e as Error).message}`));
       }, 60_000);
       tickInterval.unref();
+      // The heartbeat of the attempts (ORC-220): their leases, in the store.
+      beatInterval = setInterval(() => {
+        orchestrator.supervise().catch((e: unknown) => log(`heartbeat: ${(e as Error).message}`));
+      }, RUN_BEAT_MS);
+      beatInterval.unref();
       // The GitHub webhooks carry the PRs (ORC-134), the 5-minute reconciliation catches what they lose (ORC-185);
       // without webhooks a merge would wait 5 minutes, so the 30-second poll stays (ORC-181 removes it).
       if (!isUsableWebhookSecret(githubSecret)) poller.start();
-      if (await connectLinear()) {
-        await orchestrator.announceRecovery();
-        void reconciler.once();
-      }
+      if (await connectLinear()) void reconciler.once();
       else log(`Linear non connecté : ouvrez ${baseUrl}/oauth/start`);
       // The worker (ORC-149) executes the effects decided before a crash, then the events written
       // before it (or whose processing failed), oldest first; it then polls the inbox and the outbox

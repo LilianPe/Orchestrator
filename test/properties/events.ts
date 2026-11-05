@@ -160,6 +160,8 @@ const PAYLOADS: { [K in EventType]: fc.Arbitrary<EventPayloads[K]> } = {
     ),
   'verify.passed': fc.record({ runId, job }),
   'verify.failed': fc.record({ runId, job, failures: fc.constant(VERIFY_FAILURES) }),
+  'run.lost': fc.record({ runId, job, cause: fc.constantFrom('restart' as const, 'lease' as const) }),
+  'verify.lost': fc.record({ runId, job }),
   'timer.fired': timerFired,
   'control.pause': empty,
   'control.resume': empty,
@@ -205,7 +207,7 @@ const signedBy: fc.Arbitrary<Signed | undefined> = fc.oneof(
  * their producers stamp them `TRUSTED`. Only events that carry content from outside can be untrusted.
  */
 const FACTORY_PRODUCED: ReadonlySet<EventType> = new Set<EventType>([
-  'run.finished', 'verify.passed', 'verify.failed', 'timer.fired', 'control.pause', 'control.resume', 'control.stop',
+  'run.finished', 'run.lost', 'verify.passed', 'verify.failed', 'verify.lost', 'timer.fired', 'control.pause', 'control.resume', 'control.stop',
   'effect.done', 'effect.failed', 'dead_letter.added', 'dead_letter.repaired',
 ]);
 
@@ -235,10 +237,9 @@ const shell: fc.Arbitrary<ShellEvent> = fc.oneof(
     type: fc.constant('run.started' as const),
     runId,
     job: fc.constantFrom(...DEV_JOBS, 'ask'),
-    feedbackConsumed: fc.boolean(),
   }).map((e): ShellEvent => ({ ...e, queue: e.job === 'ask' ? 'questions' : 'dev', claudeSessionId: 'claude-1' })),
   fc.constant<ShellEvent>({ type: 'run.cleared' }),
-  fc.constant<ShellEvent>({ type: 'run.interrupted', reason: 'redémarrage' }),
+  fc.constant<ShellEvent>({ type: 'feedback.consumed' }),
   logical.map((to): ShellEvent => ({ type: 'status.recorded', to })),
   fc.constantFrom(...DEV_JOBS).map((j): ShellEvent => ({ type: 'pending.set', job: { job: j } })),
   fc.constant<ShellEvent>({ type: 'pending.cleared' }),
@@ -267,7 +268,8 @@ const attempt: fc.Arbitrary<DraftEntry[]> = fc
         ? { type: 'verify.passed', payload: { runId: id, job: j, ...freeze } }
         : { type: 'verify.failed', payload: { runId: id, job: j, failures: VERIFY_FAILURES, ...freeze } };
     return [
-      { kind: 'shell', event: { type: 'run.started', runId: id, job: j, queue: 'dev', claudeSessionId: 'claude-1', feedbackConsumed: j !== 'dev' } },
+      { kind: 'shell', event: { type: 'run.started', runId: id, job: j, queue: 'dev', claudeSessionId: 'claude-1' } },
+      ...(j !== 'dev' ? [{ kind: 'shell' as const, event: { type: 'feedback.consumed' as const } }] : []),
       { kind: 'external', draft: finished, untrusted: false },
       { kind: 'external', draft: report, untrusted: false },
     ];
@@ -288,7 +290,8 @@ const verifyLoop: fc.Arbitrary<DraftEntry[]> = fc
           ? { type: 'verify.passed', payload: { runId: id, job: j } }
           : { type: 'verify.failed', payload: { runId: id, job: j, failures: VERIFY_FAILURES } };
       return [
-        { kind: 'shell', event: { type: 'run.started', runId: id, job: j, queue: 'dev', claudeSessionId: 'claude-1', feedbackConsumed: i > 0 } },
+        { kind: 'shell', event: { type: 'run.started', runId: id, job: j, queue: 'dev', claudeSessionId: 'claude-1' } },
+        ...(i > 0 ? [{ kind: 'shell' as const, event: { type: 'feedback.consumed' as const } }] : []),
         { kind: 'external', draft: { type: 'run.finished', payload: { runId: id, job: j, outcome: 'success', costUsd: 0.5, turns: 3, lastText: 'fini' } }, untrusted: false },
         { kind: 'external', draft: report, untrusted: false },
       ];
