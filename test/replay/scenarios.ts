@@ -241,6 +241,14 @@ export async function record(name: string): Promise<ExportedJournal> {
  * without version nor taint (`src/core/upcast.ts`). The recorded decisions are unchanged: they were
  * taken on the upcast event.
  */
+/** The files `npm run replay:record` writes for a scenario, with their exact text. */
+export function recordedFiles(name: string, journal: ExportedJournal): { file: string; text: string }[] {
+  const text = (j: ExportedJournal) => `${JSON.stringify(j, null, 2)}\n`;
+  const files = [{ file: `${name}.json`, text: text(journal) }];
+  if (name === 'review-merge-done') files.push({ file: `${name}.v1.json`, text: text(asVersion1(journal)) });
+  return files;
+}
+
 export function asVersion1(journal: ExportedJournal): ExportedJournal {
   return {
     ...journal,

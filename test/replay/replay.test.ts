@@ -1,16 +1,46 @@
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { upcastTicket } from '../../src/core/types.js';
 import { formatReplay, readJournal, replayJournal, type ExportedJournal } from '../../src/runtime/replay.js';
 import { loadTestWorkflow } from '../helpers/harness.js';
 import { testPreset } from '../helpers/test-preset.js';
-import { asVersion1, record as recordScenario, scenarioWorkflow, SCENARIOS } from './scenarios.js';
+import { asVersion1, record as recordScenario, recordedFiles, scenarioWorkflow, SCENARIOS } from './scenarios.js';
 
 const dir = join(import.meta.dirname, 'journals');
 
 /** A deep copy, to change a journal without touching the recorded one. */
 const copy = (j: ExportedJournal): ExportedJournal => JSON.parse(JSON.stringify(j)) as ExportedJournal;
+
+const shown = (v: unknown) => {
+  const s = JSON.stringify(v) ?? 'absent';
+  return s.length > 80 ? `${s.slice(0, 77)}...` : s;
+};
+
+/** The first path where two parsed journals differ, as `entries[3].decision.before.status`. */
+function firstDifference(committed: unknown, recorded: unknown, path = ''): string {
+  const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null;
+  if (isObject(committed) && isObject(recorded) && Array.isArray(committed) === Array.isArray(recorded)) {
+    const keys = [...new Set([...Object.keys(committed), ...Object.keys(recorded)])];
+    for (const key of keys) {
+      const at = Array.isArray(recorded) ? `${path}[${key}]` : path ? `${path}.${key}` : key;
+      const diff = firstDifference(committed[key], recorded[key], at);
+      if (diff) return diff;
+    }
+    return path ? '' : 'same content, written differently';
+  }
+  if (JSON.stringify(committed) === JSON.stringify(recorded)) return '';
+  return `first difference at ${path || 'the root'}: committed ${shown(committed)}, recorded ${shown(recorded)}`;
+}
+
+/** Why a committed journal is not the recorded one: a workflow hash says more than its first changed key. */
+function drift(committed: string | undefined, recorded: string): string {
+  if (committed === undefined) return 'missing';
+  const [was, now] = [JSON.parse(committed), JSON.parse(recorded)] as ExportedJournal[];
+  const hashes = (j: ExportedJournal) => Object.keys(j.workflows).join(', ');
+  if (hashes(was) !== hashes(now)) return `the frozen workflow changed: committed ${hashes(was)}, recorded ${hashes(now)}`;
+  return firstDifference(was, now);
+}
 
 /** Each scenario runs once; every test gets its own copy of the journal. */
 const recorded = new Map<string, Promise<ExportedJournal>>();
@@ -189,6 +219,19 @@ describe('recorded journals (test/replay/journals)', () => {
       expect(e.decision).toMatchObject({ effects: [], timers: [], trace: [`${e.event.type}: recorded for the measures`] });
     }
     expect(replayJournal(journal)).toMatchObject({ divergences: [], replayed: journal.entries.length });
+  });
+
+  // The oracle replays a journal from its own recorded inputs, so a stale journal stays green there:
+  // this compares it with what its scenario records today (ORC-310).
+  it.each(Object.keys(SCENARIOS))('%s: the committed journals are what the scenario records today', async (name) => {
+    for (const { file, text } of recordedFiles(name, await record(name))) {
+      const committed = existsSync(join(dir, file)) ? readFileSync(join(dir, file), 'utf8') : undefined;
+      if (committed === text) continue;
+      expect.fail(
+        `test/replay/journals/${file} is not what its scenario records today (${drift(committed, text)}). ` +
+          'If the change of the pack, a projection or an event payload is meant, run `npm run replay:record` and commit the journals\' diff.',
+      );
+    }
   });
 
   it.each(files)('%s replays identical bit for bit', (file) => {
