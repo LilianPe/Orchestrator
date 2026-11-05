@@ -195,7 +195,7 @@ describe('ContainerSandboxProvider.create', () => {
     expect(egress.opened).toEqual([{ runId: 'r1', policy: { level: 'limited', allow: [] } }]);
     // Usable from now on: the heartbeat finds it, and spawnCommand knows it.
     expect(await p.findByAttempt('r1')).toEqual({ id: 'c9', network: 'limited', level: 'L3' });
-    expect(p.spawnCommand('c9', ['true'])[0]).toBe('docker');
+    expect(p.spawnCommand('c9', ['true']).command[0]).toBe('docker');
     // Twice in one process, the egress is not opened twice.
     await p.reattach('r1');
     expect(egress.opened).toHaveLength(1);

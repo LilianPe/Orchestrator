@@ -47,14 +47,15 @@ describe('the Flux on the engine (ORC-297)', () => {
     expect(f.needsYou.blocked).toEqual([{ cause: 'stopped', tickets: [expect.objectContaining({ ticketId: 'REL-1' })] }]);
   });
 
-  it('a restart during a run, then during a check, and a launch that fails: infrastructure, in the words the shell writes', async () => {
+  it('a restart during a run blocks nothing, and a launch that fails is infrastructure, in the words the shell writes', async () => {
     const h = createHarness();
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Exporter les audits en CSV depuis la liste des audits.' });
     h.runner.enqueue({ hold: true });
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
     await h.restart();
     const during = await flowOf(h)();
-    expect(during.needsYou.blocked).toEqual([{ cause: 'infra', tickets: [expect.objectContaining({ ticketId: 'REL-1', reason: expect.stringContaining('a redémarré pendant le run') })] }]);
+    // The step starts again by itself (ORC-220): nothing for a human.
+    expect(during.needsYou.blocked).toEqual([]);
 
     h.tracker.addIssue({ identifier: 'REL-2', title: 'Import CSV', description: 'Importer les audits en CSV depuis la liste des audits.' });
     h.workspaces.prepare = async () => {
