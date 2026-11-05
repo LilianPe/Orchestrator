@@ -15,7 +15,7 @@ import type { Workflow } from '../../src/config/workflow-schema.js';
 import { EventBus } from '../../src/core/bus.js';
 import { FakeClock } from '../../src/core/clock.js';
 import { Orchestrator, type ProjectRuntime } from '../../src/core/orchestrator.js';
-import { Scheduler } from '../../src/core/scheduler.js';
+import { devCapacity, Scheduler } from '../../src/core/scheduler.js';
 import { TimerService } from '../../src/runtime/timers.js';
 import type { EventPayloads, EventType, FactoryEvent, Taint } from '../../src/core/types.js';
 import type { Verifier } from '../../src/core/verify.js';
@@ -135,6 +135,8 @@ export function mortal(store: Store): { store: Store; kill(): void; gate<T exten
 export function createHarness(
   opts: {
     projectYaml?: string;
+    /** `concurrency` of factory.yml (ORC-203). */
+    concurrency?: number;
     preset?: TestPreset;
     verify?: Verifier;
     knowledge?: boolean;
@@ -216,7 +218,7 @@ export function createHarness(
       bus.subscribe((m) => void (m.kind === 'log' && logs.push({ level: m.level, message: m.message })));
       return bus;
     })(),
-    scheduler: new Scheduler(store, { dev: workflow.limits.parallelSessions, questions: workflow.limits.questionSessions }),
+    scheduler: new Scheduler(store, { dev: devCapacity(opts.concurrency, workflow.limits.parallelSessions), questions: workflow.limits.questionSessions }),
     ...outside,
     projects: [project],
     packDir,

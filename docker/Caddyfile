@@ -1,0 +1,3 @@
+{$FACTORY_PUBLIC_HOST} {
+	reverse_proxy factoryd:4100
+}

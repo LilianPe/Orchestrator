@@ -20,7 +20,7 @@ Toutes les commandes `relais` lisent `RELAIS_HOME` (défaut `~/.relais`) et `con
 | `relais stop <ID>` | Arrêter le run d'un ticket. | oui |
 | `factory run repair <ID> [replay\|skip\|force] [<événement>]` | Lister ou réparer les événements mis de côté (dead-letter) d'un ticket. | non (lit et écrit la base) |
 
-Les commandes qui demandent le démon appellent `http://127.0.0.1:<port>/api/…` avec le `port` de `config.yaml`. Si `RELAIS_UI_PASSWORD` est défini dans votre shell, elles l'envoient en HTTP Basic (nécessaire quand le démon écoute hors bouclage). En Docker, lancez-les dans le conteneur : `docker compose exec relais node dist/src/cli/relais.js status`.
+Les commandes qui demandent le démon appellent `http://127.0.0.1:<port>/api/…` avec le `port` de `config.yaml`. Si `RELAIS_UI_PASSWORD` est défini dans votre shell, elles l'envoient en HTTP Basic (nécessaire quand le démon écoute hors bouclage). En Docker, lancez-les dans le conteneur : `docker compose exec factoryd node dist/src/cli/factory.js status`.
 
 ### `relais init`
 

@@ -404,6 +404,20 @@ describe('standard workflow', () => {
     expect(h.runner.requests[1]!.cwd).toBe('/tmp/factory-fake/p/REL-2');
   });
 
+  it('concurrency: 1 in factory.yml runs one ticket at a time, whatever the workflow allows (ORC-203)', async () => {
+    const h = createHarness({ concurrency: 1, projectYaml: 'version: 1\nlimits: { parallel_sessions: 3 }\n' });
+    h.tracker.addIssue({ identifier: 'REL-1', title: 'Un' });
+    h.tracker.addIssue({ identifier: 'REL-2', title: 'Deux' });
+    h.runner.enqueue({ hold: true }, {});
+    await h.send('ticket.delegated', { linearSessionId: 'a' }, 'REL-1');
+    await h.send('ticket.delegated', { linearSessionId: 'b' }, 'REL-2');
+    expect(h.runner.requests).toHaveLength(1);
+    expect(await h.store.listQueue()).toHaveLength(1);
+    h.runner.release((await h.ticket('REL-1')).activeRunId!);
+    await h.orch.drained();
+    expect(h.runner.requests).toHaveLength(2);
+  });
+
   it('a ticket failing pickup checks is blocked with an explanation', async () => {
     const h = createHarness();
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Flou', description: 'trop court' });

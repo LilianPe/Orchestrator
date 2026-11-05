@@ -1,11 +1,27 @@
+# One topology (ORC-203): factoryd, postgres, proxy, caddy, on a rootless engine. See docs/deploiement.md.
 services:
-  factory:
-    build: .
-    ports: ["4100:4100"]
+  factoryd:
+    build:
+      context: .
+      args:
+        FACTORY_COMMIT: ${FACTORY_COMMIT:-}
+    image: factory-factoryd:local
+    # The rootless engine's socket belongs to uid 0, group 0 in a container, mode 0660: the group is all `node` needs.
+    group_add: ["0"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      proxy: { condition: service_healthy }
+    networks: [default, back]
+    stop_grace_period: 30s
     volumes:
-      # Both must be writable by uid 1000 (user `node` in the image).
-      - ./data:/data
-      - ./repos:/repos
+      # Same path on both sides: the engine resolves a runner's mounts on the host, not in this container.
+      - ${FACTORY_DIR:?définissez FACTORY_DIR (chemin absolu sur le serveur)}/data:${FACTORY_DIR}/data
+      - ${FACTORY_DIR}/repos:${FACTORY_DIR}/repos
+      - ${FACTORY_DIR}/install:${FACTORY_DIR}/install
+      # No runner gets it (the provider refuses the mount). `verify` still runs in this container until ORC-151: see docs/deploiement.md.
+      - ${FACTORY_ENGINE_SOCKET:?définissez FACTORY_ENGINE_SOCKET (socket du moteur rootless)}:/var/run/docker.sock
     environment:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?définissez ANTHROPIC_API_KEY}
       GH_TOKEN: ${GH_TOKEN:?définissez GH_TOKEN (push HTTPS et gh pr)}
@@ -15,4 +31,86 @@ services:
       GIT_AUTHOR_EMAIL: ${GIT_AUTHOR_EMAIL:-factory@localhost}
       GIT_COMMITTER_NAME:
       GIT_COMMITTER_EMAIL: ${GIT_AUTHOR_EMAIL:-factory@localhost}
+      FACTORY_HOME: ${FACTORY_DIR}/data
+      FACTORY_INSTALL_DIR: ${FACTORY_DIR}/install
+      FACTORY_DATABASE_URL: postgres://factory:${POSTGRES_PASSWORD:?définissez POSTGRES_PASSWORD}@postgres:5432/factory
+      FACTORY_CONTAINER_CLI: docker
+      FACTORY_RUNNER_IMAGE: ${FACTORY_RUNNER_IMAGE:?définissez FACTORY_RUNNER_IMAGE (voir docker/runner.Dockerfile)}
+      FACTORY_EGRESS_CONTROL: ${FACTORY_DIR}/data/network/control.sock
+      # For the proxy, on the default network; published nowhere, and every route of it asks for a run token.
+      FACTORY_AGENT_HOST: 0.0.0.0
+      FACTORY_AGENT_PORT: "4101"
+      # Refused on any other engine: for a developer's machine only, never the server.
+      FACTORY_ALLOW_ROOTFUL_ENGINE:
     restart: unless-stopped
+
+  # The factory's own proxy (docs/decisions/ORC-213.md), out of the daemon: no secret of the daemon's here.
+  proxy:
+    image: factory-factoryd:local
+    pull_policy: never
+    command: ["node", "dist/src/cli/factory-proxy.js"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    volumes:
+      - ${FACTORY_DIR}/data/network:${FACTORY_DIR}/data/network
+      - ${FACTORY_DIR}/egress-ca:${FACTORY_DIR}/egress-ca
+    environment:
+      FACTORY_EGRESS_DIR: ${FACTORY_DIR}/data/network
+      FACTORY_EGRESS_CONTROL: ${FACTORY_DIR}/data/network/control.sock
+      FACTORY_EGRESS_CA_DIR: ${FACTORY_DIR}/egress-ca
+      FACTORY_AGENT_UPSTREAM: factoryd
+      FACTORY_AGENT_PORT: "4101"
+    healthcheck:
+      test: ["CMD-SHELL", "test -S \"$$FACTORY_EGRESS_CONTROL\""]
+      interval: 30s
+      timeout: 2s
+      retries: 3
+      start_period: 60s
+      start_interval: 2s
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16
+    networks: [back]
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    environment:
+      POSTGRES_USER: factory
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: factory
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U factory -d factory"]
+      interval: 30s
+      timeout: 2s
+      retries: 3
+      start_period: 60s
+      start_interval: 2s
+    restart: unless-stopped
+
+  # TLS of the webhooks and the interface; their exposure in production is ORC-221's.
+  caddy:
+    image: caddy:2.11.8-alpine
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: ["no-new-privileges:true"]
+    depends_on: [factoryd]
+    ports:
+      - ${FACTORY_HTTP_PORT:-80}:80
+      - ${FACTORY_HTTPS_PORT:-443}:443
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    environment:
+      FACTORY_PUBLIC_HOST: ${FACTORY_PUBLIC_HOST:?définissez FACTORY_PUBLIC_HOST (domaine de publicUrl)}
+    restart: unless-stopped
+
+networks:
+  # postgres and factoryd alone: no route out, nothing published.
+  back:
+    internal: true
+
+volumes:
+  postgres:
+  caddy-data:
+  caddy-config:

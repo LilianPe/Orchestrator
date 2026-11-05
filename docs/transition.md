@@ -49,7 +49,7 @@ Relais a été renommé d'un bloc, sans changement de comportement : seuls les n
 | plugin `relais`, skills `relais:<nom>` | plugin `factory`, skills `factory:<nom>` |
 | branches `relais/<id>-<slug>` | branches `factory/<id>-<slug>` |
 | type `RelaisEvent`, `startRelais`, `relaisHome` | `FactoryEvent`, `startFactory`, `factoryHome` |
-| service compose `relais`, `relais-entrypoint`, `relais@localhost` | service `factory`, `factory-entrypoint`, `factory@localhost` |
+| service compose `relais`, `relais-entrypoint`, `relais@localhost` | service `factoryd` (ORC-203), `factory-entrypoint`, `factory@localhost` |
 | dépôt de connaissance créé par `init` : `relais-knowledge` | `factory-knowledge` |
 
 **Nom affiché.** Ce qu'un humain lit (aide et messages de la CLI, titre et en-tête de l'interface, messages publiés dans Linear, realm du mot de passe, nom de l'identité git des commits) vient d'une seule constante, `PRODUCT_NAME` dans `src/product.ts`, aujourd'hui `Orchestrator` (nom de bêta). Le jour du nom définitif, on change cette constante, le nom du dépôt GitHub et les docs ; sur une instance déjà configurée, ce qui a été écrit sous l'ancien nom ne suit pas et se renomme à la main : l'application OAuth Linear, que `init` fait créer sous ce nom et qu'on mentionne avec @, et le titre de l'`INDEX.md` de la base de connaissance. La constante est lue par :
@@ -109,7 +109,7 @@ Le premier ticket cité est celui qui touche le module en premier ou le plus ; l
 | `src/core/bus.ts` | Chaîne d'événements en mémoire (`EventBus`, aussi source du SSE) | retirer | ORC-169 (ORC-223 garde le flux SSE du dashboard) |
 | `src/core/scheduler.ts` | Places `dev` et `questions` en mémoire ; un départ est tiré de la file `queue` sous bail jusqu'à l'écriture du run (ORC-150) | retirer | ORC-169 (ORC-182 garde un emplacement à part pour les questions) |
 | `src/core/decision.ts` | Type `Decision` de `decide` : `Effect` (ex-`Command` côté externe), `Timer` générique `{kind, slot, ms, payload}` (ex-`set_debounce`, ORC-161) ; remplace `commands.ts` (ORC-133) ; `OutboxEffect` (un effet, ou `settle`) écrit dans l'outbox (ORC-149) | garder | ORC-133, ORC-161 (fait : timer générique), ORC-162 (effets idempotents), ORC-150 (`settle` passe dans `decide`) |
-| `src/core/attempt-labels.ts` | Étiquettes d'une tentative à sa création : job, file, modèle, version et commit de l'usine, empreintes sha256 du prompt, des skills, du workflow et de la config ; champs sans source encore à `null` avec le ticket qui les remplira | garder | ORC-226 (fait), ORC-203 (commit de l'usine), ORC-136/ORC-187 (effort), ORC-204 (image), ORC-206 (risque), ORC-257 (registre, faits livrés), ORC-232 (index de connaissances) |
+| `src/core/attempt-labels.ts` | Étiquettes d'une tentative à sa création : job, file, modèle, version et commit de l'usine, empreintes sha256 du prompt, des skills, du workflow et de la config ; champs sans source encore à `null` avec le ticket qui les remplira | garder | ORC-226 (fait), ORC-203 (fait, commit de l'usine), ORC-136/ORC-187 (effort), ORC-204 (image), ORC-206 (risque), ORC-257 (registre, faits livrés), ORC-232 (index de connaissances) |
 | `src/core/conditions.ts` | Mini-langage `when` | retirer | ORC-177 |
 | `src/core/verify.ts` | `runVerify` : commandes `bash -lc` dans le worktree de l'agent ; sur un échec, empreinte du worktree (arbre git, garde « Boucle », ORC-187) | adapter | ORC-151 (sandbox neuf, SHA figé), ORC-179 (plus dans le worktree) |
 | `src/core/prompt.ts` | Prompt texte d'un run (skill, ticket, branche, PR, échecs de vérif) | adapter | ORC-136 (pistes d'`intake`), ORC-151 (logs tronqués), ORC-182 (entrées de l'agent de réponse) |
@@ -213,6 +213,7 @@ Sortie réseau des sandboxes (ORC-213, [décision](decisions/ORC-213.md)).
 | `src/network/levels.ts` | Niveaux de réseau (`none`, `claude-api`, `limited`, `full`), resserrement par étape, `full` refusé à l'agent ; listes (API Claude, renouvellement OAuth, hôtes `limited`) ; décision par hôte (`CONNECT`) puis par méthode et chemin (chaque requête) | garder | ORC-213, ORC-209 C (`network` du dépôt lu au lancement), ORC-219 (tests 3 à 6) |
 | `src/network/proxy.ts` | `EgressProxy` : un socket Unix par run, chaque `CONNECT` déchiffré (HTTP/1.1 seulement) et chaque requête vérifiée puis renvoyée en TLS vérifié, HTTP en clair renvoyé en HTTPS, adresses privées refusées, API agent relayée, journal JSONL par run (`<home>/network/<run>.jsonl`) | garder | ORC-213, journal en base et au tableau de bord (ticket à ouvrir) |
 | `src/network/ca.ts` | Autorité de sortie de l'usine (`<home>/egress-ca/`, clé en `0600`) et certificats par hôte qu'elle signe (`node-forge`), en cache | garder | ORC-213 |
+| `src/network/proxy-service.ts` | Le service `proxy` de compose : `EgressProxy` piloté par le démon sur un socket de contrôle (`open`, `close`), `EgressClient` côté démon, qui oublie ses runs quand le proxy s'arrête | garder | ORC-203 |
 
 ### `src/app/` et racine de `src/`
 
@@ -285,6 +286,7 @@ Sortie réseau des sandboxes (ORC-213, [décision](decisions/ORC-213.md)).
 | `src/cli/replay.ts` | `factory replay` : rejoue des journaux exportés (régression bit à bit, `--what-if`), `--export` d'un ticket de l'instance | garder | ORC-174 (fait) |
 | `src/cli/plan.ts` | `factory plan` : tickets délégués qui seraient pris | retirer | ORC-200 |
 | `src/cli/repair.ts` | `factory run repair <ticket>` : liste les événements mis de côté d'un ticket, en rejoue, ignore ou force un, écrit dans le store (statut, événement `dead_letter.repaired` journalisé), sans démon | garder | ORC-175 |
+| `src/cli/factory-proxy.ts` | Point d'entrée du service `proxy` de compose, sans aucun secret du démon | garder | ORC-203 |
 | `src/cli/factory-agent.ts` | CLI de l'agent (`factory-agent`, nom temporaire) : `issue`, `search`, `kb search`, `ask` | retirer | ORC-192 (MCP de l'usine) |
 
 ### `web/`

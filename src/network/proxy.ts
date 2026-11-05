@@ -92,7 +92,7 @@ const targets = new WeakMap<object, { host: string; port: number }>();
 const served = new WeakSet<object>();
 
 /** ponytail: Windows named pipes, for the unit tests only; sandboxes need a Linux daemon (a Unix socket file). */
-const PIPE = process.platform === 'win32';
+export const PIPE = process.platform === 'win32';
 
 /** HTTP/1.1 alone: an h2-only client fails the handshake, and is journaled by clientError. */
 const ALPN = ({ protocols }: { protocols: string[] }) => (protocols.includes('http/1.1') ? 'http/1.1' : undefined);
