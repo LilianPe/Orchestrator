@@ -8,16 +8,14 @@ export const repoLabel = (id: string): string => `${REPO_LABEL}${id}`;
 
 const namesRepo = (label: string, id: string): boolean => label.toLowerCase() === repoLabel(id).toLowerCase();
 
-/** Start of the block reason of a ticket whose repo is still to be chosen. */
-const UNROUTED = 'Dépôt à préciser';
-
 /** The block reason, and the message, of a ticket whose repo is still to be chosen among `repos`. */
 export function unroutedReason(repos: readonly string[]): string {
   const labels = repos.map((r) => `\`${repoLabel(r)}\``).join(', ');
-  return `${UNROUTED} : cette équipe Linear a plusieurs dépôts. Ajoutez au ticket le label de son dépôt (${labels}), puis déléguez-le de nouveau.`;
+  return `Dépôt à préciser : cette équipe Linear a plusieurs dépôts. Ajoutez au ticket le label de son dépôt (${labels}), puis déléguez-le de nouveau.`;
 }
 
-export const isUnrouted = (t: TicketState | undefined): boolean => !!t?.blocked && !!t.blockReason?.startsWith(UNROUTED);
+/** The ticket waits for its repo: `awaitingRepo`, whatever its block reason says. */
+export const isUnrouted = (t: TicketState | undefined): boolean => !!t?.awaitingRepo;
 
 /** A ticket its project keeps whatever its labels say: work was asked of it there (sticky routing). */
 export const holds = (t: TicketState): boolean => !isUnrouted(t) && (t.delegated || t.prNumber !== undefined || t.branch !== undefined);

@@ -21,7 +21,7 @@ describe('a ticket waiting for its repo, once a human chose it (ORC-291)', () =>
       await h.orch.drained();
     };
     await to('p', 'ticket.delegated', { linearSessionId: 's1', repos });
-    expect((await h.store.getTicket('p', 'REL-1'))?.blockReason).toBe(unroutedReason(repos));
+    expect(await h.store.getTicket('p', 'REL-1')).toMatchObject({ blockReason: unroutedReason(repos), awaitingRepo: repos });
     expect(h.tracker.issues.get('REL-1')!.labels).toContain(BLOCKED_LABEL);
     return { h, to };
   }
@@ -38,7 +38,7 @@ describe('a ticket waiting for its repo, once a human chose it (ORC-291)', () =>
   it('its label names the repo it waits in: a new delegation lifts the wait and starts the work there', async () => {
     const { h, to } = await waiting();
     await to('p', 'ticket.delegated', { linearSessionId: 's2' });
-    expect(await h.store.getTicket('p', 'REL-1')).toMatchObject({ blocked: false, delegated: true });
+    expect(await h.store.getTicket('p', 'REL-1')).toMatchObject({ blocked: false, delegated: true, awaitingRepo: null });
     expect(h.runner.requests).toHaveLength(1);
     expect(h.tracker.issues.get('REL-1')!.labels).not.toContain(BLOCKED_LABEL);
   });

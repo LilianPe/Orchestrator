@@ -283,7 +283,7 @@ export type DecidedEvent =
   | { type: 'ticket.unblocked' }
   | {
       type: 'ticket.patched';
-      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests'>>;
+      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'awaitingRepo'>>;
     }
   | { type: 'feedback.appended'; item: FeedbackItem }
   /** The ticket's dev work is stopped: nothing pending, no verification awaited. */
@@ -361,6 +361,11 @@ export interface TicketState {
   frozenTests?: FrozenTests;
   /** The last failed check (worktree and failed commands) and how many times in a row it came back (ORC-187). */
   repeatedFailure?: { signature: string; count: number } | null;
+  /**
+   * The repos of its Linear team to choose from, while the ticket waits for a human to name one (ORC-291). `null` once
+   * chosen (`undefined` would not survive the journal's JSON); absent on a ticket that never waited.
+   */
+  awaitingRepo?: string[] | null;
   /**
    * Runs started by red CI (`pr.checks_failed`) since the last green CI or human relaunch, bounded by
    * `limits.ciFixAttempts` (I5, ORC-270). The AI review loop does not share it yet (ORC-184, ORC-187).

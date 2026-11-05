@@ -620,22 +620,25 @@ export function blockedLabelChange(before: boolean, after: boolean): Extract<Dec
 /** What a ticket waiting for its repo still handles as usual: the wait's own end, a question run's end, a dead letter. All else is fenced. */
 const PAST_THE_WAIT = new Set<EventType>(['ticket.delegated', 'ticket.undelegated', 'run.finished', 'dead_letter.added']);
 
+/** A ticket's wait for its repo is over: its block lifted, the field cleared. */
+const END_OF_WAIT = [{ type: 'ticket.unblocked' }, { type: 'ticket.patched', patch: { awaitingRepo: null } }] as const;
+
 /**
  * A ticket whose repo is to be chosen (ORC-291): an event that carries the choice (`repos`) or reaches a ticket
  * blocked for it. A delegation blocks it, whatever blocked it before: `repos` means no project holds it, and under
  * another reason it would hold this one. Already waiting, it is asked again; a mention, a command, a reply or a stop
  * is answered with the same question; anything else fenced decides nothing, so that no rule starts work in a repo
- * picked by default, and nothing replaces the reason that marks the wait. `undefined`: the event is not such a one,
- * a delegation without `repos` among them: its label names this repo, where it was waiting.
+ * picked by default. `undefined`: the event is not such a one, a delegation without `repos` among them: its label
+ * names this repo, where it was waiting.
  */
 function unrouted(state: TicketState | undefined, event: FactoryEvent): Decision | undefined {
   const repos = (event.payload as { repos?: string[] }).repos;
   if (!repos && (!isUnrouted(state) || PAST_THE_WAIT.has(event.type))) return undefined;
   const out = empty();
-  const body = repos ? unroutedReason(repos) : state!.blockReason!;
+  const body = unroutedReason(repos ?? state!.awaitingRepo!);
   const sessionId = (event.payload as { linearSessionId?: string }).linearSessionId;
   if (event.type === 'ticket.delegated' && repos) {
-    if (!isUnrouted(state)) out.events.push({ type: 'ticket.blocked', reason: body });
+    if (!isUnrouted(state)) out.events.push({ type: 'ticket.blocked', reason: body }, { type: 'ticket.patched', patch: { awaitingRepo: repos } });
     // In the session this delegation opened: the ticket keeps the first one it had.
     out.effects.push({ kind: 'activity', type: 'elicitation', body, ...(sessionId ? { linearSessionId: sessionId } : {}) });
     // A new ticket: `blockedLabel` sees no state before it and puts no label.
@@ -670,7 +673,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
   if (event.type === 'ticket.delegated' && isUnrouted(ticket)) {
     // Its repo chosen by this delegation, whose session is the ticket's from now on.
     const { linearSessionId } = event.payload;
-    for (const e of [{ type: 'ticket.unblocked' as const }, ...(linearSessionId ? [{ type: 'session.linked' as const, linearSessionId }] : [])]) {
+    for (const e of [...END_OF_WAIT, ...(linearSessionId ? [{ type: 'session.linked' as const, linearSessionId }] : [])]) {
       out.events.push(e);
       ticket = reduce(ticket, e);
     }
@@ -877,7 +880,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
     }
     case 'ticket.undelegated':
       // Delegated again with its `repo:` label, the ticket went to its repo: here nothing waits any longer (ORC-291).
-      if (isUnrouted(ticket)) out.events.push({ type: 'ticket.unblocked' });
+      if (isUnrouted(ticket)) out.events.push(...END_OF_WAIT);
       break;
     case 'label.changed': {
       // Routing is sticky (ORC-291): a ticket at work stays in its repo, whichever repo of the team a label added names.

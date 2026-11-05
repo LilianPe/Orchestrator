@@ -264,7 +264,7 @@ describe('mapLinearWebhook', () => {
     });
 
     it('a delegation to the repo its label names says where the ticket waited', async () => {
-      const stored = [{ ...newTicketState('web', 'REL-1', 'T', 'todo', 0), delegated: true, blocked: true, blockReason: unroutedReason(['web', 'api']) }];
+      const stored = [{ ...newTicketState('web', 'REL-1', 'T', 'todo', 0), delegated: true, blocked: true, blockReason: unroutedReason(['web', 'api']), awaitingRepo: ['web', 'api'] }];
       expect(await mapLinearWebhook(fx('session-created-delegation'), 'd1', twoRepos(['repo:api'], { stored }))).toMatchObject([{ projectId: 'api', payload: { waitedIn: 'web' } }]);
     });
 
@@ -301,7 +301,7 @@ describe('mapLinearWebhook', () => {
     });
 
     it('a stop in the session of a delegation still in the inbox follows its label, past the copy where the ticket waited', async () => {
-      const stored = [{ ...newTicketState('web', 'REL-1', 'T', 'todo', 0), delegated: true, blocked: true, blockReason: unroutedReason(['web', 'api']), linearSessionId: 'older' }];
+      const stored = [{ ...newTicketState('web', 'REL-1', 'T', 'todo', 0), delegated: true, blocked: true, blockReason: unroutedReason(['web', 'api']), awaitingRepo: ['web', 'api'], linearSessionId: 'older' }];
       const stop = { ...fx('session-prompted'), agentActivity: { ...fx('session-prompted').agentActivity, signal: 'stop' } };
       expect(await mapLinearWebhook(stop, 'd5', twoRepos(['repo:api'], { stored }))).toMatchObject([{ type: 'session.stopped', projectId: 'api' }]);
     });

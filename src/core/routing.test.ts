@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { namesOtherRepo, resolveRoute, unroutedReason } from './routing.js';
+import { holds, isUnrouted, namesOtherRepo, resolveRoute, unroutedReason } from './routing.js';
 import { newTicketState, type TicketState } from './types.js';
 
 const t = (projectId: string, patch: Partial<TicketState> = {}): TicketState => ({ ...newTicketState(projectId, 'REL-1', 'T', 'todo', 0), ...patch });
@@ -20,7 +20,7 @@ describe('resolveRoute (ORC-291)', () => {
     expect(resolveRoute(team, [t('web', { prNumber: 3 })], ['repo:api'])).toEqual({ projectId: 'web' });
   });
   it('a ticket waiting for its repo is routed again by its label; otherwise it stays where it waits', () => {
-    const pending = t('api', { delegated: true, blocked: true, blockReason: unroutedReason(team) });
+    const pending = t('api', { delegated: true, blocked: true, blockReason: unroutedReason(team), awaitingRepo: team });
     expect(resolveRoute(team, [pending], ['repo:web'])).toEqual({ projectId: 'web', waitedIn: 'api' });
     expect(resolveRoute(team, [pending], ['repo:api'])).toEqual({ projectId: 'api' });
     expect(resolveRoute(team, [pending], [])).toEqual({ projectId: 'api', repos: team });
@@ -32,6 +32,15 @@ describe('resolveRoute (ORC-291)', () => {
     expect(namesOtherRepo(team, 'web', 'repo:frontend')).toBe(false);
     expect(namesOtherRepo(team, 'web', 'api')).toBe(false);
     expect(namesOtherRepo(['web'], 'web', 'repo:api')).toBe(false);
+  });
+  it('the wait is the field: a block reason neither makes it nor ends it', () => {
+    const reworded = t('web', { delegated: true, blocked: true, blockReason: unroutedReason(team) });
+    expect(isUnrouted(reworded)).toBe(false);
+    expect(holds(reworded)).toBe(true);
+    const replaced = t('web', { delegated: true, blocked: true, blockReason: 'Erreur : Linear down', awaitingRepo: team });
+    expect(isUnrouted(replaced)).toBe(true);
+    expect(holds(replaced)).toBe(false);
+    expect(isUnrouted(t('web', { awaitingRepo: null }))).toBe(false);
   });
   it('without labels to route by, a ticket no project knows goes nowhere', () => {
     expect(resolveRoute(team, [])).toBeUndefined();

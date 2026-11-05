@@ -94,7 +94,7 @@ describe('reconcileOnce', () => {
       const tracker = new FakeTracker();
       tracker.addIssue({ identifier: 'REL-1', delegateId: 'app', labels: ['repo:api'] });
       const store = new SqliteStore(':memory:');
-      await store.putTicket({ ...newTicketState('web', 'REL-1', 'T', 'todo', 3), delegated: true, blocked: true, blockReason: unroutedReason(['web', 'api']) });
+      await store.putTicket({ ...newTicketState('web', 'REL-1', 'T', 'todo', 3), delegated: true, blocked: true, blockReason: unroutedReason(['web', 'api']), awaitingRepo: ['web', 'api'] });
       expect((await pass(tracker, store)).events).toEqual([
         ['web', 'reconcile:undelegated-flag:web:REL-1:3', {}],
         ['api', 'reconcile:delegated:api:REL-1', { issue: expect.any(Object), waitedIn: 'web' }],
@@ -132,7 +132,7 @@ describe('reconcileOnce', () => {
     });
 
     it('a ticket waiting for its repo moved to Done stops waiting, whether its move came by webhook or is caught up', async () => {
-      const waiting = { ...newTicketState('web', 'REL-1', 'T', 'todo', 3), delegated: true, blocked: true, blockReason: unroutedReason(['web', 'api']) };
+      const waiting = { ...newTicketState('web', 'REL-1', 'T', 'todo', 3), delegated: true, blocked: true, blockReason: unroutedReason(['web', 'api']), awaitingRepo: ['web', 'api'] };
       for (const [t, expected] of [
         [waiting, [['web', 'reconcile:moved:web:REL-1:Done:3', { from: 'todo', to: 'done' }], ['web', 'reconcile:undelegated-flag:web:REL-1:3', {}]]],
         [{ ...waiting, logical: 'done' as const }, [['web', 'reconcile:undelegated-flag:web:REL-1:3', {}]]],
@@ -158,7 +158,7 @@ describe('reconcileOnce', () => {
 
     it('catches up a Done out of the list for the repo holding the ticket: the one still waiting elsewhere only leaves', async () => {
       const { tracker, store } = await routedToApi({ stateName: 'Done', stateType: 'completed' });
-      await store.putTicket({ ...newTicketState('web', 'REL-1', 'T', 'todo', 3), delegated: true, blocked: true, blockReason: unroutedReason(['web', 'api']) });
+      await store.putTicket({ ...newTicketState('web', 'REL-1', 'T', 'todo', 3), delegated: true, blocked: true, blockReason: unroutedReason(['web', 'api']), awaitingRepo: ['web', 'api'] });
       expect((await pass(tracker, store)).events).toEqual([
         ['web', 'reconcile:undelegated-flag:web:REL-1:3', {}],
         ['api', 'reconcile:moved:api:REL-1:Done:4', { from: 'dev', to: 'done' }],
@@ -167,7 +167,7 @@ describe('reconcileOnce', () => {
 
     it('catches up a cancel out of the list for the repo holding the ticket: the one still waiting elsewhere only leaves', async () => {
       const { tracker, store } = await routedToApi({ stateName: 'Canceled', stateType: 'canceled' });
-      await store.putTicket({ ...newTicketState('web', 'REL-1', 'T', 'todo', 3), delegated: true, blocked: true, blockReason: unroutedReason(['web', 'api']) });
+      await store.putTicket({ ...newTicketState('web', 'REL-1', 'T', 'todo', 3), delegated: true, blocked: true, blockReason: unroutedReason(['web', 'api']), awaitingRepo: ['web', 'api'] });
       expect((await pass(tracker, store)).events).toEqual([
         ['web', 'reconcile:undelegated-flag:web:REL-1:3', {}],
         ['api', 'reconcile:cancelled:api:REL-1:Canceled:4', { from: 'dev', to: null, cancelled: true }],
