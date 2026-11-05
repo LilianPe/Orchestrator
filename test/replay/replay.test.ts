@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { upcastTicket } from '../../src/core/types.js';
@@ -17,35 +17,40 @@ const shown = (v: unknown) => {
   return s.length > 80 ? `${s.slice(0, 77)}...` : s;
 };
 
-/** The first path where two parsed journals differ, as `entries[3].decision.before.status`. */
+const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null;
+
+/**
+ * The first place where two parsed journals differ, as `entries[3].decision.before.status`. Objects whose
+ * keys differ are reported by those keys (a new projection field, a changed workflow hash), not walked.
+ */
 function firstDifference(committed: unknown, recorded: unknown, path = ''): string {
-  const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null;
+  const at = path || 'the root';
   if (isObject(committed) && isObject(recorded) && Array.isArray(committed) === Array.isArray(recorded)) {
-    const keys = [...new Set([...Object.keys(committed), ...Object.keys(recorded)])];
-    for (const key of keys) {
-      const at = Array.isArray(recorded) ? `${path}[${key}]` : path ? `${path}.${key}` : key;
-      const diff = firstDifference(committed[key], recorded[key], at);
+    const only = (a: object, b: object) => Object.keys(a).filter((k) => !(k in b));
+    const [gone, added] = [only(committed, recorded), only(recorded, committed)];
+    if (!Array.isArray(recorded) && gone.length + added.length > 0) {
+      return `keys differ at ${at}: only committed has ${shown(gone)}, only recorded has ${shown(added)}`;
+    }
+    for (const key of new Set([...Object.keys(committed), ...Object.keys(recorded)])) {
+      const diff = firstDifference(committed[key], recorded[key], Array.isArray(recorded) ? `${path}[${key}]` : path ? `${path}.${key}` : key);
       if (diff) return diff;
     }
-    return path ? '' : 'same content, written differently';
+    return '';
   }
   if (JSON.stringify(committed) === JSON.stringify(recorded)) return '';
-  return `first difference at ${path || 'the root'}: committed ${shown(committed)}, recorded ${shown(recorded)}`;
+  return `first difference at ${at}: committed ${shown(committed)}, recorded ${shown(recorded)}`;
 }
 
-/** Why a committed journal is not the recorded one: a workflow hash says more than its first changed key. */
+/** Why a committed journal is not the recorded one. */
 function drift(committed: string | undefined, recorded: string): string {
   if (committed === undefined) return 'missing';
-  let was: ExportedJournal;
+  let was: unknown;
   try {
-    was = JSON.parse(committed) as ExportedJournal;
+    was = JSON.parse(committed);
   } catch {
     return 'not valid JSON';
   }
-  const now = JSON.parse(recorded) as ExportedJournal;
-  const hashes = (j: ExportedJournal) => Object.keys(j.workflows ?? {}).join(', ');
-  if (hashes(was) !== hashes(now)) return `the frozen workflow changed: committed ${hashes(was)}, recorded ${hashes(now)}`;
-  return firstDifference(was, now);
+  return firstDifference(was, JSON.parse(recorded)) || 'same content, written differently';
 }
 
 /** Each scenario runs once; every test gets its own copy of the journal. */
@@ -231,12 +236,13 @@ describe('recorded journals (test/replay/journals)', () => {
   // this compares it with what its scenario records today (ORC-310).
   it.each(Object.keys(SCENARIOS))('%s: the committed journals are what the scenario records today', async (name) => {
     for (const { file, text } of recordedFiles(name, await record(name))) {
-      const committed = existsSync(join(dir, file)) ? readFileSync(join(dir, file), 'utf8') : undefined;
-      if (committed === text) continue;
-      expect.fail(
-        `test/replay/journals/${file} is not what its scenario records today (${drift(committed, text)}). ` +
-          'If the change of the pack, a projection or an event payload is meant, run `npm run replay:record` and commit the journals\' diff.',
-      );
+      const committed = files.includes(file) ? readFileSync(join(dir, file), 'utf8') : undefined;
+      if (committed !== text) {
+        expect.fail(
+          `test/replay/journals/${file} is not what its scenario records today (${drift(committed, text)}). ` +
+            'If the change of the pack, a projection or an event payload is meant, run `npm run replay:record` and commit the journals\' diff.',
+        );
+      }
     }
   });
 
