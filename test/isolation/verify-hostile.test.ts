@@ -214,7 +214,12 @@ describe.skipIf(!enabled)(`gitleaks in verify (${cli})`, () => {
     const dockerfile = readFileSync(join(import.meta.dirname, '../../docker/runner.Dockerfile'), 'utf8');
     const install = /^RUN node -e "fetch\('https:\/\/github\.com\/gitleaks[\s\S]*?rm \/tmp\/gitleaks\.tgz$/m.exec(dockerfile)?.[0];
     if (!install) throw new Error('docker/runner.Dockerfile no longer installs gitleaks');
-    execFileSync(cli, ['build', '-q', '-t', TAG, '-f', '-', base], { input: `FROM ${IMAGE}\n${install}\n`, stdio: ['pipe', 'ignore', 'pipe'], timeout: 300_000 });
+    // A file, not `-f -`: Node hands stdin as a socket, and Podman opens /dev/stdin, which a socket refuses.
+    const context = join(base, 'image');
+    mkdirSync(context);
+    const dockerfilePath = join(context, 'Dockerfile');
+    writeFileSync(dockerfilePath, `FROM ${IMAGE}\n${install}\n`);
+    execFileSync(cli, ['build', '-q', '-t', TAG, '-f', dockerfilePath, context], { stdio: ['ignore', 'ignore', 'pipe'], timeout: 300_000 });
 
     // The forge, on its default branch, and the agent's clone: the base is what the branch adds to.
     origin = join(base, 'origin');

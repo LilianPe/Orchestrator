@@ -36,6 +36,14 @@ describe('compose.yaml (ORC-203)', () => {
     for (const s of [proxy, postgres, caddy]) expect((s.volumes ?? []).filter((v) => ENGINE.test(v))).toEqual([]);
   });
 
+  it('fixes the sandboxes, so verify never runs in factoryd and has nothing to fall back on (ORC-151)', () => {
+    expect(factoryd.environment!['FACTORY_CONTAINER_CLI']).toBe('docker');
+    expect(factoryd.environment!).not.toHaveProperty('FACTORY_ALLOW_HOST_VERIFY');
+    // The engine resolves the clone's mount on the host: it lives under the home, mounted at the same path.
+    expect(factoryd.environment!['FACTORY_HOME']).toBe('${FACTORY_DIR}/data');
+    expect(factoryd.volumes!.map(parts).some(([source, target]) => sameSide(source!) === '${FACTORY_DIR}/data' && target === '${FACTORY_DIR}/data')).toBe(true);
+  });
+
   it('runs nothing privileged', () => {
     for (const s of Object.values(compose.services)) expect(s.privileged).toBeUndefined();
   });
