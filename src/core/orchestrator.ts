@@ -498,7 +498,8 @@ export class Orchestrator {
       if (!project || !job || !runner.attach) return false;
       const sandbox = sandboxes && (await sandboxes.reattach(run.id));
       if (sandboxes && !sandbox) return false;
-      const handle = runner.attach({ runId: run.id, limits: job.limits, elapsedMs: clock.now() - run.startedAt, env: this.d.agentEnv(run) });
+      const silentMs = project.workflow.limits.silentAfterMs;
+      const handle = runner.attach({ runId: run.id, limits: job.limits, elapsedMs: clock.now() - run.startedAt, env: this.d.agentEnv(run), ...(silentMs ? { stagnation: { silentMs } } : {}) });
       if (!handle) return false;
       // Its slot, in the memory of this process. Over a capacity lowered meanwhile, it goes on all the same.
       scheduler.tryAcquire(run.queue, `${run.ticketId}:${run.queue}`);
@@ -1806,6 +1807,8 @@ export class Orchestrator {
         claudeSessionId,
         resume,
         model: job.model,
+        ...(job.effort ? { effort: job.effort } : {}),
+        stagnation: { ...(wf.limits.repeatedFailures ? { repeats: wf.limits.repeatedFailures } : {}), ...(wf.limits.silentAfterMs ? { silentMs: wf.limits.silentAfterMs } : {}) },
         pluginDir: sandbox ? PACK_TARGET : this.d.packDir,
         settingsPath: sandbox ? SETTINGS_TARGET : this.settingsPath(),
         readOnly: job.workspace === 'trunk-readonly',
@@ -1942,6 +1945,7 @@ export class Orchestrator {
         lastText: result.lastText,
         attempt: attemptOutcome({ outcome: result.outcome, infraError: result.infra || unreadable }, output),
         ...(output ? { output } : {}),
+        ...(result.stagnation ? { stagnation: result.stagnation } : {}),
       },
     };
   }

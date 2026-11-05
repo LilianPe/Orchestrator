@@ -82,7 +82,7 @@ Vous pouvez n'en redéfinir qu'une partie ; après fusion, les cinq doivent avoi
 |---|---|---|---|
 | `parallel_sessions` | entier > 0 | 3 | Nombre de runs simultanés dans la file `dev`, si `factory.yml` ne fixe pas `concurrency`. Au-delà, les runs attendent dans une file persistante. Chaque run de la file `dev` reçoit aussi `PORT = workspace.ports.base + n° de place` (0 à `parallel_sessions - 1`). |
 | `question_sessions` | entier > 0 | 2 | Même chose pour la file `questions`. |
-| `per_run.turns` | entier > 0 | 150 | Nombre de messages de l'assistant dans un run. Au-delà, le run est interrompu ; son résultat est `limit`. |
+| `per_run.turns` | entier > 0 | 150 | Nombre de messages de l'assistant dans un run, un message comptant une fois même écrit sur plusieurs lignes du flux. Au-delà, le run est interrompu ; son résultat est `limit`. Un job avec `step` ne dépasse jamais les tours de son étape : `per_run` et son `limits` ne peuvent que les baisser. |
 | `per_run.duration` | durée | `90m` | Durée maximale d'un run, même résultat `limit`. |
 | `per_run.usd` | nombre > 0 | 5 | Passé à Claude Code (`--max-budget-usd`) ; quand Claude Code s'arrête sur ce plafond, le résultat est `limit`. |
 | `verify_attempts` | entier ≥ 0 | 4 (préréglage) | Nombre de passes de vérification avant de bloquer le ticket (voir `jobs.*.verify`). `0` et `1` bloquent dès le premier échec. Par défaut, la borne du [préréglage `factory/default`](preset.md) : 3 retours au run, le 4e échec bloque. |
@@ -126,6 +126,7 @@ Un job décrit **comment** lancer un run de Claude Code. Champs :
 | Champ | Valeurs | Défaut | Effet |
 |---|---|---|---|
 | `extends` | nom d'un autre job | — | Hérite de ses champs (voir section 1). |
+| `step` | étape agent du [préréglage](preset.md) | — | L'étape que ce job exécute (ORC-136) : elle fixe son effort (`claude --effort`) et plafonne ses tours. Un nom qui n'est pas une étape agent fait échouer le chargement. Sans `step`, le job garde ses propres limites et n'a pas d'effort, sauf `claude.effort.default` de `factory.yml`. |
 | `queue` | `dev`, `questions` | **obligatoire** | File d'exécution (section 5). Un job `dev` n'est lancé que sur un ticket délégué à Relais. |
 | `model` | texte | **obligatoire** | Passé tel quel à `claude --model` (alias comme `sonnet`, `opus`, `haiku`, ou identifiant complet). |
 | `workspace` | `worktree`, `trunk-readonly`, `knowledge` | **obligatoire** | `worktree` : worktree git propre au ticket, sur une branche `relais/<ticket>-<titre>`, réutilisé d'un run à l'autre. `trunk-readonly` : copie de la branche principale à jour, run lancé en mode plan (lecture seule). `knowledge` : worktree du dépôt de connaissance ; le job est ignoré si aucun dépôt de connaissance n'est configuré. |
@@ -136,7 +137,7 @@ Un job décrit **comment** lancer un run de Claude Code. Champs :
 | `repo_checks` | booléen | `false` | Le run passe par `verify` même sans commande : les commandes de `.factory/config.yml` lues sur la branche de base, les chemins interdits, le gel. Le merge exige alors un `verify` vert sur le commit relu. Vrai dans le pack pour `dev`, ce qui en hérite, et `review`. |
 | `verify_failure` | `block` | — | Un `verify` en échec bloque le ticket au lieu de relancer le job, qui n'a pas écrit le commit : `review`, sur un push humain. |
 | `pickup` | booléen | `false` | Si `true`, applique `tracker.pickup.checks` avant le premier run du ticket (quand aucune session Claude n'existe encore). |
-| `structured_output` | booléen | absent | **Provisoire** (ORC-289, jusqu'à ce qu'ORC-191/ORC-192 fassent appeler `submit_result` à tout agent) : si `true`, un run de la file `dev` qui se termine sans sortie valide est un échec. Absent, il reste un succès. |
+| `structured_output` | booléen | absent | **Provisoire** (ORC-289, jusqu'à ce qu'ORC-191/ORC-192 fassent appeler `submit_result` à tout agent) : si `true`, un run de la file `dev` qui se termine sans sortie valide est un échec. Absent, il reste un succès. Dans le pack, `true` pour `dev` seul, l'étape `build` (ORC-136). |
 | `limits` | `{ turns, duration, usd }`, chacun facultatif | `limits.per_run` | Remplace les limites par run pour ce job. |
 | `on_start` | `{ move: <état logique> }` | `{}` | Déplace le ticket au lancement du run (s'il n'y est pas déjà). |
 | `on_success` | `{ move: <état logique>, post: summary \| reply \| synthesis }` | `{}` | Après un run réussi (et des vérifications réussies) : déplace le ticket et/ou publie dans la session Linear le message composé depuis la sortie de l'agent (`submit_result` : résumé, pourquoi, risques, non testé, points à relire), ou à défaut le dernier message du run. Seul `summary` (fin du travail de dev) publie ce message composé ; `reply` (réponse à un retour, à une question) et `synthesis` (synthèse de la review) publient le dernier message du run, la réponse de l'agent. |

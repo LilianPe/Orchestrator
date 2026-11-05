@@ -2,13 +2,14 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { closeSync, createWriteStream, existsSync, mkdirSync, openSync, readFileSync, readSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
-import { addTokens, NO_TOKENS, type RunOutcome, type TokenUsage } from '../../core/types.js';
-import { systemEnv } from '../exec.js';
+import { addTokens, NO_TOKENS, type RunOutcome, type Stagnation, type TokenUsage } from '../../core/types.js';
+import { execCmd, systemEnv } from '../exec.js';
 import { Channel } from './channel.js';
+import { failedCommand, LoopDetector, WORKTREE_TREE } from './stagnation.js';
 import { parseStreamLine, parseUsage } from './stream-parser.js';
 import { maskTranscriptLine, transcriptSecrets } from './transcript.js';
 import type { SandboxProvider } from '../sandbox/types.js';
-import type { AttachRequest, RunHandle, RunRequest, RunResult, Runner, RunStreamEvent } from './types.js';
+import type { AttachRequest, RunHandle, RunRequest, RunResult, Runner, RunStreamEvent, StagnationBounds } from './types.js';
 
 export interface ClaudeRunnerOptions {
   transcriptsDir: string;
@@ -41,6 +42,7 @@ export function buildClaudeArgs(req: RunRequest): string[] {
     '--verbose',
     req.resume ? '--resume' : '--session-id', req.claudeSessionId,
     '--model', req.model,
+    ...(req.effort ? ['--effort', req.effort] : []),
     '--plugin-dir', req.pluginDir,
     '--settings', req.settingsPath,
     // Nothing of the repository's: no settings, hooks, skills, CLAUDE.md, nor .mcp.json, nor the account's
@@ -144,7 +146,16 @@ interface Followed {
   child?: ChildProcess;
   /** Taken up: watched by its pid, absent when it ended already. */
   writer?: Writer;
+  stagnation?: StagnationBounds | undefined;
+  /** The content of the worktree, where the agent runs (`WORKTREE_TREE`); undefined when it cannot be read. Absent: no loop is tracked. */
+  tree?: () => Promise<string | undefined>;
 }
+
+/** How long reading the worktree may take: past it, this failure is not counted. */
+const TREE_TIMEOUT_MS = 30_000;
+
+/** What a token cap counts: what the model read anew and wrote. A cache read costs next to nothing, and grows with each turn. */
+const spentTokens = (u: TokenUsage): number => u.input + u.output + u.cacheCreation;
 
 export class ClaudeCodeRunner implements Runner {
   constructor(private o: ClaudeRunnerOptions) {
@@ -191,7 +202,26 @@ export class ClaudeCodeRunner implements Runner {
       closeSync(err);
     }
     if (child.pid !== undefined) writeFileSync(join(dir, 'pid'), [child.pid, startTime(child.pid)].filter((x) => x !== undefined).join(' '), { mode: 0o600 });
-    return this.follow({ runId: req.runId, limits: req.limits, secrets, remainingMs: req.limits.durationMs, child });
+    return this.follow({ runId: req.runId, limits: req.limits, secrets, remainingMs: req.limits.durationMs, child, stagnation: req.stagnation, tree: () => this.worktreeTree(req) });
+  }
+
+  /** In the sandbox when the run has one: the host never runs git on a worktree the agent writes from there (ORC-203). */
+  private async worktreeTree(req: RunRequest): Promise<string | undefined> {
+    const argv = ['sh', '-c', WORKTREE_TREE];
+    let timer: NodeJS.Timeout | undefined;
+    const late = new Promise<undefined>((resolve) => {
+      timer = setTimeout(resolve, TREE_TIMEOUT_MS, undefined);
+      timer.unref();
+    });
+    try {
+      const reading = req.sandboxId !== undefined ? this.o.sandboxes!.exec(req.sandboxId, argv, { cwd: req.cwd }) : execCmd(argv[0]!, argv.slice(1), { cwd: req.cwd });
+      const read = await Promise.race([reading, late]);
+      return read?.code === 0 ? read.stdout.trim() || undefined : undefined;
+    } catch {
+      return undefined;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /**
@@ -208,7 +238,7 @@ export class ClaudeCodeRunner implements Runner {
       return undefined;
     }
     const secrets = transcriptSecrets({ ...process.env, ...req.env }, this.o.secrets?.());
-    return this.follow({ runId: req.runId, limits: req.limits, secrets, remainingMs: req.limits.durationMs - req.elapsedMs, ...(writer ? { writer } : {}) });
+    return this.follow({ runId: req.runId, limits: req.limits, secrets, remainingMs: req.limits.durationMs - req.elapsedMs, stagnation: req.stagnation, ...(writer ? { writer } : {}) });
   }
 
   private dir(runId: string): string {
@@ -222,6 +252,8 @@ export class ClaudeCodeRunner implements Runner {
     const transcript = createWriteStream(join(this.o.transcriptsDir, `${a.runId}.jsonl`), { flags: a.child ? 'a' : 'w' });
     const ch = new Channel<RunStreamEvent>();
     let assistantTurns = 0;
+    // A model message streams on several lines, one per block: it is one turn (ORC-10).
+    const turnIds = new Set<string>();
     let lastText = '';
     let transcriptError = '';
     let result: Extract<RunStreamEvent, { kind: 'result' }> | undefined;
@@ -259,14 +291,47 @@ export class ClaudeCodeRunner implements Runner {
     };
     const timer = setTimeout(limit, Math.max(0, a.remainingMs));
 
+    let stagnation: Stagnation | undefined;
+    const stagnated = (seen: Stagnation) => {
+      if (limited || stopped) return;
+      stagnation = seen;
+      limit();
+    };
+    const repeats = a.stagnation?.repeats;
+    const loops = a.tree && repeats ? new LoopDetector(repeats) : undefined;
+    const calls = new Map<string, string>();
+    // One read at a time, in the order of the failures. Read once the failure came, while the agent waits for its next
+    // model call: an edit that slips in only starts another count, it never makes a loop of work.
+    let reading: Promise<void> = Promise.resolve();
+    const watchLoops = (line: unknown) => {
+      if (!loops) return;
+      for (const failed of failedCommand(line, calls)) {
+        reading = reading.then(async () => {
+          const tree = await a.tree!();
+          const seen = tree ? loops.record(failed, tree) : undefined;
+          if (seen) stagnated(seen);
+        });
+      }
+    };
+    // On the daemon's clock, not the file's date: a host may date a file still open late. An attempt taken up gets its whole silence again.
+    let lastWrite = Date.now();
+
     const onLine = (unmasked: string, relayed: boolean) => {
       try {
         const line = maskTranscriptLine(unmasked, a.secrets);
         transcript.write(line + '\n');
         const raw = JSON.parse(line) as { type?: string; subtype?: string; message?: { id?: unknown; usage?: unknown } };
-        if (raw?.type === 'assistant' && ++assistantTurns > a.limits.turns) limit();
-        const used = raw?.type === 'assistant' && typeof raw.message?.id === 'string' ? parseUsage(raw.message.usage) : undefined;
-        if (used) usage.set(raw.message!.id as string, used);
+        const messageId = raw?.type === 'assistant' && typeof raw.message?.id === 'string' ? raw.message.id : undefined;
+        if (raw?.type === 'assistant' && (messageId === undefined || !turnIds.has(messageId))) {
+          if (messageId !== undefined) turnIds.add(messageId);
+          if (++assistantTurns > a.limits.turns) limit();
+        }
+        const used = messageId !== undefined ? parseUsage(raw.message!.usage) : undefined;
+        if (used) {
+          usage.set(messageId!, used);
+          if (a.limits.tokens !== undefined && [...usage.values()].reduce((sum, u) => sum + spentTokens(u), 0) > a.limits.tokens) limit();
+        }
+        watchLoops(raw);
         if (raw?.type === 'result' && typeof raw.subtype === 'string' && raw.subtype.includes('max')) limited = true;
         for (const ev of parseStreamLine(line)) {
           if (ev.kind === 'text' && ev.text.trim()) lastText = ev.text;
@@ -293,6 +358,7 @@ export class ClaudeCodeRunner implements Runner {
       try {
         for (let n = readSync(fd, chunk, 0, chunk.length, position); n > 0; n = readSync(fd, chunk, 0, chunk.length, position)) {
           position += n;
+          lastWrite = Date.now();
           const lines = (partial + decoder.write(chunk.subarray(0, n))).split('\n');
           partial = lines.pop()!;
           for (const line of lines) if (line) onLine(line, relayed);
@@ -324,16 +390,19 @@ export class ClaudeCodeRunner implements Runner {
         }
         rmSync(dir, { recursive: true, force: true });
         const outcome: RunOutcome = stopped ? 'stopped' : limited ? 'limit' : result && !result.isError ? 'success' : 'failure';
+        // No result line and nobody stopped it: killed, out of memory, its container gone. Nothing for the agent to fix (ORC-136).
+        const broke = spawnError || (!result && !stopped && !limited);
         // It becomes the run's lastText, stored and posted to Linear: the stream's text is masked
         // already, stderr and a spawn error are masked here.
         const text = result?.text || lastText || maskTranscriptLine(spawnError ? spawnError.message : stderr.trim().slice(-2000), a.secrets);
         const tokens = result?.tokens ?? (usage.size ? [...usage.values()].reduce(addTokens, NO_TOKENS) : undefined);
-        transcript.end(() => resolve({ outcome, costUsd: result?.costUsd ?? 0, turns: result?.turns ?? assistantTurns, lastText: text, ...(tokens ? { tokens } : {}), ...(spawnError ? { infra: true as const } : {}) }));
+        transcript.end(() => resolve({ outcome, costUsd: result?.costUsd ?? 0, turns: result?.turns ?? assistantTurns, lastText: text, ...(tokens ? { tokens } : {}), ...(broke ? { infra: true as const } : {}), ...(stagnation ? { stagnation } : {}) }));
       };
       const poll = setInterval(() => {
         read(true);
         // Not its parent: its end is seen by its pid, once what it wrote is read.
         if (!a.child && (!a.writer || !writerAlive(a.writer))) finish();
+        else if (a.stagnation?.silentMs !== undefined && Date.now() - lastWrite > a.stagnation.silentMs) stagnated({ kind: 'silent', silentMs: a.stagnation.silentMs });
       }, POLL_MS);
       poll.unref();
       a.child?.on('error', (err) => finish(err));

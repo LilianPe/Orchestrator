@@ -142,7 +142,7 @@ describe('server', () => {
     const body = await (await app.request('/api/state')).json();
     const labelled = body.activeRuns.find((r: { id: string }) => r.id === 'r2');
     expect(labelled.labels).toEqual({ ...LABELS, pending: pendingLabels(LABELS) });
-    expect(labelled.labels.pending.effort).toEqual(['ORC-136', 'ORC-187']);
+    expect(labelled.labels.pending.image).toEqual(['ORC-204']);
     expect(labelled.labels.pending).not.toHaveProperty('factoryCommit');
   });
 

@@ -66,12 +66,18 @@ describe('attempt labels', () => {
     expect(l.fingerprints.config).toMatch(SHA);
   });
 
+  it('records the effort of the job, null for a job without one (ORC-136)', () => {
+    expect(attemptLabels({ job, ...prompted(P), workflow, pack, factoryCommit: null }).effort).toBe(job.effort);
+    expect(job.effort).toBe('medium');
+    const { effort: _none, ...stepless } = job;
+    expect(attemptLabels({ job: stepless, ...prompted(P), workflow, pack, factoryCommit: null }).effort).toBeNull();
+  });
+
   it('leaves the labels nothing provides yet null, each with the tickets that will fill it', () => {
     const l = attemptLabels({ job, ...prompted(P), workflow, pack, factoryCommit: null });
-    expect(l).toMatchObject({ factoryCommit: null, effort: null, image: null, risk: null, registryCommit: null, deliveredFactIds: null });
+    expect(l).toMatchObject({ factoryCommit: null, image: null, risk: null, registryCommit: null, deliveredFactIds: null });
     expect(l.fingerprints.knowledgeIndex).toBeNull();
     expect(pendingLabels(l)).toEqual({
-      effort: ['ORC-136', 'ORC-187'],
       image: ['ORC-204'],
       risk: ['ORC-206'],
       registryCommit: ['ORC-257'],

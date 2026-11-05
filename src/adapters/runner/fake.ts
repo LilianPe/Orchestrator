@@ -1,5 +1,6 @@
 import { FakeClock, type Clock } from '../../core/clock.js';
-import type { RunOutcome, TokenUsage } from '../../core/types.js';
+import type { AgentOutput } from '../../core/agent-output.js';
+import type { RunOutcome, Stagnation, TokenUsage } from '../../core/types.js';
 import { Channel } from './channel.js';
 import type { AttachRequest, RunHandle, RunRequest, RunResult, Runner, RunStreamEvent } from './types.js';
 
@@ -13,6 +14,10 @@ export interface FakeScript {
   hold?: boolean;
   /** The run's end rejects with this message, as a broken stream or a sandbox gone does. */
   fail?: string;
+  /** What the detector saw (ORC-136). */
+  stagnation?: Stagnation;
+  /** `false`: this build never calls `submit_result`. */
+  submit?: false;
 }
 
 interface LiveRun {
@@ -26,6 +31,11 @@ export class FakeRunner implements Runner {
   requests: RunRequest[] = [];
   private scripts: FakeScript[] = [];
   private live = new Map<string, LiveRun>();
+  /**
+   * Stands for the `submit_result` of a build, the one step the pack asks it of (ORC-136): given a store, the fake
+   * agent does what the skill says, with its last text as summary. Without it, it submits nothing.
+   */
+  submit?: (runId: string, output: AgentOutput) => Promise<void>;
 
   constructor(private readonly clock: Clock = new FakeClock()) {}
 
@@ -63,11 +73,13 @@ export class FakeRunner implements Runner {
       releaseHold();
     };
     const lastText = [...events].reverse().find((e): e is Extract<RunStreamEvent, { kind: 'text' }> => e.kind === 'text')?.text ?? '';
-    const done: Promise<RunResult> = held.then(() => {
+    const output: AgentOutput = { status: 'done', summary: lastText || 'Terminé.', tests_added: [], why: '', assumptions: [], risks: [], untested: [], review_hints: [] };
+    const submitted = this.submit && s.submit !== false && req.prompt.startsWith('/factory:dev\n') ? this.submit(req.runId, output).catch(() => {}) : Promise.resolve();
+    const done: Promise<RunResult> = Promise.all([held, submitted]).then(() => {
       ch.close();
       this.live.delete(req.runId);
       if (s.fail) throw new Error(s.fail);
-      return { outcome: forced ?? s.outcome ?? 'success', costUsd: s.costUsd ?? 0.1, turns, lastText, ...(s.tokens ? { tokens: s.tokens } : {}) };
+      return { outcome: forced ?? s.outcome ?? 'success', costUsd: s.costUsd ?? 0.1, turns, lastText, ...(s.tokens ? { tokens: s.tokens } : {}), ...(s.stagnation ? { stagnation: s.stagnation } : {}) };
     });
     const run: LiveRun = { deadline: this.clock.now() + req.limits.durationMs, end, done };
     if (s.hold) this.live.set(req.runId, run);

@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -112,6 +112,11 @@ describe('buildClaudeArgs', () => {
     });
     expect(args.join(' ')).not.toContain('tok-secret');
   });
+  it('passes the effort of the step, and none for a job without one (ORC-136)', () => {
+    const args = buildClaudeArgs(req({ effort: 'medium' }));
+    expect(args.slice(args.indexOf('--effort'), args.indexOf('--effort') + 2)).toEqual(['--effort', 'medium']);
+    expect(buildClaudeArgs(req())).not.toContain('--effort');
+  });
   it('resumes read-only', () => {
     const args = buildClaudeArgs(req({ resume: true, readOnly: true }));
     expect(args.slice(5, 7)).toEqual(['--resume', 'uuid-1']);
@@ -162,6 +167,137 @@ describe('ClaudeCodeRunner', () => {
     const h = r.start(req({ cwd: join(mkdtempSync(join(tmpdir(), 'factory-tr-')), 'missing') }));
     await drain(h.events);
     expect(await h.done).toMatchObject({ outcome: 'failure', infra: true });
+  });
+});
+
+describe('ClaudeCodeRunner: caps and stagnation of the build (ORC-136)', () => {
+  const assistant = (id: string, usage = { input_tokens: 10, output_tokens: 10 }) => JSON.stringify({ type: 'assistant', message: { id, usage, content: [{ type: 'text', text: id }] } });
+  const script = (...lines: string[]) => {
+    const f = join(mkdtempSync(join(tmpdir(), 'factory-stream-')), 'stream.jsonl');
+    writeFileSync(f, lines.join('\n') + '\n');
+    return f;
+  };
+  const bashFails = (id: string, output = 'Exit code 1\nboom (12ms)') => [
+    JSON.stringify({ type: 'assistant', message: { id: `m-${id}`, content: [{ type: 'tool_use', id, name: 'Bash', input: { command: 'npm test' } }] } }),
+    JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: id, is_error: true, content: output }] } }),
+  ];
+  function gitRepo(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'factory-loop-'));
+    const git = (...args: string[]) => spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { cwd: dir });
+    git('init', '-q');
+    writeFileSync(join(dir, 'a.ts'), 'a\n');
+    git('add', '.');
+    git('commit', '-qm', 'init');
+    return dir;
+  }
+  const repeats = { repeats: 3 };
+
+  it('counts a model message once, however many lines it streams on', async () => {
+    const { r } = runner();
+    const lines = ['m1', 'm1', 'm1', 'm2', 'm2'].map((id) => assistant(id));
+    const h = r.start(req({ limits: { turns: 2, durationMs: 10_000, usd: 5 } }, { FAKE_CLAUDE_SCRIPT: script(...lines), FAKE_CLAUDE_HANG: '1' }));
+    setTimeout(() => h.stop(), 800).unref();
+    expect(await h.done).toMatchObject({ outcome: 'stopped' });
+  });
+
+  it('stops past the cap of turns of the step', async () => {
+    const { r } = runner();
+    const lines = ['m1', 'm2', 'm3'].map((id) => assistant(id));
+    const h = r.start(req({ limits: { turns: 2, durationMs: 10_000, usd: 5 } }, { FAKE_CLAUDE_SCRIPT: script(...lines), FAKE_CLAUDE_HANG: '1' }));
+    expect(await h.done).toMatchObject({ outcome: 'limit' });
+  });
+
+  it('stops past the cap of tokens, cache reads left out', async () => {
+    const { r } = runner();
+    const cached = { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 1_000_000 };
+    const under = r.start(req({ limits: { turns: 50, durationMs: 10_000, usd: 5, tokens: 100 } }, { FAKE_CLAUDE_SCRIPT: script(assistant('m1', cached)), FAKE_CLAUDE_HANG: '1' }));
+    setTimeout(() => under.stop(), 800).unref();
+    expect(await under.done).toMatchObject({ outcome: 'stopped' });
+    const over = r.start(req({ limits: { turns: 50, durationMs: 10_000, usd: 5, tokens: 100 } }, { FAKE_CLAUDE_SCRIPT: script(assistant('m1', { input_tokens: 60, output_tokens: 60 })), FAKE_CLAUDE_HANG: '1' }));
+    expect(await over.done).toMatchObject({ outcome: 'limit' });
+  });
+
+  it('stops at the third same failure on an unchanged worktree, and tells what it saw', { timeout: 30_000 }, async () => {
+    const { r } = runner();
+    const lines = [...bashFails('t1'), ...bashFails('t2', 'Exit code 1\nboom (99ms)'), ...bashFails('t3')];
+    const h = r.start(req({ cwd: gitRepo(), stagnation: repeats }, { FAKE_CLAUDE_SCRIPT: script(...lines), FAKE_CLAUDE_HANG: '1' }));
+    expect(await h.done).toMatchObject({ outcome: 'limit', stagnation: { kind: 'loop', command: 'npm test', count: 3 } });
+  });
+
+  it('a worktree that changes between the failures is work, not a loop', { timeout: 30_000 }, async () => {
+    // `tree` answers another content each time, as a worktree the agent edits.
+    let n = 0;
+    const edits = new FakeSandboxProvider();
+    const { id } = await edits.create({ runId: 'r', ticketId: 'ORC-1', workspacePath: '/w', network: 'none', requirements: { minLevel: 'L3', browser: false, services: [] }, mounts: [] });
+    vi.spyOn(edits, 'exec').mockImplementation(async () => ({ stdout: `tree-${n++}\n`, stderr: '', code: 0 }));
+    const sandboxed = runner(edits).r;
+    const lines = [...bashFails('t1'), ...bashFails('t2'), ...bashFails('t3')];
+    const h = sandboxed.start(req({ sandboxId: id, cwd: '/work', stagnation: repeats }, { FAKE_CLAUDE_SCRIPT: script(...lines), FAKE_CLAUDE_HANG: '1' }));
+    setTimeout(() => h.stop(), 1_500).unref();
+    expect(await h.done).toMatchObject({ outcome: 'stopped' });
+    expect(await h.done).not.toHaveProperty('stagnation');
+  });
+
+  it('in a sandbox, reads the worktree in it: never on the host', { timeout: 30_000 }, async () => {
+    const edits = new FakeSandboxProvider();
+    const { id } = await edits.create({ runId: 'r', ticketId: 'ORC-1', workspacePath: '/w', network: 'none', requirements: { minLevel: 'L3', browser: false, services: [] }, mounts: [] });
+    const exec = vi.spyOn(edits, 'exec').mockImplementation(async () => ({ stdout: 'same\n', stderr: '', code: 0 }));
+    const lines = [...bashFails('t1'), ...bashFails('t2'), ...bashFails('t3')];
+    const h = runner(edits).r.start(req({ sandboxId: id, cwd: '/work', stagnation: repeats }, { FAKE_CLAUDE_SCRIPT: script(...lines), FAKE_CLAUDE_HANG: '1' }));
+    expect(await h.done).toMatchObject({ outcome: 'limit', stagnation: { kind: 'loop', tree: 'same' } });
+    expect(exec.mock.calls[0]!.slice(0, 1)).toEqual([id]);
+    expect(exec.mock.calls[0]![2]).toEqual({ cwd: '/work' });
+  });
+
+  it('tracks nothing without a fingerprint of the worktree, nor on a version without the bound', { timeout: 30_000 }, async () => {
+    const { r } = runner();
+    const lines = [...bashFails('t1'), ...bashFails('t2'), ...bashFails('t3')];
+    const outside = r.start(req({ cwd: mkdtempSync(join(tmpdir(), 'factory-nogit-')), stagnation: repeats }, { FAKE_CLAUDE_SCRIPT: script(...lines), FAKE_CLAUDE_HANG: '1', GIT_CEILING_DIRECTORIES: tmpdir() }));
+    setTimeout(() => outside.stop(), 1_500).unref();
+    expect(await outside.done).not.toHaveProperty('stagnation');
+    const older = r.start(req({ cwd: gitRepo() }, { FAKE_CLAUDE_SCRIPT: script(...lines), FAKE_CLAUDE_HANG: '1' }));
+    setTimeout(() => older.stop(), 800).unref();
+    expect(await older.done).not.toHaveProperty('stagnation');
+  });
+
+  it('stops an agent that writes nothing any more, and tells it was silent', { timeout: 30_000 }, async () => {
+    const { r } = runner();
+    const h = r.start(req({ stagnation: { silentMs: 400 } }, { FAKE_CLAUDE_SCRIPT: script(assistant('m1')), FAKE_CLAUDE_HANG: '1' }));
+    expect(await h.done).toMatchObject({ outcome: 'limit', stagnation: { kind: 'silent', silentMs: 400 } });
+  });
+
+  it('an agent that keeps writing is not silent', { timeout: 30_000 }, async () => {
+    const { r, transcriptsDir } = runner();
+    const rq = req({ stagnation: { silentMs: 600 } }, { FAKE_CLAUDE_SCRIPT: script(assistant('m1')), FAKE_CLAUDE_HANG: '1' });
+    const h = r.start(rq);
+    // The stream file of the attempt written to, as the agent does: its date is the witness.
+    const stream = join(liveDir(transcriptsDir), rq.runId, 'stream');
+    const writing = setInterval(() => appendFileSync(stream, `${assistant('m1')}\n`), 100);
+    setTimeout(() => {
+      clearInterval(writing);
+      h.stop();
+    }, 1_500).unref();
+    expect(await h.done).toMatchObject({ outcome: 'stopped' });
+    expect(await h.done).not.toHaveProperty('stagnation');
+  });
+
+  it('a process that dies without a result line (its container killed) is the infrastructure, not the agent', { timeout: 30_000 }, async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'factory-killed-'));
+    const killed = join(dir, 'killed.mjs');
+    writeFileSync(killed, `console.log(${JSON.stringify(assistant('m1'))});\nsetTimeout(() => process.kill(process.pid, 'SIGKILL'), 50);\nsetInterval(() => {}, 1000);\n`);
+    const r = new ClaudeCodeRunner({ transcriptsDir: mkdtempSync(join(tmpdir(), 'factory-tr-')), command: [process.execPath, killed] });
+    expect(await r.start(req()).done).toMatchObject({ outcome: 'failure', infra: true });
+  });
+
+  it('a stop, or a cap, without a result line stays what it is', { timeout: 30_000 }, async () => {
+    const { r } = runner();
+    const stopped = r.start(req({}, { FAKE_CLAUDE_SCRIPT: script(assistant('m1')), FAKE_CLAUDE_HANG: '1' }));
+    stopped.stop();
+    expect(await stopped.done).not.toHaveProperty('infra');
+    const capped = r.start(req({ limits: { turns: 50, durationMs: 200, usd: 5 } }, { FAKE_CLAUDE_SCRIPT: script(assistant('m1')), FAKE_CLAUDE_HANG: '1' }));
+    const done = await capped.done;
+    expect(done).toMatchObject({ outcome: 'limit' });
+    expect(done).not.toHaveProperty('infra');
   });
 });
 
@@ -225,6 +361,12 @@ describe('ClaudeCodeRunner attached to an attempt of a dead daemon', () => {
     expect(r.attach({ ...attach, runId: 'r-cut' })).toBeUndefined();
     expect(existsSync(join(liveDir(transcriptsDir), 'r-cut'))).toBe(false);
     expect(r.attach({ ...attach, runId: 'r-never' })).toBeUndefined();
+  });
+
+  it('watches the silence of what it takes up (ORC-136)', { timeout: 30_000 }, async () => {
+    const { r, transcriptsDir } = runner();
+    orphan(transcriptsDir, 'r-silent', { FAKE_CLAUDE_SCRIPT: fx('stream-usage-no-result.jsonl'), FAKE_CLAUDE_HANG: '1' });
+    expect(await r.attach({ ...attach, runId: 'r-silent', stagnation: { silentMs: 300 } })!.done).toMatchObject({ outcome: 'limit', stagnation: { kind: 'silent', silentMs: 300 } });
   });
 
   it('stops it, and counts the duration already spent', { timeout: 30_000 }, async () => {

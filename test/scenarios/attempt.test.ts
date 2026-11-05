@@ -64,10 +64,10 @@ describe('the closed outcome of an attempt decides its end (ORC-289)', () => {
     for (const part of [done.summary, done.why, ...done.risks, ...done.untested, 'src/export.ts', "l'échappement des virgules"]) expect(lastBody(h)).toContain(part);
   });
 
-  it('an invalid stored output is no output: a success stays one, posted from the last text', async () => {
+  it('an invalid stored output is no output: the build asks for one, so it failed (ORC-136)', async () => {
     const h = await devRun({ status: 'done' });
-    expect(await h.ticket()).toMatchObject({ logical: 'human_review', blocked: false });
-    expect(h.tracker.activities('ls-1').at(-1)).toEqual({ type: 'response', body: 'Texte libre de fin.' });
+    expect(await h.ticket()).toMatchObject({ logical: 'dev', blocked: true, blockReason: 'Le run dev a échoué.' });
+    expect(h.tracker.activities('ls-1').at(-1)).toMatchObject({ type: 'elicitation' });
   });
 
   it("a reply (a feedback run) posts the agent's answer, not the output template", async () => {

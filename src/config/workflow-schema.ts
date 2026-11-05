@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { Condition } from '../core/conditions.js';
 import type { EventType, InputKind, LogicalState, QueueName } from '../core/types.js';
+import type { Effort } from '../presets/preset.js';
 
 const logical = z.enum(['todo', 'dev', 'human_review', 'ai_review', 'ready', 'done']);
 const duration = z.union([z.string(), z.number()]);
@@ -26,6 +27,7 @@ const rawLimits = z.object({ turns: z.number().int().positive(), duration, usd: 
 export const rawJobSchema = z
   .object({
     extends: z.string().optional(),
+    step: z.string().optional(),
     queue: z.enum(['dev', 'questions']).optional(),
     model: z.string().optional(),
     workspace: z.enum(['worktree', 'trunk-readonly', 'knowledge']).optional(),
@@ -101,6 +103,8 @@ export interface RunLimits {
   turns: number;
   durationMs: number;
   usd: number;
+  /** Tokens of the attempt (`budgets.per_step_tokens`, ORC-136), cache reads left out: past it, a cap. Absent: no cap, the values are to calibrate (ORC-216). */
+  tokens?: number;
 }
 
 export interface Limits {
@@ -115,6 +119,8 @@ export interface Limits {
    * Absent from versions frozen before it, which keep deciding without it.
    */
   repeatedFailures?: number;
+  /** An attempt that writes nothing for this long is stopped (ORC-136). Absent from versions frozen before it, which do not watch it. */
+  silentAfterMs?: number;
   reviewRounds: number;
 }
 
@@ -137,6 +143,10 @@ export interface JobSpec {
   name: string;
   queue: QueueName;
   model: string;
+  /** The agent step of the preset this job runs (ORC-136): it fixes its effort and caps its turns. Absent: a job out of the preset (a question). */
+  step?: string;
+  /** `claude --effort`. Absent from the jobs out of the preset and from versions frozen before it: the CLI's default. */
+  effort?: Effort;
   workspace: 'worktree' | 'trunk-readonly' | 'knowledge';
   session: 'new' | 'resume';
   skill: string;

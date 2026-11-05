@@ -42,12 +42,16 @@ on:
     - { move: done, do: cleanup, run: learn }
 jobs:
   dev:
+    # The agent step of factory/default this job runs: its effort, its ceiling of turns (ORC-136).
+    step: build
     queue: dev
     model: sonnet
     workspace: worktree
     session: new
     skill: "factory:dev"
     pickup: true
+    # No valid `submit_result`, no success. The build only, until ORC-191 rewrites the other skills.
+    structured_output: true
     verify: []
     # The repository's commands and the checks of the diff, in a fresh clone (ORC-151): every job that writes code.
     repo_checks: true
@@ -58,6 +62,8 @@ jobs:
   # once the golden tickets validate it.
   tests:
     extends: dev
+    step: tests
+    structured_output: false
     skill: "factory:tests"
     # The implementer's: the ticket session starts here, a return to the step and `dev` resume it (ORC-217).
     session: resume
@@ -66,6 +72,8 @@ jobs:
     on_success: { run: dev }
   dev-feedback:
     extends: dev
+    step: fix
+    structured_output: false
     session: resume
     skill: "factory:feedback"
     input: feedback
@@ -77,6 +85,7 @@ jobs:
     skill: "factory:fix-ci"
     input: ci_failures
   review:
+    step: review
     queue: dev
     model: opus
     workspace: worktree

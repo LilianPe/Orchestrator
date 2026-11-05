@@ -21,6 +21,7 @@ const CAUSES: readonly (readonly [Exclude<BlockCause, 'other'>, RegExp])[] = [
   ['infra', new RegExp(`^${PRODUCT_NAME} a redémarré pendant `)],
   ['infra', /^Le bail du run .+ a expiré \d+ fois : /],
   ['limit', /^Le run .+ a atteint un plafond/],
+  ['limit', /^Le run .+ n'a rien écrit depuis /],
   ['limit', /^Trop de relances après coupure : /],
   ['limit', /^(Vérifications|CI) toujours en échec après /],
   ['failed', /^Vérifications en échec après /],

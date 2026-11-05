@@ -45,7 +45,6 @@ export interface AttemptLabels {
 
 /** Labels nothing in the factory provides yet, and the tickets that will. */
 const PENDING_LABELS = {
-  effort: ['ORC-136', 'ORC-187'],
   image: ['ORC-204'],
   risk: ['ORC-206'],
   registryCommit: ['ORC-257'],
@@ -221,7 +220,7 @@ export function attemptLabels(i: AttemptLabelInput): AttemptLabels {
     model: i.job.model,
     factoryVersion: VERSION,
     factoryCommit,
-    effort: null,
+    effort: i.job.effort ?? null,
     image: null,
     risk: null,
     registryCommit: null,

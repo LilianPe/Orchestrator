@@ -76,6 +76,15 @@ export const SCENARIOS: Record<string, { preset?: TestPreset; authz?: HarnessAut
       await h.send('label.changed', { label: 'agent:stop', change: 'added' });
     },
   },
+  /** A build stopped by the detector, the same failure 3 times on an unchanged worktree: Bloqué, cause « boucle », on the journaled fact (ORC-136). */
+  'build-loop-blocked': {
+    run: async (h) => {
+      h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Exporter les audits en CSV depuis la liste des audits.' });
+      h.runner.enqueue({ outcome: 'limit', stagnation: { kind: 'loop', command: 'npm test', failure: 'sha256:0f', tree: '4b825dc', count: 3 } });
+      await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+      await h.orch.drained();
+    },
+  },
   /**
    * A reply whose decision throws (a corrupt projection) is dead-lettered and blocks the ticket; once the
    * projection is fixed, `factory run repair replay` decides it again and unblocks the ticket (ORC-175).
