@@ -1,7 +1,7 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { ExecResult } from '../adapters/exec.js';
 import { FakeSandboxProvider } from '../adapters/sandbox/fake.js';
@@ -50,15 +50,36 @@ class LocalSandboxes extends FakeSandboxProvider {
   }
 }
 
-function setup(over: Partial<CleanVerifyRequest> = {}) {
-  const base = mkdtempSync(join(tmpdir(), 'factory-clean-'));
-  const repo = join(base, 'agent');
-  git(base, 'init', '-q', '-b', BRANCH, repo);
+const identity = (repo: string) => {
   git(repo, 'config', 'user.email', 't@t');
   git(repo, 'config', 'user.name', 't');
+};
+
+const write = (repo: string, path: string, content: string) => {
+  mkdirSync(dirname(join(repo, path)), { recursive: true });
+  writeFileSync(join(repo, path), content);
+};
+
+const commit = (repo: string, message: string) => {
+  git(repo, 'add', '-A');
+  git(repo, 'commit', '-q', '-m', message);
+};
+
+/** The forge's repository, its default branch holding `config`, and the agent's clone of it on its branch, one commit ahead. */
+function setup(over: Partial<CleanVerifyRequest> = {}, config?: string) {
+  const base = mkdtempSync(join(tmpdir(), 'factory-clean-'));
+  const origin = join(base, 'origin');
+  git(base, 'init', '-q', '-b', 'main', origin);
+  identity(origin);
+  write(origin, 'README.md', 'base\n');
+  if (config) write(origin, '.factory/config.yml', config);
+  commit(origin, 'base');
+  const repo = join(base, 'agent');
+  git(base, 'clone', '-q', origin, repo);
+  identity(repo);
+  git(repo, 'checkout', '-q', '-b', BRANCH);
   writeFileSync(join(repo, 'a.txt'), 'committed\n');
-  git(repo, 'add', '.');
-  git(repo, 'commit', '-q', '-m', 'work');
+  commit(repo, 'work');
   const workDir = join(base, 'work');
   mkdirSync(workDir);
   const sandboxes = new LocalSandboxes();
@@ -69,14 +90,15 @@ function setup(over: Partial<CleanVerifyRequest> = {}) {
     ticketId: 'ORC-1',
     branch: BRANCH,
     worktree: repo,
+    originUrl: origin,
     workDir,
     setup: [],
     commands: ['grep committed a.txt'],
-    env: {},
+    env: async () => ({}),
     log: (m) => logs.push(m),
     ...over,
   };
-  return { base, repo, workDir, sandboxes, req, logs };
+  return { base, origin, repo, workDir, sandboxes, req, logs };
 }
 
 describe('runCleanVerify', () => {
@@ -110,7 +132,7 @@ describe('runCleanVerify', () => {
   });
 
   it('runs the setup in its own sandbox, destroyed before the one of the commands opens, with no secret', async () => {
-    const { sandboxes, req } = setup({ setup: ['touch made-by-setup'], commands: ['test -e made-by-setup'], env: { A: '1' } });
+    const { sandboxes, req } = setup({ setup: ['touch made-by-setup'], commands: ['test -e made-by-setup'], env: async () => ({ A: '1' }) });
     const res = await runCleanVerify(req);
     expect(res.failures).toEqual([]);
     expect(sandboxes.created.map((c) => [c.runId, c.network])).toEqual([['r1-bundle', 'none'], ['r1-verify-setup', 'limited'], ['r1-verify', 'none']]);
@@ -179,6 +201,62 @@ describe('runCleanVerify', () => {
     const res = await runCleanVerify(req);
     expect(res).toMatchObject({ ok: true, sha: git(repo, 'rev-parse', BRANCH) });
     expect(sandboxes.created.map((c) => c.runId)).toEqual(['r1-bundle']);
+  });
+
+  describe('.factory/config.yml, on the base branch', () => {
+    const CONFIG = 'commands: { lint: "echo base-lint", test: "echo base-test" }\nsetup: "echo base-setup"\nenv: [REPO_VAR]\n';
+
+    it('takes the commands and the setup of the base branch, in their order, over the workflow\'s', async () => {
+      const { sandboxes, req } = setup({ commands: ['echo workflow'], setup: ['echo workflow-setup'] }, CONFIG);
+      await runCleanVerify(req);
+      const commands = sandboxes.ran.map((r) => r.command);
+      expect(commands.at(-2)).toBe('echo base-lint');
+      expect(commands.at(-1)).toBe('echo base-test');
+      expect(commands).toContain('echo base-setup');
+      expect(commands).not.toContain('echo workflow');
+      expect(commands).not.toContain('echo workflow-setup');
+    });
+
+    it('ignores what the agent wrote in its own branch\'s config', async () => {
+      const { repo, sandboxes, req } = setup({}, CONFIG);
+      write(repo, '.factory/config.yml', 'commands: { test: "echo pwned-by-the-agent" }\n');
+      commit(repo, 'the agent rewrites what judges it');
+      await runCleanVerify(req);
+      expect(sandboxes.ran.map((r) => r.command)).not.toContain('echo pwned-by-the-agent');
+      expect(sandboxes.ran.map((r) => r.command)).toContain('echo base-test');
+    });
+
+    it('does not believe a ref the agent moved in the repository it can write', async () => {
+      const { repo, sandboxes, req } = setup({}, CONFIG);
+      write(repo, '.factory/config.yml', 'commands: { test: "echo pwned-by-the-ref" }\n');
+      commit(repo, 'forged base');
+      git(repo, 'update-ref', 'refs/remotes/origin/main', 'HEAD');
+      await runCleanVerify(req);
+      expect(sandboxes.ran.map((r) => r.command)).not.toContain('echo pwned-by-the-ref');
+    });
+
+    it('asks the variables of the repository from the base\'s config', async () => {
+      const asked: string[][] = [];
+      const { req } = setup({ env: async (config) => (asked.push(config.env), { REPO_VAR: 'v' }) }, CONFIG);
+      await runCleanVerify(req);
+      expect(asked).toEqual([['REPO_VAR']]);
+    });
+
+    it('with no commands in the base\'s config, keeps the workflow\'s', async () => {
+      const { sandboxes, req } = setup({ commands: ['echo workflow'] }, 'env: [A]\n');
+      await runCleanVerify(req);
+      expect(sandboxes.ran.map((r) => r.command)).toEqual(['echo workflow']);
+    });
+
+    it('a config the base refuses is a breakdown, not the agent\'s to fix', async () => {
+      const { req } = setup({}, 'checks: { disable: [all] }\n');
+      await expect(runCleanVerify(req)).rejects.toThrow(/config\.yml refusé/);
+    });
+
+    it('an origin that does not answer is a breakdown', async () => {
+      const { base, req } = setup({ originUrl: 'nowhere' });
+      await expect(runCleanVerify({ ...req, originUrl: join(base, 'gone') })).rejects.toThrow();
+    });
   });
 
   it('caps each command by a kill, and its output by the tail, keeping its exit code', () => {

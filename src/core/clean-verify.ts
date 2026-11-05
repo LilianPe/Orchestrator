@@ -2,6 +2,7 @@ import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { execCmd, mustExec, type Exec, type ExecResult } from '../adapters/exec.js';
 import { DEFAULT_REQUIREMENTS, type Sandbox, type SandboxMount, type SandboxProvider } from '../adapters/sandbox/types.js';
+import { parseRepoConfig, type RepoConfig } from '../config/repo-config.js';
 import { BUNDLE_TARGET, extractWork, HARDENING } from '../publish/extract.js';
 import { runSealedSetup } from './sealed-setup.js';
 import type { VerifyFailure } from './types.js';
@@ -26,10 +27,13 @@ export interface CleanVerifyRequest {
   gitDir?: string;
   /** On the host, empty, and the caller's to remove: where the engine can mount from. */
   workDir: string;
+  /** Where the base branch is read, not the refs of the repository, which the agent can write. */
+  originUrl: string;
+  /** The workflow's, the factory's own (`jobs.<job>.verify`, `workspace.setup`): what `.factory/config.yml` does not declare, until ORC-177. */
   setup: readonly string[];
   commands: readonly string[];
   /** The variables the repository declares (ORC-211), never a secret. */
-  env: Record<string, string>;
+  env: (config: RepoConfig) => Promise<Record<string, string>>;
   log: (message: string) => void;
   deadlineMs?: number;
   exec?: Exec;
@@ -81,7 +85,9 @@ function withDeadline(sandboxes: SandboxProvider, ms: number): SandboxProvider {
  *
  * 1. in a sandbox of its own, without network, `git bundle` of the branch: its head is the frozen SHA;
  * 2. on the host, `git bundle verify` and a clone without checkout, without the repository's config;
- * 3. every read of the clone happens here, before any code of the agent has run in it;
+ * 3. the base branch fetched into the clone from the forge, and `.factory/config.yml` read on it, never on the agent's
+ *    branch nor on a ref of the repository it can write. Every read of the clone happens here, before any code of the
+ *    agent has run in it;
  * 4. the checkout and the commands, in a new sandbox on that clone, at network `none`, with nothing else mounted.
  *
  * `setup`, which has to install, runs first in its own sandbox at `limited`, without a secret: it is sealed like the
@@ -108,31 +114,38 @@ export const runCleanVerify: CleanVerifier = async (req) => {
     box = undefined;
     rmSync(bundleDir, { recursive: true, force: true });
 
-    const tree = await cloneGit(req, cloneDir)('rev-parse', `${sha}^{tree}`);
-    if (!req.commands.length) return { ok: true, failures: [], sha, tree };
+    const git = cloneGit(req, cloneDir);
+    const tree = await git('rev-parse', `${sha}^{tree}`);
+    await fetchBase(req, cloneDir);
+    const config = parseRepoConfig(await baseConfig(git));
+    const declared = Object.values(config.commands);
+    const commands = declared.length ? declared : req.commands;
+    const setup = config.setup ? [config.setup] : req.setup;
+    const env = await req.env(config);
+    if (!commands.length) return { ok: true, failures: [], sha, tree };
 
     // `-c` on the command line: the clone's config is ours, and from the first command on it is no longer to be trusted.
     const checkout = ['git', ...SANDBOX_GIT, 'checkout', '--quiet', '--detach', sha];
-    if (req.setup.length) {
+    if (setup.length) {
       await runSealedSetup(sandboxes, {
         runId: `${req.runId}-verify`,
         ticketId: req.ticketId,
         workspacePath: cloneDir,
         mounts: [],
-        commands: [checkout.map(shellWord).join(' '), ...req.setup],
-        env: req.env,
+        commands: [checkout.map(shellWord).join(' '), ...setup],
+        env,
         secrets: {},
         now: new Date(),
       });
     }
     box = await open('verify', cloneDir, []);
-    if (!req.setup.length) {
+    if (!setup.length) {
       const out = await sandboxes.exec(box.id, checkout);
       if (out.code !== 0) throw new Error(`git checkout (sandbox) : ${out.stderr.trim()}`);
     }
     const failures: VerifyFailure[] = [];
-    for (const command of req.commands) {
-      const { code, stdout, stderr } = await sandboxes.exec(box.id, verifyCommand(command), { env: req.env });
+    for (const command of commands) {
+      const { code, stdout, stderr } = await sandboxes.exec(box.id, verifyCommand(command), { env });
       // 124: the cap's, whose failure stays the agent's (a test that hangs), as on the host.
       if (code !== 0) failures.push({ command, exitCode: code === 124 ? null : code, output: stdout + stderr });
     }
@@ -149,6 +162,25 @@ export const runCleanVerify: CleanVerifier = async (req) => {
     }
   }
 };
+
+const BASE = 'refs/factory/base';
+const CONFIG = '.factory/config.yml';
+
+/**
+ * The forge's default branch, in the clone. The daemon's own config is read, for its credentials: the repository's is
+ * not, as nothing here runs in it, and the clone's is ours. Neither `origin/HEAD` nor `origin/main` of the repository:
+ * its git dir is mounted read-write for the agent, which could point them at a config of its own.
+ */
+async function fetchBase(req: CleanVerifyRequest, cloneDir: string): Promise<void> {
+  const args = [...HARDENING.flatMap((c) => ['-c', c]), '-C', cloneDir, 'fetch', '--quiet', '--no-tags', '--no-recurse-submodules', '--', req.originUrl, `+HEAD:${BASE}`];
+  await mustExec(req.exec ?? execCmd, 'git', args, { env: { GIT_TERMINAL_PROMPT: '0' } });
+}
+
+/** The file on the base branch; undefined when it has none, which is no failure: it is optional. */
+async function baseConfig(git: (...args: string[]) => Promise<string>): Promise<string | undefined> {
+  const listed = await git('ls-tree', '--name-only', BASE, '--', CONFIG);
+  return listed ? git('show', `${BASE}:${CONFIG}`) : undefined;
+}
 
 /** Git in a sandbox, whose bind mounts are the host's uid: no hook, no fsmonitor, on a clone it did not make. */
 const SANDBOX_GIT = ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', '-c', 'safe.directory=*'];

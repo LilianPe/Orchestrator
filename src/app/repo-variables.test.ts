@@ -1,7 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { Exec } from '../adapters/exec.js';
 import { NO_REPO_VARIABLES } from '../config/repo-variables.js';
-import { makeRepoVariables } from './repo-variables.js';
+import { makeOriginUrl, makeRepoVariables } from './repo-variables.js';
 
 const YML = { repos: [{ linearTeam: 'REL', github: 'Org/App', env: { NODE_ENV: 'test' }, secrets: { REGISTRY_TOKEN: 'registry-secret' } }] };
 const CONFIG = 'env: [NODE_ENV]\nsetup_secrets: [REGISTRY_TOKEN]\n';
@@ -78,5 +78,16 @@ describe('makeRepoVariables (ORC-211)', () => {
   it('rejects when git fails, for the caller to log', async () => {
     const exec: Exec = async () => Promise.reject(new Error('no git'));
     await expect(makeRepoVariables({ yml: YML, exec, log: () => {} })(PROJECT)).rejects.toThrow('no git');
+  });
+});
+
+describe('makeOriginUrl (ORC-151)', () => {
+  it('reads the URL once by process: what an agent writes in the repository config afterwards changes nothing', async () => {
+    const urls = ['https://forge/real.git', 'https://evil/forged.git'];
+    const exec = vi.fn(async () => ({ stdout: `${urls.shift()}\n`, stderr: '', code: 0 }));
+    const url = makeOriginUrl({ exec });
+    expect(await url({ repoPath: '/r' })).toBe('https://forge/real.git');
+    expect(await url({ repoPath: '/r' })).toBe('https://forge/real.git');
+    expect(exec).toHaveBeenCalledTimes(1);
   });
 });

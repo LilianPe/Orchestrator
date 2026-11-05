@@ -23,7 +23,7 @@ import { LinearTracker } from '../adapters/tracker/linear/tracker.js';
 import { isUsableWebhookSecret } from '../adapters/tracker/linear/webhook.js';
 import { GitWorkspaces } from '../adapters/workspace/git-workspaces.js';
 import { activeClaudeToken, loadFactoryYml } from '../config/factory-yml.js';
-import { makeRepoVariables } from './repo-variables.js';
+import { makeOriginUrl, makeRepoVariables } from './repo-variables.js';
 import { daemonSecretValues, effectiveInstance, homePaths, linearSettings, saveLinearTokens } from '../config/instance.js';
 import { githubWebhookSecret, resolveGithubApp } from '../config/github-app.js';
 import { writeRunSettings } from '../config/run-settings.js';
@@ -190,6 +190,9 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
 
     // Filled once the reconciler and the poll exist, below: the reconciliation's timer (ORC-185) runs both.
     let reconcileProject: (p: ProjectRuntime) => Promise<void> = async () => {};
+    // Before any run of this process: `verify` reads the base branch at this URL, whatever an agent writes in the repository's config (ORC-151).
+    const originUrl = makeOriginUrl();
+    if (sandboxes) for (const p of projects) await originUrl(p).catch((err: Error) => log(`Attention : ${p.id} : origin illisible, verify le relira : ${err.message}`));
     const orchestrator = new Orchestrator({
       reconcile: (p) => reconcileProject(p),
       // The sources start before Linear is connected: their events wait in the inbox until replayInbox().
@@ -216,6 +219,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       knowledgeConfigured: !!instance.knowledge,
       roles,
       repoVariables: makeRepoVariables({ yml, log }),
+      originUrl,
       ...(sandboxes
         ? {
             sandboxes,

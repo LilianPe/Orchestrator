@@ -101,11 +101,12 @@ describe.skipIf(!enabled)(`a hostile verify command (${cli})`, () => {
       ticketId: 'ISO-1',
       branch: BRANCH,
       worktree,
+      originUrl: repo,
       ...(gitDir ? { gitDir } : {}),
       workDir,
       setup: ['echo setup-ran > .setup-ran'],
       commands: ['bash attack.sh'],
-      env: { REPO_VISIBLE: 'repo-variable', AGENT_WORKTREE: worktree },
+      env: async () => ({ REPO_VISIBLE: 'repo-variable', AGENT_WORKTREE: worktree }),
       log: () => {},
     });
     out = report(result.failures[0]?.output ?? '');

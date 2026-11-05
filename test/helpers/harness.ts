@@ -219,8 +219,9 @@ export function createHarness(
       workspaces: life.gate(workspaces),
       verify: life.gate(checks.run),
       hostChecks: opts.hostChecks ?? true,
+      originUrl: async () => '/origin',
       // The clean check is proved by itself (clean-verify.test.ts, the isolation suite): a scenario decides its verdict through the same fake.
-      cleanVerify: opts.cleanVerify ?? (async (req: CleanVerifyRequest) => ({ ...(await life.gate(checks.run)(req.worktree, [...req.commands], undefined, req.env)), sha: (await workspaces.head(req.worktree)) ?? 'head', tree: 'clean-tree' })),
+      cleanVerify: opts.cleanVerify ?? (async (req: CleanVerifyRequest) => ({ ...(await life.gate(checks.run)(req.worktree, [...req.commands], undefined, {})), sha: (await workspaces.head(req.worktree)) ?? 'head', tree: 'clean-tree' })),
       // The proxy's journal of a run (ORC-296) beside its refusals log: a test writes both.
       ...(sessionsDir ? { sandboxes: life.gate(sandboxes), sessionsDir, runsDir, egressJournal: (id: string) => join(runsDir!, id, 'egress.jsonl') } : {}),
     };

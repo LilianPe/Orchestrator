@@ -20,6 +20,7 @@ import { ActivityRelay } from '../adapters/tracker/activity-relay.js';
 import { IssueNotFoundError, labelEchoKey, stateEchoKey, type ActivityInput, type Tracker, type TrackerIssue } from '../adapters/tracker/types.js';
 import type { Workspace, WorkspaceManager } from '../adapters/workspace/types.js';
 import { NO_REPO_VARIABLES, type RepoVariables } from '../config/repo-variables.js';
+import type { RepoConfig } from '../config/repo-config.js';
 import type { JobSpec, Workflow } from '../config/workflow-schema.js';
 import type { EffectRetry } from '../runtime/outbox.js';
 import { Worker } from '../runtime/worker.js';
@@ -163,7 +164,9 @@ export interface OrchestratorDeps {
   sandboxMounts?: readonly SandboxMount[];
   agentEnv: (run: RunRecord) => Record<string, string>;
   /** What the runner gets of the repository, at each launch (ORC-211). Absent: nothing. */
-  repoVariables?: (project: ProjectRuntime) => Promise<RepoVariables>;
+  repoVariables?: (project: ProjectRuntime, config?: RepoConfig) => Promise<RepoVariables>;
+  /** Where a project's base branch is fetched (ORC-151): required with `sandboxes`. */
+  originUrl?: (project: ProjectRuntime) => Promise<string>;
   dailyBudgetUsd?: number;
   newId?: () => string;
   activityIntervalMs?: number;
@@ -704,9 +707,9 @@ export class Orchestrator {
   }
 
   /** What the runner gets of the repository (ORC-211): none when it cannot be read, the launch goes on. */
-  private async repoVariablesOf(project: ProjectRuntime): Promise<RepoVariables> {
+  private async repoVariablesOf(project: ProjectRuntime, config?: RepoConfig): Promise<RepoVariables> {
     if (!this.d.repoVariables) return NO_REPO_VARIABLES;
-    return this.d.repoVariables(project).catch((err: Error) => {
+    return this.d.repoVariables(project, config).catch((err: Error) => {
       this.log('warn', `${project.id}: repository variables not read: ${err.message}`);
       return NO_REPO_VARIABLES;
     });
@@ -768,13 +771,12 @@ export class Orchestrator {
    * sandboxes, only under the explicit `hostChecks`: in the worktree, on the host, and without any of these guarantees.
    */
   private async verifyWork(project: ProjectRuntime, t: TicketState, run: RunRecord, job: JobSpec): Promise<VerifyResult> {
-    const { sandboxes, runsDir } = this.d;
-    const { env } = await this.repoVariablesOf(project);
+    const { sandboxes, runsDir, originUrl } = this.d;
     if (!sandboxes) {
       if (!this.d.hostChecks) throw new Error(HOST_CHECKS_OFF);
-      return job.verify.length > 0 ? this.d.verify(run.cwd, job.verify, undefined, env) : { ok: true, failures: [] };
+      return job.verify.length > 0 ? this.d.verify(run.cwd, job.verify, undefined, (await this.repoVariablesOf(project)).env) : { ok: true, failures: [] };
     }
-    if (!runsDir) throw new Error('runsDir is required with sandboxes');
+    if (!runsDir || !originUrl) throw new Error('runsDir and originUrl are required with sandboxes');
     if (!t.branch || !t.worktreePath) throw new Error(`aucune branche ou aucun worktree pour ${t.ticketId}`);
     // A place the engine mounts from, new for each check: one cut can leave its own behind.
     const workDir = join(runsDir, run.id, `verify-${randomUUID()}`);
@@ -786,11 +788,12 @@ export class Orchestrator {
         ticketId: t.ticketId,
         branch: t.branch,
         worktree: t.worktreePath,
+        originUrl: await originUrl(project),
         gitDir: await this.d.workspaces.gitCommonDir(t.worktreePath),
         workDir,
         setup: project.workflow.workspace.setup,
         commands: job.verify,
-        env,
+        env: async (config) => (await this.repoVariablesOf(project, config)).env,
         log: (message) => this.log('warn', `verify of ${t.ticketId}: ${message}`),
       });
     } finally {

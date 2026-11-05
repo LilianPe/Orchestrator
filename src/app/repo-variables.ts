@@ -1,8 +1,8 @@
-import { execCmd, type Exec } from '../adapters/exec.js';
+import { execCmd, mustExec, type Exec } from '../adapters/exec.js';
 import { githubRepoOf } from '../adapters/forge/github-ingest.js';
 import { originHead } from '../adapters/workspace/git-workspaces.js';
 import type { FactoryYml } from '../config/factory-yml.js';
-import { parseRepoConfig } from '../config/repo-config.js';
+import { parseRepoConfig, type RepoConfig } from '../config/repo-config.js';
 import { NO_REPO_VARIABLES, repoVariables, type RepoVariables } from '../config/repo-variables.js';
 
 /**
@@ -14,17 +14,35 @@ import { NO_REPO_VARIABLES, repoVariables, type RepoVariables } from '../config/
  * Until the agent loses its read-write `.git` (ORC-205), `origin/HEAD` is a ref it could move, and
  * `origin` too before its first read here: the team bounds that to the entries of the project's own team.
  */
-export function makeRepoVariables(o: { yml: FactoryYml | undefined; log: (message: string) => void; exec?: Exec }): (project: { id: string; repoPath: string; teamKey: string }) => Promise<RepoVariables> {
+/**
+ * Where a project's forge is, read once by process (ORC-151): `bootstrap` asks it before any run starts, and an agent
+ * of this process, which can write the repository's config, changes nothing. An agent of an earlier process could:
+ * ponytail: the URL should come from the instance's configuration (`factory.yml`), with ORC-273's forge.
+ */
+export function makeOriginUrl(o: { exec?: Exec } = {}): (project: { repoPath: string }) => Promise<string> {
+  const exec = o.exec ?? execCmd;
+  const known = new Map<string, string>();
+  return async ({ repoPath }) => {
+    const seen = known.get(repoPath);
+    if (seen) return seen;
+    const url = (await mustExec(exec, 'git', ['-C', repoPath, 'config', '--get', 'remote.origin.url'])).trim();
+    known.set(repoPath, url);
+    return url;
+  };
+}
+
+export function makeRepoVariables(o: { yml: FactoryYml | undefined; log: (message: string) => void; exec?: Exec }): (project: { id: string; repoPath: string; teamKey: string }, config?: RepoConfig) => Promise<RepoVariables> {
   const exec = o.exec ?? execCmd;
   const github = githubRepoOf(exec);
-  return async ({ id, repoPath, teamKey }) => {
+  return async ({ id, repoPath, teamKey }, config) => {
     const entries = o.yml?.repos?.filter((r) => r.linearTeam === teamKey);
     if (!entries?.length) return NO_REPO_VARIABLES;
     const name = (await github(repoPath))?.toLowerCase();
     const server = entries.find((r) => r.github.toLowerCase() === name);
     if (!server) return NO_REPO_VARIABLES;
-    const file = await exec('git', ['-C', repoPath, 'show', `${await originHead(exec, repoPath)}:.factory/config.yml`]);
-    const vars = repoVariables(parseRepoConfig(file.code === 0 ? file.stdout : undefined), server);
+    // `config`: the file as `verify` read it from the forge (ORC-151), not through a ref of this repository.
+    const file = config ? undefined : await exec('git', ['-C', repoPath, 'show', `${await originHead(exec, repoPath)}:.factory/config.yml`]);
+    const vars = repoVariables(config ?? parseRepoConfig(file?.code === 0 ? file.stdout : undefined), server);
     if (vars.missing.length) o.log(`${id} : variables déclarées par le dépôt, sans valeur dans factory.yml, absentes du runner : ${vars.missing.join(', ')}`);
     return vars;
   };
