@@ -1,5 +1,5 @@
 import type { ExecResult } from '../exec.js';
-import type { IsolationLevel, Sandbox, SandboxExecOptions, SandboxProvider, SandboxRequest, SandboxRequirements } from './types.js';
+import type { IsolationLevel, Sandbox, SandboxExecOptions, SandboxProvider, SandboxRequest, SandboxRequirements, SpawnCommand } from './types.js';
 
 export interface SandboxBackend {
   name: string;
@@ -54,7 +54,7 @@ export class SandboxRouter implements SandboxProvider {
     return this.ownerOf(id).provider.exec(id, argv, opts);
   }
 
-  spawnCommand(id: string, argv: readonly string[], opts?: SandboxExecOptions): string[] {
+  spawnCommand(id: string, argv: readonly string[], opts?: SandboxExecOptions): SpawnCommand {
     return this.ownerOf(id).provider.spawnCommand(id, argv, opts);
   }
 

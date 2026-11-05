@@ -351,7 +351,7 @@ describeCheckRunnerContract(
 );
 
 const UNREACHABLE = 'findPr and unresolvedReviewComments reject when the forge does not answer';
-const UNREADABLE = 'findPr gives none for checks it cannot read';
+const UNREADABLE = 'findPr rejects for checks it cannot read';
 
 function forgeThat(patch: Partial<ForgeSubject>): () => ForgeSubject {
   return () => {
@@ -379,8 +379,10 @@ const findingPr = (findPr: Forge['findPr']): Partial<ForgeSubject> => ({ forge: 
 const unreadable = (findPr: Forge['findPr']): Partial<ForgeSubject> => ({ ...findingPr(findPr), unreadableChecks: 'factory/rel-2-y' });
 
 describeForgeContract(
-  'a forge that rejects checks it cannot read',
-  forgeThat(unreadable(async () => Promise.reject(new SyntaxError('Unexpected token n in JSON')))),
+  'a forge that reads checks it cannot read as none',
+  forgeThat(
+    unreadable(async (_repo, branch) => ({ number: 8, url: 'https://github.test/pr/8', state: 'OPEN', branch, checks: 'none', failedChecks: [] })),
+  ),
   { violates: [UNREADABLE] },
 );
 
@@ -413,6 +415,27 @@ describeForgeContract(
   'a forge that reports an open PR without any check as pending',
   forgeThat(withoutChecks(async (_repo, branch) => ({ ...openPr(branch), checks: 'pending' }))),
   { violates: [NO_CHECKS] },
+);
+
+const UNKNOWN_BUCKET = 'findPr gives neither pass nor none for checks with a state it does not know';
+const withUnknownBucket = (findPr: Forge['findPr']): Partial<ForgeSubject> => ({ ...findingPr(findPr), unknownBucket: 'factory/rel-5-v' });
+
+describeForgeContract(
+  'a forge that counts a check in a state it does not know as passed',
+  forgeThat(withUnknownBucket(async (_repo, branch) => ({ ...openPr(branch), checks: 'pass' }))),
+  { violates: [UNKNOWN_BUCKET] },
+);
+
+describeForgeContract(
+  'a forge that reads a check in a state it does not know as no check at all',
+  forgeThat(withUnknownBucket(async (_repo, branch) => ({ ...openPr(branch), checks: 'none' }))),
+  { violates: [UNKNOWN_BUCKET] },
+);
+
+describeForgeContract(
+  'a forge that reads a check in a state it does not know as failed without naming a failed check',
+  forgeThat(withUnknownBucket(async (_repo, branch) => ({ ...openPr(branch), checks: 'fail' }))),
+  { violates: [UNKNOWN_BUCKET] },
 );
 
 const NO_PR = 'findPr answers undefined for a branch without a PR';
@@ -834,8 +857,8 @@ describeSandboxContract(
   'a sandbox provider whose spawnCommand builds a command for a sandbox it does not have',
   sandboxesThat(
     class extends FakeSandboxProvider {
-      override spawnCommand(_id: string, argv: readonly string[]): string[] {
-        return [...argv];
+      override spawnCommand(_id: string, argv: readonly string[]) {
+        return { command: [...argv], env: {} };
       }
     },
   ),

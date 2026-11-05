@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { writeRunSettings } from '../config/run-settings.js';
 import { FakeForge } from '../adapters/forge/fake.js';
 import { FakeRunner } from '../adapters/runner/fake.js';
@@ -34,6 +34,7 @@ function setup(
     tweak?: (w: ReturnType<typeof loadWorkflow>) => void;
     effectRetry?: EffectRetry;
     workspaces?: FakeWorkspaces;
+    processRetry?: { attempts: number; baseMs: number };
   } = {},
 ) {
   const workflow = loadWorkflow({ packDir });
@@ -44,17 +45,22 @@ function setup(
   const runner = o.runner ?? fakeRunner;
   const scheduler = new Scheduler(store, { dev: 3, questions: 2 });
   let n = 0;
+  const bus = new EventBus();
   const orch = new Orchestrator({
-    store, clock: new FakeClock(1_000), bus: new EventBus(), scheduler,
+    store, clock: new FakeClock(1_000), bus, scheduler,
     tracker, forge: new FakeForge(), runner, workspaces: o.workspaces ?? new FakeWorkspaces(), verify: o.verify ?? (async () => ({ ok: true, failures: [] })), dailyBudgetUsd: o.budget,
     projects: [{ id: 'p', repoPath: '/repo', teamKey: 'REL', workflow }], packDir, settingsPath: o.settingsPath,
     agentEnv: (r) => ({ FACTORY_RUN_TOKEN: r.token }), newId: () => `id-${++n}`, activityIntervalMs: 0, holdInboxUntilReplay: o.hold, factoryCommit: 'cafe42',
     // One attempt: a failed effect dies at once (the retries have their own tests).
     effectRetry: o.effectRetry ?? { attempts: 1, baseMs: 1, capMs: 1 },
+    processRetry: o.processRetry,
   });
-  return { store, tracker, runner: fakeRunner, orch, scheduler };
+  return { store, tracker, runner: fakeRunner, orch, scheduler, bus };
 }
 
+const mentioned = (ticketId: string): FactoryEvent => ({
+  ...TRUSTED, id: 'm1', type: 'session.mentioned', at: 1_000, projectId: 'p', ticketId, payload: { linearSessionId: 'q1', body: '?', author: 'L' },
+});
 const delegated = (id = 'e1'): FactoryEvent => ({ ...TRUSTED, id, type: 'ticket.delegated', at: 1_000, projectId: 'p', ticketId: 'REL-1', payload: { linearSessionId: 'ls-1' } });
 
 describe('Orchestrator', () => {
@@ -142,6 +148,33 @@ describe('Orchestrator', () => {
     expect(await store.getTicket('p', 'REL-1')).toMatchObject({ title: 'Export CSV', logical: 'dev', priority: 2 });
     const journaled = (await store.recentEvents(10)).find((e) => e.id === 'm1')!;
     expect(journaled.payload).toMatchObject({ issue: { title: 'Export CSV', logical: 'dev', priority: 2 } });
+  });
+
+  it('drops, and journals, a creating event without a snapshot on an issue the tracker no longer finds (ORC-302)', async () => {
+    const { store, tracker, runner, orch, bus } = setup({ processRetry: { attempts: 3, baseMs: 1 } });
+    const logs: string[] = [];
+    bus.subscribe((m) => void (m.kind === 'log' && logs.push(m.message)));
+    const getIssue = vi.spyOn(tracker, 'getIssue');
+    await orch.accept(mentioned('REL-9'));
+    await orch.drained();
+    expect(getIssue).toHaveBeenCalledTimes(1);
+    // Retried, it would still be in the inbox: a failed row stays there until its last attempt.
+    expect(await store.pendingInbox(10)).toEqual([]);
+    expect((await store.recentEvents(10)).map((e) => e.id)).toContain('m1');
+    expect(await store.getTicket('p', 'REL-9')).toBeUndefined();
+    // Decided without the snapshot, the mention would plan a `start_run` on a ticket nothing tracks.
+    expect(await store.listEffects('p', 'REL-9')).toEqual([]);
+    expect(runner.requests).toEqual([]);
+    expect(logs.some((l) => l.includes('REL-9') && l.includes('not found in the tracker, left without a snapshot'))).toBe(true);
+  });
+
+  it('still retries a creating event whose snapshot read fails for another reason (ORC-302)', async () => {
+    const { store, tracker, orch } = setup({ processRetry: { attempts: 3, baseMs: 1 } });
+    const getIssue = vi.spyOn(tracker, 'getIssue').mockRejectedValue(new Error('fetch failed: ECONNRESET'));
+    await orch.accept(mentioned('REL-1'));
+    await orch.drained();
+    await vi.waitFor(() => expect(getIssue).toHaveBeenCalledTimes(3), { interval: 1 });
+    expect((await store.pendingInbox(10)).map((e) => e.id)).toEqual(['m1']);
   });
 
   it('ignores moves of tickets it does not manage', async () => {

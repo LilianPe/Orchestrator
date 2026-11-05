@@ -28,6 +28,8 @@ describeForgeContract('GhCliForge (scripted gh)', () => ({
       'gh pr checks 9 ': { stdout: '', stderr: "no checks reported on the 'factory/rel-3-z' branch\n", code: 1 },
       'gh pr list --head factory/rel-4-w ': { stdout: pr(10, 'factory/rel-4-w') },
       'gh pr checks 10 ': { stdout: '', stderr: 'Post "https://api.github.com/graphql": dial tcp: connection refused\n', code: 1 },
+      'gh pr list --head factory/rel-5-v ': { stdout: pr(11, 'factory/rel-5-v') },
+      'gh pr checks 11 ': { stdout: JSON.stringify([{ name: 'lint', bucket: 'pass' }, { name: 'deploy', bucket: 'mystery' }, { name: 'docs', bucket: '' }]) },
       'gh repo view': { stdout: JSON.stringify({ owner: { login: 'me' }, name: 'app' }) },
       'gh api graphql': { stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [thread] } } } } }) },
     }),
@@ -40,6 +42,7 @@ describeForgeContract('GhCliForge (scripted gh)', () => ({
   unreadableChecks: 'factory/rel-2-y',
   noChecks: 'factory/rel-3-z',
   checksDown: 'factory/rel-4-w',
+  unknownBucket: 'factory/rel-5-v',
 }));
 
 describe('aggregateChecks', () => {
@@ -49,6 +52,11 @@ describe('aggregateChecks', () => {
     [['pass', 'pending'], 'pending'],
     [['pending', 'fail'], 'fail'],
     [['cancel'], 'fail'],
+    [['skipping'], 'pass'],
+    [['pass', 'mystery'], 'pending'],
+    [['pass', ''], 'pending'],
+    [['skipping', 'mystery'], 'pending'],
+    [['mystery', 'fail'], 'fail'],
   ])('%j -> %s', (b, r) => expect(aggregateChecks(b as string[])).toBe(r));
 });
 
@@ -65,17 +73,48 @@ describe('GhCliForge', () => {
     });
   });
 
-  it.each([
-    ['an entry that is not an object', '[null]'],
-    ['an entry without a bucket', '[{"name":"ci"}]'],
-  ])('reads checks listing %s as none, not as green', async (_case, stdout) => {
-    const forge = new GhCliForge(
+  /** A forge whose `gh pr list` finds open PR 7 on branch `b`, and whose `gh pr checks 7` answers `checks`. */
+  const answeringChecks = (checks: { stdout: string; stderr?: string; code?: number }) =>
+    new GhCliForge(
       fakeExec({
         'gh pr list': { stdout: JSON.stringify([{ number: 7, url: 'https://gh/7', state: 'OPEN', headRefName: 'b' }]) },
-        'gh pr checks 7': { stdout },
+        'gh pr checks 7': checks,
       }),
     );
-    expect(await forge.findPr('/r', 'b')).toMatchObject({ checks: 'none', failedChecks: [] });
+
+  it.each([
+    ['an entry that is not an object', 0, '[null]'],
+    ['an entry without a bucket', 0, '[{"name":"ci"}]'],
+    ['a null bucket', 0, '[{"name":"ci","bucket":null}]'],
+    ['nothing', 0, ''],
+    ['an object, not a list', 1, '{"name":"ci","bucket":"pass"}'],
+  ])('rejects, naming the command and its output, when gh pr checks lists %s (exit %i)', async (_case, code, stdout) => {
+    await expect(answeringChecks({ stdout, code }).findPr('/r', 'b')).rejects.toThrow(
+      `gh pr checks 7 --json name,bucket: unreadable output, not a list of checks: ${JSON.stringify(stdout)}`,
+    );
+  });
+
+  it('cuts a long unreadable output in its error', async () => {
+    await expect(answeringChecks({ stdout: `<html>${'x'.repeat(1000)}` }).findPr('/r', 'b')).rejects.toThrow(/: "<html>x{194}"…$/);
+  });
+
+  it("keeps gh's stderr in the error even on exit 0, cut like the output", async () => {
+    await expect(answeringChecks({ stdout: 'garbage', stderr: 'A new release of gh is available\n' }).findPr('/r', 'b')).rejects.toThrow(
+      /: "garbage" \(exit 0: A new release of gh is available\)$/,
+    );
+    await expect(answeringChecks({ stdout: 'garbage', stderr: 'y'.repeat(1000), code: 1 }).findPr('/r', 'b')).rejects.toThrow(
+      /: "garbage" \(exit 1: y{200}…\)$/,
+    );
+  });
+
+  it('never cuts a character in two in its excerpt', async () => {
+    await expect(answeringChecks({ stdout: `${'x'.repeat(199)}😀tail` }).findPr('/r', 'b')).rejects.toThrow(/: "x{199}"…$/);
+  });
+
+  it('rejects a PR without checks whose stdout is not empty, as gh never answers it', async () => {
+    await expect(
+      answeringChecks({ stdout: 'garbage', stderr: "no checks reported on the 'b' branch\n", code: 1 }).findPr('/r', 'b'),
+    ).rejects.toThrow(`unreadable output, not a list of checks: "garbage" (exit 1: no checks reported on the 'b' branch)`);
   });
 
   it("rejects with gh pr checks' own failure when gh answers the PR but not its checks", async () => {

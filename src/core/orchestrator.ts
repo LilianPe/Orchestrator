@@ -17,8 +17,9 @@ import {
   type SandboxProvider,
 } from '../adapters/sandbox/types.js';
 import { ActivityRelay } from '../adapters/tracker/activity-relay.js';
-import { labelEchoKey, stateEchoKey, type ActivityInput, type Tracker } from '../adapters/tracker/types.js';
+import { IssueNotFoundError, labelEchoKey, stateEchoKey, type ActivityInput, type Tracker, type TrackerIssue } from '../adapters/tracker/types.js';
 import type { Workspace, WorkspaceManager } from '../adapters/workspace/types.js';
+import { NO_REPO_VARIABLES, type RepoVariables } from '../config/repo-variables.js';
 import type { JobSpec, Workflow } from '../config/workflow-schema.js';
 import type { EffectRetry } from '../runtime/outbox.js';
 import { Worker } from '../runtime/worker.js';
@@ -62,14 +63,16 @@ import {
   type VerifyFailure,
   TRUSTED,
 } from './types.js';
-import { VERIFY_TIMEOUT_MS, type Verifier } from './verify.js';
+import { runSealedSetup } from './sealed-setup.js';
+import { cappedCommand, type Verifier } from './verify.js';
 import { PRODUCT_NAME } from '../product.js';
 import { checkRed, type RedDeps, type RedResult } from '../checks/red.js';
 import { parseStatus } from '../adapters/workspace/git-workspaces.js';
-import type { ExecResult } from '../adapters/exec.js';
 
 /** Meta key of the head a ticket's tests step started on (ORC-123). */
 const redBaseKey = (projectId: string, ticketId: string): string => `red-base:${projectId}:${ticketId}`;
+/** Set while a fresh worktree is not set up and sealed (ORC-211): a daemon killed before the end leaves it, and the next launch makes the worktree anew. */
+const setupPendingKey = (path: string): string => `setup-pending:${path}`;
 
 /**
  * Every run's Claude Code (ORC-284): no auto-memory (ORC-205), telemetry off by both variables ORC-128
@@ -145,6 +148,8 @@ export interface OrchestratorDeps {
   /** Other host paths every sandbox mounts (the factory's install, for `factory-agent`). */
   sandboxMounts?: readonly SandboxMount[];
   agentEnv: (run: RunRecord) => Record<string, string>;
+  /** What the runner gets of the repository, at each launch (ORC-211). Absent: nothing. */
+  repoVariables?: (project: ProjectRuntime) => Promise<RepoVariables>;
   dailyBudgetUsd?: number;
   newId?: () => string;
   activityIntervalMs?: number;
@@ -630,31 +635,42 @@ export class Orchestrator {
   }
 
   /**
-   * The repository's `setup` in a worktree just made: in its sandbox, on the host without one. It
-   * throws on a failure; the launch then removes the worktree, so the next attempt runs it again.
+   * The repository's `setup` in a worktree just made: in a sandbox of its own, gone and sealed before the
+   * agent's is opened (ORC-211), on the host without sandboxes, where it gets no secret. It throws on a
+   * failure; the launch then removes the worktree, so the next attempt runs it again.
    */
-  private async runSetup(project: ProjectRuntime, ws: Workspace, sandbox: Sandbox | undefined): Promise<void> {
+  private async runSetup(project: ProjectRuntime, ticketId: string, ws: Workspace, runId: string, vars: RepoVariables): Promise<void> {
     const commands = project.workflow.workspace.setup;
-    const fail = (what: string): never => {
-      throw new Error(`Le setup du worktree a échoué : ${what}`);
-    };
-    if (sandbox) {
-      // ponytail: setup shares the attempt's sandbox, so its `limited` network (registries, GitHub read);
-      // a `full` sandbox of its own for setup when a repository needs more.
-      for (const command of commands) {
-        const { code } = await this.execCapped(sandbox.id, command);
-        if (code === 124) fail(`${command} (délai de ${VERIFY_TIMEOUT_MS / 60_000} min dépassé)`);
-        if (code !== 0) fail(command);
-      }
-    } else {
-      const res = await this.d.verify(ws.path, commands);
-      if (!res.ok) fail(res.failures[0]!.command);
+    const sandboxes = this.d.sandboxes;
+    if (!sandboxes) {
+      const res = await this.d.verify(ws.path, commands, undefined, vars.env);
+      if (!res.ok) throw new Error(`Le setup du worktree a échoué : ${res.failures[0]!.command}`);
+      return;
     }
+    // On commits a previous agent wrote, `setup` runs code nobody reviewed: no secret for it. A setup that needs one fails.
+    const secrets = ws.ahead ? {} : vars.setupSecrets;
+    if (ws.ahead && Object.keys(vars.setupSecrets).length) this.log('warn', `setup of ${ticketId}: its branch has commits beyond the default branch, the repository's secrets are withheld`);
+    const gitDir = await this.d.workspaces.gitCommonDir(ws.path);
+    const { purged } = await runSealedSetup(sandboxes, {
+      runId,
+      ticketId,
+      workspacePath: ws.path,
+      mounts: [{ host: gitDir, target: gitDir, readOnly: true }],
+      commands,
+      env: vars.env,
+      secrets,
+      now: new Date(this.d.clock.now()),
+    });
+    if (purged.length) this.log('warn', `setup of ${ticketId}: secret found and purged in ${purged.join(', ')}`);
   }
 
-  /** `command` in a sandbox under the host's cap (runVerify), by coreutils' `timeout` in the image: 124 is its exit on expiry. */
-  private execCapped(sandboxId: string, command: string): Promise<ExecResult> {
-    return this.d.sandboxes!.exec(sandboxId, ['timeout', String(VERIFY_TIMEOUT_MS / 1000), 'bash', '-lc', command]);
+  /** What the runner gets of the repository (ORC-211): none when it cannot be read, the launch goes on. */
+  private async repoVariablesOf(project: ProjectRuntime): Promise<RepoVariables> {
+    if (!this.d.repoVariables) return NO_REPO_VARIABLES;
+    return this.d.repoVariables(project).catch((err: Error) => {
+      this.log('warn', `${project.id}: repository variables not read: ${err.message}`);
+      return NO_REPO_VARIABLES;
+    });
   }
 
   /**
@@ -675,18 +691,21 @@ export class Orchestrator {
       let runTests: RedDeps['run'];
       if (!sandboxes) {
         uncommitted = await this.d.workspaces.uncommitted(run.cwd);
+        const { env } = await this.repoVariablesOf(project);
         runTests = async (cmd) => {
-          const res = await this.d.verify(run.cwd, [cmd]);
+          const res = await this.d.verify(run.cwd, [cmd], undefined, env);
           return res.ok ? { exitCode: 0, output: '' } : { exitCode: res.failures[0]!.exitCode, output: res.failures[0]!.output };
         };
       } else {
         // Not the ticket session: an empty per-run `~/.claude`, as any run that does not resume it.
         const box = (sandbox = await this.openSandbox(sandboxes, project, run.ticketId, { path: run.cwd }, redRunId, false, 'none'));
+        // The tests must fail on the missing behaviour, not on a variable the repository declares (ORC-211).
+        const { env } = await this.repoVariablesOf(project);
         const status = await sandboxes.exec(box.id, ['git', 'status', '--porcelain', '-z', '--untracked-files=all']);
         if (status.code !== 0) throw new Error(`git status : ${status.stderr.trim()}`);
         uncommitted = parseStatus(status.stdout);
         runTests = async (cmd) => {
-          const r = await this.execCapped(box.id, cmd);
+          const r = await sandboxes.exec(box.id, cappedCommand(cmd), { env });
           return { exitCode: r.code === 124 ? null : r.code, output: r.stdout + r.stderr };
         };
       }
@@ -825,13 +844,22 @@ export class Orchestrator {
   /**
    * An event that starts tracking a ticket must carry its snapshot, so that `decide` and a replay of the
    * journal never read the tracker. A producer that could not fill it gets it filled here, before journaling.
+   * An issue the tracker no longer finds (deleted meanwhile, ORC-302) leaves it without one: its decision
+   * ignores it, journaled, instead of retrying a read that would fail again. Any other read error throws: retried.
    */
   private async withSnapshot(event: FactoryEvent): Promise<FactoryEvent> {
     if (event.projectId === '*' || !event.ticketId || !CREATES_TICKET.has(event.type)) return event;
     const payload = event.payload as { issue?: IssueSnapshot };
     if (payload.issue || (await this.d.store.getTicket(event.projectId, event.ticketId))) return event;
     const project = this.project(event.projectId);
-    const issue = await this.d.tracker.getIssue(event.ticketId);
+    let issue: TrackerIssue;
+    try {
+      issue = await this.d.tracker.getIssue(event.ticketId);
+    } catch (err) {
+      if (!(err instanceof IssueNotFoundError)) throw err;
+      this.log('warn', `event ${event.id} (${event.type}): ${event.ticketId} not found in the tracker, left without a snapshot: ${err.message}`);
+      return event;
+    }
     const logical = logicalFromName(project.workflow.states, issue.stateName) ?? 'todo';
     return { ...event, payload: { ...payload, issue: { title: issue.title, logical, priority: issue.priority } } } as FactoryEvent;
   }
@@ -1068,7 +1096,7 @@ export class Orchestrator {
               );
               return;
             }
-            const res = await this.d.verify(run.cwd, job.verify);
+            const res = await this.d.verify(run.cwd, job.verify, undefined, (await this.repoVariablesOf(project)).env);
             const base = { ...TRUSTED, at: clock.now(), projectId: project.id, ticketId };
             const event: FactoryEvent = res.ok
               ? { ...base, id: `check:${run.id}`, type: 'verify.passed', payload: { runId: run.id, job: job.name, ...(c.output ? { output: c.output } : {}) } }
@@ -1402,16 +1430,15 @@ export class Orchestrator {
     // Read while the workspace is prepared; a pack it cannot read gives null fingerprints (ORC-226).
     const pack = packFingerprints(this.d.packDir, (err) => this.log('warn', `attempt labels: pack not fingerprinted: ${err.message}`));
     const runId = this.newId();
-    const ws = await workspaces.prepare({
-      projectId: project.id,
-      repoPath: project.repoPath,
-      ticketId,
-      title: issue.title,
-      kind: job.workspace,
-      slot,
-      portBase: wf.workspace.portBase,
-      runId,
-    });
+    const asked = { projectId: project.id, repoPath: project.repoPath, ticketId, title: issue.title, kind: job.workspace, slot, portBase: wf.workspace.portBase, runId };
+    let ws = await workspaces.prepare(asked);
+    // Left by a daemon killed before the end of its setup (ORC-211): half installed, perhaps holding a secret the
+    // configuration no longer names, so sealing it again proves nothing. It is made anew; no agent has worked in it.
+    if (await store.getMeta(setupPendingKey(ws.path))) {
+      await workspaces.cleanup(project.id, project.repoPath, ticketId);
+      await store.setMeta(setupPendingKey(ws.path), '');
+      ws = await workspaces.prepare(asked);
+    }
     // A fresh worktree is not set up until its setup succeeds: a launch ending before removes it, or
     // the next prepare would find it there (not fresh) and setup would never run.
     let setUp = !(ws.fresh && wf.workspace.setup.length);
@@ -1463,10 +1490,15 @@ export class Orchestrator {
       const claudeSessionId = held ?? this.newId();
       const sessionRole = roleOf(job, ticketSession);
 
-      // Opened after the cheap exits above, right before the setup and the run that need it.
-      sandbox = this.d.sandboxes && (await this.openSandbox(this.d.sandboxes, project, ticketId, ws, runId, ticketSession));
-      if (!setUp) await this.runSetup(project, ws, sandbox);
+      const vars = await this.repoVariablesOf(project);
+      if (!setUp) {
+        await store.setMeta(setupPendingKey(ws.path), '1');
+        await this.runSetup(project, ticketId, ws, runId, vars);
+        await store.setMeta(setupPendingKey(ws.path), '');
+      }
       setUp = true;
+      // Opened after the cheap exits above and after the setup, whose container is gone by now (ORC-211).
+      sandbox = this.d.sandboxes && (await this.openSandbox(this.d.sandboxes, project, ticketId, ws, runId, ticketSession));
       // In each run's prompt, not the system prompt: read again at each attempt, never frozen at a resume
       // (ORC-128). The reset below keeps `.claude/CLAUDE.md`: the order does not matter.
       const conventions = readConventions(ws.path);
@@ -1550,6 +1582,8 @@ export class Orchestrator {
         readOnly: job.workspace === 'trunk-readonly',
         limits: job.limits,
         env: {
+          // First: a variable of the repository never replaces one of the factory. Never its secrets (ORC-211).
+          ...vars.env,
           ...this.d.agentEnv(run),
           // In a sandbox, the run's refusals log, on the host: it outlives the sandbox (ORC-217).
           ...(sandbox ? { FACTORY_REFUSALS_LOG: `${REFUSALS_TARGET}/refusals.jsonl` } : {}),
