@@ -23,6 +23,7 @@ const CAUSES: readonly (readonly [Exclude<BlockCause, 'other'>, RegExp])[] = [
   ['limit', /^Le run .+ a atteint un plafond/],
   ['limit', /^Trop de relances après coupure : /],
   ['limit', /^(Vérifications|CI) toujours en échec après /],
+  ['failed', /^Vérifications en échec après /],
   ['loop', /^Boucle : /],
   ['failed', /^Le run .+ a échoué\.$/],
   ['pickup', /^La description (fait moins de|ne contient pas de)/],

@@ -114,10 +114,11 @@ describe('formatters', () => {
       '- **Lilian** (2026-10-10 14:03 UTC) : boutons',
     );
   });
-  it('keeps the tail of long outputs', () => {
-    const out = formatVerifyFailures([{ command: 'npm test', exitCode: 1, output: 'x'.repeat(9000) + 'END' }]);
-    expect(out.startsWith('### `npm test` (code 1)\n```\n')).toBe(true);
+  it('says verify reads commits, and keeps the useful parts of long outputs', () => {
+    const out = formatVerifyFailures([{ command: 'npm test', exitCode: 1, output: `${'x\n'.repeat(9000)}END` }]);
+    expect(out).toContain('### `npm test` (code 1)\n```\n');
+    expect(out).toContain('commit');
     expect(out).toContain('END');
-    expect(out.length).toBeLessThan(8100);
+    expect(out.length).toBeLessThan(8300);
   });
 });

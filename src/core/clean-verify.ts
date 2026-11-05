@@ -2,6 +2,9 @@ import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { execCmd, mustExec, type Exec, type ExecResult } from '../adapters/exec.js';
 import { DEFAULT_REQUIREMENTS, type Sandbox, type SandboxMount, type SandboxProvider } from '../adapters/sandbox/types.js';
+import { checkFrozen, FREEZE_CHECK, isFrozenHarness, type FrozenTests } from '../checks/freeze.js';
+import { checkForbiddenPaths, FORBIDDEN_CHECK } from '../checks/forbidden-paths.js';
+import { logExcerpt } from '../checks/log-excerpt.js';
 import { parseRepoConfig, type RepoConfig } from '../config/repo-config.js';
 import { BUNDLE_TARGET, extractWork, HARDENING } from '../publish/extract.js';
 import { runSealedSetup } from './sealed-setup.js';
@@ -32,6 +35,10 @@ export interface CleanVerifyRequest {
   /** The workflow's, the factory's own (`jobs.<job>.verify`, `workspace.setup`): what `.factory/config.yml` does not declare, until ORC-177. */
   setup: readonly string[];
   commands: readonly string[];
+  /** The commit `verify` last found green: found again, it is not checked again. */
+  green?: string;
+  /** `factory/tests-gelés` (ORC-131), once the ticket has a freeze. */
+  frozen?: FrozenTests;
   /** The variables the repository declares (ORC-211), never a secret. */
   env: (config: RepoConfig) => Promise<Record<string, string>>;
   log: (message: string) => void;
@@ -116,13 +123,15 @@ export const runCleanVerify: CleanVerifier = async (req) => {
 
     const git = cloneGit(req, cloneDir);
     const tree = await git('rev-parse', `${sha}^{tree}`);
+    if (sha === req.green) return { ok: true, failures: [], sha, tree };
     await fetchBase(req, cloneDir);
     const config = parseRepoConfig(await baseConfig(git));
     const declared = Object.values(config.commands);
     const commands = declared.length ? declared : req.commands;
     const setup = config.setup ? [config.setup] : req.setup;
     const env = await req.env(config);
-    if (!commands.length) return { ok: true, failures: [], sha, tree };
+    const failures = await checkClone(git, sha, req.frozen);
+    if (!commands.length) return { ok: !failures.length, failures, sha, tree };
 
     // `-c` on the command line: the clone's config is ours, and from the first command on it is no longer to be trusted.
     const checkout = ['git', ...SANDBOX_GIT, 'checkout', '--quiet', '--detach', sha];
@@ -143,13 +152,12 @@ export const runCleanVerify: CleanVerifier = async (req) => {
       const out = await sandboxes.exec(box.id, checkout);
       if (out.code !== 0) throw new Error(`git checkout (sandbox) : ${out.stderr.trim()}`);
     }
-    const failures: VerifyFailure[] = [];
     for (const command of commands) {
       const { code, stdout, stderr } = await sandboxes.exec(box.id, verifyCommand(command), { env });
       // 124: the cap's, whose failure stays the agent's (a test that hangs), as on the host.
-      if (code !== 0) failures.push({ command, exitCode: code === 124 ? null : code, output: stdout + stderr });
+      if (code !== 0) failures.push({ command, exitCode: code === 124 ? null : code, output: logExcerpt(stdout + stderr) });
     }
-    return failures.length ? { ok: false, failures, sha, tree } : { ok: true, failures, sha, tree };
+    return { ok: !failures.length, failures, sha, tree };
   } finally {
     await destroy(box);
     // Under a run dir, purged with it: a clone the attack left unremovable costs no verdict.
@@ -176,10 +184,51 @@ async function fetchBase(req: CleanVerifyRequest, cloneDir: string): Promise<voi
   await mustExec(req.exec ?? execCmd, 'git', args, { env: { GIT_TERMINAL_PROMPT: '0' } });
 }
 
+/** Git's empty tree: what a branch that shares no commit with the base is compared with, every file of it then a change. */
+const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
+const SYMLINK = '120000';
+
+/**
+ * The blocking checks on the commit, from the clone's objects: `factory/chemins-interdits` on all it changed since it
+ * left the base, whatever it says of its own history, and `factory/tests-gelés` on the frozen files as they are at
+ * its head, which needs no frozen commit: a rebase can take it away, not its fingerprints. A read that fails rejects.
+ */
+async function checkClone(git: CloneGit, sha: string, frozen: FrozenTests | undefined): Promise<VerifyFailure[]> {
+  const show = async (rev: string, path: string): Promise<string | undefined> => {
+    const listed = await git('ls-tree', '--name-only', '-z', rev, '--', path);
+    return listed ? git.raw('show', `${rev}:${path}`) : undefined;
+  };
+  const from = await git('merge-base', BASE, sha).catch(() => EMPTY_TREE);
+  const fields = (await git('diff', '--name-status', '--no-renames', '-z', from, sha)).split('\0').filter(Boolean);
+  const entries = (await git('ls-tree', '-r', '-z', sha)).split('\0').filter(Boolean);
+  const links = new Map(entries.filter((e) => e.startsWith(`${SYMLINK} `)).map((e) => [e.slice(e.indexOf('\t') + 1), e.split(' ')[2]!.split('\t')[0]!]));
+  const changed = [];
+  for (let i = 0; i + 1 < fields.length; i += 2) {
+    const path = fields[i + 1]!;
+    const blob = links.get(path);
+    changed.push({ path, deleted: fields[i] === 'D', ...(blob ? { link: await git.raw('cat-file', 'blob', blob) } : {}) });
+  }
+  const forbidden = await checkForbiddenPaths({ changed, showAtBase: (p) => (from === EMPTY_TREE ? Promise.resolve(undefined) : show(from, p)), showAtHead: (p) => show(sha, p) });
+  const failures: VerifyFailure[] = forbidden.ok ? [] : [{ command: FORBIDDEN_CHECK, exitCode: 1, output: forbidden.summary }];
+  if (frozen) {
+    const atHead = entries.map((e) => e.slice(e.indexOf('\t') + 1));
+    const listed = new Set(atHead);
+    const paths = [...new Set([...Object.keys(frozen.files), ...atHead.filter(isFrozenHarness)])];
+    const r = await checkFrozen(frozen, {
+      head: sha,
+      changed: paths.map((path) => ({ path, deleted: !listed.has(path) })),
+      filesAtHead: async () => atHead,
+      showAtHead: (p) => show(sha, p),
+    });
+    if (!r.ok) failures.push({ command: FREEZE_CHECK, exitCode: 1, output: r.summary });
+  }
+  return failures;
+}
+
 /** The file on the base branch; undefined when it has none, which is no failure: it is optional. */
-async function baseConfig(git: (...args: string[]) => Promise<string>): Promise<string | undefined> {
+async function baseConfig(git: CloneGit): Promise<string | undefined> {
   const listed = await git('ls-tree', '--name-only', BASE, '--', CONFIG);
-  return listed ? git('show', `${BASE}:${CONFIG}`) : undefined;
+  return listed ? git.raw('show', `${BASE}:${CONFIG}`) : undefined;
 }
 
 /** Git in a sandbox, whose bind mounts are the host's uid: no hook, no fsmonitor, on a clone it did not make. */
@@ -187,11 +236,15 @@ const SANDBOX_GIT = ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=fal
 
 const shellWord = (word: string): string => `'${word}'`;
 
+/** Its output trimmed; `raw` as git wrote it, for what is compared by its bytes: a file's content, a link's target. */
+type CloneGit = ((...args: string[]) => Promise<string>) & { raw: (...args: string[]) => Promise<string> };
+
 /** Git on the clone, on the host, as `extractWork`'s: no config but the hardening, outside any other repository. */
-function cloneGit(req: CleanVerifyRequest, cloneDir: string): (...args: string[]) => Promise<string> {
+function cloneGit(req: CleanVerifyRequest, cloneDir: string): CloneGit {
   const globalConfig = join(req.workDir, 'gitconfig');
   writeFileSync(globalConfig, '');
   const env = { GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: globalConfig, GIT_CEILING_DIRECTORIES: req.workDir };
   const exec = req.exec ?? execCmd;
-  return async (...args) => (await mustExec(exec, 'git', [...HARDENING.flatMap((c) => ['-c', c]), '-C', cloneDir, ...args], { env })).trim();
+  const raw = (...args: string[]) => mustExec(exec, 'git', [...HARDENING.flatMap((c) => ['-c', c]), '-C', cloneDir, ...args], { env });
+  return Object.assign(async (...args: string[]) => (await raw(...args)).trim(), { raw });
 }

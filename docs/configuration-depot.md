@@ -74,7 +74,7 @@ Une configuration **ajoute** des contrôles ou des interdits, elle n'en **retire
 - `network.level: full`, réservé à `setup`, jamais pour l'agent ; et dans `network.allow`, tout ce qui n'est pas un nom d'hôte (`*`, `*.com`, `0.0.0.0/0`) : un joker ou une plage reviendrait à `full` ;
 - un autre préréglage que `factory/default@1.0`.
 
-Les chemins interdits du socle (`.factory/**`) restent toujours interdits à l'agent, quoi que le fichier déclare.
+Les chemins interdits du socle (`.github/workflows/**`, `.factory/**`, `.claude/**`, `.git/hooks/**`, `.git/config`, `.gitattributes`, `.gitmodules`, `.npmrc`, `package.json#scripts`, `.husky/**`, `.vscode/**`, `Dockerfile*`, `.devcontainer/**`, `claims/**`, liens symboliques sortants) restent toujours interdits à l'agent, quoi que le fichier déclare. `factory/chemins-interdits` les bloque dans `verify`, à toute profondeur, sauf `.github/workflows/**` et `claims/**`, lus à la racine (ORC-151).
 
 `custom` est `limited` avec les hôtes du dépôt : c'est le plafond `limited` contre lequel les étapes du préréglage sont vérifiées ; `none` est le plafond `none`.
 

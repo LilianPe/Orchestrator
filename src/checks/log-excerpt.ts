@@ -2,14 +2,14 @@
 
 /** Characters, in all: what the prompt carried before, as a plain tail. */
 export const LOG_EXCERPT_MAX = 8000;
+/** What the two lines saying how much went may take of it. */
+const MARKS = 60;
 
 // eslint-disable-next-line no-control-regex -- the escape sequences a test runner prints in colour are what it removes.
 const ANSI = /\u001b\[[0-9;?]*[ -/]*[@-~]/g;
-const USEFUL = /\b(?:error|errors|fail|failed|failure|failures|failing|fatal|panic|exception|traceback|assert\w*|expected|received)\b|[✗✕×]/i;
+const USEFUL = /\b(?:errors?|fail|failed|failures?|failing|fatal|panic|exception|traceback|assert\w*|expected|received)\b|[✗✕×]/i;
 
-const cut = (lines: number) => `[… ${lines} lignes coupées …]`;
-
-/** As many of `lines` as fit in `budget`, a line too long kept up to it. Its count of characters comes with them. */
+/** As many of `lines` as fit in `budget`, a first line too long kept up to it. */
 function fit(lines: readonly string[], budget: number): { kept: string[]; used: number } {
   const kept: string[] = [];
   let used = 0;
@@ -27,16 +27,18 @@ function fit(lines: readonly string[], budget: number): { kept: string[]; used: 
 
 /**
  * Without its colours, and within `max`: its start, which names what ran; its end, where a runner writes its summary;
- * and between them the lines that look like an error. The rest is replaced by a line saying how much went.
+ * and between them the lines that look like an error. A line says how many went. An excerpt read again does not change.
  */
 export function logExcerpt(output: string, max = LOG_EXCERPT_MAX): string {
   const text = output.replace(ANSI, '');
   if (text.length <= max) return text;
+  const room = max - MARKS;
   const lines = text.split('\n');
-  const head = fit(lines, Math.floor(max / 8));
-  const tail = fit([...lines.slice(head.kept.length)].reverse(), Math.floor(max / 2));
-  const middle = lines.slice(head.kept.length, lines.length - tail.kept.length);
-  const useful = fit(middle.filter((l) => USEFUL.test(l)), max - head.used - tail.used);
-  const dropped = middle.length - useful.kept.length;
-  return [...head.kept, ...(dropped ? [cut(dropped)] : []), ...useful.kept, ...(useful.kept.length && dropped ? [cut(0).replace('0 lignes coupées', 'fin')] : []), ...tail.kept.reverse()].join('\n');
+  const head = fit(lines, Math.floor(room / 8));
+  const rest = lines.slice(head.kept.length);
+  const tail = fit([...rest].reverse(), Math.floor(room / 2));
+  const middle = rest.slice(0, rest.length - tail.kept.length);
+  const useful = fit(middle.filter((l) => USEFUL.test(l)), room - head.used - tail.used);
+  const went = middle.length - useful.kept.length;
+  return [...head.kept, ...(went ? [`[… ${went} lignes coupées …]`] : []), ...useful.kept, ...tail.kept.reverse()].join('\n');
 }

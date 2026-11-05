@@ -194,10 +194,11 @@ export interface EventPayloads {
   'run.finished': { runId: string; job: string; outcome: RunOutcome; costUsd: number; turns: number; lastText: string; attempt?: AttemptOutcome; output?: AgentOutput };
   /**
    * `red`: the cause of the `red` check's verdict (ORC-123), for a job checked by it instead of `verify`. `frozen`: the
-   * freeze read with it (ORC-131), on both verdicts, recorded once the run goes on to the build.
+   * freeze read with it (ORC-131), on both verdicts, recorded once the run goes on to the build. `sha`: the commit it
+   * found green (ORC-151), the only one a merge may then carry; absent on the `red` check and on older rows.
    */
-  'verify.passed': { runId: string; job: string; output?: AgentOutput; red?: RedCause; frozen?: FrozenTests };
-  /** `tree`: fingerprint of the worktree content when the check failed, absent outside git (ORC-187). */
+  'verify.passed': { runId: string; job: string; output?: AgentOutput; red?: RedCause; frozen?: FrozenTests; sha?: string };
+  /** `tree`: fingerprint of the content checked when the check failed: the commit's tree in a clean check, absent outside git (ORC-187). */
   'verify.failed': { runId: string; job: string; failures: VerifyFailure[]; tree?: string; red?: RedCause; frozen?: FrozenTests };
   /**
    * An attempt gone without a result (ORC-220): `restart`, cut by a restart of the factory, and no
@@ -284,7 +285,7 @@ export type DecidedEvent =
   | { type: 'ticket.unblocked' }
   | {
       type: 'ticket.patched';
-      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests'>>;
+      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'verifiedSha'>>;
     }
   | { type: 'feedback.appended'; item: FeedbackItem }
   /** The ticket's dev work is stopped: nothing pending, no verification awaited. */
@@ -354,6 +355,8 @@ export interface TicketState {
   /** Job of `activeRunId`, read by `when: job == …` conditions. */
   activeJob?: string;
   verifyingRunId?: string;
+  /** The last commit `verify` found green (ORC-151): nothing else is published. Absent before it. */
+  verifiedSha?: string;
   pendingJob?: PendingJob;
   verifyAttempts: number;
   /** Unverified reds in blocking mode since the last verified one, bounded by the job's `red.attempts` (ORC-123). Absent before it. */

@@ -456,6 +456,14 @@ export const isReconcileTicket = (ticketId: string | undefined): boolean => !!ti
 /** The reconciliation's cadence (ORC-185): a safety net behind the webhooks. */
 export const RECONCILE_MS = 5 * 60_000;
 
+/**
+ * No publication without a green `verify` on the same commit (I1, ORC-151): a commit since asks for its own. A workflow
+ * none of whose jobs goes through it (a version frozen before) publishes as it did. `ORC-125`'s push goes through it too.
+ */
+export function mayPublish(ticket: Pick<TicketState, 'verifiedSha'> | undefined, sha: string, workflow: Workflow): boolean {
+  return !Object.values(workflow.jobs).some((j) => j.repoChecks) || ticket?.verifiedSha === sha;
+}
+
 /** The ticket goes back to Human Review (ORC-148): nothing merged, `reason` answered in the ticket. */
 function backToReview(out: Decision, reason: string): Decision {
   out.trace.push(`not merged: ${reason}`);
@@ -471,7 +479,7 @@ function backToReview(out: Decision, reason: string): Decision {
  * the ticket goes back to Human Review with the reason. A move with no resolved actor never merges: the matrix
  * lets an unchecked event through, a merge must not.
  */
-function doneMerge(out: Decision, event: FactoryEvent<'status.changed'>, state: TicketState, matrix: AuthzMatrix): Decision {
+function doneMerge(out: Decision, event: FactoryEvent<'status.changed'>, state: TicketState, matrix: AuthzMatrix, workflow: Workflow): Decision {
   // No signed actor (Linear's GitHub integration after a merge on GitHub, the reconciliation): no human decision.
   if (event.roles === undefined || !event.actor) {
     out.trace.push('done: no signed actor, no merge');
@@ -484,6 +492,9 @@ function doneMerge(out: Decision, event: FactoryEvent<'status.changed'>, state: 
   if (!state.reviewSha) {
     // Only the end of the factory's own work in Human Review records one (a review, a dev run): a reply, a refusal do not.
     return backToReview(out, "Je ne merge pas : aucun commit relu n'est enregistré pour ce ticket (l'usine n'en retient un qu'à la fin de son propre travail, une review IA ou un dev qui ramène le ticket en Human Review, et seulement si la tête de la PR est le commit sur lequel ce travail s'est terminé ; un renvoi en Human Review après un refus n'en retient pas). Passez le ticket en AI Review : la review IA le ramène en Human Review sur la tête de la PR, qui devient le commit relu.");
+  }
+  if (!mayPublish(state, state.reviewSha, workflow)) {
+    return backToReview(out, `Je ne merge pas : le commit relu (${state.reviewSha.slice(0, 12)}) n'a pas de vérification verte, la dernière porte sur ${state.verifiedSha?.slice(0, 12) ?? 'aucun commit'}. Un nouveau commit demande une nouvelle vérification : répondez dans ce fil pour que je reprenne.`);
   }
   out.trace.push(`done: merge PR #${state.prNumber} on ${state.reviewSha}`);
   out.effects.push({ kind: 'merge', sha: state.reviewSha });
@@ -647,7 +658,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
   // A Done from Human Review only: during dev or the AI review it is no review decision, and the rules apply as before.
   const reviewed = state?.delegated && state.logical === 'human_review' && state.prNumber !== undefined && state.prState === 'OPEN';
   if (event.type === 'status.changed' && event.payload.to === 'done' && reviewed) {
-    return doneMerge(out, event, state, matrix);
+    return doneMerge(out, event, state, matrix, workflow);
   }
   if (event.type === 'command' && event.payload.name === REFREEZE) return refreeze(out, event, ticket, matrix);
   if (TRIGGERS.has(event.type)) {
@@ -679,7 +690,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       if (typeof outcome === 'object') return ticket?.blocked ? out : block(out, outcome.reason, outcome.body);
       if (outcome === 'success' && ticket?.blocked && job.queue === 'dev') return out;
       if (outcome === 'success') {
-        if (job.verify.length === 0 && !job.red && !goesThroughFreeze(ticket, job)) return success(out, { event, ticket, workflow }, job, runId, output);
+        if (job.verify.length === 0 && !job.repoChecks && !job.red && !goesThroughFreeze(ticket, job)) return success(out, { event, ticket, workflow }, job, runId, output);
         out.events.push({ type: 'verify.started', runId });
         out.effects.push({ kind: 'run_verify', runId, job: jobName, ...(output ? { output } : {}) });
         return out;
@@ -711,7 +722,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
     case 'verify.passed': {
       const job = workflow.jobs[event.payload.job];
       if (!job) return out;
-      const patch = { verifyAttempts: 0, ...(ticket?.repeatedFailure ? { repeatedFailure: null } : {}), ...(ticket?.redAttempts ? { redAttempts: 0 } : {}) };
+      const patch = { verifyAttempts: 0, ...(ticket?.repeatedFailure ? { repeatedFailure: null } : {}), ...(ticket?.redAttempts ? { redAttempts: 0 } : {}), ...(event.payload.sha ? { verifiedSha: event.payload.sha } : {}) };
       out.events.push({ type: 'ticket.patched', patch });
       if (job.red) freeze(out, ticket, event.payload.frozen);
       return success(out, { event, ticket, workflow }, job, event.payload.runId, event.payload.output);
@@ -721,6 +732,10 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       const { failures, job } = event.payload;
       const checked = workflow.jobs[job];
       if (checked?.red) return redFailed(out, { event, ticket, workflow }, checked, checked.red);
+      if (checked?.verifyFailure === 'block') {
+        const reason = `Vérifications en échec après ${job} : le commit n'est pas publiable, et ce job ne le corrige pas.`;
+        return ticket?.blocked ? out : block(out, reason, `${reason}\n${formatFailuresShort(failures)}\nRépondez dans ce fil pour relancer.`);
+      }
       const repeated = repeatedFailure(ticket, event.payload);
       if (repeated && repeated.count >= (workflow.limits.repeatedFailures ?? Infinity)) {
         out.events.push({ type: 'ticket.patched', patch: { repeatedFailure: repeated } });

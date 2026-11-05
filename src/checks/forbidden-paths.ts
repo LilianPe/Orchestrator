@@ -22,12 +22,11 @@ function matches(path: string, pattern: string): boolean {
   const p = path.toLowerCase();
   const pat = pattern.toLowerCase();
   if (pat.endsWith('*') && !pat.endsWith('**')) return (p.split('/').at(-1) ?? '').startsWith(pat.slice(0, -1));
-  const dir = pat.endsWith('/**') ? pat.slice(0, -3) : pat;
-  const at = (prefix: string) => p === prefix || (pat.endsWith('/**') && p.startsWith(`${prefix}/`));
-  if (at(dir)) return true;
-  if (ROOT_ONLY.has(pattern)) return false;
+  const isDir = pat.endsWith('/**');
+  const name = isDir ? pat.slice(0, -3) : pat;
   const segments = p.split('/');
-  return segments.some((_, i) => i > 0 && at(`${segments.slice(i).join('/').startsWith(dir) ? segments.slice(i).join('/').slice(0, dir.length) : '\0'}`) && (segments.slice(i).join('/') === dir || segments.slice(i).join('/').startsWith(`${dir}/`)) && (pat.endsWith('/**') || segments.slice(i).join('/') === dir));
+  const tails = ROOT_ONLY.has(pattern) ? [p] : segments.map((_, i) => segments.slice(i).join('/'));
+  return tails.some((t) => t === name || (isDir && t.startsWith(`${name}/`)));
 }
 
 export function forbiddenPattern(path: string): string | undefined {

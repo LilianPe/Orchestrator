@@ -4,7 +4,7 @@ import { loadWorkflow } from '../config/load-workflow.js';
 import type { AgentOutput, AttemptOutcome } from './agent-output.js';
 import type { Decision } from './decision.js';
 import { CUT_RELAUNCHES, CUT_WINDOW_MS } from '../store/types.js';
-import { CUT_BOUND_REASON, decide, isFenced, RECONCILE_MS, reconcileTicket, SENSITIVE_PATHS, sensitivePathsAtLaunch, taintedKnowledge } from './engine.js';
+import { CUT_BOUND_REASON, decide, isFenced, mayPublish, RECONCILE_MS, reconcileTicket, SENSITIVE_PATHS, sensitivePathsAtLaunch, taintedKnowledge } from './engine.js';
 import { blockCause } from './block-cause.js';
 import { reduce } from './reduce.js';
 import { newTicketState, SCHEMA_VERSION, type EventPayloads, type EventType, type FactoryEvent, type TicketState } from './types.js';
@@ -284,6 +284,67 @@ describe('decide — after the merge (ORC-268)', () => {
   });
 });
 
+describe('decide — verify on the same commit (ORC-151)', () => {
+  const running = (): TicketState => ({ ...newTicketState('p', 'REL-1', 'T', 'dev', 0), delegated: true, activeRunId: 'r1', activeJob: 'dev', linearSessionId: 'ls-1' });
+  const event = <T extends EventType>(type: T, payload: EventPayloads[T]) => ({ id: 'e', type, at: 1, projectId: 'p', ticketId: 'REL-1', schemaVersion: SCHEMA_VERSION, taint: 'trusted', payload }) as FactoryEvent;
+
+  it('a dev run that declares no command still goes through verify', () => {
+    expect(workflow.jobs['dev']!.verify).toEqual([]);
+    const out = decide(running(), event('run.finished', { runId: 'r1', job: 'dev', outcome: 'success', costUsd: 0, turns: 1, lastText: '' }), workflow);
+    expect(out.effects).toContainEqual({ kind: 'run_verify', runId: 'r1', job: 'dev' });
+    expect(out.effects.some((e) => e.kind === 'move')).toBe(false);
+  });
+
+  it('a review goes through it too, and a failure blocks: the review did not write the commit (a push since)', () => {
+    expect(workflow.jobs['review']!.repoChecks).toBe(true);
+    const t = { ...running(), verifyingRunId: 'r1', activeRunId: undefined };
+    const out = decide(t, event('verify.failed', { runId: 'r1', job: 'review', failures: [{ command: 'npm test', exitCode: 1, output: 'red' }] }), workflow);
+    expect(out.effects.some((e) => e.kind === 'start_run')).toBe(false);
+    expect(out.events).toContainEqual({ type: 'ticket.blocked', reason: expect.stringMatching(/^Vérifications en échec après review/) });
+    expect(blockCause((out.events[0] as { reason: string }).reason)).toBe('failed');
+  });
+
+  it('so do the jobs that fix what it wrote, and not those that only answer', () => {
+    expect(workflow.jobs['dev-feedback']!.repoChecks).toBe(true);
+    expect(workflow.jobs['fix-ci']!.repoChecks).toBe(true);
+    expect(workflow.jobs['ask']!.repoChecks).toBeUndefined();
+  });
+
+  it('a green verify records its commit, and only then goes on', () => {
+    const out = decide({ ...running(), verifyingRunId: 'r1' }, event('verify.passed', { runId: 'r1', job: 'dev', sha: 'abc' }), workflow);
+    expect(out.events).toContainEqual({ type: 'ticket.patched', patch: expect.objectContaining({ verifiedSha: 'abc', verifyAttempts: 0 }) });
+    expect(out.effects).toContainEqual({ kind: 'move', to: 'human_review' });
+  });
+
+  it('a commit green once may be published, a new one asks for its own', () => {
+    expect(mayPublish({ verifiedSha: 'abc' }, 'abc', workflow)).toBe(true);
+    expect(mayPublish({ verifiedSha: 'abc' }, 'def', workflow)).toBe(false);
+    expect(mayPublish({}, 'abc', workflow)).toBe(false);
+  });
+
+  it('a workflow frozen before these checks publishes as it did', () => {
+    const before = structuredClone(workflow);
+    for (const job of Object.values(before.jobs)) delete job.repoChecks;
+    expect(mayPublish({}, 'abc', before)).toBe(true);
+  });
+
+  it('the 3 returns of the default preset: the 4th failure blocks, the agent resumed three times with the logs', () => {
+    const failures = [{ command: 'npm test', exitCode: 1, output: 'red' }];
+    let t: TicketState = { ...running(), activeRunId: undefined, activeJob: undefined };
+    const returned: Decision[] = [];
+    for (let i = 0; i < 4; i++) {
+      t = { ...t, verifyingRunId: 'r1' };
+      const e = event('verify.failed', { runId: 'r1', job: 'dev', failures });
+      const out = decide(t, e, workflow);
+      returned.push(out);
+      t = out.events.reduce((s, x) => reduce(s, { kind: 'internal', event: x } as never) ?? s, reduce(t, e)!);
+      t = { ...t, ...Object.assign({}, ...out.events.filter((x) => x.type === 'ticket.patched').map((x) => (x as { patch: object }).patch)) };
+    }
+    expect(returned.map((d) => d.effects.some((x) => x.kind === 'start_run' && x.input === 'verify_failures'))).toEqual([true, true, true, false]);
+    expect(returned[3]!.events).toContainEqual({ type: 'ticket.blocked', reason: expect.stringMatching(/^Vérifications toujours en échec/) });
+  });
+});
+
 describe('decide — verify.errored (ORC-151)', () => {
   const checking = (): TicketState => ({ ...newTicketState('p', 'REL-1', 'T', 'dev', 0), delegated: true, verifyingRunId: 'r1', verifyAttempts: 1, linearSessionId: 'ls-1' });
   const errored = (runId = 'r1') => ({ id: 'e', type: 'verify.errored', at: 1, projectId: 'p', ticketId: 'REL-1', schemaVersion: SCHEMA_VERSION, taint: 'trusted', payload: { runId, job: 'dev', error: 'engine down' } }) as FactoryEvent;
@@ -448,7 +509,8 @@ describe('decide — taint', () => {
 
 describe('decide — built-ins', () => {
   it('run success without verify applies on_success', () => {
-    const out = decide(ticket({ logical: 'dev', activeRunId: 'r1' }), ev('run.finished', { runId: 'r1', job: 'dev', outcome: 'success', costUsd: 1, turns: 3, lastText: 'ok' }), workflow);
+    const unchecked = { ...workflow, jobs: { ...workflow.jobs, dev: { ...workflow.jobs['dev']!, repoChecks: undefined } } } as typeof workflow;
+    const out = decide(ticket({ logical: 'dev', activeRunId: 'r1' }), ev('run.finished', { runId: 'r1', job: 'dev', outcome: 'success', costUsd: 1, turns: 3, lastText: 'ok' }), unchecked);
     expect(out).toEqual(
       decision({
         effects: [
@@ -536,11 +598,11 @@ describe('decide — built-ins', () => {
     });
 
     it('post_output carries the validated output, through verify too; omitted without one', () => {
-      expect(decide(dev, finished('succeeded', { output }), workflow).effects).toContainEqual({ kind: 'post_output', style: 'summary', runId: 'r1', output });
-      expect(today('success').effects).toContainEqual({ kind: 'post_output', style: 'summary', runId: 'r1' });
-      const verified = { ...workflow, jobs: { ...workflow.jobs, dev: { ...workflow.jobs['dev']!, verify: ['npm test'] } } };
-      expect(decide(dev, finished('succeeded', { output }), verified).effects).toContainEqual({ kind: 'run_verify', runId: 'r1', job: 'dev', output });
-      const passed = decide(ticket({ verifyingRunId: 'r1' }), ev('verify.passed', { runId: 'r1', job: 'dev', output }), verified);
+      const unchecked = { ...workflow, jobs: { ...workflow.jobs, dev: { ...workflow.jobs['dev']!, repoChecks: undefined } } } as typeof workflow;
+      expect(decide(dev, finished('succeeded', { output }), unchecked).effects).toContainEqual({ kind: 'post_output', style: 'summary', runId: 'r1', output });
+      expect(decide(dev, ev('run.finished', { runId: 'r1', job: 'dev', outcome: 'success', costUsd: 1, turns: 3, lastText: 'ok' }), unchecked).effects).toContainEqual({ kind: 'post_output', style: 'summary', runId: 'r1' });
+      expect(decide(dev, finished('succeeded', { output }), workflow).effects).toContainEqual({ kind: 'run_verify', runId: 'r1', job: 'dev', output });
+      const passed = decide(ticket({ verifyingRunId: 'r1' }), ev('verify.passed', { runId: 'r1', job: 'dev', output }), workflow);
       expect(passed.effects).toContainEqual({ kind: 'post_output', style: 'summary', runId: 'r1', output });
     });
 

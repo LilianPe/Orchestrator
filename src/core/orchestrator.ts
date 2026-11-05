@@ -66,6 +66,7 @@ import {
 } from './types.js';
 import { runSealedSetup } from './sealed-setup.js';
 import { runCleanVerify, type CleanVerifier } from './clean-verify.js';
+import { logExcerpt } from '../checks/log-excerpt.js';
 import { cappedCommand, type Verifier, type VerifyResult } from './verify.js';
 import { PRODUCT_NAME } from '../product.js';
 import { checkRed, type RedDeps, type RedResult } from '../checks/red.js';
@@ -770,11 +771,17 @@ export class Orchestrator {
    * `runCleanVerify`. It throws when there is no verdict, an infrastructure failure the agent is not sent. Without
    * sandboxes, only under the explicit `hostChecks`: in the worktree, on the host, and without any of these guarantees.
    */
-  private async verifyWork(project: ProjectRuntime, t: TicketState, run: RunRecord, job: JobSpec): Promise<VerifyResult> {
+  private async verifyWork(project: ProjectRuntime, t: TicketState, run: RunRecord, job: JobSpec): Promise<VerifyResult & { sha?: string | undefined }> {
     const { sandboxes, runsDir, originUrl } = this.d;
     if (!sandboxes) {
       if (!this.d.hostChecks) throw new Error(HOST_CHECKS_OFF);
-      return job.verify.length > 0 ? this.d.verify(run.cwd, job.verify, undefined, (await this.repoVariablesOf(project)).env) : { ok: true, failures: [] };
+      // Read before the commands: what they would commit is not what they checked.
+      const sha = await this.d.workspaces.head(run.cwd);
+      if (sha && sha === t.verifiedSha) return { ok: true, failures: [], sha };
+      const verified = job.verify.length > 0 ? await this.d.verify(run.cwd, job.verify, undefined, (await this.repoVariablesOf(project)).env) : { ok: true, failures: [] };
+      // `factory/tests-gelés` (ORC-131), blocking from the first ticket, on top of the job's commands.
+      const frozen = goesThroughFreeze(t, job) ? await this.checkFrozen(project, run.cwd, t.frozenTests!) : [];
+      return { ...verified, ok: verified.ok && frozen.length === 0, failures: [...verified.failures, ...frozen], sha };
     }
     if (!runsDir || !originUrl) throw new Error('runsDir and originUrl are required with sandboxes');
     if (!t.branch || !t.worktreePath) throw new Error(`aucune branche ou aucun worktree pour ${t.ticketId}`);
@@ -793,6 +800,8 @@ export class Orchestrator {
         workDir,
         setup: project.workflow.workspace.setup,
         commands: job.verify,
+        ...(t.verifiedSha ? { green: t.verifiedSha } : {}),
+        ...(goesThroughFreeze(t, job) ? { frozen: t.frozenTests! } : {}),
         env: async (config) => (await this.repoVariablesOf(project, config)).env,
         log: (message) => this.log('warn', `verify of ${t.ticketId}: ${message}`),
       });
@@ -1214,19 +1223,16 @@ export class Orchestrator {
             }
             const base = { ...TRUSTED, at: clock.now(), projectId: project.id, ticketId, id: `check:${run.id}` };
             const payload = { runId: run.id, job: job.name };
-            let verified: VerifyResult;
+            let res: VerifyResult & { sha?: string | undefined };
             try {
-              verified = await this.verifyWork(project, t, run, job);
+              res = await this.verifyWork(project, t, run, job);
             } catch (err) {
               await this.submitResult({ ...base, type: 'verify.errored', payload: { ...payload, error: (err as Error).message } });
               return;
             }
-            // `factory/tests-gelés` (ORC-131), blocking from the first ticket, on top of the job's commands.
-            const frozen = goesThroughFreeze(t, job) ? await this.checkFrozen(project, run.cwd, t.frozenTests!) : [];
-            const res = { ...verified, ok: verified.ok && frozen.length === 0, failures: [...verified.failures, ...frozen] };
             const event: FactoryEvent = res.ok
-              ? { ...base, type: 'verify.passed', payload: { ...payload, ...(c.output ? { output: c.output } : {}) } }
-              : { ...base, type: 'verify.failed', payload: { ...payload, failures: res.failures, ...(res.tree ? { tree: res.tree } : {}) } };
+              ? { ...base, type: 'verify.passed', payload: { ...payload, ...(res.sha ? { sha: res.sha } : {}), ...(c.output ? { output: c.output } : {}) } }
+              : { ...base, type: 'verify.failed', payload: { ...payload, failures: res.failures.map((f) => ({ ...f, output: logExcerpt(f.output) })), ...(res.tree ? { tree: res.tree } : {}) } };
             await this.submitResult(event);
           })(),
         );

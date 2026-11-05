@@ -1,15 +1,23 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { ExecResult } from '../adapters/exec.js';
 import { FakeSandboxProvider } from '../adapters/sandbox/fake.js';
 import type { SandboxExecOptions, SandboxRequest } from '../adapters/sandbox/types.js';
+import { LOG_EXCERPT_MAX } from '../checks/log-excerpt.js';
 import { BUNDLE_TARGET } from '../publish/extract.js';
 import { runCleanVerify, verifyCommand, type CleanVerifyRequest } from './clean-verify.js';
 
 const BRANCH = 'factory/orc-1-x';
+const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
+/** A second check of the same run: its work dir emptied as the orchestrator's new one would be. */
+const setupAgain = (req: CleanVerifyRequest): CleanVerifyRequest => {
+  rmSync(join(req.workDir, 'gitconfig'), { force: true });
+  return req;
+};
 const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
 
 /** Runs each command on the host, in the dir its sandbox has as `/work`: the fake isolates nothing, the isolation suite proves that part. */
@@ -256,6 +264,93 @@ describe('runCleanVerify', () => {
     it('an origin that does not answer is a breakdown', async () => {
       const { base, req } = setup({ originUrl: 'nowhere' });
       await expect(runCleanVerify({ ...req, originUrl: join(base, 'gone') })).rejects.toThrow();
+    });
+  });
+
+  describe('the checks on the commit', () => {
+    const CHANGE = 'commands: { test: "echo base-test" }\n';
+
+    it('a change of .factory/config.yml keeps the base\'s commands, and blocks as a forbidden path', async () => {
+      const { repo, sandboxes, req } = setup({}, CHANGE);
+      write(repo, '.factory/config.yml', 'commands: { test: "echo pwned" }\n');
+      commit(repo, 'the agent rewrites what judges it');
+      const res = await runCleanVerify(req);
+      expect(res.ok).toBe(false);
+      expect(res.failures).toEqual([{ command: 'factory/chemins-interdits', exitCode: 1, output: expect.stringContaining('.factory/config.yml') }]);
+      expect(sandboxes.ran.map((r) => r.command)).toEqual(['echo base-test']);
+    });
+
+    it('a file under .github/workflows blocks', async () => {
+      const { repo, req } = setup({ commands: [] });
+      write(repo, '.github/workflows/ci.yml', 'on: push\n');
+      commit(repo, 'x');
+      expect((await runCleanVerify(req)).failures[0]).toMatchObject({ command: 'factory/chemins-interdits', output: expect.stringContaining('.github/workflows/ci.yml') });
+    });
+
+    it('package.json#scripts blocks, its dependencies do not', async () => {
+      const { origin, repo, req } = setup({ commands: [] });
+      const manifest = (o: object) => write(repo, 'package.json', JSON.stringify(o));
+      manifest({ dependencies: { a: '1' } });
+      commit(repo, 'deps');
+      expect((await runCleanVerify(req)).ok).toBe(true);
+      manifest({ dependencies: { a: '1' }, scripts: { test: 'true' } });
+      commit(repo, 'scripts');
+      void origin;
+      const again = setupAgain(req);
+      expect((await runCleanVerify(again)).failures[0]!.output).toContain('package.json#scripts');
+    });
+
+    it.skipIf(process.platform === 'win32')('an outward symbolic link blocks', async () => {
+      const { repo, req } = setup({ commands: [] });
+      symlinkSync('/etc/passwd', join(repo, 'link'));
+      commit(repo, 'x');
+      expect((await runCleanVerify(req)).failures[0]!.output).toContain('lien symbolique sortant');
+    });
+
+    it('only what the branch changed since it left the base counts, not what the base got since', async () => {
+      const { origin, req } = setup({ commands: [] });
+      write(origin, '.github/workflows/ci.yml', 'on: push\n');
+      commit(origin, 'the base moves on');
+      expect((await runCleanVerify(req)).ok).toBe(true);
+    });
+
+    it('a branch that hides its past (no common commit) has all its files read as changes', async () => {
+      const { repo, req } = setup({ commands: [] });
+      git(repo, 'checkout', '-q', '--orphan', 'orphan');
+      write(repo, '.github/workflows/ci.yml', 'on: push\n');
+      commit(repo, 'no past');
+      git(repo, 'branch', '-f', BRANCH, 'orphan');
+      expect((await runCleanVerify(req)).failures[0]!.output).toContain('.github/workflows/ci.yml');
+    });
+
+    it('the freeze is read in the clone, a frozen test changed blocks, whatever the frozen commit became', async () => {
+      const { repo, req } = setup({ commands: [], frozen: { sha: 'gone-after-a-rebase', files: { 'a.txt': sha256('committed\n') } } });
+      expect((await runCleanVerify(req)).ok).toBe(true);
+      write(repo, 'a.txt', 'changed\n');
+      commit(repo, 'x');
+      const res = await runCleanVerify(setupAgain(req));
+      expect(res.failures[0]).toMatchObject({ command: 'factory/tests-gelés', output: expect.stringContaining('a.txt') });
+    });
+
+    it('a change left uncommitted is no change for the freeze', async () => {
+      const { repo, req } = setup({ commands: [], frozen: { sha: 's', files: { 'a.txt': sha256('committed\n') } } });
+      write(repo, 'a.txt', 'changed but not committed\n');
+      expect((await runCleanVerify(req)).ok).toBe(true);
+    });
+
+    it('a commit already green is not checked again', async () => {
+      const { repo, sandboxes, req } = setup();
+      const res = await runCleanVerify({ ...req, green: git(repo, 'rev-parse', BRANCH) });
+      expect(res.ok).toBe(true);
+      expect(sandboxes.ran).toEqual([]);
+    });
+
+    it('the output comes back cut to its useful parts, within the bound', async () => {
+      const { sandboxes, req } = setup({ commands: ['loud'] });
+      sandboxes.answer = () => ({ stdout: `${'line\n'.repeat(5000)}Error: the cause\n${'line\n'.repeat(5000)}`, stderr: '', code: 1 });
+      const out = (await runCleanVerify(req)).failures[0]!.output;
+      expect(out.length).toBeLessThanOrEqual(LOG_EXCERPT_MAX);
+      expect(out).toContain('Error: the cause');
     });
   });
 
