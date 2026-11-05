@@ -680,8 +680,7 @@ export class Orchestrator {
   }
 
   /**
-   * The attempt's sandbox (ORC-204): the worktree, the git dir its `.git` file points into (at the
-   * same path, so git works there; it shows the repository's other refs until ORC-205), the ticket's
+   * The attempt's sandbox (ORC-204): the worktree, its git dir inside (ORC-317), the ticket's
    * Claude session dir as `~/.claude` (`--resume` across attempts) when the attempt runs the ticket
    * session, else an empty per-run dir there, removed with the sandbox: a review or a question starts in
    * a fresh context that never sees the ticket's (ORC-217). The run's refusals dir, read-write, so the
@@ -698,15 +697,14 @@ export class Orchestrator {
     const claudeDir = ticketSession ? join(this.d.sessionsDir, project.id, ticketId) : join(runDir, 'claude');
     const refusalsDir = join(runDir, 'refusals');
     for (const dir of [claudeDir, refusalsDir]) mkdirSync(dir, { recursive: true });
-    const gitDir = await this.d.workspaces.gitCommonDir(ws.path);
     return sandboxes.create({
       runId,
       ticketId,
       workspacePath: ws.path,
       network,
       requirements: DEFAULT_REQUIREMENTS,
+      // Its git dir is in its worktree, its own (ORC-317): the repository's, which git reads on the host, is never mounted.
       mounts: [
-        { host: gitDir, target: gitDir, readOnly: false },
         { host: claudeDir, target: `${SANDBOX_HOME}/.claude`, readOnly: false },
         { host: refusalsDir, target: REFUSALS_TARGET, readOnly: false },
         { host: this.d.packDir, target: PACK_TARGET, readOnly: true },
@@ -736,12 +734,11 @@ export class Orchestrator {
     // On commits a previous agent wrote, `setup` runs code nobody reviewed: no secret for it. A setup that needs one fails.
     const secrets = ws.ahead ? {} : vars.setupSecrets;
     if (ws.ahead && Object.keys(vars.setupSecrets).length) this.log('warn', `setup of ${ticketId}: its branch has commits beyond the default branch, the repository's secrets are withheld`);
-    const gitDir = await this.d.workspaces.gitCommonDir(ws.path);
     const { purged } = await runSealedSetup(sandboxes, {
       runId,
       ticketId,
       workspacePath: ws.path,
-      mounts: [{ host: gitDir, target: gitDir, readOnly: true }],
+      mounts: [{ host: join(ws.path, '.git'), target: `${WORKSPACE_TARGET}/.git`, readOnly: true }],
       commands,
       env: vars.env,
       secrets,
@@ -841,7 +838,6 @@ export class Orchestrator {
         branch: t.branch,
         worktree: t.worktreePath,
         originUrl: await originUrl(project),
-        gitDir: await this.d.workspaces.gitCommonDir(t.worktreePath),
         workDir,
         setup: project.workflow.workspace.setup,
         commands: job.verify,
@@ -1318,7 +1314,7 @@ export class Orchestrator {
         if (!t.activeRunId && !t.verifyingRunId) await this.updatePlan(t, (plan) => advancePlan(plan, 'PR', 'completed'));
         return;
       case 'cleanup':
-        await this.d.workspaces.cleanup(project.id, project.repoPath, ticketId);
+        await this.d.workspaces.cleanup(project.id, ticketId);
         await this.apply(await this.ticket(project.id, ticketId), { type: 'workspace.released' });
         return;
     }
@@ -1679,7 +1675,7 @@ export class Orchestrator {
     // Left by a daemon killed before the end of its setup (ORC-211): half installed, perhaps holding a secret the
     // configuration no longer names, so sealing it again proves nothing. It is made anew; no agent has worked in it.
     if (await store.getMeta(setupPendingKey(ws.path))) {
-      await workspaces.cleanup(project.id, project.repoPath, ticketId);
+      await workspaces.cleanup(project.id, ticketId);
       await store.setMeta(setupPendingKey(ws.path), '');
       ws = await workspaces.prepare(asked);
     }
@@ -1852,9 +1848,10 @@ export class Orchestrator {
     } finally {
       // The sandbox first: it mounts the worktree.
       if (sandbox && !handedOver) await this.destroySandbox(sandbox.id, runId);
+      if (!handedOver) await workspaces.release(project.id, runId).catch((err: Error) => this.log('warn', `trunk of run ${runId} not removed after a launch cut short: ${err.message}`));
       if (!setUp) {
         await workspaces
-          .cleanup(project.id, project.repoPath, ticketId)
+          .cleanup(project.id, ticketId)
           .catch((err: Error) => this.log('warn', `worktree of ${ticketId} not removed after a launch that did not set it up: ${err.message}`));
       }
     }
@@ -1932,6 +1929,7 @@ export class Orchestrator {
       }
     } finally {
       if (sandboxId) await this.destroySandbox(sandboxId, run.id, run);
+      await this.d.workspaces.release(run.projectId, run.id).catch((err: Error) => this.log('warn', `trunk of run ${run.id} not removed: ${err.message}`));
     }
     await this.submitResult(await this.finishedFor(run, result));
   }

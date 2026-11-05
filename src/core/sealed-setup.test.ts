@@ -38,6 +38,12 @@ describe('sealSecrets', () => {
     expect((await sealSecrets([root], [SECRET])).map((p) => p.slice(root.length + 1)).sort()).toEqual(['std', 'suffixed', 'url']);
   });
 
+  it("leaves the root's own .git, read-only for the setup, and a pack of its history whole; a nested one is looked at (ORC-317)", async () => {
+    const root = tree({ '.git/objects/pack/pack-1.pack': SECRET, 'vendor/x/.git/config': SECRET, 'a.txt': 'clean' });
+    expect(await sealSecrets([root], [SECRET])).toEqual([join(root, 'vendor/x/.git/config')]);
+    expect(existsSync(join(root, '.git/objects/pack/pack-1.pack'))).toBe(true);
+  });
+
   it('finds a secret across two read chunks of a large file', async () => {
     const before = Buffer.alloc(1024 * 1024 - 5, 'x');
     const root = tree({ 'big.bin': Buffer.concat([before, Buffer.from(SECRET), Buffer.alloc(100, 'y')]) });

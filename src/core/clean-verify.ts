@@ -24,13 +24,11 @@ export interface CleanVerifyRequest {
   runId: string;
   ticketId: string;
   branch: string;
-  /** The agent's worktree: mounted in the sandbox that makes the bundle, and nowhere else. */
+  /** The agent's worktree, its git dir inside (ORC-317): mounted in the sandbox that makes the bundle, and nowhere else. */
   worktree: string;
-  /** The repository's git dir, where the worktree's `.git` points, read-only; absent when it is inside the worktree. */
-  gitDir?: string;
   /** On the host, empty, and the caller's to remove: where the engine can mount from. */
   workDir: string;
-  /** Where the base branch is read, not the refs of the repository, which the agent can write. */
+  /** Where the base branch is read: on the forge, not on the refs of a local repository. */
   originUrl: string;
   /** The workflow's, the factory's own (`jobs.<job>.verify`, `workspace.setup`): what `.factory/config.yml` does not declare, until ORC-177. */
   setup: readonly string[];
@@ -120,8 +118,7 @@ export const runCleanVerify: CleanVerifier = async (req) => {
   const cloneDir = join(req.workDir, 'clone');
   mkdirSync(bundleDir);
   try {
-    const mounts = [{ host: bundleDir, target: BUNDLE_TARGET, readOnly: false }, ...(req.gitDir ? [{ host: req.gitDir, target: req.gitDir, readOnly: true }] : [])];
-    const { sha } = await inBox('bundle', req.worktree, mounts, (sandboxId) =>
+    const { sha } = await inBox('bundle', req.worktree, [{ host: bundleDir, target: BUNDLE_TARGET, readOnly: false }], (sandboxId) =>
       extractWork({ sandboxes, sandboxId, branch: req.branch, bundleDir, cloneDir, ...(req.exec ? { exec: req.exec } : {}) }),
     );
 
@@ -172,8 +169,8 @@ const CONFIG = '.factory/config.yml';
 
 /**
  * The forge's default branch, in the clone. The daemon's own config is read, for its credentials: the repository's is
- * not, as nothing here runs in it, and the clone's is ours. Neither `origin/HEAD` nor `origin/main` of the repository:
- * its git dir is mounted read-write for the agent, which could point them at a config of its own.
+ * not, as nothing here runs in it, and the clone's is ours. Read on the forge, not on `origin/HEAD` of the repository:
+ * what `.factory/config.yml` says of a commit is read as close to its source as the factory can.
  */
 async function fetchBase(req: CleanVerifyRequest, cloneDir: string): Promise<void> {
   const args = [...HARDENING.flatMap((c) => ['-c', c]), '-C', cloneDir, 'fetch', '--quiet', '--no-tags', '--no-recurse-submodules', '--', req.originUrl, `+HEAD:${BASE}`];
