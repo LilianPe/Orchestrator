@@ -975,6 +975,18 @@ describe('decide — a ticket whose repo is not known (ORC-291)', () => {
     expect(out.effects).toEqual([{ kind: 'activity', type: 'elicitation', body: expect.stringContaining('`repo:api`'), linearSessionId: 's2' }]);
   });
 
+  it('a delegation naming the repo the ticket waits in lifts the wait and runs its rule', () => {
+    const out = decide(blocked, ev('ticket.delegated', { linearSessionId: 's2' }), workflow);
+    expect(out.events.map((e) => e.type)).toContain('ticket.unblocked');
+    expect(out.effects.map((e) => e.kind)).toContain('start_run');
+    expect(out.effects).toContainEqual({ kind: 'labels', add: [], remove: ['Bloqué'] });
+  });
+
+  it('a new ticket that waited in another repo takes the Bloqué label off, as nothing there will', () => {
+    const moved = ev('ticket.delegated', { issue: { title: 'T', logical: 'todo', priority: 0 }, waitedIn: 'web' });
+    expect(decide(undefined, moved, workflow).effects).toContainEqual({ kind: 'labels', add: [], remove: ['Bloqué'] });
+  });
+
   it('a cancel ends the wait: the ticket holds no repo, its label is read again at its next delegation', () => {
     const after = reduce(blocked, ev('status.changed', { from: 'todo', to: null, cancelled: true }))!;
     expect(after).toMatchObject({ blocked: false, delegated: false });

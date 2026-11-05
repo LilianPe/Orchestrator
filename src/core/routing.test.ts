@@ -21,7 +21,8 @@ describe('resolveRoute (ORC-291)', () => {
   });
   it('a ticket waiting for its repo is routed again by its label; otherwise it stays where it waits', () => {
     const pending = t('api', { delegated: true, blocked: true, blockReason: unroutedReason(team) });
-    expect(resolveRoute(team, [pending], ['repo:web'])).toEqual({ projectId: 'web' });
+    expect(resolveRoute(team, [pending], ['repo:web'])).toEqual({ projectId: 'web', waitedIn: 'api' });
+    expect(resolveRoute(team, [pending], ['repo:api'])).toEqual({ projectId: 'api' });
     expect(resolveRoute(team, [pending], [])).toEqual({ projectId: 'api', repos: team });
     expect(resolveRoute(team, [pending])).toEqual({ projectId: 'api' });
   });

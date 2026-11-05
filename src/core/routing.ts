@@ -27,6 +27,8 @@ export interface Route {
   projectId: string;
   /** The repos to choose from: the ticket names none. */
   repos?: string[];
+  /** The project where the ticket waited for this choice: on Postgres, its one row now moves here (ORC-291). */
+  waitedIn?: string;
 }
 
 /**
@@ -46,6 +48,6 @@ export function resolveRoute(team: readonly string[], stored: readonly TicketSta
   }
   const named = new Set(labels.map((l) => l.toLowerCase()));
   const chosen = team.find((id) => named.has(`${REPO_LABEL}${id}`.toLowerCase()));
-  if (chosen) return { projectId: chosen };
+  if (chosen) return { projectId: chosen, ...(pending && pending !== chosen ? { waitedIn: pending } : {}) };
   return { projectId: pending ?? team[0]!, repos: [...team] };
 }

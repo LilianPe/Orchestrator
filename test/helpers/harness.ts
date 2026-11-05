@@ -172,6 +172,8 @@ export function createHarness(
     faults?: Faults;
     /** The simulated clock, for a process that must go on from a time another one reached (the chaos daemon). */
     clock?: FakeClock;
+    /** More projects of the same Linear team as `p` (ORC-291). */
+    extraProjects?: string[];
     /** One reconciliation of a project (ORC-185), run by the `reconcile` effect of its timer. */
     reconcile?: (project: ProjectRuntime) => Promise<void>;
     /** Runs in `sandboxes` (ORC-204), the ticket's session dirs in a temporary dir; on the host otherwise. */
@@ -229,7 +231,7 @@ export function createHarness(
     })(),
     scheduler: new Scheduler(store, { dev: workflow.limits.parallelSessions, questions: workflow.limits.questionSessions }),
     ...outside,
-    projects: [project],
+    projects: [project, ...(opts.extraProjects ?? []).map((id) => ({ ...project, id, repoPath: `/${id}` }))],
     packDir,
     agentEnv: (r) => ({ FACTORY_RUN_TOKEN: r.token }),
     newId: () => `id-${++n}`,

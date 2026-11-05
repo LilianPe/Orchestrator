@@ -7,6 +7,7 @@ import { SqliteStore } from '../../../store/sqlite-store.js';
 import { createLinearIngest } from './ingest.js';
 import { loadWorkflow } from '../../../config/load-workflow.js';
 import { FakeClock } from '../../../core/clock.js';
+import { unroutedReason } from '../../../core/routing.js';
 import { FakeTracker } from '../fake.js';
 import { IssueNotFoundError } from '../types.js';
 import { knownLabels, recordLabels, serial } from './labels.js';
@@ -260,6 +261,11 @@ describe('mapLinearWebhook', () => {
         expect(out.map((e) => e.projectId)).not.toContain('api');
       }
       expect(read).toEqual([]);
+    });
+
+    it('a delegation to the repo its label names says where the ticket waited', async () => {
+      const stored = [{ ...newTicketState('web', 'REL-1', 'T', 'todo', 0), delegated: true, blocked: true, blockReason: unroutedReason(['web', 'api']) }];
+      expect(await mapLinearWebhook(fx('session-created-delegation'), 'd1', twoRepos(['repo:api'], { stored }))).toMatchObject([{ projectId: 'api', payload: { waitedIn: 'web' } }]);
     });
 
     it('without a label, a new session goes to the first repo with the choice to make', async () => {

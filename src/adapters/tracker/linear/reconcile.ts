@@ -110,13 +110,13 @@ async function reconcileProject(d: ReconcileDeps, p: ProjectRuntime, team: strin
   for (const issue of issues) {
     const t = await d.store.getTicket(p.id, issue.identifier);
     if (!t || !t.delegated) {
-      const { repos } = issue;
+      const { repos, waitedIn } = issue;
       // Unrouted, its own id: the delegation to its repo, once labelled, must not be taken for a duplicate.
       const kind = repos ? 'unrouted' : 'delegated';
       const id = t ? `reconcile:${kind}:${p.id}:${issue.identifier}:${t.updatedAt}` : `reconcile:${kind}:${p.id}:${issue.identifier}`;
       const logical = logicalFromName(p.workflow.states, issue.stateName) ?? 'todo';
       // An untracked ticket: the snapshot spares the orchestrator a second read of the tracker.
-      const payload = { ...(t ? {} : { issue: { title: issue.title, logical, priority: issue.priority } }), ...(repos ? { repos } : {}) };
+      const payload = { ...(t ? {} : { issue: { title: issue.title, logical, priority: issue.priority } }), ...(repos ? { repos } : {}), ...(waitedIn ? { waitedIn } : {}) };
       await emit({ ticketId: issue.identifier }, UNSIGNED, id, 'ticket.delegated', payload);
       await inTurn(() => recordLabels(d.store, p.id, issue.identifier, issue.labels, issue.updatedAt ?? 0));
       continue;

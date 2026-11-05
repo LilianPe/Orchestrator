@@ -140,12 +140,13 @@ export type TimerFired = { [K in TimerKind]: { kind: K; payload: TimerPayloads[K
 
 export interface EventPayloads {
   /** `repos`: the team has several and the ticket names none (ORC-291); the delegation then waits for a human's choice. */
-  'ticket.delegated': { linearSessionId?: string; promptContext?: string; issue?: IssueSnapshot; repos?: string[] };
+  /** `waitedIn`: the project where the ticket waited for that choice. */
+  'ticket.delegated': { linearSessionId?: string; promptContext?: string; issue?: IssueSnapshot; repos?: string[]; waitedIn?: string };
   /** `keepLabel`: another project's ticket for the same issue is blocked, the label stays (ORC-291). */
   'ticket.undelegated': { keepLabel?: true };
-  'session.mentioned': { linearSessionId: string; body: string; author: string; issue?: IssueSnapshot; repos?: string[] };
-  'session.prompted': { linearSessionId: string; body: string; author: string; issue?: IssueSnapshot };
-  'session.stopped': { linearSessionId?: string };
+  'session.mentioned': { linearSessionId: string; body: string; author: string; issue?: IssueSnapshot; repos?: string[]; waitedIn?: string };
+  'session.prompted': { linearSessionId: string; body: string; author: string; issue?: IssueSnapshot; repos?: string[] };
+  'session.stopped': { linearSessionId?: string; repos?: string[] };
   /** `cancelled`: the new status is of type canceled in Linear (ORC-170). */
   'status.changed': { from: LogicalState | null; to: LogicalState | null; cancelled?: true };
   /** `otherRepo`: the label names another repo of the ticket's team (ORC-291). */
@@ -153,7 +154,7 @@ export interface EventPayloads {
   /** A commit pushed by a human on the ticket's branch. */
   'push.human': { branch: string; sha: string; author: string };
   /** `frozen`: for a `/refreeze`, the freeze at the branch's head, read before the decision (ORC-131); absent without a freeze or a branch. */
-  command: { name: string; body: string; linearSessionId: string; author: string; issue?: IssueSnapshot; frozen?: FrozenTests; repos?: string[] };
+  command: { name: string; body: string; linearSessionId: string; author: string; issue?: IssueSnapshot; frozen?: FrozenTests; repos?: string[]; waitedIn?: string };
   'pr.opened': PrPayload;
   'pr.checks_passed': PrPayload;
   'pr.checks_failed': PrPayload & { failures: string[] };

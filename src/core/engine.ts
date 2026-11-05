@@ -590,6 +590,10 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
   // An undelegation that lifts a repo choice while the issue's ticket in its repo is blocked leaves the label (ORC-291).
   const keepLabel = event.type === 'ticket.undelegated' && event.payload.keepLabel;
   if (!trackerDown && !keepLabel) blockedLabel(out, state, event);
+  // Come from a wait in another project: nothing may be left there to take the label off (one row per ticket on Postgres).
+  if ((event.payload as { waitedIn?: string }).waitedIn && !out.events.reduce<TicketState | undefined>((t, e) => reduce(t, e), reduce(state, event))?.blocked) {
+    out.effects.push(blockedLabelChange(true, false)!);
+  }
   return out;
 }
 
@@ -618,11 +622,12 @@ export function blockedLabelChange(before: boolean, after: boolean): Extract<Dec
  * blocked for it. A delegation blocks it, whatever blocked it before: `repos` means no project holds it, and under
  * another reason it would hold this one. Already waiting, it is asked again; a mention, a command, a reply or a stop
  * is answered with the same question; anything else decides nothing, so that no rule starts work in a repo picked
- * by default. `undefined`: the event is not such a one.
+ * by default. `undefined`: the event is not such a one, a delegation without `repos` among them: its label names
+ * this repo, where it was waiting.
  */
 function unrouted(state: TicketState | undefined, event: FactoryEvent): Decision | undefined {
   const repos = (event.payload as { repos?: string[] }).repos;
-  if (!repos && (!isUnrouted(state) || event.type === 'ticket.undelegated')) return undefined;
+  if (!repos && (!isUnrouted(state) || event.type === 'ticket.undelegated' || event.type === 'ticket.delegated')) return undefined;
   const out = empty();
   const body = repos ? unroutedReason(repos) : state!.blockReason!;
   const sessionId = (event.payload as { linearSessionId?: string }).linearSessionId;
@@ -655,9 +660,13 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
     return out;
   }
   // Rules read the ticket as it is once the event's own facts are recorded (new status, delegation…).
-  const ticket = reduce(state, event);
+  let ticket = reduce(state, event);
   const waiting = unrouted(state, event);
   if (waiting) return waiting;
+  if (event.type === 'ticket.delegated' && isUnrouted(ticket)) {
+    out.events.push({ type: 'ticket.unblocked' });
+    ticket = reduce(ticket, { type: 'ticket.unblocked' });
+  }
   if (BUILT_IN.has(event.type)) out.trace.push(`built-in ${event.type}`);
   if (event.type === 'status.changed' && event.payload.cancelled) {
     // A ticket cancelled by a human (ORC-170): its work stops, and nothing waits for an answer (`reduce`

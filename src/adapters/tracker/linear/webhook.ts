@@ -240,11 +240,12 @@ export async function mapLinearWebhook(body: any, key: string, ctx: MapContext):
   const teamKey = identifier.split('-')[0]!;
   const route = await routeOf(body, identifier, teamKey, ctx);
   if (!route) return [];
-  const { projectId, repos } = route;
+  const { projectId, repos, waitedIn } = route;
   const { id: actor, taint, name } = signedActor(body);
   let partials = body.type === 'AgentSessionEvent' ? sessionEvents(body, name, projectId, ctx) : await issueEvents(body, identifier, teamKey, projectId, ctx);
   // The choice to make goes with the event: `decide` blocks the delegation, answers the rest.
   if (repos) partials = partials.map((p) => ({ ...p, payload: { ...(p.payload as object), repos } }));
+  if (waitedIn) partials = partials.map((p) => ({ ...p, payload: { ...(p.payload as object), waitedIn } }));
   const at = ctx.now();
   return partials.map(
     (p) =>

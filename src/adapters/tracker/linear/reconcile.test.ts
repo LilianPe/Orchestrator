@@ -97,7 +97,7 @@ describe('reconcileOnce', () => {
       await store.putTicket({ ...newTicketState('web', 'REL-1', 'T', 'todo', 3), delegated: true, blocked: true, blockReason: unroutedReason(['web', 'api']) });
       expect((await pass(tracker, store)).events).toEqual([
         ['web', 'reconcile:undelegated-flag:web:REL-1:3', {}],
-        ['api', 'reconcile:delegated:api:REL-1', { issue: expect.any(Object) }],
+        ['api', 'reconcile:delegated:api:REL-1', { issue: expect.any(Object), waitedIn: 'web' }],
       ]);
       await store.putTicket({ ...newTicketState('api', 'REL-1', 'T', 'dev', 4), blocked: true, blockReason: 'Tests rouges' });
       expect((await pass(tracker, store)).events[0]).toEqual(['web', 'reconcile:undelegated-flag:web:REL-1:3', { keepLabel: true }]);
