@@ -532,13 +532,9 @@ describe('fullReadEnv (ORC-279)', () => {
     expect(fullReadEnv('/work', [])).toEqual({});
   });
 
-  it('stays under what one environment string can hold, and says how many paths it left out', () => {
-    const paths = Array.from({ length: 5000 }, (_, i) => `packages/some-package-${i}/src/some-feature.test.ts`);
-    const cut: number[] = [];
-    const value = fullReadEnv('/work', paths, (n) => cut.push(n))['FACTORY_FULL_READ_PATHS']!;
-    expect(Buffer.byteLength(value)).toBeLessThanOrEqual(64 * 1024);
-    const kept = (JSON.parse(value) as string[]).length;
-    expect(kept).toBeGreaterThan(0);
-    expect(cut).toEqual([5000 - kept]);
+  it('refuses a list over what one environment string can safely hold, and takes one under it', () => {
+    const paths = (n: number) => Array.from({ length: n }, (_, i) => `packages/some-package-${i}/src/some-feature.test.ts`);
+    expect(() => fullReadEnv('/work', paths(5000))).toThrow(/5000 paths/);
+    expect(Buffer.byteLength(fullReadEnv('/work', paths(1000))['FACTORY_FULL_READ_PATHS']!)).toBeLessThanOrEqual(64 * 1024);
   });
 });

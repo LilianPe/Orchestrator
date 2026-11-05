@@ -153,14 +153,10 @@ function rule(tool, command, denyPush) {
   return null;
 }
 
-const DEFAULT_READ_MAX_LINES = 350;
+const envMaxLines = Number(process.env.FACTORY_READ_MAX_LINES);
+const READ_MAX_LINES = Number.isInteger(envMaxLines) && envMaxLines > 0 ? envMaxLines : 350;
 /** Read gives these whole or by `pages`: `offset` and `limit` mean nothing for them. */
 const NOT_BY_LINES = /\.(png|jpe?g|gif|webp|pdf|ipynb)$/i;
-
-function readMaxLines() {
-  const max = Number(process.env.FACTORY_READ_MAX_LINES);
-  return Number.isInteger(max) && max > 0 ? max : DEFAULT_READ_MAX_LINES;
-}
 
 /** Past `max` lines? Stops reading as soon as it knows. A file with a NUL in its first block is binary: not counted. */
 function longerThan(file, max) {
@@ -181,11 +177,6 @@ function longerThan(file, max) {
   }
 }
 
-/**
- * A whole read of a large file (ORC-279): it costs tokens, it breaks nothing. So this fails open, unlike
- * the commands above: whatever cannot be judged passes, and Read answers for itself. `allow_large` is
- * no targeted read. `FACTORY_FULL_READ_PATHS` is the factory's list of absolute paths read whole.
- */
 /** The path behind any symlink: Claude Code's cwd is the real one, the factory's list may not be. */
 function real(path) {
   try {
@@ -195,14 +186,19 @@ function real(path) {
   }
 }
 
+/**
+ * A whole read of a large file (ORC-279): it costs tokens, it breaks nothing. So this fails open, unlike
+ * the commands above: whatever cannot be judged passes, and Read answers for itself. `allow_large` is
+ * no targeted read. `FACTORY_FULL_READ_PATHS` is the factory's list of absolute paths read whole.
+ */
 function fullRead(input) {
   try {
     const file = input.file_path;
     if (typeof file !== 'string' || input.offset != null || input.limit != null || NOT_BY_LINES.test(file)) return null;
+    // A FIFO would block the open; a directory is Read's to answer.
+    if (!statSync(file).isFile() || !longerThan(file, READ_MAX_LINES)) return null;
     const whole = JSON.parse(process.env.FACTORY_FULL_READ_PATHS || '[]');
     if (whole.map(real).includes(real(file))) return null;
-    // A FIFO would block the open; a directory is Read's to answer.
-    if (!statSync(file).isFile() || !longerThan(file, readMaxLines())) return null;
     return 'full-read';
   } catch {
     return null;
@@ -230,13 +226,12 @@ try {
 }
 const tool = call.tool_name ?? '';
 const input = call.tool_input ?? {};
-const isRead = tool === 'Read';
-const command = String((isRead ? input.file_path : input.command ?? input.query) ?? '');
-const hit = isRead ? fullRead(input) : rule(tool, command, process.env.FACTORY_DENY_PUSH === '1');
+const command = String(input.command ?? input.query ?? input.file_path ?? '');
+const hit = tool === 'Read' ? fullRead(input) : rule(tool, command, process.env.FACTORY_DENY_PUSH === '1');
 if (hit) {
   journal({ at: new Date().toISOString(), tool, command, rule: hit, ticket: process.env.FACTORY_TICKET ?? null });
-  const permissionDecisionReason = isRead
-    ? `Refusé par l'usine (règle ${hit}) : ce fichier dépasse ${readMaxLines()} lignes. Cherchez ce qu'il vous faut avec grep, puis lisez la plage utile avec offset et limit.`
+  const permissionDecisionReason = hit === 'full-read'
+    ? `Refusé par l'usine (règle ${hit}) : ce fichier dépasse ${READ_MAX_LINES} lignes. Cherchez ce qu'il vous faut avec grep, puis lisez la plage utile avec offset et limit.`
     : `Refusé par l'usine (règle ${hit}) : cette commande est interdite dans un run.`;
   process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason } }));
 }

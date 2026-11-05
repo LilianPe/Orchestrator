@@ -78,21 +78,12 @@ export const CLAUDE_RUN_ENV = { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1', DISABLE_TE
 /** Half of what Linux takes for one environment string (128 KiB): past it, the launch itself would fail. */
 const FULL_READ_ENV_MAX_BYTES = 64 * 1024;
 
-/**
- * The pack hook's list of paths read whole, absolute as the run sees them. Past the bound the last paths are left
- * out, and `onCut` told how many: such a file is refused whole and read by ranges, the run still starts.
- */
-export function fullReadEnv(cwd: string, paths: readonly string[], onCut: (count: number) => void = () => {}): Record<string, string> {
-  const kept: string[] = [];
-  let bytes = 2; // the brackets
-  for (const path of paths) {
-    const full = `${cwd}/${path}`;
-    bytes += Buffer.byteLength(JSON.stringify(full)) + 1; // the comma
-    if (bytes > FULL_READ_ENV_MAX_BYTES) break;
-    kept.push(full);
-  }
-  if (kept.length < paths.length) onCut(paths.length - kept.length);
-  return kept.length ? { FACTORY_FULL_READ_PATHS: JSON.stringify(kept) } : {};
+/** The pack hook's list of paths read whole, absolute as the run sees them. Throws past the bound: see `fullReadEnvOf`. */
+export function fullReadEnv(cwd: string, paths: readonly string[]): Record<string, string> {
+  if (paths.length === 0) return {};
+  const list = JSON.stringify(paths.map((path) => `${cwd}/${path}`));
+  if (Buffer.byteLength(list) > FULL_READ_ENV_MAX_BYTES) throw new Error(`${paths.length} paths: too long for the environment`);
+  return { FACTORY_FULL_READ_PATHS: list };
 }
 
 /**
@@ -1476,9 +1467,7 @@ export class Orchestrator {
   /** A saving of tokens, never a reason to block a ticket: whatever goes wrong, the run starts without the list. */
   private fullReadEnvOf(t: TicketState, cwd: string): Record<string, string> {
     try {
-      return fullReadEnv(cwd, this.d.fullReadPaths?.(t) ?? [], (n) =>
-        this.log('warn', `${n} path(s) of ${t.ticketId} left out of the whole-read list: too long for the environment`),
-      );
+      return fullReadEnv(cwd, this.d.fullReadPaths?.(t) ?? []);
     } catch (err) {
       this.log('warn', `no whole-read list for ${t.ticketId}: ${(err as Error).message}`);
       return {};

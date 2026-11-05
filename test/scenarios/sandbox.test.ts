@@ -240,6 +240,14 @@ describe('the ticket session across attempts', () => {
     expect(h.logs.some((l) => l.level === 'warn' && l.message.includes('boom'))).toBe(true);
   });
 
+  it('starts the run without the list when it is too long for the environment (ORC-279)', async () => {
+    const h = createHarness({ fullReadPaths: () => Array.from({ length: 5000 }, (_, i) => `packages/some-package-${i}/src/some-feature.test.ts`) });
+    await delegate(h);
+    expect(h.runner.requests[0]!.env).not.toHaveProperty('FACTORY_FULL_READ_PATHS');
+    expect(await h.ticket()).toMatchObject({ blocked: false });
+    expect(h.logs.some((l) => l.level === 'warn' && l.message.includes('too long'))).toBe(true);
+  });
+
   it('hands no list when the factory has no path to read whole (ORC-279)', async () => {
     for (const h of [createHarness({ sandboxed: true }), createHarness({ sandboxed: true, fullReadPaths: () => [] })]) {
       await delegate(h);
