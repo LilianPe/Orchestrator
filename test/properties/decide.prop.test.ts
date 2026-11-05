@@ -147,7 +147,7 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
     const A = { sha: 'aaa', files: { 'a.test.ts': '1' } };
     const B = { sha: 'bbb', files: { 'a.test.ts': '2' } };
     const tests = (id: string, frozen: typeof A) => [
-      sh({ type: 'run.started', runId: id, job: 'tests', queue: 'dev', claudeSessionId: 'claude-1', feedbackConsumed: false }),
+      sh({ type: 'run.started', runId: id, job: 'tests', queue: 'dev', claudeSessionId: 'claude-1' }),
       ext('run.finished', { runId: id, job: 'tests', outcome: 'success', costUsd: 0.5, turns: 3, lastText: 'fini' }),
       ext('verify.passed', { runId: id, job: 'tests', red: 'assertion', frozen }),
     ];

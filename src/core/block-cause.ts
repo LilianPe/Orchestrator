@@ -1,4 +1,5 @@
 import { PRODUCT_NAME } from '../product.js';
+import { CUT_BOUND_REASON } from './engine.js';
 
 /** Why a ticket waits for a human, in the order the Flux shows the causes (ORC-297). */
 export const BLOCK_CAUSES = ['question', 'contested', 'red', 'infra', 'limit', 'loop', 'failed', 'pickup', 'dead_letter', 'pr_closed', 'stopped', 'other'] as const;
@@ -18,7 +19,9 @@ const CAUSES: readonly (readonly [Exclude<BlockCause, 'other'>, RegExp])[] = [
   ['infra', /^Erreur au lancement : /],
   ['infra', /^Erreur : /],
   ['infra', new RegExp(`^${PRODUCT_NAME} a redémarré pendant `)],
+  ['infra', /^Le bail du run .+ a expiré \d+ fois : /],
   ['limit', /^Le run .+ a atteint un plafond/],
+  ['limit', CUT_BOUND_REASON],
   ['limit', /^(Vérifications|CI) toujours en échec après /],
   ['loop', /^Boucle : /],
   ['failed', /^Le run .+ a échoué\.$/],
