@@ -31,8 +31,9 @@ Les deux fichiers d'instance sont lus **au démarrage** de `relais up` : redéma
 | `FACTORY_SANDBOX_CPUS` | `relais up` | `2`, ou le nombre de CPU de l'hôte s'il en a moins | CPU d'un conteneur de run (`--cpus`, décimal accepté : `0.5`). `0` ou `none` : pas de limite. | non |
 | `FACTORY_DENY_PUSH` | `relais up` | — | `1` : le démon la transmet aux runs, et le hook `PreToolUse` du pack y refuse aussi `git push` et les écritures `gh` (`gh pr create`, `gh pr edit`, `gh pr merge`, `gh run rerun`), avec une ligne au journal des refus. Toute autre valeur : rien n'est transmis, les skills du pack poussent et ouvrent leurs PR (jusqu'à ORC-125). Voir [`pack-et-skills.md`](pack-et-skills.md#hook-pretooluse-et-journal-des-refus). | non |
 | `FACTORY_REFUSALS_LOG` | `relais up` | `$CLAUDE_CONFIG_DIR/factory-refusals.jsonl` | Fichier du journal des refus du hook `PreToolUse` ; transmis aux runs sur l'hôte seulement s'il est défini. En sandbox, ignoré : chaque run écrit dans `<RELAIS_HOME>/runs/<runId>/refusals/refusals.jsonl` (ORC-217). Voir [`pack-et-skills.md`](pack-et-skills.md#hook-pretooluse-et-journal-des-refus). | non |
-| `ANTHROPIC_API_KEY` | `claude` (hérité par les runs) | — | Authentification de Claude Code si vous n'utilisez pas `claude login`. Obligatoire en Docker. | **oui** |
-| `GH_TOKEN` | `gh`, les agents et, en Docker, git via `gh auth setup-git` | — | Authentification GitHub des agents et du repli `gh` du démon. Obligatoire en Docker tant que ORC-125 n'a pas retiré `gh`. | **oui** |
+| `CLAUDE_CODE_OAUTH_TOKEN` | `claude`, en sandbox et sur l'hôte | — | Jeton du compte Claude Code quand `factory.yml` n'en choisit pas (`claude.active`). | **oui** |
+| `ANTHROPIC_API_KEY` | `claude`, sur l'hôte seulement | — | Authentification de Claude Code sur l'hôte, sans `claude login` ni compte actif. Jamais transmise à un sandbox (ORC-211) ; retirée avec les runs sur l'hôte (ORC-179). | **oui** |
+| `GH_TOKEN` | `gh`, les agents sur l'hôte et, en Docker, git via `gh auth setup-git` | — | Authentification GitHub des agents sur l'hôte et du repli `gh` du démon. Jamais transmis à un sandbox. Obligatoire en Docker tant que ORC-125 n'a pas retiré `gh`. | **oui** |
 | `GH_APP_ID` | démon (repli de `github.appId`) | — | Identifiant de la GitHub App d'usine. | non |
 | `GH_APP_KEY` | démon (repli de `github.privateKey`) | — | Clé privée PEM de la GitHub App, ou chemin vers le fichier `.pem`. | **oui** |
 | `GH_APP_INSTALLATION_ID` | démon (repli de `github.installationId`) | — | Installation de l'App à utiliser ; facultatif, le démon sait la retrouver par dépôt. | non |
@@ -176,17 +177,20 @@ claude:
 concurrency: 1
 budgets: { max_turns: { build: 150, fix: 60, review: 25 }, on_usage_limit: wait }
 repos:
-  - { linear_team: ORC, github: LilianPe/Orchestrator }
+  - linear_team: ORC
+    github: LilianPe/Orchestrator
+    env: { NODE_ENV: test }                 # les valeurs de ce que .factory/config.yml déclare sous env
+    secrets: { NPM_TOKEN: env:ORC_NPM_TOKEN } # et sous setup_secrets : env:NOM seulement, 8 caractères au moins
 ```
 
 | Section | Effet aujourd'hui |
 | -- | -- |
 | `github` | **Appliquée** : ses clés remplacent celles de `github` dans `config.yaml` ; une clé qu'il ne déclare pas (`installation_id`, `webhook_secret`) reste celle de `config.yaml`. |
 | `linear` | **Appliquée** : `app_client_id`, `client_secret` et `webhook_secret` remplacent ceux de `secrets.json`. Les jetons OAuth restent dans `secrets.json`, écrits par « Connecter Linear ». |
-| `claude` | Validée, pas encore lue : comptes et choix du compte avec ORC-215, effort par étape avec ORC-136. |
+| `claude` | **`accounts` et `active` appliqués** (ORC-211) : le jeton du compte actif est le seul identifiant du runner. Le reste du choix de compte avec ORC-215, l'effort par étape avec ORC-136. |
 | `concurrency` | **Appliquée** (ORC-203) : capacité de la file `dev`, à la place de `limits.parallel_sessions` du workflow. La file `questions` garde `question_sessions`. |
 | `budgets` | Validée, pas encore lue : appliquée par ORC-216. |
-| `repos` | Validée, pas encore lue : `projects[].repoPath` de `config.yaml` reste la copie de travail tant que le runner ne clone pas lui-même (ORC-204). |
+| `repos` | **`env` et `secrets` appliqués** (ORC-211), l'entrée étant trouvée par le remote `origin` du projet : voir [`configuration-depot.md`](configuration-depot.md#variables-et-secrets). Pour le reste, `projects[].repoPath` de `config.yaml` reste la copie de travail tant que le runner ne clone pas lui-même (ORC-204). |
 
 `factory.yml` n'est lu qu'à la lecture : `init` et l'écriture des jetons ne recopient jamais une de ses valeurs dans `config.yaml` ou `secrets.json`. Ses secrets sont masqués dans les transcripts des runs, comme ceux de `secrets.json`.
 
@@ -194,9 +198,9 @@ repos:
 
 Le démon détient les secrets ; les runs Claude Code n'en ont pas besoin et ne doivent pas y accéder.
 
-1. **Environnement des runs filtré.** Chaque run hérite de l'environnement du démon **sans** aucune variable `RELAIS_*` ni `LINEAR_*` (donc ni `RELAIS_UI_PASSWORD`, ni une éventuelle clé Linear). Relais pose ensuite seulement `RELAIS_API` (API locale `http://127.0.0.1:<port>/agent`), `RELAIS_RUN_TOKEN` (jeton aléatoire valable pendant le run), `RELAIS_TICKET`, `RELAIS_KNOWLEDGE`, `RELAIS_ROOT` et `PATH`. Les autres variables (`ANTHROPIC_API_KEY`, `GH_TOKEN`, `GIT_*`…) sont transmises : l'agent en a besoin pour travailler.
+1. **Environnement des runs par liste blanche (ORC-211).** En sandbox, un run reçoit ses variables de run (`FACTORY_API`, `FACTORY_RUN_TOKEN`, jeton aléatoire valable pendant le run, `FACTORY_TICKET`…), les variables que le dépôt déclare ([`configuration-depot.md`](configuration-depot.md#variables-et-secrets)) et le jeton du compte `claude.active` sous `CLAUDE_CODE_OAUTH_TOKEN` (sans `factory.yml`, celui du démon de ce nom) : rien d'autre, ni `ANTHROPIC_API_KEY`, ni `ANTHROPIC_BASE_URL`, ni `GH_TOKEN`. Sur l'hôte, un run reçoit en plus le système (`PATH`, `HOME`, `LANG`, `TMPDIR`…), l'identité des commits (`GIT_AUTHOR_*`, `GIT_COMMITTER_*`) et, en transition, `GH_TOKEN` (jusqu'à ORC-125) et `ANTHROPIC_API_KEY` (jusqu'à ORC-179, retirée dès qu'un compte actif existe). Toute autre variable reste dans le démon.
 2. **Linear passe par `relais-agent`.** L'agent ne voit jamais le jeton Linear : il appelle l'API locale avec son jeton de run, qui ne donne accès qu'au ticket du run, à la recherche, à la base de connaissance et à la question (`ask`). Voir [`cli.md`](cli.md#relais-agent-côté-agent).
 3. **`run-settings.json`.** À chaque `relais up`, Relais écrit `<RELAIS_HOME>/run-settings.json` : les permissions du pack (`packs/standard/settings.json`) plus des refus sur le **vrai** chemin de `RELAIS_HOME` : `Read`/`Edit` de `secrets.json`, `Read` de `relais.db*`, `transcripts/**`, `logs/**`, et toute commande Bash qui mentionne `secrets.json` ou `relais.db`. Ce fichier est passé à chaque run par `--settings`. Les worktrees (`workspaces/`) restent lisibles.
-4. **Jeton GitHub App hors des runs.** Le jeton d'installation est demandé pour le seul dépôt du run, conservé en mémoire du démon et jamais monté dans l'environnement du runner ni écrit dans un transcript. `GH_TOKEN` reste transmis aux agents **temporairement**, car `gh` leur sert encore à ouvrir et lire les PR ; ORC-125 retirera cette variable. Voir [`github.md`](github.md#jetons).
+4. **Jeton GitHub App hors des runs.** Le jeton d'installation est demandé pour le seul dépôt du run, conservé en mémoire du démon et jamais monté dans l'environnement du runner ni écrit dans un transcript. `GH_TOKEN` reste transmis aux agents **sur l'hôte, temporairement**, car `gh` leur sert encore à ouvrir et lire les PR ; ORC-125 retirera cette variable. Voir [`github.md`](github.md#jetons).
 
 Limite connue : ces refus sont des garde-fous de Claude Code, pas une frontière de sécurité. Un agent qui exécute du code (`node`, `npm`) avec le même utilisateur système que le démon peut lire `secrets.json`. Détails et conséquences : [`interface-et-securite.md`](interface-et-securite.md#limites-connues).

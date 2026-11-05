@@ -27,6 +27,8 @@ let bundleDir = '';
 /** The proxy the provider opens runs on: the real one in this process, or the helper's sockets. */
 let impl: Pick<EgressProxy, 'open' | 'close' | 'isOpen' | 'caCertPath'>;
 let readJournal: (runId: string) => string = () => '';
+/** A new daemon's proxy on the same dirs, the first one not closed: as after a kill -9, its socket bound anew (ORC-220). */
+let rebind: () => Promise<void> = async () => {};
 let agentServer: Server | undefined;
 
 const engine = (args: string[]) => execFileSync(cli, args, { encoding: 'utf8', timeout: 300_000 }).trim();
@@ -67,9 +69,14 @@ describe.skipIf(!enabled)(`egress proxy (${cli})`, () => {
     agentServer = createServer((req, res) => res.end(`agent ${req.method} ${req.url}`));
     await new Promise<void>((ok) => agentServer!.listen(0, '127.0.0.1', ok));
     const to = { host: '127.0.0.1', port: (agentServer.address() as AddressInfo).port };
-    const proxy = new EgressProxy({ dir: join(bundleDir, 'network'), caDir: join(bundleDir, 'ca'), agentApi: { host: 'host.docker.internal', port: 4101, to } });
+    const make = () => new EgressProxy({ dir: join(bundleDir, 'network'), caDir: join(bundleDir, 'ca'), agentApi: { host: 'host.docker.internal', port: 4101, to } });
+    const proxy = make();
     impl = proxy;
     readJournal = (runId) => (existsSync(proxy.journalPath(runId)) ? readFileSync(proxy.journalPath(runId), 'utf8') : '');
+    rebind = async () => {
+      const again = make();
+      for (const level of levels) await again.open(runIds[level], { level, allow: [] });
+    };
   }
 
   /** Docker Desktop's way: the proxy in a helper container, its sockets in that container's volume. */
@@ -81,21 +88,32 @@ describe.skipIf(!enabled)(`egress proxy (${cli})`, () => {
         contents: `
           import { chownSync } from 'node:fs';
           import { createServer } from 'node:http';
-          import { basename } from 'node:path';
+          import { dirname, relative } from 'node:path';
           import { EgressProxy } from './src/network/proxy.ts';
           const [dir, uid, gid, ...runs] = process.argv.slice(2);
           createServer((req, res) => res.end('agent ' + req.method + ' ' + req.url)).listen(4101, '127.0.0.1');
-          const proxy = new EgressProxy({ dir, caDir: dir + '/ca', agentApi: { host: 'host.docker.internal', port: 4101, to: { host: '127.0.0.1', port: 4101 } } });
+          const make = () => new EgressProxy({ dir, caDir: dir + '/ca', agentApi: { host: 'host.docker.internal', port: 4101, to: { host: '127.0.0.1', port: 4101 } } });
+          const proxy = make();
           (async () => {
             const names = {};
             for (const r of runs) {
               const [id, level] = r.split('=');
               const path = await proxy.open(id, { level, allow: [] });
-              chownSync(path, Number(uid), Number(gid));
-              names[id] = basename(path);
+              // The run's dir is the sandbox's mount (ORC-220).
+              for (const p of [dirname(path), path]) chownSync(p, Number(uid), Number(gid));
+              names[id] = relative(dir, path);
             }
             console.log(JSON.stringify(names));
-          })();`,
+          })();
+          process.on('SIGUSR1', async () => {
+            const again = make();
+            for (const r of runs) {
+              const [id, level] = r.split('=');
+              const path = await again.open(id, { level, allow: [] });
+              chownSync(path, Number(uid), Number(gid));
+            }
+            console.log('rebound');
+          });`,
         resolveDir: resolve(import.meta.dirname, '../..'),
         loader: 'ts',
       },
@@ -124,6 +142,10 @@ describe.skipIf(!enabled)(`egress proxy (${cli})`, () => {
     const sockets = Object.fromEntries(Object.entries(names).map(([id, name]) => [id, `${volume}/${name}`]));
     impl = { open: async (runId) => sockets[runId]!, close: async () => {}, isOpen: () => true, caCertPath: `${volume}/ca/ca.crt` };
     readJournal = (runId) => engine(['exec', helper, 'sh', '-c', `cat /run/egress/${runId}.jsonl 2>/dev/null || true`]);
+    rebind = async () => {
+      engine(['kill', '-s', 'USR1', helper]);
+      for (let i = 0; i < 100 && !engine(['logs', helper]).includes('rebound'); i++) await new Promise((r) => setTimeout(r, 100));
+    };
   }
 
   beforeAll(async () => {
@@ -146,8 +168,9 @@ describe.skipIf(!enabled)(`egress proxy (${cli})`, () => {
   it('limited: an npm registry GET goes through the proxy, decrypted, journaled with its method, path and size', async () => {
     const r = await run('limited', 'HOME=/tmp npm view is-number@7.0.0 version');
     expect(r).toMatchObject({ code: 0, out: expect.stringContaining('7.0.0') as string });
-    const hit = journal('limited').find((e) => e.host === 'registry.npmjs.org');
-    expect(hit).toMatchObject({ method: 'GET', path: '/is-number', ok: true });
+    // By its path: npm's own update check (`/npm`) can reach the registry first.
+    const hit = journal('limited').find((e) => e.host === 'registry.npmjs.org' && e.path === '/is-number');
+    expect(hit).toMatchObject({ method: 'GET', ok: true });
     expect(hit!.down).toBeGreaterThan(0);
   });
 
@@ -187,6 +210,14 @@ describe.skipIf(!enabled)(`egress proxy (${cli})`, () => {
     expect(await run('limited', tcp)).toMatchObject({ code: 3 });
     const udp = `node -e "require('dgram').createSocket('udp4').send('x',53,'1.1.1.1',e=>{console.log(e?.code);process.exit(e?3:0)})"`;
     expect(await run('limited', udp)).toMatchObject({ code: 3 });
+  });
+
+  it('a living container gets out again through the socket a new daemon binds: its mount is the dir, not the socket (ORC-220)', async () => {
+    const mcp = `node -e "fetch('http://host.docker.internal:4101/agent/mcp',{method:'POST',body:'{}'}).then(r=>r.text()).then(t=>console.log(t),e=>{console.log('ERR',e.cause?.code??e.message);process.exit(3)})"`;
+    await rebind();
+    expect(await run('limited', mcp)).toMatchObject({ code: 0, out: 'agent POST /agent/mcp' });
+    // The mount is read-only: the agent cannot put a socket of its own in place of the proxy's.
+    expect((await run('limited', 'touch /run/factory/egress/x')).code).not.toBe(0);
   });
 
   it('none: nothing passes, not even the Claude API', async () => {

@@ -29,6 +29,19 @@ const req = (repo: string, patch: object = {}) => ({
 });
 
 describe('GitWorkspaces', () => {
+  it('says when a worktree made again comes on commits beyond the default branch, and only then (ORC-211)', async () => {
+    const { repo, root } = fixtureRepo();
+    const ws = new GitWorkspaces({ root });
+    const first = await ws.prepare(req(repo));
+    expect(first.ahead).toBeUndefined();
+    // Removed and made again on its branch, with no commit: as a setup that a crash cut.
+    await ws.cleanup('p', repo, 'REL-1');
+    expect((await ws.prepare(req(repo))).ahead).toBeUndefined();
+    git(first.path, 'commit', '--allow-empty', '-m', 'the agent');
+    await ws.cleanup('p', repo, 'REL-1');
+    expect(await ws.prepare(req(repo))).toMatchObject({ fresh: true, ahead: true });
+  });
+
   it('creates (fresh), reuses (not fresh) and removes a ticket worktree', async () => {
     const { repo, root } = fixtureRepo();
     const ws = new GitWorkspaces({ root });
@@ -85,6 +98,8 @@ describe('GitWorkspaces', () => {
     expect(await diff.showAtBase('src/export.ts')).toBe('export const other = 1;\n');
     expect(await diff.showAtHead('export.test.ts')).toBe('x\n');
     expect(await diff.showAtBase('export.test.ts')).toBeUndefined();
+    expect(diff.head).toBe(await ws.head(w.path));
+    expect(await diff.filesAtHead()).toContain('export.test.ts');
     expect((await ws.uncommitted(w.path)).sort()).toEqual(['draft.ts', 'src/export.ts']);
     expect(await ws.stepDiff(repo, join(root, 'nowhere'), base)).toBeUndefined();
   });

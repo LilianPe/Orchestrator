@@ -23,7 +23,12 @@ services:
       # No runner gets it (the provider refuses the mount). `verify` still runs in this container until ORC-151: see docs/deploiement.md.
       - ${FACTORY_ENGINE_SOCKET:?définissez FACTORY_ENGINE_SOCKET (socket du moteur rootless)}:/var/run/docker.sock
     environment:
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?définissez ANTHROPIC_API_KEY}
+      # The login of `claude`: an account of factory.yml (`token: env:CLAUDE_TOKEN_1`), or, on this image where the
+      # runs still share the daemon's container, an API key (until ORC-179). Unset here, unset in the container.
+      CLAUDE_TOKEN_1:
+      CLAUDE_TOKEN_2:
+      ANTHROPIC_API_KEY:
+      # Until the factory pushes in the agents' place (ORC-125).
       GH_TOKEN: ${GH_TOKEN:?définissez GH_TOKEN (push HTTPS et gh pr)}
       FACTORY_UI_PASSWORD: ${FACTORY_UI_PASSWORD:?définissez FACTORY_UI_PASSWORD (mot de passe de l'interface)}
       # Unset in the container when unset here, so the image identity (the product name) applies.

@@ -202,22 +202,36 @@ describe('fault injection at each point of the chain (ORC-163)', () => {
   });
 
   /**
-   * The same cut on a dev start: the ticket holds the run before it is written, so recover() blocks
-   * it and tells Linear, and the start taken up again launches nothing (refused on the blocked
-   * ticket). Never a ticket left delegated with no run, no block and no notice.
+   * The same cut on a dev start. Was (ORC-277): the ticket blocked, a notice, nothing launched. Now (ORC-220): the
+   * ticket holds a run nothing launched, recover() lets go of it, and the start taken up again past its lease
+   * launches it, with no human and no notice. Never a ticket left delegated with no run: it reaches its review.
    */
-  it('kill at a dev run launch, before its run is written: the ticket is blocked, nothing launched (ORC-277)', async () => {
+  it('kill at a dev run launch, before its run is written: launched once by the start taken up again (ORC-220)', async () => {
     const { h, report, faults } = await scenario({ point: 'run.write', mode: 'kill' }, [STEPS[0]!]);
     expect(faults.fired).toMatchObject({ point: 'run.write', mode: 'kill' });
     expect(report.violations).toEqual([]);
     expect(report.atLeastOnce).toEqual([]);
-    expect(h.runner.requests).toHaveLength(0);
+    expect(h.runner.requests).toHaveLength(1);
     const t = await h.ticket();
-    expect(t.blocked).toBe(true);
+    expect(t).toMatchObject({ blocked: false, logical: 'human_review' });
     expect(t.activeRunId).toBeUndefined();
-    expect(JSON.stringify(h.tracker.activities('ls-1'))).toContain('redémarré pendant le run');
-    // Blocked by recover(), outside any decision: the label is put all the same (ORC-170).
-    expect((await h.tracker.getIssue('REL-1')).labels).toContain('Bloqué');
+    expect(JSON.stringify(h.tracker.activities('ls-1'))).not.toContain('redémarré');
+    expect((await h.tracker.getIssue('REL-1')).labels).not.toContain('Bloqué');
+  });
+
+  /**
+   * Past the launch: the run is written, its start marked. New with ORC-220: the mark still stops the start taken up
+   * again (never twice for one row), and it is `run.lost` that starts the step, by an outbox row of its own.
+   */
+  it.each(['run.written', 'effect.after'] as const)('kill at a dev run launch, at %s: the step starts again under its own row, never twice under one (ORC-220)', async (point) => {
+    const { h, report, faults } = await scenario({ point, mode: 'kill', match: (i) => point === 'run.written' || i.method === 'start' }, [STEPS[0]!]);
+    expect(faults.fired).toMatchObject({ point, mode: 'kill' });
+    expect(report.violations).toEqual([]);
+    expect(report.atLeastOnce).toEqual([]);
+    expect(await h.ticket()).toMatchObject({ blocked: false, logical: 'human_review' });
+    const rows = (await h.store.listEffects('p', 'REL-1')).filter((r) => r.effect.kind === 'start_run');
+    expect(rows).toHaveLength(2);
+    expect(rows[1]!.effect).toMatchObject({ relaunchOf: expect.any(String) });
   });
 
   /**

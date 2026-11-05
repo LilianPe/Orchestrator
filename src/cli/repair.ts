@@ -70,7 +70,7 @@ export async function runRepair(o: RepairOptions): Promise<number> {
     return 1;
   }
   // A run's or a check's result frees the ticket's run: dropped, it would leave the ticket running for good.
-  if (action === 'skip' && SETTLES_RUN.has(chosen.event.type as EventType)) {
+  if (action === 'skip' && (SETTLES_RUN.has(chosen.event.type as EventType) || chosen.event.type === 'verify.lost')) {
     o.print(`${chosen.eventId} (${chosen.event.type}) termine un run ou ses vérifications : l'ignorer laisserait le ticket en cours. Utilisez force (ses faits sans sa décision) ou replay.`);
     return 1;
   }

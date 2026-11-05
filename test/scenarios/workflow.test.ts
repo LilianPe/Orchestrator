@@ -244,25 +244,24 @@ describe('standard workflow', () => {
     });
   });
 
+  // ORC-220 replaces the block of a restart: `test/scenarios/recovery.test.ts` holds what a restart does now.
   describe('I1: restart during a run', () => {
-    it('a dev run interrupted by shutdown blocks the ticket with a French message, and a reply resumes it', async () => {
+    // Was: blocked, and a human's reply resumed it. Now nobody has to reply: the session is resumed by the factory.
+    it('a dev run interrupted by shutdown goes on by itself, on its session', async () => {
       const h = createHarness();
       h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
-      h.runner.enqueue({ hold: true });
+      h.runner.enqueue({ hold: true }, { events: [{ kind: 'text', text: 'Repris.' }] });
       await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
       const runId = (await h.ticket()).activeRunId!;
       await h.restart();
       expect((await h.store.getRun(runId))!.status).not.toBe('running');
-      expect(await h.ticket()).toMatchObject({ blocked: true, logical: 'dev' });
-      expect((await h.ticket()).activeRunId).toBeUndefined();
-      expect(h.tracker.activities('ls-1').at(-1)).toMatchObject({ type: 'elicitation', body: expect.stringContaining('redémarré') });
-      h.runner.enqueue({ events: [{ kind: 'text', text: 'Repris.' }] });
-      await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'reprends', author: 'L' });
       expect(h.runner.requests).toHaveLength(2);
       expect(h.runner.requests[1]).toMatchObject({ resume: true, claudeSessionId: h.runner.requests[0]!.claudeSessionId });
-      expect((await h.ticket()).blocked).toBe(false);
+      expect(await h.ticket()).toMatchObject({ blocked: false, logical: 'human_review' });
+      expect(JSON.stringify(h.tracker.activities('ls-1'))).not.toContain('redémarré');
     });
 
+    // Unchanged: a question is not asked again by itself (ORC-277); the notice now goes through the outbox.
     it('a question run interrupted by shutdown gets a French notice in its thread', async () => {
       const h = createHarness();
       h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });

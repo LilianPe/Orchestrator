@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { RepoVariables } from '../../src/config/repo-variables.js';
 import { measureTicket } from '../../src/core/measures.js';
 import { exportJournal } from '../../src/runtime/replay.js';
 import { createHarness } from '../helpers/harness.js';
@@ -7,9 +8,10 @@ const WORKTREE = '/tmp/factory-fake/p/REL-1';
 const SYNTAX = 'FAIL src/export.test.ts\nError: Transform failed with 1 error';
 
 /** A project whose delegation runs the `tests` step first (ORC-123), its red check in `mode`. */
-function harness(mode: 'measure' | 'blocking' = 'measure', sandboxed = false) {
+function harness(mode: 'measure' | 'blocking' = 'measure', sandboxed = false, repoVariables?: () => Promise<RepoVariables>) {
   const h = createHarness({
     sandboxed,
+    repoVariables,
     projectYaml: `version: 1
 on:
   ticket.delegated:
@@ -81,6 +83,14 @@ describe('the tests step and the red check (ORC-123)', () => {
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
     expect(skills(h)).toEqual(['/factory:tests']);
     expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: expect.stringContaining("panne d'infrastructure") });
+  });
+
+  it('runs the tests with the variables the repository declares, never its secrets (ORC-211)', async () => {
+    const h = harness('measure', true, async () => ({ env: { NODE_ENV: 'test' }, setupSecrets: { REGISTRY_TOKEN: 'registry-secret' }, missing: [] }));
+    h.sandboxes.execResult = (argv) => (argv[0] === 'git' ? { stdout: '', stderr: '', code: 0 } : { stdout: 'AssertionError: expected 1 to be 2', stderr: '', code: 1 });
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    const tests = h.sandboxes.execs.find((e) => e.argv.at(-1) === "npm test -- 'src/export.test.ts'");
+    expect(tests!.opts!.env).toEqual({ NODE_ENV: 'test' });
   });
 
   it('with sandboxes, reads the uncommitted files and runs the tests in a sandbox of its own, without network', async () => {

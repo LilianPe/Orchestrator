@@ -1,13 +1,12 @@
-import { useEffect, useReducer } from 'react';
-import { fetchSnapshot, post, subscribe } from './api.js';
+import { useCallback, useEffect, useReducer, useRef, useState, type ComponentProps } from 'react';
+import { fetchFlow, fetchSnapshot, post, subscribe } from './api.js';
+import { Flow } from './Flow.js';
 import { initialState, reducer } from './state.js';
-import type { RunLine, TicketView } from './types.js';
+import type { FlowView, RunLine, WorkingRunView } from './types.js';
 import { PRODUCT_NAME } from '../../src/product.js';
 
-const LABELS: Record<TicketView['logical'], string> = {
-  todo: 'Todo', dev: 'En cours', human_review: 'Review humaine', ai_review: 'Review IA', ready: 'Prêt à merger', done: 'Terminé',
-};
-const WAITING_HUMAN = new Set(['human_review', 'ready']);
+/** A burst of ticket updates reads the Flux once. */
+const FLOW_DEBOUNCE_MS = 300;
 
 function Line({ line }: { line: RunLine }) {
   switch (line.kind) {
@@ -24,22 +23,54 @@ function Line({ line }: { line: RunLine }) {
   }
 }
 
+/** The durations go on between two reads: only the Flux renders each second, not the session nor the journal. */
+function LiveFlow({ flow, flowAt, frozen, ...rest }: { flow: FlowView; flowAt: number; frozen: boolean } & Omit<ComponentProps<typeof Flow>, 'flow' | 'elapsedMs'>) {
+  const [now, setNow] = useState(() => Date.now());
+  const ticking = !frozen && flow.working.length > 0;
+  useEffect(() => {
+    if (!ticking) return;
+    const timer = setInterval(() => setNow(Date.now()), 1_000);
+    return () => clearInterval(timer);
+  }, [ticking]);
+  return <Flow flow={flow} elapsedMs={Math.max(0, now - flowAt)} {...rest} />;
+}
+
 export function App() {
   const [s, dispatch] = useReducer(reducer, initialState);
+  const lastRead = useRef(0);
+
+  // Reads overlap (the poll, a ticket update, Stop): only the latest one counts, an older answer is out of date.
+  const loadFlow = useCallback(() => {
+    const read = ++lastRead.current;
+    const latest = (action: Parameters<typeof dispatch>[0]) => {
+      if (read === lastRead.current) dispatch(action);
+    };
+    return fetchFlow().then((flow) => latest({ type: 'flow', flow, at: Date.now() })).catch(() => latest({ type: 'flowFailed' }));
+  }, []);
 
   useEffect(() => {
-    const load = () => fetchSnapshot().then((snapshot) => dispatch({ type: 'snapshot', snapshot })).catch(() => undefined);
-    void load();
+    const load = () => {
+      void fetchSnapshot().then((snapshot) => dispatch({ type: 'snapshot', snapshot })).catch(() => undefined);
+      void loadFlow();
+    };
+    load();
     const timer = setInterval(load, 10_000);
     const off = subscribe((message) => dispatch({ type: 'bus', message }), (connected) => dispatch({ type: 'connection', connected }));
     return () => {
       clearInterval(timer);
       off();
     };
-  }, []);
+  }, [loadFlow]);
+
+  useEffect(() => {
+    if (s.flowStale === 0) return;
+    const timer = setTimeout(() => void loadFlow(), FLOW_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [s.flowStale, loadFlow]);
+
+  const stop = (run: WorkingRunView) => void post(`/api/tickets/${run.projectId}/${run.ticketId}/stop`);
 
   const snap = s.snapshot;
-  const tickets = Object.values(s.tickets).sort((a, b) => b.updatedAt - a.updatedAt);
   const lines = s.selectedRun ? (s.runLines[s.selectedRun] ?? []) : [];
 
   return (
@@ -59,40 +90,16 @@ export function App() {
         )}
       </header>
       <main>
-        <section className="tickets">
-          <h2>Tickets</h2>
-          <table>
-            <thead>
-              <tr><th>Ticket</th><th>État</th><th>Attend</th><th>Coût</th><th></th></tr>
-            </thead>
-            <tbody>
-              {tickets.map((t) => (
-                <tr key={`${t.projectId}/${t.ticketId}`} className={t.activeRunId === s.selectedRun ? 'selected' : ''}>
-                  <td>
-                    <button className="link" onClick={() => dispatch({ type: 'select', runId: t.activeRunId })}>{t.ticketId}</button> {t.title}
-                  </td>
-                  <td>
-                    <span className={`pill ${t.logical}`}>{LABELS[t.logical]}</span>
-                    {t.blocked && <span className="pill blocked" title={t.blockReason}>bloqué</span>}
-                  </td>
-                  <td>{t.blocked || WAITING_HUMAN.has(t.logical) ? 'vous' : t.activeRunId ? "l'agent" : '—'}</td>
-                  <td className="num">{t.costUsd.toFixed(2)} $</td>
-                  <td>
-                    {t.prUrl && <a href={t.prUrl} target="_blank" rel="noreferrer">PR</a>}{' '}
-                    {t.activeRunId && <button onClick={() => post(`/api/tickets/${t.projectId}/${t.ticketId}/stop`)}>Stop</button>}
-                  </td>
-                </tr>
-              ))}
-              {!tickets.length && (
-                <tr><td colSpan={5} className="empty">Aucun ticket. Déléguez un ticket à l’agent dans Linear.</td></tr>
-              )}
-            </tbody>
-          </table>
-        </section>
+        <div className="flow">
+          {s.flowFailed && <p className="flow-failed" role="alert">{s.flow ? 'Flux non à jour : sa lecture a échoué, ce qui suit peut être dépassé. Nouvel essai sous 10 s.' : 'Flux indisponible : sa lecture a échoué. Nouvel essai sous 10 s.'}</p>}
+          {s.flow ? (
+            <LiveFlow flow={s.flow} flowAt={s.flowAt} frozen={s.flowFailed} selectedRun={s.selectedRun} onSelect={(runId) => dispatch({ type: 'select', runId })} onStop={stop} />
+          ) : !s.flowFailed && <section><p className="empty">Chargement du Flux…</p></section>}
+        </div>
         <section className="run">
           <h2>Session en direct {s.selectedRun ? `· ${s.selectedRun.slice(0, 8)}` : ''}</h2>
           <div className="lines">
-            {lines.length ? lines.map((l, i) => <Line key={i} line={l} />) : <p className="empty">Choisissez un ticket en cours.</p>}
+            {lines.length ? lines.map((l, i) => <Line key={i} line={l} />) : <p className="empty">{s.selectedRun ? 'Rien reçu de ce run depuis l’ouverture de la page.' : 'Choisissez un run dans Working.'}</p>}
           </div>
         </section>
         <section className="journal">

@@ -44,6 +44,8 @@ Attendu : les 4 services démarrés sur un moteur rootless ; TLS par `caddy`, 40
 
 `FACTORY_ALLOW_ROOTFUL_ENGINE=1` laisse tourner ce test sur un poste (Docker Desktop) : il saute alors la vérification « rootless » et vérifie le refus. Ce résultat ne prouve rien pour le serveur.
 
+Une authentification de Claude Code est obligatoire : `ANTHROPIC_API_KEY`, ou `CLAUDE_TOKEN_1` avec un compte actif dans `factory.yml`.
+
 Puis, à la main : `docker compose up -d`, interface sur `https://<domaine>`, même comportement que 3. Avec `concurrency: 1`, déléguer deux tickets : un seul runner tourne (`docker ps --filter label=factory.attempt`).
 
 Avec `host` différent de `127.0.0.1`, le démon refuse de démarrer sans `FACTORY_UI_PASSWORD` : l'interface, `/api/*` et `/oauth/start` demandent alors une authentification HTTP Basic (nom d'utilisateur libre, mot de passe = `FACTORY_UI_PASSWORD`). Restent ouverts : `POST /webhooks/linear` (signé), `GET /oauth/callback` et `/agent/*` (jeton de run). Vérifier : `curl -i https://<domaine>/api/state` répond 401.

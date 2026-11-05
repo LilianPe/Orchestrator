@@ -1,8 +1,8 @@
 /**
  * The daemon the chaos test kills (ORC-163): the orchestrator, its worker, its outbox executor and
  * its timers on a real store (Postgres, or a SQLite file), with the fake adapters of the harness,
- * started as `factory up` starts it (`recover`, the recovery notices, the timers, the tick, the
- * worker's poll). The driver (`chaos.test.ts`) talks to it over IPC:
+ * started as `factory up` starts it (`recover`, the timers, the tick, the heartbeat, the worker's
+ * poll). Its runs die with it, as containers lost: each life starts their steps again. The driver (`chaos.test.ts`) talks to it over IPC:
  *
  * - `{ type: 'event', event }`: accepted (written to the inbox), then answered `{ type: 'ack', id }`,
  *   as a webhook is answered 200; `{ type: 'nack', id }` if the write failed;
@@ -61,13 +61,14 @@ if (existsSync(callsFile)) {
     await write.apply(h.tracker, JSON.parse(call.detail) as unknown[]);
   }
 }
-// Runs that last a few tens of milliseconds, so that kills cut some of them; no text from them: the
-// relay posts nothing, and each visible activity is an effect's.
+// Runs that last a few tens of milliseconds, or up to CHAOS_RUN_MS, so that kills cut some of them; no
+// text from them: the relay posts nothing, and each visible activity is an effect's.
+const RUN_MS = Number(process.env['CHAOS_RUN_MS'] ?? 150);
 h.runner.enqueue(...Array.from({ length: 10_000 }, () => ({ events: [], hold: true })));
 const start = h.runner.start.bind(h.runner);
 h.runner.start = (req) => {
   const handle = start(req);
-  setTimeout(() => h.runner.release(req.runId), 10 + Math.random() * 150);
+  setTimeout(() => h.runner.release(req.runId), 10 + Math.random() * RUN_MS);
   return handle;
 };
 
@@ -88,6 +89,6 @@ await h.orch.recover();
 const timers = new TimerService(h.store, clock, () => h.orch.wake(), (err) => log(`timers: ${err.message}`));
 timers.start(20);
 setInterval(() => void h.orch.tick(), 50);
-await h.orch.announceRecovery();
+setInterval(() => h.orch.supervise().catch((err: Error) => log(`heartbeat: ${err.message}`)), 50);
 await h.orch.startWorker(20);
 send({ type: 'ready' });

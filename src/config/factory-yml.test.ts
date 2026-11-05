@@ -2,7 +2,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { FactoryYmlError, loadFactoryYml, parseFactoryYml } from './factory-yml.js';
+import { activeClaudeToken, FactoryYmlError, loadFactoryYml, parseFactoryYml } from './factory-yml.js';
 
 const PEM = '-----BEGIN RSA PRIVATE KEY-----\\nabc\\n-----END RSA PRIVATE KEY-----';
 const ENV = {
@@ -107,6 +107,34 @@ describe('factory.yml (ORC-209, part B)', () => {
 
   it('refuses a repository that is not org/name', () => {
     expect(violations('repos: [{ linear_team: ORC, github: Orchestrator }]\n')).toEqual(['repos[0].github : `<org>/<dépôt>` attendu']);
+  });
+
+  describe('the values of a repository (ORC-211)', () => {
+    const env = { ...ENV, ORG_REGISTRY_TOKEN: 'registry-secret-1', API: 'https://api.exemple.com' };
+
+    it('reads its variables, in clear or env:NAME, and its secrets, env:NAME only', () => {
+      const c = parseFactoryYml('repos:\n  - linear_team: ORC\n    github: org/app\n    env: { NODE_ENV: test, API_URL: env:API }\n    secrets: { REGISTRY_TOKEN: env:ORG_REGISTRY_TOKEN }\n', env);
+      expect(c.repos).toEqual([{ linearTeam: 'ORC', github: 'org/app', env: { NODE_ENV: 'test', API_URL: 'https://api.exemple.com' }, secrets: { REGISTRY_TOKEN: 'registry-secret-1' } }]);
+    });
+
+    it('refuses a secret written in the file', () => {
+      expect(violations('repos: [{ linear_team: ORC, github: org/app, secrets: { REGISTRY_TOKEN: en-clair-123 } }]\n', env).join()).toContain('repos[0].secrets.REGISTRY_TOKEN');
+    });
+
+    it('names the variable that is missing', () => {
+      expect(violations('repos: [{ linear_team: ORC, github: org/app, secrets: { REGISTRY_TOKEN: env:NOPE } }]\n', env).join()).toContain('NOPE');
+    });
+
+    it('refuses a secret of fewer than 8 characters: sealing it would purge any file that holds those letters', () => {
+      expect(violations('repos: [{ linear_team: ORC, github: org/app, secrets: { REGISTRY_TOKEN: env:SHORT } }]\n', { ...env, SHORT: 'abc' }).join()).toContain('repos[0].secrets.REGISTRY_TOKEN');
+    });
+
+    it('gives the token of the active account, none without a claude section', () => {
+      expect(activeClaudeToken(parseFactoryYml(EXAMPLE, ENV))).toBe('tok-1');
+      expect(activeClaudeToken(parseFactoryYml(EXAMPLE.replace('active: compte-1', 'active: compte-2'), ENV))).toBe('tok-2');
+      expect(activeClaudeToken(parseFactoryYml('concurrency: 1\n', ENV))).toBeUndefined();
+      expect(activeClaudeToken(undefined)).toBeUndefined();
+    });
   });
 
   it('is optional: no file in the home, no configuration', () => {

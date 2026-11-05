@@ -9,7 +9,7 @@ export const TRANSCRIPT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 export const MASK = '[masqué]';
 
 /** Environment variables whose value is a secret: tokens, keys, passwords, connection strings. */
-const SECRET_NAME = /(TOKEN|SECRET|PASSWORD|PASSWD|_PASS|_PWD|APIKEY|_KEY|CREDENTIALS?|DATABASE_URL)$/i;
+export const SECRET_NAME = /(TOKEN|SECRET|PASSWORD|PASSWD|_PASS|_PWD|APIKEY|_KEY|CREDENTIALS?|DATABASE_URL)$/i;
 
 /** Shorter values are left alone: masking "1" or "true" everywhere would wreck the transcript. */
 const MIN_SECRET_LENGTH = 8;

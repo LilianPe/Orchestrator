@@ -52,7 +52,8 @@ Dans un fichier `.env` à côté de `compose.yaml` (non versionné). `docker com
 
 | Variable | Obligatoire | Rôle |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | oui | Authentification de Claude Code. |
+| `CLAUDE_TOKEN_1`, `CLAUDE_TOKEN_2` | l'un de ces moyens | Jetons des comptes Claude Code, lus par `factory.yml` (`token: env:CLAUDE_TOKEN_1`) ; le compte `claude.active` est le seul identifiant des runs. |
+| `ANTHROPIC_API_KEY` | l'un de ces moyens | Authentification de Claude Code sans compte actif, pour les runs de ce conteneur, qui tournent encore à côté du démon (jusqu'à ORC-179). Compose ne la réclame plus : sans aucun des deux, les runs échouent à l'authentification. |
 | `GH_TOKEN` | oui | `gh` et push HTTPS. Droits : [`github.md`](github.md#permissions-nécessaires). |
 | `FACTORY_UI_PASSWORD` | oui | Mot de passe de l'interface (le conteneur écoute hors bouclage). |
 | `FACTORY_DIR` | oui | Chemin absolu sur le serveur (voir ci-dessus). |
@@ -140,7 +141,7 @@ La pile a tourné une fois sous Docker Desktop, qui n'est pas rootless. Ces poin
 
 `SIGTERM` (`docker compose stop`) déclenche un arrêt propre : minuteries, relevé des PR et réconciliation coupés ; chaque run en cours reçoit SIGINT (SIGKILL après 10 s) et est enregistré comme **interrompu** ; le démon attend la fin de ces runs, ferme les connexions SSE et la base. `compose.yaml` lui laisse 30 s (`stop_grace_period`).
 
-Au démarrage suivant, Relais reprend la main sur ce qui a été coupé (par un arrêt ou un crash) ; détails dans [`exploitation.md`](exploitation.md#arrêt-redémarrage-et-runs-interrompus). Les demandes en file, les minuteries (retours regroupés) et l'état de pause sont conservés dans `relais.db`.
+Au démarrage suivant, Relais reprend seul ce qui a été coupé (par un arrêt ou un crash) : aucun ticket n'est bloqué pour autant ; détails dans [`exploitation.md`](exploitation.md#arrêt-redémarrage-et-runs-interrompus). Les demandes en file, les minuteries (retours regroupés) et l'état de pause sont conservés dans `relais.db`.
 
 Sous compose, cet état est dans Postgres, pas dans un fichier.
 

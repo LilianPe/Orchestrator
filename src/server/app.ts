@@ -7,9 +7,11 @@ import type { Tracker } from '../adapters/tracker/types.js';
 import type { BusMessage, EventBus } from '../core/bus.js';
 import type { Clock } from '../core/clock.js';
 import { pendingLabels } from '../core/attempt-labels.js';
+import { measureTicket } from '../core/measures.js';
 import { TRUSTED, type FactoryEvent } from '../core/types.js';
 import type { RunRecord, Store } from '../store/types.js';
 import { handleMcp } from '../api/mcp.js';
+import { buildFlow, flowKey } from './flow.js';
 import { readStatic } from './static.js';
 import { PRODUCT_NAME } from '../product.js';
 
@@ -149,6 +151,23 @@ export function createApp(d: ServerDeps): Hono {
       budgetUsd: d.dailyBudgetUsd ?? null,
       capacity: d.capacity(),
     });
+  });
+
+  app.get('/api/flow', async (c) => {
+    const [tickets, running, queue] = await Promise.all([d.store.listTickets(), d.store.runsByStatus('running'), d.store.listQueue()]);
+    const verifying = (await Promise.all(tickets.filter((t) => t.verifyingRunId).map((t) => d.store.getRun(t.verifyingRunId!)))).filter((r) => r !== undefined);
+    // One ticket whose measures cannot be read loses its tokens, not the whole page.
+    const measured = (r: RunRecord) =>
+      measureTicket(d.store, r.projectId, r.ticketId).then(
+        (m) => [flowKey(r), m] as const,
+        (err: Error) => {
+          d.bus.publish({ kind: 'log', level: 'error', message: `measures of ${r.ticketId}: ${err.message}`, at: d.clock.now() });
+          return undefined;
+        },
+      );
+    const atWork = new Map([...running, ...verifying].map((r) => [flowKey(r), r]));
+    const measures = new Map((await Promise.all([...atWork.values()].map(measured))).filter((m) => m !== undefined));
+    return c.json(buildFlow({ now: d.clock.now(), tickets, running, verifying, queue, measures }));
   });
 
   app.get('/api/events/recent', async (c) => c.json(await d.store.recentEvents(100, c.req.query('ticket') || undefined)));
