@@ -92,12 +92,18 @@ const targets = new WeakMap<object, { host: string; port: number }>();
 const served = new WeakSet<object>();
 
 /** ponytail: Windows named pipes, for the unit tests only; sandboxes need a Linux daemon (a Unix socket file). */
-const PIPE = process.platform === 'win32';
+export const PIPE = process.platform === 'win32';
 
 /** HTTP/1.1 alone: an h2-only client fails the handshake, and is journaled by clientError. */
 const ALPN = ({ protocols }: { protocols: string[] }) => (protocols.includes('http/1.1') ? 'http/1.1' : undefined);
 
 const samePolicy = (a: EgressPolicy, b: EgressPolicy) => a.level === b.level && a.allow.length === b.allow.length && a.allow.every((h, i) => h === b.allow[i]);
+
+/** The journal of a run under the proxy's directory: the daemon reads it there, whichever process wrote it (ORC-296). */
+export function egressJournalPath(dir: string, runId: string): string {
+  if (!/^[\w.-]+$/.test(runId)) throw new Error(`egress: invalid run id ${runId}`);
+  return join(dir, `${runId}.jsonl`);
+}
 
 /**
  * The factory's egress proxy (ORC-213): the only way out of a sandbox, which runs `--network none`
@@ -134,8 +140,7 @@ export class EgressProxy {
 
   /** A JSONL per run, read into the base when the run's sandbox is destroyed (ORC-296), purged at 30 days. */
   journalPath(runId: string): string {
-    if (!/^[\w.-]+$/.test(runId)) throw new Error(`egress: invalid run id ${runId}`);
-    return join(this.o.dir, `${runId}.jsonl`);
+    return egressJournalPath(this.o.dir, runId);
   }
 
   /** Whether this process listens for the run: a container from before a restart waits on a socket that is gone, until `open`. */

@@ -71,7 +71,6 @@ describe('attempt labels', () => {
     expect(l).toMatchObject({ factoryCommit: null, effort: null, image: null, risk: null, registryCommit: null, deliveredFactIds: null });
     expect(l.fingerprints.knowledgeIndex).toBeNull();
     expect(pendingLabels(l)).toEqual({
-      factoryCommit: ['ORC-203'],
       effort: ['ORC-136', 'ORC-187'],
       image: ['ORC-204'],
       risk: ['ORC-206'],
