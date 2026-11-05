@@ -269,14 +269,10 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       serial: labelsTurn,
       secret: webhookSecret,
       accept,
-      // The time the ack was posted is the first sign of life a measure reads (ORC-235).
-      ack: async (sessionId, eventId) => {
-        await trackerSwitch.activity(sessionId, { type: 'thought', body: 'Pris en compte.' });
-        await store.markAcked(eventId, clock.now()).catch((err: Error) => log(`ack of ${eventId} posted, its time not recorded: ${err.message}`));
-      },
       log,
       ctx: {
         projectIdForTeam: (k) => projects.find((p) => p.teamKey === k)?.id,
+        firstProject: () => projects[0]?.id,
         logicalFor: (pid, name) => {
           const p = projects.find((x) => x.id === pid);
           return p ? (logicalFromName(p.workflow.states, name) ?? null) : null;
@@ -299,7 +295,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     const timers = new TimerService(store, clock, () => orchestrator.wake(), (e) => log(`timers: ${e.message}`));
     const poller = new PrPoller({ store, forge, projects, submit: accept, clock, log });
     reconcileProject = async (p) => {
-      await reconcileOnce({ tracker: trackerSwitch, store, projects: [p], submit: accept, clock, log, serial: labelsTurn });
+      await reconcileOnce({ tracker: trackerSwitch, store, projects: [p], allProjects: projects, submit: accept, clock, log, serial: labelsTurn });
       await poller.pollOnce(p.id);
     };
     // GitHub webhooks (ORC-134) write to the inbox beside the poll (each reconciliation, ORC-185; every 30 s without

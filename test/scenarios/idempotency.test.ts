@@ -93,6 +93,16 @@ describe('idempotency table (ORC-162, docs/idempotence.md)', () => {
     expect(await result()).toMatchObject({ kind: 'post_output', deduplicated: true });
   });
 
+  it('Accusé (ORC-171): a replayed ack finds its comment and its activity, writes neither again, keeps the first time', async () => {
+    const { h, settled, result } = replaying('ack');
+    h.runner.enqueue({ events: [{ kind: 'text', text: 'PR ouverte.' }] });
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1', ack: true });
+    await settled();
+    expect(h.tracker.comments('REL-1')).toEqual(['Bien reçu.']);
+    expect(h.tracker.activities('ls-1').filter((a) => a.type === 'thought' && !a.ephemeral)).toEqual([{ type: 'thought', body: 'Bien reçu.' }]);
+    expect(await result()).toMatchObject({ kind: 'ack', deduplicated: true, ref: 'comment-REL-1-1' });
+  });
+
   it('Labels: a replayed label change finds the final state already there and writes nothing', async () => {
     const { h, settled, result } = replaying('labels', { projectYaml: CRASH_WORKFLOW });
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });

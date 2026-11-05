@@ -82,7 +82,9 @@ const whose = (r: TicketRef): string => r.ticketId ?? `the events without a tick
  * - **A failure holds its ticket.** A row whose preparation or store transaction throws (the
  *   tracker, the database) stays pending and is retried with a backoff (`PROCESS_RETRY`); the later
  *   rows of its ticket (or, for an event without a ticket, of its project) wait behind it and go
- *   once it passes. Past the last retry, the row and those behind it wait for the next start.
+ *   once it passes, or once the store answers it `waiting`: the store keeps the order from there,
+ *   and an older row may be among them (ORC-314).
+ *   Past the last retry, the row and those behind it wait for the next start.
  * - **A poison event is dead-lettered (ORC-175).** A row whose upcast or decision (`decide`,
  *   `reduce`) throws would throw again: it is not retried. It goes to `dead_letter`, marked
  *   processed, with the event that blocks its ticket written to the inbox, in one transaction; the
@@ -323,6 +325,11 @@ export class Worker {
       }
       if (outcome.status === 'waiting') {
         this.waited.set(row.id, row);
+        // A shutdown leaves the rows behind it for the next start.
+        if (holder === row.id && !this.stopped) {
+          this.releaseHold(row, key);
+          return 'done';
+        }
         return outcome.backoff ? 'held' : 'waiting';
       }
       this.passed(row, key);
@@ -400,16 +407,29 @@ export class Worker {
   private unwait(key: string): void {
     const rows = [...this.waited.values()].filter((row) => ticketKey(row) === key);
     if (rows.length === 0) return;
-    for (const row of rows) {
-      this.waited.delete(row.id);
-      this.queuedIds.add(row.id);
-    }
-    this.queued.set(key, [...rows, ...(this.queued.get(key) ?? [])]);
+    for (const row of rows) this.waited.delete(row.id);
+    this.requeueFirst(key, rows);
   }
 
   /** No retry left for this row in this process: it waits for the next start. */
   private givenUp(id: string): boolean {
     return (this.failures.get(id) ?? 0) >= this.retry.attempts || this.stopped;
+  }
+
+  /**
+   * A failed row got through its retry and found its turn had not come: it holds nothing back any more,
+   * and an older row may be behind it (ORC-314). The rows behind it go at the head of its ticket's
+   * queue, ahead of the younger rows read meanwhile. Only from the ticket's own task.
+   */
+  private releaseHold(row: StoredEvent, key: string): void {
+    this.requeueFirst(key, [...(this.behind.get(key)?.values() ?? [])]);
+    this.passed(row, key);
+  }
+
+  /** Puts rows back at the head of their ticket's queue. Only from its own task: none of its rows is at the store now. */
+  private requeueFirst(key: string, rows: StoredEvent[]): void {
+    for (const row of rows) this.queuedIds.add(row.id);
+    this.queued.set(key, [...rows, ...(this.queued.get(key) ?? [])]);
   }
 
   /** A row went through: if it held its key, the rows behind it are taken up again. */
