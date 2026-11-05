@@ -33,7 +33,7 @@ export interface AttemptLabels {
   queue: QueueName;
   model: string;
   factoryVersion: string;
-  /** The factory build's commit, from `FACTORY_COMMIT`; null until ORC-203 sets it at build time. */
+  /** The factory build's commit, from `FACTORY_COMMIT`, set at build time (ORC-203); null on a build not given it. */
   factoryCommit: string | null;
   effort: string | null;
   image: string | null;
@@ -45,7 +45,6 @@ export interface AttemptLabels {
 
 /** Labels nothing in the factory provides yet, and the tickets that will. */
 const PENDING_LABELS = {
-  factoryCommit: ['ORC-203'],
   effort: ['ORC-136', 'ORC-187'],
   image: ['ORC-204'],
   risk: ['ORC-206'],

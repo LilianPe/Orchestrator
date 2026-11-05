@@ -1,6 +1,11 @@
 import type { QueueClaim, QueueItem, Store } from '../store/types.js';
 import type { QueueName } from './types.js';
 
+/** Dev runs at once: `concurrency` of factory.yml (ORC-203), else `limits.parallel_sessions` of the workflow. */
+export function devCapacity(concurrency: number | undefined, parallelSessions: number | undefined): number {
+  return concurrency ?? parallelSessions ?? 3;
+}
+
 export class Scheduler {
   private held = new Map<string, { queue: QueueName; slot: number }>();
 

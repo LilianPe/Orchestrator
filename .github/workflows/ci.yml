@@ -116,6 +116,14 @@ jobs:
       # Pinned, as docker/runner.Dockerfile: a claude bump is a change of its own.
       - if: env.HAS_CLAUDE_TOKEN == 'true'
         run: npm install -g @anthropic-ai/claude-code@2.1.316
+      # The image itself (ORC-203): built under the rootless engine, its tools checked and its layers scanned.
+      # The other isolation tests stay on the public node image.
+      - name: Check the runner image
+        run: |
+          podman build -f docker/runner.Dockerfile -t localhost/factory-runner:ci docker
+          npx vitest run --project isolation test/isolation/runner-image.test.ts test/isolation/isolation-07-secrets.test.ts test/isolation/isolation-07-layers.test.ts
+        env:
+          FACTORY_RUNNER_IMAGE: localhost/factory-runner:ci
       # Isolation n° 11 runs a real claude -p when this secret is set, and is skipped without it (forks too).
       - run: npm run test:isolation
         env:
