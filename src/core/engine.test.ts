@@ -1,9 +1,10 @@
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { loadWorkflow } from '../config/load-workflow.js';
 import type { AgentOutput, AttemptOutcome } from './agent-output.js';
 import type { Decision } from './decision.js';
-import { decide, isFenced, RECONCILE_MS, reconcileTicket, SENSITIVE_PATHS, sensitivePathsAtLaunch, taintedKnowledge } from './engine.js';
+import { CUT_RELAUNCHES, CUT_WINDOW_MS } from '../store/types.js';
+import { CUT_BOUND_REASON, decide, isFenced, RECONCILE_MS, reconcileTicket, SENSITIVE_PATHS, sensitivePathsAtLaunch, taintedKnowledge } from './engine.js';
 import { reduce } from './reduce.js';
 import { newTicketState, type EventPayloads, type EventType, type FactoryEvent, type TicketState } from './types.js';
 
@@ -759,6 +760,138 @@ describe('decide — the tests step and the red check (ORC-123)', () => {
   it('a human relaunch gives the red loop its whole bound back', () => {
     const out = decide(ticket({ logical: 'dev', blocked: true, linearSessionId: 's1', redAttempts: 2 }), ev('session.prompted', { linearSessionId: 's1', body: 'vas-y', author: 'L' }), workflow);
     expect(out.events).toContainEqual({ type: 'ticket.patched', patch: { redAttempts: 0 } });
+  });
+});
+
+describe('decide — an attempt lost (ORC-220)', () => {
+  const lost = (cause: 'restart' | 'lease', runId = 'r1') => ev('run.lost', { runId, job: 'dev', cause });
+  const active = (patch: Partial<TicketState> = {}) => ticket({ logical: 'dev', delegated: true, activeRunId: 'r1', activeJob: 'dev', ...patch });
+
+  it('a dev attempt cut by a restart is started again, counted at the time of the event, and the lease bound is untouched', () => {
+    const out = decide(active({ leaseRelaunches: 1 }), lost('restart'), workflow);
+    expect(out.effects).toContainEqual({ kind: 'start_run', job: 'dev', relaunchOf: 'r1' });
+    expect(out.events).toEqual([{ type: 'ticket.patched', patch: { cutRelaunches: [1000] } }]);
+  });
+
+  it('the first expired lease relaunches once and counts it; the second blocks', () => {
+    const first = decide(active(), lost('lease'), workflow);
+    expect(first.effects).toContainEqual({ kind: 'start_run', job: 'dev', relaunchOf: 'r1' });
+    expect(first.events).toEqual([{ type: 'ticket.patched', patch: { leaseRelaunches: 1, cutRelaunches: [1000] } }]);
+    const second = decide(active({ activeRunId: 'r2', leaseRelaunches: 1 }), lost('lease', 'r2'), workflow);
+    expect(second.effects.some((e) => e.kind === 'start_run')).toBe(false);
+    expect(second.events).toEqual([{ type: 'ticket.blocked', reason: expect.stringContaining('bail') }]);
+    expect(second.effects).toContainEqual(expect.objectContaining({ kind: 'activity', type: 'elicitation' }));
+    expect(second.effects).toContainEqual({ kind: 'labels', add: ['Bloqué'], remove: [] });
+  });
+
+  it('is fenced for an attempt that is not the active one', () => {
+    const out = decide(active({ activeRunId: 'r2' }), lost('restart'), workflow);
+    expect(isFenced(out)).toBe(true);
+    expect(out.effects).toEqual([]);
+  });
+
+  it.each([
+    ['blocked', { blocked: true, blockReason: 'Arrêté à la demande' }],
+    ['not delegated', { delegated: false }],
+    ['merged', { prState: 'MERGED' as const }],
+  ])('a ticket %s is not started again, and no longer holds the attempt', (_, patch) => {
+    const t = active(patch);
+    expect(decide(t, lost('restart'), workflow).effects).toEqual([]);
+    expect(reduce(t, lost('restart'))).toMatchObject({ activeRunId: undefined, activeJob: undefined });
+  });
+
+  it('a question lost is told in its own thread, never started again, and leaves the ticket alone', () => {
+    const question = ev('run.lost', { runId: 'q1', job: 'ask', cause: 'restart' });
+    const out = decide(active({ logical: 'todo', delegated: false, activeRunId: 'r0' }), question, workflow);
+    expect(out.effects).toEqual([{ kind: 'activity', type: 'error', body: expect.stringContaining('Reposez la question'), runId: 'q1' }]);
+    expect(reduce(active({ activeRunId: 'r0' }), question)).toMatchObject({ activeRunId: 'r0' });
+  });
+
+  it('a finished attempt gives the lease bound back, a human relaunch too', () => {
+    const done = decide(active({ leaseRelaunches: 1 }), ev('run.finished', { runId: 'r1', job: 'dev', outcome: 'failure', costUsd: 0, turns: 1, lastText: '' }), workflow);
+    expect(done.events).toContainEqual({ type: 'ticket.patched', patch: { leaseRelaunches: 0 } });
+    const human = decide(ticket({ logical: 'dev', delegated: true, blocked: true, linearSessionId: 's1', leaseRelaunches: 1 }), ev('session.prompted', { linearSessionId: 's1', body: 'vas-y', author: 'L' }), workflow);
+    expect(human.events).toContainEqual({ type: 'ticket.patched', patch: { leaseRelaunches: 0 } });
+  });
+
+  it('a check lost runs again, carrying the output of its run', () => {
+    const output = { status: 'done', summary: 's', tests_added: [], why: '', assumptions: [], risks: [], untested: [], review_hints: [] } as never;
+    const out = decide(active({ activeRunId: undefined, verifyingRunId: 'r1' }), ev('verify.lost', { runId: 'r1', job: 'dev', output }), workflow);
+    expect(out.effects).toEqual([{ kind: 'run_verify', runId: 'r1', job: 'dev', output }]);
+    expect(out.events).toEqual([{ type: 'ticket.patched', patch: { cutRelaunches: [1000] } }]);
+    expect(reduce(active({ verifyingRunId: 'r1' }), ev('verify.lost', { runId: 'r1', job: 'dev' }))).toMatchObject({ verifyingRunId: 'r1' });
+  });
+
+  it('a check lost is fenced when it is not the one awaited', () => {
+    const out = decide(active({ verifyingRunId: 'r2' }), ev('verify.lost', { runId: 'r1', job: 'dev' }), workflow);
+    expect(isFenced(out)).toBe(true);
+    expect(out.effects).toEqual([]);
+  });
+});
+
+describe('decide — the bound of the relaunches after a cut (ORC-220)', () => {
+  const at = (ms: number, e: FactoryEvent): FactoryEvent => ({ ...e, at: ms });
+  const NOW = 10 * CUT_WINDOW_MS;
+  const full = Array.from({ length: CUT_RELAUNCHES }, (_, i) => NOW - i - 1);
+  const lost = (cause: 'restart' | 'lease') => at(NOW, ev('run.lost', { runId: 'r1', job: 'dev', cause }));
+  const active = (patch: Partial<TicketState> = {}) => ticket({ logical: 'dev', delegated: true, activeRunId: 'r1', activeJob: 'dev', ...patch });
+
+  it.each(['restart', 'lease'] as const)('a run lost by %s past the limit is not started again: blocked, with its stable reason', (cause) => {
+    const out = decide(active({ cutRelaunches: full }), lost(cause), workflow);
+    expect(out.effects.some((e) => e.kind === 'start_run')).toBe(false);
+    expect(out.events).toEqual([{ type: 'ticket.blocked', reason: expect.stringMatching(CUT_BOUND_REASON) }]);
+    expect(out.effects).toContainEqual(expect.objectContaining({ kind: 'activity', type: 'elicitation' }));
+    expect(out.effects).toContainEqual({ kind: 'labels', add: ['Bloqué'], remove: [] });
+  });
+
+  it('forgets the relaunches out of the window, exactly at its edge', () => {
+    const out = decide(active({ cutRelaunches: [NOW - CUT_WINDOW_MS, NOW - 2, NOW - 1] }), lost('restart'), workflow);
+    expect(out.effects).toContainEqual({ kind: 'start_run', job: 'dev', relaunchOf: 'r1' });
+    expect(out.events).toEqual([{ type: 'ticket.patched', patch: { cutRelaunches: [NOW - 2, NOW - 1, NOW] } }]);
+  });
+
+  it('a check lost past the limit runs no more: the ticket no longer waits for its verdict, a relaunch can start', () => {
+    const t = active({ activeRunId: undefined, verifyingRunId: 'r1', cutRelaunches: full });
+    const out = decide(t, at(NOW, ev('verify.lost', { runId: 'r1', job: 'dev' })), workflow);
+    expect(out.effects.some((e) => e.kind === 'run_verify')).toBe(false);
+    expect(out.events).toContainEqual({ type: 'ticket.blocked', reason: expect.stringMatching(CUT_BOUND_REASON) });
+    let after = reduce(t, at(NOW, ev('verify.lost', { runId: 'r1', job: 'dev' })));
+    for (const x of out.events) after = reduce(after, x);
+    expect(after).toMatchObject({ blocked: true, verifyingRunId: undefined });
+  });
+
+  it('a check lost past the limit on a ticket already blocked keeps its reason', () => {
+    const t = active({ activeRunId: undefined, verifyingRunId: 'r1', cutRelaunches: full, blocked: true, blockReason: 'Arrêté à la demande' });
+    const out = decide(t, at(NOW, ev('verify.lost', { runId: 'r1', job: 'dev' })), workflow);
+    expect(out.events).toEqual([{ type: 'work.cancelled' }]);
+    expect(out.effects).toEqual([]);
+  });
+
+  it('a question lost asks for no relaunch: it is not counted', () => {
+    const out = decide(active({ cutRelaunches: full }), at(NOW, ev('run.lost', { runId: 'q1', job: 'ask', cause: 'restart' })), workflow);
+    expect(out.events).toEqual([]);
+    expect(out.effects).toEqual([expect.objectContaining({ kind: 'activity', type: 'error' })]);
+  });
+
+  it('the normal end of an attempt does not reset the count; a human relaunch does', () => {
+    const done = decide(active({ cutRelaunches: full }), ev('run.finished', { runId: 'r1', job: 'dev', outcome: 'success', costUsd: 0, turns: 1, lastText: '' }), workflow);
+    expect(JSON.stringify(done.events)).not.toContain('cutRelaunches');
+    const human = decide(ticket({ logical: 'dev', delegated: true, blocked: true, linearSessionId: 's1', cutRelaunches: full }), ev('session.prompted', { linearSessionId: 's1', body: 'vas-y', author: 'L' }), workflow);
+    expect(human.events).toContainEqual({ type: 'ticket.patched', patch: { cutRelaunches: [] } });
+  });
+
+  it('an old ticket, without the field, gets no reset: its recorded decisions replay as they were', () => {
+    const human = decide(ticket({ logical: 'dev', delegated: true, blocked: true, linearSessionId: 's1' }), ev('session.prompted', { linearSessionId: 's1', body: 'vas-y', author: 'L' }), workflow);
+    expect(JSON.stringify(human.events)).not.toContain('cutRelaunches');
+  });
+
+  it('the decision reads the time of the event, not the clock: the same event decides the same, whenever', () => {
+    const spy = vi.spyOn(Date, 'now').mockReturnValue(NOW + 100 * CUT_WINDOW_MS);
+    try {
+      expect(decide(active({ cutRelaunches: full }), lost('restart'), workflow).effects.some((e) => e.kind === 'start_run')).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 

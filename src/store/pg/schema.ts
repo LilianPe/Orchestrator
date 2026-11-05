@@ -1,12 +1,14 @@
 import { sql } from 'drizzle-orm';
 import {
   bigint,
+  boolean,
   check,
   doublePrecision,
   index,
   integer,
   jsonb,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   uniqueIndex,
@@ -286,7 +288,58 @@ export const artifacts = pgTable(
   ],
 );
 
-/** The twelve public tables, in migration order. */
+/**
+ * A sandboxed run's security log (ORC-296): read from its two journals when its sandbox is destroyed,
+ * once (the run is the key); the lines left out, malformed or forged, counted. Its entries below,
+ * numbered in journal order (`n`).
+ */
+export const securityLogs = pgTable(
+  'security_logs',
+  {
+    runId: text('run_id').primaryKey(),
+    projectId: text('project_id').notNull(),
+    ticketId: text('ticket_id').notNull(),
+    readAt: timestamp('read_at', { withTimezone: true, mode: 'date' }).notNull(),
+    skippedEgress: integer('skipped_egress').notNull(),
+    skippedRefusals: integer('skipped_refusals').notNull(),
+  },
+  (t) => [index('security_logs_ticket_id_idx').on(t.ticketId)],
+);
+
+/** Every request of a run through the egress proxy (ORC-213), allowed or refused. */
+export const egressRequests = pgTable(
+  'egress_requests',
+  {
+    runId: text('run_id').notNull(),
+    n: integer('n').notNull(),
+    at: timestamp('at', { withTimezone: true, mode: 'date' }).notNull(),
+    method: text('method').notNull(),
+    host: text('host').notNull(),
+    port: integer('port'),
+    path: text('path'),
+    ok: boolean('ok').notNull(),
+    reason: text('reason'),
+    up: bigint('up', { mode: 'number' }).notNull(),
+    down: bigint('down', { mode: 'number' }).notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.runId, t.n] }), index('egress_requests_at_idx').on(t.at)],
+);
+
+/** The refusals of the pack's PreToolUse hook (ORC-285), from the agent's log: rule checked, command capped. */
+export const refusals = pgTable(
+  'refusals',
+  {
+    runId: text('run_id').notNull(),
+    n: integer('n').notNull(),
+    at: timestamp('at', { withTimezone: true, mode: 'date' }).notNull(),
+    tool: text('tool').notNull(),
+    rule: text('rule').notNull(),
+    command: text('command').notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.runId, t.n] }), index('refusals_at_idx').on(t.at)],
+);
+
+/** The public tables, in migration order: the twelve of ORC-132, then the security log's (ORC-296). */
 export const PG_TABLES = {
   inbox,
   journal,
@@ -300,6 +353,9 @@ export const PG_TABLES = {
   findings,
   freezes,
   artifacts,
+  securityLogs,
+  egressRequests,
+  refusals,
 } as const;
 
 export const PG_TABLE_NAMES = [
@@ -315,6 +371,9 @@ export const PG_TABLE_NAMES = [
   'findings',
   'freezes',
   'artifacts',
+  'security_logs',
+  'egress_requests',
+  'refusals',
 ] as const;
 
 export type PgTableName = (typeof PG_TABLE_NAMES)[number];

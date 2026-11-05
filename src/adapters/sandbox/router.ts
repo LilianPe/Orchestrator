@@ -1,5 +1,5 @@
 import type { ExecResult } from '../exec.js';
-import type { IsolationLevel, Sandbox, SandboxExecOptions, SandboxProvider, SandboxRequest, SandboxRequirements } from './types.js';
+import type { IsolationLevel, Sandbox, SandboxExecOptions, SandboxProvider, SandboxRequest, SandboxRequirements, SpawnCommand } from './types.js';
 
 export interface SandboxBackend {
   name: string;
@@ -54,13 +54,22 @@ export class SandboxRouter implements SandboxProvider {
     return this.ownerOf(id).provider.exec(id, argv, opts);
   }
 
-  spawnCommand(id: string, argv: readonly string[], opts?: SandboxExecOptions): string[] {
+  spawnCommand(id: string, argv: readonly string[], opts?: SandboxExecOptions): SpawnCommand {
     return this.ownerOf(id).provider.spawnCommand(id, argv, opts);
   }
 
-  async findByAttempt(runId: string): Promise<Sandbox | undefined> {
+  findByAttempt(runId: string): Promise<Sandbox | undefined> {
+    return this.firstOwned((p) => p.findByAttempt(runId));
+  }
+
+  reattach(runId: string): Promise<Sandbox | undefined> {
+    return this.firstOwned((p) => p.reattach(runId));
+  }
+
+  /** The first backend's answer, remembered as the owner of that sandbox. */
+  private async firstOwned(ask: (provider: SandboxProvider) => Promise<Sandbox | undefined>): Promise<Sandbox | undefined> {
     for (const b of this.backends) {
-      const sandbox = await b.provider.findByAttempt(runId);
+      const sandbox = await ask(b.provider);
       if (!sandbox) continue;
       this.owner.set(sandbox.id, b);
       return sandbox;

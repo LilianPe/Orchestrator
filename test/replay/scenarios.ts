@@ -1,6 +1,7 @@
 import { runRepair } from '../../src/cli/repair.js';
 import { SCHEMA_VERSION, type TicketState } from '../../src/core/types.js';
 import { exportJournal, type ExportedJournal } from '../../src/runtime/replay.js';
+import { CUT_RELAUNCHES } from '../../src/store/types.js';
 import type { Workflow } from '../../src/config/workflow-schema.js';
 import { createHarness, loadTestWorkflow } from '../helpers/harness.js';
 import { defaultPushBody, githubDelivery, githubIngest, pullRequestBody, sha, workflowRunBody } from '../helpers/github-webhook.js';
@@ -31,6 +32,27 @@ export const SCENARIOS: Record<string, { preset?: TestPreset; authz?: HarnessAut
       await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'boutons mal alignés', author: 'Lilian' });
       await h.advance(60_000);
       await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'bug quand la liste est vide', author: 'Lilian' });
+      await h.advance(180_000);
+    },
+  },
+  /**
+   * A crash loop (ORC-220): each kill loses the run, its step starts again up to the bound of the window, the next
+   * cut blocks the ticket; a human relaunch gives the bound back. Pins `run.lost` and the bound as they decide.
+   */
+  'crash-loop-bound': {
+    run: async (h) => {
+      const held = { hold: true };
+      h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Exporter les audits en CSV depuis la liste des audits.' });
+      h.runner.enqueue(held);
+      await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+      for (let i = 0; i <= CUT_RELAUNCHES; i++) {
+        h.runner.forget((await h.store.getTicket('p', 'REL-1'))!.activeRunId!);
+        h.runner.enqueue(held);
+        h.clock.advance(60_000);
+        await h.restart({ mode: 'brutal' });
+      }
+      h.runner.enqueue({ events: [{ kind: 'text', text: 'Repris.' }] });
+      await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'le démon est réparé, reprends', author: 'Lilian' });
       await h.advance(180_000);
     },
   },

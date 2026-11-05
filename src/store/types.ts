@@ -10,6 +10,18 @@ import type { StoredEvent } from '../core/upcast.js';
  */
 export const LEASE_MS = 60_000;
 
+/** The heartbeat of an attempt (ORC-220): every 30 s, as the MVP doc says. */
+export const RUN_BEAT_MS = 30_000;
+/** Lease of an attempt: three beats, as for an outbox row (`LEASE_MS`), so one missed beat is no expiry. */
+export const RUN_LEASE_MS = 3 * RUN_BEAT_MS;
+/**
+ * Automatic relaunches after a cut, per ticket and per sliding window (ORC-220): a crash loop must not launch an
+ * agent at each restart, without limit and out of the budget's reach. Read by `decide`: changing them changes what
+ * a replay of a `run.lost` or a `verify.lost` decides, as any change of the engine does (ORC-174).
+ */
+export const CUT_RELAUNCHES = 3;
+export const CUT_WINDOW_MS = 3_600_000;
+
 export type SessionRole = 'implementer' | 'reviewer' | 'answerer';
 
 export interface RunRecord {
@@ -43,6 +55,10 @@ export interface RunRecord {
   sensitivePaths?: readonly string[];
   /** Tokens the runner reported at the end of the attempt (ORC-235); absent when it reported none. */
   tokens?: TokenUsage;
+  /** Renewed by the heartbeat while the attempt lives (ORC-220, `renewRun`); absent on older records. */
+  leaseUntil?: number;
+  /** What the attempt was given to read (ORC-220): a relaunch of its step reads the same, the feedback it consumed included. */
+  input?: { kind: InputKind; text: string };
 }
 
 /**
@@ -69,6 +85,8 @@ export interface QueueItem {
   resume?: boolean;
   /** Those its start was decided with; the launch adds them when what the run reads then is untrusted (ORC-274). */
   sensitivePaths?: readonly string[];
+  /** The lost attempt whose step it starts again (ORC-220). */
+  relaunchOf?: string;
   priority: number;
   enqueuedAt: number;
   /**
@@ -255,6 +273,48 @@ export interface MeasureFacts {
   acks: Record<string, number>;
 }
 
+/** One request the egress proxy journaled (`EgressEntry`, ORC-213), as stored (ORC-296): `at` in ms. */
+export interface EgressRecord {
+  at: number;
+  method: string;
+  host: string;
+  port?: number;
+  path?: string;
+  ok: boolean;
+  reason?: string;
+  up: number;
+  down: number;
+}
+
+/** One refusal of the pack's PreToolUse hook (ORC-285), as stored (ORC-296): a known rule, the command capped. */
+export interface RefusalRecord {
+  at: number;
+  tool: string;
+  rule: string;
+  command: string;
+}
+
+/**
+ * The security log of a sandboxed run (ORC-296), read from its two journals when its sandbox is
+ * destroyed: the proxy's (the daemon's) and the hook's (written from the sandbox, untrusted). `at`: when
+ * it was read. `skipped`: lines left out, malformed or forged.
+ */
+export interface SecurityLog {
+  runId: string;
+  projectId: string;
+  ticketId: string;
+  at: number;
+  egress: EgressRecord[];
+  refusals: RefusalRecord[];
+  skipped: { egress: number; refusals: number };
+}
+
+/** What the security logs hold over a period (ORC-296): requests per host, refusals per rule, most first. */
+export interface SecurityStats {
+  hosts: { host: string; requests: number; refused: number }[];
+  rules: { rule: string; refusals: number }[];
+}
+
 /** The inbox event of a timer's firing (ORC-161), written by `fireTimer`: its id `timer:<key>:<fireAt>` names that firing, once. */
 export function timerEvent(t: TimerRecord, at: number): FactoryEvent<'timer.fired'> {
   return {
@@ -368,6 +428,8 @@ export interface Store {
   recordEvent(e: FactoryEvent): Promise<boolean>;
   recentEvents(limit: number, ticketId?: string): Promise<FactoryEvent[]>;
   putRun(r: RunRecord): Promise<void>;
+  /** The heartbeat of an attempt (ORC-220): its lease up to `until`. Nothing is written once it is no longer `running`. */
+  renewRun(id: string, until: number): Promise<void>;
   getRun(id: string): Promise<RunRecord | undefined>;
   runsByStatus(status: RunRecord['status']): Promise<RunRecord[]>;
   findRunByToken(token: string): Promise<RunRecord | undefined>;
@@ -424,6 +486,12 @@ export interface Store {
    * (ORC-278): what a revert on the default branch names. The first such merge of the project.
    */
   mergedPrOf(projectId: string, sha: string): Promise<{ ticketId: string; number: number } | undefined>;
+  /** Writes a run's security log (ORC-296), once: false, and nothing written, when the run has one already. */
+  putSecurityLog(log: SecurityLog): Promise<boolean>;
+  /** The security log of a run (ORC-296), its entries in journal order. */
+  securityLog(runId: string): Promise<SecurityLog | undefined>;
+  /** Requests per host and refusals per rule of the entries dated in `[since, until)` (ORC-296). */
+  securityStats(since: number, until: number): Promise<SecurityStats>;
   getMeta(key: string): Promise<string | undefined>;
   setMeta(key: string, value: string): Promise<void>;
   close(): Promise<void>;

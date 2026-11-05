@@ -3,9 +3,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { FakeTracker } from '../adapters/tracker/fake.js';
+import { blockCause } from '../core/block-cause.js';
 import { EventBus } from '../core/bus.js';
 import { FakeClock } from '../core/clock.js';
-import { newTicketState, type FactoryEvent } from '../core/types.js';
+import { newTicketState, TRUSTED, type FactoryEvent } from '../core/types.js';
 import { SqliteStore } from '../store/sqlite-store.js';
 import { LABELS } from '../../test/helpers/store-suite.js';
 import { pendingLabels } from '../core/attempt-labels.js';
@@ -58,6 +59,80 @@ describe('server', () => {
     expect(body.activeRuns[0].id).toBe('r1');
     expect(body.activeRuns[0].token).toBeUndefined();
     expect(body.capacity.dev).toEqual({ used: 1, total: 3 });
+  });
+
+  describe('the Flux (ORC-297)', () => {
+    it('serves a blocked ticket in Needs you with its cause, a running run in Working with its step, duration and tokens', async () => {
+      const { app, store } = await setup();
+      const tokens = { input: 10, output: 20, cacheRead: 30, cacheCreation: 40 };
+      await store.putRun({ ...(await store.getRun('r1'))!, id: 'r0', status: 'failure', token: 'tok0', tokens });
+      await store.putTicket({ ...newTicketState('p', 'REL-1', 'Export', 'dev', 1), activeRunId: 'r1' });
+      await store.putTicket({ ...newTicketState('p', 'REL-2', 'Import', 'dev', 1), blocked: true, blockReason: "En attente d'une réponse à la question de l'agent." });
+      const res = await app.request('/api/flow');
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.needsYou.blocked).toEqual([{ cause: 'question', tickets: [expect.objectContaining({ ticketId: 'REL-2', title: 'Import', reason: "En attente d'une réponse à la question de l'agent." })] }]);
+      expect(body.working).toEqual([expect.objectContaining({ runId: 'r1', ticketId: 'REL-1', title: 'Export', step: 'dev', stoppable: true, durationMs: 9, tokens, attemptsWithoutTokens: 0 })]);
+    });
+
+    it('still answers when the measures of a ticket cannot be read: Needs you never goes dark, the error is logged', async () => {
+      const { app, store, bus } = await setup();
+      const logs: string[] = [];
+      bus.subscribe((m) => {
+        if (m.kind === 'log') logs.push(m.message);
+      });
+      vi.spyOn(store, 'measureFacts').mockRejectedValue(new Error('journal illisible'));
+      await store.putTicket({ ...newTicketState('p', 'REL-2', 'Import', 'dev', 1), blocked: true, blockReason: 'Arrêté à la demande' });
+      const res = await app.request('/api/flow');
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.working).toEqual([expect.objectContaining({ runId: 'r1', tokens: null })]);
+      expect(body.needsYou.blocked).toHaveLength(1);
+      expect(logs).toEqual([expect.stringContaining('journal illisible')]);
+    });
+
+    it('names the cause of the block an agent asks for', async () => {
+      const { app, blockTicket } = await setup();
+      await app.request('/agent/ask', { method: 'POST', headers: { authorization: 'Bearer tok' }, body: JSON.stringify({ text: 'Laquelle ?' }) });
+      expect(blockCause(blockTicket.mock.calls[0]![2])).toBe('question');
+    });
+
+    it('asks for the password, as the other routes of the interface', async () => {
+      const { app } = await setup({ uiPassword: 'secret' });
+      expect((await app.request('/api/flow')).status).toBe(401);
+    });
+
+    it('serves no run token to the browser: not in the state, the Flux, the events nor the live stream', async () => {
+      const { app, store, bus } = await setup();
+      const TOKEN = 'CANARY-RUN-TOKEN';
+      const run = (await store.getRun('r1'))!;
+      await store.putRun({ ...run, token: TOKEN });
+      await store.putRun({ ...run, id: 'r2', ticketId: 'REL-2', status: 'success', endedAt: 5, token: `${TOKEN}-2`, tokens: { input: 1, output: 1, cacheRead: 0, cacheCreation: 0 } });
+      await store.putRun({ ...run, id: 'r3', ticketId: 'REL-3', status: 'failure', endedAt: 5, token: `${TOKEN}-3` });
+      await store.putTicket({ ...newTicketState('p', 'REL-1', 'Export', 'dev', 1), activeRunId: 'r1' });
+      await store.putTicket({ ...newTicketState('p', 'REL-2', 'Verif', 'human_review', 1), verifyingRunId: 'r2' });
+      await store.putTicket({ ...newTicketState('p', 'REL-3', 'Bloqué', 'dev', 1), blocked: true, blockReason: 'Le run dev a échoué.' });
+      await store.recordEvent({ ...TRUSTED, id: 'e1', type: 'run.finished', at: 2, projectId: 'p', ticketId: 'REL-2', payload: { runId: 'r2', job: 'dev', outcome: 'success', costUsd: 0, turns: 1, lastText: '' } });
+
+      for (const path of ['/api/state', '/api/flow', '/api/events/recent']) {
+        const res = await app.request(path);
+        expect(res.status, path).toBe(200);
+        expect(await res.text(), path).not.toContain(TOKEN);
+      }
+      const flow = await (await app.request('/api/flow')).json();
+      // The runs are in what was served: the check above saw them.
+      expect(flow.working.map((w: { runId: string }) => w.runId)).toEqual(['r1', 'r2']);
+      expect(flow.working[0].token).toBeUndefined();
+
+      const live = await app.request('/api/events');
+      const reader = live.body!.getReader();
+      bus.publish({ kind: 'ticket', ticket: (await store.getTicket('p', 'REL-1'))! });
+      const { value } = await reader.read();
+      const chunk = new TextDecoder().decode(value);
+      expect(chunk).toContain('REL-1');
+      expect(chunk).not.toContain(TOKEN);
+      await reader.cancel();
+    });
   });
 
   it('serves the labels of a run with those still null and the tickets that will fill them (ORC-226)', async () => {

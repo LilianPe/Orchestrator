@@ -9,6 +9,8 @@ export class FakeWorkspaces implements WorkspaceManager {
   heads = new Map<string, string>();
   /** Worktrees whose `.claude/` was reset, in order. */
   resetClaude: string[] = [];
+  /** Tickets whose branch has commits beyond the default branch, as a test sets it (ORC-211). */
+  ahead = new Set<string>();
   /** Ticket worktrees that exist: the first prepare of one is `fresh`, until its cleanup. */
   private made = new Set<string>();
 
@@ -19,7 +21,7 @@ export class FakeWorkspaces implements WorkspaceManager {
     const path = `/tmp/factory-fake/${req.projectId}/${req.ticketId}`;
     const fresh = !this.made.has(path);
     this.made.add(path);
-    return { path, port: req.portBase + req.slot, branch: branchName(req.ticketId, req.title), ...(fresh ? { fresh } : {}) };
+    return { path, port: req.portBase + req.slot, branch: branchName(req.ticketId, req.title), ...(fresh ? { fresh } : {}), ...(fresh && this.ahead.has(req.ticketId) ? { ahead: true } : {}) };
   }
 
   async cleanup(projectId: string, _repoPath: string, ticketId: string): Promise<void> {
@@ -31,18 +33,23 @@ export class FakeWorkspaces implements WorkspaceManager {
     return this.heads.get(path);
   }
 
-  /** What the tests step changed in each worktree, as a test sets it (ORC-123): files at the base and the head by content. */
+  /**
+   * What the commits changed in each worktree, as a test sets it (ORC-123): files at the base and the head by content.
+   * Keyed by path, or by `<path>@<base>` for the diff from one base only (the freeze's commit, ORC-131).
+   */
   steps = new Map<string, { changed: StepDiff['changed']; base?: Record<string, string>; head?: Record<string, string>; uncommitted?: string[] }>();
 
-  async stepDiff(_repoPath: string, path: string): Promise<StepDiff | undefined> {
-    const d = this.steps.get(path);
+  async stepDiff(_repoPath: string, path: string, from: string): Promise<StepDiff | undefined> {
+    const d = this.steps.get(`${path}@${from}`) ?? this.steps.get(path);
     if (!d) return undefined;
     const base = d.base ?? {};
     return {
+      head: this.heads.get(path) ?? 'head',
       changed: d.changed,
       existsAtBase: async (paths) => new Set(paths.filter((p) => p in base || Object.keys(base).some((f) => f.startsWith(`${p}/`)))),
       showAtBase: async (p) => base[p],
       showAtHead: async (p) => d.head?.[p],
+      filesAtHead: async () => Object.keys(d.head ?? {}),
     };
   }
 

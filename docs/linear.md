@@ -34,7 +34,6 @@ Linear peut refuser une URL de callback en `http://localhost` : dans ce cas, exp
 
 - enregistre les jetons, l'identifiant de l'agent (`appUserId`) et de l'organisation ;
 - **crée dans chaque équipe configurée les statuts manquants** (voir § 5) et les labels `agent:reprendre`, `agent:stop` et `Bloqué` ;
-- poste les messages de reprise en attente (runs interrompus par un redémarrage) ;
 - lance une réconciliation tout de suite ; ensuite, elle passe toutes les 5 minutes (ORC-185).
 
 Le jeton est rafraîchi automatiquement. Aux démarrages suivants, Relais se reconnecte seul avec les jetons de `secrets.json`. `relais status` et l'interface indiquent si Linear est connecté.
@@ -99,7 +98,7 @@ Après le merge de la PR (détecté par le relevé GitHub) : statut *Done*, work
 
 Seuls les tickets **délégués** à l'agent reçoivent du travail de code ; une mention sur un ticket non délégué ne donne qu'une réponse. Tout ce comportement se change dans `.relais/workflow.yml` : [`workflow.md`](workflow.md). Les contrôles avant de prendre un ticket (description d'au moins 30 caractères, pas de branche existante…) sont décrits dans [`workflow.md`](workflow.md#tracker) ; `relais plan` les applique à blanc.
 
-Un ticket bloqué (échec, plafond, question, stop, redémarrage) attend un humain : répondez dans la session ou posez `agent:reprendre`.
+Un ticket bloqué (échec, plafond, question, stop, bail expiré deux fois, trop de relances après coupure) attend un humain : répondez dans la session ou posez `agent:reprendre`.
 
 ### Le déclenchement
 
@@ -125,7 +124,7 @@ Chaque action humaine est vérifiée sur l'**acteur signé** du webhook (l'id Li
 | Déclencher l'agent | Membre de l'équipe Linear **et** droit d'écriture GitHub sur le dépôt | Linear | délégation, mention `@relais`, commande ; changement de statut ou label qui lance un run sur un ticket non bloqué |
 | Répondre à l'agent (`clarify`), lui poser une question | Demandeur (qui a délégué le ticket) **ou** membre de l'équipe | session Linear | réponse dans la session du ticket, question dans une session de question |
 | Valider la spec | Valideur désigné, **jamais** l'initiateur du run | session Linear | rien encore : vient avec `spec_review` (ORC-212) |
-| Regeler (`/refreeze`) | Mainteneur désigné | Linear ou PR | rien encore : vient avec le gel des tests (ORC-131) |
+| Regeler (`/refreeze`) | Mainteneur désigné | Linear ou PR | commande `/refreeze` en mentionnant l'agent dans le ticket ou en répondant dans sa session (ORC-131), refusée aussi sans rôles résolus ; pas encore depuis la PR |
 | Relancer un run bloqué | Membre de l'équipe | Linear (label ou réponse dans la session) | réponse dans la session, `agent:reprendre`, changement de statut qui lance un run, sur un ticket bloqué |
 | Passer en *Done* (merge) | Droit de merge GitHub | Linear | aucun merge, refus répondu dans le ticket, retour en *Human Review* (ORC-148) |
 

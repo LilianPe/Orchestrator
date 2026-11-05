@@ -1,9 +1,12 @@
+import { REFREEZE, type FrozenTests } from '../checks/freeze.js';
 import type { JobSpec, Rule, Workflow } from '../config/workflow-schema.js';
 import { allowed, DEFAULT_MATRIX, refusalMessage, type AuthzAction, type AuthzMatrix, type Channel } from './authz.js';
 import { evalCondition } from './conditions.js';
 import { deadLetterReason, liftDeadLetterBlock, REPAIR_LABELS, repairedEvent } from './dead-letter.js';
 import type { AgentOutput } from './agent-output.js';
 import type { Decision, Effect } from './decision.js';
+import { PRODUCT_NAME } from '../product.js';
+import { CUT_RELAUNCHES, CUT_WINDOW_MS } from '../store/types.js';
 import { isOwnMoveEcho, reduce } from './reduce.js';
 import type { EventPayloads, EventType, FactoryEvent, FeedbackItem, InputKind, RunOutcome, Taint, TicketState, VerifyFailure } from './types.js';
 
@@ -23,7 +26,7 @@ export function taintedKnowledge(job: string, source: 'event' | 'read' = 'event'
 }
 
 const BUILT_IN = new Set<EventType>([
-  'control.pause', 'control.resume', 'control.stop', 'run.finished', 'verify.passed', 'verify.failed', 'timer.fired', 'pr.opened',
+  'control.pause', 'control.resume', 'control.stop', 'run.finished', 'run.lost', 'verify.passed', 'verify.failed', 'verify.lost', 'timer.fired', 'pr.opened',
   'effect.done', 'effect.failed', 'dead_letter.added',
 ]);
 
@@ -61,6 +64,7 @@ function redFailed(out: Decision, at: { event: FactoryEvent<'verify.failed'>; ti
   }
   if (red.mode === 'measure') {
     out.trace.push(`red: aurait bloqué (${cause}), mode mesure : le run continue`);
+    freeze(out, at.ticket, at.event.payload.frozen);
     return success(out, at, job, runId);
   }
   const used = at.ticket?.redAttempts ?? 0;
@@ -71,6 +75,40 @@ function redFailed(out: Decision, at: { event: FactoryEvent<'verify.failed'>; ti
   }
   const reason = `Rouge non vérifié après ${red.attempts} tentatives de ${job.name}.`;
   return block(out, reason, `${reason}\n${formatFailuresShort(failures)}\nRépondez dans ce fil pour relancer.`);
+}
+
+/**
+ * Records the freeze read after `red` (ORC-131), once the run goes on to the build. A freeze already there keeps its
+ * commit and fingerprints, the new files are added: only a maintainer's `/refreeze` takes a file out of the freeze (I3).
+ */
+function freeze(out: Decision, ticket: TicketState | undefined, frozen: FrozenTests | undefined): void {
+  if (!frozen) return;
+  const old = ticket?.frozenTests;
+  out.events.push({ type: 'ticket.patched', patch: { frozenTests: old ? { sha: old.sha, files: { ...frozen.files, ...old.files } } : frozen } });
+}
+
+/** A run in the ticket's worktree goes through `factory/tests-gelés` once frozen (ORC-131), verify commands or not. */
+export function goesThroughFreeze(ticket: TicketState | undefined, job: JobSpec): boolean {
+  return !!ticket?.frozenTests && job.workspace === 'worktree';
+}
+
+/**
+ * `/refreeze` (ORC-131): the freeze read at the branch's head before the decision replaces the old one, for a designated
+ * maintainer only (ORC-186). Checked even on an event without resolved roles: a freeze never opens by default.
+ */
+function refreeze(out: Decision, event: FactoryEvent<'command'>, ticket: TicketState | undefined, matrix: AuthzMatrix): Decision {
+  if (!authorize(out, { ...event, roles: event.roles ?? [] }, ticket, 'refreeze', 'linear', matrix)) return out;
+  const { frozen, linearSessionId } = event.payload;
+  const answer = (body: string) => out.effects.push({ kind: 'activity', type: 'response', body, linearSessionId });
+  if (!frozen) {
+    answer("Rien à regeler : ce ticket n'a pas de gel ou pas de branche de travail.");
+    return out;
+  }
+  const count = Object.keys(frozen.files).length;
+  out.trace.push(`refreeze by ${event.actor}: ${count} fichiers gelés à ${frozen.sha}`);
+  out.events.push({ type: 'ticket.patched', patch: { frozenTests: frozen } });
+  answer(`Regelé : ${count} fichiers, tels qu'au commit ${frozen.sha.slice(0, 12)}. La prochaine vérification part de ce gel.`);
+  return out;
 }
 
 function block(out: Decision, reason: string, body: string): Decision {
@@ -134,6 +172,57 @@ function unblock(out: Decision, event: FactoryEvent, ticket: TicketState): void 
   if (ticket.repeatedFailure) out.events.push({ type: 'ticket.patched', patch: { repeatedFailure: null } });
   // The red loop too (ORC-123).
   if (ticket.redAttempts) out.events.push({ type: 'ticket.patched', patch: { redAttempts: 0 } });
+  // The lease's relaunch too (ORC-220), and the relaunches after a cut, which nothing else gives back.
+  if (ticket.leaseRelaunches) out.events.push({ type: 'ticket.patched', patch: { leaseRelaunches: 0 } });
+  if (ticket.cutRelaunches?.length) out.events.push({ type: 'ticket.patched', patch: { cutRelaunches: [] } });
+}
+
+/** The head of the reason of a ticket blocked by the bound: the Flux classes a block by the head of its reason (ORC-297). */
+export const CUT_BOUND_REASON = /^Trop de relances après coupure : /;
+
+/** The relaunches still in the window at the time of the event: never the clock, so that a replay decides the same. */
+function recentCuts(ticket: TicketState, at: number): number[] {
+  return (ticket.cutRelaunches ?? []).filter((t) => t > at - CUT_WINDOW_MS);
+}
+
+/** The bound of the relaunches after a cut is reached (ORC-220): no agent, and a human hears why. */
+function blockOnCuts(out: Decision): Decision {
+  const reason = `Trop de relances après coupure : ${CUT_RELAUNCHES} en ${CUT_WINDOW_MS / 60_000} min.`;
+  return block(out, reason, `${reason} ${PRODUCT_NAME} ou son runner redémarre en boucle : vérifiez le démon, puis répondez dans ce fil pour que je reprenne.`);
+}
+
+/** How many relaunches an expired lease gets before the ticket is blocked (ORC-220). */
+const LEASE_RELAUNCHES = 1;
+
+/**
+ * An attempt gone without a result (ORC-220). A dev step starts again from the ticket's session, unless nothing
+ * should run on the ticket any more. An expired lease has its own bound of one, and every relaunch counts against
+ * the bound of the window, a restart included: no fault of the attempt, but an agent launched all the same. A question
+ * is not asked again by itself (ORC-277): its thread is told, once, by an effect.
+ */
+function attemptLost(out: Decision, event: FactoryEvent<'run.lost'>, ticket: TicketState | undefined, workflow: Workflow): Decision {
+  const { job: jobName, runId, cause } = event.payload;
+  const job = workflow.jobs[jobName];
+  if (!job) return out;
+  if (job.queue !== 'dev') {
+    const why = cause === 'restart' ? `${PRODUCT_NAME} a redémarré pendant ma réponse.` : 'Le runner de ma réponse ne répond plus.';
+    out.effects.push({ kind: 'activity', type: 'error', body: `${why} Reposez la question dans ce fil.`, runId });
+    return out;
+  }
+  if (!ticket?.delegated || ticket.blocked || refusesDevWork(ticket, job)) {
+    out.trace.push(`run.lost: ${jobName} not started again, nothing should run on the ticket`);
+    return out;
+  }
+  const used = ticket.leaseRelaunches ?? 0;
+  if (cause === 'lease' && used >= LEASE_RELAUNCHES) {
+    const reason = `Le bail du run ${jobName} a expiré ${used + 1} fois : le runner ne répond plus.`;
+    return block(out, reason, `${reason} Répondez dans ce fil pour que je reprenne.`);
+  }
+  const recent = recentCuts(ticket, event.at);
+  if (recent.length >= CUT_RELAUNCHES) return blockOnCuts(out);
+  out.events.push({ type: 'ticket.patched', patch: { ...(cause === 'lease' ? { leaseRelaunches: used + 1 } : {}), cutRelaunches: [...recent, event.at] } });
+  startRun(out, event, ticket, job, { relaunchOf: runId });
+  return out;
 }
 
 /** A Linear session that carries questions (read-only answers), not the ticket's dev conversation. */
@@ -443,13 +532,13 @@ export function isFenced(d: Decision): boolean {
 
 /** A result whose attempt is no longer active: the dev run or the verification it reports on was replaced or stopped. */
 function staleAttempt(state: TicketState | undefined, event: FactoryEvent, workflow: Workflow): string | undefined {
-  if (event.type === 'verify.passed' || event.type === 'verify.failed') {
+  if (event.type === 'verify.passed' || event.type === 'verify.failed' || event.type === 'verify.lost') {
     const { runId } = event.payload;
     return runId === state?.verifyingRunId ? undefined : `${event.type} for run ${runId}, awaited ${state?.verifyingRunId ?? 'none'}`;
   }
-  if (event.type === 'run.finished' && workflow.jobs[event.payload.job]?.queue === 'dev') {
+  if ((event.type === 'run.finished' || event.type === 'run.lost') && workflow.jobs[event.payload.job]?.queue === 'dev') {
     const { runId } = event.payload;
-    return runId === state?.activeRunId ? undefined : `run.finished for run ${runId}, active ${state?.activeRunId ?? 'none'}`;
+    return runId === state?.activeRunId ? undefined : `${event.type} for run ${runId}, active ${state?.activeRunId ?? 'none'}`;
   }
   return undefined;
 }
@@ -599,11 +688,12 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
     return doneMerge(out, event, state, matrix);
   }
   if (event.type === 'ticket.delegated' && event.payload.noRepo) return noRepoBlock(out, state, event, event.payload.noRepo);
+  if (event.type === 'command' && event.payload.name === REFREEZE) return refreeze(out, event, ticket, matrix);
   if (TRIGGERS.has(event.type)) {
     // The event's facts stay recorded (Linear did delegate, the session exists): only the factory's answer is refused.
     if (!authorize(out, event, ticket, 'trigger', 'linear', matrix)) return out;
     // One active run per ticket (ORC-171): a new delegation stacks no job behind it, and its initiator stays. A pending
-    // job alone is no run: `run.interrupted` leaves one behind after a crash. What no webhook brought since ORC-171
+    // job alone is no run: a crash can leave one behind. What no webhook brought since ORC-171
     // replays as it was decided; found by the reconciliation, the matrix refuses it above.
     if (event.type === 'ticket.delegated' && event.payload.ack && (state?.activeRunId || state?.verifyingRunId)) {
       out.trace.push('ticket.delegated: a run is active, none started');
@@ -629,13 +719,15 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
     case 'run.finished': {
       const { job: jobName, runId, output } = event.payload;
       const job = workflow.jobs[jobName];
+      // An attempt that ended gives the lease's relaunch back (ORC-220): only two in a row block.
+      if (ticket?.leaseRelaunches && job?.queue === 'dev') out.events.push({ type: 'ticket.patched', patch: { leaseRelaunches: 0 } });
       if (!job || event.payload.outcome === 'stopped') return out;
       const outcome = job.queue === 'dev' ? attemptDecision(event.payload, job) : event.payload.outcome;
       // Already blocked (the agent asked through `ask`, a human's stop…): it keeps its reason and gets no second notice.
       if (typeof outcome === 'object') return ticket?.blocked ? out : block(out, outcome.reason, outcome.body);
       if (outcome === 'success' && ticket?.blocked && job.queue === 'dev') return out;
       if (outcome === 'success') {
-        if (job.verify.length === 0 && !job.red) return success(out, { event, ticket, workflow }, job, runId, output);
+        if (job.verify.length === 0 && !job.red && !goesThroughFreeze(ticket, job)) return success(out, { event, ticket, workflow }, job, runId, output);
         out.events.push({ type: 'verify.started', runId });
         out.effects.push({ kind: 'run_verify', runId, job: jobName, ...(output ? { output } : {}) });
         return out;
@@ -650,11 +742,26 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
           : `Le run ${jobName} a échoué.`;
       return block(out, reason, `${reason} Répondez dans ce fil pour que je reprenne.`);
     }
+    case 'run.lost':
+      return attemptLost(out, event, ticket, workflow);
+    case 'verify.lost': {
+      const { runId, job, output } = event.payload;
+      const recent = ticket ? recentCuts(ticket, event.at) : [];
+      if (recent.length >= CUT_RELAUNCHES) {
+        // Nothing runs it any more: the ticket must not wait for its verdict, or no later start would pass it.
+        out.events.push({ type: 'work.cancelled' });
+        return ticket?.blocked ? out : blockOnCuts(out);
+      }
+      out.events.push({ type: 'ticket.patched', patch: { cutRelaunches: [...recent, event.at] } });
+      out.effects.push({ kind: 'run_verify', runId, job, ...(output ? { output } : {}) });
+      return out;
+    }
     case 'verify.passed': {
       const job = workflow.jobs[event.payload.job];
       if (!job) return out;
       const patch = { verifyAttempts: 0, ...(ticket?.repeatedFailure ? { repeatedFailure: null } : {}), ...(ticket?.redAttempts ? { redAttempts: 0 } : {}) };
       out.events.push({ type: 'ticket.patched', patch });
+      if (job.red) freeze(out, ticket, event.payload.frozen);
       return success(out, { event, ticket, workflow }, job, event.payload.runId, event.payload.output);
     }
     case 'verify.failed': {

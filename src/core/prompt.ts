@@ -19,6 +19,8 @@ export interface PromptInput {
   conventions?: string;
   input?: { kind: InputKind; text: string };
   reviewRounds: number;
+  /** The step starts again on its session, after an attempt cut by a restart or a lost lease (ORC-220). */
+  resumedAfterCut?: boolean;
 }
 
 const HEADINGS: Record<InputKind, string> = {
@@ -46,6 +48,9 @@ export function buildPrompt(p: PromptInput): string {
     );
   }
   if (p.input) lines.push(`## ${HEADINGS[p.input.kind]}`, p.input.text, '');
+  if (p.resumedAfterCut) {
+    lines.push('## Reprise', "Ta tentative précédente a été coupée (redémarrage de l'usine ou runner muet), pas par ta faute. Le worktree est tel qu'elle l'a laissé : relis-le, reprends où tu en étais, ne refais pas ce qui est fait.", '');
+  }
   return lines.join('\n');
 }
 
