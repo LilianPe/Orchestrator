@@ -1,17 +1,4 @@
-export type Logical = 'todo' | 'dev' | 'human_review' | 'ai_review' | 'ready' | 'done';
-
-export interface TicketView {
-  projectId: string;
-  ticketId: string;
-  title: string;
-  logical: Logical;
-  blocked: boolean;
-  blockReason?: string;
-  activeRunId?: string;
-  prUrl?: string;
-  costUsd: number;
-  updatedAt: number;
-}
+import type { BlockCause } from '../../src/core/block-cause.js';
 
 export interface RunView {
   id: string;
@@ -31,12 +18,43 @@ export interface QueueView {
 export interface Snapshot {
   paused: boolean;
   linearConnected: boolean;
-  tickets: TicketView[];
   queue: QueueView[];
   activeRuns: RunView[];
   costTodayUsd: number;
   budgetUsd: number | null;
   capacity: { dev: { used: number; total: number }; questions: { used: number; total: number } };
+}
+
+export interface FlowTicketView {
+  projectId: string;
+  ticketId: string;
+  title: string;
+  prUrl?: string;
+}
+
+export interface WorkingRunView extends FlowTicketView {
+  runId: string;
+  step: string;
+  verifying: boolean;
+  stoppable: boolean;
+  durationMs: number;
+  measured: boolean;
+  tokens: { input: number; output: number; cacheRead: number; cacheCreation: number } | null;
+  attemptsWithoutTokens: number;
+  costUsd: number;
+}
+
+/** `GET /api/flow`: `Flow` of src/server/flow.ts, which the web's types cannot import (it reaches Node's). */
+export interface FlowView {
+  needsYou: {
+    blocked: { cause: BlockCause; tickets: (FlowTicketView & { reason: string })[] }[];
+    humanReview: FlowTicketView[];
+    gates: FlowTicketView[];
+  };
+  working: WorkingRunView[];
+  queued: { ticketId: string; job: string }[];
+  done: FlowTicketView[];
+  others: FlowTicketView[];
 }
 
 export type RunLine =
@@ -59,5 +77,5 @@ export type BusMessage =
   | { kind: 'event'; event: EventView }
   | { kind: 'command'; projectId: string; ticketId?: string; command: { kind: string } }
   | { kind: 'run'; runId: string; ticketId: string; ev: RunLine }
-  | { kind: 'ticket'; ticket: TicketView }
+  | { kind: 'ticket' }
   | { kind: 'log'; level: 'info' | 'warn' | 'error'; message: string; at: number };
