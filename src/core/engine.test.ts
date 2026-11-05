@@ -5,8 +5,9 @@ import type { AgentOutput, AttemptOutcome } from './agent-output.js';
 import type { Decision } from './decision.js';
 import { CUT_RELAUNCHES, CUT_WINDOW_MS } from '../store/types.js';
 import { CUT_BOUND_REASON, decide, isFenced, RECONCILE_MS, reconcileTicket, SENSITIVE_PATHS, sensitivePathsAtLaunch, taintedKnowledge } from './engine.js';
+import { blockCause } from './block-cause.js';
 import { reduce } from './reduce.js';
-import { newTicketState, type EventPayloads, type EventType, type FactoryEvent, type TicketState } from './types.js';
+import { newTicketState, SCHEMA_VERSION, type EventPayloads, type EventType, type FactoryEvent, type TicketState } from './types.js';
 
 const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../packs/standard') });
 
@@ -280,6 +281,24 @@ describe('decide — after the merge (ORC-268)', () => {
     expect(question.effects[0]).toMatchObject({ kind: 'start_run', job: 'ask' });
     const learned = decide(merged(), ev('run.finished', { runId: 'r9', job: 'learn', outcome: 'success', costUsd: 0, turns: 1, lastText: '' }), workflow);
     expect(learned.trace).not.toContain('merged: ignored run.finished for run r9');
+  });
+});
+
+describe('decide — verify.errored (ORC-151)', () => {
+  const checking = (): TicketState => ({ ...newTicketState('p', 'REL-1', 'T', 'dev', 0), delegated: true, verifyingRunId: 'r1', verifyAttempts: 1, linearSessionId: 'ls-1' });
+  const errored = (runId = 'r1') => ({ id: 'e', type: 'verify.errored', at: 1, projectId: 'p', ticketId: 'REL-1', schemaVersion: SCHEMA_VERSION, taint: 'trusted', payload: { runId, job: 'dev', error: 'engine down' } }) as FactoryEvent;
+
+  it('blocks with the breakdown, moves no counter, and gives the agent nothing to fix', () => {
+    const out = decide(checking(), errored(), workflow);
+    expect(out.effects.some((e) => e.kind === 'start_run')).toBe(false);
+    expect(out.events).toEqual([{ type: 'ticket.blocked', reason: expect.stringMatching(/^La vérification de dev n'a pas pu tourner : panne d'infrastructure/) }]);
+    expect(out.effects).toContainEqual({ kind: 'activity', type: 'elicitation', body: expect.stringContaining('engine down') });
+    expect(blockCause((out.events[0] as { reason: string }).reason)).toBe('infra');
+  });
+
+  it('is no longer awaited once it arrived, and a stale one is fenced', () => {
+    expect(reduce(checking(), errored())!.verifyingRunId).toBeUndefined();
+    expect(isFenced(decide(checking(), errored('old'), workflow))).toBe(true);
   });
 });
 

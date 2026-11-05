@@ -26,7 +26,7 @@ export function taintedKnowledge(job: string, source: 'event' | 'read' = 'event'
 }
 
 const BUILT_IN = new Set<EventType>([
-  'control.pause', 'control.resume', 'control.stop', 'run.finished', 'run.lost', 'verify.passed', 'verify.failed', 'verify.lost', 'timer.fired', 'pr.opened',
+  'control.pause', 'control.resume', 'control.stop', 'run.finished', 'run.lost', 'verify.passed', 'verify.failed', 'verify.errored', 'verify.lost', 'timer.fired', 'pr.opened',
   'effect.done', 'effect.failed', 'dead_letter.added',
 ]);
 
@@ -532,7 +532,7 @@ export function isFenced(d: Decision): boolean {
 
 /** A result whose attempt is no longer active: the dev run or the verification it reports on was replaced or stopped. */
 function staleAttempt(state: TicketState | undefined, event: FactoryEvent, workflow: Workflow): string | undefined {
-  if (event.type === 'verify.passed' || event.type === 'verify.failed' || event.type === 'verify.lost') {
+  if (event.type === 'verify.passed' || event.type === 'verify.failed' || event.type === 'verify.errored' || event.type === 'verify.lost') {
     const { runId } = event.payload;
     return runId === state?.verifyingRunId ? undefined : `${event.type} for run ${runId}, awaited ${state?.verifyingRunId ?? 'none'}`;
   }
@@ -735,6 +735,11 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       }
       const reason = `Vérifications toujours en échec après ${workflow.limits.verifyAttempts} tentatives.`;
       return block(out, reason, `${reason}\n${formatFailuresShort(failures)}\nRépondez dans ce fil pour relancer.`);
+    }
+    case 'verify.errored': {
+      // Not a failure of the work: no counter moves, and the agent gets nothing to fix. A human relaunch checks again.
+      const reason = `La vérification de ${event.payload.job} n'a pas pu tourner : panne d'infrastructure, l'agent n'est pas en cause.`;
+      return ticket?.blocked ? out : block(out, reason, `${reason}\n${event.payload.error}\nRépondez dans ce fil pour que je reprenne.`);
     }
     case 'timer.fired': {
       const fired = event.payload;

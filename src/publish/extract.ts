@@ -13,7 +13,10 @@ import type { SandboxProvider } from '../adapters/sandbox/types.js';
 export const BUNDLE_TARGET = '/factory/bundle';
 const BUNDLE = 'work.bundle';
 /** No hook, no fsmonitor: on each host git command (`-c`), and in the clone's own config (`--config`). */
-const HARDENING = [`core.hooksPath=${devNull}`, 'core.fsmonitor=false'];
+export const HARDENING = [`core.hooksPath=${devNull}`, 'core.fsmonitor=false'];
+
+/** The sandbox's git, on the agent's repository: `devNull` is the host's, and the mount's owner may not be its user. */
+const IN_SANDBOX = ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', '-c', 'safe.directory=*'];
 
 export interface ExtractRequest {
   sandboxes: SandboxProvider;
@@ -36,7 +39,7 @@ export interface ExtractRequest {
 export async function extractWork(o: ExtractRequest): Promise<{ sha: string }> {
   const ref = `refs/heads/${o.branch}`;
   const inSandbox = async (...args: string[]) => {
-    const r = await o.sandboxes.exec(o.sandboxId, ['git', ...args]);
+    const r = await o.sandboxes.exec(o.sandboxId, ['git', ...IN_SANDBOX, ...args]);
     if (r.code !== 0) throw new Error(`git ${args.join(' ')} (sandbox): ${r.stderr.trim()}`);
     return r.stdout.trim();
   };

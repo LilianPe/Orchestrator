@@ -15,6 +15,7 @@ const CAUSES: readonly (readonly [Exclude<BlockCause, 'other'>, RegExp])[] = [
   ['red', /^Rouge non vérifié après /],
   ['infra', /^Le run .+ s'est interrompu : panne d'infrastructure/],
   ['infra', /^Le contrôle du rouge de .+ n'a pas pu tourner : panne d'infrastructure/],
+  ['infra', /^La vérification de .+ n'a pas pu tourner : panne d'infrastructure/],
   ['infra', /^Erreur au lancement : /],
   ['infra', /^Erreur : /],
   ['infra', new RegExp(`^${PRODUCT_NAME} a redémarré pendant `)],

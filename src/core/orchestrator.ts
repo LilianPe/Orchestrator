@@ -64,7 +64,8 @@ import {
   TRUSTED,
 } from './types.js';
 import { runSealedSetup } from './sealed-setup.js';
-import { cappedCommand, type Verifier } from './verify.js';
+import { runCleanVerify, type CleanVerifier } from './clean-verify.js';
+import { cappedCommand, type Verifier, type VerifyResult } from './verify.js';
 import { PRODUCT_NAME } from '../product.js';
 import { checkRed, type RedDeps, type RedResult } from '../checks/red.js';
 import { checkFrozen, FREEZE_CHECK, freezeTests, newTestsOnly, REFREEZE, type FrozenTests } from '../checks/freeze.js';
@@ -131,6 +132,14 @@ export interface OrchestratorDeps {
   runner: Runner;
   workspaces: WorkspaceManager;
   verify: Verifier;
+  /**
+   * The agent's code may run on the daemon's host when there are no sandboxes: `verify`, `red`. Off, they answer an
+   * infrastructure failure: without an explicit `FACTORY_ALLOW_HOST_VERIFY=1`, an instance that lost its sandboxes
+   * does not fall back on running that code next to its secrets. Ignored with `sandboxes`, which are never fallen back from.
+   */
+  hostChecks?: boolean;
+  /** `verify` with sandboxes (ORC-151); a test replaces it. */
+  cleanVerify?: CleanVerifier;
   projects: ProjectRuntime[];
   packDir: string;
   /** `--settings` file for runs; defaults to <packDir>/settings.json. */
@@ -252,6 +261,7 @@ function sessionSaved(configDir: string, sessionId: string): boolean {
 
 /** Why the factory's merge is refused when the PR's head moved since the review (ORC-148). */
 const PUSHED = 'la branche a reçu un push depuis la review';
+const HOST_CHECKS_OFF = "aucun sandbox (FACTORY_CONTAINER_CLI) et FACTORY_ALLOW_HOST_VERIFY n'est pas à 1 : je ne lance pas le code de l'agent sur l'hôte.";
 
 export class Orchestrator {
   private background = new Map<Promise<void>, string | undefined>();
@@ -426,7 +436,7 @@ export class Orchestrator {
     const checked = new Set<string>();
     for (const row of await store.pendingInbox(Number.MAX_SAFE_INTEGER)) {
       if (row.type === 'run.finished' || row.type === 'run.lost') settled.add((row.payload as EventPayloads['run.lost']).runId);
-      if (row.type === 'verify.passed' || row.type === 'verify.failed' || row.type === 'verify.lost') checked.add((row.payload as EventPayloads['verify.lost']).runId);
+      if (row.type === 'verify.passed' || row.type === 'verify.failed' || row.type === 'verify.errored' || row.type === 'verify.lost') checked.add((row.payload as EventPayloads['verify.lost']).runId);
     }
     const interrupted = await store.runsByStatus('interrupted');
     for (const run of [...cut, ...interrupted]) {
@@ -719,6 +729,7 @@ export class Orchestrator {
       let uncommitted: string[];
       let runTests: RedDeps['run'];
       if (!sandboxes) {
+        if (!this.d.hostChecks) throw new Error(HOST_CHECKS_OFF);
         uncommitted = await this.d.workspaces.uncommitted(run.cwd);
         const { env } = await this.repoVariablesOf(project);
         runTests = async (cmd) => {
@@ -748,6 +759,42 @@ export class Orchestrator {
       return { verified: false, cause: 'infra', command: '', exitCode: null, detail: `Le contrôle du rouge n'a pas pu tourner : ${(err as Error).message}` };
     } finally {
       if (sandbox) await this.destroySandbox(sandbox.id, redRunId, run);
+    }
+  }
+
+  /**
+   * The commands of a job on what its run committed (ORC-151): out of the agent's worktree and the daemon, in
+   * `runCleanVerify`. It throws when there is no verdict, an infrastructure failure the agent is not sent. Without
+   * sandboxes, only under the explicit `hostChecks`: in the worktree, on the host, and without any of these guarantees.
+   */
+  private async verifyWork(project: ProjectRuntime, t: TicketState, run: RunRecord, job: JobSpec): Promise<VerifyResult> {
+    const { sandboxes, runsDir } = this.d;
+    const { env } = await this.repoVariablesOf(project);
+    if (!sandboxes) {
+      if (!this.d.hostChecks) throw new Error(HOST_CHECKS_OFF);
+      return job.verify.length > 0 ? this.d.verify(run.cwd, job.verify, undefined, env) : { ok: true, failures: [] };
+    }
+    if (!runsDir) throw new Error('runsDir is required with sandboxes');
+    if (!t.branch || !t.worktreePath) throw new Error(`aucune branche ou aucun worktree pour ${t.ticketId}`);
+    // A place the engine mounts from, new for each check: one cut can leave its own behind.
+    const workDir = join(runsDir, run.id, `verify-${randomUUID()}`);
+    mkdirSync(workDir, { recursive: true });
+    try {
+      return await (this.d.cleanVerify ?? runCleanVerify)({
+        sandboxes,
+        runId: run.id,
+        ticketId: t.ticketId,
+        branch: t.branch,
+        worktree: t.worktreePath,
+        gitDir: await this.d.workspaces.gitCommonDir(t.worktreePath),
+        workDir,
+        setup: project.workflow.workspace.setup,
+        commands: job.verify,
+        env,
+        log: (message) => this.log('warn', `verify of ${t.ticketId}: ${message}`),
+      });
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
     }
   }
 
@@ -1162,14 +1209,21 @@ export class Orchestrator {
               );
               return;
             }
-            const verified = job.verify.length > 0 ? await this.d.verify(run.cwd, job.verify, undefined, (await this.repoVariablesOf(project)).env) : { ok: true, failures: [] };
+            const base = { ...TRUSTED, at: clock.now(), projectId: project.id, ticketId, id: `check:${run.id}` };
+            const payload = { runId: run.id, job: job.name };
+            let verified: VerifyResult;
+            try {
+              verified = await this.verifyWork(project, t, run, job);
+            } catch (err) {
+              await this.submitResult({ ...base, type: 'verify.errored', payload: { ...payload, error: (err as Error).message } });
+              return;
+            }
             // `factory/tests-gelés` (ORC-131), blocking from the first ticket, on top of the job's commands.
             const frozen = goesThroughFreeze(t, job) ? await this.checkFrozen(project, run.cwd, t.frozenTests!) : [];
             const res = { ...verified, ok: verified.ok && frozen.length === 0, failures: [...verified.failures, ...frozen] };
-            const base = { ...TRUSTED, at: clock.now(), projectId: project.id, ticketId };
             const event: FactoryEvent = res.ok
-              ? { ...base, id: `check:${run.id}`, type: 'verify.passed', payload: { runId: run.id, job: job.name, ...(c.output ? { output: c.output } : {}) } }
-              : { ...base, id: `check:${run.id}`, type: 'verify.failed', payload: { runId: run.id, job: job.name, failures: res.failures, ...(res.tree ? { tree: res.tree } : {}) } };
+              ? { ...base, type: 'verify.passed', payload: { ...payload, ...(c.output ? { output: c.output } : {}) } }
+              : { ...base, type: 'verify.failed', payload: { ...payload, failures: res.failures, ...(res.tree ? { tree: res.tree } : {}) } };
             await this.submitResult(event);
           })(),
         );

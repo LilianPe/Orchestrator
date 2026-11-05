@@ -153,7 +153,10 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       agentApi: { host: sandboxAgentHost, port: agentPort, to: { host: agentListenHost === '0.0.0.0' ? '127.0.0.1' : agentListenHost, port: agentPort } },
     });
     const sandboxes = o.fakeRunner ? undefined : makeSandboxes(env, instanceId(o.home), egress);
-    if (!o.fakeRunner && !sandboxes) log("Attention : FACTORY_CONTAINER_CLI absent, les runs tournent sur l'hôte, sans isolation.");
+    if (!o.fakeRunner && !sandboxes) {
+      log("Attention : FACTORY_CONTAINER_CLI absent, les runs tournent sur l'hôte, sans isolation.");
+      log(env['FACTORY_ALLOW_HOST_VERIFY'] === '1' ? "Attention : FACTORY_ALLOW_HOST_VERIFY=1, verify lance le code de l'agent sur l'hôte, à côté des secrets du démon." : 'Attention : sans sandbox ni FACTORY_ALLOW_HOST_VERIFY=1, verify refuse de tourner : chaque ticket vérifié sera bloqué.');
+    }
     const claudeToken = activeClaudeToken(yml);
     if (sandboxes && !claudeToken && !env['CLAUDE_CODE_OAUTH_TOKEN']) log('Attention : aucun jeton Claude (claude.active de factory.yml, ou CLAUDE_CODE_OAUTH_TOKEN) : les runs sandboxés ne pourront pas s’authentifier.');
     const runner: Runner = o.fakeRunner
@@ -205,6 +208,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       runner,
       workspaces,
       verify: runVerify,
+      hostChecks: !!o.fakeRunner || env['FACTORY_ALLOW_HOST_VERIFY'] === '1',
       projects,
       packDir,
       settingsPath: writeRunSettings(packDir, o.home),

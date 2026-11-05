@@ -207,6 +207,11 @@ export interface EventPayloads {
   'run.lost': { runId: string; job: string; cause: 'restart' | 'lease' };
   /** The check of an attempt cut by a restart of the factory (ORC-220): run again, its verdict keeps its id `check:<run>`. */
   'verify.lost': { runId: string; job: string; output?: AgentOutput };
+  /**
+   * The check could not run (ORC-151): engine down, a sandbox that never started or stopped answering, a bundle
+   * refused. No verdict on the agent's work: the ticket is blocked, the agent never resumed for it.
+   */
+  'verify.errored': { runId: string; job: string; error: string };
   /** A timer armed by a decision, fired through the inbox with id `timer:<key>:<fireAt>` (ORC-161). */
   'timer.fired': TimerFired;
   'control.pause': Record<string, never>;

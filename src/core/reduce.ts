@@ -45,6 +45,7 @@ function external(t: TicketState, e: FactoryEvent): TicketState {
       return t.activeRunId === e.payload.runId ? { ...t, activeRunId: undefined, activeJob: undefined } : t;
     case 'verify.passed':
     case 'verify.failed':
+    case 'verify.errored':
       return e.payload.runId === t.verifyingRunId ? { ...t, verifyingRunId: undefined } : t;
     case 'pr.merged':
       return { ...t, prState: 'MERGED', prNumber: e.payload.number, prUrl: e.payload.url };
