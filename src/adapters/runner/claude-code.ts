@@ -3,6 +3,7 @@ import { createWriteStream, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { addTokens, NO_TOKENS, type RunOutcome, type TokenUsage } from '../../core/types.js';
+import { systemEnv } from '../exec.js';
 import { Channel } from './channel.js';
 import { parseStreamLine, parseUsage } from './stream-parser.js';
 import { maskTranscriptLine, transcriptSecrets } from './transcript.js';
@@ -17,10 +18,12 @@ export interface ClaudeRunnerOptions {
   secrets?: () => readonly string[];
   /** Where a run with a `sandboxId` executes (ORC-204); without it such a run is refused, never run on the host. */
   sandboxes?: SandboxProvider;
+  /** The token of the chosen Claude account (`claude.active`, ORC-211); without one, the daemon's `CLAUDE_CODE_OAUTH_TOKEN`. */
+  claudeToken?: () => string | undefined;
 }
 
-/** Daemon variables a sandboxed `claude` needs to authenticate; the rest of the host env stays out of the container. */
-const SANDBOX_AUTH = ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY', 'ANTHROPIC_BASE_URL'];
+/** The one credential a sandboxed `claude` gets (ORC-211): no API key, no other account, no gateway. */
+const CLAUDE_TOKEN = 'CLAUDE_CODE_OAUTH_TOKEN';
 
 /**
  * The factory's MCP (`POST /agent/mcp`, ORC-288). Claude Code expands `${VAR}` in a `--mcp-config`'s
@@ -51,15 +54,30 @@ export function buildClaudeArgs(req: RunRequest): string[] {
   return args;
 }
 
-/**
- * Variables the daemon sets for a run; every other FACTORY_* (and every LINEAR_*) stays in the daemon.
- * The old prefix is still filtered so a secret left in the daemon's shell never reaches a run.
- */
+/** The engine's CLI (`docker exec`) runs on the host with the daemon's env, for its own use: nothing of it enters the container but what `carried` names. */
 const DAEMON_ONLY = /^(LINEAR_|FACTORY_|RELAIS_)/; // RELAIS_ : transition, à retirer (ORC-167)
 
-export function childEnv(base: NodeJS.ProcessEnv, run: Record<string, string>): Record<string, string> {
+function engineEnv(base: NodeJS.ProcessEnv, carriers: Record<string, string>): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(base)) if (v !== undefined && !DAEMON_ONLY.test(k)) env[k] = v;
+  return { ...env, ...carriers };
+}
+
+/**
+ * What a run on the host gets of the daemon's env beyond the system (ORC-211), for `claude`, `git` and `gh`
+ * to work. Everything else stays in the daemon.
+ * Transition: `GH_TOKEN` until the agents stop pushing (ORC-125), `ANTHROPIC_API_KEY` until the host runs go (ORC-179).
+ */
+const HOST_LOGIN = ['CLAUDE_CONFIG_DIR', CLAUDE_TOKEN, 'ANTHROPIC_API_KEY', 'GH_TOKEN', 'GH_HOST', 'SSH_AUTH_SOCK', 'GIT_SSH_COMMAND'];
+
+/** The env of a run on the host; `token`, the chosen account, replaces any other login. */
+export function childEnv(base: NodeJS.ProcessEnv, run: Record<string, string>, token?: string): Record<string, string> {
+  const env = systemEnv(base);
+  for (const k of HOST_LOGIN) if (base[k] !== undefined) env[k] = base[k];
+  if (token) {
+    delete env['ANTHROPIC_API_KEY'];
+    env[CLAUDE_TOKEN] = token;
+  }
   return { ...env, ...run };
 }
 
@@ -72,19 +90,24 @@ export class ClaudeCodeRunner implements Runner {
     // Masked as read: the transcript, the stream events (SSE, Linear) and the final text never
     // hold a secret value the daemon or the run knows of.
     const secrets = transcriptSecrets({ ...process.env, ...req.env }, this.o.secrets?.());
-    let env = childEnv(process.env, req.env);
+    const chosen = this.o.claudeToken?.();
+    let env = childEnv(process.env, req.env, chosen);
     let argv = [...(this.o.command ?? ['claude']), ...buildClaudeArgs(req)];
     let cwd = req.cwd;
     if (req.sandboxId !== undefined) {
       try {
         if (!this.o.sandboxes) throw new Error(`run ${req.runId} asks for sandbox ${req.sandboxId} but the runner has no sandbox provider`);
-        const named = Object.fromEntries(Object.entries(env).filter(([k]) => k !== 'PATH' && (k in req.env || SANDBOX_AUTH.includes(k))));
+        // The allowlist of the runner (ORC-211): the run's variables and the account's token, nothing else.
+        const token = chosen ?? process.env[CLAUDE_TOKEN];
+        const { PATH: sandboxPath, ...run } = req.env;
+        const named = { ...run, ...(token ? { [CLAUDE_TOKEN]: token } : {}) };
         // req.env.PATH is the sandbox's: the host's `docker` is found on the daemon's, the command in
         // the container gets it through `env` (no secret in it, so on the command line is fine).
-        const inner = req.env['PATH'] !== undefined ? ['env', `PATH=${req.env['PATH']}`, ...argv] : argv;
-        // The host process (`docker exec`) gets the values in its env; the command only names them.
-        argv = this.o.sandboxes.spawnCommand(req.sandboxId, inner, { cwd: req.cwd, env: named });
-        env = childEnv(process.env, named);
+        const inner = sandboxPath !== undefined ? ['env', `PATH=${sandboxPath}`, ...argv] : argv;
+        // The host process (`docker exec`) gets what the provider says, never the container's env as it is.
+        const spawned = this.o.sandboxes.spawnCommand(req.sandboxId, inner, { cwd: req.cwd, env: named });
+        argv = spawned.command;
+        env = engineEnv(process.env, spawned.env);
         cwd = process.cwd(); // req.cwd is a path in the sandbox
       } catch (e) {
         return failed(maskTranscriptLine(e instanceof Error ? e.message : String(e), secrets));

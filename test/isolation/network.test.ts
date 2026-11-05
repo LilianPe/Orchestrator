@@ -146,8 +146,9 @@ describe.skipIf(!enabled)(`egress proxy (${cli})`, () => {
   it('limited: an npm registry GET goes through the proxy, decrypted, journaled with its method, path and size', async () => {
     const r = await run('limited', 'HOME=/tmp npm view is-number@7.0.0 version');
     expect(r).toMatchObject({ code: 0, out: expect.stringContaining('7.0.0') as string });
-    const hit = journal('limited').find((e) => e.host === 'registry.npmjs.org');
-    expect(hit).toMatchObject({ method: 'GET', path: '/is-number', ok: true });
+    // By its path: npm's own update check (`/npm`) can reach the registry first.
+    const hit = journal('limited').find((e) => e.host === 'registry.npmjs.org' && e.path === '/is-number');
+    expect(hit).toMatchObject({ method: 'GET', ok: true });
     expect(hit!.down).toBeGreaterThan(0);
   });
 

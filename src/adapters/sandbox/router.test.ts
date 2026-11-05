@@ -70,7 +70,7 @@ describe('SandboxRouter', () => {
     const router = new SandboxRouter([a, b]);
     const sbx = await router.create({ ...request, requirements: { ...DEFAULT_REQUIREMENTS, browser: true } });
     await router.exec(sbx.id, ['ls']);
-    expect(router.spawnCommand(sbx.id, ['claude'])).toEqual(['claude']);
+    expect(router.spawnCommand(sbx.id, ['claude'])).toEqual({ command: ['claude'], env: {} });
     expect(b.provider.execs.map((e) => e.argv)).toEqual([['ls']]);
     expect(a.provider.execs).toEqual([]);
     await router.destroy(sbx.id);
@@ -93,7 +93,7 @@ describe('SandboxRouter', () => {
 
     const found = new SandboxRouter([a, b]);
     expect(await found.findByAttempt('r2')).toEqual(other);
-    expect(found.spawnCommand(other.id, ['x'])).toEqual(['x']);
+    expect(found.spawnCommand(other.id, ['x'])).toEqual({ command: ['x'], env: {} });
   });
 
   it('knows no id it did not make, list or find: destroy ignores it, exec rejects, spawnCommand throws', async () => {
