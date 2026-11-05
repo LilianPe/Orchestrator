@@ -834,15 +834,15 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
     case 'verify.passed': {
       const job = workflow.jobs[event.payload.job];
       if (!job) return out;
-      const patch = { verifyAttempts: 0, ...(ticket?.repeatedFailure ? { repeatedFailure: null } : {}), ...(ticket?.redAttempts ? { redAttempts: 0 } : {}), ...(event.payload.sha ? { verifiedSha: event.payload.sha } : {}) };
+      // The commit found green goes out, and the job ends once it is out: until then the ticket stays held, and a stop fences the result. No sha: no commit to publish.
+      const toPublish = publishes(job) ? event.payload.sha : undefined;
+      const patch = { verifyAttempts: 0, ...(ticket?.repeatedFailure ? { repeatedFailure: null } : {}), ...(ticket?.redAttempts ? { redAttempts: 0 } : {}), ...(event.payload.sha ? { verifiedSha: event.payload.sha } : {}), ...(toPublish && job.onSuccess.move ? { owedMove: job.onSuccess.move } : {}) };
       out.events.push({ type: 'ticket.patched', patch });
       if (job.red) freeze(out, ticket, event.payload.frozen);
-      // The commit found green goes out, and the job ends once it is out: until then the ticket stays held, and a stop fences the result. No sha: no commit to publish.
-      if (publishes(job) && event.payload.sha) {
-        const { runId, sha, output } = event.payload;
-        if (job.onSuccess.move) out.events.push({ type: 'ticket.patched', patch: { owedMove: job.onSuccess.move } });
+      if (toPublish) {
+        const { runId, output } = event.payload;
         out.events.push({ type: 'verify.started', runId });
-        out.effects.push({ kind: 'publish', runId, job: job.name, sha, ...(output ? { output } : {}) });
+        out.effects.push({ kind: 'publish', runId, job: job.name, sha: toPublish, ...(output ? { output } : {}) });
         return out;
       }
       return success(out, { event, ticket, workflow }, job, event.payload.runId, event.payload.output);

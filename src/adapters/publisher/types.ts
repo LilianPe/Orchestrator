@@ -37,6 +37,14 @@ export class PublishRefused extends Error {
   }
 }
 
+/**
+ * The PR's text until the factory composes it (ORC-195, through the `OutputPolicy` of ORC-214): the ticket's id and title, its own
+ * sentence, and nothing an agent wrote. No closing keyword: it is a claim on the whole ticket, and nothing here can make it.
+ */
+export function prText(t: { ticketId: string; title: string }): { title: string; body: string } {
+  return { title: `${t.ticketId} ${t.title}`, body: `Ticket : ${t.ticketId}\n\nPubliée par l'usine : chaque commit poussé a passé sa vérification.` };
+}
+
 export interface Publisher {
   /** Rejects `PublishRefused` with nothing written on the forge; any other rejection may leave the push done, and a replay finds it. */
   publish(req: PublishRequest): Promise<Publication>;

@@ -1,3 +1,4 @@
+import { NoCommitsBetween } from './types.js';
 import { generateKeyPairSync, verify } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import type { Exec } from '../exec.js';
@@ -504,6 +505,7 @@ describe('GitHubAppForge writes, idempotent (ORC-162)', () => {
       ],
       { installationId: 42 },
     );
+    await expect(forge.ensurePr('/repo', req)).rejects.toBeInstanceOf(NoCommitsBetween);
     await expect(forge.ensurePr('/repo', req)).rejects.toThrow('No commits between main and factory/REL-1');
   });
 

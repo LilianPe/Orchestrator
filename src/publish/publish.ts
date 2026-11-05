@@ -3,16 +3,18 @@ import { existsSync, lstatSync, mkdirSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { execCmd, mustExec, type Exec, type ExecResult } from '../adapters/exec.js';
-import type { ForgeWriter } from '../adapters/forge/types.js';
+import { NoCommitsBetween, type ForgeWriter } from '../adapters/forge/types.js';
 import { PublishRefused, type Publication, type Publisher, type PublishRequest } from '../adapters/publisher/types.js';
-import { DEFAULT_REQUIREMENTS, type SandboxMount, type SandboxProvider } from '../adapters/sandbox/types.js';
-import { BASE, checkClone, cloneGit, EMPTY_TREE, scanSecrets, withDeadline, within, type Boxes } from '../core/clean-verify.js';
+import type { SandboxMount, SandboxProvider } from '../adapters/sandbox/types.js';
+import { BASE, boxOpener, checkClone, cloneGit, EMPTY_TREE, scanSecrets, withDeadline, within } from '../core/clean-verify.js';
 import { BUNDLE_TARGET, extractWork, HARDENING, hostGitEnv } from './extract.js';
 
 /** Git and a scan, no command of the repository: a stop waits behind the publication, so it is not given `verify`'s time. */
 const PUBLISH_DEADLINE_MS = 10 * 60_000;
 const REMOTE_HEAD = 'refs/factory/remote';
 const HARDENED = HARDENING.flatMap((c) => ['-c', c]);
+/** A deadline only stops waiting for git: stalled for a minute, git ends by itself, and takes the token in its env with it. */
+const STALLED = { GIT_HTTP_LOW_SPEED_LIMIT: '1000', GIT_HTTP_LOW_SPEED_TIME: '60' };
 
 export interface GitPublisherDeps {
   sandboxes: SandboxProvider;
@@ -24,14 +26,6 @@ export interface GitPublisherDeps {
   log: (message: string) => void;
   deadlineMs?: number;
   exec?: Exec;
-}
-
-/**
- * The PR's text until the factory composes it (ORC-195, through the `OutputPolicy` of ORC-214): the ticket's id and title, its own
- * sentence, and nothing an agent wrote. No closing keyword: it is a claim on the whole ticket, and nothing here can make it.
- */
-export function prText(t: { ticketId: string; title: string }): { title: string; body: string } {
-  return { title: `${t.ticketId} ${t.title}`, body: `Ticket : ${t.ticketId}\n\nPubliée par l'usine : chaque commit poussé a passé sa vérification.` };
 }
 
 /**
@@ -50,21 +44,25 @@ export function prText(t: { ticketId: string; title: string }): { title: string;
  * 6. the draft PR, found by its branch before it is opened (`ensurePr`).
  */
 export class GitPublisher implements Publisher {
-  constructor(private d: GitPublisherDeps) {}
+  private readonly exec: Exec;
+
+  constructor(private d: GitPublisherDeps) {
+    this.exec = d.exec ?? execCmd;
+  }
 
   async publish(req: PublishRequest): Promise<Publication> {
     const access = await this.d.forge.gitAccess(req.repoPath);
     const workDir = join(this.d.runsDir, req.runId, `publish-${randomUUID()}`);
     mkdirSync(workDir, { recursive: true });
     try {
-      const env = { ...hostGitEnv(workDir, workDir), GIT_TERMINAL_PROMPT: '0', ...access.env };
-      const onForge = await readForge(this.d.exec ?? execCmd, access.url, req.branch, { cwd: workDir, env });
+      const env = { ...hostGitEnv(workDir, workDir), GIT_TERMINAL_PROMPT: '0', ...STALLED, ...access.env };
+      const onForge = await readForge(this.exec, access.url, req.branch, { cwd: workDir, env });
       if (req.branch === onForge.base) throw new PublishRefused('trunk', `la branche du ticket est la branche par défaut (${onForge.base}).`);
       if (onForge.head === req.sha) this.d.log(`publish of ${req.ticketId}: ${req.sha} is already on the forge, not pushed again`);
       else await this.pushChecked(req, access.url, env, workDir, onForge.head);
       const pr = await this.d.forge.ensurePr(req.repoPath, { branch: req.branch, base: onForge.base, title: req.title, body: req.body, draft: true }).catch((err: Error) => {
         // Only here can the forge's branch hold nothing the base lacks: a head on the commit skips the check of step 3.
-        throw /No commits between/.test(err.message) ? new PublishRefused('empty', `la branche ${req.branch} n'a rien de plus que la branche de base.`) : err;
+        throw err instanceof NoCommitsBetween ? nothingToPublish(req.branch) : err;
       });
       return { prNumber: pr.number, url: pr.url, sha: req.sha };
     } finally {
@@ -76,59 +74,54 @@ export class GitPublisher implements Publisher {
   private async pushChecked(req: PublishRequest, url: string, env: Record<string, string>, workDir: string, known: string | undefined): Promise<void> {
     const deadlineMs = this.d.deadlineMs ?? PUBLISH_DEADLINE_MS;
     const silent = `la forge ne répond plus après ${deadlineMs / 1000} s`;
-    const exec = this.d.exec ?? execCmd;
     const sandboxes = withDeadline(this.d.sandboxes, deadlineMs);
+    const inBox = boxOpener(sandboxes, { runId: req.runId, ticketId: req.ticketId, log: this.d.log });
     const bundleDir = join(workDir, 'bundle');
     const cloneDir = join(workDir, 'clone');
     mkdirSync(bundleDir);
 
-    await this.inBox(sandboxes, req, 'publish', req.worktree, [{ host: bundleDir, target: BUNDLE_TARGET, readOnly: false }, ...repositoryGitDir(req)], async (sandboxId) => {
-      const { sha } = await extractWork({ sandboxes, sandboxId, branch: req.branch, bundleDir, cloneDir, ...(this.d.exec ? { exec: this.d.exec } : {}) });
+    await inBox('publish', req.worktree, [{ host: bundleDir, target: BUNDLE_TARGET, readOnly: false }, ...repositoryGitDir(req)], async (sandboxId) => {
+      const { sha } = await extractWork({ sandboxes, sandboxId, branch: req.branch, bundleDir, cloneDir, exec: this.exec });
       if (sha !== req.sha) throw new PublishRefused('head', `la tête de la branche (${sha.slice(0, 12)}) n'est pas le commit vérifié (${req.sha.slice(0, 12)}).`);
     });
 
-    const git = cloneGit({ workDir, ...(this.d.exec ? { exec: this.d.exec } : {}) }, cloneDir);
-    const fetched = [HARDENED, ['-C', cloneDir, 'fetch', '--quiet', '--no-tags', '--no-recurse-submodules', '--', url, `+HEAD:${BASE}`, ...(known ? [`+refs/heads/${req.branch}:${REMOTE_HEAD}`] : [])]].flat();
-    await within(mustExec(exec, 'git', fetched, { env }), deadlineMs, silent);
+    const git = cloneGit({ workDir, exec: this.exec }, cloneDir);
+    const inClone = (args: string[], over: Record<string, string> = {}) => this.exec('git', [...HARDENED, '-C', cloneDir, ...args], { env: { ...env, ...over } });
+    const fetched = await within(inClone(['fetch', '--quiet', '--no-tags', '--no-recurse-submodules', '--', url, `+HEAD:${BASE}`, ...(known ? [`+refs/heads/${req.branch}:${REMOTE_HEAD}`] : [])]), deadlineMs, silent);
+    if (fetched.code !== 0) throw new Error(`git fetch : ${fetched.stderr.trim() || `code ${fetched.code}`}`);
     // The head fetched is the one the lease names: read after the fetch, it is the one compared with the work.
     const remote = known ? await git('rev-parse', REMOTE_HEAD) : undefined;
-    // Git's own answers, 0 and 1, and no other code: a failure of git here is retried, never taken for a verdict on the branch.
-    const inClone = (...args: string[]) => exec('git', [...HARDENED, '-C', cloneDir, ...args], { env });
-    const answer = <T>(r: ExecResult, yes: T, no: T) => {
-      if (r.code > 1) throw new Error(`git merge-base : ${r.stderr.trim() || `code ${r.code}`}`);
-      return r.code === 0 ? yes : no;
-    };
-    if (remote && !answer(await inClone('merge-base', '--is-ancestor', remote, req.sha), true, false)) {
+    if (remote && !isYes(await inClone(['merge-base', '--is-ancestor', remote, req.sha]))) {
       throw new PublishRefused('moved', `la branche ${req.branch} porte sur la forge un commit que ce travail n'a pas (${remote.slice(0, 12)}) : un push humain, ou un historique réécrit. Rien n'est écrasé : intégrez-le dans la branche du ticket.`);
     }
-    const common = await inClone('merge-base', BASE, req.sha);
-    const from = answer(common, common.stdout.trim(), EMPTY_TREE);
-    if (from === req.sha) throw new PublishRefused('empty', `la branche ${req.branch} n'a rien de plus que la branche de base.`);
+    const common = await inClone(['merge-base', BASE, req.sha]);
+    const from = isYes(common) ? common.stdout.trim() : EMPTY_TREE;
+    if (from === req.sha) throw nothingToPublish(req.branch);
 
     const failures = await checkClone(git, from, req.sha, undefined);
-    if (this.d.gitleaks !== false) {
-      await this.inBox(sandboxes, req, 'publish-secrets', cloneDir, [], async (id) => void failures.push(...(await scanSecrets(sandboxes, id, from, req.sha))));
-    }
+    if (this.d.gitleaks !== false) failures.push(...(await inBox('publish-secrets', cloneDir, [], (id) => scanSecrets(sandboxes, id, from, req.sha))));
     if (failures.length) throw new PublishRefused('diff', failures.map((f) => `${f.command} : ${f.output}`).join('\n'));
 
+    // Read again: the checks above can outlast what a cached token has left to live.
+    const { env: fresh } = await this.d.forge.gitAccess(req.repoPath);
     // `--force-with-lease` and no other force: a fast-forward by the check above, whose lease makes the read and the write one step.
-    const push = [HARDENED, ['-C', cloneDir, 'push', '--porcelain', '--no-verify', '--recurse-submodules=no', `--force-with-lease=refs/heads/${req.branch}:${remote ?? ''}`, '--', url, `${req.sha}:refs/heads/${req.branch}`]].flat();
-    const out = await within(exec('git', push, { env }), deadlineMs, silent);
+    const push = ['push', '--porcelain', '--no-verify', '--recurse-submodules=no', `--force-with-lease=refs/heads/${req.branch}:${remote ?? ''}`, '--', url, `${req.sha}:refs/heads/${req.branch}`];
+    const out = await within(inClone(push, fresh), deadlineMs, silent);
     if (out.code === 0) return;
-    const said = `${out.stdout}\n${out.stderr}`;
-    if (/stale info|fetch first|non-fast-forward/.test(said)) throw new PublishRefused('moved', `la branche ${req.branch} a bougé pendant la publication : rien n'est écrasé.`);
-    if (/\[(remote )?rejected\]/.test(said)) throw new PublishRefused('rejected', `la forge refuse le push sur ${req.branch} : ${said.trim().slice(0, 500)}`);
-    throw new Error(`git push : ${out.stderr.trim() || `code ${out.code}`}`);
+    // Git's own status line for the ref: what a server hook prints around it says nothing of the verdict.
+    const refused = out.stdout.split('\n').find((l) => l.startsWith('!'));
+    if (!refused) throw new Error(`git push : ${out.stderr.trim() || `code ${out.code}`}`);
+    if (/stale info|fetch first|non-fast-forward/.test(refused)) throw new PublishRefused('moved', `la branche ${req.branch} a bougé pendant la publication : rien n'est écrasé.`);
+    throw new PublishRefused('rejected', `la forge refuse le push sur ${req.branch} : ${refused.trim().slice(0, 500)}`);
   }
+}
 
-  private async inBox(sandboxes: Boxes, req: PublishRequest, suffix: string, workspacePath: string, mounts: readonly SandboxMount[], work: (id: string) => Promise<void>): Promise<void> {
-    const { id } = await sandboxes.create({ runId: `${req.runId}-${suffix}`, ticketId: req.ticketId, workspacePath, network: 'none', requirements: DEFAULT_REQUIREMENTS, mounts });
-    try {
-      await work(id);
-    } finally {
-      await sandboxes.destroy(id).catch((err: Error) => this.d.log(`sandbox ${id} not destroyed: ${err.message}`));
-    }
-  }
+const nothingToPublish = (branch: string) => new PublishRefused('empty', `la branche ${branch} n'a rien de plus que la branche de base.`);
+
+/** Git's own answers of `merge-base`, 0 and 1, and no other code: a failure of git is retried, never taken for a verdict on the branch. */
+function isYes(r: ExecResult): boolean {
+  if (r.code > 1) throw new Error(`git merge-base : ${r.stderr.trim() || `code ${r.code}`}`);
+  return r.code === 0;
 }
 
 /**

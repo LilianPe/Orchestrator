@@ -89,7 +89,7 @@ github:
 
 ### GitHub App
 
-La section `github` configure l'identité du **démon** sur GitHub. Elle est facultative : sans elle, Relais utilise la CLI `gh` et `GH_TOKEN` comme avant (repli de migration, retiré après ORC-125).
+La section `github` configure l'identité du **démon** sur GitHub. Elle est facultative : sans elle, Relais utilise la CLI `gh` et `GH_TOKEN` comme avant (repli de migration, en lecture : sans la GitHub App, l'usine ne publie ni ne merge ; retiré par ORC-181).
 
 | Clé | Type | Défaut | Effet |
 |---|---|---|---|

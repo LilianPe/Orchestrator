@@ -178,7 +178,7 @@ Le premier ticket cité est celui qui touche le module en premier ou le plus ; l
 | `src/adapters/sandbox/fake.ts` | `FakeSandboxProvider` du harnais | garder | ORC-225 |
 | `src/adapters/sandbox/router.ts` | `SandboxRouter` : choisit le backend qui satisfait les exigences, refuse sinon ; `reattach` (ORC-220) | garder | ORC-204 |
 | `src/adapters/sandbox/docker-rootless.ts` | Backend conteneur `L3` (CLI `docker` ou `podman`), un conteneur par tentative, toujours en `--network none` ; avec le proxy de sortie, le socket du run et le certificat de l'autorité de sortie montés, un relais en PID 1, les variables `HTTP(S)_PROXY` et d'autorité ; un conteneur dont le socket n'est pas de ce processus est refait ; l'environnement d'un `exec` transporté sous des noms neutres, jamais lu par le moteur (ORC-211) | garder | ORC-204, ORC-213 (fait : proxy de sortie), ORC-205 (`.git` monté) |
-| `src/adapters/publisher/types.ts` | Port `Publisher` : pousse le sha vérifié, ouvre ou retrouve la PR ; `PublishRefused`, une réponse | garder | ORC-225, ORC-125 |
+| `src/adapters/publisher/types.ts` | Port `Publisher` : pousse le sha vérifié, ouvre ou retrouve la PR ; `PublishRefused`, une réponse ; `prText`, le texte provisoire de la PR | garder | ORC-225, ORC-125, ORC-195 et ORC-214 (le texte) |
 | `src/adapters/publisher/fake.ts` | `FakePublisher` du harnais, branché sur l'orchestrateur | garder | ORC-225, ORC-125 |
 | `src/adapters/checks/types.ts` | Port `CheckRunner` : vérifications hors de l'agent | garder | ORC-225, ORC-151 |
 | `src/adapters/checks/fake.ts` | `FakeCheckRunner` du harnais | garder | ORC-225 |
@@ -211,7 +211,7 @@ Sortie du travail de l'agent : aucun outil de l'usine ne tourne sur un arbre éc
 | Module | Rôle | Statut | Ticket cible |
 |---|---|---|---|
 | `src/publish/extract.ts` | `extractWork` : bundle git complet de la branche créé dans le sandbox (dossier monté à `BUNDLE_TARGET`), vérifié puis cloné sur l'hôte sans checkout, sans hook, fsmonitor ni configuration système ou globale ; tête du clone comparée au SHA lu dans le sandbox, aucun clone laissé sur un échec | garder | ORC-286, ORC-205, ORC-125 (diff lu dans le clone), ORC-151 |
-| `src/publish/publish.ts` | `GitPublisher` : tête lue sur la forge, bundle dans un sandbox à `none` comparé au commit vérifié, contrôle bloquant du diff, push vers l'avant en `--force-with-lease`, PR draft ; `prText`, le texte provisoire de la PR | garder | ORC-125, ORC-195 et ORC-214 (le texte) |
+| `src/publish/publish.ts` | `GitPublisher` : tête lue sur la forge, bundle dans un sandbox à `none` comparé au commit vérifié, contrôle bloquant du diff, push vers l'avant en `--force-with-lease`, PR draft | garder | ORC-125 |
 
 ### `src/network/`
 

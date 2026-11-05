@@ -30,6 +30,9 @@ export interface PrRequest {
   draft?: true;
 }
 
+/** The forge refuses the PR as the branch holds nothing its base lacks: an answer of the forge, whichever forge. */
+export class NoCommitsBetween extends Error {}
+
 /** How the factory's git reaches the repository (ORC-125): the URL, and what it needs in its environment, where no command line shows it. */
 export interface GitAccess {
   url: string;

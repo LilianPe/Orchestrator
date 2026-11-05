@@ -3,7 +3,7 @@ import { execCmd, mustExec, type Exec } from '../exec.js';
 import type { FeedbackItem } from '../../core/types.js';
 import { aggregateChecks, toRepoPermission } from './gh-cli.js';
 import type { RepoPermission, RepoPermissions } from '../roles/types.js';
-import type { CheckRunRequest, Forge, ForgeWriter, GitAccess, MergeResult, PrInfo, PrRequest } from './types.js';
+import { NoCommitsBetween, type CheckRunRequest, type Forge, type ForgeWriter, type GitAccess, type MergeResult, type PrInfo, type PrRequest } from './types.js';
 
 export interface GitHubRepoRef {
   owner: string;
@@ -379,18 +379,19 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
     };
     const found = await openPr();
     if (found) return found;
-    const create = async (draft: boolean) => {
-      const pr = await this.call<PullRequestDto>('POST', base, token, { title: req.title, head: req.branch, base: req.base, body: req.body, ...(draft ? { draft: true } : {}) });
-      return { number: pr.number, url: pr.html_url, deduplicated: false };
-    };
     try {
-      return await create(!!req.draft);
+      const pr = await this.call<PullRequestDto>('POST', base, token, { title: req.title, head: req.branch, base: req.base, body: req.body, ...(req.draft ? { draft: true } : {}) });
+      return { number: pr.number, url: pr.html_url, deduplicated: false };
     } catch (err) {
-      // A plan without drafts: the PR is what the ticket needs, and no human is asked to review it before Human Review.
-      if (req.draft && err instanceof GitHubApiError && err.status === 422 && /draft pull requests are not supported/i.test(err.message)) return create(false);
       if (err instanceof GitHubApiError && err.status === 422) {
+        // A plan without drafts: the PR is what the ticket needs, and no human is asked to review it before Human Review.
+        if (req.draft && /draft pull requests are not supported/i.test(err.message)) {
+          const { draft: _, ...plain } = req;
+          return this.ensurePr(repoPath, plain);
+        }
         const raced = await openPr();
         if (raced) return raced;
+        if (/no commits between/i.test(err.message)) throw new NoCommitsBetween(err.message);
       }
       throw err;
     }

@@ -5,12 +5,13 @@ import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { execCmd, type Exec, type ExecResult } from '../adapters/exec.js';
 import { FakeForge } from '../adapters/forge/fake.js';
-import { PublishRefused, type PublishRequest } from '../adapters/publisher/types.js';
+import { NoCommitsBetween } from '../adapters/forge/types.js';
+import { prText, PublishRefused, type PublishRequest } from '../adapters/publisher/types.js';
 import { FakeSandboxProvider } from '../adapters/sandbox/fake.js';
 import type { SandboxExecOptions, SandboxRequest } from '../adapters/sandbox/types.js';
 import { forbiddenPattern } from '../checks/forbidden-paths.js';
 import { BUNDLE_TARGET } from './extract.js';
-import { GitPublisher, prText } from './publish.js';
+import { GitPublisher } from './publish.js';
 
 const BRANCH = 'factory/orc-1-x';
 const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
@@ -271,10 +272,13 @@ describe('GitPublisher', () => {
     });
 
     it('a refusal the forge gives (a protected branch) is an answer, a network failure an error', async () => {
-      const said = (stderr: string) => setup({ exec: async (cmd, args, opts) => (args.includes('push') ? { stdout: '', stderr, code: 1 } : execCmd(cmd, args, opts)) });
-      const protectedBranch = said(' ! [remote rejected] x -> y (protected branch hook declined)');
+      const said = (stdout: string, stderr: string) => setup({ exec: async (cmd, args, opts) => (args.includes('push') ? { stdout, stderr, code: 1 } : execCmd(cmd, args, opts)) });
+      const protectedBranch = said('!\tx:y\t[remote rejected] (protected branch hook declined)', '');
       expect((await refusal(protectedBranch.publisher.publish(protectedBranch.request()))).code).toBe('rejected');
-      const down = said('fatal: unable to access: Could not resolve host');
+      const down = said('', 'fatal: unable to access: Could not resolve host');
+      // What a server hook prints is not git's verdict.
+      const talkative = said('!\tx:y\t[remote rejected] (declined)', 'remote: this is not a non-fast-forward');
+      expect((await refusal(talkative.publisher.publish(talkative.request()))).code).toBe('rejected');
       await expect(down.publisher.publish(down.request())).rejects.not.toBeInstanceOf(PublishRefused);
     });
   });
@@ -363,7 +367,7 @@ describe('GitPublisher', () => {
       let calls = 0;
       s.forge.ensurePr = async (...args) => {
         calls++;
-        if (calls === 2) throw new Error('GitHub API POST /repos/acme/app/pulls: 422 Validation Failed (No commits between main and factory/orc-1-x)');
+        if (calls === 2) throw new NoCommitsBetween('422 No commits between main and factory/orc-1-x');
         return ensurePr(...args);
       };
       await s.publisher.publish(s.request());

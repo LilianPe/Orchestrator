@@ -77,22 +77,12 @@ export function allowRequest(p: EgressPolicy, host: string, method: string, path
   const [pathname = '', query = ''] = path.split('?');
   if (Object.hasOwn(CLAUDE_AUTH, h) && method === 'POST' && pathname === CLAUDE_AUTH[h]) return { ok: true };
   // A push starts with this advertisement, then POSTs to git-receive-pack.
-  if (isPushAdvertisement(query)) return refuse(`${h}: git push refused (read-only)`);
+  // Read as a forge reads it, whatever its spelling. A push's real step is the POST, which no rule below lets through.
+  if (new URLSearchParams(query.toLowerCase()).getAll('service').includes('git-receive-pack')) return refuse(`${h}: git push refused (read-only)`);
   if (READ.has(method)) return { ok: true };
   // A git fetch over smart HTTP is a POST, and only reads.
   if (h === 'github.com' && method === 'POST' && pathname.endsWith('/git-upload-pack')) return { ok: true };
   return refuse(`${method} ${h}${pathname} refused: GET, HEAD and OPTIONS only`);
-}
-
-/** Under any spelling the forge would read as this query: the factory alone pushes (ORC-125), by no proxy. */
-function isPushAdvertisement(query: string): boolean {
-  let decoded = query;
-  try {
-    decoded = decodeURIComponent(query);
-  } catch {
-    // Not a query any forge reads: as it is.
-  }
-  return /(^|&)service=git-receive-pack(&|$)/i.test(decoded);
 }
 
 /** Lowercase, no trailing dot: the one spelling the lists, the proxy's certificate, Host and journal see. */

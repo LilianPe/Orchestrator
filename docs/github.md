@@ -47,7 +47,7 @@ Une valeur de `config.yaml` l'emporte sur la variable d'environnement. Si une se
 - Le démon signe un **JWT RS256** avec la clé privée : `iss = appId`, `iat = maintenant - 60 s`, `exp = maintenant + 9 min`.
 - Il échange ce JWT contre un **jeton d'installation** : `POST /app/installations/{id}/access_tokens` avec `{ "repositories": ["<dépôt du run>"] }`. Si `installationId` n'est pas configuré, il appelle d'abord `GET /repos/{owner}/{repo}/installation`.
 - Le jeton dure **au plus 1 heure**. Il est mis en cache **par dépôt** jusqu'à son expiration, avec une marge de sécurité de 60 s.
-- Il reste **en mémoire du démon** : jamais écrit sur disque, jamais journalisé, jamais transmis aux runs Claude Code (`RELAIS_*`, `GH_TOKEN`, etc. inchangés). Un run ne peut donc pas agir sur un autre dépôt avec ce jeton.
+- Il reste **en mémoire du démon** : jamais écrit sur disque, jamais journalisé, jamais transmis aux runs Claude Code, pas plus que `GH_TOKEN`. Un run ne peut donc pas agir sur un autre dépôt avec ce jeton.
 - La clé privée n'est jamais journalisée. Le message de démarrage ne contient que l'App ID et, le cas échéant, l'ID d'installation.
 
 #### Rotation de clé

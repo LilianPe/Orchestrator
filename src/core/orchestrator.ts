@@ -4,8 +4,7 @@ import { rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import type { Forge, ForgeWriter, MergeResult } from '../adapters/forge/types.js';
 import { prEventId } from '../adapters/forge/github-webhook.js';
-import { PublishRefused, type Publisher } from '../adapters/publisher/types.js';
-import { prText } from '../publish/publish.js';
+import { prText, PublishRefused, type Publisher } from '../adapters/publisher/types.js';
 import type { RoleResolver } from '../adapters/roles/types.js';
 import type { RunHandle, RunResult, Runner } from '../adapters/runner/types.js';
 import {
@@ -1523,6 +1522,8 @@ export class Orchestrator {
     else if (pr.checks !== 'pass' && pr.checks !== 'none') reason = `les checks du commit relu ne sont pas verts (${pr.failedChecks.join(', ') || pr.checks})`;
     else {
       // No check at all: the forge merges only in a repository with no CI (`mergePr`, `unchecked`).
+      // GitHub merges no draft: a Done is a merge decision, whatever became of the move's best effort (`prReady`).
+      await writer.markPrReady(project.repoPath, t.prNumber);
       const res: MergeResult = await writer.mergePr(project.repoPath, t.prNumber, sha, pr.checks === 'none' ? { unchecked: true } : undefined);
       if (res.merged) return res.deduplicated ? { deduplicated: true } : undefined;
       reason =

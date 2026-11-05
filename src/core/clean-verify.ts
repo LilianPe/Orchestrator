@@ -75,7 +75,7 @@ export function within<T>(work: Promise<T>, ms: number, message: string, onExpir
   return Promise.race([work, expired]).finally(() => clearTimeout(timer));
 }
 
-export type Boxes = Pick<SandboxProvider, 'create' | 'exec' | 'destroy'>;
+type Boxes = Pick<SandboxProvider, 'create' | 'exec' | 'destroy'>;
 
 /** `sandboxes`, whose `create` and `exec` give up on an engine silent past `ms`. An `exec` also destroys its sandbox: the only way a stuck one ends. */
 export function withDeadline(sandboxes: Boxes, ms: number): Boxes {
@@ -86,6 +86,16 @@ export function withDeadline(sandboxes: Boxes, ms: number): Boxes {
     destroy: (id) => within(sandboxes.destroy(id), ms, silent),
   };
 }
+
+/** A sandbox at network `none` for `work`, gone before the next one opens. */
+export const boxOpener = (sandboxes: Boxes, of: { runId: string; ticketId: string; log: (message: string) => void }) => async <T>(suffix: string, workspacePath: string, mounts: readonly SandboxMount[], work: (id: string) => Promise<T>): Promise<T> => {
+  const { id } = await sandboxes.create({ runId: `${of.runId}-${suffix}`, ticketId: of.ticketId, workspacePath, network: 'none', requirements: DEFAULT_REQUIREMENTS, mounts });
+  try {
+    return await work(id);
+  } finally {
+    await sandboxes.destroy(id).catch((err: Error) => of.log(`sandbox ${id} not destroyed: ${err.message}`));
+  }
+};
 
 /**
  * `verify` out of the agent's reach (ORC-151). The agent's code never runs where the engine's socket or the daemon's
@@ -107,15 +117,7 @@ export function withDeadline(sandboxes: Boxes, ms: number): Boxes {
 export const runCleanVerify: CleanVerifier = async (req) => {
   const deadlineMs = req.deadlineMs ?? VERIFY_TIMEOUT_MS + DEADLINE_GRACE_MS;
   const sandboxes = withDeadline(req.sandboxes, deadlineMs);
-  /** A sandbox at network `none` for `work`, gone before the next one opens. */
-  const inBox = async <T>(suffix: string, workspacePath: string, mounts: readonly SandboxMount[], work: (id: string) => Promise<T>): Promise<T> => {
-    const { id } = await sandboxes.create({ runId: `${req.runId}-${suffix}`, ticketId: req.ticketId, workspacePath, network: 'none', requirements: DEFAULT_REQUIREMENTS, mounts });
-    try {
-      return await work(id);
-    } finally {
-      await sandboxes.destroy(id).catch((err: Error) => req.log(`sandbox ${id} not destroyed: ${err.message}`));
-    }
-  };
+  const inBox = boxOpener(sandboxes, req);
 
   const bundleDir = join(req.workDir, 'bundle');
   const cloneDir = join(req.workDir, 'clone');
@@ -241,7 +243,7 @@ export async function checkClone(git: CloneGit, from: string, sha: string, froze
   }
   const forbidden = await checkForbiddenPaths({ changed, showAtBase: (p) => show(git, from, p), showAtHead });
   const failures: VerifyFailure[] = forbidden.ok ? [] : [{ command: FORBIDDEN_CHECK, exitCode: 1, output: forbidden.summary }];
-  const binaries = await binariesAdded(git, from, sha, new Set(changed.filter((c) => c.deleted).map((c) => c.path)));
+  const binaries = await binariesAdded(git, from, sha);
   if (binaries.length) failures.push({ command: BINARY_CHECK, exitCode: 1, output: `Fichier binaire dans le diff, publication bloquée. Retire-le de la branche :\n${binaries.map((p) => `- ${mdCode(p)}`).join('\n')}` });
   if (frozen) {
     const atHead = (await git('ls-tree', '-r', '--name-only', '-z', sha)).split('\0').filter(Boolean);
@@ -257,9 +259,9 @@ export async function checkClone(git: CloneGit, from: string, sha: string, froze
  * What the diff adds as binary, on git's own reading: a NUL in a file's start. Read in a clone without a worktree, so no `.gitattributes` of the branch says
  * otherwise. `-z`, as a path can hold anything: `<added>\t<removed>\t<path>`, both counts `-` for a binary.
  */
-async function binariesAdded(git: CloneGit, from: string, sha: string, deleted: ReadonlySet<string>): Promise<string[]> {
-  const lines = (await git('diff', '--numstat', '--no-renames', '-z', from, sha)).split('\0').filter(Boolean);
-  return lines.filter((l) => l.startsWith('-\t-\t')).map((l) => l.slice(4)).filter((path) => !deleted.has(path));
+async function binariesAdded(git: CloneGit, from: string, sha: string): Promise<string[]> {
+  const lines = (await git('diff', '--numstat', '--no-renames', '--diff-filter=d', '-z', from, sha)).split('\0').filter(Boolean);
+  return lines.filter((l) => l.startsWith('-\t-\t')).map((l) => l.slice(4));
 }
 
 /**
