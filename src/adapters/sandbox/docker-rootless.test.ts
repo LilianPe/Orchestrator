@@ -145,6 +145,9 @@ describe('ContainerSandboxProvider.create', () => {
     for (const v of ['HTTPS_PROXY=http://127.0.0.1:3128', 'http_proxy=http://127.0.0.1:3128', 'NO_PROXY=localhost,127.0.0.1', 'NODE_USE_ENV_PROXY=1', 'NODE_EXTRA_CA_CERTS=/run/factory/egress-ca.crt', 'GIT_SSL_CAINFO=/run/factory/egress-ca.crt', 'YARN_HTTPS_PROXY=http://127.0.0.1:3128']) {
       expect(a).toContain(v);
     }
+    // Yarn ≥ 2 refuses `cafile` ("Unrecognized or legacy configuration settings"); its own setting stays.
+    expect(a).toContain('YARN_HTTPS_CA_FILE_PATH=/run/factory/egress-ca.crt');
+    expect(a.some((x) => x.startsWith('YARN_CAFILE='))).toBe(false);
     expect(a.slice(-3, -1)).toEqual(['node', '-e']);
     expect(a.at(-1)).toMatch(/listen\(3128, *'127\.0\.0\.1'\)/);
     expect(a.at(-1)).toContain("net.connect('/run/factory/egress/egress.sock')");
