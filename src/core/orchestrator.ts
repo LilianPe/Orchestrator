@@ -201,6 +201,12 @@ const ECHO_MS = 60_000;
 const INSTANCE_KEY = 'instance-id';
 
 /** An outbox effect's idempotency key (ORC-162): `<ticket:seq:i>@<installation>`, and whether the row runs again. */
+/** A session's plan as the store keeps it (ORC-171): the session is that of the delegation that opened it. */
+interface KeptPlan {
+  sessionId: string;
+  plan: PlanStep[];
+}
+
 interface EffectKey {
   id: string;
   replay: boolean;
@@ -944,7 +950,7 @@ export class Orchestrator {
         const run = await store.getRun(c.runId);
         const job = project.workflow.jobs[c.job];
         if (!run || !job) return;
-        if (!job.red) await this.updatePlan(t, (plan) => plan && advancePlan(plan, 'Vérif'));
+        if (planStepOfJob(job) === 'Build') await this.updatePlan(t, (plan) => advancePlan(plan, 'Vérif'));
         this.track(
           (async () => {
             if (job.red) {
@@ -971,7 +977,7 @@ export class Orchestrator {
       case 'move':
         await this.move(project, t, c.to, c.keepReviewSha);
         // The factory's own work ended; a move back after a refusal concludes nothing.
-        if (c.to === 'human_review' && !c.keepReviewSha) await this.updatePlan(t, (plan) => plan && closePlan(plan, t.prNumber !== undefined));
+        if (c.to === 'human_review' && !c.keepReviewSha) await this.updatePlan(t, (plan) => closePlan(plan, t.prNumber !== undefined));
         return;
       case 'merge':
         return this.merge(project, t, c.sha, key);
@@ -997,7 +1003,7 @@ export class Orchestrator {
       case 'link_pr':
         if (t.linearSessionId) await tracker.addExternalUrl(t.linearSessionId, 'Pull request', c.url);
         // Seen during the run (the agent opened it), the PR waits for the end of the work: the move to Human Review closes the plan.
-        if (!t.activeRunId && !t.verifyingRunId) await this.updatePlan(t, (plan) => plan && advancePlan(plan, 'PR', 'completed'));
+        if (!t.activeRunId && !t.verifyingRunId) await this.updatePlan(t, (plan) => advancePlan(plan, 'PR', 'completed'));
         return;
       case 'cleanup':
         await this.d.workspaces.cleanup(project.id, project.repoPath, ticketId);
@@ -1023,7 +1029,7 @@ export class Orchestrator {
     if (c.comment) await attempt('comment', () => this.commentOnce(t.ticketId, c.body, key));
     await attempt('activity', () => this.activityOnce(c.linearSessionId, { type: 'thought', body: c.body }, key));
     if (outcomes.length > 0) await this.d.store.markAcked(key.eventId, this.d.clock.now()).catch((err: Error) => this.log('warn', `ack of ${key.eventId} posted, its time not recorded: ${err.message}`));
-    if (c.plan) await this.updatePlan(t, startPlan, c.linearSessionId);
+    if (c.plan) await this.openPlan(t, c.linearSessionId);
     // Already made only if nothing was written here.
     return outcomes.length > 0 && outcomes.every((o) => o?.deduplicated) ? outcomes[0] : undefined;
   }
@@ -1035,21 +1041,32 @@ export class Orchestrator {
     await this.d.tracker.comment(ticketId, body, key.id);
   }
 
+  /** Opens the session's plan (ORC-171), in the session of the delegation that asks for it. */
+  private openPlan(t: TicketState, sessionId: string): Promise<void> {
+    return this.writePlan(t, async () => ({ sessionId, plan: startPlan() }));
+  }
+
+  /** Moves the session's plan on; a ticket whose delegation opened none gets none. */
+  private updatePlan(t: TicketState, change: (plan: readonly PlanStep[]) => PlanStep[]): Promise<void> {
+    return this.writePlan(t, async (key) => {
+      const stored = await this.d.store.getMeta(key);
+      if (!stored) return undefined;
+      const { sessionId, plan } = JSON.parse(stored) as KeptPlan;
+      return { sessionId, plan: change(plan) };
+    });
+  }
+
   /**
-   * The session's plan (ORC-171), kept in the store with its session so that each update builds on the last, in the
-   * session of the delegation that opened it (`opening`); a ticket whose delegation opened none gets none. Never
+   * Keeps the plan in the store with its session, for the next update to build on, and writes it to Linear. Never
    * throws: Linear's plan API is a preview, and a plan it refuses must not stop the work.
    */
-  private async updatePlan(t: TicketState, change: (plan: readonly PlanStep[] | undefined) => PlanStep[] | undefined, opening?: string): Promise<void> {
+  private async writePlan(t: TicketState, next: (key: string) => Promise<KeptPlan | undefined>): Promise<void> {
     const key = `plan:${t.projectId}:${t.ticketId}`;
     try {
-      const stored = await this.d.store.getMeta(key);
-      const kept = stored ? (JSON.parse(stored) as { sessionId: string; plan: PlanStep[] }) : undefined;
-      const plan = change(opening ? undefined : kept?.plan);
-      const sessionId = opening ?? kept?.sessionId;
-      if (!plan || !sessionId) return;
-      await this.d.store.setMeta(key, JSON.stringify({ sessionId, plan }));
-      await this.d.tracker.setSessionPlan(sessionId, plan);
+      const kept = await next(key);
+      if (!kept) return;
+      await this.d.store.setMeta(key, JSON.stringify(kept));
+      await this.d.tracker.setSessionPlan(kept.sessionId, kept.plan);
     } catch (err) {
       this.log('warn', `plan of ${t.ticketId} not written: ${(err as Error).message}`);
     }
@@ -1460,7 +1477,7 @@ export class Orchestrator {
       await this.apply(t, { type: 'run.started', runId, job: job.name, queue: job.queue, claudeSessionId, feedbackConsumed: kind === 'feedback', ...(ticketSession ? {} : { ticketSession: false as const }) });
       await store.putRun(run);
       const step = planStepOfJob(job);
-      if (step) await this.updatePlan(t, (plan) => plan && advancePlan(plan, step));
+      if (step) await this.updatePlan(t, (plan) => advancePlan(plan, step));
       // The run is written: a queued item it came from leaves the queue now (a crash from here on is recover()'s).
       // Logged, not thrown: the run is launched either way, and a queue item left behind is refused
       // when handed out again (its ticket has a run, or is blocked, or its mark names this run).

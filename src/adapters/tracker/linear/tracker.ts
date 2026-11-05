@@ -44,7 +44,7 @@ const STATE_TYPES: Record<LogicalState, string> = {
   done: 'completed',
 };
 
-const teamOf = (identifier: string) => identifier.split('-')[0]!;
+export const teamOf = (identifier: string) => identifier.split('-')[0]!;
 
 /** Linear's answer for an issue it does not have: `Entity not found: Issue`, shown as `Could not find referenced Issue.` */
 const isNotFound = (e: LinearGqlError) => /Entity not found: Issue\b|Could not find referenced Issue\b/.test(`${e.message} ${e.extensions?.userPresentableMessage ?? ''}`);

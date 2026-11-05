@@ -63,9 +63,14 @@ describe('decide — one active run per ticket (ORC-171)', () => {
     expect(out.effects).toEqual([expect.objectContaining({ body: expect.stringMatching(/^Refusé/) })]);
   });
 
-  it('a delegation the reconciliation finds on a ticket at work starts nothing, and has no session to answer', () => {
-    const out = decide(ticket({ activeRunId: 'r1', logical: 'dev' }), ev('ticket.delegated', {}, undefined, undefined), workflow);
+  it('a delegation the reconciliation finds on a ticket at work is refused by the matrix: unsigned, it starts nothing', () => {
+    const out = decide(ticket({ activeRunId: 'r1', logical: 'dev' }), { ...ev('ticket.delegated', {}, []), actor: undefined } as FactoryEvent, workflow);
     expect(out.effects).toEqual([]);
+  });
+
+  it('replays a delegation journaled before ORC-171 as it was decided, on a ticket at work too', () => {
+    const out = decide(ticket({ delegated: true, linearSessionId: 's-dev', activeRunId: 'r1', logical: 'dev' }), ev('ticket.delegated', { linearSessionId: 's-2' }), workflow);
+    expect(kinds(out.effects)).toEqual(['start_run']);
   });
 
   it('a pending job left without a run (a crash) refuses nothing: the delegation starts', () => {

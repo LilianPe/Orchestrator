@@ -5,6 +5,7 @@ import { SCHEMA_VERSION, TRUSTED, type EventPayloads, type EventType, type Facto
 import type { Store } from '../../../store/types.js';
 import { IssueNotFoundError, labelEchoKey, stateEchoKey, type Tracker, type TrackerIssue } from '../types.js';
 import { knownLabels, labelChanges, recordLabels, type Serial } from './labels.js';
+import { teamOf } from './tracker.js';
 
 export interface ReconcileDeps {
   tracker: Pick<Tracker, 'listDelegated' | 'getIssue'>;
@@ -80,7 +81,7 @@ export async function reconcileOnce(d: ReconcileDeps): Promise<void> {
       for (const t of await d.store.listTickets()) {
         if (t.projectId !== p.id || delegated.has(t.ticketId)) continue;
         // Its team has a project now (ORC-171): its block is lifted here; a new delegation goes there.
-        if (isNoRepo(t) && (d.allProjects ?? d.projects).some((o) => o.teamKey === t.ticketId.split('-')[0])) {
+        if (isNoRepo(t) && (d.allProjects ?? d.projects).some((o) => o.teamKey === teamOf(t.ticketId))) {
           await emit(t, TRUSTED, `reconcile:undelegated-flag:${t.ticketId}:${t.updatedAt}`, 'ticket.undelegated', {});
           continue;
         }

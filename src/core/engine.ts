@@ -499,7 +499,6 @@ export const ACK_BODY = 'Bien reçu.';
  * a row journaled before ORC-171 asks for none: it replays as it was decided.
  */
 function acknowledge(out: Decision, event: FactoryEvent): void {
-  if (!TRIGGERS.has(event.type)) return;
   const { ack, linearSessionId } = event.payload as { ack?: true; linearSessionId?: string };
   if (!ack || !linearSessionId) return;
   if (out.effects.some((e) => e.kind === 'activity' && e.linearSessionId === linearSessionId)) return;
@@ -604,8 +603,9 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
     // The event's facts stay recorded (Linear did delegate, the session exists): only the factory's answer is refused.
     if (!authorize(out, event, ticket, 'trigger', 'linear', matrix)) return out;
     // One active run per ticket (ORC-171): a new delegation stacks no job behind it, and its initiator stays. A pending
-    // job alone is no run: `run.interrupted` leaves one behind after a crash.
-    if (event.type === 'ticket.delegated' && (state?.activeRunId || state?.verifyingRunId)) {
+    // job alone is no run: `run.interrupted` leaves one behind after a crash. What no webhook brought since ORC-171
+    // replays as it was decided; found by the reconciliation, the matrix refuses it above.
+    if (event.type === 'ticket.delegated' && event.payload.ack && (state?.activeRunId || state?.verifyingRunId)) {
       out.trace.push('ticket.delegated: a run is active, none started');
       const sessionId = event.payload.linearSessionId;
       if (sessionId) out.effects.push({ kind: 'activity', type: 'response', body: "Un run est déjà en cours sur ce ticket : je n'en lance pas un second.", linearSessionId: sessionId });

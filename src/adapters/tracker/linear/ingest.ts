@@ -6,10 +6,10 @@ export interface IngestDeps {
   secret: () => string;
   ctx: MapContext;
   /**
-   * Writes an event to the inbox (ORC-147) and resolves once it is committed: `false` when the
-   * inbox already holds its id. Rejects when the write fails.
+   * Writes an event to the inbox (ORC-147) and resolves once it is committed, or when the inbox
+   * already holds its id. Rejects when the write fails.
    */
-  accept: (e: FactoryEvent) => Promise<boolean>;
+  accept: (e: FactoryEvent) => Promise<unknown>;
   log: (m: string) => void;
   /** The turn the reconciliation shares, around the known labels (ORC-185); one of its own otherwise. */
   serial?: Serial;
@@ -36,10 +36,7 @@ export function createLinearIngest(d: IngestDeps) {
     const key = deliveryKey(body);
     const turn = inTurn(async () => {
       const events = await mapLinearWebhook(body, key, d.ctx);
-      for (const e of events) {
-        // A duplicate (already in the inbox) is not processed again; the ack is an effect of its decision (ORC-171).
-        await d.accept(e);
-      }
+      for (const e of events) await d.accept(e);
       // Only once the events are written: a webhook sent again must not find its change already known.
       await recordIssueLabels(body, d.ctx).catch((err: Error) => d.log(`labels not recorded: ${err.message}`));
     });

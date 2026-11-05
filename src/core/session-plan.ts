@@ -36,7 +36,7 @@ export function closePlan(plan: readonly PlanStep[], hasPr: boolean): PlanStep[]
  * without handing the ticket over (a reply, a CI fix): nothing would close the step it reopened.
  */
 export function planStepOfJob(job: Pick<JobSpec, 'queue' | 'skill' | 'red' | 'onSuccess'>): PlanStepName | undefined {
-  if (job.queue !== 'dev' || job.skill === 'factory:review') return undefined;
+  if (job.queue !== 'dev' || job.skill?.endsWith(':review')) return undefined;
   if (job.red) return 'Tests';
   return job.onSuccess.move ? 'Build' : undefined;
 }

@@ -3,6 +3,7 @@ import { reconcileOnce, type ReconcileDeps } from '../../src/adapters/tracker/li
 import { measureTicket } from '../../src/core/measures.js';
 import { createHarness } from '../helpers/harness.js';
 import { linearIngest, signedDelegation, signedMention } from '../helpers/linear-webhook.js';
+import { testPreset } from '../helpers/test-preset.js';
 
 const CLEAR = { identifier: 'REL-1', title: 'Export CSV', description: 'Exporter les audits en CSV depuis la liste des audits.' };
 
@@ -137,6 +138,18 @@ describe('the trigger (ORC-171)', () => {
     const h = plain();
     h.runner.enqueue({ events: [{ kind: 'text', text: 'PR ouverte.' }] }, { events: [{ kind: 'text', text: 'Corrigé.' }] });
     await h.send('ticket.delegated', { linearSessionId: 'ls-1', ack: true });
+    const closed = h.tracker.plans('ls-1').length;
+    await h.send('status.changed', { from: 'human_review', to: 'dev' });
+    expect(h.runner.requests).toHaveLength(2);
+    expect(h.tracker.plans('ls-1')).toHaveLength(closed);
+  });
+
+  it('shows the check of a run that hands the ticket over, not that of a feedback run: nothing would close it', async () => {
+    const h = createHarness({ preset: testPreset() });
+    h.tracker.addIssue(CLEAR);
+    h.runner.enqueue({ events: [{ kind: 'text', text: 'PR ouverte.' }] }, { events: [{ kind: 'text', text: 'Corrigé.' }] });
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1', ack: true });
+    expect(h.tracker.plans('ls-1').some((p) => p.some((s) => s.content === 'Vérif' && s.status === 'inProgress'))).toBe(true);
     const closed = h.tracker.plans('ls-1').length;
     await h.send('status.changed', { from: 'human_review', to: 'dev' });
     expect(h.runner.requests).toHaveLength(2);

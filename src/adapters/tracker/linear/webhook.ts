@@ -91,11 +91,16 @@ export function signedActor(body: any): SignedActor {
   return id ? { id, taint: 'trusted', name: name ?? 'Humain' } : { taint: 'untrusted', name: name ?? 'Humain' };
 }
 
+/** A session Linear opened on a delegation: no comment opened it. */
+const isDelegation = (body: any): boolean => body.type === 'AgentSessionEvent' && body.action === 'created' && !body.agentSession.comment;
+
+const delegationPayload = (body: any) => ({ linearSessionId: body.agentSession.id as string, promptContext: body.promptContext as string | undefined });
+
 function sessionEvents(body: any, author: string, projectId: string, ctx: MapContext): PartialEvent[] {
   const sessionId: string = body.agentSession.id;
   if (body.action === 'created') {
     const comment = body.agentSession.comment;
-    if (!comment) return [{ type: 'ticket.delegated', payload: { linearSessionId: sessionId, promptContext: body.promptContext, ack: true } }];
+    if (!comment) return [{ type: 'ticket.delegated', payload: { ...delegationPayload(body), ack: true } }];
     const text = stripMention(comment.body ?? '');
     const [first = '', ...rest] = text.split(/\s+/);
     if (ctx.commands(projectId).includes(first.toLowerCase())) {
@@ -198,15 +203,13 @@ export async function mapLinearWebhook(body: any, key: string, ctx: MapContext):
   const teamKey = identifier.split('-')[0]!;
   const known = ctx.projectIdForTeam(teamKey);
   // A delegation on a team no project takes waits blocked under the first one (ORC-171); anything else there is dropped.
-  const delegation = body.type === 'AgentSessionEvent' && body.action === 'created' && !body.agentSession.comment;
-  const projectId = known ?? (delegation ? ctx.firstProject?.() : undefined);
+  const projectId = known ?? (isDelegation(body) ? ctx.firstProject?.() : undefined);
   if (!projectId) return [];
   const { id: actor, taint, name } = signedActor(body);
-  const partials: PartialEvent[] = !known
-    ? [{ type: 'ticket.delegated', payload: { linearSessionId: body.agentSession.id, promptContext: body.promptContext, noRepo: teamKey } }]
-    : body.type === 'AgentSessionEvent'
-      ? sessionEvents(body, name, projectId, ctx)
-      : await issueEvents(body, identifier, teamKey, projectId, ctx);
+  let partials: PartialEvent[];
+  if (!known) partials = [{ type: 'ticket.delegated', payload: { ...delegationPayload(body), noRepo: teamKey } }];
+  else if (body.type === 'AgentSessionEvent') partials = sessionEvents(body, name, projectId, ctx);
+  else partials = await issueEvents(body, identifier, teamKey, projectId, ctx);
   const at = ctx.now();
   return partials.map(
     (p) =>
