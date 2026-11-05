@@ -74,9 +74,9 @@ L'usine publie (ORC-125), par l'effet `publish` de l'outbox, que `decide` n'écr
 2. fait le bundle de la branche dans un sandbox neuf à `none`, le vérifie, le clone sans checkout, sans hook ni config du dépôt, et compare sa tête au commit vérifié ;
 3. contrôle le diff depuis la base, de façon bloquante : `factory/chemins-interdits` (liens symboliques sortants et `package.json#scripts` compris), `factory/binaires`, `factory/secrets` ;
 4. pousse **seulement vers l'avant**, en `--force-with-lease` sur la tête lue : si la branche porte un commit absent du travail (un push humain, ORC-159, ou un historique réécrit), rien n'est poussé ;
-5. ouvre la PR **draft**, cherchée par branche avant création. Elle sort de draft au passage du ticket en *Human Review* : GitHub ne merge pas un draft.
+5. ouvre la PR **draft**, cherchée par branche avant création (une PR normale si l'offre du dépôt n'a pas de draft). Elle sort de draft au passage du ticket en *Human Review* : GitHub ne merge pas un draft.
 
-Un refus est une réponse : le ticket est bloqué avec la raison (`publish.refused`), décidé une fois. Une panne est rejouée par l'outbox, puis bloque le ticket. Un run sans commit au-delà de la base finit sans PR.
+Un refus est une réponse : le ticket est bloqué avec la raison (`publish.refused`), décidé une fois ; la relance qui publie le mène où il devait aller (`owedMove`). Une panne est rejouée par l'outbox, puis bloque le ticket. Un run sans commit au-delà de la base finit sans PR.
 
 Le texte de la PR est provisoire : l'id et le titre du ticket, et une phrase de l'usine, sans rien de l'agent ni de mot-clé de fermeture. Sa composition est à ORC-195, par l'`OutputPolicy` d'ORC-214.
 
@@ -171,7 +171,7 @@ Le pack interdit aux agents `gh pr merge` et tout push ([`pack-et-skills.md`](pa
 - **Require status checks to pass** avec vos checks de CI ;
 - ne pas mettre le compte de Relais dans les exceptions (*bypass*).
 
-Le dépôt de connaissance (`relais-knowledge`) mérite la même protection : les runs `learn` y ouvrent des PR, un humain les merge.
+Le dépôt de connaissance (`relais-knowledge`) mérite la même protection : un humain y merge.
 
 ## `factory doctor` : secrets de CI et branches de l'usine
 

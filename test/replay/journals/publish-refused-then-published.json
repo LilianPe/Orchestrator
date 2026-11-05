@@ -701,7 +701,8 @@
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "verifyingRunId": "id-1",
-          "verifiedSha": "aaa111"
+          "verifiedSha": "aaa111",
+          "owedMove": "human_review"
         },
         "effects": [
           {
@@ -766,7 +767,8 @@
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "verifyingRunId": "id-1",
-          "verifiedSha": "aaa111"
+          "verifiedSha": "aaa111",
+          "owedMove": "human_review"
         },
         "ticket": {
           "projectId": "p",
@@ -790,7 +792,8 @@
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "verifyingRunId": "id-1",
-          "verifiedSha": "aaa111"
+          "verifiedSha": "aaa111",
+          "owedMove": "human_review"
         },
         "effects": [],
         "timers": [],
@@ -806,7 +809,7 @@
         "taint": "trusted",
         "projectId": "p",
         "ticketId": "REL-1",
-        "id": "publish-refused:REL-1:5:1@69259ad4e9fa",
+        "id": "publish-refused:REL-1:5:1@f637c2102654",
         "type": "publish.refused",
         "at": 1791622800000,
         "payload": {
@@ -817,7 +820,7 @@
         }
       },
       "decision": {
-        "eventId": "publish-refused:REL-1:5:1@69259ad4e9fa",
+        "eventId": "publish-refused:REL-1:5:1@f637c2102654",
         "projectId": "p",
         "ticketId": "REL-1",
         "seq": 7,
@@ -845,7 +848,8 @@
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "verifyingRunId": "id-1",
-          "verifiedSha": "aaa111"
+          "verifiedSha": "aaa111",
+          "owedMove": "human_review"
         },
         "ticket": {
           "projectId": "p",
@@ -869,6 +873,7 @@
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "verifiedSha": "aaa111",
+          "owedMove": "human_review",
           "blockReason": "Publication refusée : la branche porte un commit que ce travail n'a pas"
         },
         "effects": [
@@ -940,6 +945,7 @@
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "verifiedSha": "aaa111",
+          "owedMove": "human_review",
           "blockReason": "Publication refusée : la branche porte un commit que ce travail n'a pas"
         },
         "ticket": {
@@ -964,6 +970,7 @@
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "verifiedSha": "aaa111",
+          "owedMove": "human_review",
           "blockReason": "Publication refusée : la branche porte un commit que ce travail n'a pas"
         },
         "effects": [],
@@ -1019,6 +1026,7 @@
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "verifiedSha": "aaa111",
+          "owedMove": "human_review",
           "blockReason": "Publication refusée : la branche porte un commit que ce travail n'a pas"
         },
         "ticket": {
@@ -1043,6 +1051,7 @@
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "verifiedSha": "aaa111",
+          "owedMove": "human_review",
           "blockReason": "Publication refusée : la branche porte un commit que ce travail n'a pas"
         },
         "effects": [],
@@ -1065,7 +1074,7 @@
         "payload": {
           "effectId": "REL-1:7:1",
           "kind": "activity",
-          "eventId": "publish-refused:REL-1:5:1@69259ad4e9fa",
+          "eventId": "publish-refused:REL-1:5:1@f637c2102654",
           "attempts": 1
         }
       },
@@ -1098,6 +1107,7 @@
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "verifiedSha": "aaa111",
+          "owedMove": "human_review",
           "blockReason": "Publication refusée : la branche porte un commit que ce travail n'a pas"
         },
         "ticket": {
@@ -1122,6 +1132,7 @@
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "verifiedSha": "aaa111",
+          "owedMove": "human_review",
           "blockReason": "Publication refusée : la branche porte un commit que ce travail n'a pas"
         },
         "effects": [],
@@ -1144,7 +1155,7 @@
         "payload": {
           "effectId": "REL-1:7:2",
           "kind": "labels",
-          "eventId": "publish-refused:REL-1:5:1@69259ad4e9fa",
+          "eventId": "publish-refused:REL-1:5:1@f637c2102654",
           "attempts": 1
         }
       },
@@ -1177,6 +1188,7 @@
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "verifiedSha": "aaa111",
+          "owedMove": "human_review",
           "blockReason": "Publication refusée : la branche porte un commit que ce travail n'a pas"
         },
         "ticket": {
@@ -1201,6 +1213,7 @@
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "verifiedSha": "aaa111",
+          "owedMove": "human_review",
           "blockReason": "Publication refusée : la branche porte un commit que ce travail n'a pas"
         },
         "effects": [],
@@ -1223,7 +1236,7 @@
         "payload": {
           "effectId": "REL-1:7:3",
           "kind": "settle",
-          "eventId": "publish-refused:REL-1:5:1@69259ad4e9fa",
+          "eventId": "publish-refused:REL-1:5:1@f637c2102654",
           "attempts": 1
         }
       },
@@ -1256,6 +1269,7 @@
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "verifiedSha": "aaa111",
+          "owedMove": "human_review",
           "blockReason": "Publication refusée : la branche porte un commit que ce travail n'a pas"
         },
         "ticket": {
@@ -1280,6 +1294,7 @@
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "verifiedSha": "aaa111",
+          "owedMove": "human_review",
           "blockReason": "Publication refusée : la branche porte un commit que ce travail n'a pas"
         },
         "effects": [],
@@ -1334,6 +1349,7 @@
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "verifiedSha": "aaa111",
+          "owedMove": "human_review",
           "blockReason": "Publication refusée : la branche porte un commit que ce travail n'a pas"
         },
         "ticket": {
@@ -1365,7 +1381,8 @@
           "branch": "factory/rel-1-export-csv",
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
-          "verifiedSha": "aaa111"
+          "verifiedSha": "aaa111",
+          "owedMove": "human_review"
         },
         "effects": [
           {
@@ -1433,6 +1450,7 @@
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "verifiedSha": "aaa111",
+          "owedMove": "human_review",
           "activeRunId": "id-4",
           "activeJob": "dev-feedback"
         },
@@ -1458,6 +1476,7 @@
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "verifiedSha": "aaa111",
+          "owedMove": "human_review",
           "activeRunId": "id-4",
           "activeJob": "dev-feedback"
         },
@@ -1517,6 +1536,7 @@
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "verifiedSha": "aaa111",
+          "owedMove": "human_review",
           "activeRunId": "id-4",
           "activeJob": "dev-feedback"
         },
@@ -1542,6 +1562,7 @@
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "verifiedSha": "aaa111",
+          "owedMove": "human_review",
           "verifyingRunId": "id-4"
         },
         "effects": [
@@ -1606,6 +1627,7 @@
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "verifiedSha": "aaa111",
+          "owedMove": "human_review",
           "verifyingRunId": "id-4"
         },
         "ticket": {
@@ -1630,6 +1652,7 @@
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "verifiedSha": "aaa111",
+          "owedMove": "human_review",
           "verifyingRunId": "id-4"
         },
         "effects": [],
@@ -1685,6 +1708,7 @@
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "verifiedSha": "aaa111",
+          "owedMove": "human_review",
           "verifyingRunId": "id-4"
         },
         "ticket": {
@@ -1709,6 +1733,7 @@
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "verifiedSha": "aaa111",
+          "owedMove": "human_review",
           "verifyingRunId": "id-4"
         },
         "effects": [],
@@ -1763,6 +1788,7 @@
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "verifiedSha": "aaa111",
+          "owedMove": "human_review",
           "verifyingRunId": "id-4"
         },
         "ticket": {
@@ -1787,6 +1813,7 @@
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "verifiedSha": "bbb222",
+          "owedMove": "human_review",
           "verifyingRunId": "id-4"
         },
         "effects": [
@@ -1852,6 +1879,7 @@
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "verifiedSha": "bbb222",
+          "owedMove": "human_review",
           "verifyingRunId": "id-4"
         },
         "ticket": {
@@ -1876,6 +1904,7 @@
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "verifiedSha": "bbb222",
+          "owedMove": "human_review",
           "verifyingRunId": "id-4"
         },
         "effects": [],
@@ -1930,6 +1959,7 @@
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "verifiedSha": "bbb222",
+          "owedMove": "human_review",
           "verifyingRunId": "id-4"
         },
         "ticket": {
@@ -1954,6 +1984,7 @@
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "verifiedSha": "bbb222",
+          "owedMove": "human_review",
           "verifyingRunId": "id-4",
           "prNumber": 1,
           "prUrl": "https://github.test/pr/1",
@@ -1978,7 +2009,7 @@
         "taint": "trusted",
         "projectId": "p",
         "ticketId": "REL-1",
-        "id": "publish-done:REL-1:18:1@69259ad4e9fa",
+        "id": "publish-done:REL-1:18:1@f637c2102654",
         "type": "publish.done",
         "at": 1791622800000,
         "payload": {
@@ -1988,7 +2019,7 @@
         }
       },
       "decision": {
-        "eventId": "publish-done:REL-1:18:1@69259ad4e9fa",
+        "eventId": "publish-done:REL-1:18:1@f637c2102654",
         "projectId": "p",
         "ticketId": "REL-1",
         "seq": 21,
@@ -2016,6 +2047,7 @@
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "verifiedSha": "bbb222",
+          "owedMove": "human_review",
           "verifyingRunId": "id-4",
           "prNumber": 1,
           "prUrl": "https://github.test/pr/1",
@@ -2043,11 +2075,16 @@
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "verifiedSha": "bbb222",
+          "owedMove": null,
           "prNumber": 1,
           "prUrl": "https://github.test/pr/1",
           "prState": "OPEN"
         },
         "effects": [
+          {
+            "kind": "move",
+            "to": "human_review"
+          },
           {
             "kind": "post_output",
             "style": "reply",
@@ -2091,7 +2128,7 @@
           "projectId": "p",
           "ticketId": "REL-1",
           "title": "Export CSV",
-          "logical": "dev",
+          "logical": "human_review",
           "delegated": true,
           "questionSessionIds": [],
           "blocked": false,
@@ -2106,18 +2143,20 @@
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "factory/rel-1-export-csv",
-          "recordedStatus": "dev",
+          "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
           "verifiedSha": "bbb222",
+          "owedMove": null,
           "prNumber": 1,
           "prUrl": "https://github.test/pr/1",
-          "prState": "OPEN"
+          "prState": "OPEN",
+          "reviewSha": "bbb222"
         },
         "ticket": {
           "projectId": "p",
           "ticketId": "REL-1",
           "title": "Export CSV",
-          "logical": "dev",
+          "logical": "human_review",
           "delegated": true,
           "questionSessionIds": [],
           "blocked": false,
@@ -2132,12 +2171,14 @@
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "factory/rel-1-export-csv",
-          "recordedStatus": "dev",
+          "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
           "verifiedSha": "bbb222",
+          "owedMove": null,
           "prNumber": 1,
           "prUrl": "https://github.test/pr/1",
-          "prState": "OPEN"
+          "prState": "OPEN",
+          "reviewSha": "bbb222"
         },
         "effects": [],
         "timers": [],
@@ -2174,7 +2215,7 @@
           "projectId": "p",
           "ticketId": "REL-1",
           "title": "Export CSV",
-          "logical": "dev",
+          "logical": "human_review",
           "delegated": true,
           "questionSessionIds": [],
           "blocked": false,
@@ -2189,18 +2230,20 @@
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "factory/rel-1-export-csv",
-          "recordedStatus": "dev",
+          "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
           "verifiedSha": "bbb222",
+          "owedMove": null,
           "prNumber": 1,
           "prUrl": "https://github.test/pr/1",
-          "prState": "OPEN"
+          "prState": "OPEN",
+          "reviewSha": "bbb222"
         },
         "ticket": {
           "projectId": "p",
           "ticketId": "REL-1",
           "title": "Export CSV",
-          "logical": "dev",
+          "logical": "human_review",
           "delegated": true,
           "questionSessionIds": [],
           "blocked": false,
@@ -2215,12 +2258,14 @@
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "factory/rel-1-export-csv",
-          "recordedStatus": "dev",
+          "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
           "verifiedSha": "bbb222",
+          "owedMove": null,
           "prNumber": 1,
           "prUrl": "https://github.test/pr/1",
-          "prState": "OPEN"
+          "prState": "OPEN",
+          "reviewSha": "bbb222"
         },
         "effects": [],
         "timers": [],
@@ -2257,7 +2302,7 @@
           "projectId": "p",
           "ticketId": "REL-1",
           "title": "Export CSV",
-          "logical": "dev",
+          "logical": "human_review",
           "delegated": true,
           "questionSessionIds": [],
           "blocked": false,
@@ -2272,18 +2317,20 @@
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "factory/rel-1-export-csv",
-          "recordedStatus": "dev",
+          "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
           "verifiedSha": "bbb222",
+          "owedMove": null,
           "prNumber": 1,
           "prUrl": "https://github.test/pr/1",
-          "prState": "OPEN"
+          "prState": "OPEN",
+          "reviewSha": "bbb222"
         },
         "ticket": {
           "projectId": "p",
           "ticketId": "REL-1",
           "title": "Export CSV",
-          "logical": "dev",
+          "logical": "human_review",
           "delegated": true,
           "questionSessionIds": [],
           "blocked": false,
@@ -2298,12 +2345,14 @@
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "factory/rel-1-export-csv",
-          "recordedStatus": "dev",
+          "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
           "verifiedSha": "bbb222",
+          "owedMove": null,
           "prNumber": 1,
           "prUrl": "https://github.test/pr/1",
-          "prState": "OPEN"
+          "prState": "OPEN",
+          "reviewSha": "bbb222"
         },
         "effects": [],
         "timers": [],
@@ -2324,8 +2373,8 @@
         "type": "effect.done",
         "payload": {
           "effectId": "REL-1:21:1",
-          "kind": "post_output",
-          "eventId": "publish-done:REL-1:18:1@69259ad4e9fa",
+          "kind": "move",
+          "eventId": "publish-done:REL-1:18:1@f637c2102654",
           "attempts": 1
         }
       },
@@ -2340,7 +2389,7 @@
           "projectId": "p",
           "ticketId": "REL-1",
           "title": "Export CSV",
-          "logical": "dev",
+          "logical": "human_review",
           "delegated": true,
           "questionSessionIds": [],
           "blocked": false,
@@ -2355,18 +2404,20 @@
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "factory/rel-1-export-csv",
-          "recordedStatus": "dev",
+          "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
           "verifiedSha": "bbb222",
+          "owedMove": null,
           "prNumber": 1,
           "prUrl": "https://github.test/pr/1",
-          "prState": "OPEN"
+          "prState": "OPEN",
+          "reviewSha": "bbb222"
         },
         "ticket": {
           "projectId": "p",
           "ticketId": "REL-1",
           "title": "Export CSV",
-          "logical": "dev",
+          "logical": "human_review",
           "delegated": true,
           "questionSessionIds": [],
           "blocked": false,
@@ -2381,12 +2432,14 @@
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "factory/rel-1-export-csv",
-          "recordedStatus": "dev",
+          "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
           "verifiedSha": "bbb222",
+          "owedMove": null,
           "prNumber": 1,
           "prUrl": "https://github.test/pr/1",
-          "prState": "OPEN"
+          "prState": "OPEN",
+          "reviewSha": "bbb222"
         },
         "effects": [],
         "timers": [],
@@ -2407,8 +2460,8 @@
         "type": "effect.done",
         "payload": {
           "effectId": "REL-1:21:2",
-          "kind": "settle",
-          "eventId": "publish-done:REL-1:18:1@69259ad4e9fa",
+          "kind": "post_output",
+          "eventId": "publish-done:REL-1:18:1@f637c2102654",
           "attempts": 1
         }
       },
@@ -2423,7 +2476,7 @@
           "projectId": "p",
           "ticketId": "REL-1",
           "title": "Export CSV",
-          "logical": "dev",
+          "logical": "human_review",
           "delegated": true,
           "questionSessionIds": [],
           "blocked": false,
@@ -2438,18 +2491,20 @@
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "factory/rel-1-export-csv",
-          "recordedStatus": "dev",
+          "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
           "verifiedSha": "bbb222",
+          "owedMove": null,
           "prNumber": 1,
           "prUrl": "https://github.test/pr/1",
-          "prState": "OPEN"
+          "prState": "OPEN",
+          "reviewSha": "bbb222"
         },
         "ticket": {
           "projectId": "p",
           "ticketId": "REL-1",
           "title": "Export CSV",
-          "logical": "dev",
+          "logical": "human_review",
           "delegated": true,
           "questionSessionIds": [],
           "blocked": false,
@@ -2464,12 +2519,101 @@
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "factory/rel-1-export-csv",
-          "recordedStatus": "dev",
+          "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
           "verifiedSha": "bbb222",
+          "owedMove": null,
           "prNumber": 1,
           "prUrl": "https://github.test/pr/1",
-          "prState": "OPEN"
+          "prState": "OPEN",
+          "reviewSha": "bbb222"
+        },
+        "effects": [],
+        "timers": [],
+        "clearTimers": false,
+        "trace": [
+          "built-in effect.done"
+        ]
+      }
+    },
+    {
+      "event": {
+        "schemaVersion": 3,
+        "taint": "trusted",
+        "id": "effect:REL-1:21:3",
+        "at": 1791622800000,
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "type": "effect.done",
+        "payload": {
+          "effectId": "REL-1:21:3",
+          "kind": "settle",
+          "eventId": "publish-done:REL-1:18:1@f637c2102654",
+          "attempts": 1
+        }
+      },
+      "decision": {
+        "eventId": "effect:REL-1:21:3",
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "seq": 27,
+        "at": 1791622800000,
+        "workflowHash": "5bc5638ab1ba628e408652e09e8919d36fd71667bc2a81e2ee3678f3be5e8e3e",
+        "before": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "human_review",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "pendingFeedback": [],
+          "priority": 0,
+          "costUsd": 0.2,
+          "updatedAt": 1791622800000,
+          "linearSessionId": "ls-1",
+          "workflowHash": "5bc5638ab1ba628e408652e09e8919d36fd71667bc2a81e2ee3678f3be5e8e3e",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "factory/rel-1-export-csv",
+          "recordedStatus": "human_review",
+          "claudeSessionId": "id-2",
+          "verifiedSha": "bbb222",
+          "owedMove": null,
+          "prNumber": 1,
+          "prUrl": "https://github.test/pr/1",
+          "prState": "OPEN",
+          "reviewSha": "bbb222"
+        },
+        "ticket": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "human_review",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "pendingFeedback": [],
+          "priority": 0,
+          "costUsd": 0.2,
+          "updatedAt": 1791622800000,
+          "linearSessionId": "ls-1",
+          "workflowHash": "5bc5638ab1ba628e408652e09e8919d36fd71667bc2a81e2ee3678f3be5e8e3e",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "factory/rel-1-export-csv",
+          "recordedStatus": "human_review",
+          "claudeSessionId": "id-2",
+          "verifiedSha": "bbb222",
+          "owedMove": null,
+          "prNumber": 1,
+          "prUrl": "https://github.test/pr/1",
+          "prState": "OPEN",
+          "reviewSha": "bbb222"
         },
         "effects": [],
         "timers": [],

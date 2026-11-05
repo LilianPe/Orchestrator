@@ -475,6 +475,38 @@ describe('GitHubAppForge writes, idempotent (ORC-162)', () => {
     expect(writes(calls).map((c) => c.body)).toEqual([{ title: req.title, head: req.branch, base: 'main', body: req.body, draft: true }]);
   });
 
+  it('opens a plain PR where the repository has no drafts: its plan decides, and a human then reviews it all the same', async () => {
+    const posted: unknown[] = [];
+    const { forge } = makeForge(
+      [
+        tokenRoute(42),
+        (url, init, body) => {
+          if (url.pathname !== '/repos/acme/app/pulls' || init.method !== 'POST') return undefined;
+          posted.push(body);
+          return (body as { draft?: boolean }).draft
+            ? { status: 422, body: { message: 'Validation Failed', errors: [{ message: 'Draft pull requests are not supported in this repository.' }] } }
+            : { status: 201, body: openPr({ number: 8, html_url: 'u8' }) };
+        },
+        pullsRoute([]),
+      ],
+      { installationId: 42 },
+    );
+    expect(await forge.ensurePr('/repo', { ...req, draft: true })).toEqual({ number: 8, url: 'u8', deduplicated: false });
+    expect(posted).toHaveLength(2);
+  });
+
+  it('says what GitHub said under its "Validation Failed": the reason is in its errors', async () => {
+    const { forge } = makeForge(
+      [
+        tokenRoute(42),
+        (url, init) => (url.pathname === '/repos/acme/app/pulls' && init.method === 'POST' ? { status: 422, body: { message: 'Validation Failed', errors: [{ message: 'No commits between main and factory/REL-1' }] } } : undefined),
+        pullsRoute([]),
+      ],
+      { installationId: 42 },
+    );
+    await expect(forge.ensurePr('/repo', req)).rejects.toThrow('No commits between main and factory/REL-1');
+  });
+
   it('takes a draft out of draft by the only call that can, and writes nothing for a PR already out (ORC-125)', async () => {
     const pull = (draft: boolean): Route => (url, init) => (url.pathname === '/repos/acme/app/pulls/7' && init.method === 'GET' ? { body: openPr({ draft, node_id: 'PR_node' }) } : undefined);
     const mutation: Route = (url, init) => (url.pathname === '/graphql' && init.method === 'POST' ? { body: { data: {} } } : undefined);

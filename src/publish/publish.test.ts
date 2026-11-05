@@ -314,6 +314,31 @@ describe('GitPublisher', () => {
     });
   });
 
+  it('a failure of its own git is no verdict: retried, never a refusal that names a human push', async () => {
+    const s = setup({
+      exec: async (cmd, args, opts) => (args.includes('merge-base') ? { stdout: '', stderr: 'fatal: out of memory', code: 128 } : execCmd(cmd, args, opts)),
+    });
+    await s.publisher.publish(s.request()).then(() => expect.unreachable(), (e: unknown) => expect(e).not.toBeInstanceOf(PublishRefused));
+    expect(s.onForge()).toBe('');
+    const later = setup({
+      exec: async (cmd, args, opts) => (args.includes('--is-ancestor') ? { stdout: '', stderr: 'fatal: out of memory', code: 128 } : execCmd(cmd, args, opts)),
+    });
+    await later.publisher.publish(later.request());
+    write(later.repo, 'a.txt', 'two\n');
+    const sha = commit(later.repo);
+    await later.publisher.publish(later.request({ sha })).then(() => expect.unreachable(), (e: unknown) => expect(e).not.toBeInstanceOf(PublishRefused));
+  });
+
+  it('a branch without a common history with the base is diffed whole, not a failure', async () => {
+    const s = setup();
+    git(s.repo, 'checkout', '-q', '--orphan', 'other');
+    git(s.repo, 'branch', '-q', '-D', BRANCH);
+    git(s.repo, 'checkout', '-q', '-b', BRANCH);
+    const sha = commit(s.repo, 'orphan');
+    await s.publisher.publish(s.request({ sha }));
+    expect(s.onForge()).toBe(sha);
+  });
+
   describe('what it refuses before any check', () => {
     it('a branch whose head is not the verified commit: never another commit than the green one', async () => {
       const s = setup();
@@ -330,6 +355,20 @@ describe('GitPublisher', () => {
       const r = await refusal(s.publisher.publish(s.request({ branch: 'main' })));
       expect(r.code).toBe('trunk');
       expect(s.pushes).toEqual([]);
+    });
+
+    it('a branch already on the forge with nothing beyond the base: the PR the forge refuses to open is an answer, not a failure', async () => {
+      const s = setup();
+      const ensurePr = s.forge.ensurePr.bind(s.forge);
+      let calls = 0;
+      s.forge.ensurePr = async (...args) => {
+        calls++;
+        if (calls === 2) throw new Error('GitHub API POST /repos/acme/app/pulls: 422 Validation Failed (No commits between main and factory/orc-1-x)');
+        return ensurePr(...args);
+      };
+      await s.publisher.publish(s.request());
+      const r = await refusal(s.publisher.publish(s.request()));
+      expect(r.code).toBe('empty');
     });
 
     it('a branch with nothing beyond the base: no push, no PR', async () => {

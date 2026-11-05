@@ -2,15 +2,15 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, lstatSync, mkdirSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { execCmd, mustExec, type Exec } from '../adapters/exec.js';
+import { execCmd, mustExec, type Exec, type ExecResult } from '../adapters/exec.js';
 import type { ForgeWriter } from '../adapters/forge/types.js';
 import { PublishRefused, type Publication, type Publisher, type PublishRequest } from '../adapters/publisher/types.js';
 import { DEFAULT_REQUIREMENTS, type SandboxMount, type SandboxProvider } from '../adapters/sandbox/types.js';
-import { BASE, checkClone, cloneGit, EMPTY_TREE, scanSecrets, withDeadline, within, type Boxes, type CloneGit } from '../core/clean-verify.js';
-import { VERIFY_TIMEOUT_MS } from '../core/verify.js';
+import { BASE, checkClone, cloneGit, EMPTY_TREE, scanSecrets, withDeadline, within, type Boxes } from '../core/clean-verify.js';
 import { BUNDLE_TARGET, extractWork, HARDENING, hostGitEnv } from './extract.js';
 
-const DEADLINE_GRACE_MS = 60_000;
+/** Git and a scan, no command of the repository: a stop waits behind the publication, so it is not given `verify`'s time. */
+const PUBLISH_DEADLINE_MS = 10 * 60_000;
 const REMOTE_HEAD = 'refs/factory/remote';
 const HARDENED = HARDENING.flatMap((c) => ['-c', c]);
 
@@ -62,7 +62,10 @@ export class GitPublisher implements Publisher {
       if (req.branch === onForge.base) throw new PublishRefused('trunk', `la branche du ticket est la branche par défaut (${onForge.base}).`);
       if (onForge.head === req.sha) this.d.log(`publish of ${req.ticketId}: ${req.sha} is already on the forge, not pushed again`);
       else await this.pushChecked(req, access.url, env, workDir, onForge.head);
-      const pr = await this.d.forge.ensurePr(req.repoPath, { branch: req.branch, base: onForge.base, title: req.title, body: req.body, draft: true });
+      const pr = await this.d.forge.ensurePr(req.repoPath, { branch: req.branch, base: onForge.base, title: req.title, body: req.body, draft: true }).catch((err: Error) => {
+        // Only here can the forge's branch hold nothing the base lacks: a head on the commit skips the check of step 3.
+        throw /No commits between/.test(err.message) ? new PublishRefused('empty', `la branche ${req.branch} n'a rien de plus que la branche de base.`) : err;
+      });
       return { prNumber: pr.number, url: pr.url, sha: req.sha };
     } finally {
       // Under the run's dir, purged with it: what the attack left unremovable costs no publication.
@@ -71,7 +74,7 @@ export class GitPublisher implements Publisher {
   }
 
   private async pushChecked(req: PublishRequest, url: string, env: Record<string, string>, workDir: string, known: string | undefined): Promise<void> {
-    const deadlineMs = this.d.deadlineMs ?? VERIFY_TIMEOUT_MS + DEADLINE_GRACE_MS;
+    const deadlineMs = this.d.deadlineMs ?? PUBLISH_DEADLINE_MS;
     const silent = `la forge ne répond plus après ${deadlineMs / 1000} s`;
     const exec = this.d.exec ?? execCmd;
     const sandboxes = withDeadline(this.d.sandboxes, deadlineMs);
@@ -89,10 +92,17 @@ export class GitPublisher implements Publisher {
     await within(mustExec(exec, 'git', fetched, { env }), deadlineMs, silent);
     // The head fetched is the one the lease names: read after the fetch, it is the one compared with the work.
     const remote = known ? await git('rev-parse', REMOTE_HEAD) : undefined;
-    if (remote && !(await isAncestor(git, remote, req.sha))) {
+    // Git's own answers, 0 and 1, and no other code: a failure of git here is retried, never taken for a verdict on the branch.
+    const inClone = (...args: string[]) => exec('git', [...HARDENED, '-C', cloneDir, ...args], { env });
+    const answer = <T>(r: ExecResult, yes: T, no: T) => {
+      if (r.code > 1) throw new Error(`git merge-base : ${r.stderr.trim() || `code ${r.code}`}`);
+      return r.code === 0 ? yes : no;
+    };
+    if (remote && !answer(await inClone('merge-base', '--is-ancestor', remote, req.sha), true, false)) {
       throw new PublishRefused('moved', `la branche ${req.branch} porte sur la forge un commit que ce travail n'a pas (${remote.slice(0, 12)}) : un push humain, ou un historique réécrit. Rien n'est écrasé : intégrez-le dans la branche du ticket.`);
     }
-    const from = await git('merge-base', BASE, req.sha).catch(() => EMPTY_TREE);
+    const common = await inClone('merge-base', BASE, req.sha);
+    const from = answer(common, common.stdout.trim(), EMPTY_TREE);
     if (from === req.sha) throw new PublishRefused('empty', `la branche ${req.branch} n'a rien de plus que la branche de base.`);
 
     const failures = await checkClone(git, from, req.sha, undefined);
@@ -139,8 +149,4 @@ async function readForge(exec: Exec, url: string, branch: string, opts: { cwd: s
   if (!base) throw new Error('branche par défaut non lue sur la forge');
   const head = out.split('\n').find((l) => l.endsWith(`\trefs/heads/${branch}`))?.split('\t')[0];
   return { base, ...(head ? { head } : {}) };
-}
-
-async function isAncestor(git: CloneGit, ancestor: string, sha: string): Promise<boolean> {
-  return (await git('merge-base', ancestor, sha).catch(() => '')) === ancestor;
 }

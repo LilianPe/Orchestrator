@@ -156,6 +156,12 @@ function repoApi(repo: GitHubRepoRef): string {
   return `/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}`;
 }
 
+/** GitHub's reason under its "Validation Failed": a 422 says it there. */
+function validationErrors(data: object): string[] {
+  const errors = (data as { errors?: unknown }).errors;
+  return Array.isArray(errors) ? errors.flatMap((e: { message?: unknown }) => (typeof e?.message === 'string' ? [e.message] : [])) : [];
+}
+
 /** GitHub API failure with its status, so callers can fail closed on 404/403. */
 export class GitHubApiError extends Error {
   readonly status: number;
@@ -275,7 +281,7 @@ export class GitHubAppAuth {
     if (!res.ok) {
       const message =
         typeof data === 'object' && data !== null && 'message' in data
-          ? String((data as { message: unknown }).message)
+          ? [String((data as { message: unknown }).message), ...validationErrors(data)].join(' : ')
           : text.slice(0, 200);
       throw new GitHubApiError(res.status, `GitHub API ${method} ${path.split('?')[0]}: ${res.status}${message ? ` ${message}` : ''}`, message || undefined);
     }
@@ -373,10 +379,15 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
     };
     const found = await openPr();
     if (found) return found;
-    try {
-      const pr = await this.call<PullRequestDto>('POST', base, token, { title: req.title, head: req.branch, base: req.base, body: req.body, ...(req.draft ? { draft: true } : {}) });
+    const create = async (draft: boolean) => {
+      const pr = await this.call<PullRequestDto>('POST', base, token, { title: req.title, head: req.branch, base: req.base, body: req.body, ...(draft ? { draft: true } : {}) });
       return { number: pr.number, url: pr.html_url, deduplicated: false };
+    };
+    try {
+      return await create(!!req.draft);
     } catch (err) {
+      // A plan without drafts: the PR is what the ticket needs, and no human is asked to review it before Human Review.
+      if (req.draft && err instanceof GitHubApiError && err.status === 422 && /draft pull requests are not supported/i.test(err.message)) return create(false);
       if (err instanceof GitHubApiError && err.status === 422) {
         const raced = await openPr();
         if (raced) return raced;

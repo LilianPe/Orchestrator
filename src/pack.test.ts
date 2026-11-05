@@ -57,9 +57,11 @@ describe('standard pack', () => {
 
   it('denies merge, every push, every write on the forge and reading factory secrets (ORC-125)', () => {
     const s = JSON.parse(readFileSync(join(pack, 'settings.json'), 'utf8'));
-    expect(s.permissions.deny).toEqual(expect.arrayContaining(['Bash(gh pr merge:*)', 'Bash(git push:*)', 'Bash(git * push *)', 'Bash(gh pr create:*)', 'Bash(gh pr edit:*)', 'Bash(gh run rerun:*)', 'Read(~/.factory/**)']));
+    expect(s.permissions.deny).toEqual(expect.arrayContaining(['Bash(gh pr merge:*)', 'Bash(git push:*)', 'Bash(gh pr create:*)', 'Bash(gh pr edit:*)', 'Bash(gh run rerun:*)', 'Read(~/.factory/**)']));
     const writes = /git push|gh pr (create|edit|merge)|gh run rerun/;
     expect(s.permissions.allow.filter((rule: string) => writes.test(rule))).toEqual([]);
+    // A joker on a whole command line would refuse a commit message that says "push": `git -C . push` is the hook's, which reads the words.
+    expect(s.permissions.deny.filter((rule: string) => /^Bash\(git \*/.test(rule) && rule.includes('push'))).toEqual([]);
     expect(s.permissions.allow).toContain('Bash(factory-agent:*)');
   });
 

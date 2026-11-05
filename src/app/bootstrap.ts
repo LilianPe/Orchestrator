@@ -215,7 +215,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       tracker: trackerSwitch,
       forge,
       // Only the GitHub App merges (ORC-148): with the gh CLI, a Done goes back to Human Review with the reason.
-      ...(forge instanceof GitHubAppForge ? { forgeWriter: forge } : {}),
+      // A fake run writes nothing real: its fake PR's number would be another one's on the forge.
+      ...(forge instanceof GitHubAppForge && !o.fakeRunner ? { forgeWriter: forge } : {}),
       // Only the factory publishes (ORC-125), from its sandboxes and by the App: without them, a verified ticket is blocked and told why.
       ...(publisher ? { publisher } : {}),
       runner,

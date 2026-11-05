@@ -296,7 +296,7 @@ export type DecidedEvent =
   | { type: 'ticket.unblocked' }
   | {
       type: 'ticket.patched';
-      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'verifiedSha' | 'awaitingRepo'>>;
+      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'verifiedSha' | 'awaitingRepo' | 'owedMove'>>;
     }
   | { type: 'feedback.appended'; item: FeedbackItem }
   /** The ticket's dev work is stopped: nothing pending, no verification awaited. */
@@ -376,6 +376,11 @@ export interface TicketState {
   frozenTests?: FrozenTests;
   /** The last failed check (worktree and failed commands) and how many times in a row it came back (ORC-187). */
   repeatedFailure?: { signature: string; count: number } | null;
+  /**
+   * The move of a job's `on_success` that waits for its publication (ORC-125). Kept through a refusal: what relaunches the ticket
+   * is `dev-feedback`, which has no move of its own, and the work would never reach its reviewer. `null`, not undefined, survives the journal's JSON.
+   */
+  owedMove?: LogicalState | null;
   /**
    * The repos of its Linear team to choose from, while the ticket waits for a human to name one (ORC-291); empty when
    * the team has none (ORC-171), the ticket then only filed under the first project. `null` once

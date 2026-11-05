@@ -53,7 +53,7 @@ Dans un fichier `.env` à côté de `compose.yaml` (non versionné). `docker com
 |---|---|---|
 | `CLAUDE_TOKEN_1`, `CLAUDE_TOKEN_2` | l'un de ces moyens | Jetons des comptes Claude Code, lus par `factory.yml` (`token: env:CLAUDE_TOKEN_1`) ; le compte `claude.active` est le seul identifiant des runs. |
 | `ANTHROPIC_API_KEY` | l'un de ces moyens | Authentification de Claude Code sans compte actif, pour les runs de ce conteneur, qui tournent encore à côté du démon (jusqu'à ORC-179). Compose ne la réclame plus : sans aucun des deux, les runs échouent à l'authentification. |
-| `GH_TOKEN` | oui | `gh` et push HTTPS. Droits : [`github.md`](github.md#permissions-nécessaires). |
+| `GH_TOKEN` | oui | `gh` et lecture HTTPS, jusqu'à ORC-181 ; la publication passe par la GitHub App. Droits : [`github.md`](github.md#permissions-nécessaires). |
 | `FACTORY_UI_PASSWORD` | oui | Mot de passe de l'interface (le conteneur écoute hors bouclage). |
 | `FACTORY_DIR` | oui | Chemin absolu sur le serveur (voir ci-dessus). |
 | `FACTORY_ENGINE_SOCKET` | oui | Socket du moteur rootless, par exemple `/run/user/1000/docker.sock`. |

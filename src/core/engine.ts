@@ -840,6 +840,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       // The commit found green goes out, and the job ends once it is out: until then the ticket stays held, and a stop fences the result. No sha: no commit to publish.
       if (publishes(job) && event.payload.sha) {
         const { runId, sha, output } = event.payload;
+        if (job.onSuccess.move) out.events.push({ type: 'ticket.patched', patch: { owedMove: job.onSuccess.move } });
         out.events.push({ type: 'verify.started', runId });
         out.effects.push({ kind: 'publish', runId, job: job.name, sha, ...(output ? { output } : {}) });
         return out;
@@ -848,7 +849,14 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
     }
     case 'publish.done': {
       const job = workflow.jobs[event.payload.job];
-      return job ? success(out, { event, ticket, workflow }, job, event.payload.runId, event.payload.output) : out;
+      if (!job) return out;
+      // Owed by an earlier job of the ticket, whose publication was refused: first, as the job's own would be.
+      const owed = ticket?.owedMove;
+      if (owed) {
+        out.events.push({ type: 'ticket.patched', patch: { owedMove: null } });
+        if (!job.onSuccess.move) out.effects.push({ kind: 'move', to: owed });
+      }
+      return success(out, { event, ticket, workflow }, job, event.payload.runId, event.payload.output);
     }
     case 'publish.refused': {
       const reason = `Publication refusée : ${event.payload.reason}`;

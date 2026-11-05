@@ -78,6 +78,27 @@ describe('the publish effect (ORC-125)', () => {
     expect(out.effects).toContainEqual(expect.objectContaining({ kind: 'activity', type: 'elicitation', body: expect.stringContaining('la branche a bougé') }));
   });
 
+  it('a move the refused publication owed comes with the next one: a relaunch by dev-feedback, which has no move of its own, still shows the work', () => {
+    const owed = after(verifying(), passed(), decide(verifying(), passed(), workflow));
+    expect(owed.owedMove).toBe('human_review');
+    const refused = ev('publish.refused', { runId: 'r1', job: 'dev', sha: 'abc', reason: 'x' });
+    const blocked = after(owed, refused, decide(owed, refused, workflow));
+    expect(blocked.owedMove).toBe('human_review');
+    const relaunched = { ...blocked, blocked: false, blockReason: undefined, verifyingRunId: 'r2' };
+    const done = ev('publish.done', { runId: 'r2', job: 'dev-feedback', sha: 'def' });
+    const out = decide(relaunched, done, workflow);
+    expect(out.effects).toEqual([{ kind: 'move', to: 'human_review' }, { kind: 'post_output', style: 'reply', runId: 'r2' }]);
+    expect(after(relaunched, done, out).owedMove).toBeNull();
+  });
+
+  it('a feedback published in its own course owes nothing, and moves nothing', () => {
+    const event = ev('verify.passed', { runId: 'r1', job: 'dev-feedback', sha: 'abc' });
+    const t = after(verifying(), event, decide(verifying(), event, workflow));
+    expect(t.owedMove).toBeUndefined();
+    const done = ev('publish.done', { runId: 'r1', job: 'dev-feedback', sha: 'abc' });
+    expect(decide(t, done, workflow).effects).toEqual([{ kind: 'post_output', style: 'reply', runId: 'r1' }]);
+  });
+
   it('a stop keeps its reason over a refusal that comes later', () => {
     const event = ev('publish.refused', { runId: 'r1', job: 'dev', sha: 'abc', reason: 'x' });
     expect(decide(verifying({ verifyingRunId: undefined, blocked: true, blockReason: 'Arrêté à la demande' }), event, workflow).events).toEqual([]);
