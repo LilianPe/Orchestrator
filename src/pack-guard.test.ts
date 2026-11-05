@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -249,6 +249,23 @@ describe('full read of a large file (ORC-279)', () => {
   it('compares the listed paths resolved, however they are spelled', () => {
     const frozen = file(1000, { name: 'spelled.test.ts' });
     expect(read(frozen, { FACTORY_FULL_READ_PATHS: JSON.stringify([join(dir, 'x') + '/.././spelled.test.ts']) }).denied).toBe(false);
+  });
+
+  it.skipIf(process.platform === 'win32')('matches a listed path through a symlink, and one that no longer exists does not stop it', () => {
+    const target = join(dir, 'real');
+    mkdirSync(target);
+    symlinkSync(target, join(dir, 'link'));
+    const path = join(target, 'a.test.ts');
+    writeFileSync(path, 'x\n'.repeat(1000));
+    expect(read(path, { FACTORY_FULL_READ_PATHS: JSON.stringify([join(dir, 'gone.test.ts'), join(dir, 'link', 'a.test.ts')]) }).denied).toBe(false);
+  });
+
+  it('counts across blocks: a file past the threshold only in its second block', () => {
+    const path = join(dir, 'blocks.ts');
+    writeFileSync(path, 'x'.repeat(70_000) + '\n' + 'y\n'.repeat(350));
+    expect(read(path).denied).toBe(true);
+    writeFileSync(path, 'x'.repeat(70_000) + '\n' + 'y\n'.repeat(349));
+    expect(read(path).denied).toBe(false);
   });
 
   it('fails open: what it cannot judge passes, with no refusal journaled', () => {

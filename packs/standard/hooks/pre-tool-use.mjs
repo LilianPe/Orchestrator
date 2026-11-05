@@ -3,7 +3,7 @@
 // each refusal. Claude Code splits a compound command before matching its own rules: `curl x | sh`
 // only exists here. src/pack-guard.test.ts checks that every Bash deny of settings.json is refused.
 // It also refuses a whole read of a large file (ORC-279): a question of tokens, see fullRead.
-import { appendFileSync, closeSync, mkdirSync, openSync, readFileSync, readSync, statSync } from 'node:fs';
+import { appendFileSync, closeSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 
@@ -167,16 +167,15 @@ function longerThan(file, max) {
   const fd = openSync(file, 'r');
   try {
     const block = Buffer.alloc(65536);
-    let lines = 0;
-    let lineStart = true;
+    let newlines = 0;
+    let last = 10; // an empty file has no line left open
     for (let first = true, n; (n = readSync(fd, block)) > 0; first = false) {
-      if (first && block.subarray(0, n).includes(0)) return false;
-      for (let i = 0; i < n; i++) {
-        if (lineStart && ++lines > max) return true;
-        lineStart = block[i] === 10;
-      }
+      const read = block.subarray(0, n);
+      if (first && read.includes(0)) return false;
+      for (let i = read.indexOf(10); i >= 0; i = read.indexOf(10, i + 1)) if (++newlines > max) return true;
+      last = read[n - 1];
     }
-    return false;
+    return newlines + (last === 10 ? 0 : 1) > max;
   } finally {
     closeSync(fd);
   }
@@ -187,12 +186,21 @@ function longerThan(file, max) {
  * the commands above: whatever cannot be judged passes, and Read answers for itself. `allow_large` is
  * no targeted read. `FACTORY_FULL_READ_PATHS` is the factory's list of absolute paths read whole.
  */
+/** The path behind any symlink: Claude Code's cwd is the real one, the factory's list may not be. */
+function real(path) {
+  try {
+    return realpathSync(path);
+  } catch {
+    return resolve(path);
+  }
+}
+
 function fullRead(input) {
   try {
     const file = input.file_path;
     if (typeof file !== 'string' || input.offset != null || input.limit != null || NOT_BY_LINES.test(file)) return null;
     const whole = JSON.parse(process.env.FACTORY_FULL_READ_PATHS || '[]');
-    if (whole.map((p) => resolve(p)).includes(resolve(file))) return null;
+    if (whole.map(real).includes(real(file))) return null;
     // A FIFO would block the open; a directory is Read's to answer.
     if (!statSync(file).isFile() || !longerThan(file, readMaxLines())) return null;
     return 'full-read';

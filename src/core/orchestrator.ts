@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import type { Forge, ForgeWriter, MergeResult } from '../adapters/forge/types.js';
 import type { RoleResolver } from '../adapters/roles/types.js';
 import type { RunHandle, RunResult, Runner } from '../adapters/runner/types.js';
@@ -1448,9 +1448,7 @@ export class Orchestrator {
           ...this.d.agentEnv(run),
           // In a sandbox, the run's refusals log, on the host: it outlives the sandbox (ORC-217).
           ...(sandbox ? { FACTORY_REFUSALS_LOG: `${REFUSALS_TARGET}/refusals.jsonl` } : {}),
-          ...fullReadEnv(sandbox ? WORKSPACE_TARGET : ws.path, this.d.fullReadPaths?.(t) ?? [], (n) =>
-            this.log('warn', `${n} path(s) of ${ticketId} left out of the whole-read list: too long for the environment`),
-          ),
+          ...this.fullReadEnvOf(t, sandbox ? WORKSPACE_TARGET : resolve(ws.path)),
           ...(ws.port !== undefined ? { PORT: String(ws.port) } : {}),
           ...CLAUDE_RUN_ENV,
           // The ticket's session dir (out of the ticket session, the run's own) as Claude's whole config dir (ORC-128 point 4), login by the env
@@ -1472,6 +1470,18 @@ export class Orchestrator {
           .cleanup(project.id, project.repoPath, ticketId)
           .catch((err: Error) => this.log('warn', `worktree of ${ticketId} not removed after a launch that did not set it up: ${err.message}`));
       }
+    }
+  }
+
+  /** A saving of tokens, never a reason to block a ticket: whatever goes wrong, the run starts without the list. */
+  private fullReadEnvOf(t: TicketState, cwd: string): Record<string, string> {
+    try {
+      return fullReadEnv(cwd, this.d.fullReadPaths?.(t) ?? [], (n) =>
+        this.log('warn', `${n} path(s) of ${t.ticketId} left out of the whole-read list: too long for the environment`),
+      );
+    } catch (err) {
+      this.log('warn', `no whole-read list for ${t.ticketId}: ${(err as Error).message}`);
+      return {};
     }
   }
 

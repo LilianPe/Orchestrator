@@ -1,5 +1,5 @@
 import { existsSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_REQUIREMENTS, PACK_TARGET, REFUSALS_TARGET, SANDBOX_HOME, WORKSPACE_TARGET } from '../../src/adapters/sandbox/types.js';
 import { createHarness, packDir } from '../helpers/harness.js';
@@ -219,6 +219,25 @@ describe('the ticket session across attempts', () => {
     const h = createHarness({ sandboxed: true, fullReadPaths: () => ['src/export.test.ts', 'vitest.config.ts'] });
     await delegate(h);
     expect(JSON.parse(h.runner.requests[0]!.env['FACTORY_FULL_READ_PATHS']!)).toEqual([`${WORKSPACE_TARGET}/src/export.test.ts`, `${WORKSPACE_TARGET}/vitest.config.ts`]);
+  });
+
+  it('hands a run on the host the same paths, under its worktree (ORC-279)', async () => {
+    const h = createHarness({ fullReadPaths: () => ['src/export.test.ts'] });
+    await delegate(h);
+    const r = h.runner.requests[0]!;
+    expect(JSON.parse(r.env['FACTORY_FULL_READ_PATHS']!)).toEqual([`${resolve(r.cwd)}/src/export.test.ts`]);
+  });
+
+  it('starts the run without the list when it cannot be read: a saving never blocks a ticket (ORC-279)', async () => {
+    const h = createHarness({
+      fullReadPaths: () => {
+        throw new Error('boom');
+      },
+    });
+    await delegate(h);
+    expect(h.runner.requests[0]!.env).not.toHaveProperty('FACTORY_FULL_READ_PATHS');
+    expect(await h.ticket()).toMatchObject({ blocked: false });
+    expect(h.logs.some((l) => l.level === 'warn' && l.message.includes('boom'))).toBe(true);
   });
 
   it('hands no list when the factory has no path to read whole (ORC-279)', async () => {
