@@ -742,7 +742,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       if (checked?.red) return redFailed(out, { event, ticket, workflow }, checked, checked.red);
       if (checked?.verifyFailure === 'block') {
         const reason = `Vérifications en échec après ${job} : le commit n'est pas publiable, et ce job ne le corrige pas.`;
-        return ticket?.blocked ? out : block(out, reason, `${reason}\n${formatFailuresShort(failures)}\nRépondez dans ce fil pour relancer.`);
+        return block(out, reason, `${reason}\n${formatFailuresShort(failures)}\nRépondez dans ce fil pour relancer.`);
       }
       const repeated = repeatedFailure(ticket, event.payload);
       if (repeated && repeated.count >= (workflow.limits.repeatedFailures ?? Infinity)) {
