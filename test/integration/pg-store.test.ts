@@ -76,6 +76,7 @@ describe.skipIf(!url)('PgStore integration', () => {
 
     it.each([
       ['it only waits for its repo there', { delegated: true, blocked: true, awaitingRepo: ['web', 'api'] }],
+      ['its team had no repo, it is only filed there', { delegated: true, blocked: true, awaitingRepo: [] }],
       ['nobody asked it for work there', { questionSessionIds: ['s1'] }],
     ])('replaces a row of another project when %s', async (_name, row) => {
       await store.putTicket({ ...base('web'), ...row });

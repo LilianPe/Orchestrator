@@ -33,6 +33,74 @@ function ctx(echoes: string[] = []): MapContext {
   };
 }
 
+describe('a Linear team no project takes (ORC-171)', () => {
+  const noTeam = (name: string) => {
+    const body = fx(name);
+    if (body.agentSession) body.agentSession.issue.identifier = 'ZZZ-1';
+    if (body.data) {
+      body.data.identifier = 'ZZZ-1';
+      if (body.data.team) body.data.team.key = 'ZZZ';
+    }
+    return body;
+  };
+  const first: MapContext = { ...ctx(), firstProject: () => 'first' };
+
+  it('sends its delegation to the first project, naming the team, with the signed actor and no ack', async () => {
+    expect(await mapLinearWebhook(noTeam('session-created-delegation'), 'd1', first)).toEqual([
+      {
+        id: 'linear:d1', type: 'ticket.delegated', at: 5000, schemaVersion: 3, taint: 'trusted', actor: 'user-lilian', projectId: 'first', ticketId: 'ZZZ-1',
+        payload: { linearSessionId: 'as-1', promptContext: '<issue identifier="REL-1">Export</issue>', noRepo: 'ZZZ' },
+      },
+    ]);
+  });
+
+  it('reads no label: a repo: label names a repo of its own team only, and this team has none', async () => {
+    const labelsOf = vi.fn(async () => ['repo:first']);
+    const [event] = await mapLinearWebhook(noTeam('session-created-delegation'), 'd1', { ...first, labelsOf });
+    expect(event).toMatchObject({ projectId: 'first', payload: { noRepo: 'ZZZ' } });
+    expect(labelsOf).not.toHaveBeenCalled();
+  });
+
+  describe('once a project takes it', () => {
+    const noRepoRow = { ...newTicketState('first', 'ZZZ-1', 'T', 'todo', 0), delegated: true, blocked: true, awaitingRepo: [] };
+    const taken = (stored: TicketState[], team = ['zzz']): MapContext => ({
+      ...first,
+      projectsOfTeam: (k) => (k === 'ZZZ' ? team : []),
+      ticket: async (p, id) => stored.find((t) => t.projectId === p && t.ticketId === id),
+    });
+
+    it('its delegation goes to that project and says where it waited, with its ack', async () => {
+      const [event] = await mapLinearWebhook(noTeam('session-created-delegation'), 'd1', taken([noRepoRow]));
+      expect(event).toMatchObject({ projectId: 'zzz', payload: { ack: true, waitedIn: 'first' } });
+      expect((event!.payload as { noRepo?: string }).noRepo).toBeUndefined();
+    });
+
+    it('names no wait for a ticket that had none, nor for an event that is no delegation', async () => {
+      const [fresh] = await mapLinearWebhook(noTeam('session-created-delegation'), 'd1', taken([]));
+      expect(fresh!.payload).not.toHaveProperty('waitedIn');
+      const [mention] = await mapLinearWebhook(noTeam('session-created-mention'), 'd2', taken([noRepoRow]));
+      expect(mention!.payload).not.toHaveProperty('waitedIn');
+    });
+
+    it('still asks for the repo when that team has several, the wait named too', async () => {
+      const [event] = await mapLinearWebhook(noTeam('session-created-delegation'), 'd1', taken([noRepoRow], ['zzz', 'yyy']));
+      expect(event).toMatchObject({ projectId: 'zzz', payload: { ack: true, repos: ['zzz', 'yyy'], waitedIn: 'first' } });
+    });
+  });
+
+  it.each(['session-created-mention', 'session-created-command', 'session-prompted', 'session-stop', 'issue-moved-labeled'])('still drops %s: only a delegation asks for a repo', async (name) => {
+    expect(await mapLinearWebhook(noTeam(name), 'd2', first)).toEqual([]);
+  });
+
+  it('drops the delegation too with no project at all to wait under', async () => {
+    expect(await mapLinearWebhook(noTeam('session-created-delegation'), 'd3', ctx())).toEqual([]);
+  });
+
+  it('leaves a known team as it was', async () => {
+    expect(await mapLinearWebhook(fx('session-created-delegation'), 'd4', first)).toMatchObject([{ projectId: 'p', payload: { ack: true } }]);
+  });
+});
+
 describe('signature', () => {
   it('accepts a valid HMAC and rejects others', () => {
     const raw = '{"a":1}';
@@ -75,7 +143,7 @@ describe('mapLinearWebhook', () => {
   it('maps a delegation', async () => {
     expect(await mapLinearWebhook(fx('session-created-delegation'), 'd1', ctx())).toEqual([
       { id: 'linear:d1', type: 'ticket.delegated', at: 5000, schemaVersion: 3, taint: 'trusted', actor: 'user-lilian', projectId: 'p', ticketId: 'REL-1',
-        payload: { linearSessionId: 'as-1', promptContext: '<issue identifier="REL-1">Export</issue>' } },
+        payload: { linearSessionId: 'as-1', promptContext: '<issue identifier="REL-1">Export</issue>', ack: true } },
     ]);
   });
   it('maps a mention', async () => {
@@ -92,7 +160,7 @@ describe('mapLinearWebhook', () => {
     const body = fx('session-created-command');
     body.agentSession.comment.body = '[@factory](https://linear.app/x/profiles/factory) /refreeze le test de l’export était faux';
     expect((await mapLinearWebhook(body, 'd3', ctx()))[0]).toMatchObject({
-      type: 'command', actor: 'user-lilian', payload: { name: '/refreeze', body: 'le test de l’export était faux', linearSessionId: 'as-3' },
+      type: 'command', actor: 'user-lilian', payload: { name: '/refreeze', body: 'le test de l’export était faux', linearSessionId: 'as-3', ack: true },
     });
   });
   it('maps /refreeze answered in a session as the command, not as feedback that relaunches the agent (ORC-131)', async () => {
@@ -263,6 +331,15 @@ describe('mapLinearWebhook', () => {
       expect(read).toEqual([]);
     });
 
+    it('brings the ack and the routing together: the trigger keeps its ack whichever way it is routed', async () => {
+      const choose = await mapLinearWebhook(fx('session-created-delegation'), 'd1', twoRepos([]));
+      expect(choose).toMatchObject([{ projectId: 'web', payload: { ack: true, repos: ['web', 'api'] } }]);
+      const named = await mapLinearWebhook(fx('session-created-mention'), 'd2', twoRepos(['repo:api']));
+      expect(named).toMatchObject([{ projectId: 'api', payload: { ack: true } }]);
+      const replied = await mapLinearWebhook(fx('session-prompted'), 'd3', twoRepos(['repo:api']));
+      expect(replied[0]!.payload).not.toHaveProperty('ack');
+    });
+
     it('a delegation to the repo its label names says where the ticket waited', async () => {
       const stored = [{ ...newTicketState('web', 'REL-1', 'T', 'todo', 0), delegated: true, blocked: true, blockReason: unroutedReason(['web', 'api']), awaitingRepo: ['web', 'api'] }];
       expect(await mapLinearWebhook(fx('session-created-delegation'), 'd1', twoRepos(['repo:api'], { stored }))).toMatchObject([{ projectId: 'api', payload: { waitedIn: 'web' } }]);
@@ -341,23 +418,11 @@ describe('ingest', () => {
     };
   }
 
-  it('writes a delegation to the inbox, then acks, then answers 200 (ORC-147)', async () => {
-    const order: string[] = [];
+  it('writes a delegation to the inbox, then answers 200; it writes nothing to Linear, the ack is an effect of its decision (ORC-147, ORC-171)', async () => {
     const { store, ids } = inbox();
-    const ingest = createLinearIngest({
-      secret: () => 'sec',
-      ctx: { ...ctx(), now: () => 2000 },
-      accept: async (e) => {
-        const fresh = await store.appendInbox(e);
-        order.push(`inbox:${e.type}`);
-        return fresh;
-      },
-      ack: async (s) => void order.push(`ack:${s}`),
-      log: () => {},
-    });
+    const ingest = createLinearIngest({ secret: () => 'sec', ctx: { ...ctx(), now: () => 2000 }, accept: (e) => store.appendInbox(e), log: () => {} });
     const { raw, sig } = signed(fx('session-created-delegation'));
     expect(await ingest(raw, { 'linear-signature': sig })).toEqual({ status: 200 });
-    expect(order).toEqual(['inbox:ticket.delegated', 'ack:as-1']);
     expect(await ids()).toHaveLength(1);
   });
 
@@ -367,18 +432,18 @@ describe('ingest', () => {
     // `lost` was added by a webhook that never came: this one only adds agent:reprendre, so `lost` stays unknown.
     const c = { ...ctx(['label:REL-1:agent:reprendre']), now: () => 2000, knownLabels: async () => ({ labels: ['bug'], at: 0 }), recordLabels: async (...a: unknown[]) => void recorded.push(a) };
     const { raw, sig } = signed(body);
-    const ok = createLinearIngest({ secret: () => 'sec', ctx: c, accept: async () => true, ack: async () => {}, log: () => {} });
+    const ok = createLinearIngest({ secret: () => 'sec', ctx: c, accept: async () => true, log: () => {} });
     expect(await ok(raw, { 'linear-signature': sig })).toEqual({ status: 200 });
     expect(recorded).toEqual([['p', 'REL-1', ['bug', 'agent:reprendre'], Date.parse(body.data.updatedAt)]]);
     recorded.length = 0;
     // A lost label in the full list is not recorded: the reconciliation still reports it.
     const withLost = { ...body, data: { ...body.data, labelIds: ['l-bug', 'l-resume', 'l-lost'] }, updatedFrom: { labelIds: ['l-bug', 'l-lost'] }, webhookTimestamp: 2000 };
     const s2 = signed(withLost);
-    const lost = createLinearIngest({ secret: () => 'sec', ctx: { ...c, labelNameById: (_t: string, id: string) => ({ 'l-bug': 'bug', 'l-resume': 'agent:reprendre', 'l-lost': 'lost' })[id] }, accept: async () => true, ack: async () => {}, log: () => {} });
+    const lost = createLinearIngest({ secret: () => 'sec', ctx: { ...c, labelNameById: (_t: string, id: string) => ({ 'l-bug': 'bug', 'l-resume': 'agent:reprendre', 'l-lost': 'lost' })[id] }, accept: async () => true, log: () => {} });
     expect(await lost(s2.raw, { 'linear-signature': s2.sig })).toEqual({ status: 200 });
     expect(recorded).toEqual([['p', 'REL-1', ['bug', 'agent:reprendre'], Date.parse(body.data.updatedAt)]]);
     recorded.length = 0;
-    const failing = createLinearIngest({ secret: () => 'sec', ctx: c, accept: async () => Promise.reject(new Error('disk')), ack: async () => {}, log: () => {} });
+    const failing = createLinearIngest({ secret: () => 'sec', ctx: c, accept: async () => Promise.reject(new Error('disk')), log: () => {} });
     expect(await failing(raw, { 'linear-signature': sig })).toEqual({ status: 500 });
     // Not in the inbox: Linear sends it again, and it must not be taken for a change already known then.
     expect(recorded).toEqual([]);
@@ -401,7 +466,7 @@ describe('ingest', () => {
       knownLabels: (pid: string, id: string) => knownLabels(store, pid, id),
       recordLabels: (pid: string, id: string, labels: string[], at: number) => recordLabels(store, pid, id, labels, at),
     };
-    const ingest = createLinearIngest({ secret: () => 'sec', ctx: c, serial: labelsTurn, accept: async (e) => (await gate, accept(e)), ack: async () => {}, log: () => {} });
+    const ingest = createLinearIngest({ secret: () => 'sec', ctx: c, serial: labelsTurn, accept: async (e) => (await gate, accept(e)), log: () => {} });
     const { raw, sig } = signed(body);
     const webhook = ingest(raw, { 'linear-signature': sig });
     await new Promise((r) => setTimeout(r, 10));
@@ -440,7 +505,7 @@ describe('ingest', () => {
     };
     const seen: FactoryEvent[] = [];
     const write = (e: FactoryEvent) => (seen.push(e), accept(e));
-    const ingest = createLinearIngest({ secret: () => 'sec', ctx: c, serial: labelsTurn, accept: async (e) => (await gate, write(e)), ack: async () => {}, log: () => {} });
+    const ingest = createLinearIngest({ secret: () => 'sec', ctx: c, serial: labelsTurn, accept: async (e) => (await gate, write(e)), log: () => {} });
     const { raw, sig } = signed(body);
     const webhook = ingest(raw, { 'linear-signature': sig });
     await new Promise((r) => setTimeout(r, 10));
@@ -468,7 +533,7 @@ describe('ingest', () => {
       knownLabels: (pid: string, id: string) => knownLabels(store, pid, id),
       recordLabels: (pid: string, id: string, labels: string[], at: number) => recordLabels(store, pid, id, labels, at),
     };
-    const ingest = createLinearIngest({ secret: () => 'sec', ctx: c, accept: (e) => store.appendInbox(e), ack: async () => {}, log: () => {} });
+    const ingest = createLinearIngest({ secret: () => 'sec', ctx: c, accept: (e) => store.appendInbox(e), log: () => {} });
     // W1 (bug added at 10) arrives after W2 (agent:reprendre added at 20).
     const w = (updatedAt: number, labelIds: string[], from: string[]) =>
       signed({ ...base, webhookTimestamp: 2000, data: { ...base.data, updatedAt: new Date(updatedAt).toISOString(), labelIds }, updatedFrom: { labelIds: from } });
@@ -493,7 +558,7 @@ describe('ingest', () => {
       knownLabels: (pid: string, id: string) => knownLabels(store, pid, id),
       recordLabels: (pid: string, id: string, labels: string[], at: number) => recordLabels(store, pid, id, labels, at),
     };
-    const ingest = createLinearIngest({ secret: () => 'sec', ctx: c, serial: labelsTurn, accept: (e) => store.appendInbox(e), ack: async () => {}, log: () => {} });
+    const ingest = createLinearIngest({ secret: () => 'sec', ctx: c, serial: labelsTurn, accept: (e) => store.appendInbox(e), log: () => {} });
     const { raw, sig } = signed({ ...base, webhookTimestamp: 2000, data: { ...base.data, updatedAt: new Date(30).toISOString(), labelIds: ['l-bug', 'l-resume'] }, updatedFrom: { labelIds: ['l-bug'] } });
     // The pass reads the kept labels, then the webhook comes before it writes its own reading.
     let webhook: Promise<unknown> | undefined;
@@ -514,21 +579,6 @@ describe('ingest', () => {
     expect(await knownLabels(store, 'p', 'REL-1')).toEqual({ labels: ['agent:reprendre', 'bug'], at: 30 });
   });
 
-  it('acks with the id of the event, so the daemon can record when (ORC-235)', async () => {
-    const acked: [string, string][] = [];
-    const { store } = inbox();
-    const ingest = createLinearIngest({
-      secret: () => 'sec',
-      ctx: { ...ctx(), now: () => 2000 },
-      accept: (e) => store.appendInbox(e),
-      ack: async (sessionId, eventId) => void acked.push([sessionId, eventId]),
-      log: () => {},
-    });
-    const delegation = signed(fx('session-created-delegation'));
-    expect(await ingest(delegation.raw, { 'linear-signature': delegation.sig })).toEqual({ status: 200 });
-    expect(acked).toEqual((await store.pendingInbox(10)).map((e) => ['as-1', e.id]));
-  });
-
   it('answers only once the inbox write is committed', async () => {
     let commit!: () => void;
     const committed = new Promise<void>((r) => (commit = r));
@@ -540,7 +590,6 @@ describe('ingest', () => {
         await committed;
         return store.appendInbox(e);
       },
-      ack: async () => {},
       log: () => {},
     });
     const { raw, sig } = signed(fx('session-created-delegation'));
@@ -555,8 +604,7 @@ describe('ingest', () => {
     expect(await ids()).toHaveLength(1);
   });
 
-  it('answers 500 without acking when the inbox write fails, and takes the webhook Linear sends again', async () => {
-    const acks: string[] = [];
+  it('answers 500 when the inbox write fails, and takes the webhook Linear sends again', async () => {
     const logs: string[] = [];
     const { store, ids } = inbox();
     let down = true;
@@ -567,34 +615,29 @@ describe('ingest', () => {
         if (down) throw new Error('database down');
         return store.appendInbox(e);
       },
-      ack: async (s) => void acks.push(s),
       log: (m) => logs.push(m),
     });
     const { raw, sig } = signed(fx('session-created-delegation'));
     expect(await ingest(raw, { 'linear-signature': sig })).toEqual({ status: 500 });
-    expect(acks).toEqual([]);
     expect(logs.join('\n')).toContain('database down');
     down = false;
     expect(await ingest(raw, { 'linear-signature': sig })).toEqual({ status: 200 });
-    expect(acks).toEqual(['as-1']);
     expect(await ids()).toHaveLength(1);
   });
 
   function make(store?: SqliteStore) {
-    const acks: string[] = [];
     const box = inbox(store);
     const ingest = createLinearIngest({
       secret: () => 'sec',
       ctx: { ...ctx(), now: () => 1000 },
       accept: box.accept,
-      ack: async (s) => void acks.push(s),
       log: () => {},
     });
     const send = async (body: unknown, headers: Record<string, string> = {}) => {
       const { raw, sig } = signed(body);
       expect(await ingest(raw, { ...headers, 'linear-signature': sig })).toEqual({ status: 200 });
     };
-    return { ids: box.ids, acks, send, store: box.store };
+    return { ids: box.ids, send, store: box.store };
   }
 
   // A fresh inbox per call: the ids that reach the store.
@@ -636,12 +679,11 @@ describe('ingest', () => {
     expect(await idsOf({ ...body, webhookTimestamp: 1500 })).toEqual(first);
   });
 
-  it('neither acks nor writes again a webhook replayed within the freshness window', async () => {
-    const { ids, acks, send } = make();
+  it('does not write again a webhook replayed within the freshness window', async () => {
+    const { ids, send } = make();
     await send(fx('session-created-delegation'), { 'linear-delivery': 'd1' });
     await send(fx('session-created-delegation'), { 'linear-delivery': 'forged' });
     await send({ ...fx('session-created-delegation'), webhookTimestamp: 1500 });
-    expect(acks).toEqual(['as-1']);
     expect(await ids()).toHaveLength(1);
   });
 
@@ -652,7 +694,6 @@ describe('ingest', () => {
     // A new ingest (a restarted daemon) over the same store.
     const after = make(before.store);
     await after.send({ ...fx('session-created-delegation'), webhookTimestamp: 1500 });
-    expect(after.acks).toEqual([]);
     expect(await after.ids()).toEqual([]);
   });
 
@@ -677,7 +718,6 @@ describe('ingest', () => {
       secret: () => 'sec',
       ctx: { ...ctx(), now: () => 1000, isEcho: async () => (await gate, false) },
       accept,
-      ack: async () => {},
       log: () => {},
     });
     const { raw, sig } = signed(fx('issue-moved-labeled'));
@@ -696,7 +736,6 @@ describe('ingest', () => {
       // The first webhook moves the ticket to AI Review, the second to Human Review; only the first lookup waits.
       ctx: { ...ctx(), now: () => 1000, isEcho: async (k: string) => (k === 'state:REL-1:AI Review' ? (await slow, false) : false) },
       accept,
-      ack: async () => {},
       log: () => {},
     });
     const moved = fx('issue-moved-labeled');
@@ -723,7 +762,6 @@ describe('ingest', () => {
       secret: () => 'sec',
       ctx: { ...ctx(), now: () => 1000, isEcho: async () => { if (fail) throw new Error('store down'); return false; } },
       accept,
-      ack: async () => {},
       log: () => {},
     });
     const { raw, sig } = signed(fx('issue-moved-labeled'));
@@ -735,7 +773,7 @@ describe('ingest', () => {
 
   it('rejects a bad signature and a stale body', async () => {
     const accept = vi.fn(async () => true);
-    const ingest = createLinearIngest({ secret: () => 'sec', ctx: { ...ctx(), now: () => 999_999 }, accept, ack: async () => {}, log: () => {} });
+    const ingest = createLinearIngest({ secret: () => 'sec', ctx: { ...ctx(), now: () => 999_999 }, accept, log: () => {} });
     const { raw, sig } = signed(fx('session-prompted'));
     expect(await ingest(raw, { 'linear-signature': 'bad' })).toEqual({ status: 401 });
     expect(await ingest(raw, { 'linear-signature': sig })).toEqual({ status: 401 });
@@ -744,7 +782,7 @@ describe('ingest', () => {
 
   it('rejects a fresh webhook forged with an empty secret', async () => {
     const accept = vi.fn(async () => true);
-    const ingest = createLinearIngest({ secret: () => '', ctx: { ...ctx(), now: () => 2000 }, accept, ack: async () => {}, log: () => {} });
+    const ingest = createLinearIngest({ secret: () => '', ctx: { ...ctx(), now: () => 2000 }, accept, log: () => {} });
     const raw = JSON.stringify(fx('session-prompted'));
     const forged = createHmac('sha256', '').update(raw).digest('hex');
     expect(await ingest(raw, { 'linear-signature': forged })).toEqual({ status: 401 });

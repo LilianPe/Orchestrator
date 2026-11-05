@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { holds, isUnrouted, namesOtherRepo, resolveRoute, unroutedReason } from './routing.js';
+import { holds, isNoRepo, isUnrouted, namesOtherRepo, resolveRoute, unroutedReason } from './routing.js';
 import { newTicketState, type TicketState } from './types.js';
 
 const t = (projectId: string, patch: Partial<TicketState> = {}): TicketState => ({ ...newTicketState(projectId, 'REL-1', 'T', 'todo', 0), ...patch });
@@ -41,6 +41,15 @@ describe('resolveRoute (ORC-291)', () => {
     expect(isUnrouted(replaced)).toBe(true);
     expect(holds(replaced)).toBe(false);
     expect(isUnrouted(t('web', { awaitingRepo: null }))).toBe(false);
+  });
+  it('a ticket of a team with no repo waits with nothing to choose from, and holds no project', () => {
+    const noRepo = t('web', { delegated: true, blocked: true, awaitingRepo: [] });
+    expect(isNoRepo(noRepo)).toBe(true);
+    expect(isUnrouted(noRepo)).toBe(true);
+    expect(holds(noRepo)).toBe(false);
+    expect(isNoRepo(t('web', { delegated: true, blocked: true, awaitingRepo: team }))).toBe(false);
+    expect(isNoRepo(t('web', { awaitingRepo: null }))).toBe(false);
+    expect(isNoRepo(t('web'))).toBe(false);
   });
   it('without labels to route by, a ticket no project knows goes nowhere', () => {
     expect(resolveRoute(team, [])).toBeUndefined();

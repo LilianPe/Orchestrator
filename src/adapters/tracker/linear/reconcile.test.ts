@@ -59,6 +59,51 @@ describe('reconcileOnce', () => {
     ]);
   });
 
+  describe('a ticket of a team with no repo, filed under the first project (ORC-171)', () => {
+    const web = { id: 'web', repoPath: '/web', teamKey: 'REL', workflow };
+    const zzz = { id: 'zzz', repoPath: '/zzz', teamKey: 'ZZZ', workflow };
+    const noRepoRow = { ...newTicketState('web', 'ZZZ-1', 'T', 'todo', 3), delegated: true, blocked: true, awaitingRepo: [] };
+    const pass = async (tracker: FakeTracker, store: SqliteStore, projects: (typeof web)[], only?: string) => {
+      const events: FactoryEvent[] = [];
+      await reconcileOnce({ tracker, store, projects, only, submit: (e) => events.push(e), clock: new FakeClock(100), log: () => {} });
+      return events.filter((e) => e.projectId === 'web').map((e) => [e.id, e.payload]);
+    };
+
+    it('stays as it is while no project takes its team', async () => {
+      const tracker = new FakeTracker();
+      tracker.addIssue({ identifier: 'ZZZ-1', delegateId: 'app' });
+      const store = new SqliteStore(':memory:');
+      await store.putTicket(noRepoRow);
+      expect(await pass(tracker, store, [web])).toEqual([]);
+    });
+
+    it('is lifted by the pass of the project it waits under once its team has a project, though Linear still delegates it', async () => {
+      const tracker = new FakeTracker();
+      tracker.addIssue({ identifier: 'ZZZ-1', delegateId: 'app' });
+      const store = new SqliteStore(':memory:');
+      await store.putTicket(noRepoRow);
+      const lift = [['reconcile:undelegated-flag:web:ZZZ-1:3', {}]];
+      expect(await pass(tracker, store, [web, zzz], 'web')).toEqual(lift);
+      expect(await pass(tracker, store, [web, zzz])).toEqual(lift);
+    });
+
+    it('leaves the label to the issue\'s ticket in its new repo when that one is blocked', async () => {
+      const tracker = new FakeTracker();
+      const store = new SqliteStore(':memory:');
+      await store.putTicket(noRepoRow);
+      await store.putTicket({ ...newTicketState('zzz', 'ZZZ-1', 'T', 'todo', 4), delegated: true, blocked: true, blockReason: 'Rouge' });
+      expect(await pass(tracker, store, [web, zzz], 'web')).toEqual([['reconcile:undelegated-flag:web:ZZZ-1:3', { keepLabel: true }]]);
+    });
+
+    it('goes when the delegation is withdrawn, as a wait does, even once the ticket is done', async () => {
+      const tracker = new FakeTracker();
+      tracker.addIssue({ identifier: 'ZZZ-1', stateName: 'Done', stateType: 'completed' });
+      const store = new SqliteStore(':memory:');
+      await store.putTicket({ ...noRepoRow, logical: 'done' });
+      expect((await pass(tracker, store, [web])).map(([id]) => id)).toEqual(['reconcile:undelegated-flag:web:ZZZ-1:3']);
+    });
+  });
+
   describe('a team with several repos (ORC-291)', () => {
     const projects = ['web', 'api'].map((id) => ({ id, repoPath: `/${id}`, teamKey: 'REL', workflow }));
     const pass = async (tracker: FakeTracker, store: SqliteStore, only?: string) => {

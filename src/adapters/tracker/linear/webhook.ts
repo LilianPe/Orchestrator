@@ -2,7 +2,7 @@ import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { REFREEZE } from '../../../checks/freeze.js';
 import { IssueNotFoundError, labelEchoKey, stateEchoKey } from '../types.js';
 import { labelChanges, type KnownLabels } from './labels.js';
-import { holds, namesOtherRepo, resolveRoute, type Route } from '../../../core/routing.js';
+import { holds, isNoRepo, namesOtherRepo, resolveRoute, type Route } from '../../../core/routing.js';
 import { SCHEMA_VERSION, type LogicalState, type FactoryEvent, type Taint, type TicketState } from '../../../core/types.js';
 
 export function isUsableWebhookSecret(secret: unknown): boolean {
@@ -25,6 +25,8 @@ export function isFresh(body: { webhookTimestamp?: number }, now: number): boole
 export interface MapContext {
   /** The projects of a Linear team, in config order (ORC-291). */
   projectsOfTeam(teamKey: string): string[];
+  /** The project a delegation on a team with no repo waits under (ORC-171): the first of the configuration. */
+  firstProject?(): string | undefined;
   /** A ticket's label names, read from Linear: only to route a new session on a ticket no project holds. */
   labelsOf(identifier: string): Promise<string[]>;
   /** The ticket a project stores, read only when its team has several projects. */
@@ -96,6 +98,11 @@ export function signedActor(body: any): SignedActor {
   return id ? { id, taint: 'trusted', name: name ?? 'Humain' } : { taint: 'untrusted', name: name ?? 'Humain' };
 }
 
+/** A session Linear opened on a delegation: no comment opened it. */
+const isDelegation = (body: any): boolean => body.type === 'AgentSessionEvent' && body.action === 'created' && !body.agentSession.comment;
+
+const delegationPayload = (body: any) => ({ linearSessionId: body.agentSession.id as string, promptContext: body.promptContext as string | undefined });
+
 /** The first word of a comment, without its mention, as a command's name, and the rest as its body. */
 function parseCommand(text: string): { name: string; body: string } {
   const [first = '', ...rest] = text.split(/\s+/);
@@ -106,14 +113,14 @@ function sessionEvents(body: any, author: string, projectId: string, ctx: MapCon
   const sessionId: string = body.agentSession.id;
   if (body.action === 'created') {
     const comment = body.agentSession.comment;
-    if (!comment) return [{ type: 'ticket.delegated', payload: { linearSessionId: sessionId, promptContext: body.promptContext } }];
+    if (!comment) return [{ type: 'ticket.delegated', payload: { ...delegationPayload(body), ack: true } }];
     const text = stripMention(comment.body ?? '');
     const command = parseCommand(text);
     // `/refreeze` is the factory's own (ORC-131), not a workflow rule's.
     if ([REFREEZE, ...ctx.commands(projectId)].includes(command.name)) {
-      return [{ type: 'command', payload: { ...command, linearSessionId: sessionId, author } }];
+      return [{ type: 'command', payload: { ...command, linearSessionId: sessionId, author, ack: true } }];
     }
-    return [{ type: 'session.mentioned', payload: { linearSessionId: sessionId, body: text, author } }];
+    return [{ type: 'session.mentioned', payload: { linearSessionId: sessionId, body: text, author, ack: true } }];
   }
   if (body.action === 'prompted') {
     if (body.agentActivity?.signal === 'stop') return [{ type: 'session.stopped', payload: { linearSessionId: sessionId } }];
@@ -170,7 +177,18 @@ async function issueEvents(body: any, identifier: string, teamKey: string, proje
  */
 async function routeOf(body: any, identifier: string, teamKey: string, ctx: MapContext): Promise<Route | undefined> {
   const team = ctx.projectsOfTeam(teamKey);
-  if (team.length === 0) return undefined;
+  if (team.length === 0) {
+    // A delegation on a team no project takes waits blocked under the first one (ORC-171); anything else there is dropped.
+    const first = isDelegation(body) ? ctx.firstProject?.() : undefined;
+    return first ? { projectId: first, noRepo: teamKey } : undefined;
+  }
+  const route = await routeInTeam(body, identifier, team, ctx);
+  // Its team got a repo while it waited under the first project: nothing may be left there to take its label off (ORC-171).
+  const first = route && isDelegation(body) ? ctx.firstProject?.() : undefined;
+  return first && !team.includes(first) && isNoRepo(await ctx.ticket(first, identifier)) ? { ...route!, waitedIn: first } : route;
+}
+
+async function routeInTeam(body: any, identifier: string, team: string[], ctx: MapContext): Promise<Route | undefined> {
   if (team.length === 1) return { projectId: team[0]! };
   const stored = (await Promise.all(team.map((p) => ctx.ticket(p, identifier)))).filter((t) => t !== undefined);
   const session: string | undefined = body.type === 'AgentSessionEvent' ? body.agentSession?.id : undefined;
@@ -239,9 +257,12 @@ export async function mapLinearWebhook(body: any, key: string, ctx: MapContext):
   const teamKey = identifier.split('-')[0]!;
   const route = await routeOf(body, identifier, teamKey, ctx);
   if (!route) return [];
-  const { projectId, repos, waitedIn } = route;
+  const { projectId, repos, waitedIn, noRepo } = route;
   const { id: actor, taint, name } = signedActor(body);
-  const partials = body.type === 'AgentSessionEvent' ? sessionEvents(body, name, projectId, ctx) : await issueEvents(body, identifier, teamKey, projectId, ctx);
+  let partials: PartialEvent[];
+  if (noRepo) partials = [{ type: 'ticket.delegated', payload: { ...delegationPayload(body), noRepo } }];
+  else if (body.type === 'AgentSessionEvent') partials = sessionEvents(body, name, projectId, ctx);
+  else partials = await issueEvents(body, identifier, teamKey, projectId, ctx);
   // The choice to make goes with the event: `decide` blocks the delegation, answers the rest.
   const routing = { ...(repos ? { repos } : {}), ...(waitedIn ? { waitedIn } : {}) };
   const at = ctx.now();

@@ -13,7 +13,7 @@ projects:
 
 Règles :
 
-- les tickets sont routés par clé d'équipe ; une équipe sans projet est ignorée. Une équipe peut avoir plusieurs projets : voir [Une équipe, plusieurs dépôts](#une-équipe-plusieurs-dépôts) ;
+- les tickets sont routés par clé d'équipe ; une délégation sur une équipe sans projet est bloquée, le reste ignoré ([`linear.md`](linear.md#4-utiliser-lagent-au-quotidien)). Une équipe peut avoir plusieurs projets : voir [Une équipe, plusieurs dépôts](#une-équipe-plusieurs-dépôts) ;
 - le comportement de chaque projet vient de son `.relais/workflow.yml` ([`workflow.md`](workflow.md)), lu dans la copie de travail `repoPath` au démarrage ;
 - `repoPath` doit être un clone avec `origin` : Relais y fait `git fetch origin` et y attache les worktrees. Vous pouvez continuer à y travailler, mais n'y supprimez pas les branches `relais/…` en cours.
 

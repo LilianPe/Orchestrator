@@ -17,6 +17,9 @@ export function unroutedReason(repos: readonly string[]): string {
 /** The ticket waits for its repo: `awaitingRepo`, whatever its block reason says. */
 export const isUnrouted = (t: TicketState | undefined): boolean => !!t?.awaitingRepo;
 
+/** That wait with no repo to choose from: its Linear team has none, the ticket is only filed under the first project (ORC-171). */
+export const isNoRepo = (t: TicketState | undefined): boolean => t?.awaitingRepo?.length === 0;
+
 /** A ticket its project keeps whatever its labels say: work was asked of it there (sticky routing). */
 export const holds = (t: TicketState): boolean => !isUnrouted(t) && (t.delegated || t.prNumber !== undefined || t.branch !== undefined);
 
@@ -31,6 +34,8 @@ export interface Route {
   repos?: string[];
   /** The project where the ticket waited for this choice: on Postgres, its one row now moves here (ORC-291). */
   waitedIn?: string;
+  /** The Linear team no project takes (ORC-171): the delegation only waits under this project. */
+  noRepo?: string;
 }
 
 /**

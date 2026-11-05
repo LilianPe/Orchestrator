@@ -100,7 +100,7 @@ export const SCENARIOS: Record<string, { preset?: TestPreset; authz?: HarnessAut
     run: async (h) => {
       h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Exporter les audits en CSV depuis la liste des audits.' });
       h.runner.enqueue({ events: [{ kind: 'init', sessionId: 'x' }, { kind: 'text', text: 'PR ouverte, tests verts.' }] });
-      const ingest = linearIngest((e) => h.orch.accept(e), [], { now: () => h.clock.now() });
+      const ingest = linearIngest((e) => h.orch.accept(e), { now: () => h.clock.now() });
       const { raw, headers } = signedDelegation(h.clock.now());
       await ingest(raw, headers);
       await h.orch.drained();

@@ -265,14 +265,10 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       serial: labelsTurn,
       secret: webhookSecret,
       accept,
-      // The time the ack was posted is the first sign of life a measure reads (ORC-235).
-      ack: async (sessionId, eventId) => {
-        await trackerSwitch.activity(sessionId, { type: 'thought', body: 'Pris en compte.' });
-        await store.markAcked(eventId, clock.now()).catch((err: Error) => log(`ack of ${eventId} posted, its time not recorded: ${err.message}`));
-      },
       log,
       ctx: {
         projectsOfTeam: (k) => projects.filter((p) => p.teamKey === k).map((p) => p.id),
+        firstProject: () => projects[0]?.id,
         labelsOf: async (id) => (await trackerSwitch.getIssue(id)).labels,
         ticket: (pid, id) => store.getTicket(pid, id),
         logicalFor: (pid, name) => {

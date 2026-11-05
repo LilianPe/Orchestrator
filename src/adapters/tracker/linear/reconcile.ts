@@ -1,10 +1,11 @@
 import type { Clock } from '../../../core/clock.js';
 import { logicalFromName, type ProjectRuntime } from '../../../core/orchestrator.js';
-import { isUnrouted, namesOtherRepo, resolveRoute, type Route } from '../../../core/routing.js';
+import { isNoRepo, isUnrouted, namesOtherRepo, resolveRoute, type Route } from '../../../core/routing.js';
 import { SCHEMA_VERSION, TRUSTED, type EventPayloads, type EventType, type FactoryEvent, type TicketState } from '../../../core/types.js';
 import type { Store } from '../../../store/types.js';
 import { IssueNotFoundError, labelEchoKey, stateEchoKey, type Tracker, type TrackerIssue } from '../types.js';
 import { knownLabels, labelChanges, recordLabels, type Serial } from './labels.js';
+import { teamOf } from './tracker.js';
 
 export interface ReconcileDeps {
   tracker: Pick<Tracker, 'listDelegated' | 'getIssue'>;
@@ -100,7 +101,8 @@ async function reconcileProject(d: ReconcileDeps, p: ProjectRuntime, team: strin
   const emit: Emit = async (t, base, id, type, payload) => d.submit({ ...base, id, type, at, projectId: p.id, ticketId: t.ticketId, payload } as FactoryEvent);
   const clearDelegation = async (t: TicketState) => {
     // Its repo chosen, a ticket that waited here leaves its label to the issue's ticket there when that one is blocked.
-    const keepLabel = isUnrouted(t) && (await storedTickets(d.store, team, t.ticketId)).some((o) => o.projectId !== p.id && o.blocked);
+    const there = d.projects.filter((o) => o.id !== p.id && o.teamKey === teamOf(t.ticketId));
+    const keepLabel = isUnrouted(t) && (await Promise.all(there.map((o) => d.store.getTicket(o.id, t.ticketId)))).some((o) => o?.blocked);
     await emit(t, TRUSTED, `reconcile:undelegated-flag:${p.id}:${t.ticketId}:${t.updatedAt}`, 'ticket.undelegated', keepLabel ? { keepLabel } : {});
   };
   const stopRun = (t: TicketState) => emit(t, TRUSTED, `reconcile:undelegated:${p.id}:${t.ticketId}:${t.activeRunId}`, 'session.stopped', {});
@@ -123,6 +125,11 @@ async function reconcileProject(d: ReconcileDeps, p: ProjectRuntime, team: strin
   }
   for (const t of await d.store.listTickets()) {
     if (t.projectId !== p.id || routedTo.get(t.ticketId) === p.id) continue;
+    // Its team has a project now (ORC-171): its block is lifted here; a new delegation goes there.
+    if (isNoRepo(t) && d.projects.some((o) => o.teamKey === teamOf(t.ticketId))) {
+      await clearDelegation(t);
+      continue;
+    }
     // A ticket done while it waited for its repo stops waiting: nothing else lifts that block.
     const undelegate = t.delegated && (t.logical !== 'done' || isUnrouted(t));
     if (!t.activeRunId && !undelegate) continue;

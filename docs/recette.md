@@ -16,7 +16,7 @@ Dans le dépôt de test : `relais init`. Suivre les instructions (app OAuth Line
 Si Linear refuse l'URL de callback localhost : noter l'erreur, utiliser `cloudflared tunnel --url http://localhost:4100` le temps de l'installation et mettre l'URL publique dans `publicUrl`.
 
 ## 3. Délégation (critère 3)
-Créer un ticket clair (≥ 30 caractères de description), le déléguer à @relais. Attendu en < 10 s : « Pris en compte. » dans la session. Puis : statut In Progress, sortie en direct dans l'interface, PR ouverte, statut Human Review, résumé en français dans la session.
+Créer un ticket clair (≥ 30 caractères de description), le déléguer à @relais. Attendu en < 10 s : le commentaire « Bien reçu. » sur le ticket, puis le plan dans la session (`comprendre · questions · spec · tests · build · vérif · PR`). Puis : statut In Progress, sortie en direct dans l'interface, PR ouverte, statut Human Review, résumé en français dans la session.
 Vérifier dans `~/.relais/relais.db` qu'aucun événement n'a été rejeté pour signature (sinon : le relais smee modifie le corps → passer en `publicUrl` via tunnel).
 
 ## 4. Retours groupés (critère 4)

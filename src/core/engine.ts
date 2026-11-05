@@ -8,7 +8,7 @@ import type { Decision, Effect } from './decision.js';
 import { PRODUCT_NAME } from '../product.js';
 import { CUT_RELAUNCHES, CUT_WINDOW_MS } from '../store/types.js';
 import { isOwnMoveEcho, reduce } from './reduce.js';
-import { holds, isUnrouted, unroutedReason } from './routing.js';
+import { holds, isNoRepo, isUnrouted, unroutedReason } from './routing.js';
 import type { EventPayloads, EventType, FactoryEvent, FeedbackItem, InputKind, RunOutcome, Taint, TicketState, VerifyFailure } from './types.js';
 
 type StartRun = Extract<Effect, { kind: 'start_run' }>;
@@ -369,7 +369,7 @@ function authorize(out: Decision, event: FactoryEvent, ticket: TicketState | und
  * an event without roles is not checked.
  */
 export function mayCheck(event: FactoryEvent, workflow: Workflow): boolean {
-  if (!HUMAN_EVENTS.has(event.type)) return false;
+  if (!HUMAN_EVENTS.has(event.type) || (event.type === 'ticket.delegated' && event.payload.noRepo)) return false;
   if (event.type !== 'label.changed' && event.type !== 'status.changed') return true;
   // A move to Done may merge (ORC-148): its actor is always checked.
   if (event.type === 'status.changed' && event.payload.to === 'done') return true;
@@ -579,6 +579,38 @@ function repair(state: TicketState | undefined, event: FactoryEvent<'dead_letter
 /** Events that trigger the agent (ORC-186): a delegation, a mention, a command. */
 const TRIGGERS = new Set<EventType>(['ticket.delegated', 'session.mentioned', 'command']);
 
+/** What the factory answers a trigger within 10 s (ORC-171), a comment rather than a reaction until ORC-140 decides. */
+export const ACK_BODY = 'Bien reçu.';
+
+/**
+ * The ack of a trigger the webhook brought, first of its decision (ORC-171): a delegation gets the comment, and the
+ * plan when it starts a run; any other trigger only the session's. An event already answered in its session (a
+ * refusal, a run already active) gets no ack: nothing was taken. An event no webhook brought has no one waiting, and
+ * a row journaled before ORC-171 asks for none: it replays as it was decided.
+ */
+function acknowledge(out: Decision, event: FactoryEvent): void {
+  const { ack, linearSessionId } = event.payload as { ack?: true; linearSessionId?: string };
+  if (!ack || !linearSessionId) return;
+  if (out.effects.some((e) => e.kind === 'activity' && e.linearSessionId === linearSessionId)) return;
+  const delegation = event.type === 'ticket.delegated';
+  const plan = delegation && out.effects.some((e) => e.kind === 'start_run');
+  out.effects.unshift({ kind: 'ack', body: ACK_BODY, linearSessionId, ...(delegation ? { comment: true as const } : {}), ...(plan ? { plan: true as const } : {}) });
+}
+
+/**
+ * A delegation on a Linear team no project takes (ORC-171): blocked, whoever delegated (no repo, no role to check),
+ * or asked again when already waiting: a wait for a repo with none to choose from (`awaitingRepo: []`). The free text and the session's elicitation are what any block uses today;
+ * ORC-196 replaces them with its standard comment.
+ */
+function noRepoBlock(out: Decision, state: TicketState | undefined, event: FactoryEvent<'ticket.delegated'>, team: string): Decision {
+  const reason = `Aucun dépôt connu pour l'équipe Linear ${team} : ajoutez-lui un projet dans la configuration, redémarrez, puis déléguez ce ticket de nouveau.`;
+  if (!isNoRepo(state)) out.events.push({ type: 'ticket.blocked', reason }, { type: 'ticket.patched', patch: { awaitingRepo: [] } });
+  out.effects.push({ kind: 'activity', type: 'elicitation', body: reason, ...(event.payload.linearSessionId ? { linearSessionId: event.payload.linearSessionId } : {}) });
+  // A new ticket: `blockedLabel` sees no state before it and puts no label.
+  if (!state) out.effects.push(blockedLabelChange(false, true)!);
+  return out;
+}
+
 /**
  * Pure: the same state, event, workflow and matrix always give the same decision. The authorization
  * `matrix` (ORC-186) is the default one until the `factory/default` preset declares it (ORC-187).
@@ -594,6 +626,7 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
   if ((event.payload as { waitedIn?: string }).waitedIn && !out.events.reduce<TicketState | undefined>((t, e) => reduce(t, e), reduce(state, event))?.blocked) {
     out.effects.push(blockedLabelChange(true, false)!);
   }
+  acknowledge(out, event);
   return out;
 }
 
@@ -635,7 +668,8 @@ function unrouted(state: TicketState | undefined, event: FactoryEvent): Decision
   const repos = (event.payload as { repos?: string[] }).repos;
   if (!repos && (!isUnrouted(state) || PAST_THE_WAIT.has(event.type))) return undefined;
   const out = empty();
-  const body = unroutedReason(repos ?? state!.awaitingRepo!);
+  const choices = repos ?? state!.awaitingRepo!;
+  const body = unroutedReason(choices);
   const sessionId = (event.payload as { linearSessionId?: string }).linearSessionId;
   if (event.type === 'ticket.delegated' && repos) {
     if (!isUnrouted(state)) out.events.push({ type: 'ticket.blocked', reason: body }, { type: 'ticket.patched', patch: { awaitingRepo: repos } });
@@ -645,7 +679,8 @@ function unrouted(state: TicketState | undefined, event: FactoryEvent): Decision
     if (!state) out.effects.push(blockedLabelChange(false, true)!);
     return out;
   }
-  if (sessionId && ['session.mentioned', 'command', 'session.prompted', 'session.stopped'].includes(event.type)) {
+  // A team with no repo has no choice to ask for.
+  if (sessionId && choices.length > 0 && ['session.mentioned', 'command', 'session.prompted', 'session.stopped'].includes(event.type)) {
     out.effects.push({ kind: 'activity', type: 'response', body, linearSessionId: sessionId });
   }
   out.trace.push(`${event.type}: repo to choose first`);
@@ -670,6 +705,8 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
   // No ticket out of it (an issue deleted meanwhile, ORC-302): nothing to block or to ask.
   const waiting = ticket && unrouted(state, event);
   if (waiting) return waiting;
+  // Before the wait's end below: delegated again, a team with still no repo has chosen nothing.
+  if (event.type === 'ticket.delegated' && event.payload.noRepo) return noRepoBlock(out, state, event, event.payload.noRepo);
   if (event.type === 'ticket.delegated' && isUnrouted(ticket)) {
     // Its repo chosen by this delegation, whose session is the ticket's from now on.
     const { linearSessionId } = event.payload;
@@ -706,6 +743,15 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
   if (TRIGGERS.has(event.type)) {
     // The event's facts stay recorded (Linear did delegate, the session exists): only the factory's answer is refused.
     if (!authorize(out, event, ticket, 'trigger', 'linear', matrix)) return out;
+    // One active run per ticket (ORC-171): a new delegation stacks no job behind it, and its initiator stays. A pending
+    // job alone is no run: a crash can leave one behind. What no webhook brought since ORC-171
+    // replays as it was decided; found by the reconciliation, the matrix refuses it above.
+    if (event.type === 'ticket.delegated' && event.payload.ack && (state?.activeRunId || state?.verifyingRunId)) {
+      out.trace.push('ticket.delegated: a run is active, none started');
+      const sessionId = event.payload.linearSessionId;
+      if (sessionId) out.effects.push({ kind: 'activity', type: 'response', body: "Un run est déjà en cours sur ce ticket : je n'en lance pas un second.", linearSessionId: sessionId });
+      return out;
+    }
     // The run's initiator, and its requester: who delegated it, as Linear signed it and the matrix allowed it.
     // Only a checked delegation names one: a row journaled before ORC-186 replays as it was decided.
     if (event.type === 'ticket.delegated' && event.roles !== undefined && event.actor && ticket && ticket.initiatorId !== event.actor) {
@@ -879,7 +925,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       break;
     }
     case 'ticket.undelegated':
-      // Delegated again with its `repo:` label, the ticket went to its repo: here nothing waits any longer (ORC-291).
+      // Its team got a repo, or delegated again with its `repo:` label the ticket went to its repo: here nothing waits any longer (ORC-171, ORC-291).
       if (isUnrouted(ticket)) out.events.push(...END_OF_WAIT);
       break;
     case 'label.changed': {
