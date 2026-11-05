@@ -1,7 +1,7 @@
 import { createPrivateKey, createSign } from 'node:crypto';
 import { execCmd, mustExec, type Exec } from '../exec.js';
 import type { FeedbackItem } from '../../core/types.js';
-import { aggregateChecks, toRepoPermission } from './gh-cli.js';
+import { aggregateChecks, excerpt, toRepoPermission } from './gh-cli.js';
 import type { RepoPermission, RepoPermissions } from '../roles/types.js';
 import { NoCommitsBetween, type CheckRunRequest, type Forge, type ForgeWriter, type GitAccess, type MergeResult, type PrInfo, type PrRequest } from './types.js';
 
@@ -55,12 +55,21 @@ interface PullRequestDto {
   base?: { ref: string; sha: string };
 }
 
-interface CheckRunsDto {
-  check_runs?: { id: number; name: string; status: string; conclusion: string | null; external_id?: string | null }[];
+interface CheckRunDto {
+  id: number;
+  name: string;
+  status: string;
+  conclusion: string | null;
+  external_id?: string | null;
 }
 
-interface StatusesDto {
-  statuses?: { context: string; state: string }[];
+interface CheckRunsDto {
+  check_runs?: CheckRunDto[];
+}
+
+interface StatusDto {
+  context: string;
+  state: string;
 }
 
 interface ReviewThreadNode {
@@ -149,6 +158,18 @@ function statusBucket(state: string): string {
   if (state === 'success') return 'pass';
   if (state === 'failure' || state === 'error') return 'fail';
   return 'pending';
+}
+
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null;
+
+const isCheckRun = (r: unknown): r is CheckRunDto =>
+  isRecord(r) && typeof r.name === 'string' && typeof r.status === 'string' && (r.conclusion === null || typeof r.conclusion === 'string');
+
+const isStatus = (s: unknown): s is StatusDto => isRecord(s) && typeof s.context === 'string' && typeof s.state === 'string';
+
+/** A 2xx answer that is not what the endpoint documents: never read as an empty list (ORC-273). */
+function unreadable(method: string, path: string, what: string, data: unknown): Error {
+  return new Error(`GitHub API ${method} ${path.split('?')[0]}: unreadable answer, not ${what}: ${data === undefined ? 'undefined' : excerpt(JSON.stringify(data))}`);
 }
 
 /** `/repos/{owner}/{name}`, encoded. */
@@ -273,10 +294,12 @@ export class GitHubAppAuth {
     });
     const text = await res.text();
     let data: unknown;
+    let json = true;
     try {
       data = text ? JSON.parse(text) : undefined;
     } catch {
       data = undefined;
+      json = false;
     }
     if (!res.ok) {
       const message =
@@ -285,6 +308,7 @@ export class GitHubAppAuth {
           : text.slice(0, 200);
       throw new GitHubApiError(res.status, `GitHub API ${method} ${path.split('?')[0]}: ${res.status}${message ? ` ${message}` : ''}`, message || undefined);
     }
+    if (!json) throw new Error(`GitHub API ${method} ${path.split('?')[0]}: unreadable answer, not JSON: ${excerpt(text)}`);
     return data as T;
   }
 
@@ -325,12 +349,10 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
     const repo = await this.repo(repoPath);
     const token = await this.installationToken(repo);
     const query = new URLSearchParams({ head: `${repo.owner}:${branch}`, state: 'all', per_page: '1' });
-    const pulls = await this.call<PullRequestDto[]>(
-      'GET',
-      `${repoApi(repo)}/pulls?${query}`,
-      token,
-    );
-    const pr = pulls[0];
+    const path = `${repoApi(repo)}/pulls?${query}`;
+    const pulls = await this.call<unknown>('GET', path, token);
+    if (!Array.isArray(pulls)) throw unreadable('GET', path, 'a list of pull requests', pulls);
+    const pr = pulls[0] as PullRequestDto | undefined;
     if (!pr) return undefined;
     const state: PrInfo['state'] = pr.state === 'open' ? 'OPEN' : pr.merged_at ? 'MERGED' : 'CLOSED';
     const checks = state === 'OPEN' ? await this.checksFor(repo, pr.head.sha, token) : { checks: 'none' as const, failedChecks: [] };
@@ -455,10 +477,11 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
   async unresolvedReviewComments(repoPath: string, prNumber: number): Promise<FeedbackItem[]> {
     const repo = await this.repo(repoPath);
     const token = await this.installationToken(repo);
-    const out = await this.call<ReviewThreadsDto>('POST', '/graphql', token, {
+    const out = await this.call<ReviewThreadsDto | undefined>('POST', '/graphql', token, {
       query: THREADS_QUERY,
       variables: { owner: repo.owner, name: repo.name, number: prNumber },
     });
+    if (typeof out !== 'object' || out === null) throw unreadable('POST', '/graphql', 'a GraphQL answer', out);
     if (out.errors?.length) throw new Error(`GitHub GraphQL : ${out.errors.map((e) => e.message).join('; ')}`);
     const pr = out.data?.repository?.pullRequest;
     if (!pr) throw new Error(`GitHub GraphQL : PR ${repo.owner}/${repo.name}#${prNumber} introuvable`);
@@ -495,6 +518,22 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
     return head.checks === 'none' && !ci && base.checks === 'none';
   }
 
+  /**
+   * Every page of a list GitHub returns under `key`, 100 per page. An answer without that list, or with an entry
+   * `isEntry` rejects, throws: read as empty, it would drop checks from the verdict, down to `none` (ORC-273).
+   */
+  private async allPages<E>(path: string, key: string, what: string, isEntry: (e: unknown) => e is E, token: string): Promise<E[]> {
+    const all: E[] = [];
+    for (let page = 1; ; page++) {
+      const url = `${path}?per_page=100&page=${page}`;
+      const data = await this.call<unknown>('GET', url, token);
+      const list = isRecord(data) ? data[key] : undefined;
+      if (!Array.isArray(list) || !list.every(isEntry)) throw unreadable('GET', url, what, data);
+      all.push(...list);
+      if (list.length < 100) return all;
+    }
+  }
+
   private async checksFor(
     repo: GitHubRepoRef,
     sha: string,
@@ -502,17 +541,17 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
   ): Promise<{ checks: PrInfo['checks']; failedChecks: string[] }> {
     const base = `${repoApi(repo)}/commits/${encodeURIComponent(sha)}`;
     const [runs, statuses] = await Promise.all([
-      this.call<CheckRunsDto>('GET', `${base}/check-runs?per_page=100`, token),
-      this.call<StatusesDto>('GET', `${base}/status`, token),
+      this.allPages(`${base}/check-runs`, 'check_runs', 'a list of check runs', isCheckRun, token),
+      this.allPages(`${base}/status`, 'statuses', 'a list of commit statuses', isStatus, token),
     ]);
     const buckets: string[] = [];
     const failedChecks: string[] = [];
-    for (const run of runs.check_runs ?? []) {
+    for (const run of runs) {
       const bucket = checkRunBucket(run);
       buckets.push(bucket);
       if (bucket === 'fail') failedChecks.push(run.name);
     }
-    for (const status of statuses.statuses ?? []) {
+    for (const status of statuses) {
       const bucket = statusBucket(status.state);
       buckets.push(bucket);
       if (bucket === 'fail') failedChecks.push(status.context);
