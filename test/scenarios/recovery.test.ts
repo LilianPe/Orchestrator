@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { TRUSTED, type FactoryEvent } from '../../src/core/types.js';
 import { CUT_BOUND_REASON } from '../../src/core/engine.js';
 import { CUT_RELAUNCHES, CUT_WINDOW_MS, RUN_BEAT_MS, RUN_LEASE_MS } from '../../src/store/types.js';
-import { checkChain, Faults } from '../helpers/faults.js';
+import { checkChain, Faults, settled } from '../helpers/faults.js';
 import { createHarness, heldRun } from '../helpers/harness.js';
 import { testPreset } from '../helpers/test-preset.js';
 
@@ -13,15 +13,14 @@ type H = ReturnType<typeof createHarness>;
 const claudeDir = (h: H) => join(h.sessionsDir!, 'p', 'REL-1');
 
 /**
- * The n-th check is running and its effect is settled. A kill before that leaves the outbox row to its lease
- * (the row replays it), which a slower database shows: these scenarios are about the check, not that row.
+ * The n-th check is running and nothing else is under way. A kill before that leaves an effect of the ticket to its
+ * lease (60 s), and `verify.lost` waits behind it, which a slower database shows: these scenarios are about the check.
  */
 async function checking(h: H, n: number): Promise<void> {
   await vi.waitFor(async () => {
     expect(h.checks.calls).toHaveLength(n);
-    const rows = await h.store.listEffects('p', 'REL-1');
-    expect(rows.filter((row) => row.effect.kind === 'run_verify' && row.status !== 'done')).toEqual([]);
-  });
+    expect(await settled(h.store, 'p', ['REL-1'])).toBe(true);
+  }, { timeout: 10_000 });
 }
 
 /** The container of the attempt is gone, and its process with no way to say it: no more beats. */
