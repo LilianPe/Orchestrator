@@ -1,8 +1,9 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { REFREEZE } from '../../../checks/freeze.js';
-import { labelEchoKey, stateEchoKey } from '../types.js';
+import { IssueNotFoundError, labelEchoKey, stateEchoKey } from '../types.js';
 import { labelChanges, type KnownLabels } from './labels.js';
-import { SCHEMA_VERSION, type LogicalState, type FactoryEvent, type Taint } from '../../../core/types.js';
+import { holds, isNoRepo, namesOtherRepo, resolveRoute, type Route } from '../../../core/routing.js';
+import { SCHEMA_VERSION, type LogicalState, type FactoryEvent, type Taint, type TicketState } from '../../../core/types.js';
 
 export function isUsableWebhookSecret(secret: unknown): boolean {
   return typeof secret === 'string' && secret.trim() !== '';
@@ -22,9 +23,14 @@ export function isFresh(body: { webhookTimestamp?: number }, now: number): boole
 }
 
 export interface MapContext {
-  projectIdForTeam(teamKey: string): string | undefined;
+  /** The projects of a Linear team, in config order (ORC-291). */
+  projectsOfTeam(teamKey: string): string[];
   /** The project a delegation on a team with no repo waits under (ORC-171): the first of the configuration. */
   firstProject?(): string | undefined;
+  /** A ticket's label names, read from Linear: only to route a new session on a ticket no project holds. */
+  labelsOf(identifier: string): Promise<string[]>;
+  /** The ticket a project stores, read only when its team has several projects. */
+  ticket(projectId: string, identifier: string): Promise<TicketState | undefined>;
   logicalFor(projectId: string, stateName: string): LogicalState | null;
   stateNameById(teamKey: string, stateId: string): string | undefined;
   /** Linear type of a state (`canceled`, `completed`…), from the team's cache. */
@@ -154,11 +160,47 @@ async function issueEvents(body: any, identifier: string, teamKey: string, proje
       const name = ctx.labelNameById(teamKey, id);
       if (name && known && known.labels.includes(name) === (change === 'added')) continue;
       if (name && !(await ctx.isEcho(labelEchoKey(identifier, name, change)))) {
-        out.push({ type: 'label.changed', payload: { label: name, change }, suffix: `:label:${id}` });
+        const otherRepo = namesOtherRepo(ctx.projectsOfTeam(teamKey), projectId, name);
+        out.push({ type: 'label.changed', payload: { label: name, change, ...(otherRepo ? { otherRepo } : {}) }, suffix: `:label:${id}` });
       }
     }
   }
   return out;
+}
+
+/**
+ * The project of the ticket a webhook is about (ORC-291). Several repos in the team: the project holding the
+ * ticket keeps it. Otherwise a session's event (a delegation, a mention, a command, a reply, a stop) is routed by
+ * its `repo:` label, read from Linear only then: the delegation that named it may still be in the inbox. Once a
+ * label names a repo, a reply goes to the copy that opened its session. An issue deleted meanwhile has no label:
+ * its event goes on, as on a team of one (ORC-302).
+ */
+async function routeOf(body: any, identifier: string, teamKey: string, ctx: MapContext): Promise<Route | undefined> {
+  const team = ctx.projectsOfTeam(teamKey);
+  if (team.length === 0) {
+    // A delegation on a team no project takes waits blocked under the first one (ORC-171); anything else there is dropped.
+    const first = isDelegation(body) ? ctx.firstProject?.() : undefined;
+    return first ? { projectId: first, noRepo: teamKey } : undefined;
+  }
+  const route = await routeInTeam(body, identifier, team, ctx);
+  // Its team got a repo while it waited under the first project: nothing may be left there to take its label off (ORC-171).
+  const first = route && isDelegation(body) ? ctx.firstProject?.() : undefined;
+  return first && !team.includes(first) && isNoRepo(await ctx.ticket(first, identifier)) ? { ...route!, waitedIn: first } : route;
+}
+
+async function routeInTeam(body: any, identifier: string, team: string[], ctx: MapContext): Promise<Route | undefined> {
+  if (team.length === 1) return { projectId: team[0]! };
+  const stored = (await Promise.all(team.map((p) => ctx.ticket(p, identifier)))).filter((t) => t !== undefined);
+  const session: string | undefined = body.type === 'AgentSessionEvent' ? body.agentSession?.id : undefined;
+  if (!session || stored.some(holds)) return resolveRoute(team, stored);
+  if (body.action !== 'created' && body.action !== 'prompted') return resolveRoute(team, stored);
+  const labels = await ctx.labelsOf(identifier).catch((err: Error) => {
+    if (err instanceof IssueNotFoundError) return [];
+    throw err;
+  });
+  const route = resolveRoute(team, stored, labels);
+  const opener = body.action === 'prompted' && !route.repos ? stored.find((t) => t.linearSessionId === session || t.questionSessionIds.includes(session)) : undefined;
+  return opener ? { projectId: opener.projectId } : route;
 }
 
 function issueIdentifier(body: any): string | undefined {
@@ -181,7 +223,7 @@ export async function recordIssueLabels(body: any, ctx: MapContext): Promise<voi
   const identifier = issueIdentifier(body);
   if (!identifier) return;
   const teamKey = identifier.split('-')[0]!;
-  const projectId = ctx.projectIdForTeam(teamKey);
+  const projectId = (await routeOf(body, identifier, teamKey, ctx))?.projectId;
   const at = Date.parse(body.data.updatedAt);
   if (!projectId || !Number.isFinite(at)) return;
   // Never read yet: the reconciliation's first pass records them.
@@ -213,15 +255,16 @@ export async function mapLinearWebhook(body: any, key: string, ctx: MapContext):
   const identifier = issueIdentifier(body);
   if (!identifier) return [];
   const teamKey = identifier.split('-')[0]!;
-  const known = ctx.projectIdForTeam(teamKey);
-  // A delegation on a team no project takes waits blocked under the first one (ORC-171); anything else there is dropped.
-  const projectId = known ?? (isDelegation(body) ? ctx.firstProject?.() : undefined);
-  if (!projectId) return [];
+  const route = await routeOf(body, identifier, teamKey, ctx);
+  if (!route) return [];
+  const { projectId, repos, waitedIn, noRepo } = route;
   const { id: actor, taint, name } = signedActor(body);
   let partials: PartialEvent[];
-  if (!known) partials = [{ type: 'ticket.delegated', payload: { ...delegationPayload(body), noRepo: teamKey } }];
+  if (noRepo) partials = [{ type: 'ticket.delegated', payload: { ...delegationPayload(body), noRepo } }];
   else if (body.type === 'AgentSessionEvent') partials = sessionEvents(body, name, projectId, ctx);
   else partials = await issueEvents(body, identifier, teamKey, projectId, ctx);
+  // The choice to make goes with the event: `decide` blocks the delegation, answers the rest.
+  const routing = { ...(repos ? { repos } : {}), ...(waitedIn ? { waitedIn } : {}) };
   const at = ctx.now();
   return partials.map(
     (p) =>
@@ -234,7 +277,7 @@ export async function mapLinearWebhook(body: any, key: string, ctx: MapContext):
         schemaVersion: SCHEMA_VERSION,
         taint,
         ...(actor ? { actor } : {}),
-        payload: p.payload,
+        payload: { ...(p.payload as object), ...routing },
       }) as FactoryEvent,
   );
 }

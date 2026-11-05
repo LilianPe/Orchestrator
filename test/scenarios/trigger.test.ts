@@ -283,7 +283,7 @@ describe('the trigger (ORC-171)', () => {
     await h.orch.drained();
     expect(await h.ticket('ZZZ-1')).toMatchObject({ blocked: true });
     // The 5-minute pass of the first project alone sees it too: it is told every project of the instance.
-    await reconcileOnce({ ...deps, projects: [h.project], allProjects: [h.project, { ...h.project, id: 'zzz', teamKey: 'ZZZ' }] });
+    await reconcileOnce({ ...deps, projects: [h.project, { ...h.project, id: 'zzz', teamKey: 'ZZZ' }], only: 'p' });
     await h.orch.drained();
     expect(await h.ticket('ZZZ-1')).toMatchObject({ blocked: false, delegated: false });
     expect(h.tracker.issues.get('ZZZ-1')!.labels).toEqual([]);

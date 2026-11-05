@@ -12,9 +12,11 @@ import {
   type RepairAction,
 } from '../../core/dead-letter.js';
 import type { OutboxEffect } from '../../core/decision.js';
+import { holds } from '../../core/routing.js';
 import { normalizeTicket, type FactoryEvent, type QueueName, type TicketState } from '../../core/types.js';
 import { upcastTimer, type StoredEvent, type StoredTimer } from '../../core/upcast.js';
 import {
+  TicketHeldError,
   decidedOn,
   decisionRecord,
   effectResult,
@@ -203,10 +205,22 @@ export class PgStore implements AsyncStore {
 
   /**
    * Upserts the projection from the current ticket state. `tickets.id` is the ticket identifier
-   * (the schema is single-project, unlike the old `(project_id, ticket_id)` key).
+   * (the schema is single-project, unlike the old `(project_id, ticket_id)` key). It never replaces
+   * the ticket another project holds: `TicketHeldError`.
    */
   async putTicket(ticket: TicketState, options: PutTicketOptions = {}): Promise<void> {
-    await this.writeTicket(this.db, ticket, options);
+    await this.db.transaction(async (tx) => {
+      await tx.execute(ticketLock(ticket.ticketId));
+      await this.refuseHeldRow(tx, ticket);
+      await this.writeTicket(tx, ticket, options);
+    });
+  }
+
+  /** Another project's row is replaced only when that project does not hold the ticket: a wait for its repo, a mention. */
+  private async refuseHeldRow(tx: Tx, ticket: TicketState): Promise<void> {
+    const result = await tx.execute<{ data: TicketState }>(sql`select data from tickets where id = ${ticket.ticketId} limit 1`);
+    const row = result.rows[0] && normalizeTicket(result.rows[0].data);
+    if (row && row.projectId !== ticket.projectId && holds(row)) throw new TicketHeldError(ticket.ticketId, row.projectId, ticket.projectId);
   }
 
   private async writeTicket(db: Tx | NodePgDatabase<typeof schema>, ticket: TicketState, options: PutTicketOptions = {}): Promise<void> {
@@ -373,7 +387,11 @@ export class PgStore implements AsyncStore {
           on conflict do nothing
         `);
       }
-      if (plan.ticket) await this.writeTicket(tx, plan.ticket);
+      if (plan.ticket) {
+        // Thrown, the whole decision rolls back, its journal row included. `known`: the row is this project's already.
+        if (!known) await this.refuseHeldRow(tx, plan.ticket);
+        await this.writeTicket(tx, plan.ticket);
+      }
       if (plan.clearTimers && ticketId !== null) {
         await tx.execute(sql`delete from timers where ticket_id = ${ticketId} and payload->>'projectId' = ${event.projectId}`);
       }

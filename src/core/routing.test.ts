@@ -1,0 +1,58 @@
+import { describe, expect, it } from 'vitest';
+import { holds, isNoRepo, isUnrouted, namesOtherRepo, resolveRoute, unroutedReason } from './routing.js';
+import { newTicketState, type TicketState } from './types.js';
+
+const t = (projectId: string, patch: Partial<TicketState> = {}): TicketState => ({ ...newTicketState(projectId, 'REL-1', 'T', 'todo', 0), ...patch });
+const team = ['web', 'api'];
+
+describe('resolveRoute (ORC-291)', () => {
+  it('a team with one repo keeps it, whatever the labels', () => {
+    expect(resolveRoute(['api'], [], ['repo:web'])).toEqual({ projectId: 'api' });
+  });
+  it('a team with several repos takes the one its repo: label names, case aside', () => {
+    expect(resolveRoute(team, [], ['bug', 'Repo:API'])).toEqual({ projectId: 'api' });
+  });
+  it('without a label naming one of them, the first repo gets the ticket with the list to choose from', () => {
+    expect(resolveRoute(team, [], ['repo:other'])).toEqual({ projectId: 'web', repos: ['web', 'api'] });
+  });
+  it('is sticky: a project that holds the ticket keeps it, whatever its labels now say', () => {
+    expect(resolveRoute(team, [t('web', { delegated: true })], ['repo:api'])).toEqual({ projectId: 'web' });
+    expect(resolveRoute(team, [t('web', { prNumber: 3 })], ['repo:api'])).toEqual({ projectId: 'web' });
+  });
+  it('a ticket waiting for its repo is routed again by its label; otherwise it stays where it waits', () => {
+    const pending = t('api', { delegated: true, blocked: true, blockReason: unroutedReason(team), awaitingRepo: team });
+    expect(resolveRoute(team, [pending], ['repo:web'])).toEqual({ projectId: 'web', waitedIn: 'api' });
+    expect(resolveRoute(team, [pending], ['repo:api'])).toEqual({ projectId: 'api' });
+    expect(resolveRoute(team, [pending], [])).toEqual({ projectId: 'api', repos: team });
+    expect(resolveRoute(team, [pending])).toEqual({ projectId: 'api' });
+  });
+  it('a repo: label names another repo only among the team\'s, case aside', () => {
+    expect(namesOtherRepo(team, 'web', 'Repo:API')).toBe(true);
+    expect(namesOtherRepo(team, 'web', 'repo:web')).toBe(false);
+    expect(namesOtherRepo(team, 'web', 'repo:frontend')).toBe(false);
+    expect(namesOtherRepo(team, 'web', 'api')).toBe(false);
+    expect(namesOtherRepo(['web'], 'web', 'repo:api')).toBe(false);
+  });
+  it('the wait is the field: a block reason neither makes it nor ends it', () => {
+    const reworded = t('web', { delegated: true, blocked: true, blockReason: unroutedReason(team) });
+    expect(isUnrouted(reworded)).toBe(false);
+    expect(holds(reworded)).toBe(true);
+    const replaced = t('web', { delegated: true, blocked: true, blockReason: 'Erreur : Linear down', awaitingRepo: team });
+    expect(isUnrouted(replaced)).toBe(true);
+    expect(holds(replaced)).toBe(false);
+    expect(isUnrouted(t('web', { awaitingRepo: null }))).toBe(false);
+  });
+  it('a ticket of a team with no repo waits with nothing to choose from, and holds no project', () => {
+    const noRepo = t('web', { delegated: true, blocked: true, awaitingRepo: [] });
+    expect(isNoRepo(noRepo)).toBe(true);
+    expect(isUnrouted(noRepo)).toBe(true);
+    expect(holds(noRepo)).toBe(false);
+    expect(isNoRepo(t('web', { delegated: true, blocked: true, awaitingRepo: team }))).toBe(false);
+    expect(isNoRepo(t('web', { awaitingRepo: null }))).toBe(false);
+    expect(isNoRepo(t('web'))).toBe(false);
+  });
+  it('without labels to route by, a ticket no project knows goes nowhere', () => {
+    expect(resolveRoute(team, [])).toBeUndefined();
+    expect(resolveRoute(team, [t('api')])).toEqual({ projectId: 'api' });
+  });
+});

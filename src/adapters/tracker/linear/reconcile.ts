@@ -1,6 +1,6 @@
 import type { Clock } from '../../../core/clock.js';
-import { isNoRepo } from '../../../core/engine.js';
 import { logicalFromName, type ProjectRuntime } from '../../../core/orchestrator.js';
+import { isNoRepo, isUnrouted, namesOtherRepo, resolveRoute, type Route } from '../../../core/routing.js';
 import { SCHEMA_VERSION, TRUSTED, type EventPayloads, type EventType, type FactoryEvent, type TicketState } from '../../../core/types.js';
 import type { Store } from '../../../store/types.js';
 import { IssueNotFoundError, labelEchoKey, stateEchoKey, type Tracker, type TrackerIssue } from '../types.js';
@@ -10,9 +10,10 @@ import { teamOf } from './tracker.js';
 export interface ReconcileDeps {
   tracker: Pick<Tracker, 'listDelegated' | 'getIssue'>;
   store: Store;
+  /** Every project: a team's tickets are shared out among its projects (ORC-291). */
   projects: ProjectRuntime[];
-  /** Every project of the instance, when `projects` is a part of them: which teams have a repo (ORC-171). */
-  allProjects?: ProjectRuntime[];
+  /** Only this project's pass; the others still route. */
+  only?: string;
   /** Writes the event to the inbox; awaited. */
   submit: (e: FactoryEvent) => unknown;
   clock: Clock;
@@ -28,6 +29,23 @@ export interface ReconcileDeps {
  */
 const UNSIGNED = { schemaVersion: SCHEMA_VERSION, taint: 'untrusted' } as const;
 
+type RoutedIssue = TrackerIssue & Route;
+
+/** What the store holds of a ticket in the team's projects; nothing to compare in a team of one. */
+async function storedTickets(store: Store, team: string[], ticketId: string): Promise<TicketState[]> {
+  if (team.length === 1) return [];
+  return (await Promise.all(team.map((id) => store.getTicket(id, ticketId)))).filter((t) => t !== undefined);
+}
+
+/** A team's delegated issues, read once per pass, each with the project it goes to (sticky routing, ORC-291). */
+export async function routedIssues(d: { tracker: Pick<Tracker, 'listDelegated'>; store: Store }, teamKey: string, team: string[]): Promise<RoutedIssue[]> {
+  const issues: RoutedIssue[] = [];
+  for (const issue of await d.tracker.listDelegated(teamKey)) {
+    issues.push({ ...issue, ...resolveRoute(team, await storedTickets(d.store, team, issue.identifier), issue.labels) });
+  }
+  return issues;
+}
+
 /** What one pass of one project writes: every event at the pass's time, under the ticket's project. */
 type Emit = <T extends EventType>(t: { ticketId: string }, base: typeof UNSIGNED | typeof TRUSTED, id: string, type: T, payload: EventPayloads[T]) => Promise<unknown>;
 
@@ -35,11 +53,11 @@ type Emit = <T extends EventType>(t: { ticketId: string }, base: typeof UNSIGNED
 async function catchUpMove(d: ReconcileDeps, emit: Emit, p: ProjectRuntime, t: TicketState, stateName: string, at: number): Promise<void> {
   const to = logicalFromName(p.workflow.states, stateName);
   if (!to || to === t.logical || (await d.store.isEcho(stateEchoKey(t.ticketId, stateName), at))) return;
-  await emit(t, UNSIGNED, `reconcile:moved:${t.ticketId}:${stateName}:${t.updatedAt}`, 'status.changed', { from: t.logical, to });
+  await emit(t, UNSIGNED, `reconcile:moved:${p.id}:${t.ticketId}:${stateName}:${t.updatedAt}`, 'status.changed', { from: t.logical, to });
 }
 
 /** The label changes of a delegated ticket since the factory last read its labels; the first reading only records them. */
-async function catchUpLabels(d: ReconcileDeps, emit: Emit, projectId: string, issue: TrackerIssue, t: TicketState, at: number): Promise<void> {
+async function catchUpLabels(d: ReconcileDeps, emit: Emit, projectId: string, team: string[], issue: TrackerIssue, t: TicketState, at: number): Promise<void> {
   const read = issue.updatedAt ?? 0;
   const known = await knownLabels(d.store, projectId, issue.identifier);
   // A webhook recorded a newer state of the issue than this pass read: it is the one to keep.
@@ -50,72 +68,102 @@ async function catchUpLabels(d: ReconcileDeps, emit: Emit, projectId: string, is
     // The factory's own write, whose webhook has not come yet: no human change.
     if (await d.store.isEcho(labelEchoKey(issue.identifier, c.label, c.change), at)) continue;
     // Keyed by Linear's version of the issue: a label put back later is a new change, not a duplicate.
-    await emit(t, UNSIGNED, `reconcile:label:${issue.identifier}:${c.label}:${c.change}:${issue.updatedAt ?? t.updatedAt}`, 'label.changed', c);
+    await emit(t, UNSIGNED, `reconcile:label:${projectId}:${issue.identifier}:${c.label}:${c.change}:${issue.updatedAt ?? t.updatedAt}`, 'label.changed', { ...c, ...(namesOtherRepo(team, projectId, c.label) ? { otherRepo: true } : {}) });
   }
   await recordLabels(d.store, projectId, issue.identifier, issue.labels, read);
 }
 
 export async function reconcileOnce(d: ReconcileDeps): Promise<void> {
+  for (const teamKey of new Set(d.projects.map((p) => p.teamKey))) {
+    const members = d.projects.filter((p) => p.teamKey === teamKey);
+    const mine = members.filter((p) => !d.only || p.id === d.only);
+    if (mine.length === 0) continue;
+    const team = members.map((p) => p.id);
+    // One read, however many of the team's projects pass; a failure is logged for each.
+    const routed = routedIssues(d, teamKey, team);
+    for (const p of mine) {
+      try {
+        await reconcileProject(d, p, team, await routed);
+      } catch (err) {
+        d.log(`reconcile ${p.id}: ${(err as Error).message}`);
+      }
+    }
+  }
+}
+
+// Every id names the project: a ticket that goes to another repo is a new fact there, not a duplicate (ORC-291).
+async function reconcileProject(d: ReconcileDeps, p: ProjectRuntime, team: string[], routed: RoutedIssue[]): Promise<void> {
   // Every read and write of the known labels, in the webhook's turn.
   const inTurn: Serial = d.serial ?? ((task) => task());
-  for (const p of d.projects) {
-    try {
-      const issues = await d.tracker.listDelegated(p.teamKey);
-      const at = d.clock.now();
-      const emit: Emit = async (t, base, id, type, payload) => d.submit({ ...base, id, type, at, projectId: p.id, ticketId: t.ticketId, payload } as FactoryEvent);
-      const delegated = new Set(issues.map((i) => i.identifier));
-      for (const issue of issues) {
-        const t = await d.store.getTicket(p.id, issue.identifier);
-        if (!t || !t.delegated) {
-          const id = t ? `reconcile:delegated:${issue.identifier}:${t.updatedAt}` : `reconcile:delegated:${issue.identifier}`;
-          const logical = logicalFromName(p.workflow.states, issue.stateName) ?? 'todo';
-          // An untracked ticket: the snapshot spares the orchestrator a second read of the tracker.
-          const payload = t ? {} : { issue: { title: issue.title, logical, priority: issue.priority } };
-          await emit({ ticketId: issue.identifier }, UNSIGNED, id, 'ticket.delegated', payload);
-          await inTurn(() => recordLabels(d.store, p.id, issue.identifier, issue.labels, issue.updatedAt ?? 0));
-          continue;
-        }
-        await catchUpMove(d, emit, p, t, issue.stateName, at);
-        await inTurn(() => catchUpLabels(d, emit, p.id, issue, t, at));
-      }
-      for (const t of await d.store.listTickets()) {
-        if (t.projectId !== p.id || delegated.has(t.ticketId)) continue;
-        // Its team has a project now (ORC-171): its block is lifted here; a new delegation goes there.
-        if (isNoRepo(t) && (d.allProjects ?? d.projects).some((o) => o.teamKey === teamOf(t.ticketId))) {
-          await emit(t, TRUSTED, `reconcile:undelegated-flag:${t.ticketId}:${t.updatedAt}`, 'ticket.undelegated', {});
-          continue;
-        }
-        const undelegate = t.delegated && t.logical !== 'done';
-        if (!t.activeRunId && !undelegate) continue;
-        // Out of the list: done, cancelled or no longer delegated, which only the issue itself tells apart.
-        // Undefined: deleted in Linear, so no longer delegated, as before ORC-185.
-        let issue: TrackerIssue | undefined;
-        try {
-          issue = await d.tracker.getIssue(t.ticketId);
-        } catch (err) {
-          d.log(`reconcile ${t.ticketId}: ${(err as Error).message}`);
-          // A read error (network, Linear down) says nothing of the ticket: left as it is this pass.
-          if (!(err instanceof IssueNotFoundError)) continue;
-        }
-        // Still delegated and open: past the list's first page, nothing to catch up.
-        if (issue?.delegateId && issue.stateType !== 'completed' && issue.stateType !== 'canceled') continue;
-        if (issue?.stateType === 'completed') await catchUpMove(d, emit, p, t, issue.stateName, at);
-        // A cancel stops the work of a delegated ticket itself (ORC-170); `decide` stops nothing on another.
-        const cancel = issue?.stateType === 'canceled' && t.delegated;
-        if (issue && cancel) {
-          const to = logicalFromName(p.workflow.states, issue.stateName) ?? null;
-          await emit(t, UNSIGNED, `reconcile:cancelled:${t.ticketId}:${issue.stateName}:${t.updatedAt}`, 'status.changed', { from: t.logical, to, cancelled: true });
-        } else if (t.activeRunId) {
-          await emit(t, TRUSTED, `reconcile:undelegated:${t.ticketId}:${t.activeRunId}`, 'session.stopped', {});
-        }
-        // A completed status the workflow does not call done is no move to done: the delegation is cleared, as before, or every pass reads it again.
-        const unmapped = issue?.stateType === 'completed' && logicalFromName(p.workflow.states, issue.stateName) !== 'done';
-        // Cleared after a cancel too: no later pass reads the cancelled ticket again.
-        if (undelegate && (cancel || unmapped || !issue?.delegateId)) await emit(t, TRUSTED, `reconcile:undelegated-flag:${t.ticketId}:${t.updatedAt}`, 'ticket.undelegated', {});
-      }
-    } catch (err) {
-      d.log(`reconcile ${p.id}: ${(err as Error).message}`);
+  const issues = routed.filter((i) => i.projectId === p.id);
+  const routedTo = new Map(routed.map((i) => [i.identifier, i.projectId]));
+  const at = d.clock.now();
+  const emit: Emit = async (t, base, id, type, payload) => d.submit({ ...base, id, type, at, projectId: p.id, ticketId: t.ticketId, payload } as FactoryEvent);
+  const clearDelegation = async (t: TicketState) => {
+    // Its repo chosen, a ticket that waited here leaves its label to the issue's ticket there when that one is blocked.
+    const there = d.projects.filter((o) => o.id !== p.id && o.teamKey === teamOf(t.ticketId));
+    const keepLabel = isUnrouted(t) && (await Promise.all(there.map((o) => d.store.getTicket(o.id, t.ticketId)))).some((o) => o?.blocked);
+    await emit(t, TRUSTED, `reconcile:undelegated-flag:${p.id}:${t.ticketId}:${t.updatedAt}`, 'ticket.undelegated', keepLabel ? { keepLabel } : {});
+  };
+  const stopRun = (t: TicketState) => emit(t, TRUSTED, `reconcile:undelegated:${p.id}:${t.ticketId}:${t.activeRunId}`, 'session.stopped', {});
+  for (const issue of issues) {
+    const t = await d.store.getTicket(p.id, issue.identifier);
+    if (!t || !t.delegated) {
+      const { repos, waitedIn } = issue;
+      // Unrouted, its own id: the delegation to its repo, once labelled, must not be taken for a duplicate.
+      const kind = repos ? 'unrouted' : 'delegated';
+      const id = t ? `reconcile:${kind}:${p.id}:${issue.identifier}:${t.updatedAt}` : `reconcile:${kind}:${p.id}:${issue.identifier}`;
+      const logical = logicalFromName(p.workflow.states, issue.stateName) ?? 'todo';
+      // An untracked ticket: the snapshot spares the orchestrator a second read of the tracker.
+      const payload = { ...(t ? {} : { issue: { title: issue.title, logical, priority: issue.priority } }), ...(repos ? { repos } : {}), ...(waitedIn ? { waitedIn } : {}) };
+      await emit({ ticketId: issue.identifier }, UNSIGNED, id, 'ticket.delegated', payload);
+      await inTurn(() => recordLabels(d.store, p.id, issue.identifier, issue.labels, issue.updatedAt ?? 0));
+      continue;
     }
+    await catchUpMove(d, emit, p, t, issue.stateName, at);
+    await inTurn(() => catchUpLabels(d, emit, p.id, team, issue, t, at));
+  }
+  for (const t of await d.store.listTickets()) {
+    if (t.projectId !== p.id || routedTo.get(t.ticketId) === p.id) continue;
+    // Its team has a project now (ORC-171): its block is lifted here; a new delegation goes there.
+    if (isNoRepo(t) && d.projects.some((o) => o.teamKey === teamOf(t.ticketId))) {
+      await clearDelegation(t);
+      continue;
+    }
+    // A ticket done while it waited for its repo stops waiting: nothing else lifts that block.
+    const undelegate = t.delegated && (t.logical !== 'done' || isUnrouted(t));
+    if (!t.activeRunId && !undelegate) continue;
+    // Another repo of the team has the ticket, listed or not: it leaves this one, nothing of the issue to read or to catch up here.
+    if (routedTo.has(t.ticketId) || resolveRoute(team, await storedTickets(d.store, team, t.ticketId))?.projectId !== p.id) {
+      if (t.activeRunId) await stopRun(t);
+      if (undelegate) await clearDelegation(t);
+      continue;
+    }
+    // Out of the list: done, cancelled or no longer delegated, which only the issue itself tells apart.
+    // Undefined: deleted in Linear, so no longer delegated, as before ORC-185.
+    let issue: TrackerIssue | undefined;
+    try {
+      issue = await d.tracker.getIssue(t.ticketId);
+    } catch (err) {
+      d.log(`reconcile ${t.ticketId}: ${(err as Error).message}`);
+      // A read error (network, Linear down) says nothing of the ticket: left as it is this pass.
+      if (!(err instanceof IssueNotFoundError)) continue;
+    }
+    // Still delegated and open: past the list's first page, nothing to catch up.
+    if (issue?.delegateId && issue.stateType !== 'completed' && issue.stateType !== 'canceled') continue;
+    if (issue?.stateType === 'completed') await catchUpMove(d, emit, p, t, issue.stateName, at);
+    // A cancel stops the work of a delegated ticket itself (ORC-170); `decide` stops nothing on another.
+    const cancel = issue?.stateType === 'canceled' && t.delegated;
+    if (issue && cancel) {
+      const to = logicalFromName(p.workflow.states, issue.stateName) ?? null;
+      await emit(t, UNSIGNED, `reconcile:cancelled:${p.id}:${t.ticketId}:${issue.stateName}:${t.updatedAt}`, 'status.changed', { from: t.logical, to, cancelled: true });
+    } else if (t.activeRunId) {
+      await stopRun(t);
+    }
+    // A completed status the workflow does not call done is no move to done: the delegation is cleared, as before, or every pass reads it again.
+    const unmapped = issue?.stateType === 'completed' && logicalFromName(p.workflow.states, issue.stateName) !== 'done';
+    // Cleared after a cancel too: no later pass reads the cancelled ticket again.
+    if (undelegate && (cancel || unmapped || isUnrouted(t) || !issue?.delegateId)) await clearDelegation(t);
   }
 }
 
