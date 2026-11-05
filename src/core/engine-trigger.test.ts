@@ -136,7 +136,7 @@ describe('decide — a ticket of a team with no repo (ORC-171)', () => {
     expect(decide(before, noRepo, workflow).events).toEqual(NO_REPO_EVENTS);
   });
 
-  it('has no question to repeat to whatever reaches it: fenced, nothing is said and nothing starts', () => {
+  it('has no question to repeat to whatever reaches it: fenced, no question and no run (no webhook brings it a mention)', () => {
     const out = decide(blocked, ev('session.mentioned', { linearSessionId: 's-q', body: 'alors ?', author: 'L', ack: true }), workflow);
     expect(out.events).toEqual([]);
     expect(kinds(out.effects)).toEqual(['ack']);
