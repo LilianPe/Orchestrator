@@ -1,7 +1,7 @@
 import { deadLetteredEvent } from '../core/dead-letter.js';
 import type { FactoryEvent } from '../core/types.js';
 import { upcast, type StoredEvent } from '../core/upcast.js';
-import type { DecisionOutcome, DecisionRequest, EffectOutcome, OutboxRow, Store } from '../store/types.js';
+import { TicketHeldError, type DecisionOutcome, type DecisionRequest, type EffectOutcome, type OutboxRow, type Store } from '../store/types.js';
 import { OutboxExecutor, type EffectRetry } from './outbox.js';
 
 /** Inbox rows read per pass. */
@@ -317,7 +317,7 @@ export class Worker {
         outcome = await this.d.store.decide({ ...req, decide: (ticket, workflow) => poisonOn(() => req.decide(ticket, workflow)) });
       } catch (err) {
         // Set aside as prepared (its snapshot filled), so that a replay decides what was decided.
-        if (err instanceof PoisonEvent) await this.deadLetter(event ?? row, key, err);
+        if (err instanceof PoisonEvent || err instanceof TicketHeldError) await this.deadLetter(event ?? row, key, err);
         else this.failed(row, key, toError(err));
         return 'done';
       }
@@ -342,12 +342,13 @@ export class Worker {
   }
 
   /**
-   * The row's decision threw (ORC-175): retried, it would throw again. It is set aside in
+   * The row's decision threw (ORC-175), or the store refused it (`TicketHeldError`, ORC-291): retried, it
+   * would do so again. It is set aside in
    * `dead_letter` and marked processed, and the event that blocks its ticket is written to the inbox,
    * in one transaction; the rows behind it go on. A store that cannot write the dead letter (down)
    * leaves the row to the retries of `failed`: nothing is lost.
    */
-  private async deadLetter(row: StoredEvent, key: string, err: PoisonEvent): Promise<void> {
+  private async deadLetter(row: StoredEvent, key: string, err: Error): Promise<void> {
     let written: boolean;
     try {
       written = await this.d.store.deadLetter(row, err.message, this.d.now?.() ?? Date.now());

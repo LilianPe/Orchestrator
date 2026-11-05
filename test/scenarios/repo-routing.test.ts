@@ -2,12 +2,49 @@ import { describe, expect, it } from 'vitest';
 import { BLOCKED_LABEL } from '../../src/core/engine.js';
 import { unroutedReason } from '../../src/core/routing.js';
 import type { EventPayloads, EventType, FactoryEvent } from '../../src/core/types.js';
-import { createHarness } from '../helpers/harness.js';
+import { createHarness, harnessStoreKind } from '../helpers/harness.js';
 
 /**
  * A ticket's way out of its wait for a repo (ORC-291), on either store: SQLite keeps a copy of the ticket per
  * project, Postgres one row per ticket, which the project it goes to takes over.
  */
+describe('an event routed on a stale read, on Postgres\'s one row per ticket (ORC-291)', () => {
+  it('never replaces the ticket another project holds: its row stays whole, the event is set aside, logged, repairable', async (ctx) => {
+    if (harnessStoreKind() !== 'postgres') ctx.skip();
+    const h = createHarness({ extraProjects: ['api'] });
+    h.tracker.addIssue({ identifier: 'REL-1', delegateId: 'app', description: 'x'.repeat(40) });
+    const accept = async (id: string, projectId: string, payload: EventPayloads['ticket.delegated']) => {
+      await h.orch.accept({ id, type: 'ticket.delegated', at: h.clock.now(), projectId, ticketId: 'REL-1', actor: 'user-1', taint: 'trusted', payload } as FactoryEvent);
+      await h.orch.drained();
+    };
+    // A signed delegation with `repo:api`: api holds the ticket, its run under way, its branch and PR written.
+    await accept('signed', 'api', { linearSessionId: 's1' });
+    await h.store.updateTicket('api', 'REL-1', (t) => ({ ...t, branch: 'factory/rel-1', prNumber: 7 }));
+    const held = await h.store.getTicket('api', 'REL-1');
+    expect(held).toMatchObject({ delegated: true, branch: 'factory/rel-1', prNumber: 7 });
+    const calls = h.tracker.calls.length;
+
+    // A pass that read Linear before the label was there: its delegation, unsigned, for the first repo.
+    await accept('reconcile:unrouted:p:REL-1', 'p', { issue: { title: 'T', logical: 'todo', priority: 0 }, repos: ['p', 'api'] });
+
+    expect(await h.store.getTicket('api', 'REL-1')).toEqual(held);
+    expect(await h.store.getTicket('p', 'REL-1')).toBeUndefined();
+    expect(await h.store.getDeadLetter('reconcile:unrouted:p:REL-1')).toMatchObject({ status: 'open', ticketId: 'REL-1', error: expect.stringContaining('api') });
+    expect(h.logs.some((l) => l.level === 'error' && l.message.includes('reconcile:unrouted:p:REL-1') && l.message.includes('api'))).toBe(true);
+    // Nothing of the refused decision reached Linear: neither the question nor the Bloqué label.
+    expect(h.tracker.calls.slice(calls).filter((c) => c.method !== 'getIssue')).toEqual([]);
+
+    // Replayed while api holds it, it is refused again; skipped, it is closed. The ticket never moves.
+    await h.store.repairDeadLetter('reconcile:unrouted:p:REL-1', 'replay', 'user-1', h.clock.now());
+    await h.orch.poll();
+    await h.orch.drained();
+    expect(await h.store.getDeadLetter('reconcile:unrouted:p:REL-1')).toMatchObject({ status: 'open', failures: 2 });
+    expect(await h.store.getTicket('api', 'REL-1')).toEqual(held);
+    await h.store.repairDeadLetter('reconcile:unrouted:p:REL-1', 'skip', 'user-1', h.clock.now());
+    expect(await h.store.getDeadLetter('reconcile:unrouted:p:REL-1')).toMatchObject({ status: 'skipped' });
+  });
+});
+
 describe('a ticket waiting for its repo, once a human chose it (ORC-291)', () => {
   const repos = ['p', 'api'];
   const signed = { actor: 'user-1', taint: 'trusted' as const };

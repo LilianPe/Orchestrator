@@ -187,6 +187,16 @@ export interface DecisionRequest {
   decide(ticket: TicketState | undefined, workflow: WorkflowVersion): DecisionPlan;
 }
 
+/**
+ * A write refused: it would replace the row of a ticket another project holds (ORC-291). Postgres keeps one row
+ * per ticket, whatever its project. Retried, it would be refused again: the worker sets the event aside at once.
+ */
+export class TicketHeldError extends Error {
+  constructor(ticketId: string, holder: string, writer: string) {
+    super(`ticket ${ticketId} is held by project ${holder}: refused, a write for project ${writer} would replace it`);
+  }
+}
+
 export type DecisionOutcome =
   | {
       status: 'committed';

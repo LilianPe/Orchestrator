@@ -38,6 +38,8 @@ Plusieurs projets peuvent déclarer le même `linearTeamKey`. Le ticket désigne
 - Pour débloquer : ajoutez le label `repo:<id>`, puis déléguez de nouveau le ticket (retirez l'agent puis remettez-le) : le travail part dans ce dépôt, y compris si c'est celui où le ticket attendait, et le label « Bloqué » est retiré. Sur Postgres, qui garde une seule ligne par ticket, le ticket passe alors d'un projet à l'autre ; sur SQLite, il garde une copie par projet. La nouvelle délégation est nécessaire : la réconciliation range bien le ticket sous son dépôt et retire le ticket en attente du premier projet (son blocage levé), mais une délégation qu'elle trouve n'a pas d'auteur signé, et les droits (ORC-186) ne lancent rien sans auteur.
 - Plusieurs labels `repo:` valides : le premier projet de la liste parmi eux gagne. Un ticket qui touche plusieurs dépôts se découpe en un sous-ticket par dépôt.
 
+Postgres garde une seule ligne par ticket, quel que soit son projet. Une écriture ne remplace jamais le ticket qu'un autre projet tient : un événement routé sur une lecture périmée (un passage de la réconciliation qui a lu Linear avant une délégation signée, par exemple) est refusé. Le ticket reste intact, le refus est journalisé en erreur, et l'événement est mis de côté comme lettre morte, sans nouvel essai et sans bloquer le ticket : `factory run repair <ticket>` le montre. L'ignorer le clôt ; le rejouer le refuse de nouveau tant que l'autre projet tient le ticket. Une clé `(projet, ticket)` retirerait ce cas ; ce n'est pas fait.
+
 `relais plan` liste chaque ticket une fois, sous son projet, et marque « dépôt à préciser » ceux qui n'en nomment aucun.
 
 ### Retirer un projet

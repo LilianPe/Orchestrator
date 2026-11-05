@@ -7,6 +7,7 @@ import { PG_TABLE_NAMES } from '../../src/store/pg/schema.js';
 import type { QueueItem, RunRecord } from '../../src/store/types.js';
 import { createTestDatabase, PG_URL, TRUNCATE_ALL as TRUNCATE } from '../helpers/pg-database.js';
 import { LABELS, storeContract } from '../helpers/store-suite.js';
+import { TicketHeldError } from '../../src/store/types.js';
 
 const url = PG_URL;
 
@@ -51,6 +52,37 @@ describe.skipIf(!url)('PgStore integration', () => {
     pool = new Pool({ connectionString: db.url, max: 4 });
     await migratePgStore(pool);
     store = new PgStore({ pool, now: () => 1_000_000 });
+  });
+
+  describe('one row per ticket: a write never replaces the ticket another project holds (ORC-291)', () => {
+    const base = (projectId: string) => newTicketState(projectId, 'REL-1', 'T', 'dev', 1);
+
+    it.each([
+      ['delegated', { delegated: true }],
+      ['with a branch', { branch: 'factory/rel-1' }],
+      ['with a PR', { prNumber: 7 }],
+    ])('refuses a write over a row held by another project: %s', async (_name, held) => {
+      const row = { ...base('api'), ...held };
+      await store.putTicket(row);
+      await expect(store.putTicket(base('web'))).rejects.toBeInstanceOf(TicketHeldError);
+      expect(await store.getTicket('api', 'REL-1')).toEqual(row);
+    });
+
+    it('lets the holder write its own row', async () => {
+      await store.putTicket({ ...base('api'), delegated: true });
+      await store.putTicket({ ...base('api'), delegated: true, branch: 'b' });
+      expect((await store.getTicket('api', 'REL-1'))?.branch).toBe('b');
+    });
+
+    it.each([
+      ['it only waits for its repo there', { delegated: true, blocked: true, awaitingRepo: ['web', 'api'] }],
+      ['nobody asked it for work there', { questionSessionIds: ['s1'] }],
+    ])('replaces a row of another project when %s', async (_name, row) => {
+      await store.putTicket({ ...base('web'), ...row });
+      await store.putTicket(base('api'));
+      expect(await store.getTicket('api', 'REL-1')).toBeDefined();
+      expect(await store.getTicket('web', 'REL-1')).toBeUndefined();
+    });
   });
 
   beforeEach(async () => {
