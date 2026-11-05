@@ -1,3 +1,5 @@
+import type { ExecResult } from '../exec.js';
+
 export type WorkspaceKind = 'worktree' | 'trunk-readonly' | 'knowledge';
 
 export interface WorkspaceRequest {
@@ -34,18 +36,21 @@ export interface StepDiff {
   filesAtHead(): Promise<string[]>;
 }
 
+/** Git in the attempt's sandbox, in its workspace: what touches the agent's repository runs there, never on the host (ORC-317). */
+export type InSandboxGit = (...args: string[]) => Promise<ExecResult>;
+
 export interface WorkspaceManager {
   prepare(req: WorkspaceRequest): Promise<Workspace>;
   cleanup(projectId: string, repoPath: string, ticketId: string): Promise<void>;
+  /** The trunk a question ran on, once its sandbox is gone. */
+  release(path: string): Promise<void>;
   remoteBranchExists(repoPath: string, prefix: string): Promise<boolean>;
   /** The commit a worktree's run ended on (ORC-148: only it may be recorded as reviewed); none for a path that is no worktree. */
   head(path: string): Promise<string | undefined>;
   /** What the commits from `base` to a worktree's head changed (ORC-123); none for a path that is no worktree. */
   stepDiff(repoPath: string, path: string, base: string): Promise<StepDiff | undefined>;
-  /** The worktree's changes that are not committed, untracked files included, read on the host (ORC-123). */
+  /** The worktree's changes that are not committed, untracked files included, read on the host (ORC-123). Without sandboxes only. */
   uncommitted(path: string): Promise<string[]>;
   /** Hides the repository's `.claude/` from a worktree before each session (ORC-284), without its PR deleting it. */
-  resetClaudeDir(path: string): Promise<void>;
-  /** The absolute git dir a worktree's `.git` file points into (ORC-204: mounted in its sandbox for git to work there). */
-  gitCommonDir(path: string): Promise<string>;
+  resetClaudeDir(path: string, inSandbox?: InSandboxGit): Promise<void>;
 }

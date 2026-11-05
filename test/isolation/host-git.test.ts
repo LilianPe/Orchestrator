@@ -1,12 +1,12 @@
 import { execFileSync } from 'node:child_process';
-import { lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { WORKSPACE_TARGET } from '../../src/adapters/sandbox/types.js';
 import { GitWorkspaces } from '../../src/adapters/workspace/git-workspaces.js';
-import type { SandboxMount } from '../../src/adapters/sandbox/types.js';
 import { runCleanVerify, type CleanVerifyResult } from '../../src/core/clean-verify.js';
-import { IN_SANDBOX_ENV } from '../../src/publish/extract.js';
+import { IN_SANDBOX } from '../../src/publish/extract.js';
 import { cli, enabled, useSandboxes } from './helpers.js';
 
 /**
@@ -19,15 +19,13 @@ const IMAGE = process.env['FACTORY_RUNNER_IMAGE'] ?? 'docker.io/library/node:24.
 const ORIGIN_TARGET = '/factory/test-origin.git';
 const COMMON_TARGET = '/factory/test-common';
 /** The public image has not the runner's `safe.directory`, and a host path of the forge means nothing in the sandbox. */
-const gitEnv = (hostOrigin: string) => {
-  const n = Number(IN_SANDBOX_ENV['GIT_CONFIG_COUNT']);
-  return { GIT_CONFIG_COUNT: String(n + 1), ...keepOnlySafeDirectory(), [`GIT_CONFIG_KEY_${n}`]: `url.${ORIGIN_TARGET}.insteadOf`, [`GIT_CONFIG_VALUE_${n}`]: hostOrigin };
-};
-/** Without its hooksPath and fsmonitor: these are the factory's own commands', not what an agent runs. */
-function keepOnlySafeDirectory(): Record<string, string> {
-  const n = Number(IN_SANDBOX_ENV['GIT_CONFIG_COUNT']);
-  return Object.fromEntries(Array.from({ length: n }, (_, i) => [[`GIT_CONFIG_KEY_${i}`, 'safe.directory'], [`GIT_CONFIG_VALUE_${i}`, '*']]).flat());
-}
+const gitEnv = (hostOrigin: string) => ({
+  GIT_CONFIG_COUNT: '2',
+  GIT_CONFIG_KEY_0: 'safe.directory',
+  GIT_CONFIG_VALUE_0: '*',
+  GIT_CONFIG_KEY_1: `url.${ORIGIN_TARGET}.insteadOf`,
+  GIT_CONFIG_VALUE_1: hostOrigin,
+});
 
 /** The agent's work, as any run does it: what it needs of git in its sandbox, one line per step. */
 const WORK = `#!/bin/bash
@@ -97,15 +95,9 @@ describe.skipIf(!enabled)(`what an agent leaves in its git dir, under the factor
   const ws = new GitWorkspaces({ root: join(base, 'ws') });
   const ask = (patch: object = {}) => ({ projectId: 'p', repoPath: repo, ticketId: 'ISO-1', title: 'hostile', kind: 'worktree' as const, slot: 0, portBase: 4200, runId: 'aaaaaaaa1111', ...patch });
 
-  /** What the daemon gives a sandbox for this workspace (`Orchestrator.openSandbox`, pinned by test/scenarios/sandbox.test.ts): its git dir, if it has one elsewhere. */
-  const gitMounts = (work: string): SandboxMount[] => {
-    if (!lstatSync(join(work, '.git')).isFile()) return [];
-    const common = resolve(join(work, '.git'), '..', git(work, 'rev-parse', '--git-common-dir'));
-    return [{ host: common, target: common, readOnly: false }];
-  };
-
   const scripted = async (id: string, script: string) => {
-    const r = await provider.exec(id, ['bash', '-c', script], { env: { ...gitEnv(origin), TRAP: trap } });
+    // As its config spells it: the rewrite matches on that, and git rewrites a Windows path.
+    const r = await provider.exec(id, ['bash', '-c', script], { env: { ...gitEnv(git(repo, 'config', 'remote.origin.url')), TRAP: trap } });
     return { ...r, out: report(r.stdout) };
   };
 
@@ -117,7 +109,7 @@ describe.skipIf(!enabled)(`what an agent leaves in its git dir, under the factor
   let head: string | undefined;
   let verified: CleanVerifyResult;
   let changed: string[] = [];
-  let attempts: { name: string; error?: string }[] = [];
+  const attempts: { name: string; error?: string }[] = [];
   let reused: string | undefined;
 
   beforeAll(async () => {
@@ -138,13 +130,14 @@ describe.skipIf(!enabled)(`what an agent leaves in its git dir, under the factor
     const agent = await ws.prepare(ask());
     work = agent.path;
     start = (await ws.head(work))!;
-    const box = await provider.create(request({ workspacePath: work, network: 'none', mounts: [{ host: origin, target: ORIGIN_TARGET, readOnly: false }, ...gitMounts(work)] }));
+    // Its worktree alone holds its git, as `Orchestrator.openSandbox` mounts it (pinned by test/scenarios/sandbox.test.ts); the forge, here a mount, instead of its network.
+    const box = await provider.create(request({ workspacePath: work, network: 'none', mounts: [{ host: origin, target: ORIGIN_TARGET, readOnly: false }] }));
     done = (await scripted(box.id, WORK)).out;
     plantedOut = (await scripted(box.id, PLANT)).out;
     await provider.destroy(box.id);
 
     const pointed = await ws.prepare(ask({ ticketId: 'ISO-2', title: 'pointed' }));
-    const boxPointed = await provider.create(request({ workspacePath: pointed.path, network: 'none', mounts: gitMounts(pointed.path) }));
+    const boxPointed = await provider.create(request({ workspacePath: pointed.path, network: 'none' }));
     pointedOut = (await scripted(boxPointed.id, POINT_AWAY)).out;
     await provider.destroy(boxPointed.id);
 
@@ -178,9 +171,7 @@ describe.skipIf(!enabled)(`what an agent leaves in its git dir, under the factor
     await attempt('the pointed ticket: its next launch', () => ws.prepare(ask({ ticketId: 'ISO-2', title: 'pointed' })));
     await attempt('the pointed ticket: its head', () => ws.head(pointed.path));
     const next = await provider.create(request({ workspacePath: work, network: 'none' }));
-    await attempt('the hiding of .claude/ at the next launch, in its sandbox', () =>
-      (ws.resetClaudeDir as (path: string, inBox?: (argv: string[]) => ReturnType<typeof provider.exec>) => Promise<void>).call(ws, work, (argv) => provider.exec(next.id, argv)),
-    );
+    await attempt('the hiding of .claude/ at the next launch, in its sandbox', () => ws.resetClaudeDir(work, (...args) => provider.exec(next.id, ['git', ...IN_SANDBOX, ...args])));
     await provider.destroy(next.id);
     await attempt('the pointed ticket: the hiding of .claude/', () => ws.resetClaudeDir(pointed.path, async () => ({ stdout: '', stderr: '', code: 0 })));
 
@@ -233,18 +224,36 @@ describe.skipIf(!enabled)(`what an agent leaves in its git dir, under the factor
     expect(verified).toMatchObject({ ok: true, failures: [], sha: head });
   });
 
-  it('the agent lost nothing of the repository: the factory has neither its config nor its hooks', () => {
+  it("the repository the factory reads has neither its config nor its hooks, and the hiding of .claude/ held in its sandbox", () => {
     expect(readFileSync(join(repo, '.git', 'config'), 'utf8')).not.toContain('fsmonitor');
     expect(readdirSync(join(repo, '.git', 'hooks')).filter((f) => !f.endsWith('.sample'))).toEqual([]);
+    expect(existsSync(join(work, '.claude'))).toBe(false);
   });
+
+  it("the setup's mount holds on this engine: its .git read-only over a worktree it writes, and git still reads it", async () => {
+    const { path } = await ws.prepare(ask({ ticketId: 'ISO-5', title: 'setup' }));
+    const box = await provider.create(request({ workspacePath: path, mounts: [{ host: join(path, '.git'), target: `${WORKSPACE_TARGET}/.git`, readOnly: true }] }));
+    const run = (script: string) => provider.exec(box.id, ['bash', '-c', script], { env: gitEnv('unused') });
+    const written = await run('touch made-by-setup');
+    const hook = await run('mkdir -p .git/hooks && touch .git/hooks/post-checkout');
+    const config = await run('git config factory.test yes');
+    const read = await run('git log -1 --format=%s');
+    await provider.destroy(box.id);
+    expect(written.code).toBe(0);
+    expect(existsSync(join(path, 'made-by-setup'))).toBe(true);
+    expect(hook.code).not.toBe(0);
+    expect(config.code).not.toBe(0);
+    expect(existsSync(join(path, '.git', 'hooks'))).toBe(false);
+    expect(read).toMatchObject({ code: 0 });
+    expect(read.stdout.trim()).toBe('on the forge');
+  }, 120_000);
 
   // The negative control: the layout the factory had, whatever the code under test has become.
   it("the same writes through a mount of the repository's git dir do run on the host", async () => {
     const control = join(base, 'control');
     git(base, 'clone', '-q', origin, control);
     const box = await provider.create(request({ mounts: [{ host: join(control, '.git'), target: COMMON_TARGET, readOnly: false }] }));
-    const hook = `#!/bin/sh\\n${trap}/control' #\\n`;
-    const written = await provider.exec(box.id, ['bash', '-c', `printf '${hook}' > ${COMMON_TARGET}/hooks/post-checkout && chmod +x ${COMMON_TARGET}/hooks/post-checkout`]);
+    const written = await provider.exec(box.id, ['bash', '-c', `printf '#!/bin/sh\\n%s\\n' "$TRAP/control' #" > ${COMMON_TARGET}/hooks/post-checkout && chmod +x ${COMMON_TARGET}/hooks/post-checkout`], { env: { TRAP: trap } });
     await provider.destroy(box.id);
     expect(written).toMatchObject({ code: 0 });
     git(control, 'worktree', 'add', '-q', '--detach', join(base, 'control-wt'), 'origin/main');

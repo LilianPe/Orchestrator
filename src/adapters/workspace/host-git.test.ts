@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -79,7 +79,7 @@ function hook(gitDir: string, name: string, command: string, dir = join(gitDir, 
 }
 /** In its sandbox, not on the host: a stand-in for `SandboxProvider.exec`. */
 const inBox = async () => ({ stdout: '', stderr: '', code: 0 });
-const reset = (f: Fixture, path: string) => (f.ws.resetClaudeDir as (path: string, sandbox?: typeof inBox) => Promise<void>).call(f.ws, path, inBox);
+const reset = (f: Fixture, path: string) => f.ws.resetClaudeDir(path, inBox);
 /** The attack may well make the command fail: only the witness says whether it ran. */
 const whatever = (work: Promise<unknown>) => work.catch(() => undefined);
 
@@ -249,9 +249,7 @@ describe('what an agent wrote, under the commands the factory runs on the host (
     function pointAway(f: Fixture, work: string, plant: (gitDir: string) => void): void {
       const own = join(work, 'own.git');
       git(f.base, 'init', '-q', '--bare', own);
-      git(work, 'rev-parse', 'HEAD');
       plant(own);
-      writeFileSync(join(work, '.git-pointer'), `gitdir: ${posix(own)}\n`);
       rmSync(join(work, '.git'), { recursive: true, force: true });
       writeFileSync(join(work, '.git'), `gitdir: ${posix(own)}\n`);
     }
@@ -308,14 +306,55 @@ describe('what an agent wrote, under the commands the factory runs on the host (
       expect(git(next.path, 'rev-parse', 'HEAD')).toBe(trunk);
     });
 
-    it("the git dir its .git file names, which the next sandbox would mount read-write: another project's", async () => {
+    // Before ORC-317 the daemon mounted, read-write, whatever `git rev-parse --git-common-dir` answered there: another project's git dir, for one.
+    it("a .git file naming another project's git dir is neither followed nor taken for a worktree", async () => {
       const f = fixture();
       const { path } = await f.ws.prepare(req(f.repo));
       const foreign = join(f.base, 'foreign');
       git(f.base, 'init', '-q', foreign);
+      git(foreign, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'theirs');
+      rmSync(join(path, '.git'), { recursive: true, force: true });
       writeFileSync(join(path, '.git'), `gitdir: ${posix(join(foreign, '.git'))}\n`);
-      const named = (f.ws as unknown as { gitCommonDir?: (path: string) => Promise<string> }).gitCommonDir;
-      expect(posix(await named!.call(f.ws, path))).not.toContain('foreign');
+      expect(await f.ws.head(path)).toBeUndefined();
+      expect(await f.ws.stepDiff(f.repo, path, 'HEAD')).toBeUndefined();
+      await expect(f.ws.prepare(req(f.repo))).rejects.toThrow("n'est pas celui que l'usine a créé");
+    });
+
+    it('a HEAD that names a path out of its git dir, or a commit it could not hold, reads as none', async () => {
+      const f = fixture();
+      const { path } = await f.ws.prepare(req(f.repo));
+      const secret = join(f.base, 'secret');
+      writeFileSync(secret, `${'a'.repeat(40)}\n`);
+      for (const head of ['ref: refs/heads/../../../../secret\n', 'ref: refs/heads/-oops\n', 'garbage\n', `ref: ${posix(secret)}\n`]) {
+        writeFileSync(join(path, '.git', 'HEAD'), head);
+        expect(await f.ws.head(path)).toBeUndefined();
+      }
+    });
+
+    it.skipIf(process.platform === 'win32')('a HEAD that is a FIFO or a link reads as none: it holds neither the daemon nor another file', async () => {
+      const f = fixture();
+      const { path } = await f.ws.prepare(req(f.repo));
+      const head = join(path, '.git', 'HEAD');
+      const secret = join(f.base, 'secret');
+      writeFileSync(secret, `${'a'.repeat(40)}\n`);
+      rmSync(head);
+      symlinkSync(secret, head);
+      expect(await f.ws.head(path)).toBeUndefined();
+      rmSync(head);
+      execFileSync('mkfifo', [head]);
+      expect(await f.ws.head(path)).toBeUndefined();
+    });
+
+    it.skipIf(process.platform === 'win32')('a .claude that is a link: the link goes, not what it names on the host', async () => {
+      const f = fixture();
+      const { path } = await f.ws.prepare(req(f.repo));
+      const elsewhere = join(f.base, 'elsewhere');
+      mkdirSync(elsewhere);
+      writeFileSync(join(elsewhere, 'keep'), 'x');
+      symlinkSync(elsewhere, join(path, '.claude'));
+      await reset(f, path);
+      expect(readdirSync(elsewhere)).toEqual(['keep']);
+      expect(existsSync(join(path, '.claude'))).toBe(false);
     });
   });
 

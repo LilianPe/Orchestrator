@@ -65,7 +65,6 @@ describe.skipIf(!enabled)(`a hostile verify command (${cli})`, () => {
   // Set in this process, as a daemon's secret would be: the engine CLI sees it, the container must not.
   const previous = process.env['FACTORY_DAEMON_SECRET'];
   let worktree: string;
-  let gitDir: string | undefined;
   let result: CleanVerifyResult;
   let out: Record<string, string>;
 
@@ -80,15 +79,9 @@ describe.skipIf(!enabled)(`a hostile verify command (${cli})`, () => {
     writeFileSync(join(repo, 'README.md'), 'base\n');
     git(repo, 'add', '.');
     git(repo, 'commit', '-q', '-m', 'base');
-    // A real linked worktree where the daemon can run (Linux); a git dir at a Windows path mounts nowhere.
-    if (process.platform === 'win32') {
-      worktree = repo;
-      git(repo, 'checkout', '-q', '-b', BRANCH);
-    } else {
-      worktree = join(base, 'worktree');
-      git(repo, 'worktree', 'add', '-q', '-b', BRANCH, worktree);
-      gitDir = join(repo, '.git');
-    }
+    // A repository with its git dir inside, as the agent's workspace is (ORC-317).
+    worktree = repo;
+    git(repo, 'checkout', '-q', '-b', BRANCH);
     writeFileSync(join(worktree, 'attack.sh'), ATTACK);
     git(worktree, 'add', '.');
     git(worktree, 'commit', '-q', '-m', 'the agent writes its attack');
@@ -102,7 +95,6 @@ describe.skipIf(!enabled)(`a hostile verify command (${cli})`, () => {
       branch: BRANCH,
       worktree,
       originUrl: repo,
-      ...(gitDir ? { gitDir } : {}),
       workDir,
       // The public image has none; the suite below has it.
       gitleaks: false,

@@ -68,6 +68,7 @@ import {
 } from './types.js';
 import { runSealedSetup } from './sealed-setup.js';
 import { runCleanVerify, type CleanVerifier } from './clean-verify.js';
+import { IN_SANDBOX } from '../publish/extract.js';
 import { logExcerpt } from '../checks/log-excerpt.js';
 import { cappedCommand, type Verifier, type VerifyResult } from './verify.js';
 import { PRODUCT_NAME } from '../product.js';
@@ -681,15 +682,14 @@ export class Orchestrator {
     const claudeDir = ticketSession ? join(this.d.sessionsDir, project.id, ticketId) : join(runDir, 'claude');
     const refusalsDir = join(runDir, 'refusals');
     for (const dir of [claudeDir, refusalsDir]) mkdirSync(dir, { recursive: true });
-    const gitDir = await this.d.workspaces.gitCommonDir(ws.path);
     return sandboxes.create({
       runId,
       ticketId,
       workspacePath: ws.path,
       network,
       requirements: DEFAULT_REQUIREMENTS,
+      // Its git dir is in its worktree, its own (ORC-317): the repository's, which git reads on the host, is never mounted.
       mounts: [
-        { host: gitDir, target: gitDir, readOnly: false },
         { host: claudeDir, target: `${SANDBOX_HOME}/.claude`, readOnly: false },
         { host: refusalsDir, target: REFUSALS_TARGET, readOnly: false },
         { host: this.d.packDir, target: PACK_TARGET, readOnly: true },
@@ -719,12 +719,11 @@ export class Orchestrator {
     // On commits a previous agent wrote, `setup` runs code nobody reviewed: no secret for it. A setup that needs one fails.
     const secrets = ws.ahead ? {} : vars.setupSecrets;
     if (ws.ahead && Object.keys(vars.setupSecrets).length) this.log('warn', `setup of ${ticketId}: its branch has commits beyond the default branch, the repository's secrets are withheld`);
-    const gitDir = await this.d.workspaces.gitCommonDir(ws.path);
     const { purged } = await runSealedSetup(sandboxes, {
       runId,
       ticketId,
       workspacePath: ws.path,
-      mounts: [{ host: gitDir, target: gitDir, readOnly: true }],
+      mounts: [{ host: join(ws.path, '.git'), target: `${WORKSPACE_TARGET}/.git`, readOnly: true }],
       commands,
       env: vars.env,
       secrets,
@@ -824,7 +823,6 @@ export class Orchestrator {
         branch: t.branch,
         worktree: t.worktreePath,
         originUrl: await originUrl(project),
-        gitDir: await this.d.workspaces.gitCommonDir(t.worktreePath),
         workDir,
         setup: project.workflow.workspace.setup,
         commands: job.verify,
@@ -1731,7 +1729,8 @@ export class Orchestrator {
       const conventions = readConventions(ws.path);
       // After the setup, which is the repository's and could write one; the session loads none anyway
       // (`--setting-sources ""`): defence in depth, for what ORC-128 did not trap (ORC-284).
-      await workspaces.resetClaudeDir(ws.path);
+      const box = sandbox;
+      await workspaces.resetClaudeDir(ws.path, box && ((...args) => this.d.sandboxes!.exec(box.id, ['git', ...IN_SANDBOX, ...args])));
       // The head the tests step starts on (ORC-123): its red check reads the step's own commits from it. A return
       // to the step keeps the first one, so its earlier commits still count; a relaunch is the same step.
       if (job.red && kind !== 'verify_failures' && !opts.relaunchOf) await store.setMeta(redBaseKey(project.id, ticketId), (await workspaces.head(ws.path)) ?? '');
@@ -1912,6 +1911,9 @@ export class Orchestrator {
       }
     } finally {
       if (sandboxId) await this.destroySandbox(sandboxId, run.id, run);
+      if (this.d.projects.find((p) => p.id === run.projectId)?.workflow.jobs[run.job]?.workspace === 'trunk-readonly') {
+        await this.d.workspaces.release(run.cwd).catch((err: Error) => this.log('warn', `trunk of run ${run.id} not removed: ${err.message}`));
+      }
     }
     await this.submitResult(await this.finishedFor(run, result));
   }

@@ -46,7 +46,7 @@ Sont refusés : un nom qui n'est pas en majuscules, chiffres et `_` ; les noms r
 
 ## Le `setup`
 
-Le `setup` tourne dans un conteneur à lui, au niveau réseau `limited`, avec le worktree en écriture et le dossier git du dépôt en **lecture seule** : une commande qui écrit dans `.git` (`git submodule update`, `git lfs pull`, un hook posé par husky) échoue. Ce conteneur est détruit à la fin, avec son `$HOME` (`/tmp/setup-home`) et son `/tmp` : l'agent ne retrouve que ce que le `setup` a écrit dans le worktree.
+Le `setup` tourne dans un conteneur à lui, au niveau réseau `limited`, avec le worktree en écriture et son dossier `.git` en **lecture seule** : une commande qui écrit dans `.git` (`git submodule update`, `git lfs pull`, un hook posé par husky) échoue. Ce conteneur est détruit à la fin, avec son `$HOME` (`/tmp/setup-home`) et son `/tmp` : l'agent ne retrouve que ce que le `setup` a écrit dans le worktree.
 
 Il s'exécute sous ces réglages, posés par l'environnement :
 

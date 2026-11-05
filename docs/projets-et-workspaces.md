@@ -15,7 +15,7 @@ Règles :
 
 - une équipe Linear = un dépôt (les webhooks sont routés par clé d'équipe ; une délégation sur une équipe sans projet est bloquée, le reste ignoré : [`linear.md`](linear.md#4-utiliser-lagent-au-quotidien)) ;
 - le comportement de chaque projet vient de son `.relais/workflow.yml` ([`workflow.md`](workflow.md)), lu dans la copie de travail `repoPath` au démarrage ;
-- `repoPath` doit être un clone avec `origin` : Relais y fait `git fetch origin` et y attache les worktrees. Vous pouvez continuer à y travailler, mais n'y supprimez pas les branches `relais/…` en cours.
+- `repoPath` doit être un clone avec `origin` : Relais y fait `git fetch origin` et en copie les objets pour chaque espace de travail. Vous pouvez continuer à y travailler. Les commits des agents n'y arrivent que par la forge.
 
 ### Ajouter un projet
 
@@ -30,7 +30,7 @@ relais init        # même clé d'application Linear : répondez avec les mêmes
 
 ### Retirer un projet
 
-Supprimez son entrée de `config.yaml` et redémarrez. Les worktrees restants sous `workspaces/<id>/` se suppriment avec `git -C <repoPath> worktree remove <chemin>`.
+Supprimez son entrée de `config.yaml` et redémarrez. Les dossiers restants sous `workspaces/<id>/` se suppriment comme tout dossier.
 
 ## Worktrees par ticket
 
@@ -39,19 +39,21 @@ Chaque job déclare un type d'espace de travail (`workspace` dans [`workflow.md`
 | Type | Emplacement | Utilisé par (pack) |
 |---|---|---|
 | `worktree` | `<RELAIS_HOME>/workspaces/<projet>/<ticket>/`, branche `relais/<ticket>-<titre>` | `dev`, `dev-feedback`, `fix-ci`, `review` |
-| `trunk-readonly` | `<RELAIS_HOME>/workspaces/<projet>/_trunk/`, détaché sur `origin/<branche par défaut>` | `ask` (mode plan, lecture seule) |
+| `trunk-readonly` | `<RELAIS_HOME>/workspaces/<projet>/_trunk/<runId>/`, détaché sur `origin/<branche par défaut>` | `ask` (mode plan, lecture seule) |
 | `knowledge` | `<RELAIS_HOME>/workspaces/_kb/<runId>/`, branche `learn/<ticket>-<run>` | `learn`, `remember` |
 
 Cycle de vie d'un worktree de ticket :
 
-1. **Création** au premier run : `git fetch origin`, puis `git worktree add` sur la branche du ticket (réutilise une branche locale ou distante du même nom, sinon la crée depuis `origin/<branche par défaut>`).
+Ce ne sont pas des `git worktree` du dépôt : chacun est un dépôt à lui, avec son `.git` et sa copie des objets, pour que rien de ce qu'y écrit l'agent ne soit lu par le git de l'hôte ([sécurité](interface-et-securite.md), ORC-317). `git worktree list` ne les montre donc pas, et l'espace disque compte une copie de l'historique par ticket et par question.
+
+1. **Création** au premier run : `git fetch origin`, puis un dépôt neuf sur la branche du ticket (réutilise une branche locale ou distante du même nom, sinon la crée depuis `origin/<branche par défaut>`).
 2. **Setup** : les commandes `workspace.setup` (ex. `npm ci`) sont lancées une fois, dans l'ordre, via `bash -lc`, dans le conteneur de la tentative quand `FACTORY_CONTAINER_CLI` est défini, sur l'hôte sinon. Si l'une échoue, le worktree est supprimé et le ticket bloqué (« Erreur au lancement : Le setup du worktree a échoué : <commande> ») ; le run suivant recommence de zéro.
 3. **Réutilisation** : les runs suivants du ticket (retours, CI, review) reprennent le même worktree, sans setup.
-4. **Nettoyage** : au merge de la PR (règle `pr.merged` → `do: cleanup`), `git worktree remove --force`. La branche locale reste dans `repoPath`.
+4. **Nettoyage** : au merge de la PR (règle `pr.merged` → `do: cleanup`), le dossier est supprimé, son `.git` avec : un commit que l'agent n'avait pas poussé disparaît.
 
-Le worktree `_trunk` est partagé par toutes les questions d'un projet et remis sur `origin/<branche par défaut>` à chaque run.
+Chaque question a son propre `_trunk/<runId>/`, créé pour elle et supprimé à sa fin.
 
-Ce qui **n'est pas** nettoyé automatiquement (à faire à la main si l'espace disque compte) : les worktrees de tickets dont la PR a été fermée sans merge ou qui ont été abandonnés, les worktrees `_kb/<runId>` des runs `learn`/`remember`, et les branches locales `relais/…` et `learn/…`. Commandes utiles : `git -C <repoPath> worktree list`, `git -C <repoPath> worktree prune`.
+Ce qui **n'est pas** nettoyé automatiquement (à faire à la main si l'espace disque compte) : les dossiers de tickets dont la PR a été fermée sans merge ou qui ont été abandonnés, les dossiers `_kb/<runId>` des runs `learn`/`remember`, et un `_trunk/<runId>` dont le démon a été tué en plein run. Ils se suppriment comme tout dossier, et git n'en garde aucune trace.
 
 ### `workspace.setup` et vérifications
 

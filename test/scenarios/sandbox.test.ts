@@ -34,8 +34,8 @@ describe('a disposable sandbox per attempt', () => {
       workspacePath: '/tmp/factory-fake/p/REL-1',
       network: 'limited',
       requirements: DEFAULT_REQUIREMENTS,
+      // No git dir beside its worktree (ORC-317): the repository's, read by git on the host, is never mounted.
       mounts: [
-        { host: '/repo/.git', target: '/repo/.git', readOnly: false },
         { host: sessionDir, target: `${SANDBOX_HOME}/.claude`, readOnly: false },
         { host: join(h.runsDir!, req!.runId, 'refusals'), target: REFUSALS_TARGET, readOnly: false },
         { host: packDir, target: PACK_TARGET, readOnly: true },
@@ -47,9 +47,28 @@ describe('a disposable sandbox per attempt', () => {
     // ORC-284: the ticket's session dir as Claude's whole config dir, no auto-memory, no telemetry; the repo's .claude/ hidden.
     expect(h.runner.requests[0]!.env).toMatchObject({ CLAUDE_CONFIG_DIR: `${SANDBOX_HOME}/.claude`, ...RUN_FLAGS });
     expect(h.workspaces.resetClaude).toEqual(['/tmp/factory-fake/p/REL-1']);
+    // Git in that repository runs in its sandbox, never on the host (ORC-317).
+    expect(h.workspaces.resetInSandbox).toEqual(['/tmp/factory-fake/p/REL-1']);
     expect(h.sandboxes.destroyed).toEqual(['sbx-1']);
     expect(h.sandboxes.active()).toEqual([]);
     expect(await h.ticket()).toMatchObject({ logical: 'human_review', blocked: false });
+  });
+
+  it("gives a question's trunk back once its sandbox is gone, and never a ticket's worktree (ORC-317)", async () => {
+    const h = createHarness({ sandboxed: true });
+    await delegate(h);
+    expect(h.workspaces.released).toEqual([]);
+    const destroy = h.sandboxes.destroy.bind(h.sandboxes);
+    const releasedAtDestroy: string[][] = [];
+    h.sandboxes.destroy = async (id) => {
+      releasedAtDestroy.push([...h.workspaces.released]);
+      return destroy(id);
+    };
+    h.tracker.addIssue({ identifier: 'REL-2', title: 'Une question' });
+    await h.send('session.mentioned', { linearSessionId: 'ls-9', body: 'où est calculé le score ?', author: 'L' }, 'REL-2');
+    expect(h.runner.requests.at(-1)).toMatchObject({ readOnly: true });
+    expect(releasedAtDestroy).toEqual([[]]);
+    expect(h.workspaces.released).toEqual(['/tmp/factory-fake/p/_trunk']);
   });
 
   it('destroys the sandbox of a run that fails or is stopped', async () => {
@@ -92,7 +111,7 @@ describe('a disposable sandbox per attempt', () => {
       },
     });
     await delegate(h);
-    expect(seen).toMatchObject([{ commands: ['npm test'], worktree: '/tmp/factory-fake/p/REL-1', runId: h.runner.requests[0]!.runId, gitDir: '/repo/.git' }]);
+    expect(seen).toMatchObject([{ commands: ['npm test'], worktree: '/tmp/factory-fake/p/REL-1', runId: h.runner.requests[0]!.runId }]);
     expect(h.checks.calls).toEqual([]);
     expect(await h.ticket()).toMatchObject({ logical: 'human_review', blocked: false });
   });
@@ -239,7 +258,7 @@ describe('a disposable sandbox per attempt', () => {
     it('no secret mounted for the setup: its sandbox has the git dir alone, read-only', async () => {
       const h = createHarness({ sandboxed: true, projectYaml: SETUP, repoVariables });
       await delegate(h);
-      expect(h.sandboxes.created[0]!.mounts).toEqual([{ host: '/repo/.git', target: '/repo/.git', readOnly: true }]);
+      expect(h.sandboxes.created[0]!.mounts).toEqual([{ host: join('/tmp/factory-fake/p/REL-1', '.git'), target: `${WORKSPACE_TARGET}/.git`, readOnly: true }]);
     });
 
     it('a setup that fails with secrets removes the worktree and starts no run', async () => {

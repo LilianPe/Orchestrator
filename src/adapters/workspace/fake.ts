@@ -1,5 +1,5 @@
 import { branchName } from '../../core/naming.js';
-import type { StepDiff, Workspace, WorkspaceManager, WorkspaceRequest } from './types.js';
+import type { InSandboxGit, StepDiff, Workspace, WorkspaceManager, WorkspaceRequest } from './types.js';
 
 export class FakeWorkspaces implements WorkspaceManager {
   prepared: WorkspaceRequest[] = [];
@@ -9,6 +9,10 @@ export class FakeWorkspaces implements WorkspaceManager {
   heads = new Map<string, string>();
   /** Worktrees whose `.claude/` was reset, in order. */
   resetClaude: string[] = [];
+  /** Those reset by git in the attempt's sandbox, not on the host (ORC-317). */
+  resetInSandbox: string[] = [];
+  /** Trunks given back, in order. */
+  released: string[] = [];
   /** Tickets whose branch has commits beyond the default branch, as a test sets it (ORC-211). */
   ahead = new Set<string>();
   /** Ticket worktrees that exist: the first prepare of one is `fresh`, until its cleanup. */
@@ -57,12 +61,13 @@ export class FakeWorkspaces implements WorkspaceManager {
     return this.steps.get(path)?.uncommitted ?? [];
   }
 
-  async resetClaudeDir(path: string): Promise<void> {
+  async resetClaudeDir(path: string, inSandbox?: InSandboxGit): Promise<void> {
     this.resetClaude.push(path);
+    if (inSandbox) this.resetInSandbox.push(path);
   }
 
-  async gitCommonDir(): Promise<string> {
-    return '/repo/.git';
+  async release(path: string): Promise<void> {
+    this.released.push(path);
   }
 
   async remoteBranchExists(_repoPath: string, prefix: string): Promise<boolean> {
