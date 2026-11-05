@@ -27,7 +27,7 @@ export function taintedKnowledge(job: string, source: 'event' | 'read' = 'event'
 }
 
 const BUILT_IN = new Set<EventType>([
-  'control.pause', 'control.resume', 'control.stop', 'run.finished', 'run.lost', 'verify.passed', 'verify.failed', 'verify.errored', 'verify.lost', 'timer.fired', 'pr.opened',
+  'control.pause', 'control.resume', 'control.stop', 'run.finished', 'run.lost', 'verify.passed', 'verify.failed', 'verify.errored', 'verify.lost', 'publish.done', 'publish.refused', 'timer.fired', 'pr.opened',
   'effect.done', 'effect.failed', 'dead_letter.added',
 ]);
 
@@ -459,10 +459,15 @@ export const RECONCILE_MS = 5 * 60_000;
 
 /**
  * No publication without a green `verify` on the same commit (I1, ORC-151): a commit since asks for its own. A workflow
- * none of whose jobs goes through it (a version frozen before) publishes as it did. The factory's own push is to go through it too (ORC-125).
+ * none of whose jobs goes through it (a version frozen before) merges as it did, and never pushes: only such a job writes a `publish` (ORC-125).
  */
 export function mayPublish(ticket: Pick<TicketState, 'verifiedSha'> | undefined, sha: string, workflow: Workflow): boolean {
   return !Object.values(workflow.jobs).some((j) => j.repoChecks) || ticket?.verifiedSha === sha;
+}
+
+/** The factory publishes what a job wrote and `verify` found green (ORC-125). The tests step comes before the code: its commit waits for `dev`'s. */
+function publishes(job: JobSpec): boolean {
+  return !!job.repoChecks && !job.red;
 }
 
 /** The ticket goes back to Human Review (ORC-148): nothing merged, `reason` answered in the ticket. */
@@ -552,7 +557,7 @@ export function isFenced(d: Decision): boolean {
 
 /** A result whose attempt is no longer active: the dev run or the verification it reports on was replaced or stopped. */
 function staleAttempt(state: TicketState | undefined, event: FactoryEvent, workflow: Workflow): string | undefined {
-  if (event.type === 'verify.passed' || event.type === 'verify.failed' || event.type === 'verify.errored' || event.type === 'verify.lost') {
+  if (event.type === 'verify.passed' || event.type === 'verify.failed' || event.type === 'verify.errored' || event.type === 'verify.lost' || event.type === 'publish.done' || event.type === 'publish.refused') {
     const { runId } = event.payload;
     return runId === state?.verifyingRunId ? undefined : `${event.type} for run ${runId}, awaited ${state?.verifyingRunId ?? 'none'}`;
   }
@@ -832,7 +837,22 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       const patch = { verifyAttempts: 0, ...(ticket?.repeatedFailure ? { repeatedFailure: null } : {}), ...(ticket?.redAttempts ? { redAttempts: 0 } : {}), ...(event.payload.sha ? { verifiedSha: event.payload.sha } : {}) };
       out.events.push({ type: 'ticket.patched', patch });
       if (job.red) freeze(out, ticket, event.payload.frozen);
+      // The commit found green goes out, and the job ends once it is out: until then the ticket stays held, and a stop fences the result. No sha: no commit to publish.
+      if (publishes(job) && event.payload.sha) {
+        const { runId, sha, output } = event.payload;
+        out.events.push({ type: 'verify.started', runId });
+        out.effects.push({ kind: 'publish', runId, job: job.name, sha, ...(output ? { output } : {}) });
+        return out;
+      }
       return success(out, { event, ticket, workflow }, job, event.payload.runId, event.payload.output);
+    }
+    case 'publish.done': {
+      const job = workflow.jobs[event.payload.job];
+      return job ? success(out, { event, ticket, workflow }, job, event.payload.runId, event.payload.output) : out;
+    }
+    case 'publish.refused': {
+      const reason = `Publication refusée : ${event.payload.reason}`;
+      return ticket?.blocked ? out : block(out, reason, `${reason}\nRépondez dans ce fil pour relancer.`);
     }
     case 'verify.failed': {
       const used = ticket?.verifyAttempts ?? 0;
@@ -906,6 +926,8 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       // `settle` is a step of the shell, not an effect of the workflow: its failure is only logged.
       const { kind, error, eventId } = event.payload;
       if (kind === 'settle' || !ticket) return out;
+      // Nothing more comes of it: no result will lift the hold `verify.passed` kept.
+      if (kind === 'publish' && ticket.verifyingRunId) out.events.push({ type: 'work.cancelled' });
       // A Done whose merge died (ORC-148) is not delivered: the human hears it, the ticket back in Human Review. Once a
       // human took it out of Done meanwhile, the merge was given up: only answered, as a late refusal is.
       if (kind === 'merge' && ticket.prState !== 'MERGED') {

@@ -6,6 +6,7 @@ import { GhCliForge } from '../adapters/forge/gh-cli.js';
 import { GitHubAppForge } from '../adapters/forge/github-app.js';
 import { createGithubIngest, githubMapContext, githubRepoOf } from '../adapters/forge/github-ingest.js';
 import { PrPoller } from '../adapters/forge/pr-poller.js';
+import { FakePublisher } from '../adapters/publisher/fake.js';
 import { CachedRoleResolver } from '../adapters/roles/cached.js';
 import { ClaudeCodeRunner, liveDir } from '../adapters/runner/claude-code.js';
 import { purgeRunDirs, purgeSessionDirs, purgeTranscripts } from '../adapters/runner/transcript.js';
@@ -13,6 +14,7 @@ import { FakeRunner } from '../adapters/runner/fake.js';
 import type { Runner } from '../adapters/runner/types.js';
 import { EgressProxy } from '../network/proxy.js';
 import { EgressClient, sandboxAgentHost, type Egress } from '../network/proxy-service.js';
+import { GitPublisher } from '../publish/publish.js';
 import { instanceId, makeSandboxes } from './sandbox-wiring.js';
 import { LinearApi } from '../adapters/tracker/linear/api.js';
 import { createLinearIngest } from '../adapters/tracker/linear/ingest.js';
@@ -176,8 +178,10 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
           `${githubApp.installationId ? `, installation ${githubApp.installationId}` : ", installation résolue par dépôt"})`,
       );
     } else {
-      log('forge GitHub : CLI gh (repli de migration ; GH_TOKEN reste requis par les agents jusqu’à ORC-125)');
+      log('forge GitHub : CLI gh (repli de migration, en lecture : sans GitHub App, l’usine ne publie ni ne merge)');
     }
+    const publisher = o.fakeRunner ? new FakePublisher() : sandboxes && forge instanceof GitHubAppForge ? new GitPublisher({ sandboxes, forge, runsDir: paths.runs, log }) : undefined;
+    if (!publisher) log('Attention : publication impossible (il faut les sandboxes et la GitHub App) : un ticket vérifié sera bloqué avec cette raison.');
     const kb = instance.knowledge ? new KnowledgeBase(instance.knowledge.repoPath) : undefined;
     // The roles of a human event's signed actor (ORC-186): Linear team members and GitHub rights, read
     // again past their TTL, and the designations of config.yaml.
@@ -212,6 +216,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       forge,
       // Only the GitHub App merges (ORC-148): with the gh CLI, a Done goes back to Human Review with the reason.
       ...(forge instanceof GitHubAppForge ? { forgeWriter: forge } : {}),
+      // Only the factory publishes (ORC-125), from its sandboxes and by the App: without them, a verified ticket is blocked and told why.
+      ...(publisher ? { publisher } : {}),
       runner,
       workspaces,
       verify: runVerify,
@@ -248,7 +254,6 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
         FACTORY_RUN_TOKEN: run.token,
         FACTORY_TICKET: run.ticketId,
         // Read by the pack's PreToolUse hook (ORC-285); the runner keeps every other FACTORY_* in the daemon.
-        ...(env['FACTORY_DENY_PUSH'] === '1' ? { FACTORY_DENY_PUSH: '1' } : {}),
         ...(env['FACTORY_REFUSALS_LOG'] ? { FACTORY_REFUSALS_LOG: env['FACTORY_REFUSALS_LOG'] } : {}),
         ...(yml?.readGuard ? { FACTORY_READ_MAX_LINES: String(yml.readGuard.maxLines) } : {}),
         ...(sandboxes

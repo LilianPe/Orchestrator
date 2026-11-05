@@ -147,7 +147,7 @@ Le premier ticket cité est celui qui touche le module en premier ou le plus ; l
 | `src/adapters/forge/types.ts` | Port `Forge` (`PrInfo` avec la tête et, mergée, le commit et l'heure du merge, ORC-278) ; `ForgeWriter`, ses écritures idempotentes (PR ouverte par branche, check run par `external_id`) | adapter | ORC-181 (port gardé, nouvelles opérations), ORC-124, ORC-162 (fait : `ForgeWriter`), ORC-186 (droit d'un utilisateur : port `RepoPermissions`, à part) |
 | `src/adapters/forge/fake.ts` | `FakeForge`, aussi `ForgeWriter` (PR ouvertes, check runs) et `RepoPermissions` (`setRepoPermission`) | adapter | ORC-181, ORC-225, ORC-162 (fait), ORC-186 (fait) |
 | `src/adapters/forge/gh-cli.ts` | Forge par la CLI `gh` ; droit d'un utilisateur sur le dépôt par `gh api` (ORC-186), `toRepoPermission` ; commit de merge d'une PR mergée (`mergeCommit`, ORC-278) | retirer | ORC-181 (après ORC-124, GitHub App) |
-| `src/adapters/forge/github-app.ts` | Forge GitHub App : JWT RS256, jeton d'installation limité au dépôt, PR/checks/reviews en REST et GraphQL ; écritures idempotentes `ForgeWriter` (`ensurePr`, `upsertCheckRun` par `external_id`), pas encore appelées ; droit d'un utilisateur sur le dépôt (`repoPermission`, ORC-186) ; commit de merge d'une PR mergée (`merge_commit_sha`, ORC-278) | garder | ORC-124 (remplace `gh-cli` après ORC-125), ORC-135 (authentification partagée), ORC-162 (fait : `ForgeWriter`), ORC-125 (Publisher, appelle `ensurePr`), ORC-183 (premier check run) |
+| `src/adapters/forge/github-app.ts` | Forge GitHub App : JWT RS256, jeton d'installation limité au dépôt, PR/checks/reviews en REST et GraphQL ; écritures idempotentes `ForgeWriter` (`ensurePr` en draft, `markPrReady`, `gitAccess` pour le push de l'usine, `upsertCheckRun` par `external_id`, pas encore appelée) ; droit d'un utilisateur sur le dépôt (`repoPermission`, ORC-186) ; commit de merge d'une PR mergée (`merge_commit_sha`, ORC-278) | garder | ORC-124 (remplace `gh-cli` après ORC-125), ORC-135 (authentification partagée), ORC-162 (fait : `ForgeWriter`), ORC-125 (Publisher, appelle `ensurePr`), ORC-183 (premier check run) |
 | `src/adapters/forge/github-app-api.ts` | Lectures GitHub App de `factory doctor` : workflows et environnements protégés | garder | ORC-135 |
 | `src/adapters/forge/pr-poller.ts` | Relevé des PR, passé par la réconciliation toutes les 5 min (30 s sans webhooks GitHub, ORC-185) ; verdict de CI nommé par la tête de la PR, comme le webhook ; `pr.merged` avec le commit de merge et la tête lus par la forge (ORC-278) | retirer | ORC-181, remplacé par ORC-134 (fait : webhooks, gardé à côté) et ORC-185 (réconciliation) |
 | `src/adapters/forge/github-webhook.ts` | Webhook GitHub : signature `X-Hub-Signature-256`, `mapGithubWebhook` (PR mergée ou fermée, CI, conflit, push humain, review) par la branche du ticket, ids tirés du corps signé ; push de la branche par défaut (commit qui merge une PR du ticket, revert d'une PR mergée) et `workflow_run` terminé avec sa durée (ORC-278) | garder | ORC-134 (fait), ORC-278 (fait), ORC-146 (conflits), ORC-159 (`push.human`), ORC-190 (reviews), ORC-222 (durcissement) |
@@ -178,8 +178,8 @@ Le premier ticket cité est celui qui touche le module en premier ou le plus ; l
 | `src/adapters/sandbox/fake.ts` | `FakeSandboxProvider` du harnais | garder | ORC-225 |
 | `src/adapters/sandbox/router.ts` | `SandboxRouter` : choisit le backend qui satisfait les exigences, refuse sinon ; `reattach` (ORC-220) | garder | ORC-204 |
 | `src/adapters/sandbox/docker-rootless.ts` | Backend conteneur `L3` (CLI `docker` ou `podman`), un conteneur par tentative, toujours en `--network none` ; avec le proxy de sortie, le socket du run et le certificat de l'autorité de sortie montés, un relais en PID 1, les variables `HTTP(S)_PROXY` et d'autorité ; un conteneur dont le socket n'est pas de ce processus est refait ; l'environnement d'un `exec` transporté sous des noms neutres, jamais lu par le moteur (ORC-211) | garder | ORC-204, ORC-213 (fait : proxy de sortie), ORC-205 (`.git` monté) |
-| `src/adapters/publisher/types.ts` | Port `Publisher` : pousse le sha vérifié, ouvre ou met à jour la PR | garder | ORC-225 |
-| `src/adapters/publisher/fake.ts` | `FakePublisher` du harnais | garder | ORC-225 |
+| `src/adapters/publisher/types.ts` | Port `Publisher` : pousse le sha vérifié, ouvre ou retrouve la PR ; `PublishRefused`, une réponse | garder | ORC-225, ORC-125 |
+| `src/adapters/publisher/fake.ts` | `FakePublisher` du harnais, branché sur l'orchestrateur | garder | ORC-225, ORC-125 |
 | `src/adapters/checks/types.ts` | Port `CheckRunner` : vérifications hors de l'agent | garder | ORC-225, ORC-151 |
 | `src/adapters/checks/fake.ts` | `FakeCheckRunner` du harnais | garder | ORC-225 |
 
@@ -211,6 +211,7 @@ Sortie du travail de l'agent : aucun outil de l'usine ne tourne sur un arbre éc
 | Module | Rôle | Statut | Ticket cible |
 |---|---|---|---|
 | `src/publish/extract.ts` | `extractWork` : bundle git complet de la branche créé dans le sandbox (dossier monté à `BUNDLE_TARGET`), vérifié puis cloné sur l'hôte sans checkout, sans hook, fsmonitor ni configuration système ou globale ; tête du clone comparée au SHA lu dans le sandbox, aucun clone laissé sur un échec | garder | ORC-286, ORC-205, ORC-125 (diff lu dans le clone), ORC-151 |
+| `src/publish/publish.ts` | `GitPublisher` : tête lue sur la forge, bundle dans un sandbox à `none` comparé au commit vérifié, contrôle bloquant du diff, push vers l'avant en `--force-with-lease`, PR draft ; `prText`, le texte provisoire de la PR | garder | ORC-125, ORC-195 et ORC-214 (le texte) |
 
 ### `src/network/`
 
@@ -316,10 +317,10 @@ Sortie réseau des sandboxes (ORC-213, [décision](decisions/ORC-213.md)).
 | Module | Rôle | Statut | Ticket cible |
 |---|---|---|---|
 | `packs/standard/workflow.yml` | 6 états, règles `on`, jobs, limites | retirer | ORC-177 (remplacé par ORC-187), ORC-193 (`learn`, `remember`), ORC-194 (`usd`), ORC-123 (job `tests`, contrôle `red` en mode mesure, inactif tant qu'aucune règle ne le lance) |
-| `packs/standard/settings.json` | Réglages Claude Code des runs (`acceptEdits`, `git push`, `gh`…) | adapter | ORC-191, ORC-205 (deny-list imposée), ORC-181 |
+| `packs/standard/settings.json` | Réglages Claude Code des runs (`acceptEdits`, `gh` en lecture ; tout push et les écritures `gh` refusés) | adapter | ORC-191, ORC-205 (deny-list imposée), ORC-125, ORC-181 |
 | `packs/standard/.claude-plugin/plugin.json` | Plugin `factory` | adapter | ORC-167 (nom), ORC-191 |
 | `packs/standard/hooks/hooks.json`, `packs/standard/hooks/session-start.mjs` | Hook de démarrage : règles, méthode, index de la base | adapter | ORC-191 (plus de `FACTORY_*` ni `factory-agent`), ORC-232 (index injecté par le `systemPrompt`), ORC-205 |
-| `packs/standard/hooks/pre-tool-use.mjs` | Hook `PreToolUse` : refus des commandes interdites et des lectures complètes de gros fichiers, journal des refus, drapeau `FACTORY_DENY_PUSH` | garder | ORC-285, ORC-125 (drapeau activé quand le push sort des skills), ORC-279 (fait ; la liste des fichiers lus en entier attend ORC-131 et ORC-212) |
+| `packs/standard/hooks/pre-tool-use.mjs` | Hook `PreToolUse` : refus des commandes interdites et des lectures complètes de gros fichiers, journal des refus, tout push et les écritures `gh` refusés | garder | ORC-285, ORC-125 (fait : le drapeau `FACTORY_DENY_PUSH` retiré, le refus est permanent), ORC-279 (fait ; la liste des fichiers lus en entier attend ORC-131 et ORC-212) |
 | `packs/standard/skills/{dev,feedback,review,ask}/` | Skills de job | adapter | ORC-191 (une consigne par étape, fin par `submit_result`), ORC-187 |
 | `packs/standard/skills/{fix-ci,learn}/` | Skills de job sans équivalent au MVP | retirer | ORC-191, ORC-193 (`learn`) |
 | `packs/standard/skills/tests/` | Skill de l'étape `tests` : seulement les tests des critères d'acceptation, commités, ou `spec_impossible` | garder | ORC-123, ORC-191 |

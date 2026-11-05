@@ -5,6 +5,7 @@ import { execCmd, mustExec, type Exec } from '../adapters/exec.js';
 import { DEFAULT_REQUIREMENTS, type SandboxMount, type SandboxProvider } from '../adapters/sandbox/types.js';
 import { checkFrozen, FREEZE_CHECK, isFrozenHarness, type FrozenTests } from '../checks/freeze.js';
 import { checkForbiddenPaths, FORBIDDEN_CHECK } from '../checks/forbidden-paths.js';
+import { mdCode } from '../checks/markdown.js';
 import { parseRepoConfig, type RepoConfig } from '../config/repo-config.js';
 import { BUNDLE_TARGET, extractWork, HARDENING, hostGitEnv, IN_SANDBOX, IN_SANDBOX_ENV } from '../publish/extract.js';
 import { runSealedSetup } from './sealed-setup.js';
@@ -63,7 +64,7 @@ export function verifyCommand(command: string): string[] {
 }
 
 /** `work`, or a rejection past `ms`: what it left running is `onExpiry`'s, and `recover()`'s. It never waits for an engine it gave up on. */
-function within<T>(work: Promise<T>, ms: number, message: string, onExpiry?: () => void): Promise<T> {
+export function within<T>(work: Promise<T>, ms: number, message: string, onExpiry?: () => void): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
   const expired = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
@@ -74,10 +75,10 @@ function within<T>(work: Promise<T>, ms: number, message: string, onExpiry?: () 
   return Promise.race([work, expired]).finally(() => clearTimeout(timer));
 }
 
-type Boxes = Pick<SandboxProvider, 'create' | 'exec' | 'destroy'>;
+export type Boxes = Pick<SandboxProvider, 'create' | 'exec' | 'destroy'>;
 
 /** `sandboxes`, whose `create` and `exec` give up on an engine silent past `ms`. An `exec` also destroys its sandbox: the only way a stuck one ends. */
-function withDeadline(sandboxes: Boxes, ms: number): Boxes {
+export function withDeadline(sandboxes: Boxes, ms: number): Boxes {
   const silent = `le sandbox ne répond plus après ${ms / 1000} s`;
   return {
     create: (req) => within(sandboxes.create(req), ms, silent),
@@ -167,7 +168,7 @@ export const runCleanVerify: CleanVerifier = async (req) => {
   }
 };
 
-const BASE = 'refs/factory/base';
+export const BASE = 'refs/factory/base';
 const CONFIG = '.factory/config.yml';
 
 /**
@@ -191,10 +192,11 @@ function withoutCredentials(message: string, url: string): string {
 }
 
 /** Git's empty tree: what a branch that shares no commit with the base is compared with, every file of it then a change. */
-const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
+export const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 const SYMLINK = '120000';
 const MAX_READ_BYTES = 16 * 1024 * 1024;
 const SECRETS_CHECK = 'factory/secrets';
+const BINARY_CHECK = 'factory/binaires';
 const LEAKS_FOUND = 7;
 
 /**
@@ -203,7 +205,7 @@ const LEAKS_FOUND = 7;
  * write is ignored. The report is redacted. Measured on 8.30.1: a failing `git log` leaves an empty report, exit 0, and
  * only an error on stderr. So anything but a clean exit with a readable report is a breakdown, never a green.
  */
-async function scanSecrets(sandboxes: Boxes, id: string, from: string, sha: string): Promise<VerifyFailure[]> {
+export async function scanSecrets(sandboxes: Boxes, id: string, from: string, sha: string): Promise<VerifyFailure[]> {
   // Plain `git log -p` shows no patch for a merge, where a secret can be added: what it changed beyond the clean merge, and only that.
   const logOpts = `--diff-merges=remerge ${from === EMPTY_TREE ? sha : `${from}..${sha}`}`;
   const argv = ['timeout', String(VERIFY_TIMEOUT_MS / 1000), 'gitleaks', 'git', `--log-opts=${logOpts}`, '--no-banner', '--redact', '--ignore-gitleaks-allow', '--exit-code', String(LEAKS_FOUND), '--report-format', 'json', '--report-path', '-', '--log-level', 'error', '.'];
@@ -223,11 +225,11 @@ async function scanSecrets(sandboxes: Boxes, id: string, from: string, sha: stri
 }
 
 /**
- * The blocking checks on the commit, from the clone's objects: `factory/chemins-interdits` on all it changed since it
- * left the base, whatever it says of its own history, and `factory/tests-gelés` on the frozen files as they are at
+ * The blocking checks on the commit, from the clone's objects: `factory/chemins-interdits` and `factory/binaires` on all it
+ * changed since it left the base, whatever it says of its own history, and `factory/tests-gelés` on the frozen files as they are at
  * its head, which needs no frozen commit: a rebase can take it away, not its fingerprints. A read that fails rejects.
  */
-async function checkClone(git: CloneGit, from: string, sha: string, frozen: FrozenTests | undefined): Promise<VerifyFailure[]> {
+export async function checkClone(git: CloneGit, from: string, sha: string, frozen: FrozenTests | undefined): Promise<VerifyFailure[]> {
   const showAtHead = (p: string) => show(git, sha, p);
   // `--raw`: status and modes in one process, `:<old mode> <new mode> <old id> <new id> <status>`, then the path.
   const fields = (await git('diff', '--raw', '--no-renames', '-z', from, sha)).split('\0').filter(Boolean);
@@ -239,6 +241,8 @@ async function checkClone(git: CloneGit, from: string, sha: string, frozen: Froz
   }
   const forbidden = await checkForbiddenPaths({ changed, showAtBase: (p) => show(git, from, p), showAtHead });
   const failures: VerifyFailure[] = forbidden.ok ? [] : [{ command: FORBIDDEN_CHECK, exitCode: 1, output: forbidden.summary }];
+  const binaries = await binariesAdded(git, from, sha, new Set(changed.filter((c) => c.deleted).map((c) => c.path)));
+  if (binaries.length) failures.push({ command: BINARY_CHECK, exitCode: 1, output: `Fichier binaire dans le diff, publication bloquée. Retire-le de la branche :\n${binaries.map((p) => `- ${mdCode(p)}`).join('\n')}` });
   if (frozen) {
     const atHead = (await git('ls-tree', '-r', '--name-only', '-z', sha)).split('\0').filter(Boolean);
     const listed = new Set(atHead);
@@ -247,6 +251,15 @@ async function checkClone(git: CloneGit, from: string, sha: string, frozen: Froz
     if (!r.ok) failures.push({ command: FREEZE_CHECK, exitCode: 1, output: r.summary });
   }
   return failures;
+}
+
+/**
+ * What the diff adds as binary, on git's own reading: a NUL in a file's start. Read in a clone without a worktree, so no `.gitattributes` of the branch says
+ * otherwise. `-z`, as a path can hold anything: `<added>\t<removed>\t<path>`, both counts `-` for a binary.
+ */
+async function binariesAdded(git: CloneGit, from: string, sha: string, deleted: ReadonlySet<string>): Promise<string[]> {
+  const lines = (await git('diff', '--numstat', '--no-renames', '-z', from, sha)).split('\0').filter(Boolean);
+  return lines.filter((l) => l.startsWith('-\t-\t')).map((l) => l.slice(4)).filter((path) => !deleted.has(path));
 }
 
 /**
@@ -260,9 +273,9 @@ async function show(git: CloneGit, rev: string, path: string): Promise<string | 
 }
 
 /** Its output trimmed; `raw` as git wrote it, for what is compared by its bytes: a file's content, a link's target. */
-type CloneGit = ((...args: string[]) => Promise<string>) & { raw: (...args: string[]) => Promise<string> };
+export type CloneGit = ((...args: string[]) => Promise<string>) & { raw: (...args: string[]) => Promise<string> };
 
-function cloneGit(req: CleanVerifyRequest, cloneDir: string): CloneGit {
+export function cloneGit(req: Pick<CleanVerifyRequest, 'workDir' | 'exec'>, cloneDir: string): CloneGit {
   const env = hostGitEnv(req.workDir, req.workDir);
   const exec = req.exec ?? execCmd;
   const raw = (...args: string[]) => mustExec(exec, 'git', [...HARDENING.flatMap((c) => ['-c', c]), '-C', cloneDir, ...args], { env });

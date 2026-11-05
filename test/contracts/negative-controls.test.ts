@@ -926,7 +926,7 @@ function publishersThat(publisher: (forge: FakeForge) => Publisher): () => Publi
     const forge = new FakeForge();
     return {
       publisher: publisher(forge),
-      request: { projectId: 'p', repoPath: '/repo', ticketId: 'REL-1', branch: 'factory/rel-1-x', sha: 'aaa', title: 'feat: x', body: 'b' },
+      request: { projectId: 'p', repoPath: '/repo', ticketId: 'REL-1', runId: 'r1', worktree: '/w', branch: 'factory/rel-1-x', sha: 'aaa', title: 'feat: x', body: 'b' },
       end: async (branch, prNumber) =>
         forge.setPr(branch, { number: prNumber, url: `https://github.test/pr/${prNumber}`, state: 'MERGED', checks: 'pass', failedChecks: [] }),
     };

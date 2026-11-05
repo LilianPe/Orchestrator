@@ -40,7 +40,7 @@ Un faux par port, tous montés par `createHarness()` :
 | AgentRuntime | `Runner` (`src/adapters/runner/types.ts`) | `h.runner` (`FakeRunner`) | `enqueue({ events, outcome, turns, hold })`, `release(runId)`, `requests` ; plafonds tenus : `turns` au-delà de `limits.turns`, ou un run tenu quand `h.advance(ms)` porte `h.clock` à `limits.durationMs` depuis son départ, finit en `limit` (avancer `h.clock` seule ne le termine pas) |
 | SandboxProvider | `SandboxProvider` (`src/adapters/sandbox/types.ts`) | `h.sandboxes` (`FakeSandboxProvider`) | `create`, `destroy`, `active()`, `created`, `destroyed` |
 | CheckRunner | `CheckRunner` (`src/adapters/checks/types.ts`) | `h.checks` (`FakeCheckRunner`) | `failNext(output)`, `enqueue(result)`, `holdNext()`, `calls` |
-| Publisher | `Publisher` (`src/adapters/publisher/types.ts`) | `h.publisher` (`FakePublisher`) | `publish`, `published` ; la PR publiée apparaît dans `h.forge`, ouverte, checks en attente |
+| Publisher | `Publisher` (`src/adapters/publisher/types.ts`) | `h.publisher` (`FakePublisher`) | `publish`, `asked`, `published`, `refuseNext(code, raison)` ; la PR publiée apparaît dans `h.forge`, ouverte, checks en attente |
 
 Les worktrees ont aussi leur faux, `h.workspaces` (`FakeWorkspaces`).
 
@@ -49,9 +49,9 @@ L'**AgentRuntime** du doc MVP est le `Runner` actuel : son faux est `FakeRunner`
 Ce qui est branché sur le moteur aujourd'hui :
 
 - `h.checks` exécute les vérifications des jobs (`verify` d'un job). Un scénario peut passer son propre `verify` à `createHarness({ verify })` : il répond à la place du vert par défaut, une fois vide la file de `h.checks` (`failNext`, `enqueue`, `holdNext`), et `h.checks.calls` enregistre toujours chaque appel.
-- `h.sandboxes` et `h.publisher` ne sont pas encore appelés par l'orchestrateur : l'agent travaille dans son worktree et pousse lui-même. Le scénario les appelle à la place de l'étape qui les utilisera, et vérifie ce que le moteur en fait (par exemple un `pr.opened` construit depuis la publication).
+- `h.publisher` publie ce que `verify` a trouvé vert (ORC-125), quand `h.workspaces.heads` donne un commit au worktree : sans commit, rien à publier. `h.sandboxes` n'est appelé que dans un harnais `sandboxed`.
 
-`FakePublisher` numérote ses PR lui-même, dans l'ordre où il les ouvre (1, 2…) : ne mélangez pas dans un même scénario une PR posée à la main par `h.forge.setPr` et une publication, elles pourraient partager un numéro. Republier une branche met à jour sa PR, checks en attente ; si `h.forge` montre cette PR mergée ou fermée, la publication en ouvre une nouvelle, comme sur GitHub.
+`FakePublisher` passe par `FakeForge.ensurePr` : une PR ouverte posée par `h.forge.setPr` est retrouvée, et sa tête devient le sha publié. Il ne connaît pas l'ascendance : une branche qui a bougé se joue par `h.publisher.refuseNext('moved')`.
 
 Ces interfaces sont **minimales** : elles portent ce dont les faux ont besoin. Leur contrat (méthodes, idempotence, erreurs, fencing) est dans [`docs/ports/`](ports/README.md), une fiche par port ; chaque faux passe la suite de conformité de son port (`test/contracts/`), et un faux qu'on modifie doit continuer à la passer. Les cas d'erreur et d'effet ont aussi leurs contrôles négatifs (`test/contracts/negative-controls.test.ts`, [détail](ports/README.md#contrôles-négatifs)).
 
@@ -200,6 +200,7 @@ DATABASE_URL=postgres://… CHAOS_SEED=4242 npm run test:chaos    # rejoue une g
 | `isolation-10-leaks.test.ts` (n° 10) | deux runs de deux tickets ne voient rien l'un de l'autre (`/work`, `/tmp`, `$HOME`, `~/.claude`) ; un nouveau run du même ticket ne retrouve que ses montages, le worktree et le dossier de session du ticket, par construction |
 | `runner-image.test.ts` | `docker/runner.Dockerfile` (ORC-203) : node, pnpm, python, uv, git et claude aux versions épinglées, ni `gh` ni CLI de moteur ni code du démon. Sauté sans `FACTORY_RUNNER_IMAGE`. En CI : image construite sous Podman rootless, testée avec le n° 7 |
 | `compose-stack.test.ts` | la recette d'ORC-203 ([`recette.md`](recette.md#8-docker-critère-8)) : les 4 services sur un vrai moteur, TLS par `caddy`, un runner créé depuis `factoryd`, pnpm et uv par le proxy. Sauté sans `FACTORY_COMPOSE=1` ; aucun job CI ne le lance encore |
+| `isolation-08-diff.test.ts` (n° 8) | évasion logique par le diff (ORC-125) : un workflow, un `.gitattributes`, un `.npmrc`, un dev container, la config de l'usine, un binaire, chacun dans un commit, ne partent pas ; un commit propre part par le même chemin, le témoin ; ce que l'agent a laissé dans son dépôt (hooks, `core.fsmonitor`, `core.hooksPath`) ne s'exécute ni sur l'hôte ni au push. Sans gitleaks : l'image publique n'en a pas |
 | `isolation-07-layers.test.ts` (n° 7) | `docker save` : les fichiers de chaque couche de l'image, ceux qu'une couche suivante efface compris. Cinq chaînes exactes de l'image de base (`libunistring`, binaire `node`) ont la forme d'une clé AWS et sont permises ; toute autre fait échouer |
 | `claude-settings.test.ts` (n° 11) | un vrai `claude -p` sur un dépôt piégé ne charge rien du dépôt. Il demande `claude` et un identifiant ; en CI, il ne tourne que si le secret `CLAUDE_CODE_OAUTH_TOKEN` est défini (jamais pour une PR venue d'un fork), et se saute sinon |
 
@@ -216,8 +217,8 @@ Chaque scénario est livré par le ticket qui livre le comportement qu'il teste,
 | Scénario | Ticket | Faux à piloter |
 |---|---|---|
 | CI rouge 3 fois | ORC-184 | `h.forge` (checks en échec), `h.runner` |
-| `.skip` ajouté | ORC-158 | `h.checks`, puis `h.publisher` quand l'usine poussera |
-| Config de tests modifiée | ORC-131 (fait : `test/scenarios/freeze.test.ts`) | `h.workspaces` (`heads`, `steps` par `<worktree>@<commit du gel>`), `h.runner` (`hold`), puis `h.publisher` quand l'usine poussera |
+| `.skip` ajouté | ORC-158 | `h.checks`, `h.publisher` |
+| Config de tests modifiée | ORC-131 (fait : `test/scenarios/freeze.test.ts`) | `h.workspaces` (`heads`, `steps` par `<worktree>@<commit du gel>`), `h.runner` (`hold`), `h.publisher` ; quand l'usine poussera |
 | Réponse humaine pendant un run | ORC-180 | `h.runner` (`hold`), `h.advance` |
 | Redémarrage pendant un contrôle | ORC-220 | `h.checks.holdNext()`, `h.restart({ mode: 'brutal' })` |
 | Budget épuisé | ORC-216 | `h.runner` (`turns`, `costUsd`, `outcome: 'limit'`) |

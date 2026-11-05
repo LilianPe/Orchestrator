@@ -115,7 +115,7 @@ const FETCH = new RegExp(`^(${FETCH_NAMES})$`);
 /** `bash <(curl …)`, `sh -c "$(wget …)"`: a fetch substituted into a shell, matched on the raw command. */
 const SUBST_TO_SHELL = new RegExp(String.raw`\b(${SHELL_NAMES})\b[^|;&]*[<$]\(\s*(${FETCH_NAMES})\b`);
 
-function rule(tool, command, denyPush) {
+function rule(tool, command) {
   if (tool === 'WebSearch') return 'web-search';
   if (/--no-verify/.test(command)) return 'no-verify';
   if (/docker\.sock|podman\.sock|DOCKER_HOST|CONTAINER_HOST/.test(command)) return 'container-socket';
@@ -130,7 +130,7 @@ function rule(tool, command, denyPush) {
     // Only these quoted words are commands again: a shell's -c payload, eval's arguments.
     const c = SHELLS.test(prog) ? args.findIndex((a) => /^-[a-zA-Z]*c[a-zA-Z]*$/.test(a)) : -1;
     const payload = c >= 0 ? args.slice(c + 1).find((a) => !a.startsWith('-')) : prog === 'eval' ? args.join(' ') : undefined;
-    const inner = payload === undefined ? null : rule(tool, payload, denyPush);
+    const inner = payload === undefined ? null : rule(tool, payload);
     if (inner) return inner;
     if (args.includes('--no-verify')) return 'no-verify';
     if (prog === 'rm' && (args.includes('--no-preserve-root')
@@ -138,7 +138,7 @@ function rule(tool, command, denyPush) {
     if (prog === 'gh') {
       const sub = args.filter((a, i) => !a.startsWith('-') && !/^(-R|--repo)$/.test(args[i - 1])).slice(0, 2).join(' ');
       if (sub === 'pr merge') return 'merge';
-      if (denyPush && /^(pr (create|edit)|run rerun)$/.test(sub)) return 'gh-write';
+      if (/^(pr (create|edit)|run rerun)$/.test(sub)) return 'gh-write';
     }
     if (prog !== 'git') continue;
     const [sub, ...rest] = git(words);
@@ -148,7 +148,8 @@ function rule(tool, command, denyPush) {
     if (rest.some((a) => /^--(force|mirror)/.test(a) || /^-[a-zA-Z]*f/.test(a) || a.startsWith('+'))) return 'force-push';
     // --all pushes the trunk too; a delete (-d, :main) or any refspec writing main/master reaches it.
     if (rest.includes('--all') || rest.some((a) => !a.startsWith('-') && /^(main|master)$/.test(dest(a)))) return 'push-trunk';
-    if (denyPush) return 'push';
+    // Only the factory publishes (ORC-125): the two rules above name what would have been worst, for the journal.
+    return 'push';
   }
   return null;
 }
@@ -227,7 +228,7 @@ try {
 const tool = call.tool_name ?? '';
 const input = call.tool_input ?? {};
 const command = String(input.command ?? input.query ?? input.file_path ?? '');
-const hit = tool === 'Read' ? fullRead(input) : rule(tool, command, process.env.FACTORY_DENY_PUSH === '1');
+const hit = tool === 'Read' ? fullRead(input) : rule(tool, command);
 if (hit) {
   journal({ at: new Date().toISOString(), tool, command, rule: hit, ticket: process.env.FACTORY_TICKET ?? null });
   const permissionDecisionReason = hit === 'full-read'

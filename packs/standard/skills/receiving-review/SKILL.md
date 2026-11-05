@@ -41,7 +41,7 @@ Source du retour :
 - **Une duplication se supprime**, elle ne se commente pas (« voir plus haut »).
 - **Chaque correction de comportement a sa preuve** (`factory:tdd`) : un test rouge sur l'ancien code puis vert. Pour un durcissement sans changement visible, montre que le test rougit quand tu casses volontairement la garde (avec Edit), puis remets-la.
 - Lance les tests de ce que la correction change (`factory:verification`), pas la suite complète.
-- Jamais `git commit --amend` ni réécriture d'historique : la branche est déjà poussée et le force-push est interdit. Pour annuler une correction : `git revert --no-edit <sha>`.
+- Jamais `git commit --amend` ni réécriture d'historique : la branche est déjà publiée, et l'usine refuse un historique réécrit. Pour annuler une correction : `git revert --no-edit <sha>`.
 
 ## 4. Répondre
 

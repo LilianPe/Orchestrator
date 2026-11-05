@@ -3,7 +3,7 @@ import { execCmd, mustExec, type Exec } from '../exec.js';
 import type { FeedbackItem } from '../../core/types.js';
 import { aggregateChecks, toRepoPermission } from './gh-cli.js';
 import type { RepoPermission, RepoPermissions } from '../roles/types.js';
-import type { CheckRunRequest, Forge, ForgeWriter, MergeResult, PrInfo, PrRequest } from './types.js';
+import type { CheckRunRequest, Forge, ForgeWriter, GitAccess, MergeResult, PrInfo, PrRequest } from './types.js';
 
 export interface GitHubRepoRef {
   owner: string;
@@ -45,6 +45,8 @@ interface AccessTokenDto {
 
 interface PullRequestDto {
   number: number;
+  node_id?: string;
+  draft?: boolean;
   html_url: string;
   state: 'open' | 'closed';
   merged_at: string | null;
@@ -372,7 +374,7 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
     const found = await openPr();
     if (found) return found;
     try {
-      const pr = await this.call<PullRequestDto>('POST', base, token, { title: req.title, head: req.branch, base: req.base, body: req.body });
+      const pr = await this.call<PullRequestDto>('POST', base, token, { title: req.title, head: req.branch, base: req.base, body: req.body, ...(req.draft ? { draft: true } : {}) });
       return { number: pr.number, url: pr.html_url, deduplicated: false };
     } catch (err) {
       if (err instanceof GitHubApiError && err.status === 422) {
@@ -381,6 +383,30 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
       }
       throw err;
     }
+  }
+
+  /** The REST API cannot do it: only this GraphQL mutation takes a PR out of draft. Read first: a PR already out writes nothing. */
+  async markPrReady(repoPath: string, number: number): Promise<void> {
+    const repo = await this.repo(repoPath);
+    const token = await this.installationToken(repo);
+    const pr = await this.call<PullRequestDto>('GET', `${repoApi(repo)}/pulls/${number}`, token);
+    if (!pr.draft) return;
+    const out = await this.call<{ errors?: { message: string }[] }>('POST', '/graphql', token, {
+      query: 'mutation($id: ID!) { markPullRequestReadyForReview(input: { pullRequestId: $id }) { clientMutationId } }',
+      variables: { id: pr.node_id },
+    });
+    if (out.errors?.length) throw new Error(`GitHub GraphQL : ${out.errors.map((e) => e.message).join('; ')}`);
+  }
+
+  /** In the environment: a command line is visible to every process of the host, and git quotes it in its errors. */
+  async gitAccess(repoPath: string): Promise<GitAccess> {
+    const repo = await this.repo(repoPath);
+    const token = await this.installationToken(repo);
+    const basic = Buffer.from(`x-access-token:${token}`).toString('base64');
+    return {
+      url: `https://github.com/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}.git`,
+      env: { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'http.https://github.com/.extraheader', GIT_CONFIG_VALUE_0: `Authorization: Basic ${basic}` },
+    };
   }
 
   /**

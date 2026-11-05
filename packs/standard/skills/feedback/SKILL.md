@@ -5,7 +5,7 @@ description: Appliquer des retours de review (Linear, GitHub, vérifications ou 
 
 # factory:feedback
 
-Tu reprends la session de dev du ticket, dans son worktree et sur sa branche, déjà poussée. Le bloc « Retours à traiter », « Vérifications en échec » ou « CI en échec » liste ce qu'il faut traiter. Tu es seul pendant ton tour ; ton seul canal vers un humain est `factory-agent ask "<question>"`, puis fin du tour.
+Tu reprends la session de dev du ticket, dans son worktree et sur sa branche, déjà publiée par l'usine. Le bloc « Retours à traiter », « Vérifications en échec » ou « CI en échec » liste ce qu'il faut traiter. Tu es seul pendant ton tour ; ton seul canal vers un humain est `factory-agent ask "<question>"`, puis fin du tour.
 
 ## 1. Rassembler
 
@@ -20,17 +20,18 @@ Lis tous les retours, puis applique `factory:receiving-review` : comprendre chac
 
 - Un retour humain ambigu ou contraire au ticket : UNE question avec `factory-agent ask`, après avoir traité les retours indépendants.
 - Un retour qui demande autre chose que le ticket (nouvelle fonctionnalité) : réponds qu'il mérite son propre ticket, sauf si l'humain le demande explicitement dans ce ticket.
-- Un commit par cause, message `<ID>: <ce qui est corrigé>`. Jamais d'`--amend` ni de réécriture : la branche est poussée.
+- Un commit par cause, message `<ID>: <ce qui est corrigé>`. Jamais d'`--amend` ni de réécriture : la branche est publiée, et l'usine refuse un historique réécrit.
 
-## 3. Vérifier et pousser
+## 3. Vérifier et rendre la main
 
 1. `factory:verification` : les tests de ce que tu as changé, la vérification de types et le lint du dépôt s'ils existent ; pour des vérifications en échec, rejoue exactement la commande qui a échoué.
 2. Conflit avec la base de la PR : `git fetch origin`, puis `git merge-tree --write-tree --name-only origin/<base> HEAD` (base : `gh pr view <branche> --json baseRefName --jq .baseRefName`). Code 1 : fusionne la base (`git merge --no-edit origin/<base>`), résous chaque hunk lu avec Edit en gardant l'intention des deux côtés, `git add`, `git commit --no-edit`, relance tests et types. Contradiction entre les deux côtés, deux migrations sur les mêmes tables, ou résolution hors périmètre : `git merge --abort` et question.
-3. Pousse vers la destination nommée : `git push origin HEAD:refs/heads/<branche>`, puis vérifie que `git ls-remote origin refs/heads/<branche>` montre `git rev-parse HEAD`.
+3. Un humain a pu pousser sur la branche : `git fetch origin`, et s'il y a du nouveau sur `origin/<branche>`, `git merge --no-edit origin/<branche>` ; sans cela, l'usine refuse de publier par-dessus.
+4. Commite, puis termine ton tour : **l'usine publie**, après avoir vérifié ton dernier commit. Tu ne pousses pas.
 
 ## Interdits
 
-Ne merge jamais la PR. Ne force-push jamais, ne réécris pas l'historique, ne rebase pas une branche poussée. Ne pousse jamais sur le tronc. Ne change pas de branche. Ne désactive ni n'affaiblis aucun test ou étape de CI.
+Ne merge jamais la PR. Ne pousse jamais, sur aucune branche : l'usine publie. Ne réécris pas l'historique, ne rebase pas une branche publiée. Ne change pas de branche. Ne désactive ni n'affaiblis aucun test ou étape de CI.
 
 ## Dernier message (publié dans Linear)
 

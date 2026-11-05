@@ -182,6 +182,10 @@ export interface EventPayloads {
    * `headMoved`: refused for a push since the review, whose new commits go through the AI review again.
    */
   'pr.merge_refused': PrPayload & { reason: string; headMoved?: boolean };
+  /** The verified commit is on the forge and its PR open (ORC-125), or the branch holds nothing to publish. The job's `on_success` applies. */
+  'publish.done': { runId: string; job: string; sha: string; output?: AgentOutput };
+  /** The factory did not publish, and says why (ORC-125): nothing was written on the forge. The ticket is blocked. */
+  'publish.refused': { runId: string; job: string; sha: string; reason: string };
   /**
    * A push on the project's default branch that concerns the ticket (ORC-278): only its commits that merge
    * the ticket's PR (`merges`) or revert it (`reverts`), by number. Untrusted: messages are written by

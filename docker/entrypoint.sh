@@ -1,5 +1,5 @@
 #!/bin/sh
-# Container entrypoint: lets git push over HTTPS with GH_TOKEN, then runs the command (factory up by default).
+# Container entrypoint: lets the daemon's git read over HTTPS with GH_TOKEN, then runs the command (factory up by default).
 set -e
 # Whoever holds this engine's socket holds what the engine holds: on a rootful engine, root on the host.
 if [ -n "$FACTORY_CONTAINER_CLI" ] && [ "$FACTORY_ALLOW_ROOTFUL_ENGINE" != "1" ]; then

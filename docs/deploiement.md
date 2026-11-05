@@ -35,14 +35,14 @@ Le moteur lit les chemins d'un montage **sur l'hôte**, pas dans le conteneur de
 
 ## Les images
 
-- **`Dockerfile`** (`factoryd` et `proxy`) : Node 24, `git`, le CLI `docker` et `gh`. `gh` reste jusqu'à ORC-125. Claude Code n'y est plus : l'agent tourne dans le runner. Utilisateur `node` (uid 1000).
+- **`Dockerfile`** (`factoryd` et `proxy`) : Node 24, `git`, le CLI `docker` et `gh`. `gh` reste jusqu'à ORC-181. Claude Code n'y est plus : l'agent tourne dans le runner. Utilisateur `node` (uid 1000).
 - **`docker/runner.Dockerfile`** (les runners) : Node 24 avec pnpm, Python 3 avec uv et pip, `git`, Claude Code. Versions épinglées. Ni `gh`, ni CLI de moteur, ni code du démon.
 
 Aucune image ne reçoit de secret à la construction. Le test d'isolation n° 7 cherche des jetons dans l'historique, la configuration et les fichiers de chaque couche de l'image des runners.
 
 ## Limites actuelles
 
-- **Publier** : un agent en runner n'a ni `gh`, ni jeton, et le proxy refuse `git push`. Jusqu'à ORC-125, un run sous compose ne peut donc pas ouvrir sa PR. `GH_TOKEN` ne sert qu'à `factoryd`.
+- **Publier** : l'usine pousse et ouvre la PR, avec la GitHub App (ORC-125, [`github.md`](github.md#publication)). Sans elle, un ticket vérifié est bloqué : configurez `github.*` ou `GH_APP_*`. Un agent en runner n'a ni `gh`, ni jeton, et le proxy refuse `git push`. `GH_TOKEN` ne sert qu'à `factoryd`, jusqu'à ORC-181.
 - **`verify` ne tourne plus dans `factoryd`** (ORC-151) : ses commandes vont dans un runner neuf, sur un clone, au niveau réseau `none`. Sous compose, `FACTORY_CONTAINER_CLI` est fixé : un moteur en panne donne un ticket bloqué pour cause d'infrastructure (`verify.errored`), jamais un repli sur `factoryd`. `FACTORY_ALLOW_HOST_VERIFY` n'est pas transmis, et serait sans effet. **Reste un chemin vers le socket :** `git fetch` et `git worktree add` tournent dans `factoryd`, sur un `.git` que l'agent a pu écrire, donc un hook qu'il y laisse s'exécute à côté du socket. Ne confiez à cette topologie que des dépôts et des tickets de confiance, tant que ce `.git` reste monté en écriture.
 
 ## Variables

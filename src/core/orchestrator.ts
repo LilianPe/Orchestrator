@@ -3,6 +3,9 @@ import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import type { Forge, ForgeWriter, MergeResult } from '../adapters/forge/types.js';
+import { prEventId } from '../adapters/forge/github-webhook.js';
+import { PublishRefused, type Publisher } from '../adapters/publisher/types.js';
+import { prText } from '../publish/publish.js';
 import type { RoleResolver } from '../adapters/roles/types.js';
 import type { RunHandle, RunResult, Runner } from '../adapters/runner/types.js';
 import {
@@ -43,7 +46,7 @@ import type { EventBus } from './bus.js';
 import type { Clock } from './clock.js';
 import type { Effect } from './decision.js';
 import { NO_PLAN, planDecision } from './decision-plan.js';
-import { blockedLabelChange, goesThroughFreeze, HUMAN_EVENTS, mayCheck, RECONCILE_MS, reconcileTicket, refusesDevWork, sensitivePathsAtLaunch, taintedKnowledge } from './engine.js';
+import { blockedLabelChange, goesThroughFreeze, HUMAN_EVENTS, mayCheck, mayPublish, RECONCILE_MS, reconcileTicket, refusesDevWork, sensitivePathsAtLaunch, taintedKnowledge } from './engine.js';
 import { attemptLabels, packFingerprints } from './attempt-labels.js';
 import { pickupFailures } from './pickup.js';
 import { buildPrompt, formatFeedback, formatVerifyFailures, readConventions } from './prompt.js';
@@ -144,6 +147,8 @@ export interface OrchestratorDeps {
   reconcile?: (project: ProjectRuntime) => Promise<void>;
   /** The factory's writes on the forge (ORC-148: the merge); absent with the `gh` CLI, which merges nothing. */
   forgeWriter?: ForgeWriter;
+  /** The factory publishes what `verify` found green (ORC-125); absent without sandboxes or a GitHub App, a ticket that gets there is blocked and told why. */
+  publisher?: Publisher;
   runner: Runner;
   workspaces: WorkspaceManager;
   verify: Verifier;
@@ -466,7 +471,7 @@ export class Orchestrator {
     const checked = new Set<string>();
     for (const row of await store.pendingInbox(Number.MAX_SAFE_INTEGER)) {
       if (row.type === 'run.finished' || row.type === 'run.lost') settled.add((row.payload as EventPayloads['run.lost']).runId);
-      if (row.type === 'verify.passed' || row.type === 'verify.failed' || row.type === 'verify.errored' || row.type === 'verify.lost') checked.add((row.payload as EventPayloads['verify.lost']).runId);
+      if (row.type === 'verify.passed' || row.type === 'verify.failed' || row.type === 'verify.errored' || row.type === 'verify.lost' || row.type === 'publish.done' || row.type === 'publish.refused') checked.add((row.payload as EventPayloads['verify.lost']).runId);
     }
     const interrupted = await store.runsByStatus('interrupted');
     for (const run of [...cut, ...interrupted]) {
@@ -530,13 +535,13 @@ export class Orchestrator {
   }
 
   /**
-   * The check of an attempt cut with the process that ran it: run again, unless its effect is still
-   * to come (the outbox replays it), or nothing says what it checked.
+   * The check of an attempt cut with the process that ran it: run again, unless its effect or the publication behind
+   * it is still to come (the outbox replays it), or nothing says what it checked.
    */
   private async recoverCheck(t: TicketState, runId: string): Promise<void> {
     const { store, clock } = this.d;
     const rows = await store.listEffects(t.projectId, t.ticketId);
-    if (rows.some((r) => r.effect.kind === 'run_verify' && r.effect.runId === runId && (r.status === 'pending' || r.status === 'running'))) return;
+    if (rows.some((r) => (r.effect.kind === 'run_verify' || r.effect.kind === 'publish') && r.effect.runId === runId && (r.status === 'pending' || r.status === 'running'))) return;
     const run = await store.getRun(runId);
     if (!run) {
       this.log('warn', `verification of ${t.ticketId} names a run never written (${runId}): dropped`);
@@ -1272,8 +1277,13 @@ export class Orchestrator {
       case 'move':
         await this.move(project, t, c.to, c.keepReviewSha);
         // The factory's own work ended; a move back after a refusal concludes nothing.
-        if (c.to === 'human_review' && !c.keepReviewSha) await this.updatePlan(t, (plan) => closePlan(plan, t.prNumber !== undefined));
+        if (c.to === 'human_review' && !c.keepReviewSha) {
+          await this.prReady(project, t);
+          await this.updatePlan(t, (plan) => closePlan(plan, t.prNumber !== undefined));
+        }
         return;
+      case 'publish':
+        return this.publish(project, t, c, key);
       case 'merge':
         return this.merge(project, t, c.sha, key);
       case 'labels':
@@ -1433,6 +1443,55 @@ export class Orchestrator {
       this.log('warn', `head of ${t.ticketId}'s PR unread at Human Review: ${(err as Error).message}`);
       return undefined;
     }
+  }
+
+  /**
+   * The draft goes to its human reviewer with the ticket: GitHub merges no draft. Best effort: a human can do it, and until then the merge
+   * refused says why. No PR, nothing to do.
+   */
+  private async prReady(project: ProjectRuntime, t: TicketState): Promise<void> {
+    if (t.prNumber === undefined || t.prState !== 'OPEN' || !this.d.forgeWriter) return;
+    await this.d.forgeWriter.markPrReady(project.repoPath, t.prNumber).catch((err: Error) => this.log('warn', `PR #${t.prNumber} of ${t.ticketId} still a draft: ${err.message}`));
+  }
+
+  /**
+   * The `publish` effect (ORC-125): the commit `verify` found green, out to the forge by the factory. A ticket that let go of the
+   * attempt meanwhile (a stop) publishes nothing. Its result comes back through the inbox, keyed by the effect: `pr.opened` under the id
+   * the webhook gives it, so that the first of the two counts, then `publish.done`. A refusal is decided once, as the merge's: its mark makes
+   * a replay send the same one again instead of reading a forge that changed. Anything else throws, and the outbox retries it:
+   * a push already made is found by the publisher, and the PR by its branch.
+   */
+  private async publish(project: ProjectRuntime, t: TicketState, c: Extract<Effect, { kind: 'publish' }>, key: EffectKey): Promise<void> {
+    if (t.verifyingRunId !== c.runId) {
+      this.log('info', `publish of ${t.ticketId} dropped: the ticket let go of run ${c.runId}`);
+      return;
+    }
+    const mark = `effect:${key.id}:refused`;
+    const payload = { runId: c.runId, job: c.job, sha: c.sha };
+    const base = { ...TRUSTED, projectId: project.id, ticketId: t.ticketId };
+    const refuse = async (reason: string) => void (await this.accept({ ...base, id: `publish-refused:${key.id}`, type: 'publish.refused', at: this.d.clock.now(), payload: { ...payload, reason } }));
+    const published = async () => void (await this.accept({ ...base, id: `publish-done:${key.id}`, type: 'publish.done', at: this.d.clock.now(), payload: { ...payload, ...(c.output ? { output: c.output } : {}) } }));
+    const known = key.replay ? await this.d.store.getMeta(mark) : undefined;
+    if (known) return refuse(known);
+    let reason: string;
+    const { publisher } = this.d;
+    if (!mayPublish(t, c.sha, project.workflow)) reason = `le commit ${c.sha.slice(0, 12)} n'a pas de vérification verte, la dernière porte sur ${t.verifiedSha?.slice(0, 12) ?? 'aucun commit'}.`;
+    else if (!publisher) reason = "l'usine publie par une GitHub App depuis ses sandboxes, et cette instance n'en a pas (docs/github.md).";
+    else if (!t.branch || !t.worktreePath) reason = `aucune branche ou aucun worktree pour ${t.ticketId}.`;
+    else {
+      try {
+        const pr = await publisher.publish({ projectId: project.id, repoPath: project.repoPath, ticketId: t.ticketId, runId: c.runId, worktree: t.worktreePath, branch: t.branch, sha: c.sha, ...prText(t) });
+        await this.accept({ ...base, id: prEventId(t.ticketId, pr.prNumber, 'opened'), type: 'pr.opened', at: this.d.clock.now(), payload: { number: pr.prNumber, url: pr.url, branch: t.branch } });
+        return published();
+      } catch (err) {
+        if (!(err instanceof PublishRefused)) throw err;
+        // A run that committed nothing has nothing to show: it ends as it would have, without a PR.
+        if (err.code === 'empty') return published();
+        reason = err.message;
+      }
+    }
+    await this.d.store.setMeta(mark, reason);
+    await refuse(reason);
   }
 
   /**

@@ -64,11 +64,11 @@ function engineEnv(base: NodeJS.ProcessEnv, carriers: Record<string, string>): R
 }
 
 /**
- * What a run on the host gets of the daemon's env beyond the system (ORC-211), for `claude`, `git` and `gh`
- * to work. Everything else stays in the daemon.
- * Transition: `GH_TOKEN` until the agents stop pushing (ORC-125), `ANTHROPIC_API_KEY` until the host runs go (ORC-179).
+ * What a run on the host gets of the daemon's env beyond the system (ORC-211), for `claude` and `git` to work.
+ * Everything else stays in the daemon, `GH_TOKEN` among it: the factory publishes, and the agent has no token (ORC-125).
+ * Transition: `ANTHROPIC_API_KEY` until the host runs go (ORC-179), and with them what `git fetch` reaches the forge by.
  */
-const HOST_LOGIN = ['CLAUDE_CONFIG_DIR', CLAUDE_TOKEN, 'ANTHROPIC_API_KEY', 'GH_TOKEN', 'GH_HOST', 'SSH_AUTH_SOCK', 'GIT_SSH_COMMAND'];
+const HOST_LOGIN = ['CLAUDE_CONFIG_DIR', CLAUDE_TOKEN, 'ANTHROPIC_API_KEY', 'SSH_AUTH_SOCK', 'GIT_SSH_COMMAND'];
 
 /** The env of a run on the host; `token`, the chosen account, replaces any other login. */
 export function childEnv(base: NodeJS.ProcessEnv, run: Record<string, string>, token?: string): Record<string, string> {
