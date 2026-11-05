@@ -71,6 +71,17 @@ describe('a disposable sandbox per attempt', () => {
     expect(h.workspaces.released).toEqual(['/tmp/factory-fake/p/_trunk']);
   });
 
+  it("gives a question's trunk back when its launch is cut short: nothing else would (ORC-317)", async () => {
+    const h = createHarness({ sandboxed: true });
+    h.tracker.addIssue({ identifier: 'REL-2', title: 'Une question' });
+    h.sandboxes.create = async () => {
+      throw new Error('engine down');
+    };
+    await h.send('session.mentioned', { linearSessionId: 'ls-9', body: 'où est calculé le score ?', author: 'L' }, 'REL-2');
+    expect(h.runner.requests).toEqual([]);
+    expect(h.workspaces.released).toEqual(['/tmp/factory-fake/p/_trunk']);
+  });
+
   it('destroys the sandbox of a run that fails or is stopped', async () => {
     const h = createHarness({ sandboxed: true });
     h.runner.enqueue({ outcome: 'failure' });

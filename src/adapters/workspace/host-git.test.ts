@@ -345,6 +345,18 @@ describe('what an agent wrote, under the commands the factory runs on the host (
       expect(await f.ws.head(path)).toBeUndefined();
     });
 
+    it.skipIf(process.platform === 'win32')("refs that are a link out of its git dir read as none: another ticket's head stays unread", async () => {
+      const f = fixture();
+      const { path } = await f.ws.prepare(req(f.repo));
+      const theirs = join(f.base, 'theirs', 'refs', 'heads');
+      mkdirSync(theirs, { recursive: true });
+      writeFileSync(join(theirs, 'x'), `${'a'.repeat(40)}\n`);
+      rmSync(join(path, '.git', 'refs'), { recursive: true });
+      symlinkSync(join(f.base, 'theirs', 'refs'), join(path, '.git', 'refs'));
+      writeFileSync(join(path, '.git', 'HEAD'), 'ref: refs/heads/x\n');
+      expect(await f.ws.head(path)).toBeUndefined();
+    });
+
     it.skipIf(process.platform === 'win32')('a .claude that is a link: the link goes, not what it names on the host', async () => {
       const f = fixture();
       const { path } = await f.ws.prepare(req(f.repo));

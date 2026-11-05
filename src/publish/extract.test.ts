@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ExecResult } from '../adapters/exec.js';
 import { FakeSandboxProvider } from '../adapters/sandbox/fake.js';
-import { extractWork } from './extract.js';
+import { extractWork, sandboxGit } from './extract.js';
 
 const BRANCH = 'factory/orc-1-x';
 // Forward slashes: the trap commands run under sh, Git for Windows' too.
@@ -44,6 +44,17 @@ async function setup(onExec?: (argv: readonly string[], r: ExecResult) => ExecRe
 
 afterEach(() => {
   vi.unstubAllEnvs();
+});
+
+describe('sandboxGit', () => {
+  it('runs git in the sandbox, hardened and under a cap: a filter of the agent cannot hold a launch (ORC-317)', async () => {
+    const seen: string[][] = [];
+    const run = sandboxGit({ exec: async (_, argv) => (seen.push([...argv]), { stdout: '', stderr: '', code: 0 }) }, 'sbx-1');
+    await run('sparse-checkout', 'set');
+    expect(seen[0]!.slice(0, 5)).toEqual(['timeout', '-k', '10', '120', 'git']);
+    expect(seen[0]).toContain('core.hooksPath=/dev/null');
+    expect(seen[0]!.slice(-2)).toEqual(['sparse-checkout', 'set']);
+  });
 });
 
 describe('extractWork', () => {

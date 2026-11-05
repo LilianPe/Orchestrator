@@ -42,7 +42,7 @@ export type InSandboxGit = (...args: string[]) => Promise<ExecResult>;
 export interface WorkspaceManager {
   prepare(req: WorkspaceRequest): Promise<Workspace>;
   cleanup(projectId: string, repoPath: string, ticketId: string): Promise<void>;
-  /** The trunk a question ran on, once its sandbox is gone. */
+  /** What a run leaves that is for no other: the trunk a question ran on, once its sandbox is gone. Any other path stays. */
   release(path: string): Promise<void>;
   remoteBranchExists(repoPath: string, prefix: string): Promise<boolean>;
   /** The commit a worktree's run ended on (ORC-148: only it may be recorded as reviewed); none for a path that is no worktree. */

@@ -18,6 +18,13 @@ export const HARDENING = [`core.hooksPath=${devNull}`, 'core.fsmonitor=false'];
 /** The sandbox's git, on the agent's repository: `devNull` is the host's, and the mount's owner may not be its user. */
 const SANDBOX_CONFIG = [['core.hooksPath', '/dev/null'], ['core.fsmonitor', 'false'], ['safe.directory', '*']] as const;
 export const IN_SANDBOX = SANDBOX_CONFIG.flatMap(([key, value]) => ['-c', `${key}=${value}`]);
+/**
+ * Git of the factory in an agent's repository, in its sandbox (ORC-317). Under a cap: `SandboxProvider.exec` has none, and
+ * a filter the agent left there, which this git still runs, could otherwise hold a launch for good.
+ */
+export const sandboxGit = (sandboxes: Pick<SandboxProvider, 'exec'>, id: string) => (...args: string[]) =>
+  sandboxes.exec(id, ['timeout', '-k', '10', String(SANDBOX_GIT_TIMEOUT_S), 'git', ...IN_SANDBOX, ...args]);
+const SANDBOX_GIT_TIMEOUT_S = 120;
 /** The same, for a tool that runs git itself. */
 export const IN_SANDBOX_ENV: Record<string, string> = {
   GIT_CONFIG_COUNT: String(SANDBOX_CONFIG.length),

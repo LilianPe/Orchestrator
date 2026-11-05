@@ -1,7 +1,7 @@
-import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync } from 'node:fs';
+import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { devNull } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join, resolve, sep } from 'node:path';
 import { branchName } from '../../core/naming.js';
 import { execCmd, mustExec, type Exec } from '../exec.js';
 import type { InSandboxGit, StepDiff, Workspace, WorkspaceManager, WorkspaceRequest } from './types.js';
@@ -10,20 +10,26 @@ function assertSafe(id: string): void {
   if (/[\\/]/.test(id) || id.includes('..')) throw new Error(`Identifiant invalide : ${id}`);
 }
 
-/** What the agent's repository keeps of the repository's own config: who commits, and how it reaches the forge. */
-const INHERITED = /^(user\.|credential\.|url\.|http\.|remote\.origin\.)/i;
+/**
+ * What the agent's repository does not take of the repository's own config, which the agent read before and which no
+ * agent writes: what describes that repository's layout, or names a host's path for hooks. The rest stays as it was for
+ * a run: identity, remotes, credentials, filters, line endings.
+ */
+const NOT_INHERITED = /^(core\.(bare|repositoryformatversion|worktree|hookspath|fsmonitor|sparsecheckout|sparsecheckoutcone)$|extensions\.)/i;
 const SHA = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
-/** Git allows more; a name out of this reads as no branch, which fails closed. Never `..`: it becomes a path. */
-const BRANCH_REF = /^refs\/heads\/(?!-|\.)(?!.*\.\.)[\w./-]+$/;
+/** Git's own rules on a ref's name (`git check-ref-format`), as a name out of them cannot be its branch. Never `..`: it becomes a path. */
+const BRANCH_REF = /^refs\/heads\/(?!-|\.)(?!.*(\.\.|@\{|\/\.|\/\/|\.lock(\/|$)))[^\s\p{Cc}~^:?*[\\]+$/u;
 const MAX_REFS_BYTES = 16 * 1024 * 1024;
 
 /**
- * A file of the agent's git dir, as data. It can be anything by the time it is opened: never a link, never a FIFO that
- * would hold the daemon, never more than the cap. Whatever else it is, it reads as absent.
+ * A file of the agent's git dir, as data. It can be anything by the time it is opened: not out of that dir by a link on
+ * the way, never a link itself, never a FIFO that would hold the daemon, never more than the cap. Whatever else it is, it reads as absent.
  */
-function agentFile(path: string): string | undefined {
+function agentFile(gitDir: string, name: string): string | undefined {
   let fd: number | undefined;
   try {
+    const path = join(gitDir, name);
+    if (!realpathSync(path).startsWith(realpathSync(gitDir) + sep)) return undefined;
     // Undefined on Windows, where neither applies.
     fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
     const st = fstatSync(fd);
@@ -51,15 +57,15 @@ const isDir = (path: string) => {
 function agentHead(work: string): { branch: string; sha?: string } | undefined {
   const gitDir = join(work, '.git');
   if (!isDir(gitDir)) return undefined;
-  const head = agentFile(join(gitDir, 'HEAD'))?.trim();
+  const head = agentFile(gitDir, 'HEAD')?.trim();
   if (!head) return undefined;
   if (SHA.test(head)) return { branch: 'HEAD', sha: head };
   const ref = /^ref: (\S+)$/.exec(head)?.[1];
   if (!ref || !BRANCH_REF.test(ref)) return undefined;
   const branch = ref.slice('refs/heads/'.length);
-  const loose = agentFile(join(gitDir, ref))?.trim();
+  const loose = agentFile(gitDir, ref)?.trim();
   if (loose && SHA.test(loose)) return { branch, sha: loose };
-  const packed = agentFile(join(gitDir, 'packed-refs'))?.split('\n').find((l) => l.endsWith(` ${ref}`))?.split(' ')[0];
+  const packed = agentFile(gitDir, 'packed-refs')?.split('\n').find((l) => l.endsWith(` ${ref}`))?.split(' ')[0];
   return packed && SHA.test(packed) ? { branch, sha: packed } : { branch };
 }
 
@@ -111,13 +117,14 @@ export class GitWorkspaces implements WorkspaceManager {
     let existing: string | undefined;
     let checkout = ['--no-track', '-b', branch, trunk];
     const refs: string[] = [];
-    if (await has(`refs/heads/${branch}`)) {
+    // The forge first: an agent's commits reach it, never the repository's own branch, which can only lag behind.
+    if (await has(`refs/remotes/origin/${branch}`)) {
+      existing = `refs/remotes/origin/${branch}`;
+      checkout = ['-b', branch, `origin/${branch}`];
+    } else if (await has(`refs/heads/${branch}`)) {
       existing = `refs/heads/${branch}`;
       refs.push(`+${existing}:${existing}`);
       checkout = [branch];
-    } else if (await has(`refs/remotes/origin/${branch}`)) {
-      existing = `refs/remotes/origin/${branch}`;
-      checkout = ['-b', branch, `origin/${branch}`];
     }
     // On a branch that already existed: only its commits beyond the default branch count.
     const ahead = !!existing && (await this.git(req.repoPath, 'rev-list', '--count', `${trunk}..${existing}`)).trim() !== '0';
@@ -147,9 +154,10 @@ export class GitWorkspaces implements WorkspaceManager {
       for (const entry of config) {
         const at = entry.indexOf('\n');
         const key = at < 0 ? entry : entry.slice(0, at);
-        if (at >= 0 && INHERITED.test(key)) await here('-C', making, 'config', '--add', key, entry.slice(at + 1));
+        if (at >= 0 && !NOT_INHERITED.test(key)) await here('-C', making, 'config', '--add', key, entry.slice(at + 1));
       }
-      await here('-C', making, 'fetch', '--quiet', '--no-tags', '--', repo, '+refs/remotes/origin/*:refs/remotes/origin/*', '+refs/tags/*:refs/tags/*', ...refs);
+      // Resolved: it is read from `making`, and `repoPath` can be relative.
+      await here('-C', making, 'fetch', '--quiet', '--no-tags', '--', resolve(repo), '+refs/remotes/origin/*:refs/remotes/origin/*', '+refs/tags/*:refs/tags/*', ...refs);
       await here('-C', making, 'symbolic-ref', 'refs/remotes/origin/HEAD', `refs/remotes/${trunk}`);
       await here('-C', making, 'checkout', '--quiet', ...checkout);
       renameSync(making, path);
@@ -187,8 +195,9 @@ export class GitWorkspaces implements WorkspaceManager {
     await rm(join(this.o.root, projectId, ticketId), { recursive: true, force: true });
   }
 
+  /** By where it is, not by what the workflow says now of the job: a ticket's worktree holds its unpushed commits, and is never this. */
   async release(path: string): Promise<void> {
-    await rm(path, { recursive: true, force: true });
+    if (basename(dirname(path)) === '_trunk') await rm(path, { recursive: true, force: true });
   }
 
   async head(path: string): Promise<string | undefined> {
@@ -201,7 +210,8 @@ export class GitWorkspaces implements WorkspaceManager {
    */
   async stepDiff(repoPath: string, path: string, base: string): Promise<StepDiff | undefined> {
     const head = await this.head(path);
-    const objects = join(path, '.git', 'objects');
+    // Absolute: read from `repoPath`, and the workspaces' root can be relative.
+    const objects = resolve(path, '.git', 'objects');
     if (!head || !isDir(objects)) return undefined;
     const env = { GIT_ALTERNATE_OBJECT_DIRECTORIES: objects };
     const git = (...args: string[]) => mustExec(this.exec, 'git', ['-C', repoPath, ...args], { env });

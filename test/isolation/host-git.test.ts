@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { WORKSPACE_TARGET } from '../../src/adapters/sandbox/types.js';
 import { GitWorkspaces } from '../../src/adapters/workspace/git-workspaces.js';
 import { runCleanVerify, type CleanVerifyResult } from '../../src/core/clean-verify.js';
-import { IN_SANDBOX } from '../../src/publish/extract.js';
+import { sandboxGit } from '../../src/publish/extract.js';
 import { cli, enabled, useSandboxes } from './helpers.js';
 
 /**
@@ -171,7 +171,7 @@ describe.skipIf(!enabled)(`what an agent leaves in its git dir, under the factor
     await attempt('the pointed ticket: its next launch', () => ws.prepare(ask({ ticketId: 'ISO-2', title: 'pointed' })));
     await attempt('the pointed ticket: its head', () => ws.head(pointed.path));
     const next = await provider.create(request({ workspacePath: work, network: 'none' }));
-    await attempt('the hiding of .claude/ at the next launch, in its sandbox', () => ws.resetClaudeDir(work, (...args) => provider.exec(next.id, ['git', ...IN_SANDBOX, ...args])));
+    await attempt('the hiding of .claude/ at the next launch, in its sandbox', () => ws.resetClaudeDir(work, sandboxGit(provider, next.id)));
     await provider.destroy(next.id);
     await attempt('the pointed ticket: the hiding of .claude/', () => ws.resetClaudeDir(pointed.path, async () => ({ stdout: '', stderr: '', code: 0 })));
 

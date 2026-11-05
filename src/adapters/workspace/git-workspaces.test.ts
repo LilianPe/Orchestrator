@@ -135,11 +135,49 @@ describe('GitWorkspaces', () => {
     expect(existsSync(join(one.path, 'left-by-one'))).toBe(true);
   });
 
-  it("makes the agent a repository of its own (ORC-317): its git dir in its worktree, without the factory's hooks or other config, on the forge's refs", async () => {
+  it('releases a trunk and nothing else, whatever the workflow says of a job: a worktree holds its unpushed commits', async () => {
+    const { repo, root } = fixtureRepo();
+    const ws = new GitWorkspaces({ root });
+    const w = await ws.prepare(req(repo));
+    await ws.release(w.path);
+    expect(existsSync(w.path)).toBe(true);
+  });
+
+  it('prefers the forge to a branch of the repository, which an agent no longer moves and can only lag behind', async () => {
+    const { repo, root } = fixtureRepo();
+    git(repo, 'checkout', '-q', '-b', 'factory/rel-1-export-csv');
+    git(repo, 'commit', '--allow-empty', '-m', 'old, local');
+    git(repo, 'push', '-q', 'origin', 'factory/rel-1-export-csv');
+    git(repo, 'commit', '--allow-empty', '-m', 'on the forge');
+    git(repo, 'push', '-q', 'origin', 'factory/rel-1-export-csv');
+    git(repo, 'reset', '-q', '--hard', 'HEAD~1');
+    git(repo, 'checkout', '-q', 'main');
+    const w = await new GitWorkspaces({ root }).prepare(req(repo));
+    expect(git(w.path, 'log', '-1', '--format=%s')).toBe('on the forge');
+  });
+
+  it('takes a relative repoPath and a relative root, as the config allows both', async () => {
+    const { base, repo } = fixtureRepo();
+    const here = process.cwd();
+    process.chdir(base);
+    try {
+      const ws = new GitWorkspaces({ root: 'rel-root' });
+      const w = await ws.prepare(req('repo'));
+      const start = git(w.path, 'rev-parse', 'HEAD');
+      git(w.path, 'commit', '--allow-empty', '-m', 'the agent');
+      expect((await ws.stepDiff('repo', w.path, start))?.changed).toEqual([]);
+      expect(git(repo, 'rev-parse', 'origin/main')).toBe(start);
+    } finally {
+      process.chdir(here);
+    }
+  });
+
+  it("makes the agent a repository of its own (ORC-317): its git dir in its worktree, the repository's settings without its hooks or its layout, on the forge's refs", async () => {
     const { repo, root } = fixtureRepo();
     git(repo, 'tag', 'v1');
     git(repo, 'push', '-q', 'origin', 'v1');
-    git(repo, 'config', 'core.sshCommand', 'factory-only');
+    git(repo, 'config', 'core.sshCommand', 'a-deploy-key');
+    git(repo, 'config', 'core.hooksPath', '/host/hooks');
     git(repo, 'branch', 'someone-elses');
     const hooks = join(repo, '.git', 'hooks');
     mkdirSync(hooks, { recursive: true });
@@ -154,7 +192,8 @@ describe('GitWorkspaces', () => {
     expect(git(w.path, 'tag')).toBe('v1');
     expect(git(w.path, 'branch', '--format=%(refname:short)')).toBe('factory/rel-1-export-csv');
     expect(existsSync(join(w.path, '.git', 'hooks'))).toBe(false);
-    expect(readFileSync(join(w.path, '.git', 'config'), 'utf8')).not.toContain('factory-only');
+    expect(git(w.path, 'config', 'core.sshCommand')).toBe('a-deploy-key');
+    expect(readFileSync(join(w.path, '.git', 'config'), 'utf8')).not.toContain('/host/hooks');
     // Neither the factory's objects by a link, nor another's name for them: the agent rewrites only its own.
     expect(existsSync(join(w.path, '.git', 'objects', 'info', 'alternates'))).toBe(false);
     // Its commits stay out of the factory's repository, read from there all the same.
@@ -175,6 +214,12 @@ describe('GitWorkspaces', () => {
     git(w.path, 'checkout', '-q', '--detach');
     expect(await ws.head(w.path)).toBe(head);
     expect(await ws.prepare(req(repo))).toMatchObject({ branch: 'HEAD' });
+    // A name git allows, however unusual, is no attack.
+    for (const name of ['feat/été', 'fix/#12', 'a+b@c']) {
+      git(w.path, 'checkout', '-q', '-b', name);
+      expect(await ws.head(w.path)).toBe(head);
+      expect(await ws.prepare(req(repo))).toMatchObject({ branch: name });
+    }
   });
 
   it('leaves nothing a next launch would take for a worktree when the repository cannot be made', async () => {

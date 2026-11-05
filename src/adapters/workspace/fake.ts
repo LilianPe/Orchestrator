@@ -67,7 +67,7 @@ export class FakeWorkspaces implements WorkspaceManager {
   }
 
   async release(path: string): Promise<void> {
-    this.released.push(path);
+    if (path.endsWith('/_trunk')) this.released.push(path);
   }
 
   async remoteBranchExists(_repoPath: string, prefix: string): Promise<boolean> {

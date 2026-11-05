@@ -68,7 +68,7 @@ import {
 } from './types.js';
 import { runSealedSetup } from './sealed-setup.js';
 import { runCleanVerify, type CleanVerifier } from './clean-verify.js';
-import { IN_SANDBOX } from '../publish/extract.js';
+import { sandboxGit } from '../publish/extract.js';
 import { logExcerpt } from '../checks/log-excerpt.js';
 import { cappedCommand, type Verifier, type VerifyResult } from './verify.js';
 import { PRODUCT_NAME } from '../product.js';
@@ -1729,8 +1729,7 @@ export class Orchestrator {
       const conventions = readConventions(ws.path);
       // After the setup, which is the repository's and could write one; the session loads none anyway
       // (`--setting-sources ""`): defence in depth, for what ORC-128 did not trap (ORC-284).
-      const box = sandbox;
-      await workspaces.resetClaudeDir(ws.path, box && ((...args) => this.d.sandboxes!.exec(box.id, ['git', ...IN_SANDBOX, ...args])));
+      await workspaces.resetClaudeDir(ws.path, sandbox && sandboxGit(this.d.sandboxes!, sandbox.id));
       // The head the tests step starts on (ORC-123): its red check reads the step's own commits from it. A return
       // to the step keeps the first one, so its earlier commits still count; a relaunch is the same step.
       if (job.red && kind !== 'verify_failures' && !opts.relaunchOf) await store.setMeta(redBaseKey(project.id, ticketId), (await workspaces.head(ws.path)) ?? '');
@@ -1832,6 +1831,7 @@ export class Orchestrator {
     } finally {
       // The sandbox first: it mounts the worktree.
       if (sandbox && !handedOver) await this.destroySandbox(sandbox.id, runId);
+      if (!handedOver) await workspaces.release(ws.path).catch((err: Error) => this.log('warn', `workspace of ${ticketId} not removed after a launch cut short: ${err.message}`));
       if (!setUp) {
         await workspaces
           .cleanup(project.id, project.repoPath, ticketId)
@@ -1911,9 +1911,7 @@ export class Orchestrator {
       }
     } finally {
       if (sandboxId) await this.destroySandbox(sandboxId, run.id, run);
-      if (this.d.projects.find((p) => p.id === run.projectId)?.workflow.jobs[run.job]?.workspace === 'trunk-readonly') {
-        await this.d.workspaces.release(run.cwd).catch((err: Error) => this.log('warn', `trunk of run ${run.id} not removed: ${err.message}`));
-      }
+      await this.d.workspaces.release(run.cwd).catch((err: Error) => this.log('warn', `workspace of run ${run.id} not removed: ${err.message}`));
     }
     await this.submitResult(await this.finishedFor(run, result));
   }
