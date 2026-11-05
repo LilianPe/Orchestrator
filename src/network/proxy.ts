@@ -4,7 +4,7 @@ import { chmodSync, createWriteStream, mkdirSync, rmSync, type WriteStream } fro
 import { createServer, request as httpRequest, type ClientRequest, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { BlockList, connect, isIP, type LookupFunction, type NetConnectOpts, type Socket } from 'node:net';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { pipeline, type Duplex } from 'node:stream';
 import { TLSSocket } from 'node:tls';
 import { LeafIssuer, loadOrCreateCa, type FactoryCa } from './ca.js';
@@ -126,18 +126,19 @@ export class EgressProxy {
   }
 
   socketPath(runId: string): string {
-    // Hashed: a Unix socket path is capped near 108 bytes.
+    // Hashed: a Unix socket path is capped near 108 bytes. In a dir of its own, the sandbox's mount:
+    // bound anew after a daemon restart, the living container sees it (ORC-220).
     const name = createHash('sha256').update(`${this.o.dir}\0${runId}`).digest('hex').slice(0, 16);
-    return PIPE ? `\\\\.\\pipe\\factory-egress-${name}` : join(this.o.dir, `${name}.sock`);
+    return PIPE ? `\\\\.\\pipe\\factory-egress-${name}` : join(this.o.dir, name, 'egress.sock');
   }
 
-  // TODO(dashboard): the journal goes to the base and the security log of the dashboard; a JSONL per run until then.
+  /** A JSONL per run, read into the base when the run's sandbox is destroyed (ORC-296), purged at 30 days. */
   journalPath(runId: string): string {
     if (!/^[\w.-]+$/.test(runId)) throw new Error(`egress: invalid run id ${runId}`);
     return join(this.o.dir, `${runId}.jsonl`);
   }
 
-  /** Whether this process listens for the run: a container from before a restart has a dead socket. */
+  /** Whether this process listens for the run: a container from before a restart waits on a socket that is gone, until `open`. */
   isOpen(runId: string): boolean {
     return this.runs.has(runId);
   }
@@ -178,7 +179,10 @@ export class EgressProxy {
       this.tls = { ca: await ca, issuer: await LeafIssuer.create(ca) };
     })();
     await this.tlsReady;
-    if (!PIPE) rmSync(path, { force: true }); // left by a crash
+    if (!PIPE) {
+      mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+      rmSync(path, { force: true }); // left by a crash
+    }
     run.server.on('request', (req: IncomingMessage, res: ServerResponse) => this.forward(run, req, res));
     run.server.on('connect', (req: IncomingMessage, client: Duplex, head: Buffer) => this.tunnel(run, req, client, head));
     run.mitm.on('request', (req: IncomingMessage, res: ServerResponse) => this.decrypted(run, req, res));
@@ -217,7 +221,7 @@ export class EgressProxy {
       new Promise<void>((ok) => run.server.close(() => ok())),
       new Promise<void>((ok) => run.journal.end(() => ok())),
     ]);
-    if (!PIPE) rmSync(this.socketPath(runId), { force: true });
+    if (!PIPE) rmSync(dirname(this.socketPath(runId)), { recursive: true, force: true });
   }
 
   async closeAll(): Promise<void> {

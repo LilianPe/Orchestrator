@@ -1,11 +1,12 @@
-import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { describeAgentRuntimeContract, drain, type AgentScript } from '../../../test/contracts/agent-runtime.contract.js';
 import { FakeSandboxProvider } from '../sandbox/fake.js';
 import type { SandboxProvider } from '../sandbox/types.js';
-import { buildClaudeArgs, childEnv, ClaudeCodeRunner } from './claude-code.js';
+import { buildClaudeArgs, childEnv, ClaudeCodeRunner, liveDir } from './claude-code.js';
 import type { RunRequest } from './types.js';
 
 const fx = (n: string) => join(import.meta.dirname, 'fixtures', n);
@@ -110,12 +111,109 @@ describe('ClaudeCodeRunner', () => {
   });
 });
 
+/** ORC-220: the attempt's writer outlives the daemon that started it, which `start-and-die.ts` is, killed for real. */
+describe('ClaudeCodeRunner attached to an attempt of a dead daemon', () => {
+  const gated = (transcriptsDir: string) => ({ FAKE_CLAUDE_SCRIPT: fx('stream-success.jsonl'), FAKE_CLAUDE_GATE: join(transcriptsDir, 'gate') });
+  const orphan = (transcriptsDir: string, runId: string, env: Record<string, string>) => {
+    const died = spawnSync(process.execPath, ['--import', 'tsx', fx('start-and-die.ts'), transcriptsDir, runId, fx('fake-claude.mjs'), JSON.stringify(env)], { stdio: 'ignore' });
+    expect(died.status === 0).toBe(false);
+  };
+  const attach = { limits: { turns: 50, durationMs: 60_000, usd: 5 }, elapsedMs: 0, env: {} };
+  const writerDead = async (transcriptsDir: string, runId: string) => {
+    const pid = Number(readFileSync(join(liveDir(transcriptsDir), runId, 'pid'), 'utf8').split(' ')[0]);
+    await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow(), { timeout: 5_000 });
+  };
+
+  it('follows it from now on: only the new events, the real result, a whole transcript, once', { timeout: 30_000 }, async () => {
+    const { r, transcriptsDir } = runner();
+    orphan(transcriptsDir, 'r-alive', gated(transcriptsDir));
+    await vi.waitFor(() => expect(readFileSync(join(liveDir(transcriptsDir), 'r-alive', 'stream'), 'utf8').trim().split('\n')).toHaveLength(4), { timeout: 5_000 });
+    const h = r.attach({ ...attach, runId: 'r-alive' })!;
+    expect(h).toBeDefined();
+    writeFileSync(join(transcriptsDir, 'gate'), '');
+    const events = await drain(h.events);
+    // The lines before the kill were relayed by the dead daemon, or are lost to the relay: never twice.
+    expect(events.map((e) => e.kind)).toEqual(['result']);
+    expect(await h.done).toEqual({ outcome: 'success', costUsd: 0.42, turns: 3, lastText: 'PR ouverte.', tokens: { input: 20, output: 400, cacheRead: 9000, cacheCreation: 1000 } });
+    expect(readFileSync(join(transcriptsDir, 'r-alive.jsonl'), 'utf8').trim().split('\n')).toHaveLength(5);
+    expect(existsSync(join(liveDir(transcriptsDir), 'r-alive'))).toBe(false);
+  });
+
+  it('takes the result of an attempt that ended while no daemon read it', { timeout: 30_000 }, async () => {
+    const { r, transcriptsDir } = runner();
+    orphan(transcriptsDir, 'r-ended', { FAKE_CLAUDE_SCRIPT: fx('stream-success.jsonl') });
+    await writerDead(transcriptsDir, 'r-ended');
+    const h = r.attach({ ...attach, runId: 'r-ended' })!;
+    expect(await drain(h.events)).toEqual([]);
+    expect(await h.done).toMatchObject({ outcome: 'success', lastText: 'PR ouverte.' });
+  });
+
+  it('a result line wins over a duration spent during the cut: the attempt ended in time, whoever read it late', { timeout: 30_000 }, async () => {
+    const { r, transcriptsDir } = runner();
+    orphan(transcriptsDir, 'r-late', { FAKE_CLAUDE_SCRIPT: fx('stream-success.jsonl') });
+    await writerDead(transcriptsDir, 'r-late');
+    expect(await r.attach({ ...attach, runId: 'r-late', elapsedMs: 3_600_000 })!.done).toMatchObject({ outcome: 'success' });
+  });
+
+  it('a pid another process took since is no writer: nothing to take up, nothing to signal', { timeout: 30_000 }, async () => {
+    const { r, transcriptsDir } = runner();
+    orphan(transcriptsDir, 'r-reused', { FAKE_CLAUDE_SCRIPT: fx('stream-usage-no-result.jsonl') });
+    await writerDead(transcriptsDir, 'r-reused');
+    // This test's own process, under a start that is not its own: the pid is alive, and not the writer's.
+    writeFileSync(join(liveDir(transcriptsDir), 'r-reused', 'pid'), `${process.pid} not-its-start`);
+    expect(r.attach({ ...attach, runId: 'r-reused' })).toBeUndefined();
+  });
+
+  it('has nothing to take up from a writer dead without a result, nor from a run it never saw', { timeout: 30_000 }, async () => {
+    const { r, transcriptsDir } = runner();
+    orphan(transcriptsDir, 'r-cut', { FAKE_CLAUDE_SCRIPT: fx('stream-usage-no-result.jsonl') });
+    await writerDead(transcriptsDir, 'r-cut');
+    expect(r.attach({ ...attach, runId: 'r-cut' })).toBeUndefined();
+    expect(existsSync(join(liveDir(transcriptsDir), 'r-cut'))).toBe(false);
+    expect(r.attach({ ...attach, runId: 'r-never' })).toBeUndefined();
+  });
+
+  it('stops it, and counts the duration already spent', { timeout: 30_000 }, async () => {
+    const { r, transcriptsDir } = runner();
+    const hanging = { FAKE_CLAUDE_SCRIPT: fx('stream-usage-no-result.jsonl'), FAKE_CLAUDE_HANG: '1' };
+    orphan(transcriptsDir, 'r-stop', hanging);
+    const stopped = r.attach({ ...attach, runId: 'r-stop' })!;
+    stopped.stop();
+    expect(await stopped.done).toMatchObject({ outcome: 'stopped' });
+    orphan(transcriptsDir, 'r-over', hanging);
+    expect(await r.attach({ ...attach, runId: 'r-over', elapsedMs: 60_000 })!.done).toMatchObject({ outcome: 'limit' });
+  });
+});
+
 describe('ClaudeCodeRunner in a sandbox (ORC-204)', () => {
   afterEach(() => vi.unstubAllEnvs());
 
-  it('runs claude through spawnCommand, naming the run env and the auth variables only', async () => {
-    vi.stubEnv('SOME_DAEMON_VAR', 'leak');
+  it('names the token of the chosen account, whatever login the daemon holds', async () => {
+    vi.stubEnv('CLAUDE_CODE_OAUTH_TOKEN', 'daemon-login');
+    const { sandboxes, id, spawnCommand } = await sandbox();
+    const transcriptsDir = mkdtempSync(join(tmpdir(), 'factory-tr-'));
+    const r = new ClaudeCodeRunner({ transcriptsDir, command: [process.execPath, fx('fake-claude.mjs')], sandboxes, claudeToken: () => 'chosen-account' });
+    await r.start(req({ sandboxId: id, cwd: '/work' }, { FAKE_CLAUDE_SCRIPT: fx('stream-success.jsonl') })).done;
+    const [, , opts] = spawnCommand.mock.calls[0]! as Parameters<SandboxProvider['spawnCommand']>;
+    expect(opts!.env).toMatchObject({ CLAUDE_CODE_OAUTH_TOKEN: 'chosen-account' });
+  });
+
+  it('names no credential at all when there is none, and the API key never', async () => {
+    vi.stubEnv('CLAUDE_CODE_OAUTH_TOKEN', '');
     vi.stubEnv('ANTHROPIC_API_KEY', 'sk-test');
+    vi.stubEnv('ANTHROPIC_BASE_URL', 'https://gateway');
+    const { sandboxes, id, spawnCommand } = await sandbox();
+    const { r } = runner(sandboxes);
+    await r.start(req({ sandboxId: id, cwd: '/work' }, { FAKE_CLAUDE_SCRIPT: fx('stream-success.jsonl') })).done;
+    const [, , opts] = spawnCommand.mock.calls[0]! as Parameters<SandboxProvider['spawnCommand']>;
+    expect(opts!.env).toEqual({ FAKE_CLAUDE_SCRIPT: fx('stream-success.jsonl') });
+  });
+
+  it('runs claude through spawnCommand, naming the run env and the account token only', async () => {
+    vi.stubEnv('SOME_DAEMON_VAR', 'leak');
+    vi.stubEnv('GH_TOKEN', 'ghp_leak');
+    vi.stubEnv('ANTHROPIC_API_KEY', 'sk-test');
+    vi.stubEnv('CLAUDE_CODE_OAUTH_TOKEN', 'oauth-test');
     const { sandboxes, id, spawnCommand } = await sandbox();
     const { r } = runner(sandboxes);
     const runEnv = { FAKE_CLAUDE_SCRIPT: fx('stream-success.jsonl'), FACTORY_RUN_TOKEN: 't' };
@@ -128,14 +226,14 @@ describe('ClaudeCodeRunner in a sandbox (ORC-204)', () => {
     const [sid, argv, opts] = spawnCommand.mock.calls[0]! as Parameters<SandboxProvider['spawnCommand']>;
     expect(sid).toBe(id);
     expect(argv).toEqual([process.execPath, fx('fake-claude.mjs'), ...buildClaudeArgs(rq)]);
-    expect(opts).toEqual({ cwd: '/work', env: { ...runEnv, ANTHROPIC_API_KEY: 'sk-test' } });
+    expect(opts).toEqual({ cwd: '/work', env: { ...runEnv, CLAUDE_CODE_OAUTH_TOKEN: 'oauth-test' } });
   });
 
   it('spawns the engine CLI with the daemon PATH, and hands the sandbox PATH to the command in the container', async () => {
     vi.stubEnv('PATH', process.env['PATH'] + '-daemon');
     const { sandboxes, id, spawnCommand } = await sandbox();
     // The fake runs on the host: it drops the `env PATH=...` prefix a real engine runs in the container.
-    spawnCommand.mockImplementation((_, argv) => argv.slice(2));
+    spawnCommand.mockImplementation((_, argv, o) => ({ command: argv.slice(2), env: o!.env! }));
     const { r, transcriptsDir } = runner(sandboxes);
     const pathFile = join(transcriptsDir, 'path.txt');
     const runEnv = { FAKE_CLAUDE_SCRIPT: fx('stream-success.jsonl'), FAKE_CLAUDE_PATH: pathFile, PATH: '/factory/bin:/usr/bin' };
@@ -145,6 +243,21 @@ describe('ClaudeCodeRunner in a sandbox (ORC-204)', () => {
     expect(argv).toEqual(['env', 'PATH=/factory/bin:/usr/bin', process.execPath, fx('fake-claude.mjs'), ...buildClaudeArgs(rq)]);
     expect(opts!.env).not.toHaveProperty('PATH');
     expect(readFileSync(pathFile, 'utf8')).toBe(process.env['PATH']);
+  });
+
+  it('spawns the engine CLI with what the provider says, never with the env of the container (ORC-211)', async () => {
+    vi.stubEnv('HOME', '/daemon-home');
+    const { sandboxes, id, spawnCommand } = await sandbox();
+    const { r, transcriptsDir } = runner(sandboxes);
+    const dump = join(transcriptsDir, 'cli-env.json').replaceAll('\\', '/');
+    spawnCommand.mockReturnValue({ command: [process.execPath, '-e', `require('fs').writeFileSync('${dump}', JSON.stringify(process.env))`], env: { FACTORY_SANDBOX_ENV_0: 'carried' } });
+    await r.start(req({ sandboxId: id, cwd: '/work' }, { HOME: '/tmp/setup-home', DOCKER_HOST: 'tcp://evil:1', XDG_RUNTIME_DIR: '/moved' })).done;
+    const env = JSON.parse(readFileSync(dump, 'utf8')) as Record<string, string>;
+    expect(env['FACTORY_SANDBOX_ENV_0']).toBe('carried');
+    expect(env['HOME']).toBe('/daemon-home');
+    // Not absent: the CLI keeps the daemon's own, which a CI sets.
+    expect(env['DOCKER_HOST']).not.toBe('tcp://evil:1');
+    expect(env['XDG_RUNTIME_DIR']).not.toBe('/moved');
   });
 
   it('refuses a sandboxed run without a sandbox provider, spawning nothing', async () => {
@@ -165,16 +278,30 @@ describe('ClaudeCodeRunner in a sandbox (ORC-204)', () => {
   });
 });
 
-describe('childEnv', () => {
-  it('drops daemon-only secrets (LINEAR_*, non-run FACTORY_*) and keeps the run variables', () => {
+describe('childEnv: a run on the host (ORC-211)', () => {
+  it('keeps the system, its login and the run variables, nothing else of the daemon', () => {
     const env = childEnv(
-      { HOME: '/h', PATH: '/bin', ANTHROPIC_API_KEY: 'k', GH_TOKEN: 'g', LINEAR_API_KEY: 'lin', LINEAR_TOKEN: 'x', FACTORY_HOME: '/data', FACTORY_UI_PASSWORD: 'pw', FACTORY_SECRET: 's' },
+      {
+        HOME: '/h', PATH: '/bin', LANG: 'fr_FR.UTF-8', LC_ALL: 'C', TMPDIR: '/t', GIT_AUTHOR_NAME: 'n',
+        CLAUDE_CODE_OAUTH_TOKEN: 'c',
+        AWS_SECRET_ACCESS_KEY: 'a', GITHUB_TOKEN: 'gt', NPM_TOKEN: 'n', DATABASE_URL: 'postgres://u:p@h/d', ANTHROPIC_BASE_URL: 'https://gateway', SOME_DAEMON_VAR: 'v',
+        LINEAR_API_KEY: 'lin', LINEAR_TOKEN: 'x', FACTORY_HOME: '/data', FACTORY_UI_PASSWORD: 'pw', FACTORY_SECRET: 's',
+      },
       { FACTORY_API: 'http://127.0.0.1:4100/agent', FACTORY_RUN_TOKEN: 't', FACTORY_TICKET: 'REL-1', FACTORY_KNOWLEDGE: '', FACTORY_ROOT: '/app', PATH: '/app/bin:/bin' },
     );
     expect(env).toEqual({
-      HOME: '/h', PATH: '/app/bin:/bin', ANTHROPIC_API_KEY: 'k', GH_TOKEN: 'g',
+      HOME: '/h', PATH: '/app/bin:/bin', LANG: 'fr_FR.UTF-8', LC_ALL: 'C', TMPDIR: '/t', GIT_AUTHOR_NAME: 'n',
+      CLAUDE_CODE_OAUTH_TOKEN: 'c',
       FACTORY_API: 'http://127.0.0.1:4100/agent', FACTORY_RUN_TOKEN: 't', FACTORY_TICKET: 'REL-1', FACTORY_KNOWLEDGE: '', FACTORY_ROOT: '/app',
     });
+  });
+
+  it('keeps GH_TOKEN and ANTHROPIC_API_KEY on the host until the agents stop pushing (ORC-125) and the host runs go (ORC-179)', () => {
+    expect(childEnv({ GH_TOKEN: 'g', ANTHROPIC_API_KEY: 'k', SSH_AUTH_SOCK: '/s' }, {})).toEqual({ GH_TOKEN: 'g', ANTHROPIC_API_KEY: 'k', SSH_AUTH_SOCK: '/s' });
+  });
+
+  it('the chosen account replaces any other login of the daemon', () => {
+    expect(childEnv({ HOME: '/h', ANTHROPIC_API_KEY: 'k', CLAUDE_CODE_OAUTH_TOKEN: 'old' }, {}, 'chosen')).toEqual({ HOME: '/h', CLAUDE_CODE_OAUTH_TOKEN: 'chosen' });
   });
 
   it('drops variables left over from the old prefix', () => {

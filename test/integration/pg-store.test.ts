@@ -62,7 +62,7 @@ describe.skipIf(!url)('PgStore integration', () => {
     await db.drop();
   });
 
-  it('applies the migration to an empty database and creates exactly the twelve tables', async () => {
+  it('applies the migration to an empty database and creates exactly its tables', async () => {
     const migrations = await pool.query<{ n: number }>(
       `select count(*)::int as n from drizzle.__drizzle_migrations`,
     );

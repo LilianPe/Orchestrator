@@ -105,8 +105,8 @@ export class Worker {
   private failures = new Map<string, number>();
   private retryTimers = new Set<NodeJS.Timeout>();
   private readonly retry: { attempts: number; baseMs: number };
-  /** Rows that found another worker's row or effect first: retried at the next poll. */
-  private waited = new Map<string, string>();
+  /** Rows that found a row or an effect of their ticket first: retried at the next poll, or by `unwait`. */
+  private waited = new Map<string, StoredEvent>();
   private tasks = new Set<Promise<unknown>>();
   private pass: Promise<number> | undefined;
   private again = false;
@@ -267,8 +267,12 @@ export class Worker {
   private async drainTicket(ref: TicketRef, key: string): Promise<void> {
     for (;;) {
       const effects = await this.executor.runTicket(ref.projectId, ref.ticketId);
-      // Their results are in the inbox now: the next pass reads them.
-      if (effects.settled > 0) this.kickInBackground();
+      // Their results are in the inbox now: the next pass reads them. With no effect left open, the
+      // rows that found them unfinished go first, without waiting for a poll (ORC-290).
+      if (effects.settled > 0) {
+        if (effects.status === 'done' && !this.stopped) this.unwait(key);
+        this.kickInBackground();
+      }
       // Effects held (another worker's lease, a backoff): the next row still goes to the store, which
       // lets a stop of the ticket's work pass a backoff (ORC-150) and answers `waiting` otherwise.
       const row = this.queued.get(key)?.shift();
@@ -284,11 +288,11 @@ export class Worker {
     this.queued.delete(key);
   }
 
-  /** Another worker holds the ticket: its queued rows wait for the next poll. */
+  /** Something holds the ticket (another worker, an older row, an effect): its queued rows wait for the next poll, or for `unwait`. */
   private waitAll(key: string): void {
     for (const row of this.queued.get(key) ?? []) {
       this.queuedIds.delete(row.id);
-      this.waited.set(row.id, key);
+      this.waited.set(row.id, row);
     }
     this.queued.delete(key);
   }
@@ -318,7 +322,7 @@ export class Worker {
         return 'done';
       }
       if (outcome.status === 'waiting') {
-        this.waited.set(row.id, key);
+        this.waited.set(row.id, row);
         return outcome.backoff ? 'held' : 'waiting';
       }
       this.passed(row, key);
@@ -388,17 +392,19 @@ export class Worker {
   }
 
   /**
-   * A row of the ticket went through (a stop that cancelled a backoff, say): its rows that found it
-   * held are tried again now rather than at the next poll.
+   * A row of the ticket went through (a stop that cancelled a backoff, say), or its last open effect
+   * settled here: its rows that found it held are tried again now rather than at the next poll. They
+   * go at the head of its queue, ahead of the younger rows read while they were parked (ORC-290). Only
+   * from the ticket's own task: none of its rows is at the store now.
    */
   private unwait(key: string): void {
-    let any = false;
-    for (const [id, k] of this.waited) {
-      if (k !== key) continue;
-      this.waited.delete(id);
-      any = true;
+    const rows = [...this.waited.values()].filter((row) => ticketKey(row) === key);
+    if (rows.length === 0) return;
+    for (const row of rows) {
+      this.waited.delete(row.id);
+      this.queuedIds.add(row.id);
     }
-    if (any) this.kickInBackground();
+    this.queued.set(key, [...rows, ...(this.queued.get(key) ?? [])]);
   }
 
   /** No retry left for this row in this process: it waits for the next start. */

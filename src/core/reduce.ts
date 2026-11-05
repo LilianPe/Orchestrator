@@ -41,6 +41,8 @@ function external(t: TicketState, e: FactoryEvent): TicketState {
         activeJob: active ? undefined : t.activeJob,
       };
     }
+    case 'run.lost':
+      return t.activeRunId === e.payload.runId ? { ...t, activeRunId: undefined, activeJob: undefined } : t;
     case 'verify.passed':
     case 'verify.failed':
       return e.payload.runId === t.verifyingRunId ? { ...t, verifyingRunId: undefined } : t;
@@ -79,15 +81,14 @@ function internal(t: TicketState, e: InternalEvent): TicketState {
     case 'workspace.released':
       return { ...t, worktreePath: undefined, port: undefined };
     case 'run.started': {
-      const out = e.feedbackConsumed ? { ...t, pendingFeedback: [] } : { ...t };
-      if (e.queue !== 'dev') return out;
+      if (e.queue !== 'dev') return { ...t };
       const claudeSessionId = e.ticketSession === false ? t.claudeSessionId : (t.claudeSessionId ?? e.claudeSessionId);
-      return { ...out, activeRunId: e.runId, activeJob: e.job, claudeSessionId };
+      return { ...t, activeRunId: e.runId, activeJob: e.job, claudeSessionId };
     }
+    case 'feedback.consumed':
+      return { ...t, pendingFeedback: [] };
     case 'run.cleared':
       return { ...t, activeRunId: undefined, activeJob: undefined };
-    case 'run.interrupted':
-      return { ...t, activeRunId: undefined, activeJob: undefined, verifyingRunId: undefined, blocked: true, blockReason: e.reason };
   }
 }
 

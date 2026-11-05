@@ -15,9 +15,9 @@ Toutes les commandes `relais` lisent `RELAIS_HOME` (défaut `~/.relais`) et `con
 | `factory doctor [repo]` | Refuser un dépôt dont la CI peut exposer des secrets aux branches de l'usine. | non (GitHub App) |
 | `relais up [--fake-runner]` | Démarrer le démon. | — |
 | `relais plan` | Lister les tickets délégués et dire lesquels seraient pris. | non (Linear connecté) |
-| `relais status` | État de l'instance en cours. | oui |
+| `factory status` | État de l'instance en cours : tickets, blocages, runs. | oui |
 | `relais pause` / `relais resume` | Suspendre / reprendre la file. | oui |
-| `relais stop <ID>` | Arrêter le run d'un ticket. | oui |
+| `factory stop <ID>` | Arrêter le run d'un ticket. | oui |
 | `factory run repair <ID> [replay\|skip\|force] [<événement>]` | Lister ou réparer les événements mis de côté (dead-letter) d'un ticket. | non (lit et écrit la base) |
 
 Les commandes qui demandent le démon appellent `http://127.0.0.1:<port>/api/…` avec le `port` de `config.yaml`. Si `RELAIS_UI_PASSWORD` est défini dans votre shell, elles l'envoient en HTTP Basic (nécessaire quand le démon écoute hors bouclage). En Docker, lancez-les dans le conteneur : `docker compose exec relais node dist/src/cli/relais.js status`.
@@ -41,7 +41,7 @@ Les commandes qui demandent le démon appellent `http://127.0.0.1:<port>/api/…
 Démarre le démon au premier plan : serveur HTTP (interface, API, webhooks, OAuth), relais smee, minuteries, réconciliation Linear et GitHub toutes les 5 minutes par minuterie en base (relevé des PR toutes les 30 s si les webhooks GitHub sont refusés), réévaluation de la file toutes les minutes. Affiche `Relais tourne : <url>`.
 
 - Écrit `<RELAIS_HOME>/run-settings.json` (voir [`configuration.md`](configuration.md#ce-qui-ne-sort-pas-du-démon)).
-- Clôt les runs interrompus par un arrêt ou un crash précédent et bloque leurs tickets (voir [`exploitation.md`](exploitation.md#arrêt-redémarrage-et-runs-interrompus)).
+- Reprend ce qu'un arrêt ou un crash précédent a coupé, sans intervention humaine : se rattache aux conteneurs encore en vie, relance les autres étapes (voir [`exploitation.md`](exploitation.md#arrêt-redémarrage-et-runs-interrompus)).
 - Si Linear n'est pas connecté, journalise `Linear non connecté : ouvrez <url>/oauth/start`.
 - Si le secret de webhook manque dans `secrets.json`, journalise un avertissement : tous les webhooks seront refusés (401) tant qu'il n'est pas renseigné.
 - Refuse de démarrer si `host` n'est pas en bouclage et que `RELAIS_UI_PASSWORD` est vide.
@@ -81,21 +81,25 @@ REL-9  déjà géré  Refonte du menu (human_review)
 
 Exige que Linear soit connecté (`Linear non connecté : lancez relais up puis connectez Linear.` sinon).
 
-### `relais status`
+### `factory status`
 
 ```text
-Linear : connecté · file : active · places dev 1/3 · coût du jour 2.40 $
+Linear : connecté · file : active (0 en attente) · places dev 1/3 · coût du jour 2.40 $
   REL-12  dev  Ajouter l'export CSV
+    run 7f3a… : dev, depuis 12 min, 0.80 $
   REL-15  todo (bloqué)  Corriger le login
+    Arrêté à la demande
 ```
+
+Pour chaque ticket : son état, un contrôle en cours, la raison d'un blocage, et ses runs en cours avec ce qu'ils exécutent. `, bail expiré` suit un run que le battement de cœur ne tient plus (ORC-220). Démon injoignable ou mot de passe manquant : le dit, code de sortie 1.
 
 ### `relais pause` / `relais resume`
 
 `pause` : plus aucun run ne démarre ; les demandes s'accumulent dans la file. Les runs en cours continuent. L'état de pause est conservé dans `relais.db` et survit à un redémarrage. `resume` relance la file. Équivalent au bouton « Pause / Reprendre » de l'interface.
 
-### `relais stop <ID>`
+### `factory stop <ID>`
 
-Arrête le run du ticket `<ID>` (ex. `REL-12`) : SIGINT au processus Claude Code, puis SIGKILL après 10 s. Le ticket est bloqué jusqu'à une réponse dans le fil Linear ou le label `agent:reprendre`. Équivalent au bouton « Stop » de l'interface, au « stop » de la session Linear et au label `agent:stop`.
+Arrête le run du ticket `<ID>` (ex. `REL-12`) : SIGINT au processus Claude Code, puis SIGKILL après 10 s, et le conteneur est détruit ; un run auquel le démon s'est rattaché après un redémarrage s'arrête de même. Le ticket est bloqué jusqu'à une réponse dans le fil Linear ou le label `agent:reprendre`. Équivalent au bouton « Stop » de l'interface, au « stop » de la session Linear et au label `agent:stop`. Sans option : un ticket inconnu est refusé, code de sortie 1.
 
 ### `factory replay <journal.json | dossier>...` (ORC-174)
 

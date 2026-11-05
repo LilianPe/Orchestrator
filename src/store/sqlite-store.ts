@@ -27,6 +27,8 @@ import {
   type QueueClaim,
   type QueueItem,
   type RunRecord,
+  type SecurityLog,
+  type SecurityStats,
   type Store,
   type TimerRecord,
   type WorkflowVersion,
@@ -41,6 +43,7 @@ CREATE TABLE IF NOT EXISTS inbox (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT
 CREATE INDEX IF NOT EXISTS inbox_pending ON inbox (processed_at, seq);
 CREATE INDEX IF NOT EXISTS inbox_pending_ticket ON inbox (json_extract(data, '$.projectId'), json_extract(data, '$.ticketId'), seq) WHERE processed_at IS NULL;
 CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, status TEXT NOT NULL, token TEXT NOT NULL, started_at INTEGER NOT NULL, cost_usd REAL NOT NULL, data TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS runs_status ON runs (status);
 CREATE TABLE IF NOT EXISTS timers (key TEXT PRIMARY KEY, fire_at INTEGER NOT NULL, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS queue (project_id TEXT, ticket_id TEXT, job TEXT, queue TEXT NOT NULL, rank INTEGER NOT NULL, enqueued_at INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY (project_id, ticket_id, job));
 CREATE TABLE IF NOT EXISTS echoes (key TEXT PRIMARY KEY, until INTEGER NOT NULL);
@@ -52,6 +55,7 @@ CREATE TABLE IF NOT EXISTS workflow_versions (hash TEXT PRIMARY KEY, definition 
 CREATE TABLE IF NOT EXISTS decision_trace (event_id TEXT PRIMARY KEY, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS dead_letter (event_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, ticket_id TEXT, status TEXT NOT NULL, failures INTEGER NOT NULL, error TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, resolved_by TEXT, data TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS dead_letter_ticket ON dead_letter (ticket_id, status);
+CREATE TABLE IF NOT EXISTS security_logs (run_id TEXT PRIMARY KEY, data TEXT NOT NULL);
 `;
 
 interface DeadLetterSqlRow {
@@ -499,6 +503,10 @@ export class SqliteStore implements Store {
       .run(r.id, r.status, r.token, r.startedAt, r.costUsd, JSON.stringify(r));
   }
 
+  async renewRun(id: string, until: number): Promise<void> {
+    this.db.prepare(`UPDATE runs SET data = json_set(data, '$.leaseUntil', ?) WHERE id = ? AND status = 'running'`).run(until, id);
+  }
+
   async getRun(id: string): Promise<RunRecord | undefined> {
     const row = this.db.prepare('SELECT data FROM runs WHERE id = ?').get(id) as { data: string } | undefined;
     return row ? JSON.parse(row.data) : undefined;
@@ -665,6 +673,36 @@ export class SqliteStore implements Store {
       )
       .get(projectId, sha, sha) as { ticket_id: string; number: number } | undefined;
     return row && { ticketId: row.ticket_id, number: Number(row.number) };
+  }
+
+  async putSecurityLog(log: SecurityLog): Promise<boolean> {
+    const res = this.db.prepare('INSERT INTO security_logs (run_id, data) VALUES (?, ?) ON CONFLICT DO NOTHING').run(log.runId, JSON.stringify(log));
+    return Number(res.changes) === 1;
+  }
+
+  async securityLog(runId: string): Promise<SecurityLog | undefined> {
+    const row = this.db.prepare('SELECT data FROM security_logs WHERE run_id = ?').get(runId) as { data: string } | undefined;
+    return row && (JSON.parse(row.data) as SecurityLog);
+  }
+
+  // ponytail: every log read and counted in memory; SQLite is kept until ORC-178, Postgres counts in SQL.
+  async securityStats(since: number, until: number): Promise<SecurityStats> {
+    const logs = (this.db.prepare('SELECT data FROM security_logs').all() as { data: string }[]).map((r) => JSON.parse(r.data) as SecurityLog);
+    const inPeriod = <T extends { at: number }>(xs: T[]) => xs.filter((x) => x.at >= since && x.at < until);
+    const hosts = new Map<string, { host: string; requests: number; refused: number }>();
+    const rules = new Map<string, { rule: string; refusals: number }>();
+    for (const log of logs) {
+      for (const e of inPeriod(log.egress)) {
+        const h = hosts.get(e.host) ?? hosts.set(e.host, { host: e.host, requests: 0, refused: 0 }).get(e.host)!;
+        h.requests++;
+        if (!e.ok) h.refused++;
+      }
+      for (const r of inPeriod(log.refusals)) (rules.get(r.rule) ?? rules.set(r.rule, { rule: r.rule, refusals: 0 }).get(r.rule)!).refusals++;
+    }
+    return {
+      hosts: [...hosts.values()].sort((a, b) => b.requests - a.requests || a.host.localeCompare(b.host)),
+      rules: [...rules.values()].sort((a, b) => b.refusals - a.refusals || a.rule.localeCompare(b.rule)),
+    };
   }
 
   async getMeta(key: string): Promise<string | undefined> {

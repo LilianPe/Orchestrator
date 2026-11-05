@@ -35,7 +35,8 @@ Les dépôts sous `repos/` doivent avoir un remote **HTTPS** (`https://github.co
 
 | Variable | Obligatoire | Rôle |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | oui | Authentification de Claude Code. |
+| `CLAUDE_TOKEN_1`, `CLAUDE_TOKEN_2` | l'un de ces moyens | Jetons des comptes Claude Code, lus par `factory.yml` (`token: env:CLAUDE_TOKEN_1`) ; le compte `claude.active` est le seul identifiant des runs. |
+| `ANTHROPIC_API_KEY` | l'un de ces moyens | Authentification de Claude Code sans compte actif, pour les runs de ce conteneur, qui tournent encore à côté du démon (jusqu'à ORC-179). Compose ne la réclame plus : sans aucun des deux, les runs échouent à l'authentification. |
 | `GH_TOKEN` | oui | `gh` et push HTTPS. Droits : [`github.md`](github.md#permissions-nécessaires). |
 | `RELAIS_UI_PASSWORD` | oui | Mot de passe de l'interface (le conteneur écoute hors bouclage). |
 | `GH_WEBHOOK_SECRET` | non | Secret des webhooks GitHub (`<publicUrl>/webhooks/github`) quand `github.webhookSecret` n'est pas dans `config.yaml`. Absent : webhooks GitHub refusés, le relevé des PR suit seul ([`github.md`](github.md#webhooks-github)). |
@@ -117,7 +118,7 @@ Adaptez `PATH` à l'emplacement réel de `node` (nvm, fnm…), `claude` et `gh` 
 
 Laissez au moins 15 s au démon pour s'arrêter (Docker en laisse 10 par défaut : `docker compose stop -t 30` ou `stop_grace_period: 30s` dans `compose.yaml`).
 
-Au démarrage suivant, Relais reprend la main sur ce qui a été coupé (par un arrêt ou un crash) ; détails dans [`exploitation.md`](exploitation.md#arrêt-redémarrage-et-runs-interrompus). Les demandes en file, les minuteries (retours regroupés) et l'état de pause sont conservés dans `relais.db`.
+Au démarrage suivant, Relais reprend seul ce qui a été coupé (par un arrêt ou un crash) : aucun ticket n'est bloqué pour autant ; détails dans [`exploitation.md`](exploitation.md#arrêt-redémarrage-et-runs-interrompus). Les demandes en file, les minuteries (retours regroupés) et l'état de pause sont conservés dans `relais.db`.
 
 ## Mise à jour
 
