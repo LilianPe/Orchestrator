@@ -39,7 +39,7 @@ import type { EventBus } from './bus.js';
 import type { Clock } from './clock.js';
 import type { Effect } from './decision.js';
 import { NO_PLAN, planDecision } from './decision-plan.js';
-import { blockedLabelChange, HUMAN_EVENTS, mayCheck, RECONCILE_MS, reconcileTicket, refusesDevWork, sensitivePathsAtLaunch, taintedKnowledge } from './engine.js';
+import { blockedLabelChange, goesThroughFreeze, HUMAN_EVENTS, mayCheck, RECONCILE_MS, reconcileTicket, refusesDevWork, sensitivePathsAtLaunch, taintedKnowledge } from './engine.js';
 import { attemptLabels, packFingerprints } from './attempt-labels.js';
 import { pickupFailures } from './pickup.js';
 import { buildPrompt, formatFeedback, formatVerifyFailures, readConventions } from './prompt.js';
@@ -63,7 +63,7 @@ import {
 import { VERIFY_TIMEOUT_MS, type Verifier } from './verify.js';
 import { PRODUCT_NAME } from '../product.js';
 import { checkRed, type RedDeps, type RedResult } from '../checks/red.js';
-import { checkFrozen, FREEZE_CHECK, freezeTests, REFREEZE, type FrozenTests } from '../checks/freeze.js';
+import { checkFrozen, FREEZE_CHECK, freezeTests, newTestsOnly, REFREEZE, type FrozenTests } from '../checks/freeze.js';
 import { isTestFile } from '../checks/test-files.js';
 import { parseStatus } from '../adapters/workspace/git-workspaces.js';
 import type { ExecResult } from '../adapters/exec.js';
@@ -519,7 +519,7 @@ export class Orchestrator {
    * factory's repository; its uncommitted files and its tests run in a sandbox of their own without network, on the
    * host as `verify` without sandboxes. A check that cannot run gives no verdict on the tests: `infra`.
    */
-  private async checkRed(project: ProjectRuntime, run: RunRecord, command: string): Promise<RedResult & { frozen?: FrozenTests }> {
+  private async checkRed(project: ProjectRuntime, run: RunRecord, command: string, alreadyFrozen: boolean): Promise<RedResult & { frozen?: FrozenTests }> {
     const sandboxes = this.d.sandboxes;
     const redRunId = `${run.id}-red`;
     let sandbox: Sandbox | undefined;
@@ -551,7 +551,8 @@ export class Orchestrator {
       // The freeze (ORC-131) on the same commit: the step's tests and the harness, whatever the red's verdict.
       // ponytail: committed files only; a test left uncommitted is not frozen (verify reads commits once ORC-151 lands).
       const tests = diff.changed.filter((f) => !f.deleted && isTestFile(f.path)).map((f) => f.path);
-      return { ...red, frozen: await freezeTests(tests, diff) };
+      const read = await freezeTests(tests, diff);
+      return { ...red, frozen: alreadyFrozen ? newTestsOnly(read) : read };
     } catch (err) {
       return { verified: false, cause: 'infra', command: '', exitCode: null, detail: `Le contrôle du rouge n'a pas pu tourner : ${(err as Error).message}` };
     } finally {
@@ -563,13 +564,13 @@ export class Orchestrator {
    * `factory/tests-gelés` on a worktree's head (ORC-131): the commits since the freeze, read on the factory's repository.
    * A check that cannot read them fails: the freeze never opens on a breakdown.
    */
-  private async checkFrozen(project: ProjectRuntime, cwd: string, frozen: FrozenTests): Promise<{ ok: boolean; failures: VerifyFailure[] }> {
-    const fail = (output: string) => ({ ok: false, failures: [{ command: FREEZE_CHECK, exitCode: 1, output }] });
+  private async checkFrozen(project: ProjectRuntime, cwd: string, frozen: FrozenTests): Promise<VerifyFailure[]> {
+    const fail = (output: string) => [{ command: FREEZE_CHECK, exitCode: 1, output }];
     try {
       const diff = await this.d.workspaces.stepDiff(project.repoPath, cwd, frozen.sha);
       if (!diff) return fail(`Le contrôle du gel n'a pas pu tourner : aucun worktree à ${cwd}.`);
       const r = await checkFrozen(frozen, diff);
-      return r.ok ? { ok: true, failures: [] } : fail(r.summary);
+      return r.ok ? [] : fail(r.summary);
     } catch (err) {
       return fail(`Le contrôle du gel n'a pas pu tourner : ${(err as Error).message}`);
     }
@@ -577,17 +578,17 @@ export class Orchestrator {
 
   /**
    * A `/refreeze` gets the freeze at its ticket's branch head before its decision (ORC-131), as roles are resolved:
-   * `decide` stays pure and a replay regels the same files. The files frozen before, and the harness. No worktree, none.
+   * `decide` stays pure and a replay regels the same files. The files frozen before, and the harness. No freeze or no
+   * worktree, none: it is the way out of a freeze, not a way in. The head alone: the frozen commit may be gone after a rebase.
    */
   private async withFreeze(event: FactoryEvent): Promise<FactoryEvent> {
     if (event.type !== 'command' || event.payload.name !== REFREEZE || event.payload.frozen || !event.ticketId) return event;
     const t = await this.d.store.getTicket(event.projectId, event.ticketId);
-    if (!t?.worktreePath) return event;
-    const old = t.frozenTests;
-    const base = old?.sha ?? (await this.d.workspaces.head(t.worktreePath));
-    const diff = base ? await this.d.workspaces.stepDiff(this.project(event.projectId).repoPath, t.worktreePath, base) : undefined;
+    if (!t?.worktreePath || !t.frozenTests) return event;
+    const head = await this.d.workspaces.head(t.worktreePath);
+    const diff = head ? await this.d.workspaces.stepDiff(this.project(event.projectId).repoPath, t.worktreePath, head) : undefined;
     if (!diff) return event;
-    return { ...event, payload: { ...event.payload, frozen: await freezeTests(Object.keys(old?.files ?? {}), diff) } };
+    return { ...event, payload: { ...event.payload, frozen: await freezeTests(Object.keys(t.frozenTests.files), diff) } };
   }
 
   /**
@@ -981,20 +982,21 @@ export class Orchestrator {
         this.track(
           (async () => {
             if (job.red) {
-              const red = await this.checkRed(project, run, job.red.command);
+              const red = await this.checkRed(project, run, job.red.command, !!t.frozenTests);
               const base = { ...TRUSTED, at: clock.now(), projectId: project.id, ticketId, id: `check:${run.id}` };
               const failures = [{ command: red.command || 'factory/red', exitCode: red.exitCode, output: red.detail }];
+              const common = { runId: run.id, job: job.name, red: red.cause, ...(red.frozen ? { frozen: red.frozen } : {}) };
               await this.submitResult(
                 red.verified
-                  ? { ...base, type: 'verify.passed', payload: { runId: run.id, job: job.name, red: red.cause, ...(c.output ? { output: c.output } : {}), ...(red.frozen ? { frozen: red.frozen } : {}) } }
-                  : { ...base, type: 'verify.failed', payload: { runId: run.id, job: job.name, failures, red: red.cause, ...(red.frozen ? { frozen: red.frozen } : {}) } },
+                  ? { ...base, type: 'verify.passed', payload: { ...common, ...(c.output ? { output: c.output } : {}) } }
+                  : { ...base, type: 'verify.failed', payload: { ...common, failures } },
               );
               return;
             }
             const verified = job.verify.length > 0 ? await this.d.verify(run.cwd, job.verify) : { ok: true, failures: [] };
             // `factory/tests-gelés` (ORC-131), blocking from the first ticket, on top of the job's commands.
-            const frozen = t.frozenTests && job.workspace === 'worktree' ? await this.checkFrozen(project, run.cwd, t.frozenTests) : undefined;
-            const res = frozen ? { ...verified, ok: verified.ok && frozen.ok, failures: [...verified.failures, ...frozen.failures] } : verified;
+            const frozen = goesThroughFreeze(t, job) ? await this.checkFrozen(project, run.cwd, t.frozenTests!) : [];
+            const res = { ...verified, ok: verified.ok && frozen.length === 0, failures: [...verified.failures, ...frozen] };
             const base = { ...TRUSTED, at: clock.now(), projectId: project.id, ticketId };
             const event: FactoryEvent = res.ok
               ? { ...base, id: `check:${run.id}`, type: 'verify.passed', payload: { runId: run.id, job: job.name, ...(c.output ? { output: c.output } : {}) } }

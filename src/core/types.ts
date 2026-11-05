@@ -149,7 +149,7 @@ export interface EventPayloads {
   'label.changed': { label: string; change: 'added' | 'removed' };
   /** A commit pushed by a human on the ticket's branch. */
   'push.human': { branch: string; sha: string; author: string };
-  /** `frozen`: for a `/refreeze`, the freeze at the branch's head, read before the decision (ORC-131); absent without a branch. */
+  /** `frozen`: for a `/refreeze`, the freeze at the branch's head, read before the decision (ORC-131); absent without a freeze or a branch. */
   command: { name: string; body: string; linearSessionId: string; author: string; issue?: IssueSnapshot; frozen?: FrozenTests };
   'pr.opened': PrPayload;
   'pr.checks_passed': PrPayload;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { checkFrozen, fingerprint, FREEZE_CHECK, freezeTests, isFrozenHarness, type FreezeView } from './freeze.js';
+import { checkFrozen, fingerprint, FREEZE_CHECK, freezeTests, isFrozenHarness, newTestsOnly, type FreezeView } from './freeze.js';
 
 const TEST = "import { expect, it } from 'vitest';\nit('exports', () => expect(toCsv([])).toBe(''));\n";
 const PKG = JSON.stringify({ name: 'app', scripts: { test: 'vitest run', build: 'tsc' } });
@@ -37,6 +37,16 @@ async function after(changes: Record<string, string | undefined>) {
 }
 
 describe('freezeTests (ORC-131)', () => {
+  it('throws on a file of the commit it cannot read: a breakdown never leaves it out of the freeze', async () => {
+    const broken: FreezeView = { ...view('sha-1', AT_FREEZE), showAtHead: async (p) => (p === 'src/export.test.ts' ? undefined : AT_FREEZE[p as keyof typeof AT_FREEZE]) };
+    await expect(freezeTests(['src/export.test.ts'], broken)).rejects.toThrow('src/export.test.ts');
+  });
+
+  it('leaves out a file frozen before and deleted since: a /refreeze takes it out', async () => {
+    const { files } = await freezeTests(['src/gone.test.ts'], view('sha-1', AT_FREEZE));
+    expect(files).not.toHaveProperty(['src/gone.test.ts']);
+  });
+
   it('fingerprints the tests of the step and the harness at the head, nothing else', async () => {
     const f = await frozen();
     expect(f.sha).toBe('sha-1');
@@ -46,6 +56,13 @@ describe('freezeTests (ORC-131)', () => {
   it('a package.json without a test script, a pyproject.toml without pytest are not frozen', async () => {
     const f = await freezeTests([], view('s', { 'package.json': '{"name":"x"}', 'pyproject.toml': '[project]\nname = "x"\n' }));
     expect(f.files).toEqual({});
+  });
+});
+
+describe('newTestsOnly (ORC-131)', () => {
+  it('keeps the tests of a later step, not the harness, a conftest.py under a test directory included', () => {
+    const read = { sha: 's', files: { 'src/new.test.ts': 'a', 'jest.config.js': 'b', 'tests/conftest.py': 'c', 'package.json': 'd' } };
+    expect(newTestsOnly(read)).toEqual({ sha: 's', files: { 'src/new.test.ts': 'a' } });
   });
 });
 

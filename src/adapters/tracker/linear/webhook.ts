@@ -90,22 +90,32 @@ export function signedActor(body: any): SignedActor {
   return id ? { id, taint: 'trusted', name: name ?? 'Humain' } : { taint: 'untrusted', name: name ?? 'Humain' };
 }
 
+/** The first word of a comment, without its mention, as a command's name, and the rest as its body. */
+function parseCommand(text: string): { name: string; body: string } {
+  const [first = '', ...rest] = text.split(/\s+/);
+  return { name: first.toLowerCase(), body: rest.join(' ') };
+}
+
 function sessionEvents(body: any, author: string, projectId: string, ctx: MapContext): PartialEvent[] {
   const sessionId: string = body.agentSession.id;
   if (body.action === 'created') {
     const comment = body.agentSession.comment;
     if (!comment) return [{ type: 'ticket.delegated', payload: { linearSessionId: sessionId, promptContext: body.promptContext } }];
     const text = stripMention(comment.body ?? '');
-    const [first = '', ...rest] = text.split(/\s+/);
+    const command = parseCommand(text);
     // `/refreeze` is the factory's own (ORC-131), not a workflow rule's.
-    if ([REFREEZE, ...ctx.commands(projectId)].includes(first.toLowerCase())) {
-      return [{ type: 'command', payload: { name: first.toLowerCase(), body: rest.join(' '), linearSessionId: sessionId, author } }];
+    if ([REFREEZE, ...ctx.commands(projectId)].includes(command.name)) {
+      return [{ type: 'command', payload: { ...command, linearSessionId: sessionId, author } }];
     }
     return [{ type: 'session.mentioned', payload: { linearSessionId: sessionId, body: text, author } }];
   }
   if (body.action === 'prompted') {
     if (body.agentActivity?.signal === 'stop') return [{ type: 'session.stopped', payload: { linearSessionId: sessionId } }];
-    return [{ type: 'session.prompted', payload: { linearSessionId: sessionId, body: body.agentActivity?.content?.body ?? '', author } }];
+    const reply: string = body.agentActivity?.content?.body ?? '';
+    // A blocked ticket's thread asks for a reply: `/refreeze` there is the command, not feedback that relaunches the agent.
+    const command = parseCommand(stripMention(reply));
+    if (command.name === REFREEZE) return [{ type: 'command', payload: { ...command, linearSessionId: sessionId, author } }];
+    return [{ type: 'session.prompted', payload: { linearSessionId: sessionId, body: reply, author } }];
   }
   return [];
 }

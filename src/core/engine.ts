@@ -77,12 +77,17 @@ function redFailed(out: Decision, at: { event: FactoryEvent<'verify.failed'>; ti
 
 /**
  * Records the freeze read after `red` (ORC-131), once the run goes on to the build. A freeze already there keeps its
- * commit and fingerprints, new files are added: only a maintainer's `/refreeze` takes a file out of the freeze (I3).
+ * commit and fingerprints, the new files are added: only a maintainer's `/refreeze` takes a file out of the freeze (I3).
  */
 function freeze(out: Decision, ticket: TicketState | undefined, frozen: FrozenTests | undefined): void {
   if (!frozen) return;
   const old = ticket?.frozenTests;
   out.events.push({ type: 'ticket.patched', patch: { frozenTests: old ? { sha: old.sha, files: { ...frozen.files, ...old.files } } : frozen } });
+}
+
+/** A run in the ticket's worktree goes through `factory/tests-gelés` once frozen (ORC-131), verify commands or not. */
+export function goesThroughFreeze(ticket: TicketState | undefined, job: JobSpec): boolean {
+  return !!ticket?.frozenTests && job.workspace === 'worktree';
 }
 
 /**
@@ -94,7 +99,7 @@ function refreeze(out: Decision, event: FactoryEvent<'command'>, ticket: TicketS
   const { frozen, linearSessionId } = event.payload;
   const answer = (body: string) => out.effects.push({ kind: 'activity', type: 'response', body, linearSessionId });
   if (!frozen) {
-    answer("Rien à regeler : ce ticket n'a pas de branche de travail.");
+    answer("Rien à regeler : ce ticket n'a pas de gel ou pas de branche de travail.");
     return out;
   }
   const count = Object.keys(frozen.files).length;
@@ -619,9 +624,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       if (typeof outcome === 'object') return ticket?.blocked ? out : block(out, outcome.reason, outcome.body);
       if (outcome === 'success' && ticket?.blocked && job.queue === 'dev') return out;
       if (outcome === 'success') {
-        // Frozen tests (ORC-131): a run in the ticket's worktree goes through `factory/tests-gelés`, verify commands or not.
-        const frozen = !!ticket?.frozenTests && job.workspace === 'worktree';
-        if (job.verify.length === 0 && !job.red && !frozen) return success(out, { event, ticket, workflow }, job, runId, output);
+        if (job.verify.length === 0 && !job.red && !goesThroughFreeze(ticket, job)) return success(out, { event, ticket, workflow }, job, runId, output);
         out.events.push({ type: 'verify.started', runId });
         out.effects.push({ kind: 'run_verify', runId, job: jobName, ...(output ? { output } : {}) });
         return out;

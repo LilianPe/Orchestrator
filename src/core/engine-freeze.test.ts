@@ -66,7 +66,7 @@ describe('decide — the freeze of the tests (ORC-131)', () => {
     }
   });
 
-  it('/refreeze without a branch to read answers so, and changes nothing', () => {
+  it('/refreeze with no freeze or no branch to read answers so, and changes nothing', () => {
     const out = decide(ticket(), refreeze(undefined, { actor: 'u-lead', roles: ['maintainer'] }), workflow);
     expect(out.events).toEqual([]);
     expect(out.effects).toEqual([{ kind: 'activity', type: 'response', linearSessionId: 's-q', body: expect.stringMatching(/^Rien à regeler/) }]);

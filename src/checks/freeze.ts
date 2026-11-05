@@ -61,16 +61,30 @@ export function fingerprint(path: string, content: string): string | undefined {
   return sha256(content);
 }
 
-/** The freeze at `view.head`: the step's `tests`, and every harness file of the commit. */
+/**
+ * The freeze at `view.head`: the step's `tests`, and every harness file of the commit. A path the commit does not have
+ * is left out (frozen before and deleted since); one it has but that cannot be read throws: a breakdown opens no freeze.
+ */
 export async function freezeTests(tests: readonly string[], view: FreezeView): Promise<FrozenTests> {
-  const paths = new Set([...tests.map(normalizePath), ...(await view.filesAtHead()).filter(isFrozenHarness).map(normalizePath)]);
+  const atHead = (await view.filesAtHead()).map(normalizePath);
+  const listed = new Set(atHead);
+  const paths = new Set([...tests.map(normalizePath), ...atHead.filter(isFrozenHarness)]);
   const files: Record<string, string> = {};
-  for (const path of [...paths].sort()) {
+  for (const path of paths) {
     const content = await view.showAtHead(path);
+    if (content === undefined && listed.has(path)) throw new Error(`${path} est illisible au commit ${view.head}`);
     const print = content === undefined ? undefined : fingerprint(path, content);
     if (print !== undefined) files[path] = print;
   }
   return { sha: view.head, files };
+}
+
+/**
+ * What a later `tests` step adds to a freeze already there: its tests, never the harness. A harness file added since the
+ * first freeze stays out, and `checkFrozen` keeps failing on it: only a `/refreeze` takes it in.
+ */
+export function newTestsOnly(read: FrozenTests): FrozenTests {
+  return { sha: read.sha, files: Object.fromEntries(Object.entries(read.files).filter(([path]) => !isFrozenHarness(path))) };
 }
 
 /** `factory/tests-gelés` on `view.head`: every frozen file the commits since the freeze changed, and every harness file they added. */

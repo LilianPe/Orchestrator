@@ -110,7 +110,7 @@ Chaque action humaine est vérifiée sur l'**acteur signé** du webhook (l'id Li
 | Déclencher l'agent | Membre de l'équipe Linear **et** droit d'écriture GitHub sur le dépôt | Linear | délégation, mention `@relais`, commande ; changement de statut ou label qui lance un run sur un ticket non bloqué |
 | Répondre à l'agent (`clarify`), lui poser une question | Demandeur (qui a délégué le ticket) **ou** membre de l'équipe | session Linear | réponse dans la session du ticket, question dans une session de question |
 | Valider la spec | Valideur désigné, **jamais** l'initiateur du run | session Linear | rien encore : vient avec `spec_review` (ORC-212) |
-| Regeler (`/refreeze`) | Mainteneur désigné | Linear ou PR | commande `/refreeze` en mentionnant l'agent dans le ticket (ORC-131), refusée aussi sans rôles résolus ; pas encore depuis la PR |
+| Regeler (`/refreeze`) | Mainteneur désigné | Linear ou PR | commande `/refreeze` en mentionnant l'agent dans le ticket ou en répondant dans sa session (ORC-131), refusée aussi sans rôles résolus ; pas encore depuis la PR |
 | Relancer un run bloqué | Membre de l'équipe | Linear (label ou réponse dans la session) | réponse dans la session, `agent:reprendre`, changement de statut qui lance un run, sur un ticket bloqué |
 | Passer en *Done* (merge) | Droit de merge GitHub | Linear | aucun merge, refus répondu dans le ticket, retour en *Human Review* (ORC-148) |
 
