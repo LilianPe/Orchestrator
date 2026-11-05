@@ -1,5 +1,7 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
-import { labelEchoKey } from '../types.js';
+import { REFREEZE } from '../../../checks/freeze.js';
+import { labelEchoKey, stateEchoKey } from '../types.js';
+import { labelChanges, type KnownLabels } from './labels.js';
 import { SCHEMA_VERSION, type LogicalState, type FactoryEvent, type Taint } from '../../../core/types.js';
 
 export function isUsableWebhookSecret(secret: unknown): boolean {
@@ -30,6 +32,10 @@ export interface MapContext {
   isEcho(key: string): boolean | Promise<boolean>;
   commands(projectId: string): string[];
   now(): number;
+  /** The ticket's labels as the factory last read them, and when (ORC-185); undefined when it never did. */
+  knownLabels?(projectId: string, identifier: string): Promise<KnownLabels | undefined>;
+  /** Records the ticket's labels as known at `at` (an issue's `updatedAt`), once the webhook's events are in the inbox. */
+  recordLabels?(projectId: string, identifier: string, labels: string[], at: number): Promise<void>;
 }
 
 export function stripMention(body: string): string {
@@ -84,21 +90,32 @@ export function signedActor(body: any): SignedActor {
   return id ? { id, taint: 'trusted', name: name ?? 'Humain' } : { taint: 'untrusted', name: name ?? 'Humain' };
 }
 
+/** The first word of a comment, without its mention, as a command's name, and the rest as its body. */
+function parseCommand(text: string): { name: string; body: string } {
+  const [first = '', ...rest] = text.split(/\s+/);
+  return { name: first.toLowerCase(), body: rest.join(' ') };
+}
+
 function sessionEvents(body: any, author: string, projectId: string, ctx: MapContext): PartialEvent[] {
   const sessionId: string = body.agentSession.id;
   if (body.action === 'created') {
     const comment = body.agentSession.comment;
     if (!comment) return [{ type: 'ticket.delegated', payload: { linearSessionId: sessionId, promptContext: body.promptContext } }];
     const text = stripMention(comment.body ?? '');
-    const [first = '', ...rest] = text.split(/\s+/);
-    if (ctx.commands(projectId).includes(first.toLowerCase())) {
-      return [{ type: 'command', payload: { name: first.toLowerCase(), body: rest.join(' '), linearSessionId: sessionId, author } }];
+    const command = parseCommand(text);
+    // `/refreeze` is the factory's own (ORC-131), not a workflow rule's.
+    if ([REFREEZE, ...ctx.commands(projectId)].includes(command.name)) {
+      return [{ type: 'command', payload: { ...command, linearSessionId: sessionId, author } }];
     }
     return [{ type: 'session.mentioned', payload: { linearSessionId: sessionId, body: text, author } }];
   }
   if (body.action === 'prompted') {
     if (body.agentActivity?.signal === 'stop') return [{ type: 'session.stopped', payload: { linearSessionId: sessionId } }];
-    return [{ type: 'session.prompted', payload: { linearSessionId: sessionId, body: body.agentActivity?.content?.body ?? '', author } }];
+    const reply: string = body.agentActivity?.content?.body ?? '';
+    // A blocked ticket's thread asks for a reply: `/refreeze` there is the command, not feedback that relaunches the agent.
+    const command = parseCommand(stripMention(reply));
+    if (command.name === REFREEZE) return [{ type: 'command', payload: { ...command, linearSessionId: sessionId, author } }];
+    return [{ type: 'session.prompted', payload: { linearSessionId: sessionId, body: reply, author } }];
   }
   return [];
 }
@@ -111,7 +128,7 @@ async function issueEvents(body: any, identifier: string, teamKey: string, proje
   if (from.stateId !== undefined) {
     const toName: string | undefined = data.state?.name ?? ctx.stateNameById(teamKey, data.stateId);
     const fromName = ctx.stateNameById(teamKey, from.stateId);
-    if (toName && !(await ctx.isEcho(`state:${identifier}:${toName}`))) {
+    if (toName && !(await ctx.isEcho(stateEchoKey(identifier, toName)))) {
       out.push({
         type: 'status.changed',
         payload: {
@@ -123,20 +140,55 @@ async function issueEvents(body: any, identifier: string, teamKey: string, proje
     }
   }
   if (Array.isArray(from.labelIds) && Array.isArray(data.labelIds)) {
-    const before = from.labelIds as string[];
-    const after = data.labelIds as string[];
-    const changes = [
-      ...after.filter((id) => !before.includes(id)).map((id) => ({ id, change: 'added' as const })),
-      ...before.filter((id) => !after.includes(id)).map((id) => ({ id, change: 'removed' as const })),
-    ];
+    const changes = labelChanges(from.labelIds as string[], data.labelIds as string[]).map(({ label: id, change }) => ({ id, change }));
+    // A change the factory already knows was caught up by the reconciliation first (ORC-185).
+    const known = changes.length ? await ctx.knownLabels?.(projectId, identifier) : undefined;
     for (const { id, change } of changes) {
       const name = ctx.labelNameById(teamKey, id);
+      if (name && known && known.labels.includes(name) === (change === 'added')) continue;
       if (name && !(await ctx.isEcho(labelEchoKey(identifier, name, change)))) {
         out.push({ type: 'label.changed', payload: { label: name, change }, suffix: `:label:${id}` });
       }
     }
   }
   return out;
+}
+
+function issueIdentifier(body: any): string | undefined {
+  if (body?.type === 'AgentSessionEvent') return body.agentSession?.issue?.identifier;
+  if (body?.type === 'Issue') return body.data?.identifier ?? (body.data?.team?.key ? `${body.data.team.key}-${body.data.number}` : undefined);
+  return undefined;
+}
+
+/**
+ * Applies an issue webhook's own label changes to the labels the factory knows (ORC-185), the factory's
+ * own echoes included: what the reconciliation compares Linear with. A label the team's cache cannot
+ * name is left out; nothing is recorded for a ticket never read yet.
+ */
+export async function recordIssueLabels(body: any, ctx: MapContext): Promise<void> {
+  if (body?.type !== 'Issue' || body.action !== 'update' || !ctx.recordLabels || !ctx.knownLabels) return;
+  // Only the webhook's own label changes: its full label list may hold one whose webhook was lost, which
+  // the reconciliation must still report (a description edit carries every label too).
+  const from = body.updatedFrom?.labelIds;
+  if (!Array.isArray(from) || !Array.isArray(body.data?.labelIds)) return;
+  const identifier = issueIdentifier(body);
+  if (!identifier) return;
+  const teamKey = identifier.split('-')[0]!;
+  const projectId = ctx.projectIdForTeam(teamKey);
+  const at = Date.parse(body.data.updatedAt);
+  if (!projectId || !Number.isFinite(at)) return;
+  // Never read yet: the reconciliation's first pass records them.
+  const known = await ctx.knownLabels(projectId, identifier);
+  if (!known) return;
+  const next = new Set(known.labels);
+  for (const { label: id, change } of labelChanges(from as string[], body.data.labelIds as string[])) {
+    const name = ctx.labelNameById(teamKey, id);
+    if (!name) continue;
+    if (change === 'added') next.add(name);
+    else next.delete(name);
+  }
+  // A webhook come late still adds what it reported, at the newer date: dropped, its change would be reported again.
+  await ctx.recordLabels(projectId, identifier, [...next], Math.max(at, known.at));
 }
 
 // Linear-Delivery is outside the HMAC: the dedup key must come from the signed body.
@@ -151,9 +203,7 @@ export function deliveryKey(body: any): string {
 }
 
 export async function mapLinearWebhook(body: any, key: string, ctx: MapContext): Promise<FactoryEvent[]> {
-  let identifier: string | undefined;
-  if (body?.type === 'AgentSessionEvent') identifier = body.agentSession?.issue?.identifier;
-  else if (body?.type === 'Issue') identifier = body.data?.identifier ?? (body.data?.team?.key ? `${body.data.team.key}-${body.data.number}` : undefined);
+  const identifier = issueIdentifier(body);
   if (!identifier) return [];
   const teamKey = identifier.split('-')[0]!;
   const projectId = ctx.projectIdForTeam(teamKey);

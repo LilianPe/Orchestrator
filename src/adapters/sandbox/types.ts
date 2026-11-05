@@ -53,20 +53,32 @@ export interface SandboxExecOptions {
   env?: Record<string, string>;
 }
 
+export interface SpawnCommand {
+  /** `[cmd, ...args]`. */
+  command: string[];
+  /** What the host process needs in its environment, on top of its own. */
+  env: Record<string, string>;
+}
+
 export interface SandboxProvider {
   /** A live sandbox for `req.runId`; replayed for the same run, it returns that sandbox. Rejects when no backend satisfies `req.requirements`. */
   create(req: SandboxRequest): Promise<Sandbox>;
   /** Runs `argv` in the sandbox to completion. Rejects on an unknown sandbox; a non-zero exit is a result, not a rejection. */
   exec(id: string, argv: readonly string[], opts?: SandboxExecOptions): Promise<ExecResult>;
   /**
-   * The host command (`[cmd, ...args]`) that runs `argv` in the sandbox with stdio attached, for a
-   * runner that streams its output (`ClaudeCodeRunner`). Throws on an unknown sandbox. `opts.env`
-   * values never appear in the command: it names the variables (`-e NAME`), and the caller spawns it
-   * with them in its environment, so no secret shows in the host's process list.
+   * The host command that runs `argv` in the sandbox with stdio attached, for a runner that streams its
+   * output (`ClaudeCodeRunner`). Throws on an unknown sandbox. `opts.env` values never appear in the
+   * command, so no secret shows in the host's process list. The caller spawns it with `env` added to its
+   * own environment: that, not `opts.env`, is what the host process may see.
    */
-  spawnCommand(id: string, argv: readonly string[], opts?: SandboxExecOptions): string[];
+  spawnCommand(id: string, argv: readonly string[], opts?: SandboxExecOptions): SpawnCommand;
   /** The live sandbox of an attempt, by its label; none once destroyed. */
   findByAttempt(runId: string): Promise<Sandbox | undefined>;
+  /**
+   * The live sandbox of an attempt started by an earlier process (ORC-220), made usable from this one:
+   * its egress listens again. Undefined when none runs: the supervisor then starts the step again.
+   */
+  reattach(runId: string): Promise<Sandbox | undefined>;
   /** Every live sandbox this provider made (by label), for recover() to destroy those of dead attempts. */
   list(): Promise<{ runId: string; sandbox: Sandbox }[]>;
   /** Idempotent: an unknown or destroyed id is ignored. */

@@ -1,13 +1,14 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { writeRunSettings } from '../config/run-settings.js';
 import { FakeForge } from '../adapters/forge/fake.js';
 import { FakeRunner } from '../adapters/runner/fake.js';
 import type { Runner } from '../adapters/runner/types.js';
 import type { Verifier } from './verify.js';
 import { FakeTracker } from '../adapters/tracker/fake.js';
+import { stateEchoKey } from '../adapters/tracker/types.js';
 import { FakeWorkspaces } from '../adapters/workspace/fake.js';
 import { loadWorkflow } from '../config/load-workflow.js';
 import { SqliteStore } from '../store/sqlite-store.js';
@@ -33,6 +34,7 @@ function setup(
     tweak?: (w: ReturnType<typeof loadWorkflow>) => void;
     effectRetry?: EffectRetry;
     workspaces?: FakeWorkspaces;
+    processRetry?: { attempts: number; baseMs: number };
   } = {},
 ) {
   const workflow = loadWorkflow({ packDir });
@@ -43,17 +45,22 @@ function setup(
   const runner = o.runner ?? fakeRunner;
   const scheduler = new Scheduler(store, { dev: 3, questions: 2 });
   let n = 0;
+  const bus = new EventBus();
   const orch = new Orchestrator({
-    store, clock: new FakeClock(1_000), bus: new EventBus(), scheduler,
+    store, clock: new FakeClock(1_000), bus, scheduler,
     tracker, forge: new FakeForge(), runner, workspaces: o.workspaces ?? new FakeWorkspaces(), verify: o.verify ?? (async () => ({ ok: true, failures: [] })), dailyBudgetUsd: o.budget,
     projects: [{ id: 'p', repoPath: '/repo', teamKey: 'REL', workflow }], packDir, settingsPath: o.settingsPath,
     agentEnv: (r) => ({ FACTORY_RUN_TOKEN: r.token }), newId: () => `id-${++n}`, activityIntervalMs: 0, holdInboxUntilReplay: o.hold, factoryCommit: 'cafe42',
     // One attempt: a failed effect dies at once (the retries have their own tests).
     effectRetry: o.effectRetry ?? { attempts: 1, baseMs: 1, capMs: 1 },
+    processRetry: o.processRetry,
   });
-  return { store, tracker, runner: fakeRunner, orch, scheduler };
+  return { store, tracker, runner: fakeRunner, orch, scheduler, bus };
 }
 
+const mentioned = (ticketId: string): FactoryEvent => ({
+  ...TRUSTED, id: 'm1', type: 'session.mentioned', at: 1_000, projectId: 'p', ticketId, payload: { linearSessionId: 'q1', body: '?', author: 'L' },
+});
 const delegated = (id = 'e1'): FactoryEvent => ({ ...TRUSTED, id, type: 'ticket.delegated', at: 1_000, projectId: 'p', ticketId: 'REL-1', payload: { linearSessionId: 'ls-1' } });
 
 describe('Orchestrator', () => {
@@ -104,6 +111,16 @@ describe('Orchestrator', () => {
     expect(await store.getTicket('p', 'REL-1')).toMatchObject({ delegated: true, blocked: true, blockReason: "Question posée par l'agent" });
   });
 
+  it('marks its own move as an echo under the key the webhook and the reconciliation look up', async () => {
+    const { store, tracker, orch } = setup();
+    tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+    await orch.accept(delegated());
+    await orch.drained();
+    const moves = tracker.calls.filter((c) => c.method === 'moveTo').map((c) => c.args[1] as string);
+    expect(moves.length).toBeGreaterThan(0);
+    for (const name of moves) expect(await store.isEcho(stateEchoKey('REL-1', name), 1_000)).toBe(true);
+  });
+
   it('ignores a duplicate event id', async () => {
     const { tracker, runner, orch } = setup();
     tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
@@ -131,6 +148,33 @@ describe('Orchestrator', () => {
     expect(await store.getTicket('p', 'REL-1')).toMatchObject({ title: 'Export CSV', logical: 'dev', priority: 2 });
     const journaled = (await store.recentEvents(10)).find((e) => e.id === 'm1')!;
     expect(journaled.payload).toMatchObject({ issue: { title: 'Export CSV', logical: 'dev', priority: 2 } });
+  });
+
+  it('drops, and journals, a creating event without a snapshot on an issue the tracker no longer finds (ORC-302)', async () => {
+    const { store, tracker, runner, orch, bus } = setup({ processRetry: { attempts: 3, baseMs: 1 } });
+    const logs: string[] = [];
+    bus.subscribe((m) => void (m.kind === 'log' && logs.push(m.message)));
+    const getIssue = vi.spyOn(tracker, 'getIssue');
+    await orch.accept(mentioned('REL-9'));
+    await orch.drained();
+    expect(getIssue).toHaveBeenCalledTimes(1);
+    // Retried, it would still be in the inbox: a failed row stays there until its last attempt.
+    expect(await store.pendingInbox(10)).toEqual([]);
+    expect((await store.recentEvents(10)).map((e) => e.id)).toContain('m1');
+    expect(await store.getTicket('p', 'REL-9')).toBeUndefined();
+    // Decided without the snapshot, the mention would plan a `start_run` on a ticket nothing tracks.
+    expect(await store.listEffects('p', 'REL-9')).toEqual([]);
+    expect(runner.requests).toEqual([]);
+    expect(logs.some((l) => l.includes('REL-9') && l.includes('not found in the tracker, left without a snapshot'))).toBe(true);
+  });
+
+  it('still retries a creating event whose snapshot read fails for another reason (ORC-302)', async () => {
+    const { store, tracker, orch } = setup({ processRetry: { attempts: 3, baseMs: 1 } });
+    const getIssue = vi.spyOn(tracker, 'getIssue').mockRejectedValue(new Error('fetch failed: ECONNRESET'));
+    await orch.accept(mentioned('REL-1'));
+    await orch.drained();
+    await vi.waitFor(() => expect(getIssue).toHaveBeenCalledTimes(3), { interval: 1 });
+    expect((await store.pendingInbox(10)).map((e) => e.id)).toEqual(['m1']);
   });
 
   it('ignores moves of tickets it does not manage', async () => {
@@ -200,19 +244,6 @@ describe('Orchestrator', () => {
     }
   });
 
-  it('recover() blocks tickets whose run was interrupted', async () => {
-    const { store, tracker, runner, orch } = setup();
-    tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
-    runner.enqueue({ hold: true });
-    await orch.accept(delegated());
-    await orch.drained();
-    await orch.recover();
-    const t = (await store.getTicket('p', 'REL-1'))!;
-    expect(t.blocked).toBe(true);
-    expect(t.activeRunId).toBeUndefined();
-    expect(await store.runsByStatus('running')).toEqual([]);
-  });
-
   it('stopAll() then idle() waits until the interrupted run is persisted', async () => {
     const { store, tracker, runner, orch } = setup();
     tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
@@ -222,7 +253,7 @@ describe('Orchestrator', () => {
     const runId = (await store.getTicket('p', 'REL-1'))!.activeRunId!;
     orch.stopAll();
     await orch.drained();
-    // A shutdown is not a user stop: the run is `interrupted` and the ticket keeps it for recover() on the next start.
+    // A shutdown is not a user stop: the run is `interrupted` and the ticket keeps it for recover(), which starts its step again.
     expect((await store.getRun(runId))!.status).toBe('interrupted');
     expect((await store.getTicket('p', 'REL-1'))!.activeRunId).toBe(runId);
   });
@@ -252,36 +283,52 @@ describe('Orchestrator', () => {
     expect(await store.runsByStatus('running')).toEqual([]);
   });
 
-  it('recover() blocks a ticket whose activeRunId points to a finished run', async () => {
+  // Was: blocked. A run that really ended has a result: it is delivered (ORC-220), never run again.
+  it('recover() delivers the result of a finished run its ticket still holds', async () => {
     const { store, tracker, orch } = setup();
     tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
     await orch.accept(delegated());
     await orch.drained();
     const t = (await store.getTicket('p', 'REL-1'))!;
-    t.activeRunId = (await store.runsByStatus('success'))[0]!.id;
+    const run = (await store.runsByStatus('success'))[0]!;
+    const finished = (await store.recentEvents(50, 'REL-1')).find((e) => e.type === 'run.finished')!;
+    t.activeRunId = 'r-unsent';
     t.blocked = false;
     await store.putTicket(t);
+    await store.putRun({ ...run, id: 'r-unsent', token: 't-unsent' });
     await orch.recover();
-    const after = (await store.getTicket('p', 'REL-1'))!;
-    expect(after.blocked).toBe(true);
-    expect(after.activeRunId).toBeUndefined();
-    expect(after.blockReason).toContain('redémarré');
+    expect((await store.pendingInbox(10)).find((e) => e.id === 'attempt:r-unsent:finished')).toMatchObject({ type: 'run.finished', payload: { runId: 'r-unsent', outcome: 'success', job: (finished.payload as { job: string }).job } });
+    expect((await store.getTicket('p', 'REL-1'))!.blocked).toBe(false);
   });
 
-  it('recover() blocks a ticket that was being verified', async () => {
+  // Was: blocked. The check runs again on the same attempt (ORC-220), whose verdict keeps its id.
+  it('recover() takes up a check whose verdict never came', async () => {
+    const { store, tracker, orch } = setup();
+    tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+    await orch.accept(delegated());
+    await orch.drained();
+    const t = (await store.getTicket('p', 'REL-1'))!;
+    const run = (await store.runsByStatus('success'))[0]!;
+    t.verifyingRunId = run.id;
+    await store.putTicket(t);
+    await orch.recover();
+    expect((await store.pendingInbox(10)).find((e) => e.id.startsWith(`check:${run.id}:lost`))).toMatchObject({ type: 'verify.lost', payload: { runId: run.id, job: run.job } });
+    expect((await store.getTicket('p', 'REL-1'))!.blocked).toBe(false);
+  });
+
+  // Was: blocked. Nothing says what to check: the wait ends, and the ticket is not held for a verdict that cannot come.
+  it('recover() drops a check that names a run never written', async () => {
     const { store, tracker, orch } = setup();
     tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
     await orch.accept(delegated());
     await orch.drained();
     const t = (await store.getTicket('p', 'REL-1'))!;
     t.verifyingRunId = 'r-x';
-    t.blocked = false;
     await store.putTicket(t);
     await orch.recover();
     const after = (await store.getTicket('p', 'REL-1'))!;
-    expect(after.blocked).toBe(true);
+    expect(after.blocked).toBe(false);
     expect(after.verifyingRunId).toBeUndefined();
-    expect(after.blockReason).toContain('vérifications');
   });
 
   it('ignores a verification result that arrives after the ticket was stopped', async () => {

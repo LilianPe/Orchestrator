@@ -5,6 +5,12 @@ import { describe, expect, it, vi } from 'vitest';
 import type { FactoryEvent } from '../../../core/types.js';
 import { SqliteStore } from '../../../store/sqlite-store.js';
 import { createLinearIngest } from './ingest.js';
+import { loadWorkflow } from '../../../config/load-workflow.js';
+import { FakeClock } from '../../../core/clock.js';
+import { newTicketState } from '../../../core/types.js';
+import { FakeTracker } from '../fake.js';
+import { knownLabels, recordLabels, serial } from './labels.js';
+import { reconcileOnce } from './reconcile.js';
 import { isFresh, isUsableWebhookSecret, mapLinearWebhook, stripMention, verifyLinearSignature, type MapContext } from './webhook.js';
 
 const fx = (name: string) => JSON.parse(readFileSync(join(import.meta.dirname, 'fixtures', `${name}.json`), 'utf8'));
@@ -79,6 +85,20 @@ describe('mapLinearWebhook', () => {
       type: 'command', payload: { name: 'retiens', body: 'les agrégats côté serveur', linearSessionId: 'as-3' },
     });
   });
+  it('maps /refreeze as a command whatever the workflow declares (ORC-131)', async () => {
+    const body = fx('session-created-command');
+    body.agentSession.comment.body = '[@factory](https://linear.app/x/profiles/factory) /refreeze le test de l’export était faux';
+    expect((await mapLinearWebhook(body, 'd3', ctx()))[0]).toMatchObject({
+      type: 'command', actor: 'user-lilian', payload: { name: '/refreeze', body: 'le test de l’export était faux', linearSessionId: 'as-3' },
+    });
+  });
+  it('maps /refreeze answered in a session as the command, not as feedback that relaunches the agent (ORC-131)', async () => {
+    const body = fx('session-prompted');
+    body.agentActivity.content.body = '/refreeze le test était faux';
+    expect((await mapLinearWebhook(body, 'd3', ctx()))[0]).toMatchObject({
+      type: 'command', payload: { name: '/refreeze', body: 'le test était faux', linearSessionId: 'as-1', author: 'Lilian' },
+    });
+  });
   it('maps a prompt and a stop', async () => {
     expect((await mapLinearWebhook(fx('session-prompted'), 'd4', ctx()))[0]).toMatchObject({
       type: 'session.prompted', payload: { linearSessionId: 'as-1', body: 'les boutons sont mal alignés', author: 'Lilian' },
@@ -109,6 +129,17 @@ describe('mapLinearWebhook', () => {
     const c = { ...ctx(), isEcho: async (k: string) => echoes.includes(k) };
     expect(await mapLinearWebhook(fx('issue-moved-labeled'), 'd9', c)).toEqual([]);
   });
+  it('drops a label change the factory already knows, caught up by the reconciliation first (ORC-185)', async () => {
+    const removed = { ...fx('issue-moved-labeled'), data: { ...fx('issue-moved-labeled').data, labelIds: ['l-resume'] }, updatedFrom: { labelIds: ['l-bug'] } };
+    const known = (labels: string[] | undefined) => ({ ...ctx(), knownLabels: async () => (labels ? { labels, at: 0 } : undefined) });
+    expect(await mapLinearWebhook(removed, 'd11', known(['agent:reprendre']))).toEqual([]);
+    expect((await mapLinearWebhook(removed, 'd11', known(['bug']))).map((e) => e.payload)).toEqual([
+      { label: 'agent:reprendre', change: 'added' },
+      { label: 'bug', change: 'removed' },
+    ]);
+    expect(await mapLinearWebhook(removed, 'd11', known(undefined))).toHaveLength(2);
+  });
+
   it('maps a removed label as label.changed, and drops the echo of a removal the factory made (ORC-160)', async () => {
     const removed = { ...fx('issue-moved-labeled'), data: { ...fx('issue-moved-labeled').data, labelIds: ['l-resume'] }, updatedFrom: { labelIds: ['l-bug'] } };
     expect(await mapLinearWebhook(removed, 'd10', ctx())).toEqual([
@@ -238,6 +269,119 @@ describe('ingest', () => {
     expect(await ingest(raw, { 'linear-signature': sig })).toEqual({ status: 200 });
     expect(order).toEqual(['inbox:ticket.delegated', 'ack:as-1']);
     expect(await ids()).toHaveLength(1);
+  });
+
+  it('records the labels an issue webhook reads, echoes included, once its events are in the inbox (ORC-185)', async () => {
+    const recorded: unknown[][] = [];
+    const body = { ...fx('issue-moved-labeled'), webhookTimestamp: 2000 };
+    // `lost` was added by a webhook that never came: this one only adds agent:reprendre, so `lost` stays unknown.
+    const c = { ...ctx(['label:REL-1:agent:reprendre']), now: () => 2000, knownLabels: async () => ({ labels: ['bug'], at: 0 }), recordLabels: async (...a: unknown[]) => void recorded.push(a) };
+    const { raw, sig } = signed(body);
+    const ok = createLinearIngest({ secret: () => 'sec', ctx: c, accept: async () => true, ack: async () => {}, log: () => {} });
+    expect(await ok(raw, { 'linear-signature': sig })).toEqual({ status: 200 });
+    expect(recorded).toEqual([['p', 'REL-1', ['bug', 'agent:reprendre'], Date.parse(body.data.updatedAt)]]);
+    recorded.length = 0;
+    // A lost label in the full list is not recorded: the reconciliation still reports it.
+    const withLost = { ...body, data: { ...body.data, labelIds: ['l-bug', 'l-resume', 'l-lost'] }, updatedFrom: { labelIds: ['l-bug', 'l-lost'] }, webhookTimestamp: 2000 };
+    const s2 = signed(withLost);
+    const lost = createLinearIngest({ secret: () => 'sec', ctx: { ...c, labelNameById: (_t: string, id: string) => ({ 'l-bug': 'bug', 'l-resume': 'agent:reprendre', 'l-lost': 'lost' })[id] }, accept: async () => true, ack: async () => {}, log: () => {} });
+    expect(await lost(s2.raw, { 'linear-signature': s2.sig })).toEqual({ status: 200 });
+    expect(recorded).toEqual([['p', 'REL-1', ['bug', 'agent:reprendre'], Date.parse(body.data.updatedAt)]]);
+    recorded.length = 0;
+    const failing = createLinearIngest({ secret: () => 'sec', ctx: c, accept: async () => Promise.reject(new Error('disk')), ack: async () => {}, log: () => {} });
+    expect(await failing(raw, { 'linear-signature': sig })).toEqual({ status: 500 });
+    // Not in the inbox: Linear sends it again, and it must not be taken for a change already known then.
+    expect(recorded).toEqual([]);
+  });
+
+  it('a reconciliation pass that runs while a webhook writes its label change waits for it: the change is reported once (ORC-185)', async () => {
+    const { store, accept, ids } = inbox();
+    const body = { ...fx('issue-moved-labeled'), webhookTimestamp: 2000 };
+    const updatedAt = Date.parse(body.data.updatedAt);
+    await store.putTicket({ ...newTicketState('p', 'REL-1', 'T', 'ai_review', 1), delegated: true });
+    await recordLabels(store, 'p', 'REL-1', ['bug'], updatedAt - 1000);
+    const tracker = new FakeTracker();
+    tracker.addIssue({ identifier: 'REL-1', delegateId: 'app', stateName: 'AI Review', labels: ['bug', 'agent:reprendre'], updatedAt });
+    const labelsTurn = serial();
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const c = {
+      ...ctx(),
+      now: () => 2000,
+      knownLabels: (pid: string, id: string) => knownLabels(store, pid, id),
+      recordLabels: (pid: string, id: string, labels: string[], at: number) => recordLabels(store, pid, id, labels, at),
+    };
+    const ingest = createLinearIngest({ secret: () => 'sec', ctx: c, serial: labelsTurn, accept: async (e) => (await gate, accept(e)), ack: async () => {}, log: () => {} });
+    const { raw, sig } = signed(body);
+    const webhook = ingest(raw, { 'linear-signature': sig });
+    await new Promise((r) => setTimeout(r, 10));
+    const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../../../packs/standard') });
+    const reconciled = reconcileOnce({
+      tracker, store, projects: [{ id: 'p', repoPath: '/r', teamKey: 'REL', workflow }], serial: labelsTurn,
+      submit: (e) => store.appendInbox(e), clock: new FakeClock(2000), log: () => {},
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    release();
+    expect(await webhook).toEqual({ status: 200 });
+    await reconciled;
+    expect((await ids()).filter((id) => id.includes('label'))).toHaveLength(1);
+  });
+
+  it('a label webhook come after a newer one still adds its change to the known labels: the reconciliation does not report it again (ORC-185)', async () => {
+    const { store, ids } = inbox();
+    const base = fx('issue-moved-labeled');
+    await store.putTicket({ ...newTicketState('p', 'REL-1', 'T', 'ai_review', 1), delegated: true });
+    await recordLabels(store, 'p', 'REL-1', [], 5);
+    const c = {
+      ...ctx(),
+      now: () => 2000,
+      knownLabels: (pid: string, id: string) => knownLabels(store, pid, id),
+      recordLabels: (pid: string, id: string, labels: string[], at: number) => recordLabels(store, pid, id, labels, at),
+    };
+    const ingest = createLinearIngest({ secret: () => 'sec', ctx: c, accept: (e) => store.appendInbox(e), ack: async () => {}, log: () => {} });
+    // W1 (bug added at 10) arrives after W2 (agent:reprendre added at 20).
+    const w = (updatedAt: number, labelIds: string[], from: string[]) =>
+      signed({ ...base, webhookTimestamp: 2000, data: { ...base.data, updatedAt: new Date(updatedAt).toISOString(), labelIds }, updatedFrom: { labelIds: from } });
+    for (const { raw, sig } of [w(20, ['l-bug', 'l-resume'], ['l-bug']), w(10, ['l-bug'], [])]) expect(await ingest(raw, { 'linear-signature': sig })).toEqual({ status: 200 });
+    expect(await knownLabels(store, 'p', 'REL-1')).toEqual({ labels: ['agent:reprendre', 'bug'], at: 20 });
+    const tracker = new FakeTracker();
+    tracker.addIssue({ identifier: 'REL-1', delegateId: 'app', stateName: 'AI Review', labels: ['bug', 'agent:reprendre'], updatedAt: 20 });
+    const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../../../packs/standard') });
+    await reconcileOnce({ tracker, store, projects: [{ id: 'p', repoPath: '/r', teamKey: 'REL', workflow }], submit: (e) => store.appendInbox(e), clock: new FakeClock(2000), log: () => {} });
+    expect((await ids()).filter((id) => id.startsWith('reconcile:label'))).toEqual([]);
+  });
+
+  it('the labels a pass records on a delegation found again wait for a webhook recording under way: a newer reading is not overwritten (ORC-185)', async () => {
+    const { store } = inbox();
+    const base = fx('issue-moved-labeled');
+    await store.putTicket({ ...newTicketState('p', 'REL-1', 'T', 'ai_review', 1), delegated: false });
+    await recordLabels(store, 'p', 'REL-1', ['bug'], 10);
+    const labelsTurn = serial();
+    const c = {
+      ...ctx(),
+      now: () => 2000,
+      knownLabels: (pid: string, id: string) => knownLabels(store, pid, id),
+      recordLabels: (pid: string, id: string, labels: string[], at: number) => recordLabels(store, pid, id, labels, at),
+    };
+    const ingest = createLinearIngest({ secret: () => 'sec', ctx: c, serial: labelsTurn, accept: (e) => store.appendInbox(e), ack: async () => {}, log: () => {} });
+    const { raw, sig } = signed({ ...base, webhookTimestamp: 2000, data: { ...base.data, updatedAt: new Date(30).toISOString(), labelIds: ['l-bug', 'l-resume'] }, updatedFrom: { labelIds: ['l-bug'] } });
+    // The pass reads the kept labels, then the webhook comes before it writes its own reading.
+    let webhook: Promise<unknown> | undefined;
+    const passStore = Object.create(store) as SqliteStore;
+    passStore.getMeta = async (k: string) => {
+      const v = await store.getMeta(k);
+      if (k.startsWith('linear-labels:') && !webhook) {
+        webhook = ingest(raw, { 'linear-signature': sig });
+        await new Promise((r) => setTimeout(r, 20));
+      }
+      return v;
+    };
+    const tracker = new FakeTracker();
+    tracker.addIssue({ identifier: 'REL-1', delegateId: 'app', stateName: 'AI Review', labels: ['bug'], updatedAt: 20 });
+    const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../../../packs/standard') });
+    await reconcileOnce({ tracker, store: passStore, projects: [{ id: 'p', repoPath: '/r', teamKey: 'REL', workflow }], serial: labelsTurn, submit: (e) => store.appendInbox(e), clock: new FakeClock(2000), log: () => {} });
+    await webhook;
+    expect(await knownLabels(store, 'p', 'REL-1')).toEqual({ labels: ['agent:reprendre', 'bug'], at: 30 });
   });
 
   it('acks with the id of the event, so the daemon can record when (ORC-235)', async () => {

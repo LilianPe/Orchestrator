@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS inbox (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT
 CREATE INDEX IF NOT EXISTS inbox_pending ON inbox (processed_at, seq);
 CREATE INDEX IF NOT EXISTS inbox_pending_ticket ON inbox (json_extract(data, '$.projectId'), json_extract(data, '$.ticketId'), seq) WHERE processed_at IS NULL;
 CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, status TEXT NOT NULL, token TEXT NOT NULL, started_at INTEGER NOT NULL, cost_usd REAL NOT NULL, data TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS runs_status ON runs (status);
 CREATE TABLE IF NOT EXISTS timers (key TEXT PRIMARY KEY, fire_at INTEGER NOT NULL, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS queue (project_id TEXT, ticket_id TEXT, job TEXT, queue TEXT NOT NULL, rank INTEGER NOT NULL, enqueued_at INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY (project_id, ticket_id, job));
 CREATE TABLE IF NOT EXISTS echoes (key TEXT PRIMARY KEY, until INTEGER NOT NULL);
@@ -500,6 +501,10 @@ export class SqliteStore implements Store {
                        ELSE json_set(excluded.data, '$.labels', json(json_extract(runs.data, '$.labels'))) END`,
       )
       .run(r.id, r.status, r.token, r.startedAt, r.costUsd, JSON.stringify(r));
+  }
+
+  async renewRun(id: string, until: number): Promise<void> {
+    this.db.prepare(`UPDATE runs SET data = json_set(data, '$.leaseUntil', ?) WHERE id = ? AND status = 'running'`).run(until, id);
   }
 
   async getRun(id: string): Promise<RunRecord | undefined> {

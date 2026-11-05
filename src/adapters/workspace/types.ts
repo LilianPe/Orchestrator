@@ -17,15 +17,21 @@ export interface Workspace {
   branch?: string;
   /** True when `prepare` just created the worktree: the repository's `setup` is then the caller's to run (ORC-204). */
   fresh?: boolean;
+  /** True when a fresh worktree came on commits beyond the default branch, a previous agent's: its `setup` then runs code nobody reviewed, and gets no secret (ORC-211). */
+  ahead?: boolean;
 }
 
 /** What a step's commits changed, read on the factory's repository (ORC-123): the `red` check's view of the step. */
 export interface StepDiff {
+  /** The worktree's head the diff ends on. */
+  head: string;
   changed: { path: string; deleted: boolean }[];
   /** Of `paths`, those that exist at the base (a file, or a directory). */
   existsAtBase(paths: readonly string[]): Promise<Set<string>>;
   showAtBase(path: string): Promise<string | undefined>;
   showAtHead(path: string): Promise<string | undefined>;
+  /** Every file at the head: the freeze looks the harness up in it (ORC-131). */
+  filesAtHead(): Promise<string[]>;
 }
 
 export interface WorkspaceManager {

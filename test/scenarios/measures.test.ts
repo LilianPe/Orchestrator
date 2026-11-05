@@ -27,6 +27,14 @@ describe('measures of the MVP doc, from the first run (ORC-235)', () => {
     expect(m.reworks.map((r) => r.cause)).toEqual(['pr.checks_failed', 'feedback']);
   });
 
+  it('a running attempt has not failed to report its usage: it reports at its end (ORC-297)', async () => {
+    const h = createHarness();
+    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Exporter les audits en CSV depuis la liste des audits.' });
+    h.runner.enqueue({ hold: true });
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    expect(await measureTicket(h.store, 'p', 'REL-1')).toMatchObject({ attempts: 1, attemptsWithoutTokens: 0, tokens: null });
+  });
+
   it('a reply that relaunches a failed dev run and a human sending the ticket back to dev are reworks too', async () => {
     const h = createHarness();
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Exporter les audits en CSV.' });

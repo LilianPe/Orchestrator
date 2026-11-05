@@ -351,7 +351,7 @@ describeCheckRunnerContract(
 );
 
 const UNREACHABLE = 'findPr and unresolvedReviewComments reject when the forge does not answer';
-const UNREADABLE = 'findPr gives none for checks it cannot read';
+const UNREADABLE = 'findPr rejects for checks it cannot read';
 
 function forgeThat(patch: Partial<ForgeSubject>): () => ForgeSubject {
   return () => {
@@ -379,8 +379,10 @@ const findingPr = (findPr: Forge['findPr']): Partial<ForgeSubject> => ({ forge: 
 const unreadable = (findPr: Forge['findPr']): Partial<ForgeSubject> => ({ ...findingPr(findPr), unreadableChecks: 'factory/rel-2-y' });
 
 describeForgeContract(
-  'a forge that rejects checks it cannot read',
-  forgeThat(unreadable(async () => Promise.reject(new SyntaxError('Unexpected token n in JSON')))),
+  'a forge that reads checks it cannot read as none',
+  forgeThat(
+    unreadable(async (_repo, branch) => ({ number: 8, url: 'https://github.test/pr/8', state: 'OPEN', branch, checks: 'none', failedChecks: [] })),
+  ),
   { violates: [UNREADABLE] },
 );
 
@@ -390,6 +392,50 @@ describeForgeContract(
     unreadable(async (_repo, branch) => ({ number: 8, url: 'https://github.test/pr/8', state: 'OPEN', branch, checks: 'pending', failedChecks: [] })),
   ),
   { violates: [UNREADABLE] },
+);
+
+const NO_CHECKS = 'findPr gives none for an open PR without any check';
+const CHECKS_DOWN = 'findPr rejects when the forge answers the PR but not its checks';
+const openPr = (branch: string) => ({ number: 9, url: 'https://github.test/pr/9', state: 'OPEN' as const, branch, failedChecks: [] });
+const withoutChecks = (findPr: Forge['findPr']): Partial<ForgeSubject> => ({ ...findingPr(findPr), noChecks: 'factory/rel-3-z' });
+
+describeForgeContract(
+  'a forge that reads checks it failed to fetch as none',
+  forgeThat({ ...findingPr(async (_repo, branch) => ({ ...openPr(branch), checks: 'none' })), checksDown: 'factory/rel-4-w' }),
+  { violates: [CHECKS_DOWN] },
+);
+
+describeForgeContract(
+  'a forge that rejects an open PR without any check',
+  forgeThat(withoutChecks(async (_repo, branch) => Promise.reject(new Error(`no checks reported on the '${branch}' branch`)))),
+  { violates: [NO_CHECKS] },
+);
+
+describeForgeContract(
+  'a forge that reports an open PR without any check as pending',
+  forgeThat(withoutChecks(async (_repo, branch) => ({ ...openPr(branch), checks: 'pending' }))),
+  { violates: [NO_CHECKS] },
+);
+
+const UNKNOWN_BUCKET = 'findPr gives neither pass nor none for checks with a state it does not know';
+const withUnknownBucket = (findPr: Forge['findPr']): Partial<ForgeSubject> => ({ ...findingPr(findPr), unknownBucket: 'factory/rel-5-v' });
+
+describeForgeContract(
+  'a forge that counts a check in a state it does not know as passed',
+  forgeThat(withUnknownBucket(async (_repo, branch) => ({ ...openPr(branch), checks: 'pass' }))),
+  { violates: [UNKNOWN_BUCKET] },
+);
+
+describeForgeContract(
+  'a forge that reads a check in a state it does not know as no check at all',
+  forgeThat(withUnknownBucket(async (_repo, branch) => ({ ...openPr(branch), checks: 'none' }))),
+  { violates: [UNKNOWN_BUCKET] },
+);
+
+describeForgeContract(
+  'a forge that reads a check in a state it does not know as failed without naming a failed check',
+  forgeThat(withUnknownBucket(async (_repo, branch) => ({ ...openPr(branch), checks: 'fail' }))),
+  { violates: [UNKNOWN_BUCKET] },
 );
 
 const NO_PR = 'findPr answers undefined for a branch without a PR';
@@ -474,6 +520,19 @@ describeTrackerContract(
     class extends FakeTracker {
       override async getIssue(identifier: string): Promise<TrackerIssue> {
         return super.getIssue(this.issues.has(identifier) ? identifier : 'REL-1');
+      }
+    },
+  ),
+  { violates: [UNKNOWN_READ] },
+);
+
+describeTrackerContract(
+  'a tracker whose getIssue rejects an unknown issue with a plain error, as a read error',
+  trackerThat(
+    class extends FakeTracker {
+      override async getIssue(identifier: string): Promise<TrackerIssue> {
+        if (!this.issues.has(identifier)) throw new Error(`unknown issue ${identifier}`);
+        return super.getIssue(identifier);
       }
     },
   ),
@@ -798,8 +857,8 @@ describeSandboxContract(
   'a sandbox provider whose spawnCommand builds a command for a sandbox it does not have',
   sandboxesThat(
     class extends FakeSandboxProvider {
-      override spawnCommand(_id: string, argv: readonly string[]): string[] {
-        return [...argv];
+      override spawnCommand(_id: string, argv: readonly string[]) {
+        return { command: [...argv], env: {} };
       }
     },
   ),

@@ -52,7 +52,7 @@ Toutes les suites déclarent leurs cas par `describeContract` (`test/contracts/c
 
 ## Écarts connus
 
-Aucun : chaque implémentation passe tous les cas qu'elle lance. `LinearTracker` en live ne lance que les lectures (sans `states`, les cas d'écriture sont sautés) : ses écritures ne passent par aucune suite. Les faux qui s'en écartaient ont été alignés par ORC-189 ; chaque fiche dit lesquels, et ce qu'un scénario doit déclarer depuis (catalogue de statuts de `FakeTracker`, horloge de `FakeRunner`).
+Aucun : chaque implémentation passe tous les cas qu'elle lance. `LinearTracker` en live ne lance que les lectures (sans `states`, les cas d'écriture sont sautés) : ses écritures ne passent par aucune suite. `GitHubAppForge` ne lance pas encore la suite Forge, et ne tient pas sa règle des checks illisibles (ORC-273, voir [sa fiche](forge.md#écarts-connus)). Les faux qui s'en écartaient ont été alignés par ORC-189 ; chaque fiche dit lesquels, et ce qu'un scénario doit déclarer depuis (catalogue de statuts de `FakeTracker`, horloge de `FakeRunner`).
 
 Une implémentation qui ne tiendrait pas un cas ne le déclare pas dans sa suite : elle s'aligne, ou le cas sort du contrat avec la fiche, par une décision écrite.
 

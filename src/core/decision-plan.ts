@@ -8,7 +8,7 @@ import { reduce } from './reduce.js';
 import { CREATES_TICKET, type EventType, type FactoryEvent, type TicketState } from './types.js';
 
 /** Events after which `handle` settles the ticket: the pending job starts once nothing is in flight. */
-export const SETTLES_RUN: ReadonlySet<EventType> = new Set<EventType>(['run.finished', 'verify.passed', 'verify.failed']);
+export const SETTLES_RUN: ReadonlySet<EventType> = new Set<EventType>(['run.finished', 'run.lost', 'verify.passed', 'verify.failed']);
 
 /** The log line of an action the authorization matrix refused (ORC-186); the refusal itself is in the trace. */
 function refusedNote(event: FactoryEvent, trace: readonly string[]): string | undefined {
@@ -48,8 +48,12 @@ export function planDecision({ event, known, workflow, hash, now }: PlanInput): 
   if (!known && event.ticketId && !CREATES_TICKET.has(decided.type)) {
     return { ...NO_PLAN, at: now, note: `ignored ${event.type} for unmanaged ticket ${event.ticketId}` };
   }
-  const decision = decide(known, event, workflow);
   let next = reduce(known, event);
+  // A creating event that starts tracking nothing has no snapshot: `withSnapshot` leaves none when the tracker no longer finds the issue (ORC-302).
+  if (!known && !next && event.ticketId) {
+    return { ...NO_PLAN, at: now, note: `ignored ${event.type} for unmanaged ticket ${event.ticketId}: no snapshot of the issue to start tracking it from` };
+  }
+  const decision = decide(known, event, workflow);
   for (const e of decision.events) next = reduce(next, e);
   const ticket = next && { ...next, updatedAt: now, workflowHash: hash };
   const effects: OutboxEffect[] = [...decision.effects];

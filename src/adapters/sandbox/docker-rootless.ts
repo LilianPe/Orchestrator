@@ -1,5 +1,5 @@
 import { availableParallelism } from 'node:os';
-import { basename } from 'node:path';
+import { basename, dirname } from 'node:path';
 import type { EgressProxy } from '../../network/proxy.js';
 import { execCmd, mustExec, type Exec, type ExecResult } from '../exec.js';
 import {
@@ -11,6 +11,7 @@ import {
   type SandboxMount,
   type SandboxProvider,
   type SandboxRequest,
+  type SpawnCommand,
 } from './types.js';
 
 export interface ContainerSandboxOptions {
@@ -54,13 +55,16 @@ const ATTEMPT = 'factory.attempt';
 const NETWORK = 'factory.network';
 const INSTANCE = 'factory.instance';
 
-/** Where the run's proxy socket is mounted, and where the relay in front of it listens. */
-const EGRESS_SOCKET = '/run/factory/egress.sock';
+/**
+ * Where the run's own dir of the proxy is mounted, read-only: a dir, not its socket, so that a daemon started
+ * after a kill -9 binds the socket anew and the living container sees it (ORC-220). A socket opens on a read-only mount.
+ */
+const EGRESS_DIR = '/run/factory/egress';
 /** The factory CA's certificate, read-only: the only authority the sandbox's tools trust (the proxy decrypts every tunnel). */
 const EGRESS_CA = '/run/factory/egress-ca.crt';
 const PROXY = 'http://127.0.0.1:3128';
 /** PID 1 of a sandbox with an egress: TCP on the loopback to the proxy's socket, so every tool can use HTTP(S)_PROXY. */
-const RELAY = `const net=require('net');net.createServer((c)=>{const u=net.connect('${EGRESS_SOCKET}');c.pipe(u).pipe(c);c.on('error',()=>u.destroy());u.on('error',()=>c.destroy())}).listen(3128,'127.0.0.1')`;
+const relay = (socket: string) => `const net=require('net');net.createServer((c)=>{const u=net.connect('${socket}');c.pipe(u).pipe(c);c.on('error',()=>u.destroy());u.on('error',()=>c.destroy())}).listen(3128,'127.0.0.1')`;
 /**
  * The proxy's address for every tool, and the factory CA as its trust: Node (claude, npm, yarn,
  * factory-agent), OpenSSL (curl, Python), pip, git.
@@ -80,6 +84,33 @@ const EGRESS_ENV = [
 
 /** Where the engines listen. A mount of one of them, or of a directory above one, hands the agent the engine, so root on the host. */
 const SOCKETS = ['/var/run/docker.sock', '/run/docker.sock', '/var/run/podman/podman.sock', '/run/podman/podman.sock'];
+
+/**
+ * Where a variable of the container travels in the engine CLI's environment. Under its own name it would
+ * also be read by the CLI: rootless Podman takes its storage and its runtime dir from `HOME`, `XDG_*` and
+ * `TMPDIR`, its target from `CONTAINER_HOST` (measured on 5.8), Docker its daemon from `DOCKER_HOST`, and the
+ * list has no end. The value stays out of the command line, which the host's process list shows.
+ */
+const CARRIER = 'FACTORY_SANDBOX_ENV_';
+const VARIABLE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/**
+ * `argv` under `env` in the container, for an `exec`: the `-e` flags, the command, and what the CLI must have
+ * in its environment. A small `sh` gives each value its name back, unsets the carriers and becomes the command.
+ */
+function carried(argv: readonly string[], env: Record<string, string> = {}): { flags: string[]; command: string[]; carriers: Record<string, string> } {
+  const names = Object.keys(env);
+  if (!names.length) return { flags: [], command: [...argv], carriers: {} };
+  // Written in the shell of the container: only a variable's name may reach it.
+  for (const name of names) if (!VARIABLE.test(name)) throw new Error(`container sandbox: « ${name} » is not a variable name`);
+  const carrier = (i: number) => `${CARRIER}${i}`;
+  const script = `export ${names.map((name, i) => `${name}="$${carrier(i)}"`).join(' ')}; unset ${names.map((_, i) => carrier(i)).join(' ')}; exec "$@"`;
+  return {
+    flags: names.flatMap((_, i) => ['-e', carrier(i)]),
+    command: ['sh', '-c', script, 'sh', ...argv],
+    carriers: Object.fromEntries(names.map((name, i) => [carrier(i), env[name]!])),
+  };
+}
 
 interface Info {
   id: string;
@@ -145,7 +176,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
       ...mounts.flatMap((m) => ['--mount', m]),
       ...(egress
         ? [
-            '--mount', mountArg({ host: egress, target: EGRESS_SOCKET, readOnly: false }),
+            '--mount', mountArg({ host: dirname(egress), target: EGRESS_DIR, readOnly: true }),
             '--mount', mountArg({ host: this.opts.egress!.caCertPath, target: EGRESS_CA, readOnly: true }),
             ...EGRESS_ENV.flatMap((v) => ['-e', v]),
           ]
@@ -153,30 +184,42 @@ export class ContainerSandboxProvider implements SandboxProvider {
       '--workdir', WORKSPACE_TARGET,
       // Always: no route, no DNS, no UDP. The level is the proxy's to apply (ORC-213).
       '--network', 'none',
-      this.opts.image, ...(egress ? ['node', '-e', RELAY] : ['sleep', 'infinity']),
+      this.opts.image, ...(egress ? ['node', '-e', relay(`${EGRESS_DIR}/${basename(egress)}`)] : ['sleep', 'infinity']),
     ];
   }
 
   async exec(id: string, argv: readonly string[], opts: SandboxExecOptions = {}): Promise<ExecResult> {
     const [c] = await this.inspect([id]);
     if (!c?.running) throw new Error(`container sandbox: no live container ${id}`);
-    // Values go through the environment, not the command line: secrets stay out of the host's process list.
-    const r = await this.engine(['exec', ...this.execFlags(opts), id, ...argv], opts.env ? { env: opts.env } : undefined);
+    const { flags, command, carriers } = carried(argv, opts.env);
+    const r = await this.engine(['exec', '-w', opts.cwd ?? WORKSPACE_TARGET, ...flags, id, ...command], flags.length ? { env: carriers } : undefined);
     // 125 is the engine failing, not the command (126/127 are the command's own, kept as results).
     if (r.code === 125) throw new Error(`container sandbox: exec in ${id}: ${r.stderr.trim()}`);
     return r;
   }
 
   /** Sync, so it checks the ids this provider has seen, not the engine: the spawned exec fails on a container that died since. */
-  spawnCommand(id: string, argv: readonly string[], opts: SandboxExecOptions = {}): string[] {
+  spawnCommand(id: string, argv: readonly string[], opts: SandboxExecOptions = {}): SpawnCommand {
     if (!this.known.has(id)) throw new Error(`container sandbox: unknown sandbox ${id}`);
-    return [this.opts.cli, ...this.global(), 'exec', '-i', ...this.execFlags(opts), id, ...argv];
+    const { flags, command, carriers } = carried(argv, opts.env);
+    return { command: [this.opts.cli, ...this.global(), 'exec', '-i', '-w', opts.cwd ?? WORKSPACE_TARGET, ...flags, id, ...command], env: carriers };
   }
 
   async findByAttempt(runId: string): Promise<Sandbox | undefined> {
     // A container this provider cannot use is not handed back: the router then asks create(), which replaces it.
     const c = (await this.byLabel(`${ATTEMPT}=${runId}`)).find((x) => this.usable(x));
     return c && this.seen(c);
+  }
+
+  /**
+   * Its egress listens again at the same path, at the level on the container's label. `allow` is not kept:
+   * nothing asks for it yet (`openSandbox`), and a list lost only narrows.
+   */
+  async reattach(runId: string): Promise<Sandbox | undefined> {
+    const c = (await this.byLabel(`${ATTEMPT}=${runId}`)).find((x) => x.running);
+    if (!c) return undefined;
+    if (this.opts.egress && !this.opts.egress.isOpen(runId)) await this.opts.egress.open(runId, { level: c.network, allow: [] });
+    return this.seen(c);
   }
 
   /** Stopped containers too: they are still attempts' leftovers for recover() to destroy. */
@@ -200,10 +243,6 @@ export class ContainerSandboxProvider implements SandboxProvider {
   /** Running, and with its egress listening in this process if it has one. */
   private usable(c: Info): boolean {
     return c.running && (!this.opts.egress || this.opts.egress.isOpen(c.runId));
-  }
-
-  private execFlags(opts: SandboxExecOptions): string[] {
-    return ['-w', opts.cwd ?? WORKSPACE_TARGET, ...Object.keys(opts.env ?? {}).flatMap((k) => ['-e', k])];
   }
 
   /** Podman prints its own warnings (cgroup manager fallback...) on stderr, mixed with the command's: errors only. */

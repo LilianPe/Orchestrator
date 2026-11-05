@@ -94,20 +94,17 @@ describe.skipIf(!PG_URL)('orchestrator on PgStore', () => {
     expect(outbox.rows).toEqual([{ status: 'done' }]);
   });
 
-  it('blocks a ticket whose run a restart cut, and resumes it on a reply', async () => {
+  // Was: blocked, then resumed on a reply. Since ORC-220 nobody has to reply.
+  it('takes up a ticket whose run a restart cut, on its session', async () => {
     const h = harness();
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
-    h.runner.enqueue({ hold: true });
+    h.runner.enqueue({ hold: true }, { events: [{ kind: 'text', text: 'Repris.' }] });
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
     const runId = (await h.ticket()).activeRunId!;
     await h.restart();
     expect((await h.store.getRun(runId))!.status).toBe('stopped');
-    expect(await h.ticket()).toMatchObject({ blocked: true, logical: 'dev' });
-    expect(h.tracker.activities('ls-1').at(-1)).toMatchObject({ type: 'elicitation', body: expect.stringContaining('redémarré') });
-    h.runner.enqueue({ events: [{ kind: 'text', text: 'Repris.' }] });
-    await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'reprends', author: 'L' });
     expect(h.runner.requests[1]).toMatchObject({ resume: true, claudeSessionId: h.runner.requests[0]!.claudeSessionId });
-    expect((await h.ticket()).blocked).toBe(false);
+    expect(await h.ticket()).toMatchObject({ blocked: false, logical: 'human_review' });
   });
 
   it('dead-letters an event whose reduce throws, blocks the ticket, and replays it with factory run repair (ORC-175)', async () => {

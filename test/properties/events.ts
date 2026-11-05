@@ -1,4 +1,5 @@
 import fc from 'fast-check';
+import { REFREEZE, type FrozenTests } from '../../src/checks/freeze.js';
 import type { Role } from '../../src/core/authz.js';
 import {
   LOGICAL_STATES,
@@ -30,6 +31,12 @@ const RUN_IDS = ['r1', 'r2', 'r3'] as const;
 const JOBS = ['dev', 'tests', 'dev-feedback', 'fix-ci', 'review', 'ask', 'learn', 'remember', 'unknown'] as const;
 const DEV_JOBS = ['dev', 'tests', 'dev-feedback', 'fix-ci', 'review'] as const;
 export const VERIFY_FAILURES = [{ command: 'fake:check', exitCode: 1, output: 'rouge' }];
+/** Freezes the red check reads, or a `/refreeze` (ORC-131): they share a file, with another fingerprint. */
+const FREEZES: readonly FrozenTests[] = [
+  { sha: 'aaa', files: { 'a.test.ts': '1', 'vitest.config.ts': '1' } },
+  { sha: 'bbb', files: { 'a.test.ts': '2', 'b.test.ts': '1' } },
+];
+const frozen = fc.constantFrom(undefined, ...FREEZES);
 
 export type Entry = { kind: 'external'; event: FactoryEvent } | { kind: 'shell'; event: ShellEvent };
 
@@ -93,7 +100,9 @@ const PAYLOADS: { [K in EventType]: fc.Arbitrary<EventPayloads[K]> } = {
   'status.changed': fc.record({ from: fc.option(logical, { nil: null }), to: fc.option(logical, { nil: null }) }),
   'label.changed': fc.record({ label: fc.constantFrom('agent:reprendre', 'agent:stop', 'bug'), change: fc.constantFrom('added' as const, 'removed' as const) }),
   'push.human': fc.record({ branch: fc.constant('agent/rel-1'), sha: fc.constantFrom('aaa', 'bbb'), author }),
-  command: fc.record({ name: fc.constantFrom('retiens', 'fais-le', 'autre'), body, linearSessionId: session, author, issue }),
+  command: fc
+    .record({ name: fc.constantFrom('retiens', 'fais-le', 'autre', REFREEZE), body, linearSessionId: session, author, issue, frozen })
+    .map(({ frozen: f, ...c }) => (f && c.name === REFREEZE ? { ...c, frozen: f } : c)),
   'pr.opened': pr,
   'pr.checks_passed': pr,
   'pr.checks_failed': pr.map((p) => ({ ...p, failures: ['test'] })),
@@ -151,6 +160,8 @@ const PAYLOADS: { [K in EventType]: fc.Arbitrary<EventPayloads[K]> } = {
     ),
   'verify.passed': fc.record({ runId, job }),
   'verify.failed': fc.record({ runId, job, failures: fc.constant(VERIFY_FAILURES) }),
+  'run.lost': fc.record({ runId, job, cause: fc.constantFrom('restart' as const, 'lease' as const) }),
+  'verify.lost': fc.record({ runId, job }),
   'timer.fired': timerFired,
   'control.pause': empty,
   'control.resume': empty,
@@ -181,6 +192,7 @@ export const ACTORS: Readonly<Record<string, readonly Role[]>> = {
   'u-dev': ['team_member', 'repo_writer', 'repo_merger'],
   'u-member': ['team_member'],
   'u-out': ['repo_writer'],
+  'u-lead': ['team_member', 'maintainer'],
 };
 /** Events a human sends through Linear: the orchestrator may resolve roles for them (`mayCheck`). */
 const HUMAN: ReadonlySet<EventType> = new Set<EventType>(['ticket.delegated', 'session.mentioned', 'command', 'session.prompted', 'label.changed', 'status.changed']);
@@ -195,7 +207,7 @@ const signedBy: fc.Arbitrary<Signed | undefined> = fc.oneof(
  * their producers stamp them `TRUSTED`. Only events that carry content from outside can be untrusted.
  */
 const FACTORY_PRODUCED: ReadonlySet<EventType> = new Set<EventType>([
-  'run.finished', 'verify.passed', 'verify.failed', 'timer.fired', 'control.pause', 'control.resume', 'control.stop',
+  'run.finished', 'run.lost', 'verify.passed', 'verify.failed', 'verify.lost', 'timer.fired', 'control.pause', 'control.resume', 'control.stop',
   'effect.done', 'effect.failed', 'dead_letter.added', 'dead_letter.repaired',
 ]);
 
@@ -225,10 +237,9 @@ const shell: fc.Arbitrary<ShellEvent> = fc.oneof(
     type: fc.constant('run.started' as const),
     runId,
     job: fc.constantFrom(...DEV_JOBS, 'ask'),
-    feedbackConsumed: fc.boolean(),
   }).map((e): ShellEvent => ({ ...e, queue: e.job === 'ask' ? 'questions' : 'dev', claudeSessionId: 'claude-1' })),
   fc.constant<ShellEvent>({ type: 'run.cleared' }),
-  fc.constant<ShellEvent>({ type: 'run.interrupted', reason: 'redémarrage' }),
+  fc.constant<ShellEvent>({ type: 'feedback.consumed' }),
   logical.map((to): ShellEvent => ({ type: 'status.recorded', to })),
   fc.constantFrom(...DEV_JOBS).map((j): ShellEvent => ({ type: 'pending.set', job: { job: j } })),
   fc.constant<ShellEvent>({ type: 'pending.cleared' }),
@@ -246,15 +257,19 @@ const attempt: fc.Arbitrary<DraftEntry[]> = fc
     job: fc.constantFrom(...DEV_JOBS),
     outcome: fc.constantFrom('success' as const, 'success' as const, 'failure' as const, 'limit' as const),
     verdict: fc.constantFrom('verify.failed' as const, 'verify.failed' as const, 'verify.passed' as const),
+    frozen,
   })
-  .map(({ runId: id, job: j, outcome, verdict }): DraftEntry[] => {
+  .map(({ runId: id, job: j, outcome, verdict, frozen: f }): DraftEntry[] => {
     const finished: Draft = { type: 'run.finished', payload: { runId: id, job: j, outcome, costUsd: 0.5, turns: 3, lastText: 'fini' } };
+    // The red check of the tests step reads a freeze with its verdict (ORC-131).
+    const freeze = j === 'tests' && f ? { frozen: f } : {};
     const report: Draft =
       verdict === 'verify.passed'
-        ? { type: 'verify.passed', payload: { runId: id, job: j } }
-        : { type: 'verify.failed', payload: { runId: id, job: j, failures: VERIFY_FAILURES } };
+        ? { type: 'verify.passed', payload: { runId: id, job: j, ...freeze } }
+        : { type: 'verify.failed', payload: { runId: id, job: j, failures: VERIFY_FAILURES, ...freeze } };
     return [
-      { kind: 'shell', event: { type: 'run.started', runId: id, job: j, queue: 'dev', claudeSessionId: 'claude-1', feedbackConsumed: j !== 'dev' } },
+      { kind: 'shell', event: { type: 'run.started', runId: id, job: j, queue: 'dev', claudeSessionId: 'claude-1' } },
+      ...(j !== 'dev' ? [{ kind: 'shell' as const, event: { type: 'feedback.consumed' as const } }] : []),
       { kind: 'external', draft: finished, untrusted: false },
       { kind: 'external', draft: report, untrusted: false },
     ];
@@ -275,7 +290,8 @@ const verifyLoop: fc.Arbitrary<DraftEntry[]> = fc
           ? { type: 'verify.passed', payload: { runId: id, job: j } }
           : { type: 'verify.failed', payload: { runId: id, job: j, failures: VERIFY_FAILURES } };
       return [
-        { kind: 'shell', event: { type: 'run.started', runId: id, job: j, queue: 'dev', claudeSessionId: 'claude-1', feedbackConsumed: i > 0 } },
+        { kind: 'shell', event: { type: 'run.started', runId: id, job: j, queue: 'dev', claudeSessionId: 'claude-1' } },
+        ...(i > 0 ? [{ kind: 'shell' as const, event: { type: 'feedback.consumed' as const } }] : []),
         { kind: 'external', draft: { type: 'run.finished', payload: { runId: id, job: j, outcome: 'success', costUsd: 0.5, turns: 3, lastText: 'fini' } }, untrusted: false },
         { kind: 'external', draft: report, untrusted: false },
       ];
