@@ -1,3 +1,4 @@
+import { REFREEZE, type FrozenTests } from '../checks/freeze.js';
 import type { JobSpec, Rule, Workflow } from '../config/workflow-schema.js';
 import { allowed, DEFAULT_MATRIX, refusalMessage, type AuthzAction, type AuthzMatrix, type Channel } from './authz.js';
 import { evalCondition } from './conditions.js';
@@ -63,6 +64,7 @@ function redFailed(out: Decision, at: { event: FactoryEvent<'verify.failed'>; ti
   }
   if (red.mode === 'measure') {
     out.trace.push(`red: aurait bloqué (${cause}), mode mesure : le run continue`);
+    freeze(out, at.ticket, at.event.payload.frozen);
     return success(out, at, job, runId);
   }
   const used = at.ticket?.redAttempts ?? 0;
@@ -73,6 +75,40 @@ function redFailed(out: Decision, at: { event: FactoryEvent<'verify.failed'>; ti
   }
   const reason = `Rouge non vérifié après ${red.attempts} tentatives de ${job.name}.`;
   return block(out, reason, `${reason}\n${formatFailuresShort(failures)}\nRépondez dans ce fil pour relancer.`);
+}
+
+/**
+ * Records the freeze read after `red` (ORC-131), once the run goes on to the build. A freeze already there keeps its
+ * commit and fingerprints, the new files are added: only a maintainer's `/refreeze` takes a file out of the freeze (I3).
+ */
+function freeze(out: Decision, ticket: TicketState | undefined, frozen: FrozenTests | undefined): void {
+  if (!frozen) return;
+  const old = ticket?.frozenTests;
+  out.events.push({ type: 'ticket.patched', patch: { frozenTests: old ? { sha: old.sha, files: { ...frozen.files, ...old.files } } : frozen } });
+}
+
+/** A run in the ticket's worktree goes through `factory/tests-gelés` once frozen (ORC-131), verify commands or not. */
+export function goesThroughFreeze(ticket: TicketState | undefined, job: JobSpec): boolean {
+  return !!ticket?.frozenTests && job.workspace === 'worktree';
+}
+
+/**
+ * `/refreeze` (ORC-131): the freeze read at the branch's head before the decision replaces the old one, for a designated
+ * maintainer only (ORC-186). Checked even on an event without resolved roles: a freeze never opens by default.
+ */
+function refreeze(out: Decision, event: FactoryEvent<'command'>, ticket: TicketState | undefined, matrix: AuthzMatrix): Decision {
+  if (!authorize(out, { ...event, roles: event.roles ?? [] }, ticket, 'refreeze', 'linear', matrix)) return out;
+  const { frozen, linearSessionId } = event.payload;
+  const answer = (body: string) => out.effects.push({ kind: 'activity', type: 'response', body, linearSessionId });
+  if (!frozen) {
+    answer("Rien à regeler : ce ticket n'a pas de gel ou pas de branche de travail.");
+    return out;
+  }
+  const count = Object.keys(frozen.files).length;
+  out.trace.push(`refreeze by ${event.actor}: ${count} fichiers gelés à ${frozen.sha}`);
+  out.events.push({ type: 'ticket.patched', patch: { frozenTests: frozen } });
+  answer(`Regelé : ${count} fichiers, tels qu'au commit ${frozen.sha.slice(0, 12)}. La prochaine vérification part de ce gel.`);
+  return out;
 }
 
 function block(out: Decision, reason: string, body: string): Decision {
@@ -613,6 +649,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
   if (event.type === 'status.changed' && event.payload.to === 'done' && reviewed) {
     return doneMerge(out, event, state, matrix);
   }
+  if (event.type === 'command' && event.payload.name === REFREEZE) return refreeze(out, event, ticket, matrix);
   if (TRIGGERS.has(event.type)) {
     // The event's facts stay recorded (Linear did delegate, the session exists): only the factory's answer is refused.
     if (!authorize(out, event, ticket, 'trigger', 'linear', matrix)) return out;
@@ -642,7 +679,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       if (typeof outcome === 'object') return ticket?.blocked ? out : block(out, outcome.reason, outcome.body);
       if (outcome === 'success' && ticket?.blocked && job.queue === 'dev') return out;
       if (outcome === 'success') {
-        if (job.verify.length === 0 && !job.red) return success(out, { event, ticket, workflow }, job, runId, output);
+        if (job.verify.length === 0 && !job.red && !goesThroughFreeze(ticket, job)) return success(out, { event, ticket, workflow }, job, runId, output);
         out.events.push({ type: 'verify.started', runId });
         out.effects.push({ kind: 'run_verify', runId, job: jobName, ...(output ? { output } : {}) });
         return out;
@@ -676,6 +713,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       if (!job) return out;
       const patch = { verifyAttempts: 0, ...(ticket?.repeatedFailure ? { repeatedFailure: null } : {}), ...(ticket?.redAttempts ? { redAttempts: 0 } : {}) };
       out.events.push({ type: 'ticket.patched', patch });
+      if (job.red) freeze(out, ticket, event.payload.frozen);
       return success(out, { event, ticket, workflow }, job, event.payload.runId, event.payload.output);
     }
     case 'verify.failed': {

@@ -213,7 +213,7 @@ Chaque scénario est livré par le ticket qui livre le comportement qu'il teste,
 |---|---|---|
 | CI rouge 3 fois | ORC-184 | `h.forge` (checks en échec), `h.runner` |
 | `.skip` ajouté | ORC-158 | `h.checks`, puis `h.publisher` quand l'usine poussera |
-| Config de tests modifiée | ORC-131 | `h.checks`, puis `h.publisher` quand l'usine poussera |
+| Config de tests modifiée | ORC-131 (fait : `test/scenarios/freeze.test.ts`) | `h.workspaces` (`heads`, `steps` par `<worktree>@<commit du gel>`), `h.runner` (`hold`), puis `h.publisher` quand l'usine poussera |
 | Réponse humaine pendant un run | ORC-180 | `h.runner` (`hold`), `h.advance` |
 | Redémarrage pendant un contrôle | ORC-220 | `h.checks.holdNext()`, `h.restart({ mode: 'brutal' })` |
 | Budget épuisé | ORC-216 | `h.runner` (`turns`, `costUsd`, `outcome: 'limit'`) |

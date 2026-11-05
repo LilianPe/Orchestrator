@@ -23,11 +23,15 @@ export interface Workspace {
 
 /** What a step's commits changed, read on the factory's repository (ORC-123): the `red` check's view of the step. */
 export interface StepDiff {
+  /** The worktree's head the diff ends on. */
+  head: string;
   changed: { path: string; deleted: boolean }[];
   /** Of `paths`, those that exist at the base (a file, or a directory). */
   existsAtBase(paths: readonly string[]): Promise<Set<string>>;
   showAtBase(path: string): Promise<string | undefined>;
   showAtHead(path: string): Promise<string | undefined>;
+  /** Every file at the head: the freeze looks the harness up in it (ORC-131). */
+  filesAtHead(): Promise<string[]>;
 }
 
 export interface WorkspaceManager {
