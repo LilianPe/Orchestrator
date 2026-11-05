@@ -26,6 +26,8 @@ export interface FactoryYml {
   budgets?: { perStepTokens?: Record<string, number>; perTicketTokens?: number; maxTurns?: Record<string, number>; onUsageLimit?: 'wait' };
   /** Read and validated; `projects[].repoPath` of config.yaml stays the working copy until the runner clones (ORC-204). */
   repos?: { linearTeam: string; github: string }[];
+  /** Lines past which the pack's hook refuses a whole read (ORC-279); without it, the hook's own 350. */
+  readGuard?: { maxLines: number };
 }
 
 type Effort = 'low' | 'medium' | 'high';
@@ -43,6 +45,7 @@ const SECTIONS: Record<string, string[]> = {
   concurrency: [],
   budgets: ['per_step_tokens', 'per_ticket_tokens', 'max_turns', 'on_usage_limit'],
   repos: [],
+  read_guard: ['max_lines'],
 };
 const effort = z.enum(['low', 'medium', 'high']);
 const counts = z.record(z.string(), z.number().int().positive());
@@ -177,6 +180,8 @@ export function parseFactoryYml(text: string, env: NodeJS.ProcessEnv = process.e
     });
     out.repos = repos.map((repo) => ({ linearTeam: repo.linear_team, github: repo.github }));
   }
+  const maxLines = leaf('read_guard.max_lines', section('read_guard')?.['max_lines'], z.number().int().positive(), 'un entier positif est attendu');
+  if (maxLines !== undefined) out.readGuard = { maxLines };
 
   if (violations.length > 0) throw new FactoryYmlError(violations);
   return out;

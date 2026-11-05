@@ -75,6 +75,26 @@ const redBaseKey = (projectId: string, ticketId: string): string => `red-base:${
  */
 export const CLAUDE_RUN_ENV = { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1', DISABLE_TELEMETRY: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' };
 
+/** Half of what Linux takes for one environment string (128 KiB): past it, the launch itself would fail. */
+const FULL_READ_ENV_MAX_BYTES = 64 * 1024;
+
+/**
+ * The pack hook's list of paths read whole, absolute as the run sees them. Past the bound the last paths are left
+ * out, and `onCut` told how many: such a file is refused whole and read by ranges, the run still starts.
+ */
+export function fullReadEnv(cwd: string, paths: readonly string[], onCut: (count: number) => void = () => {}): Record<string, string> {
+  const kept: string[] = [];
+  let bytes = 2; // the brackets
+  for (const path of paths) {
+    const full = `${cwd}/${path}`;
+    bytes += Buffer.byteLength(JSON.stringify(full)) + 1; // the comma
+    if (bytes > FULL_READ_ENV_MAX_BYTES) break;
+    kept.push(full);
+  }
+  if (kept.length < paths.length) onCut(paths.length - kept.length);
+  return kept.length ? { FACTORY_FULL_READ_PATHS: JSON.stringify(kept) } : {};
+}
+
 /**
  * The run's output, validated again: absent or invalid, the agent submitted none (ORC-289). A store
  * that cannot be read rejects: that is the infrastructure's, not the agent's.
@@ -143,6 +163,11 @@ export interface OrchestratorDeps {
   /** Other host paths every sandbox mounts (the factory's install, for `factory-agent`). */
   sandboxMounts?: readonly SandboxMount[];
   agentEnv: (run: RunRecord) => Record<string, string>;
+  /**
+   * Repository-relative paths a run of this ticket reads whole past the pack's read threshold (ORC-279). Nothing
+   * sets it yet: it will give the frozen tests (ORC-131, `frozenTests.files`) and the ticket's spec (ORC-212).
+   */
+  fullReadPaths?: (ticket: TicketState) => readonly string[];
   dailyBudgetUsd?: number;
   newId?: () => string;
   activityIntervalMs?: number;
@@ -1423,6 +1448,9 @@ export class Orchestrator {
           ...this.d.agentEnv(run),
           // In a sandbox, the run's refusals log, on the host: it outlives the sandbox (ORC-217).
           ...(sandbox ? { FACTORY_REFUSALS_LOG: `${REFUSALS_TARGET}/refusals.jsonl` } : {}),
+          ...fullReadEnv(sandbox ? WORKSPACE_TARGET : ws.path, this.d.fullReadPaths?.(t) ?? [], (n) =>
+            this.log('warn', `${n} path(s) of ${ticketId} left out of the whole-read list: too long for the environment`),
+          ),
           ...(ws.port !== undefined ? { PORT: String(ws.port) } : {}),
           ...CLAUDE_RUN_ENV,
           // The ticket's session dir (out of the ticket session, the run's own) as Claude's whole config dir (ORC-128 point 4), login by the env

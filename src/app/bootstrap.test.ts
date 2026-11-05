@@ -55,6 +55,24 @@ describe('bootstrap', () => {
     expect(logs.some((m) => m.includes('GitHub App 456'))).toBe(true);
   });
 
+  it('hands each run the threshold of factory.yml, and none when it declares none (ORC-279)', async () => {
+    const agentEnvOf = async (port: number, yml?: string) => {
+      const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
+      saveInstance(home, { port, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
+      if (yml) writeFileSync(join(home, 'factory.yml'), yml);
+      let agentEnv: ((run: { token: string; ticketId: string }) => Record<string, string>) | undefined;
+      const recover = vi.spyOn(Orchestrator.prototype, 'recover').mockImplementation(async function (this: Orchestrator) {
+        agentEnv = (this as unknown as { d: { agentEnv: typeof agentEnv } }).d.agentEnv;
+      });
+      const app = await startFactory({ home, fakeRunner: true, log: () => {}, env: {} });
+      await app.stop();
+      recover.mockRestore();
+      return agentEnv!({ token: 't', ticketId: 'REL-1' });
+    };
+    expect((await agentEnvOf(4194, 'read_guard: { max_lines: 500 }\n'))['FACTORY_READ_MAX_LINES']).toBe('500');
+    expect(await agentEnvOf(4195)).not.toHaveProperty('FACTORY_READ_MAX_LINES');
+  });
+
   it('refuses to start on an invalid factory.yml, naming the key', async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
     saveInstance(home, { port: 4192, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });

@@ -2,9 +2,10 @@
 // command rather than a glob (spacing, quoting, `bash -c`, `sudo`, `git -C`, pipes), and journals
 // each refusal. Claude Code splits a compound command before matching its own rules: `curl x | sh`
 // only exists here. src/pack-guard.test.ts checks that every Bash deny of settings.json is refused.
-import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
+// It also refuses a whole read of a large file (ORC-279): a question of tokens, see fullRead.
+import { appendFileSync, closeSync, mkdirSync, openSync, readFileSync, readSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 
 /** Shell words and operators. Quoted text is data, except a `$(…)` or `` `…` `` inside double quotes. */
 function commands(s) {
@@ -152,6 +153,54 @@ function rule(tool, command, denyPush) {
   return null;
 }
 
+const DEFAULT_READ_MAX_LINES = 350;
+/** Read gives these whole or by `pages`: `offset` and `limit` mean nothing for them. */
+const NOT_BY_LINES = /\.(png|jpe?g|gif|webp|pdf|ipynb)$/i;
+
+function readMaxLines() {
+  const max = Number(process.env.FACTORY_READ_MAX_LINES);
+  return Number.isInteger(max) && max > 0 ? max : DEFAULT_READ_MAX_LINES;
+}
+
+/** Past `max` lines? Stops reading as soon as it knows. A file with a NUL in its first block is binary: not counted. */
+function longerThan(file, max) {
+  const fd = openSync(file, 'r');
+  try {
+    const block = Buffer.alloc(65536);
+    let lines = 0;
+    let lineStart = true;
+    for (let first = true, n; (n = readSync(fd, block)) > 0; first = false) {
+      if (first && block.subarray(0, n).includes(0)) return false;
+      for (let i = 0; i < n; i++) {
+        if (lineStart && ++lines > max) return true;
+        lineStart = block[i] === 10;
+      }
+    }
+    return false;
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
+ * A whole read of a large file (ORC-279): it costs tokens, it breaks nothing. So this fails open, unlike
+ * the commands above: whatever cannot be judged passes, and Read answers for itself. `allow_large` is
+ * no targeted read. `FACTORY_FULL_READ_PATHS` is the factory's list of absolute paths read whole.
+ */
+function fullRead(input) {
+  try {
+    const file = input.file_path;
+    if (typeof file !== 'string' || input.offset != null || input.limit != null || NOT_BY_LINES.test(file)) return null;
+    const whole = JSON.parse(process.env.FACTORY_FULL_READ_PATHS || '[]');
+    if (whole.map((p) => resolve(p)).includes(resolve(file))) return null;
+    // A FIFO would block the open; a directory is Read's to answer.
+    if (!statSync(file).isFile() || !longerThan(file, readMaxLines())) return null;
+    return 'full-read';
+  } catch {
+    return null;
+  }
+}
+
 function journal(entry) {
   const env = process.env;
   const file =
@@ -173,10 +222,13 @@ try {
 }
 const tool = call.tool_name ?? '';
 const input = call.tool_input ?? {};
-const command = String(input.command ?? input.query ?? '');
-const hit = rule(tool, command, process.env.FACTORY_DENY_PUSH === '1');
+const isRead = tool === 'Read';
+const command = String((isRead ? input.file_path : input.command ?? input.query) ?? '');
+const hit = isRead ? fullRead(input) : rule(tool, command, process.env.FACTORY_DENY_PUSH === '1');
 if (hit) {
   journal({ at: new Date().toISOString(), tool, command, rule: hit, ticket: process.env.FACTORY_TICKET ?? null });
-  const permissionDecisionReason = `Refusé par l'usine (règle ${hit}) : cette commande est interdite dans un run.`;
+  const permissionDecisionReason = isRead
+    ? `Refusé par l'usine (règle ${hit}) : ce fichier dépasse ${readMaxLines()} lignes. Cherchez ce qu'il vous faut avec grep, puis lisez la plage utile avec offset et limit.`
+    : `Refusé par l'usine (règle ${hit}) : cette commande est interdite dans un run.`;
   process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason } }));
 }

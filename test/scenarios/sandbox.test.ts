@@ -215,6 +215,19 @@ describe('the ticket session across attempts', () => {
     expect(await roles(h)).toEqual(['implementer', 'answerer']);
   });
 
+  it('hands a run the paths it reads whole, as the sandbox sees them (ORC-279)', async () => {
+    const h = createHarness({ sandboxed: true, fullReadPaths: () => ['src/export.test.ts', 'vitest.config.ts'] });
+    await delegate(h);
+    expect(JSON.parse(h.runner.requests[0]!.env['FACTORY_FULL_READ_PATHS']!)).toEqual([`${WORKSPACE_TARGET}/src/export.test.ts`, `${WORKSPACE_TARGET}/vitest.config.ts`]);
+  });
+
+  it('hands no list when the factory has no path to read whole (ORC-279)', async () => {
+    for (const h of [createHarness({ sandboxed: true }), createHarness({ sandboxed: true, fullReadPaths: () => [] })]) {
+      await delegate(h);
+      expect(h.runner.requests[0]!.env).not.toHaveProperty('FACTORY_FULL_READ_PATHS');
+    }
+  });
+
   it("every sandboxed run's refusals log is on the host, and outlives its sandbox", async () => {
     const h = createHarness({ sandboxed: true });
     await delegate(h);

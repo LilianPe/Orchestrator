@@ -15,7 +15,7 @@ import { SqliteStore } from '../store/sqlite-store.js';
 import { hashText } from './attempt-labels.js';
 import { EventBus } from './bus.js';
 import { FakeClock } from './clock.js';
-import { Orchestrator } from './orchestrator.js';
+import { fullReadEnv, Orchestrator } from './orchestrator.js';
 import { runRepair } from '../cli/repair.js';
 import type { StoredEvent } from './upcast.js';
 import type { EffectRetry } from '../runtime/outbox.js';
@@ -520,5 +520,25 @@ describe('Orchestrator', () => {
     await orch.drained();
     expect((await store.getTicket('p', 'REL-1'))!.blockReason).toBe('Erreur : linear down');
     expect(await store.dueTimers(Number.MAX_SAFE_INTEGER)).toEqual([]);
+  });
+});
+
+describe('fullReadEnv (ORC-279)', () => {
+  it('gives each path under the run cwd, as JSON', () => {
+    expect(fullReadEnv('/work', ['a b.test.ts', 'src/é.test.ts'])).toEqual({ FACTORY_FULL_READ_PATHS: JSON.stringify(['/work/a b.test.ts', '/work/src/é.test.ts']) });
+  });
+
+  it('gives nothing for no path', () => {
+    expect(fullReadEnv('/work', [])).toEqual({});
+  });
+
+  it('stays under what one environment string can hold, and says how many paths it left out', () => {
+    const paths = Array.from({ length: 5000 }, (_, i) => `packages/some-package-${i}/src/some-feature.test.ts`);
+    const cut: number[] = [];
+    const value = fullReadEnv('/work', paths, (n) => cut.push(n))['FACTORY_FULL_READ_PATHS']!;
+    expect(Buffer.byteLength(value)).toBeLessThanOrEqual(64 * 1024);
+    const kept = (JSON.parse(value) as string[]).length;
+    expect(kept).toBeGreaterThan(0);
+    expect(cut).toEqual([5000 - kept]);
   });
 });

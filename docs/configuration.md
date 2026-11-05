@@ -37,7 +37,7 @@ Les deux fichiers d'instance sont lus **au démarrage** de `relais up` : redéma
 
 Variables réservées aux tests (sans effet sur le démon) : `LINEAR_API_KEY` (test live des requêtes Linear), `FACTORY_E2E=1` (test du pack avec le vrai `claude`). Voir [`recette.md`](recette.md#vérifications-live-optionnelles).
 
-Variables **posées par Relais** dans l'environnement de chaque run (à ne pas définir vous-même) : `RELAIS_API`, `RELAIS_RUN_TOKEN`, `RELAIS_TICKET`, `RELAIS_KNOWLEDGE`, `RELAIS_ROOT`, `PATH`, `FACTORY_DENY_PUSH` quand le démon l'a à `1`, `FACTORY_REFUSALS_LOG` quand le démon l'a (en sandbox, toujours, vers le dossier du run) et, pour la file `dev`, `PORT`. Voir [« Ce qui ne sort pas du démon »](#ce-qui-ne-sort-pas-du-démon). Dans un conteneur, ces chemins sont ceux du conteneur : `RELAIS_ROOT=/factory/app` (le `bin/` de Relais et ce qu'il lui faut, montés en lecture seule), `RELAIS_KNOWLEDGE=/factory/knowledge` (en lecture seule), et un `PATH` propre au conteneur, jamais celui de l'hôte.
+Variables **posées par Relais** dans l'environnement de chaque run (à ne pas définir vous-même) : `RELAIS_API`, `RELAIS_RUN_TOKEN`, `RELAIS_TICKET`, `RELAIS_KNOWLEDGE`, `RELAIS_ROOT`, `PATH`, `FACTORY_DENY_PUSH` quand le démon l'a à `1`, `FACTORY_REFUSALS_LOG` quand le démon l'a (en sandbox, toujours, vers le dossier du run), `FACTORY_READ_MAX_LINES` quand `factory.yml` déclare `read_guard.max_lines`, `FACTORY_FULL_READ_PATHS` quand un fichier doit être lu en entier et, pour la file `dev`, `PORT`. Voir [« Ce qui ne sort pas du démon »](#ce-qui-ne-sort-pas-du-démon). Dans un conteneur, ces chemins sont ceux du conteneur : `RELAIS_ROOT=/factory/app` (le `bin/` de Relais et ce qu'il lui faut, montés en lecture seule), `RELAIS_KNOWLEDGE=/factory/knowledge` (en lecture seule), et un `PATH` propre au conteneur, jamais celui de l'hôte.
 
 ## `config.yaml`
 
@@ -173,6 +173,7 @@ concurrency: 1
 budgets: { max_turns: { build: 150, fix: 60, review: 25 }, on_usage_limit: wait }
 repos:
   - { linear_team: ORC, github: LilianPe/Orchestrator }
+read_guard: { max_lines: 350 }
 ```
 
 | Section | Effet aujourd'hui |
@@ -183,6 +184,7 @@ repos:
 | `concurrency` | Validée, pas encore lue : la file prend encore `parallel_sessions`. |
 | `budgets` | Validée, pas encore lue : appliquée par ORC-216. |
 | `repos` | Validée, pas encore lue : `projects[].repoPath` de `config.yaml` reste la copie de travail tant que le runner ne clone pas lui-même (ORC-204). |
+| `read_guard` | **Appliquée** : `max_lines` (entier positif, 350 sans cette clé) est le nombre de lignes au-delà duquel le hook du pack refuse une lecture complète ([ORC-279](pack-et-skills.md#lecture-complète-dun-gros-fichier)). Il compte à partir du prochain démarrage. |
 
 `factory.yml` n'est lu qu'à la lecture : `init` et l'écriture des jetons ne recopient jamais une de ses valeurs dans `config.yaml` ou `secrets.json`. Ses secrets sont masqués dans les transcripts des runs, comme ceux de `secrets.json`.
 
