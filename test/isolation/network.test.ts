@@ -179,6 +179,7 @@ describe.skipIf(!enabled)(`egress proxy (${cli})`, () => {
     `cd $(mktemp -d) && echo '{"name":"p","version":"1.0.0",${manifest}"dependencies":{"is-number":"7.0.0"}}' > package.json && touch yarn.lock && HOME=$(mktemp -d) ${yarn} install`;
 
   it('limited: Yarn 1, the image’s, installs a package through the proxy, trusting the factory CA', async () => {
+    expect(await run('limited', 'yarn --version')).toMatchObject({ code: 0, out: expect.stringMatching(/^1\./) as string });
     const r = await run('limited', `${yarnInstall('yarn', '')} --non-interactive && cat node_modules/is-number/package.json`);
     expect(r).toMatchObject({ code: 0, out: expect.stringContaining('"version": "7.0.0"') as string });
     expect(journal('limited')).toContainEqual(expect.objectContaining({ method: 'GET', host: 'registry.yarnpkg.com', ok: true }));
@@ -186,11 +187,12 @@ describe.skipIf(!enabled)(`egress proxy (${cli})`, () => {
 
   it('limited: Yarn 4 loads its configuration and installs a package through the proxy', async () => {
     const yarn = 'node /tmp/yarn4/node_modules/@yarnpkg/cli-dist/bin/yarn.js';
-    expect((await run('limited', 'HOME=/tmp npm install -s --prefix /tmp/yarn4 @yarnpkg/cli-dist@4.5.0')).code).toBe(0);
-    const r = await run('limited', `${yarnInstall(yarn, '"packageManager":"yarn@4.5.0",')} && ${yarn} config get npmRegistryServer && node -r ./.pnp.cjs -p "require('is-number/package.json').version"`);
+    expect(await run('limited', 'HOME=/tmp npm install -s --prefix /tmp/yarn4 @yarnpkg/cli-dist@4.5.0')).toMatchObject({ code: 0 });
+    const r = await run('limited', `${yarnInstall(yarn, '"packageManager":"yarn@4.5.0",')} && ${yarn} config get npmRegistryServer && node -r ./.pnp.cjs -p "'is-number@'+require('is-number/package.json').version"`);
     expect(r.out).not.toMatch(/Unrecognized or legacy configuration settings/);
-    expect(r).toMatchObject({ code: 0, out: expect.stringMatching(/Done[\s\S]*registry\.yarnpkg\.com\s+7\.0\.0$/) as string });
-  }, 120_000);
+    expect(r).toMatchObject({ code: 0, out: expect.stringContaining('is-number@7.0.0') as string });
+    expect(r.out).toContain('https://registry.yarnpkg.com');
+  });
 
   it('limited: an https GET to a docs host passes, journaled with its path; a POST to it is refused', async () => {
     expect(await run('limited', fetchIn('https://nodejs.org/en/about'))).toMatchObject({ code: 0, out: '200' });
