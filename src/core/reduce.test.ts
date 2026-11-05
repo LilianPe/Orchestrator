@@ -139,7 +139,7 @@ describe('reduce — facts recorded by the orchestrator', () => {
 
   it('a dev run becomes the active run and keeps the first claude session; a question run changes neither', () => {
     const started = (queue: 'dev' | 'questions', claudeSessionId: string) =>
-      ({ type: 'run.started', runId: 'r1', job: queue === 'dev' ? 'dev' : 'ask', queue, claudeSessionId, feedbackConsumed: false }) as const;
+      ({ type: 'run.started', runId: 'r1', job: queue === 'dev' ? 'dev' : 'ask', queue, claudeSessionId }) as const;
     expect(reduce(ticket(), started('dev', 'c1'))).toMatchObject({ activeRunId: 'r1', activeJob: 'dev', claudeSessionId: 'c1' });
     expect(reduce(ticket({ claudeSessionId: 'c0' }), started('dev', 'c1'))!.claudeSessionId).toBe('c0');
     expect(reduce(ticket(), started('questions', 'c1'))).toEqual(ticket());
@@ -147,19 +147,14 @@ describe('reduce — facts recorded by the orchestrator', () => {
 
   it('a run that consumes the feedback empties it', () => {
     const t = ticket({ pendingFeedback: [{ author: 'L', body: 'x', at: 1, source: 'session' }] });
-    expect(reduce(t, { type: 'run.started', runId: 'r1', job: 'dev-feedback', queue: 'dev', claudeSessionId: 'c', feedbackConsumed: true })!.pendingFeedback).toEqual([]);
+    // Kept until the run that read it is written (ORC-220): a launch cut before reads it again.
+    expect(reduce(t, { type: 'run.started', runId: 'r1', job: 'dev-feedback', queue: 'dev', claudeSessionId: 'c' })!.pendingFeedback).toHaveLength(t.pendingFeedback.length);
+    expect(reduce(t, { type: 'feedback.consumed' })!.pendingFeedback).toEqual([]);
   });
 
-  it('a cleared run frees the ticket; an interrupted one also drops the verification and blocks', () => {
+  it('a cleared run frees the ticket, and keeps the verification', () => {
     const t = ticket({ activeRunId: 'r1', activeJob: 'dev', verifyingRunId: 'r0' });
     expect(reduce(t, { type: 'run.cleared' })).toMatchObject({ activeRunId: undefined, activeJob: undefined, verifyingRunId: 'r0' });
-    expect(reduce(t, { type: 'run.interrupted', reason: 'redémarré' })).toMatchObject({
-      activeRunId: undefined,
-      activeJob: undefined,
-      verifyingRunId: undefined,
-      blocked: true,
-      blockReason: 'redémarré',
-    });
   });
 });
 

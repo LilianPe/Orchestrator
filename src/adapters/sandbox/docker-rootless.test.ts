@@ -45,7 +45,7 @@ function fakeEgress(live: string[] = []) {
     open: async (runId: string, policy: EgressPolicy) => {
       opened.push({ runId, policy });
       open.add(runId);
-      return `/home/d/.factory/network/${runId}.sock`;
+      return `/home/d/.factory/network/${runId}/egress.sock`;
     },
     close: async (runId: string) => {
       closed.push(runId);
@@ -137,7 +137,8 @@ describe('ContainerSandboxProvider.create', () => {
     await p.create(req({ network: 'limited', allow: ['docs.exemple.com'] }));
     expect(egress.opened).toEqual([{ runId: 'r1', policy: { level: 'limited', allow: ['docs.exemple.com'] } }]);
     const a = runArgs(e.calls);
-    expect(a).toContain('type=bind,source=/home/d/.factory/network/r1.sock,target=/run/factory/egress.sock');
+    // Its dir, read-only: bound anew after a restart, the socket stays in reach, and the agent cannot replace it (ORC-220).
+    expect(a).toContain('type=bind,source=/home/d/.factory/network/r1,target=/run/factory/egress,readonly');
     expect(a).toContain('type=bind,source=/home/d/.factory/egress-ca/ca.crt,target=/run/factory/egress-ca.crt,readonly');
     expect(a.some((x) => x.includes('ca.key'))).toBe(false);
     expect(a.slice(a.indexOf('--network'), a.indexOf('--network') + 2)).toEqual(['--network', 'none']);
@@ -146,6 +147,7 @@ describe('ContainerSandboxProvider.create', () => {
     }
     expect(a.slice(-3, -1)).toEqual(['node', '-e']);
     expect(a.at(-1)).toMatch(/listen\(3128, *'127\.0\.0\.1'\)/);
+    expect(a.at(-1)).toContain("net.connect('/run/factory/egress/egress.sock')");
   });
 
   it('closes the run’s egress when its container is destroyed, from the run it knows, or when it never runs', async () => {
@@ -179,6 +181,36 @@ describe('ContainerSandboxProvider.create', () => {
     expect(e.calls.map((c) => c.args.slice(0, 2).join(' '))).toContain('rm -f');
     const live = new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: e.exec, egress: fakeEgress(['r1']) });
     expect(await live.findByAttempt('r1')).toEqual({ id: 'c9', network: 'limited', level: 'L3' });
+  });
+
+  it('reattaches to the live container of an attempt from before a restart: its egress listens again, on its label (ORC-220)', async () => {
+    const e = engine((a) => {
+      if (a[0] === 'ps') return ok('c9\n');
+      if (a[0] === 'inspect') return ok(inspectLine('c9', true, 'r1', 'limited'));
+      throw new Error(`unexpected ${a.join(' ')}`);
+    });
+    const egress = fakeEgress();
+    const p = new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: e.exec, egress });
+    expect(await p.reattach('r1')).toEqual({ id: 'c9', network: 'limited', level: 'L3' });
+    expect(egress.opened).toEqual([{ runId: 'r1', policy: { level: 'limited', allow: [] } }]);
+    // Usable from now on: the heartbeat finds it, and spawnCommand knows it.
+    expect(await p.findByAttempt('r1')).toEqual({ id: 'c9', network: 'limited', level: 'L3' });
+    expect(p.spawnCommand('c9', ['true']).command[0]).toBe('docker');
+    // Twice in one process, the egress is not opened twice.
+    await p.reattach('r1');
+    expect(egress.opened).toHaveLength(1);
+  });
+
+  it('has nothing to reattach to when the container of the attempt is stopped or gone', async () => {
+    const stopped = engine((a) => {
+      if (a[0] === 'ps') return ok('c9\n');
+      if (a[0] === 'inspect') return ok(inspectLine('c9', false, 'r1', 'limited'));
+      return ok();
+    });
+    const egress = fakeEgress();
+    expect(await new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: stopped.exec, egress }).reattach('r1')).toBeUndefined();
+    expect(await new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: empty().exec, egress }).reattach('r1')).toBeUndefined();
+    expect(egress.opened).toEqual([]);
   });
 
   it('returns the live container of the attempt instead of running a second one', async () => {

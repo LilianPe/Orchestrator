@@ -37,6 +37,10 @@ export class FakeSandboxProvider implements SandboxProvider {
     return s && { ...s };
   }
 
+  reattach(runId: string): Promise<Sandbox | undefined> {
+    return this.findByAttempt(runId);
+  }
+
   async list(): Promise<{ runId: string; sandbox: Sandbox }[]> {
     return [...this.live].map(([runId, s]) => ({ runId, sandbox: { ...s } }));
   }

@@ -41,6 +41,14 @@ export function loadTestWorkflow(projectYaml?: string): Workflow {
   }
 }
 
+/** REL-1 delegated, its dev run held by the runner: it stays `running` until released. */
+export async function heldRun(h: ReturnType<typeof createHarness>): Promise<string> {
+  h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+  h.runner.enqueue({ hold: true });
+  await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+  return (await h.ticket()).activeRunId!;
+}
+
 export type StoreKind = 'sqlite' | 'postgres';
 
 /**
@@ -257,6 +265,8 @@ export function createHarness(
     clock.advance(ms);
     runner.tick();
     await timers.tick();
+    // The heartbeat, as the daemon's would by then: the leases of the attempts (ORC-220).
+    await orch.supervise();
     // The worker's poll, as the daemon's loop would by then: rows held by a backoff or a lease go again.
     await orch.poll();
     await orch.drained();
@@ -279,7 +289,6 @@ export function createHarness(
     orch = build(life);
     timers = timerService(life.store);
     await orch.recover();
-    await orch.announceRecovery();
     await orch.replayInbox();
     await orch.drained();
   }

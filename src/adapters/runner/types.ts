@@ -50,6 +50,22 @@ export interface RunHandle {
   stop(): void;
 }
 
+/** What the supervisor knows of an attempt started by an earlier process (ORC-220). */
+export interface AttachRequest {
+  runId: string;
+  limits: RunLimits;
+  /** Spent already, against `limits.durationMs`. */
+  elapsedMs: number;
+  /** The run's environment: its secrets are masked as at the start. */
+  env: Record<string, string>;
+}
+
 export interface Runner {
   start(req: RunRequest): RunHandle;
+  /**
+   * Takes up an attempt started by an earlier process, a factory that was killed (ORC-220): the events from
+   * now on, and its real result, even if it ended meanwhile. Undefined when nothing is left of it: the
+   * supervisor then starts its step again. Absent: a runner that cannot.
+   */
+  attach?(req: AttachRequest): RunHandle | undefined;
 }

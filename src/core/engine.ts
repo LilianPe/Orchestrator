@@ -4,6 +4,8 @@ import { evalCondition } from './conditions.js';
 import { deadLetterReason, liftDeadLetterBlock, REPAIR_LABELS, repairedEvent } from './dead-letter.js';
 import type { AgentOutput } from './agent-output.js';
 import type { Decision, Effect } from './decision.js';
+import { PRODUCT_NAME } from '../product.js';
+import { CUT_RELAUNCHES, CUT_WINDOW_MS } from '../store/types.js';
 import { isOwnMoveEcho, reduce } from './reduce.js';
 import type { EventPayloads, EventType, FactoryEvent, FeedbackItem, InputKind, RunOutcome, Taint, TicketState, VerifyFailure } from './types.js';
 
@@ -23,7 +25,7 @@ export function taintedKnowledge(job: string, source: 'event' | 'read' = 'event'
 }
 
 const BUILT_IN = new Set<EventType>([
-  'control.pause', 'control.resume', 'control.stop', 'run.finished', 'verify.passed', 'verify.failed', 'timer.fired', 'pr.opened',
+  'control.pause', 'control.resume', 'control.stop', 'run.finished', 'run.lost', 'verify.passed', 'verify.failed', 'verify.lost', 'timer.fired', 'pr.opened',
   'effect.done', 'effect.failed', 'dead_letter.added',
 ]);
 
@@ -134,6 +136,57 @@ function unblock(out: Decision, event: FactoryEvent, ticket: TicketState): void 
   if (ticket.repeatedFailure) out.events.push({ type: 'ticket.patched', patch: { repeatedFailure: null } });
   // The red loop too (ORC-123).
   if (ticket.redAttempts) out.events.push({ type: 'ticket.patched', patch: { redAttempts: 0 } });
+  // The lease's relaunch too (ORC-220), and the relaunches after a cut, which nothing else gives back.
+  if (ticket.leaseRelaunches) out.events.push({ type: 'ticket.patched', patch: { leaseRelaunches: 0 } });
+  if (ticket.cutRelaunches?.length) out.events.push({ type: 'ticket.patched', patch: { cutRelaunches: [] } });
+}
+
+/** The head of the reason of a ticket blocked by the bound: the Flux classes a block by the head of its reason (ORC-297). */
+export const CUT_BOUND_REASON = /^Trop de relances après coupure : /;
+
+/** The relaunches still in the window at the time of the event: never the clock, so that a replay decides the same. */
+function recentCuts(ticket: TicketState, at: number): number[] {
+  return (ticket.cutRelaunches ?? []).filter((t) => t > at - CUT_WINDOW_MS);
+}
+
+/** The bound of the relaunches after a cut is reached (ORC-220): no agent, and a human hears why. */
+function blockOnCuts(out: Decision): Decision {
+  const reason = `Trop de relances après coupure : ${CUT_RELAUNCHES} en ${CUT_WINDOW_MS / 60_000} min.`;
+  return block(out, reason, `${reason} ${PRODUCT_NAME} ou son runner redémarre en boucle : vérifiez le démon, puis répondez dans ce fil pour que je reprenne.`);
+}
+
+/** How many relaunches an expired lease gets before the ticket is blocked (ORC-220). */
+const LEASE_RELAUNCHES = 1;
+
+/**
+ * An attempt gone without a result (ORC-220). A dev step starts again from the ticket's session, unless nothing
+ * should run on the ticket any more. An expired lease has its own bound of one, and every relaunch counts against
+ * the bound of the window, a restart included: no fault of the attempt, but an agent launched all the same. A question
+ * is not asked again by itself (ORC-277): its thread is told, once, by an effect.
+ */
+function attemptLost(out: Decision, event: FactoryEvent<'run.lost'>, ticket: TicketState | undefined, workflow: Workflow): Decision {
+  const { job: jobName, runId, cause } = event.payload;
+  const job = workflow.jobs[jobName];
+  if (!job) return out;
+  if (job.queue !== 'dev') {
+    const why = cause === 'restart' ? `${PRODUCT_NAME} a redémarré pendant ma réponse.` : 'Le runner de ma réponse ne répond plus.';
+    out.effects.push({ kind: 'activity', type: 'error', body: `${why} Reposez la question dans ce fil.`, runId });
+    return out;
+  }
+  if (!ticket?.delegated || ticket.blocked || refusesDevWork(ticket, job)) {
+    out.trace.push(`run.lost: ${jobName} not started again, nothing should run on the ticket`);
+    return out;
+  }
+  const used = ticket.leaseRelaunches ?? 0;
+  if (cause === 'lease' && used >= LEASE_RELAUNCHES) {
+    const reason = `Le bail du run ${jobName} a expiré ${used + 1} fois : le runner ne répond plus.`;
+    return block(out, reason, `${reason} Répondez dans ce fil pour que je reprenne.`);
+  }
+  const recent = recentCuts(ticket, event.at);
+  if (recent.length >= CUT_RELAUNCHES) return blockOnCuts(out);
+  out.events.push({ type: 'ticket.patched', patch: { ...(cause === 'lease' ? { leaseRelaunches: used + 1 } : {}), cutRelaunches: [...recent, event.at] } });
+  startRun(out, event, ticket, job, { relaunchOf: runId });
+  return out;
 }
 
 /** A Linear session that carries questions (read-only answers), not the ticket's dev conversation. */
@@ -443,13 +496,13 @@ export function isFenced(d: Decision): boolean {
 
 /** A result whose attempt is no longer active: the dev run or the verification it reports on was replaced or stopped. */
 function staleAttempt(state: TicketState | undefined, event: FactoryEvent, workflow: Workflow): string | undefined {
-  if (event.type === 'verify.passed' || event.type === 'verify.failed') {
+  if (event.type === 'verify.passed' || event.type === 'verify.failed' || event.type === 'verify.lost') {
     const { runId } = event.payload;
     return runId === state?.verifyingRunId ? undefined : `${event.type} for run ${runId}, awaited ${state?.verifyingRunId ?? 'none'}`;
   }
-  if (event.type === 'run.finished' && workflow.jobs[event.payload.job]?.queue === 'dev') {
+  if ((event.type === 'run.finished' || event.type === 'run.lost') && workflow.jobs[event.payload.job]?.queue === 'dev') {
     const { runId } = event.payload;
-    return runId === state?.activeRunId ? undefined : `run.finished for run ${runId}, active ${state?.activeRunId ?? 'none'}`;
+    return runId === state?.activeRunId ? undefined : `${event.type} for run ${runId}, active ${state?.activeRunId ?? 'none'}`;
   }
   return undefined;
 }
@@ -581,6 +634,8 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
     case 'run.finished': {
       const { job: jobName, runId, output } = event.payload;
       const job = workflow.jobs[jobName];
+      // An attempt that ended gives the lease's relaunch back (ORC-220): only two in a row block.
+      if (ticket?.leaseRelaunches && job?.queue === 'dev') out.events.push({ type: 'ticket.patched', patch: { leaseRelaunches: 0 } });
       if (!job || event.payload.outcome === 'stopped') return out;
       const outcome = job.queue === 'dev' ? attemptDecision(event.payload, job) : event.payload.outcome;
       // Already blocked (the agent asked through `ask`, a human's stop…): it keeps its reason and gets no second notice.
@@ -601,6 +656,20 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
           ? `Le run ${jobName} a atteint un plafond (tours, durée ou budget).`
           : `Le run ${jobName} a échoué.`;
       return block(out, reason, `${reason} Répondez dans ce fil pour que je reprenne.`);
+    }
+    case 'run.lost':
+      return attemptLost(out, event, ticket, workflow);
+    case 'verify.lost': {
+      const { runId, job, output } = event.payload;
+      const recent = ticket ? recentCuts(ticket, event.at) : [];
+      if (recent.length >= CUT_RELAUNCHES) {
+        // Nothing runs it any more: the ticket must not wait for its verdict, or no later start would pass it.
+        out.events.push({ type: 'work.cancelled' });
+        return ticket?.blocked ? out : blockOnCuts(out);
+      }
+      out.events.push({ type: 'ticket.patched', patch: { cutRelaunches: [...recent, event.at] } });
+      out.effects.push({ kind: 'run_verify', runId, job, ...(output ? { output } : {}) });
+      return out;
     }
     case 'verify.passed': {
       const job = workflow.jobs[event.payload.job];
