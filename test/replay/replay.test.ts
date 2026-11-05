@@ -36,8 +36,14 @@ function firstDifference(committed: unknown, recorded: unknown, path = ''): stri
 /** Why a committed journal is not the recorded one: a workflow hash says more than its first changed key. */
 function drift(committed: string | undefined, recorded: string): string {
   if (committed === undefined) return 'missing';
-  const [was, now] = [JSON.parse(committed), JSON.parse(recorded)] as ExportedJournal[];
-  const hashes = (j: ExportedJournal) => Object.keys(j.workflows).join(', ');
+  let was: ExportedJournal;
+  try {
+    was = JSON.parse(committed) as ExportedJournal;
+  } catch {
+    return 'not valid JSON';
+  }
+  const now = JSON.parse(recorded) as ExportedJournal;
+  const hashes = (j: ExportedJournal) => Object.keys(j.workflows ?? {}).join(', ');
   if (hashes(was) !== hashes(now)) return `the frozen workflow changed: committed ${hashes(was)}, recorded ${hashes(now)}`;
   return firstDifference(was, now);
 }

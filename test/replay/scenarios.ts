@@ -236,11 +236,6 @@ export async function record(name: string): Promise<ExportedJournal> {
   return journal;
 }
 
-/**
- * The journal as an engine before schema version 2 wrote it: `status.changed` rows as `ticket.moved`,
- * without version nor taint (`src/core/upcast.ts`). The recorded decisions are unchanged: they were
- * taken on the upcast event.
- */
 /** The files `npm run replay:record` writes for a scenario, with their exact text. */
 export function recordedFiles(name: string, journal: ExportedJournal): { file: string; text: string }[] {
   const text = (j: ExportedJournal) => `${JSON.stringify(j, null, 2)}\n`;
@@ -249,6 +244,11 @@ export function recordedFiles(name: string, journal: ExportedJournal): { file: s
   return files;
 }
 
+/**
+ * The journal as an engine before schema version 2 wrote it: `status.changed` rows as `ticket.moved`,
+ * without version nor taint (`src/core/upcast.ts`). The recorded decisions are unchanged: they were
+ * taken on the upcast event.
+ */
 export function asVersion1(journal: ExportedJournal): ExportedJournal {
   return {
     ...journal,
