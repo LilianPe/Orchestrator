@@ -1,3 +1,4 @@
+import type { PlanStep } from '../../core/session-plan.js';
 import type { TeamDirectory } from '../roles/types.js';
 import { IssueNotFoundError, type ActivityInput, type SearchHit, type Tracker, type TrackerIssue } from './types.js';
 
@@ -75,6 +76,11 @@ export class FakeTracker implements Tracker, TeamDirectory {
 
   externalUrls(sessionId: string): { label: string; url: string }[] {
     return this.argsOf('addExternalUrl', sessionId).map(([label, url]) => ({ label: label as string, url: url as string }));
+  }
+
+  /** The plans written to the session, in order. */
+  plans(sessionId: string): (readonly PlanStep[])[] {
+    return this.argsOf('setSessionPlan', sessionId).map(([plan]) => plan as readonly PlanStep[]);
   }
 
   /** What the comments, sessions, activities and links written so far read back as, in the shape the contract suite asks. */
@@ -175,6 +181,10 @@ export class FakeTracker implements Tracker, TeamDirectory {
   async addExternalUrl(sessionId: string, label: string, url: string): Promise<void> {
     if (this.externalUrls(sessionId).some((l) => l.url === url)) return;
     this.record('addExternalUrl', sessionId, label, url);
+  }
+
+  async setSessionPlan(sessionId: string, plan: readonly PlanStep[]): Promise<void> {
+    this.record('setSessionPlan', sessionId, plan);
   }
 
   async ensureSession(identifier: string): Promise<string> {

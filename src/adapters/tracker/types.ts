@@ -1,3 +1,5 @@
+import type { PlanStep } from '../../core/session-plan.js';
+
 export interface TrackerIssue {
   identifier: string;
   title: string;
@@ -67,4 +69,6 @@ export interface Tracker {
   /** Adds the link to the session; nothing when the session already has this URL. */
   addExternalUrl(sessionId: string, label: string, url: string): Promise<void>;
   ensureSession(identifier: string): Promise<string>;
+  /** Final state: the session's plan is `plan`, whole (Linear replaces it at each update). */
+  setSessionPlan(sessionId: string, plan: readonly PlanStep[]): Promise<void>;
 }
