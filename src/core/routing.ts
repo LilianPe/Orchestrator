@@ -1,14 +1,19 @@
 import type { TicketState } from './types.js';
 
 /** Prefix of the label that names a ticket's repo: `repo:<project id>` (ORC-291). */
-export const REPO_LABEL = 'repo:';
+const REPO_LABEL = 'repo:';
+
+/** The label that names a repo. */
+export const repoLabel = (id: string): string => `${REPO_LABEL}${id}`;
+
+const namesRepo = (label: string, id: string): boolean => label.toLowerCase() === repoLabel(id).toLowerCase();
 
 /** Start of the block reason of a ticket whose repo is still to be chosen. */
-export const UNROUTED = 'Dépôt à préciser';
+const UNROUTED = 'Dépôt à préciser';
 
 /** The block reason, and the message, of a ticket whose repo is still to be chosen among `repos`. */
 export function unroutedReason(repos: readonly string[]): string {
-  const labels = repos.map((r) => `\`${REPO_LABEL}${r}\``).join(', ');
+  const labels = repos.map((r) => `\`${repoLabel(r)}\``).join(', ');
   return `${UNROUTED} : cette équipe Linear a plusieurs dépôts. Ajoutez au ticket le label de son dépôt (${labels}), puis déléguez-le de nouveau.`;
 }
 
@@ -19,8 +24,7 @@ export const holds = (t: TicketState): boolean => !isUnrouted(t) && (t.delegated
 
 /** A label naming another repo of the team than `projectId`: what a ticket held there cannot follow. */
 export function namesOtherRepo(team: readonly string[], projectId: string, label: string): boolean {
-  const lower = label.toLowerCase();
-  return team.some((id) => id !== projectId && lower === `${REPO_LABEL}${id}`.toLowerCase());
+  return team.some((id) => id !== projectId && namesRepo(label, id));
 }
 
 export interface Route {
@@ -37,6 +41,8 @@ export interface Route {
  * (something to route: a delegation, a mention), the one its `repo:` label names, or the first with the
  * choice to make. Without `labels`, a ticket no project knows has nowhere to go.
  */
+export function resolveRoute(team: readonly string[], stored: readonly TicketState[], labels: readonly string[]): Route;
+export function resolveRoute(team: readonly string[], stored: readonly TicketState[]): Route | undefined;
 export function resolveRoute(team: readonly string[], stored: readonly TicketState[], labels?: readonly string[]): Route | undefined {
   if (team.length === 1) return { projectId: team[0]! };
   const held = stored.find(holds);
@@ -46,8 +52,7 @@ export function resolveRoute(team: readonly string[], stored: readonly TicketSta
     const known = pending ?? stored[0]?.projectId;
     return known ? { projectId: known } : undefined;
   }
-  const named = new Set(labels.map((l) => l.toLowerCase()));
-  const chosen = team.find((id) => named.has(`${REPO_LABEL}${id}`.toLowerCase()));
+  const chosen = team.find((id) => labels.some((l) => namesRepo(l, id)));
   if (chosen) return { projectId: chosen, ...(pending && pending !== chosen ? { waitedIn: pending } : {}) };
   return { projectId: pending ?? team[0]!, repos: [...team] };
 }

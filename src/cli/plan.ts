@@ -2,7 +2,7 @@ import type { Tracker } from '../adapters/tracker/types.js';
 import type { WorkspaceManager } from '../adapters/workspace/types.js';
 import type { ProjectRuntime } from '../core/orchestrator.js';
 import { pickupFailures } from '../core/pickup.js';
-import { REPO_LABEL } from '../core/routing.js';
+import { repoLabel } from '../core/routing.js';
 import { routedIssues } from '../adapters/tracker/linear/reconcile.js';
 import type { Store } from '../store/types.js';
 
@@ -29,13 +29,13 @@ export async function planRows(d: {
     for (const issue of await routedIssues(d, teamKey, members.map((p) => p.id))) {
       const p = members.find((x) => x.id === issue.projectId)!;
       const row = { identifier: issue.identifier, title: issue.title, priority: issue.priority };
-      const known = await d.store.getTicket(p.id, issue.identifier);
-      if (known && !issue.repos) {
-        rows.push({ ...row, status: 'déjà géré', reasons: [known.logical] });
+      if (issue.repos) {
+        rows.push({ ...row, status: 'pas pris', reasons: [`dépôt à préciser (${issue.repos.map(repoLabel).join(', ')})`] });
         continue;
       }
-      if (issue.repos) {
-        rows.push({ ...row, status: 'pas pris', reasons: [`dépôt à préciser (${issue.repos.map((r) => `${REPO_LABEL}${r}`).join(', ')})`] });
+      const known = await d.store.getTicket(p.id, issue.identifier);
+      if (known) {
+        rows.push({ ...row, status: 'déjà géré', reasons: [known.logical] });
         continue;
       }
       const reasons = await pickupFailures(p.workflow.tracker.pickup.checks, issue, p.repoPath, d.workspaces);

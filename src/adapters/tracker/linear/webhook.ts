@@ -173,12 +173,13 @@ async function routeOf(body: any, identifier: string, teamKey: string, ctx: MapC
   if (team.length === 0) return undefined;
   if (team.length === 1) return { projectId: team[0]! };
   const stored = (await Promise.all(team.map((p) => ctx.ticket(p, identifier)))).filter((t) => t !== undefined);
-  const held = stored.some(holds);
-  const session: unknown = body.type === 'AgentSessionEvent' ? body.agentSession?.id : undefined;
-  const opener = held ? undefined : stored.find((t) => t.linearSessionId === session || t.questionSessionIds.includes(session as string));
-  if (session && body.action === 'prompted' && opener) return { projectId: opener.projectId };
-  const routes = session && !held && (body.action === 'created' || stored.length === 0);
-  if (!routes) return resolveRoute(team, stored);
+  const session: string | undefined = body.type === 'AgentSessionEvent' ? body.agentSession?.id : undefined;
+  if (!session || stored.some(holds)) return resolveRoute(team, stored);
+  if (body.action === 'prompted') {
+    const opener = stored.find((t) => t.linearSessionId === session || t.questionSessionIds.includes(session));
+    if (opener) return { projectId: opener.projectId };
+  }
+  if (body.action !== 'created' && (body.action !== 'prompted' || stored.length > 0)) return resolveRoute(team, stored);
   const labels = await ctx.labelsOf(identifier).catch((err: Error) => {
     if (err instanceof IssueNotFoundError) return [];
     throw err;
@@ -242,10 +243,9 @@ export async function mapLinearWebhook(body: any, key: string, ctx: MapContext):
   if (!route) return [];
   const { projectId, repos, waitedIn } = route;
   const { id: actor, taint, name } = signedActor(body);
-  let partials = body.type === 'AgentSessionEvent' ? sessionEvents(body, name, projectId, ctx) : await issueEvents(body, identifier, teamKey, projectId, ctx);
+  const partials = body.type === 'AgentSessionEvent' ? sessionEvents(body, name, projectId, ctx) : await issueEvents(body, identifier, teamKey, projectId, ctx);
   // The choice to make goes with the event: `decide` blocks the delegation, answers the rest.
-  if (repos) partials = partials.map((p) => ({ ...p, payload: { ...(p.payload as object), repos } }));
-  if (waitedIn) partials = partials.map((p) => ({ ...p, payload: { ...(p.payload as object), waitedIn } }));
+  const routing = { ...(repos ? { repos } : {}), ...(waitedIn ? { waitedIn } : {}) };
   const at = ctx.now();
   return partials.map(
     (p) =>
@@ -258,7 +258,7 @@ export async function mapLinearWebhook(body: any, key: string, ctx: MapContext):
         schemaVersion: SCHEMA_VERSION,
         taint,
         ...(actor ? { actor } : {}),
-        payload: p.payload,
+        payload: { ...(p.payload as object), ...routing },
       }) as FactoryEvent,
   );
 }
