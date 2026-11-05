@@ -26,6 +26,15 @@ describe('a ticket waiting for its repo, once a human chose it (ORC-291)', () =>
     return { h, to };
   }
 
+  it('a delegation with the choice to make, on an issue deleted meanwhile, leaves no ticket and writes nothing to Linear (ORC-302)', async () => {
+    const h = createHarness({ extraProjects: ['api'] });
+    await h.orch.accept({ id: 'gone', type: 'ticket.delegated', at: h.clock.now(), projectId: 'p', ticketId: 'REL-9', ...signed, payload: { linearSessionId: 's1', repos } } as FactoryEvent);
+    await h.orch.drained();
+    expect(await h.store.getTicket('p', 'REL-9')).toBeUndefined();
+    expect(h.tracker.calls.filter((c) => c.method !== 'getIssue')).toEqual([]);
+    expect(h.runner.requests).toEqual([]);
+  });
+
   it('its label names the repo it waits in: a new delegation lifts the wait and starts the work there', async () => {
     const { h, to } = await waiting();
     await to('p', 'ticket.delegated', { linearSessionId: 's2' });

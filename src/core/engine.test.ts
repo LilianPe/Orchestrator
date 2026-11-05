@@ -980,6 +980,8 @@ describe('decide — a ticket whose repo is not known (ORC-291)', () => {
     expect(out.events.map((e) => e.type)).toContain('ticket.unblocked');
     expect(out.effects.map((e) => e.kind)).toContain('start_run');
     expect(out.effects).toContainEqual({ kind: 'labels', add: [], remove: ['Bloqué'] });
+    // The session the delegation opened is the ticket's from now on: its replies are dev feedback, not questions.
+    expect(out.events.reduce((t, e) => reduce(t, e), reduce({ ...blocked, linearSessionId: 's1' }, ev('ticket.delegated', { linearSessionId: 's2' })))?.linearSessionId).toBe('s2');
   });
 
   it('a new ticket that waited in another repo takes the Bloqué label off, as nothing there will', () => {
@@ -994,7 +996,7 @@ describe('decide — a ticket whose repo is not known (ORC-291)', () => {
   });
 
   it('answers a mention, a command, a reply or a stop with the same question, and starts nothing', () => {
-    const mention = ev('session.mentioned', { linearSessionId: 's9', body: 'ça va ?', author: 'L', repos: ['web', 'api'] });
+    const mention = ev('session.mentioned', { linearSessionId: 's9', body: 'ça va ?', author: 'L', repos: ['web', 'api'], issue: { title: 'T', logical: 'todo', priority: 0 } });
     expect(decide(undefined, mention, workflow).effects).toEqual([{ kind: 'activity', type: 'response', body: expect.stringContaining('`repo:api`'), linearSessionId: 's9' }]);
     for (const e of [ev('session.prompted', { linearSessionId: 's1', body: 'vas-y', author: 'L' }), ev('session.stopped', { linearSessionId: 's1' })]) {
       expect(decide(blocked, e, workflow)).toEqual(decision({ effects: [{ kind: 'activity', type: 'response', body: blocked.blockReason!, linearSessionId: 's1' }] }));
@@ -1007,6 +1009,22 @@ describe('decide — a ticket whose repo is not known (ORC-291)', () => {
       expect(out).toEqual(decision());
       expect(out.trace).toContain(`${e.type}: repo to choose first`);
     }
+  });
+
+  it('a timer or a failed effect neither starts work nor replaces the wait: the ticket would then hold the repo picked by default', () => {
+    const timer = ev('timer.fired', { kind: 'debounce', payload: { job: 'dev-feedback' } } as never);
+    const failed = ev('effect.failed', { kind: 'activity', error: 'Linear down', eventId: 'linear:session:s1' } as never);
+    for (const e of [timer, failed]) {
+      const out = decide(blocked, e, workflow);
+      expect(out.events).toEqual([]);
+      expect(out.effects.map((f) => f.kind)).not.toContain('start_run');
+    }
+  });
+
+  it('a delegation without a snapshot blocks nothing and asks nothing: no ticket comes out of it (ORC-302)', () => {
+    const out = decide(undefined, ev('ticket.delegated', { linearSessionId: 's1', repos: ['web', 'api'] }), workflow);
+    expect(out.events).toEqual([]);
+    expect(out.effects.map((e) => e.kind)).not.toContain('activity');
   });
 
   it('leaves what is no human action to its usual handling: the end of a question run under way, a dead letter', () => {

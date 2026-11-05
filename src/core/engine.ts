@@ -617,20 +617,20 @@ export function blockedLabelChange(before: boolean, after: boolean): Extract<Dec
   return after ? { kind: 'labels', add: [BLOCKED_LABEL], remove: [] } : { kind: 'labels', add: [], remove: [BLOCKED_LABEL] };
 }
 
-/** What a ticket waiting for its repo answers or ignores; the rest (a run's end, a dead letter) is handled as usual. */
-const WAITING_FENCES = new Set<EventType>(['session.mentioned', 'command', 'session.prompted', 'session.stopped', 'status.changed', 'label.changed']);
+/** What a ticket waiting for its repo still handles as usual: the wait's own end, a question run's end, a dead letter. All else is fenced. */
+const PAST_THE_WAIT = new Set<EventType>(['ticket.delegated', 'ticket.undelegated', 'run.finished', 'dead_letter.added']);
 
 /**
  * A ticket whose repo is to be chosen (ORC-291): an event that carries the choice (`repos`) or reaches a ticket
  * blocked for it. A delegation blocks it, whatever blocked it before: `repos` means no project holds it, and under
  * another reason it would hold this one. Already waiting, it is asked again; a mention, a command, a reply or a stop
- * is answered with the same question; a status or a label decides nothing, so that no rule starts work in a repo
- * picked by default. `undefined`: the event is not such a one, a delegation without `repos` among them: its label
- * names this repo, where it was waiting.
+ * is answered with the same question; anything else fenced decides nothing, so that no rule starts work in a repo
+ * picked by default, and nothing replaces the reason that marks the wait. `undefined`: the event is not such a one,
+ * a delegation without `repos` among them: its label names this repo, where it was waiting.
  */
 function unrouted(state: TicketState | undefined, event: FactoryEvent): Decision | undefined {
   const repos = (event.payload as { repos?: string[] }).repos;
-  if (!repos && (!isUnrouted(state) || !WAITING_FENCES.has(event.type))) return undefined;
+  if (!repos && (!isUnrouted(state) || PAST_THE_WAIT.has(event.type))) return undefined;
   const out = empty();
   const body = repos ? unroutedReason(repos) : state!.blockReason!;
   const sessionId = (event.payload as { linearSessionId?: string }).linearSessionId;
@@ -664,11 +664,16 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
   }
   // Rules read the ticket as it is once the event's own facts are recorded (new status, delegation…).
   let ticket = reduce(state, event);
-  const waiting = unrouted(state, event);
+  // No ticket out of it (an issue deleted meanwhile, ORC-302): nothing to block or to ask.
+  const waiting = ticket && unrouted(state, event);
   if (waiting) return waiting;
   if (event.type === 'ticket.delegated' && isUnrouted(ticket)) {
-    out.events.push({ type: 'ticket.unblocked' });
-    ticket = reduce(ticket, { type: 'ticket.unblocked' });
+    // Its repo chosen by this delegation, whose session is the ticket's from now on.
+    const { linearSessionId } = event.payload;
+    for (const e of [{ type: 'ticket.unblocked' as const }, ...(linearSessionId ? [{ type: 'session.linked' as const, linearSessionId }] : [])]) {
+      out.events.push(e);
+      ticket = reduce(ticket, e);
+    }
   }
   if (BUILT_IN.has(event.type)) out.trace.push(`built-in ${event.type}`);
   if (event.type === 'status.changed' && event.payload.cancelled) {
