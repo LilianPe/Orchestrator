@@ -123,7 +123,7 @@ describe('mapLinearWebhook', () => {
     const body = fx('session-created-command');
     body.agentSession.comment.body = '[@factory](https://linear.app/x/profiles/factory) /refreeze le test de l’export était faux';
     expect((await mapLinearWebhook(body, 'd3', ctx()))[0]).toMatchObject({
-      type: 'command', actor: 'user-lilian', payload: { name: '/refreeze', body: 'le test de l’export était faux', linearSessionId: 'as-3' },
+      type: 'command', actor: 'user-lilian', payload: { name: '/refreeze', body: 'le test de l’export était faux', linearSessionId: 'as-3', ack: true },
     });
   });
   it('maps /refreeze answered in a session as the command, not as feedback that relaunches the agent (ORC-131)', async () => {

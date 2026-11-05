@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { reconcileOnce, type ReconcileDeps } from '../../src/adapters/tracker/linear/reconcile.js';
+import { CUT_BOUND_REASON } from '../../src/core/engine.js';
 import { measureTicket } from '../../src/core/measures.js';
+import { CUT_RELAUNCHES } from '../../src/store/types.js';
 import { createHarness } from '../helpers/harness.js';
 import { linearIngest, signedDelegation, signedMention } from '../helpers/linear-webhook.js';
 import { testPreset } from '../helpers/test-preset.js';
@@ -246,6 +248,91 @@ describe('the trigger (ORC-171)', () => {
     await h.orch.drained();
     expect(await h.ticket('ZZZ-1')).toMatchObject({ blocked: false, delegated: false });
     expect(h.tracker.issues.get('ZZZ-1')!.labels).toEqual([]);
+  });
+
+  it('a /refreeze gets its answer alone in its session: no comment, no thought, no time of ack', async () => {
+    const h = authorized();
+    const { raw, headers } = signedMention('as-r', '@factory /refreeze le test était faux', h.clock.now());
+    await ingestOf(h)(raw, headers);
+    await h.orch.drained();
+    expect(h.tracker.activities('as-r')).toEqual([{ type: 'response', body: expect.stringMatching(/^Refusé/) }]);
+    expect(h.tracker.comments('REL-1')).toEqual([]);
+    expect((await h.store.measureFacts('p', 'REL-1')).acks).toEqual({});
+  });
+
+  describe('after a restart (ORC-220)', () => {
+    const underWay = (h: ReturnType<typeof createHarness>) => h.tracker.plans('ls-1').at(-1)!.filter((s) => s.status === 'inProgress').map((s) => s.content);
+
+    /** A delegated ticket whose attempt is at work, then gone with the process that held it. */
+    async function lost(h: ReturnType<typeof createHarness>): Promise<void> {
+      h.runner.enqueue({ events: [{ kind: 'text', text: 'PR ouverte.' }], hold: true });
+      await h.send('ticket.delegated', { linearSessionId: 'ls-1', ack: true });
+      const [run] = await h.store.runsByStatus('running');
+      h.runner.forget(run!.id);
+    }
+
+    it('the relaunch of a lost run keeps one active run: the plan stays on its step, a new delegation starts nothing, and the end closes the plan', async () => {
+      const h = plain();
+      await lost(h);
+      h.runner.enqueue({ events: [{ kind: 'text', text: 'Repris.' }], hold: true });
+      await h.restart({ mode: 'brutal' });
+      expect(h.runner.requests).toHaveLength(2);
+      const running = await h.store.runsByStatus('running');
+      expect(running).toHaveLength(1);
+      expect(await h.ticket()).toMatchObject({ activeRunId: running[0]!.id });
+      expect(underWay(h)).toEqual(['Build']);
+
+      await h.send('ticket.delegated', { linearSessionId: 'ls-2', ack: true });
+      expect(h.runner.requests).toHaveLength(2);
+      expect((await h.ticket()).pendingJob).toBeUndefined();
+      expect(h.tracker.activities('ls-2')).toEqual([{ type: 'response', body: expect.stringContaining('déjà') }]);
+      // The relaunch is nobody's trigger: the one ack stays that of the delegation.
+      expect(h.tracker.comments('REL-1')).toEqual(['Bien reçu.']);
+
+      h.runner.release(running[0]!.id);
+      await h.orch.drained();
+      expect(h.runner.requests).toHaveLength(2);
+      expect(await h.ticket()).toMatchObject({ logical: 'human_review', blocked: false });
+      expect(underWay(h)).toEqual([]);
+    });
+
+    it('an attempt reattached is still the active run: a new delegation starts nothing, the plan does not move', async () => {
+      const h = plain();
+      h.runner.enqueue({ events: [{ kind: 'text', text: 'PR ouverte.' }], hold: true });
+      await h.send('ticket.delegated', { linearSessionId: 'ls-1', ack: true });
+      const written = h.tracker.plans('ls-1').length;
+      await h.restart({ mode: 'brutal' });
+      await h.send('ticket.delegated', { linearSessionId: 'ls-2', ack: true });
+      expect(h.runner.requests).toHaveLength(1);
+      expect(h.tracker.activities('ls-2')).toEqual([{ type: 'response', body: expect.stringContaining('déjà') }]);
+      expect(h.tracker.plans('ls-1')).toHaveLength(written);
+    });
+
+    it('the relaunch of a feedback run does not reopen the closed plan: nothing would close it', async () => {
+      const h = plain();
+      h.runner.enqueue({ events: [{ kind: 'text', text: 'PR ouverte.' }] }, { events: [{ kind: 'text', text: 'Corrigé.' }], hold: true });
+      await h.send('ticket.delegated', { linearSessionId: 'ls-1', ack: true });
+      const closed = h.tracker.plans('ls-1').length;
+      await h.send('status.changed', { from: 'human_review', to: 'dev' });
+      const [run] = await h.store.runsByStatus('running');
+      h.runner.forget(run!.id);
+      h.runner.enqueue({ events: [{ kind: 'text', text: 'Repris.' }] });
+      await h.restart({ mode: 'brutal' });
+      expect(h.runner.requests).toHaveLength(3);
+      expect(h.tracker.plans('ls-1')).toHaveLength(closed);
+    });
+
+    it('a lost run past the bound relaunches nothing: blocked, its step stays where it stopped, as under any block', async () => {
+      const h = plain();
+      await lost(h);
+      await h.store.putTicket({ ...(await h.ticket()), cutRelaunches: Array<number>(CUT_RELAUNCHES).fill(h.clock.now()) });
+      const written = h.tracker.plans('ls-1').length;
+      await h.restart({ mode: 'brutal' });
+      expect(h.runner.requests).toHaveLength(1);
+      expect((await h.ticket()).blockReason).toMatch(CUT_BOUND_REASON);
+      expect(h.tracker.plans('ls-1')).toHaveLength(written);
+      expect(underWay(h)).toEqual(['Build']);
+    });
   });
 
   it('criterion 4: a mention gets its ack and its answer in the session under the comment, the ticket not delegated', async () => {

@@ -1,6 +1,7 @@
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { loadWorkflow } from '../config/load-workflow.js';
+import { REFREEZE, type FrozenTests } from '../checks/freeze.js';
 import type { Role } from './authz.js';
 import { ACK_BODY, decide, mayCheck } from './engine.js';
 import { reduce } from './reduce.js';
@@ -46,6 +47,19 @@ describe('decide — the acknowledgement of a trigger (ORC-171)', () => {
   });
 });
 
+describe('decide — /refreeze answers for itself (ORC-131, ORC-171)', () => {
+  const refreeze = (roles: readonly Role[], frozen?: FrozenTests) => ev('command', { name: REFREEZE, body: '', linearSessionId: 's-r', author: 'L', ack: true, ...(frozen ? { frozen } : {}) }, roles);
+
+  it.each([
+    ['refused', refreeze(['team_member']), /^Refusé/],
+    ['with nothing to refreeze', refreeze(['maintainer']), /^Rien à regeler/],
+    ['done', refreeze(['maintainer'], { sha: 'a'.repeat(40), files: { 'a.test.ts': 'x' } }), /^Regelé/],
+  ])('%s: its answer is the sign of life, with no ack before it', (_, event, body) => {
+    const out = decide(ticket({ delegated: true, logical: 'dev' }), event, workflow);
+    expect(out.effects).toEqual([{ kind: 'activity', type: 'response', linearSessionId: 's-r', body: expect.stringMatching(body) }]);
+  });
+});
+
 describe('decide — one active run per ticket (ORC-171)', () => {
   const active: Partial<TicketState>[] = [{ activeRunId: 'r1', activeJob: 'dev' }, { verifyingRunId: 'r1' }, { activeRunId: 'r1', activeJob: 'dev', pendingJob: { job: 'dev' } }];
 
@@ -76,6 +90,12 @@ describe('decide — one active run per ticket (ORC-171)', () => {
   it('a pending job left without a run (a crash) refuses nothing: the delegation starts', () => {
     const out = decide(ticket({ delegated: true, linearSessionId: 's-dev', logical: 'dev', pendingJob: { job: 'dev' } }), delegation(), workflow);
     expect(kinds(out.effects)).toEqual(['ack', 'start_run']);
+  });
+
+  it('the relaunch of a lost run asks for no ack and no plan: nobody triggered it', () => {
+    const state = ticket({ delegated: true, linearSessionId: 's-dev', logical: 'dev', activeRunId: 'r1', activeJob: 'dev' });
+    const out = decide(state, ev('run.lost', { runId: 'r1', job: 'dev', cause: 'restart' }, undefined, undefined), workflow);
+    expect(kinds(out.effects)).toEqual(['start_run']);
   });
 
   it('a delegation after the run ended starts as before', () => {
