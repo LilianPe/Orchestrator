@@ -143,9 +143,7 @@ export interface JobSpec {
   name: string;
   queue: QueueName;
   model: string;
-  /** The agent step of the preset this job runs (ORC-136): it fixes its effort and caps its turns. Absent: a job out of the preset (a question). */
-  step?: string;
-  /** `claude --effort`. Absent from the jobs out of the preset and from versions frozen before it: the CLI's default. */
+  /** `claude --effort`, of the preset step the job names (`step`, ORC-136). Absent from the jobs out of the preset and from versions frozen before it: the CLI's default. */
   effort?: Effort;
   workspace: 'worktree' | 'trunk-readonly' | 'knowledge';
   session: 'new' | 'resume';

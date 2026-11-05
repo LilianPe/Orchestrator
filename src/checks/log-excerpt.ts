@@ -6,7 +6,7 @@ export const LOG_EXCERPT_MAX = 8000;
 const MARKS = 60;
 
 // eslint-disable-next-line no-control-regex -- the escape sequences a test runner prints in colour are what it removes.
-const ANSI = /\u001b\[[0-9;?]*[ -/]*[@-~]/g;
+export const ANSI = /\u001b\[[0-9;?]*[ -/]*[@-~]/g;
 const USEFUL = /\b(?:errors?|fail|failed|failures?|failing|fatal|panic|exception|traceback|assert\w*|expected|received)\b|[✗✕×]/i;
 
 /** As many of `lines` as fit in `budget`, a first line too long kept up to it. */

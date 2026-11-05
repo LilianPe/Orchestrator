@@ -12,7 +12,7 @@ import { FakeTracker } from '../../src/adapters/tracker/fake.js';
 import { FakeWorkspaces } from '../../src/adapters/workspace/fake.js';
 import { loadWorkflow } from '../../src/config/load-workflow.js';
 import type { Workflow } from '../../src/config/workflow-schema.js';
-import { agentOutputKey } from '../../src/core/agent-output.js';
+import { saveAgentOutput } from '../../src/core/agent-output.js';
 import { EventBus } from '../../src/core/bus.js';
 import { FakeClock } from '../../src/core/clock.js';
 import type { RepoVariables } from '../../src/config/repo-variables.js';
@@ -235,7 +235,7 @@ export function createHarness(
   };
   let life = connect();
   // The fake build does what its skill says: it ends on a `submit_result` (ORC-136), on the store of the living process.
-  runner.submit = (runId, output) => life.store.setMeta(agentOutputKey(runId), JSON.stringify(output));
+  runner.submit = (runId, output) => saveAgentOutput(life.store, runId, output);
   let n = 0;
   const build = ({ store, outside, gate }: ReturnType<typeof connect>) => new Orchestrator({
     store,

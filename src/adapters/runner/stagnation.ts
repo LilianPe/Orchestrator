@@ -1,10 +1,11 @@
+import { ANSI } from '../../checks/log-excerpt.js';
 import { hashText } from '../../core/attempt-labels.js';
 import type { Stagnation } from '../../core/types.js';
+import { blocks } from './stream-parser.js';
 
 /** What changes from one run of a command to the next without being another failure. */
 const NOISE: readonly (readonly [RegExp, string])[] = [
-  // eslint-disable-next-line no-control-regex
-  [/\u001b\[[0-9;]*[A-Za-z]/g, ''],
+  [ANSI, ''],
   [/\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?(?:Z|[+-]\d{2}:?\d{2})?/g, '<date>'],
   [/\b\d{2}:\d{2}:\d{2}(?:\.\d+)?\b/g, '<heure>'],
   [/\b\d+(?:\.\d+)?\s?(?:ms|s|sec|secs|seconds|m|min)\b/g, '<durée>'],
@@ -35,10 +36,9 @@ function toolOutput(content: unknown): string {
  * tool id, across the lines of an attempt. On a line already masked: neither fact carries a known secret.
  */
 export function failedCommand(line: unknown, pending: Map<string, string>): FailedCommand[] {
-  const { type, message } = (line ?? {}) as { type?: unknown; message?: { content?: unknown } };
-  const blocks = Array.isArray(message?.content) ? (message.content as Record<string, unknown>[]) : [];
+  const { type } = (line ?? {}) as { type?: unknown };
   const failed: FailedCommand[] = [];
-  for (const b of blocks) {
+  for (const b of blocks(line) as Record<string, unknown>[]) {
     if (type === 'assistant' && b?.['type'] === 'tool_use' && b['name'] === 'Bash') {
       const { command } = (b['input'] ?? {}) as { command?: unknown };
       if (typeof b['id'] === 'string' && typeof command === 'string') pending.set(b['id'], command);
@@ -80,6 +80,6 @@ export class LoopDetector {
 /**
  * The tree of the whole worktree (`sh`, run where the agent runs: in its sandbox when it has one, the worktree
  * being its own): what `verify.failed` calls `tree`, edits, staged or not, and untracked files in. As `worktreeTree`
- * of `core/verify.ts` does on the host: a copy of the index and a throwaway object store, the repository is only read.
+ * of `core/verify.ts` does on the host: a copy of the index, dated as it is so that git still rehashes a file written in its second, and a throwaway object store: the repository is only read.
  */
-export const WORKTREE_TREE = `d=$(mktemp -d) && trap 'rm -rf "$d"' EXIT && i=$(git rev-parse --git-path index) && o=$(cd "$(git rev-parse --git-path objects)" && pwd) && mkdir "$d/o" && { cp "$i" "$d/i" 2>/dev/null; export GIT_INDEX_FILE="$d/i" GIT_OBJECT_DIRECTORY="$d/o" GIT_ALTERNATE_OBJECT_DIRECTORIES="$o"; git add -A . && git write-tree; }`;
+export const WORKTREE_TREE = `d=$(mktemp -d) && trap 'rm -rf "$d"' EXIT && git rev-parse --git-path index --git-path objects > "$d/p" && { read -r i; read -r o; } < "$d/p" && o=$(cd "$o" && pwd) && mkdir "$d/o" && { cp -p "$i" "$d/i" 2>/dev/null; export GIT_INDEX_FILE="$d/i" GIT_OBJECT_DIRECTORY="$d/o" GIT_ALTERNATE_OBJECT_DIRECTORIES="$o"; git -c core.looseCompression=0 add -A . && git write-tree; }`;

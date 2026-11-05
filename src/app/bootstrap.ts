@@ -23,7 +23,7 @@ import { Reconciler, reconcileOnce } from '../adapters/tracker/linear/reconcile.
 import { LinearTracker } from '../adapters/tracker/linear/tracker.js';
 import { isUsableWebhookSecret } from '../adapters/tracker/linear/webhook.js';
 import { GitWorkspaces } from '../adapters/workspace/git-workspaces.js';
-import { agentOutputKey, type AgentOutput } from '../core/agent-output.js';
+import { saveAgentOutput, type AgentOutput } from '../core/agent-output.js';
 import { activeClaudeToken, loadFactoryYml, stepSettings } from '../config/factory-yml.js';
 import { makeOriginUrl, makeRepoVariables } from './repo-variables.js';
 import { daemonSecretValues, effectiveInstance, homePaths, linearSettings, saveLinearTokens } from '../config/instance.js';
@@ -165,7 +165,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     const claudeToken = activeClaudeToken(yml);
     if (sandboxes && !claudeToken && !env['CLAUDE_CODE_OAUTH_TOKEN']) log('Attention : aucun jeton Claude (claude.active de factory.yml, ou CLAUDE_CODE_OAUTH_TOKEN) : les runs sandboxés ne pourront pas s’authentifier.');
     const runner: Runner = o.fakeRunner
-      ? Object.assign(new FakeRunner(), { submit: (runId: string, output: AgentOutput) => store.setMeta(agentOutputKey(runId), JSON.stringify(output)) })
+      ? Object.assign(new FakeRunner(), { submit: (runId: string, output: AgentOutput) => saveAgentOutput(store, runId, output) })
       : new ClaudeCodeRunner({ transcriptsDir: paths.transcripts, secrets: daemonSecrets, claudeToken: () => claudeToken, ...(sandboxes ? { sandboxes } : {}) });
     const workspaces = new GitWorkspaces({ root: paths.workspaces, knowledgeRepo: instance.knowledge?.repoPath });
     const forge = githubApp

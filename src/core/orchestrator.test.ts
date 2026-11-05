@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { writeRunSettings } from '../config/run-settings.js';
-import { agentOutputKey } from './agent-output.js';
+import { saveAgentOutput } from './agent-output.js';
 import { FakeForge } from '../adapters/forge/fake.js';
 import { FakeRunner } from '../adapters/runner/fake.js';
 import type { Runner } from '../adapters/runner/types.js';
@@ -43,7 +43,7 @@ function setup(
   const store = new SqliteStore(':memory:');
   const tracker = new FakeTracker();
   const fakeRunner = new FakeRunner();
-  fakeRunner.submit = (runId, output) => store.setMeta(agentOutputKey(runId), JSON.stringify(output));
+  fakeRunner.submit = (runId, output) => saveAgentOutput(store, runId, output);
   const runner = o.runner ?? fakeRunner;
   const scheduler = new Scheduler(store, { dev: 3, questions: 2 });
   let n = 0;

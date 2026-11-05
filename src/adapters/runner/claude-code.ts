@@ -157,6 +157,19 @@ const TREE_TIMEOUT_S = 30;
 /** What a token cap counts: what the model read anew and wrote. A cache read costs next to nothing, and grows with each turn. */
 const spentTokens = (u: TokenUsage): number => u.input + u.output + u.cacheCreation;
 
+/** In the sandbox when the run has one: the host never runs git on a worktree the agent writes from there (ORC-203). Holds the two fields it reads, not the request. */
+function worktreeReader(sandboxes: SandboxProvider | undefined, { sandboxId, cwd }: Pick<RunRequest, 'sandboxId' | 'cwd'>): () => Promise<string | undefined> {
+  const argv = ['timeout', String(TREE_TIMEOUT_S), 'sh', '-c', WORKTREE_TREE];
+  return async () => {
+    try {
+      const read = await (sandboxId !== undefined ? sandboxes!.exec(sandboxId, argv, { cwd }) : execCmd(argv[0]!, argv.slice(1), { cwd }));
+      return read.code === 0 ? read.stdout.trim() || undefined : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+}
+
 export class ClaudeCodeRunner implements Runner {
   constructor(private o: ClaudeRunnerOptions) {
     mkdirSync(liveDir(o.transcriptsDir), { recursive: true, mode: 0o700 });
@@ -202,18 +215,7 @@ export class ClaudeCodeRunner implements Runner {
       closeSync(err);
     }
     if (child.pid !== undefined) writeFileSync(join(dir, 'pid'), [child.pid, startTime(child.pid)].filter((x) => x !== undefined).join(' '), { mode: 0o600 });
-    return this.follow({ runId: req.runId, limits: req.limits, secrets, remainingMs: req.limits.durationMs, child, stagnation: req.stagnation, tree: () => this.worktreeTree(req) });
-  }
-
-  /** In the sandbox when the run has one: the host never runs git on a worktree the agent writes from there (ORC-203). */
-  private async worktreeTree(req: RunRequest): Promise<string | undefined> {
-    const argv = ['timeout', String(TREE_TIMEOUT_S), 'sh', '-c', WORKTREE_TREE];
-    try {
-      const read = await (req.sandboxId !== undefined ? this.o.sandboxes!.exec(req.sandboxId, argv, { cwd: req.cwd }) : execCmd(argv[0]!, argv.slice(1), { cwd: req.cwd }));
-      return read.code === 0 ? read.stdout.trim() || undefined : undefined;
-    } catch {
-      return undefined;
-    }
+    return this.follow({ runId: req.runId, limits: req.limits, secrets, remainingMs: req.limits.durationMs, child, stagnation: req.stagnation, ...(req.stagnation?.repeats ? { tree: worktreeReader(this.o.sandboxes, req) } : {}) });
   }
 
   /**
@@ -252,6 +254,7 @@ export class ClaudeCodeRunner implements Runner {
     // Usage of each model message as it streams, by message id (its lines repeat it): the tokens of a
     // run that ends without a result line (stopped, capped, killed) are not lost (ORC-235).
     const usage = new Map<string, TokenUsage>();
+    const totalUsage = () => [...usage.values()].reduce(addTokens, NO_TOKENS);
     let stopped = false;
     let limited = false;
 
@@ -285,9 +288,9 @@ export class ClaudeCodeRunner implements Runner {
 
     let stagnation: Stagnation | undefined;
     // Its end seen, or its result: a read that comes late signals no process and changes no outcome.
-    let ended = false;
+    let finished = false;
     const stagnated = (seen: Stagnation) => {
-      if (limited || stopped || ended || result) return;
+      if (limited || stopped || finished || result) return;
       stagnation = seen;
       limit();
     };
@@ -301,7 +304,7 @@ export class ClaudeCodeRunner implements Runner {
       if (!loops) return;
       for (const failed of failedCommand(line, calls)) {
         reading = reading.then(async () => {
-          if (ended || result) return;
+          if (limited || stopped || finished || result) return;
           const tree = await a.tree!();
           const seen = tree ? loops.record(failed, tree) : undefined;
           if (seen) stagnated(seen);
@@ -316,15 +319,17 @@ export class ClaudeCodeRunner implements Runner {
         const line = maskTranscriptLine(unmasked, a.secrets);
         transcript.write(line + '\n');
         const raw = JSON.parse(line) as { type?: string; subtype?: string; message?: { id?: unknown; usage?: unknown } };
-        const messageId = raw?.type === 'assistant' && typeof raw.message?.id === 'string' ? raw.message.id : undefined;
-        if (raw?.type === 'assistant' && (messageId === undefined || !turnIds.has(messageId))) {
-          if (messageId !== undefined) turnIds.add(messageId);
-          if (++assistantTurns > a.limits.turns) limit();
-        }
-        const used = messageId !== undefined ? parseUsage(raw.message!.usage) : undefined;
-        if (used) {
-          usage.set(messageId!, used);
-          if (a.limits.tokens !== undefined && [...usage.values()].reduce((sum, u) => sum + spentTokens(u), 0) > a.limits.tokens) limit();
+        if (raw?.type === 'assistant') {
+          const id = typeof raw.message?.id === 'string' ? raw.message.id : undefined;
+          if (id === undefined || !turnIds.has(id)) {
+            if (id !== undefined) turnIds.add(id);
+            if (++assistantTurns > a.limits.turns) limit();
+          }
+          const used = id !== undefined ? parseUsage(raw.message?.usage) : undefined;
+          if (used) {
+            usage.set(id!, used);
+            if (a.limits.tokens !== undefined && spentTokens(totalUsage()) > a.limits.tokens) limit();
+          }
         }
         watchLoops(raw);
         if (raw?.type === 'result' && typeof raw.subtype === 'string' && raw.subtype.includes('max')) limited = true;
@@ -367,11 +372,9 @@ export class ClaudeCodeRunner implements Runner {
     if (!a.child && result && !a.writer) clearTimeout(timer);
 
     const done = new Promise<RunResult>((resolve) => {
-      let finished = false;
       const finish = (spawnError?: Error) => {
         if (finished) return;
         finished = true;
-        ended = true;
         clearInterval(poll);
         clearTimeout(timer);
         clearTimeout(killTimer);
@@ -391,7 +394,7 @@ export class ClaudeCodeRunner implements Runner {
         // It becomes the run's lastText, stored and posted to Linear: the stream's text is masked
         // already, stderr and a spawn error are masked here.
         const text = result?.text || lastText || maskTranscriptLine(spawnError ? spawnError.message : stderr.trim().slice(-2000), a.secrets);
-        const tokens = result?.tokens ?? (usage.size ? [...usage.values()].reduce(addTokens, NO_TOKENS) : undefined);
+        const tokens = result?.tokens ?? (usage.size ? totalUsage() : undefined);
         transcript.end(() => resolve({ outcome, costUsd: result?.costUsd ?? 0, turns: result?.turns ?? assistantTurns, lastText: text, ...(tokens ? { tokens } : {}), ...(broke ? { infra: true as const } : {}), ...(stagnation ? { stagnation } : {}) }));
       };
       const poll = setInterval(() => {

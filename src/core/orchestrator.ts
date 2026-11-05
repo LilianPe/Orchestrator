@@ -114,16 +114,9 @@ async function storedOutput(store: Store, runId: string): Promise<AgentOutput | 
   }
 }
 
-const attemptFactsKey = (runId: string): string => `attempt-facts:${runId}`;
-
-/** What only the runner knows of an attempt's end (ORC-136): the run's row does not hold it, and a crash before `run.finished` must not change the decision. */
-async function keepAttemptFacts(store: Store, runId: string, { stagnation, infra }: RunResult): Promise<void> {
-  if (stagnation || infra) await store.setMeta(attemptFactsKey(runId), JSON.stringify({ ...(stagnation ? { stagnation } : {}), ...(infra ? { infra } : {}) }));
-}
-
-async function readAttemptFacts(store: Store, runId: string): Promise<Pick<RunResult, 'stagnation' | 'infra'>> {
-  const raw = await store.getMeta(attemptFactsKey(runId));
-  return raw ? (JSON.parse(raw) as Pick<RunResult, 'stagnation' | 'infra'>) : {};
+/** What only the runner knows of an attempt's end (ORC-136), kept on its row: recover() sends the same result if the process dies before it does. */
+function endFacts({ stagnation, infra }: Pick<RunResult, 'stagnation' | 'infra'>): Pick<RunResult, 'stagnation' | 'infra'> {
+  return { ...(stagnation ? { stagnation } : {}), ...(infra ? { infra } : {}) };
 }
 
 /** The message posted for a run that submitted its output: composed by the factory from it, never the agent's last text (ORC-289). */
@@ -522,8 +515,7 @@ export class Orchestrator {
       if (!project || !job || !runner.attach) return false;
       const sandbox = sandboxes && (await sandboxes.reattach(run.id));
       if (sandboxes && !sandbox) return false;
-      const silentMs = project.workflow.limits.silentAfterMs;
-      const handle = runner.attach({ runId: run.id, limits: job.limits, elapsedMs: clock.now() - run.startedAt, env: this.d.agentEnv(run), ...(silentMs ? { stagnation: { silentMs } } : {}) });
+      const handle = runner.attach({ runId: run.id, limits: job.limits, elapsedMs: clock.now() - run.startedAt, env: this.d.agentEnv(run), ...stagnationBounds(project.workflow, job) });
       if (!handle) return false;
       // Its slot, in the memory of this process. Over a capacity lowered meanwhile, it goes on all the same.
       scheduler.tryAcquire(run.queue, `${run.ticketId}:${run.queue}`);
@@ -544,11 +536,7 @@ export class Orchestrator {
     const { store, clock } = this.d;
     const run = await store.getRun(runId);
     if (run) {
-      const facts = await readAttemptFacts(store, runId).catch((err: Error) => {
-        this.log('warn', `facts of run ${runId} not read: ${err.message}`);
-        return {};
-      });
-      await store.appendInbox(await this.finishedFor(run, { outcome: run.status as RunOutcome, costUsd: run.costUsd, turns: run.turns, lastText: run.lastText, ...facts }));
+      await store.appendInbox(await this.finishedFor(run, { outcome: run.status as RunOutcome, costUsd: run.costUsd, turns: run.turns, lastText: run.lastText, ...endFacts(run) }));
       return;
     }
     // Nothing else will take it up (a pending job started by `settle` has no mark): `run.lost`, on the job the ticket holds.
@@ -1904,8 +1892,6 @@ export class Orchestrator {
       const interrupted = this.stopping && result.outcome === 'stopped';
       // Closed before its end (`leaseExpired`): `run.lost` speaks for it. What it spent is still recorded.
       const closed = rec.status !== 'running';
-      // Before the run's end: from there on recover() sends the result if this process dies, from what is stored.
-      await keepAttemptFacts(store, run.id, result);
       await store.putRun({
         ...rec,
         status: closed ? rec.status : interrupted ? 'interrupted' : result.outcome,
@@ -1914,6 +1900,7 @@ export class Orchestrator {
         turns: result.turns,
         lastText: result.lastText,
         ...(result.tokens ? { tokens: result.tokens } : {}),
+        ...endFacts(result),
       });
       // Shutdown, not a user stop: keep the ticket's activeRunId so the next start's recover() starts its step again.
       if (interrupted || closed) return;
@@ -1936,7 +1923,7 @@ export class Orchestrator {
         try {
           const rec = (await store.getRun(run.id)) ?? run;
           if (rec.status !== 'running') return;
-          await store.putRun({ ...rec, status: 'failure', endedAt: clock.now(), lastText: message });
+          await store.putRun({ ...rec, status: 'failure', endedAt: clock.now(), lastText: message, infra: true });
         } catch (e) {
           this.log('error', `could not record failure of run ${run.id}: ${(e as Error).message}`);
         }

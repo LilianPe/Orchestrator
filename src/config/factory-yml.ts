@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse } from 'yaml';
 import { z } from 'zod';
+import type { Effort } from '../presets/preset.js';
 import type { StepSettings } from './load-workflow.js';
 
 /**
@@ -44,10 +45,8 @@ export function activeClaudeToken(yml: FactoryYml | undefined): string | undefin
 
 /** What the workflow's agent steps read of the file (ORC-136). */
 export function stepSettings(yml: FactoryYml | undefined): StepSettings {
-  return { ...(yml?.claude?.effort ? { effort: yml.claude.effort } : {}), ...(yml?.budgets ? { budgets: yml.budgets } : {}) };
+  return { effort: yml?.claude?.effort, budgets: yml?.budgets };
 }
-
-type Effort = 'low' | 'medium' | 'high';
 
 export class FactoryYmlError extends Error {
   constructor(readonly violations: string[]) {

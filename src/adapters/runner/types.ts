@@ -71,8 +71,8 @@ export interface AttachRequest {
   elapsedMs: number;
   /** The run's environment: its secrets are masked as at the start. */
   env: Record<string, string>;
-  /** Silence only: the worktree of an attempt taken up is not read, its loops are left to its turns and its duration. */
-  stagnation?: Pick<StagnationBounds, 'silentMs'>;
+  /** Silence only is watched: the worktree of an attempt taken up is not read, its loops are left to its turns and its duration. */
+  stagnation?: StagnationBounds;
 }
 
 export interface Runner {

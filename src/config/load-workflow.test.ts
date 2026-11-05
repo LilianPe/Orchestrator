@@ -72,18 +72,17 @@ on:
   describe('the preset step of a job (ORC-136)', () => {
     it('gives the pack its effort and its turns: build 150, fix 60, review 25', () => {
       const { jobs } = loadWorkflow({ packDir });
-      expect(jobs['dev']).toMatchObject({ step: 'build', effort: 'medium', limits: { turns: 150 } });
-      expect(jobs['tests']).toMatchObject({ step: 'tests', effort: 'medium', limits: { turns: 150 } });
-      expect(jobs['dev-feedback']).toMatchObject({ step: 'fix', effort: 'medium', limits: { turns: 60 } });
-      expect(jobs['fix-ci']).toMatchObject({ step: 'fix', effort: 'medium', limits: { turns: 60 } });
-      expect(jobs['review']).toMatchObject({ step: 'review', effort: 'high', limits: { turns: 25 } });
+      expect(jobs['dev']).toMatchObject({ effort: 'medium', limits: { turns: 150 } });
+      expect(jobs['tests']).toMatchObject({ effort: 'medium', limits: { turns: 150 } });
+      expect(jobs['dev-feedback']).toMatchObject({ effort: 'medium', limits: { turns: 60 } });
+      expect(jobs['fix-ci']).toMatchObject({ effort: 'medium', limits: { turns: 60 } });
+      expect(jobs['review']).toMatchObject({ effort: 'high', limits: { turns: 25 } });
     });
 
     it('leaves the jobs out of the preset alone: their own limits, no effort', () => {
       const { jobs } = loadWorkflow({ packDir });
       expect(jobs['ask']!.limits.turns).toBe(30);
       expect(jobs['ask']).not.toHaveProperty('effort');
-      expect(jobs['ask']).not.toHaveProperty('step');
     });
 
     it('asks a submit_result of the build only, until ORC-191 rewrites the other skills', () => {
