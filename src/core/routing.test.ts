@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveRoute, unroutedReason } from './routing.js';
+import { namesOtherRepo, resolveRoute, unroutedReason } from './routing.js';
 import { newTicketState, type TicketState } from './types.js';
 
 const t = (projectId: string, patch: Partial<TicketState> = {}): TicketState => ({ ...newTicketState(projectId, 'REL-1', 'T', 'todo', 0), ...patch });
@@ -24,6 +24,13 @@ describe('resolveRoute (ORC-291)', () => {
     expect(resolveRoute(team, [pending], ['repo:web'])).toEqual({ projectId: 'web' });
     expect(resolveRoute(team, [pending], [])).toEqual({ projectId: 'api', repos: team });
     expect(resolveRoute(team, [pending])).toEqual({ projectId: 'api' });
+  });
+  it('a repo: label names another repo only among the team\'s, case aside', () => {
+    expect(namesOtherRepo(team, 'web', 'Repo:API')).toBe(true);
+    expect(namesOtherRepo(team, 'web', 'repo:web')).toBe(false);
+    expect(namesOtherRepo(team, 'web', 'repo:frontend')).toBe(false);
+    expect(namesOtherRepo(team, 'web', 'api')).toBe(false);
+    expect(namesOtherRepo(['web'], 'web', 'repo:api')).toBe(false);
   });
   it('without labels to route by, a ticket no project knows goes nowhere', () => {
     expect(resolveRoute(team, [])).toBeUndefined();

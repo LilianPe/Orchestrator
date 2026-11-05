@@ -8,6 +8,7 @@ import { createLinearIngest } from './ingest.js';
 import { loadWorkflow } from '../../../config/load-workflow.js';
 import { FakeClock } from '../../../core/clock.js';
 import { FakeTracker } from '../fake.js';
+import { IssueNotFoundError } from '../types.js';
 import { knownLabels, recordLabels, serial } from './labels.js';
 import { reconcileOnce } from './reconcile.js';
 import { isFresh, isUsableWebhookSecret, mapLinearWebhook, stripMention, verifyLinearSignature, type MapContext } from './webhook.js';
@@ -268,12 +269,43 @@ describe('mapLinearWebhook', () => {
       expect(await mapLinearWebhook(fx('session-created-mention'), 'd2', twoRepos([]))).toMatchObject([{ type: 'session.mentioned', projectId: 'web', payload: { repos: ['web', 'api'] } }]);
     });
 
-    it('drops what reaches a ticket no project knows, without reading Linear: there is nothing to route', async () => {
+    it('drops an issue change on a ticket no project knows, without reading Linear: there is nothing to route', async () => {
       const labelsOf = async (): Promise<string[]> => {
         throw new Error('Linear down');
       };
-      expect(await mapLinearWebhook(fx('session-prompted'), 'd4', { ...twoRepos([]), labelsOf })).toEqual([]);
       expect(await mapLinearWebhook(fx('issue-moved-labeled'), 'd6', { ...twoRepos([]), labelsOf })).toEqual([]);
+    });
+
+    it('a reply or a stop on a ticket whose delegation is still in the inbox follows it by its label: no project stores it yet, and it must not be lost', async () => {
+      expect(await mapLinearWebhook(fx('session-prompted'), 'd4', twoRepos(['repo:api']))).toMatchObject([{ projectId: 'api' }]);
+      const stop = { ...fx('session-prompted'), agentActivity: { ...fx('session-prompted').agentActivity, signal: 'stop' } };
+      expect(await mapLinearWebhook(stop, 'd5', twoRepos(['repo:api']))).toMatchObject([{ type: 'session.stopped', projectId: 'api' }]);
+    });
+
+    it('a reply in a question session goes to the copy of the ticket that opened it, whichever the store lists first', async () => {
+      const session = fx('session-prompted').agentSession.id;
+      const stored = [newTicketState('web', 'REL-1', 'T', 'todo', 0), { ...newTicketState('api', 'REL-1', 'T', 'todo', 0), questionSessionIds: [session] }];
+      const read: string[] = [];
+      expect(await mapLinearWebhook(fx('session-prompted'), 'd4', twoRepos(['repo:web'], { read, stored }))).toMatchObject([{ projectId: 'api' }]);
+      expect(read).toEqual([]);
+    });
+
+    it('a delegation of an issue deleted meanwhile is written for the journal, not sent back by Linear forever', async () => {
+      const labelsOf = async (): Promise<string[]> => {
+        throw new IssueNotFoundError('REL-1');
+      };
+      expect(await mapLinearWebhook(fx('session-created-delegation'), 'd1', { ...twoRepos([]), labelsOf })).toMatchObject([{ type: 'ticket.delegated', projectId: 'web' }]);
+      const down = async (): Promise<string[]> => {
+        throw new Error('Linear down');
+      };
+      await expect(mapLinearWebhook(fx('session-created-delegation'), 'd1', { ...twoRepos([]), labelsOf: down })).rejects.toThrow('Linear down');
+    });
+
+    it('marks a label added that names another repo of the team, and only then', async () => {
+      const naming = (name: string, projects: string[]) => ({ ...twoRepos([], { stored: [held] }), projectsOfTeam: () => projects, labelNameById: (_t: string, id: string) => (id === 'l-resume' ? name : 'bug') });
+      const labels = async (c: MapContext) => (await mapLinearWebhook(fx('issue-moved-labeled'), 'd', c)).filter((e) => e.type === 'label.changed').map((e) => e.payload);
+      expect(await labels(naming('repo:api', ['web', 'api']))).toEqual([{ label: 'repo:api', change: 'added', otherRepo: true }]);
+      expect(await labels(naming('repo:other', ['web', 'api']))).toEqual([{ label: 'repo:other', change: 'added' }]);
     });
   });
 });

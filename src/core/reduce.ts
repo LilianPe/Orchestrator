@@ -1,4 +1,5 @@
 import { liftDeadLetterBlock, repairedEvent } from './dead-letter.js';
+import { isUnrouted } from './routing.js';
 import { CREATES_TICKET, newTicketState, type InternalEvent, type FactoryEvent, type IssueSnapshot, type TicketState } from './types.js';
 
 const MAX_QUESTION_SESSIONS = 50;
@@ -23,7 +24,8 @@ function external(t: TicketState, e: FactoryEvent): TicketState {
     case 'status.changed': {
       // Cancelled (ORC-170): nothing waits for a human any longer, and the replies kept for a next run are dropped.
       // Any human move, a cancel or an unmapped status included, ends the status the factory put the ticket in.
-      if (e.payload.cancelled) return { ...t, blocked: false, blockReason: undefined, pendingFeedback: [], recordedStatus: undefined };
+      // A cancel also ends a wait for the ticket's repo: delegated and unblocked, it would hold this repo (ORC-291).
+      if (e.payload.cancelled) return { ...t, delegated: t.delegated && !isUnrouted(t), blocked: false, blockReason: undefined, pendingFeedback: [], recordedStatus: undefined };
       if (isOwnMoveEcho(t, e)) return t;
       const to = e.payload.to;
       if (!to) return { ...t, recordedStatus: undefined };

@@ -148,7 +148,8 @@ export interface EventPayloads {
   'session.stopped': { linearSessionId?: string };
   /** `cancelled`: the new status is of type canceled in Linear (ORC-170). */
   'status.changed': { from: LogicalState | null; to: LogicalState | null; cancelled?: true };
-  'label.changed': { label: string; change: 'added' | 'removed' };
+  /** `otherRepo`: the label names another repo of the ticket's team (ORC-291). */
+  'label.changed': { label: string; change: 'added' | 'removed'; otherRepo?: true };
   /** A commit pushed by a human on the ticket's branch. */
   'push.human': { branch: string; sha: string; author: string };
   /** `frozen`: for a `/refreeze`, the freeze at the branch's head, read before the decision (ORC-131); absent without a freeze or a branch. */

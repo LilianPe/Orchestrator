@@ -1,6 +1,6 @@
 import type { Clock } from '../../../core/clock.js';
 import { logicalFromName, type ProjectRuntime } from '../../../core/orchestrator.js';
-import { isUnrouted, resolveRoute } from '../../../core/routing.js';
+import { isUnrouted, namesOtherRepo, resolveRoute } from '../../../core/routing.js';
 import { SCHEMA_VERSION, TRUSTED, type EventPayloads, type EventType, type FactoryEvent, type TicketState } from '../../../core/types.js';
 import type { Store } from '../../../store/types.js';
 import { IssueNotFoundError, labelEchoKey, stateEchoKey, type Tracker, type TrackerIssue } from '../types.js';
@@ -54,7 +54,7 @@ async function catchUpMove(d: ReconcileDeps, emit: Emit, p: ProjectRuntime, t: T
 }
 
 /** The label changes of a delegated ticket since the factory last read its labels; the first reading only records them. */
-async function catchUpLabels(d: ReconcileDeps, emit: Emit, projectId: string, issue: TrackerIssue, t: TicketState, at: number): Promise<void> {
+async function catchUpLabels(d: ReconcileDeps, emit: Emit, projectId: string, team: string[], issue: TrackerIssue, t: TicketState, at: number): Promise<void> {
   const read = issue.updatedAt ?? 0;
   const known = await knownLabels(d.store, projectId, issue.identifier);
   // A webhook recorded a newer state of the issue than this pass read: it is the one to keep.
@@ -65,7 +65,7 @@ async function catchUpLabels(d: ReconcileDeps, emit: Emit, projectId: string, is
     // The factory's own write, whose webhook has not come yet: no human change.
     if (await d.store.isEcho(labelEchoKey(issue.identifier, c.label, c.change), at)) continue;
     // Keyed by Linear's version of the issue: a label put back later is a new change, not a duplicate.
-    await emit(t, UNSIGNED, `reconcile:label:${projectId}:${issue.identifier}:${c.label}:${c.change}:${issue.updatedAt ?? t.updatedAt}`, 'label.changed', c);
+    await emit(t, UNSIGNED, `reconcile:label:${projectId}:${issue.identifier}:${c.label}:${c.change}:${issue.updatedAt ?? t.updatedAt}`, 'label.changed', { ...c, ...(namesOtherRepo(team, projectId, c.label) ? { otherRepo: true } : {}) });
   }
   await recordLabels(d.store, projectId, issue.identifier, issue.labels, read);
 }
@@ -122,11 +122,12 @@ async function reconcileProject(d: ReconcileDeps, p: ProjectRuntime, team: strin
       continue;
     }
     await catchUpMove(d, emit, p, t, issue.stateName, at);
-    await inTurn(() => catchUpLabels(d, emit, p.id, issue, t, at));
+    await inTurn(() => catchUpLabels(d, emit, p.id, team, issue, t, at));
   }
   for (const t of await d.store.listTickets()) {
     if (t.projectId !== p.id || delegated.has(t.ticketId)) continue;
-    const undelegate = t.delegated && t.logical !== 'done';
+    // A ticket done while it waited for its repo stops waiting: nothing else lifts that block.
+    const undelegate = t.delegated && (t.logical !== 'done' || isUnrouted(t));
     if (!t.activeRunId && !undelegate) continue;
     // Another repo of the team has the ticket, listed or not: it leaves this one, nothing of the issue to read or to catch up here.
     if (listedElsewhere.has(t.ticketId) || resolveRoute(team, await storedTickets(d.store, team, t.ticketId))?.projectId !== p.id) {
@@ -158,7 +159,7 @@ async function reconcileProject(d: ReconcileDeps, p: ProjectRuntime, team: strin
     // A completed status the workflow does not call done is no move to done: the delegation is cleared, as before, or every pass reads it again.
     const unmapped = issue?.stateType === 'completed' && logicalFromName(p.workflow.states, issue.stateName) !== 'done';
     // Cleared after a cancel too: no later pass reads the cancelled ticket again.
-    if (undelegate && (cancel || unmapped || !issue?.delegateId)) await clearDelegation(t);
+    if (undelegate && (cancel || unmapped || isUnrouted(t) || !issue?.delegateId)) await clearDelegation(t);
   }
 }
 

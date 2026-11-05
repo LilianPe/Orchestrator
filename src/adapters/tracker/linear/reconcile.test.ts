@@ -124,6 +124,27 @@ describe('reconcileOnce', () => {
       expect(await knownLabels(store, 'web', 'REL-1')).toEqual({ labels: ['old'], at: 1 });
     });
 
+    it('marks a caught-up label that names another repo of the team', async () => {
+      const { tracker, store } = await routedToApi({ updatedAt: 10, labels: ['repo:api'] });
+      await recordLabels(store, 'api', 'REL-1', ['repo:api'], 5);
+      tracker.issues.get('REL-1')!.labels = ['repo:api', 'repo:web'];
+      expect((await pass(tracker, store)).events).toEqual([['api', 'reconcile:label:api:REL-1:repo:web:added:10', { label: 'repo:web', change: 'added', otherRepo: true }]]);
+    });
+
+    it('a ticket waiting for its repo moved to Done stops waiting, whether its move came by webhook or is caught up', async () => {
+      const waiting = { ...newTicketState('web', 'REL-1', 'T', 'todo', 3), delegated: true, blocked: true, blockReason: unroutedReason(['web', 'api']) };
+      for (const [t, expected] of [
+        [waiting, [['web', 'reconcile:moved:web:REL-1:Done:3', { from: 'todo', to: 'done' }], ['web', 'reconcile:undelegated-flag:web:REL-1:3', {}]]],
+        [{ ...waiting, logical: 'done' as const }, [['web', 'reconcile:undelegated-flag:web:REL-1:3', {}]]],
+      ] as const) {
+        const tracker = new FakeTracker();
+        tracker.addIssue({ identifier: 'REL-1', delegateId: 'app', stateName: 'Done', stateType: 'completed' });
+        const store = new SqliteStore(':memory:');
+        await store.putTicket(t);
+        expect((await pass(tracker, store)).events).toEqual(expected);
+      }
+    });
+
     it('catches up a lost move for the repo the ticket went to, and only there', async () => {
       const { tracker, store } = await routedToApi({ stateName: 'AI Review' });
       expect((await pass(tracker, store)).events).toEqual([['api', 'reconcile:moved:api:REL-1:AI Review:4', { from: 'dev', to: 'ai_review' }]]);

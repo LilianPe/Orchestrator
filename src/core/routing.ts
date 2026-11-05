@@ -17,6 +17,12 @@ export const isUnrouted = (t: TicketState | undefined): boolean => !!t?.blocked 
 /** A ticket its project keeps whatever its labels say: work was asked of it there (sticky routing). */
 export const holds = (t: TicketState): boolean => !isUnrouted(t) && (t.delegated || t.prNumber !== undefined || t.branch !== undefined);
 
+/** A label naming another repo of the team than `projectId`: what a ticket held there cannot follow. */
+export function namesOtherRepo(team: readonly string[], projectId: string, label: string): boolean {
+  const lower = label.toLowerCase();
+  return team.some((id) => id !== projectId && lower === `${REPO_LABEL}${id}`.toLowerCase());
+}
+
 export interface Route {
   projectId: string;
   /** The repos to choose from: the ticket names none. */

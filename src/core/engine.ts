@@ -8,7 +8,7 @@ import type { Decision, Effect } from './decision.js';
 import { PRODUCT_NAME } from '../product.js';
 import { CUT_RELAUNCHES, CUT_WINDOW_MS } from '../store/types.js';
 import { isOwnMoveEcho, reduce } from './reduce.js';
-import { holds, isUnrouted, REPO_LABEL, unroutedReason } from './routing.js';
+import { holds, isUnrouted, unroutedReason } from './routing.js';
 import type { EventPayloads, EventType, FactoryEvent, FeedbackItem, InputKind, RunOutcome, Taint, TicketState, VerifyFailure } from './types.js';
 
 type StartRun = Extract<Effect, { kind: 'start_run' }>;
@@ -615,23 +615,25 @@ export function blockedLabelChange(before: boolean, after: boolean): Extract<Dec
 
 /**
  * A ticket whose repo is to be chosen (ORC-291): an event that carries the choice (`repos`) or reaches a ticket
- * blocked for it. A delegation blocks it, or asks again when it is already blocked (its reason kept); a mention,
- * a command, a reply or a stop is answered with the same question; anything else decides nothing, so that no
- * rule starts work in a repo picked by default. `undefined`: the event is not such a one.
+ * blocked for it. A delegation blocks it, whatever blocked it before: `repos` means no project holds it, and under
+ * another reason it would hold this one. Already waiting, it is asked again; a mention, a command, a reply or a stop
+ * is answered with the same question; anything else decides nothing, so that no rule starts work in a repo picked
+ * by default. `undefined`: the event is not such a one.
  */
 function unrouted(state: TicketState | undefined, event: FactoryEvent): Decision | undefined {
   const repos = (event.payload as { repos?: string[] }).repos;
   if (!repos && (!isUnrouted(state) || event.type === 'ticket.undelegated')) return undefined;
   const out = empty();
   const body = repos ? unroutedReason(repos) : state!.blockReason!;
+  const sessionId = (event.payload as { linearSessionId?: string }).linearSessionId;
   if (event.type === 'ticket.delegated' && repos) {
-    if (state?.blocked) out.effects.push({ kind: 'activity', type: 'elicitation', body });
-    else block(out, body, body);
+    if (!isUnrouted(state)) out.events.push({ type: 'ticket.blocked', reason: body });
+    // In the session this delegation opened: the ticket keeps the first one it had.
+    out.effects.push({ kind: 'activity', type: 'elicitation', body, ...(sessionId ? { linearSessionId: sessionId } : {}) });
     // A new ticket: `blockedLabel` sees no state before it and puts no label.
     if (!state) out.effects.push(blockedLabelChange(false, true)!);
     return out;
   }
-  const sessionId = (event.payload as { linearSessionId?: string }).linearSessionId;
   if (sessionId && ['session.mentioned', 'command', 'session.prompted', 'session.stopped'].includes(event.type)) {
     out.effects.push({ kind: 'activity', type: 'response', body, linearSessionId: sessionId });
   }
@@ -861,11 +863,10 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       if (isUnrouted(ticket)) out.events.push({ type: 'ticket.unblocked' });
       break;
     case 'label.changed': {
-      // Routing is sticky (ORC-291): a ticket at work stays in its repo, whatever `repo:` label is added.
-      const { label, change } = event.payload;
-      const lower = label.toLowerCase();
-      if (change === 'added' && ticket && holds(ticket) && lower.startsWith(REPO_LABEL) && lower !== `${REPO_LABEL}${event.projectId}`.toLowerCase()) {
-        out.effects.push({ kind: 'comment', body: `Ce ticket reste sur le dépôt ${event.projectId} : le dépôt ne change pas en cours de route. Pour le changer, arrêtez le travail, retirez la délégation, puis déléguez de nouveau.` });
+      // Routing is sticky (ORC-291): a ticket at work stays in its repo, whichever repo of the team a label added names.
+      const { change, otherRepo } = event.payload;
+      if (change === 'added' && otherRepo && ticket && holds(ticket)) {
+        out.effects.push({ kind: 'comment', body: `Ce ticket reste sur le dépôt ${event.projectId} : le dépôt ne change pas en cours de route. Sans branche ni PR, arrêtez le travail, retirez la délégation, puis déléguez de nouveau. Sinon, ouvrez un nouveau ticket pour l'autre dépôt.` });
       }
       break;
     }

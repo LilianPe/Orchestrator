@@ -6,6 +6,7 @@ import type { Decision } from './decision.js';
 import { CUT_RELAUNCHES, CUT_WINDOW_MS } from '../store/types.js';
 import { CUT_BOUND_REASON, decide, isFenced, RECONCILE_MS, reconcileTicket, SENSITIVE_PATHS, sensitivePathsAtLaunch, taintedKnowledge } from './engine.js';
 import { reduce } from './reduce.js';
+import { holds, isUnrouted } from './routing.js';
 import { newTicketState, type EventPayloads, type EventType, type FactoryEvent, type TicketState } from './types.js';
 
 const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../packs/standard') });
@@ -961,9 +962,23 @@ describe('decide — a ticket whose repo is not known (ORC-291)', () => {
     expect(out.effects[0]).toMatchObject({ type: 'elicitation', body: expect.stringContaining('`repo:web`, `repo:api`') });
   });
 
-  it('keeps the reason of a ticket already blocked, and asks again', () => {
+  it('a ticket no project holds, blocked for another reason, waits for its repo: delegated under another reason, it would hold this repo', () => {
     const out = decide(ticket({ blocked: true, blockReason: 'Tests rouges' }), unrouted, workflow);
-    expect(kinds(out)).toEqual({ events: [], effects: ['activity'], timers: [] });
+    expect(kinds(out)).toEqual({ events: ['ticket.blocked'], effects: ['activity'], timers: [] });
+    expect(isUnrouted(out.events.reduce((s, e) => reduce(s, e), reduce(ticket({ blocked: true, blockReason: 'Tests rouges' }), unrouted)))).toBe(true);
+  });
+
+  it('asks again in the session a new delegation opened, not in the one the ticket first waited in', () => {
+    const again = ev('ticket.delegated', { linearSessionId: 's2', repos: ['web', 'api'] });
+    const out = decide({ ...blocked, linearSessionId: 's1' }, again, workflow);
+    expect(out.events).toEqual([]);
+    expect(out.effects).toEqual([{ kind: 'activity', type: 'elicitation', body: expect.stringContaining('`repo:api`'), linearSessionId: 's2' }]);
+  });
+
+  it('a cancel ends the wait: the ticket holds no repo, its label is read again at its next delegation', () => {
+    const after = reduce(blocked, ev('status.changed', { from: 'todo', to: null, cancelled: true }))!;
+    expect(after).toMatchObject({ blocked: false, delegated: false });
+    expect(holds(after)).toBe(false);
   });
 
   it('answers a mention, a command, a reply or a stop with the same question, and starts nothing', () => {
@@ -987,9 +1002,13 @@ describe('decide — a ticket whose repo is not known (ORC-291)', () => {
     expect(kinds(decide(blocked, ev('ticket.undelegated', { keepLabel: true }), workflow))).toEqual({ events: ['ticket.unblocked'], effects: [], timers: [] });
   });
 
-  it('tells a human adding another repo: label that a ticket at work does not change repo', () => {
-    const out = decide(ticket(), ev('label.changed', { label: 'Repo:Api', change: 'added' }), workflow);
+  it('tells a human adding the label of another repo of the team that a ticket at work does not change repo, and what can', () => {
+    const out = decide(ticket(), ev('label.changed', { label: 'Repo:Api', change: 'added', otherRepo: true }), workflow);
     expect(out.effects).toEqual([{ kind: 'comment', body: expect.stringContaining('reste sur le dépôt p') }]);
-    expect(decide(ticket(), ev('label.changed', { label: 'repo:p', change: 'added' }), workflow).effects).toEqual([]);
+    expect(out.effects[0]).toMatchObject({ body: expect.stringContaining('nouveau ticket') });
+  });
+
+  it('says nothing of a repo: label that names no other repo of the team', () => {
+    expect(decide(ticket(), ev('label.changed', { label: 'repo:frontend', change: 'added' }), workflow).effects).toEqual([]);
   });
 });

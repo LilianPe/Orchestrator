@@ -1,8 +1,8 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { REFREEZE } from '../../../checks/freeze.js';
-import { labelEchoKey, stateEchoKey } from '../types.js';
+import { IssueNotFoundError, labelEchoKey, stateEchoKey } from '../types.js';
 import { labelChanges, type KnownLabels } from './labels.js';
-import { holds, resolveRoute, type Route } from '../../../core/routing.js';
+import { holds, namesOtherRepo, resolveRoute, type Route } from '../../../core/routing.js';
 import { SCHEMA_VERSION, type LogicalState, type FactoryEvent, type Taint, type TicketState } from '../../../core/types.js';
 
 export function isUsableWebhookSecret(secret: unknown): boolean {
@@ -153,7 +153,8 @@ async function issueEvents(body: any, identifier: string, teamKey: string, proje
       const name = ctx.labelNameById(teamKey, id);
       if (name && known && known.labels.includes(name) === (change === 'added')) continue;
       if (name && !(await ctx.isEcho(labelEchoKey(identifier, name, change)))) {
-        out.push({ type: 'label.changed', payload: { label: name, change }, suffix: `:label:${id}` });
+        const otherRepo = namesOtherRepo(ctx.projectsOfTeam(teamKey), projectId, name);
+        out.push({ type: 'label.changed', payload: { label: name, change, ...(otherRepo ? { otherRepo } : {}) }, suffix: `:label:${id}` });
       }
     }
   }
@@ -162,16 +163,27 @@ async function issueEvents(body: any, identifier: string, teamKey: string, proje
 
 /**
  * The project of the ticket a webhook is about (ORC-291). Several repos in the team: the project holding the
- * ticket keeps it; a new session on a ticket none holds (a delegation, a mention, a command) is routed by its
- * `repo:` label, read from Linear only then.
+ * ticket keeps it; a reply goes to the copy that opened its session. Otherwise a new session (a delegation, a
+ * mention, a command) is routed by its `repo:` label, read from Linear only then, and so is a reply or a stop on
+ * a ticket no project stores: its delegation is still in the inbox. An issue deleted meanwhile has no label: its
+ * event goes on, as on a team of one (ORC-302).
  */
 async function routeOf(body: any, identifier: string, teamKey: string, ctx: MapContext): Promise<Route | undefined> {
   const team = ctx.projectsOfTeam(teamKey);
   if (team.length === 0) return undefined;
   if (team.length === 1) return { projectId: team[0]! };
   const stored = (await Promise.all(team.map((p) => ctx.ticket(p, identifier)))).filter((t) => t !== undefined);
-  const routes = body.type === 'AgentSessionEvent' && body.action === 'created' && !stored.some(holds);
-  return resolveRoute(team, stored, routes ? await ctx.labelsOf(identifier) : undefined);
+  const held = stored.some(holds);
+  const session: unknown = body.type === 'AgentSessionEvent' ? body.agentSession?.id : undefined;
+  const opener = held ? undefined : stored.find((t) => t.linearSessionId === session || t.questionSessionIds.includes(session as string));
+  if (session && body.action === 'prompted' && opener) return { projectId: opener.projectId };
+  const routes = session && !held && (body.action === 'created' || stored.length === 0);
+  if (!routes) return resolveRoute(team, stored);
+  const labels = await ctx.labelsOf(identifier).catch((err: Error) => {
+    if (err instanceof IssueNotFoundError) return [];
+    throw err;
+  });
+  return resolveRoute(team, stored, labels);
 }
 
 function issueIdentifier(body: any): string | undefined {
