@@ -11,12 +11,10 @@ import { NO_REPO_VARIABLES, repoVariables, type RepoVariables } from '../config/
  * never in a worktree the agent writes. A failure is the caller's: a launch goes on without them, and a
  * setup that needs a secret then fails by itself.
  * ponytail: its own read of the config, for these two keys; ORC-209 C reads it whole at the launch.
- * Until the agent loses its read-write `.git` (ORC-205), `origin/HEAD` is a ref it could move, and
- * `origin` too before its first read here: the team bounds that to the entries of the project's own team.
+ * The agent has neither `origin` nor `origin/HEAD` of this repository to write: its git dir is its own (ORC-317).
  */
 /**
- * Where a project's forge is, read once by process (ORC-151): `bootstrap` asks it before any run starts, and an agent
- * of this process, which can write the repository's config, changes nothing. An agent of an earlier process could:
+ * Where a project's forge is, read once by process (ORC-151): `bootstrap` asks it before any run starts.
  * ponytail: the URL should come from the instance's configuration (`factory.yml`), with ORC-273's forge.
  */
 export function makeOriginUrl(o: { exec?: Exec } = {}): (project: { repoPath: string }) => Promise<string> {

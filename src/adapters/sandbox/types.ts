@@ -34,7 +34,7 @@ export interface SandboxRequest {
   /** The repository's own hosts (`network.allow` of a `custom` repository), at `limited`. */
   allow?: readonly string[];
   requirements: SandboxRequirements;
-  /** Other host paths the run needs (git common dir, Claude session dir, pack): nothing else is mounted. */
+  /** Other host paths the run needs (Claude session dir, pack): nothing else is mounted. */
   mounts: readonly SandboxMount[];
 }
 

@@ -43,7 +43,7 @@ Aucune image ne reçoit de secret à la construction. Le test d'isolation n° 7 
 ## Limites actuelles
 
 - **Publier** : un agent en runner n'a ni `gh`, ni jeton, et le proxy refuse `git push`. Jusqu'à ORC-125, un run sous compose ne peut donc pas ouvrir sa PR. `GH_TOKEN` ne sert qu'à `factoryd`.
-- **`verify` ne tourne plus dans `factoryd`** (ORC-151) : ses commandes vont dans un runner neuf, sur un clone, au niveau réseau `none`. Sous compose, `FACTORY_CONTAINER_CLI` est fixé : un moteur en panne donne un ticket bloqué pour cause d'infrastructure (`verify.errored`), jamais un repli sur `factoryd`. `FACTORY_ALLOW_HOST_VERIFY` n'est pas transmis, et serait sans effet. **Reste un chemin vers le socket :** `git fetch` et `git worktree add` tournent dans `factoryd`, sur un `.git` que l'agent a pu écrire, donc un hook qu'il y laisse s'exécute à côté du socket. Ne confiez à cette topologie que des dépôts et des tickets de confiance, tant que ce `.git` reste monté en écriture.
+- **`verify` ne tourne plus dans `factoryd`** (ORC-151) : ses commandes vont dans un runner neuf, sur un clone, au niveau réseau `none`. Sous compose, `FACTORY_CONTAINER_CLI` est fixé : un moteur en panne donne un ticket bloqué pour cause d'infrastructure (`verify.errored`), jamais un repli sur `factoryd`. `FACTORY_ALLOW_HOST_VERIFY` n'est pas transmis, et serait sans effet. **Le `git` de `factoryd`, à côté du socket, ne lit rien de ce qu'a écrit un agent** (ORC-317) : chaque agent a son propre dépôt, et le dossier git de `repoPath` n'est jamais monté.
 
 ## Variables
 
@@ -154,3 +154,5 @@ docker compose up -d
 ```
 
 Chaque image a sa copie de l'installation dans `$FACTORY_DIR/install`. Les anciennes restent, un conteneur pouvant encore tourner depuis l'une d'elles : à retirer à la main une fois la mise à jour faite. `run-settings.json` est régénéré au démarrage.
+
+**En passant à ORC-317 :** les espaces de travail deviennent des dépôts à part. Un ticket dont le dossier est encore un `git worktree` est refusé au lancement (« n'est pas celui que l'usine a créé ») : supprimez `workspaces/<projet>/<ticket>/` et `workspaces/<projet>/_trunk/`, puis `git -C <repoPath> worktree prune`. Un commit non poussé y serait perdu : poussez-le d'abord, à la main. Et un agent a pu écrire dans le dossier git d'un dépôt déjà confié à l'usine : vérifiez son `config`, ses `hooks/` et `info/attributes`, ou mieux, reclonez-le. Le correctif protège de ce qu'un agent écrira, pas de ce qu'il a déjà laissé.

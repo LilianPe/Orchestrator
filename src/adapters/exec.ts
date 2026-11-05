@@ -1,4 +1,8 @@
 import { spawn } from 'node:child_process';
+import { devNull } from 'node:os';
+
+/** No hook, no fsmonitor: on each host git command (`-c`), and in a clone's own config (`--config`). */
+export const HARDENING = [`core.hooksPath=${devNull}`, 'core.fsmonitor=false'];
 
 export interface ExecResult {
   stdout: string;

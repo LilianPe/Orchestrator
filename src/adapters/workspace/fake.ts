@@ -9,14 +9,21 @@ export class FakeWorkspaces implements WorkspaceManager {
   heads = new Map<string, string>();
   /** Worktrees whose `.claude/` was reset, in order. */
   resetClaude: string[] = [];
+  /** Trunks given back, in order. */
+  released: string[] = [];
   /** Tickets whose branch has commits beyond the default branch, as a test sets it (ORC-211). */
   ahead = new Set<string>();
   /** Ticket worktrees that exist: the first prepare of one is `fresh`, until its cleanup. */
   private made = new Set<string>();
+  private trunks = new Set<string>();
 
   async prepare(req: WorkspaceRequest): Promise<Workspace> {
     this.prepared.push(req);
-    if (req.kind === 'trunk-readonly') return { path: `/tmp/factory-fake/${req.projectId}/_trunk` };
+    if (req.kind === 'trunk-readonly') {
+      const trunk = `/tmp/factory-fake/${req.projectId}/_trunk/${req.runId}`;
+      this.trunks.add(trunk);
+      return { path: trunk };
+    }
     if (req.kind === 'knowledge') return { path: `/tmp/factory-fake/_kb/${req.runId}` };
     const path = `/tmp/factory-fake/${req.projectId}/${req.ticketId}`;
     const fresh = !this.made.has(path);
@@ -24,7 +31,7 @@ export class FakeWorkspaces implements WorkspaceManager {
     return { path, port: req.portBase + req.slot, branch: branchName(req.ticketId, req.title), ...(fresh ? { fresh } : {}), ...(fresh && this.ahead.has(req.ticketId) ? { ahead: true } : {}) };
   }
 
-  async cleanup(projectId: string, _repoPath: string, ticketId: string): Promise<void> {
+  async cleanup(projectId: string, ticketId: string): Promise<void> {
     this.cleaned.push(ticketId);
     this.made.delete(`/tmp/factory-fake/${projectId}/${ticketId}`);
   }
@@ -61,8 +68,9 @@ export class FakeWorkspaces implements WorkspaceManager {
     this.resetClaude.push(path);
   }
 
-  async gitCommonDir(): Promise<string> {
-    return '/repo/.git';
+  async release(projectId: string, runId: string): Promise<void> {
+    const trunk = `/tmp/factory-fake/${projectId}/_trunk/${runId}`;
+    if (this.trunks.delete(trunk)) this.released.push(trunk);
   }
 
   async remoteBranchExists(_repoPath: string, prefix: string): Promise<boolean> {

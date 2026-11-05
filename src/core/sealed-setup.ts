@@ -30,7 +30,7 @@ export function setupEnv(now: Date): Record<string, string> {
     npm_config_minimum_release_age: String(RELEASE_AGE_DAYS * 24 * 60),
     npm_config_before: cutoff,
     UV_EXCLUDE_NEWER: cutoff,
-    // An agent before this setup could write in the repository's git dir (ORC-205): no hook of its runs with the secrets.
+    // A fresh repository of the agent's has none (ORC-317): defence in depth, no hook runs with the secrets.
     GIT_CONFIG_COUNT: '2',
     GIT_CONFIG_KEY_0: 'core.hooksPath',
     GIT_CONFIG_VALUE_0: '/dev/null',
@@ -86,7 +86,8 @@ async function holdsOne(path: string, needles: readonly Buffer[], buffer: Buffer
  * Purges from the disk every file under `roots` that holds one of `secrets`, and gives their paths
  * (never the values). A link is not followed: its target may be out of the tree. A file it cannot read
  * is purged too: what cannot be checked does not stay. It finds the spellings above, not a secret hashed
- * or encoded otherwise.
+ * or encoded otherwise. A root's own `.git` is left: mounted read-only for the setup, it cannot hold what the setup
+ * wrote, and a pack purged for a value in the repository's history would break the repository.
  */
 export async function sealSecrets(roots: readonly string[], secrets: readonly string[]): Promise<string[]> {
   const needles = secrets.filter(Boolean).flatMap(spellings);
@@ -95,6 +96,7 @@ export async function sealSecrets(roots: readonly string[], secrets: readonly st
   const overlap = Math.max(...needles.map((n) => n.length)) - 1;
   const buffer = Buffer.alloc(CHUNK + overlap);
   const pending = [...roots];
+  const gitDirs = new Set(roots.map((root) => join(root, '.git')));
   for (let dir = pending.pop(); dir !== undefined; dir = pending.pop()) {
     let entries;
     try {
@@ -105,7 +107,7 @@ export async function sealSecrets(roots: readonly string[], secrets: readonly st
     }
     for (const entry of entries) {
       const path = join(dir, entry.name);
-      if (entry.isDirectory()) pending.push(path);
+      if (entry.isDirectory() && !gitDirs.has(path)) pending.push(path);
       if (!entry.isFile()) continue;
       const found = await holdsOne(path, needles, buffer, overlap).catch(() => true);
       if (!found) continue;
@@ -121,7 +123,7 @@ export interface SealedSetupRequest {
   runId: string;
   ticketId: string;
   workspacePath: string;
-  /** What it mounts beside the worktree: the repository's git dir, read-only, so neither a secret nor a hook is written there for the agent to find. */
+  /** What it mounts beside the worktree: its git dir, read-only over it, so neither a secret nor a hook is written there for the agent to find. */
   mounts: readonly SandboxMount[];
   commands: readonly string[];
   /** A command as it runs: `cappedCommand` by default; `verifyCommand` on code nobody reviewed, whose output is capped too. */
