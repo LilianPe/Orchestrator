@@ -44,6 +44,7 @@ describe('blockCause (ORC-297)', () => {
     ['limit', () => reasonOf(ticket({ activeRunId: 'r1', cutRelaunches: [997, 998, 999] }), ev('run.lost', { runId: 'r1', job: 'dev', cause: 'restart' }))],
     ['pr_closed', () => reasonOf(ticket({ activeRunId: 'r1', prNumber: 3, prState: 'OPEN' }), ev('pr.closed', { number: 3, url: 'u', branch: 'b' }))],
     ['pickup', () => reasonOf(ticket({ delegated: false }), ev('ticket.delegated', { linearSessionId: 's1', noRepo: 'ZZZ' }))],
+    ['pickup', () => reasonOf(ticket({ delegated: false }), ev('ticket.delegated', { linearSessionId: 's1', repos: ['web', 'api'] }))],
     ['dead_letter', () => reasonOf(ticket(), ev('dead_letter.added', { eventId: 'e9', eventType: 'pr.opened', error: 'boom', failures: 1 }))],
   ] as const)('%s, for a reason decide writes', (cause, reason) => {
     expect(blockCause(reason())).toBe(cause);

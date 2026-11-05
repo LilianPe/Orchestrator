@@ -2,6 +2,8 @@ import type { Tracker } from '../adapters/tracker/types.js';
 import type { WorkspaceManager } from '../adapters/workspace/types.js';
 import type { ProjectRuntime } from '../core/orchestrator.js';
 import { pickupFailures } from '../core/pickup.js';
+import { repoLabel } from '../core/routing.js';
+import { routedIssues } from '../adapters/tracker/linear/reconcile.js';
 import type { Store } from '../store/types.js';
 
 export interface PlanRow {
@@ -21,15 +23,23 @@ export async function planRows(d: {
   workspaces: WorkspaceManager;
 }): Promise<PlanRow[]> {
   const rows: PlanRow[] = [];
-  for (const p of d.projects) {
-    for (const issue of await d.tracker.listDelegated(p.teamKey)) {
+  // One read per team; each ticket listed once, under the project it goes to (ORC-291).
+  for (const teamKey of new Set(d.projects.map((p) => p.teamKey))) {
+    const members = d.projects.filter((p) => p.teamKey === teamKey);
+    for (const issue of await routedIssues(d, teamKey, members.map((p) => p.id))) {
+      const p = members.find((x) => x.id === issue.projectId)!;
+      const row = { identifier: issue.identifier, title: issue.title, priority: issue.priority };
+      if (issue.repos) {
+        rows.push({ ...row, status: 'pas pris', reasons: [`dépôt à préciser (${issue.repos.map(repoLabel).join(', ')})`] });
+        continue;
+      }
       const known = await d.store.getTicket(p.id, issue.identifier);
       if (known) {
-        rows.push({ identifier: issue.identifier, title: issue.title, priority: issue.priority, status: 'déjà géré', reasons: [known.logical] });
+        rows.push({ ...row, status: 'déjà géré', reasons: [known.logical] });
         continue;
       }
       const reasons = await pickupFailures(p.workflow.tracker.pickup.checks, issue, p.repoPath, d.workspaces);
-      rows.push({ identifier: issue.identifier, title: issue.title, priority: issue.priority, status: reasons.length ? 'pas pris' : 'pris', reasons });
+      rows.push({ ...row, status: reasons.length ? 'pas pris' : 'pris', reasons });
     }
   }
   return rows.sort((a, b) => rank(a.priority) - rank(b.priority));

@@ -139,19 +139,25 @@ export type TimerKind = keyof TimerPayloads;
 export type TimerFired = { [K in TimerKind]: { kind: K; payload: TimerPayloads[K] } }[TimerKind];
 
 export interface EventPayloads {
-  /** `ack`: brought by the webhook, to acknowledge (ORC-171). `noRepo`: the Linear team no project takes: the ticket waits blocked under the first project. */
-  'ticket.delegated': { linearSessionId?: string; promptContext?: string; issue?: IssueSnapshot; ack?: true; noRepo?: string };
-  'ticket.undelegated': Record<string, never>;
-  'session.mentioned': { linearSessionId: string; body: string; author: string; issue?: IssueSnapshot; ack?: true };
-  'session.prompted': { linearSessionId: string; body: string; author: string; issue?: IssueSnapshot };
-  'session.stopped': { linearSessionId?: string };
+  /**
+   * `ack`: brought by the webhook, to acknowledge (ORC-171). `noRepo`: the Linear team no project takes: the ticket waits blocked under the first project.
+   * `repos`: the team has several and the ticket names none (ORC-291); the delegation then waits for a human's choice.
+   * `waitedIn`: the project where the ticket waited for that choice.
+   */
+  'ticket.delegated': { linearSessionId?: string; promptContext?: string; issue?: IssueSnapshot; ack?: true; noRepo?: string; repos?: string[]; waitedIn?: string };
+  /** `keepLabel`: another project's ticket for the same issue is blocked, the label stays (ORC-291). */
+  'ticket.undelegated': { keepLabel?: true };
+  'session.mentioned': { linearSessionId: string; body: string; author: string; issue?: IssueSnapshot; ack?: true; repos?: string[]; waitedIn?: string };
+  'session.prompted': { linearSessionId: string; body: string; author: string; issue?: IssueSnapshot; repos?: string[]; waitedIn?: string };
+  'session.stopped': { linearSessionId?: string; repos?: string[]; waitedIn?: string };
   /** `cancelled`: the new status is of type canceled in Linear (ORC-170). */
   'status.changed': { from: LogicalState | null; to: LogicalState | null; cancelled?: true };
-  'label.changed': { label: string; change: 'added' | 'removed' };
+  /** `otherRepo`: the label names another repo of the ticket's team (ORC-291). */
+  'label.changed': { label: string; change: 'added' | 'removed'; otherRepo?: true };
   /** A commit pushed by a human on the ticket's branch. */
   'push.human': { branch: string; sha: string; author: string };
   /** `frozen`: for a `/refreeze`, the freeze at the branch's head, read before the decision (ORC-131); absent without a freeze or a branch. */
-  command: { name: string; body: string; linearSessionId: string; author: string; issue?: IssueSnapshot; ack?: true; frozen?: FrozenTests };
+  command: { name: string; body: string; linearSessionId: string; author: string; issue?: IssueSnapshot; ack?: true; frozen?: FrozenTests; repos?: string[]; waitedIn?: string };
   'pr.opened': PrPayload;
   'pr.checks_passed': PrPayload;
   'pr.checks_failed': PrPayload & { failures: string[] };
@@ -286,7 +292,7 @@ export type DecidedEvent =
   | { type: 'ticket.unblocked' }
   | {
       type: 'ticket.patched';
-      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'verifiedSha'>>;
+      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'verifiedSha' | 'awaitingRepo'>>;
     }
   | { type: 'feedback.appended'; item: FeedbackItem }
   /** The ticket's dev work is stopped: nothing pending, no verification awaited. */
@@ -366,6 +372,12 @@ export interface TicketState {
   frozenTests?: FrozenTests;
   /** The last failed check (worktree and failed commands) and how many times in a row it came back (ORC-187). */
   repeatedFailure?: { signature: string; count: number } | null;
+  /**
+   * The repos of its Linear team to choose from, while the ticket waits for a human to name one (ORC-291); empty when
+   * the team has none (ORC-171), the ticket then only filed under the first project. `null` once
+   * chosen (`undefined` would not survive the journal's JSON); absent on a ticket that never waited.
+   */
+  awaitingRepo?: string[] | null;
   /**
    * Runs started by red CI (`pr.checks_failed`) since the last green CI or human relaunch, bounded by
    * `limits.ciFixAttempts` (I5, ORC-270). The AI review loop does not share it yet (ORC-184, ORC-187).

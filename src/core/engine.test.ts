@@ -7,6 +7,7 @@ import { CUT_RELAUNCHES, CUT_WINDOW_MS } from '../store/types.js';
 import { CUT_BOUND_REASON, decide, isFenced, mayPublish, RECONCILE_MS, reconcileTicket, SENSITIVE_PATHS, sensitivePathsAtLaunch, taintedKnowledge } from './engine.js';
 import { blockCause } from './block-cause.js';
 import { reduce } from './reduce.js';
+import { holds, isUnrouted, unroutedReason } from './routing.js';
 import { newTicketState, SCHEMA_VERSION, type EventPayloads, type EventType, type FactoryEvent, type TicketState } from './types.js';
 
 const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../packs/standard') });
@@ -1028,5 +1029,118 @@ describe('decide — dead letters (ORC-175)', () => {
     const out = decide(ticket({ activeRunId: 'new' }), ev('dead_letter.repaired', { eventId: 'l1', action: 'replay', by: 'ops', event: stale }), workflow);
     expect(out.effects).toEqual([]);
     expect(isFenced(out)).toBe(true);
+  });
+});
+
+describe('decide — a ticket whose repo is not known (ORC-291)', () => {
+  const unrouted = ev('ticket.delegated', { issue: { title: 'T', logical: 'todo', priority: 0 }, repos: ['web', 'api'] });
+
+  const blocked = decide(undefined, unrouted, workflow).events.reduce((t, e) => reduce(t, e), reduce(undefined, unrouted))!;
+
+  it('blocks the delegation, even unsigned, labels it and asks which repo, listing them', () => {
+    const out = decide(undefined, { ...unrouted, taint: 'untrusted', roles: [] }, workflow);
+    expect(kinds(out)).toEqual({ events: ['ticket.blocked', 'ticket.patched'], effects: ['activity', 'labels'], timers: [] });
+    expect(out.effects[0]).toMatchObject({ type: 'elicitation', body: expect.stringContaining('`repo:web`, `repo:api`') });
+    expect(blocked.awaitingRepo).toEqual(['web', 'api']);
+  });
+
+  it('a ticket no project holds, blocked for another reason, waits for its repo: delegated under another reason, it would hold this repo', () => {
+    const out = decide(ticket({ blocked: true, blockReason: 'Tests rouges' }), unrouted, workflow);
+    expect(kinds(out)).toEqual({ events: ['ticket.blocked', 'ticket.patched'], effects: ['activity'], timers: [] });
+    expect(isUnrouted(out.events.reduce((s, e) => reduce(s, e), reduce(ticket({ blocked: true, blockReason: 'Tests rouges' }), unrouted)))).toBe(true);
+  });
+
+  it('asks again in the session a new delegation opened, not in the one the ticket first waited in', () => {
+    const again = ev('ticket.delegated', { linearSessionId: 's2', repos: ['web', 'api'] });
+    const out = decide({ ...blocked, linearSessionId: 's1' }, again, workflow);
+    expect(out.events).toEqual([]);
+    expect(out.effects).toEqual([{ kind: 'activity', type: 'elicitation', body: expect.stringContaining('`repo:api`'), linearSessionId: 's2' }]);
+  });
+
+  it('a delegation naming the repo the ticket waits in lifts the wait and runs its rule', () => {
+    const out = decide(blocked, ev('ticket.delegated', { linearSessionId: 's2' }), workflow);
+    expect(out.events.map((e) => e.type)).toContain('ticket.unblocked');
+    expect(out.effects.map((e) => e.kind)).toContain('start_run');
+    expect(out.effects).toContainEqual({ kind: 'labels', add: [], remove: ['Bloqué'] });
+    // The session the delegation opened is the ticket's from now on: its replies are dev feedback, not questions.
+    expect(out.events.reduce((t, e) => reduce(t, e), reduce({ ...blocked, linearSessionId: 's1' }, ev('ticket.delegated', { linearSessionId: 's2' })))?.linearSessionId).toBe('s2');
+  });
+
+  it('a new ticket that waited in another repo takes the Bloqué label off, as nothing there will', () => {
+    const moved = ev('ticket.delegated', { issue: { title: 'T', logical: 'todo', priority: 0 }, waitedIn: 'web' });
+    expect(decide(undefined, moved, workflow).effects).toContainEqual({ kind: 'labels', add: [], remove: ['Bloqué'] });
+  });
+
+  it('a cancel ends the wait: the ticket holds no repo, its label is read again at its next delegation', () => {
+    const after = reduce(blocked, ev('status.changed', { from: 'todo', to: null, cancelled: true }))!;
+    expect(after).toMatchObject({ blocked: false, delegated: false, awaitingRepo: null });
+    expect(holds(after)).toBe(false);
+  });
+
+  it('answers a mention, a command, a reply or a stop with the same question, and starts nothing', () => {
+    const mention = ev('session.mentioned', { linearSessionId: 's9', body: 'ça va ?', author: 'L', repos: ['web', 'api'], issue: { title: 'T', logical: 'todo', priority: 0 } });
+    expect(decide(undefined, mention, workflow).effects).toEqual([{ kind: 'activity', type: 'response', body: expect.stringContaining('`repo:api`'), linearSessionId: 's9' }]);
+    for (const e of [ev('session.prompted', { linearSessionId: 's1', body: 'vas-y', author: 'L' }), ev('session.stopped', { linearSessionId: 's1' })]) {
+      expect(decide(blocked, e, workflow)).toEqual(decision({ effects: [{ kind: 'activity', type: 'response', body: blocked.blockReason!, linearSessionId: 's1' }] }));
+    }
+  });
+
+  it('decides nothing else on a ticket waiting for its repo: no rule may start work in a repo picked by default', () => {
+    for (const e of [ev('status.changed', { from: 'todo', to: 'dev' }), ev('label.changed', { label: 'agent:reprendre', change: 'added' })]) {
+      const out = decide(blocked, e, workflow);
+      expect(out).toEqual(decision());
+      expect(out.trace).toContain(`${e.type}: repo to choose first`);
+    }
+  });
+
+  it('a timer or a failed effect neither starts work nor replaces the wait: the ticket would then hold the repo picked by default', () => {
+    const timer = ev('timer.fired', { kind: 'debounce', payload: { job: 'dev-feedback' } } as never);
+    const failed = ev('effect.failed', { kind: 'activity', error: 'Linear down', eventId: 'linear:session:s1' } as never);
+    for (const e of [timer, failed]) {
+      const out = decide(blocked, e, workflow);
+      expect(out.events).toEqual([]);
+      expect(out.effects.map((f) => f.kind)).not.toContain('start_run');
+    }
+  });
+
+  it('a delegation without a snapshot blocks nothing and asks nothing: no ticket comes out of it (ORC-302)', () => {
+    const out = decide(undefined, ev('ticket.delegated', { linearSessionId: 's1', repos: ['web', 'api'] }), workflow);
+    expect(out.events).toEqual([]);
+    expect(out.effects.map((e) => e.kind)).not.toContain('activity');
+  });
+
+  it('leaves what is no human action to its usual handling: the end of a question run under way, a dead letter', () => {
+    for (const e of [ev('run.finished', { runId: 'gone', job: 'ask', outcome: 'success', costUsd: 0, turns: 0, lastText: '' }), ev('dead_letter.added', { eventId: 'e', eventType: 'pr.opened', error: 'x', failures: 1 })]) {
+      expect(decide(blocked, e, workflow).trace).not.toContain(`${e.type}: repo to choose first`);
+    }
+  });
+
+  it('still asks the question from the field when another block replaced the reason', () => {
+    const replaced = { ...blocked, blockReason: 'Erreur : Linear down' };
+    const reply = decide(replaced, ev('session.prompted', { linearSessionId: 's1', body: 'vas-y', author: 'L' }), workflow);
+    expect(reply.effects).toEqual([{ kind: 'activity', type: 'response', body: unroutedReason(['web', 'api']), linearSessionId: 's1' }]);
+  });
+
+  it('a ticket that never waited gets no trace of the field, so that old journals replay as they were', () => {
+    const cancelled = reduce(ticket(), ev('status.changed', { from: 'dev', to: null, cancelled: true }))!;
+    expect('awaitingRepo' in cancelled).toBe(false);
+  });
+
+  it('lifts that block once the ticket is no longer delegated here, the label kept when its repo blocks it too', () => {
+    const lift = decide(blocked, ev('ticket.undelegated', {}), workflow);
+    expect(kinds(lift)).toEqual({ events: ['ticket.unblocked', 'ticket.patched'], effects: ['labels'], timers: [] });
+    expect(lift.events.reduce((t, e) => reduce(t, e), reduce(blocked, ev('ticket.undelegated', {})))).toMatchObject({ blocked: false, awaitingRepo: null });
+    expect(kinds(decide(blocked, ev('ticket.undelegated', { keepLabel: true }), workflow))).toEqual({ events: ['ticket.unblocked', 'ticket.patched'], effects: [], timers: [] });
+  });
+
+  it('tells a human adding the label of another repo of the team that a ticket at work does not change repo, and what can', () => {
+    const out = decide(ticket(), ev('label.changed', { label: 'Repo:Api', change: 'added', otherRepo: true }), workflow);
+    expect(out.effects).toEqual([{ kind: 'comment', body: expect.stringContaining('reste sur le dépôt p') }]);
+    expect(out.effects[0]).toMatchObject({ body: expect.stringContaining('nouveau ticket') });
+    expect(out.effects[0]).toMatchObject({ body: expect.stringContaining('5 minutes') });
+  });
+
+  it('says nothing of a repo: label that names no other repo of the team', () => {
+    expect(decide(ticket(), ev('label.changed', { label: 'repo:frontend', change: 'added' }), workflow).effects).toEqual([]);
   });
 });

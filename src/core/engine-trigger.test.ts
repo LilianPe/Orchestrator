@@ -107,21 +107,22 @@ describe('decide — one active run per ticket (ORC-171)', () => {
 describe('decide — a ticket of a team with no repo (ORC-171)', () => {
   const issue = { title: 'T', logical: 'todo' as const, priority: 0 };
   const noRepo = ev('ticket.delegated', { linearSessionId: 's-1', issue, noRepo: 'ZZZ' }, undefined);
-  const blocked = reduce(reduce(undefined, noRepo), decide(undefined, noRepo, workflow).events[0]!)!;
+  const blocked = decide(undefined, noRepo, workflow).events.reduce<TicketState | undefined>((t, e) => reduce(t, e), reduce(undefined, noRepo))!;
+  const NO_REPO_EVENTS = [{ type: 'ticket.blocked', reason: expect.stringContaining('ZZZ') }, { type: 'ticket.patched', patch: { awaitingRepo: [] } }];
 
   it('blocks the delegation, labels it and says why in its session, and starts nothing', () => {
     const out = decide(undefined, noRepo, workflow);
-    expect(out.events).toEqual([{ type: 'ticket.blocked', reason: expect.stringContaining('ZZZ') }]);
+    expect(out.events).toEqual(NO_REPO_EVENTS);
     expect(out.effects).toEqual([
       { kind: 'activity', type: 'elicitation', linearSessionId: 's-1', body: expect.stringContaining('ZZZ') },
       { kind: 'labels', add: ['Bloqué'], remove: [] },
     ]);
-    expect(blocked).toMatchObject({ blocked: true, delegated: true });
+    expect(blocked).toMatchObject({ blocked: true, delegated: true, awaitingRepo: [] });
   });
 
   it('whoever delegated: no repo, no role to check', () => {
     expect(mayCheck(noRepo, workflow)).toBe(false);
-    expect(decide(undefined, { ...noRepo, roles: [] }, workflow).events).toEqual([{ type: 'ticket.blocked', reason: expect.stringContaining('ZZZ') }]);
+    expect(decide(undefined, { ...noRepo, roles: [] }, workflow).events).toEqual(NO_REPO_EVENTS);
   });
 
   it('asks again on a new delegation while the team still has no repo, the block kept', () => {
@@ -130,13 +131,70 @@ describe('decide — a ticket of a team with no repo (ORC-171)', () => {
     expect(out.effects).toEqual([{ kind: 'activity', type: 'elicitation', linearSessionId: 's-2', body: expect.stringContaining('ZZZ') }]);
   });
 
+  it('takes over a block of another reason, or of a row written before the field: the wait is the field', () => {
+    const before = { ...blocked, awaitingRepo: undefined, blockReason: "Aucun dépôt connu pour l'équipe Linear ZZZ : ..." };
+    expect(decide(before, noRepo, workflow).events).toEqual(NO_REPO_EVENTS);
+  });
+
+  it('has no question to repeat to whatever reaches it: fenced, no question and no run (no webhook brings it a mention)', () => {
+    const out = decide(blocked, ev('session.mentioned', { linearSessionId: 's-q', body: 'alors ?', author: 'L', ack: true }), workflow);
+    expect(out.events).toEqual([]);
+    expect(kinds(out.effects)).toEqual(['ack']);
+    expect(decide(blocked, ev('status.changed', { from: 'todo', to: 'dev' }), workflow).effects).toEqual([]);
+  });
+
   it('lifts that block, and the label, once the ticket is no longer delegated here', () => {
     const out = decide(blocked, ev('ticket.undelegated', {}, undefined, undefined), workflow);
-    expect(out.events).toEqual([{ type: 'ticket.unblocked' }]);
+    expect(out.events).toEqual([{ type: 'ticket.unblocked' }, { type: 'ticket.patched', patch: { awaitingRepo: null } }]);
     expect(out.effects).toEqual([{ kind: 'labels', add: [], remove: ['Bloqué'] }]);
   });
 
   it('leaves any other block alone when the ticket is undelegated', () => {
     expect(decide(ticket({ delegated: true, blocked: true, blockReason: 'Tests rouges' }), ev('ticket.undelegated', {}, undefined, undefined), workflow).events).toEqual([]);
+  });
+});
+
+describe('decide — the ack of a ticket waiting for its repo (ORC-171, ORC-291)', () => {
+  const repos = ['p', 'api'];
+  const asked = (linearSessionId: string) => ({ kind: 'activity', type: 'elicitation', linearSessionId, body: expect.stringContaining('Dépôt à préciser') });
+  const waiting = ticket({ delegated: true, blocked: true, blockReason: 'Dépôt à préciser : ...', awaitingRepo: repos, linearSessionId: 's-1' });
+  const ack = (linearSessionId: string) => ({ kind: 'ack', body: ACK_BODY, linearSessionId, comment: true, plan: true });
+
+  it('a delegation that must choose gets the question alone: no ack, no plan, no run', () => {
+    const out = decide(undefined, ev('ticket.delegated', { linearSessionId: 's-1', ack: true, repos, issue: { title: 'T', logical: 'todo', priority: 0 } }), workflow);
+    expect(out.effects).toEqual([asked('s-1'), { kind: 'labels', add: ['Bloqué'], remove: [] }]);
+    // Delegated again, still with no label: the question again, still no ack.
+    expect(decide(waiting, ev('ticket.delegated', { linearSessionId: 's-2', ack: true, repos }), workflow).effects).toEqual([asked('s-2')]);
+  });
+
+  it.each([
+    ['a mention', ev('session.mentioned', { linearSessionId: 's-q', body: 'alors ?', author: 'L', ack: true })],
+    ['a command', ev('command', { name: '/x', body: '', linearSessionId: 's-q', author: 'L', ack: true })],
+  ])('%s on a waiting ticket is answered with the question, no ack', (_name, event) => {
+    expect(decide(waiting, event, workflow).effects).toEqual([{ kind: 'activity', type: 'response', linearSessionId: 's-q', body: expect.stringContaining('Dépôt à préciser') }]);
+  });
+
+  it('its end in the repo it waited in: one ack in the new session, the plan there, one run', () => {
+    const out = decide(waiting, ev('ticket.delegated', { linearSessionId: 's-2', ack: true }), workflow);
+    expect(out.events.slice(0, 3)).toEqual([{ type: 'ticket.unblocked' }, { type: 'ticket.patched', patch: { awaitingRepo: null } }, { type: 'session.linked', linearSessionId: 's-2' }]);
+    expect(out.effects.filter((e) => e.kind === 'ack')).toEqual([ack('s-2')]);
+    expect(out.effects[0]).toEqual(ack('s-2'));
+    expect(out.effects.filter((e) => e.kind === 'start_run')).toHaveLength(1);
+    expect(out.effects.filter((e) => e.kind === 'labels')).toEqual([{ kind: 'labels', add: [], remove: ['Bloqué'] }]);
+  });
+
+  it('its end in another repo: the same, on a ticket with nothing before it', () => {
+    const delegated = ev('ticket.delegated', { linearSessionId: 's-2', ack: true, waitedIn: 'p', issue: { title: 'T', logical: 'todo', priority: 0 } });
+    const out = decide(undefined, { ...delegated, projectId: 'api' }, workflow);
+    expect(out.effects[0]).toEqual(ack('s-2'));
+    expect(out.effects.filter((e) => e.kind === 'ack')).toHaveLength(1);
+    expect(out.effects.filter((e) => e.kind === 'start_run')).toHaveLength(1);
+    expect(out.effects.filter((e) => e.kind === 'labels')).toEqual([{ kind: 'labels', add: [], remove: ['Bloqué'] }]);
+  });
+
+  it('an undelegation that keeps the label decides no ack and no label', () => {
+    const out = decide(waiting, ev('ticket.undelegated', { keepLabel: true }, undefined, undefined), workflow);
+    expect(out.effects).toEqual([]);
+    expect(out.events).toEqual([{ type: 'ticket.unblocked' }, { type: 'ticket.patched', patch: { awaitingRepo: null } }]);
   });
 });

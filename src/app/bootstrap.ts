@@ -281,8 +281,10 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       accept,
       log,
       ctx: {
-        projectIdForTeam: (k) => projects.find((p) => p.teamKey === k)?.id,
+        projectsOfTeam: (k) => projects.filter((p) => p.teamKey === k).map((p) => p.id),
         firstProject: () => projects[0]?.id,
+        labelsOf: async (id) => (await trackerSwitch.getIssue(id)).labels,
+        ticket: (pid, id) => store.getTicket(pid, id),
         logicalFor: (pid, name) => {
           const p = projects.find((x) => x.id === pid);
           return p ? (logicalFromName(p.workflow.states, name) ?? null) : null;
@@ -305,7 +307,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     const timers = new TimerService(store, clock, () => orchestrator.wake(), (e) => log(`timers: ${e.message}`));
     const poller = new PrPoller({ store, forge, projects, submit: accept, clock, log });
     reconcileProject = async (p) => {
-      await reconcileOnce({ tracker: trackerSwitch, store, projects: [p], allProjects: projects, submit: accept, clock, log, serial: labelsTurn });
+      await reconcileOnce({ tracker: trackerSwitch, store, projects, only: p.id, submit: accept, clock, log, serial: labelsTurn });
       await poller.pollOnce(p.id);
     };
     // GitHub webhooks (ORC-134) write to the inbox beside the poll (each reconciliation, ORC-185; every 30 s without
