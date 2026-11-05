@@ -49,6 +49,8 @@ jobs:
     skill: "factory:dev"
     pickup: true
     verify: []
+    # The repository's commands and the checks of the diff, in a fresh clone (ORC-151): every job that writes code.
+    repo_checks: true
     on_start: { move: dev }
     on_success: { move: human_review, post: summary }
   # The `tests` step of factory/default (ORC-123): tests of the acceptance criteria only, then the `red`
@@ -80,6 +82,9 @@ jobs:
     workspace: worktree
     session: new
     skill: "factory:review"
+    # It brings a push into its worktree: that commit needs its own green `verify`, and the review does not fix it.
+    repo_checks: true
+    verify_failure: block
     on_success: { move: human_review, post: synthesis }
   ask:
     queue: questions

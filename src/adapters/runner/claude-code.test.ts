@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { describeAgentRuntimeContract, drain, type AgentScript } from '../../../test/contracts/agent-runtime.contract.js';
+import { ContainerSandboxProvider } from '../sandbox/docker-rootless.js';
 import { FakeSandboxProvider } from '../sandbox/fake.js';
 import type { SandboxProvider } from '../sandbox/types.js';
 import { buildClaudeArgs, childEnv, ClaudeCodeRunner, liveDir } from './claude-code.js';
@@ -32,6 +33,59 @@ async function sandbox() {
   const { id } = await sandboxes.create({ runId: 'r', ticketId: 'ORC-1', workspacePath: '/w', network: 'claude-api', requirements: { minLevel: 'L3', browser: false, services: [] }, mounts: [] });
   return { sandboxes, id, spawnCommand: vi.spyOn(sandboxes, 'spawnCommand') };
 }
+
+/**
+ * The provider's real command without its engine: the same carriers and the same `sh`, run here. The command
+ * stands for `claude`, which gives its env to its hooks: it asks the pack's hook about each file and writes the answers.
+ */
+class NoEngine extends ContainerSandboxProvider {
+  override spawnCommand(...args: Parameters<ContainerSandboxProvider['spawnCommand']>) {
+    const { command, env } = super.spawnCommand(...args);
+    return { command: command.slice(command.indexOf(args[0]) + 1), env };
+  }
+}
+const ASKS_THE_HOOK = `
+import { spawnSync } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
+const denied = (file_path) => spawnSync(process.execPath, [process.env.PROBE_HOOK], { input: JSON.stringify({ tool_name: 'Read', tool_input: { file_path } }), encoding: 'utf8' }).stdout.includes('"deny"');
+const { PROBE_OUT, PROBE_BIG, PROBE_FROZEN } = process.env;
+const carriers = Object.keys(process.env).filter((k) => k.startsWith('FACTORY_SANDBOX_ENV_'));
+writeFileSync(PROBE_OUT, JSON.stringify({ big: denied(PROBE_BIG), frozen: denied(PROBE_FROZEN), carriers }));
+console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, total_cost_usd: 0, num_turns: 1, result: 'ok' }));
+`;
+
+describe('the settings of the read guard, through the allowlist of a sandbox (ORC-279)', () => {
+  // A path with a space and an accent: the list goes through the carrier and the `sh` as JSON.
+  async function probe(run: (frozen: string) => Record<string, string>) {
+    const dir = mkdtempSync(join(tmpdir(), 'factory dé-'));
+    const [big, frozen, script, out] = ['big.ts', 'frozen.test.ts', 'probe.mjs', 'out.json'].map((n) => join(dir, n)) as [string, string, string, string];
+    writeFileSync(big, 'x\n'.repeat(200));
+    writeFileSync(frozen, 'x\n'.repeat(200));
+    writeFileSync(script, ASKS_THE_HOOK);
+    const exec = async (_cmd: string, args: string[]) => ({ stdout: args[0] === 'run' ? 'c1\n' : '', stderr: '', code: 0 });
+    const sandboxes = new NoEngine({ cli: 'docker', image: 'factory-runner:1', uid: 1000, gid: 1000, exec });
+    await sandboxes.create({ runId: 'r', ticketId: 'ORC-1', workspacePath: '/w', network: 'none', requirements: { minLevel: 'L3', browser: false, services: [] }, mounts: [] });
+    const r = new ClaudeCodeRunner({ transcriptsDir: mkdtempSync(join(tmpdir(), 'factory-tr-')), command: [process.execPath, script], sandboxes });
+    const env = { PROBE_HOOK: join(import.meta.dirname, '../../../packs/standard/hooks/pre-tool-use.mjs'), PROBE_OUT: out, PROBE_BIG: big, PROBE_FROZEN: frozen, FACTORY_REFUSALS_LOG: join(dir, 'refusals.jsonl'), FACTORY_TICKET: 'ORC-1', ...run(frozen) };
+    expect(await r.start(req({ sandboxId: 'c1', cwd: '/work' }, env)).done).toMatchObject({ outcome: 'success' });
+    return JSON.parse(readFileSync(out, 'utf8')) as { big: boolean; frozen: boolean; carriers: string[] };
+  }
+
+  it('reach the hook in the container under their own names', async () => {
+    // A threshold under the 200 lines of the files: only the run's variable can make the hook refuse.
+    const seen = await probe((frozen) => ({ FACTORY_READ_MAX_LINES: '100', FACTORY_FULL_READ_PATHS: JSON.stringify([frozen]) }));
+    expect(seen).toEqual({ big: true, frozen: false, carriers: [] });
+  });
+
+  it('are what changes the answer: without them, the 350 of the hook lets both through', async () => {
+    expect(await probe(() => ({}))).toEqual({ big: false, frozen: false, carriers: [] });
+  });
+
+  it('never come from the daemon: its own FACTORY_* stay out of the container', async () => {
+    vi.stubEnv('FACTORY_READ_MAX_LINES', '100');
+    expect(await probe(() => ({}))).toEqual({ big: false, frozen: false, carriers: [] });
+  });
+});
 
 const scripts: Record<AgentScript, Partial<RunRequest>> = {
   success: { env: { FAKE_CLAUDE_SCRIPT: fx('stream-success.jsonl') } },

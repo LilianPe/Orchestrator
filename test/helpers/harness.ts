@@ -15,10 +15,11 @@ import type { Workflow } from '../../src/config/workflow-schema.js';
 import { EventBus } from '../../src/core/bus.js';
 import { FakeClock } from '../../src/core/clock.js';
 import type { RepoVariables } from '../../src/config/repo-variables.js';
-import { Orchestrator, type ProjectRuntime } from '../../src/core/orchestrator.js';
+import { Orchestrator, type OrchestratorDeps, type ProjectRuntime } from '../../src/core/orchestrator.js';
 import { devCapacity, Scheduler } from '../../src/core/scheduler.js';
 import { TimerService } from '../../src/runtime/timers.js';
 import type { EventPayloads, EventType, FactoryEvent, Taint } from '../../src/core/types.js';
+import type { CleanVerifier, CleanVerifyRequest } from '../../src/core/clean-verify.js';
 import type { Verifier } from '../../src/core/verify.js';
 import type { EffectRetry } from '../../src/runtime/outbox.js';
 import { SqliteStore } from '../../src/store/sqlite-store.js';
@@ -148,6 +149,10 @@ export function createHarness(
     concurrency?: number;
     preset?: TestPreset;
     verify?: Verifier;
+    /** The clean check itself; by default its verdict comes from `checks`. */
+    cleanVerify?: CleanVerifier;
+    /** `false`: an instance with neither sandboxes nor `FACTORY_ALLOW_HOST_VERIFY`. */
+    hostChecks?: boolean;
     knowledge?: boolean;
     /**
      * A store to run on instead of the harness's own database (the SQLite file a SIGKILLed child
@@ -180,6 +185,7 @@ export function createHarness(
     reconcile?: (project: ProjectRuntime) => Promise<void>;
     /** Runs in `sandboxes` (ORC-204), the ticket's session dirs in a temporary dir; on the host otherwise. */
     sandboxed?: boolean;
+    fullReadPaths?: OrchestratorDeps['fullReadPaths'];
     /** What the runner gets of the repository (ORC-211). */
     repoVariables?: (project: ProjectRuntime) => Promise<RepoVariables>;
   } = {},
@@ -217,6 +223,10 @@ export function createHarness(
       forgeWriter: life.gate(forge),
       workspaces: life.gate(workspaces),
       verify: life.gate(checks.run),
+      hostChecks: opts.hostChecks ?? true,
+      originUrl: async () => '/origin',
+      // The clean check is proved by itself (clean-verify.test.ts, the isolation suite): a scenario decides its verdict through the same fake.
+      cleanVerify: opts.cleanVerify ?? (async (req: CleanVerifyRequest) => ({ ...(req.commands.length ? await life.gate(checks.run)(req.worktree, [...req.commands], undefined, {}) : { ok: true, failures: [] }), sha: (await workspaces.head(req.worktree)) ?? 'head', tree: 'clean-tree' })),
       // The proxy's journal of a run (ORC-296) beside its refusals log: a test writes both.
       ...(sessionsDir ? { sandboxes: life.gate(sandboxes), sessionsDir, runsDir, egressJournal: (id: string) => join(runsDir!, id, 'egress.jsonl') } : {}),
     };
@@ -246,6 +256,7 @@ export function createHarness(
     effectRetry: opts.effectRetry ?? { attempts: 1, baseMs: 1, capMs: 1 },
     // Each life resolves roles through its own adapters and keeps its own cache, as a process does.
     reconcile: opts.reconcile,
+    fullReadPaths: opts.fullReadPaths,
     repoVariables: opts.repoVariables,
     roles: authz && new CachedRoleResolver({ projects: (id) => (id === 'p' ? authz : undefined), team: gate(tracker), repo: outside.forge, now: () => clock.now() }),
   });

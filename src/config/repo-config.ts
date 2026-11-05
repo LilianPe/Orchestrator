@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { SECRET_NAME } from '../adapters/runner/transcript.js';
 import type { NetworkLevel } from '../adapters/sandbox/types.js';
 import { MaxDiffConfigError, resolveMaxDiff, type MaxDiff } from '../checks/diff-size.js';
+import { FORBIDDEN_PATHS } from '../checks/forbidden-paths.js';
 
 /**
  * `.factory/config.yml` (ORC-209): what a repository declares to the factory, optional. It can add controls or
@@ -44,7 +45,7 @@ const HOST = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0
 
 const PRESET = 'factory/default@1.0';
 /** The factory's own configuration: the agent never edits what verifies it. */
-export const SOCLE_FORBIDDEN_PATHS: readonly string[] = Object.freeze(['.factory/**']);
+export const SOCLE_FORBIDDEN_PATHS: readonly string[] = FORBIDDEN_PATHS;
 
 export class RepoConfigError extends Error {
   constructor(readonly violations: string[]) {

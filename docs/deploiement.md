@@ -43,8 +43,7 @@ Aucune image ne reçoit de secret à la construction. Le test d'isolation n° 7 
 ## Limites actuelles
 
 - **Publier** : un agent en runner n'a ni `gh`, ni jeton, et le proxy refuse `git push`. Jusqu'à ORC-125, un run sous compose ne peut donc pas ouvrir sa PR. `GH_TOKEN` ne sert qu'à `factoryd`.
-- **`verify` tourne encore dans `factoryd`** (ORC-151), avec le socket du moteur à portée. Le code qu'un agent a écrit (tests, scripts de `package.json`) peut donc piloter le moteur, sortir de l'isolation des runners et lire les secrets du démon. **Jusqu'à ORC-151, cette topologie ne protège pas contre un agent hostile** : ne lui confiez que des dépôts et des tickets de confiance. Même risque pour un hook git qu'un agent laisserait et que le démon exécuterait (ORC-205).
-- `factoryd` n'a ni pnpm ni uv : un `verify` qui en a besoin y échoue, jusqu'à ORC-151.
+- **`verify` ne tourne plus dans `factoryd`** (ORC-151) : ses commandes vont dans un runner neuf, sur un clone, au niveau réseau `none`. Sous compose, `FACTORY_CONTAINER_CLI` est fixé : un moteur en panne donne un ticket bloqué pour cause d'infrastructure (`verify.errored`), jamais un repli sur `factoryd`. `FACTORY_ALLOW_HOST_VERIFY` n'est pas transmis, et serait sans effet. **Reste un chemin vers le socket :** `git fetch` et `git worktree add` tournent dans `factoryd`, sur un `.git` que l'agent a pu écrire, donc un hook qu'il y laisse s'exécute à côté du socket. Ne confiez à cette topologie que des dépôts et des tickets de confiance, tant que ce `.git` reste monté en écriture.
 
 ## Variables
 

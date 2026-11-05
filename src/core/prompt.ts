@@ -1,5 +1,6 @@
 import { closeSync, openSync, readSync, realpathSync, statSync } from 'node:fs';
 import { join, sep } from 'node:path';
+import { logExcerpt } from '../checks/log-excerpt.js';
 import type { FeedbackItem, InputKind, VerifyFailure } from './types.js';
 
 export interface PromptIssue {
@@ -114,10 +115,11 @@ export function formatFeedback(items: FeedbackItem[]): string {
   return items.map((i) => `- **${i.author}** (${utc(i.at)}) : ${i.body}`).join('\n');
 }
 
-const TAIL = 8000;
+/** `verify` reads commits, on a fresh clone (ORC-151): what is left uncommitted did not exist for it. */
+const VERIFY_READS_COMMITS = "L'usine vérifie le dernier commit de la branche, dans un clone neuf : ce qui n'est pas commité n'y est pas. Commite tes corrections.";
 
 export function formatVerifyFailures(failures: VerifyFailure[]): string {
-  return failures
-    .map((f) => `### \`${f.command}\` (code ${f.exitCode ?? 'timeout'})\n\`\`\`\n${f.output.slice(-TAIL)}\n\`\`\``)
+  return `${VERIFY_READS_COMMITS}\n\n` + failures
+    .map((f) => `### \`${f.command}\` (code ${f.exitCode ?? 'timeout'})\n\`\`\`\n${logExcerpt(f.output)}\n\`\`\``)
     .join('\n\n');
 }

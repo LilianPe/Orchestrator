@@ -124,6 +124,8 @@ export interface SealedSetupRequest {
   /** What it mounts beside the worktree: the repository's git dir, read-only, so neither a secret nor a hook is written there for the agent to find. */
   mounts: readonly SandboxMount[];
   commands: readonly string[];
+  /** A command as it runs: `cappedCommand` by default; `verifyCommand` on code nobody reviewed, whose output is capped too. */
+  argv?: (command: string) => string[];
   env: Record<string, string>;
   secrets: Record<string, string>;
   now: Date;
@@ -137,7 +139,7 @@ export interface SealedSetupRequest {
  * ponytail: at `limited` (registries, GitHub read), so a secret has nowhere to be sent; the doc's `full`
  * when a repository needs more (docs/decisions/ORC-213.md, open point 2).
  */
-export async function runSealedSetup(sandboxes: SandboxProvider, req: SealedSetupRequest): Promise<{ purged: string[] }> {
+export async function runSealedSetup(sandboxes: Pick<SandboxProvider, 'create' | 'exec' | 'destroy'>, req: SealedSetupRequest): Promise<{ purged: string[] }> {
   const box = await sandboxes.create({
     runId: `${req.runId}-setup`,
     ticketId: req.ticketId,
@@ -152,7 +154,7 @@ export async function runSealedSetup(sandboxes: SandboxProvider, req: SealedSetu
     const rc = await sandboxes.exec(box.id, YARN1_NO_SCRIPTS, { env: { HOME: SETUP_HOME } });
     if (rc.code !== 0) throw new Error(`Le setup du worktree a échoué : scripts de Yarn 1 non coupés (${rc.stderr.trim()})`);
     for (const command of req.commands) {
-      const { code } = await sandboxes.exec(box.id, cappedCommand(command), { env });
+      const { code } = await sandboxes.exec(box.id, (req.argv ?? cappedCommand)(command), { env });
       if (code === 124) throw new Error(`Le setup du worktree a échoué : ${command} (délai de ${VERIFY_TIMEOUT_MS / 60_000} min dépassé)`);
       if (code !== 0) throw new Error(`Le setup du worktree a échoué : ${command}`);
     }

@@ -15,7 +15,7 @@ import { SqliteStore } from '../store/sqlite-store.js';
 import { hashText } from './attempt-labels.js';
 import { EventBus } from './bus.js';
 import { FakeClock } from './clock.js';
-import { Orchestrator } from './orchestrator.js';
+import { fullReadEnv, Orchestrator } from './orchestrator.js';
 import { runRepair } from '../cli/repair.js';
 import type { StoredEvent } from './upcast.js';
 import type { EffectRetry } from '../runtime/outbox.js';
@@ -48,7 +48,7 @@ function setup(
   const bus = new EventBus();
   const orch = new Orchestrator({
     store, clock: new FakeClock(1_000), bus, scheduler,
-    tracker, forge: new FakeForge(), runner, workspaces: o.workspaces ?? new FakeWorkspaces(), verify: o.verify ?? (async () => ({ ok: true, failures: [] })), dailyBudgetUsd: o.budget,
+    tracker, forge: new FakeForge(), runner, workspaces: o.workspaces ?? new FakeWorkspaces(), verify: o.verify ?? (async () => ({ ok: true, failures: [] })), hostChecks: true, dailyBudgetUsd: o.budget,
     projects: [{ id: 'p', repoPath: '/repo', teamKey: 'REL', workflow }], packDir, settingsPath: o.settingsPath,
     agentEnv: (r) => ({ FACTORY_RUN_TOKEN: r.token }), newId: () => `id-${++n}`, activityIntervalMs: 0, holdInboxUntilReplay: o.hold, factoryCommit: 'cafe42',
     // One attempt: a failed effect dies at once (the retries have their own tests).
@@ -523,5 +523,21 @@ describe('Orchestrator', () => {
     await orch.drained();
     expect((await store.getTicket('p', 'REL-1'))!.blockReason).toBe('Erreur : linear down');
     expect(await store.dueTimers(Number.MAX_SAFE_INTEGER)).toEqual([]);
+  });
+});
+
+describe('fullReadEnv (ORC-279)', () => {
+  it('gives each path under the run cwd, as JSON', () => {
+    expect(fullReadEnv('/work', ['a b.test.ts', 'src/é.test.ts'])).toEqual({ FACTORY_FULL_READ_PATHS: JSON.stringify(['/work/a b.test.ts', '/work/src/é.test.ts']) });
+  });
+
+  it('gives nothing for no path', () => {
+    expect(fullReadEnv('/work', [])).toEqual({});
+  });
+
+  it('refuses a list over what one environment string can safely hold, and takes one under it', () => {
+    const paths = (n: number) => Array.from({ length: n }, (_, i) => `packages/some-package-${i}/src/some-feature.test.ts`);
+    expect(() => fullReadEnv('/work', paths(5000))).toThrow(/5000 paths/);
+    expect(Buffer.byteLength(fullReadEnv('/work', paths(1000))['FACTORY_FULL_READ_PATHS']!)).toBeLessThanOrEqual(64 * 1024);
   });
 });

@@ -99,7 +99,7 @@ describe('parseRepoConfig (.factory/config.yml, ORC-209)', () => {
   });
 
   it('always keeps the forbidden paths of the socle, whatever the file adds', () => {
-    expect(parseRepoConfig(EXAMPLE).forbiddenPaths).toEqual(['.factory/**']);
+    expect(parseRepoConfig(EXAMPLE).forbiddenPaths).toEqual(expect.arrayContaining(['.factory/**', '.github/workflows/**', 'claims/**']));
   });
 
   describe('a configuration can only add to the socle, never take from it', () => {

@@ -66,6 +66,45 @@ describe('the trigger (ORC-171)', () => {
     expect((await measureTicket(h.store, 'p', 'REL-1')).messages[0]!.signOfLifeMs).toBe(1_500);
   });
 
+  describe('across verify.errored (ORC-151)', () => {
+    const broken = () => {
+      let down = true;
+      const h = createHarness({
+        sandboxed: true,
+        cleanVerify: async () => {
+          if (down) throw new Error('engine down');
+          return { ok: true, failures: [], sha: 'abc', tree: 'tree' };
+        },
+      });
+      h.tracker.addIssue(CLEAR);
+      return { h, recover: () => (down = false) };
+    };
+    const comments = (h: ReturnType<typeof createHarness>) => h.tracker.calls.filter((c) => c.method === 'comment');
+
+    it('the plan stays on Vérif, the PR not done, and the ack is not sent again', async () => {
+      const { h } = broken();
+      await h.send('ticket.delegated', { linearSessionId: 'ls-1', ack: true });
+      expect(await h.ticket()).toMatchObject({ blocked: true });
+      const last = h.tracker.plans('ls-1').at(-1)!;
+      expect(last.filter((s) => s.status === 'inProgress').map((s) => s.content)).toEqual(['Vérif']);
+      expect(last.at(-1)).toEqual({ content: 'PR', status: 'pending' });
+      expect(comments(h)).toHaveLength(1);
+    });
+
+    it('a reply takes it up: checked again, no second ack, the plan not reopened on Build', async () => {
+      const { h, recover } = broken();
+      await h.send('ticket.delegated', { linearSessionId: 'ls-1', ack: true });
+      const plans = h.tracker.plans('ls-1').length;
+      recover();
+      await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'le moteur est revenu', author: 'L' });
+      await h.advance(1);
+      expect(await h.ticket()).toMatchObject({ blocked: false, verifiedSha: 'abc' });
+      expect(comments(h)).toHaveLength(1);
+      // dev-feedback closes no step: the plan waits for the next move to Human Review, as after any block.
+      expect(h.tracker.plans('ls-1').length).toBe(plans);
+    });
+  });
+
   it('updates the plan at each step of the run, ending with the PR', async () => {
     const h = plain();
     h.runner.enqueue({ events: [{ kind: 'text', text: 'PR ouverte.' }] });

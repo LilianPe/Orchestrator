@@ -6,6 +6,7 @@ import type { Role } from '../../src/core/authz.js';
 import { AUTHZ_REFUSED, decide, isFenced, mayCheck, SENSITIVE_PATHS } from '../../src/core/engine.js';
 import { reduce } from '../../src/core/reduce.js';
 import {
+  newTicketState,
   TRUSTED,
   type EventPayloads,
   type EventType,
@@ -138,7 +139,55 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
       TIMEOUT,
     );
 
-    it.todo('I1 on the SHA: the publication carries the SHA of a green check:… with no push in between (Publisher/CheckRunner in decide, ORC-133, ORC-150)');
+    it(
+      'I1 on the SHA: whatever was found green and pushed, in any order, a merge carries only the last commit verify found green',
+      () => {
+        const SHAS = ['aaa', 'bbb', 'ccc'];
+        const step = fc.oneof(
+          fc.record({ green: fc.constantFrom(...SHAS) }),
+          fc.record({ shown: fc.constantFrom(...SHAS) }),
+          fc.record({ done: fc.constant(true) }),
+        );
+        fc.assert(
+          fc.property(fc.array(step, { maxLength: 12 }), (steps) => {
+            let t: TicketState = { ...newTicketState(PROJECT, TICKET, 'T', 'human_review', 0), delegated: true, prNumber: 1, prState: 'OPEN', reviewSha: 'aaa' };
+            let n = 0;
+            for (const s of steps) {
+              n += 1;
+              const base = { id: `i1-${n}`, at: n, projectId: PROJECT, ticketId: TICKET, ...TRUSTED };
+              if ('shown' in s) {
+                // A commit reaches the review: the factory's record of it, a push or a run since.
+                t = reduce(t, { type: 'status.recorded', to: 'human_review', reviewSha: s.shown } as InternalEvent)!;
+                continue;
+              }
+              if ('green' in s) {
+                const e = { ...base, type: 'verify.passed', payload: { runId: 'r', job: 'dev', sha: s.green } } as FactoryEvent;
+                const before: TicketState = { ...t, verifyingRunId: 'r' };
+                const d = decide(before, e, wf);
+                t = d.events.reduce((x, ev) => reduce(x, ev as InternalEvent)!, reduce(before, e)!);
+                t = { ...t, logical: 'human_review', reviewSha: t.reviewSha };
+                continue;
+              }
+              const e = { ...base, type: 'status.changed', actor: 'u', roles: ['team_member', 'repo_writer', 'repo_merger'], payload: { from: 'human_review', to: 'done' } } as FactoryEvent;
+              for (const effect of decide({ ...t, recordedStatus: undefined }, e, wf).effects) {
+                if (effect.kind === 'merge') expect(effect.sha).toBe(t.verifiedSha);
+              }
+            }
+          }),
+          params(),
+        );
+      },
+      TIMEOUT,
+    );
+
+    it('I1 on the SHA, by example: a green commit merges, the next one does not until it is green', () => {
+      const t: TicketState = { ...newTicketState(PROJECT, TICKET, 'T', 'human_review', 0), delegated: true, prNumber: 1, prState: 'OPEN', reviewSha: 'bbb', verifiedSha: 'aaa' };
+      const e = { id: 'x', at: 1, projectId: PROJECT, ticketId: TICKET, ...TRUSTED, type: 'status.changed', actor: 'u', roles: ['team_member', 'repo_writer', 'repo_merger'], payload: { from: 'human_review', to: 'done' } } as FactoryEvent;
+      expect(decide(t, e, wf).effects.some((x) => x.kind === 'merge')).toBe(false);
+      expect(decide({ ...t, verifiedSha: 'bbb' }, e, wf).effects).toContainEqual({ kind: 'merge', sha: 'bbb' });
+    });
+
+    it.todo("I1 at the factory's own push: the publication step goes through mayPublish (ORC-125)");
   });
 
   it.todo('I2 — no gate passed without an approval later than the last push (no gate in decide yet: human gates of ORC-212, ORC-198)');
