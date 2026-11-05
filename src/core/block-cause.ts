@@ -28,6 +28,7 @@ const CAUSES: readonly (readonly [Exclude<BlockCause, 'other'>, RegExp])[] = [
   ['failed', /^Le run .+ a échoué\.$/],
   ['pickup', /^La description (fait moins de|ne contient pas de)/],
   ['pickup', /^Une branche .+ existe déjà sur origin\./],
+  ['pickup', /^Aucun dépôt connu pour l'équipe Linear /],
   ['dead_letter', /^Événement .+ mis de côté /],
   ['pr_closed', /^PR #\d+ fermée sans merge$/],
   ['stopped', /^Arrêté à la demande$/],

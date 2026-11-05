@@ -255,6 +255,48 @@ on:
       expect(decided.slice(1).filter((id) => !id.startsWith('effect:'))).toEqual(['g1', 'g2']);
       expect(await h.store.getMeta('paused')).toBe('0');
     });
+
+    it('lets the older row parked before it go first, oldest first, without a restart (ORC-314)', async () => {
+      let hiccup = true;
+      const decided: string[] = [];
+      const h = createHarness({
+        projectYaml: CRASH_WORKFLOW,
+        processRetry: { attempts: 5, baseMs: 1 },
+        // A backoff no real timer reaches during the test: only the polls below end it.
+        effectRetry: { attempts: 2, baseMs: 60_000, capMs: 60_000 },
+        wrapStore: (inner) =>
+          Object.assign(Object.create(inner) as Store, {
+            decide: async (req: DecisionRequest) => {
+              if (hiccup && req.event.id === 'younger') {
+                hiccup = false;
+                throw new Error('database hiccup');
+              }
+              const outcome = await inner.decide(req);
+              decided.push(`${req.event.id}:${outcome.status}`);
+              return outcome;
+            },
+          }),
+      });
+      h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+      h.tracker.comment = async () => {
+        throw new Error('Linear down');
+      };
+      await h.orch.accept(delegation(h, 'd1'));
+      await h.orch.drained();
+      // The result of the labels is parked behind the comment's backoff.
+      expect((await h.store.pendingInbox(10)).map((e) => e.id)).toEqual(['effect:REL-1:1:1']);
+
+      // A younger row gets to the store all the same (a stop may pass a backoff), and fails there.
+      await h.orch.accept({ ...TRUSTED, id: 'younger', type: 'status.changed', at: h.clock.now(), projectId: 'p', ticketId: 'REL-1', payload: { from: 'todo', to: 'todo' } });
+      await waitFor(() => decided.includes('younger:waiting'));
+
+      // The comment's last attempt dies, at the first poll. The worker goes on polling, with no restart.
+      for (let polls = 0; polls < 3; polls++) await h.advance(60_000);
+
+      expect((await h.store.pendingInbox(10)).map((e) => e.id)).toEqual([]);
+      expect(decided.filter((d) => /^(effect:REL-1:1:[12]|younger):committed$/.test(d))).toEqual(['effect:REL-1:1:1:committed', 'younger:committed', 'effect:REL-1:1:2:committed']);
+      expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Erreur : Linear down' });
+    });
   });
 
   it('keeps the slot a drain promised to a dequeued item from a start decided meanwhile, and the item its place', async () => {

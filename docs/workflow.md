@@ -80,7 +80,7 @@ Vous pouvez n'en redéfinir qu'une partie ; après fusion, les cinq doivent avoi
 ### `limits`
 | Clé | Type | Défaut | Effet quand la limite est atteinte |
 |---|---|---|---|
-| `parallel_sessions` | entier > 0 | 3 | Nombre de runs simultanés dans la file `dev`. Au-delà, les runs attendent dans une file persistante. Chaque run de la file `dev` reçoit aussi `PORT = workspace.ports.base + n° de place` (0 à `parallel_sessions - 1`). |
+| `parallel_sessions` | entier > 0 | 3 | Nombre de runs simultanés dans la file `dev`, si `factory.yml` ne fixe pas `concurrency`. Au-delà, les runs attendent dans une file persistante. Chaque run de la file `dev` reçoit aussi `PORT = workspace.ports.base + n° de place` (0 à `parallel_sessions - 1`). |
 | `question_sessions` | entier > 0 | 2 | Même chose pour la file `questions`. |
 | `per_run.turns` | entier > 0 | 150 | Nombre de messages de l'assistant dans un run. Au-delà, le run est interrompu ; son résultat est `limit`. |
 | `per_run.duration` | durée | `90m` | Durée maximale d'un run, même résultat `limit`. |

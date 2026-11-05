@@ -1,14 +1,18 @@
 import type { Clock } from '../../../core/clock.js';
+import { isNoRepo } from '../../../core/engine.js';
 import { logicalFromName, type ProjectRuntime } from '../../../core/orchestrator.js';
 import { SCHEMA_VERSION, TRUSTED, type EventPayloads, type EventType, type FactoryEvent, type TicketState } from '../../../core/types.js';
 import type { Store } from '../../../store/types.js';
 import { IssueNotFoundError, labelEchoKey, stateEchoKey, type Tracker, type TrackerIssue } from '../types.js';
 import { knownLabels, labelChanges, recordLabels, type Serial } from './labels.js';
+import { teamOf } from './tracker.js';
 
 export interface ReconcileDeps {
   tracker: Pick<Tracker, 'listDelegated' | 'getIssue'>;
   store: Store;
   projects: ProjectRuntime[];
+  /** Every project of the instance, when `projects` is a part of them: which teams have a repo (ORC-171). */
+  allProjects?: ProjectRuntime[];
   /** Writes the event to the inbox; awaited. */
   submit: (e: FactoryEvent) => unknown;
   clock: Clock;
@@ -76,6 +80,11 @@ export async function reconcileOnce(d: ReconcileDeps): Promise<void> {
       }
       for (const t of await d.store.listTickets()) {
         if (t.projectId !== p.id || delegated.has(t.ticketId)) continue;
+        // Its team has a project now (ORC-171): its block is lifted here; a new delegation goes there.
+        if (isNoRepo(t) && (d.allProjects ?? d.projects).some((o) => o.teamKey === teamOf(t.ticketId))) {
+          await emit(t, TRUSTED, `reconcile:undelegated-flag:${t.ticketId}:${t.updatedAt}`, 'ticket.undelegated', {});
+          continue;
+        }
         const undelegate = t.delegated && t.logical !== 'done';
         if (!t.activeRunId && !undelegate) continue;
         // Out of the list: done, cancelled or no longer delegated, which only the issue itself tells apart.

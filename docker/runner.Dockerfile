@@ -1,10 +1,12 @@
-# The agent's image (ORC-204), not the daemon's: node, git, gitleaks and claude, no gh and no daemon code.
+# The agent's image (ORC-204), not the daemon's: node (pnpm), python (uv), git, gitleaks and claude, no gh and no daemon code.
 # Build: docker build -f docker/runner.Dockerfile -t factory-runner:<version> docker
 FROM node:24.22.1-bookworm-slim
+# python3 from the distribution: a runner has no route to download one (`uv python install` would need GitHub's CDN).
 RUN apt-get update \
- && apt-get install -y --no-install-recommends git ca-certificates \
+ && apt-get install -y --no-install-recommends git ca-certificates python3 python3-pip \
  && rm -rf /var/lib/apt/lists/*
-RUN npm install -g @anthropic-ai/claude-code@2.1.316
+RUN npm install -g @anthropic-ai/claude-code@2.1.316 pnpm@10.20.0
+RUN pip3 install --break-system-packages --no-cache-dir uv==0.13.7
 # Pinned by its checksum (ORC-151): `verify` runs it on the agent's commits, in a sandbox of its own. x86-64 only, as its release is by architecture.
 RUN node -e "fetch('https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz').then((r) => { if (!r.ok) throw new Error(r.status); return r.arrayBuffer(); }).then((b) => require('fs').writeFileSync('/tmp/gitleaks.tgz', Buffer.from(b)))" \
  && echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  /tmp/gitleaks.tgz" | sha256sum -c - \

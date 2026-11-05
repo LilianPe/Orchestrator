@@ -16,7 +16,7 @@ Dans le dépôt de test : `relais init`. Suivre les instructions (app OAuth Line
 Si Linear refuse l'URL de callback localhost : noter l'erreur, utiliser `cloudflared tunnel --url http://localhost:4100` le temps de l'installation et mettre l'URL publique dans `publicUrl`.
 
 ## 3. Délégation (critère 3)
-Créer un ticket clair (≥ 30 caractères de description), le déléguer à @relais. Attendu en < 10 s : « Pris en compte. » dans la session. Puis : statut In Progress, sortie en direct dans l'interface, PR ouverte, statut Human Review, résumé en français dans la session.
+Créer un ticket clair (≥ 30 caractères de description), le déléguer à @relais. Attendu en < 10 s : le commentaire « Bien reçu. » sur le ticket, puis le plan dans la session (`comprendre · questions · spec · tests · build · vérif · PR`). Puis : statut In Progress, sortie en direct dans l'interface, PR ouverte, statut Human Review, résumé en français dans la session.
 Vérifier dans `~/.relais/relais.db` qu'aucun événement n'a été rejeté pour signature (sinon : le relais smee modifie le corps → passer en `publicUrl` via tunnel).
 
 ## 4. Retours groupés (critère 4)
@@ -32,10 +32,23 @@ Sur un autre ticket : `@relais où est géré X ?` → réponse en lecture seule
 Déléguer un ticket, pendant le run cliquer « Send stop request » dans Linear. Attendu en < 10 s : « Arrêté… », ticket bloqué, run `stopped`.
 
 ## 8. Docker (critère 8)
-`docker compose up --build` sur une machine Linux avec `data/config.yaml` adapté (`host: 0.0.0.0`, `publicUrl: https://<domaine>`, `relay: { kind: none }`, `repoPath` sous `/repos`). Attendu : interface sur le port 4100, même comportement que 3.
-Variables obligatoires (compose refuse de démarrer sinon) : `GH_TOKEN`, `RELAIS_UI_PASSWORD`. Une authentification de Claude Code : `ANTHROPIC_API_KEY`, ou `CLAUDE_TOKEN_1` avec un compte actif dans `factory.yml`. Optionnelles : `GIT_AUTHOR_NAME` / `GIT_AUTHOR_EMAIL` (identité des commits, `Relais <relais@localhost>` par défaut).
-Le conteneur tourne sous l'utilisateur `node` (uid 1000) : `data/` et `repos/` doivent lui être accessibles en écriture (`sudo chown -R 1000:1000 data repos`). Au démarrage, `gh auth setup-git` branche `GH_TOKEN` sur git : les dépôts sous `/repos` doivent avoir un remote **HTTPS** (`https://github.com/...`), pas SSH (aucune clé dans le conteneur). Vérifier : `docker compose exec relais git -C /repos/<dépôt> remote -v`.
-Avec `host` différent de `127.0.0.1`, Relais refuse de démarrer sans `RELAIS_UI_PASSWORD` : l'interface, `/api/*` et `/oauth/start` demandent alors une authentification HTTP Basic (nom d'utilisateur libre, mot de passe = `RELAIS_UI_PASSWORD`). Restent ouverts : `POST /webhooks/linear` (signé), `GET /oauth/callback` et `/agent/*` (jeton de run). Vérifier : `curl -i https://<domaine>/api/state` répond 401 ; la CLI (`relais status`) utilise la même variable.
+Sur le serveur, images construites ([`deploiement.md`](deploiement.md#premier-démarrage)), en test automatique, sous un nom de projet et des ports à lui :
+
+```bash
+FACTORY_ISOLATION=1 FACTORY_COMPOSE=1 FACTORY_CONTAINER_CLI=docker FACTORY_RUNNER_IMAGE=<image> \
+  FACTORY_ENGINE_SOCKET=/run/user/1000/docker.sock \
+  npx vitest run --project isolation test/isolation/compose-stack.test.ts
+```
+
+Attendu : les 4 services démarrés sur un moteur rootless ; TLS par `caddy`, 401 sans le mot de passe ; un runner créé depuis `factoryd`, sans socket du moteur, en `--network none`, avec pnpm et uv qui installent par le proxy, et les refus au journal. Sans `claude` réel ni ticket.
+
+`FACTORY_ALLOW_ROOTFUL_ENGINE=1` laisse tourner ce test sur un poste (Docker Desktop) : il saute alors la vérification « rootless » et vérifie le refus. Ce résultat ne prouve rien pour le serveur.
+
+Une authentification de Claude Code est obligatoire : `ANTHROPIC_API_KEY`, ou `CLAUDE_TOKEN_1` avec un compte actif dans `factory.yml`.
+
+Puis, à la main : `docker compose up -d`, interface sur `https://<domaine>`, même comportement que 3. Avec `concurrency: 1`, déléguer deux tickets : un seul runner tourne (`docker ps --filter label=factory.attempt`).
+
+Avec `host` différent de `127.0.0.1`, le démon refuse de démarrer sans `FACTORY_UI_PASSWORD` : l'interface, `/api/*` et `/oauth/start` demandent alors une authentification HTTP Basic (nom d'utilisateur libre, mot de passe = `FACTORY_UI_PASSWORD`). Restent ouverts : `POST /webhooks/linear` (signé), `GET /oauth/callback` et `/agent/*` (jeton de run). Vérifier : `curl -i https://<domaine>/api/state` répond 401.
 
 ## Vérifications live optionnelles
 - `LINEAR_API_KEY=<clé perso> npx vitest run src/adapters/tracker/linear/queries.live.test.ts` : toutes les requêtes valident contre le schéma Linear.

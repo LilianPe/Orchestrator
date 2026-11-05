@@ -4,3 +4,7 @@ web/dist
 .git
 data
 repos
+.env
+.env.*
+install
+egress-ca
