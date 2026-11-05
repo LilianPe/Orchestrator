@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -5,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { readSecurityLog, refusalSummary, REFUSAL_RULES } from './security-log.js';
 
 const RUN = { runId: 'r1', projectId: 'p', ticketId: 'REL-1', at: 5 };
+const HOOK = join(import.meta.dirname, '../../packs/standard/hooks/pre-tool-use.mjs');
 
 function files(egress: string[] | undefined, refusals: string[] | undefined) {
   const dir = mkdtempSync(join(tmpdir(), 'factory-seclog-'));
@@ -76,8 +78,23 @@ describe('the security log of a run (ORC-296)', () => {
     expect(readSecurityLog(RUN, paths)).toMatchObject({ refusals: [], skipped: { refusals: 1 } });
   });
 
+  it('takes a whole read the real hook refused, the path in its command (ORC-279)', () => {
+    const paths = files(undefined, undefined);
+    const big = `${paths.refusals}.big.ts`;
+    writeFileSync(big, 'x\n'.repeat(1000));
+    const call = JSON.stringify({ tool_name: 'Read', tool_input: { file_path: big } });
+    const env = { PATH: process.env['PATH'], FACTORY_REFUSALS_LOG: paths.refusals, FACTORY_TICKET: RUN.ticketId };
+    const hook = spawnSync(process.execPath, [HOOK], { input: call, encoding: 'utf8', env });
+    expect(hook.stdout).toContain('"permissionDecision":"deny"');
+    const log = readSecurityLog(RUN, paths);
+    expect(log.refusals).toEqual([{ at: expect.any(Number), tool: 'Read', rule: 'full-read', command: big }]);
+    expect(log.skipped.refusals).toBe(0);
+    expect(refusalSummary(log)).toContain('`full-read` : 1');
+    expect(refusalSummary(log)).not.toContain(big);
+  });
+
   it('knows every rule of the pack hook', () => {
-    const hook = readFileSync(join(import.meta.dirname, '../../packs/standard/hooks/pre-tool-use.mjs'), 'utf8');
+    const hook = readFileSync(HOOK, 'utf8');
     const returned = new Set([...hook.matchAll(/return '([a-z-]+)'/g)].map((m) => m[1]));
     expect([...returned].sort()).toEqual([...REFUSAL_RULES].sort());
   });

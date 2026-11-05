@@ -420,6 +420,14 @@ describe("a run's security log", () => {
     expect(await h.ticket()).toMatchObject({ logical: 'human_review', blocked: false });
   });
 
+  it('stores a whole read the hook refused and counts its rule, never naming the path in the session (ORC-279)', async () => {
+    const line = JSON.stringify({ at, tool: 'Read', command: '/work/src/secret-name.ts', rule: 'full-read', ticket: 'REL-1' });
+    const { h, runId } = await runWith([], [line]);
+    expect(await h.store.securityLog(runId)).toMatchObject({ refusals: [{ tool: 'Read', rule: 'full-read', command: '/work/src/secret-name.ts' }], skipped: { refusals: 0 } });
+    expect(summaries(h)[0]!.body).toContain('`full-read` : 1');
+    expect(JSON.stringify(h.tracker.activities('ls-1'))).not.toContain('secret-name');
+  });
+
   it('skips and counts the forged lines, posts nothing for a run without a refusal, and the run ends as it would', async () => {
     const { h, runId } = await runWith([request('registry.npmjs.org', true)], ['{"rule":"push"}', 'garbage', refusal('push', 'REL-9')]);
     expect(await h.store.securityLog(runId)).toMatchObject({ refusals: [], skipped: { refusals: 3 } });
