@@ -458,7 +458,7 @@ export const RECONCILE_MS = 5 * 60_000;
 
 /**
  * No publication without a green `verify` on the same commit (I1, ORC-151): a commit since asks for its own. A workflow
- * none of whose jobs goes through it (a version frozen before) publishes as it did. `ORC-125`'s push goes through it too.
+ * none of whose jobs goes through it (a version frozen before) publishes as it did. The factory's own push is to go through it too (ORC-125).
  */
 export function mayPublish(ticket: Pick<TicketState, 'verifiedSha'> | undefined, sha: string, workflow: Workflow): boolean {
   return !Object.values(workflow.jobs).some((j) => j.repoChecks) || ticket?.verifiedSha === sha;

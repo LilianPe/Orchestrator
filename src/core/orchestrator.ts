@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Forge, ForgeWriter, MergeResult } from '../adapters/forge/types.js';
 import type { RoleResolver } from '../adapters/roles/types.js';
@@ -810,11 +811,7 @@ export class Orchestrator {
       });
     } finally {
       // Under the run's dir, purged with it: what the attack left unremovable costs no verdict.
-      try {
-        rmSync(workDir, { recursive: true, force: true });
-      } catch (err) {
-        this.log('warn', `verify of ${t.ticketId}: ${workDir} not removed: ${(err as Error).message}`);
-      }
+      await rm(workDir, { recursive: true, force: true }).catch((err: Error) => this.log('warn', `verify of ${t.ticketId}: ${workDir} not removed: ${err.message}`));
     }
   }
 

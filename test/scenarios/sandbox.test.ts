@@ -2,7 +2,9 @@ import { existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_REQUIREMENTS, PACK_TARGET, REFUSALS_TARGET, SANDBOX_HOME, WORKSPACE_TARGET } from '../../src/adapters/sandbox/types.js';
+import { LOG_EXCERPT_MAX } from '../../src/checks/log-excerpt.js';
 import type { CleanVerifyRequest } from '../../src/core/clean-verify.js';
+import type { EventPayloads } from '../../src/core/types.js';
 import { blockCause } from '../../src/core/block-cause.js';
 import { createHarness, packDir } from '../helpers/harness.js';
 
@@ -93,6 +95,22 @@ describe('a disposable sandbox per attempt', () => {
     expect(seen).toMatchObject([{ commands: ['npm test'], worktree: '/tmp/factory-fake/p/REL-1', runId: h.runner.requests[0]!.runId, gitDir: '/repo/.git' }]);
     expect(h.checks.calls).toEqual([]);
     expect(await h.ticket()).toMatchObject({ logical: 'human_review', blocked: false });
+  });
+
+  it("a command's output reaches the journal and the agent cut to its useful parts (ORC-151)", async () => {
+    const output = `${'line\n'.repeat(5000)}Error: the cause\n${'line\n'.repeat(5000)}`;
+    const h = createHarness({
+      sandboxed: true,
+      projectYaml: VERIFIED,
+      cleanVerify: async () => ({ ok: false, failures: [{ command: 'npm test', exitCode: 1, output }], sha: 'abc', tree: 'tree' }),
+    });
+    h.runner.enqueue({});
+    await delegate(h);
+    const failed = (await h.store.recentEvents(50, 'REL-1')).find((e) => e.type === 'verify.failed')!;
+    const sent = (failed.payload as EventPayloads['verify.failed']).failures[0]!.output;
+    expect(sent.length).toBeLessThanOrEqual(LOG_EXCERPT_MAX);
+    expect(sent).toContain('Error: the cause');
+    expect(h.runner.requests[1]?.prompt).toContain('Error: the cause');
   });
 
   it('an engine down gives an infrastructure block: no fallback on the host, nothing sent to the agent (ORC-151)', async () => {

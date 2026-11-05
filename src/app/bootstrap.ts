@@ -192,7 +192,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     let reconcileProject: (p: ProjectRuntime) => Promise<void> = async () => {};
     // Before any run of this process: `verify` reads the base branch at this URL, whatever an agent writes in the repository's config (ORC-151).
     const originUrl = makeOriginUrl();
-    if (sandboxes) for (const p of projects) await originUrl(p).catch((err: Error) => log(`Attention : ${p.id} : origin illisible, verify le relira : ${err.message}`));
+    if (sandboxes) await Promise.all(projects.map((p) => originUrl(p).catch((err: Error) => log(`Attention : ${p.id} : origin illisible, verify le relira : ${err.message}`))));
     const orchestrator = new Orchestrator({
       reconcile: (p) => reconcileProject(p),
       // The sources start before Linear is connected: their events wait in the inbox until replayInbox().

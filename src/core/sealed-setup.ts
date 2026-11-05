@@ -139,7 +139,7 @@ export interface SealedSetupRequest {
  * ponytail: at `limited` (registries, GitHub read), so a secret has nowhere to be sent; the doc's `full`
  * when a repository needs more (docs/decisions/ORC-213.md, open point 2).
  */
-export async function runSealedSetup(sandboxes: SandboxProvider, req: SealedSetupRequest): Promise<{ purged: string[] }> {
+export async function runSealedSetup(sandboxes: Pick<SandboxProvider, 'create' | 'exec' | 'destroy'>, req: SealedSetupRequest): Promise<{ purged: string[] }> {
   const box = await sandboxes.create({
     runId: `${req.runId}-setup`,
     ticketId: req.ticketId,

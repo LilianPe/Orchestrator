@@ -146,7 +146,7 @@ describe('runCleanVerify', () => {
     const { sandboxes, req } = setup({ setup: ['touch made-by-setup'], commands: ['test -e made-by-setup'], env: async () => ({ A: '1' }) });
     const res = await runCleanVerify(req);
     expect(res.failures).toEqual([]);
-    expect(sandboxes.created.map((c) => [c.runId, c.network])).toEqual([['r1-bundle', 'none'], ['r1-verify-setup', 'limited'], ['r1-verify', 'none']]);
+    expect(sandboxes.created.map((c) => [c.runId, c.network])).toEqual([['r1-bundle', 'none'], ['r1-prepare', 'none'], ['r1-verify-setup', 'limited'], ['r1-verify', 'none']]);
     expect(sandboxes.ran.find((r) => r.box === 'r1-verify')!.env).toEqual({ A: '1' });
   });
 
@@ -397,7 +397,7 @@ describe('runCleanVerify', () => {
         expect(scans).toHaveLength(1);
         expect(scans[0]).toContain(`--log-opts=--diff-merges=remerge ${from}..${git(repo, 'rev-parse', BRANCH)}`);
         expect(scans[0]).toEqual(expect.arrayContaining(['--redact', '--ignore-gitleaks-allow']));
-        expect(sandboxes.created.find((c) => c.runId === 'r1-scan')).toMatchObject({ network: 'none', mounts: [] });
+        expect(sandboxes.created.find((c) => c.runId === 'r1-prepare')).toMatchObject({ network: 'none', mounts: [] });
       });
 
       it('a secret blocks, named by its place, never by its value', async () => {
@@ -448,13 +448,6 @@ describe('runCleanVerify', () => {
       expect(sandboxes.ran).toEqual([]);
     });
 
-    it('the output comes back cut to its useful parts, within the bound', async () => {
-      const { sandboxes, req } = setup({ commands: ['loud'] });
-      sandboxes.answer = () => ({ stdout: `${'line\n'.repeat(5000)}Error: the cause\n${'line\n'.repeat(5000)}`, stderr: '', code: 1 });
-      const out = (await runCleanVerify(req)).failures[0]!.output;
-      expect(out.length).toBeLessThanOrEqual(LOG_EXCERPT_MAX);
-      expect(out).toContain('Error: the cause');
-    });
   });
 
   it('caps each command by a kill, and its output by the tail, keeping its exit code', () => {
