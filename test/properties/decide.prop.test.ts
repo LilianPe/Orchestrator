@@ -116,10 +116,15 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
       () => {
         holds((s) => {
           const r = run(s);
-          // Today's publication is the run's output (post_output) and the success move; neither carries a SHA yet.
+          // The publication the human sees is the run's output (post_output) and the success move, after the factory's own push (ORC-125).
           for (const step of decided(r)) {
             const e = step.event;
             const published = step.decision.effects.filter((x) => x.kind === 'post_output');
+            if (e.type === 'publish.done') {
+              // Fenced unless the ticket still holds that attempt: a stop's late result shows nothing.
+              if (published.length > 0) expect(step.before?.verifyingRunId).toBe(e.payload.runId);
+              continue;
+            }
             if (e.type !== 'run.finished' && e.type !== 'verify.passed') {
               expect(published).toEqual([]);
               continue;

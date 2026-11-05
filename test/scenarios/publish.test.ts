@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { TicketState } from '../../src/core/types.js';
+import type { Store } from '../../src/store/types.js';
 import { createHarness } from '../helpers/harness.js';
 
 /**
@@ -17,6 +19,28 @@ function verified(opts: Parameters<typeof createHarness>[0] = {}): Harness {
   h.runner.enqueue({ events: [{ kind: 'init', sessionId: 'x' }, { kind: 'text', text: 'SECRET_LAST_MESSAGE' }] });
   return h;
 }
+
+/** A store with some methods replaced. A new object, not an assignment: the Postgres harness's store is a proxy, which would ignore one. */
+function overriding(store: Store, over: Partial<Store>): Store {
+  return new Proxy(store, {
+    get(target, prop) {
+      const own = (over as Record<string | symbol, unknown>)[prop];
+      if (own) return own;
+      const value = (target as unknown as Record<string | symbol, unknown>)[prop];
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+}
+
+/** The ticket changed under the effect, as it is claimed: what a decision between the two would leave. */
+const onPublishClaim = (change: (t: TicketState) => TicketState) => (store: Store) =>
+  overriding(store, {
+    claimEffect: async (...args) => {
+      const row = await store.claimEffect(...args);
+      if (row && row !== 'busy' && row.effect.kind === 'publish') await store.updateTicket('p', 'REL-1', change);
+      return row;
+    },
+  });
 
 const delegate = (h: Harness) => h.send('ticket.delegated', { linearSessionId: 'ls-1' });
 const moves = (h: Harness) => h.tracker.calls.filter((c) => c.method === 'moveTo').map((c) => c.args[1]);
@@ -72,17 +96,7 @@ describe('the factory publishes (ORC-125)', () => {
   });
 
   it('a commit that is no longer the green one when the effect runs: nothing is pushed, the ticket blocked (criterion 6)', async () => {
-    const h = verified({
-      wrapStore: (store) => {
-        const claim = store.claimEffect.bind(store);
-        store.claimEffect = async (...args) => {
-          const row = await claim(...args);
-          if (row && row !== 'busy' && row.effect.kind === 'publish') await store.updateTicket('p', 'REL-1', (t) => ({ ...t, verifiedSha: 'other' }));
-          return row;
-        };
-        return store;
-      },
-    });
+    const h = verified({ wrapStore: onPublishClaim((t) => ({ ...t, verifiedSha: 'other' })) });
     await delegate(h);
     expect(h.publisher.asked).toEqual([]);
     const t = await h.ticket();
@@ -147,17 +161,7 @@ describe('the factory publishes (ORC-125)', () => {
   });
 
   it('a stop before the effect runs: nothing goes out', async () => {
-    const h = verified({
-      wrapStore: (store) => {
-        const claim = store.claimEffect.bind(store);
-        store.claimEffect = async (...args) => {
-          const row = await claim(...args);
-          if (row && row !== 'busy' && row.effect.kind === 'publish') await store.updateTicket('p', 'REL-1', (t) => ({ ...t, verifyingRunId: undefined }));
-          return row;
-        };
-        return store;
-      },
-    });
+    const h = verified({ wrapStore: onPublishClaim((t) => ({ ...t, verifyingRunId: undefined })) });
     await delegate(h);
     expect(h.publisher.asked).toEqual([]);
     expect(moves(h)).not.toContain('Human Review');
@@ -222,17 +226,16 @@ describe('the factory publishes (ORC-125)', () => {
       let failures = 2;
       const h = verified({
         effectRetry: { attempts: 6, baseMs: 1, capMs: 1 },
-        wrapStore: (store) => {
-          const append = store.appendInbox.bind(store);
-          store.appendInbox = async (e) => {
-            if (e.id.startsWith('publish-refused:') && failures > 0) {
-              failures--;
-              throw new Error('inbox down');
-            }
-            return append(e);
-          };
-          return store;
-        },
+        wrapStore: (store) =>
+          overriding(store, {
+            appendInbox: async (e) => {
+              if (e.id.startsWith('publish-refused:') && failures > 0) {
+                failures--;
+                throw new Error('inbox down');
+              }
+              return store.appendInbox(e);
+            },
+          }),
       });
       h.publisher.refuseNext('moved', 'bougée');
       await delegate(h);
