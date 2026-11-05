@@ -31,8 +31,12 @@ export function closePlan(plan: readonly PlanStep[], hasPr: boolean): PlanStep[]
   return hasPr ? advancePlan(closed, 'PR', 'completed') : closed;
 }
 
-/** The step of the plan a job works on, read from its shape; none for a review or a question. */
-export function planStepOfJob(job: Pick<JobSpec, 'queue' | 'skill' | 'red'>): PlanStepName | undefined {
+/**
+ * The step of the plan a job works on, read from its shape. None for a review or a question, nor for a run that ends
+ * without handing the ticket over (a reply, a CI fix): nothing would close the step it reopened.
+ */
+export function planStepOfJob(job: Pick<JobSpec, 'queue' | 'skill' | 'red' | 'onSuccess'>): PlanStepName | undefined {
   if (job.queue !== 'dev' || job.skill === 'factory:review') return undefined;
-  return job.red ? 'Tests' : 'Build';
+  if (job.red) return 'Tests';
+  return job.onSuccess.move ? 'Build' : undefined;
 }

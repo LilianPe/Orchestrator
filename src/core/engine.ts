@@ -534,7 +534,7 @@ function noRepoBlock(out: Decision, state: TicketState | undefined, event: Facto
 export function decide(state: TicketState | undefined, event: FactoryEvent, workflow: Workflow, matrix: AuthzMatrix = DEFAULT_MATRIX): Decision {
   const out = decideEvent(state, event, workflow, matrix);
   // A dead notice or label means the tracker is down: nothing more is written to it (no loop, ORC-150).
-  const trackerDown = event.type === 'effect.failed' && (event.payload.kind === 'activity' || event.payload.kind === 'labels' || event.payload.kind === 'ack');
+  const trackerDown = event.type === 'effect.failed' && (event.payload.kind === 'activity' || event.payload.kind === 'labels');
   if (!trackerDown) blockedLabel(out, state, event);
   acknowledge(out, event);
   return out;
@@ -603,8 +603,9 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
   if (TRIGGERS.has(event.type)) {
     // The event's facts stay recorded (Linear did delegate, the session exists): only the factory's answer is refused.
     if (!authorize(out, event, ticket, 'trigger', 'linear', matrix)) return out;
-    // One active run per ticket (ORC-171): a new delegation stacks no job behind it, and its initiator stays.
-    if (event.type === 'ticket.delegated' && (state?.activeRunId || state?.verifyingRunId || state?.pendingJob)) {
+    // One active run per ticket (ORC-171): a new delegation stacks no job behind it, and its initiator stays. A pending
+    // job alone is no run: `run.interrupted` leaves one behind after a crash.
+    if (event.type === 'ticket.delegated' && (state?.activeRunId || state?.verifyingRunId)) {
       out.trace.push('ticket.delegated: a run is active, none started');
       const sessionId = event.payload.linearSessionId;
       if (sessionId) out.effects.push({ kind: 'activity', type: 'response', body: "Un run est déjà en cours sur ce ticket : je n'en lance pas un second.", linearSessionId: sessionId });

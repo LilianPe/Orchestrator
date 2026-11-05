@@ -204,6 +204,8 @@ const INSTANCE_KEY = 'instance-id';
 interface EffectKey {
   id: string;
   replay: boolean;
+  /** The inbox event the effect's decision came from. */
+  eventId: string;
 }
 
 export function logicalFromName(states: Workflow['states'], name: string): LogicalState | undefined {
@@ -797,10 +799,8 @@ export class Orchestrator {
       return;
     }
     this.d.bus.publish({ kind: 'command', projectId: project.id, ticketId: row.ticketId, command: effect });
-    const key: EffectKey = { id: `${row.id}@${await this.instanceId()}`, replay: row.attempts > 1 };
+    const key: EffectKey = { id: `${row.id}@${await this.instanceId()}`, replay: row.attempts > 1, eventId: row.eventId };
     const outcome = await this.exec(project, row.ticketId, effect, key);
-    // The delay a measure reads (ORC-235), webhook to ack; the first time stays, a replay's is later.
-    if (effect.kind === 'ack') await this.d.store.markAcked(row.eventId, this.d.clock.now()).catch((err: Error) => this.log('warn', `ack of ${row.eventId} posted, its time not recorded: ${err.message}`));
     if (outcome?.deduplicated) this.log('info', `effect ${row.id} (${effect.kind}) already made${outcome.ref ? ` (${outcome.ref})` : ''}: not written again`);
     return outcome;
   }
@@ -979,13 +979,8 @@ export class Orchestrator {
         return this.setLabels(ticketId, c.add, c.remove);
       case 'comment':
         return this.commentOnce(ticketId, c.body, key);
-      case 'ack': {
-        // The one key on both writes: a replay finds what its first execution wrote of each.
-        const comment = c.comment ? await this.commentOnce(ticketId, c.body, key) : undefined;
-        const activity = await this.activityOnce(c.linearSessionId, { type: 'thought', body: c.body }, key);
-        if (c.plan) await this.updatePlan(t, startPlan);
-        return comment ?? activity;
-      }
+      case 'ack':
+        return this.ack(t, c, key);
       case 'activity': {
         const fromRun = c.runId ? (await store.getRun(c.runId))?.linearSessionId : undefined;
         const session = c.linearSessionId ?? fromRun ?? (await this.sessionFor(t));
@@ -1001,13 +996,36 @@ export class Orchestrator {
       }
       case 'link_pr':
         if (t.linearSessionId) await tracker.addExternalUrl(t.linearSessionId, 'Pull request', c.url);
-        await this.updatePlan(t, (plan) => plan && advancePlan(plan, 'PR', 'completed'));
+        // Seen during the run (the agent opened it), the PR waits for the end of the work: the move to Human Review closes the plan.
+        if (!t.activeRunId && !t.verifyingRunId) await this.updatePlan(t, (plan) => plan && advancePlan(plan, 'PR', 'completed'));
         return;
       case 'cleanup':
         await this.d.workspaces.cleanup(project.id, project.repoPath, ticketId);
         await this.apply(await this.ticket(project.id, ticketId), { type: 'workspace.released' });
         return;
     }
+  }
+
+  /**
+   * The ack of a trigger (ORC-171), best effort: a courtesy must not hold back or kill the run behind it, so a write
+   * Linear refuses is logged, neither retried nor blocking. The one key on both writes: a replay finds what its first
+   * execution wrote of each. The time a measure reads (ORC-235) is the human's first sign of life, before the plan.
+   */
+  private async ack(t: TicketState, c: Extract<Effect, { kind: 'ack' }>, key: EffectKey): Promise<EffectOutcome | void> {
+    const outcomes: (EffectOutcome | void)[] = [];
+    const attempt = async (what: string, write: () => Promise<EffectOutcome | void>) => {
+      try {
+        outcomes.push(await write());
+      } catch (err) {
+        this.log('warn', `${what} of the ack of ${t.ticketId} not written: ${(err as Error).message}`);
+      }
+    };
+    if (c.comment) await attempt('comment', () => this.commentOnce(t.ticketId, c.body, key));
+    await attempt('activity', () => this.activityOnce(c.linearSessionId, { type: 'thought', body: c.body }, key));
+    if (outcomes.length > 0) await this.d.store.markAcked(key.eventId, this.d.clock.now()).catch((err: Error) => this.log('warn', `ack of ${key.eventId} posted, its time not recorded: ${err.message}`));
+    if (c.plan) await this.updatePlan(t, startPlan, c.linearSessionId);
+    // Already made only if nothing was written here.
+    return outcomes.length > 0 && outcomes.every((o) => o?.deduplicated) ? outcomes[0] : undefined;
   }
 
   /** A comment of an outbox effect, written unless its first execution already wrote it (ORC-162). */
@@ -1018,17 +1036,20 @@ export class Orchestrator {
   }
 
   /**
-   * The session's plan (ORC-171), kept in the store so that each update builds on the last; a ticket whose delegation
-   * opened none gets none. Never throws: Linear's plan API is a preview, and a plan it refuses must not stop the work.
+   * The session's plan (ORC-171), kept in the store with its session so that each update builds on the last, in the
+   * session of the delegation that opened it (`opening`); a ticket whose delegation opened none gets none. Never
+   * throws: Linear's plan API is a preview, and a plan it refuses must not stop the work.
    */
-  private async updatePlan(t: TicketState, change: (plan: readonly PlanStep[] | undefined) => PlanStep[] | undefined): Promise<void> {
+  private async updatePlan(t: TicketState, change: (plan: readonly PlanStep[] | undefined) => PlanStep[] | undefined, opening?: string): Promise<void> {
     const key = `plan:${t.projectId}:${t.ticketId}`;
     try {
-      const kept = await this.d.store.getMeta(key);
-      const plan = change(kept ? (JSON.parse(kept) as PlanStep[]) : undefined);
-      if (!plan || !t.linearSessionId) return;
-      await this.d.store.setMeta(key, JSON.stringify(plan));
-      await this.d.tracker.setSessionPlan(t.linearSessionId, plan);
+      const stored = await this.d.store.getMeta(key);
+      const kept = stored ? (JSON.parse(stored) as { sessionId: string; plan: PlanStep[] }) : undefined;
+      const plan = change(opening ? undefined : kept?.plan);
+      const sessionId = opening ?? kept?.sessionId;
+      if (!plan || !sessionId) return;
+      await this.d.store.setMeta(key, JSON.stringify({ sessionId, plan }));
+      await this.d.tracker.setSessionPlan(sessionId, plan);
     } catch (err) {
       this.log('warn', `plan of ${t.ticketId} not written: ${(err as Error).message}`);
     }

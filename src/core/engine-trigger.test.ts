@@ -47,7 +47,7 @@ describe('decide — the acknowledgement of a trigger (ORC-171)', () => {
 });
 
 describe('decide — one active run per ticket (ORC-171)', () => {
-  const active: Partial<TicketState>[] = [{ activeRunId: 'r1', activeJob: 'dev' }, { verifyingRunId: 'r1' }, { pendingJob: { job: 'dev' } }];
+  const active: Partial<TicketState>[] = [{ activeRunId: 'r1', activeJob: 'dev' }, { verifyingRunId: 'r1' }, { activeRunId: 'r1', activeJob: 'dev', pendingJob: { job: 'dev' } }];
 
   it.each(active)('a second delegation starts nothing, keeps the initiator and answers in its session: %o', (patch) => {
     const state = ticket({ delegated: true, linearSessionId: 's-dev', initiatorId: 'u-first', logical: 'dev', ...patch });
@@ -66,6 +66,11 @@ describe('decide — one active run per ticket (ORC-171)', () => {
   it('a delegation the reconciliation finds on a ticket at work starts nothing, and has no session to answer', () => {
     const out = decide(ticket({ activeRunId: 'r1', logical: 'dev' }), ev('ticket.delegated', {}, undefined, undefined), workflow);
     expect(out.effects).toEqual([]);
+  });
+
+  it('a pending job left without a run (a crash) refuses nothing: the delegation starts', () => {
+    const out = decide(ticket({ delegated: true, linearSessionId: 's-dev', logical: 'dev', pendingJob: { job: 'dev' } }), delegation(), workflow);
+    expect(kinds(out.effects)).toEqual(['ack', 'start_run']);
   });
 
   it('a delegation after the run ended starts as before', () => {

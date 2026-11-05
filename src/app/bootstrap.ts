@@ -285,7 +285,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     const timers = new TimerService(store, clock, () => orchestrator.wake(), (e) => log(`timers: ${e.message}`));
     const poller = new PrPoller({ store, forge, projects, submit: accept, clock, log });
     reconcileProject = async (p) => {
-      await reconcileOnce({ tracker: trackerSwitch, store, projects: [p], submit: accept, clock, log, serial: labelsTurn });
+      await reconcileOnce({ tracker: trackerSwitch, store, projects: [p], allProjects: projects, submit: accept, clock, log, serial: labelsTurn });
       await poller.pollOnce(p.id);
     };
     // GitHub webhooks (ORC-134) write to the inbox beside the poll (each reconciliation, ORC-185; every 30 s without

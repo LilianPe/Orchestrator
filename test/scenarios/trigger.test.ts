@@ -95,6 +95,67 @@ describe('the trigger (ORC-171)', () => {
     expect(h.tracker.comments('REL-1')).toEqual(['Bien reçu.']);
   });
 
+  it('keeps a refused ack from holding back or killing the run: the session still hears, its time is that of the write', async () => {
+    const h = plain();
+    h.tracker.comment = async () => {
+      throw new Error('Linear refuses the comment');
+    };
+    h.runner.enqueue({ events: [{ kind: 'text', text: 'PR ouverte.' }] });
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1', ack: true });
+    expect(await h.ticket()).toMatchObject({ logical: 'human_review', blocked: false });
+    expect(h.tracker.activities('ls-1')[0]).toEqual({ type: 'thought', body: 'Bien reçu.' });
+    expect(Object.keys((await h.store.measureFacts('p', 'REL-1')).acks)).toHaveLength(1);
+    expect(h.runner.requests).toHaveLength(1);
+  });
+
+  it('records no time of ack when neither write reached Linear', async () => {
+    const h = plain();
+    const refused = async () => {
+      throw new Error('Linear down for writes');
+    };
+    h.tracker.comment = refused;
+    h.tracker.activity = refused;
+    await h.store.setMeta('paused', '1');
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1', ack: true });
+    expect((await h.store.measureFacts('p', 'REL-1')).acks).toEqual({});
+    expect((await h.ticket()).blocked).toBe(false);
+  });
+
+  it('writes the plan of a new delegation to its own session, and keeps it there', async () => {
+    const h = plain();
+    h.runner.enqueue({ events: [{ kind: 'text', text: 'PR ouverte.' }] }, { events: [{ kind: 'text', text: 'Repris.' }] });
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1', ack: true });
+    const before = h.tracker.plans('ls-1').length;
+    await h.send('status.changed', { from: 'human_review', to: 'dev' });
+    await h.send('ticket.delegated', { linearSessionId: 'ls-2', ack: true });
+    expect(h.tracker.plans('ls-1')).toHaveLength(before);
+    expect(h.tracker.plans('ls-2').at(0)![0]).toEqual({ content: 'Comprendre', status: 'inProgress' });
+    expect(h.tracker.plans('ls-2').length).toBeGreaterThan(1);
+  });
+
+  it('leaves the closed plan alone on a reply: a feedback run reopens no step that nothing would close', async () => {
+    const h = plain();
+    h.runner.enqueue({ events: [{ kind: 'text', text: 'PR ouverte.' }] }, { events: [{ kind: 'text', text: 'Corrigé.' }] });
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1', ack: true });
+    const closed = h.tracker.plans('ls-1').length;
+    await h.send('status.changed', { from: 'human_review', to: 'dev' });
+    expect(h.runner.requests).toHaveLength(2);
+    expect(h.tracker.plans('ls-1')).toHaveLength(closed);
+  });
+
+  it('a PR seen during the run does not end the plan: the end of the work closes it, the PR with it', async () => {
+    const h = plain();
+    h.runner.enqueue({ events: [{ kind: 'text', text: 'PR ouverte.' }], hold: true });
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1', ack: true });
+    const [run] = await h.store.runsByStatus('running');
+    await h.send('pr.opened', { number: 3, url: 'https://gh/pr/3', branch: 'factory/rel-1-export-csv' });
+    expect(h.tracker.plans('ls-1').at(-1)!.find((s) => s.content === 'Build')).toEqual({ content: 'Build', status: 'inProgress' });
+    h.runner.release(run!.id);
+    await h.orch.drained();
+    expect(h.tracker.plans('ls-1').at(-1)!.at(-1)).toEqual({ content: 'PR', status: 'completed' });
+    expect(h.tracker.plans('ls-1').at(-1)!.some((s) => s.status === 'inProgress')).toBe(false);
+  });
+
   it('a webhook sent again neither comments nor starts twice', async () => {
     const h = authorized();
     h.runner.enqueue({ events: [{ kind: 'text', text: 'PR ouverte.' }] });
@@ -156,7 +217,7 @@ describe('the trigger (ORC-171)', () => {
     expect(h.runner.requests).toEqual([]);
   });
 
-  it('criterion 3, repaired: its team now has a repo, the first pass over all the projects lifts the block and the label', async () => {
+  it('criterion 3, repaired: its team now has a repo, the next pass lifts the block and the label', async () => {
     const h = authorized();
     h.tracker.addIssue({ identifier: 'ZZZ-1', title: 'Ailleurs', delegateId: 'app' });
     const { raw, headers } = signedDelegation(h.clock.now(), 'ZZZ-1');
@@ -167,7 +228,8 @@ describe('the trigger (ORC-171)', () => {
     await reconcileOnce({ ...deps, projects: [h.project] });
     await h.orch.drained();
     expect(await h.ticket('ZZZ-1')).toMatchObject({ blocked: true });
-    await reconcileOnce({ ...deps, projects: [h.project, { ...h.project, id: 'zzz', teamKey: 'ZZZ' }] });
+    // The 5-minute pass of the first project alone sees it too: it is told every project of the instance.
+    await reconcileOnce({ ...deps, projects: [h.project], allProjects: [h.project, { ...h.project, id: 'zzz', teamKey: 'ZZZ' }] });
     await h.orch.drained();
     expect(await h.ticket('ZZZ-1')).toMatchObject({ blocked: false, delegated: false });
     expect(h.tracker.issues.get('ZZZ-1')!.labels).toEqual([]);

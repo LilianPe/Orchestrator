@@ -28,11 +28,12 @@ describe('session plan (ORC-171)', () => {
     expect(statuses(closePlan(building, true))).toEqual(['completed', 'canceled', 'canceled', 'canceled', 'completed', 'canceled', 'completed']);
   });
 
-  it('reads the step of a job from its shape: review and question jobs are not steps of the plan', () => {
-    expect(planStepOfJob({ queue: 'dev', skill: 'factory:dev' })).toBe('Build');
-    expect(planStepOfJob({ queue: 'dev', skill: 'factory:feedback' })).toBe('Build');
-    expect(planStepOfJob({ queue: 'dev', skill: 'factory:tests', red: { command: 'npm test --', mode: 'measure', attempts: 3 } })).toBe('Tests');
-    expect(planStepOfJob({ queue: 'dev', skill: 'factory:review' })).toBeUndefined();
-    expect(planStepOfJob({ queue: 'questions', skill: 'factory:ask' })).toBeUndefined();
+  it('reads the step of a job from its shape: reviews, questions and runs that hand nothing over are not steps of the plan', () => {
+    const toReview = { move: 'human_review' as const };
+    expect(planStepOfJob({ queue: 'dev', skill: 'factory:dev', onSuccess: toReview })).toBe('Build');
+    expect(planStepOfJob({ queue: 'dev', skill: 'factory:tests', onSuccess: { run: 'dev' }, red: { command: 'npm test --', mode: 'measure', attempts: 3 } })).toBe('Tests');
+    expect(planStepOfJob({ queue: 'dev', skill: 'factory:feedback', onSuccess: { post: 'reply' } })).toBeUndefined();
+    expect(planStepOfJob({ queue: 'dev', skill: 'factory:review', onSuccess: toReview })).toBeUndefined();
+    expect(planStepOfJob({ queue: 'questions', skill: 'factory:ask', onSuccess: { post: 'reply' } })).toBeUndefined();
   });
 });
