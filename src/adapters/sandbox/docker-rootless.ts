@@ -1,5 +1,5 @@
 import { availableParallelism } from 'node:os';
-import { basename } from 'node:path';
+import { basename, dirname } from 'node:path';
 import type { EgressProxy } from '../../network/proxy.js';
 import { execCmd, mustExec, type Exec, type ExecResult } from '../exec.js';
 import {
@@ -55,13 +55,16 @@ const ATTEMPT = 'factory.attempt';
 const NETWORK = 'factory.network';
 const INSTANCE = 'factory.instance';
 
-/** Where the run's proxy socket is mounted, and where the relay in front of it listens. */
-const EGRESS_SOCKET = '/run/factory/egress.sock';
+/**
+ * Where the run's own dir of the proxy is mounted, read-only: a dir, not its socket, so that a daemon started
+ * after a kill -9 binds the socket anew and the living container sees it (ORC-220). A socket opens on a read-only mount.
+ */
+const EGRESS_DIR = '/run/factory/egress';
 /** The factory CA's certificate, read-only: the only authority the sandbox's tools trust (the proxy decrypts every tunnel). */
 const EGRESS_CA = '/run/factory/egress-ca.crt';
 const PROXY = 'http://127.0.0.1:3128';
 /** PID 1 of a sandbox with an egress: TCP on the loopback to the proxy's socket, so every tool can use HTTP(S)_PROXY. */
-const RELAY = `const net=require('net');net.createServer((c)=>{const u=net.connect('${EGRESS_SOCKET}');c.pipe(u).pipe(c);c.on('error',()=>u.destroy());u.on('error',()=>c.destroy())}).listen(3128,'127.0.0.1')`;
+const relay = (socket: string) => `const net=require('net');net.createServer((c)=>{const u=net.connect('${socket}');c.pipe(u).pipe(c);c.on('error',()=>u.destroy());u.on('error',()=>c.destroy())}).listen(3128,'127.0.0.1')`;
 /**
  * The proxy's address for every tool, and the factory CA as its trust: Node (claude, npm, yarn,
  * factory-agent), OpenSSL (curl, Python), pip, git.
@@ -173,7 +176,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
       ...mounts.flatMap((m) => ['--mount', m]),
       ...(egress
         ? [
-            '--mount', mountArg({ host: egress, target: EGRESS_SOCKET, readOnly: false }),
+            '--mount', mountArg({ host: dirname(egress), target: EGRESS_DIR, readOnly: true }),
             '--mount', mountArg({ host: this.opts.egress!.caCertPath, target: EGRESS_CA, readOnly: true }),
             ...EGRESS_ENV.flatMap((v) => ['-e', v]),
           ]
@@ -181,7 +184,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
       '--workdir', WORKSPACE_TARGET,
       // Always: no route, no DNS, no UDP. The level is the proxy's to apply (ORC-213).
       '--network', 'none',
-      this.opts.image, ...(egress ? ['node', '-e', RELAY] : ['sleep', 'infinity']),
+      this.opts.image, ...(egress ? ['node', '-e', relay(`${EGRESS_DIR}/${basename(egress)}`)] : ['sleep', 'infinity']),
     ];
   }
 
@@ -206,6 +209,17 @@ export class ContainerSandboxProvider implements SandboxProvider {
     // A container this provider cannot use is not handed back: the router then asks create(), which replaces it.
     const c = (await this.byLabel(`${ATTEMPT}=${runId}`)).find((x) => this.usable(x));
     return c && this.seen(c);
+  }
+
+  /**
+   * Its egress listens again at the same path, at the level on the container's label. `allow` is not kept:
+   * nothing asks for it yet (`openSandbox`), and a list lost only narrows.
+   */
+  async reattach(runId: string): Promise<Sandbox | undefined> {
+    const c = (await this.byLabel(`${ATTEMPT}=${runId}`)).find((x) => x.running);
+    if (!c) return undefined;
+    if (this.opts.egress && !this.opts.egress.isOpen(runId)) await this.opts.egress.open(runId, { level: c.network, allow: [] });
+    return this.seen(c);
   }
 
   /** Stopped containers too: they are still attempts' leftovers for recover() to destroy. */

@@ -194,6 +194,14 @@ export interface EventPayloads {
   'verify.passed': { runId: string; job: string; output?: AgentOutput; red?: RedCause };
   /** `tree`: fingerprint of the worktree content when the check failed, absent outside git (ORC-187). */
   'verify.failed': { runId: string; job: string; failures: VerifyFailure[]; tree?: string; red?: RedCause };
+  /**
+   * An attempt gone without a result (ORC-220): `restart`, cut by a restart of the factory, and no
+   * container left to reattach to; `lease`, its lease expired under a living factory. `decide` starts
+   * the step again; only `lease` counts against the bound of one relaunch, a restart being no fault of the attempt.
+   */
+  'run.lost': { runId: string; job: string; cause: 'restart' | 'lease' };
+  /** The check of an attempt cut by a restart of the factory (ORC-220): run again, its verdict keeps its id `check:<run>`. */
+  'verify.lost': { runId: string; job: string; output?: AgentOutput };
   /** A timer armed by a decision, fired through the inbox with id `timer:<key>:<fireAt>` (ORC-161). */
   'timer.fired': TimerFired;
   'control.pause': Record<string, never>;
@@ -266,7 +274,7 @@ export type DecidedEvent =
   | { type: 'ticket.unblocked' }
   | {
       type: 'ticket.patched';
-      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId'>>;
+      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches'>>;
     }
   | { type: 'feedback.appended'; item: FeedbackItem }
   /** The ticket's dev work is stopped: nothing pending, no verification awaited. */
@@ -277,7 +285,7 @@ export type DecidedEvent =
  * A dev start kept for when the slot frees. `sensitivePaths`: those its start was decided with; the launch
  * adds them when what the run reads then is untrusted (I12, ORC-274).
  */
-export type PendingJob = { job: string; input?: InputKind; inputText?: string; resume?: boolean; sensitivePaths?: readonly string[] };
+export type PendingJob = { job: string; input?: InputKind; inputText?: string; resume?: boolean; sensitivePaths?: readonly string[]; relaunchOf?: string };
 
 /** Facts the orchestrator records around an effect it carried out, applied to the ticket by `reduce`. */
 export type ShellEvent =
@@ -295,14 +303,16 @@ export type ShellEvent =
       job: string;
       queue: QueueName;
       claudeSessionId: string;
-      feedbackConsumed: boolean;
       /** `false` on a run out of the ticket session (a review): the ticket does not take its session (ORC-217). Absent before. */
       ticketSession?: false;
     }
-  /** The active run is gone without a `run.finished` (launch failure). */
-  | { type: 'run.cleared' }
-  /** The factory restarted while the ticket had a run or a verification in flight. */
-  | { type: 'run.interrupted'; reason: string };
+  /**
+   * The pending feedback was given to a run, recorded once that run is written (ORC-220): a launch cut
+   * before it keeps the replies for the start taken up again.
+   */
+  | { type: 'feedback.consumed' }
+  /** The active run is gone without a `run.finished` (launch failure, or a launch cut before its run was written). */
+  | { type: 'run.cleared' };
 
 export type InternalEvent = DecidedEvent | ShellEvent;
 
@@ -345,6 +355,13 @@ export interface TicketState {
    * `limits.ciFixAttempts` (I5, ORC-270). The AI review loop does not share it yet (ORC-184, ORC-187).
    */
   ciFixAttempts: number;
+  /** Relaunches of an expired lease since an attempt last ended or a human relaunched (ORC-220). Absent before it. */
+  leaseRelaunches?: number;
+  /**
+   * When each automatic relaunch after a cut was decided (`run.lost`, `verify.lost`), those still in the window
+   * at the last one (ORC-220). Only a human relaunch empties it. Absent until the first: journals from before it replay as they were.
+   */
+  cutRelaunches?: number[];
   /**
    * Signed actor of the last authorized delegation (ORC-186): the run's initiator, who never validates
    * its spec, and its requester, who may answer it.

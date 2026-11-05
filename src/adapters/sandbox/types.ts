@@ -74,6 +74,11 @@ export interface SandboxProvider {
   spawnCommand(id: string, argv: readonly string[], opts?: SandboxExecOptions): SpawnCommand;
   /** The live sandbox of an attempt, by its label; none once destroyed. */
   findByAttempt(runId: string): Promise<Sandbox | undefined>;
+  /**
+   * The live sandbox of an attempt started by an earlier process (ORC-220), made usable from this one:
+   * its egress listens again. Undefined when none runs: the supervisor then starts the step again.
+   */
+  reattach(runId: string): Promise<Sandbox | undefined>;
   /** Every live sandbox this provider made (by label), for recover() to destroy those of dead attempts. */
   list(): Promise<{ runId: string; sandbox: Sandbox }[]>;
   /** Idempotent: an unknown or destroyed id is ignored. */

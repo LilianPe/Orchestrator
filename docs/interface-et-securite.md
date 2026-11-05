@@ -123,7 +123,7 @@ Le proxy applique le niveau du run :
 - **Hôte vérifié = hôte joint** : la requête part vers la cible du `CONNECT`, avec cet hôte en `Host`, quel que soit l'en-tête envoyé par le conteneur.
 - **Jamais d'adresse privée** (boucle locale, réseaux privés, `169.254.0.0/16` des métadonnées cloud), même en `full`, même par un nom qui y mène.
 - **Journal** : chaque requête et chaque refus, avec l'hôte, la méthode, le chemin (sans sa requête, qui peut porter un jeton), les octets envoyés et reçus et la raison d'un refus, dans `<home>/network/<run>.jsonl`, purgé après 30 jours comme les transcripts.
-- **Après un redémarrage du démon**, un conteneur encore vivant a un socket mort : il est détruit et refait, jamais repris.
+- **Après un redémarrage du démon**, le conteneur encore vivant d'une tentative en cours est repris (ORC-220) : le socket du run vit dans un dossier à lui, monté en lecture seule, et le démon l'y remet au même chemin, au niveau du label du conteneur. Les connexions en cours sont coupées ; le client les rouvre. La liste `allow` d'un dépôt `custom` n'est pas gardée : aucun run ne la demande encore (ORC-209 C), et la perdre ne ferait que restreindre. Tout autre conteneur vivant est détruit.
 
 ## Secrets
 
