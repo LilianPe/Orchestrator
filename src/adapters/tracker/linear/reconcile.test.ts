@@ -102,6 +102,57 @@ describe('reconcileOnce', () => {
       await store.putTicket({ ...newTicketState('api', 'REL-1', 'T', 'dev', 4), blocked: true, blockReason: 'Tests rouges' });
       expect((await pass(tracker, store)).events[0]).toEqual(['web', 'reconcile:undelegated-flag:web:REL-1:3', { keepLabel: true }]);
     });
+
+    // The ticket `api` holds, with a row left in `web` from when it waited there for its repo.
+    async function routedToApi(issue: Partial<Parameters<FakeTracker['addIssue']>[0]>) {
+      const tracker = new FakeTracker();
+      tracker.setStates('REL', [...STANDARD_STATES, 'Canceled']);
+      tracker.addIssue({ identifier: 'REL-1', delegateId: 'app', labels: ['repo:api'], stateName: 'In Progress', ...issue });
+      const store = new SqliteStore(':memory:');
+      await store.putTicket({ ...newTicketState('web', 'REL-1', 'T', 'todo', 3) });
+      await store.putTicket({ ...newTicketState('api', 'REL-1', 'T', 'dev', 4), delegated: true });
+      return { tracker, store };
+    }
+
+    it('catches up a lost label for the repo the ticket went to, and only there, its known labels with it', async () => {
+      const { tracker, store } = await routedToApi({ updatedAt: 10 });
+      await recordLabels(store, 'web', 'REL-1', ['old'], 1);
+      await recordLabels(store, 'api', 'REL-1', ['repo:api'], 5);
+      tracker.issues.get('REL-1')!.labels = ['repo:api', 'agent:reprendre'];
+      expect((await pass(tracker, store)).events).toEqual([['api', 'reconcile:label:api:REL-1:agent:reprendre:added:10', { label: 'agent:reprendre', change: 'added' }]]);
+      expect(await knownLabels(store, 'api', 'REL-1')).toEqual({ labels: ['agent:reprendre', 'repo:api'], at: 10 });
+      expect(await knownLabels(store, 'web', 'REL-1')).toEqual({ labels: ['old'], at: 1 });
+    });
+
+    it('catches up a lost move for the repo the ticket went to, and only there', async () => {
+      const { tracker, store } = await routedToApi({ stateName: 'AI Review' });
+      expect((await pass(tracker, store)).events).toEqual([['api', 'reconcile:moved:api:REL-1:AI Review:4', { from: 'dev', to: 'ai_review' }]]);
+    });
+
+    it('a pass of the other repo alone catches up nothing for it', async () => {
+      const { tracker, store } = await routedToApi({ stateName: 'AI Review' });
+      await recordLabels(store, 'api', 'REL-1', ['bug'], 0);
+      expect((await pass(tracker, store, 'web')).events).toEqual([]);
+    });
+
+    it('catches up a Done out of the list for the repo holding the ticket: the one still waiting elsewhere only leaves', async () => {
+      const { tracker, store } = await routedToApi({ stateName: 'Done', stateType: 'completed' });
+      await store.putTicket({ ...newTicketState('web', 'REL-1', 'T', 'todo', 3), delegated: true, blocked: true, blockReason: unroutedReason(['web', 'api']) });
+      expect((await pass(tracker, store)).events).toEqual([
+        ['web', 'reconcile:undelegated-flag:web:REL-1:3', {}],
+        ['api', 'reconcile:moved:api:REL-1:Done:4', { from: 'dev', to: 'done' }],
+      ]);
+    });
+
+    it('catches up a cancel out of the list for the repo holding the ticket: the one still waiting elsewhere only leaves', async () => {
+      const { tracker, store } = await routedToApi({ stateName: 'Canceled', stateType: 'canceled' });
+      await store.putTicket({ ...newTicketState('web', 'REL-1', 'T', 'todo', 3), delegated: true, blocked: true, blockReason: unroutedReason(['web', 'api']) });
+      expect((await pass(tracker, store)).events).toEqual([
+        ['web', 'reconcile:undelegated-flag:web:REL-1:3', {}],
+        ['api', 'reconcile:cancelled:api:REL-1:Canceled:4', { from: 'dev', to: null, cancelled: true }],
+        ['api', 'reconcile:undelegated-flag:api:REL-1:4', {}],
+      ]);
+    });
   });
 });
 

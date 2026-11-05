@@ -28,12 +28,17 @@ export interface ReconcileDeps {
  */
 const UNSIGNED = { schemaVersion: SCHEMA_VERSION, taint: 'untrusted' } as const;
 
+/** What the store holds of a ticket in the team's projects; nothing to compare in a team of one. */
+async function storedTickets(store: Store, team: string[], ticketId: string): Promise<TicketState[]> {
+  if (team.length === 1) return [];
+  return (await Promise.all(team.map((id) => store.getTicket(id, ticketId)))).filter((t) => t !== undefined);
+}
+
 /** A team's delegated issues, read once per pass, each with the project it goes to (sticky routing, ORC-291). */
 export async function routedIssues(d: { tracker: Pick<Tracker, 'listDelegated'>; store: Store }, teamKey: string, team: string[]) {
   const issues = [];
   for (const issue of await d.tracker.listDelegated(teamKey)) {
-    const stored = team.length > 1 ? (await Promise.all(team.map((id) => d.store.getTicket(id, issue.identifier)))).filter((t) => t !== undefined) : [];
-    issues.push({ ...issue, ...resolveRoute(team, stored, issue.labels)! });
+    issues.push({ ...issue, ...resolveRoute(team, await storedTickets(d.store, team, issue.identifier), issue.labels)! });
   }
   return issues;
 }
@@ -93,7 +98,7 @@ async function reconcileProject(d: ReconcileDeps, p: ProjectRuntime, team: strin
   // Every read and write of the known labels, in the webhook's turn.
   const inTurn: Serial = d.serial ?? ((task) => task());
   const issues = routed.filter((i) => i.projectId === p.id);
-  const elsewhere = new Set(routed.filter((i) => i.projectId !== p.id).map((i) => i.identifier));
+  const listedElsewhere = new Set(routed.filter((i) => i.projectId !== p.id).map((i) => i.identifier));
   const at = d.clock.now();
   const emit: Emit = async (t, base, id, type, payload) => d.submit({ ...base, id, type, at, projectId: p.id, ticketId: t.ticketId, payload } as FactoryEvent);
   const clearDelegation = async (t: TicketState) => {
@@ -123,8 +128,8 @@ async function reconcileProject(d: ReconcileDeps, p: ProjectRuntime, team: strin
     if (t.projectId !== p.id || delegated.has(t.ticketId)) continue;
     const undelegate = t.delegated && t.logical !== 'done';
     if (!t.activeRunId && !undelegate) continue;
-    // Listed under another repo of the team: it leaves this one, nothing of the issue to read or to catch up here.
-    if (elsewhere.has(t.ticketId)) {
+    // Another repo of the team has the ticket, listed or not: it leaves this one, nothing of the issue to read or to catch up here.
+    if (listedElsewhere.has(t.ticketId) || resolveRoute(team, await storedTickets(d.store, team, t.ticketId))?.projectId !== p.id) {
       if (t.activeRunId) await emit(t, TRUSTED, `reconcile:undelegated:${p.id}:${t.ticketId}:${t.activeRunId}`, 'session.stopped', {});
       if (undelegate) await clearDelegation(t);
       continue;

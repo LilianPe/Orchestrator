@@ -369,6 +369,46 @@ describe('ingest', () => {
     expect((await ids()).filter((id) => id.includes('label'))).toHaveLength(1);
   });
 
+  it('in a team with several repos, a label webhook and a pass under way report one change, once, for the repo holding the ticket (ORC-291)', async () => {
+    const { store, accept, ids } = inbox();
+    const body = { ...fx('issue-moved-labeled'), webhookTimestamp: 2000 };
+    const updatedAt = Date.parse(body.data.updatedAt);
+    await store.putTicket({ ...newTicketState('web', 'REL-1', 'T', 'todo', 1) });
+    await store.putTicket({ ...newTicketState('api', 'REL-1', 'T', 'ai_review', 1), delegated: true });
+    await recordLabels(store, 'web', 'REL-1', ['old'], 1);
+    await recordLabels(store, 'api', 'REL-1', ['bug'], updatedAt - 1000);
+    const tracker = new FakeTracker();
+    tracker.addIssue({ identifier: 'REL-1', delegateId: 'app', stateName: 'AI Review', labels: ['bug', 'agent:reprendre'], updatedAt });
+    const labelsTurn = serial();
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const c: MapContext = {
+      ...ctx(),
+      projectsOfTeam: (k) => (k === 'REL' ? ['web', 'api'] : []),
+      ticket: (p, id) => store.getTicket(p, id),
+      now: () => 2000,
+      knownLabels: (pid, id) => knownLabels(store, pid, id),
+      recordLabels: (pid, id, labels, at) => recordLabels(store, pid, id, labels, at),
+    };
+    const seen: FactoryEvent[] = [];
+    const write = (e: FactoryEvent) => (seen.push(e), accept(e));
+    const ingest = createLinearIngest({ secret: () => 'sec', ctx: c, serial: labelsTurn, accept: async (e) => (await gate, write(e)), ack: async () => {}, log: () => {} });
+    const { raw, sig } = signed(body);
+    const webhook = ingest(raw, { 'linear-signature': sig });
+    await new Promise((r) => setTimeout(r, 10));
+    const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../../../packs/standard') });
+    const projects = ['web', 'api'].map((id) => ({ id, repoPath: `/${id}`, teamKey: 'REL', workflow }));
+    const reconciled = reconcileOnce({ tracker, store, projects, serial: labelsTurn, submit: write, clock: new FakeClock(2000), log: () => {} });
+    await new Promise((r) => setTimeout(r, 10));
+    release();
+    expect(await webhook).toEqual({ status: 200 });
+    await reconciled;
+    expect((await ids()).filter((id) => id.includes('label'))).toHaveLength(1);
+    expect(seen.filter((e) => e.type === 'label.changed').map((e) => e.projectId)).toEqual(['api']);
+    expect((await knownLabels(store, 'api', 'REL-1'))?.labels).toEqual(['agent:reprendre', 'bug']);
+    expect(await knownLabels(store, 'web', 'REL-1')).toEqual({ labels: ['old'], at: 1 });
+  });
+
   it('a label webhook come after a newer one still adds its change to the known labels: the reconciliation does not report it again (ORC-185)', async () => {
     const { store, ids } = inbox();
     const base = fx('issue-moved-labeled');
