@@ -7,7 +7,6 @@ import { describe, expect, it } from 'vitest';
 import { execCmd, type Exec, type ExecResult } from '../adapters/exec.js';
 import { FakeSandboxProvider } from '../adapters/sandbox/fake.js';
 import type { SandboxExecOptions, SandboxRequest } from '../adapters/sandbox/types.js';
-import { LOG_EXCERPT_MAX } from '../checks/log-excerpt.js';
 import { BUNDLE_TARGET } from '../publish/extract.js';
 import { runCleanVerify, verifyCommand, type CleanVerifyRequest } from './clean-verify.js';
 
