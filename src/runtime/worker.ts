@@ -270,7 +270,7 @@ export class Worker {
       // Their results are in the inbox now: the next pass reads them. With no effect left open, the
       // rows that found them unfinished go first, without waiting for a poll (ORC-290).
       if (effects.settled > 0) {
-        if (effects.status === 'done') this.unwait(key);
+        if (effects.status === 'done' && !this.stopped) this.unwait(key);
         this.kickInBackground();
       }
       // Effects held (another worker's lease, a backoff): the next row still goes to the store, which

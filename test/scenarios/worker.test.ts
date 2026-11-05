@@ -466,6 +466,31 @@ describe('outbox executors: lease, backoff, results through the inbox', () => {
     expect(await h.store.pendingInbox(10)).toEqual([]);
   });
 
+  it('leaves a parked row for the next start when its effect settles during a shutdown (ORC-290)', async () => {
+    const h = createHarness({ projectYaml: CRASH_WORKFLOW, effectRetry: { attempts: 2, baseMs: 60_000, capMs: 60_000 } });
+    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+    let tries = 0;
+    const trying = gate();
+    const failing = gate();
+    h.tracker.comment = async () => {
+      if (++tries === 2) {
+        trying.open();
+        await failing.opened;
+      }
+      throw new Error('Linear down');
+    };
+    await h.orch.accept(delegation(h));
+    await h.orch.drained();
+    h.clock.advance(60_000);
+    h.orch.wake();
+    await trying.opened;
+    h.orch.stopAll();
+    failing.open();
+    await h.orch.drained();
+    expect((await h.store.listEffects('p', 'REL-1'))[1]).toMatchObject({ status: 'dead' });
+    expect((await h.store.pendingInbox(10)).map((e) => e.id)).toContain('effect:REL-1:1:1');
+  });
+
   it('does not loop when the error notice of a dead effect dies too', async () => {
     const h = createHarness({ projectYaml: CRASH_WORKFLOW });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
