@@ -4,7 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { PrPoller } from '../adapters/forge/pr-poller.js';
-import { Orchestrator } from '../core/orchestrator.js';
+import { Orchestrator, type OrchestratorDeps } from '../core/orchestrator.js';
+import type { TicketState } from '../core/types.js';
+import type { RunRecord } from '../store/types.js';
 import { TimerService } from '../runtime/timers.js';
 import { saveInstance, saveSecrets } from '../config/instance.js';
 import { startFactory } from './bootstrap.js';
@@ -66,6 +68,36 @@ describe('bootstrap', () => {
     } finally {
       await app.stop();
     }
+  });
+
+  describe('the whole-read settings of a run (ORC-279)', () => {
+    /** What bootstrap gave the orchestrator: its `recover` is the first thing to run with them. */
+    const depsOf = async (port: number, yml?: string) => {
+      const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
+      saveInstance(home, { port, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
+      if (yml) writeFileSync(join(home, 'factory.yml'), yml);
+      let deps: OrchestratorDeps | undefined;
+      const recover = vi.spyOn(Orchestrator.prototype, 'recover').mockImplementation(async function (this: Orchestrator) {
+        deps = (this as unknown as { d: OrchestratorDeps }).d;
+      });
+      const app = await startFactory({ home, fakeRunner: true, log: () => {}, env: {} });
+      await app.stop();
+      recover.mockRestore();
+      return deps!;
+    };
+    const agentEnvOf = async (port: number, yml?: string) => (await depsOf(port, yml)).agentEnv({ token: 't', ticketId: 'REL-1' } as RunRecord);
+
+    it('hands each run the threshold of factory.yml, and none when it declares none', async () => {
+      expect((await agentEnvOf(4194, 'read_guard: { max_lines: 500 }\n'))['FACTORY_READ_MAX_LINES']).toBe('500');
+      expect(await agentEnvOf(4195)).not.toHaveProperty('FACTORY_READ_MAX_LINES');
+    });
+
+    it('lets a run read the frozen tests of its ticket whole, and nothing on a ticket with no freeze', async () => {
+      const { fullReadPaths } = await depsOf(4183);
+      const frozen = { sha: 'abc', files: { 'src/export.test.ts': 'f1', 'vitest.config.ts': 'f2' } };
+      expect(fullReadPaths!({ frozenTests: frozen } as Partial<TicketState> as TicketState)).toEqual(['src/export.test.ts', 'vitest.config.ts']);
+      expect(fullReadPaths!({} as TicketState)).toEqual([]);
+    });
   });
 
   it('refuses to start on an invalid factory.yml, naming the key', async () => {

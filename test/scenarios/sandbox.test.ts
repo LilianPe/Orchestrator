@@ -1,5 +1,5 @@
 import { existsSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_REQUIREMENTS, PACK_TARGET, REFUSALS_TARGET, SANDBOX_HOME, WORKSPACE_TARGET } from '../../src/adapters/sandbox/types.js';
 import { createHarness, packDir } from '../helpers/harness.js';
@@ -332,6 +332,46 @@ describe('the ticket session across attempts', () => {
     expect(await roles(h)).toEqual(['implementer', 'answerer']);
   });
 
+  it('hands a run the paths it reads whole, as the sandbox sees them (ORC-279)', async () => {
+    const h = createHarness({ sandboxed: true, fullReadPaths: () => ['src/export.test.ts', 'vitest.config.ts'] });
+    await delegate(h);
+    expect(JSON.parse(h.runner.requests[0]!.env['FACTORY_FULL_READ_PATHS']!)).toEqual([`${WORKSPACE_TARGET}/src/export.test.ts`, `${WORKSPACE_TARGET}/vitest.config.ts`]);
+  });
+
+  it('hands a run on the host the same paths, under its worktree (ORC-279)', async () => {
+    const h = createHarness({ fullReadPaths: () => ['src/export.test.ts'] });
+    await delegate(h);
+    const r = h.runner.requests[0]!;
+    expect(JSON.parse(r.env['FACTORY_FULL_READ_PATHS']!)).toEqual([`${resolve(r.cwd)}/src/export.test.ts`]);
+  });
+
+  it('starts the run without the list when it cannot be read: a saving never blocks a ticket (ORC-279)', async () => {
+    const h = createHarness({
+      fullReadPaths: () => {
+        throw new Error('boom');
+      },
+    });
+    await delegate(h);
+    expect(h.runner.requests[0]!.env).not.toHaveProperty('FACTORY_FULL_READ_PATHS');
+    expect(await h.ticket()).toMatchObject({ blocked: false });
+    expect(h.logs.some((l) => l.level === 'warn' && l.message.includes('boom'))).toBe(true);
+  });
+
+  it('starts the run without the list when it is too long for the environment (ORC-279)', async () => {
+    const h = createHarness({ fullReadPaths: () => Array.from({ length: 5000 }, (_, i) => `packages/some-package-${i}/src/some-feature.test.ts`) });
+    await delegate(h);
+    expect(h.runner.requests[0]!.env).not.toHaveProperty('FACTORY_FULL_READ_PATHS');
+    expect(await h.ticket()).toMatchObject({ blocked: false });
+    expect(h.logs.some((l) => l.level === 'warn' && l.message.includes('too long'))).toBe(true);
+  });
+
+  it('hands no list when the factory has no path to read whole (ORC-279)', async () => {
+    for (const h of [createHarness({ sandboxed: true }), createHarness({ sandboxed: true, fullReadPaths: () => [] })]) {
+      await delegate(h);
+      expect(h.runner.requests[0]!.env).not.toHaveProperty('FACTORY_FULL_READ_PATHS');
+    }
+  });
+
   it("every sandboxed run's refusals log is on the host, and outlives its sandbox", async () => {
     const h = createHarness({ sandboxed: true });
     await delegate(h);
@@ -378,6 +418,14 @@ describe("a run's security log", () => {
     expect(summary!.body).toContain('`evil.example` (1)');
     expect(JSON.stringify(h.tracker.activities('ls-1'))).not.toContain('s3cr3t');
     expect(await h.ticket()).toMatchObject({ logical: 'human_review', blocked: false });
+  });
+
+  it('stores a whole read the hook refused and counts its rule, never naming the path in the session (ORC-279)', async () => {
+    const line = JSON.stringify({ at, tool: 'Read', command: '/work/src/secret-name.ts', rule: 'full-read', ticket: 'REL-1' });
+    const { h, runId } = await runWith([], [line]);
+    expect(await h.store.securityLog(runId)).toMatchObject({ refusals: [{ tool: 'Read', rule: 'full-read', command: '/work/src/secret-name.ts' }], skipped: { refusals: 0 } });
+    expect(summaries(h)[0]!.body).toContain('`full-read` : 1');
+    expect(JSON.stringify(h.tracker.activities('ls-1'))).not.toContain('secret-name');
   });
 
   it('skips and counts the forged lines, posts nothing for a run without a refusal, and the run ends as it would', async () => {
