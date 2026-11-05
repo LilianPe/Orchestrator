@@ -1,13 +1,14 @@
 import { chmodSync, rmSync } from 'node:fs';
 import { createServer, request, type ClientRequest, type IncomingMessage } from 'node:http';
+import { dirname } from 'node:path';
 import { json } from 'node:stream/consumers';
 import { z } from 'zod';
 import type { NetworkLevel } from '../adapters/sandbox/types.js';
 import { NETWORK_RANK, type EgressPolicy } from './levels.js';
-import { PIPE, type EgressProxy } from './proxy.js';
+import { egressJournalPath, PIPE, type EgressProxy } from './proxy.js';
 
 /** What the daemon asks of the egress proxy, in its own process or in the `proxy` service. */
-export type Egress = Pick<EgressProxy, 'open' | 'close' | 'closeAll' | 'isOpen' | 'caCertPath'>;
+export type Egress = Pick<EgressProxy, 'open' | 'close' | 'closeAll' | 'isOpen' | 'caCertPath' | 'journalPath'>;
 
 /** The name of the agent API in a sandbox: the daemon writes it in `FACTORY_API`, the proxy recognises it. */
 export const sandboxAgentHost = (env: NodeJS.ProcessEnv) => env['FACTORY_SANDBOX_AGENT_HOST'] || 'host.docker.internal';
@@ -91,6 +92,11 @@ export class EgressClient implements Egress {
 
   isOpen(runId: string): boolean {
     return this.opened.has(runId);
+  }
+
+  /** The control socket sits in the proxy's directory, mounted at the same path in both services (`compose.yaml`). */
+  journalPath(runId: string): string {
+    return egressJournalPath(dirname(this.path), runId);
   }
 
   async open(runId: string, policy: EgressPolicy): Promise<string> {

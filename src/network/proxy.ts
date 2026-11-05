@@ -99,6 +99,12 @@ const ALPN = ({ protocols }: { protocols: string[] }) => (protocols.includes('ht
 
 const samePolicy = (a: EgressPolicy, b: EgressPolicy) => a.level === b.level && a.allow.length === b.allow.length && a.allow.every((h, i) => h === b.allow[i]);
 
+/** The journal of a run under the proxy's directory: the daemon reads it there, whichever process wrote it (ORC-296). */
+export function egressJournalPath(dir: string, runId: string): string {
+  if (!/^[\w.-]+$/.test(runId)) throw new Error(`egress: invalid run id ${runId}`);
+  return join(dir, `${runId}.jsonl`);
+}
+
 /**
  * The factory's egress proxy (ORC-213): the only way out of a sandbox, which runs `--network none`
  * with this run's Unix socket mounted. One socket per run, so the journal knows the run without
@@ -134,8 +140,7 @@ export class EgressProxy {
 
   /** A JSONL per run, read into the base when the run's sandbox is destroyed (ORC-296), purged at 30 days. */
   journalPath(runId: string): string {
-    if (!/^[\w.-]+$/.test(runId)) throw new Error(`egress: invalid run id ${runId}`);
-    return join(this.o.dir, `${runId}.jsonl`);
+    return egressJournalPath(this.o.dir, runId);
   }
 
   /** Whether this process listens for the run: a container from before a restart waits on a socket that is gone, until `open`. */

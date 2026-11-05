@@ -34,6 +34,12 @@ describe('the egress proxy as a service of its own (ORC-203)', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  it('finds the journal of a run where the proxy writes it: the control socket sits in the directory of the proxy (ORC-296)', () => {
+    const at = join(dir, 'network');
+    expect(new EgressClient(join(at, 'control.sock')).journalPath('r1')).toBe(proxy.journalPath('r1'));
+    expect(() => client.journalPath('../r1')).toThrow('invalid run id');
+  });
+
   /** A control socket that is not the proxy's. */
   const withServer = async (handler: RequestListener, body: (at: string) => Promise<void>) => {
     const server = createServer(handler);
