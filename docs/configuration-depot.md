@@ -28,7 +28,7 @@ network: { level: limited, allow: ["docs.exemple.com"] }   # none | limited (dé
 | `extends` | texte | `factory/default@1.0` | Le préréglage ; seul `factory/default@1.0` existe au MVP. |
 | `setup` | commande | aucune | Préparation du dépôt (installation, migrations). `verify` la relance sur son clone neuf, à `limited` et sans secret, avant ses commandes ; absente : `workspace.setup` du workflow. |
 | `commands` | `nom: commande` | `{}` | Les contrôles du dépôt (`lint`, `typecheck`, `test`…), lancés par `verify` dans l'ordre du fichier, au niveau réseau `none`. Vide : `jobs.<job>.verify` du workflow, jusqu'à ORC-177. |
-| `env` | liste de noms | `[]` | Variables que le runner reçoit : `setup`, agent, contrôle du rouge, et `verify` tant qu'il tourne sur l'hôte. Voir [Variables et secrets](#variables-et-secrets). |
+| `env` | liste de noms | `[]` | Variables que le runner reçoit : `setup`, agent, contrôle du rouge, et `verify`. Voir [Variables et secrets](#variables-et-secrets). |
 | `setup_secrets` | liste de noms | `[]` | Secrets que le `setup` seul reçoit, scellés avant que l'agent démarre. |
 | `services` | liste | `[]` | Services à démarrer à côté du runner (`postgres`…). |
 | `sensitive_paths` | liste de motifs | `[]` | Chemins dont la modification marque le run (relecture renforcée). |
