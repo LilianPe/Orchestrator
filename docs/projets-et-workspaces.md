@@ -42,11 +42,11 @@ Chaque job déclare un type d'espace de travail (`workspace` dans [`workflow.md`
 | `trunk-readonly` | `<RELAIS_HOME>/workspaces/<projet>/_trunk/<runId>/`, détaché sur `origin/<branche par défaut>` | `ask` (mode plan, lecture seule) |
 | `knowledge` | `<RELAIS_HOME>/workspaces/_kb/<runId>/`, branche `learn/<ticket>-<run>` | `learn`, `remember` |
 
-Cycle de vie d'un worktree de ticket :
-
 Ce ne sont pas des `git worktree` du dépôt : chacun est un dépôt à lui, avec son `.git` et sa copie des objets, pour que rien de ce qu'y écrit l'agent ne soit lu par le git de l'hôte ([sécurité](interface-et-securite.md), ORC-317). `git worktree list` ne les montre donc pas, et l'espace disque compte une copie de l'historique par ticket et par question.
 
-1. **Création** au premier run : `git fetch origin`, puis un dépôt neuf sur la branche du ticket (réutilise une branche locale ou distante du même nom, sinon la crée depuis `origin/<branche par défaut>`).
+Cycle de vie d'un worktree de ticket :
+
+1. **Création** au premier run : `git fetch origin`, puis un dépôt neuf sur la branche du ticket (réutilise une branche distante, à défaut locale, du même nom, sinon la crée depuis `origin/<branche par défaut>`). `.claude/` y est masqué dès ce moment, sauf `.claude/CLAUDE.md`, y compris pour le `setup`.
 2. **Setup** : les commandes `workspace.setup` (ex. `npm ci`) sont lancées une fois, dans l'ordre, via `bash -lc`, dans le conteneur de la tentative quand `FACTORY_CONTAINER_CLI` est défini, sur l'hôte sinon. Si l'une échoue, le worktree est supprimé et le ticket bloqué (« Erreur au lancement : Le setup du worktree a échoué : <commande> ») ; le run suivant recommence de zéro.
 3. **Réutilisation** : les runs suivants du ticket (retours, CI, review) reprennent le même worktree, sans setup.
 4. **Nettoyage** : au merge de la PR (règle `pr.merged` → `do: cleanup`), le dossier est supprimé, son `.git` avec : un commit que l'agent n'avait pas poussé disparaît.

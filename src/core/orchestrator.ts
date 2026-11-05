@@ -68,7 +68,6 @@ import {
 } from './types.js';
 import { runSealedSetup } from './sealed-setup.js';
 import { runCleanVerify, type CleanVerifier } from './clean-verify.js';
-import { sandboxGit } from '../publish/extract.js';
 import { logExcerpt } from '../checks/log-excerpt.js';
 import { cappedCommand, type Verifier, type VerifyResult } from './verify.js';
 import { PRODUCT_NAME } from '../product.js';
@@ -664,8 +663,7 @@ export class Orchestrator {
   }
 
   /**
-   * The attempt's sandbox (ORC-204): the worktree, the git dir its `.git` file points into (at the
-   * same path, so git works there; it shows the repository's other refs until ORC-205), the ticket's
+   * The attempt's sandbox (ORC-204): the worktree, its git dir inside (ORC-317), the ticket's
    * Claude session dir as `~/.claude` (`--resume` across attempts) when the attempt runs the ticket
    * session, else an empty per-run dir there, removed with the sandbox: a review or a question starts in
    * a fresh context that never sees the ticket's (ORC-217). The run's refusals dir, read-write, so the
@@ -1299,7 +1297,7 @@ export class Orchestrator {
         if (!t.activeRunId && !t.verifyingRunId) await this.updatePlan(t, (plan) => advancePlan(plan, 'PR', 'completed'));
         return;
       case 'cleanup':
-        await this.d.workspaces.cleanup(project.id, project.repoPath, ticketId);
+        await this.d.workspaces.cleanup(project.id, ticketId);
         await this.apply(await this.ticket(project.id, ticketId), { type: 'workspace.released' });
         return;
     }
@@ -1660,7 +1658,7 @@ export class Orchestrator {
     // Left by a daemon killed before the end of its setup (ORC-211): half installed, perhaps holding a secret the
     // configuration no longer names, so sealing it again proves nothing. It is made anew; no agent has worked in it.
     if (await store.getMeta(setupPendingKey(ws.path))) {
-      await workspaces.cleanup(project.id, project.repoPath, ticketId);
+      await workspaces.cleanup(project.id, ticketId);
       await store.setMeta(setupPendingKey(ws.path), '');
       ws = await workspaces.prepare(asked);
     }
@@ -1729,7 +1727,7 @@ export class Orchestrator {
       const conventions = readConventions(ws.path);
       // After the setup, which is the repository's and could write one; the session loads none anyway
       // (`--setting-sources ""`): defence in depth, for what ORC-128 did not trap (ORC-284).
-      await workspaces.resetClaudeDir(ws.path, sandbox && sandboxGit(this.d.sandboxes!, sandbox.id));
+      await workspaces.resetClaudeDir(ws.path);
       // The head the tests step starts on (ORC-123): its red check reads the step's own commits from it. A return
       // to the step keeps the first one, so its earlier commits still count; a relaunch is the same step.
       if (job.red && kind !== 'verify_failures' && !opts.relaunchOf) await store.setMeta(redBaseKey(project.id, ticketId), (await workspaces.head(ws.path)) ?? '');
@@ -1831,10 +1829,10 @@ export class Orchestrator {
     } finally {
       // The sandbox first: it mounts the worktree.
       if (sandbox && !handedOver) await this.destroySandbox(sandbox.id, runId);
-      if (!handedOver) await workspaces.release(ws.path).catch((err: Error) => this.log('warn', `workspace of ${ticketId} not removed after a launch cut short: ${err.message}`));
+      if (!handedOver) await workspaces.release(project.id, runId).catch((err: Error) => this.log('warn', `trunk of run ${runId} not removed after a launch cut short: ${err.message}`));
       if (!setUp) {
         await workspaces
-          .cleanup(project.id, project.repoPath, ticketId)
+          .cleanup(project.id, ticketId)
           .catch((err: Error) => this.log('warn', `worktree of ${ticketId} not removed after a launch that did not set it up: ${err.message}`));
       }
     }
@@ -1911,7 +1909,7 @@ export class Orchestrator {
       }
     } finally {
       if (sandboxId) await this.destroySandbox(sandboxId, run.id, run);
-      await this.d.workspaces.release(run.cwd).catch((err: Error) => this.log('warn', `workspace of run ${run.id} not removed: ${err.message}`));
+      await this.d.workspaces.release(run.projectId, run.id).catch((err: Error) => this.log('warn', `trunk of run ${run.id} not removed: ${err.message}`));
     }
     await this.submitResult(await this.finishedFor(run, result));
   }

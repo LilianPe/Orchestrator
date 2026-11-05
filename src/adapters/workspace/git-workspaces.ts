@@ -1,10 +1,10 @@
-import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, renameSync, rmSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
-import { devNull } from 'node:os';
-import { basename, dirname, join, resolve, sep } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 import { branchName } from '../../core/naming.js';
-import { execCmd, mustExec, type Exec } from '../exec.js';
-import type { InSandboxGit, StepDiff, Workspace, WorkspaceManager, WorkspaceRequest } from './types.js';
+import { execCmd, HARDENING, mustExec, type Exec } from '../exec.js';
+import { readCapped } from '../read-capped.js';
+import type { StepDiff, Workspace, WorkspaceManager, WorkspaceRequest } from './types.js';
 
 function assertSafe(id: string): void {
   if (/[\\/]/.test(id) || id.includes('..')) throw new Error(`Identifiant invalide : ${id}`);
@@ -26,18 +26,13 @@ const MAX_REFS_BYTES = 16 * 1024 * 1024;
  * the way, never a link itself, never a FIFO that would hold the daemon, never more than the cap. Whatever else it is, it reads as absent.
  */
 function agentFile(gitDir: string, name: string): string | undefined {
-  let fd: number | undefined;
   try {
     const path = join(gitDir, name);
     if (!realpathSync(path).startsWith(realpathSync(gitDir) + sep)) return undefined;
-    // Undefined on Windows, where neither applies.
-    fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
-    const st = fstatSync(fd);
-    return st.isFile() && st.size <= MAX_REFS_BYTES ? readFileSync(fd, 'utf8') : undefined;
+    const read = readCapped(path, MAX_REFS_BYTES);
+    return read && read !== 'not a file' && !read.cut ? read.text : undefined;
   } catch {
     return undefined;
-  } finally {
-    if (fd !== undefined) closeSync(fd);
   }
 }
 
@@ -116,19 +111,18 @@ export class GitWorkspaces implements WorkspaceManager {
     const trunk = await originHead(this.exec, req.repoPath);
     let existing: string | undefined;
     let checkout = ['--no-track', '-b', branch, trunk];
-    const refs: string[] = [];
+    let local: string | undefined;
     // The forge first: an agent's commits reach it, never the repository's own branch, which can only lag behind.
     if (await has(`refs/remotes/origin/${branch}`)) {
       existing = `refs/remotes/origin/${branch}`;
       checkout = ['-b', branch, `origin/${branch}`];
     } else if (await has(`refs/heads/${branch}`)) {
-      existing = `refs/heads/${branch}`;
-      refs.push(`+${existing}:${existing}`);
+      existing = local = `refs/heads/${branch}`;
       checkout = [branch];
     }
     // On a branch that already existed: only its commits beyond the default branch count.
     const ahead = !!existing && (await this.git(req.repoPath, 'rev-list', '--count', `${trunk}..${existing}`)).trim() !== '0';
-    await this.agentRepository(req.repoPath, path, trunk, checkout, refs);
+    await this.agentRepository(req.repoPath, path, trunk, checkout, local);
     return { path, port, branch, fresh: true, ...(ahead ? { ahead } : {}) };
   }
 
@@ -136,30 +130,38 @@ export class GitWorkspaces implements WorkspaceManager {
    * The agent's own repository at `path`, its `.git` inside its worktree (ORC-317). Everything in it, config, hooks,
    * refs, the `.git` itself, is the agent's: the repository of `repo`, its config, its hooks and its refs, is never
    * mounted in a sandbox, so that git can go on running on it on the host. No git of the host runs in `path` afterwards:
-   * `agentHead` and `objects` read it as data, and what must happen in it happens in its sandbox.
+   * `agentHead` and `stepDiff` read it as data, and what git must do in it is done here, before any agent.
+   *
+   * Left out of its sparse checkout but for `.claude/CLAUDE.md`, which the factory reads as the
+   * repo's conventions (`readConventions`) and the session does not load (`--setting-sources ""`, ORC-128).
+   * The rest: the agent's session cannot load it, `git status`, `add -A`
+   * or `commit -a` neither see nor commit it as deleted, so a PR never drops the repo's `.claude/`, and a
+   * merge or rebase that changes it does not write it back (skip-worktree alone did). The index keeps it.
+   * `!/.claude/*`, not `!/.claude/`: git re-includes a file only if its parent directory is not excluded.
    *
    * Its objects are copied, not shared: a hard link would let the agent rewrite the factory's, and an alternate needs a
    * mount at the same path. What is fetched is what the forge has and the ticket's own branch, not another ticket's.
    * Made aside, then renamed: a daemon killed halfway leaves no directory the next launch would take for a worktree.
    */
-  private async agentRepository(repo: string, path: string, trunk: string, checkout: readonly string[], refs: readonly string[]): Promise<void> {
+  private async agentRepository(repo: string, path: string, trunk: string, checkout: readonly string[], localRef?: string): Promise<void> {
     const making = `${path}.new`;
     await rm(making, { recursive: true, force: true });
     mkdirSync(dirname(path), { recursive: true });
     // Nothing of an agent has run in it: the checkout runs no hook, as `--template=` left none, and reads the daemon's own config.
-    const here = (...args: string[]) => mustExec(this.exec, 'git', ['-c', `core.hooksPath=${devNull}`, '-c', 'core.fsmonitor=false', ...args]);
+    const here = (...args: string[]) => mustExec(this.exec, 'git', [...HARDENING.flatMap((c) => ['-c', c]), ...args]);
     try {
       await here('init', '--quiet', '--template=', making);
       const config = (await this.git(repo, 'config', '--local', '-z', '--list')).split('\0').filter(Boolean);
       for (const entry of config) {
         const at = entry.indexOf('\n');
-        const key = at < 0 ? entry : entry.slice(0, at);
-        if (at >= 0 && !NOT_INHERITED.test(key)) await here('-C', making, 'config', '--add', key, entry.slice(at + 1));
+        if (at < 0 || NOT_INHERITED.test(entry.slice(0, at))) continue;
+        await here('-C', making, 'config', '--add', entry.slice(0, at), entry.slice(at + 1));
       }
       // Resolved: it is read from `making`, and `repoPath` can be relative.
-      await here('-C', making, 'fetch', '--quiet', '--no-tags', '--', resolve(repo), '+refs/remotes/origin/*:refs/remotes/origin/*', '+refs/tags/*:refs/tags/*', ...refs);
+      await here('-C', making, 'fetch', '--quiet', '--no-tags', '--', resolve(repo), '+refs/remotes/origin/*:refs/remotes/origin/*', '+refs/tags/*:refs/tags/*', ...(localRef ? [`+${localRef}:${localRef}`] : []));
       await here('-C', making, 'symbolic-ref', 'refs/remotes/origin/HEAD', `refs/remotes/${trunk}`);
       await here('-C', making, 'checkout', '--quiet', ...checkout);
+      await here('-C', making, 'sparse-checkout', 'set', '--no-cone', '/*', '!/.claude/*', '/.claude/CLAUDE.md');
       renameSync(making, path);
     } catch (err) {
       await rm(making, { recursive: true, force: true });
@@ -173,7 +175,7 @@ export class GitWorkspaces implements WorkspaceManager {
     const path = join(this.o.root, req.projectId, '_trunk', req.runId);
     await this.git(req.repoPath, 'fetch', 'origin');
     const ref = await originHead(this.exec, req.repoPath);
-    await this.agentRepository(req.repoPath, path, ref, ['--detach', ref], []);
+    await this.agentRepository(req.repoPath, path, ref, ['--detach', ref]);
     return { path };
   }
 
@@ -184,20 +186,22 @@ export class GitWorkspaces implements WorkspaceManager {
     const path = join(this.o.root, '_kb', req.runId);
     const branch = `learn/${req.ticketId.toLowerCase()}-${req.runId.slice(0, 8)}`;
     const trunk = await originHead(this.exec, kb);
-    await this.agentRepository(kb, path, trunk, ['-b', branch, trunk], []);
+    await this.agentRepository(kb, path, trunk, ['-b', branch, trunk]);
     return { path, branch };
   }
 
   /** No git here: its `.git` goes with it, the commits it did not push too. */
-  async cleanup(projectId: string, _repoPath: string, ticketId: string): Promise<void> {
+  async cleanup(projectId: string, ticketId: string): Promise<void> {
     assertSafe(projectId);
     assertSafe(ticketId);
     await rm(join(this.o.root, projectId, ticketId), { recursive: true, force: true });
   }
 
-  /** By where it is, not by what the workflow says now of the job: a ticket's worktree holds its unpushed commits, and is never this. */
-  async release(path: string): Promise<void> {
-    if (basename(dirname(path)) === '_trunk') await rm(path, { recursive: true, force: true });
+  /** By its project and its run, whatever the workflow says now of the job: it cannot name a ticket's worktree, which holds unpushed commits. */
+  async release(projectId: string, runId: string): Promise<void> {
+    assertSafe(projectId);
+    assertSafe(runId);
+    await rm(join(this.o.root, projectId, '_trunk', runId), { recursive: true, force: true });
   }
 
   async head(path: string): Promise<string | undefined> {
@@ -244,23 +248,10 @@ export class GitWorkspaces implements WorkspaceManager {
   }
 
   /**
-   * Left out of the worktree's sparse checkout but for `.claude/CLAUDE.md`, which the factory reads as the
-   * repo's conventions (`readConventions`) and the session does not load (`--setting-sources ""`, ORC-128).
-   * The rest: the agent's session cannot load it, `git status`, `add -A`
-   * or `commit -a` neither see nor commit it as deleted, so a PR never drops the repo's `.claude/`, and a
-   * merge or rebase that changes it does not write it back (skip-worktree alone did). The index keeps it.
-   * The rm takes what the checkout does not own (an untracked settings.local.json).
-   * `!/.claude/*`, not `!/.claude/`: git re-includes a file only if its parent directory is not excluded.
-   * With sandboxes, git runs in the attempt's (`inSandbox`, ORC-317). A `.claude` that is a link goes, not what it names.
+   * What the sparse checkout (`agentRepository`) does not own: an untracked settings.local.json, what a setup or an
+   * agent wrote, what an agent brought back. No git here. A `.claude` that is a link goes, not what it names.
    */
-  async resetClaudeDir(path: string, inSandbox?: InSandboxGit): Promise<void> {
-    const args = ['sparse-checkout', 'set', '--no-cone', '/*', '!/.claude/*', '/.claude/CLAUDE.md'];
-    if (inSandbox) {
-      const r = await inSandbox(...args);
-      if (r.code !== 0) throw new Error(`git sparse-checkout (sandbox) : ${r.stderr.trim()}`);
-    } else {
-      await this.git(path, ...args);
-    }
+  async resetClaudeDir(path: string): Promise<void> {
     const dir = join(path, '.claude');
     const entries = isDir(dir) ? readdirSync(dir) : [];
     if (!entries.includes('CLAUDE.md')) rmSync(dir, { recursive: true, force: true });

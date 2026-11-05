@@ -28,7 +28,7 @@ export interface CleanVerifyRequest {
   worktree: string;
   /** On the host, empty, and the caller's to remove: where the engine can mount from. */
   workDir: string;
-  /** Where the base branch is read, not the refs of the repository, which the agent can write. */
+  /** Where the base branch is read: on the forge, not on the refs of a local repository. */
   originUrl: string;
   /** The workflow's, the factory's own (`jobs.<job>.verify`, `workspace.setup`): what `.factory/config.yml` does not declare, until ORC-177. */
   setup: readonly string[];

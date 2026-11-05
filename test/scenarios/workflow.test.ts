@@ -279,7 +279,7 @@ describe('standard workflow', () => {
     h.runner.enqueue({ events: [{ kind: 'text', text: 'Dans src/scores/history.ts.' }] });
     await h.send('session.mentioned', { linearSessionId: 'ls-9', body: 'où est calculé le score ?', author: 'L' });
     const r = h.runner.requests[0]!;
-    expect(r).toMatchObject({ readOnly: true, cwd: '/tmp/factory-fake/p/_trunk' });
+    expect(r).toMatchObject({ readOnly: true, cwd: `/tmp/factory-fake/p/_trunk/${r.runId}` });
     expect(r.prompt).toContain('## Message\noù est calculé le score ?');
     expect(h.tracker.activities('ls-9').at(-1)).toEqual({ type: 'response', body: 'Dans src/scores/history.ts.' });
     expect(await h.ticket()).toMatchObject({ logical: 'todo', blocked: false });
@@ -311,7 +311,7 @@ describe('standard workflow', () => {
       await h.advance(600_000);
       expect(h.runner.requests).toHaveLength(2);
       const r = h.runner.requests[1]!;
-      expect(r).toMatchObject({ readOnly: true, cwd: '/tmp/factory-fake/p/_trunk' });
+      expect(r).toMatchObject({ readOnly: true, cwd: `/tmp/factory-fake/p/_trunk/${r.runId}` });
       expect(r.prompt.startsWith('/factory:ask\n')).toBe(true);
       expect(r.prompt).toContain('et pourquoi ?');
       expect(h.tracker.activities('ls-9').at(-1)).toEqual({ type: 'response', body: 'Parce que.' });

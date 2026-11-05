@@ -47,8 +47,6 @@ describe('a disposable sandbox per attempt', () => {
     // ORC-284: the ticket's session dir as Claude's whole config dir, no auto-memory, no telemetry; the repo's .claude/ hidden.
     expect(h.runner.requests[0]!.env).toMatchObject({ CLAUDE_CONFIG_DIR: `${SANDBOX_HOME}/.claude`, ...RUN_FLAGS });
     expect(h.workspaces.resetClaude).toEqual(['/tmp/factory-fake/p/REL-1']);
-    // Git in that repository runs in its sandbox, never on the host (ORC-317).
-    expect(h.workspaces.resetInSandbox).toEqual(['/tmp/factory-fake/p/REL-1']);
     expect(h.sandboxes.destroyed).toEqual(['sbx-1']);
     expect(h.sandboxes.active()).toEqual([]);
     expect(await h.ticket()).toMatchObject({ logical: 'human_review', blocked: false });
@@ -68,7 +66,7 @@ describe('a disposable sandbox per attempt', () => {
     await h.send('session.mentioned', { linearSessionId: 'ls-9', body: 'où est calculé le score ?', author: 'L' }, 'REL-2');
     expect(h.runner.requests.at(-1)).toMatchObject({ readOnly: true });
     expect(releasedAtDestroy).toEqual([[]]);
-    expect(h.workspaces.released).toEqual(['/tmp/factory-fake/p/_trunk']);
+    expect(h.workspaces.released).toEqual([`/tmp/factory-fake/p/_trunk/${h.runner.requests.at(-1)!.runId}`]);
   });
 
   it("gives a question's trunk back when its launch is cut short: nothing else would (ORC-317)", async () => {
@@ -79,7 +77,7 @@ describe('a disposable sandbox per attempt', () => {
     };
     await h.send('session.mentioned', { linearSessionId: 'ls-9', body: 'où est calculé le score ?', author: 'L' }, 'REL-2');
     expect(h.runner.requests).toEqual([]);
-    expect(h.workspaces.released).toEqual(['/tmp/factory-fake/p/_trunk']);
+    expect(h.workspaces.released).toEqual([`/tmp/factory-fake/p/_trunk/${h.workspaces.prepared.at(-1)!.runId}`]);
   });
 
   it('destroys the sandbox of a run that fails or is stopped', async () => {

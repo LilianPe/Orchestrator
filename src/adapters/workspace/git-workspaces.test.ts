@@ -36,9 +36,9 @@ describe('GitWorkspaces', () => {
     const first = await ws.prepare(req(repo));
     expect(first.ahead).toBeUndefined();
     // Removed and made again on its branch, with no commit: as a setup that a crash cut.
-    await ws.cleanup('p', repo, 'REL-1');
+    await ws.cleanup('p', 'REL-1');
     expect((await ws.prepare(req(repo))).ahead).toBeUndefined();
-    await ws.cleanup('p', repo, 'REL-1');
+    await ws.cleanup('p', 'REL-1');
     // Pushed by a previous attempt: what the factory finds on the forge, as it no longer shares the agent's commits.
     git(repo, 'checkout', '-q', '-b', 'factory/rel-1-export-csv');
     git(repo, 'commit', '--allow-empty', '-m', 'the agent');
@@ -55,7 +55,7 @@ describe('GitWorkspaces', () => {
     expect(w).toEqual({ path: join(root, 'p', 'REL-1'), port: 4201, branch: 'factory/rel-1-export-csv', fresh: true });
     expect(git(w.path, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('factory/rel-1-export-csv');
     expect(await ws.prepare(req(repo))).toEqual({ ...w, fresh: undefined });
-    await ws.cleanup('p', repo, 'REL-1');
+    await ws.cleanup('p', 'REL-1');
     expect(existsSync(w.path)).toBe(false);
   });
 
@@ -117,7 +117,7 @@ describe('GitWorkspaces', () => {
     const trunk = await ws.prepare(req(repo, { kind: 'trunk-readonly' }));
     expect(trunk).toEqual({ path: join(root, 'p', '_trunk', 'abcdef123456') });
     expect(git(trunk.path, 'rev-parse', 'HEAD')).toBe(git(repo, 'rev-parse', 'origin/main'));
-    await ws.release(trunk.path);
+    await ws.release('p', 'abcdef123456');
     expect(existsSync(trunk.path)).toBe(false);
     const k = await ws.prepare(req(repo, { kind: 'knowledge' }));
     expect(k).toEqual({ path: join(root, '_kb', 'abcdef123456'), branch: 'learn/rel-1-abcdef12' });
@@ -135,11 +135,12 @@ describe('GitWorkspaces', () => {
     expect(existsSync(join(one.path, 'left-by-one'))).toBe(true);
   });
 
-  it('releases a trunk and nothing else, whatever the workflow says of a job: a worktree holds its unpushed commits', async () => {
+  it('releases a trunk and nothing else: a worktree holds its unpushed commits, a project named as the trunk included', async () => {
     const { repo, root } = fixtureRepo();
     const ws = new GitWorkspaces({ root });
-    const w = await ws.prepare(req(repo));
-    await ws.release(w.path);
+    const w = await ws.prepare(req(repo, { projectId: '_trunk' }));
+    await ws.release('_trunk', 'REL-1');
+    await ws.release('_trunk', 'abcdef123456');
     expect(existsSync(w.path)).toBe(true);
   });
 
@@ -242,7 +243,7 @@ describe('GitWorkspaces', () => {
     expect(git(w.path, 'log', '-1', '--format=%s')).toBe('human, local only');
     expect(w.ahead).toBe(true);
     git(w.path, 'commit', '--allow-empty', '-m', 'the agent, unpushed');
-    await ws.cleanup('p', repo, 'REL-1');
+    await ws.cleanup('p', 'REL-1');
     const w2 = await ws.prepare(req(repo));
     expect(git(w2.path, 'log', '-1', '--format=%s')).toBe('human, local only');
   });
@@ -252,7 +253,7 @@ describe('GitWorkspaces', () => {
     const ws = new GitWorkspaces({ root });
     await ws.prepare(req(repo));
     const w2 = await ws.prepare(req(repo, { ticketId: 'REL-2', title: 'Other' }));
-    await ws.cleanup('p', repo, 'REL-1');
+    await ws.cleanup('p', 'REL-1');
     expect(existsSync(w2.path)).toBe(true);
   });
 
@@ -266,6 +267,9 @@ describe('GitWorkspaces', () => {
     git(repo, 'push');
     const ws = new GitWorkspaces({ root });
     const w = await ws.prepare(req(repo));
+    // Hidden from its creation: what a setup or an agent writes there goes at the next launch.
+    expect(existsSync(join(w.path, '.claude'))).toBe(false);
+    mkdirSync(join(w.path, '.claude'));
     writeFileSync(join(w.path, '.claude', 'settings.local.json'), '{}\n');
     await ws.resetClaudeDir(w.path);
     await ws.resetClaudeDir(w.path);
@@ -331,7 +335,7 @@ describe('GitWorkspaces', () => {
     const ws = new GitWorkspaces({ root });
     await expect(ws.prepare(req(repo, { ticketId: '../x' }))).rejects.toThrow('Identifiant invalide : ../x');
     await expect(ws.prepare(req(repo, { projectId: 'a/b' }))).rejects.toThrow('Identifiant invalide : a/b');
-    await expect(ws.cleanup('p', repo, '..')).rejects.toThrow('Identifiant invalide : ..');
-    await expect(ws.cleanup('a\\b', repo, 'REL-1')).rejects.toThrow('Identifiant invalide');
+    await expect(ws.cleanup('p', '..')).rejects.toThrow('Identifiant invalide : ..');
+    await expect(ws.cleanup('a\\b', 'REL-1')).rejects.toThrow('Identifiant invalide');
   });
 });

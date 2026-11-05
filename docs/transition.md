@@ -141,6 +141,7 @@ Le premier ticket cité est celui qui touche le module en premier ou le plus ; l
 | Module | Rôle | Statut | Ticket cible |
 |---|---|---|---|
 | `src/adapters/exec.ts` | `execCmd`, `mustExec` : sous-processus utilisé par git, `gh`, la base de connaissance, la CLI | garder | ORC-124 (son usage pour `gh` part avec la GitHub App ; git en garde besoin) |
+| `src/adapters/read-capped.ts` | `readCapped` : lecture bornée d'un fichier ordinaire qu'un agent a pu remplacer, sans suivre de lien ni attendre sur une FIFO ; journal de sécurité et dépôt de l'agent | garder | ORC-296, ORC-317 |
 | `src/adapters/roles/types.ts` | Ports des rôles (ORC-186) : `RoleResolver`, `TeamDirectory` (membres d'une équipe Linear), `RepoPermissions` (droit GitHub d'un utilisateur), `ProjectAuthz` (désignations de la configuration) | garder | ORC-186 (fait), ORC-209 (désignations lues de `.factory/config.yml`) |
 | `src/adapters/roles/cached.ts` | `CachedRoleResolver` : membres Linear et droits GitHub relus après `ROLES_TTL_MS` (60 s), mainteneurs, valideurs et logins GitHub de la configuration ; un échec n'est pas gardé | garder | ORC-186 (fait), ORC-209 |
 | `src/adapters/forge/types.ts` | Port `Forge` (`PrInfo` avec la tête et, mergée, le commit et l'heure du merge, ORC-278) ; `ForgeWriter`, ses écritures idempotentes (PR ouverte par branche, check run par `external_id`) | adapter | ORC-181 (port gardé, nouvelles opérations), ORC-124, ORC-162 (fait : `ForgeWriter`), ORC-186 (droit d'un utilisateur : port `RepoPermissions`, à part) |

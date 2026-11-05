@@ -6,7 +6,6 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { WORKSPACE_TARGET } from '../../src/adapters/sandbox/types.js';
 import { GitWorkspaces } from '../../src/adapters/workspace/git-workspaces.js';
 import { runCleanVerify, type CleanVerifyResult } from '../../src/core/clean-verify.js';
-import { sandboxGit } from '../../src/publish/extract.js';
 import { cli, enabled, useSandboxes } from './helpers.js';
 
 /**
@@ -170,10 +169,8 @@ describe.skipIf(!enabled)(`what an agent leaves in its git dir, under the factor
     await attempt('the next question: the trunk again', () => ws.prepare(ask({ kind: 'trunk-readonly', runId: 'bbbbbbbb2222' })));
     await attempt('the pointed ticket: its next launch', () => ws.prepare(ask({ ticketId: 'ISO-2', title: 'pointed' })));
     await attempt('the pointed ticket: its head', () => ws.head(pointed.path));
-    const next = await provider.create(request({ workspacePath: work, network: 'none' }));
-    await attempt('the hiding of .claude/ at the next launch, in its sandbox', () => ws.resetClaudeDir(work, sandboxGit(provider, next.id)));
-    await provider.destroy(next.id);
-    await attempt('the pointed ticket: the hiding of .claude/', () => ws.resetClaudeDir(pointed.path, async () => ({ stdout: '', stderr: '', code: 0 })));
+    await attempt('the hiding of .claude/ at the next launch', () => ws.resetClaudeDir(work));
+    await attempt('the pointed ticket: the hiding of .claude/', () => ws.resetClaudeDir(pointed.path));
 
     const workDir = join(base, 'verify');
     mkdirSync(workDir);
@@ -211,7 +208,7 @@ describe.skipIf(!enabled)(`what an agent leaves in its git dir, under the factor
   it('every command of the factory it could have poisoned was indeed run', () => {
     // A launch of the pointed ticket is refused: its `.git` is not the one it was given. Nothing else may fail.
     expect(attempts.filter((a) => a.error && a.name !== 'the pointed ticket: its next launch')).toEqual([]);
-    expect(attempts.map((a) => a.name)).toHaveLength(11);
+    expect(attempts).toHaveLength(11);
   });
 
   it('the factory reads its work, from objects it does not trust a config for', () => {
@@ -224,7 +221,7 @@ describe.skipIf(!enabled)(`what an agent leaves in its git dir, under the factor
     expect(verified).toMatchObject({ ok: true, failures: [], sha: head });
   });
 
-  it("the repository the factory reads has neither its config nor its hooks, and the hiding of .claude/ held in its sandbox", () => {
+  it('the repository the factory reads has neither its config nor its hooks, and .claude/ stayed hidden through its work', () => {
     expect(readFileSync(join(repo, '.git', 'config'), 'utf8')).not.toContain('fsmonitor');
     expect(readdirSync(join(repo, '.git', 'hooks')).filter((f) => !f.endsWith('.sample'))).toEqual([]);
     expect(existsSync(join(work, '.claude'))).toBe(false);

@@ -1,7 +1,7 @@
 import { existsSync, lstatSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { devNull, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { execCmd, mustExec, type Exec } from '../adapters/exec.js';
+import { execCmd, HARDENING, mustExec, type Exec } from '../adapters/exec.js';
 import type { SandboxProvider } from '../adapters/sandbox/types.js';
 
 /**
@@ -12,19 +12,11 @@ import type { SandboxProvider } from '../adapters/sandbox/types.js';
  */
 export const BUNDLE_TARGET = '/factory/bundle';
 const BUNDLE = 'work.bundle';
-/** No hook, no fsmonitor: on each host git command (`-c`), and in the clone's own config (`--config`). */
-export const HARDENING = [`core.hooksPath=${devNull}`, 'core.fsmonitor=false'];
+export { HARDENING };
 
 /** The sandbox's git, on the agent's repository: `devNull` is the host's, and the mount's owner may not be its user. */
 const SANDBOX_CONFIG = [['core.hooksPath', '/dev/null'], ['core.fsmonitor', 'false'], ['safe.directory', '*']] as const;
 export const IN_SANDBOX = SANDBOX_CONFIG.flatMap(([key, value]) => ['-c', `${key}=${value}`]);
-/**
- * Git of the factory in an agent's repository, in its sandbox (ORC-317). Under a cap: `SandboxProvider.exec` has none, and
- * a filter the agent left there, which this git still runs, could otherwise hold a launch for good.
- */
-export const sandboxGit = (sandboxes: Pick<SandboxProvider, 'exec'>, id: string) => (...args: string[]) =>
-  sandboxes.exec(id, ['timeout', '-k', '10', String(SANDBOX_GIT_TIMEOUT_S), 'git', ...IN_SANDBOX, ...args]);
-const SANDBOX_GIT_TIMEOUT_S = 120;
 /** The same, for a tool that runs git itself. */
 export const IN_SANDBOX_ENV: Record<string, string> = {
   GIT_CONFIG_COUNT: String(SANDBOX_CONFIG.length),

@@ -82,7 +82,7 @@ describe('makeRepoVariables (ORC-211)', () => {
 });
 
 describe('makeOriginUrl (ORC-151)', () => {
-  it('reads the URL once by process: what an agent writes in the repository config afterwards changes nothing', async () => {
+  it('reads the URL once by process: what changes in the repository config afterwards changes nothing', async () => {
     const urls = ['https://forge/real.git', 'https://evil/forged.git'];
     const exec = vi.fn(async () => ({ stdout: `${urls.shift()}\n`, stderr: '', code: 0 }));
     const url = makeOriginUrl({ exec });

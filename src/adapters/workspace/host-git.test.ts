@@ -12,7 +12,6 @@ import { execCmd } from '../exec.js';
 
 /**
  * ORC-317: what an agent leaves where it can write, then the factory's own git command on the host, then a witness.
- * Where the agent can write is read from its workspace, as a sandbox's mounts follow it: the git dir its `.git` names.
  * The sandbox itself is `test/isolation/host-git.test.ts`.
  */
 const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
@@ -44,7 +43,6 @@ function fixture() {
   const ws = new GitWorkspaces({ root });
   return {
     base,
-    origin,
     repo,
     root,
     ws,
@@ -68,8 +66,8 @@ const req = (repo: string, patch: object = {}) => ({
 });
 const other = { ticketId: 'REL-2', title: 'Other' };
 
-/** The git dir the agent's git writes: the agent's sandbox has it, whatever the layout. */
-const reach = (work: string) => git(work, 'rev-parse', '--path-format=absolute', '--git-common-dir');
+/** The git dir the agent's git writes. On the red commit of this test, it read the layout: the repository's own, shared. */
+const reach = (work: string) => join(work, '.git');
 const set = (gitDir: string, key: string, value: string) => execFileSync('git', ['config', '-f', join(gitDir, 'config'), key, value]);
 function hook(gitDir: string, name: string, command: string, dir = join(gitDir, 'hooks')): void {
   mkdirSync(dir, { recursive: true });
@@ -77,15 +75,13 @@ function hook(gitDir: string, name: string, command: string, dir = join(gitDir, 
   writeFileSync(path, `#!/bin/sh\n${command}\n`);
   chmodSync(path, 0o755);
 }
-/** In its sandbox, not on the host: a stand-in for `SandboxProvider.exec`. */
-const inBox = async () => ({ stdout: '', stderr: '', code: 0 });
-const reset = (f: Fixture, path: string) => f.ws.resetClaudeDir(path, inBox);
+const reset = (f: Fixture, path: string) => f.ws.resetClaudeDir(path);
 /** The attack may well make the command fail: only the witness says whether it ran. */
 const whatever = (work: Promise<unknown>) => work.catch(() => undefined);
 
 describe('what an agent wrote, under the commands the factory runs on the host (ORC-317)', () => {
   describe('hooks', () => {
-    it('post-checkout: a worktree added for another ticket', async () => {
+    it('post-checkout: the workspace of another ticket', async () => {
       const f = fixture();
       const { path } = await f.ws.prepare(req(f.repo));
       hook(reach(path), 'post-checkout', f.trap('post-checkout'));
@@ -93,7 +89,7 @@ describe('what an agent wrote, under the commands the factory runs on the host (
       expect(f.fired()).toEqual([]);
     });
 
-    it('post-checkout, under a hooksPath of the agent: a worktree added for another ticket', async () => {
+    it('post-checkout, under a hooksPath of the agent: the workspace of another ticket', async () => {
       const f = fixture();
       const { path } = await f.ws.prepare(req(f.repo));
       const hooks = join(path, 'my-hooks');
@@ -112,7 +108,7 @@ describe('what an agent wrote, under the commands the factory runs on the host (
       expect(f.fired()).toEqual([]);
     });
 
-    it('post-checkout: the trunk put back on the default branch for the next question', async () => {
+    it('post-checkout: the trunk of the next question', async () => {
       const f = fixture();
       const { path } = await f.ws.prepare(req(f.repo, { kind: 'trunk-readonly' }));
       hook(reach(path), 'post-checkout', f.trap('trunk'));
@@ -221,7 +217,7 @@ describe('what an agent wrote, under the commands the factory runs on the host (
       expect(f.fired()).toEqual([]);
     });
 
-    it('a smudge filter, on every file by info/attributes: a worktree added for another ticket', async () => {
+    it('a smudge filter, on every file by info/attributes: the workspace of another ticket', async () => {
       const f = fixture();
       const { path } = await f.ws.prepare(req(f.repo));
       set(reach(path), 'filter.x.smudge', f.trap('smudge'));
@@ -231,17 +227,6 @@ describe('what an agent wrote, under the commands the factory runs on the host (
       expect(f.fired()).toEqual([]);
     });
 
-    it('a smudge filter: the trunk put back for the next question', async () => {
-      const f = fixture();
-      const { path } = await f.ws.prepare(req(f.repo, { kind: 'trunk-readonly' }));
-      set(reach(path), 'filter.x.smudge', f.trap('trunk-smudge'));
-      mkdirSync(join(reach(path), 'info'), { recursive: true });
-      writeFileSync(join(reach(path), 'info', 'attributes'), '* filter=x\n');
-      // The file comes back only if the checkout has to write it.
-      rmSync(join(path, 'README.md'));
-      await whatever(f.ws.prepare(req(f.repo, { kind: 'trunk-readonly', runId: 'fedcba654321' })));
-      expect(f.fired()).toEqual([]);
-    });
   });
 
   describe("the worktree's own .git, which the agent also writes", () => {
@@ -415,7 +400,7 @@ describe('what an agent wrote, under the commands the factory runs on the host (
       const f = fixture();
       const { path } = await f.ws.prepare(req(f.repo));
       planted(f, reach(path));
-      await f.ws.cleanup('p', f.repo, 'REL-1');
+      await f.ws.cleanup('p', 'REL-1');
       expect(f.fired()).toEqual([]);
     });
   });
