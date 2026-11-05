@@ -1,5 +1,5 @@
 import type { ExecResult } from '../exec.js';
-import type { Sandbox, SandboxExecOptions, SandboxProvider, SandboxRequest } from './types.js';
+import type { Sandbox, SandboxExecOptions, SandboxProvider, SandboxRequest, SpawnCommand } from './types.js';
 
 export class FakeSandboxProvider implements SandboxProvider {
   created: SandboxRequest[] = [];
@@ -27,9 +27,9 @@ export class FakeSandboxProvider implements SandboxProvider {
   }
 
   /** Runs `argv` on the host as is: the fake isolates nothing. */
-  spawnCommand(id: string, argv: readonly string[]): string[] {
+  spawnCommand(id: string, argv: readonly string[], opts?: SandboxExecOptions): SpawnCommand {
     this.known(id);
-    return [...argv];
+    return { command: [...argv], env: opts?.env ?? {} };
   }
 
   async findByAttempt(runId: string): Promise<Sandbox | undefined> {

@@ -244,13 +244,46 @@ describe('ContainerSandboxProvider.create', () => {
 describe('ContainerSandboxProvider.exec', () => {
   const live = (a: string[]) => (a[0] === 'inspect' ? ok(inspectLine('c1', true, 'r1', 'none')) : ok('out'));
 
-  it('runs argv in the container, env named on the command line and valued in the environment', async () => {
+  it('runs argv in the container, its env under neutral names on the command line and valued in the environment', async () => {
     const e = engine(live);
     const p = new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: e.exec });
     expect(await p.exec('c1', ['npm', 'ci'], { cwd: '/work/sub', env: { TOKEN: 's3cr3t' } })).toEqual(ok('out'));
     const call = e.calls.find((c) => c.args[0] === 'exec')!;
-    expect(call.args).toEqual(['exec', '-w', '/work/sub', '-e', 'TOKEN', 'c1', 'npm', 'ci']);
-    expect(call.env).toEqual({ TOKEN: 's3cr3t' });
+    expect(call.args).toEqual([
+      'exec', '-w', '/work/sub', '-e', 'FACTORY_SANDBOX_ENV_0', 'c1',
+      'sh', '-c', 'export TOKEN="$FACTORY_SANDBOX_ENV_0"; unset FACTORY_SANDBOX_ENV_0; exec "$@"', 'sh', 'npm', 'ci',
+    ]);
+    expect(call.env).toEqual({ FACTORY_SANDBOX_ENV_0: 's3cr3t' });
+  });
+
+  /** What the engines read on the host, measured on Podman 5.8: each of them moves its storage or its target, or fails it. */
+  const READ_BY_THE_ENGINE = ['HOME', 'PATH', 'TMPDIR', 'XDG_DATA_HOME', 'XDG_RUNTIME_DIR', 'XDG_CONFIG_HOME', 'DOCKER_HOST', 'DOCKER_CONFIG', 'CONTAINER_HOST', 'CONTAINER_CONNECTION', 'CONTAINERS_CONF', 'CONTAINERS_STORAGE_CONF', 'LD_PRELOAD'];
+
+  it.each(READ_BY_THE_ENGINE)('never hands %s to the engine CLI, whatever the container is given', async (name) => {
+    const e = engine(live);
+    const p = new ContainerSandboxProvider({ ...opts, cli: 'podman', exec: e.exec });
+    await p.exec('c1', ['true'], { env: { [name]: '/moved' } });
+    const call = e.calls.find((c) => c.args[1] === 'exec')!;
+    expect(Object.keys(call.env!)).not.toContain(name);
+    expect(call.args).not.toContain(name);
+    // The command in the container gets it under its own name.
+    expect(call.args.join(' ')).toContain(`export ${name}="$FACTORY_SANDBOX_ENV_0"`);
+  });
+
+  it('never puts a value on the command line, the whole of a setup env included', async () => {
+    const e = engine(live);
+    const p = new ContainerSandboxProvider({ ...opts, cli: 'podman', exec: e.exec });
+    await p.exec('c1', ['true'], { env: { HOME: '/tmp/setup-home', NPM_TOKEN: 'npm-s3cr3t', MULTI: 'line "one"\n$two' } });
+    const call = e.calls.find((c) => c.args[1] === 'exec')!;
+    for (const value of ['/tmp/setup-home', 'npm-s3cr3t', 'line']) expect(call.args.join(' ')).not.toContain(value);
+    expect(Object.values(call.env!)).toEqual(['/tmp/setup-home', 'npm-s3cr3t', 'line "one"\n$two']);
+  });
+
+  it.each(['A=B', 'A B', 'A;touch /x', '$(id)', '1A', ''])('refuses the name %j, which would land in the shell of the container', async (name) => {
+    const e = engine(live);
+    const p = new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: e.exec });
+    await expect(p.exec('c1', ['true'], { env: { [name]: 'v' } })).rejects.toThrow(/variable/);
+    expect(e.calls.some((c) => c.args[0] === 'exec')).toBe(false);
   });
 
   it('defaults cwd to the workspace and returns a non-zero exit as a result', async () => {
@@ -280,11 +313,32 @@ describe('ContainerSandboxProvider.spawnCommand', () => {
     const p = new ContainerSandboxProvider({ ...opts, cli: 'podman', exec: e.exec });
     expect(() => p.spawnCommand('c1', ['true'])).toThrow(/unknown sandbox/);
     await p.create(req());
-    expect(p.spawnCommand('c1', ['claude', '-p', 'hi'], { env: { CLAUDE_CODE_OAUTH_TOKEN: 'secret', A: 'b' } })).toEqual([
-      'podman', QUIET, 'exec', '-i', '-w', '/work', '-e', 'CLAUDE_CODE_OAUTH_TOKEN', '-e', 'A', 'c1', 'claude', '-p', 'hi',
-    ]);
+    expect(p.spawnCommand('c1', ['claude', '-p', 'hi'], { env: { CLAUDE_CODE_OAUTH_TOKEN: 'secret', A: 'b' } })).toEqual({
+      command: [
+        'podman', QUIET, 'exec', '-i', '-w', '/work', '-e', 'FACTORY_SANDBOX_ENV_0', '-e', 'FACTORY_SANDBOX_ENV_1', 'c1',
+        'sh', '-c', 'export CLAUDE_CODE_OAUTH_TOKEN="$FACTORY_SANDBOX_ENV_0" A="$FACTORY_SANDBOX_ENV_1"; unset FACTORY_SANDBOX_ENV_0 FACTORY_SANDBOX_ENV_1; exec "$@"', 'sh', 'claude', '-p', 'hi',
+      ],
+      env: { FACTORY_SANDBOX_ENV_0: 'secret', FACTORY_SANDBOX_ENV_1: 'b' },
+    });
     await p.destroy('c1');
     expect(() => p.spawnCommand('c1', ['true'])).toThrow(/unknown sandbox/);
+  });
+
+  it('adds no wrapper to a command with no env', async () => {
+    const e = engine((x) => ok(x[0] === 'run' ? 'c1\n' : ''));
+    const p = new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: e.exec });
+    await p.create(req());
+    expect(p.spawnCommand('c1', ['true'])).toEqual({ command: ['docker', 'exec', '-i', '-w', '/work', 'c1', 'true'], env: {} });
+  });
+
+  it('gives the caller nothing the engine reads, whatever the container is given', async () => {
+    const e = engine((x) => ok(x[0] === 'run' ? 'c1\n' : ''));
+    const p = new ContainerSandboxProvider({ ...opts, cli: 'podman', exec: e.exec });
+    await p.create(req());
+    const { command, env } = p.spawnCommand('c1', ['claude'], { env: { HOME: '/moved', XDG_RUNTIME_DIR: '/moved', CONTAINER_HOST: 'tcp://evil:1' } });
+    expect(Object.keys(env)).toEqual(['FACTORY_SANDBOX_ENV_0', 'FACTORY_SANDBOX_ENV_1', 'FACTORY_SANDBOX_ENV_2']);
+    expect(command.join(' ')).not.toContain('/moved');
+    expect(command.join(' ')).not.toContain('tcp://evil:1');
   });
 });
 

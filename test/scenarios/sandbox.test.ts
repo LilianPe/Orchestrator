@@ -7,6 +7,9 @@ import { createHarness, packDir } from '../helpers/harness.js';
 const RUN_FLAGS = { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1', DISABLE_TELEMETRY: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' };
 const SETUP = 'version: 1\nworkspace:\n  setup: ["npm ci"]\n  ports: { base: 4200 }\n';
 
+/** The repository's own setup commands, without the rc file of Yarn 1 that comes before them. */
+const setups = (h: ReturnType<typeof createHarness>) => h.sandboxes.execs.filter((e) => e.argv[0] === 'timeout');
+
 function delegate(h: ReturnType<typeof createHarness>) {
   h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
   return h.send('ticket.delegated', { linearSessionId: 'ls-1' });
@@ -52,20 +55,30 @@ describe('a disposable sandbox per attempt', () => {
     expect(h.sandboxes.active()).toEqual([]);
   });
 
-  it('runs setup in the sandbox of a fresh worktree only', async () => {
+  it('runs setup in a sandbox of its own, gone before the agent gets its, for a fresh worktree only (ORC-211)', async () => {
     const h = createHarness({ sandboxed: true, projectYaml: SETUP });
+    const create = h.sandboxes.create.bind(h.sandboxes);
+    const aliveAtCreate: string[][] = [];
+    h.sandboxes.create = async (req) => {
+      aliveAtCreate.push(h.sandboxes.active().map((s) => s.id));
+      return create(req);
+    };
     await delegate(h);
-    expect(h.sandboxes.execs).toEqual([{ id: 'sbx-1', argv: ['timeout', '900', 'bash', '-lc', 'npm ci'] }]);
+    expect(setups(h)).toMatchObject([{ id: 'sbx-1', argv: ['timeout', '900', 'bash', '-lc', 'npm ci'] }]);
+    const runId = h.runner.requests[0]!.runId;
+    expect(h.sandboxes.created.map((c) => c.runId)).toEqual([`${runId}-setup`, runId]);
+    expect(aliveAtCreate).toEqual([[], []]);
+    expect(h.runner.requests[0]).toMatchObject({ sandboxId: 'sbx-2' });
     expect(h.checks.calls.some((c) => c.commands.includes('npm ci'))).toBe(false);
     await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'reprends', author: 'L' });
     await h.advance(600_000);
     expect(h.runner.requests).toHaveLength(2);
-    expect(h.sandboxes.execs).toHaveLength(1);
+    expect(setups(h)).toHaveLength(1);
   });
 
   it('a failed setup destroys the sandbox, removes the worktree and blocks the ticket, without a run', async () => {
     const h = createHarness({ sandboxed: true, projectYaml: SETUP });
-    h.sandboxes.execResult = () => ({ stdout: '', stderr: 'boom', code: 1 });
+    h.sandboxes.execResult = (argv) => ({ stdout: '', stderr: 'boom', code: argv[0] === 'timeout' ? 1 : 0 });
     await delegate(h);
     expect(h.runner.requests).toEqual([]);
     expect(h.sandboxes.active()).toEqual([]);
@@ -76,7 +89,7 @@ describe('a disposable sandbox per attempt', () => {
 
   it('a setup command over the verify timeout fails the setup as a timeout', async () => {
     const h = createHarness({ sandboxed: true, projectYaml: SETUP });
-    h.sandboxes.execResult = () => ({ stdout: '', stderr: '', code: 124 });
+    h.sandboxes.execResult = (argv) => ({ stdout: '', stderr: '', code: argv[0] === 'timeout' ? 124 : 0 });
     await delegate(h);
     expect(h.runner.requests).toEqual([]);
     expect(h.workspaces.cleaned).toEqual(['REL-1']);
@@ -106,7 +119,7 @@ describe('a disposable sandbox per attempt', () => {
     await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'reprends', author: 'L' });
     await h.advance(600_000);
     expect(h.runner.requests).toHaveLength(1);
-    expect(h.sandboxes.execs.map((e) => e.argv.at(-1))).toEqual(['npm ci']);
+    expect(setups(h).map((e) => e.argv.at(-1))).toEqual(['npm ci']);
   });
 
   it('opens no sandbox for a launch that ends before its run, and removes the fresh worktree it did not set up', async () => {
@@ -129,6 +142,110 @@ describe('a disposable sandbox per attempt', () => {
     expect(h.runner.requests[0]!.env).toMatchObject(RUN_FLAGS);
     expect(h.runner.requests[0]!.env).not.toHaveProperty('CLAUDE_CONFIG_DIR');
     expect(h.workspaces.resetClaude).toEqual(['/tmp/factory-fake/p/REL-1']);
+  });
+
+  describe('the repository variables and secrets (ORC-211)', () => {
+    const VARS = { env: { NODE_ENV: 'test' }, setupSecrets: { REGISTRY_TOKEN: 'registry-secret' }, missing: [] };
+    const repoVariables = async () => VARS;
+
+    it('gives the setup the secrets, and the agent only the declared variables', async () => {
+      const h = createHarness({ sandboxed: true, projectYaml: SETUP, repoVariables });
+      await delegate(h);
+      expect(setups(h)[0]!.opts!.env).toMatchObject({ NODE_ENV: 'test', REGISTRY_TOKEN: 'registry-secret', npm_config_ignore_scripts: 'true' });
+      const env = h.runner.requests[0]!.env;
+      expect(env).toMatchObject({ NODE_ENV: 'test' });
+      expect(env).not.toHaveProperty('REGISTRY_TOKEN');
+      expect(Object.values(env)).not.toContain('registry-secret');
+    });
+
+    it('a run variable of the factory wins over a variable of the repository', async () => {
+      const h = createHarness({ sandboxed: true, repoVariables: async () => ({ env: { FACTORY_RUN_TOKEN: 'from-the-repo' }, setupSecrets: {}, missing: [] }) });
+      await delegate(h);
+      expect(h.runner.requests[0]!.env['FACTORY_RUN_TOKEN']).not.toBe('from-the-repo');
+    });
+
+    it('no secret mounted for the setup: its sandbox has the git dir alone, read-only', async () => {
+      const h = createHarness({ sandboxed: true, projectYaml: SETUP, repoVariables });
+      await delegate(h);
+      expect(h.sandboxes.created[0]!.mounts).toEqual([{ host: '/repo/.git', target: '/repo/.git', readOnly: true }]);
+    });
+
+    it('a setup that fails with secrets removes the worktree and starts no run', async () => {
+      const h = createHarness({ sandboxed: true, projectYaml: SETUP, repoVariables });
+      h.sandboxes.execResult = () => ({ stdout: '', stderr: 'boom', code: 1 });
+      await delegate(h);
+      expect(h.runner.requests).toEqual([]);
+      expect(h.sandboxes.active()).toEqual([]);
+      expect(h.workspaces.cleaned).toEqual(['REL-1']);
+    });
+
+    it('a setup whose container cannot be destroyed starts no run: a process could still write the secret', async () => {
+      const h = createHarness({ sandboxed: true, projectYaml: SETUP, repoVariables });
+      h.sandboxes.destroy = async () => Promise.reject(new Error('engine down'));
+      await delegate(h);
+      expect(h.runner.requests).toEqual([]);
+      expect(await h.ticket()).toMatchObject({ blocked: true });
+    });
+
+    it.each([
+      ['the secrets are still declared', VARS],
+      // Sealing again could not find a value it no longer knows: only a new worktree is sure.
+      ['the secrets are gone from the configuration', { env: {}, setupSecrets: {}, missing: [] }],
+    ])('a worktree whose setup a crash cut is removed and made anew, when %s', async (_, after) => {
+      let declared = VARS as typeof after;
+      const h = createHarness({ sandboxed: true, projectYaml: SETUP, repoVariables: async () => declared });
+      await delegate(h);
+      expect(setups(h)).toHaveLength(1);
+      expect(h.workspaces.cleaned).toEqual([]);
+      // The mark a daemon killed between the setup's start and its seal leaves behind.
+      declared = after;
+      await h.store.setMeta('setup-pending:/tmp/factory-fake/p/REL-1', '1');
+      await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'reprends', author: 'L' });
+      await h.advance(600_000);
+      expect(h.workspaces.cleaned).toEqual(['REL-1']);
+      expect(setups(h)).toHaveLength(2);
+      expect(await h.store.getMeta('setup-pending:/tmp/factory-fake/p/REL-1')).toBe('');
+      // Sealed: the next run does not set up again.
+      await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'encore', author: 'L' });
+      await h.advance(600_000);
+      expect(setups(h)).toHaveLength(2);
+    });
+
+    it('withholds the secrets from a setup on commits a previous agent wrote, and says so', async () => {
+      const h = createHarness({ sandboxed: true, projectYaml: SETUP, repoVariables });
+      h.workspaces.ahead.add('REL-1');
+      await delegate(h);
+      expect(setups(h)[0]!.opts!.env).toMatchObject({ NODE_ENV: 'test' });
+      expect(setups(h)[0]!.opts!.env).not.toHaveProperty('REGISTRY_TOKEN');
+      expect(h.logs.map((l) => l.message).join()).toContain('withheld');
+    });
+
+    it('marks the worktree while its setup runs, with or without a secret, and lifts the mark at its end', async () => {
+      const h = createHarness({ sandboxed: true, projectYaml: SETUP });
+      let during: string | undefined;
+      const exec = h.sandboxes.exec.bind(h.sandboxes);
+      h.sandboxes.exec = async (id, argv, opts) => {
+        during ??= await h.store.getMeta('setup-pending:/tmp/factory-fake/p/REL-1');
+        return exec(id, argv, opts);
+      };
+      await delegate(h);
+      expect(during).toBe('1');
+      expect(await h.store.getMeta('setup-pending:/tmp/factory-fake/p/REL-1')).toBe('');
+    });
+
+    it('a reading of the variables that fails leaves the run without them', async () => {
+      const h = createHarness({ sandboxed: true, repoVariables: async () => Promise.reject(new Error('git down')) });
+      await delegate(h);
+      expect(h.runner.requests).toHaveLength(1);
+      expect(h.runner.requests[0]!.env).not.toHaveProperty('NODE_ENV');
+    });
+
+    it('never gives the secrets to a setup on the host, without a sandbox', async () => {
+      const h = createHarness({ projectYaml: SETUP, repoVariables });
+      await delegate(h);
+      expect(h.checks.calls[0]).toEqual({ cwd: '/tmp/factory-fake/p/REL-1', commands: ['npm ci'] });
+      expect(Object.values(h.runner.requests[0]!.env)).not.toContain('registry-secret');
+    });
   });
 
   it('recover destroys the sandboxes of attempts that are no longer running', async () => {

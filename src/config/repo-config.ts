@@ -1,5 +1,6 @@
 import { parse } from 'yaml';
 import { z } from 'zod';
+import { SECRET_NAME } from '../adapters/runner/transcript.js';
 import type { NetworkLevel } from '../adapters/sandbox/types.js';
 import { MaxDiffConfigError, resolveMaxDiff, type MaxDiff } from '../checks/diff-size.js';
 
@@ -12,6 +13,10 @@ export interface RepoConfig {
   extends: typeof PRESET;
   setup?: string;
   commands: Record<string, string>;
+  /** Names of the variables the runner gets, setup and agent (ORC-211): the values are the server's (`factory.yml`), never here. */
+  env: string[];
+  /** Names of the secrets the `setup` alone gets, sealed before the agent starts (ORC-211). */
+  setupSecrets: string[];
   services: string[];
   sensitivePaths: string[];
   /** Paths the agent never writes: the socle's, which no configuration removes. */
@@ -47,8 +52,25 @@ export class RepoConfigError extends Error {
   }
 }
 
-const KEYS = ['extends', 'setup', 'commands', 'services', 'sensitive_paths', 'budgets', 'max_diff', 'feature_flags', 'visual_paths', 'network'];
+const KEYS = ['extends', 'setup', 'commands', 'env', 'setup_secrets', 'services', 'sensitive_paths', 'budgets', 'max_diff', 'feature_flags', 'visual_paths', 'network'];
 const strings = z.array(z.string().min(1));
+
+const VARIABLE = /^[A-Z][A-Z0-9_]*$/;
+/**
+ * What a repository never hands the runner, whatever the server gives: the sandbox's egress and trust,
+ * what runs code in all its processes, the agent's identity, the factory's and the forge's own, and what
+ * the `setup` is hardened with (`setupEnv`).
+ */
+const RESERVED = new RegExp(
+  '^(' +
+    [
+      'HOME', 'USER', 'SHELL', 'PWD', 'PATH', 'PORT', 'ENV', 'BASH_ENV', 'LD_.*', 'NODE_OPTIONS', 'NODE_PATH', 'PYTHONPATH', 'PYTHONSTARTUP',
+      '(HTTP|HTTPS|ALL|NO|FTP)_PROXY', 'NODE_USE_ENV_PROXY', 'NODE_EXTRA_CA_CERTS', 'NODE_TLS_REJECT_UNAUTHORIZED', 'SSL_CERT_.*', 'CURL_CA_BUNDLE', 'REQUESTS_CA_BUNDLE',
+      'ANTHROPIC_.*', 'CLAUDE.*', 'DISABLE_TELEMETRY', 'FACTORY_.*', 'RELAIS_.*', 'LINEAR_.*', 'GH_.*', 'GITHUB_.*', 'GIT_.*', // RELAIS_ : transition, à retirer (ORC-167)
+      'NPM_CONFIG_.*', 'YARN_.*', 'PIP_.*', 'UV_.*',
+    ].join('|') +
+    ')$',
+);
 
 const at = (path: PropertyKey[]): string => path.map((p) => (typeof p === 'number' ? `[${p}]` : `.${String(p)}`)).join('');
 
@@ -80,6 +102,16 @@ export function parseRepoConfig(text: string | undefined): RepoConfig {
   }
   const setup = read('setup', z.string().min(1), 'une commande est attendue');
   const commands = read('commands', z.record(z.string(), z.string().min(1)), 'un objet `nom: commande` est attendu', 'une commande non vide est attendue');
+  const env = read('env', strings, 'un tableau de noms de variables est attendu', 'un nom de variable non vide est attendu');
+  const setupSecrets = read('setup_secrets', strings, 'un tableau de noms de variables est attendu', 'un nom de variable non vide est attendu');
+  for (const [key, names] of [['env', env], ['setup_secrets', setupSecrets]] as const) {
+    names?.forEach((name, i) => {
+      if (!VARIABLE.test(name)) violations.push(`${key}[${i}] : « ${name} » n’est pas un nom de variable (majuscules, chiffres, _)`);
+      else if (RESERVED.test(name)) violations.push(`${key}[${i}] : « ${name} » est réservé à l’usine`);
+      else if (key === 'env' && SECRET_NAME.test(name)) violations.push(`${key}[${i}] : « ${name} » a le nom d’un secret, que l’agent verrait ; un secret se déclare sous setup_secrets`);
+      else if (key === 'env' && setupSecrets?.includes(name)) violations.push(`${key}[${i}] : « ${name} » est aussi sous setup_secrets, que l’agent ne doit pas voir`);
+    });
+  }
   const services = read('services', strings, 'un tableau est attendu', 'un nom de service non vide est attendu');
   const sensitivePaths = read('sensitive_paths', strings, 'un tableau de chemins est attendu', 'un chemin non vide est attendu');
   const visualPaths = read('visual_paths', strings, 'un tableau de chemins est attendu', 'un chemin non vide est attendu');
@@ -105,6 +137,8 @@ export function parseRepoConfig(text: string | undefined): RepoConfig {
     extends: PRESET,
     ...(setup ? { setup } : {}),
     commands: commands ?? {},
+    env: env ?? [],
+    setupSecrets: setupSecrets ?? [],
     services: services ?? [],
     sensitivePaths: sensitivePaths ?? [],
     forbiddenPaths: [...SOCLE_FORBIDDEN_PATHS],
