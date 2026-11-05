@@ -109,6 +109,18 @@ describe('factory.yml (ORC-209, part B)', () => {
     expect(violations('repos: [{ linear_team: ORC, github: Orchestrator }]\n')).toEqual(['repos[0].github : `<org>/<dépôt>` attendu']);
   });
 
+  it('reads the threshold of the full-read refusal (ORC-279)', () => {
+    expect(parseFactoryYml('read_guard: { max_lines: 500 }', ENV).readGuard).toEqual({ maxLines: 500 });
+    expect(parseFactoryYml('concurrency: 1', ENV).readGuard).toBeUndefined();
+    expect(parseFactoryYml('read_guard: {}', ENV).readGuard).toBeUndefined();
+  });
+
+  it('refuses a threshold that is not a positive integer, and an unknown key of read_guard', () => {
+    for (const bad of ['0', '-1', '1.5', 'beaucoup']) expect(violations(`read_guard: { max_lines: ${bad} }`).join()).toContain('read_guard.max_lines');
+    expect(violations('read_guard: { lines: 500 }')).toContain('read_guard.lines : clé inconnue');
+    expect(violations('read_guard: 500')).toContain('read_guard : un objet est attendu');
+  });
+
   describe('the values of a repository (ORC-211)', () => {
     const env = { ...ENV, ORG_REGISTRY_TOKEN: 'registry-secret-1', API: 'https://api.exemple.com' };
 

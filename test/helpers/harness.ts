@@ -15,7 +15,7 @@ import type { Workflow } from '../../src/config/workflow-schema.js';
 import { EventBus } from '../../src/core/bus.js';
 import { FakeClock } from '../../src/core/clock.js';
 import type { RepoVariables } from '../../src/config/repo-variables.js';
-import { Orchestrator, type ProjectRuntime } from '../../src/core/orchestrator.js';
+import { Orchestrator, type OrchestratorDeps, type ProjectRuntime } from '../../src/core/orchestrator.js';
 import { devCapacity, Scheduler } from '../../src/core/scheduler.js';
 import { TimerService } from '../../src/runtime/timers.js';
 import type { EventPayloads, EventType, FactoryEvent, Taint } from '../../src/core/types.js';
@@ -183,6 +183,7 @@ export function createHarness(
     reconcile?: (project: ProjectRuntime) => Promise<void>;
     /** Runs in `sandboxes` (ORC-204), the ticket's session dirs in a temporary dir; on the host otherwise. */
     sandboxed?: boolean;
+    fullReadPaths?: OrchestratorDeps['fullReadPaths'];
     /** What the runner gets of the repository (ORC-211). */
     repoVariables?: (project: ProjectRuntime) => Promise<RepoVariables>;
   } = {},
@@ -253,6 +254,7 @@ export function createHarness(
     effectRetry: opts.effectRetry ?? { attempts: 1, baseMs: 1, capMs: 1 },
     // Each life resolves roles through its own adapters and keeps its own cache, as a process does.
     reconcile: opts.reconcile,
+    fullReadPaths: opts.fullReadPaths,
     repoVariables: opts.repoVariables,
     roles: authz && new CachedRoleResolver({ projects: (id) => (id === 'p' ? authz : undefined), team: gate(tracker), repo: outside.forge, now: () => clock.now() }),
   });

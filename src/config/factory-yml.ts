@@ -29,6 +29,8 @@ export interface FactoryYml {
    * `secrets` are the values of what the repository's `.factory/config.yml` declares (ORC-211).
    */
   repos?: { linearTeam: string; github: string; env?: Record<string, string>; secrets?: Record<string, string> }[];
+  /** Lines past which the pack's hook refuses a whole read (ORC-279); without it, the hook's own 350. */
+  readGuard?: { maxLines: number };
 }
 
 /** Sealing purges the files that hold a secret: a value this short would be found in many that do not. */
@@ -54,6 +56,7 @@ const SECTIONS: Record<string, string[]> = {
   concurrency: [],
   budgets: ['per_step_tokens', 'per_ticket_tokens', 'max_turns', 'on_usage_limit'],
   repos: [],
+  read_guard: ['max_lines'],
 };
 const effort = z.enum(['low', 'medium', 'high']);
 const counts = z.record(z.string(), z.number().int().positive());
@@ -204,6 +207,8 @@ export function parseFactoryYml(text: string, env: NodeJS.ProcessEnv = process.e
       return { linearTeam: repo.linear_team, github: repo.github, ...(repo.env ? { env: resolved('env') } : {}), ...(repo.secrets ? { secrets: resolved('secrets') } : {}) };
     });
   }
+  const maxLines = leaf('read_guard.max_lines', section('read_guard')?.['max_lines'], z.number().int().positive(), 'un entier positif est attendu');
+  if (maxLines !== undefined) out.readGuard = { maxLines };
 
   if (violations.length > 0) throw new FactoryYmlError(violations);
   return out;

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import type { Forge, ForgeWriter, MergeResult } from '../adapters/forge/types.js';
 import type { RoleResolver } from '../adapters/roles/types.js';
 import type { RunHandle, RunResult, Runner } from '../adapters/runner/types.js';
@@ -88,6 +88,17 @@ const setupPendingKey = (path: string): string => `setup-pending:${path}`;
  */
 export const CLAUDE_RUN_ENV = { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1', DISABLE_TELEMETRY: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' };
 
+/** Half of what Linux takes for one environment string (128 KiB): past it, the launch itself would fail. */
+const FULL_READ_ENV_MAX_BYTES = 64 * 1024;
+
+/** The pack hook's list of paths read whole, absolute as the run sees them. Throws past the bound: see `fullReadEnvOf`. */
+export function fullReadEnv(cwd: string, paths: readonly string[]): Record<string, string> {
+  if (paths.length === 0) return {};
+  const list = JSON.stringify(paths.map((path) => `${cwd}/${path}`));
+  if (Buffer.byteLength(list) > FULL_READ_ENV_MAX_BYTES) throw new Error(`${paths.length} paths: too long for the environment`);
+  return { FACTORY_FULL_READ_PATHS: list };
+}
+
 /**
  * The run's output, validated again: absent or invalid, the agent submitted none (ORC-289). A store
  * that cannot be read rejects: that is the infrastructure's, not the agent's.
@@ -166,6 +177,11 @@ export interface OrchestratorDeps {
   /** Other host paths every sandbox mounts (the factory's install, for `factory-agent`). */
   sandboxMounts?: readonly SandboxMount[];
   agentEnv: (run: RunRecord) => Record<string, string>;
+  /**
+   * Repository-relative paths a run of this ticket reads whole past the pack's read threshold (ORC-279): the frozen
+   * tests (ORC-131). ORC-212 will add the ticket's spec.
+   */
+  fullReadPaths?: (ticket: TicketState) => readonly string[];
   /** What the runner gets of the repository, at each launch (ORC-211). Absent: nothing. */
   repoVariables?: (project: ProjectRuntime, config?: RepoConfig) => Promise<RepoVariables>;
   /** Where a project's base branch is fetched (ORC-151): required with `sandboxes`. */
@@ -1800,6 +1816,7 @@ export class Orchestrator {
           ...this.d.agentEnv(run),
           // In a sandbox, the run's refusals log, on the host: it outlives the sandbox (ORC-217).
           ...(sandbox ? { FACTORY_REFUSALS_LOG: `${REFUSALS_TARGET}/refusals.jsonl` } : {}),
+          ...this.fullReadEnvOf(t, sandbox ? WORKSPACE_TARGET : resolve(ws.path)),
           ...(ws.port !== undefined ? { PORT: String(ws.port) } : {}),
           ...CLAUDE_RUN_ENV,
           // The ticket's session dir (out of the ticket session, the run's own) as Claude's whole config dir (ORC-128 point 4), login by the env
@@ -1821,6 +1838,16 @@ export class Orchestrator {
           .cleanup(project.id, project.repoPath, ticketId)
           .catch((err: Error) => this.log('warn', `worktree of ${ticketId} not removed after a launch that did not set it up: ${err.message}`));
       }
+    }
+  }
+
+  /** A saving of tokens, never a reason to block a ticket: whatever goes wrong, the run starts without the list. */
+  private fullReadEnvOf(t: TicketState, cwd: string): Record<string, string> {
+    try {
+      return fullReadEnv(cwd, this.d.fullReadPaths?.(t) ?? []);
+    } catch (err) {
+      this.log('warn', `no whole-read list for ${t.ticketId}: ${(err as Error).message}`);
+      return {};
     }
   }
 

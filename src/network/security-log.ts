@@ -16,6 +16,7 @@ export const REFUSAL_RULES = [
   'force-push',
   'push-trunk',
   'push',
+  'full-read',
 ] as const;
 
 /** Postgres text and jsonb refuse NUL: a line carrying one would fail the whole write. */
@@ -35,12 +36,12 @@ const egressLine = z.object({
   down: bytes,
 });
 
-/** A command is kept for the maintainers, capped: it may be long, and is never posted (it can hold a secret). */
+/** A command, or the path of a refused read, is kept for the maintainers, capped: it may be long, and is never posted (it can hold a secret). */
 const COMMAND_MAX = 2000;
 const refusalLine = (ticketId: string) =>
   z.object({
     at,
-    tool: z.enum(['Bash', 'WebSearch']),
+    tool: z.enum(['Bash', 'WebSearch', 'Read']),
     command: z
       .string()
       .refine((s) => !s.includes('\0'))

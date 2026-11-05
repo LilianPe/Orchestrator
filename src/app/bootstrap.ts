@@ -224,6 +224,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       roles,
       repoVariables: makeRepoVariables({ yml, log }),
       originUrl,
+      fullReadPaths: (t) => Object.keys(t.frozenTests?.files ?? {}),
       ...(sandboxes
         ? {
             sandboxes,
@@ -249,6 +250,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
         // Read by the pack's PreToolUse hook (ORC-285); the runner keeps every other FACTORY_* in the daemon.
         ...(env['FACTORY_DENY_PUSH'] === '1' ? { FACTORY_DENY_PUSH: '1' } : {}),
         ...(env['FACTORY_REFUSALS_LOG'] ? { FACTORY_REFUSALS_LOG: env['FACTORY_REFUSALS_LOG'] } : {}),
+        ...(yml?.readGuard ? { FACTORY_READ_MAX_LINES: String(yml.readGuard.maxLines) } : {}),
         ...(sandboxes
           ? {
               FACTORY_API: `http://${agentHostInSandbox}:${agentPort}/agent`,

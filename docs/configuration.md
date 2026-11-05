@@ -43,7 +43,7 @@ Les deux fichiers d'instance sont lus **au démarrage** de `relais up` : redéma
 
 Variables réservées aux tests (sans effet sur le démon) : `LINEAR_API_KEY` (test live des requêtes Linear), `FACTORY_E2E=1` (test du pack avec le vrai `claude`). Voir [`recette.md`](recette.md#vérifications-live-optionnelles).
 
-Variables **posées par Relais** dans l'environnement de chaque run (à ne pas définir vous-même) : `RELAIS_API`, `RELAIS_RUN_TOKEN`, `RELAIS_TICKET`, `RELAIS_KNOWLEDGE`, `RELAIS_ROOT`, `PATH`, `FACTORY_DENY_PUSH` quand le démon l'a à `1`, `FACTORY_REFUSALS_LOG` quand le démon l'a (en sandbox, toujours, vers le dossier du run) et, pour la file `dev`, `PORT`. Voir [« Ce qui ne sort pas du démon »](#ce-qui-ne-sort-pas-du-démon). Dans un conteneur, ces chemins sont ceux du conteneur : `RELAIS_ROOT=/factory/app` (le `bin/` de Relais et ce qu'il lui faut, montés en lecture seule), `RELAIS_KNOWLEDGE=/factory/knowledge` (en lecture seule), et un `PATH` propre au conteneur, jamais celui de l'hôte.
+Variables **posées par Relais** dans l'environnement de chaque run (à ne pas définir vous-même) : `RELAIS_API`, `RELAIS_RUN_TOKEN`, `RELAIS_TICKET`, `RELAIS_KNOWLEDGE`, `RELAIS_ROOT`, `PATH`, `FACTORY_DENY_PUSH` quand le démon l'a à `1`, `FACTORY_REFUSALS_LOG` quand le démon l'a (en sandbox, toujours, vers le dossier du run), `FACTORY_READ_MAX_LINES` quand `factory.yml` déclare `read_guard.max_lines`, `FACTORY_FULL_READ_PATHS` quand un fichier doit être lu en entier et, pour la file `dev`, `PORT`. Voir [« Ce qui ne sort pas du démon »](#ce-qui-ne-sort-pas-du-démon). Dans un conteneur, ces chemins sont ceux du conteneur : `RELAIS_ROOT=/factory/app` (le `bin/` de Relais et ce qu'il lui faut, montés en lecture seule), `RELAIS_KNOWLEDGE=/factory/knowledge` (en lecture seule), et un `PATH` propre au conteneur, jamais celui de l'hôte.
 
 ## `config.yaml`
 
@@ -182,6 +182,7 @@ repos:
     github: LilianPe/Orchestrator
     env: { NODE_ENV: test }                 # les valeurs de ce que .factory/config.yml déclare sous env
     secrets: { NPM_TOKEN: env:ORC_NPM_TOKEN } # et sous setup_secrets : env:NOM seulement, 8 caractères au moins
+read_guard: { max_lines: 350 }
 ```
 
 | Section | Effet aujourd'hui |
@@ -192,6 +193,7 @@ repos:
 | `concurrency` | **Appliquée** (ORC-203) : capacité de la file `dev`, à la place de `limits.parallel_sessions` du workflow. La file `questions` garde `question_sessions`. |
 | `budgets` | Validée, pas encore lue : appliquée par ORC-216. |
 | `repos` | **`env` et `secrets` appliqués** (ORC-211), l'entrée étant trouvée par le remote `origin` du projet : voir [`configuration-depot.md`](configuration-depot.md#variables-et-secrets). Pour le reste, `projects[].repoPath` de `config.yaml` reste la copie de travail tant que le runner ne clone pas lui-même (ORC-204). |
+| `read_guard` | **Appliquée** : `max_lines` (entier positif, 350 sans cette clé) est le nombre de lignes au-delà duquel le hook du pack refuse une lecture complète ([ORC-279](pack-et-skills.md#lecture-complète-dun-gros-fichier)). Il compte à partir du prochain démarrage. |
 
 `factory.yml` n'est lu qu'à la lecture : `init` et l'écriture des jetons ne recopient jamais une de ses valeurs dans `config.yaml` ou `secrets.json`. Ses secrets sont masqués dans les transcripts des runs, comme ceux de `secrets.json`.
 
@@ -199,7 +201,7 @@ repos:
 
 Le démon détient les secrets ; les runs Claude Code n'en ont pas besoin et ne doivent pas y accéder.
 
-1. **Environnement des runs par liste blanche (ORC-211).** En sandbox, un run reçoit ses variables de run (`FACTORY_API`, `FACTORY_RUN_TOKEN`, jeton aléatoire valable pendant le run, `FACTORY_TICKET`…), les variables que le dépôt déclare ([`configuration-depot.md`](configuration-depot.md#variables-et-secrets)) et le jeton du compte `claude.active` sous `CLAUDE_CODE_OAUTH_TOKEN` (sans `factory.yml`, celui du démon de ce nom) : rien d'autre, ni `ANTHROPIC_API_KEY`, ni `ANTHROPIC_BASE_URL`, ni `GH_TOKEN`. Sur l'hôte, un run reçoit en plus le système (`PATH`, `HOME`, `LANG`, `TMPDIR`…), l'identité des commits (`GIT_AUTHOR_*`, `GIT_COMMITTER_*`) et, en transition, `GH_TOKEN` (jusqu'à ORC-125) et `ANTHROPIC_API_KEY` (jusqu'à ORC-179, retirée dès qu'un compte actif existe). Toute autre variable reste dans le démon.
+1. **Environnement des runs par liste blanche (ORC-211).** En sandbox, un run reçoit ses variables de run (`FACTORY_API`, `FACTORY_RUN_TOKEN`, jeton aléatoire valable pendant le run, `FACTORY_TICKET`…), les réglages du hook du pack, sans secret (`FACTORY_READ_MAX_LINES`, `FACTORY_FULL_READ_PATHS`), les variables que le dépôt déclare ([`configuration-depot.md`](configuration-depot.md#variables-et-secrets)) et le jeton du compte `claude.active` sous `CLAUDE_CODE_OAUTH_TOKEN` (sans `factory.yml`, celui du démon de ce nom) : rien d'autre, ni `ANTHROPIC_API_KEY`, ni `ANTHROPIC_BASE_URL`, ni `GH_TOKEN`. Sur l'hôte, un run reçoit en plus le système (`PATH`, `HOME`, `LANG`, `TMPDIR`…), l'identité des commits (`GIT_AUTHOR_*`, `GIT_COMMITTER_*`) et, en transition, `GH_TOKEN` (jusqu'à ORC-125) et `ANTHROPIC_API_KEY` (jusqu'à ORC-179, retirée dès qu'un compte actif existe). Toute autre variable reste dans le démon.
 2. **Linear passe par `relais-agent`.** L'agent ne voit jamais le jeton Linear : il appelle l'API locale avec son jeton de run, qui ne donne accès qu'au ticket du run, à la recherche, à la base de connaissance et à la question (`ask`). Voir [`cli.md`](cli.md#relais-agent-côté-agent).
 3. **`run-settings.json`.** À chaque `relais up`, Relais écrit `<RELAIS_HOME>/run-settings.json` : les permissions du pack (`packs/standard/settings.json`) plus des refus sur le **vrai** chemin de `RELAIS_HOME` : `Read`/`Edit` de `secrets.json`, `Read` de `relais.db*`, `transcripts/**`, `logs/**`, et toute commande Bash qui mentionne `secrets.json` ou `relais.db`. Ce fichier est passé à chaque run par `--settings`. Les worktrees (`workspaces/`) restent lisibles.
 4. **Jeton GitHub App hors des runs.** Le jeton d'installation est demandé pour le seul dépôt du run, conservé en mémoire du démon et jamais monté dans l'environnement du runner ni écrit dans un transcript. `GH_TOKEN` reste transmis aux agents **sur l'hôte, temporairement**, car `gh` leur sert encore à ouvrir et lire les PR ; ORC-125 retirera cette variable. Voir [`github.md`](github.md#jetons).
