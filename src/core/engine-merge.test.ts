@@ -48,10 +48,18 @@ describe('a Done on a commit verify did not find green (ORC-151)', () => {
     expect(out.effects).toContainEqual({ kind: 'merge', sha: 'abc' });
   });
 
-  it('refuses a commit since the green one: a new commit asks for a new verify', () => {
+  it('refuses a commit since the green one, and sends it through the AI review, whose verify asks again', () => {
     const out = done(inReview({ reviewSha: 'def', verifiedSha: 'abc' }));
     expect(out.effects.some((e) => e.kind === 'merge')).toBe(false);
     expect(out.effects).toContainEqual({ kind: 'comment', body: expect.stringContaining("n'a pas de vérification verte") });
+    expect(out.effects).toContainEqual({ kind: 'move', to: 'ai_review' });
+    expect(out.effects).toContainEqual(expect.objectContaining({ kind: 'start_run', job: 'review' }));
+  });
+
+  it('a blocked ticket waits for its human, in Human Review', () => {
+    const out = done(inReview({ reviewSha: 'def', verifiedSha: 'abc', blocked: true }));
+    expect(out.effects.some((e) => e.kind === 'merge' || e.kind === 'start_run')).toBe(false);
+    expect(out.effects).toContainEqual({ kind: 'move', to: 'human_review', keepReviewSha: true });
   });
 
   it('refuses when nothing was ever green', () => {

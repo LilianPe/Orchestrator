@@ -6,7 +6,7 @@ import { checkFrozen, FREEZE_CHECK, isFrozenHarness, type FrozenTests } from '..
 import { checkForbiddenPaths, FORBIDDEN_CHECK } from '../checks/forbidden-paths.js';
 import { logExcerpt } from '../checks/log-excerpt.js';
 import { parseRepoConfig, type RepoConfig } from '../config/repo-config.js';
-import { BUNDLE_TARGET, extractWork, HARDENING } from '../publish/extract.js';
+import { BUNDLE_TARGET, extractWork, HARDENING, IN_SANDBOX } from '../publish/extract.js';
 import { runSealedSetup } from './sealed-setup.js';
 import type { VerifyFailure } from './types.js';
 import { VERIFY_TIMEOUT_MS, type VerifyResult } from './verify.js';
@@ -62,29 +62,29 @@ export function verifyCommand(command: string): string[] {
   return ['bash', '-c', script, 'verify', command];
 }
 
-/** `sandboxes`, whose `exec` gives up on a sandbox silent past `ms`, and destroys it: that is the only way a stuck exec ends. */
+/** `work`, or a rejection past `ms`: what it left running is `onExpiry`'s, and `recover()`'s. It never waits for an engine it gave up on. */
+function within<T>(work: Promise<T>, ms: number, message: string, onExpiry?: () => void): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const expired = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      onExpiry?.();
+      reject(new Error(message));
+    }, ms);
+  });
+  return Promise.race([work, expired]).finally(() => clearTimeout(timer));
+}
+
+/** `sandboxes`, whose `create` and `exec` give up on an engine silent past `ms`. An `exec` also destroys its sandbox: the only way a stuck one ends. */
 function withDeadline(sandboxes: SandboxProvider, ms: number): SandboxProvider {
-  const exec = async (id: string, argv: readonly string[], opts?: Parameters<SandboxProvider['exec']>[2]): Promise<ExecResult> => {
-    let timer: NodeJS.Timeout | undefined;
-    const expired = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => {
-        void sandboxes.destroy(id).catch(() => {}).then(() => reject(new Error(`le sandbox ne répond plus après ${ms / 1000} s`)));
-      }, ms);
-    });
-    try {
-      return await Promise.race([sandboxes.exec(id, argv, opts), expired]);
-    } finally {
-      clearTimeout(timer);
-    }
-  };
+  const silent = `le sandbox ne répond plus après ${ms / 1000} s`;
   return {
-    create: (req) => sandboxes.create(req),
-    exec,
+    create: (req) => within(sandboxes.create(req), ms, silent),
+    exec: (id, argv, opts) => within(sandboxes.exec(id, argv, opts), ms, silent, () => void sandboxes.destroy(id).catch(() => {})),
     spawnCommand: (id, argv, opts) => sandboxes.spawnCommand(id, argv, opts),
     findByAttempt: (runId) => sandboxes.findByAttempt(runId),
     reattach: (runId) => sandboxes.reattach(runId),
     list: () => sandboxes.list(),
-    destroy: (id) => sandboxes.destroy(id),
+    destroy: (id) => within(sandboxes.destroy(id), ms, silent),
   };
 }
 
@@ -100,11 +100,12 @@ function withDeadline(sandboxes: SandboxProvider, ms: number): SandboxProvider {
  * 4. the checkout and the commands, in a new sandbox on that clone, at network `none`, with nothing else mounted.
  *
  * `setup`, which has to install, runs first in its own sandbox at `limited`, without a secret: it is sealed like the
- * attempt's (`runSealedSetup`), on commits nobody reviewed. It rejects on any failure, the setup's included: an
+ * attempt's (`runSealedSetup`), on commits nobody reviewed, and never on a commit the checks already refused. It rejects on any failure, the setup's included: an
  * install that fails can be a registry down, and what cannot be told from a breakdown is never sent to the agent.
  */
 export const runCleanVerify: CleanVerifier = async (req) => {
-  const sandboxes = withDeadline(req.sandboxes, req.deadlineMs ?? VERIFY_TIMEOUT_MS + DEADLINE_GRACE_MS);
+  const deadlineMs = req.deadlineMs ?? VERIFY_TIMEOUT_MS + DEADLINE_GRACE_MS;
+  const sandboxes = withDeadline(req.sandboxes, deadlineMs);
   const destroy = (box: Sandbox | undefined) => box && sandboxes.destroy(box.id).catch((err: Error) => req.log(`sandbox ${box.id} not destroyed: ${err.message}`));
   const open = (suffix: string, workspacePath: string, mounts: readonly SandboxMount[]) =>
     sandboxes.create({ runId: `${req.runId}-${suffix}`, ticketId: req.ticketId, workspacePath, network: 'none', requirements: DEFAULT_REQUIREMENTS, mounts });
@@ -126,7 +127,7 @@ export const runCleanVerify: CleanVerifier = async (req) => {
     const git = cloneGit(req, cloneDir);
     const tree = await git('rev-parse', `${sha}^{tree}`);
     if (sha === req.green) return { ok: true, failures: [], sha, tree };
-    await fetchBase(req, cloneDir);
+    await within(fetchBase(req, cloneDir), deadlineMs, `la forge ne répond plus après ${deadlineMs / 1000} s`);
     const config = parseRepoConfig(await baseConfig(git));
     const declared = Object.values(config.commands);
     const commands = declared.length ? declared : req.commands;
@@ -140,10 +141,11 @@ export const runCleanVerify: CleanVerifier = async (req) => {
       await destroy(box);
       box = undefined;
     }
-    if (!commands.length) return { ok: !failures.length, failures, sha, tree };
+    // Refused already: nothing of it is installed or run. A forbidden `.npmrc` would be read by the install it forbids, and a breakdown of that install would hide the verdict.
+    if (failures.length || !commands.length) return { ok: !failures.length, failures, sha, tree };
 
     // `-c` on the command line: the clone's config is ours, and from the first command on it is no longer to be trusted.
-    const checkout = ['git', ...SANDBOX_GIT, 'checkout', '--quiet', '--detach', sha];
+    const checkout = ['git', ...IN_SANDBOX, 'checkout', '--quiet', '--detach', sha];
     if (setup.length) {
       await runSealedSetup(sandboxes, {
         runId: `${req.runId}-verify`,
@@ -151,6 +153,7 @@ export const runCleanVerify: CleanVerifier = async (req) => {
         workspacePath: cloneDir,
         mounts: [],
         commands: [checkout.map(shellWord).join(' '), ...setup],
+        argv: verifyCommand,
         env,
         secrets: {},
         now: new Date(),
@@ -190,12 +193,24 @@ const CONFIG = '.factory/config.yml';
  */
 async function fetchBase(req: CleanVerifyRequest, cloneDir: string): Promise<void> {
   const args = [...HARDENING.flatMap((c) => ['-c', c]), '-C', cloneDir, 'fetch', '--quiet', '--no-tags', '--no-recurse-submodules', '--', req.originUrl, `+HEAD:${BASE}`];
-  await mustExec(req.exec ?? execCmd, 'git', args, { env: { GIT_TERMINAL_PROMPT: '0' } });
+  let r: ExecResult;
+  try {
+    r = await (req.exec ?? execCmd)('git', args, { env: { GIT_TERMINAL_PROMPT: '0' } });
+  } catch (err) {
+    throw new Error(`branche de base non lue : ${withoutCredentials((err as Error).message, req.originUrl)}`);
+  }
+  if (r.code !== 0) throw new Error(`branche de base non lue : ${withoutCredentials(r.stderr.trim() || `exit ${r.code}`, req.originUrl)}`);
+}
+
+/** The message goes to the journal and to the ticket: neither the URL, which can carry a token, nor what git quotes of one. */
+function withoutCredentials(message: string, url: string): string {
+  return message.replaceAll(url, 'origin').replace(/\/\/[^/\s@]+@/g, '//***@');
 }
 
 /** Git's empty tree: what a branch that shares no commit with the base is compared with, every file of it then a change. */
 const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 const SYMLINK = '120000';
+const MAX_READ_BYTES = 16 * 1024 * 1024;
 export const SECRETS_CHECK = 'factory/secrets';
 const LEAKS_FOUND = 7;
 
@@ -206,9 +221,10 @@ const LEAKS_FOUND = 7;
  * only an error on stderr. So anything but a clean exit with a readable report is a breakdown, never a green.
  */
 async function scanSecrets(sandboxes: SandboxProvider, id: string, from: string, sha: string): Promise<VerifyFailure[]> {
-  const logOpts = from === EMPTY_TREE ? sha : `${from}..${sha}`;
+  // Plain `git log -p` shows no patch for a merge, where a secret can be added: what it changed beyond the clean merge, and only that.
+  const logOpts = `--diff-merges=remerge ${from === EMPTY_TREE ? sha : `${from}..${sha}`}`;
   const argv = ['timeout', String(VERIFY_TIMEOUT_MS / 1000), 'gitleaks', 'git', `--log-opts=${logOpts}`, '--no-banner', '--redact', '--ignore-gitleaks-allow', '--exit-code', String(LEAKS_FOUND), '--report-format', 'json', '--report-path', '-', '--log-level', 'error', '.'];
-  const env = { GIT_CONFIG_COUNT: '3', GIT_CONFIG_KEY_0: 'core.hooksPath', GIT_CONFIG_VALUE_0: '/dev/null', GIT_CONFIG_KEY_1: 'core.fsmonitor', GIT_CONFIG_VALUE_1: 'false', GIT_CONFIG_KEY_2: 'safe.directory', GIT_CONFIG_VALUE_2: '*' };
+  const env = { GIT_AUTHOR_NAME: 'factory', GIT_AUTHOR_EMAIL: 'factory@localhost', GIT_COMMITTER_NAME: 'factory', GIT_COMMITTER_EMAIL: 'factory@localhost', GIT_CONFIG_COUNT: '3', GIT_CONFIG_KEY_0: 'core.hooksPath', GIT_CONFIG_VALUE_0: '/dev/null', GIT_CONFIG_KEY_1: 'core.fsmonitor', GIT_CONFIG_VALUE_1: 'false', GIT_CONFIG_KEY_2: 'safe.directory', GIT_CONFIG_VALUE_2: '*' };
   const { code, stdout, stderr } = await sandboxes.exec(id, argv, { env });
   if ((code !== 0 && code !== LEAKS_FOUND) || stderr.trim()) throw new Error(`gitleaks n'a pas pu tourner (code ${code}) : ${stderr.trim()}`);
   let found: { File: string; StartLine: number; RuleID: string }[];
@@ -231,16 +247,19 @@ async function scanSecrets(sandboxes: SandboxProvider, id: string, from: string,
 async function checkClone(git: CloneGit, from: string, sha: string, frozen: FrozenTests | undefined): Promise<VerifyFailure[]> {
   const show = async (rev: string, path: string): Promise<string | undefined> => {
     const listed = await git('ls-tree', '--name-only', '-z', rev, '--', path);
-    return listed ? git.raw('show', `${rev}:${path}`) : undefined;
+    if (!listed) return undefined;
+    // A blob the agent made huge never comes into the daemon's memory: as itself, by its id, it reads as changed.
+    const size = Number(await git('cat-file', '-s', `${rev}:${path}`));
+    return size > MAX_READ_BYTES ? `\0too large: ${await git('rev-parse', `${rev}:${path}`)}` : git.raw('show', `${rev}:${path}`);
   };
   const fields = (await git('diff', '--name-status', '--no-renames', '-z', from, sha)).split('\0').filter(Boolean);
   const entries = (await git('ls-tree', '-r', '-z', sha)).split('\0').filter(Boolean);
-  const links = new Map(entries.filter((e) => e.startsWith(`${SYMLINK} `)).map((e) => [e.slice(e.indexOf('\t') + 1), e.split(' ')[2]!.split('\t')[0]!]));
+  const links = new Set(entries.filter((e) => e.startsWith(`${SYMLINK} `)).map((e) => e.slice(e.indexOf('\t') + 1)));
   const changed = [];
   for (let i = 0; i + 1 < fields.length; i += 2) {
     const path = fields[i + 1]!;
-    const blob = links.get(path);
-    changed.push({ path, deleted: fields[i] === 'D', ...(blob ? { link: await git.raw('cat-file', 'blob', blob) } : {}) });
+    const isLink = links.has(path);
+    changed.push({ path, deleted: fields[i] === 'D', ...(isLink ? { link: (await show(sha, path))! } : {}) });
   }
   const forbidden = await checkForbiddenPaths({ changed, showAtBase: (p) => (from === EMPTY_TREE ? Promise.resolve(undefined) : show(from, p)), showAtHead: (p) => show(sha, p) });
   const failures: VerifyFailure[] = forbidden.ok ? [] : [{ command: FORBIDDEN_CHECK, exitCode: 1, output: forbidden.summary }];
@@ -264,9 +283,6 @@ async function baseConfig(git: CloneGit): Promise<string | undefined> {
   const listed = await git('ls-tree', '--name-only', BASE, '--', CONFIG);
   return listed ? git.raw('show', `${BASE}:${CONFIG}`) : undefined;
 }
-
-/** Git in a sandbox, whose bind mounts are the host's uid: no hook, no fsmonitor, on a clone it did not make. */
-const SANDBOX_GIT = ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', '-c', 'safe.directory=*'];
 
 const shellWord = (word: string): string => `'${word}'`;
 

@@ -20,9 +20,11 @@ describe('logExcerpt', () => {
     expect(out).toMatch(/\[… \d+ lignes coupées …\]/);
   });
 
-  it('bounds one huge line', () => {
-    const out = logExcerpt('x'.repeat(LOG_EXCERPT_MAX * 20));
+  it('bounds one huge line, keeping its end and saying what went', () => {
+    const out = logExcerpt(`${'x'.repeat(LOG_EXCERPT_MAX * 20)}the failure`);
     expect(out.length).toBeLessThanOrEqual(LOG_EXCERPT_MAX);
+    expect(out.endsWith('the failure')).toBe(true);
+    expect(out).toMatch(/lignes coupées/);
   });
 
   it('bounds error lines however many there are, the end kept', () => {

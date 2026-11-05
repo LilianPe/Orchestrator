@@ -258,4 +258,20 @@ describe.skipIf(!enabled)(`gitleaks in verify (${cli})`, () => {
     expect(found?.output).toContain('leak.ts:1 (github-pat)');
     expect(JSON.stringify(res)).not.toContain(SECRET);
   });
+
+  it('finds a secret added by a merge commit alone, which a plain git log shows no patch for', async () => {
+    const hidden = `ghp_${'9876543210'.repeat(3)}987654`;
+    git(repo, 'reset', '-q', '--hard', 'HEAD~2');
+    git(repo, 'checkout', '-q', '-b', 'side');
+    writeFileSync(join(repo, 'side.ts'), 'export const s = 1;\n');
+    git(repo, 'add', '.');
+    git(repo, 'commit', '-q', '-m', 'side');
+    git(repo, 'checkout', '-q', BRANCH);
+    git(repo, 'merge', '-q', '--no-commit', '--no-ff', 'side');
+    writeFileSync(join(repo, 'merged.ts'), `export const token = "${hidden}";\n`);
+    git(repo, 'add', '.');
+    git(repo, 'commit', '-q', '-m', 'merge side');
+    const found = (await check('merge')).failures.find((f) => f.command === 'factory/secrets');
+    expect(found?.output).toContain('merged.ts');
+  });
 });

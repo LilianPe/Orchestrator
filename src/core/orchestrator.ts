@@ -773,11 +773,13 @@ export class Orchestrator {
    */
   private async verifyWork(project: ProjectRuntime, t: TicketState, run: RunRecord, job: JobSpec): Promise<VerifyResult & { sha?: string | undefined }> {
     const { sandboxes, runsDir, originUrl } = this.d;
+    // A job that checks what it did not write (a review) has nothing to add on a commit found green: one that wrote it asks again.
+    const green = job.verifyFailure === 'block' ? t.verifiedSha : undefined;
     if (!sandboxes) {
       if (!this.d.hostChecks) throw new Error(HOST_CHECKS_OFF);
       // Read before the commands: what they would commit is not what they checked.
       const sha = await this.d.workspaces.head(run.cwd);
-      if (sha && sha === t.verifiedSha) return { ok: true, failures: [], sha };
+      if (sha && sha === green) return { ok: true, failures: [], sha };
       const verified = job.verify.length > 0 ? await this.d.verify(run.cwd, job.verify, undefined, (await this.repoVariablesOf(project)).env) : { ok: true, failures: [] };
       // `factory/tests-gelés` (ORC-131), blocking from the first ticket, on top of the job's commands.
       const frozen = goesThroughFreeze(t, job) ? await this.checkFrozen(project, run.cwd, t.frozenTests!) : [];
@@ -801,13 +803,18 @@ export class Orchestrator {
         setup: project.workflow.workspace.setup,
         commands: job.verify,
         gitleaks: true,
-        ...(t.verifiedSha ? { green: t.verifiedSha } : {}),
+        ...(green ? { green } : {}),
         ...(goesThroughFreeze(t, job) ? { frozen: t.frozenTests! } : {}),
         env: async (config) => (await this.repoVariablesOf(project, config)).env,
         log: (message) => this.log('warn', `verify of ${t.ticketId}: ${message}`),
       });
     } finally {
-      rmSync(workDir, { recursive: true, force: true });
+      // Under the run's dir, purged with it: what the attack left unremovable costs no verdict.
+      try {
+        rmSync(workDir, { recursive: true, force: true });
+      } catch (err) {
+        this.log('warn', `verify of ${t.ticketId}: ${workDir} not removed: ${(err as Error).message}`);
+      }
     }
   }
 

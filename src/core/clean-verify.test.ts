@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync 
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import type { ExecResult } from '../adapters/exec.js';
+import { execCmd, type Exec, type ExecResult } from '../adapters/exec.js';
 import { FakeSandboxProvider } from '../adapters/sandbox/fake.js';
 import type { SandboxExecOptions, SandboxRequest } from '../adapters/sandbox/types.js';
 import { LOG_EXCERPT_MAX } from '../checks/log-excerpt.js';
@@ -171,6 +171,36 @@ describe('runCleanVerify', () => {
     expect(sandboxes.active()).toEqual([]);
   });
 
+  it('gives up on an engine whose destroy hangs too: the deadline does not wait for it', async () => {
+    const { sandboxes, req } = setup({ commands: ['stuck'], deadlineMs: 20 });
+    sandboxes.hang = (c) => c === 'stuck';
+    const destroy = sandboxes.destroy.bind(sandboxes);
+    let hanging = false;
+    sandboxes.destroy = (id) => (hanging ? new Promise(() => {}) : destroy(id));
+    const exec = sandboxes.exec.bind(sandboxes);
+    sandboxes.exec = (id, argv, opts) => {
+      if (argv.at(-1) === 'stuck') hanging = true;
+      return exec(id, argv, opts);
+    };
+    await expect(runCleanVerify(req)).rejects.toThrow(/ne répond plus/);
+  });
+
+  it('gives up on a forge that does not answer', async () => {
+    const hung: Exec = (cmd, args, opts) => (args.includes('fetch') ? new Promise(() => {}) : execCmd(cmd, args, opts));
+    const { req } = setup({ exec: hung, deadlineMs: 500 });
+    await expect(runCleanVerify(req)).rejects.toThrow(/forge ne répond plus/);
+  });
+
+  it('keeps the credentials of the URL out of what reaches the ticket', async () => {
+    const url = 'https://x-access-token:s3cr3t-token@github.com/o/r';
+    const failing: Exec = async (cmd, args, opts) => (args.includes('fetch') ? { stdout: '', stderr: `fatal: unable to access '${url}/': 503, and https://u:other-token@host/`, code: 128 } : execCmd(cmd, args, opts));
+    const { req } = setup({ exec: failing, originUrl: url });
+    const message = await runCleanVerify(req).then(() => '', (err: Error) => err.message);
+    expect(message).toContain('503');
+    expect(message).not.toContain('s3cr3t-token');
+    expect(message).not.toContain('other-token');
+  });
+
   it('a sandbox that cannot start rejects, and nothing is left', async () => {
     const { workDir, sandboxes, req } = setup();
     sandboxes.create = async () => {
@@ -228,21 +258,28 @@ describe('runCleanVerify', () => {
       expect(commands).not.toContain('echo workflow-setup');
     });
 
+    /** What the config read says, whatever the verdict: its `env`, asked of the caller before any check refuses the commit. */
+    const readConfig = (over: Partial<CleanVerifyRequest>, config: string) => {
+      const asked: string[][] = [];
+      return { asked, ...setup({ ...over, env: async (c) => (asked.push(c.env), {}) }, config) };
+    };
+
     it('ignores what the agent wrote in its own branch\'s config', async () => {
-      const { repo, sandboxes, req } = setup({}, CONFIG);
-      write(repo, '.factory/config.yml', 'commands: { test: "echo pwned-by-the-agent" }\n');
+      const { asked, repo, sandboxes, req } = readConfig({}, CONFIG);
+      write(repo, '.factory/config.yml', 'commands: { test: "echo pwned-by-the-agent" }\nenv: [PWNED]\n');
       commit(repo, 'the agent rewrites what judges it');
       await runCleanVerify(req);
+      expect(asked).toEqual([['REPO_VAR']]);
       expect(sandboxes.ran.map((r) => r.command)).not.toContain('echo pwned-by-the-agent');
-      expect(sandboxes.ran.map((r) => r.command)).toContain('echo base-test');
     });
 
     it('does not believe a ref the agent moved in the repository it can write', async () => {
-      const { repo, sandboxes, req } = setup({}, CONFIG);
-      write(repo, '.factory/config.yml', 'commands: { test: "echo pwned-by-the-ref" }\n');
+      const { asked, repo, sandboxes, req } = readConfig({}, CONFIG);
+      write(repo, '.factory/config.yml', 'commands: { test: "echo pwned-by-the-ref" }\nenv: [PWNED]\n');
       commit(repo, 'forged base');
       git(repo, 'update-ref', 'refs/remotes/origin/main', 'HEAD');
       await runCleanVerify(req);
+      expect(asked).toEqual([['REPO_VAR']]);
       expect(sandboxes.ran.map((r) => r.command)).not.toContain('echo pwned-by-the-ref');
     });
 
@@ -280,7 +317,9 @@ describe('runCleanVerify', () => {
       const res = await runCleanVerify(req);
       expect(res.ok).toBe(false);
       expect(res.failures).toEqual([{ command: 'factory/chemins-interdits', exitCode: 1, output: expect.stringContaining('.factory/config.yml') }]);
-      expect(sandboxes.ran.map((r) => r.command)).toEqual(['echo base-test']);
+      // Refused before anything of it runs: neither its commands nor the base's.
+      expect(sandboxes.ran).toEqual([]);
+      expect(sandboxes.created.map((c) => c.runId)).toEqual(['r1-bundle']);
     });
 
     it('a file under .github/workflows blocks', async () => {
@@ -356,7 +395,7 @@ describe('runCleanVerify', () => {
         };
         await runCleanVerify(req);
         expect(scans).toHaveLength(1);
-        expect(scans[0]).toContain(`--log-opts=${from}..${git(repo, 'rev-parse', BRANCH)}`);
+        expect(scans[0]).toContain(`--log-opts=--diff-merges=remerge ${from}..${git(repo, 'rev-parse', BRANCH)}`);
         expect(scans[0]).toEqual(expect.arrayContaining(['--redact', '--ignore-gitleaks-allow']));
         expect(sandboxes.created.find((c) => c.runId === 'r1-scan')).toMatchObject({ network: 'none', mounts: [] });
       });
@@ -383,6 +422,23 @@ describe('runCleanVerify', () => {
         await expect(runCleanVerify(req)).rejects.toThrow(/gitleaks/);
         expect(sandboxes.ran).toEqual([]);
       });
+    });
+
+    it('a commit the checks refused gets no install, whose breakdown would hide the verdict', async () => {
+      const { repo, sandboxes, req } = setup({ setup: ['npm ci'], gitleaks: true });
+      write(repo, '.npmrc', 'registry=https://evil.example\n');
+      commit(repo, 'x');
+      const res = await runCleanVerify(req);
+      expect(res.failures[0]).toMatchObject({ command: 'factory/chemins-interdits' });
+      expect(sandboxes.ran).toEqual([]);
+    });
+
+    it('a blob made huge is not read into the daemon, and reads as changed', async () => {
+      const { repo, req } = setup({ commands: [] });
+      write(repo, 'package.json', `{"pad":"${'x'.repeat(17 * 1024 * 1024)}"}`);
+      commit(repo, 'x');
+      const res = await runCleanVerify(req);
+      expect(res.failures[0]!.output).toContain('package.json#scripts');
     });
 
     it('a commit already green is not checked again', async () => {

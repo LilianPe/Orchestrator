@@ -33,7 +33,9 @@ export function logExcerpt(output: string, max = LOG_EXCERPT_MAX): string {
   const text = output.replace(ANSI, '');
   if (text.length <= max) return text;
   const room = max - MARKS;
-  const lines = text.split('\n');
+  // A runner can print everything on one line: cut in pieces, its end stays reachable.
+  const piece = Math.floor(room / 8);
+  const lines = text.split('\n').flatMap((l) => (l.length <= piece ? [l] : (l.match(new RegExp(`[\\s\\S]{1,${piece}}`, 'g')) ?? [])));
   const head = fit(lines, Math.floor(room / 8));
   const rest = lines.slice(head.kept.length);
   const tail = fit([...rest].reverse(), Math.floor(room / 2));

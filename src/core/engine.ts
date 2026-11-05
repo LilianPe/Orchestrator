@@ -494,7 +494,7 @@ function doneMerge(out: Decision, event: FactoryEvent<'status.changed'>, state: 
     return backToReview(out, "Je ne merge pas : aucun commit relu n'est enregistré pour ce ticket (l'usine n'en retient un qu'à la fin de son propre travail, une review IA ou un dev qui ramène le ticket en Human Review, et seulement si la tête de la PR est le commit sur lequel ce travail s'est terminé ; un renvoi en Human Review après un refus n'en retient pas). Passez le ticket en AI Review : la review IA le ramène en Human Review sur la tête de la PR, qui devient le commit relu.");
   }
   if (!mayPublish(state, state.reviewSha, workflow)) {
-    return backToReview(out, `Je ne merge pas : le commit relu (${state.reviewSha.slice(0, 12)}) n'a pas de vérification verte, la dernière porte sur ${state.verifiedSha?.slice(0, 12) ?? 'aucun commit'}. Un nouveau commit demande une nouvelle vérification : répondez dans ce fil pour que je reprenne.`);
+    return backThroughAiReview(out, event, state, workflow, `Je ne merge pas : le commit relu (${state.reviewSha.slice(0, 12)}) n'a pas de vérification verte, la dernière porte sur ${state.verifiedSha?.slice(0, 12) ?? 'aucun commit'}.`);
   }
   out.trace.push(`done: merge PR #${state.prNumber} on ${state.reviewSha}`);
   out.effects.push({ kind: 'merge', sha: state.reviewSha });
@@ -522,14 +522,22 @@ function mergeRefused(out: Decision, event: FactoryEvent<'pr.merge_refused'>, ti
     out.effects.push({ kind: 'comment', body: refused });
     return out;
   }
+  return event.payload.headMoved ? backThroughAiReview(out, event, ticket, workflow, refused) : backToReview(out, refused);
+}
+
+/**
+ * New commits go through the AI review again, whose `verify` finds them green or not, and which shows the head in Human
+ * Review. A blocked ticket (it waits for a human) or a workflow with no AI review goes back to Human Review.
+ */
+function backThroughAiReview(out: Decision, event: FactoryEvent, ticket: TicketState, workflow: Workflow, refused: string): Decision {
   // The rule a human's move from Done to AI Review would apply, read on the ticket as it would then be.
-  const moved: FactoryEvent<'status.changed'> = { ...event, type: 'status.changed', payload: { from: 'done', to: 'ai_review' } };
+  const moved: FactoryEvent<'status.changed'> = { ...event, type: 'status.changed', payload: { from: 'done', to: 'ai_review' } } as FactoryEvent<'status.changed'>;
   const inAiReview = { ...ticket, logical: 'ai_review' as const };
   // The first rule that matches, as `decideEvent` picks it: one with no run listed first starts no review.
   const run = (workflow.on['status.changed'] ?? []).find((r) => ruleAllowed(r, moved, inAiReview, workflow) && ruleMatches(r, moved, inAiReview, ticket.activeJob))?.run;
   const job = run && workflow.states.ai_review ? workflow.jobs[run] : undefined;
-  if (!event.payload.headMoved || !job || ticket.blocked) return backToReview(out, refused);
-  out.trace.push(`not merged: ${event.payload.reason}, back to the AI review`);
+  if (!job || ticket.blocked) return backToReview(out, refused);
+  out.trace.push(`not merged: ${refused}, back to the AI review`);
   out.effects.push({ kind: 'move', to: 'ai_review' }, { kind: 'comment', body: `${refused} Les nouveaux commits repassent par la review IA.` });
   startRun(out, event, ticket, job, { input: job.input });
   return out;

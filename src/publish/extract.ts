@@ -16,7 +16,7 @@ const BUNDLE = 'work.bundle';
 export const HARDENING = [`core.hooksPath=${devNull}`, 'core.fsmonitor=false'];
 
 /** The sandbox's git, on the agent's repository: `devNull` is the host's, and the mount's owner may not be its user. */
-const IN_SANDBOX = ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', '-c', 'safe.directory=*'];
+export const IN_SANDBOX = ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', '-c', 'safe.directory=*'];
 
 export interface ExtractRequest {
   sandboxes: SandboxProvider;
