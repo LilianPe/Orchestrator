@@ -3,6 +3,7 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:f
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
+import { systemEnv } from '../adapters/exec.js';
 import type { VerifyFailure } from './types.js';
 
 export interface VerifyResult {
@@ -12,11 +13,13 @@ export interface VerifyResult {
   tree?: string;
 }
 
-export type Verifier = (cwd: string, commands: string[], timeoutMs?: number) => Promise<VerifyResult>;
+/** `env`: what the commands get beyond the system, the variables the repository declares (ORC-211). */
+export type Verifier = (cwd: string, commands: string[], timeoutMs?: number, env?: Record<string, string>) => Promise<VerifyResult>;
 
-function runOne(cwd: string, command: string, timeoutMs: number): Promise<{ exitCode: number | null; output: string }> {
+function runOne(cwd: string, command: string, timeoutMs: number, env: Record<string, string>): Promise<{ exitCode: number | null; output: string }> {
   return new Promise((resolve) => {
-    const child = spawn('bash', ['-lc', command], { cwd, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+    // No credential of the daemon: these commands run what the agent wrote (ORC-211).
+    const child = spawn('bash', ['-lc', command], { cwd, env: { ...systemEnv(process.env), ...env }, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
     let output = '';
     let done = false;
     const finish = (exitCode: number | null, extra = ''): void => {
@@ -47,10 +50,15 @@ function runOne(cwd: string, command: string, timeoutMs: number): Promise<{ exit
 /** Each command's cap, on the host and (setup) in a sandbox. */
 export const VERIFY_TIMEOUT_MS = 15 * 60_000;
 
-export const runVerify: Verifier = async (cwd, commands, timeoutMs = VERIFY_TIMEOUT_MS) => {
+/** `command` in a sandbox under the same cap, by coreutils' `timeout` in the image: 124 is its exit on expiry. */
+export function cappedCommand(command: string): string[] {
+  return ['timeout', String(VERIFY_TIMEOUT_MS / 1000), 'bash', '-lc', command];
+}
+
+export const runVerify: Verifier = async (cwd, commands, timeoutMs = VERIFY_TIMEOUT_MS, env = {}) => {
   const failures: VerifyFailure[] = [];
   for (const command of commands) {
-    const { exitCode, output } = await runOne(cwd, command, timeoutMs);
+    const { exitCode, output } = await runOne(cwd, command, timeoutMs, env);
     if (exitCode !== 0) failures.push({ command, exitCode, output });
   }
   if (failures.length === 0) return { ok: true, failures };

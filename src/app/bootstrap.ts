@@ -22,7 +22,8 @@ import { Reconciler, reconcileOnce } from '../adapters/tracker/linear/reconcile.
 import { LinearTracker } from '../adapters/tracker/linear/tracker.js';
 import { isUsableWebhookSecret } from '../adapters/tracker/linear/webhook.js';
 import { GitWorkspaces } from '../adapters/workspace/git-workspaces.js';
-import { loadFactoryYml } from '../config/factory-yml.js';
+import { activeClaudeToken, loadFactoryYml } from '../config/factory-yml.js';
+import { makeRepoVariables } from './repo-variables.js';
 import { daemonSecretValues, effectiveInstance, homePaths, linearSettings, saveLinearTokens } from '../config/instance.js';
 import { githubWebhookSecret, resolveGithubApp } from '../config/github-app.js';
 import { writeRunSettings } from '../config/run-settings.js';
@@ -152,9 +153,11 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     });
     const sandboxes = o.fakeRunner ? undefined : makeSandboxes(env, instanceId(o.home), egress);
     if (!o.fakeRunner && !sandboxes) log("Attention : FACTORY_CONTAINER_CLI absent, les runs tournent sur l'hôte, sans isolation.");
+    const claudeToken = activeClaudeToken(yml);
+    if (sandboxes && !claudeToken && !env['CLAUDE_CODE_OAUTH_TOKEN']) log('Attention : aucun jeton Claude (claude.active de factory.yml, ou CLAUDE_CODE_OAUTH_TOKEN) : les runs sandboxés ne pourront pas s’authentifier.');
     const runner: Runner = o.fakeRunner
       ? new FakeRunner()
-      : new ClaudeCodeRunner({ transcriptsDir: paths.transcripts, secrets: daemonSecrets, ...(sandboxes ? { sandboxes } : {}) });
+      : new ClaudeCodeRunner({ transcriptsDir: paths.transcripts, secrets: daemonSecrets, claudeToken: () => claudeToken, ...(sandboxes ? { sandboxes } : {}) });
     const workspaces = new GitWorkspaces({ root: paths.workspaces, knowledgeRepo: instance.knowledge?.repoPath });
     const forge = githubApp
       ? new GitHubAppForge({ ...githubApp, log })
@@ -207,6 +210,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       dailyBudgetUsd: instance.limits.perDayUsd,
       knowledgeConfigured: !!instance.knowledge,
       roles,
+      repoVariables: makeRepoVariables({ yml, log }),
       ...(sandboxes
         ? {
             sandboxes,

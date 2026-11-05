@@ -29,6 +29,19 @@ const req = (repo: string, patch: object = {}) => ({
 });
 
 describe('GitWorkspaces', () => {
+  it('says when a worktree made again comes on commits beyond the default branch, and only then (ORC-211)', async () => {
+    const { repo, root } = fixtureRepo();
+    const ws = new GitWorkspaces({ root });
+    const first = await ws.prepare(req(repo));
+    expect(first.ahead).toBeUndefined();
+    // Removed and made again on its branch, with no commit: as a setup that a crash cut.
+    await ws.cleanup('p', repo, 'REL-1');
+    expect((await ws.prepare(req(repo))).ahead).toBeUndefined();
+    git(first.path, 'commit', '--allow-empty', '-m', 'the agent');
+    await ws.cleanup('p', repo, 'REL-1');
+    expect(await ws.prepare(req(repo))).toMatchObject({ fresh: true, ahead: true });
+  });
+
   it('creates (fresh), reuses (not fresh) and removes a ticket worktree', async () => {
     const { repo, root } = fixtureRepo();
     const ws = new GitWorkspaces({ root });
