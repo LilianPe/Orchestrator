@@ -7,7 +7,10 @@
 Ce qu'elle montre, en direct :
 
 - **En-tête** : places occupées (`dev`, `questions`), longueur de la file, coût du jour et budget, indicateur « en direct » ; boutons **Connecter Linear** (tant que Linear n'est pas connecté) et **Pause / Reprendre**.
-- **Tickets** : identifiant, titre, état logique, `bloqué` (la raison au survol), coût cumulé ; bouton **Stop** sur un ticket qui a un run en cours. Cliquer un identifiant ouvre son run.
+- **Flux** (ORC-297), lu sur `GET /api/flow` à l'ouverture, à chaque changement d'un ticket et toutes les 10 s :
+  - **Needs you** : ce qui attend un humain. Les tickets bloqués, groupés par cause (question de l'agent, ticket contesté, rouge non vérifié, panne d'infrastructure, plafond, boucle, run en échec, prise en charge refusée, événement mis de côté, PR fermée sans merge, arrêt, autre cause), chacun avec sa raison ; les PR en Human Review ; les portes en attente (`ready`, pour un workflow qui le déclare encore ; la porte de spec viendra avec ORC-212). Le plus ancien d'abord, selon la dernière activité du ticket. Une PR sur laquelle l'agent travaille encore, ou dont le run attend une place, n'y est pas ; une question posée à l'agent l'y laisse. Un ticket bloqué dont le run tourne encore est aux deux endroits.
+  - **Working** : chaque run en cours et chaque vérification en cours, avec son étape (le job du run), sa durée et les tokens du ticket ; bouton **Stop** sur le run actif d'un ticket. Cliquer un identifiant ouvre son run. Les tickets en file sont listés dessous.
+  - **Done** : les tickets terminés dont la dernière activité date de moins de 7 jours, 20 au plus, puis les autres tickets non terminés, repliés (**Autres tickets suivis**).
 - **Session en direct** : la sortie du run sélectionné (texte, appels d'outils), reçue en direct depuis l'ouverture de la page. Le transcript complet d'un run reste disponible par l'API (`/api/runs/<id>/transcript`) et dans `<RELAIS_HOME>/transcripts/`.
 - **Journal** : les derniers messages du démon et les événements reçus.
 
@@ -15,12 +18,17 @@ Le direct passe par un flux **SSE** (`GET /api/events`) avec un `ping` toutes le
 
 Développement de l'interface : `npm run dev:web` lance Vite sur le port 5173 avec un proxy de `/api` et `/oauth` vers `http://127.0.0.1:4100` (un `relais up` doit tourner).
 
+**Les tokens du Flux** sont la mesure d'ORC-235 : la somme des tentatives terminées du ticket. Un run ne rapporte son usage qu'à sa fin : celui en cours n'y est pas encore, ce que la page dit sous le tableau. `≥` signale des tentatives terminées sans mesure ; `—` qu'aucune n'en a, avec le coût en dollars s'il existe, jusqu'à ORC-216 ; `?` que les mesures du ticket n'ont pas pu être lues (l'erreur est au journal). Si la lecture du Flux échoue, un bandeau le dit et les durées s'arrêtent. Le nombre affiché additionne entrée, sortie, cache lu et cache écrit ; le détail est au survol.
+
+**La cause d'un blocage** est lue dans sa raison (`src/core/block-cause.ts`), sur le début de phrase que l'usine écrit. Une raison inconnue tombe dans « Autre cause », affichée telle quelle. Un nouveau motif de blocage s'ajoute à cette table et à son test.
+
 ## Ce que le serveur expose
 
 | Route | Rôle | Protection |
 |---|---|---|
 | `GET /` et fichiers statiques | Interface | mot de passe (hors bouclage) |
 | `GET /api/state` | État : tickets, file, runs actifs (sans leurs jetons), coût, capacité | mot de passe |
+| `GET /api/flow` | Flux : Needs you, Working, Done (sans jetons de run ni contenu de la file) | mot de passe |
 | `GET /api/events`, `GET /api/events/recent` | Flux SSE, 100 derniers événements | mot de passe |
 | `GET /api/runs/:id/transcript` | Transcript d'un run | mot de passe |
 | `POST /api/control/pause`, `/api/control/resume` | Pause / reprise | mot de passe + contrôle d'origine |
@@ -59,7 +67,7 @@ Chaque run reçoit un `RELAIS_RUN_TOKEN` aléatoire. L'API `/agent/*` ne l'accep
 
 - ne lit que **le ticket du run** (`/agent/issue/<autre ticket>` → 403) ;
 - peut chercher des tickets, chercher dans la base de connaissance et poser une question dans la session du ticket ;
-- n'apparaît pas dans `/api/state`.
+- n'apparaît ni dans `/api/state`, ni dans `/api/flow`, ni dans `/api/events` et `/api/events/recent`.
 
 Sur l'hôte, `RELAIS_API` pointe sur `http://127.0.0.1:<port>/agent` : les agents parlent au démon en local. Dans un sandbox, elle pointe sur `http://<FACTORY_SANDBOX_AGENT_HOST>:<FACTORY_AGENT_PORT>/agent` (par défaut `host.docker.internal`) : un nom que le conteneur ne résout pas, que le proxy de sortie reconnaît et relaie vers le serveur dédié à l'API agent.
 

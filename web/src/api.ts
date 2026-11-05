@@ -1,7 +1,13 @@
-import type { BusMessage, Snapshot } from './types.js';
+import type { BusMessage, FlowView, Snapshot } from './types.js';
 
 export async function fetchSnapshot(): Promise<Snapshot> {
   return (await fetch('/api/state')).json();
+}
+
+export async function fetchFlow(): Promise<FlowView> {
+  const res = await fetch('/api/flow');
+  if (!res.ok) throw new Error(`/api/flow: ${res.status}`);
+  return res.json();
 }
 
 export const post = (path: string) => fetch(path, { method: 'POST' });
