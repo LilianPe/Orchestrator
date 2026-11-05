@@ -145,8 +145,8 @@ export interface EventPayloads {
   /** `keepLabel`: another project's ticket for the same issue is blocked, the label stays (ORC-291). */
   'ticket.undelegated': { keepLabel?: true };
   'session.mentioned': { linearSessionId: string; body: string; author: string; issue?: IssueSnapshot; repos?: string[]; waitedIn?: string };
-  'session.prompted': { linearSessionId: string; body: string; author: string; issue?: IssueSnapshot; repos?: string[] };
-  'session.stopped': { linearSessionId?: string; repos?: string[] };
+  'session.prompted': { linearSessionId: string; body: string; author: string; issue?: IssueSnapshot; repos?: string[]; waitedIn?: string };
+  'session.stopped': { linearSessionId?: string; repos?: string[]; waitedIn?: string };
   /** `cancelled`: the new status is of type canceled in Linear (ORC-170). */
   'status.changed': { from: LogicalState | null; to: LogicalState | null; cancelled?: true };
   /** `otherRepo`: the label names another repo of the ticket's team (ORC-291). */

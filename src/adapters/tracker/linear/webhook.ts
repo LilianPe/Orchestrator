@@ -163,10 +163,10 @@ async function issueEvents(body: any, identifier: string, teamKey: string, proje
 
 /**
  * The project of the ticket a webhook is about (ORC-291). Several repos in the team: the project holding the
- * ticket keeps it; a reply goes to the copy that opened its session. Otherwise a new session (a delegation, a
- * mention, a command) is routed by its `repo:` label, read from Linear only then, and so is a reply or a stop on
- * a ticket no project stores: its delegation is still in the inbox. An issue deleted meanwhile has no label: its
- * event goes on, as on a team of one (ORC-302).
+ * ticket keeps it. Otherwise a session's event (a delegation, a mention, a command, a reply, a stop) is routed by
+ * its `repo:` label, read from Linear only then: the delegation that named it may still be in the inbox. Once a
+ * label names a repo, a reply goes to the copy that opened its session. An issue deleted meanwhile has no label:
+ * its event goes on, as on a team of one (ORC-302).
  */
 async function routeOf(body: any, identifier: string, teamKey: string, ctx: MapContext): Promise<Route | undefined> {
   const team = ctx.projectsOfTeam(teamKey);
@@ -175,16 +175,14 @@ async function routeOf(body: any, identifier: string, teamKey: string, ctx: MapC
   const stored = (await Promise.all(team.map((p) => ctx.ticket(p, identifier)))).filter((t) => t !== undefined);
   const session: string | undefined = body.type === 'AgentSessionEvent' ? body.agentSession?.id : undefined;
   if (!session || stored.some(holds)) return resolveRoute(team, stored);
-  if (body.action === 'prompted') {
-    const opener = stored.find((t) => t.linearSessionId === session || t.questionSessionIds.includes(session));
-    if (opener) return { projectId: opener.projectId };
-  }
-  if (body.action !== 'created' && (body.action !== 'prompted' || stored.length > 0)) return resolveRoute(team, stored);
+  if (body.action !== 'created' && body.action !== 'prompted') return resolveRoute(team, stored);
   const labels = await ctx.labelsOf(identifier).catch((err: Error) => {
     if (err instanceof IssueNotFoundError) return [];
     throw err;
   });
-  return resolveRoute(team, stored, labels);
+  const route = resolveRoute(team, stored, labels);
+  const opener = body.action === 'prompted' && !route.repos ? stored.find((t) => t.linearSessionId === session || t.questionSessionIds.includes(session)) : undefined;
+  return opener ? { projectId: opener.projectId } : route;
 }
 
 function issueIdentifier(body: any): string | undefined {

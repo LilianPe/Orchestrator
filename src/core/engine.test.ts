@@ -1009,6 +1009,12 @@ describe('decide — a ticket whose repo is not known (ORC-291)', () => {
     }
   });
 
+  it('leaves what is no human action to its usual handling: the end of a question run under way, a dead letter', () => {
+    for (const e of [ev('run.finished', { runId: 'gone', job: 'ask', outcome: 'success', costUsd: 0, turns: 0, lastText: '' }), ev('dead_letter.added', { eventId: 'e', eventType: 'pr.opened', error: 'x', failures: 1 })]) {
+      expect(decide(blocked, e, workflow).trace).not.toContain(`${e.type}: repo to choose first`);
+    }
+  });
+
   it('lifts that block once the ticket is no longer delegated here, the label kept when its repo blocks it too', () => {
     expect(kinds(decide(blocked, ev('ticket.undelegated', {}), workflow))).toEqual({ events: ['ticket.unblocked'], effects: ['labels'], timers: [] });
     expect(kinds(decide(blocked, ev('ticket.undelegated', { keepLabel: true }), workflow))).toEqual({ events: ['ticket.unblocked'], effects: [], timers: [] });
@@ -1018,6 +1024,7 @@ describe('decide — a ticket whose repo is not known (ORC-291)', () => {
     const out = decide(ticket(), ev('label.changed', { label: 'Repo:Api', change: 'added', otherRepo: true }), workflow);
     expect(out.effects).toEqual([{ kind: 'comment', body: expect.stringContaining('reste sur le dépôt p') }]);
     expect(out.effects[0]).toMatchObject({ body: expect.stringContaining('nouveau ticket') });
+    expect(out.effects[0]).toMatchObject({ body: expect.stringContaining('5 minutes') });
   });
 
   it('says nothing of a repo: label that names no other repo of the team', () => {

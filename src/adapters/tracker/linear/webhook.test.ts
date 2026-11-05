@@ -291,9 +291,19 @@ describe('mapLinearWebhook', () => {
     it('a reply in a question session goes to the copy of the ticket that opened it, whichever the store lists first', async () => {
       const session = fx('session-prompted').agentSession.id;
       const stored = [newTicketState('web', 'REL-1', 'T', 'todo', 0), { ...newTicketState('api', 'REL-1', 'T', 'todo', 0), questionSessionIds: [session] }];
-      const read: string[] = [];
-      expect(await mapLinearWebhook(fx('session-prompted'), 'd4', twoRepos(['repo:web'], { read, stored }))).toMatchObject([{ projectId: 'api' }]);
-      expect(read).toEqual([]);
+      expect(await mapLinearWebhook(fx('session-prompted'), 'd4', twoRepos(['repo:web'], { stored }))).toMatchObject([{ projectId: 'api' }]);
+    });
+
+    it('a reply in a session on a ticket that still names no repo gets the question again: nothing runs in a repo picked by default', async () => {
+      const session = fx('session-prompted').agentSession.id;
+      const stored = [{ ...newTicketState('web', 'REL-1', 'T', 'todo', 0), questionSessionIds: [session] }];
+      expect(await mapLinearWebhook(fx('session-prompted'), 'd4', twoRepos([], { stored }))).toMatchObject([{ projectId: 'web', payload: { repos: ['web', 'api'] } }]);
+    });
+
+    it('a stop in the session of a delegation still in the inbox follows its label, past the copy where the ticket waited', async () => {
+      const stored = [{ ...newTicketState('web', 'REL-1', 'T', 'todo', 0), delegated: true, blocked: true, blockReason: unroutedReason(['web', 'api']), linearSessionId: 'older' }];
+      const stop = { ...fx('session-prompted'), agentActivity: { ...fx('session-prompted').agentActivity, signal: 'stop' } };
+      expect(await mapLinearWebhook(stop, 'd5', twoRepos(['repo:api'], { stored }))).toMatchObject([{ type: 'session.stopped', projectId: 'api' }]);
     });
 
     it('a delegation of an issue deleted meanwhile is written for the journal, not sent back by Linear forever', async () => {

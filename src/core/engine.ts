@@ -617,17 +617,20 @@ export function blockedLabelChange(before: boolean, after: boolean): Extract<Dec
   return after ? { kind: 'labels', add: [BLOCKED_LABEL], remove: [] } : { kind: 'labels', add: [], remove: [BLOCKED_LABEL] };
 }
 
+/** What a ticket waiting for its repo answers or ignores; the rest (a run's end, a dead letter) is handled as usual. */
+const WAITING_FENCES = new Set<EventType>(['session.mentioned', 'command', 'session.prompted', 'session.stopped', 'status.changed', 'label.changed']);
+
 /**
  * A ticket whose repo is to be chosen (ORC-291): an event that carries the choice (`repos`) or reaches a ticket
  * blocked for it. A delegation blocks it, whatever blocked it before: `repos` means no project holds it, and under
  * another reason it would hold this one. Already waiting, it is asked again; a mention, a command, a reply or a stop
- * is answered with the same question; anything else decides nothing, so that no rule starts work in a repo picked
- * by default. `undefined`: the event is not such a one, a delegation without `repos` among them: its label names
- * this repo, where it was waiting.
+ * is answered with the same question; a status or a label decides nothing, so that no rule starts work in a repo
+ * picked by default. `undefined`: the event is not such a one, a delegation without `repos` among them: its label
+ * names this repo, where it was waiting.
  */
 function unrouted(state: TicketState | undefined, event: FactoryEvent): Decision | undefined {
   const repos = (event.payload as { repos?: string[] }).repos;
-  if (!repos && (!isUnrouted(state) || event.type === 'ticket.undelegated' || event.type === 'ticket.delegated')) return undefined;
+  if (!repos && (!isUnrouted(state) || !WAITING_FENCES.has(event.type))) return undefined;
   const out = empty();
   const body = repos ? unroutedReason(repos) : state!.blockReason!;
   const sessionId = (event.payload as { linearSessionId?: string }).linearSessionId;
@@ -875,7 +878,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       // Routing is sticky (ORC-291): a ticket at work stays in its repo, whichever repo of the team a label added names.
       const { change, otherRepo } = event.payload;
       if (change === 'added' && otherRepo && ticket && holds(ticket)) {
-        out.effects.push({ kind: 'comment', body: `Ce ticket reste sur le dépôt ${event.projectId} : le dépôt ne change pas en cours de route. Sans branche ni PR, arrêtez le travail, retirez la délégation, puis déléguez de nouveau. Sinon, ouvrez un nouveau ticket pour l'autre dépôt.` });
+        out.effects.push({ kind: 'comment', body: `Ce ticket reste sur le dépôt ${event.projectId} : le dépôt ne change pas en cours de route. Sans branche ni PR, arrêtez le travail, retirez la délégation, attendez 5 minutes que la réconciliation la voie, puis déléguez de nouveau. Sinon, ouvrez un nouveau ticket pour l'autre dépôt.` });
       }
       break;
     }
