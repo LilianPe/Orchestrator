@@ -162,6 +162,7 @@ const PAYLOADS: { [K in EventType]: fc.Arbitrary<EventPayloads[K]> } = {
   'verify.failed': fc.record({ runId, job, failures: fc.constant(VERIFY_FAILURES) }),
   'run.lost': fc.record({ runId, job, cause: fc.constantFrom('restart' as const, 'lease' as const) }),
   'verify.lost': fc.record({ runId, job }),
+  'verify.errored': fc.record({ runId, job, error: fc.constant('engine down') }),
   'timer.fired': timerFired,
   'control.pause': empty,
   'control.resume': empty,
@@ -207,7 +208,7 @@ const signedBy: fc.Arbitrary<Signed | undefined> = fc.oneof(
  * their producers stamp them `TRUSTED`. Only events that carry content from outside can be untrusted.
  */
 const FACTORY_PRODUCED: ReadonlySet<EventType> = new Set<EventType>([
-  'run.finished', 'run.lost', 'verify.passed', 'verify.failed', 'verify.lost', 'timer.fired', 'control.pause', 'control.resume', 'control.stop',
+  'run.finished', 'run.lost', 'verify.passed', 'verify.failed', 'verify.errored', 'verify.lost', 'timer.fired', 'control.pause', 'control.resume', 'control.stop',
   'effect.done', 'effect.failed', 'dead_letter.added', 'dead_letter.repaired',
 ]);
 

@@ -58,7 +58,7 @@ describe('worker: per-ticket lock and decision transaction', () => {
     expect(labels).toHaveLength(killAt === 1 ? 1 : 0);
     expect(h.tracker.calls.filter((c) => c.method === 'comment').map((c) => c.args[1])).toEqual(['Pris en charge.']);
     expect(h.runner.requests).toHaveLength(1);
-    expect((await h.store.recentEvents(10, 'REL-1')).filter((e) => e.type === 'ticket.delegated')).toHaveLength(1);
+    expect((await h.store.recentEvents(50, 'REL-1')).filter((e) => e.type === 'ticket.delegated')).toHaveLength(1);
 
     // Another start finds nothing left to do.
     await h.restart();
@@ -77,7 +77,7 @@ describe('worker: per-ticket lock and decision transaction', () => {
     expect((await h.store.pendingInbox(10)).map((e) => e.type)).toEqual(['ticket.delegated']);
 
     await h.restart();
-    expect((await h.store.recentEvents(10, 'REL-1')).filter((e) => e.type === 'ticket.delegated')).toHaveLength(1);
+    expect((await h.store.recentEvents(50, 'REL-1')).filter((e) => e.type === 'ticket.delegated')).toHaveLength(1);
     expect(h.tracker.calls.filter((c) => c.method === 'comment')).toHaveLength(1);
     expect(h.runner.requests).toHaveLength(1);
   });

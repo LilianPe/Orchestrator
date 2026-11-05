@@ -35,6 +35,8 @@ export const rawJobSchema = z
     verify: z.array(z.string()).optional(),
     pickup: z.boolean().optional(),
     structured_output: z.boolean().optional(),
+    repo_checks: z.boolean().optional(),
+    verify_failure: z.literal('block').optional(),
     red: z.object({ command: z.string().min(1), mode: z.enum(['measure', 'blocking']) }).partial().strict().optional(),
     limits: rawLimits.optional(),
     on_start: z.object({ move: logical.optional() }).strict().optional(),
@@ -140,6 +142,13 @@ export interface JobSpec {
   skill: string;
   input?: InputKind;
   verify: string[];
+  /**
+   * The job's commits go through `verify` whether or not it declares commands (ORC-151): the repository's, read on its
+   * base branch, and the checks of the diff; and only a commit it found green may be merged. Absent from the jobs and versions without it.
+   */
+  repoChecks?: boolean;
+  /** `block`: a failed `verify` blocks the ticket instead of sending the job back: the job did not write what it found (a review, on a human's push). */
+  verifyFailure?: 'block';
   pickup: boolean;
   /**
    * The job's agent always calls `submit_result` (ORC-289): a success without output is a failure.

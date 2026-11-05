@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import type { Forge, ForgeWriter, MergeResult } from '../adapters/forge/types.js';
 import type { RoleResolver } from '../adapters/roles/types.js';
@@ -20,6 +21,7 @@ import { ActivityRelay } from '../adapters/tracker/activity-relay.js';
 import { IssueNotFoundError, labelEchoKey, stateEchoKey, type ActivityInput, type Tracker, type TrackerIssue } from '../adapters/tracker/types.js';
 import type { Workspace, WorkspaceManager } from '../adapters/workspace/types.js';
 import { NO_REPO_VARIABLES, type RepoVariables } from '../config/repo-variables.js';
+import type { RepoConfig } from '../config/repo-config.js';
 import type { JobSpec, Workflow } from '../config/workflow-schema.js';
 import type { EffectRetry } from '../runtime/outbox.js';
 import { Worker } from '../runtime/worker.js';
@@ -65,7 +67,9 @@ import {
   TRUSTED,
 } from './types.js';
 import { runSealedSetup } from './sealed-setup.js';
-import { cappedCommand, type Verifier } from './verify.js';
+import { runCleanVerify, type CleanVerifier } from './clean-verify.js';
+import { logExcerpt } from '../checks/log-excerpt.js';
+import { cappedCommand, type Verifier, type VerifyResult } from './verify.js';
 import { PRODUCT_NAME } from '../product.js';
 import { checkRed, type RedDeps, type RedResult } from '../checks/red.js';
 import { checkFrozen, FREEZE_CHECK, freezeTests, newTestsOnly, REFREEZE, type FrozenTests } from '../checks/freeze.js';
@@ -143,6 +147,14 @@ export interface OrchestratorDeps {
   runner: Runner;
   workspaces: WorkspaceManager;
   verify: Verifier;
+  /**
+   * The agent's code may run on the daemon's host when there are no sandboxes: `verify`, `red`. Off, they answer an
+   * infrastructure failure: without an explicit `FACTORY_ALLOW_HOST_VERIFY=1`, an instance that lost its sandboxes
+   * does not fall back on running that code next to its secrets. Ignored with `sandboxes`, which are never fallen back from.
+   */
+  hostChecks?: boolean;
+  /** `verify` with sandboxes (ORC-151); a test replaces it. */
+  cleanVerify?: CleanVerifier;
   projects: ProjectRuntime[];
   packDir: string;
   /** `--settings` file for runs; defaults to <packDir>/settings.json. */
@@ -171,7 +183,9 @@ export interface OrchestratorDeps {
    */
   fullReadPaths?: (ticket: TicketState) => readonly string[];
   /** What the runner gets of the repository, at each launch (ORC-211). Absent: nothing. */
-  repoVariables?: (project: ProjectRuntime) => Promise<RepoVariables>;
+  repoVariables?: (project: ProjectRuntime, config?: RepoConfig) => Promise<RepoVariables>;
+  /** Where a project's base branch is fetched (ORC-151): required with `sandboxes`. */
+  originUrl?: (project: ProjectRuntime) => Promise<string>;
   dailyBudgetUsd?: number;
   newId?: () => string;
   activityIntervalMs?: number;
@@ -277,6 +291,7 @@ function sessionSaved(configDir: string, sessionId: string): boolean {
 
 /** Why the factory's merge is refused when the PR's head moved since the review (ORC-148). */
 const PUSHED = 'la branche a reçu un push depuis la review';
+const HOST_CHECKS_OFF = "aucun sandbox (FACTORY_CONTAINER_CLI) et FACTORY_ALLOW_HOST_VERIFY n'est pas à 1 : je ne lance pas le code de l'agent sur l'hôte.";
 
 export class Orchestrator {
   private background = new Map<Promise<void>, string | undefined>();
@@ -451,7 +466,7 @@ export class Orchestrator {
     const checked = new Set<string>();
     for (const row of await store.pendingInbox(Number.MAX_SAFE_INTEGER)) {
       if (row.type === 'run.finished' || row.type === 'run.lost') settled.add((row.payload as EventPayloads['run.lost']).runId);
-      if (row.type === 'verify.passed' || row.type === 'verify.failed' || row.type === 'verify.lost') checked.add((row.payload as EventPayloads['verify.lost']).runId);
+      if (row.type === 'verify.passed' || row.type === 'verify.failed' || row.type === 'verify.errored' || row.type === 'verify.lost') checked.add((row.payload as EventPayloads['verify.lost']).runId);
     }
     const interrupted = await store.runsByStatus('interrupted');
     for (const run of [...cut, ...interrupted]) {
@@ -719,9 +734,9 @@ export class Orchestrator {
   }
 
   /** What the runner gets of the repository (ORC-211): none when it cannot be read, the launch goes on. */
-  private async repoVariablesOf(project: ProjectRuntime): Promise<RepoVariables> {
+  private async repoVariablesOf(project: ProjectRuntime, config?: RepoConfig): Promise<RepoVariables> {
     if (!this.d.repoVariables) return NO_REPO_VARIABLES;
-    return this.d.repoVariables(project).catch((err: Error) => {
+    return this.d.repoVariables(project, config).catch((err: Error) => {
       this.log('warn', `${project.id}: repository variables not read: ${err.message}`);
       return NO_REPO_VARIABLES;
     });
@@ -744,6 +759,7 @@ export class Orchestrator {
       let uncommitted: string[];
       let runTests: RedDeps['run'];
       if (!sandboxes) {
+        if (!this.d.hostChecks) throw new Error(HOST_CHECKS_OFF);
         uncommitted = await this.d.workspaces.uncommitted(run.cwd);
         const { env } = await this.repoVariablesOf(project);
         runTests = async (cmd) => {
@@ -773,6 +789,54 @@ export class Orchestrator {
       return { verified: false, cause: 'infra', command: '', exitCode: null, detail: `Le contrôle du rouge n'a pas pu tourner : ${(err as Error).message}` };
     } finally {
       if (sandbox) await this.destroySandbox(sandbox.id, redRunId, run);
+    }
+  }
+
+  /**
+   * The commands of a job on what its run committed (ORC-151): out of the agent's worktree and the daemon, in
+   * `runCleanVerify`. It throws when there is no verdict, an infrastructure failure the agent is not sent. Without
+   * sandboxes, only under the explicit `hostChecks`: in the worktree, on the host, and without any of these guarantees.
+   */
+  private async verifyWork(project: ProjectRuntime, t: TicketState, run: RunRecord, job: JobSpec): Promise<VerifyResult & { sha?: string | undefined }> {
+    const { sandboxes, runsDir, originUrl } = this.d;
+    // A job that checks what it did not write (a review) has nothing to add on a commit found green: one that wrote it asks again.
+    const green = job.verifyFailure === 'block' ? t.verifiedSha : undefined;
+    if (!sandboxes) {
+      if (!this.d.hostChecks) throw new Error(HOST_CHECKS_OFF);
+      // Read before the commands: what they would commit is not what they checked.
+      const sha = await this.d.workspaces.head(run.cwd);
+      if (sha && sha === green) return { ok: true, failures: [], sha };
+      const verified = job.verify.length > 0 ? await this.d.verify(run.cwd, job.verify, undefined, (await this.repoVariablesOf(project)).env) : { ok: true, failures: [] };
+      // `factory/tests-gelés` (ORC-131), blocking from the first ticket, on top of the job's commands.
+      const frozen = goesThroughFreeze(t, job) ? await this.checkFrozen(project, run.cwd, t.frozenTests!) : [];
+      return { ...verified, ok: verified.ok && frozen.length === 0, failures: [...verified.failures, ...frozen], sha };
+    }
+    if (!runsDir || !originUrl) throw new Error('runsDir and originUrl are required with sandboxes');
+    if (!t.branch || !t.worktreePath) throw new Error(`aucune branche ou aucun worktree pour ${t.ticketId}`);
+    // A place the engine mounts from, new for each check: one cut can leave its own behind.
+    const workDir = join(runsDir, run.id, `verify-${randomUUID()}`);
+    mkdirSync(workDir, { recursive: true });
+    try {
+      return await (this.d.cleanVerify ?? runCleanVerify)({
+        sandboxes,
+        runId: run.id,
+        ticketId: t.ticketId,
+        branch: t.branch,
+        worktree: t.worktreePath,
+        originUrl: await originUrl(project),
+        gitDir: await this.d.workspaces.gitCommonDir(t.worktreePath),
+        workDir,
+        setup: project.workflow.workspace.setup,
+        commands: job.verify,
+        gitleaks: true,
+        ...(green ? { green } : {}),
+        ...(goesThroughFreeze(t, job) ? { frozen: t.frozenTests! } : {}),
+        env: async (config) => (await this.repoVariablesOf(project, config)).env,
+        log: (message) => this.log('warn', `verify of ${t.ticketId}: ${message}`),
+      });
+    } finally {
+      // Under the run's dir, purged with it: what the attack left unremovable costs no verdict.
+      await rm(workDir, { recursive: true, force: true }).catch((err: Error) => this.log('warn', `verify of ${t.ticketId}: ${workDir} not removed: ${err.message}`));
     }
   }
 
@@ -1188,14 +1252,18 @@ export class Orchestrator {
               );
               return;
             }
-            const verified = job.verify.length > 0 ? await this.d.verify(run.cwd, job.verify, undefined, (await this.repoVariablesOf(project)).env) : { ok: true, failures: [] };
-            // `factory/tests-gelés` (ORC-131), blocking from the first ticket, on top of the job's commands.
-            const frozen = goesThroughFreeze(t, job) ? await this.checkFrozen(project, run.cwd, t.frozenTests!) : [];
-            const res = { ...verified, ok: verified.ok && frozen.length === 0, failures: [...verified.failures, ...frozen] };
-            const base = { ...TRUSTED, at: clock.now(), projectId: project.id, ticketId };
+            const base = { ...TRUSTED, at: clock.now(), projectId: project.id, ticketId, id: `check:${run.id}` };
+            const payload = { runId: run.id, job: job.name };
+            let res: VerifyResult & { sha?: string | undefined };
+            try {
+              res = await this.verifyWork(project, t, run, job);
+            } catch (err) {
+              await this.submitResult({ ...base, type: 'verify.errored', payload: { ...payload, error: (err as Error).message } });
+              return;
+            }
             const event: FactoryEvent = res.ok
-              ? { ...base, id: `check:${run.id}`, type: 'verify.passed', payload: { runId: run.id, job: job.name, ...(c.output ? { output: c.output } : {}) } }
-              : { ...base, id: `check:${run.id}`, type: 'verify.failed', payload: { runId: run.id, job: job.name, failures: res.failures, ...(res.tree ? { tree: res.tree } : {}) } };
+              ? { ...base, type: 'verify.passed', payload: { ...payload, ...(res.sha ? { sha: res.sha } : {}), ...(c.output ? { output: c.output } : {}) } }
+              : { ...base, type: 'verify.failed', payload: { ...payload, failures: res.failures.map((f) => ({ ...f, output: logExcerpt(f.output) })), ...(res.tree ? { tree: res.tree } : {}) } };
             await this.submitResult(event);
           })(),
         );

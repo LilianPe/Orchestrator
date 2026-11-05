@@ -112,6 +112,8 @@ function buildJob(name: string, raw: RawJob, perRun: RunLimits): JobSpec {
     skill: need('skill'),
     input: raw.input,
     verify: raw.verify ?? [],
+    ...(raw.repo_checks ? { repoChecks: true } : {}),
+    ...(raw.verify_failure ? { verifyFailure: raw.verify_failure } : {}),
     pickup: raw.pickup ?? false,
     structuredOutput: raw.structured_output,
     // `attempts` counts every check, as `verifyAttempts`: the preset's returns to the job, plus the first one.

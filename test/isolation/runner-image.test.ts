@@ -14,6 +14,7 @@ describe.skipIf(!built)(`the runner image (${cli})`, () => {
     ['python', 'python3 --version', /^Python 3\./],
     ['uv', 'uv --version', /^uv 0\.13\.7/],
     ['git', 'git --version', /^git version/],
+    ['gitleaks', 'gitleaks version', /^v?8\.30\.1/],
     ['claude', 'claude --version', /^2\.1\.316/],
   ])('has %s', (_name, command, expected) => {
     expect(inImage(command)).toMatch(expected);

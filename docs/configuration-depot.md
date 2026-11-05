@@ -2,7 +2,7 @@
 
 Un dépôt peut déclarer à l'usine ses commandes, ses chemins sensibles et ses limites dans `.factory/config.yml`, à la racine. Le fichier est facultatif : sans lui, le socle de `factory/default` s'applique tel quel.
 
-**Statut (ORC-209, partie A).** Le schéma et `factory validate` existent. Le démon ne lit encore de ce fichier que `env` et `setup_secrets`, sur la branche par défaut, à chaque lancement (ORC-211). La lecture du reste et l'interdiction de `.factory/**` à l'agent viennent avec la partie C d'ORC-209 ; `factory.yml` côté serveur avec la partie B.
+**Statut (ORC-209, partie A).** Le schéma et `factory validate` existent. Le démon lit de ce fichier `env` et `setup_secrets`, sur la branche par défaut, à chaque lancement (ORC-211), et `commands`, `setup` et `env` à chaque `verify`, sur la branche par défaut de la forge, récupérée à ce moment-là : jamais sur la branche de l'agent, ni sur une référence du dépôt, qu'il peut écrire (ORC-151). La lecture du reste et l'interdiction de `.factory/**` à l'agent viennent avec la partie C d'ORC-209 ; `factory.yml` côté serveur avec la partie B.
 
 ## Exemple
 
@@ -26,9 +26,9 @@ network: { level: limited, allow: ["docs.exemple.com"] }   # none | limited (dé
 | Clé | Type | Défaut | Rôle |
 | -- | -- | -- | -- |
 | `extends` | texte | `factory/default@1.0` | Le préréglage ; seul `factory/default@1.0` existe au MVP. |
-| `setup` | commande | aucune | Préparation du dépôt (installation, migrations). |
-| `commands` | `nom: commande` | `{}` | Les contrôles du dépôt (`lint`, `typecheck`, `test`…). |
-| `env` | liste de noms | `[]` | Variables que le runner reçoit : `setup`, agent, contrôle du rouge, et `verify` tant qu'il tourne sur l'hôte. Voir [Variables et secrets](#variables-et-secrets). |
+| `setup` | commande | aucune | Préparation du dépôt (installation, migrations). `verify` la relance sur son clone neuf, à `limited` et sans secret, avant ses commandes ; absente : `workspace.setup` du workflow. |
+| `commands` | `nom: commande` | `{}` | Les contrôles du dépôt (`lint`, `typecheck`, `test`…), lancés par `verify` dans l'ordre du fichier, au niveau réseau `none`. Vide : `jobs.<job>.verify` du workflow, jusqu'à ORC-177. |
+| `env` | liste de noms | `[]` | Variables que le runner reçoit : `setup`, agent, contrôle du rouge, et `verify`. Voir [Variables et secrets](#variables-et-secrets). |
 | `setup_secrets` | liste de noms | `[]` | Secrets que le `setup` seul reçoit, scellés avant que l'agent démarre. |
 | `services` | liste | `[]` | Services à démarrer à côté du runner (`postgres`…). |
 | `sensitive_paths` | liste de motifs | `[]` | Chemins dont la modification marque le run (relecture renforcée). |
@@ -74,7 +74,7 @@ Une configuration **ajoute** des contrôles ou des interdits, elle n'en **retire
 - `network.level: full`, réservé à `setup`, jamais pour l'agent ; et dans `network.allow`, tout ce qui n'est pas un nom d'hôte (`*`, `*.com`, `0.0.0.0/0`) : un joker ou une plage reviendrait à `full` ;
 - un autre préréglage que `factory/default@1.0`.
 
-Les chemins interdits du socle (`.factory/**`) restent toujours interdits à l'agent, quoi que le fichier déclare.
+Les chemins interdits du socle (`.github/workflows/**`, `.factory/**`, `.claude/**`, `.git/hooks/**`, `.git/config`, `.gitattributes`, `.gitmodules`, `.npmrc`, `package.json#scripts`, `.husky/**`, `.vscode/**`, `Dockerfile*`, `.devcontainer/**`, `claims/**`, liens symboliques sortants) restent toujours interdits à l'agent, quoi que le fichier déclare. `factory/chemins-interdits` les bloque dans `verify`, à toute profondeur, sauf `.github/workflows/**` et `claims/**`, lus à la racine (ORC-151).
 
 `custom` est `limited` avec les hôtes du dépôt : c'est le plafond `limited` contre lequel les étapes du préréglage sont vérifiées ; `none` est le plafond `none`.
 

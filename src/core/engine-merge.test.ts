@@ -32,12 +32,41 @@ function inReview(patch: Partial<TicketState> = {}): TicketState {
     prUrl: 'https://github.com/acme/app/pull/7',
     prState: 'OPEN',
     reviewSha: 'abc123',
+    verifiedSha: 'abc123',
     ...patch,
   };
 }
 const done = (actor = 'u-lead', roles: readonly Role[] | undefined = MERGER) => ev('status.changed', { from: 'human_review', to: 'done' }, actor, roles);
 /** Back to Human Review, the reviewed commit kept: a move that concludes no work of the factory records none. */
 const backToReview = (body: RegExp) => [{ kind: 'move', to: 'human_review', keepReviewSha: true }, { kind: 'comment', body: expect.stringMatching(body) }];
+
+describe('a Done on a commit verify did not find green (ORC-151)', () => {
+  const done = (t: TicketState) => decide(t, ev('status.changed', { from: 'human_review', to: 'done' }, 'u-merger', MERGER), workflow);
+
+  it('merges the commit green and shown', () => {
+    const out = done(inReview({ reviewSha: 'abc', verifiedSha: 'abc' }));
+    expect(out.effects).toContainEqual({ kind: 'merge', sha: 'abc' });
+  });
+
+  it('refuses a commit since the green one, and sends it through the AI review, whose verify asks again', () => {
+    const out = done(inReview({ reviewSha: 'def', verifiedSha: 'abc' }));
+    expect(out.effects.some((e) => e.kind === 'merge')).toBe(false);
+    expect(out.effects).toContainEqual({ kind: 'comment', body: expect.stringContaining("n'a pas de vérification verte") });
+    expect(out.effects).toContainEqual({ kind: 'move', to: 'ai_review' });
+    expect(out.effects).toContainEqual(expect.objectContaining({ kind: 'start_run', job: 'review' }));
+  });
+
+  it('a blocked ticket waits for its human, in Human Review', () => {
+    const out = done(inReview({ reviewSha: 'def', verifiedSha: 'abc', blocked: true }));
+    expect(out.effects.some((e) => e.kind === 'merge' || e.kind === 'start_run')).toBe(false);
+    expect(out.effects).toContainEqual({ kind: 'move', to: 'human_review', keepReviewSha: true });
+  });
+
+  it('refuses when nothing was ever green', () => {
+    const out = done(inReview({ reviewSha: 'abc', verifiedSha: undefined }));
+    expect(out.effects.some((e) => e.kind === 'merge')).toBe(false);
+  });
+});
 
 describe('decide — Done by a human merges the PR (ORC-148)', () => {
   it('merges, on the commit shown in Human Review, when a human with the merge right moves the ticket to Done', () => {

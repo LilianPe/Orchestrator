@@ -20,7 +20,7 @@ services:
       - ${FACTORY_DIR:?définissez FACTORY_DIR (chemin absolu sur le serveur)}/data:${FACTORY_DIR}/data
       - ${FACTORY_DIR}/repos:${FACTORY_DIR}/repos
       - ${FACTORY_DIR}/install:${FACTORY_DIR}/install
-      # No runner gets it (the provider refuses the mount). `verify` still runs in this container until ORC-151: see docs/deploiement.md.
+      # No runner gets it (the provider refuses the mount), and `verify` runs nothing here (ORC-151). A hook an agent left in `.git` still can: see docs/deploiement.md.
       - ${FACTORY_ENGINE_SOCKET:?définissez FACTORY_ENGINE_SOCKET (socket du moteur rootless)}:/var/run/docker.sock
     environment:
       # The login of `claude`: an account of factory.yml (`token: env:CLAUDE_TOKEN_1`), or, on this image where the
