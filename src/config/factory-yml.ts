@@ -20,7 +20,7 @@ export interface FactoryYml {
     perStep?: Record<string, string>;
     effort?: { default: Effort; perStep?: Record<string, Effort> };
   };
-  /** Tickets worked at once; read, not applied yet (the scheduler still takes `parallel_sessions`). */
+  /** Tickets worked at once: the dev queue's capacity, over `parallel_sessions` of the workflow (ORC-203). */
   concurrency?: number;
   /** Read and validated; enforced by ORC-216. */
   budgets?: { perStepTokens?: Record<string, number>; perTicketTokens?: number; maxTurns?: Record<string, number>; onUsageLimit?: 'wait' };

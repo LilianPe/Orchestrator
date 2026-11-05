@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 import { ContainerSandboxProvider, defaultLimits, type SandboxLimits } from '../adapters/sandbox/docker-rootless.js';
 import { SandboxRouter } from '../adapters/sandbox/router.js';
 import type { SandboxProvider } from '../adapters/sandbox/types.js';
-import type { EgressProxy } from '../network/proxy.js';
+import type { Egress } from '../network/proxy-service.js';
 
 /** A daemon's id on a shared engine, from its home: two daemons never see (nor reap) each other's containers. */
 export function instanceId(home: string): string {
@@ -12,9 +12,9 @@ export function instanceId(home: string): string {
 
 /**
  * The sandboxes of real runs (ORC-204): a container per attempt when FACTORY_CONTAINER_CLI is set, none
- * otherwise. Each reaches out only through `egress`, the daemon's proxy (ORC-213).
+ * otherwise. Each reaches out only through `egress`, the factory's proxy (ORC-213).
  */
-export function makeSandboxes(env: NodeJS.ProcessEnv, instance: string, egress: EgressProxy): SandboxProvider | undefined {
+export function makeSandboxes(env: NodeJS.ProcessEnv, instance: string, egress: Egress): SandboxProvider | undefined {
   const cli = env['FACTORY_CONTAINER_CLI'];
   if (!cli) return undefined;
   if (cli !== 'docker' && cli !== 'podman') throw new Error(`FACTORY_CONTAINER_CLI=${cli} : docker ou podman attendu.`);

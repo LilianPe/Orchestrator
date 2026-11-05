@@ -30,7 +30,7 @@ relais init          # équipe Linear, application OAuth, base de connaissance, 
 relais up            # http://localhost:4100, puis « Connecter Linear »
 ```
 
-4. Dans Linear, créez un ticket clair (au moins 30 caractères de description) et **déléguez-le à `@relais`**. En quelques secondes : « Pris en compte. », statut *In Progress*, sortie en direct dans l'interface, puis PR ouverte, statut *Human Review* et résumé dans la session Linear.
+4. Dans Linear, créez un ticket clair (au moins 30 caractères de description) et **déléguez-le à `@relais`**. En moins de 10 s : le commentaire « Bien reçu. » et le plan dans la session, puis statut *In Progress*, sortie en direct dans l'interface, puis PR ouverte, statut *Human Review* et résumé dans la session Linear.
 5. Répondez dans la session pour demander des changements, passez le ticket en *AI Review* pour la review IA, mergez la PR sur GitHub : le ticket passe en *Done*.
 
 Sans tokens, pour tester l'interface : `relais up --fake-runner`.

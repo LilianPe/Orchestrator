@@ -1,3 +1,4 @@
+import type { PlanStep } from '../core/session-plan.js';
 import type { ActivityInput, SearchHit, Tracker, TrackerIssue } from '../adapters/tracker/types.js';
 
 export class TrackerSwitch implements Tracker {
@@ -25,4 +26,5 @@ export class TrackerSwitch implements Tracker {
   findActivity(s: string, e: string): Promise<string | undefined> { return Promise.resolve().then(() => this.t().findActivity(s, e)); }
   addExternalUrl(s: string, l: string, u: string): Promise<void> { return Promise.resolve().then(() => this.t().addExternalUrl(s, l, u)); }
   ensureSession(id: string): Promise<string> { return Promise.resolve().then(() => this.t().ensureSession(id)); }
+  setSessionPlan(s: string, plan: readonly PlanStep[]): Promise<void> { return Promise.resolve().then(() => this.t().setSessionPlan(s, plan)); }
 }

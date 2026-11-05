@@ -12,6 +12,7 @@ import { purgeRunDirs, purgeSessionDirs, purgeTranscripts } from '../adapters/ru
 import { FakeRunner } from '../adapters/runner/fake.js';
 import type { Runner } from '../adapters/runner/types.js';
 import { EgressProxy } from '../network/proxy.js';
+import { EgressClient, sandboxAgentHost, type Egress } from '../network/proxy-service.js';
 import { instanceId, makeSandboxes } from './sandbox-wiring.js';
 import { LinearApi } from '../adapters/tracker/linear/api.js';
 import { createLinearIngest } from '../adapters/tracker/linear/ingest.js';
@@ -32,7 +33,7 @@ import { EventBus } from '../core/bus.js';
 import { BLOCKED_LABEL } from '../core/engine.js';
 import { SystemClock } from '../core/clock.js';
 import { logicalFromName, Orchestrator, type ProjectRuntime } from '../core/orchestrator.js';
-import { Scheduler } from '../core/scheduler.js';
+import { devCapacity, Scheduler } from '../core/scheduler.js';
 import { TimerService } from '../runtime/timers.js';
 import type { FactoryEvent } from '../core/types.js';
 import { runVerify } from '../core/verify.js';
@@ -90,7 +91,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
   // On the loopback: the sandboxes reach it through the egress proxy, in this process (ORC-213).
   const agentListenHost = env['FACTORY_AGENT_HOST'] || '127.0.0.1';
   // The name the sandboxes use for it, resolved by the proxy alone: a sandbox resolves nothing.
-  const sandboxAgentHost = env['FACTORY_SANDBOX_AGENT_HOST'] || 'host.docker.internal';
+  const agentHostInSandbox = sandboxAgentHost(env);
   const githubApp = resolveGithubApp(instance, env);
   const githubSecret = githubWebhookSecret(instance, env);
 
@@ -141,16 +142,19 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       return true;
     };
 
-    const scheduler = new Scheduler(store, { dev: limits?.parallelSessions ?? 3, questions: limits?.questionSessions ?? 2 });
+    const devSessions = devCapacity(yml?.concurrency, limits?.parallelSessions);
+    const scheduler = new Scheduler(store, { dev: devSessions, questions: limits?.questionSessions ?? 2 });
     // The daemon's own secrets never enter a run's environment; masked all the same, should one surface.
     const daemonSecrets = () => [...daemonSecretValues(o.home, yml), ...(githubSecret ? [githubSecret] : [])];
     // A container per attempt (ORC-204) when FACTORY_CONTAINER_CLI is set; --fake-runner stays on the host.
     // The sandboxes' only way out (ORC-213): it applies each run's network level and journals its connections.
-    const egress = new EgressProxy({
+    // In a service of its own under compose (ORC-203), in this process otherwise.
+    const egressControl = env['FACTORY_EGRESS_CONTROL'];
+    const egress: Egress = egressControl ? new EgressClient(egressControl, log) : new EgressProxy({
       dir: paths.network,
       caDir: paths.egressCa,
       log,
-      agentApi: { host: sandboxAgentHost, port: agentPort, to: { host: agentListenHost === '0.0.0.0' ? '127.0.0.1' : agentListenHost, port: agentPort } },
+      agentApi: { host: agentHostInSandbox, port: agentPort, to: { host: agentListenHost === '0.0.0.0' ? '127.0.0.1' : agentListenHost, port: agentPort } },
     });
     const sandboxes = o.fakeRunner ? undefined : makeSandboxes(env, instanceId(o.home), egress);
     if (!o.fakeRunner && !sandboxes) log("Attention : FACTORY_CONTAINER_CLI absent, les runs tournent sur l'hôte, sans isolation.");
@@ -241,7 +245,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
         ...(yml?.readGuard ? { FACTORY_READ_MAX_LINES: String(yml.readGuard.maxLines) } : {}),
         ...(sandboxes
           ? {
-              FACTORY_API: `http://${sandboxAgentHost}:${agentPort}/agent`,
+              FACTORY_API: `http://${agentHostInSandbox}:${agentPort}/agent`,
               FACTORY_KNOWLEDGE: instance.knowledge ? SANDBOX_KNOWLEDGE : '',
               FACTORY_ROOT: SANDBOX_ROOT,
             }
@@ -267,14 +271,10 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       serial: labelsTurn,
       secret: webhookSecret,
       accept,
-      // The time the ack was posted is the first sign of life a measure reads (ORC-235).
-      ack: async (sessionId, eventId) => {
-        await trackerSwitch.activity(sessionId, { type: 'thought', body: 'Pris en compte.' });
-        await store.markAcked(eventId, clock.now()).catch((err: Error) => log(`ack of ${eventId} posted, its time not recorded: ${err.message}`));
-      },
       log,
       ctx: {
         projectIdForTeam: (k) => projects.find((p) => p.teamKey === k)?.id,
+        firstProject: () => projects[0]?.id,
         logicalFor: (pid, name) => {
           const p = projects.find((x) => x.id === pid);
           return p ? (logicalFromName(p.workflow.states, name) ?? null) : null;
@@ -297,7 +297,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     const timers = new TimerService(store, clock, () => orchestrator.wake(), (e) => log(`timers: ${e.message}`));
     const poller = new PrPoller({ store, forge, projects, submit: accept, clock, log });
     reconcileProject = async (p) => {
-      await reconcileOnce({ tracker: trackerSwitch, store, projects: [p], submit: accept, clock, log, serial: labelsTurn });
+      await reconcileOnce({ tracker: trackerSwitch, store, projects: [p], allProjects: projects, submit: accept, clock, log, serial: labelsTurn });
       await poller.pollOnce(p.id);
     };
     // GitHub webhooks (ORC-134) write to the inbox beside the poll (each reconciliation, ORC-185; every 30 s without
@@ -323,7 +323,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       linearConnected: () => !!trackerSwitch.current,
       tracker: trackerSwitch,
       capacity: () => ({
-        dev: { used: scheduler.inUse('dev'), total: limits?.parallelSessions ?? 3 },
+        dev: { used: scheduler.inUse('dev'), total: devSessions },
         questions: { used: scheduler.inUse('questions'), total: limits?.questionSessions ?? 2 },
       }),
       dailyBudgetUsd: instance.limits.perDayUsd,
@@ -360,7 +360,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     const server = serve({ fetch: app.fetch, port, hostname: instance.host });
     // Only with sandboxes: the agent API on a listener of its own, for them alone (ORC-204), reached through the egress proxy.
     const agentServer = sandboxes ? serve({ fetch: agentOnly(app), port: agentPort, hostname: agentListenHost }) : undefined;
-    if (agentServer) log(`API agent des sandboxes : ${agentListenHost}:${agentPort}, jointe en http://${sandboxAgentHost}:${agentPort}/agent`);
+    if (agentServer) log(`API agent des sandboxes : ${agentListenHost}:${agentPort}, jointe en http://${agentHostInSandbox}:${agentPort}/agent`);
     const relay = instance.relay.kind === 'smee' ? startSmeeRelay({ url: instance.relay.url, onWebhook: ingest, log }) : undefined;
     let purgeInterval: NodeJS.Timeout | undefined;
     let tickInterval: NodeJS.Timeout | undefined;

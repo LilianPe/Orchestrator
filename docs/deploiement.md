@@ -1,130 +1,157 @@
 # Déploiement
 
-Relais est un démon longue durée : il doit tourner en continu pour recevoir les webhooks, relever les PR et lancer les runs. Deux façons de le faire tourner : Docker (serveur) ou un service sur la machine.
+Le démon, `factoryd`, tourne en continu pour recevoir les webhooks, relever les PR et lancer les runs. Il y a une seule topologie : `docker compose up -d` sur un serveur Linux dédié à l'usine, avec un moteur rootless. Le serveur lui-même est le sujet d'ORC-126.
 
-## Docker
+Pour travailler sur un poste, sans conteneur : `factory up` (voir [`installation.md`](installation.md)). Ce n'est pas un mode de production.
 
-Le dépôt fournit un `Dockerfile` et un `compose.yaml`.
+## Les services
 
-### L'image
+| Service | Image | Rôle | Publié |
+|---|---|---|---|
+| `factoryd` | `Dockerfile` | Le démon. Seul à tenir le socket du moteur, avec lequel il crée les runners. | non |
+| `proxy` | la même | Le proxy de sortie des runners (`src/network/proxy.ts`, [ORC-213](decisions/ORC-213.md)), dans un processus à lui. | non |
+| `postgres` | `postgres:16` | L'état du démon. Sur le réseau interne seulement. | non |
+| `caddy` | `caddy:2.11.8-alpine` | Le TLS de l'interface et des webhooks, devant `factoryd`. L'exposition en production est le sujet d'ORC-221. | 80, 443 |
 
-- Base `node:24.22.1-bookworm-slim` (patch épinglé : la mise à jour de sécurité de Node se fait en changeant ce tag, pas par un simple rebuild), avec `git`, `gh` (dépôt officiel GitHub CLI) et Claude Code (`npm install -g @anthropic-ai/claude-code`, dernière version au moment du build).
-- Relais construit dans `/app` (`npm ci`, `npm run build`, dépendances de dev retirées).
-- Identité git par défaut au niveau système : `Relais <relais@localhost>`, et `safe.directory '*'` (les dépôts montés peuvent appartenir à un autre utilisateur). Les variables `GIT_AUTHOR_*` / `GIT_COMMITTER_*` la remplacent.
-- `RELAIS_HOME=/data`, `NODE_ENV=production`.
-- Tourne sous l'utilisateur **`node` (uid 1000)**, pas root.
-- Point d'entrée `docker/entrypoint.sh` : si `GH_TOKEN` est défini, `gh auth setup-git` (git pousse en HTTPS avec ce jeton), puis la commande, par défaut `node dist/src/cli/relais.js up`.
-- Port exposé : 4100.
+Les runners ne sont pas des services : `factoryd` en crée un par tentative, puis le détruit. Ils tournent en `--network none` ; leur seule sortie est le socket de leur run, servi par `proxy`. Aucun ne reçoit le socket du moteur : le provider refuse ce montage. Le serveur doit être dédié à l'usine : qui tient ce socket tient tout ce que le moteur peut faire.
 
-### Volumes
+`proxy` n'a aucun secret du démon. La clé de l'autorité de sortie est chez lui seul, dans `$FACTORY_DIR/egress-ca`, que `factoryd` ne monte pas. `factoryd` le pilote par un socket de contrôle (`data/network/control.sock`), jamais monté dans un runner. Si `proxy` s'arrête, les sockets des runs meurent avec lui : `factoryd` le voit, et remplace ces conteneurs à leur prochaine demande. Si `factoryd` s'arrête, `proxy` ferme ses runs, comme s'il tournait dans son processus.
 
-| Volume (compose) | Dans le conteneur | Contenu |
+## Pourquoi les mêmes chemins des deux côtés
+
+Le moteur lit les chemins d'un montage **sur l'hôte**, pas dans le conteneur de `factoryd`. Trois conséquences :
+
+- `$FACTORY_DIR` est un chemin absolu, monté au même endroit dans le conteneur.
+- Les chemins de `config.yaml` sont ces chemins-là (`repoPath: /srv/factory/repos/mon-app`, écrit en entier).
+- L'installation de l'usine, que chaque runner monte en lecture seule, n'existe que dans l'image. Au démarrage, `docker/entrypoint.sh` la copie dans `$FACTORY_DIR/install/<empreinte>`, une fois par image, et lance le démon depuis cette copie.
+
+| Dossier | Contenu | Monté par |
 |---|---|---|
-| `./data` | `/data` | `RELAIS_HOME` : `config.yaml`, `secrets.json`, `relais.db`, transcripts, worktrees. |
-| `./repos` | `/repos` | Les clones des dépôts confiés à Relais (et éventuellement le dépôt de connaissance). |
+| `data` | `FACTORY_HOME` : `config.yaml`, `factory.yml`, `secrets.json`, transcripts, worktrees | `factoryd` |
+| `data/network` | Sockets et journaux des runs, socket de contrôle | `factoryd`, `proxy` |
+| `repos` | Les clones des dépôts, en HTTPS | `factoryd` |
+| `install` | La copie de l'installation | `factoryd` |
+| `egress-ca` | L'autorité de sortie, sa clé comprise | `proxy` |
 
-Les deux doivent être accessibles en écriture par l'uid 1000 :
+## Les images
 
-```bash
-mkdir -p data repos && sudo chown -R 1000:1000 data repos
-```
+- **`Dockerfile`** (`factoryd` et `proxy`) : Node 24, `git`, le CLI `docker` et `gh`. `gh` reste jusqu'à ORC-125. Claude Code n'y est plus : l'agent tourne dans le runner. Utilisateur `node` (uid 1000).
+- **`docker/runner.Dockerfile`** (les runners) : Node 24 avec pnpm, Python 3 avec uv et pip, `git`, Claude Code. Versions épinglées. Ni `gh`, ni CLI de moteur, ni code du démon.
 
-Les dépôts sous `repos/` doivent avoir un remote **HTTPS** (`https://github.com/<org>/<dépôt>.git`) : il n'y a aucune clé SSH dans le conteneur. Vérifier : `docker compose exec relais git -C /repos/<dépôt> remote -v`.
+Aucune image ne reçoit de secret à la construction. Le test d'isolation n° 7 cherche des jetons dans l'historique, la configuration et les fichiers de chaque couche de l'image des runners.
 
-### Variables
+## Limites actuelles
+
+- **Publier** : un agent en runner n'a ni `gh`, ni jeton, et le proxy refuse `git push`. Jusqu'à ORC-125, un run sous compose ne peut donc pas ouvrir sa PR. `GH_TOKEN` ne sert qu'à `factoryd`.
+- **`verify` tourne encore dans `factoryd`** (ORC-151), avec le socket du moteur à portée. Le code qu'un agent a écrit (tests, scripts de `package.json`) peut donc piloter le moteur, sortir de l'isolation des runners et lire les secrets du démon. **Jusqu'à ORC-151, cette topologie ne protège pas contre un agent hostile** : ne lui confiez que des dépôts et des tickets de confiance. Même risque pour un hook git qu'un agent laisserait et que le démon exécuterait (ORC-205).
+- `factoryd` n'a ni pnpm ni uv : un `verify` qui en a besoin y échoue, jusqu'à ORC-151.
+
+## Variables
+
+Dans un fichier `.env` à côté de `compose.yaml` (non versionné). `docker compose` refuse de démarrer si une variable obligatoire manque.
 
 | Variable | Obligatoire | Rôle |
 |---|---|---|
 | `CLAUDE_TOKEN_1`, `CLAUDE_TOKEN_2` | l'un de ces moyens | Jetons des comptes Claude Code, lus par `factory.yml` (`token: env:CLAUDE_TOKEN_1`) ; le compte `claude.active` est le seul identifiant des runs. |
 | `ANTHROPIC_API_KEY` | l'un de ces moyens | Authentification de Claude Code sans compte actif, pour les runs de ce conteneur, qui tournent encore à côté du démon (jusqu'à ORC-179). Compose ne la réclame plus : sans aucun des deux, les runs échouent à l'authentification. |
 | `GH_TOKEN` | oui | `gh` et push HTTPS. Droits : [`github.md`](github.md#permissions-nécessaires). |
-| `RELAIS_UI_PASSWORD` | oui | Mot de passe de l'interface (le conteneur écoute hors bouclage). |
-| `GH_WEBHOOK_SECRET` | non | Secret des webhooks GitHub (`<publicUrl>/webhooks/github`) quand `github.webhookSecret` n'est pas dans `config.yaml`. Absent : webhooks GitHub refusés, le relevé des PR suit seul ([`github.md`](github.md#webhooks-github)). |
-| `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL` | non | Identité des commits (`Relais`, `relais@localhost` par défaut) ; compose les recopie dans `GIT_COMMITTER_*`. |
+| `FACTORY_UI_PASSWORD` | oui | Mot de passe de l'interface (le conteneur écoute hors bouclage). |
+| `FACTORY_DIR` | oui | Chemin absolu sur le serveur (voir ci-dessus). |
+| `FACTORY_ENGINE_SOCKET` | oui | Socket du moteur rootless, par exemple `/run/user/1000/docker.sock`. |
+| `FACTORY_RUNNER_IMAGE` | oui | L'image des runners, construite à part. |
+| `FACTORY_PUBLIC_HOST` | oui | Domaine de `publicUrl`, pour le certificat de `caddy`. |
+| `POSTGRES_PASSWORD` | oui | Mot de passe de la base, repris dans une URL : lettres et chiffres seulement. |
+| `FACTORY_COMMIT` | non | À la construction : le commit, relevé sur chaque tentative. |
+| `FACTORY_HTTP_PORT`, `FACTORY_HTTPS_PORT` | non | Ports publiés par `caddy` (80 et 443 par défaut). |
+| `FACTORY_ALLOW_ROOTFUL_ENGINE` | non | `1` : laisse démarrer sur un moteur qui n'est pas rootless. Pour un poste de développement, jamais pour le serveur. |
+| `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL` | non | Identité des commits (le nom du produit et `factory@localhost` par défaut) ; compose les recopie dans `GIT_COMMITTER_*`. |
 
-`docker compose` refuse de démarrer si une variable obligatoire manque. Mettez-les dans un fichier `.env` à côté de `compose.yaml` (non versionné) ou dans l'environnement du shell.
+Les webhooks GitHub lisent `github.webhookSecret` dans `config.yaml` ou `factory.yml` ([`github.md`](github.md#webhooks-github)) : `compose.yaml` ne transmet pas `GH_WEBHOOK_SECRET`.
 
-### `data/config.yaml`
+## Premier démarrage
 
-```yaml
-host: 0.0.0.0
-publicUrl: https://relais.exemple.fr
-relay:
-  kind: none
-projects:
-  - id: mon-app
-    repoPath: /repos/mon-app
-    linearTeamKey: APP
-limits:
-  perDayUsd: 40
-knowledge:
-  repoPath: /repos/relais-knowledge
-```
+Sur le serveur, avec le moteur rootless de l'utilisateur en marche :
 
-- `host: 0.0.0.0` : sinon le serveur n'est pas joignable depuis l'extérieur du conteneur ;
-- `publicUrl` : URL HTTPS par laquelle Linear joint Relais (webhook `<publicUrl>/webhooks/linear`, callback `<publicUrl>/oauth/callback`) ; placez un proxy HTTPS devant le port 4100 ;
-- chemins **du conteneur** (`/repos/…`).
+1. Écrire `.env`, créer `$FACTORY_DIR` et ses dossiers :
 
-### Premier démarrage
+   ```bash
+   . ./.env
+   mkdir -p "$FACTORY_DIR"/data/network "$FACTORY_DIR"/repos "$FACTORY_DIR"/install "$FACTORY_DIR"/egress-ca
+   ```
 
-1. Cloner les dépôts dans `repos/` (HTTPS), préparer `data/config.yaml`.
-2. Créer l'application Linear avec les URL basées sur `publicUrl` ([`linear.md`](linear.md)).
-3. Écrire `data/secrets.json` avec `clientId`, `clientSecret`, `webhookSecret` (format : [`configuration.md`](configuration.md#secretsjson)), propriétaire uid 1000, mode `0600`. On peut aussi lancer l'assistant dans le conteneur : `docker compose run --rm -it -w /repos/mon-app relais node /app/dist/src/cli/relais.js init`.
-4. `docker compose up -d --build`.
-5. Ouvrir `https://relais.exemple.fr` (mot de passe `RELAIS_UI_PASSWORD`), cliquer **Connecter Linear**.
+2. Cloner les dépôts dans `repos/` (en HTTPS), créer l'application Linear avec les URL basées sur `publicUrl` ([`linear.md`](linear.md)), et écrire `data/secrets.json` (`clientId`, `clientSecret`, `webhookSecret`, format : [`configuration.md`](configuration.md#secretsjson)), `data/config.yaml` et `data/factory.yml` :
 
-Les commandes d'exploitation se lancent dans le conteneur (le mot de passe y est déjà dans l'environnement) :
+   ```yaml
+   # data/config.yaml, avec FACTORY_DIR=/srv/factory
+   host: 0.0.0.0
+   publicUrl: https://usine.exemple.fr
+   relay: { kind: none }
+   projects:
+     - { id: mon-app, repoPath: /srv/factory/repos/mon-app, linearTeamKey: APP }
+   limits: { perDayUsd: 40 }
+   ```
 
-```bash
-docker compose exec relais node dist/src/cli/relais.js status
-docker compose exec relais node dist/src/cli/relais.js pause
-docker compose logs -f relais
-```
+   ```yaml
+   # data/factory.yml : un ticket à la fois au départ
+   concurrency: 1
+   ```
 
-Recette Docker : [`recette.md`](recette.md#8-docker-critère-8).
+   Puis donner le tout à l'uid 1000 des conteneurs. Dans un moteur rootless, c'est un sous-uid de l'utilisateur, pas l'utilisateur : seul un conteneur peut le faire. Ensuite, on ne modifie plus ces dossiers que depuis un conteneur (`docker compose exec factoryd ...`).
 
-## Service sur une machine (sans Docker)
+   ```bash
+   docker run --rm -v "$FACTORY_DIR:/base" node:24.22.1-bookworm-slim chown -R 1000:1000 /base
+   docker run --rm -v "$FACTORY_DIR:/base" node:24.22.1-bookworm-slim chmod 600 /base/data/secrets.json
+   ```
 
-`relais up` reste au premier plan. Pour qu'il tourne en continu, lancez-le sous un gestionnaire de services, avec le même utilisateur que celui connecté à `gh` et `claude`. Exemple d'unité **systemd utilisateur** (`~/.config/systemd/user/relais.service`) :
+3. Construire les images, l'une après l'autre :
 
-```ini
-[Unit]
-Description=Relais
-After=network-online.target
+   ```bash
+   docker build -f docker/runner.Dockerfile -t "$FACTORY_RUNNER_IMAGE" docker
+   FACTORY_COMMIT="$(git rev-parse HEAD)" docker compose build
+   ```
 
-[Service]
-ExecStart=/usr/bin/env relais up
-Restart=on-failure
-# Si host n'est pas en bouclage :
-# Environment=RELAIS_UI_PASSWORD=...
-# PATH doit contenir node, claude, gh et git :
-Environment=PATH=/home/moi/.local/bin:/usr/local/bin:/usr/bin:/bin
+4. `docker compose up -d`.
+5. Ouvrir `https://usine.exemple.fr` (mot de passe `FACTORY_UI_PASSWORD`), cliquer **Connecter Linear**.
 
-[Install]
-WantedBy=default.target
-```
+`factoryd` refuse de démarrer sur un moteur qui n'est pas rootless : tenir son socket donnerait root sur l'hôte.
+
+Les commandes d'exploitation se lancent dans le conteneur :
 
 ```bash
-systemctl --user daemon-reload && systemctl --user enable --now relais
-journalctl --user -u relais -f
-loginctl enable-linger $USER      # pour qu'il tourne sans session ouverte
+docker compose exec factoryd node dist/src/cli/factory.js status
+docker compose exec factoryd node dist/src/cli/factory.js pause
+docker compose logs -f factoryd
 ```
 
-Adaptez `PATH` à l'emplacement réel de `node` (nvm, fnm…), `claude` et `gh` : un service ne charge pas votre `.bashrc`. Cette unité est un exemple, non livré avec Relais.
+Recette : [`recette.md`](recette.md#8-docker-critère-8).
+
+## Ce qui n'est prouvé que sur le serveur
+
+La pile a tourné une fois sous Docker Desktop, qui n'est pas rootless. Ces points restent à vérifier par la recette, sur le serveur (ORC-126) :
+
+- le démarrage sur un moteur rootless (la détection cherche `rootless` dans `docker info`) ;
+- l'accès de l'uid 1000 au socket rootless par son groupe 0 (`group_add`) ;
+- les propriétaires sous les sous-uid : `factoryd`, `proxy` et les runners sous le même uid, un socket de run en `0600` ouvert par le runner ;
+- la préparation des dossiers ci-dessus ;
+- `caddy` sur les ports 80 et 443 : un moteur rootless ne publie sous 1024 qu'avec `net.ipv4.ip_unprivileged_port_start=80` ;
+- un vrai certificat, et les limites de processus, de mémoire et de CPU (cgroup v2, `loginctl enable-linger`) ;
+- Podman derrière le CLI `docker` : rien n'a été mesuré, le déploiement vise Docker rootless.
 
 ## Arrêt propre et redémarrage
 
-`SIGTERM` (`docker compose stop`, `systemctl stop`) ou `SIGINT` (`Ctrl+C`) déclenchent un arrêt propre : relais smee, minuteries, relevé des PR et réconciliation coupés ; chaque run en cours reçoit SIGINT (SIGKILL après 10 s) et est enregistré comme **interrompu** ; le démon attend la fin de ces runs, ferme les connexions SSE et la base.
-
-Laissez au moins 15 s au démon pour s'arrêter (Docker en laisse 10 par défaut : `docker compose stop -t 30` ou `stop_grace_period: 30s` dans `compose.yaml`).
+`SIGTERM` (`docker compose stop`) déclenche un arrêt propre : minuteries, relevé des PR et réconciliation coupés ; chaque run en cours reçoit SIGINT (SIGKILL après 10 s) et est enregistré comme **interrompu** ; le démon attend la fin de ces runs, ferme les connexions SSE et la base. `compose.yaml` lui laisse 30 s (`stop_grace_period`).
 
 Au démarrage suivant, Relais reprend seul ce qui a été coupé (par un arrêt ou un crash) : aucun ticket n'est bloqué pour autant ; détails dans [`exploitation.md`](exploitation.md#arrêt-redémarrage-et-runs-interrompus). Les demandes en file, les minuteries (retours regroupés) et l'état de pause sont conservés dans `relais.db`.
+
+Sous compose, cet état est dans Postgres, pas dans un fichier.
 
 ## Mise à jour
 
 ```bash
-git pull && npm ci && npm run build      # poste
-docker compose up -d --build             # Docker
+git pull
+docker build -f docker/runner.Dockerfile -t "$FACTORY_RUNNER_IMAGE" docker
+FACTORY_COMMIT="$(git rev-parse HEAD)" docker compose build
+docker compose up -d
 ```
 
-puis redémarrer. `run-settings.json` est régénéré au démarrage.
+Chaque image a sa copie de l'installation dans `$FACTORY_DIR/install`. Les anciennes restent, un conteneur pouvant encore tourner depuis l'une d'elles : à retirer à la main une fois la mise à jour faite. `run-settings.json` est régénéré au démarrage.

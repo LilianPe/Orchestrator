@@ -57,6 +57,19 @@ describe('bootstrap', () => {
     expect(logs.some((m) => m.includes('GitHub App 456'))).toBe(true);
   });
 
+  it('takes the dev capacity from concurrency in factory.yml (ORC-203)', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
+    saveInstance(home, { port: 4179, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
+    writeFileSync(join(home, 'factory.yml'), 'concurrency: 1\n');
+    const app = await startFactory({ home, fakeRunner: true, log: () => {} });
+    try {
+      const state = (await (await fetch('http://127.0.0.1:4179/api/state')).json()) as { capacity: { dev: { total: number } } };
+      expect(state.capacity.dev.total).toBe(1);
+    } finally {
+      await app.stop();
+    }
+  });
+
   describe('the whole-read settings of a run (ORC-279)', () => {
     /** What bootstrap gave the orchestrator: its `recover` is the first thing to run with them. */
     const depsOf = async (port: number, yml?: string) => {
