@@ -95,8 +95,10 @@ describe.skipIf(!enabled)(`what an agent leaves in its git dir, under the factor
   const ask = (patch: object = {}) => ({ projectId: 'p', repoPath: repo, ticketId: 'ISO-1', title: 'hostile', kind: 'worktree' as const, slot: 0, portBase: 4200, runId: 'aaaaaaaa1111', ...patch });
 
   const scripted = async (id: string, script: string) => {
-    // As its config spells it: the rewrite matches on that, and git rewrites a Windows path.
-    const r = await provider.exec(id, ['bash', '-c', script], { env: { ...gitEnv(git(repo, 'config', 'remote.origin.url')), TRAP: trap } });
+    // In a global config, as the runner's image has it in its system one: git clears GIT_CONFIG_* for a local transport's upload-pack, which then refuses a mount it does not own.
+    const trusting = `mkdir -p "$HOME" && git config --global --add safe.directory '*'\n`;
+    // The URL as its config spells it: the rewrite matches on that, a Windows path included.
+    const r = await provider.exec(id, ['bash', '-c', trusting + script], { env: { ...gitEnv(git(repo, 'config', 'remote.origin.url')), HOME: '/tmp/agent-home', TRAP: trap } });
     return { ...r, out: report(r.stdout) };
   };
 
@@ -118,6 +120,8 @@ describe.skipIf(!enabled)(`what an agent leaves in its git dir, under the factor
     git(base, 'clone', '-q', origin, repo);
     git(repo, 'config', 'user.email', 't@t');
     git(repo, 'config', 'user.name', 't');
+    // The agent's repository inherits it: a checkout on Windows, in CRLF, would read as modified from the sandbox.
+    git(repo, 'config', 'core.autocrlf', 'false');
     mkdirSync(join(repo, '.claude'));
     writeFileSync(join(repo, '.claude', 'settings.json'), '{}\n');
     writeFileSync(join(repo, 'README.md'), 'base\n');
