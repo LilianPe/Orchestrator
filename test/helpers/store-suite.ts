@@ -1,7 +1,7 @@
 import { expect, it } from 'vitest';
 import type { AttemptLabels } from '../../src/core/attempt-labels.js';
 import { newTicketState, TRUSTED, type FactoryEvent, type TicketState } from '../../src/core/types.js';
-import { timerEvent, type DecisionPlan, type DecisionRequest, type QueueItem, type RunRecord, type Store, type WorkflowVersion } from '../../src/store/types.js';
+import { timerEvent, type DecisionPlan, type DecisionRequest, type QueueItem, type RunRecord, type SecurityLog, type Store, type WorkflowVersion } from '../../src/store/types.js';
 
 function run(patch: Partial<RunRecord> = {}): RunRecord {
   return {
@@ -192,6 +192,38 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     expect(await s.mergedPrOf('p', 'ddd')).toBeUndefined();
     expect(await s.mergedPrOf('p', 'eee')).toBeUndefined();
     expect(await s.mergedPrOf('p', 'zzz')).toBeUndefined();
+  });
+
+  it("keeps a run's security log once, and counts hosts and rules over a period (ORC-296)", async () => {
+    const s = await store();
+    const egress = (at: number, host: string, ok = true) => ({ at, method: 'GET', host, path: '/x', ok, ...(ok ? {} : { reason: 'refused' }), up: 1, down: 2 });
+    const log: SecurityLog = {
+      runId: 'r1', projectId: 'p', ticketId: 'REL-1', at: 500,
+      egress: [egress(100, 'b.example'), egress(110, 'a.example', false), { at: 120, method: 'CONNECT', host: 'a.example', port: 22, ok: false, reason: 'port', up: 0, down: 0 }, egress(130, 'b.example')],
+      refusals: [{ at: 140, tool: 'Bash', rule: 'push-trunk', command: 'git push origin main' }],
+      skipped: { egress: 1, refusals: 2 },
+    };
+    expect(await s.securityLog('r1')).toBeUndefined();
+    expect(await s.putSecurityLog(log)).toBe(true);
+    expect(await s.putSecurityLog({ ...log, egress: [], refusals: [] })).toBe(false);
+    expect(await s.securityLog('r1')).toEqual(log);
+    await s.putSecurityLog({
+      runId: 'r2', projectId: 'p', ticketId: 'REL-2', at: 900, egress: [egress(800, 'a.example')],
+      refusals: [{ at: 200, tool: 'Bash', rule: 'force-push', command: 'x' }, { at: 210, tool: 'WebSearch', rule: 'web-search', command: 'q' }, { at: 900, tool: 'Bash', rule: 'force-push', command: 'y' }],
+      skipped: { egress: 0, refusals: 0 },
+    });
+    expect(await s.securityStats(0, 900)).toEqual({
+      hosts: [
+        { host: 'a.example', requests: 3, refused: 2 },
+        { host: 'b.example', requests: 2, refused: 0 },
+      ],
+      rules: [
+        { rule: 'force-push', refusals: 1 },
+        { rule: 'push-trunk', refusals: 1 },
+        { rule: 'web-search', refusals: 1 },
+      ],
+    });
+    expect(await s.securityStats(115, 205)).toEqual({ hosts: [{ host: 'a.example', requests: 1, refused: 1 }, { host: 'b.example', requests: 1, refused: 0 }], rules: [{ rule: 'force-push', refusals: 1 }, { rule: 'push-trunk', refusals: 1 }] });
   });
 
   it('still reads a run stored without labels', async () => {

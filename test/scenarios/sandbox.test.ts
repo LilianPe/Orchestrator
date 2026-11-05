@@ -346,3 +346,44 @@ describe('the ticket session across attempts', () => {
     for (const r of h.runner.requests) expect(existsSync(join(h.runsDir!, r.runId, 'refusals', 'refusals.jsonl'))).toBe(true);
   });
 });
+
+/** ORC-296: a run's two security journals go into the base when its sandbox is destroyed, a summary of its refusals to the ticket's session. */
+describe("a run's security log", () => {
+  /** A held dev run of REL-1 whose journals hold `egress` and `refusals` lines when it ends. */
+  async function runWith(egress: string[], refusals: string[]) {
+    const h = createHarness({ sandboxed: true });
+    h.runner.enqueue({ hold: true });
+    await delegate(h);
+    const runId = (await h.ticket()).activeRunId!;
+    writeFileSync(join(h.runsDir!, runId, 'egress.jsonl'), egress.map((l) => `${l}\n`).join(''));
+    writeFileSync(join(h.runsDir!, runId, 'refusals', 'refusals.jsonl'), refusals.map((l) => `${l}\n`).join(''));
+    h.runner.release(runId);
+    await h.advance(0);
+    return { h, runId };
+  }
+  const at = '2026-11-03T10:00:00.000Z';
+  const request = (host: string, ok: boolean) => JSON.stringify({ at, method: 'GET', host, path: '/', ok, ...(ok ? {} : { reason: 'host not allowed' }), up: 0, down: 0 });
+  const refusal = (rule: string, ticket = 'REL-1') => JSON.stringify({ at, tool: 'Bash', command: 'git push origin main # TOKEN=s3cr3t', rule, ticket });
+  const summaries = (h: ReturnType<typeof createHarness>) => h.tracker.activities('ls-1').flatMap((a) => ('body' in a && a.body.startsWith('Refus pendant ce run') ? [{ type: a.type, body: a.body }] : []));
+
+  it('stores the connections and refusals of the run, tied to it and its ticket, and posts a summary without the commands', async () => {
+    const { h, runId } = await runWith([request('registry.npmjs.org', true), request('evil.example', false)], [refusal('push-trunk'), refusal('push-trunk')]);
+    const log = await h.store.securityLog(runId);
+    expect(log).toMatchObject({ runId, projectId: 'p', ticketId: 'REL-1', skipped: { egress: 0, refusals: 0 } });
+    expect(log!.egress.map((e) => [e.host, e.ok])).toEqual([['registry.npmjs.org', true], ['evil.example', false]]);
+    expect(log!.refusals.map((r) => r.rule)).toEqual(['push-trunk', 'push-trunk']);
+    const [summary] = summaries(h);
+    expect(summary).toMatchObject({ type: 'thought' });
+    expect(summary!.body).toContain('`push-trunk` : 2');
+    expect(summary!.body).toContain('`evil.example` (1)');
+    expect(JSON.stringify(h.tracker.activities('ls-1'))).not.toContain('s3cr3t');
+    expect(await h.ticket()).toMatchObject({ logical: 'human_review', blocked: false });
+  });
+
+  it('skips and counts the forged lines, posts nothing for a run without a refusal, and the run ends as it would', async () => {
+    const { h, runId } = await runWith([request('registry.npmjs.org', true)], ['{"rule":"push"}', 'garbage', refusal('push', 'REL-9')]);
+    expect(await h.store.securityLog(runId)).toMatchObject({ refusals: [], skipped: { refusals: 3 } });
+    expect(summaries(h)).toEqual([]);
+    expect(await h.ticket()).toMatchObject({ logical: 'human_review', blocked: false });
+  });
+});

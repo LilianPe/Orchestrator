@@ -217,6 +217,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
             sandboxes,
             sessionsDir: paths.sessions,
             runsDir: paths.runs,
+            egressJournal: (runId: string) => egress.journalPath(runId),
             // factory-agent runs from the factory's install, read-only: only what it needs, never the whole root,
             // which can hold a `.env` or a dev FACTORY_HOME. The knowledge base, read-only, for the session-start hook.
             sandboxMounts: [
