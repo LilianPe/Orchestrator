@@ -1,5 +1,6 @@
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
+import { REFREEZE } from '../../src/checks/freeze.js';
 import { effectiveEvent } from '../../src/core/dead-letter.js';
 import type { Role } from '../../src/core/authz.js';
 import { AUTHZ_REFUSED, decide, isFenced, mayCheck, SENSITIVE_PATHS } from '../../src/core/engine.js';
@@ -141,7 +142,38 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
   });
 
   it.todo('I2 — no gate passed without an approval later than the last push (no gate in decide yet: human gates of ORC-212, ORC-198)');
-  it.todo('I3 — a frozen test leaves the freeze only through a human /refreeze (no freeze in decide yet: ORC-131)');
+  describe('I3 — a frozen test leaves the freeze only through a human /refreeze', () => {
+    // Two red checks of the tests step, each with its freeze, then a /refreeze by a member who is not a maintainer.
+    const A = { sha: 'aaa', files: { 'a.test.ts': '1' } };
+    const B = { sha: 'bbb', files: { 'a.test.ts': '2' } };
+    const tests = (id: string, frozen: typeof A) => [
+      sh({ type: 'run.started', runId: id, job: 'tests', queue: 'dev', claudeSessionId: 'claude-1' }),
+      ext('run.finished', { runId: id, job: 'tests', outcome: 'success', costUsd: 0.5, turns: 3, lastText: 'fini' }),
+      ext('verify.passed', { runId: id, job: 'tests', red: 'assertion', frozen }),
+    ];
+    const byMember: Entry = {
+      kind: 'external',
+      event: { ...(ext('command', { name: REFREEZE, body: '', linearSessionId: 's-q1', author: 'armand', frozen: B }).event as FactoryEvent), actor: 'u-dev', roles: ['team_member'] },
+    };
+    const refrozen = seq(...delegated('dev'), ...tests('r1', A), ...tests('r2', B), byMember);
+    it(
+      'a frozen file is dropped, or its fingerprint changes, only on a /refreeze signed by a designated maintainer',
+      () => {
+        holds((s) => {
+          for (const step of decided(run(s))) {
+            const before = step.before?.frozenTests?.files ?? {};
+            const after = step.after?.frozenTests?.files ?? {};
+            if (Object.entries(before).every(([path, print]) => after[path] === print)) continue;
+            const e = step.event;
+            expect(e.type === 'command' && e.payload.name === REFREEZE && !!e.actor && !!e.roles?.includes('maintainer')).toBe(true);
+          }
+        }, [refrozen]);
+      },
+      TIMEOUT,
+    );
+
+    it.todo('I3 on the writes: no write effect targets a frozen file (the agent writes in its sandbox; checked by factory/tests-gelés, ORC-151)');
+  });
   it.todo('I4 — the risk of a run never goes down (no risk in the state yet: recorded by intake, ORC-206)');
 
   describe('I5 — every loop has a bounded counter, red CI included', () => {
@@ -583,7 +615,9 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
             const answers = step.decision.effects.filter((e) => !(isDone(step) && backToReview(e)));
             expect(answers, 'refusal not answered once').toHaveLength(answered ? 1 : 0);
             for (const e of answers) expect(['activity', 'comment']).toContain(e.kind);
-            expect(step.event.roles, 'refused an event whose roles were not resolved').toBeDefined();
+            // But `/refreeze` (ORC-131), refused without roles too: a freeze never opens by default.
+            const refreeze = step.event.type === 'command' && step.event.payload.name === REFREEZE;
+            if (!refreeze) expect(step.event.roles, 'refused an event whose roles were not resolved').toBeDefined();
             // The orchestrator resolves roles only where `mayCheck` says the matrix may be checked.
             expect(mayCheck(step.event, wf), `${step.event.type} refused where the orchestrator resolves no roles`).toBe(true);
           }
@@ -602,6 +636,11 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
             // A merge needs a checked actor: an unchecked Done never merges, the one decision the check adds to.
             if (isDone(step)) {
               expect(unchecked.effects.some((e) => e.kind === 'merge'), 'an unchecked Done merged').toBe(false);
+              continue;
+            }
+            // So does a /refreeze (ORC-131): unchecked, it never regels.
+            if (step.event.type === 'command' && step.event.payload.name === REFREEZE) {
+              expect(unchecked.events, 'an unchecked /refreeze regeled').toEqual([]);
               continue;
             }
             // Only a checked delegation names the run's initiator: the one event an unchecked decision leaves out.
