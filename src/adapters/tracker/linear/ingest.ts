@@ -10,14 +10,10 @@ export interface IngestDeps {
    * inbox already holds its id. Rejects when the write fails.
    */
   accept: (e: FactoryEvent) => Promise<boolean>;
-  /** Posts the ack of event `eventId` in its session; the daemon also records when (ORC-235). */
-  ack: (sessionId: string, eventId: string) => Promise<void>;
   log: (m: string) => void;
   /** The turn the reconciliation shares, around the known labels (ORC-185); one of its own otherwise. */
   serial?: Serial;
 }
-
-const ACKED = new Set(['ticket.delegated', 'session.mentioned', 'command']);
 
 /**
  * The Linear webhook (ORC-147): the response comes only once the events are in the inbox. 200
@@ -41,10 +37,8 @@ export function createLinearIngest(d: IngestDeps) {
     const turn = inTurn(async () => {
       const events = await mapLinearWebhook(body, key, d.ctx);
       for (const e of events) {
-        // A duplicate (already in the inbox) is neither acked nor processed again.
-        if (!(await d.accept(e))) continue;
-        const sessionId = (e.payload as { linearSessionId?: string }).linearSessionId;
-        if (ACKED.has(e.type) && sessionId) d.ack(sessionId, e.id).catch((err: Error) => d.log(`ack failed: ${err.message}`));
+        // A duplicate (already in the inbox) is not processed again; the ack is an effect of its decision (ORC-171).
+        await d.accept(e);
       }
       // Only once the events are written: a webhook sent again must not find its change already known.
       await recordIssueLabels(body, d.ctx).catch((err: Error) => d.log(`labels not recorded: ${err.message}`));

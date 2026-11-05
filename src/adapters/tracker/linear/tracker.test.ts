@@ -29,6 +29,13 @@ const states = { workflowStates: { nodes: [
 ] } };
 
 describe('LinearTracker', () => {
+  it('writes the whole plan of a session, as Linear replaces it at each update (ORC-171)', async () => {
+    const { api, calls } = fakeLinear({ SessionUpdate: () => ({ agentSessionUpdate: { success: true } }) });
+    const plan = [{ content: 'Comprendre', status: 'inProgress' }, { content: 'Build', status: 'pending' }] as never;
+    await new LinearTracker(api, 'app-1').setSessionPlan('as-1', plan);
+    expect(calls.at(-1)?.vars).toEqual({ id: 'as-1', input: { plan } });
+  });
+
   it('maps an issue', async () => {
     const { api } = fakeLinear({ Issue: () => ({ issue: node }) });
     expect(await new LinearTracker(api, 'app-1').getIssue('REL-1')).toEqual({

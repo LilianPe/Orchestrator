@@ -21,10 +21,11 @@ Le suivi des tickets : lire un ticket, le déplacer, l'étiqueter, commenter, et
 | `activity(session, a, effectId?)` | une activité dans la session (`thought`, `response`, `elicitation`, `error`, `action`, éphémère ou non) ; avec `effectId`, sous un id dérivé de l'effet | écrit une seconde activité : l'appelant cherche d'abord avec `findActivity` | non spécifié (le faux accepte une session inconnue) |
 | `findActivity(session, effectId)` | l'id de l'activité de la session écrite pour cet effet, `undefined` sinon | lecture | non spécifié |
 | `addExternalUrl(session, label, url)` | un lien sur la session ; rien si la session a déjà cette URL | n'écrit rien | non spécifié |
+| `setSessionPlan(session, plan)` | le plan de la session est `plan`, en entier (ORC-171) | réécrit le même état | non spécifié ; l'usine journalise l'erreur et continue |
 
 ## Idempotence
 
-Les écritures rejouables sans dommage sont celles qui écrivent un état final : `moveTo`, `setLabels` et `addExternalUrl`. `comment` et `activity` d'un effet de l'outbox sont clés par l'id de l'effet (ORC-162) : le moteur cherche avec `findComment` / `findActivity` avant d'écrire, et un rejeu n'écrit rien. Sans `effectId` (avis de reprise, réponses hors outbox, relais du flux d'un run), ou pour `ensureSession`, un rejeu écrit en double. Le détail, et ce que l'API Linear permet, est dans [Idempotence des effets externes](../idempotence.md) ; ces cas sont testés par `test/scenarios/idempotency.test.ts` et `linear/tracker.test.ts`, pas encore par la suite de conformité (ORC-189).
+Les écritures rejouables sans dommage sont celles qui écrivent un état final : `moveTo`, `setLabels`, `addExternalUrl` et `setSessionPlan`. `comment` et `activity` d'un effet de l'outbox sont clés par l'id de l'effet (ORC-162) : le moteur cherche avec `findComment` / `findActivity` avant d'écrire, et un rejeu n'écrit rien. Sans `effectId` (avis de reprise, réponses hors outbox, relais du flux d'un run), ou pour `ensureSession`, un rejeu écrit en double. Le détail, et ce que l'API Linear permet, est dans [Idempotence des effets externes](../idempotence.md) ; ces cas sont testés par `test/scenarios/idempotency.test.ts` et `linear/tracker.test.ts`, pas encore par la suite de conformité (ORC-189).
 
 ## Fencing
 

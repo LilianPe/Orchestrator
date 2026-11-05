@@ -23,13 +23,12 @@ export const ASK_TOKENS = { input: 100, output: 50, cacheRead: 2_000, cacheCreat
  */
 export async function firstRun(h: Harness): Promise<TicketMeasures> {
   const ingest = linearIngest(
+    // The worker takes the event, and posts its ack, this long after the webhook.
     async (e) => {
-      const fresh = await h.orch.accept(e);
       h.clock.advance(ACK_MS);
-      return fresh;
+      return h.orch.accept(e);
     },
-    [],
-    { acked: (id) => h.store.markAcked(id, h.clock.now()), now: () => h.clock.now() },
+    { now: () => h.clock.now() },
   );
   h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Exporter les audits en CSV depuis la liste des audits.' });
   h.runner.enqueue(

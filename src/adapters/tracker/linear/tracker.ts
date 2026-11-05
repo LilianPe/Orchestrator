@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import type { PlanStep } from '../../../core/session-plan.js';
 import type { LogicalState } from '../../../core/types.js';
 import type { TeamDirectory } from '../../roles/types.js';
 import { effectMarker, IssueNotFoundError, type ActivityInput, type SearchHit, type Tracker, type TrackerIssue } from '../types.js';
@@ -290,6 +291,10 @@ export class LinearTracker implements Tracker, TeamDirectory {
     const { agentSession } = await this.api.gql<{ agentSession: { externalLinks: { url: string }[] } | null }>(Q.sessionLinks, { id: sessionId });
     if (agentSession?.externalLinks.some((l) => l.url === url)) return;
     await this.api.gql(Q.sessionUpdate, { id: sessionId, input: { addedExternalUrls: [{ label, url }] } });
+  }
+
+  async setSessionPlan(sessionId: string, plan: readonly PlanStep[]): Promise<void> {
+    await this.api.gql(Q.sessionUpdate, { id: sessionId, input: { plan } });
   }
 
   async ensureSession(identifier: string): Promise<string> {

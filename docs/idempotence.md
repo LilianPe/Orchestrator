@@ -30,6 +30,7 @@ Les autres effets de `decide`, rattachés comme ORC-138 le propose (point 6) :
 
 | Effet | Comportement en doublon |
 |---|---|
+| `ack` (accusé, ORC-171) | les lignes Commentaire et Activité, sur la même clé : un rejeu cherche chacun et n'écrit que ce qui manque ; le plan (`setSessionPlan`) est un état final ; l'heure gardée sur la ligne d'inbox est la première |
 | `move` (statut) | état final, naturellement idempotent ; écho filtré |
 | `link_pr` (`addExternalUrl`) | état final : l'adaptateur Linear relit les liens de la session et n'ajoute pas une URL déjà là (le faux aussi) |
 | `stop_run`, `cleanup` | naturellement idempotents : arrêter ce qui est arrêté, supprimer ce qui n'existe plus ne fait rien |

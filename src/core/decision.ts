@@ -15,6 +15,11 @@ export type Effect =
   | { kind: 'move'; to: LogicalState; keepReviewSha?: true }
   | { kind: 'labels'; add: string[]; remove: string[] }
   | { kind: 'comment'; body: string }
+  /**
+   * The ack of a webhook's event (ORC-171): `body` in its session, as Linear asks of a session within 10 s, its time
+   * recorded on the inbox row. `comment`: on the ticket too (ORC-140), first. `plan`: then opens the session's plan.
+   */
+  | { kind: 'ack'; body: string; linearSessionId: string; comment?: true; plan?: true }
   | { kind: 'activity'; type: ActivityType; body: string; linearSessionId?: string; runId?: string }
   | { kind: 'post_output'; style: 'summary' | 'reply' | 'synthesis'; runId: string; output?: AgentOutput }
   | { kind: 'link_pr'; url: string }

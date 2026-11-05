@@ -1,0 +1,38 @@
+import { describe, expect, it } from 'vitest';
+import { advancePlan, closePlan, planStepOfJob, startPlan, type PlanStep } from './session-plan.js';
+
+const statuses = (plan: readonly PlanStep[]) => plan.map((s) => s.status);
+
+describe('session plan (ORC-171)', () => {
+  it('starts on understanding the ticket, the seven steps in the order of the MVP doc', () => {
+    expect(startPlan().map((s) => s.content)).toEqual(['Comprendre', 'Questions', 'Spec', 'Tests', 'Build', 'Vérif', 'PR']);
+    expect(statuses(startPlan())).toEqual(['inProgress', 'pending', 'pending', 'pending', 'pending', 'pending', 'pending']);
+  });
+
+  it('completes what ran and cancels what was skipped: a step that never ran is not shown as done', () => {
+    expect(statuses(advancePlan(startPlan(), 'Build'))).toEqual(['completed', 'canceled', 'canceled', 'canceled', 'inProgress', 'pending', 'pending']);
+  });
+
+  it('goes back to an earlier step: what came after it is to do again', () => {
+    const atCheck = advancePlan(advancePlan(startPlan(), 'Build'), 'Vérif');
+    expect(statuses(advancePlan(atCheck, 'Build'))).toEqual(['completed', 'canceled', 'canceled', 'canceled', 'inProgress', 'pending', 'pending']);
+  });
+
+  it('marks the PR done once it exists, the check the run never went through canceled', () => {
+    expect(statuses(advancePlan(advancePlan(startPlan(), 'Build'), 'PR', 'completed'))).toEqual(['completed', 'canceled', 'canceled', 'canceled', 'completed', 'canceled', 'completed']);
+  });
+
+  it('closes on the end of the work: the step under way is done, the PR too only when one exists', () => {
+    const building = advancePlan(startPlan(), 'Build');
+    expect(statuses(closePlan(building, false))).toEqual(['completed', 'canceled', 'canceled', 'canceled', 'completed', 'pending', 'pending']);
+    expect(statuses(closePlan(building, true))).toEqual(['completed', 'canceled', 'canceled', 'canceled', 'completed', 'canceled', 'completed']);
+  });
+
+  it('reads the step of a job from its shape: review and question jobs are not steps of the plan', () => {
+    expect(planStepOfJob({ queue: 'dev', skill: 'factory:dev' })).toBe('Build');
+    expect(planStepOfJob({ queue: 'dev', skill: 'factory:feedback' })).toBe('Build');
+    expect(planStepOfJob({ queue: 'dev', skill: 'factory:tests', red: { command: 'npm test --', mode: 'measure', attempts: 3 } })).toBe('Tests');
+    expect(planStepOfJob({ queue: 'dev', skill: 'factory:review' })).toBeUndefined();
+    expect(planStepOfJob({ queue: 'questions', skill: 'factory:ask' })).toBeUndefined();
+  });
+});

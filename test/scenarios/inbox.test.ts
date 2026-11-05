@@ -39,11 +39,9 @@ describe('inbox: written before the answer, processed from the inbox', () => {
 
     // Exactly once: neither another start nor Linear sending the webhook again processes it twice.
     await h.restart();
-    const acks: string[] = [];
     const { raw, headers } = signedDelegation();
-    expect(await linearIngest((e) => h.orch.accept(e), acks)(raw, headers)).toEqual({ status: 200 });
+    expect(await linearIngest((e) => h.orch.accept(e))(raw, headers)).toEqual({ status: 200 });
     await h.orch.drained();
-    expect(acks).toEqual([]);
     expect(await delegations(h.store)).toHaveLength(1);
     expect(h.runner.requests).toHaveLength(runs);
   });

@@ -22,6 +22,8 @@ export function isFresh(body: { webhookTimestamp?: number }, now: number): boole
 
 export interface MapContext {
   projectIdForTeam(teamKey: string): string | undefined;
+  /** The project a delegation on a team with no repo waits under (ORC-171): the first of the configuration. */
+  firstProject?(): string | undefined;
   logicalFor(projectId: string, stateName: string): LogicalState | null;
   stateNameById(teamKey: string, stateId: string): string | undefined;
   /** Linear type of a state (`canceled`, `completed`…), from the team's cache. */
@@ -93,13 +95,13 @@ function sessionEvents(body: any, author: string, projectId: string, ctx: MapCon
   const sessionId: string = body.agentSession.id;
   if (body.action === 'created') {
     const comment = body.agentSession.comment;
-    if (!comment) return [{ type: 'ticket.delegated', payload: { linearSessionId: sessionId, promptContext: body.promptContext } }];
+    if (!comment) return [{ type: 'ticket.delegated', payload: { linearSessionId: sessionId, promptContext: body.promptContext, ack: true } }];
     const text = stripMention(comment.body ?? '');
     const [first = '', ...rest] = text.split(/\s+/);
     if (ctx.commands(projectId).includes(first.toLowerCase())) {
-      return [{ type: 'command', payload: { name: first.toLowerCase(), body: rest.join(' '), linearSessionId: sessionId, author } }];
+      return [{ type: 'command', payload: { name: first.toLowerCase(), body: rest.join(' '), linearSessionId: sessionId, author, ack: true } }];
     }
-    return [{ type: 'session.mentioned', payload: { linearSessionId: sessionId, body: text, author } }];
+    return [{ type: 'session.mentioned', payload: { linearSessionId: sessionId, body: text, author, ack: true } }];
   }
   if (body.action === 'prompted') {
     if (body.agentActivity?.signal === 'stop') return [{ type: 'session.stopped', payload: { linearSessionId: sessionId } }];
@@ -194,10 +196,17 @@ export async function mapLinearWebhook(body: any, key: string, ctx: MapContext):
   const identifier = issueIdentifier(body);
   if (!identifier) return [];
   const teamKey = identifier.split('-')[0]!;
-  const projectId = ctx.projectIdForTeam(teamKey);
+  const known = ctx.projectIdForTeam(teamKey);
+  // A delegation on a team no project takes waits blocked under the first one (ORC-171); anything else there is dropped.
+  const delegation = body.type === 'AgentSessionEvent' && body.action === 'created' && !body.agentSession.comment;
+  const projectId = known ?? (delegation ? ctx.firstProject?.() : undefined);
   if (!projectId) return [];
   const { id: actor, taint, name } = signedActor(body);
-  const partials = body.type === 'AgentSessionEvent' ? sessionEvents(body, name, projectId, ctx) : await issueEvents(body, identifier, teamKey, projectId, ctx);
+  const partials: PartialEvent[] = !known
+    ? [{ type: 'ticket.delegated', payload: { linearSessionId: body.agentSession.id, promptContext: body.promptContext, noRepo: teamKey } }]
+    : body.type === 'AgentSessionEvent'
+      ? sessionEvents(body, name, projectId, ctx)
+      : await issueEvents(body, identifier, teamKey, projectId, ctx);
   const at = ctx.now();
   return partials.map(
     (p) =>

@@ -44,6 +44,7 @@ import { attemptLabels, packFingerprints } from './attempt-labels.js';
 import { pickupFailures } from './pickup.js';
 import { buildPrompt, formatFeedback, formatVerifyFailures, readConventions } from './prompt.js';
 import { reduce } from './reduce.js';
+import { advancePlan, closePlan, planStepOfJob, startPlan, type PlanStep } from './session-plan.js';
 import type { StoredEvent } from './upcast.js';
 import type { Scheduler } from './scheduler.js';
 import {
@@ -798,6 +799,8 @@ export class Orchestrator {
     this.d.bus.publish({ kind: 'command', projectId: project.id, ticketId: row.ticketId, command: effect });
     const key: EffectKey = { id: `${row.id}@${await this.instanceId()}`, replay: row.attempts > 1 };
     const outcome = await this.exec(project, row.ticketId, effect, key);
+    // The delay a measure reads (ORC-235), webhook to ack; the first time stays, a replay's is later.
+    if (effect.kind === 'ack') await this.d.store.markAcked(row.eventId, this.d.clock.now()).catch((err: Error) => this.log('warn', `ack of ${row.eventId} posted, its time not recorded: ${err.message}`));
     if (outcome?.deduplicated) this.log('info', `effect ${row.id} (${effect.kind}) already made${outcome.ref ? ` (${outcome.ref})` : ''}: not written again`);
     return outcome;
   }
@@ -941,6 +944,7 @@ export class Orchestrator {
         const run = await store.getRun(c.runId);
         const job = project.workflow.jobs[c.job];
         if (!run || !job) return;
+        if (!job.red) await this.updatePlan(t, (plan) => plan && advancePlan(plan, 'Vérif'));
         this.track(
           (async () => {
             if (job.red) {
@@ -965,15 +969,22 @@ export class Orchestrator {
         return;
       }
       case 'move':
-        return this.move(project, t, c.to, c.keepReviewSha);
+        await this.move(project, t, c.to, c.keepReviewSha);
+        // The factory's own work ended; a move back after a refusal concludes nothing.
+        if (c.to === 'human_review' && !c.keepReviewSha) await this.updatePlan(t, (plan) => plan && closePlan(plan, t.prNumber !== undefined));
+        return;
       case 'merge':
         return this.merge(project, t, c.sha, key);
       case 'labels':
         return this.setLabels(ticketId, c.add, c.remove);
-      case 'comment': {
-        const found = key.replay ? await tracker.findComment(ticketId, key.id) : undefined;
-        if (found !== undefined) return { deduplicated: true, ref: found };
-        return tracker.comment(ticketId, c.body, key.id);
+      case 'comment':
+        return this.commentOnce(ticketId, c.body, key);
+      case 'ack': {
+        // The one key on both writes: a replay finds what its first execution wrote of each.
+        const comment = c.comment ? await this.commentOnce(ticketId, c.body, key) : undefined;
+        const activity = await this.activityOnce(c.linearSessionId, { type: 'thought', body: c.body }, key);
+        if (c.plan) await this.updatePlan(t, startPlan);
+        return comment ?? activity;
       }
       case 'activity': {
         const fromRun = c.runId ? (await store.getRun(c.runId))?.linearSessionId : undefined;
@@ -990,11 +1001,36 @@ export class Orchestrator {
       }
       case 'link_pr':
         if (t.linearSessionId) await tracker.addExternalUrl(t.linearSessionId, 'Pull request', c.url);
+        await this.updatePlan(t, (plan) => plan && advancePlan(plan, 'PR', 'completed'));
         return;
       case 'cleanup':
         await this.d.workspaces.cleanup(project.id, project.repoPath, ticketId);
         await this.apply(await this.ticket(project.id, ticketId), { type: 'workspace.released' });
         return;
+    }
+  }
+
+  /** A comment of an outbox effect, written unless its first execution already wrote it (ORC-162). */
+  private async commentOnce(ticketId: string, body: string, key: EffectKey): Promise<EffectOutcome | void> {
+    const found = key.replay ? await this.d.tracker.findComment(ticketId, key.id) : undefined;
+    if (found !== undefined) return { deduplicated: true, ref: found };
+    await this.d.tracker.comment(ticketId, body, key.id);
+  }
+
+  /**
+   * The session's plan (ORC-171), kept in the store so that each update builds on the last; a ticket whose delegation
+   * opened none gets none. Never throws: Linear's plan API is a preview, and a plan it refuses must not stop the work.
+   */
+  private async updatePlan(t: TicketState, change: (plan: readonly PlanStep[] | undefined) => PlanStep[] | undefined): Promise<void> {
+    const key = `plan:${t.projectId}:${t.ticketId}`;
+    try {
+      const kept = await this.d.store.getMeta(key);
+      const plan = change(kept ? (JSON.parse(kept) as PlanStep[]) : undefined);
+      if (!plan || !t.linearSessionId) return;
+      await this.d.store.setMeta(key, JSON.stringify(plan));
+      await this.d.tracker.setSessionPlan(t.linearSessionId, plan);
+    } catch (err) {
+      this.log('warn', `plan of ${t.ticketId} not written: ${(err as Error).message}`);
     }
   }
 
@@ -1402,6 +1438,8 @@ export class Orchestrator {
       if (opts.startMark) await store.setMeta(opts.startMark, runId);
       await this.apply(t, { type: 'run.started', runId, job: job.name, queue: job.queue, claudeSessionId, feedbackConsumed: kind === 'feedback', ...(ticketSession ? {} : { ticketSession: false as const }) });
       await store.putRun(run);
+      const step = planStepOfJob(job);
+      if (step) await this.updatePlan(t, (plan) => plan && advancePlan(plan, step));
       // The run is written: a queued item it came from leaves the queue now (a crash from here on is recover()'s).
       // Logged, not thrown: the run is launched either way, and a queue item left behind is refused
       // when handed out again (its ticket has a run, or is blocked, or its mark names this run).
