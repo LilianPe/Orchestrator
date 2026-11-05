@@ -800,6 +800,7 @@ export class Orchestrator {
         workDir,
         setup: project.workflow.workspace.setup,
         commands: job.verify,
+        gitleaks: true,
         ...(t.verifiedSha ? { green: t.verifiedSha } : {}),
         ...(goesThroughFreeze(t, job) ? { frozen: t.frozenTests! } : {}),
         env: async (config) => (await this.repoVariablesOf(project, config)).env,

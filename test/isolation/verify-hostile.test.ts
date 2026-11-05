@@ -36,7 +36,7 @@ echo "pid1-canary:$(tr '\\0' '\\n' < /proc/1/environ 2>/dev/null | grep -c '${CA
 echo own > own-file && echo "write-witness:$(cat own-file)"
 (echo pwned > "$AGENT_WORKTREE/pwned") 2>/dev/null && echo "worktree-write:yes" || echo "worktree-write:no"
 echo "worktree-seen:$(test -e "$AGENT_WORKTREE" && echo yes || echo no)"
-echo "gitdir:$(git rev-parse --git-common-dir 2>/dev/null)"
+echo "gitdir:$(git -c safe.directory=* rev-parse --git-common-dir 2>/dev/null)"
 
 # The network: its loopback as the witness, then an address and a name.
 node -e "
@@ -104,6 +104,8 @@ describe.skipIf(!enabled)(`a hostile verify command (${cli})`, () => {
       originUrl: repo,
       ...(gitDir ? { gitDir } : {}),
       workDir,
+      // The public image has none; the suite below has it.
+      gitleaks: false,
       setup: ['echo setup-ran > .setup-ran'],
       commands: ['bash attack.sh'],
       env: async () => ({ REPO_VISIBLE: 'repo-variable', AGENT_WORKTREE: worktree }),
@@ -175,5 +177,85 @@ describe.skipIf(!enabled)(`a hostile verify command (${cli})`, () => {
     expect(seen['env-canary']).toBe('1');
     expect(seen['worktree-write']).toBe('yes');
     rmSync(join(worktree, 'pwned'), { force: true });
+    // Its `find /` walks the host's whole disk.
+  }, 300_000);
+});
+
+/** The real gitleaks of `docker/runner.Dockerfile`, by its own pinned line, on a public image with git. */
+describe.skipIf(!enabled)(`gitleaks in verify (${cli})`, () => {
+  const TAG = `factory-verify-gitleaks:${Date.now()}`;
+  const { provider } = useSandboxes('verify-gitleaks', { image: TAG });
+  const base = mkdtempSync(join(tmpdir(), 'factory-gitleaks-'));
+  // Written in two parts: this file is not to be found by a scan of the factory's own repository.
+  const SECRET = `ghp_${'0123456789'.repeat(3)}012345`;
+  let origin: string;
+  let repo: string;
+
+  const check = async (name: string) => {
+    const workDir = join(base, name);
+    mkdirSync(workDir);
+    return runCleanVerify({
+      sandboxes: provider,
+      runId: `isolation-verify-gitleaks-${name}-${Date.now()}`,
+      ticketId: 'ISO-2',
+      branch: BRANCH,
+      worktree: repo,
+      originUrl: origin,
+      workDir,
+      gitleaks: true,
+      setup: [],
+      commands: [],
+      env: async () => ({}),
+      log: () => {},
+    });
+  };
+
+  beforeAll(() => {
+    const dockerfile = readFileSync(join(import.meta.dirname, '../../docker/runner.Dockerfile'), 'utf8');
+    const install = /^RUN node -e "fetch\('https:\/\/github\.com\/gitleaks[\s\S]*?rm \/tmp\/gitleaks\.tgz$/m.exec(dockerfile)?.[0];
+    if (!install) throw new Error('docker/runner.Dockerfile no longer installs gitleaks');
+    execFileSync(cli, ['build', '-q', '-t', TAG, '-f', '-', base], { input: `FROM ${IMAGE}\n${install}\n`, stdio: ['pipe', 'ignore', 'pipe'], timeout: 300_000 });
+
+    // The forge, on its default branch, and the agent's clone: the base is what the branch adds to.
+    origin = join(base, 'origin');
+    git(base, 'init', '-q', '-b', 'main', origin);
+    git(origin, 'config', 'user.email', 't@t');
+    git(origin, 'config', 'user.name', 't');
+    writeFileSync(join(origin, 'README.md'), 'base\n');
+    git(origin, 'add', '.');
+    git(origin, 'commit', '-q', '-m', 'base');
+    repo = join(base, 'repo');
+    git(base, 'clone', '-q', origin, repo);
+    git(repo, 'config', 'user.email', 't@t');
+    git(repo, 'config', 'user.name', 't');
+    git(repo, 'checkout', '-q', '-b', BRANCH);
+    writeFileSync(join(repo, 'clean.ts'), 'export const a = 1;\n');
+    git(repo, 'add', '.');
+    git(repo, 'commit', '-q', '-m', 'clean');
+  }, 420_000);
+
+  afterAll(() => {
+    spawnSync(cli, ['rmi', '-f', TAG], { stdio: 'ignore' });
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  it('passes commits with no secret: the witness that it reads them comes next', async () => {
+    expect(await check('clean')).toMatchObject({ ok: true, failures: [] });
+  });
+
+  it("finds a secret the branch committed, redacted, through what the branch writes to silence it", async () => {
+    writeFileSync(join(repo, 'leak.ts'), `export const token = "${SECRET}"; // gitleaks:allow\n`);
+    writeFileSync(join(repo, '.gitleaks.toml'), 'title = "x"\n[allowlist]\npaths = [".*"]\n');
+    git(repo, 'add', '.');
+    git(repo, 'commit', '-q', '-m', 'the agent commits a secret and its silence');
+    // A later commit that removes it does not take it out of the history.
+    rmSync(join(repo, 'leak.ts'));
+    git(repo, 'add', '.');
+    git(repo, 'commit', '-q', '-m', 'and removes it');
+    const res = await check('leak');
+    expect(res.ok).toBe(false);
+    const found = res.failures.find((f) => f.command === 'factory/secrets');
+    expect(found?.output).toContain('leak.ts:1 (github-pat)');
+    expect(JSON.stringify(res)).not.toContain(SECRET);
   });
 });

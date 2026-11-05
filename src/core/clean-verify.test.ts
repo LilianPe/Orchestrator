@@ -27,6 +27,7 @@ class LocalSandboxes extends FakeSandboxProvider {
   /** A command this test decides the fate of, by its text. */
   answer?: (command: string, box: string) => ExecResult | undefined;
   hang?: (command: string) => boolean;
+  scan?: (argv: readonly string[]) => ExecResult;
 
   override async create(req: SandboxRequest) {
     const s = await super.create(req);
@@ -39,6 +40,7 @@ class LocalSandboxes extends FakeSandboxProvider {
     const req = this.byId.get(id)!;
     const bundle = req.mounts.find((m) => m.target === BUNDLE_TARGET)?.host;
     const args = argv.map((a) => (bundle ? a.replace(BUNDLE_TARGET, bundle) : a));
+    if (args.includes('gitleaks')) return this.scan?.(args) ?? { stdout: '[]', stderr: '', code: 0 };
     // What a test sets as a command comes as the wrapper's last word; what the factory runs itself comes as it is.
     const wrapped = args[0] === 'bash' && args[1] === '-c';
     const shellCommand = wrapped ? args.at(-1)! : args[0] === 'timeout' ? args.at(-1)! : undefined;
@@ -100,6 +102,7 @@ function setup(over: Partial<CleanVerifyRequest> = {}, config?: string) {
     worktree: repo,
     originUrl: origin,
     workDir,
+    gitleaks: false,
     setup: [],
     commands: ['grep committed a.txt'],
     env: async () => ({}),
@@ -336,6 +339,50 @@ describe('runCleanVerify', () => {
       const { repo, req } = setup({ commands: [], frozen: { sha: 's', files: { 'a.txt': sha256('committed\n') } } });
       write(repo, 'a.txt', 'changed but not committed\n');
       expect((await runCleanVerify(req)).ok).toBe(true);
+    });
+
+    describe('factory/secrets', () => {
+      const clean = { stdout: '[]', stderr: '', code: 0 };
+
+      it('scans only what the branch adds, in its own sandbox without network, before any code of the agent', async () => {
+        const { origin, repo, sandboxes, req } = setup({ gitleaks: true, setup: ['true'] });
+        const from = git(origin, 'rev-parse', 'HEAD');
+        const scans: (readonly string[])[] = [];
+        const setups = () => sandboxes.created.filter((c) => c.runId.endsWith('-setup')).length;
+        sandboxes.scan = (argv) => {
+          expect(setups()).toBe(0);
+          scans.push(argv);
+          return clean;
+        };
+        await runCleanVerify(req);
+        expect(scans).toHaveLength(1);
+        expect(scans[0]).toContain(`--log-opts=${from}..${git(repo, 'rev-parse', BRANCH)}`);
+        expect(scans[0]).toEqual(expect.arrayContaining(['--redact', '--ignore-gitleaks-allow']));
+        expect(sandboxes.created.find((c) => c.runId === 'r1-scan')).toMatchObject({ network: 'none', mounts: [] });
+      });
+
+      it('a secret blocks, named by its place, never by its value', async () => {
+        const { sandboxes, req } = setup({ gitleaks: true, commands: [] });
+        sandboxes.scan = () => ({ stdout: JSON.stringify([{ File: 'src/a.ts', StartLine: 3, RuleID: 'github-pat', Secret: 'REDACTED' }]), stderr: '', code: 7 });
+        const res = await runCleanVerify(req);
+        expect(res.ok).toBe(false);
+        expect(res.failures[0]).toMatchObject({ command: 'factory/secrets', output: expect.stringContaining('src/a.ts:3 (github-pat)') });
+        expect(res.failures[0]!.output).not.toContain('REDACTED');
+      });
+
+      // Each of these is a green if it is read by its exit code alone: 8.30.1 exits 0 on a failing git log.
+      it.each([
+        ['absent from the image', { stdout: '', stderr: 'gitleaks: not found', code: 127 }],
+        ['a git error under an exit 0', { stdout: '[]', stderr: 'ERR stderr is not empty', code: 0 }],
+        ['an unreadable report', { stdout: 'not json', stderr: '', code: 0 }],
+        ['no report', { stdout: '', stderr: '', code: 0 }],
+        ['its cap', { stdout: '', stderr: '', code: 124 }],
+      ])('%s is a breakdown, never a green', async (_, answer) => {
+        const { sandboxes, req } = setup({ gitleaks: true });
+        sandboxes.scan = () => answer;
+        await expect(runCleanVerify(req)).rejects.toThrow(/gitleaks/);
+        expect(sandboxes.ran).toEqual([]);
+      });
     });
 
     it('a commit already green is not checked again', async () => {

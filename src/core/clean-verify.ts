@@ -37,6 +37,8 @@ export interface CleanVerifyRequest {
   commands: readonly string[];
   /** The commit `verify` last found green: found again, it is not checked again. */
   green?: string;
+  /** `factory/secrets`, by the image's gitleaks. Only an isolation test on a public image without it turns it off. */
+  gitleaks: boolean;
   /** `factory/tests-gelés` (ORC-131), once the ticket has a freeze. */
   frozen?: FrozenTests;
   /** The variables the repository declares (ORC-211), never a secret. */
@@ -130,7 +132,14 @@ export const runCleanVerify: CleanVerifier = async (req) => {
     const commands = declared.length ? declared : req.commands;
     const setup = config.setup ? [config.setup] : req.setup;
     const env = await req.env(config);
-    const failures = await checkClone(git, sha, req.frozen);
+    const from = await git('merge-base', BASE, sha).catch(() => EMPTY_TREE);
+    const failures = await checkClone(git, from, sha, req.frozen);
+    if (req.gitleaks) {
+      box = await open('scan', cloneDir, []);
+      failures.push(...(await scanSecrets(sandboxes, box.id, from, sha)));
+      await destroy(box);
+      box = undefined;
+    }
     if (!commands.length) return { ok: !failures.length, failures, sha, tree };
 
     // `-c` on the command line: the clone's config is ours, and from the first command on it is no longer to be trusted.
@@ -187,18 +196,43 @@ async function fetchBase(req: CleanVerifyRequest, cloneDir: string): Promise<voi
 /** Git's empty tree: what a branch that shares no commit with the base is compared with, every file of it then a change. */
 const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 const SYMLINK = '120000';
+export const SECRETS_CHECK = 'factory/secrets';
+const LEAKS_FOUND = 7;
+
+/**
+ * The commits the branch adds, by gitleaks in a sandbox of its own, before any code of the agent has run: the clone has no
+ * checkout, so neither a `.gitleaks.toml` nor a `.gitleaksignore` of the branch is read, and the `gitleaks:allow` it could
+ * write is ignored. The report is redacted. Measured on 8.30.1: a failing `git log` leaves an empty report, exit 0, and
+ * only an error on stderr. So anything but a clean exit with a readable report is a breakdown, never a green.
+ */
+async function scanSecrets(sandboxes: SandboxProvider, id: string, from: string, sha: string): Promise<VerifyFailure[]> {
+  const logOpts = from === EMPTY_TREE ? sha : `${from}..${sha}`;
+  const argv = ['timeout', String(VERIFY_TIMEOUT_MS / 1000), 'gitleaks', 'git', `--log-opts=${logOpts}`, '--no-banner', '--redact', '--ignore-gitleaks-allow', '--exit-code', String(LEAKS_FOUND), '--report-format', 'json', '--report-path', '-', '--log-level', 'error', '.'];
+  const env = { GIT_CONFIG_COUNT: '3', GIT_CONFIG_KEY_0: 'core.hooksPath', GIT_CONFIG_VALUE_0: '/dev/null', GIT_CONFIG_KEY_1: 'core.fsmonitor', GIT_CONFIG_VALUE_1: 'false', GIT_CONFIG_KEY_2: 'safe.directory', GIT_CONFIG_VALUE_2: '*' };
+  const { code, stdout, stderr } = await sandboxes.exec(id, argv, { env });
+  if ((code !== 0 && code !== LEAKS_FOUND) || stderr.trim()) throw new Error(`gitleaks n'a pas pu tourner (code ${code}) : ${stderr.trim()}`);
+  let found: { File: string; StartLine: number; RuleID: string }[];
+  try {
+    found = JSON.parse(stdout) as typeof found;
+    if (!Array.isArray(found)) throw new Error('not a list');
+  } catch {
+    throw new Error(`gitleaks n'a pas rendu de rapport lisible (code ${code})`);
+  }
+  if (code === 0 && !found.length) return [];
+  const lines = found.map((f) => `- ${f.File}:${f.StartLine} (${f.RuleID})`);
+  return [{ command: SECRETS_CHECK, exitCode: 1, output: logExcerpt(`Secret codé en dur dans les commits de la branche, publication bloquée. Retire-le de son historique, et considère-le comme exposé :\n${lines.join('\n')}`) }];
+}
 
 /**
  * The blocking checks on the commit, from the clone's objects: `factory/chemins-interdits` on all it changed since it
  * left the base, whatever it says of its own history, and `factory/tests-gelés` on the frozen files as they are at
  * its head, which needs no frozen commit: a rebase can take it away, not its fingerprints. A read that fails rejects.
  */
-async function checkClone(git: CloneGit, sha: string, frozen: FrozenTests | undefined): Promise<VerifyFailure[]> {
+async function checkClone(git: CloneGit, from: string, sha: string, frozen: FrozenTests | undefined): Promise<VerifyFailure[]> {
   const show = async (rev: string, path: string): Promise<string | undefined> => {
     const listed = await git('ls-tree', '--name-only', '-z', rev, '--', path);
     return listed ? git.raw('show', `${rev}:${path}`) : undefined;
   };
-  const from = await git('merge-base', BASE, sha).catch(() => EMPTY_TREE);
   const fields = (await git('diff', '--name-status', '--no-renames', '-z', from, sha)).split('\0').filter(Boolean);
   const entries = (await git('ls-tree', '-r', '-z', sha)).split('\0').filter(Boolean);
   const links = new Map(entries.filter((e) => e.startsWith(`${SYMLINK} `)).map((e) => [e.slice(e.indexOf('\t') + 1), e.split(' ')[2]!.split('\t')[0]!]));
