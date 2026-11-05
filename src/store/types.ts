@@ -283,6 +283,48 @@ export interface MeasureFacts {
   acks: Record<string, number>;
 }
 
+/** One request the egress proxy journaled (`EgressEntry`, ORC-213), as stored (ORC-296): `at` in ms. */
+export interface EgressRecord {
+  at: number;
+  method: string;
+  host: string;
+  port?: number;
+  path?: string;
+  ok: boolean;
+  reason?: string;
+  up: number;
+  down: number;
+}
+
+/** One refusal of the pack's PreToolUse hook (ORC-285), as stored (ORC-296): a known rule, the command capped. */
+export interface RefusalRecord {
+  at: number;
+  tool: string;
+  rule: string;
+  command: string;
+}
+
+/**
+ * The security log of a sandboxed run (ORC-296), read from its two journals when its sandbox is
+ * destroyed: the proxy's (the daemon's) and the hook's (written from the sandbox, untrusted). `at`: when
+ * it was read. `skipped`: lines left out, malformed or forged.
+ */
+export interface SecurityLog {
+  runId: string;
+  projectId: string;
+  ticketId: string;
+  at: number;
+  egress: EgressRecord[];
+  refusals: RefusalRecord[];
+  skipped: { egress: number; refusals: number };
+}
+
+/** What the security logs hold over a period (ORC-296): requests per host, refusals per rule, most first. */
+export interface SecurityStats {
+  hosts: { host: string; requests: number; refused: number }[];
+  rules: { rule: string; refusals: number }[];
+}
+
 /** The inbox event of a timer's firing (ORC-161), written by `fireTimer`: its id `timer:<key>:<fireAt>` names that firing, once. */
 export function timerEvent(t: TimerRecord, at: number): FactoryEvent<'timer.fired'> {
   return {
@@ -454,6 +496,12 @@ export interface Store {
    * (ORC-278): what a revert on the default branch names. The first such merge of the project.
    */
   mergedPrOf(projectId: string, sha: string): Promise<{ ticketId: string; number: number } | undefined>;
+  /** Writes a run's security log (ORC-296), once: false, and nothing written, when the run has one already. */
+  putSecurityLog(log: SecurityLog): Promise<boolean>;
+  /** The security log of a run (ORC-296), its entries in journal order. */
+  securityLog(runId: string): Promise<SecurityLog | undefined>;
+  /** Requests per host and refusals per rule of the entries dated in `[since, until)` (ORC-296). */
+  securityStats(since: number, until: number): Promise<SecurityStats>;
   getMeta(key: string): Promise<string | undefined>;
   setMeta(key: string, value: string): Promise<void>;
   close(): Promise<void>;

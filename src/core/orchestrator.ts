@@ -70,6 +70,7 @@ import { checkRed, type RedDeps, type RedResult } from '../checks/red.js';
 import { checkFrozen, FREEZE_CHECK, freezeTests, newTestsOnly, REFREEZE, type FrozenTests } from '../checks/freeze.js';
 import { isTestFile } from '../checks/test-files.js';
 import { parseStatus } from '../adapters/workspace/git-workspaces.js';
+import { readSecurityLog, refusalSummary } from '../network/security-log.js';
 
 /** Meta key of the head a ticket's tests step started on (ORC-123). */
 const redBaseKey = (projectId: string, ticketId: string): string => `red-base:${projectId}:${ticketId}`;
@@ -147,6 +148,8 @@ export interface OrchestratorDeps {
    * with its sandbox. Required with `sandboxes`.
    */
   runsDir?: string;
+  /** The egress proxy's journal of a run (`EgressProxy.journalPath`), read into its security log (ORC-296). */
+  egressJournal?: (runId: string) => string;
   /** Other host paths every sandbox mounts (the factory's install, for `factory-agent`). */
   sandboxMounts?: readonly SandboxMount[];
   agentEnv: (run: RunRecord) => Record<string, string>;
@@ -583,16 +586,40 @@ export class Orchestrator {
       this.log('error', `sandboxes not listed, those of dead attempts are left: ${(err as Error).message}`);
       return;
     }
-    await Promise.all(live.filter(({ runId }) => !this.handles.has(runId)).map(({ sandbox, runId }) => this.destroySandbox(sandbox.id, runId)));
+    // ponytail: a red check's sandbox (`<run>-red`) has no run record: its log is left to the files' purge.
+    await Promise.all(live.filter(({ runId }) => !this.handles.has(runId)).map(async ({ sandbox, runId }) => this.destroySandbox(sandbox.id, runId, await this.d.store.getRun(runId))));
   }
 
   /**
    * Logged, never thrown: a sandbox left behind is recover()'s at the next start. The run's own
    * `~/.claude` goes with it (a dir left by a failed removal is purged with the run's dir, at 30 days).
+   * Then the security log of the attempt `owner` ran there, if any (ORC-296): its journals are complete.
    */
-  private async destroySandbox(id: string, runId: string): Promise<void> {
+  private async destroySandbox(id: string, runId: string, owner?: RunRecord): Promise<void> {
     await this.d.sandboxes?.destroy(id).catch((err: Error) => this.log('error', `sandbox ${id} not destroyed: ${err.message}`));
     if (this.d.runsDir) rmSync(join(this.d.runsDir, runId, 'claude'), { recursive: true, force: true });
+    if (owner) await this.ingestSecurityLog(runId, owner);
+  }
+
+  /**
+   * The proxy's journal and the hook's refusals log of a sandbox into the base, once (ORC-296); a
+   * summary of the refusals in the session of `owner`. Logged, never thrown: the run's end goes on.
+   * ponytail: posted directly, not by the outbox; a crash between the write and the post loses the summary.
+   */
+  private async ingestSecurityLog(runId: string, owner: RunRecord): Promise<void> {
+    try {
+      const log = readSecurityLog(
+        { runId, projectId: owner.projectId, ticketId: owner.ticketId, at: this.d.clock.now() },
+        { ...(this.d.egressJournal ? { egress: this.d.egressJournal(runId) } : {}), refusals: join(this.d.runsDir!, runId, 'refusals', 'refusals.jsonl') },
+      );
+      if (!(await this.d.store.putSecurityLog(log))) return;
+      const { egress, refusals } = log.skipped;
+      if (egress + refusals) this.log('warn', `security log of ${runId}: ${egress} egress and ${refusals} refusal lines skipped (malformed or forged)`);
+      const summary = refusalSummary(log);
+      if (summary && owner.linearSessionId) await this.d.tracker.activity(owner.linearSessionId, { type: 'thought', body: summary });
+    } catch (err) {
+      this.log('error', `security log of ${runId} not recorded: ${(err as Error).message}`);
+    }
   }
 
   /**
@@ -720,7 +747,7 @@ export class Orchestrator {
     } catch (err) {
       return { verified: false, cause: 'infra', command: '', exitCode: null, detail: `Le contrôle du rouge n'a pas pu tourner : ${(err as Error).message}` };
     } finally {
-      if (sandbox) await this.destroySandbox(sandbox.id, redRunId);
+      if (sandbox) await this.destroySandbox(sandbox.id, redRunId, run);
     }
   }
 
@@ -1713,7 +1740,7 @@ export class Orchestrator {
         result = { outcome: 'failure', costUsd: 0, turns: 0, lastText: message, infra: true };
       }
     } finally {
-      if (sandboxId) await this.destroySandbox(sandboxId, run.id);
+      if (sandboxId) await this.destroySandbox(sandboxId, run.id, run);
     }
     await this.submitResult(await this.finishedFor(run, result));
   }

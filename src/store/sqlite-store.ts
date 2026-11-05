@@ -27,6 +27,8 @@ import {
   type QueueClaim,
   type QueueItem,
   type RunRecord,
+  type SecurityLog,
+  type SecurityStats,
   type Store,
   type TimerRecord,
   type WorkflowVersion,
@@ -53,6 +55,7 @@ CREATE TABLE IF NOT EXISTS workflow_versions (hash TEXT PRIMARY KEY, definition 
 CREATE TABLE IF NOT EXISTS decision_trace (event_id TEXT PRIMARY KEY, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS dead_letter (event_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, ticket_id TEXT, status TEXT NOT NULL, failures INTEGER NOT NULL, error TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, resolved_by TEXT, data TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS dead_letter_ticket ON dead_letter (ticket_id, status);
+CREATE TABLE IF NOT EXISTS security_logs (run_id TEXT PRIMARY KEY, data TEXT NOT NULL);
 `;
 
 interface DeadLetterSqlRow {
@@ -670,6 +673,36 @@ export class SqliteStore implements Store {
       )
       .get(projectId, sha, sha) as { ticket_id: string; number: number } | undefined;
     return row && { ticketId: row.ticket_id, number: Number(row.number) };
+  }
+
+  async putSecurityLog(log: SecurityLog): Promise<boolean> {
+    const res = this.db.prepare('INSERT INTO security_logs (run_id, data) VALUES (?, ?) ON CONFLICT DO NOTHING').run(log.runId, JSON.stringify(log));
+    return Number(res.changes) === 1;
+  }
+
+  async securityLog(runId: string): Promise<SecurityLog | undefined> {
+    const row = this.db.prepare('SELECT data FROM security_logs WHERE run_id = ?').get(runId) as { data: string } | undefined;
+    return row && (JSON.parse(row.data) as SecurityLog);
+  }
+
+  // ponytail: every log read and counted in memory; SQLite is kept until ORC-178, Postgres counts in SQL.
+  async securityStats(since: number, until: number): Promise<SecurityStats> {
+    const logs = (this.db.prepare('SELECT data FROM security_logs').all() as { data: string }[]).map((r) => JSON.parse(r.data) as SecurityLog);
+    const inPeriod = <T extends { at: number }>(xs: T[]) => xs.filter((x) => x.at >= since && x.at < until);
+    const hosts = new Map<string, { host: string; requests: number; refused: number }>();
+    const rules = new Map<string, { rule: string; refusals: number }>();
+    for (const log of logs) {
+      for (const e of inPeriod(log.egress)) {
+        const h = hosts.get(e.host) ?? hosts.set(e.host, { host: e.host, requests: 0, refused: 0 }).get(e.host)!;
+        h.requests++;
+        if (!e.ok) h.refused++;
+      }
+      for (const r of inPeriod(log.refusals)) (rules.get(r.rule) ?? rules.set(r.rule, { rule: r.rule, refusals: 0 }).get(r.rule)!).refusals++;
+    }
+    return {
+      hosts: [...hosts.values()].sort((a, b) => b.requests - a.requests || a.host.localeCompare(b.host)),
+      rules: [...rules.values()].sort((a, b) => b.refusals - a.refusals || a.rule.localeCompare(b.rule)),
+    };
   }
 
   async getMeta(key: string): Promise<string | undefined> {

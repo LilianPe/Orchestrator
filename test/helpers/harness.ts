@@ -215,7 +215,8 @@ export function createHarness(
       forgeWriter: life.gate(forge),
       workspaces: life.gate(workspaces),
       verify: life.gate(checks.run),
-      ...(sessionsDir ? { sandboxes: life.gate(sandboxes), sessionsDir, runsDir } : {}),
+      // The proxy's journal of a run (ORC-296) beside its refusals log: a test writes both.
+      ...(sessionsDir ? { sandboxes: life.gate(sandboxes), sessionsDir, runsDir, egressJournal: (id: string) => join(runsDir!, id, 'egress.jsonl') } : {}),
     };
     return { ...life, outside };
   };
