@@ -1,5 +1,5 @@
 import type { FeedbackItem } from '../../core/types.js';
-import { execCmd, execFailure, mustExec, type Exec } from '../exec.js';
+import { execCmd, execFailure, mustExec, type Exec, type ExecResult } from '../exec.js';
 import { REPO_PERMISSIONS, type RepoPermission, type RepoPermissions } from '../roles/types.js';
 import type { Forge, PrInfo } from './types.js';
 
@@ -27,14 +27,33 @@ type Check = { name: string; bucket: string };
 const isCheck = (c: unknown): c is Check =>
   typeof c === 'object' && c !== null && typeof (c as Check).name === 'string' && typeof (c as Check).bucket === 'string';
 
-/** The checks `gh pr checks --json name,bucket` lists, or undefined when its output is not such a list. */
-function parseChecks(stdout: string): Check[] | undefined {
+const EXCERPT = 200;
+/** The first EXCERPT code units of `s`, one less rather than half a character, `…` when cut. */
+function cut(s: string): { head: string; more: string } {
+  if (s.length <= EXCERPT) return { head: s, more: '' };
+  const end = /[\uD800-\uDBFF]/.test(s[EXCERPT - 1]!) ? EXCERPT - 1 : EXCERPT;
+  return { head: s.slice(0, end), more: '…' };
+}
+const excerpt = (out: string) => {
+  const { head, more } = cut(out);
+  return JSON.stringify(head) + more;
+};
+
+/**
+ * The checks `gh pr checks --json name,bucket` lists. Output that is not such a list throws, never reads as
+ * `none`, a PR without CI, for which the PR poller sends no checks event (ORC-305). It logs the error and retries.
+ */
+function parseChecks(args: string[], r: ExecResult): Check[] {
+  let list: unknown;
   try {
-    const list: unknown = JSON.parse(stdout);
-    return Array.isArray(list) && list.every(isCheck) ? list : undefined;
+    list = JSON.parse(r.stdout);
   } catch {
-    return undefined;
+    list = undefined;
   }
+  if (Array.isArray(list) && list.every(isCheck)) return list;
+  const stderr = cut(r.stderr.trim());
+  const exit = r.code === 0 && !stderr.head ? '' : ` (exit ${r.code}${stderr.head && `: ${stderr.head}${stderr.more}`})`;
+  throw new Error(`gh ${args.join(' ')}: unreadable output, not a list of checks: ${excerpt(r.stdout)}${exit}`);
 }
 
 /**
@@ -85,13 +104,15 @@ export class GhCliForge implements Forge, RepoPermissions {
     if (pr.state === 'OPEN') {
       const args = ['pr', 'checks', String(pr.number), '--json', 'name,bucket'];
       const r = await this.exec('gh', args, { cwd: repoPath });
-      const list = parseChecks(r.stdout);
-      if (list) {
+      if (r.code !== 0 && r.stdout.trim() === '') {
+        if (!NO_CHECKS.test(r.stderr)) {
+          if (NO_JSON_FLAG.test(r.stderr)) throw new Error(`gh ${args.join(' ')}: this gh has no --json on pr checks, gh 2.50 or later is required`);
+          throw execFailure('gh', args, r);
+        }
+      } else {
+        const list = parseChecks(args, r);
         checks = aggregateChecks(list.map((c) => c.bucket));
         failedChecks = list.filter((c) => c.bucket === 'fail' || c.bucket === 'cancel').map((c) => c.name);
-      } else if (r.code !== 0 && !NO_CHECKS.test(r.stderr)) {
-        if (NO_JSON_FLAG.test(r.stderr)) throw new Error(`gh ${args.join(' ')}: this gh has no --json on pr checks, gh 2.50 or later is required`);
-        throw execFailure('gh', args, r);
       }
     }
     return {
