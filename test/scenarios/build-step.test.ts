@@ -65,6 +65,22 @@ describe('the build step (ORC-136)', () => {
     await h.advance(0);
     const journal = await h.store.ticketJournal('p', 'REL-1');
     expect(journal.find((e) => e.event.type === 'run.finished')!.event.payload).toMatchObject({ stagnation: loop, outcome: 'limit', attempt: 'timeout' });
+    // Kept for recover(), before the end of the run is written.
+    expect(JSON.parse((await h.store.getMeta(`attempt-facts:${h.runner.requests[0]!.runId}`))!)).toEqual({ stagnation: loop });
+  });
+
+  it('a crash between the end of the attempt and its result changes nothing: recover() sends what the runner saw', async () => {
+    const h = delegated();
+    h.runner.enqueue({ hold: true, outcome: 'limit', stagnation: loop });
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    const runId = (await h.ticket()).activeRunId!;
+    // The pump's steps up to the kill: what it stored of the end of the attempt, and no `run.finished`.
+    await h.store.setMeta(`attempt-facts:${runId}`, JSON.stringify({ stagnation: loop }));
+    await h.store.putRun({ ...(await h.store.getRun(runId))!, status: 'limit', endedAt: h.clock.now() });
+    h.runner.forget(runId);
+    await h.restart({ mode: 'brutal' });
+    await h.orch.drained();
+    expect(blockCause((await h.ticket()).blockReason)).toBe('loop');
   });
 
   it('a human reply relaunches a ticket blocked on a loop: the session resumes, nothing is counted against it', async () => {

@@ -4,7 +4,7 @@ import { rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import type { Forge, ForgeWriter, MergeResult } from '../adapters/forge/types.js';
 import type { RoleResolver } from '../adapters/roles/types.js';
-import type { RunHandle, RunResult, Runner } from '../adapters/runner/types.js';
+import type { RunHandle, RunResult, Runner, StagnationBounds } from '../adapters/runner/types.js';
 import {
   DEFAULT_REQUIREMENTS,
   PACK_TARGET,
@@ -114,6 +114,18 @@ async function storedOutput(store: Store, runId: string): Promise<AgentOutput | 
   }
 }
 
+const attemptFactsKey = (runId: string): string => `attempt-facts:${runId}`;
+
+/** What only the runner knows of an attempt's end (ORC-136): the run's row does not hold it, and a crash before `run.finished` must not change the decision. */
+async function keepAttemptFacts(store: Store, runId: string, { stagnation, infra }: RunResult): Promise<void> {
+  if (stagnation || infra) await store.setMeta(attemptFactsKey(runId), JSON.stringify({ ...(stagnation ? { stagnation } : {}), ...(infra ? { infra } : {}) }));
+}
+
+async function readAttemptFacts(store: Store, runId: string): Promise<Pick<RunResult, 'stagnation' | 'infra'>> {
+  const raw = await store.getMeta(attemptFactsKey(runId));
+  return raw ? (JSON.parse(raw) as Pick<RunResult, 'stagnation' | 'infra'>) : {};
+}
+
 /** The message posted for a run that submitted its output: composed by the factory from it, never the agent's last text (ORC-289). */
 function formatAgentOutput(o: AgentOutput): string {
   const list = (title: string, items: string[]) => (items.length ? [`**${title}**\n${items.map((i) => `- ${i}`).join('\n')}`] : []);
@@ -124,6 +136,18 @@ function formatAgentOutput(o: AgentOutput): string {
     ...list('Non testé', o.untested),
     ...list('À relire', o.review_hints.map((h) => `\`${h.file}\` : ${h.reason}`)),
   ].join('\n\n');
+}
+
+/**
+ * What a run's stagnation is watched against (ORC-136). `silentAfterMs` tells a version frozen since: one before it has
+ * `repeatedFailures` too (ORC-187), for its checks only, and keeps running as it did. Only a dev job has its worktree read
+ * for a loop: `decide` blocks no ticket on a question, whose checkout stays out of it.
+ */
+function stagnationBounds(wf: Workflow, job: JobSpec): { stagnation?: StagnationBounds } {
+  const silentMs = wf.limits.silentAfterMs;
+  if (!silentMs) return {};
+  const repeats = job.queue === 'dev' ? wf.limits.repeatedFailures : undefined;
+  return { stagnation: { silentMs, ...(repeats ? { repeats } : {}) } };
 }
 
 export interface ProjectRuntime {
@@ -520,7 +544,11 @@ export class Orchestrator {
     const { store, clock } = this.d;
     const run = await store.getRun(runId);
     if (run) {
-      await store.appendInbox(await this.finishedFor(run, { outcome: run.status as RunOutcome, costUsd: run.costUsd, turns: run.turns, lastText: run.lastText }));
+      const facts = await readAttemptFacts(store, runId).catch((err: Error) => {
+        this.log('warn', `facts of run ${runId} not read: ${err.message}`);
+        return {};
+      });
+      await store.appendInbox(await this.finishedFor(run, { outcome: run.status as RunOutcome, costUsd: run.costUsd, turns: run.turns, lastText: run.lastText, ...facts }));
       return;
     }
     // Nothing else will take it up (a pending job started by `settle` has no mark): `run.lost`, on the job the ticket holds.
@@ -1808,7 +1836,7 @@ export class Orchestrator {
         resume,
         model: job.model,
         ...(job.effort ? { effort: job.effort } : {}),
-        stagnation: { ...(wf.limits.repeatedFailures ? { repeats: wf.limits.repeatedFailures } : {}), ...(wf.limits.silentAfterMs ? { silentMs: wf.limits.silentAfterMs } : {}) },
+        ...stagnationBounds(wf, job),
         pluginDir: sandbox ? PACK_TARGET : this.d.packDir,
         settingsPath: sandbox ? SETTINGS_TARGET : this.settingsPath(),
         readOnly: job.workspace === 'trunk-readonly',
@@ -1876,6 +1904,8 @@ export class Orchestrator {
       const interrupted = this.stopping && result.outcome === 'stopped';
       // Closed before its end (`leaseExpired`): `run.lost` speaks for it. What it spent is still recorded.
       const closed = rec.status !== 'running';
+      // Before the run's end: from there on recover() sends the result if this process dies, from what is stored.
+      await keepAttemptFacts(store, run.id, result);
       await store.putRun({
         ...rec,
         status: closed ? rec.status : interrupted ? 'interrupted' : result.outcome,

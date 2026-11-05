@@ -213,6 +213,19 @@ describe('Orchestrator', () => {
     expect(runner.requests[0]!.prompt).toContain('### .claude/CLAUDE.md\nlocal conventions');
   });
 
+  it('watches a question for silence only, and a version frozen before the detector not at all (ORC-136)', async () => {
+    const dev = setup();
+    dev.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+    await dev.orch.accept(delegated());
+    await dev.orch.drained();
+    expect(dev.runner.requests[0]!.stagnation).toEqual({ repeats: 3, silentMs: 30 * 60_000 });
+    const frozen = setup({ tweak: (w) => void delete w.limits.silentAfterMs });
+    frozen.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+    await frozen.orch.accept(delegated());
+    await frozen.orch.drained();
+    expect(frozen.runner.requests[0]).not.toHaveProperty('stagnation');
+  });
+
   it('labels the attempt it launches, and the labels outlive the run settling (ORC-226)', async () => {
     const { store, tracker, runner, orch } = setup();
     tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });

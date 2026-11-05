@@ -119,6 +119,13 @@ on:
       expect(jobs['review']).toMatchObject({ effort: 'high' });
     });
 
+    it('refuses a step of factory.yml the preset does not have: it would cap nothing', () => {
+      expect(() => loadWorkflow({ packDir, settings: { budgets: { perStepTokens: { dev: 1000 } } } })).toThrow(/budgets\.per_step_tokens\.dev/);
+      expect(() => loadWorkflow({ packDir, settings: { budgets: { maxTurns: { verify: 1 } } } })).toThrow(/budgets\.max_turns\.verify/);
+      expect(() => loadWorkflow({ packDir, settings: { effort: { perStep: { buid: 'low' } } } })).toThrow(/claude\.effort\.per_step\.buid/);
+      expect(() => loadWorkflow({ packDir, settings: { effort: { perStep: { spec_draft: 'high' } } } })).not.toThrow();
+    });
+
     it('sets no token cap by default: the values are to calibrate (ORC-216)', () => {
       expect(loadWorkflow({ packDir }).jobs['dev']!.limits).not.toHaveProperty('tokens');
     });

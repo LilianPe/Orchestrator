@@ -594,6 +594,13 @@ describe('decide — built-ins', () => {
       expect(decide(blocked, finished(loop), workflow).events).toEqual([]);
     });
 
+    it('a build that asked through `ask` then ended its turn, no output: its question stays, no second notice', () => {
+      const asked = ticket({ logical: 'dev', activeRunId: 'r1', blocked: true, blockReason: "Question posée par l'agent" });
+      const out = decide(asked, ev('run.finished', { runId: 'r1', job: 'dev', outcome: 'success', costUsd: 1, turns: 3, lastText: 'ok', attempt: 'failed' }), workflow);
+      expect(out.events).toEqual([]);
+      expect(out.effects).toEqual([]);
+    });
+
     it('a stopped run is a stop, whatever it had seen', () => {
       const out = decide(dev, finished(loop, { outcome: 'stopped', attempt: 'errored' }), workflow);
       expect(out.events).toEqual([]);

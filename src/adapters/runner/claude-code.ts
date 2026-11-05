@@ -151,8 +151,8 @@ interface Followed {
   tree?: () => Promise<string | undefined>;
 }
 
-/** How long reading the worktree may take: past it, this failure is not counted. */
-const TREE_TIMEOUT_MS = 30_000;
+/** Seconds reading the worktree may take, for `timeout`, which kills it: past it, this failure is not counted. */
+const TREE_TIMEOUT_S = 30;
 
 /** What a token cap counts: what the model read anew and wrote. A cache read costs next to nothing, and grows with each turn. */
 const spentTokens = (u: TokenUsage): number => u.input + u.output + u.cacheCreation;
@@ -207,20 +207,12 @@ export class ClaudeCodeRunner implements Runner {
 
   /** In the sandbox when the run has one: the host never runs git on a worktree the agent writes from there (ORC-203). */
   private async worktreeTree(req: RunRequest): Promise<string | undefined> {
-    const argv = ['sh', '-c', WORKTREE_TREE];
-    let timer: NodeJS.Timeout | undefined;
-    const late = new Promise<undefined>((resolve) => {
-      timer = setTimeout(resolve, TREE_TIMEOUT_MS, undefined);
-      timer.unref();
-    });
+    const argv = ['timeout', String(TREE_TIMEOUT_S), 'sh', '-c', WORKTREE_TREE];
     try {
-      const reading = req.sandboxId !== undefined ? this.o.sandboxes!.exec(req.sandboxId, argv, { cwd: req.cwd }) : execCmd(argv[0]!, argv.slice(1), { cwd: req.cwd });
-      const read = await Promise.race([reading, late]);
-      return read?.code === 0 ? read.stdout.trim() || undefined : undefined;
+      const read = await (req.sandboxId !== undefined ? this.o.sandboxes!.exec(req.sandboxId, argv, { cwd: req.cwd }) : execCmd(argv[0]!, argv.slice(1), { cwd: req.cwd }));
+      return read.code === 0 ? read.stdout.trim() || undefined : undefined;
     } catch {
       return undefined;
-    } finally {
-      clearTimeout(timer);
     }
   }
 
@@ -292,8 +284,10 @@ export class ClaudeCodeRunner implements Runner {
     const timer = setTimeout(limit, Math.max(0, a.remainingMs));
 
     let stagnation: Stagnation | undefined;
+    // Its end seen, or its result: a read that comes late signals no process and changes no outcome.
+    let ended = false;
     const stagnated = (seen: Stagnation) => {
-      if (limited || stopped) return;
+      if (limited || stopped || ended || result) return;
       stagnation = seen;
       limit();
     };
@@ -307,6 +301,7 @@ export class ClaudeCodeRunner implements Runner {
       if (!loops) return;
       for (const failed of failedCommand(line, calls)) {
         reading = reading.then(async () => {
+          if (ended || result) return;
           const tree = await a.tree!();
           const seen = tree ? loops.record(failed, tree) : undefined;
           if (seen) stagnated(seen);
@@ -376,6 +371,7 @@ export class ClaudeCodeRunner implements Runner {
       const finish = (spawnError?: Error) => {
         if (finished) return;
         finished = true;
+        ended = true;
         clearInterval(poll);
         clearTimeout(timer);
         clearTimeout(killTimer);

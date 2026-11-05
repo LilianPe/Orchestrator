@@ -814,7 +814,8 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       const outcome = job.queue === 'dev' ? (stuck ?? attemptDecision(event.payload, job)) : event.payload.outcome;
       // Already blocked (the agent asked through `ask`, a human's stop…): it keeps its reason and gets no second notice.
       if (typeof outcome === 'object') return ticket?.blocked ? out : block(out, outcome.reason, outcome.body);
-      if (outcome === 'success' && ticket?.blocked && job.queue === 'dev') return out;
+      // A run that ended well on a ticket already blocked (`ask`, then the end of its turn): no output is expected of it, its question stays.
+      if ((outcome === 'success' || event.payload.outcome === 'success') && ticket?.blocked && job.queue === 'dev') return out;
       if (outcome === 'success') {
         if (job.verify.length === 0 && !job.repoChecks && !job.red && !goesThroughFreeze(ticket, job)) return success(out, { event, ticket, workflow }, job, runId, output);
         out.events.push({ type: 'verify.started', runId });

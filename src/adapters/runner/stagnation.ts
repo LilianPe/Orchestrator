@@ -56,17 +56,21 @@ export function failedCommand(line: unknown, pending: Map<string, string>): Fail
 const COMMAND_MAX = 200;
 
 /**
- * Same command, same normalized failure, same content of the worktree, `limit` times in an attempt: the agent
- * turns in circles (ORC-136). Other commands in between change nothing, an edit starts another count.
+ * Same command, same normalized failure, `limit` times with no change of the worktree between them: the agent
+ * turns in circles (ORC-136). Other commands in between change nothing; any change of the content starts every count
+ * over, a return to an earlier content included: it was work.
  */
 export class LoopDetector {
   private readonly seen = new Map<string, number>();
+  private tree: string | undefined;
 
   constructor(private readonly limit: number) {}
 
   record(failed: FailedCommand, tree: string): Stagnation | undefined {
+    if (tree !== this.tree) this.seen.clear();
+    this.tree = tree;
     const failure = hashText(normalizeFailure(failed.output));
-    const key = `${failed.command}\0${failure}\0${tree}`;
+    const key = `${failed.command}\0${failure}`;
     const count = (this.seen.get(key) ?? 0) + 1;
     this.seen.set(key, count);
     return count >= this.limit ? { kind: 'loop', command: failed.command.slice(0, COMMAND_MAX), failure, tree, count } : undefined;
@@ -75,7 +79,7 @@ export class LoopDetector {
 
 /**
  * The tree of the whole worktree (`sh`, run where the agent runs: in its sandbox when it has one, the worktree
- * being its own): what `verify.failed` calls `tree`, edits, staged or not, and untracked files in. On a copy of
- * the index: the agent's stays as it is. It leaves a few unreachable objects, that no bundle carries.
+ * being its own): what `verify.failed` calls `tree`, edits, staged or not, and untracked files in. As `worktreeTree`
+ * of `core/verify.ts` does on the host: a copy of the index and a throwaway object store, the repository is only read.
  */
-export const WORKTREE_TREE = `d=$(mktemp -d) && trap 'rm -rf "$d"' EXIT && i=$(git rev-parse --git-path index) && { cp "$i" "$d/i" 2>/dev/null; GIT_INDEX_FILE="$d/i" git add -A . && GIT_INDEX_FILE="$d/i" git write-tree; }`;
+export const WORKTREE_TREE = `d=$(mktemp -d) && trap 'rm -rf "$d"' EXIT && i=$(git rev-parse --git-path index) && o=$(cd "$(git rev-parse --git-path objects)" && pwd) && mkdir "$d/o" && { cp "$i" "$d/i" 2>/dev/null; export GIT_INDEX_FILE="$d/i" GIT_OBJECT_DIRECTORY="$d/o" GIT_ALTERNATE_OBJECT_DIRECTORIES="$o"; git add -A . && git write-tree; }`;

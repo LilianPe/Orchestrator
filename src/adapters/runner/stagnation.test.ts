@@ -61,6 +61,16 @@ describe('LoopDetector', () => {
     expect(d.record({ ...failure, command: 'npm run lint' }, 'tree-a')).toBeUndefined();
   });
 
+  it('a return to an earlier content is no loop: any change starts every count over', () => {
+    const d = new LoopDetector(3);
+    d.record(failure, 'tree-a');
+    d.record(failure, 'tree-a');
+    d.record(failure, 'tree-b');
+    expect(d.record(failure, 'tree-a')).toBeUndefined();
+    expect(d.record(failure, 'tree-a')).toBeUndefined();
+    expect(d.record(failure, 'tree-a')).toMatchObject({ count: 3 });
+  });
+
   it('other commands between two failures do not reset the count: only the content of the worktree does', () => {
     const d = new LoopDetector(2);
     d.record(failure, 'tree-a');
@@ -128,6 +138,15 @@ describe('WORKTREE_TREE: the content of a worktree, on a real git', () => {
     expect(readFileSync(index).equals(bytes)).toBe(true);
     expect(statSync(index).mtimeMs).toBe(mtime);
     expect(git(dir, 'status', '--porcelain')).toBe('?? new.ts');
+  });
+
+  it('writes nothing in the repository: its objects stay as they are', async () => {
+    const dir = repo();
+    writeFileSync(join(dir, 'new.ts'), 'un\n');
+    const count = () => git(dir, 'count-objects');
+    const before = count();
+    await tree(dir);
+    expect(count()).toBe(before);
   });
 
   it('fails outside a git worktree: no fingerprint, nothing tracked', async () => {

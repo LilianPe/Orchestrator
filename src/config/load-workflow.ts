@@ -112,6 +112,16 @@ function stepFields(job: string, raw: RawJob, own: RunLimits, settings: StepSett
   };
 }
 
+/** A step named in `factory.yml` that the preset does not have would silently cap nothing. */
+function checkStepSettings({ effort, budgets }: StepSettings): void {
+  const named = { 'claude.effort.per_step': effort?.perStep, 'budgets.max_turns': budgets?.maxTurns, 'budgets.per_step_tokens': budgets?.perStepTokens };
+  for (const [where, steps] of Object.entries(named)) {
+    for (const name of Object.keys(steps ?? {})) {
+      if (!preset.steps.some((s) => s.id === name && 'maxTurns' in s)) throw new WorkflowError(`factory.yml: ${where}.${name}: not an agent step of ${preset.name}`);
+    }
+  }
+}
+
 function limits(raw: { turns?: number; duration?: string | number; usd?: number } | undefined, base: RunLimits): RunLimits {
   return {
     turns: raw?.turns ?? base.turns,
@@ -169,6 +179,7 @@ export function loadWorkflow(opts: { packDir: string; projectFile?: string | und
   const project = opts.projectFile ? readRaw(opts.projectFile) : undefined;
   const raw = mergeRaw(pack, project);
 
+  checkStepSettings(opts.settings ?? {});
   const perRun = limits(raw.limits?.per_run, { turns: 150, durationMs: 90 * 60_000, usd: 5 });
   const rawJobs = raw.jobs ?? {};
   const jobs: Record<string, JobSpec> = {};
