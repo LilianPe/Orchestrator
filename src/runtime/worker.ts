@@ -9,8 +9,9 @@ const INBOX_BATCH = 100;
 /**
  * Processings of a row whose preparation or store transaction throws (the tracker or the database
  * down), in this process: the n-th retry after `baseMs * 3^(n-1)` (2 s, 6 s, 18 s, 54 s: about 80 s
- * in all). Past the last one, the row waits for the next start. A decision that throws is not
- * retried: it is dead-lettered (ORC-175).
+ * in all). Past the last one, the row is dead-lettered (ORC-320); one that cannot be keeps being
+ * retried, every `baseMs * 3^(attempts-1)` (162 s). A decision that throws is not retried: it is
+ * dead-lettered at once (ORC-175).
  */
 export const PROCESS_RETRY = { attempts: 5, baseMs: 2_000 };
 
@@ -50,9 +51,9 @@ export interface WorkerDeps {
   effectRetry?: EffectRetry;
   /** The time of the effect results it writes to the inbox; the store's clock by default. */
   now?: () => number;
-  /** A row left for the next start: past its last retry, or behind such a row. Must not throw. */
+  /** A row that may wait for long: past its last retry and not set aside, or behind such a row. Must not throw. */
   left?(row: StoredEvent): void;
-  /** A row set aside in `dead_letter`, its decision having thrown (ORC-175). Must not throw. */
+  /** A row set aside in `dead_letter`, its decision having thrown (ORC-175) or its attempts run out (ORC-320). Must not throw. */
   deadLettered?(row: StoredEvent): void;
 }
 
@@ -83,8 +84,12 @@ const whose = (r: TicketRef): string => r.ticketId ?? `the events without a tick
  *   tracker, the database) stays pending and is retried with a backoff (`PROCESS_RETRY`); the later
  *   rows of its ticket (or, for an event without a ticket, of its project) wait behind it and go
  *   once it passes, or once the store answers it `waiting`: the store keeps the order from there.
- *   Past the last retry, the row and those behind it wait for the next start. An older row is not
- *   behind it: it still goes to the store, and takes the hold if it fails in turn (ORC-315).
+ *   An older row is not behind it: it still goes to the store, and takes the hold if it fails in
+ *   turn (ORC-315).
+ * - **A row out of attempts is dead-lettered (ORC-320)**, so that its ticket is blocked and the rows
+ *   behind it go on, with no restart. One that no block could tell (no ticket, one the factory does not
+ *   track, the very event that blocks), or that the store cannot set aside (down), stays in the inbox
+ *   and holds its key: it keeps being retried, and passes when its cause ends.
  * - **A poison event is dead-lettered (ORC-175).** A row whose upcast or decision (`decide`,
  *   `reduce`) throws would throw again: it is not retried. It goes to `dead_letter`, marked
  *   processed, with the event that blocks its ticket written to the inbox, in one transaction; the
@@ -324,7 +329,8 @@ export class Worker {
         outcome = await this.d.store.decide({ ...req, decide: (ticket, workflow) => poisonOn(() => req.decide(ticket, workflow)) });
       } catch (err) {
         // Set aside as prepared (its snapshot filled), so that a replay decides what was decided.
-        if (err instanceof PoisonEvent || err instanceof TicketHeldError) await this.deadLetter(event ?? row, key, err);
+        if (err instanceof PoisonEvent || err instanceof TicketHeldError) await this.deadLetter(event ?? row, key, err, 'its decision threw');
+        else if (await this.outOfAttempts(row)) await this.deadLetter(event ?? row, key, toError(err), `out of attempts after ${this.retry.attempts}`);
         else this.failed(row, key, toError(err));
         return 'done';
       }
@@ -352,13 +358,13 @@ export class Worker {
   }
 
   /**
-   * The row's decision threw (ORC-175), or the store refused it (`TicketHeldError`, ORC-291): retried, it
-   * would do so again. It is set aside in
+   * The row's decision threw (ORC-175), the store refused it (`TicketHeldError`, ORC-291) or its attempts ran
+   * out (ORC-320): retried, it would do so again, or hold its ticket for as long. It is set aside in
    * `dead_letter` and marked processed, and the event that blocks its ticket (a refused one: that tells the
    * ticket's holder, ORC-316) is written to the inbox, in one transaction; the rows behind it go on. A store that cannot write the dead letter (down)
    * leaves the row to the retries of `failed`: nothing is lost.
    */
-  private async deadLetter(row: StoredEvent, key: string, err: Error): Promise<void> {
+  private async deadLetter(row: StoredEvent, key: string, err: Error, why: string): Promise<void> {
     let written: boolean;
     try {
       written = await this.d.store.deadLetter(row, err.message, this.d.now?.() ?? Date.now(), err instanceof TicketHeldError ? err.holder : undefined);
@@ -370,13 +376,25 @@ export class Worker {
     this.passed(row, key);
     if (!written) return;
     const set = deadLetteredEvent(row);
-    this.d.log('error', `event ${set.id} (${set.type}) dead-lettered, its decision threw: ${err.message} (repair: factory run repair ${set.ticketId ?? set.id})`);
+    this.d.log('error', `event ${set.id} (${set.type}) dead-lettered, ${why}: ${err.message} (repair: factory run repair ${set.ticketId ?? set.id})`);
     this.d.deadLettered?.(row);
     // The event that blocks the ticket is in the inbox now.
     this.kickInBackground();
   }
 
-  /** A row's processing threw: it holds its key, and is retried after a backoff while retries are left. */
+  /**
+   * This failure is the row's last attempt, and setting it aside would tell a human: its ticket is tracked,
+   * and the row is not the event that blocks it (`deadLetterNotice`). Otherwise its dead letter would wait
+   * for a repair no one knows of: it stays, retried. A shutdown sets nothing aside, the store may be closing.
+   */
+  private async outOfAttempts(row: StoredEvent): Promise<boolean> {
+    if ((this.failures.get(row.id) ?? 0) + 1 < this.retry.attempts) return false;
+    if (row.ticketId === undefined || row.type === 'dead_letter.added') return false;
+    const tracked = await this.d.store.getTicket(row.projectId, row.ticketId).catch(() => undefined);
+    return tracked !== undefined && !this.stopped;
+  }
+
+  /** A row's processing threw: it holds its key, and is retried after a backoff. Only a shutdown ends its retries. */
   private failed(row: StoredEvent, key: string, err: Error): void {
     const n = (this.failures.get(row.id) ?? 0) + 1;
     this.failures.set(row.id, n);
@@ -385,13 +403,15 @@ export class Worker {
     const holder = this.holders.get(key);
     if (holder !== undefined && holder.id !== row.id) this.keepBehind(holder, key);
     this.holders.set(key, row);
-    if (this.givenUp(row.id)) {
+    // Once: a run's result frees its slot only once, however long it stays.
+    if (n === this.retry.attempts || this.stopped) for (const r of [row, ...(this.behind.get(key)?.values() ?? [])]) this.d.left?.(r);
+    if (this.stopped) {
       this.d.log('error', `event ${row.id} (${row.type}): ${err.message} (kept in the inbox for the next start, after ${n} attempts)`);
-      for (const r of [row, ...(this.behind.get(key)?.values() ?? [])]) this.d.left?.(r);
       return;
     }
-    const delay = this.retry.baseMs * 3 ** (n - 1);
-    this.d.log('error', `event ${row.id} (${row.type}): ${err.message} (attempt ${n} of ${this.retry.attempts}, retried in ${Math.round(delay / 1000)} s)`);
+    const delay = this.retry.baseMs * 3 ** (Math.min(n, this.retry.attempts) - 1);
+    const tried = n < this.retry.attempts ? `attempt ${n} of ${this.retry.attempts}` : `kept in the inbox after ${n} attempts`;
+    this.d.log('error', `event ${row.id} (${row.type}): ${err.message} (${tried}, retried in ${Math.round(delay / 1000)} s)`);
     const timer = setTimeout(() => {
       this.retryTimers.delete(timer);
       // It was taken up meanwhile, behind an older row that took the hold: this retry is out of date.
@@ -423,7 +443,7 @@ export class Worker {
     this.queued.set(key, [...rows, ...(this.queued.get(key) ?? [])]);
   }
 
-  /** No retry left for this row in this process: it waits for the next start. */
+  /** Past this row's last attempt, or in a shutdown: what waits behind it may wait for long. */
   private givenUp(id: string): boolean {
     return (this.failures.get(id) ?? 0) >= this.retry.attempts || this.stopped;
   }

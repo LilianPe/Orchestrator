@@ -203,44 +203,64 @@ on:
       expect(await h.ticket()).toMatchObject({ delegated: true, blocked: true, blockReason: 'Arrêté à la demande' });
     });
 
-    it('waits for the next start past its last retry, with the rows of its ticket, other tickets aside', async () => {
-      const h = createHarness({ processRetry: { attempts: 3, baseMs: 1 } });
+    it('keeps being retried past its last retry on a ticket no block could tell, with the rows of its ticket, other tickets aside (ORC-320)', async () => {
+      const pastLast = gate();
+      const decided = gate();
+      const h = createHarness({
+        processRetry: { attempts: 3, baseMs: 1 },
+        wrapStore: (inner) =>
+          Object.assign(Object.create(inner) as Store, {
+            decide: async (req: DecisionRequest) => {
+              const outcome = await inner.decide(req);
+              if (req.event.id === 's1' && outcome.status === 'committed') decided.open();
+              return outcome;
+            },
+          }),
+      });
       h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
       h.tracker.addIssue({ identifier: 'REL-2', title: 'Import CSV' });
       const getIssue = h.tracker.getIssue.bind(h.tracker);
       let down = true;
       let tries = 0;
       h.tracker.getIssue = async (id: string) => {
-        if (down && id === 'REL-1') {
-          tries++;
-          throw new Error('Linear unreachable');
-        }
-        return getIssue(id);
+        if (id !== 'REL-1' || !down) return getIssue(id);
+        if (++tries > 3) pastLast.open();
+        throw new Error('Linear unreachable');
       };
       await h.orch.accept(delegation(h, 'd1'));
       await h.orch.accept(stop(h, 's1'));
-      await waitFor(() => tries === 3);
-      await new Promise((r) => setTimeout(r, 30));
-      expect(tries).toBe(3);
+      await pastLast.opened;
       await h.send('ticket.delegated', { linearSessionId: 'ls-2' }, 'REL-2');
       expect(await h.ticket('REL-2')).toMatchObject({ delegated: true });
       expect((await h.store.pendingInbox(10)).map((e) => e.id)).toEqual(['d1', 's1']);
+      // Set aside on a ticket the factory does not track, it would wait for a repair no one hears of.
+      expect(await h.store.deadLetters()).toEqual([]);
 
       down = false;
-      await h.restart();
+      await decided.opened;
+      await h.orch.drained();
       expect((await h.store.recentEvents(10, 'REL-1')).map((e) => e.id).reverse().slice(0, 2)).toEqual(['d1', 's1']);
       expect(await h.store.pendingInbox(10)).toEqual([]);
     });
 
     it('holds the later events without a ticket of its project too, instead of leaving them waiting unseen', async () => {
-      let broken = true;
+      const pastLast = gate();
+      const up = gate();
+      const resumed = gate();
+      let tries = 0;
       const decided: string[] = [];
       const wrapStore = (inner: Store) =>
         Object.assign(Object.create(inner) as Store, {
-          decide: (req: DecisionRequest) => {
+          decide: async (req: DecisionRequest) => {
+            if (req.event.id === 'g1' && ++tries === 1) throw new Error('database hiccup');
+            if (req.event.id === 'g1') {
+              pastLast.open();
+              await up.opened;
+            }
             decided.push(req.event.id);
-            if (broken && req.event.id === 'g1') throw new Error('database hiccup');
-            return inner.decide(req);
+            const outcome = await inner.decide(req);
+            if (req.event.id === 'g2') resumed.open();
+            return outcome;
           },
         });
       const h = createHarness({ wrapStore, processRetry: { attempts: 1, baseMs: 1 } });
@@ -248,14 +268,17 @@ on:
         ({ ...TRUSTED, id, type, at: h.clock.now(), projectId: '*', payload: {} });
       await h.orch.accept(global('g1', 'control.pause'));
       await h.orch.accept(global('g2', 'control.resume'));
-      await h.orch.drained();
-      // g2 is held behind g1 by this process: never even sent to the store.
-      expect(decided).toEqual(['g1']);
+      // Past its only attempt, retried all the same: no ticket to block, so never set aside (ORC-320). g2 is held
+      // behind g1 by this process: never even sent to the store.
+      await pastLast.opened;
+      expect(decided).toEqual([]);
       expect((await h.store.pendingInbox(10)).map((e) => e.id)).toEqual(['g1', 'g2']);
+      expect(await h.store.deadLetters()).toEqual([]);
 
-      broken = false;
-      await h.restart();
-      expect(decided.slice(1).filter((id) => !id.startsWith('effect:'))).toEqual(['g1', 'g2']);
+      up.open();
+      await resumed.opened;
+      await h.orch.drained();
+      expect(decided.filter((id) => !id.startsWith('effect:'))).toEqual(['g1', 'g2']);
       expect(await h.store.getMeta('paused')).toBe('0');
     });
 
@@ -332,18 +355,13 @@ on:
         return { h, state, decided, younger };
       }
 
-      /** The older row is decided with no restart; the result of the effect that died after `younger` came stays behind it. */
-      async function olderDecidedThenRestart({ h, state, decided }: Pick<ReturnType<typeof failingYounger>, 'h' | 'state' | 'decided'>) {
+      /** The older row is decided with no restart, then the result of the effect that died after `younger` came (ORC-320). */
+      async function olderDecided({ h, decided }: Pick<ReturnType<typeof failingYounger>, 'h' | 'decided'>) {
         await h.advance(60_000);
-        expect(decided).toContain('effect:REL-1:1:1:committed');
-        expect((await h.store.pendingInbox(10)).map((e) => e.id)).toEqual(['younger', 'effect:REL-1:1:2']);
-        expect((await h.ticket()).blocked).toBe(false);
-
-        state.broken = false;
-        await h.restart();
         expect(await h.store.pendingInbox(10)).toEqual([]);
-        expect(decided.filter((d) => /^(effect:REL-1:1:[12]|younger):committed$/.test(d))).toEqual(['effect:REL-1:1:1:committed', 'younger:committed', 'effect:REL-1:1:2:committed']);
+        expect(decided.filter((d) => /^(effect:REL-1:1:[12]|younger):committed$/.test(d))).toEqual(['effect:REL-1:1:1:committed', 'effect:REL-1:1:2:committed']);
         expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Erreur : Linear down' });
+        expect(await h.store.deadLetters('REL-1')).toMatchObject([{ eventId: 'younger', status: 'open' }]);
       }
 
       it('lets the older row go, without a restart', async () => {
@@ -360,7 +378,7 @@ on:
         await exhausted.opened;
         await h.orch.drained();
 
-        await olderDecidedThenRestart(scenario);
+        await olderDecided(scenario);
       });
 
       it('lets it go when a poll read it behind the attempt still running, before that attempt failed', async () => {
@@ -381,7 +399,7 @@ on:
         answer.open();
         await h.orch.drained();
 
-        await olderDecidedThenRestart(scenario);
+        await olderDecided(scenario);
       });
     });
 
@@ -527,7 +545,9 @@ on:
       it('takes up what arrived behind the row once it is set aside, a stop included', async () => {
         const inDecision = gate();
         const answer = gate();
-        const { h, state } = failing(async () => {
+        const last = gate();
+        const { h, state } = failing(async (n) => {
+          if (n === ATTEMPTS) last.open();
           inDecision.open();
           await answer.opened;
         });
@@ -537,6 +557,7 @@ on:
         await h.orch.accept(stop(h, 's1'));
         await h.orch.poll();
         answer.open();
+        await last.opened;
         await h.orch.drained();
 
         expect(state.decided).toContain('s1:committed');
@@ -657,12 +678,15 @@ on:
           let tries = 0;
           const { h, state } = failing(undefined, (inner, s) => ({
             getTicket: async (projectId: string, ticketId: string) => {
-              if (s.broken && tries >= ATTEMPTS) throw new Error('database down');
+              if (s.broken && tries >= ATTEMPTS) {
+                if (tries > ATTEMPTS) pastLast.open();
+                throw new Error('database down');
+              }
               return inner.getTicket(projectId, ticketId);
             },
             decide: async (req: DecisionRequest) => {
               if (s.broken && req.event.id === 'younger') {
-                if (++tries > ATTEMPTS) pastLast.open();
+                tries++;
                 throw new Error('database down');
               }
               const outcome = await inner.decide(req);
