@@ -19,6 +19,8 @@ export const factoryDefault: Preset = {
     human_review: { limit: 3 },
   },
   sameFailure: { limit: 3, cause: 'boucle' },
+  // Longer than any Bash call of Claude Code (10 min at most) and than a slow model call retried: a long test run is no silence.
+  silentRun: { minutes: 30 },
   redCi: { goto: 'fix', counter: 'review_ci' },
   steps: [
     { id: 'intake', type: 'agent_step', writes: 'nothing', model: SONNET, effort: 'low', maxTurns: DEFAULT_TURNS, network: 'limited', next: 'clarify' },

@@ -5,7 +5,7 @@ import { parseCondition } from '../core/conditions.js';
 import { parseDuration } from '../core/duration.js';
 import { RENAMED_V1, type EventType, type LogicalState } from '../core/types.js';
 import { factoryDefault } from '../presets/factory-default.js';
-import { compilePreset, type Preset } from '../presets/preset.js';
+import { compilePreset, type Effort, type Preset, type Step } from '../presets/preset.js';
 import {
   rawWorkflowSchema,
   type JobSpec,
@@ -82,6 +82,43 @@ function resolveJob(name: string, jobs: Record<string, RawJob>, seen: string[] =
   return merged;
 }
 
+/** What `factory.yml` says of the agent steps (ORC-136), by step name. */
+export interface StepSettings {
+  effort?: { default?: Effort; perStep?: Record<string, Effort> | undefined } | undefined;
+  budgets?: { maxTurns?: Record<string, number> | undefined; perStepTokens?: Record<string, number> | undefined } | undefined;
+}
+
+const agentStep = (name: string): Extract<Step, { maxTurns: number }> | undefined => {
+  const step = preset.steps.find((s) => s.id === name);
+  return step && 'maxTurns' in step ? step : undefined;
+};
+
+/**
+ * The job's effort and caps. Its step sets the effort, `factory.yml` may change it; the step's turns are a ceiling that a
+ * project or `factory.yml` only lowers, as a step only narrows the network. A job out of the preset keeps its own limits.
+ */
+function stepFields(job: string, raw: RawJob, own: RunLimits, settings: StepSettings): Pick<JobSpec, 'effort' | 'limits'> {
+  const name = raw.step;
+  if (name === undefined) return { ...(settings.effort?.default ? { effort: settings.effort.default } : {}), limits: own };
+  const step = agentStep(name);
+  if (!step) throw new WorkflowError(`jobs.${job}.step: ${name} is not an agent step of ${preset.name}`);
+  const tokens = settings.budgets?.perStepTokens?.[name];
+  return {
+    effort: settings.effort?.perStep?.[name] ?? step.effort,
+    limits: { ...own, turns: Math.min(own.turns, step.maxTurns, settings.budgets?.maxTurns?.[name] ?? Infinity), ...(tokens !== undefined ? { tokens } : {}) },
+  };
+}
+
+/** A step named in `factory.yml` that the preset does not have would silently cap nothing. */
+function checkStepSettings({ effort, budgets }: StepSettings): void {
+  const named = { 'claude.effort.per_step': effort?.perStep, 'budgets.max_turns': budgets?.maxTurns, 'budgets.per_step_tokens': budgets?.perStepTokens };
+  for (const [where, steps] of Object.entries(named)) {
+    for (const name of Object.keys(steps ?? {})) {
+      if (!agentStep(name)) throw new WorkflowError(`factory.yml: ${where}.${name}: not an agent step of ${preset.name}`);
+    }
+  }
+}
+
 function limits(raw: { turns?: number; duration?: string | number; usd?: number } | undefined, base: RunLimits): RunLimits {
   return {
     turns: raw?.turns ?? base.turns,
@@ -90,7 +127,7 @@ function limits(raw: { turns?: number; duration?: string | number; usd?: number 
   };
 }
 
-function buildJob(name: string, raw: RawJob, perRun: RunLimits): JobSpec {
+function buildJob(name: string, raw: RawJob, perRun: RunLimits, settings: StepSettings): JobSpec {
   const need = <K extends keyof RawJob>(k: K): NonNullable<RawJob[K]> => {
     const v = raw[k];
     if (v === undefined) throw new WorkflowError(`jobs.${name}.${String(k)}: required`);
@@ -118,7 +155,7 @@ function buildJob(name: string, raw: RawJob, perRun: RunLimits): JobSpec {
     structuredOutput: raw.structured_output,
     // `attempts` counts every check, as `verifyAttempts`: the preset's returns to the job, plus the first one.
     ...(raw.red ? { red: { command: raw.red.command ?? missing('red.command'), mode: raw.red.mode ?? 'measure', attempts: presetBound(preset, 'red') + 1 } } : {}),
-    limits: limits(raw.limits, perRun),
+    ...stepFields(name, raw, limits(raw.limits, perRun), settings),
     onStart: raw.on_start ?? {},
     onSuccess: raw.on_success ?? {},
   };
@@ -134,15 +171,17 @@ export function presetBound(p: Preset, counter: string): number {
   return found.limit;
 }
 
-export function loadWorkflow(opts: { packDir: string; projectFile?: string }): Workflow {
+export function loadWorkflow(opts: { packDir: string; projectFile?: string | undefined; settings?: StepSettings | undefined }): Workflow {
   const pack = readRaw(join(opts.packDir, 'workflow.yml'));
   const project = opts.projectFile ? readRaw(opts.projectFile) : undefined;
   const raw = mergeRaw(pack, project);
 
+  const settings = opts.settings ?? {};
+  checkStepSettings(settings);
   const perRun = limits(raw.limits?.per_run, { turns: 150, durationMs: 90 * 60_000, usd: 5 });
   const rawJobs = raw.jobs ?? {};
   const jobs: Record<string, JobSpec> = {};
-  for (const name of Object.keys(rawJobs)) jobs[name] = buildJob(name, resolveJob(name, rawJobs), perRun);
+  for (const name of Object.keys(rawJobs)) jobs[name] = buildJob(name, resolveJob(name, rawJobs), perRun, settings);
 
   for (const j of Object.values(jobs)) {
     if (j.onSuccess.run && !jobs[j.onSuccess.run]) throw new WorkflowError(`jobs.${j.name}.on_success.run: unknown job "${j.onSuccess.run}"`);
@@ -208,6 +247,7 @@ export function loadWorkflow(opts: { packDir: string; projectFile?: string }): W
       verifyAttempts: raw.limits?.verify_attempts ?? presetBound(preset, 'verify') + 1,
       ciFixAttempts: raw.limits?.ci_fix_attempts ?? presetBound(preset, 'review_ci'),
       repeatedFailures: preset.sameFailure.limit,
+      silentAfterMs: preset.silentRun.minutes * 60_000,
       reviewRounds: raw.limits?.review_rounds ?? 5,
     },
     workspace: { setup: raw.workspace?.setup ?? [], portBase: raw.workspace?.ports?.base ?? 4200 },

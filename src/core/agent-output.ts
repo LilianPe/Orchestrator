@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { Store } from '../store/types.js';
 import type { RunOutcome } from './types.js';
 
 /**
@@ -32,6 +33,9 @@ export type AgentOutput = z.infer<typeof agentOutputSchema>;
 
 /** Where the factory MCP's `submit_result` keeps a run's validated output (ORC-288). */
 export const agentOutputKey = (runId: string): string => `agent-output:${runId}`;
+
+/** Keeps a run's validated output, the contract with the engine: read when the run ends. */
+export const saveAgentOutput = (store: Pick<Store, 'setMeta'>, runId: string, output: AgentOutput): Promise<void> => store.setMeta(agentOutputKey(runId), JSON.stringify(output));
 
 /** Closed outcomes of an agent attempt (doc MVP). `errored` is infrastructure: never sent back to the agent to fix. */
 export type AttemptOutcome = 'succeeded' | 'failed' | 'noop' | 'needs_input' | 'timeout' | 'spec_impossible' | 'errored';

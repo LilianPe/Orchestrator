@@ -2,6 +2,8 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse } from 'yaml';
 import { z } from 'zod';
+import type { Effort } from '../presets/preset.js';
+import type { StepSettings } from './load-workflow.js';
 
 /**
  * `<FACTORY_HOME>/factory.yml` (ORC-209, part B): the server's configuration, optional, next to `config.yaml`
@@ -11,7 +13,7 @@ import { z } from 'zod';
 export interface FactoryYml {
   linear?: { clientId?: string; clientSecret?: string; webhookSecret?: string };
   github?: { appId: string; privateKey: string; installationId?: string; webhookSecret?: string };
-  /** Read and validated; used by the runner once ORC-215 (accounts) and ORC-136 (effort per step) land. */
+  /** `effort` is applied by `stepSettings` (ORC-136); the rest of the choice of account waits for ORC-215. */
   claude?: {
     runtime: 'claude-code';
     accounts: { name: string; token: string }[];
@@ -22,7 +24,7 @@ export interface FactoryYml {
   };
   /** Tickets worked at once: the dev queue's capacity, over `parallel_sessions` of the workflow (ORC-203). */
   concurrency?: number;
-  /** Read and validated; enforced by ORC-216. */
+  /** `max_turns` and `per_step_tokens` are applied by `stepSettings` (ORC-136); `per_ticket_tokens`, `validate`'s worst case and the wait on a usage limit by ORC-216 and ORC-215. */
   budgets?: { perStepTokens?: Record<string, number>; perTicketTokens?: number; maxTurns?: Record<string, number>; onUsageLimit?: 'wait' };
   /**
    * `projects[].repoPath` of config.yaml stays the working copy until the runner clones (ORC-204). `env` and
@@ -41,7 +43,10 @@ export function activeClaudeToken(yml: FactoryYml | undefined): string | undefin
   return yml?.claude?.accounts.find((a) => a.name === yml.claude?.active)?.token || undefined;
 }
 
-type Effort = 'low' | 'medium' | 'high';
+/** What the workflow's agent steps read of the file (ORC-136). */
+export function stepSettings(yml: FactoryYml | undefined): StepSettings {
+  return { effort: yml?.claude?.effort, budgets: yml?.budgets };
+}
 
 export class FactoryYmlError extends Error {
   constructor(readonly violations: string[]) {

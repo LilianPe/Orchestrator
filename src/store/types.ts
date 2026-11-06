@@ -1,7 +1,7 @@
 import type { AttemptLabels } from '../core/attempt-labels.js';
 import type { DeadLetter, RepairAction } from '../core/dead-letter.js';
 import type { OutboxEffect } from '../core/decision.js';
-import { TRUSTED, type EffectResultPayload, type InputKind, type TimerFired, type QueueName, type FactoryEvent, type RunOutcome, type TicketState, type TokenUsage } from '../core/types.js';
+import { TRUSTED, type EffectResultPayload, type InputKind, type TimerFired, type QueueName, type FactoryEvent, type RunOutcome, type Stagnation, type TicketState, type TokenUsage } from '../core/types.js';
 import type { StoredEvent } from '../core/upcast.js';
 
 /**
@@ -55,6 +55,10 @@ export interface RunRecord {
   sensitivePaths?: readonly string[];
   /** Tokens the runner reported at the end of the attempt (ORC-235); absent when it reported none. */
   tokens?: TokenUsage;
+  /** What stopped the attempt, when the detector did (ORC-136). */
+  stagnation?: Stagnation;
+  /** The runner or its sandbox broke: nothing for the agent to fix (ORC-136). */
+  infra?: true;
   /** Renewed by the heartbeat while the attempt lives (ORC-220, `renewRun`); absent on older records. */
   leaseUntil?: number;
   /** What the attempt was given to read (ORC-220): a relaunch of its step reads the same, the feedback it consumed included. */

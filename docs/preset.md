@@ -26,7 +26,8 @@ Chaque étape a un type : `spec_check`, `agent_step`, `verify` (modes `red`, `fr
 | `verify` échoue → `build` (ou `verify_fix` → `fix`) | `verify` | 3 | Bloqué |
 | Review IA ou CI rouge → `fix` | `review_ci` | 2, un seul compteur par run | Bloqué |
 | Retours humains → `fix` | `human_review` | 3, distincts des tours IA | Bloqué |
-| Même commande, même échec, diff inchangé | `sameFailure` | 3 | Bloqué, cause « boucle » |
+| Même commande, même échec, diff inchangé | `sameFailure` | 3 | Bloqué, cause « boucle » : entre deux `verify` et pendant la tentative ([stagnation](#stagnation-dune-tentative-orc-136)) |
+| Rien d'écrit sur le flux de la tentative | `silentRun` | 30 min | Bloqué ([stagnation](#stagnation-dune-tentative-orc-136)) |
 
 Une CI rouge est l'échec d'un push : tant que la PR est ouverte, y compris pendant la porte de merge, elle part vers `fix` sur le compteur `review_ci` (`redCi`, seule source de cette règle). Aucune réaction ne relance `fix` hors de ce compteur. Une PR mergée n'a plus de retour arrière.
 
@@ -44,7 +45,11 @@ Une CI rouge est l'échec d'un push : tant que la PR est ouverte, y compris pend
 | `review` | Opus | high | 25 | API Claude |
 | `spec_check`, `verify*`, `red`, `freeze_tests` | (contrôle usine) | | | Aucun |
 
-Les tours des étapes que le doc MVP ne chiffre pas reprennent l'ancien `per_run.turns: 150`. Les plafonds en tokens restent à fixer (ORC-216).
+Les tours des étapes que le doc MVP ne chiffre pas reprennent l'ancien `per_run.turns: 150`. Les plafonds en tokens restent à fixer (ORC-216) : aucun par défaut.
+
+Un job du workflow nomme son étape (`step`, ORC-136) : `dev` est `build`, `tests` est `tests`, `dev-feedback` et `fix-ci` sont `fix`, `review` est `review`. Le chargement en tire l'effort, passé à `claude --effort` et enregistré dans les étiquettes de la tentative, et les tours. `factory.yml` peut changer l'effort d'une étape (`claude.effort.per_step`), baisser ses tours (`budgets.max_turns`) et lui donner un plafond en tokens (`budgets.per_step_tokens`). Comme tout le workflow, ces valeurs sont figées avec la version du ticket : un ticket déjà démarré garde les siennes, et une version figée avant ORC-136 n'a ni effort ni tokens.
+
+Un plafond en tokens compte `input + output + cache_creation` des messages de la tentative, pas les lectures de cache. Dépassé, le run s'arrête comme sur un plafond de tours : `limit`, ticket Bloqué.
 
 Le niveau de réseau se choisit par dépôt (Limité par défaut) ; une étape peut seulement le resserrer. Une étape déclarée au-dessus du niveau du dépôt fait échouer la compilation.
 
@@ -60,6 +65,20 @@ Le niveau de réseau se choisit par dépôt (Limité par défaut) ; une étape p
 | `counters.red` (2) | `jobs.<job>.red.attempts` = 3 | en mode bloquant, 2 retours à `tests` après un rouge non vérifié ; le 3e bloque. Une relance humaine remet le compte à zéro |
 
 `verify_attempts` et `ci_fix_attempts` de `workflow.yml` surchargent encore les deux premières, jusqu'au retrait du YAML (ORC-177).
+
+## Stagnation d'une tentative (ORC-136)
+
+Le runner regarde le flux de la tentative. Il constate, l'arrête, et journalise ce qu'il a vu dans `run.finished` (champ `stagnation`). C'est `decide` qui bloque, à partir de ce fait et de la borne de la version figée : le rejeu décide de même, et un journal d'avant ORC-136, sans ce champ, décide comme avant. Une version figée sans borne ne surveille rien.
+
+**Boucle.** Pour chaque appel `Bash` que le flux dit en échec (`is_error`), le runner calcule une empreinte : la commande, la sortie normalisée (couleurs, dates, durées, adresses, hash, pid et chemins temporaires retirés), et le contenu du worktree. Ce contenu est l'arbre git de tout le worktree, fichiers modifiés et non suivis compris, lu avec une copie de l'index : l'index de l'agent ne bouge pas. Il est lu là où tourne l'agent, dans son bac à sable s'il en a un. La même commande sur le même échec `sameFailure.limit` fois (3), sans changement du contenu entre elles : arrêt, puis Bloqué, raison « Boucle : … », et la commande dans le fil. D'autres commandes entre deux échecs ne remettent pas le compte à zéro. Tout changement du contenu les remet tous à zéro, même un retour à un contenu déjà vu. Commiter sans rien changer ne le fait pas. Une commande qui attend un état extérieur (`curl` sur un serveur qui démarre) et échoue 3 fois de la même façon compte aussi. Si le contenu n'a pas pu être lu (pas de git, plus de 30 s), cet échec ne compte pas, et le journal du démon le dit une fois par run, avec le code de sortie et la première ligne de stderr : un détecteur éteint se voit. Seuls les jobs de la file `dev` sont surveillés pour les boucles.
+
+**Silence.** Rien d'écrit sur le flux pendant `silentRun.minutes` (30) : arrêt, puis Bloqué, « Le run … n'a rien écrit depuis 30 min ». Le bail ne le voit pas : il dit seulement que le conteneur vit. 30 min dépassent le plus long appel `Bash` de Claude Code (10 min).
+
+Un humain relance comme d'habitude, sur la session du ticket, et le compte repart à zéro. Une tentative reprise après un redémarrage (`attach`) n'est surveillée que pour le silence, dont le délai repart de la reprise ; ses boucles restent bornées par ses tours et sa durée.
+
+La garde entre deux `verify` (`repeatedFailure`, ORC-187) reste à part : même job, mêmes commandes et codes de sortie, même arbre, sans la sortie.
+
+Une tentative dont le processus s'arrête sans ligne `result`, sans qu'on l'ait arrêtée ni qu'elle ait atteint un plafond (conteneur tué, mémoire, processus tué), est une panne : `errored`, ticket Bloqué, rien n'est renvoyé à l'agent.
 
 ## Étape `tests` et contrôle `red` (ORC-123)
 
