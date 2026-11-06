@@ -69,3 +69,19 @@ describe('the standard blocking comment and the reply that resumes (ORC-196)', (
     expect(replayJournal(await exportJournal(h.store, 'p', 'REL-1')).divergences).toEqual([]);
   });
 });
+
+describe('the question of an agent through `/agent/ask` (ORC-196)', () => {
+  it('is told by the comment, then a reply resumes the job at work once it ended', async () => {
+    const h = createHarness();
+    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Exporter les audits en CSV depuis la liste des audits.' });
+    h.runner.enqueue({ hold: true });
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    const run = (await h.store.getRun((await h.ticket()).activeRunId!))!;
+    await h.orch.askQuestion(run, "Question posée par l'agent", 'Quel séparateur ?');
+    await h.orch.blockTicket('p', 'REL-1', "Question posée par l'agent");
+    expect(h.tracker.comments('REL-1').at(-1)).toContain('Question : Quel séparateur ?');
+    expect(await h.ticket()).toMatchObject({ blocked: true, blockedJob: 'dev' });
+    await h.send('ticket.commented', { body: 'Le point-virgule.', author: 'Lilian' });
+    expect(await h.ticket()).toMatchObject({ blocked: false, pendingJob: { job: 'dev', input: 'feedback' } });
+  });
+});

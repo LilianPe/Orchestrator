@@ -22,8 +22,10 @@ export interface ServerDeps {
   /** Writes an event to the inbox (ORC-147); awaited before the route answers. */
   submit: (e: FactoryEvent) => unknown;
   isPaused: () => boolean | Promise<boolean>;
-  /** Blocks a ticket through the orchestrator's event chain, which tells the agent's question (Orchestrator.blockTicket). */
-  blockTicket: (projectId: string, ticketId: string, reason: string, asked: { question: string; linearSessionId?: string | undefined }) => Promise<void>;
+  /** Blocks a ticket through the orchestrator's event chain (Orchestrator.blockTicket). */
+  blockTicket: (projectId: string, ticketId: string, reason: string) => Promise<void>;
+  /** Tells the agent's question to a human (Orchestrator.askQuestion). */
+  askQuestion: (run: RunRecord, reason: string, question: string) => Promise<void>;
   linearWebhook: (raw: string, headers: Record<string, string | undefined>) => { status: number } | Promise<{ status: number }>;
   /** The GitHub webhook (ORC-134): signature checked, events written to the inbox before the answer. */
   githubWebhook: (raw: string, headers: Record<string, string | undefined>) => Promise<{ status: number }>;
@@ -249,9 +251,11 @@ export function createApp(d: ServerDeps): Hono {
   agent.get('/search', async (c) => c.json(await d.tracker.search(c.req.query('q') ?? '')));
   agent.get('/kb/search', async (c) => c.json(d.knowledgeSearch ? await d.knowledgeSearch(c.req.query('q') ?? '') : []));
   const ask = async (run: RunRecord, text: string) => {
+    const reason = "Question posée par l'agent";
+    await d.askQuestion(run, reason, text);
     // Not awaited: the block waits its turn behind the events before it (a run's launch among them),
     // and the agent must not wait minutes for an answer, nor ask again when its request times out.
-    d.blockTicket(run.projectId, run.ticketId, "Question posée par l'agent", { question: text, linearSessionId: run.linearSessionId }).catch((err: Error) =>
+    d.blockTicket(run.projectId, run.ticketId, reason).catch((err: Error) =>
       d.bus.publish({ kind: 'log', level: 'error', message: `ask ${run.ticketId}: ${err.message}`, at: d.clock.now() }),
     );
   };

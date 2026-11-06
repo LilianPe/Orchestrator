@@ -847,7 +847,7 @@ describe('a start that must not run (ORC-150 review)', () => {
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
     await h.send('ticket.delegated', { linearSessionId: 'ls-2' }, 'REL-2');
     expect((await h.store.listQueue()).map((q) => q.ticketId)).toEqual(['REL-2']);
-    await h.orch.blockTicket('p', 'REL-2', 'Question posée par l\'agent', { question: 'Laquelle ?' });
+    await h.orch.blockTicket('p', 'REL-2', 'Question posée par l\'agent');
     h.runner.release(h.runner.requests[0]!.runId);
     await h.orch.drained();
     expect(h.runner.requests).toHaveLength(1);

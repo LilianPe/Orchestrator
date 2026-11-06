@@ -11,7 +11,7 @@ export type MessageKind = 'delegation' | 'question' | 'command' | 'instruction';
 /** A human message and how fast the factory reacted to it. */
 export interface MessageMeasure {
   eventId: string;
-  type: 'ticket.delegated' | 'session.mentioned' | 'session.prompted' | 'command';
+  type: 'ticket.delegated' | 'session.mentioned' | 'session.prompted' | 'ticket.commented' | 'command';
   kind: MessageKind;
   linearSessionId: string | undefined;
   /** When the factory received it (`at` of the event). */
@@ -183,7 +183,7 @@ function outputs(facts: MeasureFacts, events: FactoryEvent[], devSession: string
 }
 
 function messageMeasure(m: Message, kind: MessageKind, outs: Output[], ack: number | undefined): MessageMeasure {
-  const session = m.payload.linearSessionId;
+  const session = (m.payload as { linearSessionId?: string }).linearSessionId;
   const after = outs.filter((o) => o.session === session && o.at >= m.at);
   const signs = [ack, after[0]?.at].filter((t): t is number => t !== undefined);
   const answered =
@@ -257,7 +257,9 @@ export function ticketMeasures(projectId: string, ticketId: string, facts: Measu
       const r = e.type === 'ticket.commented' ? (relaunched.has(e.id) ? { cause: 'feedback' as const, id: e.id } : undefined) : rework(e, ticket);
       if (r) reworks.push(r);
     }
-    if (e.type === 'session.prompted') messages.push({ m: e, kind: isQuestionSession(ticket, e.payload.linearSessionId) ? 'question' : 'instruction' });
+    // A comment has no session of its own: its sign of life is in the dev session, as a block's comment answers there.
+    if (e.type === 'ticket.commented') messages.push({ m: { ...e, payload: { ...e.payload, linearSessionId: ticket.linearSessionId } } as Message, kind: 'instruction' });
+    else if (e.type === 'session.prompted') messages.push({ m: e, kind: isQuestionSession(ticket, e.payload.linearSessionId) ? 'question' : 'instruction' });
     else if (e.type in KIND) messages.push({ m: e as Message, kind: KIND[e.type as keyof typeof KIND] });
   }
   const outs = outputs(facts, events, ticket.linearSessionId);

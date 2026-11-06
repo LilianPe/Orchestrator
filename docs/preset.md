@@ -74,12 +74,12 @@ Les règles `on` du YAML pilotent encore l'enchaînement (ORC-177) : le moteur n
 
 | Bloqué à | Une réponse relance |
 | -- | -- |
-| `build`, `tests`, `fix`, `review` (fin du run, plafond, boucle, bail, coupure, question) | le job de cette étape : `dev`, `tests`, `dev-feedback` ou `fix-ci`, `review` |
+| `build`, `tests`, `fix`, `review` (fin du run, plafond, boucle, bail, coupure, question, `relais-agent ask`) | le job de cette étape : `dev`, `tests`, `dev-feedback`, `review`. `fix-ci` passe par `dev-feedback`, même étape : il lit ses checks rouges, pas une réponse |
 | prise en charge, lancement | le job qu'on lançait, ses contrôles compris |
 | `verify`, `verify_fix`, `red` (échec au plafond, boucle, panne) | le job que le contrôle juge : c'est le retour arrière du préréglage. Pas le contrôle seul : `run_verify` a besoin de la sortie de l'agent, que `verify.errored` ne porte pas |
 | `verify` d'un job qui ne corrige pas (`verify_failure: block`, la review) | `dev-feedback`, qui écrit |
 | `publish` refusé | `dev-feedback` : il écrit, repasse par `verify` puis `publish`, et le déplacement dû suit (`owedMove`) |
-| dead-letter, effet mort, `stop`, question par `relais-agent ask` | `dev-feedback`, ces blocages n'ont pas d'étape à eux |
+| dead-letter, effet mort, `stop` | `dev-feedback`, ces blocages n'ont pas d'étape à eux |
 
 **Pas encore** : relancer une étape sans agent (`verify`, `red`, `freeze_tests`, `spec_check`, `publish`, `merge`) seule, et reprendre aux portes humaines (`spec_review`, `human_review`) : il faut un moteur qui exécute les étapes (ORC-177). `intake`, `clarify`, `spec_draft`, `spec_check`, `spec_review` et `after_merge` n'ont pas encore de job. Le numéro de tentative suit le compteur qui a mené au blocage ; une étape sans compteur affiche 1/1. Une règle de projet avec un `debounce` sur un ticket bloqué garde son job : sa minuterie part une fois le blocage levé.
 

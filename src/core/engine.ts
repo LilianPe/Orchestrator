@@ -62,7 +62,7 @@ function redFailed(out: Decision, at: { event: FactoryEvent<'verify.failed'>; ti
   const { red: cause = 'error', failures, runId } = at.event.payload;
   if (cause === 'infra') {
     const reason = `Le contrôle du rouge de ${job.name} n'a pas pu tourner : panne d'infrastructure, l'agent n'est pas en cause.`;
-    return block(out, at.workflow, { reason, body: `${reason}\n${failures[0]?.output ?? ''}\nRépondez dans ce fil pour que je reprenne.`, job: job.name, step: 'red', tried: triedFailures(failures) });
+    return block(out, at.workflow, { reason, body: `${reason}\n${failures[0]?.output ?? ''}\nRépondez dans ce fil pour que je reprenne.`, job: job.name, step: 'red', tried: failures.map((f) => f.output) });
   }
   if (red.mode === 'measure') {
     out.trace.push(`red: aurait bloqué (${cause}), mode mesure : le run continue`);
@@ -448,12 +448,14 @@ const REPLIES = new Set<EventType>(['session.prompted', 'ticket.commented']);
 
 /**
  * The job a reply resumes (ORC-196): the one the ticket blocked on, in place of the job its rule names, reading the
- * reply. A rule stays what lets the reply through (its `when`). A debounced rule keeps its job: its timer starts it
- * once the block is gone.
+ * reply. A rule stays what lets the reply through (its `when`). The rule's job stays when the blocked one is made to
+ * read something else (`fix-ci`, its red checks: `dev-feedback` is the same step), and when the rule is debounced: its
+ * timer starts it once the block is gone.
  */
 function resumedJob(rule: Rule, event: FactoryEvent, ticket: TicketState | undefined, workflow: Workflow): JobSpec | undefined {
   if (!workflow.blockComment || !REPLIES.has(event.type) || !rule.run || rule.debounceMs || !ticket?.blocked || !ticket.blockedJob) return undefined;
-  return workflow.jobs[ticket.blockedJob];
+  const job = workflow.jobs[ticket.blockedJob];
+  return job && (!job.input || job.input === 'feedback') ? job : undefined;
 }
 
 function applyRule(out: Decision, rule: Rule, event: FactoryEvent, ticket: TicketState | undefined, workflow: Workflow): Decision {

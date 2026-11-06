@@ -894,19 +894,28 @@ export class Orchestrator {
    * the ticket's worker task, so its read-modify-write never interleaves with a decision's, and
    * after the events accepted before it (their inbox write in flight included).
    */
-  async blockTicket(projectId: string, ticketId: string, reason: string, asked: { question: string; linearSessionId?: string | undefined }): Promise<void> {
+  async blockTicket(projectId: string, ticketId: string, reason: string): Promise<void> {
     await Promise.all(this.writes);
     await this.worker.kick();
-    const blocked = await this.worker.exclusive({ projectId, ticketId }, async () => {
+    await this.worker.exclusive({ projectId, ticketId }, async () => {
       const t = await this.d.store.getTicket(projectId, ticketId);
-      return t && this.apply(t, { type: 'ticket.blocked', reason });
+      // The job at work is the step a reply resumes (ORC-196).
+      if (t) await this.apply(t, { type: 'ticket.blocked', reason, ...(t.activeJob ? { job: t.activeJob } : {}) });
     });
-    const project = blocked && (await this.runtimeFor(projectId, ticketId, blocked));
-    if (!blocked || !project) return;
-    const job = blocked.activeJob;
-    await this.tellBlock(project, blocked, blockFacts({ reason, step: job ? stepOf(project.workflow, job) : 'ask', tried: [`Le run ${job ?? ''} en cours : l'agent demande une précision.`], question: asked.question }), async () => {
-      if (asked.linearSessionId) await this.d.tracker.activity(asked.linearSessionId, { type: 'elicitation', body: asked.question });
-    });
+  }
+
+  /**
+   * Tells a human the question of the agent (`/agent/ask`), before its block waits for its turn: the agent hears
+   * of a question that could not be told, and does not wait minutes behind the events before it.
+   */
+  async askQuestion(run: Pick<RunRecord, 'projectId' | 'ticketId' | 'job' | 'linearSessionId'>, reason: string, question: string): Promise<void> {
+    const frozen = async () => {
+      if (run.linearSessionId) await this.d.tracker.activity(run.linearSessionId, { type: 'elicitation', body: question });
+    };
+    const t = await this.d.store.getTicket(run.projectId, run.ticketId);
+    const project = t && (await this.runtimeFor(run.projectId, run.ticketId, t));
+    if (!t || !project) return frozen();
+    await this.tellBlock(project, t, blockFacts({ reason, step: stepOf(project.workflow, run.job), tried: [`Le run ${run.job} en cours : l'agent demande une précision.`], question }), frozen);
   }
 
   /**
@@ -915,7 +924,8 @@ export class Orchestrator {
    */
   private async tellBlock(project: ProjectRuntime, t: TicketState, facts: BlockFacts, frozen: () => Promise<void>): Promise<void> {
     if (!project.workflow.blockComment) return frozen();
-    await this.d.tracker.comment(t.ticketId, composeBlockComment(facts, await this.blockStatus(t)));
+    // A key of its own: it carries the marker that tells a comment of the factory from a human's reply.
+    await this.d.tracker.comment(t.ticketId, composeBlockComment(facts, await this.blockStatus(t)), `block:${this.newId()}`);
   }
 
   /** The state line of a block's comment. An unknown value is said as such: reading it must not stop the comment. */
@@ -1849,8 +1859,8 @@ export class Orchestrator {
       // (`--setting-sources ""`): defence in depth, for what ORC-128 did not trap (ORC-284).
       await workspaces.resetClaudeDir(ws.path);
       // The head the tests step starts on (ORC-123): its red check reads the step's own commits from it. A return
-      // to the step keeps the first one, so its earlier commits still count; a relaunch is the same step.
-      if (job.red && kind !== 'verify_failures' && kind !== 'feedback' && !opts.relaunchOf) await store.setMeta(redBaseKey(project.id, ticketId), (await workspaces.head(ws.path)) ?? '');
+      // to the step keeps the first one, so its earlier commits still count; a relaunch is the same step, a reply too once it has one.
+      if (job.red && kind !== 'verify_failures' && !opts.relaunchOf && !(kind === 'feedback' && (await store.getMeta(redBaseKey(project.id, ticketId))))) await store.setMeta(redBaseKey(project.id, ticketId), (await workspaces.head(ws.path)) ?? '');
 
       let input: { kind: InputKind; text: string } | undefined;
       if (from) {

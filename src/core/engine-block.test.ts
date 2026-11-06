@@ -63,6 +63,12 @@ describe('a block posts the standard comment (ORC-196)', () => {
     expect(blockCause(out.events.reduce<TicketState | undefined>((t, e) => reduce(t, e), state)?.blockReason)).toBe(cause);
   });
 
+  it('a red check that could not run says why in the comment', () => {
+    const wf: Workflow = { ...workflow, jobs: { ...workflow.jobs, tests: { ...workflow.jobs['tests']!, red: { command: 'npm test --', mode: 'measure', attempts: 3 } } } };
+    const out = decide(verifying({ activeJob: 'tests' }), ev('verify.failed', { runId: 'r1', job: 'tests', red: 'infra', failures: [{ command: 'factory/red', exitCode: null, output: 'base absente' }] }), wf);
+    expect(notice(out)?.block).toMatchObject({ step: 'red', tried: ['base absente'] });
+  });
+
   it('a dead letter is told in the same comment, and its repair still lifts its block', () => {
     const out = decide(ticket(), ev('dead_letter.added', { eventId: 'x', eventType: 'pr.opened', error: 'boom', failures: 1 }), workflow);
     expect(notice(out)?.block.question).toContain('factory run repair REL-1');
@@ -137,8 +143,12 @@ describe('a reply resumes the blocked step (ORC-196)', () => {
     expect(out.effects).toContainEqual({ kind: 'labels', add: [], remove: [BLOCKED_LABEL] });
   });
 
-  it('the tests step, the fix of a red CI and the review are each resumed, not `dev-feedback`', () => {
-    for (const job of ['tests', 'fix-ci', 'review']) expect(starts(decide(blockedOn(job), comment(), workflow))[0]).toMatchObject({ job, input: 'feedback' });
+  it('`fix-ci` reads its red checks, not a reply: the rule\'s job takes it up, the same step', () => {
+    expect(starts(decide(blockedOn('fix-ci'), comment(), workflow))[0]).toMatchObject({ job: 'dev-feedback' });
+  });
+
+  it('the tests step and the review are each resumed, not `dev-feedback`', () => {
+    for (const job of ['tests', 'review']) expect(starts(decide(blockedOn(job), comment(), workflow))[0]).toMatchObject({ job, input: 'feedback' });
   });
 
   it('gives the bounds back as any human relaunch, ORC-220\'s among them', () => {

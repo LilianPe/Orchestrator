@@ -101,7 +101,7 @@ describe('Orchestrator', () => {
     tracker.getIssue = async (id: string) => (await gate, getIssue(id));
     let blocked = false;
     await orch.accept(delegated());
-    const block = orch.blockTicket('p', 'REL-1', "Question posée par l'agent", { question: 'Laquelle ?' }).then(() => void (blocked = true));
+    const block = orch.blockTicket('p', 'REL-1', "Question posée par l'agent").then(() => void (blocked = true));
     await new Promise((r) => setTimeout(r, 10));
     // The delegation waits for the tracker: the block waits behind it, in the ticket's task.
     expect(blocked).toBe(false);
