@@ -90,10 +90,11 @@ describe('runVerify', () => {
 
   // `indexAt` within the second of the file: git trusts no entry as recent as its index, whatever the file's stat says.
   // The ctime cannot be set back, and it is not what the protection is about: `core.trustctime` takes it out of the comparison.
-  // Red on Linux only: on Windows a plain `copyFileSync` already keeps the date.
-  it.each([
-    ['at the start of its second', 0],
-    ['at the very end of its second', 0.9996],
+  // `touch`: `utimes` takes a double, too coarse for the last row. Not on Windows: a plain `copyFileSync` already keeps the date there.
+  it.skipIf(process.platform === 'win32').each([
+    ['at the start of its second', '000000000'],
+    ['at the end of its second, where a `Date` rounds up', '999600000'],
+    ['in its last nanoseconds, where `mtimeMs` rounds up', '999999950'],
   ])('sees an edit of the same size, with the same date, in the second of an index dated %s (ORC-318)', async (_, indexAt) => {
     const dir = repo();
     git(dir, 'config', 'core.trustctime', 'false');
@@ -101,7 +102,7 @@ describe('runVerify', () => {
     utimesSync(join(dir, 'a.txt'), second, second);
     git(dir, 'add', '.');
     git(dir, 'commit', '-qm', 'init');
-    utimesSync(join(dir, '.git', 'index'), second + indexAt, second + indexAt);
+    execFileSync('touch', ['-d', `@${second}.${indexAt}`, join(dir, '.git', 'index')]);
     const committed = git(dir, 'rev-parse', 'HEAD^{tree}');
     expect((await runVerify(dir, ['exit 1'])).tree).toBe(committed);
     writeFileSync(join(dir, 'a.txt'), 'two\n');

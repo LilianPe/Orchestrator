@@ -1,5 +1,5 @@
 import { execFile, spawn } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, statSync, utimesSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, statSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
@@ -89,11 +89,13 @@ async function worktreeTree(cwd: string): Promise<string | undefined> {
       GIT_ALTERNATE_OBJECT_DIRECTORIES: resolve(cwd, objects!),
     };
     // Starting from a copy of the real index, git only hashes the files changed since it was written.
-    if (existsSync(resolve(cwd, index!))) {
-      // Dated as the real one, or git no longer rehashes a file written in its second: an edit of the same size shows on no stat.
-      // Down to the second, read before the copy: too old only rehashes a file more, while a `Date` rounds up, past that second.
-      const second = Math.floor(statSync(resolve(cwd, index!)).mtimeMs / 1000);
-      copyFileSync(resolve(cwd, index!), env.GIT_INDEX_FILE);
+    const realIndex = resolve(cwd, index!);
+    // Read before the copy, in nanoseconds: a date too old only rehashes a file more, while `mtime` and `mtimeMs` round up, past the second.
+    const stat = statSync(realIndex, { bigint: true, throwIfNoEntry: false });
+    if (stat) {
+      copyFileSync(realIndex, env.GIT_INDEX_FILE);
+      // Dated as the real one, down to the second, or git no longer rehashes a file written in its second: an edit of the same size shows on no stat.
+      const second = Number(stat.mtimeNs / 1_000_000_000n);
       utimesSync(env.GIT_INDEX_FILE, second, second);
     }
     // `--sparse`: without it, one file where a sparse checkout hides (`.claude/`) fails the whole `add`, and there is no fingerprint.
