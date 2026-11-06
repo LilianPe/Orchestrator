@@ -82,9 +82,9 @@ const whose = (r: TicketRef): string => r.ticketId ?? `the events without a tick
  * - **A failure holds its ticket.** A row whose preparation or store transaction throws (the
  *   tracker, the database) stays pending and is retried with a backoff (`PROCESS_RETRY`); the later
  *   rows of its ticket (or, for an event without a ticket, of its project) wait behind it and go
- *   once it passes, or once the store answers it `waiting`: the store keeps the order from there,
- *   and an older row may be among them (ORC-314).
- *   Past the last retry, the row and those behind it wait for the next start.
+ *   once it passes. Past the last retry, the row and those behind it wait for the next start. An
+ *   older row is not behind it: it still goes to the store, whose answer keeps the order, and takes
+ *   the hold if it fails in turn (ORC-315).
  * - **A poison event is dead-lettered (ORC-175).** A row whose upcast or decision (`decide`,
  *   `reduce`) throws would throw again: it is not retried. It goes to `dead_letter`, marked
  *   processed, with the event that blocks its ticket written to the inbox, in one transaction; the
@@ -99,10 +99,17 @@ export class Worker {
   private queuedIds = new Set<string>();
   /** Rows left out of the passes: a failed row until its retry (or the next start), the rows behind it. */
   private skipped = new Set<string>();
-  /** Keys held by a failed row (its id): their later rows wait behind it. */
-  private holders = new Map<string, string>();
+  /** Keys held by a failed row: their later rows wait behind it. */
+  private holders = new Map<string, StoredEvent>();
   /** The rows waiting behind each held key, released once its failed row passes. */
   private behind = new Map<string, Map<string, StoredEvent>>();
+  /**
+   * When each row still unprocessed was first read. Within a ticket, this is the inbox's order: a scan
+   * reads oldest first and leaves out only rows already read, and a ticket's rows become visible in
+   * the order they were written, under its lock on Postgres (ORC-315).
+   */
+  private firstRead = new Map<string, number>();
+  private reads = 0;
   /** Failed processings of each row in this process. */
   private failures = new Map<string, number>();
   private retryTimers = new Set<NodeJS.Timeout>();
@@ -230,6 +237,7 @@ export class Worker {
     let n = 0;
     const exclude = [...this.skipped, ...this.waited.keys(), ...this.queuedIds];
     for (const row of await this.d.store.pendingInbox(INBOX_BATCH, exclude)) {
+      if (!this.firstRead.has(row.id)) this.firstRead.set(row.id, this.reads++);
       this.queue(row);
       n++;
     }
@@ -302,13 +310,10 @@ export class Worker {
   private async process(row: StoredEvent, key: string): Promise<'done' | 'held' | 'waiting'> {
     try {
       const holder = this.holders.get(key);
-      if (holder !== undefined && holder !== row.id) {
-        this.skipped.add(row.id);
-        const rows = this.behind.get(key) ?? new Map<string, StoredEvent>();
-        rows.set(row.id, row);
-        this.behind.set(key, rows);
-        this.d.log('error', `event ${row.id} (${row.type}) kept in the inbox behind a failed event of ${whose(row)} (${holder})`);
-        if (this.givenUp(holder)) this.d.left?.(row);
+      if (holder !== undefined && holder.id !== row.id && !this.isOlder(row, holder)) {
+        this.keepBehind(row, key);
+        this.d.log('error', `event ${row.id} (${row.type}) kept in the inbox behind a failed event of ${whose(row)} (${holder.id})`);
+        if (this.givenUp(holder.id)) this.d.left?.(row);
         return 'done';
       }
       let outcome: DecisionOutcome;
@@ -325,11 +330,9 @@ export class Worker {
       }
       if (outcome.status === 'waiting') {
         this.waited.set(row.id, row);
-        // A shutdown leaves the rows behind it for the next start.
-        if (holder === row.id && !this.stopped) {
-          this.releaseHold(row, key);
-          return 'done';
-        }
+        // It got through: the retries count consecutive failures. If it holds its key, it keeps the
+        // hold: the rows behind it are younger, and the store would answer them `waiting` too.
+        this.failures.delete(row.id);
         return outcome.backoff ? 'held' : 'waiting';
       }
       this.passed(row, key);
@@ -378,7 +381,10 @@ export class Worker {
     const n = (this.failures.get(row.id) ?? 0) + 1;
     this.failures.set(row.id, n);
     this.skipped.add(row.id);
-    this.holders.set(key, row.id);
+    // Only an older row gets here while another holds its key: the hold is now its own.
+    const holder = this.holders.get(key);
+    if (holder !== undefined && holder.id !== row.id) this.keepBehind(holder, key);
+    this.holders.set(key, row);
     if (this.givenUp(row.id)) {
       this.d.log('error', `event ${row.id} (${row.type}): ${err.message} (kept in the inbox for the next start, after ${n} attempts)`);
       for (const r of [row, ...(this.behind.get(key)?.values() ?? [])]) this.d.left?.(r);
@@ -408,8 +414,11 @@ export class Worker {
   private unwait(key: string): void {
     const rows = [...this.waited.values()].filter((row) => ticketKey(row) === key);
     if (rows.length === 0) return;
-    for (const row of rows) this.waited.delete(row.id);
-    this.requeueFirst(key, rows);
+    for (const row of rows) {
+      this.waited.delete(row.id);
+      this.queuedIds.add(row.id);
+    }
+    this.queued.set(key, [...rows, ...(this.queued.get(key) ?? [])]);
   }
 
   /** No retry left for this row in this process: it waits for the next start. */
@@ -417,26 +426,23 @@ export class Worker {
     return (this.failures.get(id) ?? 0) >= this.retry.attempts || this.stopped;
   }
 
-  /**
-   * A failed row got through its retry and found its turn had not come: it holds nothing back any more,
-   * and an older row may be behind it (ORC-314). The rows behind it go at the head of its ticket's
-   * queue, ahead of the younger rows read meanwhile. Only from the ticket's own task.
-   */
-  private releaseHold(row: StoredEvent, key: string): void {
-    this.requeueFirst(key, [...(this.behind.get(key)?.values() ?? [])]);
-    this.passed(row, key);
+  /** Whether `row` comes before `holder` in the inbox (see `firstRead`). */
+  private isOlder(row: StoredEvent, holder: StoredEvent): boolean {
+    return this.firstRead.get(row.id)! < this.firstRead.get(holder.id)!;
   }
 
-  /** Puts rows back at the head of their ticket's queue. Only from its own task: none of its rows is at the store now. */
-  private requeueFirst(key: string, rows: StoredEvent[]): void {
-    for (const row of rows) this.queuedIds.add(row.id);
-    this.queued.set(key, [...rows, ...(this.queued.get(key) ?? [])]);
+  private keepBehind(row: StoredEvent, key: string): void {
+    this.skipped.add(row.id);
+    const rows = this.behind.get(key) ?? new Map<string, StoredEvent>();
+    rows.set(row.id, row);
+    this.behind.set(key, rows);
   }
 
   /** A row went through: if it held its key, the rows behind it are taken up again. */
   private passed(row: StoredEvent, key: string): void {
     this.failures.delete(row.id);
-    if (this.holders.get(key) !== row.id) return;
+    this.firstRead.delete(row.id);
+    if (this.holders.get(key)?.id !== row.id) return;
     this.holders.delete(key);
     for (const id of this.behind.get(key)?.keys() ?? []) this.skipped.delete(id);
     this.behind.delete(key);

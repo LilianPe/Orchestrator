@@ -122,14 +122,14 @@ describe('Worker: a younger row that fails while an older one is parked (ORC-314
 
   /**
    * e2 is parked behind the effect another worker runs for e1. e3 fails in its preparation and takes
-   * the hold, its retry 1 s away on the fake clock, and the next poll puts e2 behind it. `retrying`
-   * runs in e3's next preparation.
+   * the hold, its retry 1 s away on the fake clock; the next poll asks for e2 all the same (ORC-315).
+   * `retrying` runs in e3's next preparation.
    */
-  async function olderBehindYounger(retrying: () => Promise<void> = async () => {}) {
+  async function olderBeforeYounger(retrying: () => Promise<void> = async () => {}) {
     vi.useFakeTimers({ now: 1_000_000 });
     const prepared: string[] = [];
     let failing = true;
-    const { store, worker, logs } = setup({
+    const { store, worker } = setup({
       retry: { attempts: 5, baseMs: 1_000 },
       prepare: async (e) => {
         prepared.push(e.id);
@@ -153,18 +153,24 @@ describe('Worker: a younger row that fails while an older one is parked (ORC-314
     await worker.settle();
     await worker.poll();
     await worker.settle();
-    expect(logs.filter((m) => m.startsWith('event e2 ')).at(-1)).toContain('behind a failed event of REL-1 (e3)');
-    expect(prepared).toEqual(['e2', 'e3']);
+    expect(prepared).toEqual(['e2', 'e3', 'e2']);
     return { store, worker, other, prepared };
   }
 
   /** The rows decided, oldest first, without the results of their effects. */
   const decidedRows = async (store: SqliteStore) => (await store.recentEvents(50, 'REL-1')).map((e) => e.id).reverse().filter((id) => /^e\d$/.test(id));
 
-  it('gives the hold up when its retry finds the older row first: both are decided, oldest first', async () => {
-    const { store, worker, other } = await olderBehindYounger();
+  it('keeps the hold when its retry finds the older row first: the younger row stays behind it, and all are decided, oldest first', async () => {
+    const { store, worker, other, prepared } = await olderBeforeYounger();
+    await store.appendInbox(event('e4'));
+    await worker.kick();
+    await worker.settle();
     await vi.advanceTimersByTimeAsync(1_000);
     await worker.settle();
+    await worker.poll();
+    await worker.settle();
+    expect(prepared.filter((id) => id === 'e3').length).toBeGreaterThan(1);
+    expect(prepared).not.toContain('e4');
     // The other worker finishes: nothing is left but this worker's own polls, with no restart.
     await store.completeEffect(other.id, other.lease, Date.now());
     for (let polls = 0; polls < 4; polls++) {
@@ -172,29 +178,16 @@ describe('Worker: a younger row that fails while an older one is parked (ORC-314
       await settled(worker);
     }
     expect(await store.pendingInbox(10)).toEqual([]);
-    expect(await decidedRows(store)).toEqual(['e1', 'e2', 'e3']);
+    expect(await decidedRows(store)).toEqual(['e1', 'e2', 'e3', 'e4']);
     worker.stop();
   });
 
-  it('asks for the older row in the same pass once it gives the hold up, without waiting for a poll', async () => {
-    const { store, worker, other } = await olderBehindYounger();
-    // No effect left for this worker, and their results queued after e3, ahead of e2 once it is read again.
-    await store.completeEffect(other.id, other.lease, Date.now());
-    const last = (await store.claimEffect('p', 'REL-1', 60_000)) as OutboxRow;
-    await store.completeEffect(last.id, last.lease, Date.now());
-    await vi.advanceTimersByTimeAsync(1_000);
-    await settled(worker);
-    expect(await store.pendingInbox(10)).toEqual([]);
-    expect(await decidedRows(store)).toEqual(['e1', 'e2', 'e3']);
-    worker.stop();
-  });
-
-  it('leaves the rows behind it for the next start when its retry is answered during a shutdown', async () => {
+  it('takes nothing up when its retry is answered during a shutdown', async () => {
     let open!: () => void;
     const answer = new Promise<void>((r) => (open = r));
     let reached!: () => void;
     const retrying = new Promise<void>((r) => (reached = r));
-    const { store, worker, prepared } = await olderBehindYounger(async () => {
+    const { store, worker, prepared } = await olderBeforeYounger(async () => {
       reached();
       await answer;
     });
@@ -203,7 +196,7 @@ describe('Worker: a younger row that fails while an older one is parked (ORC-314
     worker.stop();
     open();
     await worker.settle();
-    expect(prepared).toEqual(['e2', 'e3', 'e3']);
+    expect(prepared).toEqual(['e2', 'e3', 'e2', 'e3']);
     expect((await store.pendingInbox(10)).map((e) => e.id)).toEqual(['e2', 'e3']);
   });
 });
