@@ -23,6 +23,12 @@ export const isNoRepo = (t: TicketState | undefined): boolean => t?.awaitingRepo
 /** A ticket its project keeps whatever its labels say: work was asked of it there (sticky routing). */
 export const holds = (t: TicketState): boolean => !isUnrouted(t) && (t.delegated || t.prNumber !== undefined || t.branch !== undefined);
 
+/**
+ * What a decision writes lays claim to the ticket for its project: a new copy, or a copy that comes to hold it. Refused while
+ * another project holds the ticket (ORC-316): a copy of its own leaves that project's row whole, but work would start twice.
+ */
+export const claims = (known: TicketState | undefined, next: TicketState): boolean => !known || (holds(next) && !holds(known));
+
 /** A label naming another repo of the team than `projectId`: what a ticket held there cannot follow. */
 export function namesOtherRepo(team: readonly string[], projectId: string, label: string): boolean {
   return team.some((id) => id !== projectId && namesRepo(label, id));
@@ -32,7 +38,7 @@ export interface Route {
   projectId: string;
   /** The repos to choose from: the ticket names none. */
   repos?: string[];
-  /** The project where the ticket waited for this choice: on Postgres, its one row now moves here (ORC-291). */
+  /** The project where the ticket waited for this choice: the Bloqué label goes at once, not at the pass that ends that wait (ORC-291). */
   waitedIn?: string;
   /** The Linear team no project takes (ORC-171): the delegation only waits under this project. */
   noRepo?: string;

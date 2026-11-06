@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { runStatusCommand, runStopCommand, type ControlDeps } from '../../src/cli/control.js';
 import { EventBus } from '../../src/core/bus.js';
+import { newTicketState } from '../../src/core/types.js';
 import { createApp } from '../../src/server/app.js';
 import { RUN_LEASE_MS } from '../../src/store/types.js';
 import { createHarness, heldRun } from '../helpers/harness.js';
@@ -55,6 +56,18 @@ describe('factory status and factory stop (ORC-220)', () => {
     await runStatusCommand(c, h.clock.now());
     expect(c.lines).toContain('  REL-1  dev (bloqué)  Export CSV');
     expect(c.lines).toContain('    Arrêté à la demande');
+  });
+
+  it('stop goes to the project holding the ticket, not to a copy that only waited for its repo (ORC-316)', async () => {
+    const copy = (projectId: string, patch: object) => ({ ...newTicketState(projectId, 'REL-1', 'T', 'dev', 1), ...patch });
+    const tickets = [copy('api', { delegated: true, blocked: true, awaitingRepo: ['api', 'web'] }), copy('web', { delegated: true })];
+    const asked: string[] = [];
+    const fetch = (url: string) => {
+      asked.push(url);
+      return Response.json(url.endsWith('/api/state') ? { tickets } : {});
+    };
+    expect(await runStopCommand({ api: 'http://d', headers: {}, out: () => {}, fetch }, 'REL-1')).toBe(0);
+    expect(asked.at(-1)).toBe('http://d/api/tickets/web/REL-1/stop');
   });
 
   it('stop stops the run, one the daemon reattached to included', async () => {

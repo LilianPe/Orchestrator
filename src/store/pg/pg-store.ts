@@ -12,7 +12,7 @@ import {
   type RepairAction,
 } from '../../core/dead-letter.js';
 import type { OutboxEffect } from '../../core/decision.js';
-import { holds } from '../../core/routing.js';
+import { claims, holds } from '../../core/routing.js';
 import { normalizeTicket, type FactoryEvent, type QueueName, type TicketState } from '../../core/types.js';
 import { upcastTimer, type StoredEvent, type StoredTimer } from '../../core/upcast.js';
 import {
@@ -21,6 +21,7 @@ import {
   decisionRecord,
   effectResult,
   timerEvent,
+  timerRowId,
   LEASE_MS,
   type DecisionOutcome,
   type DecisionRecord,
@@ -196,31 +197,24 @@ export class PgStore implements AsyncStore {
   }
 
   private async readTicket(db: Tx | NodePgDatabase<typeof schema>, projectId: string, ticketId: string): Promise<TicketState | undefined> {
-    const result = await db.execute<{ data: TicketState }>(sql`select data from tickets where id = ${ticketId} limit 1`);
+    const result = await db.execute<{ data: TicketState }>(sql`select data from tickets where project_id = ${projectId} and id = ${ticketId}`);
     const row = result.rows[0];
-    if (!row) return undefined;
-    const ticket = normalizeTicket(row.data);
-    return ticket.projectId === projectId ? ticket : undefined;
+    return row && normalizeTicket(row.data);
   }
 
-  /**
-   * Upserts the projection from the current ticket state. `tickets.id` is the ticket identifier
-   * (the schema is single-project, unlike the old `(project_id, ticket_id)` key). It never replaces
-   * the ticket another project holds: `TicketHeldError`.
-   */
+  /** Upserts the projection from the current ticket state. `tickets.id` is the ticket identifier: one copy per project (ORC-316). */
   async putTicket(ticket: TicketState, options: PutTicketOptions = {}): Promise<void> {
     await this.db.transaction(async (tx) => {
       await tx.execute(ticketLock(ticket.ticketId));
-      await this.refuseHeldRow(tx, ticket);
       await this.writeTicket(tx, ticket, options);
     });
   }
 
-  /** Another project's row is replaced only when that project does not hold the ticket: a wait for its repo, a mention. */
-  private async refuseHeldRow(tx: Tx, ticket: TicketState): Promise<void> {
-    const result = await tx.execute<{ data: TicketState }>(sql`select data from tickets where id = ${ticket.ticketId} limit 1`);
-    const row = result.rows[0] && normalizeTicket(result.rows[0].data);
-    if (row && row.projectId !== ticket.projectId && holds(row)) throw new TicketHeldError(ticket.ticketId, row.projectId, ticket.projectId);
+  private async refuseClaim(tx: Tx, peers: readonly string[], known: TicketState | undefined, next: TicketState): Promise<void> {
+    if (peers.length === 0 || !claims(known, next)) return;
+    const copies = await tx.execute<{ data: TicketState }>(sql`select data from tickets where id = ${next.ticketId} and project_id = any(${sql.param([...peers])}::text[])`);
+    const holder = copies.rows.map((r) => normalizeTicket(r.data)).find(holds);
+    if (holder) throw new TicketHeldError(next.ticketId, holder.projectId, next.projectId);
   }
 
   private async writeTicket(db: Tx | NodePgDatabase<typeof schema>, ticket: TicketState, options: PutTicketOptions = {}): Promise<void> {
@@ -230,13 +224,13 @@ export class PgStore implements AsyncStore {
     const now = this.now();
     await db.execute(sql`
       insert into tickets (
-        id, status, step_cursor, active_attempts, human_inbox, workflow_hash, data, created_at, updated_at
+        project_id, id, status, step_cursor, active_attempts, human_inbox, workflow_hash, data, created_at, updated_at
       ) values (
-        ${t.ticketId}, ${t.logical}, ${stepCursor}, ${activeAttempts}, ${JSON.stringify(t.pendingFeedback)}::jsonb,
+        ${t.projectId}, ${t.ticketId}, ${t.logical}, ${stepCursor}, ${activeAttempts}, ${JSON.stringify(t.pendingFeedback)}::jsonb,
         ${options.workflowHash ?? t.workflowHash ?? null}, ${JSON.stringify(t)}::jsonb,
         to_timestamp(${now / 1000}), to_timestamp(${t.updatedAt / 1000})
       )
-      on conflict (id) do update set
+      on conflict (project_id, id) do update set
         status = excluded.status,
         step_cursor = excluded.step_cursor,
         active_attempts = excluded.active_attempts,
@@ -248,7 +242,7 @@ export class PgStore implements AsyncStore {
   }
 
   async listTickets(): Promise<TicketState[]> {
-    const result = await this.db.execute<{ data: TicketState }>(sql`select data from tickets order by id`);
+    const result = await this.db.execute<{ data: TicketState }>(sql`select data from tickets order by id, project_id`);
     return result.rows.map((row) => normalizeTicket(row.data));
   }
 
@@ -388,8 +382,8 @@ export class PgStore implements AsyncStore {
         `);
       }
       if (plan.ticket) {
-        // Thrown, the whole decision rolls back, its journal row included. `known`: the row is this project's already.
-        if (!known) await this.refuseHeldRow(tx, plan.ticket);
+        // Thrown, the whole decision rolls back, its journal row included.
+        await this.refuseClaim(tx, req.peers ?? [], known, plan.ticket);
         await this.writeTicket(tx, plan.ticket);
       }
       if (plan.clearTimers && ticketId !== null) {
@@ -525,7 +519,7 @@ export class PgStore implements AsyncStore {
     return (inserted.rowCount ?? 0) > 0;
   }
 
-  async deadLetter(row: StoredEvent, error: string, at: number): Promise<boolean> {
+  async deadLetter(row: StoredEvent, error: string, at: number, holder?: string): Promise<boolean> {
     const now = this.now();
     return this.db.transaction(async (tx) => {
       await tx.execute(ticketLock(row.ticketId));
@@ -545,7 +539,7 @@ export class PgStore implements AsyncStore {
         returning failures
       `);
       const failures = Number(upserted.rows[0]!.failures);
-      const notice = deadLetterNotice({ event, error, failures }, at);
+      const notice = deadLetterNotice({ event, error, failures }, at, holder);
       if (notice) await this.appendResult(tx, notice);
       return true;
     });
@@ -925,7 +919,7 @@ export class PgStore implements AsyncStore {
     await db.execute(sql`
       insert into timers (id, ticket_id, kind, due_at, payload, status, created_at)
       values (
-        ${timer.key}, ${timer.ticketId}, ${timer.kind}, to_timestamp(${timer.fireAt / 1000}),
+        ${timerRowId(timer)}, ${timer.ticketId}, ${timer.kind}, to_timestamp(${timer.fireAt / 1000}),
         ${JSON.stringify(timer)}::jsonb, 'pending', to_timestamp(${this.now() / 1000})
       )
       on conflict (id) do update set
@@ -965,7 +959,7 @@ export class PgStore implements AsyncStore {
       await tx.execute(ticketLock(timer.ticketId));
       const armed = await tx.execute(sql`
         delete from timers
-        where id = ${timer.key} and status = 'pending' and (payload->>'fireAt')::double precision = ${timer.fireAt}
+        where id = ${timerRowId(timer)} and status = 'pending' and (payload->>'fireAt')::double precision = ${timer.fireAt}
         returning id
       `);
       if ((armed.rowCount ?? 0) === 0) return false;

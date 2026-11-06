@@ -188,16 +188,18 @@ export interface DecisionRequest {
   event: FactoryEvent;
   /** The project's workflow now: a ticket without a frozen version is frozen on it. */
   workflow: WorkflowVersion;
+  /** The other projects of the ticket's Linear team: one holding the ticket refuses a claim on it (`TicketHeldError`, ORC-316). */
+  peers?: readonly string[];
   decide(ticket: TicketState | undefined, workflow: WorkflowVersion): DecisionPlan;
 }
 
 /**
- * A write refused: it would replace the row of a ticket another project holds (ORC-291). Postgres keeps one row
- * per ticket, whatever its project. Retried, it would be refused again: the worker sets the event aside at once.
+ * A decision refused: it lays claim to a ticket another project of its team holds (`claims`, ORC-291, ORC-316).
+ * Retried, it would be refused again: the worker sets the event aside at once.
  */
 export class TicketHeldError extends Error {
-  constructor(ticketId: string, holder: string, writer: string) {
-    super(`ticket ${ticketId} is held by project ${holder}: refused, a write for project ${writer} would replace it`);
+  constructor(ticketId: string, readonly holder: string, writer: string) {
+    super(`ticket ${ticketId} is held by project ${holder}: refused, a decision for project ${writer} lays claim to it`);
   }
 }
 
@@ -329,6 +331,9 @@ export interface SecurityStats {
   rules: { rule: string; refusals: number }[];
 }
 
+/** The store's id of an armed timer: `key` is per ticket, and each project's copy of the ticket has its own timers (ORC-316). */
+export const timerRowId = (t: Pick<TimerRecord, 'projectId' | 'key'>): string => `${t.projectId}:${t.key}`;
+
 /** The inbox event of a timer's firing (ORC-161), written by `fireTimer`: its id `timer:<key>:<fireAt>` names that firing, once. */
 export function timerEvent(t: TimerRecord, at: number): FactoryEvent<'timer.fired'> {
   return {
@@ -418,9 +423,10 @@ export interface Store {
    * lock: the row is marked processed (it is not retried), its event (the one a failed repair carries,
    * `deadLetteredEvent`) goes to `dead_letter`, open, its failures counted, and the event that blocks
    * its ticket (`deadLetterNotice`) is written to the inbox. False, and nothing written, when the row
-   * is no longer pending (another worker processed it).
+   * is no longer pending (another worker processed it). `holder`: the project whose ticket refused
+   * the event (`TicketHeldError`), told instead of a ticket blocked (ORC-316).
    */
-  deadLetter(row: StoredEvent, error: string, at: number): Promise<boolean>;
+  deadLetter(row: StoredEvent, error: string, at: number, holder?: string): Promise<boolean>;
   /** The dead letters, of a ticket (any project) or all of them, open ones first, then oldest first. */
   deadLetters(ticketId?: string): Promise<DeadLetter[]>;
   /** The dead letter of an event, by its id. */

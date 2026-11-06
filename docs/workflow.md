@@ -232,7 +232,7 @@ Une règle sans condition correspond toujours.
 | `comment` | Publie ce texte en commentaire du ticket. |
 | `do` | `stop` : arrête le run en cours, vide les runs en attente et bloque le ticket (« Arrêté. Répondez dans ce fil ou posez le label agent:reprendre pour relancer. »). `cleanup` : supprime le worktree du ticket. `propose_delegate` : répond qu'il faut déléguer le ticket à Relais pour qu'il le développe. |
 | `run` | Lance le job de ce nom (doit exister dans `jobs`). Si le ticket était bloqué, il est débloqué d'abord. |
-| `debounce` | Avec `run` : au lieu de lancer tout de suite, programme le job après ce délai. Un nouvel événement correspondant avant l'expiration repousse le délai : des messages rapprochés donnent un seul run. `0s` = immédiat. Le délai est une minuterie en base, écrite avec la décision : un redémarrage de Relais ne la perd pas. |
+| `debounce` | Avec `run` : au lieu de lancer tout de suite, programme le job après ce délai. Un nouvel événement correspondant avant l'expiration repousse le délai : des messages rapprochés donnent un seul run. `0s` = immédiat. Le délai est une minuterie en base, écrite avec la décision, propre à chaque projet : un redémarrage de Relais ne la perd pas. |
 
 Une règle sans action est valide : elle « consomme » l'événement sans rien faire (et empêche les règles suivantes de s'appliquer).
 

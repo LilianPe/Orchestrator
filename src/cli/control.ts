@@ -1,5 +1,6 @@
 import { PRODUCT_NAME } from '../product.js';
 import type { RunRecord } from '../store/types.js';
+import { holds } from '../core/routing.js';
 import type { TicketState } from '../core/types.js';
 
 /** The daemon's HTTP API, as `factory status` and `factory stop` reach it. */
@@ -67,7 +68,9 @@ export async function runStatusCommand(d: ControlDeps, now: number = Date.now())
 export async function runStopCommand(d: ControlDeps, ticketId: string): Promise<number> {
   const s = await readState(d);
   if (!s) return 1;
-  const t = s.tickets.find((x) => x.ticketId === ticketId);
+  // A copy per project (ORC-316): the work is under the one holding the ticket.
+  const copies = s.tickets.filter((x) => x.ticketId === ticketId);
+  const t = copies.find(holds) ?? copies[0];
   if (!t) {
     d.out(`Ticket ${ticketId} inconnu de ${PRODUCT_NAME}.`);
     return 1;

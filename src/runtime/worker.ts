@@ -354,14 +354,14 @@ export class Worker {
   /**
    * The row's decision threw (ORC-175), or the store refused it (`TicketHeldError`, ORC-291): retried, it
    * would do so again. It is set aside in
-   * `dead_letter` and marked processed, and the event that blocks its ticket is written to the inbox,
-   * in one transaction; the rows behind it go on. A store that cannot write the dead letter (down)
+   * `dead_letter` and marked processed, and the event that blocks its ticket (a refused one: that tells the
+   * ticket's holder, ORC-316) is written to the inbox, in one transaction; the rows behind it go on. A store that cannot write the dead letter (down)
    * leaves the row to the retries of `failed`: nothing is lost.
    */
   private async deadLetter(row: StoredEvent, key: string, err: Error): Promise<void> {
     let written: boolean;
     try {
-      written = await this.d.store.deadLetter(row, err.message, this.d.now?.() ?? Date.now());
+      written = await this.d.store.deadLetter(row, err.message, this.d.now?.() ?? Date.now(), err instanceof TicketHeldError ? err.holder : undefined);
     } catch (writeErr) {
       this.failed(row, key, new Error(`${err.message}; not dead-lettered: ${toError(writeErr).message}`));
       return;

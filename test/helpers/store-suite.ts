@@ -1,7 +1,7 @@
-import { expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import type { AttemptLabels } from '../../src/core/attempt-labels.js';
 import { newTicketState, TRUSTED, type FactoryEvent, type TicketState } from '../../src/core/types.js';
-import { timerEvent, type DecisionPlan, type DecisionRequest, type QueueItem, type RunRecord, type SecurityLog, type Store, type WorkflowVersion } from '../../src/store/types.js';
+import { TicketHeldError, timerEvent, type DecisionPlan, type DecisionRequest, type QueueItem, type RunRecord, type SecurityLog, type Store, type TimerRecord, type WorkflowVersion } from '../../src/store/types.js';
 
 function run(patch: Partial<RunRecord> = {}): RunRecord {
   return {
@@ -742,6 +742,85 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     expect(await s.pendingInbox(10)).toEqual([
       delegatedEvent('e2'),
       { ...TRUSTED, id: 'dead-letter:e1:1', type: 'dead_letter.added', at: 50, projectId: 'p', ticketId: 'REL-1', payload: { eventId: 'e1', eventType: 'ticket.delegated', error: 'boom', failures: 1 } },
+    ]);
+  });
+
+  it('keeps a timer per project under one key: arming or firing a copy\'s leaves the other\'s (ORC-316)', async () => {
+    const s = await store();
+    const timer = (projectId: string, fireAt: number): TimerRecord => ({ key: 'REL-1:dev-feedback', projectId, ticketId: 'REL-1', kind: 'debounce', payload: { job: 'dev-feedback' }, fireAt });
+    await s.putTimer(timer('api', 100));
+    await s.putTimer(timer('p', 200));
+    await s.putTimer(timer('p', 300));
+    expect((await s.dueTimers(1000)).map((t) => [t.projectId, t.key, t.fireAt])).toEqual([['api', 'REL-1:dev-feedback', 100], ['p', 'REL-1:dev-feedback', 300]]);
+    // Fired as read: a stale read of p's is left alone, api's goes.
+    expect(await s.fireTimer(timer('p', 200), 400)).toBe(false);
+    expect(await s.fireTimer(timer('api', 100), 400)).toBe(true);
+    expect((await s.dueTimers(1000)).map((t) => t.projectId)).toEqual(['p']);
+    expect((await s.pendingInbox(10)).map((e) => [e.id, e.projectId])).toEqual([['timer:REL-1:dev-feedback:100', 'api']]);
+  });
+
+  it('keeps a copy of a ticket per project: writing one leaves the other whole (ORC-316)', async () => {
+    const s = await store();
+    const api = { ...newTicketState('api', 'REL-1', 'T', 'dev', 1), delegated: true, branch: 'factory/rel-1', prNumber: 7 };
+    const web = newTicketState('web', 'REL-1', 'T', 'dev', 1);
+    await s.putTicket(api);
+    await s.putTicket(web);
+    await s.putTicket({ ...web, title: 'renamed' });
+    expect(await s.getTicket('api', 'REL-1')).toEqual(api);
+    expect(await s.getTicket('web', 'REL-1')).toEqual({ ...web, title: 'renamed' });
+    expect((await s.listTickets()).map((t) => t.projectId).sort()).toEqual(['api', 'web']);
+    expect(await s.updateTicket('web', 'REL-1', (t) => ({ ...t, blocked: true }))).toMatchObject({ projectId: 'web', blocked: true });
+    expect(await s.getTicket('api', 'REL-1')).toEqual(api);
+  });
+
+  describe('a decision another project of the ticket\'s team holds the ticket against (ORC-316)', () => {
+    const plan = (ticket: TicketState): DecisionPlan => ({ ticket, effects: [], timers: [], clearTimers: false });
+    const held = { ...newTicketState('api', 'REL-1', 'T', 'dev', 1), delegated: true };
+    const wait = { ...newTicketState('p', 'REL-1', 'T', 'dev', 1), delegated: true, blocked: true, awaitingRepo: ['p', 'api'] };
+    const on = async (...copies: TicketState[]) => {
+      const s = await store();
+      for (const c of copies) await s.putTicket(c);
+      await s.appendInbox(delegatedEvent('e1'));
+      return s;
+    };
+
+    it('is refused when it would create a copy: nothing written, the row still pending', async () => {
+      const s = await on(held);
+      const req = { event: delegatedEvent('e1'), workflow: WF, peers: ['api'], decide: () => plan(newTicketState('p', 'REL-1', 'T', 'dev', 1)) };
+      await expect(s.decide(req)).rejects.toBeInstanceOf(TicketHeldError);
+      expect(await s.getTicket('api', 'REL-1')).toEqual(held);
+      expect(await s.getTicket('p', 'REL-1')).toBeUndefined();
+      expect(await s.recentEvents(10)).toEqual([]);
+      expect((await s.pendingInbox(10)).map((e) => e.id)).toEqual(['e1']);
+    });
+
+    it('is refused when the copy that waited here would come to hold it, and goes on when it only stops waiting', async () => {
+      const s = await on(held, wait);
+      await expect(s.decide({ event: delegatedEvent('e1'), workflow: WF, peers: ['api'], decide: () => plan({ ...wait, blocked: false, awaitingRepo: null }) })).rejects.toBeInstanceOf(TicketHeldError);
+      expect(await s.getTicket('p', 'REL-1')).toEqual(wait);
+      const ended = { ...wait, delegated: false, blocked: false, awaitingRepo: null };
+      expect(await s.decide({ event: delegatedEvent('e1'), workflow: WF, peers: ['api'], decide: () => plan(ended) })).toMatchObject({ status: 'committed' });
+      expect(await s.getTicket('p', 'REL-1')).toEqual(ended);
+    });
+
+    it('goes on when the other copy does not hold it, or is no longer a peer (a project renamed)', async () => {
+      const s = await on(wait, { ...held, projectId: 'old-name' });
+      const created = newTicketState('web', 'REL-1', 'T', 'dev', 1);
+      await expect(s.decide({ event: { ...delegatedEvent('e1'), projectId: 'web' }, workflow: WF, peers: ['p'], decide: () => plan(created) })).resolves.toMatchObject({ status: 'committed' });
+      expect(await s.getTicket('web', 'REL-1')).toEqual(created);
+    });
+  });
+
+  it('a refused event\'s notice goes to the project holding the ticket, with the project refused and its session (ORC-316)', async () => {
+    const s = await store();
+    await s.appendInbox(delegatedEvent('e1'));
+    expect(await s.deadLetter(delegatedEvent('e1'), 'held', 50, 'api')).toBe(true);
+    expect(await s.getDeadLetter('e1')).toMatchObject({ projectId: 'p', status: 'open' });
+    expect(await s.pendingInbox(10)).toEqual([
+      {
+        ...TRUSTED, id: 'refused:e1:1', type: 'dead_letter.added', at: 50, projectId: 'api', ticketId: 'REL-1',
+        payload: { eventId: 'e1', eventType: 'ticket.delegated', error: 'held', failures: 1, refused: { projectId: 'p', linearSessionId: 'ls-1' } },
+      },
     ]);
   });
 

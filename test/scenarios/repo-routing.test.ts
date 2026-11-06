@@ -3,17 +3,19 @@ import { BLOCKED_LABEL } from '../../src/core/engine.js';
 import { reconcileOnce } from '../../src/adapters/tracker/linear/reconcile.js';
 import { blockCause } from '../../src/core/block-cause.js';
 import { unroutedReason } from '../../src/core/routing.js';
-import type { EventPayloads, EventType, FactoryEvent } from '../../src/core/types.js';
-import { createHarness, harnessStoreKind } from '../helpers/harness.js';
+import { newTicketState, type EventPayloads, type EventType, type FactoryEvent } from '../../src/core/types.js';
+import { createHarness } from '../helpers/harness.js';
 import { linearIngest, signedDelegation } from '../helpers/linear-webhook.js';
 
+/** What a refused event tells a human: it names the event, the project refused and the one that holds the ticket. */
+const refusal = (eventId: string, type = 'thought') => ({ type, body: expect.stringMatching(new RegExp(`${eventId}.*refusé.*\\bp\\b.*\\bapi\\b`, 's')) });
+
 /**
- * A ticket's way out of its wait for a repo (ORC-291), on either store: SQLite keeps a copy of the ticket per
- * project, Postgres one row per ticket, which the project it goes to takes over.
+ * A ticket's way out of its wait for a repo (ORC-291), on either store: each keeps a copy of the ticket per
+ * project (ORC-316), and one project at most holds it.
  */
-describe('an event routed on a stale read, on Postgres\'s one row per ticket (ORC-291)', () => {
-  it('never replaces the ticket another project holds: its row stays whole, the event is set aside, logged, repairable', async (ctx) => {
-    if (harnessStoreKind() !== 'postgres') ctx.skip();
+describe('an event routed on a stale read, on either store (ORC-291, ORC-316)', () => {
+  it('never touches the ticket another project holds: its row stays whole, the event is set aside, logged, repairable, and said in the ticket\'s session', async () => {
     const h = createHarness({ extraProjects: ['api'] });
     h.tracker.addIssue({ identifier: 'REL-1', delegateId: 'app', description: 'x'.repeat(40) });
     const accept = async (id: string, projectId: string, payload: EventPayloads['ticket.delegated']) => {
@@ -25,7 +27,7 @@ describe('an event routed on a stale read, on Postgres\'s one row per ticket (OR
     await h.store.updateTicket('api', 'REL-1', (t) => ({ ...t, branch: 'factory/rel-1', prNumber: 7 }));
     const held = await h.store.getTicket('api', 'REL-1');
     expect(held).toMatchObject({ delegated: true, branch: 'factory/rel-1', prNumber: 7 });
-    const calls = h.tracker.calls.length;
+    const said = h.tracker.activities('s1').length;
 
     // A pass that read Linear before the label was there: its delegation, unsigned, for the first repo.
     await accept('reconcile:unrouted:p:REL-1', 'p', { issue: { title: 'T', logical: 'todo', priority: 0 }, repos: ['p', 'api'] });
@@ -34,25 +36,81 @@ describe('an event routed on a stale read, on Postgres\'s one row per ticket (OR
     expect(await h.store.getTicket('p', 'REL-1')).toBeUndefined();
     expect(await h.store.getDeadLetter('reconcile:unrouted:p:REL-1')).toMatchObject({ status: 'open', ticketId: 'REL-1', error: expect.stringContaining('api') });
     expect(h.logs.some((l) => l.level === 'error' && l.message.includes('reconcile:unrouted:p:REL-1') && l.message.includes('api'))).toBe(true);
-    // Nothing of the refused decision reached Linear: neither the question nor the Bloqué label.
-    expect(h.tracker.calls.slice(calls).filter((c) => c.method !== 'getIssue')).toEqual([]);
+    // A human reads the refusal in the ticket's session; nothing else of it reached Linear: neither the question nor the Bloqué label.
+    expect(h.tracker.activities('s1').slice(said)).toEqual([refusal('reconcile:unrouted:p:REL-1')]);
+    expect(h.tracker.issues.get('REL-1')!.labels).not.toContain(BLOCKED_LABEL);
 
-    // Replayed while api holds it, it is refused again; skipped, it is closed. The ticket never moves.
+    // Replayed while api holds it, it is refused again, and said again; skipped, it is closed. The ticket never moves.
     await h.store.repairDeadLetter('reconcile:unrouted:p:REL-1', 'replay', 'user-1', h.clock.now());
     await h.orch.poll();
     await h.orch.drained();
     expect(await h.store.getDeadLetter('reconcile:unrouted:p:REL-1')).toMatchObject({ status: 'open', failures: 2 });
     expect(await h.store.getTicket('api', 'REL-1')).toEqual(held);
+    expect(h.tracker.activities('s1').slice(said)).toEqual([refusal('reconcile:unrouted:p:REL-1'), refusal('reconcile:unrouted:p:REL-1')]);
     await h.store.repairDeadLetter('reconcile:unrouted:p:REL-1', 'skip', 'user-1', h.clock.now());
     expect(await h.store.getDeadLetter('reconcile:unrouted:p:REL-1')).toMatchObject({ status: 'skipped' });
   });
+
+  it('the copy that waited here never starts work while another project holds the ticket: refused, and said', async () => {
+    const h = createHarness({ extraProjects: ['api'] });
+    h.tracker.addIssue({ identifier: 'REL-1', delegateId: 'app', description: 'x'.repeat(40) });
+    const accept = async (id: string, projectId: string, payload: EventPayloads['ticket.delegated']) => {
+      await h.orch.accept({ id, type: 'ticket.delegated', at: h.clock.now(), projectId, ticketId: 'REL-1', actor: 'user-1', taint: 'trusted', payload } as FactoryEvent);
+      await h.orch.drained();
+    };
+    await accept('wait', 'p', { linearSessionId: 's1', repos: ['p', 'api'] });
+    await accept('signed', 'api', { linearSessionId: 's2', waitedIn: 'p' });
+    const [waiting, held] = [await h.store.getTicket('p', 'REL-1'), await h.store.getTicket('api', 'REL-1')];
+    expect(waiting).toMatchObject({ awaitingRepo: ['p', 'api'] });
+    expect(h.runner.requests).toHaveLength(1);
+
+    // Routed to the repo it waited in, on a read older than api's delegation.
+    await accept('stale', 'p', { linearSessionId: 's3' });
+
+    expect(await h.store.getTicket('p', 'REL-1')).toEqual(waiting);
+    expect(await h.store.getTicket('api', 'REL-1')).toEqual(held);
+    expect(h.runner.requests).toHaveLength(1);
+    expect(await h.store.getDeadLetter('stale')).toMatchObject({ status: 'open' });
+    expect(h.tracker.activities('s2').at(-1)).toEqual(refusal('stale'));
+    expect(h.tracker.activities('s3')).toEqual([refusal('stale', 'response')]);
+  });
+
+  it('two copies that debounce the same job keep a timer each, and each fires: a project workflow debouncing a question (ORC-316)', async () => {
+    // Not the standard pack: it debounces only `dev-feedback`, which a copy that does not hold the ticket never arms.
+    const h = createHarness({ extraProjects: ['api'], projectYaml: 'version: 1\non:\n  session.mentioned:\n    - { run: ask, debounce: 1m }\n' });
+    h.tracker.addIssue({ identifier: 'REL-1', description: 'x'.repeat(40) });
+    const mention = async (id: string, projectId: string, session: string) => {
+      await h.orch.accept({ id, type: 'session.mentioned', at: h.clock.now(), projectId, ticketId: 'REL-1', actor: 'user-1', taint: 'trusted', payload: { linearSessionId: session, body: 'Pourquoi ?', author: 'A' } } as FactoryEvent);
+      await h.orch.drained();
+    };
+    await mention('m1', 'api', 's1');
+    await h.advance(1000);
+    await mention('m2', 'p', 's2');
+
+    const armed = (await h.store.dueTimers(Number.MAX_SAFE_INTEGER)).filter((t) => t.kind === 'debounce');
+    expect(armed.map((t) => t.projectId).sort()).toEqual(['api', 'p']);
+    await h.advance(60_000);
+    expect(h.runner.requests).toHaveLength(2);
+  });
+
+  it('a row left by a project no longer in the configuration refuses nothing: the project renamed takes its events (ORC-316)', async () => {
+    const h = createHarness({ extraProjects: ['api'] });
+    h.tracker.addIssue({ identifier: 'REL-1', delegateId: 'app', description: 'x'.repeat(40) });
+    const old = { ...newTicketState('old-name', 'REL-1', 'T', 'dev', 1), delegated: true, branch: 'factory/rel-1' };
+    await h.store.putTicket(old);
+    await h.orch.accept({ id: 'renamed', type: 'ticket.delegated', at: h.clock.now(), projectId: 'p', ticketId: 'REL-1', actor: 'user-1', taint: 'trusted', payload: { linearSessionId: 's1' } } as FactoryEvent);
+    await h.orch.drained();
+    expect(await h.store.getDeadLetter('renamed')).toBeUndefined();
+    expect(await h.store.getTicket('p', 'REL-1')).toMatchObject({ delegated: true, linearSessionId: 's1' });
+    expect(await h.store.getTicket('old-name', 'REL-1')).toEqual(old);
+  });
 });
 
-describe.runIf(harnessStoreKind() === 'postgres')('a stale event, on Postgres, brought by the webhook with its ack (ORC-171, ORC-291)', () => {
+describe('a stale event brought by the webhook with its ack, on either store (ORC-171, ORC-291, ORC-316)', () => {
   it.each([
     ['a delegation routed by a stale read', { linearSessionId: 's9', ack: true as const }],
     ['a delegation for a team believed to have no repo', { linearSessionId: 's9', noRepo: 'REL' }],
-  ])('%s never replaces the row another project holds, and says nothing to Linear', async (_name, payload) => {
+  ])('%s never touches the row another project holds: no ack, no plan, the refusal said in both sessions', async (_name, payload) => {
     const h = createHarness({ extraProjects: ['api'] });
     h.tracker.addIssue({ identifier: 'REL-1', delegateId: 'app', description: 'x'.repeat(40) });
     const accept = async (id: string, projectId: string, p: EventPayloads['ticket.delegated']) => {
@@ -69,7 +127,9 @@ describe.runIf(harnessStoreKind() === 'postgres')('a stale event, on Postgres, b
     expect(await h.store.getTicket('api', 'REL-1')).toEqual(held);
     expect(await h.store.getDeadLetter('stale')).toMatchObject({ status: 'open', error: expect.stringContaining('api') });
     expect(h.tracker.comments('REL-1')).toEqual(acks);
-    expect(h.tracker.activities('s9')).toEqual([]);
+    // The ticket's session, and the one the human who delegated is looking at.
+    expect(h.tracker.activities('s1').at(-1)).toEqual(refusal('stale'));
+    expect(h.tracker.activities('s9')).toEqual([refusal('stale', 'response')]);
     expect(h.tracker.plans('s9')).toEqual([]);
     expect(h.runner.requests).toHaveLength(1);
   });
@@ -134,7 +194,7 @@ describe('routed from the webhook, on either store', () => {
     expect(await planKeys(h, ['p', 'api'], 'REL-1')).toEqual([project]);
     expect(h.tracker.issues.get('REL-1')!.labels).not.toContain(BLOCKED_LABEL);
 
-    // The next pass finds the copy that waited, on SQLite: no second ack, no second run, and no block back.
+    // The next pass finds the copy that waited: no second ack, no second run, and no block back.
     await reconcileOnce({ tracker: h.tracker, store: h.store, projects: ['p', 'api'].map((id) => ({ ...h.project, id })), submit: (e) => h.orch.accept(e), clock: h.clock, log: () => {} });
     await h.orch.drained();
     expect(h.runner.requests).toHaveLength(1);

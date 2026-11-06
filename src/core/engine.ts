@@ -2,7 +2,7 @@ import { REFREEZE, type FrozenTests } from '../checks/freeze.js';
 import type { JobSpec, Rule, Workflow } from '../config/workflow-schema.js';
 import { allowed, DEFAULT_MATRIX, refusalMessage, type AuthzAction, type AuthzMatrix, type Channel } from './authz.js';
 import { evalCondition } from './conditions.js';
-import { deadLetterReason, liftDeadLetterBlock, REPAIR_LABELS, repairedEvent } from './dead-letter.js';
+import { deadLetterReason, heldMessage, isRefusedNotice, liftDeadLetterBlock, REPAIR_LABELS, repairedEvent } from './dead-letter.js';
 import type { AgentOutput } from './agent-output.js';
 import type { Decision, Effect } from './decision.js';
 import { PRODUCT_NAME } from '../product.js';
@@ -664,7 +664,7 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
   // An undelegation that lifts a repo choice while the issue's ticket in its repo is blocked leaves the label (ORC-291).
   const keepLabel = event.type === 'ticket.undelegated' && event.payload.keepLabel;
   if (!trackerDown && !keepLabel) blockedLabel(out, state, event);
-  // Come from a wait in another project: nothing may be left there to take the label off (one row per ticket on Postgres).
+  // Come from a wait in another project: the label goes now, not at the pass that ends that wait.
   if ((event.payload as { waitedIn?: string }).waitedIn && !out.events.reduce<TicketState | undefined>((t, e) => reduce(t, e), reduce(state, event))?.blocked) {
     out.effects.push(blockedLabelChange(true, false)!);
   }
@@ -936,6 +936,16 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
     case 'dead_letter.added': {
       // An event without a ticket, or a ticket the factory does not track: the dead letter waits for its repair.
       if (!ticket) return out;
+      const { refused } = event.payload;
+      if (refused) {
+        // The ticket holding it is not at fault: never blocked. A thought leaves its session as it is (a run, a question
+        // waiting); the session the refused event came from gets its answer. No session is opened when that one can be told.
+        const from = refused.linearSessionId;
+        const body = heldMessage(event.payload, refused.projectId, ticket.projectId, ticket.ticketId);
+        if (ticket.linearSessionId || !from) out.effects.push({ kind: 'activity', type: 'thought', body });
+        if (from && from !== ticket.linearSessionId) out.effects.push({ kind: 'activity', type: 'response', body, linearSessionId: from });
+        return out;
+      }
       const settled = settledTicket(ticket);
       if (settled) {
         out.trace.push(`dead_letter.added ignored: ticket ${settled}`);
@@ -953,6 +963,10 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       // `settle` is a step of the shell, not an effect of the workflow: its failure is only logged.
       const { kind, error, eventId } = event.payload;
       if (kind === 'settle' || !ticket) return out;
+      if (isRefusedNotice(eventId)) {
+        out.trace.push('effect.failed ignored: the notice of a refused event, which blocks nothing');
+        return out;
+      }
       // Nothing more comes of it: no result will lift the hold `verify.passed` kept.
       if (kind === 'publish' && ticket.verifyingRunId) out.events.push({ type: 'work.cancelled' });
       // A Done whose merge died (ORC-148) is not delivered: the human hears it, the ticket back in Human Review. Once a
