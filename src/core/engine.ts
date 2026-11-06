@@ -596,7 +596,7 @@ function afterMerge(state: TicketState | undefined, event: FactoryEvent, workflo
 }
 
 /** Delivered (`done`, PR merged) or stopped by a human (its reason stays): a failure blocks it no more. */
-function settledTicket(ticket: TicketState): string | undefined {
+export function settledTicket(ticket: TicketState): string | undefined {
   if (ticket.logical === 'done' || ticket.prState === 'MERGED') return 'delivered';
   return ticket.blocked && ticket.blockReason === STOPPED ? 'stopped' : undefined;
 }

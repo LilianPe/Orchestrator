@@ -419,7 +419,7 @@ export interface Store {
    */
   ticketJournal(projectId: string, ticketId?: string): Promise<JournalEntry[]>;
   /**
-   * Sets aside an inbox row whose decision threw (ORC-175), in one transaction under the ticket's
+   * Sets aside an inbox row whose decision threw (ORC-175) or that is out of attempts (ORC-320), in one transaction under the ticket's
    * lock: the row is marked processed (it is not retried), its event (the one a failed repair carries,
    * `deadLetteredEvent`) goes to `dead_letter`, open, its failures counted, and the event that blocks
    * its ticket (`deadLetterNotice`) is written to the inbox. False, and nothing written, when the row
