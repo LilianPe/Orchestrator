@@ -110,7 +110,7 @@ describe('reduce — decided events', () => {
   it('appends feedback in order', () => {
     const item = (body: string) => ({ author: 'L', body, at: 1, source: 'session' as const });
     const out = fold(ticket(), { type: 'feedback.appended', item: item('a') }, { type: 'feedback.appended', item: item('b') })!;
-    expect(out.pendingFeedback.map((f) => f.body)).toEqual(['a', 'b']);
+    expect(out.humanInbox.map((f) => f.body)).toEqual(['a', 'b']);
   });
 
   it('cancelling the work drops the pending job and the awaited verification', () => {
@@ -146,10 +146,10 @@ describe('reduce — facts recorded by the orchestrator', () => {
   });
 
   it('a run that consumes the feedback empties it', () => {
-    const t = ticket({ pendingFeedback: [{ author: 'L', body: 'x', at: 1, source: 'session' }] });
+    const t = ticket({ humanInbox: [{ author: 'L', body: 'x', at: 1, source: 'session' }] });
     // Kept until the run that read it is written (ORC-220): a launch cut before reads it again.
-    expect(reduce(t, { type: 'run.started', runId: 'r1', job: 'dev-feedback', queue: 'dev', claudeSessionId: 'c' })!.pendingFeedback).toHaveLength(t.pendingFeedback.length);
-    expect(reduce(t, { type: 'feedback.consumed' })!.pendingFeedback).toEqual([]);
+    expect(reduce(t, { type: 'run.started', runId: 'r1', job: 'dev-feedback', queue: 'dev', claudeSessionId: 'c' })!.humanInbox).toHaveLength(t.humanInbox.length);
+    expect(reduce(t, { type: 'feedback.consumed' })!.humanInbox).toEqual([]);
   });
 
   it('a cleared run frees the ticket, and keeps the verification', () => {
@@ -160,7 +160,7 @@ describe('reduce — facts recorded by the orchestrator', () => {
 
 describe('reduce — purity', () => {
   it('never mutates the state it is given', () => {
-    const t = ticket({ activeRunId: 'r1', questionSessionIds: ['a'], pendingFeedback: [] });
+    const t = ticket({ activeRunId: 'r1', questionSessionIds: ['a'], humanInbox: [] });
     const snapshot = structuredClone(t);
     reduce(t, ev('session.mentioned', { linearSessionId: 'b', body: '?', author: 'L' }));
     reduce(t, { type: 'feedback.appended', item: { author: 'L', body: 'x', at: 1, source: 'session' } });

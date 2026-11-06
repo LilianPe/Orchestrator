@@ -24,7 +24,7 @@ function external(t: TicketState, e: FactoryEvent): TicketState {
       // Cancelled (ORC-170): nothing waits for a human any longer, and the replies kept for a next run are dropped.
       // Any human move, a cancel or an unmapped status included, ends the status the factory put the ticket in.
       // A cancel also ends a wait for the ticket's repo: delegated and unblocked, it would hold this repo (ORC-291).
-      if (e.payload.cancelled) return { ...t, ...(t.awaitingRepo ? { delegated: false, awaitingRepo: null } : {}), blocked: false, blockReason: undefined, pendingFeedback: [], recordedStatus: undefined };
+      if (e.payload.cancelled) return { ...t, ...(t.awaitingRepo ? { delegated: false, awaitingRepo: null } : {}), blocked: false, blockReason: undefined, humanInbox: [], recordedStatus: undefined };
       if (isOwnMoveEcho(t, e)) return t;
       const to = e.payload.to;
       if (!to) return { ...t, recordedStatus: undefined };
@@ -66,7 +66,7 @@ function internal(t: TicketState, e: InternalEvent): TicketState {
     case 'ticket.patched':
       return { ...t, ...e.patch };
     case 'feedback.appended':
-      return { ...t, pendingFeedback: [...t.pendingFeedback, e.item] };
+      return { ...t, humanInbox: [...t.humanInbox, e.item] };
     case 'work.cancelled':
       return { ...t, pendingJob: undefined, verifyingRunId: undefined };
     case 'verify.started':
@@ -90,7 +90,7 @@ function internal(t: TicketState, e: InternalEvent): TicketState {
       return { ...t, activeRunId: e.runId, activeJob: e.job, claudeSessionId };
     }
     case 'feedback.consumed':
-      return { ...t, pendingFeedback: [] };
+      return { ...t, humanInbox: [] };
     case 'run.cleared':
       return { ...t, activeRunId: undefined, activeJob: undefined };
   }

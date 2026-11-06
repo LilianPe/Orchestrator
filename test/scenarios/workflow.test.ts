@@ -33,13 +33,13 @@ describe('standard workflow', () => {
     expect(acts.at(-1)).toEqual({ type: 'response', body: 'PR ouverte, tests verts.' });
   });
 
-  it('criterion 4: two replies within the debounce window resume the same session once', async () => {
+  it('criterion 4: two instructions regrouped with no agent at work resume its session once, the replies together (ORC-180)', async () => {
     const h = createHarness();
     await delegatedAndInReview(h);
     h.runner.enqueue({ events: [{ kind: 'text', text: 'Corrigé dans abc123.' }] });
-    await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'boutons mal alignés', author: 'Lilian' });
+    await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'boutons mal alignés', author: 'Lilian', ack: true, kind: 'instruction' });
     await h.advance(60_000);
-    await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'bug quand la liste est vide', author: 'Lilian' });
+    await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'bug quand la liste est vide', author: 'Lilian', ack: true, kind: 'instruction' });
     await h.advance(179_000);
     expect(h.runner.requests).toHaveLength(1);
     await h.advance(1_000);
@@ -50,7 +50,7 @@ describe('standard workflow', () => {
     expect(r.prompt.startsWith('/factory:feedback\n')).toBe(true);
     expect(r.prompt).toContain('boutons mal alignés');
     expect(r.prompt).toContain('bug quand la liste est vide');
-    expect(await h.ticket()).toMatchObject({ logical: 'human_review', pendingFeedback: [] });
+    expect(await h.ticket()).toMatchObject({ logical: 'human_review', humanInbox: [] });
     expect(h.tracker.activities('ls-1').at(-1)).toEqual({ type: 'response', body: 'Corrigé dans abc123.' });
   });
 
@@ -58,10 +58,10 @@ describe('standard workflow', () => {
     const h = createHarness();
     await delegatedAndInReview(h);
     h.runner.enqueue({ events: [{ kind: 'text', text: 'Corrigé.' }] });
-    await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'boutons mal alignés', author: 'Lilian' });
+    await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'boutons mal alignés', author: 'Lilian', ack: true, kind: 'instruction' });
     // Written by the decision of the reply, with its journal row: nothing of it lives in the process.
     expect((await h.store.dueTimers(Number.MAX_SAFE_INTEGER)).map((t) => [t.key, t.kind, t.payload])).toEqual([
-      ['REL-1:dev-feedback', 'debounce', { job: 'dev-feedback' }],
+      ['REL-1:dev-feedback', 'debounce', { job: 'dev-feedback', inbox: true }],
     ]);
     await h.advance(60_000);
     await h.restart();
@@ -98,15 +98,17 @@ describe('standard workflow', () => {
     expect(await h.ticket()).toMatchObject({ logical: before.logical, blocked: before.blocked });
   });
 
-  it('criterion 4b: a reply during a running feedback run is queued and runs after it', async () => {
+  it('criterion 4b: an instruction during a running feedback run does not interrupt it, and is handed over at its end (ORC-180)', async () => {
     const h = createHarness();
     await delegatedAndInReview(h);
     h.runner.enqueue({ hold: true }, { events: [{ kind: 'text', text: 'Second passage.' }] });
     await h.send('status.changed', { from: 'human_review', to: 'dev' });
     const runningId = (await h.ticket()).activeRunId!;
-    await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'aussi le titre', author: 'L' });
+    await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'aussi le titre', author: 'L', ack: true, kind: 'instruction' });
     await h.advance(180_000);
     expect(h.runner.requests).toHaveLength(2);
+    expect((await h.ticket()).pendingJob).toBeUndefined();
+    expect((await h.store.getRun(runningId))!.status).toBe('running');
     h.runner.release(runningId);
     await h.orch.drained();
     expect(h.runner.requests).toHaveLength(3);
@@ -327,7 +329,7 @@ describe('standard workflow', () => {
         ['/factory:ask', true],
         ['/factory:ask', true],
       ]);
-      expect(await h.ticket()).toMatchObject({ pendingFeedback: [], blocked: false });
+      expect(await h.ticket()).toMatchObject({ humanInbox: [], blocked: false });
       expect(h.tracker.calls.filter((c) => c.method === 'ensureSession')).toEqual([]);
     });
 
@@ -364,7 +366,7 @@ describe('standard workflow', () => {
       await h.send('session.prompted', { linearSessionId: 'ls-9', body: 'et pourquoi ?', author: 'L' });
       await h.advance(600_000);
       expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:dev', '/factory:ask', '/factory:ask']);
-      expect((await h.ticket()).pendingFeedback).toEqual([]);
+      expect((await h.ticket()).humanInbox).toEqual([]);
     });
   });
 

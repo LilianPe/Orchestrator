@@ -115,6 +115,15 @@ export function formatFeedback(items: FeedbackItem[]): string {
   return items.map((i) => `- **${i.author}** (${utc(i.at)}) : ${i.body}`).join('\n');
 }
 
+/**
+ * The input of a run that carries the human inbox at its step boundary (ORC-180), written as one with what the step
+ * reads anyway: the relaunch of an attempt cut reads the same, from its record.
+ */
+export function withHumanInbox(input: { kind: InputKind; text: string } | undefined, items: FeedbackItem[]): { kind: InputKind; text: string } {
+  const text = formatFeedback(items);
+  return input ? { ...input, text: `${input.text}\n\n## ${HEADINGS.feedback}\n${text}` } : { kind: 'feedback', text };
+}
+
 /** `verify` reads commits, on a fresh clone (ORC-151): what is left uncommitted did not exist for it. */
 const VERIFY_READS_COMMITS = "L'usine vérifie le dernier commit de la branche, dans un clone neuf : ce qui n'est pas commité n'y est pas. Commite tes corrections.";
 

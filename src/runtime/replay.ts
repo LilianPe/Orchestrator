@@ -1,6 +1,6 @@
 import type { Workflow } from '../config/workflow-schema.js';
 import { NO_PLAN, planDecision } from '../core/decision-plan.js';
-import { SCHEMA_VERSION, type FactoryEvent } from '../core/types.js';
+import { SCHEMA_VERSION, upcastTicket, type FactoryEvent, type TicketState } from '../core/types.js';
 import { upcast, upcastTimer, type StoredTimer } from '../core/upcast.js';
 import type { DecisionPlan, DecisionRecord, JournalEntry, Store } from '../store/types.js';
 import { canonical } from './workflow-version.js';
@@ -119,7 +119,7 @@ function rerun(event: FactoryEvent, decision: DecisionRecord, journal: ExportedJ
   if (!definition) throw new Error(`workflow version ${decision.workflowHash} is not in the journal`);
   return planDecision({
     event,
-    known: decision.before,
+    known: decision.before && (upcastTicket(decision.before) as TicketState),
     workflow: definition as Workflow,
     // What-if keeps the recorded hash: the ticket stays frozen on its version, only the definition changes.
     hash: decision.workflowHash,
@@ -132,7 +132,7 @@ function rerun(event: FactoryEvent, decision: DecisionRecord, journal: ExportedJ
  * again (`planDecision`: `decide`, then `reduce`) from what the decision transaction recorded: the
  * projection read under the lock, the frozen workflow version, the clock. The new projection, the
  * effects, the timers and the timer reset must come out bit for bit as recorded (canonical JSON);
- * recorded timers go through `upcastTimer`, as the events go through `upcast`.
+ * recorded timers go through `upcastTimer` and recorded tickets through `upcastTicket`, as the events go through `upcast`.
  *
  * Each decision starts from its own recorded projection, not from the previous decision's output:
  * the shell also changes the projection between decisions (`Orchestrator.apply`, a run's start,
@@ -161,8 +161,9 @@ export function replayJournal(journal: ExportedJournal, options: ReplayOptions =
     const plan = rerun(event, decision, journal, mode === 'what-if' ? options.workflow : undefined);
     report.replayed++;
     let diverged = false;
-    // Timers recorded before ORC-161 were the debounce of a job: read as the generic timer they are now.
-    const recorded = { ...decision, timers: (decision.timers as StoredTimer[]).map(upcastTimer) };
+    // Timers recorded before ORC-161 were the debounce of a job: read as the generic timer they are now. A ticket recorded
+    // before ORC-180 held its human inbox as `pendingFeedback`.
+    const recorded = { ...decision, ticket: decision.ticket && upcastTicket(decision.ticket), timers: (decision.timers as StoredTimer[]).map(upcastTimer) };
     for (const field of COMPARED) {
       const d = firstDifference(json(recorded[field]), json(plan[field]), field);
       if (!d) continue;

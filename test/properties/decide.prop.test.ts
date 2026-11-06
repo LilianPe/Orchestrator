@@ -359,12 +359,12 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
 
   describe('I6 — no human message is lost', () => {
     it(
-      'feedback leaves pendingFeedback only when a run that consumes it starts',
+      'feedback leaves humanInbox only when a run that consumes it starts',
       () => {
         holds((s) => {
           for (const step of run(s).steps) {
-            const kept = step.before?.pendingFeedback ?? [];
-            const now = step.after?.pendingFeedback ?? [];
+            const kept = step.before?.humanInbox ?? [];
+            const now = step.after?.humanInbox ?? [];
             if (kept.every((f) => now.includes(f))) continue;
             expect(step.kind === 'shell' && step.event.type === 'feedback.consumed').toBe(true);
           }
