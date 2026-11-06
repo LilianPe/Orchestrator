@@ -640,7 +640,13 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
         // taint of what it reads then. (A failed run blocks the ticket: startRun then refuses the pending job.)
         const pending = (...end: Entry[]) => seq(...delegated('dev'), runStarted(), reply(), ext('timer.fired', DEBOUNCE), reply('untrusted'), ...end);
         const settled = pending(runFinished('success'), ext('verify.passed', { runId: 'r1', job: 'dev' }));
-        holds(feedbackRunSandboxed, [debounced, settled, pending(runFinished('failure'))]);
+        // Found by fast-check at 10 000 sequences (ORC-180, seed 509541243), shrunk: a run that empties the inbox takes the
+        // taint of all it empties, a command included, though the agent is not given a command. Relayed by a trusted label...
+        const command = () => ext('session.prompted', { linearSessionId: DEV_SESSION, body: 'ok', author: 'lilian', issue, ack: true, kind: 'command' }, 'untrusted');
+        const relayed = seq(ext('ticket.delegated', { linearSessionId: undefined, issue }, 'untrusted'), command(), ext('label.changed', { label: 'agent:reprendre', change: 'added' }));
+        // ... or by a job pending since before it came in.
+        const settledAfterCommand = seq(...delegated('dev'), runStarted(), reply(), ext('timer.fired', DEBOUNCE), command(), runFinished('success'), ext('verify.passed', { runId: 'r1', job: 'dev' }));
+        holds(feedbackRunSandboxed, [debounced, settled, pending(runFinished('failure')), relayed, settledAfterCommand]);
       },
       TIMEOUT,
     );

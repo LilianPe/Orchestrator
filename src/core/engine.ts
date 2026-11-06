@@ -275,14 +275,15 @@ export function isQuestionSession(ticket: TicketState | undefined, sessionId: st
 }
 
 /**
- * The strongest taint of what a run reads: its event, and the ticket's pending feedback when the run
- * consumes it, even if a trusted event (a timer, a label) starts it (I12). An item without taint was
- * written before ORC-269, when no source marked an event untrusted: it stays trusted, as `upcast` reads
- * a version 1 event, so that replaying the journal gives the same decisions.
+ * The strongest taint of what a run takes in: its event, and the ticket's whole human inbox when the run
+ * consumes it, even if a trusted event (a timer, a label) starts it (I12). A command is not given to the
+ * agent and counts all the same: the rule is the inbox the run empties, not what a filter lets through.
+ * An item without taint was written before ORC-269, when no source marked an event untrusted: it stays
+ * trusted, as `upcast` reads a version 1 event, so that replaying the journal gives the same decisions.
  */
 function runTaint(event: FactoryEvent, ticket: TicketState | undefined, input: InputKind | undefined): Taint {
   if (event.taint === 'untrusted') return 'untrusted';
-  return input === 'feedback' && anyUntrusted(forAgent(ticket?.humanInbox ?? [])) ? 'untrusted' : 'trusted';
+  return input === 'feedback' && anyUntrusted(ticket?.humanInbox ?? []) ? 'untrusted' : 'trusted';
 }
 
 function anyUntrusted(items: readonly FeedbackItem[]): boolean {
@@ -291,7 +292,7 @@ function anyUntrusted(items: readonly FeedbackItem[]): boolean {
 
 /**
  * The sensitive paths of a run at its launch (I12, ORC-274): when its start was decided with them, or
- * when what the launch reads is untrusted. A launch reads the feedback when it starts, not when
+ * when what the launch reads or empties is untrusted. A launch reads the feedback when it starts, not when
  * `decide` started it: a job kept pending or queued meanwhile reads the replies that came in since.
  * `Orchestrator.launch` applies it to every start (a `start_run`, the pending job by `settle`, the queue).
  */

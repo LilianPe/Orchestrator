@@ -94,6 +94,80 @@ describe('the human inbox (ORC-180)', () => {
     expect(h.runner.requests[1]!.sensitivePaths).toEqual(SENSITIVE_PATHS);
   });
 
+  describe('a run that empties the inbox takes the taint of all it empties (I12)', () => {
+    const command = { linearSessionId: 'ls-1', body: '/status', author: 'Lilian', ack: true as const, kind: 'command' as const };
+
+    it('a command beside a message, at a boundary: the agent is not given the command, the attempt takes its taint', async () => {
+      const h = createHarness({ preset: testPreset() });
+      h.checks.failNext('1 failed');
+      const running = await atWork(h);
+      await h.send('session.prompted', instruction('corrige le tri'));
+      await h.send('session.prompted', command, 'REL-1', { taint: 'untrusted' });
+      h.runner.enqueue({ events: [{ kind: 'text', text: 'Corrigé.' }] });
+      h.runner.release(running);
+      await h.orch.drained();
+      expect(h.runner.requests[1]!.prompt).toContain('corrige le tri');
+      expect(h.runner.requests[1]!.prompt).not.toContain('/status');
+      expect(h.runner.requests[1]!.sensitivePaths).toEqual(SENSITIVE_PATHS);
+      expect((await h.ticket()).humanInbox).toEqual([]);
+    });
+
+    it('a command that came in behind a pending job: the launch takes its taint, not only the decision', async () => {
+      const h = createHarness();
+      const running = await atWork(h);
+      await h.send('label.changed', { label: 'agent:reprendre', change: 'added' });
+      expect((await h.ticket()).pendingJob).toMatchObject({ job: 'dev-feedback' });
+      await h.send('session.prompted', command, 'REL-1', { taint: 'untrusted' });
+      h.runner.enqueue({ events: [{ kind: 'text', text: 'Repris.' }] });
+      h.runner.release(running);
+      await h.orch.drained();
+      expect(h.runner.requests[1]!.prompt.startsWith('/factory:feedback\n')).toBe(true);
+      expect(h.runner.requests[1]!.sensitivePaths).toEqual(SENSITIVE_PATHS);
+    });
+
+    it('the relaunch of a cut attempt keeps that taint, the inbox being empty by then', async () => {
+      const h = createHarness({ preset: testPreset(), effectLeaseMs: 60_000 });
+      h.checks.failNext('1 failed');
+      const running = await atWork(h);
+      await h.send('session.prompted', instruction('corrige le tri'));
+      await h.send('session.prompted', command, 'REL-1', { taint: 'untrusted' });
+      h.runner.enqueue({ hold: true });
+      h.runner.release(running);
+      await h.orch.drained();
+      const cut = (await h.ticket()).activeRunId!;
+      expect((await h.ticket()).humanInbox).toEqual([]);
+      h.runner.forget(cut);
+      h.runner.enqueue({ events: [{ kind: 'text', text: 'Corrigé.' }] });
+      await h.restart({ mode: 'brutal' });
+      const again = h.runner.requests[2]!;
+      expect(again.prompt).toContain('corrige le tri');
+      expect(again.sensitivePaths).toEqual(SENSITIVE_PATHS);
+    });
+
+    it('a step that reads and empties nothing takes nothing: a command alone at a boundary stays, the attempt free', async () => {
+      const h = createHarness({ preset: testPreset() });
+      h.checks.failNext('1 failed');
+      const running = await atWork(h);
+      await h.send('session.prompted', command, 'REL-1', { taint: 'untrusted' });
+      h.runner.enqueue({ events: [{ kind: 'text', text: 'Corrigé.' }] });
+      h.runner.release(running);
+      await h.orch.drained();
+      expect(h.runner.requests[1]!.sensitivePaths).toBeUndefined();
+      expect((await h.ticket()).humanInbox).toEqual([expect.objectContaining({ kind: 'command', taint: 'untrusted' })]);
+    });
+
+    it('a review neither reads nor empties it, whatever waits there', async () => {
+      const h = createHarness();
+      await inReview(h);
+      await h.send('session.prompted', instruction('corrige le tri'), 'REL-1', { taint: 'untrusted' });
+      h.runner.enqueue({ hold: true, events: [{ kind: 'text', text: 'Synthèse.' }], submit: false });
+      await h.send('status.changed', { from: 'human_review', to: 'ai_review' });
+      expect(h.runner.requests[1]!.prompt.startsWith('/factory:review\n')).toBe(true);
+      expect(h.runner.requests[1]!.sensitivePaths).toBeUndefined();
+      expect((await h.ticket()).humanInbox).toEqual([expect.objectContaining({ taint: 'untrusted' })]);
+    });
+  });
+
   it('a review does not read them: they wait for the agent that implements', async () => {
     const h = createHarness();
     await inReview(h);

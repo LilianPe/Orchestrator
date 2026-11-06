@@ -133,6 +133,35 @@ describe('decide — a classified message (ORC-180)', () => {
     expect(decide(t, timer, workflow).effects).toEqual([expect.objectContaining({ kind: 'start_run', job: 'dev-feedback', sensitivePaths: SENSITIVE_PATHS })]);
   });
 
+  describe('a trusted event starts a run that empties an untrusted inbox (I12)', () => {
+    const untrusted = { taint: 'untrusted' as const };
+    const label = ev('label.changed', { label: 'agent:reprendre', change: 'added' });
+    const end = ev('verify.passed', { runId: 'r1', job: 'review' });
+    const starts = (d: ReturnType<typeof decide>) => d.effects.filter((e) => e.kind === 'start_run');
+    const sandboxed = [expect.objectContaining({ job: 'dev-feedback', sensitivePaths: SENSITIVE_PATHS })];
+
+    it.each<[string, FeedbackItem[]]>([
+      ['a message', [item(untrusted)]],
+      ['a question of a thread', [item({ kind: 'question', source: 'thread', ...untrusted })]],
+      ['a row written before ORC-180', [item({ kind: undefined, ...untrusted })]],
+      ['a command alone', [item({ kind: 'command', ...untrusted })]],
+      ['a command beside a trusted message', [item(), item({ kind: 'command', ...untrusted })]],
+    ])('by a label, %s', (_what, humanInbox) => {
+      expect(starts(decide(ticket({ logical: 'human_review', humanInbox }), label, workflow))).toEqual(sandboxed);
+    });
+
+    it('by the regrouping, and at the end of a step: a command beside a trusted message', () => {
+      const humanInbox = [item(), item({ kind: 'command', ...untrusted })];
+      expect(starts(decide(ticket({ logical: 'human_review', humanInbox }), timer, workflow))).toEqual(sandboxed);
+      expect(starts(decide(ticket({ logical: 'ai_review', verifyingRunId: 'r1', humanInbox }), end, workflow))).toEqual(sandboxed);
+    });
+
+    it('all of it trusted, no sensitive path', () => {
+      const [start] = starts(decide(ticket({ logical: 'human_review', humanInbox: [item(), item({ kind: 'command' })] }), label, workflow));
+      expect(start).not.toHaveProperty('sensitivePaths');
+    });
+  });
+
   it('a mask at the ingestion is told to its author with the ack', () => {
     const out = decide(ticket(), ev('session.prompted', { linearSessionId: 's1', body: 'token [masqué]', author: 'L', ack: true, kind: 'question', masked: true }), workflow);
     expect(acked(out.effects)).toMatchObject({ body: expect.stringContaining('secret') });

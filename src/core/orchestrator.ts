@@ -1779,7 +1779,9 @@ export class Orchestrator {
           read.push(...comments.map((c) => ({ ...c, taint: 'untrusted' as const })));
         }
       }
-      const sensitivePaths = sensitivePathsAtLaunch(opts.sensitivePaths ?? from?.sensitivePaths, read);
+      // A launch that empties the inbox takes the taint of all it empties, what the agent is not given included (`runTaint`).
+      const consumes = kind === 'feedback' || carried.length > 0;
+      const sensitivePaths = sensitivePathsAtLaunch(opts.sensitivePaths ?? from?.sensitivePaths, consumes ? [...read, ...t.humanInbox] : read);
       if (sensitivePaths && job.workspace === 'knowledge') {
         // As decide refuses it (I12), for what it could not see: untrusted content read at the launch.
         this.d.scheduler.release(key);
@@ -1867,7 +1869,7 @@ export class Orchestrator {
       if (opts.startMark) await store.setMeta(opts.startMark, runId);
       await this.apply(t, { type: 'run.started', runId, job: job.name, queue: job.queue, claudeSessionId, ...(ticketSession ? {} : { ticketSession: false as const }) });
       await store.putRun(run);
-      if (kind === 'feedback' || carried.length) await this.apply(await this.ticket(project.id, ticketId), { type: 'feedback.consumed' });
+      if (consumes) await this.apply(await this.ticket(project.id, ticketId), { type: 'feedback.consumed' });
       const step = planStepOfJob(job);
       if (step) await this.updatePlan(t, (plan) => advancePlan(plan, step));
       // The run is written: a queued item it came from leaves the queue now (a crash from here on is recover()'s).
