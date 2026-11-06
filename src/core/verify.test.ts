@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -11,6 +11,8 @@ function repo(): string {
   writeFileSync(join(dir, 'a.txt'), 'one\n');
   return dir;
 }
+
+const git = (dir: string, ...args: string[]) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { cwd: dir, encoding: 'utf8' }).trim();
 
 describe('runVerify', () => {
   it('passes when every command exits 0', async () => {
@@ -84,6 +86,45 @@ describe('runVerify', () => {
     writeFileSync(join(dir, 'c.txt'), 'more\n');
     expect((await runVerify(dir, ['exit 1'])).tree).toBeDefined();
     expect(objects()).toBe(before);
+  });
+
+  // `indexAt` within the second of the file: git trusts no entry as recent as its index, whatever the file's stat says.
+  // The ctime cannot be set back, and it is not what the protection is about: `core.trustctime` takes it out of the comparison.
+  // `touch`: `utimes` takes a double, too coarse for the last row. Not on Windows: a plain `copyFileSync` already keeps the date there.
+  it.skipIf(process.platform === 'win32').each([
+    ['at the start of its second', '000000000'],
+    ['at the end of its second, where a `Date` rounds up', '999600000'],
+    ['in its last nanoseconds, where `mtimeMs` rounds up', '999999950'],
+  ])('sees an edit of the same size, with the same date, in the second of an index dated %s (ORC-318)', async (_, indexAt) => {
+    const dir = repo();
+    git(dir, 'config', 'core.trustctime', 'false');
+    const second = Math.floor(Date.now() / 1000) - 100;
+    utimesSync(join(dir, 'a.txt'), second, second);
+    git(dir, 'add', '.');
+    git(dir, 'commit', '-qm', 'init');
+    execFileSync('touch', ['-d', `@${second}.${indexAt}`, join(dir, '.git', 'index')]);
+    const committed = git(dir, 'rev-parse', 'HEAD^{tree}');
+    expect((await runVerify(dir, ['exit 1'])).tree).toBe(committed);
+    writeFileSync(join(dir, 'a.txt'), 'two\n');
+    utimesSync(join(dir, 'a.txt'), second, second);
+    expect((await runVerify(dir, ['exit 1'])).tree).not.toBe(committed);
+  });
+
+  it('reads a sparse worktree: what it hides is no deletion, a file written where it hides is a change (ORC-318)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'factory-verify-'));
+    git(dir, 'init', '-q');
+    mkdirSync(join(dir, '.claude'));
+    writeFileSync(join(dir, '.claude', 'settings.json'), '{}\n');
+    writeFileSync(join(dir, '.claude', 'CLAUDE.md'), 'c\n');
+    git(dir, 'add', '.');
+    git(dir, 'commit', '-qm', 'init');
+    git(dir, 'sparse-checkout', 'set', '--no-cone', '/*', '!/.claude/*', '/.claude/CLAUDE.md');
+    expect((await runVerify(dir, ['exit 1'])).tree).toBe(git(dir, 'rev-parse', 'HEAD^{tree}'));
+    writeFileSync(join(dir, '.claude', 'settings.local.json'), 'one\n');
+    const made = (await runVerify(dir, ['exit 1'])).tree;
+    expect(made).toMatch(/^[0-9a-f]{40}$/);
+    expect(made).not.toBe(git(dir, 'rev-parse', 'HEAD^{tree}'));
+    expect(git(dir, 'ls-files', '-t', '.claude')).toBe('H .claude/CLAUDE.md\nS .claude/settings.json');
   });
 
   it('has no fingerprint outside a git worktree', async () => {
