@@ -208,6 +208,55 @@ describe('Worker: a younger row that fails while an older one is parked (ORC-314
   });
 });
 
+describe('Worker: a hold keeps back only the rows younger than the failed one (ORC-315)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('asks for an older row past a younger one out of retries; failing too, the older takes the hold, and the younger ones go after it', async () => {
+    vi.useFakeTimers({ now: 1_000_000 });
+    const prepared: string[] = [];
+    const failing = new Set(['e3']);
+    const { store, worker } = setup({
+      retry: { attempts: 2, baseMs: 1_000 },
+      prepare: async (e) => {
+        prepared.push(e.id);
+        if (failing.has(e.id)) throw new Error('Linear unreachable');
+        return e;
+      },
+    });
+    await store.appendInbox(event('e1'));
+    await store.decide(twoComments(event('e1')));
+    const other = (await store.claimEffect('p', 'REL-1', 60_000)) as OutboxRow;
+    await store.appendInbox(event('e2'));
+    await worker.kick();
+    await worker.settle();
+    await store.appendInbox(event('e3'));
+    await store.appendInbox(event('e4'));
+    await worker.kick();
+    await worker.settle();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await worker.settle();
+    // e3 is out of retries, e4 was never asked for. e2 is older: the poll asks for it, and it fails.
+    expect(prepared).toEqual(['e2', 'e3', 'e3']);
+    failing.add('e2');
+    await worker.poll();
+    await worker.settle();
+    expect(prepared).toEqual(['e2', 'e3', 'e3', 'e2']);
+
+    failing.clear();
+    await store.completeEffect(other.id, other.lease, Date.now());
+    await vi.advanceTimersByTimeAsync(1_000);
+    for (let polls = 0; polls < 4; polls++) {
+      await worker.poll();
+      await settled(worker);
+    }
+    expect(await store.pendingInbox(10)).toEqual([]);
+    expect((await store.recentEvents(50, 'REL-1')).map((e) => e.id).reverse().filter((id) => /^e\d$/.test(id))).toEqual(['e1', 'e2', 'e3', 'e4']);
+    worker.stop();
+  });
+});
+
 describe('Worker: effects through the outbox executor (ORC-150)', () => {
   afterEach(() => {
     vi.useRealTimers();

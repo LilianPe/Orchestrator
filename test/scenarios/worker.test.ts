@@ -297,6 +297,90 @@ on:
       expect(decided.filter((d) => /^(effect:REL-1:1:[12]|younger):committed$/.test(d))).toEqual(['effect:REL-1:1:1:committed', 'younger:committed', 'effect:REL-1:1:2:committed']);
       expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Erreur : Linear down' });
     });
+
+    describe('past its last retry, with an older row of its ticket parked (ORC-315)', () => {
+      /** `younger` throws at each decision while `broken`; `attempt` runs in that decision, before it throws. */
+      function failingYounger(attempts: number, attempt: (n: number) => void | Promise<void>) {
+        const state = { broken: true, tries: 0 };
+        const decided: string[] = [];
+        const h = createHarness({
+          projectYaml: CRASH_WORKFLOW,
+          processRetry: { attempts, baseMs: 1 },
+          // A backoff no real timer reaches during the test: only `advance` ends it.
+          effectRetry: { attempts: 2, baseMs: 60_000, capMs: 60_000 },
+          wrapStore: (inner) =>
+            Object.assign(Object.create(inner) as Store, {
+              decide: async (req: DecisionRequest) => {
+                if (state.broken && req.event.id === 'younger') {
+                  await attempt(++state.tries);
+                  throw new Error('database hiccup');
+                }
+                const outcome = await inner.decide(req);
+                decided.push(`${req.event.id}:${outcome.status}`);
+                return outcome;
+              },
+            }),
+        });
+        h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+        h.tracker.comment = async () => {
+          throw new Error('Linear down');
+        };
+        const younger = { ...TRUSTED, id: 'younger', type: 'status.changed' as const, at: h.clock.now(), projectId: 'p', ticketId: 'REL-1', payload: { from: 'todo', to: 'todo' } };
+        return { h, state, decided, younger };
+      }
+
+      /** The older row is decided with no restart; the result of the effect that died after `younger` came stays behind it. */
+      async function olderDecidedThenRestart({ h, state, decided }: Pick<ReturnType<typeof failingYounger>, 'h' | 'state' | 'decided'>) {
+        await h.advance(60_000);
+        expect(decided).toContain('effect:REL-1:1:1:committed');
+        expect((await h.store.pendingInbox(10)).map((e) => e.id)).toEqual(['younger', 'effect:REL-1:1:2']);
+        expect((await h.ticket()).blocked).toBe(false);
+
+        state.broken = false;
+        await h.restart();
+        expect(await h.store.pendingInbox(10)).toEqual([]);
+        expect(decided.filter((d) => /^(effect:REL-1:1:[12]|younger):committed$/.test(d))).toEqual(['effect:REL-1:1:1:committed', 'younger:committed', 'effect:REL-1:1:2:committed']);
+        expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Erreur : Linear down' });
+      }
+
+      it('lets the older row go, without a restart', async () => {
+        const exhausted = gate();
+        const scenario = failingYounger(3, (n) => {
+          if (n === 3) exhausted.open();
+        });
+        const { h } = scenario;
+        await h.orch.accept(delegation(h, 'd1'));
+        await h.orch.drained();
+        expect((await h.store.pendingInbox(10)).map((e) => e.id)).toEqual(['effect:REL-1:1:1']);
+
+        await h.orch.accept(scenario.younger);
+        await exhausted.opened;
+        await h.orch.drained();
+
+        await olderDecidedThenRestart(scenario);
+      });
+
+      it('lets it go when a poll read it behind the attempt still running, before that attempt failed', async () => {
+        const inDecision = gate();
+        const answer = gate();
+        const scenario = failingYounger(1, async () => {
+          inDecision.open();
+          await answer.opened;
+        });
+        const { h } = scenario;
+        await h.orch.accept(delegation(h, 'd1'));
+        await h.orch.drained();
+
+        await h.orch.accept(scenario.younger);
+        await inDecision.opened;
+        // Read again now, it queues behind `younger` in its ticket's task: no failed row holds the ticket yet.
+        await h.orch.poll();
+        answer.open();
+        await h.orch.drained();
+
+        await olderDecidedThenRestart(scenario);
+      });
+    });
   });
 
   it('keeps the slot a drain promised to a dequeued item from a start decided meanwhile, and the item its place', async () => {
