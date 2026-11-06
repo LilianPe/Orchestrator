@@ -4,7 +4,7 @@ import { newTicketState, SCHEMA_VERSION, TRUSTED, type FactoryEvent } from '../.
 import { migratePgStore } from '../../src/store/pg/migrate.js';
 import { OUTBOX_LEASE_MS, PgStore } from '../../src/store/pg/pg-store.js';
 import { PG_TABLE_NAMES } from '../../src/store/pg/schema.js';
-import type { QueueItem, RunRecord } from '../../src/store/types.js';
+import { timerRowId, type QueueItem, type RunRecord } from '../../src/store/types.js';
 import { createTestDatabase, PG_URL, TRUNCATE_ALL as TRUNCATE } from '../helpers/pg-database.js';
 import { LABELS, storeContract } from '../helpers/store-suite.js';
 
@@ -294,7 +294,7 @@ describe.skipIf(!url)('PgStore integration', () => {
     // A pass cut before fireTimer (an error, a shutdown) finds the timer again.
     expect(await store.dueTimers(10_000)).toEqual([timer]);
 
-    const pending = await pool.query<{ status: string; kind: string }>('select status, kind from timers where id = $1', [timer.key]);
+    const pending = await pool.query<{ status: string; kind: string }>('select status, kind from timers where id = $1', [timerRowId(timer)]);
     expect(pending.rows[0]).toEqual({ status: 'pending', kind: 'debounce' });
 
     await store.putTimer({ ...timer, fireAt: 9_000 });
@@ -328,7 +328,7 @@ describe.skipIf(!url)('PgStore integration', () => {
     const old = { key: 'REL-1:dev-feedback', projectId: 'p', ticketId: 'REL-1', job: 'dev-feedback', fireAt: 5_000, armedBy: 'e1' };
     await pool.query(
       `insert into timers (id, ticket_id, kind, due_at, payload, status) values ($1, 'REL-1', 'dev-feedback', to_timestamp(5), $2::jsonb, 'pending')`,
-      [old.key, JSON.stringify(old)],
+      [timerRowId(old), JSON.stringify(old)],
     );
     const [due] = await store.dueTimers(10_000);
     expect(due).toEqual({ key: old.key, projectId: 'p', ticketId: 'REL-1', kind: 'debounce', payload: { job: 'dev-feedback' }, fireAt: 5_000, armedBy: 'e1' });

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AttemptLabels } from '../../src/core/attempt-labels.js';
 import { newTicketState, TRUSTED, type FactoryEvent, type TicketState } from '../../src/core/types.js';
-import { TicketHeldError, timerEvent, type DecisionPlan, type DecisionRequest, type QueueItem, type RunRecord, type SecurityLog, type Store, type WorkflowVersion } from '../../src/store/types.js';
+import { TicketHeldError, timerEvent, type DecisionPlan, type DecisionRequest, type QueueItem, type RunRecord, type SecurityLog, type Store, type TimerRecord, type WorkflowVersion } from '../../src/store/types.js';
 
 function run(patch: Partial<RunRecord> = {}): RunRecord {
   return {
@@ -743,6 +743,20 @@ export function storeContract(store: () => Store | Promise<Store>): void {
       delegatedEvent('e2'),
       { ...TRUSTED, id: 'dead-letter:e1:1', type: 'dead_letter.added', at: 50, projectId: 'p', ticketId: 'REL-1', payload: { eventId: 'e1', eventType: 'ticket.delegated', error: 'boom', failures: 1 } },
     ]);
+  });
+
+  it('keeps a timer per project under one key: arming or firing a copy\'s leaves the other\'s (ORC-316)', async () => {
+    const s = await store();
+    const timer = (projectId: string, fireAt: number): TimerRecord => ({ key: 'REL-1:dev-feedback', projectId, ticketId: 'REL-1', kind: 'debounce', payload: { job: 'dev-feedback' }, fireAt });
+    await s.putTimer(timer('api', 100));
+    await s.putTimer(timer('p', 200));
+    await s.putTimer(timer('p', 300));
+    expect((await s.dueTimers(1000)).map((t) => [t.projectId, t.key, t.fireAt])).toEqual([['api', 'REL-1:dev-feedback', 100], ['p', 'REL-1:dev-feedback', 300]]);
+    // Fired as read: a stale read of p's is left alone, api's goes.
+    expect(await s.fireTimer(timer('p', 200), 400)).toBe(false);
+    expect(await s.fireTimer(timer('api', 100), 400)).toBe(true);
+    expect((await s.dueTimers(1000)).map((t) => t.projectId)).toEqual(['p']);
+    expect((await s.pendingInbox(10)).map((e) => [e.id, e.projectId])).toEqual([['timer:REL-1:dev-feedback:100', 'api']]);
   });
 
   it('keeps a copy of a ticket per project: writing one leaves the other whole (ORC-316)', async () => {

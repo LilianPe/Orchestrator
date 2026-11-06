@@ -75,6 +75,24 @@ describe('an event routed on a stale read, on either store (ORC-291, ORC-316)', 
     expect(h.tracker.activities('s3')).toEqual([refusal('stale', 'response')]);
   });
 
+  it('two copies that debounce the same job keep a timer each, and each fires: a project workflow debouncing a question (ORC-316)', async () => {
+    // Not the standard pack: it debounces only `dev-feedback`, which a copy that does not hold the ticket never arms.
+    const h = createHarness({ extraProjects: ['api'], projectYaml: 'version: 1\non:\n  session.mentioned:\n    - { run: ask, debounce: 1m }\n' });
+    h.tracker.addIssue({ identifier: 'REL-1', description: 'x'.repeat(40) });
+    const mention = async (id: string, projectId: string, session: string) => {
+      await h.orch.accept({ id, type: 'session.mentioned', at: h.clock.now(), projectId, ticketId: 'REL-1', actor: 'user-1', taint: 'trusted', payload: { linearSessionId: session, body: 'Pourquoi ?', author: 'A' } } as FactoryEvent);
+      await h.orch.drained();
+    };
+    await mention('m1', 'api', 's1');
+    await h.advance(1000);
+    await mention('m2', 'p', 's2');
+
+    const armed = (await h.store.dueTimers(Number.MAX_SAFE_INTEGER)).filter((t) => t.kind === 'debounce');
+    expect(armed.map((t) => t.projectId).sort()).toEqual(['api', 'p']);
+    await h.advance(60_000);
+    expect(h.runner.requests).toHaveLength(2);
+  });
+
   it('a row left by a project no longer in the configuration refuses nothing: the project renamed takes its events (ORC-316)', async () => {
     const h = createHarness({ extraProjects: ['api'] });
     h.tracker.addIssue({ identifier: 'REL-1', delegateId: 'app', description: 'x'.repeat(40) });

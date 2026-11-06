@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { TicketState } from '../../src/core/types.js';
+import { newTicketState, type FactoryEvent, type TicketState } from '../../src/core/types.js';
 import type { Store } from '../../src/store/types.js';
 import { createHarness } from '../helpers/harness.js';
 
@@ -84,6 +84,41 @@ describe('the factory publishes (ORC-125)', () => {
     release();
     await delegated;
     expect(moves(h)).toContain('Human Review');
+  });
+
+  it('a stale event refused while the ticket is in publication: told once the publication ended, which it leaves alone (ORC-316)', async () => {
+    const h = verified({ extraProjects: ['api'] });
+    // The copy that waited under another project of the team: neither refuses the holder's publication nor shares its effect keys.
+    const waiting = { ...newTicketState('api', 'REL-1', 'T', 'dev', 1), delegated: true, blocked: true, awaitingRepo: ['p', 'api'] };
+    await h.store.putTicket(waiting);
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const real = h.publisher.publish.bind(h.publisher);
+    vi.spyOn(h.publisher, 'publish').mockImplementation(async (req) => {
+      await gate;
+      return real(req);
+    });
+    const delegated = delegate(h);
+    await vi.waitFor(() => expect(h.publisher.publish).toHaveBeenCalled());
+    const publishing = await h.ticket();
+    expect(publishing.verifyingRunId).toBeDefined();
+
+    await h.orch.accept({ id: 'stale', type: 'ticket.delegated', at: h.clock.now(), projectId: 'api', ticketId: 'REL-1', actor: 'user-1', taint: 'trusted', payload: { linearSessionId: 's9' } } as FactoryEvent);
+    await vi.waitFor(async () => expect(await h.store.getDeadLetter('stale')).toMatchObject({ status: 'open' }));
+    expect(await h.ticket()).toMatchObject({ verifyingRunId: publishing.verifyingRunId, blocked: false });
+
+    release();
+    await delegated;
+    await h.orch.drained();
+    expect(h.publisher.published).toHaveLength(1);
+    expect(h.forge.opened).toHaveLength(1);
+    expect(await h.ticket()).toMatchObject({ logical: 'human_review', prNumber: 1, blocked: false });
+    expect((await h.ticket()).verifyingRunId).toBeUndefined();
+    expect(await h.store.getTicket('api', 'REL-1')).toEqual(waiting);
+    expect(h.tracker.activities('ls-1')).toContainEqual({ type: 'thought', body: expect.stringContaining('stale') });
+    expect(h.tracker.activities('s9')).toEqual([{ type: 'response', body: expect.stringContaining('stale') }]);
+    // Only the one refused: `pr.opened` and `publish.done` went through as the holder's.
+    expect((await h.store.deadLetters('REL-1')).map((d) => d.eventId)).toEqual(['stale']);
   });
 
   it('a verify that fails publishes nothing (criterion 6)', async () => {

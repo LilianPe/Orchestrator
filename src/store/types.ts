@@ -331,6 +331,9 @@ export interface SecurityStats {
   rules: { rule: string; refusals: number }[];
 }
 
+/** The store's id of an armed timer: `key` is per ticket, and each project's copy of the ticket has its own timers (ORC-316). */
+export const timerRowId = (t: Pick<TimerRecord, 'projectId' | 'key'>): string => `${t.projectId}:${t.key}`;
+
 /** The inbox event of a timer's firing (ORC-161), written by `fireTimer`: its id `timer:<key>:<fireAt>` names that firing, once. */
 export function timerEvent(t: TimerRecord, at: number): FactoryEvent<'timer.fired'> {
   return {

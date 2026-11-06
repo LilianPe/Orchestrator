@@ -19,6 +19,7 @@ import {
   decisionRecord,
   effectResult,
   timerEvent,
+  timerRowId,
   type DecisionOutcome,
   type DecisionRecord,
   type JournalEntry,
@@ -481,7 +482,7 @@ export class SqliteStore implements Store {
   private writeTimer(t: TimerRecord): void {
     this.db
       .prepare('INSERT INTO timers (key, fire_at, data) VALUES (?, ?, ?) ON CONFLICT DO UPDATE SET fire_at = excluded.fire_at, data = excluded.data')
-      .run(t.key, t.fireAt, JSON.stringify(t));
+      .run(timerRowId(t), t.fireAt, JSON.stringify(t));
   }
 
   private clearTimers(projectId: string, ticketId: string): void {
@@ -555,7 +556,7 @@ export class SqliteStore implements Store {
 
   async fireTimer(t: TimerRecord, at: number): Promise<boolean> {
     return this.atomically(() => {
-      const armed = this.db.prepare('DELETE FROM timers WHERE key = ? AND fire_at = ?').run(t.key, t.fireAt);
+      const armed = this.db.prepare('DELETE FROM timers WHERE key = ? AND fire_at = ?').run(timerRowId(t), t.fireAt);
       if (Number(armed.changes) !== 1) return false;
       return this.appendResult(timerEvent(t, at));
     });

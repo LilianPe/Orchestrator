@@ -21,6 +21,7 @@ import {
   decisionRecord,
   effectResult,
   timerEvent,
+  timerRowId,
   LEASE_MS,
   type DecisionOutcome,
   type DecisionRecord,
@@ -918,7 +919,7 @@ export class PgStore implements AsyncStore {
     await db.execute(sql`
       insert into timers (id, ticket_id, kind, due_at, payload, status, created_at)
       values (
-        ${timer.key}, ${timer.ticketId}, ${timer.kind}, to_timestamp(${timer.fireAt / 1000}),
+        ${timerRowId(timer)}, ${timer.ticketId}, ${timer.kind}, to_timestamp(${timer.fireAt / 1000}),
         ${JSON.stringify(timer)}::jsonb, 'pending', to_timestamp(${this.now() / 1000})
       )
       on conflict (id) do update set
@@ -958,7 +959,7 @@ export class PgStore implements AsyncStore {
       await tx.execute(ticketLock(timer.ticketId));
       const armed = await tx.execute(sql`
         delete from timers
-        where id = ${timer.key} and status = 'pending' and (payload->>'fireAt')::double precision = ${timer.fireAt}
+        where id = ${timerRowId(timer)} and status = 'pending' and (payload->>'fireAt')::double precision = ${timer.fireAt}
         returning id
       `);
       if ((armed.rowCount ?? 0) === 0) return false;
