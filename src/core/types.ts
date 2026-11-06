@@ -239,7 +239,8 @@ export interface EventPayloads {
   /** An outbox effect that failed on its last attempt (ORC-150): the ticket is blocked. */
   'effect.failed': EffectResultPayload & { error: string };
   /** An event whose decision threw, set aside in `dead_letter` (ORC-175): the ticket is blocked. */
-  'dead_letter.added': { eventId: string; eventType: string; error: string; failures: number };
+  /** `refused`: the store refused the event, this notice goes to the project holding the ticket (ORC-316). */
+  'dead_letter.added': { eventId: string; eventType: string; error: string; failures: number; refused?: { projectId: string; linearSessionId?: string } };
   /**
    * A dead-lettered event repaired by `factory run repair` (ORC-175): `replay` decides `event` again,
    * `force` records its facts without its decision, `skip` drops it. Its block is lifted. `event` is

@@ -80,7 +80,9 @@ export const journal = pgTable(
 export const tickets = pgTable(
   'tickets',
   {
-    id: text('id').primaryKey(),
+    projectId: text('project_id').notNull(),
+    /** The ticket's identifier: a Linear team with several repos may have a copy of it per project (ORC-316). */
+    id: text('id').notNull(),
     status: text('status').notNull(),
     /** Last step the workflow reached; `null` before the first job is pending. */
     stepCursor: text('step_cursor'),
@@ -93,6 +95,7 @@ export const tickets = pgTable(
     updatedAt: updatedAt(),
   },
   (t) => [
+    primaryKey({ columns: [t.projectId, t.id] }),
     index('tickets_status_idx').on(t.status),
     index('tickets_updated_at_idx').on(t.updatedAt),
     check('tickets_active_attempts_check', sql`${t.activeAttempts} >= 0`),

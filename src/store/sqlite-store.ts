@@ -10,9 +10,11 @@ import {
   type RepairAction,
 } from '../core/dead-letter.js';
 import type { OutboxEffect } from '../core/decision.js';
+import { claims, holds } from '../core/routing.js';
 import { normalizeTicket, type QueueName, type FactoryEvent, type TicketState } from '../core/types.js';
 import { upcastTimer, type StoredEvent, type StoredTimer } from '../core/upcast.js';
 import {
+  TicketHeldError,
   decidedOn,
   decisionRecord,
   effectResult,
@@ -262,7 +264,11 @@ export class SqliteStore implements Store {
         .prepare('INSERT OR IGNORE INTO workflow_versions (hash, definition) VALUES (?, ?)')
         .run(req.workflow.hash, JSON.stringify(req.workflow.definition));
     }
-    if (plan.ticket) this.writeTicket(plan.ticket);
+    if (plan.ticket) {
+      // Thrown, the whole decision rolls back, its journal row included.
+      this.refuseClaim(req.peers ?? [], known, plan.ticket);
+      this.writeTicket(plan.ticket);
+    }
     if (plan.clearTimers && ticketId !== null) this.clearTimers(event.projectId, ticketId);
     for (const t of plan.timers) this.writeTimer(t);
     const effectIds = plan.effects.map((effect, k) => {
@@ -276,6 +282,15 @@ export class SqliteStore implements Store {
     });
     this.db.prepare('UPDATE inbox SET processed_at = ? WHERE id = ?').run(this.now(), event.id);
     return { status: 'committed', seq, effectIds, known, plan, preempted };
+  }
+
+  private refuseClaim(peers: readonly string[], known: TicketState | undefined, next: TicketState): void {
+    if (!claims(known, next)) return;
+    const holder = peers.find((p) => {
+      const copy = this.ticketRow(p, next.ticketId);
+      return copy && holds(copy);
+    });
+    if (holder !== undefined) throw new TicketHeldError(next.ticketId, holder, next.projectId);
   }
 
   private frozenWorkflow(known: TicketState | undefined, current: WorkflowVersion): WorkflowVersion {
@@ -376,7 +391,7 @@ export class SqliteStore implements Store {
     return Number(res.changes) === 1;
   }
 
-  async deadLetter(row: StoredEvent, error: string, at: number): Promise<boolean> {
+  async deadLetter(row: StoredEvent, error: string, at: number, holder?: string): Promise<boolean> {
     return this.atomically(() => {
       if (!this.markProcessed(row.id)) return false;
       const event = deadLetteredEvent(row);
@@ -389,7 +404,7 @@ export class SqliteStore implements Store {
         )
         .get(event.id, event.projectId, event.ticketId ?? null, error, at, at, JSON.stringify(event)) as { failures: number };
       const failures = Number(upserted.failures);
-      const notice = deadLetterNotice({ event, error, failures }, at);
+      const notice = deadLetterNotice({ event, error, failures }, at, holder);
       if (notice) this.appendResult(notice);
       return true;
     });

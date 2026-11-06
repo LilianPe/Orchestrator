@@ -2,7 +2,7 @@ import { REFREEZE, type FrozenTests } from '../checks/freeze.js';
 import type { JobSpec, Rule, Workflow } from '../config/workflow-schema.js';
 import { allowed, DEFAULT_MATRIX, refusalMessage, type AuthzAction, type AuthzMatrix, type Channel } from './authz.js';
 import { evalCondition } from './conditions.js';
-import { deadLetterReason, liftDeadLetterBlock, REPAIR_LABELS, repairedEvent } from './dead-letter.js';
+import { deadLetterReason, heldMessage, liftDeadLetterBlock, REPAIR_LABELS, repairedEvent } from './dead-letter.js';
 import type { AgentOutput } from './agent-output.js';
 import type { Decision, Effect } from './decision.js';
 import { PRODUCT_NAME } from '../product.js';
@@ -659,7 +659,7 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
   // An undelegation that lifts a repo choice while the issue's ticket in its repo is blocked leaves the label (ORC-291).
   const keepLabel = event.type === 'ticket.undelegated' && event.payload.keepLabel;
   if (!trackerDown && !keepLabel) blockedLabel(out, state, event);
-  // Come from a wait in another project: nothing may be left there to take the label off (one row per ticket on Postgres).
+  // Come from a wait in another project: the label goes now, not at the pass that ends that wait.
   if ((event.payload as { waitedIn?: string }).waitedIn && !out.events.reduce<TicketState | undefined>((t, e) => reduce(t, e), reduce(state, event))?.blocked) {
     out.effects.push(blockedLabelChange(true, false)!);
   }
@@ -908,6 +908,14 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
     case 'dead_letter.added': {
       // An event without a ticket, or a ticket the factory does not track: the dead letter waits for its repair.
       if (!ticket) return out;
+      const { refused } = event.payload;
+      if (refused) {
+        // The ticket holding it is not at fault: never blocked, its session told, and the one the refused event came from.
+        const body = heldMessage(event.payload, refused.projectId, ticket.projectId, ticket.ticketId);
+        out.effects.push({ kind: 'activity', type: 'response', body });
+        if (refused.linearSessionId && refused.linearSessionId !== ticket.linearSessionId) out.effects.push({ kind: 'activity', type: 'response', body, linearSessionId: refused.linearSessionId });
+        return out;
+      }
       const settled = settledTicket(ticket);
       if (settled) {
         out.trace.push(`dead_letter.added ignored: ticket ${settled}`);

@@ -183,7 +183,7 @@ async function routeOf(body: any, identifier: string, teamKey: string, ctx: MapC
     return first ? { projectId: first, noRepo: teamKey } : undefined;
   }
   const route = await routeInTeam(body, identifier, team, ctx);
-  // Its team got a repo while it waited under the first project: nothing may be left there to take its label off (ORC-171).
+  // Its team got a repo while it waited under the first project: the label goes now, not at the pass that ends that wait (ORC-171).
   const first = route && isDelegation(body) ? ctx.firstProject?.() : undefined;
   return first && !team.includes(first) && isNoRepo(await ctx.ticket(first, identifier)) ? { ...route!, waitedIn: first } : route;
 }
