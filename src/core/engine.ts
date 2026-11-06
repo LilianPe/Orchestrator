@@ -61,11 +61,11 @@ function success(out: Decision, at: { event: FactoryEvent; ticket: TicketState |
  */
 function handOver(out: Decision, at: { event: FactoryEvent; ticket: TicketState | undefined; workflow: Workflow }, job: JobSpec): void {
   const { event, ticket, workflow } = at;
-  if (job.queue !== 'dev' || !ticket?.delegated || ticket.blocked || ticket.pendingJob || !awaitsAgent(ticket.humanInbox)) return;
+  if (job.queue !== 'dev' || !ticket?.delegated || heldInbox(ticket)) return;
   // A move owed by an earlier job is made by this end too (`publish.done`).
   const after = { ...ticket, logical: job.onSuccess.move ?? ticket.owedMove ?? ticket.logical };
   // The first rule that matches, as a reply would pick it: one with no run listed first starts nothing.
-  const rule = (workflow.on['session.prompted'] ?? []).find((r) => ruleAllowed(r, event, after, workflow) && ruleMatches(r, event, after, undefined));
+  const rule = workflow.on['session.prompted']?.[firstRule('session.prompted', event, after, workflow)];
   const next = rule?.run ? workflow.jobs[rule.run] : undefined;
   if (!next) return;
   out.trace.push(`human inbox: handed over to ${next.name} at the end of ${job.name}`);
@@ -120,7 +120,7 @@ export function goesThroughFreeze(ticket: TicketState | undefined, job: JobSpec)
  */
 function refreeze(out: Decision, event: FactoryEvent<'command'>, ticket: TicketState | undefined, matrix: AuthzMatrix): Decision {
   if (!authorize(out, { ...event, roles: event.roles ?? [] }, ticket, 'refreeze', 'linear', matrix)) return out;
-  if (event.payload.kind) keepMessage(out, event, 'session', commandText(event));
+  if (event.payload.kind) keepMessage(out, event, 'session');
   const { frozen, linearSessionId } = event.payload;
   const answer = (body: string) => out.effects.push({ kind: 'activity', type: 'response', body, linearSessionId });
   if (!frozen) {
@@ -282,7 +282,7 @@ export function isQuestionSession(ticket: TicketState | undefined, sessionId: st
  */
 function runTaint(event: FactoryEvent, ticket: TicketState | undefined, input: InputKind | undefined): Taint {
   if (event.taint === 'untrusted') return 'untrusted';
-  return input === 'feedback' && anyUntrusted(ticket?.humanInbox ?? []) ? 'untrusted' : 'trusted';
+  return input === 'feedback' && anyUntrusted(forAgent(ticket?.humanInbox ?? [])) ? 'untrusted' : 'trusted';
 }
 
 function anyUntrusted(items: readonly FeedbackItem[]): boolean {
@@ -358,6 +358,11 @@ function eventMatches(rule: Rule, event: FactoryEvent): boolean {
   return rule.say === undefined || (event.type === 'command' && event.payload.name === rule.say);
 }
 
+/** The index of the first rule of `type` that applies to the event, on the ticket as it is read, the active job included: -1 without one. */
+function firstRule(type: EventType, event: FactoryEvent, ticket: TicketState | undefined, workflow: Workflow): number {
+  return (workflow.on[type] ?? []).findIndex((r) => ruleAllowed(r, event, ticket, workflow) && ruleMatches(r, event, ticket, ticket?.activeJob));
+}
+
 function ruleMatches(rule: Rule, event: FactoryEvent, ticket: TicketState | undefined, activeJob: string | undefined): boolean {
   if (!eventMatches(rule, event)) return false;
   if (rule.when) {
@@ -377,8 +382,9 @@ type HumanMessage = FactoryEvent<'session.prompted' | 'session.mentioned' | 'com
 const commandText = (event: FactoryEvent<'command'>): string => `${event.payload.name} ${event.payload.body}`.trim();
 
 /** Records a human message: it waits in humanInbox for the next run that consumes it (I6), its taint with it (I12). */
-function keepMessage(out: Decision, event: HumanMessage, source: 'session' | 'thread', body = event.payload.body): void {
+function keepMessage(out: Decision, event: HumanMessage, source: 'session' | 'thread'): void {
   const { author, kind } = event.payload;
+  const body = event.type === 'command' && kind ? commandText(event) : event.payload.body;
   out.events.push({ type: 'feedback.appended', item: { author, authorId: event.actor, body, at: event.at, source, taint: event.taint, ...(kind ? { kind } : {}) } });
 }
 
@@ -397,30 +403,42 @@ function heldInbox(ticket: TicketState | undefined): string | undefined {
  * from: blocked, the rule relaunches at once (ORC-196's path); else it arms the debounce, and no rule leaves it for the next run.
  */
 function regroup(out: Decision, event: FactoryEvent<'session.prompted' | 'session.mentioned'>, ticket: TicketState | undefined, workflow: Workflow): Decision {
-  const rules = workflow.on['session.prompted'] ?? [];
-  const index = rules.findIndex((r) => ruleAllowed(r, event, ticket, workflow) && ruleMatches(r, event, ticket, ticket?.activeJob));
+  const index = firstRule('session.prompted', event, ticket, workflow);
   if (index < 0) {
     out.trace.push('no rule for session.prompted');
     return out;
   }
   out.trace.push(`on.session.prompted[${index}]`);
-  return applyRule(out, rules[index]!, event, ticket, workflow);
+  return applyRule(out, workflow.on['session.prompted']![index]!, event, ticket, workflow);
 }
 
 /**
  * `/status` or `/stop` (ORC-180), answered by the factory, never by a model. `/stop` stops as the stop signal of its session
  * does. A session opened by this very mention holds no run: on a delegated ticket, it is the ticket's work that it stops.
  */
-function factoryCommand(out: Decision, event: FactoryEvent<'session.prompted' | 'session.mentioned'>, state: TicketState | undefined, ticket: TicketState | undefined, workflow: Workflow, matrix: AuthzMatrix): Decision {
+function factoryCommand(out: Decision, event: FactoryEvent<'session.prompted' | 'session.mentioned'>, ticket: TicketState | undefined, workflow: Workflow): Decision {
   const { body, linearSessionId } = event.payload;
   if (commandOf(body) !== STOP_COMMAND) {
     out.effects.push({ kind: 'activity', type: 'response', body: statusAnswer(ticket), linearSessionId });
     return out;
   }
-  const payload = event.type === 'session.mentioned' && ticket?.delegated ? {} : { linearSessionId };
-  const stopped = decideEvent(state, { ...event, type: 'session.stopped', payload } as FactoryEvent<'session.stopped'>, workflow, matrix);
-  stopped.events.unshift(...out.events);
-  return stopped;
+  const session = event.type === 'session.mentioned' && ticket?.delegated ? undefined : linearSessionId;
+  if (isQuestionSession(ticket, session)) return stopQuestion(out, session!);
+  const index = firstRule('session.stopped', event, ticket, workflow);
+  return index < 0 ? out : applyRule(out, workflow.on['session.stopped']![index]!, event, ticket, workflow);
+}
+
+/** The stop of a question session: its answer, not the ticket's work. */
+function stopQuestion(out: Decision, sessionId: string): Decision {
+  out.trace.push('built-in session.stopped (question session)');
+  out.effects.push({ kind: 'stop_run', linearSessionId: sessionId }, { kind: 'activity', type: 'response', body: 'Arrêté.', linearSessionId: sessionId });
+  return out;
+}
+
+/** The read-only answer to a question, in its session. */
+function askInThread(out: Decision, event: FactoryEvent<'session.prompted'>, ticket: TicketState | undefined, workflow: Workflow): void {
+  const ask = workflow.jobs['ask'];
+  if (ask) startRun(out, event, ticket, ask, { input: 'thread', inputText: event.payload.body, linearSessionId: event.payload.linearSessionId });
 }
 
 /**
@@ -428,19 +446,18 @@ function factoryCommand(out: Decision, event: FactoryEvent<'session.prompted' | 
  * whether an answer starts as well. Only the ticket's dev session relaunches a blocked ticket, and there a reply is a reply: no
  * answer of its own. On a ticket not delegated, the answer is the only reaction there can be. A refused one is not kept.
  */
-function classifiedReply(out: Decision, event: FactoryEvent<'session.prompted'>, state: TicketState | undefined, ticket: TicketState | undefined, workflow: Workflow, matrix: AuthzMatrix): Decision {
-  const { kind, body, linearSessionId } = event.payload;
-  const thread = isQuestionSession(ticket, linearSessionId);
+function classifiedReply(out: Decision, event: FactoryEvent<'session.prompted'>, ticket: TicketState | undefined, workflow: Workflow, matrix: AuthzMatrix): Decision {
+  const { kind } = event.payload;
+  const thread = isQuestionSession(ticket, event.payload.linearSessionId);
   // A command relaunches nothing: answered under the same right as any reply, blocked or not.
   const relaunches = !thread && !!ticket?.blocked && kind !== 'command';
   if (!authorize(out, event, ticket, relaunches ? 'relaunch_blocked' : 'answer_clarify', 'linear_session', matrix)) return out;
   const answerOnly = thread && (kind === 'question' || !ticket?.delegated);
   if (ticket) keepMessage(out, event, answerOnly ? 'thread' : 'session');
-  if (kind === 'command') return factoryCommand(out, event, state, ticket, workflow, matrix);
-  if (answerOnly || (kind === 'question' && !relaunches)) {
+  if (kind === 'command') return factoryCommand(out, event, ticket, workflow);
+  if (answerOnly || (kind === 'question' && !ticket?.blocked)) {
     out.trace.push(`session.prompted: ${kind}, answered`);
-    const ask = workflow.jobs['ask'];
-    if (ask) startRun(out, event, ticket, ask, { input: 'thread', inputText: body, linearSessionId });
+    askInThread(out, event, ticket, workflow);
   }
   if (answerOnly || (thread && ticket?.blocked)) return out;
   return regroup(out, event, ticket, workflow);
@@ -722,7 +739,7 @@ export const ACK_BODY = 'Bien reçu.';
  * a row journaled before ORC-171 asks for none: it replays as it was decided.
  */
 function acknowledge(out: Decision, event: FactoryEvent, state: TicketState | undefined): void {
-  const { ack, linearSessionId, kind, masked } = event.payload as { ack?: true; linearSessionId?: string; kind?: MessageKind; masked?: true };
+  const { ack, linearSessionId, kind } = event.payload as { ack?: true; linearSessionId?: string; kind?: MessageKind };
   if (!ack || !linearSessionId) return;
   if (out.effects.some((e) => e.kind === 'activity' && e.linearSessionId === linearSessionId)) return;
   // A command of a reply is answered by what it does: `/stop` says so in the ticket's session, whichever one it came from.
@@ -731,17 +748,27 @@ function acknowledge(out: Decision, event: FactoryEvent, state: TicketState | un
   const plan = delegation && out.effects.some((e) => e.kind === 'start_run');
   // A mention that asks a question keeps the ack of a trigger (ORC-171).
   const body = kind === 'instruction' || (event.type === 'session.prompted' && kind) ? messageAck(out, state) : ACK_BODY;
-  out.effects.unshift({ kind: 'ack', body: masked ? `${body} ${MASKED_NOTICE}` : body, linearSessionId, ...(delegation ? { comment: true as const } : {}), ...(plan ? { plan: true as const } : {}) });
+  out.effects.unshift({ kind: 'ack', body, linearSessionId, ...(delegation ? { comment: true as const } : {}), ...(plan ? { plan: true as const } : {}) });
 }
 
-/** Said to whoever left a secret in a message: masked here, it stays in Linear (ORC-180). */
-const MASKED_NOTICE = 'Votre message contenait un secret : il est masqué côté usine, mais reste visible dans Linear. Révoquez-le et supprimez-le du message.';
+/**
+ * Said to whoever left a secret in a message: masked here, it stays in Linear (ORC-180). With the ack; with no ack to
+ * carry it (a refusal, a command, a `/refreeze`), on its own.
+ */
+function noticeMasked(out: Decision, event: FactoryEvent): void {
+  const { masked, linearSessionId } = event.payload as { masked?: true; linearSessionId?: string };
+  if (!masked || !linearSessionId) return;
+  const notice = 'Votre message contenait un secret : il est masqué côté usine, mais reste visible dans Linear. Révoquez-le et supprimez-le du message.';
+  const ack = out.effects.find((e) => e.kind === 'ack');
+  if (ack) ack.body = `${ack.body} ${notice}`;
+  else out.effects.push({ kind: 'activity', type: 'response', body: notice, linearSessionId });
+}
 
 /** The sign of life of a message (ORC-180): what will come of it, as this decision has it. */
 function messageAck(out: Decision, state: TicketState | undefined): string {
   if (out.events.some((e) => e.type === 'ticket.unblocked')) return 'Noté, je reprends.';
   if (out.effects.some((e) => e.kind === 'start_run' && e.input === 'thread')) return 'Noté, je regarde et je réponds ici.';
-  if (state?.logical === 'done' || state?.prState === 'MERGED') return 'Noté, mais ce ticket est livré : aucune étape ne le reprendra.';
+  if (state && settledTicket(state) === 'delivered') return 'Noté, mais ce ticket est livré : aucune étape ne le reprendra.';
   return 'Noté, pris en compte à la prochaine étape.';
 }
 
@@ -786,9 +813,7 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
     out.effects.push(blockedLabelChange(true, false)!);
   }
   acknowledge(out, event, state);
-  // No ack to carry it (a refusal, a command, a `/refreeze`): its author hears of it all the same.
-  const { masked, linearSessionId } = event.payload as { masked?: true; linearSessionId?: string };
-  if (masked && linearSessionId && !out.effects.some((e) => e.kind === 'ack')) out.effects.push({ kind: 'activity', type: 'response', body: MASKED_NOTICE, linearSessionId });
+  noticeMasked(out, event);
   return out;
 }
 
@@ -844,6 +869,7 @@ function unrouted(state: TicketState | undefined, event: FactoryEvent, matrix: A
   // Kept for the run that follows the choice (I6), if the matrix would have let it in: nothing is refused here.
   if ((event.type === 'session.prompted' || event.type === 'session.mentioned' || event.type === 'command') && event.payload.kind) {
     const asked = event.type === 'session.prompted' ? ({ action: 'answer_clarify', channel: 'linear_session' } as const) : ({ action: 'trigger', channel: 'linear' } as const);
+    // As `authorize` reads it, its refusal left out: nothing is refused here.
     if (event.roles === undefined || allowed(asked, event.actor, state, matrix, event.roles).ok) keepMessage(out, event, 'thread');
   }
   // A team with no repo has no choice to ask for.
@@ -1191,14 +1217,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
     }
     case 'session.stopped': {
       const sessionId = event.payload.linearSessionId;
-      if (isQuestionSession(ticket, sessionId)) {
-        out.trace.push('built-in session.stopped (question session)');
-        out.effects.push(
-          { kind: 'stop_run', linearSessionId: sessionId },
-          { kind: 'activity', type: 'response', body: 'Arrêté.', linearSessionId: sessionId },
-        );
-        return out;
-      }
+      if (isQuestionSession(ticket, sessionId)) return stopQuestion(out, sessionId!);
       break;
     }
     case 'session.mentioned':
@@ -1206,21 +1225,20 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       if (event.payload.kind && ticket) {
         const order = event.payload.kind === 'instruction' && ticket.delegated;
         keepMessage(out, event, order ? 'session' : 'thread');
-        if (event.payload.kind === 'command') return factoryCommand(out, event, state, ticket, workflow, matrix);
+        if (event.payload.kind === 'command') return factoryCommand(out, event, ticket, workflow);
         if (order) return ticket.blocked ? out : regroup(out, event, ticket, workflow);
       }
       break;
     case 'command':
-      if (event.payload.kind && ticket) keepMessage(out, event, 'session', commandText(event));
+      if (event.payload.kind && ticket) keepMessage(out, event, 'session');
       break;
     case 'session.prompted':
-      if (event.payload.kind) return classifiedReply(out, event, state, ticket, workflow, matrix);
+      if (event.payload.kind) return classifiedReply(out, event, ticket, workflow, matrix);
       if (isQuestionSession(ticket, event.payload.linearSessionId)) {
         // Only who may answer the agent may ask the answering agent a question.
         if (!authorize(out, event, ticket, 'answer_clarify', 'linear_session', matrix)) return out;
         out.trace.push('built-in session.prompted (question session)');
-        const ask = workflow.jobs['ask'];
-        if (ask) startRun(out, event, ticket, ask, { input: 'thread', inputText: event.payload.body, linearSessionId: event.payload.linearSessionId });
+        askInThread(out, event, ticket, workflow);
         return out;
       }
       // In the dev session, a reply relaunches a blocked ticket, or answers the agent; a refused one is not kept.
@@ -1231,9 +1249,8 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
     default:
       break;
   }
-  const activeJob = ticket?.activeJob;
   const rules = workflow.on[event.type] ?? [];
-  const index = rules.findIndex((r) => ruleAllowed(r, event, ticket, workflow) && ruleMatches(r, event, ticket, activeJob));
+  const index = firstRule(event.type, event, ticket, workflow);
   if (index < 0) {
     out.trace.push(`no rule for ${event.type}`);
     return out;

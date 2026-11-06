@@ -154,6 +154,19 @@ export type TimerKind = keyof TimerPayloads;
 /** A timer's kind and what it carries: what `timer.fired` brings back to `decide`. */
 export type TimerFired = { [K in TimerKind]: { kind: K; payload: TimerPayloads[K] } }[TimerKind];
 
+/** A human message in a Linear session, a mention or a reply. */
+interface SessionMessage {
+  linearSessionId: string;
+  body: string;
+  author: string;
+  issue?: IssueSnapshot;
+  ack?: true;
+  kind?: MessageKind;
+  masked?: true;
+  repos?: string[];
+  waitedIn?: string;
+}
+
 export interface EventPayloads {
   /**
    * `ack`: brought by the webhook, to acknowledge (ORC-171). `noRepo`: the Linear team no project takes: the ticket waits blocked under the first project.
@@ -167,8 +180,8 @@ export interface EventPayloads {
    * `kind`: the class of the message at its arrival, journaled so that a replay decides on the same one (ORC-180); absent on
    * rows written before, which decide as they did. `masked`: a secret was masked out of `body` before it was journaled.
    */
-  'session.mentioned': { linearSessionId: string; body: string; author: string; issue?: IssueSnapshot; ack?: true; kind?: MessageKind; masked?: true; repos?: string[]; waitedIn?: string };
-  'session.prompted': { linearSessionId: string; body: string; author: string; issue?: IssueSnapshot; ack?: true; kind?: MessageKind; masked?: true; repos?: string[]; waitedIn?: string };
+  'session.mentioned': SessionMessage;
+  'session.prompted': SessionMessage;
   'session.stopped': { linearSessionId?: string; repos?: string[]; waitedIn?: string };
   /** `cancelled`: the new status is of type canceled in Linear (ORC-170). */
   'status.changed': { from: LogicalState | null; to: LogicalState | null; cancelled?: true };
@@ -442,15 +455,15 @@ export interface TicketState {
  * human inbox was `pendingFeedback`. Same items: only the name changes, and only in the ticket; no event carries it, so no
  * event changes version. What it holds is not looked at: a corrupt one stays corrupt, its decision dead-letters as before.
  */
-export function upcastTicket<T extends object>(stored: T): Omit<T, 'pendingFeedback'> & Pick<TicketState, 'humanInbox'> {
-  if (!('pendingFeedback' in stored)) return stored as unknown as Omit<T, 'pendingFeedback'> & Pick<TicketState, 'humanInbox'>;
+export function upcastTicket(stored: object): TicketState {
+  if (!('pendingFeedback' in stored)) return stored as TicketState;
   const { pendingFeedback, ...rest } = stored;
-  return { ...rest, humanInbox: pendingFeedback } as unknown as Omit<T, 'pendingFeedback'> & Pick<TicketState, 'humanInbox'>;
+  return { ...rest, humanInbox: pendingFeedback } as TicketState;
 }
 
 /** Fills fields added after a row was first persisted. */
 export function normalizeTicket(stored: TicketState): TicketState {
-  const t = upcastTicket(stored) as TicketState;
+  const t = upcastTicket(stored);
   return { ...t, delegated: t.delegated ?? false, questionSessionIds: t.questionSessionIds ?? [], ciFixAttempts: t.ciFixAttempts ?? 0 };
 }
 

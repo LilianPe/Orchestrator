@@ -1,6 +1,6 @@
 import type { Workflow } from '../config/workflow-schema.js';
 import { NO_PLAN, planDecision } from '../core/decision-plan.js';
-import { SCHEMA_VERSION, upcastTicket, type FactoryEvent, type TicketState } from '../core/types.js';
+import { SCHEMA_VERSION, upcastTicket, type FactoryEvent } from '../core/types.js';
 import { upcast, upcastTimer, type StoredTimer } from '../core/upcast.js';
 import type { DecisionPlan, DecisionRecord, JournalEntry, Store } from '../store/types.js';
 import { canonical } from './workflow-version.js';
@@ -119,7 +119,7 @@ function rerun(event: FactoryEvent, decision: DecisionRecord, journal: ExportedJ
   if (!definition) throw new Error(`workflow version ${decision.workflowHash} is not in the journal`);
   return planDecision({
     event,
-    known: decision.before && (upcastTicket(decision.before) as TicketState),
+    known: decision.before && upcastTicket(decision.before),
     workflow: definition as Workflow,
     // What-if keeps the recorded hash: the ticket stays frozen on its version, only the definition changes.
     hash: decision.workflowHash,

@@ -17,7 +17,7 @@ const ACTION = new RegExp(
     'remplace', 'renomme', 'renommer', 'deplace', 'mets', 'utilise', 'garde', 'fais', 'refais', 'teste', 'verifie', 'relance', 'annule', 'il faut', "n'oublie pas", 'pense a', 'ne touche pas',
     'fix', 'add', 'remove', 'delete', 'replace', 'rename', 'move', 'use', 'keep', 'update', 'revert', 'make',
   ].join('|')})(?![\\p{L}\\p{N}])`,
-  'iu',
+  'u',
 );
 
 /**
@@ -36,6 +36,9 @@ export function classifyMessage(body: string): MessageKind {
 }
 
 /** What of the human inbox a run reads: a command is answered by the factory, nothing is left of it for an agent. */
+/** A message classified at its arrival, that the factory did not answer itself. */
+const classified = (i: FeedbackItem): boolean => i.kind !== undefined && i.kind !== 'command';
+
 export function forAgent(items: readonly FeedbackItem[]): FeedbackItem[] {
   return items.filter((i) => i.kind !== 'command');
 }
@@ -46,7 +49,7 @@ export function forAgent(items: readonly FeedbackItem[]): FeedbackItem[] {
  * before ORC-180: the debounce relays it, as it did.
  */
 export function awaitsAgent(items: readonly FeedbackItem[]): boolean {
-  return items.some((i) => i.kind !== undefined && i.kind !== 'command' && i.source === 'session');
+  return items.some((i) => classified(i) && i.source === 'session');
 }
 
 /**
@@ -54,5 +57,5 @@ export function awaitsAgent(items: readonly FeedbackItem[]): boolean {
  * Nothing without a classified message, so that what was written before ORC-180 goes on waiting for its debounce.
  */
 export function carriedAtLaunch(items: readonly FeedbackItem[]): FeedbackItem[] {
-  return items.some((i) => i.kind !== undefined && i.kind !== 'command') ? forAgent(items) : [];
+  return items.some(classified) ? forAgent(items) : [];
 }

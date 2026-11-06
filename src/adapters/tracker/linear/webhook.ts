@@ -129,8 +129,7 @@ function sessionEvents(body: any, author: string, projectId: string, ctx: MapCon
     const command = parseCommand(text);
     // `/refreeze` is the factory's own (ORC-131), not a workflow rule's.
     if ([REFREEZE, ...ctx.commands(projectId)].includes(command.name)) {
-      const { body: said, masked } = message(command.body);
-      return [{ type: 'command', payload: { ...command, body: said, ...(masked ? { masked } : {}), linearSessionId: sessionId, author, ack: true, kind: 'command' } }];
+      return [{ type: 'command', payload: { ...command, ...message(command.body), linearSessionId: sessionId, author, ack: true, kind: 'command' } }];
     }
     const said = message(text);
     return [{ type: 'session.mentioned', payload: { ...said, linearSessionId: sessionId, author, ack: true, kind: classifyMessage(said.body) } }];
@@ -142,9 +141,10 @@ function sessionEvents(body: any, author: string, projectId: string, ctx: MapCon
     const command = parseCommand(stripMention(reply));
     if (command.name === REFREEZE) return [{ type: 'command', payload: { ...command, ...message(command.body), linearSessionId: sessionId, author, kind: 'command' } }];
     const said = message(reply);
-    const kind = classifyMessage(stripMention(said.body));
+    const bare = stripMention(said.body);
+    const kind = classifyMessage(bare);
     // A command is read by its first word: without the mention it may open with.
-    return [{ type: 'session.prompted', payload: { ...said, body: kind === 'command' ? stripMention(said.body) : said.body, linearSessionId: sessionId, author, ack: true, kind } }];
+    return [{ type: 'session.prompted', payload: { ...said, body: kind === 'command' ? bare : said.body, linearSessionId: sessionId, author, ack: true, kind } }];
   }
   return [];
 }
