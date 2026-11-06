@@ -222,7 +222,6 @@ describe('decide — the regrouping ends (ORC-180)', () => {
 
 describe('decide — a step ends with messages waiting (ORC-180)', () => {
   const run = 'r1';
-  const finished = ev('run.finished', { runId: run, job: 'review', outcome: 'success', costUsd: 0, turns: 1, lastText: '' });
   const inReview = (patch: Partial<TicketState>) => ticket({ logical: 'ai_review', activeRunId: run, activeJob: 'review', ...patch });
 
   // `review` verifies once something is frozen or it has repo checks: its success goes through its check, then publishes.
