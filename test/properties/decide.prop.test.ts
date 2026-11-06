@@ -330,7 +330,7 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
       }
     };
     const ciBound = wf.limits.ciFixAttempts;
-    const CI_RESETS: EventType[] = ['pr.checks_passed', 'pr.opened', 'session.prompted', 'label.changed', 'status.changed', 'ticket.delegated'];
+    const CI_RESETS: EventType[] = ['pr.checks_passed', 'pr.opened', 'session.prompted', 'ticket.commented', 'label.changed', 'status.changed', 'ticket.delegated'];
     const redCiCounterexample = seq(
       ...delegated(),
       ext('status.changed', { from: 'todo', to: 'human_review' }),
@@ -584,7 +584,7 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
             if (relaunched && e.type === 'run.lost') expect(recent.length).toBeLessThan(CUT_RELAUNCHES);
             if (relaunched && e.type === 'verify.lost') expect(recent.length).toBeLessThan(CUT_RELAUNCHES);
             const reset = step.decision.events.some((x) => x.type === 'ticket.patched' && x.patch.cutRelaunches?.length === 0);
-            if (reset) expect(['session.prompted', 'label.changed', 'status.changed', 'ticket.delegated']).toContain(e.type);
+            if (reset) expect(['session.prompted', 'ticket.commented', 'label.changed', 'status.changed', 'ticket.delegated']).toContain(e.type);
           }
         });
       },

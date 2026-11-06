@@ -26,6 +26,17 @@ export interface BlockStatus {
   durationMs?: number | undefined;
 }
 
+/** The closed question of a block that no one asked: the common one, the reply being the instruction if there is any. */
+const REDO = "Je reprends l'étape telle quelle (répondez « oui ») ou avec une consigne (écrivez-la) ?";
+
+/**
+ * The fields of a block. `attempts`: the counter the block is the end of, so its last attempt as well as its bound; a
+ * step no counter sends back had one try.
+ */
+export function blockFacts({ reason, step, tried, attempts = 1, question = REDO }: Pick<BlockFacts, 'reason' | 'step' | 'tried'> & { attempts?: number; question?: string }): BlockFacts {
+  return { step, attempt: attempts, max: attempts, reason, tried, question };
+}
+
 const CI: Record<NonNullable<TicketState['prChecks']>, string> = { pending: 'en cours', pass: 'verte', fail: 'rouge', none: 'aucune' };
 const MAX_TRIED = 5;
 const SHORT_SHA = 12;

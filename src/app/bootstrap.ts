@@ -334,8 +334,6 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       clock,
       submit: accept,
       isPaused: () => orchestrator.isPaused(),
-      blockTicket: (projectId, ticketId, reason) => orchestrator.blockTicket(projectId, ticketId, reason),
-      askQuestion: (run, reason, question) => orchestrator.askQuestion(run, reason, question),
       linearWebhook: ingest,
       githubWebhook: githubIngest,
       linearConnected: () => !!trackerSwitch.current,

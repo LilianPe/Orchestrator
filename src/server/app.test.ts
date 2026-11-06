@@ -3,7 +3,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { FakeTracker } from '../adapters/tracker/fake.js';
-import { blockCause } from '../core/block-cause.js';
 import { EventBus } from '../core/bus.js';
 import { FakeClock } from '../core/clock.js';
 import { newTicketState, TRUSTED, type FactoryEvent } from '../core/types.js';
@@ -23,10 +22,8 @@ async function setup(extra: { uiPassword?: string } = {}) {
   writeFileSync(join(webDir, 'index.html'), '<h1>Factory</h1>');
   const linearWebhook = vi.fn(() => ({ status: 200 }));
   const githubWebhook = vi.fn(async () => ({ status: 401 }));
-  const blockTicket = vi.fn(async (_p: string, _t: string, _reason: string) => {});
-  const askQuestion = vi.fn(async (_run: unknown, _reason: string, _question: string) => {});
   const app = createApp({
-    store, bus, clock: new FakeClock(10), submit: (e) => void submitted.push(e), isPaused: () => false, linearWebhook, githubWebhook, blockTicket, askQuestion,
+    store, bus, clock: new FakeClock(10), submit: (e) => void submitted.push(e), isPaused: () => false, linearWebhook, githubWebhook,
     linearConnected: () => true, tracker, capacity: () => ({ dev: { used: 1, total: 3 }, questions: { used: 0, total: 2 } }),
     transcriptsDir, webDir, ...extra,
   });
@@ -35,7 +32,7 @@ async function setup(extra: { uiPassword?: string } = {}) {
     id: 'r1', projectId: 'p', ticketId: 'REL-1', job: 'dev', queue: 'dev', status: 'running', claudeSessionId: 'c', linearSessionId: 'ls-1',
     startedAt: 1, costUsd: 0.5, turns: 2, lastText: '', token: 'tok', cwd: '/w',
   });
-  return { app, store, bus, tracker, submitted, linearWebhook, githubWebhook, blockTicket, askQuestion, transcriptsDir, webDir };
+  return { app, store, bus, tracker, submitted, linearWebhook, githubWebhook, transcriptsDir, webDir };
 }
 
 describe('server', () => {
@@ -90,12 +87,6 @@ describe('server', () => {
       expect(body.working).toEqual([expect.objectContaining({ runId: 'r1', tokens: null })]);
       expect(body.needsYou.blocked).toHaveLength(1);
       expect(logs).toEqual([expect.stringContaining('journal illisible')]);
-    });
-
-    it('names the cause of the block an agent asks for', async () => {
-      const { app, blockTicket } = await setup();
-      await app.request('/agent/ask', { method: 'POST', headers: { authorization: 'Bearer tok' }, body: JSON.stringify({ text: 'Laquelle ?' }) });
-      expect(blockCause(blockTicket.mock.calls[0]![2])).toBe('question');
     });
 
     it('asks for the password, as the other routes of the interface', async () => {
@@ -176,33 +167,12 @@ describe('server', () => {
     }
   });
 
-  it('agent ask blocks the ticket through the orchestrator, which tells the question', async () => {
-    const { app, askQuestion, blockTicket } = await setup();
+  it('agent ask journals the question, and tells nothing itself: `decide` blocks and the outbox writes it', async () => {
+    const { app, tracker, submitted } = await setup();
     const res = await app.request('/agent/ask', { method: 'POST', headers: { authorization: 'Bearer tok', 'content-type': 'application/json' }, body: JSON.stringify({ text: 'Quelle base ?' }) });
     expect(res.status).toBe(200);
-    expect(askQuestion).toHaveBeenCalledWith(expect.objectContaining({ ticketId: 'REL-1' }), "Question posée par l'agent", 'Quelle base ?');
-    expect(blockTicket).toHaveBeenCalledWith('p', 'REL-1', "Question posée par l'agent");
-  });
-
-  it('agent ask reports a question it could not tell, and blocks nothing', async () => {
-    const { app, askQuestion, blockTicket } = await setup();
-    askQuestion.mockRejectedValueOnce(new Error('Linear down'));
-    const res = await app.request('/agent/ask', { method: 'POST', headers: { authorization: 'Bearer tok', 'content-type': 'application/json' }, body: JSON.stringify({ text: 'Quelle base ?' }) });
-    expect(res.status).toBe(500);
-    expect(blockTicket).not.toHaveBeenCalled();
-  });
-
-  it('agent ask answers without waiting for the block, and reports a failed one', async () => {
-    const { app, blockTicket, bus } = await setup();
-    let fail!: (err: Error) => void;
-    blockTicket.mockImplementation(() => new Promise((_resolve, reject) => (fail = reject)));
-    const logs: string[] = [];
-    bus.subscribe((m) => m.kind === 'log' && logs.push(m.message));
-    const res = await app.request('/agent/ask', { method: 'POST', headers: { authorization: 'Bearer tok', 'content-type': 'application/json' }, body: JSON.stringify({ text: 'Quelle base ?' }) });
-    expect(res.status).toBe(200);
-    fail(new Error('store down'));
-    await new Promise((r) => setImmediate(r));
-    expect(logs).toEqual(['ask REL-1: store down']);
+    expect(submitted).toEqual([expect.objectContaining({ type: 'agent.asked', projectId: 'p', ticketId: 'REL-1', payload: { question: 'Quelle base ?', job: expect.any(String) } })]);
+    expect(tracker.activities('ls-1')).toEqual([]);
   });
 
   it('returns a transcript and serves the UI', async () => {
@@ -288,11 +258,10 @@ describe('server', () => {
       expect(await store.getMeta('agent-output:r1')).toBeUndefined();
     });
 
-    it('ask blocks the ticket with the question, like /agent/ask', async () => {
-      const { app, askQuestion, blockTicket } = await setup();
+    it('ask journals the question, like /agent/ask', async () => {
+      const { app, submitted } = await setup();
       expect((await call(app, 'ask', { text: 'Quelle base ?' })).isError).toBeUndefined();
-      expect(askQuestion).toHaveBeenCalledWith(expect.objectContaining({ ticketId: 'REL-1' }), "Question posée par l'agent", 'Quelle base ?');
-      expect(blockTicket).toHaveBeenCalledWith('p', 'REL-1', "Question posée par l'agent");
+      expect(submitted).toEqual([expect.objectContaining({ type: 'agent.asked', payload: expect.objectContaining({ question: 'Quelle base ?' }) })]);
       expect((await call(app, 'ask', {})).isError).toBe(true);
     });
 

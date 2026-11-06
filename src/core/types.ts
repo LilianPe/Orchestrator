@@ -26,6 +26,9 @@ export interface TokenUsage {
 
 export const NO_TOKENS: TokenUsage = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 };
 
+/** What a token cap counts: what the model read anew and wrote. A cache read costs next to nothing, and grows with each turn. */
+export const spentTokens = (u: TokenUsage): number => u.input + u.output + u.cacheCreation;
+
 export function addTokens(a: TokenUsage, b: TokenUsage): TokenUsage {
   return { input: a.input + b.input, output: a.output + b.output, cacheRead: a.cacheRead + b.cacheRead, cacheCreation: a.cacheCreation + b.cacheCreation };
 }
@@ -159,6 +162,11 @@ export interface EventPayloads {
   'session.mentioned': { linearSessionId: string; body: string; author: string; issue?: IssueSnapshot; ack?: true; repos?: string[]; waitedIn?: string };
   'session.prompted': { linearSessionId: string; body: string; author: string; issue?: IssueSnapshot; repos?: string[]; waitedIn?: string };
   'session.stopped': { linearSessionId?: string; repos?: string[]; waitedIn?: string };
+  /**
+   * The agent's question through `/agent/ask` (ORC-196), journaled when it asks: told once the block is committed, by
+   * the same comment as any block, so that a reply always finds it. `job`: the job of the run that asks.
+   */
+  'agent.asked': { question: string; job: string };
   /** A human's comment on the ticket, out of any session (ORC-196): the reply to a block's comment. Decided only while the ticket is blocked. */
   'ticket.commented': { body: string; author: string };
   /** `cancelled`: the new status is of type canceled in Linear (ORC-170). */

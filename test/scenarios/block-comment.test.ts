@@ -76,9 +76,7 @@ describe('the question of an agent through `/agent/ask` (ORC-196)', () => {
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Exporter les audits en CSV depuis la liste des audits.' });
     h.runner.enqueue({ hold: true });
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
-    const run = (await h.store.getRun((await h.ticket()).activeRunId!))!;
-    await h.orch.askQuestion(run, "Question posée par l'agent", 'Quel séparateur ?');
-    await h.orch.blockTicket('p', 'REL-1', "Question posée par l'agent");
+    await h.send('agent.asked', { question: 'Quel séparateur ?', job: 'dev' });
     expect(h.tracker.comments('REL-1').at(-1)).toContain('Question : Quel séparateur ?');
     expect(await h.ticket()).toMatchObject({ blocked: true, blockedJob: 'dev' });
     await h.send('ticket.commented', { body: 'Le point-virgule.', author: 'Lilian' });

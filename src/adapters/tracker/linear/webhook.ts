@@ -63,6 +63,9 @@ export interface SignedActor {
 
 const idOf = (v: unknown): string | undefined => (typeof v === 'string' && v !== '' ? v : undefined);
 
+/** Came through a bot or from outside the workspace: Slack, email, customer requests. */
+const isExternal = (o: any): boolean => !!(o?.botActor || o?.externalUser || o?.externalUserId);
+
 /** Who wrote what a session webhook carries: the reply, the comment that opened the session, or its creator. */
 function sessionAuthor(body: any): { id?: string; name?: string; external: boolean } {
   const s = body.agentSession ?? {};
@@ -73,7 +76,7 @@ function sessionAuthor(body: any): { id?: string; name?: string; external: boole
         ? [s.comment, idOf(s.comment.user?.id) ?? idOf(s.comment.userId)]
         : [s, idOf(s.creator?.id) ?? idOf(s.creatorId)];
   const name = obj?.user?.name ?? obj?.creator?.name;
-  return { id, name, external: !!(obj?.botActor || obj?.externalUser || obj?.externalUserId) };
+  return { id, name, external: isExternal(obj) };
 }
 
 /**
@@ -93,7 +96,7 @@ export function signedActor(body: any): SignedActor {
     name = a.name;
   } else {
     // A comment synced from Slack or email names a workspace user no more than a session's does.
-    const external = body?.type === 'Comment' && !!(body.data?.botActor || body.data?.externalUser || body.data?.externalUserId);
+    const external = body?.type === 'Comment' && isExternal(body.data);
     id = body?.actor?.type === 'user' && !external ? idOf(body.actor.id) : undefined;
     name = body?.actor?.name;
   }
@@ -147,7 +150,8 @@ async function commentEvents(body: any, identifier: string, projectId: string, a
   if (body.action !== 'create' || !actor || typeof text !== 'string' || !text.trim() || isEffectComment(text)) return [];
   const bare = stripMention(text);
   if (bare !== text.trim() || parseCommand(bare).name === REFREEZE) return [];
-  if (!(await ctx.ticket(projectId, identifier))?.blocked) return [];
+  const ticket = await ctx.ticket(projectId, identifier);
+  if (!ticket?.blocked || !ticket.delegated) return [];
   return [{ type: 'ticket.commented', payload: { body: text, author } }];
 }
 

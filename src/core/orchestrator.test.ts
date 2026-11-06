@@ -92,27 +92,6 @@ describe('Orchestrator', () => {
     expect(await store.pendingInbox(10)).toEqual([]);
   });
 
-  it('blocks a ticket from outside an event only after the event in flight, never over it', async () => {
-    const { store, tracker, orch } = setup();
-    tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
-    let release!: () => void;
-    const gate = new Promise<void>((r) => (release = r));
-    const getIssue = tracker.getIssue.bind(tracker);
-    tracker.getIssue = async (id: string) => (await gate, getIssue(id));
-    let blocked = false;
-    await orch.accept(delegated());
-    const block = orch.blockTicket('p', 'REL-1', "Question posée par l'agent").then(() => void (blocked = true));
-    await new Promise((r) => setTimeout(r, 10));
-    // The delegation waits for the tracker: the block waits behind it, in the ticket's task.
-    expect(blocked).toBe(false);
-    expect(await store.getTicket('p', 'REL-1')).toBeUndefined();
-    release();
-    await block;
-    await orch.drained();
-    // Applied after the delegation created the ticket: on top of it, not lost before it.
-    expect(await store.getTicket('p', 'REL-1')).toMatchObject({ delegated: true, blocked: true, blockReason: "Question posée par l'agent" });
-  });
-
   it('marks its own move as an echo under the key the webhook and the reconciliation look up', async () => {
     const { store, tracker, orch } = setup();
     tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });

@@ -108,6 +108,25 @@ describe('a block posts the standard comment (ORC-196)', () => {
   });
 });
 
+describe('the question of the agent, journaled (ORC-196)', () => {
+  const asked = ev('agent.asked', { question: 'Laquelle ?', job: 'dev' });
+
+  it('blocks with the cause « question », the job at work to resume, the question in the comment', () => {
+    const out = decide(ticket(), asked, workflow);
+    expect(out.events).toEqual([{ type: 'ticket.blocked', reason: "Question posée par l'agent", job: 'dev' }]);
+    expect(blockCause("Question posée par l'agent")).toBe('question');
+    expect(notice(out)?.block).toMatchObject({ step: 'build', question: 'Laquelle ?' });
+  });
+
+  it('a question run has no job of the ticket to resume', () => {
+    expect(decide(ticket({ activeRunId: undefined, activeJob: undefined }), ev('agent.asked', { question: 'Q', job: 'ask' }), workflow).events).toEqual([{ type: 'ticket.blocked', reason: "Question posée par l'agent" }]);
+  });
+
+  it('a frozen version posts what it did', () => {
+    expect(decide(ticket(), asked, frozen).effects[0]).toEqual({ kind: 'activity', type: 'elicitation', body: 'Laquelle ?' });
+  });
+});
+
 describe('versions frozen before it decide bit for bit as they did', () => {
   it('the run\'s cap: the elicitation, no comment, no job on the event', () => {
     const out = decide(ticket(), finished(), frozen);

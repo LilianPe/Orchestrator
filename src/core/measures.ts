@@ -182,8 +182,9 @@ function outputs(facts: MeasureFacts, events: FactoryEvent[], devSession: string
   return out.sort((a, b) => a.at - b.at);
 }
 
-function messageMeasure(m: Message, kind: MessageKind, outs: Output[], ack: number | undefined): MessageMeasure {
-  const session = (m.payload as { linearSessionId?: string }).linearSessionId;
+function messageMeasure(m: Message, kind: MessageKind, outs: Output[], ack: number | undefined, devSession: string | undefined): MessageMeasure {
+  // A comment has no session of its own: its sign of life is in the dev session, as a block's comment answers there.
+  const session = m.type === 'ticket.commented' ? devSession : m.payload.linearSessionId;
   const after = outs.filter((o) => o.session === session && o.at >= m.at);
   const signs = [ack, after[0]?.at].filter((t): t is number => t !== undefined);
   const answered =
@@ -212,7 +213,7 @@ function redVerdicts(events: FactoryEvent[]): TicketMeasures['red'] {
 const HANDED_OVER = new Set<LogicalState>(['human_review', 'ai_review', 'ready', 'done']);
 
 /** The rework an event of the journal is, if any; `ticket` is the ticket once the event applied. */
-function rework(e: FactoryEvent, ticket: TicketState): Rework | undefined {
+function rework(e: FactoryEvent, ticket: TicketState, relaunched: ReadonlySet<string>): Rework | undefined {
   switch (e.type) {
     case 'verify.failed':
       return e.payload.red ? undefined : { cause: e.type, id: e.id };
@@ -221,6 +222,9 @@ function rework(e: FactoryEvent, ticket: TicketState): Rework | undefined {
       return { cause: e.type, id: e.id };
     case 'session.prompted':
       return isQuestionSession(ticket, e.payload.linearSessionId) ? undefined : { cause: 'feedback', id: e.id };
+    // A comment is a reply only if it relaunched the ticket: the fold of the journal does not see its blocks (ORC-196).
+    case 'ticket.commented':
+      return relaunched.has(e.id) ? { cause: 'feedback', id: e.id } : undefined;
     case 'pr.reviewed':
       return e.payload.kind === 'review' && e.payload.state?.toLowerCase() === 'changes_requested' ? { cause: 'changes_requested', id: e.id } : undefined;
     case 'status.changed':
@@ -253,12 +257,10 @@ export function ticketMeasures(projectId: string, ticketId: string, facts: Measu
         mergedAt = e.at;
         firstMerge = e;
       }
-      // A comment is a reply only if it relaunched the ticket: the fold of the journal does not see its blocks (ORC-196).
-      const r = e.type === 'ticket.commented' ? (relaunched.has(e.id) ? { cause: 'feedback' as const, id: e.id } : undefined) : rework(e, ticket);
+      const r = rework(e, ticket, relaunched);
       if (r) reworks.push(r);
     }
-    // A comment has no session of its own: its sign of life is in the dev session, as a block's comment answers there.
-    if (e.type === 'ticket.commented') messages.push({ m: { ...e, payload: { ...e.payload, linearSessionId: ticket.linearSessionId } } as Message, kind: 'instruction' });
+    if (e.type === 'ticket.commented') messages.push({ m: e, kind: 'instruction' });
     else if (e.type === 'session.prompted') messages.push({ m: e, kind: isQuestionSession(ticket, e.payload.linearSessionId) ? 'question' : 'instruction' });
     else if (e.type in KIND) messages.push({ m: e as Message, kind: KIND[e.type as keyof typeof KIND] });
   }
@@ -278,7 +280,7 @@ export function ticketMeasures(projectId: string, ticketId: string, facts: Measu
     revertedWithin14Days: revertedWithin14Days(events, mergedAt),
     revertWindowEndsAt: firstMerge ? mergeTime(firstMerge) + REVERT_WINDOW_MS : null,
     ciCost: ciCost(events),
-    messages: messages.map(({ m, kind }) => messageMeasure(m, kind, outs, facts.acks[m.id])),
+    messages: messages.map(({ m, kind }) => messageMeasure(m, kind, outs, facts.acks[m.id], ticket.linearSessionId)),
     red: redVerdicts(events),
   };
 }

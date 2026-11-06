@@ -97,6 +97,7 @@ const PAYLOADS: { [K in EventType]: fc.Arbitrary<EventPayloads[K]> } = {
   'session.mentioned': fc.record({ linearSessionId: session, body, author, issue }),
   'session.prompted': fc.record({ linearSessionId: session, body, author, issue }),
   'ticket.commented': fc.record({ body, author }),
+  'agent.asked': fc.record({ question: body, job: fc.constantFrom('dev', 'dev-feedback') }),
   'session.stopped': fc.record({ linearSessionId: fc.option(session, { nil: undefined }) }),
   'status.changed': fc.record({ from: fc.option(logical, { nil: null }), to: fc.option(logical, { nil: null }) }),
   'label.changed': fc.record({ label: fc.constantFrom('agent:reprendre', 'agent:stop', 'bug'), change: fc.constantFrom('added' as const, 'removed' as const) }),
