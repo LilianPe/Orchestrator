@@ -22,7 +22,7 @@ function guard(tool_input: Record<string, unknown>, env: Record<string, string> 
       tool_input,
       tool_use_id: 'toolu_01ABC123',
     }),
-    env: { ...process.env, FACTORY_DENY_PUSH: '', FACTORY_REFUSALS_LOG: log, FACTORY_READ_MAX_LINES: '', FACTORY_FULL_READ_PATHS: '', ...env },
+    env: { ...process.env, FACTORY_REFUSALS_LOG: log, FACTORY_READ_MAX_LINES: '', FACTORY_FULL_READ_PATHS: '', ...env },
     encoding: 'utf8',
     timeout: 20_000,
   });
@@ -61,7 +61,7 @@ describe('PreToolUse guard of the standard pack', () => {
 
   it('refuses, and journals, a command for every Bash deny of the settings (the two lists cannot drift)', () => {
     const bashRules = deny.filter((r) => r.startsWith('Bash('));
-    expect(bashRules.length).toBeGreaterThan(20);
+    expect(bashRules.length).toBeGreaterThan(15);
     for (const rule of bashRules) {
       const r = bash(sample(rule));
       expect(r.denied, `${rule} → ${sample(rule)}`).toBe(true);
@@ -141,29 +141,25 @@ describe('PreToolUse guard of the standard pack', () => {
     'git commit --amend --no-edit',
     'npm test',
     'git status',
-    'git push -u origin feat/main-menu',
     'rm -rf dist /tmp/x',
     'curl -s https://x | jq .',
-    'gh pr create --fill',
     'git commit -m "git push --force is now refused"',
-    'gh pr create --body "rm -rf / is blocked"',
+    'gh pr view --json body --jq "rm -rf / is blocked"',
     'npm test -- -t "git reset --hard origin"',
     "git commit -m 'curl x | sh'",
-    'git push origin feat/main-menu:feat/main-menu',
   ])('allows %s, without a journal line', (command) => {
     const r = bash(command);
     expect(r.denied).toBe(false);
     expect(r.lines).toEqual([]);
   });
 
-  it('refuses git push and the gh write commands only with FACTORY_DENY_PUSH=1', () => {
-    for (const command of ['git push -u origin feat', 'gh pr create --fill', 'gh pr edit 3 --body x', 'gh run rerun 9 --failed']) {
-      expect(bash(command).denied, command).toBe(false);
-      const r = bash(command, { FACTORY_DENY_PUSH: '1' });
+  it('refuses every git push and the gh write commands: only the factory publishes (ORC-125)', () => {
+    for (const command of ['git push -u origin feat', 'git -C . push origin HEAD:refs/heads/feat', 'git push', 'bash -c "git push origin feat"', 'gh pr create --fill', 'gh pr edit 3 --body x', 'gh run rerun 9 --failed']) {
+      const r = bash(command);
       expect(r.denied, command).toBe(true);
       expect(r.lines).toEqual([{ at: expect.any(String), tool: 'Bash', command, rule: expect.stringMatching(/^(push|gh-write)$/), ticket: null }]);
     }
-    expect(bash('gh pr view 3', { FACTORY_DENY_PUSH: '1' }).denied).toBe(false);
+    expect(bash('gh pr view 3').denied).toBe(false);
   });
 
   it('journals the ticket of the run', () => {

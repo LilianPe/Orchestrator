@@ -56,6 +56,19 @@ export const SCENARIOS: Record<string, { preset?: TestPreset; authz?: HarnessAut
       await h.advance(180_000);
     },
   },
+  /** The factory's publication (ORC-125): a refusal blocks the ticket, a relaunch publishes the next green commit, then Human Review. */
+  'publish-refused-then-published': {
+    run: async (h) => {
+      const worktree = '/tmp/factory-fake/p/REL-1';
+      h.workspaces.heads.set(worktree, 'aaa111');
+      h.publisher.refuseNext('moved', "la branche porte un commit que ce travail n'a pas");
+      await delegated(h);
+      h.workspaces.heads.set(worktree, 'bbb222');
+      h.runner.enqueue({ events: [{ kind: 'text', text: 'Intégré.' }] });
+      await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'intègre mon commit', author: 'Lilian' });
+      await h.advance(180_000);
+    },
+  },
   /** AI review, merge, cleanup and learn. */
   'review-merge-done': {
     run: async (h) => {

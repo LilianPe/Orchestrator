@@ -90,17 +90,19 @@ describe('Done by a human, merge by the factory (ORC-148)', () => {
     expect((await h.ticket()).reviewSha).toBe('def456');
   });
 
-  it('a review that ended on another commit than the PR\'s head records none: the next Done merges nothing', async () => {
+  it('a review that ended on another commit than the PR\'s head: its publication is refused, nothing written over and nothing merged (ORC-125)', async () => {
     const h = await inHumanReview();
     h.forge.setPr(BRANCH, { ...PR, state: 'OPEN', headSha: 'def456', checks: 'pass', failedChecks: [] });
-    // The review did not bring the push into its worktree: it read abc123, the forge shows def456.
+    // The review did not bring the push into its worktree: it read abc123, the forge shows def456, which the work does not hold.
+    h.publisher.refuseNext('moved', 'la branche porte un commit que ce travail n\'a pas');
     h.runner.enqueue({ events: [{ kind: 'init', sessionId: 'y' }, { kind: 'text', text: 'Rien à redire.' }] });
     await h.send('status.changed', { from: 'human_review', to: 'done' }, 'REL-1', { actor: 'user-lilian' });
-    expect(lastMove(h)).toBe('Human Review');
-    expect((await h.ticket()).reviewSha).toBeUndefined();
-    await h.send('status.changed', { from: 'human_review', to: 'done' }, 'REL-1', { actor: 'user-lilian' });
     expect(h.forge.merges).toEqual([]);
-    expect(comments(h).at(-1)).toMatch(/aucun commit relu/);
+    const t = await h.ticket();
+    expect(t.reviewSha).toBeUndefined();
+    expect(t.blockReason).toMatch(/que ce travail n'a pas/);
+    expect((await h.forge.findPr('', BRANCH))?.headSha).toBe('def456');
+    expect(lastMove(h)).not.toBe('Human Review');
   });
 
   it('refuses to merge another PR than the ticket\'s, found on its branch', async () => {

@@ -12,6 +12,11 @@ export type Effect =
   | { kind: 'stop_run'; linearSessionId?: string }
   /** `output`: the run's validated output (ORC-289), carried to its `post_output`; absent when it submitted none. */
   | { kind: 'run_verify'; runId: string; job: string; output?: AgentOutput }
+  /**
+   * The verified commit out to the forge (ORC-125), by the factory alone, then `publish.done` or `publish.refused`. `output`: for
+   * the `post_output` the job's `on_success` writes once it is out.
+   */
+  | { kind: 'publish'; runId: string; job: string; sha: string; output?: AgentOutput }
   /** `keepReviewSha`: a move back to Human Review that concludes no work of the factory keeps the reviewed commit (ORC-148). */
   | { kind: 'move'; to: LogicalState; keepReviewSha?: true }
   | { kind: 'labels'; add: string[]; remove: string[] }

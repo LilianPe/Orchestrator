@@ -55,9 +55,13 @@ describe('standard pack', () => {
     );
   });
 
-  it('denies merge, force push and reading factory secrets', () => {
+  it('denies merge, every push, every write on the forge and reading factory secrets (ORC-125)', () => {
     const s = JSON.parse(readFileSync(join(pack, 'settings.json'), 'utf8'));
-    expect(s.permissions.deny).toEqual(expect.arrayContaining(['Bash(gh pr merge:*)', 'Bash(git push --force:*)', 'Bash(git push -f:*)', 'Read(~/.factory/**)']));
+    expect(s.permissions.deny).toEqual(expect.arrayContaining(['Bash(gh pr merge:*)', 'Bash(git push:*)', 'Bash(gh pr create:*)', 'Bash(gh pr edit:*)', 'Bash(gh run rerun:*)', 'Read(~/.factory/**)']));
+    const writes = /git push|gh pr (create|edit|merge)|gh run rerun/;
+    expect(s.permissions.allow.filter((rule: string) => writes.test(rule))).toEqual([]);
+    // A joker on a whole command line would refuse a commit message that says "push": `git -C . push` is the hook's, which reads the words.
+    expect(s.permissions.deny.filter((rule: string) => /^Bash\(git \*/.test(rule) && rule.includes('push'))).toEqual([]);
     expect(s.permissions.allow).toContain('Bash(factory-agent:*)');
   });
 
@@ -66,19 +70,11 @@ describe('standard pack', () => {
     expect(s.permissions.allow).toEqual(expect.arrayContaining(['mcp__factory__submit_result', 'mcp__factory__ask']));
   });
 
-  it('denies force pushes and pushes to the trunk written mid-command', () => {
-    const s = JSON.parse(readFileSync(join(pack, 'settings.json'), 'utf8'));
-    expect(s.permissions.deny).toEqual(
-      expect.arrayContaining([
-        'Bash(git push * --force*)',
-        'Bash(git push * -f*)',
-        'Bash(git push *+*)',
-        'Bash(git push * *:main*)',
-        'Bash(git push * *:master*)',
-        'Bash(git push * main)',
-        'Bash(git push * master)',
-      ]),
-    );
+  it('tells no skill to push or to open a PR: the factory does (ORC-125)', () => {
+    for (const name of readdirSync(join(pack, 'skills'))) {
+      const text = readFileSync(join(pack, 'skills', name, 'SKILL.md'), 'utf8');
+      expect(text, name).not.toMatch(/`[^`]*git push|gh pr (create|edit)|gh run rerun/);
+    }
   });
 
   it('denies skipping the git hooks with --no-verify or -n, grouped (-nm) or late in the command', () => {
@@ -89,7 +85,6 @@ describe('standard pack', () => {
         'Bash(git commit -n:*)',
         'Bash(git commit -n*)',
         'Bash(git commit * -n*)',
-        'Bash(git push --no-verify:*)',
         'Bash(git * --no-verify*)',
         'Bash(*--no-verify*)',
       ]),

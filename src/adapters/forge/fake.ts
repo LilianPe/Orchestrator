@@ -1,6 +1,6 @@
 import type { FeedbackItem } from '../../core/types.js';
 import type { RepoPermission, RepoPermissions } from '../roles/types.js';
-import type { CheckRunRequest, Forge, ForgeWriter, MergeResult, PrInfo, PrRequest } from './types.js';
+import type { CheckRunRequest, Forge, ForgeWriter, GitAccess, MergeResult, PrInfo, PrRequest } from './types.js';
 
 export type FakeCheckRun = CheckRunRequest & { id: number };
 
@@ -57,6 +57,22 @@ export class FakeForge implements Forge, ForgeWriter, RepoPermissions {
     this.opened.push({ ...req, number });
     this.setPr(req.branch, { number, url, state: 'OPEN', checks: 'pending', failedChecks: [] });
     return { number, url, deduplicated: false };
+  }
+
+  /** The PRs taken out of draft, in order. */
+  readied: number[] = [];
+
+  async markPrReady(_repoPath: string, number: number): Promise<void> {
+    this.answer();
+    this.readied.push(number);
+  }
+
+  /** Where the factory's git goes: a local repository in a test. */
+  gitUrl = 'https://github.test/acme/app.git';
+  gitEnv: Record<string, string> = {};
+
+  async gitAccess(): Promise<GitAccess> {
+    return { url: this.gitUrl, env: this.gitEnv };
   }
 
   /** The merges asked (ORC-148), with the head each one required. */

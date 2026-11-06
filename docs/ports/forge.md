@@ -15,11 +15,13 @@ La forge de code, en lecture : la PR d'une branche, l'état de ses checks, ses f
 
 ## Idempotence
 
-Le port `Forge` ne fait que lire. Les écritures de l'usine sont à part, dans `ForgeWriter` (même fichier, ORC-162), chacune idempotente ; elles ne sont pas encore appelées (le [Publisher](publisher.md), ORC-125, appellera `ensurePr`) et n'ont pas de suite de conformité :
+Le port `Forge` ne fait que lire. Les écritures de l'usine sont à part, dans `ForgeWriter` (même fichier, ORC-162), chacune idempotente ; elles n'ont pas de suite de conformité. Le [Publisher](publisher.md) (ORC-125) appelle `ensurePr` et `gitAccess`, le passage en *Human Review* appelle `markPrReady` :
 
 | Méthode | Ce qu'elle garantit | Rejouée |
 |---|---|---|
-| `ensurePr(repo, { branch, base, title, body })` | la PR **ouverte** de la branche, créée si la branche n'en a pas ; une PR fermée ou mergée n'est pas réutilisée | rend la même PR, `deduplicated: true` ; après une course perdue (422), relit la PR ouverte |
+| `ensurePr(repo, { branch, base, title, body, draft? })` | la PR **ouverte** de la branche, créée si la branche n'en a pas, en draft si demandé ; une PR fermée ou mergée n'est pas réutilisée | rend la même PR, `deduplicated: true` ; après une course perdue (422), relit la PR ouverte |
+| `markPrReady(repo, n)` (ORC-125) | la PR sort de draft ; la mutation GraphQL est la seule voie, l'API REST ne le permet pas | lue d'abord : une PR déjà sortie n'écrit rien |
+| `gitAccess(repo)` (ORC-125) | l'URL du dépôt et, **dans l'environnement seulement**, le jeton de l'App limité à ce dépôt, pour le git de l'usine ; jamais donné à un run | relit le jeton (son cache) |
 | `upsertCheckRun(repo, { sha, name, externalId, status, … })` | le check run du sha qui porte `externalId`, créé ou mis à jour | met à jour le même check run, `deduplicated: true` |
 | `mergePr(repo, n, sha, { unchecked? })` (ORC-148) | merge la PR seulement si sa tête est encore `sha` (GitHub le vérifie dans le même appel) ; `unchecked` (la tête n'a aucun check) : seulement dans un dépôt sans CI (tête toujours sans check, aucun workflow Actions actif du dépôt, hors workflows dynamiques de GitHub, commit de base de la PR sans check) ; un refus pour une raison à dire à l'humain est une **réponse** : `head_moved` (409), `not_mergeable` avec le message de GitHub (405), `checks_missing` (tête sans check dans un dépôt qui a une CI) ; toute autre erreur est levée, pour que l'effet soit rejoué | PR déjà mergée sur `sha` : `{ merged: true, deduplicated: true }`, aucune écriture |
 

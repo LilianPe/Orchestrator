@@ -1,12 +1,12 @@
 # GitHub
 
-Relais parle à GitHub à travers **git** et une **GitHub App d'usine**. Le démon utilise l'App quand elle est configurée ; sinon il retombe sur la CLI **`gh`** (repli de migration). Les agents continuent d'utiliser `gh` et `GH_TOKEN` tant que ORC-125 n'a pas retiré cette dépendance. Le démon suit les PR de deux façons, qui écrivent les mêmes événements dans l'inbox : les **webhooks GitHub** (`POST /webhooks/github`, dès que leur secret est configuré, voir [Webhooks GitHub](#webhooks-github)) et le **relevé** des PR toutes les 30 s, gardé jusqu'à la réconciliation GitHub (ORC-185) et son retrait (ORC-181).
+Relais parle à GitHub à travers **git** et une **GitHub App d'usine**. Le démon utilise l'App quand elle est configurée ; sinon il retombe sur la CLI **`gh`** (repli de migration). **Seule l'usine écrit sur GitHub** (ORC-125, [Publication](#publication)) : les agents commitent, et n'ont ni jeton ni réseau pour pousser. Le démon suit les PR de deux façons, qui écrivent les mêmes événements dans l'inbox : les **webhooks GitHub** (`POST /webhooks/github`, dès que leur secret est configuré, voir [Webhooks GitHub](#webhooks-github)) et le **relevé** des PR toutes les 30 s, gardé jusqu'à la réconciliation GitHub (ORC-185) et son retrait (ORC-181).
 
 ## Authentification du démon
 
 ### GitHub App (recommandé)
 
-La GitHub App est l'identité du **démon**, pas celle des agents. Elle sert à lire les PR, les checks et les fils de review sans dépendre de `GH_TOKEN` ni de la CLI `gh`.
+La GitHub App est l'identité du **démon**, pas celle des agents. Elle sert à lire les PR, les checks et les fils de review sans dépendre de `GH_TOKEN` ni de la CLI `gh`, et à publier : pousser la branche du ticket, ouvrir sa PR draft, merger.
 
 ```yaml
 # <RELAIS_HOME>/config.yaml
@@ -47,7 +47,7 @@ Une valeur de `config.yaml` l'emporte sur la variable d'environnement. Si une se
 - Le démon signe un **JWT RS256** avec la clé privée : `iss = appId`, `iat = maintenant - 60 s`, `exp = maintenant + 9 min`.
 - Il échange ce JWT contre un **jeton d'installation** : `POST /app/installations/{id}/access_tokens` avec `{ "repositories": ["<dépôt du run>"] }`. Si `installationId` n'est pas configuré, il appelle d'abord `GET /repos/{owner}/{repo}/installation`.
 - Le jeton dure **au plus 1 heure**. Il est mis en cache **par dépôt** jusqu'à son expiration, avec une marge de sécurité de 60 s.
-- Il reste **en mémoire du démon** : jamais écrit sur disque, jamais journalisé, jamais transmis aux runs Claude Code (`RELAIS_*`, `GH_TOKEN`, etc. inchangés). Un run ne peut donc pas agir sur un autre dépôt avec ce jeton.
+- Il reste **en mémoire du démon** : jamais écrit sur disque, jamais journalisé, jamais transmis aux runs Claude Code, pas plus que `GH_TOKEN`. Un run ne peut donc pas agir sur un autre dépôt avec ce jeton.
 - La clé privée n'est jamais journalisée. Le message de démarrage ne contient que l'App ID et, le cas échéant, l'ID d'installation.
 
 #### Rotation de clé
@@ -61,14 +61,26 @@ Une valeur de `config.yaml` l'emporte sur la variable d'environnement. Si une se
 
 Sans section `github`, le démon utilise `GhCliForge` et la CLI `gh`, comme avant :
 
-- **Poste** : `gh auth login` avec le compte qui doit pousser et ouvrir les PR, et git configuré pour pousser vers `origin` (SSH ou HTTPS). Vérifiez `gh auth status` et `git push` depuis le dépôt.
-- **Docker** : variable `GH_TOKEN` ; au démarrage, le conteneur lance `gh auth setup-git` pour que git pousse en HTTPS avec ce jeton. Les dépôts montés doivent donc avoir un remote **HTTPS**. Voir [`deploiement.md`](deploiement.md).
+- **Poste** : `gh auth login`, et git configuré pour lire `origin` (SSH ou HTTPS). Vérifiez `gh auth status` et `git fetch` depuis le dépôt.
+- **Docker** : variable `GH_TOKEN` ; au démarrage, le conteneur lance `gh auth setup-git` pour que git lise en HTTPS avec ce jeton. Les dépôts montés doivent donc avoir un remote **HTTPS**. Voir [`deploiement.md`](deploiement.md).
 
-Le démarrage journalise explicitement `forge GitHub : CLI gh (repli de migration…)`. Ce repli disparaîtra après ORC-125.
+Le démarrage journalise explicitement `forge GitHub : CLI gh (repli de migration…)`. Ce repli ne fait que lire : **sans GitHub App, l'usine ne publie ni ne merge**, et un ticket vérifié est bloqué avec cette raison. Il disparaîtra avec ORC-181.
 
-### Agents (temporaire)
+### Publication
 
-Les skills `dev`, `fix-ci` et `review` appellent encore `gh` et `GH_TOKEN` pour créer, lire et modifier les PR. **Ne les retirez pas avant ORC-125** : cette PR ne fait que brancher la GitHub App côté démon. Le jour venu, les agents passeront par l'API locale de Relais, qui portera elle-même le jeton d'installation limité au dépôt du run.
+L'usine publie (ORC-125), par l'effet `publish` de l'outbox, que `decide` n'écrit que pour le commit que `verify` vient de trouver vert (invariant I1) et que `mayPublish` regarde encore au moment de l'exécuter. Il faut les sandboxes et la GitHub App (permissions *Contents* et *Pull requests* en écriture). `GitPublisher` (`src/publish/publish.ts`) :
+
+1. lit sur la forge la branche par défaut et la tête de la branche du ticket ; une tête déjà sur le commit va droit à la PR, sans pousser : c'est le rejeu d'une publication coupée ;
+2. fait le bundle de la branche, dans le dépôt propre de l'agent (ORC-317), dans un sandbox neuf à `none`, son `.git` en lecture seule ; aucun git de l'hôte n'y tourne, et le dossier git de `repoPath` n'est monté nulle part. Il le vérifie, le clone sans checkout, sans hook ni config du dépôt, et compare sa tête au commit vérifié ;
+3. contrôle le diff depuis la base, de façon bloquante : `factory/chemins-interdits` (liens symboliques sortants et `package.json#scripts` compris), `factory/binaires`, `factory/secrets` ;
+4. pousse **seulement vers l'avant**, en `--force-with-lease` sur la tête lue : si la branche porte un commit absent du travail (un push humain, ORC-159, ou un historique réécrit), rien n'est poussé ;
+5. ouvre la PR **draft**, cherchée par branche avant création (une PR normale si l'offre du dépôt n'a pas de draft). Elle sort de draft au passage du ticket en *Human Review* : GitHub ne merge pas un draft.
+
+Un refus est une réponse : le ticket est bloqué avec la raison (`publish.refused`), décidé une fois ; la relance qui publie le mène où il devait aller (`owedMove`). Une panne est rejouée par l'outbox, puis bloque le ticket. Un run sans commit au-delà de la base finit sans PR.
+
+Le texte de la PR est provisoire : l'id et le titre du ticket, et une phrase de l'usine, sans rien de l'agent ni de mot-clé de fermeture. Sa composition est à ORC-195, par l'`OutputPolicy` d'ORC-214.
+
+Côté agent : `git push` et les écritures `gh` sont refusés par le pack et son hook, le proxy refuse `git-receive-pack` à tout niveau de réseau de l'agent, et aucun jeton n'entre dans un sandbox. Sur l'hôte, sans sandbox, seul le hook tient : ORC-179.
 
 ### Permissions nécessaires pour le repli `gh`
 
@@ -76,12 +88,12 @@ Sur chaque dépôt confié à Relais, le compte `gh` doit pouvoir :
 
 | Action | Utilisée par | Commande |
 |---|---|---|
-| Lire et pousser des branches | agents, worktrees | `git fetch`, `git push`, `git ls-remote` |
-| Créer, lire et modifier des PR | agents | `gh pr create`, `gh pr view`, `gh pr edit`, `gh pr diff` |
+| Lire les branches | agents, worktrees | `git fetch`, `git ls-remote` |
+| Lire les PR | agents | `gh pr view`, `gh pr diff` |
 | Lire les checks et les logs de CI | démon, agents | `gh pr checks`, `gh run view --log-failed` |
 | Lire les fils de review | démon | `gh api graphql` (`reviewThreads`) |
 
-Avec un jeton à granularité fine : *Contents* lecture/écriture, *Pull requests* lecture/écriture, *Actions* et *Checks* lecture, *Metadata* lecture. Avec un jeton classique : scope `repo` (et `workflow` seulement si les agents doivent modifier `.github/workflows`, ce que le skill `fix-ci` leur interdit). Pour `relais init` → « Créer un dépôt relais-knowledge », le compte doit aussi pouvoir créer un dépôt.
+Avec un jeton à granularité fine : *Contents*, *Pull requests*, *Actions* et *Checks* en lecture, *Metadata* en lecture. Avec un jeton classique : scope `repo`. Pour `relais init` → « Créer un dépôt relais-knowledge », le compte doit aussi pouvoir créer un dépôt.
 
 ## Droits des humains
 
@@ -94,7 +106,7 @@ Toutes les 5 minutes avec la réconciliation (ORC-185), et toutes les 30 s quand
 - `GET /repos/{owner}/{repo}/pulls?head={owner}:{branche}&state=all` : la PR de la branche (ouverte, mergée, fermée) ;
 - si elle est ouverte, `GET /repos/{owner}/{repo}/commits/{sha}/check-runs` et `GET /repos/{owner}/{repo}/commits/{sha}/status` : état agrégé de la CI (`fail` si un check échoue ou est annulé, `pending` si un check tourne, `pass` sinon, `none` sans check).
 
-Un **push humain** dont le webhook s'est perdu n'est pas rattrapé : le relevé lit la tête de la PR, mais l'usine ne retient pas la tête qu'elle a poussée elle-même, et tant que les agents poussent avec `GH_TOKEN` (ORC-125) leurs pushes ne se distinguent pas de ceux d'un humain (suite d'ORC-185).
+Un **push humain** dont le webhook s'est perdu n'est pas rattrapé : le relevé lit la tête de la PR, mais l'usine ne retient pas la tête qu'elle a poussée elle-même (suite d'ORC-185, ORC-281). Publier par-dessus un tel push est refusé : voir [Publication](#publication).
 
 Au moment d'un run `dev-feedback`, les fils de review **non résolus** sont lus en GraphQL (`reviewThreads`) et transformés en retours pour l'agent.
 
@@ -152,14 +164,14 @@ Chaque ticket travaille sur `relais/<ticket>-<titre-en-slug>` (ex. `relais/rel-1
 
 ## Protection de branche (fortement conseillée)
 
-Le pack interdit aux agents `gh pr merge`, le force-push et le push direct sur `main` / `master` ([`pack-et-skills.md`](pack-et-skills.md#permissions)), mais ces refus sont une **première barrière** : ils dépendent de Claude Code et un agent qui exécute du code peut les contourner. C'est GitHub qui garantit que seuls les humains mergent. Sur la branche par défaut de chaque dépôt :
+Le pack interdit aux agents `gh pr merge` et tout push ([`pack-et-skills.md`](pack-et-skills.md#permissions)), mais ces refus sont une **première barrière** : ils dépendent de Claude Code et un agent qui exécute du code peut les contourner. C'est GitHub qui garantit que seuls les humains mergent. Sur la branche par défaut de chaque dépôt :
 
 - **Require a pull request before merging** (avec au moins une approbation si votre équipe relit) ;
 - **Block force pushes** et interdire la suppression ;
 - **Require status checks to pass** avec vos checks de CI ;
 - ne pas mettre le compte de Relais dans les exceptions (*bypass*).
 
-Le dépôt de connaissance (`relais-knowledge`) mérite la même protection : les runs `learn` y ouvrent des PR, un humain les merge.
+Le dépôt de connaissance (`relais-knowledge`) mérite la même protection : un humain y merge.
 
 ## `factory doctor` : secrets de CI et branches de l'usine
 

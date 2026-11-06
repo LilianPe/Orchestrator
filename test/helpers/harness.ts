@@ -152,6 +152,8 @@ export function createHarness(
     verify?: Verifier;
     /** The clean check itself; by default its verdict comes from `checks`. */
     cleanVerify?: CleanVerifier;
+    /** An instance without the GitHub App or the sandboxes: it cannot publish (ORC-125). */
+    noPublisher?: boolean;
     /** `false`: an instance with neither sandboxes nor `FACTORY_ALLOW_HOST_VERIFY`. */
     hostChecks?: boolean;
     knowledge?: boolean;
@@ -222,6 +224,7 @@ export function createHarness(
       runner: life.gate(view ? view.runner(runner) : runner),
       forge: life.gate(forge),
       forgeWriter: life.gate(forge),
+      ...(opts.noPublisher ? {} : { publisher: life.gate(publisher) }),
       workspaces: life.gate(workspaces),
       verify: life.gate(checks.run),
       hostChecks: opts.hostChecks ?? true,

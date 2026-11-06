@@ -5,7 +5,7 @@ import { FakePublisher } from './fake.js';
 import type { PublishRequest } from './types.js';
 
 const req = (o: Partial<PublishRequest> = {}): PublishRequest => ({
-  projectId: 'p', repoPath: '/repo', ticketId: 'REL-1', branch: 'factory/rel-1-x', sha: 'aaa', title: 'feat: x', body: 'b', ...o,
+  projectId: 'p', repoPath: '/repo', ticketId: 'REL-1', runId: 'r1', worktree: '/w', branch: 'factory/rel-1-x', sha: 'aaa', title: 'feat: x', body: 'b', ...o,
 });
 
 describePublisherContract('FakePublisher', () => {
@@ -43,7 +43,7 @@ describe('FakePublisher', () => {
     const p = new FakePublisher(forge);
     await p.publish(req());
     expect(await forge.findPr('/repo', 'factory/rel-1-x')).toEqual({
-      number: 1, url: 'https://github.test/pr/1', state: 'OPEN', branch: 'factory/rel-1-x', checks: 'pending', failedChecks: [],
+      number: 1, url: 'https://github.test/pr/1', state: 'OPEN', branch: 'factory/rel-1-x', headSha: 'aaa', checks: 'pending', failedChecks: [],
     });
   });
 });

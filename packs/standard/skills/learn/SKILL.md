@@ -1,6 +1,6 @@
 ---
 name: learn
-description: Ajouter à la base de connaissance partagée ce qui mérite d'être retenu après un ticket ou sur demande (« retiens ça »), par une PR relue (lancé par l'usine).
+description: Ajouter à la base de connaissance partagée ce qui mérite d'être retenu après un ticket ou sur demande (« retiens ça »), en fiches commitées sur une branche dédiée (lancé par l'usine).
 ---
 
 # factory:learn
@@ -29,10 +29,10 @@ Test rapide : un dev qui ouvre un ticket voisin dans trois mois perdrait-il du t
    <3 à 10 lignes : le fait, pourquoi, comment l'appliquer>
    ```
 6. Ajoute ou mets à jour la ligne dans `INDEX.md` : `- [<titre>](notes/<slug>.md) — <résumé en une ligne>`. L'index est injecté dans chaque run : la ligne doit dire quand la fiche sert.
-7. Commite (`learn: <titre>`), pousse vers la branche courante, nommée (`git branch --show-current`) : `git push origin HEAD:refs/heads/<branche>`, vérifie avec `git ls-remote origin refs/heads/<branche>`, puis ouvre la PR : `gh pr create --head <branche> --title "learn: <titre>" --body "Source : <ID>"`.
+7. Commite (`learn: <titre>`) sur la branche courante. Tu ne pousses pas et tu n'ouvres pas de PR : tu n'écris pas sur la forge.
 
-Ne pousse jamais sur la branche principale du dépôt de connaissance, et ne merge jamais.
+Ne merge jamais.
 
 ## Dernier message (publié dans Linear)
 
-En français : « Retenu : <titre> — PR <url> », une ligne par fiche, ou « Rien à retenir de durable sur ce ticket. »
+En français : « Retenu : <titre> — commit <sha court> sur <branche> », une ligne par fiche, ou « Rien à retenir de durable sur ce ticket. »

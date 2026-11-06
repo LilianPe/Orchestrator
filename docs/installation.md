@@ -9,7 +9,7 @@ Cette page couvre l'installation de Relais sur une machine (poste de dev ou serv
 | Node.js | **24.22.1 ou plus** (`engines.node: ">=24.22.1"`) | Le démon utilise `node:sqlite`, intégré à Node 24 ; 24.22.1 est le minimum corrigé de la release de sécurité d'octobre 2026. |
 | npm | celui de Node 24 | Installation et build. |
 | git | récent (worktrees) | Un worktree git par ticket. |
-| GitHub CLI `gh` | **2.50 ou plus**, connecté (`gh auth login`) au compte qui pousse et ouvre les PR | Relais et les agents appellent `gh pr …`, `gh api graphql`. Relais lit les checks d'une PR par `gh pr checks --json`, apparu en 2.50 : avant, il ne peut lire aucune PR ouverte (le `gh` des dépôts Ubuntu 24.04 est un 2.45, prenez celui de [cli.github.com](https://github.com/cli/cli/blob/trunk/docs/install_linux.md)). Voir [`github.md`](github.md). |
+| GitHub CLI `gh` | **2.50 ou plus**, connecté (`gh auth login`) | Sans GitHub App, Relais lit par `gh pr …`, `gh api graphql` ; pousser et ouvrir les PR demande la GitHub App. Relais lit les checks d'une PR par `gh pr checks --json`, apparu en 2.50 : avant, il ne peut lire aucune PR ouverte (le `gh` des dépôts Ubuntu 24.04 est un 2.45, prenez celui de [cli.github.com](https://github.com/cli/cli/blob/trunk/docs/install_linux.md)). Voir [`github.md`](github.md). |
 | Claude Code CLI `claude` | connecté (abonnement ou `ANTHROPIC_API_KEY`) | Chaque run est un `claude -p … --output-format stream-json`. Il doit être dans le `PATH` du démon. |
 | bash | — | Les commandes `workspace.setup` et `verify` sont lancées via `bash -lc`. |
 
