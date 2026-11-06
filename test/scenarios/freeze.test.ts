@@ -103,7 +103,7 @@ describe('the freeze of the tests (ORC-131)', () => {
     // Relaunched, the run's verification reads from the new freeze: unchanged since.
     await h.send('session.prompted', { linearSessionId: 'as-1', body: 'reprends', author: 'Lilian' }, 'REL-1', { actor: LEAD });
     const passed = (await exportJournal(h.store, 'p', 'REL-1')).entries.filter((e) => e.event.type === 'verify.passed').map((e) => e.event.payload);
-    expect(passed.at(-1)).toMatchObject({ job: 'dev-feedback' });
+    expect(passed.at(-1)).toMatchObject({ job: 'dev' });
     expect((await h.ticket()).blocked).toBe(false);
   });
 

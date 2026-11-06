@@ -130,16 +130,17 @@ describe('standard workflow', () => {
   });
 
   it('a merge drops the queued and debounced feedback runs, refuses a relaunch, and still cleans up and learns (ORC-268)', async () => {
-    const h = createHarness();
+    // A project's own relaunch label: a run a human asks for out of a reply.
+    const h = createHarness({ projectYaml: 'version: 1\non:\n  label.changed:\n    - { label: relance, run: dev-feedback }\n' });
     await delegatedAndInReview(h);
     await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'encore un détail', author: 'L' });
     // Paused: the relaunch waits in the scheduler queue, out of decide's sight, when the PR is merged.
     await h.send('control.pause', {});
-    await h.send('label.changed', { label: 'agent:reprendre', change: 'added' });
+    await h.send('label.changed', { label: 'relance', change: 'added' });
     await h.send('pr.merged', { number: 3, url: 'https://gh/pr/3', branch: 'factory/rel-1-export-csv' });
     await h.send('control.resume', {});
     await h.advance(180_000);
-    await h.send('label.changed', { label: 'agent:reprendre', change: 'added' });
+    await h.send('label.changed', { label: 'relance', change: 'added' });
     expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:dev', '/factory:learn']);
     expect(await h.ticket()).toMatchObject({ logical: 'done', prState: 'MERGED' });
     expect(h.workspaces.cleaned).toEqual(['REL-1']);
@@ -171,7 +172,7 @@ describe('standard workflow', () => {
   });
 
   it('red CI relaunches fix-ci up to limits.ci_fix_attempts, then blocks; a green CI resets the count (ORC-270)', async () => {
-    const h = createHarness();
+    const h = createHarness({ projectYaml: 'version: 1\non:\n  label.changed:\n    - { label: relance, run: dev-feedback }\n' });
     await delegatedAndInReview(h);
     const red = { number: 7, url: 'https://forge/pr/7', branch: 'factory/rel-1-export-csv', failures: ['test'] };
     const fixCi = () => h.runner.requests.filter((r) => r.prompt.startsWith('/factory:fix-ci\n')).length;
@@ -182,11 +183,11 @@ describe('standard workflow', () => {
     await h.send('pr.checks_failed', red);
     expect(fixCi()).toBe(2);
     expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'CI toujours en échec après 2 tentatives de fix-ci.' });
-    expect(h.tracker.activities('ls-1').at(-1)).toMatchObject({ type: 'elicitation', body: expect.stringContaining('- `test`') });
+    expect(h.tracker.comments('REL-1').at(-1)).toContain('- `test`');
     await h.send('pr.checks_failed', red);
     expect(fixCi()).toBe(2);
     // The human relaunches: a new budget, and a green CI resets it too.
-    await h.send('label.changed', { label: 'agent:reprendre', change: 'added' });
+    await h.send('label.changed', { label: 'relance', change: 'added' });
     expect(await h.ticket()).toMatchObject({ blocked: false, ciFixAttempts: 0 });
     await h.send('pr.checks_failed', red);
     expect(fixCi()).toBe(3);
@@ -340,10 +341,10 @@ describe('standard workflow', () => {
       expect((await h.ticket()).logical).toBe('ai_review');
     });
 
-    it('agent:reprendre on a mention-only ticket starts nothing', async () => {
+    it('a comment on a mention-only ticket starts nothing', async () => {
       const h = createHarness();
       await mentioned(h);
-      await h.send('label.changed', { label: 'agent:reprendre', change: 'added' });
+      await h.send('ticket.commented', { body: 'reprends', author: 'L' });
       expect(h.runner.requests).toHaveLength(1);
     });
 
@@ -423,8 +424,8 @@ describe('standard workflow', () => {
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
     expect(h.runner.requests).toHaveLength(0);
     expect((await h.ticket()).blocked).toBe(true);
-    const last = h.tracker.activities('ls-1').at(-1)!;
-    expect(last.type).toBe('elicitation');
+    expect(h.tracker.comments('REL-1').at(-1)).toContain("🔴 Bloqué à l'étape intake (tentative 1/1)");
+    expect(h.tracker.activities('ls-1')).toEqual([]);
     // Blocked outside a decision, the ticket still shows the label next to its status (ORC-170).
     expect((await h.tracker.getIssue('REL-1')).labels).toContain('Bloqué');
   });

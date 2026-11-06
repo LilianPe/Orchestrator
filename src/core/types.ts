@@ -49,7 +49,7 @@ export interface FeedbackItem {
   authorId?: string;
   body: string;
   at: number;
-  source: 'session' | 'review' | 'label' | 'verify' | 'ci';
+  source: 'session' | 'comment' | 'review' | 'label' | 'verify' | 'ci';
   /**
    * Taint of the event that brought the item; a run that consumes the pending feedback is as untrusted
    * as its least trusted item (I12). Absent on items written before ORC-269, when no source marked an
@@ -159,6 +159,8 @@ export interface EventPayloads {
   'session.mentioned': { linearSessionId: string; body: string; author: string; issue?: IssueSnapshot; ack?: true; repos?: string[]; waitedIn?: string };
   'session.prompted': { linearSessionId: string; body: string; author: string; issue?: IssueSnapshot; repos?: string[]; waitedIn?: string };
   'session.stopped': { linearSessionId?: string; repos?: string[]; waitedIn?: string };
+  /** A human's comment on the ticket, out of any session (ORC-196): the reply to a block's comment. Decided only while the ticket is blocked. */
+  'ticket.commented': { body: string; author: string };
   /** `cancelled`: the new status is of type canceled in Linear (ORC-170). */
   'status.changed': { from: LogicalState | null; to: LogicalState | null; cancelled?: true };
   /** `otherRepo`: the label names another repo of the ticket's team (ORC-291). */
@@ -302,7 +304,8 @@ export type FactoryEvent<T extends EventType = EventType> = {
 
 /** State changes decided by `decide`, applied to the ticket by `reduce`. */
 export type DecidedEvent =
-  | { type: 'ticket.blocked'; reason: string }
+  /** `job`: the step a reply resumes (ORC-196); none when no job of the workflow stands for it, then the rule's runs. */
+  | { type: 'ticket.blocked'; reason: string; job?: string }
   | { type: 'ticket.unblocked' }
   | {
       type: 'ticket.patched';
@@ -359,6 +362,8 @@ export interface TicketState {
   questionSessionIds: string[];
   blocked: boolean;
   blockReason?: string;
+  /** The job a reply resumes while the ticket is blocked (ORC-196). Absent on a block of no job, and on versions frozen before it. */
+  blockedJob?: string;
   claudeSessionId?: string;
   linearSessionId?: string;
   branch?: string;

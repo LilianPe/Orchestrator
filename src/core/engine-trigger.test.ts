@@ -110,11 +110,11 @@ describe('decide — a ticket of a team with no repo (ORC-171)', () => {
   const blocked = decide(undefined, noRepo, workflow).events.reduce<TicketState | undefined>((t, e) => reduce(t, e), reduce(undefined, noRepo))!;
   const NO_REPO_EVENTS = [{ type: 'ticket.blocked', reason: expect.stringContaining('ZZZ') }, { type: 'ticket.patched', patch: { awaitingRepo: [] } }];
 
-  it('blocks the delegation, labels it and says why in its session, and starts nothing', () => {
+  it('blocks the delegation, labels it and says why in the standard comment, and starts nothing', () => {
     const out = decide(undefined, noRepo, workflow);
     expect(out.events).toEqual(NO_REPO_EVENTS);
     expect(out.effects).toEqual([
-      { kind: 'activity', type: 'elicitation', linearSessionId: 's-1', body: expect.stringContaining('ZZZ') },
+      { kind: 'block_comment', block: expect.objectContaining({ waits: true, reason: expect.stringContaining('ZZZ') }) },
       { kind: 'labels', add: ['Bloqué'], remove: [] },
     ]);
     expect(blocked).toMatchObject({ blocked: true, delegated: true, awaitingRepo: [] });
@@ -128,7 +128,7 @@ describe('decide — a ticket of a team with no repo (ORC-171)', () => {
   it('asks again on a new delegation while the team still has no repo, the block kept', () => {
     const out = decide(blocked, { ...noRepo, payload: { linearSessionId: 's-2', noRepo: 'ZZZ' } } as FactoryEvent, workflow);
     expect(out.events).toEqual([]);
-    expect(out.effects).toEqual([{ kind: 'activity', type: 'elicitation', linearSessionId: 's-2', body: expect.stringContaining('ZZZ') }]);
+    expect(out.effects).toEqual([{ kind: 'block_comment', block: expect.objectContaining({ waits: true, reason: expect.stringContaining('ZZZ') }) }]);
   });
 
   it('takes over a block of another reason, or of a row written before the field: the wait is the field', () => {
@@ -156,15 +156,17 @@ describe('decide — a ticket of a team with no repo (ORC-171)', () => {
 
 describe('decide — the ack of a ticket waiting for its repo (ORC-171, ORC-291)', () => {
   const repos = ['p', 'api'];
-  const asked = (linearSessionId: string) => ({ kind: 'activity', type: 'elicitation', linearSessionId, body: expect.stringContaining('Dépôt à préciser') });
+  const asked = { kind: 'block_comment', block: expect.objectContaining({ waits: true, reason: expect.stringContaining('Dépôt à préciser') }) };
+  /** The session the delegation opened needs a sign of life: the question is a comment on the ticket (ORC-196). No plan: no run. */
+  const held = (linearSessionId: string) => ({ kind: 'ack', body: ACK_BODY, linearSessionId, comment: true });
   const waiting = ticket({ delegated: true, blocked: true, blockReason: 'Dépôt à préciser : ...', awaitingRepo: repos, linearSessionId: 's-1' });
   const ack = (linearSessionId: string) => ({ kind: 'ack', body: ACK_BODY, linearSessionId, comment: true, plan: true });
 
-  it('a delegation that must choose gets the question alone: no ack, no plan, no run', () => {
+  it('a delegation that must choose gets the question, and the ack its session is owed: no plan, no run', () => {
     const out = decide(undefined, ev('ticket.delegated', { linearSessionId: 's-1', ack: true, repos, issue: { title: 'T', logical: 'todo', priority: 0 } }), workflow);
-    expect(out.effects).toEqual([asked('s-1'), { kind: 'labels', add: ['Bloqué'], remove: [] }]);
-    // Delegated again, still with no label: the question again, still no ack.
-    expect(decide(waiting, ev('ticket.delegated', { linearSessionId: 's-2', ack: true, repos }), workflow).effects).toEqual([asked('s-2')]);
+    expect(out.effects).toEqual([held('s-1'), asked, { kind: 'labels', add: ['Bloqué'], remove: [] }]);
+    // Delegated again, still with no label: the question again, in its own session's ack.
+    expect(decide(waiting, ev('ticket.delegated', { linearSessionId: 's-2', ack: true, repos }), workflow).effects).toEqual([held('s-2'), asked]);
   });
 
   it.each([

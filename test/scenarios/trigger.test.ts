@@ -79,7 +79,7 @@ describe('the trigger (ORC-171)', () => {
       h.tracker.addIssue(CLEAR);
       return { h, recover: () => (down = false) };
     };
-    const comments = (h: ReturnType<typeof createHarness>) => h.tracker.calls.filter((c) => c.method === 'comment');
+    const comments = (h: ReturnType<typeof createHarness>) => h.tracker.comments('REL-1').filter((body) => body === 'Bien reçu.');
 
     it('the plan stays on Vérif, the PR not done, and the ack is not sent again', async () => {
       const { h } = broken();
@@ -91,7 +91,7 @@ describe('the trigger (ORC-171)', () => {
       expect(comments(h)).toHaveLength(1);
     });
 
-    it('a reply takes it up: checked again, no second ack, the plan not reopened on Build', async () => {
+    it('a reply resumes the job that blocked: checked again, no second ack, the plan closed at its end', async () => {
       const { h, recover } = broken();
       await h.send('ticket.delegated', { linearSessionId: 'ls-1', ack: true });
       const plans = h.tracker.plans('ls-1').length;
@@ -100,8 +100,9 @@ describe('the trigger (ORC-171)', () => {
       await h.advance(1);
       expect(await h.ticket()).toMatchObject({ blocked: false, verifiedSha: 'abc' });
       expect(comments(h)).toHaveLength(1);
-      // dev-feedback closes no step: the plan waits for the next move to Human Review, as after any block.
-      expect(h.tracker.plans('ls-1').length).toBe(plans);
+      // `dev` itself ends in Human Review, which closes the plan: `dev-feedback` used to leave it waiting (ORC-196).
+      expect(h.tracker.plans('ls-1').length).toBeGreaterThan(plans);
+      expect(h.tracker.plans('ls-1').at(-1)!.filter((s) => s.status === 'inProgress')).toEqual([]);
     });
   });
 
@@ -266,8 +267,8 @@ describe('the trigger (ORC-171)', () => {
     await h.orch.drained();
     expect(await h.ticket('ZZZ-1')).toMatchObject({ projectId: 'p', blocked: true, delegated: true, blockReason: expect.stringContaining('ZZZ') });
     expect(h.tracker.issues.get('ZZZ-1')!.labels).toEqual(['Bloqué']);
-    expect(h.tracker.activities('as-1')).toEqual([{ type: 'elicitation', body: expect.stringContaining('ZZZ') }]);
-    expect(h.tracker.comments('ZZZ-1')).toEqual([]);
+    expect(h.tracker.activities('as-1')).toEqual([{ type: 'thought', body: 'Bien reçu.' }]);
+    expect(h.tracker.comments('ZZZ-1')).toEqual(['Bien reçu.', expect.stringContaining('ZZZ')]);
     expect(h.runner.requests).toEqual([]);
   });
 

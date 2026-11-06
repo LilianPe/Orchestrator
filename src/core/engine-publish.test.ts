@@ -75,7 +75,7 @@ describe('the publish effect (ORC-125)', () => {
     expect(t).toMatchObject({ blocked: true, verifyingRunId: undefined });
     expect(t.blockReason).toContain('la branche a bougé');
     expect(out.effects.some((e) => e.kind === 'move' || e.kind === 'post_output')).toBe(false);
-    expect(out.effects).toContainEqual(expect.objectContaining({ kind: 'activity', type: 'elicitation', body: expect.stringContaining('la branche a bougé') }));
+    expect(out.effects).toContainEqual({ kind: 'block_comment', block: expect.objectContaining({ step: 'publish', reason: expect.stringContaining('la branche a bougé') }) });
   });
 
   it('a move the refused publication owed comes with the next one: a relaunch by dev-feedback, which has no move of its own, still shows the work', () => {

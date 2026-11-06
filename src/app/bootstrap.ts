@@ -63,7 +63,7 @@ export function isLoopbackHost(host: string): boolean {
   return h === 'localhost' || h === '::1' || /^127\.\d+\.\d+\.\d+$/.test(h);
 }
 
-const FACTORY_LABELS = ['agent:reprendre', 'agent:stop', BLOCKED_LABEL];
+const FACTORY_LABELS = ['agent:stop', BLOCKED_LABEL];
 
 /** Where a sandbox sees the factory's install and the knowledge base (ORC-204); its image puts `/factory/app/bin` on its PATH. */
 const SANDBOX_ROOT = '/factory/app';
@@ -334,7 +334,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       clock,
       submit: accept,
       isPaused: () => orchestrator.isPaused(),
-      blockTicket: (projectId, ticketId, reason) => orchestrator.blockTicket(projectId, ticketId, reason),
+      blockTicket: (projectId, ticketId, reason, asked) => orchestrator.blockTicket(projectId, ticketId, reason, asked),
       linearWebhook: ingest,
       githubWebhook: githubIngest,
       linearConnected: () => !!trackerSwitch.current,

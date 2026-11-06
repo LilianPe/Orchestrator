@@ -24,7 +24,7 @@ function external(t: TicketState, e: FactoryEvent): TicketState {
       // Cancelled (ORC-170): nothing waits for a human any longer, and the replies kept for a next run are dropped.
       // Any human move, a cancel or an unmapped status included, ends the status the factory put the ticket in.
       // A cancel also ends a wait for the ticket's repo: delegated and unblocked, it would hold this repo (ORC-291).
-      if (e.payload.cancelled) return { ...t, ...(t.awaitingRepo ? { delegated: false, awaitingRepo: null } : {}), blocked: false, blockReason: undefined, pendingFeedback: [], recordedStatus: undefined };
+      if (e.payload.cancelled) return { ...t, ...(t.awaitingRepo ? { delegated: false, awaitingRepo: null } : {}), blocked: false, blockReason: undefined, blockedJob: undefined, pendingFeedback: [], recordedStatus: undefined };
       if (isOwnMoveEcho(t, e)) return t;
       const to = e.payload.to;
       if (!to) return { ...t, recordedStatus: undefined };
@@ -60,9 +60,9 @@ function external(t: TicketState, e: FactoryEvent): TicketState {
 function internal(t: TicketState, e: InternalEvent): TicketState {
   switch (e.type) {
     case 'ticket.blocked':
-      return { ...t, blocked: true, blockReason: e.reason };
+      return { ...t, blocked: true, blockReason: e.reason, blockedJob: e.job };
     case 'ticket.unblocked':
-      return { ...t, blocked: false, blockReason: undefined };
+      return { ...t, blocked: false, blockReason: undefined, blockedJob: undefined };
     case 'ticket.patched':
       return { ...t, ...e.patch };
     case 'feedback.appended':

@@ -89,6 +89,23 @@ export const SCENARIOS: Record<string, { preset?: TestPreset; authz?: HarnessAut
       await h.send('label.changed', { label: 'agent:stop', change: 'added' });
     },
   },
+  /**
+   * A run at its cap (ORC-196): Bloqué, the standard comment; a comment by someone out of the team is refused; a
+   * member's reply on the ticket resumes the job that blocked.
+   */
+  'blocked-then-comment-resumes': {
+    authz: { githubLogins: { 'user-lilian': 'lilian-gh' } },
+    run: async (h) => {
+      h.tracker.setTeamMembers('REL', ['user-lilian']);
+      h.forge.setRepoPermission('lilian-gh', 'write');
+      h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Exporter les audits en CSV depuis la liste des audits.' });
+      h.runner.enqueue({ outcome: 'limit' });
+      await h.send('ticket.delegated', { linearSessionId: 'ls-1' }, 'REL-1', { actor: 'user-lilian' });
+      await h.send('ticket.commented', { body: 'Reprends.', author: 'Quelqu\'un' }, 'REL-1', { actor: 'user-stranger' });
+      h.runner.enqueue({ events: [{ kind: 'text', text: 'Repris.' }] });
+      await h.send('ticket.commented', { body: 'Reprends.', author: 'Lilian' }, 'REL-1', { actor: 'user-lilian' });
+    },
+  },
   /** A build stopped by the detector, the same failure 3 times on an unchanged worktree: Bloqué, cause « boucle », on the journaled fact (ORC-136). */
   'build-loop-blocked': {
     run: async (h) => {

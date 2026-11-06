@@ -99,7 +99,7 @@ Pour chaque ticket : son état, un contrôle en cours, la raison d'un blocage, e
 
 ### `factory stop <ID>`
 
-Arrête le run du ticket `<ID>` (ex. `REL-12`) : SIGINT au processus Claude Code, puis SIGKILL après 10 s, et le conteneur est détruit ; un run auquel le démon s'est rattaché après un redémarrage s'arrête de même. Le ticket est bloqué jusqu'à une réponse dans le fil Linear ou le label `agent:reprendre`. Équivalent au bouton « Stop » de l'interface, au « stop » de la session Linear et au label `agent:stop`. Sans option : un ticket inconnu est refusé, code de sortie 1.
+Arrête le run du ticket `<ID>` (ex. `REL-12`) : SIGINT au processus Claude Code, puis SIGKILL après 10 s, et le conteneur est détruit ; un run auquel le démon s'est rattaché après un redémarrage s'arrête de même. Le ticket est bloqué jusqu'à une réponse dans le ticket Linear (commentaire ou session). Équivalent au bouton « Stop » de l'interface, au « stop » de la session Linear et au label `agent:stop`. Sans option : un ticket inconnu est refusé, code de sortie 1.
 
 ### `factory replay <journal.json | dossier>...` (ORC-174)
 
@@ -143,7 +143,7 @@ Pendant un run, Relais ajoute `bin/` de Relais au `PATH` et pose `RELAIS_API` et
 | `relais-agent issue <ID>` | Affiche le ticket : identifiant, titre, statut, URL, description. **Limité au ticket du run** (403 sinon). |
 | `relais-agent search <texte>` | Recherche des tickets Linear. |
 | `relais-agent kb search <mots>` | Recherche dans `notes/*.md` de la base de connaissance (mots de 3 lettres ou plus, sans accents ni casse). Affiche `fichier:ligne: texte`. |
-| `relais-agent ask <question>` | Publie la question dans la session Linear (elicitation) et **bloque** le ticket. L'agent doit terminer son tour ; la réponse humaine relance le travail. |
+| `relais-agent ask <question>` | Publie la question dans le commentaire de blocage du ticket (ORC-196) et **bloque** le ticket. L'agent doit terminer son tour ; la réponse humaine relance le travail. |
 
 Lancé hors d'un run, il répond `relais-agent doit être lancé par Relais (RELAIS_API et RELAIS_RUN_TOKEN manquants).` (code 2). Le jeton n'est accepté que tant que le run est en cours. Le pack autorise `Bash(relais-agent:*)` et le hook de démarrage rappelle ces commandes à l'agent ([`pack-et-skills.md`](pack-et-skills.md)).
 

@@ -156,7 +156,7 @@ describe('a disposable sandbox per attempt', () => {
     expect(t).toMatchObject({ blocked: true, verifyAttempts: 0 });
     expect(blockCause(t.blockReason)).toBe('infra');
     expect(t.verifyingRunId).toBeUndefined();
-    expect(h.tracker.activities('ls-1').at(-1)).toMatchObject({ body: expect.stringContaining('engine down') });
+    expect(h.tracker.comments('REL-1').at(-1)).toContain('engine down');
   });
 
   it('without sandboxes and without the explicit flag, verify refuses to run the code on the host (ORC-151)', async () => {
@@ -167,7 +167,7 @@ describe('a disposable sandbox per attempt', () => {
     const t = await h.ticket();
     expect(t.blocked).toBe(true);
     expect(blockCause(t.blockReason)).toBe('infra');
-    expect(h.tracker.activities('ls-1').at(-1)).toMatchObject({ body: expect.stringContaining('FACTORY_ALLOW_HOST_VERIFY') });
+    expect(h.tracker.comments('REL-1').at(-1)).toContain('FACTORY_ALLOW_HOST_VERIFY');
   });
 
   it('the explicit flag keeps the host path, in the worktree (ORC-151)', async () => {
@@ -184,7 +184,7 @@ describe('a disposable sandbox per attempt', () => {
     expect(h.sandboxes.active()).toEqual([]);
     expect(h.workspaces.cleaned).toEqual(['REL-1']);
     expect(await h.ticket()).toMatchObject({ blocked: true });
-    expect(h.tracker.activities('ls-1').at(-1)).toMatchObject({ type: 'error', body: 'Erreur au lancement : Le setup du worktree a échoué : npm ci' });
+    expect(h.tracker.comments('REL-1').at(-1)).toContain('Raison : Erreur au lancement : Le setup du worktree a échoué : npm ci\n');
   });
 
   it('a setup command over the verify timeout fails the setup as a timeout', async () => {
@@ -193,10 +193,7 @@ describe('a disposable sandbox per attempt', () => {
     await delegate(h);
     expect(h.runner.requests).toEqual([]);
     expect(h.workspaces.cleaned).toEqual(['REL-1']);
-    expect(h.tracker.activities('ls-1').at(-1)).toMatchObject({
-      type: 'error',
-      body: 'Erreur au lancement : Le setup du worktree a échoué : npm ci (délai de 15 min dépassé)',
-    });
+    expect(h.tracker.comments('REL-1').at(-1)).toContain('Raison : Erreur au lancement : Le setup du worktree a échoué : npm ci (délai de 15 min dépassé)');
   });
 
   it.each([

@@ -169,6 +169,11 @@ function outputs(facts: MeasureFacts, events: FactoryEvent[], devSession: string
     const at = doneAt.get(row.id);
     if (row.status !== 'done' || at === undefined) continue;
     const c = row.effect;
+    // A block's comment is written on the ticket, and answers in the dev session as its elicitation did (ORC-196).
+    if (c.kind === 'block_comment') {
+      out.push({ session: devSession, at, answer: true });
+      continue;
+    }
     if (c.kind !== 'activity' && c.kind !== 'post_output') continue;
     const run = c.runId ? runs.get(c.runId) : undefined;
     const session = (c.kind === 'activity' ? c.linearSessionId : undefined) ?? run?.linearSessionId ?? devSession;
@@ -239,6 +244,7 @@ export function ticketMeasures(projectId: string, ticketId: string, facts: Measu
   let mergedAt: number | null = null;
   let firstMerge: FactoryEvent<'pr.merged'> | undefined;
   const reworks: Rework[] = [];
+  const relaunched = new Set(facts.effects.filter((r) => r.effect.kind === 'start_run').map((r) => r.eventId));
   const messages: { m: Message; kind: MessageKind }[] = [];
   for (const e of events) {
     ticket = reduce(ticket, e) ?? ticket;
@@ -247,7 +253,8 @@ export function ticketMeasures(projectId: string, ticketId: string, facts: Measu
         mergedAt = e.at;
         firstMerge = e;
       }
-      const r = rework(e, ticket);
+      // A comment is a reply only if it relaunched the ticket: the fold of the journal does not see its blocks (ORC-196).
+      const r = e.type === 'ticket.commented' ? (relaunched.has(e.id) ? { cause: 'feedback' as const, id: e.id } : undefined) : rework(e, ticket);
       if (r) reworks.push(r);
     }
     if (e.type === 'session.prompted') messages.push({ m: e, kind: isQuestionSession(ticket, e.payload.linearSessionId) ? 'question' : 'instruction' });

@@ -96,6 +96,7 @@ const PAYLOADS: { [K in EventType]: fc.Arbitrary<EventPayloads[K]> } = {
   'ticket.undelegated': empty,
   'session.mentioned': fc.record({ linearSessionId: session, body, author, issue }),
   'session.prompted': fc.record({ linearSessionId: session, body, author, issue }),
+  'ticket.commented': fc.record({ body, author }),
   'session.stopped': fc.record({ linearSessionId: fc.option(session, { nil: undefined }) }),
   'status.changed': fc.record({ from: fc.option(logical, { nil: null }), to: fc.option(logical, { nil: null }) }),
   'label.changed': fc.record({ label: fc.constantFrom('agent:reprendre', 'agent:stop', 'bug'), change: fc.constantFrom('added' as const, 'removed' as const) }),
@@ -198,7 +199,7 @@ export const ACTORS: Readonly<Record<string, readonly Role[]>> = {
   'u-lead': ['team_member', 'maintainer'],
 };
 /** Events a human sends through Linear: the orchestrator may resolve roles for them (`mayCheck`). */
-const HUMAN: ReadonlySet<EventType> = new Set<EventType>(['ticket.delegated', 'session.mentioned', 'command', 'session.prompted', 'label.changed', 'status.changed']);
+const HUMAN: ReadonlySet<EventType> = new Set<EventType>(['ticket.delegated', 'session.mentioned', 'command', 'session.prompted', 'ticket.commented', 'label.changed', 'status.changed']);
 const signedBy: fc.Arbitrary<Signed | undefined> = fc.oneof(
   { arbitrary: fc.constant(undefined), weight: 6 },
   { arbitrary: fc.constantFrom(...Object.keys(ACTORS)).map((actor): Signed => ({ actor, roles: ACTORS[actor]! })), weight: 2 },

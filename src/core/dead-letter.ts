@@ -39,7 +39,7 @@ export interface DeadLetter {
 /** Prefix of the block reason of a dead-lettered event: its repair lifts that block, not another one. */
 const reasonPrefix = (eventId: string) => `Événement ${eventId} mis de côté`;
 
-/** The block reason of `dead_letter.added`: a simple message naming the event (the standard comment: ORC-196). */
+/** The block reason of `dead_letter.added`, naming the event: `Raison` of its standard comment (ORC-196). */
 export function deadLetterReason(p: EventPayloads['dead_letter.added']): string {
   return `${reasonPrefix(p.eventId)} (${p.eventType}) : sa décision a échoué (${p.error}).`;
 }

@@ -173,7 +173,7 @@ describe('GitHub webhooks', () => {
     await post(h, 'pull_request', reopened);
     expect(await h.ticket()).toMatchObject({ prState: 'OPEN', blocked: true });
     h.runner.enqueue({ hold: true });
-    await h.send('label.changed', { label: 'agent:reprendre', change: 'added' });
+    await h.send('ticket.commented', { body: 'reprends', author: 'L' });
     expect((await h.ticket()).activeRunId).toBeDefined();
     await post(h, 'pull_request', at('2026-10-28T12:00:00Z'));
     const t = await h.ticket();

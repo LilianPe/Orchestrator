@@ -176,9 +176,18 @@ describe('recorded journals (test/replay/journals)', () => {
     expect(report.replayed).toBeGreaterThan(0);
   });
 
+  it('a block of a version frozen before ORC-196 replays with its free text, a block of today with the comment', () => {
+    const entries = (file: string) => readJournal(readFileSync(join(dir, file), 'utf8'), file).entries;
+    const told = (file: string) => entries(file).flatMap((e) => e.decision?.effects ?? []).map((e) => e.kind);
+    expect(told('build-loop-blocked.pre-orc-196.json')).toContain('activity');
+    expect(told('build-loop-blocked.pre-orc-196.json')).not.toContain('block_comment');
+    expect(told('build-loop-blocked.json')).toContain('block_comment');
+  });
+
   // Regression replays each decision on the workflow version it was frozen on, kept in the journal: a
   // change of the pack or of a preset shows only against the workflow of today, hence this what-if pass.
-  it.each(files)('%s decides the same under the standard pack and its preset as they are today', (file) => {
+  // Journals kept as the engine before ORC-196 recorded them, on versions without its comment: they pin those versions, today's differ by design.
+  it.each(files.filter((f) => !f.includes('.pre-orc-196.')))('%s decides the same under the standard pack and its preset as they are today', (file) => {
     const scenario = file.replace(/(\.v\d+)?\.json$/, '');
     expect(Object.keys(SCENARIOS)).toContain(scenario);
     const report = replayJournal(readJournal(readFileSync(join(dir, file), 'utf8'), file), { mode: 'what-if', workflow: scenarioWorkflow(scenario) });

@@ -1,6 +1,6 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { REFREEZE } from '../../../checks/freeze.js';
-import { IssueNotFoundError, labelEchoKey, stateEchoKey } from '../types.js';
+import { isEffectComment, IssueNotFoundError, labelEchoKey, stateEchoKey } from '../types.js';
 import { labelChanges, type KnownLabels } from './labels.js';
 import { holds, isNoRepo, namesOtherRepo, resolveRoute, type Route } from '../../../core/routing.js';
 import { SCHEMA_VERSION, type LogicalState, type FactoryEvent, type Taint, type TicketState } from '../../../core/types.js';
@@ -92,7 +92,9 @@ export function signedActor(body: any): SignedActor {
     id = a.external ? undefined : a.id;
     name = a.name;
   } else {
-    id = body?.actor?.type === 'user' ? idOf(body.actor.id) : undefined;
+    // A comment synced from Slack or email names a workspace user no more than a session's does.
+    const external = body?.type === 'Comment' && !!(body.data?.botActor || body.data?.externalUser || body.data?.externalUserId);
+    id = body?.actor?.type === 'user' && !external ? idOf(body.actor.id) : undefined;
     name = body?.actor?.name;
   }
   return id ? { id, taint: 'trusted', name: name ?? 'Humain' } : { taint: 'untrusted', name: name ?? 'Humain' };
@@ -131,6 +133,22 @@ function sessionEvents(body: any, author: string, projectId: string, ctx: MapCon
     return [{ type: 'session.prompted', payload: { linearSessionId: sessionId, body: reply, author } }];
   }
   return [];
+}
+
+/**
+ * The reply to a block's comment, written on the ticket (ORC-196): a member's comment while the factory waits for one.
+ * Any other comment stays between humans, and is not journaled. A comment posted once the block's comment is visible
+ * finds the block committed: the read cannot miss it. Dropped: what no user signed (the factory's own comments, an
+ * integration, Slack), what starts with a mention (`@relais` opens its own session, `@someone` talks to them), and
+ * `/refreeze`, which is no instruction for the agent. A thread under any comment counts as well as the ticket's.
+ */
+async function commentEvents(body: any, identifier: string, projectId: string, actor: string | undefined, author: string, ctx: MapContext): Promise<PartialEvent[]> {
+  const text: unknown = body.data?.body;
+  if (body.action !== 'create' || !actor || typeof text !== 'string' || !text.trim() || isEffectComment(text)) return [];
+  const bare = stripMention(text);
+  if (bare !== text.trim() || parseCommand(bare).name === REFREEZE) return [];
+  if (!(await ctx.ticket(projectId, identifier))?.blocked) return [];
+  return [{ type: 'ticket.commented', payload: { body: text, author } }];
 }
 
 async function issueEvents(body: any, identifier: string, teamKey: string, projectId: string, ctx: MapContext): Promise<PartialEvent[]> {
@@ -206,6 +224,7 @@ async function routeInTeam(body: any, identifier: string, team: string[], ctx: M
 function issueIdentifier(body: any): string | undefined {
   if (body?.type === 'AgentSessionEvent') return body.agentSession?.issue?.identifier;
   if (body?.type === 'Issue') return body.data?.identifier ?? (body.data?.team?.key ? `${body.data.team.key}-${body.data.number}` : undefined);
+  if (body?.type === 'Comment') return body.data?.issue?.identifier;
   return undefined;
 }
 
@@ -260,8 +279,9 @@ export async function mapLinearWebhook(body: any, key: string, ctx: MapContext):
   const { projectId, repos, waitedIn, noRepo } = route;
   const { id: actor, taint, name } = signedActor(body);
   let partials: PartialEvent[];
-  if (noRepo) partials = [{ type: 'ticket.delegated', payload: { ...delegationPayload(body), noRepo } }];
+  if (noRepo) partials = [{ type: 'ticket.delegated', payload: { ...delegationPayload(body), ack: true, noRepo } }];
   else if (body.type === 'AgentSessionEvent') partials = sessionEvents(body, name, projectId, ctx);
+  else if (body.type === 'Comment') partials = await commentEvents(body, identifier, projectId, actor, name, ctx);
   else partials = await issueEvents(body, identifier, teamKey, projectId, ctx);
   // The choice to make goes with the event: `decide` blocks the delegation, answers the rest.
   const routing = { ...(repos ? { repos } : {}), ...(waitedIn ? { waitedIn } : {}) };

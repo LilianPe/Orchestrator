@@ -45,11 +45,11 @@ describe('a Linear team no project takes (ORC-171)', () => {
   };
   const first: MapContext = { ...ctx(), firstProject: () => 'first' };
 
-  it('sends its delegation to the first project, naming the team, with the signed actor and no ack', async () => {
+  it('sends its delegation to the first project, naming the team, with the signed actor, and the ack its session is owed', async () => {
     expect(await mapLinearWebhook(noTeam('session-created-delegation'), 'd1', first)).toEqual([
       {
         id: 'linear:d1', type: 'ticket.delegated', at: 5000, schemaVersion: 3, taint: 'trusted', actor: 'user-lilian', projectId: 'first', ticketId: 'ZZZ-1',
-        payload: { linearSessionId: 'as-1', promptContext: '<issue identifier="REL-1">Export</issue>', noRepo: 'ZZZ' },
+        payload: { linearSessionId: 'as-1', promptContext: '<issue identifier="REL-1">Export</issue>', ack: true, noRepo: 'ZZZ' },
       },
     ]);
   });
@@ -787,5 +787,50 @@ describe('ingest', () => {
     const forged = createHmac('sha256', '').update(raw).digest('hex');
     expect(await ingest(raw, { 'linear-signature': forged })).toEqual({ status: 401 });
     expect(accept).not.toHaveBeenCalled();
+  });
+});
+
+describe('a comment on the ticket as the reply to a block (ORC-196)', () => {
+  const comment = (data: object = {}, patch: object = {}) => ({
+    type: 'Comment', action: 'create', webhookTimestamp: 1000, actor: { id: 'user-lilian', type: 'user', name: 'Lilian' },
+    data: { id: 'c1', body: 'Prends le point-virgule', issue: { id: 'u1', identifier: 'REL-1' }, ...data }, ...patch,
+  });
+  const blocked = (over: Partial<TicketState> = {}): MapContext => ({ ...ctx(), ticket: async () => ({ ...newTicketState('p', 'REL-1', 'T', 'dev', 0), delegated: true, blocked: true, ...over }) });
+
+  it('a signed comment on a blocked ticket is a reply: journaled with its actor, its roles still to resolve', async () => {
+    expect(await mapLinearWebhook(comment(), 'c1', blocked())).toEqual([
+      { id: 'linear:c1', type: 'ticket.commented', at: 5000, schemaVersion: 3, taint: 'trusted', actor: 'user-lilian', projectId: 'p', ticketId: 'REL-1', payload: { body: 'Prends le point-virgule', author: 'Lilian' } },
+    ]);
+  });
+
+  it('a thread under the block\'s comment is a reply too', async () => {
+    expect(await mapLinearWebhook(comment({ parentId: 'c0' }), 'c1', blocked())).toHaveLength(1);
+  });
+
+  it.each<[string, object, object]>([
+    ['the factory\'s own comment, signed by its app', {}, { actor: { id: 'app', type: 'oauthClient', name: 'relais' } }],
+    ['the factory\'s own comment, whichever actor is named', { body: 'Bloqué\n\n<!-- factory:effect=p:1:0 -->' }, {}],
+    ['a comment synced from Slack', { botActor: { name: 'Slack' } }, {}],
+    ['an external user\'s', { externalUserId: 'e1' }, {}],
+    ['a mention: it opens its own session', { body: '@relais reprends' }, {}],
+    ['a word to someone else', { body: '@alice tu regardes ?' }, {}],
+    ['/refreeze: no instruction for the agent', { body: '/refreeze' }, {}],
+    ['an edit', {}, { action: 'update' }],
+    ['an empty body', { body: '  ' }, {}],
+  ])('drops %s', async (_what, data, patch) => {
+    expect(await mapLinearWebhook(comment(data, patch), 'c1', blocked())).toEqual([]);
+  });
+
+  it('a comment on a ticket that waits for no reply, or that no project tracks, is not journaled', async () => {
+    expect(await mapLinearWebhook(comment(), 'c1', blocked({ blocked: false }))).toEqual([]);
+    expect(await mapLinearWebhook(comment(), 'c1', ctx())).toEqual([]);
+  });
+
+  it('a mention further in the text stays a reply', async () => {
+    expect(await mapLinearWebhook(comment({ body: 'Oui, voir @alice' }), 'c1', blocked())).toHaveLength(1);
+  });
+
+  it('a team no project takes: nothing', async () => {
+    expect(await mapLinearWebhook(comment({ issue: { id: 'u1', identifier: 'ZZZ-1' } }), 'c1', blocked())).toEqual([]);
   });
 });

@@ -33,7 +33,7 @@ Linear peut refuser une URL de callback en `http://localhost` : dans ce cas, exp
 À la connexion, Relais :
 
 - enregistre les jetons, l'identifiant de l'agent (`appUserId`) et de l'organisation ;
-- **crée dans chaque équipe configurée les statuts manquants** (voir § 5) et les labels `agent:reprendre`, `agent:stop` et `Bloqué` ;
+- **crée dans chaque équipe configurée les statuts manquants** (voir § 5) et les labels `agent:stop` et `Bloqué` ;
 - lance une réconciliation tout de suite ; ensuite, elle passe toutes les 5 minutes (ORC-185).
 
 Le jeton est rafraîchi automatiquement. Aux démarrages suivants, Relais se reconnecte seul avec les jetons de `secrets.json`. `relais status` et l'interface indiquent si Linear est connecté.
@@ -86,7 +86,7 @@ Sa cadence est une **minuterie en base** (ORC-185) : le pseudo-ticket `_reconcil
 | `@relais retiens <fait>` | PR dans le dépôt de connaissance (`remember`). |
 | `@relais fais-le` | Rappelle qu'il faut déléguer le ticket. |
 | Label `agent:stop`, bouton stop de la session, ou retrait de la délégation | Arrêt du run, ticket bloqué. |
-| Label `agent:reprendre` | Relance `dev-feedback` (débloque). |
+| Répondre sur un ticket bloqué (commentaire ou session) | Relance l'étape bloquée, avec la réponse en entrée : voir [Le commentaire de blocage](#le-commentaire-de-blocage-orc-196). |
 
 **Done vaut décision de merge (ORC-148).** Un ticket délégué en *Human Review*, dont la PR est ouverte, passé en *Done* par un humain qui a le droit de merge GitHub (vérifié sur l'acteur du webhook signé), est mergé par l'usine avec sa GitHub App, sur le **commit montré en *Human Review*** : quand l'usine passe le ticket en *Human Review* à la fin de son propre travail, elle retient la tête de la PR, et ne merge que ce commit, si c'est encore la tête de la PR du ticket et que ses checks sont verts. **Dépôt sans CI** : un commit relu sans aucun check n'est mergé que dans un dépôt sans CI, reconnu à trois signes relus au moment du merge : le commit relu n'a toujours aucun check, le dépôt n'a aucun workflow GitHub Actions actif à lui (une CI sur `pull_request` seulement ne laisse aucun check sur la base ; les workflows dynamiques de GitHub, Pages ou Dependabot, ne comptent pas ; des workflows illisibles, faute de la permission *Actions* en lecture, comptent comme une CI), et le commit de base de la PR n'a aucun check (une CI hors Actions qui vérifie la base). Sinon la CI n'a pas encore tourné sur le commit relu, et l'usine refuse. Une CI hors Actions qui ne tourne que sur les PR n'est pas reconnue : protégez la branche par des checks requis. Les checks requis par une protection de branche restent appliqués par GitHub au merge. La méthode de merge est la première que le dépôt autorise (merge, sinon squash, sinon rebase).
 
@@ -96,13 +96,33 @@ Les autres refus ne mergent rien et renvoient le ticket en *Human Review* avec l
 
 Ce qui ne déclenche rien : un *Done* sans acteur signé (l'intégration GitHub de Linear après un merge fait sur GitHub, la réconciliation), un *Done* posé pendant le dev ou la review IA, un *Done* sur un ticket sans PR ouverte.
 
-Après le merge de la PR (détecté par le relevé GitHub) : statut *Done*, worktree supprimé, run `learn`. Le run de code encore en cours est arrêté, et ce qui attendait (file, réponse en `debounce`) est abandonné. Ensuite, plus aucun travail de code ne démarre sur le ticket : `agent:reprendre` ou une réponse dans la session ne relancent rien (une réponse est seulement gardée). Pour reprendre le ticket, changez son statut pour autre chose que *Done* (aussi quand Relais n'a pas pu le passer en *Done*) ou déléguez-le à nouveau.
+Après le merge de la PR (détecté par le relevé GitHub) : statut *Done*, worktree supprimé, run `learn`. Le run de code encore en cours est arrêté, et ce qui attendait (file, réponse en `debounce`) est abandonné. Ensuite, plus aucun travail de code ne démarre sur le ticket : une réponse dans le ticket ne relance rien (une réponse est seulement gardée). Pour reprendre le ticket, changez son statut pour autre chose que *Done* (aussi quand Relais n'a pas pu le passer en *Done*) ou déléguez-le à nouveau.
 
 Une équipe qui a plusieurs dépôts : chaque ticket désigne le sien par un label `repo:<id>` ([`projets-et-workspaces.md`](projets-et-workspaces.md#une-équipe-plusieurs-dépôts)).
 
 Seuls les tickets **délégués** à l'agent reçoivent du travail de code ; une mention sur un ticket non délégué ne donne qu'une réponse. Tout ce comportement se change dans `.relais/workflow.yml` : [`workflow.md`](workflow.md). Les contrôles avant de prendre un ticket (description d'au moins 30 caractères, pas de branche existante…) sont décrits dans [`workflow.md`](workflow.md#tracker) ; `relais plan` les applique à blanc.
 
-Un ticket bloqué (échec, plafond, question, stop, bail expiré deux fois, trop de relances après coupure) attend un humain : répondez dans la session ou posez `agent:reprendre`.
+Un ticket bloqué (échec, plafond, question, stop, bail expiré deux fois, trop de relances après coupure) attend un humain : répondez dans le ticket.
+
+### Le commentaire de blocage (ORC-196)
+
+Tout blocage est dit au même endroit et de la même façon, dans un commentaire du ticket, seul canal d'escalade, avec le label `Bloqué` à côté du statut :
+
+```
+🔴 Bloqué à l'étape <étape> (tentative <n>/<max>)
+Raison : <une phrase>
+Ce que j'ai essayé :
+- <fait>
+Question : <une question fermée si possible>
+État : branche <nom> · dernier commit <sha> · CI <état> · tokens <n> · <durée>
+Répondez dans ce ticket : je reprends dès votre réponse.
+```
+
+`decide` écrit les champs, l'usine compose le texte en un seul endroit (`src/core/block-comment.ts`, ORC-214 y mettra son `OutputPolicy`) et lit l'état au moment d'écrire. Ce que l'usine ne sait pas, elle le dit (`aucune`, `inconnus`). « Ce que j'ai essayé » ne liste que des faits : parfois un seul, jamais inventés. Un blocage qu'une réponse ne lève pas (dépôt à ajouter ou à nommer) le dit à la dernière ligne. Un arrêt à la demande (`stop`, PR fermée) reste une réponse dans la session : il n'y a rien à escalader.
+
+**Répondre.** Un commentaire d'un utilisateur de l'espace sur un ticket bloqué et délégué, ou une réponse dans sa session, relance l'étape bloquée. Le commentaire peut être au niveau du ticket ou dans un fil. Ne comptent pas comme réponse : un commentaire de l'usine, d'une intégration ou synchronisé (Slack, e-mail), un commentaire qui commence par une mention (`@relais` ouvre sa propre session, `@quelqu'un` parle à quelqu'un d'autre), `/refreeze`. Un humain qui n'est pas membre de l'équipe est refusé : le refus est journalisé et répondu dans le ticket. Sur un ticket qui n'attend pas de réponse, un commentaire reste une conversation entre humains : l'usine ne le lit pas. Un commentaire perdu par Linear n'est pas rattrapé par la réconciliation.
+
+Les tickets déjà démarrés restent sur la version figée de leur workflow : ils gardent le texte libre dans la session, et le label `agent:reprendre` y relance encore `dev-feedback`, jusqu'à leur fin.
 
 ### Le déclenchement
 
@@ -117,7 +137,7 @@ L'accusé ne retient pas le travail : un commentaire ou une activité que Linear
 
 **Un seul run actif par ticket.** Une nouvelle délégation sur un ticket qui a un run ou une vérification en cours ne lance rien, n'empile rien, garde l'initiateur et répond dans sa session ; après un redémarrage, c'est vrai du run repris comme du run relancé. Deux délégations d'un ticket en file donnent une seule ligne de file, mais `decide` ne voit pas la file : la seconde est accusée elle aussi, et son auteur devient l'initiateur.
 
-**Équipe sans dépôt.** Une délégation sur une équipe Linear qu'aucun projet de `config.yaml` ne prend passe en Bloqué (label `Bloqué`, raison dans la session ; ORC-196 remplacera ce texte par son commentaire standard), quel que soit son auteur : sans dépôt, aucun rôle à vérifier. Le ticket attend sous le **premier** projet de la configuration, et aucun travail ne part. Pour corriger : ajoutez un projet pour cette équipe et redémarrez, le passage de réconciliation suivant lève le blocage et le label, puis déléguez de nouveau. Une délégation arrivée avant ce passage part déjà dans le nouveau dépôt, et retire le label. Tout le reste sur cette équipe (mention, réponse, changement de ticket) reste ignoré, comme avant. Un rattachement par *projet* Linear n'existe pas encore : le routage se fait par équipe, et `repos` de `factory.yml` n'est pas encore lu pour router (ORC-204).
+**Équipe sans dépôt.** Une délégation sur une équipe Linear qu'aucun projet de `config.yaml` ne prend passe en Bloqué (label `Bloqué`, raison dans le commentaire de blocage), quel que soit son auteur : sans dépôt, aucun rôle à vérifier. Le ticket attend sous le **premier** projet de la configuration, et aucun travail ne part. Pour corriger : ajoutez un projet pour cette équipe et redémarrez, le passage de réconciliation suivant lève le blocage et le label, puis déléguez de nouveau. Une délégation arrivée avant ce passage part déjà dans le nouveau dépôt, et retire le label. Tout le reste sur cette équipe (mention, réponse, changement de ticket) reste ignoré, comme avant. Un rattachement par *projet* Linear n'existe pas encore : le routage se fait par équipe, et `repos` de `factory.yml` n'est pas encore lu pour router (ORC-204).
 
 ### Autorisations : qui peut faire quoi
 
@@ -129,7 +149,7 @@ Chaque action humaine est vérifiée sur l'**acteur signé** du webhook (l'id Li
 | Répondre à l'agent (`clarify`), lui poser une question | Demandeur (qui a délégué le ticket) **ou** membre de l'équipe | session Linear | réponse dans la session du ticket, question dans une session de question |
 | Valider la spec | Valideur désigné, **jamais** l'initiateur du run | session Linear | rien encore : vient avec `spec_review` (ORC-212) |
 | Regeler (`/refreeze`) | Mainteneur désigné | Linear ou PR | commande `/refreeze` en mentionnant l'agent dans le ticket ou en répondant dans sa session (ORC-131), refusée aussi sans rôles résolus ; pas encore depuis la PR |
-| Relancer un run bloqué | Membre de l'équipe | Linear (label ou réponse dans la session) | réponse dans la session, `agent:reprendre`, changement de statut qui lance un run, sur un ticket bloqué |
+| Relancer un run bloqué | Membre de l'équipe | Linear (commentaire, réponse dans la session, label d'un projet) | réponse dans le ticket, label ou changement de statut qui lance un run, sur un ticket bloqué |
 | Passer en *Done* (merge) | Droit de merge GitHub | Linear | aucun merge, refus répondu dans le ticket, retour en *Human Review* (ORC-148) |
 
 Un refus ne lance rien, ne garde pas la réponse refusée pour le prochain run et ne débloque pas le ticket ; il est répondu là où l'humain a agi (dans la session de l'événement, sinon en commentaire du ticket), par l'outbox, donc une seule fois même si l'effet est rejoué, et le démon journalise `authz: refused …`. La délégation refusée reste enregistrée (Linear a bien délégué) : un membre autorisé peut ensuite relancer. Un événement sans acteur signé (intégration, Slack, e-mail, délégation retrouvée par la réconciliation) est refusé pour toute action de la matrice ; s'il n'a pas non plus de session (délégation, déplacement ou label retrouvé par la réconciliation, changement fait par une intégration), personne n'est à qui répondre : le refus est seulement journalisé. Une délégation dont le webhook s'est perdu n'est donc plus rattrapée par la réconciliation : déléguez à nouveau. Arrêter (`agent:stop`, bouton stop, retrait de la délégation) n'est pas dans la matrice. Les événements GitHub (`push.human`, `pr.reviewed`, `pr.conflicted`, `pr.closed`) n'y passent pas non plus aujourd'hui : aucun ne fait agir l'usine pour un humain (revue et conflit sans réaction, ORC-190 et ORC-146 ; une PR fermée ne fait qu'arrêter ; un push humain est non fiable et ne lance rien). Leurs réactions apporteront leur vérification, sur le login GitHub signé.
@@ -161,7 +181,7 @@ Les déplacements faits par Relais lui-même sont reconnus (pendant 60 s) et ne 
 
 Un ticket délégué passé par un humain dans un statut de type *Canceled* annule son run (arrêt, file et réponses en attente abandonnées) ; il n'est pas bloqué, et un blocage en cours est levé avec son label (ORC-170).
 
-Tant qu'un ticket est **bloqué** (l'usine attend une réponse), le label `Bloqué` est posé à côté de son statut ; il est retiré quand le ticket repart. Relais le crée à la connexion, avec `agent:reprendre` et `agent:stop`.
+Tant qu'un ticket est **bloqué** (l'usine attend une réponse), le label `Bloqué` est posé à côté de son statut ; il est retiré quand le ticket repart. Relais le crée à la connexion, avec `agent:stop`.
 
 ## 6. Équipes et projets
 

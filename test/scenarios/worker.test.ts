@@ -533,7 +533,9 @@ describe('outbox executors: lease, backoff, results through the inbox', () => {
     expect(h.runner.requests).toHaveLength(0);
     expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Erreur : Linear down' });
     expect((await journal(h)).find((e) => e.id === 'effect:REL-1:1:2')).toMatchObject({ type: 'effect.failed', payload: { error: 'Linear down', attempts: 2 } });
-    expect(h.tracker.activities().filter((a) => a.type === 'error').map((a) => ('body' in a ? a.body : ''))).toEqual(['Erreur : Linear down']);
+    expect(h.tracker.activities().filter((a) => a.type === 'error')).toEqual([]);
+    // Comments are what is down here: its own comment died too, and nothing loops on it.
+    expect(h.tracker.comments('REL-1')).toEqual([]);
   });
 
   it('decides the effect.failed of an effect it let die at once, even when the result ahead of it was parked as the backoff ended (ORC-290)', async () => {
@@ -845,7 +847,7 @@ describe('a start that must not run (ORC-150 review)', () => {
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
     await h.send('ticket.delegated', { linearSessionId: 'ls-2' }, 'REL-2');
     expect((await h.store.listQueue()).map((q) => q.ticketId)).toEqual(['REL-2']);
-    await h.orch.blockTicket('p', 'REL-2', 'Question posée par l\'agent');
+    await h.orch.blockTicket('p', 'REL-2', 'Question posée par l\'agent', { question: 'Laquelle ?' });
     h.runner.release(h.runner.requests[0]!.runId);
     await h.orch.drained();
     expect(h.runner.requests).toHaveLength(1);

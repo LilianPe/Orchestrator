@@ -175,12 +175,12 @@ describe('server', () => {
     }
   });
 
-  it('agent ask posts an elicitation and blocks the ticket through the orchestrator', async () => {
+  it('agent ask blocks the ticket through the orchestrator, which tells the question', async () => {
     const { app, tracker, blockTicket } = await setup();
     const res = await app.request('/agent/ask', { method: 'POST', headers: { authorization: 'Bearer tok', 'content-type': 'application/json' }, body: JSON.stringify({ text: 'Quelle base ?' }) });
     expect(res.status).toBe(200);
-    expect(tracker.activities('ls-1')).toEqual([{ type: 'elicitation', body: 'Quelle base ?' }]);
-    expect(blockTicket).toHaveBeenCalledWith('p', 'REL-1', "Question posée par l'agent");
+    expect(tracker.activities('ls-1')).toEqual([]);
+    expect(blockTicket).toHaveBeenCalledWith('p', 'REL-1', "Question posée par l'agent", { question: 'Quelle base ?', linearSessionId: 'ls-1' });
   });
 
   it('agent ask answers without waiting for the block, and reports a failed one', async () => {
@@ -279,11 +279,11 @@ describe('server', () => {
       expect(await store.getMeta('agent-output:r1')).toBeUndefined();
     });
 
-    it('ask posts an elicitation and blocks the ticket, like /agent/ask', async () => {
+    it('ask blocks the ticket with the question, like /agent/ask', async () => {
       const { app, tracker, blockTicket } = await setup();
       expect((await call(app, 'ask', { text: 'Quelle base ?' })).isError).toBeUndefined();
-      expect(tracker.activities('ls-1')).toEqual([{ type: 'elicitation', body: 'Quelle base ?' }]);
-      expect(blockTicket).toHaveBeenCalledWith('p', 'REL-1', "Question posée par l'agent");
+      expect(tracker.activities('ls-1')).toEqual([]);
+      expect(blockTicket).toHaveBeenCalledWith('p', 'REL-1', "Question posée par l'agent", { question: 'Quelle base ?', linearSessionId: 'ls-1' });
       expect((await call(app, 'ask', {})).isError).toBe(true);
     });
 
