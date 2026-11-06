@@ -381,6 +381,44 @@ on:
         await olderDecidedThenRestart(scenario);
       });
     });
+
+    it('lets a stop pass the backoff once its retry is answered `waiting`, when only the result of a done effect is ahead (ORC-315)', async () => {
+      const answered = gate();
+      let hiccup = true;
+      const decided: string[] = [];
+      const h = createHarness({
+        projectYaml: CRASH_WORKFLOW,
+        processRetry: { attempts: 5, baseMs: 1 },
+        // A backoff no real timer reaches during the test: the stop is what ends it.
+        effectRetry: { attempts: 2, baseMs: 60_000, capMs: 60_000 },
+        wrapStore: (inner) =>
+          Object.assign(Object.create(inner) as Store, {
+            decide: async (req: DecisionRequest) => {
+              if (hiccup && req.event.id === 'effect:REL-1:1:1') {
+                hiccup = false;
+                throw new Error('database hiccup');
+              }
+              const outcome = await inner.decide(req);
+              decided.push(`${req.event.id}:${outcome.status}`);
+              if (req.event.id === 'effect:REL-1:1:1' && outcome.status === 'waiting') answered.open();
+              return outcome;
+            },
+          }),
+      });
+      h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+      h.tracker.comment = async () => {
+        throw new Error('Linear down');
+      };
+      await h.orch.accept(delegation(h, 'd1'));
+      await answered.opened;
+      await h.orch.drained();
+
+      await h.orch.accept(stop(h, 's1'));
+      await h.orch.drained();
+
+      expect(decided).toContain('s1:committed');
+      expect((await h.store.listEffects('p', 'REL-1')).find((r) => r.id === 'REL-1:1:2')).toMatchObject({ status: 'failed', error: 'cancelled by s1' });
+    });
   });
 
   it('keeps the slot a drain promised to a dequeued item from a start decided meanwhile, and the item its place', async () => {

@@ -82,9 +82,9 @@ const whose = (r: TicketRef): string => r.ticketId ?? `the events without a tick
  * - **A failure holds its ticket.** A row whose preparation or store transaction throws (the
  *   tracker, the database) stays pending and is retried with a backoff (`PROCESS_RETRY`); the later
  *   rows of its ticket (or, for an event without a ticket, of its project) wait behind it and go
- *   once it passes. Past the last retry, the row and those behind it wait for the next start. An
- *   older row is not behind it: it still goes to the store, whose answer keeps the order, and takes
- *   the hold if it fails in turn (ORC-315).
+ *   once it passes, or once the store answers it `waiting`: the store keeps the order from there.
+ *   Past the last retry, the row and those behind it wait for the next start. An older row is not
+ *   behind it: it still goes to the store, and takes the hold if it fails in turn (ORC-315).
  * - **A poison event is dead-lettered (ORC-175).** A row whose upcast or decision (`decide`,
  *   `reduce`) throws would throw again: it is not retried. It goes to `dead_letter`, marked
  *   processed, with the event that blocks its ticket written to the inbox, in one transaction; the
@@ -330,9 +330,9 @@ export class Worker {
       }
       if (outcome.status === 'waiting') {
         this.waited.set(row.id, row);
-        // It got through: the retries count consecutive failures. If it holds its key, it keeps the
-        // hold: the rows behind it are younger, and the store would answer them `waiting` too.
-        this.failures.delete(row.id);
+        // It got through, so it holds nothing back any more: the store keeps the order from here, and
+        // a stop behind it may pass a backoff. A shutdown leaves the rows behind it for the next start.
+        if (holder?.id === row.id && !this.stopped) this.letGo(row, key);
         return outcome.backoff ? 'held' : 'waiting';
       }
       this.passed(row, key);
@@ -394,6 +394,8 @@ export class Worker {
     this.d.log('error', `event ${row.id} (${row.type}): ${err.message} (attempt ${n} of ${this.retry.attempts}, retried in ${Math.round(delay / 1000)} s)`);
     const timer = setTimeout(() => {
       this.retryTimers.delete(timer);
+      // It was taken up meanwhile, behind an older row that took the hold: this retry is out of date.
+      if (this.failures.get(row.id) !== n) return;
       this.skipped.delete(row.id);
       // Queued as read, not left to the next scan: a transaction that committed after all (the
       // answer to its COMMIT lost) left the row processed, out of the scans, and only its own
@@ -438,10 +440,15 @@ export class Worker {
     this.behind.set(key, rows);
   }
 
-  /** A row went through: if it held its key, the rows behind it are taken up again. */
+  /** A row went through. */
   private passed(row: StoredEvent, key: string): void {
-    this.failures.delete(row.id);
     this.firstRead.delete(row.id);
+    this.letGo(row, key);
+  }
+
+  /** The row's failures are over: if it held its key, the rows behind it are taken up again. */
+  private letGo(row: StoredEvent, key: string): void {
+    this.failures.delete(row.id);
     if (this.holders.get(key)?.id !== row.id) return;
     this.holders.delete(key);
     for (const id of this.behind.get(key)?.keys() ?? []) this.skipped.delete(id);
