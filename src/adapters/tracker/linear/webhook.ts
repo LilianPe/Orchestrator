@@ -1,5 +1,7 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { REFREEZE } from '../../../checks/freeze.js';
+import { classifyMessage } from '../../../core/human-message.js';
+import { maskTranscriptLine } from '../../runner/transcript.js';
 import { isEffectComment, IssueNotFoundError, labelEchoKey, stateEchoKey } from '../types.js';
 import { labelChanges, type KnownLabels } from './labels.js';
 import { holds, isNoRepo, namesOtherRepo, resolveRoute, type Route } from '../../../core/routing.js';
@@ -108,6 +110,15 @@ const isDelegation = (body: any): boolean => body.type === 'AgentSessionEvent' &
 
 const delegationPayload = (body: any) => ({ linearSessionId: body.agentSession.id as string, promptContext: body.promptContext as string | undefined });
 
+/**
+ * What a message becomes before the inbox (ORC-180): the secret shapes of the transcripts masked, so that none reaches
+ * the journal, a prompt or an activity, then classified without a model. On Linear, the message stays as its author wrote it.
+ */
+function message(text: string): { body: string; masked?: true } {
+  const body = maskTranscriptLine(text, []);
+  return body === text ? { body } : { body, masked: true };
+}
+
 /** The first word of a comment, without its mention, as a command's name, and the rest as its body. */
 function parseCommand(text: string): { name: string; body: string } {
   const [first = '', ...rest] = text.split(/\s+/);
@@ -123,17 +134,22 @@ function sessionEvents(body: any, author: string, projectId: string, ctx: MapCon
     const command = parseCommand(text);
     // `/refreeze` is the factory's own (ORC-131), not a workflow rule's.
     if ([REFREEZE, ...ctx.commands(projectId)].includes(command.name)) {
-      return [{ type: 'command', payload: { ...command, linearSessionId: sessionId, author, ack: true } }];
+      return [{ type: 'command', payload: { ...command, ...message(command.body), linearSessionId: sessionId, author, ack: true, kind: 'command' } }];
     }
-    return [{ type: 'session.mentioned', payload: { linearSessionId: sessionId, body: text, author, ack: true } }];
+    const said = message(text);
+    return [{ type: 'session.mentioned', payload: { ...said, linearSessionId: sessionId, author, ack: true, kind: classifyMessage(said.body) } }];
   }
   if (body.action === 'prompted') {
     if (body.agentActivity?.signal === 'stop') return [{ type: 'session.stopped', payload: { linearSessionId: sessionId } }];
     const reply: string = body.agentActivity?.content?.body ?? '';
     // A blocked ticket's thread asks for a reply: `/refreeze` there is the command, not feedback that relaunches the agent.
     const command = parseCommand(stripMention(reply));
-    if (command.name === REFREEZE) return [{ type: 'command', payload: { ...command, linearSessionId: sessionId, author } }];
-    return [{ type: 'session.prompted', payload: { linearSessionId: sessionId, body: reply, author } }];
+    if (command.name === REFREEZE) return [{ type: 'command', payload: { ...command, ...message(command.body), linearSessionId: sessionId, author, kind: 'command' } }];
+    const said = message(reply);
+    const bare = stripMention(said.body);
+    const kind = classifyMessage(bare);
+    // A command is read by its first word: without the mention it may open with.
+    return [{ type: 'session.prompted', payload: { ...said, body: kind === 'command' ? bare : said.body, linearSessionId: sessionId, author, ack: true, kind } }];
   }
   return [];
 }
@@ -143,7 +159,9 @@ function sessionEvents(body: any, author: string, projectId: string, ctx: MapCon
  * Any other comment stays between humans, and is not journaled. A comment posted once the block's comment is visible
  * finds the block committed: the read cannot miss it. Dropped: what no user signed (the factory's own comments, an
  * integration, Slack), what starts with a mention (`@relais` opens its own session, `@someone` talks to them), and
- * `/refreeze`, which is no instruction for the agent. A thread under any comment counts as well as the ticket's.
+ * `/refreeze`, which is no instruction for the agent. A thread under any comment counts as well as the ticket's. A reply
+ * is masked and classified as a session's is (ORC-180). A comment outside a block does not enter the human inbox: it is
+ * not addressed to the factory, and an agent would read it; a session is how one speaks to the agent at work.
  */
 async function commentEvents(body: any, identifier: string, projectId: string, actor: string | undefined, author: string, ctx: MapContext): Promise<PartialEvent[]> {
   const text: unknown = body.data?.body;
@@ -152,7 +170,8 @@ async function commentEvents(body: any, identifier: string, projectId: string, a
   if (bare !== text.trim() || parseCommand(bare).name === REFREEZE) return [];
   const ticket = await ctx.ticket(projectId, identifier);
   if (!ticket?.blocked || !ticket.delegated) return [];
-  return [{ type: 'ticket.commented', payload: { body: text, author } }];
+  const said = message(text);
+  return [{ type: 'ticket.commented', payload: { ...said, author, kind: classifyMessage(said.body) } }];
 }
 
 async function issueEvents(body: any, identifier: string, teamKey: string, projectId: string, ctx: MapContext): Promise<PartialEvent[]> {

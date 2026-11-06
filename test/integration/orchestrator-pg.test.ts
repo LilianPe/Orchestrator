@@ -114,7 +114,7 @@ describe.skipIf(!PG_URL)('orchestrator on PgStore', () => {
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
     // A corrupt projection: recording a reply in it throws, every time.
     const good = await h.ticket();
-    await h.store.putTicket({ ...good, pendingFeedback: null as unknown as TicketState['pendingFeedback'] });
+    await h.store.putTicket({ ...good, humanInbox: null as unknown as TicketState['humanInbox'] });
     await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'et le mobile ?', author: 'L' });
     const dead = await pool.query<{ event_id: string; status: string; failures: number; ticket_id: string }>(
       `select event_id, status, failures, ticket_id from dead_letter`,
@@ -123,10 +123,10 @@ describe.skipIf(!PG_URL)('orchestrator on PgStore', () => {
     expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: expect.stringMatching(/^Événement t-2 mis de côté \(session\.prompted\)/) });
     expect(await h.store.pendingInbox(10)).toEqual([]);
 
-    await h.store.putTicket({ ...(await h.ticket()), pendingFeedback: [] });
+    await h.store.putTicket({ ...(await h.ticket()), humanInbox: [] });
     expect(await runRepair({ store: h.store, target: 'REL-1', action: 'replay', by: 'armand', now: h.clock.now(), print: () => {} })).toBe(0);
     await h.orch.drained();
-    expect(await h.ticket()).toMatchObject({ blocked: false, pendingFeedback: [expect.objectContaining({ body: 'et le mobile ?' })] });
+    expect(await h.ticket()).toMatchObject({ blocked: false, humanInbox: [expect.objectContaining({ body: 'et le mobile ?' })] });
     const journal = await pool.query<{ event_id: string; type: string }>(
       `select event_id, type from journal where ticket_id = 'REL-1' and type like 'dead_letter.%' order by seq`,
     );

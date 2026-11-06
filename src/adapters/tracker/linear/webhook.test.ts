@@ -176,6 +176,60 @@ describe('mapLinearWebhook', () => {
     });
     expect((await mapLinearWebhook(fx('session-stop'), 'd5', ctx()))[0]).toMatchObject({ type: 'session.stopped', payload: { linearSessionId: 'as-1' } });
   });
+  describe('classifies a message at its arrival, journaled with it (ORC-180)', () => {
+    const reply = (text: string) => {
+      const body = fx('session-prompted');
+      body.agentActivity.content.body = text;
+      return mapLinearWebhook(body, 'd', ctx());
+    };
+    const mention = (text: string) => {
+      const body = fx('session-created-mention');
+      body.agentSession.comment.body = text;
+      return mapLinearWebhook(body, 'd', ctx());
+    };
+
+    it.each([
+      ['et pour mobile ?', 'question'],
+      ['boutons mal alignés', 'question'],
+      ['corrige le tri', 'instruction'],
+      ['/status', 'command'],
+      ['/stop', 'command'],
+    ])('a reply %j is a %s, to acknowledge', async (text, kind) => {
+      expect((await reply(text))[0]).toMatchObject({ type: 'session.prompted', payload: { body: text, ack: true, kind } });
+    });
+
+    it('a command opened by a mention is read without it', async () => {
+      expect((await reply('[@factory](https://linear.app/x/profiles/factory) /stop'))[0]).toMatchObject({ payload: { body: '/stop', kind: 'command' } });
+    });
+
+    it('a mention is classified without the mention', async () => {
+      expect((await mention('[@factory](https://linear.app/x/profiles/factory) corrige le tri'))[0]).toMatchObject({ type: 'session.mentioned', payload: { body: 'corrige le tri', kind: 'instruction' } });
+      expect((await mention('[@factory](https://linear.app/x/profiles/factory) pourquoi ?'))[0]).toMatchObject({ payload: { kind: 'question' } });
+    });
+
+    it('a command is one as well, kept apart', async () => {
+      const body = fx('session-created-command');
+      body.agentSession.comment.body = '[@factory](https://linear.app/x/profiles/factory) retiens ceci';
+      expect((await mapLinearWebhook(body, 'd', ctx()))[0]).toMatchObject({ type: 'command', payload: { kind: 'command' } });
+    });
+
+    it('masks a secret before the message reaches the journal, and says it did', async () => {
+      const token = `ghp_${'a'.repeat(36)}`;
+      const [masked] = await reply(`corrige, voici le jeton ${token}`);
+      expect(JSON.stringify(masked)).not.toContain(token);
+      expect(masked).toMatchObject({ payload: { body: 'corrige, voici le jeton [masqué]', kind: 'instruction', masked: true } });
+      const [opened] = await mention(`[@factory](https://linear.app/x/profiles/factory) ${token} ?`);
+      expect(JSON.stringify(opened)).not.toContain(token);
+      expect(opened).toMatchObject({ payload: { masked: true } });
+      expect((await reply('corrige le tri'))[0]!.payload).not.toHaveProperty('masked');
+    });
+
+    it('an unsigned message keeps its taint, whatever its class', async () => {
+      const body = fx('session-prompted');
+      body.agentActivity = { ...body.agentActivity, userId: undefined, user: undefined, content: { body: 'corrige le tri' } };
+      expect((await mapLinearWebhook(body, 'd', ctx()))[0]).toMatchObject({ taint: 'untrusted', payload: { kind: 'instruction' } });
+    });
+  });
   it('maps a move and an added label', async () => {
     const out = await mapLinearWebhook(fx('issue-moved-labeled'), 'd6', ctx());
     expect(out).toEqual([
@@ -337,7 +391,7 @@ describe('mapLinearWebhook', () => {
       const named = await mapLinearWebhook(fx('session-created-mention'), 'd2', twoRepos(['repo:api']));
       expect(named).toMatchObject([{ projectId: 'api', payload: { ack: true } }]);
       const replied = await mapLinearWebhook(fx('session-prompted'), 'd3', twoRepos(['repo:api']));
-      expect(replied[0]!.payload).not.toHaveProperty('ack');
+      expect(replied).toMatchObject([{ projectId: 'api', payload: { ack: true, kind: 'question' } }]);
     });
 
     it('a delegation to the repo its label names says where the ticket waited', async () => {
@@ -799,8 +853,23 @@ describe('a comment on the ticket as the reply to a block (ORC-196)', () => {
 
   it('a signed comment on a blocked ticket is a reply: journaled with its actor, its roles still to resolve', async () => {
     expect(await mapLinearWebhook(comment(), 'c1', blocked())).toEqual([
-      { id: 'linear:c1', type: 'ticket.commented', at: 5000, schemaVersion: 3, taint: 'trusted', actor: 'user-lilian', projectId: 'p', ticketId: 'REL-1', payload: { body: 'Prends le point-virgule', author: 'Lilian' } },
+      { id: 'linear:c1', type: 'ticket.commented', at: 5000, schemaVersion: 3, taint: 'trusted', actor: 'user-lilian', projectId: 'p', ticketId: 'REL-1', payload: { body: 'Prends le point-virgule', author: 'Lilian', kind: 'question' } },
     ]);
+  });
+
+  it.each<[string, string, string]>([
+    ['a direction', 'Corrige le tri', 'instruction'],
+    ['a question', 'Lequel ?', 'question'],
+    ['a command, not a reply that relaunches', '/stop', 'command'],
+  ])('classifies a comment as a session\'s message: %s', async (_what, body, kind) => {
+    expect((await mapLinearWebhook(comment({ body }), 'c1', blocked()))[0]!.payload).toEqual({ body, author: 'Lilian', kind });
+  });
+
+  it('masks a secret before the journal, and says so for the author to hear', async () => {
+    const body = 'Le jeton ghp_0123456789abcdefghijABCDEFGHIJ012345 marche';
+    const [e] = await mapLinearWebhook(comment({ body }), 'c1', blocked());
+    expect(JSON.stringify(e)).not.toContain('ghp_0123456789');
+    expect(e!.payload).toMatchObject({ masked: true });
   });
 
   it('a thread under the block\'s comment is a reply too', async () => {

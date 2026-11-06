@@ -5,9 +5,9 @@ import type { Workflow } from '../config/workflow-schema.js';
 import { blockCause } from './block-cause.js';
 import type { Role } from './authz.js';
 import type { Decision } from './decision.js';
-import { BLOCKED_LABEL, decide, mayCheck } from './engine.js';
+import { BLOCKED_LABEL, decide, mayCheck, SENSITIVE_PATHS } from './engine.js';
 import { reduce } from './reduce.js';
-import { newTicketState, SCHEMA_VERSION, type EventPayloads, type EventType, type FactoryEvent, type TicketState } from './types.js';
+import { newTicketState, SCHEMA_VERSION, type EventPayloads, type EventType, type FactoryEvent, type FeedbackItem, type MessageKind, type TicketState } from './types.js';
 
 const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../packs/standard') });
 /** A version frozen before ORC-196, as a recorded journal holds it. */
@@ -28,8 +28,11 @@ const notice = (d: Decision) => d.effects.find((e) => e.kind === 'block_comment'
 const starts = (d: Decision) => d.effects.filter((e) => e.kind === 'start_run');
 const MEMBER: readonly Role[] = ['team_member'];
 const signed = { actor: 'u-member', roles: MEMBER };
+/** A row journaled before ORC-180, with no class: what a frozen version replays. */
 const reply = (extra: Partial<FactoryEvent> = signed) => ev('session.prompted', { linearSessionId: 's-dev', body: 'Continue', author: 'Lilian' }, extra);
-const comment = (extra: Partial<FactoryEvent> = signed) => ev('ticket.commented', { body: 'Continue', author: 'Lilian' }, extra);
+const comment = (extra: Partial<FactoryEvent> = signed, kind: MessageKind = 'instruction', patch: Partial<EventPayloads['ticket.commented']> = {}) => ev('ticket.commented', { body: 'Continue', author: 'Lilian', kind, ...patch }, extra);
+/** A reply as the webhook brings it: classified (ORC-180). */
+const classified = (kind: MessageKind, body: string, linearSessionId = 's-dev', extra: Partial<FactoryEvent> = signed) => ev('session.prompted', { linearSessionId, body, author: 'Lilian', ack: true, kind }, extra);
 
 describe('a block posts the standard comment (ORC-196)', () => {
   it('a run at its cap: structured fields, the comment and the label, and nothing else tells it', () => {
@@ -74,6 +77,18 @@ describe('a block posts the standard comment (ORC-196)', () => {
     expect(notice(out)?.block.question).toContain('factory run repair REL-1');
     expect(out.effects.filter((e) => e.kind === 'activity')).toEqual([]);
     expect(blockCause(reduce(ticket(), out.events[0]!)?.blockReason)).toBe('dead_letter');
+  });
+
+  it('a row out of its attempts says so: the attempts in the header and what was tried, no failed decision for an outage (ORC-320)', () => {
+    const out = decide(ticket(), ev('dead_letter.added', { eventId: 'x', eventType: 'pr.opened', error: 'connection refused', failures: 1, attempts: 5 }), workflow);
+    expect(notice(out)?.block).toMatchObject({ attempt: 5, max: 5, tried: ['5 essais de traiter cet événement.'], reason: 'Événement x mis de côté (pr.opened) : 5 essais sans aboutir (connection refused).' });
+    expect(blockCause(notice(out)?.block.reason)).toBe('dead_letter');
+    expect(reduce(reduce(ticket(), out.events[0]!), { ...ev('dead_letter.repaired', { eventId: 'x', action: 'skip', by: 'ops', event: {} as never }) } as FactoryEvent)?.blocked).toBe(false);
+  });
+
+  it('a row whose decision threw keeps its sentence, and so does one journaled before', () => {
+    const out = decide(ticket(), ev('dead_letter.added', { eventId: 'x', eventType: 'pr.opened', error: 'boom', failures: 1 }), workflow);
+    expect(notice(out)?.block).toMatchObject({ attempt: 1, max: 1, tried: ['1 décision(s) de cet événement.'], reason: 'Événement x mis de côté (pr.opened) : sa décision a échoué (boom).' });
   });
 
   it('a team with no repo: the comment says a reply is not enough, and still blocks with its reason', () => {
@@ -153,13 +168,78 @@ describe('a reply resumes the blocked step (ORC-196)', () => {
   const blockedOn = (job: string, patch: Partial<TicketState> = {}) => ticket({ blocked: true, blockReason: 'Le run a échoué.', blockedJob: job, activeRunId: undefined, activeJob: undefined, ...patch });
 
   it.each([
-    ['in the session', reply()],
-    ['as a comment on the ticket', comment()],
+    ['in the session, a row with no class', reply()],
+    ['in the session, a direction', classified('instruction', 'Corrige le tri')],
+    ['in the session, a question', classified('question', 'et le séparateur ?')],
+    ['as a comment, a direction', comment()],
+    ['as a comment, a question', comment(signed, 'question')],
   ])('a member\'s reply %s starts the job that blocked, with the reply to read, and lifts the label', (_where, event) => {
     const out = decide(blockedOn('dev'), event, workflow);
     expect(starts(out)).toEqual([{ kind: 'start_run', job: 'dev', input: 'feedback' }]);
     expect(out.events.map((e) => e.type)).toEqual(expect.arrayContaining(['feedback.appended', 'ticket.unblocked']));
     expect(out.effects).toContainEqual({ kind: 'labels', add: [], remove: [BLOCKED_LABEL] });
+  });
+
+  it('a classified reply says it resumes, in the ack that is its sign of life', () => {
+    expect(decide(blockedOn('dev'), classified('question', 'et le séparateur ?'), workflow).effects[0]).toEqual({ kind: 'ack', body: 'Noté, je reprends.', linearSessionId: 's-dev' });
+  });
+
+  it.each([
+    ['in the session', classified('command', '/status'), { kind: 'activity', type: 'response', linearSessionId: 's-dev', body: expect.stringContaining('Bloqué : Le run a échoué.') }],
+    ['as a comment', comment(signed, 'command', { body: '/status' }), { kind: 'comment', body: expect.stringContaining('Bloqué : Le run a échoué.') }],
+  ])('`/status` %s answers, resumes nothing, the step kept', (_where, event, answer) => {
+    const out = decide(blockedOn('dev'), event, workflow);
+    expect(out.effects).toEqual([answer]);
+    expect(out.events.map((e) => e.type)).toEqual(['feedback.appended']);
+    expect(out.events[0]).toMatchObject({ item: { kind: 'command' } });
+  });
+
+  it.each([
+    ['in the session', classified('command', '/stop')],
+    ['as a comment', comment(signed, 'command', { body: '/stop' })],
+  ])('`/stop` %s stops: it does not relaunch what it stops', (_where, event) => {
+    const out = decide(blockedOn('dev'), event, workflow);
+    expect(starts(out)).toEqual([]);
+    expect(out.events).toContainEqual({ type: 'ticket.blocked', reason: 'Arrêté à la demande' });
+  });
+
+  it('a question in another thread of a blocked ticket is no reply to its block', () => {
+    const out = decide(blockedOn('dev', { questionSessionIds: ['s-q'] }), classified('question', 'et ça ?', 's-q'), workflow);
+    expect(out.events.map((e) => e.type)).not.toContain('ticket.unblocked');
+    expect(starts(out)).toEqual([expect.objectContaining({ job: 'ask', input: 'thread' })]);
+  });
+
+  describe('a comment enters the human inbox under the same taint rule as a reply (I12)', () => {
+    const item = (taint: FeedbackItem['taint'], kind: MessageKind = 'instruction'): FeedbackItem => ({ author: 'x', body: 'b', at: 1, source: 'session', taint, kind });
+    const appended = (d: Decision) => d.events.flatMap((e) => (e.type === 'feedback.appended' ? [e.item] : []));
+
+    it('it keeps its class and its taint, as a message that waits for the agent', () => {
+      expect(appended(decide(blockedOn('dev'), comment({ ...signed, taint: 'untrusted' }), workflow))).toEqual([{ author: 'Lilian', authorId: 'u-member', body: 'Continue', at: 1000, source: 'session', taint: 'untrusted', kind: 'instruction' }]);
+    });
+
+    it.each([
+      ['an untrusted comment', blockedOn('dev'), comment({ taint: 'untrusted' })],
+      ['a trusted comment over an untrusted message', blockedOn('dev', { humanInbox: [item('untrusted')] }), comment()],
+      ['a trusted comment over an untrusted command, which the agent is not given', blockedOn('dev', { humanInbox: [item('untrusted', 'command')] }), comment()],
+    ])('%s: the resumed run takes the sensitive paths', (_what, state, event) => {
+      expect(starts(decide(state, event, workflow))).toEqual([expect.objectContaining({ job: 'dev', input: 'feedback', sensitivePaths: SENSITIVE_PATHS })]);
+    });
+
+    it('a trusted comment over a trusted inbox: none', () => {
+      expect(starts(decide(blockedOn('dev', { humanInbox: [item('trusted')] }), comment(), workflow))[0]).not.toHaveProperty('sensitivePaths');
+    });
+
+    it('a resumed job that writes the knowledge base is refused on what it would read, and the ticket stays blocked', () => {
+      const wf: Workflow = { ...workflow, jobs: { ...workflow.jobs, notes: { ...workflow.jobs['dev']!, name: 'notes', workspace: 'knowledge' } } };
+      const out = decide(blockedOn('notes', { humanInbox: [item('untrusted')] }), comment(), wf);
+      expect(starts(out)).toEqual([]);
+      expect(out.events.map((e) => e.type)).not.toContain('ticket.unblocked');
+    });
+
+    it('a secret masked out of a comment is told on the ticket, which has no session to carry it', () => {
+      const out = decide(blockedOn('dev'), comment(signed, 'instruction', { masked: true }), workflow);
+      expect(out.effects).toContainEqual({ kind: 'comment', body: expect.stringContaining('contenait un secret') });
+    });
   });
 
   it('`fix-ci` reads its red checks, not a reply: the rule\'s job takes it up, the same step', () => {

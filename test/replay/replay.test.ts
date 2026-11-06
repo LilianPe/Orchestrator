@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { upcastTicket } from '../../src/core/types.js';
 import { formatReplay, readJournal, replayJournal, type ExportedJournal } from '../../src/runtime/replay.js';
 import { loadTestWorkflow } from '../helpers/harness.js';
 import { testPreset } from '../helpers/test-preset.js';
@@ -88,7 +89,7 @@ describe('replay oracle (ORC-174)', () => {
     const added = journal.entries.find((e) => e.event.type === 'dead_letter.added')!;
     const repaired = journal.entries.find((e) => e.event.type === 'dead_letter.repaired')!;
     expect(added.decision!.ticket).toMatchObject({ blocked: true });
-    expect(repaired.decision!.ticket).toMatchObject({ blocked: false, pendingFeedback: [expect.objectContaining({ body: 'et le mobile ?' })] });
+    expect(repaired.decision!.ticket).toMatchObject({ blocked: false, humanInbox: [expect.objectContaining({ body: 'et le mobile ?' })] });
     // The dead-lettered reply itself is not journaled: only its repair, which carries it.
     expect(journal.entries.map((e) => e.event.id)).not.toContain((repaired.event.payload as { eventId: string }).eventId);
     expect(replayJournal(journal)).toMatchObject({ divergences: [], replayed: journal.entries.length });
@@ -151,11 +152,31 @@ describe('recorded journals (test/replay/journals)', () => {
     const replies = journal.entries.filter((e) => e.event.type === 'session.prompted');
     expect(replies.map((e) => e.event.actor)).toEqual(['user-stranger', 'user-armand']);
     expect(replies[0]!.decision?.trace).toContainEqual(expect.stringMatching(/^authz: refused answer_clarify to user-stranger/));
-    expect(replies[1]!.decision?.ticket?.pendingFeedback.map((f) => f.body)).toEqual(['le bouton export est mal placé']);
+    expect(upcastTicket(replies[1]!.decision!.ticket!).humanInbox.map((f) => f.body)).toEqual(['le bouton export est mal placé']);
     expect(replayJournal(journal)).toMatchObject({ divergences: [], replayed: journal.entries.length });
     // A refusal recorded on other roles is caught at its exact event: the roles are part of what is replayed.
     delegations[0]!.event.roles = ['team_member', 'repo_writer'];
     expect(new Set(replayJournal(journal).divergences.map((d) => d.eventId))).toEqual(new Set([delegations[0]!.event.id]));
+  });
+
+  it('reads a decision recorded before ORC-180 through the ticket upcaster: its pendingFeedback is the human inbox', () => {
+    const journal = readJournal(readFileSync(join(dir, 'review-merge-done.v1.json'), 'utf8'));
+    const tickets = journal.entries.flatMap((e) => [e.decision?.before, e.decision?.ticket]).filter((t) => t !== undefined && t !== null);
+    expect(tickets.length).toBeGreaterThan(0);
+    expect(tickets.every((t) => 'pendingFeedback' in t && !('humanInbox' in t))).toBe(true);
+    expect(replayJournal(journal).divergences).toEqual([]);
+    // Upcast, not ignored: a value that differs is still caught.
+    (journal.entries.find((e) => e.decision?.ticket)!.decision!.ticket as unknown as { pendingFeedback: unknown[] }).pendingFeedback = [{ body: 'x' }];
+    expect(replayJournal(journal).divergences.map((d) => d.field)).toContain('ticket');
+  });
+
+  it('a message of today, classified and acked, replays bit for bit: instruction held at the regrouping, handed over at the end of the step (ORC-180)', () => {
+    const journal = readJournal(readFileSync(join(dir, 'human-reply-during-run.json'), 'utf8'));
+    const prompted = journal.entries.filter((e) => e.event.type === 'session.prompted');
+    expect(prompted.map((e) => e.decision?.effects.map((x) => x.kind))).toEqual([['ack'], ['ack', 'start_run']]);
+    expect(journal.entries.find((e) => e.event.type === 'timer.fired')!.decision?.effects).toEqual([]);
+    expect(journal.entries.flatMap((e) => e.decision?.effects ?? []).filter((x) => x.kind === 'start_run').map((x) => (x as { job: string }).job)).toEqual(['dev', 'ask', 'dev-feedback']);
+    expect(replayJournal(journal)).toMatchObject({ divergences: [], replayed: journal.entries.length });
   });
 
   it('journals CI run attempts, the merge commit and the default-branch pushes, decided as facts only (ORC-278)', () => {

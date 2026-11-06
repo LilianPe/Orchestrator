@@ -3,7 +3,7 @@ import { TRUSTED, type EventPayloads, type FactoryEvent, type TicketState } from
 
 /**
  * The dead-letter of ORC-175: an inbox row whose decision throws (`decide` or `reduce`, a poison
- * event) is set aside in `dead_letter` instead of being retried forever. Its ticket is blocked by
+ * event), or out of attempts (ORC-320), is set aside in `dead_letter` instead of being retried forever. Its ticket is blocked by
  * the decision of a `dead_letter.added` event, and `factory run repair` repairs it with a
  * `dead_letter.repaired` event: replayed, skipped or forced, each one journaled.
  */
@@ -39,9 +39,19 @@ export interface DeadLetter {
 /** Prefix of the block reason of a dead-lettered event: its repair lifts that block, not another one. */
 const reasonPrefix = (eventId: string) => `Événement ${eventId} mis de côté`;
 
-/** The block reason of `dead_letter.added`, naming the event: `Raison` of its standard comment (ORC-196). */
+/**
+ * The block reason of `dead_letter.added`, naming the event: `Raison` of its standard comment (ORC-196). A row out of
+ * attempts (`attempts`, ORC-320) may have failed for a store or a Linear down: its decision never came, none failed.
+ * A row without the field threw in its decision, or was journaled before, and keeps its sentence.
+ */
 export function deadLetterReason(p: EventPayloads['dead_letter.added']): string {
-  return `${reasonPrefix(p.eventId)} (${p.eventType}) : sa décision a échoué (${p.error}).`;
+  const what = p.attempts ? `${p.attempts} essais sans aboutir` : 'sa décision a échoué';
+  return `${reasonPrefix(p.eventId)} (${p.eventType}) : ${what} (${p.error}).`;
+}
+
+/** What was tried, in the block's comment: `failures` counts the times it was set aside, not the attempts behind each. */
+export function deadLetterTried(p: EventPayloads['dead_letter.added']): string {
+  return p.attempts ? `${p.attempts} essais de traiter cet événement.` : `${p.failures} décision(s) de cet événement.`;
 }
 
 function blockedByDeadLetter(t: TicketState, eventId: string): boolean {
@@ -69,16 +79,19 @@ export function heldMessage(p: EventPayloads['dead_letter.added'], refused: stri
   return `Événement ${p.eventId} (${p.eventType}) refusé pour le projet ${refused} : ce ticket est tenu par le projet ${holder}, rien n'y change. Un mainteneur peut le clore : \`factory run repair ${ticketId} skip ${p.eventId}\`.`;
 }
 
+/** Whether a dead-lettered event gets the event that blocks its ticket (`deadLetterNotice`). */
+export const hasNotice = (event: StoredEvent): event is StoredEvent & { ticketId: string } => event.type !== 'dead_letter.added' && event.ticketId !== undefined;
+
 /**
  * The event that blocks the ticket of a dead-lettered event, written to the inbox in the transaction
  * that sets it aside: `dead-letter:<event id>:<failures>`. None for a `dead_letter.added` itself (its
  * decision threw: blocking again would throw again), nor for an event without a ticket. An event the
  * store refused (`holder`, ORC-316) has no ticket of its own to block: its notice, `refused:<event id>:<failures>`,
- * goes to the holder's, which it only tells.
+ * goes to the holder's, which it only tells. `attempts`: a row out of its attempts, how many it had (ORC-320).
  */
-export function deadLetterNotice(dl: Pick<DeadLetter, 'event' | 'error' | 'failures'>, at: number, holder?: string): FactoryEvent | undefined {
+export function deadLetterNotice(dl: Pick<DeadLetter, 'event' | 'error' | 'failures'>, at: number, holder?: string, attempts?: number): FactoryEvent | undefined {
   const { event } = dl;
-  if (event.type === 'dead_letter.added' || event.ticketId === undefined) return undefined;
+  if (!hasNotice(event)) return undefined;
   const session = (event.payload as { linearSessionId?: string }).linearSessionId;
   const refused = holder === undefined ? {} : { refused: { projectId: event.projectId, ...(session ? { linearSessionId: session } : {}) } };
   return {
@@ -88,7 +101,7 @@ export function deadLetterNotice(dl: Pick<DeadLetter, 'event' | 'error' | 'failu
     at,
     projectId: holder ?? event.projectId,
     ticketId: event.ticketId,
-    payload: { eventId: event.id, eventType: event.type, error: dl.error, failures: dl.failures, ...refused },
+    payload: { eventId: event.id, eventType: event.type, error: dl.error, failures: dl.failures, ...(attempts ? { attempts } : {}), ...refused },
   };
 }
 

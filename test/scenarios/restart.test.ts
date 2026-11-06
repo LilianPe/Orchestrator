@@ -78,7 +78,7 @@ describe('a brutal restart in the middle of the processing', () => {
     expect(new Set(ids).size).toBe(ids.length);
     expect(ids).toEqual(expect.arrayContaining(['d2', 'p2', `effect:${claimed.id}`]));
     expect(journal.filter((e) => e.type === 'timer.fired')).toHaveLength(1);
-    expect(await h.ticket('REL-2')).toMatchObject({ delegated: true, pendingFeedback: [expect.objectContaining({ body: 'et le PDF ?' })] });
+    expect(await h.ticket('REL-2')).toMatchObject({ delegated: true, humanInbox: [expect.objectContaining({ body: 'et le PDF ?' })] });
 
     // No visible duplicate: the start taken up again moved the issue to the state it was already in
     // (the move is idempotent), and launched its run once; the timer started its run once.

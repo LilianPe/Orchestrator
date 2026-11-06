@@ -159,7 +159,7 @@ describe('GitHub webhooks', () => {
     ]);
     expect(await events(h, 'pr.conflicted')).toMatchObject([{ id: 'pr:REL-1:3:conflicted:head1:base1', payload: { headSha: 'head1', baseRef: 'main' } }]);
     expect(h.runner.requests).toHaveLength(1);
-    expect(await h.ticket()).toMatchObject({ logical: 'human_review', blocked: false, pendingFeedback: [] });
+    expect(await h.ticket()).toMatchObject({ logical: 'human_review', blocked: false, humanInbox: [] });
   });
 
   it('cancels again a PR reopened, relaunched and closed again', async () => {
@@ -173,7 +173,7 @@ describe('GitHub webhooks', () => {
     await post(h, 'pull_request', reopened);
     expect(await h.ticket()).toMatchObject({ prState: 'OPEN', blocked: true });
     h.runner.enqueue({ hold: true });
-    await h.send('ticket.commented', { body: 'reprends', author: 'L' });
+    await h.send('ticket.commented', { body: 'reprends', author: 'L', kind: 'instruction' });
     expect((await h.ticket()).activeRunId).toBeDefined();
     await post(h, 'pull_request', at('2026-10-28T12:00:00Z'));
     const t = await h.ticket();

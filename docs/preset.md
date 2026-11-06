@@ -68,7 +68,7 @@ Le niveau de réseau se choisit par dépôt (Limité par défaut) ; une étape p
 
 ## Reprise de l'étape bloquée (ORC-196)
 
-Une réponse humaine sur un ticket Bloqué relance l'étape où il s'est bloqué, pas `dev-feedback`. Le blocage retient son job (`blockedJob`, de `ticket.blocked`), que le moteur lance à la place du job de la règle, avec la réponse en entrée. La règle (`session.prompted` et `ticket.commented`, `when: blocked`) reste ce qui laisse passer la réponse.
+Une réponse humaine sur un ticket Bloqué relance l'étape où il s'est bloqué, pas `dev-feedback`. Le blocage retient son job (`blockedJob`, de `ticket.blocked`), que le moteur lance à la place du job de la règle, avec la réponse en entrée. La règle (`session.prompted` et `ticket.commented`, `when: blocked`) reste ce qui laisse passer la réponse. Le classement d'ORC-180 passe avant : une consigne et une question de la session du ticket relancent, une commande (`/status`, `/stop`) ne relance rien, une question d'un autre fil a sa réponse là-bas et ne lève pas le blocage.
 
 Les règles `on` du YAML pilotent encore l'enchaînement (ORC-177) : le moteur n'exécute pas les étapes du préréglage, il lance des jobs. D'où ce que la reprise sait faire aujourd'hui :
 

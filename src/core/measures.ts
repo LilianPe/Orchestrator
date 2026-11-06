@@ -2,17 +2,17 @@ import type { RedCause } from '../checks/red.js';
 import type { MeasureFacts, Store } from '../store/types.js';
 import { isQuestionSession } from './engine.js';
 import { reduce } from './reduce.js';
-import { addTokens, newTicketState, NO_TOKENS, type FactoryEvent, type LogicalState, type TicketState, type TokenUsage } from './types.js';
+import { addTokens, newTicketState, NO_TOKENS, type FactoryEvent, type LogicalState, type MessageKind, type TicketState, type TokenUsage } from './types.js';
 import { upcast, type StoredEvent } from './upcast.js';
 
-/** What a human message asks for, read from the event type and its Linear session, never from its text. */
-export type MessageKind = 'delegation' | 'question' | 'command' | 'instruction';
+/** What a human message asks for: the class journaled with it (ORC-180), else, on a row written before, from its event type and its Linear session. */
+export type MeasuredKind = 'delegation' | MessageKind;
 
 /** A human message and how fast the factory reacted to it. */
 export interface MessageMeasure {
   eventId: string;
   type: 'ticket.delegated' | 'session.mentioned' | 'session.prompted' | 'ticket.commented' | 'command';
-  kind: MessageKind;
+  kind: MeasuredKind;
   linearSessionId: string | undefined;
   /** When the factory received it (`at` of the event). */
   at: number;
@@ -148,7 +148,7 @@ function ciCost(events: FactoryEvent[]): CiCost | null {
 type Message = FactoryEvent<MessageMeasure['type']>;
 
 /** The kind of a human message, by its type; a reply (`session.prompted`) depends on its session. */
-const KIND = { 'ticket.delegated': 'delegation', 'session.mentioned': 'question', command: 'command' } as const satisfies Record<string, MessageKind>;
+const KIND = { 'ticket.delegated': 'delegation', 'session.mentioned': 'question', command: 'command' } as const satisfies Record<string, MeasuredKind>;
 
 /** A factory output carried out on a Linear session: what a human sees there, and when. */
 interface Output {
@@ -182,7 +182,7 @@ function outputs(facts: MeasureFacts, events: FactoryEvent[], devSession: string
   return out.sort((a, b) => a.at - b.at);
 }
 
-function messageMeasure(m: Message, kind: MessageKind, outs: Output[], ack: number | undefined, devSession: string | undefined): MessageMeasure {
+function messageMeasure(m: Message, kind: MeasuredKind, outs: Output[], ack: number | undefined, devSession: string | undefined): MessageMeasure {
   // A comment has no session of its own: its sign of life is in the dev session, as a block's comment answers there.
   const session = m.type === 'ticket.commented' ? devSession : m.payload.linearSessionId;
   const after = outs.filter((o) => o.session === session && o.at >= m.at);
@@ -249,7 +249,7 @@ export function ticketMeasures(projectId: string, ticketId: string, facts: Measu
   let firstMerge: FactoryEvent<'pr.merged'> | undefined;
   const reworks: Rework[] = [];
   const relaunched = new Set(facts.effects.filter((r) => r.effect.kind === 'start_run').map((r) => r.eventId));
-  const messages: { m: Message; kind: MessageKind }[] = [];
+  const messages: { m: Message; kind: MeasuredKind }[] = [];
   for (const e of events) {
     ticket = reduce(ticket, e) ?? ticket;
     if (mergedAt === null) {
@@ -260,9 +260,9 @@ export function ticketMeasures(projectId: string, ticketId: string, facts: Measu
       const r = rework(e, ticket, relaunched);
       if (r) reworks.push(r);
     }
-    if (e.type === 'ticket.commented') messages.push({ m: e, kind: 'instruction' });
-    else if (e.type === 'session.prompted') messages.push({ m: e, kind: isQuestionSession(ticket, e.payload.linearSessionId) ? 'question' : 'instruction' });
-    else if (e.type in KIND) messages.push({ m: e as Message, kind: KIND[e.type as keyof typeof KIND] });
+    if (e.type === 'ticket.commented') messages.push({ m: e, kind: e.payload.kind });
+    else if (e.type === 'session.prompted') messages.push({ m: e, kind: e.payload.kind ?? (isQuestionSession(ticket, e.payload.linearSessionId) ? 'question' : 'instruction') });
+    else if (e.type in KIND) messages.push({ m: e as Message, kind: (e as Message & { payload: { kind?: MessageKind } }).payload.kind ?? KIND[e.type as keyof typeof KIND] });
   }
   const outs = outputs(facts, events, ticket.linearSessionId);
   const withTokens = facts.runs.filter((r) => r.tokens !== undefined);

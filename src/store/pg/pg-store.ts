@@ -226,7 +226,7 @@ export class PgStore implements AsyncStore {
       insert into tickets (
         project_id, id, status, step_cursor, active_attempts, human_inbox, workflow_hash, data, created_at, updated_at
       ) values (
-        ${t.projectId}, ${t.ticketId}, ${t.logical}, ${stepCursor}, ${activeAttempts}, ${JSON.stringify(t.pendingFeedback)}::jsonb,
+        ${t.projectId}, ${t.ticketId}, ${t.logical}, ${stepCursor}, ${activeAttempts}, ${JSON.stringify(t.humanInbox)}::jsonb,
         ${options.workflowHash ?? t.workflowHash ?? null}, ${JSON.stringify(t)}::jsonb,
         to_timestamp(${now / 1000}), to_timestamp(${t.updatedAt / 1000})
       )
@@ -519,7 +519,7 @@ export class PgStore implements AsyncStore {
     return (inserted.rowCount ?? 0) > 0;
   }
 
-  async deadLetter(row: StoredEvent, error: string, at: number, holder?: string): Promise<boolean> {
+  async deadLetter(row: StoredEvent, error: string, at: number, holder?: string, attempts?: number): Promise<boolean> {
     const now = this.now();
     return this.db.transaction(async (tx) => {
       await tx.execute(ticketLock(row.ticketId));
@@ -539,7 +539,7 @@ export class PgStore implements AsyncStore {
         returning failures
       `);
       const failures = Number(upserted.rows[0]!.failures);
-      const notice = deadLetterNotice({ event, error, failures }, at, holder);
+      const notice = deadLetterNotice({ event, error, failures }, at, holder, attempts);
       if (notice) await this.appendResult(tx, notice);
       return true;
     });

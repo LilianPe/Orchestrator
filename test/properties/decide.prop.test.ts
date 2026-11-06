@@ -359,12 +359,12 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
 
   describe('I6 — no human message is lost', () => {
     it(
-      'feedback leaves pendingFeedback only when a run that consumes it starts',
+      'feedback leaves humanInbox only when a run that consumes it starts',
       () => {
         holds((s) => {
           for (const step of run(s).steps) {
-            const kept = step.before?.pendingFeedback ?? [];
-            const now = step.after?.pendingFeedback ?? [];
+            const kept = step.before?.humanInbox ?? [];
+            const now = step.after?.humanInbox ?? [];
             if (kept.every((f) => now.includes(f))) continue;
             expect(step.kind === 'shell' && step.event.type === 'feedback.consumed').toBe(true);
           }
@@ -455,7 +455,7 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
       () => {
         // A human relaunch after the merge; and, found by fast-check, a run in flight at the merge whose checks then
         // fail, a debounce armed before the merge that fires after it, and the job kept pending that settle starts.
-        const relaunched = seq(...delegated(), ext('pr.merged', pr), ext('label.changed', { label: 'agent:reprendre', change: 'added' }));
+        const relaunched = seq(...delegated(), ext('pr.merged', pr), ext('control.stop', {}), ext('ticket.commented', { body: 'reprends', author: 'lilian', kind: 'instruction' }));
         const inFlight = seq(
           ...delegated(),
           runStarted(),
@@ -617,6 +617,7 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
      * sensitive paths, whoever starts it: `decide`, or `settle` on the pending job. Checked on the launches, as
      * `Orchestrator.launch` hands them to the runner (ORC-274), not on the starts `decide` emits.
      */
+    const launches0 = (s: Sequences) => run(s).steps.flatMap(launches);
     const feedbackRunSandboxed = (s: Sequences): void => {
       let untrustedPending = false;
       for (const step of run(s).steps) {
@@ -640,7 +641,19 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
         // taint of what it reads then. (A failed run blocks the ticket: startRun then refuses the pending job.)
         const pending = (...end: Entry[]) => seq(...delegated('dev'), runStarted(), reply(), ext('timer.fired', DEBOUNCE), reply('untrusted'), ...end);
         const settled = pending(runFinished('success'), ext('verify.passed', { runId: 'r1', job: 'dev' }));
-        holds(feedbackRunSandboxed, [debounced, settled, pending(runFinished('failure'))]);
+        // Found by fast-check at 10 000 sequences (ORC-180, seed 509541243), shrunk: a run that empties the inbox takes the
+        // taint of all it empties, a command included, though the agent is not given a command. Relayed by a trusted move...
+        const command = () => ext('session.prompted', { linearSessionId: DEV_SESSION, body: 'ok', author: 'lilian', issue, ack: true, kind: 'command' }, 'untrusted');
+        const relayed = seq(ext('ticket.delegated', { linearSessionId: undefined, issue }, 'untrusted'), command(), ext('status.changed', { from: 'human_review', to: 'dev' }));
+        // ... by a trusted comment that resumes a blocked job, or an untrusted one, which is the taint of the run itself (ORC-196)...
+        const comment = (taint?: 'untrusted') => ext('ticket.commented', { body: 'reprends', author: 'lilian', kind: 'instruction' }, taint);
+        const resumed = seq(...delegated('dev'), ext('agent.asked', { question: 'Laquelle ?', job: 'dev' }), command(), comment());
+        const commented = seq(...delegated('dev'), ext('agent.asked', { question: 'Laquelle ?', job: 'dev' }), comment('untrusted'));
+        // ... or by a job pending since before it came in.
+        const settledAfterCommand = seq(...delegated('dev'), runStarted(), reply(), ext('timer.fired', DEBOUNCE), command(), runFinished('success'), ext('verify.passed', { runId: 'r1', job: 'dev' }));
+        // The examples must start the run they are about: one with no rule to relay it would hold for nothing.
+        for (const example of [relayed, resumed, commented]) expect(launches0(example).filter((e) => readsFeedback(e, wf))).not.toEqual([]);
+        holds(feedbackRunSandboxed, [debounced, settled, pending(runFinished('failure')), relayed, settledAfterCommand, resumed, commented]);
       },
       TIMEOUT,
     );

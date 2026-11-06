@@ -69,6 +69,25 @@ export const SCENARIOS: Record<string, { preset?: TestPreset; authz?: HarnessAut
       await h.advance(180_000);
     },
   },
+  /**
+   * An instruction and a question during the run, classified and acked (ORC-180): the regrouping ends with the run
+   * still at work, the question is answered beside it, both reach the agent resumed at the end of its work.
+   */
+  'human-reply-during-run': {
+    run: async (h) => {
+      h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Exporter les audits en CSV depuis la liste des audits.' });
+      h.runner.enqueue({ hold: true, events: [{ kind: 'text', text: 'PR ouverte, tests verts.' }] });
+      await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+      const running = (await h.store.getTicket('p', 'REL-1'))!.activeRunId!;
+      await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'corrige le tri', author: 'Lilian', ack: true, kind: 'instruction' });
+      h.runner.enqueue({ events: [{ kind: 'text', text: 'Parce que.' }] });
+      await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'pourquoi ce choix ?', author: 'Lilian', ack: true, kind: 'question' });
+      await h.advance(180_000);
+      h.runner.enqueue({ events: [{ kind: 'text', text: 'Pris en compte.' }] });
+      h.runner.release(running);
+      await h.orch.drained();
+    },
+  },
   /** AI review, merge, cleanup and learn. */
   'review-merge-done': {
     run: async (h) => {
@@ -101,9 +120,9 @@ export const SCENARIOS: Record<string, { preset?: TestPreset; authz?: HarnessAut
       h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Exporter les audits en CSV depuis la liste des audits.' });
       h.runner.enqueue({ outcome: 'limit' });
       await h.send('ticket.delegated', { linearSessionId: 'ls-1' }, 'REL-1', { actor: 'user-lilian' });
-      await h.send('ticket.commented', { body: 'Reprends.', author: 'Quelqu\'un' }, 'REL-1', { actor: 'user-stranger' });
+      await h.send('ticket.commented', { body: 'Reprends.', author: 'Quelqu\'un', kind: 'instruction' }, 'REL-1', { actor: 'user-stranger' });
       h.runner.enqueue({ events: [{ kind: 'text', text: 'Repris.' }] });
-      await h.send('ticket.commented', { body: 'Reprends.', author: 'Lilian' }, 'REL-1', { actor: 'user-lilian' });
+      await h.send('ticket.commented', { body: 'Reprends.', author: 'Lilian', kind: 'instruction' }, 'REL-1', { actor: 'user-lilian' });
     },
   },
   /** A build stopped by the detector, the same failure 3 times on an unchanged worktree: Bloqué, cause « boucle », on the journaled fact (ORC-136). */
@@ -123,9 +142,9 @@ export const SCENARIOS: Record<string, { preset?: TestPreset; authz?: HarnessAut
     run: async (h) => {
       await delegated(h);
       const good = await h.ticket();
-      await h.store.putTicket({ ...good, pendingFeedback: null as unknown as TicketState['pendingFeedback'] });
+      await h.store.putTicket({ ...good, humanInbox: null as unknown as TicketState['humanInbox'] });
       await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'et le mobile ?', author: 'Lilian' });
-      await h.store.putTicket({ ...(await h.ticket()), pendingFeedback: [] });
+      await h.store.putTicket({ ...(await h.ticket()), humanInbox: [] });
       await runRepair({ store: h.store, target: 'REL-1', action: 'replay', by: 'ops', now: h.clock.now(), print: () => {} });
       await h.orch.drained();
     },

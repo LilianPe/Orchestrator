@@ -221,6 +221,10 @@ describe('Worker: a hold keeps back only the rows younger than the failed one (O
         return e;
       },
     });
+    // Nothing can be set aside (ORC-320): out of retries, e3 keeps its hold.
+    store.deadLetter = async () => {
+      throw new Error('database down');
+    };
     await store.appendInbox(event('e1'));
     await store.decide(twoComments(event('e1')));
     const other = (await store.claimEffect('p', 'REL-1', 60_000)) as OutboxRow;
@@ -518,6 +522,92 @@ describe('Worker: a decision that throws is dead-lettered (ORC-175)', () => {
     await worker.settle();
     expect(await store.deadLetters()).toEqual([]);
     expect((await store.recentEvents(10, 'REL-1')).map((e) => e.id)).toContain('e1');
+  });
+});
+
+describe('Worker: a row out of attempts (ORC-320)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** REL-1 is tracked, and e2 fails in its preparation until `up`, with e3 behind it. */
+  async function failingE2() {
+    vi.useFakeTimers({ now: 1_000_000 });
+    const state = { up: false, tries: 0 };
+    const left: string[] = [];
+    const deadLettered: string[] = [];
+    const scenario = setup({
+      retry: { attempts: 2, baseMs: 1_000 },
+      left: (row) => void left.push(row.id),
+      deadLettered: (row) => void deadLettered.push(row.id),
+      prepare: async (e) => {
+        if (e.id === 'e2' && !state.up) {
+          state.tries++;
+          throw new Error('Linear unreachable');
+        }
+        return e;
+      },
+    });
+    await scenario.store.appendInbox(event('e1'));
+    await scenario.worker.kick();
+    await settled(scenario.worker);
+    await scenario.store.appendInbox(event('e2'));
+    await scenario.store.appendInbox(event('e3'));
+    await scenario.worker.kick();
+    await settled(scenario.worker);
+    return { ...scenario, state, left, deadLettered };
+  }
+
+  it('sets it aside, unprepared, and lets the row behind it go: it is not left waiting', async () => {
+    const { store, worker, logs, state, left, deadLettered } = await failingE2();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await settled(worker);
+
+    expect(state.tries).toBe(2);
+    expect(await store.deadLetters('REL-1')).toMatchObject([{ eventId: 'e2', status: 'open', failures: 1, error: 'Linear unreachable' }]);
+    expect(deadLettered).toEqual(['e2']);
+    expect(left).toEqual([]);
+    expect(await decidedRows(store)).toEqual(['e1', 'e3']);
+    expect(logs).toContain('event e2 (ticket.delegated) dead-lettered, out of attempts after 2: Linear unreachable (repair: factory run repair REL-1)');
+    worker.stop();
+  });
+
+  it('tells a row left once, however long it is retried, when the store cannot set it aside; and it passes when the store is back', async () => {
+    const { store, worker, logs, state, left, deadLettered } = await failingE2();
+    const write = store.deadLetter.bind(store);
+    store.deadLetter = async () => {
+      throw new Error('database down');
+    };
+    await vi.advanceTimersByTimeAsync(1_000);
+    await settled(worker);
+    for (const tries of [3, 4]) {
+      await vi.advanceTimersByTimeAsync(3_000);
+      await settled(worker);
+      expect(state.tries).toBe(tries);
+    }
+    expect(left).toEqual(['e2', 'e3']);
+    expect(deadLettered).toEqual([]);
+    expect(logs).toContain('event e2 (ticket.delegated): Linear unreachable; not dead-lettered: database down (kept in the inbox after 4 attempts, retried in 3 s)');
+    expect(await decidedRows(store)).toEqual(['e1']);
+
+    store.deadLetter = write;
+    state.up = true;
+    await vi.advanceTimersByTimeAsync(3_000);
+    await settled(worker);
+    expect(await decidedRows(store)).toEqual(['e1', 'e2', 'e3']);
+    expect(await store.deadLetters()).toEqual([]);
+    worker.stop();
+  });
+
+  it('sets nothing aside, and retries nothing, once stopped', async () => {
+    const { store, worker, state, left } = await failingE2();
+    worker.stop();
+    await vi.advanceTimersByTimeAsync(60_000);
+    await worker.settle();
+    expect(state.tries).toBe(1);
+    expect(left).toEqual([]);
+    expect(await store.deadLetters()).toEqual([]);
+    expect((await store.pendingInbox(10)).map((e) => e.id)).toEqual(['e2', 'e3']);
   });
 });
 

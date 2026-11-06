@@ -416,7 +416,7 @@ describe('Orchestrator', () => {
       expect(tracker.activities().filter((a) => a.type === 'error')).toEqual([]);
       // Not retried: nothing pending; the reply behind it was decided (kept as feedback for the next run, I6).
       expect(await store.pendingInbox(10)).toEqual([]);
-      expect(t.pendingFeedback.map((f) => f.body)).toEqual(['ok']);
+      expect(t.humanInbox.map((f) => f.body)).toEqual(['ok']);
       // The block is a decision of its own, journaled: the poison event is not.
       const journal = (await store.recentEvents(20, 'REL-1')).map((e) => e.id);
       expect(journal).toContain('dead-letter:l1:1');

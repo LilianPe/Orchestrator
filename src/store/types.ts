@@ -419,14 +419,14 @@ export interface Store {
    */
   ticketJournal(projectId: string, ticketId?: string): Promise<JournalEntry[]>;
   /**
-   * Sets aside an inbox row whose decision threw (ORC-175), in one transaction under the ticket's
+   * Sets aside an inbox row whose decision threw (ORC-175) or that is out of attempts (ORC-320), in one transaction under the ticket's
    * lock: the row is marked processed (it is not retried), its event (the one a failed repair carries,
    * `deadLetteredEvent`) goes to `dead_letter`, open, its failures counted, and the event that blocks
    * its ticket (`deadLetterNotice`) is written to the inbox. False, and nothing written, when the row
    * is no longer pending (another worker processed it). `holder`: the project whose ticket refused
    * the event (`TicketHeldError`), told instead of a ticket blocked (ORC-316).
    */
-  deadLetter(row: StoredEvent, error: string, at: number, holder?: string): Promise<boolean>;
+  deadLetter(row: StoredEvent, error: string, at: number, holder?: string, attempts?: number): Promise<boolean>;
   /** The dead letters, of a ticket (any project) or all of them, open ones first, then oldest first. */
   deadLetters(ticketId?: string): Promise<DeadLetter[]>;
   /** The dead letter of an event, by its id. */

@@ -276,7 +276,7 @@ describe.skipIf(!PG_URL)('worker on PgStore', () => {
     for (const t of tickets) {
       // A lost update (two decisions on the same projection) or a reordering would show here.
       const ticket = await seed.getTicket('p', t);
-      expect(ticket!.pendingFeedback.map((f) => f.body)).toEqual(Array.from({ length: prompts }, (_, k) => `${t}#${k}`));
+      expect(ticket!.humanInbox.map((f) => f.body)).toEqual(Array.from({ length: prompts }, (_, k) => `${t}#${k}`));
       const journal = await pool.query<{ event_id: string; seq: number }>(`select event_id, seq from journal where ticket_id = $1 order by seq`, [t]);
       expect(journal.rows.map((r) => r.event_id).filter((id) => !id.startsWith('effect:'))).toEqual(order.get(t));
       expect(journal.rows.map((r) => r.seq)).toEqual(Array.from({ length: 2 * (prompts + 1) }, (_, k) => k + 1));

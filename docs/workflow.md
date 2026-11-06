@@ -179,7 +179,7 @@ Jobs du pack :
 | `ticket.commented` | Un utilisateur de l'espace commente un ticket bloqué, hors session (ORC-196). | Une réponse au commentaire de blocage : vérifiée sur la matrice, gardée pour le run, qui lance l'étape bloquée. Absent des versions figées avant lui. |
 | `status.changed` | Le ticket change de statut dans Linear (par un humain). | Filtrable avec `from` / `to`. Les déplacements faits par Relais lui-même ne génèrent pas cet événement. |
 | `session.mentioned` | `@relais …` dans un commentaire, quand le premier mot n'est pas une commande. | — |
-| `session.prompted` | Réponse dans une session Linear de Relais. | Dans la session dev d'un ticket délégué, le message est toujours ajouté aux retours en attente (`input: feedback`), qu'une règle corresponde ou non : sans règle pour l'état du ticket (`todo`, `ai_review`, `ready`, `done` dans le pack), il attend le prochain run qui lit les retours (`input: feedback` : `dev-feedback` dans le pack). Dans une session de question, Relais lance directement `ask`, sans lire les règles. |
+| `session.prompted` | Réponse dans une session Linear de Relais. | Le message accepté entre toujours dans `humanInbox`, qu'une règle corresponde ou non : sans règle pour l'état du ticket (`todo`, `ai_review`, `ready`, `done` dans le pack), il attend le prochain run de l'agent qui implémente. La règle reçoit une consigne de n'importe quelle session, et toute réponse dans la session dev ; une question y lance aussi `ask`. Une question d'un fil lance `ask`, sans lire les règles ([détail](linear.md#messages-humains-pendant-un-run)). |
 | `session.stopped` | Bouton « stop » dans Linear, ou ticket retiré à l'agent. | Dans une session de question, Relais arrête la réponse en cours, sans lire les règles. |
 | `label.changed` | Un label est ajouté au ticket ou en est retiré (par un humain). | Filtrable avec `label`. Seul l'ajout correspond à une règle : un retrait entre dans l'inbox et le journal (`change: removed`) mais ne déclenche rien. |
 | `push.human` | Un humain pousse un commit sur la branche du ticket. | Aucune règle dans le pack. Reçu par le webhook GitHub `push` (compte qui n'est pas un bot), marqué non fiable ([`github.md`](github.md#webhooks-github)). |
@@ -247,7 +247,7 @@ Il n'existe pas de champ `post` dans une règle : la publication du résultat se
 |---|---|
 | `ticket.delegated` | si `state in [todo, dev] && !blocked` → `dev` |
 | `status.changed` | de `human_review` vers `dev` → `dev-feedback` ; vers `ai_review` → `review` |
-| `session.prompted` | si `blocked` → `dev-feedback` immédiatement ; si `state in [dev, human_review]` → `dev-feedback` après 3 min sans nouveau message ; sinon, le message reste dans les retours en attente |
+| `session.prompted` | si `blocked` → `dev-feedback` immédiatement ; si `state in [dev, human_review]` → regroupement de 3 min sans nouveau message, puis `dev-feedback` si aucun travail n'est en cours (sinon la fin de ce travail remet les messages) ; sinon, le message reste dans `humanInbox` |
 | `session.mentioned` | → `ask` |
 | `command` | `retiens` → `remember` ; `fais-le` → `propose_delegate` |
 | `ticket.commented` | si `blocked` → l'étape bloquée, ou `dev-feedback` si le blocage n'en a pas (ORC-196, [préréglage](preset.md#reprise-de-létape-bloquée-orc-196)) |

@@ -44,12 +44,14 @@ import { agentOutputKey, attemptOutcome, parseAgentOutput, type AgentOutput } fr
 import type { EventBus } from './bus.js';
 import type { Clock } from './clock.js';
 import type { Effect } from './decision.js';
+import { repairedEvent } from './dead-letter.js';
 import { NO_PLAN, planDecision } from './decision-plan.js';
 import { blockFacts, composeBlockComment, type BlockFacts, type BlockStatus } from './block-comment.js';
 import { blockedLabelChange, goesThroughFreeze, HUMAN_EVENTS, mayCheck, mayPublish, RECONCILE_MS, reconcileTicket, refusesDevWork, sensitivePathsAtLaunch, stepOf, taintedKnowledge } from './engine.js';
 import { attemptLabels, packFingerprints } from './attempt-labels.js';
 import { pickupFailures } from './pickup.js';
-import { buildPrompt, formatFeedback, formatVerifyFailures, readConventions } from './prompt.js';
+import { buildPrompt, formatFeedback, formatVerifyFailures, readConventions, withHumanInbox } from './prompt.js';
+import { carriedAtLaunch, forAgent } from './human-message.js';
 import { reduce } from './reduce.js';
 import { advancePlan, closePlan, planStepOfJob, startPlan, type PlanStep } from './session-plan.js';
 import type { StoredEvent } from './upcast.js';
@@ -346,7 +348,7 @@ export class Orchestrator {
     this.worker = new Worker({
       store: d.store,
       log: (level, message) => this.log(level, message),
-      prepare: async (event) => this.withFreeze(await this.withRoles(await this.withSnapshot(event))),
+      prepare: (event) => this.prepared(event),
       request: (event) => this.request(event),
       committed: (event, outcome) => this.committed(event, outcome),
       execute: (row) => this.execute(row),
@@ -1066,6 +1068,26 @@ export class Orchestrator {
     return { ...event, roles: event.actor ? await resolver.rolesOf(event.projectId, event.actor) : [] };
   }
 
+  /**
+   * What the decision of an event needs from outside. A repair that applies its event prepares that one: set
+   * aside out of attempts, it may never have been (ORC-320), and an event without roles is not checked at all. A
+   * `force` records facts without a decision: it needs the snapshot alone, not what may be down still. An event
+   * already prepared stays as it is. One its upcast refuses is left to the decision, which throws too.
+   */
+  private async prepared(event: FactoryEvent): Promise<FactoryEvent> {
+    const outside = async (e: FactoryEvent) => this.withFreeze(await this.withRoles(await this.withSnapshot(e)));
+    if (event.type !== 'dead_letter.repaired') return outside(event);
+    let repaired: FactoryEvent | undefined;
+    try {
+      repaired = repairedEvent(event);
+    } catch {
+      return event;
+    }
+    if (!repaired) return event;
+    const inner = event.payload.action === 'force' ? await this.withSnapshot(repaired) : await outside(repaired);
+    return inner === repaired ? event : { ...event, payload: { ...event.payload, event: inner } };
+  }
+
   /** The decision transaction of an event (ORC-149): `decide` runs in the store, under the ticket's lock. */
   private request(event: FactoryEvent): DecisionRequest {
     const project = event.projectId === '*' ? this.d.projects[0] : this.project(event.projectId);
@@ -1081,9 +1103,9 @@ export class Orchestrator {
   }
 
   /**
-   * A run result left for the next start (behind a failed event, or failing itself past its last
-   * retry) still frees its run's slot: otherwise, slot after slot, it would stop every launch until
-   * a restart. The slots are in memory, so the replay at the next start frees nothing twice.
+   * A run result left waiting (behind a failed event, or failing itself past its last retry) or set
+   * aside still frees its run's slot: otherwise, slot after slot, it would stop every launch for as long
+   * as it stays. The slots are in memory, so the replay at the next start frees nothing twice.
    */
   private async freeSlot(row: StoredEvent): Promise<void> {
     if (row.type !== 'run.finished') return;
@@ -1781,9 +1803,16 @@ export class Orchestrator {
       // The feedback the run reads, taken at the launch whoever started it (a decision, settle, the queue):
       // its taint completes the one the start was decided with (I12, ORC-274).
       const kind = from ? undefined : (opts.input ?? job.input);
-      const read: FeedbackItem[] = [];
+      // The implementer's run (a `dev` from scratch or a resume) runs the ticket session: resumed when the
+      // ticket has one, else made here and taken by the ticket. A review or a question never does (ORC-217).
+      // A relaunch runs the session the lost attempt ran. Cut before Claude wrote it, that session does not
+      // exist yet: it starts under the id the ticket already holds (ORC-128).
+      const ticketSession = job.queue === 'dev' && (from?.sessionRole ? from.sessionRole === 'implementer' : (opts.resume ?? (job.session === 'resume' || job.pickup)));
+      // Its step boundary (ORC-180): the agent that implements starts a step, it reads what came in since its last one.
+      const carried = !from && kind !== 'feedback' && ticketSession ? carriedAtLaunch(t.humanInbox) : [];
+      const read: FeedbackItem[] = [...carried];
       if (kind === 'feedback') {
-        read.push(...t.pendingFeedback);
+        read.push(...forAgent(t.humanInbox));
         // Review comments are external content: whoever can comment on the PR wrote them, and nothing
         // authenticates them as the team's (ORC-160). Untrusted, whatever the forge says.
         if (t.prNumber) {
@@ -1791,7 +1820,9 @@ export class Orchestrator {
           read.push(...comments.map((c) => ({ ...c, taint: 'untrusted' as const })));
         }
       }
-      const sensitivePaths = sensitivePathsAtLaunch(opts.sensitivePaths ?? from?.sensitivePaths, read);
+      // A launch that empties the inbox takes the taint of all it empties, what the agent is not given included (`runTaint`).
+      const consumes = kind === 'feedback' || carried.length > 0;
+      const sensitivePaths = sensitivePathsAtLaunch(opts.sensitivePaths ?? from?.sensitivePaths, consumes ? [...read, ...t.humanInbox] : read);
       if (sensitivePaths && job.workspace === 'knowledge') {
         // As decide refuses it (I12), for what it could not see: untrusted content read at the launch.
         this.d.scheduler.release(key);
@@ -1802,11 +1833,6 @@ export class Orchestrator {
         return;
       }
 
-      // The implementer's run (a `dev` from scratch or a resume) runs the ticket session: resumed when the
-      // ticket has one, else made here and taken by the ticket. A review or a question never does (ORC-217).
-      // A relaunch runs the session the lost attempt ran. Cut before Claude wrote it, that session does not
-      // exist yet: it starts under the id the ticket already holds (ORC-128).
-      const ticketSession = job.queue === 'dev' && (from?.sessionRole ? from.sessionRole === 'implementer' : (opts.resume ?? (job.session === 'resume' || job.pickup)));
       const held = ticketSession ? t.claudeSessionId : undefined;
       const resume = !!held && (!opts.relaunchOf || !this.d.sessionsDir || sessionSaved(join(this.d.sessionsDir, project.id, ticketId), held));
       const claudeSessionId = held ?? this.newId();
@@ -1843,6 +1869,7 @@ export class Orchestrator {
       } else if (kind === 'thread') {
         input = { kind, text: opts.inputText ?? '' };
       }
+      if (carried.length) input = withHumanInbox(input, carried);
 
       const promptInput = {
         skill: job.skill,
@@ -1883,7 +1910,7 @@ export class Orchestrator {
       if (opts.startMark) await store.setMeta(opts.startMark, runId);
       await this.apply(t, { type: 'run.started', runId, job: job.name, queue: job.queue, claudeSessionId, ...(ticketSession ? {} : { ticketSession: false as const }) });
       await store.putRun(run);
-      if (kind === 'feedback') await this.apply(await this.ticket(project.id, ticketId), { type: 'feedback.consumed' });
+      if (consumes) await this.apply(await this.ticket(project.id, ticketId), { type: 'feedback.consumed' });
       const step = planStepOfJob(job);
       if (step) await this.updatePlan(t, (plan) => advancePlan(plan, step));
       // The run is written: a queued item it came from leaves the queue now (a crash from here on is recover()'s).

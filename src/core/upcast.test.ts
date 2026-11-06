@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { loadWorkflow } from '../config/load-workflow.js';
 import { SqliteStore } from '../store/sqlite-store.js';
 import { decide } from './engine.js';
-import { newTicketState, SCHEMA_VERSION, type FactoryEvent } from './types.js';
+import { newTicketState, normalizeTicket, SCHEMA_VERSION, upcastTicket, type FactoryEvent, type TicketState } from './types.js';
 import { upcast, upcastTimer, type StoredEvent } from './upcast.js';
 
 const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../packs/standard') });
@@ -66,5 +66,21 @@ describe('upcast', () => {
     const generic = { ...rest, kind: 'debounce' as const, payload: { job: 'dev-feedback' } };
     expect(upcastTimer(old)).toEqual(generic);
     expect(upcastTimer(generic)).toBe(generic);
+  });
+});
+
+describe('a ticket written before ORC-180', () => {
+  const body = { author: 'L', body: 'ok', at: 1, source: 'session' as const };
+  const { humanInbox: _unused, ...current } = newTicketState('p', 'REL-1', 'T', 'human_review', 0);
+
+  it('reads its pending feedback as its human inbox, the same items', () => {
+    expect(upcastTicket({ ...current, pendingFeedback: [body] })).toEqual({ ...current, humanInbox: [body] });
+    expect(normalizeTicket({ ...current, pendingFeedback: [body] } as unknown as TicketState)).toEqual({ ...current, humanInbox: [body] });
+  });
+
+  it('leaves a ticket of today as it is, and a corrupt inbox corrupt: it is not repaired in passing', () => {
+    const today = { ...current, humanInbox: [body] };
+    expect(upcastTicket(today)).toBe(today);
+    expect(upcastTicket({ ...current, pendingFeedback: null })).toEqual({ ...current, humanInbox: null });
   });
 });

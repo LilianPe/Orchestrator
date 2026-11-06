@@ -75,7 +75,7 @@ function q(patch: Partial<QueueItem>): QueueItem {
 export function storeContract(store: () => Store | Promise<Store>): void {
   it('round-trips tickets', async () => {
     const s = await store();
-    const t = { ...newTicketState('p', 'REL-1', 'T', 'todo', 1), pendingFeedback: [{ author: 'a', body: 'b', at: 2, source: 'session' as const }] };
+    const t = { ...newTicketState('p', 'REL-1', 'T', 'todo', 1), humanInbox: [{ author: 'a', body: 'b', at: 2, source: 'session' as const }] };
     await s.putTicket(t);
     expect(await s.getTicket('p', 'REL-1')).toEqual(t);
     expect(await s.getTicket('other', 'REL-1')).toBeUndefined();

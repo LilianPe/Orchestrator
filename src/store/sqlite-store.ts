@@ -392,7 +392,7 @@ export class SqliteStore implements Store {
     return Number(res.changes) === 1;
   }
 
-  async deadLetter(row: StoredEvent, error: string, at: number, holder?: string): Promise<boolean> {
+  async deadLetter(row: StoredEvent, error: string, at: number, holder?: string, attempts?: number): Promise<boolean> {
     return this.atomically(() => {
       if (!this.markProcessed(row.id)) return false;
       const event = deadLetteredEvent(row);
@@ -405,7 +405,7 @@ export class SqliteStore implements Store {
         )
         .get(event.id, event.projectId, event.ticketId ?? null, error, at, at, JSON.stringify(event)) as { failures: number };
       const failures = Number(upserted.failures);
-      const notice = deadLetterNotice({ event, error, failures }, at, holder);
+      const notice = deadLetterNotice({ event, error, failures }, at, holder, attempts);
       if (notice) this.appendResult(notice);
       return true;
     });

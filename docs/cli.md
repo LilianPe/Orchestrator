@@ -118,7 +118,7 @@ test/replay/journals/check-failed-then-feedback.json : p/REL-1 : 4 décision(s) 
 `factory replay --export <ID> [--project <id>] [--out <fichier>]` écrit le journal d'un ticket de l'instance (store de `FACTORY_DATABASE_URL`, sinon `factory.db`, ouvert sans migration), avec les versions de workflow de ses décisions. `--project` est requis quand l'instance a plusieurs projets. Un ticket sans événement journalisé, ou une instance sans base, est refusé plutôt qu'exporté vide. Le format et la mise en CI : [`tests.md`](tests.md#loracle-de-rejeu).
 ### `factory run repair <ID> [replay|skip|force] [<événement>]`
 
-Répare un événement dont la décision a échoué et que le démon a mis de côté (table `dead_letter`) en bloquant le ticket `<ID>`. Sans action, liste les événements mis de côté du ticket (ouverts et déjà réparés) ; avec une action, répare le seul ouvert, ou celui donné en dernier argument :
+Répare un événement dont la décision a échoué, ou qui a épuisé ses essais, et que le démon a mis de côté (table `dead_letter`) en bloquant le ticket `<ID>`. Sans action, liste les événements mis de côté du ticket (ouverts et déjà réparés) ; avec une action, répare le seul ouvert, ou celui donné en dernier argument :
 
 ```text
 $ factory run repair REL-12
