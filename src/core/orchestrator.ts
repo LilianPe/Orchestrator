@@ -1061,7 +1061,8 @@ export class Orchestrator {
    * already prepared stays as it is. One its upcast refuses is left to the decision, which throws too.
    */
   private async prepared(event: FactoryEvent): Promise<FactoryEvent> {
-    if (event.type !== 'dead_letter.repaired') return this.withFreeze(await this.withRoles(await this.withSnapshot(event)));
+    const outside = async (e: FactoryEvent) => this.withFreeze(await this.withRoles(await this.withSnapshot(e)));
+    if (event.type !== 'dead_letter.repaired') return outside(event);
     let repaired: FactoryEvent | undefined;
     try {
       repaired = repairedEvent(event);
@@ -1069,7 +1070,7 @@ export class Orchestrator {
       return event;
     }
     if (!repaired) return event;
-    const inner = event.payload.action === 'force' ? await this.withSnapshot(repaired) : await this.prepared(repaired);
+    const inner = event.payload.action === 'force' ? await this.withSnapshot(repaired) : await outside(repaired);
     return inner === repaired ? event : { ...event, payload: { ...event.payload, event: inner } };
   }
 

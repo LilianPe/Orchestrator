@@ -69,6 +69,9 @@ export function heldMessage(p: EventPayloads['dead_letter.added'], refused: stri
   return `Événement ${p.eventId} (${p.eventType}) refusé pour le projet ${refused} : ce ticket est tenu par le projet ${holder}, rien n'y change. Un mainteneur peut le clore : \`factory run repair ${ticketId} skip ${p.eventId}\`.`;
 }
 
+/** Whether a dead-lettered event gets the event that blocks its ticket (`deadLetterNotice`). */
+export const hasNotice = (event: StoredEvent): event is StoredEvent & { ticketId: string } => event.type !== 'dead_letter.added' && event.ticketId !== undefined;
+
 /**
  * The event that blocks the ticket of a dead-lettered event, written to the inbox in the transaction
  * that sets it aside: `dead-letter:<event id>:<failures>`. None for a `dead_letter.added` itself (its
@@ -78,7 +81,7 @@ export function heldMessage(p: EventPayloads['dead_letter.added'], refused: stri
  */
 export function deadLetterNotice(dl: Pick<DeadLetter, 'event' | 'error' | 'failures'>, at: number, holder?: string): FactoryEvent | undefined {
   const { event } = dl;
-  if (event.type === 'dead_letter.added' || event.ticketId === undefined) return undefined;
+  if (!hasNotice(event)) return undefined;
   const session = (event.payload as { linearSessionId?: string }).linearSessionId;
   const refused = holder === undefined ? {} : { refused: { projectId: event.projectId, ...(session ? { linearSessionId: session } : {}) } };
   return {

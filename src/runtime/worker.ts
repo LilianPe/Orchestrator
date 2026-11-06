@@ -1,4 +1,4 @@
-import { deadLetteredEvent } from '../core/dead-letter.js';
+import { deadLetteredEvent, hasNotice } from '../core/dead-letter.js';
 import { settledTicket } from '../core/engine.js';
 import type { FactoryEvent } from '../core/types.js';
 import { upcast, type StoredEvent } from '../core/upcast.js';
@@ -319,7 +319,7 @@ export class Worker {
       if (holder !== undefined && holder.id !== row.id && !this.isOlder(row, holder)) {
         this.keepBehind(row, key);
         this.d.log('error', `event ${row.id} (${row.type}) kept in the inbox behind a failed event of ${whose(row)} (${holder.id})`);
-        if (this.givenUp(holder.id)) this.d.left?.(row);
+        if (this.mayWaitLong(holder.id)) this.d.left?.(row);
         return 'done';
       }
       let outcome: DecisionOutcome;
@@ -385,14 +385,14 @@ export class Worker {
 
   /**
    * This failure is the row's last attempt, and setting it aside would tell a human: its ticket is tracked,
-   * neither delivered nor stopped, and the row is not the event that blocks it (`deadLetterNotice`), nor its
-   * repair. Otherwise its dead letter would wait for a repair no one knows of: it stays, retried. A shutdown
+   * neither delivered nor stopped, and the row gets an event that blocks it (`hasNotice`), itself or as the
+   * event it repairs. Otherwise its dead letter would wait for a repair no one knows of: it stays, retried. A shutdown
    * sets nothing aside, the store may be closing.
    */
   private async outOfAttempts(row: StoredEvent): Promise<boolean> {
     if ((this.failures.get(row.id) ?? 0) + 1 < this.retry.attempts) return false;
     const event = deadLetteredEvent(row);
-    if (event.ticketId === undefined || event.type === 'dead_letter.added') return false;
+    if (!hasNotice(event)) return false;
     try {
       const ticket = await this.d.store.getTicket(event.projectId, event.ticketId);
       return ticket !== undefined && settledTicket(ticket) === undefined && !this.stopped;
@@ -452,7 +452,7 @@ export class Worker {
   }
 
   /** Past this row's last attempt, or in a shutdown: what waits behind it may wait for long. */
-  private givenUp(id: string): boolean {
+  private mayWaitLong(id: string): boolean {
     return (this.failures.get(id) ?? 0) >= this.retry.attempts || this.stopped;
   }
 

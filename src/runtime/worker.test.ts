@@ -531,7 +531,7 @@ describe('Worker: a row out of attempts (ORC-320)', () => {
   });
 
   /** REL-1 is tracked, and e2 fails in its preparation until `up`, with e3 behind it. */
-  async function failingE2(patch: Partial<WorkerDeps> = {}) {
+  async function failingE2() {
     vi.useFakeTimers({ now: 1_000_000 });
     const state = { up: false, tries: 0 };
     const left: string[] = [];
@@ -547,7 +547,6 @@ describe('Worker: a row out of attempts (ORC-320)', () => {
         }
         return e;
       },
-      ...patch,
     });
     await scenario.store.appendInbox(event('e1'));
     await scenario.worker.kick();
