@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { reduce } from './reduce.js';
-import { newTicketState, normalizeTicket, type EventPayloads, type EventType, type InternalEvent, type FactoryEvent, type TicketState } from './types.js';
+import { newTicketState, normalizeTicket, type EventPayloads, type EventType, type FeedbackItem, type InternalEvent, type FactoryEvent, type TicketState } from './types.js';
 
 function ev<T extends EventType>(type: T, payload: EventPayloads[T]): FactoryEvent {
   return { id: `e-${type}`, type, at: 1000, projectId: 'p', ticketId: 'REL-1', schemaVersion: 3, taint: 'trusted', payload } as FactoryEvent;
@@ -166,5 +166,19 @@ describe('reduce — purity', () => {
     reduce(t, { type: 'feedback.appended', item: { author: 'L', body: 'x', at: 1, source: 'session' } });
     reduce(t, { type: 'ticket.patched', patch: { prNumber: 1 } });
     expect(t).toEqual(snapshot);
+  });
+});
+
+describe('the human inbox stays within its bound (ORC-180)', () => {
+  const said = (at: number, patch: Partial<FeedbackItem>): FeedbackItem => ({ author: 'L', body: String(at), at, source: 'session', ...patch });
+
+  it('drops the oldest of what had its answer, never what waits for the agent', () => {
+    let t: TicketState | undefined = newTicketState('p', 'REL-1', 'T', 'dev', 0);
+    t = reduce(t, { type: 'feedback.appended', item: said(0, { kind: 'instruction' }) });
+    for (let i = 1; i <= 60; i++) t = reduce(t, { type: 'feedback.appended', item: said(i, i % 2 ? { kind: 'question', source: 'thread' } : { kind: 'command' }) });
+    t = reduce(t, { type: 'feedback.appended', item: said(61, {}) });
+    expect(t!.humanInbox).toHaveLength(52);
+    expect(t!.humanInbox.map((f) => f.at).slice(0, 2)).toEqual([0, 11]);
+    expect(t!.humanInbox.at(-1)!.at).toBe(61);
   });
 });

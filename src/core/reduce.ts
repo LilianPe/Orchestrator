@@ -1,7 +1,19 @@
 import { liftDeadLetterBlock, repairedEvent } from './dead-letter.js';
-import { CREATES_TICKET, newTicketState, type InternalEvent, type FactoryEvent, type IssueSnapshot, type TicketState } from './types.js';
+import { CREATES_TICKET, newTicketState, type InternalEvent, type FactoryEvent, type FeedbackItem, type IssueSnapshot, type TicketState } from './types.js';
 
 const MAX_QUESTION_SESSIONS = 50;
+
+const MAX_ANSWERED_MESSAGES = 50;
+
+/**
+ * Only an implementer's run empties the human inbox, and a ticket may never see one. What already had its answer (a
+ * question of a thread, a command) stays within a bound, its oldest dropped: it is in the journal, and was answered. What waits for the agent is never dropped (I6).
+ */
+function withinBound(inbox: FeedbackItem[]): FeedbackItem[] {
+  const answered = (i: FeedbackItem) => i.source === 'thread' || i.kind === 'command';
+  let excess = inbox.filter(answered).length - MAX_ANSWERED_MESSAGES;
+  return excess <= 0 ? inbox : inbox.filter((i) => !answered(i) || excess-- <= 0);
+}
 
 /** A human takes a delivered ticket back: it is no longer merged, and dev work may start again (I8 b ends). */
 function reopened(t: TicketState): TicketState {
@@ -66,7 +78,7 @@ function internal(t: TicketState, e: InternalEvent): TicketState {
     case 'ticket.patched':
       return { ...t, ...e.patch };
     case 'feedback.appended':
-      return { ...t, humanInbox: [...t.humanInbox, e.item] };
+      return { ...t, humanInbox: withinBound([...t.humanInbox, e.item]) };
     case 'work.cancelled':
       return { ...t, pendingJob: undefined, verifyingRunId: undefined };
     case 'verify.started':

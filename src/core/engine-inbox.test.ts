@@ -92,6 +92,33 @@ describe('decide — a classified message (ORC-180)', () => {
     expect(thread.events.map((e) => e.type)).not.toContain('ticket.blocked');
   });
 
+  it('a command sent as a mention is a command: no model, and /stop stops the ticket, not the session it opened', () => {
+    const mention = (body: string) => ev('session.mentioned', { linearSessionId: 's9', body, author: 'L', ack: true, kind: 'command' });
+    const status = decide(ticket({ activeRunId: 'r1', activeJob: 'dev' }), mention('/status'), workflow);
+    expect(status.effects).toEqual([expect.objectContaining({ kind: 'activity', type: 'response', linearSessionId: 's9', body: expect.stringContaining('En cours : dev') })]);
+    const stop = decide(ticket({ activeRunId: 'r1', activeJob: 'dev' }), mention('/stop'), workflow);
+    expect(stop.effects.map((e) => e.kind)).toEqual(expect.arrayContaining(['stop_run']));
+    expect(stop.effects).not.toContainEqual(expect.objectContaining({ kind: 'start_run' }));
+    expect(stop.events).toContainEqual(expect.objectContaining({ type: 'ticket.blocked' }));
+    // A ticket not delegated has no work to stop, and blocks on nothing.
+    const free = decide(ticket({ delegated: false }), mention('/stop'), workflow);
+    expect(free.events.map((e) => e.type)).toEqual(['feedback.appended']);
+  });
+
+  it('on a blocked ticket a command stays open to whoever may reply: it relaunches nothing', () => {
+    const t = ticket({ blocked: true, blockReason: 'plafond', initiatorId: 'u-req' });
+    const out = decide(t, reply('command', '/status', 's1', { actor: 'u-req', roles: [] }), workflow);
+    expect(out.effects).toEqual([expect.objectContaining({ kind: 'activity', body: expect.stringContaining('Bloqué : plafond') })]);
+    expect(out.events.map((e) => e.type)).toEqual(['feedback.appended']);
+  });
+
+  it('a mask is told to its author on every path, with no ack to carry it', () => {
+    const masked = { linearSessionId: 's1', body: '/status [masqué]', author: 'L', ack: true as const, kind: 'command' as const, masked: true as const };
+    const notice = expect.objectContaining({ kind: 'activity', linearSessionId: 's1', body: expect.stringContaining('secret') });
+    expect(decide(ticket(), ev('session.prompted', masked), workflow).effects).toContainEqual(notice);
+    expect(decide(ticket(), ev('session.prompted', masked, { actor: 'u-out', roles: [] }), workflow).effects).toContainEqual(notice);
+  });
+
   it('a refused message is not kept, gets its refusal, and no ack', () => {
     const out = decide(ticket(), reply('instruction', 'passe en prod', 's1', { actor: 'u-out', roles: [] }), workflow);
     expect(appended(out)).toEqual([]);
@@ -117,10 +144,13 @@ describe('decide — a classified message (ORC-180)', () => {
     expect(acked(out.effects)).toMatchObject({ body: expect.stringContaining('livré') });
   });
 
-  it('a reply to a ticket waiting for its repo is kept with the question it gets back', () => {
-    const out = decide(ticket({ blocked: true, awaitingRepo: ['web', 'api'] }), reply('instruction', 'corrige'), workflow);
+  it('a reply to a ticket waiting for its repo is kept with the question it gets back, unless the matrix would refuse it', () => {
+    const waiting = ticket({ blocked: true, awaitingRepo: ['web', 'api'] });
+    const out = decide(waiting, reply('instruction', 'corrige'), workflow);
     expect(appended(out)).toHaveLength(1);
     expect(out.effects).toEqual([expect.objectContaining({ kind: 'activity', type: 'response' })]);
+    expect(appended(decide(waiting, reply('instruction', 'passe en prod', 's1', { actor: 'u-out', roles: [] }), workflow))).toEqual([]);
+    expect(appended(decide(waiting, reply('instruction', 'corrige', 's1', { actor: 'u-m', roles: ['team_member'] }), workflow))).toHaveLength(1);
   });
 
   describe('the blocked path stays the rule of the workflow (ORC-196)', () => {
@@ -214,6 +244,14 @@ describe('decide — a step ends with messages waiting (ORC-180)', () => {
     ['it is no longer delegated', { humanInbox: [item()], delegated: false }],
   ])('no run when %s', (_what, patch) => {
     expect(decide(verifying(patch), passed, workflow).effects.map((e) => e.kind)).not.toContain('start_run');
+  });
+
+  it('the state it is read on is the one this end leaves, a move owed by a refused publication included', () => {
+    const done = ev('publish.done', { runId: run, job: 'dev-feedback', sha: 'abc' });
+    const t = ticket({ logical: 'dev', verifyingRunId: run, owedMove: 'ai_review', humanInbox: [item()] });
+    // Owed to AI Review, where no reply rule applies: the messages wait.
+    expect(decide(t, done, workflow).effects.map((e) => e.kind)).not.toContain('start_run');
+    expect(decide({ ...t, owedMove: 'human_review' }, done, workflow).effects.at(-1)).toMatchObject({ kind: 'start_run', job: 'dev-feedback' });
   });
 
   it('the end of an answer starts no agent', () => {

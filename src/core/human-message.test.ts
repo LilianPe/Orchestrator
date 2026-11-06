@@ -7,7 +7,7 @@ describe('classifyMessage (ORC-180): deterministic rules, no model', () => {
     expect(classifyMessage(body)).toBe('command');
   });
 
-  it.each(['et pour mobile ?', 'pourquoi?', 'change le titre ?', 'corrige https://a.b/c?d=1'])('%j has a question mark: a question', (body) => {
+  it.each(['et pour mobile ?', 'pourquoi?', 'change le titre ?', 'corrige https://a.b/c?d=1 ?'])('%j has a question mark: a question', (body) => {
     expect(classifyMessage(body)).toBe('question');
   });
 
@@ -24,11 +24,12 @@ describe('classifyMessage (ORC-180): deterministic rules, no model', () => {
     'merci de renommer ce champ',
     'stp corrige le bug',
     'please fix the sort',
+    'corrige le lien https://app/x?id=1',
   ])('%j asks for an action: an instruction', (body) => {
     expect(classifyMessage(body)).toBe('instruction');
   });
 
-  it.each(['boutons mal alignés', 'ok', 'bug quand la liste est vide', 'changement de plan', '', '   ', '/autre chose'])('%j stays ambiguous: a question', (body) => {
+  it.each(['boutons mal alignés', 'ok', 'bug quand la liste est vide', 'changement de plan', '', '   ', '/autre chose', 'regarde https://app/x?id=1'])('%j stays ambiguous: a question', (body) => {
     expect(classifyMessage(body)).toBe('question');
   });
 });

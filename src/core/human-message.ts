@@ -2,7 +2,10 @@ import type { FeedbackItem, MessageKind } from './types.js';
 
 /** The commands a message can be, answered by the factory itself, no model and no agent. */
 export const STOP_COMMAND = '/stop';
-export const STATUS_COMMAND = '/status';
+const STATUS_COMMAND = '/status';
+
+/** The first word of a message, as a command is read. */
+export const commandOf = (body: string): string | undefined => body.trim().toLowerCase().split(/\s+/, 1)[0];
 
 /**
  * What a message that asks for an action starts with, accents left out. Every word an action can open a sentence with
@@ -19,15 +22,16 @@ const ACTION = new RegExp(
 
 /**
  * Classifies a human message at its arrival, the deterministic rules of ORC-180, with no model: a command by its first
- * word, a question mark is a question, a message that opens with an action is an instruction, and all else, a mention of
+ * word, a question mark outside a URL is a question, a message that opens with an action is an instruction, and all else, a mention of
  * the agent included, stays ambiguous, so a question: the worst case is a useless answer, not a silence. Pure, and
  * journaled with the event: a change of these rules leaves the decisions already taken as they are.
  */
 export function classifyMessage(body: string): MessageKind {
-  const text = body.trim().toLowerCase();
-  const first = text.split(/\s+/, 1)[0];
+  const first = commandOf(body);
   if (first === STOP_COMMAND || first === STATUS_COMMAND) return 'command';
-  if (text.includes('?')) return 'question';
+  const text = body.trim().toLowerCase();
+  // The question mark of a URL asks nothing.
+  if (text.replace(/\bhttps?:\/\/\S+/g, '').includes('?')) return 'question';
   return ACTION.test(text.normalize('NFD').replace(/\p{M}/gu, '').replaceAll('’', "'")) ? 'instruction' : 'question';
 }
 
