@@ -203,7 +203,10 @@ export class PgStore implements AsyncStore {
 
   /** Upserts the projection from the current ticket state. `tickets.id` is the ticket identifier: one copy per project (ORC-316). */
   async putTicket(ticket: TicketState, options: PutTicketOptions = {}): Promise<void> {
-    await this.writeTicket(this.db, ticket, options);
+    await this.db.transaction(async (tx) => {
+      await tx.execute(ticketLock(ticket.ticketId));
+      await this.writeTicket(tx, ticket, options);
+    });
   }
 
   private async refuseClaim(tx: Tx, peers: readonly string[], known: TicketState | undefined, next: TicketState): Promise<void> {

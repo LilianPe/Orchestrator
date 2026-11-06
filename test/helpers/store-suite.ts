@@ -804,7 +804,7 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     expect(await s.getDeadLetter('e1')).toMatchObject({ projectId: 'p', status: 'open' });
     expect(await s.pendingInbox(10)).toEqual([
       {
-        ...TRUSTED, id: 'dead-letter:e1:1', type: 'dead_letter.added', at: 50, projectId: 'api', ticketId: 'REL-1',
+        ...TRUSTED, id: 'refused:e1:1', type: 'dead_letter.added', at: 50, projectId: 'api', ticketId: 'REL-1',
         payload: { eventId: 'e1', eventType: 'ticket.delegated', error: 'held', failures: 1, refused: { projectId: 'p', linearSessionId: 'ls-1' } },
       },
     ]);

@@ -1043,17 +1043,26 @@ describe('decide — dead letters (ORC-175)', () => {
   const reason = 'Événement l1 mis de côté (label.changed) : sa décision a échoué (boom).';
   const delegation = { ...ev('ticket.delegated', {}), id: 'l1' };
 
-  it('a refused event (ORC-316) is only said on the ticket that holds it: never blocked, and in the session of whoever sent it too', () => {
+  it('a refused event (ORC-316) is only said on the ticket that holds it: never blocked, its session\'s state left alone, and answered in the session of whoever sent it', () => {
     const refused = { eventId: 'l1', eventType: 'ticket.delegated', error: 'held', failures: 1, refused: { projectId: 'web' } };
     const body = "Événement l1 (ticket.delegated) refusé pour le projet web : ce ticket est tenu par le projet p, rien n'y change. Un mainteneur peut le clore : `factory run repair REL-1 skip l1`.";
-    const said = { kind: 'activity' as const, type: 'response' as const, body };
+    const said = { kind: 'activity' as const, type: 'thought' as const, body };
+    const answered = { kind: 'activity' as const, type: 'response' as const, body, linearSessionId: 's9' };
     expect(decide(ticket(), ev('dead_letter.added', refused), workflow)).toEqual(decision({ effects: [said] }));
     // Delivered or stopped, it still answers whoever asked: no block is at stake.
     expect(decide(ticket({ logical: 'done' }), ev('dead_letter.added', refused), workflow)).toEqual(decision({ effects: [said] }));
     const fromSession = { ...refused, refused: { projectId: 'web', linearSessionId: 's9' } };
-    expect(decide(ticket({ linearSessionId: 's1' }), ev('dead_letter.added', fromSession), workflow)).toEqual(decision({ effects: [said, { ...said, linearSessionId: 's9' }] }));
+    expect(decide(ticket({ linearSessionId: 's1' }), ev('dead_letter.added', fromSession), workflow)).toEqual(decision({ effects: [said, answered] }));
     // Sent from the ticket's own session: said once.
     expect(decide(ticket({ linearSessionId: 's9' }), ev('dead_letter.added', fromSession), workflow)).toEqual(decision({ effects: [said] }));
+    // The ticket has no session of its own: none is opened on it when the sender's can be told.
+    expect(decide(ticket(), ev('dead_letter.added', fromSession), workflow)).toEqual(decision({ effects: [answered] }));
+  });
+
+  it('a refusal\'s notice that dies blocks nothing: the ticket holding it is not at fault (ORC-316)', () => {
+    const dead = ev('effect.failed', { effectId: 'REL-1:3:1', kind: 'activity', eventId: 'refused:l1:1', attempts: 5, error: 'linear down' });
+    expect(decide(ticket(), dead, workflow).events).toEqual([]);
+    expect(decide(ticket(), dead, workflow).effects).toEqual([]);
   });
 
   it('blocks the ticket of a dead-lettered event and says which event, once', () => {

@@ -58,6 +58,12 @@ export function deadLetteredEvent(row: StoredEvent): StoredEvent {
   return row.type === 'dead_letter.repaired' ? (row.payload as EventPayloads['dead_letter.repaired']).event : row;
 }
 
+/** Prefix of the id of a refused event's notice: unlike a dead letter's, its effects dying blocks nothing. */
+const REFUSED_NOTICE = 'refused:';
+
+/** The event `effect.failed` reports on is a refused event's notice. */
+export const isRefusedNotice = (eventId: string): boolean => eventId.startsWith(REFUSED_NOTICE);
+
 /** What a human reads in the ticket's session of an event the store refused (ORC-316). */
 export function heldMessage(p: EventPayloads['dead_letter.added'], refused: string, holder: string, ticketId: string): string {
   return `Événement ${p.eventId} (${p.eventType}) refusé pour le projet ${refused} : ce ticket est tenu par le projet ${holder}, rien n'y change. Un mainteneur peut le clore : \`factory run repair ${ticketId} skip ${p.eventId}\`.`;
@@ -67,8 +73,8 @@ export function heldMessage(p: EventPayloads['dead_letter.added'], refused: stri
  * The event that blocks the ticket of a dead-lettered event, written to the inbox in the transaction
  * that sets it aside: `dead-letter:<event id>:<failures>`. None for a `dead_letter.added` itself (its
  * decision threw: blocking again would throw again), nor for an event without a ticket. An event the
- * store refused (`holder`, ORC-316) has no ticket of its own to block: its notice goes to the holder's,
- * which it only tells.
+ * store refused (`holder`, ORC-316) has no ticket of its own to block: its notice, `refused:<event id>:<failures>`,
+ * goes to the holder's, which it only tells.
  */
 export function deadLetterNotice(dl: Pick<DeadLetter, 'event' | 'error' | 'failures'>, at: number, holder?: string): FactoryEvent | undefined {
   const { event } = dl;
@@ -77,7 +83,7 @@ export function deadLetterNotice(dl: Pick<DeadLetter, 'event' | 'error' | 'failu
   const refused = holder === undefined ? {} : { refused: { projectId: event.projectId, ...(session ? { linearSessionId: session } : {}) } };
   return {
     ...TRUSTED,
-    id: `dead-letter:${event.id}:${dl.failures}`,
+    id: `${holder === undefined ? 'dead-letter:' : REFUSED_NOTICE}${event.id}:${dl.failures}`,
     type: 'dead_letter.added',
     at,
     projectId: holder ?? event.projectId,

@@ -8,7 +8,7 @@ import { createHarness } from '../helpers/harness.js';
 import { linearIngest, signedDelegation } from '../helpers/linear-webhook.js';
 
 /** What a refused event tells a human: it names the event, the project refused and the one that holds the ticket. */
-const refusal = (eventId: string) => ({ type: 'response', body: expect.stringMatching(new RegExp(`${eventId}.*refusé.*\\bp\\b.*\\bapi\\b`, 's')) });
+const refusal = (eventId: string, type = 'thought') => ({ type, body: expect.stringMatching(new RegExp(`${eventId}.*refusé.*\\bp\\b.*\\bapi\\b`, 's')) });
 
 /**
  * A ticket's way out of its wait for a repo (ORC-291), on either store: each keeps a copy of the ticket per
@@ -72,7 +72,7 @@ describe('an event routed on a stale read, on either store (ORC-291, ORC-316)', 
     expect(h.runner.requests).toHaveLength(1);
     expect(await h.store.getDeadLetter('stale')).toMatchObject({ status: 'open' });
     expect(h.tracker.activities('s2').at(-1)).toEqual(refusal('stale'));
-    expect(h.tracker.activities('s3')).toEqual([refusal('stale')]);
+    expect(h.tracker.activities('s3')).toEqual([refusal('stale', 'response')]);
   });
 
   it('a row left by a project no longer in the configuration refuses nothing: the project renamed takes its events (ORC-316)', async () => {
@@ -111,7 +111,7 @@ describe('a stale event brought by the webhook with its ack, on either store (OR
     expect(h.tracker.comments('REL-1')).toEqual(acks);
     // The ticket's session, and the one the human who delegated is looking at.
     expect(h.tracker.activities('s1').at(-1)).toEqual(refusal('stale'));
-    expect(h.tracker.activities('s9')).toEqual([refusal('stale')]);
+    expect(h.tracker.activities('s9')).toEqual([refusal('stale', 'response')]);
     expect(h.tracker.plans('s9')).toEqual([]);
     expect(h.runner.requests).toHaveLength(1);
   });

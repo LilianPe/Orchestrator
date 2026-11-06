@@ -2,7 +2,7 @@ import { REFREEZE, type FrozenTests } from '../checks/freeze.js';
 import type { JobSpec, Rule, Workflow } from '../config/workflow-schema.js';
 import { allowed, DEFAULT_MATRIX, refusalMessage, type AuthzAction, type AuthzMatrix, type Channel } from './authz.js';
 import { evalCondition } from './conditions.js';
-import { deadLetterReason, heldMessage, liftDeadLetterBlock, REPAIR_LABELS, repairedEvent } from './dead-letter.js';
+import { deadLetterReason, heldMessage, isRefusedNotice, liftDeadLetterBlock, REPAIR_LABELS, repairedEvent } from './dead-letter.js';
 import type { AgentOutput } from './agent-output.js';
 import type { Decision, Effect } from './decision.js';
 import { PRODUCT_NAME } from '../product.js';
@@ -910,10 +910,12 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       if (!ticket) return out;
       const { refused } = event.payload;
       if (refused) {
-        // The ticket holding it is not at fault: never blocked, its session told, and the one the refused event came from.
+        // The ticket holding it is not at fault: never blocked. A thought leaves its session as it is (a run, a question
+        // waiting); the session the refused event came from gets its answer. No session is opened when that one can be told.
+        const from = refused.linearSessionId;
         const body = heldMessage(event.payload, refused.projectId, ticket.projectId, ticket.ticketId);
-        out.effects.push({ kind: 'activity', type: 'response', body });
-        if (refused.linearSessionId && refused.linearSessionId !== ticket.linearSessionId) out.effects.push({ kind: 'activity', type: 'response', body, linearSessionId: refused.linearSessionId });
+        if (ticket.linearSessionId || !from) out.effects.push({ kind: 'activity', type: 'thought', body });
+        if (from && from !== ticket.linearSessionId) out.effects.push({ kind: 'activity', type: 'response', body, linearSessionId: from });
         return out;
       }
       const settled = settledTicket(ticket);
@@ -933,6 +935,10 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       // `settle` is a step of the shell, not an effect of the workflow: its failure is only logged.
       const { kind, error, eventId } = event.payload;
       if (kind === 'settle' || !ticket) return out;
+      if (isRefusedNotice(eventId)) {
+        out.trace.push('effect.failed ignored: the notice of a refused event, which blocks nothing');
+        return out;
+      }
       // A Done whose merge died (ORC-148) is not delivered: the human hears it, the ticket back in Human Review. Once a
       // human took it out of Done meanwhile, the merge was given up: only answered, as a late refusal is.
       if (kind === 'merge' && ticket.prState !== 'MERGED') {
