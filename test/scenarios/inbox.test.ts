@@ -117,7 +117,7 @@ describe('inbox: written before the answer, processed from the inbox', () => {
     expect(await h.store.pendingInbox(10)).toEqual([]);
   });
 
-  /** The harness's store, whose decision transaction throws for the events `fails` picks. */
+  /** The harness's store, down for the events `fails` picks: no decision, no dead letter (ORC-320). */
   function failingDecide(fails: (id: string) => boolean): (inner: Store) => Store {
     return (inner) =>
       Object.assign(Object.create(inner) as Store, {
@@ -125,24 +125,22 @@ describe('inbox: written before the answer, processed from the inbox', () => {
           if (fails(req.event.id)) throw new Error('database down');
           return inner.decide(req);
         },
+        deadLetter: async (...args: Parameters<Store['deadLetter']>) => {
+          if (fails(args[0].id)) throw new Error('database down');
+          return inner.deadLetter(...args);
+        },
       });
   }
 
   it('frees the slot of a run whose result is left behind a failed event of its ticket', async () => {
-    let failNext = false;
-    const wrapStore = failingDecide(() => {
-      const fail = failNext;
-      failNext = false;
-      return fail;
-    });
-    // No retry in this process: the failed event and those behind it wait for the next start.
-    const h = createHarness({ wrapStore, projectYaml: stringify({ version: 1, limits: { parallel_sessions: 1 } }), processRetry: { attempts: 1, baseMs: 1 } });
+    // Its one attempt failed, and it cannot be set aside: the failed event and those behind it wait.
+    const wrapStore = failingDecide((id) => id === 't-2');
+    const h = createHarness({ wrapStore, projectYaml: stringify({ version: 1, limits: { parallel_sessions: 1 } }), processRetry: { attempts: 1, baseMs: 60_000 } });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
     h.tracker.addIssue({ identifier: 'REL-2', title: 'Import CSV' });
     h.runner.enqueue({ hold: true });
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
     const [run] = h.runner.requests;
-    failNext = true;
     await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'et le PDF ?', author: 'L' });
     h.runner.release(run!.runId);
     await h.orch.drained();
@@ -156,7 +154,7 @@ describe('inbox: written before the answer, processed from the inbox', () => {
     // As a crash between the inbox write and the decision: the result is in the inbox only.
     let down = false;
     const wrapStore = failingDecide((id) => down && id.startsWith('attempt:'));
-    const h = createHarness({ wrapStore, preset: testPreset(), processRetry: { attempts: 1, baseMs: 1 } });
+    const h = createHarness({ wrapStore, preset: testPreset(), processRetry: { attempts: 1, baseMs: 60_000 } });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
     h.runner.enqueue({ hold: true });
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });

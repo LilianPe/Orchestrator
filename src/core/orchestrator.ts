@@ -44,6 +44,7 @@ import { agentOutputKey, attemptOutcome, parseAgentOutput, type AgentOutput } fr
 import type { EventBus } from './bus.js';
 import type { Clock } from './clock.js';
 import type { Effect } from './decision.js';
+import { repairedEvent } from './dead-letter.js';
 import { NO_PLAN, planDecision } from './decision-plan.js';
 import { blockedLabelChange, goesThroughFreeze, HUMAN_EVENTS, mayCheck, mayPublish, RECONCILE_MS, reconcileTicket, refusesDevWork, sensitivePathsAtLaunch, taintedKnowledge } from './engine.js';
 import { attemptLabels, packFingerprints } from './attempt-labels.js';
@@ -345,7 +346,7 @@ export class Orchestrator {
     this.worker = new Worker({
       store: d.store,
       log: (level, message) => this.log(level, message),
-      prepare: async (event) => this.withFreeze(await this.withRoles(await this.withSnapshot(event))),
+      prepare: (event) => this.prepared(event),
       request: (event) => this.request(event),
       committed: (event, outcome) => this.committed(event, outcome),
       execute: (row) => this.execute(row),
@@ -1054,6 +1055,26 @@ export class Orchestrator {
     return { ...event, roles: event.actor ? await resolver.rolesOf(event.projectId, event.actor) : [] };
   }
 
+  /**
+   * What the decision of an event needs from outside. A repair that applies its event prepares that one: set
+   * aside out of attempts, it may never have been (ORC-320), and an event without roles is not checked at all. A
+   * `force` records facts without a decision: it needs the snapshot alone, not what may be down still. An event
+   * already prepared stays as it is. One its upcast refuses is left to the decision, which throws too.
+   */
+  private async prepared(event: FactoryEvent): Promise<FactoryEvent> {
+    const outside = async (e: FactoryEvent) => this.withFreeze(await this.withRoles(await this.withSnapshot(e)));
+    if (event.type !== 'dead_letter.repaired') return outside(event);
+    let repaired: FactoryEvent | undefined;
+    try {
+      repaired = repairedEvent(event);
+    } catch {
+      return event;
+    }
+    if (!repaired) return event;
+    const inner = event.payload.action === 'force' ? await this.withSnapshot(repaired) : await outside(repaired);
+    return inner === repaired ? event : { ...event, payload: { ...event.payload, event: inner } };
+  }
+
   /** The decision transaction of an event (ORC-149): `decide` runs in the store, under the ticket's lock. */
   private request(event: FactoryEvent): DecisionRequest {
     const project = event.projectId === '*' ? this.d.projects[0] : this.project(event.projectId);
@@ -1069,9 +1090,9 @@ export class Orchestrator {
   }
 
   /**
-   * A run result left for the next start (behind a failed event, or failing itself past its last
-   * retry) still frees its run's slot: otherwise, slot after slot, it would stop every launch until
-   * a restart. The slots are in memory, so the replay at the next start frees nothing twice.
+   * A run result left waiting (behind a failed event, or failing itself past its last retry) or set
+   * aside still frees its run's slot: otherwise, slot after slot, it would stop every launch for as long
+   * as it stays. The slots are in memory, so the replay at the next start frees nothing twice.
    */
   private async freeSlot(row: StoredEvent): Promise<void> {
     if (row.type !== 'run.finished') return;
