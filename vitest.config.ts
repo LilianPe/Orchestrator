@@ -1,4 +1,18 @@
+import { availableParallelism } from 'node:os';
 import { defineConfig } from 'vitest/config';
+
+/**
+ * The hooks of the Postgres projects create, migrate and drop databases, and a drop waits for a
+ * checkpoint of the whole server. Vitest's 10 s fail on a stalled machine, not on a bug: on CI, a
+ * checkpoint of 45 buffers took 14.5 s, and a file 75 times its usual time (docs/tests.md, ORC-290).
+ */
+const POSTGRES_HOOK_TIMEOUT = 60_000;
+
+/**
+ * Vitest's default (one worker per CPU but one), bounded: at 11 workers a drop waits 4 s, at 6 it
+ * waits 0.6 s (docs/tests.md, ORC-290). An explicit number alone would raise a small CI runner's one worker.
+ */
+const POSTGRES_MAX_WORKERS = Math.max(1, Math.min(4, availableParallelism() - 1));
 
 export default defineConfig({
   test: {
@@ -18,6 +32,10 @@ export default defineConfig({
           include: ['test/integration/**/*.test.ts'],
           environment: 'node',
           testTimeout: 30000,
+          hookTimeout: POSTGRES_HOOK_TIMEOUT,
+          maxWorkers: POSTGRES_MAX_WORKERS,
+          // One project at a time on Postgres, each with its own bound of workers.
+          sequence: { groupOrder: 1 },
         },
       },
       {
@@ -29,6 +47,9 @@ export default defineConfig({
           setupFiles: ['test/helpers/pg-harness.ts'],
           environment: 'node',
           testTimeout: 30000,
+          hookTimeout: POSTGRES_HOOK_TIMEOUT,
+          maxWorkers: POSTGRES_MAX_WORKERS,
+          sequence: { groupOrder: 2 },
         },
       },
       {

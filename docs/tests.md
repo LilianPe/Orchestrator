@@ -29,6 +29,21 @@ Pendant le travail, lancez seulement les tests des fichiers touchés : `npx vite
 
 **Les scénarios sur Postgres (ORC-228).** Le projet `scenarios-pg` reprend les fichiers de `test/scenarios/` avec `test/helpers/pg-harness.ts` en fichier de setup : chaque `createHarness()` y reçoit sa propre base, clonée (`create database … template`) d'une base migrée une fois par fichier, et supprimée à la fin du test. Les deux stores passent ainsi les mêmes scénarios sans changer une ligne de ceux-ci. Ils tournent dans le job `integration`, qui a déjà Postgres, plutôt que dans `test` : le job rapide garde SQLite (quelques secondes), le second passage coûte environ 30 s de plus au job `integration`. Les quelques scénarios écrits pour un fichier SQLite tué par SIGKILL (`harnessStoreKind() === 'postgres'` les saute) ont leur équivalent Postgres dans `test/integration/`.
 
+**Pour remplacer une méthode du store dans un scénario :** passez par `wrapStore` et un nouvel objet (`Object.assign(Object.create(inner) as Store, { … })`), jamais par une affectation (`store.appendInbox = …`). Le store du harnais Postgres est un proxy, qui ignore sans le dire ce qu'on lui affecte : la panne n'est alors pas injectée et le test passe sans rien prouver. Quand un test injecte une panne, il vérifie qu'elle a eu lieu (ORC-290).
+
+**Les délais et les workers sur Postgres (ORC-290).** `integration` et `scenarios-pg` passent l'un après l'autre (`sequence.groupOrder`), avec au plus 4 workers chacun, et leurs hooks ont 60 s (10 s par défaut). Un `drop database` attend un checkpoint de tout le serveur : c'est l'étape qui se dégrade. Mesures de la boucle création, migration, 8 clones et leurs suppressions, sur le Postgres local (Docker Desktop) :
+
+| Workers | Création + migration | Clone (p90) | Suppression (p90) | Suppression (max) |
+|---|---|---|---|---|
+| 1 | 0,36 s | 0,09 s | 0,24 s | 0,24 s |
+| 3 | 0,5 s | 0,10 s | 0,43 s | 0,44 s |
+| 6 | 0,8 s | 0,23 s | 0,59 s | 0,68 s |
+| 11 (défaut sur 12 cœurs) | 1 s | 0,31 s | 4,2 s | 4,4 s |
+
+La borne est celle de Vitest (un worker par cœur moins un) plafonnée à 4 : un petit runner de CI garde son unique worker. Elle coûte du temps sur une grosse machine : `scenarios-pg` a pris 98 s à 4 workers, contre 68 s à 11.
+
+Les 60 s couvrent un autre cas, que la borne ne change pas : une machine qui cale. Sur la CI du 05/11 (#99), le job n'avait qu'un worker, et le runner était à l'arrêt ou presque : `setup-node` a pris 5,5 min au lieu de 0,5 s, un checkpoint de 45 tampons 14,5 s au lieu de 0,2 s au plus, et `open-store.test.ts` 41 s au lieu de 0,5 s. Une suppression peut attendre le checkpoint en cours puis le sien, soit près de 30 s à ce rythme, et une création avec migration autant : 60 s laissent une marge de deux. C'est un délai, pas une garantie : une panne plus longue fera encore échouer les hooks, et un Postgres vraiment figé mettra 60 s par hook à se déclarer.
+
 ## Les faux adaptateurs
 
 Un faux par port, tous montés par `createHarness()` :
