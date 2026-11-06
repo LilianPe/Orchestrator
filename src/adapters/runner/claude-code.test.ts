@@ -7,7 +7,7 @@ import { describeAgentRuntimeContract, drain, type AgentScript } from '../../../
 import { ContainerSandboxProvider } from '../sandbox/docker-rootless.js';
 import { FakeSandboxProvider } from '../sandbox/fake.js';
 import type { SandboxProvider } from '../sandbox/types.js';
-import { buildClaudeArgs, childEnv, ClaudeCodeRunner, liveDir } from './claude-code.js';
+import { buildClaudeArgs, childEnv, ClaudeCodeRunner, liveDir, worktreeReader } from './claude-code.js';
 import type { RunRequest } from './types.js';
 
 const fx = (n: string) => join(import.meta.dirname, 'fixtures', n);
@@ -258,6 +258,76 @@ describe('ClaudeCodeRunner: caps and stagnation of the build (ORC-136)', () => {
     const older = r.start(req({ cwd: gitRepo() }, { FAKE_CLAUDE_SCRIPT: script(...lines), FAKE_CLAUDE_HANG: '1' }));
     setTimeout(() => older.stop(), 800).unref();
     expect(await older.done).not.toHaveProperty('stagnation');
+  });
+
+  it('says once per run that the worktree cannot be read, masked, and the run ends as before', { timeout: 30_000 }, async () => {
+    const { sandboxes, id } = await sandbox();
+    const exec = vi.spyOn(sandboxes, 'exec').mockImplementation(async () => ({ stdout: '', stderr: "fatal: detected dubious ownership, token hunter2-secret-value\nthe content of a file\n", code: 128 }));
+    const log = vi.fn();
+    const r = new ClaudeCodeRunner({ transcriptsDir: mkdtempSync(join(tmpdir(), 'factory-tr-')), command: [process.execPath, fx('fake-claude.mjs')], killGraceMs: 500, sandboxes, log, secrets: () => ['hunter2-secret-value'] });
+    const lines = [...bashFails('t1'), ...bashFails('t2'), ...bashFails('t3')];
+    const run = async (runId: string) => {
+      exec.mockClear();
+      const h = r.start(req({ runId, sandboxId: id, cwd: '/work', stagnation: repeats }, { FAKE_CLAUDE_SCRIPT: script(...lines), FAKE_CLAUDE_HANG: '1' }));
+      await vi.waitFor(() => expect(exec).toHaveBeenCalledTimes(3), { timeout: 10_000 });
+      h.stop();
+      return h.done;
+    };
+    const ended = await run('r-unread');
+    expect(ended).toMatchObject({ outcome: 'stopped' });
+    expect(ended).not.toHaveProperty('stagnation');
+    expect(log).toHaveBeenCalledOnce();
+    const said = log.mock.calls[0]![0] as string;
+    expect(said).toContain('r-unread');
+    expect(said).toContain('code 128');
+    expect(said).toContain('dubious ownership');
+    expect(said).not.toContain('hunter2-secret-value');
+    expect(said).not.toContain('the content of a file');
+    await run('r-unread-2');
+    expect(log).toHaveBeenCalledTimes(2);
+    expect(log.mock.calls[1]![0]).toContain('r-unread-2');
+  });
+
+  describe('worktreeReader', () => {
+    const reader = (exec: SandboxProvider['exec']) => {
+      const said: string[] = [];
+      return { said, read: worktreeReader({ exec }, { runId: 'r1', sandboxId: 'c1', cwd: '/work' }, (m) => said.push(m)) };
+    };
+
+    it('gives the tree and says nothing when it reads', async () => {
+      const { said, read } = reader(async () => ({ stdout: 'abc\n', stderr: 'a warning\n', code: 0 }));
+      expect(await read()).toBe('abc');
+      expect(said).toEqual([]);
+    });
+
+    it('a read that fails after one that worked is said too, and only once', async () => {
+      const exec = vi.fn<SandboxProvider['exec']>(async () => ({ stdout: '', stderr: '', code: 124 }));
+      exec.mockResolvedValueOnce({ stdout: 'abc\n', stderr: '', code: 0 });
+      const { said, read } = reader(exec);
+      expect(await read()).toBe('abc');
+      expect(await read()).toBeUndefined();
+      expect(await read()).toBeUndefined();
+      expect(said).toHaveLength(1);
+      expect(said[0]).toContain('code 124');
+    });
+
+    it('says it of an exit 0 with no tree, and of an engine that refuses the exec', async () => {
+      const empty = reader(async () => ({ stdout: '\n', stderr: '', code: 0 }));
+      expect(await empty.read()).toBeUndefined();
+      expect(empty.said[0]).toContain('code 0');
+      const refused = reader(async () => {
+        throw new Error('container sandbox: no live container c1\nmore');
+      });
+      expect(await refused.read()).toBeUndefined();
+      expect(refused.said[0]).toContain('no live container c1');
+      expect(refused.said[0]).not.toContain('more');
+    });
+
+    it('keeps the line short: a log, not a dump', async () => {
+      const { said, read } = reader(async () => ({ stdout: '', stderr: 'x'.repeat(5000), code: 1 }));
+      await read();
+      expect(said[0]!.length).toBeLessThan(500);
+    });
   });
 
   it('stops an agent that writes nothing any more, and tells it was silent', { timeout: 30_000 }, async () => {

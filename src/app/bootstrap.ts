@@ -166,7 +166,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     if (sandboxes && !claudeToken && !env['CLAUDE_CODE_OAUTH_TOKEN']) log('Attention : aucun jeton Claude (claude.active de factory.yml, ou CLAUDE_CODE_OAUTH_TOKEN) : les runs sandboxés ne pourront pas s’authentifier.');
     const runner: Runner = o.fakeRunner
       ? Object.assign(new FakeRunner(), { submit: (runId: string, output: AgentOutput) => saveAgentOutput(store, runId, output) })
-      : new ClaudeCodeRunner({ transcriptsDir: paths.transcripts, secrets: daemonSecrets, claudeToken: () => claudeToken, ...(sandboxes ? { sandboxes } : {}) });
+      : new ClaudeCodeRunner({ transcriptsDir: paths.transcripts, secrets: daemonSecrets, claudeToken: () => claudeToken, log, ...(sandboxes ? { sandboxes } : {}) });
     const workspaces = new GitWorkspaces({ root: paths.workspaces, knowledgeRepo: instance.knowledge?.repoPath });
     const forge = githubApp
       ? new GitHubAppForge({ ...githubApp, log })

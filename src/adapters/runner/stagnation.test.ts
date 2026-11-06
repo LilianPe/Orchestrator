@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -147,6 +147,25 @@ describe('WORKTREE_TREE: the content of a worktree, on a real git', () => {
     const before = count();
     await tree(dir);
     expect(count()).toBe(before);
+  });
+
+  it('reads a sparse worktree: what it hides is no deletion, a file written where it hides is a change', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'factory-tree-'));
+    git(dir, 'init', '-q');
+    mkdirSync(join(dir, '.claude'));
+    writeFileSync(join(dir, '.claude', 'settings.json'), '{}\n');
+    writeFileSync(join(dir, '.claude', 'CLAUDE.md'), 'c\n');
+    git(dir, 'add', '.');
+    git(dir, 'commit', '-qm', 'init');
+    git(dir, 'sparse-checkout', 'set', '--no-cone', '/*', '!/.claude/*', '/.claude/CLAUDE.md');
+    const clean = await tree(dir);
+    expect(clean).toBe(git(dir, 'rev-parse', 'HEAD^{tree}'));
+    writeFileSync(join(dir, '.claude', 'settings.local.json'), 'one\n');
+    const made = await tree(dir);
+    expect(made).not.toBe(clean);
+    writeFileSync(join(dir, '.claude', 'settings.local.json'), 'two\n');
+    expect(await tree(dir)).not.toBe(made);
+    expect(git(dir, 'ls-files', '-t', '.claude')).toBe('H .claude/CLAUDE.md\nS .claude/settings.json');
   });
 
   it('fails outside a git worktree: no fingerprint, nothing tracked', async () => {

@@ -21,6 +21,8 @@ export interface ClaudeRunnerOptions {
   sandboxes?: SandboxProvider;
   /** The token of the chosen Claude account (`claude.active`, ORC-211); without one, the daemon's `CLAUDE_CODE_OAUTH_TOKEN`. */
   claudeToken?: () => string | undefined;
+  /** The daemon's log. */
+  log?: (message: string) => void;
 }
 
 /** The one credential a sandboxed `claude` gets (ORC-211): no API key, no other account, no gateway. */
@@ -157,16 +159,31 @@ const TREE_TIMEOUT_S = 30;
 /** What a token cap counts: what the model read anew and wrote. A cache read costs next to nothing, and grows with each turn. */
 const spentTokens = (u: TokenUsage): number => u.input + u.output + u.cacheCreation;
 
-/** In the sandbox when the run has one: the host never runs git on a worktree the agent writes from there (ORC-203). Holds the two fields it reads, not the request. */
-function worktreeReader(sandboxes: SandboxProvider | undefined, { sandboxId, cwd }: Pick<RunRequest, 'sandboxId' | 'cwd'>): () => Promise<string | undefined> {
+/** What a warning takes of an stderr: its first line, cut. git names a path there, not what a file holds. */
+const STDERR_LINE_MAX = 200;
+
+/**
+ * In the sandbox when the run has one: the host never runs git on a worktree the agent writes from there (ORC-203). Holds the fields it reads, not the request.
+ * A read that fails only leaves that failure uncounted, and a detector that sees nothing looks like an agent that does not loop: `warn` says it, once per run.
+ */
+export function worktreeReader(sandboxes: Pick<SandboxProvider, 'exec'> | undefined, { runId, sandboxId, cwd }: Pick<RunRequest, 'runId' | 'sandboxId' | 'cwd'>, warn: (message: string) => void): () => Promise<string | undefined> {
   const argv = ['timeout', String(TREE_TIMEOUT_S), 'sh', '-c', WORKTREE_TREE];
+  let warned = false;
+  const unread = (code: number | undefined, stderr: string) => {
+    if (warned) return;
+    warned = true;
+    warn(`Attention : run ${runId} : worktree illisible (${code === undefined ? 'exec refusé' : `code ${code}`}) : ${stderr.split('\n')[0]!.trim().slice(0, STDERR_LINE_MAX)}. Ses échecs ne comptent pas pour le détecteur de boucle.`);
+  };
   return async () => {
     try {
       const read = await (sandboxId !== undefined ? sandboxes!.exec(sandboxId, argv, { cwd }) : execCmd(argv[0]!, argv.slice(1), { cwd }));
-      return read.code === 0 ? read.stdout.trim() || undefined : undefined;
-    } catch {
-      return undefined;
+      const tree = read.code === 0 ? read.stdout.trim() : '';
+      if (tree) return tree;
+      unread(read.code, read.stderr);
+    } catch (err) {
+      unread(undefined, err instanceof Error ? err.message : String(err));
     }
+    return undefined;
   };
 }
 
@@ -215,7 +232,7 @@ export class ClaudeCodeRunner implements Runner {
       closeSync(err);
     }
     if (child.pid !== undefined) writeFileSync(join(dir, 'pid'), [child.pid, startTime(child.pid)].filter((x) => x !== undefined).join(' '), { mode: 0o600 });
-    return this.follow({ runId: req.runId, limits: req.limits, secrets, remainingMs: req.limits.durationMs, child, stagnation: req.stagnation, ...(req.stagnation?.repeats ? { tree: worktreeReader(this.o.sandboxes, req) } : {}) });
+    return this.follow({ runId: req.runId, limits: req.limits, secrets, remainingMs: req.limits.durationMs, child, stagnation: req.stagnation, ...(req.stagnation?.repeats ? { tree: worktreeReader(this.o.sandboxes, req, (m) => this.o.log?.(maskTranscriptLine(m, secrets))) } : {}) });
   }
 
   /**
