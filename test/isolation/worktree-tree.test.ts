@@ -19,12 +19,17 @@ const TREE = /^[0-9a-f]{40,64}$/;
 
 const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
 
-/** Every entry of a directory: its path, its date and, for a file, its size and content. */
+/**
+ * Every entry of a directory: its path, its date and, for a file, its size and content. No date for an object:
+ * git freshens an object it would write again, even in an alternate, and its content stays the same.
+ */
 function snapshot(dir: string): string[] {
   return (readdirSync(dir, { recursive: true }) as string[]).sort().map((name) => {
     const path = join(dir, name);
     const at = lstatSync(path);
-    return `${name} ${at.mtimeMs} ${at.isFile() ? `${at.size} ${createHash('sha256').update(readFileSync(path)).digest('hex')}` : 'dir'}`;
+    if (!at.isFile()) return `${name} ${at.mtimeMs} dir`;
+    const content = `${at.size} ${createHash('sha256').update(readFileSync(path)).digest('hex')}`;
+    return name.startsWith('objects') ? `${name} ${content}` : `${name} ${at.mtimeMs} ${content}`;
   });
 }
 
