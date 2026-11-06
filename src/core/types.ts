@@ -42,6 +42,9 @@ export type Stagnation =
 export type InputKind = 'feedback' | 'ci_failures' | 'thread' | 'verify_failures';
 export type QueueName = 'dev' | 'questions';
 
+/** What a human message asks for (ORC-180), classified at its arrival and journaled with it. */
+export type MessageKind = 'question' | 'instruction' | 'command';
+
 export interface FeedbackItem {
   /** The author's name, for the prompt. */
   author: string;
@@ -49,7 +52,10 @@ export interface FeedbackItem {
   authorId?: string;
   body: string;
   at: number;
-  source: 'session' | 'review' | 'label' | 'verify' | 'ci';
+  /** `thread`: a question of a question thread, or a message on a ticket not delegated: answered there, no agent asked for it (ORC-180). */
+  source: 'session' | 'thread' | 'review' | 'label' | 'verify' | 'ci';
+  /** Its class when it came in; absent on items written before ORC-180, which only a run that reads the feedback takes. */
+  kind?: MessageKind;
   /**
    * Taint of the event that brought the item; a run that consumes the pending feedback is as untrusted
    * as its least trusted item (I12). Absent on items written before ORC-269, when no source marked an
@@ -128,13 +134,14 @@ export interface EffectResultPayload {
  * transaction writes it to `timers`, and its firing comes back through the inbox as `timer.fired`.
  *
  * - `debounce`: a rule with `debounce` regroups the messages that come in before it fires, then starts `job`.
+ *   `inbox`: armed by a classified message (ORC-180): it starts nothing while work is in flight, the messages wait for its end.
  * - `clarify.remind` / `clarify.expire`: the reminder of a `clarify` question at 24 h, then the block at
  *   72 h, in the question's session; the rules that arm and decide them are ORC-210's.
  * - `usage.reset`: the reset of a subscription's usage limit, after which the waiting runs resume; the
  *   rule is ORC-215's.
  */
 export interface TimerPayloads {
-  debounce: { job: string };
+  debounce: { job: string; inbox?: true };
   'clarify.remind': { linearSessionId?: string };
   'clarify.expire': { linearSessionId?: string };
   'usage.reset': { account?: string };
@@ -147,6 +154,19 @@ export type TimerKind = keyof TimerPayloads;
 /** A timer's kind and what it carries: what `timer.fired` brings back to `decide`. */
 export type TimerFired = { [K in TimerKind]: { kind: K; payload: TimerPayloads[K] } }[TimerKind];
 
+/** A human message in a Linear session, a mention or a reply. */
+interface SessionMessage {
+  linearSessionId: string;
+  body: string;
+  author: string;
+  issue?: IssueSnapshot;
+  ack?: true;
+  kind?: MessageKind;
+  masked?: true;
+  repos?: string[];
+  waitedIn?: string;
+}
+
 export interface EventPayloads {
   /**
    * `ack`: brought by the webhook, to acknowledge (ORC-171). `noRepo`: the Linear team no project takes: the ticket waits blocked under the first project.
@@ -156,8 +176,12 @@ export interface EventPayloads {
   'ticket.delegated': { linearSessionId?: string; promptContext?: string; issue?: IssueSnapshot; ack?: true; noRepo?: string; repos?: string[]; waitedIn?: string };
   /** `keepLabel`: another project's ticket for the same issue is blocked, the label stays (ORC-291). */
   'ticket.undelegated': { keepLabel?: true };
-  'session.mentioned': { linearSessionId: string; body: string; author: string; issue?: IssueSnapshot; ack?: true; repos?: string[]; waitedIn?: string };
-  'session.prompted': { linearSessionId: string; body: string; author: string; issue?: IssueSnapshot; repos?: string[]; waitedIn?: string };
+  /**
+   * `kind`: the class of the message at its arrival, journaled so that a replay decides on the same one (ORC-180); absent on
+   * rows written before, which decide as they did. `masked`: a secret was masked out of `body` before it was journaled.
+   */
+  'session.mentioned': SessionMessage;
+  'session.prompted': SessionMessage;
   'session.stopped': { linearSessionId?: string; repos?: string[]; waitedIn?: string };
   /** `cancelled`: the new status is of type canceled in Linear (ORC-170). */
   'status.changed': { from: LogicalState | null; to: LogicalState | null; cancelled?: true };
@@ -166,7 +190,7 @@ export interface EventPayloads {
   /** A commit pushed by a human on the ticket's branch. */
   'push.human': { branch: string; sha: string; author: string };
   /** `frozen`: for a `/refreeze`, the freeze at the branch's head, read before the decision (ORC-131); absent without a freeze or a branch. */
-  command: { name: string; body: string; linearSessionId: string; author: string; issue?: IssueSnapshot; ack?: true; frozen?: FrozenTests; repos?: string[]; waitedIn?: string };
+  command: { name: string; body: string; linearSessionId: string; author: string; issue?: IssueSnapshot; ack?: true; kind?: MessageKind; masked?: true; frozen?: FrozenTests; repos?: string[]; waitedIn?: string };
   'pr.opened': PrPayload;
   'pr.checks_passed': PrPayload;
   'pr.checks_failed': PrPayload & { failures: string[] };
@@ -414,7 +438,11 @@ export interface TicketState {
    * its spec, and its requester, who may answer it.
    */
   initiatorId?: string;
-  pendingFeedback: FeedbackItem[];
+  /**
+   * Every human message the factory kept, whatever its class (ORC-180, I6). It leaves only when a run that reads it is
+   * written (`feedback.consumed`), or by a cancellation (ORC-170).
+   */
+  humanInbox: FeedbackItem[];
   priority: number;
   costUsd: number;
   updatedAt: number;
@@ -422,8 +450,20 @@ export interface TicketState {
   workflowHash?: string;
 }
 
+/**
+ * A ticket as a projection or a recorded decision may hold it, whatever factory version wrote it: before ORC-180, the
+ * human inbox was `pendingFeedback`. Same items: only the name changes, and only in the ticket; no event carries it, so no
+ * event changes version. What it holds is not looked at: a corrupt one stays corrupt, its decision dead-letters as before.
+ */
+export function upcastTicket(stored: object): TicketState {
+  if (!('pendingFeedback' in stored)) return stored as TicketState;
+  const { pendingFeedback, ...rest } = stored;
+  return { ...rest, humanInbox: pendingFeedback } as TicketState;
+}
+
 /** Fills fields added after a row was first persisted. */
-export function normalizeTicket(t: TicketState): TicketState {
+export function normalizeTicket(stored: TicketState): TicketState {
+  const t = upcastTicket(stored);
   return { ...t, delegated: t.delegated ?? false, questionSessionIds: t.questionSessionIds ?? [], ciFixAttempts: t.ciFixAttempts ?? 0 };
 }
 
@@ -445,7 +485,7 @@ export function newTicketState(
     blocked: false,
     verifyAttempts: 0,
     ciFixAttempts: 0,
-    pendingFeedback: [],
+    humanInbox: [],
     priority,
     costUsd: 0,
     updatedAt: now,

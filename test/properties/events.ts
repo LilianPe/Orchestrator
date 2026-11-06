@@ -90,12 +90,17 @@ const timerFired: fc.Arbitrary<EventPayloads['timer.fired']> = fc.oneof(
   { arbitrary: fc.constant({ kind: 'usage.reset' as const, payload: {} }), weight: 1 },
 );
 
+/** A human message: classified at its arrival by the webhook (ORC-180), or a row journaled before it. */
+const message = fc
+  .record({ linearSessionId: session, body, author, issue, kind: fc.option(fc.constantFrom('question' as const, 'instruction' as const, 'command' as const), { nil: undefined }) })
+  .map(({ kind, ...p }) => (kind ? { ...p, ack: true as const, kind } : p));
+
 /** One arbitrary per event type: adding an event type to `EventPayloads` fails to compile until it is generated here. */
 const PAYLOADS: { [K in EventType]: fc.Arbitrary<EventPayloads[K]> } = {
   'ticket.delegated': fc.record({ linearSessionId: fc.option(session, { nil: undefined }), issue }),
   'ticket.undelegated': empty,
-  'session.mentioned': fc.record({ linearSessionId: session, body, author, issue }),
-  'session.prompted': fc.record({ linearSessionId: session, body, author, issue }),
+  'session.mentioned': message,
+  'session.prompted': message,
   'session.stopped': fc.record({ linearSessionId: fc.option(session, { nil: undefined }) }),
   'status.changed': fc.record({ from: fc.option(logical, { nil: null }), to: fc.option(logical, { nil: null }) }),
   'label.changed': fc.record({ label: fc.constantFrom('agent:reprendre', 'agent:stop', 'bug'), change: fc.constantFrom('added' as const, 'removed' as const) }),
@@ -313,7 +318,7 @@ const redCi: fc.Arbitrary<DraftEntry[]> = fc
 const devReply: fc.Arbitrary<Draft> = PAYLOADS['session.prompted'].map((p) => ({ type: 'session.prompted', payload: { ...p, linearSessionId: DEV_SESSION } }));
 const debouncedReply: fc.Arbitrary<DraftEntry[]> = external(devReply).map((reply): DraftEntry[] => [
   reply,
-  { kind: 'external', draft: { type: 'timer.fired', payload: DEBOUNCE }, untrusted: false },
+  { kind: 'external', draft: { type: 'timer.fired', payload: reply.kind === 'external' && (reply.draft.payload as { kind?: string }).kind ? { kind: 'debounce', payload: { job: 'dev-feedback', inbox: true } } : DEBOUNCE }, untrusted: false },
 ]);
 
 /** A human talks to the factory: in the dev session, in a question session, through a label. */

@@ -58,6 +58,17 @@ export function signedMention(sessionId: string, body: string, at = NOW): { raw:
   });
 }
 
+/** A signed reply in session `sessionId` of REL-1, posted at `at`. */
+export function signedReply(sessionId: string, body: string, at = NOW): { raw: string; headers: Record<string, string> } {
+  return sign({
+    type: 'AgentSessionEvent',
+    action: 'prompted',
+    webhookTimestamp: at,
+    agentSession: { id: sessionId, issue: { id: 'u1', identifier: 'REL-1', title: 'Export CSV' } },
+    agentActivity: { id: `aa-${sessionId}-${at}`, user: { id: 'user-lilian', name: 'Lilian' }, content: { type: 'prompt', body } },
+  });
+}
+
 /**
  * The daemon's Linear ingestion for project `p` (team REL), writing through `accept`. `now` as the
  * daemon wires it: the clock (default 1000). `ctx`: what differs from that one project (the team's repos).

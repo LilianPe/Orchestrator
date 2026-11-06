@@ -141,7 +141,7 @@ describe.skipIf(!url)('PgStore integration', () => {
       ...newTicketState('p', 'REL-1', 'Ticket', 'dev', 1_000, 2),
       pendingJob: { job: 'dev-feedback' },
       activeRunId: 'r1',
-      pendingFeedback: [{ author: 'a', body: 'b', at: 2, source: 'session' as const }],
+      humanInbox: [{ author: 'a', body: 'b', at: 2, source: 'session' as const }],
       updatedAt: 1_500,
     };
     await store.putTicket(ticket, { workflowHash: 'wf-1' });
@@ -164,7 +164,7 @@ describe.skipIf(!url)('PgStore integration', () => {
       step_cursor: 'dev-feedback',
       active_attempts: 1,
       workflow_hash: 'wf-1',
-      human_inbox: ticket.pendingFeedback,
+      human_inbox: ticket.humanInbox,
     });
 
     await store.putTicket({ ...ticket, logical: 'human_review' });

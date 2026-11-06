@@ -166,7 +166,7 @@ describe('a restart during a run', () => {
     const again = h.runner.requests[2]!;
     expect(again.prompt).toContain('boutons mal alignés');
     expect(again.sensitivePaths).toBeDefined();
-    expect((await h.ticket()).pendingFeedback).toEqual([]);
+    expect((await h.ticket()).humanInbox).toEqual([]);
   });
 
   it('a first run whose session was never written starts it under the same id: --resume would fail on it (ORC-128, call 9)', async () => {

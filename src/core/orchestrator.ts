@@ -49,7 +49,8 @@ import { NO_PLAN, planDecision } from './decision-plan.js';
 import { blockedLabelChange, goesThroughFreeze, HUMAN_EVENTS, mayCheck, mayPublish, RECONCILE_MS, reconcileTicket, refusesDevWork, sensitivePathsAtLaunch, taintedKnowledge } from './engine.js';
 import { attemptLabels, packFingerprints } from './attempt-labels.js';
 import { pickupFailures } from './pickup.js';
-import { buildPrompt, formatFeedback, formatVerifyFailures, readConventions } from './prompt.js';
+import { buildPrompt, formatFeedback, formatVerifyFailures, readConventions, withHumanInbox } from './prompt.js';
+import { carriedAtLaunch, forAgent } from './human-message.js';
 import { reduce } from './reduce.js';
 import { advancePlan, closePlan, planStepOfJob, startPlan, type PlanStep } from './session-plan.js';
 import type { StoredEvent } from './upcast.js';
@@ -1782,9 +1783,16 @@ export class Orchestrator {
       // The feedback the run reads, taken at the launch whoever started it (a decision, settle, the queue):
       // its taint completes the one the start was decided with (I12, ORC-274).
       const kind = from ? undefined : (opts.input ?? job.input);
-      const read: FeedbackItem[] = [];
+      // The implementer's run (a `dev` from scratch or a resume) runs the ticket session: resumed when the
+      // ticket has one, else made here and taken by the ticket. A review or a question never does (ORC-217).
+      // A relaunch runs the session the lost attempt ran. Cut before Claude wrote it, that session does not
+      // exist yet: it starts under the id the ticket already holds (ORC-128).
+      const ticketSession = job.queue === 'dev' && (from?.sessionRole ? from.sessionRole === 'implementer' : (opts.resume ?? (job.session === 'resume' || job.pickup)));
+      // Its step boundary (ORC-180): the agent that implements starts a step, it reads what came in since its last one.
+      const carried = !from && kind !== 'feedback' && ticketSession ? carriedAtLaunch(t.humanInbox) : [];
+      const read: FeedbackItem[] = [...carried];
       if (kind === 'feedback') {
-        read.push(...t.pendingFeedback);
+        read.push(...forAgent(t.humanInbox));
         // Review comments are external content: whoever can comment on the PR wrote them, and nothing
         // authenticates them as the team's (ORC-160). Untrusted, whatever the forge says.
         if (t.prNumber) {
@@ -1792,7 +1800,9 @@ export class Orchestrator {
           read.push(...comments.map((c) => ({ ...c, taint: 'untrusted' as const })));
         }
       }
-      const sensitivePaths = sensitivePathsAtLaunch(opts.sensitivePaths ?? from?.sensitivePaths, read);
+      // A launch that empties the inbox takes the taint of all it empties, what the agent is not given included (`runTaint`).
+      const consumes = kind === 'feedback' || carried.length > 0;
+      const sensitivePaths = sensitivePathsAtLaunch(opts.sensitivePaths ?? from?.sensitivePaths, consumes ? [...read, ...t.humanInbox] : read);
       if (sensitivePaths && job.workspace === 'knowledge') {
         // As decide refuses it (I12), for what it could not see: untrusted content read at the launch.
         this.d.scheduler.release(key);
@@ -1803,11 +1813,6 @@ export class Orchestrator {
         return;
       }
 
-      // The implementer's run (a `dev` from scratch or a resume) runs the ticket session: resumed when the
-      // ticket has one, else made here and taken by the ticket. A review or a question never does (ORC-217).
-      // A relaunch runs the session the lost attempt ran. Cut before Claude wrote it, that session does not
-      // exist yet: it starts under the id the ticket already holds (ORC-128).
-      const ticketSession = job.queue === 'dev' && (from?.sessionRole ? from.sessionRole === 'implementer' : (opts.resume ?? (job.session === 'resume' || job.pickup)));
       const held = ticketSession ? t.claudeSessionId : undefined;
       const resume = !!held && (!opts.relaunchOf || !this.d.sessionsDir || sessionSaved(join(this.d.sessionsDir, project.id, ticketId), held));
       const claudeSessionId = held ?? this.newId();
@@ -1844,6 +1849,7 @@ export class Orchestrator {
       } else if (kind === 'thread') {
         input = { kind, text: opts.inputText ?? '' };
       }
+      if (carried.length) input = withHumanInbox(input, carried);
 
       const promptInput = {
         skill: job.skill,
@@ -1884,7 +1890,7 @@ export class Orchestrator {
       if (opts.startMark) await store.setMeta(opts.startMark, runId);
       await this.apply(t, { type: 'run.started', runId, job: job.name, queue: job.queue, claudeSessionId, ...(ticketSession ? {} : { ticketSession: false as const }) });
       await store.putRun(run);
-      if (kind === 'feedback') await this.apply(await this.ticket(project.id, ticketId), { type: 'feedback.consumed' });
+      if (consumes) await this.apply(await this.ticket(project.id, ticketId), { type: 'feedback.consumed' });
       const step = planStepOfJob(job);
       if (step) await this.updatePlan(t, (plan) => advancePlan(plan, step));
       // The run is written: a queued item it came from leaves the queue now (a crash from here on is recover()'s).
