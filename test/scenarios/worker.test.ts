@@ -2,8 +2,11 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { ROLES_TTL_MS } from '../../src/adapters/roles/cached.js';
+import { runRepair } from '../../src/cli/repair.js';
 import { loadWorkflow } from '../../src/config/load-workflow.js';
 import { TRUSTED, type FactoryEvent } from '../../src/core/types.js';
+import type { StoredEvent } from '../../src/core/upcast.js';
 import { SqliteStore } from '../../src/store/sqlite-store.js';
 import type { DecisionRequest, Store } from '../../src/store/types.js';
 import type { WorkspaceRequest } from '../../src/adapters/workspace/types.js';
@@ -379,6 +382,391 @@ on:
         await h.orch.drained();
 
         await olderDecidedThenRestart(scenario);
+      });
+    });
+
+    describe('past its last attempt, without a restart (ORC-320)', () => {
+      const ATTEMPTS = 2;
+      const younger = (h: ReturnType<typeof createHarness>) =>
+        ({ ...TRUSTED, id: 'younger', type: 'status.changed' as const, at: h.clock.now(), projectId: 'p', ticketId: 'REL-1', payload: { from: 'todo', to: 'todo' } });
+      const journaled = async (h: ReturnType<typeof createHarness>) => (await h.store.recentEvents(50, 'REL-1')).map((e) => e.id).reverse();
+      const repair = (h: ReturnType<typeof createHarness>) => runRepair({ store: h.store, target: 'REL-1', action: 'replay', by: 'armand', now: h.clock.now(), print: () => {} });
+
+      /** `younger` throws at each decision while `broken`; `attempt` runs in that decision, before it throws. */
+      function failing(attempt: (n: number) => void | Promise<void> = () => {}, wrap: (inner: Store, state: { broken: boolean; decided: string[] }) => Partial<Store> = () => ({})) {
+        const state = { broken: true, decided: [] as string[] };
+        let tries = 0;
+        const h = createHarness({
+          projectYaml: CRASH_WORKFLOW,
+          processRetry: { attempts: ATTEMPTS, baseMs: 1 },
+          // A backoff no real timer reaches during the test: only `advance` ends it.
+          effectRetry: { attempts: 2, baseMs: 60_000, capMs: 60_000 },
+          wrapStore: (inner) =>
+            Object.assign(Object.create(inner) as Store, {
+              decide: async (req: DecisionRequest) => {
+                if (state.broken && req.event.id === 'younger') {
+                  await attempt(++tries);
+                  throw new Error('database hiccup');
+                }
+                const outcome = await inner.decide(req);
+                state.decided.push(`${req.event.id}:${outcome.status}`);
+                return outcome;
+              },
+              ...wrap(inner, state),
+            }),
+        });
+        h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+        return { h, state };
+      }
+
+      /** A tracked ticket with roles to read; `attempt` runs in each read of them, which throws until `up`. */
+      async function rolesDown(attempt: (n: number) => void) {
+        const h = createHarness({ processRetry: { attempts: ATTEMPTS, baseMs: 1 }, authz: { githubLogins: { 'user-lilian': 'lilian-gh' } } });
+        h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+        h.tracker.setTeamMembers('REL', ['user-lilian']);
+        h.forge.setRepoPermission('lilian-gh', 'write');
+        await h.send('ticket.delegated', { linearSessionId: 'ls-1' }, 'REL-1', { actor: 'user-lilian' });
+        h.clock.advance(ROLES_TTL_MS + 1);
+        const teamMembers = h.tracker.teamMembers.bind(h.tracker);
+        let tries = 0;
+        h.tracker.teamMembers = async () => {
+          attempt(++tries);
+          throw new Error('Linear unreachable');
+        };
+        const mention = (actor: string) => ({ ...TRUSTED, id: 'mention', type: 'session.mentioned' as const, at: h.clock.now(), projectId: 'p', ticketId: 'REL-1', actor, payload: { linearSessionId: 'ls-2', body: 'lance le dev', author: 'S' } });
+        return { h, mention, up: () => (h.tracker.teamMembers = teamMembers) };
+      }
+
+      it('blocks the ticket and says so in its session when its store transaction throws at each attempt (criterion 1)', async () => {
+        const last = gate();
+        const { h } = failing((n) => {
+          if (n === ATTEMPTS) last.open();
+        });
+        await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+
+        await h.orch.accept(younger(h));
+        await last.opened;
+        await h.orch.drained();
+
+        expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: expect.stringMatching(/^Événement younger mis de côté \(status\.changed\)/) });
+        expect(h.tracker.activities('ls-1')).toContainEqual({ type: 'error', body: expect.stringContaining('factory run repair REL-1') });
+        expect(await h.store.deadLetters('REL-1')).toMatchObject([{ eventId: 'younger', status: 'open', failures: 1, error: 'database hiccup' }]);
+        expect(await h.store.pendingInbox(10)).toEqual([]);
+      });
+
+      it('blocks the ticket when its preparation throws at each attempt (criterion 1)', async () => {
+        const last = gate();
+        const { h, mention } = await rolesDown((n) => {
+          if (n === ATTEMPTS) last.open();
+        });
+
+        await h.orch.accept(mention('user-lilian'));
+        await last.opened;
+        await h.orch.drained();
+
+        expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: expect.stringMatching(/^Événement mention mis de côté/) });
+        expect(await h.store.deadLetters('REL-1')).toMatchObject([{ eventId: 'mention', status: 'open', error: 'Linear unreachable' }]);
+        expect(await h.store.pendingInbox(10)).toEqual([]);
+      });
+
+      /** The ticket's effect died near `younger`'s last attempt: blocked for it, its result decided, nothing left behind. */
+      async function effectDiedThenBlocked({ h, state }: ReturnType<typeof failing>) {
+        expect(state.decided).toContain('effect:REL-1:1:2:committed');
+        expect(await h.store.pendingInbox(10)).toEqual([]);
+        // The block of the dead effect, not the dead letter's: repairing `younger` does not make the effect look alive.
+        expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Erreur : Linear down' });
+        expect(await h.store.deadLetters('REL-1')).toMatchObject([{ eventId: 'younger', status: 'open' }]);
+      }
+
+      it('blocks the ticket on an effect that dies after the row is out of attempts (criterion 2)', async () => {
+        const last = gate();
+        const scenario = failing((n) => {
+          if (n === ATTEMPTS) last.open();
+        });
+        const { h } = scenario;
+        h.tracker.comment = async () => {
+          throw new Error('Linear down');
+        };
+        await h.orch.accept(delegation(h, 'd1'));
+        await h.orch.drained();
+        await h.orch.accept(younger(h));
+        await last.opened;
+        await h.orch.drained();
+
+        // The comment's last attempt dies at the next poll, with no restart.
+        await h.advance(60_000);
+
+        await effectDiedThenBlocked(scenario);
+      });
+
+      it('blocks the ticket on an effect that dies right behind the last attempt, in the same task (criterion 2)', async () => {
+        const inDecision = gate();
+        const answer = gate();
+        const scenario = failing(async (n) => {
+          if (n < ATTEMPTS) return;
+          inDecision.open();
+          await answer.opened;
+        });
+        const { h } = scenario;
+        h.tracker.comment = async () => {
+          throw new Error('Linear down');
+        };
+        await h.orch.accept(delegation(h, 'd1'));
+        await h.orch.drained();
+        await h.orch.accept(younger(h));
+        await inDecision.opened;
+        // The comment's backoff ends during the attempt: its ticket's task reaches it once the attempt is over.
+        h.clock.advance(60_000);
+        answer.open();
+        await h.orch.drained();
+        await h.advance(0);
+
+        await effectDiedThenBlocked(scenario);
+      });
+
+      it('takes up what arrived behind the row once it is set aside, a stop included', async () => {
+        const inDecision = gate();
+        const answer = gate();
+        const { h, state } = failing(async () => {
+          inDecision.open();
+          await answer.opened;
+        });
+        await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+        await h.orch.accept(younger(h));
+        await inDecision.opened;
+        await h.orch.accept(stop(h, 's1'));
+        await h.orch.poll();
+        answer.open();
+        await h.orch.drained();
+
+        expect(state.decided).toContain('s1:committed');
+        expect(await h.store.pendingInbox(10)).toEqual([]);
+        expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Arrêté à la demande' });
+      });
+
+      it('gets its row back with `factory run repair`: replayed once the cause is fixed, the ticket unblocked', async () => {
+        const last = gate();
+        const { h, state } = failing((n) => {
+          if (n === ATTEMPTS) last.open();
+        });
+        await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+        await h.orch.accept(younger(h));
+        await last.opened;
+        await h.orch.drained();
+        expect((await h.ticket()).blocked).toBe(true);
+
+        state.broken = false;
+        expect(await repair(h)).toBe(0);
+        await h.orch.poll();
+        await h.orch.drained();
+
+        expect((await h.ticket()).blocked).toBe(false);
+        expect(await journaled(h)).toContain('repair:younger:1');
+        expect(await h.store.getDeadLetter('younger')).toMatchObject({ status: 'replayed', resolvedBy: 'armand' });
+      });
+
+      it('checks a repaired row on its roles: set aside before they could be read, it is refused at its replay', async () => {
+        const last = gate();
+        const { h, mention, up } = await rolesDown((n) => {
+          if (n === ATTEMPTS) last.open();
+        });
+        const runs = h.runner.requests.length;
+        await h.orch.accept(mention('user-stranger'));
+        await last.opened;
+        await h.orch.drained();
+        expect((await h.store.getDeadLetter('mention'))!.event.roles).toBeUndefined();
+
+        up();
+        expect(await repair(h)).toBe(0);
+        await h.orch.poll();
+        await h.orch.drained();
+
+        // Read at last, its roles refuse it: no run on the word of someone who may not ask.
+        expect(h.runner.requests).toHaveLength(runs);
+        expect(h.tracker.activities('ls-2')).toEqual([{ type: 'response', body: expect.stringMatching(/^Refusé/) }]);
+        const repaired = (await h.store.recentEvents(50, 'REL-1')).find((e) => e.id === 'repair:mention:1');
+        expect(repaired).toMatchObject({ payload: { event: { id: 'mention', roles: [] } } });
+      });
+
+      it('reopens the dead letter when the repair itself cannot be prepared: the row is still there', async () => {
+        const first = gate();
+        const second = gate();
+        const { h, mention } = await rolesDown((n) => {
+          if (n === ATTEMPTS) first.open();
+          if (n === ATTEMPTS * 2) second.open();
+        });
+        await h.orch.accept(mention('user-lilian'));
+        await first.opened;
+        await h.orch.drained();
+
+        expect(await repair(h)).toBe(0);
+        await h.orch.poll();
+        await second.opened;
+        await h.orch.drained();
+
+        expect(await h.store.getDeadLetter('mention')).toMatchObject({ status: 'open', failures: 2 });
+        expect((await h.ticket()).blocked).toBe(true);
+        expect(await h.store.pendingInbox(10)).toEqual([]);
+      });
+
+      describe('with the store itself failing', () => {
+        it('keeps the row and its order while nothing can be written, and decides it at a later attempt, without a dead letter', async () => {
+          const stillDown = gate();
+          const back = gate();
+          let tries = 0;
+          const { h, state } = failing(undefined, (inner, s) => ({
+            deadLetter: async () => {
+              // Past the last attempt: the dead letter could not be written, the row is not given up.
+              if (tries > ATTEMPTS) stillDown.open();
+              throw new Error('database down');
+            },
+            decide: async (req: DecisionRequest) => {
+              if (s.broken && req.event.id === 'younger') {
+                tries++;
+                throw new Error('database down');
+              }
+              const outcome = await inner.decide(req);
+              s.decided.push(`${req.event.id}:${outcome.status}`);
+              if (req.event.id === 'younger') back.open();
+              return outcome;
+            },
+          }));
+          await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+          await h.orch.accept(younger(h));
+          await h.orch.accept(stop(h, 's1'));
+          await stillDown.opened;
+
+          expect((await h.store.pendingInbox(10)).map((e) => e.id)).toEqual(['younger', 's1']);
+          expect(state.decided).not.toContain('s1:committed');
+          expect(await h.store.deadLetters()).toEqual([]);
+
+          state.broken = false;
+          await back.opened;
+          await h.orch.drained();
+
+          expect(await h.store.pendingInbox(10)).toEqual([]);
+          expect(await h.store.deadLetters()).toEqual([]);
+          const order = await journaled(h);
+          expect(order).toContain('younger');
+          expect(order.indexOf('younger')).toBeLessThan(order.indexOf('s1'));
+        });
+
+        it('keeps retrying when the store cannot even say whether the ticket is tracked', async () => {
+          const pastLast = gate();
+          const back = gate();
+          let tries = 0;
+          const { h, state } = failing(undefined, (inner, s) => ({
+            getTicket: async (projectId: string, ticketId: string) => {
+              if (s.broken && tries >= ATTEMPTS) throw new Error('database down');
+              return inner.getTicket(projectId, ticketId);
+            },
+            decide: async (req: DecisionRequest) => {
+              if (s.broken && req.event.id === 'younger') {
+                if (++tries > ATTEMPTS) pastLast.open();
+                throw new Error('database down');
+              }
+              const outcome = await inner.decide(req);
+              if (req.event.id === 'younger') back.open();
+              return outcome;
+            },
+          }));
+          await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+          await h.orch.accept(younger(h));
+          await pastLast.opened;
+          expect(await h.store.deadLetters()).toEqual([]);
+
+          state.broken = false;
+          await back.opened;
+          await h.orch.drained();
+
+          expect(await journaled(h)).toContain('younger');
+          expect(await h.store.deadLetters()).toEqual([]);
+          expect(await h.store.pendingInbox(10)).toEqual([]);
+        });
+
+        it("sets the row aside once when the answer to the dead letter's COMMIT is lost", async () => {
+          const noticed = gate();
+          let lost = true;
+          const { h, state } = failing(undefined, (inner, s) => ({
+            deadLetter: async (row: StoredEvent, error: string, at: number, holder?: string) => {
+              const written = await inner.deadLetter(row, error, at, holder);
+              if (lost) {
+                lost = false;
+                throw new Error('connection reset');
+              }
+              return written;
+            },
+            decide: async (req: DecisionRequest) => {
+              if (s.broken && req.event.id === 'younger') throw new Error('database hiccup');
+              const outcome = await inner.decide(req);
+              s.decided.push(`${req.event.id}:${outcome.status}`);
+              if (req.event.id === 'dead-letter:younger:1' && outcome.status === 'committed') noticed.open();
+              return outcome;
+            },
+          }));
+          await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+          await h.orch.accept(younger(h));
+          await noticed.opened;
+          await h.orch.drained();
+
+          expect(await h.store.deadLetters('REL-1')).toMatchObject([{ eventId: 'younger', status: 'open', failures: 1 }]);
+          expect(state.decided.filter((d) => d.startsWith('dead-letter:'))).toEqual(['dead-letter:younger:1:committed']);
+          expect((await h.ticket()).blocked).toBe(true);
+          expect(await h.store.pendingInbox(10)).toEqual([]);
+        });
+
+        it('sets nothing aside during a shutdown: the row waits for the next start', async () => {
+          const inDecision = gate();
+          const answer = gate();
+          const { h, state } = failing(async (n) => {
+            if (n < ATTEMPTS) return;
+            inDecision.open();
+            await answer.opened;
+          });
+          await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+          await h.orch.accept(younger(h));
+          await inDecision.opened;
+          h.orch.stopAll();
+          answer.open();
+          await h.orch.drained();
+
+          expect(await h.store.deadLetters()).toEqual([]);
+          expect((await h.store.pendingInbox(10)).map((e) => e.id)).toEqual(['younger']);
+
+          state.broken = false;
+          await h.restart();
+          expect(await journaled(h)).toContain('younger');
+          expect(await h.store.pendingInbox(10)).toEqual([]);
+        });
+      });
+
+      it('never sets aside the event that blocks the ticket: set aside, the block would be lost', async () => {
+        const pastLast = gate();
+        const blocked = gate();
+        let tries = 0;
+        const { h, state } = failing(undefined, (inner, s) => ({
+          decide: async (req: DecisionRequest) => {
+            if (s.broken && req.event.id === 'younger') throw new Error('database hiccup');
+            if (s.broken && req.event.id === 'dead-letter:younger:1') {
+              if (++tries > ATTEMPTS) pastLast.open();
+              throw new Error('database hiccup');
+            }
+            const outcome = await inner.decide(req);
+            if (req.event.id === 'dead-letter:younger:1') blocked.open();
+            return outcome;
+          },
+        }));
+        await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+        await h.orch.accept(younger(h));
+        await pastLast.opened;
+        expect((await h.store.deadLetters()).map((d) => d.eventId)).toEqual(['younger']);
+
+        state.broken = false;
+        await blocked.opened;
+        await h.orch.drained();
+
+        expect((await h.ticket()).blocked).toBe(true);
+        expect(await h.store.pendingInbox(10)).toEqual([]);
       });
     });
 
