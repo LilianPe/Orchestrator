@@ -141,6 +141,8 @@ describe('Done by a human, merge by the factory (ORC-148)', () => {
     });
     h.forge.setPr(BRANCH, { ...PR, state: 'OPEN', headSha: 'abc123', checks: 'pending', failedChecks: [] });
     await h.send('status.changed', { from: 'human_review', to: 'done' }, 'REL-1', { actor: 'user-lilian' });
+    // Replays are still owed when the checks turn green, and every one of them happens after.
+    expect(failures).toBeGreaterThan(0);
     h.forge.setPr(BRANCH, { ...PR, state: 'OPEN', headSha: 'abc123', checks: 'pass', failedChecks: [] });
     for (let i = 0; i < 6; i++) await h.advance(10);
     expect(failures).toBe(0);
