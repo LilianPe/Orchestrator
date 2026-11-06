@@ -1,4 +1,17 @@
+import { availableParallelism } from 'node:os';
 import { defineConfig } from 'vitest/config';
+
+/** What the projects on one Postgres share; the measures behind these numbers are in docs/tests.md (ORC-290). */
+const onPostgres = {
+  // A hook creates, migrates or drops databases, and a drop waits for a checkpoint of the whole server.
+  // On a stalled CI runner a checkpoint of 45 buffers took 14.5 s, past Vitest's default of 10 s for a hook.
+  hookTimeout: 60_000,
+  // Vitest's default for a run (a worker per CPU but one), bounded: a drop's p90 is 4.2 s at 11 workers.
+  // A bare 4 would raise a small CI runner's single worker.
+  maxWorkers: Math.max(1, Math.min(4, availableParallelism() - 1)),
+  // Vitest wants projects with another maxWorkers in another group; a same group shares that bound.
+  sequence: { groupOrder: 1 },
+};
 
 export default defineConfig({
   test: {
@@ -18,6 +31,7 @@ export default defineConfig({
           include: ['test/integration/**/*.test.ts'],
           environment: 'node',
           testTimeout: 30000,
+          ...onPostgres,
         },
       },
       {
@@ -29,6 +43,7 @@ export default defineConfig({
           setupFiles: ['test/helpers/pg-harness.ts'],
           environment: 'node',
           testTimeout: 30000,
+          ...onPostgres,
         },
       },
       {
