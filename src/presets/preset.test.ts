@@ -57,6 +57,8 @@ describe('factory/default', () => {
       human_review: { limit: 3 },
     });
     expect(factoryDefault.sameFailure).toEqual({ limit: 3, cause: 'boucle' });
+    expect(factoryDefault.silentRun).toEqual({ minutes: 30 });
+    expect(() => compilePreset({ ...factoryDefault, silentRun: { minutes: 0 } })).toThrow(/silentRun/);
     expect(step(factoryDefault, 'verify').onFailure).toEqual({ goto: 'build', counter: 'verify' });
     expect(step(factoryDefault, 'spec_check').onFailure).toEqual({ goto: 'spec_draft', counter: 'spec_check' });
     expect(step(factoryDefault, 'red').onFailure).toEqual({ goto: 'tests', counter: 'red' });

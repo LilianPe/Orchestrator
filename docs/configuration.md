@@ -188,9 +188,9 @@ read_guard: { max_lines: 350 }
 | -- | -- |
 | `github` | **Appliquée** : ses clés remplacent celles de `github` dans `config.yaml` ; une clé qu'il ne déclare pas (`installation_id`, `webhook_secret`) reste celle de `config.yaml`. |
 | `linear` | **Appliquée** : `app_client_id`, `client_secret` et `webhook_secret` remplacent ceux de `secrets.json`. Les jetons OAuth restent dans `secrets.json`, écrits par « Connecter Linear ». |
-| `claude` | **`accounts` et `active` appliqués** (ORC-211) : le jeton du compte actif est le seul identifiant du runner. Le reste du choix de compte avec ORC-215, l'effort par étape avec ORC-136. |
+| `claude` | **`accounts` et `active` appliqués** (ORC-211) : le jeton du compte actif est le seul identifiant du runner. **`effort` appliqué** (ORC-136) : `per_step` remplace l'effort d'une étape du préréglage, `default` sert aux jobs hors préréglage (`ask`, `learn`). Le reste du choix de compte avec ORC-215. |
 | `concurrency` | **Appliquée** (ORC-203) : capacité de la file `dev`, à la place de `limits.parallel_sessions` du workflow. La file `questions` garde `question_sessions`. |
-| `budgets` | Validée, pas encore lue : appliquée par ORC-216. |
+| `budgets` | **`max_turns` et `per_step_tokens` appliqués** (ORC-136), par étape : `max_turns` ne fait que baisser les tours de l'étape, `per_step_tokens` est un plafond par tentative, sans valeur par défaut. `per_ticket_tokens` et le pire cas de `factory validate` avec ORC-216, `on_usage_limit` avec ORC-215. |
 | `repos` | **`env` et `secrets` appliqués** (ORC-211), l'entrée étant trouvée par le remote `origin` du projet : voir [`configuration-depot.md`](configuration-depot.md#variables-et-secrets). Pour le reste, `projects[].repoPath` de `config.yaml` reste la copie de travail tant que le runner ne clone pas lui-même (ORC-204). |
 | `read_guard` | **Appliquée** : `max_lines` (entier positif, 350 sans cette clé) est le nombre de lignes au-delà duquel le hook du pack refuse une lecture complète ([ORC-279](pack-et-skills.md#lecture-complète-dun-gros-fichier)). Il compte à partir du prochain démarrage. |
 

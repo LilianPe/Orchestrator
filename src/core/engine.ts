@@ -149,6 +149,24 @@ function attemptDecision(p: EventPayloads['run.finished'], job: JobSpec): RunOut
   }
 }
 
+/**
+ * The block of an attempt the detector stopped (ORC-136), judged on the fact journaled with its end against the
+ * bound of the frozen workflow. An event without the fact (rows written before it), or a version without the bound, is
+ * no stagnation: the attempt's outcome decides, so a replay decides as it did.
+ */
+function stagnationBlock(p: EventPayloads['run.finished'], workflow: Workflow): { reason: string; body: string } | undefined {
+  const seen = p.stagnation;
+  if (!seen) return undefined;
+  if (seen.kind === 'silent') {
+    const reason = `Le run ${p.job} n'a rien écrit depuis ${Math.round(seen.silentMs / 60_000)} min : l'agent ne répond plus, son conteneur tourne encore.`;
+    return { reason, body: `${reason} Répondez dans ce fil pour que je reprenne.` };
+  }
+  const bound = workflow.limits.repeatedFailures;
+  if (bound === undefined || seen.count < bound) return undefined;
+  const reason = `Boucle : même commande, même échec, ${seen.count} fois, sans changement du code.`;
+  return { reason, body: `${reason}\n- \`${seen.command}\`\nRépondez dans ce fil pour relancer.` };
+}
+
 /** Prefix of the block reason of the red-CI bound: a green CI lifts that block (ORC-270). */
 const RED_CI_BLOCKED = 'CI toujours en échec après ';
 
@@ -797,10 +815,11 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       // An attempt that ended gives the lease's relaunch back (ORC-220): only two in a row block.
       if (ticket?.leaseRelaunches && job?.queue === 'dev') out.events.push({ type: 'ticket.patched', patch: { leaseRelaunches: 0 } });
       if (!job || event.payload.outcome === 'stopped') return out;
-      const outcome = job.queue === 'dev' ? attemptDecision(event.payload, job) : event.payload.outcome;
+      const outcome = job.queue === 'dev' ? (stagnationBlock(event.payload, workflow) ?? attemptDecision(event.payload, job)) : event.payload.outcome;
       // Already blocked (the agent asked through `ask`, a human's stop…): it keeps its reason and gets no second notice.
       if (typeof outcome === 'object') return ticket?.blocked ? out : block(out, outcome.reason, outcome.body);
-      if (outcome === 'success' && ticket?.blocked && job.queue === 'dev') return out;
+      // A run that ended well on a ticket already blocked (`ask`, then the end of its turn): no output is expected of it, its question stays.
+      if (event.payload.outcome === 'success' && ticket?.blocked && job.queue === 'dev') return out;
       if (outcome === 'success') {
         if (job.verify.length === 0 && !job.repoChecks && !job.red && !goesThroughFreeze(ticket, job)) return success(out, { event, ticket, workflow }, job, runId, output);
         out.events.push({ type: 'verify.started', runId });

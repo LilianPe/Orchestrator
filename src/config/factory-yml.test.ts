@@ -2,7 +2,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { activeClaudeToken, FactoryYmlError, loadFactoryYml, parseFactoryYml } from './factory-yml.js';
+import { activeClaudeToken, FactoryYmlError, loadFactoryYml, parseFactoryYml, stepSettings } from './factory-yml.js';
 
 const PEM = '-----BEGIN RSA PRIVATE KEY-----\\nabc\\n-----END RSA PRIVATE KEY-----';
 const ENV = {
@@ -119,6 +119,13 @@ describe('factory.yml (ORC-209, part B)', () => {
     for (const bad of ['0', '-1', '1.5', 'beaucoup']) expect(violations(`read_guard: { max_lines: ${bad} }`).join()).toContain('read_guard.max_lines');
     expect(violations('read_guard: { lines: 500 }')).toContain('read_guard.lines : clé inconnue');
     expect(violations('read_guard: 500')).toContain('read_guard : un objet est attendu');
+  });
+
+  it('hands the effort and the budgets to the agent steps, nothing without them (ORC-136)', () => {
+    expect(stepSettings(undefined)).toEqual({});
+    expect(stepSettings({ budgets: { maxTurns: { build: 10 } } })).toEqual({ budgets: { maxTurns: { build: 10 } } });
+    const claude = { runtime: 'claude-code' as const, accounts: [], active: 'a', defaultModel: 'm', effort: { default: 'low' as const, perStep: { build: 'high' as const } } };
+    expect(stepSettings({ claude })).toEqual({ effort: { default: 'low', perStep: { build: 'high' } } });
   });
 
   describe('the values of a repository (ORC-211)', () => {

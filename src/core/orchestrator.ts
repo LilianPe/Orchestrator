@@ -6,7 +6,7 @@ import type { Forge, ForgeWriter, MergeResult } from '../adapters/forge/types.js
 import { prEventId } from '../adapters/forge/github-webhook.js';
 import { prText, PublishRefused, type Publisher } from '../adapters/publisher/types.js';
 import type { RoleResolver } from '../adapters/roles/types.js';
-import type { RunHandle, RunResult, Runner } from '../adapters/runner/types.js';
+import type { RunHandle, RunResult, Runner, StagnationBounds } from '../adapters/runner/types.js';
 import {
   DEFAULT_REQUIREMENTS,
   PACK_TARGET,
@@ -116,6 +116,11 @@ async function storedOutput(store: Store, runId: string): Promise<AgentOutput | 
   }
 }
 
+/** What only the runner knows of an attempt's end (ORC-136), kept on its row: recover() sends the same result if the process dies before it does. */
+function endFacts({ stagnation, infra }: Pick<RunResult, 'stagnation' | 'infra'>): Pick<RunResult, 'stagnation' | 'infra'> {
+  return { ...(stagnation ? { stagnation } : {}), ...(infra ? { infra } : {}) };
+}
+
 /** The message posted for a run that submitted its output: composed by the factory from it, never the agent's last text (ORC-289). */
 function formatAgentOutput(o: AgentOutput): string {
   const list = (title: string, items: string[]) => (items.length ? [`**${title}**\n${items.map((i) => `- ${i}`).join('\n')}`] : []);
@@ -126,6 +131,18 @@ function formatAgentOutput(o: AgentOutput): string {
     ...list('Non testé', o.untested),
     ...list('À relire', o.review_hints.map((h) => `\`${h.file}\` : ${h.reason}`)),
   ].join('\n\n');
+}
+
+/**
+ * What a run's stagnation is watched against (ORC-136). `silentAfterMs` tells a version frozen since: one before it has
+ * `repeatedFailures` too (ORC-187), for its checks only, and keeps running as it did. Only a dev job has its worktree read
+ * for a loop: `decide` blocks no ticket on a question, whose checkout stays out of it.
+ */
+function stagnationBounds(wf: Workflow, job: JobSpec): { stagnation?: StagnationBounds } {
+  const silentMs = wf.limits.silentAfterMs;
+  if (!silentMs) return {};
+  const repeats = job.queue === 'dev' ? wf.limits.repeatedFailures : undefined;
+  return { stagnation: { silentMs, ...(repeats ? { repeats } : {}) } };
 }
 
 export interface ProjectRuntime {
@@ -502,7 +519,7 @@ export class Orchestrator {
       if (!project || !job || !runner.attach) return false;
       const sandbox = sandboxes && (await sandboxes.reattach(run.id));
       if (sandboxes && !sandbox) return false;
-      const handle = runner.attach({ runId: run.id, limits: job.limits, elapsedMs: clock.now() - run.startedAt, env: this.d.agentEnv(run) });
+      const handle = runner.attach({ runId: run.id, limits: job.limits, elapsedMs: clock.now() - run.startedAt, env: this.d.agentEnv(run), ...stagnationBounds(project.workflow, job) });
       if (!handle) return false;
       // Its slot, in the memory of this process. Over a capacity lowered meanwhile, it goes on all the same.
       scheduler.tryAcquire(run.queue, `${run.ticketId}:${run.queue}`);
@@ -523,7 +540,7 @@ export class Orchestrator {
     const { store, clock } = this.d;
     const run = await store.getRun(runId);
     if (run) {
-      await store.appendInbox(await this.finishedFor(run, { outcome: run.status as RunOutcome, costUsd: run.costUsd, turns: run.turns, lastText: run.lastText }));
+      await store.appendInbox(await this.finishedFor(run, { outcome: run.status as RunOutcome, costUsd: run.costUsd, turns: run.turns, lastText: run.lastText, ...endFacts(run) }));
       return;
     }
     // Nothing else will take it up (a pending job started by `settle` has no mark): `run.lost`, on the job the ticket holds.
@@ -1862,6 +1879,8 @@ export class Orchestrator {
         claudeSessionId,
         resume,
         model: job.model,
+        ...(job.effort ? { effort: job.effort } : {}),
+        ...stagnationBounds(wf, job),
         pluginDir: sandbox ? PACK_TARGET : this.d.packDir,
         settingsPath: sandbox ? SETTINGS_TARGET : this.settingsPath(),
         readOnly: job.workspace === 'trunk-readonly',
@@ -1938,6 +1957,7 @@ export class Orchestrator {
         turns: result.turns,
         lastText: result.lastText,
         ...(result.tokens ? { tokens: result.tokens } : {}),
+        ...endFacts(result),
       });
       // Shutdown, not a user stop: keep the ticket's activeRunId so the next start's recover() starts its step again.
       if (interrupted || closed) return;
@@ -1960,7 +1980,7 @@ export class Orchestrator {
         try {
           const rec = (await store.getRun(run.id)) ?? run;
           if (rec.status !== 'running') return;
-          await store.putRun({ ...rec, status: 'failure', endedAt: clock.now(), lastText: message });
+          await store.putRun({ ...rec, status: 'failure', endedAt: clock.now(), lastText: message, infra: true });
         } catch (e) {
           this.log('error', `could not record failure of run ${run.id}: ${(e as Error).message}`);
         }
@@ -2000,6 +2020,7 @@ export class Orchestrator {
         lastText: result.lastText,
         attempt: attemptOutcome({ outcome: result.outcome, infraError: result.infra || unreadable }, output),
         ...(output ? { output } : {}),
+        ...(result.stagnation ? { stagnation: result.stagnation } : {}),
       },
     };
   }

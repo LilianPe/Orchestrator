@@ -24,7 +24,7 @@ export function parseUsage(usage: unknown): TokenUsage | undefined {
   };
 }
 
-function blocks(obj: any): any[] {
+export function blocks(obj: any): any[] {
   const c = obj?.message?.content;
   return Array.isArray(c) ? c : [];
 }

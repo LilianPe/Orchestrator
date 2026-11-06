@@ -30,6 +30,15 @@ export function addTokens(a: TokenUsage, b: TokenUsage): TokenUsage {
   return { input: a.input + b.input, output: a.output + b.output, cacheRead: a.cacheRead + b.cacheRead, cacheCreation: a.cacheCreation + b.cacheCreation };
 }
 
+/**
+ * What the runner saw of an attempt that no longer moves (ORC-136), journaled with its end so that `decide` judges it
+ * and a replay judges the same. `loop`: the same Bash command, the same normalized failure (`failure`, its hash) and the
+ * same content of the worktree (`tree`), `count` times. `silent`: nothing written on its stream for `silentMs`.
+ */
+export type Stagnation =
+  | { kind: 'loop'; command: string; failure: string; tree: string; count: number }
+  | { kind: 'silent'; silentMs: number };
+
 export type InputKind = 'feedback' | 'ci_failures' | 'thread' | 'verify_failures';
 export type QueueName = 'dev' | 'questions';
 
@@ -200,9 +209,9 @@ export interface EventPayloads {
   /**
    * `attempt`: the closed outcome of the attempt (ORC-289), from `outcome`, the runner's own failure and
    * what `submit_result` recorded (`output`, when valid). Optional: no version bump, rows written before
-   * it lack both and decide on `outcome` as before.
+   * it lack both and decide on `outcome` as before. `stagnation` (ORC-136): optional likewise, absent on rows written before it.
    */
-  'run.finished': { runId: string; job: string; outcome: RunOutcome; costUsd: number; turns: number; lastText: string; attempt?: AttemptOutcome; output?: AgentOutput };
+  'run.finished': { runId: string; job: string; outcome: RunOutcome; costUsd: number; turns: number; lastText: string; attempt?: AttemptOutcome; output?: AgentOutput; stagnation?: Stagnation };
   /**
    * `red`: the cause of the `red` check's verdict (ORC-123), for a job checked by it instead of `verify`. `frozen`: the
    * freeze read with it (ORC-131), on both verdicts, recorded once the run goes on to the build. `sha`: the commit it

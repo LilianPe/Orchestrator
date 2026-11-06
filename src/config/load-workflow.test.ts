@@ -69,6 +69,71 @@ on:
     expect(wf.jobs['dev']!.limits.turns).toBe(150);
   });
 
+  describe('the preset step of a job (ORC-136)', () => {
+    it('gives the pack its effort and its turns: build 150, fix 60, review 25', () => {
+      const { jobs } = loadWorkflow({ packDir });
+      expect(jobs['dev']).toMatchObject({ effort: 'medium', limits: { turns: 150 } });
+      expect(jobs['tests']).toMatchObject({ effort: 'medium', limits: { turns: 150 } });
+      expect(jobs['dev-feedback']).toMatchObject({ effort: 'medium', limits: { turns: 60 } });
+      expect(jobs['fix-ci']).toMatchObject({ effort: 'medium', limits: { turns: 60 } });
+      expect(jobs['review']).toMatchObject({ effort: 'high', limits: { turns: 25 } });
+    });
+
+    it('leaves the jobs out of the preset alone: their own limits, no effort', () => {
+      const { jobs } = loadWorkflow({ packDir });
+      expect(jobs['ask']!.limits.turns).toBe(30);
+      expect(jobs['ask']).not.toHaveProperty('effort');
+    });
+
+    it('asks a submit_result of the build only, until ORC-191 rewrites the other skills', () => {
+      const { jobs } = loadWorkflow({ packDir });
+      expect(jobs['dev']!.structuredOutput).toBe(true);
+      for (const name of ['tests', 'dev-feedback', 'fix-ci', 'review', 'ask']) expect(jobs[name]!.structuredOutput).toBeFalsy();
+    });
+
+    it('lets a project narrow the turns of a step, never widen them', () => {
+      const wf = loadWorkflow({ packDir, projectFile: projectFile('version: 1\njobs:\n  dev: { limits: { turns: 10 } }\n  dev-feedback: { limits: { turns: 500 } }\n') });
+      expect(wf.jobs['dev']!.limits.turns).toBe(10);
+      expect(wf.jobs['dev-feedback']!.limits.turns).toBe(60);
+    });
+
+    it('refuses a step that is not an agent step of the preset', () => {
+      expect(() => loadWorkflow({ packDir, projectFile: projectFile('version: 1\njobs:\n  dev: { step: nope }\n') })).toThrow(/jobs\.dev\.step: .*nope/);
+      expect(() => loadWorkflow({ packDir, projectFile: projectFile('version: 1\njobs:\n  dev: { step: verify }\n') })).toThrow(/jobs\.dev\.step: .*verify/);
+    });
+
+    it('takes the effort and the budgets of factory.yml, by step: the turns only narrow', () => {
+      const { jobs } = loadWorkflow({
+        packDir,
+        settings: {
+          effort: { default: 'low', perStep: { build: 'high' } },
+          budgets: { maxTurns: { build: 40, fix: 500 }, perStepTokens: { build: 1_000_000 } },
+        },
+      });
+      expect(jobs['dev']).toMatchObject({ effort: 'high', limits: { turns: 40, tokens: 1_000_000 } });
+      expect(jobs['dev-feedback']).toMatchObject({ effort: 'medium', limits: { turns: 60 } });
+      expect(jobs['dev-feedback']!.limits).not.toHaveProperty('tokens');
+      // `default` is for what the preset does not set: the jobs out of it.
+      expect(jobs['ask']).toMatchObject({ effort: 'low' });
+      expect(jobs['review']).toMatchObject({ effort: 'high' });
+    });
+
+    it('refuses a step of factory.yml the preset does not have: it would cap nothing', () => {
+      expect(() => loadWorkflow({ packDir, settings: { budgets: { perStepTokens: { dev: 1000 } } } })).toThrow(/budgets\.per_step_tokens\.dev/);
+      expect(() => loadWorkflow({ packDir, settings: { budgets: { maxTurns: { verify: 1 } } } })).toThrow(/budgets\.max_turns\.verify/);
+      expect(() => loadWorkflow({ packDir, settings: { effort: { perStep: { buid: 'low' } } } })).toThrow(/claude\.effort\.per_step\.buid/);
+      expect(() => loadWorkflow({ packDir, settings: { effort: { perStep: { spec_draft: 'high' } } } })).not.toThrow();
+    });
+
+    it('sets no token cap by default: the values are to calibrate (ORC-216)', () => {
+      expect(loadWorkflow({ packDir }).jobs['dev']!.limits).not.toHaveProperty('tokens');
+    });
+
+    it('reports the bounds of the stagnation detector', () => {
+      expect(loadWorkflow({ packDir }).limits).toMatchObject({ repeatedFailures: 3, silentAfterMs: 30 * 60_000 });
+    });
+  });
+
   it('merges a project file over the pack', () => {
     const wf = loadWorkflow({
       packDir,

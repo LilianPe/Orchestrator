@@ -11,6 +11,8 @@ export interface Preset {
   counters: Record<string, { limit: number }>;
   /** Same command, same failure, unchanged diff: past `limit` occurrences the run is Blocked with this cause. */
   sameFailure: { limit: number; cause: 'boucle' };
+  /** An attempt that writes nothing on its stream for this long is stopped, the run Blocked (ORC-136): the lease only says that its container lives. */
+  silentRun: { minutes: number };
   /**
    * Where a red CI goes, from any step while the PR is open (the merge gate included): it is the failure of
    * a push, and it never restarts `fix` outside this counter.
@@ -83,6 +85,7 @@ export function compilePreset(preset: Preset, options: CompileOptions = {}): Com
     if (!isPositiveInt(limit)) violations.push(`counter ${name}: limit must be a positive integer`);
   }
   if (!isPositiveInt(preset.sameFailure.limit)) violations.push('sameFailure: limit must be a positive integer');
+  if (!isPositiveInt(preset.silentRun.minutes)) violations.push('silentRun: minutes must be a positive integer');
   checkEdge('redCi', preset.redCi);
 
   for (const s of preset.steps) {

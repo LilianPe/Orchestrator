@@ -555,13 +555,73 @@ describe('decide — built-ins', () => {
     expect(kinds(fourth)).toEqual({ events: ['ticket.blocked'], effects: ['activity', 'labels'], timers: [] });
   });
 
+  describe('stagnation of an attempt, read from the journaled event (ORC-136)', () => {
+    const dev = ticket({ logical: 'dev', activeRunId: 'r1' });
+    const loop = { kind: 'loop', command: 'npm test', failure: 'sha256:f', tree: 'abc', count: 3 } as const;
+    const finished = (stagnation?: EventPayloads['run.finished']['stagnation'], extra: Partial<EventPayloads['run.finished']> = {}) =>
+      ev('run.finished', { runId: 'r1', job: 'dev', outcome: 'limit', costUsd: 1, turns: 3, lastText: 'ok', attempt: 'timeout', ...(stagnation ? { stagnation } : {}), ...extra });
+
+    it('a loop at the bound blocks, cause « boucle », naming the command', () => {
+      const out = decide(dev, finished(loop), workflow);
+      expect(kinds(out)).toEqual({ events: ['ticket.blocked'], effects: ['activity', 'labels'], timers: [] });
+      const reason = (out.events[0] as { reason: string }).reason;
+      expect(blockCause(reason)).toBe('loop');
+      expect(out.effects[0]).toMatchObject({ type: 'elicitation', body: expect.stringContaining('`npm test`') });
+    });
+
+    it('the bound is the frozen workflow\'s: under it, or on a version without it, the fact decides nothing and the cap speaks', () => {
+      const cap = decide(dev, finished(), workflow);
+      expect(decide(dev, finished({ ...loop, count: 2 }), workflow)).toEqual(cap);
+      const older = { ...workflow, limits: { ...workflow.limits, repeatedFailures: undefined } };
+      expect(decide(dev, finished(loop), older)).toEqual(decide(dev, finished(), older));
+    });
+
+    it('a silent agent blocks, on the cap cause, the minutes in the reason', () => {
+      const out = decide(dev, finished({ kind: 'silent', silentMs: 30 * 60_000 }), workflow);
+      const reason = (out.events[0] as { reason: string }).reason;
+      expect(reason).toContain("n'a rien écrit depuis 30 min");
+      expect(blockCause(reason)).toBe('limit');
+    });
+
+    it('an event without the fact, as journaled before it, decides as it did', () => {
+      const old = ev('run.finished', { runId: 'r1', job: 'dev', outcome: 'limit', costUsd: 1, turns: 3, lastText: 'ok' });
+      const out = decide(dev, old, workflow);
+      expect(out.events[0]).toMatchObject({ reason: 'Le run dev a atteint un plafond (tours, durée ou budget).' });
+    });
+
+    it('a ticket already blocked keeps its reason and is not told twice', () => {
+      const blocked = ticket({ logical: 'dev', activeRunId: 'r1', blocked: true, blockReason: "En attente d'une réponse" });
+      expect(decide(blocked, finished(loop), workflow).events).toEqual([]);
+    });
+
+    it('a build that asked through `ask` then ended its turn, no output: its question stays, no second notice', () => {
+      const asked = ticket({ logical: 'dev', activeRunId: 'r1', blocked: true, blockReason: "Question posée par l'agent" });
+      const out = decide(asked, ev('run.finished', { runId: 'r1', job: 'dev', outcome: 'success', costUsd: 1, turns: 3, lastText: 'ok', attempt: 'failed' }), workflow);
+      expect(out.events).toEqual([]);
+      expect(out.effects).toEqual([]);
+    });
+
+    it('a stopped run is a stop, whatever it had seen', () => {
+      const out = decide(dev, finished(loop, { outcome: 'stopped', attempt: 'errored' }), workflow);
+      expect(out.events).toEqual([]);
+    });
+
+    it('a question run ends on its error notice: a loop blocks no ticket from there', () => {
+      const q = decide(ticket(), ev('run.finished', { runId: 'r9', job: 'ask', outcome: 'limit', costUsd: 0, turns: 1, lastText: '', stagnation: loop }), workflow);
+      expect(q.events).toEqual([]);
+      expect(q.effects[0]).toMatchObject({ kind: 'activity', type: 'error' });
+    });
+  });
+
   describe('closed outcome of the attempt (ORC-289)', () => {
     const output: AgentOutput = { status: 'done', summary: 'Export CSV ajouté.', tests_added: [], why: '', assumptions: [], risks: [], untested: [], review_hints: [] };
     const finished = (attempt: AttemptOutcome, extra: Partial<EventPayloads['run.finished']> = {}) =>
       ev('run.finished', { runId: 'r1', job: 'dev', outcome: 'success', costUsd: 1, turns: 3, lastText: 'ok', attempt, ...extra });
     const dev = ticket({ logical: 'dev', activeRunId: 'r1' });
     const today = (outcome: 'success' | 'failure' | 'limit') => decide(dev, ev('run.finished', { runId: 'r1', job: 'dev', outcome, costUsd: 1, turns: 3, lastText: 'ok' }), workflow);
-    const structured = { ...workflow, jobs: { ...workflow.jobs, dev: { ...workflow.jobs['dev']!, structuredOutput: true } } };
+    const structured = workflow;
+    // A job the pack does not ask `submit_result` of yet, as `dev` was before ORC-136.
+    const unstructured = { ...workflow, jobs: { ...workflow.jobs, dev: { ...workflow.jobs['dev']!, structuredOutput: false } } };
 
     it('succeeded decides as a success, timeout as a cap', () => {
       expect(decide(dev, finished('succeeded'), workflow)).toEqual(today('success'));
@@ -570,7 +630,8 @@ describe('decide — built-ins', () => {
 
     it('failed decides as a failure, but a success without output stays a success until the job is structured', () => {
       expect(decide(dev, finished('failed', { outcome: 'failure' }), workflow)).toEqual(today('failure'));
-      expect(decide(dev, finished('failed'), workflow)).toEqual(today('success'));
+      const success = decide(dev, ev('run.finished', { runId: 'r1', job: 'dev', outcome: 'success', costUsd: 1, turns: 3, lastText: 'ok' }), unstructured);
+      expect(decide(dev, finished('failed'), unstructured)).toEqual(success);
       const out = decide(dev, finished('failed'), structured);
       expect(kinds(out)).toEqual({ events: ['ticket.blocked'], effects: ['activity', 'labels'], timers: [] });
     });

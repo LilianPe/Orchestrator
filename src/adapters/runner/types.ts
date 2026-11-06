@@ -1,5 +1,13 @@
 import type { RunLimits } from '../../config/workflow-schema.js';
-import type { RunOutcome, TokenUsage } from '../../core/types.js';
+import type { RunOutcome, Stagnation, TokenUsage } from '../../core/types.js';
+
+/** The bounds of the stagnation detector (ORC-136), of the frozen workflow: absent, a version without them, nothing is watched. */
+export interface StagnationBounds {
+  /** Same command, same failure, same worktree: stopped at this many. */
+  repeats?: number;
+  /** Nothing written on the stream for this long: stopped. */
+  silentMs?: number;
+}
 
 export type RunStreamEvent =
   | { kind: 'init'; sessionId: string }
@@ -16,6 +24,9 @@ export interface RunRequest {
   claudeSessionId: string;
   resume: boolean;
   model: string;
+  /** `claude --effort`, of the job's preset step (ORC-136). Absent: the CLI's default. */
+  effort?: string;
+  stagnation?: StagnationBounds;
   pluginDir: string;
   settingsPath: string;
   readOnly: boolean;
@@ -42,6 +53,8 @@ export interface RunResult {
   tokens?: TokenUsage;
   /** The runner or its sandbox broke (refused before the spawn, spawn error): nothing for the agent to fix (ORC-289). */
   infra?: true;
+  /** What stopped it, when the detector did (ORC-136): `outcome` is then `limit`. */
+  stagnation?: Stagnation;
 }
 
 export interface RunHandle {
@@ -58,6 +71,8 @@ export interface AttachRequest {
   elapsedMs: number;
   /** The run's environment: its secrets are masked as at the start. */
   env: Record<string, string>;
+  /** Silence only is watched: the worktree of an attempt taken up is not read, its loops are left to its turns and its duration. */
+  stagnation?: StagnationBounds;
 }
 
 export interface Runner {

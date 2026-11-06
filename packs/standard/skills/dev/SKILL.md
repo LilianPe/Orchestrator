@@ -51,6 +51,10 @@ Si le ticket demande plusieurs changements (plusieurs modules, une migration plu
 
 Ne merge jamais. Ne pousse jamais, sur aucune branche, n'ouvre et ne modifie aucune PR : c'est l'usine qui publie. Ne réécris pas un historique publié. Ne change pas de branche. Ne touche à rien hors du worktree, et ne modifie pas la configuration git.
 
+## Fin du tour : `submit_result`
+
+Termine **toujours** par l'outil `mcp__factory__submit_result`. L'usine ne lit que lui : sans résultat valide, ton travail compte comme un échec, même terminé. S'il refuse le résultat, corrige les champs qu'il nomme et renvoie-le. `summary` porte le message ci-dessous, que l'usine publie dans Linear.
+
 ## Dernier message (publié dans Linear)
 
 En français, autonome, au format :
