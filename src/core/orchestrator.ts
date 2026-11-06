@@ -1056,8 +1056,9 @@ export class Orchestrator {
 
   /**
    * What the decision of an event needs from outside. A repair that applies its event prepares that one: set
-   * aside out of attempts, it may never have been (ORC-320), and an event without roles is not checked at all.
-   * An event already prepared stays as it is. One its upcast refuses is left to the decision, which throws too.
+   * aside out of attempts, it may never have been (ORC-320), and an event without roles is not checked at all. A
+   * `force` records facts without a decision: it needs the snapshot alone, not what may be down still. An event
+   * already prepared stays as it is. One its upcast refuses is left to the decision, which throws too.
    */
   private async prepared(event: FactoryEvent): Promise<FactoryEvent> {
     if (event.type !== 'dead_letter.repaired') return this.withFreeze(await this.withRoles(await this.withSnapshot(event)));
@@ -1068,7 +1069,7 @@ export class Orchestrator {
       return event;
     }
     if (!repaired) return event;
-    const inner = await this.prepared(repaired);
+    const inner = event.payload.action === 'force' ? await this.withSnapshot(repaired) : await this.prepared(repaired);
     return inner === repaired ? event : { ...event, payload: { ...event.payload, event: inner } };
   }
 

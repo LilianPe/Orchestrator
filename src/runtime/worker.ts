@@ -1,4 +1,5 @@
 import { deadLetteredEvent } from '../core/dead-letter.js';
+import { settledTicket } from '../core/engine.js';
 import type { FactoryEvent } from '../core/types.js';
 import { upcast, type StoredEvent } from '../core/upcast.js';
 import { TicketHeldError, type DecisionOutcome, type DecisionRequest, type EffectOutcome, type OutboxRow, type Store } from '../store/types.js';
@@ -88,7 +89,7 @@ const whose = (r: TicketRef): string => r.ticketId ?? `the events without a tick
  *   turn (ORC-315).
  * - **A row out of attempts is dead-lettered (ORC-320)**, so that its ticket is blocked and the rows
  *   behind it go on, with no restart. One that no block could tell (no ticket, one the factory does not
- *   track, the very event that blocks), or that the store cannot set aside (down), stays in the inbox
+ *   track or has settled, the very event that blocks), or that the store cannot set aside (down), stays in the inbox
  *   and holds its key: it keeps being retried, and passes when its cause ends.
  * - **A poison event is dead-lettered (ORC-175).** A row whose upcast or decision (`decide`,
  *   `reduce`) throws would throw again: it is not retried. It goes to `dead_letter`, marked
@@ -102,7 +103,7 @@ export class Worker {
   private draining = new Set<string>();
   private queued = new Map<string, StoredEvent[]>();
   private queuedIds = new Set<string>();
-  /** Rows left out of the passes: a failed row until its retry (or the next start), the rows behind it. */
+  /** Rows left out of the passes: a failed row until its retry, the rows behind it. */
   private skipped = new Set<string>();
   /** Keys held by a failed row: their later rows wait behind it. */
   private holders = new Map<string, StoredEvent>();
@@ -384,14 +385,21 @@ export class Worker {
 
   /**
    * This failure is the row's last attempt, and setting it aside would tell a human: its ticket is tracked,
-   * and the row is not the event that blocks it (`deadLetterNotice`). Otherwise its dead letter would wait
-   * for a repair no one knows of: it stays, retried. A shutdown sets nothing aside, the store may be closing.
+   * neither delivered nor stopped, and the row is not the event that blocks it (`deadLetterNotice`), nor its
+   * repair. Otherwise its dead letter would wait for a repair no one knows of: it stays, retried. A shutdown
+   * sets nothing aside, the store may be closing.
    */
   private async outOfAttempts(row: StoredEvent): Promise<boolean> {
     if ((this.failures.get(row.id) ?? 0) + 1 < this.retry.attempts) return false;
-    if (row.ticketId === undefined || row.type === 'dead_letter.added') return false;
-    const tracked = await this.d.store.getTicket(row.projectId, row.ticketId).catch(() => undefined);
-    return tracked !== undefined && !this.stopped;
+    const event = deadLetteredEvent(row);
+    if (event.ticketId === undefined || event.type === 'dead_letter.added') return false;
+    try {
+      const ticket = await this.d.store.getTicket(event.projectId, event.ticketId);
+      return ticket !== undefined && settledTicket(ticket) === undefined && !this.stopped;
+    } catch (err) {
+      this.d.log('error', `event ${row.id} (${row.type}) not set aside, its ticket could not be read: ${toError(err).message}`);
+      return false;
+    }
   }
 
   /** A row's processing threw: it holds its key, and is retried after a backoff. Only a shutdown ends its retries. */

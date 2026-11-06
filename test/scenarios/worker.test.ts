@@ -408,7 +408,7 @@ on:
       const younger = (h: ReturnType<typeof createHarness>) =>
         ({ ...TRUSTED, id: 'younger', type: 'status.changed' as const, at: h.clock.now(), projectId: 'p', ticketId: 'REL-1', payload: { from: 'todo', to: 'todo' } });
       const journaled = async (h: ReturnType<typeof createHarness>) => (await h.store.recentEvents(50, 'REL-1')).map((e) => e.id).reverse();
-      const repair = (h: ReturnType<typeof createHarness>) => runRepair({ store: h.store, target: 'REL-1', action: 'replay', by: 'armand', now: h.clock.now(), print: () => {} });
+      const repair = (h: ReturnType<typeof createHarness>, action = 'replay') => runRepair({ store: h.store, target: 'REL-1', action, by: 'armand', now: h.clock.now(), print: () => {} });
 
       /** `younger` throws at each decision while `broken`; `attempt` runs in that decision, before it throws. */
       function failing(attempt: (n: number) => void | Promise<void> = () => {}, wrap: (inner: Store, state: { broken: boolean; decided: string[] }) => Partial<Store> = () => ({})) {
@@ -626,6 +626,86 @@ on:
         await h.orch.drained();
 
         expect(await h.store.getDeadLetter('mention')).toMatchObject({ status: 'open', failures: 2 });
+        expect((await h.ticket()).blocked).toBe(true);
+        expect(await h.store.pendingInbox(10)).toEqual([]);
+      });
+
+      it('lets a `force` through while the roles still cannot be read: it decides nothing, so it needs none', async () => {
+        const last = gate();
+        const { h, mention } = await rolesDown((n) => {
+          if (n === ATTEMPTS) last.open();
+        });
+        await h.orch.accept(mention('user-lilian'));
+        await last.opened;
+        await h.orch.drained();
+
+        expect(await repair(h, 'force')).toBe(0);
+        await h.orch.poll();
+        await h.orch.drained();
+
+        expect(await h.store.getDeadLetter('mention')).toMatchObject({ status: 'forced', failures: 1 });
+        expect((await h.ticket()).blocked).toBe(false);
+        expect(await h.store.pendingInbox(10)).toEqual([]);
+      });
+
+      it('keeps retrying on a ticket a human stopped: its block says nothing of a dead letter, which would wait unseen', async () => {
+        const pastLast = gate();
+        const back = gate();
+        const { h, state } = failing(
+          (n) => {
+            if (n > ATTEMPTS) pastLast.open();
+          },
+        );
+        await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+        await h.send('control.stop', {});
+        expect((await h.ticket()).blockReason).toBe('Arrêté à la demande');
+        const decide = h.store.decide.bind(h.store);
+        h.store.decide = async (req) => {
+          const outcome = await decide(req);
+          if (req.event.id === 'younger') back.open();
+          return outcome;
+        };
+        await h.orch.accept(younger(h));
+        await pastLast.opened;
+        expect(await h.store.deadLetters()).toEqual([]);
+
+        state.broken = false;
+        await back.opened;
+        await h.orch.drained();
+
+        expect(await journaled(h)).toContain('younger');
+        expect(await h.store.deadLetters()).toEqual([]);
+      });
+
+      it('never sets aside the repair of the event that blocks the ticket either: the block would be lost', async () => {
+        const pastLast = gate();
+        const repaired = gate();
+        let tries = 0;
+        const { h, state } = failing(undefined, (inner, s) => ({
+          decide: async (req: DecisionRequest) => {
+            if (s.broken && req.event.id === 'repair:n1:1') {
+              if (++tries > ATTEMPTS) pastLast.open();
+              throw new Error('database hiccup');
+            }
+            const outcome = await inner.decide(req);
+            if (req.event.id === 'repair:n1:1') repaired.open();
+            return outcome;
+          },
+        }));
+        await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+        const notice = { ...TRUSTED, id: 'n1', type: 'dead_letter.added' as const, at: h.clock.now(), projectId: 'p', ticketId: 'REL-1', payload: { eventId: 'x', eventType: 'status.changed', error: 'boom', failures: 1 } };
+        await h.store.appendInbox(notice);
+        await h.store.deadLetter(notice, 'boom', h.clock.now());
+
+        expect(await repair(h)).toBe(0);
+        await h.orch.poll();
+        await pastLast.opened;
+        expect(await h.store.getDeadLetter('n1')).toMatchObject({ status: 'replayed', failures: 1 });
+
+        state.broken = false;
+        await repaired.opened;
+        await h.orch.drained();
+
         expect((await h.ticket()).blocked).toBe(true);
         expect(await h.store.pendingInbox(10)).toEqual([]);
       });

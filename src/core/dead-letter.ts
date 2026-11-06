@@ -3,7 +3,7 @@ import { TRUSTED, type EventPayloads, type FactoryEvent, type TicketState } from
 
 /**
  * The dead-letter of ORC-175: an inbox row whose decision throws (`decide` or `reduce`, a poison
- * event) is set aside in `dead_letter` instead of being retried forever. Its ticket is blocked by
+ * event), or out of attempts (ORC-320), is set aside in `dead_letter` instead of being retried forever. Its ticket is blocked by
  * the decision of a `dead_letter.added` event, and `factory run repair` repairs it with a
  * `dead_letter.repaired` event: replayed, skipped or forced, each one journaled.
  */
