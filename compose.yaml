@@ -28,8 +28,8 @@ services:
       CLAUDE_TOKEN_1:
       CLAUDE_TOKEN_2:
       ANTHROPIC_API_KEY:
-      # Until the factory pushes in the agents' place (ORC-125).
-      GH_TOKEN: ${GH_TOKEN:?définissez GH_TOKEN (push HTTPS et gh pr)}
+      # Until the gh CLI goes (ORC-181): the factory's own publication goes by the GitHub App.
+      GH_TOKEN: ${GH_TOKEN:?définissez GH_TOKEN (lecture HTTPS et gh pr)}
       FACTORY_UI_PASSWORD: ${FACTORY_UI_PASSWORD:?définissez FACTORY_UI_PASSWORD (mot de passe de l'interface)}
       # Unset in the container when unset here, so the image identity (the product name) applies.
       GIT_AUTHOR_NAME:

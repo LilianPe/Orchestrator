@@ -77,7 +77,8 @@ export function allowRequest(p: EgressPolicy, host: string, method: string, path
   const [pathname = '', query = ''] = path.split('?');
   if (Object.hasOwn(CLAUDE_AUTH, h) && method === 'POST' && pathname === CLAUDE_AUTH[h]) return { ok: true };
   // A push starts with this advertisement, then POSTs to git-receive-pack.
-  if (/(^|&)service=git-receive-pack(&|$)/.test(query)) return refuse(`${h}: git push refused (read-only)`);
+  // Read as a forge reads it, whatever its spelling. A push's real step is the POST, which no rule below lets through.
+  if (new URLSearchParams(query.toLowerCase()).getAll('service').includes('git-receive-pack')) return refuse(`${h}: git push refused (read-only)`);
   if (READ.has(method)) return { ok: true };
   // A git fetch over smart HTTP is a POST, and only reads.
   if (h === 'github.com' && method === 'POST' && pathname.endsWith('/git-upload-pack')) return { ok: true };

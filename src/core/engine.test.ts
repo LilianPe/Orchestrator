@@ -311,10 +311,10 @@ describe('decide — verify on the same commit (ORC-151)', () => {
     expect(workflow.jobs['ask']!.repoChecks).toBeUndefined();
   });
 
-  it('a green verify records its commit, and only then goes on', () => {
+  it('a green verify records its commit, and goes on by publishing it (ORC-125)', () => {
     const out = decide({ ...running(), verifyingRunId: 'r1' }, event('verify.passed', { runId: 'r1', job: 'dev', sha: 'abc' }), workflow);
     expect(out.events).toContainEqual({ type: 'ticket.patched', patch: expect.objectContaining({ verifiedSha: 'abc', verifyAttempts: 0 }) });
-    expect(out.effects).toContainEqual({ kind: 'move', to: 'human_review' });
+    expect(out.effects).toEqual([{ kind: 'publish', runId: 'r1', job: 'dev', sha: 'abc' }]);
   });
 
   it('a commit green once may be published, a new one asks for its own', () => {

@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { REFREEZE } from '../../src/checks/freeze.js';
 import { effectiveEvent } from '../../src/core/dead-letter.js';
 import type { Role } from '../../src/core/authz.js';
-import { AUTHZ_REFUSED, decide, isFenced, mayCheck, SENSITIVE_PATHS } from '../../src/core/engine.js';
+import { AUTHZ_REFUSED, decide, isFenced, mayCheck, mayPublish, SENSITIVE_PATHS } from '../../src/core/engine.js';
 import { reduce } from '../../src/core/reduce.js';
 import {
   newTicketState,
@@ -116,10 +116,15 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
       () => {
         holds((s) => {
           const r = run(s);
-          // Today's publication is the run's output (post_output) and the success move; neither carries a SHA yet.
+          // The publication the human sees is the run's output (post_output) and the success move, after the factory's own push (ORC-125).
           for (const step of decided(r)) {
             const e = step.event;
             const published = step.decision.effects.filter((x) => x.kind === 'post_output');
+            if (e.type === 'publish.done') {
+              // Fenced unless the ticket still holds that attempt: a stop's late result shows nothing.
+              if (published.length > 0) expect(step.before?.verifyingRunId).toBe(e.payload.runId);
+              continue;
+            }
             if (e.type !== 'run.finished' && e.type !== 'verify.passed') {
               expect(published).toEqual([]);
               continue;
@@ -187,7 +192,20 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
       expect(decide({ ...t, verifiedSha: 'bbb' }, e, wf).effects).toContainEqual({ kind: 'merge', sha: 'bbb' });
     });
 
-    it.todo("I1 at the factory's own push: the publication step goes through mayPublish (ORC-125)");
+    it("I1 at the factory's own push: a publish effect is only ever on the commit its decision found green (ORC-125)", () => {
+      const t: TicketState = { ...newTicketState(PROJECT, TICKET, 'T', 'dev', 0), delegated: true, verifyingRunId: 'r1', verifiedSha: 'old' };
+      fc.assert(
+        fc.property(fc.constantFrom('dev', 'dev-feedback', 'fix-ci', 'review'), fc.option(fc.constantFrom('aaa', 'bbb'), { nil: undefined }), (job, sha) => {
+          const e = { id: 'x', at: 1, projectId: PROJECT, ticketId: TICKET, ...TRUSTED, type: 'verify.passed', payload: { runId: 'r1', job, ...(sha ? { sha } : {}) } } as FactoryEvent;
+          const out = decide(t, e, wf);
+          const after = out.events.reduce<TicketState | undefined>((s, ev) => reduce(s, ev), reduce(t, e));
+          const published = out.effects.filter((x) => x.kind === 'publish');
+          expect(published).toEqual(sha ? [expect.objectContaining({ sha })] : []);
+          for (const p of published) expect(mayPublish(after, (p as { sha: string }).sha, wf)).toBe(true);
+        }),
+        params(),
+      );
+    });
   });
 
   it.todo('I2 — no gate passed without an approval later than the last push (no gate in decide yet: human gates of ORC-212, ORC-198)');

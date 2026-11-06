@@ -191,6 +191,10 @@ export interface EventPayloads {
    * `headMoved`: refused for a push since the review, whose new commits go through the AI review again.
    */
   'pr.merge_refused': PrPayload & { reason: string; headMoved?: boolean };
+  /** The verified commit is on the forge and its PR open (ORC-125), or the branch holds nothing to publish. The job's `on_success` applies. */
+  'publish.done': { runId: string; job: string; sha: string; output?: AgentOutput };
+  /** The factory did not publish, and says why (ORC-125): nothing was written on the forge. The ticket is blocked. */
+  'publish.refused': { runId: string; job: string; sha: string; reason: string };
   /**
    * A push on the project's default branch that concerns the ticket (ORC-278): only its commits that merge
    * the ticket's PR (`merges`) or revert it (`reverts`), by number. Untrusted: messages are written by
@@ -302,7 +306,7 @@ export type DecidedEvent =
   | { type: 'ticket.unblocked' }
   | {
       type: 'ticket.patched';
-      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'verifiedSha' | 'awaitingRepo'>>;
+      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'verifiedSha' | 'awaitingRepo' | 'owedMove'>>;
     }
   | { type: 'feedback.appended'; item: FeedbackItem }
   /** The ticket's dev work is stopped: nothing pending, no verification awaited. */
@@ -382,6 +386,11 @@ export interface TicketState {
   frozenTests?: FrozenTests;
   /** The last failed check (worktree and failed commands) and how many times in a row it came back (ORC-187). */
   repeatedFailure?: { signature: string; count: number } | null;
+  /**
+   * The move of a job's `on_success` that waits for its publication (ORC-125). Kept through a refusal: what relaunches the ticket
+   * is `dev-feedback`, which has no move of its own, and the work would never reach its reviewer. `null`, not undefined, survives the journal's JSON.
+   */
+  owedMove?: LogicalState | null;
   /**
    * The repos of its Linear team to choose from, while the ticket waits for a human to name one (ORC-291); empty when
    * the team has none (ORC-171), the ticket then only filed under the first project. `null` once

@@ -8,7 +8,7 @@ import { reduce } from './reduce.js';
 import { CREATES_TICKET, type EventType, type FactoryEvent, type TicketState } from './types.js';
 
 /** Events after which `handle` settles the ticket: the pending job starts once nothing is in flight. */
-export const SETTLES_RUN: ReadonlySet<EventType> = new Set<EventType>(['run.finished', 'run.lost', 'verify.passed', 'verify.failed', 'verify.errored']);
+export const SETTLES_RUN: ReadonlySet<EventType> = new Set<EventType>(['run.finished', 'run.lost', 'verify.passed', 'verify.failed', 'verify.errored', 'publish.done', 'publish.refused']);
 
 /** The log line of an action the authorization matrix refused (ORC-186); the refusal itself is in the trace. */
 function refusedNote(event: FactoryEvent, trace: readonly string[]): string | undefined {

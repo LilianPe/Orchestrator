@@ -3,7 +3,7 @@ import { execCmd, mustExec, type Exec } from '../exec.js';
 import type { FeedbackItem } from '../../core/types.js';
 import { aggregateChecks, toRepoPermission } from './gh-cli.js';
 import type { RepoPermission, RepoPermissions } from '../roles/types.js';
-import type { CheckRunRequest, Forge, ForgeWriter, MergeResult, PrInfo, PrRequest } from './types.js';
+import { NoCommitsBetween, type CheckRunRequest, type Forge, type ForgeWriter, type GitAccess, type MergeResult, type PrInfo, type PrRequest } from './types.js';
 
 export interface GitHubRepoRef {
   owner: string;
@@ -45,6 +45,8 @@ interface AccessTokenDto {
 
 interface PullRequestDto {
   number: number;
+  node_id?: string;
+  draft?: boolean;
   html_url: string;
   state: 'open' | 'closed';
   merged_at: string | null;
@@ -152,6 +154,12 @@ function statusBucket(state: string): string {
 /** `/repos/{owner}/{name}`, encoded. */
 function repoApi(repo: GitHubRepoRef): string {
   return `/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}`;
+}
+
+/** GitHub's reason under its "Validation Failed": a 422 says it there. */
+function validationErrors(data: object): string[] {
+  const errors = (data as { errors?: unknown }).errors;
+  return Array.isArray(errors) ? errors.flatMap((e: { message?: unknown }) => (typeof e?.message === 'string' ? [e.message] : [])) : [];
 }
 
 /** GitHub API failure with its status, so callers can fail closed on 404/403. */
@@ -273,7 +281,7 @@ export class GitHubAppAuth {
     if (!res.ok) {
       const message =
         typeof data === 'object' && data !== null && 'message' in data
-          ? String((data as { message: unknown }).message)
+          ? [String((data as { message: unknown }).message), ...validationErrors(data)].join(' : ')
           : text.slice(0, 200);
       throw new GitHubApiError(res.status, `GitHub API ${method} ${path.split('?')[0]}: ${res.status}${message ? ` ${message}` : ''}`, message || undefined);
     }
@@ -372,15 +380,45 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
     const found = await openPr();
     if (found) return found;
     try {
-      const pr = await this.call<PullRequestDto>('POST', base, token, { title: req.title, head: req.branch, base: req.base, body: req.body });
+      const pr = await this.call<PullRequestDto>('POST', base, token, { title: req.title, head: req.branch, base: req.base, body: req.body, ...(req.draft ? { draft: true } : {}) });
       return { number: pr.number, url: pr.html_url, deduplicated: false };
     } catch (err) {
       if (err instanceof GitHubApiError && err.status === 422) {
+        // A plan without drafts: the PR is what the ticket needs, and no human is asked to review it before Human Review.
+        if (req.draft && /draft pull requests are not supported/i.test(err.message)) {
+          const { draft: _, ...plain } = req;
+          return this.ensurePr(repoPath, plain);
+        }
         const raced = await openPr();
         if (raced) return raced;
+        if (/no commits between/i.test(err.message)) throw new NoCommitsBetween(err.message);
       }
       throw err;
     }
+  }
+
+  /** The REST API cannot do it: only this GraphQL mutation takes a PR out of draft. Read first: a PR already out writes nothing. */
+  async markPrReady(repoPath: string, number: number): Promise<void> {
+    const repo = await this.repo(repoPath);
+    const token = await this.installationToken(repo);
+    const pr = await this.call<PullRequestDto>('GET', `${repoApi(repo)}/pulls/${number}`, token);
+    if (!pr.draft) return;
+    const out = await this.call<{ errors?: { message: string }[] }>('POST', '/graphql', token, {
+      query: 'mutation($id: ID!) { markPullRequestReadyForReview(input: { pullRequestId: $id }) { clientMutationId } }',
+      variables: { id: pr.node_id },
+    });
+    if (out.errors?.length) throw new Error(`GitHub GraphQL : ${out.errors.map((e) => e.message).join('; ')}`);
+  }
+
+  /** In the environment: a command line is visible to every process of the host, and git quotes it in its errors. */
+  async gitAccess(repoPath: string): Promise<GitAccess> {
+    const repo = await this.repo(repoPath);
+    const token = await this.installationToken(repo);
+    const basic = Buffer.from(`x-access-token:${token}`).toString('base64');
+    return {
+      url: `https://github.com/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}.git`,
+      env: { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'http.https://github.com/.extraheader', GIT_CONFIG_VALUE_0: `Authorization: Basic ${basic}` },
+    };
   }
 
   /**

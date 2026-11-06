@@ -35,14 +35,14 @@ Le moteur lit les chemins d'un montage **sur l'hôte**, pas dans le conteneur de
 
 ## Les images
 
-- **`Dockerfile`** (`factoryd` et `proxy`) : Node 24, `git`, le CLI `docker` et `gh`. `gh` reste jusqu'à ORC-125. Claude Code n'y est plus : l'agent tourne dans le runner. Utilisateur `node` (uid 1000).
+- **`Dockerfile`** (`factoryd` et `proxy`) : Node 24, `git`, le CLI `docker` et `gh`. `gh` reste jusqu'à ORC-181. Claude Code n'y est plus : l'agent tourne dans le runner. Utilisateur `node` (uid 1000).
 - **`docker/runner.Dockerfile`** (les runners) : Node 24 avec pnpm, Python 3 avec uv et pip, `git`, Claude Code. Versions épinglées. Ni `gh`, ni CLI de moteur, ni code du démon.
 
 Aucune image ne reçoit de secret à la construction. Le test d'isolation n° 7 cherche des jetons dans l'historique, la configuration et les fichiers de chaque couche de l'image des runners.
 
 ## Limites actuelles
 
-- **Publier** : un agent en runner n'a ni `gh`, ni jeton, et le proxy refuse `git push`. Jusqu'à ORC-125, un run sous compose ne peut donc pas ouvrir sa PR. `GH_TOKEN` ne sert qu'à `factoryd`.
+- **Publier** : l'usine pousse et ouvre la PR, avec la GitHub App (ORC-125, [`github.md`](github.md#publication)). Sans elle, un ticket vérifié est bloqué : configurez `github.*` ou `GH_APP_*`. Un agent en runner n'a ni `gh`, ni jeton, et le proxy refuse `git push`. `GH_TOKEN` ne sert qu'à `factoryd`, jusqu'à ORC-181.
 - **`verify` ne tourne plus dans `factoryd`** (ORC-151) : ses commandes vont dans un runner neuf, sur un clone, au niveau réseau `none`. Sous compose, `FACTORY_CONTAINER_CLI` est fixé : un moteur en panne donne un ticket bloqué pour cause d'infrastructure (`verify.errored`), jamais un repli sur `factoryd`. `FACTORY_ALLOW_HOST_VERIFY` n'est pas transmis, et serait sans effet. **Le `git` de `factoryd`, à côté du socket, ne lit rien de ce qu'a écrit un agent** (ORC-317) : chaque agent a son propre dépôt, et le dossier git de `repoPath` n'est jamais monté.
 
 ## Variables
@@ -53,7 +53,7 @@ Dans un fichier `.env` à côté de `compose.yaml` (non versionné). `docker com
 |---|---|---|
 | `CLAUDE_TOKEN_1`, `CLAUDE_TOKEN_2` | l'un de ces moyens | Jetons des comptes Claude Code, lus par `factory.yml` (`token: env:CLAUDE_TOKEN_1`) ; le compte `claude.active` est le seul identifiant des runs. |
 | `ANTHROPIC_API_KEY` | l'un de ces moyens | Authentification de Claude Code sans compte actif, pour les runs de ce conteneur, qui tournent encore à côté du démon (jusqu'à ORC-179). Compose ne la réclame plus : sans aucun des deux, les runs échouent à l'authentification. |
-| `GH_TOKEN` | oui | `gh` et push HTTPS. Droits : [`github.md`](github.md#permissions-nécessaires). |
+| `GH_TOKEN` | oui | `gh` et lecture HTTPS, jusqu'à ORC-181 ; la publication passe par la GitHub App. Droits : [`github.md`](github.md#permissions-nécessaires). |
 | `FACTORY_UI_PASSWORD` | oui | Mot de passe de l'interface (le conteneur écoute hors bouclage). |
 | `FACTORY_DIR` | oui | Chemin absolu sur le serveur (voir ci-dessus). |
 | `FACTORY_ENGINE_SOCKET` | oui | Socket du moteur rootless, par exemple `/run/user/1000/docker.sock`. |

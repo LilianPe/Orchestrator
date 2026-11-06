@@ -67,6 +67,9 @@ describe('allowRequest (plain HTTP: the method and the path are seen)', () => {
     expect(allowRequest(limited, 'api.github.com', 'HEAD', '/repos/o/r').ok).toBe(true);
     expect(allowRequest(limited, 'api.github.com', 'POST', '/gists')).toEqual({ ok: false, reason: expect.stringMatching(/POST/) as string });
     expect(allowRequest(limited, 'github.com', 'POST', '/o/r.git/git-receive-pack').ok).toBe(false);
+    // The advertisement of a push under any spelling GitHub would decode (ORC-125).
+    expect(allowRequest(limited, 'github.com', 'GET', '/o/r.git/info/refs?service=git%2Dreceive%2Dpack').ok).toBe(false);
+    expect(allowRequest(limited, 'github.com', 'GET', '/o/r.git/info/refs?SERVICE=GIT-RECEIVE-PACK').ok).toBe(false);
     expect(allowRequest(limited, 'github.com', 'GET', '/o/r.git/info/refs?service=git-receive-pack').ok).toBe(false);
     expect(allowRequest(limited, 'registry.npmjs.org', 'PUT', '/is-number').ok).toBe(false);
   });

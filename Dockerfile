@@ -1,5 +1,5 @@
 FROM node:24.22.1-bookworm-slim
-# gh until the factory publishes in the agents' place (ORC-125); the engine's CLI to create the runners (ORC-203).
+# gh until the daemon reads by the GitHub App alone (ORC-181); the engine's CLI to create the runners (ORC-203).
 ARG DOCKER_CLI_VERSION=29.9.3
 RUN apt-get update \
  && apt-get install -y --no-install-recommends git ca-certificates curl gnupg bash \

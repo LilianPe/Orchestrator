@@ -1,3 +1,4 @@
+import { NoCommitsBetween } from './types.js';
 import { generateKeyPairSync, verify } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import type { Exec } from '../exec.js';
@@ -460,6 +461,87 @@ describe('GitHubAppForge writes, idempotent (ORC-162)', () => {
     );
     expect(await forge.ensurePr('/repo', req)).toEqual({ number: 8, url: 'u8', deduplicated: false });
     expect(writes(calls).map((c) => c.body)).toEqual([{ title: req.title, head: req.branch, base: 'main', body: req.body }]);
+  });
+
+  it('opens a draft when asked (ORC-125)', async () => {
+    const { forge, calls } = makeForge(
+      [
+        tokenRoute(42),
+        (url, init) => (url.pathname === '/repos/acme/app/pulls' && init.method === 'POST' ? { status: 201, body: openPr({ number: 8, html_url: 'u8' }) } : undefined),
+        pullsRoute([]),
+      ],
+      { installationId: 42 },
+    );
+    await forge.ensurePr('/repo', { ...req, draft: true });
+    expect(writes(calls).map((c) => c.body)).toEqual([{ title: req.title, head: req.branch, base: 'main', body: req.body, draft: true }]);
+  });
+
+  it('opens a plain PR where the repository has no drafts: its plan decides, and a human then reviews it all the same', async () => {
+    const posted: unknown[] = [];
+    const { forge } = makeForge(
+      [
+        tokenRoute(42),
+        (url, init, body) => {
+          if (url.pathname !== '/repos/acme/app/pulls' || init.method !== 'POST') return undefined;
+          posted.push(body);
+          return (body as { draft?: boolean }).draft
+            ? { status: 422, body: { message: 'Validation Failed', errors: [{ message: 'Draft pull requests are not supported in this repository.' }] } }
+            : { status: 201, body: openPr({ number: 8, html_url: 'u8' }) };
+        },
+        pullsRoute([]),
+      ],
+      { installationId: 42 },
+    );
+    expect(await forge.ensurePr('/repo', { ...req, draft: true })).toEqual({ number: 8, url: 'u8', deduplicated: false });
+    expect(posted).toHaveLength(2);
+  });
+
+  it('says what GitHub said under its "Validation Failed": the reason is in its errors', async () => {
+    const { forge } = makeForge(
+      [
+        tokenRoute(42),
+        (url, init) => (url.pathname === '/repos/acme/app/pulls' && init.method === 'POST' ? { status: 422, body: { message: 'Validation Failed', errors: [{ message: 'No commits between main and factory/REL-1' }] } } : undefined),
+        pullsRoute([]),
+      ],
+      { installationId: 42 },
+    );
+    await expect(forge.ensurePr('/repo', req)).rejects.toBeInstanceOf(NoCommitsBetween);
+    await expect(forge.ensurePr('/repo', req)).rejects.toThrow('No commits between main and factory/REL-1');
+  });
+
+  it('takes a draft out of draft by the only call that can, and writes nothing for a PR already out (ORC-125)', async () => {
+    const pull = (draft: boolean): Route => (url, init) => (url.pathname === '/repos/acme/app/pulls/7' && init.method === 'GET' ? { body: openPr({ draft, node_id: 'PR_node' }) } : undefined);
+    const mutation: Route = (url, init) => (url.pathname === '/graphql' && init.method === 'POST' ? { body: { data: {} } } : undefined);
+    const drafted = makeForge([tokenRoute(42), pull(true), mutation], { installationId: 42 });
+    await drafted.forge.markPrReady('/repo', 7);
+    const posted = drafted.calls.filter((c) => c.url.endsWith('/graphql'));
+    expect(posted).toHaveLength(1);
+    expect(JSON.stringify(posted[0]!.body)).toContain('markPullRequestReadyForReview');
+    expect(JSON.stringify(posted[0]!.body)).toContain('PR_node');
+    const ready = makeForge([tokenRoute(42), pull(false), mutation], { installationId: 42 });
+    await ready.forge.markPrReady('/repo', 7);
+    expect(ready.calls.filter((c) => c.url.endsWith('/graphql'))).toEqual([]);
+  });
+
+  it("a GraphQL refusal of it rejects: GitHub answers 200 with its errors", async () => {
+    const { forge } = makeForge(
+      [
+        tokenRoute(42),
+        (url, init) => (url.pathname === '/repos/acme/app/pulls/7' && init.method === 'GET' ? { body: openPr({ draft: true, node_id: 'PR_node' }) } : undefined),
+        (url) => (url.pathname === '/graphql' ? { body: { errors: [{ message: 'not allowed' }] } } : undefined),
+      ],
+      { installationId: 42 },
+    );
+    await expect(forge.markPrReady('/repo', 7)).rejects.toThrow('not allowed');
+  });
+
+  it("gives the factory's git the repository's URL and the token, the token in the environment alone (ORC-125)", async () => {
+    const { forge } = makeForge([tokenRoute(42, 'ghs_push_token')], { installationId: 42 });
+    const access = await forge.gitAccess('/repo');
+    expect(access.url).toBe('https://github.com/acme/app.git');
+    expect(access.url).not.toContain('ghs_push_token');
+    expect(access.env['GIT_CONFIG_KEY_0']).toBe('http.https://github.com/.extraheader');
+    expect(access.env['GIT_CONFIG_VALUE_0']).toBe(`Authorization: Basic ${Buffer.from('x-access-token:ghs_push_token').toString('base64')}`);
   });
 
   it('reads the open PR again when a concurrent replay opened it first (422), and rethrows a 422 with none behind it', async () => {

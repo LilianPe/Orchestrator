@@ -462,4 +462,22 @@ describe('runCleanVerify', () => {
     expect(argv[2]).toMatch(/timeout -k \d+ \d+ bash -lc "\$1" 2>&1 \| tail -c \d+; exit "\$\{PIPESTATUS\[0\]\}"/);
     expect(argv.at(-1)).toBe('npm test');
   });
+
+describe('a failure of its own git (ORC-125)', () => {
+  it('is no verdict: merge-base failing is not a branch without history, whose every file would be judged a change', async () => {
+    const failing: Exec = async (cmd, args, opts) => (args.includes('merge-base') ? { stdout: '', stderr: 'fatal: out of memory', code: 128 } : execCmd(cmd, args, opts));
+    const { req } = setup({ exec: failing });
+    await expect(runCleanVerify(req)).rejects.toThrow('out of memory');
+  });
+
+  it('a branch that shares no commit with the base stays what it was: all its files are changes', async () => {
+    const { req, repo } = setup();
+    git(repo, 'checkout', '-q', '--orphan', 'other');
+    git(repo, 'branch', '-q', '-D', BRANCH);
+    git(repo, 'checkout', '-q', '-b', BRANCH);
+    git(repo, 'commit', '-q', '-m', 'orphan');
+    expect((await runCleanVerify(req)).ok).toBe(true);
+  });
+});
+
 });

@@ -92,7 +92,7 @@ describe('compose.yaml (ORC-203)', () => {
     expect(proxy.networks ?? ['default']).not.toContain('back');
   });
 
-  it('keeps GH_TOKEN for factoryd until ORC-125', () => {
+  it('keeps GH_TOKEN for factoryd until ORC-181', () => {
     expect(factoryd.environment!['GH_TOKEN']).toMatch(/^\$\{GH_TOKEN:\?/);
   });
 
@@ -117,7 +117,7 @@ describe('the images (ORC-203)', () => {
     expect(read('.dockerignore').split(/\r?\n/)).toEqual(expect.arrayContaining(['.env', '.env.*', 'install', 'egress-ca']));
   });
 
-  it('runs no agent in the daemon image, which keeps gh until ORC-125 and gains the engine CLI', () => {
+  it('runs no agent in the daemon image, which keeps gh until ORC-181 and gains the engine CLI', () => {
     expect(daemon).not.toContain('claude-code');
     expect(daemon).toMatch(/install -y[^\n]* gh\b/);
     expect(daemon).toMatch(/docker-\$\{?DOCKER_CLI_VERSION\}?\.tgz/);
