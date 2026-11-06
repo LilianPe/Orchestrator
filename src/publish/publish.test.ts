@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -8,7 +8,8 @@ import { FakeForge } from '../adapters/forge/fake.js';
 import { NoCommitsBetween } from '../adapters/forge/types.js';
 import { prText, PublishRefused, type PublishRequest } from '../adapters/publisher/types.js';
 import { FakeSandboxProvider } from '../adapters/sandbox/fake.js';
-import type { SandboxExecOptions, SandboxRequest } from '../adapters/sandbox/types.js';
+import { GitWorkspaces } from '../adapters/workspace/git-workspaces.js';
+import { WORKSPACE_TARGET, type SandboxExecOptions, type SandboxRequest } from '../adapters/sandbox/types.js';
 import { forbiddenPattern } from '../checks/forbidden-paths.js';
 import { BUNDLE_TARGET } from './extract.js';
 import { GitPublisher } from './publish.js';
@@ -420,6 +421,99 @@ describe('GitPublisher', () => {
     await refusal(s.publisher.publish(s.request()));
     const left = spawnSync('find', [join(s.base, 'runs').replace(/\\/g, '/'), '-mindepth', '2', '-name', 'publish-*'], { encoding: 'utf8' });
     expect(left.stdout.trim()).toBe('');
+  });
+});
+
+describe('GitPublisher, on the repository the agent really has (ORC-317)', () => {
+  /** The forge, the factory's clone of it, and the agent's own repository as `GitWorkspaces` makes it: its `.git` inside its worktree. Every git of the host is recorded. */
+  async function realLayout() {
+    const base = mkdtempSync(join(tmpdir(), 'factory-publish-layout-'));
+    const remote = join(base, 'remote.git');
+    git(base, 'init', '-q', '--bare', '-b', 'main', remote);
+    const repoPath = join(base, 'repo');
+    git(base, 'clone', '-q', remote, repoPath);
+    identify(repoPath);
+    git(repoPath, 'config', 'core.autocrlf', 'false');
+    git(repoPath, 'checkout', '-q', '-b', 'main');
+    write(repoPath, 'README.md', 'base\n');
+    commit(repoPath, 'base');
+    git(repoPath, 'push', '-q', '-u', 'origin', 'main');
+    git(repoPath, 'remote', 'set-head', 'origin', 'main');
+    const ws = await new GitWorkspaces({ root: join(base, 'ws') }).prepare({ projectId: 'p', repoPath, ticketId: 'ORC-1', title: 'x', kind: 'worktree', slot: 0, portBase: 4200, runId: 'r0' } as never);
+    const work = ws.path;
+    const branch = ws.branch!;
+    write(work, 'a.txt', 'one\n');
+    const sha = commit(work);
+
+    const forge = new FakeForge();
+    forge.gitUrl = remote;
+    const sandboxes = new LocalSandboxes();
+    const hostGit: { args: string[]; cwd: string | undefined }[] = [];
+    const exec: Exec = async (cmd, args, opts) => {
+      hostGit.push({ args, cwd: opts?.cwd });
+      return execCmd(cmd, args, opts);
+    };
+    const publisher = new GitPublisher({ sandboxes, forge, runsDir: join(base, 'runs'), gitleaks: false, log: () => {}, exec });
+    const request = (over: Partial<PublishRequest> = {}): PublishRequest => ({ projectId: 'p', repoPath, ticketId: 'ORC-1', runId: 'r1', worktree: work, branch, sha, title: 'ORC-1 x', body: 'b', ...over });
+    const onForge = () => git(remote, 'for-each-ref', '--format=%(objectname)', `refs/heads/${branch}`);
+    return { base, remote, repoPath, work, branch, sha, forge, sandboxes, hostGit, publisher, request, onForge };
+  }
+
+  it('the layout is the one this test means: a git dir of its own, no link to the repository of the factory', async () => {
+    const s = await realLayout();
+    expect(git(s.work, 'rev-parse', '--git-common-dir')).toBe('.git');
+    expect(git(s.work, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe(s.branch);
+  });
+
+  it('publishes from it: pushed, a draft PR, and a next commit goes forward under the lease', async () => {
+    const s = await realLayout();
+    await s.publisher.publish(s.request());
+    expect(s.onForge()).toBe(s.sha);
+    expect(s.forge.opened).toEqual([expect.objectContaining({ branch: s.branch, base: 'main', draft: true })]);
+    write(s.work, 'a.txt', 'two\n');
+    const next = commit(s.work);
+    await s.publisher.publish(s.request({ sha: next }));
+    expect(s.onForge()).toBe(next);
+    expect(s.forge.opened).toHaveLength(1);
+  });
+
+  it("mounts the agent's own git dir, read-only over its worktree, and never the factory's", async () => {
+    const s = await realLayout();
+    await s.publisher.publish(s.request());
+    const [box] = s.sandboxes.created;
+    expect(box!.mounts).toContainEqual({ host: join(s.work, '.git'), target: `${WORKSPACE_TARGET}/.git`, readOnly: true });
+    expect(s.sandboxes.created.flatMap((c) => c.mounts).map((m) => m.host).filter((h) => h.startsWith(s.repoPath))).toEqual([]);
+  });
+
+  it("runs no git of the host in the agent's directory: its bundle is the sandbox's, its lease and its base the clone's", async () => {
+    const s = await realLayout();
+    await s.publisher.publish(s.request());
+    expect(s.hostGit.length).toBeGreaterThan(3);
+    for (const { args, cwd } of s.hostGit) {
+      expect(cwd ?? '', args.join(' ')).not.toContain(s.work);
+      expect(args.join(' ')).not.toContain(s.work);
+    }
+  });
+
+  it('what the agent left in its git dir never runs, on the host nor at the push', async () => {
+    const s = await realLayout();
+    const trap = join(s.base, 'TRAPPED').replace(/\\/g, '/');
+    mkdirSync(join(s.work, '.git', 'hooks'), { recursive: true });
+    for (const hook of ['pre-push', 'reference-transaction', 'post-checkout', 'pre-auto-gc']) writeFileSync(join(s.work, '.git', 'hooks', hook), `#!/bin/sh\ntouch "${trap}"\n`, { mode: 0o755 });
+    for (const [key, value] of [['core.fsmonitor', `sh -c 'touch "${trap}"'`], ['core.sshCommand', `sh -c 'touch "${trap}"'`], ['core.hooksPath', '.git/hooks'], ['remote.origin.uploadpack', `sh -c 'touch "${trap}"'`]] as const) git(s.work, 'config', key, value);
+    await s.publisher.publish(s.request());
+    expect(s.onForge()).toBe(s.sha);
+    expect(existsSync(trap)).toBe(false);
+  });
+
+  it("a .git the agent replaced by a file pointing at the factory's: refused, and that dir is mounted nowhere", async () => {
+    const s = await realLayout();
+    rmSync(join(s.work, '.git'), { recursive: true, force: true });
+    writeFileSync(join(s.work, '.git'), `gitdir: ${join(s.repoPath, '.git')}\n`);
+    const r = await refusal(s.publisher.publish(s.request()));
+    expect(r.code).toBe('head');
+    expect(s.sandboxes.created).toEqual([]);
+    expect(s.onForge()).toBe('');
   });
 });
 

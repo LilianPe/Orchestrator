@@ -71,7 +71,7 @@ Le démarrage journalise explicitement `forge GitHub : CLI gh (repli de migratio
 L'usine publie (ORC-125), par l'effet `publish` de l'outbox, que `decide` n'écrit que pour le commit que `verify` vient de trouver vert (invariant I1) et que `mayPublish` regarde encore au moment de l'exécuter. Il faut les sandboxes et la GitHub App (permissions *Contents* et *Pull requests* en écriture). `GitPublisher` (`src/publish/publish.ts`) :
 
 1. lit sur la forge la branche par défaut et la tête de la branche du ticket ; une tête déjà sur le commit va droit à la PR, sans pousser : c'est le rejeu d'une publication coupée ;
-2. fait le bundle de la branche dans un sandbox neuf à `none`, le vérifie, le clone sans checkout, sans hook ni config du dépôt, et compare sa tête au commit vérifié ;
+2. fait le bundle de la branche, dans le dépôt propre de l'agent (ORC-317), dans un sandbox neuf à `none`, son `.git` en lecture seule ; aucun git de l'hôte n'y tourne, et le dossier git de `repoPath` n'est monté nulle part. Il le vérifie, le clone sans checkout, sans hook ni config du dépôt, et compare sa tête au commit vérifié ;
 3. contrôle le diff depuis la base, de façon bloquante : `factory/chemins-interdits` (liens symboliques sortants et `package.json#scripts` compris), `factory/binaires`, `factory/secrets` ;
 4. pousse **seulement vers l'avant**, en `--force-with-lease` sur la tête lue : si la branche porte un commit absent du travail (un push humain, ORC-159, ou un historique réécrit), rien n'est poussé ;
 5. ouvre la PR **draft**, cherchée par branche avant création (une PR normale si l'offre du dépôt n'a pas de draft). Elle sort de draft au passage du ticket en *Human Review* : GitHub ne merge pas un draft.

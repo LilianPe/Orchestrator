@@ -61,7 +61,7 @@ Tout l'état de l'instance vit dans **`RELAIS_HOME`**, par défaut `~/.relais` (
 | `relais.db` | Base SQLite : tickets suivis, événements, runs, coûts, file, minuteries. Absente quand `FACTORY_DATABASE_URL` désigne une base Postgres ([`configuration.md`](configuration.md#variables-denvironnement)). | oui (contient l'historique) |
 | `transcripts/<runId>.jsonl` | Sortie `stream-json` de chaque run, secrets masqués, supprimée 30 jours après sa dernière écriture ([`exploitation.md`](exploitation.md#journaux-transcripts-et-données)). | oui (code, contenu des tickets) |
 | `workspaces/<projet>/<ticket>/` | Worktree git de chaque ticket en cours. | — |
-| `workspaces/<projet>/_trunk/` | Copie détachée de la branche principale, pour les questions en lecture seule. | — |
+| `workspaces/<projet>/_trunk/<runId>/` | Copie détachée de la branche principale, une par question en lecture seule, supprimée à sa fin. | — |
 | `workspaces/_kb/<runId>/` | Worktrees du dépôt de connaissance pour les runs `learn` / `remember`. | — |
 | `logs/` | Créé au démarrage mais pas encore utilisé : les journaux du démon sortent sur la sortie standard. | — |
 | `knowledge/` | Emplacement visé par `relais init` pour le dépôt de connaissance (voir [`projets-et-workspaces.md`](projets-et-workspaces.md#base-de-connaissance-partagée)). | — |

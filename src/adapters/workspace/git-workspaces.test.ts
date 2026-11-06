@@ -1,9 +1,10 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { isAbsolute, join } from 'node:path';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { readConventions } from '../../core/prompt.js';
+import { execCmd } from '../exec.js';
 import { GitWorkspaces } from './git-workspaces.js';
 
 const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
@@ -35,10 +36,15 @@ describe('GitWorkspaces', () => {
     const first = await ws.prepare(req(repo));
     expect(first.ahead).toBeUndefined();
     // Removed and made again on its branch, with no commit: as a setup that a crash cut.
-    await ws.cleanup('p', repo, 'REL-1');
+    await ws.cleanup('p', 'REL-1');
     expect((await ws.prepare(req(repo))).ahead).toBeUndefined();
-    git(first.path, 'commit', '--allow-empty', '-m', 'the agent');
-    await ws.cleanup('p', repo, 'REL-1');
+    await ws.cleanup('p', 'REL-1');
+    // Pushed by a previous attempt: what the factory finds on the forge, as it no longer shares the agent's commits.
+    git(repo, 'checkout', '-q', '-b', 'factory/rel-1-export-csv');
+    git(repo, 'commit', '--allow-empty', '-m', 'the agent');
+    git(repo, 'push', '-q', 'origin', 'factory/rel-1-export-csv');
+    git(repo, 'checkout', '-q', 'main');
+    git(repo, 'branch', '-q', '-D', 'factory/rel-1-export-csv');
     expect(await ws.prepare(req(repo))).toMatchObject({ fresh: true, ahead: true });
   });
 
@@ -49,7 +55,7 @@ describe('GitWorkspaces', () => {
     expect(w).toEqual({ path: join(root, 'p', 'REL-1'), port: 4201, branch: 'factory/rel-1-export-csv', fresh: true });
     expect(git(w.path, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('factory/rel-1-export-csv');
     expect(await ws.prepare(req(repo))).toEqual({ ...w, fresh: undefined });
-    await ws.cleanup('p', repo, 'REL-1');
+    await ws.cleanup('p', 'REL-1');
     expect(existsSync(w.path)).toBe(false);
   });
 
@@ -108,31 +114,138 @@ describe('GitWorkspaces', () => {
     const { repo, root } = fixtureRepo();
     const kb = fixtureRepo();
     const ws = new GitWorkspaces({ root, knowledgeRepo: kb.repo });
-    expect(await ws.prepare(req(repo, { kind: 'trunk-readonly' }))).toEqual({ path: join(root, 'p', '_trunk') });
+    const trunk = await ws.prepare(req(repo, { kind: 'trunk-readonly' }));
+    expect(trunk).toEqual({ path: join(root, 'p', '_trunk', 'abcdef123456') });
+    expect(git(trunk.path, 'rev-parse', 'HEAD')).toBe(git(repo, 'rev-parse', 'origin/main'));
+    await ws.release('p', 'abcdef123456');
+    expect(existsSync(trunk.path)).toBe(false);
     const k = await ws.prepare(req(repo, { kind: 'knowledge' }));
     expect(k).toEqual({ path: join(root, '_kb', 'abcdef123456'), branch: 'learn/rel-1-abcdef12' });
     expect(existsSync(join(k.path, 'README.md'))).toBe(true);
   });
 
-  it('reads the git common dir of a worktree as an absolute path, the one its .git file points into (ORC-204)', async () => {
+  it('gives each question its own trunk: what one left is not there for the next', async () => {
     const { repo, root } = fixtureRepo();
     const ws = new GitWorkspaces({ root });
-    const w = await ws.prepare(req(repo));
-    const dir = await ws.gitCommonDir(w.path);
-    expect(isAbsolute(dir)).toBe(true);
-    expect(realpathSync(dir)).toBe(realpathSync(join(repo, '.git')));
+    const one = await ws.prepare(req(repo, { kind: 'trunk-readonly', runId: 'run-one' }));
+    writeFileSync(join(one.path, 'left-by-one'), 'x');
+    const two = await ws.prepare(req(repo, { kind: 'trunk-readonly', runId: 'run-two' }));
+    expect(two.path).not.toBe(one.path);
+    expect(existsSync(join(two.path, 'left-by-one'))).toBe(false);
+    expect(existsSync(join(one.path, 'left-by-one'))).toBe(true);
   });
 
-  it('keeps unpushed local commits when re-preparing after cleanup', async () => {
+  it('releases a trunk and nothing else: a worktree holds its unpushed commits, a project named as the trunk included', async () => {
+    const { repo, root } = fixtureRepo();
+    const ws = new GitWorkspaces({ root });
+    const w = await ws.prepare(req(repo, { projectId: '_trunk' }));
+    await ws.release('_trunk', 'REL-1');
+    await ws.release('_trunk', 'abcdef123456');
+    expect(existsSync(w.path)).toBe(true);
+  });
+
+  it('prefers the forge to a branch of the repository, which an agent no longer moves and can only lag behind', async () => {
+    const { repo, root } = fixtureRepo();
+    git(repo, 'checkout', '-q', '-b', 'factory/rel-1-export-csv');
+    git(repo, 'commit', '--allow-empty', '-m', 'old, local');
+    git(repo, 'push', '-q', 'origin', 'factory/rel-1-export-csv');
+    git(repo, 'commit', '--allow-empty', '-m', 'on the forge');
+    git(repo, 'push', '-q', 'origin', 'factory/rel-1-export-csv');
+    git(repo, 'reset', '-q', '--hard', 'HEAD~1');
+    git(repo, 'checkout', '-q', 'main');
+    const w = await new GitWorkspaces({ root }).prepare(req(repo));
+    expect(git(w.path, 'log', '-1', '--format=%s')).toBe('on the forge');
+  });
+
+  it('takes a relative repoPath and a relative root, as the config allows both', async () => {
+    const { base, repo } = fixtureRepo();
+    const here = process.cwd();
+    process.chdir(base);
+    try {
+      const ws = new GitWorkspaces({ root: 'rel-root' });
+      const w = await ws.prepare(req('repo'));
+      const start = git(w.path, 'rev-parse', 'HEAD');
+      git(w.path, 'commit', '--allow-empty', '-m', 'the agent');
+      expect((await ws.stepDiff('repo', w.path, start))?.changed).toEqual([]);
+      expect(git(repo, 'rev-parse', 'origin/main')).toBe(start);
+    } finally {
+      process.chdir(here);
+    }
+  });
+
+  it("makes the agent a repository of its own (ORC-317): its git dir in its worktree, the repository's settings without its hooks or its layout, on the forge's refs", async () => {
+    const { repo, root } = fixtureRepo();
+    git(repo, 'tag', 'v1');
+    git(repo, 'push', '-q', 'origin', 'v1');
+    git(repo, 'config', 'core.sshCommand', 'a-deploy-key');
+    git(repo, 'config', 'core.hooksPath', '/host/hooks');
+    git(repo, 'branch', 'someone-elses');
+    const hooks = join(repo, '.git', 'hooks');
+    mkdirSync(hooks, { recursive: true });
+    writeFileSync(join(hooks, 'post-commit'), '#!/bin/sh\nexit 1\n');
+    const ws = new GitWorkspaces({ root });
+    const w = await ws.prepare(req(repo));
+    expect(realpathSync(git(w.path, 'rev-parse', '--path-format=absolute', '--git-common-dir'))).toBe(realpathSync(join(w.path, '.git')));
+    expect(git(w.path, 'config', 'remote.origin.url')).toBe(git(repo, 'config', 'remote.origin.url'));
+    expect(git(w.path, 'config', 'remote.origin.fetch')).toBe(git(repo, 'config', 'remote.origin.fetch'));
+    expect(git(w.path, 'config', 'user.name')).toBe('t');
+    expect(git(w.path, 'symbolic-ref', 'refs/remotes/origin/HEAD')).toBe('refs/remotes/origin/main');
+    expect(git(w.path, 'tag')).toBe('v1');
+    expect(git(w.path, 'branch', '--format=%(refname:short)')).toBe('factory/rel-1-export-csv');
+    expect(existsSync(join(w.path, '.git', 'hooks'))).toBe(false);
+    expect(git(w.path, 'config', 'core.sshCommand')).toBe('a-deploy-key');
+    expect(readFileSync(join(w.path, '.git', 'config'), 'utf8')).not.toContain('/host/hooks');
+    // Neither the factory's objects by a link, nor another's name for them: the agent rewrites only its own.
+    expect(existsSync(join(w.path, '.git', 'objects', 'info', 'alternates'))).toBe(false);
+    // Its commits stay out of the factory's repository, read from there all the same.
+    git(w.path, 'commit', '--allow-empty', '-m', 'the agent');
+    const head = (await ws.head(w.path))!;
+    expect(head).toBe(git(w.path, 'rev-parse', 'HEAD'));
+    expect(() => execFileSync('git', ['cat-file', '-e', head], { cwd: repo, stdio: 'ignore' })).toThrow();
+  });
+
+  it('reads the head of a repository whose refs git packed, on a branch or detached', async () => {
     const { repo, root } = fixtureRepo();
     const ws = new GitWorkspaces({ root });
     const w = await ws.prepare(req(repo));
-    git(w.path, 'config', 'user.email', 't@t');
-    git(w.path, 'config', 'user.name', 't');
-    git(w.path, 'commit', '--allow-empty', '-m', 'local only');
-    await ws.cleanup('p', repo, 'REL-1');
+    const head = git(w.path, 'rev-parse', 'HEAD');
+    git(w.path, 'pack-refs', '--all');
+    expect(await ws.head(w.path)).toBe(head);
+    expect(await ws.prepare(req(repo))).toMatchObject({ branch: 'factory/rel-1-export-csv' });
+    git(w.path, 'checkout', '-q', '--detach');
+    expect(await ws.head(w.path)).toBe(head);
+    expect(await ws.prepare(req(repo))).toMatchObject({ branch: 'HEAD' });
+    // A name git allows, however unusual, is no attack.
+    for (const name of ['feat/été', 'fix/#12', 'a+b@c']) {
+      git(w.path, 'checkout', '-q', '-b', name);
+      expect(await ws.head(w.path)).toBe(head);
+      expect(await ws.prepare(req(repo))).toMatchObject({ branch: name });
+    }
+  });
+
+  it('leaves nothing a next launch would take for a worktree when the repository cannot be made', async () => {
+    const { repo, root } = fixtureRepo();
+    const ws = new GitWorkspaces({ root });
+    const fails = new GitWorkspaces({ root, exec: async (cmd, args, opts) => (args.includes('checkout') ? { stdout: '', stderr: 'boom', code: 1 } : execCmd(cmd, args, opts)) });
+    await expect(fails.prepare(req(repo))).rejects.toThrow('boom');
+    expect(readdirSync(join(root, 'p'))).toEqual([]);
+    expect((await ws.prepare(req(repo))).fresh).toBe(true);
+  });
+
+  it("starts from a branch only the repository has, and the agent's unpushed commits go with its worktree", async () => {
+    const { repo, root } = fixtureRepo();
+    const ws = new GitWorkspaces({ root });
+    git(repo, 'branch', 'factory/rel-1-export-csv');
+    git(repo, 'checkout', '-q', 'factory/rel-1-export-csv');
+    git(repo, 'commit', '--allow-empty', '-m', 'human, local only');
+    git(repo, 'checkout', '-q', 'main');
+    const w = await ws.prepare(req(repo));
+    expect(git(w.path, 'log', '-1', '--format=%s')).toBe('human, local only');
+    expect(w.ahead).toBe(true);
+    git(w.path, 'commit', '--allow-empty', '-m', 'the agent, unpushed');
+    await ws.cleanup('p', 'REL-1');
     const w2 = await ws.prepare(req(repo));
-    expect(git(w2.path, 'log', '-1', '--format=%s')).toBe('local only');
+    expect(git(w2.path, 'log', '-1', '--format=%s')).toBe('human, local only');
   });
 
   it('cleanup of one ticket leaves another untouched', async () => {
@@ -140,7 +253,7 @@ describe('GitWorkspaces', () => {
     const ws = new GitWorkspaces({ root });
     await ws.prepare(req(repo));
     const w2 = await ws.prepare(req(repo, { ticketId: 'REL-2', title: 'Other' }));
-    await ws.cleanup('p', repo, 'REL-1');
+    await ws.cleanup('p', 'REL-1');
     expect(existsSync(w2.path)).toBe(true);
   });
 
@@ -154,6 +267,9 @@ describe('GitWorkspaces', () => {
     git(repo, 'push');
     const ws = new GitWorkspaces({ root });
     const w = await ws.prepare(req(repo));
+    // Hidden from its creation: what a setup or an agent writes there goes at the next launch.
+    expect(existsSync(join(w.path, '.claude'))).toBe(false);
+    mkdirSync(join(w.path, '.claude'));
     writeFileSync(join(w.path, '.claude', 'settings.local.json'), '{}\n');
     await ws.resetClaudeDir(w.path);
     await ws.resetClaudeDir(w.path);
@@ -169,8 +285,10 @@ describe('GitWorkspaces', () => {
     git(repo, 'checkout', '-b', 'side');
     writeFileSync(join(repo, '.claude', 'settings.json'), '{"x":1}\n');
     git(repo, 'commit', '-am', 'side');
+    git(repo, 'push', '-q', 'origin', 'side');
     git(repo, 'checkout', 'main');
-    git(w.path, 'merge', '--no-edit', 'side');
+    git(w.path, 'fetch', '-q', 'origin');
+    git(w.path, 'merge', '--no-edit', 'origin/side');
     expect(existsSync(join(w.path, '.claude'))).toBe(false);
     expect(git(w.path, 'status', '--porcelain')).toBe('');
     expect(git(w.path, 'show', 'HEAD:.claude/settings.json')).toContain('"x":1');
@@ -204,8 +322,10 @@ describe('GitWorkspaces', () => {
     git(repo, 'checkout', '-b', 'side');
     writeFileSync(join(repo, '.claude', 'settings.json'), '{"x":1}\n');
     git(repo, 'commit', '-am', 'side');
+    git(repo, 'push', '-q', 'origin', 'side');
     git(repo, 'checkout', 'main');
-    git(w.path, 'merge', '--no-edit', 'side');
+    git(w.path, 'fetch', '-q', 'origin');
+    git(w.path, 'merge', '--no-edit', 'origin/side');
     expect(readdirSync(join(w.path, '.claude'))).toEqual(['CLAUDE.md']);
     expect(git(w.path, 'status', '--porcelain')).toBe('');
   }, 60_000);
@@ -215,7 +335,7 @@ describe('GitWorkspaces', () => {
     const ws = new GitWorkspaces({ root });
     await expect(ws.prepare(req(repo, { ticketId: '../x' }))).rejects.toThrow('Identifiant invalide : ../x');
     await expect(ws.prepare(req(repo, { projectId: 'a/b' }))).rejects.toThrow('Identifiant invalide : a/b');
-    await expect(ws.cleanup('p', repo, '..')).rejects.toThrow('Identifiant invalide : ..');
-    await expect(ws.cleanup('a\\b', repo, 'REL-1')).rejects.toThrow('Identifiant invalide');
+    await expect(ws.cleanup('p', '..')).rejects.toThrow('Identifiant invalide : ..');
+    await expect(ws.cleanup('a\\b', 'REL-1')).rejects.toThrow('Identifiant invalide');
   });
 });

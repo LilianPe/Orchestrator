@@ -1,7 +1,7 @@
 import { existsSync, lstatSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { devNull, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { execCmd, mustExec, type Exec } from '../adapters/exec.js';
+import { execCmd, HARDENING, mustExec, type Exec } from '../adapters/exec.js';
 import type { SandboxProvider } from '../adapters/sandbox/types.js';
 
 /**
@@ -12,8 +12,7 @@ import type { SandboxProvider } from '../adapters/sandbox/types.js';
  */
 export const BUNDLE_TARGET = '/factory/bundle';
 const BUNDLE = 'work.bundle';
-/** No hook, no fsmonitor: on each host git command (`-c`), and in the clone's own config (`--config`). */
-export const HARDENING = [`core.hooksPath=${devNull}`, 'core.fsmonitor=false'];
+export { HARDENING };
 
 /** The sandbox's git, on the agent's repository: `devNull` is the host's, and the mount's owner may not be its user. */
 const SANDBOX_CONFIG = [['core.hooksPath', '/dev/null'], ['core.fsmonitor', 'false'], ['safe.directory', '*']] as const;

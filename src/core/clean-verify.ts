@@ -1,7 +1,7 @@
 import { mkdirSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { execCmd, mustExec, type Exec } from '../adapters/exec.js';
+import { execCmd, mustExec, type Exec, type ExecResult } from '../adapters/exec.js';
 import { DEFAULT_REQUIREMENTS, type SandboxMount, type SandboxProvider } from '../adapters/sandbox/types.js';
 import { checkFrozen, FREEZE_CHECK, isFrozenHarness, type FrozenTests } from '../checks/freeze.js';
 import { checkForbiddenPaths, FORBIDDEN_CHECK } from '../checks/forbidden-paths.js';
@@ -25,13 +25,11 @@ export interface CleanVerifyRequest {
   runId: string;
   ticketId: string;
   branch: string;
-  /** The agent's worktree: mounted in the sandbox that makes the bundle, and nowhere else. */
+  /** The agent's worktree, its git dir inside (ORC-317): mounted in the sandbox that makes the bundle, and nowhere else. */
   worktree: string;
-  /** The repository's git dir, where the worktree's `.git` points, read-only; absent when it is inside the worktree. */
-  gitDir?: string;
   /** On the host, empty, and the caller's to remove: where the engine can mount from. */
   workDir: string;
-  /** Where the base branch is read, not the refs of the repository, which the agent can write. */
+  /** Where the base branch is read: on the forge, not on the refs of a local repository. */
   originUrl: string;
   /** The workflow's, the factory's own (`jobs.<job>.verify`, `workspace.setup`): what `.factory/config.yml` does not declare, until ORC-177. */
   setup: readonly string[];
@@ -123,8 +121,7 @@ export const runCleanVerify: CleanVerifier = async (req) => {
   const cloneDir = join(req.workDir, 'clone');
   mkdirSync(bundleDir);
   try {
-    const mounts = [{ host: bundleDir, target: BUNDLE_TARGET, readOnly: false }, ...(req.gitDir ? [{ host: req.gitDir, target: req.gitDir, readOnly: true }] : [])];
-    const { sha } = await inBox('bundle', req.worktree, mounts, (sandboxId) =>
+    const { sha } = await inBox('bundle', req.worktree, [{ host: bundleDir, target: BUNDLE_TARGET, readOnly: false }], (sandboxId) =>
       extractWork({ sandboxes, sandboxId, branch: req.branch, bundleDir, cloneDir, ...(req.exec ? { exec: req.exec } : {}) }),
     );
 
@@ -137,7 +134,7 @@ export const runCleanVerify: CleanVerifier = async (req) => {
     const commands = declared.length ? declared : req.commands;
     const setup = config.setup ? [config.setup] : req.setup;
     const env = await req.env(config);
-    const from = await git('merge-base', BASE, sha).catch(() => EMPTY_TREE);
+    const from = await forkPoint(git, sha);
     const failures = await checkClone(git, from, sha, req.frozen);
     if (req.gitleaks || (commands.length && !failures.length)) {
       await inBox('prepare', cloneDir, [], async (id) => {
@@ -175,8 +172,8 @@ const CONFIG = '.factory/config.yml';
 
 /**
  * The forge's default branch, in the clone. The daemon's own config is read, for its credentials: the repository's is
- * not, as nothing here runs in it, and the clone's is ours. Neither `origin/HEAD` nor `origin/main` of the repository:
- * its git dir is mounted read-write for the agent, which could point them at a config of its own.
+ * not, as nothing here runs in it, and the clone's is ours. Read on the forge, not on `origin/HEAD` of the repository:
+ * what `.factory/config.yml` says of a commit is read as close to its source as the factory can.
  */
 async function fetchBase(req: CleanVerifyRequest, cloneDir: string): Promise<void> {
   const args = [...HARDENING.flatMap((c) => ['-c', c]), '-C', cloneDir, 'fetch', '--quiet', '--no-tags', '--no-recurse-submodules', '--', req.originUrl, `+HEAD:${BASE}`];
@@ -194,7 +191,7 @@ function withoutCredentials(message: string, url: string): string {
 }
 
 /** Git's empty tree: what a branch that shares no commit with the base is compared with, every file of it then a change. */
-export const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
+const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 const SYMLINK = '120000';
 const MAX_READ_BYTES = 16 * 1024 * 1024;
 const SECRETS_CHECK = 'factory/secrets';
@@ -224,6 +221,18 @@ export async function scanSecrets(sandboxes: Boxes, id: string, from: string, sh
   if (code === 0 && !found.length) return [];
   const lines = found.map((f) => `- ${f.File}:${f.StartLine} (${f.RuleID})`);
   return [{ command: SECRETS_CHECK, exitCode: 1, output: `Secret codé en dur dans les commits de la branche, publication bloquée. Retire-le de son historique, et considère-le comme exposé :\n${lines.join('\n')}` }];
+}
+
+/** `merge-base`'s own answers, 0 and 1, and no other code: a failure of git is no verdict on the branch, and rejects. */
+export function isYes(r: ExecResult): boolean {
+  if (r.code > 1) throw new Error(`git merge-base : ${r.stderr.trim() || `code ${r.code}`}`);
+  return r.code === 0;
+}
+
+/** Where the commit left the base, the empty tree for one that never shares a commit with it: all its files are then changes. */
+export async function forkPoint(git: CloneGit, sha: string): Promise<string> {
+  const common = await git.status('merge-base', BASE, sha);
+  return isYes(common) ? common.stdout.trim() : EMPTY_TREE;
 }
 
 /**
@@ -275,11 +284,12 @@ async function show(git: CloneGit, rev: string, path: string): Promise<string | 
 }
 
 /** Its output trimmed; `raw` as git wrote it, for what is compared by its bytes: a file's content, a link's target. */
-export type CloneGit = ((...args: string[]) => Promise<string>) & { raw: (...args: string[]) => Promise<string> };
+export type CloneGit = ((...args: string[]) => Promise<string>) & { raw: (...args: string[]) => Promise<string>; status: (...args: string[]) => Promise<ExecResult> };
 
 export function cloneGit(req: Pick<CleanVerifyRequest, 'workDir' | 'exec'>, cloneDir: string): CloneGit {
   const env = hostGitEnv(req.workDir, req.workDir);
   const exec = req.exec ?? execCmd;
   const raw = (...args: string[]) => mustExec(exec, 'git', [...HARDENING.flatMap((c) => ['-c', c]), '-C', cloneDir, ...args], { env });
-  return Object.assign(async (...args: string[]) => (await raw(...args)).trim(), { raw });
+  const status = (...args: string[]) => exec('git', [...HARDENING.flatMap((c) => ['-c', c]), '-C', cloneDir, ...args], { env });
+  return Object.assign(async (...args: string[]) => (await raw(...args)).trim(), { raw, status });
 }

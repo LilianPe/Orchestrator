@@ -132,13 +132,20 @@ describe('runCleanVerify', () => {
     expect(sandboxes.ran).toHaveLength(2);
   });
 
-  it('extracts in a sandbox of its own, the git dir read-only, at network none', async () => {
-    const { sandboxes, req } = setup({ gitDir: '/repo/.git' });
+  it('extracts in a sandbox of its own, at network none, with only the place for the bundle beside the worktree', async () => {
+    const { sandboxes, req } = setup();
     await runCleanVerify(req).catch(() => {});
     const box = sandboxes.created.find((c) => c.runId === 'r1-bundle')!;
     expect(box).toMatchObject({ network: 'none' });
-    expect(box.mounts).toContainEqual({ host: '/repo/.git', target: '/repo/.git', readOnly: true });
-    expect(box.mounts).toContainEqual(expect.objectContaining({ target: BUNDLE_TARGET, readOnly: false }));
+    expect(box.mounts).toEqual([expect.objectContaining({ target: BUNDLE_TARGET, readOnly: false })]);
+  });
+
+  // Read once by process from the repository's config, which no agent writes any more: still, a URL of the agent's runs nothing.
+  it('a forge at an ext:: URL runs nothing: the fetch reads no config of the repository that would allow it', async () => {
+    const witness = join(mkdtempSync(join(tmpdir(), 'factory-ext-')), 'witness');
+    const { req } = setup({ originUrl: `ext::sh -c touch% ${witness.replaceAll('\\', '/')}` });
+    await expect(runCleanVerify(req)).rejects.toThrow(/branche de base non lue/);
+    expect(existsSync(witness)).toBe(false);
   });
 
   it('runs the setup in its own sandbox, destroyed before the one of the commands opens, with no secret', async () => {
@@ -455,4 +462,22 @@ describe('runCleanVerify', () => {
     expect(argv[2]).toMatch(/timeout -k \d+ \d+ bash -lc "\$1" 2>&1 \| tail -c \d+; exit "\$\{PIPESTATUS\[0\]\}"/);
     expect(argv.at(-1)).toBe('npm test');
   });
+
+describe('a failure of its own git (ORC-125)', () => {
+  it('is no verdict: merge-base failing is not a branch without history, whose every file would be judged a change', async () => {
+    const failing: Exec = async (cmd, args, opts) => (args.includes('merge-base') ? { stdout: '', stderr: 'fatal: out of memory', code: 128 } : execCmd(cmd, args, opts));
+    const { req } = setup({ exec: failing });
+    await expect(runCleanVerify(req)).rejects.toThrow('out of memory');
+  });
+
+  it('a branch that shares no commit with the base stays what it was: all its files are changes', async () => {
+    const { req, repo } = setup();
+    git(repo, 'checkout', '-q', '--orphan', 'other');
+    git(repo, 'branch', '-q', '-D', BRANCH);
+    git(repo, 'checkout', '-q', '-b', BRANCH);
+    git(repo, 'commit', '-q', '-m', 'orphan');
+    expect((await runCleanVerify(req)).ok).toBe(true);
+  });
+});
+
 });

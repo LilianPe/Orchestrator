@@ -1,12 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync, lstatSync, mkdirSync } from 'node:fs';
+import { lstatSync, mkdirSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { execCmd, mustExec, type Exec, type ExecResult } from '../adapters/exec.js';
+import { execCmd, mustExec, type Exec } from '../adapters/exec.js';
 import { NoCommitsBetween, type ForgeWriter } from '../adapters/forge/types.js';
 import { PublishRefused, type Publication, type Publisher, type PublishRequest } from '../adapters/publisher/types.js';
-import type { SandboxMount, SandboxProvider } from '../adapters/sandbox/types.js';
-import { BASE, boxOpener, checkClone, cloneGit, EMPTY_TREE, scanSecrets, withDeadline, within } from '../core/clean-verify.js';
+import { WORKSPACE_TARGET, type SandboxMount, type SandboxProvider } from '../adapters/sandbox/types.js';
+import { BASE, boxOpener, checkClone, cloneGit, forkPoint, isYes, scanSecrets, withDeadline, within } from '../core/clean-verify.js';
 import { BUNDLE_TARGET, extractWork, HARDENING, hostGitEnv } from './extract.js';
 
 /** Git and a scan, no command of the repository: a stop waits behind the publication, so it is not given `verify`'s time. */
@@ -33,7 +33,7 @@ export interface GitPublisherDeps {
  *
  * 1. on the forge, with the App's token, the base and the branch's head. A head already at the commit needs no push: the
  *    replay of a publication cut before its PR goes straight to the PR, and that is how it never pushes twice;
- * 2. in a sandbox of its own, without network, `git bundle` of the branch, whose head must be the commit `verify` found
+ * 2. in a sandbox of its own, without network, its `.git` read-only, `git bundle` of the branch in the agent's own repository, whose head must be the commit `verify` found
  *    green, then `git bundle verify` and a fresh clone on the host, without a checkout (`extractWork`);
  * 3. the base and the branch's head fetched into that clone, from the forge;
  * 4. the blocking check of the diff from the base: `checkClone` on the clone's objects, then gitleaks in a sandbox at `none`.
@@ -80,7 +80,7 @@ export class GitPublisher implements Publisher {
     const cloneDir = join(workDir, 'clone');
     mkdirSync(bundleDir);
 
-    await inBox('publish', req.worktree, [{ host: bundleDir, target: BUNDLE_TARGET, readOnly: false }, ...repositoryGitDir(req)], async (sandboxId) => {
+    await inBox('publish', req.worktree, [{ host: bundleDir, target: BUNDLE_TARGET, readOnly: false }, agentGitDir(req.worktree)], async (sandboxId) => {
       const { sha } = await extractWork({ sandboxes, sandboxId, branch: req.branch, bundleDir, cloneDir, exec: this.exec });
       if (sha !== req.sha) throw new PublishRefused('head', `la tête de la branche (${sha.slice(0, 12)}) n'est pas le commit vérifié (${req.sha.slice(0, 12)}).`);
     });
@@ -91,11 +91,10 @@ export class GitPublisher implements Publisher {
     if (fetched.code !== 0) throw new Error(`git fetch : ${fetched.stderr.trim() || `code ${fetched.code}`}`);
     // The head fetched is the one the lease names: read after the fetch, it is the one compared with the work.
     const remote = known ? await git('rev-parse', REMOTE_HEAD) : undefined;
-    if (remote && !isYes(await inClone(['merge-base', '--is-ancestor', remote, req.sha]))) {
+    if (remote && !isYes(await git.status('merge-base', '--is-ancestor', remote, req.sha))) {
       throw new PublishRefused('moved', `la branche ${req.branch} porte sur la forge un commit que ce travail n'a pas (${remote.slice(0, 12)}) : un push humain, ou un historique réécrit. Rien n'est écrasé : intégrez-le dans la branche du ticket.`);
     }
-    const common = await inClone(['merge-base', BASE, req.sha]);
-    const from = isYes(common) ? common.stdout.trim() : EMPTY_TREE;
+    const from = await forkPoint(git, req.sha);
     if (from === req.sha) throw nothingToPublish(req.branch);
 
     const failures = await checkClone(git, from, req.sha, undefined);
@@ -118,21 +117,15 @@ export class GitPublisher implements Publisher {
 
 const nothingToPublish = (branch: string) => new PublishRefused('empty', `la branche ${branch} n'a rien de plus que la branche de base.`);
 
-/** Git's own answers of `merge-base`, 0 and 1, and no other code: a failure of git is retried, never taken for a verdict on the branch. */
-function isYes(r: ExecResult): boolean {
-  if (r.code > 1) throw new Error(`git merge-base : ${r.stderr.trim() || `code ${r.code}`}`);
-  return r.code === 0;
-}
-
 /**
- * Where a linked worktree's `.git` file points, read-only for the bundle's git; nothing when the git dir is in the worktree. A path of the
- * project's: no git runs, and nothing the agent can write is read but that `.git` is a file (ORC-317). What it could point elsewhere is
- * only ever read in the sandbox, and its head has to be the verified commit. Goes away with the worktrees that hold their own git dir.
+ * The agent's own git dir (ORC-317), read-only over its worktree: nothing here writes, and the factory's repository is mounted nowhere. Its worktree can hold
+ * anything by now, so anything but a real directory is refused: a link would have the engine mount what it points at, and a `.git` file send git to another repository.
+ * Only its type is read on the host.
  */
-function repositoryGitDir(req: Pick<PublishRequest, 'repoPath' | 'worktree'>): SandboxMount[] {
-  if (lstatSync(join(req.worktree, '.git')).isDirectory()) return [];
-  const gitDir = existsSync(join(req.repoPath, '.git')) ? join(req.repoPath, '.git') : req.repoPath;
-  return [{ host: gitDir, target: gitDir, readOnly: true }];
+function agentGitDir(worktree: string): SandboxMount {
+  const host = join(worktree, '.git');
+  if (!lstatSync(host, { throwIfNoEntry: false })?.isDirectory()) throw new PublishRefused('head', "le dossier git de l'agent n'est plus un dossier : son dépôt n'est plus celui que l'usine a créé.");
+  return { host, target: `${WORKSPACE_TARGET}/.git`, readOnly: true };
 }
 
 /** The default branch, by its name, and the branch's head, on the forge: `ls-remote` from a directory of ours, no repository read. */
