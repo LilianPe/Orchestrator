@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { Store } from '../../src/store/types.js';
 import { createHarness } from '../helpers/harness.js';
 
 /**
@@ -126,22 +127,23 @@ describe('Done by a human, merge by the factory (ORC-148)', () => {
     let failures = 3;
     const h = await inHumanReview({
       effectRetry: { attempts: 6, baseMs: 1, capMs: 1 },
-      wrapStore: (store) => {
-        const append = store.appendInbox.bind(store);
-        store.appendInbox = async (e) => {
-          if (e.id.startsWith('merge-refused:') && failures > 0) {
-            failures--;
-            throw new Error('inbox unavailable');
-          }
-          return append(e);
-        };
-        return store;
-      },
+      // A new object, not an assignment: the Postgres harness's store is a proxy, which would ignore one.
+      wrapStore: (inner) =>
+        Object.assign(Object.create(inner) as Store, {
+          appendInbox: async (e: Parameters<Store['appendInbox']>[0]) => {
+            if (e.id.startsWith('merge-refused:') && failures > 0) {
+              failures--;
+              throw new Error('inbox unavailable');
+            }
+            return inner.appendInbox(e);
+          },
+        }),
     });
     h.forge.setPr(BRANCH, { ...PR, state: 'OPEN', headSha: 'abc123', checks: 'pending', failedChecks: [] });
     await h.send('status.changed', { from: 'human_review', to: 'done' }, 'REL-1', { actor: 'user-lilian' });
     h.forge.setPr(BRANCH, { ...PR, state: 'OPEN', headSha: 'abc123', checks: 'pass', failedChecks: [] });
     for (let i = 0; i < 6; i++) await h.advance(10);
+    expect(failures).toBe(0);
     expect(h.forge.merges).toEqual([]);
     expect(comments(h).at(-1)).toMatch(/checks du commit relu ne sont pas verts \(pending\)/);
     expect(lastMove(h)).toBe('Human Review');
