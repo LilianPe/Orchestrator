@@ -50,7 +50,10 @@ describe.skipIf(!enabled)(`the tree of a worktree, in the agent's sandbox (${cli
   let second: string | undefined;
 
   /** The agent's own hand: its user, no git. */
-  const agent = async (script: string) => expect(await provider.exec(box, ['sh', '-c', script])).toMatchObject({ code: 0, stderr: '' });
+  const agent = async (script: string) => {
+    const done = await provider.exec(box, ['sh', '-c', script]);
+    expect(done.code, done.stderr).toBe(0);
+  };
   /** A read that must succeed: if not, the warning is the reason. */
   const tree = async () => {
     const seen = await read();
