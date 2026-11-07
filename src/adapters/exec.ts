@@ -15,7 +15,11 @@ export interface ExecResult {
 export interface ExecOpts {
   cwd?: string;
   env?: Record<string, string>;
-  /** Past it, the command and what it started (its process group: git's ssh) are killed, and the result's code is `TIMED_OUT`. */
+  /**
+   * Past it, the command and what stayed in its process group (git's ssh) are killed (POSIX; on Windows, the command
+   * alone). The code is `TIMED_OUT` only if the command itself was still running then. A process that left the group
+   * and holds the output open can still hold the promise: a caller that must not wait bounds it too (`within`).
+   */
   timeoutMs?: number;
   /** Past this many bytes of stdout, the command is killed, its output dropped, and the result says `overflow`. */
   maxStdout?: number;
@@ -44,11 +48,14 @@ export const execCmd: Exec = (cmd, args, opts = {}) =>
         // Already gone.
       }
     };
+    // Set when the command itself ends, its pipes perhaps still held by what it left behind.
+    let exited: number | undefined;
+    child.on('exit', (code) => (exited = code ?? 1));
     const timer =
       opts.timeoutMs === undefined
         ? undefined
         : setTimeout(() => {
-            timedOut = true;
+            timedOut = exited === undefined;
             kill();
           }, opts.timeoutMs);
     child.stdout.on('data', (d: Buffer) => {
@@ -69,7 +76,7 @@ export const execCmd: Exec = (cmd, args, opts = {}) =>
     });
     child.on('close', (code) => {
       clearTimeout(timer);
-      resolve({ stdout: Buffer.concat(out).toString('utf8'), stderr, code: timedOut ? TIMED_OUT : (code ?? 1), ...(overflow ? { overflow: true as const } : {}) });
+      resolve({ stdout: Buffer.concat(out).toString('utf8'), stderr, code: timedOut ? TIMED_OUT : (exited ?? code ?? 1), ...(overflow ? { overflow: true as const } : {}) });
     });
   });
 

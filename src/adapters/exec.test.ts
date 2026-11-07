@@ -23,6 +23,14 @@ describe.skipIf(process.platform === 'win32')('execCmd with a deadline', () => {
     expect(alive(grandchild)).toBe(false);
   });
 
+  it('gives the code of a command that ended before the deadline, even when what it left holds its output past it', async () => {
+    const started = Date.now();
+    // It exits at once; its background child keeps the pipe open until the deadline kills the group.
+    const r = await execCmd('sh', ['-c', 'sleep 30 & exit 3'], { timeoutMs: 300 });
+    expect(r.code).toBe(3);
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
   it('leaves a command that ends in time as it is', async () => {
     expect(await execCmd('sh', ['-c', 'echo ok'], { timeoutMs: 5_000 })).toEqual({ stdout: 'ok\n', stderr: '', code: 0 });
   });

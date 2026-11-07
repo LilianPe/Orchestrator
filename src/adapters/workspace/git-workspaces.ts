@@ -2,7 +2,9 @@ import { existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, renameSync
 import { rm } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
 import { branchName } from '../../core/naming.js';
-import { execCmd, HARDENING, mustExec, type Exec } from '../exec.js';
+import { within } from '../../core/clean-verify.js';
+import { STALLED } from '../../publish/publish.js';
+import { execCmd, execFailure, HARDENING, mustExec, TIMED_OUT, type Exec } from '../exec.js';
 import { readCapped } from '../read-capped.js';
 import type { StepDiff, Workspace, WorkspaceManager, WorkspaceRequest } from './types.js';
 
@@ -84,6 +86,27 @@ export async function originHead(exec: Exec, repo: string): Promise<string> {
 export async function originHeadOf(exec: Exec, repo: string): Promise<{ name: string; set: boolean }> {
   const r = await exec('git', ['-C', repo, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD']);
   return r.code === 0 ? { name: r.stdout.trim(), set: true } : { name: 'origin/main', set: false };
+}
+
+/** A launch waits this long for the forge, at most: past it, it is refused (ORC-209 C). */
+export const FETCH_DEADLINE_MS = 2 * 60_000;
+/** What the launch still gives git, killed at its deadline, to end: past it, it stops waiting for a process that left git's group. */
+const FETCH_GRACE_MS = 5_000;
+
+/**
+ * `git fetch origin` in `repo`, never longer than `deadlineMs` and never a prompt for a credential: past the deadline,
+ * git and what stayed in its process group (its ssh) are killed, and the launch stops waiting a few seconds later
+ * whatever still holds git's output. A failure's message reaches the ticket (Linear): it names neither the server's
+ * path nor the command, which go to `log`.
+ */
+export async function fetchOrigin(exec: Exec, repo: string, o: { deadlineMs?: number; log?: (message: string) => void } = {}): Promise<void> {
+  const deadlineMs = o.deadlineMs ?? FETCH_DEADLINE_MS;
+  const silent = `the forge no longer responds after ${deadlineMs / 1000} s`;
+  const args = ['-C', repo, 'fetch', '--quiet', 'origin'];
+  const r = await within(exec('git', args, { env: { GIT_TERMINAL_PROMPT: '0', ...STALLED }, timeoutMs: deadlineMs }), deadlineMs + FETCH_GRACE_MS, silent);
+  if (r.code === 0) return;
+  o.log?.(execFailure('git', args, r).message);
+  throw new Error(r.code === TIMED_OUT ? silent : `the forge could not be read (git fetch, code ${r.code})`);
 }
 
 export class GitWorkspaces implements WorkspaceManager {

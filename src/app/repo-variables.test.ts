@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -77,6 +77,29 @@ describe('makeRepoConfig (ORC-209 C)', () => {
     // No prompt for a credential, a stalled transfer ends git by itself, and the deadline kills it with its ssh.
     expect(calls[0]!.opts).toMatchObject({ env: { GIT_TERMINAL_PROMPT: '0', GIT_HTTP_LOW_SPEED_LIMIT: '1000' }, timeoutMs: 20 });
     expect(calls.some((c) => c.args.includes('ls-tree'))).toBe(false);
+  });
+
+  it.skipIf(process.platform !== 'linux')('bounds the launch end to end, even when what git started left its process group and holds its output', { timeout: 30_000 }, async () => {
+    const root = mkdtempSync(join(tmpdir(), 'factory-repo-config-'));
+    const pidFile = join(root, 'transport.pid');
+    try {
+      const { run, repo } = forgeAndClone(root, 'network: { level: none }\n');
+      // A transport that never answers, in a session of its own: the deadline's kill of git's group misses it, and it keeps git's stderr.
+      const stall = join(root, 'stall.sh');
+      writeFileSync(stall, `#!/bin/sh\necho $$ > ${pidFile}\nexec setsid sleep 60\n`, { mode: 0o755 });
+      run(repo, 'config', 'protocol.ext.allow', 'always');
+      run(repo, 'remote', 'set-url', 'origin', `ext::${stall}`);
+      const started = Date.now();
+      await expect(makeRepoConfig({ fetchDeadlineMs: 300, log: () => {} })({ repoPath: repo })).rejects.toThrow(/^the forge no longer responds after 0.3 s$/);
+      expect(Date.now() - started).toBeLessThan(15_000);
+    } finally {
+      try {
+        process.kill(Number(readFileSync(pidFile, 'utf8')), 'SIGKILL');
+      } catch {
+        // Not started, or already gone.
+      }
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('gives the socle when the default branch has no file', async () => {
