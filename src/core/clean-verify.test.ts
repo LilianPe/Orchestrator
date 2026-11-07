@@ -41,7 +41,7 @@ class LocalSandboxes extends FakeSandboxProvider {
     const args = argv.map((a) => (bundle ? a.replace(BUNDLE_TARGET, bundle) : a));
     if (args.includes('gitleaks')) return this.scan?.(args) ?? { stdout: '[]', stderr: '', code: 0 };
     // What a test sets as a command comes as the wrapper's last word; what the factory runs itself comes as it is.
-    const wrapped = args[0] === 'bash' && args[1] === '-c';
+    const wrapped = args[0] === 'bash' && args[1] === '--norc' && args[2] === '-c';
     const shellCommand = wrapped ? args.at(-1)! : args[0] === 'timeout' ? args.at(-1)! : undefined;
     if (shellCommand) {
       if (this.hang?.(shellCommand)) return new Promise(() => {});
@@ -478,8 +478,8 @@ describe('runCleanVerify', () => {
 
   it('caps each command by a kill, and its output by the tail, keeping its exit code', () => {
     const argv = verifyCommand('npm test');
-    expect(argv.slice(0, 2)).toEqual(['bash', '-c']);
-    expect(argv[2]).toMatch(/timeout -k \d+ \d+ bash -lc "\$1" 2>&1 \| tail -c \d+; exit "\$\{PIPESTATUS\[0\]\}"/);
+    expect(argv.slice(0, 3)).toEqual(['bash', '--norc', '-c']);
+    expect(argv[3]).toMatch(/timeout -k \d+ \d+ bash --norc -c "\$1" 2>&1 \| tail -c \d+; exit "\$\{PIPESTATUS\[0\]\}"/);
     expect(argv.at(-1)).toBe('npm test');
   });
 

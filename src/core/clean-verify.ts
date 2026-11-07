@@ -56,11 +56,12 @@ export type CleanVerifier = (req: CleanVerifyRequest) => Promise<CleanVerifyResu
 
 /**
  * A verification command as it runs in its sandbox: under its cap, killed if it ignores the cap, with its output's
- * tail alone reaching the daemon. A process it left holding the pipe is the deadline's: `exec` would not return.
+ * tail alone reaching the daemon, by `bash --norc -c`: no profile (ORC-324, see `runOne`). A process it left holding
+ * the pipe is the deadline's: `exec` would not return.
  */
 export function verifyCommand(command: string): string[] {
-  const script = `timeout -k ${KILL_AFTER_S} ${VERIFY_TIMEOUT_MS / 1000} bash -lc "$1" 2>&1 | tail -c ${OUTPUT_TAIL_BYTES}; exit "\${PIPESTATUS[0]}"`;
-  return ['bash', '-c', script, 'verify', command];
+  const script = `timeout -k ${KILL_AFTER_S} ${VERIFY_TIMEOUT_MS / 1000} bash --norc -c "$1" 2>&1 | tail -c ${OUTPUT_TAIL_BYTES}; exit "\${PIPESTATUS[0]}"`;
+  return ['bash', '--norc', '-c', script, 'verify', command];
 }
 
 /** `work`, or a rejection past `ms`: what it left running is `onExpiry`'s, and `recover()`'s. It never waits for an engine it gave up on. */

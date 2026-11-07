@@ -114,7 +114,7 @@ Le **budget journalier** de toute l'instance ne se règle pas ici, mais dans `~/
 ### `workspace`
 | Clé | Type | Défaut | Effet |
 |---|---|---|---|
-| `setup` | liste de commandes | `[]` | Exécutées (via `bash -lc`, dans l'ordre) à la **création** d'un worktree, pas aux runs suivants qui le réutilisent. Si l'une échoue, le worktree est supprimé et le ticket bloqué (« Erreur au lancement : Le setup du worktree a échoué : <commande> »). |
+| `setup` | liste de commandes | `[]` | Exécutées (via `bash -c`, dans l'ordre) à la **création** d'un worktree, pas aux runs suivants qui le réutilisent. Si l'une échoue, le worktree est supprimé et le ticket bloqué (« Erreur au lancement : Le setup du worktree a échoué : <commande> »). |
 | `ports.base` | entier > 0 | 4200 | Premier port attribué aux runs de la file `dev` (`PORT` dans l'environnement du run). |
 
 ### `on`
@@ -148,7 +148,7 @@ Les valeurs de `input` :
 - `thread` : le texte du message qui a déclenché le run (mention ou commande) (titre « Message »). Vide si l'événement n'est pas un message.
 - `verify_failures` : utilisé par Relais lui-même quand il relance un job après des vérifications en échec ; inutile à configurer.
 
-Les vérifications (`verify`) : avec les sandboxes (`FACTORY_CONTAINER_CLI`), l'usine fige le dernier commit de la branche, le sort par `git bundle` vers un clone neuf, et lance chaque commande dans un conteneur neuf à réseau `none` (`bash -lc`, 15 minutes maximum par commande), **toutes** même si l'une échoue. Ce qui n'est pas commité n'est pas vérifié. Sans sandbox, voir `FACTORY_ALLOW_HOST_VERIFY` dans [`configuration.md`](configuration.md#variables-denvironnement). Un même commit trouvé vert n'est pas revérifié. S'y ajoutent, bloquants, `factory/chemins-interdits`, `factory/secrets` (gitleaks, sur les commits ajoutés à la branche de base) et `factory/tests-gelés`.
+Les vérifications (`verify`) : avec les sandboxes (`FACTORY_CONTAINER_CLI`), l'usine fige le dernier commit de la branche, le sort par `git bundle` vers un clone neuf, et lance chaque commande dans un conteneur neuf à réseau `none` (`bash -c`, 15 minutes maximum par commande), **toutes** même si l'une échoue. Ce qui n'est pas commité n'est pas vérifié. Sans sandbox, voir `FACTORY_ALLOW_HOST_VERIFY` dans [`configuration.md`](configuration.md#variables-denvironnement). Un même commit trouvé vert n'est pas revérifié. S'y ajoutent, bloquants, `factory/chemins-interdits`, `factory/secrets` (gitleaks, sur les commits ajoutés à la branche de base) et `factory/tests-gelés`.
 - Toutes passent : `on_success` s'applique.
 - Une échoue et il reste des tentatives : Relais relance **le même job** en reprenant la session, avec la sortie des commandes en échec, coupée à son début, sa fin et ses lignes d'erreur (8 000 caractères au plus).
 - Après `limits.verify_attempts` passes en échec : le ticket est bloqué et Relais poste la liste des commandes en échec dans la session.

@@ -11,7 +11,7 @@ Cette page couvre l'installation de Relais sur une machine (poste de dev ou serv
 | git | récent (worktrees) | Un worktree git par ticket. |
 | GitHub CLI `gh` | **2.50 ou plus**, connecté (`gh auth login`) | Sans GitHub App, Relais lit par `gh pr …`, `gh api graphql` ; pousser et ouvrir les PR demande la GitHub App. Relais lit les checks d'une PR par `gh pr checks --json`, apparu en 2.50 : avant, il ne peut lire aucune PR ouverte (le `gh` des dépôts Ubuntu 24.04 est un 2.45, prenez celui de [cli.github.com](https://github.com/cli/cli/blob/trunk/docs/install_linux.md)). Voir [`github.md`](github.md). |
 | Claude Code CLI `claude` | connecté (abonnement ou `ANTHROPIC_API_KEY`) | Chaque run est un `claude -p … --output-format stream-json`. Il doit être dans le `PATH` du démon. |
-| bash | — | Les commandes `workspace.setup` et `verify` sont lancées via `bash -lc`. |
+| bash | — | Les commandes `workspace.setup` et `verify` sont lancées via `bash -c`, sans profil de connexion : le `PATH` est celui du démon (ou de l'image du sandbox). Un outil que seul votre profil met sur le `PATH` (nvm, asdf, volta, `~/.local/bin`) doit être sur celui du démon : `Environment=PATH=…` dans l'unité systemd, par exemple. |
 
 Côté services : un espace Linear dont vous êtes admin (pour créer l'application OAuth, voir [`linear.md`](linear.md)) et un dépôt GitHub cloné localement.
 

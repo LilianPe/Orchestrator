@@ -1,9 +1,11 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
-import { runVerify } from './verify.js';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
+import { systemEnv } from '../adapters/exec.js';
+import { verifyCommand } from './clean-verify.js';
+import { cappedCommand, runVerify } from './verify.js';
 
 function repo(): string {
   const dir = mkdtempSync(join(tmpdir(), 'factory-verify-'));
@@ -28,8 +30,37 @@ describe('runVerify', () => {
     ]);
   });
 
-  // Not on Windows: the output of its `bash` does not come back here, as for the test above.
-  it.skipIf(process.platform === 'win32')('gives its commands no credential of the daemon: they run what the agent wrote (ORC-211)', async () => {
+  describe('loads no login profile: what the machine prints there is not the command output (ORC-324)', () => {
+    function home(): string {
+      const dir = mkdtempSync(join(tmpdir(), 'factory-home-'));
+      for (const file of ['.bash_profile', '.profile', '.bashrc', '.bash_logout']) writeFileSync(join(dir, file), `printf 'from ${file}\\n'; printf 'err ${file}\\n' >&2\n`);
+      return dir;
+    }
+
+    it('on the host', async () => {
+      vi.stubEnv('HOME', home());
+      onTestFinished(() => {
+        vi.unstubAllEnvs();
+      });
+      // Outside git: the failure has no fingerprint to take, of a whole repository.
+      const res = await runVerify(mkdtempSync(join(tmpdir(), 'factory-nogit-')), ['echo boom >&2; exit 3']);
+      expect(res.failures[0]!.output).toBe('boom\n');
+    });
+
+    // GNU `timeout`, as in the images. On the host: none on macOS, and Windows' own `timeout.exe` first on a PATH out of Git Bash.
+    const gnuTimeout = spawnSync('timeout', ['--version'], { encoding: 'utf8' }).stdout?.includes('coreutils') ?? false;
+    it.skipIf(!gnuTimeout).each([
+      ['setup in a sandbox', cappedCommand],
+      ['verify in a sandbox', verifyCommand],
+    ])('%s', (_, argv) => {
+      const [cmd, ...args] = argv('echo boom >&2; exit 3');
+      const r = spawnSync(cmd!, args, { env: { ...systemEnv(process.env), HOME: home() }, encoding: 'utf8' });
+      expect(r.status).toBe(3);
+      expect(r.stdout + r.stderr).toBe('boom\n');
+    });
+  });
+
+  it('gives its commands no credential of the daemon: they run what the agent wrote (ORC-211)', async () => {
     vi.stubEnv('ORG_REGISTRY_TOKEN', 'repo-secret');
     vi.stubEnv('CLAUDE_CODE_OAUTH_TOKEN', 'claude-token');
     vi.stubEnv('GH_TOKEN', 'gh-token');
@@ -40,7 +71,7 @@ describe('runVerify', () => {
     expect(res.failures[0]!.output).toContain('[|C]');
   });
 
-  it.skipIf(process.platform === 'win32')('gives its commands the variables the repository declares', async () => {
+  it('gives its commands the variables the repository declares', async () => {
     const res = await runVerify(process.cwd(), ['echo "[$API_URL]"; exit 1'], undefined, { API_URL: 'https://api' });
     expect(res.failures[0]!.output).toContain('[https://api]');
   });

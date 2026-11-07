@@ -61,7 +61,7 @@ Ce ne sont pas des `git worktree` du dépôt : chacun est un dépôt à lui, ave
 Cycle de vie d'un worktree de ticket :
 
 1. **Création** au premier run : `git fetch origin`, puis un dépôt neuf sur la branche du ticket (réutilise une branche distante, à défaut locale, du même nom, sinon la crée depuis `origin/<branche par défaut>`). `.claude/` y est masqué dès ce moment, sauf `.claude/CLAUDE.md`, y compris pour le `setup`.
-2. **Setup** : les commandes `workspace.setup` (ex. `npm ci`) sont lancées une fois, dans l'ordre, via `bash -lc`, dans le conteneur de la tentative quand `FACTORY_CONTAINER_CLI` est défini, sur l'hôte sinon. Si l'une échoue, le worktree est supprimé et le ticket bloqué (« Erreur au lancement : Le setup du worktree a échoué : <commande> ») ; le run suivant recommence de zéro.
+2. **Setup** : les commandes `workspace.setup` (ex. `npm ci`) sont lancées une fois, dans l'ordre, via `bash -c`, dans le conteneur de la tentative quand `FACTORY_CONTAINER_CLI` est défini, sur l'hôte sinon. Si l'une échoue, le worktree est supprimé et le ticket bloqué (« Erreur au lancement : Le setup du worktree a échoué : <commande> ») ; le run suivant recommence de zéro.
 3. **Réutilisation** : les runs suivants du ticket (retours, CI, review) reprennent le même worktree, sans setup.
 4. **Nettoyage** : au merge de la PR (règle `pr.merged` → `do: cleanup`), le dossier est supprimé, son `.git` avec : un commit que l'agent n'avait pas poussé disparaît.
 
