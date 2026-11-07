@@ -1,3 +1,4 @@
+import type { RepoConfig } from '../config/repo-config.js';
 import type { AttemptLabels } from '../core/attempt-labels.js';
 import type { DeadLetter, RepairAction } from '../core/dead-letter.js';
 import type { OutboxEffect } from '../core/decision.js';
@@ -63,6 +64,11 @@ export interface RunRecord {
   leaseUntil?: number;
   /** What the attempt was given to read (ORC-220): a relaunch of its step reads the same, the feedback it consumed included. */
   input?: { kind: InputKind; text: string };
+  /**
+   * `.factory/config.yml` as its launch read it (ORC-209 C): what checks the attempt afterwards (its red check,
+   * `verify` on the host) reads this one, not what the default branch holds by then. Absent on older records.
+   */
+  repoConfig?: RepoConfig;
 }
 
 /**

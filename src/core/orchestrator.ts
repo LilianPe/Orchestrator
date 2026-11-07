@@ -768,8 +768,9 @@ export class Orchestrator {
   }
 
   /**
-   * What the runner gets of the repository (ORC-211), from `config` when the caller read it (the launch, `verify`),
-   * else read here without a fetch, on what the launch fetched: none when it cannot be read, the caller goes on.
+   * What the runner gets of the repository (ORC-211), from `config` when the caller has it (the launch's read, kept on
+   * the run; `verify`'s), else read here without a fetch, for a run recorded before ORC-209 C: none when it cannot be
+   * read, the caller goes on.
    */
   private async repoVariablesOf(project: ProjectRuntime, config?: RepoConfig): Promise<RepoVariables> {
     if (!this.d.repoVariables) return NO_REPO_VARIABLES;
@@ -800,7 +801,7 @@ export class Orchestrator {
       if (!sandboxes) {
         if (!this.d.hostChecks) throw new Error(HOST_CHECKS_OFF);
         uncommitted = await this.d.workspaces.uncommitted(run.cwd);
-        const { env } = await this.repoVariablesOf(project);
+        const { env } = await this.repoVariablesOf(project, run.repoConfig);
         runTests = async (cmd) => {
           const res = await this.d.verify(run.cwd, [cmd], undefined, env);
           return res.ok ? { exitCode: 0, output: '' } : { exitCode: res.failures[0]!.exitCode, output: res.failures[0]!.output };
@@ -809,7 +810,7 @@ export class Orchestrator {
         // Not the ticket session: an empty per-run `~/.claude`, as any run that does not resume it.
         const box = (sandbox = await this.openSandbox(sandboxes, project, run.ticketId, { path: run.cwd }, redRunId, false, { level: 'none', allow: [] }));
         // The tests must fail on the missing behaviour, not on a variable the repository declares (ORC-211).
-        const { env } = await this.repoVariablesOf(project);
+        const { env } = await this.repoVariablesOf(project, run.repoConfig);
         const status = await sandboxes.exec(box.id, ['git', 'status', '--porcelain', '-z', '--untracked-files=all']);
         if (status.code !== 0) throw new Error(`git status : ${status.stderr.trim()}`);
         uncommitted = parseStatus(status.stdout);
@@ -845,7 +846,7 @@ export class Orchestrator {
       // Read before the commands: what they would commit is not what they checked.
       const sha = await this.d.workspaces.head(run.cwd);
       if (sha && sha === green) return { ok: true, failures: [], sha };
-      const verified = job.verify.length > 0 ? await this.d.verify(run.cwd, job.verify, undefined, (await this.repoVariablesOf(project)).env) : { ok: true, failures: [] };
+      const verified = job.verify.length > 0 ? await this.d.verify(run.cwd, job.verify, undefined, (await this.repoVariablesOf(project, run.repoConfig)).env) : { ok: true, failures: [] };
       // `factory/tests-gelés` (ORC-131), blocking from the first ticket, on top of the job's commands.
       const frozen = goesThroughFreeze(t, job) ? await this.checkFrozen(project, run.cwd, t.frozenTests!) : [];
       return { ...verified, ok: verified.ok && frozen.length === 0, failures: [...verified.failures, ...frozen], sha };
@@ -1926,6 +1927,7 @@ export class Orchestrator {
         labels,
         sensitivePaths,
         ...(input ? { input } : {}),
+        repoConfig: config,
       };
       // The mark, then the ticket, then the run (`startHandled`, ORC-277): a dev ticket holds its run before
       // the run is written, so recover() finds it whichever write a crash falls after. The feedback stays

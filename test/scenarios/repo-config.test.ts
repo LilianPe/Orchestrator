@@ -68,6 +68,25 @@ describe("the repository's config at the launch", () => {
     expect(h.runner.requests[0]!.env).toMatchObject({ NODE_ENV: 'test' });
   });
 
+  it.each([false, true])('checks a run with the config its launch read, kept on the run: a merge on the default branch meanwhile changes nothing (sandboxed: %s)', async (sandboxed) => {
+    const before = 'env: [NODE_ENV]\n';
+    const merged = 'env: [API_URL]\n';
+    let reads = 0;
+    const repoConfig = async () => parseRepoConfig(reads++ === 0 ? before : merged);
+    const given: string[][] = [];
+    const repoVariables = async (_: unknown, config: RepoConfig): Promise<RepoVariables> => (given.push(config.env), { env: {}, setupSecrets: {}, missing: [] });
+    const h = createHarness({ sandboxed, repoConfig, repoVariables, projectYaml: 'version: 1\non:\n  ticket.delegated:\n    - { when: "state in [todo, dev] && !blocked", run: tests }\njobs:\n  tests:\n    red: { mode: measure }\n' });
+    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Exporter les audits en CSV depuis la liste des audits.' });
+    h.workspaces.heads.set('/tmp/factory-fake/p/REL-1', 'base-sha');
+    h.workspaces.steps.set('/tmp/factory-fake/p/REL-1', { changed: [{ path: 'src/export.test.ts', deleted: false }] });
+    h.checks.failNext('AssertionError: expected 1 to be 2');
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    // The tests step's launch, then its red check on the host: the same config. The dev step's launch reads the merge.
+    expect(given.slice(0, 3)).toEqual([['NODE_ENV'], ['NODE_ENV'], ['API_URL']]);
+    expect(reads).toBe(2);
+    expect((await h.store.getRun(h.runner.requests[0]!.runId))?.repoConfig).toEqual(parseRepoConfig(before));
+  });
+
   it("reads a question's config without a fetch of its own: its trunk was just fetched", async () => {
     const base = onDefaultBranch(BASE);
     const h = createHarness({ sandboxed: true, ...base });
