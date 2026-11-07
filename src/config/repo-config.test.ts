@@ -23,7 +23,7 @@ budgets: { per_ticket_tokens: 2000000 }
 max_diff: { files: 15, lines: 400 }
 feature_flags: { provider: openfeature }
 visual_paths: ["src/components/**", "app/**"]
-network: { level: limited, allow: ["docs.exemple.com"] }
+network: { level: custom, allow: ["docs.exemple.com"] }
 `;
 
 describe('parseRepoConfig (.factory/config.yml, ORC-209)', () => {
@@ -36,7 +36,7 @@ describe('parseRepoConfig (.factory/config.yml, ORC-209)', () => {
       services: ['postgres'],
       sensitivePaths: ['src/auth/**', 'src/billing/**', 'db/migrations/**'],
       maxDiff: { files: 15, lines: 400 },
-      network: { level: 'limited', allow: ['docs.exemple.com'] },
+      network: { level: 'custom', allow: ['docs.exemple.com'] },
       visualPaths: ['src/components/**', 'app/**'],
     });
   });
@@ -135,6 +135,13 @@ describe('parseRepoConfig (.factory/config.yml, ORC-209)', () => {
         'network.allow[2] : « *.com » n’est pas un nom d’hôte ; les jokers et les plages sont refusés',
         'network.allow[3] : « 0.0.0.0/0 » n’est pas un nom d’hôte ; les jokers et les plages sont refusés',
       ]);
+    });
+
+    it('refuses an allow list under a level other than custom: validated, then ignored, it would mislead', () => {
+      expect(violations('network: { level: limited, allow: [docs.exemple.com] }\n')).toEqual(['network.allow : seul le niveau `custom` prend une liste d’hôtes ; ici `limited`']);
+      expect(violations('network: { level: none, allow: [docs.exemple.com] }\n')).toEqual(['network.allow : seul le niveau `custom` prend une liste d’hôtes ; ici `none`']);
+      expect(violations('network: { allow: [docs.exemple.com] }\n')).toEqual(['network.allow : seul le niveau `custom` prend une liste d’hôtes ; ici `limited`']);
+      expect(parseRepoConfig('network: { level: limited, allow: [] }\n').network).toEqual({ level: 'limited', allow: [] });
     });
 
     it('refuses a negation anywhere in a path, extglob included', () => {

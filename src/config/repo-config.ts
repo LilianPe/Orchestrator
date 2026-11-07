@@ -176,5 +176,7 @@ function networkOf(raw: unknown, violations: string[]): RepoConfig['network'] {
     if (!HOST.test(host)) violations.push(`network.allow[${i}] : « ${host} » n’est pas un nom d’hôte ; les jokers et les plages sont refusés`);
   });
   if (allow) network.allow = allow;
+  // Only `custom` opens its hosts (`stepPolicy`): a list under another level would pass validation and open nothing.
+  if (allow?.length && (level === undefined || level === 'none' || level === 'limited')) violations.push(`network.allow : seul le niveau \`custom\` prend une liste d’hôtes ; ici \`${level ?? 'limited'}\``);
   return network;
 }

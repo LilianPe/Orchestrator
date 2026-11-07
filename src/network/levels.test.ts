@@ -12,7 +12,8 @@ describe('stepPolicy', () => {
 
   it('is limited by default, the repository hosts only for custom', () => {
     expect(stepPolicy(repo())).toEqual(limited);
-    expect(stepPolicy(repo('network: { level: limited, allow: [docs.exemple.com] }\n'))).toEqual(limited);
+    // The schema refuses such a list; built by hand, it still opens nothing.
+    expect(stepPolicy({ ...repo(), network: { level: 'limited', allow: ['docs.exemple.com'] } })).toEqual(limited);
     expect(stepPolicy(repo('network: { level: custom, allow: [docs.exemple.com] }\n'))).toEqual({ level: 'limited', allow: ['docs.exemple.com'] });
   });
 
