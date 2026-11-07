@@ -102,7 +102,7 @@ describe('GitHubAppApi', () => {
                 body: {
                   total_count: 3,
                   environments: [
-                    { name: 'protected', protection_rules: [{ type: 'required_reviewers', reviewers: [{ type: 'User' }] }] },
+                    { name: 'protected', protection_rules: [{ type: 'required_reviewers', reviewers: [{ type: 'User', reviewer: { login: 'alice' } }] }] },
                     { name: 'empty-reviewers', protection_rules: [{ type: 'required_reviewers', reviewers: [] }] },
                     { name: 'wait-timer', protection_rules: [{ type: 'wait_timer', wait_timer: 30 }] },
                   ],
@@ -197,6 +197,7 @@ describe('GitHubAppApi', () => {
   it.each([
     ['a reviewer that is null', [null]],
     ['a reviewer without its type', [{}]],
+    ['a reviewer without the user or team behind it', [{ type: 'User', reviewer: null }]],
   ])('rejects, never reads "protected", required reviewers listing %s', async (_case, reviewers) => {
     const body = { total_count: 1, environments: [{ name: 'prod', protection_rules: [{ type: 'required_reviewers', reviewers }] }] };
     await expect(makeApi([tokenRoute(), environmentsRoute(() => body)]).listEnvironments('/repo')).rejects.toThrow(

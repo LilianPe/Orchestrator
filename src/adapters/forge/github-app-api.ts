@@ -53,8 +53,8 @@ const isDirEntry = (v: unknown): v is DirEntryDto =>
 /** A listing of `.github/workflows`: read as "no workflow" when it is not one, `doctor` would skip the CI secret check (ORC-135). */
 const isDirListing = (v: unknown): v is DirEntryDto[] => Array.isArray(v) && v.every(isDirEntry);
 
-/** A reviewer of a rule, as GitHub lists it: an object with its type. Anything else is no proof of a human approval. */
-const isReviewer = (v: unknown): boolean => isRecord(v) && typeof v.type === 'string';
+/** A reviewer of a rule, as GitHub lists it: its type and the user or team behind it. Anything else is no proof of a human approval. */
+const isReviewer = (v: unknown): boolean => isRecord(v) && typeof v.type === 'string' && isRecord(v.reviewer);
 
 /** A rule that requires reviewers carries their list: without it, "no reviewer" would be a guess, and "protected" a worse one. */
 const isProtectionRule = (r: unknown): r is { type: string; reviewers?: unknown[] } =>
