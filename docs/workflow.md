@@ -62,7 +62,7 @@ The checks:
 - `not_started`: no `relais/<ticket-id>-…` branch already exists on `origin`.
 - `has_acceptance_criteria`: the description contains « critères d'acceptation » (or « critère d'acceptation », « criteres… ») or "acceptance criteria", case-insensitively.
 
-If a check fails, the ticket is blocked and Relais replies in the Linear session with the list of problems (« Je ne peux pas commencer ce ticket… Corrigez puis répondez dans ce fil »). `relais plan` shows, for each delegated ticket, whether it would be picked up or not, and why.
+If a check fails, the ticket is blocked and Relais replies in the Linear session with the list of problems (« I cannot start this ticket… Fix it, then reply in this thread »). `relais plan` shows, for each delegated ticket, whether it would be picked up or not, and why.
 
 ### `states`
 Maps Relais's five **logical states** to the exact names of the team's Linear columns (statuses):
@@ -87,18 +87,18 @@ You can redefine only some of them; after merging, all five must have a name. `r
 | `per_run.usd` | number > 0 | 5 | Passed to Claude Code (`--max-budget-usd`); when Claude Code stops on this cap, the result is `limit`. |
 | `verify_attempts` | integer ≥ 0 | 4 (preset) | Number of verification passes before blocking the ticket (see `jobs.*.verify`). `0` and `1` block on the first failure. By default, the bound from the [`factory/default` preset](preset.md): 3 returns to the run, the 4th failure blocks. |
 | `ci_fix_attempts` | integer ≥ 0 | 2 (preset) | Number of runs a red CI (`pr.checks_failed`) can launch before the next red CI blocks the ticket (see below). `0` blocks on the first red CI. |
-| `review_rounds` | integer > 0 | 5 | Given to the review skill in its prompt (« Rounds de review max : 5 »); only for jobs whose skill ends with `:review`. The skill respects this number; Relais does not count it. |
+| `review_rounds` | integer > 0 | 5 | Given to the review skill in its prompt (« Max review rounds: 5 »); only for jobs whose skill ends with `:review`. The skill respects this number; Relais does not count it. |
 
 The defaults of `verify_attempts` and `ci_fix_attempts` come from the [`factory/default` preset](preset.md) (ORC-187); the pack no longer declares them. These two keys remain a possible override until `workflow.yml` is removed (ORC-177).
 
 `per_run` is the default limit for **all** jobs; each job can replace it field by field with its own `limits`.
 
 What happens when a run hits a limit (`limit`) or fails?
-- Job in the `dev` queue: the ticket is **blocked** and Relais says so in the ticket's block comment (« Le run <job> a atteint un plafond (tours, durée ou budget). », or « … a échoué. »). A reply in the ticket relaunches that job, or `dev-feedback` if the block has none (the pack's `session.prompted` rule).
-- Job in the `questions` queue: Relais replies « Je n'ai pas pu terminer (échec ou plafond atteint). ».
+- Job in the `dev` queue: the ticket is **blocked** and Relais says so in the ticket's block comment (« The run <job> reached a limit (turns, duration or budget). », or « … failed. »). A reply in the ticket relaunches that job, or `dev-feedback` if the block has none (the pack's `session.prompted` rule).
+- Job in the `questions` queue: Relais replies « I could not finish (failure or limit reached). ».
 
 What happens when CI stays red (`ci_fix_attempts`)?
-- Each `pr.checks_failed` rule that launches a run (`fix-ci` in the pack) counts that run against the ticket. Once `ci_fix_attempts` runs have been launched, the next red CI does not apply the rule: the ticket is **blocked** and Relais says so in the block comment (« CI toujours en échec après 2 tentatives de fix-ci. », plus the failing checks). Subsequent red CIs relaunch nothing and do not repeat the message.
+- Each `pr.checks_failed` rule that launches a run (`fix-ci` in the pack) counts that run against the ticket. Once `ci_fix_attempts` runs have been launched, the next red CI does not apply the rule: the ticket is **blocked** and Relais says so in the block comment (« CI still failing after 2 attempts of fix-ci. », plus the failing checks). Subsequent red CIs relaunch nothing and do not repeat the message.
 - The count resets to zero when CI turns green (`pr.checks_passed`, which also lifts the block caused by this bound), when another PR is detected for the ticket (`pr.opened` with another number), or when a human relaunches the blocked ticket (reply in the ticket, project label, status change or delegation that launches a run). Neither a new push by the agent (that is the loop itself) nor a `debounce` timer armed before the block resets it.
 - Unlike `verify_attempts`, which counts passes (including the first run), `ci_fix_attempts` counts relaunches: with `2`, two `fix-ci` runs, then a block on the third red CI. This is the unit of invariant I5 ([`decisions/ORC-138.md`](decisions/ORC-138.md), point 8).
 - Provisional bound: the AI review → fix loop is not yet counted by the engine, and so does not share this counter with red CI. The single counter for both loops arrives with ORC-184 and the ORC-187 preset.
@@ -114,7 +114,7 @@ The **daily budget** for the whole instance is not set here, but in `~/.relais/c
 ### `workspace`
 | Key | Type | Default | Effect |
 |---|---|---|---|
-| `setup` | list of commands | `[]` | Run (via `bash -c`, in order) when a worktree is **created**, not on later runs that reuse it. If one fails, the worktree is deleted and the ticket blocked (« Erreur au lancement : Le setup du worktree a échoué : <commande> »). |
+| `setup` | list of commands | `[]` | Run (via `bash -c`, in order) when a worktree is **created**, not on later runs that reuse it. If one fails, the worktree is deleted and the ticket blocked (« Launch error: The worktree setup failed: <command> »). |
 | `ports.base` | integer > 0 | 4200 | First port assigned to runs in the `dev` queue (`PORT` in the run's environment). |
 
 ### `on`
@@ -143,8 +143,8 @@ A job describes **how** to launch a Claude Code run. Fields:
 | `on_success` | `{ move: <logical state>, post: summary \| reply \| synthesis }` | `{}` | After a successful run (and successful checks): moves the ticket and/or posts in the Linear session the message composed from the agent's output (`submit_result`: summary, why, risks, untested, points to review), or failing that the run's last message. Only `summary` (end of the dev work) posts this composed message; `reply` (reply to feedback, to a question) and `synthesis` (review synthesis) post the run's last message, the agent's reply. |
 
 The values of `input`:
-- `feedback`: the Linear thread messages accumulated since the last run, plus the PR's unresolved review comments (title « Retours à traiter »).
-- `ci_failures`: « La CI de la PR est en échec. Lancez `gh pr checks` pour le détail. » (title « CI en échec »).
+- `feedback`: the Linear thread messages accumulated since the last run, plus the PR's unresolved review comments (title « Feedback to address »).
+- `ci_failures`: « The PR's CI is failing. Run `gh pr checks` for the details. » (title « CI failures »).
 - `thread`: the text of the message that triggered the run (mention or command) (title « Message »). Empty if the event is not a message.
 - `verify_failures`: used by Relais itself when it relaunches a job after failed checks; no need to configure it.
 
@@ -187,7 +187,7 @@ Pack jobs:
 | `pr.checks_passed` | The PR's CI passes. | Before the rules, Relais resets the red-CI relaunch count (`limits.ci_fix_attempts`) and lifts the block caused by this bound. |
 | `pr.checks_failed` | The PR's CI fails. | A rule that launches a run is bounded by `limits.ci_fix_attempts`: once the bound is reached, Relais blocks the ticket instead of applying the rule. |
 | `pr.merged` | The PR is merged. | Before the rules, Relais records the PR as merged and stops work on the ticket like a `stop`, without blocking it: the running `dev` run is stopped, waiting or queued runs and `debounce` timers are deleted. After that, no job from the `dev` queue starts on the ticket any more, whatever rule, timer or wait requests it (project label, reply, red CI, waiting or queued job): the refusal is only traced, with no message in Linear. The end of the stopped `dev` run and its checks are ignored. The rules apply after the stop: `done`, cleanup and `learn` do not change, and jobs from the `questions` queue (`learn`, `ask`) still run. The ticket becomes active again when a human changes its status to something other than *Done* (also when Relais could not move it to *Done*), delegates it again, or a new PR (another number) is detected for it. GitHub polling no longer looks at a ticket in *Done* whose PR is merged: a new PR is only seen once the ticket has left *Done*. |
-| `pr.closed` | The PR is closed without merging. | Before the rules, if it is the ticket's known PR, open, and the ticket is not *Done*, Relais cancels work on the ticket: the running `dev` run is stopped, the waiting job and the expected check are deleted, the ticket is blocked (« PR #n fermée sans merge ») with a message in the session. A human relaunches as after a `stop` (reply in the ticket); a new PR (another number) is followed like any PR, and the same PR reopened becomes open again (`pr.opened`). |
+| `pr.closed` | The PR is closed without merging. | Before the rules, if it is the ticket's known PR, open, and the ticket is not *Done*, Relais cancels work on the ticket: the running `dev` run is stopped, the waiting job and the expected check are deleted, the ticket is blocked (« PR #n closed without merge ») with a message in the session. A human relaunches as after a `stop` (reply in the ticket); a new PR (another number) is followed like any PR, and the same PR reopened becomes open again (`pr.opened`). |
 
 The pack uses neither `pr.checks_passed` nor `pr.closed`: you can add your own rules there.
 
@@ -231,7 +231,7 @@ A rule with no condition always matches.
 | `move` | Moves the ticket to this logical state. |
 | `labels` | `{ add: [...], remove: [...] }`: adds / removes Linear labels. |
 | `comment` | Posts this text as a comment on the ticket. |
-| `do` | `stop`: stops the running run, empties waiting runs and blocks the ticket (« Arrêté. Répondez dans ce ticket pour relancer. »). `cleanup`: deletes the ticket's worktree. `propose_delegate`: replies that the ticket must be delegated to Relais for it to develop it. |
+| `do` | `stop`: stops the running run, empties waiting runs and blocks the ticket (« Stopped. Reply on this ticket to relaunch. »). `cleanup`: deletes the ticket's worktree. `propose_delegate`: replies that the ticket must be delegated to Relais for it to develop it. |
 | `run` | Launches the job with this name (must exist in `jobs`). If the ticket was blocked, it is unblocked first. |
 | `debounce` | With `run`: instead of launching right away, schedules the job after this delay. A new matching event before expiry pushes the delay back: messages close together produce a single run. `0s` = immediate. The delay is a timer in the database, written with the decision, specific to each project: a Relais restart does not lose it. |
 

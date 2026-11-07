@@ -40,7 +40,7 @@ Several projects can declare the same `linearTeamKey`. The ticket then designate
 
 Only one project holds a ticket, across both stores (key `(project, ticket)`, ORC-316). While another project of the same team holds it, an event routed on a stale read (a reconciliation pass that read Linear before a signed delegation, for example) is refused if it would create a copy of the ticket, or if it would make the copy that was waiting here hold the ticket. The ticket stays intact, the refusal is logged as an error, and the event is set aside as a dead letter, with no retry and without blocking the ticket. The ticket's session says so (a `thought` activity, which does not change the session's state), and the session the event came from replies if it is a different one; `factory run repair <ticket>` shows it. Ignoring it closes it; replaying it refuses it again as long as the other project holds the ticket. The row of a project that is no longer in the configuration (renamed, for example) refuses nothing: its events create a copy under the new id, and the old row remains, unrelated to it.
 
-`relais plan` lists each ticket once, under its project, and marks « dépôt à préciser » those that name none.
+`relais plan` lists each ticket once, under its project, and marks « repository to specify » those that name none.
 
 ### Removing a project
 
@@ -61,7 +61,7 @@ These are not `git worktree`s of the repository: each is a repository of its own
 Lifecycle of a ticket worktree:
 
 1. **Creation** on the first run: `git fetch origin`, then a new repository on the ticket's branch (reuses a remote branch, failing that a local one, with the same name, otherwise creates it from `origin/<default branch>`). `.claude/` is masked there from that moment, except `.claude/CLAUDE.md`, including for the `setup`.
-2. **Setup**: the `workspace.setup` commands (e.g. `npm ci`) are run once, in order, via `bash -c`, in the attempt's container when `FACTORY_CONTAINER_CLI` is set, on the host otherwise. If one fails, the worktree is deleted and the ticket blocked (« Erreur au lancement : Le setup du worktree a échoué : <commande> »); the next run starts from scratch.
+2. **Setup**: the `workspace.setup` commands (e.g. `npm ci`) are run once, in order, via `bash -c`, in the attempt's container when `FACTORY_CONTAINER_CLI` is set, on the host otherwise. If one fails, the worktree is deleted and the ticket blocked (« Launch error: The worktree setup failed: <command> »); the next run starts from scratch.
 3. **Reuse**: the ticket's following runs (feedback, CI, review) pick up the same worktree, without setup.
 4. **Cleanup**: when the PR is merged (rule `pr.merged` → `do: cleanup`), the directory is deleted, its `.git` with it: a commit the agent had not pushed disappears.
 
@@ -98,7 +98,7 @@ How it is used:
 
 ### Setup
 
-`relais init` offers « Créer un dépôt GitHub privé relais-knowledge » (`gh repo create relais-knowledge --private --add-readme --clone`), then records `knowledge.repoPath` in `config.yaml`.
+`relais init` offers « Create a private GitHub repository "relais-knowledge" » (`gh repo create relais-knowledge --private --add-readme --clone`), then records `knowledge.repoPath` in `config.yaml`.
 
 > **Check after `init`.** `init` records `knowledge.repoPath: <RELAIS_HOME>/knowledge`, whereas `gh repo create --clone` run from `<RELAIS_HOME>` clones into `<RELAIS_HOME>/relais-knowledge`. Check that `knowledge.repoPath` does point to a git clone containing `INDEX.md` and `notes/` (`git -C <path> status`); otherwise fix the path, or do the manual setup below.
 

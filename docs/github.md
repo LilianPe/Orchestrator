@@ -64,7 +64,7 @@ Without a `github` section, the daemon uses `GhCliForge` and the `gh` CLI, as be
 - **Workstation**: `gh auth login`, and git configured to read `origin` (SSH or HTTPS). Check `gh auth status` and `git fetch` from the repository.
 - **Docker**: `GH_TOKEN` variable; at startup, the container runs `gh auth setup-git` so that git reads over HTTPS with this token. Mounted repositories must therefore have an **HTTPS** remote. See [`deployment.md`](deployment.md).
 
-Startup explicitly logs `forge GitHub : CLI gh (repli de migration…)`. This fallback only reads: **without a GitHub App, the factory neither publishes nor merges**, and a verified ticket is blocked with that reason. It will go away with ORC-181.
+Startup explicitly logs `GitHub forge: gh CLI (migration fallback…)`. This fallback only reads: **without a GitHub App, the factory neither publishes nor merges**, and a verified ticket is blocked with that reason. It will go away with ORC-181.
 
 ### Publishing
 
@@ -94,7 +94,7 @@ On each repository entrusted to Relais, the `gh` account must be able to:
 | Read checks and CI logs | daemon, agents | `gh pr checks`, `gh run view --log-failed` |
 | Read review threads | daemon | `gh api graphql` (`reviewThreads`) |
 
-With a fine-grained token: *Contents*, *Pull requests*, *Actions* and *Checks* read, *Metadata* read. With a classic token: `repo` scope. For `relais init` → « Créer un dépôt relais-knowledge », the account must also be able to create a repository.
+With a fine-grained token: *Contents*, *Pull requests*, *Actions* and *Checks* read, *Metadata* read. With a classic token: `repo` scope. For `relais init` → « Create a private GitHub repository "relais-knowledge" », the account must also be able to create a repository.
 
 ## Human permissions
 
@@ -210,16 +210,16 @@ Refusal:
 
 ```text
 $ factory doctor
-Workflows GitHub Actions : 1
+GitHub Actions workflows: 1
 
 .github/workflows/ci.yml
-  déclencheurs : pull_request
-  secrets : oui
-  environnements : aucun
-  environnement protégé : non
-  verdict : refusé — secrets exposés sur les branches de l'usine (pull_request peut exécuter la CI sur une branche `factory/*`) sans approbation humaine
+  triggers: pull_request
+  secrets: yes
+  environments: none
+  protected environment: no
+  verdict: refused — secrets exposed on the factory's branches (pull_request can run the CI on a `factory/*` branch) without human approval
   ...
-Résultat : refusé — 1 workflow(s) sur 1 peuvent exposer des secrets aux branches de l'usine.
+Result: refused — 1 workflow(s) of 1 can expose secrets to the factory's branches.
 ```
 
 Acceptance with human approval (`ci-protected` has a `required_reviewers` rule):
@@ -236,7 +236,7 @@ jobs:
           TOKEN: ${{ secrets.NPM_TOKEN }}
 ```
 
-`factory doctor` then displays `secrets : oui`, `environnement protégé : oui` and `verdict : accepté`.
+`factory doctor` then displays `secrets: yes`, `protected environment: yes` and `verdict: accepted`.
 
 `--json` produces the same verdict in an object `{ repoPath, accepted, workflows: [{ path, triggers, secrets, environments, protected, verdict, reasons }] }`, without any secret value.
 
