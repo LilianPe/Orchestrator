@@ -238,14 +238,14 @@ function resetRedCi(out: Decision, ticket: TicketState | undefined): void {
 
 /**
  * Work starts again on a blocked ticket. Relaunched by a human (a reply, a label, a status change), the
- * red-CI count and the « Boucle » guard reset; by a machine event (a timer, red CI itself), it does not, or a timer armed before
+ * red-CI count and the « Loop » guard reset; by a machine event (a timer, red CI itself), it does not, or a timer armed before
  * the block would undo it.
  */
 function unblock(out: Decision, event: FactoryEvent, ticket: TicketState): void {
   out.events.push({ type: 'ticket.unblocked' });
   if (!HUMAN_RELAUNCH.has(event.type)) return;
   resetRedCi(out, ticket);
-  // The « Boucle » guard starts over too (ORC-187); `null`, not undefined, survives the JSON of the journal.
+  // The « Loop » guard starts over too (ORC-187); `null`, not undefined, survives the JSON of the journal.
   if (ticket.repeatedFailure) out.events.push({ type: 'ticket.patched', patch: { repeatedFailure: null } });
   // The red loop too (ORC-123).
   if (ticket.redAttempts) out.events.push({ type: 'ticket.patched', patch: { redAttempts: 0 } });

@@ -12,7 +12,7 @@ Running Relais day to day: limits, budget, pause, logs, recovery after a restart
 | Run duration | `limits.per_run.duration` | `90m` | Run interrupted, result `limit`. |
 | Dollars per run | `limits.per_run.usd` (→ `--max-budget-usd`) | 5 | Claude Code stops, result `limit`. |
 | Verification passes | `limits.verify_attempts` | 4 (preset: 3 retries) | Ticket blocked, failing commands posted in Linear. |
-| Same failure, unchanged worktree | preset (`sameFailure`) | 3 in a row | Ticket blocked with the cause « Boucle », failing commands posted in Linear. |
+| Same failure, unchanged worktree | preset (`sameFailure`) | 3 in a row | Ticket blocked with the cause « Loop », failing commands posted in Linear. |
 | Retries on red CI | `limits.ci_fix_attempts` | 2 | The next red CI does not relaunch `fix-ci`: ticket blocked, failing checks posted in Linear. Reset by a green CI (which also lifts this block), another PR, or a human relaunch of the blocked ticket. |
 | Review rounds | `limits.review_rounds` | 5 | The `review` skill stops and writes its summary. |
 | Daily budget | `limits.perDayUsd` (`config.yaml`) | none | No run starts until the next day (UTC); one comment per ticket per day. |
@@ -161,10 +161,10 @@ Each repair is **journaled**: the command writes directly to the database (the d
 | Validation error in `workflow.yml` at startup | Invalid key or value in `.relais/workflow.yml`. | [`workflow.md`](workflow.md#7-common-errors-and-validation). |
 | `http://localhost:4100` does not respond, Relais is running | `localhost` resolves to `::1` while Relais listens on `127.0.0.1`. | Open `http://127.0.0.1:4100`. |
 | UI shows "Not Found", API OK | UI not built. | `npm run build`. |
-| `Linear not connected: open …/oauth/start` | No token yet, or `secrets.json` deleted. | Click « Connecter Linear ». |
+| `Linear not connected: open …/oauth/start` | No token yet, or `secrets.json` deleted. | Click « Connect Linear ». |
 | `Warning: no Linear webhook secret configured, every webhook will be refused. Run relais init again to set it.` | `webhookSecret` empty or missing from `secrets.json`: all webhooks are refused (401). | `relais init` (the secret is asked again as long as it is empty), then restart `relais up`: the secret is reread on every webhook, but the project and the Linear credentials that `init` saves are only read at startup. |
 | `/oauth/start` returns 404 | `secrets.json` without Linear credentials at startup. | `relais init`, then restart `relais up`. |
-| « Could not connect Linear: unknown OAuth state » | The daemon restarted between the OAuth start and return, or the link was reused. | Run « Connecter Linear » again. |
+| « Could not connect Linear: unknown OAuth state » | The daemon restarted between the OAuth start and return, or the link was reused. | Run « Connect Linear » again. |
 | Linear refuses the callback URL | `http://localhost` callback refused, or URL different from the application's. | Tunnel + `publicUrl` ([`linear.md`](linear.md#1-create-the-oauth-application)); the URL must be identical on both sides. |
 | A delegated ticket does not move, no « Got it. » | Webhooks not received or rejected. | In smee mode, look in the log for `relay: webhook rejected with 401 (…)` (wrong secret, clock off by more than 60 s, or a body that smee cannot replay identically: secret and clock correct → switch to `publicUrl`, see [`linear.md`](linear.md#3-webhooks-smee-or-public-url)) or `relay: connection error`; in `publicUrl` mode, check the webhook deliveries in Linear (response code). Reconciliation (30 s) should still pick up the ticket: otherwise check `linearTeamKey` and the delegation. It does not catch up on everything ([`linear.md`](linear.md#3-webhooks-smee-or-public-url) lists what is lost): repeated 401s should be fixed right away. |
 | `webhook not written to the inbox: …` in the log, Linear shows 500 responses | The store could not write the event (Postgres unreachable, disk full). | Restore the database: Linear resends the webhook, and nothing was processed in the meantime. |

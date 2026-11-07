@@ -21,52 +21,54 @@ describe('formats', () => {
 
   it('formatTokens', () => {
     expect(formatTokens(950)).toBe('950');
-    expect(formatTokens(37_000)).toBe('37,0 k');
-    expect(formatTokens(1_234_000)).toBe('1,2 M');
+    expect(formatTokens(37_000)).toBe('37.0 k');
+    expect(formatTokens(1_234_000)).toBe('1.2 M');
   });
 
   it('tokensCell: the measure, marked when attempts are missing from it, and the cost in dollars when none reported (ORC-216)', () => {
-    expect(tokensCell(running).text).toBe('37,0 k');
-    expect(tokensCell({ ...running, attemptsWithoutTokens: 2 }).text).toBe('≥ 37,0 k');
-    expect(tokensCell({ ...running, tokens: null }).text).toBe('— (0,50 $)');
+    expect(tokensCell(running).text).toBe('37.0 k');
+    expect(tokensCell({ ...running, attemptsWithoutTokens: 2 }).text).toBe('≥ 37.0 k');
+    expect(tokensCell({ ...running, tokens: null }).text).toBe('— ($0.50)');
     expect(tokensCell({ ...running, tokens: null, costUsd: 0 }).text).toBe('—');
   });
 
   it('tokensCell: a read error is not a fact about the ticket', () => {
     const cell = tokensCell({ ...running, measured: false, tokens: null, attemptsWithoutTokens: 0 });
     expect(cell.text).toBe('?');
-    expect(cell.title).toContain('illisibles');
+    expect(cell.title).toContain('could not be read');
   });
 });
 
 describe('Flow', () => {
   it('says so when nothing waits for a human', () => {
-    expect(page({})).toContain('Rien n’attend un humain');
+    expect(page({})).toContain('Nothing is waiting for a human');
   });
 
   it('shows a blocked ticket in Needs you under its cause, with its reason', () => {
-    const html = page({ needsYou: { ...EMPTY.needsYou, blocked: [{ cause: 'red', tickets: [{ ...base, reason: 'Rouge non vérifié après 2 tentatives de tests.' }] }] } });
-    expect(html).toContain('Rouge non vérifié</h3>');
+    const html = page({ needsYou: { ...EMPTY.needsYou, blocked: [{ cause: 'red', tickets: [{ ...base, reason: 'Red not verified after 2 attempts of tests.' }] }] } });
+    expect(html).toContain('Red not verified</h3>');
     expect(html).toContain('REL-1');
-    expect(html).toContain('Rouge non vérifié après 2 tentatives de tests.');
-    expect(html).not.toContain('Rien n’attend un humain');
+    expect(html).toContain('Red not verified after 2 attempts of tests.');
+    expect(html).not.toContain('Nothing is waiting for a human');
   });
 
   it('does not repeat a reason that only says what its cause says', () => {
     const html = page({ needsYou: { ...EMPTY.needsYou, blocked: [{ cause: 'stopped', tickets: [{ ...base, reason: 'Stopped on request' }] }] } });
     expect(html.match(/Stopped on request/g)).toHaveLength(1);
+    const asked = page({ needsYou: { ...EMPTY.needsYou, blocked: [{ cause: 'question', tickets: [{ ...base, reason: 'Question asked by the agent' }] }] } });
+    expect(asked.match(/Question asked by the agent/g)).toHaveLength(1);
   });
 
   it('says on the page, not only on hover, that a running run counts when it ends', () => {
-    expect(page({ working: [{ ...running, tokens: null, costUsd: 0 }] })).toContain('Un run en cours compte à sa fin');
-    expect(page({})).not.toContain('Un run en cours compte à sa fin');
+    expect(page({ working: [{ ...running, tokens: null, costUsd: 0 }] })).toContain('A run in progress counts when it ends');
+    expect(page({})).not.toContain('A run in progress counts when it ends');
   });
 
   it('shows the PRs in Human Review with their link, and the gates', () => {
     const html = page({ needsYou: { ...EMPTY.needsYou, humanReview: [{ ...base, prUrl: 'https://gh/pr/1' }], gates: [{ ...base, ticketId: 'REL-2' }] } });
-    expect(html).toContain('PR en Human Review');
+    expect(html).toContain('PRs in Human Review');
     expect(html).toContain('href="https://gh/pr/1"');
-    expect(html).toContain('Porte de merge');
+    expect(html).toContain('Merge gate');
     expect(html).toContain('REL-2');
   });
 
@@ -74,14 +76,14 @@ describe('Flow', () => {
     const html = page({ working: [running] }, 10_000);
     expect(html).toContain('dev-feedback');
     expect(html).toContain('1 min 15 s');
-    expect(html).toContain('37,0 k');
+    expect(html).toContain('37.0 k');
     expect(html).toContain('>Stop</button>');
   });
 
   it('offers no Stop where the Tickets table offered none, and names a verification', () => {
     const html = page({ working: [{ ...running, stoppable: false, verifying: true }] });
     expect(html).not.toContain('>Stop</button>');
-    expect(html).toContain('vérification');
+    expect(html).toContain('verification');
   });
 
   it('shows the queue, the finished tickets and the other tickets', () => {

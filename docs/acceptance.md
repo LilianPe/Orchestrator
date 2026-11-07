@@ -12,7 +12,7 @@ npm ci && npm run build && npm link
 In the test repository: `relais init`. Follow the instructions (Linear OAuth app, webhook = displayed smee URL, categories Agent session events + Issues + Comments). Check `~/.relais/config.yaml`, `~/.relais/secrets.json` (mode 600), `.relais/workflow.yml`.
 
 ## 2. up and connection (criterion 2)
-`relais up`, open http://localhost:4100, click « Connecter Linear ». Expected: page « Linear is connected », statuses Human Review / AI Review and labels agent:* and Bloqué created in the team, button replaced by the « en direct » state.
+`relais up`, open http://localhost:4100, click « Connect Linear ». Expected: page « Linear is connected », statuses Human Review / AI Review and labels agent:* and Bloqué created in the team, button replaced by the « live » state.
 If Linear refuses the localhost callback URL: note the error, use `cloudflared tunnel --url http://localhost:4100` for the duration of the installation and put the public URL in `publicUrl`.
 
 ## 3. Delegation (criterion 3)

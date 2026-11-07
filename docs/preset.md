@@ -61,7 +61,7 @@ The network level is chosen per repository (Limited by default); a step can only
 | -- | -- | -- |
 | `counters.verify` (3) | `limits.verifyAttempts` = 4 | 3 returns to the run after a failed check; the 4th failure blocks |
 | `counters.review_ci` (2) | `limits.ciFixAttempts` = 2 | 2 `fix-ci` retries on red CI; the next one blocks. AI review rounds will join this counter with ORC-184 |
-| `sameFailure` (3) | `limits.repeatedFailures` = 3 | same failure on an unchanged worktree, 3 times in a row: Blocked, cause « Boucle » (loop) |
+| `sameFailure` (3) | `limits.repeatedFailures` = 3 | same failure on an unchanged worktree, 3 times in a row: Blocked, cause « Loop » |
 | `counters.red` (2) | `jobs.<job>.red.attempts` = 3 | in blocking mode, 2 returns to `tests` after an unverified red; the 3rd blocks. A human retry resets the count to zero |
 
 `verify_attempts` and `ci_fix_attempts` in `workflow.yml` still override the first two, until the YAML is removed (ORC-177).
