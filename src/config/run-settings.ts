@@ -13,13 +13,23 @@ export interface Settings {
  * `//` prefixes an absolute path in Claude Code permission rules.
  */
 export function buildRunSettings(pack: Settings, home: string): Settings {
-  return withHomeDenies(pack, `/${posixPath(resolve(home))}`);
+  const native = resolve(home);
+  const abs = posixPath(native);
+  // Windows paths are case-insensitive, and Claude Code's docs do not say whether its rules are: a Windows home is
+  // denied as written and in lower case, so another casing of the same path cannot read past the rule.
+  const roots = abs === native ? [abs] : [...new Set([abs, abs.toLowerCase()])];
+  return withHomeDenies(pack, roots.map((r) => `/${r}`));
 }
 
-/** Claude Code matches Windows paths in POSIX form, `C:\data` as `/c/data`; any other path is kept as is. */
+/**
+ * Claude Code matches Windows paths in POSIX form: `C:\data` as `/c/data`, `\\server\share\x` as `//server/share/x`
+ * (`\\?\` long-path forms likewise), with no trailing `/`. Any other path is kept as is.
+ */
 export function posixPath(abs: string): string {
-  const m = /^([A-Za-z]):\\(.*)$/.exec(abs);
-  return m ? `/${m[1]!.toLowerCase()}/${m[2]!.replaceAll('\\', '/')}` : abs;
+  const win = abs.replace(/^\\\\[?.]\\UNC\\/i, '\\\\').replace(/^\\\\[?.]\\(?=[A-Za-z]:)/, '');
+  const drive = /^([A-Za-z]):[\\/]?(.*)$/.exec(win);
+  const posix = drive ? `/${drive[1]!.toLowerCase()}/${drive[2]}` : win.startsWith('\\\\') ? win : undefined;
+  return posix === undefined ? abs : posix.replaceAll('\\', '/').replace(/(.)\/+$/, '$1');
 }
 
 /**
@@ -27,17 +37,19 @@ export function posixPath(abs: string): string {
  * and OS, so attempts can be compared by configuration (ORC-226).
  */
 export function runSettingsTemplate(pack: Settings): Settings {
-  return withHomeDenies(pack, '<HOME>');
+  return withHomeDenies(pack, ['<HOME>']);
 }
 
-function withHomeDenies(pack: Settings, abs: string): Settings {
+function withHomeDenies(pack: Settings, roots: string[]): Settings {
   const deny = [
     ...(pack.permissions.deny ?? []),
-    `Read(${abs}/secrets.json)`,
-    `Edit(${abs}/secrets.json)`,
-    `Read(${abs}/factory.db*)`,
-    `Read(${abs}/transcripts/**)`,
-    `Read(${abs}/logs/**)`,
+    ...roots.flatMap((abs) => [
+      `Read(${abs}/secrets.json)`,
+      `Edit(${abs}/secrets.json)`,
+      `Read(${abs}/factory.db*)`,
+      `Read(${abs}/transcripts/**)`,
+      `Read(${abs}/logs/**)`,
+    ]),
     'Bash(*secrets.json*)',
     'Bash(*factory.db*)',
   ];

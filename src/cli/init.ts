@@ -27,15 +27,22 @@ function detectVerify(repo: string): string[] {
   return ['lint', 'typecheck', 'test'].filter((s) => scripts[s]).map((s) => `npm ${s === 'test' ? 'test' : `run ${s}`}`);
 }
 
+/** Whether two paths name one directory: an entry an older init wrote in another form (`C:/x`, `x/`) is the same repo. */
+function samePath(a: string, b: string): boolean {
+  const norm = (p: string) => (process.platform === 'win32' ? resolve(p).toLowerCase() : resolve(p));
+  return norm(a) === norm(b);
+}
+
 export async function runInit(d: InitDeps): Promise<void> {
   const { io } = d;
   const top = await d.exec('git', ['rev-parse', '--show-toplevel'], { cwd: d.cwd });
-  const repoPath = top.code === 0 ? resolve(top.stdout.trim()) : await io.ask(`Chemin du dépôt git à confier à ${PRODUCT_NAME}`);
+  // One form whatever gave the path: git writes `C:/x` on Windows, a typed one may be relative or end with `/`.
+  const repoPath = resolve(top.code === 0 ? top.stdout.trim() : await io.ask(`Chemin du dépôt git à confier à ${PRODUCT_NAME}`));
   const teamKey = (await io.ask('Clé de l’équipe Linear (ex. REL)')).toUpperCase();
 
   const cfg = loadInstance(d.home);
   const id = slugify(basename(repoPath), 30);
-  cfg.projects = [...cfg.projects.filter((p) => p.repoPath !== repoPath), { id, repoPath, linearTeamKey: teamKey }];
+  cfg.projects = [...cfg.projects.filter((p) => !samePath(p.repoPath, repoPath)), { id, repoPath, linearTeamKey: teamKey }];
   if (!cfg.publicUrl && cfg.relay.kind === 'none') cfg.relay = { kind: 'smee', url: await d.createSmee() };
   const webhookUrl = cfg.publicUrl ? `${cfg.publicUrl}/webhooks/linear` : cfg.relay.kind === 'smee' ? cfg.relay.url : '';
   const callbackUrl = `${cfg.publicUrl ?? `http://localhost:${cfg.port}`}/oauth/callback`;

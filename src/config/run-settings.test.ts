@@ -10,7 +10,7 @@ describe('run settings', () => {
   it('adds denies for the real FACTORY_HOME secrets to the pack settings', () => {
     const s = buildRunSettings(pack, '/data');
     // On Windows `/data` resolves on the current drive, C:\data, which Claude Code matches as /c/data.
-    const data = process.platform === 'win32' ? `//${resolve('/')[0]!.toLowerCase()}/data` : '//data';
+    const data = `/${posixPath(resolve('/data'))}`;
     expect(s.permissions.allow).toEqual(['Read']);
     expect(s.permissions.defaultMode).toBe('acceptEdits');
     expect(s.permissions.deny).toEqual([
@@ -37,6 +37,18 @@ describe('run settings', () => {
 
   it('writes a Windows path in the POSIX form Claude Code matches, and leaves a POSIX path alone', () => {
     expect(posixPath('C:\\Users\\u\\.factory')).toBe('/c/Users/u/.factory');
+    expect(posixPath('D:\\')).toBe('/d');
+    expect(posixPath('\\\\server\\share\\u\\.factory')).toBe('//server/share/u/.factory');
+    expect(posixPath('\\\\?\\C:\\Users\\u')).toBe('/c/Users/u');
+    expect(posixPath('\\\\?\\UNC\\server\\share\\u')).toBe('//server/share/u');
     expect(posixPath('/home/u/.factory')).toBe('/home/u/.factory');
+  });
+
+  // Windows paths only: a Linux run cannot resolve one.
+  it.runIf(process.platform === 'win32')('on Windows, denies a home as written and in lower case, and a drive root without a doubled separator', () => {
+    const deny = buildRunSettings(pack, 'D:\\Factory\\Home').permissions.deny!;
+    expect(deny).toContain('Read(//d/Factory/Home/secrets.json)');
+    expect(deny).toContain('Read(//d/factory/home/secrets.json)');
+    expect(buildRunSettings(pack, 'D:\\').permissions.deny).toContain('Read(//d/secrets.json)');
   });
 });

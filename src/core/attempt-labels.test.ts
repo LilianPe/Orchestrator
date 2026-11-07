@@ -168,11 +168,12 @@ describe('attempt labels', () => {
     const homes = [join(tmpdir(), 'home-a'), '/srv/factory/home-b'];
     const built = homes.map((home) => buildRunSettings(settings, home));
     expect(stableJson(built[0])).not.toBe(stableJson(built[1]));
-    // Each home's run settings are the template with that home in place of <HOME>.
+    // Each home's run settings are the template with that home in place of <HOME> (on Windows, written as is and in lower case).
     homes.forEach((home, i) => {
       const abs = `/${posixPath(resolve(home))}`;
       const own = built[i]!;
-      const homeless = { ...own, permissions: { ...own.permissions, deny: own.permissions.deny!.map((r) => r.split(abs).join('<HOME>')) } };
+      const deny = [...new Set(own.permissions.deny!.map((r) => r.split(abs).join('<HOME>').split(abs.toLowerCase()).join('<HOME>')))];
+      const homeless = { ...own, permissions: { ...own.permissions, deny } };
       expect(homeless).toEqual(runSettingsTemplate(settings));
     });
   });

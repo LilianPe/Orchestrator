@@ -45,7 +45,8 @@ describe('instance config', () => {
     );
   });
 
-  // Windows has no POSIX mode bits: Node reports 0o666 whatever chmod asked.
+  // Windows has no POSIX mode bits: Node reports 0o666 whatever chmod asked. The file takes its folder's ACL there,
+  // which docs/installation.md asks to keep private (saveSecrets).
   it.skipIf(process.platform === 'win32')('writes secrets with mode 600', () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-home-'));
     expect(loadSecrets(home)).toEqual({});
