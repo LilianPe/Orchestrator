@@ -63,6 +63,16 @@ describe('factory validate (ORC-209)', () => {
     expect(run(dir)).toEqual({ code: 1, out: ['.factory/config.yml refusé :', '- .factory : un dossier attendu, pas un lien symbolique ni un fichier'] });
   });
 
+  it('refuses a dangling link too, at .factory or at its file: the launch refuses it all the same', () => {
+    const file = repo('commands: { test: npm test }\n');
+    renameSync(join(file, '.factory/config.yml'), join(file, 'gone.yml'));
+    symlinkSync('../missing.yml', join(file, '.factory/config.yml'));
+    expect(run(file)).toEqual({ code: 1, out: ['.factory/config.yml refusé :', '- .factory/config.yml : un fichier attendu, pas un lien symbolique'] });
+    const dir = repo();
+    symlinkSync('missing', join(dir, '.factory'));
+    expect(run(dir)).toEqual({ code: 1, out: ['.factory/config.yml refusé :', '- .factory : un dossier attendu, pas un lien symbolique ni un fichier'] });
+  });
+
   it('refuses an option where the repository path goes', () => {
     const out: string[] = [];
     expect(runValidateCommand({ repoPath: '--json', out: (l) => out.push(l) })).toBe(1);
