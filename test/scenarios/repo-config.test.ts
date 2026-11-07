@@ -1,4 +1,9 @@
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { makeRepoConfig } from '../../src/app/repo-variables.js';
 import { parseRepoConfig, type RepoConfig } from '../../src/config/repo-config.js';
 import type { RepoVariables } from '../../src/config/repo-variables.js';
 import { createHarness } from '../helpers/harness.js';
@@ -90,18 +95,41 @@ describe("the repository's config at the launch", () => {
       { ok: false, failures: [{ command: 'factory/chemins-interdits', exitCode: 1, output: 'Chemin interdit modifié : .factory/config.yml' }], sha: 'abc', tree: 't' },
       { ok: true, failures: [], sha: 'def', tree: 't2' },
     ];
-    const base = onDefaultBranch(BASE);
-    const h = createHarness({ sandboxed: true, projectYaml: VERIFIED, cleanVerify: async () => verdicts.shift()!, ...base });
-    h.runner.enqueue({});
-    await delegate(h);
-    expect(h.runner.requests).toHaveLength(2);
-    expect(h.runner.requests[1]!.prompt).toContain('.factory/config.yml');
-    // Each launch read the default branch's file again, whatever the agent committed on its branch: the second, on
-    // a worktree that already exists, fetches the forge first.
-    expect(base.reads).toEqual([{ fetch: false }, { fetch: true }]);
-    expect(agents(h).map((c) => [c.network, c.allow])).toEqual([
-      ['limited', ['docs.exemple.com']],
-      ['limited', ['docs.exemple.com']],
-    ]);
+    // The read itself is the daemon's, on a real repository: its default branch holds BASE, and the branch checked
+    // out in it carries the agent's change, committed and in the worktree too.
+    const root = mkdtempSync(join(tmpdir(), 'factory-criterion-5-'));
+    try {
+      const git = (cwd: string, ...args: string[]) => execFileSync('git', ['-C', cwd, ...args], { env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' } });
+      const forge = join(root, 'forge');
+      const repo = join(root, 'repo');
+      execFileSync('git', ['init', '--quiet', '--bare', '-b', 'main', forge]);
+      execFileSync('git', ['clone', '--quiet', forge, repo]);
+      mkdirSync(join(repo, '.factory'));
+      writeFileSync(join(repo, '.factory', 'config.yml'), BASE);
+      git(repo, 'add', '.');
+      git(repo, 'commit', '--quiet', '-m', 'base');
+      git(repo, 'push', '--quiet', 'origin', 'main');
+      git(repo, 'remote', 'set-head', 'origin', 'main');
+      git(repo, 'checkout', '--quiet', '-b', 'factory/rel-1');
+      writeFileSync(join(repo, '.factory', 'config.yml'), 'network: { level: custom, allow: [evil.exemple.com] }\n');
+      git(repo, 'commit', '--quiet', '-am', 'widen');
+      const read = makeRepoConfig();
+      const reads: { fetch: boolean }[] = [];
+      const repoConfig = (_: unknown, o?: { fetch?: boolean }) => (reads.push({ fetch: o?.fetch ?? true }), read({ repoPath: repo }, o));
+      const h = createHarness({ sandboxed: true, projectYaml: VERIFIED, cleanVerify: async () => verdicts.shift()!, repoConfig });
+      h.runner.enqueue({});
+      await delegate(h);
+      expect(h.runner.requests).toHaveLength(2);
+      expect(h.runner.requests[1]!.prompt).toContain('.factory/config.yml');
+      // Each launch read the default branch's file again, never the agent's: the second, on a worktree that already
+      // exists, fetches the forge first.
+      expect(reads).toEqual([{ fetch: false }, { fetch: true }]);
+      expect(agents(h).map((c) => [c.network, c.allow])).toEqual([
+        ['limited', ['docs.exemple.com']],
+        ['limited', ['docs.exemple.com']],
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
