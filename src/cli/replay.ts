@@ -7,11 +7,11 @@ import { loadWorkflow } from '../config/load-workflow.js';
 import { exportJournal, formatReplay, readJournal, replayJournal, type ReplayOptions } from '../runtime/replay.js';
 import { DATABASE_URL_ENV, openStore } from '../store/open.js';
 
-export const REPLAY_USAGE = `Usage : factory replay <journal.json | dossier>... [--what-if <workflow.yml>] [--pack <dossier>]
-        factory replay --export <ID> [--project <id>] [--out <fichier>]
-  Rejoue des journaux exportés : sans --what-if, chaque décision doit redonner bit à bit la projection
-  et les effets enregistrés ; avec --what-if, les décisions tournent sur ce workflow (posé sur le pack)
-  et le rejeu s'arrête à la première divergence. --export écrit le journal d'un ticket de l'instance.`;
+export const REPLAY_USAGE = `Usage: factory replay <journal.json | directory>... [--what-if <workflow.yml>] [--pack <directory>]
+       factory replay --export <ID> [--project <id>] [--out <file>]
+  Replays exported journals: without --what-if, each decision must give back, bit for bit, the recorded
+  projection and effects; with --what-if, the decisions run on this workflow (laid over the pack)
+  and the replay stops at the first divergence. --export writes the journal of a ticket of the instance.`;
 
 export interface ReplayIo {
   print(line: string): void;
@@ -39,13 +39,13 @@ async function exportFromInstance(env: NodeJS.ProcessEnv, ticketId: string, proj
   const home = factoryHome(env);
   const projects = loadInstance(home).projects;
   const project = projectId ?? (projects.length === 1 ? projects[0]!.id : undefined);
-  if (!project) throw new Error(`précisez --project (${projects.map((p) => p.id).join(', ') || 'aucun projet configuré'})`);
+  if (!project) throw new Error(`give --project (${projects.map((p) => p.id).join(', ') || 'no project configured'})`);
   const sqlitePath = homePaths(home).db;
-  if (!env[DATABASE_URL_ENV]?.trim() && !existsSync(sqlitePath)) throw new Error(`pas de base d'instance : ni ${DATABASE_URL_ENV} ni ${sqlitePath}`);
+  if (!env[DATABASE_URL_ENV]?.trim() && !existsSync(sqlitePath)) throw new Error(`no instance database: neither ${DATABASE_URL_ENV} nor ${sqlitePath}`);
   const { store } = await openStore({ env, sqlitePath, migrationsFolder: join(repoRoot(), 'drizzle'), migrate: false });
   try {
     const journal = await exportJournal(store, project, ticketId);
-    if (journal.entries.length === 0) throw new Error(`aucun événement journalisé pour ${ticketId} dans le projet ${project}`);
+    if (journal.entries.length === 0) throw new Error(`no event journaled for ${ticketId} in the project ${project}`);
     return journal;
   } finally {
     await store.close();
@@ -56,7 +56,7 @@ async function exportFromInstance(env: NodeJS.ProcessEnv, ticketId: string, proj
 function replayFiles(paths: string[], options: ReplayOptions, io: ReplayIo): number {
   const files = journalFiles(paths);
   if (files.length === 0) {
-    io.print('Aucun journal à rejouer.');
+    io.print('No journal to replay.');
     return 2;
   }
   let diverged = 0;
@@ -64,17 +64,17 @@ function replayFiles(paths: string[], options: ReplayOptions, io: ReplayIo): num
   for (const file of files) {
     try {
       const report = replayJournal(readJournal(readFileSync(file, 'utf8'), file), options);
-      io.print(`${file} : ${formatReplay(report)}`);
+      io.print(`${file}: ${formatReplay(report)}`);
       if (report.divergences.length > 0) diverged++;
       // A journal with no decision to compare checks nothing: refused, not passed.
       else if (report.replayed === 0) broken++;
     } catch (err) {
-      io.print(`${file} : illisible ou impossible à rejouer : ${(err as Error).message}`);
+      io.print(`${file}: unreadable or impossible to replay: ${(err as Error).message}`);
       broken++;
     }
   }
   const failed = diverged + broken;
-  io.print(failed === 0 ? `${files.length} journal(aux) rejoué(s) sans divergence.` : `${diverged} journal(aux) sur ${files.length} divergent, ${broken} en erreur ou sans décision.`);
+  io.print(failed === 0 ? `${files.length} journal(s) replayed without divergence.` : `${diverged} journal(s) of ${files.length} diverge, ${broken} in error or without decisions.`);
   return broken > 0 ? 2 : diverged > 0 ? 1 : 0;
 }
 
@@ -108,7 +108,7 @@ ${REPLAY_USAGE}`);
 `;
     if (values.out) {
       writeFileSync(values.out, text);
-      io.print(`Journal de ${values.export} écrit dans ${values.out}.`);
+      io.print(`Journal of ${values.export} written to ${values.out}.`);
     } else io.print(text.trimEnd());
     return 0;
   }

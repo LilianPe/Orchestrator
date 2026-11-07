@@ -240,7 +240,7 @@ on:
       for (let polls = 0; polls < 3; polls++) await h.advance(60_000);
       expect(await h.store.pendingInbox(10)).toEqual([]);
       // The block of the dead effect, not the dead letter's: repairing `younger` does not make the effect look alive.
-      expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Erreur : Linear down' });
+      expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Error: Linear down' });
       expect(await h.store.deadLetters('REL-1')).toMatchObject([{ eventId: 'younger', status: 'open' }]);
     }
 
@@ -264,7 +264,7 @@ on:
       await h.orch.drained();
       const types = (await h.store.recentEvents(10, 'REL-1')).map((e) => e.id).reverse();
       expect(types.slice(0, 2)).toEqual(['d1', 's1']);
-      expect(await h.ticket()).toMatchObject({ delegated: true, blocked: true, blockReason: 'Arrêté à la demande' });
+      expect(await h.ticket()).toMatchObject({ delegated: true, blocked: true, blockReason: 'Stopped on request' });
     });
 
     it('keeps being retried past its last retry on a ticket no block could tell, with the rows of its ticket, other tickets aside (ORC-320)', async () => {
@@ -385,7 +385,7 @@ on:
 
       expect((await h.store.pendingInbox(10)).map((e) => e.id)).toEqual([]);
       expect(decided.filter((d) => /^(effect:REL-1:1:[12]|younger):committed$/.test(d))).toEqual(['effect:REL-1:1:1:committed', 'younger:committed', 'effect:REL-1:1:2:committed']);
-      expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Erreur : Linear down' });
+      expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Error: Linear down' });
     });
 
     describe('past its last retry, with an older row of its ticket parked (ORC-315)', () => {
@@ -464,14 +464,14 @@ on:
         await last.opened;
         await h.orch.drained();
 
-        expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: expect.stringMatching(/^Événement younger mis de côté \(status\.changed\)/) });
+        expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: expect.stringMatching(/^Event younger set aside \(status\.changed\)/) });
         // Told by the standard comment (ORC-196), with its attempts: not one decision, and no decision that failed for an outage.
         const told = h.tracker.comments('REL-1').at(-1)!;
-        expect(told).toContain(`(tentative ${ATTEMPTS}/${ATTEMPTS})`);
-        expect(told).toContain(`Raison : Événement younger mis de côté (status.changed) : ${ATTEMPTS} essais sans aboutir (database hiccup).`);
-        expect(told).toContain(`- ${ATTEMPTS} essais de traiter cet événement.`);
+        expect(told).toContain(`(attempt ${ATTEMPTS}/${ATTEMPTS})`);
+        expect(told).toContain(`Reason: Event younger set aside (status.changed): ${ATTEMPTS} attempts without success (database hiccup).`);
+        expect(told).toContain(`- ${ATTEMPTS} attempts to process this event.`);
         expect(told).toContain('factory run repair REL-1');
-        expect(told).not.toContain('décision');
+        expect(told).not.toContain('decision');
         expect(await h.store.deadLetters('REL-1')).toMatchObject([{ eventId: 'younger', status: 'open', failures: 1, error: 'database hiccup' }]);
         expect(await h.store.pendingInbox(10)).toEqual([]);
       });
@@ -483,7 +483,7 @@ on:
         await last.opened;
         await h.orch.drained();
 
-        expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: expect.stringMatching(/^Événement mention mis de côté/) });
+        expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: expect.stringMatching(/^Event mention set aside/) });
         expect(await h.store.deadLetters('REL-1')).toMatchObject([{ eventId: 'mention', status: 'open', error: 'Linear unreachable' }]);
         expect(await h.store.pendingInbox(10)).toEqual([]);
       });
@@ -551,7 +551,7 @@ on:
 
         expect(state.decided).toContain('s1:committed');
         expect(await h.store.pendingInbox(10)).toEqual([]);
-        expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Arrêté à la demande' });
+        expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Stopped on request' });
       });
 
       it('gets its row back with `factory run repair`: replayed once the cause is fixed, the ticket unblocked', async () => {
@@ -587,7 +587,7 @@ on:
 
         // Read at last, its roles refuse it: no run on the word of someone who may not ask.
         expect(h.runner.requests).toHaveLength(runs);
-        expect(h.tracker.activities('ls-2')).toEqual([{ type: 'response', body: expect.stringMatching(/^Refusé/) }]);
+        expect(h.tracker.activities('ls-2')).toEqual([{ type: 'response', body: expect.stringMatching(/^Refused/) }]);
         const repaired = (await h.store.recentEvents(50, 'REL-1')).find((e) => e.id === 'repair:mention:1');
         expect(repaired).toMatchObject({ payload: { event: { id: 'mention', roles: [] } } });
       });
@@ -639,7 +639,7 @@ on:
         });
         await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
         await h.send('control.stop', {});
-        expect((await h.ticket()).blockReason).toBe('Arrêté à la demande');
+        expect((await h.ticket()).blockReason).toBe('Stopped on request');
         await h.orch.accept(younger(h));
         await pastLast.opened;
         expect(await h.store.deadLetters()).toEqual([]);
@@ -987,7 +987,7 @@ describe('outbox executors: lease, backoff, results through the inbox', () => {
       ['start_run', 'failed'],
     ]);
     expect(h.runner.requests).toHaveLength(0);
-    expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Erreur : Linear down' });
+    expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Error: Linear down' });
     expect((await journal(h)).find((e) => e.id === 'effect:REL-1:1:2')).toMatchObject({ type: 'effect.failed', payload: { error: 'Linear down', attempts: 2 } });
     expect(h.tracker.activities().filter((a) => a.type === 'error')).toEqual([]);
     // Comments are what is down here: its own comment died too, and nothing loops on it.
@@ -1032,7 +1032,7 @@ describe('outbox executors: lease, backoff, results through the inbox', () => {
     await h.orch.drained();
     expect((await h.store.listEffects('p', 'REL-1')).slice(0, 2).map((r) => r.status)).toEqual(['done', 'dead']);
     // No poll since the effect died: its death alone lets what waited behind it go.
-    expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Erreur : Linear down' });
+    expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Error: Linear down' });
     expect(await h.store.pendingInbox(10)).toEqual([]);
   });
 
@@ -1084,7 +1084,7 @@ describe('outbox executors: lease, backoff, results through the inbox', () => {
     await h.orch.drained();
     // Oldest first: the labels' result, then the younger row, then the comment's death.
     expect(decided.filter((d) => /^(effect:REL-1:1:[12]|younger):committed$/.test(d))).toEqual(['effect:REL-1:1:1:committed', 'younger:committed', 'effect:REL-1:1:2:committed']);
-    expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Erreur : Linear down' });
+    expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Error: Linear down' });
     expect(await h.store.pendingInbox(10)).toEqual([]);
   });
 
@@ -1125,7 +1125,7 @@ describe('outbox executors: lease, backoff, results through the inbox', () => {
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
     // The comment dies, then its notice: two results, nothing more.
     expect((await journal(h)).filter((e) => e.type === 'effect.failed')).toHaveLength(2);
-    expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Erreur : Linear down' });
+    expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Error: Linear down' });
     expect(await h.store.pendingInbox(10)).toEqual([]);
   });
 
@@ -1211,7 +1211,7 @@ on:
     await waitFor(async () => (await h.store.getRun(runId))?.status === 'stopped');
     await h.orch.drained();
     expect(Date.now() - started).toBeLessThan(10_000);
-    expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Arrêté à la demande' });
+    expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Stopped on request' });
     expect((await h.store.listEffects('p', 'REL-1')).find((r) => r.id === comment.id)).toMatchObject({ status: 'failed', error: 'cancelled by stop-1' });
     // No effect.failed for a cancelled row: nothing rewrites the stop's reason.
     expect((await h.store.recentEvents(100, 'REL-1')).some((e) => e.type === 'effect.failed')).toBe(false);
@@ -1243,7 +1243,7 @@ on:
     await h.orch.accept({ ...TRUSTED, id: 'stop-1', type: 'control.stop', at: h.clock.now(), projectId: 'p', ticketId: 'REL-1', payload: {} });
     await waitFor(async () => (await h.store.getRun(runId))?.status === 'stopped');
     await h.orch.drained();
-    expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Arrêté à la demande' });
+    expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Stopped on request' });
     expect(await h.store.pendingInbox(10)).toEqual([]);
   });
 
@@ -1290,7 +1290,7 @@ describe('a start that must not run (ORC-150 review)', () => {
       return activity(sessionId, a);
     };
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
-    expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Erreur au lancement : disk full' });
+    expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Launch error: disk full' });
     expect((await h.store.listEffects('p', 'REL-1')).find((r) => r.effect.kind === 'start_run')).toMatchObject({ status: 'done', attempts: 1 });
     expect(h.runner.requests).toHaveLength(0);
   });
@@ -1304,7 +1304,7 @@ describe('a start that must not run (ORC-150 review)', () => {
       throw new Error('disk full');
     };
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
-    expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Erreur au lancement : disk full' });
+    expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Launch error: disk full' });
     expect((await h.ticket()).blockedJob).toBeUndefined();
   });
 

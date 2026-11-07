@@ -102,7 +102,7 @@ function carried(argv: readonly string[], env: Record<string, string> = {}): { f
   const names = Object.keys(env);
   if (!names.length) return { flags: [], command: [...argv], carriers: {} };
   // Written in the shell of the container: only a variable's name may reach it.
-  for (const name of names) if (!VARIABLE.test(name)) throw new Error(`container sandbox: « ${name} » is not a variable name`);
+  for (const name of names) if (!VARIABLE.test(name)) throw new Error(`container sandbox: "${name}" is not a variable name`);
   const carrier = (i: number) => `${CARRIER}${i}`;
   const script = `export ${names.map((name, i) => `${name}="$${carrier(i)}"`).join(' ')}; unset ${names.map((_, i) => carrier(i)).join(' ')}; exec "$@"`;
   return {

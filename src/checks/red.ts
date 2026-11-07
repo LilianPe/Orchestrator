@@ -138,9 +138,9 @@ export async function checkRed(command: string, deps: RedDeps): Promise<RedResul
     detail,
   });
   const outside = [...deps.changed.map((f) => f.path), ...deps.uncommitted].filter((p) => !isTestFile(p));
-  if (outside.length > 0) return verdict('scope', `L'étape tests a modifié des fichiers qui ne sont pas des tests : ${[...new Set(outside)].join(', ')}.`);
+  if (outside.length > 0) return verdict('scope', `The tests step changed files that are not tests: ${[...new Set(outside)].join(', ')}.`);
   const tests = deps.changed.filter((f) => !f.deleted && isTestSpec(f.path)).map((f) => normalizePath(f.path));
-  if (tests.length === 0) return verdict('no_tests', "L'étape tests n'a commité aucun test.");
+  if (tests.length === 0) return verdict('no_tests', 'The tests step committed no test.');
 
   const ran = `${command} ${tests.map(quote).join(' ')}`;
   const { exitCode, output } = await deps.run(ran);
@@ -190,13 +190,13 @@ async function judge(m: Missing, tests: readonly string[], deps: RedDeps): Promi
 }
 
 const DETAIL: Record<Exclude<RedCause, 'scope' | 'infra'>, string> = {
-  assertion: 'Les tests échouent sur une assertion : rouge vérifié.',
-  missing_module: 'Les tests échouent sur un module que le ticket doit créer : rouge vérifié',
-  missing_export: "Les tests échouent sur ce qu'un module existant n'exporte pas encore : rouge vérifié",
-  module_at_base: "Un module introuvable pour les tests existe avant le ticket : l'import est cassé.",
-  missing_package: "Les tests importent un paquet qui n'est pas installé : le ticket n'en crée pas.",
-  compile: "Les tests ne compilent pas (erreur de syntaxe, de compilation ou de chargement, ou symbole qui existe déjà).",
-  error: "Les tests échouent sans assertion (erreur à l'exécution, délai dépassé).",
-  no_tests: "Aucun test n'a tourné.",
-  passing: 'Les tests passent déjà : ils ne testent pas ce que le ticket demande.',
+  assertion: 'The tests fail on an assertion: red verified.',
+  missing_module: 'The tests fail on a module the ticket has to create: red verified',
+  missing_export: 'The tests fail on what an existing module does not export yet: red verified',
+  module_at_base: 'A module the tests cannot find exists before the ticket: the import is broken.',
+  missing_package: 'The tests import a package that is not installed: the ticket does not create packages.',
+  compile: 'The tests do not compile (syntax, compilation or loading error, or a symbol that already exists).',
+  error: 'The tests fail without an assertion (runtime error, timeout).',
+  no_tests: 'No test ran.',
+  passing: 'The tests already pass: they do not test what the ticket asks for.',
 };

@@ -37,15 +37,15 @@ describe('diffSizeCheck', () => {
     const diff = files(14, 20) + addedFile('src/last.ts', 400 - 14 * 20);
     const result = diffSizeCheck(diff);
     expect(result).toMatchObject({ check: DIFF_SIZE_CHECK, ok: true, size: { files: 15, lines: 400 }, limits: MAX_DIFF });
-    expect(result.summary).toContain('15 fichier(s), 400 ligne(s) hors tests');
+    expect(result.summary).toContain('15 file(s), 400 line(s) outside tests');
   });
 
   it('blocks 16 files outside tests and proposes a split or asks a question', () => {
     const result = diffSizeCheck(files(16));
     expect(result.ok).toBe(false);
     expect(result.size).toEqual({ files: 16, lines: 16 });
-    expect(result.summary).toContain('16 fichiers hors tests, au-delà de 15');
-    expect(result.summary).toMatch(/découp/);
+    expect(result.summary).toContain('16 files outside tests, over 15');
+    expect(result.summary).toMatch(/split the ticket/);
     expect(result.summary).toMatch(/\?/);
   });
 
@@ -53,7 +53,7 @@ describe('diffSizeCheck', () => {
     const result = diffSizeCheck(addedFile('src/a.ts', 200) + modifiedFile('src/b.ts', 100, 101));
     expect(result.ok).toBe(false);
     expect(result.size).toEqual({ files: 2, lines: 401 });
-    expect(result.summary).toContain('401 lignes hors tests, au-delà de 400');
+    expect(result.summary).toContain('401 lines outside tests, over 400');
   });
 
   it('does not count tests: 600 lines of tests and a small change pass', () => {
@@ -61,7 +61,7 @@ describe('diffSizeCheck', () => {
     const result = diffSizeCheck(tests + modifiedFile('src/score.ts', 10, 2));
     expect(result.ok).toBe(true);
     expect(result.size).toEqual({ files: 1, lines: 12 });
-    expect(result.summary).toContain('3 fichier(s) de test non compté(s)');
+    expect(result.summary).toContain('3 test file(s) not counted');
   });
 
   it('does not count test files towards the file bound either', () => {
@@ -73,16 +73,16 @@ describe('diffSizeCheck', () => {
     expect(diffSizeCheck(diff).ok).toBe(true);
     const tightFiles = diffSizeCheck(diff, { maxDiff: { files: 5 } });
     expect(tightFiles).toMatchObject({ ok: false, limits: { files: 5, lines: 400 } });
-    expect(tightFiles.summary).toContain('6 fichiers hors tests, au-delà de 5');
+    expect(tightFiles.summary).toContain('6 files outside tests, over 5');
     const tightLines = diffSizeCheck(diff, { maxDiff: { lines: 50 } });
     expect(tightLines).toMatchObject({ ok: false, limits: { files: 15, lines: 50 } });
-    expect(tightLines.summary).toContain('60 lignes hors tests, au-delà de 50');
+    expect(tightLines.summary).toContain('60 lines outside tests, over 50');
   });
 
   it('refuses a configuration that loosens the base thresholds, and blocks', () => {
     const result = diffSizeCheck(files(1), { maxDiff: { files: 30, lines: 1000 } });
     expect(result.ok).toBe(false);
-    expect(result.summary).toContain('ne peut que resserrer');
+    expect(result.summary).toContain('can only tighten');
     expect(result.summary).toContain('files');
   });
 
@@ -111,7 +111,7 @@ describe('diffSizeCheck', () => {
     const result = diffSizeCheck(diff);
     expect(result.ok).toBe(true);
     expect(result.size).toEqual({ files: 1, lines: 1 });
-    expect(result.summary).toContain(`${locks.length} fichier(s) généré(s) non compté(s)`);
+    expect(result.summary).toContain(`${locks.length} generated file(s) not counted`);
   });
 
   it('counts a file only named like a lockfile', () => {
@@ -136,7 +136,7 @@ describe('diffSizeCheck', () => {
     const diff = [`diff --git ${a} ${b}`, 'new file mode 100644', '--- /dev/null', `+++ ${b}`, '@@ -0,0 +1,401 @@', ...body, ''].join('\n');
     const result = diffSizeCheck(diff);
     expect(result.ok).toBe(false);
-    expect(result.summary).toContain('- `` src/a?[ok](x)`b.ts `` : 401 ligne(s)');
+    expect(result.summary).toContain('- `` src/a?[ok](x)`b.ts ``: 401 line(s)');
   });
 
   it('counts the test runner configuration: it is not a test', () => {
@@ -172,7 +172,7 @@ describe('resolveMaxDiff', () => {
 
   it('refuses to loosen a bound', () => {
     expect(() => resolveMaxDiff({ files: 16 })).toThrow(MaxDiffConfigError);
-    expect(() => resolveMaxDiff({ lines: 401 })).toThrow(/max_diff\.lines = 401 .* 400 .* ne peut que resserrer/);
+    expect(() => resolveMaxDiff({ lines: 401 })).toThrow(/max_diff\.lines = 401 .* 400.* can only tighten/);
   });
 
   it('reads a null max_diff (`max_diff:` with no value) as no tightening', () => {
@@ -180,7 +180,7 @@ describe('resolveMaxDiff', () => {
   });
 
   it('refuses an unknown key rather than ignore a typo', () => {
-    expect(() => resolveMaxDiff({ file: 5 } as unknown as Partial<{ files: number }>)).toThrow(/clé\(s\) inconnue\(s\) file/);
+    expect(() => resolveMaxDiff({ file: 5 } as unknown as Partial<{ files: number }>)).toThrow(/unknown key\(s\) file/);
     expect(() => resolveMaxDiff([] as unknown as Partial<{ files: number }>)).toThrow(MaxDiffConfigError);
   });
 

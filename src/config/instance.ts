@@ -96,7 +96,7 @@ function validate(raw: unknown): InstanceConfig {
   const res = instanceSchema.safeParse(raw ?? {});
   if (!res.success) {
     const i = res.error.issues[0]!;
-    throw new Error(`config.yaml invalide : ${i.path.join('.')}: ${i.message}`);
+    throw new Error(`invalid config.yaml: ${i.path.join('.')}: ${i.message}`);
   }
   return res.data;
 }

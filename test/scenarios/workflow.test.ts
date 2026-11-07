@@ -22,7 +22,7 @@ describe('standard workflow', () => {
     const req = h.runner.requests[0]!;
     expect(req).toMatchObject({ resume: false, model: 'sonnet', cwd: '/tmp/factory-fake/p/REL-1', readOnly: false });
     expect(req.prompt.startsWith('/factory:dev\n')).toBe(true);
-    expect(req.prompt).toContain('Branche : factory/rel-1-export-csv');
+    expect(req.prompt).toContain('Branch: factory/rel-1-export-csv');
     const t = await h.ticket();
     expect(t).toMatchObject({ logical: 'human_review', blocked: false, branch: 'factory/rel-1-export-csv', linearSessionId: 'ls-1' });
     expect(t.activeRunId).toBeUndefined();
@@ -121,7 +121,7 @@ describe('standard workflow', () => {
     h.runner.enqueue({ events: [{ kind: 'text', text: 'Synthèse : 2 rounds, CI verte.' }] });
     await h.send('status.changed', { from: 'human_review', to: 'ai_review' });
     expect(h.runner.requests[1]).toMatchObject({ model: 'opus', resume: false });
-    expect(h.runner.requests[1]!.prompt).toContain('Rounds de review max : 5');
+    expect(h.runner.requests[1]!.prompt).toContain('Max review rounds: 5');
     expect((await h.ticket()).logical).toBe('human_review');
     expect(h.tracker.activities('ls-1').at(-1)).toEqual({ type: 'response', body: 'Synthèse : 2 rounds, CI verte.' });
     await h.send('pr.merged', { number: 3, url: 'https://gh/pr/3', branch: 'factory/rel-1-export-csv' });
@@ -168,7 +168,7 @@ describe('standard workflow', () => {
     await delegatedAndInReview(h);
     expect(h.runner.requests).toHaveLength(2);
     expect(h.runner.requests[1]).toMatchObject({ resume: true });
-    expect(h.runner.requests[1]!.prompt).toContain('## Vérifications en échec');
+    expect(h.runner.requests[1]!.prompt).toContain('## Failed checks');
     expect(h.runner.requests[1]!.prompt).toContain('1 failed');
     expect(await h.ticket()).toMatchObject({ logical: 'human_review', verifyAttempts: 0 });
   });
@@ -184,7 +184,7 @@ describe('standard workflow', () => {
     expect(await h.ticket()).toMatchObject({ blocked: false, ciFixAttempts: 2 });
     await h.send('pr.checks_failed', red);
     expect(fixCi()).toBe(2);
-    expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'CI toujours en échec après 2 tentatives de fix-ci.' });
+    expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'CI still failing after 2 attempts of fix-ci.' });
     expect(h.tracker.comments('REL-1').at(-1)).toContain('- `test`');
     await h.send('pr.checks_failed', red);
     expect(fixCi()).toBe(2);
@@ -228,7 +228,7 @@ describe('standard workflow', () => {
       expect((await h.store.getRun(askRunId))!.status).toBe('stopped');
       expect((await h.store.getRun(devRunId))!.status).toBe('running');
       expect(await h.ticket()).toMatchObject({ blocked: false, activeRunId: devRunId });
-      expect(h.tracker.activities('ls-9').at(-1)).toEqual({ type: 'response', body: 'Arrêté.' });
+      expect(h.tracker.activities('ls-9').at(-1)).toEqual({ type: 'response', body: 'Stopped.' });
       expect(h.tracker.activities('ls-1').filter((a) => a.type === 'response')).toEqual([]);
       h.runner.release(devRunId);
       await h.orch.drained();
@@ -261,7 +261,7 @@ describe('standard workflow', () => {
       expect(h.runner.requests).toHaveLength(2);
       expect(h.runner.requests[1]).toMatchObject({ resume: true, claudeSessionId: h.runner.requests[0]!.claudeSessionId });
       expect(await h.ticket()).toMatchObject({ blocked: false, logical: 'human_review' });
-      expect(JSON.stringify(h.tracker.activities('ls-1'))).not.toContain('redémarré');
+      expect(JSON.stringify(h.tracker.activities('ls-1'))).not.toContain('restarted');
     });
 
     // Unchanged: a question is not asked again by itself (ORC-277); the notice now goes through the outbox.
@@ -271,7 +271,7 @@ describe('standard workflow', () => {
       h.runner.enqueue({ hold: true });
       await h.send('session.mentioned', { linearSessionId: 'ls-9', body: 'où ?', author: 'L' });
       await h.restart();
-      expect(h.tracker.activities('ls-9').at(-1)).toMatchObject({ type: 'error', body: expect.stringContaining('redémarré') });
+      expect(h.tracker.activities('ls-9').at(-1)).toMatchObject({ type: 'error', body: expect.stringContaining('restarted') });
       expect((await h.ticket()).blocked).toBe(false);
     });
   });
@@ -387,7 +387,7 @@ describe('standard workflow', () => {
       await h.send('command', { name: 'retiens', body: 'un fait', linearSessionId: 'ls-10', author: 'L' });
       expect(h.runner.requests).toHaveLength(0);
       expect((await h.ticket()).blocked).toBe(false);
-      expect(h.tracker.activities('ls-10').at(-1)).toMatchObject({ type: 'response', body: expect.stringContaining('base de connaissance') });
+      expect(h.tracker.activities('ls-10').at(-1)).toMatchObject({ type: 'response', body: expect.stringContaining('knowledge base') });
     });
   });
 
@@ -426,7 +426,7 @@ describe('standard workflow', () => {
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
     expect(h.runner.requests).toHaveLength(0);
     expect((await h.ticket()).blocked).toBe(true);
-    expect(h.tracker.comments('REL-1').at(-1)).toContain("🔴 Bloqué à l'étape intake (tentative 1/1)");
+    expect(h.tracker.comments('REL-1').at(-1)).toContain("🔴 Blocked at step intake (attempt 1/1)");
     expect(h.tracker.activities('ls-1')).toEqual([]);
     // Blocked outside a decision, the ticket still shows the label next to its status (ORC-170).
     expect((await h.tracker.getIssue('REL-1')).labels).toContain('Bloqué');

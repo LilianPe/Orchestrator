@@ -62,51 +62,51 @@ describe('factory.yml (ORC-209, part B)', () => {
 
   it('names the key whose variable is missing', () => {
     const { LINEAR_WEBHOOK_SECRET: _, ...env } = ENV;
-    expect(violations(EXAMPLE, env)).toEqual(['linear.webhook_secret : la variable d’environnement LINEAR_WEBHOOK_SECRET n’est pas définie']);
+    expect(violations(EXAMPLE, env)).toEqual(['linear.webhook_secret: the environment variable LINEAR_WEBHOOK_SECRET is not set']);
   });
 
   it('refuses a secret written in the file instead of env:NAME', () => {
     expect(violations('github: { app_id: 42, private_key: "-----BEGIN RSA PRIVATE KEY-----" }\n')).toEqual([
-      'github.private_key : un secret s’écrit `env:NOM`, jamais en clair dans factory.yml',
+      'github.private_key: a secret is written `env:NAME`, never in clear in factory.yml',
     ]);
   });
 
   it('refuses an unknown key with its path', () => {
     expect(violations('relay: { kind: smee }\nclaude: { runtime: claude-code, accounts: [{ name: x, token: env:CLAUDE_TOKEN_1 }], active: x, default_model: m, color: red }\n')).toEqual([
-      'relay : clé inconnue',
-      'claude.color : clé inconnue',
+      'relay: unknown key',
+      'claude.color: unknown key',
     ]);
   });
 
   it('names the required keys of a section that are missing or empty', () => {
     expect(violations('claude: { runtime: claude-code, accounts: [{ name: a, token: env:CLAUDE_TOKEN_1 }] }\ngithub: { app_id: 42, private_key: }\n')).toEqual([
-      'github.private_key : requis',
-      'claude.active : requis',
-      'claude.default_model : requis',
+      'github.private_key: required',
+      'claude.active: required',
+      'claude.default_model: required',
     ]);
   });
 
   it('does not blame the active account when the accounts themselves are malformed', () => {
     expect(violations('claude: { runtime: claude-code, accounts: [{ name: a, token: env:CLAUDE_TOKEN_1, extra: 1 }], active: a, default_model: m }\n')).toEqual([
-      'claude.accounts : `[{ name, token }]` attendu',
+      'claude.accounts: `[{ name, token }]` expected',
     ]);
   });
 
   it('refuses an env: reference whose name is not a variable name', () => {
     expect(violations('linear: { webhook_secret: "env:" }\ngithub: { app_id: 1, private_key: "env: GH_APP_KEY" }\n')).toEqual([
-      'linear.webhook_secret : « env: » ne nomme pas une variable (`env:NOM`)',
-      'github.private_key : « env: GH_APP_KEY » ne nomme pas une variable (`env:NOM`)',
+      'linear.webhook_secret: "env:" does not name a variable (`env:NAME`)',
+      'github.private_key: "env: GH_APP_KEY" does not name a variable (`env:NAME`)',
     ]);
   });
 
   it('refuses an active account that is not declared', () => {
     expect(violations('claude: { runtime: claude-code, accounts: [{ name: a, token: env:CLAUDE_TOKEN_1 }], active: b, default_model: m }\n')).toEqual([
-      'claude.active : « b » n’est pas un des comptes déclarés (a)',
+      'claude.active: "b" is not one of the declared accounts (a)',
     ]);
   });
 
   it('refuses a repository that is not org/name', () => {
-    expect(violations('repos: [{ linear_team: ORC, github: Orchestrator }]\n')).toEqual(['repos[0].github : `<org>/<dépôt>` attendu']);
+    expect(violations('repos: [{ linear_team: ORC, github: Orchestrator }]\n')).toEqual(['repos[0].github: `<org>/<repo>` expected']);
   });
 
   it('reads the threshold of the full-read refusal (ORC-279)', () => {
@@ -117,8 +117,8 @@ describe('factory.yml (ORC-209, part B)', () => {
 
   it('refuses a threshold that is not a positive integer, and an unknown key of read_guard', () => {
     for (const bad of ['0', '-1', '1.5', 'beaucoup']) expect(violations(`read_guard: { max_lines: ${bad} }`).join()).toContain('read_guard.max_lines');
-    expect(violations('read_guard: { lines: 500 }')).toContain('read_guard.lines : clé inconnue');
-    expect(violations('read_guard: 500')).toContain('read_guard : un objet est attendu');
+    expect(violations('read_guard: { lines: 500 }')).toContain('read_guard.lines: unknown key');
+    expect(violations('read_guard: 500')).toContain('read_guard: an object is expected');
   });
 
   it('hands the effort and the budgets to the agent steps, nothing without them (ORC-136)', () => {

@@ -31,7 +31,7 @@ const states = { workflowStates: { nodes: [
 describe('LinearTracker', () => {
   it('writes the whole plan of a session, as Linear replaces it at each update (ORC-171)', async () => {
     const { api, calls } = fakeLinear({ SessionUpdate: () => ({ agentSessionUpdate: { success: true } }) });
-    const plan = [{ content: 'Comprendre', status: 'inProgress' }, { content: 'Build', status: 'pending' }] as never;
+    const plan = [{ content: 'Understand', status: 'inProgress' }, { content: 'Build', status: 'pending' }] as never;
     await new LinearTracker(api, 'app-1').setSessionPlan('as-1', plan);
     expect(calls.at(-1)?.vars).toEqual({ id: 'as-1', input: { plan } });
   });
@@ -83,7 +83,7 @@ describe('LinearTracker', () => {
 
   it('fails on an unknown team rather than give it no member', async () => {
     const { api } = fakeLinear({ TeamMembers: () => ({ teams: { nodes: [] } }) });
-    await expect(new LinearTracker(api, 'app-1').teamMembers('NOPE')).rejects.toThrow('Équipe Linear introuvable : NOPE');
+    await expect(new LinearTracker(api, 'app-1').teamMembers('NOPE')).rejects.toThrow('Linear team not found: NOPE');
   });
 
   it('moves by state name', async () => {
@@ -94,7 +94,7 @@ describe('LinearTracker', () => {
 
   it('fails clearly on an unknown state', async () => {
     const { api } = fakeLinear({ Issue: () => ({ issue: node }), TeamStates: () => states });
-    await expect(new LinearTracker(api, 'app-1').moveTo('REL-1', 'Nope')).rejects.toThrow('Statut Linear introuvable : "Nope" (équipe REL)');
+    await expect(new LinearTracker(api, 'app-1').moveTo('REL-1', 'Nope')).rejects.toThrow('Linear status not found: "Nope" (team REL)');
   });
 
   it('posts activities with ephemeral flag and action content', async () => {
@@ -154,7 +154,7 @@ describe('LinearTracker', () => {
     onIssue = [{ id: 'l-low', name: 'prio:basse', parent: group }, { id: 'l-high', name: 'prio:haute', parent: group }];
     await t.setLabels('REL-1', ['prio:haute'], []);
     expect(calls.at(-1)).toEqual({ op: 'IssueUpdate', vars: { id: 'uuid-1', input: { addedLabelIds: [], removedLabelIds: ['l-low'] } } });
-    await expect(t.setLabels('REL-1', ['prio:basse', 'prio:haute'], [])).rejects.toThrow('"prio:basse" et "prio:haute"');
+    await expect(t.setLabels('REL-1', ['prio:basse', 'prio:haute'], [])).rejects.toThrow('"prio:basse" and "prio:haute"');
   });
 
   it('reads the team labels again before adding one, so a group made since the start counts (ORC-160)', async () => {

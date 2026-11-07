@@ -83,10 +83,10 @@ describe('GitHub webhooks', () => {
     expect((await h.ticket()).activeRunId).toBeDefined();
     expect(await post(h, 'pull_request', pullRequestBody('closed'))).toEqual({ status: 200 });
     const t = await h.ticket();
-    expect(t).toMatchObject({ prState: 'CLOSED', blocked: true, blockReason: 'PR #3 fermée sans merge' });
+    expect(t).toMatchObject({ prState: 'CLOSED', blocked: true, blockReason: 'PR #3 closed without merge' });
     expect(t.activeRunId).toBeUndefined();
     expect((await events(h, 'run.finished'))[0]).toMatchObject({ payload: { outcome: 'stopped' } });
-    expect(h.tracker.activities('ls-1').at(-1)).toMatchObject({ type: 'response', body: expect.stringContaining('fermée sans merge') });
+    expect(h.tracker.activities('ls-1').at(-1)).toMatchObject({ type: 'response', body: expect.stringContaining('closed without merge') });
   });
 
   it('criterion 5: red CI enters the inbox, and no running agent handles it on its own', async () => {

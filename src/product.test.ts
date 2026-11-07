@@ -8,7 +8,7 @@ const root = join(import.meta.dirname, '..');
 const MARK = 'transition, à retirer';
 
 describe('product name', () => {
-  it('leaves no trace of the old name in tracked files outside docs/ and README.md, except lines marked « transition, à retirer » (docs/transition.md, « Renommage »)', () => {
+  it('leaves no trace of the old name in tracked files outside docs/ and README.md, except lines marked « transition, à retirer » (docs/transition.md, « Renaming »)', () => {
     const self = relative(root, import.meta.filename).split(sep).join('/'); // git ls-files lists with `/`
     const hits = execFileSync('git', ['ls-files', '-z'], { cwd: root, encoding: 'utf8' })
       .split('\0')

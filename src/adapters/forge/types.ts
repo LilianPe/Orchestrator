@@ -60,7 +60,7 @@ export type CheckRunRequest = {
 );
 
 /**
- * What the factory itself writes on the forge, each write idempotent (ORC-162, docs/idempotence.md):
+ * What the factory itself writes on the forge, each write idempotent (ORC-162, docs/idempotency.md):
  * a replay finds what the first one wrote and says so (`deduplicated`). Only the GitHub App adapter
  * writes: GitHub lets only an app create check runs, so `gh` and its user token cannot.
  */

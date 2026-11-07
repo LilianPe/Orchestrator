@@ -183,7 +183,7 @@ describe('fault injection at each point of the chain (ORC-163)', () => {
     expect(report.atLeastOnce).toEqual([]);
     expect(h.runner.requests).toHaveLength(1);
     expect(h.tracker.activities('ls-q')).toEqual([
-      { type: 'error', body: expect.stringContaining('Reposez la question') as unknown },
+      { type: 'error', body: expect.stringContaining('Ask the question again') as unknown },
     ]);
   });
 
@@ -198,7 +198,7 @@ describe('fault injection at each point of the chain (ORC-163)', () => {
     expect(report.violations).toEqual([]);
     expect(report.atLeastOnce).toEqual([]);
     expect(h.runner.requests).toHaveLength(1);
-    expect(JSON.stringify(h.tracker.activities('ls-q'))).not.toContain('Reposez');
+    expect(JSON.stringify(h.tracker.activities('ls-q'))).not.toContain('Ask the question again');
   });
 
   /**
@@ -215,7 +215,7 @@ describe('fault injection at each point of the chain (ORC-163)', () => {
     const t = await h.ticket();
     expect(t).toMatchObject({ blocked: false, logical: 'human_review' });
     expect(t.activeRunId).toBeUndefined();
-    expect(JSON.stringify(h.tracker.activities('ls-1'))).not.toContain('redémarré');
+    expect(JSON.stringify(h.tracker.activities('ls-1'))).not.toContain('restarted');
     expect((await h.tracker.getIssue('REL-1')).labels).not.toContain('Bloqué');
   });
 
@@ -256,7 +256,7 @@ describe('fault injection at each point of the chain (ORC-163)', () => {
     await h.orch.tick();
     await h.orch.drained();
     expect(h.runner.requests).toHaveLength(0);
-    expect(h.tracker.activities('ls-q')).toEqual([{ type: 'error', body: expect.stringContaining('Reposez la question') as unknown }]);
+    expect(h.tracker.activities('ls-q')).toEqual([{ type: 'error', body: expect.stringContaining('Ask the question again') as unknown }]);
     expect(await h.store.listQueue()).toEqual([]);
   });
 });

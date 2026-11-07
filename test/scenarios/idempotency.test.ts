@@ -13,7 +13,7 @@ import { CRASH_WORKFLOW } from '../helpers/crash-workflow.js';
 import { createHarness } from '../helpers/harness.js';
 
 /**
- * The idempotency table of docs/idempotence.md (ORC-162), one test per row: the effect executed
+ * The idempotency table of docs/idempotency.md (ORC-162), one test per row: the effect executed
  * twice gives one visible effect. The rows the factory carries out today are replayed through the
  * outbox itself: the first execution acts, then loses its lease before it settles (`LosingStore`),
  * so the row is claimed and executed again once the lease expires, as after a stalled executor.
@@ -71,7 +71,7 @@ function replaying(kind: string, opts: { projectYaml?: string } = {}) {
 
 const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 
-describe('idempotency table (ORC-162, docs/idempotence.md)', () => {
+describe('idempotency table (ORC-162, docs/idempotency.md)', () => {
   it('Commentaire: a replayed comment finds its marker and writes no second comment', async () => {
     const { h, settled, result } = replaying('comment', { projectYaml: CRASH_WORKFLOW });
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
@@ -98,8 +98,8 @@ describe('idempotency table (ORC-162, docs/idempotence.md)', () => {
     h.runner.enqueue({ events: [{ kind: 'text', text: 'PR ouverte.' }] });
     await h.send('ticket.delegated', { linearSessionId: 'ls-1', ack: true });
     await settled();
-    expect(h.tracker.comments('REL-1')).toEqual(['Bien reçu.']);
-    expect(h.tracker.activities('ls-1').filter((a) => a.type === 'thought' && !a.ephemeral)).toEqual([{ type: 'thought', body: 'Bien reçu.' }]);
+    expect(h.tracker.comments('REL-1')).toEqual(['Got it.']);
+    expect(h.tracker.activities('ls-1').filter((a) => a.type === 'thought' && !a.ephemeral)).toEqual([{ type: 'thought', body: 'Got it.' }]);
     expect(await result()).toMatchObject({ kind: 'ack', deduplicated: true, ref: 'comment-REL-1-1' });
   });
 

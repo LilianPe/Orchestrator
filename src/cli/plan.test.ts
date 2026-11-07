@@ -20,9 +20,9 @@ describe('plan', () => {
     await store.putTicket({ ...newTicketState('web', 'REL-3', 'T', 'dev', 1), delegated: true });
     const rows = await planRows({ tracker, store, projects, workspaces: new FakeWorkspaces() });
     expect(rows.map((r) => [r.identifier, r.status, r.reasons])).toEqual([
-      ['REL-1', 'pris', []],
-      ['REL-2', 'pas pris', ['dépôt à préciser (repo:web, repo:api)']],
-      ['REL-3', 'déjà géré', ['dev']],
+      ['REL-1', 'taken', []],
+      ['REL-2', 'not taken', ['repository to specify (repo:web, repo:api)']],
+      ['REL-3', 'already handled', ['dev']],
     ]);
   });
 
@@ -37,11 +37,11 @@ describe('plan', () => {
     await store.putTicket(newTicketState('p', 'REL-4', 'En cours', 'dev', 1));
     const rows = await planRows({ tracker, store, projects: [{ id: 'p', repoPath: '/r', teamKey: 'REL', workflow }], workspaces: new FakeWorkspaces() });
     expect(rows.map((r) => [r.identifier, r.status])).toEqual([
-      ['REL-2', 'pris'],
-      ['REL-3', 'pas pris'],
-      ['REL-4', 'déjà géré'],
-      ['REL-1', 'pris'],
+      ['REL-2', 'taken'],
+      ['REL-3', 'not taken'],
+      ['REL-4', 'already handled'],
+      ['REL-1', 'taken'],
     ]);
-    expect(formatPlan(rows)).toContain('REL-3  pas pris  Flou — La description fait moins de 30 caractères.');
+    expect(formatPlan(rows)).toContain('REL-3  not taken  Flou — The description is shorter than 30 characters.');
   });
 });

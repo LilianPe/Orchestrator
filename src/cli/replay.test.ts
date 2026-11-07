@@ -29,8 +29,8 @@ describe('factory replay (ORC-174)', () => {
   it('replays every journal of a folder, identical bit for bit', async () => {
     const { code, out } = await run([journals]);
     expect(code).toBe(0);
-    expect(out).toMatch(/review-merge-done\.v1\.json : p\/REL-1 : \d+ décision\(s\) rejouée\(s\), 1 relu\(s\) par les upcasters — identiques bit à bit/);
-    expect(out).toMatch(/sans divergence\.$/);
+    expect(out).toMatch(/review-merge-done\.v1\.json: p\/REL-1: \d+ decision\(s\) replayed, 1 read through the upcasters — identical bit for bit/);
+    expect(out).toMatch(/without divergence\.$/);
   });
 
   it('--what-if: a modified preset diverges, and the report names the event; exit code 1', async () => {
@@ -39,8 +39,8 @@ describe('factory replay (ORC-174)', () => {
     writeFileSync(yaml, 'version: 1\nlimits: { verify_attempts: 1 }\njobs:\n  dev: { verify: ["fake:check"] }\n');
     const { code, out } = await run([join(journals, 'check-failed-then-feedback.json'), '--what-if', yaml]);
     expect(code).toBe(1);
-    expect(out).toContain('arrêt à la première divergence');
-    expect(out).toMatch(/événement \S+ \(verify\.failed, n° \d+ du journal\)/);
+    expect(out).toContain('stopped at the first divergence');
+    expect(out).toMatch(/event \S+ \(verify\.failed, #\d+ of the journal\)/);
   });
 
   it('--export writes the journal of a ticket of the instance, which then replays', async () => {
@@ -54,7 +54,7 @@ describe('factory replay (ORC-174)', () => {
     await h.store.close();
 
     const file = join(home, 'REL-1.json');
-    expect(await run(['--export', 'REL-1', '--out', file], { FACTORY_HOME: home })).toEqual({ code: 0, out: `Journal de REL-1 écrit dans ${file}.` });
+    expect(await run(['--export', 'REL-1', '--out', file], { FACTORY_HOME: home })).toEqual({ code: 0, out: `Journal of REL-1 written to ${file}.` });
     expect(JSON.parse(readFileSync(file, 'utf8'))).toMatchObject({ format: 1, projectId: 'p', ticketId: 'REL-1' });
     expect((await run([file])).code).toBe(0);
   });
@@ -62,10 +62,10 @@ describe('factory replay (ORC-174)', () => {
   it('refuses to export a ticket the instance has not journaled, or an instance without a base', async () => {
     const home = tmp();
     saveInstance(home, { port: 4100, host: '127.0.0.1', relay: { kind: 'none' }, projects: [{ id: 'p', repoPath: '/repo', linearTeamKey: 'REL' }], limits: {} });
-    await expect(run(['--export', 'REL-1'], { FACTORY_HOME: home })).rejects.toThrow(/pas de base d'instance/);
+    await expect(run(['--export', 'REL-1'], { FACTORY_HOME: home })).rejects.toThrow(/no instance database/);
     expect(existsSync(homePaths(home).db)).toBe(false);
     await new SqliteStore(homePaths(home).db).close();
-    await expect(run(['--export', 'REL-999'], { FACTORY_HOME: home })).rejects.toThrow(/aucun événement journalisé pour REL-999/);
+    await expect(run(['--export', 'REL-999'], { FACTORY_HOME: home })).rejects.toThrow(/no event journaled for REL-999/);
   });
 
   it('exits 2, after the other journals, on a journal it cannot read or one without a decision', async () => {
@@ -74,14 +74,14 @@ describe('factory replay (ORC-174)', () => {
     writeFileSync(join(dir, 'b-null.json'), JSON.stringify({ format: 1, projectId: 'p', workflows: null, entries: [] }));
     const { code, out } = await run([dir, join(journals, 'review-merge-done.json'), join(dir, 'missing.json')]);
     expect(code).toBe(2);
-    expect(out).toContain('a-empty.json : p/REL-1 : 0 décision(s) rejouée(s)');
-    expect(out).toMatch(/b-null\.json : illisible .*pas un journal exporté/);
-    expect(out).toMatch(/review-merge-done\.json : p\/REL-1 : \d+ décision\(s\) rejouée\(s\) — identiques bit à bit/);
-    expect(out).toMatch(/missing\.json : illisible/);
+    expect(out).toContain('a-empty.json: p/REL-1: 0 decision(s) replayed');
+    expect(out).toMatch(/b-null\.json: unreadable .*not a journal exported/);
+    expect(out).toMatch(/review-merge-done\.json: p\/REL-1: \d+ decision\(s\) replayed — identical bit for bit/);
+    expect(out).toMatch(/missing\.json: unreadable/);
   });
 
   it('prints its usage without a journal, or with an unknown option', async () => {
     expect((await run([])).code).toBe(2);
-    expect(await run(['--whatif', 'x.yml', journals])).toMatchObject({ code: 2, out: expect.stringContaining('Usage : factory replay') });
+    expect(await run(['--whatif', 'x.yml', journals])).toMatchObject({ code: 2, out: expect.stringContaining('Usage: factory replay') });
   });
 });

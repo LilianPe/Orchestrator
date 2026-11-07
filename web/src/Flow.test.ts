@@ -53,8 +53,8 @@ describe('Flow', () => {
   });
 
   it('does not repeat a reason that only says what its cause says', () => {
-    const html = page({ needsYou: { ...EMPTY.needsYou, blocked: [{ cause: 'stopped', tickets: [{ ...base, reason: 'Arrêté à la demande' }] }] } });
-    expect(html.match(/Arrêté à la demande/g)).toHaveLength(1);
+    const html = page({ needsYou: { ...EMPTY.needsYou, blocked: [{ cause: 'stopped', tickets: [{ ...base, reason: 'Stopped on request' }] }] } });
+    expect(html.match(/Stopped on request/g)).toHaveLength(1);
   });
 
   it('says on the page, not only on hover, that a running run counts when it ends', () => {

@@ -40,7 +40,7 @@ export interface WorkflowReport {
   environments: { name: string; requiredReviewers: boolean }[];
   /** True when every job that can see secrets is attached to a protected environment. */
   protected: boolean;
-  verdict: 'accepté' | 'refusé';
+  verdict: 'accepted' | 'refused';
   reasons: string[];
 }
 
@@ -102,26 +102,26 @@ function parseTriggerFilters(value: unknown): TriggerFilters | undefined {
 function parseOn(value: unknown): Map<string, TriggerFilters> | string {
   if (typeof value === 'string') {
     const name = value.trim();
-    if (!name || name.includes('${{')) return 'déclencheur `on` dynamique ou vide';
+    if (!name || name.includes('${{')) return 'dynamic or empty `on` trigger';
     return new Map([[name, {}]]);
   }
   if (Array.isArray(value)) {
     const triggers = new Map<string, TriggerFilters>();
     for (const item of value) {
-      if (typeof item !== 'string') return 'liste de déclencheurs `on` ambiguë';
+      if (typeof item !== 'string') return 'ambiguous `on` trigger list';
       const name = item.trim();
-      if (!name || name.includes('${{')) return 'déclencheur `on` dynamique ou vide';
+      if (!name || name.includes('${{')) return 'dynamic or empty `on` trigger';
       triggers.set(name, {});
     }
     return triggers;
   }
-  if (!isRecord(value)) return 'déclencheur `on` ambigu';
+  if (!isRecord(value)) return 'ambiguous `on` trigger';
   const triggers = new Map<string, TriggerFilters>();
   for (const [rawName, rawFilters] of Object.entries(value)) {
     const name = rawName.trim();
-    if (!name || name.includes('${{')) return 'déclencheur `on` dynamique ou vide';
+    if (!name || name.includes('${{')) return 'dynamic or empty `on` trigger';
     const filters = parseTriggerFilters(rawFilters);
-    if (!filters) return `filtres ambigus pour le déclencheur \`${name}\``;
+    if (!filters) return `ambiguous filters for the \`${name}\` trigger`;
     triggers.set(name, filters);
   }
   return triggers;
@@ -165,27 +165,27 @@ function parseWorkflow(content: string): ParseResult {
   try {
     documents = parseAllDocuments(content);
   } catch {
-    return { ok: false, reason: 'YAML illisible (le parseur a refusé le fichier)' };
+    return { ok: false, reason: 'unreadable YAML (the parser refused the file)' };
   }
-  if (documents.length !== 1) return { ok: false, reason: 'YAML ambigu : un workflow doit contenir un seul document' };
+  if (documents.length !== 1) return { ok: false, reason: 'ambiguous YAML: a workflow must hold a single document' };
   const document = documents[0]!;
-  if (document.errors.length > 0) return { ok: false, reason: 'YAML invalide (erreur de syntaxe)' };
-  if (document.warnings.length > 0) return { ok: false, reason: 'YAML ambigu (avertissement du parseur)' };
+  if (document.errors.length > 0) return { ok: false, reason: 'invalid YAML (syntax error)' };
+  if (document.warnings.length > 0) return { ok: false, reason: 'ambiguous YAML (parser warning)' };
 
   let root: unknown;
   try {
     root = document.toJS();
   } catch {
-    return { ok: false, reason: 'YAML ambigu (structure impossible à lire)' };
+    return { ok: false, reason: 'ambiguous YAML (unreadable structure)' };
   }
-  if (!isRecord(root)) return { ok: false, reason: 'workflow vide ou racine YAML invalide' };
+  if (!isRecord(root)) return { ok: false, reason: 'empty workflow or invalid YAML root' };
 
-  if (root['on'] === undefined) return { ok: false, reason: 'déclencheur `on` absent : impossible de savoir quand la CI tourne' };
+  if (root['on'] === undefined) return { ok: false, reason: 'no `on` trigger: impossible to know when the CI runs' };
   const parsedOn = parseOn(root['on']);
   if (typeof parsedOn === 'string') return { ok: false, reason: parsedOn };
 
   const rawJobs = root['jobs'];
-  if (!isRecord(rawJobs)) return { ok: false, reason: 'section `jobs` absente ou invalide' };
+  if (!isRecord(rawJobs)) return { ok: false, reason: 'missing or invalid `jobs` section' };
 
   const jobs = new Map<string, Record<string, unknown>>();
   const jobEnvironments = new Map<string, string>();
@@ -198,7 +198,7 @@ function parseWorkflow(content: string): ParseResult {
       let name: string | undefined;
       if (typeof environment === 'string') name = environment.trim();
       else if (isRecord(environment) && typeof environment['name'] === 'string') name = environment['name'].trim();
-      if (!name || name.includes('${{')) return { ok: false, reason: `environnement du job \`${jobId}\` ambigu` };
+      if (!name || name.includes('${{')) return { ok: false, reason: `ambiguous environment for the job \`${jobId}\`` };
       jobEnvironments.set(jobId, name);
       if (!environmentNames.includes(name)) environmentNames.push(name);
     }
@@ -312,11 +312,11 @@ function pushReachesFactory(filters: TriggerFilters): boolean {
 }
 
 function triggerLabel(name: string, filters: TriggerFilters): string {
-  if (filters.branches !== undefined) return `${name} (branches : ${filters.branches.join(', ')})`;
-  if (filters.branchesIgnore !== undefined) return `${name} (branches-ignore : ${filters.branchesIgnore.join(', ')})`;
-  if (filters.tags !== undefined) return `${name} (tags seulement)`;
-  if (filters.tagsIgnore !== undefined) return `${name} (tags-ignore : ${filters.tagsIgnore.join(', ')})`;
-  if (name === 'push' || name === 'workflow_run') return `${name} (toutes les branches)`;
+  if (filters.branches !== undefined) return `${name} (branches: ${filters.branches.join(', ')})`;
+  if (filters.branchesIgnore !== undefined) return `${name} (branches-ignore: ${filters.branchesIgnore.join(', ')})`;
+  if (filters.tags !== undefined) return `${name} (tags only)`;
+  if (filters.tagsIgnore !== undefined) return `${name} (tags-ignore: ${filters.tagsIgnore.join(', ')})`;
+  if (name === 'push' || name === 'workflow_run') return `${name} (all branches)`;
   return name;
 }
 
@@ -325,9 +325,9 @@ function exposureReasons(triggers: Map<string, TriggerFilters>): string[] {
   const reasons: string[] = [];
   for (const [name, filters] of triggers) {
     if (name === 'pull_request' || name === 'pull_request_target') {
-      reasons.push(`${name} peut exécuter la CI sur une branche \`factory/*\``);
+      reasons.push(`${name} can run the CI on a \`factory/*\` branch`);
     } else if ((name === 'push' || name === 'workflow_run') && pushReachesFactory(filters)) {
-      reasons.push(`${triggerLabel(name, filters)} peut exécuter la CI sur une branche \`factory/*\``);
+      reasons.push(`${triggerLabel(name, filters)} can run the CI on a \`factory/*\` branch`);
     }
   }
   return reasons;
@@ -347,7 +347,7 @@ function analyzeWorkflow(source: WorkflowSource, environments: Map<string, Envir
       secrets: false,
       environments: [],
       protected: false,
-      verdict: 'refusé',
+      verdict: 'refused',
       reasons: [parsed.reason],
     };
   }
@@ -365,24 +365,24 @@ function analyzeWorkflow(source: WorkflowSource, environments: Map<string, Envir
     workflow.secretJobs.every((jobId) => protectedByEnvironment(jobId, workflow, environments));
 
   const reasons: string[] = [];
-  let verdict: WorkflowReport['verdict'] = 'accepté';
+  let verdict: WorkflowReport['verdict'] = 'accepted';
   if (!workflow.hasSecrets) {
-    reasons.push('aucun secret référencé');
+    reasons.push('no secret referenced');
   } else if (exposure.length === 0) {
-    reasons.push("secrets référencés uniquement sur des déclencheurs qui n'atteignent pas les branches de l'usine");
+    reasons.push("secrets referenced only on triggers that do not reach the factory's branches");
   } else if (workflow.secretJobs.length === 0) {
-    reasons.push('workflow sans job : aucun secret ne peut être exposé');
+    reasons.push('workflow without jobs: no secret can be exposed');
   } else if (unprotectedJobs.length === 0) {
-    reasons.push(`secrets limités aux jobs sous environnement protégé (${[...new Set(workflow.environmentNames)].join(', ')})`);
+    reasons.push(`secrets limited to jobs under a protected environment (${[...new Set(workflow.environmentNames)].join(', ')})`);
   } else {
-    verdict = 'refusé';
-    reasons.push(`secrets exposés sur les branches de l'usine (${exposure.join(' ; ')}) sans approbation humaine`);
+    verdict = 'refused';
+    reasons.push(`secrets exposed on the factory's branches (${exposure.join('; ')}) without human approval`);
     const withoutEnvironment = unprotectedJobs.filter((jobId) => !workflow.jobEnvironments.has(jobId));
     const withUnprotectedEnvironment = unprotectedJobs.filter((jobId) => workflow.jobEnvironments.has(jobId));
-    if (withoutEnvironment.length > 0) reasons.push(`job(s) sans environnement : ${withoutEnvironment.join(', ')}`);
-    if (withUnprotectedEnvironment.length > 0) reasons.push(`job(s) sous environnement sans required reviewers : ${withUnprotectedEnvironment.join(', ')}`);
+    if (withoutEnvironment.length > 0) reasons.push(`job(s) without an environment: ${withoutEnvironment.join(', ')}`);
+    if (withUnprotectedEnvironment.length > 0) reasons.push(`job(s) under an environment without required reviewers: ${withUnprotectedEnvironment.join(', ')}`);
     for (const name of workflow.environmentNames) {
-      if (!environments.has(name)) reasons.push(`environnement \`${name}\` introuvable dans l'API GitHub`);
+      if (!environments.has(name)) reasons.push(`environment \`${name}\` not found in the GitHub API`);
     }
   }
 
@@ -407,50 +407,50 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
   try {
     workflows = await api.listWorkflows(repoPath);
   } catch (error) {
-    return doctorFailure(options, `Lecture des workflows impossible : ${errorMessage(error)}`);
+    return doctorFailure(options, `Cannot read the workflows: ${errorMessage(error)}`);
   }
   let environments: EnvironmentProtection[] = [];
   if (workflows.length > 0) {
     try {
       environments = await api.listEnvironments(repoPath);
     } catch (error) {
-      return doctorFailure(options, `Lecture des environnements impossible : ${errorMessage(error)}`);
+      return doctorFailure(options, `Cannot read the environments: ${errorMessage(error)}`);
     }
   }
   const environmentMap = new Map(environments.map((environment) => [environment.name, environment] as const));
   const reports = workflows.map((workflow) => analyzeWorkflow(workflow, environmentMap));
-  const accepted = reports.every((report) => report.verdict === 'accepté');
-  const refused = reports.filter((report) => report.verdict === 'refusé').length;
+  const accepted = reports.every((report) => report.verdict === 'accepted');
+  const refused = reports.filter((report) => report.verdict === 'refused').length;
 
   if (options.json) {
     out(JSON.stringify({ repoPath, accepted, workflows: reports }, null, 2));
   } else {
-    if (reports.length === 0) out('Aucun workflow GitHub Actions trouvé.');
+    if (reports.length === 0) out('No GitHub Actions workflow found.');
     else {
-      out(`Workflows GitHub Actions : ${reports.length}`);
+      out(`GitHub Actions workflows: ${reports.length}`);
       out('');
       for (const report of reports) {
         out(report.path);
-        out(`  déclencheurs : ${report.triggers.length > 0 ? report.triggers.join(', ') : 'inconnus'}`);
-        out(`  secrets : ${report.secrets ? 'oui' : 'non'}`);
+        out(`  triggers: ${report.triggers.length > 0 ? report.triggers.join(', ') : 'unknown'}`);
+        out(`  secrets: ${report.secrets ? 'yes' : 'no'}`);
         out(
-          `  environnements : ${
+          `  environments: ${
             report.environments.length > 0
               ? report.environments
-                  .map((environment) => `${environment.name} (${environment.requiredReviewers ? 'required reviewers' : 'sans required reviewers'})`)
+                  .map((environment) => `${environment.name} (${environment.requiredReviewers ? 'required reviewers' : 'without required reviewers'})`)
                   .join(', ')
-              : 'aucun'
+              : 'none'
           }`,
         );
-        out(`  environnement protégé : ${report.protected ? 'oui' : 'non'}`);
-        out(`  verdict : ${report.verdict} — ${report.reasons.join(' ')}`);
+        out(`  protected environment: ${report.protected ? 'yes' : 'no'}`);
+        out(`  verdict: ${report.verdict} — ${report.reasons.join(' ')}`);
         out('');
       }
     }
     out(
       accepted
-        ? "Résultat : accepté — aucun workflow ne peut exposer de secret aux branches de l'usine."
-        : `Résultat : refusé — ${refused} workflow(s) sur ${reports.length} peuvent exposer des secrets aux branches de l'usine.`,
+        ? "Result: accepted — no workflow can expose a secret to the factory's branches."
+        : `Result: refused — ${refused} workflow(s) of ${reports.length} can expose secrets to the factory's branches.`,
     );
   }
   return accepted ? 0 : 1;
@@ -491,8 +491,8 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
   }
   if (!githubApp) {
     out(
-      'GitHub App non configurée : `factory doctor` a besoin de github.appId et github.privateKey (ou GH_APP_ID et GH_APP_KEY) ' +
-        'pour lire les workflows et les environnements. Aucun repli `gh` pour ce contrôle.',
+      'GitHub App not configured: `factory doctor` needs github.appId and github.privateKey (or GH_APP_ID and GH_APP_KEY) ' +
+        'to read the workflows and the environments. No `gh` fallback for this check.',
     );
     return 1;
   }

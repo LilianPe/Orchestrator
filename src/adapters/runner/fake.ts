@@ -60,7 +60,7 @@ export class FakeRunner implements Runner {
   start(req: RunRequest): RunHandle {
     this.requests.push(req);
     const s = this.scripts.shift() ?? {};
-    const events = s.events ?? [{ kind: 'text', text: 'Terminé.' }];
+    const events = s.events ?? [{ kind: 'text', text: 'Done.' }];
     const ch = new Channel<RunStreamEvent>();
     for (const e of events) ch.push(e);
     const overTurns = (s.turns ?? 1) > req.limits.turns;
@@ -73,7 +73,7 @@ export class FakeRunner implements Runner {
       releaseHold();
     };
     const lastText = [...events].reverse().find((e): e is Extract<RunStreamEvent, { kind: 'text' }> => e.kind === 'text')?.text ?? '';
-    const output: AgentOutput = { status: 'done', summary: lastText || 'Terminé.', tests_added: [], why: '', assumptions: [], risks: [], untested: [], review_hints: [] };
+    const output: AgentOutput = { status: 'done', summary: lastText || 'Done.', tests_added: [], why: '', assumptions: [], risks: [], untested: [], review_hints: [] };
     const submitted = this.submit && s.submit !== false && req.prompt.startsWith('/factory:dev\n') ? this.submit(req.runId, output).catch(() => {}) : Promise.resolve();
     const done: Promise<RunResult> = Promise.all([held, submitted]).then(() => {
       ch.close();

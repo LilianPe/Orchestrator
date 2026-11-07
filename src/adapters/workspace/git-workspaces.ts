@@ -7,7 +7,7 @@ import { readCapped } from '../read-capped.js';
 import type { StepDiff, Workspace, WorkspaceManager, WorkspaceRequest } from './types.js';
 
 function assertSafe(id: string): void {
-  if (/[\\/]/.test(id) || id.includes('..')) throw new Error(`Identifiant invalide : ${id}`);
+  if (/[\\/]/.test(id) || id.includes('..')) throw new Error(`Invalid identifier: ${id}`);
 }
 
 /**
@@ -106,7 +106,7 @@ export class GitWorkspaces implements WorkspaceManager {
     const port = req.portBase + req.slot;
     if (existsSync(path)) {
       const branch = agentHead(path)?.branch;
-      if (!branch) throw new Error(`Le dépôt git de ${path} n'est pas celui que l'usine a créé, ou n'est plus lisible : ce worktree doit être supprimé.`);
+      if (!branch) throw new Error(`The git repository of ${path} is not the one the factory created, or is no longer readable: this worktree must be deleted.`);
       return { path, port, branch };
     }
     await this.git(req.repoPath, 'fetch', 'origin');
@@ -186,7 +186,7 @@ export class GitWorkspaces implements WorkspaceManager {
 
   private async knowledgeWorkspace(req: WorkspaceRequest): Promise<Workspace> {
     const kb = this.o.knowledgeRepo;
-    if (!kb) throw new Error('Aucun dépôt de connaissance configuré.');
+    if (!kb) throw new Error('No knowledge repository configured.');
     await this.git(kb, 'fetch', 'origin');
     const path = join(this.o.root, '_kb', req.runId);
     const branch = `learn/${req.ticketId.toLowerCase()}-${req.runId.slice(0, 8)}`;

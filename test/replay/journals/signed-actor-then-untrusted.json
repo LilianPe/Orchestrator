@@ -391,7 +391,7 @@
         "effects": [
           {
             "kind": "ack",
-            "body": "Bien reçu.",
+            "body": "Got it.",
             "linearSessionId": "as-1",
             "comment": true,
             "plan": true
@@ -1985,7 +1985,7 @@
           {
             "kind": "activity",
             "type": "response",
-            "body": "Je ne lance pas remember : ce job écrit dans la base de connaissances, et l'événement vient d'une source non fiable.",
+            "body": "I am not starting remember: this job writes to the knowledge base, and the event comes from an untrusted source.",
             "linearSessionId": "as-bot"
           }
         ],

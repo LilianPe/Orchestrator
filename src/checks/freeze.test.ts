@@ -84,7 +84,7 @@ describe('checkFrozen (ORC-131)', () => {
   it('a deleted frozen file blocks', async () => {
     const r = await after({ 'src/export.test.ts': undefined });
     expect(r.ok).toBe(false);
-    expect(r.summary).toContain('supprimé');
+    expect(r.summary).toContain('deleted');
   });
 
   it('a harness file added after the freeze blocks: it can switch tests off', async () => {
@@ -103,7 +103,7 @@ describe('checkFrozen (ORC-131)', () => {
 
   it('a file that is not frozen passes, a new test included', async () => {
     const r = await after({ 'src/export.ts': 'export const toCsv = (r: string[]) => r.join(",");\n', 'src/other.test.ts': TEST });
-    expect(r).toEqual({ check: FREEZE_CHECK, ok: true, summary: '6 fichiers gelés, inchangés depuis le gel' });
+    expect(r).toEqual({ check: FREEZE_CHECK, ok: true, summary: '6 frozen files, unchanged since the freeze' });
   });
 });
 

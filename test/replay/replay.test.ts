@@ -25,7 +25,7 @@ describe('replay oracle (ORC-174)', () => {
     const report = replayJournal(journal);
     expect(report.replayed).toBe(journal.entries.length);
     expect(report).toMatchObject({ mode: 'regression', unrecorded: 0, upcast: 0, divergences: [] });
-    expect(formatReplay(report)).toMatch(/identiques bit à bit$/);
+    expect(formatReplay(report)).toMatch(/identical bit for bit$/);
   });
 
   it('reports a decision that no longer comes out as recorded, at its exact event', async () => {
@@ -59,7 +59,7 @@ describe('replay oracle (ORC-174)', () => {
     // Stopped there: the decisions before it, and this one, were replayed; none after.
     expect(report.replayed).toBe(journal.entries.indexOf(failed) + 1);
     expect(report.divergences.map((d) => d.field)).toContain('ticket');
-    expect(formatReplay(report)).toContain(`événement ${failed.event.id} (verify.failed`);
+    expect(formatReplay(report)).toContain(`event ${failed.event.id} (verify.failed`);
   });
 
   it('what-if under the same preset finds no divergence', async () => {
@@ -147,7 +147,7 @@ describe('recorded journals (test/replay/journals)', () => {
       ['user-lilian', ['team_member', 'repo_writer', 'repo_merger']],
     ]);
     expect(delegations[0]!.decision?.trace).toContainEqual(expect.stringMatching(/^authz: refused trigger to user-armand/));
-    expect(delegations[0]!.decision?.effects).toEqual([expect.objectContaining({ kind: 'activity', linearSessionId: 'ls-1', body: expect.stringMatching(/^Refusé/) })]);
+    expect(delegations[0]!.decision?.effects).toEqual([expect.objectContaining({ kind: 'activity', linearSessionId: 'ls-1', body: expect.stringMatching(/^Refused:/) })]);
     expect(delegations[1]!.decision?.effects).toContainEqual(expect.objectContaining({ kind: 'start_run', job: 'dev' }));
     const replies = journal.entries.filter((e) => e.event.type === 'session.prompted');
     expect(replies.map((e) => e.event.actor)).toEqual(['user-stranger', 'user-armand']);

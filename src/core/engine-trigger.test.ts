@@ -22,7 +22,7 @@ describe('decide — the acknowledgement of a trigger (ORC-171)', () => {
     const out = decide(ticket(), delegation(), workflow);
     expect(kinds(out.effects)).toEqual(['ack', 'start_run']);
     expect(out.effects[0]).toEqual({ kind: 'ack', body: ACK_BODY, linearSessionId: 's-dev', comment: true, plan: true });
-    expect(ACK_BODY).toBe('Bien reçu.');
+    expect(ACK_BODY).toBe('Got it.');
   });
 
   it('acknowledges a mention in its own session, without a comment or a plan: the ask run still starts', () => {
@@ -39,7 +39,7 @@ describe('decide — the acknowledgement of a trigger (ORC-171)', () => {
   it('answers a refused delegation with the refusal alone: nothing says it was taken', () => {
     const out = decide(ticket(), ev('ticket.delegated', { linearSessionId: 's-dev', ack: true }, ['team_member']), workflow);
     expect(kinds(out.effects)).toEqual(['activity']);
-    expect(out.effects[0]).toMatchObject({ body: expect.stringMatching(/^Refusé/) });
+    expect(out.effects[0]).toMatchObject({ body: expect.stringMatching(/^Refused/) });
   });
 
   it('asks nothing of a row journaled before ORC-171, or of what no webhook brought: it replays as it was decided', () => {
@@ -51,9 +51,9 @@ describe('decide — /refreeze answers for itself (ORC-131, ORC-171)', () => {
   const refreeze = (roles: readonly Role[], frozen?: FrozenTests) => ev('command', { name: REFREEZE, body: '', linearSessionId: 's-r', author: 'L', ack: true, ...(frozen ? { frozen } : {}) }, roles);
 
   it.each([
-    ['refused', refreeze(['team_member']), /^Refusé/],
-    ['with nothing to refreeze', refreeze(['maintainer']), /^Rien à regeler/],
-    ['done', refreeze(['maintainer'], { sha: 'a'.repeat(40), files: { 'a.test.ts': 'x' } }), /^Regelé/],
+    ['refused', refreeze(['team_member']), /^Refused/],
+    ['with nothing to refreeze', refreeze(['maintainer']), /^Nothing to refreeze/],
+    ['done', refreeze(['maintainer'], { sha: 'a'.repeat(40), files: { 'a.test.ts': 'x' } }), /^Refrozen/],
   ])('%s: its answer is the sign of life, with no ack before it', (_, event, body) => {
     const out = decide(ticket({ delegated: true, logical: 'dev' }), event, workflow);
     expect(out.effects).toEqual([{ kind: 'activity', type: 'response', linearSessionId: 's-r', body: expect.stringMatching(body) }]);
@@ -67,14 +67,14 @@ describe('decide — one active run per ticket (ORC-171)', () => {
     const state = ticket({ delegated: true, linearSessionId: 's-dev', initiatorId: 'u-first', logical: 'dev', ...patch });
     const out = decide(state, delegation('s-2'), workflow);
     expect(out.events).toEqual([]);
-    expect(out.effects).toEqual([{ kind: 'activity', type: 'response', linearSessionId: 's-2', body: expect.stringContaining('déjà') }]);
+    expect(out.effects).toEqual([{ kind: 'activity', type: 'response', linearSessionId: 's-2', body: expect.stringContaining('already') }]);
     expect(out.trace).toContain('ticket.delegated: a run is active, none started');
   });
 
   it('still refuses a second delegation by someone without the right', () => {
     const state = ticket({ delegated: true, linearSessionId: 's-dev', activeRunId: 'r1', logical: 'dev' });
     const out = decide(state, ev('ticket.delegated', { linearSessionId: 's-2', ack: true }, []), workflow);
-    expect(out.effects).toEqual([expect.objectContaining({ body: expect.stringMatching(/^Refusé/) })]);
+    expect(out.effects).toEqual([expect.objectContaining({ body: expect.stringMatching(/^Refused/) })]);
   });
 
   it('a delegation the reconciliation finds on a ticket at work is refused by the matrix: unsigned, it starts nothing', () => {
@@ -132,7 +132,7 @@ describe('decide — a ticket of a team with no repo (ORC-171)', () => {
   });
 
   it('takes over a block of another reason, or of a row written before the field: the wait is the field', () => {
-    const before = { ...blocked, awaitingRepo: undefined, blockReason: "Aucun dépôt connu pour l'équipe Linear ZZZ : ..." };
+    const before = { ...blocked, awaitingRepo: undefined, blockReason: "No repository known for the Linear team ZZZ : ..." };
     expect(decide(before, noRepo, workflow).events).toEqual(NO_REPO_EVENTS);
   });
 
@@ -156,10 +156,10 @@ describe('decide — a ticket of a team with no repo (ORC-171)', () => {
 
 describe('decide — the ack of a ticket waiting for its repo (ORC-171, ORC-291)', () => {
   const repos = ['p', 'api'];
-  const asked = { kind: 'block_comment', block: expect.objectContaining({ waits: true, reason: expect.stringContaining('Dépôt à préciser') }) };
+  const asked = { kind: 'block_comment', block: expect.objectContaining({ waits: true, reason: expect.stringContaining('Repository to specify') }) };
   /** The session the delegation opened needs a sign of life: the question is a comment on the ticket (ORC-196). No plan: no run. */
   const held = (linearSessionId: string) => ({ kind: 'ack', body: ACK_BODY, linearSessionId, comment: true });
-  const waiting = ticket({ delegated: true, blocked: true, blockReason: 'Dépôt à préciser : ...', awaitingRepo: repos, linearSessionId: 's-1' });
+  const waiting = ticket({ delegated: true, blocked: true, blockReason: 'Repository to specify: ...', awaitingRepo: repos, linearSessionId: 's-1' });
   const ack = (linearSessionId: string) => ({ kind: 'ack', body: ACK_BODY, linearSessionId, comment: true, plan: true });
 
   it('a delegation that must choose gets the question, and the ack its session is owed: no plan, no run', () => {
@@ -173,7 +173,7 @@ describe('decide — the ack of a ticket waiting for its repo (ORC-171, ORC-291)
     ['a mention', ev('session.mentioned', { linearSessionId: 's-q', body: 'alors ?', author: 'L', ack: true })],
     ['a command', ev('command', { name: '/x', body: '', linearSessionId: 's-q', author: 'L', ack: true })],
   ])('%s on a waiting ticket is answered with the question, no ack', (_name, event) => {
-    expect(decide(waiting, event, workflow).effects).toEqual([{ kind: 'activity', type: 'response', linearSessionId: 's-q', body: expect.stringContaining('Dépôt à préciser') }]);
+    expect(decide(waiting, event, workflow).effects).toEqual([{ kind: 'activity', type: 'response', linearSessionId: 's-q', body: expect.stringContaining('Repository to specify') }]);
   });
 
   it('its end in the repo it waited in: one ack in the new session, the plan there, one run', () => {

@@ -58,7 +58,7 @@ export const SOCLE_FORBIDDEN_PATHS: readonly string[] = FORBIDDEN_PATHS;
 
 export class RepoConfigError extends Error {
   constructor(readonly violations: string[]) {
-    super(`.factory/config.yml refusé :\n- ${violations.join('\n- ')}`);
+    super(`.factory/config.yml refused:\n- ${violations.join('\n- ')}`);
   }
 }
 
@@ -90,10 +90,10 @@ export function parseRepoConfig(text: string | undefined): RepoConfig {
   try {
     raw = text === undefined ? null : parse(text);
   } catch (err) {
-    throw new RepoConfigError([`YAML illisible : ${(err as Error).message}`]);
+    throw new RepoConfigError([`unreadable YAML: ${(err as Error).message}`]);
   }
   raw ??= {};
-  if (typeof raw !== 'object' || Array.isArray(raw)) throw new RepoConfigError(['un objet YAML est attendu']);
+  if (typeof raw !== 'object' || Array.isArray(raw)) throw new RepoConfigError(['a YAML object is expected']);
   const r = raw as Record<string, unknown>;
   const violations: string[] = [];
   // `expected` for the value as a whole, `element` for one of its entries, named by its path (`sensitive_paths[1]`).
@@ -102,37 +102,37 @@ export function parseRepoConfig(text: string | undefined): RepoConfig {
     const res = schema.safeParse(r[key]);
     if (res.success) return res.data;
     const path = res.error.issues[0]?.path ?? [];
-    violations.push(path.length === 0 ? `${key} : ${expected}` : `${key}${at(path)} : ${element}`);
+    violations.push(path.length === 0 ? `${key}: ${expected}` : `${key}${at(path)}: ${element}`);
     return undefined;
   };
 
-  if (r['extends'] !== undefined && r['extends'] !== null && r['extends'] !== PRESET) violations.push(`extends : seul \`${PRESET}\` existe au MVP`);
+  if (r['extends'] !== undefined && r['extends'] !== null && r['extends'] !== PRESET) violations.push(`extends: only \`${PRESET}\` exists in the MVP`);
   for (const key of Object.keys(r)) {
-    if (!KEYS.includes(key)) violations.push(`${key} : clé inconnue ; la configuration du dépôt ajoute des contrôles ou des interdits, elle n’en retire jamais au socle`);
+    if (!KEYS.includes(key)) violations.push(`${key}: unknown key; the repository configuration adds checks or prohibitions, it never removes any from the baseline`);
   }
-  const setup = read('setup', z.string().min(1), 'une commande est attendue');
-  const commands = read('commands', z.record(z.string(), z.string().min(1)), 'un objet `nom: commande` est attendu', 'une commande non vide est attendue');
-  const env = read('env', strings, 'un tableau de noms de variables est attendu', 'un nom de variable non vide est attendu');
-  const setupSecrets = read('setup_secrets', strings, 'un tableau de noms de variables est attendu', 'un nom de variable non vide est attendu');
+  const setup = read('setup', z.string().min(1), 'a command is expected');
+  const commands = read('commands', z.record(z.string(), z.string().min(1)), 'an object `name: command` is expected', 'a non-empty command is expected');
+  const env = read('env', strings, 'an array of variable names is expected', 'a non-empty variable name is expected');
+  const setupSecrets = read('setup_secrets', strings, 'an array of variable names is expected', 'a non-empty variable name is expected');
   for (const [key, names] of [['env', env], ['setup_secrets', setupSecrets]] as const) {
     names?.forEach((name, i) => {
-      if (!VARIABLE.test(name)) violations.push(`${key}[${i}] : « ${name} » n’est pas un nom de variable (majuscules, chiffres, _)`);
-      else if (RESERVED.test(name)) violations.push(`${key}[${i}] : « ${name} » est réservé à l’usine`);
-      else if (key === 'env' && SECRET_NAME.test(name)) violations.push(`${key}[${i}] : « ${name} » a le nom d’un secret, que l’agent verrait ; un secret se déclare sous setup_secrets`);
-      else if (key === 'env' && setupSecrets?.includes(name)) violations.push(`${key}[${i}] : « ${name} » est aussi sous setup_secrets, que l’agent ne doit pas voir`);
+      if (!VARIABLE.test(name)) violations.push(`${key}[${i}]: "${name}" is not a variable name (capitals, digits, _)`);
+      else if (RESERVED.test(name)) violations.push(`${key}[${i}]: "${name}" is reserved for the factory`);
+      else if (key === 'env' && SECRET_NAME.test(name)) violations.push(`${key}[${i}]: "${name}" has the name of a secret, which the agent would see; a secret is declared under setup_secrets`);
+      else if (key === 'env' && setupSecrets?.includes(name)) violations.push(`${key}[${i}]: "${name}" is also under setup_secrets, which the agent must not see`);
     });
   }
-  const services = read('services', strings, 'un tableau est attendu', 'un nom de service non vide est attendu');
-  const sensitivePaths = read('sensitive_paths', strings, 'un tableau de chemins est attendu', 'un chemin non vide est attendu');
-  const visualPaths = read('visual_paths', strings, 'un tableau de chemins est attendu', 'un chemin non vide est attendu');
+  const services = read('services', strings, 'an array is expected', 'a non-empty service name is expected');
+  const sensitivePaths = read('sensitive_paths', strings, 'an array of paths is expected', 'a non-empty path is expected');
+  const visualPaths = read('visual_paths', strings, 'an array of paths is expected', 'a non-empty path is expected');
   for (const [key, paths] of [['sensitive_paths', sensitivePaths], ['visual_paths', visualPaths]] as const) {
     paths?.forEach((p, i) => {
       // Anywhere in the pattern: `!x` and the extglob `src/!(auth)/**` both carve a hole.
-      if (p.includes('!')) violations.push(`${key}[${i}] : « ${p} » retirerait un chemin ; on ne peut qu’en ajouter`);
+      if (p.includes('!')) violations.push(`${key}[${i}]: "${p}" would remove a path; paths can only be added`);
     });
   }
-  const budgets = read('budgets', z.strictObject({ per_ticket_tokens: z.number().int().positive().optional() }), '`{ per_ticket_tokens }` entier positif attendu');
-  const featureFlags = read('feature_flags', z.strictObject({ provider: z.string().min(1) }), '`{ provider }` attendu');
+  const budgets = read('budgets', z.strictObject({ per_ticket_tokens: z.number().int().positive().optional() }), '`{ per_ticket_tokens }` positive integer expected');
+  const featureFlags = read('feature_flags', z.strictObject({ provider: z.string().min(1) }), '`{ provider }` expected');
   const network = networkOf(r['network'], violations);
   let maxDiff = resolveMaxDiff();
   try {
@@ -165,18 +165,18 @@ function networkOf(raw: unknown, violations: string[]): RepoConfig['network'] {
   if (raw === undefined || raw === null) return network;
   const res = z.strictObject({ level: z.string().optional(), allow: strings.optional() }).safeParse(raw);
   if (!res.success) {
-    violations.push('network : `{ level, allow }` attendu');
+    violations.push('network: `{ level, allow }` expected');
     return network;
   }
   const { level, allow } = res.data;
-  if (level === 'full') violations.push('network.level : `full` est réservé à `setup`, jamais pour l’agent');
-  else if (level !== undefined && level !== 'none' && level !== 'limited' && level !== 'custom') violations.push(`network.level : « ${level} » inconnu (none, limited, custom)`);
+  if (level === 'full') violations.push('network.level: `full` is reserved for `setup`, never for the agent');
+  else if (level !== undefined && level !== 'none' && level !== 'limited' && level !== 'custom') violations.push(`network.level: unknown "${level}" (none, limited, custom)`);
   else if (level) network.level = level;
   allow?.forEach((host, i) => {
-    if (!HOST.test(host)) violations.push(`network.allow[${i}] : « ${host} » n’est pas un nom d’hôte ; les jokers et les plages sont refusés`);
+    if (!HOST.test(host)) violations.push(`network.allow[${i}]: "${host}" is not a host name; wildcards and ranges are refused`);
   });
   if (allow) network.allow = allow;
   // Only `custom` opens its hosts (`stepPolicy`): a list under another level would pass validation and open nothing.
-  if (allow?.length && (level === undefined || level === 'none' || level === 'limited')) violations.push(`network.allow : seul le niveau \`custom\` prend une liste d’hôtes ; ici \`${level ?? 'limited'}\``);
+  if (allow?.length && (level === undefined || level === 'none' || level === 'limited')) violations.push(`network.allow: only the \`custom\` level takes a list of hosts; here \`${level ?? 'limited'}\``);
   return network;
 }

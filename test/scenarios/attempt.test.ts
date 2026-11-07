@@ -39,12 +39,12 @@ describe('the closed outcome of an attempt decides its end (ORC-289)', () => {
     const h = await devRun({ ...done, status: 'blocked', question: 'Quel séparateur : virgule ou point-virgule ?' });
     expect(await h.ticket()).toMatchObject({ logical: 'dev', blocked: true });
     expect((await h.tracker.getIssue('REL-1')).labels).toContain('Bloqué');
-    expect(lastBody(h)).toContain('Question : Quel séparateur');
+    expect(lastBody(h)).toContain('Question: Quel séparateur');
   });
 
   it('spec_impossible: Bloqué, the justification posted', async () => {
     const h = await devRun({ ...done, status: 'blocked', reason: 'spec_impossible', question: 'Les critères 2 et 3 se contredisent.' });
-    expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: expect.stringContaining('conteste') });
+    expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: expect.stringContaining('disputes') });
     expect(lastBody(h)).toContain('Les critères 2 et 3 se contredisent.');
   });
 
@@ -54,7 +54,7 @@ describe('the closed outcome of an attempt decides its end (ORC-289)', () => {
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
     await h.advance(600_000);
     expect(h.runner.requests).toHaveLength(1);
-    expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: expect.stringContaining("panne d'infrastructure, l'agent n'est pas en cause") });
+    expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: expect.stringContaining("infrastructure failure, not the agent's fault") });
   });
 
   it('succeeded: the posted message is composed from the output, not the last text', async () => {
@@ -67,8 +67,8 @@ describe('the closed outcome of an attempt decides its end (ORC-289)', () => {
 
   it('an invalid stored output is no output: the build asks for one, so it failed (ORC-136)', async () => {
     const h = await devRun({ status: 'done' });
-    expect(await h.ticket()).toMatchObject({ logical: 'dev', blocked: true, blockReason: 'Le run dev a échoué.' });
-    expect(lastBody(h)).toContain('🔴 Bloqué');
+    expect(await h.ticket()).toMatchObject({ logical: 'dev', blocked: true, blockReason: 'The run dev failed.' });
+    expect(lastBody(h)).toContain('🔴 Blocked');
   });
 
   it("a reply (a feedback run) posts the agent's answer, not the output template", async () => {
@@ -89,7 +89,7 @@ describe('the closed outcome of an attempt decides its end (ORC-289)', () => {
         getMeta: (k: string) => (k.startsWith('agent-output:') ? Promise.reject(new Error('database down')) : inner.getMeta(k)),
       }),
     );
-    expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: expect.stringContaining("panne d'infrastructure") });
+    expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: expect.stringContaining('infrastructure failure') });
   });
 
   it('a failure after the run ended (recording it) does not turn a finished attempt into errored', async () => {

@@ -1364,7 +1364,7 @@
             1791622920000,
             1791622980000
           ],
-          "blockReason": "Trop de relances après coupure : 3 en 60 min.",
+          "blockReason": "Too many relaunches after a cut: 3 in 60 min.",
           "blockedJob": "dev"
         },
         "effects": [
@@ -1373,11 +1373,11 @@
             "block": {
               "step": "build",
               "max": 3,
-              "reason": "Trop de relances après coupure : 3 en 60 min.",
+              "reason": "Too many relaunches after a cut: 3 in 60 min.",
               "tried": [
-                "3 relances automatiques après coupure."
+                "3 automatic relaunches after a cut."
               ],
-              "question": "Orchestrator ou son runner redémarre en boucle : le démon est-il rétabli (répondez « oui » pour que je reprenne) ?"
+              "question": "Orchestrator or its runner keeps restarting: is the daemon back (reply \"yes\" and I will resume)?"
             }
           },
           {
@@ -1447,7 +1447,7 @@
             1791622920000,
             1791622980000
           ],
-          "blockReason": "Trop de relances après coupure : 3 en 60 min.",
+          "blockReason": "Too many relaunches after a cut: 3 in 60 min.",
           "blockedJob": "dev"
         },
         "ticket": {
@@ -1476,7 +1476,7 @@
             1791622920000,
             1791622980000
           ],
-          "blockReason": "Trop de relances après coupure : 3 en 60 min.",
+          "blockReason": "Too many relaunches after a cut: 3 in 60 min.",
           "blockedJob": "dev"
         },
         "effects": [],
@@ -1536,7 +1536,7 @@
             1791622920000,
             1791622980000
           ],
-          "blockReason": "Trop de relances après coupure : 3 en 60 min.",
+          "blockReason": "Too many relaunches after a cut: 3 in 60 min.",
           "blockedJob": "dev"
         },
         "ticket": {
@@ -1565,7 +1565,7 @@
             1791622920000,
             1791622980000
           ],
-          "blockReason": "Trop de relances après coupure : 3 en 60 min.",
+          "blockReason": "Too many relaunches after a cut: 3 in 60 min.",
           "blockedJob": "dev"
         },
         "effects": [],
@@ -1625,7 +1625,7 @@
             1791622920000,
             1791622980000
           ],
-          "blockReason": "Trop de relances après coupure : 3 en 60 min.",
+          "blockReason": "Too many relaunches after a cut: 3 in 60 min.",
           "blockedJob": "dev"
         },
         "ticket": {
@@ -1654,7 +1654,7 @@
             1791622920000,
             1791622980000
           ],
-          "blockReason": "Trop de relances après coupure : 3 en 60 min.",
+          "blockReason": "Too many relaunches after a cut: 3 in 60 min.",
           "blockedJob": "dev"
         },
         "effects": [],
@@ -1713,7 +1713,7 @@
             1791622920000,
             1791622980000
           ],
-          "blockReason": "Trop de relances après coupure : 3 en 60 min.",
+          "blockReason": "Too many relaunches after a cut: 3 in 60 min.",
           "blockedJob": "dev"
         },
         "ticket": {

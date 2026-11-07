@@ -73,7 +73,7 @@ describe('makeRepoConfig (ORC-209 C)', () => {
       calls.push({ args, ...(opts ? { opts } : {}) });
       return args.includes('fetch') ? { stdout: '', stderr: '', code: TIMED_OUT } : { stdout: 'origin/main\n', stderr: '', code: 0 };
     };
-    await expect(makeRepoConfig({ exec, fetchDeadlineMs: 20 })(PROJECT)).rejects.toThrow(/^la forge ne répond plus après 0.02 s$/);
+    await expect(makeRepoConfig({ exec, fetchDeadlineMs: 20 })(PROJECT)).rejects.toThrow(/^the forge no longer responds after 0.02 s$/);
     // No prompt for a credential, a stalled transfer ends git by itself, and the deadline kills it with its ssh.
     expect(calls[0]!.opts).toMatchObject({ env: { GIT_TERMINAL_PROMPT: '0', GIT_HTTP_LOW_SPEED_LIMIT: '1000' }, timeoutMs: 20 });
     expect(calls.some((c) => c.args.includes('ls-tree'))).toBe(false);
@@ -92,7 +92,7 @@ describe('makeRepoConfig (ORC-209 C)', () => {
     const exec: Exec = async (_, args) => (args.includes('ls-tree') ? { stdout: '', stderr: 'fatal: Not a valid object name', code: 128 } : { stdout: 'origin/main\n', stderr: '', code: 0 });
     const err = await makeRepoConfig({ exec, log: (m) => log.push(m) })(PROJECT).catch((e: Error) => e);
     // What reaches Linear: neither the server's path nor a git command line, nor a hint for an origin/HEAD that is set.
-    expect((err as Error).message).toBe('branche par défaut illisible (origin/main)');
+    expect((err as Error).message).toBe('unreadable default branch (origin/main)');
     // The detail stays in the daemon's log.
     expect(log).toEqual([expect.stringMatching(/-C \/repo ls-tree .*Not a valid object name/)]);
   });
@@ -101,7 +101,7 @@ describe('makeRepoConfig (ORC-209 C)', () => {
     const exec: Exec = async (_, args) =>
       args.includes('symbolic-ref') || args.includes('ls-tree') ? { stdout: '', stderr: 'fatal: /repo: ref missing', code: 128 } : { stdout: '', stderr: '', code: 0 };
     const err = (await makeRepoConfig({ exec, log: () => {} })(PROJECT).catch((e: Error) => e)) as Error;
-    expect(err.message).toMatch(/^branche par défaut illisible \(origin\/main\) : origin\/HEAD n'est pas défini.*git remote set-head origin --auto/);
+    expect(err.message).toMatch(/^unreadable default branch \(origin\/main\): origin\/HEAD is not set.*git remote set-head origin --auto/);
     expect(err.message).not.toContain('/repo');
   });
 
@@ -113,22 +113,22 @@ describe('makeRepoConfig (ORC-209 C)', () => {
       return { stdout: '', stderr: '', code: 0 };
     };
     const err = (await makeRepoConfig({ exec, log: () => {} })(PROJECT).catch((e: Error) => e)) as Error;
-    expect(err.message).toBe('.factory/config.yml illisible sur origin/main (objet git manquant ou abîmé)');
+    expect(err.message).toBe('.factory/config.yml unreadable on origin/main (git object missing or damaged)');
   });
 
   it('names a submodule at .factory as such', async () => {
     const err = (await makeRepoConfig({ exec: git({ head: 'origin/main', config: CONFIG, dir: '160000 commit' }).exec })(PROJECT).catch((e: Error) => e)) as Error;
-    expect(err.message).toMatch(/\.factory n'est pas un dossier sur origin\/main \(lien symbolique, fichier ou sous-module\)/);
+    expect(err.message).toMatch(/\.factory is not a folder on origin\/main \(symbolic link, file or submodule\)/);
   });
 
   it('names neither the path nor the command when the fetch fails', async () => {
     const exec: Exec = async (_, args) => (args.includes('fetch') ? { stdout: '', stderr: "fatal: '/srv/factory/repo' does not appear to be a git repository", code: 128 } : { stdout: 'origin/main\n', stderr: '', code: 0 });
     const err = (await makeRepoConfig({ exec, log: () => {} })(PROJECT).catch((e: Error) => e)) as Error;
-    expect(err.message).toBe("la forge n'a pas pu être lue (git fetch, code 128)");
+    expect(err.message).toBe('the forge could not be read (git fetch, code 128)');
   });
 
   it.each(['120000 blob', '040000 tree'])('rejects a .factory/config.yml that is not a file (%s)', async (mode) => {
-    await expect(makeRepoConfig({ exec: git({ head: 'origin/main', config: CONFIG, mode }).exec })(PROJECT)).rejects.toThrow(/pas un fichier/);
+    await expect(makeRepoConfig({ exec: git({ head: 'origin/main', config: CONFIG, mode }).exec })(PROJECT)).rejects.toThrow(/is not a file/);
     // The repository's to fix, as an invalid file is: not a breakdown of the factory.
     await expect(makeRepoConfig({ exec: git({ head: 'origin/main', config: CONFIG, mode }).exec })(PROJECT)).rejects.toBeInstanceOf(RepoConfigError);
   });
@@ -150,7 +150,7 @@ describe('makeRepoConfig (ORC-209 C)', () => {
   });
 
   it('rejects a .factory that is not a directory: git reads nothing through a link, which is not an absent file', async () => {
-    await expect(makeRepoConfig({ exec: git({ head: 'origin/main', config: CONFIG, dir: '120000 blob' }).exec })(PROJECT)).rejects.toThrow(/\.factory n'est pas un dossier/);
+    await expect(makeRepoConfig({ exec: git({ head: 'origin/main', config: CONFIG, dir: '120000 blob' }).exec })(PROJECT)).rejects.toThrow(/\.factory is not a folder/);
     await expect(makeRepoConfig({ exec: git({ head: 'origin/main', config: CONFIG, dir: '120000 blob' }).exec })(PROJECT)).rejects.toBeInstanceOf(RepoConfigError);
     const root = mkdtempSync(join(tmpdir(), 'factory-repo-config-'));
     try {
@@ -160,7 +160,7 @@ describe('makeRepoConfig (ORC-209 C)', () => {
       run(repo, 'add', '-A');
       run(repo, 'commit', '--quiet', '-m', 'link');
       run(repo, 'push', '--quiet', 'origin', 'main');
-      await expect(makeRepoConfig()({ repoPath: repo })).rejects.toThrow(/\.factory n'est pas un dossier/);
+      await expect(makeRepoConfig()({ repoPath: repo })).rejects.toThrow(/\.factory is not a folder/);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

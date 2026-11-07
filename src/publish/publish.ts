@@ -57,7 +57,7 @@ export class GitPublisher implements Publisher {
     try {
       const env = { ...hostGitEnv(workDir, workDir), GIT_TERMINAL_PROMPT: '0', ...STALLED, ...access.env };
       const onForge = await readForge(this.exec, access.url, req.branch, { cwd: workDir, env });
-      if (req.branch === onForge.base) throw new PublishRefused('trunk', `la branche du ticket est la branche par défaut (${onForge.base}).`);
+      if (req.branch === onForge.base) throw new PublishRefused('trunk', `the ticket's branch is the default branch (${onForge.base}).`);
       if (onForge.head === req.sha) this.d.log(`publish of ${req.ticketId}: ${req.sha} is already on the forge, not pushed again`);
       else await this.pushChecked(req, access.url, env, workDir, onForge.head);
       const pr = await this.d.forge.ensurePr(req.repoPath, { branch: req.branch, base: onForge.base, title: req.title, body: req.body, draft: true }).catch((err: Error) => {
@@ -73,7 +73,7 @@ export class GitPublisher implements Publisher {
 
   private async pushChecked(req: PublishRequest, url: string, env: Record<string, string>, workDir: string, known: string | undefined): Promise<void> {
     const deadlineMs = this.d.deadlineMs ?? PUBLISH_DEADLINE_MS;
-    const silent = `la forge ne répond plus après ${deadlineMs / 1000} s`;
+    const silent = `the forge no longer responds after ${deadlineMs / 1000} s`;
     const sandboxes = withDeadline(this.d.sandboxes, deadlineMs);
     const inBox = boxOpener(sandboxes, { runId: req.runId, ticketId: req.ticketId, log: this.d.log });
     const bundleDir = join(workDir, 'bundle');
@@ -82,24 +82,24 @@ export class GitPublisher implements Publisher {
 
     await inBox('publish', req.worktree, [{ host: bundleDir, target: BUNDLE_TARGET, readOnly: false }, agentGitDir(req.worktree)], async (sandboxId) => {
       const { sha } = await extractWork({ sandboxes, sandboxId, branch: req.branch, bundleDir, cloneDir, exec: this.exec });
-      if (sha !== req.sha) throw new PublishRefused('head', `la tête de la branche (${sha.slice(0, 12)}) n'est pas le commit vérifié (${req.sha.slice(0, 12)}).`);
+      if (sha !== req.sha) throw new PublishRefused('head', `the head of the branch (${sha.slice(0, 12)}) is not the verified commit (${req.sha.slice(0, 12)}).`);
     });
 
     const git = cloneGit({ workDir, exec: this.exec }, cloneDir);
     const inClone = (args: string[], over: Record<string, string> = {}) => this.exec('git', [...HARDENED, '-C', cloneDir, ...args], { env: { ...env, ...over } });
     const fetched = await within(inClone(['fetch', '--quiet', '--no-tags', '--no-recurse-submodules', '--', url, `+HEAD:${BASE}`, ...(known ? [`+refs/heads/${req.branch}:${REMOTE_HEAD}`] : [])]), deadlineMs, silent);
-    if (fetched.code !== 0) throw new Error(`git fetch : ${fetched.stderr.trim() || `code ${fetched.code}`}`);
+    if (fetched.code !== 0) throw new Error(`git fetch: ${fetched.stderr.trim() || `code ${fetched.code}`}`);
     // The head fetched is the one the lease names: read after the fetch, it is the one compared with the work.
     const remote = known ? await git('rev-parse', REMOTE_HEAD) : undefined;
     if (remote && !isYes(await git.status('merge-base', '--is-ancestor', remote, req.sha))) {
-      throw new PublishRefused('moved', `la branche ${req.branch} porte sur la forge un commit que ce travail n'a pas (${remote.slice(0, 12)}) : un push humain, ou un historique réécrit. Rien n'est écrasé : intégrez-le dans la branche du ticket.`);
+      throw new PublishRefused('moved', `the branch ${req.branch} has a commit on the forge that this work does not have (${remote.slice(0, 12)}): a human push, or a rewritten history. Nothing is overwritten: merge it into the ticket's branch.`);
     }
     const from = await forkPoint(git, req.sha);
     if (from === req.sha) throw nothingToPublish(req.branch);
 
     const failures = await checkClone(git, from, req.sha, undefined);
     if (this.d.gitleaks !== false) failures.push(...(await inBox('publish-secrets', cloneDir, [], (id) => scanSecrets(sandboxes, id, from, req.sha))));
-    if (failures.length) throw new PublishRefused('diff', failures.map((f) => `${f.command} : ${f.output}`).join('\n'));
+    if (failures.length) throw new PublishRefused('diff', failures.map((f) => `${f.command}: ${f.output}`).join('\n'));
 
     // Read again: the checks above can outlast what a cached token has left to live.
     const { env: fresh } = await this.d.forge.gitAccess(req.repoPath);
@@ -109,13 +109,13 @@ export class GitPublisher implements Publisher {
     if (out.code === 0) return;
     // Git's own status line for the ref: what a server hook prints around it says nothing of the verdict.
     const refused = out.stdout.split('\n').find((l) => l.startsWith('!'));
-    if (!refused) throw new Error(`git push : ${out.stderr.trim() || `code ${out.code}`}`);
-    if (/stale info|fetch first|non-fast-forward/.test(refused)) throw new PublishRefused('moved', `la branche ${req.branch} a bougé pendant la publication : rien n'est écrasé.`);
-    throw new PublishRefused('rejected', `la forge refuse le push sur ${req.branch} : ${refused.trim().slice(0, 500)}`);
+    if (!refused) throw new Error(`git push: ${out.stderr.trim() || `code ${out.code}`}`);
+    if (/stale info|fetch first|non-fast-forward/.test(refused)) throw new PublishRefused('moved', `the branch ${req.branch} moved during the publication: nothing is overwritten.`);
+    throw new PublishRefused('rejected', `the forge refuses the push to ${req.branch}: ${refused.trim().slice(0, 500)}`);
   }
 }
 
-const nothingToPublish = (branch: string) => new PublishRefused('empty', `la branche ${branch} n'a rien de plus que la branche de base.`);
+const nothingToPublish = (branch: string) => new PublishRefused('empty', `the branch ${branch} has nothing more than the base branch.`);
 
 /**
  * The agent's own git dir (ORC-317), read-only over its worktree: nothing here writes, and the factory's repository is mounted nowhere. Its worktree can hold
@@ -124,7 +124,7 @@ const nothingToPublish = (branch: string) => new PublishRefused('empty', `la bra
  */
 function agentGitDir(worktree: string): SandboxMount {
   const host = join(worktree, '.git');
-  if (!lstatSync(host, { throwIfNoEntry: false })?.isDirectory()) throw new PublishRefused('head', "le dossier git de l'agent n'est plus un dossier : son dépôt n'est plus celui que l'usine a créé.");
+  if (!lstatSync(host, { throwIfNoEntry: false })?.isDirectory()) throw new PublishRefused('head', "the agent's git folder is no longer a folder: its repository is no longer the one the factory created.");
   return { host, target: `${WORKSPACE_TARGET}/.git`, readOnly: true };
 }
 
@@ -132,7 +132,7 @@ function agentGitDir(worktree: string): SandboxMount {
 async function readForge(exec: Exec, url: string, branch: string, opts: { cwd: string; env: Record<string, string> }): Promise<{ base: string; head?: string }> {
   const out = await mustExec(exec, 'git', [...HARDENED, 'ls-remote', '--symref', '--', url, 'HEAD', `refs/heads/${branch}`], opts);
   const base = /^ref: refs\/heads\/(\S+)\tHEAD$/m.exec(out)?.[1];
-  if (!base) throw new Error('branche par défaut non lue sur la forge');
+  if (!base) throw new Error('default branch not read on the forge');
   const head = out.split('\n').find((l) => l.endsWith(`\trefs/heads/${branch}`))?.split('\t')[0];
   return { base, ...(head ? { head } : {}) };
 }

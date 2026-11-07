@@ -125,7 +125,7 @@ describe('the factory publishes (ORC-125)', () => {
     expect(h.publisher.asked).toEqual([]);
     const t = await h.ticket();
     expect(t.blocked).toBe(true);
-    expect(t.blockReason).toMatch(/n'a pas de vérification verte/);
+    expect(t.blockReason).toMatch(/has no green verification/);
     expect(moves(h)).not.toContain('Human Review');
   });
 
@@ -302,7 +302,7 @@ describe('the factory publishes (ORC-125)', () => {
     it('with no verification command, factory/verify is neutral and says nothing ran', async () => {
       const h = green([]);
       await delegate(h);
-      expect(verifyCheck(h)).toMatchObject({ conclusion: 'neutral', summary: expect.stringContaining("rien n'a tourné") });
+      expect(verifyCheck(h)).toMatchObject({ conclusion: 'neutral', summary: expect.stringContaining('nothing ran') });
     });
 
     it('a check the forge refuses (an App without Checks write) blocks nothing: the PR is out, and the log says why', async () => {
@@ -310,7 +310,7 @@ describe('the factory publishes (ORC-125)', () => {
       vi.spyOn(h.forge, 'upsertCheckRun').mockRejectedValue(Object.assign(new Error('Resource not accessible by integration'), { status: 403 }));
       await delegate(h);
       expect(await h.ticket()).toMatchObject({ logical: 'human_review', prNumber: 1, blocked: false });
-      expect(h.logs).toContainEqual({ level: 'warn', message: expect.stringContaining('Checks en écriture') });
+      expect(h.logs).toContainEqual({ level: 'warn', message: expect.stringContaining('Checks write permission') });
     });
   });
 });

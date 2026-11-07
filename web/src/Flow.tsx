@@ -13,7 +13,7 @@ const CAUSE_LABELS: Record<BlockCause, string> = {
   repo_config: 'Configuration du dépôt invalide',
   dead_letter: 'Événement mis de côté',
   pr_closed: 'PR fermée sans merge',
-  stopped: 'Arrêté à la demande',
+  stopped: 'Stopped on request',
   other: 'Autre cause',
 };
 

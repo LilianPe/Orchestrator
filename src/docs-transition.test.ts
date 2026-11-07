@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 const root = join(import.meta.dirname, '..');
 const doc = readFileSync(join(root, 'docs/transition.md'), 'utf8');
-const STATUSES = ['garder', 'adapter', 'retirer', 'à trancher'];
+const STATUSES = ['keep', 'adapt', 'remove', 'undecided'];
 
 function section(title: string): string {
   const start = doc.indexOf(`\n## ${title}\n`);
@@ -26,10 +26,10 @@ const sourceFiles = readdirSync(join(root, 'src'), { recursive: true, withFileTy
 const rows = new Map<string, string>();
 const duplicates: string[] = [];
 let statusCol = -1;
-for (const line of section('Inventaire des modules').split('\n')) {
+for (const line of section('Module inventory').split('\n')) {
   if (!line.startsWith('|')) continue;
   const cells = line.split('|').slice(1, -1).map((c) => c.trim());
-  if (cells.includes('Statut')) statusCol = cells.indexOf('Statut');
+  if (cells.includes('Status')) statusCol = cells.indexOf('Status');
   else if (!cells[0]!.startsWith('-')) {
     for (const [, path] of cells[0]!.matchAll(/`([^`]+)`/g)) {
       for (const p of expand(path!)) {
@@ -59,9 +59,9 @@ describe('docs/transition.md', () => {
     expect([...rows.keys()].filter((p) => !existsSync(join(root, p)))).toEqual([]);
   });
 
-  it('lists in « À trancher » exactly the rows marked à trancher', () => {
-    const undecided = [...rows].filter(([, s]) => s === 'à trancher').map(([p]) => p);
-    const listed = [...section('À trancher').matchAll(/^- `([^`]+)`/gm)].map((m) => m[1]);
+  it('lists in « Undecided » exactly the rows marked undecided', () => {
+    const undecided = [...rows].filter(([, s]) => s === 'undecided').map(([p]) => p);
+    const listed = [...section('Undecided').matchAll(/^- `([^`]+)`/gm)].map((m) => m[1]);
     expect(listed.sort()).toEqual(undecided.sort());
   });
 

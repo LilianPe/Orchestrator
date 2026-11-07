@@ -71,7 +71,7 @@ describe('a restart during a run', () => {
     await h.orch.accept({ ...TRUSTED, id: 'stop', type: 'control.stop', at: h.clock.now(), projectId: 'p', ticketId: 'REL-1', payload: {} });
     await h.orch.drained();
     expect((await h.store.getRun(runId))!.status).toBe('stopped');
-    expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Arrêté à la demande' });
+    expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Stopped on request' });
     expect((await h.ticket()).activeRunId).toBeUndefined();
     expect(h.runner.requests).toHaveLength(1);
   });
@@ -86,7 +86,7 @@ describe('a restart during a run', () => {
     expect((await h.store.getRun(runId))!.status).toBe('failure');
     expect(h.runner.requests).toHaveLength(2);
     expect(h.runner.requests[1]).toMatchObject({ resume: true, claudeSessionId: first!.claudeSessionId });
-    expect(h.runner.requests[1]!.prompt).toContain('## Reprise');
+    expect(h.runner.requests[1]!.prompt).toContain('## Resumed after a cut');
     expect(await h.ticket()).toMatchObject({ logical: 'human_review', blocked: false });
     expect((await h.tracker.getIssue('REL-1')).labels).not.toContain('Bloqué');
   });
@@ -176,7 +176,7 @@ describe('a restart during a run', () => {
     h.runner.enqueue({ events: [{ kind: 'text', text: 'Repris.' }] });
     await h.restart({ mode: 'brutal' });
     expect(h.runner.requests[1]).toMatchObject({ resume: false, claudeSessionId: h.runner.requests[0]!.claudeSessionId });
-    expect(h.runner.requests[1]!.prompt).not.toContain('## Reprise');
+    expect(h.runner.requests[1]!.prompt).not.toContain('## Resumed after a cut');
   });
 
   it('a session already written is resumed: --session-id would fail on it (ORC-128, call 10)', async () => {
@@ -216,7 +216,7 @@ describe('a restart during a run', () => {
     await h.send('session.mentioned', { linearSessionId: 'ls-9', body: 'où ?', author: 'L' });
     const runId = h.runner.requests[0]!.runId;
     await h.restart({ mode: 'brutal' });
-    expect(JSON.stringify(h.tracker.activities('ls-9'))).not.toContain('Reposez');
+    expect(JSON.stringify(h.tracker.activities('ls-9'))).not.toContain('Ask the question again');
     h.runner.release(runId);
     await h.orch.drained();
     expect(h.tracker.activities('ls-9').at(-1)).toMatchObject({ type: 'response' });
@@ -231,7 +231,7 @@ describe('a restart during a run', () => {
     await h.orch.drained();
     await h.restart({ mode: 'brutal' });
     expect(h.runner.requests).toHaveLength(1);
-    expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Arrêté à la demande' });
+    expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Stopped on request' });
     expect((await h.ticket()).activeRunId).toBeUndefined();
   });
 
@@ -275,7 +275,7 @@ describe('the bound of the relaunches after a cut', () => {
     expect(t).toMatchObject({ blocked: true });
     expect(t.blockReason).toMatch(CUT_BOUND_REASON);
     expect(t.activeRunId).toBeUndefined();
-    expect(h.tracker.comments('REL-1').at(-1)).toContain('Raison : Trop de relances après coupure : ');
+    expect(h.tracker.comments('REL-1').at(-1)).toContain('Reason: Too many relaunches after a cut: ');
     expect((await h.tracker.getIssue('REL-1')).labels).toContain('Bloqué');
     // A normal outcome for the checker of the chaos, strict as it is: nothing lost, nothing doubled, replayed bit for bit.
     expect(await checkChain(h.store, { projectId: 'p', tickets: ['REL-1'], acked: [], calls: faults.calls })).toEqual({ violations: [], atLeastOnce: [] });
@@ -380,8 +380,8 @@ describe('the lease of an attempt', () => {
     const t = await h.ticket();
     expect(t.blocked).toBe(true);
     expect(t.activeRunId).toBeUndefined();
-    expect(t.blockReason).toContain('bail');
-    expect(h.tracker.comments('REL-1').at(-1)).toContain('🔴 Bloqué');
+    expect(t.blockReason).toContain('lease');
+    expect(h.tracker.comments('REL-1').at(-1)).toContain('🔴 Blocked');
     expect((await h.tracker.getIssue('REL-1')).labels).toContain('Bloqué');
   });
 

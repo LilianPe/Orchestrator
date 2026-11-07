@@ -11,7 +11,7 @@ export class TrackerSwitch implements Tracker {
   }
 
   private t(): Tracker {
-    if (!this.current) throw new Error(`Linear non connecté : ouvrez http://localhost:${this.port}/oauth/start`);
+    if (!this.current) throw new Error(`Linear not connected: open http://localhost:${this.port}/oauth/start`);
     return this.current;
   }
 

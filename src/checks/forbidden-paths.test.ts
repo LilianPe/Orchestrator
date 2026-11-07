@@ -77,7 +77,7 @@ describe('factory/chemins-interdits', () => {
   });
 
   it('an outward symbolic link blocks, an inward one does not', async () => {
-    expect((await checkForbiddenPaths(view([{ path: 'x', deleted: false, link: '/etc/passwd' }]))).summary).toContain('lien symbolique sortant');
+    expect((await checkForbiddenPaths(view([{ path: 'x', deleted: false, link: '/etc/passwd' }]))).summary).toContain('symbolic link pointing outside');
     expect((await checkForbiddenPaths(view([{ path: 'x', deleted: false, link: 'src/a.ts' }]))).ok).toBe(true);
   });
 

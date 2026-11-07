@@ -87,7 +87,7 @@ export function createApp(d: ServerDeps): Hono {
       if (isPublicPath(c.req.method, c.req.path)) return next();
       const given = basicPassword(c.req.header('authorization'));
       if (given === undefined || !sameSecret(given, password)) {
-        return c.text('Authentification requise', 401, { 'WWW-Authenticate': `Basic realm="${PRODUCT_NAME}", charset="UTF-8"` });
+        return c.text('Authentication required', 401, { 'WWW-Authenticate': `Basic realm="${PRODUCT_NAME}", charset="UTF-8"` });
       }
       return next();
     });
@@ -124,9 +124,9 @@ export function createApp(d: ServerDeps): Hono {
     if (!d.oauth) return c.notFound();
     try {
       await d.oauth.callback(c.req.query('code') ?? '', c.req.query('state') ?? '');
-      return c.html('<p>Linear est connecté. Vous pouvez fermer cet onglet.</p>');
+      return c.html('<p>Linear is connected. You can close this tab.</p>');
     } catch (err) {
-      return c.html(`<p>Connexion Linear impossible : ${escapeHtml((err as Error).message)}</p>`, 400);
+      return c.html(`<p>Could not connect Linear: ${escapeHtml((err as Error).message)}</p>`, 400);
     }
   });
 

@@ -1,11 +1,12 @@
 import { PRODUCT_NAME } from '../product.js';
+import { BEFORE_ORC_331 } from './legacy-messages.js';
 
 /** Why a ticket waits for a human, in the order the Flux shows the causes (ORC-297). */
 export const BLOCK_CAUSES = ['question', 'contested', 'red', 'infra', 'limit', 'loop', 'failed', 'pickup', 'repo_config', 'dead_letter', 'pr_closed', 'stopped', 'other'] as const;
 export type BlockCause = (typeof BLOCK_CAUSES)[number];
 
 /** The head of a launch refused on the repository's `.factory/config.yml` (ORC-209 C): the repository's to fix. */
-export const REPO_CONFIG_REFUSED = 'Configuration du dépôt à corriger : ';
+export const REPO_CONFIG_REFUSED = 'Repository configuration to fix: ';
 
 /**
  * Each anchored on the head of a reason, which the factory writes: what follows may quote an error or
@@ -13,31 +14,33 @@ export const REPO_CONFIG_REFUSED = 'Configuration du dépôt à corriger : ';
  * one would change what the replay compares (ORC-174).
  */
 const CAUSES: readonly (readonly [Exclude<BlockCause, 'other'>, RegExp])[] = [
-  ['question', /^(Question posée par l'agent|En attente d'une réponse à la question de l'agent)/],
-  ['contested', /^L'agent conteste le ticket/],
-  ['red', /^Rouge non vérifié après /],
-  ['infra', /^Le run .+ s'est interrompu : panne d'infrastructure/],
-  ['infra', /^Le contrôle du rouge de .+ n'a pas pu tourner : panne d'infrastructure/],
-  ['infra', /^La vérification de .+ n'a pas pu tourner : panne d'infrastructure/],
-  ['infra', /^Erreur au lancement : /],
-  ['infra', /^Erreur : /],
-  ['infra', new RegExp(`^${PRODUCT_NAME} a redémarré pendant `)],
-  ['infra', /^Le bail du run .+ a expiré \d+ fois : /],
-  ['limit', /^Le run .+ a atteint un plafond/],
-  ['limit', /^Le run .+ n'a rien écrit depuis /],
-  ['limit', /^Trop de relances après coupure : /],
-  ['limit', /^(Vérifications|CI) toujours en échec après /],
-  ['failed', /^Vérifications en échec après /],
-  ['loop', /^Boucle : /],
-  ['failed', /^Le run .+ a échoué\.$/],
-  ['pickup', /^La description (fait moins de|ne contient pas de)/],
-  ['pickup', /^Une branche .+ existe déjà sur origin\./],
-  ['pickup', /^Aucun dépôt connu pour l'équipe Linear /],
-  ['pickup', /^Dépôt à préciser : /],
+  ['question', /^(Question asked by the agent|Waiting for an answer to the agent's question)/],
+  ['contested', /^The agent disputes the ticket/],
+  ['red', /^Red not verified after /],
+  ['infra', /^The run .+ was interrupted: infrastructure failure/],
+  ['infra', /^The red check of .+ could not run: infrastructure failure/],
+  ['infra', /^The verification of .+ could not run: infrastructure failure/],
+  ['infra', /^Launch error: /],
+  ['infra', /^Error: /],
+  ['infra', new RegExp(`^${PRODUCT_NAME} restarted during `)],
+  ['infra', /^The lease of the run .+ expired \d+ times: /],
+  ['limit', /^The run .+ reached a limit/],
+  ['limit', /^The run .+ has written nothing for /],
+  ['limit', /^Too many relaunches after a cut: /],
+  ['limit', /^(Checks|CI) still failing after /],
+  ['failed', /^Checks failing after /],
+  ['loop', /^Loop: /],
+  ['failed', /^The run .+ failed\.$/],
+  ['pickup', /^The description (is shorter than|has no)/],
+  ['pickup', /^A branch .+ already exists on origin\./],
+  ['pickup', /^No repository known for the Linear team /],
+  ['pickup', /^Repository to specify: /],
   ['repo_config', new RegExp(`^${REPO_CONFIG_REFUSED}`)],
-  ['dead_letter', /^Événement .+ mis de côté /],
-  ['pr_closed', /^PR #\d+ fermée sans merge$/],
-  ['stopped', /^Arrêté à la demande$/],
+  ['dead_letter', /^Event .+ set aside /],
+  ['pr_closed', /^PR #\d+ closed without merge$/],
+  ['stopped', /^Stopped on request$/],
+  // A ticket blocked before ORC-331 keeps its French reason until it is unblocked.
+  ...BEFORE_ORC_331.causes,
 ];
 
 /** The cause of a block, read from its reason; `other` when no cause is known for it, never a guess. */

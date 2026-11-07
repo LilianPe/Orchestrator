@@ -48,7 +48,7 @@ describe('authorization matrix, end to end (ORC-186)', () => {
     const h = setup();
     await h.send('ticket.delegated', { linearSessionId: 'as-1' }, 'REL-1', { actor: 'user-armand' });
     expect(h.runner.requests).toEqual([]);
-    expect(h.tracker.activities('as-1')).toEqual([{ type: 'response', body: expect.stringMatching(/^Refusé : déclencher l'agent/) }]);
+    expect(h.tracker.activities('as-1')).toEqual([{ type: 'response', body: expect.stringMatching(/^Refused: triggering the agent/) }]);
     expect(await h.ticket()).toMatchObject({ delegated: true });
     expect((await h.ticket()).initiatorId).toBeUndefined();
     // Replayed by the outbox (ORC-162), the answer is found, not written again.
@@ -64,7 +64,7 @@ describe('authorization matrix, end to end (ORC-186)', () => {
     expect(await ingest(forged.raw, forged.headers)).toEqual({ status: 200 });
     await h.orch.drained();
     expect(h.runner.requests).toEqual([]);
-    expect(h.tracker.activities('as-m1')).toEqual([{ type: 'response', body: expect.stringMatching(/^Refusé/) }]);
+    expect(h.tracker.activities('as-m1')).toEqual([{ type: 'response', body: expect.stringMatching(/^Refused/) }]);
     const mentions = (await h.store.recentEvents(10, 'REL-1')).filter((e) => e.type === 'session.mentioned');
     expect(mentions).toEqual([expect.objectContaining({ actor: 'user-stranger', roles: [] })]);
     // The same words, signed by Lilian: the answering agent starts.
@@ -82,7 +82,7 @@ describe('authorization matrix, end to end (ORC-186)', () => {
     await h.advance(ROLES_TTL_MS + 1);
     await h.send('session.mentioned', { linearSessionId: 'as-q2', body: 'encore', author: 'Lilian' }, 'REL-1', { actor: 'user-lilian' });
     expect(h.runner.requests).toHaveLength(1);
-    expect(h.tracker.activities('as-q2')).toEqual([{ type: 'response', body: expect.stringMatching(/^Refusé/) }]);
+    expect(h.tracker.activities('as-q2')).toEqual([{ type: 'response', body: expect.stringMatching(/^Refused/) }]);
   });
 
   it('does not wait on Linear or GitHub for an event the matrix will not check', async () => {
