@@ -193,7 +193,7 @@ describe('full read of a large file (ORC-279)', () => {
     const r = read(path, { FACTORY_TICKET: 'REL-7' });
     expect(r.out).toEqual({ hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: expect.any(String) });
     expect(r.reason).toMatch(/full-read/);
-    expect(r.reason).toMatch(/350 lignes/);
+    expect(r.reason).toMatch(/350 lines/);
     expect(r.reason).toMatch(/grep/i);
     expect(r.reason).toMatch(/offset/);
     expect(r.reason).toMatch(/limit/);
@@ -226,7 +226,7 @@ describe('full read of a large file (ORC-279)', () => {
     expect(read(file(1000), { FACTORY_READ_MAX_LINES: '1000' }).denied).toBe(false);
     const r = read(file(200), { FACTORY_READ_MAX_LINES: '100' });
     expect(r.denied).toBe(true);
-    expect(r.reason).toMatch(/100 lignes/);
+    expect(r.reason).toMatch(/100 lines/);
   });
 
   it.each(['', 'abc', '0', '-5', '1.5'])('falls back on 350 lines with the threshold %j', (value) => {

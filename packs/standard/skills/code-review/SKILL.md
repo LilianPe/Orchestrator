@@ -1,15 +1,15 @@
 ---
 name: code-review
-description: Relire un diff à un niveau proportionné à son risque (rapide, standard, approfondi), limité à ce que le diff change ou casse, avec des défauts classés et vérifiés. Utilisé par factory:review et en auto-review dans factory:dev.
+description: Review a diff at a level proportionate to its risk (quick, standard, thorough), limited to what the diff changes or breaks, with classified and verified defects. Used by factory:review and as a self-review in factory:dev.
 ---
 
 # factory:code-review
 
-Tu relis un diff comme un relecteur exigeant, pas comme son auteur. Le résultat est une **liste de défauts vérifiés**, classés, que l'appelant corrige. Une review coûte des tokens : son niveau se choisit sur le risque du diff, une fois, avant de commencer.
+You review a diff as a demanding reviewer, not as its author. The result is a **list of verified defects**, classified, that the caller fixes. A review costs tokens: its level is chosen from the diff's risk, once, before starting.
 
-## 1. Délimiter le diff
+## 1. Scope the diff
 
-La base est la branche cible de la PR (`gh pr view <branche> --json baseRefName --jq .baseRefName`) ; sans PR, le tronc (`git rev-parse --abbrev-ref origin/HEAD`, qui affiche `origin/<tronc>`). Une commande par appel, sans enchaînement shell :
+The base is the PR's target branch (`gh pr view <branch> --json baseRefName --jq .baseRefName`); without a PR, the trunk (`git rev-parse --abbrev-ref origin/HEAD`, which prints `origin/<trunk>`). One command per call, no shell chaining:
 
 ```bash
 git fetch origin
@@ -18,70 +18,70 @@ git diff --stat origin/<base>...HEAD
 git diff origin/<base>...HEAD
 ```
 
-Pour un round ciblé (relire seulement des commits de correction) : `git show <sha>` pour chaque commit, plus leurs consommateurs (voir 4).
+For a targeted round (reviewing only fix commits): `git show <sha>` for each commit, plus their consumers (see 4).
 
-Lis aussi les règles du dépôt qui s'appliquent aux fichiers touchés : `CLAUDE.md` (racine et dossiers concernés), `docs/agent/`, et le ticket (ce que le diff doit faire).
+Also read the repository's rules that apply to the touched files: `CLAUDE.md` (root and relevant folders), `docs/agent/`, and the ticket (what the diff must do).
 
-## 2. Choisir le niveau
+## 2. Choose the level
 
-Prends le plus haut niveau qui correspond à une partie du diff ; dans le doute entre deux, le plus haut.
+Take the highest level that matches any part of the diff; when in doubt between two, the higher one.
 
-| Le diff touche… | Niveau |
+| The diff touches… | Level |
 |---|---|
-| Texte, libellés, faute de frappe, configuration triviale, documentation qui n'affirme rien sur le code | **rapide** |
-| Logique applicative, état, routes, services, requêtes ; documentation qui décrit le comportement du code ; tests | **standard** |
-| Authentification, permissions, isolation entre clients, secrets, migrations de schéma, suppression de données, concurrence, argent ; ou un gros diff (plus de ~800 lignes ou ~20 fichiers de code) | **approfondi** |
+| Text, labels, typos, trivial configuration, documentation that claims nothing about the code | **quick** |
+| Application logic, state, routes, services, queries; documentation that describes the code's behavior; tests | **standard** |
+| Authentication, permissions, isolation between customers, secrets, schema migrations, data deletion, concurrency, money; or a large diff (more than ~800 lines or ~20 code files) | **thorough** |
 
-Une documentation qui décrit le code n'est pas un diff « rapide » : sa vérité est dans le code, hors du diff. Liste chaque affirmation qu'elle fait et vérifie-la dans le code.
+Documentation that describes the code is not a "quick" diff: its truth is in the code, outside the diff. List every claim it makes and check it in the code.
 
-- **Rapide** : une lecture attentive du diff, hunk par hunk. Pas d'exploration au-delà.
-- **Standard** : la lecture, plus les passes de la section 3, plus les consommateurs des symboles modifiés (`grep -rn "<symbole>"`).
-- **Approfondi** : tout le standard, en passes séparées par angle (section 3), avec la liste explicite des surfaces critiques à éprouver (contrôles d'accès, filtrage par client, réversibilité d'une migration, ce qui se passe en cas d'échec à mi-chemin). Si l'outil de sous-agents est disponible, lance une passe par angle en parallèle (consigne pour chacune : le diff exact, l'angle, « ne signale que des défauts dans ces lignes ou ce qu'elles cassent », lecture seule, pas de sous-agent) ; sinon fais les passes toi-même, l'une après l'autre. Réserve-le aux diffs qui le justifient : c'est le niveau le plus cher.
+- **Quick**: one careful reading of the diff, hunk by hunk. No exploration beyond it.
+- **Standard**: the reading, plus the passes of section 3, plus the consumers of the changed symbols (`grep -rn "<symbol>"`).
+- **Thorough**: all of standard, in separate passes per angle (section 3), with the explicit list of critical surfaces to test (access controls, per-customer filtering, reversibility of a migration, what happens on a failure halfway through). If the subagent tool is available, run one pass per angle in parallel (instructions for each: the exact diff, the angle, "only report defects in these lines or in what they break", read-only, no subagent); otherwise do the passes yourself, one after the other. Keep it for diffs that warrant it: it is the most expensive level.
 
-## 3. Les angles
+## 3. The angles
 
-1. **Justesse** : le code fait-il ce que le ticket demande ? Cas limites (vide, nul, zéro, un seul, très grand), erreurs (que se passe-t-il quand l'appel échoue ?), conditions inversées, état partagé.
-2. **Ce que le diff casse ailleurs** : un symbole supprimé ou renommé → cherche l'ancien nom dans tout le dépôt, commentaires et docs compris ; un type ou une signature exportée élargie → ses implémentations et appelants ; un effet déplacé dans une fonction partagée → chacun de ses appelants respecte-t-il la nouvelle condition ? Une condition retirée alors que la donnée qu'elle gardait reste ; un nouveau compteur ajouté à un total dont un « reste » est déduit.
-3. **Les tests** : couvrent-ils le comportement, ou le mock ? Une assertion qui ne peut pas échouer (mock posé trop tard, valeur que le banc produirait de toute façon, `not.toThrow` jamais vu rouge) ne garde rien. Un test supprimé dont le nom décrit un cas de repli : le cas est-il encore couvert ?
-4. **Les règles du dépôt** : conventions écrites dans `CLAUDE.md` et voisins, motif établi ailleurs dans le code. Cite la règle.
-5. **Sécurité et données** (approfondi, ou dès qu'une surface sensible est touchée) : entrées non validées, accès non filtré, secret dans le code ou les logs, migration irréversible ou destructrice, opération non atomique.
-6. **Commentaires et messages** : un commentaire ou une doc qui contredit le code (ou une correction du même diff) est un défaut, pas un détail : le prochain lecteur « réparera » dans le mauvais sens. Une affirmation d'un message de commit (« déjà géré ailleurs », « même motif que X ») se vérifie en ouvrant X.
+1. **Correctness**: does the code do what the ticket asks? Edge cases (empty, null, zero, a single one, very large), errors (what happens when the call fails?), inverted conditions, shared state.
+2. **What the diff breaks elsewhere**: a deleted or renamed symbol → search for the old name across the whole repository, comments and docs included; a widened exported type or signature → its implementations and callers; an effect moved into a shared function → does each of its callers satisfy the new condition? A condition removed while the data it guarded remains; a new counter added to a total from which a "remainder" is deduced.
+3. **The tests**: do they cover the behavior, or the mock? An assertion that cannot fail (mock set too late, a value the test bench would produce anyway, `not.toThrow` never seen red) guards nothing. A deleted test whose name describes a fallback case: is the case still covered?
+4. **The repository's rules**: conventions written in `CLAUDE.md` and its neighbors, a pattern established elsewhere in the code. Cite the rule.
+5. **Security and data** (thorough, or as soon as a sensitive surface is touched): unvalidated input, unfiltered access, a secret in the code or the logs, an irreversible or destructive migration, a non-atomic operation.
+6. **Comments and messages**: a comment or doc that contradicts the code (or a fix in the same diff) is a defect, not a detail: the next reader will "fix" it the wrong way. A claim in a commit message ("already handled elsewhere", "same pattern as X") is checked by opening X.
 
-Lis **chaque hunk** d'un fichier touché, même quand le message de commit dit que le fichier « ne fait que déplacer du code ».
+Read **every hunk** of a touched file, even when the commit message says the file "only moves code".
 
-## 4. Classer chaque constat
+## 4. Classify each finding
 
-D'abord la **portée**, par causalité, pas par fichier :
+First the **scope**, by causality, not by file:
 
-- **dans le périmètre** : une conséquence de ce diff, y compris dans un fichier que le diff ne modifie pas (un appelant cassé) ;
-- **hors périmètre** : un défaut qui existait avant et que le diff ne change pas. Il n'est jamais corrigé ici : liste-le à part ;
-- **conflit de règle** : causé par le diff, mais la correction proposée enfreint une règle écrite du dépôt. Ne pas l'appliquer ; le signaler avec la règle.
+- **in scope**: a consequence of this diff, including in a file the diff does not modify (a broken caller);
+- **out of scope**: a defect that existed before and that the diff does not change. It is never fixed here: list it separately;
+- **rule conflict**: caused by the diff, but the proposed fix breaks a written rule of the repository. Do not apply it; report it with the rule.
 
-Puis la **gravité** :
+Then the **severity**:
 
-- **bloquant** : bug, perte ou corruption de données, faille, régression, contrat cassé, chemin critique sans test, test qui ne peut pas échouer ;
-- **important** : défaut réel mais rare ou rattrapé ailleurs, duplication qui divergera, commentaire ou doc qui dit le contraire du code ;
-- **mineur** : lisibilité, nommage, style non couvert par le lint, sans effet sur le comportement.
+- **blocking**: bug, data loss or corruption, vulnerability, regression, broken contract, critical path without a test, a test that cannot fail;
+- **important**: a real defect but rare or caught elsewhere, duplication that will diverge, a comment or doc that says the opposite of the code;
+- **minor**: readability, naming, style not covered by the lint, with no effect on behavior.
 
-Ignore ce que le lint, le compilateur ou la CI attrapent déjà, et les préférences sans règle écrite.
+Ignore what the lint, the compiler or the CI already catch, and preferences without a written rule.
 
-## 5. Vérifier avant de rapporter
+## 5. Verify before reporting
 
-Un constat est une affirmation : vérifie-le avant de le garder.
+A finding is a claim: verify it before keeping it.
 
-- Lis la fonction citée **en entier**, pas les lignes d'un `grep` : la garde est souvent entre deux résultats.
-- « X peut arriver » : trace si un vrai appelant atteint cet état. Inatteignable : écarte-le, avec la trace.
-- Un constat qui dépend d'une version de bibliothèque : cherche dans le dépôt un usage existant de la même forme avant de le déclarer faux.
-- Garde seulement ce dont tu es sûr après vérification. Un doute réel et important : garde-le, en disant ce qui permettrait de trancher.
+- Read the cited function **in full**, not the lines of a `grep`: the guard is often between two matches.
+- "X can happen": trace whether a real caller reaches that state. Unreachable: discard it, with the trace.
+- A finding that depends on a library version: search the repository for an existing use of the same form before declaring it wrong.
+- Keep only what you are sure of after verification. A real and important doubt: keep it, saying what would settle it.
 
-## 6. Rendre le résultat
+## 6. Return the result
 
-Une ligne par constat, du plus grave au moins grave :
+One line per finding, from most to least severe:
 
 ```
-[bloquant|important|mineur] chemin/fichier.ts:42 — ce qui ne va pas, dans quel scénario, pourquoi ça compte → correction suggérée
+[blocking|important|minor] path/file.ts:42 — what is wrong, in which scenario, why it matters → suggested fix
 ```
 
-Puis, s'il y en a : « Hors périmètre » (une ligne chacun), « Conflits de règle » (avec la règle). Aucun constat : écris « aucun défaut trouvé » et ce que tu as vérifié (niveau, angles, fichiers).
+Then, if any: "Out of scope" (one line each), "Rule conflicts" (with the rule). No findings: write "no defect found" and what you checked (level, angles, files).
 
-Le relecteur ne modifie rien pendant la review : les corrections viennent après, par l'appelant (`factory:receiving-review`).
+The reviewer changes nothing during the review: the fixes come afterwards, from the caller (`factory:receiving-review`).

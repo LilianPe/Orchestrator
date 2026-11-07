@@ -1,47 +1,47 @@
 ---
 name: tdd
-description: Méthode test d'abord (rouge, vert, nettoyage) pour tout changement de comportement : fonctionnalité, correction de bug, refactorisation. À suivre avant d'écrire le code de production.
+description: Test-first method (red, green, clean up) for any behavior change: feature, bug fix, refactoring. To follow before writing production code.
 ---
 
 # factory:tdd
 
-**Règle : pas de code de production sans un test qui a échoué d'abord, et pour la bonne raison.** Un test que tu n'as pas vu échouer ne prouve rien : il peut tester autre chose, ou rien du tout.
+**Rule: no production code without a test that failed first, and for the right reason.** A test you have not seen fail proves nothing: it may test something else, or nothing at all.
 
-## Quand
+## When
 
-Toujours quand le comportement change : nouvelle fonctionnalité, bug, refactorisation qui touche une logique, retour de review qui décrit un défaut.
+Always when the behavior changes: new feature, bug, refactoring that touches logic, review feedback that describes a defect.
 
-Exceptions (à écrire dans ton dernier message, avec la raison) : fichier de configuration pur, texte ou traduction, code généré, documentation. Si le dépôt interdit un type de test (voir `CLAUDE.md`), suis le dépôt et dis-le.
+Exceptions (to write in your last message, with the reason): pure configuration file, text or translation, generated code, documentation. If the repository forbids a type of test (see `CLAUDE.md`), follow the repository and say so.
 
-## Le cycle
+## The cycle
 
-1. **Rouge — un test, un comportement.** Avant d'écrire le test, nomme le changement de production qui le ferait échouer. Nom de test qui décrit le comportement attendu (« refuse un e-mail vide », pas « test1 »). Un « et » dans le nom : deux tests.
-2. **Vérifier le rouge — obligatoire.** Les tests qu'une étape `tests` a écrits avant toi, l'usine en a déjà vérifié le rouge : ne les revérifie pas. Pour les autres : Lance ce seul fichier de test (`npx vitest run <fichier>`, `pytest <fichier>::<test>`, etc.). Il doit **échouer**, pas planter : le message d'échec dit que le comportement manque, pas qu'un import est cassé ou qu'il y a une faute de frappe. Il passe déjà ? Tu testes du comportement existant : corrige le test. Il plante ? Corrige l'erreur et relance jusqu'à un vrai échec.
-3. **Vert — le code minimal.** Le plus simple qui fait passer le test. Pas d'option « pour plus tard », pas de refactorisation voisine, pas d'amélioration hors du test.
-4. **Vérifier le vert — obligatoire.** Relance le test, puis les tests voisins (même fichier, même module, consommateurs du code changé). Sortie propre : pas d'erreur ni d'avertissement nouveau. Un test échoue : corrige le code, pas le test.
-5. **Nettoyer.** Seulement au vert : noms, duplication, extraction. Les tests restent verts à chaque pas. Aucun comportement nouveau ici.
-6. Comportement suivant : retour en 1.
+1. **Red — one test, one behavior.** Before writing the test, name the production change that would make it fail. A test name that describes the expected behavior ("rejects an empty email", not "test1"). An "and" in the name: two tests.
+2. **Verify the red — mandatory.** For tests that a `tests` step wrote before you, the factory has already verified the red: do not verify it again. For the others: run that single test file (`npx vitest run <file>`, `pytest <file>::<test>`, etc.). It must **fail**, not crash: the failure message says the behavior is missing, not that an import is broken or that there is a typo. It already passes? You are testing existing behavior: fix the test. It crashes? Fix the error and rerun until a real failure.
+3. **Green — the minimal code.** The simplest thing that makes the test pass. No option "for later", no neighboring refactoring, no improvement beyond the test.
+4. **Verify the green — mandatory.** Rerun the test, then the neighboring tests (same file, same module, consumers of the changed code). Clean output: no new error or warning. A test fails: fix the code, not the test.
+5. **Clean up.** Only when green: names, duplication, extraction. The tests stay green at every step. No new behavior here.
+6. Next behavior: back to 1.
 
-## Des tests honnêtes
+## Honest tests
 
-- **Du vrai code, pas des mocks.** Un mock seulement aux frontières lentes ou externes (réseau, horloge, service tiers). Une assertion sur un mock (« a été appelé 3 fois ») teste le mock, pas le code.
-- **Le test doit pouvoir échouer.** Un mock enregistré trop tard, une assertion négative (« ne lève pas ») qui passe dès la première écriture, une valeur que le banc de test produirait de toute façon (`undefined`, `0`, `""`) : ce test ne garde rien. Vérifie-le : casse volontairement le code (une ligne, avec Edit), relance, le test doit rougir ; puis remets le code (Edit) et vérifie que `git diff` ne montre plus ta mutation.
-- **Placer le test là où la fonction est déjà testée** (`grep -rl "<fonction>" <dossier de tests>`), pas d'après le nom du fichier.
-- **Pas de code réservé aux tests dans la production.** Les aides de test vont dans les utilitaires de test.
-- Avant de mocker une dépendance, sache ce qu'elle fait d'autre (transformation locale, effet de bord) : le mock l'efface aussi.
+- **Real code, not mocks.** A mock only at slow or external boundaries (network, clock, third-party service). An assertion on a mock ("was called 3 times") tests the mock, not the code.
+- **The test must be able to fail.** A mock registered too late, a negative assertion ("does not throw") that passes from the first writing, a value the test bench would produce anyway (`undefined`, `0`, `""`): this test guards nothing. Check it: deliberately break the code (one line, with Edit), rerun, the test must turn red; then restore the code (Edit) and check that `git diff` no longer shows your mutation.
+- **Place the test where the function is already tested** (`grep -rl "<function>" <tests folder>`), not according to the file name.
+- **No test-only code in production.** Test helpers go in the test utilities.
+- Before mocking a dependency, know what else it does (local transformation, side effect): the mock erases that too.
 
-## Bug : le test d'abord
+## Bug: the test first
 
-Un bug se corrige en deux commits logiques ou un seul, mais toujours dans cet ordre : un test qui reproduit le symptôme (rouge), puis la correction (vert). Pour trouver la cause, suis `factory:debugging` ; le test vient avant la correction.
+A bug is fixed in two logical commits or a single one, but always in this order: a test that reproduces the symptom (red), then the fix (green). To find the cause, follow `factory:debugging`; the test comes before the fix.
 
-## Signaux d'arrêt
+## Stop signals
 
-Recommence avec un test si tu te surprends à : écrire le code avant le test ; garder du code « en référence » en écrivant le test après ; voir un test passer du premier coup sans comprendre pourquoi ; dire « testé à la main », « trop simple pour un test », « je testerai après ». Un test écrit après coup passe tout de suite et ne prouve rien.
+Start over with a test if you catch yourself: writing the code before the test; keeping code "for reference" while writing the test afterwards; seeing a test pass on the first try without understanding why; saying "tested by hand", "too simple for a test", "I'll test later". A test written after the fact passes right away and proves nothing.
 
-Difficile à tester ? C'est souvent le design : interface plus simple, dépendance injectée, plutôt qu'un échafaudage de mocks.
+Hard to test? It is often the design: a simpler interface, an injected dependency, rather than a scaffolding of mocks.
 
-## Fini quand
+## Done when
 
-- chaque comportement nouveau ou corrigé a un test que tu as vu échouer pour la bonne raison ;
-- le code minimal le fait passer, et les tests voisins sont verts ;
-- tu peux citer la commande lancée et son résultat (voir `factory:verification`).
+- each new or fixed behavior has a test you saw fail for the right reason;
+- the minimal code makes it pass, and the neighboring tests are green;
+- you can cite the command run and its result (see `factory:verification`).

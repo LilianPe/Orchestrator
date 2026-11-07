@@ -232,7 +232,7 @@ const hit = tool === 'Read' ? fullRead(input) : rule(tool, command);
 if (hit) {
   journal({ at: new Date().toISOString(), tool, command, rule: hit, ticket: process.env.FACTORY_TICKET ?? null });
   const permissionDecisionReason = hit === 'full-read'
-    ? `Refusé par l'usine (règle ${hit}) : ce fichier dépasse ${READ_MAX_LINES} lignes. Cherchez ce qu'il vous faut avec grep, puis lisez la plage utile avec offset et limit.`
-    : `Refusé par l'usine (règle ${hit}) : cette commande est interdite dans un run.`;
+    ? `Refused by the factory (rule ${hit}): this file is longer than ${READ_MAX_LINES} lines. Find what you need with grep, then read the useful range with offset and limit.`
+    : `Refused by the factory (rule ${hit}): this command is forbidden in a run.`;
   process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason } }));
 }

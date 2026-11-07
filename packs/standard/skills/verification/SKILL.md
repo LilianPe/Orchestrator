@@ -1,46 +1,46 @@
 ---
 name: verification
-description: Vérifier avant d'affirmer : lancer la commande qui prouve un résultat et lire sa sortie avant de dire que c'est fait, que ça passe ou que c'est corrigé, et avant chaque commit, push ou PR.
+description: Verify before asserting: run the command that proves a result and read its output before saying it is done, that it passes or that it is fixed, and before each commit, push or PR.
 ---
 
 # factory:verification
 
-**Règle : aucune affirmation de réussite sans une preuve fraîche.** Ton dernier message est publié dans Linear et un humain s'y fie. « Ça devrait passer » n'est pas un résultat.
+**Rule: no claim of success without fresh proof.** Your last message is published in Linear and a human relies on it. "It should pass" is not a result.
 
-## La porte, avant toute affirmation
+## The gate, before any claim
 
-1. **Quelle commande prouve ce que je vais dire ?**
-2. **La lancer maintenant**, en entier, sur l'état actuel du code (pas un résultat d'avant ta dernière modification).
-3. **Lire** la sortie et le code de sortie : nombre de tests, échecs, avertissements.
-4. La sortie confirme : affirme-le, avec la preuve (« 14 tests passent, `npx vitest run src/foo.test.ts` »). Elle ne confirme pas : dis l'état réel.
+1. **Which command proves what I am about to say?**
+2. **Run it now**, in full, on the current state of the code (not a result from before your last change).
+3. **Read** the output and the exit code: number of tests, failures, warnings.
+4. The output confirms: claim it, with the proof ("14 tests pass, `npx vitest run src/foo.test.ts`"). It does not confirm: state the real status.
 
-| Affirmation | Preuve exigée | Ne suffit pas |
+| Claim | Proof required | Not enough |
 |---|---|---|
-| Les tests passent | sortie du lanceur : 0 échec | un ancien run, « devrait passer » |
-| Le bug est corrigé | le symptôme d'origine rejoué : il a disparu | « le code a changé » |
-| Le test de non-régression marche | rouge sans la correction, vert avec | « j'ai écrit un test » |
-| Les types sont bons | la vérification de types du dépôt : code 0 | le lint, les tests (souvent sans contrôle de types) |
-| C'est commité | `git status` propre, et `git log -1` montre ton commit | « j'ai fini » : l'usine ne publie que ce qui est commité |
-| La CI est verte | `gh pr checks <branche>` lu, aucun check en cours ni rouge | « la CI va tourner » |
-| Le ticket est traité | chaque critère du ticket relu et coché | « les tests passent » |
+| The tests pass | runner output: 0 failures | an old run, "should pass" |
+| The bug is fixed | the original symptom replayed: it is gone | "the code changed" |
+| The regression test works | red without the fix, green with it | "I wrote a test" |
+| The types are correct | the repository's type check: exit code 0 | the lint, the tests (often without type checking) |
+| It is committed | clean `git status`, and `git log -1` shows your commit | "I'm done": the factory only publishes what is committed |
+| The CI is green | `gh pr checks <branch>` read, no check running or red | "the CI will run" |
+| The ticket is handled | each criterion of the ticket reread and checked off | "the tests pass" |
 
-## Quoi lancer, et quoi ne pas lancer
+## What to run, and what not to run
 
-D'autres sessions tournent en même temps sur la même machine, et l'usine relance ensuite les vérifications du projet (`verify` du workflow) puis la CI.
+Other sessions run at the same time on the same machine, and the factory then reruns the project's checks (the workflow's `verify`) and then the CI.
 
-- **Les tests de ce que tu as touché** : le fichier de test de chaque module modifié et ceux de ses consommateurs directs. Avec vitest, `npx vitest related <fichiers modifiés> --run` les trouve.
-- **Une liste vide ne lance pas « rien »** : `vitest run` sans fichier lance toute la suite, `vitest related` sans fichier ne lance rien et sort en succès. Quand ta liste de fichiers vient d'une commande (`git diff --name-only`…), vérifie qu'elle n'est pas vide avant de lancer. « No test files found » : aucun test ne couvre ces fichiers ; dis-le, ce n'est pas un vert.
-- **La vérification de types et le lint du dépôt**, une fois avant de rendre la main, s'ils existent et sont légers (scripts `typecheck`, `lint` de `package.json`, ou l'équivalent). Un changement de type exporté casse des fichiers que tes tests ne lancent pas : seule la vérification de types complète le voit.
-- **Pas la suite complète ni le build**, même si le `CLAUDE.md` du dépôt le conseille : c'est le rôle de `verify` et de la CI. Exception : le dépôt n'a ni l'un ni l'autre ; dis-le alors dans ton message.
-- **Juge un run sur son code de sortie**, jamais sur un `grep` de son résumé ni sur la fin d'une sortie tronquée par `| tail`.
+- **The tests of what you touched**: the test file of each modified module and those of its direct consumers. With vitest, `npx vitest related <modified files> --run` finds them.
+- **An empty list does not run "nothing"**: `vitest run` without a file runs the whole suite, `vitest related` without a file runs nothing and exits successfully. When your file list comes from a command (`git diff --name-only`…), check that it is not empty before running. "No test files found": no test covers these files; say so, it is not a green.
+- **The repository's type check and lint**, once before handing back, if they exist and are light (`typecheck`, `lint` scripts of `package.json`, or the equivalent). A change to an exported type breaks files your tests do not run: only the full type check sees it.
+- **Not the full suite nor the build**, even if the repository's `CLAUDE.md` recommends it: that is the role of `verify` and the CI. Exception: the repository has neither; then say so in your message.
+- **Judge a run by its exit code**, never by a `grep` of its summary nor by the end of an output truncated by `| tail`.
 
-## Pièges
+## Pitfalls
 
-- Dire « parfait », « c'est bon », « terminé » avant d'avoir lancé la commande.
-- Conclure d'un vérificateur à un autre : le lint ne compile pas, les tests ne vérifient pas toujours les types.
-- Croire un rapport (d'un sous-agent, d'un message de commit, d'un retour) sans regarder le diff ou relancer.
-- Un échec dans un fichier que tu n'as pas touché n'est pas forcément « pas toi » : une dépendance changée casse un test intact. Pour savoir s'il préexiste, regarde s'il échoue aussi sur le tronc (la CI du tronc, ou `git log` du fichier) ; sinon traite-le comme le tien (`factory:debugging`).
+- Saying "perfect", "all good", "done" before having run the command.
+- Concluding from one checker to another: the lint does not compile, the tests do not always check types.
+- Believing a report (from a subagent, a commit message, feedback) without looking at the diff or rerunning.
+- A failure in a file you did not touch is not necessarily "not you": a changed dependency breaks an untouched test. To know whether it predates you, check whether it also fails on the trunk (the trunk's CI, or the file's `git log`); otherwise treat it as yours (`factory:debugging`).
 
-## Fini quand
+## Done when
 
-Chaque phrase de ton dernier message qui dit « marche », « passe », « corrigé », « commité » ou « vert » s'appuie sur une commande lancée après ta dernière modification, et tu la cites. Ce que tu n'as pas pu vérifier est écrit comme tel.
+Every sentence of your last message that says "works", "passes", "fixed", "committed" or "green" rests on a command run after your last change, and you cite it. What you could not verify is written as such.
