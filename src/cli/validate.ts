@@ -1,8 +1,8 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { parseRepoConfig, RepoConfigError } from '../config/repo-config.js';
+import { parseRepoConfig, REPO_CONFIG_PATH, RepoConfigError } from '../config/repo-config.js';
 
-const FILE = '.factory/config.yml';
+const FILE = REPO_CONFIG_PATH;
 /** A spelling the factory never reads: validating around it would pass a file nobody applies. */
 const MISSPELT = '.factory/config.yaml';
 

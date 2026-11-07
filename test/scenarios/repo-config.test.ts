@@ -17,10 +17,10 @@ function delegate(h: ReturnType<typeof createHarness>) {
   return h.send('ticket.delegated', { linearSessionId: 'ls-1' });
 }
 
-/** The default branch's file, read at each launch; `reads` counts them. */
+/** The default branch's file, read at each launch; `reads` says whether each read fetched the forge first. */
 function onDefaultBranch(yaml: string) {
-  const reads: string[] = [];
-  return { reads, repoConfig: async (p: { id: string }) => (reads.push(p.id), parseRepoConfig(yaml)) };
+  const reads: { fetch: boolean }[] = [];
+  return { reads, repoConfig: async (_: unknown, o?: { fetch?: boolean }) => (reads.push({ fetch: o?.fetch ?? true }), parseRepoConfig(yaml)) };
 }
 
 /** ORC-209 C: `.factory/config.yml` read once at each launch, on the default branch; the run takes it whole. */
@@ -56,7 +56,8 @@ describe("the repository's config at the launch", () => {
     const base = onDefaultBranch(BASE);
     const h = createHarness({ sandboxed: true, repoVariables, ...base });
     await delegate(h);
-    expect(base.reads).toEqual(['p']);
+    // A fresh worktree: `prepare` has just fetched the forge.
+    expect(base.reads).toEqual([{ fetch: false }]);
     expect(given).toEqual([parseRepoConfig(BASE)]);
     expect(h.runner.requests[0]!.env).toMatchObject({ NODE_ENV: 'test' });
   });
@@ -86,8 +87,9 @@ describe("the repository's config at the launch", () => {
     await delegate(h);
     expect(h.runner.requests).toHaveLength(2);
     expect(h.runner.requests[1]!.prompt).toContain('.factory/config.yml');
-    // Each launch read the default branch's file again, whatever the agent committed on its branch.
-    expect(base.reads).toEqual(['p', 'p']);
+    // Each launch read the default branch's file again, whatever the agent committed on its branch: the second, on
+    // a worktree that already exists, fetches the forge first.
+    expect(base.reads).toEqual([{ fetch: false }, { fetch: true }]);
     expect(agents(h).map((c) => [c.network, c.allow])).toEqual([
       ['limited', ['docs.exemple.com']],
       ['limited', ['docs.exemple.com']],

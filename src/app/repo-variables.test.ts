@@ -42,6 +42,12 @@ describe('makeRepoConfig (ORC-209 C)', () => {
     ]);
   });
 
+  it('reads without a fetch when the caller just fetched, or reads after the run what the launch fetched', async () => {
+    const { exec, calls } = git({ head: 'origin/main', config: CONFIG });
+    expect(await makeRepoConfig({ exec })(PROJECT, { fetch: false })).toEqual(DECLARED);
+    expect(calls.some((c) => c.includes('fetch'))).toBe(false);
+  });
+
   it('gives the socle when the default branch has no file', async () => {
     expect(await makeRepoConfig({ exec: git({ head: 'origin/main' }).exec })(PROJECT)).toEqual(parseRepoConfig(undefined));
   });

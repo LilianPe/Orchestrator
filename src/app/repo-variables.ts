@@ -2,7 +2,7 @@ import { execCmd, mustExec, type Exec } from '../adapters/exec.js';
 import { githubRepoOf } from '../adapters/forge/github-ingest.js';
 import { originHead } from '../adapters/workspace/git-workspaces.js';
 import type { FactoryYml } from '../config/factory-yml.js';
-import { parseRepoConfig, type RepoConfig } from '../config/repo-config.js';
+import { parseRepoConfig, REPO_CONFIG_PATH, type RepoConfig, type RepoConfigRead } from '../config/repo-config.js';
 import { NO_REPO_VARIABLES, repoVariables, type RepoVariables } from '../config/repo-variables.js';
 
 /**
@@ -11,11 +11,11 @@ import { NO_REPO_VARIABLES, repoVariables, type RepoVariables } from '../config/
  * has neither `origin` nor `origin/HEAD` of this repository to write: its git dir is its own (ORC-317). No file: the
  * socle. An invalid file, or a default branch git cannot read, rejects: no run starts on a config half read.
  */
-export function makeRepoConfig(o: { exec?: Exec } = {}): (project: { repoPath: string }) => Promise<RepoConfig> {
+export function makeRepoConfig(o: { exec?: Exec } = {}): (project: { repoPath: string }, read?: RepoConfigRead) => Promise<RepoConfig> {
   const exec = o.exec ?? execCmd;
-  return async ({ repoPath }) => {
+  return async ({ repoPath }, { fetch = true } = {}) => {
     // A worktree that already exists is prepared without a fetch: what was merged since applies all the same.
-    await mustExec(exec, 'git', ['-C', repoPath, 'fetch', '--quiet', 'origin']);
+    if (fetch) await mustExec(exec, 'git', ['-C', repoPath, 'fetch', '--quiet', 'origin']);
     const ref = await originHead(exec, repoPath);
     // `ls-tree` tells a file absent from a branch it could not read, which `git show` answers alike.
     const entry = await mustExec(exec, 'git', ['-C', repoPath, 'ls-tree', '-z', ref, '--', REPO_CONFIG_PATH]).catch((err: Error) => {
@@ -27,8 +27,6 @@ export function makeRepoConfig(o: { exec?: Exec } = {}): (project: { repoPath: s
     return parseRepoConfig(await mustExec(exec, 'git', ['-C', repoPath, 'cat-file', 'blob', blob]));
   };
 }
-
-const REPO_CONFIG_PATH = '.factory/config.yml';
 
 /**
  * Where a project's forge is, read once by process (ORC-151): `bootstrap` asks it before any run starts.

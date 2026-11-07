@@ -22,7 +22,7 @@ import { ActivityRelay } from '../adapters/tracker/activity-relay.js';
 import { IssueNotFoundError, labelEchoKey, stateEchoKey, type ActivityInput, type Tracker, type TrackerIssue } from '../adapters/tracker/types.js';
 import type { Workspace, WorkspaceManager } from '../adapters/workspace/types.js';
 import { NO_REPO_VARIABLES, type RepoVariables } from '../config/repo-variables.js';
-import { parseRepoConfig, type RepoConfig } from '../config/repo-config.js';
+import { parseRepoConfig, type RepoConfig, type RepoConfigRead } from '../config/repo-config.js';
 import type { JobSpec, Workflow } from '../config/workflow-schema.js';
 import type { EffectRetry } from '../runtime/outbox.js';
 import { Worker } from '../runtime/worker.js';
@@ -213,7 +213,7 @@ export interface OrchestratorDeps {
    * `.factory/config.yml` on the repository's default branch, read once at each launch (ORC-209 C); it rejects on an
    * invalid file. Absent: the socle, as for a repository without the file.
    */
-  repoConfig?: (project: ProjectRuntime) => Promise<RepoConfig>;
+  repoConfig?: (project: ProjectRuntime, read?: RepoConfigRead) => Promise<RepoConfig>;
   /** Where a project's base branch is fetched (ORC-151): required with `sandboxes`. */
   originUrl?: (project: ProjectRuntime) => Promise<string>;
   dailyBudgetUsd?: number;
@@ -762,21 +762,22 @@ export class Orchestrator {
   }
 
   /** `.factory/config.yml` on the default branch (ORC-209 C): it rejects on an invalid file. */
-  private async repoConfigOf(project: ProjectRuntime): Promise<RepoConfig> {
-    return this.d.repoConfig ? this.d.repoConfig(project) : parseRepoConfig(undefined);
+  private async repoConfigOf(project: ProjectRuntime, read?: RepoConfigRead): Promise<RepoConfig> {
+    return this.d.repoConfig ? this.d.repoConfig(project, read) : parseRepoConfig(undefined);
   }
 
   /**
    * What the runner gets of the repository (ORC-211), from `config` when the caller read it (the launch, `verify`),
-   * else read here: none when it cannot be read, the caller goes on.
+   * else read here without a fetch, on what the launch fetched: none when it cannot be read, the caller goes on.
    */
   private async repoVariablesOf(project: ProjectRuntime, config?: RepoConfig): Promise<RepoVariables> {
-    const repoVariables = this.d.repoVariables;
-    if (!repoVariables) return NO_REPO_VARIABLES;
-    return (async () => repoVariables(project, config ?? (await this.repoConfigOf(project))))().catch((err: Error) => {
-      this.log('warn', `${project.id}: repository variables not read: ${err.message}`);
+    if (!this.d.repoVariables) return NO_REPO_VARIABLES;
+    try {
+      return await this.d.repoVariables(project, config ?? (await this.repoConfigOf(project, { fetch: false })));
+    } catch (err) {
+      this.log('warn', `${project.id}: repository variables not read: ${(err as Error).message}`);
       return NO_REPO_VARIABLES;
-    });
+    }
   }
 
   /**
@@ -1805,10 +1806,11 @@ export class Orchestrator {
     // Until pump has it, the sandbox is the launch's: whatever ends the launch before destroys it.
     let handedOver = false;
     try {
-      // Read once, on the default branch (ORC-209 C): an invalid file refuses the launch, and a fresh worktree goes with it.
-      const config = await this.repoConfigOf(project);
+      // Read once, on the default branch (ORC-209 C): an invalid file refuses the launch, and a fresh worktree goes with
+      // it. A fresh worktree's `prepare` has just fetched the forge.
+      const config = await this.repoConfigOf(project, { fetch: !ws.fresh });
       const setup = config.setup ? [config.setup] : wf.workspace.setup;
-      if (!setup.length) setUp = true;
+      setUp ||= !setup.length;
       t = await this.ticket(project.id, ticketId);
       if (job.queue === 'dev') t = await this.apply(t, { type: 'workspace.prepared', path: ws.path, port: ws.port, branch: ws.branch });
       if (job.onStart.move && t.logical !== job.onStart.move) await this.move(project, t, job.onStart.move);
