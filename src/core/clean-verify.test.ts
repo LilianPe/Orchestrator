@@ -380,6 +380,13 @@ describe('runCleanVerify', () => {
       expect(res.failures[0]).toMatchObject({ command: 'factory/tests-gelés', output: expect.stringContaining('a.txt') });
     });
 
+    it('a test disabled or a check bypassed in the diff blocks as factory/anti-triche', async () => {
+      const { repo, req } = setup({ commands: [] });
+      write(repo, 'src/a.test.ts', "it.skip('works', () => {});\n");
+      commit(repo, 'x');
+      expect((await runCleanVerify(req)).failures).toEqual([{ command: 'factory/anti-triche', exitCode: 1, output: expect.stringContaining('src/a.test.ts:1') }]);
+    });
+
     it('a change left uncommitted is no change for the freeze', async () => {
       const { repo, req } = setup({ commands: [], frozen: { sha: 's', files: { 'a.txt': sha256('committed\n') } } });
       write(repo, 'a.txt', 'changed but not committed\n');

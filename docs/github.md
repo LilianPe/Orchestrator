@@ -33,7 +33,7 @@ Une valeur de `config.yaml` l'emporte sur la variable d'environnement. Si une se
 3. Dans **Repository permissions**, appliquez le manifeste [`github-app-manifest.json`](github-app-manifest.json) :
    - **Contents** : lecture/écriture ;
    - **Pull requests** : lecture/écriture ;
-   - **Checks** : lecture ;
+   - **Checks** : lecture/écriture (les checks `factory/*` publiés sur le commit poussé, ORC-151 ; une App créée avant doit l'ajouter, sinon la publication échoue en 403 et bloque le ticket) ;
    - **Commit statuses** : lecture ;
    - **Actions** : lecture (lister les environnements et leurs règles de protection, pour `factory doctor`) ;
    - **Metadata** : lecture (obligatoire pour toute App).
@@ -72,9 +72,10 @@ L'usine publie (ORC-125), par l'effet `publish` de l'outbox, que `decide` n'écr
 
 1. lit sur la forge la branche par défaut et la tête de la branche du ticket ; une tête déjà sur le commit va droit à la PR, sans pousser : c'est le rejeu d'une publication coupée ;
 2. fait le bundle de la branche, dans le dépôt propre de l'agent (ORC-317), dans un sandbox neuf à `none`, son `.git` en lecture seule ; aucun git de l'hôte n'y tourne, et le dossier git de `repoPath` n'est monté nulle part. Il le vérifie, le clone sans checkout, sans hook ni config du dépôt, et compare sa tête au commit vérifié ;
-3. contrôle le diff depuis la base, de façon bloquante : `factory/chemins-interdits` (liens symboliques sortants et `package.json#scripts` compris), `factory/binaires`, `factory/secrets` ;
+3. contrôle le diff depuis la base, de façon bloquante : `factory/chemins-interdits` (liens symboliques sortants et `package.json#scripts` compris), `factory/binaires`, `factory/anti-triche`, `factory/secrets` ;
 4. pousse **seulement vers l'avant**, en `--force-with-lease` sur la tête lue : si la branche porte un commit absent du travail (un push humain, ORC-159, ou un historique réécrit), rien n'est poussé ;
-5. ouvre la PR **draft**, cherchée par branche avant création (une PR normale si l'offre du dépôt n'a pas de draft). Elle sort de draft au passage du ticket en *Human Review* : GitHub ne merge pas un draft.
+5. ouvre la PR **draft**, cherchée par branche avant création (une PR normale si l'offre du dépôt n'a pas de draft). Elle sort de draft au passage du ticket en *Human Review* : GitHub ne merge pas un draft ;
+6. publie sur le commit poussé les checks `factory/verify`, `factory/tests-gelés` (`neutral` sans gel) et `factory/anti-triche` (ORC-151), identifiés par `external_id` : un rejeu les met à jour, sans doublon. Un verdict rouge n'est jamais poussé, donc n'a pas de check.
 
 Un refus est une réponse : le ticket est bloqué avec la raison (`publish.refused`), décidé une fois ; la relance qui publie le mène où il devait aller (`owedMove`). Une panne est rejouée par l'outbox, puis bloque le ticket. Un run sans commit au-delà de la base finit sans PR.
 

@@ -78,6 +78,7 @@ import { PRODUCT_NAME } from '../product.js';
 import { checkRed, type RedDeps, type RedResult } from '../checks/red.js';
 import { checkFrozen, FREEZE_CHECK, freezeTests, newTestsOnly, REFREEZE, type FrozenTests } from '../checks/freeze.js';
 import { isTestFile } from '../checks/test-files.js';
+import { ANTI_CHEAT_CHECK } from '../checks/anti-cheat.js';
 import { parseStatus } from '../adapters/workspace/git-workspaces.js';
 import { readSecurityLog, refusalSummary } from '../network/security-log.js';
 
@@ -1517,6 +1518,7 @@ export class Orchestrator {
     else {
       try {
         const pr = await publisher.publish({ projectId: project.id, repoPath: project.repoPath, ticketId: t.ticketId, runId: c.runId, worktree: t.worktreePath, branch: t.branch, sha: c.sha, ...prText(t) });
+        await this.publishChecks(project, t, c.sha, key.id);
         await this.accept({ ...base, id: prEventId(t.ticketId, pr.prNumber, 'opened'), type: 'pr.opened', at: this.d.clock.now(), payload: { number: pr.prNumber, url: pr.url, branch: t.branch } });
         return published();
       } catch (err) {
@@ -1528,6 +1530,22 @@ export class Orchestrator {
     }
     await this.d.store.setMeta(mark, reason);
     await refuse(reason);
+  }
+
+  /**
+   * The checks `verify` found green, on the commit just pushed (ORC-151): only a pushed commit can carry one, so a red
+   * verdict, never pushed, has none. Keyed by the effect's id (ORC-138, point 5): its replay updates them, never doubles them.
+   */
+  private async publishChecks(project: ProjectRuntime, t: TicketState, sha: string, effectId: string): Promise<void> {
+    const writer = this.d.forgeWriter;
+    if (!writer) return;
+    const frozen = Object.keys(t.frozenTests?.files ?? {}).length;
+    const checks = [
+      { name: 'factory/verify', conclusion: 'success', summary: `Commandes de vérification vertes sur ${sha.slice(0, 12)}, dans un clone neuf, sans réseau.` },
+      { name: FREEZE_CHECK, conclusion: frozen ? 'success' : 'neutral', summary: frozen ? `${frozen} fichier(s) gelé(s) intact(s).` : 'Aucun test gelé pour ce ticket.' },
+      { name: ANTI_CHEAT_CHECK, conclusion: 'success', summary: 'Aucun test désactivé, aucun contournement.' },
+    ] as const;
+    for (const { name, conclusion, summary } of checks) await writer.upsertCheckRun(project.repoPath, { sha, name, externalId: effectId, status: 'completed', conclusion, summary });
   }
 
   /**

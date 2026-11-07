@@ -231,6 +231,30 @@ describe('the factory publishes (ORC-125)', () => {
       expect(responses(h)).toHaveLength(1);
     });
 
+    it('the checks of the pushed commit, by external_id: a replay updates them, never doubles them (ORC-151)', async () => {
+      const h = verified({ effectRetry: { attempts: 3, baseMs: 1, capMs: 1 } });
+      const real = h.forge.upsertCheckRun.bind(h.forge);
+      let cut = true;
+      vi.spyOn(h.forge, 'upsertCheckRun').mockImplementation(async (repo, req) => {
+        const out = await real(repo, req);
+        if (cut && req.name === 'factory/anti-triche') {
+          cut = false;
+          throw new Error('coupé après les checks');
+        }
+        return out;
+      });
+      await delegate(h);
+      await h.advance(10);
+      expect(h.forge.upsertCheckRun).toHaveBeenCalledTimes(6);
+      expect(h.forge.checkRuns.map((c) => [c.name, c.sha, c.conclusion])).toEqual([
+        ['factory/verify', SHA, 'success'],
+        ['factory/tests-gelés', SHA, 'neutral'],
+        ['factory/anti-triche', SHA, 'success'],
+      ]);
+      expect(new Set(h.forge.checkRuns.map((c) => c.externalId)).size).toBe(1);
+      expect(await h.ticket()).toMatchObject({ logical: 'human_review', prNumber: 1 });
+    });
+
     it('a process killed during the publication: the next one finishes it, once', async () => {
       const h = verified({ effectRetry: { attempts: 3, baseMs: 1, capMs: 1 }, effectLeaseMs: 1000 });
       let die: () => void = () => {};

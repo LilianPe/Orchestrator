@@ -3,6 +3,7 @@ import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { execCmd, mustExec, type Exec, type ExecResult } from '../adapters/exec.js';
 import { DEFAULT_REQUIREMENTS, type SandboxMount, type SandboxProvider } from '../adapters/sandbox/types.js';
+import { ANTI_CHEAT_CHECK, antiCheatCheck } from '../checks/anti-cheat.js';
 import { checkFrozen, FREEZE_CHECK, isFrozenHarness, type FrozenTests } from '../checks/freeze.js';
 import { checkForbiddenPaths, FORBIDDEN_CHECK } from '../checks/forbidden-paths.js';
 import { mdCode } from '../checks/markdown.js';
@@ -236,8 +237,8 @@ export async function forkPoint(git: CloneGit, sha: string): Promise<string> {
 }
 
 /**
- * The blocking checks on the commit, from the clone's objects: `factory/chemins-interdits` and `factory/binaires` on all it
- * changed since it left the base, whatever it says of its own history, and `factory/tests-gelés` on the frozen files as they are at
+ * The blocking checks on the commit, from the clone's objects: `factory/chemins-interdits`, `factory/binaires` and `factory/anti-triche`
+ * (ORC-158) on all it changed since it left the base, whatever it says of its own history, and `factory/tests-gelés` on the frozen files as they are at
  * its head, which needs no frozen commit: a rebase can take it away, not its fingerprints. A read that fails rejects.
  */
 export async function checkClone(git: CloneGit, from: string, sha: string, frozen: FrozenTests | undefined): Promise<VerifyFailure[]> {
@@ -254,6 +255,11 @@ export async function checkClone(git: CloneGit, from: string, sha: string, froze
   const failures: VerifyFailure[] = forbidden.ok ? [] : [{ command: FORBIDDEN_CHECK, exitCode: 1, output: forbidden.summary }];
   const binaries = await binariesAdded(git, from, sha);
   if (binaries.length) failures.push({ command: BINARY_CHECK, exitCode: 1, output: `Fichier binaire dans le diff, publication bloquée. Retire-le de la branche :\n${binaries.map((p) => `- ${mdCode(p)}`).join('\n')}` });
+  // The frozen files are `factory/tests-gelés`'s, below. A blob over the cap reads as binary: its text never comes into the daemon's memory.
+  // ponytail: the cap is per file; the whole patch is bounded only by the bundle already taken in, max_diff (ORC-145) once wired.
+  const patch = await git.raw('-c', `core.bigFileThreshold=${MAX_READ_BYTES}`, 'diff', '--no-renames', '--no-ext-diff', '--no-textconv', '-U0', from, sha);
+  const cheat = antiCheatCheck(patch);
+  if (!cheat.ok) failures.push({ command: ANTI_CHEAT_CHECK, exitCode: 1, output: `Contournement ou test désactivé dans le diff, publication bloquée. Retire-le de la branche :\n${cheat.summary}` });
   if (frozen) {
     const atHead = (await git('ls-tree', '-r', '--name-only', '-z', sha)).split('\0').filter(Boolean);
     const listed = new Set(atHead);
