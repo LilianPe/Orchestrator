@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { Exec } from '../adapters/exec.js';
-import { parseRepoConfig } from '../config/repo-config.js';
+import { parseRepoConfig, RepoConfigError } from '../config/repo-config.js';
 import { NO_REPO_VARIABLES } from '../config/repo-variables.js';
 import { makeOriginUrl, makeRepoConfig, makeRepoVariables } from './repo-variables.js';
 
@@ -112,6 +112,8 @@ describe('makeRepoConfig (ORC-209 C)', () => {
 
   it.each(['120000 blob', '040000 tree'])('rejects a .factory/config.yml that is not a file (%s)', async (mode) => {
     await expect(makeRepoConfig({ exec: git({ head: 'origin/main', config: CONFIG, mode }).exec })(PROJECT)).rejects.toThrow(/pas un fichier/);
+    // The repository's to fix, as an invalid file is: not a breakdown of the factory.
+    await expect(makeRepoConfig({ exec: git({ head: 'origin/main', config: CONFIG, mode }).exec })(PROJECT)).rejects.toBeInstanceOf(RepoConfigError);
   });
 
   it('reads the remote branch, never a tag of its name, when origin/HEAD is missing', async () => {
@@ -132,6 +134,7 @@ describe('makeRepoConfig (ORC-209 C)', () => {
 
   it('rejects a .factory that is not a directory: git reads nothing through a link, which is not an absent file', async () => {
     await expect(makeRepoConfig({ exec: git({ head: 'origin/main', config: CONFIG, dir: '120000 blob' }).exec })(PROJECT)).rejects.toThrow(/\.factory n'est pas un dossier/);
+    await expect(makeRepoConfig({ exec: git({ head: 'origin/main', config: CONFIG, dir: '120000 blob' }).exec })(PROJECT)).rejects.toBeInstanceOf(RepoConfigError);
     const root = mkdtempSync(join(tmpdir(), 'factory-repo-config-'));
     try {
       const { run, repo } = forgeAndClone(root, 'network: { level: none }\n');

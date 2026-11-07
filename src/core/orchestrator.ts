@@ -22,7 +22,7 @@ import { ActivityRelay } from '../adapters/tracker/activity-relay.js';
 import { IssueNotFoundError, labelEchoKey, stateEchoKey, type ActivityInput, type Tracker, type TrackerIssue } from '../adapters/tracker/types.js';
 import type { Workspace, WorkspaceManager } from '../adapters/workspace/types.js';
 import { NO_REPO_VARIABLES, type RepoVariables } from '../config/repo-variables.js';
-import { parseRepoConfig, type RepoConfig, type RepoConfigRead } from '../config/repo-config.js';
+import { parseRepoConfig, RepoConfigError, type RepoConfig, type RepoConfigRead } from '../config/repo-config.js';
 import type { JobSpec, Workflow } from '../config/workflow-schema.js';
 import type { EffectRetry } from '../runtime/outbox.js';
 import { Worker } from '../runtime/worker.js';
@@ -81,6 +81,7 @@ import { checkFrozen, FREEZE_CHECK, freezeTests, newTestsOnly, REFREEZE, type Fr
 import { isTestFile } from '../checks/test-files.js';
 import { parseStatus } from '../adapters/workspace/git-workspaces.js';
 import { agentPolicy, type EgressPolicy } from '../network/levels.js';
+import { REPO_CONFIG_REFUSED } from './block-cause.js';
 import { readSecurityLog, refusalSummary } from '../network/security-log.js';
 
 /** Meta key of the head a ticket's tests step started on (ORC-123). */
@@ -1716,7 +1717,8 @@ export class Orchestrator {
         if (r && r.status === 'running' && !this.handles.has(r.id)) await this.d.store.putRun({ ...r, status: 'failure', endedAt: this.d.clock.now() });
         if (!this.handles.has(fresh.activeRunId)) events.push({ type: 'run.cleared' });
       }
-      const reason = `Erreur au lancement : ${(err as Error).message}`;
+      // A file the repository has to fix is not a breakdown of the factory: the Flux shows it as such (`repo_config`).
+      const reason = err instanceof RepoConfigError ? `${REPO_CONFIG_REFUSED}${err.message}` : `Erreur au lancement : ${(err as Error).message}`;
       fresh = await this.apply(fresh, ...events, blockedOn(project.workflow, reason, job.name));
       // The ticket is blocked: a failed notice must not fail the effect, whose retry would start again.
       try {

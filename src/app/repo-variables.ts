@@ -2,7 +2,7 @@ import { execCmd, execFailure, mustExec, type Exec } from '../adapters/exec.js';
 import { githubRepoOf } from '../adapters/forge/github-ingest.js';
 import { originHeadOf } from '../adapters/workspace/git-workspaces.js';
 import type { FactoryYml } from '../config/factory-yml.js';
-import { parseRepoConfig, REPO_CONFIG_DIR, REPO_CONFIG_PATH, type RepoConfig, type RepoConfigRead } from '../config/repo-config.js';
+import { parseRepoConfig, REPO_CONFIG_DIR, REPO_CONFIG_PATH, RepoConfigError, type RepoConfig, type RepoConfigRead } from '../config/repo-config.js';
 import { NO_REPO_VARIABLES, repoVariables, type RepoVariables } from '../config/repo-variables.js';
 import { within } from '../core/clean-verify.js';
 import { STALLED } from '../publish/publish.js';
@@ -45,11 +45,11 @@ export function makeRepoConfig(o: { exec?: Exec; fetchDeadlineMs?: number; log?:
     // `ls-tree` does not go through a `.factory` that is a link: the file under it would read as absent.
     const dir = await entryOf(REPO_CONFIG_DIR);
     if (!dir) return parseRepoConfig(undefined);
-    if (!dir.startsWith('040000 tree ')) throw new Error(`${REPO_CONFIG_DIR} n'est pas un dossier sur ${name} (lien symbolique ou fichier)`);
+    if (!dir.startsWith('040000 tree ')) throw new RepoConfigError([`${REPO_CONFIG_DIR} n'est pas un dossier sur ${name} (lien symbolique ou fichier)`]);
     const entry = await entryOf(REPO_CONFIG_PATH);
     if (!entry) return parseRepoConfig(undefined);
     const blob = /^100(?:644|755) blob ([0-9a-f]+)\t/.exec(entry)?.[1];
-    if (!blob) throw new Error(`${REPO_CONFIG_PATH} n'est pas un fichier sur ${name} (lien symbolique ou dossier)`);
+    if (!blob) throw new RepoConfigError([`${REPO_CONFIG_PATH} n'est pas un fichier sur ${name} (lien symbolique ou dossier)`]);
     return parseRepoConfig(await git(['cat-file', 'blob', blob], () => unreadable));
   };
 }

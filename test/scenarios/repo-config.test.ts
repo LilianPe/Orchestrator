@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { makeRepoConfig } from '../../src/app/repo-variables.js';
 import { parseRepoConfig, type RepoConfig } from '../../src/config/repo-config.js';
 import type { RepoVariables } from '../../src/config/repo-variables.js';
+import { blockCause } from '../../src/core/block-cause.js';
 import { createHarness } from '../helpers/harness.js';
 
 const VERIFIED = 'version: 1\njobs:\n  dev: { verify: ["npm test"] }\n';
@@ -86,7 +87,15 @@ describe("the repository's config at the launch", () => {
     expect(h.runner.requests).toEqual([]);
     expect(h.workspaces.cleaned).toEqual(['REL-1']);
     expect(await h.ticket()).toMatchObject({ blocked: true });
-    expect(h.tracker.activities('ls-1').at(-1)).toMatchObject({ type: 'error', body: expect.stringMatching(/^Erreur au lancement : \.factory\/config\.yml refusé :[\s\S]*network\.level/) });
+    expect(h.tracker.activities('ls-1').at(-1)).toMatchObject({ type: 'error', body: expect.stringMatching(/^Configuration du dépôt à corriger : \.factory\/config\.yml refusé :[\s\S]*network\.level/) });
+    // The Flux shows it as the repository's to fix, not as a breakdown of the factory.
+    expect(blockCause((await h.ticket()).blockReason)).toBe('repo_config');
+  });
+
+  it('keeps a config the forge could not give as a breakdown, not as a fault of the repository', async () => {
+    const h = createHarness({ sandboxed: true, repoConfig: async () => Promise.reject(new Error('la forge ne répond plus après 120 s')) });
+    await delegate(h);
+    expect(blockCause((await h.ticket()).blockReason)).toBe('infra');
   });
 
   it("criterion 5: the agent's change of .factory/config.yml is refused as a forbidden path, and the base's config applies to the next run", async () => {
