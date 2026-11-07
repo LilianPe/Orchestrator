@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import type { Exec } from '../adapters/exec.js';
+import { TIMED_OUT, type Exec, type ExecOpts } from '../adapters/exec.js';
 import { parseRepoConfig, RepoConfigError } from '../config/repo-config.js';
 import { NO_REPO_VARIABLES } from '../config/repo-variables.js';
 import { makeOriginUrl, makeRepoConfig, makeRepoVariables } from './repo-variables.js';
@@ -67,14 +67,15 @@ describe('makeRepoConfig (ORC-209 C)', () => {
   });
 
   it('gives up on a forge that does not answer, refusing the launch rather than holding it forever', async () => {
-    const calls: { args: string[]; env?: Record<string, string> }[] = [];
-    const exec: Exec = (_, args, opts) => {
-      calls.push({ args, ...(opts?.env ? { env: opts.env } : {}) });
-      return args.includes('fetch') ? new Promise(() => {}) : Promise.resolve({ stdout: 'origin/main\n', stderr: '', code: 0 });
+    const calls: { args: string[]; opts?: ExecOpts }[] = [];
+    // `execCmd` kills a command past `timeoutMs` and answers TIMED_OUT (exec.test.ts): here, a fetch that never ends.
+    const exec: Exec = async (_, args, opts) => {
+      calls.push({ args, ...(opts ? { opts } : {}) });
+      return args.includes('fetch') ? { stdout: '', stderr: '', code: TIMED_OUT } : { stdout: 'origin/main\n', stderr: '', code: 0 };
     };
-    await expect(makeRepoConfig({ exec, fetchDeadlineMs: 20 })(PROJECT)).rejects.toThrow(/la forge ne répond plus après 0.02 s/);
-    // No prompt for a credential, and a stalled transfer ends git by itself: the deadline only stops waiting for it.
-    expect(calls[0]!.env).toMatchObject({ GIT_TERMINAL_PROMPT: '0', GIT_HTTP_LOW_SPEED_LIMIT: '1000' });
+    await expect(makeRepoConfig({ exec, fetchDeadlineMs: 20 })(PROJECT)).rejects.toThrow(/^la forge ne répond plus après 0.02 s$/);
+    // No prompt for a credential, a stalled transfer ends git by itself, and the deadline kills it with its ssh.
+    expect(calls[0]!.opts).toMatchObject({ env: { GIT_TERMINAL_PROMPT: '0', GIT_HTTP_LOW_SPEED_LIMIT: '1000' }, timeoutMs: 20 });
     expect(calls.some((c) => c.args.includes('ls-tree'))).toBe(false);
   });
 
