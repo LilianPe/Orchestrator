@@ -42,7 +42,8 @@ export default defineConfig({
           include: ['test/scenarios/**/*.test.ts'],
           setupFiles: ['test/helpers/pg-harness.ts'],
           environment: 'node',
-          testTimeout: 30000,
+          // A scenario is up to ~1,700 queries one after the other: 41 s at 24 ms a query on a loaded machine (docs/tests.md).
+          testTimeout: 90_000,
           ...onPostgres,
         },
       },

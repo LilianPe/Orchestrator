@@ -17,6 +17,8 @@ interface Database {
   pool: Promise<Pool>;
   /** Set once its test is over. */
   closed: boolean;
+  /** A connection lost while the test ran: the test fails on it once over. */
+  lost?: Error;
 }
 
 /** The databases of the current test: dropped once it ends. */
@@ -57,8 +59,10 @@ function pgDatabase() {
   open.push(db);
   // One PgStore per database, reused by every life of the harness (its clock is the harness's).
   let store: Store | undefined;
+  // PgStore hears every client, a checked-out one included (ORC-290). The forced drop at the end of the
+  // test cuts those its background work still holds: expected. Before that, a lost connection fails the test.
   const onError = (err: Error) => {
-    if (!db.closed) console.error(`scenarios-pg ${name}: ${err.message}`);
+    if (!db.closed) db.lost ??= err;
   };
   return (now: () => number): Store => (store ??= deferred(db, pool.then((p) => new PgStore({ pool: p, now, onError }))));
 }
@@ -90,6 +94,8 @@ if (PG_URL) {
     open = [];
     for (const db of dbs) db.closed = true;
     await Promise.all(dbs.map(drop));
+    const lost = dbs.find((db) => db.lost)?.lost;
+    if (lost) throw new Error(`scenarios-pg: a connection was lost during the test: ${lost.message}`);
   });
 
   afterAll(async () => {

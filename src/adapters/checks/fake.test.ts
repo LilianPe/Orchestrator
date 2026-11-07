@@ -50,6 +50,20 @@ describe('FakeCheckRunner', () => {
     expect((await p).ok).toBe(false);
   });
 
+  it('started(n) settles once the n-th check has started, a held one included', async () => {
+    const c = new FakeCheckRunner();
+    let second = false;
+    void c.started(2).then(() => (second = true));
+    await c.run('/w', ['npm test']);
+    await Promise.resolve();
+    expect(second).toBe(false);
+    c.holdNext();
+    void c.run('/w', ['npm test']);
+    await c.started(2);
+    expect(second).toBe(true);
+    await c.started(1);
+  });
+
   it('falls back to the given verifier once the queue is empty, still recording the call', async () => {
     const fail = { ok: false, failures: [{ command: 'npm test', exitCode: 2, output: 'own' }] };
     const c = new FakeCheckRunner(async () => fail);

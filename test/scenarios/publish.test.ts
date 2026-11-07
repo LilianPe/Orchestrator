@@ -70,15 +70,9 @@ describe('the factory publishes (ORC-125)', () => {
 
   it('the summary and the move wait for the publication: a run held on it shows neither', async () => {
     const h = verified();
-    let release!: () => void;
-    const gate = new Promise<void>((r) => (release = r));
-    const real = h.publisher.publish.bind(h.publisher);
-    vi.spyOn(h.publisher, 'publish').mockImplementation(async (req) => {
-      await gate;
-      return real(req);
-    });
+    const { started, release } = h.publisher.holdNext();
     const delegated = delegate(h);
-    await vi.waitFor(() => expect(h.publisher.publish).toHaveBeenCalled());
+    await started;
     expect(moves(h)).not.toContain('Human Review');
     expect((await h.ticket()).verifyingRunId).toBeDefined();
     release();
@@ -91,20 +85,15 @@ describe('the factory publishes (ORC-125)', () => {
     // The copy that waited under another project of the team: neither refuses the holder's publication nor shares its effect keys.
     const waiting = { ...newTicketState('api', 'REL-1', 'T', 'dev', 1), delegated: true, blocked: true, awaitingRepo: ['p', 'api'] };
     await h.store.putTicket(waiting);
-    let release!: () => void;
-    const gate = new Promise<void>((r) => (release = r));
-    const real = h.publisher.publish.bind(h.publisher);
-    vi.spyOn(h.publisher, 'publish').mockImplementation(async (req) => {
-      await gate;
-      return real(req);
-    });
+    const { started, release } = h.publisher.holdNext();
     const delegated = delegate(h);
-    await vi.waitFor(() => expect(h.publisher.publish).toHaveBeenCalled());
+    await started;
     const publishing = await h.ticket();
     expect(publishing.verifyingRunId).toBeDefined();
 
     await h.orch.accept({ id: 'stale', type: 'ticket.delegated', at: h.clock.now(), projectId: 'api', ticketId: 'REL-1', actor: 'user-1', taint: 'trusted', payload: { linearSessionId: 's9' } } as FactoryEvent);
-    await vi.waitFor(async () => expect(await h.store.getDeadLetter('stale')).toMatchObject({ status: 'open' }));
+    // A decision under load takes more than vi.waitFor's 1 s by default (ORC-290): the dead letter is waited for 10 s.
+    await vi.waitFor(async () => expect(await h.store.getDeadLetter('stale')).toMatchObject({ status: 'open' }), { timeout: 10_000 });
     expect(await h.ticket()).toMatchObject({ verifyingRunId: publishing.verifyingRunId, blocked: false });
 
     release();
@@ -178,15 +167,9 @@ describe('the factory publishes (ORC-125)', () => {
 
   it('a stop while it publishes: its result moves nothing', async () => {
     const h = verified();
-    let release!: () => void;
-    const gate = new Promise<void>((r) => (release = r));
-    const real = h.publisher.publish.bind(h.publisher);
-    vi.spyOn(h.publisher, 'publish').mockImplementation(async (req) => {
-      await gate;
-      return real(req);
-    });
+    const { started, release } = h.publisher.holdNext();
     const delegated = delegate(h);
-    await vi.waitFor(() => expect(h.publisher.publish).toHaveBeenCalled());
+    await started;
     const stopped = h.send('control.stop', {});
     release();
     await Promise.all([delegated, stopped]);

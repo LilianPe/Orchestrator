@@ -59,9 +59,20 @@ export interface PgStoreOptions {
  * A pool emits `error` when an idle client loses its connection; unheard, Node throws it and the
  * daemon dies. The pool reconnects on the next query, so the error is only reported. An injected
  * pool that already has a listener keeps it.
+ *
+ * A checked-out client is not the pool's to hear (it takes its idle listener off on acquire): cut
+ * between two queries (Postgres restarted, `pg_terminate_backend`), it would crash the daemon the same
+ * way (ORC-290). Each client gets a listener of its own, which only speaks when nobody else listens:
+ * an idle client's error goes through the pool's.
  */
 export function listenForPoolErrors(pool: Pool, onError: (err: Error) => void): void {
   if (pool.listenerCount('error') === 0) pool.on('error', onError);
+  pool.on('connect', (client) => {
+    const own = (err: Error) => {
+      if (client.listenerCount('error') === 1) onError(err);
+    };
+    client.on('error', own);
+  });
 }
 
 const reportToStderr = (err: Error) => console.error(`[postgres] ${err.message}`);

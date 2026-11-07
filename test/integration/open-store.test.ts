@@ -12,14 +12,19 @@ import { createTestDatabase, PG_URL, queryOn } from '../helpers/pg-database.js';
 const migrationsFolder = join(import.meta.dirname, '../../drizzle');
 
 describe.skipIf(!PG_URL)('openStore and the daemon on Postgres', () => {
-  let db: Awaited<ReturnType<typeof createTestDatabase>>;
+  type TestDatabase = Awaited<ReturnType<typeof createTestDatabase>>;
+  let db: TestDatabase;
+  /** Left unmigrated. Made and dropped in the hooks, which have 60 s: a drop waits for a checkpoint, past a test's 30 s on a loaded machine (ORC-290). */
+  let other: TestDatabase;
 
   beforeAll(async () => {
-    db = await createTestDatabase('factory_open');
+    // Each assigned as soon as made: if the other fails, afterAll still drops it.
+    await Promise.all([createTestDatabase('factory_open').then((d) => (db = d)), createTestDatabase('factory_nomigrate').then((d) => (other = d))]);
   });
 
   afterAll(async () => {
-    await db.drop();
+    const made: (TestDatabase | undefined)[] = [db, other];
+    await Promise.all(made.map((d) => d?.drop()));
   });
 
   const tablesOf = (url: string) =>
@@ -28,16 +33,11 @@ describe.skipIf(!PG_URL)('openStore and the daemon on Postgres', () => {
     );
 
   it('opens Postgres without migrating it with `migrate: false` (factory plan)', async () => {
-    const other = await createTestDatabase('factory_nomigrate');
-    try {
-      const sqlitePath = join(mkdtempSync(join(tmpdir(), 'factory-store-')), 'factory.db');
-      const { store, kind } = await openStore({ env: { [DATABASE_URL_ENV]: other.url }, sqlitePath, migrationsFolder, migrate: false });
-      expect(kind).toBe('postgres');
-      await store.close();
-      expect(await tablesOf(other.url)).toEqual([]);
-    } finally {
-      await other.drop();
-    }
+    const sqlitePath = join(mkdtempSync(join(tmpdir(), 'factory-store-')), 'factory.db');
+    const { store, kind } = await openStore({ env: { [DATABASE_URL_ENV]: other.url }, sqlitePath, migrationsFolder, migrate: false });
+    expect(kind).toBe('postgres');
+    await store.close();
+    expect(await tablesOf(other.url)).toEqual([]);
   });
 
   it('applies the migrations to an empty database, then again without change', async () => {

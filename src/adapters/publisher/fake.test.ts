@@ -18,6 +18,20 @@ describePublisherContract('FakePublisher', () => {
 });
 
 describe('FakePublisher', () => {
+  it('holdNext: the next publication starts, then waits for its release before reaching the forge (ORC-290)', async () => {
+    const p = new FakePublisher();
+    const { started, release } = p.holdNext();
+    const publishing = p.publish(req());
+    await started;
+    await Promise.resolve();
+    expect(p.asked).toHaveLength(1);
+    expect(p.published).toEqual([]);
+    release();
+    expect((await publishing).prNumber).toBe(1);
+    expect(p.published).toHaveLength(1);
+    expect((await p.publish(req({ sha: 'bbb' }))).sha).toBe('bbb');
+  });
+
   it('opens one PR per branch and republishing the branch updates its sha', async () => {
     const p = new FakePublisher();
     const first = await p.publish(req());

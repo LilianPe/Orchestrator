@@ -91,9 +91,11 @@ export const harnessStoreKind = (): StoreKind => databases.kind;
  * process calls nothing outside any more (no comment, no activity, no run), and a call under way
  * that acted never answers.
  */
-export function mortal(store: Store): { store: Store; kill(): void; gate<T extends object>(target: T): T } {
+export function mortal(store: Store): { store: Store; kill(): void; gate<T extends object>(target: T): T; settled(): Promise<void> } {
   let dead = false;
   const never = new Promise<never>(() => {});
+  /** The store calls under way: `settled` waits for them. */
+  const inflight = new Set<Promise<unknown>>();
   const proxy = new Proxy(store, {
     get(target, prop, receiver) {
       const value: unknown = Reflect.get(target, prop, receiver);
@@ -101,12 +103,16 @@ export function mortal(store: Store): { store: Store; kill(): void; gate<T exten
       return (...args: unknown[]) => {
         if (dead) return never;
         // A wrapper that throws or answers synchronously is handled like any store call.
-        return Promise.resolve()
-          .then(() => (value as (...a: unknown[]) => unknown).apply(target, args))
-          .then(
-            (v) => (dead ? never : v),
-            (err: unknown) => (dead ? never : Promise.reject(err)),
-          );
+        const call = Promise.resolve().then(() => (value as (...a: unknown[]) => unknown).apply(target, args));
+        const done = call.then(
+          () => void inflight.delete(done),
+          () => void inflight.delete(done),
+        );
+        inflight.add(done);
+        return call.then(
+          (v) => (dead ? never : v),
+          (err: unknown) => (dead ? never : Promise.reject(err)),
+        );
       };
     },
   });
@@ -139,7 +145,30 @@ export function mortal(store: Store): { store: Store; kill(): void; gate<T exten
         return (...args: unknown[]) => call(value as (...a: unknown[]) => unknown, t, args);
       },
     });
-  return { store: proxy, kill: () => void (dead = true), gate };
+  const settled = async (): Promise<void> => {
+    while (inflight.size > 0) await Promise.all(inflight);
+  };
+  return { store: proxy, kill: () => void (dead = true), gate, settled };
+}
+
+/** The harnesses made in this file, once it asked for it (`trackHarnesses`): their shutdown. */
+let tracked: Set<() => Promise<void>> | undefined;
+
+/**
+ * For the tests that share one database and empty it between them (ORC-290): without it, the background
+ * work of the previous test's harness (a run that finishes) wrote its `attempt:id-1:finished` into the next
+ * test's inbox, and finished a run of the same id there. From now on, each harness of this file is
+ * recorded; the function returned, for `afterEach`, shuts each one down as `restart()` does (every run
+ * stopped, nothing left to do), waits for its store calls under way, then kills it: nothing it started
+ * reaches the database after that. Opt-in, so that the other files keep no harness alive.
+ */
+export function trackHarnesses(): () => Promise<void> {
+  const mine = (tracked ??= new Set());
+  return async () => {
+    const stops = [...mine];
+    mine.clear();
+    await Promise.all(stops.map((stop) => stop()));
+  };
 }
 
 export function createHarness(
@@ -273,6 +302,13 @@ export function createHarness(
   const timerService = (store: Store) => new TimerService(store, clock, () => orch.wake());
   let timers = timerService(life.store);
   let seq = 0;
+  // The process alive at the end of the test, read then: a restart replaces it.
+  tracked?.add(async () => {
+    orch.stopAll();
+    await Promise.all([orch.drained(), timers.stop()]);
+    await life.settled();
+    life.kill();
+  });
 
   /** `signed`: the event's signed actor and taint, as the Linear ingestion stamps them (ORC-160). */
   async function send<T extends EventType>(type: T, payload: EventPayloads[T], ticketId = 'REL-1', signed: { actor?: string; taint?: Taint } = {}): Promise<void> {

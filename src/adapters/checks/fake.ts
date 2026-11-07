@@ -28,8 +28,18 @@ export class FakeCheckRunner implements CheckRunner {
     return release;
   }
 
+  /** Settles once the n-th check has started: the moment a held check is pending, without a deadline of its own (ORC-290). */
+  started(n: number): Promise<void> {
+    if (this.calls.length >= n) return Promise.resolve();
+    return new Promise((resolve) => this.waiters.push({ n, resolve }));
+  }
+
+  private waiters: { n: number; resolve: () => void }[] = [];
+
   run: Verifier = async (cwd, commands, timeoutMs) => {
     this.calls.push({ cwd, commands });
+    for (const w of this.waiters) if (w.n <= this.calls.length) w.resolve();
+    this.waiters = this.waiters.filter((w) => w.n > this.calls.length);
     const next = this.results.shift();
     return next ? next(commands) : this.fallback(cwd, commands, timeoutMs);
   };

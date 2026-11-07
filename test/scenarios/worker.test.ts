@@ -935,9 +935,13 @@ describe('outbox executors: lease, backoff, results through the inbox', () => {
       ]);
       expect(events.findIndex((e) => e.id === `effect:${r.id}`)).toBeGreaterThan(events.findIndex((e) => e.id === r.eventId));
     }
-    expect(events.slice(0, 4).map((e) => e.id)).toEqual(['t-1', 'effect:REL-1:1:1', 'effect:REL-1:1:2', 'effect:REL-1:1:3']);
-    // The run's result enters as attempt:<id>:finished.
-    expect(events.map((e) => e.id)).toContain('attempt:id-1:finished');
+    // The run's result enters as attempt:<id>:finished. It races the result of the start_run that launched it: the
+    // fake run may end before that effect settles (ORC-290). Nothing else may come out of order.
+    const launched = ['t-1', 'effect:REL-1:1:1', 'effect:REL-1:1:2'];
+    expect([
+      [...launched, 'effect:REL-1:1:3', 'attempt:id-1:finished'],
+      [...launched, 'attempt:id-1:finished', 'effect:REL-1:1:3'],
+    ]).toContainEqual(events.slice(0, 5).map((e) => e.id));
     expect(await h.store.pendingInbox(10)).toEqual([]);
   });
 

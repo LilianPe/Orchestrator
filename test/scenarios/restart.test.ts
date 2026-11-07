@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import type { Store } from '../../src/store/types.js';
 import { createHarness, mortal } from '../helpers/harness.js';
 
@@ -32,15 +32,18 @@ describe('a brutal restart in the middle of the processing', () => {
     h.tracker.addIssue({ identifier: 'REL-2', title: 'Import CSV' });
     const moveTo = h.tracker.moveTo.bind(h.tracker);
     let hung = false;
+    let hang!: () => void;
+    const hanging = new Promise<void>((r) => (hang = r));
     h.tracker.moveTo = async (id: string, state: string) => {
       await moveTo(id, state);
       if (id === 'REL-2' && !hung) {
         hung = true;
+        hang();
         await new Promise<never>(() => {});
       }
     };
     await h.orch.accept({ id: 'd2', type: 'ticket.delegated', at: h.clock.now(), projectId: 'p', ticketId: 'REL-2', payload: { linearSessionId: 'ls-2' } });
-    await vi.waitFor(() => expect(hung).toBe(true));
+    await hanging;
     const claimed = (await h.store.listEffects('p', 'REL-2')).find((r) => r.status === 'running')!;
     expect(claimed).toMatchObject({ effect: { kind: 'start_run' }, attempts: 1 });
 

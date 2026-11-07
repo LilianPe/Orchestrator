@@ -1,5 +1,5 @@
 import { DEFAULT_REQUIREMENTS } from '../../src/adapters/sandbox/types.js';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { createHarness } from '../helpers/harness.js';
 import { testPreset } from '../helpers/test-preset.js';
 
@@ -64,7 +64,7 @@ describe('harness: new port fakes and the test preset', () => {
     const h = createHarness({ preset: testPreset() });
     const release = h.checks.holdNext();
     const delegated = delegate(h);
-    await vi.waitFor(() => expect(h.checks.calls).toHaveLength(1));
+    await h.checks.started(1);
     expect((await h.ticket()).verifyingRunId).toBeDefined();
     release({ ok: false, failures: [{ command: 'fake:check', exitCode: 1, output: '1 failed' }] });
     await delegated;
