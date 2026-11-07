@@ -67,10 +67,6 @@ interface CheckRunDto {
   external_id?: string | null;
 }
 
-interface CheckRunsDto {
-  check_runs?: CheckRunDto[];
-}
-
 interface WorkflowDto {
   state: string;
   path?: string;
@@ -195,12 +191,36 @@ const isStatus = (s: unknown): s is StatusDto => isRecord(s) && typeof s.context
 
 const isPulls = (v: unknown): v is PullRequestDto[] => Array.isArray(v) && v.every(isPull);
 
+/** A PR as `markPrReady` reads it: its draft state, and the node id the mutation needs when it is a draft. */
+const isDraftState = (p: unknown): p is PullRequestDto & { draft: boolean } =>
+  isPull(p) && typeof p.draft === 'boolean' && (!p.draft || typeof p.node_id === 'string');
+
+/** What `upsertCheckRun` reads of a run: its id, and the external id it matches. */
+const isCheckRunRef = (r: unknown): r is Pick<CheckRunDto, 'id' | 'external_id'> =>
+  isRecord(r) && typeof r.id === 'number' && (r.external_id === undefined || r.external_id === null || typeof r.external_id === 'string');
+
+const isCreated = (r: unknown): r is { id: number } => isRecord(r) && typeof r.id === 'number';
+
+const isAccessToken = (d: unknown): d is AccessTokenDto =>
+  isRecord(d) && typeof d.token === 'string' && d.token !== '' && (d.expires_at === undefined || typeof d.expires_at === 'string');
+
+/** A collaborator's permission: one of its two fields at least, a string; an unknown role is still an answer. */
+const isPermission = (d: unknown): d is { permission?: string; role_name?: string } =>
+  isRecord(d) &&
+  (typeof d.permission === 'string' || typeof d.role_name === 'string') &&
+  (d.permission === undefined || typeof d.permission === 'string') &&
+  (d.role_name === undefined || typeof d.role_name === 'string');
+
 /** `GitHub API <method> <path>`, without the query: the prefix of every error of a call. */
 const apiLabel = (method: string, path: string) => `GitHub API ${method} ${path.split('?')[0]}`;
 
-/** A 2xx answer that is not what the endpoint documents: never read as an empty list (ORC-273). */
-function unreadable(method: string, path: string, what: string, data: unknown): Error {
-  return new Error(`${apiLabel(method, path)}: unreadable answer, not ${what}: ${data === undefined ? 'undefined' : excerpt(JSON.stringify(data))}`);
+/**
+ * A 2xx answer that is not what the endpoint documents: never read as an empty list (ORC-273). `secret`: the answer
+ * may carry a credential, so no part of it goes in the error.
+ */
+function unreadable(method: string, path: string, what: string, data: unknown, secret = false): Error {
+  const shown = secret ? '' : `: ${data === undefined ? 'undefined' : excerpt(JSON.stringify(data))}`;
+  return new Error(`${apiLabel(method, path)}: unreadable answer, not ${what}${shown}`);
 }
 
 /** `/repos/{owner}/{name}`, encoded. */
@@ -300,14 +320,15 @@ export class GitHubAppAuth {
   private async fetchInstallationToken(repo: GitHubRepoRef, now: number): Promise<string> {
     const jwt = createAppJwt(this.appId, this.#privateKey, now);
     const installationId = this.installationId ?? (await this.findInstallationId(repo, jwt));
-    const data = await this.call<AccessTokenDto>(
+    const data = await this.read(
       'POST',
       `/app/installations/${encodeURIComponent(installationId)}/access_tokens`,
       jwt,
+      isAccessToken,
+      'an installation token',
       { repositories: [repo.name] },
       true,
     );
-    if (!data?.token) throw new Error("GitHub App : réponse sans jeton d'installation");
     const requested = data.expires_at ? Date.parse(data.expires_at) : Number.NaN;
     const hardLimit = now + ONE_HOUR_MS;
     const expiresAt = (Number.isFinite(requested) ? Math.min(requested, hardLimit) : hardLimit) - TOKEN_SAFETY_MARGIN_MS;
@@ -317,17 +338,23 @@ export class GitHubAppAuth {
   }
 
   private async findInstallationId(repo: GitHubRepoRef, jwt: string): Promise<string> {
-    const data = await this.call<{ id?: number }>(
-      'GET',
-      `/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}/installation`,
-      jwt,
-    );
-    if (!data?.id) throw new Error(`GitHub App : installation introuvable pour ${repo.owner}/${repo.name}`);
+    const data = await this.read('GET', `${repoApi(repo)}/installation`, jwt, isCreated, 'an installation');
     return String(data.id);
   }
 
-  /** `secret`: the answer carries a credential (an installation token), so no part of it goes in an error. */
-  protected async call<T>(method: string, path: string, auth: string, body?: unknown, secret = false): Promise<T> {
+  /** Resolves repo + token, then reads the API on a path built from owner/name, under the guard `is`. */
+  protected async requestRead<T>(repoPath: string, path: (repo: GitHubRepoRef) => string, is: (v: unknown) => v is T, what: string): Promise<T> {
+    const repo = await this.repo(repoPath);
+    const token = await this.installationToken(repo);
+    return this.read('GET', path(repo), token, is, what);
+  }
+
+  /**
+   * The HTTP exchange: a refusal throws a `GitHubApiError`, a 2xx body that is not JSON throws, an empty one is
+   * `undefined`. Callers never read its answer without a guard: `read` checks it, `call` drops it (ORC-273).
+   * `secret`: the answer carries a credential (an installation token), so no part of it goes in an error.
+   */
+  async #send(method: string, path: string, auth: string, body: unknown, secret: boolean): Promise<unknown> {
     const res = await this.http(`${this.apiBase}${path}`, {
       method,
       headers: {
@@ -356,27 +383,29 @@ export class GitHubAppAuth {
       throw new GitHubApiError(res.status, `${apiLabel(method, path)}: ${res.status}${message ? ` ${message}` : ''}`, message || undefined, isRateLimit(res, message));
     }
     if (!json) throw new Error(`${apiLabel(method, path)}: unreadable answer, not JSON${secret ? '' : `: ${excerpt(text)}`}`);
-    return data as T;
-  }
-
-  /** A call whose answer is read: one `is` rejects throws, saying it is unreadable (ORC-273). */
-  protected async read<T>(method: string, path: string, token: string, is: (v: unknown) => v is T, what: string, body?: unknown): Promise<T> {
-    const data = await this.call<unknown>(method, path, token, body);
-    if (!is(data)) throw unreadable(method, path, what, data);
     return data;
   }
 
-  /** Resolves repo + token, then calls the API on a path built from owner/name. */
-  protected async request<T>(
-    repoPath: string,
-    method: string,
-    path: (repo: GitHubRepoRef) => string,
-    body?: unknown,
-  ): Promise<T> {
-    const repo = await this.repo(repoPath);
-    const token = await this.installationToken(repo);
-    return this.call<T>(method, path(repo), token, body);
+  /** A call whose answer is not read (a write that only has to succeed): it returns nothing to read. */
+  protected async call(method: string, path: string, auth: string, body?: unknown): Promise<void> {
+    await this.#send(method, path, auth, body, false);
   }
+
+  /** A call whose answer is read: one `is` rejects throws, saying it is unreadable (ORC-273). */
+  protected async read<T>(
+    method: string,
+    path: string,
+    auth: string,
+    is: (v: unknown) => v is T,
+    what: string,
+    body?: unknown,
+    secret = false,
+  ): Promise<T> {
+    const data = await this.#send(method, path, auth, body, secret);
+    if (!is(data)) throw unreadable(method, path, what, data, secret);
+    return data;
+  }
+
 }
 
 export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter, RepoPermissions {
@@ -391,7 +420,7 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
     const token = await this.installationToken(repo);
     try {
       return toRepoPermission(
-        await this.call<{ permission?: string; role_name?: string }>('GET', `${repoApi(repo)}/collaborators/${encodeURIComponent(login)}/permission`, token),
+        await this.read('GET', `${repoApi(repo)}/collaborators/${encodeURIComponent(login)}/permission`, token, isPermission, 'a permission'),
       );
     } catch (err) {
       if (err instanceof GitHubApiError && err.status === 404) return 'none';
@@ -447,13 +476,13 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
     const base = `${repoApi(repo)}/pulls`;
     const openPr = async () => {
       const query = new URLSearchParams({ head: `${repo.owner}:${req.branch}`, state: 'open', per_page: '1' });
-      const [pr] = await this.call<PullRequestDto[]>('GET', `${base}?${query}`, token);
+      const [pr] = await this.read('GET', `${base}?${query}`, token, isPulls, 'a list of pull requests');
       return pr && { number: pr.number, url: pr.html_url, deduplicated: true };
     };
     const found = await openPr();
     if (found) return found;
     try {
-      const pr = await this.call<PullRequestDto>('POST', base, token, { title: req.title, head: req.branch, base: req.base, body: req.body, ...(req.draft ? { draft: true } : {}) });
+      const pr = await this.read('POST', base, token, isPull, 'a pull request', { title: req.title, head: req.branch, base: req.base, body: req.body, ...(req.draft ? { draft: true } : {}) });
       return { number: pr.number, url: pr.html_url, deduplicated: false };
     } catch (err) {
       if (err instanceof GitHubApiError && err.status === 422) {
@@ -474,9 +503,9 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
   async markPrReady(repoPath: string, number: number): Promise<void> {
     const repo = await this.repo(repoPath);
     const token = await this.installationToken(repo);
-    const pr = await this.call<PullRequestDto>('GET', `${repoApi(repo)}/pulls/${number}`, token);
+    const pr = await this.read('GET', `${repoApi(repo)}/pulls/${number}`, token, isDraftState, 'a pull request with its draft state');
     if (!pr.draft) return;
-    const out = await this.call<{ errors?: { message: string }[] }>('POST', '/graphql', token, {
+    const out: { errors?: { message: string }[] } = await this.read('POST', '/graphql', token, isRecord, 'a GraphQL answer', {
       query: 'mutation($id: ID!) { markPullRequestReadyForReview(input: { pullRequestId: $id }) { clientMutationId } }',
       variables: { id: pr.node_id },
     });
@@ -497,19 +526,16 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
   /**
    * Creates the check run, or updates the one of the sha whose `external_id` is the request's
    * (ORC-162). GitHub has no filter on `external_id`: the sha's runs of that name are listed (all of
-   * them, `filter=all`, not only the latest, page by page) and matched here.
+   * them, `filter=all`, not only the latest, every page) and matched here. An unreadable list rejects: read as
+   * empty, it would create a second run for the same external id (ORC-273).
    */
   async upsertCheckRun(repoPath: string, req: CheckRunRequest): Promise<{ id: number; deduplicated: boolean }> {
     const repo = await this.repo(repoPath);
     const token = await this.installationToken(repo);
     const base = repoApi(repo);
-    let existing: { id: number } | undefined;
-    for (let page = 1; !existing; page++) {
-      const query = new URLSearchParams({ check_name: req.name, filter: 'all', per_page: '100', page: String(page) });
-      const runs = (await this.call<CheckRunsDto>('GET', `${base}/commits/${encodeURIComponent(req.sha)}/check-runs?${query}`, token)).check_runs ?? [];
-      existing = runs.find((r) => r.external_id === req.externalId);
-      if (runs.length < 100) break;
-    }
+    const query = new URLSearchParams({ check_name: req.name, filter: 'all' });
+    const runs = await this.allPages(`${base}/commits/${encodeURIComponent(req.sha)}/check-runs`, 'check_runs', 'a list of check runs', isCheckRunRef, token, query);
+    const existing = runs.find((r) => r.external_id === req.externalId);
     const body = {
       name: req.name,
       external_id: req.externalId,
@@ -521,7 +547,7 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
       await this.call('PATCH', `${base}/check-runs/${existing.id}`, token, body);
       return { id: existing.id, deduplicated: true };
     }
-    const created = await this.call<{ id: number }>('POST', `${base}/check-runs`, token, { ...body, head_sha: req.sha });
+    const created = await this.read('POST', `${base}/check-runs`, token, isCreated, 'a check run', { ...body, head_sha: req.sha });
     return { id: created.id, deduplicated: false };
   }
 
@@ -573,12 +599,20 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
    * Every page of a list GitHub returns under `key`, 100 per page. An answer without that list, or with an entry
    * `isEntry` rejects, throws: read as empty, it would drop checks from the verdict, down to `none`, or hide a CI (ORC-273).
    * A list longer than `MAX_PAGES` pages throws too: a server that ignores `page` would loop forever, under a lease
-   * renewed all along. After `MAX_PAGES` full pages, one more page is read: empty, the list is complete.
+   * renewed all along. After `MAX_PAGES` full pages, one more page is read: empty, the list is complete. `filter`:
+   * the endpoint's own query parameters, sent with every page.
    */
-  private async allPages<E>(path: string, key: string, what: string, isEntry: (e: unknown) => e is E, token: string): Promise<E[]> {
+  private async allPages<E>(
+    path: string,
+    key: string,
+    what: string,
+    isEntry: (e: unknown) => e is E,
+    token: string,
+    filter = new URLSearchParams(),
+  ): Promise<E[]> {
     const all: E[] = [];
     for (let page = 1; ; page++) {
-      const url = `${path}?per_page=100&page=${page}`;
+      const url = `${path}?${new URLSearchParams([...filter, ['per_page', '100'], ['page', String(page)]])}`;
       const isPage = (d: unknown): d is Record<string, E[]> => isRecord(d) && Array.isArray(d[key]) && d[key].every(isEntry);
       const list = (await this.read('GET', url, token, isPage, what))[key]!;
       if (page > MAX_PAGES) {

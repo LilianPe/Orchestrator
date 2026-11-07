@@ -522,6 +522,18 @@ describe('GitHubAppForge secrets', () => {
     expect((error as Error).message).toMatch(/access_tokens: unreadable answer, not JSON$/);
     expect((error as Error).message).not.toContain('ghs_very_secret');
   });
+
+  it('rejects a token answer without its token, saying it is unreadable, with no part of the answer in the error', async () => {
+    const odd: Route = (url) => (url.pathname === '/app/installations/42/access_tokens' ? { status: 201, body: { tokn: 'ghs_very_secret' } } : undefined);
+    const error = await makeForge([installationRoute(), odd]).forge.findPr('/repo', 'factory/REL-1').catch((e: Error) => e);
+    expect((error as Error).message).toMatch(/access_tokens: unreadable answer, not an installation token$/);
+    expect((error as Error).message).not.toContain('ghs_very_secret');
+  });
+
+  it('rejects an installation answer without its id, saying it is unreadable', async () => {
+    const odd: Route = (url) => (url.pathname === '/repos/acme/app/installation' ? { body: { id: '42' } } : undefined);
+    await expect(makeForge([odd]).forge.findPr('/repo', 'factory/REL-1')).rejects.toThrow(/installation: unreadable answer, not an installation: /);
+  });
 });
 
 describe('GitHubAppForge.mergePr (ORC-148)', () => {
@@ -777,6 +789,55 @@ describe('GitHubAppForge writes, idempotent (ORC-162)', () => {
     await expect(forge.markPrReady('/repo', 7)).rejects.toThrow('not allowed');
   });
 
+  it.each([
+    ['a PR without its draft flag', openPr({ node_id: 'PR_node' }), /pulls\/7: unreadable answer, not a pull request with its draft state: /],
+    ['a draft without its node id', openPr({ draft: true }), /pulls\/7: unreadable answer, not a pull request with its draft state: /],
+    ['a PR that is no PR', { message: 'ok' }, /pulls\/7: unreadable answer, not a pull request with its draft state: /],
+  ])('rejects, saying it is unreadable, never reads it as out of draft, on %s', async (_case, pr, message) => {
+    const { forge, calls } = makeForge(
+      [tokenRoute(42), (url, init) => (url.pathname === '/repos/acme/app/pulls/7' && init.method === 'GET' ? { body: pr } : undefined), (url) => (url.pathname === '/graphql' ? { body: { data: {} } } : undefined)],
+      { installationId: 42 },
+    );
+    const err = await forge.markPrReady('/repo', 7).catch((e: unknown) => e);
+    expect(err).not.toBeInstanceOf(TypeError);
+    expect((err as Error).message).toMatch(message);
+    expect(calls.some((c) => c.url.endsWith('/graphql'))).toBe(false);
+  });
+
+  it('rejects, saying it is unreadable, a ready-for-review mutation answered with no GraphQL object', async () => {
+    const { forge } = makeForge(
+      [
+        tokenRoute(42),
+        (url, init) => (url.pathname === '/repos/acme/app/pulls/7' && init.method === 'GET' ? { body: openPr({ draft: true, node_id: 'PR_node' }) } : undefined),
+        (url) => (url.pathname === '/graphql' ? { raw: '' } : undefined),
+      ],
+      { installationId: 42 },
+    );
+    await expect(forge.markPrReady('/repo', 7)).rejects.toThrow(/POST \/graphql: unreadable answer, not a GraphQL answer: undefined$/);
+  });
+
+  it.each([
+    ['a list that is no list', { message: 'ok' }],
+    ['a PR without its number', [openPr({ number: undefined })]],
+  ])('rejects, never creates a PR, when the open PRs of the branch come back as %s', async (_case, answer) => {
+    const { forge, calls } = makeForge(
+      [tokenRoute(42), (url, init) => (url.pathname === '/repos/acme/app/pulls' && init.method === 'GET' ? { body: answer } : undefined), (url, init) => (url.pathname === '/repos/acme/app/pulls' && init.method === 'POST' ? { status: 201, body: openPr({ number: 8 }) } : undefined)],
+      { installationId: 42 },
+    );
+    const err = await forge.ensurePr('/repo', req).catch((e: unknown) => e);
+    expect(err).not.toBeInstanceOf(TypeError);
+    expect((err as Error).message).toMatch(/pulls: unreadable answer, not a list of pull requests: /);
+    expect(writes(calls)).toEqual([]);
+  });
+
+  it('rejects, saying it is unreadable, a created PR answered without its URL', async () => {
+    const { forge } = makeForge(
+      [tokenRoute(42), (url, init) => (url.pathname === '/repos/acme/app/pulls' && init.method === 'POST' ? { status: 201, body: { number: 8 } } : undefined), pullsRoute([])],
+      { installationId: 42 },
+    );
+    await expect(forge.ensurePr('/repo', req)).rejects.toThrow(/POST \/repos\/acme\/app\/pulls: unreadable answer, not a pull request: /);
+  });
+
   it("gives the factory's git the repository's URL and the token, the token in the environment alone (ORC-125)", async () => {
     const { forge } = makeForge([tokenRoute(42, 'ghs_push_token')], { installationId: 42 });
     const access = await forge.gitAccess('/repo');
@@ -864,6 +925,37 @@ describe('GitHubAppForge writes, idempotent (ORC-162)', () => {
     });
     expect(writes(calls).map((c) => c.body)).toEqual([{ name: 'factory/verify', external_id: 'REL-1:4:1', status: 'in_progress', head_sha: 'abc123' }]);
   });
+
+  it.each([
+    ['without its list', { total_count: 1 }],
+    ['with a run without its id', { check_runs: [{ name: 'factory/verify', external_id: 'REL-1:4:1' }] }],
+  ])('rejects, never creates a second run, when the check runs of the sha come back %s', async (_case, answer) => {
+    const { forge, calls } = makeForge(
+      [
+        tokenRoute(42),
+        (url) => (url.pathname === '/repos/acme/app/commits/abc123/check-runs' ? { body: answer } : undefined),
+        (url, init) => (url.pathname === '/repos/acme/app/check-runs' && init.method === 'POST' ? { status: 201, body: { id: 21 } } : undefined),
+      ],
+      { installationId: 42 },
+    );
+    const err = await forge.upsertCheckRun('/repo', { sha: 'abc123', name: 'factory/verify', externalId: 'REL-1:4:1', status: 'in_progress' }).catch((e: unknown) => e);
+    expect((err as Error).message).toMatch(/check-runs: unreadable answer, not a list of check runs: /);
+    expect(writes(calls)).toEqual([]);
+  });
+
+  it('rejects, saying it is unreadable, a created check run answered without its id', async () => {
+    const { forge } = makeForge(
+      [
+        tokenRoute(42),
+        (url) => (url.pathname === '/repos/acme/app/commits/abc123/check-runs' ? { body: { check_runs: [] } } : undefined),
+        (url, init) => (url.pathname === '/repos/acme/app/check-runs' && init.method === 'POST' ? { status: 201, body: {} } : undefined),
+      ],
+      { installationId: 42 },
+    );
+    await expect(forge.upsertCheckRun('/repo', { sha: 'abc123', name: 'factory/verify', externalId: 'REL-1:4:1', status: 'in_progress' })).rejects.toThrow(
+      /POST \/repos\/acme\/app\/check-runs: unreadable answer, not a check run: "\{\}"$/,
+    );
+  });
 });
 
 describe('GitHubAppForge.repoPermission (ORC-186)', () => {
@@ -897,6 +989,14 @@ describe('GitHubAppForge.repoPermission (ORC-186)', () => {
     ]);
     expect(await forge.repoPermission('/repo', 'ghost')).toBe('none');
     await expect(forge.repoPermission('/repo', 'down')).rejects.toThrow(/502/);
+  });
+
+  it.each([
+    ['an empty object', {}],
+    ['a permission that is no string', { permission: 3 }],
+  ])('rejects, never answers none, on a permission answer that is %s', async (_case, body) => {
+    const { forge } = makeForge([installationRoute(42), tokenRoute(42), permissionRoute('odd', 200, body)]);
+    await expect(forge.repoPermission('/repo', 'odd')).rejects.toThrow(/permission: unreadable answer, not a permission: /);
   });
 
   it('throws, never answers none, when the app is not installed on the repo', async () => {

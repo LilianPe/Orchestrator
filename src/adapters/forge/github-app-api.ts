@@ -27,6 +27,8 @@ interface EnvironmentsDto {
 }
 
 const WORKFLOWS_DIR = '.github/workflows';
+/** Until the guards of `doctor`'s reads land: the answer as it comes, as the previous `request` gave it. */
+const anything = (_v: unknown): _v is unknown => true;
 const MAX_ENVIRONMENT_PAGES = 10;
 
 function segment(value: string): string {
@@ -63,9 +65,9 @@ export class GitHubAppApi extends GitHubAppAuth {
   async listWorkflows(repoPath: string): Promise<WorkflowSource[]> {
     let entries: unknown;
     try {
-      entries = await this.request<unknown>(repoPath, 'GET', (repo) => {
+      entries = await this.requestRead(repoPath, (repo) => {
         return `/repos/${segment(repo.owner)}/${segment(repo.name)}/contents/${encodedPath(WORKFLOWS_DIR)}`;
-      });
+      }, anything, 'anything');
     } catch (err) {
       if (err instanceof GitHubApiError && err.status === 404) return [];
       throw err;
@@ -74,9 +76,9 @@ export class GitHubAppApi extends GitHubAppAuth {
     const files = entries.filter(isWorkflowEntry).filter((entry) => /\.ya?ml$/i.test(entry.name ?? entry.path));
     const sources: WorkflowSource[] = [];
     for (const file of files) {
-      const dto = await this.request<ContentEntryDto>(repoPath, 'GET', (repo) => {
+      const dto = await this.requestRead(repoPath, (repo) => {
         return `/repos/${segment(repo.owner)}/${segment(repo.name)}/contents/${encodedPath(file.path)}`;
-      });
+      }, anything as (v: unknown) => v is ContentEntryDto | undefined, 'anything');
       if (typeof dto?.content !== 'string' || dto.encoding !== 'base64') {
         throw new Error(`GitHub : contenu illisible pour ${file.path} (fichier trop gros ou encodage inattendu)`);
       }
@@ -88,9 +90,9 @@ export class GitHubAppApi extends GitHubAppAuth {
   async listEnvironments(repoPath: string): Promise<EnvironmentProtection[]> {
     const environments: EnvironmentProtection[] = [];
     for (let page = 1; page <= MAX_ENVIRONMENT_PAGES; page++) {
-      const data = await this.request<EnvironmentsDto>(repoPath, 'GET', (repo) => {
+      const data = await this.requestRead(repoPath, (repo) => {
         return `/repos/${segment(repo.owner)}/${segment(repo.name)}/environments?per_page=100&page=${page}`;
-      });
+      }, anything as (v: unknown) => v is EnvironmentsDto | undefined, 'anything');
       const batch = Array.isArray(data?.environments) ? data.environments : [];
       for (const environment of batch) {
         if (!isRecord(environment) || typeof environment.name !== 'string' || !environment.name) continue;
