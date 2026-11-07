@@ -190,7 +190,7 @@ describe('scanDiff', () => {
 
     it('blocks any change to a frozen test, even an honest-looking one', () => {
       const diff = fileDiff('test/acceptance/scores.test.ts', " it('rounds', () => {", '-  expect(score(1.234)).toBe(1.23);', '+  expect(score(1.234)).toBe(1.2);');
-      expect(scanDiff(diff, { frozenTests })).toEqual([{ file: 'test/acceptance/scores.test.ts', line: 11, form: 'frozen-test', match: 'modifié' }]);
+      expect(scanDiff(diff, { frozenTests })).toEqual([{ file: 'test/acceptance/scores.test.ts', line: 11, form: 'frozen-test', match: 'changed' }]);
       expect(scanDiff(diff)).toEqual([]);
     });
 
@@ -200,8 +200,8 @@ describe('scanDiff', () => {
         ['diff --git a/test/acceptance/scores.test.ts b/test/old/scores.test.ts', 'similarity index 90%', 'rename from test/acceptance/scores.test.ts', 'rename to test/old/scores.test.ts', '@@ -1,1 +1,2 @@', ' a', "+it.skip('x', () => {});", ''].join('\n'),
       ].join('');
       expect(scanDiff(diff, { frozenTests })).toEqual([
-        { file: 'tests/test_scores.py', form: 'frozen-test', match: 'supprimé' },
-        { file: 'test/acceptance/scores.test.ts', form: 'frozen-test', match: 'renommé en test/old/scores.test.ts' },
+        { file: 'tests/test_scores.py', form: 'frozen-test', match: 'deleted' },
+        { file: 'test/acceptance/scores.test.ts', form: 'frozen-test', match: 'renamed to test/old/scores.test.ts' },
         { file: 'test/old/scores.test.ts', line: 2, form: 'disabled-test', match: 'it.skip' },
       ]);
     });
@@ -227,7 +227,7 @@ describe('antiCheatCheck', () => {
     expect(antiCheatCheck(fileDiff('src/a.ts', ' a', '+b'))).toEqual({
       check: ANTI_CHEAT_CHECK,
       ok: true,
-      summary: 'aucun test désactivé, aucun contournement',
+      summary: 'no disabled test, no workaround',
       findings: [],
     });
     expect(ANTI_CHEAT_CHECK).toBe('factory/anti-triche');
@@ -244,11 +244,11 @@ describe('antiCheatCheck', () => {
     expect(result.findings).toHaveLength(4);
     expect(result.summary).toBe(
       [
-        '4 constats :',
-        "- `src/a.test.ts:11` : test d'acceptation gelé modifié (modifié)",
-        '- `src/a.test.ts:11` : test désactivé (`it.skip`)',
-        "- `src/score.ts:11` : comportement différent sous test (`NODE_ENV === 'test'`)",
-        '- `src/b.test.ts:11` : contournement (`` expect(`ok`) ``)',
+        '4 findings:',
+        '- `src/a.test.ts:11`: frozen acceptance test changed (changed)',
+        '- `src/a.test.ts:11`: disabled test (`it.skip`)',
+        "- `src/score.ts:11`: different behaviour under test (`NODE_ENV === 'test'`)",
+        '- `src/b.test.ts:11`: workaround (`` expect(`ok`) ``)',
       ].join('\n'),
     );
   });
@@ -259,11 +259,11 @@ describe('antiCheatCheck', () => {
     const result = antiCheatCheck(long + many);
     expect(result.findings).toHaveLength(2001);
     expect(result.summary.length).toBeLessThanOrEqual(65_535);
-    expect(result.summary.split('\n')[1]).toMatch(/^- `src\/score\.ts:11` : comportement différent sous test \(`'test', pad = 'x{180,}…`\)$/);
-    expect(result.summary).toMatch(/\n… et \d+ autres$/);
+    expect(result.summary.split('\n')[1]).toMatch(/^- `src\/score\.ts:11`: different behaviour under test \(`'test', pad = 'x{180,}…`\)$/);
+    expect(result.summary).toMatch(/\n… and \d+ more$/);
   });
 
-  it('says 1 constat for a single finding', () => {
-    expect(antiCheatCheck(added('src/a.ts', '// @ts-ignore')).summary).toBe('1 constat :\n- `src/a.ts:11` : contournement (`@ts-ignore`)');
+  it('says 1 finding for a single finding', () => {
+    expect(antiCheatCheck(added('src/a.ts', '// @ts-ignore')).summary).toBe('1 finding:\n- `src/a.ts:11`: workaround (`@ts-ignore`)');
   });
 });

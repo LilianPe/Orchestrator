@@ -49,7 +49,7 @@ describe('authorization matrix (ORC-186)', () => {
     it('refuses the initiator sending /approve, even when designated validator', () => {
       const verdict = check('validate_spec', 'linear_session', INITIATOR, ['validator', 'team_member', 'maintainer']);
       expect(verdict).toEqual({ ok: false, reason: 'initiator' });
-      expect(refusalMessage('validate_spec', DEFAULT_MATRIX, 'initiator')).toMatch(/jamais .*initiat/);
+      expect(refusalMessage('validate_spec', DEFAULT_MATRIX, 'initiator')).toMatch(/never the run's initiator/);
     });
     it('refuses a team member who is not a validator', () => {
       expect(check('validate_spec', 'linear_session', MEMBER, ['team_member', 'repo_writer']).ok).toBe(false);
@@ -83,7 +83,7 @@ describe('authorization matrix (ORC-186)', () => {
     it('refuses a team member without merge rights: no merge, the refusal is answered', () => {
       const verdict = check('done_merge', 'linear', MEMBER, ['team_member', 'repo_writer']);
       expect(verdict).toEqual({ ok: false, reason: 'roles' });
-      expect(refusalMessage('done_merge', DEFAULT_MATRIX, 'roles')).toMatch(/droit de merge/);
+      expect(refusalMessage('done_merge', DEFAULT_MATRIX, 'roles')).toMatch(/GitHub merge rights/);
     });
   });
 

@@ -27,7 +27,7 @@ export interface BlockStatus {
 }
 
 /** The closed question of a block that no one asked: the common one, the reply being the instruction if there is any. */
-const REDO = "Je reprends l'étape telle quelle (répondez « oui ») ou avec une consigne (écrivez-la) ?";
+const REDO = 'Shall I redo the step as is (reply "yes") or with an instruction (write it)?';
 
 /**
  * The fields of a block. `attempts`: the counter the block is the end of, so its last attempt as well as its bound; a
@@ -37,13 +37,13 @@ export function blockFacts({ reason, step, tried, attempts = 1, question = REDO 
   return { step, max: attempts, reason, tried, question };
 }
 
-const CI: Record<NonNullable<TicketState['prChecks']>, string> = { pending: 'en cours', pass: 'verte', fail: 'rouge', none: 'aucune' };
+const CI: Record<NonNullable<TicketState['prChecks']>, string> = { pending: 'pending', pass: 'green', fail: 'red', none: 'none' };
 const MAX_TRIED = 5;
 const SHORT_SHA = 12;
 
 function stateLine({ branch, sha, ci, tokens, durationMs }: BlockStatus): string {
-  const duration = durationMs === undefined ? 'durée inconnue' : `${Math.round(durationMs / 60_000)} min`;
-  return `État : branche ${branch ?? 'aucune'} · dernier commit ${sha?.slice(0, SHORT_SHA) ?? 'aucun'} · CI ${ci ? CI[ci] : 'aucune'} · tokens ${tokens ?? 'inconnus'} · ${duration}`;
+  const duration = durationMs === undefined ? 'unknown duration' : `${Math.round(durationMs / 60_000)} min`;
+  return `State: branch ${branch ?? 'none'} · last commit ${sha?.slice(0, SHORT_SHA) ?? 'none'} · CI ${ci ? CI[ci] : 'none'} · tokens ${tokens ?? 'unknown'} · ${duration}`;
 }
 
 /**
@@ -52,12 +52,12 @@ function stateLine({ branch, sha, ci, tokens, durationMs }: BlockStatus): string
  */
 export function composeBlockComment(facts: BlockFacts, status: BlockStatus): string {
   return [
-    `🔴 Bloqué à l'étape ${facts.step} (tentative ${facts.max}/${facts.max})`,
-    `Raison : ${facts.reason.replace(/\s+/g, ' ').trim()}`,
-    "Ce que j'ai essayé :",
+    `🔴 Blocked at step ${facts.step} (attempt ${facts.max}/${facts.max})`,
+    `Reason: ${facts.reason.replace(/\s+/g, ' ').trim()}`,
+    'What I tried:',
     ...facts.tried.slice(0, MAX_TRIED).map((t) => `- ${t}`),
-    `Question : ${facts.question}`,
+    `Question: ${facts.question}`,
     stateLine(status),
-    facts.waits ? 'Une réponse ne suffit pas ici : je reprends une fois ce qui est demandé ci-dessus fait.' : 'Répondez dans ce ticket : je reprends dès votre réponse.',
+    facts.waits ? 'A reply is not enough here: I will resume once what is asked above is done.' : 'Reply on this ticket: I will resume as soon as you answer.',
   ].join('\n');
 }

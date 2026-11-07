@@ -170,7 +170,7 @@ describe('runSealedSetup', () => {
     const root = tree({ '.env': SECRET });
     const sandboxes = new FakeSandboxProvider();
     sandboxes.execResult = (argv) => ({ stdout: '', stderr: 'boom', code: argv[0] === 'timeout' ? 1 : 0 });
-    await expect(runSealedSetup(sandboxes, request(root, { commands: ['npm ci', 'never'] }))).rejects.toThrow('Le setup du worktree a échoué : npm ci');
+    await expect(runSealedSetup(sandboxes, request(root, { commands: ['npm ci', 'never'] }))).rejects.toThrow('The worktree setup failed: npm ci');
     expect(sandboxes.execs.map((e) => e.argv.at(-1))).not.toContain('never');
     expect(sandboxes.active()).toEqual([]);
     expect(existsSync(join(root, '.env'))).toBe(false);
@@ -179,7 +179,7 @@ describe('runSealedSetup', () => {
   it('a command over its cap fails as a timeout', async () => {
     const sandboxes = new FakeSandboxProvider();
     sandboxes.execResult = (argv) => ({ stdout: '', stderr: '', code: argv[0] === 'timeout' ? 124 : 0 });
-    await expect(runSealedSetup(sandboxes, request(tree({})))).rejects.toThrow('npm ci (délai de 15 min dépassé)');
+    await expect(runSealedSetup(sandboxes, request(tree({})))).rejects.toThrow('npm ci (timed out after 15 min)');
   });
 
   it('fails when its container cannot be destroyed: a process that holds the secret could still write it', async () => {

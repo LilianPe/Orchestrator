@@ -6,7 +6,7 @@ import type { Store } from '../../store/types.js';
 export const TRANSCRIPT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 /** What replaces a secret in a transcript; plain text, so a JSON line stays valid. */
-export const MASK = '[masqué]';
+export const MASK = '[masked]';
 
 /** Environment variables whose value is a secret: tokens, keys, passwords, connection strings. */
 export const SECRET_NAME = /(TOKEN|SECRET|PASSWORD|PASSWD|_PASS|_PWD|APIKEY|_KEY|CREDENTIALS?|DATABASE_URL)$/i;

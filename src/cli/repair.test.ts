@@ -22,13 +22,13 @@ describe('factory run repair (ORC-175)', () => {
   it('lists the dead letters of a ticket without an action', async () => {
     const { lines, repair } = await withDeadLetters(ev('l1', 'REL-1'));
     expect(await repair('REL-1')).toBe(0);
-    expect(lines).toEqual(['Événements mis de côté pour REL-1 :', '  l1  label.changed  ouvert  (1 échec) boom l1']);
+    expect(lines).toEqual(['Events set aside for REL-1:', '  l1  label.changed  open  (1 failure) boom l1']);
   });
 
   it('says when there is nothing to repair, and refuses an unknown action', async () => {
     const { lines, repair } = await withDeadLetters(ev('l1', 'REL-1'));
     expect(await repair('REL-2', 'skip')).toBe(1);
-    expect(lines.pop()).toBe('Aucun événement mis de côté pour REL-2.');
+    expect(lines.pop()).toBe('No event set aside for REL-2.');
     expect(await repair('REL-1', 'drop')).toBe(1);
     expect(lines.pop()).toBe(REPAIR_USAGE);
   });
@@ -36,10 +36,10 @@ describe('factory run repair (ORC-175)', () => {
   it('asks which event when the ticket has several open, and repairs the one named', async () => {
     const { store, lines, repair } = await withDeadLetters(ev('l1', 'REL-1'), ev('l2', 'REL-1'));
     expect(await repair('REL-1', 'skip')).toBe(1);
-    expect(lines[0]).toBe('Plusieurs événements ouverts pour REL-1 : précisez lequel.');
+    expect(lines[0]).toBe('Several open events for REL-1: say which one.');
     lines.length = 0;
     expect(await repair('REL-1', 'force', 'l2')).toBe(0);
-    expect(lines).toEqual(['Événement l2 (label.changed) forcé par armand : réparation journalisée, décidée au prochain passage du démon.', 'Encore 1 événement ouvert pour REL-1.']);
+    expect(lines).toEqual(['Event l2 (label.changed) forced by armand: repair journaled, decided at the next pass of the daemon.', 'Still 1 open event for REL-1.']);
     expect((await store.deadLetters('REL-1')).map((d) => [d.eventId, d.status])).toEqual([
       ['l1', 'open'],
       ['l2', 'forced'],
@@ -62,7 +62,7 @@ describe('factory run repair (ORC-175)', () => {
     } as FactoryEvent;
     const { store, lines, repair } = await withDeadLetters(finished);
     expect(await repair('REL-1', 'skip')).toBe(1);
-    expect(lines.pop()).toMatch(/^f1 \(run\.finished\) termine un run .* Utilisez force/);
+    expect(lines.pop()).toMatch(/^f1 \(run\.finished\) ends a run .* Use force/);
     expect(await store.deadLetters('REL-1')).toMatchObject([{ status: 'open' }]);
     expect(await repair('REL-1', 'force')).toBe(0);
   });

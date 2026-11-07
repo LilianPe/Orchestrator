@@ -64,14 +64,14 @@ export async function checkForbiddenPaths(view: ForbiddenView): Promise<CheckRes
   const findings: string[] = [];
   for (const { path, deleted, link } of view.changed) {
     const pattern = forbiddenPattern(path);
-    if (pattern) findings.push(`${mdCode(path)} : chemin interdit (${mdCode(pattern)})`);
-    if (link !== undefined && isOutwardLink(path, link)) findings.push(`${mdCode(path)} : lien symbolique sortant (vers ${mdCode(link)})`);
+    if (pattern) findings.push(`${mdCode(path)}: forbidden path (${mdCode(pattern)})`);
+    if (link !== undefined && isOutwardLink(path, link)) findings.push(`${mdCode(path)}: symbolic link pointing outside (to ${mdCode(link)})`);
     if (normalizePath(path).split('/').at(-1) === 'package.json') {
       const [before, after] = [scriptsOf(await view.showAtBase(path)), deleted ? undefined : scriptsOf(await view.showAtHead(path))];
-      if (before !== after) findings.push(`${mdCode(path)} : \`scripts\` modifié (${mdCode('package.json#scripts')})`);
+      if (before !== after) findings.push(`${mdCode(path)}: \`scripts\` changed (${mdCode('package.json#scripts')})`);
     }
   }
   const ok = findings.length === 0;
-  const summary = ok ? 'Aucun chemin interdit touché' : `Chemins interdits à l'agent, publication bloquée. Retire ces changements de la branche :\n${findings.map((f) => `- ${f}`).join('\n')}`;
+  const summary = ok ? 'No forbidden path touched' : `Paths forbidden to the agent, publication blocked. Remove these changes from the branch:\n${findings.map((f) => `- ${f}`).join('\n')}`;
   return { check: FORBIDDEN_CHECK, ok, summary };
 }

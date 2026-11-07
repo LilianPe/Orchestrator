@@ -85,7 +85,7 @@ describe('the freeze of the tests (ORC-131)', () => {
     await commitThenFinish(h, { 'src/export.test.ts': CHANGED_TEST });
     const before = (await h.ticket()).frozenTests;
     await refreeze(h, MEMBER);
-    expect(h.tracker.activities('as-r')).toEqual([{ type: 'response', body: expect.stringMatching(/^Refusé : regeler les tests/) }]);
+    expect(h.tracker.activities('as-r')).toEqual([{ type: 'response', body: expect.stringMatching(/^Refused: refreezing the tests/) }]);
     expect((await h.ticket()).frozenTests).toEqual(before);
   });
 
@@ -94,7 +94,7 @@ describe('the freeze of the tests (ORC-131)', () => {
     await commitThenFinish(h, { 'src/export.test.ts': CHANGED_TEST });
     expect(await h.ticket()).toMatchObject({ blocked: true });
     await refreeze(h, LEAD);
-    expect(h.tracker.activities('as-r')).toEqual([{ type: 'response', body: expect.stringMatching(/^Regelé : 2 fichiers/) }]);
+    expect(h.tracker.activities('as-r')).toEqual([{ type: 'response', body: expect.stringMatching(/^Refrozen: 2 files/) }]);
     const regeled = (await h.ticket()).frozenTests!;
     expect(regeled.sha).toBe('sha-dev');
     expect(regeled.files['src/export.test.ts']).toBe(fingerprint('src/export.test.ts', CHANGED_TEST));
@@ -116,7 +116,7 @@ describe('the freeze of the tests (ORC-131)', () => {
       return diff(repo, path, base);
     });
     await refreeze(h, LEAD);
-    expect(h.tracker.activities('as-r')).toEqual([{ type: 'response', body: expect.stringMatching(/^Regelé : 2 fichiers/) }]);
+    expect(h.tracker.activities('as-r')).toEqual([{ type: 'response', body: expect.stringMatching(/^Refrozen: 2 files/) }]);
     expect((await h.ticket()).frozenTests?.sha).toBe('sha-dev');
   });
 
@@ -141,7 +141,7 @@ describe('the freeze of the tests (ORC-131)', () => {
     await h.send('ticket.delegated', { linearSessionId: 'as-1' }, 'REL-1', { actor: LEAD });
     expect((await h.ticket()).worktreePath).toBe(WORKTREE);
     await refreeze(h, LEAD);
-    expect(h.tracker.activities('as-r')).toEqual([{ type: 'response', body: expect.stringMatching(/^Rien à regeler/) }]);
+    expect(h.tracker.activities('as-r')).toEqual([{ type: 'response', body: expect.stringMatching(/^Nothing to refreeze/) }]);
     expect((await h.ticket()).frozenTests).toBeUndefined();
   });
 });

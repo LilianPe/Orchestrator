@@ -24,17 +24,17 @@ import { runRepairCommand } from './repair.js';
 import { runValidateCommand } from './validate.js';
 import { PRODUCT_NAME } from '../product.js';
 
-const USAGE = `Usage : factory <commande>
-  init               configurer ${PRODUCT_NAME} pour le dépôt courant
-  validate [repo]    vérifier .factory/config.yml contre le socle (il ne peut qu'ajouter)
-  doctor [repo] [--json] refuser un dépôt dont la CI peut exposer des secrets aux branches de l'usine
-  up [--fake-runner] démarrer ${PRODUCT_NAME} (interface sur http://localhost:4100)
-  plan               voir quels tickets délégués seraient pris
-  status             état de l'instance en cours
-  pause | resume     suspendre ou reprendre la file
-  stop <ID>          arrêter le run d'un ticket
-  replay <journal>... rejouer des journaux exportés (régression bit à bit, --what-if <workflow.yml>, --export <ID>)
-  run repair <ID> [replay|skip|force] [<événement>]  réparer un événement mis de côté (dead-letter)`;
+const USAGE = `Usage: factory <command>
+  init               set up ${PRODUCT_NAME} for the current repository
+  validate [repo]    check .factory/config.yml against the baseline (it can only add)
+  doctor [repo] [--json] refuse a repository whose CI can expose secrets to the factory's branches
+  up [--fake-runner] start ${PRODUCT_NAME} (interface on http://localhost:4100)
+  plan               see which delegated tickets would be taken
+  status             state of the running instance
+  pause | resume     suspend or resume the queue
+  stop <ID>          stop a ticket's run
+  replay <journal>... replay exported journals (bit-for-bit regression, --what-if <workflow.yml>, --export <ID>)
+  run repair <ID> [replay|skip|force] [<event>]  repair an event set aside (dead letter)`;
 
 /** Basic auth for an instance bound to a non-loopback host (FACTORY_UI_PASSWORD). */
 function uiAuth(): Record<string, string> {
@@ -82,7 +82,7 @@ async function main(): Promise<number> {
       return runDoctorCommand({ repoPath: arg ?? process.cwd(), home, json: values.json });
     case 'up': {
       const app = await startFactory({ home, fakeRunner: values['fake-runner'] });
-      console.log(`${PRODUCT_NAME} tourne : ${app.url}  (Ctrl+C pour arrêter)`);
+      console.log(`${PRODUCT_NAME} is running: ${app.url}  (Ctrl+C to stop)`);
       await new Promise<void>((resolve) => {
         process.once('SIGINT', () => resolve());
         process.once('SIGTERM', () => resolve());
@@ -96,11 +96,11 @@ async function main(): Promise<number> {
         linear = linearSettings(home, loadFactoryYml(home));
       } catch (err) {
         if (!(err instanceof FactoryYmlError)) throw err;
-        console.log(`${err.message}\n(plan lit les identifiants Linear de factory.yml : lancez-le avec l'environnement du démon.)`);
+        console.log(`${err.message}\n(plan reads the Linear credentials from factory.yml: run it with the daemon's environment.)`);
         return 1;
       }
       if (!linear?.accessToken || !linear.appUserId) {
-        console.log('Linear non connecté : lancez `factory up` puis connectez Linear.');
+        console.log('Linear not connected: run `factory up`, then connect Linear.');
         return 1;
       }
       const tm = new TokenManager({
@@ -126,7 +126,7 @@ async function main(): Promise<number> {
     case 'pause':
     case 'resume':
       await fetch(`${api}/api/control/${cmd}`, { method: 'POST', headers: uiAuth() });
-      console.log(cmd === 'pause' ? 'File en pause.' : 'File relancée.');
+      console.log(cmd === 'pause' ? 'Queue paused.' : 'Queue resumed.');
       return 0;
     case 'stop':
       if (!arg) break;

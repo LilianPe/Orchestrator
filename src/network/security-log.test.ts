@@ -89,7 +89,7 @@ describe('the security log of a run (ORC-296)', () => {
     const log = readSecurityLog(RUN, paths);
     expect(log.refusals).toEqual([{ at: expect.any(Number), tool: 'Read', rule: 'full-read', command: big }]);
     expect(log.skipped.refusals).toBe(0);
-    expect(refusalSummary(log)).toContain('`full-read` : 1');
+    expect(refusalSummary(log)).toContain('`full-read`: 1');
     expect(refusalSummary(log)).not.toContain(big);
   });
 
@@ -117,12 +117,12 @@ describe('the refusals summary posted in the ticket session (ORC-296)', () => {
         skipped: { egress: 0, refusals: 2 },
       }),
     )!;
-    expect(body).toContain('`push-trunk` : 2');
-    expect(body).toContain('`pipe-to-shell` : 1');
+    expect(body).toContain('`push-trunk`: 2');
+    expect(body).toContain('`pipe-to-shell`: 1');
     expect(body).toContain('`evil.example` (2)');
     expect(body).toContain('`x.org` (1)');
-    expect(body).toContain('1 autre');
-    expect(body).toContain('2 lignes');
+    expect(body).toContain('1 other');
+    expect(body).toContain('2 log lines');
     expect(body).not.toContain('SECRET');
     expect(body).not.toContain('git push');
     expect(body).not.toContain('everyone');

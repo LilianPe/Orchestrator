@@ -105,7 +105,7 @@ export class LinearTracker implements Tracker, TeamDirectory {
       // Linear answers an unknown or deleted issue with an error, not with null.
       if (!(err instanceof LinearApiError && err.errors.some(isNotFound))) throw err;
     }
-    if (!issue) throw new IssueNotFoundError(`Ticket Linear introuvable : ${identifier}`);
+    if (!issue) throw new IssueNotFoundError(`Linear ticket not found: ${identifier}`);
     this.issueIds.set(identifier, issue.id);
     return issue;
   }
@@ -119,7 +119,7 @@ export class LinearTracker implements Tracker, TeamDirectory {
     if (cached) return cached;
     const { teams } = await this.api.gql<{ teams: { nodes: { id: string }[] } }>(Q.team, { key: teamKey });
     const id = teams.nodes[0]?.id;
-    if (!id) throw new Error(`Équipe Linear introuvable : ${teamKey}`);
+    if (!id) throw new Error(`Linear team not found: ${teamKey}`);
     this.teamIds.set(teamKey, id);
     return id;
   }
@@ -134,7 +134,7 @@ export class LinearTracker implements Tracker, TeamDirectory {
     for (;;) {
       const page: MembersPage = await this.api.gql<MembersPage>(Q.teamMembers, { key: teamKey, after });
       const team = page.teams.nodes[0];
-      if (!team) throw new Error(`Équipe Linear introuvable : ${teamKey}`);
+      if (!team) throw new Error(`Linear team not found: ${teamKey}`);
       ids.push(...team.members.nodes.filter((m) => m.active).map((m) => m.id));
       if (!team.members.pageInfo.hasNextPage || !team.members.pageInfo.endCursor) return ids;
       after = team.members.pageInfo.endCursor;
@@ -181,7 +181,7 @@ export class LinearTracker implements Tracker, TeamDirectory {
   async getIssue(identifier: string): Promise<TrackerIssue> {
     const issue = await this.node(identifier);
     // Deleted in Linear: kept in the trash, and still answered, for 30 days.
-    if (issue.trashed) throw new IssueNotFoundError(`Ticket Linear supprimé : ${identifier}`);
+    if (issue.trashed) throw new IssueNotFoundError(`Linear ticket deleted: ${identifier}`);
     return toIssue(issue);
   }
 
@@ -204,7 +204,7 @@ export class LinearTracker implements Tracker, TeamDirectory {
     const team = teamOf(identifier);
     let state = (await this.teamStates(team)).find((s) => s.name === stateName);
     state ??= (await this.teamStates(team, true)).find((s) => s.name === stateName);
-    if (!state) throw new Error(`Statut Linear introuvable : "${stateName}" (équipe ${team})`);
+    if (!state) throw new Error(`Linear status not found: "${stateName}" (team ${team})`);
     await this.api.gql(Q.issueUpdate, { id: await this.issueId(identifier), input: { stateId: state.id } });
   }
 
@@ -240,7 +240,7 @@ export class LinearTracker implements Tracker, TeamDirectory {
       const group = present?.parent?.id ?? this.labelGroups.get(id);
       if (!group) continue;
       const other = groups.get(group);
-      if (other !== undefined && other !== name) throw new Error(`Labels exclusifs demandés ensemble : "${other}" et "${name}" (même groupe Linear)`);
+      if (other !== undefined && other !== name) throw new Error(`Exclusive labels asked for together: "${other}" and "${name}" (same Linear group)`);
       groups.set(group, name);
     }
     const removedLabelIds = issue.labels.nodes

@@ -1,7 +1,7 @@
 import type { JobSpec } from '../config/workflow-schema.js';
 
 /** The steps the MVP doc shows in the session; `Questions` and `Spec` run nothing until ORC-210 and ORC-212. */
-const STEPS = ['Comprendre', 'Questions', 'Spec', 'Tests', 'Build', 'Vérif', 'PR'] as const;
+const STEPS = ['Understand', 'Questions', 'Spec', 'Tests', 'Build', 'Verify', 'PR'] as const;
 export type PlanStepName = (typeof STEPS)[number];
 
 /** A step as Linear's `agentSession.plan` holds it: Linear replaces the whole plan at each update. */
@@ -22,7 +22,7 @@ export function advancePlan(plan: readonly PlanStep[], step: PlanStepName, statu
 
 /** The plan at the delegation: the factory starts by understanding the ticket. */
 export function startPlan(): PlanStep[] {
-  return advancePlan(STEPS.map((content) => ({ content, status: 'pending' })), 'Comprendre');
+  return advancePlan(STEPS.map((content) => ({ content, status: 'pending' })), 'Understand');
 }
 
 /** The end of the factory's work on the ticket: the step under way is done, and the PR when there is one. */

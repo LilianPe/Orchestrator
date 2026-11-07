@@ -21,7 +21,7 @@ describe('checkDependencies (factory/dependances)', () => {
     expect(r.check).toBe('factory/dependances');
     expect(r.ok).toBe(false);
     expect(r.findings).toEqual([expect.objectContaining({ reason: 'not_found', ecosystem: 'npm', name: 'lodahs', manifest: 'package.json' })]);
-    expect(r.findings[0]!.message).toContain('absent du registre npm');
+    expect(r.findings[0]!.message).toContain('package missing from the npm registry');
   });
 
   it('blocks an added PyPI package that is not in the registry', async () => {
@@ -48,7 +48,7 @@ describe('checkDependencies (factory/dependances)', () => {
       ['not_allowed', 'npm', 'react'],
       ['not_allowed', 'pypi', 'pytest'],
     ]);
-    expect(r.findings[0]!.message).toContain('hors de la liste autorisée');
+    expect(r.findings[0]!.message).toContain("not on the repository's allowlist");
   });
 
   it('passes an added package that exists and is allowed, npm and PyPI', async () => {
@@ -64,7 +64,7 @@ describe('checkDependencies (factory/dependances)', () => {
     expect(r).toEqual({
       check: 'factory/dependances',
       ok: true,
-      summary: '2 dépendance(s) ajoutée(s), présentes au registre et autorisées, ou locales : @types/node, typing-extensions.',
+      summary: '2 dependenc(ies) added, present in the registry and allowed, or local: @types/node, typing-extensions.',
       findings: [],
       added: [
         { ecosystem: 'npm', name: '@types/node', declared: '@types/node', spec: '^24.0.0', source: 'registry', manifest: 'package.json' },
@@ -79,7 +79,7 @@ describe('checkDependencies (factory/dependances)', () => {
     for (const allowList of [undefined, { pypi: ['requests'] }]) {
       const r = await checkDependencies({ changes, registry: registry(), allowList });
       expect(r.ok).toBe(false);
-      expect(r.findings).toEqual([expect.objectContaining({ reason: 'not_allowed', name: 'zod', message: expect.stringContaining('aucune liste autorisée npm') })]);
+      expect(r.findings).toEqual([expect.objectContaining({ reason: 'not_allowed', name: 'zod', message: expect.stringContaining('no npm allowlist') })]);
     }
     // No addition: nothing to allow, the check passes without a list.
     const none = await checkDependencies({ changes: [change('package.json', pkg({}), pkg({}))], registry: registry() });
@@ -264,7 +264,7 @@ hypothesis = "*"
       change('src/index.ts', null, 'import x from "y";'),
     ]);
     expect(names(r)).toEqual(['npm:zod']);
-    expect(r.unreadable).toEqual([{ manifest: 'requirements.txt', error: expect.stringContaining('ligne 1') }]);
+    expect(r.unreadable).toEqual([{ manifest: 'requirements.txt', error: expect.stringContaining('line 1') }]);
   });
 });
 
@@ -331,7 +331,7 @@ describe('supply-chain bypasses (fail-closed)', () => {
     ].join('\n');
     const r = await checkDependencies({ changes: [change('requirements/dev.txt', before, after)], registry: registry(), allowList: allowAll });
     expect(r.findings.map((f) => [f.reason, f.manifest])).toEqual(Array(7).fill(['unchecked_directive', 'requirements/dev.txt']));
-    expect(r.findings.map((f) => /« (.*) »/.exec(f.message)![1])).toEqual([
+    expect(r.findings.map((f) => /"(.*)"/.exec(f.message)![1])).toEqual([
       '--extra-index-url https://evil.test/simple',
       '--index-url https://evil.test/other',
       '--find-links https://evil.test/wheels',
@@ -413,7 +413,7 @@ requests = { version = "^2", source = "corp" }
       ['unchecked_directive', undefined],
       ['non_registry_source', 'requests'],
     ]);
-    expect(r.findings.slice(0, 3).map((f) => /« (.*?) »/.exec(f.message)![1])).toEqual([
+    expect(r.findings.slice(0, 3).map((f) => /\("(.*)"\):/.exec(f.message)![1])).toEqual([
       'project.dynamic: dependencies',
       'tool.uv.index = [{"name":"internal","url":"https://evil.test/simple"}]',
       'tool.poetry.source = [{"name":"corp","url":"https://evil.test/corp"}]',
@@ -522,8 +522,8 @@ requests = { version = "^2", source = "corp" }
 
   it('summarises what blocks, in the CheckResult shape', async () => {
     const r = await checkDependencies({ changes: [change('package.json', pkg({}), pkg({ dependencies: { lodahs: '1' } }))], registry: registry(), allowList: allowAll });
-    expect(r.summary).toBe(['1 constat(s) bloquant(s) :', '- npm « lodahs » (package.json) : paquet absent du registre npm.'].join('\n'));
+    expect(r.summary).toBe(['1 blocking finding(s):', '- npm "lodahs" (package.json): package missing from the npm registry.'].join('\n'));
     const none = await checkDependencies({ changes: [], registry: registry() });
-    expect(none.summary).toBe('Aucune dépendance ajoutée.');
+    expect(none.summary).toBe('No dependency added.');
   });
 });

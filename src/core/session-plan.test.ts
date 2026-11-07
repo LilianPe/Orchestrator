@@ -5,7 +5,7 @@ const statuses = (plan: readonly PlanStep[]) => plan.map((s) => s.status);
 
 describe('session plan (ORC-171)', () => {
   it('starts on understanding the ticket, the seven steps in the order of the MVP doc', () => {
-    expect(startPlan().map((s) => s.content)).toEqual(['Comprendre', 'Questions', 'Spec', 'Tests', 'Build', 'Vérif', 'PR']);
+    expect(startPlan().map((s) => s.content)).toEqual(['Understand', 'Questions', 'Spec', 'Tests', 'Build', 'Verify', 'PR']);
     expect(statuses(startPlan())).toEqual(['inProgress', 'pending', 'pending', 'pending', 'pending', 'pending', 'pending']);
   });
 
@@ -14,7 +14,7 @@ describe('session plan (ORC-171)', () => {
   });
 
   it('goes back to an earlier step: what came after it is to do again', () => {
-    const atCheck = advancePlan(advancePlan(startPlan(), 'Build'), 'Vérif');
+    const atCheck = advancePlan(advancePlan(startPlan(), 'Build'), 'Verify');
     expect(statuses(advancePlan(atCheck, 'Build'))).toEqual(['completed', 'canceled', 'canceled', 'canceled', 'inProgress', 'pending', 'pending']);
   });
 

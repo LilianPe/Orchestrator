@@ -10,7 +10,7 @@ export interface PlanRow {
   identifier: string;
   title: string;
   priority: number;
-  status: 'pris' | 'déjà géré' | 'pas pris';
+  status: 'taken' | 'already handled' | 'not taken';
   reasons: string[];
 }
 
@@ -30,24 +30,24 @@ export async function planRows(d: {
       const p = members.find((x) => x.id === issue.projectId)!;
       const row = { identifier: issue.identifier, title: issue.title, priority: issue.priority };
       if (issue.repos) {
-        rows.push({ ...row, status: 'pas pris', reasons: [`dépôt à préciser (${issue.repos.map(repoLabel).join(', ')})`] });
+        rows.push({ ...row, status: 'not taken', reasons: [`repository to specify (${issue.repos.map(repoLabel).join(', ')})`] });
         continue;
       }
       const known = await d.store.getTicket(p.id, issue.identifier);
       if (known) {
-        rows.push({ ...row, status: 'déjà géré', reasons: [known.logical] });
+        rows.push({ ...row, status: 'already handled', reasons: [known.logical] });
         continue;
       }
       const reasons = await pickupFailures(p.workflow.tracker.pickup.checks, issue, p.repoPath, d.workspaces);
-      rows.push({ ...row, status: reasons.length ? 'pas pris' : 'pris', reasons });
+      rows.push({ ...row, status: reasons.length ? 'not taken' : 'taken', reasons });
     }
   }
   return rows.sort((a, b) => rank(a.priority) - rank(b.priority));
 }
 
 export function formatPlan(rows: PlanRow[]): string {
-  if (!rows.length) return 'Aucun ticket délégué à l’agent.';
+  if (!rows.length) return 'No ticket delegated to the agent.';
   return rows
-    .map((r) => `${r.identifier}  ${r.status}  ${r.title}${r.status === 'pas pris' ? ` — ${r.reasons.join(' ')}` : r.status === 'déjà géré' ? ` (${r.reasons[0]})` : ''}`)
+    .map((r) => `${r.identifier}  ${r.status}  ${r.title}${r.status === 'not taken' ? ` — ${r.reasons.join(' ')}` : r.status === 'already handled' ? ` (${r.reasons[0]})` : ''}`)
     .join('\n');
 }

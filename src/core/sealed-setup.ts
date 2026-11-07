@@ -154,11 +154,11 @@ export async function runSealedSetup(sandboxes: Pick<SandboxProvider, 'create' |
   let purged: string[];
   try {
     const rc = await sandboxes.exec(box.id, YARN1_NO_SCRIPTS, { env: { HOME: SETUP_HOME } });
-    if (rc.code !== 0) throw new Error(`Le setup du worktree a échoué : scripts de Yarn 1 non coupés (${rc.stderr.trim()})`);
+    if (rc.code !== 0) throw new Error(`The worktree setup failed: Yarn 1 scripts not disabled (${rc.stderr.trim()})`);
     for (const command of req.commands) {
       const { code } = await sandboxes.exec(box.id, (req.argv ?? cappedCommand)(command), { env });
-      if (code === 124) throw new Error(`Le setup du worktree a échoué : ${command} (délai de ${VERIFY_TIMEOUT_MS / 60_000} min dépassé)`);
-      if (code !== 0) throw new Error(`Le setup du worktree a échoué : ${command}`);
+      if (code === 124) throw new Error(`The worktree setup failed: ${command} (timed out after ${VERIFY_TIMEOUT_MS / 60_000} min)`);
+      if (code !== 0) throw new Error(`The worktree setup failed: ${command}`);
     }
   } finally {
     // Its failure wins over the setup's: a container still alive holds the secret and can still write it, no agent may start.

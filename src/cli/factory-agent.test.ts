@@ -17,7 +17,7 @@ describe('factory-agent', () => {
   it('refuses to run outside the factory', async () => {
     const out: string[] = [];
     expect(await runAgentCli(['issue', 'REL-1'], {} as NodeJS.ProcessEnv, fetch, (s) => out.push(s))).toBe(2);
-    expect(out.join('')).toContain(`doit être lancé par ${PRODUCT_NAME}`);
+    expect(out.join('')).toContain(`must be started by ${PRODUCT_NAME}`);
   });
 
   it('reads an issue with the bearer token', async () => {

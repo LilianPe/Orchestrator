@@ -51,7 +51,7 @@ describe('a Done on a commit verify did not find green (ORC-151)', () => {
   it('refuses a commit since the green one, and sends it through the AI review, whose verify asks again', () => {
     const out = done(inReview({ reviewSha: 'def', verifiedSha: 'abc' }));
     expect(out.effects.some((e) => e.kind === 'merge')).toBe(false);
-    expect(out.effects).toContainEqual({ kind: 'comment', body: expect.stringContaining("n'a pas de vérification verte") });
+    expect(out.effects).toContainEqual({ kind: 'comment', body: expect.stringContaining('has no green verification') });
     expect(out.effects).toContainEqual({ kind: 'move', to: 'ai_review' });
     expect(out.effects).toContainEqual(expect.objectContaining({ kind: 'start_run', job: 'review' }));
   });
@@ -78,7 +78,7 @@ describe('decide — Done by a human merges the PR (ORC-148)', () => {
     const out = decide(inReview(), done('u-dev', ['team_member', 'repo_writer']), workflow);
     expect(out.effects.some((e) => e.kind === 'merge')).toBe(false);
     expect(out.trace.some((t) => t.startsWith(AUTHZ_REFUSED))).toBe(true);
-    expect(out.effects).toEqual([{ kind: 'comment', body: expect.stringContaining('passer le ticket en Done') }, { kind: 'move', to: 'human_review', keepReviewSha: true }]);
+    expect(out.effects).toEqual([{ kind: 'comment', body: expect.stringContaining('moving the ticket to Done') }, { kind: 'move', to: 'human_review', keepReviewSha: true }]);
   });
 
   it('a move to Done with no signed actor or no resolved roles is no human decision: never merged, left as it is', () => {
@@ -96,17 +96,17 @@ describe('decide — Done by a human merges the PR (ORC-148)', () => {
 
   it('no commit recorded at the passage in Human Review: nothing merged, back to Human Review, the way to record one said', () => {
     // A reply in the thread runs dev-feedback, which moves nothing: only the AI review's move to Human Review records one.
-    expect(decide(inReview({ reviewSha: undefined }), done(), workflow).effects).toEqual(backToReview(/aucun commit relu.*qu'à la fin de son propre travail.*Passez le ticket en AI Review/));
+    expect(decide(inReview({ reviewSha: undefined }), done(), workflow).effects).toEqual(backToReview(/no reviewed commit.*only at the end of its own work.*Move the ticket to AI Review/));
   });
 
-  const pushed = { number: 7, url: 'u', branch: 'b', reason: 'la branche a reçu un push depuis la review', headMoved: true };
+  const pushed = { number: 7, url: 'u', branch: 'b', reason: 'the branch received a push since the review', headMoved: true };
 
   it('a merge refused for a push since the review sends the new commits through the AI review, not straight to Human Review', () => {
     // A move by the factory emits no status.changed, so the review is started here, not by the rule `to: ai_review`.
     const out = decide(inReview({ logical: 'done' }), { ...ev('pr.merge_refused', pushed), taint: 'trusted' }, workflow);
     expect(out.effects).toEqual([
       { kind: 'move', to: 'ai_review' },
-      { kind: 'comment', body: expect.stringMatching(/push depuis la review.*repassent par la review IA/) },
+      { kind: 'comment', body: expect.stringMatching(/push since the review.*go through the AI review again/) },
       { kind: 'start_run', job: 'review' },
     ]);
   });
@@ -150,18 +150,18 @@ describe('decide — Done by a human merges the PR (ORC-148)', () => {
 
   it('a merge refused for a push, in a workflow with no AI review, goes back to Human Review with the reason', () => {
     const noReview = { ...workflow, on: { ...workflow.on, 'status.changed': (workflow.on['status.changed'] ?? []).filter((r) => r.to !== 'ai_review') } };
-    expect(decide(inReview({ logical: 'done' }), ev('pr.merge_refused', pushed), noReview).effects).toEqual(backToReview(/push depuis la review/));
+    expect(decide(inReview({ logical: 'done' }), ev('pr.merge_refused', pushed), noReview).effects).toEqual(backToReview(/push since the review/));
   });
 
   it('a merge refused for a push applies the rule a human\'s move to AI Review would: the first that matches, run or not', () => {
     // A rule with no run listed first answers a human's move with no review: so does the refusal.
     const first = { ...workflow, on: { ...workflow.on, 'status.changed': [{ from: 'done', to: 'ai_review' }, ...(workflow.on['status.changed'] ?? [])] } } as typeof workflow;
-    expect(decide(inReview({ logical: 'done' }), { ...ev('pr.merge_refused', pushed), taint: 'trusted' }, first).effects).toEqual(backToReview(/push depuis la review/));
+    expect(decide(inReview({ logical: 'done' }), { ...ev('pr.merge_refused', pushed), taint: 'trusted' }, first).effects).toEqual(backToReview(/push since the review/));
   });
 
   it('a merge refused for a push on a blocked ticket goes back to Human Review: a blocked ticket waits for a human', () => {
     const out = decide(inReview({ logical: 'done', blocked: true, blockReason: 'x' }), { ...ev('pr.merge_refused', pushed), taint: 'trusted' }, workflow);
-    expect(out.effects).toEqual(backToReview(/push depuis la review/));
+    expect(out.effects).toEqual(backToReview(/push since the review/));
   });
 
   it('a merge refused late, once a human moved the ticket on from Done, starts no AI review', () => {
@@ -175,16 +175,16 @@ describe('decide — Done by a human merges the PR (ORC-148)', () => {
 
   it('a merge effect that died (GitHub down past its retries) sends the ticket back to Human Review: Done no longer says merged', () => {
     const failed = { ...ev('effect.failed', { effectId: 'REL-1:4:0', kind: 'merge', eventId: 'e-status.changed', attempts: 8, error: 'GitHub API PUT /pulls/7/merge: 502' }), taint: 'trusted' as const };
-    expect(decide(inReview({ logical: 'done' }), failed, workflow).effects).toEqual(backToReview(/pas pu merger la PR #7 : GitHub API PUT \/pulls\/7\/merge: 502/));
+    expect(decide(inReview({ logical: 'done' }), failed, workflow).effects).toEqual(backToReview(/could not merge PR #7: GitHub API PUT \/pulls\/7\/merge: 502/));
     // Once a human took the ticket out of Done, the dead merge is only answered: no block, the ticket where the human put it.
-    expect(decide(inReview({ logical: 'human_review' }), failed, workflow)).toMatchObject({ events: [], effects: [{ kind: 'comment', body: expect.stringMatching(/pas pu merger la PR #7/) }] });
+    expect(decide(inReview({ logical: 'human_review' }), failed, workflow)).toMatchObject({ events: [], effects: [{ kind: 'comment', body: expect.stringMatching(/could not merge PR #7/) }] });
     // A ticket delivered after all (merged on GitHub) is left as it is.
     expect(decide(inReview({ logical: 'done', prState: 'MERGED' }), failed, workflow).effects).toEqual([]);
   });
 
   it('a merge refused for another reason (PR not mergeable) sends the ticket back to Human Review, the reviewed commit kept', () => {
-    const out = decide(inReview({ logical: 'done' }), ev('pr.merge_refused', { number: 7, url: 'u', branch: 'b', reason: 'GitHub refuse le merge (conflit)' }), workflow);
-    expect(out.effects).toEqual(backToReview(/GitHub refuse le merge \(conflit\)/));
+    const out = decide(inReview({ logical: 'done' }), ev('pr.merge_refused', { number: 7, url: 'u', branch: 'b', reason: 'GitHub refuses the merge (conflit)' }), workflow);
+    expect(out.effects).toEqual(backToReview(/GitHub refuses the merge \(conflit\)/));
   });
 
   it('a ticket cancelled in Human Review writes nothing on the forge: no merge, its PR left open', () => {

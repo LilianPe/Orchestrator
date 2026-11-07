@@ -38,7 +38,7 @@ export async function exportJournal(store: Store, projectId: string, ticketId?: 
 export function readJournal(text: string, source = 'journal'): ExportedJournal {
   const j = JSON.parse(text) as Partial<ExportedJournal>;
   if (j.format !== JOURNAL_FORMAT || typeof j.projectId !== 'string' || !Array.isArray(j.entries) || !isObject(j.workflows)) {
-    throw new Error(`${source} : pas un journal exporté au format ${JOURNAL_FORMAT}`);
+    throw new Error(`${source}: not a journal exported in format ${JOURNAL_FORMAT}`);
   }
   return j as ExportedJournal;
 }
@@ -179,15 +179,15 @@ const subject = (r: Pick<ReplayReport, 'projectId' | 'ticketId'>) => `${r.projec
 
 /** One line per journal, then one per divergence. */
 export function formatReplay(r: ReplayReport): string {
-  const upcast = r.upcast > 0 ? `, ${r.upcast} relu(s) par les upcasters` : '';
-  const unrecorded = r.unrecorded > 0 ? `, ${r.unrecorded} ligne(s) sans décision enregistrée` : '';
-  const head = `${subject(r)} : ${r.replayed} décision(s) rejouée(s)${upcast}${unrecorded}`;
+  const upcast = r.upcast > 0 ? `, ${r.upcast} read through the upcasters` : '';
+  const unrecorded = r.unrecorded > 0 ? `, ${r.unrecorded} line(s) without a recorded decision` : '';
+  const head = `${subject(r)}: ${r.replayed} decision(s) replayed${upcast}${unrecorded}`;
   if (r.divergences.length === 0) {
-    return `${head} — ${r.mode === 'regression' ? 'identiques bit à bit' : 'aucune divergence'}`;
+    return `${head} — ${r.mode === 'regression' ? 'identical bit for bit' : 'no divergence'}`;
   }
-  const what = r.mode === 'what-if' ? 'arrêt à la première divergence' : `${r.divergences.length} divergence(s)`;
+  const what = r.mode === 'what-if' ? 'stopped at the first divergence' : `${r.divergences.length} divergence(s)`;
   const lines = r.divergences.map(
-    (d) => `  événement ${d.eventId} (${d.eventType}, n° ${d.seq} du journal) : ${d.path} enregistré ${d.recorded ?? 'absent'}, rejoué ${d.replayed ?? 'absent'}`,
+    (d) => `  event ${d.eventId} (${d.eventType}, #${d.seq} of the journal): ${d.path} recorded ${d.recorded ?? 'absent'}, replayed ${d.replayed ?? 'absent'}`,
   );
   return [`${head} — ${what}`, ...lines].join('\n');
 }

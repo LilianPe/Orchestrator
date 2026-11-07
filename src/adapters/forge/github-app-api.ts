@@ -95,7 +95,7 @@ export class GitHubAppApi extends GitHubAppAuth {
     for (const file of files) {
       const dto = await this.read('GET', `${contents}/${encodedPath(file.path)}`, token, isFile, 'a file');
       if (dto.encoding !== 'base64') {
-        throw new Error(`GitHub : contenu illisible pour ${file.path} (fichier trop gros ou encodage inattendu)`);
+        throw new Error(`GitHub: unreadable content for ${file.path} (file too large or unexpected encoding)`);
       }
       sources.push({ path: file.path, content: Buffer.from(dto.content, 'base64').toString('utf8') });
     }

@@ -42,7 +42,7 @@ export class PublishRefused extends Error {
  * sentence, and nothing an agent wrote. No closing keyword: it is a claim on the whole ticket, and nothing here can make it.
  */
 export function prText(t: { ticketId: string; title: string }): { title: string; body: string } {
-  return { title: `${t.ticketId} ${t.title}`, body: `Ticket : ${t.ticketId}\n\nPubliée par l'usine : chaque commit poussé a passé sa vérification.` };
+  return { title: `${t.ticketId} ${t.title}`, body: `Ticket: ${t.ticketId}\n\nPublished by the factory: every pushed commit passed its verification.` };
 }
 
 export interface Publisher {

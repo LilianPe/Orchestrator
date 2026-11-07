@@ -351,7 +351,7 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
     it(`the counterexample of ORC-173: ${ciBound} fix-ci, then the ticket is blocked for its red CI`, () => {
       const r = run(redCiCounterexample);
       expect(effects(r).filter((e) => e.kind === 'start_run' && e.job === 'fix-ci')).toHaveLength(ciBound);
-      expect(r.final).toMatchObject({ blocked: true, blockReason: `CI toujours en échec après ${ciBound} tentatives de fix-ci.`, ciFixAttempts: ciBound });
+      expect(r.final).toMatchObject({ blocked: true, blockReason: `CI still failing after ${ciBound} attempts of fix-ci.`, ciFixAttempts: ciBound });
     });
 
     it.todo('I5 — the AI review → fix loop is counted by the engine, with the same counter as red CI (ORC-184, preset bounds of ORC-187)');

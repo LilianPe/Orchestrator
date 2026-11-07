@@ -49,7 +49,7 @@ export async function serveEgressControl(proxy: EgressProxy, path: string): Prom
     }
     const reply = (status: number, value: object) => res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(value));
     const route = req.method === 'POST' ? routes.get(req.url ?? '') : undefined;
-    if (!route) return void reply(400, { error: `requête invalide : ${req.method} ${req.url}` });
+    if (!route) return void reply(400, { error: `invalid request: ${req.method} ${req.url}` });
     json(req).then(route).then(
       (value) => reply(200, value),
       (err: Error) => reply(err instanceof z.ZodError || err instanceof SyntaxError ? 400 : 500, { error: err.message }),

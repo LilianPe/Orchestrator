@@ -123,7 +123,7 @@ describe.skipIf(!PG_URL)('orchestrator on PgStore', () => {
       `select event_id, status, failures, ticket_id from dead_letter`,
     );
     expect(dead.rows).toEqual([{ event_id: 't-2', status: 'open', failures: 1, ticket_id: 'REL-1' }]);
-    expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: expect.stringMatching(/^Événement t-2 mis de côté \(session\.prompted\)/) });
+    expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: expect.stringMatching(/^Event t-2 set aside \(session\.prompted\)/) });
     expect(await h.store.pendingInbox(10)).toEqual([]);
 
     await h.store.putTicket({ ...(await h.ticket()), humanInbox: [] });
@@ -163,7 +163,7 @@ describe.skipIf(!PG_URL)('orchestrator on PgStore', () => {
     h.forge.setRepoPermission('dev-gh', 'write');
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' }, 'REL-1', { actor: 'user-member' });
     expect(h.runner.requests).toEqual([]);
-    expect(h.tracker.activities('ls-1')).toEqual([{ type: 'response', body: expect.stringMatching(/^Refusé/) }]);
+    expect(h.tracker.activities('ls-1')).toEqual([{ type: 'response', body: expect.stringMatching(/^Refused:/) }]);
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' }, 'REL-1', { actor: 'user-dev' });
     expect(h.runner.requests).toHaveLength(1);
     const journal = await pool.query<{ payload: { actor?: string; roles?: string[] } }>(
@@ -174,7 +174,7 @@ describe.skipIf(!PG_URL)('orchestrator on PgStore', () => {
       ['user-dev', ['team_member', 'repo_writer', 'repo_merger']],
     ]);
     await h.restart();
-    const refusals = h.tracker.activities('ls-1').filter((a) => 'body' in a && a.body.startsWith('Refusé'));
+    const refusals = h.tracker.activities('ls-1').filter((a) => 'body' in a && a.body.startsWith('Refused:'));
     expect(refusals).toHaveLength(1);
     expect(await h.ticket()).toMatchObject({ initiatorId: 'user-dev' });
   });

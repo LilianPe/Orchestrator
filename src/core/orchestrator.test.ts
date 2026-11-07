@@ -365,7 +365,7 @@ describe('Orchestrator', () => {
     expect((await store.listQueue()).length).toBeGreaterThanOrEqual(1);
     const comments = tracker.calls.filter((c) => c.method === 'comment' && c.args[0] === 'REL-2');
     expect(comments).toHaveLength(1);
-    expect(String(comments[0]!.args[1])).toContain('Budget journalier');
+    expect(String(comments[0]!.args[1])).toContain('Daily budget');
   });
 
   it('does not start runs after stopAll()', async () => {
@@ -410,8 +410,8 @@ describe('Orchestrator', () => {
       expect(dl!.error).toMatch(/every/);
       const t = (await store.getTicket('p', 'REL-1'))!;
       expect(t.blocked).toBe(true);
-      expect(t.blockReason).toMatch(/^Événement l1 mis de côté \(label\.changed\) : sa décision a échoué/);
-      expect(tracker.comments('REL-1').at(-1)).toContain(`Raison : ${t.blockReason}`);
+      expect(t.blockReason).toMatch(/^Event l1 set aside \(label\.changed\): its decision failed/);
+      expect(tracker.comments('REL-1').at(-1)).toContain(`Reason: ${t.blockReason}`);
       expect(tracker.comments('REL-1').at(-1)).toContain('`factory run repair REL-1`');
       expect(tracker.activities().filter((a) => a.type === 'error')).toEqual([]);
       // Not retried: nothing pending; the reply behind it was decided (kept as feedback for the next run, I6).
@@ -437,7 +437,7 @@ describe('Orchestrator', () => {
       expect(t.blockReason).toBeUndefined();
       // The rule of the replayed event ran: its comment is posted.
       expect(tracker.calls.filter((c) => c.method === 'comment').map((c) => c.args[1])).toContain('reçu');
-      expect(tracker.activities().map((a) => ('body' in a ? a.body : ''))).toContain('Événement l1 réparé par armand (rejoué) : le ticket est débloqué.');
+      expect(tracker.activities().map((a) => ('body' in a ? a.body : ''))).toContain('Event l1 repaired by armand (replayed): the ticket is unblocked.');
       expect(await store.deadLetters('REL-1')).toMatchObject([{ eventId: 'l1', status: 'replayed', resolvedBy: 'armand' }]);
       expect((await store.recentEvents(20, 'REL-1')).find((e) => e.id === 'repair:l1:1')).toMatchObject({
         type: 'dead_letter.repaired',
@@ -474,8 +474,8 @@ describe('Orchestrator', () => {
     });
 
     it.each([
-      ['skip', 'ignoré'],
-      ['force', 'forcé'],
+      ['skip', 'skipped'],
+      ['force', 'forced'],
     ] as const)('%s: unblocks the ticket without the decision of the event', async (action, label_) => {
       const { store, tracker, orch } = broken();
       await orch.accept(delegated());
@@ -486,7 +486,7 @@ describe('Orchestrator', () => {
       await orch.drained();
       expect((await store.getTicket('p', 'REL-1'))!.blocked).toBe(false);
       expect(tracker.calls.filter((c) => c.method === 'comment').map((c) => c.args[1])).not.toContain('reçu');
-      expect(tracker.activities().map((a) => ('body' in a ? a.body : ''))).toContain(`Événement l1 réparé par armand (${label_}) : le ticket est débloqué.`);
+      expect(tracker.activities().map((a) => ('body' in a ? a.body : ''))).toContain(`Event l1 repaired by armand (${label_}): the ticket is unblocked.`);
       expect(await store.deadLetters('REL-1')).toMatchObject([{ status: action === 'skip' ? 'skipped' : 'forced', resolvedBy: 'armand' }]);
       expect((await store.recentEvents(20, 'REL-1')).find((e) => e.id === 'repair:l1:1')).toMatchObject({ payload: { action, by: 'armand' } });
     });
@@ -517,7 +517,7 @@ describe('Orchestrator', () => {
     await orch.drained();
     await orch.accept(labelled('agent:y'));
     await orch.drained();
-    expect((await store.getTicket('p', 'REL-1'))!.blockReason).toBe('Erreur : linear down');
+    expect((await store.getTicket('p', 'REL-1'))!.blockReason).toBe('Error: linear down');
     expect(await store.dueTimers(Number.MAX_SAFE_INTEGER)).toEqual([]);
   });
 });

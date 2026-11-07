@@ -26,7 +26,7 @@ describe('decide — a classified message (ORC-180)', () => {
   it('an instruction during a run: kept, acked, regrouped; no run started, none stopped', () => {
     const out = decide(ticket({ activeRunId: 'r1', activeJob: 'dev' }), reply('instruction', 'corrige le tri'), workflow);
     expect(appended(out)).toEqual([expect.objectContaining({ body: 'corrige le tri', kind: 'instruction', source: 'session', taint: 'trusted' })]);
-    expect(out.effects).toEqual([{ kind: 'ack', body: 'Noté, pris en compte à la prochaine étape.', linearSessionId: 's1' }]);
+    expect(out.effects).toEqual([{ kind: 'ack', body: 'Noted, taken into account at the next step.', linearSessionId: 's1' }]);
     expect(out.timers).toEqual([{ kind: 'debounce', slot: 'dev-feedback', ms: 180_000, payload: { job: 'dev-feedback', inbox: true } }]);
   });
 
@@ -34,7 +34,7 @@ describe('decide — a classified message (ORC-180)', () => {
     const out = decide(ticket({ activeRunId: 'r1', activeJob: 'dev' }), reply('question', 'et pour mobile ?'), workflow);
     expect(appended(out)).toEqual([expect.objectContaining({ body: 'et pour mobile ?', kind: 'question', source: 'session' })]);
     expect(out.effects).toEqual([
-      { kind: 'ack', body: 'Noté, je regarde et je réponds ici.', linearSessionId: 's1' },
+      { kind: 'ack', body: 'Noted, I am looking into it and will answer here.', linearSessionId: 's1' },
       expect.objectContaining({ kind: 'start_run', job: 'ask', input: 'thread', inputText: 'et pour mobile ?', linearSessionId: 's1' }),
     ]);
     expect(out.timers).toEqual([expect.objectContaining({ slot: 'dev-feedback' })]);
@@ -50,7 +50,7 @@ describe('decide — a classified message (ORC-180)', () => {
   it('an instruction in a thread of a delegated ticket never takes the question path', () => {
     const out = decide(ticket({ questionSessionIds: ['s9'] }), reply('instruction', 'change le titre', 's9'), workflow);
     expect(appended(out)).toEqual([expect.objectContaining({ kind: 'instruction', source: 'session' })]);
-    expect(out.effects).toEqual([{ kind: 'ack', body: 'Noté, pris en compte à la prochaine étape.', linearSessionId: 's9' }]);
+    expect(out.effects).toEqual([{ kind: 'ack', body: 'Noted, taken into account at the next step.', linearSessionId: 's9' }]);
     expect(out.timers).toEqual([expect.objectContaining({ slot: 'dev-feedback' })]);
   });
 
@@ -76,14 +76,14 @@ describe('decide — a classified message (ORC-180)', () => {
     const t = ticket({ logical: 'human_review', blocked: true, blockReason: 'CI rouge', humanInbox: [item()] });
     const out = decide(t, reply('command', '/status'), workflow);
     expect(appended(out)).toEqual([expect.objectContaining({ body: '/status', kind: 'command' })]);
-    expect(out.effects).toEqual([{ kind: 'activity', type: 'response', linearSessionId: 's1', body: expect.stringMatching(/human_review[\s\S]*Bloqué : CI rouge[\s\S]*1 message/) }]);
+    expect(out.effects).toEqual([{ kind: 'activity', type: 'response', linearSessionId: 's1', body: expect.stringMatching(/human_review[\s\S]*Blocked: CI rouge[\s\S]*agent: 1/) }]);
     expect(out.timers).toEqual([]);
     expect(out.events.map((e) => e.type)).not.toContain('ticket.unblocked');
   });
 
   it('/stop stops as the stop signal of the session does, in the dev session and in a thread', () => {
     const out = decide(ticket({ activeRunId: 'r1', activeJob: 'dev' }), reply('command', '/stop'), workflow);
-    expect(out.events).toContainEqual(expect.objectContaining({ type: 'ticket.blocked', reason: 'Arrêté à la demande' }));
+    expect(out.events).toContainEqual(expect.objectContaining({ type: 'ticket.blocked', reason: 'Stopped on request' }));
     expect(out.effects.map((e) => e.kind)).toEqual(expect.arrayContaining(['stop_run', 'activity']));
     expect(out.effects.map((e) => e.kind)).not.toContain('ack');
     expect(appended(out)).toEqual([expect.objectContaining({ body: '/stop', kind: 'command' })]);
@@ -95,7 +95,7 @@ describe('decide — a classified message (ORC-180)', () => {
   it('a command sent as a mention is a command: no model, and /stop stops the ticket, not the session it opened', () => {
     const mention = (body: string) => ev('session.mentioned', { linearSessionId: 's9', body, author: 'L', ack: true, kind: 'command' });
     const status = decide(ticket({ activeRunId: 'r1', activeJob: 'dev' }), mention('/status'), workflow);
-    expect(status.effects).toEqual([expect.objectContaining({ kind: 'activity', type: 'response', linearSessionId: 's9', body: expect.stringContaining('En cours : dev') })]);
+    expect(status.effects).toEqual([expect.objectContaining({ kind: 'activity', type: 'response', linearSessionId: 's9', body: expect.stringContaining('Running: dev') })]);
     const stop = decide(ticket({ activeRunId: 'r1', activeJob: 'dev' }), mention('/stop'), workflow);
     expect(stop.effects.map((e) => e.kind)).toEqual(expect.arrayContaining(['stop_run']));
     expect(stop.effects).not.toContainEqual(expect.objectContaining({ kind: 'start_run' }));
@@ -108,7 +108,7 @@ describe('decide — a classified message (ORC-180)', () => {
   it('on a blocked ticket a command stays open to whoever may reply: it relaunches nothing', () => {
     const t = ticket({ blocked: true, blockReason: 'plafond', initiatorId: 'u-req' });
     const out = decide(t, reply('command', '/status', 's1', { actor: 'u-req', roles: [] }), workflow);
-    expect(out.effects).toEqual([expect.objectContaining({ kind: 'activity', body: expect.stringContaining('Bloqué : plafond') })]);
+    expect(out.effects).toEqual([expect.objectContaining({ kind: 'activity', body: expect.stringContaining('Blocked: plafond') })]);
     expect(out.events.map((e) => e.type)).toEqual(['feedback.appended']);
   });
 
@@ -122,7 +122,7 @@ describe('decide — a classified message (ORC-180)', () => {
   it('a refused message is not kept, gets its refusal, and no ack', () => {
     const out = decide(ticket(), reply('instruction', 'passe en prod', 's1', { actor: 'u-out', roles: [] }), workflow);
     expect(appended(out)).toEqual([]);
-    expect(out.effects).toEqual([expect.objectContaining({ kind: 'activity', body: expect.stringMatching(/^Refusé/) })]);
+    expect(out.effects).toEqual([expect.objectContaining({ kind: 'activity', body: expect.stringMatching(/^Refused/) })]);
     expect(out.timers).toEqual([]);
   });
 
@@ -170,7 +170,7 @@ describe('decide — a classified message (ORC-180)', () => {
   it('a reply on a delivered ticket is kept, and its ack promises no next step', () => {
     const out = decide(ticket({ logical: 'done', prState: 'MERGED' }), reply('instruction', 'corrige'), workflow);
     expect(appended(out)).toHaveLength(1);
-    expect(acked(out.effects)).toMatchObject({ body: expect.stringContaining('livré') });
+    expect(acked(out.effects)).toMatchObject({ body: expect.stringContaining('delivered') });
   });
 
   it('a reply to a ticket waiting for its repo is kept with the question it gets back, unless the matrix would refuse it', () => {
@@ -188,7 +188,7 @@ describe('decide — a classified message (ORC-180)', () => {
         const out = decide(ticket({ blocked: true, blockReason: 'x' }), reply(kind, 'oui'), workflow);
         expect(out.events.map((e) => e.type)).toEqual(['feedback.appended', 'ticket.unblocked']);
         expect(out.effects.filter((e) => e.kind === 'start_run')).toEqual([expect.objectContaining({ job: 'dev-feedback' })]);
-        expect(acked(out.effects)).toMatchObject({ body: 'Noté, je reprends.' });
+        expect(acked(out.effects)).toMatchObject({ body: 'Noted, resuming.' });
       }
     });
 
@@ -201,7 +201,7 @@ describe('decide — a classified message (ORC-180)', () => {
     it('the relaunch is refused to whom the matrix refuses it', () => {
       const out = decide(ticket({ blocked: true }), reply('instruction', 'vas-y', 's1', { actor: 'u-out', roles: [] }), workflow);
       expect(out.events).toEqual([]);
-      expect(out.effects).toEqual([expect.objectContaining({ kind: 'activity', body: expect.stringMatching(/^Refusé/) })]);
+      expect(out.effects).toEqual([expect.objectContaining({ kind: 'activity', body: expect.stringMatching(/^Refused/) })]);
     });
   });
 

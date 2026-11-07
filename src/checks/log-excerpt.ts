@@ -42,5 +42,5 @@ export function logExcerpt(output: string, max = LOG_EXCERPT_MAX): string {
   const middle = rest.slice(0, rest.length - tail.kept.length);
   const useful = fit(middle.filter((l) => USEFUL.test(l)), room - head.used - tail.used);
   const went = middle.length - useful.kept.length;
-  return [...head.kept, ...(went ? [`[… ${went} lignes coupées …]`] : []), ...useful.kept, ...tail.kept.reverse()].join('\n');
+  return [...head.kept, ...(went ? [`[… ${went} lines cut …]`] : []), ...useful.kept, ...tail.kept.reverse()].join('\n');
 }

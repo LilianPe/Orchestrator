@@ -151,7 +151,7 @@ describe('GitPublisher', () => {
       const s = setup();
       write(s.repo, path, 'trap\n');
       commit(s.repo);
-      await blocked(s, /chemin interdit/);
+      await blocked(s, /forbidden path/);
     });
 
     it('.git/hooks and .git/config, which no commit can hold: named forbidden all the same, should a tree carry them', () => {
@@ -171,7 +171,7 @@ describe('GitPublisher', () => {
     it('a secret, found by gitleaks in a sandbox at none', async () => {
       const s = setup({ gitleaks: true });
       s.sandboxes.scan = () => ({ stdout: JSON.stringify([{ File: 'a.txt', StartLine: 1, RuleID: 'aws' }]), stderr: '', code: 7 });
-      await blocked(s, /Secret/);
+      await blocked(s, /secret/);
       expect(s.sandboxes.created.map((c) => [c.runId, c.network])).toContainEqual(['r1-publish-secrets', 'none']);
     });
 
@@ -186,7 +186,7 @@ describe('GitPublisher', () => {
       const s = setup();
       write(s.repo, 'tool.bin', 'MZ\0\0\0payload');
       commit(s.repo);
-      await blocked(s, /binaire/);
+      await blocked(s, /Binary file/);
     });
 
     it('a binary the branch deletes is no finding', async () => {
@@ -206,7 +206,7 @@ describe('GitPublisher', () => {
       const s = setup();
       linkOut(s.repo, '/etc/passwd', 'link');
       git(s.repo, 'commit', '-q', '-m', 'link');
-      await blocked(s, /lien symbolique sortant/);
+      await blocked(s, /symbolic link pointing outside/);
     });
   });
 
@@ -521,7 +521,7 @@ describe('prText', () => {
   it("names the ticket, and copies nothing of the agent's: no last message reaches GitHub", () => {
     const { title, body } = prText({ ticketId: 'ORC-1', title: 'Exporter en CSV' });
     expect(title).toBe('ORC-1 Exporter en CSV');
-    expect(body).toContain('Ticket : ORC-1');
+    expect(body).toContain('Ticket: ORC-1');
     // A closing keyword is a claim about the whole ticket: only ORC-195's composer can make it.
     expect(body).not.toMatch(/\b(fix(es)?|close[sd]?|resolve[sd]?)\b/i);
   });

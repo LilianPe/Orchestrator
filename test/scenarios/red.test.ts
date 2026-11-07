@@ -47,7 +47,7 @@ describe('the tests step and the red check (ORC-123)', () => {
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
     expect(skills(h)).toEqual(['/factory:tests', '/factory:dev']);
     expect(await h.ticket()).toMatchObject({ logical: 'human_review', blocked: false });
-    expect(await traces(h)).toContain('red: aurait bloqué (compile), mode mesure : le run continue');
+    expect(await traces(h)).toContain('red: would have blocked (compile), measure mode: the run goes on');
     expect((await measureTicket(h.store, 'p', 'REL-1')).red).toEqual([{ id: expect.any(String), verified: false, cause: 'compile' }]);
   });
 
@@ -57,7 +57,7 @@ describe('the tests step and the red check (ORC-123)', () => {
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
     expect(skills(h)).toEqual(['/factory:tests', '/factory:tests', '/factory:tests']);
     expect(h.runner.requests[1]).toMatchObject({ resume: true });
-    expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Rouge non vérifié après 3 tentatives de tests.' });
+    expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Red not verified after 3 attempts of tests.' });
   });
 
   it('in blocking mode, a tests step that touched a file outside the tests fails, without running anything', async () => {
@@ -74,7 +74,7 @@ describe('the tests step and the red check (ORC-123)', () => {
     h.workspaces.steps.set(WORKTREE, { changed: [{ path: 'src/export.test.ts', deleted: false }, { path: 'src/export.ts', deleted: false }] });
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
     expect(skills(h)).toEqual(['/factory:tests', '/factory:dev']);
-    expect(await traces(h)).toContain('red: aurait bloqué (scope), mode mesure : le run continue');
+    expect(await traces(h)).toContain('red: would have blocked (scope), measure mode: the run goes on');
   });
 
   it('a red check that cannot read the step blocks on the infrastructure, without resuming the agent', async () => {
@@ -82,7 +82,7 @@ describe('the tests step and the red check (ORC-123)', () => {
     h.workspaces.steps.clear();
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
     expect(skills(h)).toEqual(['/factory:tests']);
-    expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: expect.stringContaining("panne d'infrastructure") });
+    expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: expect.stringContaining('infrastructure failure') });
   });
 
   it('runs the tests with the variables the repository declares, never its secrets (ORC-211)', async () => {

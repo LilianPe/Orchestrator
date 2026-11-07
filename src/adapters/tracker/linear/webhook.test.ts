@@ -217,7 +217,7 @@ describe('mapLinearWebhook', () => {
       const token = `ghp_${'a'.repeat(36)}`;
       const [masked] = await reply(`corrige, voici le jeton ${token}`);
       expect(JSON.stringify(masked)).not.toContain(token);
-      expect(masked).toMatchObject({ payload: { body: 'corrige, voici le jeton [masqué]', kind: 'instruction', masked: true } });
+      expect(masked).toMatchObject({ payload: { body: 'corrige, voici le jeton [masked]', kind: 'instruction', masked: true } });
       const [opened] = await mention(`[@factory](https://linear.app/x/profiles/factory) ${token} ?`);
       expect(JSON.stringify(opened)).not.toContain(token);
       expect(opened).toMatchObject({ payload: { masked: true } });

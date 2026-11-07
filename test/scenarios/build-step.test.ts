@@ -41,7 +41,7 @@ describe('the build step (ORC-136)', () => {
     await h.advance(600_000);
     expect(h.runner.requests).toHaveLength(1);
     const t = await h.ticket();
-    expect(t).toMatchObject({ blocked: true, blockReason: expect.stringContaining('a atteint un plafond') });
+    expect(t).toMatchObject({ blocked: true, blockReason: expect.stringContaining('reached a limit') });
     expect(blockCause(t.blockReason)).toBe('limit');
   });
 
@@ -100,7 +100,7 @@ describe('the build step (ORC-136)', () => {
     await h.advance(600_000);
     expect(h.runner.requests).toHaveLength(1);
     const t = await h.ticket();
-    expect(t).toMatchObject({ blocked: true, blockReason: expect.stringContaining("n'a rien écrit depuis 30 min") });
+    expect(t).toMatchObject({ blocked: true, blockReason: expect.stringContaining("has written nothing for 30 min") });
     expect(blockCause(t.blockReason)).toBe('limit');
   });
 
@@ -115,7 +115,7 @@ describe('the build step (ORC-136)', () => {
     const t = await h.ticket();
     expect(t).toMatchObject({ logical: 'dev', blocked: true });
     expect(blockCause(t.blockReason)).toBe('failed');
-    expect(h.tracker.comments('REL-1').at(-1)).toContain('🔴 Bloqué');
+    expect(h.tracker.comments('REL-1').at(-1)).toContain('🔴 Blocked');
     expect(h.tracker.activities('ls-1').filter((a) => a.type === 'response')).toEqual([]);
   });
 

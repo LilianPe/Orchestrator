@@ -61,11 +61,11 @@ describe('parseRepoConfig (.factory/config.yml, ORC-209)', () => {
   describe('the variables a repository declares (ORC-211)', () => {
     it('reads names, never values', () => {
       expect(parseRepoConfig('env: [NODE_ENV]\nsetup_secrets: [REGISTRY_TOKEN]\n')).toMatchObject({ env: ['NODE_ENV'], setupSecrets: ['REGISTRY_TOKEN'] });
-      expect(violations('env: { NODE_ENV: test }\n')).toEqual(['env : un tableau de noms de variables est attendu']);
+      expect(violations('env: { NODE_ENV: test }\n')).toEqual(['env: an array of variable names is expected']);
     });
 
     it.each(['lower_case', 'WITH-DASH', '1DIGIT', 'A=B'])('refuses %s, which is no variable name', (name) => {
-      expect(violations(`env: ["${name}"]\n`).join()).toContain(`env[0] : « ${name} »`);
+      expect(violations(`env: ["${name}"]\n`).join()).toContain(`env[0]: "${name}"`);
     });
 
     it.each([
@@ -80,8 +80,8 @@ describe('parseRepoConfig (.factory/config.yml, ORC-209)', () => {
       // The hardening of the setup.
       'NPM_CONFIG_IGNORE_SCRIPTS', 'UV_NO_BUILD', 'YARN_ENABLE_SCRIPTS', 'PIP_ONLY_BINARY',
     ])('refuses to hand the runner %s, in either list', (name) => {
-      expect(violations(`env: [${name}]\n`).join()).toContain('réservé');
-      expect(violations(`setup_secrets: [${name}]\n`).join()).toContain('réservé');
+      expect(violations(`env: [${name}]\n`).join()).toContain('reserved');
+      expect(violations(`setup_secrets: [${name}]\n`).join()).toContain('reserved');
     });
 
     it.each(['API_TOKEN', 'STRIPE_SECRET', 'DB_PASSWORD', 'SIGNING_KEY', 'DATABASE_URL'])('refuses %s as a variable of the agent: a secret goes under setup_secrets', (name) => {
@@ -105,19 +105,19 @@ describe('parseRepoConfig (.factory/config.yml, ORC-209)', () => {
   describe('a configuration can only add to the socle, never take from it', () => {
     it('refuses a key that would switch off a control of the socle', () => {
       expect(violations('checks: { disable: ["factory/taille-du-diff"] }\n')).toEqual([
-        'checks : clé inconnue ; la configuration du dépôt ajoute des contrôles ou des interdits, elle n’en retire jamais au socle',
+        'checks: unknown key; the repository configuration adds checks or prohibitions, it never removes any from the baseline',
       ]);
     });
 
     it('refuses a negated path, which would carve a hole in a forbidden or sensitive path', () => {
       expect(violations('sensitive_paths: ["src/**", "!.factory/**"]\n')).toEqual([
-        'sensitive_paths[1] : « !.factory/** » retirerait un chemin ; on ne peut qu’en ajouter',
+        'sensitive_paths[1]: "!.factory/**" would remove a path; paths can only be added',
       ]);
     });
 
     it('refuses a max_diff wider than the socle', () => {
       expect(violations('max_diff: { files: 20 }\n')).toEqual([
-        'max_diff.files = 20 dépasse le socle 15 : la configuration du dépôt ne peut que resserrer `max_diff`.',
+        'max_diff.files = 20 exceeds the baseline 15: the repository configuration can only tighten `max_diff`.',
       ]);
     });
 
@@ -126,32 +126,32 @@ describe('parseRepoConfig (.factory/config.yml, ORC-209)', () => {
     });
 
     it('refuses the full network level', () => {
-      expect(violations('network: { level: full }\n')).toEqual(['network.level : `full` est réservé à `setup`, jamais pour l’agent']);
+      expect(violations('network: { level: full }\n')).toEqual(['network.level: `full` is reserved for `setup`, never for the agent']);
     });
 
     it('refuses a host wildcard or a network range, which would be full in disguise', () => {
       expect(violations('network: { level: custom, allow: ["docs.exemple.com", "*", "*.com", "0.0.0.0/0"] }\n')).toEqual([
-        'network.allow[1] : « * » n’est pas un nom d’hôte ; les jokers et les plages sont refusés',
-        'network.allow[2] : « *.com » n’est pas un nom d’hôte ; les jokers et les plages sont refusés',
-        'network.allow[3] : « 0.0.0.0/0 » n’est pas un nom d’hôte ; les jokers et les plages sont refusés',
+        'network.allow[1]: "*" is not a host name; wildcards and ranges are refused',
+        'network.allow[2]: "*.com" is not a host name; wildcards and ranges are refused',
+        'network.allow[3]: "0.0.0.0/0" is not a host name; wildcards and ranges are refused',
       ]);
     });
 
     it('refuses an allow list under a level other than custom: validated, then ignored, it would mislead', () => {
-      expect(violations('network: { level: limited, allow: [docs.exemple.com] }\n')).toEqual(['network.allow : seul le niveau `custom` prend une liste d’hôtes ; ici `limited`']);
-      expect(violations('network: { level: none, allow: [docs.exemple.com] }\n')).toEqual(['network.allow : seul le niveau `custom` prend une liste d’hôtes ; ici `none`']);
-      expect(violations('network: { allow: [docs.exemple.com] }\n')).toEqual(['network.allow : seul le niveau `custom` prend une liste d’hôtes ; ici `limited`']);
+      expect(violations('network: { level: limited, allow: [docs.exemple.com] }\n')).toEqual(['network.allow: only the `custom` level takes a list of hosts; here `limited`']);
+      expect(violations('network: { level: none, allow: [docs.exemple.com] }\n')).toEqual(['network.allow: only the `custom` level takes a list of hosts; here `none`']);
+      expect(violations('network: { allow: [docs.exemple.com] }\n')).toEqual(['network.allow: only the `custom` level takes a list of hosts; here `limited`']);
       expect(parseRepoConfig('network: { level: limited, allow: [] }\n').network).toEqual({ level: 'limited', allow: [] });
     });
 
     it('refuses a negation anywhere in a path, extglob included', () => {
       expect(violations('sensitive_paths: ["src/!(auth)/**"]\n')).toEqual([
-        'sensitive_paths[0] : « src/!(auth)/** » retirerait un chemin ; on ne peut qu’en ajouter',
+        'sensitive_paths[0]: "src/!(auth)/**" would remove a path; paths can only be added',
       ]);
     });
 
     it('refuses a preset other than factory/default', () => {
-      expect(violations('extends: factory/fast@1.0\n')).toEqual(['extends : seul `factory/default@1.0` existe au MVP']);
+      expect(violations('extends: factory/fast@1.0\n')).toEqual(['extends: only `factory/default@1.0` exists in the MVP']);
     });
   });
 
@@ -161,8 +161,8 @@ describe('parseRepoConfig (.factory/config.yml, ORC-209)', () => {
 
   it('names the element that fails, not only its key', () => {
     expect(violations('sensitive_paths: ["src/**", ""]\ncommands: { test: "" }\n')).toEqual([
-      'commands.test : une commande non vide est attendue',
-      'sensitive_paths[1] : un chemin non vide est attendu',
+      'commands.test: a non-empty command is expected',
+      'sensitive_paths[1]: a non-empty path is expected',
     ]);
   });
 
@@ -176,13 +176,13 @@ describe('parseRepoConfig (.factory/config.yml, ORC-209)', () => {
 
   it('lists every violation with the path of its key', () => {
     expect(violations('network: { level: full }\nmax_diff: { files: 99 }\nservices: postgres\n')).toEqual([
-      'services : un tableau est attendu',
-      'network.level : `full` est réservé à `setup`, jamais pour l’agent',
-      'max_diff.files = 99 dépasse le socle 15 : la configuration du dépôt ne peut que resserrer `max_diff`.',
+      'services: an array is expected',
+      'network.level: `full` is reserved for `setup`, never for the agent',
+      'max_diff.files = 99 exceeds the baseline 15: the repository configuration can only tighten `max_diff`.',
     ]);
   });
 
   it('refuses a file that is not YAML', () => {
-    expect(violations('a: [\n')[0]).toMatch(/^YAML illisible/);
+    expect(violations('a: [\n')[0]).toMatch(/^unreadable YAML/);
   });
 });

@@ -33,7 +33,7 @@ describe('the human inbox (ORC-180)', () => {
     await h.send('session.prompted', instruction('corrige le tri'));
     expect((await h.ticket()).humanInbox.map((f) => f.body)).toEqual(['corrige le tri']);
     // At once, on the clock of the decision, with no agent called: the model stays out of it.
-    expect(h.tracker.activities('ls-1').slice(before)).toContainEqual(expect.objectContaining({ type: 'thought', body: 'Noté, pris en compte à la prochaine étape.' }));
+    expect(h.tracker.activities('ls-1').slice(before)).toContainEqual(expect.objectContaining({ type: 'thought', body: 'Noted, taken into account at the next step.' }));
     expect(h.runner.requests).toHaveLength(1);
     expect((await h.store.getRun(running))!.status).toBe('running');
 
@@ -71,8 +71,8 @@ describe('the human inbox (ORC-180)', () => {
     // The failed check resumes `dev`: the same attempt reads its failures and the instruction.
     const prompts = h.runner.requests.map((r) => r.prompt);
     expect(prompts).toHaveLength(2);
-    expect(prompts[1]).toContain('## Vérifications en échec');
-    expect(prompts[1]).toContain('## Retours à traiter');
+    expect(prompts[1]).toContain('## Failed checks');
+    expect(prompts[1]).toContain('## Feedback to address');
     expect(prompts[1]).toContain('corrige le tri');
     expect((await h.ticket()).humanInbox).toEqual([]);
     // Written with the attempt: the relaunch of a cut attempt reads what it read.
@@ -225,7 +225,7 @@ describe('the human inbox (ORC-180)', () => {
     await ingest(raw, headers);
     await h.orch.drained();
     expect(h.runner.requests.at(-1)!.prompt.startsWith('/factory:ask\n')).toBe(true);
-    expect(h.tracker.activities('ls-1')).toContainEqual(expect.objectContaining({ type: 'thought', body: 'Noté, je regarde et je réponds ici.' }));
+    expect(h.tracker.activities('ls-1')).toContainEqual(expect.objectContaining({ type: 'thought', body: 'Noted, I am looking into it and will answer here.' }));
     const prompted = (await h.store.recentEvents(100, 'REL-1')).find((e) => e.type === 'session.prompted')!;
     expect(prompted.payload).toMatchObject({ ack: true, kind: 'question' });
     expect((await h.store.measureFacts('p', 'REL-1')).acks[prompted.id]).toBe(h.clock.now());

@@ -37,8 +37,8 @@ export async function runInit(d: InitDeps): Promise<void> {
   const { io } = d;
   const top = await d.exec('git', ['rev-parse', '--show-toplevel'], { cwd: d.cwd });
   // One form whatever gave the path: git writes `C:/x` on Windows, a typed one may be relative or end with `/`.
-  const repoPath = resolve(top.code === 0 ? top.stdout.trim() : await io.ask(`Chemin du dépôt git à confier à ${PRODUCT_NAME}`));
-  const teamKey = (await io.ask('Clé de l’équipe Linear (ex. REL)')).toUpperCase();
+  const repoPath = resolve(top.code === 0 ? top.stdout.trim() : await io.ask(`Path of the git repository to hand to ${PRODUCT_NAME}`));
+  const teamKey = (await io.ask('Linear team key (e.g. REL)')).toUpperCase();
 
   const cfg = loadInstance(d.home);
   const id = slugify(basename(repoPath), 30);
@@ -50,13 +50,13 @@ export async function runInit(d: InitDeps): Promise<void> {
   io.print(
     [
       '',
-      '1. Dans Linear : Settings → API → OAuth applications → New application.',
-      `   - Name : ${PRODUCT_NAME} (c’est le nom qu’on mentionnera avec @)`,
-      `   - Callback URL : ${callbackUrl}`,
-      '   - Cochez « Webhooks », URL :',
+      '1. In Linear: Settings → API → OAuth applications → New application.',
+      `   - Name: ${PRODUCT_NAME} (the name you will mention with @)`,
+      `   - Callback URL: ${callbackUrl}`,
+      '   - Check "Webhooks", URL:',
       `     ${webhookUrl}`,
-      '   - Catégories : Agent session events, Issues, Comments',
-      '2. Créez l’application, puis copiez ci-dessous le client ID, le client secret et le webhook signing secret.',
+      '   - Categories: Agent session events, Issues, Comments',
+      '2. Create the application, then paste the client ID, the client secret and the webhook signing secret below.',
       '',
     ].join('\n'),
   );
@@ -66,32 +66,32 @@ export async function runInit(d: InitDeps): Promise<void> {
   for (;;) {
     webhookSecret = (await io.ask('Webhook signing secret')).trim();
     if (isUsableWebhookSecret(webhookSecret)) break;
-    io.print(`Le webhook signing secret est obligatoire : sans lui, ${PRODUCT_NAME} refuse tous les webhooks.`);
+    io.print(`The webhook signing secret is required: without it, ${PRODUCT_NAME} refuses every webhook.`);
   }
   const secrets = loadSecrets(d.home);
   const keepTokens = secrets.linear?.clientId === clientId ? secrets.linear : {};
   saveSecrets(d.home, { ...secrets, linear: { ...keepTokens, clientId, clientSecret, webhookSecret } });
 
-  if (!cfg.knowledge && (await io.confirm('Créer un dépôt GitHub privé « factory-knowledge » pour la base de connaissance ?', true))) {
+  if (!cfg.knowledge && (await io.confirm('Create a private GitHub repository "factory-knowledge" for the knowledge base?', true))) {
     const kbPath = join(d.home, 'knowledge');
     const created = await d.exec('gh', ['repo', 'create', 'factory-knowledge', '--private', '--add-readme', '--clone'], { cwd: d.home });
     if (created.code === 0) {
       mkdirSync(join(kbPath, 'notes'), { recursive: true });
-      writeFileSync(join(kbPath, 'INDEX.md'), `# Base de connaissance ${PRODUCT_NAME}\n\n`);
+      writeFileSync(join(kbPath, 'INDEX.md'), `# ${PRODUCT_NAME} knowledge base\n\n`);
       writeFileSync(join(kbPath, 'notes/.gitkeep'), '');
       await d.exec('git', ['-C', kbPath, 'add', '.'], {});
       await d.exec('git', ['-C', kbPath, 'commit', '-m', 'init knowledge base'], {});
       await d.exec('git', ['-C', kbPath, 'push'], {});
       cfg.knowledge = { repoPath: kbPath };
     } else {
-      io.print(`Création impossible : ${created.stderr.trim()}. Vous pourrez renseigner knowledge.repoPath dans ${join(d.home, 'config.yaml')}.`);
+      io.print(`Could not create it: ${created.stderr.trim()}. You can set knowledge.repoPath in ${join(d.home, 'config.yaml')}.`);
     }
   }
 
   const wfFile = join(repoPath, '.factory/workflow.yml');
   if (!existsSync(wfFile)) {
     const detected = detectVerify(repoPath);
-    const verify = (await io.ask('Commandes de vérification après chaque run (séparées par ;)', detected.join('; ')))
+    const verify = (await io.ask('Verification commands after each run (separated by ;)', detected.join('; ')))
       .split(';')
       .map((s) => s.trim())
       .filter(Boolean);
@@ -119,11 +119,11 @@ export async function runInit(d: InitDeps): Promise<void> {
   io.print(
     [
       '',
-      'Configuration écrite.',
-      'Ensuite :',
+      'Configuration written.',
+      'Next:',
       '  1. factory up',
-      `  2. ouvrez http://localhost:${cfg.port} et cliquez « Connecter Linear » (installe l’agent dans votre espace)`,
-      `  3. déléguez un ticket à @${PRODUCT_NAME} dans Linear`,
+      `  2. open http://localhost:${cfg.port} and click "Connecter Linear" (installs the agent in your workspace)`,
+      `  3. delegate a ticket to @${PRODUCT_NAME} in Linear`,
       '',
     ].join('\n'),
   );

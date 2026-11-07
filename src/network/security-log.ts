@@ -118,15 +118,15 @@ function counts(keys: string[]): [string, number][] {
 export function refusalSummary(log: SecurityLog): string | undefined {
   const refused = log.egress.filter((e) => !e.ok);
   if (log.refusals.length === 0 && refused.length === 0) return undefined;
-  const out = ['Refus pendant ce run :'];
-  for (const [rule, n] of counts(log.refusals.map((r) => r.rule))) out.push(`- règle \`${rule}\` : ${n}`);
+  const out = ['Refusals during this run:'];
+  for (const [rule, n] of counts(log.refusals.map((r) => r.rule))) out.push(`- rule \`${rule}\`: ${n}`);
   const hosts = counts(refused.map((e) => e.host).filter((h) => PLAIN_HOST.test(h)));
   const other = refused.length - hosts.reduce((s, [, n]) => s + n, 0) + hosts.slice(HOSTS_SHOWN).reduce((s, [, n]) => s + n, 0);
   if (refused.length) {
     const named = hosts.slice(0, HOSTS_SHOWN).map(([h, n]) => `\`${h}\` (${n})`);
-    out.push(`- hôtes refusés par le proxy : ${[...named, ...(other ? [`${other} autre${other > 1 ? 's' : ''}`] : [])].join(', ')}`);
+    out.push(`- hosts refused by the proxy: ${[...named, ...(other ? [`${other} other${other > 1 ? 's' : ''}`] : [])].join(', ')}`);
   }
   const skipped = log.skipped.egress + log.skipped.refusals;
-  if (skipped) out.push(`\n${skipped} ligne${skipped > 1 ? 's' : ''} de journal ignorée${skipped > 1 ? 's' : ''} (mal formée${skipped > 1 ? 's' : ''} ou forgée${skipped > 1 ? 's' : ''}).`);
+  if (skipped) out.push(`\n${skipped} log line${skipped > 1 ? 's' : ''} ignored (malformed or forged).`);
   return out.join('\n');
 }

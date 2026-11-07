@@ -63,8 +63,8 @@ describe('blockCause (ORC-297)', () => {
   });
 
   it('reads only the head of a reason: what an error or a job name quotes does not change the cause', () => {
-    expect(blockCause("Erreur : Rouge non vérifié après 2 tentatives, En attente d'une réponse")).toBe('infra');
-    expect(blockCause('Événement e9 mis de côté (pr.opened) : sa décision a échoué (Boucle : même échec).')).toBe('dead_letter');
+    expect(blockCause("Error: Red not verified after 2 attempts, Waiting for an answer")).toBe('infra');
+    expect(blockCause('Event e9 set aside (pr.opened): its decision failed (Loop: same failure).')).toBe('dead_letter');
   });
 
   it('never guesses: an unknown or missing reason is `other`', () => {

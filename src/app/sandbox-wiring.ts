@@ -17,12 +17,12 @@ export function instanceId(home: string): string {
 export function makeSandboxes(env: NodeJS.ProcessEnv, instance: string, egress: Egress): SandboxProvider | undefined {
   const cli = env['FACTORY_CONTAINER_CLI'];
   if (!cli) return undefined;
-  if (cli !== 'docker' && cli !== 'podman') throw new Error(`FACTORY_CONTAINER_CLI=${cli} : docker ou podman attendu.`);
+  if (cli !== 'docker' && cli !== 'podman') throw new Error(`FACTORY_CONTAINER_CLI=${cli}: docker or podman expected.`);
   const image = env['FACTORY_RUNNER_IMAGE'];
-  if (!image) throw new Error('FACTORY_RUNNER_IMAGE est requis avec FACTORY_CONTAINER_CLI.');
+  if (!image) throw new Error('FACTORY_RUNNER_IMAGE is required with FACTORY_CONTAINER_CLI.');
   const uid = process.getuid?.();
   const gid = process.getgid?.();
-  if (uid === undefined || gid === undefined) throw new Error('Les sandboxes exigent un démon sous Linux (uid et gid).');
+  if (uid === undefined || gid === undefined) throw new Error('The sandboxes require a daemon on Linux (uid and gid).');
   return new SandboxRouter([
     {
       name: 'container',
@@ -36,9 +36,9 @@ export function makeSandboxes(env: NodeJS.ProcessEnv, instance: string, egress: 
 export function sandboxLimits(env: NodeJS.ProcessEnv): SandboxLimits {
   const d = defaultLimits();
   return {
-    pids: limit(env, 'FACTORY_SANDBOX_PIDS', /^[1-9]\d*$/, 'un nombre entier de processus', d.pids, Number),
-    memory: limit(env, 'FACTORY_SANDBOX_MEMORY', /^[1-9]\d*[bkmg]?$/i, 'une taille comme 4g ou 512m', d.memory, String),
-    cpus: limit(env, 'FACTORY_SANDBOX_CPUS', /^(\d+|\d*\.\d+)$/, 'un nombre de CPU comme 2 ou 0.5', d.cpus, Number),
+    pids: limit(env, 'FACTORY_SANDBOX_PIDS', /^[1-9]\d*$/, 'a whole number of processes', d.pids, Number),
+    memory: limit(env, 'FACTORY_SANDBOX_MEMORY', /^[1-9]\d*[bkmg]?$/i, 'a size such as 4g or 512m', d.memory, String),
+    cpus: limit(env, 'FACTORY_SANDBOX_CPUS', /^(\d+|\d*\.\d+)$/, 'a number of CPUs such as 2 or 0.5', d.cpus, Number),
   };
 }
 
@@ -46,6 +46,6 @@ function limit<T>(env: NodeJS.ProcessEnv, name: string, ok: RegExp, hint: string
   const v = env[name]?.trim();
   if (!v) return def;
   if (/^(0|none)$/i.test(v)) return undefined;
-  if (!ok.test(v) || !(Number.parseFloat(v) > 0)) throw new Error(`${name}=${v} : ${hint} attendu, ou 0 / none pour ne pas limiter.`);
+  if (!ok.test(v) || !(Number.parseFloat(v) > 0)) throw new Error(`${name}=${v}: ${hint} expected, or 0 / none for no limit.`);
   return cast(v);
 }

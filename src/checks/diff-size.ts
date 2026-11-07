@@ -42,17 +42,17 @@ export function resolveMaxDiff(config?: Partial<MaxDiff> | null): MaxDiff {
   const limits: MaxDiff = { ...MAX_DIFF };
   // `max_diff:` with no value reads as null in YAML: no tightening.
   if (config === undefined || config === null) return limits;
-  if (typeof config !== 'object' || Array.isArray(config)) throw new MaxDiffConfigError('max_diff : un objet `{ files, lines }` est attendu.');
+  if (typeof config !== 'object' || Array.isArray(config)) throw new MaxDiffConfigError('max_diff: an object `{ files, lines }` is expected.');
   const unknown = Object.keys(config).filter((k) => k !== 'files' && k !== 'lines');
-  if (unknown.length > 0) throw new MaxDiffConfigError(`max_diff : clé(s) inconnue(s) ${unknown.join(', ')} ; seules \`files\` et \`lines\` existent.`);
+  if (unknown.length > 0) throw new MaxDiffConfigError(`max_diff: unknown key(s) ${unknown.join(', ')}; only \`files\` and \`lines\` exist.`);
   for (const key of ['files', 'lines'] as const) {
     const value = config[key];
     if (value === undefined) continue;
     if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) {
-      throw new MaxDiffConfigError(`max_diff.${key} = ${String(value)} : un entier strictement positif est attendu.`);
+      throw new MaxDiffConfigError(`max_diff.${key} = ${String(value)}: a strictly positive integer is expected.`);
     }
     if (value > MAX_DIFF[key]) {
-      throw new MaxDiffConfigError(`max_diff.${key} = ${value} dépasse le socle ${MAX_DIFF[key]} : la configuration du dépôt ne peut que resserrer \`max_diff\`.`);
+      throw new MaxDiffConfigError(`max_diff.${key} = ${value} exceeds the baseline ${MAX_DIFF[key]}: the repository configuration can only tighten \`max_diff\`.`);
     }
     limits[key] = value;
   }
@@ -136,24 +136,24 @@ const LISTED = 10;
 
 function leftOut(m: DiffMeasure): string {
   const parts: string[] = [];
-  if (m.tests > 0) parts.push(`${m.tests} fichier(s) de test non compté(s)`);
-  if (m.generated > 0) parts.push(`${m.generated} fichier(s) généré(s) non compté(s)`);
+  if (m.tests > 0) parts.push(`${m.tests} test file(s) not counted`);
+  if (m.generated > 0) parts.push(`${m.generated} generated file(s) not counted`);
   return parts.length > 0 ? ` (${parts.join(', ')})` : '';
 }
 
 function blockedSummary(m: DiffMeasure, limits: MaxDiff): string {
   const over: string[] = [];
-  if (m.size.files > limits.files) over.push(`${m.size.files} fichiers hors tests, au-delà de ${limits.files}`);
-  if (m.size.lines > limits.lines) over.push(`${m.size.lines} lignes hors tests, au-delà de ${limits.lines}`);
-  const biggest = m.counted.slice(0, LISTED).map((f) => `- ${mdCode(f.path)} : ${f.lines} ligne(s)`);
+  if (m.size.files > limits.files) over.push(`${m.size.files} files outside tests, over ${limits.files}`);
+  if (m.size.lines > limits.lines) over.push(`${m.size.lines} lines outside tests, over ${limits.lines}`);
+  const biggest = m.counted.slice(0, LISTED).map((f) => `- ${mdCode(f.path)}: ${f.lines} line(s)`);
   return [
-    `Diff trop gros pour une PR : ${over.join(' ; ')}${leftOut(m)}.`,
+    `Diff too large for a PR: ${over.join('; ')}${leftOut(m)}.`,
     '',
-    `Plus gros fichiers hors tests${m.counted.length > LISTED ? ` (${LISTED} sur ${m.counted.length})` : ''} :`,
+    `Largest files outside tests${m.counted.length > LISTED ? ` (${LISTED} of ${m.counted.length})` : ''}:`,
     ...biggest,
     '',
-    `Proposition : découper le ticket en sous-tickets qui tiennent chacun sous \`max_diff\` (${limits.files} fichiers, ${limits.lines} lignes hors tests), par exemple un par module touché.`,
-    'Question : quelle partie livrer en premier, ou le ticket peut-il être réduit ?',
+    `Proposal: split the ticket into sub-tickets that each fit under \`max_diff\` (${limits.files} files, ${limits.lines} lines outside tests), for example one per module touched.`,
+    'Question: which part should ship first, or can the ticket be reduced?',
   ].join('\n');
 }
 
@@ -165,11 +165,11 @@ export function diffSizeCheck(diff: string | DiffFile[], options: DiffSizeOption
     limits = resolveMaxDiff(options.maxDiff);
   } catch (err) {
     if (!(err instanceof MaxDiffConfigError)) throw err;
-    return { check: DIFF_SIZE_CHECK, ok: false, size: measure.size, limits: { ...MAX_DIFF }, summary: `Configuration \`max_diff\` refusée : ${err.message}` };
+    return { check: DIFF_SIZE_CHECK, ok: false, size: measure.size, limits: { ...MAX_DIFF }, summary: `\`max_diff\` configuration refused: ${err.message}` };
   }
   const ok = measure.size.files <= limits.files && measure.size.lines <= limits.lines;
   const summary = ok
-    ? `${measure.size.files} fichier(s), ${measure.size.lines} ligne(s) hors tests${leftOut(measure)}, dans \`max_diff\` (${limits.files} fichiers, ${limits.lines} lignes).`
+    ? `${measure.size.files} file(s), ${measure.size.lines} line(s) outside tests${leftOut(measure)}, within \`max_diff\` (${limits.files} files, ${limits.lines} lines).`
     : blockedSummary(measure, limits);
   return { check: DIFF_SIZE_CHECK, ok, summary, size: measure.size, limits };
 }

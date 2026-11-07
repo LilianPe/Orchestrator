@@ -7,7 +7,7 @@ import type { CheckResult } from './types.js';
 
 export const ANTI_CHEAT_CHECK = 'factory/anti-triche';
 /** The check's summary when the diff shows none of the four forms. */
-export const ANTI_CHEAT_OK = 'aucun test désactivé, aucun contournement';
+export const ANTI_CHEAT_OK = 'no disabled test, no workaround';
 
 /** 1: a frozen acceptance test changed; 2: a test disabled; 3: a check bypassed; 4: code that behaves differently under test. */
 export type CheatForm = 'frozen-test' | 'disabled-test' | 'bypass' | 'test-only-behaviour';
@@ -88,10 +88,10 @@ const RULES: Rule[] = [
 ];
 
 const FORM_LABEL: Record<CheatForm, string> = {
-  'frozen-test': "test d'acceptation gelé modifié",
-  'disabled-test': 'test désactivé',
-  bypass: 'contournement',
-  'test-only-behaviour': 'comportement différent sous test',
+  'frozen-test': 'frozen acceptance test changed',
+  'disabled-test': 'disabled test',
+  bypass: 'workaround',
+  'test-only-behaviour': 'different behaviour under test',
 };
 
 // Documentation may quote any of the patterns: it is never scanned, agent instructions (`CLAUDE.md`, `SKILL.md`)
@@ -187,11 +187,11 @@ function view(text: string, tokens: Token[], keep: Kind | undefined): string {
 
 // Only a change to the frozen path itself: a copy of a frozen test leaves it as it was.
 function frozenChange(file: DiffFile, frozen: Set<string>): CheatFinding | undefined {
-  if (file.status === 'renamed' && frozen.has(file.oldPath!)) return { file: file.oldPath!, form: 'frozen-test', match: `renommé en ${file.path}` };
+  if (file.status === 'renamed' && frozen.has(file.oldPath!)) return { file: file.oldPath!, form: 'frozen-test', match: `renamed to ${file.path}` };
   if (!frozen.has(file.path)) return undefined;
-  if (file.status === 'deleted') return { file: file.path, form: 'frozen-test', match: 'supprimé' };
+  if (file.status === 'deleted') return { file: file.path, form: 'frozen-test', match: 'deleted' };
   const first = file.added[0]?.line;
-  return { file: file.path, ...(first !== undefined ? { line: first } : {}), form: 'frozen-test', match: 'modifié' };
+  return { file: file.path, ...(first !== undefined ? { line: first } : {}), form: 'frozen-test', match: 'changed' };
 }
 
 export function scanDiff(diff: string, options: AntiCheatOptions = {}): CheatFinding[] {
@@ -226,18 +226,18 @@ const MATCH_LIMIT = 200;
 function describeFinding(f: CheatFinding): string {
   const where = f.line === undefined ? f.file : `${f.file}:${f.line}`;
   const match = f.match.length > MATCH_LIMIT ? `${f.match.slice(0, MATCH_LIMIT)}…` : f.match;
-  return `- ${mdCode(where)} : ${FORM_LABEL[f.form]} (${f.form === 'frozen-test' ? match : mdCode(match)})`;
+  return `- ${mdCode(where)}: ${FORM_LABEL[f.form]} (${f.form === 'frozen-test' ? match : mdCode(match)})`;
 }
 
 function summarize(findings: CheatFinding[]): string {
-  const lines = [findings.length === 1 ? '1 constat :' : `${findings.length} constats :`];
+  const lines = [findings.length === 1 ? '1 finding:' : `${findings.length} findings:`];
   let size = lines[0]!.length;
   for (const [i, f] of findings.entries()) {
     const line = describeFinding(f);
     const left = findings.length - i;
-    // Keep room for the closing "… et N autres" line.
+    // Keep room for the closing "… and N more" line.
     if (size + 1 + line.length + (left > 1 ? 40 : 0) > SUMMARY_LIMIT) {
-      lines.push(`… et ${left} autres`);
+      lines.push(`… and ${left} more`);
       break;
     }
     lines.push(line);

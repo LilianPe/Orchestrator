@@ -34,14 +34,14 @@ describe('the trigger (ORC-171)', () => {
     expect(await ingestOf(h)(raw, headers)).toEqual({ status: 200 });
     await h.orch.drained();
 
-    expect(h.tracker.comments('REL-1')).toEqual(['Bien reçu.']);
+    expect(h.tracker.comments('REL-1')).toEqual(['Got it.']);
     const order = h.tracker.calls.map((c) => c.method);
     expect(order.indexOf('comment')).toBeGreaterThanOrEqual(0);
     expect(order.indexOf('comment')).toBeLessThan(order.indexOf('setSessionPlan'));
     expect(order.indexOf('setSessionPlan')).toBeLessThan(order.indexOf('moveTo'));
     // Linear marks a session unresponsive without an activity in 10 s: a plan does not count as one.
-    expect(h.tracker.activities('as-1')[0]).toEqual({ type: 'thought', body: 'Bien reçu.' });
-    expect(h.tracker.plans('as-1')[0]![0]).toEqual({ content: 'Comprendre', status: 'inProgress' });
+    expect(h.tracker.activities('as-1')[0]).toEqual({ type: 'thought', body: 'Got it.' });
+    expect(h.tracker.plans('as-1')[0]![0]).toEqual({ content: 'Understand', status: 'inProgress' });
     const [message] = (await measureTicket(h.store, 'p', 'REL-1')).messages;
     expect(message!.signOfLifeMs).toEqual(expect.any(Number));
     expect(message!.signOfLifeMs).toBeLessThan(10_000);
@@ -79,14 +79,14 @@ describe('the trigger (ORC-171)', () => {
       h.tracker.addIssue(CLEAR);
       return { h, recover: () => (down = false) };
     };
-    const comments = (h: ReturnType<typeof createHarness>) => h.tracker.comments('REL-1').filter((body) => body === 'Bien reçu.');
+    const comments = (h: ReturnType<typeof createHarness>) => h.tracker.comments('REL-1').filter((body) => body === 'Got it.');
 
     it('the plan stays on Vérif, the PR not done, and the ack is not sent again', async () => {
       const { h } = broken();
       await h.send('ticket.delegated', { linearSessionId: 'ls-1', ack: true });
       expect(await h.ticket()).toMatchObject({ blocked: true });
       const last = h.tracker.plans('ls-1').at(-1)!;
-      expect(last.filter((s) => s.status === 'inProgress').map((s) => s.content)).toEqual(['Vérif']);
+      expect(last.filter((s) => s.status === 'inProgress').map((s) => s.content)).toEqual(['Verify']);
       expect(last.at(-1)).toEqual({ content: 'PR', status: 'pending' });
       expect(comments(h)).toHaveLength(1);
     });
@@ -111,7 +111,7 @@ describe('the trigger (ORC-171)', () => {
     h.runner.enqueue({ events: [{ kind: 'text', text: 'PR ouverte.' }] });
     await h.send('ticket.delegated', { linearSessionId: 'ls-1', ack: true });
     const underWay = (i: number) => h.tracker.plans('ls-1')[i]!.filter((s) => s.status === 'inProgress').map((s) => s.content);
-    expect(underWay(0)).toEqual(['Comprendre']);
+    expect(underWay(0)).toEqual(['Understand']);
     expect(underWay(1)).toEqual(['Build']);
     await h.send('pr.opened', { number: 3, url: 'https://gh/pr/3', branch: 'factory/rel-1-export-csv' });
     const last = h.tracker.plans('ls-1').at(-1)!;
@@ -135,7 +135,7 @@ describe('the trigger (ORC-171)', () => {
     h.runner.enqueue({ events: [{ kind: 'text', text: 'PR ouverte.' }] });
     await h.send('ticket.delegated', { linearSessionId: 'ls-1', ack: true });
     expect(await h.ticket()).toMatchObject({ logical: 'human_review', blocked: false });
-    expect(h.tracker.comments('REL-1')).toEqual(['Bien reçu.']);
+    expect(h.tracker.comments('REL-1')).toEqual(['Got it.']);
   });
 
   it('keeps a refused ack from holding back or killing the run: the session still hears, its time is that of the write', async () => {
@@ -146,7 +146,7 @@ describe('the trigger (ORC-171)', () => {
     h.runner.enqueue({ events: [{ kind: 'text', text: 'PR ouverte.' }] });
     await h.send('ticket.delegated', { linearSessionId: 'ls-1', ack: true });
     expect(await h.ticket()).toMatchObject({ logical: 'human_review', blocked: false });
-    expect(h.tracker.activities('ls-1')[0]).toEqual({ type: 'thought', body: 'Bien reçu.' });
+    expect(h.tracker.activities('ls-1')[0]).toEqual({ type: 'thought', body: 'Got it.' });
     expect(Object.keys((await h.store.measureFacts('p', 'REL-1')).acks)).toHaveLength(1);
     expect(h.runner.requests).toHaveLength(1);
   });
@@ -172,7 +172,7 @@ describe('the trigger (ORC-171)', () => {
     await h.send('status.changed', { from: 'human_review', to: 'dev' });
     await h.send('ticket.delegated', { linearSessionId: 'ls-2', ack: true });
     expect(h.tracker.plans('ls-1')).toHaveLength(before);
-    expect(h.tracker.plans('ls-2').at(0)![0]).toEqual({ content: 'Comprendre', status: 'inProgress' });
+    expect(h.tracker.plans('ls-2').at(0)![0]).toEqual({ content: 'Understand', status: 'inProgress' });
     expect(h.tracker.plans('ls-2').length).toBeGreaterThan(1);
   });
 
@@ -191,7 +191,7 @@ describe('the trigger (ORC-171)', () => {
     h.tracker.addIssue(CLEAR);
     h.runner.enqueue({ events: [{ kind: 'text', text: 'PR ouverte.' }] }, { events: [{ kind: 'text', text: 'Corrigé.' }] });
     await h.send('ticket.delegated', { linearSessionId: 'ls-1', ack: true });
-    expect(h.tracker.plans('ls-1').some((p) => p.some((s) => s.content === 'Vérif' && s.status === 'inProgress'))).toBe(true);
+    expect(h.tracker.plans('ls-1').some((p) => p.some((s) => s.content === 'Verify' && s.status === 'inProgress'))).toBe(true);
     const closed = h.tracker.plans('ls-1').length;
     await h.send('status.changed', { from: 'human_review', to: 'dev' });
     expect(h.runner.requests).toHaveLength(2);
@@ -220,7 +220,7 @@ describe('the trigger (ORC-171)', () => {
     await h.orch.drained();
     await ingest(raw, headers);
     await h.orch.drained();
-    expect(h.tracker.comments('REL-1')).toEqual(['Bien reçu.']);
+    expect(h.tracker.comments('REL-1')).toEqual(['Got it.']);
     expect(h.runner.requests).toHaveLength(1);
   });
 
@@ -231,7 +231,7 @@ describe('the trigger (ORC-171)', () => {
     await ingestOf(h)(raw, headers);
     await h.orch.drained();
     expect(h.tracker.comments('REL-1')).toEqual([]);
-    expect(h.tracker.activities('as-1')).toEqual([{ type: 'response', body: expect.stringMatching(/^Refusé/) }]);
+    expect(h.tracker.activities('as-1')).toEqual([{ type: 'response', body: expect.stringMatching(/^Refused/) }]);
     expect((await h.store.measureFacts('p', 'REL-1')).acks).toEqual({});
   });
 
@@ -243,8 +243,8 @@ describe('the trigger (ORC-171)', () => {
     await h.send('ticket.delegated', { linearSessionId: 'ls-2', ack: true });
     expect(await h.ticket()).toMatchObject({ activeRunId: run!.id, linearSessionId: 'ls-1' });
     expect((await h.ticket()).pendingJob).toBeUndefined();
-    expect(h.tracker.comments('REL-1')).toEqual(['Bien reçu.']);
-    expect(h.tracker.activities('ls-2')).toEqual([{ type: 'response', body: expect.stringContaining('déjà') }]);
+    expect(h.tracker.comments('REL-1')).toEqual(['Got it.']);
+    expect(h.tracker.activities('ls-2')).toEqual([{ type: 'response', body: expect.stringContaining('already') }]);
     h.runner.release(run!.id);
     await h.orch.drained();
     expect(h.runner.requests).toHaveLength(1);
@@ -267,8 +267,8 @@ describe('the trigger (ORC-171)', () => {
     await h.orch.drained();
     expect(await h.ticket('ZZZ-1')).toMatchObject({ projectId: 'p', blocked: true, delegated: true, blockReason: expect.stringContaining('ZZZ') });
     expect(h.tracker.issues.get('ZZZ-1')!.labels).toEqual(['Bloqué']);
-    expect(h.tracker.activities('as-1')).toEqual([{ type: 'thought', body: 'Bien reçu.' }]);
-    expect(h.tracker.comments('ZZZ-1')).toEqual(['Bien reçu.', expect.stringContaining('ZZZ')]);
+    expect(h.tracker.activities('as-1')).toEqual([{ type: 'thought', body: 'Got it.' }]);
+    expect(h.tracker.comments('ZZZ-1')).toEqual(['Got it.', expect.stringContaining('ZZZ')]);
     expect(h.runner.requests).toEqual([]);
   });
 
@@ -295,7 +295,7 @@ describe('the trigger (ORC-171)', () => {
     const { raw, headers } = signedMention('as-r', '@factory /refreeze le test était faux', h.clock.now());
     await ingestOf(h)(raw, headers);
     await h.orch.drained();
-    expect(h.tracker.activities('as-r')).toEqual([{ type: 'response', body: expect.stringMatching(/^Refusé/) }]);
+    expect(h.tracker.activities('as-r')).toEqual([{ type: 'response', body: expect.stringMatching(/^Refused/) }]);
     expect(h.tracker.comments('REL-1')).toEqual([]);
     expect((await h.store.measureFacts('p', 'REL-1')).acks).toEqual({});
   });
@@ -325,9 +325,9 @@ describe('the trigger (ORC-171)', () => {
       await h.send('ticket.delegated', { linearSessionId: 'ls-2', ack: true });
       expect(h.runner.requests).toHaveLength(2);
       expect((await h.ticket()).pendingJob).toBeUndefined();
-      expect(h.tracker.activities('ls-2')).toEqual([{ type: 'response', body: expect.stringContaining('déjà') }]);
+      expect(h.tracker.activities('ls-2')).toEqual([{ type: 'response', body: expect.stringContaining('already') }]);
       // The relaunch is nobody's trigger: the one ack stays that of the delegation.
-      expect(h.tracker.comments('REL-1')).toEqual(['Bien reçu.']);
+      expect(h.tracker.comments('REL-1')).toEqual(['Got it.']);
 
       h.runner.release(running[0]!.id);
       await h.orch.drained();
@@ -344,7 +344,7 @@ describe('the trigger (ORC-171)', () => {
       await h.restart({ mode: 'brutal' });
       await h.send('ticket.delegated', { linearSessionId: 'ls-2', ack: true });
       expect(h.runner.requests).toHaveLength(1);
-      expect(h.tracker.activities('ls-2')).toEqual([{ type: 'response', body: expect.stringContaining('déjà') }]);
+      expect(h.tracker.activities('ls-2')).toEqual([{ type: 'response', body: expect.stringContaining('already') }]);
       expect(h.tracker.plans('ls-1')).toHaveLength(written);
     });
 
@@ -382,7 +382,7 @@ describe('the trigger (ORC-171)', () => {
     await ingestOf(h)(raw, headers);
     await h.orch.drained();
     const session = h.tracker.activities('as-q');
-    expect(session[0]).toEqual({ type: 'thought', body: 'Bien reçu.' });
+    expect(session[0]).toEqual({ type: 'thought', body: 'Got it.' });
     expect(session.at(-1)).toEqual({ type: 'response', body: "C'est pour garder l'ordre." });
     expect(h.tracker.comments('REL-1')).toEqual([]);
     expect(await h.ticket()).toMatchObject({ delegated: false });

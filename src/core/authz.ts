@@ -39,39 +39,39 @@ export const DEFAULT_MATRIX: AuthzMatrix = {
   trigger: {
     anyOf: [['team_member', 'repo_writer']],
     channels: ['linear'],
-    what: "déclencher l'agent (délégation, mention)",
-    who: "aux membres de l'équipe Linear qui ont le droit d'écriture sur le dépôt",
+    what: 'triggering the agent (delegation, mention)',
+    who: 'Linear team members with write access to the repository',
   },
   answer_clarify: {
     anyOf: [['requester'], ['team_member']],
     channels: ['linear_session'],
-    what: "répondre à l'agent ou lui poser une question",
-    who: "au demandeur et aux membres de l'équipe Linear",
+    what: 'answering the agent or asking it a question',
+    who: 'the requester and Linear team members',
   },
   validate_spec: {
     anyOf: [['validator']],
     neverInitiator: true,
     channels: ['linear_session'],
-    what: 'valider la spec',
-    who: "aux valideurs désignés par le projet, jamais à l'initiateur du run",
+    what: 'validating the spec',
+    who: 'validators designated by the project, never the run\'s initiator',
   },
   refreeze: {
     anyOf: [['maintainer']],
     channels: ['linear', 'pr'],
-    what: 'regeler les tests (/refreeze)',
-    who: 'aux mainteneurs désignés',
+    what: 'refreezing the tests (/refreeze)',
+    who: 'designated maintainers',
   },
   relaunch_blocked: {
     anyOf: [['team_member']],
     channels: ['linear', 'linear_session'],
-    what: 'relancer un run bloqué',
-    who: "aux membres de l'équipe Linear",
+    what: 'relaunching a blocked run',
+    who: 'Linear team members',
   },
   done_merge: {
     anyOf: [['repo_merger']],
     channels: ['linear'],
-    what: 'passer le ticket en Done (merge)',
-    who: 'aux humains qui ont le droit de merge GitHub sur le dépôt',
+    what: 'moving the ticket to Done (merge)',
+    who: 'humans with GitHub merge rights on the repository',
   },
 };
 
@@ -107,14 +107,14 @@ export function allowed(
   return row.anyOf.some((set) => set.every(holds)) ? { ok: true } : { ok: false, reason: 'roles' };
 }
 
-/** The refusal answered in the ticket (French). It names no one: the actor knows who they are. */
+/** The refusal answered in the ticket. It names no one: the actor knows who they are. */
 export function refusalMessage(action: AuthzAction, matrix: AuthzMatrix, reason: RefusalReason): string {
   const row = matrix[action];
   const why =
     reason === 'unsigned'
-      ? " Linear ne nomme aucun membre de l'espace comme auteur (intégration, Slack, e-mail…) : je ne peux pas le vérifier."
+      ? ' Linear names no workspace member as the author (integration, Slack, email…): I cannot check it.'
       : reason === 'channel'
-        ? ' Pas par ce canal.'
+        ? ' Not through this channel.'
         : '';
-  return `Refusé : ${row.what} est réservé ${row.who}.${why} La vérification porte sur l'auteur signé de l'action, jamais sur un nom cité dans le texte.`;
+  return `Refused: ${row.what} is reserved for ${row.who}.${why} The check is on the signed author of the action, never on a name quoted in the text.`;
 }
