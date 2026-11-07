@@ -217,14 +217,17 @@ describe('ClaudeCodeRunner: caps and stagnation of the build (ORC-136)', () => {
     expect(await over.done).toMatchObject({ outcome: 'limit' });
   });
 
-  it('stops at the third same failure on an unchanged worktree, and tells what it saw', { timeout: 30_000 }, async () => {
+  it('stops at the third same failure on an unchanged worktree, and tells what it saw', async () => {
     const { r } = runner();
     const lines = [...bashFails('t1'), ...bashFails('t2', 'Exit code 1\nboom (99ms)'), ...bashFails('t3')];
-    const h = r.start(req({ cwd: gitRepo(), stagnation: repeats }, { FAKE_CLAUDE_SCRIPT: script(...lines), FAKE_CLAUDE_HANG: '1' }));
+    // Three real fingerprints of the worktree (git) before the third failure: under load they took past the default cap of
+    // 10 s, which ended the run first (ORC-325). The cap is no subject here; under the test's bound, a missed loop still ends.
+    const limits = { turns: 50, durationMs: 100_000, usd: 5 };
+    const h = r.start(req({ cwd: gitRepo(), stagnation: repeats, limits }, { FAKE_CLAUDE_SCRIPT: script(...lines), FAKE_CLAUDE_HANG: '1' }));
     expect(await h.done).toMatchObject({ outcome: 'limit', stagnation: { kind: 'loop', command: 'npm test', count: 3 } });
   });
 
-  it('a worktree that changes between the failures is work, not a loop', { timeout: 30_000 }, async () => {
+  it('a worktree that changes between the failures is work, not a loop', async () => {
     // `tree` answers another content each time, as a worktree the agent edits.
     let n = 0;
     const edits = new FakeSandboxProvider();
@@ -238,7 +241,7 @@ describe('ClaudeCodeRunner: caps and stagnation of the build (ORC-136)', () => {
     expect(await h.done).not.toHaveProperty('stagnation');
   });
 
-  it('in a sandbox, reads the worktree in it: never on the host', { timeout: 30_000 }, async () => {
+  it('in a sandbox, reads the worktree in it: never on the host', async () => {
     const edits = new FakeSandboxProvider();
     const { id } = await edits.create({ runId: 'r', ticketId: 'ORC-1', workspacePath: '/w', network: 'none', requirements: { minLevel: 'L3', browser: false, services: [] }, mounts: [] });
     const exec = vi.spyOn(edits, 'exec').mockImplementation(async () => ({ stdout: 'same\n', stderr: '', code: 0 }));
@@ -249,7 +252,7 @@ describe('ClaudeCodeRunner: caps and stagnation of the build (ORC-136)', () => {
     expect(exec.mock.calls[0]![2]).toEqual({ cwd: '/work' });
   });
 
-  it('tracks nothing without a fingerprint of the worktree, nor on a version without the bound', { timeout: 30_000 }, async () => {
+  it('tracks nothing without a fingerprint of the worktree, nor on a version without the bound', async () => {
     const { r } = runner();
     const lines = [...bashFails('t1'), ...bashFails('t2'), ...bashFails('t3')];
     const outside = r.start(req({ cwd: mkdtempSync(join(tmpdir(), 'factory-nogit-')), stagnation: repeats }, { FAKE_CLAUDE_SCRIPT: script(...lines), FAKE_CLAUDE_HANG: '1', GIT_CEILING_DIRECTORIES: tmpdir() }));
@@ -260,7 +263,7 @@ describe('ClaudeCodeRunner: caps and stagnation of the build (ORC-136)', () => {
     expect(await older.done).not.toHaveProperty('stagnation');
   });
 
-  it('says once per run that the worktree cannot be read, masked, and the run ends as before', { timeout: 30_000 }, async () => {
+  it('says once per run that the worktree cannot be read, masked, and the run ends as before', async () => {
     const { sandboxes, id } = await sandbox();
     const exec = vi.spyOn(sandboxes, 'exec').mockImplementation(async () => ({ stdout: '', stderr: "fatal: detected dubious ownership, token hunter2-secret-value\nthe content of a file\n", code: 128 }));
     const log = vi.fn();
@@ -330,13 +333,13 @@ describe('ClaudeCodeRunner: caps and stagnation of the build (ORC-136)', () => {
     });
   });
 
-  it('stops an agent that writes nothing any more, and tells it was silent', { timeout: 30_000 }, async () => {
+  it('stops an agent that writes nothing any more, and tells it was silent', async () => {
     const { r } = runner();
     const h = r.start(req({ stagnation: { silentMs: 400 } }, { FAKE_CLAUDE_SCRIPT: script(assistant('m1')), FAKE_CLAUDE_HANG: '1' }));
     expect(await h.done).toMatchObject({ outcome: 'limit', stagnation: { kind: 'silent', silentMs: 400 } });
   });
 
-  it('an agent that keeps writing is not silent', { timeout: 30_000 }, async () => {
+  it('an agent that keeps writing is not silent', async () => {
     const { r, transcriptsDir } = runner();
     const rq = req({ stagnation: { silentMs: 600 } }, { FAKE_CLAUDE_SCRIPT: script(assistant('m1')), FAKE_CLAUDE_HANG: '1' });
     const h = r.start(rq);
@@ -351,7 +354,7 @@ describe('ClaudeCodeRunner: caps and stagnation of the build (ORC-136)', () => {
     expect(await h.done).not.toHaveProperty('stagnation');
   });
 
-  it('a process that dies without a result line (its container killed) is the infrastructure, not the agent', { timeout: 30_000 }, async () => {
+  it('a process that dies without a result line (its container killed) is the infrastructure, not the agent', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'factory-killed-'));
     const killed = join(dir, 'killed.mjs');
     writeFileSync(killed, `console.log(${JSON.stringify(assistant('m1'))});\nsetTimeout(() => process.kill(process.pid, 'SIGKILL'), 50);\nsetInterval(() => {}, 1000);\n`);
@@ -359,7 +362,7 @@ describe('ClaudeCodeRunner: caps and stagnation of the build (ORC-136)', () => {
     expect(await r.start(req()).done).toMatchObject({ outcome: 'failure', infra: true });
   });
 
-  it('a stop, or a cap, without a result line stays what it is', { timeout: 30_000 }, async () => {
+  it('a stop, or a cap, without a result line stays what it is', async () => {
     const { r } = runner();
     const stopped = r.start(req({}, { FAKE_CLAUDE_SCRIPT: script(assistant('m1')), FAKE_CLAUDE_HANG: '1' }));
     stopped.stop();
@@ -384,7 +387,7 @@ describe('ClaudeCodeRunner attached to an attempt of a dead daemon', () => {
     await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow(), { timeout: 5_000 });
   };
 
-  it('follows it from now on: only the new events, the real result, a whole transcript, once', { timeout: 30_000 }, async () => {
+  it('follows it from now on: only the new events, the real result, a whole transcript, once', async () => {
     const { r, transcriptsDir } = runner();
     orphan(transcriptsDir, 'r-alive', gated(transcriptsDir));
     await vi.waitFor(() => expect(readFileSync(join(liveDir(transcriptsDir), 'r-alive', 'stream'), 'utf8').trim().split('\n')).toHaveLength(4), { timeout: 5_000 });
@@ -399,7 +402,7 @@ describe('ClaudeCodeRunner attached to an attempt of a dead daemon', () => {
     expect(existsSync(join(liveDir(transcriptsDir), 'r-alive'))).toBe(false);
   });
 
-  it('takes the result of an attempt that ended while no daemon read it', { timeout: 30_000 }, async () => {
+  it('takes the result of an attempt that ended while no daemon read it', async () => {
     const { r, transcriptsDir } = runner();
     orphan(transcriptsDir, 'r-ended', { FAKE_CLAUDE_SCRIPT: fx('stream-success.jsonl') });
     await writerDead(transcriptsDir, 'r-ended');
@@ -408,14 +411,14 @@ describe('ClaudeCodeRunner attached to an attempt of a dead daemon', () => {
     expect(await h.done).toMatchObject({ outcome: 'success', lastText: 'PR ouverte.' });
   });
 
-  it('a result line wins over a duration spent during the cut: the attempt ended in time, whoever read it late', { timeout: 30_000 }, async () => {
+  it('a result line wins over a duration spent during the cut: the attempt ended in time, whoever read it late', async () => {
     const { r, transcriptsDir } = runner();
     orphan(transcriptsDir, 'r-late', { FAKE_CLAUDE_SCRIPT: fx('stream-success.jsonl') });
     await writerDead(transcriptsDir, 'r-late');
     expect(await r.attach({ ...attach, runId: 'r-late', elapsedMs: 3_600_000 })!.done).toMatchObject({ outcome: 'success' });
   });
 
-  it('a pid another process took since is no writer: nothing to take up, nothing to signal', { timeout: 30_000 }, async () => {
+  it('a pid another process took since is no writer: nothing to take up, nothing to signal', async () => {
     const { r, transcriptsDir } = runner();
     orphan(transcriptsDir, 'r-reused', { FAKE_CLAUDE_SCRIPT: fx('stream-usage-no-result.jsonl') });
     await writerDead(transcriptsDir, 'r-reused');
@@ -424,7 +427,7 @@ describe('ClaudeCodeRunner attached to an attempt of a dead daemon', () => {
     expect(r.attach({ ...attach, runId: 'r-reused' })).toBeUndefined();
   });
 
-  it('has nothing to take up from a writer dead without a result, nor from a run it never saw', { timeout: 30_000 }, async () => {
+  it('has nothing to take up from a writer dead without a result, nor from a run it never saw', async () => {
     const { r, transcriptsDir } = runner();
     orphan(transcriptsDir, 'r-cut', { FAKE_CLAUDE_SCRIPT: fx('stream-usage-no-result.jsonl') });
     await writerDead(transcriptsDir, 'r-cut');
@@ -433,13 +436,13 @@ describe('ClaudeCodeRunner attached to an attempt of a dead daemon', () => {
     expect(r.attach({ ...attach, runId: 'r-never' })).toBeUndefined();
   });
 
-  it('watches the silence of what it takes up (ORC-136)', { timeout: 30_000 }, async () => {
+  it('watches the silence of what it takes up (ORC-136)', async () => {
     const { r, transcriptsDir } = runner();
     orphan(transcriptsDir, 'r-silent', { FAKE_CLAUDE_SCRIPT: fx('stream-usage-no-result.jsonl'), FAKE_CLAUDE_HANG: '1' });
     expect(await r.attach({ ...attach, runId: 'r-silent', stagnation: { silentMs: 300 } })!.done).toMatchObject({ outcome: 'limit', stagnation: { kind: 'silent', silentMs: 300 } });
   });
 
-  it('stops it, and counts the duration already spent', { timeout: 30_000 }, async () => {
+  it('stops it, and counts the duration already spent', async () => {
     const { r, transcriptsDir } = runner();
     const hanging = { FAKE_CLAUDE_SCRIPT: fx('stream-usage-no-result.jsonl'), FAKE_CLAUDE_HANG: '1' };
     orphan(transcriptsDir, 'r-stop', hanging);

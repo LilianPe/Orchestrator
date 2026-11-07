@@ -299,7 +299,7 @@ describe('GitWorkspaces', () => {
     const plain = fixtureRepo();
     const ws2 = new GitWorkspaces({ root: plain.root });
     await expect(ws2.resetClaudeDir((await ws2.prepare(req(plain.repo))).path)).resolves.toBeUndefined();
-  }, 60_000);
+  });
 
   it('keeps .claude/CLAUDE.md on disk for readConventions, across resets and merges (ORC-205)', async () => {
     const { repo, root } = fixtureRepo();
@@ -328,7 +328,7 @@ describe('GitWorkspaces', () => {
     git(w.path, 'merge', '--no-edit', 'origin/side');
     expect(readdirSync(join(w.path, '.claude'))).toEqual(['CLAUDE.md']);
     expect(git(w.path, 'status', '--porcelain')).toBe('');
-  }, 60_000);
+  });
 
   it('rejects unsafe identifiers', async () => {
     const { repo, root } = fixtureRepo();

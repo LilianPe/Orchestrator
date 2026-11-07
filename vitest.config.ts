@@ -22,7 +22,12 @@ export default defineConfig({
           include: ['src/**/*.test.ts', 'test/**/*.test.ts', 'web/src/**/*.test.ts'],
           exclude: ['test/integration/**', 'test/isolation/**', 'test/chaos/**'],
           environment: 'node',
-          testTimeout: 15000,
+          // Many of these tests spawn real processes (git, bash, node): their time is the machine's load, not their
+          // own (ORC-325). Two `npm test` at once on an 8-CPU machine: 85 to 89 tests past 15 s, the slowest at 59 s
+          // (git-workspaces, host-git, verify, publish, worker's SIGKILL scenarios). 120 s is twice that. It bounds a
+          // hang only: a passing test takes no longer for it. One bound for the project rather than a list of files
+          // that spawn, which would rot; a test needing more says so itself.
+          testTimeout: 120_000,
         },
       },
       {
