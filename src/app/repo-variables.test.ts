@@ -105,6 +105,22 @@ describe('makeRepoConfig (ORC-209 C)', () => {
     expect(err.message).not.toContain('/repo');
   });
 
+  it('names a file it could not read as such: the branch was read, set-head would fix nothing', async () => {
+    const exec: Exec = async (_, args) => {
+      if (args.includes('symbolic-ref') || args.includes('cat-file')) return { stdout: '', stderr: 'fatal', code: 128 };
+      if (args.at(-1) === '.factory') return { stdout: '040000 tree def456\t.factory\0', stderr: '', code: 0 };
+      if (args.includes('ls-tree')) return { stdout: '100644 blob abc123\t.factory/config.yml\0', stderr: '', code: 0 };
+      return { stdout: '', stderr: '', code: 0 };
+    };
+    const err = (await makeRepoConfig({ exec, log: () => {} })(PROJECT).catch((e: Error) => e)) as Error;
+    expect(err.message).toBe('.factory/config.yml illisible sur origin/main (objet git manquant ou abîmé)');
+  });
+
+  it('names a submodule at .factory as such', async () => {
+    const err = (await makeRepoConfig({ exec: git({ head: 'origin/main', config: CONFIG, dir: '160000 commit' }).exec })(PROJECT).catch((e: Error) => e)) as Error;
+    expect(err.message).toMatch(/\.factory n'est pas un dossier sur origin\/main \(lien symbolique, fichier ou sous-module\)/);
+  });
+
   it('names neither the path nor the command when the fetch fails', async () => {
     const exec: Exec = async (_, args) => (args.includes('fetch') ? { stdout: '', stderr: "fatal: '/srv/factory/repo' does not appear to be a git repository", code: 128 } : { stdout: 'origin/main\n', stderr: '', code: 0 });
     const err = (await makeRepoConfig({ exec, log: () => {} })(PROJECT).catch((e: Error) => e)) as Error;

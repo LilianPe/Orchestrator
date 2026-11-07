@@ -45,12 +45,12 @@ export function makeRepoConfig(o: { exec?: Exec; fetchDeadlineMs?: number; log?:
     // `ls-tree` does not go through a `.factory` that is a link: the file under it would read as absent.
     const dir = await entryOf(REPO_CONFIG_DIR);
     if (!dir) return parseRepoConfig(undefined);
-    if (!dir.startsWith('040000 tree ')) throw new RepoConfigError([`${REPO_CONFIG_DIR} n'est pas un dossier sur ${name} (lien symbolique ou fichier)`]);
+    if (!dir.startsWith('040000 tree ')) throw new RepoConfigError([`${REPO_CONFIG_DIR} n'est pas un dossier sur ${name} (lien symbolique, fichier ou sous-module)`]);
     const entry = await entryOf(REPO_CONFIG_PATH);
     if (!entry) return parseRepoConfig(undefined);
     const blob = /^100(?:644|755) blob ([0-9a-f]+)\t/.exec(entry)?.[1];
-    if (!blob) throw new RepoConfigError([`${REPO_CONFIG_PATH} n'est pas un fichier sur ${name} (lien symbolique ou dossier)`]);
-    return parseRepoConfig(await git(['cat-file', 'blob', blob], () => unreadable));
+    if (!blob) throw new RepoConfigError([`${REPO_CONFIG_PATH} n'est pas un fichier sur ${name} (lien symbolique, dossier ou sous-module)`]);
+    return parseRepoConfig(await git(['cat-file', 'blob', blob], () => `${REPO_CONFIG_PATH} illisible sur ${name} (objet git manquant ou abîmé)`));
   };
 }
 
