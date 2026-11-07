@@ -7,7 +7,7 @@ type Harness = ReturnType<typeof createHarness>;
 
 function flowOf(h: Harness) {
   const app = createApp({
-    store: h.store, bus: new EventBus(), clock: h.clock, submit: () => undefined, isPaused: () => false, blockTicket: async () => undefined,
+    store: h.store, bus: new EventBus(), clock: h.clock, submit: () => undefined, isPaused: () => false, 
     linearWebhook: () => ({ status: 200 }), githubWebhook: async () => ({ status: 200 }), linearConnected: () => true, tracker: h.tracker,
     capacity: () => ({ dev: { used: 0, total: 1 }, questions: { used: 0, total: 1 } }), transcriptsDir: '.',
   });
@@ -39,7 +39,7 @@ describe('the Flux on the engine (ORC-297)', () => {
     await h.advance(5_000);
     f = await flow();
     expect(f.needsYou.blocked).toEqual([]);
-    expect(f.working).toEqual([expect.objectContaining({ ticketId: 'REL-1', step: 'dev-feedback', stoppable: true, verifying: false, durationMs: 5_000, tokens: TOKENS, attemptsWithoutTokens: 0 })]);
+    expect(f.working).toEqual([expect.objectContaining({ ticketId: 'REL-1', step: 'dev', stoppable: true, verifying: false, durationMs: 5_000, tokens: TOKENS, attemptsWithoutTokens: 0 })]);
 
     // Stop: back in Needs you, for the human's stop.
     await h.send('control.stop', {});

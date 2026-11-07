@@ -55,7 +55,7 @@ describe('the build step (ORC-136)', () => {
     expect(t.blocked).toBe(true);
     expect(blockCause(t.blockReason)).toBe('loop');
     expect((await h.tracker.getIssue('REL-1')).labels).toContain('Bloqué');
-    expect(h.tracker.activities('ls-1').at(-1)).toMatchObject({ type: 'elicitation', body: expect.stringContaining('npm test') });
+    expect(h.tracker.comments('REL-1').at(-1)).toContain('npm test');
   });
 
   it('the block is decided from the journal: the fact is in the journaled event', async () => {
@@ -115,7 +115,7 @@ describe('the build step (ORC-136)', () => {
     const t = await h.ticket();
     expect(t).toMatchObject({ logical: 'dev', blocked: true });
     expect(blockCause(t.blockReason)).toBe('failed');
-    expect(h.tracker.activities('ls-1').at(-1)).toMatchObject({ type: 'elicitation' });
+    expect(h.tracker.comments('REL-1').at(-1)).toContain('🔴 Bloqué');
     expect(h.tracker.activities('ls-1').filter((a) => a.type === 'response')).toEqual([]);
   });
 

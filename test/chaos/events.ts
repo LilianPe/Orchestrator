@@ -40,7 +40,7 @@ export function rng(seed: number): () => number {
 
 /**
  * `count` events from Linear over `tickets` tickets, drawn from `random`: each ticket is delegated
- * first, then gets replies, questions, label changes (a stop, a restart), moves to AI review, and
+ * first, then gets replies, questions, stops by a label, replies by a comment (a relaunch once blocked, since ORC-196), moves to AI review, and
  * now and then its delegation again (a webhook resent by Linear under a new delivery id). One event in
  * seven is signed by someone outside the team: its refusal is an effect like any other (ORC-186).
  */
@@ -65,7 +65,7 @@ export function chaosEvents(random: () => number, count: number, tickets: number
     } else if (r < 0.75) {
       event = { ...base, type: 'label.changed', payload: { label: 'agent:stop', change: 'added' } };
     } else if (r < 0.85) {
-      event = { ...base, type: 'label.changed', payload: { label: 'agent:reprendre', change: 'added' } };
+      event = { ...base, type: 'ticket.commented', payload: { body: `reprends ${n}`, author: 'L', kind: 'instruction' } };
     } else {
       event = { ...base, type: 'status.changed', payload: { from: 'human_review', to: 'ai_review' } };
     }

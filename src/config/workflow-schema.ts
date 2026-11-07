@@ -143,6 +143,8 @@ export interface JobSpec {
   name: string;
   queue: QueueName;
   model: string;
+  /** The preset step the job runs (`step`, ORC-136), named by its block's comment (ORC-196). Absent from the jobs out of the preset and from versions frozen before it. */
+  step?: string;
   /** `claude --effort`, of the preset step the job names (`step`, ORC-136). Absent from the jobs out of the preset and from versions frozen before it: the CLI's default. */
   effort?: Effort;
   workspace: 'worktree' | 'trunk-readonly' | 'knowledge';
@@ -178,6 +180,11 @@ export interface JobSpec {
 
 export interface Workflow {
   version: 1;
+  /**
+   * A block is told by the standard comment, a reply resumes its step, and a comment on the ticket is a reply (ORC-196).
+   * Absent from versions frozen before it, whose tickets keep the free text of their session: a replay decides as they did.
+   */
+  blockComment?: true;
   tracker: { kind: 'linear'; team?: string; pickup: { checks: PickupCheck[] } };
   /** `ready` (« Ready to Merge ») is gone from the pack (ORC-170): optional, for the versions frozen with it. */
   states: Record<Exclude<LogicalState, 'ready'>, string> & { ready?: string };

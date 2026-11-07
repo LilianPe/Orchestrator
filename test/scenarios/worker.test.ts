@@ -236,6 +236,8 @@ on:
 
     /** The ticket's effect died with `younger` set aside: blocked for it, nothing left behind. */
     async function effectDiedThenBlocked({ h }: ReturnType<typeof failing>) {
+      // Each block's comment (ORC-196) dies with Linear, at its own backoff, with the rows parked behind it: a poll each.
+      for (let polls = 0; polls < 3; polls++) await h.advance(60_000);
       expect(await h.store.pendingInbox(10)).toEqual([]);
       // The block of the dead effect, not the dead letter's: repairing `younger` does not make the effect look alive.
       expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Erreur : Linear down' });
@@ -390,6 +392,8 @@ on:
       /** The older row is decided with no restart, then the result of the effect that died after `younger` came (ORC-320). */
       async function olderDecided(scenario: ReturnType<typeof failing>) {
         const { h, state } = scenario;
+        // The block's comment (ORC-196) goes down with Linear too: the older row waits for its backoff as well, a poll more.
+        await h.advance(60_000);
         await h.advance(60_000);
         expect(state.decided.filter((d) => /^(effect:REL-1:1:[12]|younger):committed$/.test(d))).toEqual(['effect:REL-1:1:1:committed', 'effect:REL-1:1:2:committed']);
         await effectDiedThenBlocked(scenario);
@@ -461,7 +465,13 @@ on:
         await h.orch.drained();
 
         expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: expect.stringMatching(/^Événement younger mis de côté \(status\.changed\)/) });
-        expect(h.tracker.activities('ls-1')).toContainEqual({ type: 'error', body: expect.stringContaining('factory run repair REL-1') });
+        // Told by the standard comment (ORC-196), with its attempts: not one decision, and no decision that failed for an outage.
+        const told = h.tracker.comments('REL-1').at(-1)!;
+        expect(told).toContain(`(tentative ${ATTEMPTS}/${ATTEMPTS})`);
+        expect(told).toContain(`Raison : Événement younger mis de côté (status.changed) : ${ATTEMPTS} essais sans aboutir (database hiccup).`);
+        expect(told).toContain(`- ${ATTEMPTS} essais de traiter cet événement.`);
+        expect(told).toContain('factory run repair REL-1');
+        expect(told).not.toContain('décision');
         expect(await h.store.deadLetters('REL-1')).toMatchObject([{ eventId: 'younger', status: 'open', failures: 1, error: 'database hiccup' }]);
         expect(await h.store.pendingInbox(10)).toEqual([]);
       });
@@ -488,7 +498,8 @@ on:
         await last.opened;
         await h.orch.drained();
 
-        // The comment's last attempt dies at the next poll, with no restart.
+        // The comment's last attempt dies at the next poll, with no restart. The block's comment (ORC-196) goes down with Linear too: the older row waits for its backoff as well, a poll more.
+        await h.advance(60_000);
         await h.advance(60_000);
 
         expect(state.decided).toContain('effect:REL-1:1:2:committed');
@@ -513,6 +524,8 @@ on:
         answer.open();
         await h.orch.drained();
         await h.advance(0);
+        // The block's comment (ORC-196) goes down with Linear too: the older row waits for its backoff as well, a poll more.
+        await h.advance(60_000);
 
         expect(state.decided).toContain('effect:REL-1:1:2:committed');
         await effectDiedThenBlocked(scenario);
@@ -972,7 +985,9 @@ describe('outbox executors: lease, backoff, results through the inbox', () => {
     expect(h.runner.requests).toHaveLength(0);
     expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Erreur : Linear down' });
     expect((await journal(h)).find((e) => e.id === 'effect:REL-1:1:2')).toMatchObject({ type: 'effect.failed', payload: { error: 'Linear down', attempts: 2 } });
-    expect(h.tracker.activities().filter((a) => a.type === 'error').map((a) => ('body' in a ? a.body : ''))).toEqual(['Erreur : Linear down']);
+    expect(h.tracker.activities().filter((a) => a.type === 'error')).toEqual([]);
+    // Comments are what is down here: its own comment died too, and nothing loops on it.
+    expect(h.tracker.comments('REL-1')).toEqual([]);
   });
 
   it('decides the effect.failed of an effect it let die at once, even when the result ahead of it was parked as the backoff ended (ORC-290)', async () => {
@@ -1276,6 +1291,19 @@ describe('a start that must not run (ORC-150 review)', () => {
     expect(h.runner.requests).toHaveLength(0);
   });
 
+  it('a launch that fails on a version frozen before ORC-196 blocks with no step to resume, as the engine does there', async () => {
+    const h = createHarness();
+    const { blockComment: _b, ...frozen } = h.project.workflow;
+    h.project.workflow = frozen;
+    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+    h.workspaces.prepare = async () => {
+      throw new Error('disk full');
+    };
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Erreur au lancement : disk full' });
+    expect((await h.ticket()).blockedJob).toBeUndefined();
+  });
+
   it('drops a queued dev start of a ticket blocked meanwhile, without a run', async () => {
     const h = createHarness({ projectYaml: 'version: 1\nlimits:\n  parallel_sessions: 1\n' });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
@@ -1284,7 +1312,7 @@ describe('a start that must not run (ORC-150 review)', () => {
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
     await h.send('ticket.delegated', { linearSessionId: 'ls-2' }, 'REL-2');
     expect((await h.store.listQueue()).map((q) => q.ticketId)).toEqual(['REL-2']);
-    await h.orch.blockTicket('p', 'REL-2', 'Question posée par l\'agent');
+    await h.send('agent.asked', { question: 'Laquelle ?', job: 'dev' }, 'REL-2');
     h.runner.release(h.runner.requests[0]!.runId);
     await h.orch.drained();
     expect(h.runner.requests).toHaveLength(1);

@@ -18,7 +18,7 @@ describe('harness: new port fakes and the test preset', () => {
     expect(h.checks.calls[0]!.commands).toEqual(preset.steps.find((s) => s.kind === 'check')!.commands);
     expect(h.runner.requests).toHaveLength(preset.bounds.verifyAttempts);
     expect(await h.ticket()).toMatchObject({ blocked: true, verifyAttempts: preset.bounds.verifyAttempts - 1 });
-    expect(h.tracker.activities('ls-1').at(-1)!.type).toBe('elicitation');
+    expect(h.tracker.comments('REL-1').at(-1)).toContain('🔴 Bloqué');
   });
 
   it('test preset: a check that passes within the bound resets the counter', async () => {
@@ -53,7 +53,7 @@ describe('harness: new port fakes and the test preset', () => {
     await h.advance(1);
     expect(await h.store.getRun(runId)).toMatchObject({ status: 'limit' });
     expect(await h.ticket()).toMatchObject({ blocked: true });
-    expect(h.tracker.activities('ls-1').at(-1)).toMatchObject({ type: 'elicitation', body: expect.stringContaining('plafond') });
+    expect(h.tracker.comments('REL-1').at(-1)).toContain('plafond');
   });
 
   it('refuses a projectYaml combined with a preset, even an empty one', () => {

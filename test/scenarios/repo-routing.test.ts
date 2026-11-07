@@ -169,8 +169,8 @@ describe('routed from the webhook, on either store', () => {
     const t = await h.store.getTicket('p', 'REL-1');
     expect(t).toMatchObject({ blocked: true, delegated: true, awaitingRepo: ['p', 'api'] });
     expect(blockCause(t!.blockReason)).toBe('pickup');
-    expect(h.tracker.activities('as-1')).toEqual([{ type: 'elicitation', body: unroutedReason(['p', 'api']) }]);
-    expect(h.tracker.comments('REL-1')).toEqual([]);
+    expect(h.tracker.activities('as-1')).toEqual([{ type: 'thought', body: 'Bien reçu.' }]);
+    expect(h.tracker.comments('REL-1')).toEqual(['Bien reçu.', expect.stringContaining(unroutedReason(['p', 'api']))]);
     expect(h.tracker.plans('as-1')).toEqual([]);
     expect(h.tracker.issues.get('REL-1')!.labels).toContain(BLOCKED_LABEL);
     expect(h.runner.requests).toEqual([]);
@@ -186,9 +186,9 @@ describe('routed from the webhook, on either store', () => {
 
     expect(await h.store.getTicket(project, 'REL-1')).toMatchObject({ blocked: false, delegated: true, linearSessionId: 'as-2', activeRunId: expect.any(String) });
     expect(h.runner.requests).toHaveLength(1);
-    expect(h.tracker.comments('REL-1')).toEqual(['Bien reçu.']);
+    expect(h.tracker.comments('REL-1')).toEqual(['Bien reçu.', expect.stringContaining(unroutedReason(['p', 'api'])), 'Bien reçu.']);
     expect(h.tracker.activities('as-2')[0]).toEqual({ type: 'thought', body: 'Bien reçu.' });
-    expect(h.tracker.activities('as-1')).toEqual([{ type: 'elicitation', body: unroutedReason(['p', 'api']) }]);
+    expect(h.tracker.activities('as-1')).toEqual([{ type: 'thought', body: 'Bien reçu.' }]);
     expect(h.tracker.plans('as-2')[0]![0]).toEqual(expect.objectContaining({ content: 'Comprendre' }));
     expect(h.tracker.plans('as-1')).toEqual([]);
     expect(await planKeys(h, ['p', 'api'], 'REL-1')).toEqual([project]);
@@ -198,7 +198,7 @@ describe('routed from the webhook, on either store', () => {
     await reconcileOnce({ tracker: h.tracker, store: h.store, projects: ['p', 'api'].map((id) => ({ ...h.project, id })), submit: (e) => h.orch.accept(e), clock: h.clock, log: () => {} });
     await h.orch.drained();
     expect(h.runner.requests).toHaveLength(1);
-    expect(h.tracker.comments('REL-1')).toEqual(['Bien reçu.']);
+    expect(h.tracker.comments('REL-1').filter((c) => c === 'Bien reçu.')).toHaveLength(2);
     expect(h.tracker.issues.get('REL-1')!.labels).not.toContain(BLOCKED_LABEL);
     expect(await h.store.getTicket(project, 'REL-1')).toMatchObject({ blocked: false, delegated: true });
   });
@@ -224,13 +224,14 @@ describe('routed from the webhook, on either store', () => {
     const t = await h.store.getTicket('p', 'ZZZ-1');
     expect(t).toMatchObject({ blocked: true, delegated: true, awaitingRepo: [] });
     expect(blockCause(t!.blockReason)).toBe('pickup');
-    expect(h.tracker.activities('as-1')).toEqual([{ type: 'elicitation', body: expect.stringContaining('ZZZ') }]);
-    expect(h.tracker.comments('ZZZ-1')).toEqual([]);
+    expect(h.tracker.activities('as-1')).toEqual([{ type: 'thought', body: 'Bien reçu.' }]);
+    expect(h.tracker.comments('ZZZ-1')).toEqual(['Bien reçu.', expect.stringContaining('ZZZ')]);
     expect(h.runner.requests).toEqual([]);
     // Delegated again, still none: asked again, and the wait does not end by itself.
     await delegate('ZZZ-1', 'as-2');
     expect(await h.store.getTicket('p', 'ZZZ-1')).toMatchObject({ blocked: true, awaitingRepo: [] });
-    expect(h.tracker.activities('as-2')).toEqual([{ type: 'elicitation', body: expect.stringContaining('ZZZ') }]);
+    expect(h.tracker.activities('as-2')).toEqual([{ type: 'thought', body: 'Bien reçu.' }]);
+    expect(h.tracker.comments('ZZZ-1').at(-1)).toContain('🔴 Bloqué');
     expect(h.runner.requests).toEqual([]);
   });
 
@@ -251,7 +252,7 @@ describe('routed from the webhook, on either store', () => {
     expect(await h.store.getTicket('zzz', 'ZZZ-1')).toMatchObject({ blocked: false, delegated: true, linearSessionId: 'as-2', activeRunId: expect.any(String) });
     expect(await h.store.deadLetters('ZZZ-1')).toEqual([]);
     expect(h.runner.requests).toHaveLength(1);
-    expect(h.tracker.comments('ZZZ-1')).toEqual(['Bien reçu.']);
+    expect(h.tracker.comments('ZZZ-1')).toEqual(['Bien reçu.', expect.stringContaining('ZZZ'), 'Bien reçu.']);
     expect(h.tracker.plans('as-2')[0]![0]).toEqual(expect.objectContaining({ content: 'Comprendre' }));
     expect(await planKeys(h, ['p', 'zzz'], 'ZZZ-1')).toEqual(['zzz']);
     expect(h.tracker.issues.get('ZZZ-1')!.labels).not.toContain(BLOCKED_LABEL);

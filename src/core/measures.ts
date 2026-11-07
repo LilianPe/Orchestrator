@@ -1,5 +1,6 @@
 import type { RedCause } from '../checks/red.js';
 import type { MeasureFacts, Store } from '../store/types.js';
+import { allowed, DEFAULT_MATRIX } from './authz.js';
 import { isQuestionSession } from './engine.js';
 import { reduce } from './reduce.js';
 import { addTokens, newTicketState, NO_TOKENS, type FactoryEvent, type LogicalState, type MessageKind, type TicketState, type TokenUsage } from './types.js';
@@ -11,7 +12,7 @@ export type MeasuredKind = 'delegation' | MessageKind;
 /** A human message and how fast the factory reacted to it. */
 export interface MessageMeasure {
   eventId: string;
-  type: 'ticket.delegated' | 'session.mentioned' | 'session.prompted' | 'command';
+  type: 'ticket.delegated' | 'session.mentioned' | 'session.prompted' | 'ticket.commented' | 'command';
   kind: MeasuredKind;
   linearSessionId: string | undefined;
   /** When the factory received it (`at` of the event). */
@@ -169,6 +170,11 @@ function outputs(facts: MeasureFacts, events: FactoryEvent[], devSession: string
     const at = doneAt.get(row.id);
     if (row.status !== 'done' || at === undefined) continue;
     const c = row.effect;
+    // A block's comment is written on the ticket, and answers in the dev session as its elicitation did (ORC-196).
+    if (c.kind === 'block_comment') {
+      out.push({ session: devSession, at, answer: true });
+      continue;
+    }
     if (c.kind !== 'activity' && c.kind !== 'post_output') continue;
     const run = c.runId ? runs.get(c.runId) : undefined;
     const session = (c.kind === 'activity' ? c.linearSessionId : undefined) ?? run?.linearSessionId ?? devSession;
@@ -177,8 +183,9 @@ function outputs(facts: MeasureFacts, events: FactoryEvent[], devSession: string
   return out.sort((a, b) => a.at - b.at);
 }
 
-function messageMeasure(m: Message, kind: MeasuredKind, outs: Output[], ack: number | undefined): MessageMeasure {
-  const session = m.payload.linearSessionId;
+function messageMeasure(m: Message, kind: MeasuredKind, outs: Output[], ack: number | undefined, devSession: string | undefined): MessageMeasure {
+  // A comment has no session of its own: its sign of life is in the dev session, as a block's comment answers there.
+  const session = m.type === 'ticket.commented' ? devSession : m.payload.linearSessionId;
   const after = outs.filter((o) => o.session === session && o.at >= m.at);
   const signs = [ack, after[0]?.at].filter((t): t is number => t !== undefined);
   const answered =
@@ -206,8 +213,16 @@ function redVerdicts(events: FactoryEvent[]): TicketMeasures['red'] {
 /** States a human sends a ticket back to dev from: its work had been handed over. */
 const HANDED_OVER = new Set<LogicalState>(['human_review', 'ai_review', 'ready', 'done']);
 
+/**
+ * A comment `decide` read (ORC-196), told from what it left: one it ignored left no effect, one it refused only its
+ * refusal, under the matrix `decide` checks.
+ */
+function readComment(e: FactoryEvent<'ticket.commented'>, ticket: TicketState, answered: ReadonlySet<string>): boolean {
+  return answered.has(e.id) && (e.roles === undefined || allowed({ action: 'relaunch_blocked', channel: 'linear' }, e.actor, ticket, DEFAULT_MATRIX, e.roles).ok);
+}
+
 /** The rework an event of the journal is, if any; `ticket` is the ticket once the event applied. */
-function rework(e: FactoryEvent, ticket: TicketState): Rework | undefined {
+function rework(e: FactoryEvent, ticket: TicketState, relaunched: ReadonlySet<string>): Rework | undefined {
   switch (e.type) {
     case 'verify.failed':
       return e.payload.red ? undefined : { cause: e.type, id: e.id };
@@ -216,6 +231,9 @@ function rework(e: FactoryEvent, ticket: TicketState): Rework | undefined {
       return { cause: e.type, id: e.id };
     case 'session.prompted':
       return isQuestionSession(ticket, e.payload.linearSessionId) ? undefined : { cause: 'feedback', id: e.id };
+    // A comment is a reply only if it relaunched the ticket: the fold of the journal does not see its blocks (ORC-196).
+    case 'ticket.commented':
+      return relaunched.has(e.id) ? { cause: 'feedback', id: e.id } : undefined;
     case 'pr.reviewed':
       return e.payload.kind === 'review' && e.payload.state?.toLowerCase() === 'changes_requested' ? { cause: 'changes_requested', id: e.id } : undefined;
     case 'status.changed':
@@ -239,6 +257,8 @@ export function ticketMeasures(projectId: string, ticketId: string, facts: Measu
   let mergedAt: number | null = null;
   let firstMerge: FactoryEvent<'pr.merged'> | undefined;
   const reworks: Rework[] = [];
+  const relaunched = new Set(facts.effects.filter((r) => r.effect.kind === 'start_run').map((r) => r.eventId));
+  const answered = new Set(facts.effects.map((r) => r.eventId));
   const messages: { m: Message; kind: MeasuredKind }[] = [];
   for (const e of events) {
     ticket = reduce(ticket, e) ?? ticket;
@@ -247,10 +267,12 @@ export function ticketMeasures(projectId: string, ticketId: string, facts: Measu
         mergedAt = e.at;
         firstMerge = e;
       }
-      const r = rework(e, ticket);
+      const r = rework(e, ticket, relaunched);
       if (r) reworks.push(r);
     }
-    if (e.type === 'session.prompted') messages.push({ m: e, kind: e.payload.kind ?? (isQuestionSession(ticket, e.payload.linearSessionId) ? 'question' : 'instruction') });
+    if (e.type === 'ticket.commented') {
+      if (readComment(e, ticket, answered)) messages.push({ m: e, kind: e.payload.kind });
+    } else if (e.type === 'session.prompted') messages.push({ m: e, kind: e.payload.kind ?? (isQuestionSession(ticket, e.payload.linearSessionId) ? 'question' : 'instruction') });
     else if (e.type in KIND) messages.push({ m: e as Message, kind: (e as Message & { payload: { kind?: MessageKind } }).payload.kind ?? KIND[e.type as keyof typeof KIND] });
   }
   const outs = outputs(facts, events, ticket.linearSessionId);
@@ -269,7 +291,7 @@ export function ticketMeasures(projectId: string, ticketId: string, facts: Measu
     revertedWithin14Days: revertedWithin14Days(events, mergedAt),
     revertWindowEndsAt: firstMerge ? mergeTime(firstMerge) + REVERT_WINDOW_MS : null,
     ciCost: ciCost(events),
-    messages: messages.map(({ m, kind }) => messageMeasure(m, kind, outs, facts.acks[m.id])),
+    messages: messages.map(({ m, kind }) => messageMeasure(m, kind, outs, facts.acks[m.id], ticket.linearSessionId)),
     red: redVerdicts(events),
   };
 }

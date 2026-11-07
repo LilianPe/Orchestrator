@@ -2,7 +2,7 @@ import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { REFREEZE } from '../../../checks/freeze.js';
 import { classifyMessage } from '../../../core/human-message.js';
 import { maskTranscriptLine } from '../../runner/transcript.js';
-import { IssueNotFoundError, labelEchoKey, stateEchoKey } from '../types.js';
+import { isEffectComment, IssueNotFoundError, labelEchoKey, stateEchoKey } from '../types.js';
 import { labelChanges, type KnownLabels } from './labels.js';
 import { holds, isNoRepo, namesOtherRepo, resolveRoute, type Route } from '../../../core/routing.js';
 import { SCHEMA_VERSION, type LogicalState, type FactoryEvent, type Taint, type TicketState } from '../../../core/types.js';
@@ -65,6 +65,9 @@ export interface SignedActor {
 
 const idOf = (v: unknown): string | undefined => (typeof v === 'string' && v !== '' ? v : undefined);
 
+/** Came through a bot or from outside the workspace: Slack, email, customer requests. */
+const isExternal = (o: any): boolean => !!(o?.botActor || o?.externalUser || o?.externalUserId);
+
 /** Who wrote what a session webhook carries: the reply, the comment that opened the session, or its creator. */
 function sessionAuthor(body: any): { id?: string; name?: string; external: boolean } {
   const s = body.agentSession ?? {};
@@ -75,7 +78,7 @@ function sessionAuthor(body: any): { id?: string; name?: string; external: boole
         ? [s.comment, idOf(s.comment.user?.id) ?? idOf(s.comment.userId)]
         : [s, idOf(s.creator?.id) ?? idOf(s.creatorId)];
   const name = obj?.user?.name ?? obj?.creator?.name;
-  return { id, name, external: !!(obj?.botActor || obj?.externalUser || obj?.externalUserId) };
+  return { id, name, external: isExternal(obj) };
 }
 
 /**
@@ -94,7 +97,9 @@ export function signedActor(body: any): SignedActor {
     id = a.external ? undefined : a.id;
     name = a.name;
   } else {
-    id = body?.actor?.type === 'user' ? idOf(body.actor.id) : undefined;
+    // A comment synced from Slack or email names a workspace user no more than a session's does.
+    const external = body?.type === 'Comment' && isExternal(body.data);
+    id = body?.actor?.type === 'user' && !external ? idOf(body.actor.id) : undefined;
     name = body?.actor?.name;
   }
   return id ? { id, taint: 'trusted', name: name ?? 'Humain' } : { taint: 'untrusted', name: name ?? 'Humain' };
@@ -147,6 +152,28 @@ function sessionEvents(body: any, author: string, projectId: string, ctx: MapCon
     return [{ type: 'session.prompted', payload: { ...said, body: kind === 'command' ? bare : said.body, linearSessionId: sessionId, author, ack: true, kind } }];
   }
   return [];
+}
+
+/**
+ * The reply to a block's comment, written on the ticket (ORC-196): a member's comment while the factory waits for one.
+ * Any other comment stays between humans, and is not journaled. A comment posted once the block's comment is visible
+ * finds the block committed: the read cannot miss it. Dropped: what no user signed (the factory's own comments, an
+ * integration, Slack), what starts with a mention (`@relais` opens its own session, `@someone` talks to them), and
+ * `/refreeze`, which is no instruction for the agent. A thread under any comment counts as well as the ticket's. A reply
+ * is masked and classified as a session's is (ORC-180). A comment outside a block does not enter the human inbox: it is
+ * not addressed to the factory, and an agent would read it; a session is how one speaks to the agent at work.
+ */
+async function commentEvents(body: any, identifier: string, projectId: string, actor: string | undefined, author: string, ctx: MapContext): Promise<PartialEvent[]> {
+  const text: unknown = body.data?.body;
+  if (body.action !== 'create' || !actor || typeof text !== 'string' || !text.trim() || isEffectComment(text)) return [];
+  // A reply in an agent session comes as its `prompted` webhook: its comment is the same message (`deliveryKey` too).
+  if (body.data.agentSessionId || body.data.agentSession) return [];
+  const bare = stripMention(text);
+  if (bare !== text.trim() || parseCommand(bare).name === REFREEZE) return [];
+  const ticket = await ctx.ticket(projectId, identifier);
+  if (!ticket?.blocked || !ticket.delegated) return [];
+  const said = message(text);
+  return [{ type: 'ticket.commented', payload: { ...said, author, kind: classifyMessage(said.body) } }];
 }
 
 async function issueEvents(body: any, identifier: string, teamKey: string, projectId: string, ctx: MapContext): Promise<PartialEvent[]> {
@@ -222,6 +249,7 @@ async function routeInTeam(body: any, identifier: string, team: string[], ctx: M
 function issueIdentifier(body: any): string | undefined {
   if (body?.type === 'AgentSessionEvent') return body.agentSession?.issue?.identifier;
   if (body?.type === 'Issue') return body.data?.identifier ?? (body.data?.team?.key ? `${body.data.team.key}-${body.data.number}` : undefined);
+  if (body?.type === 'Comment') return body.data?.issue?.identifier;
   return undefined;
 }
 
@@ -258,7 +286,11 @@ export async function recordIssueLabels(body: any, ctx: MapContext): Promise<voi
 
 // Linear-Delivery is outside the HMAC: the dedup key must come from the signed body.
 export function deliveryKey(body: any): string {
+  // A session reply and the comment Linear may write for it are one message: one key, the inbox keeps the first (ORC-196).
+  // ponytail: the field names (`sourceCommentId`, the comment's `agentSessionId`) are Linear's API's, not seen in a captured webhook yet.
+  if (body?.type === 'Comment' && body.data?.id) return `comment:${body.data.id}`;
   if (body?.type === 'AgentSessionEvent') {
+    if (body.action === 'prompted' && body.agentActivity?.sourceCommentId) return `comment:${body.agentActivity.sourceCommentId}`;
     if (body.action === 'prompted' && body.agentActivity?.id) return `activity:${body.agentActivity.id}`;
     if (body.action === 'created' && body.agentSession?.id) return `session:${body.agentSession.id}`;
   }
@@ -276,8 +308,9 @@ export async function mapLinearWebhook(body: any, key: string, ctx: MapContext):
   const { projectId, repos, waitedIn, noRepo } = route;
   const { id: actor, taint, name } = signedActor(body);
   let partials: PartialEvent[];
-  if (noRepo) partials = [{ type: 'ticket.delegated', payload: { ...delegationPayload(body), noRepo } }];
+  if (noRepo) partials = [{ type: 'ticket.delegated', payload: { ...delegationPayload(body), ack: true, noRepo } }];
   else if (body.type === 'AgentSessionEvent') partials = sessionEvents(body, name, projectId, ctx);
+  else if (body.type === 'Comment') partials = await commentEvents(body, identifier, projectId, actor, name, ctx);
   else partials = await issueEvents(body, identifier, teamKey, projectId, ctx);
   // The choice to make goes with the event: `decide` blocks the delegation, answers the rest.
   const routing = { ...(repos ? { repos } : {}), ...(waitedIn ? { waitedIn } : {}) };

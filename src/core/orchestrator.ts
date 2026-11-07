@@ -46,7 +46,8 @@ import type { Clock } from './clock.js';
 import type { Effect } from './decision.js';
 import { repairedEvent } from './dead-letter.js';
 import { NO_PLAN, planDecision } from './decision-plan.js';
-import { blockedLabelChange, goesThroughFreeze, HUMAN_EVENTS, mayCheck, mayPublish, RECONCILE_MS, reconcileTicket, refusesDevWork, sensitivePathsAtLaunch, taintedKnowledge } from './engine.js';
+import { blockFacts, composeBlockComment, type BlockFacts, type BlockStatus } from './block-comment.js';
+import { blockedLabelChange, goesThroughFreeze, HUMAN_EVENTS, mayCheck, mayPublish, RECONCILE_MS, reconcileTicket, refusesDevWork, sensitivePathsAtLaunch, stepOf, taintedKnowledge } from './engine.js';
 import { attemptLabels, packFingerprints } from './attempt-labels.js';
 import { pickupFailures } from './pickup.js';
 import { buildPrompt, formatFeedback, formatVerifyFailures, readConventions, withHumanInbox } from './prompt.js';
@@ -69,6 +70,7 @@ import {
   type TicketState,
   type VerifyFailure,
   TRUSTED,
+  spentTokens,
 } from './types.js';
 import { runSealedSetup } from './sealed-setup.js';
 import { runCleanVerify, type CleanVerifier } from './clean-verify.js';
@@ -315,6 +317,9 @@ function sessionSaved(configDir: string, sessionId: string): boolean {
 /** Why the factory's merge is refused when the PR's head moved since the review (ORC-148). */
 const PUSHED = 'la branche a reçu un push depuis la review';
 const HOST_CHECKS_OFF = "aucun sandbox (FACTORY_CONTAINER_CLI) et FACTORY_ALLOW_HOST_VERIFY n'est pas à 1 : je ne lance pas le code de l'agent sur l'hôte.";
+
+/** A block made out of a decision, its step to resume as the engine's `block` journals it: only where a reply resumes it (ORC-196). */
+const blockedOn = (workflow: Workflow, reason: string, job: string): InternalEvent => ({ type: 'ticket.blocked', reason, ...(workflow.blockComment ? { job } : {}) });
 
 export class Orchestrator {
   private background = new Map<Promise<void>, string | undefined>();
@@ -891,17 +896,28 @@ export class Orchestrator {
   }
 
   /**
-   * Blocks a ticket from outside an event (the agent's question through /agent/ask). It runs in
-   * the ticket's worker task, so its read-modify-write never interleaves with a decision's, and
-   * after the events accepted before it (their inbox write in flight included).
+   * A block made out of a decision (a launch that failed, a refused pickup): the same comment as
+   * any other, without an effect's key. A version frozen before ORC-196 says it the way it did (`frozen`).
    */
-  async blockTicket(projectId: string, ticketId: string, reason: string): Promise<void> {
-    await Promise.all(this.writes);
-    await this.worker.kick();
-    await this.worker.exclusive({ projectId, ticketId }, async () => {
-      const t = await this.d.store.getTicket(projectId, ticketId);
-      if (t) await this.apply(t, { type: 'ticket.blocked', reason });
-    });
+  private async tellBlock(project: ProjectRuntime, t: TicketState, facts: BlockFacts, frozen: (t: TicketState) => Promise<void>): Promise<void> {
+    if (!project.workflow.blockComment) return frozen(t);
+    // A key of its own: it carries the marker that tells a comment of the factory from a human's reply.
+    await this.d.tracker.comment(t.ticketId, composeBlockComment(facts, await this.blockStatus(t)), `block:${this.newId()}`);
+  }
+
+  /** The state line of a block's comment. An unknown value is said as such: reading it must not stop the comment. */
+  private async blockStatus(t: TicketState): Promise<BlockStatus> {
+    const sha = t.worktreePath ? await this.d.workspaces.head(t.worktreePath).catch(() => undefined) : undefined;
+    const runs = await this.d.store.ticketRuns(t.projectId, t.ticketId).catch((): RunRecord[] => []);
+    const reported = runs.filter((r) => r.tokens !== undefined);
+    const ended = runs.filter((r) => r.endedAt !== undefined);
+    return {
+      branch: t.branch,
+      sha,
+      ci: t.prChecks,
+      tokens: reported.length ? reported.reduce((n, r) => n + spentTokens(r.tokens!), 0) : undefined,
+      durationMs: ended.length ? ended.reduce((n, r) => n + r.endedAt! - r.startedAt, 0) : undefined,
+    };
   }
 
   async tick(): Promise<void> {
@@ -1326,6 +1342,8 @@ export class Orchestrator {
         return this.setLabels(ticketId, c.add, c.remove);
       case 'comment':
         return this.commentOnce(ticketId, c.body, key);
+      case 'block_comment':
+        return this.commentOnce(ticketId, async () => composeBlockComment(c.block, await this.blockStatus(t)), key);
       case 'ack':
         return this.ack(t, c, key);
       case 'activity': {
@@ -1376,10 +1394,10 @@ export class Orchestrator {
   }
 
   /** A comment of an outbox effect, written unless its first execution already wrote it (ORC-162). */
-  private async commentOnce(ticketId: string, body: string, key: EffectKey): Promise<EffectOutcome | void> {
+  private async commentOnce(ticketId: string, body: string | (() => Promise<string>), key: EffectKey): Promise<EffectOutcome | void> {
     const found = key.replay ? await this.d.tracker.findComment(ticketId, key.id) : undefined;
     if (found !== undefined) return { deduplicated: true, ref: found };
-    await this.d.tracker.comment(ticketId, body, key.id);
+    await this.d.tracker.comment(ticketId, typeof body === 'string' ? body : await body(), key.id);
   }
 
   /** Opens the session's plan (ORC-171), in the session of the delegation that asks for it. */
@@ -1686,11 +1704,13 @@ export class Orchestrator {
         if (!this.handles.has(fresh.activeRunId)) events.push({ type: 'run.cleared' });
       }
       const reason = `Erreur au lancement : ${(err as Error).message}`;
-      fresh = await this.apply(fresh, ...events, { type: 'ticket.blocked', reason });
+      fresh = await this.apply(fresh, ...events, blockedOn(project.workflow, reason, job.name));
       // The ticket is blocked: a failed notice must not fail the effect, whose retry would start again.
       try {
-        const session = opts.linearSessionId ?? (await this.sessionFor(fresh));
-        await this.d.tracker.activity(session, { type: 'error', body: reason });
+        await this.tellBlock(project, fresh, blockFacts({ reason, step: stepOf(project.workflow, job.name), tried: [`Le lancement de ${job.name}.`] }), async (failed) => {
+          const session = opts.linearSessionId ?? (await this.sessionFor(failed));
+          await this.d.tracker.activity(session, { type: 'error', body: reason });
+        });
       } catch (e) {
         this.log('warn', `could not post the launch error of ${ticketId}: ${(e as Error).message}`);
       }
@@ -1741,11 +1761,14 @@ export class Orchestrator {
       const failures = await pickupFailures(wf.tracker.pickup.checks, issue, project.repoPath, workspaces);
       if (failures.length) {
         this.d.scheduler.release(key);
-        t = await this.apply(t, { type: 'ticket.blocked', reason: failures.join(' ') });
-        const session = await this.sessionFor(t);
-        await tracker.activity(session, {
-          type: 'elicitation',
-          body: `Je ne peux pas commencer ce ticket :\n${failures.map((f) => `- ${f}`).join('\n')}\nCorrigez puis répondez dans ce fil.`,
+        const reason = failures.join(' ');
+        t = await this.apply(t, blockedOn(project.workflow, reason, job.name));
+        await this.tellBlock(project, t, blockFacts({ reason, step: 'intake', tried: failures, question: 'Pouvez-vous corriger cela, puis répondre ici ?' }), async (refused) => {
+          const session = await this.sessionFor(refused);
+          await tracker.activity(session, {
+            type: 'elicitation',
+            body: `Je ne peux pas commencer ce ticket :\n${failures.map((f) => `- ${f}`).join('\n')}\nCorrigez puis répondez dans ce fil.`,
+          });
         });
         return;
       }
@@ -1834,8 +1857,8 @@ export class Orchestrator {
       // (`--setting-sources ""`): defence in depth, for what ORC-128 did not trap (ORC-284).
       await workspaces.resetClaudeDir(ws.path);
       // The head the tests step starts on (ORC-123): its red check reads the step's own commits from it. A return
-      // to the step keeps the first one, so its earlier commits still count; a relaunch is the same step.
-      if (job.red && kind !== 'verify_failures' && !opts.relaunchOf) await store.setMeta(redBaseKey(project.id, ticketId), (await workspaces.head(ws.path)) ?? '');
+      // to the step, a reply or a relaunch keeps the first one, so its earlier commits still count; only a step that has none takes one.
+      if (job.red && ((!kind && !opts.relaunchOf) || !(await store.getMeta(redBaseKey(project.id, ticketId))))) await store.setMeta(redBaseKey(project.id, ticketId), (await workspaces.head(ws.path)) ?? '');
 
       let input: { kind: InputKind; text: string } | undefined;
       if (from) {
