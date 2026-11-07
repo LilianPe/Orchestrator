@@ -282,6 +282,7 @@ export class GitHubAppAuth {
       `/app/installations/${encodeURIComponent(installationId)}/access_tokens`,
       jwt,
       { repositories: [repo.name] },
+      true,
     );
     if (!data?.token) throw new Error("GitHub App : réponse sans jeton d'installation");
     const requested = data.expires_at ? Date.parse(data.expires_at) : Number.NaN;
@@ -302,7 +303,8 @@ export class GitHubAppAuth {
     return String(data.id);
   }
 
-  protected async call<T>(method: string, path: string, auth: string, body?: unknown): Promise<T> {
+  /** `secret`: the answer carries a credential (an installation token), so no part of it goes in an error. */
+  protected async call<T>(method: string, path: string, auth: string, body?: unknown, secret = false): Promise<T> {
     const res = await this.http(`${this.apiBase}${path}`, {
       method,
       headers: {
@@ -330,7 +332,7 @@ export class GitHubAppAuth {
           : text.slice(0, 200);
       throw new GitHubApiError(res.status, `${apiLabel(method, path)}: ${res.status}${message ? ` ${message}` : ''}`, message || undefined);
     }
-    if (!json) throw new Error(`${apiLabel(method, path)}: unreadable answer, not JSON: ${excerpt(text)}`);
+    if (!json) throw new Error(`${apiLabel(method, path)}: unreadable answer, not JSON${secret ? '' : `: ${excerpt(text)}`}`);
     return data as T;
   }
 

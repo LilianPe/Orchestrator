@@ -486,6 +486,14 @@ describe('GitHubAppForge secrets', () => {
     expect((error as Error).message).toContain('boom');
     expect((error as Error).message).not.toContain('ghs_very_secret');
   });
+
+  it('never puts the installation token in the error of a cut token answer', async () => {
+    const cut: Route = (url) =>
+      url.pathname === '/app/installations/42/access_tokens' ? { status: 201, raw: '{"token":"ghs_very_secret","expires_at":"2026-' } : undefined;
+    const error = await makeForge([installationRoute(), cut]).forge.findPr('/repo', 'factory/REL-1').catch((e: Error) => e);
+    expect((error as Error).message).toMatch(/access_tokens: unreadable answer, not JSON$/);
+    expect((error as Error).message).not.toContain('ghs_very_secret');
+  });
 });
 
 describe('GitHubAppForge.mergePr (ORC-148)', () => {
