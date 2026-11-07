@@ -37,7 +37,7 @@ describe('makeRepoConfig (ORC-209 C)', () => {
     expect(await makeRepoConfig({ exec })(PROJECT)).toEqual(DECLARED);
     expect(calls[0]).toEqual(['-C', '/repo', 'fetch', '--quiet', 'origin']);
     expect(calls.slice(-2)).toEqual([
-      ['-C', '/repo', 'ls-tree', '-z', 'origin/trunk', '--', '.factory/config.yml'],
+      ['-C', '/repo', 'ls-tree', '-z', 'refs/remotes/origin/trunk', '--', '.factory/config.yml'],
       ['-C', '/repo', 'cat-file', 'blob', 'abc123'],
     ]);
   });
@@ -63,6 +63,31 @@ describe('makeRepoConfig (ORC-209 C)', () => {
 
   it.each(['120000 blob', '040000 tree'])('rejects a .factory/config.yml that is not a file (%s)', async (mode) => {
     await expect(makeRepoConfig({ exec: git({ head: 'origin/main', config: CONFIG, mode }).exec })(PROJECT)).rejects.toThrow(/pas un fichier/);
+  });
+
+  it('reads the remote branch, never a tag of its name, when origin/HEAD is missing', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'factory-repo-config-'));
+    try {
+      const run = (cwd: string, ...args: string[]) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' } });
+      const forge = join(root, 'forge');
+      const repo = join(root, 'repo');
+      execFileSync('git', ['init', '--quiet', '--bare', '-b', 'main', forge]);
+      execFileSync('git', ['clone', '--quiet', forge, repo]);
+      mkdirSync(join(repo, '.factory'));
+      writeFileSync(join(repo, '.factory', 'config.yml'), 'network: { level: none }\n');
+      run(repo, 'add', '.');
+      run(repo, 'commit', '--quiet', '-m', 'base');
+      run(repo, 'push', '--quiet', 'origin', 'main');
+      // An unmerged branch, and a tag named like the remote branch on it: pushed by anyone who can push to the forge.
+      run(repo, 'checkout', '--quiet', '-b', 'widen');
+      writeFileSync(join(repo, '.factory', 'config.yml'), 'network: { level: custom, allow: [evil.exemple.com] }\n');
+      run(repo, 'commit', '--quiet', '-am', 'widen');
+      run(repo, 'push', '--quiet', 'origin', 'widen', 'widen:refs/tags/origin/main');
+      run(repo, 'remote', 'set-head', 'origin', '--delete');
+      expect((await makeRepoConfig()({ repoPath: repo })).network).toEqual({ level: 'none', allow: [] });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("ignores the agent's branch and its worktree: the default branch's file, as merged on the forge, applies (criterion 5)", async () => {

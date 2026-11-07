@@ -16,7 +16,9 @@ export function makeRepoConfig(o: { exec?: Exec } = {}): (project: { repoPath: s
   return async ({ repoPath }, { fetch = true } = {}) => {
     // A worktree that already exists is prepared without a fetch: what was merged since applies all the same.
     if (fetch) await mustExec(exec, 'git', ['-C', repoPath, 'fetch', '--quiet', 'origin']);
-    const ref = await originHead(exec, repoPath);
+    // In full: a short `origin/main` (the fallback without `origin/HEAD`) is resolved by git as `refs/tags/origin/main`
+    // first, a tag anyone who pushes to the forge can make.
+    const ref = `refs/remotes/${(await originHead(exec, repoPath)).replace(/^remotes\//, '')}`;
     // `ls-tree` tells a file absent from a branch it could not read, which `git show` answers alike.
     const entry = await mustExec(exec, 'git', ['-C', repoPath, 'ls-tree', '-z', ref, '--', REPO_CONFIG_PATH]).catch((err: Error) => {
       throw new Error(`branche par défaut illisible (${ref}) : ${err.message} ; si ce n'est pas la branche par défaut, lancez \`git remote set-head origin --auto\` dans ${repoPath}`);
