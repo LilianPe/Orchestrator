@@ -171,8 +171,8 @@ describe('Orchestrator', () => {
     await orch.accept(delegated());
     await orch.drained();
     const r = runner.requests[0]!;
-    expect(r.pluginDir.endsWith('packs/standard')).toBe(true);
-    expect(r.settingsPath.endsWith('packs/standard/settings.json')).toBe(true);
+    expect(r.pluginDir.endsWith(join('packs', 'standard'))).toBe(true);
+    expect(r.settingsPath.endsWith(join('packs', 'standard', 'settings.json'))).toBe(true);
     expect(r.env['FACTORY_RUN_TOKEN']).toBeDefined();
     expect(r.env['PORT']).toBe('4200');
   });

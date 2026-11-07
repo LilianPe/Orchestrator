@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import type { Exec } from '../adapters/exec.js';
 import { isUsableWebhookSecret } from '../adapters/tracker/linear/webhook.js';
 import { loadInstance, loadSecrets, saveInstance, saveSecrets } from '../config/instance.js';
@@ -30,7 +30,7 @@ function detectVerify(repo: string): string[] {
 export async function runInit(d: InitDeps): Promise<void> {
   const { io } = d;
   const top = await d.exec('git', ['rev-parse', '--show-toplevel'], { cwd: d.cwd });
-  const repoPath = top.code === 0 ? top.stdout.trim() : await io.ask(`Chemin du dépôt git à confier à ${PRODUCT_NAME}`);
+  const repoPath = top.code === 0 ? resolve(top.stdout.trim()) : await io.ask(`Chemin du dépôt git à confier à ${PRODUCT_NAME}`);
   const teamKey = (await io.ask('Clé de l’équipe Linear (ex. REL)')).toUpperCase();
 
   const cfg = loadInstance(d.home);

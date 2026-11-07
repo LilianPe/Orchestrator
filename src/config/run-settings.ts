@@ -13,7 +13,13 @@ export interface Settings {
  * `//` prefixes an absolute path in Claude Code permission rules.
  */
 export function buildRunSettings(pack: Settings, home: string): Settings {
-  return withHomeDenies(pack, `/${resolve(home)}`);
+  return withHomeDenies(pack, `/${posixPath(resolve(home))}`);
+}
+
+/** Claude Code matches Windows paths in POSIX form, `C:\data` as `/c/data`; any other path is kept as is. */
+export function posixPath(abs: string): string {
+  const m = /^([A-Za-z]):\\(.*)$/.exec(abs);
+  return m ? `/${m[1]!.toLowerCase()}/${m[2]!.replaceAll('\\', '/')}` : abs;
 }
 
 /**

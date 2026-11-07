@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { join, relative, sep } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const root = join(import.meta.dirname, '..');
@@ -9,7 +9,7 @@ const MARK = 'transition, à retirer';
 
 describe('product name', () => {
   it('leaves no trace of the old name in tracked files outside docs/ and README.md, except lines marked « transition, à retirer » (docs/transition.md, « Renommage »)', () => {
-    const self = relative(root, import.meta.filename);
+    const self = relative(root, import.meta.filename).split(sep).join('/'); // git ls-files lists with `/`
     const hits = execFileSync('git', ['ls-files', '-z'], { cwd: root, encoding: 'utf8' })
       .split('\0')
       .filter((f) => f && f !== self && !f.startsWith('docs/') && f !== 'README.md' && existsSync(join(root, f)))

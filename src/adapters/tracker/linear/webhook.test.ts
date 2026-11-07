@@ -888,11 +888,11 @@ describe('a comment on the ticket as the reply to a block (ORC-196)', () => {
   });
 
   it.each<[string, object, object]>([
-    ['the factory\'s own comment, signed by its app', {}, { actor: { id: 'app', type: 'oauthClient', name: 'relais' } }],
+    ['the factory\'s own comment, signed by its app', {}, { actor: { id: 'app', type: 'oauthClient', name: 'factory' } }],
     ['the factory\'s own comment, whichever actor is named', { body: 'Bloqué\n\n<!-- factory:effect=p:1:0 -->' }, {}],
     ['a comment synced from Slack', { botActor: { name: 'Slack' } }, {}],
     ['an external user\'s', { externalUserId: 'e1' }, {}],
-    ['a mention: it opens its own session', { body: '@relais reprends' }, {}],
+    ['a mention: it opens its own session', { body: '@factory reprends' }, {}],
     ['a word to someone else', { body: '@alice tu regardes ?' }, {}],
     ['/refreeze: no instruction for the agent', { body: '/refreeze' }, {}],
     ['an edit', {}, { action: 'update' }],
