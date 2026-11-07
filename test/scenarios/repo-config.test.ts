@@ -75,6 +75,7 @@ describe("the repository's config at the launch", () => {
   });
 
   it("criterion 5: the agent's change of .factory/config.yml is refused as a forbidden path, and the base's config applies to the next run", async () => {
+    // The verdict of `factory/chemins-interdits` is the clean check's (`.factory/**` in the socle, clean-verify.test.ts); here, what the launch does next.
     const verdicts = [
       { ok: false, failures: [{ command: 'factory/chemins-interdits', exitCode: 1, output: 'Chemin interdit modifié : .factory/config.yml' }], sha: 'abc', tree: 't' },
       { ok: true, failures: [], sha: 'def', tree: 't2' },

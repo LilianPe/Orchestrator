@@ -14,11 +14,17 @@ import { NO_REPO_VARIABLES, repoVariables, type RepoVariables } from '../config/
 export function makeRepoConfig(o: { exec?: Exec } = {}): (project: { repoPath: string }) => Promise<RepoConfig> {
   const exec = o.exec ?? execCmd;
   return async ({ repoPath }) => {
+    // A worktree that already exists is prepared without a fetch: what was merged since applies all the same.
+    await mustExec(exec, 'git', ['-C', repoPath, 'fetch', '--quiet', 'origin']);
     const ref = await originHead(exec, repoPath);
     // `ls-tree` tells a file absent from a branch it could not read, which `git show` answers alike.
-    const entry = await mustExec(exec, 'git', ['-C', repoPath, 'ls-tree', '-z', ref, '--', REPO_CONFIG_PATH]);
-    const blob = /^\d+ blob ([0-9a-f]+)\t/.exec(entry)?.[1];
-    return parseRepoConfig(blob ? await mustExec(exec, 'git', ['-C', repoPath, 'cat-file', 'blob', blob]) : undefined);
+    const entry = await mustExec(exec, 'git', ['-C', repoPath, 'ls-tree', '-z', ref, '--', REPO_CONFIG_PATH]).catch((err: Error) => {
+      throw new Error(`branche par défaut illisible (${ref}) : ${err.message} ; si ce n'est pas la branche par défaut, lancez \`git remote set-head origin --auto\` dans ${repoPath}`);
+    });
+    if (!entry) return parseRepoConfig(undefined);
+    const blob = /^100(?:644|755) blob ([0-9a-f]+)\t/.exec(entry)?.[1];
+    if (!blob) throw new Error(`${REPO_CONFIG_PATH} n'est pas un fichier sur ${ref} (lien symbolique ou dossier)`);
+    return parseRepoConfig(await mustExec(exec, 'git', ['-C', repoPath, 'cat-file', 'blob', blob]));
   };
 }
 

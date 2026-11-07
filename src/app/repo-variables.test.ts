@@ -12,7 +12,7 @@ const YML = { repos: [{ linearTeam: 'REL', github: 'Org/App', env: { NODE_ENV: '
 const CONFIG = 'env: [NODE_ENV]\nsetup_secrets: [REGISTRY_TOKEN]\n';
 
 /** A repository: its origin, its default branch, the config committed on it. */
-function git(o: { origin?: string; head?: string; config?: string } = {}): { exec: Exec; calls: string[][] } {
+function git(o: { origin?: string; head?: string; config?: string; mode?: string } = {}): { exec: Exec; calls: string[][] } {
   const calls: string[][] = [];
   const ok = (stdout: string) => ({ stdout, stderr: '', code: 0 });
   const ko = { stdout: '', stderr: 'fatal', code: 128 };
@@ -20,7 +20,8 @@ function git(o: { origin?: string; head?: string; config?: string } = {}): { exe
     calls.push(args);
     if (args.includes('get-url')) return ok(`${o.origin ?? 'https://github.com/org/app.git'}\n`);
     if (args.includes('symbolic-ref')) return o.head === undefined ? ko : ok(`${o.head}\n`);
-    if (args.includes('ls-tree')) return ok(o.config === undefined ? '' : '100644 blob abc123\t.factory/config.yml\0');
+    if (args.includes('fetch')) return ok('');
+    if (args.includes('ls-tree')) return ok(o.config === undefined ? '' : `${o.mode ?? '100644 blob'} abc123\t.factory/config.yml\0`);
     if (args.includes('cat-file')) return o.config === undefined ? ko : ok(o.config);
     return ko;
   };
@@ -31,9 +32,10 @@ const PROJECT = { id: 'p', repoPath: '/repo', teamKey: 'REL' };
 const DECLARED = parseRepoConfig(CONFIG);
 
 describe('makeRepoConfig (ORC-209 C)', () => {
-  it('reads the file on the default branch, never in a worktree the agent writes', async () => {
+  it('reads the file on the default branch as the forge has it now, never in a worktree the agent writes', async () => {
     const { exec, calls } = git({ head: 'origin/trunk', config: CONFIG });
     expect(await makeRepoConfig({ exec })(PROJECT)).toEqual(DECLARED);
+    expect(calls[0]).toEqual(['-C', '/repo', 'fetch', '--quiet', 'origin']);
     expect(calls.slice(-2)).toEqual([
       ['-C', '/repo', 'ls-tree', '-z', 'origin/trunk', '--', '.factory/config.yml'],
       ['-C', '/repo', 'cat-file', 'blob', 'abc123'],
@@ -50,10 +52,14 @@ describe('makeRepoConfig (ORC-209 C)', () => {
 
   it('rejects when the default branch cannot be read: a file it could not see is not an absent one', async () => {
     const exec: Exec = async (_, args) => (args.includes('ls-tree') ? { stdout: '', stderr: 'fatal: Not a valid object name', code: 128 } : { stdout: 'origin/main\n', stderr: '', code: 0 });
-    await expect(makeRepoConfig({ exec })(PROJECT)).rejects.toThrow(/Not a valid object name/);
+    await expect(makeRepoConfig({ exec })(PROJECT)).rejects.toThrow(/origin\/main.*Not a valid object name.*git remote set-head origin --auto/s);
   });
 
-  it("ignores the agent's branch and its worktree: the default branch's file applies (criterion 5)", async () => {
+  it.each(['120000 blob', '040000 tree'])('rejects a .factory/config.yml that is not a file (%s)', async (mode) => {
+    await expect(makeRepoConfig({ exec: git({ head: 'origin/main', config: CONFIG, mode }).exec })(PROJECT)).rejects.toThrow(/pas un fichier/);
+  });
+
+  it("ignores the agent's branch and its worktree: the default branch's file, as merged on the forge, applies (criterion 5)", async () => {
     const root = mkdtempSync(join(tmpdir(), 'factory-repo-config-'));
     try {
       const run = (cwd: string, ...args: string[]) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' } });
@@ -70,7 +76,15 @@ describe('makeRepoConfig (ORC-209 C)', () => {
       run(repo, 'checkout', '--quiet', '-b', 'agent');
       writeFileSync(join(repo, '.factory', 'config.yml'), 'network: { level: custom, allow: [evil.exemple.com] }\n');
       run(repo, 'commit', '--quiet', '-am', 'widen');
-      expect((await makeRepoConfig()({ repoPath: repo })).network).toEqual({ level: 'none', allow: [] });
+      const read = makeRepoConfig();
+      expect((await read({ repoPath: repo })).network).toEqual({ level: 'none', allow: [] });
+      // Merged on the forge since: the next launch takes it, without a fetch of its own before.
+      const human = join(root, 'human');
+      execFileSync('git', ['clone', '--quiet', forge, human]);
+      writeFileSync(join(human, '.factory', 'config.yml'), 'network: { level: custom, allow: [docs.exemple.com] }\n');
+      run(human, 'commit', '--quiet', '-am', 'allow docs');
+      run(human, 'push', '--quiet', 'origin', 'main');
+      expect((await read({ repoPath: repo })).network).toEqual({ level: 'custom', allow: ['docs.exemple.com'] });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

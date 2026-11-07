@@ -6,7 +6,7 @@ Un dépôt peut déclarer à l'usine ses commandes, ses chemins sensibles et ses
 
 ## Quand et où il est lu
 
-- **Au lancement de chaque run d'agent**, une seule fois, sur la branche par défaut telle que le dépôt de l'usine la connaît (`origin/HEAD`, récupérée juste avant pour un worktree neuf) : jamais dans le worktree de l'agent, ni sur sa branche. L'agent ne peut pas écrire cette référence : son dossier git est le sien (ORC-317). Le run en tire son `setup`, ses variables et son niveau réseau.
+- **Au lancement de chaque run d'agent**, une seule fois, sur la branche par défaut de la forge, récupérée juste avant dans le dépôt de l'usine (`git fetch origin`, puis `origin/HEAD`) : jamais dans le worktree de l'agent, ni sur sa branche. L'agent ne peut pas écrire cette référence : son dossier git est le sien (ORC-317). Le run en tire son `setup`, ses variables et son niveau réseau.
 - **À chaque `verify`**, sur la branche par défaut de la forge, récupérée à ce moment-là dans un clone à part (ORC-151) : `commands`, `setup` et `env`.
 - **Un fichier invalide refuse le lancement** : le ticket se bloque avec le message de `factory validate` (« Erreur au lancement : .factory/config.yml refusé : … »), sans worktree neuf, sans sandbox ni run. Aucun run ne part sur une config à moitié lue. Corrigez le fichier sur la branche par défaut, puis relancez.
 - **L'agent ne peut pas changer la config de son run.** `.factory/**` est un chemin interdit : `verify` bloque un commit qui y touche (`factory/chemins-interdits`), et le run suivant relit le fichier de la branche par défaut. Une modification de la config passe par une PR humaine, mergée sur la branche par défaut.
