@@ -1,4 +1,4 @@
-import { GitHubApiError, GitHubAppAuth } from './github-app.js';
+import { GitHubApiError, GitHubAppAuth, isRecord } from './github-app.js';
 
 /** One workflow file, decoded from the Contents API. */
 export interface WorkflowSource {
@@ -28,10 +28,6 @@ interface EnvironmentsDto {
 
 const WORKFLOWS_DIR = '.github/workflows';
 const MAX_ENVIRONMENT_PAGES = 10;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
 
 function segment(value: string): string {
   return encodeURIComponent(value);

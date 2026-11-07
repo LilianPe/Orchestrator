@@ -53,7 +53,7 @@ function installationRoute(id = 42): Route {
   return (url) => (url.pathname === '/repos/acme/app/installation' ? { body: { id } } : undefined);
 }
 
-function pullsRoute(pulls: unknown[]): Route {
+function pullsRoute(pulls: unknown): Route {
   return (url) => (url.pathname === '/repos/acme/app/pulls' ? { body: pulls } : undefined);
 }
 
@@ -351,7 +351,7 @@ describe('GitHubAppForge.findPr', () => {
   });
 
   it('rejects, saying it is unreadable, a list of PRs that is not one: never read as no PR', async () => {
-    const { forge } = makeForge([tokenRoute(42), (url) => (url.pathname === '/repos/acme/app/pulls' ? { body: { message: 'ok' } } : undefined)], { installationId: 42 });
+    const { forge } = makeForge([tokenRoute(42), pullsRoute({ message: 'ok' })], { installationId: 42 });
     await expect(forge.findPr('/repo', 'factory/REL-1')).rejects.toThrow(/pulls: unreadable answer, not a list of pull requests: "\{\\"message\\":\\"ok\\"\}"$/);
   });
 
@@ -360,7 +360,7 @@ describe('GitHubAppForge.findPr', () => {
     ['an entry without its head', [{ number: 7, state: 'open', html_url: 'https://github.com/acme/app/pull/7' }]],
     ['an entry without a number', [openPr({ number: undefined })]],
   ])('rejects, saying it is unreadable, a list of PRs with %s: never a raw TypeError', async (_case, body) => {
-    const { forge } = makeForge([tokenRoute(42), (url) => (url.pathname === '/repos/acme/app/pulls' ? { body } : undefined)], { installationId: 42 });
+    const { forge } = makeForge([tokenRoute(42), pullsRoute(body)], { installationId: 42 });
     const err = await forge.findPr('/repo', 'factory/REL-1').catch((e: unknown) => e);
     expect(err).not.toBeInstanceOf(TypeError);
     expect((err as Error).message).toMatch(/pulls: unreadable answer, not a list of pull requests: /);
@@ -449,11 +449,9 @@ describe('GitHubAppForge.unresolvedReviewComments', () => {
     expect(JSON.stringify(gql.body)).toContain('reviewThreads');
   });
 
-  it('rejects, saying it is unreadable, a GraphQL answer that is not JSON or empty', async () => {
-    for (const raw of ['<html>oops</html>', '']) {
-      const { forge } = makeForge([tokenRoute(42), (url) => (url.pathname === '/graphql' ? { raw } : undefined)], { installationId: 42 });
-      await expect(forge.unresolvedReviewComments('/repo', 7)).rejects.toThrow(/graphql: unreadable answer/);
-    }
+  it.each([['not JSON', '<html>oops</html>'], ['empty', '']])('rejects, saying it is unreadable, a GraphQL answer %s', async (_case, raw) => {
+    const { forge } = makeForge([tokenRoute(42), (url) => (url.pathname === '/graphql' ? { raw } : undefined)], { installationId: 42 });
+    await expect(forge.unresolvedReviewComments('/repo', 7)).rejects.toThrow(/graphql: unreadable answer/);
   });
 
   it('surfaces GraphQL errors without leaking the installation token', async () => {
@@ -592,10 +590,10 @@ describe('GitHubAppForge.mergePr (ORC-148)', () => {
   });
 
   it.each([
-    ['without its list', () => ({ body: { total_count: 1 } })],
-    ['with an entry without a state', () => ({ body: { total_count: 1, workflows: [{ path: '.github/workflows/ci.yml' }] } })],
+    ['without its list', { body: { total_count: 1 } }],
+    ['with an entry without a state', { body: { total_count: 1, workflows: [{ path: '.github/workflows/ci.yml' }] } }],
   ])('rejects, never merges, when GitHub answers the workflows %s: no proof of a repository without CI', async (_case, answer) => {
-    const unlisted: Route = (url) => (url.pathname === '/repos/acme/app/actions/workflows' ? answer() : undefined);
+    const unlisted: Route = (url) => (url.pathname === '/repos/acme/app/actions/workflows' ? answer : undefined);
     const { forge, calls } = makeForge([tokenRoute(42), pullRoute(withBase), repoRoute(), ...headChecks([]), unlisted, ...baseChecks([]), mergeRoute(200, { merged: true })], { installationId: 42 });
     await expect(forge.mergePr('/repo', 7, 'abc123', { unchecked: true })).rejects.toThrow(/actions\/workflows: unreadable answer, not a list of workflows: /);
     expect(calls.some((c) => c.method === 'PUT')).toBe(false);

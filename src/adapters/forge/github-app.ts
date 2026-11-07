@@ -165,7 +165,7 @@ function statusBucket(state: string): string {
   return 'pending';
 }
 
-const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null;
+export const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
 const isCheckRun = (r: unknown): r is CheckRunDto =>
   isRecord(r) && typeof r.name === 'string' && typeof r.status === 'string' && (r.conclusion === null || typeof r.conclusion === 'string');
@@ -184,9 +184,14 @@ const isWorkflow = (w: unknown): w is WorkflowDto =>
 
 const isStatus = (s: unknown): s is StatusDto => isRecord(s) && typeof s.context === 'string' && typeof s.state === 'string';
 
+const isPulls = (v: unknown): v is PullRequestDto[] => Array.isArray(v) && v.every(isPull);
+
+/** `GitHub API <method> <path>`, without the query: the prefix of every error of a call. */
+const apiLabel = (method: string, path: string) => `GitHub API ${method} ${path.split('?')[0]}`;
+
 /** A 2xx answer that is not what the endpoint documents: never read as an empty list (ORC-273). */
 function unreadable(method: string, path: string, what: string, data: unknown): Error {
-  return new Error(`GitHub API ${method} ${path.split('?')[0]}: unreadable answer, not ${what}: ${data === undefined ? 'undefined' : excerpt(JSON.stringify(data))}`);
+  return new Error(`${apiLabel(method, path)}: unreadable answer, not ${what}: ${data === undefined ? 'undefined' : excerpt(JSON.stringify(data))}`);
 }
 
 /** `/repos/{owner}/{name}`, encoded. */
@@ -323,10 +328,17 @@ export class GitHubAppAuth {
         typeof data === 'object' && data !== null && 'message' in data
           ? [String((data as { message: unknown }).message), ...validationErrors(data)].join(' : ')
           : text.slice(0, 200);
-      throw new GitHubApiError(res.status, `GitHub API ${method} ${path.split('?')[0]}: ${res.status}${message ? ` ${message}` : ''}`, message || undefined);
+      throw new GitHubApiError(res.status, `${apiLabel(method, path)}: ${res.status}${message ? ` ${message}` : ''}`, message || undefined);
     }
-    if (!json) throw new Error(`GitHub API ${method} ${path.split('?')[0]}: unreadable answer, not JSON: ${excerpt(text)}`);
+    if (!json) throw new Error(`${apiLabel(method, path)}: unreadable answer, not JSON: ${excerpt(text)}`);
     return data as T;
+  }
+
+  /** A call whose answer is read: one `is` rejects throws, saying it is unreadable (ORC-273). */
+  protected async read<T>(method: string, path: string, token: string, is: (v: unknown) => v is T, what: string, body?: unknown): Promise<T> {
+    const data = await this.call<unknown>(method, path, token, body);
+    if (!is(data)) throw unreadable(method, path, what, data);
+    return data;
   }
 
   /** Resolves repo + token, then calls the API on a path built from owner/name. */
@@ -366,10 +378,7 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
     const repo = await this.repo(repoPath);
     const token = await this.installationToken(repo);
     const query = new URLSearchParams({ head: `${repo.owner}:${branch}`, state: 'all', per_page: '1' });
-    const path = `${repoApi(repo)}/pulls?${query}`;
-    const pulls = await this.call<unknown>('GET', path, token);
-    if (!Array.isArray(pulls) || !pulls.every(isPull)) throw unreadable('GET', path, 'a list of pull requests', pulls);
-    const pr = pulls[0];
+    const [pr] = await this.read('GET', `${repoApi(repo)}/pulls?${query}`, token, isPulls, 'a list of pull requests');
     if (!pr) return undefined;
     const state: PrInfo['state'] = pr.state === 'open' ? 'OPEN' : pr.merged_at ? 'MERGED' : 'CLOSED';
     const checks = state === 'OPEN' ? await this.checksFor(repo, pr.head.sha, token) : { checks: 'none' as const, failedChecks: [] };
@@ -382,12 +391,10 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
     const token = await this.installationToken(repo);
     const url = `${repoApi(repo)}/pulls/${number}`;
     // A replay: the first call merged it on that head. Merged on another head is not ours to call merged.
-    const pr = await this.call<unknown>('GET', url, token);
-    if (!isPull(pr)) throw unreadable('GET', url, 'a pull request', pr);
+    const pr = await this.read('GET', url, token, isPull, 'a pull request');
     if (pr.merged_at && pr.head.sha === sha) return { merged: true, deduplicated: true };
     // A method the repository allows, a merge commit first: a squash-only repository refuses the others (405).
-    const settings = await this.call<{ allow_merge_commit?: boolean; allow_squash_merge?: boolean; allow_rebase_merge?: boolean } | undefined>('GET', repoApi(repo), token);
-    if (!isRecord(settings)) throw unreadable('GET', repoApi(repo), 'repository settings', settings);
+    const settings = await this.read('GET', repoApi(repo), token, isRecord, 'repository settings');
     const method = settings.allow_merge_commit !== false ? 'merge' : settings.allow_squash_merge !== false ? 'squash' : 'rebase';
     if (opts.unchecked) {
       // Read as moved, answered as moved, with no PUT: a stale read must never let an unchecked head merge unverified.
@@ -496,11 +503,10 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
   async unresolvedReviewComments(repoPath: string, prNumber: number): Promise<FeedbackItem[]> {
     const repo = await this.repo(repoPath);
     const token = await this.installationToken(repo);
-    const out = await this.call<ReviewThreadsDto | undefined>('POST', '/graphql', token, {
+    const out: ReviewThreadsDto = await this.read('POST', '/graphql', token, isRecord, 'a GraphQL answer', {
       query: THREADS_QUERY,
       variables: { owner: repo.owner, name: repo.name, number: prNumber },
     });
-    if (typeof out !== 'object' || out === null) throw unreadable('POST', '/graphql', 'a GraphQL answer', out);
     if (out.errors?.length) throw new Error(`GitHub GraphQL : ${out.errors.map((e) => e.message).join('; ')}`);
     const pr = out.data?.repository?.pullRequest;
     if (!pr) throw new Error(`GitHub GraphQL : PR ${repo.owner}/${repo.name}#${prNumber} introuvable`);
@@ -545,9 +551,8 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
     const all: E[] = [];
     for (let page = 1; ; page++) {
       const url = `${path}?per_page=100&page=${page}`;
-      const data = await this.call<unknown>('GET', url, token);
-      const list = isRecord(data) ? data[key] : undefined;
-      if (!Array.isArray(list) || !list.every(isEntry)) throw unreadable('GET', url, what, data);
+      const isPage = (d: unknown): d is Record<string, E[]> => isRecord(d) && Array.isArray(d[key]) && d[key].every(isEntry);
+      const list = (await this.read('GET', url, token, isPage, what))[key]!;
       all.push(...list);
       if (list.length < 100) return all;
     }
