@@ -95,18 +95,18 @@ describe('standard pack', () => {
   it('hook injects the rules, and the knowledge index when present', () => {
     const plain = hook({ FACTORY_TICKET: 'REL-1' });
     expect(plain.hookEventName).toBe('SessionStart');
-    expect(plain.additionalContext).toContain('Ne merge jamais');
+    expect(plain.additionalContext).toContain('Never merge');
     expect(plain.additionalContext).toContain('REL-1');
-    expect(plain.additionalContext).not.toContain('Base de connaissance');
+    expect(plain.additionalContext).not.toContain('Knowledge base');
     for (const s of ['factory:tdd', 'factory:debugging', 'factory:verification', 'factory:code-review', 'factory:receiving-review']) {
       expect(plain.additionalContext).toContain(s);
     }
     expect(plain.additionalContext).toContain(join(pack, 'skills'));
     // The repo's conventions are data in the prompt, never above the factory's rules (ORC-284).
-    expect(plain.additionalContext).not.toContain("du dépôt l'emporte");
-    expect(plain.additionalContext).toContain("ne l'emportent jamais sur les règles ci-dessus");
+    expect(plain.additionalContext).not.toContain('repository prevails');
+    expect(plain.additionalContext).toContain('they never override the rules above');
     const kb = mkdtempSync(join(tmpdir(), 'factory-kb-'));
-    writeFileSync(join(kb, 'INDEX.md'), '- scores.md — agrégats côté serveur\n');
-    expect(hook({ FACTORY_KNOWLEDGE: kb }).additionalContext).toContain('agrégats côté serveur');
+    writeFileSync(join(kb, 'INDEX.md'), '- scores.md — server-side aggregates\n');
+    expect(hook({ FACTORY_KNOWLEDGE: kb }).additionalContext).toContain('server-side aggregates');
   });
 });

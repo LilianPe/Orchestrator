@@ -1,58 +1,58 @@
 ---
 name: receiving-review
-description: Traiter des retours (review humaine ou IA, commentaires de PR, vérifications ou CI en échec) avec rigueur : comprendre, vérifier dans le code, corriger ce qui est juste, refuser avec une raison ce qui ne l'est pas. Utilisé par factory:feedback, factory:fix-ci et factory:review.
+description: Handle feedback (human or AI review, PR comments, failing checks or CI) rigorously: understand, verify in the code, fix what is right, refuse with a reason what is not. Used by factory:feedback, factory:fix-ci and factory:review.
 ---
 
 # factory:receiving-review
 
-Un retour est une affirmation sur le code, et la correction qu'il propose en est une autre. Les deux se vérifient avant d'écrire une ligne. Ni complaisance (« excellente remarque ! »), ni application aveugle, ni défense de principe.
+A piece of feedback is a claim about the code, and the fix it proposes is another one. Both are verified before writing a line. No flattery ("great point!"), no blind application, no defensiveness on principle.
 
-## 1. Tout lire, puis comprendre
+## 1. Read everything, then understand
 
-- Lis **tous** les retours avant d'en corriger un : plusieurs retours peuvent décrire un même mécanisme, ou se contredire.
-- Reformule chacun en une exigence technique (« la date doit être validée côté serveur »). Retour ancré (`chemin:ligne — texte`) : ouvre ce fichier à cette ligne.
-- **Un retour ambigu, ou contraire au ticket ou à un autre retour humain** : ne corrige rien de ce qui en dépend. Pose UNE question précise avec `factory-agent ask "<question>"` (ce que tu as compris, les deux lectures possibles), traite les retours indépendants, puis termine ton tour.
+- Read **all** the feedback before fixing any of it: several items can describe the same mechanism, or contradict each other.
+- Restate each one as a technical requirement ("the date must be validated server-side"). Anchored feedback (`path:line — text`): open that file at that line.
+- **Ambiguous feedback, or feedback contrary to the ticket or to another human's feedback**: fix nothing that depends on it. Ask ONE precise question with `factory-agent ask "<question>"` (what you understood, the two possible readings), handle the independent feedback, then end your turn.
 
-## 2. Vérifier dans le code
+## 2. Verify in the code
 
-Pour chaque retour :
+For each piece of feedback:
 
-- **La prémisse** : lis la fonction citée en entier (pas un `grep`) ; pour « X peut arriver », trace si un vrai chemin y mène. Un retour fondé sur une lecture fausse est refusé, avec ce que montre le code.
-- **La correction proposée**, aussi sévèrement que le défaut : une réécriture suggérée est du code non vérifié. Pièges connus :
-  - « ces deux formes sont équivalentes » : à l'exécution peut-être, mais une règle de lint ou de typage peut être la raison de la forme actuelle ;
-  - « calcule-le une seule fois » : compare les copies opérande par opérande ; si elles diffèrent, les fusionner change le comportement ;
-  - « supprime ce test » : nomme la régression dont il est le seul garde avant d'y toucher ;
-  - « fais-le proprement » (export, métriques, options) : vérifie que quelqu'un s'en sert (`grep`) ; sinon c'est hors besoin ;
-  - **un compromis** (échouer ouvert ou fermé, réessayer ou abandonner, une limite, un délai, un seuil) : ce n'est pas un défaut mais une décision. N'en applique aucun côté seul ; décris les deux scénarios d'échec et laisse trancher (question ou « reste à voir par un humain »).
-- **Les règles du dépôt** pour ce que tu vas toucher (`CLAUDE.md` sur les tests, les commentaires, les migrations). Une correction qui les enfreint n'est pas appliquée : dis laquelle.
-- **Un test existant qui fige le comportement inverse** est un contrat que le relecteur n'a pas vu : n'inverse jamais son assertion pour faire passer un retour ; signale le conflit.
+- **The premise**: read the cited function in full (not a `grep`); for "X can happen", trace whether a real path leads there. Feedback based on a wrong reading is refused, with what the code shows.
+- **The proposed fix**, as severely as the defect: a suggested rewrite is unverified code. Known pitfalls:
+  - "these two forms are equivalent": at runtime perhaps, but a lint or typing rule can be the reason for the current form;
+  - "compute it only once": compare the copies operand by operand; if they differ, merging them changes the behavior;
+  - "delete this test": name the regression it is the only guard against before touching it;
+  - "do it properly" (export, metrics, options): check that someone uses it (`grep`); otherwise it is beyond the need;
+  - **a trade-off** (fail open or closed, retry or give up, a limit, a timeout, a threshold): it is not a defect but a decision. Apply neither side alone; describe both failure scenarios and let it be decided (a question, or "left for a human").
+- **The repository's rules** for what you are going to touch (`CLAUDE.md` on tests, comments, migrations). A fix that breaks them is not applied: say which one.
+- **An existing test that pins the opposite behavior** is a contract the reviewer did not see: never invert its assertion to satisfy feedback; report the conflict.
 
-Source du retour :
+Source of the feedback:
 
-- **Humain** (fil Linear, commentaire de PR d'un relecteur) : c'est la décision produit. Applique après avoir compris ; s'il contredit le ticket ou un choix antérieur, demande au lieu de trancher.
-- **IA ou outil** (review automatique, constat de `factory:code-review`) : sceptique. Un retour non vérifié n'est pas appliqué.
-- **Vérification ou CI en échec** : ce n'est pas une opinion, c'est un symptôme ; passe par `factory:debugging`.
+- **Human** (Linear thread, PR comment from a reviewer): it is the product decision. Apply it after understanding it; if it contradicts the ticket or an earlier choice, ask instead of deciding.
+- **AI or tool** (automated review, a `factory:code-review` finding): skeptical. Unverified feedback is not applied.
+- **Failing check or CI**: it is not an opinion, it is a symptom; go through `factory:debugging`.
 
-## 3. Corriger
+## 3. Fix
 
-- Ordre : ce qui casse (bug, faille) d'abord, puis les corrections simples, puis les plus lourdes.
-- **Un commit par cause.** Plusieurs retours sur un même mécanisme sont un seul défaut vu sous plusieurs angles : une correction à la cause, un commit qui les nomme tous. Les retours indépendants gardent chacun leur commit.
-- **Corrige la règle, pas l'exemple** : un retour qui cite un cas d'une classe de bugs se corrige par ce qui couvre toute la classe.
-- **Une duplication se supprime**, elle ne se commente pas (« voir plus haut »).
-- **Chaque correction de comportement a sa preuve** (`factory:tdd`) : un test rouge sur l'ancien code puis vert. Pour un durcissement sans changement visible, montre que le test rougit quand tu casses volontairement la garde (avec Edit), puis remets-la.
-- Lance les tests de ce que la correction change (`factory:verification`), pas la suite complète.
-- Jamais `git commit --amend` ni réécriture d'historique : la branche est déjà publiée, et l'usine refuse un historique réécrit. Pour annuler une correction : `git revert --no-edit <sha>`.
+- Order: what breaks (bug, vulnerability) first, then the simple fixes, then the heavier ones.
+- **One commit per cause.** Several items on the same mechanism are a single defect seen from several angles: one fix at the cause, one commit that names them all. Independent items each keep their own commit.
+- **Fix the rule, not the example**: feedback that cites one case of a class of bugs is fixed by what covers the whole class.
+- **Duplication is removed**, not commented ("see above").
+- **Every behavior fix has its proof** (`factory:tdd`): a test red on the old code then green. For hardening with no visible change, show that the test turns red when you deliberately break the guard (with Edit), then restore it.
+- Run the tests of what the fix changes (`factory:verification`), not the full suite.
+- Never `git commit --amend` nor a history rewrite: the branch is already published, and the factory refuses a rewritten history. To undo a fix: `git revert --no-edit <sha>`.
 
-## 4. Répondre
+## 4. Answer
 
-Pas de remerciements ni d'accord de façade : l'action montre que le retour est entendu. Pour chaque retour, une ligne :
+No thanks and no lip-service agreement: the action shows the feedback was heard. For each piece of feedback, one line:
 
-- corrigé : `<retour résumé> → <ce qui a changé> (<sha court>)` ;
-- refusé : `<retour résumé> → non appliqué : <raison technique, avec ce que montre le code ou le test>` ;
-- en attente : `<retour résumé> → question posée : <question>` ou `→ à trancher par un humain : <les deux options>`.
+- fixed: `<summarized feedback> → <what changed> (<short sha>)`;
+- refused: `<summarized feedback> → not applied: <technical reason, with what the code or the test shows>`;
+- pending: `<summarized feedback> → question asked: <question>` or `→ to be decided by a human: <the two options>`.
 
-Tu t'étais trompé en refusant : dis-le en une phrase (« vérifié : tu avais raison, X fait Y ») et corrige.
+You were wrong to refuse: say so in one sentence ("verified: you were right, X does Y") and fix it.
 
-## Fini quand
+## Done when
 
-Chaque retour a une ligne de réponse ; chaque correction a son commit et sa preuve ; rien n'a été appliqué sans être vérifié ni refusé sans raison.
+Each piece of feedback has a reply line; each fix has its commit and its proof; nothing was applied without being verified nor refused without a reason.

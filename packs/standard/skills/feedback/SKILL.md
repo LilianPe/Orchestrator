@@ -1,40 +1,40 @@
 ---
 name: feedback
-description: Appliquer des retours de review (Linear, GitHub, vérifications ou CI) sur la PR du ticket et répondre point par point (lancé par l'usine).
+description: Apply review feedback (Linear, GitHub, checks or CI) to the ticket's PR and answer point by point (launched by the factory).
 ---
 
 # factory:feedback
 
-Tu reprends la session de dev du ticket, dans son worktree et sur sa branche, déjà publiée par l'usine. Le bloc « Retours à traiter », « Vérifications en échec » ou « CI en échec » liste ce qu'il faut traiter. Tu es seul pendant ton tour ; ton seul canal vers un humain est `factory-agent ask "<question>"`, puis fin du tour.
+You resume the ticket's dev session, in its worktree and on its branch, already published by the factory. The "Feedback to address", "Failed checks" or "CI failures" block lists what must be handled. You are alone during your turn; your only channel to a human is `factory-agent ask "<question>"`, then end of turn.
 
-## 1. Rassembler
+## 1. Gather
 
-- **Retours à traiter** : messages du fil Linear et commentaires de review GitHub non résolus, avec leur auteur. Le bloc dit « aucun retour écrit » : relis le fil Linear du ticket et la PR (`gh pr view <branche> --comments`) pour trouver ce qui est demandé.
-- **Vérifications en échec** : les commandes de `verify` du projet, leur code de sortie et la fin de leur sortie. C'est un symptôme : `factory:debugging`.
-- **CI en échec** : applique `factory:fix-ci` (lire l'échec exact, reproduire en local, classer la cause ; jamais désactiver ni affaiblir un test ou une étape de CI).
-- Vérifie où en est la branche : `git status` (rien d'inattendu en cours), `git log --oneline -10`.
+- **Feedback to address**: messages from the Linear thread and unresolved GitHub review comments, with their author. The block says "no written feedback": reread the ticket's Linear thread and the PR (`gh pr view <branch> --comments`) to find what is asked.
+- **Failed checks**: the project's `verify` commands, their exit code and the end of their output. It is a symptom: `factory:debugging`.
+- **CI failures**: apply `factory:fix-ci` (read the exact failure, reproduce locally, classify the cause; never disable or weaken a test or a CI step).
+- Check where the branch stands: `git status` (nothing unexpected in progress), `git log --oneline -10`.
 
-## 2. Traiter avec `factory:receiving-review`
+## 2. Handle with `factory:receiving-review`
 
-Lis tous les retours, puis applique `factory:receiving-review` : comprendre chacun, vérifier sa prémisse et sa correction dans le code, corriger ce qui est juste avec sa preuve (`factory:tdd`), refuser avec une raison ce qui ne l'est pas.
+Read all the feedback, then apply `factory:receiving-review`: understand each item, verify its premise and its fix in the code, fix what is right with its proof (`factory:tdd`), refuse with a reason what is not.
 
-- Un retour humain ambigu ou contraire au ticket : UNE question avec `factory-agent ask`, après avoir traité les retours indépendants.
-- Un retour qui demande autre chose que le ticket (nouvelle fonctionnalité) : réponds qu'il mérite son propre ticket, sauf si l'humain le demande explicitement dans ce ticket.
-- Un commit par cause, message `<ID>: <ce qui est corrigé>`. Jamais d'`--amend` ni de réécriture : la branche est publiée, et l'usine refuse un historique réécrit.
+- Ambiguous human feedback, or feedback contrary to the ticket: ONE question with `factory-agent ask`, after having handled the independent feedback.
+- Feedback that asks for something other than the ticket (a new feature): answer that it deserves its own ticket, unless the human explicitly asks for it in this ticket.
+- One commit per cause, message `<ID>: <what is fixed>`. Never `--amend` nor a rewrite: the branch is published, and the factory refuses a rewritten history.
 
-## 3. Vérifier et rendre la main
+## 3. Verify and hand back
 
-1. `factory:verification` : les tests de ce que tu as changé, la vérification de types et le lint du dépôt s'ils existent ; pour des vérifications en échec, rejoue exactement la commande qui a échoué.
-2. Conflit avec la base de la PR : `git fetch origin`, puis `git merge-tree --write-tree --name-only origin/<base> HEAD` (base : `gh pr view <branche> --json baseRefName --jq .baseRefName`). Code 1 : fusionne la base (`git merge --no-edit origin/<base>`), résous chaque hunk lu avec Edit en gardant l'intention des deux côtés, `git add`, `git commit --no-edit`, relance tests et types. Contradiction entre les deux côtés, deux migrations sur les mêmes tables, ou résolution hors périmètre : `git merge --abort` et question.
-3. Un humain a pu pousser sur la branche : `git fetch origin`, et s'il y a du nouveau sur `origin/<branche>`, `git merge --no-edit origin/<branche>` ; sans cela, l'usine refuse de publier par-dessus.
-4. Commite, puis termine ton tour : **l'usine publie**, après avoir vérifié ton dernier commit. Tu ne pousses pas.
+1. `factory:verification`: the tests of what you changed, the repository's type check and lint if they exist; for failed checks, rerun exactly the command that failed.
+2. Conflict with the PR's base: `git fetch origin`, then `git merge-tree --write-tree --name-only origin/<base> HEAD` (base: `gh pr view <branch> --json baseRefName --jq .baseRefName`). Exit code 1: merge the base (`git merge --no-edit origin/<base>`), resolve each hunk you have read with Edit, keeping the intent of both sides, `git add`, `git commit --no-edit`, rerun tests and types. Contradiction between the two sides, two migrations on the same tables, or a resolution beyond the scope: `git merge --abort` and a question.
+3. A human may have pushed to the branch: `git fetch origin`, and if there is something new on `origin/<branch>`, `git merge --no-edit origin/<branch>`; without it, the factory refuses to publish on top.
+4. Commit, then end your turn: **the factory publishes**, after verifying your last commit. You do not push.
 
-## Interdits
+## Forbidden
 
-Ne merge jamais la PR. Ne pousse jamais, sur aucune branche : l'usine publie. Ne réécris pas l'historique, ne rebase pas une branche publiée. Ne change pas de branche. Ne désactive ni n'affaiblis aucun test ou étape de CI.
+Never merge the PR. Never push, to any branch: the factory publishes. Do not rewrite history, do not rebase a published branch. Do not switch branches. Do not disable or weaken any test or CI step.
 
-## Dernier message (publié dans Linear)
+## Last message (published in Linear)
 
-En français, une puce par retour : `- <retour résumé> → <ce qui a été fait> (<sha court>)`, ou `→ non appliqué : <raison>`. Puis une ligne **Vérifié** (commandes et résultat). Termine par les retours non traités et pourquoi, s'il y en a.
+In English, one bullet per feedback item: `- <summarized feedback> → <what was done> (<short sha>)`, or `→ not applied: <reason>`. Then a **Verified** line (commands and result). End with the feedback not handled and why, if any.
 
-Si tu poses une question avec `factory-agent ask`, ce dernier message n'est pas publié : la question doit dire aussi ce qui a déjà été traité.
+If you ask a question with `factory-agent ask`, this last message is not published: the question must also say what has already been handled.
