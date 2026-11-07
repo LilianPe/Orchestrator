@@ -1,29 +1,29 @@
-# Port CheckRunner
+# CheckRunner port
 
-Les commandes de vérification d'un job (`verify`), lancées hors de l'agent, et leur verdict.
+A job's verification commands (`verify`), run outside the agent, and their verdict.
 
-- Interface : `CheckRunner` (`src/adapters/checks/types.ts`), port nouveau (ORC-225) ; `run` a le type `Verifier` de `src/core/verify.ts`. Le `Verifier` du ticket, c'est ce type.
-- Implémentations : `runVerify` (`src/core/verify.ts`, `bash -c` dans un dossier ; `{ run: runVerify }` est un `CheckRunner`), `FakeCheckRunner` (`src/adapters/checks/fake.ts`). Avec les sandboxes, `verify` ne passe pas par ce port : `runCleanVerify` (`src/core/clean-verify.ts`, ORC-151) lance les commandes dans un sandbox neuf, sur un clone du SHA figé, et rejette au lieu de répondre quand il n'a pas de verdict. Ce port reste pour le `setup` sans sandbox et pour `FACTORY_ALLOW_HOST_VERIFY=1`.
-- Suite : `test/contracts/check-runner.contract.ts`, lancée par `src/adapters/checks/fake.test.ts` et `src/adapters/checks/run-verify.test.ts`.
+- Interface: `CheckRunner` (`src/adapters/checks/types.ts`), new port (ORC-225); `run` has the `Verifier` type from `src/core/verify.ts`. The ticket's `Verifier` is that type.
+- Implementations: `runVerify` (`src/core/verify.ts`, `bash -c` in a directory; `{ run: runVerify }` is a `CheckRunner`), `FakeCheckRunner` (`src/adapters/checks/fake.ts`). With sandboxes, `verify` does not go through this port: `runCleanVerify` (`src/core/clean-verify.ts`, ORC-151) runs the commands in a fresh sandbox, on a clone of the frozen SHA, and rejects instead of answering when it has no verdict. This port remains for `setup` without a sandbox and for `FACTORY_ALLOW_HOST_VERIFY=1`.
+- Suite: `test/contracts/check-runner.contract.ts`, run by `src/adapters/checks/fake.test.ts` and `src/adapters/checks/run-verify.test.ts`.
 
-## Méthodes
+## Methods
 
-| Méthode | Ce qu'elle garantit | Rejouée | Erreur |
+| Method | What it guarantees | Replayed | Error |
 |---|---|---|---|
-| `run(cwd, commandes, timeoutMs?)` | lance **toutes** les commandes, dans l'ordre ; `ok` vrai exactement quand aucune n'échoue ; chaque échec porte sa commande, son code de sortie et sa sortie ; une commande qui dépasse `timeoutMs` échoue avec un code `null` ; aucune commande, c'est un succès | relance les commandes | ne rejette pas : une commande qui ne démarre pas est un échec de code `null` |
+| `run(cwd, commands, timeoutMs?)` | runs **all** the commands, in order; `ok` is true exactly when none fails; each failure carries its command, its exit code and its output; a command that exceeds `timeoutMs` fails with a `null` code; no commands is a success | reruns the commands | does not reject: a command that does not start is a failure with a `null` code |
 
 ## Idempotence
 
-Le port ne publie rien : rejouer, c'est relancer les commandes, sans effet externe de plus. Le verdict n'est stable que si les commandes le sont.
+The port publishes nothing: replaying means rerunning the commands, with no further external effect. The verdict is only stable if the commands are.
 
 ## Fencing
 
-Le résultat ne porte pas de tentative : c'est le moteur qui le rattache à son run (`verify.passed` et `verify.failed` portent le `runId`). Le fencing de `runCleanVerify` est le même : son verdict, ou `verify.errored`, porte le `runId`.
+The result carries no attempt: the engine is what ties it to its run (`verify.passed` and `verify.failed` carry the `runId`). Fencing for `runCleanVerify` is the same: its verdict, or `verify.errored`, carries the `runId`.
 
-## Ce que la suite demande à l'implémentation
+## What the suite asks of the implementation
 
-`CheckRunnerSubject` : un dossier, une commande qui passe, deux commandes qui échouent avec des codes distincts et le texte qu'elles affichent, et en option une commande qui dépasse 200 ms, un dossier où aucune commande ne démarre (`runVerify` : un dossier absent, où `bash` ne se lance pas), et une commande qui passe en comptant ses lancements, pour vérifier qu'un rejeu relance. Le faux interprète ces commandes par un `Verifier` de repli (celui de son constructeur).
+`CheckRunnerSubject`: a directory, a command that passes, two commands that fail with distinct codes and the text they print, and optionally a command that exceeds 200 ms, a directory where no command starts (`runVerify`: a missing directory, where `bash` does not launch), and a command that passes while counting its launches, to check that a replay reruns. The fake interprets these commands through a fallback `Verifier` (the one from its constructor).
 
-## Écarts connus
+## Known gaps
 
-Aucun. `FakeCheckRunner` ne transmettait pas `timeoutMs` à son `Verifier` de repli : depuis ORC-189, il le transmet, et la suite y joue la commande lente par sa table, qui ne la fait échouer que sous un timeout plus court qu'elle.
+None. `FakeCheckRunner` did not pass `timeoutMs` to its fallback `Verifier`: since ORC-189, it does, and the suite plays the slow command through its table, which only makes it fail under a timeout shorter than it.

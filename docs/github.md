@@ -1,212 +1,212 @@
 # GitHub
 
-Relais parle à GitHub à travers **git** et une **GitHub App d'usine**. Le démon utilise l'App quand elle est configurée ; sinon il retombe sur la CLI **`gh`** (repli de migration). **Seule l'usine écrit sur GitHub** (ORC-125, [Publication](#publication)) : les agents commitent, et n'ont ni jeton ni réseau pour pousser. Le démon suit les PR de deux façons, qui écrivent les mêmes événements dans l'inbox : les **webhooks GitHub** (`POST /webhooks/github`, dès que leur secret est configuré, voir [Webhooks GitHub](#webhooks-github)) et le **relevé** des PR toutes les 30 s, gardé jusqu'à la réconciliation GitHub (ORC-185) et son retrait (ORC-181).
+Relais talks to GitHub through **git** and a **factory GitHub App**. The daemon uses the App when it is configured; otherwise it falls back to the **`gh`** CLI (migration fallback). **Only the factory writes to GitHub** (ORC-125, [Publishing](#publishing)): agents commit, and have neither a token nor network access to push. The daemon tracks PRs in two ways, which write the same events to the inbox: **GitHub webhooks** (`POST /webhooks/github`, as soon as their secret is configured, see [GitHub webhooks](#github-webhooks)) and **polling** of PRs every 30 s, kept until GitHub reconciliation (ORC-185) and its removal (ORC-181).
 
-## Authentification du démon
+## Daemon authentication
 
-### GitHub App (recommandé)
+### GitHub App (recommended)
 
-La GitHub App est l'identité du **démon**, pas celle des agents. Elle sert à lire les PR, les checks et les fils de review sans dépendre de `GH_TOKEN` ni de la CLI `gh`, et à publier : pousser la branche du ticket, ouvrir sa PR draft, merger.
+The GitHub App is the identity of the **daemon**, not of the agents. It is used to read PRs, checks and review threads without depending on `GH_TOKEN` or the `gh` CLI, and to publish: push the ticket's branch, open its draft PR, merge.
 
 ```yaml
 # <RELAIS_HOME>/config.yaml
 github:
   appId: "123456"
-  privateKey: /home/relais/.relais/github-app.pem   # PEM inline ou chemin de fichier
-  installationId: "987654"                          # facultatif
+  privateKey: /home/relais/.relais/github-app.pem   # inline PEM or file path
+  installationId: "987654"                          # optional
 ```
 
-Les variables d'environnement servent de repli, pour les installations existantes et Docker :
+Environment variables serve as a fallback, for existing installations and Docker:
 
-| Variable | Rôle |
+| Variable | Role |
 |---|---|
-| `GH_APP_ID` | identifiant de l'App |
-| `GH_APP_KEY` | clé privée PEM, ou chemin vers le fichier `.pem` |
-| `GH_APP_INSTALLATION_ID` | installation à utiliser ; facultatif |
+| `GH_APP_ID` | App identifier |
+| `GH_APP_KEY` | PEM private key, or path to the `.pem` file |
+| `GH_APP_INSTALLATION_ID` | installation to use; optional |
 
-Une valeur de `config.yaml` l'emporte sur la variable d'environnement. Si une seule des deux valeurs `appId` / `privateKey` est fournie, le démarrage échoue avec un message explicite plutôt que de basculer silencieusement sur `gh`.
+A value in `config.yaml` takes precedence over the environment variable. If only one of the two values `appId` / `privateKey` is provided, startup fails with an explicit message rather than silently switching to `gh`.
 
-#### Créer l'App
+#### Creating the App
 
 1. GitHub → **Settings → Developer settings → GitHub Apps → New GitHub App**.
-2. Renseignez un nom et une URL. **Webhook** : actif, URL `<publicUrl>/webhooks/github`, secret = la valeur de `github.webhookSecret` (ou `GH_WEBHOOK_SECRET`) ; événements : *Pull request*, *Pull request review*, *Pull request review comment*, *Check run*, *Check suite*, *Push*, *Workflow run* (ces deux derniers servent aussi aux mesures de reverts et de coût de CI, voir [Webhooks GitHub](#webhooks-github) ; *Workflow run* demande la permission *Actions* en lecture, déjà dans le manifeste). Sans URL publique, laissez-le désactivé : le relevé toutes les 30 s suit les PR seul.
-3. Dans **Repository permissions**, appliquez le manifeste [`github-app-manifest.json`](github-app-manifest.json) :
-   - **Contents** : lecture/écriture ;
-   - **Pull requests** : lecture/écriture ;
-   - **Checks** : lecture/écriture (les checks `factory/*` publiés sur le commit poussé, ORC-151 ; une App créée avant doit l'ajouter, sinon ces checks ne sont pas publiés, et le journal le dit) ;
-   - **Commit statuses** : lecture ;
-   - **Actions** : lecture (lister les environnements et leurs règles de protection, pour `factory doctor`) ;
-   - **Metadata** : lecture (obligatoire pour toute App).
-   Aucune permission d'**administration**, ni `Actions` en écriture, ni `Workflows`.
-4. Créez l'App, notez son **App ID**, puis **Generate a private key**. Placez le `.pem` hors du dépôt, en mode `0600` (par exemple `~/.relais/github-app.pem`).
-5. **Install** l'App sur les dépôts confiés à Relais. L'identifiant d'installation est visible dans l'URL `https://github.com/settings/installations/<id>` ; il est facultatif, le démon sait le retrouver dépôt par dépôt.
-6. Renseignez `config.yaml` ou les variables `GH_APP_*`, puis redémarrez `relais up`. Le démarrage journalise le forge choisi, sans secret.
+2. Enter a name and a URL. **Webhook**: active, URL `<publicUrl>/webhooks/github`, secret = the value of `github.webhookSecret` (or `GH_WEBHOOK_SECRET`); events: *Pull request*, *Pull request review*, *Pull request review comment*, *Check run*, *Check suite*, *Push*, *Workflow run* (the last two are also used for the revert and CI cost measurements, see [GitHub webhooks](#github-webhooks); *Workflow run* requires the *Actions* read permission, already in the manifest). Without a public URL, leave it disabled: polling every 30 s tracks PRs on its own.
+3. Under **Repository permissions**, apply the manifest [`github-app-manifest.json`](github-app-manifest.json):
+   - **Contents**: read/write;
+   - **Pull requests**: read/write;
+   - **Checks**: read/write (the `factory/*` checks published on the pushed commit, ORC-151; an App created earlier must add it, otherwise these checks are not published, and the log says so);
+   - **Commit statuses**: read;
+   - **Actions**: read (list environments and their protection rules, for `factory doctor`);
+   - **Metadata**: read (mandatory for every App).
+   No **administration** permission, no `Actions` write, no `Workflows`.
+4. Create the App, note its **App ID**, then **Generate a private key**. Place the `.pem` outside the repository, with mode `0600` (for example `~/.relais/github-app.pem`).
+5. **Install** the App on the repositories entrusted to Relais. The installation ID is visible in the URL `https://github.com/settings/installations/<id>`; it is optional, the daemon can look it up repository by repository.
+6. Fill in `config.yaml` or the `GH_APP_*` variables, then restart `relais up`. Startup logs the chosen forge, without secrets.
 
-#### Jetons
+#### Tokens
 
-- Le démon signe un **JWT RS256** avec la clé privée : `iss = appId`, `iat = maintenant - 60 s`, `exp = maintenant + 9 min`.
-- Il échange ce JWT contre un **jeton d'installation** : `POST /app/installations/{id}/access_tokens` avec `{ "repositories": ["<dépôt du run>"] }`. Si `installationId` n'est pas configuré, il appelle d'abord `GET /repos/{owner}/{repo}/installation`.
-- Le jeton dure **au plus 1 heure**. Il est mis en cache **par dépôt** jusqu'à son expiration, avec une marge de sécurité de 60 s.
-- Il reste **en mémoire du démon** : jamais écrit sur disque, jamais journalisé, jamais transmis aux runs Claude Code, pas plus que `GH_TOKEN`. Un run ne peut donc pas agir sur un autre dépôt avec ce jeton.
-- La clé privée n'est jamais journalisée. Le message de démarrage ne contient que l'App ID et, le cas échéant, l'ID d'installation.
+- The daemon signs an **RS256 JWT** with the private key: `iss = appId`, `iat = now - 60 s`, `exp = now + 9 min`.
+- It exchanges this JWT for an **installation token**: `POST /app/installations/{id}/access_tokens` with `{ "repositories": ["<run's repository>"] }`. If `installationId` is not configured, it first calls `GET /repos/{owner}/{repo}/installation`.
+- The token lasts **at most 1 hour**. It is cached **per repository** until it expires, with a 60 s safety margin.
+- It stays **in the daemon's memory**: never written to disk, never logged, never passed to Claude Code runs, any more than `GH_TOKEN` is. A run therefore cannot act on another repository with this token.
+- The private key is never logged. The startup message contains only the App ID and, where applicable, the installation ID.
 
-#### Rotation de clé
+#### Key rotation
 
 1. GitHub App → **Private keys → Generate a private key**.
-2. Déposez le nouveau `.pem` (mode `0600`) et mettez à jour `github.privateKey` ou `GH_APP_KEY`.
-3. Redémarrez le démon ; les jetons d'installation en cache sont oubliés et les nouveaux sont émis avec la nouvelle clé.
-4. Révoquez l'ancienne clé dans GitHub. Les jetons d'installation déjà émis expirent d'eux-mêmes en moins d'une heure, mais une clé privée compromise peut en émettre de nouveaux : révoquez-la sans attendre.
+2. Drop in the new `.pem` (mode `0600`) and update `github.privateKey` or `GH_APP_KEY`.
+3. Restart the daemon; cached installation tokens are discarded and new ones are issued with the new key.
+4. Revoke the old key in GitHub. Already-issued installation tokens expire on their own in less than an hour, but a compromised private key can issue new ones: revoke it without delay.
 
-### CLI `gh` (repli de migration)
+### `gh` CLI (migration fallback)
 
-Sans section `github`, le démon utilise `GhCliForge` et la CLI `gh`, comme avant :
+Without a `github` section, the daemon uses `GhCliForge` and the `gh` CLI, as before:
 
-- **Poste** : `gh auth login`, et git configuré pour lire `origin` (SSH ou HTTPS). Vérifiez `gh auth status` et `git fetch` depuis le dépôt.
-- **Docker** : variable `GH_TOKEN` ; au démarrage, le conteneur lance `gh auth setup-git` pour que git lise en HTTPS avec ce jeton. Les dépôts montés doivent donc avoir un remote **HTTPS**. Voir [`deploiement.md`](deploiement.md).
+- **Workstation**: `gh auth login`, and git configured to read `origin` (SSH or HTTPS). Check `gh auth status` and `git fetch` from the repository.
+- **Docker**: `GH_TOKEN` variable; at startup, the container runs `gh auth setup-git` so that git reads over HTTPS with this token. Mounted repositories must therefore have an **HTTPS** remote. See [`deployment.md`](deployment.md).
 
-Le démarrage journalise explicitement `forge GitHub : CLI gh (repli de migration…)`. Ce repli ne fait que lire : **sans GitHub App, l'usine ne publie ni ne merge**, et un ticket vérifié est bloqué avec cette raison. Il disparaîtra avec ORC-181.
+Startup explicitly logs `forge GitHub : CLI gh (repli de migration…)`. This fallback only reads: **without a GitHub App, the factory neither publishes nor merges**, and a verified ticket is blocked with that reason. It will go away with ORC-181.
 
-### Publication
+### Publishing
 
-L'usine publie (ORC-125), par l'effet `publish` de l'outbox, que `decide` n'écrit que pour le commit que `verify` vient de trouver vert (invariant I1) et que `mayPublish` regarde encore au moment de l'exécuter. Il faut les sandboxes et la GitHub App (permissions *Contents* et *Pull requests* en écriture). `GitPublisher` (`src/publish/publish.ts`) :
+The factory publishes (ORC-125), through the outbox's `publish` effect, which `decide` only writes for the commit that `verify` has just found green (invariant I1) and which `mayPublish` checks again at execution time. It requires sandboxes and the GitHub App (*Contents* and *Pull requests* write permissions). `GitPublisher` (`src/publish/publish.ts`):
 
-1. lit sur la forge la branche par défaut et la tête de la branche du ticket ; une tête déjà sur le commit va droit à la PR, sans pousser : c'est le rejeu d'une publication coupée ;
-2. fait le bundle de la branche, dans le dépôt propre de l'agent (ORC-317), dans un sandbox neuf à `none`, son `.git` en lecture seule ; aucun git de l'hôte n'y tourne, et le dossier git de `repoPath` n'est monté nulle part. Il le vérifie, le clone sans checkout, sans hook ni config du dépôt, et compare sa tête au commit vérifié ;
-3. contrôle le diff depuis la base, de façon bloquante : `factory/chemins-interdits` (liens symboliques sortants et `package.json#scripts` compris), `factory/binaires`, `factory/anti-triche`, `factory/secrets` ;
-4. pousse **seulement vers l'avant**, en `--force-with-lease` sur la tête lue : si la branche porte un commit absent du travail (un push humain, ORC-159, ou un historique réécrit), rien n'est poussé ;
-5. ouvre la PR **draft**, cherchée par branche avant création (une PR normale si l'offre du dépôt n'a pas de draft). Elle sort de draft au passage du ticket en *Human Review* : GitHub ne merge pas un draft ;
-6. publie sur le commit poussé les checks `factory/verify` (les commandes qui ont tourné ; `neutral` sans commande déclarée), `factory/tests-gelés` (`neutral` sans gel) et `factory/anti-triche` (ORC-151), identifiés par `external_id` = `<check>@<sha>` : un rejeu, ou une seconde publication du même commit, les met à jour, sans doublon. Au mieux : un check refusé (App sans *Checks* en écriture) est journalisé et ne bloque pas le ticket. Un verdict rouge n'est jamais poussé, donc n'a pas de check. Ces checks `factory/*` ne comptent jamais comme la CI du commit (lecture des checks, relevé, webhook) : seuls, ils ne rendent pas une tête verte.
+1. reads from the forge the default branch and the head of the ticket's branch; a head already at the commit goes straight to the PR, without pushing: that is the replay of an interrupted publication;
+2. bundles the branch, in the agent's own repository (ORC-317), in a fresh sandbox at `none`, its `.git` read-only; no host git runs there, and the git directory of `repoPath` is mounted nowhere. It verifies the bundle, clones it without checkout, without the repository's hooks or config, and compares its head to the verified commit;
+3. checks the diff since the base, blocking: `factory/chemins-interdits` (outgoing symbolic links and `package.json#scripts` included), `factory/binaires`, `factory/anti-triche`, `factory/secrets`;
+4. pushes **forward only**, with `--force-with-lease` on the head it read: if the branch carries a commit absent from the work (a human push, ORC-159, or rewritten history), nothing is pushed;
+5. opens the **draft** PR, looked up by branch before creation (a normal PR if the repository's plan has no drafts). It leaves draft when the ticket moves to *Human Review*: GitHub does not merge a draft;
+6. publishes on the pushed commit the checks `factory/verify` (the commands that ran; `neutral` with no declared command), `factory/tests-gelés` (`neutral` with no freeze) and `factory/anti-triche` (ORC-151), identified by `external_id` = `<check>@<sha>`: a replay, or a second publication of the same commit, updates them, without duplicates. Best effort: a refused check (App without *Checks* write) is logged and does not block the ticket. A red verdict is never pushed, so it has no check. These `factory/*` checks never count as the commit's CI (check reading, polling, webhook): on their own, they do not make a head green.
 
-Un refus est une réponse : le ticket est bloqué avec la raison (`publish.refused`), décidé une fois ; la relance qui publie le mène où il devait aller (`owedMove`). Une panne est rejouée par l'outbox, puis bloque le ticket. Un run sans commit au-delà de la base finit sans PR.
+A refusal is an answer: the ticket is blocked with the reason (`publish.refused`), decided once; the retry that publishes takes it where it was meant to go (`owedMove`). A failure is replayed by the outbox, then blocks the ticket. A run with no commit beyond the base ends without a PR.
 
-Le texte de la PR est provisoire : l'id et le titre du ticket, et une phrase de l'usine, sans rien de l'agent ni de mot-clé de fermeture. Sa composition est à ORC-195, par l'`OutputPolicy` d'ORC-214.
+The PR text is provisional: the ticket's id and title, and a sentence from the factory, with nothing from the agent and no closing keyword. Its composition belongs to ORC-195, through the `OutputPolicy` of ORC-214.
 
-Côté agent : `git push` et les écritures `gh` sont refusés par le pack et son hook, le proxy refuse `git-receive-pack` à tout niveau de réseau de l'agent, et aucun jeton n'entre dans un sandbox. Sur l'hôte, sans sandbox, seul le hook tient : ORC-179.
+On the agent side: `git push` and `gh` writes are refused by the pack and its hook, the proxy refuses `git-receive-pack` at every agent network level, and no token enters a sandbox. On the host, without a sandbox, only the hook holds: ORC-179.
 
-### Permissions nécessaires pour le repli `gh`
+### Permissions required for the `gh` fallback
 
-Sur chaque dépôt confié à Relais, le compte `gh` doit pouvoir :
+On each repository entrusted to Relais, the `gh` account must be able to:
 
-| Action | Utilisée par | Commande |
+| Action | Used by | Command |
 |---|---|---|
-| Lire les branches | agents, worktrees | `git fetch`, `git ls-remote` |
-| Lire les PR | agents | `gh pr view`, `gh pr diff` |
-| Lire les checks et les logs de CI | démon, agents | `gh pr checks`, `gh run view --log-failed` |
-| Lire les fils de review | démon | `gh api graphql` (`reviewThreads`) |
+| Read branches | agents, worktrees | `git fetch`, `git ls-remote` |
+| Read PRs | agents | `gh pr view`, `gh pr diff` |
+| Read checks and CI logs | daemon, agents | `gh pr checks`, `gh run view --log-failed` |
+| Read review threads | daemon | `gh api graphql` (`reviewThreads`) |
 
-Avec un jeton à granularité fine : *Contents*, *Pull requests*, *Actions* et *Checks* en lecture, *Metadata* en lecture. Avec un jeton classique : scope `repo`. Pour `relais init` → « Créer un dépôt relais-knowledge », le compte doit aussi pouvoir créer un dépôt.
+With a fine-grained token: *Contents*, *Pull requests*, *Actions* and *Checks* read, *Metadata* read. With a classic token: `repo` scope. For `relais init` → « Créer un dépôt relais-knowledge », the account must also be able to create a repository.
 
-## Droits des humains
+## Human permissions
 
-La [matrice d'autorisations](linear.md#autorisations--qui-peut-faire-quoi) (ORC-186) lit la permission d'un utilisateur sur le dépôt (`GET /repos/{owner}/{repo}/collaborators/{login}/permission`), par la GitHub App (permission *Metadata* en lecture, déjà demandée) ou, en repli, par `gh api`. Le login GitHub de chaque utilisateur Linear se déclare dans `config.yaml` (`projects[].authz.githubLogins`, voir [configuration](configuration.md#autorisations)). Une permission lue est gardée 60 s.
+The [authorization matrix](linear.md#authorizations-who-can-do-what) (ORC-186) reads a user's permission on the repository (`GET /repos/{owner}/{repo}/collaborators/{login}/permission`), through the GitHub App (*Metadata* read permission, already requested) or, as a fallback, through `gh api`. The GitHub login of each Linear user is declared in `config.yaml` (`projects[].authz.githubLogins`, see [configuration](configuration.md#authorization)). A permission once read is kept for 60 s.
 
-## Ce que Relais relève
+## What Relais polls
 
-Toutes les 5 minutes avec la réconciliation (ORC-185), et toutes les 30 s quand les webhooks GitHub sont refusés faute de secret (sans eux, un merge attendrait 5 minutes), pour chaque ticket suivi qui a une branche et n'est pas `done` (un ticket passé en `done` avant que le relevé voie le merge de sa PR connue reste relevé, pour le seul merge ou la fermeture de cette PR, jusqu'à ce qu'il les voie : Linear peut le passer en *Done* avant, et seul `pr.merged` arrête le travail de code) :
+Every 5 minutes with reconciliation (ORC-185), and every 30 s when GitHub webhooks are refused for lack of a secret (without them, a merge would wait 5 minutes), for each tracked ticket that has a branch and is not `done` (a ticket moved to `done` before polling sees the merge of its known PR keeps being polled, only for the merge or closing of that PR, until it sees them: Linear may move it to *Done* first, and only `pr.merged` stops the code work):
 
-- `GET /repos/{owner}/{repo}/pulls?head={owner}:{branche}&state=all` : la PR de la branche (ouverte, mergée, fermée) ;
-- si elle est ouverte, `GET /repos/{owner}/{repo}/commits/{sha}/check-runs` et `GET /repos/{owner}/{repo}/commits/{sha}/status` : état agrégé de la CI (`fail` si un check échoue ou est annulé, `pending` si un check tourne, `pass` sinon, `none` sans check).
+- `GET /repos/{owner}/{repo}/pulls?head={owner}:{branch}&state=all`: the branch's PR (open, merged, closed);
+- if it is open, `GET /repos/{owner}/{repo}/commits/{sha}/check-runs` and `GET /repos/{owner}/{repo}/commits/{sha}/status`: aggregated CI state (`fail` if a check fails or is cancelled, `pending` if a check is running, `pass` otherwise, `none` with no check).
 
-Un **push humain** dont le webhook s'est perdu n'est pas rattrapé : le relevé lit la tête de la PR, mais l'usine ne retient pas la tête qu'elle a poussée elle-même (suite d'ORC-185, ORC-281). Publier par-dessus un tel push est refusé : voir [Publication](#publication).
+A **human push** whose webhook got lost is not caught up: polling reads the PR head, but the factory does not remember the head it pushed itself (follow-up of ORC-185, ORC-281). Publishing over such a push is refused: see [Publishing](#publishing).
 
-Au moment d'un run `dev-feedback`, les fils de review **non résolus** sont lus en GraphQL (`reviewThreads`) et transformés en retours pour l'agent.
+At the time of a `dev-feedback` run, **unresolved** review threads are read via GraphQL (`reviewThreads`) and turned into feedback for the agent.
 
-Événements produits (voir [`workflow.md`](workflow.md#3-les-règles-on)) :
+Events produced (see [`workflow.md`](workflow.md#3-the-on-rules)):
 
-| Constat | Événement | Pack standard |
+| Observation | Event | Standard pack |
 |---|---|---|
-| Nouvelle PR pour la branche | `pr.opened` | URL ajoutée à la session Linear |
-| CI qui passe au rouge | `pr.checks_failed` (avec la liste des checks en échec) | `fix-ci` si le ticket est en *Human Review* ou *AI Review* et non bloqué, au plus `limits.ci_fix_attempts` fois de suite ; ensuite le ticket est bloqué ([`workflow.md`](workflow.md#limits)) |
-| CI qui passe au vert | `pr.checks_passed` | remet à zéro le compte des relances sur CI rouge et lève le blocage dû à cette borne |
-| PR mergée | `pr.merged` | *Done*, worktree supprimé, `learn` ; ensuite, plus aucun run de code sur le ticket |
-| Merge de l'usine refusé (ORC-148) | `pr.merge_refused` | push depuis la review : retour en *AI Review*, review IA relancée sur les nouveaux commits ; autre refus (PR non mergeable…) : retour en *Human Review* avec la raison |
-| PR fermée sans merge | `pr.closed` | le travail du ticket est annulé (voir [`workflow.md`](workflow.md#événements-configurables)) |
+| New PR for the branch | `pr.opened` | URL added to the Linear session |
+| CI turning red | `pr.checks_failed` (with the list of failing checks) | `fix-ci` if the ticket is in *Human Review* or *AI Review* and not blocked, at most `limits.ci_fix_attempts` times in a row; after that the ticket is blocked ([`workflow.md`](workflow.md#limits)) |
+| CI turning green | `pr.checks_passed` | resets the count of retries on red CI and lifts the block caused by that limit |
+| PR merged | `pr.merged` | *Done*, worktree deleted, `learn`; after that, no more code runs on the ticket |
+| Factory merge refused (ORC-148) | `pr.merge_refused` | push during review: back to *AI Review*, AI review relaunched on the new commits; other refusal (PR not mergeable…): back to *Human Review* with the reason |
+| PR closed without merge | `pr.closed` | the ticket's work is cancelled (see [`workflow.md`](workflow.md#configurable-events)) |
 
-Un changement d'état de CI n'est signalé qu'une fois (pas à chaque relevé). Les commentaires de review **non résolus** de la PR sont relus au moment d'un run `dev-feedback` (entrée `feedback`) : résolvez un fil sur GitHub pour qu'il ne soit plus renvoyé à l'agent.
+A CI state change is reported only once (not on every poll). The PR's **unresolved** review comments are re-read at the time of a `dev-feedback` run (`feedback` input): resolve a thread on GitHub so it is no longer sent back to the agent.
 
-Sans webhook GitHub, il faut jusqu'à 30 s pour qu'un merge ou une CI soit pris en compte. Un verdict de CI est nommé par la tête de la PR (`pr:<ticket>:<n>:checks:<fail|pass>:<sha>`) : le relevé et le webhook qui voient le même verdict sur le même commit l'écrivent une seule fois dans l'inbox, et un verdict rouge revu sur le même commit après un vert (CI relancée) n'est pas signalé une seconde fois. Avec la CLI `gh`, la tête est lue dans `headRefOid`.
+Without a GitHub webhook, it takes up to 30 s for a merge or CI to be taken into account. A CI verdict is named by the PR head (`pr:<ticket>:<n>:checks:<fail|pass>:<sha>`): polling and the webhook seeing the same verdict on the same commit write it only once to the inbox, and a red verdict seen again on the same commit after a green one (CI rerun) is not reported a second time. With the `gh` CLI, the head is read from `headRefOid`.
 
-## Webhooks GitHub
+## GitHub webhooks
 
-`POST /webhooks/github` reçoit les webhooks de l'App (ORC-134) :
+`POST /webhooks/github` receives the App's webhooks (ORC-134):
 
-- **signature** : `X-Hub-Signature-256` doit valoir `sha256=` suivi du HMAC-SHA256 du corps brut avec le secret, comparé en temps constant ; sinon refus (401) et **rien n'est écrit**. Le secret vient de `github.webhookSecret` dans `config.yaml`, sinon de la variable `GH_WEBHOOK_SECRET`. Sans secret (ou un secret fait d'espaces), **tous** les webhooks GitHub sont refusés, et `relais up` le signale au démarrage ;
-- **inbox écrite avant la réponse** (ORC-147) : un 200 veut dire « écrit » ; si le démon tombe juste après, même avec `kill -9`, l'événement est traité au démarrage suivant. Si l'écriture échoue, la réponse est 500 : GitHub ne renvoie pas seul une livraison en échec, renvoyez-la depuis l'onglet *Advanced* de l'App, ou laissez le relevé la rattraper ;
-- **déduplication et rejeu** : l'id de chaque événement vient du corps signé (numéro de PR, SHA, id de la review ou du commentaire), jamais de `X-GitHub-Delivery`, que la signature ne couvre pas (il sert seulement au journal). Une livraison renvoyée, un corps rejoué, ou le même fait vu par le relevé, porte un id que l'inbox a déjà : il n'est pas retraité. GitHub ne signe pas d'horodatage : il n'y a pas de contrôle de fraîcheur, la déduplication en base en tient lieu ;
-- **rattachement au ticket** : par la branche de la PR (ou du push), comme le relevé, et par le dépôt : `repository.full_name` doit être le dépôt `origin` du projet du ticket (lu une fois par `git remote get-url origin`). Seule une branche d'un ticket suivi, dans le dépôt de son projet, produit un événement ; tout le reste (autre dépôt où l'App est installée, autre branche, corps d'une autre forme) est accepté (200) et ignoré. Une PR plus ancienne de la branche, déjà fermée, est ignorée aussi.
+- **signature**: `X-Hub-Signature-256` must equal `sha256=` followed by the HMAC-SHA256 of the raw body with the secret, compared in constant time; otherwise refused (401) and **nothing is written**. The secret comes from `github.webhookSecret` in `config.yaml`, otherwise from the `GH_WEBHOOK_SECRET` variable. Without a secret (or with a secret made of whitespace), **all** GitHub webhooks are refused, and `relais up` reports it at startup;
+- **inbox written before the response** (ORC-147): a 200 means "written"; if the daemon goes down right after, even with `kill -9`, the event is processed at the next startup. If the write fails, the response is 500: GitHub does not resend a failed delivery on its own; redeliver it from the App's *Advanced* tab, or let polling catch it up;
+- **deduplication and replay**: each event's id comes from the signed body (PR number, SHA, review or comment id), never from `X-GitHub-Delivery`, which the signature does not cover (it is only used for the log). A redelivery, a replayed body, or the same fact seen by polling carries an id the inbox already has: it is not reprocessed. GitHub does not sign a timestamp: there is no freshness check; deduplication in the database stands in for it;
+- **linking to the ticket**: by the PR's (or push's) branch, like polling, and by repository: `repository.full_name` must be the `origin` repository of the ticket's project (read once via `git remote get-url origin`). Only a branch of a tracked ticket, in its project's repository, produces an event; everything else (another repository where the App is installed, another branch, a body of another shape) is accepted (200) and ignored. An older PR of the branch, already closed, is ignored too.
 
-| Webhook | Événement dans l'inbox | Réaction |
+| Webhook | Event in the inbox | Reaction |
 |---|---|---|
-| `pull_request` fermée avec `merged: true` | `pr.merged` (précédé de `pr.opened` si le ticket ne connaît pas la PR), avec le commit de merge (`mergeSha`, `merge_commit_sha`), la tête mergée (`headSha`) et l'heure du merge sur GitHub (`mergedAt`, `merged_at`) ; le relevé les donne aussi quand la forge les lit | comme pour le relevé |
-| `pull_request` fermée sans merge | `pr.closed`, un par fermeture | travail du ticket annulé |
-| `pull_request` rouverte (la PR du ticket) | `pr.opened`, un par réouverture | la PR redevient ouverte ; le ticket reste bloqué jusqu'à une relance humaine |
-| `pull_request` ouverte avec `mergeable_state: dirty` | `pr.conflicted` (tête et base) | aucune pour l'instant (ORC-146) |
-| `check_run` / `check_suite` terminé en échec (`failure`, `timed_out`, `cancelled`, `action_required`, `stale`, `startup_failure`) sur la tête de la PR | `pr.checks_failed`, avec la liste des checks en échec que la forge lit sur cette tête ; rien si elle lit cette tête en cours ou au vert (run annulé puis relancé) ; si elle ne répond pas, le check du webhook seul | celle du pack, bornée par `limits.ci_fix_attempts` |
-| `check_run` / `check_suite` terminé au vert | `pr.checks_passed`, seulement quand la forge lit alors **tous** les checks de cette tête au vert ; si elle ne répond pas, 500 | celle du pack |
-| `push` sur la branche du ticket par un compte qui n'est pas un bot | `push.human` (non fiable) | aucune pour l'instant (ORC-159) |
-| `pull_request_review` soumise, `pull_request_review_comment` créé, par un humain | `pr.reviewed` (non fiable) | aucune pour l'instant (ORC-190) |
-| `push` sur la branche par défaut du dépôt (`repository.default_branch`) dont un commit merge une PR d'un ticket suivi, ou revert une PR mergée d'un ticket | `default_branch.pushed` (non fiable), un par ticket concerné, avec ses seuls commits concernés (SHA, message, auteur, `merges` ou `reverts` : numéro de la PR) et l'heure du push (`repository.pushed_at`) | aucune : lu par les mesures (revert à 14 jours, ORC-278) |
-| `workflow_run` terminé (`completed`) sur la branche d'un ticket suivi, dans le dépôt du projet (pas une fork) | `ci.run_completed` (non fiable), un par run et par essai (`ci:<ticket>:<run id>:<run_attempt>`), avec la PR, la tête, la conclusion et la durée | aucune : lu par les mesures (coût de CI, ORC-278) |
+| `pull_request` closed with `merged: true` | `pr.merged` (preceded by `pr.opened` if the ticket does not know the PR), with the merge commit (`mergeSha`, `merge_commit_sha`), the merged head (`headSha`) and the merge time on GitHub (`mergedAt`, `merged_at`); polling provides them too when the forge reads them | same as for polling |
+| `pull_request` closed without merge | `pr.closed`, one per closing | ticket's work cancelled |
+| `pull_request` reopened (the ticket's PR) | `pr.opened`, one per reopening | the PR is open again; the ticket stays blocked until a human retry |
+| `pull_request` open with `mergeable_state: dirty` | `pr.conflicted` (head and base) | none for now (ORC-146) |
+| `check_run` / `check_suite` completed with failure (`failure`, `timed_out`, `cancelled`, `action_required`, `stale`, `startup_failure`) on the PR head | `pr.checks_failed`, with the list of failing checks the forge reads on that head; nothing if it reads that head as in progress or green (run cancelled then rerun); if it does not respond, the webhook's check alone | the pack's, bounded by `limits.ci_fix_attempts` |
+| `check_run` / `check_suite` completed green | `pr.checks_passed`, only when the forge then reads **all** checks of that head as green; if it does not respond, 500 | the pack's |
+| `push` on the ticket's branch by an account that is not a bot | `push.human` (untrusted) | none for now (ORC-159) |
+| `pull_request_review` submitted, `pull_request_review_comment` created, by a human | `pr.reviewed` (untrusted) | none for now (ORC-190) |
+| `push` on the repository's default branch (`repository.default_branch`) where a commit merges a PR of a tracked ticket, or reverts a merged PR of a ticket | `default_branch.pushed` (untrusted), one per ticket concerned, with only its relevant commits (SHA, message, author, `merges` or `reverts`: PR number) and the push time (`repository.pushed_at`) | none: read by the measurements (14-day revert, ORC-278) |
+| `workflow_run` completed (`completed`) on a tracked ticket's branch, in the project's repository (not a fork) | `ci.run_completed` (untrusted), one per run and per attempt (`ci:<ticket>:<run id>:<run_attempt>`), with the PR, the head, the conclusion and the duration | none: read by the measurements (CI cost, ORC-278) |
 
-Un check sur un commit que la PR a quitté est ignoré. Une lecture de la forge en retard sur le webhook (check encore lu « en cours ») ne laisse rien passer : le relevé rattrape le verdict. Les webhooks sont traités un par un, dans l'ordre d'arrivée : une lecture lente de la forge retarde les réponses suivantes. Les statuts de commit (`status`) ne passent que par le relevé. Un conflit n'apparaît que sur un webhook `pull_request` où GitHub a déjà calculé la fusionnabilité : un conflit créé par un push sur la branche par défaut, sans événement sur la PR, attend la réconciliation (ORC-185). Tant que les agents poussent avec `GH_TOKEN` (ORC-125), leurs pushes viennent d'un compte utilisateur et arrivent donc comme `push.human`, sans effet aujourd'hui. `pr.conflicted`, `pr.reviewed`, `default_branch.pushed` et `ci.run_completed` ne sont pas des clés acceptées sous `on` : le moteur les trace sans réagir.
+A check on a commit the PR has moved away from is ignored. A forge read lagging behind the webhook (check still read as "in progress") lets nothing through: polling catches up the verdict. Webhooks are processed one at a time, in order of arrival: a slow forge read delays the following responses. Commit statuses (`status`) only go through polling. A conflict only appears on a `pull_request` webhook where GitHub has already computed mergeability: a conflict created by a push to the default branch, with no event on the PR, waits for reconciliation (ORC-185). As long as agents push with `GH_TOKEN` (ORC-125), their pushes come from a user account and therefore arrive as `push.human`, with no effect today. `pr.conflicted`, `pr.reviewed`, `default_branch.pushed` and `ci.run_completed` are not accepted keys under `on`: the engine records them without reacting.
 
-**Push de la branche par défaut et runs de CI (ORC-278).** Un push sur la branche par défaut n'a pas de branche de ticket : chaque commit est rattaché par ce que GitHub en écrit, jamais par le texte d'un agent lu comme une affirmation :
+**Default branch pushes and CI runs (ORC-278).** A push to the default branch has no ticket branch: each commit is linked by what GitHub writes about it, never by an agent's text read as a claim:
 
-- un commit **merge** une PR d'un ticket suivi quand GitHub l'a écrit (committer `web-flow`, celui du bouton de merge) avec le sujet de son merge (`Merge pull request #<n> from …`, ou `<titre> (#<n>)` pour un squash ; le dernier `(#<n>)` est celui que GitHub ajoute) et que `<n>` est la PR d'un ticket du projet, ou quand son SHA est le commit de merge ou la tête d'une PR dont le `pr.merged` est au journal (merge par rebase). Le même sujet tapé par quelqu'un d'autre (un cherry-pick, un commit d'agent) ne merge rien ;
-- un commit **revert** une PR mergée quand son message contient `This reverts commit <sha complet>` (`git revert`, et le commit du bouton *Revert* de GitHub) et que ce SHA est le commit de merge ou la tête d'un `pr.merged` journalisé du projet (`Store.mergedPrOf`), ou `Reverts <owner>/<dépôt>#<n>` (corps de la PR du bouton *Revert*, gardé par un squash) pour une PR `<n>` d'un ticket du dépôt ;
-- aucun revert n'est lu dans le commit qui merge une PR de l'usine (un squash garde les messages des commits de l'agent), ni dans tout un push qui la merge par un commit de merge ou par rebase : il apporte les commits de la PR, écrits par l'agent ; un revert poussé à côté du squash d'une PR de l'usine est lu ;
-- un push sans commit concerné ne produit rien. L'id `default-branch:<ticket>:<after>` dédoublonne une livraison renvoyée.
+- a commit **merges** a PR of a tracked ticket when GitHub wrote it (committer `web-flow`, the one of the merge button) with its merge subject (`Merge pull request #<n> from …`, or `<title> (#<n>)` for a squash; the last `(#<n>)` is the one GitHub adds) and `<n>` is the PR of a ticket of the project, or when its SHA is the merge commit or the head of a PR whose `pr.merged` is in the journal (rebase merge). The same subject typed by someone else (a cherry-pick, an agent commit) merges nothing;
+- a commit **reverts** a merged PR when its message contains `This reverts commit <full sha>` (`git revert`, and the commit of GitHub's *Revert* button) and that SHA is the merge commit or the head of a journaled `pr.merged` of the project (`Store.mergedPrOf`), or `Reverts <owner>/<repo>#<n>` (body of the *Revert* button's PR, kept by a squash) for a PR `<n>` of a ticket of the repository;
+- no revert is read in the commit that merges a factory PR (a squash keeps the messages of the agent's commits), nor in an entire push that merges it via a merge commit or a rebase: it brings in the PR's commits, written by the agent; a revert pushed alongside the squash of a factory PR is read;
+- a push with no relevant commit produces nothing. The id `default-branch:<ticket>:<after>` deduplicates a redelivery.
 
-Le push du merge peut arriver avant le `pr.merged` du même merge : il est alors rattaché par son sujet ; un merge par rebase arrivé avant n'est pas vu (la mesure de revert du ticket reste vide tant qu'aucun push ne le concerne), et les messages de ses commits sont lus comme ceux d'un push humain : un commit d'agent qui écrit `This reverts commit <sha d'un autre merge de l'usine>` compterait un revert sur l'autre ticket. Chaque numéro de PR et chaque SHA d'un push est cherché une fois ; la recherche d'un SHA lit `journal` (Postgres) ou `events` (SQLite) sans index dédié. La durée d'un run de CI est celle de son essai, de `run_started_at` (début de cet essai, pas du premier) à `updated_at` du webhook `completed` : le webhook porte les deux, sans appel à l'API. Les minutes facturées (`GET /actions/runs/{id}/timing`) ne sont pas lues : GitHub retire ces points d'accès d'usage, et ils demanderaient un appel par run ; la durée de l'essai est le temps d'horloge du workflow, pas la somme de ses jobs en parallèle ni l'arrondi à la minute de la facture. Un run sans PR listée par GitHub est compté sur la PR du ticket au moment du webhook si elle est ouverte, sinon sans PR. Un run dont le dépôt de tête n'est pas celui du projet (une fork, ou une fork supprimée : `head_repository` nul) est ignoré.
+The merge push may arrive before the `pr.merged` of the same merge: it is then linked by its subject; a rebase merge arriving first is not seen (the ticket's revert measurement stays empty as long as no push concerns it), and its commits' messages are read like those of a human push: an agent commit that writes `This reverts commit <sha of another factory merge>` would count a revert on the other ticket. Each PR number and each SHA of a push is looked up once; looking up a SHA reads `journal` (Postgres) or `events` (SQLite) without a dedicated index. A CI run's duration is that of its attempt, from `run_started_at` (start of this attempt, not the first) to `updated_at` of the `completed` webhook: the webhook carries both, with no API call. Billed minutes (`GET /actions/runs/{id}/timing`) are not read: GitHub is retiring these usage endpoints, and they would require one call per run; the attempt duration is the workflow's wall-clock time, not the sum of its parallel jobs nor the bill's per-minute rounding. A run with no PR listed by GitHub is counted on the ticket's PR at the time of the webhook if it is open, otherwise without a PR. A run whose head repository is not the project's (a fork, or a deleted fork: `head_repository` null) is ignored.
 
 ## Branches
 
-Chaque ticket travaille sur `relais/<ticket>-<titre-en-slug>` (ex. `relais/rel-12-export-csv`), créée depuis `origin/<branche par défaut>` (lue dans `refs/remotes/origin/HEAD`, sinon `main`). Une branche locale ou distante du même nom est réutilisée. Le contrôle `not_started` refuse de prendre un ticket qui a déjà une branche `relais/<ticket>-…` sur `origin`.
+Each ticket works on `relais/<ticket>-<title-slug>` (e.g. `relais/rel-12-export-csv`), created from `origin/<default branch>` (read from `refs/remotes/origin/HEAD`, otherwise `main`). A local or remote branch with the same name is reused. The `not_started` check refuses to take a ticket that already has a `relais/<ticket>-…` branch on `origin`.
 
-## Protection de branche (fortement conseillée)
+## Branch protection (strongly recommended)
 
-Le pack interdit aux agents `gh pr merge` et tout push ([`pack-et-skills.md`](pack-et-skills.md#permissions)), mais ces refus sont une **première barrière** : ils dépendent de Claude Code et un agent qui exécute du code peut les contourner. C'est GitHub qui garantit que seuls les humains mergent. Sur la branche par défaut de chaque dépôt :
+The pack forbids agents from `gh pr merge` and any push ([`pack-and-skills.md`](pack-and-skills.md#permissions)), but these refusals are a **first barrier**: they depend on Claude Code, and an agent that runs code can bypass them. It is GitHub that guarantees only humans merge. On the default branch of each repository:
 
-- **Require a pull request before merging** (avec au moins une approbation si votre équipe relit) ;
-- **Block force pushes** et interdire la suppression ;
-- **Require status checks to pass** avec vos checks de CI ;
-- ne pas mettre le compte de Relais dans les exceptions (*bypass*).
+- **Require a pull request before merging** (with at least one approval if your team reviews);
+- **Block force pushes** and forbid deletion;
+- **Require status checks to pass** with your CI checks;
+- do not put Relais's account in the exceptions (*bypass*).
 
-Le dépôt de connaissance (`relais-knowledge`) mérite la même protection : un humain y merge.
+The knowledge repository (`relais-knowledge`) deserves the same protection: a human merges there.
 
-## `factory doctor` : secrets de CI et branches de l'usine
+## `factory doctor`: CI secrets and factory branches
 
-`factory doctor [repo] [--json]` (dépôt courant par défaut) vérifie, avant de confier un dépôt, qu'aucune CI ne peut exposer de secrets à une branche `factory/*`. Le contrôle vit dans `doctor`, pas seulement dans le skill `fix-ci` : une PR de l'usine ne doit jamais déclencher un job qui lit les secrets du dépôt sans qu'un humain ait approuvé.
+`factory doctor [repo] [--json]` (current repository by default) checks, before entrusting a repository, that no CI can expose secrets to a `factory/*` branch. The check lives in `doctor`, not only in the `fix-ci` skill: a factory PR must never trigger a job that reads the repository's secrets without a human having approved it.
 
-La commande résout `owner/name` avec `git remote get-url origin`, puis lit avec la GitHub App :
+The command resolves `owner/name` with `git remote get-url origin`, then reads with the GitHub App:
 
-- `.github/workflows/*.yml` et `*.yaml` (Contents API, branche par défaut) ;
-- `GET /repos/{owner}/{repo}/environments` et leurs `protection_rules`.
+- `.github/workflows/*.yml` and `*.yaml` (Contents API, default branch);
+- `GET /repos/{owner}/{repo}/environments` and their `protection_rules`.
 
-Elle exige la GitHub App (`github.*` ou `GH_APP_*`) : aucun repli `gh` pour ce contrôle. Code retour `0` si le dépôt est accepté, `1` s'il est refusé ou si une lecture échoue.
+It requires the GitHub App (`github.*` or `GH_APP_*`): no `gh` fallback for this check. Exit code `0` if the repository is accepted, `1` if it is refused or if a read fails.
 
-### Règle
+### Rule
 
-Un workflow **avec secrets** (`secrets.*`, `${{ secrets.X }}`, `secrets: inherit` ou une clé `secrets:`) est refusé s'il peut tourner sur une branche de l'usine :
+A workflow **with secrets** (`secrets.*`, `${{ secrets.X }}`, `secrets: inherit` or a `secrets:` key) is refused if it can run on a factory branch:
 
-- `pull_request` et `pull_request_target` : toujours considérés à risque, car une PR de `factory/*` peut les déclencher ; le filtre `branches` d'une pull request porte sur la branche de base, pas sur la branche de tête ;
-- `push` sans filtre : toutes les branches ;
-- `push` dont le filtre `branches` peut atteindre `factory/*` (`factory/**`, `*/*`, `**`…) ou dont `branches-ignore` ne l'exclut pas entièrement ;
-- `workflow_run` sans filtre, ou avec un filtre qui atteint `factory/*` (protection supplémentaire de la même famille de risque).
+- `pull_request` and `pull_request_target`: always considered risky, because a PR from `factory/*` can trigger them; a pull request's `branches` filter applies to the base branch, not the head branch;
+- `push` without a filter: all branches;
+- `push` whose `branches` filter can reach `factory/*` (`factory/**`, `*/*`, `**`…) or whose `branches-ignore` does not fully exclude it;
+- `workflow_run` without a filter, or with a filter that reaches `factory/*` (extra protection against the same family of risk).
 
-À l'inverse, un `push` limité à des branches hors usine (`main`, `release/*`) ou à des tags seulement ne voit pas les secrets sur une branche `factory/*`.
+Conversely, a `push` limited to non-factory branches (`main`, `release/*`) or to tags only does not see secrets on a `factory/*` branch.
 
-Sont acceptés :
+Accepted:
 
-1. une CI dédiée **sans secrets** sur ces branches ;
-2. un workflow avec secrets dont **tous les jobs qui voient un secret** sont rattachés à un environnement GitHub dont les `protection_rules` contiennent `required_reviewers` avec au moins un reviewer : l'approbation humaine bloque le job avant qu'il ne lise le secret ;
-3. un workflow avec secrets qui ne tourne que sur des branches hors usine, ou seulement sur des tags.
+1. a dedicated CI **without secrets** on these branches;
+2. a workflow with secrets where **every job that sees a secret** is attached to a GitHub environment whose `protection_rules` contain `required_reviewers` with at least one reviewer: human approval blocks the job before it reads the secret;
+3. a workflow with secrets that only runs on non-factory branches, or only on tags.
 
-En cas de doute, `doctor` refuse : YAML invalide ou ambigu (multi-document, `on` dynamique, filtres mal typés), environnement introuvable ou sans required reviewers, clé `secrets:` (workflow réutilisable) sans environnement protégé, erreur de l'API GitHub, réponse de l'API illisible (jamais lue comme « aucun workflow », « aucun environnement », « aucun reviewer » ou « protégé »), plus de 1000 environnements. Un 404 sur `.github/workflows` veut dire « pas de CI » ; un 404 sur l'installation de l'App ou sur son jeton est une erreur de configuration : `doctor` refuse. `GITHUB_TOKEN` compte comme un secret.
+When in doubt, `doctor` refuses: invalid or ambiguous YAML (multi-document, dynamic `on`, mistyped filters), environment not found or without required reviewers, `secrets:` key (reusable workflow) without a protected environment, GitHub API error, unreadable API response (never read as "no workflow", "no environment", "no reviewer" or "protected"), more than 1000 environments. A 404 on `.github/workflows` means "no CI"; a 404 on the App's installation or on its token is a configuration error: `doctor` refuses. `GITHUB_TOKEN` counts as a secret.
 
-### Exemples
+### Examples
 
-Refus :
+Refusal:
 
 ```text
 $ factory doctor
@@ -222,7 +222,7 @@ Workflows GitHub Actions : 1
 Résultat : refusé — 1 workflow(s) sur 1 peuvent exposer des secrets aux branches de l'usine.
 ```
 
-Acceptation avec approbation humaine (`ci-protected` a une règle `required_reviewers`) :
+Acceptance with human approval (`ci-protected` has a `required_reviewers` rule):
 
 ```yaml
 on: pull_request
@@ -236,20 +236,20 @@ jobs:
           TOKEN: ${{ secrets.NPM_TOKEN }}
 ```
 
-`factory doctor` affiche alors `secrets : oui`, `environnement protégé : oui` et `verdict : accepté`.
+`factory doctor` then displays `secrets : oui`, `environnement protégé : oui` and `verdict : accepté`.
 
-`--json` produit le même verdict dans un objet `{ repoPath, accepted, workflows: [{ path, triggers, secrets, environments, protected, verdict, reasons }] }`, sans aucune valeur de secret.
+`--json` produces the same verdict in an object `{ repoPath, accepted, workflows: [{ path, triggers, secrets, environments, protected, verdict, reasons }] }`, without any secret value.
 
-### Limites
+### Limitations
 
-- La lecture porte sur la **branche par défaut** (Contents API sans `ref`) : les workflows de `pull_request` sont bien ceux que GitHub utilise pour une PR de `factory/*` ; un workflow qui n'existerait que sur une branche poussée n'est pas vu.
-- L'App ne peut pas lister les secrets du dépôt : `doctor` détecte les **références** aux secrets, pas leur existence.
-- Les workflows réutilisables appelés ne sont pas téléchargés : `secrets: inherit` est traité comme un secret, et un workflow réutilisable appelé sans `secrets:` ne reçoit aucun secret.
-- Ce contrôle ne remplace pas la protection de branche : il garantit seulement que la CI ne lit pas de secret sur une branche d'usine sans approbation.
-- Permission requise : **Actions : lecture** (présente dans [`github-app-manifest.json`](github-app-manifest.json)) ; c'est la permission que GitHub associe à `GET /repos/{owner}/{repo}/environments`. Une App créée avant ORC-135 doit l'ajouter, sinon cette lecture répond 403 et `doctor` refuse le dépôt.
+- Reading targets the **default branch** (Contents API without `ref`): the `pull_request` workflows are indeed the ones GitHub uses for a PR from `factory/*`; a workflow that only exists on a pushed branch is not seen.
+- The App cannot list the repository's secrets: `doctor` detects **references** to secrets, not their existence.
+- Called reusable workflows are not downloaded: `secrets: inherit` is treated as a secret, and a reusable workflow called without `secrets:` receives no secret.
+- This check does not replace branch protection: it only guarantees that CI does not read a secret on a factory branch without approval.
+- Required permission: **Actions: read** (present in [`github-app-manifest.json`](github-app-manifest.json)); it is the permission GitHub associates with `GET /repos/{owner}/{repo}/environments`. An App created before ORC-135 must add it, otherwise this read returns 403 and `doctor` refuses the repository.
 
 ## CI
 
-Relais n'impose pas de CI mais en tire parti : `pr.checks_failed` déclenche `fix-ci` (diagnostic, reproduction locale, correction ou question), et le skill `review` attend une CI verte. Une CI qui lance au moins lint, types et tests est donc recommandée, en plus des commandes `verify` que Relais lance lui-même après chaque run ([`workflow.md`](workflow.md#jobs)).
+Relais does not impose a CI but makes use of it: `pr.checks_failed` triggers `fix-ci` (diagnosis, local reproduction, fix or question), and the `review` skill waits for a green CI. A CI that runs at least lint, types and tests is therefore recommended, in addition to the `verify` commands Relais runs itself after each run ([`workflow.md`](workflow.md#jobs)).
 
-Le dépôt Relais lui-même a une CI GitHub Actions (`.github/workflows/ci.yml`) : sur chaque PR et chaque push sur `main`, Node 24, `npm ci`, `npm run typecheck`, `npm run lint`, `npm test`.
+The Relais repository itself has a GitHub Actions CI (`.github/workflows/ci.yml`): on every PR and every push to `main`, Node 24, `npm ci`, `npm run typecheck`, `npm run lint`, `npm test`.
