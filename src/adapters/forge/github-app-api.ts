@@ -43,6 +43,8 @@ interface EnvironmentDto {
   protection_rules?: { type: string; reviewers?: unknown[] }[];
 }
 
+const isFile = (v: unknown): v is ContentEntryDto => isRecord(v);
+
 const isDirEntry = (v: unknown): v is DirEntryDto =>
   isRecord(v) && typeof v.type === 'string' && typeof v.path === 'string' && (v.name === undefined || typeof v.name === 'string');
 
@@ -72,11 +74,13 @@ function hasRequiredReviewers(rules: EnvironmentDto['protection_rules']): boolea
  */
 export class GitHubAppApi extends GitHubAppAuth {
   async listWorkflows(repoPath: string): Promise<WorkflowSource[]> {
+    // Resolved before the try: a 404 on the installation or its token is a configuration error, never "no CI".
+    const repo = await this.repo(repoPath);
+    const token = await this.installationToken(repo);
+    const contents = `/repos/${segment(repo.owner)}/${segment(repo.name)}/contents`;
     let entries: DirEntryDto[];
     try {
-      entries = await this.requestRead(repoPath, (repo) => {
-        return `/repos/${segment(repo.owner)}/${segment(repo.name)}/contents/${encodedPath(WORKFLOWS_DIR)}`;
-      }, isDirListing, 'a directory listing');
+      entries = await this.read('GET', `${contents}/${encodedPath(WORKFLOWS_DIR)}`, token, isDirListing, 'a directory listing');
     } catch (err) {
       if (err instanceof GitHubApiError && err.status === 404) return [];
       throw err;
@@ -84,9 +88,7 @@ export class GitHubAppApi extends GitHubAppAuth {
     const files = entries.filter((entry) => entry.type === 'file' && /\.ya?ml$/i.test(entry.name ?? entry.path));
     const sources: WorkflowSource[] = [];
     for (const file of files) {
-      const dto = await this.requestRead(repoPath, (repo) => {
-        return `/repos/${segment(repo.owner)}/${segment(repo.name)}/contents/${encodedPath(file.path)}`;
-      }, (v: unknown): v is ContentEntryDto => isRecord(v), 'a file');
+      const dto = await this.read('GET', `${contents}/${encodedPath(file.path)}`, token, isFile, 'a file');
       if (typeof dto.content !== 'string' || dto.encoding !== 'base64') {
         throw new Error(`GitHub : contenu illisible pour ${file.path} (fichier trop gros ou encodage inattendu)`);
       }

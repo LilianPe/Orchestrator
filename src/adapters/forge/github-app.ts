@@ -406,13 +406,6 @@ export class GitHubAppAuth {
     }
   }
 
-  /** Resolves repo + token, then reads the API on a path built from owner/name, under the guard `is`. */
-  protected async requestRead<T>(repoPath: string, path: (repo: GitHubRepoRef) => string, is: (v: unknown) => v is T, what: string): Promise<T> {
-    const repo = await this.repo(repoPath);
-    const token = await this.installationToken(repo);
-    return this.read('GET', path(repo), token, is, what);
-  }
-
   /**
    * The HTTP exchange: a refusal throws a `GitHubApiError`, a 2xx body that is not JSON throws, an empty one is
    * `undefined`. Callers never read its answer without a guard: `read` checks it, `call` drops it (ORC-273).

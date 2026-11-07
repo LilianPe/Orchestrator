@@ -162,6 +162,29 @@ describe('GitHubAppApi', () => {
     await expect(endless.listEnvironments('/repo')).rejects.toThrow(/environments: more than 1000 entries, never read as complete/);
   });
 
+  it.each([
+    ['the app is not installed on the repo', [(url: URL) => (url.pathname === '/repos/acme/app/installation' ? { status: 404, body: { message: 'Not Found' } } : undefined)], undefined],
+    ['the configured installation does not exist', [(url: URL) => (url.pathname === '/app/installations/42/access_tokens' ? { status: 404, body: { message: 'Not Found' } } : undefined)], 42],
+  ])('rejects, never reads "no CI", a 404 while resolving the installation: %s', async (_case, routes, installationId) => {
+    const listing: Route = workflowsDir([{ type: 'file', name: 'ci.yml', path: '.github/workflows/ci.yml' }]);
+    const api = new GitHubAppApi({ appId: '123', privateKey: privatePem, installationId, http: fakeHttp([...(routes as Route[]), listing]), exec, now: () => NOW });
+    await expect(api.listWorkflows('/repo')).rejects.toMatchObject({ status: 404 });
+  });
+
+  it('resolves the repository and its token once for every workflow file', async () => {
+    let gits = 0;
+    const counting: Exec = async (cmd, args, opts) => {
+      gits++;
+      return exec(cmd, args, opts);
+    };
+    const file = (name: string): Route => (url) =>
+      url.pathname === `/repos/acme/app/contents/.github/workflows/${name}` ? { body: { type: 'file', encoding: 'base64', content: Buffer.from(YAML).toString('base64') } } : undefined;
+    const routes = [tokenRoute(), workflowsDir([1, 2, 3].map((i) => ({ type: 'file', name: `w${i}.yml`, path: `.github/workflows/w${i}.yml` }))), file('w1.yml'), file('w2.yml'), file('w3.yml')];
+    const api = new GitHubAppApi({ appId: '123', privateKey: privatePem, installationId: 42, http: fakeHttp(routes), exec: counting, now: () => NOW });
+    expect(await api.listWorkflows('/repo')).toHaveLength(3);
+    expect(gits).toBe(1);
+  });
+
   it('surfaces API errors without leaking the installation token', async () => {
     const api = makeApi([
       tokenRoute(),
