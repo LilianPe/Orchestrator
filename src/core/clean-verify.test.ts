@@ -380,6 +380,26 @@ describe('runCleanVerify', () => {
       expect(res.failures[0]).toMatchObject({ command: 'factory/tests-gelés', output: expect.stringContaining('a.txt') });
     });
 
+    it('a test disabled or a check bypassed in the diff blocks as factory/anti-triche', async () => {
+      const { repo, req } = setup({ commands: [] });
+      write(repo, 'src/a.test.ts', "it.skip('works', () => {});\n");
+      commit(repo, 'x');
+      expect((await runCleanVerify(req)).failures).toEqual([{ command: 'factory/anti-triche', exitCode: 1, output: expect.stringContaining('src/a.test.ts:1') }]);
+    });
+
+    it('a text file over the read cap is never read, and blocks: neither scanned nor let through', async () => {
+      const { repo, req } = setup({ commands: [] });
+      write(repo, 'big.txt', 'x\n'.repeat(9 * 1024 * 1024));
+      commit(repo, 'x');
+      expect((await runCleanVerify(req)).failures).toEqual([{ command: 'factory/binaires', exitCode: 1, output: expect.stringContaining('big.txt') }]);
+    });
+
+    it('a diff too big to read blocks, never throws', async () => {
+      const exec: Exec = async (cmd, args, opts) => (args.includes('--patch') ? { stdout: '', stderr: '', code: 1, overflow: true } : execCmd(cmd, args, opts));
+      const { req } = setup({ commands: [], exec });
+      expect((await runCleanVerify(req)).failures).toEqual([{ command: 'factory/anti-triche', exitCode: 1, output: expect.stringContaining('Diff trop gros') }]);
+    });
+
     it('a change left uncommitted is no change for the freeze', async () => {
       const { repo, req } = setup({ commands: [], frozen: { sha: 's', files: { 'a.txt': sha256('committed\n') } } });
       write(repo, 'a.txt', 'changed but not committed\n');

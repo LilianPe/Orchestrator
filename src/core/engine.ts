@@ -1096,9 +1096,9 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       out.events.push({ type: 'ticket.patched', patch });
       if (job.red) freeze(out, ticket, event.payload.frozen);
       if (toPublish) {
-        const { runId, output } = event.payload;
+        const { runId, output, commands } = event.payload;
         out.events.push({ type: 'verify.started', runId });
-        out.effects.push({ kind: 'publish', runId, job: job.name, sha: toPublish, ...(output ? { output } : {}) });
+        out.effects.push({ kind: 'publish', runId, job: job.name, sha: toPublish, ...(output ? { output } : {}), ...(commands ? { commands } : {}) });
         return out;
       }
       return success(out, { event, ticket, workflow }, job, event.payload.runId, event.payload.output);

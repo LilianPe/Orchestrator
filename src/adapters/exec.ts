@@ -8,6 +8,8 @@ export interface ExecResult {
   stdout: string;
   stderr: string;
   code: number;
+  /** Its stdout went past `maxStdout`: the process was killed, and `stdout` is empty. */
+  overflow?: true;
 }
 
 export interface ExecOpts {
@@ -15,6 +17,8 @@ export interface ExecOpts {
   env?: Record<string, string>;
   /** Past it, the command and what it started (its process group: git's ssh) are killed, and the result's code is `TIMED_OUT`. */
   timeoutMs?: number;
+  /** Past this many bytes of stdout, the command is killed, its output dropped, and the result says `overflow`. */
+  maxStdout?: number;
 }
 
 export type Exec = (cmd: string, args: string[], opts?: ExecOpts) => Promise<ExecResult>;
@@ -27,22 +31,37 @@ export const execCmd: Exec = (cmd, args, opts = {}) =>
     // Its own process group under a deadline, so the kill reaches the grandchildren too (POSIX; Windows kills the child alone).
     const group = opts.timeoutMs !== undefined && process.platform !== 'win32';
     const child = spawn(cmd, args, { cwd: opts.cwd, env: { ...process.env, ...opts.env }, stdio: ['ignore', 'pipe', 'pipe'], detached: group });
-    let stdout = '';
+    const out: Buffer[] = [];
+    let size = 0;
+    let overflow = false;
     let stderr = '';
     let timedOut = false;
+    const kill = () => {
+      try {
+        if (group && child.pid !== undefined) process.kill(-child.pid, 'SIGKILL');
+        else child.kill('SIGKILL');
+      } catch {
+        // Already gone.
+      }
+    };
     const timer =
       opts.timeoutMs === undefined
         ? undefined
         : setTimeout(() => {
             timedOut = true;
-            try {
-              if (group && child.pid !== undefined) process.kill(-child.pid, 'SIGKILL');
-              else child.kill('SIGKILL');
-            } catch {
-              // Already gone.
-            }
+            kill();
           }, opts.timeoutMs);
-    child.stdout.on('data', (d) => (stdout += d));
+    child.stdout.on('data', (d: Buffer) => {
+      if (overflow) return;
+      size += d.length;
+      if (opts.maxStdout !== undefined && size > opts.maxStdout) {
+        overflow = true;
+        out.length = 0;
+        kill();
+        return;
+      }
+      out.push(d);
+    });
     child.stderr.on('data', (d) => (stderr += d));
     child.on('error', (err) => {
       clearTimeout(timer);
@@ -50,7 +69,7 @@ export const execCmd: Exec = (cmd, args, opts = {}) =>
     });
     child.on('close', (code) => {
       clearTimeout(timer);
-      resolve({ stdout, stderr, code: timedOut ? TIMED_OUT : (code ?? 1) });
+      resolve({ stdout: Buffer.concat(out).toString('utf8'), stderr, code: timedOut ? TIMED_OUT : (code ?? 1), ...(overflow ? { overflow: true as const } : {}) });
     });
   });
 

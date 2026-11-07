@@ -3,7 +3,7 @@ import { execCmd, mustExec, type Exec } from '../exec.js';
 import type { FeedbackItem } from '../../core/types.js';
 import { aggregateChecks, excerpt, toRepoPermission } from './gh-cli.js';
 import type { RepoPermission, RepoPermissions } from '../roles/types.js';
-import { NoCommitsBetween, type CheckRunRequest, type Forge, type ForgeWriter, type GitAccess, type MergeResult, type PrInfo, type PrRequest } from './types.js';
+import { isFactoryCheck, NoCommitsBetween, type CheckRunRequest, type Forge, type ForgeWriter, type GitAccess, type MergeResult, type PrInfo, type PrRequest } from './types.js';
 
 export interface GitHubRepoRef {
   owner: string;
@@ -665,6 +665,7 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
     const buckets: string[] = [];
     const failedChecks: string[] = [];
     for (const run of runs) {
+      if (isFactoryCheck(run.name)) continue;
       const bucket = checkRunBucket(run);
       buckets.push(bucket);
       if (bucket === 'fail') failedChecks.push(run.name);
