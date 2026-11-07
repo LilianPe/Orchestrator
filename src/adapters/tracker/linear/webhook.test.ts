@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { newTicketState, type FactoryEvent, type TicketState } from '../../../core/types.js';
+import type { ModelVerdict } from '../../../core/human-message.js';
 import { SqliteStore } from '../../../store/sqlite-store.js';
 import { createLinearIngest } from './ingest.js';
 import { loadWorkflow } from '../../../config/load-workflow.js';
@@ -176,21 +177,56 @@ describe('mapLinearWebhook', () => {
     });
     expect((await mapLinearWebhook(fx('session-stop'), 'd5', ctx()))[0]).toMatchObject({ type: 'session.stopped', payload: { linearSessionId: 'as-1' } });
   });
-  describe('classifies a message at its arrival, journaled with it (ORC-180)', () => {
-    const reply = (text: string) => {
+  describe('classifies a message at its arrival, journaled with it (ORC-180, ORC-336)', () => {
+    const reply = (text: string, c: MapContext = ctx()) => {
       const body = fx('session-prompted');
       body.agentActivity.content.body = text;
-      return mapLinearWebhook(body, 'd', ctx());
+      return mapLinearWebhook(body, 'd', c);
     };
-    const mention = (text: string) => {
+    const mention = (text: string, c: MapContext = ctx()) => {
       const body = fx('session-created-mention');
       body.agentSession.comment.body = text;
-      return mapLinearWebhook(body, 'd', ctx());
+      return mapLinearWebhook(body, 'd', c);
     };
+    /** A fake small model: says `verdict`, and records what it was asked. */
+    const model = (verdict: ModelVerdict | (() => Promise<ModelVerdict>)) => {
+      const asked: string[] = [];
+      const c: MapContext = { ...ctx(), classify: async (b) => (asked.push(b), typeof verdict === 'function' ? verdict() : verdict) };
+      return { c, asked };
+    };
+
+    it.each(['Le tri doit être décroissant', 'Please switch the sort to descending'])('an instruction without a verb of a list, %j, is one when the model says so', async (text) => {
+      const { c, asked } = model('instruction');
+      expect((await reply(text, c))[0]).toMatchObject({ payload: { body: text, ack: true, kind: 'instruction' } });
+      expect(asked).toEqual([text]);
+    });
+
+    it('an instruction with a question mark is one when the model says so', async () => {
+      const { c } = model('instruction');
+      expect((await reply('corrige le tri, ok ?', c))[0]).toMatchObject({ payload: { kind: 'instruction' } });
+      expect((await mention('[@factory](https://linear.app/x/profiles/factory) Could you switch the sort?', c))[0]).toMatchObject({ payload: { kind: 'instruction' } });
+    });
+
+    it('/stop and /status are commands, the model never asked, nor for a workflow command', async () => {
+      const { c, asked } = model('question');
+      expect((await reply('/stop', c))[0]).toMatchObject({ payload: { kind: 'command' } });
+      expect((await reply('[@factory](https://linear.app/x/profiles/factory) /status', c))[0]).toMatchObject({ payload: { kind: 'command' } });
+      const body = fx('session-created-command');
+      body.agentSession.comment.body = '[@factory](https://linear.app/x/profiles/factory) retiens ceci';
+      expect((await mapLinearWebhook(body, 'd', c))[0]).toMatchObject({ type: 'command', payload: { kind: 'command' } });
+      expect(asked).toEqual([]);
+    });
+
+    it('a model that fails or says nothing leaves the fallback rule, and the message keeps its ack', async () => {
+      for (const failing of [model(() => Promise.reject(new Error('timeout'))), model(undefined)]) {
+        expect((await reply('corrige le tri, ok ?', failing.c))[0]).toMatchObject({ payload: { ack: true, kind: 'question' } });
+        expect((await reply('Le tri doit être décroissant', failing.c))[0]).toMatchObject({ payload: { ack: true, kind: 'instruction' } });
+      }
+    });
 
     it.each([
       ['et pour mobile ?', 'question'],
-      ['boutons mal alignés', 'question'],
+      ['boutons mal alignés', 'instruction'],
       ['corrige le tri', 'instruction'],
       ['/status', 'command'],
       ['/stop', 'command'],
@@ -391,7 +427,7 @@ describe('mapLinearWebhook', () => {
       const named = await mapLinearWebhook(fx('session-created-mention'), 'd2', twoRepos(['repo:api']));
       expect(named).toMatchObject([{ projectId: 'api', payload: { ack: true } }]);
       const replied = await mapLinearWebhook(fx('session-prompted'), 'd3', twoRepos(['repo:api']));
-      expect(replied).toMatchObject([{ projectId: 'api', payload: { ack: true, kind: 'question' } }]);
+      expect(replied).toMatchObject([{ projectId: 'api', payload: { ack: true, kind: 'instruction' } }]);
     });
 
     it('a delegation to the repo its label names says where the ticket waited', async () => {
@@ -853,7 +889,7 @@ describe('a comment on the ticket as the reply to a block (ORC-196)', () => {
 
   it('a signed comment on a blocked ticket is a reply: journaled with its actor, its roles still to resolve', async () => {
     expect(await mapLinearWebhook(comment(), 'c1', blocked())).toEqual([
-      { id: 'linear:c1', type: 'ticket.commented', at: 5000, schemaVersion: 3, taint: 'trusted', actor: 'user-lilian', projectId: 'p', ticketId: 'REL-1', payload: { body: 'Prends le point-virgule', author: 'Lilian', kind: 'question' } },
+      { id: 'linear:c1', type: 'ticket.commented', at: 5000, schemaVersion: 3, taint: 'trusted', actor: 'user-lilian', projectId: 'p', ticketId: 'REL-1', payload: { body: 'Prends le point-virgule', author: 'Lilian', kind: 'instruction' } },
     ]);
   });
 

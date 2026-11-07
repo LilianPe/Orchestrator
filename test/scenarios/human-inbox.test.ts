@@ -216,7 +216,7 @@ describe('the human inbox (ORC-180)', () => {
     expect((await h.ticket()).humanInbox.map((f) => f.body)).toEqual(['pourquoi ce choix ?']);
   });
 
-  it('through the Linear webhook: classified without a model, acked by the outbox, the ack time recorded for the measure', async () => {
+  it('through the Linear webhook: classified by the fallback rule without a model, acked by the outbox, the ack time recorded for the measure', async () => {
     const h = createHarness();
     await inReview(h);
     const ingest = linearIngest((e) => h.orch.accept(e), { now: () => h.clock.now() });
@@ -229,5 +229,33 @@ describe('the human inbox (ORC-180)', () => {
     const prompted = (await h.store.recentEvents(100, 'REL-1')).find((e) => e.type === 'session.prompted')!;
     expect(prompted.payload).toMatchObject({ ack: true, kind: 'question' });
     expect((await h.store.measureFacts('p', 'REL-1')).acks[prompted.id]).toBe(h.clock.now());
+  });
+
+  describe('the small model at ingestion (ORC-336)', () => {
+    const through = async (classify: (b: string) => Promise<'instruction' | 'question' | undefined>, text: string) => {
+      const h = createHarness();
+      await inReview(h);
+      const ingest = linearIngest((e) => h.orch.accept(e), { now: () => h.clock.now(), ctx: { classify } });
+      const { raw, headers } = signedReply('ls-1', text, h.clock.now());
+      h.runner.enqueue({ events: [{ kind: 'text', text: 'Parce que.' }] });
+      expect((await ingest(raw, headers)).status).toBe(200);
+      await h.orch.drained();
+      const prompted = (await h.store.recentEvents(100, 'REL-1')).find((e) => e.type === 'session.prompted')!;
+      return { h, prompted };
+    };
+
+    it('an instruction with a question mark, as the model reads it, is acked as an instruction and starts no answer', async () => {
+      const { h, prompted } = await through(async () => 'instruction', 'corrige le tri, ok ?');
+      expect(prompted.payload).toMatchObject({ ack: true, kind: 'instruction' });
+      expect(h.tracker.activities('ls-1')).toContainEqual(expect.objectContaining({ type: 'thought', body: 'Noted, taken into account at the next step.' }));
+      expect(h.runner.requests.some((r) => r.prompt.startsWith('/factory:ask\n'))).toBe(false);
+    });
+
+    it('a model down or too slow: a question by the fallback rule, and the sign of life goes all the same', async () => {
+      const { h, prompted } = await through(() => Promise.reject(new Error('timed out')), 'pourquoi ce choix ?');
+      expect(prompted.payload).toMatchObject({ ack: true, kind: 'question' });
+      expect(h.tracker.activities('ls-1')).toContainEqual(expect.objectContaining({ type: 'thought', body: 'Noted, I am looking into it and will answer here.' }));
+      expect((await h.store.measureFacts('p', 'REL-1')).acks[prompted.id]).toBe(h.clock.now());
+    });
   });
 });

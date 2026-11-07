@@ -73,6 +73,22 @@ The measures from the MVP doc are collected from the first run, with no display 
 
 An instruction and a question are distinguished by the classification journaled with the message on arrival (ORC-180, [rules](linear.md#human-messages-during-a-run)). A row written before ORC-180 has none: the event and its session stand in for it (a mention or a command opens a question session, a reply in the dev session is an instruction).
 
+## The small model of messages
+
+A human message that is not a command is classified `instruction` or `question` by `claude-haiku-5-5` at ingestion (ORC-336, [rules](linear.md#human-messages-during-a-run)). It reaches Claude by the runners' credential, with no new setting:
+
+| What the daemon has | Runs on the host | Runs in sandboxes (`FACTORY_CONTAINER_CLI`) |
+|---|---|---|
+| A Claude account (`claude.active` in `factory.yml`) or `CLAUDE_CODE_OAUTH_TOKEN` | `claude -p` with that token, as a run on the host would | The Messages API if `ANTHROPIC_API_KEY` is set too, otherwise none |
+| `ANTHROPIC_API_KEY` alone | The Messages API | The Messages API |
+| Neither | `claude -p` with the host's Claude Code login; without one it fails | None |
+
+`claude -p` runs with no tool, no MCP server, no settings, no session kept, out of any repository, the message on stdin. The daemon image holds no `claude` (no agent runs in it, ORC-204), hence no Claude account backend with sandboxes. The Messages API call has `max_tokens` 16, thinking off, low effort. With no backend, or one that fails, the fallback rule classifies.
+
+`FACTORY_MESSAGE_MODEL=off` turns the model off: the fallback rule (a `?` outside a URL makes a question, anything else an instruction) classifies alone. The fake runner (`--fake-runner`) never calls it.
+
+**Bound.** The verdict comes before the event is journaled, so the webhook's answer and the acknowledgement wait for it: Linear marks a session unresponsive when no activity arrives within 10 s. A call is cut at 3 s through the Messages API, 6 s through `claude -p`, and the fallback rule decides. Measured on a developer's machine (Claude Code 2.1.319, low effort): the model itself answers in about 0.9 s (`duration_api_ms`); `claude -p` takes 1.7 to 3.4 s in all, its start included, and about 5 s more without `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, which it is given. The time of a message (`at`, and so `signOfLifeMs`) is taken before the call: the wait shows in the measure.
+
 ## Shutdown, restart and interrupted runs
 
 On a clean shutdown, runs in progress are interrupted and marked as such ([`deployment.md`](deployment.md#clean-shutdown-and-restart)). After a `kill -9`, they keep going: they are not children of the daemon but containers, whose `docker exec` client writes its output to a file on the host that outlives it. At the next startup, with no human intervention (ORC-220), Relais:

@@ -9,6 +9,7 @@ import { PrPoller } from '../adapters/forge/pr-poller.js';
 import { FakePublisher } from '../adapters/publisher/fake.js';
 import { CachedRoleResolver } from '../adapters/roles/cached.js';
 import { ClaudeCodeRunner, liveDir } from '../adapters/runner/claude-code.js';
+import { messageClassifier } from '../adapters/runner/message-classifier.js';
 import { purgeRunDirs, purgeSessionDirs, purgeTranscripts } from '../adapters/runner/transcript.js';
 import { FakeRunner } from '../adapters/runner/fake.js';
 import type { Runner } from '../adapters/runner/types.js';
@@ -308,6 +309,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
         recordLabels: async (pid, id, labels, at) => {
           if (await store.getTicket(pid, id)) await recordLabels(store, pid, id, labels, at);
         },
+        // The fake runner's daemon reaches no model: its messages are classified by the fallback rule (ORC-336).
+        ...(o.fakeRunner ? {} : { classify: messageClassifier(env, () => claudeToken, !sandboxes) }),
       },
     });
 
