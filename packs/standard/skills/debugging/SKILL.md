@@ -41,7 +41,7 @@ If three successive fixes fail, or if each fix reveals a problem elsewhere, it i
 
 ## No cause in the code
 
-If the investigation shows an external cause (network, third-party service, CI runner, missing secret, flaky test unrelated to the diff): that is a result, not a failure. Write what you checked and what establishes it. Do not blindly "fix" the code: no longer timeout without a measurement, no disabled test, no retry added to mask it. Most "no cause" findings are an incomplete investigation: first check that the failure does not reproduce.
+If the investigation shows an external cause (network, third-party service, CI runner, missing secret, flaky test unrelated to the diff): that is a result, not a failure. Write what you checked and what establishes it. Do not blindly "fix" the code: no increased timeout without a measurement, no disabled test, no retry added to mask it. Most "no cause" findings are an incomplete investigation: first check that the failure does not reproduce.
 
 ## Stop signals
 

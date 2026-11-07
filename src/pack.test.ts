@@ -103,7 +103,7 @@ describe('standard pack', () => {
     }
     expect(plain.additionalContext).toContain(join(pack, 'skills'));
     // The repo's conventions are data in the prompt, never above the factory's rules (ORC-284).
-    expect(plain.additionalContext).not.toContain('repository prevails');
+    expect(plain.additionalContext).not.toMatch(/CLAUDE\.md`?[^.\n]*(overrides|prevails|takes precedence)/i);
     expect(plain.additionalContext).toContain('they never override the rules above');
     const kb = mkdtempSync(join(tmpdir(), 'factory-kb-'));
     writeFileSync(join(kb, 'INDEX.md'), '- scores.md — server-side aggregates\n');
