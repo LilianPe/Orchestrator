@@ -2,7 +2,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { systemEnv } from '../adapters/exec.js';
 import { verifyCommand } from './clean-verify.js';
 import { cappedCommand, runVerify } from './verify.js';
@@ -138,6 +138,14 @@ describe('runVerify', () => {
   });
 
   it('reads a sparse worktree: what it hides is no deletion, a file written where it hides is a change (ORC-318)', async () => {
+    // No git config of the machine: a global ignore often lists `.claude/settings.local.json`, whose write would show nowhere (ORC-324).
+    const config = mkdtempSync(join(tmpdir(), 'factory-config-'));
+    writeFileSync(join(config, 'gitconfig'), '');
+    vi.stubEnv('GIT_CONFIG_GLOBAL', join(config, 'gitconfig'));
+    vi.stubEnv('XDG_CONFIG_HOME', config);
+    onTestFinished(() => {
+      vi.unstubAllEnvs();
+    });
     const dir = mkdtempSync(join(tmpdir(), 'factory-verify-'));
     git(dir, 'init', '-q');
     mkdirSync(join(dir, '.claude'));
