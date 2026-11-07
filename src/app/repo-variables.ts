@@ -1,6 +1,6 @@
-import { execCmd, mustExec, type Exec } from '../adapters/exec.js';
+import { execCmd, execFailure, mustExec, type Exec } from '../adapters/exec.js';
 import { githubRepoOf } from '../adapters/forge/github-ingest.js';
-import { originHead } from '../adapters/workspace/git-workspaces.js';
+import { originHeadOf } from '../adapters/workspace/git-workspaces.js';
 import type { FactoryYml } from '../config/factory-yml.js';
 import { parseRepoConfig, REPO_CONFIG_DIR, REPO_CONFIG_PATH, type RepoConfig, type RepoConfigRead } from '../config/repo-config.js';
 import { NO_REPO_VARIABLES, repoVariables, type RepoVariables } from '../config/repo-variables.js';
@@ -16,30 +16,41 @@ const FETCH_DEADLINE_MS = 2 * 60_000;
  * has neither `origin` nor `origin/HEAD` of this repository to write: its git dir is its own (ORC-317). No file: the
  * socle. An invalid file, or a default branch git cannot read, rejects: no run starts on a config half read.
  */
-export function makeRepoConfig(o: { exec?: Exec; fetchDeadlineMs?: number } = {}): (project: { repoPath: string }, read?: RepoConfigRead) => Promise<RepoConfig> {
+export function makeRepoConfig(o: { exec?: Exec; fetchDeadlineMs?: number; log?: (message: string) => void } = {}): (project: { repoPath: string }, read?: RepoConfigRead) => Promise<RepoConfig> {
   const exec = o.exec ?? execCmd;
   const deadlineMs = o.fetchDeadlineMs ?? FETCH_DEADLINE_MS;
   return async ({ repoPath }, { fetch = true } = {}) => {
+    // A failure's message reaches the ticket (Linear): never the server's path nor the command, which go to the daemon's log.
+    const git = async (args: string[], failure: (code: number) => string, env?: Record<string, string>): Promise<string> => {
+      const r = await exec('git', ['-C', repoPath, ...args], env ? { env } : undefined);
+      if (r.code === 0) return r.stdout;
+      o.log?.(`${REPO_CONFIG_PATH} : ${execFailure('git', ['-C', repoPath, ...args], r).message}`);
+      throw new Error(failure(r.code));
+    };
     // A worktree that already exists is prepared without a fetch: what was merged since applies all the same.
     // Never a prompt for a credential; a forge that does not answer refuses the launch, which never waits for it forever.
-    if (fetch) await within(mustExec(exec, 'git', ['-C', repoPath, 'fetch', '--quiet', 'origin'], { env: { GIT_TERMINAL_PROMPT: '0', ...STALLED } }), deadlineMs, `la forge ne répond plus après ${deadlineMs / 1000} s`);
+    if (fetch) {
+      const fetched = git(['fetch', '--quiet', 'origin'], (code) => `la forge n'a pas pu être lue (git fetch, code ${code})`, { GIT_TERMINAL_PROMPT: '0', ...STALLED });
+      await within(fetched, deadlineMs, `la forge ne répond plus après ${deadlineMs / 1000} s`);
+    }
+    const head = await originHeadOf(exec, repoPath);
+    const name = head.name.replace(/^remotes\//, '');
     // In full: a short `origin/main` (the fallback without `origin/HEAD`) is resolved by git as `refs/tags/origin/main`
     // first, a tag anyone who pushes to the forge can make.
-    const ref = `refs/remotes/${(await originHead(exec, repoPath)).replace(/^remotes\//, '')}`;
+    const ref = `refs/remotes/${name}`;
+    // The hint only when `origin/HEAD` is missing: `origin/main` is then a guess, perhaps not the default branch.
+    const unreadable = `branche par défaut illisible (${name})${head.set ? '' : ` : origin/HEAD n'est pas défini sur le dépôt de l'usine ; si ${name} n'est pas la branche par défaut, lancez \`git remote set-head origin --auto\` sur ce dépôt`}`;
     // `ls-tree` tells a file absent from a branch it could not read, which `git show` answers alike.
-    const entryOf = (path: string) =>
-      mustExec(exec, 'git', ['-C', repoPath, 'ls-tree', '-z', ref, '--', path]).catch((err: Error) => {
-        throw new Error(`branche par défaut illisible (${ref}) : ${err.message} ; si ce n'est pas la branche par défaut, lancez \`git remote set-head origin --auto\` dans ${repoPath}`);
-      });
+    const entryOf = (path: string) => git(['ls-tree', '-z', ref, '--', path], () => unreadable);
     // `ls-tree` does not go through a `.factory` that is a link: the file under it would read as absent.
     const dir = await entryOf(REPO_CONFIG_DIR);
     if (!dir) return parseRepoConfig(undefined);
-    if (!dir.startsWith('040000 tree ')) throw new Error(`${REPO_CONFIG_DIR} n'est pas un dossier sur ${ref} (lien symbolique ou fichier)`);
+    if (!dir.startsWith('040000 tree ')) throw new Error(`${REPO_CONFIG_DIR} n'est pas un dossier sur ${name} (lien symbolique ou fichier)`);
     const entry = await entryOf(REPO_CONFIG_PATH);
     if (!entry) return parseRepoConfig(undefined);
     const blob = /^100(?:644|755) blob ([0-9a-f]+)\t/.exec(entry)?.[1];
-    if (!blob) throw new Error(`${REPO_CONFIG_PATH} n'est pas un fichier sur ${ref} (lien symbolique ou dossier)`);
-    return parseRepoConfig(await mustExec(exec, 'git', ['-C', repoPath, 'cat-file', 'blob', blob]));
+    if (!blob) throw new Error(`${REPO_CONFIG_PATH} n'est pas un fichier sur ${name} (lien symbolique ou dossier)`);
+    return parseRepoConfig(await git(['cat-file', 'blob', blob], () => unreadable));
   };
 }
 

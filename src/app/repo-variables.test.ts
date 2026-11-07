@@ -87,8 +87,27 @@ describe('makeRepoConfig (ORC-209 C)', () => {
   });
 
   it('rejects when the default branch cannot be read: a file it could not see is not an absent one', async () => {
+    const log: string[] = [];
     const exec: Exec = async (_, args) => (args.includes('ls-tree') ? { stdout: '', stderr: 'fatal: Not a valid object name', code: 128 } : { stdout: 'origin/main\n', stderr: '', code: 0 });
-    await expect(makeRepoConfig({ exec })(PROJECT)).rejects.toThrow(/origin\/main.*Not a valid object name.*git remote set-head origin --auto/s);
+    const err = await makeRepoConfig({ exec, log: (m) => log.push(m) })(PROJECT).catch((e: Error) => e);
+    // What reaches Linear: neither the server's path nor a git command line, nor a hint for an origin/HEAD that is set.
+    expect((err as Error).message).toBe('branche par défaut illisible (origin/main)');
+    // The detail stays in the daemon's log.
+    expect(log).toEqual([expect.stringMatching(/-C \/repo ls-tree .*Not a valid object name/)]);
+  });
+
+  it('suggests set-head only when origin/HEAD is what is missing', async () => {
+    const exec: Exec = async (_, args) =>
+      args.includes('symbolic-ref') || args.includes('ls-tree') ? { stdout: '', stderr: 'fatal: /repo: ref missing', code: 128 } : { stdout: '', stderr: '', code: 0 };
+    const err = (await makeRepoConfig({ exec, log: () => {} })(PROJECT).catch((e: Error) => e)) as Error;
+    expect(err.message).toMatch(/^branche par défaut illisible \(origin\/main\) : origin\/HEAD n'est pas défini.*git remote set-head origin --auto/);
+    expect(err.message).not.toContain('/repo');
+  });
+
+  it('names neither the path nor the command when the fetch fails', async () => {
+    const exec: Exec = async (_, args) => (args.includes('fetch') ? { stdout: '', stderr: "fatal: '/srv/factory/repo' does not appear to be a git repository", code: 128 } : { stdout: 'origin/main\n', stderr: '', code: 0 });
+    const err = (await makeRepoConfig({ exec, log: () => {} })(PROJECT).catch((e: Error) => e)) as Error;
+    expect(err.message).toBe("la forge n'a pas pu être lue (git fetch, code 128)");
   });
 
   it.each(['120000 blob', '040000 tree'])('rejects a .factory/config.yml that is not a file (%s)', async (mode) => {

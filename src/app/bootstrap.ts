@@ -231,7 +231,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       knowledgeConfigured: !!instance.knowledge,
       roles,
       repoVariables: makeRepoVariables({ yml, log }),
-      repoConfig: makeRepoConfig(),
+      repoConfig: makeRepoConfig({ log }),
       originUrl,
       fullReadPaths: (t) => Object.keys(t.frozenTests?.files ?? {}),
       ...(sandboxes
