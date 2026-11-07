@@ -82,5 +82,6 @@ export class LoopDetector {
  * being its own): what `verify.failed` calls `tree`, edits, staged or not, and untracked files in. As `worktreeTree`
  * of `core/verify.ts` does on the host: a copy of the index, dated as it is so that git still rehashes a file written in its second, and a throwaway object store: the repository is only read.
  * `--sparse`: without it, one file where the sparse checkout of `prepare` hides (`.claude/`) fails the whole `add`. What it hides and nobody wrote stays as the commit has it.
+ * `core.excludesFile=` (empty): no ignore file of the machine's user hides a file the agent writes (ORC-324, as `worktreeTree`).
  */
-export const WORKTREE_TREE = `d=$(mktemp -d) && trap 'rm -rf "$d"' EXIT && git rev-parse --git-path index --git-path objects > "$d/p" && { read -r i; read -r o; } < "$d/p" && o=$(cd "$o" && pwd) && mkdir "$d/o" && { cp -p "$i" "$d/i" 2>/dev/null; export GIT_INDEX_FILE="$d/i" GIT_OBJECT_DIRECTORY="$d/o" GIT_ALTERNATE_OBJECT_DIRECTORIES="$o"; git -c core.looseCompression=0 add -A --sparse . && git write-tree; }`;
+export const WORKTREE_TREE = `d=$(mktemp -d) && trap 'rm -rf "$d"' EXIT && git rev-parse --git-path index --git-path objects > "$d/p" && { read -r i; read -r o; } < "$d/p" && o=$(cd "$o" && pwd) && mkdir "$d/o" && { cp -p "$i" "$d/i" 2>/dev/null; export GIT_INDEX_FILE="$d/i" GIT_OBJECT_DIRECTORY="$d/o" GIT_ALTERNATE_OBJECT_DIRECTORIES="$o"; git -c core.looseCompression=0 -c core.excludesFile= add -A --sparse . && git write-tree; }`;

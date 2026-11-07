@@ -105,7 +105,11 @@ async function worktreeTree(cwd: string): Promise<string | undefined> {
       utimesSync(env.GIT_INDEX_FILE, second, second);
     }
     // `--sparse`: without it, one file where a sparse checkout hides (`.claude/`) fails the whole `add`, and there is no fingerprint.
-    await git('git', ['add', '-A', '--sparse'], { ...opts, env });
+    // No ignore file of the daemon's user (`core.excludesFile`, by default `~/.config/git/ignore`): a file it lists, written by
+    // the agent, would change no fingerprint, and the loop guard would block a ticket that changed (ORC-324). Empty, not
+    // `/dev/null`, which Git Bash hands to Windows' git as `nul`, refused. The rest of the global and system config stays:
+    // the images trust their worktrees there (`safe.directory`).
+    await git('git', ['-c', 'core.excludesFile=', 'add', '-A', '--sparse'], { ...opts, env });
     return (await git('git', ['write-tree'], { ...opts, env })).stdout.trim();
   } catch {
     return undefined;

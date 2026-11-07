@@ -39,12 +39,17 @@ describe('runVerify', () => {
 
     it('on the host', async () => {
       vi.stubEnv('HOME', home());
-      const res = await runVerify(process.cwd(), ['echo boom >&2; exit 3']);
-      vi.unstubAllEnvs();
+      onTestFinished(() => {
+        vi.unstubAllEnvs();
+      });
+      // Outside git: the failure has no fingerprint to take, of a whole repository.
+      const res = await runVerify(mkdtempSync(join(tmpdir(), 'factory-nogit-')), ['echo boom >&2; exit 3']);
       expect(res.failures[0]!.output).toBe('boom\n');
     });
 
-    it.each([
+    // GNU `timeout`, as in the images. On the host: none on macOS, and Windows' own `timeout.exe` first on a PATH out of Git Bash.
+    const gnuTimeout = spawnSync('timeout', ['--version'], { encoding: 'utf8' }).stdout?.includes('coreutils') ?? false;
+    it.skipIf(!gnuTimeout).each([
       ['setup in a sandbox', cappedCommand],
       ['verify in a sandbox', verifyCommand],
     ])('%s', (_, argv) => {
@@ -55,8 +60,7 @@ describe('runVerify', () => {
     });
   });
 
-  // Not on Windows: the output of its `bash` does not come back here, as for the test above.
-  it.skipIf(process.platform === 'win32')('gives its commands no credential of the daemon: they run what the agent wrote (ORC-211)', async () => {
+  it('gives its commands no credential of the daemon: they run what the agent wrote (ORC-211)', async () => {
     vi.stubEnv('ORG_REGISTRY_TOKEN', 'repo-secret');
     vi.stubEnv('CLAUDE_CODE_OAUTH_TOKEN', 'claude-token');
     vi.stubEnv('GH_TOKEN', 'gh-token');
@@ -67,7 +71,7 @@ describe('runVerify', () => {
     expect(res.failures[0]!.output).toContain('[|C]');
   });
 
-  it.skipIf(process.platform === 'win32')('gives its commands the variables the repository declares', async () => {
+  it('gives its commands the variables the repository declares', async () => {
     const res = await runVerify(process.cwd(), ['echo "[$API_URL]"; exit 1'], undefined, { API_URL: 'https://api' });
     expect(res.failures[0]!.output).toContain('[https://api]');
   });
@@ -138,14 +142,6 @@ describe('runVerify', () => {
   });
 
   it('reads a sparse worktree: what it hides is no deletion, a file written where it hides is a change (ORC-318)', async () => {
-    // No git config of the machine: a global ignore often lists `.claude/settings.local.json`, whose write would show nowhere (ORC-324).
-    const config = mkdtempSync(join(tmpdir(), 'factory-config-'));
-    writeFileSync(join(config, 'gitconfig'), '');
-    vi.stubEnv('GIT_CONFIG_GLOBAL', join(config, 'gitconfig'));
-    vi.stubEnv('XDG_CONFIG_HOME', config);
-    onTestFinished(() => {
-      vi.unstubAllEnvs();
-    });
     const dir = mkdtempSync(join(tmpdir(), 'factory-verify-'));
     git(dir, 'init', '-q');
     mkdirSync(join(dir, '.claude'));
