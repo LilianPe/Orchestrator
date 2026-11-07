@@ -72,7 +72,7 @@ export async function freezeTests(tests: readonly string[], view: FreezeView): P
   const files: Record<string, string> = {};
   for (const path of paths) {
     const content = await view.showAtHead(path);
-    if (content === undefined && listed.has(path)) throw new Error(`${path} est illisible au commit ${view.head}`);
+    if (content === undefined && listed.has(path)) throw new Error(`${path} is unreadable at commit ${view.head}`);
     const print = content === undefined ? undefined : fingerprint(path, content);
     if (print !== undefined) files[path] = print;
   }
@@ -97,12 +97,12 @@ export async function checkFrozen(frozen: FrozenTests, view: FreezeView): Promis
     const content = deleted ? undefined : await view.showAtHead(path);
     const now = content === undefined ? undefined : fingerprint(path, content);
     if (now === was) continue;
-    findings.push(`${mdCode(path)} : ${was === undefined ? 'harnais ajouté après le gel' : now === undefined ? 'supprimé' : 'modifié'}`);
+    findings.push(`${mdCode(path)}: ${was === undefined ? 'harness added after the freeze' : now === undefined ? 'deleted' : 'changed'}`);
   }
   const count = Object.keys(frozen.files).length;
   const ok = findings.length === 0;
   const summary = ok
-    ? `${count} fichiers gelés, inchangés depuis le gel`
-    : `Modifié depuis le gel, publication bloquée (un mainteneur peut regeler par \`${REFREEZE}\`) :\n${findings.map((f) => `- ${f}`).join('\n')}`;
+    ? `${count} frozen files, unchanged since the freeze`
+    : `Changed since the freeze, publication blocked (a maintainer can refreeze with \`${REFREEZE}\`):\n${findings.map((f) => `- ${f}`).join('\n')}`;
   return { check: FREEZE_CHECK, ok, summary };
 }

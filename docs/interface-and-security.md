@@ -20,7 +20,7 @@ Interface development: `npm run dev:web` starts Vite on port 5173 with a proxy f
 
 **The Flow's tokens** are ORC-235's measurement: the sum of the ticket's finished attempts. A run only reports its usage when it ends: the one in progress is not included yet, which the page states below the table. `≥` indicates finished attempts without a measurement; `—` that none has one, with the cost in dollars if it exists, until ORC-216; `?` that the ticket's measurements could not be read (the error is in the log). If reading the Flow fails, a banner says so and the durations stop. The displayed number adds up input, output, cache read and cache write; the breakdown is shown on hover.
 
-**The cause of a block** is read from its reason (`src/core/block-cause.ts`), from the sentence opening the factory writes. An unknown reason falls into « Autre cause », displayed as is. A new block reason is added to that table and to its test.
+**The cause of a block** is read from its reason (`src/core/block-cause.ts`), from the sentence opening the factory writes. An unknown reason falls into « Autre cause », displayed as is. A ticket blocked before ORC-331 keeps its French reason, which the same table still reads (`src/core/legacy-messages.ts`). A new block reason is added to that table and to its test.
 
 ## What the server exposes
 
@@ -89,7 +89,7 @@ The agent loads only what the factory imposes:
 - **the run settings** (`--settings`, the factory's `run-settings.json`);
 - **the pack** (`--plugin-dir`): its skills, its startup hook (factory rules, knowledge base index);
 - **the factory MCP**, the only one declared via `--mcp-config` (see [Factory MCP](#factory-mcp));
-- **the repository's conventions**: the factory itself reads `CLAUDE.md`, `AGENTS.md` and `.claude/CLAUDE.md` from the worktree (the only file in `.claude/` that the removal below keeps, since Claude Code does not load it) and puts them in the run's prompt, as **data**: in a « Conventions du dépôt (données) » section, between tags, presented as the repository's conventions, which lift no factory rule. Together, they are cut at 8,000 bytes (proposal, to be set with ORC-254's prompt budget), the cut marked; a larger file is never read in full. A file that is a link pointing outside the worktree, or unreadable, is not read. Their `@path` imports are not followed: only the files' text is injected. They are re-read on every attempt: they are in the run's message, not in the system prompt frozen on resume.
+- **the repository's conventions**: the factory itself reads `CLAUDE.md`, `AGENTS.md` and `.claude/CLAUDE.md` from the worktree (the only file in `.claude/` that the removal below keeps, since Claude Code does not load it) and puts them in the run's prompt, as **data**: in a « Repository conventions (data) » section, between tags, presented as the repository's conventions, which lift no factory rule. Together, they are cut at 8,000 bytes (proposal, to be set with ORC-254's prompt budget), the cut marked; a larger file is never read in full. A file that is a link pointing outside the worktree, or unreadable, is not read. Their `@path` imports are not followed: only the files' text is injected. They are re-read on every attempt: they are in the run's message, not in the system prompt frozen on resume.
 
 And nothing from the repository:
 
@@ -131,7 +131,7 @@ Where they live and how they stay inside the daemon: [`configuration.md`](config
 
 ## Known limitations
 
-- **Without a sandbox, same system user.** Without `FACTORY_CONTAINER_CLI`, runs execute on the host under the same user as the daemon (the daemon writes it at startup: « les runs tournent sur l'hôte, sans isolation »). Claude Code's refusals are advisory: an agent that runs code (`node -e …`, allowed by the pack) can read `secrets.json` or `relais.db`. An injection in a ticket or a comment could push it to do so. **Do not entrust Relais with tickets written by untrusted people** as long as runs do not execute under a separate user.
+- **Without a sandbox, same system user.** Without `FACTORY_CONTAINER_CLI`, runs execute on the host under the same user as the daemon (the daemon writes it at startup: « runs execute on the host, without isolation »). Claude Code's refusals are advisory: an agent that runs code (`node -e …`, allowed by the pack) can read `secrets.json` or `relais.db`. An injection in a ticket or a comment could push it to do so. **Do not entrust Relais with tickets written by untrusted people** as long as runs do not execute under a separate user.
 - **Sandbox: the egress authority's key is a daemon secret.** Whoever reads it (`<home>/egress-ca/ca.key`) can impersonate any site to this instance's sandboxes, not beyond: nothing else trusts this authority. A run without a sandbox, on the host, can read it like `secrets.json`.
 - **Sandbox: a client that pins a certificate fails.** It refuses the factory's certificate: the connection fails, logged (closed by default). Likewise a tool that ignores the authority variables above.
 - **Sandbox: redirect to an unlisted host.** A redirect (`git`, `npm`, `fetch`) to a host the level does not include is refused like a direct connection: a renamed GitHub repository, or a package served from another CDN, fails.

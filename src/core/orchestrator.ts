@@ -84,6 +84,7 @@ import { mdCode } from '../checks/markdown.js';
 import { parseStatus } from '../adapters/workspace/git-workspaces.js';
 import { agentPolicy, type EgressPolicy } from '../network/levels.js';
 import { REPO_CONFIG_REFUSED } from './block-cause.js';
+import { BEFORE_ORC_331 } from './legacy-messages.js';
 import { readSecurityLog, refusalSummary } from '../network/security-log.js';
 
 /** Meta key of the head a ticket's tests step started on (ORC-123). */
@@ -133,10 +134,10 @@ function formatAgentOutput(o: AgentOutput): string {
   const list = (title: string, items: string[]) => (items.length ? [`**${title}**\n${items.map((i) => `- ${i}`).join('\n')}`] : []);
   return [
     o.summary,
-    ...(o.why ? [`**Pourquoi** : ${o.why}`] : []),
-    ...list('Risques', o.risks),
-    ...list('Non testé', o.untested),
-    ...list('À relire', o.review_hints.map((h) => `\`${h.file}\` : ${h.reason}`)),
+    ...(o.why ? [`**Why**: ${o.why}`] : []),
+    ...list('Risks', o.risks),
+    ...list('Untested', o.untested),
+    ...list('To review', o.review_hints.map((h) => `\`${h.file}\`: ${h.reason}`)),
   ].join('\n\n');
 }
 
@@ -323,11 +324,11 @@ function sessionSaved(configDir: string, sessionId: string): boolean {
 }
 
 /** Why the factory's merge is refused when the PR's head moved since the review (ORC-148). */
-const PUSHED = 'la branche a reçu un push depuis la review';
+const PUSHED = 'the branch received a push since the review';
 /** A verdict on a commit: what ran on it, absent when it was found green before and nothing ran again. */
 type Verified = VerifyResult & { sha?: string | undefined; commands?: readonly string[] };
 
-const HOST_CHECKS_OFF ="aucun sandbox (FACTORY_CONTAINER_CLI) et FACTORY_ALLOW_HOST_VERIFY n'est pas à 1 : je ne lance pas le code de l'agent sur l'hôte.";
+const HOST_CHECKS_OFF = "no sandbox (FACTORY_CONTAINER_CLI) and FACTORY_ALLOW_HOST_VERIFY is not 1: I do not run the agent's code on the host.";
 
 /** A block made out of a decision, its step to resume as the engine's `block` journals it: only where a reply resumes it (ORC-196). */
 const blockedOn = (workflow: Workflow, reason: string, job: string): InternalEvent => ({ type: 'ticket.blocked', reason, ...(workflow.blockComment ? { job } : {}) });
@@ -748,7 +749,7 @@ export class Orchestrator {
     const sandboxes = this.d.sandboxes;
     if (!sandboxes) {
       const res = await this.d.verify(ws.path, commands, undefined, vars.env);
-      if (!res.ok) throw new Error(`Le setup du worktree a échoué : ${res.failures[0]!.command}`);
+      if (!res.ok) throw new Error(`The worktree setup failed: ${res.failures[0]!.command}`);
       return;
     }
     // On commits a previous agent wrote, `setup` runs code nobody reviewed: no secret for it. A setup that needs one fails.
@@ -798,9 +799,9 @@ export class Orchestrator {
     let sandbox: Sandbox | undefined;
     try {
       const base = await this.d.store.getMeta(redBaseKey(project.id, run.ticketId));
-      if (!base) throw new Error("le commit de départ de l'étape n'est pas enregistré");
+      if (!base) throw new Error('the starting commit of the step is not recorded');
       const diff = await this.d.workspaces.stepDiff(project.repoPath, run.cwd, base);
-      if (!diff) throw new Error(`aucun worktree à ${run.cwd}`);
+      if (!diff) throw new Error(`no worktree at ${run.cwd}`);
       let uncommitted: string[];
       let runTests: RedDeps['run'];
       if (!sandboxes) {
@@ -817,7 +818,7 @@ export class Orchestrator {
         // The tests must fail on the missing behaviour, not on a variable the repository declares (ORC-211).
         const { env } = await this.repoVariablesOf(project, run.repoConfig);
         const status = await sandboxes.exec(box.id, ['git', 'status', '--porcelain', '-z', '--untracked-files=all']);
-        if (status.code !== 0) throw new Error(`git status : ${status.stderr.trim()}`);
+        if (status.code !== 0) throw new Error(`git status: ${status.stderr.trim()}`);
         uncommitted = parseStatus(status.stdout);
         runTests = async (cmd) => {
           const r = await sandboxes.exec(box.id, cappedCommand(cmd), { env });
@@ -831,7 +832,7 @@ export class Orchestrator {
       const read = await freezeTests(tests, diff);
       return { ...red, frozen: alreadyFrozen ? newTestsOnly(read) : read };
     } catch (err) {
-      return { verified: false, cause: 'infra', command: '', exitCode: null, detail: `Le contrôle du rouge n'a pas pu tourner : ${(err as Error).message}` };
+      return { verified: false, cause: 'infra', command: '', exitCode: null, detail: `The red check could not run: ${(err as Error).message}` };
     } finally {
       if (sandbox) await this.destroySandbox(sandbox.id, redRunId, run);
     }
@@ -857,7 +858,7 @@ export class Orchestrator {
       return { ...verified, ok: verified.ok && frozen.length === 0, failures: [...verified.failures, ...frozen], sha, commands: job.verify };
     }
     if (!runsDir || !originUrl) throw new Error('runsDir and originUrl are required with sandboxes');
-    if (!t.branch || !t.worktreePath) throw new Error(`aucune branche ou aucun worktree pour ${t.ticketId}`);
+    if (!t.branch || !t.worktreePath) throw new Error(`no branch or no worktree for ${t.ticketId}`);
     // A place the engine mounts from, new for each check: one cut can leave its own behind.
     const workDir = join(runsDir, run.id, `verify-${randomUUID()}`);
     mkdirSync(workDir, { recursive: true });
@@ -892,11 +893,11 @@ export class Orchestrator {
     const fail = (output: string) => [{ command: FREEZE_CHECK, exitCode: 1, output }];
     try {
       const diff = await this.d.workspaces.stepDiff(project.repoPath, cwd, frozen.sha);
-      if (!diff) return fail(`Le contrôle du gel n'a pas pu tourner : aucun worktree à ${cwd}.`);
+      if (!diff) return fail(`The freeze check could not run: no worktree at ${cwd}.`);
       const r = await checkFrozen(frozen, diff);
       return r.ok ? [] : fail(r.summary);
     } catch (err) {
-      return fail(`Le contrôle du gel n'a pas pu tourner : ${(err as Error).message}`);
+      return fail(`The freeze check could not run: ${(err as Error).message}`);
     }
   }
 
@@ -1314,7 +1315,7 @@ export class Orchestrator {
         const job = project.workflow.jobs[c.job];
         // No longer awaited (a stop, a verdict): a replayed effect checks nothing, and moves no plan.
         if (!run || !job || t.verifyingRunId !== c.runId) return;
-        if (planStepOfJob(job) === 'Build') await this.updatePlan(t, (plan) => advancePlan(plan, 'Vérif'));
+        if (planStepOfJob(job) === 'Build') await this.updatePlan(t, (plan) => advancePlan(plan, 'Verify'));
         this.track(
           (async () => {
             if (job.red) {
@@ -1376,7 +1377,7 @@ export class Orchestrator {
         if (!run) return;
         const session = run.linearSessionId ?? (await this.sessionFor(t));
         // The template stands for the dev's end of work only: a reply (feedback, a question) is the agent's own answer.
-        const body = c.output && c.style === 'summary' ? formatAgentOutput(c.output) : run.lastText.trim() || 'Terminé.';
+        const body = c.output && c.style === 'summary' ? formatAgentOutput(c.output) : run.lastText.trim() || 'Done.';
         return this.activityOnce(session, { type: 'response', body }, key);
       }
       case 'link_pr':
@@ -1549,9 +1550,9 @@ export class Orchestrator {
     if (known) return refuse(known);
     let reason: string;
     const { publisher } = this.d;
-    if (!mayPublish(t, c.sha, project.workflow)) reason = `le commit ${c.sha.slice(0, 12)} n'a pas de vérification verte, la dernière porte sur ${t.verifiedSha?.slice(0, 12) ?? 'aucun commit'}.`;
-    else if (!publisher) reason = "l'usine publie par une GitHub App depuis ses sandboxes, et cette instance n'en a pas (docs/github.md).";
-    else if (!t.branch || !t.worktreePath) reason = `aucune branche ou aucun worktree pour ${t.ticketId}.`;
+    if (!mayPublish(t, c.sha, project.workflow)) reason = `the commit ${c.sha.slice(0, 12)} has no green verification, the last one is on ${t.verifiedSha?.slice(0, 12) ?? 'no commit'}.`;
+    else if (!publisher) reason = "the factory publishes through a GitHub App from its sandboxes, and this instance has none (docs/github.md).";
+    else if (!t.branch || !t.worktreePath) reason = `no branch or no worktree for ${t.ticketId}.`;
     else {
       try {
         const pr = await publisher.publish({ projectId: project.id, repoPath: project.repoPath, ticketId: t.ticketId, runId: c.runId, worktree: t.worktreePath, branch: t.branch, sha: c.sha, ...prText(t) });
@@ -1581,19 +1582,19 @@ export class Orchestrator {
     const frozen = Object.keys(t.frozenTests?.files ?? {}).length;
     const verify =
       commands === undefined
-        ? ({ conclusion: 'success', summary: `${sha.slice(0, 12)} déjà trouvé vert par une vérification précédente.` } as const)
+        ? ({ conclusion: 'success', summary: `${sha.slice(0, 12)} already found green by an earlier verification.` } as const)
         : commands.length
-          ? ({ conclusion: 'success', summary: `Vert sur ${sha.slice(0, 12)}, dans un clone neuf, sans réseau :\n${commands.map((cmd) => `- ${mdCode(cmd)}`).join('\n')}` } as const)
-          : ({ conclusion: 'neutral', summary: "Aucune commande de vérification déclarée : rien n'a tourné." } as const);
+          ? ({ conclusion: 'success', summary: `Green on ${sha.slice(0, 12)}, in a fresh clone, without network:\n${commands.map((cmd) => `- ${mdCode(cmd)}`).join('\n')}` } as const)
+          : ({ conclusion: 'neutral', summary: 'No verification command declared: nothing ran.' } as const);
     const checks = [
       { name: VERIFY_CHECK, ...verify },
-      { name: FREEZE_CHECK, conclusion: frozen ? 'success' : 'neutral', summary: frozen ? `${frozen} fichier(s) gelé(s) intact(s).` : 'Aucun test gelé pour ce ticket.' },
+      { name: FREEZE_CHECK, conclusion: frozen ? 'success' : 'neutral', summary: frozen ? `${frozen} frozen file(s) intact.` : 'No frozen test for this ticket.' },
       { name: ANTI_CHEAT_CHECK, conclusion: 'success', summary: ANTI_CHEAT_OK },
     ] as const;
     await Promise.all(
       checks.map(({ name, conclusion, summary }) =>
         writer.upsertCheckRun(project.repoPath, { sha, name, externalId: `${name}@${sha}`, status: 'completed', conclusion, summary }).catch((err: Error & { status?: number }) => {
-          const hint = err.status === 403 ? " : la GitHub App n'a pas la permission Checks en écriture (docs/github.md)" : '';
+          const hint = err.status === 403 ? ': the GitHub App lacks the Checks write permission (docs/github.md)' : '';
           this.log('warn', `check ${name} of ${t.ticketId} not published on ${sha.slice(0, 12)}${hint}: ${err.message}`);
         }),
       ),
@@ -1621,12 +1622,12 @@ export class Orchestrator {
       this.log('info', `merge of ${t.ticketId} dropped: PR #${pr.number} already merged on ${pr.headSha}`);
       return;
     }
-    if (!t.branch) reason = 'la branche du ticket est inconnue';
-    else if (pr && pr.number !== t.prNumber) reason = `la PR de la branche (#${pr.number}) n'est pas celle du ticket (#${t.prNumber})`;
-    else if (!writer) reason = "la GitHub App de l'usine est requise pour merger";
-    else if (pr?.state !== 'OPEN') reason = "la PR n'est plus ouverte";
+    if (!t.branch) reason = 'the ticket\'s branch is unknown';
+    else if (pr && pr.number !== t.prNumber) reason = `the branch's PR (#${pr.number}) is not the ticket's (#${t.prNumber})`;
+    else if (!writer) reason = "the factory's GitHub App is required to merge";
+    else if (pr?.state !== 'OPEN') reason = 'the PR is no longer open';
     else if (pr.headSha !== sha) reason = PUSHED;
-    else if (pr.checks !== 'pass' && pr.checks !== 'none') reason = `les checks du commit relu ne sont pas verts (${pr.failedChecks.join(', ') || pr.checks})`;
+    else if (pr.checks !== 'pass' && pr.checks !== 'none') reason = `the checks of the reviewed commit are not green (${pr.failedChecks.join(', ') || pr.checks})`;
     else {
       // No check at all: the forge merges only in a repository with no CI (`mergePr`, `unchecked`).
       // GitHub merges no draft: a Done is a merge decision, whatever became of the move's best effort (`prReady`).
@@ -1637,8 +1638,8 @@ export class Orchestrator {
         res.reason === 'head_moved'
           ? PUSHED
           : res.reason === 'checks_missing'
-            ? "aucun check n'a tourné sur le commit relu, alors que le dépôt a une CI ou que l'usine ne peut pas vérifier qu'il n'en a pas (CI pas encore lancée, checks qui viennent d'apparaître, ou GitHub App sans la permission Actions en lecture)"
-            : `GitHub refuse le merge (${res.message})`;
+            ? 'no check ran on the reviewed commit, while the repository has a CI or the factory cannot check that it has none (CI not started yet, checks just appearing, or a GitHub App without the Actions read permission)'
+            : `GitHub refuses the merge (${res.message})`;
     }
     await this.d.store.setMeta(mark, reason);
     await this.refuseMerge(project, t, key, reason);
@@ -1653,7 +1654,7 @@ export class Orchestrator {
       at: this.d.clock.now(),
       projectId: project.id,
       ticketId: t.ticketId,
-      payload: { number: t.prNumber!, url: t.prUrl ?? '', branch: t.branch ?? '', reason, headMoved: reason === PUSHED },
+      payload: { number: t.prNumber!, url: t.prUrl ?? '', branch: t.branch ?? '', reason, headMoved: reason === PUSHED || reason === BEFORE_ORC_331.pushed },
     });
   }
 
@@ -1696,7 +1697,7 @@ export class Orchestrator {
       this.log('info', `skipped ${job.name} on ${ticketId}: no knowledge repo configured`);
       if (opts.linearSessionId) {
         await this.d.tracker
-          .activity(opts.linearSessionId, { type: 'response', body: `Aucune base de connaissance n'est configurée pour ${PRODUCT_NAME} : je ne peux rien retenir.` })
+          .activity(opts.linearSessionId, { type: 'response', body: `No knowledge base is configured for ${PRODUCT_NAME}: I cannot remember anything.` })
           .catch((err: Error) => this.log('warn', `could not answer ${ticketId}: ${err.message}`));
       }
       return 'done';
@@ -1756,11 +1757,11 @@ export class Orchestrator {
         if (!this.handles.has(fresh.activeRunId)) events.push({ type: 'run.cleared' });
       }
       // A file the repository has to fix is not a breakdown of the factory: the Flux shows it as such (`repo_config`).
-      const reason = err instanceof RepoConfigError ? `${REPO_CONFIG_REFUSED}${err.message}` : `Erreur au lancement : ${(err as Error).message}`;
+      const reason = err instanceof RepoConfigError ? `${REPO_CONFIG_REFUSED}${err.message}` : `Launch error: ${(err as Error).message}`;
       fresh = await this.apply(fresh, ...events, blockedOn(project.workflow, reason, job.name));
       // The ticket is blocked: a failed notice must not fail the effect, whose retry would start again.
       try {
-        await this.tellBlock(project, fresh, blockFacts({ reason, step: stepOf(project.workflow, job.name), tried: [`Le lancement de ${job.name}.`] }), async (failed) => {
+        await this.tellBlock(project, fresh, blockFacts({ reason, step: stepOf(project.workflow, job.name), tried: [`The launch of ${job.name}.`] }), async (failed) => {
           const session = opts.linearSessionId ?? (await this.sessionFor(failed));
           await this.d.tracker.activity(session, { type: 'error', body: reason });
         });
@@ -1792,7 +1793,7 @@ export class Orchestrator {
     await this.d.store.setMeta(key, '1');
     await this.d.tracker.comment(
       ticketId,
-      `Budget journalier de ${PRODUCT_NAME} atteint : ce ticket reste en file jusqu'à demain (ou jusqu'à une hausse du plafond).`,
+      `Daily budget of ${PRODUCT_NAME} reached: this ticket stays queued until tomorrow (or until the cap is raised).`,
     );
   }
 
@@ -1816,11 +1817,11 @@ export class Orchestrator {
         this.d.scheduler.release(key);
         const reason = failures.join(' ');
         t = await this.apply(t, blockedOn(project.workflow, reason, job.name));
-        await this.tellBlock(project, t, blockFacts({ reason, step: 'intake', tried: failures, question: 'Pouvez-vous corriger cela, puis répondre ici ?' }), async (refused) => {
+        await this.tellBlock(project, t, blockFacts({ reason, step: 'intake', tried: failures, question: 'Can you fix this, then reply here?' }), async (refused) => {
           const session = await this.sessionFor(refused);
           await tracker.activity(session, {
             type: 'elicitation',
-            body: `Je ne peux pas commencer ce ticket :\n${failures.map((f) => `- ${f}`).join('\n')}\nCorrigez puis répondez dans ce fil.`,
+            body: `I cannot start this ticket:\n${failures.map((f) => `- ${f}`).join('\n')}\nFix it, then reply in this thread.`,
           });
         });
         return;
@@ -1922,11 +1923,11 @@ export class Orchestrator {
       if (from) {
         input = from.input;
       } else if (kind === 'feedback') {
-        input = { kind, text: read.length ? formatFeedback(read) : '(aucun retour écrit : relisez la PR et le fil Linear)' };
+        input = { kind, text: read.length ? formatFeedback(read) : '(no written feedback: read the PR and the Linear thread again)' };
       } else if (kind === 'verify_failures') {
         input = { kind, text: formatVerifyFailures(JSON.parse(opts.inputText ?? '[]') as VerifyFailure[]) };
       } else if (kind === 'ci_failures') {
-        input = { kind, text: opts.inputText ?? 'La CI de la PR est en échec. Lancez `gh pr checks` pour le détail.' };
+        input = { kind, text: opts.inputText ?? 'The PR\'s CI is failing. Run `gh pr checks` for the details.' };
       } else if (kind === 'thread') {
         input = { kind, text: opts.inputText ?? '' };
       }

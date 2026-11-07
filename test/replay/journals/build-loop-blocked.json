@@ -579,7 +579,7 @@
           "branch": "factory/rel-1-export-csv",
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
-          "blockReason": "Boucle : même commande, même échec, 3 fois, sans changement du code.",
+          "blockReason": "Loop: same command, same failure, 3 times, with no code change.",
           "blockedJob": "dev"
         },
         "effects": [
@@ -588,11 +588,11 @@
             "block": {
               "step": "build",
               "max": 1,
-              "reason": "Boucle : même commande, même échec, 3 fois, sans changement du code.",
+              "reason": "Loop: same command, same failure, 3 times, with no code change.",
               "tried": [
-                "`npm test`, 3 fois"
+                "`npm test`, 3 times"
               ],
-              "question": "Je reprends l'étape telle quelle (répondez « oui ») ou avec une consigne (écrivez-la) ?"
+              "question": "Shall I redo the step as is (reply \"yes\") or with an instruction (write it)?"
             }
           },
           {
@@ -657,7 +657,7 @@
           "branch": "factory/rel-1-export-csv",
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
-          "blockReason": "Boucle : même commande, même échec, 3 fois, sans changement du code.",
+          "blockReason": "Loop: same command, same failure, 3 times, with no code change.",
           "blockedJob": "dev"
         },
         "ticket": {
@@ -681,7 +681,7 @@
           "branch": "factory/rel-1-export-csv",
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
-          "blockReason": "Boucle : même commande, même échec, 3 fois, sans changement du code.",
+          "blockReason": "Loop: same command, same failure, 3 times, with no code change.",
           "blockedJob": "dev"
         },
         "effects": [],
@@ -736,7 +736,7 @@
           "branch": "factory/rel-1-export-csv",
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
-          "blockReason": "Boucle : même commande, même échec, 3 fois, sans changement du code.",
+          "blockReason": "Loop: same command, same failure, 3 times, with no code change.",
           "blockedJob": "dev"
         },
         "ticket": {
@@ -760,7 +760,7 @@
           "branch": "factory/rel-1-export-csv",
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
-          "blockReason": "Boucle : même commande, même échec, 3 fois, sans changement du code.",
+          "blockReason": "Loop: same command, same failure, 3 times, with no code change.",
           "blockedJob": "dev"
         },
         "effects": [],
@@ -815,7 +815,7 @@
           "branch": "factory/rel-1-export-csv",
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
-          "blockReason": "Boucle : même commande, même échec, 3 fois, sans changement du code.",
+          "blockReason": "Loop: same command, same failure, 3 times, with no code change.",
           "blockedJob": "dev"
         },
         "ticket": {
@@ -839,7 +839,7 @@
           "branch": "factory/rel-1-export-csv",
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
-          "blockReason": "Boucle : même commande, même échec, 3 fois, sans changement du code.",
+          "blockReason": "Loop: same command, same failure, 3 times, with no code change.",
           "blockedJob": "dev"
         },
         "effects": [],

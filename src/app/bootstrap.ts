@@ -82,8 +82,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
   const uiPassword = isLoopbackHost(instance.host) ? undefined : env['FACTORY_UI_PASSWORD'] || undefined;
   if (!isLoopbackHost(instance.host) && !uiPassword) {
     throw new Error(
-      `host: ${instance.host} expose l'interface et l'API de ${PRODUCT_NAME} hors de cette machine. ` +
-        "Définissez la variable d'environnement FACTORY_UI_PASSWORD (mot de passe de l'interface), ou remettez host: 127.0.0.1 dans config.yaml.",
+      `host: ${instance.host} exposes the interface and the API of ${PRODUCT_NAME} outside this machine. ` +
+        'Set the FACTORY_UI_PASSWORD environment variable (the interface password), or set host: 127.0.0.1 back in config.yaml.',
     );
   }
   const paths = homePaths(o.home);
@@ -110,7 +110,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
   const limits = projects[0]?.workflow.limits;
 
   const { store, kind } = await openStore({ env, sqlitePath: paths.db, migrationsFolder: join(root, 'drizzle'), log });
-  log(kind === 'postgres' ? 'store : Postgres (migrations Drizzle appliquées)' : `store : SQLite (${paths.db})`);
+  log(kind === 'postgres' ? 'store: Postgres (Drizzle migrations applied)' : `store: SQLite (${paths.db})`);
   // From here on, a failed start closes the store it opened (the Postgres pool would keep the process alive).
   try {
     const clock = new SystemClock();
@@ -161,11 +161,11 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     });
     const sandboxes = o.fakeRunner ? undefined : makeSandboxes(env, instanceId(o.home), egress);
     if (!o.fakeRunner && !sandboxes) {
-      log("Attention : FACTORY_CONTAINER_CLI absent, les runs tournent sur l'hôte, sans isolation.");
-      log(env['FACTORY_ALLOW_HOST_VERIFY'] === '1' ? "Attention : FACTORY_ALLOW_HOST_VERIFY=1, verify lance le code de l'agent sur l'hôte, à côté des secrets du démon." : 'Attention : sans sandbox ni FACTORY_ALLOW_HOST_VERIFY=1, verify refuse de tourner : chaque ticket vérifié sera bloqué.');
+      log('Warning: FACTORY_CONTAINER_CLI is not set, runs execute on the host, without isolation.');
+      log(env['FACTORY_ALLOW_HOST_VERIFY'] === '1' ? "Warning: FACTORY_ALLOW_HOST_VERIFY=1, verify runs the agent's code on the host, next to the daemon's secrets." : 'Warning: without a sandbox or FACTORY_ALLOW_HOST_VERIFY=1, verify refuses to run: every verified ticket will be blocked.');
     }
     const claudeToken = activeClaudeToken(yml);
-    if (sandboxes && !claudeToken && !env['CLAUDE_CODE_OAUTH_TOKEN']) log('Attention : aucun jeton Claude (claude.active de factory.yml, ou CLAUDE_CODE_OAUTH_TOKEN) : les runs sandboxés ne pourront pas s’authentifier.');
+    if (sandboxes && !claudeToken && !env['CLAUDE_CODE_OAUTH_TOKEN']) log('Warning: no Claude token (claude.active in factory.yml, or CLAUDE_CODE_OAUTH_TOKEN): sandboxed runs will not be able to authenticate.');
     const runner: Runner = o.fakeRunner
       ? Object.assign(new FakeRunner(), { submit: (runId: string, output: AgentOutput) => saveAgentOutput(store, runId, output) })
       : new ClaudeCodeRunner({ transcriptsDir: paths.transcripts, secrets: daemonSecrets, claudeToken: () => claudeToken, log, ...(sandboxes ? { sandboxes } : {}) });
@@ -175,14 +175,14 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       : new GhCliForge();
     if (githubApp) {
       log(
-        `forge GitHub : GitHub App ${githubApp.appId} (jetons d'installation limités au dépôt du run` +
-          `${githubApp.installationId ? `, installation ${githubApp.installationId}` : ", installation résolue par dépôt"})`,
+        `GitHub forge: GitHub App ${githubApp.appId} (installation tokens limited to the run's repository` +
+          `${githubApp.installationId ? `, installation ${githubApp.installationId}` : ", installation resolved per repository"})`,
       );
     } else {
-      log('forge GitHub : CLI gh (repli de migration, en lecture : sans GitHub App, l’usine ne publie ni ne merge)');
+      log('GitHub forge: gh CLI (migration fallback, read-only: without a GitHub App, the factory neither publishes nor merges)');
     }
     const publisher = o.fakeRunner ? new FakePublisher() : sandboxes && forge instanceof GitHubAppForge ? new GitPublisher({ sandboxes, forge, runsDir: paths.runs, log }) : undefined;
-    if (!publisher) log('Attention : publication impossible (il faut les sandboxes et la GitHub App) : un ticket vérifié sera bloqué avec cette raison.');
+    if (!publisher) log('Warning: publication impossible (it needs the sandboxes and the GitHub App): a verified ticket will be blocked with this reason.');
     const kb = instance.knowledge ? new KnowledgeBase(instance.knowledge.repoPath) : undefined;
     // The roles of a human event's signed actor (ORC-186): Linear team members and GitHub rights, read
     // again past their TTL, and the designations of config.yaml.
@@ -192,7 +192,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
         return p && { teamKey: p.linearTeamKey, repoPath: p.repoPath, maintainers: [], validators: [], githubLogins: {}, ...p.authz };
       },
       team: {
-        teamMembers: (teamKey) => (linearTracker ? linearTracker.teamMembers(teamKey) : Promise.reject(new Error('Linear non connecté'))),
+        teamMembers: (teamKey) => (linearTracker ? linearTracker.teamMembers(teamKey) : Promise.reject(new Error('Linear not connected'))),
       },
       repo: forge,
     });
@@ -201,7 +201,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     let reconcileProject: (p: ProjectRuntime) => Promise<void> = async () => {};
     // Before any run of this process: `verify` reads the base branch at this URL, whatever an agent writes in the repository's config (ORC-151).
     const originUrl = makeOriginUrl();
-    if (sandboxes) await Promise.all(projects.map((p) => originUrl(p).catch((err: Error) => log(`Attention : ${p.id} : origin illisible, verify le relira : ${err.message}`))));
+    if (sandboxes) await Promise.all(projects.map((p) => originUrl(p).catch((err: Error) => log(`Warning: ${p.id}: unreadable origin, verify will read it again: ${err.message}`))));
     const orchestrator = new Orchestrator({
       reconcile: (p) => reconcileProject(p),
       // The sources start before Linear is connected: their events wait in the inbox until replayInbox().
@@ -355,7 +355,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
               return buildAuthorizeUrl({ clientId: linearSettings(o.home, yml)!.clientId, redirectUri: `${baseUrl}/oauth/callback`, state });
             },
             callback: async (code, state) => {
-              if (!oauthStates.delete(state)) throw new Error('état OAuth inconnu, relancez la connexion');
+              if (!oauthStates.delete(state)) throw new Error('unknown OAuth state, start the connection again');
               const s = linearSettings(o.home, yml)!;
               const tokens = await exchangeCode({ clientId: s.clientId, clientSecret: s.clientSecret, code, redirectUri: `${baseUrl}/oauth/callback` });
               saveLinearTokens(o.home, tokens);
@@ -365,7 +365,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
               await connectLinear();
               for (const p of projects) {
                 const created = await linearTracker!.ensureSetup(p.teamKey, p.workflow.states, FACTORY_LABELS);
-                if (created.length) log(`Linear ${p.teamKey} : créé ${created.join(', ')}`);
+                if (created.length) log(`Linear ${p.teamKey}: created ${created.join(', ')}`);
               }
               // At the connection, without waiting for the timer: what Linear holds is read at once, in the background.
               void reconciler.once();
@@ -377,7 +377,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     const server = serve({ fetch: app.fetch, port, hostname: instance.host });
     // Only with sandboxes: the agent API on a listener of its own, for them alone (ORC-204), reached through the egress proxy.
     const agentServer = sandboxes ? serve({ fetch: agentOnly(app), port: agentPort, hostname: agentListenHost }) : undefined;
-    if (agentServer) log(`API agent des sandboxes : ${agentListenHost}:${agentPort}, jointe en http://${agentHostInSandbox}:${agentPort}/agent`);
+    if (agentServer) log(`Sandbox agent API: ${agentListenHost}:${agentPort}, reached at http://${agentHostInSandbox}:${agentPort}/agent`);
     const relay = instance.relay.kind === 'smee' ? startSmeeRelay({ url: instance.relay.url, onWebhook: ingest, log }) : undefined;
     let purgeInterval: NodeJS.Timeout | undefined;
     let tickInterval: NodeJS.Timeout | undefined;
@@ -408,13 +408,13 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       const purge = () => {
         const now = Date.now();
         const removed = purgeTranscripts(paths.transcripts, now);
-        if (removed.length) log(`transcripts : ${removed.length} supprimé(s) après 30 jours`);
+        if (removed.length) log(`transcripts: ${removed.length} deleted after 30 days`);
         const runs = purgeRunDirs(paths.runs, now);
-        if (runs.length) log(`runs : ${runs.length} dossier(s) supprimé(s) après 30 jours`);
+        if (runs.length) log(`runs: ${runs.length} folder(s) deleted after 30 days`);
         // Raw streams a crash left and nothing took up (ORC-220).
         purgeRunDirs(liveDir(paths.transcripts), now);
         purgeSessionDirs(paths.sessions, now, store).then(
-          (sessions) => sessions.length && log(`sessions : ${sessions.length} supprimée(s), tickets clos depuis 30 jours`),
+          (sessions) => sessions.length && log(`sessions: ${sessions.length} deleted, tickets closed for 30 days`),
           (e: unknown) => log(`sessions purge: ${(e as Error).message}`),
         );
         // The egress journals (ORC-213), `*.jsonl` too: the same 30 days.
@@ -436,20 +436,20 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       // without webhooks a merge would wait 5 minutes, so the 30-second poll stays (ORC-181 removes it).
       if (!isUsableWebhookSecret(githubSecret)) poller.start();
       if (await connectLinear()) void reconciler.once();
-      else log(`Linear non connecté : ouvrez ${baseUrl}/oauth/start`);
+      else log(`Linear not connected: open ${baseUrl}/oauth/start`);
       // The worker (ORC-149) executes the effects decided before a crash, then the events written
       // before it (or whose processing failed), oldest first; it then polls the inbox and the outbox
       // every second, for what another process wrote and for leases that expired.
-      orchestrator.startWorker().catch((e: unknown) => log(`inbox : ${(e as Error).message}`));
+      orchestrator.startWorker().catch((e: unknown) => log(`inbox: ${(e as Error).message}`));
       if (!isUsableWebhookSecret(webhookSecret()))
-        log('Attention : aucun secret de webhook Linear configuré, tout webhook sera refusé. Relancez factory init pour le renseigner.');
+        log('Warning: no Linear webhook secret configured, every webhook will be refused. Run factory init again to set it.');
       if (!isUsableWebhookSecret(githubSecret))
-        log('Webhooks GitHub refusés : ni github.webhookSecret ni GH_WEBHOOK_SECRET ; seul le relevé des PR toutes les 30 s suit GitHub.');
+        log('GitHub webhooks refused: neither github.webhookSecret nor GH_WEBHOOK_SECRET; only the PR poll every 30 s follows GitHub.');
     } catch (err) {
-      await shutdown().catch((e: Error) => log(`arrêt après un démarrage manqué : ${e.message}`));
+      await shutdown().catch((e: Error) => log(`shutdown after a failed start: ${e.message}`));
       throw err;
     }
-    log(`${PRODUCT_NAME} écoute sur ${baseUrl}`);
+    log(`${PRODUCT_NAME} listening on ${baseUrl}`);
 
     return {
       url: baseUrl,
@@ -459,7 +459,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       },
     };
   } catch (err) {
-    await store.close().catch((e: Error) => log(`store : fermeture impossible (${e.message})`));
+    await store.close().catch((e: Error) => log(`store: could not close (${e.message})`));
     throw err;
   }
 }

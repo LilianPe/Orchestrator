@@ -199,14 +199,14 @@ function overrideTarget(key: string): string {
  */
 function npmOverrides(m: Manifest, v: unknown, where: string, parent?: string): void {
   if (v === undefined) return;
-  if (!isRecord(v)) throw new ManifestError(`« ${where} » n'est pas un objet`);
+  if (!isRecord(v)) throw new ManifestError(`"${where}" is not an object`);
   for (const [key, spec] of Object.entries(v)) {
     const path = key === '.' ? (parent ?? key) : parent ? `${parent} > ${key}` : key;
     if (isRecord(spec)) {
       npmOverrides(m, spec, where, path);
       continue;
     }
-    if (typeof spec !== 'string') throw new ManifestError(`« ${where} » : la valeur de « ${path} » n'est pas une chaîne`);
+    if (typeof spec !== 'string') throw new ManifestError(`"${where}": the value of "${path}" is not a string`);
     if (spec.startsWith('$')) continue;
     const d = npmDeclared(m.path, overrideTarget(path), spec);
     if (d.source === 'registry' && !isAlias(spec)) continue;
@@ -219,15 +219,15 @@ function readPackageJson(m: Manifest, text: string): void {
   try {
     json = JSON.parse(text);
   } catch (err) {
-    throw new ManifestError(`JSON invalide (${(err as Error).message})`);
+    throw new ManifestError(`invalid JSON (${(err as Error).message})`);
   }
-  if (!isRecord(json)) throw new ManifestError("ce n'est pas un objet JSON");
+  if (!isRecord(json)) throw new ManifestError('not a JSON object');
   for (const section of NPM_SECTIONS) {
     const deps = json[section];
     if (deps === undefined) continue;
-    if (!isRecord(deps)) throw new ManifestError(`« ${section} » n'est pas un objet`);
+    if (!isRecord(deps)) throw new ManifestError(`"${section}" is not an object`);
     for (const [name, spec] of Object.entries(deps)) {
-      if (typeof spec !== 'string') throw new ManifestError(`la version de « ${name} » dans « ${section} » n'est pas une chaîne`);
+      if (typeof spec !== 'string') throw new ManifestError(`the version of "${name}" in "${section}" is not a string`);
       m.deps.push(npmDeclared(m.path, name, spec));
     }
   }
@@ -263,7 +263,7 @@ function readRequirement(m: Manifest, text: string, where: string): Declared {
     const egg = /[#&]egg=([A-Za-z0-9._-]+)/.exec(req);
     return egg ? pypiDeclared(egg[1]!, req, 'remote') : unnamed(req, 'remote');
   }
-  throw new ManifestError(`${where} : exigence illisible « ${req} »`);
+  throw new ManifestError(`${where}: unreadable requirement "${req}"`);
 }
 
 const SHORT_OPTIONS: Record<string, string> = { '-r': '--requirement', '-c': '--constraint', '-e': '--editable', '-i': '--index-url', '-f': '--find-links' };
@@ -289,7 +289,7 @@ function readRequirements(m: Manifest, text: string): void {
   lines.forEach((raw, n) => {
     const line = raw.replace(/(^|\s)#.*$/, '').trim();
     if (line === '') return;
-    const where = `ligne ${n + 1}`;
+    const where = `line ${n + 1}`;
     if (!line.startsWith('-')) {
       // Per-requirement options (`--hash=…`) follow the requirement.
       m.deps.push(readRequirement(m, line.split(/\s+--?[a-z]/i)[0]!, where));
@@ -310,18 +310,18 @@ const at = (t: TomlTable | undefined, dotted: string): TomlValue | undefined =>
 
 function requirementList(m: Manifest, v: TomlValue | undefined, where: string, tablesAllowed = false): void {
   if (v === undefined) return;
-  if (!Array.isArray(v)) throw new ManifestError(`« ${where} » n'est pas une liste`);
+  if (!Array.isArray(v)) throw new ManifestError(`"${where}" is not a list`);
   for (const item of v) {
     if (typeof item === 'string') m.deps.push(readRequirement(m, item, where));
     // PEP 735: `{ include-group = "…" }` names another group of the same file.
-    else if (!(tablesAllowed && asTable(item))) throw new ManifestError(`« ${where} » contient autre chose que des exigences`);
+    else if (!(tablesAllowed && asTable(item))) throw new ManifestError(`"${where}" holds something other than requirements`);
   }
 }
 
 function requirementTables(m: Manifest, v: TomlValue | undefined, where: string, tablesAllowed = false): void {
   if (v === undefined) return;
   const t = asTable(v);
-  if (!t) throw new ManifestError(`« ${where} » n'est pas une table`);
+  if (!t) throw new ManifestError(`"${where}" is not a table`);
   for (const [k, list] of Object.entries(t)) requirementList(m, list, `${where}.${k}`, tablesAllowed);
 }
 
@@ -331,7 +331,7 @@ function requirementTables(m: Manifest, v: TomlValue | undefined, where: string,
  * when all name a path or workspace; the registry otherwise.
  */
 const unreadableSource = (): never => {
-  throw new ManifestError('source de dépendance illisible');
+  throw new ManifestError('unreadable dependency source');
 };
 
 function tablesSource(manifest: string, spec: TomlValue, remoteKeys: readonly string[]): DependencySource {
@@ -348,7 +348,7 @@ const UV_REMOTE = ['git', 'url', 'index'] as const;
 function poetryTable(m: Manifest, v: TomlValue | undefined, where: string): void {
   if (v === undefined) return;
   const t = asTable(v);
-  if (!t) throw new ManifestError(`« ${where} » n'est pas une table`);
+  if (!t) throw new ManifestError(`"${where}" is not a table`);
   for (const [name, spec] of Object.entries(t)) {
     if (name.toLowerCase() === 'python') continue;
     const table = typeof spec !== 'string';
@@ -373,7 +373,7 @@ function readPyproject(m: Manifest, text: string): void {
   try {
     doc = parseToml(text);
   } catch (err) {
-    throw new ManifestError(`TOML illisible (${(err as Error).message})`);
+    throw new ManifestError(`unreadable TOML (${(err as Error).message})`);
   }
   for (const where of PYPROJECT_LISTS) requirementList(m, at(doc, where), where);
   for (const where of PYPROJECT_TABLES) requirementTables(m, at(doc, where), where);
@@ -524,9 +524,9 @@ function limiter(max: number): <T>(task: () => Promise<T>) => Promise<T> {
 }
 
 function summarize(findings: DependencyFinding[], added: AddedDependency[]): string {
-  if (findings.length > 0) return [`${findings.length} constat(s) bloquant(s) :`, ...findings.map((f) => `- ${f.message}`)].join('\n');
-  if (added.length === 0) return 'Aucune dépendance ajoutée.';
-  return `${added.length} dépendance(s) ajoutée(s), présentes au registre et autorisées, ou locales : ${added.map((d) => d.name).join(', ')}.`;
+  if (findings.length > 0) return [`${findings.length} blocking finding(s):`, ...findings.map((f) => `- ${f.message}`)].join('\n');
+  if (added.length === 0) return 'No dependency added.';
+  return `${added.length === 1 ? '1 dependency' : `${added.length} dependencies`} added, present in the registry and allowed, or local: ${added.map((d) => d.name).join(', ')}.`;
 }
 
 export async function checkDependencies(input: DependencyCheckInput): Promise<DependencyCheckResult> {
@@ -535,18 +535,18 @@ export async function checkDependencies(input: DependencyCheckInput): Promise<De
     ...unreadable.map(({ manifest, error }): DependencyFinding => ({
       reason: 'unreadable_manifest',
       manifest,
-      message: `${manifest} : manifeste illisible, ses dépendances ne peuvent pas être contrôlées : ${error}`,
+      message: `${manifest}: unreadable manifest, its dependencies cannot be checked: ${error}`,
     })),
     ...unsupported.map((manifest): DependencyFinding => ({
       reason: 'unsupported_manifest',
       manifest,
-      message: `${manifest} : fichier modifié qui oriente l'installation des dépendances et que le contrôle ne lit pas.`,
+      message: `${manifest}: changed file that steers the installation of dependencies and that the check does not read.`,
     })),
     ...directives.map(({ ecosystem, directive, manifest }): DependencyFinding => ({
       reason: 'unchecked_directive',
       manifest,
       ecosystem,
-      message: `${manifest} : directive ajoutée que le contrôle ne suit pas (« ${directive} ») : autre index, fichier inclus non lu ou dépendances calculées hors du manifeste.`,
+      message: `${manifest}: added directive the check does not follow ("${directive}"): another index, an included file it does not read, or dependencies computed outside the manifest.`,
     })),
   ];
   const allowed: Record<Ecosystem, Set<string> | undefined> = {
@@ -573,19 +573,19 @@ export async function checkDependencies(input: DependencyCheckInput): Promise<De
       if (d.source === 'local') return [];
       const out: DependencyFinding[] = [];
       const base = { manifest: d.manifest, ecosystem: d.ecosystem, name: d.name };
-      const label = `${LABEL[d.ecosystem]} « ${d.name} » (${d.manifest})`;
+      const label = `${LABEL[d.ecosystem]} "${d.name}" (${d.manifest})`;
       if (d.source === 'remote') {
-        out.push({ ...base, reason: 'non_registry_source', message: `${label} : source hors du registre (${d.spec}), son existence ne peut pas être contrôlée.` });
+        out.push({ ...base, reason: 'non_registry_source', message: `${label}: source outside the registry (${d.spec}), its existence cannot be checked.` });
       } else if (d.ecosystem === 'npm' && !isValidNpmName(d.name)) {
-        return [{ ...base, reason: 'invalid_name', message: `${label} : nom de paquet npm invalide.` }];
+        return [{ ...base, reason: 'invalid_name', message: `${label}: invalid npm package name.` }];
       } else {
         const res = await lookup(d.ecosystem, d.name);
-        if (res.status === 'missing') out.push({ ...base, reason: 'not_found', message: `${label} : paquet absent du registre ${LABEL[d.ecosystem]}.` });
-        if (res.status === 'unknown') out.push({ ...base, reason: 'registry_unknown', message: `${label} : le registre n'a pas répondu (${res.reason}), le paquet n'est pas vérifié.` });
+        if (res.status === 'missing') out.push({ ...base, reason: 'not_found', message: `${label}: package missing from the ${LABEL[d.ecosystem]} registry.` });
+        if (res.status === 'unknown') out.push({ ...base, reason: 'registry_unknown', message: `${label}: the registry did not answer (${res.reason}), the package is not checked.` });
       }
       const list = allowed[d.ecosystem];
-      if (!list) out.push({ ...base, reason: 'not_allowed', message: `${label} : aucune liste autorisée ${LABEL[d.ecosystem]} pour ce dépôt.` });
-      else if (!list.has(d.name)) out.push({ ...base, reason: 'not_allowed', message: `${label} : hors de la liste autorisée du dépôt.` });
+      if (!list) out.push({ ...base, reason: 'not_allowed', message: `${label}: no ${LABEL[d.ecosystem]} allowlist for this repository.` });
+      else if (!list.has(d.name)) out.push({ ...base, reason: 'not_allowed', message: `${label}: not on the repository's allowlist.` });
       return out;
     }),
   );

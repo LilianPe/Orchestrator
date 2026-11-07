@@ -242,7 +242,7 @@ describe('GitHubAppForge installation tokens', () => {
 
   it('rejects an invalid private key without echoing it', () => {
     expect(() => new GitHubAppForge({ appId: '1', privateKey: 'not-a-pem', http: fakeHttp([]) })).toThrow(
-      /clé privée invalide/,
+      /invalid private key/,
     );
   });
 

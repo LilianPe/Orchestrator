@@ -1,4 +1,5 @@
 import { upcast, type StoredEvent } from './upcast.js';
+import { BEFORE_ORC_331 } from './legacy-messages.js';
 import { TRUSTED, type EventPayloads, type FactoryEvent, type TicketState } from './types.js';
 
 /**
@@ -18,8 +19,8 @@ export const REPAIR_ACTIONS = Object.keys(REPAIRED_STATUS) as readonly RepairAct
 /** `open` until repaired; then the last repair. A replay whose decision throws again reopens it. */
 export type DeadLetterStatus = 'open' | (typeof REPAIRED_STATUS)[RepairAction];
 
-/** The action in French, for the operator and the ticket's session. */
-export const REPAIR_LABELS: Record<RepairAction, string> = { replay: 'rejoué', skip: 'ignoré', force: 'forcé' };
+/** The action as said to the operator and in the ticket's session. */
+export const REPAIR_LABELS: Record<RepairAction, string> = { replay: 'replayed', skip: 'skipped', force: 'forced' };
 
 export interface DeadLetter {
   eventId: string;
@@ -37,7 +38,7 @@ export interface DeadLetter {
 }
 
 /** Prefix of the block reason of a dead-lettered event: its repair lifts that block, not another one. */
-const reasonPrefix = (eventId: string) => `Événement ${eventId} mis de côté`;
+const reasonPrefix = (eventId: string) => `Event ${eventId} set aside`;
 
 /**
  * The block reason of `dead_letter.added`, naming the event: `Raison` of its standard comment (ORC-196). A row out of
@@ -45,17 +46,17 @@ const reasonPrefix = (eventId: string) => `Événement ${eventId} mis de côté`
  * A row without the field threw in its decision, or was journaled before, and keeps its sentence.
  */
 export function deadLetterReason(p: EventPayloads['dead_letter.added']): string {
-  const what = p.attempts ? `${p.attempts} essais sans aboutir` : 'sa décision a échoué';
-  return `${reasonPrefix(p.eventId)} (${p.eventType}) : ${what} (${p.error}).`;
+  const what = p.attempts ? `${p.attempts} attempts without success` : 'its decision failed';
+  return `${reasonPrefix(p.eventId)} (${p.eventType}): ${what} (${p.error}).`;
 }
 
 /** What was tried, in the block's comment: `failures` counts the times it was set aside, not the attempts behind each. */
 export function deadLetterTried(p: EventPayloads['dead_letter.added']): string {
-  return p.attempts ? `${p.attempts} essais de traiter cet événement.` : `${p.failures} décision(s) de cet événement.`;
+  return p.attempts ? `${p.attempts} attempts to process this event.` : `${p.failures} decision(s) of this event.`;
 }
 
 function blockedByDeadLetter(t: TicketState, eventId: string): boolean {
-  return t.blocked && (t.blockReason?.startsWith(`${reasonPrefix(eventId)} (`) ?? false);
+  return t.blocked && [reasonPrefix(eventId), BEFORE_ORC_331.deadLetter(eventId)].some((prefix) => t.blockReason?.startsWith(`${prefix} (`));
 }
 
 /** The ticket with the block of a dead-lettered event lifted, or as it is when blocked by anything else (`decide` and `reduce` of a repair). */
@@ -76,7 +77,7 @@ export const isRefusedNotice = (eventId: string): boolean => eventId.startsWith(
 
 /** What a human reads in the ticket's session of an event the store refused (ORC-316). */
 export function heldMessage(p: EventPayloads['dead_letter.added'], refused: string, holder: string, ticketId: string): string {
-  return `Événement ${p.eventId} (${p.eventType}) refusé pour le projet ${refused} : ce ticket est tenu par le projet ${holder}, rien n'y change. Un mainteneur peut le clore : \`factory run repair ${ticketId} skip ${p.eventId}\`.`;
+  return `Event ${p.eventId} (${p.eventType}) refused for the project ${refused}: this ticket is held by the project ${holder}, nothing changes on it. A maintainer can close it: \`factory run repair ${ticketId} skip ${p.eventId}\`.`;
 }
 
 /** Whether a dead-lettered event gets the event that blocks its ticket (`deadLetterNotice`). */

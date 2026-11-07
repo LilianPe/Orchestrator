@@ -11,7 +11,7 @@ const namesRepo = (label: string, id: string): boolean => label.toLowerCase() ==
 /** The block reason, and the message, of a ticket whose repo is still to be chosen among `repos`. */
 export function unroutedReason(repos: readonly string[]): string {
   const labels = repos.map((r) => `\`${repoLabel(r)}\``).join(', ');
-  return `Dépôt à préciser : cette équipe Linear a plusieurs dépôts. Ajoutez au ticket le label de son dépôt (${labels}), puis déléguez-le de nouveau.`;
+  return `Repository to specify: this Linear team has several repositories. Add the label of its repository to the ticket (${labels}), then delegate it again.`;
 }
 
 /** The ticket waits for its repo: `awaitingRepo`, whatever its block reason says. */

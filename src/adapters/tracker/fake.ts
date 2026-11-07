@@ -43,7 +43,7 @@ export class FakeTracker implements Tracker, TeamDirectory {
   addIssue(p: Partial<TrackerIssue> & { identifier: string }): TrackerIssue {
     const issue: TrackerIssue = {
       title: 'Ticket',
-      description: 'Description assez longue pour passer le contrôle de prise en charge.',
+      description: 'A description long enough to pass the pickup check.',
       url: `https://linear.app/test/issue/${p.identifier}`,
       stateName: 'Todo',
       stateType: 'unstarted',

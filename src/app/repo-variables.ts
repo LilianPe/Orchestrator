@@ -23,14 +23,14 @@ export function makeRepoConfig(o: { exec?: Exec; fetchDeadlineMs?: number; log?:
     const git = async (args: string[], failure: (code: number) => string, opts?: ExecOpts): Promise<string> => {
       const r = await exec('git', ['-C', repoPath, ...args], opts);
       if (r.code === 0) return r.stdout;
-      o.log?.(`${REPO_CONFIG_PATH} : ${execFailure('git', ['-C', repoPath, ...args], r).message}`);
+      o.log?.(`${REPO_CONFIG_PATH}: ${execFailure('git', ['-C', repoPath, ...args], r).message}`);
       throw new Error(failure(r.code));
     };
     // A worktree that already exists is prepared without a fetch: what was merged since applies all the same.
     // Never a prompt for a credential; a forge that does not answer refuses the launch, which never waits for it forever.
     // Past the deadline, git and its ssh are killed: nothing is left holding the repository's locks.
     if (fetch) {
-      const failure = (code: number) => (code === TIMED_OUT ? `la forge ne répond plus après ${deadlineMs / 1000} s` : `la forge n'a pas pu être lue (git fetch, code ${code})`);
+      const failure = (code: number) => (code === TIMED_OUT ? `the forge no longer responds after ${deadlineMs / 1000} s` : `the forge could not be read (git fetch, code ${code})`);
       await git(['fetch', '--quiet', 'origin'], failure, { env: { GIT_TERMINAL_PROMPT: '0', ...STALLED }, timeoutMs: deadlineMs });
     }
     const head = await originHeadOf(exec, repoPath);
@@ -39,18 +39,18 @@ export function makeRepoConfig(o: { exec?: Exec; fetchDeadlineMs?: number; log?:
     // first, a tag anyone who pushes to the forge can make.
     const ref = `refs/remotes/${name}`;
     // The hint only when `origin/HEAD` is missing: `origin/main` is then a guess, perhaps not the default branch.
-    const unreadable = `branche par défaut illisible (${name})${head.set ? '' : ` : origin/HEAD n'est pas défini sur le dépôt de l'usine ; si ${name} n'est pas la branche par défaut, lancez \`git remote set-head origin --auto\` sur ce dépôt`}`;
+    const unreadable = `unreadable default branch (${name})${head.set ? '' : `: origin/HEAD is not set on the factory's repository; if ${name} is not the default branch, run \`git remote set-head origin --auto\` on this repository`}`;
     // `ls-tree` tells a file absent from a branch it could not read, which `git show` answers alike.
     const entryOf = (path: string) => git(['ls-tree', '-z', ref, '--', path], () => unreadable);
     // `ls-tree` does not go through a `.factory` that is a link: the file under it would read as absent.
     const dir = await entryOf(REPO_CONFIG_DIR);
     if (!dir) return parseRepoConfig(undefined);
-    if (!dir.startsWith('040000 tree ')) throw new RepoConfigError([`${REPO_CONFIG_DIR} n'est pas un dossier sur ${name} (lien symbolique, fichier ou sous-module)`]);
+    if (!dir.startsWith('040000 tree ')) throw new RepoConfigError([`${REPO_CONFIG_DIR} is not a folder on ${name} (symbolic link, file or submodule)`]);
     const entry = await entryOf(REPO_CONFIG_PATH);
     if (!entry) return parseRepoConfig(undefined);
     const blob = /^100(?:644|755) blob ([0-9a-f]+)\t/.exec(entry)?.[1];
-    if (!blob) throw new RepoConfigError([`${REPO_CONFIG_PATH} n'est pas un fichier sur ${name} (lien symbolique, dossier ou sous-module)`]);
-    return parseRepoConfig(await git(['cat-file', 'blob', blob], () => `${REPO_CONFIG_PATH} illisible sur ${name} (objet git manquant ou abîmé)`));
+    if (!blob) throw new RepoConfigError([`${REPO_CONFIG_PATH} is not a file on ${name} (symbolic link, folder or submodule)`]);
+    return parseRepoConfig(await git(['cat-file', 'blob', blob], () => `${REPO_CONFIG_PATH} unreadable on ${name} (git object missing or damaged)`));
   };
 }
 
@@ -84,7 +84,7 @@ export function makeRepoVariables(o: { yml: FactoryYml | undefined; log: (messag
     const server = entries.find((r) => r.github.toLowerCase() === name);
     if (!server) return NO_REPO_VARIABLES;
     const vars = repoVariables(config, server);
-    if (vars.missing.length) o.log(`${id} : variables déclarées par le dépôt, sans valeur dans factory.yml, absentes du runner : ${vars.missing.join(', ')}`);
+    if (vars.missing.length) o.log(`${id}: variables declared by the repository, with no value in factory.yml, left out of the runner: ${vars.missing.join(', ')}`);
     return vars;
   };
 }

@@ -21,12 +21,12 @@ const VERSIONS = ['2025-11-25', '2025-06-18', '2025-03-26'];
 const TOOLS = [
   {
     name: 'submit_result',
-    description: "Rend le résultat du run à l'usine, en dernier. Seul ce résultat est lu : un run sans résultat valide échoue. Un second envoi remplace le premier.",
+    description: 'Hands the run\'s result to the factory, last. Only this result is read: a run without a valid result fails. A second submission replaces the first.',
     inputSchema: z.toJSONSchema(agentOutputSchema),
   },
   {
     name: 'ask',
-    description: "Pose une question à un humain dans Linear et bloque le ticket jusqu'à sa réponse.",
+    description: 'Asks a human a question in Linear and blocks the ticket until they answer.',
     inputSchema: { type: 'object', properties: { text: { type: 'string', minLength: 1 } }, required: ['text'], additionalProperties: false },
   },
 ];
@@ -36,14 +36,14 @@ const text = (t: string, isError?: true) => ({ content: [{ type: 'text', text: t
 async function callTool(name: unknown, args: Record<string, unknown>, run: RunRecord, d: McpDeps) {
   if (name === 'submit_result') {
     const parsed = parseAgentOutput(args);
-    if (!parsed.ok) return text(`Résultat refusé, à corriger : ${parsed.error}`, true);
+    if (!parsed.ok) return text(`Result refused, to fix: ${parsed.error}`, true);
     await saveAgentOutput(d.store, run.id, parsed.output);
-    return text('Résultat enregistré.');
+    return text('Result recorded.');
   }
   if (name === 'ask') {
-    if (typeof args['text'] !== 'string' || !args['text']) return text('text: requis', true);
+    if (typeof args['text'] !== 'string' || !args['text']) return text('text: required', true);
     await d.ask(run, args['text']);
-    return text('Question posée : le ticket attend la réponse.');
+    return text('Question asked: the ticket waits for the answer.');
   }
   return undefined;
 }

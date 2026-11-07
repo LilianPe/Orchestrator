@@ -80,7 +80,7 @@ type Boxes = Pick<SandboxProvider, 'create' | 'exec' | 'destroy'>;
 
 /** `sandboxes`, whose `create` and `exec` give up on an engine silent past `ms`. An `exec` also destroys its sandbox: the only way a stuck one ends. */
 export function withDeadline(sandboxes: Boxes, ms: number): Boxes {
-  const silent = `le sandbox ne répond plus après ${ms / 1000} s`;
+  const silent = `the sandbox no longer responds after ${ms / 1000} s`;
   return {
     create: (req) => within(sandboxes.create(req), ms, silent),
     exec: (id, argv, opts) => within(sandboxes.exec(id, argv, opts), ms, silent, () => void sandboxes.destroy(id).catch(() => {})),
@@ -131,7 +131,7 @@ export const runCleanVerify: CleanVerifier = async (req) => {
     const git = cloneGit(req, cloneDir);
     const tree = await git('rev-parse', `${sha}^{tree}`);
     if (sha === req.green) return { ok: true, failures: [], sha, tree };
-    await within(fetchBase(req, cloneDir), deadlineMs, `la forge ne répond plus après ${deadlineMs / 1000} s`);
+    await within(fetchBase(req, cloneDir), deadlineMs, `the forge no longer responds after ${deadlineMs / 1000} s`);
     const config = parseRepoConfig(await show(git, BASE, REPO_CONFIG_PATH));
     const declared = Object.values(config.commands);
     const commands = declared.length ? declared : req.commands;
@@ -146,7 +146,7 @@ export const runCleanVerify: CleanVerifier = async (req) => {
         if (failures.length || !commands.length) return;
         // `-c`: the clone's config is ours, and from the first command on it is no longer to be trusted.
         const out = await sandboxes.exec(id, ['git', ...IN_SANDBOX, 'checkout', '--quiet', '--detach', sha]);
-        if (out.code !== 0) throw new Error(`git checkout (sandbox) : ${out.stderr.trim()}`);
+        if (out.code !== 0) throw new Error(`git checkout (sandbox): ${out.stderr.trim()}`);
       });
     }
     if (failures.length || !commands.length) return { ok: !failures.length, failures, sha, tree, commands };
@@ -183,7 +183,7 @@ async function fetchBase(req: CleanVerifyRequest, cloneDir: string): Promise<voi
     await mustExec(req.exec ?? execCmd, 'git', args, { env: { GIT_TERMINAL_PROMPT: '0' } });
   } catch (err) {
     // eslint-disable-next-line preserve-caught-error -- its message holds the URL and its credentials: it stays out of what is journaled.
-    throw new Error(`branche de base non lue : ${withoutCredentials((err as Error).message, req.originUrl)}`);
+    throw new Error(`base branch not read: ${withoutCredentials((err as Error).message, req.originUrl)}`);
   }
 }
 
@@ -214,22 +214,22 @@ export async function scanSecrets(sandboxes: Boxes, id: string, from: string, sh
   const argv = ['timeout', String(VERIFY_TIMEOUT_MS / 1000), 'gitleaks', 'git', `--log-opts=${logOpts}`, '--no-banner', '--redact', '--ignore-gitleaks-allow', '--exit-code', String(LEAKS_FOUND), '--report-format', 'json', '--report-path', '-', '--log-level', 'error', '.'];
   const env = { GIT_AUTHOR_NAME: 'factory', GIT_AUTHOR_EMAIL: 'factory@localhost', GIT_COMMITTER_NAME: 'factory', GIT_COMMITTER_EMAIL: 'factory@localhost', ...IN_SANDBOX_ENV };
   const { code, stdout, stderr } = await sandboxes.exec(id, argv, { env });
-  if ((code !== 0 && code !== LEAKS_FOUND) || stderr.trim()) throw new Error(`gitleaks n'a pas pu tourner (code ${code}) : ${stderr.trim()}`);
+  if ((code !== 0 && code !== LEAKS_FOUND) || stderr.trim()) throw new Error(`gitleaks could not run (code ${code}): ${stderr.trim()}`);
   let found: { File: string; StartLine: number; RuleID: string }[];
   try {
     found = JSON.parse(stdout) as typeof found;
     if (!Array.isArray(found)) throw new Error('not a list');
   } catch {
-    throw new Error(`gitleaks n'a pas rendu de rapport lisible (code ${code})`);
+    throw new Error(`gitleaks returned no readable report (code ${code})`);
   }
   if (code === 0 && !found.length) return [];
   const lines = found.map((f) => `- ${f.File}:${f.StartLine} (${f.RuleID})`);
-  return [{ command: SECRETS_CHECK, exitCode: 1, output: `Secret codé en dur dans les commits de la branche, publication bloquée. Retire-le de son historique, et considère-le comme exposé :\n${lines.join('\n')}` }];
+  return [{ command: SECRETS_CHECK, exitCode: 1, output: `Hard-coded secret in the branch's commits, publication blocked. Remove it from its history, and consider it exposed:\n${lines.join('\n')}` }];
 }
 
 /** `merge-base`'s own answers, 0 and 1, and no other code: a failure of git is no verdict on the branch, and rejects. */
 export function isYes(r: ExecResult): boolean {
-  if (r.code > 1) throw new Error(`git merge-base : ${r.stderr.trim() || `code ${r.code}`}`);
+  if (r.code > 1) throw new Error(`git merge-base: ${r.stderr.trim() || `code ${r.code}`}`);
   return r.code === 0;
 }
 
@@ -275,13 +275,13 @@ export async function checkClone(git: CloneGit, from: string, sha: string, froze
  */
 async function checkAdded(git: CloneGit, from: string, sha: string): Promise<VerifyFailure[]> {
   const read = await git.capped(MAX_PATCH_BYTES, '-c', `core.bigFileThreshold=${MAX_READ_BYTES}`, 'diff', '--numstat', '--patch', '-z', '-U0', '--no-renames', '--no-ext-diff', '--no-textconv', '--diff-filter=d', from, sha);
-  if (read === undefined) return [{ command: ANTI_CHEAT_CHECK, exitCode: 1, output: `Diff trop gros pour être analysé (plus de ${MAX_PATCH_BYTES / 2 ** 20} Mo), publication bloquée. Découpe le travail.` }];
+  if (read === undefined) return [{ command: ANTI_CHEAT_CHECK, exitCode: 1, output: `Diff too large to analyze (over ${MAX_PATCH_BYTES / 2 ** 20} MB), publication blocked. Split the work.` }];
   const end = read.indexOf('\0\0');
   const binaries = (end === -1 ? [] : read.slice(0, end).split('\0')).filter((l) => l.startsWith('-\t-\t')).map((l) => l.slice(4));
   const failures: VerifyFailure[] = [];
-  if (binaries.length) failures.push({ command: BINARY_CHECK, exitCode: 1, output: `Fichier binaire, ou trop gros pour être analysé (plus de ${MAX_READ_BYTES / 2 ** 20} Mo), dans le diff, publication bloquée. Retire-le de la branche :\n${binaries.map((p) => `- ${mdCode(p)}`).join('\n')}` });
+  if (binaries.length) failures.push({ command: BINARY_CHECK, exitCode: 1, output: `Binary file, or one too large to analyze (over ${MAX_READ_BYTES / 2 ** 20} MB), in the diff, publication blocked. Remove it from the branch:\n${binaries.map((p) => `- ${mdCode(p)}`).join('\n')}` });
   const cheat = antiCheatCheck(end === -1 ? '' : read.slice(end + 2));
-  if (!cheat.ok) failures.push({ command: ANTI_CHEAT_CHECK, exitCode: 1, output: `Contournement ou test désactivé dans le diff, publication bloquée. Retire-le de la branche :\n${cheat.summary}` });
+  if (!cheat.ok) failures.push({ command: ANTI_CHEAT_CHECK, exitCode: 1, output: `Workaround or disabled test in the diff, publication blocked. Remove it from the branch:\n${cheat.summary}` });
   return failures;
 }
 

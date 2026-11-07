@@ -8,12 +8,12 @@ import type { EventType } from '../core/types.js';
 import { openStore } from '../store/open.js';
 import type { Store } from '../store/types.js';
 
-export const REPAIR_USAGE = `Usage : factory run repair <ticket | événement> [replay | skip | force] [<événement>]
-  sans action  lister les événements mis de côté (dead-letter) du ticket
-  replay       décider l'événement de nouveau (après un correctif)
-  skip         l'ignorer : il n'est jamais décidé
-  force        enregistrer ses faits sans sa décision (aucun effet)
-Le ticket est débloqué ; la réparation passe par l'inbox et est journalisée.`;
+export const REPAIR_USAGE = `Usage: factory run repair <ticket | event> [replay | skip | force] [<event>]
+  no action    list the ticket's events set aside (dead letters)
+  replay       decide the event again (after a fix)
+  skip         ignore it: it is never decided
+  force        record its facts without its decision (no effect)
+The ticket is unblocked; the repair goes through the inbox and is journaled.`;
 
 export interface RepairOptions {
   store: Store;
@@ -29,7 +29,7 @@ export interface RepairOptions {
 }
 
 const line = (d: DeadLetter) =>
-  `  ${d.eventId}  ${d.event.type}  ${d.status === 'open' ? 'ouvert' : `${d.status} par ${d.resolvedBy ?? '?'}`}  (${d.failures} échec${d.failures > 1 ? 's' : ''}) ${d.error}`;
+  `  ${d.eventId}  ${d.event.type}  ${d.status === 'open' ? 'open' : `${d.status} by ${d.resolvedBy ?? '?'}`}  (${d.failures} failure${d.failures > 1 ? 's' : ''}) ${d.error}`;
 
 /**
  * `factory run repair` (ORC-175): lists a ticket's dead letters, or repairs one. The repair is written
@@ -43,11 +43,11 @@ export async function runRepair(o: RepairOptions): Promise<number> {
     found = one ? [one] : [];
   }
   if (found.length === 0) {
-    o.print(`Aucun événement mis de côté pour ${o.target}.`);
+    o.print(`No event set aside for ${o.target}.`);
     return 1;
   }
   if (o.action === undefined) {
-    o.print(`Événements mis de côté pour ${o.target} :`);
+    o.print(`Events set aside for ${o.target}:`);
     for (const d of found) o.print(line(d));
     return 0;
   }
@@ -61,27 +61,27 @@ export async function runRepair(o: RepairOptions): Promise<number> {
   if (!chosen) {
     o.print(
       open.length === 0
-        ? `Plus rien d'ouvert pour ${o.target} : tout est déjà réparé.`
+        ? `Nothing open any more for ${o.target}: everything is already repaired.`
         : o.eventId === undefined
-          ? `Plusieurs événements ouverts pour ${o.target} : précisez lequel.`
-          : `Pas d'événement ouvert ${o.eventId} pour ${o.target}.`,
+          ? `Several open events for ${o.target}: say which one.`
+          : `No open event ${o.eventId} for ${o.target}.`,
     );
     for (const d of open) o.print(line(d));
     return 1;
   }
   // A run's or a check's result frees the ticket's run: dropped, it would leave the ticket running for good.
   if (action === 'skip' && (SETTLES_RUN.has(chosen.event.type as EventType) || chosen.event.type === 'verify.lost')) {
-    o.print(`${chosen.eventId} (${chosen.event.type}) termine un run ou ses vérifications : l'ignorer laisserait le ticket en cours. Utilisez force (ses faits sans sa décision) ou replay.`);
+    o.print(`${chosen.eventId} (${chosen.event.type}) ends a run or its checks: skipping it would leave the ticket in progress. Use force (its facts without its decision) or replay.`);
     return 1;
   }
   const repaired = await o.store.repairDeadLetter(chosen.eventId, action, o.by, o.now);
   if (!repaired) {
-    o.print(`L'événement ${chosen.eventId} a été réparé entre-temps.`);
+    o.print(`The event ${chosen.eventId} was repaired in the meantime.`);
     return 1;
   }
-  o.print(`Événement ${chosen.eventId} (${chosen.event.type}) ${REPAIR_LABELS[action]} par ${o.by} : réparation journalisée, décidée au prochain passage du démon.`);
+  o.print(`Event ${chosen.eventId} (${chosen.event.type}) ${REPAIR_LABELS[action]} by ${o.by}: repair journaled, decided at the next pass of the daemon.`);
   const left = open.length - 1;
-  if (left > 0) o.print(`Encore ${left} événement${left > 1 ? 's' : ''} ouvert${left > 1 ? 's' : ''} pour ${o.target}.`);
+  if (left > 0) o.print(`Still ${left} open event${left > 1 ? 's' : ''} for ${o.target}.`);
   return 0;
 }
 

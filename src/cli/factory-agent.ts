@@ -2,13 +2,13 @@
 import { fileURLToPath } from 'node:url';
 import { PRODUCT_NAME } from '../product.js';
 
-const USAGE = 'Usage : factory-agent issue <ID> | search <texte> | kb search <mots> | ask <question>';
+const USAGE = 'Usage: factory-agent issue <ID> | search <text> | kb search <words> | ask <question>';
 
 export async function runAgentCli(argv: string[], env: NodeJS.ProcessEnv, fetchImpl: typeof fetch, out: (s: string) => void): Promise<number> {
   const api = env['FACTORY_API'];
   const token = env['FACTORY_RUN_TOKEN'];
   if (!api || !token) {
-    out(`factory-agent doit être lancé par ${PRODUCT_NAME} (FACTORY_API et FACTORY_RUN_TOKEN manquants).\n`);
+    out(`factory-agent must be started by ${PRODUCT_NAME} (FACTORY_API and FACTORY_RUN_TOKEN missing).\n`);
     return 2;
   }
   const headers = { authorization: `Bearer ${token}`, 'content-type': 'application/json' };
@@ -31,17 +31,17 @@ export async function runAgentCli(argv: string[], env: NodeJS.ProcessEnv, fetchI
     }
     if (cmd === 'kb' && rest[0] === 'search' && rest.length > 1) {
       const hits = (await get(`/kb/search?q=${encodeURIComponent(rest.slice(1).join(' '))}`)) as any[];
-      out((hits.length ? hits.map((h) => `${h.file}:${h.line}: ${h.text}`).join('\n') : 'Aucun résultat.') + '\n');
+      out((hits.length ? hits.map((h) => `${h.file}:${h.line}: ${h.text}`).join('\n') : 'No result.') + '\n');
       return 0;
     }
     if (cmd === 'ask' && rest.length) {
       const res = await fetchImpl(`${api}/ask`, { method: 'POST', headers, body: JSON.stringify({ text: rest.join(' ') }) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      out('Question posée dans Linear. Termine ton tour maintenant.\n');
+      out('Question asked in Linear. End your turn now.\n');
       return 0;
     }
   } catch (err) {
-    out(`factory-agent : ${(err as Error).message}\n`);
+    out(`factory-agent: ${(err as Error).message}\n`);
     return 1;
   }
   out(`${USAGE}\n`);

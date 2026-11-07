@@ -98,8 +98,8 @@ describe('idempotency table (ORC-162, docs/idempotency.md)', () => {
     h.runner.enqueue({ events: [{ kind: 'text', text: 'PR ouverte.' }] });
     await h.send('ticket.delegated', { linearSessionId: 'ls-1', ack: true });
     await settled();
-    expect(h.tracker.comments('REL-1')).toEqual(['Bien reçu.']);
-    expect(h.tracker.activities('ls-1').filter((a) => a.type === 'thought' && !a.ephemeral)).toEqual([{ type: 'thought', body: 'Bien reçu.' }]);
+    expect(h.tracker.comments('REL-1')).toEqual(['Got it.']);
+    expect(h.tracker.activities('ls-1').filter((a) => a.type === 'thought' && !a.ephemeral)).toEqual([{ type: 'thought', body: 'Got it.' }]);
     expect(await result()).toMatchObject({ kind: 'ack', deduplicated: true, ref: 'comment-REL-1-1' });
   });
 

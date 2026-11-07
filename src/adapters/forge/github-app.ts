@@ -327,7 +327,7 @@ export class GitHubAppAuth {
     try {
       createPrivateKey(this.#privateKey);
     } catch {
-      throw new Error('GitHub App : clé privée invalide (PEM RSA attendu)');
+      throw new Error('GitHub App: invalid private key (RSA PEM expected)');
     }
   }
 
@@ -335,7 +335,7 @@ export class GitHubAppAuth {
     if (this.resolveRepoFn) return this.resolveRepoFn(repoPath);
     const remote = await mustExec(this.exec, 'git', ['remote', 'get-url', 'origin'], { cwd: repoPath });
     const repo = parseGitHubRemote(remote);
-    if (!repo) throw new Error(`remote origin de ${repoPath} n'est pas un dépôt GitHub`);
+    if (!repo) throw new Error(`the origin remote of ${repoPath} is not a GitHub repository`);
     return repo;
   }
 
@@ -367,7 +367,7 @@ export class GitHubAppAuth {
     const hardLimit = now + ONE_HOUR_MS;
     const expiresAt = (Number.isFinite(requested) ? Math.min(requested, hardLimit) : hardLimit) - TOKEN_SAFETY_MARGIN_MS;
     this.#tokens.set(`${repo.owner}/${repo.name}`, { token: data.token, expiresAt });
-    this.log?.(`GitHub App : jeton d'installation pour ${repo.owner}/${repo.name} (expire ${new Date(expiresAt).toISOString()})`);
+    this.log?.(`GitHub App: installation token for ${repo.owner}/${repo.name} (expires ${new Date(expiresAt).toISOString()})`);
     return data.token;
   }
 
@@ -566,7 +566,7 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
       query: 'mutation($id: ID!) { markPullRequestReadyForReview(input: { pullRequestId: $id }) { clientMutationId } }',
       variables: { id: pr.node_id },
     });
-    if (out.errors?.length) throw new Error(`GitHub GraphQL : ${out.errors.map((e) => e.message).join('; ')}`);
+    if (out.errors?.length) throw new Error(`GitHub GraphQL: ${out.errors.map((e) => e.message).join('; ')}`);
   }
 
   /** In the environment: a command line is visible to every process of the host, and git quotes it in its errors. */
@@ -615,9 +615,9 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
       query: THREADS_QUERY,
       variables: { owner: repo.owner, name: repo.name, number: prNumber },
     });
-    if (out.errors?.length) throw new Error(`GitHub GraphQL : ${out.errors.map((e) => e.message).join('; ')}`);
+    if (out.errors?.length) throw new Error(`GitHub GraphQL: ${out.errors.map((e) => e.message).join('; ')}`);
     const pr = out.data?.repository?.pullRequest;
-    if (!pr) throw new Error(`GitHub GraphQL : PR ${repo.owner}/${repo.name}#${prNumber} introuvable`);
+    if (!pr) throw new Error(`GitHub GraphQL: PR ${repo.owner}/${repo.name}#${prNumber} not found`);
     return pr.reviewThreads.nodes
       .filter((t) => !t.isResolved && t.comments.nodes[0])
       .map((t) => {

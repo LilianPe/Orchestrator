@@ -50,7 +50,7 @@ export function stepSettings(yml: FactoryYml | undefined): StepSettings {
 
 export class FactoryYmlError extends Error {
   constructor(readonly violations: string[]) {
-    super(`factory.yml invalide :\n- ${violations.join('\n- ')}`);
+    super(`invalid factory.yml:\n- ${violations.join('\n- ')}`);
   }
 }
 
@@ -79,22 +79,22 @@ export function parseFactoryYml(text: string, env: NodeJS.ProcessEnv = process.e
   try {
     raw = parse(text) ?? {};
   } catch (err) {
-    throw new FactoryYmlError([`YAML illisible : ${(err as Error).message}`]);
+    throw new FactoryYmlError([`unreadable YAML: ${(err as Error).message}`]);
   }
-  if (typeof raw !== 'object' || Array.isArray(raw)) throw new FactoryYmlError(['un objet YAML est attendu']);
+  if (typeof raw !== 'object' || Array.isArray(raw)) throw new FactoryYmlError(['a YAML object is expected']);
   const r = raw as Record<string, unknown>;
   const violations: string[] = [];
   const out: FactoryYml = {};
 
-  for (const key of Object.keys(r)) if (!(key in SECTIONS)) violations.push(`${key} : clé inconnue`);
+  for (const key of Object.keys(r)) if (!(key in SECTIONS)) violations.push(`${key}: unknown key`);
   const section = (key: string): Record<string, unknown> | undefined => {
     const v = r[key];
     if (v === undefined || v === null) return undefined;
     if (typeof v !== 'object' || Array.isArray(v)) {
-      violations.push(`${key} : un objet est attendu`);
+      violations.push(`${key}: an object is expected`);
       return undefined;
     }
-    for (const k of Object.keys(v)) if (!SECTIONS[key]!.includes(k)) violations.push(`${key}.${k} : clé inconnue`);
+    for (const k of Object.keys(v)) if (!SECTIONS[key]!.includes(k)) violations.push(`${key}.${k}: unknown key`);
     return v as Record<string, unknown>;
   };
   /** A value, or `env:NAME` read from the environment; a secret must be `env:NAME`. */
@@ -102,26 +102,26 @@ export function parseFactoryYml(text: string, env: NodeJS.ProcessEnv = process.e
     if (v === undefined || v === null) return undefined;
     const text = typeof v === 'number' ? String(v) : v;
     if (typeof text !== 'string' || text === '') {
-      violations.push(`${path} : un texte non vide est attendu`);
+      violations.push(`${path}: a non-empty text is expected`);
       return undefined;
     }
     if (!text.startsWith('env:')) {
-      if (secret) violations.push(`${path} : un secret s’écrit \`env:NOM\`, jamais en clair dans factory.yml`);
+      if (secret) violations.push(`${path}: a secret is written \`env:NAME\`, never in clear in factory.yml`);
       return secret ? undefined : text;
     }
     const name = text.slice(4);
     if (!ENV_NAME.test(name)) {
-      violations.push(`${path} : « ${text} » ne nomme pas une variable (\`env:NOM\`)`);
+      violations.push(`${path}: "${text}" does not name a variable (\`env:NAME\`)`);
       return undefined;
     }
     const resolved = env[name];
-    if (resolved === undefined || resolved === '') violations.push(`${path} : la variable d’environnement ${name} n’est pas définie`);
+    if (resolved === undefined || resolved === '') violations.push(`${path}: the environment variable ${name} is not set`);
     return resolved || undefined;
   };
   const leaf = <T>(path: string, v: unknown, schema: z.ZodType<T>, expected: string): T | undefined => {
     if (v === undefined || v === null) return undefined;
     const res = schema.safeParse(v);
-    if (!res.success) violations.push(`${path} : ${expected}`);
+    if (!res.success) violations.push(`${path}: ${expected}`);
     return res.success ? res.data : undefined;
   };
 
@@ -138,31 +138,31 @@ export function parseFactoryYml(text: string, env: NodeJS.ProcessEnv = process.e
     const appId = value('github.app_id', github['app_id']);
     const privateKey = value('github.private_key', github['private_key'], true);
     // `== null`: an empty value (`private_key:`) is as missing as an absent one.
-    if (github['app_id'] == null) violations.push('github.app_id : requis');
-    if (github['private_key'] == null) violations.push('github.private_key : requis');
+    if (github['app_id'] == null) violations.push('github.app_id: required');
+    if (github['private_key'] == null) violations.push('github.private_key: required');
     const installationId = value('github.installation_id', github['installation_id']);
     const webhookSecret = value('github.webhook_secret', github['webhook_secret'], true);
     if (appId && privateKey) out.github = { appId, privateKey, ...(installationId ? { installationId } : {}), ...(webhookSecret ? { webhookSecret } : {}) };
   }
   const claude = section('claude');
   if (claude) {
-    for (const key of ['accounts', 'active', 'default_model']) if (claude[key] == null) violations.push(`claude.${key} : requis`);
-    const declared = leaf('claude.accounts', claude['accounts'], z.array(z.strictObject({ name: z.string().min(1), token: z.string() })), '`[{ name, token }]` attendu');
+    for (const key of ['accounts', 'active', 'default_model']) if (claude[key] == null) violations.push(`claude.${key}: required`);
+    const declared = leaf('claude.accounts', claude['accounts'], z.array(z.strictObject({ name: z.string().min(1), token: z.string() })), '`[{ name, token }]` expected');
     const accounts = (declared ?? []).map((a, i) => ({ name: a.name, token: value(`claude.accounts[${i}].token`, a.token, true) ?? '' }));
-    const active = leaf('claude.active', claude['active'], z.string().min(1), 'un nom de compte est attendu');
+    const active = leaf('claude.active', claude['active'], z.string().min(1), 'an account name is expected');
     // Only against well-formed accounts: a malformed list already has its own violation.
     if (active && declared && !accounts.some((a) => a.name === active)) {
-      violations.push(`claude.active : « ${active} » n’est pas un des comptes déclarés (${accounts.map((a) => a.name).join(', ')})`);
+      violations.push(`claude.active: "${active}" is not one of the declared accounts (${accounts.map((a) => a.name).join(', ')})`);
     }
-    const defaultModel = leaf('claude.default_model', claude['default_model'], z.string().min(1), 'un modèle est attendu');
-    const perStep = leaf('claude.per_step', claude['per_step'], z.record(z.string(), z.string().min(1)), '`étape: modèle` attendu');
+    const defaultModel = leaf('claude.default_model', claude['default_model'], z.string().min(1), 'a model is expected');
+    const perStep = leaf('claude.per_step', claude['per_step'], z.record(z.string(), z.string().min(1)), '`step: model` expected');
     const eff = leaf(
       'claude.effort',
       claude['effort'],
       z.strictObject({ default: effort, per_step: z.record(z.string(), effort).optional() }),
-      '`{ default, per_step }` en low | medium | high attendu',
+      '`{ default, per_step }` in low | medium | high expected',
     );
-    if (claude['runtime'] !== 'claude-code') violations.push('claude.runtime : seul `claude-code` existe');
+    if (claude['runtime'] !== 'claude-code') violations.push('claude.runtime: only `claude-code` exists');
     if (active && defaultModel) {
       out.claude = {
         runtime: 'claude-code',
@@ -174,14 +174,14 @@ export function parseFactoryYml(text: string, env: NodeJS.ProcessEnv = process.e
       };
     }
   }
-  const concurrency = leaf('concurrency', r['concurrency'], z.number().int().positive(), 'un entier positif est attendu');
+  const concurrency = leaf('concurrency', r['concurrency'], z.number().int().positive(), 'a positive integer is expected');
   if (concurrency !== undefined) out.concurrency = concurrency;
   const budgets = section('budgets');
   if (budgets) {
-    const perStepTokens = leaf('budgets.per_step_tokens', budgets['per_step_tokens'], counts, '`étape: entier positif` attendu');
-    const perTicketTokens = leaf('budgets.per_ticket_tokens', budgets['per_ticket_tokens'], z.number().int().positive(), 'un entier positif est attendu');
-    const maxTurns = leaf('budgets.max_turns', budgets['max_turns'], counts, '`étape: entier positif` attendu');
-    const onUsageLimit = leaf('budgets.on_usage_limit', budgets['on_usage_limit'], z.literal('wait'), 'seul `wait` existe');
+    const perStepTokens = leaf('budgets.per_step_tokens', budgets['per_step_tokens'], counts, '`step: positive integer` expected');
+    const perTicketTokens = leaf('budgets.per_ticket_tokens', budgets['per_ticket_tokens'], z.number().int().positive(), 'a positive integer is expected');
+    const maxTurns = leaf('budgets.max_turns', budgets['max_turns'], counts, '`step: positive integer` expected');
+    const onUsageLimit = leaf('budgets.on_usage_limit', budgets['on_usage_limit'], z.literal('wait'), 'only `wait` exists');
     out.budgets = {
       ...(perStepTokens ? { perStepTokens } : {}),
       ...(perTicketTokens ? { perTicketTokens } : {}),
@@ -193,18 +193,18 @@ export function parseFactoryYml(text: string, env: NodeJS.ProcessEnv = process.e
     'repos',
     r['repos'],
     z.array(z.strictObject({ linear_team: z.string().min(1), github: z.string(), env: z.record(z.string(), z.unknown()).optional(), secrets: z.record(z.string(), z.unknown()).optional() })),
-    '`[{ linear_team, github, env, secrets }]` attendu',
+    '`[{ linear_team, github, env, secrets }]` expected',
   );
   if (repos) {
     out.repos = repos.map((repo, i) => {
-      if (!REPO.test(repo.github)) violations.push(`repos[${i}].github : \`<org>/<dépôt>\` attendu`);
+      if (!REPO.test(repo.github)) violations.push(`repos[${i}].github: \`<org>/<repo>\` expected`);
       const resolved = (key: 'env' | 'secrets') => {
         const out: Record<string, string> = {};
         for (const [name, v] of Object.entries(repo[key] ?? {})) {
           const path = `repos[${i}].${key}.${name}`;
           const text = value(path, v, key === 'secrets');
           if (text === undefined) continue;
-          if (key === 'secrets' && text.length < MIN_REPO_SECRET_LENGTH) violations.push(`${path} : au moins ${MIN_REPO_SECRET_LENGTH} caractères attendus`);
+          if (key === 'secrets' && text.length < MIN_REPO_SECRET_LENGTH) violations.push(`${path}: at least ${MIN_REPO_SECRET_LENGTH} characters expected`);
           out[name] = text;
         }
         return out;
@@ -212,7 +212,7 @@ export function parseFactoryYml(text: string, env: NodeJS.ProcessEnv = process.e
       return { linearTeam: repo.linear_team, github: repo.github, ...(repo.env ? { env: resolved('env') } : {}), ...(repo.secrets ? { secrets: resolved('secrets') } : {}) };
     });
   }
-  const maxLines = leaf('read_guard.max_lines', section('read_guard')?.['max_lines'], z.number().int().positive(), 'un entier positif est attendu');
+  const maxLines = leaf('read_guard.max_lines', section('read_guard')?.['max_lines'], z.number().int().positive(), 'a positive integer is expected');
   if (maxLines !== undefined) out.readGuard = { maxLines };
 
   if (violations.length > 0) throw new FactoryYmlError(violations);

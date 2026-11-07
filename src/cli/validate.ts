@@ -12,31 +12,31 @@ const MISSPELT = '.factory/config.yaml';
  */
 export function runValidateCommand(opts: { repoPath: string; out: (line: string) => void }): number {
   if (opts.repoPath.startsWith('-')) {
-    opts.out('Usage : factory validate [repo] (aucune option)');
+    opts.out('Usage: factory validate [repo] (no options)');
     return 1;
   }
   const refuse = (violations: string[]): number => {
-    opts.out(`${FILE} refusé :`);
+    opts.out(`${FILE} refused:`);
     for (const v of violations) opts.out(`- ${v}`);
     return 1;
   };
-  if (existsSync(join(opts.repoPath, MISSPELT))) return refuse([`${MISSPELT} : renommez-le en ${FILE}, seul nom lu par l'usine`]);
+  if (existsSync(join(opts.repoPath, MISSPELT))) return refuse([`${MISSPELT}: rename it to ${FILE}, the only name the factory reads`]);
   // As the daemon reads it on the default branch (`makeRepoConfig`): through a link, git sees no file, and the launch refuses it.
   // `lstat`, not `existsSync`, which follows a link: a dangling one would read as no file at all.
   const entry = (p: string) => lstatSync(p, { throwIfNoEntry: false });
   const dir = entry(join(opts.repoPath, REPO_CONFIG_DIR));
-  if (dir && !dir.isDirectory()) return refuse([`${REPO_CONFIG_DIR} : un dossier attendu, pas un lien symbolique ni un fichier`]);
+  if (dir && !dir.isDirectory()) return refuse([`${REPO_CONFIG_DIR}: a folder is expected, not a symbolic link or a file`]);
   const path = join(opts.repoPath, FILE);
-  if (entry(path)?.isSymbolicLink()) return refuse([`${FILE} : un fichier attendu, pas un lien symbolique`]);
+  if (entry(path)?.isSymbolicLink()) return refuse([`${FILE}: a file is expected, not a symbolic link`]);
   if (!existsSync(path)) {
-    opts.out(`pas de ${FILE} : le socle de factory/default s'applique tel quel.`);
+    opts.out(`no ${FILE}: the factory/default baseline applies as is.`);
     return 0;
   }
   let text: string;
   try {
     text = readFileSync(path, 'utf8');
   } catch (err) {
-    return refuse([`illisible : ${(err as Error).message}`]);
+    return refuse([`unreadable: ${(err as Error).message}`]);
   }
   try {
     parseRepoConfig(text);
@@ -44,6 +44,6 @@ export function runValidateCommand(opts: { repoPath: string; out: (line: string)
     if (!(err instanceof RepoConfigError)) throw err;
     return refuse(err.violations);
   }
-  opts.out(`${FILE} valide : il n'ajoute que des contrôles ou des interdits au socle.`);
+  opts.out(`${FILE} valid: it only adds checks or prohibitions to the baseline.`);
   return 0;
 }

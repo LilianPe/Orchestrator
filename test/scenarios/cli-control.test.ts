@@ -37,9 +37,9 @@ describe('factory status and factory stop (ORC-220)', () => {
     await h.advance(5 * 60_000);
     const c = control(h);
     expect(await runStatusCommand(c, h.clock.now())).toBe(0);
-    expect(c.lines[0]).toContain('places dev 1/3');
+    expect(c.lines[0]).toContain('dev slots 1/3');
     expect(c.lines).toContain('  REL-1  dev  Export CSV');
-    expect(c.lines).toContain(`    run ${runId} : dev, depuis 5 min, 0.00 $`);
+    expect(c.lines).toContain(`    run ${runId}: dev, for 5 min, 0.00 $`);
   });
 
   it('status tells a lease expired that nothing took up yet, and a blocked ticket its reason', async () => {
@@ -48,13 +48,13 @@ describe('factory status and factory stop (ORC-220)', () => {
     h.clock.advance(RUN_LEASE_MS + 1);
     const c = control(h);
     await runStatusCommand(c, h.clock.now());
-    expect(c.lines.some((l) => l.includes(runId) && l.includes('bail expiré'))).toBe(true);
+    expect(c.lines.some((l) => l.includes(runId) && l.includes('lease expired'))).toBe(true);
     await runStopCommand(c, 'REL-1');
     await h.orch.drained();
     c.lines.length = 0;
     await runStatusCommand(c, h.clock.now());
-    expect(c.lines).toContain('  REL-1  dev (bloqué)  Export CSV');
-    expect(c.lines).toContain('    Arrêté à la demande');
+    expect(c.lines).toContain('  REL-1  dev (blocked)  Export CSV');
+    expect(c.lines).toContain('    Stopped on request');
   });
 
   it('stop goes to the project holding the ticket, not to a copy that only waited for its repo (ORC-316)', async () => {
@@ -75,17 +75,17 @@ describe('factory status and factory stop (ORC-220)', () => {
     await h.restart({ mode: 'brutal' });
     const c = control(h);
     expect(await runStopCommand(c, 'REL-1')).toBe(0);
-    expect(c.lines).toEqual(['Arrêt demandé pour REL-1.']);
+    expect(c.lines).toEqual(['Stop requested for REL-1.']);
     await h.orch.drained();
     expect((await h.store.getRun(runId))!.status).toBe('stopped');
-    expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Arrêté à la demande' });
+    expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Stopped on request' });
     expect((await h.ticket()).activeRunId).toBeUndefined();
   });
 
   it('stop refuses a ticket the factory does not know', async () => {
     const c = control(createHarness());
     expect(await runStopCommand(c, 'REL-9')).toBe(1);
-    expect(c.lines[0]).toContain('REL-9 inconnu');
+    expect(c.lines[0]).toContain('REL-9 unknown');
   });
 
   it('says what to do when the daemon is down or asks for its password', async () => {

@@ -65,11 +65,11 @@ describe('server', () => {
       const tokens = { input: 10, output: 20, cacheRead: 30, cacheCreation: 40 };
       await store.putRun({ ...(await store.getRun('r1'))!, id: 'r0', status: 'failure', token: 'tok0', tokens });
       await store.putTicket({ ...newTicketState('p', 'REL-1', 'Export', 'dev', 1), activeRunId: 'r1' });
-      await store.putTicket({ ...newTicketState('p', 'REL-2', 'Import', 'dev', 1), blocked: true, blockReason: "En attente d'une réponse à la question de l'agent." });
+      await store.putTicket({ ...newTicketState('p', 'REL-2', 'Import', 'dev', 1), blocked: true, blockReason: "Waiting for an answer to the agent's question." });
       const res = await app.request('/api/flow');
       expect(res.status).toBe(200);
       const body = await res.json();
-      expect(body.needsYou.blocked).toEqual([{ cause: 'question', tickets: [expect.objectContaining({ ticketId: 'REL-2', title: 'Import', reason: "En attente d'une réponse à la question de l'agent." })] }]);
+      expect(body.needsYou.blocked).toEqual([{ cause: 'question', tickets: [expect.objectContaining({ ticketId: 'REL-2', title: 'Import', reason: "Waiting for an answer to the agent's question." })] }]);
       expect(body.working).toEqual([expect.objectContaining({ runId: 'r1', ticketId: 'REL-1', title: 'Export', step: 'dev', stoppable: true, durationMs: 9, tokens, attemptsWithoutTokens: 0 })]);
     });
 
@@ -80,7 +80,7 @@ describe('server', () => {
         if (m.kind === 'log') logs.push(m.message);
       });
       vi.spyOn(store, 'measureFacts').mockRejectedValue(new Error('journal illisible'));
-      await store.putTicket({ ...newTicketState('p', 'REL-2', 'Import', 'dev', 1), blocked: true, blockReason: 'Arrêté à la demande' });
+      await store.putTicket({ ...newTicketState('p', 'REL-2', 'Import', 'dev', 1), blocked: true, blockReason: 'Stopped on request' });
       const res = await app.request('/api/flow');
       expect(res.status).toBe(200);
       const body = await res.json();
@@ -103,7 +103,7 @@ describe('server', () => {
       await store.putRun({ ...run, id: 'r3', ticketId: 'REL-3', status: 'failure', endedAt: 5, token: `${TOKEN}-3` });
       await store.putTicket({ ...newTicketState('p', 'REL-1', 'Export', 'dev', 1), activeRunId: 'r1' });
       await store.putTicket({ ...newTicketState('p', 'REL-2', 'Verif', 'human_review', 1), verifyingRunId: 'r2' });
-      await store.putTicket({ ...newTicketState('p', 'REL-3', 'Bloqué', 'dev', 1), blocked: true, blockReason: 'Le run dev a échoué.' });
+      await store.putTicket({ ...newTicketState('p', 'REL-3', 'Bloqué', 'dev', 1), blocked: true, blockReason: 'The run dev failed.' });
       await store.recordEvent({ ...TRUSTED, id: 'e1', type: 'run.finished', at: 2, projectId: 'p', ticketId: 'REL-2', payload: { runId: 'r2', job: 'dev', outcome: 'success', costUsd: 0, turns: 1, lastText: '' } });
 
       for (const path of ['/api/state', '/api/flow', '/api/events/recent']) {
@@ -244,7 +244,7 @@ describe('server', () => {
 
     it('submit_result stores a valid output for the run of the token, the last one winning', async () => {
       const { app, store } = await setup();
-      expect(await call(app, 'submit_result', { ...output, summary: 'premier' })).toEqual({ content: [{ type: 'text', text: 'Résultat enregistré.' }] });
+      expect(await call(app, 'submit_result', { ...output, summary: 'premier' })).toEqual({ content: [{ type: 'text', text: 'Result recorded.' }] });
       await call(app, 'submit_result', output);
       expect(JSON.parse((await store.getMeta('agent-output:r1'))!)).toEqual(output);
     });

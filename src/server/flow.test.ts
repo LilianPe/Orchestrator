@@ -18,9 +18,9 @@ describe('buildFlow (ORC-297)', () => {
     it('groups the blocked tickets by cause, oldest wait first, each with its reason', () => {
       const f = flow({
         tickets: [
-          ticket('A', { blocked: true, blockReason: "Question posée par l'agent", updatedAt: 30 }),
-          ticket('B', { blocked: true, blockReason: 'Le run dev a atteint un plafond (tours, durée ou budget).', updatedAt: 20 }),
-          ticket('C', { blocked: true, blockReason: "En attente d'une réponse à la question de l'agent.", updatedAt: 10 }),
+          ticket('A', { blocked: true, blockReason: 'Question asked by the agent', updatedAt: 30 }),
+          ticket('B', { blocked: true, blockReason: 'The run dev reached a limit (turns, duration or budget).', updatedAt: 20 }),
+          ticket('C', { blocked: true, blockReason: "Waiting for an answer to the agent's question.", updatedAt: 10 }),
           ticket('D', { blocked: false }),
         ],
       });
@@ -28,7 +28,7 @@ describe('buildFlow (ORC-297)', () => {
         ['question', ['C', 'A']],
         ['limit', ['B']],
       ]);
-      expect(f.needsYou.blocked[1]!.tickets[0]).toMatchObject({ title: 'Titre B', reason: 'Le run dev a atteint un plafond (tours, durée ou budget).' });
+      expect(f.needsYou.blocked[1]!.tickets[0]).toMatchObject({ title: 'Titre B', reason: 'The run dev reached a limit (turns, duration or budget).' });
     });
 
     it('keeps a block without a known cause in sight, with its raw reason', () => {
@@ -50,7 +50,7 @@ describe('buildFlow (ORC-297)', () => {
     });
 
     it('shows a blocked ticket once, under its block, wherever it is in the workflow', () => {
-      const f = flow({ tickets: [ticket('A', { logical: 'human_review', blocked: true, blockReason: 'Arrêté à la demande' }), ticket('B', { logical: 'done', blocked: true, blockReason: 'Arrêté à la demande' })] });
+      const f = flow({ tickets: [ticket('A', { logical: 'human_review', blocked: true, blockReason: 'Stopped on request' }), ticket('B', { logical: 'done', blocked: true, blockReason: 'Stopped on request' })] });
       expect(f.needsYou.humanReview).toEqual([]);
       expect(f.done).toEqual([]);
       expect(f.needsYou.blocked[0]!.tickets.map((t) => t.ticketId)).toEqual(['A', 'B']);

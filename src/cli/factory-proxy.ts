@@ -6,7 +6,7 @@ import { sandboxAgentHost, serveEgressControl } from '../network/proxy-service.j
 /** The `proxy` service of compose.yaml (ORC-203): EgressProxy in a process of its own, with none of the daemon's secrets. */
 const required = (name: string): string => {
   const v = process.env[name]?.trim();
-  if (!v) throw new Error(`${name} est requis par le service proxy.`);
+  if (!v) throw new Error(`${name} is required by the proxy service.`);
   return v;
 };
 const log = (m: string) => console.log(`[proxy] ${m}`);
@@ -22,7 +22,7 @@ const proxy = new EgressProxy({
   agentApi: { host: sandboxAgentHost(process.env), port: agentPort, to: { host: required('FACTORY_AGENT_UPSTREAM'), port: agentPort } },
 });
 const control = await serveEgressControl(proxy, controlPath);
-log(`proxy de sortie prêt : ${controlPath}`);
+log(`egress proxy ready: ${controlPath}`);
 await new Promise<void>((resolve) => {
   process.once('SIGINT', () => resolve());
   process.once('SIGTERM', () => resolve());

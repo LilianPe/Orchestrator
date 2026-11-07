@@ -38,17 +38,17 @@ Run it **in the repository** to entrust to Relais (otherwise it asks for the rep
 
 ### `relais up`
 
-Starts the daemon in the foreground: HTTP server (UI, API, webhooks, OAuth), smee relay, timers, Linear and GitHub reconciliation every 5 minutes through a database timer (PR polling every 30 s if GitHub webhooks are refused), queue re-evaluation every minute. Prints `Relais tourne : <url>`.
+Starts the daemon in the foreground: HTTP server (UI, API, webhooks, OAuth), smee relay, timers, Linear and GitHub reconciliation every 5 minutes through a database timer (PR polling every 30 s if GitHub webhooks are refused), queue re-evaluation every minute. Prints `Relais is running: <url>`.
 
 - Writes `<RELAIS_HOME>/run-settings.json` (see [`configuration.md`](configuration.md#what-does-not-leave-the-daemon)).
 - Resumes whatever a previous shutdown or crash cut off, without human intervention: reattaches to the containers still alive, relaunches the other steps (see [`operations.md`](operations.md#shutdown-restart-and-interrupted-runs)).
-- If Linear is not connected, logs `Linear non connecté : ouvrez <url>/oauth/start`.
+- If Linear is not connected, logs `Linear not connected: open <url>/oauth/start`.
 - If the webhook secret is missing from `secrets.json`, logs a warning: all webhooks will be refused (401) until it is filled in.
 - Refuses to start if `host` is not loopback and `RELAIS_UI_PASSWORD` is empty.
 
 `Ctrl+C` (SIGINT) or SIGTERM: clean shutdown (runs in progress are interrupted, then taken back on the next start).
 
-`--fake-runner`: replaces Claude Code with a simulated runner that answers « Terminé. » at no cost. For testing the UI and the Linear wiring.
+`--fake-runner`: replaces Claude Code with a simulated runner that answers « Done. » at no cost. For testing the UI and the Linear wiring.
 
 ### `factory validate [repo]`
 
@@ -70,28 +70,28 @@ Full rule, examples and limits: [`github.md`](github.md).
 Starts nothing. For each project, lists the tickets delegated to the agent in Linear, sorted by priority:
 
 ```text
-REL-12  pris  Ajouter l'export CSV
-REL-15  pas pris  Corriger le login — La description fait moins de 30 caractères.
-REL-9  déjà géré  Refonte du menu (human_review)
+REL-12  taken  Add the CSV export
+REL-15  not taken  Fix the login — The description is shorter than 30 characters.
+REL-9  already handled  Menu redesign (human_review)
 ```
 
-- `pris`: would pass the `tracker.pickup.checks` checks;
-- `pas pris`: followed by the reasons;
-- `déjà géré`: already tracked by Relais (with its logical state).
+- `taken`: would pass the `tracker.pickup.checks` checks;
+- `not taken`: followed by the reasons;
+- `already handled`: already tracked by Relais (with its logical state).
 
-Requires Linear to be connected (`Linear non connecté : lancez relais up puis connectez Linear.` otherwise).
+Requires Linear to be connected (`Linear not connected: run `factory up`, then connect Linear.` otherwise).
 
 ### `factory status`
 
 ```text
-Linear : connecté · file : active (0 en attente) · places dev 1/3 · coût du jour 2.40 $
-  REL-12  dev  Ajouter l'export CSV
-    run 7f3a… : dev, depuis 12 min, 0.80 $
-  REL-15  todo (bloqué)  Corriger le login
-    Arrêté à la demande
+Linear: connected · queue: active (0 waiting) · dev slots 1/3 · cost today 2.40 $
+  REL-12  dev  Add the CSV export
+    run 7f3a…: dev, for 12 min, 0.80 $
+  REL-15  todo (blocked)  Fix the login
+    Stopped on request
 ```
 
-For each ticket: its state, a check in progress, the reason for a block, and its runs in progress with what they are executing. `, bail expiré` follows a run the heartbeat no longer holds (ORC-220). Daemon unreachable or password missing: says so, exit code 1.
+For each ticket: its state, a check in progress, the reason for a block, and its runs in progress with what they are executing. `, lease expired` follows a run the heartbeat no longer holds (ORC-220). Daemon unreachable or password missing: says so, exit code 1.
 
 ### `relais pause` / `relais resume`
 
@@ -109,10 +109,10 @@ Replays exported ticket journals, without an instance or network: each journal l
 - **What-if** (`--what-if <workflow.yml>`): the decisions run on this workflow, laid over the standard pack (`--pack <directory>` for another), instead of the versions the tickets were pinned to. The replay stops at the first divergence and reports it:
 
 ```
-test/replay/journals/check-failed-then-feedback.json : p/REL-1 : 4 décision(s) rejouée(s) — arrêt à la première divergence
-  événement check:id-1 (verify.failed, n° 4 du journal) : ticket.blockReason enregistré absent, rejoué "Vérifications toujours en échec après 1 tentatives."
-  événement check:id-1 (verify.failed, n° 4 du journal) : effects[0].kind enregistré "start_run", rejoué "activity"
-1 journal(aux) sur 1 divergent.
+test/replay/journals/check-failed-then-feedback.json: p/REL-1: 4 decision(s) replayed — stopped at the first divergence
+  event check:id-1 (verify.failed, #4 of the journal): ticket.blockReason recorded absent, replayed "Checks still failing after 1 attempts."
+  event check:id-1 (verify.failed, #4 of the journal): effects[0].kind recorded "start_run", replayed "activity"
+1 journal(s) of 1 diverge, 0 in error or without decisions.
 ```
 
 `factory replay --export <ID> [--project <id>] [--out <file>]` writes the journal of one of the instance's tickets (store from `FACTORY_DATABASE_URL`, otherwise `factory.db`, opened without migration), with the workflow versions of its decisions. `--project` is required when the instance has several projects. A ticket without a logged event, or an instance without a database, is refused rather than exported empty. The format and CI setup: [`tests.md`](tests.md#the-replay-oracle).
@@ -122,10 +122,10 @@ Repairs an event whose decision failed, or which exhausted its retries, and whic
 
 ```text
 $ factory run repair REL-12
-Événements mis de côté pour REL-12 :
-  l1  label.changed  ouvert  (1 échec) rule.when.every is not a function
+Events set aside for REL-12:
+  l1  label.changed  open  (1 failure) rule.when.every is not a function
 $ factory run repair REL-12 replay
-Événement l1 (label.changed) rejoué par armand : réparation journalisée, décidée au prochain passage du démon.
+Event l1 (label.changed) replayed by armand: repair journaled, decided at the next pass of the daemon.
 ```
 
 - `replay`: decide the event again, after a fix;
@@ -145,7 +145,7 @@ During a run, Relais adds Relais's `bin/` to the `PATH` and sets `RELAIS_API` an
 | `relais-agent kb search <words>` | Searches `notes/*.md` in the knowledge base (words of 3 letters or more, ignoring accents and case). Prints `file:line: text`. |
 | `relais-agent ask <question>` | Posts the question in the ticket's block comment (ORC-196) and **blocks** the ticket. The agent must end its turn; the human reply restarts the work. |
 
-Launched outside a run, it answers `relais-agent doit être lancé par Relais (RELAIS_API et RELAIS_RUN_TOKEN manquants).` (code 2). The token is only accepted while the run is in progress. The pack allows `Bash(relais-agent:*)` and the startup hook reminds the agent of these commands ([`pack-and-skills.md`](pack-and-skills.md)).
+Launched outside a run, it answers `relais-agent must be started by Relais (RELAIS_API and RELAIS_RUN_TOKEN missing).` (code 2). The token is only accepted while the run is in progress. The pack allows `Bash(relais-agent:*)` and the startup hook reminds the agent of these commands ([`pack-and-skills.md`](pack-and-skills.md)).
 
 ## Development scripts
 

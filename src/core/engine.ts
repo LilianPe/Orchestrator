@@ -7,6 +7,7 @@ import type { AgentOutput } from './agent-output.js';
 import { blockFacts, type BlockFacts } from './block-comment.js';
 import type { Decision, Effect } from './decision.js';
 import { awaitsAgent, commandOf, forAgent, STOP_COMMAND } from './human-message.js';
+import { BEFORE_ORC_331 } from './legacy-messages.js';
 import { PRODUCT_NAME } from '../product.js';
 import { CUT_RELAUNCHES, CUT_WINDOW_MS } from '../store/types.js';
 import { isOwnMoveEcho, reduce } from './reduce.js';
@@ -16,16 +17,16 @@ import type { EventPayloads, EventType, FactoryEvent, FeedbackItem, InputKind, M
 type StartRun = Extract<Effect, { kind: 'start_run' }>;
 
 /** What a stop's answer says of the way back: versions frozen before ORC-196 keep their label. */
-const relaunch = (workflow: Workflow): string => (workflow.blockComment ? 'Répondez dans ce ticket pour relancer.' : 'Répondez dans ce fil ou posez le label agent:reprendre pour relancer.');
-const STOPPED = 'Arrêté à la demande';
+const relaunch = (workflow: Workflow): string => (workflow.blockComment ? 'Reply on this ticket to relaunch.' : 'Reply in this thread or add the agent:reprendre label to relaunch.');
+const STOPPED = 'Stopped on request';
 
 /** Paths a run started from an untrusted event must not write; enforced by the runner's sandbox (ORC-151). */
 export const SENSITIVE_PATHS: readonly string[] = ['.github/**', '.factory/**', '.claude/**', 'CODEOWNERS', '.env*'];
 
 /** The refusal of a knowledge job (I12): its event is untrusted, or what it would read at its launch is (ORC-274). */
 export function taintedKnowledge(job: string, source: 'event' | 'read' = 'event'): string {
-  const what = source === 'event' ? "l'événement vient" : "des retours qu'il lirait (fil ou commentaires de review) viennent";
-  return `Je ne lance pas ${job} : ce job écrit dans la base de connaissances, et ${what} d'une source non fiable.`;
+  const what = source === 'event' ? 'the event comes' : 'the feedback it would read (thread or review comments) comes';
+  return `I am not starting ${job}: this job writes to the knowledge base, and ${what} from an untrusted source.`;
 }
 
 const BUILT_IN = new Set<EventType>([
@@ -38,7 +39,7 @@ function empty(): Decision {
 }
 
 /** The ticket's work stops and it is blocked for `reason` until a human relaunches it; `body` tells the session: a stop is an answer, not an escalation. */
-function stop(out: Decision, workflow: Workflow, reason = STOPPED, body = `Arrêté. ${relaunch(workflow)}`): Decision {
+function stop(out: Decision, workflow: Workflow, reason = STOPPED, body = `Stopped. ${relaunch(workflow)}`): Decision {
   out.events.push({ type: 'work.cancelled' }, { type: 'ticket.blocked', reason });
   out.effects.push({ kind: 'stop_run' }, { kind: 'activity', type: 'response', body });
   return out;
@@ -82,11 +83,11 @@ function handOver(out: Decision, at: { event: FactoryEvent; ticket: TicketState 
 function redFailed(out: Decision, at: { event: FactoryEvent<'verify.failed'>; ticket: TicketState | undefined; workflow: Workflow }, job: JobSpec, red: NonNullable<JobSpec['red']>): Decision {
   const { red: cause = 'error', failures, runId } = at.event.payload;
   if (cause === 'infra') {
-    const reason = `Le contrôle du rouge de ${job.name} n'a pas pu tourner : panne d'infrastructure, l'agent n'est pas en cause.`;
-    return block(out, at.workflow, { reason, body: `${reason}\n${failures[0]?.output ?? ''}\nRépondez dans ce fil pour que je reprenne.`, job: job.name, step: 'red', tried: triedFailures(failures) });
+    const reason = `The red check of ${job.name} could not run: infrastructure failure, not the agent's fault.`;
+    return block(out, at.workflow, { reason, body: `${reason}\n${failures[0]?.output ?? ''}\nReply in this thread and I will resume.`, job: job.name, step: 'red', tried: triedFailures(failures) });
   }
   if (red.mode === 'measure') {
-    out.trace.push(`red: aurait bloqué (${cause}), mode mesure : le run continue`);
+    out.trace.push(`red: would have blocked (${cause}), measure mode: the run goes on`);
     freeze(out, at.ticket, at.event.payload.frozen);
     return success(out, at, job, runId);
   }
@@ -96,7 +97,7 @@ function redFailed(out: Decision, at: { event: FactoryEvent<'verify.failed'>; ti
     startRun(out, at.event, at.ticket, job, { input: 'verify_failures', inputText: JSON.stringify(failures), resume: true });
     return out;
   }
-  const reason = `Rouge non vérifié après ${red.attempts} tentatives de ${job.name}.`;
+  const reason = `Red not verified after ${red.attempts} attempts of ${job.name}.`;
   return block(out, at.workflow, { ...failedChecks(reason, failures), job: job.name, step: 'red', attempts: red.attempts });
 }
 
@@ -125,13 +126,13 @@ function refreeze(out: Decision, event: FactoryEvent<'command'>, ticket: TicketS
   const { frozen, linearSessionId } = event.payload;
   const answer = (body: string) => out.effects.push({ kind: 'activity', type: 'response', body, linearSessionId });
   if (!frozen) {
-    answer("Rien à regeler : ce ticket n'a pas de gel ou pas de branche de travail.");
+    answer('Nothing to refreeze: this ticket has no freeze or no working branch.');
     return out;
   }
   const count = Object.keys(frozen.files).length;
-  out.trace.push(`refreeze by ${event.actor}: ${count} fichiers gelés à ${frozen.sha}`);
+  out.trace.push(`refreeze by ${event.actor}: ${count} files frozen at ${frozen.sha}`);
   out.events.push({ type: 'ticket.patched', patch: { frozenTests: frozen } });
-  answer(`Regelé : ${count} fichiers, tels qu'au commit ${frozen.sha.slice(0, 12)}. La prochaine vérification part de ce gel.`);
+  answer(`Refrozen: ${count} files, as of commit ${frozen.sha.slice(0, 12)}. The next verification starts from this freeze.`);
   return out;
 }
 
@@ -163,7 +164,7 @@ function askForRepo(out: Decision, workflow: Workflow, reason: string, question:
 /** Failed checks, the block's fields and what a frozen version posts. */
 const failedChecks = (reason: string, failures: VerifyFailure[]) => ({ reason, body: `${reason}
 ${formatFailuresShort(failures)}
-Répondez dans ce fil pour relancer.`, tried: triedFailures(failures) });
+Reply in this thread to relaunch.`, tried: triedFailures(failures) });
 
 /** The preset step of a job, by its own name when it is out of the preset. */
 export const stepOf = (workflow: Workflow, job: string): string => workflow.jobs[job]?.step ?? job;
@@ -189,17 +190,17 @@ function attemptDecision(p: EventPayloads['run.finished'], job: JobSpec): RunOut
     case 'timeout':
       return 'limit';
     case 'errored': {
-      const reason = `Le run ${job.name} s'est interrompu : panne d'infrastructure, l'agent n'est pas en cause.`;
-      return { reason, body: `${reason} Répondez dans ce fil pour que je reprenne.`, tried: [`Le run ${job.name} lancé : son processus s'est arrêté sans résultat.`] };
+      const reason = `The run ${job.name} was interrupted: infrastructure failure, not the agent's fault.`;
+      return { reason, body: `${reason} Reply in this thread and I will resume.`, tried: [`Started the run ${job.name}: its process stopped without a result.`] };
     }
     case 'needs_input':
-      return { reason: "En attente d'une réponse à la question de l'agent.", body: `${question}\n\nRépondez dans ce fil pour que je reprenne.`, tried: [`Le run ${job.name} lancé : l'agent demande une précision.`], question: question || undefined };
+      return { reason: "Waiting for an answer to the agent's question.", body: `${question}\n\nReply in this thread and I will resume.`, tried: [`Started the run ${job.name}: the agent asks for a clarification.`], question: question || undefined };
     case 'spec_impossible':
       return {
-        reason: "L'agent conteste le ticket : il ne peut pas le réaliser honnêtement tel qu'il est écrit.",
-        body: `Je ne peux pas réaliser ce ticket tel qu'il est écrit : ${question}\n\nCorrigez le ticket ou répondez dans ce fil pour que je reprenne.`,
-        tried: [`Le run ${job.name} lancé : l'agent rend \`spec_impossible\`.`],
-        question: [question, 'Pouvez-vous corriger le ticket, ou préciser ce qui est attendu ?'].filter(Boolean).join(' '),
+        reason: 'The agent disputes the ticket: it cannot honestly be done as written.',
+        body: `I cannot do this ticket as written: ${question}\n\nFix the ticket or reply in this thread and I will resume.`,
+        tried: [`Started the run ${job.name}: the agent returns \`spec_impossible\`.`],
+        question: [question, 'Can you fix the ticket, or clarify what is expected?'].filter(Boolean).join(' '),
       };
     default:
       return p.outcome;
@@ -215,17 +216,17 @@ function stagnationBlock(p: EventPayloads['run.finished'], workflow: Workflow): 
   const seen = p.stagnation;
   if (!seen) return undefined;
   if (seen.kind === 'silent') {
-    const reason = `Le run ${p.job} n'a rien écrit depuis ${Math.round(seen.silentMs / 60_000)} min : l'agent ne répond plus, son conteneur tourne encore.`;
-    return { reason, body: `${reason} Répondez dans ce fil pour que je reprenne.`, tried: [`Le run ${p.job} arrêté après ${Math.round(seen.silentMs / 60_000)} min de silence.`] };
+    const reason = `The run ${p.job} has written nothing for ${Math.round(seen.silentMs / 60_000)} min: the agent no longer responds, its container is still running.`;
+    return { reason, body: `${reason} Reply in this thread and I will resume.`, tried: [`Stopped the run ${p.job} after ${Math.round(seen.silentMs / 60_000)} min of silence.`] };
   }
   const bound = workflow.limits.repeatedFailures;
   if (bound === undefined || seen.count < bound) return undefined;
-  const reason = `Boucle : même commande, même échec, ${seen.count} fois, sans changement du code.`;
-  return { reason, body: `${reason}\n- \`${seen.command}\`\nRépondez dans ce fil pour relancer.`, tried: [`\`${seen.command}\`, ${seen.count} fois`] };
+  const reason = `Loop: same command, same failure, ${seen.count} times, with no code change.`;
+  return { reason, body: `${reason}\n- \`${seen.command}\`\nReply in this thread to relaunch.`, tried: [`\`${seen.command}\`, ${seen.count} times`] };
 }
 
 /** Prefix of the block reason of the red-CI bound: a green CI lifts that block (ORC-270). */
-const RED_CI_BLOCKED = 'CI toujours en échec après ';
+const RED_CI_BLOCKED = 'CI still failing after ';
 
 /** Events a human sends: unblocking the ticket, they give the red-CI loop its whole bound back (ORC-270). */
 const HUMAN_RELAUNCH = new Set<EventType>(['session.prompted', 'ticket.commented', 'label.changed', 'status.changed', 'ticket.delegated']);
@@ -254,7 +255,7 @@ function unblock(out: Decision, event: FactoryEvent, ticket: TicketState): void 
 }
 
 /** The head of the reason of a ticket blocked by the bound: the Flux classes a block by the head of its reason (ORC-297). */
-export const CUT_BOUND_REASON = /^Trop de relances après coupure : /;
+export const CUT_BOUND_REASON = /^Too many relaunches after a cut: /;
 
 /** The relaunches still in the window at the time of the event: never the clock, so that a replay decides the same. */
 function recentCuts(ticket: TicketState, at: number): number[] {
@@ -263,15 +264,15 @@ function recentCuts(ticket: TicketState, at: number): number[] {
 
 /** The bound of the relaunches after a cut is reached (ORC-220): no agent, and a human hears why. */
 function blockOnCuts(out: Decision, workflow: Workflow, job: string, step = stepOf(workflow, job)): Decision {
-  const reason = `Trop de relances après coupure : ${CUT_RELAUNCHES} en ${CUT_WINDOW_MS / 60_000} min.`;
+  const reason = `Too many relaunches after a cut: ${CUT_RELAUNCHES} in ${CUT_WINDOW_MS / 60_000} min.`;
   return block(out, workflow, {
     reason,
-    body: `${reason} ${PRODUCT_NAME} ou son runner redémarre en boucle : vérifiez le démon, puis répondez dans ce fil pour que je reprenne.`,
+    body: `${reason} ${PRODUCT_NAME} or its runner keeps restarting: check the daemon, then reply in this thread and I will resume.`,
     job,
     step,
     attempts: CUT_RELAUNCHES,
-    tried: [`${CUT_RELAUNCHES} relances automatiques après coupure.`],
-    question: `${PRODUCT_NAME} ou son runner redémarre en boucle : le démon est-il rétabli (répondez « oui » pour que je reprenne) ?`,
+    tried: [`${CUT_RELAUNCHES} automatic relaunches after a cut.`],
+    question: `${PRODUCT_NAME} or its runner keeps restarting: is the daemon back (reply "yes" and I will resume)?`,
   });
 }
 
@@ -289,8 +290,8 @@ function attemptLost(out: Decision, event: FactoryEvent<'run.lost'>, ticket: Tic
   const job = workflow.jobs[jobName];
   if (!job) return out;
   if (job.queue !== 'dev') {
-    const why = cause === 'restart' ? `${PRODUCT_NAME} a redémarré pendant ma réponse.` : 'Le runner de ma réponse ne répond plus.';
-    out.effects.push({ kind: 'activity', type: 'error', body: `${why} Reposez la question dans ce fil.`, runId });
+    const why = cause === 'restart' ? `${PRODUCT_NAME} restarted during my answer.` : 'The runner of my answer no longer responds.';
+    out.effects.push({ kind: 'activity', type: 'error', body: `${why} Ask the question again in this thread.`, runId });
     return out;
   }
   if (!ticket?.delegated || ticket.blocked || refusesDevWork(ticket, job)) {
@@ -299,8 +300,8 @@ function attemptLost(out: Decision, event: FactoryEvent<'run.lost'>, ticket: Tic
   }
   const used = ticket.leaseRelaunches ?? 0;
   if (cause === 'lease' && used >= LEASE_RELAUNCHES) {
-    const reason = `Le bail du run ${jobName} a expiré ${used + 1} fois : le runner ne répond plus.`;
-    return block(out, workflow, { reason, body: `${reason} Répondez dans ce fil pour que je reprenne.`, job: jobName, attempts: used + 1, tried: [`${used} relance(s) après un bail expiré.`] });
+    const reason = `The lease of the run ${jobName} expired ${used + 1} times: the runner no longer responds.`;
+    return block(out, workflow, { reason, body: `${reason} Reply in this thread and I will resume.`, job: jobName, attempts: used + 1, tried: [`${used} relaunch(es) after an expired lease.`] });
   }
   const recent = recentCuts(ticket, event.at);
   if (recent.length >= CUT_RELAUNCHES) return blockOnCuts(out, workflow, jobName);
@@ -477,7 +478,7 @@ function factoryCommand(out: Decision, event: FactoryEvent<'session.prompted' | 
 /** The stop of a question session: its answer, not the ticket's work. */
 function stopQuestion(out: Decision, sessionId: string): Decision {
   out.trace.push('built-in session.stopped (question session)');
-  out.effects.push({ kind: 'stop_run', linearSessionId: sessionId }, { kind: 'activity', type: 'response', body: 'Arrêté.', linearSessionId: sessionId });
+  out.effects.push({ kind: 'stop_run', linearSessionId: sessionId }, { kind: 'activity', type: 'response', body: 'Stopped.', linearSessionId: sessionId });
   return out;
 }
 
@@ -584,7 +585,7 @@ function applyRule(out: Decision, rule: Rule, event: FactoryEvent, ticket: Ticke
     out.effects.push({
       kind: 'activity',
       type: 'response',
-      body: 'Pour que je développe ce ticket, déléguez-le moi (champ « Agent » du ticket).',
+      body: 'To have me develop this ticket, delegate it to me (the ticket\'s "Agent" field).',
     });
   }
   if (!job) return out;
@@ -621,14 +622,14 @@ function fixRedCi(out: Decision, rule: Rule, event: FactoryEvent<'pr.checks_fail
   out.trace.push(`red CI: ${job.name} bound ${bound} reached`);
   // Already blocked (by a rule without !blocked): the ticket keeps its reason and gets no second notice.
   if (ticket?.blocked) return out;
-  const reason = `${RED_CI_BLOCKED}${bound} tentatives de ${job.name}.`;
+  const reason = `${RED_CI_BLOCKED}${bound} attempts of ${job.name}.`;
   const failures = event.payload.failures.map((f) => `- \`${f}\``);
   return block(out, workflow, {
     reason,
-    body: [reason, ...failures, 'Répondez dans ce fil pour relancer.'].join('\n'),
+    body: [reason, ...failures, 'Reply in this thread to relaunch.'].join('\n'),
     job: job.name,
     attempts: bound,
-    tried: event.payload.failures.length ? event.payload.failures.map((f) => `\`${f}\``) : [`${bound} run(s) de ${job.name}.`],
+    tried: event.payload.failures.length ? event.payload.failures.map((f) => `\`${f}\``) : [`${bound} run(s) of ${job.name}.`],
   });
 }
 
@@ -669,7 +670,7 @@ function publishes(job: JobSpec): boolean {
 function backToReview(out: Decision, reason: string): Decision {
   out.trace.push(`not merged: ${reason}`);
   // The commit under review stays the one shown: a head pushed since is never taken as reviewed.
-  out.effects.push({ kind: 'move', to: 'human_review', keepReviewSha: true }, { kind: 'comment', body: `${reason} Le ticket repasse en Human Review.` });
+  out.effects.push({ kind: 'move', to: 'human_review', keepReviewSha: true }, { kind: 'comment', body: `${reason} The ticket goes back to Human Review.` });
   return out;
 }
 
@@ -692,10 +693,10 @@ function doneMerge(out: Decision, event: FactoryEvent<'status.changed'>, state: 
   }
   if (!state.reviewSha) {
     // Only the end of the factory's own work in Human Review records one (a review, a dev run): a reply, a refusal do not.
-    return backToReview(out, "Je ne merge pas : aucun commit relu n'est enregistré pour ce ticket (l'usine n'en retient un qu'à la fin de son propre travail, une review IA ou un dev qui ramène le ticket en Human Review, et seulement si la tête de la PR est le commit sur lequel ce travail s'est terminé ; un renvoi en Human Review après un refus n'en retient pas). Passez le ticket en AI Review : la review IA le ramène en Human Review sur la tête de la PR, qui devient le commit relu.");
+    return backToReview(out, 'I am not merging: no reviewed commit is recorded for this ticket (the factory records one only at the end of its own work, an AI review or a dev run that brings the ticket back to Human Review, and only if the head of the PR is the commit that work ended on; a move back to Human Review after a refusal records none). Move the ticket to AI Review: the AI review brings it back to Human Review on the head of the PR, which becomes the reviewed commit.');
   }
   if (!mayPublish(state, state.reviewSha, workflow)) {
-    return backThroughAiReview(out, event, state, workflow, `Je ne merge pas : le commit relu (${state.reviewSha.slice(0, 12)}) n'a pas de vérification verte, la dernière porte sur ${state.verifiedSha?.slice(0, 12) ?? 'aucun commit'}.`);
+    return backThroughAiReview(out, event, state, workflow, `I am not merging: the reviewed commit (${state.reviewSha.slice(0, 12)}) has no green verification, the last one is on ${state.verifiedSha?.slice(0, 12) ?? 'no commit'}.`);
   }
   out.trace.push(`done: merge PR #${state.prNumber} on ${state.reviewSha}`);
   out.effects.push({ kind: 'merge', sha: state.reviewSha });
@@ -712,7 +713,7 @@ function doneMerge(out: Decision, event: FactoryEvent<'status.changed'>, state: 
  * meanwhile (on GitHub) is delivered: nothing is answered.
  */
 function mergeRefused(out: Decision, event: FactoryEvent<'pr.merge_refused'>, ticket: TicketState | undefined, workflow: Workflow): Decision {
-  const refused = `Je n'ai pas mergé la PR #${event.payload.number} : ${event.payload.reason}.`;
+  const refused = `I did not merge PR #${event.payload.number}: ${event.payload.reason}.`;
   if (ticket?.prState === 'MERGED') {
     // Merged on GitHub meanwhile: delivered, nothing to answer nor to move.
     out.trace.push(`not merged: ${event.payload.reason}, but the PR is merged`);
@@ -739,7 +740,7 @@ function backThroughAiReview(out: Decision, event: FactoryEvent, ticket: TicketS
   const job = run && workflow.states.ai_review ? workflow.jobs[run] : undefined;
   if (!job || ticket.blocked) return backToReview(out, refused);
   out.trace.push(`not merged: ${refused}, back to the AI review`);
-  out.effects.push({ kind: 'move', to: 'ai_review' }, { kind: 'comment', body: `${refused} Les nouveaux commits repassent par la review IA.` });
+  out.effects.push({ kind: 'move', to: 'ai_review' }, { kind: 'comment', body: `${refused} The new commits go through the AI review again.` });
   startRun(out, event, ticket, job, { input: job.input });
   return out;
 }
@@ -775,7 +776,7 @@ function afterMerge(state: TicketState | undefined, event: FactoryEvent, workflo
 /** Delivered (`done`, PR merged) or stopped by a human (its reason stays): a failure blocks it no more. */
 export function settledTicket(ticket: TicketState): string | undefined {
   if (ticket.logical === 'done' || ticket.prState === 'MERGED') return 'delivered';
-  return ticket.blocked && ticket.blockReason === STOPPED ? 'stopped' : undefined;
+  return ticket.blocked && (ticket.blockReason === STOPPED || ticket.blockReason === BEFORE_ORC_331.stopped) ? 'stopped' : undefined;
 }
 
 /**
@@ -791,7 +792,7 @@ function repair(state: TicketState | undefined, event: FactoryEvent<'dead_letter
   const out = action === 'replay' && repaired ? decide(base, repaired, workflow) : empty();
   // Pushed, not put first: the trace of a replayed event keeps its fence first (`isFenced`).
   out.trace.push(`built-in dead_letter.repaired: ${action} ${eventId}`);
-  if (lifted) out.effects.push({ kind: 'activity', type: 'response', body: `Événement ${eventId} réparé par ${by} (${REPAIR_LABELS[action]}) : le ticket est débloqué.` });
+  if (lifted) out.effects.push({ kind: 'activity', type: 'response', body: `Event ${eventId} repaired by ${by} (${REPAIR_LABELS[action]}): the ticket is unblocked.` });
   return out;
 }
 
@@ -799,7 +800,7 @@ function repair(state: TicketState | undefined, event: FactoryEvent<'dead_letter
 const TRIGGERS = new Set<EventType>(['ticket.delegated', 'session.mentioned', 'command']);
 
 /** What the factory answers a trigger within 10 s (ORC-171), a comment rather than a reaction until ORC-140 decides. */
-export const ACK_BODY = 'Bien reçu.';
+export const ACK_BODY = 'Got it.';
 
 /**
  * The ack of a trigger the webhook brought, first of its decision (ORC-171): a delegation gets the comment, and the
@@ -827,7 +828,7 @@ function acknowledge(out: Decision, event: FactoryEvent, state: TicketState | un
 function noticeMasked(out: Decision, event: FactoryEvent): void {
   const { masked, linearSessionId } = event.payload as { masked?: true; linearSessionId?: string };
   if (!masked) return;
-  const notice = 'Votre message contenait un secret : il est masqué côté usine, mais reste visible dans Linear. Révoquez-le et supprimez-le du message.';
+  const notice = 'Your message contained a secret: the factory masks it, but it is still visible in Linear. Revoke it and delete it from the message.';
   const ack = out.effects.find((e) => e.kind === 'ack');
   if (ack) ack.body = `${ack.body} ${notice}`;
   else if (linearSessionId) out.effects.push({ kind: 'activity', type: 'response', body: notice, linearSessionId });
@@ -837,20 +838,20 @@ function noticeMasked(out: Decision, event: FactoryEvent): void {
 
 /** The sign of life of a message (ORC-180): what will come of it, as this decision has it. */
 function messageAck(out: Decision, state: TicketState | undefined): string {
-  if (out.events.some((e) => e.type === 'ticket.unblocked')) return 'Noté, je reprends.';
-  if (out.effects.some((e) => e.kind === 'start_run' && e.input === 'thread')) return 'Noté, je regarde et je réponds ici.';
-  if (state && settledTicket(state) === 'delivered') return 'Noté, mais ce ticket est livré : aucune étape ne le reprendra.';
-  return 'Noté, pris en compte à la prochaine étape.';
+  if (out.events.some((e) => e.type === 'ticket.unblocked')) return 'Noted, resuming.';
+  if (out.effects.some((e) => e.kind === 'start_run' && e.input === 'thread')) return 'Noted, I am looking into it and will answer here.';
+  if (state && settledTicket(state) === 'delivered') return 'Noted, but this ticket is delivered: no step will pick it up again.';
+  return 'Noted, taken into account at the next step.';
 }
 
 /** `/status` (ORC-180): the state of the ticket as the projection has it, with no model. */
 function statusAnswer(ticket: TicketState | undefined): string {
-  if (!ticket) return 'Je ne suis pas ce ticket.';
-  const lines = [`État : ${ticket.logical}`];
-  if (ticket.activeJob) lines.push(`En cours : ${ticket.activeJob}`);
-  else if (ticket.verifyingRunId) lines.push('En cours : vérification');
-  if (ticket.blocked) lines.push(`Bloqué : ${ticket.blockReason ?? 'sans raison enregistrée'}`);
-  lines.push(`Messages en attente de l'agent : ${forAgent(ticket.humanInbox).length} message(s)`);
+  if (!ticket) return 'I am not following this ticket.';
+  const lines = [`State: ${ticket.logical}`];
+  if (ticket.activeJob) lines.push(`Running: ${ticket.activeJob}`);
+  else if (ticket.verifyingRunId) lines.push('Running: verification');
+  if (ticket.blocked) lines.push(`Blocked: ${ticket.blockReason ?? 'no recorded reason'}`);
+  lines.push(`Messages waiting for the agent: ${forAgent(ticket.humanInbox).length}`);
   return lines.join('\n');
 }
 
@@ -860,9 +861,9 @@ function statusAnswer(ticket: TicketState | undefined): string {
  * standard comment (ORC-196), which says that only an action lifts it; a version frozen before it, in the session.
  */
 function noRepoBlock(out: Decision, state: TicketState | undefined, event: FactoryEvent<'ticket.delegated'>, team: string, workflow: Workflow): Decision {
-  const reason = `Aucun dépôt connu pour l'équipe Linear ${team} : ajoutez-lui un projet dans la configuration, redémarrez, puis déléguez ce ticket de nouveau.`;
+  const reason = `No repository known for the Linear team ${team}: add a project for it to the configuration, restart, then delegate this ticket again.`;
   if (!isNoRepo(state)) out.events.push({ type: 'ticket.blocked', reason }, { type: 'ticket.patched', patch: { awaitingRepo: [] } });
-  askForRepo(out, workflow, reason, 'Pouvez-vous ajouter un projet pour cette équipe, redémarrer, puis déléguer ce ticket de nouveau ?', `Délégation sur l'équipe ${team}, qu'aucun projet ne prend.`, event.payload.linearSessionId);
+  askForRepo(out, workflow, reason, 'Can you add a project for this team, restart, then delegate this ticket again?', `Delegation on the team ${team}, which no project takes.`, event.payload.linearSessionId);
   // A new ticket: `blockedLabel` sees no state before it and puts no label.
   if (!state) out.effects.push(blockedLabelChange(false, true)!);
   return out;
@@ -933,7 +934,7 @@ function unrouted(state: TicketState | undefined, event: FactoryEvent, workflow:
   if (event.type === 'ticket.delegated' && repos) {
     if (!isUnrouted(state)) out.events.push({ type: 'ticket.blocked', reason: body }, { type: 'ticket.patched', patch: { awaitingRepo: repos } });
     // In the session this delegation opened: the ticket keeps the first one it had.
-    askForRepo(out, workflow, body, `Quel dépôt : ${choices.map((r) => `\`${repoLabel(r)}\``).join(' ou ')} ? Ajoutez son label au ticket, puis déléguez-le de nouveau.`, 'Délégation sur une équipe qui a plusieurs dépôts, sans label qui en nomme un.', sessionId);
+    askForRepo(out, workflow, body, `Which repository: ${choices.map((r) => `\`${repoLabel(r)}\``).join(' or ')}? Add its label to the ticket, then delegate it again.`, 'Delegation on a team with several repositories, without a label naming one.', sessionId);
     // A new ticket: `blockedLabel` sees no state before it and puts no label.
     if (!state) out.effects.push(blockedLabelChange(false, true)!);
     return out;
@@ -1014,7 +1015,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
     if (event.type === 'ticket.delegated' && event.payload.ack && (state?.activeRunId || state?.verifyingRunId)) {
       out.trace.push('ticket.delegated: a run is active, none started');
       const sessionId = event.payload.linearSessionId;
-      if (sessionId) out.effects.push({ kind: 'activity', type: 'response', body: "Un run est déjà en cours sur ce ticket : je n'en lance pas un second.", linearSessionId: sessionId });
+      if (sessionId) out.effects.push({ kind: 'activity', type: 'response', body: 'A run is already in progress on this ticket: I am not starting a second one.', linearSessionId: sessionId });
       return out;
     }
     // The run's initiator, and its requester: who delegated it, as Linear signed it and the matrix allowed it.
@@ -1050,14 +1051,14 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
         return out;
       }
       if (job.queue === 'questions') {
-        out.effects.push({ kind: 'activity', type: 'error', body: "Je n'ai pas pu terminer (échec ou plafond atteint).", runId });
+        out.effects.push({ kind: 'activity', type: 'error', body: 'I could not finish (failure or limit reached).', runId });
         return out;
       }
       const reason =
         outcome === 'limit'
-          ? `Le run ${jobName} a atteint un plafond (tours, durée ou budget).`
-          : `Le run ${jobName} a échoué.`;
-      return block(out, workflow, { reason, body: `${reason} Répondez dans ce fil pour que je reprenne.`, job: jobName, tried: [`Le run ${jobName} lancé : ${outcome === 'limit' ? 'arrêté à son plafond' : 'il a échoué'}.`] });
+          ? `The run ${jobName} reached a limit (turns, duration or budget).`
+          : `The run ${jobName} failed.`;
+      return block(out, workflow, { reason, body: `${reason} Reply in this thread and I will resume.`, job: jobName, tried: [`Started the run ${jobName}: ${outcome === 'limit' ? 'stopped at its limit' : 'it failed'}.`] });
     }
     case 'run.lost':
       return attemptLost(out, event, ticket, workflow);
@@ -1073,7 +1074,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       if (workflow.blockComment && linearSessionId && linearSessionId !== ticket.linearSessionId) out.effects.push(asker);
       // The job at work is the step a reply resumes; a question run has none on the ticket.
       const at = ticket.activeJob ? { job: ticket.activeJob } : { step: job };
-      return block(out, workflow, { reason: "Question posée par l'agent", body: question, linearSessionId, ...at, tried: [`Le run ${job} en cours : l'agent demande une précision.`], question: question || undefined });
+      return block(out, workflow, { reason: 'Question asked by the agent', body: question, linearSessionId, ...at, tried: [`The run ${job} in progress: the agent asks for a clarification.`], question: question || undefined });
     }
     case 'verify.lost': {
       const { runId, job, output } = event.payload;
@@ -1115,9 +1116,9 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       return success(out, { event, ticket, workflow }, job, event.payload.runId, event.payload.output);
     }
     case 'publish.refused': {
-      const reason = `Publication refusée : ${event.payload.reason}`;
+      const reason = `Publication refused: ${event.payload.reason}`;
       // No job of its own: what relaunches it is a job that writes (`owedMove`), the rule's.
-      return ticket?.blocked ? out : block(out, workflow, { reason, body: `${reason}\nRépondez dans ce fil pour relancer.`, step: 'publish', tried: [`Publication du commit de ${event.payload.job}.`] });
+      return ticket?.blocked ? out : block(out, workflow, { reason, body: `${reason}\nReply in this thread to relaunch.`, step: 'publish', tried: [`Publication of the commit of ${event.payload.job}.`] });
     }
     case 'verify.failed': {
       const used = ticket?.verifyAttempts ?? 0;
@@ -1125,14 +1126,14 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       const checked = workflow.jobs[job];
       if (checked?.red) return redFailed(out, { event, ticket, workflow }, checked, checked.red);
       if (checked?.verifyFailure === 'block') {
-        const reason = `Vérifications en échec après ${job} : le commit n'est pas publiable, et ce job ne le corrige pas.`;
+        const reason = `Checks failing after ${job}: the commit cannot be published, and this job does not fix it.`;
         // This job does not fix what it found: the reply goes to the rule's, which writes.
         return block(out, workflow, { ...failedChecks(reason, failures), step: checkOf(workflow, job) });
       }
       const repeated = repeatedFailure(ticket, event.payload);
       if (repeated && repeated.count >= (workflow.limits.repeatedFailures ?? Infinity)) {
         out.events.push({ type: 'ticket.patched', patch: { repeatedFailure: repeated } });
-        const reason = `Boucle : même échec ${repeated.count} fois de suite, sans changement du code.`;
+        const reason = `Loop: same failure ${repeated.count} times in a row, with no code change.`;
         return block(out, workflow, { ...failedChecks(reason, failures), job, step: checkOf(workflow, job), attempts: repeated.count });
       }
       if (used + 1 < workflow.limits.verifyAttempts) {
@@ -1141,13 +1142,13 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
         if (spec) startRun(out, event, ticket, spec, { input: 'verify_failures', inputText: JSON.stringify(failures), resume: true });
         return out;
       }
-      const reason = `Vérifications toujours en échec après ${workflow.limits.verifyAttempts} tentatives.`;
+      const reason = `Checks still failing after ${workflow.limits.verifyAttempts} attempts.`;
       return block(out, workflow, { ...failedChecks(reason, failures), job, step: checkOf(workflow, job), attempts: workflow.limits.verifyAttempts });
     }
     case 'verify.errored': {
       // Not a failure of the work: no counter moves, and the agent gets nothing to fix. A human relaunch checks again.
-      const reason = `La vérification de ${event.payload.job} n'a pas pu tourner : panne d'infrastructure, l'agent n'est pas en cause.`;
-      return ticket?.blocked ? out : block(out, workflow, { reason, body: `${reason}\n${event.payload.error}\nRépondez dans ce fil pour que je reprenne.`, job: event.payload.job, step: checkOf(workflow, event.payload.job), tried: [`La vérification de ${event.payload.job} lancée : ${event.payload.error}`] });
+      const reason = `The verification of ${event.payload.job} could not run: infrastructure failure, not the agent's fault.`;
+      return ticket?.blocked ? out : block(out, workflow, { reason, body: `${reason}\n${event.payload.error}\nReply in this thread and I will resume.`, job: event.payload.job, step: checkOf(workflow, event.payload.job), tried: [`Started the verification of ${event.payload.job}: ${event.payload.error}`] });
     }
     case 'timer.fired': {
       const fired = event.payload;
@@ -1203,8 +1204,8 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       tell(
         out,
         workflow,
-        blockFacts({ reason, step: stepOf(workflow, ticket.activeJob ?? event.payload.eventType), attempts: event.payload.attempts ?? event.payload.failures, tried: [deadLetterTried(event.payload)], question: `Un mainteneur peut-il réparer cet événement : \`factory run repair ${ticket.ticketId}\` ?` }),
-        { kind: 'activity', type: 'error', body: `${reason} Un mainteneur peut le réparer : \`factory run repair ${ticket.ticketId}\`.` },
+        blockFacts({ reason, step: stepOf(workflow, ticket.activeJob ?? event.payload.eventType), attempts: event.payload.attempts ?? event.payload.failures, tried: [deadLetterTried(event.payload)], question: `Can a maintainer repair this event: \`factory run repair ${ticket.ticketId}\`?` }),
+        { kind: 'activity', type: 'error', body: `${reason} A maintainer can repair it: \`factory run repair ${ticket.ticketId}\`.` },
       );
       return out;
     }
@@ -1221,7 +1222,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       // A Done whose merge died (ORC-148) is not delivered: the human hears it, the ticket back in Human Review. Once a
       // human took it out of Done meanwhile, the merge was given up: only answered, as a late refusal is.
       if (kind === 'merge' && ticket.prState !== 'MERGED') {
-        const failed = `Je n'ai pas pu merger la PR #${ticket.prNumber} : ${error}.`;
+        const failed = `I could not merge PR #${ticket.prNumber}: ${error}.`;
         if (ticket.logical === 'done') return backToReview(out, failed);
         out.trace.push(`merge died, the ticket left Done (${ticket.logical}): answered only`);
         out.effects.push({ kind: 'comment', body: failed });
@@ -1243,10 +1244,10 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
         out.trace.push('effect.failed ignored: the notice of a block, which keeps its reason');
         return out;
       }
-      const reason = `Erreur : ${error}`;
+      const reason = `Error: ${error}`;
       out.events.push({ type: 'ticket.blocked', reason });
       // The error notice of a failed effect is not noticed again when it fails too: the tracker may be what fails.
-      if (!eventId.startsWith('effect:')) tell(out, workflow, blockFacts({ reason, step: stepOf(workflow, ticket.activeJob ?? kind), tried: [`L'effet ${kind}, ${event.payload.attempts} fois.`] }), { kind: 'activity', type: 'error', body: reason });
+      if (!eventId.startsWith('effect:')) tell(out, workflow, blockFacts({ reason, step: stepOf(workflow, ticket.activeJob ?? kind), tried: [`The effect ${kind}, ${event.payload.attempts} times.`] }), { kind: 'activity', type: 'error', body: reason });
       return out;
     }
     case 'pr.merged':
@@ -1266,7 +1267,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       }
       out.trace.push('built-in pr.closed: work cancelled');
       out.events.push({ type: 'ticket.patched', patch: { prState: 'CLOSED' } });
-      stop(out, workflow, `PR #${n} fermée sans merge`, `La PR #${n} a été fermée sans merge : j'arrête le travail sur ce ticket. ${relaunch(workflow)}`);
+      stop(out, workflow, `PR #${n} closed without merge`, `PR #${n} was closed without merge: I am stopping work on this ticket. ${relaunch(workflow)}`);
       break;
     }
     case 'ticket.undelegated':
@@ -1277,7 +1278,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       // Routing is sticky (ORC-291): a ticket at work stays in its repo, whichever repo of the team a label added names.
       const { change, otherRepo } = event.payload;
       if (change === 'added' && otherRepo && ticket && holds(ticket)) {
-        out.effects.push({ kind: 'comment', body: `Ce ticket reste sur le dépôt ${event.projectId} : le dépôt ne change pas en cours de route. Sans branche ni PR, arrêtez le travail, retirez la délégation, attendez 5 minutes que la réconciliation la voie, puis déléguez de nouveau. Sinon, ouvrez un nouveau ticket pour l'autre dépôt.` });
+        out.effects.push({ kind: 'comment', body: `This ticket stays on the repository ${event.projectId}: the repository does not change along the way. With no branch or PR yet, stop the work, remove the delegation, wait 5 minutes for the reconciliation to see it, then delegate again. Otherwise, open a new ticket for the other repository.` });
       }
       break;
     }
@@ -1297,7 +1298,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       // Green CI ends the red-CI loop: its count starts over (ORC-270). The rules of pr.checks_passed still apply.
       // A ticket blocked by the red-CI bound is no longer blocked for a reason that holds: the block is lifted.
       resetRedCi(out, ticket);
-      if (ticket?.blocked && ticket.blockReason?.startsWith(RED_CI_BLOCKED)) out.events.push({ type: 'ticket.unblocked' });
+      if (ticket?.blocked && (ticket.blockReason?.startsWith(RED_CI_BLOCKED) || ticket.blockReason?.startsWith(BEFORE_ORC_331.redCiBlocked))) out.events.push({ type: 'ticket.unblocked' });
       break;
     case 'pr.opened': {
       // A new PR (another number) reopens a delivered ticket; the same PR seen again leaves it as it is,

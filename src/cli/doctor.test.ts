@@ -87,9 +87,9 @@ describe('factory doctor', () => {
     const result = await doctor([workflow(secretsWorkflow('  pull_request:')), workflow('name: other\non: pull_request\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo ok\n', '.github/workflows/other.yml')]);
 
     expect(result.code).toBe(1);
-    expect(result.text).toContain('secrets : oui');
+    expect(result.text).toContain('secrets: yes');
     expect(result.text).toContain('pull_request');
-    expect(result.text).toContain('refusé');
+    expect(result.text).toContain('refused');
     // The report never contains a secret value nor a secret name.
     expect(result.text).not.toContain('NPM_TOKEN');
   });
@@ -106,9 +106,9 @@ jobs:
 `;
     const result = await doctor([workflow(ci)]);
     expect(result.code).toBe(0);
-    expect(result.text).toContain('secrets : non');
-    expect(result.text).toContain('verdict : accepté');
-    expect(result.text).toContain('Résultat : accepté');
+    expect(result.text).toContain('secrets: no');
+    expect(result.text).toContain('verdict: accepted');
+    expect(result.text).toContain('Result: accepted');
   });
 
   it('accepts a workflow with secrets attached to an environment with required reviewers', async () => {
@@ -123,8 +123,8 @@ jobs:
 `;
     const result = await doctor([workflow(ci)], [protectedEnvironment]);
     expect(result.code).toBe(0);
-    expect(result.text).toContain('environnement protégé : oui');
-    expect(result.text).toContain('secrets limités aux jobs sous environnement protégé');
+    expect(result.text).toContain('protected environment: yes');
+    expect(result.text).toContain('secrets limited to jobs under a protected environment');
   });
 
   it('accepts an environment object with a name', async () => {
@@ -146,7 +146,7 @@ jobs:
     const result = await doctor([workflow(secretsWorkflow('  pull_request_target:'))]);
     expect(result.code).toBe(1);
     expect(result.text).toContain('pull_request_target');
-    expect(result.text).toContain('refusé');
+    expect(result.text).toContain('refused');
   });
 
   it('refuses an environment that exists without required reviewers', async () => {
@@ -159,7 +159,7 @@ jobs:
 `;
     const result = await doctor([workflow(ci)], [{ name: 'staging', requiredReviewers: false }]);
     expect(result.code).toBe(1);
-    expect(result.text).toContain('sans required reviewers');
+    expect(result.text).toContain('without required reviewers');
   });
 
   it('accepts a push limited to branches outside factory/*', async () => {
@@ -173,15 +173,15 @@ jobs:
 `;
     const result = await doctor([workflow(ci)]);
     expect(result.code).toBe(0);
-    expect(result.text).toContain('push (branches : main, release/*)');
-    expect(result.text).toContain("déclencheurs qui n'atteignent pas les branches de l'usine");
+    expect(result.text).toContain('push (branches: main, release/*)');
+    expect(result.text).toContain("triggers that do not reach the factory's branches");
   });
 
   it('refuses a push on all branches with secrets', async () => {
     const result = await doctor([workflow(secretsWorkflow('  push:'))]);
     expect(result.code).toBe(1);
-    expect(result.text).toContain('push (toutes les branches)');
-    expect(result.text).toContain('refusé');
+    expect(result.text).toContain('push (all branches)');
+    expect(result.text).toContain('refused');
   });
 
   it('refuses a push whose branch filter can reach factory/*', async () => {
@@ -266,11 +266,11 @@ jobs:
   it('refuses an ambiguous or unreadable YAML', async () => {
     const broken = await doctor([workflow('on: [pull_request\njobs: {}\n')]);
     expect(broken.code).toBe(1);
-    expect(broken.text).toContain('YAML invalide');
+    expect(broken.text).toContain('invalid YAML');
 
     const dynamic = await doctor([workflow('on: "${{ github.event_name }}"\njobs: {}\n')]);
     expect(dynamic.code).toBe(1);
-    expect(dynamic.text).toContain('dynamique');
+    expect(dynamic.text).toContain('dynamic');
   });
 
   it('refuses a workflow with indirect secrets (secrets: inherit)', async () => {
@@ -282,7 +282,7 @@ jobs:
 `;
     const result = await doctor([workflow(ci)]);
     expect(result.code).toBe(1);
-    expect(result.text).toContain('secrets exposés');
+    expect(result.text).toContain('secrets exposed');
   });
 
   it('refuses when only one of several secret-exposing jobs is protected', async () => {
@@ -298,24 +298,24 @@ jobs:
 `;
     const result = await doctor([workflow(ci)], [protectedEnvironment]);
     expect(result.code).toBe(1);
-    expect(result.text).toContain('job(s) sans environnement : unprotected');
+    expect(result.text).toContain('job(s) without an environment: unprotected');
   });
 
   it('accepts a repository without workflows without calling the environments API', async () => {
     const result = await doctor([]);
     expect(result.code).toBe(0);
-    expect(result.text).toContain('Aucun workflow GitHub Actions trouvé');
+    expect(result.text).toContain('No GitHub Actions workflow found');
     expect(result.api.environmentCalls).toBe(0);
   });
 
   it('fails closed when the GitHub API cannot be read', async () => {
     const result = await doctor([], [], { fake: { failWorkflows: true } });
     expect(result.code).toBe(1);
-    expect(result.text).toContain('Lecture des workflows impossible');
+    expect(result.text).toContain('Cannot read the workflows');
 
     const envFailure = await doctor([workflow(secretsWorkflow('  pull_request:'))], [], { fake: { failEnvironments: true } });
     expect(envFailure.code).toBe(1);
-    expect(envFailure.text).toContain('Lecture des environnements impossible');
+    expect(envFailure.text).toContain('Cannot read the environments');
   });
 
   it('emits a JSON report with the verdict and no secret value', async () => {
@@ -337,7 +337,7 @@ jobs:
     expect(report.workflows[0]).toMatchObject({
       path: '.github/workflows/ci.yml',
       secrets: true,
-      verdict: 'refusé',
+      verdict: 'refused',
       triggers: ['pull_request'],
     });
     expect(result.text).not.toContain('ghp_SENTINEL_VALUE');
@@ -348,8 +348,8 @@ jobs:
     const lines: string[] = [];
     const code = await runDoctorCommand({ repoPath: '/repo', home, env: {}, out: (line) => lines.push(line) });
     expect(code).toBe(1);
-    expect(lines.join('\n')).toContain('GitHub App non configurée');
-    expect(lines.join('\n')).toContain('Aucun repli `gh`');
+    expect(lines.join('\n')).toContain('GitHub App not configured');
+    expect(lines.join('\n')).toContain('No `gh` fallback');
   });
 
   it('runs the CLI adapter with the configured App and the git remote', async () => {
@@ -405,6 +405,6 @@ jobs:
       now: () => now,
     });
     expect(code).toBe(0);
-    expect(lines.join('\n')).toContain('verdict : accepté');
+    expect(lines.join('\n')).toContain('verdict: accepted');
   });
 });

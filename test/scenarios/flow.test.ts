@@ -31,7 +31,7 @@ describe('the Flux on the engine (ORC-297)', () => {
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
     let f = await flow();
     expect(f.working).toEqual([]);
-    expect(f.needsYou.blocked).toEqual([{ cause: 'failed', tickets: [expect.objectContaining({ ticketId: 'REL-1', title: 'Export CSV', reason: 'Le run dev a échoué.' })] }]);
+    expect(f.needsYou.blocked).toEqual([{ cause: 'failed', tickets: [expect.objectContaining({ ticketId: 'REL-1', title: 'Export CSV', reason: 'The run dev failed.' })] }]);
 
     // A human relaunches it: it leaves Needs you, and the tokens of the attempt that ended are shown.
     h.runner.enqueue({ hold: true });
@@ -63,7 +63,7 @@ describe('the Flux on the engine (ORC-297)', () => {
     };
     await h.send('ticket.delegated', { linearSessionId: 'ls-2' }, 'REL-2');
     const launch = await flowOf(h)();
-    expect(launch.needsYou.blocked[0].tickets.map((t: { ticketId: string; reason: string }) => [t.ticketId, t.reason.split(' : ')[0]])).toContainEqual(['REL-2', 'Erreur au lancement']);
+    expect(launch.needsYou.blocked[0].tickets.map((t: { ticketId: string; reason: string }) => [t.ticketId, t.reason.split(': ')[0]])).toContainEqual(['REL-2', 'Launch error']);
     expect(launch.needsYou.blocked.map((g: { cause: string }) => g.cause)).toEqual(['infra']);
   });
 

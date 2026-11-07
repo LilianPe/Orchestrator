@@ -184,7 +184,7 @@ describe('a disposable sandbox per attempt', () => {
     expect(h.sandboxes.active()).toEqual([]);
     expect(h.workspaces.cleaned).toEqual(['REL-1']);
     expect(await h.ticket()).toMatchObject({ blocked: true });
-    expect(h.tracker.comments('REL-1').at(-1)).toContain('Raison : Erreur au lancement : Le setup du worktree a échoué : npm ci\n');
+    expect(h.tracker.comments('REL-1').at(-1)).toContain('Reason: Launch error: The worktree setup failed: npm ci\n');
   });
 
   it('a setup command over the verify timeout fails the setup as a timeout', async () => {
@@ -193,7 +193,7 @@ describe('a disposable sandbox per attempt', () => {
     await delegate(h);
     expect(h.runner.requests).toEqual([]);
     expect(h.workspaces.cleaned).toEqual(['REL-1']);
-    expect(h.tracker.comments('REL-1').at(-1)).toContain('Raison : Erreur au lancement : Le setup du worktree a échoué : npm ci (délai de 15 min dépassé)');
+    expect(h.tracker.comments('REL-1').at(-1)).toContain('Reason: Launch error: The worktree setup failed: npm ci (timed out after 15 min)');
   });
 
   it.each([
@@ -501,7 +501,7 @@ describe("a run's security log", () => {
   const at = '2026-11-03T10:00:00.000Z';
   const request = (host: string, ok: boolean) => JSON.stringify({ at, method: 'GET', host, path: '/', ok, ...(ok ? {} : { reason: 'host not allowed' }), up: 0, down: 0 });
   const refusal = (rule: string, ticket = 'REL-1') => JSON.stringify({ at, tool: 'Bash', command: 'git push origin main # TOKEN=s3cr3t', rule, ticket });
-  const summaries = (h: ReturnType<typeof createHarness>) => h.tracker.activities('ls-1').flatMap((a) => ('body' in a && a.body.startsWith('Refus pendant ce run') ? [{ type: a.type, body: a.body }] : []));
+  const summaries = (h: ReturnType<typeof createHarness>) => h.tracker.activities('ls-1').flatMap((a) => ('body' in a && a.body.startsWith('Refusals during this run') ? [{ type: a.type, body: a.body }] : []));
 
   it('stores the connections and refusals of the run, tied to it and its ticket, and posts a summary without the commands', async () => {
     const { h, runId } = await runWith([request('registry.npmjs.org', true), request('evil.example', false)], [refusal('push-trunk'), refusal('push-trunk')]);
@@ -511,7 +511,7 @@ describe("a run's security log", () => {
     expect(log!.refusals.map((r) => r.rule)).toEqual(['push-trunk', 'push-trunk']);
     const [summary] = summaries(h);
     expect(summary).toMatchObject({ type: 'thought' });
-    expect(summary!.body).toContain('`push-trunk` : 2');
+    expect(summary!.body).toContain('`push-trunk`: 2');
     expect(summary!.body).toContain('`evil.example` (1)');
     expect(JSON.stringify(h.tracker.activities('ls-1'))).not.toContain('s3cr3t');
     expect(await h.ticket()).toMatchObject({ logical: 'human_review', blocked: false });
@@ -521,7 +521,7 @@ describe("a run's security log", () => {
     const line = JSON.stringify({ at, tool: 'Read', command: '/work/src/secret-name.ts', rule: 'full-read', ticket: 'REL-1' });
     const { h, runId } = await runWith([], [line]);
     expect(await h.store.securityLog(runId)).toMatchObject({ refusals: [{ tool: 'Read', rule: 'full-read', command: '/work/src/secret-name.ts' }], skipped: { refusals: 0 } });
-    expect(summaries(h)[0]!.body).toContain('`full-read` : 1');
+    expect(summaries(h)[0]!.body).toContain('`full-read`: 1');
     expect(JSON.stringify(h.tracker.activities('ls-1'))).not.toContain('secret-name');
   });
 

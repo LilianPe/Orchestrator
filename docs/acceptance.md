@@ -12,11 +12,11 @@ npm ci && npm run build && npm link
 In the test repository: `relais init`. Follow the instructions (Linear OAuth app, webhook = displayed smee URL, categories Agent session events + Issues + Comments). Check `~/.relais/config.yaml`, `~/.relais/secrets.json` (mode 600), `.relais/workflow.yml`.
 
 ## 2. up and connection (criterion 2)
-`relais up`, open http://localhost:4100, click « Connecter Linear ». Expected: page « Linear est connecté », statuses Human Review / AI Review and labels agent:* and Bloqué created in the team, button replaced by the « en direct » state.
+`relais up`, open http://localhost:4100, click « Connecter Linear ». Expected: page « Linear is connected », statuses Human Review / AI Review and labels agent:* and Bloqué created in the team, button replaced by the « en direct » state.
 If Linear refuses the localhost callback URL: note the error, use `cloudflared tunnel --url http://localhost:4100` for the duration of the installation and put the public URL in `publicUrl`.
 
 ## 3. Delegation (criterion 3)
-Create a clear ticket (≥ 30 characters of description), delegate it to @relais. Expected in < 10 s: the comment « Bien reçu. » on the ticket, then the plan in the session (`comprendre · questions · spec · tests · build · vérif · PR`). Then: status In Progress, live output in the UI, PR opened, status Human Review, summary in French in the session.
+Create a clear ticket (≥ 30 characters of description), delegate it to @relais. Expected in < 10 s: the comment « Got it. » on the ticket, then the plan in the session (`Understand · Questions · Spec · Tests · Build · Verify · PR`). Then: status In Progress, live output in the UI, PR opened, status Human Review, summary in French in the session.
 Check in `~/.relais/relais.db` that no event was rejected for its signature (otherwise: the smee relay modifies the body → switch to `publicUrl` via a tunnel).
 
 ## 4. Grouped feedback (criterion 4)
@@ -29,7 +29,7 @@ Move the ticket to AI Review. Expected: fresh session, summary, status Human Rev
 On another ticket: `@relais où est géré X ?` → read-only answer. `@relais retiens <fait>` → PR in relais-knowledge. Merge it, then ask a related question: the answer cites the note.
 
 ## 7. Stop (criterion 7)
-Delegate a ticket, during the run click "Send stop request" in Linear. Expected in < 10 s: « Arrêté… », ticket blocked, run `stopped`.
+Delegate a ticket, during the run click "Send stop request" in Linear. Expected in < 10 s: « Stopped… », ticket blocked, run `stopped`.
 
 ## 8. Docker (criterion 8)
 On the server, images built ([`deployment.md`](deployment.md#first-start)), as an automated test, under its own project name and ports:
@@ -63,8 +63,8 @@ With `host` other than `127.0.0.1`, the daemon refuses to start without `FACTORY
 6. Does the installed Claude Code version apply wildcards at the start of a pattern? Observe: in a test worktree, a session launched with `--settings ~/.relais/run-settings.json`: same check for the leading wildcard of `Bash(*secrets.json*)`: `cat ~/.relais/secrets.json` must be refused.
 7. In `--permission-mode plan` (`trunk-readonly` runs), does Claude Code allow calling `mcp__factory__submit_result` and `mcp__factory__ask`, permitted by the pack's `allow`? Observe: a question (`@Relais …`) that calls `submit_result` has no permission refusal in its transcript. Otherwise, these runs answer with their last message only.
 8. Does `claude -p --effort <low|medium|high>` accept these values, also with `--resume` (ORC-136)? Observe: a `dev` run starts, and the `init` event reports no refused option. Tested only on a fake `claude`; `--effort` was only read in `claude --help` (2.1.318).
-9. Does a failed `Bash` call arrive in `stream-json` with `is_error: true`, `tool_use_id` and its output in `content` (ORC-136)? Observe: an agent made to rerun a failing command 3 times, without changing anything, ends up Bloqué on « Boucle : ». Otherwise the loop detector sees nothing, and only turns and duration bound it.
-10. Does a real `dev` run call `mcp__factory__submit_result` from its sandbox (ORC-136)? Observe: the run ends in success. The pack requires it for `dev`: without that call, or if the factory's MCP is not reachable, every build ends up Bloqué on « Le run dev a échoué. ».
+9. Does a failed `Bash` call arrive in `stream-json` with `is_error: true`, `tool_use_id` and its output in `content` (ORC-136)? Observe: an agent made to rerun a failing command 3 times, without changing anything, ends up Bloqué on « Loop: ». Otherwise the loop detector sees nothing, and only turns and duration bound it.
+10. Does a real `dev` run call `mcp__factory__submit_result` from its sandbox (ORC-136)? Observe: the run ends in success. The pack requires it for `dev`: without that call, or if the factory's MCP is not reachable, every build ends up Bloqué on « The run dev failed. ».
 11. Do the `assistant` lines of `stream-json` carry the message's real `output_tokens`, or a provisional value (ORC-136)? Observe: on a real run, the sum per `message.id` compared with the `usage` of the `result` line. If it undercounts, the `budgets.per_step_tokens` cap triggers too late, and it must be calibrated on what is counted.
 
 ## Security: known limits

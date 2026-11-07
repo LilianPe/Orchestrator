@@ -46,8 +46,8 @@ describe('GitHub App configuration', () => {
   });
 
   it('fails fast on a partial configuration rather than silently using gh', () => {
-    expect(() => resolveGithubApp(base(), { GH_APP_ID: '123' })).toThrow(/incomplète/);
-    expect(() => resolveGithubApp(base(), { GH_APP_KEY: PEM })).toThrow(/incomplète/);
+    expect(() => resolveGithubApp(base(), { GH_APP_ID: '123' })).toThrow(/Incomplete/);
+    expect(() => resolveGithubApp(base(), { GH_APP_KEY: PEM })).toThrow(/Incomplete/);
   });
 
   it('reads the GitHub webhook secret from config.yaml, else GH_WEBHOOK_SECRET, else none (ORC-134)', () => {

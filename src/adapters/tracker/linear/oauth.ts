@@ -25,7 +25,7 @@ async function tokenRequest(params: Record<string, string>, fetchImpl: typeof fe
     body: new URLSearchParams(params).toString(),
   });
   const json = (await res.json()) as { access_token?: string; refresh_token?: string; expires_in?: number; error?: string };
-  if (!res.ok || !json.access_token) throw new Error(`OAuth Linear refusé : ${json.error ?? res.status}`);
+  if (!res.ok || !json.access_token) throw new Error(`Linear OAuth refused: ${json.error ?? res.status}`);
   return {
     accessToken: json.access_token,
     refreshToken: json.refresh_token,
@@ -78,7 +78,7 @@ export class TokenManager {
 
   async get(): Promise<string> {
     const t = this.o.load();
-    if (!t) throw new Error('Linear non connecté');
+    if (!t) throw new Error('Linear not connected');
     const now = (this.o.now ?? Date.now)();
     if (!t.expiresAt || !t.refreshToken || t.expiresAt - now > 5 * 60_000) return t.accessToken;
     this.inflight ??= refreshToken({

@@ -26,13 +26,13 @@ describe('the standard blocking comment and the reply that resumes (ORC-196)', (
     expect((await h.tracker.getIssue('REL-1')).labels).toContain('Bloqué');
     const body = h.tracker.comments('REL-1').at(-1)!;
     expect(body.split('\n')).toEqual([
-      "🔴 Bloqué à l'étape build (tentative 1/1)",
-      `Raison : ${t.blockReason}`,
-      "Ce que j'ai essayé :",
-      '- Le run dev lancé : arrêté à son plafond.',
-      "Question : Je reprends l'étape telle quelle (répondez « oui ») ou avec une consigne (écrivez-la) ?",
-      expect.stringMatching(/^État : branche \S+ · dernier commit \S+ · CI aucune · tokens 123 · \d+ min$/),
-      'Répondez dans ce ticket : je reprends dès votre réponse.',
+      "🔴 Blocked at step build (attempt 1/1)",
+      `Reason: ${t.blockReason}`,
+      'What I tried:',
+      '- Started the run dev: stopped at its limit.',
+      'Question: Shall I redo the step as is (reply "yes") or with an instruction (write it)?',
+      expect.stringMatching(/^State: branch \S+ · last commit \S+ · CI none · tokens 123 · \d+ min$/),
+      'Reply on this ticket: I will resume as soon as you answer.',
     ]);
     const told = h.tracker.activities('ls-1').filter((a) => a.type === 'elicitation' || a.type === 'error');
     expect(told).toEqual([]);
@@ -57,7 +57,7 @@ describe('the standard blocking comment and the reply that resumes (ORC-196)', (
     const h = await blocked();
     await h.send('ticket.commented', { body: 'Reprends.', author: 'X', kind: 'instruction' }, 'REL-1', { actor: 'user-stranger' });
     expect(h.runner.requests).toHaveLength(1);
-    expect(h.tracker.comments('REL-1').at(-1)).toMatch(/^Refusé : relancer un run bloqué/);
+    expect(h.tracker.comments('REL-1').at(-1)).toMatch(/^Refused: relaunching a blocked run/);
     expect(await h.ticket()).toMatchObject({ blocked: true, humanInbox: [] });
     const { entries } = await exportJournal(h.store, 'p', 'REL-1');
     expect(entries.find((e) => e.event.type === 'ticket.commented')?.decision?.trace?.join()).toContain('authz: refused relaunch_blocked');
@@ -84,7 +84,7 @@ describe('the standard blocking comment and the reply that resumes (ORC-196)', (
     const h = await blocked();
     await h.send('ticket.commented', { body: '/status', author: 'Lilian', kind: 'command' }, 'REL-1', { actor: MEMBER });
     expect(h.runner.requests).toHaveLength(1);
-    expect(h.tracker.comments('REL-1').at(-1)).toContain('Bloqué : ');
+    expect(h.tracker.comments('REL-1').at(-1)).toContain('Blocked: ');
     expect(await h.ticket()).toMatchObject({ blocked: true, blockedJob: 'dev' });
     h.runner.enqueue({ hold: true });
     await h.send('ticket.commented', { body: 'Vas-y.', author: 'Lilian', kind: 'instruction' }, 'REL-1', { actor: MEMBER });
@@ -120,7 +120,7 @@ describe('the question of an agent through `/agent/ask` (ORC-196)', () => {
     h.runner.enqueue({ hold: true });
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
     await h.send('agent.asked', { question: 'Quel séparateur ?', job: 'dev' });
-    expect(h.tracker.comments('REL-1').at(-1)).toContain('Question : Quel séparateur ?');
+    expect(h.tracker.comments('REL-1').at(-1)).toContain('Question: Quel séparateur ?');
     expect(await h.ticket()).toMatchObject({ blocked: true, blockedJob: 'dev' });
     await h.send('ticket.commented', { body: 'Le point-virgule.', author: 'Lilian', kind: 'instruction' });
     expect(await h.ticket()).toMatchObject({ blocked: false, pendingJob: { job: 'dev', input: 'feedback' } });

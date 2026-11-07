@@ -17,14 +17,14 @@ describe('logExcerpt', () => {
     expect(out).toContain('Error: boom');
     expect(out.endsWith('Tests: 1 failed')).toBe(true);
     expect(out).not.toContain('middle 1000');
-    expect(out).toMatch(/\[… \d+ lignes coupées …\]/);
+    expect(out).toMatch(/\[… \d+ lines cut …\]/);
   });
 
   it('bounds one huge line, keeping its end and saying what went', () => {
     const out = logExcerpt(`${'x'.repeat(LOG_EXCERPT_MAX * 20)}the failure`);
     expect(out.length).toBeLessThanOrEqual(LOG_EXCERPT_MAX);
     expect(out.endsWith('the failure')).toBe(true);
-    expect(out).toMatch(/lignes coupées/);
+    expect(out).toMatch(/lines cut/);
   });
 
   it('bounds error lines however many there are, the end kept', () => {

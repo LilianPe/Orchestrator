@@ -43,7 +43,7 @@ describe('Done by a human, merge by the factory (ORC-148)', () => {
     const h = await inHumanReview();
     await h.send('status.changed', { from: 'human_review', to: 'done' }, 'REL-1', { actor: 'user-armand' });
     expect(h.forge.merges).toEqual([]);
-    expect(comments(h).at(-1)).toMatch(/^Refusé : passer le ticket en Done/);
+    expect(comments(h).at(-1)).toMatch(/^Refused: moving the ticket to Done/);
     expect(lastMove(h)).toBe('Human Review');
   });
 
@@ -55,7 +55,7 @@ describe('Done by a human, merge by the factory (ORC-148)', () => {
     h.runner.enqueue({ events: [{ kind: 'init', sessionId: 'y' }, { kind: 'text', text: 'Rien à redire.' }] });
     await h.send('status.changed', { from: 'human_review', to: 'done' }, 'REL-1', { actor: 'user-lilian' });
     expect(h.forge.merges).toEqual([]);
-    expect(comments(h).some((c) => /push depuis la review.*repassent par la review IA/.test(c))).toBe(true);
+    expect(comments(h).some((c) => /push since the review.*go through the AI review again/.test(c))).toBe(true);
     expect((await h.store.getRun(h.runner.requests.at(-1)!.runId))?.job).toBe('review');
     // The review done, the factory shows the pushed head in Human Review: that commit is now the reviewed one.
     expect(lastMove(h)).toBe('Human Review');
@@ -87,7 +87,7 @@ describe('Done by a human, merge by the factory (ORC-148)', () => {
     await h.send('status.changed', { from: 'human_review', to: 'done' }, 'REL-1', { actor: 'user-lilian' });
     expect(h.forge.merges).toEqual([]);
     expect((await h.store.getRun(h.runner.requests.at(-1)!.runId))?.job).toBe('review');
-    expect(comments(h).some((c) => /push depuis la review.*repassent par la review IA/.test(c))).toBe(true);
+    expect(comments(h).some((c) => /push since the review.*go through the AI review again/.test(c))).toBe(true);
     expect((await h.ticket()).reviewSha).toBe('def456');
   });
 
@@ -111,7 +111,7 @@ describe('Done by a human, merge by the factory (ORC-148)', () => {
     h.forge.setPr(BRANCH, { number: 5, url: 'https://github.com/acme/app/pull/5', state: 'OPEN', headSha: 'abc123', checks: 'pass', failedChecks: [] });
     await h.send('status.changed', { from: 'human_review', to: 'done' }, 'REL-1', { actor: 'user-lilian' });
     expect(h.forge.merges).toEqual([]);
-    expect(comments(h).at(-1)).toMatch(/la PR de la branche \(#5\) n'est pas celle du ticket \(#3\)/);
+    expect(comments(h).at(-1)).toMatch(/the branch's PR \(#5\) is not the ticket's \(#3\)/);
   });
 
   it('merges nothing on a red check, and says why', async () => {
@@ -120,7 +120,7 @@ describe('Done by a human, merge by the factory (ORC-148)', () => {
     h.forge.setPr(BRANCH, { ...PR, state: 'OPEN', headSha: 'abc123', checks: 'fail', failedChecks: ['test'] });
     await h.send('status.changed', { from: 'human_review', to: 'done' }, 'REL-1', { actor: 'user-lilian' });
     expect(h.forge.merges).toEqual([]);
-    expect(comments(h).at(-1)).toMatch(/checks du commit relu ne sont pas verts \(test\)/);
+    expect(comments(h).at(-1)).toMatch(/checks of the reviewed commit are not green \(test\)/);
     expect(lastMove(h)).toBe('Human Review');
   });
 
@@ -149,8 +149,36 @@ describe('Done by a human, merge by the factory (ORC-148)', () => {
     for (let i = 0; i < 6; i++) await h.advance(10);
     expect(failures).toBe(0);
     expect(h.forge.merges).toEqual([]);
-    expect(comments(h).at(-1)).toMatch(/checks du commit relu ne sont pas verts \(pending\)/);
+    expect(comments(h).at(-1)).toMatch(/checks of the reviewed commit are not green \(pending\)/);
     expect(lastMove(h)).toBe('Human Review');
+  });
+
+  it('a push-since-review refusal saved before ORC-331, in French, replays as a moved head: the new commits go through the AI review', async () => {
+    let failures = 1;
+    const h = await inHumanReview({
+      effectRetry: { attempts: 6, baseMs: 1, capMs: 1 },
+      wrapStore: (inner) =>
+        Object.assign(Object.create(inner) as Store, {
+          appendInbox: async (e: Parameters<Store['appendInbox']>[0]) => {
+            if (e.id.startsWith('merge-refused:') && failures > 0) {
+              failures--;
+              throw new Error('inbox unavailable');
+            }
+            return inner.appendInbox(e);
+          },
+          // The refusal as the factory saved it before its messages moved to English.
+          getMeta: async (key: string) => (key.endsWith(':refused') ? 'la branche a reçu un push depuis la review' : inner.getMeta(key)),
+        }),
+    });
+    h.forge.setPr(BRANCH, { ...PR, state: 'OPEN', headSha: 'def456', checks: 'pass', failedChecks: [] });
+    h.workspaces.heads.set(WORKTREE, 'def456');
+    h.runner.enqueue({ events: [{ kind: 'init', sessionId: 'y' }, { kind: 'text', text: 'Rien à redire.' }] });
+    await h.send('status.changed', { from: 'human_review', to: 'done' }, 'REL-1', { actor: 'user-lilian' });
+    for (let i = 0; i < 6; i++) await h.advance(10);
+    expect(failures).toBe(0);
+    expect(h.forge.merges).toEqual([]);
+    expect((await h.store.getRun(h.runner.requests.at(-1)!.runId))?.job).toBe('review');
+    expect((await h.ticket()).reviewSha).toBe('def456');
   });
 
   it('a PR merged on GitHub meanwhile, on another head, is no refusal: the ticket stays in Done', async () => {
@@ -158,7 +186,7 @@ describe('Done by a human, merge by the factory (ORC-148)', () => {
     h.forge.setPr(BRANCH, { ...PR, state: 'MERGED', headSha: 'def456', checks: 'pass', failedChecks: [] });
     await h.send('status.changed', { from: 'human_review', to: 'done' }, 'REL-1', { actor: 'user-lilian' });
     expect(h.forge.merges).toEqual([]);
-    expect(comments(h).some((c) => /pas mergé/.test(c))).toBe(false);
+    expect(comments(h).some((c) => /did not merge/.test(c))).toBe(false);
     expect((await h.ticket()).logical).toBe('done');
   });
 
@@ -175,7 +203,7 @@ describe('Done by a human, merge by the factory (ORC-148)', () => {
     h.forge.baseChecks = 'pass';
     await h.send('status.changed', { from: 'human_review', to: 'done' }, 'REL-1', { actor: 'user-lilian' });
     expect(h.forge.merges).toEqual([]);
-    expect(comments(h).at(-1)).toMatch(/aucun check n'a tourné sur le commit relu/);
+    expect(comments(h).at(-1)).toMatch(/no check ran on the reviewed commit/);
     expect(lastMove(h)).toBe('Human Review');
   });
 
@@ -185,7 +213,7 @@ describe('Done by a human, merge by the factory (ORC-148)', () => {
     h.forge.ciWorkflows = 1;
     await h.send('status.changed', { from: 'human_review', to: 'done' }, 'REL-1', { actor: 'user-lilian' });
     expect(h.forge.merges).toEqual([]);
-    expect(comments(h).at(-1)).toMatch(/aucun check n'a tourné sur le commit relu, alors que le dépôt a une CI ou que l'usine ne peut pas vérifier qu'il n'en a pas/);
+    expect(comments(h).at(-1)).toMatch(/no check ran on the reviewed commit, while the repository has a CI or the factory cannot check that it has none/);
   });
 
   it('writes nothing on the forge when a human cancels the ticket: its PR stays open', async () => {

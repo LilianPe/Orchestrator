@@ -105,7 +105,7 @@ describe('bootstrap', () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
     saveInstance(home, { port: 4192, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
     writeFileSync(join(home, 'factory.yml'), 'github: { app_id: 456, private_key: env:GH_APP_KEY }\n');
-    await expect(startFactory({ home, fakeRunner: true, log: () => {}, env: {} })).rejects.toThrow(/github\.private_key : la variable d’environnement GH_APP_KEY/);
+    await expect(startFactory({ home, fakeRunner: true, log: () => {}, env: {} })).rejects.toThrow(/github\.private_key: the environment variable GH_APP_KEY/);
   });
 
   it('plans the reconciliation of each project in the store at start, once, and drops a removed project\'s (ORC-185)', async () => {
@@ -138,7 +138,7 @@ describe('bootstrap', () => {
     const logs: string[] = [];
     const app = await startFactory({ home, fakeRunner: true, log: (m) => void logs.push(m), env: {} });
     await app.stop();
-    expect(logs.some((m) => m.includes('CLI gh'))).toBe(true);
+    expect(logs.some((m) => m.includes('gh CLI'))).toBe(true);
   });
 
   it('purges the transcripts older than 30 days at start', async () => {
@@ -155,7 +155,7 @@ describe('bootstrap', () => {
     const app = await startFactory({ home, fakeRunner: true, log: (m) => void logs.push(m), env: {} });
     await app.stop();
     expect([existsSync(old), existsSync(recent)]).toEqual([false, true]);
-    expect(logs).toContain('transcripts : 1 supprimé(s) après 30 jours');
+    expect(logs).toContain('transcripts: 1 deleted after 30 days');
   });
 
   it('closes the store it opened when the start fails afterwards', async () => {
@@ -236,11 +236,11 @@ describe('bootstrap', () => {
     const logs: string[] = [];
     const app = await startFactory({ home, fakeRunner: true, log: (m) => void logs.push(m) });
     await app.stop();
-    expect(logs.some((m) => m.includes('secret de webhook') && m.includes('refusé'))).toBe(warns);
+    expect(logs.some((m) => m.includes('webhook secret') && m.includes('refused'))).toBe(warns);
   });
 
   it('TrackerSwitch explains how to connect', async () => {
-    await expect(new TrackerSwitch(4100).getIssue('REL-1')).rejects.toThrow('Linear non connecté : ouvrez http://localhost:4100/oauth/start');
+    await expect(new TrackerSwitch(4100).getIssue('REL-1')).rejects.toThrow('Linear not connected: open http://localhost:4100/oauth/start');
   });
 
   it('refuses a non-loopback host without FACTORY_UI_PASSWORD', async () => {

@@ -302,7 +302,7 @@ describe('what an agent wrote, under the commands the factory runs on the host (
       writeFileSync(join(path, '.git'), `gitdir: ${posix(join(foreign, '.git'))}\n`);
       expect(await f.ws.head(path)).toBeUndefined();
       expect(await f.ws.stepDiff(f.repo, path, 'HEAD')).toBeUndefined();
-      await expect(f.ws.prepare(req(f.repo))).rejects.toThrow("n'est pas celui que l'usine a créé");
+      await expect(f.ws.prepare(req(f.repo))).rejects.toThrow('is not the one the factory created');
     });
 
     it('a HEAD that names a path out of its git dir, or a commit it could not hold, reads as none', async () => {

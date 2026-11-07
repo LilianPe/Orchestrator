@@ -12,13 +12,13 @@ export async function pickupFailures(
   const prefix = `factory/${issue.identifier.toLowerCase()}-`;
   for (const check of checks) {
     if (check === 'has_description' && issue.description.trim().length < 30) {
-      out.push('La description fait moins de 30 caractères.');
+      out.push('The description is shorter than 30 characters.');
     }
     if (check === 'not_started' && (await workspaces.remoteBranchExists(repoPath, prefix))) {
-      out.push(`Une branche ${prefix}… existe déjà sur origin.`);
+      out.push(`A branch ${prefix}… already exists on origin.`);
     }
     if (check === 'has_acceptance_criteria' && !/(crit[eè]res? d['’]acceptation|acceptance criteria)/i.test(issue.description)) {
-      out.push("La description ne contient pas de critères d'acceptation.");
+      out.push('The description has no acceptance criteria.');
     }
   }
   return out;

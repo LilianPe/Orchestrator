@@ -29,11 +29,11 @@ export function readPrivateKey(
   readFile: (path: string) => string = (path) => readFileSync(path, 'utf8'),
 ): string {
   const raw = value.trim();
-  if (!raw) throw new Error('Configuration GitHub App : clé privée vide');
+  if (!raw) throw new Error('GitHub App configuration: empty private key');
   const expanded = expandPem(raw);
   const pem = expanded.includes(PEM_HEADER) ? expanded : readFile(expandHome(expanded));
   if (!pem.includes(PEM_HEADER) || !pem.includes(PEM_FOOTER)) {
-    throw new Error('Configuration GitHub App : la clé privée doit être un PEM RSA (contenu ou chemin de fichier)');
+    throw new Error('GitHub App configuration: the private key must be an RSA PEM (content or file path)');
   }
   return pem.endsWith('\n') ? pem : `${pem}\n`;
 }
@@ -54,8 +54,8 @@ export function resolveGithubApp(config: InstanceConfig, env: NodeJS.ProcessEnv 
   if (!appId && !key) return undefined;
   if (!appId || !key) {
     throw new Error(
-      'Configuration GitHub App incomplète : renseignez github.appId et github.privateKey (ou GH_APP_ID et GH_APP_KEY), ' +
-        'ou retirez la section github pour continuer avec la CLI gh.',
+      'Incomplete GitHub App configuration: set github.appId and github.privateKey (or GH_APP_ID and GH_APP_KEY), ' +
+        'or remove the github section to go on with the gh CLI.',
     );
   }
   const installationId = (fromConfig?.installationId ?? env['GH_APP_INSTALLATION_ID'] ?? '').trim() || undefined;

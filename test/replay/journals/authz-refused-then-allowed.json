@@ -393,7 +393,7 @@
           {
             "kind": "activity",
             "type": "response",
-            "body": "Refusé : déclencher l'agent (délégation, mention) est réservé aux membres de l'équipe Linear qui ont le droit d'écriture sur le dépôt. La vérification porte sur l'auteur signé de l'action, jamais sur un nom cité dans le texte.",
+            "body": "Refused: triggering the agent (delegation, mention) is reserved for Linear team members with write access to the repository. The check is on the signed author of the action, never on a name quoted in the text.",
             "linearSessionId": "ls-1"
           }
         ],
@@ -1306,7 +1306,7 @@
           {
             "kind": "activity",
             "type": "response",
-            "body": "Refusé : répondre à l'agent ou lui poser une question est réservé au demandeur et aux membres de l'équipe Linear. La vérification porte sur l'auteur signé de l'action, jamais sur un nom cité dans le texte.",
+            "body": "Refused: answering the agent or asking it a question is reserved for the requester and Linear team members. The check is on the signed author of the action, never on a name quoted in the text.",
             "linearSessionId": "ls-1"
           }
         ],

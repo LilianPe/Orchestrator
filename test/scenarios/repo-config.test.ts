@@ -106,13 +106,13 @@ describe("the repository's config at the launch", () => {
     expect(h.runner.requests).toEqual([]);
     expect(h.workspaces.cleaned).toEqual(['REL-1']);
     expect(await h.ticket()).toMatchObject({ blocked: true });
-    expect(h.tracker.comments('REL-1').at(-1)).toMatch(/Raison : Configuration du dépôt à corriger : \.factory\/config\.yml refusé :[\s\S]*network\.level/);
+    expect(h.tracker.comments('REL-1').at(-1)).toMatch(/Reason: Repository configuration to fix: \.factory\/config\.yml refused:[\s\S]*network\.level/);
     // The Flux shows it as the repository's to fix, not as a breakdown of the factory.
     expect(blockCause((await h.ticket()).blockReason)).toBe('repo_config');
   });
 
   it('keeps a config the forge could not give as a breakdown, not as a fault of the repository', async () => {
-    const h = createHarness({ sandboxed: true, repoConfig: async () => Promise.reject(new Error('la forge ne répond plus après 120 s')) });
+    const h = createHarness({ sandboxed: true, repoConfig: async () => Promise.reject(new Error('the forge no longer responds after 120 s')) });
     await delegate(h);
     expect(blockCause((await h.ticket()).blockReason)).toBe('infra');
   });

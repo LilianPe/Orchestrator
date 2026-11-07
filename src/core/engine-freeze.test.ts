@@ -53,8 +53,8 @@ describe('decide — the freeze of the tests (ORC-131)', () => {
   it('/refreeze by a designated maintainer freezes the branch head, journaled', () => {
     const out = decide(ticket({ frozenTests: FROZEN }), refreeze(LATER, { actor: 'u-lead', roles: ['team_member', 'maintainer'] }), workflow);
     expect(frozenPatch(out)).toEqual([LATER]);
-    expect(out.trace).toContain('refreeze by u-lead: 2 fichiers gelés à sha-2');
-    expect(out.effects).toEqual([{ kind: 'activity', type: 'response', linearSessionId: 's-q', body: expect.stringMatching(/^Regelé : 2 fichiers/) }]);
+    expect(out.trace).toContain('refreeze by u-lead: 2 files frozen at sha-2');
+    expect(out.effects).toEqual([{ kind: 'activity', type: 'response', linearSessionId: 's-q', body: expect.stringMatching(/^Refrozen: 2 files/) }]);
     expect(out.effects).not.toContainEqual(expect.objectContaining({ kind: 'start_run' }));
   });
 
@@ -63,13 +63,13 @@ describe('decide — the freeze of the tests (ORC-131)', () => {
       const out = decide(ticket({ frozenTests: FROZEN }), refreeze(LATER, signed), workflow);
       expect(frozenPatch(out)).toEqual([]);
       expect(out.trace.some((t) => t.startsWith(`${AUTHZ_REFUSED}refreeze`))).toBe(true);
-      expect(out.effects).toEqual([{ kind: 'activity', type: 'response', linearSessionId: 's-q', body: expect.stringMatching(/^Refusé : regeler les tests/) }]);
+      expect(out.effects).toEqual([{ kind: 'activity', type: 'response', linearSessionId: 's-q', body: expect.stringMatching(/^Refused: refreezing the tests/) }]);
     }
   });
 
   it('/refreeze with no freeze or no branch to read answers so, and changes nothing', () => {
     const out = decide(ticket(), refreeze(undefined, { actor: 'u-lead', roles: ['maintainer'] }), workflow);
     expect(out.events).toEqual([]);
-    expect(out.effects).toEqual([{ kind: 'activity', type: 'response', linearSessionId: 's-q', body: expect.stringMatching(/^Rien à regeler/) }]);
+    expect(out.effects).toEqual([{ kind: 'activity', type: 'response', linearSessionId: 's-q', body: expect.stringMatching(/^Nothing to refreeze/) }]);
   });
 });

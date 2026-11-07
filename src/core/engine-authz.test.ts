@@ -46,7 +46,7 @@ describe('decide — authorization matrix (ORC-186)', () => {
       expect(refused(out.trace)).toBe(true);
       expect(out.events).toEqual([]);
       expect(out.effects).toEqual([
-        { kind: 'activity', type: 'response', linearSessionId: 's-dev', body: expect.stringMatching(/^Refusé : déclencher l'agent .*droit d'écriture/) },
+        { kind: 'activity', type: 'response', linearSessionId: 's-dev', body: expect.stringMatching(/^Refused: triggering the agent .*write access/) },
       ]);
     });
 
@@ -63,7 +63,7 @@ describe('decide — authorization matrix (ORC-186)', () => {
       ]) {
         const out = decide(ticket(), e, workflow);
         expect(starts(out.effects)).toEqual([]);
-        expect(out.effects).toEqual([expect.objectContaining({ kind: 'activity', body: expect.stringMatching(/aucun membre/) })]);
+        expect(out.effects).toEqual([expect.objectContaining({ kind: 'activity', body: expect.stringMatching(/no workspace member/) })]);
       }
     });
   });
@@ -104,7 +104,7 @@ describe('decide — authorization matrix (ORC-186)', () => {
   });
 
   describe('relaunch a blocked run', () => {
-    const blocked = ticket({ logical: 'dev', blocked: true, blockReason: 'Le run dev a échoué.', initiatorId: 'u-req' });
+    const blocked = ticket({ logical: 'dev', blocked: true, blockReason: 'The run dev failed.', initiatorId: 'u-req' });
 
     it('relaunches on a reply, or on the relaunch label of a project, of a team member', () => {
       const reply = decide(blocked, ev('session.prompted', { linearSessionId: 's-dev', body: 'vas-y', author: 'M' }, 'u-member', ['team_member']), workflow);
@@ -116,10 +116,10 @@ describe('decide — authorization matrix (ORC-186)', () => {
     it('refuses the requester outside the team, and a label set by someone outside it: the ticket stays blocked', () => {
       const reply = decide(blocked, ev('session.prompted', { linearSessionId: 's-dev', body: 'vas-y', author: 'R' }, 'u-req', []), workflow);
       expect(reply.events).toEqual([]);
-      expect(reply.effects).toEqual([expect.objectContaining({ kind: 'activity', body: expect.stringMatching(/relancer un run bloqué/) })]);
+      expect(reply.effects).toEqual([expect.objectContaining({ kind: 'activity', body: expect.stringMatching(/relaunching a blocked run/) })]);
       const label = decide(blocked, ev('label.changed', { label: 'relance', change: 'added' }, 'u-out', []), labelled);
       expect(label.events).toEqual([]);
-      expect(label.effects).toEqual([{ kind: 'comment', body: expect.stringMatching(/^Refusé : relancer un run bloqué/) }]);
+      expect(label.effects).toEqual([{ kind: 'comment', body: expect.stringMatching(/^Refused: relaunching a blocked run/) }]);
     });
   });
 

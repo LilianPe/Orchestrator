@@ -924,13 +924,13 @@
           "claudeSessionId": "id-2",
           "verifiedSha": "aaa111",
           "owedMove": "human_review",
-          "blockReason": "Publication refusée : la branche porte un commit que ce travail n'a pas"
+          "blockReason": "Publication refused: la branche porte un commit que ce travail n'a pas"
         },
         "effects": [
           {
             "kind": "activity",
             "type": "elicitation",
-            "body": "Publication refusée : la branche porte un commit que ce travail n'a pas\nRépondez dans ce fil pour relancer."
+            "body": "Publication refused: la branche porte un commit que ce travail n'a pas\nReply in this thread to relaunch."
           },
           {
             "kind": "labels",
@@ -996,7 +996,7 @@
           "claudeSessionId": "id-2",
           "verifiedSha": "aaa111",
           "owedMove": "human_review",
-          "blockReason": "Publication refusée : la branche porte un commit que ce travail n'a pas"
+          "blockReason": "Publication refused: la branche porte un commit que ce travail n'a pas"
         },
         "ticket": {
           "projectId": "p",
@@ -1021,7 +1021,7 @@
           "claudeSessionId": "id-2",
           "verifiedSha": "aaa111",
           "owedMove": "human_review",
-          "blockReason": "Publication refusée : la branche porte un commit que ce travail n'a pas"
+          "blockReason": "Publication refused: la branche porte un commit que ce travail n'a pas"
         },
         "effects": [],
         "timers": [],
@@ -1077,7 +1077,7 @@
           "claudeSessionId": "id-2",
           "verifiedSha": "aaa111",
           "owedMove": "human_review",
-          "blockReason": "Publication refusée : la branche porte un commit que ce travail n'a pas"
+          "blockReason": "Publication refused: la branche porte un commit que ce travail n'a pas"
         },
         "ticket": {
           "projectId": "p",
@@ -1102,7 +1102,7 @@
           "claudeSessionId": "id-2",
           "verifiedSha": "aaa111",
           "owedMove": "human_review",
-          "blockReason": "Publication refusée : la branche porte un commit que ce travail n'a pas"
+          "blockReason": "Publication refused: la branche porte un commit que ce travail n'a pas"
         },
         "effects": [],
         "timers": [],
@@ -1158,7 +1158,7 @@
           "claudeSessionId": "id-2",
           "verifiedSha": "aaa111",
           "owedMove": "human_review",
-          "blockReason": "Publication refusée : la branche porte un commit que ce travail n'a pas"
+          "blockReason": "Publication refused: la branche porte un commit que ce travail n'a pas"
         },
         "ticket": {
           "projectId": "p",
@@ -1183,7 +1183,7 @@
           "claudeSessionId": "id-2",
           "verifiedSha": "aaa111",
           "owedMove": "human_review",
-          "blockReason": "Publication refusée : la branche porte un commit que ce travail n'a pas"
+          "blockReason": "Publication refused: la branche porte un commit que ce travail n'a pas"
         },
         "effects": [],
         "timers": [],
@@ -1239,7 +1239,7 @@
           "claudeSessionId": "id-2",
           "verifiedSha": "aaa111",
           "owedMove": "human_review",
-          "blockReason": "Publication refusée : la branche porte un commit que ce travail n'a pas"
+          "blockReason": "Publication refused: la branche porte un commit que ce travail n'a pas"
         },
         "ticket": {
           "projectId": "p",
@@ -1264,7 +1264,7 @@
           "claudeSessionId": "id-2",
           "verifiedSha": "aaa111",
           "owedMove": "human_review",
-          "blockReason": "Publication refusée : la branche porte un commit que ce travail n'a pas"
+          "blockReason": "Publication refused: la branche porte un commit que ce travail n'a pas"
         },
         "effects": [],
         "timers": [],
@@ -1320,7 +1320,7 @@
           "claudeSessionId": "id-2",
           "verifiedSha": "aaa111",
           "owedMove": "human_review",
-          "blockReason": "Publication refusée : la branche porte un commit que ce travail n'a pas"
+          "blockReason": "Publication refused: la branche porte un commit que ce travail n'a pas"
         },
         "ticket": {
           "projectId": "p",
@@ -1345,7 +1345,7 @@
           "claudeSessionId": "id-2",
           "verifiedSha": "aaa111",
           "owedMove": "human_review",
-          "blockReason": "Publication refusée : la branche porte un commit que ce travail n'a pas"
+          "blockReason": "Publication refused: la branche porte un commit que ce travail n'a pas"
         },
         "effects": [],
         "timers": [],
@@ -1400,7 +1400,7 @@
           "claudeSessionId": "id-2",
           "verifiedSha": "aaa111",
           "owedMove": "human_review",
-          "blockReason": "Publication refusée : la branche porte un commit que ce travail n'a pas"
+          "blockReason": "Publication refused: la branche porte un commit que ce travail n'a pas"
         },
         "ticket": {
           "projectId": "p",

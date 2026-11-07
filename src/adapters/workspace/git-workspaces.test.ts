@@ -333,9 +333,9 @@ describe('GitWorkspaces', () => {
   it('rejects unsafe identifiers', async () => {
     const { repo, root } = fixtureRepo();
     const ws = new GitWorkspaces({ root });
-    await expect(ws.prepare(req(repo, { ticketId: '../x' }))).rejects.toThrow('Identifiant invalide : ../x');
-    await expect(ws.prepare(req(repo, { projectId: 'a/b' }))).rejects.toThrow('Identifiant invalide : a/b');
-    await expect(ws.cleanup('p', '..')).rejects.toThrow('Identifiant invalide : ..');
-    await expect(ws.cleanup('a\\b', 'REL-1')).rejects.toThrow('Identifiant invalide');
+    await expect(ws.prepare(req(repo, { ticketId: '../x' }))).rejects.toThrow('Invalid identifier: ../x');
+    await expect(ws.prepare(req(repo, { projectId: 'a/b' }))).rejects.toThrow('Invalid identifier: a/b');
+    await expect(ws.cleanup('p', '..')).rejects.toThrow('Invalid identifier: ..');
+    await expect(ws.cleanup('a\\b', 'REL-1')).rejects.toThrow('Invalid identifier');
   });
 });

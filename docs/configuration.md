@@ -16,7 +16,7 @@ The two instance files are read **at startup** of `relais up`: restart after a c
 |---|---|---|---|---|
 | `RELAIS_HOME` | all `relais` commands | `$HOME/.relais` | Instance directory (see [`installation.md`](installation.md#the-daemons-home-directory)). | no |
 | `RELAIS_UI_PASSWORD` | `relais up`, `relais status/pause/resume/stop` | — | HTTP Basic password for the UI and the API. **Required** as soon as `host` is not a loopback address: without it, `relais up` refuses to start. Ignored when `host` is loopback. See [`interface-and-security.md`](interface-and-security.md). | **yes** |
-| `FACTORY_DATABASE_URL` | `relais up`, `relais plan` | — | Postgres connection string (`postgres://utilisateur:mot-de-passe@hôte:5432/base`). When set, the daemon keeps its state in Postgres (`PgStore`) and applies the Drizzle migrations from `drizzle/` at startup (`relais plan` reads it without migrating it); an unreachable database prevents startup, with no fallback to SQLite. Absent: SQLite database `relais.db`, until it is removed (ORC-178). Never passed to runs (`FACTORY_` prefix), never written to the daemon's log. | **yes** |
+| `FACTORY_DATABASE_URL` | `relais up`, `relais plan` | — | Postgres connection string (`postgres://user:password@host:5432/database`). When set, the daemon keeps its state in Postgres (`PgStore`) and applies the Drizzle migrations from `drizzle/` at startup (`relais plan` reads it without migrating it); an unreachable database prevents startup, with no fallback to SQLite. Absent: SQLite database `relais.db`, until it is removed (ORC-178). Never passed to runs (`FACTORY_` prefix), never written to the daemon's log. | **yes** |
 | `FACTORY_CONTAINER_CLI` | `relais up` | — | `docker` or `podman`. When set, each attempt runs in a disposable container (ORC-204): created when it launches, destroyed when it ends, and those a crash left behind are destroyed at the next startup. The repository's `setup` runs there too. Absent: runs execute on the host, without isolation, and the daemon says so at startup. No effect with `--fake-runner`. See [`interface-and-security.md`](interface-and-security.md#known-limitations). | no |
 | `FACTORY_ALLOW_HOST_VERIFY` | `relais up` | — | `1`: without a sandbox, `verify` and the red check run the agent's code on the host, next to the daemon's secrets. Otherwise, they refuse and the ticket is blocked. No effect with `FACTORY_CONTAINER_CLI`: a failed engine never falls back to the host. See [`interface-and-security.md`](interface-and-security.md#known-limitations). | no |
 | `FACTORY_RUNNER_IMAGE` | `relais up` | — | Image of the run containers (`docker/runner.Dockerfile`: node and pnpm, python and uv, git, gitleaks, claude): without gitleaks, every `verify` is a failure (ORC-151). Required with `FACTORY_CONTAINER_CLI`. | no |
@@ -46,7 +46,7 @@ Variables **set by Relais** in each run's environment (do not set them yourself)
 
 ## `config.yaml`
 
-Written by `relais init`, editable by hand. Missing file = all default values. An invalid field prevents startup with `config.yaml invalide : <champ>: <message>`.
+Written by `relais init`, editable by hand. Missing file = all default values. An invalid field prevents startup with `invalid config.yaml: <field>: <message>`.
 
 | Key | Type | Default | Effect |
 |---|---|---|---|
@@ -122,7 +122,7 @@ Linear team members and GitHub permissions are not configured: they are read (Li
 
 `limits.perDayUsd` caps the sum of run costs since midnight **UTC**. A run's cost is the one reported by Claude Code at the end of the run.
 
-When the cap is reached: no new run starts, requests stay queued and Relais comments once per ticket per day « Budget journalier de Relais atteint : ce ticket reste en file jusqu'à demain (ou jusqu'à une hausse du plafond). ». Runs already launched run to completion. The queue restarts on its own when the day changes (the daemon re-evaluates the queue every minute) or after a restart with a raised cap.
+When the cap is reached: no new run starts, requests stay queued and Relais comments once per ticket per day « Daily budget of Relais reached: this ticket stays queued until tomorrow (or until the cap is raised). ». Runs already launched run to completion. The queue restarts on its own when the day changes (the daemon re-evaluates the queue every minute) or after a restart with a raised cap.
 
 The day's cost and the cap are shown in the UI and by `relais status`. **Per-run** caps (turns, duration, dollars) are set in `workflow.yml` ([`workflow.md`](workflow.md#limits)).
 

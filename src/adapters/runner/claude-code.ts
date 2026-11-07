@@ -169,7 +169,7 @@ export function worktreeReader(sandboxes: Pick<SandboxProvider, 'exec'> | undefi
   const unread = (code: number | undefined, stderr: string) => {
     if (warned) return;
     warned = true;
-    warn(`Attention : run ${runId} : worktree illisible (${code === undefined ? 'exec refusé' : `code ${code}`}) : ${stderr.split('\n')[0]!.trim().slice(0, STDERR_LINE_MAX)}. Ses échecs ne comptent pas pour le détecteur de boucle.`);
+    warn(`Warning: run ${runId}: unreadable worktree (${code === undefined ? 'exec refused' : `code ${code}`}): ${stderr.split('\n')[0]!.trim().slice(0, STDERR_LINE_MAX)}. Its failures do not count for the loop detector.`);
   };
   return async () => {
     try {

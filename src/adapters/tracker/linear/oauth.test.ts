@@ -36,6 +36,6 @@ describe('oauth', () => {
 
   it('throws when not connected', async () => {
     const m = new TokenManager({ load: () => undefined, save: () => {}, clientId: 'c', clientSecret: 's' });
-    await expect(m.get()).rejects.toThrow('Linear non connecté');
+    await expect(m.get()).rejects.toThrow('Linear not connected');
   });
 });

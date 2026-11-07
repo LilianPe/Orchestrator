@@ -144,7 +144,7 @@ describe('runCleanVerify', () => {
   it('a forge at an ext:: URL runs nothing: the fetch reads no config of the repository that would allow it', async () => {
     const witness = join(mkdtempSync(join(tmpdir(), 'factory-ext-')), 'witness');
     const { req } = setup({ originUrl: `ext::sh -c touch% ${witness.replaceAll('\\', '/')}` });
-    await expect(runCleanVerify(req)).rejects.toThrow(/branche de base non lue/);
+    await expect(runCleanVerify(req)).rejects.toThrow(/base branch not read/);
     expect(existsSync(witness)).toBe(false);
   });
 
@@ -173,7 +173,7 @@ describe('runCleanVerify', () => {
   it('a sandbox that no longer answers rejects: an infrastructure failure, its container destroyed', async () => {
     const { sandboxes, req } = setup({ commands: ['stuck'], deadlineMs: 20 });
     sandboxes.hang = (c) => c === 'stuck';
-    await expect(runCleanVerify(req)).rejects.toThrow(/ne répond plus/);
+    await expect(runCleanVerify(req)).rejects.toThrow(/no longer responds/);
     expect(sandboxes.active()).toEqual([]);
   });
 
@@ -188,13 +188,13 @@ describe('runCleanVerify', () => {
       if (argv.at(-1) === 'stuck') hanging = true;
       return exec(id, argv, opts);
     };
-    await expect(runCleanVerify(req)).rejects.toThrow(/ne répond plus/);
+    await expect(runCleanVerify(req)).rejects.toThrow(/no longer responds/);
   });
 
   it('gives up on a forge that does not answer', async () => {
     const hung: Exec = (cmd, args, opts) => (args.includes('fetch') ? new Promise(() => {}) : execCmd(cmd, args, opts));
     const { req } = setup({ exec: hung, deadlineMs: 500 });
-    await expect(runCleanVerify(req)).rejects.toThrow(/forge ne répond plus/);
+    await expect(runCleanVerify(req)).rejects.toThrow(/forge no longer responds/);
   });
 
   it('keeps the credentials of the URL out of what reaches the ticket', async () => {
@@ -304,7 +304,7 @@ describe('runCleanVerify', () => {
 
     it('a config the base refuses is a breakdown, not the agent\'s to fix', async () => {
       const { req } = setup({}, 'checks: { disable: [all] }\n');
-      await expect(runCleanVerify(req)).rejects.toThrow(/config\.yml refusé/);
+      await expect(runCleanVerify(req)).rejects.toThrow(/config\.yml refused/);
     });
 
     it('an origin that does not answer is a breakdown', async () => {
@@ -352,7 +352,7 @@ describe('runCleanVerify', () => {
       const { repo, req } = setup({ commands: [] });
       symlinkSync('/etc/passwd', join(repo, 'link'));
       commit(repo, 'x');
-      expect((await runCleanVerify(req)).failures[0]!.output).toContain('lien symbolique sortant');
+      expect((await runCleanVerify(req)).failures[0]!.output).toContain('symbolic link pointing outside');
     });
 
     it('only what the branch changed since it left the base counts, not what the base got since', async () => {
@@ -397,7 +397,7 @@ describe('runCleanVerify', () => {
     it('a diff too big to read blocks, never throws', async () => {
       const exec: Exec = async (cmd, args, opts) => (args.includes('--patch') ? { stdout: '', stderr: '', code: 1, overflow: true } : execCmd(cmd, args, opts));
       const { req } = setup({ commands: [], exec });
-      expect((await runCleanVerify(req)).failures).toEqual([{ command: 'factory/anti-triche', exitCode: 1, output: expect.stringContaining('Diff trop gros') }]);
+      expect((await runCleanVerify(req)).failures).toEqual([{ command: 'factory/anti-triche', exitCode: 1, output: expect.stringContaining('Diff too large') }]);
     });
 
     it('a change left uncommitted is no change for the freeze', async () => {

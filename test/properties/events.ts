@@ -118,7 +118,7 @@ const PAYLOADS: { [K in EventType]: fc.Arbitrary<EventPayloads[K]> } = {
   'pr.closed': pr,
   'pr.reviewed': fc.record({ pr, kind: fc.constantFrom('review' as const, 'comment' as const), author, body }).map(({ pr: p, ...r }) => ({ ...p, ...r })),
   'pr.conflicted': pr.map((p) => ({ ...p, headSha: 'aaa', baseRef: 'main' })),
-  'pr.merge_refused': pr.chain((p) => fc.constantFrom({ ...p, reason: 'la branche a reçu un push depuis la review', headMoved: true }, { ...p, reason: 'GitHub refuse le merge (conflit)', headMoved: false })),
+  'pr.merge_refused': pr.chain((p) => fc.constantFrom({ ...p, reason: 'the branch received a push since the review', headMoved: true }, { ...p, reason: 'GitHub refuses the merge (conflit)', headMoved: false })),
   'publish.done': fc.record({ runId: fc.constant('r1'), job, sha: fc.constantFrom('aaa', 'bbb') }),
   'publish.refused': fc.record({ runId: fc.constant('r1'), job, sha: fc.constantFrom('aaa', 'bbb'), reason: fc.constant('la branche a bougé') }),
   // A push on the default branch that lands or reverts one of the ticket's PRs, and a CI run attempt (ORC-278).
