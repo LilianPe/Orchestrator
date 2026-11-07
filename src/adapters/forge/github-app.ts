@@ -19,6 +19,8 @@ export interface HttpRequest {
 export interface HttpResponse {
   ok: boolean;
   status: number;
+  /** Read for the rate limit headers of a refusal (`retry-after`, `x-ratelimit-remaining`). */
+  headers?: { get(name: string): string | null };
   text(): Promise<string>;
 }
 
@@ -27,7 +29,7 @@ export type HttpClient = (url: string, init: HttpRequest) => Promise<HttpRespons
 
 export const fetchHttp: HttpClient = async (url, init) => {
   const res = await fetch(url, { method: init.method, headers: init.headers, body: init.body });
-  return { ok: res.ok, status: res.status, text: () => res.text() };
+  return { ok: res.ok, status: res.status, headers: res.headers, text: () => res.text() };
 };
 
 /** GitHub rejects installation tokens older than one hour; cache them with a safety margin. */
@@ -212,17 +214,31 @@ function validationErrors(data: object): string[] {
   return Array.isArray(errors) ? errors.flatMap((e: { message?: unknown }) => (typeof e?.message === 'string' ? [e.message] : [])) : [];
 }
 
+/**
+ * A refusal for the rate, not for the permission: GitHub answers both a primary and a secondary rate limit with a 403
+ * (or a 429), a `retry-after` header, `x-ratelimit-remaining: 0`, or a message that names it.
+ */
+function isRateLimit(res: HttpResponse, message: string): boolean {
+  return (
+    (res.status === 403 || res.status === 429) &&
+    (res.headers?.get('retry-after') != null || res.headers?.get('x-ratelimit-remaining') === '0' || /rate limit/i.test(message))
+  );
+}
+
 /** GitHub API failure with its status, so callers can fail closed on 404/403. */
 export class GitHubApiError extends Error {
   readonly status: number;
   /** GitHub's own `message`, for an answer worth repeating to a human (a merge refused). */
   readonly apiMessage?: string;
+  /** A rate limit, not a permission: never read as an answer about the repository. */
+  readonly rateLimited: boolean;
 
-  constructor(status: number, message: string, apiMessage?: string) {
+  constructor(status: number, message: string, apiMessage?: string, rateLimited = false) {
     super(message);
     this.name = 'GitHubApiError';
     this.status = status;
     if (apiMessage) this.apiMessage = apiMessage;
+    this.rateLimited = rateLimited;
   }
 }
 
@@ -337,7 +353,7 @@ export class GitHubAppAuth {
         typeof data === 'object' && data !== null && 'message' in data
           ? [String((data as { message: unknown }).message), ...validationErrors(data)].join(' : ')
           : text.slice(0, 200);
-      throw new GitHubApiError(res.status, `${apiLabel(method, path)}: ${res.status}${message ? ` ${message}` : ''}`, message || undefined);
+      throw new GitHubApiError(res.status, `${apiLabel(method, path)}: ${res.status}${message ? ` ${message}` : ''}`, message || undefined, isRateLimit(res, message));
     }
     if (!json) throw new Error(`${apiLabel(method, path)}: unreadable answer, not JSON${secret ? '' : `: ${excerpt(text)}`}`);
     return data as T;
@@ -536,14 +552,15 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
    * Whether an unchecked head is one of a repository with no CI (ORC-148): the head still has no check, the repository
    * no active Actions workflow of its own (a CI on `pull_request` only leaves the base unchecked; GitHub's dynamic
    * workflows, Pages or Dependabot, are no CI), and the PR's base commit no check either (a CI outside Actions that
-   * checks the base). Workflows unreadable (Actions permission missing) say CI; a 2xx answer without its list throws.
+   * checks the base). Workflows unreadable (Actions permission missing: a 403 or 404) say CI; a rate limit (a 403 too)
+   * and a 2xx answer without its list throw, so the effect is replayed.
    */
   private async withoutCi(repo: GitHubRepoRef, pr: PullRequestDto, token: string): Promise<boolean> {
     if (!pr.base) return false;
     const [head, workflows, base] = await Promise.all([
       this.checksFor(repo, pr.head.sha, token),
       this.allPages(`${repoApi(repo)}/actions/workflows`, 'workflows', 'a list of workflows', isWorkflow, token).catch((err: unknown) => {
-        if (err instanceof GitHubApiError && (err.status === 403 || err.status === 404)) return undefined;
+        if (err instanceof GitHubApiError && (err.status === 403 || err.status === 404) && !err.rateLimited) return undefined;
         throw err;
       }),
       this.checksFor(repo, pr.base.sha, token),

@@ -23,7 +23,7 @@ interface Call {
 }
 
 /** `raw` is sent as is, for an answer that is not JSON; `body` is sent as JSON. */
-type Route = (url: URL, init: HttpRequest, body: unknown) => { status?: number; body?: unknown; raw?: string } | undefined;
+type Route = (url: URL, init: HttpRequest, body: unknown) => { status?: number; body?: unknown; raw?: string; headers?: Record<string, string> } | undefined;
 
 function fakeHttp(routes: Route[], calls: Call[] = []): HttpClient {
   return async (url, init) => {
@@ -35,7 +35,8 @@ function fakeHttp(routes: Route[], calls: Call[] = []): HttpClient {
       if (res) {
         const status = res.status ?? 200;
         const text = res.raw ?? (res.body === undefined ? '' : JSON.stringify(res.body));
-        return { ok: status < 400, status, text: async () => text };
+        const headers = Object.fromEntries(Object.entries(res.headers ?? {}).map(([k, v]) => [k.toLowerCase(), v]));
+        return { ok: status < 400, status, headers: { get: (name: string) => headers[name.toLowerCase()] ?? null }, text: async () => text };
       }
     }
     throw new Error(`unexpected ${init.method} ${parsed.pathname}`);
@@ -611,6 +612,23 @@ describe('GitHubAppForge.mergePr (ORC-148)', () => {
   it('workflows unreadable (Actions permission missing, 403): an answer, taken as a CI, not an error', async () => {
     const denied: Route = (url) => (url.pathname === '/repos/acme/app/actions/workflows' ? { status: 403, body: { message: 'Resource not accessible by integration' } } : undefined);
     const { forge } = makeForge([tokenRoute(42), pullRoute(withBase), repoRoute(), ...headChecks([]), denied, ...baseChecks([])], { installationId: 42 });
+    expect(await forge.mergePr('/repo', 7, 'abc123', { unchecked: true })).toEqual({ merged: false, reason: 'checks_missing' });
+  });
+
+  it.each([
+    ['a retry-after header', { 'retry-after': '60' }, 'Forbidden'],
+    ['no request left (x-ratelimit-remaining: 0)', { 'x-ratelimit-remaining': '0' }, 'Forbidden'],
+    ['a rate limit message, without its headers', {}, 'API rate limit exceeded for installation ID 42.'],
+  ])('a 403 on the workflows with %s is a rate limit, not a CI: it rejects, never merges, so the effect is replayed', async (_case, headers, message) => {
+    const limited: Route = (url) => (url.pathname === '/repos/acme/app/actions/workflows' ? { status: 403, headers, body: { message } } : undefined);
+    const { forge, calls } = makeForge([tokenRoute(42), pullRoute(withBase), repoRoute(), ...headChecks([]), limited, ...baseChecks([]), mergeRoute(200, { merged: true })], { installationId: 42 });
+    await expect(forge.mergePr('/repo', 7, 'abc123', { unchecked: true })).rejects.toMatchObject({ status: 403, rateLimited: true });
+    expect(calls.some((c) => c.method === 'PUT')).toBe(false);
+  });
+
+  it('a 404 on the workflows (Actions not visible to the app) is still taken as a CI', async () => {
+    const hidden: Route = (url) => (url.pathname === '/repos/acme/app/actions/workflows' ? { status: 404, body: { message: 'Not Found' } } : undefined);
+    const { forge } = makeForge([tokenRoute(42), pullRoute(withBase), repoRoute(), ...headChecks([]), hidden, ...baseChecks([])], { installationId: 42 });
     expect(await forge.mergePr('/repo', 7, 'abc123', { unchecked: true })).toEqual({ merged: false, reason: 'checks_missing' });
   });
 
