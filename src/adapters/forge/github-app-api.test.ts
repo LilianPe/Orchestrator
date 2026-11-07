@@ -102,7 +102,7 @@ describe('GitHubAppApi', () => {
                 body: {
                   total_count: 3,
                   environments: [
-                    { name: 'protected', protection_rules: [{ type: 'required_reviewers', reviewers: [{ type: 'User' }] }] },
+                    { name: 'protected', protection_rules: [{ type: 'required_reviewers', reviewers: [{ type: 'User', reviewer: { login: 'alice' } }] }] },
                     { name: 'empty-reviewers', protection_rules: [{ type: 'required_reviewers', reviewers: [] }] },
                     { name: 'wait-timer', protection_rules: [{ type: 'wait_timer', wait_timer: 30 }] },
                   ],
@@ -119,6 +119,90 @@ describe('GitHubAppApi', () => {
       { name: 'wait-timer', requiredReviewers: false },
     ]);
     expect(calls.find((call) => call.url.includes('/environments'))!.url).toContain('per_page=100');
+  });
+
+  const workflowsDir = (body: unknown): Route => (url) => (url.pathname === '/repos/acme/app/contents/.github/workflows' ? { body } : undefined);
+  const environmentsRoute = (answer: (page: number) => unknown): Route => (url) =>
+    url.pathname === '/repos/acme/app/environments' ? { body: answer(Number(url.searchParams.get('page'))) } : undefined;
+
+  it.each([
+    ['an object, not a listing', { message: 'ok' }],
+    ['an entry without its path', [{ type: 'file', name: 'ci.yml' }]],
+  ])('rejects, never reads "no workflow", a 2xx listing of .github/workflows that is %s', async (_case, body) => {
+    const error = await makeApi([tokenRoute(), workflowsDir(body)]).listWorkflows('/repo').catch((e: Error) => e);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(/contents\/\.github\/workflows: unreadable answer, not a directory listing: /);
+  });
+
+  it('rejects a workflow file answered with no object, saying it is unreadable', async () => {
+    const api = makeApi([
+      tokenRoute(),
+      (url) => (url.pathname === '/repos/acme/app/contents/.github/workflows/ci.yml' ? { body: ['ci.yml'] } : undefined),
+      workflowsDir([{ type: 'file', name: 'ci.yml', path: '.github/workflows/ci.yml' }]),
+    ]);
+    await expect(api.listWorkflows('/repo')).rejects.toThrow(/workflows\/ci\.yml: unreadable answer, not a file: /);
+  });
+
+  it.each([
+    ['without its list', { total_count: 2 }],
+    ['with an environment without its name', { total_count: 1, environments: [{ protection_rules: [] }] }],
+    ['with protection rules that are no list', { total_count: 1, environments: [{ name: 'prod', protection_rules: { type: 'required_reviewers' } }] }],
+    ['with a reviewer rule without its reviewers', { total_count: 1, environments: [{ name: 'prod', protection_rules: [{ type: 'required_reviewers' }] }] }],
+  ])('rejects, never reads "no environment" or "no reviewer", environments answered %s', async (_case, body) => {
+    const error = await makeApi([tokenRoute(), environmentsRoute(() => body)]).listEnvironments('/repo').catch((e: Error) => e);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(/environments: unreadable answer, not a list of environments: /);
+  });
+
+  it('reads every page of environments, and rejects past ten full pages instead of stopping there', async () => {
+    const page = (n: number) => Array.from({ length: n === 2 ? 1 : 100 }, (_, i) => ({ name: `env-${n}-${i}`, protection_rules: [] }));
+    const two = await makeApi([tokenRoute(), environmentsRoute((n) => ({ total_count: 101, environments: n <= 2 ? page(n) : [] }))]).listEnvironments('/repo');
+    expect(two).toHaveLength(101);
+    const endless = makeApi([tokenRoute(), environmentsRoute(() => ({ total_count: 5000, environments: page(1) }))]);
+    await expect(endless.listEnvironments('/repo')).rejects.toThrow(/environments: more than 1000 entries, never read as complete/);
+  });
+
+  it.each([
+    ['the app is not installed on the repo', [(url: URL) => (url.pathname === '/repos/acme/app/installation' ? { status: 404, body: { message: 'Not Found' } } : undefined)], undefined],
+    ['the configured installation does not exist', [(url: URL) => (url.pathname === '/app/installations/42/access_tokens' ? { status: 404, body: { message: 'Not Found' } } : undefined)], 42],
+  ])('rejects, never reads "no CI", a 404 while resolving the installation: %s', async (_case, routes, installationId) => {
+    const listing: Route = workflowsDir([{ type: 'file', name: 'ci.yml', path: '.github/workflows/ci.yml' }]);
+    const api = new GitHubAppApi({ appId: '123', privateKey: privatePem, installationId, http: fakeHttp([...(routes as Route[]), listing]), exec, now: () => NOW });
+    await expect(api.listWorkflows('/repo')).rejects.toMatchObject({ status: 404 });
+  });
+
+  it('resolves the repository and its token once for every workflow file', async () => {
+    let gits = 0;
+    const counting: Exec = async (cmd, args, opts) => {
+      gits++;
+      return exec(cmd, args, opts);
+    };
+    const file = (name: string): Route => (url) =>
+      url.pathname === `/repos/acme/app/contents/.github/workflows/${name}` ? { body: { type: 'file', encoding: 'base64', content: Buffer.from(YAML).toString('base64') } } : undefined;
+    const routes = [tokenRoute(), workflowsDir([1, 2, 3].map((i) => ({ type: 'file', name: `w${i}.yml`, path: `.github/workflows/w${i}.yml` }))), file('w1.yml'), file('w2.yml'), file('w3.yml')];
+    const api = new GitHubAppApi({ appId: '123', privateKey: privatePem, installationId: 42, http: fakeHttp(routes), exec: counting, now: () => NOW });
+    expect(await api.listWorkflows('/repo')).toHaveLength(3);
+    expect(gits).toBe(1);
+  });
+
+  it('rejects a workflow file answered without its content, saying it is unreadable', async () => {
+    const api = makeApi([
+      tokenRoute(),
+      (url) => (url.pathname === '/repos/acme/app/contents/.github/workflows/ci.yml' ? { body: { message: 'ok' } } : undefined),
+      workflowsDir([{ type: 'file', name: 'ci.yml', path: '.github/workflows/ci.yml' }]),
+    ]);
+    await expect(api.listWorkflows('/repo')).rejects.toThrow(/workflows\/ci\.yml: unreadable answer, not a file: /);
+  });
+
+  it.each([
+    ['a reviewer that is null', [null]],
+    ['a reviewer without its type', [{}]],
+    ['a reviewer without the user or team behind it', [{ type: 'User', reviewer: null }]],
+  ])('rejects, never reads "protected", required reviewers listing %s', async (_case, reviewers) => {
+    const body = { total_count: 1, environments: [{ name: 'prod', protection_rules: [{ type: 'required_reviewers', reviewers }] }] };
+    await expect(makeApi([tokenRoute(), environmentsRoute(() => body)]).listEnvironments('/repo')).rejects.toThrow(
+      /environments: unreadable answer, not a list of environments: /,
+    );
   });
 
   it('surfaces API errors without leaking the installation token', async () => {
