@@ -95,6 +95,10 @@ describe('mapGithubWebhook', () => {
     expect(await mapGithubWebhook('check_suite', suite, ctx(tracked({ prNumber: 3 })))).toMatchObject([{ payload: { failures: ['GitHub Actions'] } }]);
   });
 
+  it("reads nothing from the factory's own check runs: its verdict is no CI (ORC-151)", async () => {
+    expect(await mapGithubWebhook('check_run', checkRunBody('failure', { name: 'factory/verify' }), ctx(tracked({ prNumber: 3 })))).toEqual([]);
+  });
+
   it('takes the verdict and the failed checks the forge reads on that head, and no red it reads otherwise', async () => {
     const t = tracked({ prNumber: 3 });
     const pr = (checks: PrInfo['checks'], failedChecks: string[] = []): PrInfo => ({ number: 3, url: 'https://pr/3', state: 'OPEN', branch: BRANCH, headSha: 'head1', checks, failedChecks });

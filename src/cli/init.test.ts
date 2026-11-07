@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { Exec } from '../adapters/exec.js';
-import { loadInstance, loadSecrets } from '../config/instance.js';
+import { loadInstance, loadSecrets, saveInstance } from '../config/instance.js';
 import { runInit, type InitIO } from './init.js';
 
 function scriptedIO(answers: string[], confirms: boolean[]): InitIO & { printed: string[] } {
@@ -69,5 +69,18 @@ describe('factory init', () => {
 
     expect(asked.filter((q) => q === 'Webhook signing secret')).toHaveLength(3);
     expect(loadSecrets(home).linear?.webhookSecret).toBe('whsecret');
+  });
+
+  it("replaces the repo's entry written in another form (git's `C:/x`, a trailing slash, another case on Windows), and stores a typed path resolved", async () => {
+    const home = mkdtempSync(join(tmpdir(), 'factory-init-home-'));
+    const repo = mkdtempSync(join(tmpdir(), 'factory-init-repo-'));
+    const old = `${repo.replaceAll('\\', '/')}/`;
+    const project = { id: 'old', repoPath: process.platform === 'win32' ? old.toUpperCase() : old, linearTeamKey: 'OLD' };
+    saveInstance(home, { port: 4100, host: '127.0.0.1', relay: { kind: 'none' }, projects: [project], limits: {} });
+    const exec: Exec = async (cmd, args) =>
+      cmd === 'git' && args[0] === 'rev-parse' ? { stdout: '', stderr: 'not a git repository', code: 128 } : { stdout: '', stderr: '', code: 0 };
+    const io = scriptedIO([`${repo}/`, 'REL', 'cid', 'csecret', 'whsecret', ''], [false]);
+    await runInit({ io, home, cwd: repo, createSmee: async () => 'https://smee.io/abc', exec });
+    expect(loadInstance(home).projects).toEqual([{ id: expect.any(String), repoPath: repo, linearTeamKey: 'REL' }]);
   });
 });

@@ -1,7 +1,7 @@
 import type { FeedbackItem } from '../../core/types.js';
 import { execCmd, execFailure, mustExec, type Exec, type ExecResult } from '../exec.js';
 import { REPO_PERMISSIONS, type RepoPermission, type RepoPermissions } from '../roles/types.js';
-import type { Forge, PrInfo } from './types.js';
+import { isFactoryCheck, type Forge, type PrInfo } from './types.js';
 
 /**
  * A bucket outside pass/skipping/fail/cancel/pending (empty, or new) is never green: it reads as `pending` (ORC-303), so the
@@ -34,7 +34,7 @@ function cut(s: string): { head: string; more: string } {
   const end = /[\uD800-\uDBFF]/.test(s[EXCERPT - 1]!) ? EXCERPT - 1 : EXCERPT;
   return { head: s.slice(0, end), more: '…' };
 }
-const excerpt = (out: string) => {
+export const excerpt = (out: string) => {
   const { head, more } = cut(out);
   return JSON.stringify(head) + more;
 };
@@ -110,7 +110,7 @@ export class GhCliForge implements Forge, RepoPermissions {
           throw execFailure('gh', args, r);
         }
       } else {
-        const list = parseChecks(args, r);
+        const list = parseChecks(args, r).filter((c) => !isFactoryCheck(c.name));
         checks = aggregateChecks(list.map((c) => c.bucket));
         failedChecks = list.filter((c) => c.bucket === 'fail' || c.bucket === 'cancel').map((c) => c.name);
       }

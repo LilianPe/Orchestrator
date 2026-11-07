@@ -158,7 +158,7 @@ function sessionEvents(body: any, author: string, projectId: string, ctx: MapCon
  * The reply to a block's comment, written on the ticket (ORC-196): a member's comment while the factory waits for one.
  * Any other comment stays between humans, and is not journaled. A comment posted once the block's comment is visible
  * finds the block committed: the read cannot miss it. Dropped: what no user signed (the factory's own comments, an
- * integration, Slack), what starts with a mention (`@relais` opens its own session, `@someone` talks to them), and
+ * integration, Slack), what starts with a mention (`@factory` opens its own session, `@someone` talks to them), and
  * `/refreeze`, which is no instruction for the agent. A thread under any comment counts as well as the ticket's. A reply
  * is masked and classified as a session's is (ORC-180). A comment outside a block does not enter the human inbox: it is
  * not addressed to the factory, and an agent would read it; a session is how one speaks to the agent at work.

@@ -6,6 +6,9 @@ import { promisify } from 'node:util';
 import { systemEnv } from '../adapters/exec.js';
 import type { VerifyFailure } from './types.js';
 
+/** The check run of `verify`'s commands, on the commit the factory pushed (ORC-151). */
+export const VERIFY_CHECK = 'factory/verify';
+
 export interface VerifyResult {
   ok: boolean;
   failures: VerifyFailure[];

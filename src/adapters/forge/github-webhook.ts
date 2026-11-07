@@ -1,7 +1,7 @@
 import { TRUSTED, type CiRunPayload, type FactoryEvent, type PrPayload, type PushedCommit, type Taint, type TicketState } from '../../core/types.js';
 import { verifyLinearSignature } from '../tracker/linear/webhook.js';
 import { checkRunBucket } from './github-app.js';
-import type { PrInfo } from './types.js';
+import { isFactoryCheck, type PrInfo } from './types.js';
 
 /**
  * `X-Hub-Signature-256` is `sha256=<hex HMAC-SHA256 of the raw body>`: the HMAC Linear signs with, under a
@@ -114,6 +114,8 @@ async function checkedPr(repo: string, check: any, ctx: GithubMapContext): Promi
 async function checks(body: any, kind: 'check_run' | 'check_suite', repo: string, ctx: GithubMapContext): Promise<Mapped> {
   const check = body[kind];
   if (body.action !== 'completed' || typeof check?.head_sha !== 'string') return NOTHING;
+  // The factory's own verdict is no CI; its check suite, named by no check, the forge's reading below leaves out.
+  if (kind === 'check_run' && isFactoryCheck(check.name ?? '')) return NOTHING;
   const found = await checkedPr(repo, check, ctx);
   if (!found) return NOTHING;
   const { ticket: t, ref } = found;

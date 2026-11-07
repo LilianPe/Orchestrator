@@ -98,7 +98,8 @@ export class FakeForge implements Forge, ForgeWriter, RepoPermissions {
 
   async upsertCheckRun(_repoPath: string, req: CheckRunRequest): Promise<{ id: number; deduplicated: boolean }> {
     this.answer();
-    const existing = this.checkRuns.find((c) => c.sha === req.sha && c.externalId === req.externalId);
+    // As GitHub's adapter: among the sha's runs of that name.
+    const existing = this.checkRuns.find((c) => c.sha === req.sha && c.name === req.name && c.externalId === req.externalId);
     if (existing) {
       Object.assign(existing, req);
       return { id: existing.id, deduplicated: true };

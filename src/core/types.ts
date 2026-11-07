@@ -255,7 +255,8 @@ export interface EventPayloads {
    * freeze read with it (ORC-131), on both verdicts, recorded once the run goes on to the build. `sha`: the commit it
    * found green (ORC-151), the only one a merge may then carry; absent on the `red` check and on older rows.
    */
-  'verify.passed': { runId: string; job: string; output?: AgentOutput; red?: RedCause; frozen?: FrozenTests; sha?: string };
+  /** `commands`: what `verify` ran on `sha`, for its check on the forge (ORC-151); absent when it ran nothing again. */
+  'verify.passed': { runId: string; job: string; output?: AgentOutput; red?: RedCause; frozen?: FrozenTests; sha?: string; commands?: readonly string[] };
   /** `tree`: fingerprint of the content checked when the check failed: the commit's tree in a clean check, absent outside git (ORC-187). */
   'verify.failed': { runId: string; job: string; failures: VerifyFailure[]; tree?: string; red?: RedCause; frozen?: FrozenTests };
   /**
