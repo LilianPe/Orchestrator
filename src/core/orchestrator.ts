@@ -14,7 +14,6 @@ import {
   SANDBOX_HOME,
   SETTINGS_TARGET,
   WORKSPACE_TARGET,
-  type NetworkLevel,
   type Sandbox,
   type SandboxMount,
   type SandboxProvider,
@@ -23,7 +22,7 @@ import { ActivityRelay } from '../adapters/tracker/activity-relay.js';
 import { IssueNotFoundError, labelEchoKey, stateEchoKey, type ActivityInput, type Tracker, type TrackerIssue } from '../adapters/tracker/types.js';
 import type { Workspace, WorkspaceManager } from '../adapters/workspace/types.js';
 import { NO_REPO_VARIABLES, type RepoVariables } from '../config/repo-variables.js';
-import type { RepoConfig } from '../config/repo-config.js';
+import { parseRepoConfig, RepoConfigError, type RepoConfig, type RepoConfigRead } from '../config/repo-config.js';
 import type { JobSpec, Workflow } from '../config/workflow-schema.js';
 import type { EffectRetry } from '../runtime/outbox.js';
 import { Worker } from '../runtime/worker.js';
@@ -46,7 +45,8 @@ import type { Clock } from './clock.js';
 import type { Effect } from './decision.js';
 import { repairedEvent } from './dead-letter.js';
 import { NO_PLAN, planDecision } from './decision-plan.js';
-import { blockedLabelChange, goesThroughFreeze, HUMAN_EVENTS, mayCheck, mayPublish, RECONCILE_MS, reconcileTicket, refusesDevWork, sensitivePathsAtLaunch, taintedKnowledge } from './engine.js';
+import { blockFacts, composeBlockComment, type BlockFacts, type BlockStatus } from './block-comment.js';
+import { blockedLabelChange, goesThroughFreeze, HUMAN_EVENTS, mayCheck, mayPublish, RECONCILE_MS, reconcileTicket, refusesDevWork, sensitivePathsAtLaunch, stepOf, taintedKnowledge } from './engine.js';
 import { attemptLabels, packFingerprints } from './attempt-labels.js';
 import { pickupFailures } from './pickup.js';
 import { buildPrompt, formatFeedback, formatVerifyFailures, readConventions, withHumanInbox } from './prompt.js';
@@ -69,6 +69,7 @@ import {
   type TicketState,
   type VerifyFailure,
   TRUSTED,
+  spentTokens,
 } from './types.js';
 import { runSealedSetup } from './sealed-setup.js';
 import { runCleanVerify, type CleanVerifier } from './clean-verify.js';
@@ -81,6 +82,8 @@ import { isTestFile } from '../checks/test-files.js';
 import { ANTI_CHEAT_CHECK, ANTI_CHEAT_OK } from '../checks/anti-cheat.js';
 import { mdCode } from '../checks/markdown.js';
 import { parseStatus } from '../adapters/workspace/git-workspaces.js';
+import { agentPolicy, type EgressPolicy } from '../network/levels.js';
+import { REPO_CONFIG_REFUSED } from './block-cause.js';
 import { readSecurityLog, refusalSummary } from '../network/security-log.js';
 
 /** Meta key of the head a ticket's tests step started on (ORC-123). */
@@ -207,8 +210,13 @@ export interface OrchestratorDeps {
    * tests (ORC-131). ORC-212 will add the ticket's spec.
    */
   fullReadPaths?: (ticket: TicketState) => readonly string[];
-  /** What the runner gets of the repository, at each launch (ORC-211). Absent: nothing. */
-  repoVariables?: (project: ProjectRuntime, config?: RepoConfig) => Promise<RepoVariables>;
+  /** What the runner gets of the repository, from its config (ORC-211). Absent: nothing. */
+  repoVariables?: (project: ProjectRuntime, config: RepoConfig) => Promise<RepoVariables>;
+  /**
+   * `.factory/config.yml` on the repository's default branch, read once at each launch (ORC-209 C); it rejects on an
+   * invalid file. Absent: the socle, as for a repository without the file.
+   */
+  repoConfig?: (project: ProjectRuntime, read?: RepoConfigRead) => Promise<RepoConfig>;
   /** Where a project's base branch is fetched (ORC-151): required with `sandboxes`. */
   originUrl?: (project: ProjectRuntime) => Promise<string>;
   dailyBudgetUsd?: number;
@@ -320,6 +328,9 @@ const PUSHED = 'la branche a reçu un push depuis la review';
 type Verified = VerifyResult & { sha?: string | undefined; commands?: readonly string[] };
 
 const HOST_CHECKS_OFF ="aucun sandbox (FACTORY_CONTAINER_CLI) et FACTORY_ALLOW_HOST_VERIFY n'est pas à 1 : je ne lance pas le code de l'agent sur l'hôte.";
+
+/** A block made out of a decision, its step to resume as the engine's `block` journals it: only where a reply resumes it (ORC-196). */
+const blockedOn = (workflow: Workflow, reason: string, job: string): InternalEvent => ({ type: 'ticket.blocked', reason, ...(workflow.blockComment ? { job } : {}) });
 
 export class Orchestrator {
   private background = new Map<Promise<void>, string | undefined>();
@@ -697,12 +708,10 @@ export class Orchestrator {
    * a fresh context that never sees the ticket's (ORC-217). The run's refusals dir, read-write, so the
    * hook's log outlives the sandbox. The pack and the run settings read-only.
    * A `trunk-readonly` job gets its worktree read-write too: only `--permission-mode plan` keeps it
-   * from writing, as on the host. The network is applied by the egress proxy (ORC-213): `limited`, the
-   * doc's default, for the agent; `none` for a check (the red sandbox).
-   * ponytail: every agent run `limited`, `allow` empty; `stepPolicy` (src/network/levels.ts) takes over
-   * once ORC-209 C reads the repository's config at the launch.
+   * from writing, as on the host. The network is applied by the egress proxy (ORC-213): the repository's
+   * level for the agent (`agentPolicy`, from the config read at the launch); `none` for a check (the red sandbox).
    */
-  private async openSandbox(sandboxes: SandboxProvider, project: ProjectRuntime, ticketId: string, ws: Workspace, runId: string, ticketSession: boolean, network: NetworkLevel = 'limited'): Promise<Sandbox> {
+  private async openSandbox(sandboxes: SandboxProvider, project: ProjectRuntime, ticketId: string, ws: Workspace, runId: string, ticketSession: boolean, policy: EgressPolicy): Promise<Sandbox> {
     if (!this.d.sessionsDir || !this.d.runsDir) throw new Error('sessionsDir and runsDir are required with sandboxes');
     const runDir = join(this.d.runsDir, runId);
     const claudeDir = ticketSession ? join(this.d.sessionsDir, project.id, ticketId) : join(runDir, 'claude');
@@ -712,7 +721,8 @@ export class Orchestrator {
       runId,
       ticketId,
       workspacePath: ws.path,
-      network,
+      network: policy.level,
+      ...(policy.allow.length ? { allow: policy.allow } : {}),
       requirements: DEFAULT_REQUIREMENTS,
       // Its git dir is in its worktree, its own (ORC-317): the repository's, which git reads on the host, is never mounted.
       mounts: [
@@ -734,8 +744,7 @@ export class Orchestrator {
    * agent's is opened (ORC-211), on the host without sandboxes, where it gets no secret. It throws on a
    * failure; the launch then removes the worktree, so the next attempt runs it again.
    */
-  private async runSetup(project: ProjectRuntime, ticketId: string, ws: Workspace, runId: string, vars: RepoVariables): Promise<void> {
-    const commands = project.workflow.workspace.setup;
+  private async runSetup(project: ProjectRuntime, ticketId: string, ws: Workspace, runId: string, vars: RepoVariables, commands: string[]): Promise<void> {
     const sandboxes = this.d.sandboxes;
     if (!sandboxes) {
       const res = await this.d.verify(ws.path, commands, undefined, vars.env);
@@ -758,13 +767,24 @@ export class Orchestrator {
     if (purged.length) this.log('warn', `setup of ${ticketId}: secret found and purged in ${purged.join(', ')}`);
   }
 
-  /** What the runner gets of the repository (ORC-211): none when it cannot be read, the launch goes on. */
+  /** `.factory/config.yml` on the default branch (ORC-209 C): it rejects on an invalid file. */
+  private async repoConfigOf(project: ProjectRuntime, read?: RepoConfigRead): Promise<RepoConfig> {
+    return this.d.repoConfig ? this.d.repoConfig(project, read) : parseRepoConfig(undefined);
+  }
+
+  /**
+   * What the runner gets of the repository (ORC-211), from `config` when the caller has it (the launch's read, kept on
+   * the run; `verify`'s), else read here without a fetch, for a run recorded before ORC-209 C: none when it cannot be
+   * read, the caller goes on.
+   */
   private async repoVariablesOf(project: ProjectRuntime, config?: RepoConfig): Promise<RepoVariables> {
     if (!this.d.repoVariables) return NO_REPO_VARIABLES;
-    return this.d.repoVariables(project, config).catch((err: Error) => {
-      this.log('warn', `${project.id}: repository variables not read: ${err.message}`);
+    try {
+      return await this.d.repoVariables(project, config ?? (await this.repoConfigOf(project, { fetch: false })));
+    } catch (err) {
+      this.log('warn', `${project.id}: repository variables not read: ${(err as Error).message}`);
       return NO_REPO_VARIABLES;
-    });
+    }
   }
 
   /**
@@ -786,16 +806,16 @@ export class Orchestrator {
       if (!sandboxes) {
         if (!this.d.hostChecks) throw new Error(HOST_CHECKS_OFF);
         uncommitted = await this.d.workspaces.uncommitted(run.cwd);
-        const { env } = await this.repoVariablesOf(project);
+        const { env } = await this.repoVariablesOf(project, run.repoConfig);
         runTests = async (cmd) => {
           const res = await this.d.verify(run.cwd, [cmd], undefined, env);
           return res.ok ? { exitCode: 0, output: '' } : { exitCode: res.failures[0]!.exitCode, output: res.failures[0]!.output };
         };
       } else {
         // Not the ticket session: an empty per-run `~/.claude`, as any run that does not resume it.
-        const box = (sandbox = await this.openSandbox(sandboxes, project, run.ticketId, { path: run.cwd }, redRunId, false, 'none'));
+        const box = (sandbox = await this.openSandbox(sandboxes, project, run.ticketId, { path: run.cwd }, redRunId, false, { level: 'none', allow: [] }));
         // The tests must fail on the missing behaviour, not on a variable the repository declares (ORC-211).
-        const { env } = await this.repoVariablesOf(project);
+        const { env } = await this.repoVariablesOf(project, run.repoConfig);
         const status = await sandboxes.exec(box.id, ['git', 'status', '--porcelain', '-z', '--untracked-files=all']);
         if (status.code !== 0) throw new Error(`git status : ${status.stderr.trim()}`);
         uncommitted = parseStatus(status.stdout);
@@ -831,7 +851,7 @@ export class Orchestrator {
       // Read before the commands: what they would commit is not what they checked.
       const sha = await this.d.workspaces.head(run.cwd);
       if (sha && sha === green) return { ok: true, failures: [], sha };
-      const verified = job.verify.length > 0 ? await this.d.verify(run.cwd, job.verify, undefined, (await this.repoVariablesOf(project)).env) : { ok: true, failures: [] };
+      const verified = job.verify.length > 0 ? await this.d.verify(run.cwd, job.verify, undefined, (await this.repoVariablesOf(project, run.repoConfig)).env) : { ok: true, failures: [] };
       // `factory/tests-gelés` (ORC-131), blocking from the first ticket, on top of the job's commands.
       const frozen = goesThroughFreeze(t, job) ? await this.checkFrozen(project, run.cwd, t.frozenTests!) : [];
       return { ...verified, ok: verified.ok && frozen.length === 0, failures: [...verified.failures, ...frozen], sha, commands: job.verify };
@@ -896,17 +916,28 @@ export class Orchestrator {
   }
 
   /**
-   * Blocks a ticket from outside an event (the agent's question through /agent/ask). It runs in
-   * the ticket's worker task, so its read-modify-write never interleaves with a decision's, and
-   * after the events accepted before it (their inbox write in flight included).
+   * A block made out of a decision (a launch that failed, a refused pickup): the same comment as
+   * any other, without an effect's key. A version frozen before ORC-196 says it the way it did (`frozen`).
    */
-  async blockTicket(projectId: string, ticketId: string, reason: string): Promise<void> {
-    await Promise.all(this.writes);
-    await this.worker.kick();
-    await this.worker.exclusive({ projectId, ticketId }, async () => {
-      const t = await this.d.store.getTicket(projectId, ticketId);
-      if (t) await this.apply(t, { type: 'ticket.blocked', reason });
-    });
+  private async tellBlock(project: ProjectRuntime, t: TicketState, facts: BlockFacts, frozen: (t: TicketState) => Promise<void>): Promise<void> {
+    if (!project.workflow.blockComment) return frozen(t);
+    // A key of its own: it carries the marker that tells a comment of the factory from a human's reply.
+    await this.d.tracker.comment(t.ticketId, composeBlockComment(facts, await this.blockStatus(t)), `block:${this.newId()}`);
+  }
+
+  /** The state line of a block's comment. An unknown value is said as such: reading it must not stop the comment. */
+  private async blockStatus(t: TicketState): Promise<BlockStatus> {
+    const sha = t.worktreePath ? await this.d.workspaces.head(t.worktreePath).catch(() => undefined) : undefined;
+    const runs = await this.d.store.ticketRuns(t.projectId, t.ticketId).catch((): RunRecord[] => []);
+    const reported = runs.filter((r) => r.tokens !== undefined);
+    const ended = runs.filter((r) => r.endedAt !== undefined);
+    return {
+      branch: t.branch,
+      sha,
+      ci: t.prChecks,
+      tokens: reported.length ? reported.reduce((n, r) => n + spentTokens(r.tokens!), 0) : undefined,
+      durationMs: ended.length ? ended.reduce((n, r) => n + r.endedAt! - r.startedAt, 0) : undefined,
+    };
   }
 
   async tick(): Promise<void> {
@@ -1331,6 +1362,8 @@ export class Orchestrator {
         return this.setLabels(ticketId, c.add, c.remove);
       case 'comment':
         return this.commentOnce(ticketId, c.body, key);
+      case 'block_comment':
+        return this.commentOnce(ticketId, async () => composeBlockComment(c.block, await this.blockStatus(t)), key);
       case 'ack':
         return this.ack(t, c, key);
       case 'activity': {
@@ -1381,10 +1414,10 @@ export class Orchestrator {
   }
 
   /** A comment of an outbox effect, written unless its first execution already wrote it (ORC-162). */
-  private async commentOnce(ticketId: string, body: string, key: EffectKey): Promise<EffectOutcome | void> {
+  private async commentOnce(ticketId: string, body: string | (() => Promise<string>), key: EffectKey): Promise<EffectOutcome | void> {
     const found = key.replay ? await this.d.tracker.findComment(ticketId, key.id) : undefined;
     if (found !== undefined) return { deduplicated: true, ref: found };
-    await this.d.tracker.comment(ticketId, body, key.id);
+    await this.d.tracker.comment(ticketId, typeof body === 'string' ? body : await body(), key.id);
   }
 
   /** Opens the session's plan (ORC-171), in the session of the delegation that asks for it. */
@@ -1722,12 +1755,15 @@ export class Orchestrator {
         if (r && r.status === 'running' && !this.handles.has(r.id)) await this.d.store.putRun({ ...r, status: 'failure', endedAt: this.d.clock.now() });
         if (!this.handles.has(fresh.activeRunId)) events.push({ type: 'run.cleared' });
       }
-      const reason = `Erreur au lancement : ${(err as Error).message}`;
-      fresh = await this.apply(fresh, ...events, { type: 'ticket.blocked', reason });
+      // A file the repository has to fix is not a breakdown of the factory: the Flux shows it as such (`repo_config`).
+      const reason = err instanceof RepoConfigError ? `${REPO_CONFIG_REFUSED}${err.message}` : `Erreur au lancement : ${(err as Error).message}`;
+      fresh = await this.apply(fresh, ...events, blockedOn(project.workflow, reason, job.name));
       // The ticket is blocked: a failed notice must not fail the effect, whose retry would start again.
       try {
-        const session = opts.linearSessionId ?? (await this.sessionFor(fresh));
-        await this.d.tracker.activity(session, { type: 'error', body: reason });
+        await this.tellBlock(project, fresh, blockFacts({ reason, step: stepOf(project.workflow, job.name), tried: [`Le lancement de ${job.name}.`] }), async (failed) => {
+          const session = opts.linearSessionId ?? (await this.sessionFor(failed));
+          await this.d.tracker.activity(session, { type: 'error', body: reason });
+        });
       } catch (e) {
         this.log('warn', `could not post the launch error of ${ticketId}: ${(e as Error).message}`);
       }
@@ -1778,11 +1814,14 @@ export class Orchestrator {
       const failures = await pickupFailures(wf.tracker.pickup.checks, issue, project.repoPath, workspaces);
       if (failures.length) {
         this.d.scheduler.release(key);
-        t = await this.apply(t, { type: 'ticket.blocked', reason: failures.join(' ') });
-        const session = await this.sessionFor(t);
-        await tracker.activity(session, {
-          type: 'elicitation',
-          body: `Je ne peux pas commencer ce ticket :\n${failures.map((f) => `- ${f}`).join('\n')}\nCorrigez puis répondez dans ce fil.`,
+        const reason = failures.join(' ');
+        t = await this.apply(t, blockedOn(project.workflow, reason, job.name));
+        await this.tellBlock(project, t, blockFacts({ reason, step: 'intake', tried: failures, question: 'Pouvez-vous corriger cela, puis répondre ici ?' }), async (refused) => {
+          const session = await this.sessionFor(refused);
+          await tracker.activity(session, {
+            type: 'elicitation',
+            body: `Je ne peux pas commencer ce ticket :\n${failures.map((f) => `- ${f}`).join('\n')}\nCorrigez puis répondez dans ce fil.`,
+          });
         });
         return;
       }
@@ -1802,11 +1841,16 @@ export class Orchestrator {
     }
     // A fresh worktree is not set up until its setup succeeds: a launch ending before removes it, or
     // the next prepare would find it there (not fresh) and setup would never run.
-    let setUp = !(ws.fresh && wf.workspace.setup.length);
+    let setUp = !ws.fresh;
     let sandbox: Sandbox | undefined;
     // Until pump has it, the sandbox is the launch's: whatever ends the launch before destroys it.
     let handedOver = false;
     try {
+      // Read once, on the default branch (ORC-209 C): an invalid file refuses the launch, and a fresh worktree goes with
+      // it. A fresh worktree's `prepare` has just fetched the forge, as a question's trunk always does.
+      const config = await this.repoConfigOf(project, { fetch: !ws.fresh && job.workspace !== 'trunk-readonly' });
+      const setup = config.setup ? [config.setup] : wf.workspace.setup;
+      setUp ||= !setup.length;
       t = await this.ticket(project.id, ticketId);
       if (job.queue === 'dev') t = await this.apply(t, { type: 'workspace.prepared', path: ws.path, port: ws.port, branch: ws.branch });
       if (job.onStart.move && t.logical !== job.onStart.move) await this.move(project, t, job.onStart.move);
@@ -1855,15 +1899,15 @@ export class Orchestrator {
       const claudeSessionId = held ?? this.newId();
       const sessionRole = roleOf(job, ticketSession);
 
-      const vars = await this.repoVariablesOf(project);
+      const vars = await this.repoVariablesOf(project, config);
       if (!setUp) {
         await store.setMeta(setupPendingKey(ws.path), '1');
-        await this.runSetup(project, ticketId, ws, runId, vars);
+        await this.runSetup(project, ticketId, ws, runId, vars, setup);
         await store.setMeta(setupPendingKey(ws.path), '');
       }
       setUp = true;
       // Opened after the cheap exits above and after the setup, whose container is gone by now (ORC-211).
-      sandbox = this.d.sandboxes && (await this.openSandbox(this.d.sandboxes, project, ticketId, ws, runId, ticketSession));
+      sandbox = this.d.sandboxes && (await this.openSandbox(this.d.sandboxes, project, ticketId, ws, runId, ticketSession, agentPolicy(config)));
       // In each run's prompt, not the system prompt: read again at each attempt, never frozen at a resume
       // (ORC-128). The reset below keeps `.claude/CLAUDE.md`: the order does not matter.
       const conventions = readConventions(ws.path);
@@ -1871,8 +1915,8 @@ export class Orchestrator {
       // (`--setting-sources ""`): defence in depth, for what ORC-128 did not trap (ORC-284).
       await workspaces.resetClaudeDir(ws.path);
       // The head the tests step starts on (ORC-123): its red check reads the step's own commits from it. A return
-      // to the step keeps the first one, so its earlier commits still count; a relaunch is the same step.
-      if (job.red && kind !== 'verify_failures' && !opts.relaunchOf) await store.setMeta(redBaseKey(project.id, ticketId), (await workspaces.head(ws.path)) ?? '');
+      // to the step, a reply or a relaunch keeps the first one, so its earlier commits still count; only a step that has none takes one.
+      if (job.red && ((!kind && !opts.relaunchOf) || !(await store.getMeta(redBaseKey(project.id, ticketId))))) await store.setMeta(redBaseKey(project.id, ticketId), (await workspaces.head(ws.path)) ?? '');
 
       let input: { kind: InputKind; text: string } | undefined;
       if (from) {
@@ -1920,6 +1964,7 @@ export class Orchestrator {
         labels,
         sensitivePaths,
         ...(input ? { input } : {}),
+        repoConfig: config,
       };
       // The mark, then the ticket, then the run (`startHandled`, ORC-277): a dev ticket holds its run before
       // the run is written, so recover() finds it whichever write a crash falls after. The feedback stays

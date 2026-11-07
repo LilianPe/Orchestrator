@@ -135,7 +135,7 @@ describe('decide — a classified message (ORC-180)', () => {
 
   describe('a trusted event starts a run that empties an untrusted inbox (I12)', () => {
     const untrusted = { taint: 'untrusted' as const };
-    const label = ev('label.changed', { label: 'agent:reprendre', change: 'added' });
+    const moved = ev('status.changed', { from: 'human_review', to: 'dev' });
     const end = ev('verify.passed', { runId: 'r1', job: 'review' });
     const starts = (d: ReturnType<typeof decide>) => d.effects.filter((e) => e.kind === 'start_run');
     const sandboxed = [expect.objectContaining({ job: 'dev-feedback', sensitivePaths: SENSITIVE_PATHS })];
@@ -146,8 +146,8 @@ describe('decide — a classified message (ORC-180)', () => {
       ['a row written before ORC-180', [item({ kind: undefined, ...untrusted })]],
       ['a command alone', [item({ kind: 'command', ...untrusted })]],
       ['a command beside a trusted message', [item(), item({ kind: 'command', ...untrusted })]],
-    ])('by a label, %s', (_what, humanInbox) => {
-      expect(starts(decide(ticket({ logical: 'human_review', humanInbox }), label, workflow))).toEqual(sandboxed);
+    ])('by a move, %s', (_what, humanInbox) => {
+      expect(starts(decide(ticket({ logical: 'human_review', humanInbox }), moved, workflow))).toEqual(sandboxed);
     });
 
     it('by the regrouping, and at the end of a step: a command beside a trusted message', () => {
@@ -157,7 +157,7 @@ describe('decide — a classified message (ORC-180)', () => {
     });
 
     it('all of it trusted, no sensitive path', () => {
-      const [start] = starts(decide(ticket({ logical: 'human_review', humanInbox: [item(), item({ kind: 'command' })] }), label, workflow));
+      const [start] = starts(decide(ticket({ logical: 'human_review', humanInbox: [item(), item({ kind: 'command' })] }), moved, workflow));
       expect(start).not.toHaveProperty('sensitivePaths');
     });
   });

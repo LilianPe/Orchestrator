@@ -275,7 +275,7 @@ describe('the bound of the relaunches after a cut', () => {
     expect(t).toMatchObject({ blocked: true });
     expect(t.blockReason).toMatch(CUT_BOUND_REASON);
     expect(t.activeRunId).toBeUndefined();
-    expect(h.tracker.activities('ls-1').at(-1)).toMatchObject({ type: 'elicitation', body: expect.stringMatching(CUT_BOUND_REASON) });
+    expect(h.tracker.comments('REL-1').at(-1)).toContain('Raison : Trop de relances après coupure : ');
     expect((await h.tracker.getIssue('REL-1')).labels).toContain('Bloqué');
     // A normal outcome for the checker of the chaos, strict as it is: nothing lost, nothing doubled, replayed bit for bit.
     expect(await checkChain(h.store, { projectId: 'p', tickets: ['REL-1'], acked: [], calls: faults.calls })).toEqual({ violations: [], atLeastOnce: [] });
@@ -381,7 +381,7 @@ describe('the lease of an attempt', () => {
     expect(t.blocked).toBe(true);
     expect(t.activeRunId).toBeUndefined();
     expect(t.blockReason).toContain('bail');
-    expect(h.tracker.activities('ls-1').at(-1)).toMatchObject({ type: 'elicitation' });
+    expect(h.tracker.comments('REL-1').at(-1)).toContain('🔴 Bloqué');
     expect((await h.tracker.getIssue('REL-1')).labels).toContain('Bloqué');
   });
 

@@ -1,3 +1,4 @@
+import type { RepoConfig } from '../config/repo-config.js';
 import type { AttemptLabels } from '../core/attempt-labels.js';
 import type { DeadLetter, RepairAction } from '../core/dead-letter.js';
 import type { OutboxEffect } from '../core/decision.js';
@@ -63,6 +64,11 @@ export interface RunRecord {
   leaseUntil?: number;
   /** What the attempt was given to read (ORC-220): a relaunch of its step reads the same, the feedback it consumed included. */
   input?: { kind: InputKind; text: string };
+  /**
+   * `.factory/config.yml` as its launch read it (ORC-209 C): what checks the attempt afterwards (its red check,
+   * `verify` on the host) reads this one, not what the default branch holds by then. Absent on older records.
+   */
+  repoConfig?: RepoConfig;
 }
 
 /**
@@ -426,7 +432,7 @@ export interface Store {
    * is no longer pending (another worker processed it). `holder`: the project whose ticket refused
    * the event (`TicketHeldError`), told instead of a ticket blocked (ORC-316).
    */
-  deadLetter(row: StoredEvent, error: string, at: number, holder?: string): Promise<boolean>;
+  deadLetter(row: StoredEvent, error: string, at: number, holder?: string, attempts?: number): Promise<boolean>;
   /** The dead letters, of a ticket (any project) or all of them, open ones first, then oldest first. */
   deadLetters(ticketId?: string): Promise<DeadLetter[]>;
   /** The dead letter of an event, by its id. */
@@ -452,6 +458,8 @@ export interface Store {
   renewRun(id: string, until: number): Promise<void>;
   getRun(id: string): Promise<RunRecord | undefined>;
   runsByStatus(status: RunRecord['status']): Promise<RunRecord[]>;
+  /** The attempts of one ticket, oldest first: `runs` of `measureFacts`, without the rest of its facts. */
+  ticketRuns(projectId: string, ticketId: string): Promise<RunRecord[]>;
   findRunByToken(token: string): Promise<RunRecord | undefined>;
   putTimer(t: TimerRecord): Promise<void>;
   /**

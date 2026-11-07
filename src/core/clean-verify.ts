@@ -7,7 +7,7 @@ import { ANTI_CHEAT_CHECK, antiCheatCheck } from '../checks/anti-cheat.js';
 import { checkFrozen, FREEZE_CHECK, isFrozenHarness, type FrozenTests } from '../checks/freeze.js';
 import { checkForbiddenPaths, FORBIDDEN_CHECK } from '../checks/forbidden-paths.js';
 import { mdCode } from '../checks/markdown.js';
-import { parseRepoConfig, type RepoConfig } from '../config/repo-config.js';
+import { parseRepoConfig, REPO_CONFIG_PATH, type RepoConfig } from '../config/repo-config.js';
 import { BUNDLE_TARGET, extractWork, HARDENING, hostGitEnv, IN_SANDBOX, IN_SANDBOX_ENV } from '../publish/extract.js';
 import { runSealedSetup } from './sealed-setup.js';
 import type { VerifyFailure } from './types.js';
@@ -131,7 +131,7 @@ export const runCleanVerify: CleanVerifier = async (req) => {
     const tree = await git('rev-parse', `${sha}^{tree}`);
     if (sha === req.green) return { ok: true, failures: [], sha, tree };
     await within(fetchBase(req, cloneDir), deadlineMs, `la forge ne répond plus après ${deadlineMs / 1000} s`);
-    const config = parseRepoConfig(await show(git, BASE, CONFIG));
+    const config = parseRepoConfig(await show(git, BASE, REPO_CONFIG_PATH));
     const declared = Object.values(config.commands);
     const commands = declared.length ? declared : req.commands;
     const setup = config.setup ? [config.setup] : req.setup;
@@ -170,7 +170,6 @@ export const runCleanVerify: CleanVerifier = async (req) => {
 };
 
 export const BASE = 'refs/factory/base';
-const CONFIG = '.factory/config.yml';
 
 /**
  * The forge's default branch, in the clone. The daemon's own config is read, for its credentials: the repository's is

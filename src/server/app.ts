@@ -22,8 +22,6 @@ export interface ServerDeps {
   /** Writes an event to the inbox (ORC-147); awaited before the route answers. */
   submit: (e: FactoryEvent) => unknown;
   isPaused: () => boolean | Promise<boolean>;
-  /** Blocks a ticket through the orchestrator's event chain (Orchestrator.blockTicket). */
-  blockTicket: (projectId: string, ticketId: string, reason: string) => Promise<void>;
   linearWebhook: (raw: string, headers: Record<string, string | undefined>) => { status: number } | Promise<{ status: number }>;
   /** The GitHub webhook (ORC-134): signature checked, events written to the inbox before the answer. */
   githubWebhook: (raw: string, headers: Record<string, string | undefined>) => Promise<{ status: number }>;
@@ -248,13 +246,10 @@ export function createApp(d: ServerDeps): Hono {
   });
   agent.get('/search', async (c) => c.json(await d.tracker.search(c.req.query('q') ?? '')));
   agent.get('/kb/search', async (c) => c.json(d.knowledgeSearch ? await d.knowledgeSearch(c.req.query('q') ?? '') : []));
-  const ask = async (run: RunRecord, text: string) => {
-    if (run.linearSessionId) await d.tracker.activity(run.linearSessionId, { type: 'elicitation', body: text });
-    // Not awaited: the block waits its turn behind the events before it (a run's launch among them),
-    // and the agent must not wait minutes for an answer, nor ask again when its request times out.
-    d.blockTicket(run.projectId, run.ticketId, "Question posée par l'agent").catch((err: Error) =>
-      d.bus.publish({ kind: 'log', level: 'error', message: `ask ${run.ticketId}: ${err.message}`, at: d.clock.now() }),
-    );
+  // In the inbox, in order behind the events before it: the agent waits for no decision, and hears of a failed write.
+  const ask = async (run: RunRecord, question: string) => {
+    const at = d.clock.now();
+    await d.submit({ ...TRUSTED, id: `ask:${run.id}:${at}`, type: 'agent.asked', at, projectId: run.projectId, ticketId: run.ticketId, payload: { question, job: run.job, ...(run.linearSessionId ? { linearSessionId: run.linearSessionId } : {}) } });
   };
   agent.post('/ask', async (c) => {
     const { text } = (await c.req.json()) as { text?: string };

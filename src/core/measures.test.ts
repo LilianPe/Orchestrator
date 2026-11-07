@@ -136,6 +136,18 @@ describe('ticketMeasures (ORC-235)', () => {
       ['q2', 40, null],
     ]);
   });
+
+  it('counts only the comments decide read: not one it ignored, nor one it refused (ORC-196)', () => {
+    const comment = (id: string, roles: FactoryEvent['roles']) => ({ ...ev(id, 'ticket.commented', 10, { body: 'Vas-y.', author: 'h', kind: 'instruction' }), actor: 'u', roles });
+    const m = ticketMeasures('p', 'REL-1', facts({
+      events: [comment('read', ['team_member']), comment('ignored', ['team_member']), comment('refused', [])],
+      effects: [
+        { ...row('REL-1:1:0', { kind: 'start_run', job: 'dev' } as never), eventId: 'read' },
+        { ...row('REL-1:3:0', { kind: 'comment', body: 'Refusé' }), eventId: 'refused' },
+      ],
+    }));
+    expect(m.messages.map((x) => x.eventId)).toEqual(['read']);
+  });
 });
 
 const DAY = 24 * 60 * 60 * 1000;

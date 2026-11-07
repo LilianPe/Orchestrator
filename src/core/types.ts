@@ -26,6 +26,9 @@ export interface TokenUsage {
 
 export const NO_TOKENS: TokenUsage = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 };
 
+/** What a token cap counts: what the model read anew and wrote. A cache read costs next to nothing, and grows with each turn. */
+export const spentTokens = (u: TokenUsage): number => u.input + u.output + u.cacheCreation;
+
 export function addTokens(a: TokenUsage, b: TokenUsage): TokenUsage {
   return { input: a.input + b.input, output: a.output + b.output, cacheRead: a.cacheRead + b.cacheRead, cacheCreation: a.cacheCreation + b.cacheCreation };
 }
@@ -52,7 +55,7 @@ export interface FeedbackItem {
   authorId?: string;
   body: string;
   at: number;
-  /** `thread`: a question of a question thread, or a message on a ticket not delegated: answered there, no agent asked for it (ORC-180). */
+  /** `session`: the ticket's dev conversation, in its session or by a comment that replies to a block (ORC-196). `thread`: a question of a question thread, or a message on a ticket not delegated: answered there, no agent asked for it (ORC-180). */
   source: 'session' | 'thread' | 'review' | 'label' | 'verify' | 'ci';
   /** Its class when it came in; absent on items written before ORC-180, which only a run that reads the feedback takes. */
   kind?: MessageKind;
@@ -183,6 +186,17 @@ export interface EventPayloads {
   'session.mentioned': SessionMessage;
   'session.prompted': SessionMessage;
   'session.stopped': { linearSessionId?: string; repos?: string[]; waitedIn?: string };
+  /**
+   * The agent's question through `/agent/ask` (ORC-196), journaled when it asks: told once the block is committed, by
+   * the same comment as any block, so that a reply always finds it. `job`: the job of the run that asks;
+   * `linearSessionId`: its session, where a question thread hears it.
+   */
+  'agent.asked': { question: string; job: string; linearSessionId?: string };
+  /**
+   * A human's comment on the ticket, out of any session (ORC-196): the reply to a block's comment. Decided only while the ticket is
+   * blocked. `kind`, `masked`: as a session's message (ORC-180); this event never existed without them.
+   */
+  'ticket.commented': { body: string; author: string; kind: MessageKind; masked?: true };
   /** `cancelled`: the new status is of type canceled in Linear (ORC-170). */
   'status.changed': { from: LogicalState | null; to: LogicalState | null; cancelled?: true };
   /** `otherRepo`: the label names another repo of the ticket's team (ORC-291). */
@@ -269,7 +283,7 @@ export interface EventPayloads {
   'effect.failed': EffectResultPayload & { error: string };
   /** An event whose decision threw, set aside in `dead_letter` (ORC-175): the ticket is blocked. */
   /** `refused`: the store refused the event, this notice goes to the project holding the ticket (ORC-316). */
-  'dead_letter.added': { eventId: string; eventType: string; error: string; failures: number; refused?: { projectId: string; linearSessionId?: string } };
+  'dead_letter.added': { eventId: string; eventType: string; error: string; failures: number; attempts?: number; refused?: { projectId: string; linearSessionId?: string } };
   /**
    * A dead-lettered event repaired by `factory run repair` (ORC-175): `replay` decides `event` again,
    * `force` records its facts without its decision, `skip` drops it. Its block is lifted. `event` is
@@ -327,7 +341,8 @@ export type FactoryEvent<T extends EventType = EventType> = {
 
 /** State changes decided by `decide`, applied to the ticket by `reduce`. */
 export type DecidedEvent =
-  | { type: 'ticket.blocked'; reason: string }
+  /** `job`: the step a reply resumes (ORC-196); none when no job of the workflow stands for it, then the rule's runs. */
+  | { type: 'ticket.blocked'; reason: string; job?: string }
   | { type: 'ticket.unblocked' }
   | {
       type: 'ticket.patched';
@@ -384,6 +399,8 @@ export interface TicketState {
   questionSessionIds: string[];
   blocked: boolean;
   blockReason?: string;
+  /** The job a reply resumes while the ticket is blocked (ORC-196). Absent on a block of no job, and on versions frozen before it. */
+  blockedJob?: string;
   claudeSessionId?: string;
   linearSessionId?: string;
   branch?: string;

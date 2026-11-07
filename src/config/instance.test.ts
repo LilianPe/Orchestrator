@@ -20,7 +20,7 @@ import {
 describe('instance config', () => {
   it('resolves home', () => {
     expect(factoryHome({ FACTORY_HOME: '/x' } as NodeJS.ProcessEnv)).toBe('/x');
-    expect(factoryHome({ HOME: '/home/u' } as NodeJS.ProcessEnv)).toBe('/home/u/.factory');
+    expect(factoryHome({ HOME: '/home/u' } as NodeJS.ProcessEnv)).toBe(join('/home/u', '.factory'));
   });
 
   it('returns defaults, then round-trips', () => {
@@ -45,7 +45,9 @@ describe('instance config', () => {
     );
   });
 
-  it('writes secrets with mode 600', () => {
+  // Windows has no POSIX mode bits: Node reports 0o666 whatever chmod asked. The file takes its folder's ACL there,
+  // which docs/installation.md asks to keep private (saveSecrets).
+  it.skipIf(process.platform === 'win32')('writes secrets with mode 600', () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-home-'));
     expect(loadSecrets(home)).toEqual({});
     saveSecrets(home, { linear: { clientId: 'c', clientSecret: 's', webhookSecret: 'w' } });

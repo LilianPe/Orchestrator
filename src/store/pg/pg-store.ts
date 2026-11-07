@@ -519,7 +519,7 @@ export class PgStore implements AsyncStore {
     return (inserted.rowCount ?? 0) > 0;
   }
 
-  async deadLetter(row: StoredEvent, error: string, at: number, holder?: string): Promise<boolean> {
+  async deadLetter(row: StoredEvent, error: string, at: number, holder?: string, attempts?: number): Promise<boolean> {
     const now = this.now();
     return this.db.transaction(async (tx) => {
       await tx.execute(ticketLock(row.ticketId));
@@ -539,7 +539,7 @@ export class PgStore implements AsyncStore {
         returning failures
       `);
       const failures = Number(upserted.rows[0]!.failures);
-      const notice = deadLetterNotice({ event, error, failures }, at, holder);
+      const notice = deadLetterNotice({ event, error, failures }, at, holder, attempts);
       if (notice) await this.appendResult(tx, notice);
       return true;
     });
@@ -782,6 +782,13 @@ export class PgStore implements AsyncStore {
     return result.rows.map((row) => row.data);
   }
 
+  async ticketRuns(projectId: string, ticketId: string): Promise<RunRecord[]> {
+    const result = await this.db.execute<{ data: RunRecord }>(sql`
+      select data from attempts where ticket_id = ${ticketId} and data->>'projectId' = ${projectId} order by started_at, id
+    `);
+    return result.rows.map((r) => r.data);
+  }
+
   async findRunByToken(token: string): Promise<RunRecord | undefined> {
     const result = await this.db.execute<{ data: RunRecord }>(
       sql`select data from attempts where data->>'token' = ${token} limit 1`,
@@ -810,9 +817,7 @@ export class PgStore implements AsyncStore {
       this.db.execute<{ payload: FactoryEvent }>(sql`
         select payload from journal where ticket_id = ${ticketId} and payload->>'projectId' = ${projectId} order by seq
       `),
-      this.db.execute<{ data: RunRecord }>(sql`
-        select data from attempts where ticket_id = ${ticketId} and data->>'projectId' = ${projectId} order by started_at, id
-      `),
+      this.ticketRuns(projectId, ticketId),
       this.db.execute<{ id: string; at: string | number }>(sql`
         select id, round(extract(epoch from acked_at) * 1000) as at from inbox
         where acked_at is not null
@@ -824,7 +829,7 @@ export class PgStore implements AsyncStore {
     return {
       devSession: ticket?.linearSessionId,
       events: events.rows.map((r) => r.payload),
-      runs: runs.rows.map((r) => r.data),
+      runs,
       effects,
       acks: Object.fromEntries(acked.rows.map((r) => [r.id, Number(r.at)])),
     };

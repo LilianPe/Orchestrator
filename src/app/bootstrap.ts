@@ -27,7 +27,7 @@ import { isUsableWebhookSecret } from '../adapters/tracker/linear/webhook.js';
 import { GitWorkspaces } from '../adapters/workspace/git-workspaces.js';
 import { saveAgentOutput, type AgentOutput } from '../core/agent-output.js';
 import { activeClaudeToken, loadFactoryYml, stepSettings } from '../config/factory-yml.js';
-import { makeOriginUrl, makeRepoVariables } from './repo-variables.js';
+import { makeOriginUrl, makeRepoConfig, makeRepoVariables } from './repo-variables.js';
 import { daemonSecretValues, effectiveInstance, homePaths, linearSettings, saveLinearTokens } from '../config/instance.js';
 import { githubWebhookSecret, resolveGithubApp } from '../config/github-app.js';
 import { writeRunSettings } from '../config/run-settings.js';
@@ -63,7 +63,7 @@ export function isLoopbackHost(host: string): boolean {
   return h === 'localhost' || h === '::1' || /^127\.\d+\.\d+\.\d+$/.test(h);
 }
 
-const FACTORY_LABELS = ['agent:reprendre', 'agent:stop', BLOCKED_LABEL];
+const FACTORY_LABELS = ['agent:stop', BLOCKED_LABEL];
 
 /** Where a sandbox sees the factory's install and the knowledge base (ORC-204); its image puts `/factory/app/bin` on its PATH. */
 const SANDBOX_ROOT = '/factory/app';
@@ -231,6 +231,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       knowledgeConfigured: !!instance.knowledge,
       roles,
       repoVariables: makeRepoVariables({ yml, log }),
+      repoConfig: makeRepoConfig({ log }),
       originUrl,
       fullReadPaths: (t) => Object.keys(t.frozenTests?.files ?? {}),
       ...(sandboxes
@@ -334,7 +335,6 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       clock,
       submit: accept,
       isPaused: () => orchestrator.isPaused(),
-      blockTicket: (projectId, ticketId, reason) => orchestrator.blockTicket(projectId, ticketId, reason),
       linearWebhook: ingest,
       githubWebhook: githubIngest,
       linearConnected: () => !!trackerSwitch.current,

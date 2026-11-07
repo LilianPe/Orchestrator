@@ -1,11 +1,15 @@
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { loadWorkflow } from '../config/load-workflow.js';
+import type { Workflow } from '../config/workflow-schema.js';
 import { DEFAULT_MATRIX, type Role } from './authz.js';
 import { AUTHZ_REFUSED, decide, mayCheck } from './engine.js';
 import { newTicketState, SCHEMA_VERSION, type EventPayloads, type EventType, type FactoryEvent, type TicketState } from './types.js';
 
 const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../packs/standard') });
+
+/** A project's own label rule: the pack has no label that relaunches since ORC-196. */
+const labelled: Workflow = { ...workflow, on: { ...workflow.on, 'label.changed': [{ label: 'relance', run: 'dev-feedback' }] } };
 
 const WRITER: Role[] = ['team_member', 'repo_writer'];
 
@@ -102,10 +106,10 @@ describe('decide — authorization matrix (ORC-186)', () => {
   describe('relaunch a blocked run', () => {
     const blocked = ticket({ logical: 'dev', blocked: true, blockReason: 'Le run dev a échoué.', initiatorId: 'u-req' });
 
-    it('relaunches on a reply, or the agent:reprendre label, of a team member', () => {
+    it('relaunches on a reply, or on the relaunch label of a project, of a team member', () => {
       const reply = decide(blocked, ev('session.prompted', { linearSessionId: 's-dev', body: 'vas-y', author: 'M' }, 'u-member', ['team_member']), workflow);
       expect(reply.events.map((e) => e.type)).toEqual(['feedback.appended', 'ticket.unblocked']);
-      const label = decide(blocked, ev('label.changed', { label: 'agent:reprendre', change: 'added' }, 'u-member', ['team_member']), workflow);
+      const label = decide(blocked, ev('label.changed', { label: 'relance', change: 'added' }, 'u-member', ['team_member']), labelled);
       expect(starts(label.effects)).toHaveLength(1);
     });
 
@@ -113,7 +117,7 @@ describe('decide — authorization matrix (ORC-186)', () => {
       const reply = decide(blocked, ev('session.prompted', { linearSessionId: 's-dev', body: 'vas-y', author: 'R' }, 'u-req', []), workflow);
       expect(reply.events).toEqual([]);
       expect(reply.effects).toEqual([expect.objectContaining({ kind: 'activity', body: expect.stringMatching(/relancer un run bloqué/) })]);
-      const label = decide(blocked, ev('label.changed', { label: 'agent:reprendre', change: 'added' }, 'u-out', []), workflow);
+      const label = decide(blocked, ev('label.changed', { label: 'relance', change: 'added' }, 'u-out', []), labelled);
       expect(label.events).toEqual([]);
       expect(label.effects).toEqual([{ kind: 'comment', body: expect.stringMatching(/^Refusé : relancer un run bloqué/) }]);
     });
@@ -144,8 +148,8 @@ describe('decide — authorization matrix (ORC-186)', () => {
     const e = <T extends EventType>(type: T, payload: EventPayloads[T]) => ev(type, payload, 'u', undefined);
     expect(mayCheck(e('ticket.delegated', {}), workflow)).toBe(true);
     expect(mayCheck(e('session.prompted', { linearSessionId: 's', body: '', author: 'A' }), workflow)).toBe(true);
-    expect(mayCheck(e('label.changed', { label: 'agent:reprendre', change: 'added' }), workflow)).toBe(true);
-    expect(mayCheck(e('label.changed', { label: 'agent:reprendre', change: 'removed' }), workflow)).toBe(false);
+    expect(mayCheck(e('label.changed', { label: 'relance', change: 'added' }), labelled)).toBe(true);
+    expect(mayCheck(e('label.changed', { label: 'relance', change: 'removed' }), labelled)).toBe(false);
     expect(mayCheck(e('label.changed', { label: 'agent:stop', change: 'added' }), workflow)).toBe(false);
     expect(mayCheck(e('status.changed', { from: 'human_review', to: 'dev' }), workflow)).toBe(true);
     expect(mayCheck(e('status.changed', { from: 'dev', to: 'human_review' }), workflow)).toBe(false);

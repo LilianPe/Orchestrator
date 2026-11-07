@@ -115,7 +115,9 @@ describe('the human inbox (ORC-180)', () => {
     it('a command that came in behind a pending job: the launch takes its taint, not only the decision', async () => {
       const h = createHarness();
       const running = await atWork(h);
-      await h.send('label.changed', { label: 'agent:reprendre', change: 'added' });
+      // Out and back by a human: its own move to dev would be the echo of the factory's.
+      await h.send('status.changed', { from: 'dev', to: 'human_review' });
+      await h.send('status.changed', { from: 'human_review', to: 'dev' });
       expect((await h.ticket()).pendingJob).toMatchObject({ job: 'dev-feedback' });
       await h.send('session.prompted', command, 'REL-1', { taint: 'untrusted' });
       h.runner.enqueue({ events: [{ kind: 'text', text: 'Repris.' }] });

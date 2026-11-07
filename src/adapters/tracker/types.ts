@@ -27,10 +27,15 @@ export interface SearchHit {
   stateName: string;
 }
 
+const EFFECT_MARKER = '<!-- factory:effect=';
+
 /** The marker a comment written for an outbox effect carries in its body (ORC-162): invisible once rendered. */
 export function effectMarker(effectId: string): string {
-  return `<!-- factory:effect=${effectId} -->`;
+  return `${EFFECT_MARKER}${effectId} -->`;
 }
+
+/** A comment the factory wrote for an outbox effect: never a human's reply, whichever actor Linear names (ORC-196). */
+export const isEffectComment = (body: string): boolean => body.includes(EFFECT_MARKER);
 
 /** The echo key of a status the factory itself moved the ticket to (`putEcho`), for the webhook of its own move to be dropped. */
 export function stateEchoKey(identifier: string, stateName: string): string {

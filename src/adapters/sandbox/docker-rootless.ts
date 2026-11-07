@@ -213,7 +213,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
 
   /**
    * Its egress listens again at the same path, at the level on the container's label. `allow` is not kept:
-   * nothing asks for it yet (`openSandbox`), and a list lost only narrows.
+   * a `custom` repository's run taken back loses its hosts, which only narrows.
    */
   async reattach(runId: string): Promise<Sandbox | undefined> {
     const c = (await this.byLabel(`${ATTEMPT}=${runId}`)).find((x) => x.running);

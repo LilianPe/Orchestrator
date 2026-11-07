@@ -43,6 +43,15 @@ export function repoNetworkCeiling(config: RepoConfig): NetworkLevel {
 /** A host name: no wildcard, no range, no path (a `*` or a `0.0.0.0/0` would be `full` in disguise). */
 const HOST = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/i;
 
+/** The one name the factory reads, at the repository's root: a file in a directory, neither a link. */
+export const REPO_CONFIG_DIR = '.factory';
+export const REPO_CONFIG_PATH = `${REPO_CONFIG_DIR}/config.yml`;
+
+/** How the daemon reads it on the default branch. `fetch: false`: the forge was just fetched, or the read follows the launch's. */
+export interface RepoConfigRead {
+  fetch?: boolean;
+}
+
 const PRESET = 'factory/default@1.0';
 /** The factory's own configuration: the agent never edits what verifies it. */
 export const SOCLE_FORBIDDEN_PATHS: readonly string[] = FORBIDDEN_PATHS;
@@ -167,5 +176,7 @@ function networkOf(raw: unknown, violations: string[]): RepoConfig['network'] {
     if (!HOST.test(host)) violations.push(`network.allow[${i}] : « ${host} » n’est pas un nom d’hôte ; les jokers et les plages sont refusés`);
   });
   if (allow) network.allow = allow;
+  // Only `custom` opens its hosts (`stepPolicy`): a list under another level would pass validation and open nothing.
+  if (allow?.length && (level === undefined || level === 'none' || level === 'limited')) violations.push(`network.allow : seul le niveau \`custom\` prend une liste d’hôtes ; ici \`${level ?? 'limited'}\``);
   return network;
 }

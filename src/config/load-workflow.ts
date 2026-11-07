@@ -20,7 +20,7 @@ export class WorkflowError extends Error {}
 
 const EVENT_TYPES: readonly string[] = [
   'ticket.delegated', 'session.mentioned', 'session.prompted', 'session.stopped', 'status.changed', 'label.changed',
-  'push.human', 'command', 'pr.opened', 'pr.checks_passed', 'pr.checks_failed', 'pr.merged', 'pr.closed', 'run.finished',
+  'ticket.commented', 'push.human', 'command', 'pr.opened', 'pr.checks_passed', 'pr.checks_failed', 'pr.merged', 'pr.closed', 'run.finished',
   'verify.passed', 'verify.failed', 'timer.fired', 'control.pause', 'control.resume', 'control.stop',
 ];
 
@@ -142,6 +142,7 @@ function buildJob(name: string, raw: RawJob, perRun: RunLimits, settings: StepSe
   }
   return {
     name,
+    ...(raw.step ? { step: raw.step } : {}),
     queue: need('queue'),
     model: need('model'),
     workspace: need('workspace'),
@@ -232,6 +233,7 @@ export function loadWorkflow(opts: { packDir: string; projectFile?: string | und
 
   return {
     version: 1,
+    blockComment: true,
     tracker: {
       kind: 'linear',
       team: raw.tracker?.team,

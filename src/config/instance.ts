@@ -161,6 +161,10 @@ export function daemonSecretValues(home: string, yml: FactoryYml | undefined): s
   return [...new Set([...secretValues({ linear: linearSettings(home, yml) }), ...fromYml.filter((v): v is string => !!v)])];
 }
 
+/**
+ * Mode 0600 on POSIX. Windows has no mode bits (chmod only sets read-only): the file takes the ACL of its folder, so
+ * FACTORY_HOME must be in a folder only the factory's user can read (docs/installation.md).
+ */
 export function saveSecrets(home: string, s: Secrets): void {
   ensureTree(home);
   const file = homePaths(home).secrets;

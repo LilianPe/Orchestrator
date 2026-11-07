@@ -66,15 +66,32 @@ Le niveau de réseau se choisit par dépôt (Limité par défaut) ; une étape p
 
 `verify_attempts` et `ci_fix_attempts` de `workflow.yml` surchargent encore les deux premières, jusqu'au retrait du YAML (ORC-177).
 
+## Reprise de l'étape bloquée (ORC-196)
+
+Une réponse humaine sur un ticket Bloqué relance l'étape où il s'est bloqué, pas `dev-feedback`. Le blocage retient son job (`blockedJob`, de `ticket.blocked`), que le moteur lance à la place du job de la règle, avec la réponse en entrée. La règle (`session.prompted` et `ticket.commented`, `when: blocked`) reste ce qui laisse passer la réponse. Le classement d'ORC-180 passe avant : une consigne et une question de la session du ticket relancent, une commande (`/status`, `/stop`) ne relance rien, une question d'un autre fil a sa réponse là-bas et ne lève pas le blocage.
+
+Les règles `on` du YAML pilotent encore l'enchaînement (ORC-177) : le moteur n'exécute pas les étapes du préréglage, il lance des jobs. D'où ce que la reprise sait faire aujourd'hui :
+
+| Bloqué à | Une réponse relance |
+| -- | -- |
+| `build`, `tests`, `fix`, `review` (fin du run, plafond, boucle, bail, coupure, question, y compris par `relais-agent ask`) | le job de cette étape : `dev`, `tests`, `dev-feedback`, `review`. `fix-ci` passe par `dev-feedback`, même étape : il lit ses checks rouges, pas une réponse |
+| prise en charge, lancement | le job qu'on lançait, ses contrôles compris |
+| `verify`, `verify_fix`, `red` (échec au plafond, boucle, panne) | le job que le contrôle juge : c'est le retour arrière du préréglage. Pas le contrôle seul : `run_verify` a besoin de la sortie de l'agent, que `verify.errored` ne porte pas |
+| `verify` d'un job qui ne corrige pas (`verify_failure: block`, la review) | `dev-feedback`, qui écrit |
+| `publish` refusé | `dev-feedback` : il écrit, repasse par `verify` puis `publish`, et le déplacement dû suit (`owedMove`) |
+| dead-letter, effet mort, `stop` | `dev-feedback`, ces blocages n'ont pas d'étape à eux |
+
+**Pas encore** : relancer une étape sans agent (`verify`, `red`, `freeze_tests`, `spec_check`, `publish`, `merge`) seule, et reprendre aux portes humaines (`spec_review`, `human_review`) : il faut un moteur qui exécute les étapes (ORC-177). `intake`, `clarify`, `spec_draft`, `spec_check`, `spec_review` et `after_merge` n'ont pas encore de job. Le numéro de tentative suit le compteur qui a mené au blocage ; une étape sans compteur affiche 1/1. Une règle de projet avec un `debounce` sur un ticket bloqué garde son job : sa minuterie part une fois le blocage levé.
+
 ## Stagnation d'une tentative (ORC-136)
 
 Le runner regarde le flux de la tentative. Il constate, l'arrête, et journalise ce qu'il a vu dans `run.finished` (champ `stagnation`). C'est `decide` qui bloque, à partir de ce fait et de la borne de la version figée : le rejeu décide de même, et un journal d'avant ORC-136, sans ce champ, décide comme avant. Une version figée sans borne ne surveille rien.
 
-**Boucle.** Pour chaque appel `Bash` que le flux dit en échec (`is_error`), le runner calcule une empreinte : la commande, la sortie normalisée (couleurs, dates, durées, adresses, hash, pid et chemins temporaires retirés), et le contenu du worktree. Ce contenu est l'arbre git de tout le worktree, fichiers modifiés et non suivis compris, lu avec une copie de l'index : l'index de l'agent ne bouge pas. Il est lu là où tourne l'agent, dans son bac à sable s'il en a un. La même commande sur le même échec `sameFailure.limit` fois (3), sans changement du contenu entre elles : arrêt, puis Bloqué, raison « Boucle : … », et la commande dans le fil. D'autres commandes entre deux échecs ne remettent pas le compte à zéro. Tout changement du contenu les remet tous à zéro, même un retour à un contenu déjà vu. Commiter sans rien changer ne le fait pas. Une commande qui attend un état extérieur (`curl` sur un serveur qui démarre) et échoue 3 fois de la même façon compte aussi. Si le contenu n'a pas pu être lu (pas de git, plus de 30 s), cet échec ne compte pas, et le journal du démon le dit une fois par run, avec le code de sortie et la première ligne de stderr : un détecteur éteint se voit. Seuls les jobs de la file `dev` sont surveillés pour les boucles.
+**Boucle.** Pour chaque appel `Bash` que le flux dit en échec (`is_error`), le runner calcule une empreinte : la commande, la sortie normalisée (couleurs, dates, durées, adresses, hash, pid et chemins temporaires retirés), et le contenu du worktree. Ce contenu est l'arbre git de tout le worktree, fichiers modifiés et non suivis compris, lu avec une copie de l'index : l'index de l'agent ne bouge pas. Il est lu là où tourne l'agent, dans son bac à sable s'il en a un. La même commande sur le même échec `sameFailure.limit` fois (3), sans changement du contenu entre elles : arrêt, puis Bloqué, raison « Boucle : … », et la commande dans le commentaire de blocage. D'autres commandes entre deux échecs ne remettent pas le compte à zéro. Tout changement du contenu les remet tous à zéro, même un retour à un contenu déjà vu. Commiter sans rien changer ne le fait pas. Une commande qui attend un état extérieur (`curl` sur un serveur qui démarre) et échoue 3 fois de la même façon compte aussi. Si le contenu n'a pas pu être lu (pas de git, plus de 30 s), cet échec ne compte pas, et le journal du démon le dit une fois par run, avec le code de sortie et la première ligne de stderr : un détecteur éteint se voit. Seuls les jobs de la file `dev` sont surveillés pour les boucles.
 
 **Silence.** Rien d'écrit sur le flux pendant `silentRun.minutes` (30) : arrêt, puis Bloqué, « Le run … n'a rien écrit depuis 30 min ». Le bail ne le voit pas : il dit seulement que le conteneur vit. 30 min dépassent le plus long appel `Bash` de Claude Code (10 min).
 
-Un humain relance comme d'habitude, sur la session du ticket, et le compte repart à zéro. Une tentative reprise après un redémarrage (`attach`) n'est surveillée que pour le silence, dont le délai repart de la reprise ; ses boucles restent bornées par ses tours et sa durée.
+Un humain relance comme d'habitude, par une réponse dans le ticket, et le compte repart à zéro. Une tentative reprise après un redémarrage (`attach`) n'est surveillée que pour le silence, dont le délai repart de la reprise ; ses boucles restent bornées par ses tours et sa durée.
 
 La garde entre deux `verify` (`repeatedFailure`, ORC-187) reste à part : même job, mêmes commandes et codes de sortie, même arbre, sans la sortie.
 

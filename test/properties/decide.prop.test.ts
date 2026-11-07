@@ -330,7 +330,7 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
       }
     };
     const ciBound = wf.limits.ciFixAttempts;
-    const CI_RESETS: EventType[] = ['pr.checks_passed', 'pr.opened', 'session.prompted', 'label.changed', 'status.changed', 'ticket.delegated'];
+    const CI_RESETS: EventType[] = ['pr.checks_passed', 'pr.opened', 'session.prompted', 'ticket.commented', 'label.changed', 'status.changed', 'ticket.delegated'];
     const redCiCounterexample = seq(
       ...delegated(),
       ext('status.changed', { from: 'todo', to: 'human_review' }),
@@ -455,7 +455,7 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
       () => {
         // A human relaunch after the merge; and, found by fast-check, a run in flight at the merge whose checks then
         // fail, a debounce armed before the merge that fires after it, and the job kept pending that settle starts.
-        const relaunched = seq(...delegated(), ext('pr.merged', pr), ext('label.changed', { label: 'agent:reprendre', change: 'added' }));
+        const relaunched = seq(...delegated(), ext('pr.merged', pr), ext('control.stop', {}), ext('ticket.commented', { body: 'reprends', author: 'lilian', kind: 'instruction' }));
         const inFlight = seq(
           ...delegated(),
           runStarted(),
@@ -584,7 +584,7 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
             if (relaunched && e.type === 'run.lost') expect(recent.length).toBeLessThan(CUT_RELAUNCHES);
             if (relaunched && e.type === 'verify.lost') expect(recent.length).toBeLessThan(CUT_RELAUNCHES);
             const reset = step.decision.events.some((x) => x.type === 'ticket.patched' && x.patch.cutRelaunches?.length === 0);
-            if (reset) expect(['session.prompted', 'label.changed', 'status.changed', 'ticket.delegated']).toContain(e.type);
+            if (reset) expect(['session.prompted', 'ticket.commented', 'label.changed', 'status.changed', 'ticket.delegated']).toContain(e.type);
           }
         });
       },
@@ -617,6 +617,7 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
      * sensitive paths, whoever starts it: `decide`, or `settle` on the pending job. Checked on the launches, as
      * `Orchestrator.launch` hands them to the runner (ORC-274), not on the starts `decide` emits.
      */
+    const launches0 = (s: Sequences) => run(s).steps.flatMap(launches);
     const feedbackRunSandboxed = (s: Sequences): void => {
       let untrustedPending = false;
       for (const step of run(s).steps) {
@@ -641,12 +642,18 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
         const pending = (...end: Entry[]) => seq(...delegated('dev'), runStarted(), reply(), ext('timer.fired', DEBOUNCE), reply('untrusted'), ...end);
         const settled = pending(runFinished('success'), ext('verify.passed', { runId: 'r1', job: 'dev' }));
         // Found by fast-check at 10 000 sequences (ORC-180, seed 509541243), shrunk: a run that empties the inbox takes the
-        // taint of all it empties, a command included, though the agent is not given a command. Relayed by a trusted label...
+        // taint of all it empties, a command included, though the agent is not given a command. Relayed by a trusted move...
         const command = () => ext('session.prompted', { linearSessionId: DEV_SESSION, body: 'ok', author: 'lilian', issue, ack: true, kind: 'command' }, 'untrusted');
-        const relayed = seq(ext('ticket.delegated', { linearSessionId: undefined, issue }, 'untrusted'), command(), ext('label.changed', { label: 'agent:reprendre', change: 'added' }));
+        const relayed = seq(ext('ticket.delegated', { linearSessionId: undefined, issue }, 'untrusted'), command(), ext('status.changed', { from: 'human_review', to: 'dev' }));
+        // ... by a trusted comment that resumes a blocked job, or an untrusted one, which is the taint of the run itself (ORC-196)...
+        const comment = (taint?: 'untrusted') => ext('ticket.commented', { body: 'reprends', author: 'lilian', kind: 'instruction' }, taint);
+        const resumed = seq(...delegated('dev'), ext('agent.asked', { question: 'Laquelle ?', job: 'dev' }), command(), comment());
+        const commented = seq(...delegated('dev'), ext('agent.asked', { question: 'Laquelle ?', job: 'dev' }), comment('untrusted'));
         // ... or by a job pending since before it came in.
         const settledAfterCommand = seq(...delegated('dev'), runStarted(), reply(), ext('timer.fired', DEBOUNCE), command(), runFinished('success'), ext('verify.passed', { runId: 'r1', job: 'dev' }));
-        holds(feedbackRunSandboxed, [debounced, settled, pending(runFinished('failure')), relayed, settledAfterCommand]);
+        // The examples must start the run they are about: one with no rule to relay it would hold for nothing.
+        for (const example of [relayed, resumed, commented]) expect(launches0(example).filter((e) => readsFeedback(e, wf))).not.toEqual([]);
+        holds(feedbackRunSandboxed, [debounced, settled, pending(runFinished('failure')), relayed, settledAfterCommand, resumed, commented]);
       },
       TIMEOUT,
     );

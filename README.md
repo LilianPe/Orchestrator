@@ -2,7 +2,7 @@
 
 # Relais
 
-Orchestrateur d'agents de code : un ticket Linear délégué à l'agent devient une PR, relue par un humain puis par une boucle de review IA, prête à merger. Prototype privé.
+Orchestrateur d'agents de code : un ticket Linear délégué à l'agent devient une PR, relue par un humain puis par une boucle de review IA, prête à merger. Prototype public, sous [licence Elastic 2.0](#licence).
 
 - Relais tourne comme un démon (`relais up`) relié à **Linear** (application agent OAuth + webhooks) et à **GitHub** (CLI `gh`).
 - Chaque ticket délégué obtient son worktree git et une session **Claude Code** headless, reprise de run en run (retours, CI, review).
@@ -94,3 +94,7 @@ Règles :
 - Les exemples YAML de [`docs/workflow.md`](docs/workflow.md) sont chargés par un test (`src/docs-workflow.test.ts`) : gardez-les valides.
 - Code, noms de fichiers et messages de commit en anglais (`feat(core): …`, `docs: …`) ; textes destinés aux humains (docs, skills du pack, messages Linear) en français.
 - La CI (`.github/workflows/ci.yml`) lance typecheck, lint et tests unitaires sur chaque PR, plus les jobs Postgres et rootless séparés.
+
+## Licence
+
+Le code est publié sous [Elastic License 2.0](LICENSE) (ELv2) : chacun peut l'utiliser, le modifier, le redistribuer et s'en servir en entreprise, mais pas le proposer à des tiers comme service hébergé ou géré, ni contourner une clé de licence, ni retirer les mentions de licence. Les parties reprises d'autres projets gardent leur licence, citée dans [`packs/standard/NOTICE.md`](packs/standard/NOTICE.md).

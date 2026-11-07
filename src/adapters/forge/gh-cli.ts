@@ -34,7 +34,7 @@ function cut(s: string): { head: string; more: string } {
   const end = /[\uD800-\uDBFF]/.test(s[EXCERPT - 1]!) ? EXCERPT - 1 : EXCERPT;
   return { head: s.slice(0, end), more: '…' };
 }
-const excerpt = (out: string) => {
+export const excerpt = (out: string) => {
   const { head, more } = cut(out);
   return JSON.stringify(head) + more;
 };

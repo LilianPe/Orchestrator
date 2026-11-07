@@ -26,13 +26,15 @@ on:
   session.prompted:
     - { when: "blocked", run: dev-feedback, debounce: 0s }
     - { when: "state in [dev, human_review]", run: dev-feedback, debounce: 3m }
+  # A reply to the blocking comment, written on the ticket. `dev-feedback` stands for a block with no step of its own (ORC-196).
+  ticket.commented:
+    - { when: "blocked", run: dev-feedback }
   session.mentioned:
     - { run: ask }
   command:
     - { say: retiens, run: remember }
     - { say: "fais-le", do: propose_delegate }
   label.changed:
-    - { label: "agent:reprendre", run: dev-feedback }
     - { label: "agent:stop", do: stop }
   session.stopped:
     - { do: stop }
