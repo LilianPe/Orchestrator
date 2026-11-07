@@ -51,15 +51,20 @@ function pgDatabase() {
   const pool = queryOn(PG_URL, (c) => c.query(`create database "${name}" template "${from}"`)).then(() => {
     const u = new URL(PG_URL);
     u.pathname = `/${name}`;
-    return new Pool({ connectionString: u.toString(), max: 4 });
+    const p = new Pool({ connectionString: u.toString(), max: 4 });
+    // A client still checked out when the test ends (a transaction whose callback called the store, which
+    // never answers once closed) is cut by the forced drop: the pool listens to idle clients only, and an
+    // 'error' nobody listens to is an uncaught exception that fails the whole run (ORC-290).
+    p.on('connect', (client) => client.on('error', onError));
+    return p;
   });
   const db: Database = { name, pool, closed: false };
   open.push(db);
   // One PgStore per database, reused by every life of the harness (its clock is the harness's).
   let store: Store | undefined;
-  const onError = (err: Error) => {
+  function onError(err: Error): void {
     if (!db.closed) console.error(`scenarios-pg ${name}: ${err.message}`);
-  };
+  }
   return (now: () => number): Store => (store ??= deferred(db, pool.then((p) => new PgStore({ pool: p, now, onError }))));
 }
 
@@ -85,15 +90,24 @@ if (PG_URL) {
     }
   });
 
-  afterEach(async () => {
+  /**
+   * The drops under way, each settled with its error if any. A drop forces an immediate checkpoint of the
+   * whole server: on a loaded machine one took more than the hook's 60 s (ORC-290). Not awaited by the test
+   * that made the database, they go on beside the next tests, and drops at the same time share a checkpoint.
+   */
+  const dropping: Promise<unknown>[] = [];
+
+  afterEach(() => {
     const dbs = open;
     open = [];
     for (const db of dbs) db.closed = true;
-    await Promise.all(dbs.map(drop));
+    dropping.push(...dbs.map((db) => drop(db).catch((err: unknown) => err)));
   });
 
   afterAll(async () => {
+    const failed = (await Promise.all(dropping)).find((err) => err !== undefined);
     await template?.drop();
+    if (failed) throw failed;
   });
 } else {
   beforeEach((ctx) => ctx.skip());

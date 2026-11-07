@@ -1,5 +1,5 @@
 import { Pool } from 'pg';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { newTicketState, TRUSTED, type FactoryEvent } from '../../src/core/types.js';
 import { OutboxExecutor } from '../../src/runtime/outbox.js';
 import { migratePgStore } from '../../src/store/pg/migrate.js';
@@ -7,7 +7,7 @@ import { PgStore } from '../../src/store/pg/pg-store.js';
 import { PG_TABLE_NAMES } from '../../src/store/pg/schema.js';
 import type { DecisionOutcome, DecisionRequest, Store } from '../../src/store/types.js';
 import { CRASH_WORKFLOW, crashAfterDecision } from '../helpers/crash-workflow.js';
-import { createHarness } from '../helpers/harness.js';
+import { createHarness, killHarnesses } from '../helpers/harness.js';
 import { createTestDatabase, PG_URL } from '../helpers/pg-database.js';
 
 const TRUNCATE = `truncate table ${PG_TABLE_NAMES.map((name) => `"${name}"`).join(', ')} restart identity cascade`;
@@ -37,6 +37,9 @@ describe.skipIf(!PG_URL)('worker on PgStore', () => {
   beforeEach(async () => {
     await pool.query(TRUNCATE);
   });
+
+  // The harness of the previous test, killed: its background work stays out of the next one's database (ORC-290).
+  afterEach(killHarnesses);
 
   afterAll(async () => {
     await pool.end();

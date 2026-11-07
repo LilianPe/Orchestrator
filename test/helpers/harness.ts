@@ -143,6 +143,20 @@ export function mortal(store: Store): { store: Store; kill(): void; gate<T exten
   return { store: proxy, kill: () => void (dead = true), gate };
 }
 
+/** Every life of every harness made in this file, until `killHarnesses`. */
+const lives = new Set<{ kill(): void }>();
+
+/**
+ * Kills every harness made so far, as `kill -9` would (ORC-290): none of their background work (a run
+ * still finishing, a retry due) reaches the database any more. For the tests that share one database
+ * and truncate it between them: without it, the previous test's `attempt:id-1:finished` lands in the
+ * next one's inbox, and finishes a run of the same id there.
+ */
+export function killHarnesses(): void {
+  for (const life of lives) life.kill();
+  lives.clear();
+}
+
 export function createHarness(
   opts: {
     projectYaml?: string;
@@ -219,6 +233,7 @@ export function createHarness(
     const view = opts.faults?.life(() => kill());
     const life = mortal(view ? view.store(store) : store);
     kill = life.kill;
+    lives.add(life);
     const outside = {
       tracker: life.gate(view ? view.tracker(tracker) : tracker),
       runner: life.gate(view ? view.runner(runner) : runner),
