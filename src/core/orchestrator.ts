@@ -1265,7 +1265,7 @@ export class Orchestrator {
   }
 
   /**
-   * `key`: the idempotency key of the effect (ORC-162, docs/idempotence.md). Only a replay (a row
+   * `key`: the idempotency key of the effect (ORC-162, docs/idempotency.md). Only a replay (a row
    * claimed before) looks for what an earlier execution wrote: a first execution has nothing to find.
    * A replay that finds the effect already made writes nothing and says so.
    */

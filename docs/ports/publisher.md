@@ -1,31 +1,31 @@
-# Port Publisher
+# Publisher port
 
-L'usine pousse le sha vérifié et ouvre la PR de la branche, ou la retrouve (ORC-125). L'agent ne pousse plus.
+The factory pushes the verified sha and opens the branch's PR, or finds it again (ORC-125). The agent no longer pushes.
 
-- Interface : `Publisher` (`src/adapters/publisher/types.ts`), port nouveau (ORC-225).
-- Implémentations : `GitPublisher` (`src/publish/publish.ts`), `FakePublisher` (`src/adapters/publisher/fake.ts`).
-- Suite : `test/contracts/publisher.contract.ts`, lancée par `src/adapters/publisher/fake.test.ts`. `GitPublisher` a ses tests sur un vrai git et un dépôt nu (`src/publish/publish.test.ts`), et sous un vrai moteur (`test/isolation/isolation-08-diff.test.ts`) : il lui faut une `ForgeWriter`, un sandbox et un dépôt, que la suite ne pose pas.
+- Interface: `Publisher` (`src/adapters/publisher/types.ts`), new port (ORC-225).
+- Implementations: `GitPublisher` (`src/publish/publish.ts`), `FakePublisher` (`src/adapters/publisher/fake.ts`).
+- Suite: `test/contracts/publisher.contract.ts`, run by `src/adapters/publisher/fake.test.ts`. `GitPublisher` has its tests on a real git and a bare repository (`src/publish/publish.test.ts`), and under a real engine (`test/isolation/isolation-08-diff.test.ts`): it needs a `ForgeWriter`, a sandbox and a repository, which the suite does not set up.
 
-## Méthodes
+## Methods
 
-| Méthode | Ce qu'elle garantit | Rejouée | Erreur |
+| Method | What it guarantees | Replayed | Error |
 |---|---|---|---|
-| `publish(req)` | la branche porte `req.sha` et a une PR ouverte, draft à sa création ; rend son numéro, son URL `https://` et le sha poussé | même PR, même résultat, aucun push ; un autre sha met la branche à jour sans ouvrir de seconde PR | `PublishRefused` (`moved`, `rejected`, `diff`, `head`, `trunk`, `empty`) : une réponse, rien n'est écrit sur la forge, à ne pas rejouer ; toute autre rejet : à rejouer, le push a pu avoir lieu |
+| `publish(req)` | the branch carries `req.sha` and has an open PR, draft when created; returns its number, its `https://` URL and the pushed sha | same PR, same result, no push; a different sha updates the branch without opening a second PR | `PublishRefused` (`moved`, `rejected`, `diff`, `head`, `trunk`, `empty`): an answer, nothing is written to the forge, do not replay; any other rejection: replay, the push may have happened |
 
-Une branche a sa PR à elle. Quand la PR de la branche est mergée ou fermée, publier en ouvre une nouvelle, comme GitHub.
+A branch has its own PR. When the branch's PR is merged or closed, publishing opens a new one, like GitHub.
 
 ## Idempotence
 
-La clé est la branche (lignes « Push » et « PR » d'ORC-162) : la tête de la branche est lue avant de pousser, la PR existante cherchée avant d'en créer une.
+The key is the branch ("Push" and "PR" rows of ORC-162): the branch head is read before pushing, the existing PR looked up before creating one.
 
 ## Fencing
 
-Le push se fait en `--force-with-lease` sur la tête lue, et seulement si elle est dans le travail : jamais par-dessus un commit que le travail n'a pas. C'est `GitPublisher` qui le prouve (sur `--force-with-lease` refusé après un déplacement entre la lecture et le push) : le faux ne connaît pas l'ascendance, il refuse sur commande (`refuseNext`).
+The push is done with `--force-with-lease` on the head that was read, and only if that head is part of the work: never over a commit the work does not have. `GitPublisher` is what proves it (on `--force-with-lease` refused after a move between the read and the push): the fake knows nothing of ancestry, it refuses on command (`refuseNext`).
 
-## Ce que la suite demande à l'implémentation
+## What the suite asks of the implementation
 
-`PublisherSubject` : une requête sur une branche sans PR, et en option `end(branche, n)`, qui merge ou ferme cette PR sur la forge (le faux le fait par `FakeForge.setPr`).
+`PublisherSubject`: a request on a branch without a PR, and optionally `end(branch, n)`, which merges or closes that PR on the forge (the fake does it through `FakeForge.setPr`).
 
-## Écarts connus
+## Known gaps
 
-`GitPublisher` ne lance pas la suite (voir plus haut).
+`GitPublisher` does not run the suite (see above).

@@ -54,7 +54,7 @@ export class IssueNotFoundError extends Error {}
  * Writes are keyed by the outbox effect id (`ticket:seq:i`) when they come from an effect (ORC-162):
  * an effect replayed after it acted looks for what its first execution wrote before writing again
  * (`findComment`, `findActivity`), and the writes that set a final state (`moveTo`, `setLabels`,
- * `addExternalUrl`) do nothing when it is already there. See docs/idempotence.md.
+ * `addExternalUrl`) do nothing when it is already there. See docs/idempotency.md.
  */
 export interface Tracker {
   getIssue(identifier: string): Promise<TrackerIssue>;

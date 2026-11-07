@@ -50,7 +50,7 @@ export interface OutboxExecutorDeps {
  *   decision blocks the ticket. All of it in one transaction: nothing of it is kept in memory.
  *
  * At least once: an effect cut after it acted (a crash, a lost lease) runs again under its next
- * claim. Each external effect is idempotent, keyed by the row id (ORC-162, docs/idempotence.md): a
+ * claim. Each external effect is idempotent, keyed by the row id (ORC-162, docs/idempotency.md): a
  * replay that finds it already made writes nothing and settles as done, `deduplicated`.
  */
 export class OutboxExecutor {
