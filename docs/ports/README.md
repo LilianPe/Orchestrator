@@ -1,21 +1,21 @@
-# Contrats des ports
+# Port contracts
 
-Le moteur ne parle au monde que par six ports. Chacun a une **fiche** (ce que toute implémentation garantit : méthodes, idempotence, erreurs, fencing) et une **suite de conformité**, paramétrée par l'implémentation : le faux du harnais la passe, et un nouvel adaptateur doit la passer avant d'être branché.
+The engine only talks to the world through six ports. Each has a **sheet** (what every implementation guarantees: methods, idempotence, errors, fencing) and a **conformance suite**, parameterized by the implementation: the harness's fake passes it, and a new adapter must pass it before being plugged in.
 
-| Port (doc MVP) | Interface | Fiche | Suite | Lancée sur |
+| Port (MVP doc) | Interface | Sheet | Suite | Run on |
 |---|---|---|---|---|
-| Tracker | `Tracker` | [tracker.md](tracker.md) | `test/contracts/tracker.contract.ts` | `FakeTracker` ; `LinearTracker` en live, lecture seule |
-| Forge | `Forge` | [forge.md](forge.md) | `test/contracts/forge.contract.ts` | `FakeForge`, `GitHubAppForge` (sur un `fetch` scripté), `GhCliForge` (sur un `gh` scripté) ; `GhCliForge` en live |
-| Publisher | `Publisher` | [publisher.md](publisher.md) | `test/contracts/publisher.contract.ts` | `FakePublisher` (`GitPublisher` par ses tests propres) |
-| SandboxProvider | `SandboxProvider` | [sandbox-provider.md](sandbox-provider.md) | `test/contracts/sandbox.contract.ts` | `FakeSandboxProvider`, `SandboxRouter`, `ContainerSandboxProvider` (tests d'isolation) |
+| Tracker | `Tracker` | [tracker.md](tracker.md) | `test/contracts/tracker.contract.ts` | `FakeTracker`; `LinearTracker` live, read-only |
+| Forge | `Forge` | [forge.md](forge.md) | `test/contracts/forge.contract.ts` | `FakeForge`, `GitHubAppForge` (on a scripted `fetch`), `GhCliForge` (on a scripted `gh`); `GhCliForge` live |
+| Publisher | `Publisher` | [publisher.md](publisher.md) | `test/contracts/publisher.contract.ts` | `FakePublisher` (`GitPublisher` through its own tests) |
+| SandboxProvider | `SandboxProvider` | [sandbox-provider.md](sandbox-provider.md) | `test/contracts/sandbox.contract.ts` | `FakeSandboxProvider`, `SandboxRouter`, `ContainerSandboxProvider` (isolation tests) |
 | CheckRunner | `CheckRunner` | [check-runner.md](check-runner.md) | `test/contracts/check-runner.contract.ts` | `FakeCheckRunner`, `runVerify` |
-| AgentRuntime | `Runner` | [agent-runtime.md](agent-runtime.md) | `test/contracts/agent-runtime.contract.ts` | `FakeRunner`, `ClaudeCodeRunner` (faux CLI `claude`) |
+| AgentRuntime | `Runner` | [agent-runtime.md](agent-runtime.md) | `test/contracts/agent-runtime.contract.ts` | `FakeRunner`, `ClaudeCodeRunner` (fake `claude` CLI) |
 
-Les interfaces gardent leur nom actuel (`Runner` pour AgentRuntime) : elles prendront le nom cible quand le port changera de forme, pas avant.
+The interfaces keep their current name (`Runner` for AgentRuntime): they will take the target name when the port changes shape, not before.
 
-## Brancher une nouvelle implémentation
+## Plugging in a new implementation
 
-Une suite est une fonction `describe<Port>Contract(nom, make)`. `make` est appelé par cas et rend un sujet neuf : l'implémentation, plus ce que la suite ne peut pas inventer (un ticket existant, une PR, des commandes qui échouent…). Le type `<Port>Subject` de chaque suite dit quoi fournir ; un champ optionnel absent saute les cas qui en ont besoin (`subjectWith`, `test/contracts/cases.ts`). Un test à côté de l'adaptateur l'appelle ; pour un futur adaptateur de conteneurs, par exemple :
+A suite is a function `describe<Port>Contract(name, make)`. `make` is called per case and returns a fresh subject: the implementation, plus what the suite cannot invent (an existing ticket, a PR, failing commands…). Each suite's `<Port>Subject` type says what to provide; a missing optional field skips the cases that need it (`subjectWith`, `test/contracts/cases.ts`). A test next to the adapter calls it; for a future container adapter, for example:
 
 ```ts
 import { describeSandboxContract } from '../../../test/contracts/sandbox.contract.js';
@@ -27,43 +27,43 @@ describeSandboxContract('ContainerSandboxProvider', () => ({
 }));
 ```
 
-Une suite ne lance aucun service : pour un adaptateur qui parle à un vrai service, le test est un test live (ci-dessous).
+A suite starts no service: for an adapter that talks to a real service, the test is a live test (below).
 
-Chaque garantie d'erreur ou d'effet d'une fiche a son cas. Pour une panne, le sujet fournit de quoi la provoquer (un faux qui échoue sur demande, comme `FakeForge.offline`, ou le vrai adaptateur pointé vers un dossier absent ou un réseau coupé) ; pour un effet que le port ne relit pas (un commentaire, une activité), le sujet fournit de quoi le relire (`written` du Tracker). Une garantie qu'on ne sait pas tester ne s'écrit pas dans la fiche.
+Every error or effect guarantee in a sheet has its case. For a failure, the subject provides the means to cause it (a fake that fails on demand, like `FakeForge.offline`, or the real adapter pointed at a missing directory or a cut network); for an effect the port does not read back (a comment, an activity), the subject provides the means to read it back (the Tracker's `written`). A guarantee we cannot test is not written in the sheet.
 
-## Contrôles négatifs
+## Negative controls
 
-Un cas qui passe contre tous les sujets ne prouve rien s'il passerait aussi contre un sujet qui viole sa garantie. `test/contracts/negative-controls.test.ts` lance chaque cas d'erreur des suites, chaque cas de rejeu, d'idempotence, d'indépendance et d'arrêt, les effets des écritures du Tracker et « seulement eux » de `listDelegated`, contre des sujets qui violent chacun une garantie exprès : le cas doit y échouer sur une assertion. Ce qu'ils couvrent, par port :
+A case that passes against every subject proves nothing if it would also pass against a subject that violates its guarantee. `test/contracts/negative-controls.test.ts` runs every error case of the suites, every replay, idempotence, independence and stop case, the effects of the Tracker's writes and the "only those" of `listDelegated`, against subjects that each violate one guarantee on purpose: the case must fail there on an assertion. What they cover, per port:
 
-| Port | Cas sous contrôle |
+| Port | Cases under control |
 |---|---|
-| AgentRuntime | run en échec, run qui ne peut pas démarrer, plafonds de durée et de tours, `stop` (pendant le run, rejoué, après la fin), runs indépendants |
-| CheckRunner | commande en échec (code, sortie, ordre), délai dépassé, commande qui ne démarre pas, rejeu |
-| Forge | branche sans PR, forge injoignable, checks illisibles |
-| Tracker | ticket inconnu en lecture et en écriture, statut absent de la team, `moveTo` rejoué, état final de `setLabels`, effets des écritures, `ensureSession`, `listDelegated` |
-| SandboxProvider | `destroy` d'un id inconnu ou déjà détruit, `create` rejoué, une sandbox par run, une nouvelle après `destroy`, `exec` (résultat, id inconnu), `spawnCommand` sur un id inconnu, `findByAttempt`, `list`, refus d'une exigence non satisfaite |
-| Publisher | republier une branche, une PR par branche, une nouvelle PR après merge ou fermeture |
+| AgentRuntime | failing run, run that cannot start, duration and turn caps, `stop` (during the run, replayed, after the end), independent runs |
+| CheckRunner | failing command (code, output, order), timeout exceeded, command that does not start, replay |
+| Forge | branch without a PR, unreachable forge, unreadable checks |
+| Tracker | unknown ticket on read and on write, status missing from the team, replayed `moveTo`, final state of `setLabels`, effects of writes, `ensureSession`, `listDelegated` |
+| SandboxProvider | `destroy` of an unknown or already destroyed id, replayed `create`, one sandbox per run, a new one after `destroy`, `exec` (result, unknown id), `spawnCommand` on an unknown id, `findByAttempt`, `list`, refusal of an unmet requirement |
+| Publisher | republishing a branch, one PR per branch, a new PR after merge or close |
 
-Les sujets fautifs de chaque cas sont nommés par les titres de `negative-controls.test.ts`. Les cas du chemin nominal n'ont pas de contrôle : un run qui réussit, une commande qui passe, un premier `publish`, un premier `create` et son niveau de réseau, les lectures nominales du Tracker et de la Forge (`getIssue`, `search`, `findPr` qui trouve la PR, instantanés).
+The faulty subjects for each case are named by the titles in `negative-controls.test.ts`. Happy-path cases have no control: a run that succeeds, a command that passes, a first `publish`, a first `create` and its network level, the nominal reads of the Tracker and the Forge (`getIssue`, `search`, `findPr` that finds the PR, snapshots).
 
-Un cas qui attend une réponse du port (un résultat, un `undefined`, un `destroy` ou un rejeu sans effet) la lit par `resolved` (`test/contracts/cases.ts`) : un sujet qui rejette au lieu de répondre y échoue sur une assertion, pas sur sa propre erreur. Tout rejet y compte, un `TypeError` du sujet fautif compris, par exception à la règle du paragraphe suivant : un contrôle qui passe ainsi ne dit pas s'il a touché la garantie visée.
+A case that expects an answer from the port (a result, an `undefined`, a `destroy` or a replay with no effect) reads it through `resolved` (`test/contracts/cases.ts`): a subject that rejects instead of answering fails there on an assertion, not on its own error. Any rejection counts, including a `TypeError` from the faulty subject, as an exception to the rule of the next paragraph: a control that passes this way does not tell whether it hit the targeted guarantee.
 
-Toutes les suites déclarent leurs cas par `describeContract` (`test/contracts/cases.ts`). Leur troisième argument, `{ violates: [noms de cas] }`, les met dans ce mode : seuls ces cas tournent, et chacun ne passe que s'il échoue sur une assertion (une autre erreur, un `TypeError` du sujet par exemple, fait échouer le contrôle, de même qu'un sujet qui n'a pas le champ dont le cas a besoin, au lieu de le sauter). Un nom qui ne désigne aucun cas, ou une liste vide, fait échouer le fichier, pour qu'un cas renommé ne laisse pas son contrôle tourner à vide. Un nouveau cas d'erreur ou d'effet arrive avec son contrôle.
+All suites declare their cases through `describeContract` (`test/contracts/cases.ts`). Its third argument, `{ violates: [case names] }`, puts them in this mode: only those cases run, and each passes only if it fails on an assertion (another error, a `TypeError` from the subject for example, fails the control, as does a subject missing the field the case needs, instead of skipping it). A name that designates no case, or an empty list, fails the file, so that a renamed case does not leave its control running empty. A new error or effect case comes with its control.
 
-## Écarts connus
+## Known gaps
 
-Aucun : chaque implémentation passe tous les cas qu'elle lance. `LinearTracker` en live ne lance que les lectures (sans `states`, les cas d'écriture sont sautés) : ses écritures ne passent par aucune suite. Les faux qui s'en écartaient ont été alignés par ORC-189 ; chaque fiche dit lesquels, et ce qu'un scénario doit déclarer depuis (catalogue de statuts de `FakeTracker`, horloge de `FakeRunner`).
+None: each implementation passes every case it runs. `LinearTracker` live runs only the reads (without `states`, the write cases are skipped): its writes go through no suite. The fakes that diverged were aligned by ORC-189; each sheet says which ones, and what a scenario must declare since then (`FakeTracker` status catalog, `FakeRunner` clock).
 
-Une implémentation qui ne tiendrait pas un cas ne le déclare pas dans sa suite : elle s'aligne, ou le cas sort du contrat avec la fiche, par une décision écrite.
+An implementation that does not hold a case does not declare it in its suite: it aligns, or the case leaves the contract along with the sheet, through a written decision.
 
-## Tests live
+## Live tests
 
-Hors CI, sautés sans leurs variables (règle de [`docs/transition.md`](../transition.md#tests-live-hors-ci)) :
+Outside CI, skipped without their variables (rule from [`docs/transition.md`](../transition.md#live-tests-outside-ci)):
 
-| Test | Variables | Ce qu'il lit |
+| Test | Variables | What it reads |
 |---|---|---|
-| `src/adapters/tracker/linear/tracker.live.test.ts` | `FACTORY_LIVE_LINEAR_TOKEN` (le jeton d'accès OAuth de l'app, envoyé en `Bearer` comme le fait l'instance ; pas une clé d'API personnelle), `FACTORY_LIVE_LINEAR_ISSUE` (un ticket, ex. `ORC-1`) ; options `FACTORY_LIVE_LINEAR_SEARCH`, un mot de son titre, et `FACTORY_LIVE_LINEAR_DELEGATED` avec `FACTORY_LIVE_LINEAR_NOT_DELEGATED`, deux tickets de la même équipe, l'un délégué à l'app (pas terminé ni annulé), l'autre non | le ticket et les tickets délégués à l'app (l'utilisateur du jeton), sans rien écrire |
-| `src/adapters/forge/gh-cli.live.test.ts` | `FACTORY_LIVE_GH_REPO` (un clone local), `FACTORY_LIVE_GH_BRANCH` et `FACTORY_LIVE_GH_PR` (une branche et sa PR, aux checks terminés : une PR mergée convient) ; `gh` connecté | la PR, sans rien écrire ; la forge injoignable passe par un proxy sur un port local fermé |
+| `src/adapters/tracker/linear/tracker.live.test.ts` | `FACTORY_LIVE_LINEAR_TOKEN` (the app's OAuth access token, sent as `Bearer` as the instance does; not a personal API key), `FACTORY_LIVE_LINEAR_ISSUE` (a ticket, e.g. `ORC-1`); options `FACTORY_LIVE_LINEAR_SEARCH`, a word from its title, and `FACTORY_LIVE_LINEAR_DELEGATED` with `FACTORY_LIVE_LINEAR_NOT_DELEGATED`, two tickets from the same team, one delegated to the app (neither done nor canceled), the other not | the ticket and the tickets delegated to the app (the token's user), without writing anything |
+| `src/adapters/forge/gh-cli.live.test.ts` | `FACTORY_LIVE_GH_REPO` (a local clone), `FACTORY_LIVE_GH_BRANCH` and `FACTORY_LIVE_GH_PR` (a branch and its PR, with finished checks: a merged PR works); `gh` logged in | the PR, without writing anything; the unreachable forge goes through a proxy on a closed local port |
 
 ```bash
 FACTORY_LIVE_GH_REPO=$PWD FACTORY_LIVE_GH_BRANCH=orc-168-ci-postgres-docker-rootless FACTORY_LIVE_GH_PR=30 \

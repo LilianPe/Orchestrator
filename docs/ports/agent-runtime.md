@@ -1,45 +1,45 @@
-# Port AgentRuntime
+# AgentRuntime port
 
-Lancer un agent sur un prompt, suivre son flux, l'arrêter, et lire son issue. C'est le port `Runner` actuel, pas renommé tant qu'il ne change pas de forme.
+Launch an agent on a prompt, follow its stream, stop it, and read its outcome. This is the current `Runner` port, not renamed as long as its shape does not change.
 
-- Interface : `Runner`, `RunRequest`, `RunHandle`, `RunResult` (`src/adapters/runner/types.ts`).
-- Implémentations : `ClaudeCodeRunner` (`src/adapters/runner/claude-code.ts`, `claude -p` en sous-processus), `FakeRunner` (`src/adapters/runner/fake.ts`).
-- Suite : `test/contracts/agent-runtime.contract.ts`, lancée par `src/adapters/runner/fake.test.ts` et `src/adapters/runner/claude-code.test.ts` (sur le faux `claude` de `src/adapters/runner/fixtures/`, sans réseau).
+- Interface: `Runner`, `RunRequest`, `RunHandle`, `RunResult` (`src/adapters/runner/types.ts`).
+- Implementations: `ClaudeCodeRunner` (`src/adapters/runner/claude-code.ts`, `claude -p` as a subprocess), `FakeRunner` (`src/adapters/runner/fake.ts`).
+- Suite: `test/contracts/agent-runtime.contract.ts`, run by `src/adapters/runner/fake.test.ts` and `src/adapters/runner/claude-code.test.ts` (on the fake `claude` in `src/adapters/runner/fixtures/`, without network).
 
-## Méthodes
+## Methods
 
-| Méthode | Ce qu'elle garantit | Rejouée | Erreur |
+| Method | What it guarantees | Replayed | Error |
 |---|---|---|---|
-| `start(req)` | un run, et son `RunHandle` | un second `start` lance un second run | ne lève pas : un échec de lancement finit en `failure` |
-| `handle.events` | les événements du flux, dans l'ordre ; le flux se ferme quand le run finit | — | — |
-| `handle.done` | l'issue : `success`, `failure`, `stopped` ou `limit`, le coût (≥ 0), les tours (≥ 1 sur un succès), le dernier texte de l'agent, et l'usage en tokens quand le runtime le rend (`tokens`, ORC-235 ; `claude -p` : `usage` de sa ligne `result`), jamais lu dans le texte de l'agent | — | ne rejette pas |
-| `handle.stop()` | le run finit en `stopped` | sans effet ; après la fin, l'issue ne change pas | — |
+| `start(req)` | a run, and its `RunHandle` | a second `start` launches a second run | does not throw: a launch failure ends in `failure` |
+| `handle.events` | the stream's events, in order; the stream closes when the run ends | — | — |
+| `handle.done` | the outcome: `success`, `failure`, `stopped` or `limit`, the cost (≥ 0), the turns (≥ 1 on a success), the agent's last text, and the token usage when the runtime returns it (`tokens`, ORC-235; `claude -p`: `usage` from its `result` line), never read from the agent's text | — | does not reject |
+| `handle.stop()` | the run ends in `stopped` | no effect; after the end, the outcome does not change | — |
 
-Un run qui dépasse `limits.durationMs` ou `limits.turns` finit en `limit`. Deux runs sont indépendants : arrêter l'un laisse l'autre tourner.
+A run that exceeds `limits.durationMs` or `limits.turns` ends in `limit`. Two runs are independent: stopping one leaves the other running.
 
 ## Idempotence
 
-`start` n'est pas idempotent : la ligne « Appel au modèle » d'ORC-162 met l'idempotence dans le moteur (id de tentative), pas dans le port.
+`start` is not idempotent: the "Model call" row of ORC-162 puts idempotence in the engine (attempt id), not in the port.
 
 ## Fencing
 
-Un `RunHandle` appartient à un seul `start`, donc à un seul `runId` : la suite vérifie qu'arrêter un run laisse l'autre tourner. Ignorer le résultat d'une tentative qui n'est plus active, c'est le moteur (ORC-133, ORC-162).
+A `RunHandle` belongs to a single `start`, hence to a single `runId`: the suite checks that stopping one run leaves the other running. Ignoring the result of an attempt that is no longer active is the engine's job (ORC-133, ORC-162).
 
-## Ce que la suite demande à l'implémentation
+## What the suite asks of the implementation
 
-`AgentRuntimeSubject` : le runtime, en option `elapse(ms)`, qui avance son horloge (absent, la suite attend en temps réel ; présent, un run plafonné doit finir en `limit` dans les 100 ms qui suivent), et `script(nom)`, qui prépare le prochain run à se comporter comme `success`, `failure`, `hang` (tourne jusqu'à l'arrêt ou au plafond), `chatty` (enchaîne au moins trois tours) ou `unlaunchable` (ne peut pas démarrer : `ClaudeCodeRunner` le lance dans un dossier absent), et rend ce que sa requête doit porter pour ça (le faux `claude` lit son script dans l'environnement).
+`AgentRuntimeSubject`: the runtime, optionally `elapse(ms)`, which advances its clock (absent, the suite waits in real time; present, a capped run must end in `limit` within the following 100 ms), and `script(name)`, which prepares the next run to behave as `success`, `failure`, `hang` (runs until stopped or capped), `chatty` (chains at least three turns) or `unlaunchable` (cannot start: `ClaudeCodeRunner` launches it in a missing directory), and returns what its request must carry for that (the fake `claude` reads its script from the environment).
 
-La suite attend l'issue d'un run qui ne peut pas démarrer, ou d'un run arrêté par `stop`, au plus 1,5 s, et la fermeture de son flux autant. Un runtime qui laisse un délai de grâce avant de tuer son processus le règle plus court pour la suite : `ClaudeCodeRunner` attend `killGraceMs` (10 s par défaut) et sa suite le met à 500 ms.
+The suite waits at most 1.5 s for the outcome of a run that cannot start, or of a run stopped by `stop`, and as long for its stream to close. A runtime that leaves a grace period before killing its process sets it shorter for the suite: `ClaudeCodeRunner` waits `killGraceMs` (10 s by default) and its suite sets it to 500 ms.
 
-## Hypothèse sur le point ouvert (ORC-155)
+## Assumption on the open question (ORC-155)
 
-ORC-155 décidera si ce port devient une abstraction du harness (Claude Code ou un autre). La suite ne tranche pas : elle traite le runtime en boîte noire, et ne regarde ni les champs propres à Claude de `RunRequest` (`claudeSessionId`, `pluginDir`, `settingsPath`) ni les arguments de la CLI (testés à part, `buildClaudeArgs`). Un second runtime la passe tant que `start`, `RunHandle` et les quatre issues gardent leur forme ; si ORC-155 change cette forme, la suite change avec le port.
+ORC-155 will decide whether this port becomes an abstraction of the harness (Claude Code or another). The suite does not decide: it treats the runtime as a black box, and looks neither at the Claude-specific fields of `RunRequest` (`claudeSessionId`, `pluginDir`, `settingsPath`) nor at the CLI arguments (tested separately, `buildClaudeArgs`). A second runtime passes it as long as `start`, `RunHandle` and the four outcomes keep their shape; if ORC-155 changes that shape, the suite changes with the port.
 
-## Écarts connus
+## Known gaps
 
-`RunRequest.sensitivePaths` (les chemins qu'un run qui lit un contenu non fiable ne doit pas écrire, ORC-274) est porté jusqu'au port mais appliqué par aucune implémentation : `ClaudeCodeRunner` l'ignore, et la suite ne le vérifie pas. L'appliquer revient à la sandbox du runner (ORC-151, ORC-204).
+`RunRequest.sensitivePaths` (the paths a run that reads untrusted content must not write, ORC-274) is carried all the way to the port but enforced by no implementation: `ClaudeCodeRunner` ignores it, and the suite does not check it. Enforcing it falls to the runner's sandbox (ORC-151, ORC-204).
 
-`FakeRunner` ignorait `limits` : depuis ORC-189, il les tient comme le vrai runtime.
+`FakeRunner` ignored `limits`: since ORC-189, it enforces them like the real runtime.
 
-- Tours : un script dont `turns` dépasse `limits.turns` finit en `limit` tout de suite, sans attendre `release`, et rapporte `limits.turns + 1` tours : le vrai runtime interrompt l'agent au tour qui dépasse et rapporte les tours lus jusqu'à sa sortie, au moins celui-là ; le faux rapporte ce minimum.
-- Durée : sur l'horloge simulée passée au constructeur (`new FakeRunner(clock)`), vérifiée à chaque `tick()`. Un run tenu (`hold`) finit en `limit` quand l'horloge atteint `limits.durationMs` depuis son départ. Le harnais des scénarios lui passe son horloge et appelle `tick()` dans `advance(ms)` : un scénario qui avance l'horloge au-delà du plafond d'un run tenu le voit finir en `limit`.
+- Turns: a script whose `turns` exceeds `limits.turns` ends in `limit` right away, without waiting for `release`, and reports `limits.turns + 1` turns: the real runtime interrupts the agent on the turn that exceeds and reports the turns read until it exits, at least that one; the fake reports that minimum.
+- Duration: on the simulated clock passed to the constructor (`new FakeRunner(clock)`), checked on each `tick()`. A held run (`hold`) ends in `limit` when the clock reaches `limits.durationMs` since its start. The scenario harness passes it its clock and calls `tick()` in `advance(ms)`: a scenario that advances the clock past the cap of a held run sees it end in `limit`.

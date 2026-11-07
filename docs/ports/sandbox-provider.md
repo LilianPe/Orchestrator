@@ -1,68 +1,68 @@
-# Port SandboxProvider
+# SandboxProvider port
 
-Un environnement isolé par tentative : un conteneur créé pour elle et détruit après, qui ne voit ni l'hôte, ni le démon, ni les autres runs (ORC-204). Le pipeline exprime des exigences ; le fournisseur prend un backend qui les satisfait, ou il refuse.
+One isolated environment per attempt: a container created for it and destroyed afterwards, which sees neither the host, nor the daemon, nor the other runs (ORC-204). The pipeline expresses requirements; the provider picks a backend that satisfies them, or it refuses.
 
-- Interface : `SandboxProvider` (`src/adapters/sandbox/types.ts`), port posé par ORC-225, élargi par ORC-204. Niveaux réseau : `none`, `claude-api`, `limited`, `full`. Niveaux d'isolation : `L3` (conteneur rootless), `L4` (gVisor), `L5` (microVM) ; seul `L3` existe au MVP.
-- Implémentations :
-  - `FakeSandboxProvider` (`src/adapters/sandbox/fake.ts`) : le faux du harnais, qui n'isole rien et rend ce qu'on lui scripte pour `exec` ;
-  - `SandboxRouter` (`src/adapters/sandbox/router.ts`) : choisit le backend de chaque sandbox (ci-dessous) ;
-  - le backend conteneur (`src/adapters/sandbox/docker-rootless.ts`), piloté par la CLI `docker` ou `podman`, au niveau `L3`, sans navigateur ni services.
-- Suite : `test/contracts/sandbox.contract.ts`, lancée par `src/adapters/sandbox/fake.test.ts` et `src/adapters/sandbox/router.test.ts` (le routeur sur un faux).
+- Interface: `SandboxProvider` (`src/adapters/sandbox/types.ts`), port introduced by ORC-225, widened by ORC-204. Network levels: `none`, `claude-api`, `limited`, `full`. Isolation levels: `L3` (rootless container), `L4` (gVisor), `L5` (microVM); only `L3` exists in the MVP.
+- Implementations:
+  - `FakeSandboxProvider` (`src/adapters/sandbox/fake.ts`): the harness's fake, which isolates nothing and returns what is scripted for `exec`;
+  - `SandboxRouter` (`src/adapters/sandbox/router.ts`): picks the backend of each sandbox (below);
+  - the container backend (`src/adapters/sandbox/docker-rootless.ts`), driven by the `docker` or `podman` CLI, at level `L3`, without browser or services.
+- Suite: `test/contracts/sandbox.contract.ts`, run by `src/adapters/sandbox/fake.test.ts` and `src/adapters/sandbox/router.test.ts` (the router on a fake).
 
-Le ticket donnait `WorkspaceManager` → SandboxProvider. ORC-225 a posé `SandboxProvider` à côté, et `WorkspaceManager` (`src/adapters/workspace/types.ts`) reste le port des worktrees : le worktree est monté dans le sandbox, il n'y est pas créé.
+The ticket gave `WorkspaceManager` → SandboxProvider. ORC-225 introduced `SandboxProvider` alongside, and `WorkspaceManager` (`src/adapters/workspace/types.ts`) remains the worktree port: the worktree is mounted into the sandbox, it is not created there.
 
-## Méthodes
+## Methods
 
-| Méthode | Ce qu'elle garantit | Rejouée | Erreur |
+| Method | What it guarantees | Replayed | Error |
 |---|---|---|---|
-| `create(req)` | un sandbox vivant pour `req.runId`, qui porte le niveau réseau demandé (`req.network`, appliqué par le proxy de sortie, ci-dessous), sur un backend qui satisfait `req.requirements` | même `runId` : rend le sandbox existant, n'en crée pas de second (le routeur rejette s'il n'a pas ce niveau réseau ou ne satisfait pas les exigences) | rejette, en nommant l'exigence non satisfaite, quand aucun backend ne les satisfait toutes ; aucun sandbox n'est créé |
-| `exec(id, argv, opts?)` | lance `argv` dans le sandbox jusqu'au bout et rend son code de sortie, `stdout` et `stderr` ; `cwd` vaut `/work` par défaut | relance la commande | rejette sur un id inconnu ou détruit ; un code non nul est un résultat, pas un rejet |
-| `spawnCommand(id, argv, opts?)` | la commande hôte (`command`) qui lance `argv` dans le sandbox, stdio attaché, pour un runner qui lit sa sortie au fil de l'eau, et ce que le processus hôte doit avoir dans son environnement (`env`) ; les valeurs de `opts.env` ne figurent jamais dans la commande | même commande | lève sur un id inconnu |
-| `findByAttempt(runId)` | le sandbox vivant de la tentative, par son label | sans effet | `undefined` quand il n'y en a pas, ou plus après `destroy` |
-| `reattach(runId)` | le sandbox vivant d'une tentative lancée par un processus précédent, rendu utilisable par celui-ci : son proxy de sortie écoute de nouveau (ORC-220) | sans effet | `undefined` quand aucun ne tourne |
-| `list()` | chaque sandbox vivant que le fournisseur a fait, avec son `runId`, pour que `recover()` détruise ceux des tentatives mortes, sans toucher à ceux qu'il a repris | sans effet | aucune |
-| `destroy(id)` | le sandbox n'existe plus | sans effet | un id inconnu ou déjà détruit est ignoré |
+| `create(req)` | a live sandbox for `req.runId`, carrying the requested network level (`req.network`, enforced by the egress proxy, below), on a backend that satisfies `req.requirements` | same `runId`: returns the existing sandbox, does not create a second one (the router rejects if it does not have that network level or does not satisfy the requirements) | rejects, naming the unmet requirement, when no backend satisfies them all; no sandbox is created |
+| `exec(id, argv, opts?)` | runs `argv` in the sandbox to completion and returns its exit code, `stdout` and `stderr`; `cwd` defaults to `/work` | reruns the command | rejects on an unknown or destroyed id; a non-zero code is a result, not a rejection |
+| `spawnCommand(id, argv, opts?)` | the host command (`command`) that runs `argv` in the sandbox, stdio attached, for a runner that reads its output as it goes, and what the host process must have in its environment (`env`); the values of `opts.env` never appear in the command | same command | throws on an unknown id |
+| `findByAttempt(runId)` | the attempt's live sandbox, by its label | no effect | `undefined` when there is none, or no longer after `destroy` |
+| `reattach(runId)` | the live sandbox of an attempt launched by a previous process, made usable by this one: its egress proxy listens again (ORC-220) | no effect | `undefined` when none is running |
+| `list()` | every live sandbox the provider made, with its `runId`, so that `recover()` destroys those of dead attempts, without touching those it took back | no effect | none |
+| `destroy(id)` | the sandbox no longer exists | no effect | an unknown or already destroyed id is ignored |
 
-Après `destroy`, un `create` pour le même `runId` donne un nouveau sandbox.
+After `destroy`, a `create` for the same `runId` gives a new sandbox.
 
-## L'environnement du conteneur
+## The container's environment
 
-`opts.env` est pour la commande du conteneur, jamais pour le processus du moteur sur l'hôte. Le backend conteneur le transporte sous des noms neutres (`-e FACTORY_SANDBOX_ENV_<n>`, valeurs dans l'environnement du processus CLI), et un petit `sh` dans le conteneur rend à chaque valeur son nom, retire les noms neutres et devient la commande. Sous son propre nom, une variable serait aussi lue par le moteur : mesuré sur Podman 5.8 rootless, `HOME` et `XDG_DATA_HOME` déplacent son stockage (« no container with name or ID »), `XDG_RUNTIME_DIR` et `TMPDIR` son dossier d'exécution, `CONTAINER_HOST` sa cible. Docker lit de même `DOCKER_HOST`. L'image doit donc avoir `sh`. Un nom qui n'est pas un nom de variable est refusé.
+`opts.env` is for the container's command, never for the engine process on the host. The container backend carries it under neutral names (`-e FACTORY_SANDBOX_ENV_<n>`, values in the CLI process's environment), and a small `sh` in the container gives each value back its name, removes the neutral names and becomes the command. Under its own name, a variable would also be read by the container engine: measured on rootless Podman 5.8, `HOME` and `XDG_DATA_HOME` move its storage ("no container with name or ID"), `XDG_RUNTIME_DIR` and `TMPDIR` its runtime directory, `CONTAINER_HOST` its target. Docker likewise reads `DOCKER_HOST`. The image must therefore have `sh`. A name that is not a variable name is refused.
 
-## Exigences et refus
+## Requirements and refusals
 
-`req.requirements` : un niveau d'isolation minimal (`minLevel`, ordonné `L3` < `L4` < `L5`), `browser` et une liste de `services`. Un backend les satisfait toutes ou n'est pas pris : jamais de repli silencieux sur un backend moins isolé, ni sur l'hôte. Le refus est un rejet de `create` dont le message nomme ce qui manque (`level >= L5`, `browser`, `service postgres`). Au MVP, `L4`, `L5`, un navigateur et tout service sont donc refusés.
+`req.requirements`: a minimum isolation level (`minLevel`, ordered `L3` < `L4` < `L5`), `browser` and a list of `services`. A backend satisfies them all or is not picked: never a silent fallback to a less isolated backend, nor to the host. The refusal is a rejection of `create` whose message names what is missing (`level >= L5`, `browser`, `service postgres`). In the MVP, `L4`, `L5`, a browser and any service are therefore refused.
 
-## Le routeur
+## The router
 
-`SandboxRouter` reçoit une liste de backends, chacun avec un nom, un `SandboxProvider` et ce qu'il sait faire (`level`, `browser`, `services`). Il est lui-même un `SandboxProvider` :
+`SandboxRouter` receives a list of backends, each with a name, a `SandboxProvider` and what it can do (`level`, `browser`, `services`). It is itself a `SandboxProvider`:
 
-- `create` demande d'abord `findByAttempt(runId)` à chaque backend : un `create` rejoué rend le sandbox existant, quel que soit le backend qui le tient, s'il a le niveau réseau demandé et satisfait les exigences (niveau d'isolation, capacités de son backend) ; sinon il rejette, sans jamais le rendre. Sinon il prend le premier backend qui satisfait toutes les exigences, ou rejette en disant, backend par backend, ce qui lui manque.
-- `exec`, `spawnCommand` et `destroy` vont au backend qui a fait l'id. Le routeur s'en souvient en mémoire ; après un redémarrage du démon, `reattach`, `list()` et `findByAttempt` le réapprennent des backends. Pour un id qu'il ne connaît pas, `destroy` ne fait rien, `exec` rejette, `spawnCommand` lève.
-- `list()` met bout à bout les listes des backends.
+- `create` first asks each backend for `findByAttempt(runId)`: a replayed `create` returns the existing sandbox, whichever backend holds it, if it has the requested network level and satisfies the requirements (isolation level, capabilities of its backend); otherwise it rejects, never returning it. Otherwise it picks the first backend that satisfies all requirements, or rejects saying, backend by backend, what it lacks.
+- `exec`, `spawnCommand` and `destroy` go to the backend that made the id. The router remembers it in memory; after a daemon restart, `reattach`, `list()` and `findByAttempt` relearn it from the backends. For an id it does not know, `destroy` does nothing, `exec` rejects, `spawnCommand` throws.
+- `list()` concatenates the backends' lists.
 
 ## Idempotence
 
-La clé est l'id de la tentative, `runId`, porté par le label `factory.attempt=<runId>` et cherché avant de créer (ligne « Conteneur » d'ORC-162). Un `create` rejoué rend le sandbox tel qu'il a été créé. Une requête rejouée avec un autre niveau réseau ou des exigences qu'il ne satisfait pas est rejetée par le routeur (et le backend conteneur pour le réseau) ; la suite de contrat ne le vérifie pas.
+The key is the attempt id, `runId`, carried by the `factory.attempt=<runId>` label and looked up before creating ("Container" row of ORC-162). A replayed `create` returns the sandbox as it was created. A request replayed with another network level or requirements it does not satisfy is rejected by the router (and by the container backend for the network); the contract suite does not check it.
 
-Avec plusieurs démons sur un même moteur, chacun pose aussi `factory.instance=<id>` (12 hexadécimaux du sha256 de son `FACTORY_HOME`) et ne cherche que ses conteneurs : `recover()` ne détruit pas ceux d'un autre.
+With several daemons on the same container engine, each also sets `factory.instance=<id>` (12 hex digits of the sha256 of its `FACTORY_HOME`) and only looks for its own containers: `recover()` does not destroy another's.
 
 ## Fencing
 
-Le sandbox appartient à une tentative : c'est le moteur qui décide quelle tentative est active (ORC-133) et détruit les autres, au démarrage par `list()` dans `recover()`, une fois repris ceux des tentatives encore en vie (`reattach`).
+The sandbox belongs to an attempt: the engine is what decides which attempt is active (ORC-133) and destroys the others, at startup through `list()` in `recover()`, once it has taken back those of attempts still alive (`reattach`).
 
-## Ce que la suite demande à l'implémentation
+## What the suite asks of the implementation
 
-`SandboxSubject` :
+`SandboxSubject`:
 
-- `request` : une requête pour un run sans sandbox ;
-- `active()` : les ids des sandboxes vivants (le faux les lit par `active()` ; un vrai, par ses labels) ;
-- `unsatisfiable` (optionnel) : des exigences que le sujet ne sait pas satisfaire et un motif du message de refus qui doit les nommer ; sans lui, le cas du refus est sauté (le faux, qui ne regarde pas les exigences, n'en déclare pas).
+- `request`: a request for a run without a sandbox;
+- `active()`: the ids of the live sandboxes (the fake reads them through `active()`; a real one, through its labels);
+- `unsatisfiable` (optional): requirements the subject cannot satisfy and a pattern of the refusal message that must name them; without it, the refusal case is skipped (the fake, which does not look at requirements, declares none).
 
-Le cas `exec` lance `EXEC_PROBE` (`sh -c`, qui écrit sur les deux sorties et sort en 3) : un vrai sandbox l'exécute, un faux scripte sa réponse.
+The `exec` case runs `EXEC_PROBE` (`sh -c`, which writes to both outputs and exits with 3): a real sandbox executes it, a fake scripts its answer.
 
-## Écarts connus
+## Known gaps
 
-- **Réseau appliqué par le proxy de sortie (ORC-213).** Le backend conteneur tourne toujours en `--network none`. Avec le proxy de l'usine, il monte le socket du run et le certificat de l'autorité de sortie, et c'est le proxy qui applique le niveau ; sans proxy, rien ne sort, quel que soit le niveau. Le `Sandbox` rendu porte le niveau demandé (un `create` rejoué le compare). Un conteneur vivant dont le socket n'est pas tenu par ce processus (démon redémarré) n'est rendu que par `reattach`, qui rouvre le socket au même chemin : `create` et `findByAttempt` ne le rendent pas, et `create` le détruit et le refait. Voir [interface-et-securite.md](../interface-et-securite.md#réseau-des-sandboxes).
-- `FakeSandboxProvider` ne regarde pas les exigences : il crée toujours un sandbox `L3`. Le refus est vérifié sur le routeur.
-- `FakeSandboxProvider.create` créait un sandbox à chaque appel : il rend celui du run depuis ORC-189.
+- **Network enforced by the egress proxy (ORC-213).** The container backend always runs with `--network none`. With the factory's proxy, it mounts the run's socket and the egress authority's certificate, and the proxy is what enforces the level; without a proxy, nothing gets out, whatever the level. The returned `Sandbox` carries the requested level (a replayed `create` compares it). A live container whose socket is not held by this process (restarted daemon) is only returned by `reattach`, which reopens the socket at the same path: `create` and `findByAttempt` do not return it, and `create` destroys and remakes it. See [interface-et-securite.md](../interface-et-securite.md#sandbox-network).
+- `FakeSandboxProvider` does not look at requirements: it always creates an `L3` sandbox. The refusal is checked on the router.
+- `FakeSandboxProvider.create` created a sandbox on each call: it returns the run's one since ORC-189.
