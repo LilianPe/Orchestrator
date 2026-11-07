@@ -22,7 +22,15 @@ export default defineConfig({
           include: ['src/**/*.test.ts', 'test/**/*.test.ts', 'web/src/**/*.test.ts'],
           exclude: ['test/integration/**', 'test/isolation/**', 'test/chaos/**'],
           environment: 'node',
-          testTimeout: 15000,
+          // Many of these tests spawn real processes (git, bash, node), which need CPUs beside their worker's (ORC-325).
+          // Measured on an 8-CPU machine, two `npm test` at once: with Vitest's default of a worker per CPU but one, 85 to
+          // 89 tests took past 15 s and the slowest 59 s; with half the CPUs, 6 or 7 past 15 s and the slowest 21 s, each
+          // run in 460 s instead of 867 s. Alone, half the CPUs is no slower: 261 s against 272 s.
+          maxWorkers: Math.max(1, Math.floor(availableParallelism() / 2)),
+          // About three times that slowest 21 s: a margin for a busier machine, and a hang still said within a minute.
+          testTimeout: 60_000,
+          // A hook does what a test does here (git fixtures, servers, an RSA key), on the same load: the same bound.
+          hookTimeout: 60_000,
         },
       },
       {

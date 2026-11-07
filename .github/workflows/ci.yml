@@ -10,6 +10,9 @@ jobs:
   test:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
+    # The job takes 1.5 to 2 min (`npm test` 37 to 52 s); a stalled runner has taken 5.5 min for setup-node alone (ORC-290).
+    # 15 min holds both, where GitHub's default of 6 h would hold a hung test that long (ORC-325).
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
