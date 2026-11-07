@@ -201,7 +201,7 @@ Sont acceptés :
 2. un workflow avec secrets dont **tous les jobs qui voient un secret** sont rattachés à un environnement GitHub dont les `protection_rules` contiennent `required_reviewers` avec au moins un reviewer : l'approbation humaine bloque le job avant qu'il ne lise le secret ;
 3. un workflow avec secrets qui ne tourne que sur des branches hors usine, ou seulement sur des tags.
 
-En cas de doute, `doctor` refuse : YAML invalide ou ambigu (multi-document, `on` dynamique, filtres mal typés), environnement introuvable ou sans required reviewers, clé `secrets:` (workflow réutilisable) sans environnement protégé, erreur de l'API GitHub, réponse de l'API illisible (jamais lue comme « aucun workflow », « aucun environnement » ou « aucun reviewer »), plus de 1000 environnements. `GITHUB_TOKEN` compte comme un secret.
+En cas de doute, `doctor` refuse : YAML invalide ou ambigu (multi-document, `on` dynamique, filtres mal typés), environnement introuvable ou sans required reviewers, clé `secrets:` (workflow réutilisable) sans environnement protégé, erreur de l'API GitHub, réponse de l'API illisible (jamais lue comme « aucun workflow », « aucun environnement », « aucun reviewer » ou « protégé »), plus de 1000 environnements. Un 404 sur `.github/workflows` veut dire « pas de CI » ; un 404 sur l'installation de l'App ou sur son jeton est une erreur de configuration : `doctor` refuse. `GITHUB_TOKEN` compte comme un secret.
 
 ### Exemples
 

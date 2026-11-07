@@ -11,7 +11,7 @@ La forge de code, en lecture : la PR d'une branche, l'état de ses checks, ses f
 | Méthode | Ce qu'elle garantit | Rejouée | Erreur |
 |---|---|---|---|
 | `findPr(repo, branche)` | `undefined` sans PR ; sinon la PR de la branche (numéro, URL `https://`, état `OPEN`/`MERGED`/`CLOSED`), `checks` parmi `pending`/`pass`/`fail`/`none`, `failedChecks` non vide exactement quand `checks` vaut `fail` ; une copie | lecture : même réponse | rejette si la forge ne répond pas, y compris quand elle rend la PR mais pas ses checks, et quand elle rend des checks illisibles, même sans erreur (ORC-305 : le relevé des PR journalise l'erreur et réessaie au tour suivant) ; une PR ouverte sans aucun check donne `none` ; un check dans un état que la forge ne connaît pas ne donne ni `pass` ni `none` (ORC-303) |
-| `unresolvedReviewComments(repo, n)` | les fils de review non résolus, en `FeedbackItem` de source `review` (auteur, corps, date) ; une copie | lecture | rejette si la forge ne répond pas |
+| `unresolvedReviewComments(repo, n)` | les fils de review non résolus, en `FeedbackItem` de source `review` (auteur, corps, date) ; une copie | lecture | rejette si la forge ne répond pas, ou rend des fils illisibles (`GitHubAppForge`) |
 
 ## Idempotence
 
@@ -27,7 +27,7 @@ Le port `Forge` ne fait que lire. Les écritures de l'usine sont à part, dans `
 
 Seuls `GitHubAppForge` et `FakeForge` l'implémentent : GitHub ne laisse qu'une app créer un check run, pas le jeton utilisateur de `gh`. Détail et limites : [Idempotence des effets externes](../idempotence.md).
 
-`GitHubAppForge` ne lit aucune réponse de GitHub sans la valider : une réponse 2xx qu'il ne peut pas lire fait rejeter l'écriture, avec l'appel et un extrait de la réponse dans l'erreur (sans extrait pour le jeton d'installation), jamais lue comme un verdict (ORC-273). Ainsi `ensurePr` rejette une liste de PR illisible au lieu de créer une PR, et une PR créée sans son URL ; `markPrReady`, une PR sans son état de draft, ou en draft sans son `node_id`, au lieu de la croire sortie de draft ; `upsertCheckRun`, une liste de check runs illisible, lue en entier (au plus 1000, comme les checks de `findPr`), au lieu d'en créer un second pour le même `externalId` ; `repoPermission` (ORC-186), une réponse sans permission au lieu de répondre `none`. Seules les réponses que l'usine ignore (le `PUT` du merge, le `PATCH` d'un check run) ne sont pas lues.
+`GitHubAppForge` ne lit aucune réponse de GitHub sans la valider : une réponse 2xx qu'il ne peut pas lire fait rejeter l'écriture, avec l'appel et un extrait de la réponse dans l'erreur (sans extrait pour le jeton d'installation), jamais lue comme un verdict (ORC-273). Ainsi `ensurePr` rejette une liste de PR illisible au lieu de créer une PR, et une PR créée sans son URL ; `markPrReady`, une PR sans son état de draft, ou en draft sans son `node_id`, et une mutation qui ne rend ni son résultat ni des erreurs lisibles, au lieu de la croire sortie de draft ; `upsertCheckRun`, une liste de check runs illisible, lue en entier (au plus 1000, comme les checks de `findPr`), au lieu d'en créer un second pour le même `externalId` ; `repoPermission` (ORC-186), une réponse sans permission au lieu de répondre `none`. Seules les réponses que l'usine ignore (le `PUT` du merge, le `PATCH` d'un check run) ne sont pas lues.
 
 ## Fencing
 
