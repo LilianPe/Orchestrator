@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { closeSync, createWriteStream, existsSync, mkdirSync, openSync, readFileSync, readSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
-import { addTokens, NO_TOKENS, type RunOutcome, type Stagnation, type TokenUsage } from '../../core/types.js';
+import { addTokens, NO_TOKENS, spentTokens, type RunOutcome, type Stagnation, type TokenUsage } from '../../core/types.js';
 import { execCmd, systemEnv } from '../exec.js';
 import { Channel } from './channel.js';
 import { failedCommand, LoopDetector, WORKTREE_TREE } from './stagnation.js';
@@ -155,9 +155,6 @@ interface Followed {
 
 /** Seconds reading the worktree may take, for `timeout`, which kills it: past it, this failure is not counted. */
 const TREE_TIMEOUT_S = 30;
-
-/** What a token cap counts: what the model read anew and wrote. A cache read costs next to nothing, and grows with each turn. */
-const spentTokens = (u: TokenUsage): number => u.input + u.output + u.cacheCreation;
 
 /** What a warning takes of an stderr: its first line, cut. git names a path there, not what a file holds. */
 const STDERR_LINE_MAX = 200;

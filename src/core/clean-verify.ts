@@ -1,12 +1,13 @@
 import { mkdirSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { execCmd, mustExec, type Exec, type ExecResult } from '../adapters/exec.js';
+import { execCmd, execFailure, mustExec, type Exec, type ExecResult } from '../adapters/exec.js';
 import { DEFAULT_REQUIREMENTS, type SandboxMount, type SandboxProvider } from '../adapters/sandbox/types.js';
+import { ANTI_CHEAT_CHECK, antiCheatCheck } from '../checks/anti-cheat.js';
 import { checkFrozen, FREEZE_CHECK, isFrozenHarness, type FrozenTests } from '../checks/freeze.js';
 import { checkForbiddenPaths, FORBIDDEN_CHECK } from '../checks/forbidden-paths.js';
 import { mdCode } from '../checks/markdown.js';
-import { parseRepoConfig, type RepoConfig } from '../config/repo-config.js';
+import { parseRepoConfig, REPO_CONFIG_PATH, type RepoConfig } from '../config/repo-config.js';
 import { BUNDLE_TARGET, extractWork, HARDENING, hostGitEnv, IN_SANDBOX, IN_SANDBOX_ENV } from '../publish/extract.js';
 import { runSealedSetup } from './sealed-setup.js';
 import type { VerifyFailure } from './types.js';
@@ -47,7 +48,8 @@ export interface CleanVerifyRequest {
   exec?: Exec;
 }
 
-export type CleanVerifyResult = VerifyResult & { sha: string; tree: string };
+/** `commands`: what ran on the commit, none when nothing is declared; absent when it was found green before, and nothing ran again. */
+export type CleanVerifyResult = VerifyResult & { sha: string; tree: string; commands?: readonly string[] };
 
 /** A verdict on the commit: rejecting means there is none, an infrastructure failure the agent is not sent. */
 export type CleanVerifier = (req: CleanVerifyRequest) => Promise<CleanVerifyResult>;
@@ -129,7 +131,7 @@ export const runCleanVerify: CleanVerifier = async (req) => {
     const tree = await git('rev-parse', `${sha}^{tree}`);
     if (sha === req.green) return { ok: true, failures: [], sha, tree };
     await within(fetchBase(req, cloneDir), deadlineMs, `la forge ne répond plus après ${deadlineMs / 1000} s`);
-    const config = parseRepoConfig(await show(git, BASE, CONFIG));
+    const config = parseRepoConfig(await show(git, BASE, REPO_CONFIG_PATH));
     const declared = Object.values(config.commands);
     const commands = declared.length ? declared : req.commands;
     const setup = config.setup ? [config.setup] : req.setup;
@@ -146,7 +148,7 @@ export const runCleanVerify: CleanVerifier = async (req) => {
         if (out.code !== 0) throw new Error(`git checkout (sandbox) : ${out.stderr.trim()}`);
       });
     }
-    if (failures.length || !commands.length) return { ok: !failures.length, failures, sha, tree };
+    if (failures.length || !commands.length) return { ok: !failures.length, failures, sha, tree, commands };
 
     if (setup.length) {
       await runSealedSetup(sandboxes, { runId: `${req.runId}-verify`, ticketId: req.ticketId, workspacePath: cloneDir, mounts: [], commands: setup, argv: verifyCommand, env, secrets: {}, now: new Date() });
@@ -158,7 +160,7 @@ export const runCleanVerify: CleanVerifier = async (req) => {
         if (code !== 0) failures.push({ command, exitCode: code === 124 ? null : code, output: stdout + stderr });
       }
     });
-    return { ok: !failures.length, failures, sha, tree };
+    return { ok: !failures.length, failures, sha, tree, commands };
   } finally {
     // Not synchronous: a clone holds a whole install, and the daemon serves meanwhile. Under a run dir, purged with it: what the attack left unremovable costs no verdict.
     await Promise.all(
@@ -168,7 +170,6 @@ export const runCleanVerify: CleanVerifier = async (req) => {
 };
 
 export const BASE = 'refs/factory/base';
-const CONFIG = '.factory/config.yml';
 
 /**
  * The forge's default branch, in the clone. The daemon's own config is read, for its credentials: the repository's is
@@ -194,6 +195,8 @@ function withoutCredentials(message: string, url: string): string {
 const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 const SYMLINK = '120000';
 const MAX_READ_BYTES = 16 * 1024 * 1024;
+/** What the numstat and the patch of a diff may weigh together in the daemon's memory. */
+const MAX_PATCH_BYTES = 64 * 1024 * 1024;
 const SECRETS_CHECK = 'factory/secrets';
 const BINARY_CHECK = 'factory/binaires';
 const LEAKS_FOUND = 7;
@@ -236,8 +239,8 @@ export async function forkPoint(git: CloneGit, sha: string): Promise<string> {
 }
 
 /**
- * The blocking checks on the commit, from the clone's objects: `factory/chemins-interdits` and `factory/binaires` on all it
- * changed since it left the base, whatever it says of its own history, and `factory/tests-gelés` on the frozen files as they are at
+ * The blocking checks on the commit, from the clone's objects: `factory/chemins-interdits`, `factory/binaires` and `factory/anti-triche`
+ * (ORC-158) on all it changed since it left the base, whatever it says of its own history, and `factory/tests-gelés` on the frozen files as they are at
  * its head, which needs no frozen commit: a rebase can take it away, not its fingerprints. A read that fails rejects.
  */
 export async function checkClone(git: CloneGit, from: string, sha: string, frozen: FrozenTests | undefined): Promise<VerifyFailure[]> {
@@ -252,8 +255,7 @@ export async function checkClone(git: CloneGit, from: string, sha: string, froze
   }
   const forbidden = await checkForbiddenPaths({ changed, showAtBase: (p) => show(git, from, p), showAtHead });
   const failures: VerifyFailure[] = forbidden.ok ? [] : [{ command: FORBIDDEN_CHECK, exitCode: 1, output: forbidden.summary }];
-  const binaries = await binariesAdded(git, from, sha);
-  if (binaries.length) failures.push({ command: BINARY_CHECK, exitCode: 1, output: `Fichier binaire dans le diff, publication bloquée. Retire-le de la branche :\n${binaries.map((p) => `- ${mdCode(p)}`).join('\n')}` });
+  failures.push(...(await checkAdded(git, from, sha)));
   if (frozen) {
     const atHead = (await git('ls-tree', '-r', '--name-only', '-z', sha)).split('\0').filter(Boolean);
     const listed = new Set(atHead);
@@ -265,12 +267,21 @@ export async function checkClone(git: CloneGit, from: string, sha: string, froze
 }
 
 /**
- * What the diff adds as binary, on git's own reading: a NUL in a file's start. Read in a clone without a worktree, so no `.gitattributes` of the branch says
- * otherwise. `-z`, as a path can hold anything: `<added>\t<removed>\t<path>`, both counts `-` for a binary.
+ * `factory/binaires` and `factory/anti-triche` (ORC-158) on what the diff adds, in one read: `--numstat` (`-z`, as a path can hold anything:
+ * `<added>\t<removed>\t<path>`, both counts `-` for a binary), an empty record, then the patch. Binary on git's own reading, in a clone
+ * without a worktree, so no `.gitattributes` of the branch says otherwise. A blob over the cap reads as binary in both parts, so it blocks:
+ * its text never comes into the daemon's memory, nor does a whole read over `MAX_PATCH_BYTES`, which blocks too.
  */
-async function binariesAdded(git: CloneGit, from: string, sha: string): Promise<string[]> {
-  const lines = (await git('diff', '--numstat', '--no-renames', '--diff-filter=d', '-z', from, sha)).split('\0').filter(Boolean);
-  return lines.filter((l) => l.startsWith('-\t-\t')).map((l) => l.slice(4));
+async function checkAdded(git: CloneGit, from: string, sha: string): Promise<VerifyFailure[]> {
+  const read = await git.capped(MAX_PATCH_BYTES, '-c', `core.bigFileThreshold=${MAX_READ_BYTES}`, 'diff', '--numstat', '--patch', '-z', '-U0', '--no-renames', '--no-ext-diff', '--no-textconv', '--diff-filter=d', from, sha);
+  if (read === undefined) return [{ command: ANTI_CHEAT_CHECK, exitCode: 1, output: `Diff trop gros pour être analysé (plus de ${MAX_PATCH_BYTES / 2 ** 20} Mo), publication bloquée. Découpe le travail.` }];
+  const end = read.indexOf('\0\0');
+  const binaries = (end === -1 ? [] : read.slice(0, end).split('\0')).filter((l) => l.startsWith('-\t-\t')).map((l) => l.slice(4));
+  const failures: VerifyFailure[] = [];
+  if (binaries.length) failures.push({ command: BINARY_CHECK, exitCode: 1, output: `Fichier binaire, ou trop gros pour être analysé (plus de ${MAX_READ_BYTES / 2 ** 20} Mo), dans le diff, publication bloquée. Retire-le de la branche :\n${binaries.map((p) => `- ${mdCode(p)}`).join('\n')}` });
+  const cheat = antiCheatCheck(end === -1 ? '' : read.slice(end + 2));
+  if (!cheat.ok) failures.push({ command: ANTI_CHEAT_CHECK, exitCode: 1, output: `Contournement ou test désactivé dans le diff, publication bloquée. Retire-le de la branche :\n${cheat.summary}` });
+  return failures;
 }
 
 /**
@@ -284,12 +295,24 @@ async function show(git: CloneGit, rev: string, path: string): Promise<string | 
 }
 
 /** Its output trimmed; `raw` as git wrote it, for what is compared by its bytes: a file's content, a link's target. */
-export type CloneGit = ((...args: string[]) => Promise<string>) & { raw: (...args: string[]) => Promise<string>; status: (...args: string[]) => Promise<ExecResult> };
+export type CloneGit = ((...args: string[]) => Promise<string>) & {
+  raw: (...args: string[]) => Promise<string>;
+  status: (...args: string[]) => Promise<ExecResult>;
+  /** As `raw`, undefined past `max` bytes of output: the process killed, nothing of it kept. */
+  capped: (max: number, ...args: string[]) => Promise<string | undefined>;
+};
 
 export function cloneGit(req: Pick<CleanVerifyRequest, 'workDir' | 'exec'>, cloneDir: string): CloneGit {
   const env = hostGitEnv(req.workDir, req.workDir);
   const exec = req.exec ?? execCmd;
-  const raw = (...args: string[]) => mustExec(exec, 'git', [...HARDENING.flatMap((c) => ['-c', c]), '-C', cloneDir, ...args], { env });
-  const status = (...args: string[]) => exec('git', [...HARDENING.flatMap((c) => ['-c', c]), '-C', cloneDir, ...args], { env });
-  return Object.assign(async (...args: string[]) => (await raw(...args)).trim(), { raw, status });
+  const argv = (args: string[]) => [...HARDENING.flatMap((c) => ['-c', c]), '-C', cloneDir, ...args];
+  const raw = (...args: string[]) => mustExec(exec, 'git', argv(args), { env });
+  const status = (...args: string[]) => exec('git', argv(args), { env });
+  const capped = async (max: number, ...args: string[]) => {
+    const r = await exec('git', argv(args), { env, maxStdout: max });
+    if (r.overflow) return undefined;
+    if (r.code !== 0) throw execFailure('git', args, r);
+    return r.stdout;
+  };
+  return Object.assign(async (...args: string[]) => (await raw(...args)).trim(), { raw, status, capped });
 }

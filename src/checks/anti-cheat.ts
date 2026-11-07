@@ -6,6 +6,8 @@ import { isTestFile, isTestHarnessFile, normalizePath } from './test-files.js';
 import type { CheckResult } from './types.js';
 
 export const ANTI_CHEAT_CHECK = 'factory/anti-triche';
+/** The check's summary when the diff shows none of the four forms. */
+export const ANTI_CHEAT_OK = 'aucun test désactivé, aucun contournement';
 
 /** 1: a frozen acceptance test changed; 2: a test disabled; 3: a check bypassed; 4: code that behaves differently under test. */
 export type CheatForm = 'frozen-test' | 'disabled-test' | 'bypass' | 'test-only-behaviour';
@@ -248,5 +250,5 @@ function summarize(findings: CheatFinding[]): string {
 export function antiCheatCheck(diff: string, options: AntiCheatOptions = {}): AntiCheatResult {
   const findings = scanDiff(diff, options);
   const ok = findings.length === 0;
-  return { check: ANTI_CHEAT_CHECK, ok, summary: ok ? 'aucun test désactivé, aucun contournement' : summarize(findings), findings };
+  return { check: ANTI_CHEAT_CHECK, ok, summary: ok ? ANTI_CHEAT_OK : summarize(findings), findings };
 }

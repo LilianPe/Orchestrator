@@ -56,7 +56,7 @@ Tout l'état de l'instance vit dans **`RELAIS_HOME`**, par défaut `~/.relais` (
 | Chemin | Contenu | Sensible |
 |---|---|---|
 | `config.yaml` | Configuration de l'instance : port, hôte, projets, relais webhook, budget, base de connaissance. Voir [`configuration.md`](configuration.md). | non |
-| `secrets.json` | Identifiants et jetons Linear. Écrit en mode `0600`. | **oui** |
+| `secrets.json` | Identifiants et jetons Linear. Écrit en mode `0600`. Sous Windows, qui n'a pas de mode POSIX, le fichier hérite des droits (ACL) de son dossier : placez `FACTORY_HOME` dans un dossier que seul l'utilisateur de l'usine peut lire (le profil utilisateur l'est par défaut). | **oui** |
 | `run-settings.json` | Permissions Claude Code passées à chaque run (`--settings`), régénéré à chaque `relais up`. | non |
 | `relais.db` | Base SQLite : tickets suivis, événements, runs, coûts, file, minuteries. Absente quand `FACTORY_DATABASE_URL` désigne une base Postgres ([`configuration.md`](configuration.md#variables-denvironnement)). | oui (contient l'historique) |
 | `transcripts/<runId>.jsonl` | Sortie `stream-json` de chaque run, secrets masqués, supprimée 30 jours après sa dernière écriture ([`exploitation.md`](exploitation.md#journaux-transcripts-et-données)). | oui (code, contenu des tickets) |

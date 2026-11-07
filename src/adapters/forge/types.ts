@@ -39,6 +39,12 @@ export interface GitAccess {
   env: Record<string, string>;
 }
 
+/**
+ * The factory's own checks (`factory/…`, ORC-151): its verdict, published once it pushed, never the repository's CI. Read as
+ * CI, a head with them alone would pass for green, and merge before the real CI ran.
+ */
+export const isFactoryCheck = (name: string): boolean => name.startsWith('factory/');
+
 /** A check run the factory publishes on a sha (ORC-162): `externalId` is the id of the effect that created it (ORC-138, point 5). */
 export type CheckRunRequest = {
   sha: string;

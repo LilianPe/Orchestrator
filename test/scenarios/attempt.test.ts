@@ -32,14 +32,14 @@ async function devRun(output: unknown, wrapStore?: (s: Store) => Store) {
   return h;
 }
 
-const lastBody = (h: ReturnType<typeof createHarness>) => (h.tracker.activities('ls-1').at(-1) as { body: string }).body;
+const lastBody = (h: ReturnType<typeof createHarness>) => h.tracker.comments('REL-1').at(-1)!;
 
 describe('the closed outcome of an attempt decides its end (ORC-289)', () => {
   it('needs_input: Bloqué, the question posted', async () => {
     const h = await devRun({ ...done, status: 'blocked', question: 'Quel séparateur : virgule ou point-virgule ?' });
     expect(await h.ticket()).toMatchObject({ logical: 'dev', blocked: true });
     expect((await h.tracker.getIssue('REL-1')).labels).toContain('Bloqué');
-    expect(h.tracker.activities('ls-1').at(-1)).toMatchObject({ type: 'elicitation', body: expect.stringContaining('Quel séparateur') });
+    expect(lastBody(h)).toContain('Question : Quel séparateur');
   });
 
   it('spec_impossible: Bloqué, the justification posted', async () => {
@@ -60,14 +60,15 @@ describe('the closed outcome of an attempt decides its end (ORC-289)', () => {
   it('succeeded: the posted message is composed from the output, not the last text', async () => {
     const h = await devRun(done);
     expect(await h.ticket()).toMatchObject({ logical: 'human_review', blocked: false });
-    expect(lastBody(h)).not.toContain('Texte libre');
-    for (const part of [done.summary, done.why, ...done.risks, ...done.untested, 'src/export.ts', "l'échappement des virgules"]) expect(lastBody(h)).toContain(part);
+    const body = (h.tracker.activities('ls-1').at(-1) as { body: string }).body;
+    expect(body).not.toContain('Texte libre');
+    for (const part of [done.summary, done.why, ...done.risks, ...done.untested, 'src/export.ts', "l'échappement des virgules"]) expect(body).toContain(part);
   });
 
   it('an invalid stored output is no output: the build asks for one, so it failed (ORC-136)', async () => {
     const h = await devRun({ status: 'done' });
     expect(await h.ticket()).toMatchObject({ logical: 'dev', blocked: true, blockReason: 'Le run dev a échoué.' });
-    expect(h.tracker.activities('ls-1').at(-1)).toMatchObject({ type: 'elicitation' });
+    expect(lastBody(h)).toContain('🔴 Bloqué');
   });
 
   it("a reply (a feedback run) posts the agent's answer, not the output template", async () => {

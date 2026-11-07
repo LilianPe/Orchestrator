@@ -331,7 +331,7 @@ export class Worker {
       } catch (err) {
         // Set aside as prepared (its snapshot filled), so that a replay decides what was decided.
         if (err instanceof PoisonEvent || err instanceof TicketHeldError) await this.deadLetter(event ?? row, key, err, 'its decision threw');
-        else if (await this.outOfAttempts(row)) await this.deadLetter(event ?? row, key, toError(err), `out of attempts after ${this.retry.attempts}`);
+        else if (await this.outOfAttempts(row)) await this.deadLetter(event ?? row, key, toError(err), `out of attempts after ${this.retry.attempts}`, (this.failures.get(row.id) ?? 0) + 1);
         else this.failed(row, key, toError(err));
         return 'done';
       }
@@ -365,10 +365,10 @@ export class Worker {
    * ticket's holder, ORC-316) is written to the inbox, in one transaction; the rows behind it go on. A store that cannot write the dead letter (down)
    * leaves the row to the retries of `failed`: nothing is lost.
    */
-  private async deadLetter(row: StoredEvent, key: string, err: Error, why: string): Promise<void> {
+  private async deadLetter(row: StoredEvent, key: string, err: Error, why: string, attempts?: number): Promise<void> {
     let written: boolean;
     try {
-      written = await this.d.store.deadLetter(row, err.message, this.d.now?.() ?? Date.now(), err instanceof TicketHeldError ? err.holder : undefined);
+      written = await this.d.store.deadLetter(row, err.message, this.d.now?.() ?? Date.now(), err instanceof TicketHeldError ? err.holder : undefined, attempts);
     } catch (writeErr) {
       this.failed(row, key, new Error(`${err.message}; not dead-lettered: ${toError(writeErr).message}`));
       return;

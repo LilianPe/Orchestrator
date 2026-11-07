@@ -19,7 +19,6 @@ function control(h: H): ControlDeps & { lines: string[] } {
     clock: h.clock,
     submit: (e) => h.orch.accept(e),
     isPaused: () => h.orch.isPaused(),
-    blockTicket: async () => {},
     linearWebhook: () => ({ status: 200 }),
     githubWebhook: async () => ({ status: 200 }),
     linearConnected: () => true,

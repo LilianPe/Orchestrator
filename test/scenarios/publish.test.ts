@@ -229,6 +229,31 @@ describe('the factory publishes (ORC-125)', () => {
       expect(responses(h)).toHaveLength(1);
     });
 
+    it('the checks of the pushed commit, keyed by its sha and their name: a replay updates them, never doubles them (ORC-151)', async () => {
+      let failures = 1;
+      const h = verified({
+        effectRetry: { attempts: 3, baseMs: 1, capMs: 1 },
+        wrapStore: (store) =>
+          overriding(store, {
+            appendInbox: async (e) => {
+              if (e.id.startsWith('publish-done:') && failures-- > 0) throw new Error('inbox down');
+              return store.appendInbox(e);
+            },
+          }),
+      });
+      vi.spyOn(h.forge, 'upsertCheckRun');
+      await delegate(h);
+      await h.advance(10);
+      expect(h.forge.upsertCheckRun).toHaveBeenCalledTimes(6);
+      expect(h.forge.checkRuns.map((c) => [c.name, c.sha, c.externalId, c.conclusion])).toEqual([
+        // The standard pack declares no verification command: nothing ran.
+        ['factory/verify', SHA, `factory/verify@${SHA}`, 'neutral'],
+        ['factory/tests-gelés', SHA, `factory/tests-gelés@${SHA}`, 'neutral'],
+        ['factory/anti-triche', SHA, `factory/anti-triche@${SHA}`, 'success'],
+      ]);
+      expect(await h.ticket()).toMatchObject({ logical: 'human_review', prNumber: 1 });
+    });
+
     it('a process killed during the publication: the next one finishes it, once', async () => {
       const h = verified({ effectRetry: { attempts: 3, baseMs: 1, capMs: 1 }, effectLeaseMs: 1000 });
       let die: () => void = () => {};
@@ -276,6 +301,31 @@ describe('the factory publishes (ORC-125)', () => {
       await h.advance(10);
       expect(h.publisher.asked).toHaveLength(1);
       expect((await h.ticket()).blockReason).toContain('bougée');
+    });
+  });
+
+  describe('the checks on the PR (ORC-151)', () => {
+    const green = (commands: string[]) => verified({ sandboxed: true, cleanVerify: async () => ({ ok: true, failures: [], sha: SHA, tree: 't', commands }) });
+    const verifyCheck = (h: Harness) => h.forge.checkRuns.find((c) => c.name === 'factory/verify');
+
+    it('factory/verify says what ran on the commit', async () => {
+      const h = green(['npm test']);
+      await delegate(h);
+      expect(verifyCheck(h)).toMatchObject({ conclusion: 'success', summary: expect.stringContaining('npm test') });
+    });
+
+    it('with no verification command, factory/verify is neutral and says nothing ran', async () => {
+      const h = green([]);
+      await delegate(h);
+      expect(verifyCheck(h)).toMatchObject({ conclusion: 'neutral', summary: expect.stringContaining("rien n'a tourné") });
+    });
+
+    it('a check the forge refuses (an App without Checks write) blocks nothing: the PR is out, and the log says why', async () => {
+      const h = verified();
+      vi.spyOn(h.forge, 'upsertCheckRun').mockRejectedValue(Object.assign(new Error('Resource not accessible by integration'), { status: 403 }));
+      await delegate(h);
+      expect(await h.ticket()).toMatchObject({ logical: 'human_review', prNumber: 1, blocked: false });
+      expect(h.logs).toContainEqual({ level: 'warn', message: expect.stringContaining('Checks en écriture') });
     });
   });
 });

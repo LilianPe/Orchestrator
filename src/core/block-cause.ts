@@ -1,8 +1,11 @@
 import { PRODUCT_NAME } from '../product.js';
 
 /** Why a ticket waits for a human, in the order the Flux shows the causes (ORC-297). */
-export const BLOCK_CAUSES = ['question', 'contested', 'red', 'infra', 'limit', 'loop', 'failed', 'pickup', 'dead_letter', 'pr_closed', 'stopped', 'other'] as const;
+export const BLOCK_CAUSES = ['question', 'contested', 'red', 'infra', 'limit', 'loop', 'failed', 'pickup', 'repo_config', 'dead_letter', 'pr_closed', 'stopped', 'other'] as const;
 export type BlockCause = (typeof BLOCK_CAUSES)[number];
+
+/** The head of a launch refused on the repository's `.factory/config.yml` (ORC-209 C): the repository's to fix. */
+export const REPO_CONFIG_REFUSED = 'Configuration du dépôt à corriger : ';
 
 /**
  * Each anchored on the head of a reason, which the factory writes: what follows may quote an error or
@@ -31,6 +34,7 @@ const CAUSES: readonly (readonly [Exclude<BlockCause, 'other'>, RegExp])[] = [
   ['pickup', /^Une branche .+ existe déjà sur origin\./],
   ['pickup', /^Aucun dépôt connu pour l'équipe Linear /],
   ['pickup', /^Dépôt à préciser : /],
+  ['repo_config', new RegExp(`^${REPO_CONFIG_REFUSED}`)],
   ['dead_letter', /^Événement .+ mis de côté /],
   ['pr_closed', /^PR #\d+ fermée sans merge$/],
   ['stopped', /^Arrêté à la demande$/],
