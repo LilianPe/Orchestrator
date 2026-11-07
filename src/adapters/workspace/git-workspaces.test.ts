@@ -143,6 +143,19 @@ describe('GitWorkspaces', () => {
     expect(logged.at(-1)).toContain(`git -C ${repo} fetch`);
   });
 
+  it.each(['worktree', 'trunk-readonly', 'knowledge'] as const)('%s: starts from the remote branch, never a tag of its name, when origin/HEAD is missing', async (kind) => {
+    const { repo, root } = fixtureRepo();
+    const trunk = git(repo, 'rev-parse', 'origin/main');
+    // A tag named like the remote branch, on a commit off the default branch: pushed by anyone who can push to the forge.
+    git(repo, 'checkout', '-q', '-b', 'elsewhere');
+    git(repo, 'commit', '-q', '--allow-empty', '-m', 'not merged');
+    git(repo, 'push', '-q', 'origin', 'elsewhere:refs/tags/origin/main');
+    git(repo, 'checkout', '-q', 'main');
+    git(repo, 'remote', 'set-head', 'origin', '--delete');
+    const w = await new GitWorkspaces({ root, knowledgeRepo: repo }).prepare(req(repo, { kind }));
+    expect(git(w.path, 'rev-parse', 'HEAD')).toBe(trunk);
+  });
+
   it('gives each question its own trunk: what one left is not there for the next', async () => {
     const { repo, root } = fixtureRepo();
     const ws = new GitWorkspaces({ root });

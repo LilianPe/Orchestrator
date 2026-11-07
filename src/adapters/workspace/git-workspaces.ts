@@ -77,15 +77,20 @@ export function parseStatus(out: string): string[] {
   return paths;
 }
 
-/** The default branch as `origin/<name>`; `origin/main` when the clone does not know it. */
+/**
+ * The default branch as a full ref, `refs/remotes/origin/<name>`; `refs/remotes/origin/main` when the clone does not
+ * know it. In full: a short `origin/main` is resolved by git as `refs/tags/origin/main` first, a tag anyone who pushes
+ * to the forge can make.
+ */
 export async function originHead(exec: Exec, repo: string): Promise<string> {
-  return (await originHeadOf(exec, repo)).name;
+  return (await originHeadOf(exec, repo)).ref;
 }
 
-/** `originHead`, and whether `origin/HEAD` gave it (`set`) or `origin/main` is assumed. */
-export async function originHeadOf(exec: Exec, repo: string): Promise<{ name: string; set: boolean }> {
-  const r = await exec('git', ['-C', repo, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD']);
-  return r.code === 0 ? { name: r.stdout.trim(), set: true } : { name: 'origin/main', set: false };
+/** `originHead` (`ref`), its short name for a message (`origin/main`), and whether `origin/HEAD` gave it (`set`) or `origin/main` is assumed. */
+export async function originHeadOf(exec: Exec, repo: string): Promise<{ ref: string; name: string; set: boolean }> {
+  const r = await exec('git', ['-C', repo, 'symbolic-ref', 'refs/remotes/origin/HEAD']);
+  const ref = r.code === 0 ? r.stdout.trim() : 'refs/remotes/origin/main';
+  return { ref, name: ref.replace(/^refs\/remotes\//, ''), set: r.code === 0 };
 }
 
 /** A launch waits this long for the forge, at most: past it, it is refused (ORC-209 C). */
@@ -193,7 +198,7 @@ export class GitWorkspaces implements WorkspaceManager {
       }
       // Resolved: it is read from `making`, and `repoPath` can be relative.
       await here('-C', making, 'fetch', '--quiet', '--no-tags', '--', resolve(repo), '+refs/remotes/origin/*:refs/remotes/origin/*', '+refs/tags/*:refs/tags/*', ...(localRef ? [`+${localRef}:${localRef}`] : []));
-      await here('-C', making, 'symbolic-ref', 'refs/remotes/origin/HEAD', `refs/remotes/${trunk}`);
+      await here('-C', making, 'symbolic-ref', 'refs/remotes/origin/HEAD', trunk);
       await here('-C', making, 'checkout', '--quiet', ...checkout);
       await here('-C', making, 'sparse-checkout', 'set', '--no-cone', '/*', '!/.claude/*', '/.claude/CLAUDE.md');
       renameSync(making, path);

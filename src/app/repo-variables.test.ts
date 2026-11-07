@@ -19,7 +19,7 @@ function git(o: { origin?: string; head?: string; config?: string; mode?: string
   const exec: Exec = async (_, args) => {
     calls.push(args);
     if (args.includes('get-url')) return ok(`${o.origin ?? 'https://github.com/org/app.git'}\n`);
-    if (args.includes('symbolic-ref')) return o.head === undefined ? ko : ok(`${o.head}\n`);
+    if (args.includes('symbolic-ref')) return o.head === undefined ? ko : ok(`refs/remotes/${o.head}\n`);
     if (args.includes('fetch')) return ok('');
     if (args.at(-1) === '.factory') return ok(o.config === undefined ? '' : `${o.dir ?? '040000 tree'} def456\t.factory\0`);
     if (args.includes('ls-tree')) return ok(o.config === undefined ? '' : `${o.mode ?? '100644 blob'} abc123\t.factory/config.yml\0`);

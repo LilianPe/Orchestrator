@@ -24,13 +24,9 @@ export function makeRepoConfig(o: { exec?: Exec; fetchDeadlineMs?: number; log?:
     // A worktree that already exists is prepared without a fetch: what was merged since applies all the same.
     // A forge that does not answer refuses the launch, which never waits for it forever.
     if (fetch) await fetchOrigin(exec, repoPath, { deadlineMs: o.fetchDeadlineMs, log: (m) => o.log?.(`${REPO_CONFIG_PATH}: ${m}`) });
-    const head = await originHeadOf(exec, repoPath);
-    const name = head.name.replace(/^remotes\//, '');
-    // In full: a short `origin/main` (the fallback without `origin/HEAD`) is resolved by git as `refs/tags/origin/main`
-    // first, a tag anyone who pushes to the forge can make.
-    const ref = `refs/remotes/${name}`;
+    const { ref, name, set } = await originHeadOf(exec, repoPath);
     // The hint only when `origin/HEAD` is missing: `origin/main` is then a guess, perhaps not the default branch.
-    const unreadable = `unreadable default branch (${name})${head.set ? '' : `: origin/HEAD is not set on the factory's repository; if ${name} is not the default branch, run \`git remote set-head origin --auto\` on this repository`}`;
+    const unreadable = `unreadable default branch (${name})${set ? '' : `: origin/HEAD is not set on the factory's repository; if ${name} is not the default branch, run \`git remote set-head origin --auto\` on this repository`}`;
     // `ls-tree` tells a file absent from a branch it could not read, which `git show` answers alike.
     const entryOf = (path: string) => git(['ls-tree', '-z', ref, '--', path], () => unreadable);
     // `ls-tree` does not go through a `.factory` that is a link: the file under it would read as absent.
