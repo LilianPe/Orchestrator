@@ -388,6 +388,18 @@ describe('GitHubAppForge.findPr', () => {
     }
   });
 
+  it('rejects, after ten pages, check runs a server answers the same whatever the page: never loops', async () => {
+    const full = Array.from({ length: 100 }, (_, i) => ({ id: i, name: `job-${i}`, status: 'completed', conclusion: 'success' }));
+    const { forge, calls } = makeForge([
+      tokenRoute(42),
+      pullsRoute([openPr()]),
+      (url) => (url.pathname === '/repos/acme/app/commits/abc123/check-runs' ? { body: { total_count: 100, check_runs: full } } : undefined),
+      (url) => (url.pathname === '/repos/acme/app/commits/abc123/status' ? { body: { statuses: [] } } : undefined),
+    ], { installationId: 42 });
+    await expect(forge.findPr('/repo', 'factory/REL-1')).rejects.toThrow(/check-runs: more than 10 pages of 100, never read as complete$/);
+    expect(calls.filter((c) => c.url.includes('/check-runs'))).toHaveLength(10);
+  });
+
   it('reports closed PRs', async () => {
     const { forge } = makeForge([installationRoute(), tokenRoute(42), pullsRoute([openPr({ state: 'closed' })])]);
     expect(await forge.findPr('/repo', 'factory/REL-1')).toMatchObject({ state: 'CLOSED', checks: 'none' });
