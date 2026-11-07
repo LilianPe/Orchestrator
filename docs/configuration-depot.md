@@ -25,7 +25,7 @@ budgets: { per_ticket_tokens: 2000000 }      # à calibrer (ORC-216)
 max_diff: { files: 15, lines: 400 }          # hors tests ; seulement resserrer
 feature_flags: { provider: openfeature }    # facultatif
 visual_paths: ["src/components/**", "app/**"]
-network: { level: limited, allow: ["docs.exemple.com"] }   # none | limited (défaut) | custom
+network: { level: custom, allow: ["docs.exemple.com"] }    # none | limited (défaut) | custom ; `allow` pour custom seul
 ```
 
 ## Clés
