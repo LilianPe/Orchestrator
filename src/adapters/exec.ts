@@ -8,19 +8,33 @@ export interface ExecResult {
   stdout: string;
   stderr: string;
   code: number;
+  /** Its stdout went past `maxStdout`: the process was killed, and `stdout` is empty. */
+  overflow?: true;
 }
 
-export type Exec = (cmd: string, args: string[], opts?: { cwd?: string; env?: Record<string, string> }) => Promise<ExecResult>;
+export type Exec = (cmd: string, args: string[], opts?: { cwd?: string; env?: Record<string, string>; maxStdout?: number }) => Promise<ExecResult>;
 
 export const execCmd: Exec = (cmd, args, opts = {}) =>
   new Promise((resolve, reject) => {
     const child = spawn(cmd, args, { cwd: opts.cwd, env: { ...process.env, ...opts.env }, stdio: ['ignore', 'pipe', 'pipe'] });
-    let stdout = '';
+    const out: Buffer[] = [];
+    let size = 0;
+    let overflow = false;
     let stderr = '';
-    child.stdout.on('data', (d) => (stdout += d));
+    child.stdout.on('data', (d: Buffer) => {
+      if (overflow) return;
+      size += d.length;
+      if (opts.maxStdout !== undefined && size > opts.maxStdout) {
+        overflow = true;
+        out.length = 0;
+        child.kill();
+        return;
+      }
+      out.push(d);
+    });
     child.stderr.on('data', (d) => (stderr += d));
     child.on('error', reject);
-    child.on('close', (code) => resolve({ stdout, stderr, code: code ?? 1 }));
+    child.on('close', (code) => resolve({ stdout: Buffer.concat(out).toString('utf8'), stderr, code: code ?? 1, ...(overflow ? { overflow: true as const } : {}) }));
   });
 
 /**

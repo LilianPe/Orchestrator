@@ -73,12 +73,13 @@ import {
 import { runSealedSetup } from './sealed-setup.js';
 import { runCleanVerify, type CleanVerifier } from './clean-verify.js';
 import { logExcerpt } from '../checks/log-excerpt.js';
-import { cappedCommand, type Verifier, type VerifyResult } from './verify.js';
+import { cappedCommand, VERIFY_CHECK, type Verifier, type VerifyResult } from './verify.js';
 import { PRODUCT_NAME } from '../product.js';
 import { checkRed, type RedDeps, type RedResult } from '../checks/red.js';
 import { checkFrozen, FREEZE_CHECK, freezeTests, newTestsOnly, REFREEZE, type FrozenTests } from '../checks/freeze.js';
 import { isTestFile } from '../checks/test-files.js';
-import { ANTI_CHEAT_CHECK } from '../checks/anti-cheat.js';
+import { ANTI_CHEAT_CHECK, ANTI_CHEAT_OK } from '../checks/anti-cheat.js';
+import { mdCode } from '../checks/markdown.js';
 import { parseStatus } from '../adapters/workspace/git-workspaces.js';
 import { readSecurityLog, refusalSummary } from '../network/security-log.js';
 
@@ -315,7 +316,10 @@ function sessionSaved(configDir: string, sessionId: string): boolean {
 
 /** Why the factory's merge is refused when the PR's head moved since the review (ORC-148). */
 const PUSHED = 'la branche a reçu un push depuis la review';
-const HOST_CHECKS_OFF = "aucun sandbox (FACTORY_CONTAINER_CLI) et FACTORY_ALLOW_HOST_VERIFY n'est pas à 1 : je ne lance pas le code de l'agent sur l'hôte.";
+/** A verdict on a commit: what ran on it, absent when it was found green before and nothing ran again. */
+type Verified = VerifyResult & { sha?: string | undefined; commands?: readonly string[] };
+
+const HOST_CHECKS_OFF ="aucun sandbox (FACTORY_CONTAINER_CLI) et FACTORY_ALLOW_HOST_VERIFY n'est pas à 1 : je ne lance pas le code de l'agent sur l'hôte.";
 
 export class Orchestrator {
   private background = new Map<Promise<void>, string | undefined>();
@@ -818,7 +822,7 @@ export class Orchestrator {
    * `runCleanVerify`. It throws when there is no verdict, an infrastructure failure the agent is not sent. Without
    * sandboxes, only under the explicit `hostChecks`: in the worktree, on the host, and without any of these guarantees.
    */
-  private async verifyWork(project: ProjectRuntime, t: TicketState, run: RunRecord, job: JobSpec): Promise<VerifyResult & { sha?: string | undefined }> {
+  private async verifyWork(project: ProjectRuntime, t: TicketState, run: RunRecord, job: JobSpec): Promise<Verified> {
     const { sandboxes, runsDir, originUrl } = this.d;
     // A job that checks what it did not write (a review) has nothing to add on a commit found green: one that wrote it asks again.
     const green = job.verifyFailure === 'block' ? t.verifiedSha : undefined;
@@ -830,7 +834,7 @@ export class Orchestrator {
       const verified = job.verify.length > 0 ? await this.d.verify(run.cwd, job.verify, undefined, (await this.repoVariablesOf(project)).env) : { ok: true, failures: [] };
       // `factory/tests-gelés` (ORC-131), blocking from the first ticket, on top of the job's commands.
       const frozen = goesThroughFreeze(t, job) ? await this.checkFrozen(project, run.cwd, t.frozenTests!) : [];
-      return { ...verified, ok: verified.ok && frozen.length === 0, failures: [...verified.failures, ...frozen], sha };
+      return { ...verified, ok: verified.ok && frozen.length === 0, failures: [...verified.failures, ...frozen], sha, commands: job.verify };
     }
     if (!runsDir || !originUrl) throw new Error('runsDir and originUrl are required with sandboxes');
     if (!t.branch || !t.worktreePath) throw new Error(`aucune branche ou aucun worktree pour ${t.ticketId}`);
@@ -1296,7 +1300,7 @@ export class Orchestrator {
             }
             const base = { ...TRUSTED, at: clock.now(), projectId: project.id, ticketId, id: `check:${run.id}` };
             const payload = { runId: run.id, job: job.name };
-            let res: VerifyResult & { sha?: string | undefined };
+            let res: Verified;
             try {
               res = await this.verifyWork(project, t, run, job);
             } catch (err) {
@@ -1304,7 +1308,7 @@ export class Orchestrator {
               return;
             }
             const event: FactoryEvent = res.ok
-              ? { ...base, type: 'verify.passed', payload: { ...payload, ...(res.sha ? { sha: res.sha } : {}), ...(c.output ? { output: c.output } : {}) } }
+              ? { ...base, type: 'verify.passed', payload: { ...payload, ...(res.sha ? { sha: res.sha } : {}), ...(res.commands ? { commands: res.commands } : {}), ...(c.output ? { output: c.output } : {}) } }
               : { ...base, type: 'verify.failed', payload: { ...payload, failures: res.failures.map((f) => ({ ...f, output: logExcerpt(f.output) })), ...(res.tree ? { tree: res.tree } : {}) } };
             await this.submitResult(event);
           })(),
@@ -1518,8 +1522,8 @@ export class Orchestrator {
     else {
       try {
         const pr = await publisher.publish({ projectId: project.id, repoPath: project.repoPath, ticketId: t.ticketId, runId: c.runId, worktree: t.worktreePath, branch: t.branch, sha: c.sha, ...prText(t) });
-        await this.publishChecks(project, t, c.sha, key.id);
         await this.accept({ ...base, id: prEventId(t.ticketId, pr.prNumber, 'opened'), type: 'pr.opened', at: this.d.clock.now(), payload: { number: pr.prNumber, url: pr.url, branch: t.branch } });
+        await this.publishChecks(project, t, c);
         return published();
       } catch (err) {
         if (!(err instanceof PublishRefused)) throw err;
@@ -1534,18 +1538,33 @@ export class Orchestrator {
 
   /**
    * The checks `verify` found green, on the commit just pushed (ORC-151): only a pushed commit can carry one, so a red
-   * verdict, never pushed, has none. Keyed by the effect's id (ORC-138, point 5): its replay updates them, never doubles them.
+   * verdict, never pushed, has none. Keyed by the sha and the check: a replay, or a second publication of the same commit,
+   * updates them, never doubles them. Best effort, as `prReady`: the PR is out, and a check that fails to go out blocks nothing.
    */
-  private async publishChecks(project: ProjectRuntime, t: TicketState, sha: string, effectId: string): Promise<void> {
+  private async publishChecks(project: ProjectRuntime, t: TicketState, c: Extract<Effect, { kind: 'publish' }>): Promise<void> {
     const writer = this.d.forgeWriter;
     if (!writer) return;
+    const { sha, commands } = c;
     const frozen = Object.keys(t.frozenTests?.files ?? {}).length;
+    const verify =
+      commands === undefined
+        ? ({ conclusion: 'success', summary: `${sha.slice(0, 12)} déjà trouvé vert par une vérification précédente.` } as const)
+        : commands.length
+          ? ({ conclusion: 'success', summary: `Vert sur ${sha.slice(0, 12)}, dans un clone neuf, sans réseau :\n${commands.map((cmd) => `- ${mdCode(cmd)}`).join('\n')}` } as const)
+          : ({ conclusion: 'neutral', summary: "Aucune commande de vérification déclarée : rien n'a tourné." } as const);
     const checks = [
-      { name: 'factory/verify', conclusion: 'success', summary: `Commandes de vérification vertes sur ${sha.slice(0, 12)}, dans un clone neuf, sans réseau.` },
+      { name: VERIFY_CHECK, ...verify },
       { name: FREEZE_CHECK, conclusion: frozen ? 'success' : 'neutral', summary: frozen ? `${frozen} fichier(s) gelé(s) intact(s).` : 'Aucun test gelé pour ce ticket.' },
-      { name: ANTI_CHEAT_CHECK, conclusion: 'success', summary: 'Aucun test désactivé, aucun contournement.' },
+      { name: ANTI_CHEAT_CHECK, conclusion: 'success', summary: ANTI_CHEAT_OK },
     ] as const;
-    for (const { name, conclusion, summary } of checks) await writer.upsertCheckRun(project.repoPath, { sha, name, externalId: effectId, status: 'completed', conclusion, summary });
+    await Promise.all(
+      checks.map(({ name, conclusion, summary }) =>
+        writer.upsertCheckRun(project.repoPath, { sha, name, externalId: `${name}@${sha}`, status: 'completed', conclusion, summary }).catch((err: Error & { status?: number }) => {
+          const hint = err.status === 403 ? " : la GitHub App n'a pas la permission Checks en écriture (docs/github.md)" : '';
+          this.log('warn', `check ${name} of ${t.ticketId} not published on ${sha.slice(0, 12)}${hint}: ${err.message}`);
+        }),
+      ),
+    );
   }
 
   /**

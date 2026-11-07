@@ -209,6 +209,16 @@ describe('GitHubAppForge.findPr', () => {
       failedChecks: [],
     },
     { name: 'no checks', runs: [], statuses: [], checks: 'none', failedChecks: [] },
+    {
+      name: "the factory's own checks alone: no CI (ORC-151)",
+      runs: [
+        { name: 'factory/verify', status: 'completed', conclusion: 'success' },
+        { name: 'factory/anti-triche', status: 'completed', conclusion: 'success' },
+      ],
+      statuses: [],
+      checks: 'none',
+      failedChecks: [],
+    },
   ])('maps $name', async ({ runs, statuses, checks, failedChecks }) => {
     const { forge } = makeForge([
       installationRoute(),
