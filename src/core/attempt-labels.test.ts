@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { loadWorkflow } from '../config/load-workflow.js';
-import { buildRunSettings, runSettingsTemplate, type Settings } from '../config/run-settings.js';
+import { buildRunSettings, posixPath, runSettingsTemplate, type Settings } from '../config/run-settings.js';
 import { VERSION } from '../version.js';
 import { buildPrompt, type PromptInput } from './prompt.js';
 import {
@@ -170,7 +170,7 @@ describe('attempt labels', () => {
     expect(stableJson(built[0])).not.toBe(stableJson(built[1]));
     // Each home's run settings are the template with that home in place of <HOME>.
     homes.forEach((home, i) => {
-      const abs = `/${resolve(home)}`;
+      const abs = `/${posixPath(resolve(home))}`;
       const own = built[i]!;
       const homeless = { ...own, permissions: { ...own.permissions, deny: own.permissions.deny!.map((r) => r.split(abs).join('<HOME>')) } };
       expect(homeless).toEqual(runSettingsTemplate(settings));

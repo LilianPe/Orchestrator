@@ -9,6 +9,7 @@ import type { TicketState } from '../core/types.js';
 import type { RunRecord } from '../store/types.js';
 import { TimerService } from '../runtime/timers.js';
 import { saveInstance, saveSecrets } from '../config/instance.js';
+import { posixPath } from '../config/run-settings.js';
 import { startFactory } from './bootstrap.js';
 import { SqliteStore } from '../store/sqlite-store.js';
 import { TrackerSwitch } from './tracker-switch.js';
@@ -22,7 +23,7 @@ describe('bootstrap', () => {
     const state = await (await fetch('http://127.0.0.1:4199/api/state')).json();
     expect(state).toMatchObject({ linearConnected: false, paused: false, tickets: [] });
     const runSettings = JSON.parse(readFileSync(join(home, 'run-settings.json'), 'utf8'));
-    expect(runSettings.permissions.deny).toContain(`Read(/${home}/secrets.json)`);
+    expect(runSettings.permissions.deny).toContain(`Read(/${posixPath(home)}/secrets.json)`);
     await app.stop();
   });
 
