@@ -66,6 +66,18 @@ describe('makeRepoConfig (ORC-209 C)', () => {
     expect(calls.some((c) => c.includes('fetch'))).toBe(false);
   });
 
+  it('gives up on a forge that does not answer, refusing the launch rather than holding it forever', async () => {
+    const calls: { args: string[]; env?: Record<string, string> }[] = [];
+    const exec: Exec = (_, args, opts) => {
+      calls.push({ args, ...(opts?.env ? { env: opts.env } : {}) });
+      return args.includes('fetch') ? new Promise(() => {}) : Promise.resolve({ stdout: 'origin/main\n', stderr: '', code: 0 });
+    };
+    await expect(makeRepoConfig({ exec, fetchDeadlineMs: 20 })(PROJECT)).rejects.toThrow(/la forge ne répond plus après 0.02 s/);
+    // No prompt for a credential, and a stalled transfer ends git by itself: the deadline only stops waiting for it.
+    expect(calls[0]!.env).toMatchObject({ GIT_TERMINAL_PROMPT: '0', GIT_HTTP_LOW_SPEED_LIMIT: '1000' });
+    expect(calls.some((c) => c.args.includes('ls-tree'))).toBe(false);
+  });
+
   it('gives the socle when the default branch has no file', async () => {
     expect(await makeRepoConfig({ exec: git({ head: 'origin/main' }).exec })(PROJECT)).toEqual(parseRepoConfig(undefined));
   });

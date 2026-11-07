@@ -14,7 +14,7 @@ const PUBLISH_DEADLINE_MS = 10 * 60_000;
 const REMOTE_HEAD = 'refs/factory/remote';
 const HARDENED = HARDENING.flatMap((c) => ['-c', c]);
 /** A deadline only stops waiting for git: stalled for a minute, git ends by itself, and takes the token in its env with it. */
-const STALLED = { GIT_HTTP_LOW_SPEED_LIMIT: '1000', GIT_HTTP_LOW_SPEED_TIME: '60' };
+export const STALLED = { GIT_HTTP_LOW_SPEED_LIMIT: '1000', GIT_HTTP_LOW_SPEED_TIME: '60' };
 
 export interface GitPublisherDeps {
   sandboxes: SandboxProvider;

@@ -4,6 +4,11 @@ import { originHead } from '../adapters/workspace/git-workspaces.js';
 import type { FactoryYml } from '../config/factory-yml.js';
 import { parseRepoConfig, REPO_CONFIG_DIR, REPO_CONFIG_PATH, type RepoConfig, type RepoConfigRead } from '../config/repo-config.js';
 import { NO_REPO_VARIABLES, repoVariables, type RepoVariables } from '../config/repo-variables.js';
+import { within } from '../core/clean-verify.js';
+import { STALLED } from '../publish/publish.js';
+
+/** A launch waits this long for the forge, at most: past it, it is refused (ORC-209 C). */
+const FETCH_DEADLINE_MS = 2 * 60_000;
 
 /**
  * `.factory/config.yml` of a project's repository, read once at each launch (ORC-209 C): on its default branch as
@@ -11,11 +16,13 @@ import { NO_REPO_VARIABLES, repoVariables, type RepoVariables } from '../config/
  * has neither `origin` nor `origin/HEAD` of this repository to write: its git dir is its own (ORC-317). No file: the
  * socle. An invalid file, or a default branch git cannot read, rejects: no run starts on a config half read.
  */
-export function makeRepoConfig(o: { exec?: Exec } = {}): (project: { repoPath: string }, read?: RepoConfigRead) => Promise<RepoConfig> {
+export function makeRepoConfig(o: { exec?: Exec; fetchDeadlineMs?: number } = {}): (project: { repoPath: string }, read?: RepoConfigRead) => Promise<RepoConfig> {
   const exec = o.exec ?? execCmd;
+  const deadlineMs = o.fetchDeadlineMs ?? FETCH_DEADLINE_MS;
   return async ({ repoPath }, { fetch = true } = {}) => {
     // A worktree that already exists is prepared without a fetch: what was merged since applies all the same.
-    if (fetch) await mustExec(exec, 'git', ['-C', repoPath, 'fetch', '--quiet', 'origin']);
+    // Never a prompt for a credential; a forge that does not answer refuses the launch, which never waits for it forever.
+    if (fetch) await within(mustExec(exec, 'git', ['-C', repoPath, 'fetch', '--quiet', 'origin'], { env: { GIT_TERMINAL_PROMPT: '0', ...STALLED } }), deadlineMs, `la forge ne répond plus après ${deadlineMs / 1000} s`);
     // In full: a short `origin/main` (the fallback without `origin/HEAD`) is resolved by git as `refs/tags/origin/main`
     // first, a tag anyone who pushes to the forge can make.
     const ref = `refs/remotes/${(await originHead(exec, repoPath)).replace(/^remotes\//, '')}`;
