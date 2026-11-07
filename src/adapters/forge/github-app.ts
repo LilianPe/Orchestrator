@@ -165,6 +165,15 @@ const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'obj
 const isCheckRun = (r: unknown): r is CheckRunDto =>
   isRecord(r) && typeof r.name === 'string' && typeof r.status === 'string' && (r.conclusion === null || typeof r.conclusion === 'string');
 
+const isPull = (p: unknown): p is PullRequestDto =>
+  isRecord(p) &&
+  typeof p.number === 'number' &&
+  typeof p.html_url === 'string' &&
+  typeof p.state === 'string' &&
+  isRecord(p.head) &&
+  typeof p.head.ref === 'string' &&
+  typeof p.head.sha === 'string';
+
 const isStatus = (s: unknown): s is StatusDto => isRecord(s) && typeof s.context === 'string' && typeof s.state === 'string';
 
 /** A 2xx answer that is not what the endpoint documents: never read as an empty list (ORC-273). */
@@ -351,8 +360,8 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
     const query = new URLSearchParams({ head: `${repo.owner}:${branch}`, state: 'all', per_page: '1' });
     const path = `${repoApi(repo)}/pulls?${query}`;
     const pulls = await this.call<unknown>('GET', path, token);
-    if (!Array.isArray(pulls)) throw unreadable('GET', path, 'a list of pull requests', pulls);
-    const pr = pulls[0] as PullRequestDto | undefined;
+    if (!Array.isArray(pulls) || !pulls.every(isPull)) throw unreadable('GET', path, 'a list of pull requests', pulls);
+    const pr = pulls[0];
     if (!pr) return undefined;
     const state: PrInfo['state'] = pr.state === 'open' ? 'OPEN' : pr.merged_at ? 'MERGED' : 'CLOSED';
     const checks = state === 'OPEN' ? await this.checksFor(repo, pr.head.sha, token) : { checks: 'none' as const, failedChecks: [] };

@@ -355,6 +355,17 @@ describe('GitHubAppForge.findPr', () => {
     await expect(forge.findPr('/repo', 'factory/REL-1')).rejects.toThrow(/pulls: unreadable answer, not a list of pull requests: "\{\\"message\\":\\"ok\\"\}"$/);
   });
 
+  it.each([
+    ['an entry that is not an object', [null]],
+    ['an entry without its head', [{ number: 7, state: 'open', html_url: 'https://github.com/acme/app/pull/7' }]],
+    ['an entry without a number', [openPr({ number: undefined })]],
+  ])('rejects, saying it is unreadable, a list of PRs with %s: never a raw TypeError', async (_case, body) => {
+    const { forge } = makeForge([tokenRoute(42), (url) => (url.pathname === '/repos/acme/app/pulls' ? { body } : undefined)], { installationId: 42 });
+    const err = await forge.findPr('/repo', 'factory/REL-1').catch((e: unknown) => e);
+    expect(err).not.toBeInstanceOf(TypeError);
+    expect((err as Error).message).toMatch(/pulls: unreadable answer, not a list of pull requests: /);
+  });
+
   it('reads every page of check runs and commit statuses: a failure past the first hundred is in the verdict', async () => {
     const green = (i: number) => ({ id: i, name: `job-${i}`, status: 'completed', conclusion: 'success' });
     const ok = (i: number) => ({ context: `ctx-${i}`, state: 'success' });
