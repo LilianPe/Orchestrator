@@ -62,6 +62,15 @@ describe("the repository's config at the launch", () => {
     expect(h.runner.requests[0]!.env).toMatchObject({ NODE_ENV: 'test' });
   });
 
+  it("reads a question's config without a fetch of its own: its trunk was just fetched", async () => {
+    const base = onDefaultBranch(BASE);
+    const h = createHarness({ sandboxed: true, ...base });
+    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+    await h.send('session.mentioned', { linearSessionId: 'as-q1', body: 'question', author: 'Lilian' });
+    expect(h.workspaces.prepared.map((p) => p.kind)).toEqual(['trunk-readonly']);
+    expect(base.reads).toEqual([{ fetch: false }]);
+  });
+
   it('refuses the launch on an invalid file, naming the fault: no sandbox, no run, no worktree left', async () => {
     const h = createHarness({
       sandboxed: true,

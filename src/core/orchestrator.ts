@@ -1807,8 +1807,8 @@ export class Orchestrator {
     let handedOver = false;
     try {
       // Read once, on the default branch (ORC-209 C): an invalid file refuses the launch, and a fresh worktree goes with
-      // it. A fresh worktree's `prepare` has just fetched the forge.
-      const config = await this.repoConfigOf(project, { fetch: !ws.fresh });
+      // it. A fresh worktree's `prepare` has just fetched the forge, as a question's trunk always does.
+      const config = await this.repoConfigOf(project, { fetch: !ws.fresh && job.workspace !== 'trunk-readonly' });
       const setup = config.setup ? [config.setup] : wf.workspace.setup;
       setUp ||= !setup.length;
       t = await this.ticket(project.id, ticketId);
