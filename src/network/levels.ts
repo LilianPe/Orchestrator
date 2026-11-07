@@ -58,6 +58,17 @@ export function stepPolicy(config: RepoConfig, step: NetworkLevel = 'limited'): 
   return { level, allow: level === 'limited' && config.network.level === 'custom' ? config.network.allow.map(norm) : [] };
 }
 
+/**
+ * An agent run's policy (ORC-209 C): the repository's level, the Claude API kept for a repository at `none`, as
+ * the MVP doc says of a step that calls the agent: without it, no run can start.
+ * ponytail: every agent run at the repository's level; the step's own level (`stepPolicy(config, step)`, the
+ * preset's `review` at `claude-api`) applies once the review needs no network (ORC-322).
+ */
+export function agentPolicy(config: RepoConfig): EgressPolicy {
+  const p = stepPolicy(config);
+  return p.level === 'none' ? { level: 'claude-api', allow: [] } : p;
+}
+
 /** A `CONNECT host:443`: the host alone, before the proxy decrypts the requests (`allowRequest`). */
 export function allowConnect(p: EgressPolicy, host: string): Verdict {
   const h = norm(host);

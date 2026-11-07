@@ -77,8 +77,13 @@ export function parseStatus(out: string): string[] {
 
 /** The default branch as `origin/<name>`; `origin/main` when the clone does not know it. */
 export async function originHead(exec: Exec, repo: string): Promise<string> {
+  return (await originHeadOf(exec, repo)).name;
+}
+
+/** `originHead`, and whether `origin/HEAD` gave it (`set`) or `origin/main` is assumed. */
+export async function originHeadOf(exec: Exec, repo: string): Promise<{ name: string; set: boolean }> {
   const r = await exec('git', ['-C', repo, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD']);
-  return r.code === 0 ? r.stdout.trim() : 'origin/main';
+  return r.code === 0 ? { name: r.stdout.trim(), set: true } : { name: 'origin/main', set: false };
 }
 
 export class GitWorkspaces implements WorkspaceManager {

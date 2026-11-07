@@ -10,17 +10,48 @@ export interface ExecResult {
   code: number;
 }
 
-export type Exec = (cmd: string, args: string[], opts?: { cwd?: string; env?: Record<string, string> }) => Promise<ExecResult>;
+export interface ExecOpts {
+  cwd?: string;
+  env?: Record<string, string>;
+  /** Past it, the command and what it started (its process group: git's ssh) are killed, and the result's code is `TIMED_OUT`. */
+  timeoutMs?: number;
+}
+
+export type Exec = (cmd: string, args: string[], opts?: ExecOpts) => Promise<ExecResult>;
+
+/** The code of a command killed at its deadline, as `timeout(1)` gives it. */
+export const TIMED_OUT = 124;
 
 export const execCmd: Exec = (cmd, args, opts = {}) =>
   new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, { cwd: opts.cwd, env: { ...process.env, ...opts.env }, stdio: ['ignore', 'pipe', 'pipe'] });
+    // Its own process group under a deadline, so the kill reaches the grandchildren too (POSIX; Windows kills the child alone).
+    const group = opts.timeoutMs !== undefined && process.platform !== 'win32';
+    const child = spawn(cmd, args, { cwd: opts.cwd, env: { ...process.env, ...opts.env }, stdio: ['ignore', 'pipe', 'pipe'], detached: group });
     let stdout = '';
     let stderr = '';
+    let timedOut = false;
+    const timer =
+      opts.timeoutMs === undefined
+        ? undefined
+        : setTimeout(() => {
+            timedOut = true;
+            try {
+              if (group && child.pid !== undefined) process.kill(-child.pid, 'SIGKILL');
+              else child.kill('SIGKILL');
+            } catch {
+              // Already gone.
+            }
+          }, opts.timeoutMs);
     child.stdout.on('data', (d) => (stdout += d));
     child.stderr.on('data', (d) => (stderr += d));
-    child.on('error', reject);
-    child.on('close', (code) => resolve({ stdout, stderr, code: code ?? 1 }));
+    child.on('error', (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      resolve({ stdout, stderr, code: timedOut ? TIMED_OUT : (code ?? 1) });
+    });
   });
 
 /**
@@ -47,7 +78,7 @@ export function execFailure(cmd: string, args: string[], r: ExecResult): Error {
   return new Error(`${cmd} ${args.join(' ')}: ${r.stderr.trim() || r.stdout.trim() || `exit ${r.code}`}`);
 }
 
-export async function mustExec(exec: Exec, cmd: string, args: string[], opts?: { cwd?: string; env?: Record<string, string> }): Promise<string> {
+export async function mustExec(exec: Exec, cmd: string, args: string[], opts?: ExecOpts): Promise<string> {
   const r = await exec(cmd, args, opts);
   if (r.code !== 0) throw execFailure(cmd, args, r);
   return r.stdout;
