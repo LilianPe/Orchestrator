@@ -342,6 +342,36 @@ export class GitHubAppAuth {
     return String(data.id);
   }
 
+  /**
+   * Every page of a list GitHub returns under `key`, 100 per page. An answer without that list, or with an entry
+   * `isEntry` rejects, throws: read as empty, it would drop checks from the verdict, down to `none`, hide a CI, create a
+   * second check run, or let `doctor` skip an environment (ORC-273).
+   * A list longer than `MAX_PAGES` pages throws too: a server that ignores `page` would loop forever, under a lease
+   * renewed all along. After `MAX_PAGES` full pages, one more page is read: empty, the list is complete. `filter`:
+   * the endpoint's own query parameters, sent with every page.
+   */
+  protected async allPages<E>(
+    path: string,
+    key: string,
+    what: string,
+    isEntry: (e: unknown) => e is E,
+    token: string,
+    filter = new URLSearchParams(),
+  ): Promise<E[]> {
+    const all: E[] = [];
+    for (let page = 1; ; page++) {
+      const url = `${path}?${new URLSearchParams([...filter, ['per_page', '100'], ['page', String(page)]])}`;
+      const isPage = (d: unknown): d is Record<string, E[]> => isRecord(d) && Array.isArray(d[key]) && d[key].every(isEntry);
+      const list = (await this.read('GET', url, token, isPage, what))[key]!;
+      if (page > MAX_PAGES) {
+        if (list.length === 0) return all;
+        throw new Error(`${apiLabel('GET', path)}: more than ${MAX_PAGES * 100} entries, never read as complete`);
+      }
+      all.push(...list);
+      if (list.length < 100) return all;
+    }
+  }
+
   /** Resolves repo + token, then reads the API on a path built from owner/name, under the guard `is`. */
   protected async requestRead<T>(repoPath: string, path: (repo: GitHubRepoRef) => string, is: (v: unknown) => v is T, what: string): Promise<T> {
     const repo = await this.repo(repoPath);
@@ -593,35 +623,6 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
     ]);
     const ci = !workflows || workflows.some((w) => w.state === 'active' && !w.path?.startsWith('dynamic/'));
     return head.checks === 'none' && !ci && base.checks === 'none';
-  }
-
-  /**
-   * Every page of a list GitHub returns under `key`, 100 per page. An answer without that list, or with an entry
-   * `isEntry` rejects, throws: read as empty, it would drop checks from the verdict, down to `none`, or hide a CI (ORC-273).
-   * A list longer than `MAX_PAGES` pages throws too: a server that ignores `page` would loop forever, under a lease
-   * renewed all along. After `MAX_PAGES` full pages, one more page is read: empty, the list is complete. `filter`:
-   * the endpoint's own query parameters, sent with every page.
-   */
-  private async allPages<E>(
-    path: string,
-    key: string,
-    what: string,
-    isEntry: (e: unknown) => e is E,
-    token: string,
-    filter = new URLSearchParams(),
-  ): Promise<E[]> {
-    const all: E[] = [];
-    for (let page = 1; ; page++) {
-      const url = `${path}?${new URLSearchParams([...filter, ['per_page', '100'], ['page', String(page)]])}`;
-      const isPage = (d: unknown): d is Record<string, E[]> => isRecord(d) && Array.isArray(d[key]) && d[key].every(isEntry);
-      const list = (await this.read('GET', url, token, isPage, what))[key]!;
-      if (page > MAX_PAGES) {
-        if (list.length === 0) return all;
-        throw new Error(`${apiLabel('GET', path)}: more than ${MAX_PAGES * 100} entries, never read as complete`);
-      }
-      all.push(...list);
-      if (list.length < 100) return all;
-    }
   }
 
   private async checksFor(
