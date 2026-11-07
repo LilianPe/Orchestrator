@@ -631,6 +631,7 @@ describe('GitHubAppForge.mergePr (ORC-148)', () => {
 
   it.each([
     ['a PR without its head', [pullRoute({ number: 7, state: 'open', merged_at: null }), repoRoute()], /pulls\/7: unreadable answer, not a pull request: /],
+    ['a PR whose base has no sha', [pullRoute(openPr({ base: { ref: 'main' } })), repoRoute()], /pulls\/7: unreadable answer, not a pull request: /],
     ['repository settings that are not an object', [pullRoute(openPr()), (url: URL, init: HttpRequest) => (url.pathname === '/repos/acme/app' && init.method === 'GET' ? { raw: '' } : undefined)], /GET \/repos\/acme\/app: unreadable answer, not repository settings: undefined$/],
   ])('rejects, saying it is unreadable, never merges, on %s: never a raw TypeError', async (_case, routes, message) => {
     const { forge, calls } = makeForge([tokenRoute(42), ...(routes as Route[]), mergeRoute(200, { merged: true })], { installationId: 42 });

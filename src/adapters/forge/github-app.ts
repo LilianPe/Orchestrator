@@ -169,8 +169,12 @@ function statusBucket(state: string): string {
 
 export const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
-const isCheckRun = (r: unknown): r is CheckRunDto =>
-  isRecord(r) && typeof r.name === 'string' && typeof r.status === 'string' && (r.conclusion === null || typeof r.conclusion === 'string');
+/** What the verdict reads of a check run, and all it checks: never its `id`. */
+const isCheckRun = (r: unknown): r is Pick<CheckRunDto, 'name' | 'status' | 'conclusion'> =>
+  isRecord(r) &&
+  typeof r.name === 'string' &&
+  typeof r.status === 'string' &&
+  (r.conclusion === null || typeof r.conclusion === 'string');
 
 const isPull = (p: unknown): p is PullRequestDto =>
   isRecord(p) &&
@@ -179,7 +183,8 @@ const isPull = (p: unknown): p is PullRequestDto =>
   typeof p.state === 'string' &&
   isRecord(p.head) &&
   typeof p.head.ref === 'string' &&
-  typeof p.head.sha === 'string';
+  typeof p.head.sha === 'string' &&
+  (p.base === undefined || (isRecord(p.base) && typeof p.base.ref === 'string' && typeof p.base.sha === 'string'));
 
 const isWorkflow = (w: unknown): w is WorkflowDto =>
   isRecord(w) && typeof w.state === 'string' && (w.path === undefined || typeof w.path === 'string');
