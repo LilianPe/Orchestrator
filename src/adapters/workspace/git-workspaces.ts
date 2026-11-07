@@ -112,12 +112,18 @@ export async function fetchOrigin(exec: Exec, repo: string, o: { deadlineMs?: nu
 export class GitWorkspaces implements WorkspaceManager {
   private exec: Exec;
 
-  constructor(private o: { root: string; knowledgeRepo?: string; exec?: Exec }) {
+  /** `log`: the detail of a failed fetch (the server's path, git's own words), which the ticket never gets. */
+  constructor(private o: { root: string; knowledgeRepo?: string; exec?: Exec; fetchDeadlineMs?: number; log?: (message: string) => void }) {
     this.exec = o.exec ?? execCmd;
   }
 
   private git(repo: string, ...args: string[]): Promise<string> {
     return mustExec(this.exec, 'git', ['-C', repo, ...args]);
+  }
+
+  /** Bounded: a forge that does not answer refuses the launch, which never waits for it forever (ORC-209). */
+  private fetch(repo: string): Promise<void> {
+    return fetchOrigin(this.exec, repo, { deadlineMs: this.o.fetchDeadlineMs, log: this.o.log });
   }
 
   async prepare(req: WorkspaceRequest): Promise<Workspace> {
@@ -132,7 +138,7 @@ export class GitWorkspaces implements WorkspaceManager {
       if (!branch) throw new Error(`The git repository of ${path} is not the one the factory created, or is no longer readable: this worktree must be deleted.`);
       return { path, port, branch };
     }
-    await this.git(req.repoPath, 'fetch', 'origin');
+    await this.fetch(req.repoPath);
     const branch = branchName(req.ticketId, req.title);
     const has = async (ref: string) =>
       (await this.exec('git', ['-C', req.repoPath, 'rev-parse', '--verify', '--quiet', ref])).code === 0;
@@ -201,7 +207,7 @@ export class GitWorkspaces implements WorkspaceManager {
   private async trunkWorkspace(req: WorkspaceRequest): Promise<Workspace> {
     assertSafe(req.runId);
     const path = join(this.o.root, req.projectId, '_trunk', req.runId);
-    await this.git(req.repoPath, 'fetch', 'origin');
+    await this.fetch(req.repoPath);
     const ref = await originHead(this.exec, req.repoPath);
     await this.agentRepository(req.repoPath, path, ref, ['--detach', ref]);
     return { path };
@@ -210,7 +216,7 @@ export class GitWorkspaces implements WorkspaceManager {
   private async knowledgeWorkspace(req: WorkspaceRequest): Promise<Workspace> {
     const kb = this.o.knowledgeRepo;
     if (!kb) throw new Error('No knowledge repository configured.');
-    await this.git(kb, 'fetch', 'origin');
+    await this.fetch(kb);
     const path = join(this.o.root, '_kb', req.runId);
     const branch = `learn/${req.ticketId.toLowerCase()}-${req.runId.slice(0, 8)}`;
     const trunk = await originHead(this.exec, kb);

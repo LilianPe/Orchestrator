@@ -124,6 +124,25 @@ describe('GitWorkspaces', () => {
     expect(existsSync(join(k.path, 'README.md'))).toBe(true);
   });
 
+  it.each(['worktree', 'trunk-readonly', 'knowledge'] as const)('%s: gives up on a forge that does not answer, naming neither the path nor the command', async (kind) => {
+    const { base, repo, root } = fixtureRepo();
+    // A transport that never answers: the deadline kills it with git.
+    const stall = join(base, 'stall.sh');
+    writeFileSync(stall, '#!/bin/sh\nexec sleep 60\n', { mode: 0o755 });
+    git(repo, 'config', 'protocol.ext.allow', 'always');
+    git(repo, 'remote', 'set-url', 'origin', `ext::${stall}`);
+    const logged: string[] = [];
+    const ws = new GitWorkspaces({ root, knowledgeRepo: repo, fetchDeadlineMs: 300, log: (m) => logged.push(m) });
+    const started = Date.now();
+    await expect(ws.prepare(req(repo, { kind }))).rejects.toThrow(/^the forge no longer responds after 0.3 s$/);
+    expect(Date.now() - started).toBeLessThan(5_000);
+    // A forge that answers with an error: its code, and the detail in the daemon's log only.
+    git(repo, 'remote', 'set-url', 'origin', join(base, 'gone.git'));
+    const err = (await ws.prepare(req(repo, { kind })).catch((e: Error) => e)) as Error;
+    expect(err.message).toBe('the forge could not be read (git fetch, code 128)');
+    expect(logged.at(-1)).toContain(`git -C ${repo} fetch`);
+  });
+
   it('gives each question its own trunk: what one left is not there for the next', async () => {
     const { repo, root } = fixtureRepo();
     const ws = new GitWorkspaces({ root });
