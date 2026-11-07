@@ -3,7 +3,7 @@
 Les commandes de vérification d'un job (`verify`), lancées hors de l'agent, et leur verdict.
 
 - Interface : `CheckRunner` (`src/adapters/checks/types.ts`), port nouveau (ORC-225) ; `run` a le type `Verifier` de `src/core/verify.ts`. Le `Verifier` du ticket, c'est ce type.
-- Implémentations : `runVerify` (`src/core/verify.ts`, `bash -lc` dans un dossier ; `{ run: runVerify }` est un `CheckRunner`), `FakeCheckRunner` (`src/adapters/checks/fake.ts`). Avec les sandboxes, `verify` ne passe pas par ce port : `runCleanVerify` (`src/core/clean-verify.ts`, ORC-151) lance les commandes dans un sandbox neuf, sur un clone du SHA figé, et rejette au lieu de répondre quand il n'a pas de verdict. Ce port reste pour le `setup` sans sandbox et pour `FACTORY_ALLOW_HOST_VERIFY=1`.
+- Implémentations : `runVerify` (`src/core/verify.ts`, `bash -c` dans un dossier ; `{ run: runVerify }` est un `CheckRunner`), `FakeCheckRunner` (`src/adapters/checks/fake.ts`). Avec les sandboxes, `verify` ne passe pas par ce port : `runCleanVerify` (`src/core/clean-verify.ts`, ORC-151) lance les commandes dans un sandbox neuf, sur un clone du SHA figé, et rejette au lieu de répondre quand il n'a pas de verdict. Ce port reste pour le `setup` sans sandbox et pour `FACTORY_ALLOW_HOST_VERIFY=1`.
 - Suite : `test/contracts/check-runner.contract.ts`, lancée par `src/adapters/checks/fake.test.ts` et `src/adapters/checks/run-verify.test.ts`.
 
 ## Méthodes

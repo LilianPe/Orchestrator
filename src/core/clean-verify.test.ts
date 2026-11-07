@@ -459,7 +459,7 @@ describe('runCleanVerify', () => {
   it('caps each command by a kill, and its output by the tail, keeping its exit code', () => {
     const argv = verifyCommand('npm test');
     expect(argv.slice(0, 2)).toEqual(['bash', '-c']);
-    expect(argv[2]).toMatch(/timeout -k \d+ \d+ bash -lc "\$1" 2>&1 \| tail -c \d+; exit "\$\{PIPESTATUS\[0\]\}"/);
+    expect(argv[2]).toMatch(/timeout -k \d+ \d+ bash -c "\$1" 2>&1 \| tail -c \d+; exit "\$\{PIPESTATUS\[0\]\}"/);
     expect(argv.at(-1)).toBe('npm test');
   });
 

@@ -1,9 +1,11 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { runVerify } from './verify.js';
+import { systemEnv } from '../adapters/exec.js';
+import { verifyCommand } from './clean-verify.js';
+import { cappedCommand, runVerify } from './verify.js';
 
 function repo(): string {
   const dir = mkdtempSync(join(tmpdir(), 'factory-verify-'));
@@ -26,6 +28,31 @@ describe('runVerify', () => {
       { command: 'echo boom >&2; exit 3', exitCode: 3, output: 'boom\n' },
       { command: 'exit 1', exitCode: 1, output: '' },
     ]);
+  });
+
+  describe('loads no login profile: what the machine prints there is not the command output (ORC-324)', () => {
+    function home(): string {
+      const dir = mkdtempSync(join(tmpdir(), 'factory-home-'));
+      for (const file of ['.bash_profile', '.profile', '.bashrc', '.bash_logout']) writeFileSync(join(dir, file), `printf 'from ${file}\\n'; printf 'err ${file}\\n' >&2\n`);
+      return dir;
+    }
+
+    it('on the host', async () => {
+      vi.stubEnv('HOME', home());
+      const res = await runVerify(process.cwd(), ['echo boom >&2; exit 3']);
+      vi.unstubAllEnvs();
+      expect(res.failures[0]!.output).toBe('boom\n');
+    });
+
+    it.each([
+      ['setup in a sandbox', cappedCommand],
+      ['verify in a sandbox', verifyCommand],
+    ])('%s', (_, argv) => {
+      const [cmd, ...args] = argv('echo boom >&2; exit 3');
+      const r = spawnSync(cmd!, args, { env: { ...systemEnv(process.env), HOME: home() }, encoding: 'utf8' });
+      expect(r.status).toBe(3);
+      expect(r.stdout + r.stderr).toBe('boom\n');
+    });
   });
 
   // Not on Windows: the output of its `bash` does not come back here, as for the test above.

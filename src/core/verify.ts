@@ -16,10 +16,16 @@ export interface VerifyResult {
 /** `env`: what the commands get beyond the system, the variables the repository declares (ORC-211). */
 export type Verifier = (cwd: string, commands: string[], timeoutMs?: number, env?: Record<string, string>) => Promise<VerifyResult>;
 
+/*
+ * `bash -c`, never `-lc`, here and in a sandbox (ORC-324): a login shell runs the machine's profile and logout files,
+ * whose output (a clear-screen on Git for Windows) joins the command's, which goes to the agent and into what the
+ * factory publishes. The PATH is given, not read from a profile: the daemon's on the host (`systemEnv`), the image's in
+ * a sandbox, which Debian's `/etc/profile` would even reset, dropping `/factory/app/bin`.
+ */
 function runOne(cwd: string, command: string, timeoutMs: number, env: Record<string, string>): Promise<{ exitCode: number | null; output: string }> {
   return new Promise((resolve) => {
     // No credential of the daemon: these commands run what the agent wrote (ORC-211).
-    const child = spawn('bash', ['-lc', command], { cwd, env: { ...systemEnv(process.env), ...env }, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+    const child = spawn('bash', ['-c', command], { cwd, env: { ...systemEnv(process.env), ...env }, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
     let output = '';
     let done = false;
     const finish = (exitCode: number | null, extra = ''): void => {
@@ -52,7 +58,7 @@ export const VERIFY_TIMEOUT_MS = 15 * 60_000;
 
 /** `command` in a sandbox under the same cap, by coreutils' `timeout` in the image: 124 is its exit on expiry. */
 export function cappedCommand(command: string): string[] {
-  return ['timeout', String(VERIFY_TIMEOUT_MS / 1000), 'bash', '-lc', command];
+  return ['timeout', String(VERIFY_TIMEOUT_MS / 1000), 'bash', '-c', command];
 }
 
 export const runVerify: Verifier = async (cwd, commands, timeoutMs = VERIFY_TIMEOUT_MS, env = {}) => {
