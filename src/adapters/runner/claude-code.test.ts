@@ -12,6 +12,20 @@ import type { RunRequest } from './types.js';
 
 const fx = (n: string) => join(import.meta.dirname, 'fixtures', n);
 
+/** The worktree reads on the host that returned: `execCmd` as it is, counted once its answer came (ORC-325). */
+const hostReads = vi.hoisted(() => ({ done: 0 }));
+vi.mock('../exec.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../exec.js')>();
+  return {
+    ...real,
+    execCmd: async (...args: Parameters<typeof real.execCmd>) => {
+      const out = await real.execCmd(...args);
+      if (args[1].some((a) => a.includes('git write-tree'))) hostReads.done++;
+      return out;
+    },
+  };
+});
+
 function req(patch: Partial<RunRequest> = {}, env: Record<string, string> = {}): RunRequest {
   return {
     runId: `r-${Math.random().toString(36).slice(2)}`, cwd: process.cwd(), prompt: '/factory:dev\n\n## Ticket', claudeSessionId: 'uuid-1', resume: false,
@@ -191,13 +205,34 @@ describe('ClaudeCodeRunner: caps and stagnation of the build (ORC-136)', () => {
     return dir;
   }
   const repeats = { repeats: 3 };
+  /**
+   * What a negative case must have seen before it says nothing happened: every line relayed, then `before`, then a stop.
+   * A fixed timer passed a loaded machine before the lines were even read, and the case checked nothing (ORC-325).
+   */
+  const stopAfter = async (h: ReturnType<ClaudeCodeRunner['start']>, count: number, before: () => Promise<void> = async () => {}) => {
+    let n = 0;
+    for await (const _ of h.events) {
+      if (++n !== count) continue;
+      await before();
+      h.stop();
+    }
+    expect(n).toBe(count);
+    return h.done;
+  };
+  /** `count` reads returned, then a macrotask: the run's own promise chain after the last one has run out. */
+  const reads = (done: () => number, count: number) => async () => {
+    await vi.waitFor(() => expect(done()).toBe(count), { timeout: 30_000 });
+    await new Promise((r) => setTimeout(r, 0));
+  };
+  /** The events of three failed `npm test`: a tool call and its result each. */
+  const FAILURES_EVENTS = 6;
 
   it('counts a model message once, however many lines it streams on', async () => {
     const { r } = runner();
     const lines = ['m1', 'm1', 'm1', 'm2', 'm2'].map((id) => assistant(id));
-    const h = r.start(req({ limits: { turns: 2, durationMs: 10_000, usd: 5 } }, { FAKE_CLAUDE_SCRIPT: script(...lines), FAKE_CLAUDE_HANG: '1' }));
-    setTimeout(() => h.stop(), 800).unref();
-    expect(await h.done).toMatchObject({ outcome: 'stopped' });
+    // The agent ends by itself once its lines are written, without a result line: no timer, no stop to hide a limit (ORC-325).
+    const h = r.start(req({ limits: { turns: 2, durationMs: 10_000, usd: 5 } }, { FAKE_CLAUDE_SCRIPT: script(...lines) }));
+    expect(await h.done).toMatchObject({ outcome: 'failure', turns: 2 });
   });
 
   it('stops past the cap of turns of the step', async () => {
@@ -210,9 +245,9 @@ describe('ClaudeCodeRunner: caps and stagnation of the build (ORC-136)', () => {
   it('stops past the cap of tokens, cache reads left out', async () => {
     const { r } = runner();
     const cached = { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 1_000_000 };
-    const under = r.start(req({ limits: { turns: 50, durationMs: 10_000, usd: 5, tokens: 100 } }, { FAKE_CLAUDE_SCRIPT: script(assistant('m1', cached)), FAKE_CLAUDE_HANG: '1' }));
-    setTimeout(() => under.stop(), 800).unref();
-    expect(await under.done).toMatchObject({ outcome: 'stopped' });
+    // Ends by itself, as above: a limit would show, where a stop would win over it.
+    const under = r.start(req({ limits: { turns: 50, durationMs: 10_000, usd: 5, tokens: 100 } }, { FAKE_CLAUDE_SCRIPT: script(assistant('m1', cached)) }));
+    expect(await under.done).toMatchObject({ outcome: 'failure' });
     const over = r.start(req({ limits: { turns: 50, durationMs: 10_000, usd: 5, tokens: 100 } }, { FAKE_CLAUDE_SCRIPT: script(assistant('m1', { input_tokens: 60, output_tokens: 60 })), FAKE_CLAUDE_HANG: '1' }));
     expect(await over.done).toMatchObject({ outcome: 'limit' });
   });
@@ -221,8 +256,9 @@ describe('ClaudeCodeRunner: caps and stagnation of the build (ORC-136)', () => {
     const { r } = runner();
     const lines = [...bashFails('t1'), ...bashFails('t2', 'Exit code 1\nboom (99ms)'), ...bashFails('t3')];
     // Three real fingerprints of the worktree (git) before the third failure: under load they took past the default cap of
-    // 10 s, which ended the run first (ORC-325). The cap is no subject here; under the test's bound, a missed loop still ends.
-    const limits = { turns: 50, durationMs: 100_000, usd: 5 };
+    // 10 s, which ended the run first (ORC-325); this test took 12.9 s then. The cap is no subject here: 30 s, half the unit
+    // project's testTimeout (vitest.config.ts), so a missed loop still ends on the cap and the assertion says what is missing.
+    const limits = { ...req().limits, durationMs: 30_000 };
     const h = r.start(req({ cwd: gitRepo(), stagnation: repeats, limits }, { FAKE_CLAUDE_SCRIPT: script(...lines), FAKE_CLAUDE_HANG: '1' }));
     expect(await h.done).toMatchObject({ outcome: 'limit', stagnation: { kind: 'loop', command: 'npm test', count: 3 } });
   });
@@ -236,9 +272,9 @@ describe('ClaudeCodeRunner: caps and stagnation of the build (ORC-136)', () => {
     const sandboxed = runner(edits).r;
     const lines = [...bashFails('t1'), ...bashFails('t2'), ...bashFails('t3')];
     const h = sandboxed.start(req({ sandboxId: id, cwd: '/work', stagnation: repeats }, { FAKE_CLAUDE_SCRIPT: script(...lines), FAKE_CLAUDE_HANG: '1' }));
-    setTimeout(() => h.stop(), 1_500).unref();
-    expect(await h.done).toMatchObject({ outcome: 'stopped' });
-    expect(await h.done).not.toHaveProperty('stagnation');
+    const ended = await stopAfter(h, FAILURES_EVENTS, reads(() => n, 3));
+    expect(ended).toMatchObject({ outcome: 'stopped' });
+    expect(ended).not.toHaveProperty('stagnation');
   });
 
   it('in a sandbox, reads the worktree in it: never on the host', async () => {
@@ -255,12 +291,13 @@ describe('ClaudeCodeRunner: caps and stagnation of the build (ORC-136)', () => {
   it('tracks nothing without a fingerprint of the worktree, nor on a version without the bound', async () => {
     const { r } = runner();
     const lines = [...bashFails('t1'), ...bashFails('t2'), ...bashFails('t3')];
+    const before = hostReads.done;
     const outside = r.start(req({ cwd: mkdtempSync(join(tmpdir(), 'factory-nogit-')), stagnation: repeats }, { FAKE_CLAUDE_SCRIPT: script(...lines), FAKE_CLAUDE_HANG: '1', GIT_CEILING_DIRECTORIES: tmpdir() }));
-    setTimeout(() => outside.stop(), 1_500).unref();
-    expect(await outside.done).not.toHaveProperty('stagnation');
+    expect(await stopAfter(outside, FAILURES_EVENTS, reads(() => hostReads.done - before, 3))).not.toHaveProperty('stagnation');
+    // Without the bound, nothing is read: the lines all relayed, the count of reads has not moved.
     const older = r.start(req({ cwd: gitRepo() }, { FAKE_CLAUDE_SCRIPT: script(...lines), FAKE_CLAUDE_HANG: '1' }));
-    setTimeout(() => older.stop(), 800).unref();
-    expect(await older.done).not.toHaveProperty('stagnation');
+    expect(await stopAfter(older, FAILURES_EVENTS)).not.toHaveProperty('stagnation');
+    expect(hostReads.done - before).toBe(3);
   });
 
   it('says once per run that the worktree cannot be read, masked, and the run ends as before', async () => {
@@ -271,8 +308,9 @@ describe('ClaudeCodeRunner: caps and stagnation of the build (ORC-136)', () => {
     const lines = [...bashFails('t1'), ...bashFails('t2'), ...bashFails('t3')];
     const run = async (runId: string) => {
       exec.mockClear();
-      const h = r.start(req({ runId, sandboxId: id, cwd: '/work', stagnation: repeats }, { FAKE_CLAUDE_SCRIPT: script(...lines), FAKE_CLAUDE_HANG: '1' }));
-      await vi.waitFor(() => expect(exec).toHaveBeenCalledTimes(3), { timeout: 10_000 });
+      // A cap above the wait, both under the test's 60 s: the run must not end on its cap before its three reads (ORC-325).
+      const h = r.start(req({ runId, sandboxId: id, cwd: '/work', stagnation: repeats, limits: { ...req().limits, durationMs: 40_000 } }, { FAKE_CLAUDE_SCRIPT: script(...lines), FAKE_CLAUDE_HANG: '1' }));
+      await vi.waitFor(() => expect(exec).toHaveBeenCalledTimes(3), { timeout: 20_000 });
       h.stop();
       return h.done;
     };

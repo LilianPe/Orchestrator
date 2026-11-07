@@ -221,7 +221,7 @@ describe('bootstrap', () => {
     expect(res.status).toBe(200);
     await app.stop();
     ctrl.abort();
-  }, 4000);
+  });
 
   it.each([
     { webhookSecret: undefined, warns: true, port: 4194 },
