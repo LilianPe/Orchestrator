@@ -132,7 +132,7 @@ describe('runSealedSetup', () => {
     await runSealedSetup(sandboxes, request(tree({})));
     expect(sandboxes.execs).toEqual([
       { id: 'sbx-1', argv: YARN1_NO_SCRIPTS, opts: { env: { HOME: setupEnv(NOW)['HOME']! } } },
-      { id: 'sbx-1', argv: ['timeout', '900', 'bash', '-c', 'npm ci'], opts: { env: { NODE_ENV: 'test', NPM_TOKEN: SECRET, ...setupEnv(NOW) } } },
+      { id: 'sbx-1', argv: ['timeout', '900', 'bash', '--norc', '-c', 'npm ci'], opts: { env: { NODE_ENV: 'test', NPM_TOKEN: SECRET, ...setupEnv(NOW) } } },
     ]);
   });
 
