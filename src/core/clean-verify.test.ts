@@ -352,7 +352,7 @@ describe('runCleanVerify', () => {
       const { repo, req } = setup({ commands: [] });
       symlinkSync('/etc/passwd', join(repo, 'link'));
       commit(repo, 'x');
-      expect((await runCleanVerify(req)).failures[0]!.output).toContain('lien symbolique sortant');
+      expect((await runCleanVerify(req)).failures[0]!.output).toContain('symbolic link pointing outside');
     });
 
     it('only what the branch changed since it left the base counts, not what the base got since', async () => {

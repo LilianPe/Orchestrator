@@ -84,6 +84,7 @@ import { mdCode } from '../checks/markdown.js';
 import { parseStatus } from '../adapters/workspace/git-workspaces.js';
 import { agentPolicy, type EgressPolicy } from '../network/levels.js';
 import { REPO_CONFIG_REFUSED } from './block-cause.js';
+import { BEFORE_ORC_331 } from './legacy-messages.js';
 import { readSecurityLog, refusalSummary } from '../network/security-log.js';
 
 /** Meta key of the head a ticket's tests step started on (ORC-123). */
@@ -1653,7 +1654,7 @@ export class Orchestrator {
       at: this.d.clock.now(),
       projectId: project.id,
       ticketId: t.ticketId,
-      payload: { number: t.prNumber!, url: t.prUrl ?? '', branch: t.branch ?? '', reason, headMoved: reason === PUSHED },
+      payload: { number: t.prNumber!, url: t.prUrl ?? '', branch: t.branch ?? '', reason, headMoved: reason === PUSHED || reason === BEFORE_ORC_331.pushed },
     });
   }
 

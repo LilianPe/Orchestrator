@@ -64,7 +64,7 @@ describe('checkDependencies (factory/dependances)', () => {
     expect(r).toEqual({
       check: 'factory/dependances',
       ok: true,
-      summary: '2 dependenc(ies) added, present in the registry and allowed, or local: @types/node, typing-extensions.',
+      summary: '2 dependencies added, present in the registry and allowed, or local: @types/node, typing-extensions.',
       findings: [],
       added: [
         { ecosystem: 'npm', name: '@types/node', declared: '@types/node', spec: '^24.0.0', source: 'registry', manifest: 'package.json' },
@@ -72,6 +72,8 @@ describe('checkDependencies (factory/dependances)', () => {
       ],
     });
     expect(reg.lookups).toEqual([{ ecosystem: 'npm', name: '@types/node' }, { ecosystem: 'pypi', name: 'typing-extensions' }]);
+    const one = await checkDependencies({ changes: [change('package.json', pkg({}), pkg({ dependencies: { zod: '^4.0.0' } }))], registry: registry(), allowList: allowAll });
+    expect(one.summary).toBe('1 dependency added, present in the registry and allowed, or local: zod.');
   });
 
   it('blocks every added package when the repository declares no allow-list', async () => {

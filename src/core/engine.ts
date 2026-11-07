@@ -7,6 +7,7 @@ import type { AgentOutput } from './agent-output.js';
 import { blockFacts, type BlockFacts } from './block-comment.js';
 import type { Decision, Effect } from './decision.js';
 import { awaitsAgent, commandOf, forAgent, STOP_COMMAND } from './human-message.js';
+import { BEFORE_ORC_331 } from './legacy-messages.js';
 import { PRODUCT_NAME } from '../product.js';
 import { CUT_RELAUNCHES, CUT_WINDOW_MS } from '../store/types.js';
 import { isOwnMoveEcho, reduce } from './reduce.js';
@@ -18,8 +19,6 @@ type StartRun = Extract<Effect, { kind: 'start_run' }>;
 /** What a stop's answer says of the way back: versions frozen before ORC-196 keep their label. */
 const relaunch = (workflow: Workflow): string => (workflow.blockComment ? 'Reply on this ticket to relaunch.' : 'Reply in this thread or add the agent:reprendre label to relaunch.');
 const STOPPED = 'Stopped on request';
-/** The reason a stop wrote before ORC-331: a ticket stopped then is still stopped. */
-const STOPPED_BEFORE_ORC_331 = 'Arrêté à la demande';
 
 /** Paths a run started from an untrusted event must not write; enforced by the runner's sandbox (ORC-151). */
 export const SENSITIVE_PATHS: readonly string[] = ['.github/**', '.factory/**', '.claude/**', 'CODEOWNERS', '.env*'];
@@ -228,8 +227,6 @@ function stagnationBlock(p: EventPayloads['run.finished'], workflow: Workflow): 
 
 /** Prefix of the block reason of the red-CI bound: a green CI lifts that block (ORC-270). */
 const RED_CI_BLOCKED = 'CI still failing after ';
-/** The same prefix as written before ORC-331: a ticket blocked then is lifted all the same. */
-const RED_CI_BLOCKED_BEFORE_ORC_331 = 'CI toujours en échec après ';
 
 /** Events a human sends: unblocking the ticket, they give the red-CI loop its whole bound back (ORC-270). */
 const HUMAN_RELAUNCH = new Set<EventType>(['session.prompted', 'ticket.commented', 'label.changed', 'status.changed', 'ticket.delegated']);
@@ -779,7 +776,7 @@ function afterMerge(state: TicketState | undefined, event: FactoryEvent, workflo
 /** Delivered (`done`, PR merged) or stopped by a human (its reason stays): a failure blocks it no more. */
 export function settledTicket(ticket: TicketState): string | undefined {
   if (ticket.logical === 'done' || ticket.prState === 'MERGED') return 'delivered';
-  return ticket.blocked && (ticket.blockReason === STOPPED || ticket.blockReason === STOPPED_BEFORE_ORC_331) ? 'stopped' : undefined;
+  return ticket.blocked && (ticket.blockReason === STOPPED || ticket.blockReason === BEFORE_ORC_331.stopped) ? 'stopped' : undefined;
 }
 
 /**
@@ -1301,7 +1298,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       // Green CI ends the red-CI loop: its count starts over (ORC-270). The rules of pr.checks_passed still apply.
       // A ticket blocked by the red-CI bound is no longer blocked for a reason that holds: the block is lifted.
       resetRedCi(out, ticket);
-      if (ticket?.blocked && (ticket.blockReason?.startsWith(RED_CI_BLOCKED) || ticket.blockReason?.startsWith(RED_CI_BLOCKED_BEFORE_ORC_331))) out.events.push({ type: 'ticket.unblocked' });
+      if (ticket?.blocked && (ticket.blockReason?.startsWith(RED_CI_BLOCKED) || ticket.blockReason?.startsWith(BEFORE_ORC_331.redCiBlocked))) out.events.push({ type: 'ticket.unblocked' });
       break;
     case 'pr.opened': {
       // A new PR (another number) reopens a delivered ticket; the same PR seen again leaves it as it is,

@@ -153,6 +153,34 @@ describe('Done by a human, merge by the factory (ORC-148)', () => {
     expect(lastMove(h)).toBe('Human Review');
   });
 
+  it('a push-since-review refusal saved before ORC-331, in French, replays as a moved head: the new commits go through the AI review', async () => {
+    let failures = 1;
+    const h = await inHumanReview({
+      effectRetry: { attempts: 6, baseMs: 1, capMs: 1 },
+      wrapStore: (inner) =>
+        Object.assign(Object.create(inner) as Store, {
+          appendInbox: async (e: Parameters<Store['appendInbox']>[0]) => {
+            if (e.id.startsWith('merge-refused:') && failures > 0) {
+              failures--;
+              throw new Error('inbox unavailable');
+            }
+            return inner.appendInbox(e);
+          },
+          // The refusal as the factory saved it before its messages moved to English.
+          getMeta: async (key: string) => (key.endsWith(':refused') ? 'la branche a reçu un push depuis la review' : inner.getMeta(key)),
+        }),
+    });
+    h.forge.setPr(BRANCH, { ...PR, state: 'OPEN', headSha: 'def456', checks: 'pass', failedChecks: [] });
+    h.workspaces.heads.set(WORKTREE, 'def456');
+    h.runner.enqueue({ events: [{ kind: 'init', sessionId: 'y' }, { kind: 'text', text: 'Rien à redire.' }] });
+    await h.send('status.changed', { from: 'human_review', to: 'done' }, 'REL-1', { actor: 'user-lilian' });
+    for (let i = 0; i < 6; i++) await h.advance(10);
+    expect(failures).toBe(0);
+    expect(h.forge.merges).toEqual([]);
+    expect((await h.store.getRun(h.runner.requests.at(-1)!.runId))?.job).toBe('review');
+    expect((await h.ticket()).reviewSha).toBe('def456');
+  });
+
   it('a PR merged on GitHub meanwhile, on another head, is no refusal: the ticket stays in Done', async () => {
     const h = await inHumanReview();
     h.forge.setPr(BRANCH, { ...PR, state: 'MERGED', headSha: 'def456', checks: 'pass', failedChecks: [] });

@@ -67,10 +67,10 @@ async function main(): Promise<number> {
         exec: execCmd,
         createSmee: () => createSmeeChannel(),
         io: {
-          ask: async (q, def) => (await rl.question(`${q}${def ? ` [${def}]` : ''} : `)).trim() || def || '',
+          ask: async (q, def) => (await rl.question(`${q}${def ? ` [${def}]` : ''}: `)).trim() || def || '',
           confirm: async (q, def = false) => {
-            const a = (await rl.question(`${q} ${def ? '[O/n]' : '[o/N]'} : `)).trim().toLowerCase();
-            return a ? a.startsWith('o') || a.startsWith('y') : def;
+            const a = (await rl.question(`${q} ${def ? '[Y/n]' : '[y/N]'}: `)).trim().toLowerCase();
+            return a ? a.startsWith('y') || a.startsWith('o') : def;
           },
           print: (s) => console.log(s),
         },

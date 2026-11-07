@@ -11,9 +11,12 @@ export interface PlanStep {
 }
 
 /** The plan with `step` at `status`: what ran before it is done, what it skipped is canceled, what follows is to do (again). */
+/** Each step named from `STEPS` by its position: a plan started before ORC-331 switches to English at its next update. */
+const named = (s: PlanStep, i: number): PlanStep => ({ ...s, content: STEPS[i] ?? s.content });
+
 export function advancePlan(plan: readonly PlanStep[], step: PlanStepName, status: PlanStep['status'] = 'inProgress'): PlanStep[] {
   const at = STEPS.indexOf(step);
-  return plan.map((s, i) => {
+  return plan.map(named).map((s, i) => {
     if (i === at) return { ...s, status };
     if (i > at) return { ...s, status: 'pending' };
     return { ...s, status: s.status === 'pending' || s.status === 'canceled' ? 'canceled' : 'completed' };
@@ -27,7 +30,7 @@ export function startPlan(): PlanStep[] {
 
 /** The end of the factory's work on the ticket: the step under way is done, and the PR when there is one. */
 export function closePlan(plan: readonly PlanStep[], hasPr: boolean): PlanStep[] {
-  const closed = plan.map((s): PlanStep => (s.status === 'inProgress' ? { ...s, status: 'completed' } : s));
+  const closed = plan.map(named).map((s): PlanStep => (s.status === 'inProgress' ? { ...s, status: 'completed' } : s));
   return hasPr ? advancePlan(closed, 'PR', 'completed') : closed;
 }
 

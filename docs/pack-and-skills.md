@@ -125,7 +125,7 @@ Relais always loads `packs/standard`: `extends` in `workflow.yml` has no effect 
 
 - Frontmatter `name` (folder name) and `description`; `src/pack.test.ts` checks that every pack skill has this frontmatter, that every skill referenced by the pack's `workflow.yml` exists, and that every `relais:<name>` cited in a skill or in the hook exists.
 - Rely on the method skills rather than repeating their rules: "apply `relais:receiving-review`" stays correct when the method evolves.
-- The run's prompt starts with `/<skill>` followed by the « Ticket » block (identifier, title, URL, branch, PR, description), the « Contexte Linear » block when the webhook provides one and, depending on `input`, « Feedback to address », « CI failures », « Message » or « Failed checks ».
+- The run's prompt starts with `/<skill>` followed by the « Ticket » block (identifier, title, URL, branch, PR, description), the « Linear context » block when the webhook provides one and, depending on `input`, « Feedback to address », « CI failures », « Message » or « Failed checks ».
 - State explicitly what to do **at the end**: commit/push, and the format of the last message (posted in Linear).
 - Use `relais-agent ask` for any missing decision, then end the turn.
 - Test it by hand in a repository: `claude -p "/<skill> …" --plugin-dir packs/standard --settings ~/.relais/run-settings.json`.

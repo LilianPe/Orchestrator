@@ -67,6 +67,15 @@ describe('blockCause (ORC-297)', () => {
     expect(blockCause('Event e9 set aside (pr.opened): its decision failed (Loop: same failure).')).toBe('dead_letter');
   });
 
+  it('classifies the French reasons of tickets blocked before ORC-331, a stop included', () => {
+    expect(blockCause('Arrêté à la demande')).toBe('stopped');
+    expect(blockCause('CI toujours en échec après 2 tentatives de fix-ci.')).toBe('limit');
+    expect(blockCause('Événement e9 mis de côté (pr.opened) : sa décision a échoué (boom).')).toBe('dead_letter');
+    expect(blockCause("Question posée par l'agent")).toBe('question');
+    expect(blockCause('Configuration du dépôt à corriger : .factory/config.yml refusé')).toBe('repo_config');
+    expect(blockCause('PR #3 fermée sans merge')).toBe('pr_closed');
+  });
+
   it('never guesses: an unknown or missing reason is `other`', () => {
     expect(blockCause('Une raison que le moteur écrira demain.')).toBe('other');
     expect(blockCause(undefined)).toBe('other');

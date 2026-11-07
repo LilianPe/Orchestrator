@@ -526,7 +526,7 @@ function limiter(max: number): <T>(task: () => Promise<T>) => Promise<T> {
 function summarize(findings: DependencyFinding[], added: AddedDependency[]): string {
   if (findings.length > 0) return [`${findings.length} blocking finding(s):`, ...findings.map((f) => `- ${f.message}`)].join('\n');
   if (added.length === 0) return 'No dependency added.';
-  return `${added.length} dependenc(ies) added, present in the registry and allowed, or local: ${added.map((d) => d.name).join(', ')}.`;
+  return `${added.length === 1 ? '1 dependency' : `${added.length} dependencies`} added, present in the registry and allowed, or local: ${added.map((d) => d.name).join(', ')}.`;
 }
 
 export async function checkDependencies(input: DependencyCheckInput): Promise<DependencyCheckResult> {

@@ -1,4 +1,5 @@
 import { PRODUCT_NAME } from '../product.js';
+import { BEFORE_ORC_331 } from './legacy-messages.js';
 
 /** Why a ticket waits for a human, in the order the Flux shows the causes (ORC-297). */
 export const BLOCK_CAUSES = ['question', 'contested', 'red', 'infra', 'limit', 'loop', 'failed', 'pickup', 'repo_config', 'dead_letter', 'pr_closed', 'stopped', 'other'] as const;
@@ -38,6 +39,8 @@ const CAUSES: readonly (readonly [Exclude<BlockCause, 'other'>, RegExp])[] = [
   ['dead_letter', /^Event .+ set aside /],
   ['pr_closed', /^PR #\d+ closed without merge$/],
   ['stopped', /^Stopped on request$/],
+  // A ticket blocked before ORC-331 keeps its French reason until it is unblocked.
+  ...BEFORE_ORC_331.causes,
 ];
 
 /** The cause of a block, read from its reason; `other` when no cause is known for it, never a guess. */

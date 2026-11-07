@@ -20,7 +20,7 @@ Interface development: `npm run dev:web` starts Vite on port 5173 with a proxy f
 
 **The Flow's tokens** are ORC-235's measurement: the sum of the ticket's finished attempts. A run only reports its usage when it ends: the one in progress is not included yet, which the page states below the table. `≥` indicates finished attempts without a measurement; `—` that none has one, with the cost in dollars if it exists, until ORC-216; `?` that the ticket's measurements could not be read (the error is in the log). If reading the Flow fails, a banner says so and the durations stop. The displayed number adds up input, output, cache read and cache write; the breakdown is shown on hover.
 
-**The cause of a block** is read from its reason (`src/core/block-cause.ts`), from the sentence opening the factory writes. An unknown reason falls into « Autre cause », displayed as is. A new block reason is added to that table and to its test.
+**The cause of a block** is read from its reason (`src/core/block-cause.ts`), from the sentence opening the factory writes. An unknown reason falls into « Autre cause », displayed as is. A ticket blocked before ORC-331 keeps its French reason, which the same table still reads (`src/core/legacy-messages.ts`). A new block reason is added to that table and to its test.
 
 ## What the server exposes
 
