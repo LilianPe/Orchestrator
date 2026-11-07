@@ -482,6 +482,18 @@ describe('GitHubAppForge.unresolvedReviewComments', () => {
     await expect(forge.unresolvedReviewComments('/repo', 7)).rejects.toThrow(/graphql: unreadable answer/);
   });
 
+  it.each([
+    ['errors that are no list', { errors: 'boom' }],
+    ['an error that is null', { errors: [null] }],
+    ['threads that are no list', { data: { repository: { pullRequest: { reviewThreads: { nodes: {} } } } } }],
+    ['a thread without its comments', { data: { repository: { pullRequest: { reviewThreads: { nodes: [{ isResolved: false }] } } } } }],
+  ])('rejects, saying it is unreadable, never a raw TypeError, review threads answered with %s', async (_case, answer) => {
+    const { forge } = makeForge([tokenRoute(42), (url) => (url.pathname === '/graphql' ? { body: answer } : undefined)], { installationId: 42 });
+    const err = await forge.unresolvedReviewComments('/repo', 7).catch((e: unknown) => e);
+    expect(err).not.toBeInstanceOf(TypeError);
+    expect((err as Error)?.message).toMatch(/POST \/graphql: unreadable answer, not a GraphQL answer with review threads: /);
+  });
+
   it('surfaces GraphQL errors without leaking the installation token', async () => {
     const { forge } = makeForge([
       installationRoute(),
@@ -765,7 +777,7 @@ describe('GitHubAppForge writes, idempotent (ORC-162)', () => {
 
   it('takes a draft out of draft by the only call that can, and writes nothing for a PR already out (ORC-125)', async () => {
     const pull = (draft: boolean): Route => (url, init) => (url.pathname === '/repos/acme/app/pulls/7' && init.method === 'GET' ? { body: openPr({ draft, node_id: 'PR_node' }) } : undefined);
-    const mutation: Route = (url, init) => (url.pathname === '/graphql' && init.method === 'POST' ? { body: { data: {} } } : undefined);
+    const mutation: Route = (url, init) => (url.pathname === '/graphql' && init.method === 'POST' ? { body: { data: { markPullRequestReadyForReview: { clientMutationId: null } } } } : undefined);
     const drafted = makeForge([tokenRoute(42), pull(true), mutation], { installationId: 42 });
     await drafted.forge.markPrReady('/repo', 7);
     const posted = drafted.calls.filter((c) => c.url.endsWith('/graphql'));
@@ -804,6 +816,25 @@ describe('GitHubAppForge writes, idempotent (ORC-162)', () => {
     expect(calls.some((c) => c.url.endsWith('/graphql'))).toBe(false);
   });
 
+  it.each([
+    ['an empty object', {}],
+    ['a null mutation result', { data: { markPullRequestReadyForReview: null } }],
+    ['errors that are no list', { errors: 'boom' }],
+    ['an error that is null', { errors: [null] }],
+  ])('rejects, saying it is unreadable, never reads it as done, a ready-for-review mutation answered with %s', async (_case, answer) => {
+    const { forge } = makeForge(
+      [
+        tokenRoute(42),
+        (url, init) => (url.pathname === '/repos/acme/app/pulls/7' && init.method === 'GET' ? { body: openPr({ draft: true, node_id: 'PR_node' }) } : undefined),
+        (url) => (url.pathname === '/graphql' ? { body: answer } : undefined),
+      ],
+      { installationId: 42 },
+    );
+    const err = await forge.markPrReady('/repo', 7).catch((e: unknown) => e);
+    expect(err).not.toBeInstanceOf(TypeError);
+    expect((err as Error)?.message).toMatch(/POST \/graphql: unreadable answer, not a GraphQL answer to markPullRequestReadyForReview: /);
+  });
+
   it('rejects, saying it is unreadable, a ready-for-review mutation answered with no GraphQL object', async () => {
     const { forge } = makeForge(
       [
@@ -813,7 +844,7 @@ describe('GitHubAppForge writes, idempotent (ORC-162)', () => {
       ],
       { installationId: 42 },
     );
-    await expect(forge.markPrReady('/repo', 7)).rejects.toThrow(/POST \/graphql: unreadable answer, not a GraphQL answer: undefined$/);
+    await expect(forge.markPrReady('/repo', 7)).rejects.toThrow(/POST \/graphql: unreadable answer, not a GraphQL answer to markPullRequestReadyForReview: undefined$/);
   });
 
   it.each([

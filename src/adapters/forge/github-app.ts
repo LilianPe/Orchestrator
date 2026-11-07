@@ -211,6 +211,40 @@ const isPermission = (d: unknown): d is { permission?: string; role_name?: strin
   (d.permission === undefined || typeof d.permission === 'string') &&
   (d.role_name === undefined || typeof d.role_name === 'string');
 
+/** GraphQL's `errors`: absent, or a list of messages. */
+const isGraphQlErrors = (e: unknown): e is { message: string }[] | undefined =>
+  e === undefined || (Array.isArray(e) && e.every((x) => isRecord(x) && typeof x.message === 'string'));
+
+/** GraphQL answered with errors to report: the rest of the answer is not read. */
+const hasErrors = (d: Record<string, unknown>): boolean => Array.isArray(d.errors) && d.errors.length > 0;
+
+/** The ready-for-review mutation: its errors, or its result. A `null` result without errors is no proof it ran. */
+const isReadyAnswer = (d: unknown): d is { errors?: { message: string }[] } =>
+  isRecord(d) && isGraphQlErrors(d.errors) && (hasErrors(d) || (isRecord(d.data) && isRecord(d.data.markPullRequestReadyForReview)));
+
+const isThreadComment = (c: unknown): boolean =>
+  isRecord(c) &&
+  (c.author === null || (isRecord(c.author) && typeof c.author.login === 'string')) &&
+  typeof c.body === 'string' &&
+  typeof c.createdAt === 'string' &&
+  typeof c.path === 'string' &&
+  (c.line === null || typeof c.line === 'number');
+
+const isThread = (t: unknown): boolean =>
+  isRecord(t) && typeof t.isResolved === 'boolean' && isRecord(t.comments) && Array.isArray(t.comments.nodes) && t.comments.nodes.every(isThreadComment);
+
+/** The review threads query: its errors, or a repository and a PR each `null` (not found) or carrying their threads. */
+const isThreadsAnswer = (d: unknown): d is ReviewThreadsDto => {
+  if (!isRecord(d) || !isGraphQlErrors(d.errors)) return false;
+  if (hasErrors(d)) return true;
+  if (!isRecord(d.data)) return false;
+  const repo = d.data.repository;
+  if (repo === null) return true;
+  if (!isRecord(repo)) return false;
+  const pr = repo.pullRequest;
+  return pr === null || (isRecord(pr) && isRecord(pr.reviewThreads) && Array.isArray(pr.reviewThreads.nodes) && pr.reviewThreads.nodes.every(isThread));
+};
+
 /** `GitHub API <method> <path>`, without the query: the prefix of every error of a call. */
 const apiLabel = (method: string, path: string) => `GitHub API ${method} ${path.split('?')[0]}`;
 
@@ -535,7 +569,7 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
     const token = await this.installationToken(repo);
     const pr = await this.read('GET', `${repoApi(repo)}/pulls/${number}`, token, isDraftState, 'a pull request with its draft state');
     if (!pr.draft) return;
-    const out: { errors?: { message: string }[] } = await this.read('POST', '/graphql', token, isRecord, 'a GraphQL answer', {
+    const out = await this.read('POST', '/graphql', token, isReadyAnswer, 'a GraphQL answer to markPullRequestReadyForReview', {
       query: 'mutation($id: ID!) { markPullRequestReadyForReview(input: { pullRequestId: $id }) { clientMutationId } }',
       variables: { id: pr.node_id },
     });
@@ -584,7 +618,7 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
   async unresolvedReviewComments(repoPath: string, prNumber: number): Promise<FeedbackItem[]> {
     const repo = await this.repo(repoPath);
     const token = await this.installationToken(repo);
-    const out: ReviewThreadsDto = await this.read('POST', '/graphql', token, isRecord, 'a GraphQL answer', {
+    const out = await this.read('POST', '/graphql', token, isThreadsAnswer, 'a GraphQL answer with review threads', {
       query: THREADS_QUERY,
       variables: { owner: repo.owner, name: repo.name, number: prNumber },
     });
