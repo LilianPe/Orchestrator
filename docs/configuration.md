@@ -1,65 +1,65 @@
-# Configuration du démon
+# Daemon configuration
 
-Relais se configure à trois niveaux :
+Relais is configured at three levels:
 
-| Niveau | Fichier | Portée | Doc |
+| Level | File | Scope | Doc |
 |---|---|---|---|
-| Instance | `<RELAIS_HOME>/config.yaml` | Le démon : port, hôte, projets, relais webhook, budget journalier, base de connaissance. | cette page |
-| Secrets | `<RELAIS_HOME>/secrets.json` | Identifiants Linear. | cette page |
-| Projet | `.relais/workflow.yml` dans chaque dépôt | Comportement : événements, jobs, modèles, limites par run, vérifications. | [`workflow.md`](workflow.md) |
+| Instance | `<RELAIS_HOME>/config.yaml` | The daemon: port, host, projects, webhook relay, daily budget, knowledge base. | this page |
+| Secrets | `<RELAIS_HOME>/secrets.json` | Linear credentials. | this page |
+| Project | `.relais/workflow.yml` in each repository | Behavior: events, jobs, models, per-run limits, checks. | [`workflow.md`](workflow.md) |
 
-Les deux fichiers d'instance sont lus **au démarrage** de `relais up` : redémarrez après une modification.
+The two instance files are read **at startup** of `relais up`: restart after a change.
 
-## Variables d'environnement
+## Environment variables
 
-| Variable | Lue par | Défaut | Effet | Secret |
+| Variable | Read by | Default | Effect | Secret |
 |---|---|---|---|---|
-| `RELAIS_HOME` | toutes les commandes `relais` | `$HOME/.relais` | Répertoire de l'instance (voir [`installation.md`](installation.md#le-répertoire-home-du-démon)). | non |
-| `RELAIS_UI_PASSWORD` | `relais up`, `relais status/pause/resume/stop` | — | Mot de passe HTTP Basic de l'interface et de l'API. **Obligatoire** dès que `host` n'est pas une adresse de bouclage : sans lui, `relais up` refuse de démarrer. Ignoré quand `host` est en bouclage. Voir [`interface-et-securite.md`](interface-et-securite.md). | **oui** |
-| `FACTORY_DATABASE_URL` | `relais up`, `relais plan` | — | Chaîne de connexion Postgres (`postgres://utilisateur:mot-de-passe@hôte:5432/base`). Définie, le démon garde son état dans Postgres (`PgStore`) et applique les migrations Drizzle de `drizzle/` au démarrage (`relais plan` la lit sans la migrer) ; une base injoignable empêche le démarrage, sans repli sur SQLite. Absente : base SQLite `relais.db`, jusqu'à son retrait (ORC-178). Jamais transmise aux runs (préfixe `FACTORY_`), jamais écrite dans le journal du démon. | **oui** |
-| `FACTORY_CONTAINER_CLI` | `relais up` | — | `docker` ou `podman`. Définie, chaque tentative tourne dans un conteneur jetable (ORC-204) : créé à son lancement, détruit à sa fin, et ceux qu'un crash a laissés le sont au démarrage suivant. Le `setup` du dépôt y tourne aussi. Absente : les runs tournent sur l'hôte, sans isolation, et le démon l'écrit au démarrage. Sans effet avec `--fake-runner`. Voir [`interface-et-securite.md`](interface-et-securite.md#limites-connues). | non |
-| `FACTORY_ALLOW_HOST_VERIFY` | `relais up` | — | `1` : sans sandbox, `verify` et le contrôle du rouge lancent le code de l'agent sur l'hôte, à côté des secrets du démon. Sinon, ils refusent et le ticket est bloqué. Sans effet avec `FACTORY_CONTAINER_CLI` : un moteur en panne ne retombe jamais sur l'hôte. Voir [`interface-et-securite.md`](interface-et-securite.md#limites-connues). | non |
-| `FACTORY_RUNNER_IMAGE` | `relais up` | — | Image des conteneurs de run (`docker/runner.Dockerfile` : node et pnpm, python et uv, git, gitleaks, claude) : sans gitleaks, chaque `verify` est une panne (ORC-151). Requise avec `FACTORY_CONTAINER_CLI`. | non |
-| `FACTORY_EGRESS_CONTROL` | `relais up` | — | Socket de contrôle du service `proxy` (ORC-203). Définie, le démon pilote ce service au lieu de faire tourner le proxy de sortie dans son processus. | non |
-| `FACTORY_INSTALL_DIR` | `docker/entrypoint.sh` | — | Où copier l'installation, à un chemin que le moteur voit sur l'hôte ; le démon tourne depuis cette copie, une par image ([`deploiement.md`](deploiement.md#pourquoi-les-mêmes-chemins-des-deux-côtés)). | non |
-| `FACTORY_ALLOW_ROOTFUL_ENGINE` | `docker/entrypoint.sh` | — | `1` : laisse démarrer le conteneur du démon sur un moteur qui n'est pas rootless. Poste de développement seulement. | non |
-| `FACTORY_COMMIT` | `relais up` | fixée à la construction de l'image | Commit de l'usine, relevé sur chaque tentative. | non |
-| `FACTORY_AGENT_PORT` | `relais up` | port de l'interface + 1 | Port du serveur qui ne sert que `/agent/*`, pour les conteneurs. Démarré seulement avec `FACTORY_CONTAINER_CLI`. | non |
-| `FACTORY_AGENT_HOST` | `relais up` | `127.0.0.1` | Adresse d'écoute de ce serveur. Les conteneurs le joignent par le proxy de sortie du démon (ORC-213), pas par le réseau : la boucle locale suffit. Sous compose, `0.0.0.0` : le service `proxy` le joint par le réseau interne. | non |
-| `FACTORY_SANDBOX_AGENT_HOST` | `relais up` | `host.docker.internal` | Nom du démon dans le `RELAIS_API` des runs (`http://<nom>:<FACTORY_AGENT_PORT>/agent`). Le conteneur ne le résout pas : le proxy de sortie reconnaît ce nom et relaie vers le serveur de l'API agent. | non |
-| `FACTORY_SANDBOX_PIDS` | `relais up` | `512` | Nombre maximal de processus d'un conteneur de run (`--pids-limit`) : une fork bomb bute dessus sans affamer les autres tentatives (ORC-218). `0` ou `none` : pas de limite. Une valeur qui n'est pas un entier positif empêche le démarrage. | non |
-| `FACTORY_SANDBOX_MEMORY` | `relais up` | `4g` | Mémoire d'un conteneur de run, sans swap au-delà (`--memory` et `--memory-swap`) : un gouffre mémoire est tué par l'OOM. Taille au format du moteur (`512m`, `4g`). `0` ou `none` : pas de limite. | non |
-| `FACTORY_SANDBOX_CPUS` | `relais up` | `2`, ou le nombre de CPU de l'hôte s'il en a moins | CPU d'un conteneur de run (`--cpus`, décimal accepté : `0.5`). `0` ou `none` : pas de limite. | non |
-| `FACTORY_REFUSALS_LOG` | `relais up` | `$CLAUDE_CONFIG_DIR/factory-refusals.jsonl` | Fichier du journal des refus du hook `PreToolUse` ; transmis aux runs sur l'hôte seulement s'il est défini. En sandbox, ignoré : chaque run écrit dans `<RELAIS_HOME>/runs/<runId>/refusals/refusals.jsonl` (ORC-217). Voir [`pack-et-skills.md`](pack-et-skills.md#hook-pretooluse-et-journal-des-refus). | non |
-| `CLAUDE_CODE_OAUTH_TOKEN` | `claude`, en sandbox et sur l'hôte | — | Jeton du compte Claude Code quand `factory.yml` n'en choisit pas (`claude.active`). | **oui** |
-| `ANTHROPIC_API_KEY` | `claude`, sur l'hôte seulement | — | Authentification de Claude Code sur l'hôte, sans `claude login` ni compte actif. Jamais transmise à un sandbox (ORC-211) ; retirée avec les runs sur l'hôte (ORC-179). | **oui** |
-| `GH_TOKEN` | `gh` et, en Docker, git via `gh auth setup-git` | — | Authentification GitHub du repli `gh` du démon, et de son `git fetch`. Jamais transmis à un run (ORC-125). Obligatoire en Docker jusqu'à ORC-181. | **oui** |
-| `GH_APP_ID` | démon (repli de `github.appId`) | — | Identifiant de la GitHub App d'usine. | non |
-| `GH_APP_KEY` | démon (repli de `github.privateKey`) | — | Clé privée PEM de la GitHub App, ou chemin vers le fichier `.pem`. | **oui** |
-| `GH_APP_INSTALLATION_ID` | démon (repli de `github.installationId`) | — | Installation de l'App à utiliser ; facultatif, le démon sait la retrouver par dépôt. | non |
-| `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME`, `GIT_COMMITTER_EMAIL` | git (hérité par les runs) | identité git de la machine ; en Docker `Relais <relais@localhost>` | Identité des commits des agents. | non |
-| `PATH` | le démon | — | Doit contenir `claude`, `gh`, `git`. Relais y ajoute `bin/` de Relais pour les runs. | non |
+| `RELAIS_HOME` | all `relais` commands | `$HOME/.relais` | Instance directory (see [`installation.md`](installation.md#the-daemons-home-directory)). | no |
+| `RELAIS_UI_PASSWORD` | `relais up`, `relais status/pause/resume/stop` | — | HTTP Basic password for the UI and the API. **Required** as soon as `host` is not a loopback address: without it, `relais up` refuses to start. Ignored when `host` is loopback. See [`interface-et-securite.md`](interface-et-securite.md). | **yes** |
+| `FACTORY_DATABASE_URL` | `relais up`, `relais plan` | — | Postgres connection string (`postgres://utilisateur:mot-de-passe@hôte:5432/base`). When set, the daemon keeps its state in Postgres (`PgStore`) and applies the Drizzle migrations from `drizzle/` at startup (`relais plan` reads it without migrating it); an unreachable database prevents startup, with no fallback to SQLite. Absent: SQLite database `relais.db`, until it is removed (ORC-178). Never passed to runs (`FACTORY_` prefix), never written to the daemon's log. | **yes** |
+| `FACTORY_CONTAINER_CLI` | `relais up` | — | `docker` or `podman`. When set, each attempt runs in a disposable container (ORC-204): created when it launches, destroyed when it ends, and those a crash left behind are destroyed at the next startup. The repository's `setup` runs there too. Absent: runs execute on the host, without isolation, and the daemon says so at startup. No effect with `--fake-runner`. See [`interface-et-securite.md`](interface-et-securite.md#known-limitations). | no |
+| `FACTORY_ALLOW_HOST_VERIFY` | `relais up` | — | `1`: without a sandbox, `verify` and the red check run the agent's code on the host, next to the daemon's secrets. Otherwise, they refuse and the ticket is blocked. No effect with `FACTORY_CONTAINER_CLI`: a failed engine never falls back to the host. See [`interface-et-securite.md`](interface-et-securite.md#known-limitations). | no |
+| `FACTORY_RUNNER_IMAGE` | `relais up` | — | Image of the run containers (`docker/runner.Dockerfile`: node and pnpm, python and uv, git, gitleaks, claude): without gitleaks, every `verify` is a failure (ORC-151). Required with `FACTORY_CONTAINER_CLI`. | no |
+| `FACTORY_EGRESS_CONTROL` | `relais up` | — | Control socket of the `proxy` service (ORC-203). When set, the daemon drives that service instead of running the egress proxy in its own process. | no |
+| `FACTORY_INSTALL_DIR` | `docker/entrypoint.sh` | — | Where to copy the installation, at a path the engine sees on the host; the daemon runs from that copy, one per image ([`deploiement.md`](deploiement.md#why-the-same-paths-on-both-sides)). | no |
+| `FACTORY_ALLOW_ROOTFUL_ENGINE` | `docker/entrypoint.sh` | — | `1`: allows the daemon container to start on an engine that is not rootless. Development workstation only. | no |
+| `FACTORY_COMMIT` | `relais up` | set when the image is built | The factory's commit, recorded on each attempt. | no |
+| `FACTORY_AGENT_PORT` | `relais up` | UI port + 1 | Port of the server that only serves `/agent/*`, for containers. Started only with `FACTORY_CONTAINER_CLI`. | no |
+| `FACTORY_AGENT_HOST` | `relais up` | `127.0.0.1` | Listen address of that server. Containers reach it through the daemon's egress proxy (ORC-213), not through the network: loopback is enough. Under compose, `0.0.0.0`: the `proxy` service reaches it over the internal network. | no |
+| `FACTORY_SANDBOX_AGENT_HOST` | `relais up` | `host.docker.internal` | Name of the daemon in the runs' `RELAIS_API` (`http://<name>:<FACTORY_AGENT_PORT>/agent`). The container does not resolve it: the egress proxy recognizes this name and relays to the agent API server. | no |
+| `FACTORY_SANDBOX_PIDS` | `relais up` | `512` | Maximum number of processes in a run container (`--pids-limit`): a fork bomb hits it without starving the other attempts (ORC-218). `0` or `none`: no limit. A value that is not a positive integer prevents startup. | no |
+| `FACTORY_SANDBOX_MEMORY` | `relais up` | `4g` | Memory of a run container, with no swap beyond it (`--memory` and `--memory-swap`): a memory hog is killed by the OOM killer. Size in the engine's format (`512m`, `4g`). `0` or `none`: no limit. | no |
+| `FACTORY_SANDBOX_CPUS` | `relais up` | `2`, or the host's CPU count if it has fewer | CPUs of a run container (`--cpus`, decimals accepted: `0.5`). `0` or `none`: no limit. | no |
+| `FACTORY_REFUSALS_LOG` | `relais up` | `$CLAUDE_CONFIG_DIR/factory-refusals.jsonl` | File for the `PreToolUse` hook's refusal log; passed to runs on the host only if it is set. In a sandbox, ignored: each run writes to `<RELAIS_HOME>/runs/<runId>/refusals/refusals.jsonl` (ORC-217). See [`pack-et-skills.md`](pack-et-skills.md#pretooluse-hook-and-refusal-log). | no |
+| `CLAUDE_CODE_OAUTH_TOKEN` | `claude`, in a sandbox and on the host | — | Claude Code account token when `factory.yml` does not choose one (`claude.active`). | **yes** |
+| `ANTHROPIC_API_KEY` | `claude`, on the host only | — | Claude Code authentication on the host, without `claude login` or an active account. Never passed to a sandbox (ORC-211); removed along with host runs (ORC-179). | **yes** |
+| `GH_TOKEN` | `gh` and, in Docker, git via `gh auth setup-git` | — | GitHub authentication for the daemon's `gh` fallback, and for its `git fetch`. Never passed to a run (ORC-125). Required in Docker until ORC-181. | **yes** |
+| `GH_APP_ID` | daemon (fallback for `github.appId`) | — | Identifier of the factory's GitHub App. | no |
+| `GH_APP_KEY` | daemon (fallback for `github.privateKey`) | — | PEM private key of the GitHub App, or path to the `.pem` file. | **yes** |
+| `GH_APP_INSTALLATION_ID` | daemon (fallback for `github.installationId`) | — | App installation to use; optional, the daemon can find it per repository. | no |
+| `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME`, `GIT_COMMITTER_EMAIL` | git (inherited by runs) | the machine's git identity; in Docker `Relais <relais@localhost>` | Identity of the agents' commits. | no |
+| `PATH` | the daemon | — | Must contain `claude`, `gh`, `git`. Relais adds Relais's `bin/` to it for runs. | no |
 
-Variables réservées aux tests (sans effet sur le démon) : `LINEAR_API_KEY` (test live des requêtes Linear), `FACTORY_E2E=1` (test du pack avec le vrai `claude`). Voir [`recette.md`](recette.md#vérifications-live-optionnelles).
+Variables reserved for tests (no effect on the daemon): `LINEAR_API_KEY` (live test of the Linear queries), `FACTORY_E2E=1` (pack test with the real `claude`). See [`recette.md`](recette.md#optional-live-checks).
 
-Variables **posées par Relais** dans l'environnement de chaque run (à ne pas définir vous-même) : `RELAIS_API`, `RELAIS_RUN_TOKEN`, `RELAIS_TICKET`, `RELAIS_KNOWLEDGE`, `RELAIS_ROOT`, `PATH`, `FACTORY_REFUSALS_LOG` quand le démon l'a (en sandbox, toujours, vers le dossier du run), `FACTORY_READ_MAX_LINES` quand `factory.yml` déclare `read_guard.max_lines`, `FACTORY_FULL_READ_PATHS` quand un fichier doit être lu en entier et, pour la file `dev`, `PORT`. Voir [« Ce qui ne sort pas du démon »](#ce-qui-ne-sort-pas-du-démon). Dans un conteneur, ces chemins sont ceux du conteneur : `RELAIS_ROOT=/factory/app` (le `bin/` de Relais et ce qu'il lui faut, montés en lecture seule), `RELAIS_KNOWLEDGE=/factory/knowledge` (en lecture seule), et un `PATH` propre au conteneur, jamais celui de l'hôte.
+Variables **set by Relais** in each run's environment (do not set them yourself): `RELAIS_API`, `RELAIS_RUN_TOKEN`, `RELAIS_TICKET`, `RELAIS_KNOWLEDGE`, `RELAIS_ROOT`, `PATH`, `FACTORY_REFUSALS_LOG` when the daemon has it (in a sandbox, always, pointing to the run's directory), `FACTORY_READ_MAX_LINES` when `factory.yml` declares `read_guard.max_lines`, `FACTORY_FULL_READ_PATHS` when a file must be read in full and, for the `dev` queue, `PORT`. See ["What does not leave the daemon"](#what-does-not-leave-the-daemon). In a container, these paths are the container's: `RELAIS_ROOT=/factory/app` (Relais's `bin/` and what it needs, mounted read-only), `RELAIS_KNOWLEDGE=/factory/knowledge` (read-only), and a `PATH` specific to the container, never the host's.
 
 ## `config.yaml`
 
-Écrit par `relais init`, modifiable à la main. Fichier absent = toutes les valeurs par défaut. Un champ invalide empêche le démarrage avec `config.yaml invalide : <champ>: <message>`.
+Written by `relais init`, editable by hand. Missing file = all default values. An invalid field prevents startup with `config.yaml invalide : <champ>: <message>`.
 
-| Clé | Type | Défaut | Effet |
+| Key | Type | Default | Effect |
 |---|---|---|---|
-| `port` | entier > 0 | `4100` | Port du serveur HTTP (interface, API, webhooks, OAuth). Aussi le port que la CLI interroge (`http://127.0.0.1:<port>`). |
-| `host` | texte | `127.0.0.1` | Adresse d'écoute. Toute valeur hors bouclage (`localhost`, `127.x.x.x`, `::1`) exige `RELAIS_UI_PASSWORD`. En Docker : `0.0.0.0`. |
-| `publicUrl` | URL | — | URL publique de Relais (tunnel ou domaine). Si elle est définie, elle sert de base aux URL de callback OAuth (`<publicUrl>/oauth/callback`) et de webhook (`<publicUrl>/webhooks/linear`), et `relais init` ne crée pas de canal smee. Sans elle : `http://localhost:<port>`. |
-| `relay` | `{ kind: smee, url: <URL> }` ou `{ kind: none }` | `{ kind: none }` | Relais des webhooks Linear. `relais init` crée un canal smee.io quand il n'y a ni `publicUrl` ni relais. Voir [`linear.md`](linear.md#3-webhooks--smee-ou-url-publique). |
-| `projects` | liste de `{ id, repoPath, linearTeamKey, authz? }` | `[]` | Un projet = un dépôt local + une équipe Linear. Voir [`projets-et-workspaces.md`](projets-et-workspaces.md). `authz` : voir [Autorisations](#autorisations). |
-| `limits.perDayUsd` | nombre > 0 | — (pas de plafond) | Budget journalier de toute l'instance, en dollars. Voir [Budget journalier](#budget-journalier). |
-| `knowledge.repoPath` | chemin | — | Clone local du dépôt de base de connaissance. Absent : les jobs `learn` et `remember` sont ignorés et `relais-agent kb search` ne renvoie rien. |
-| `github` | `{ appId, privateKey, installationId?, webhookSecret? }` | — | GitHub App du démon. Absent : repli sur la CLI `gh`. Voir [GitHub App](#github-app). |
+| `port` | integer > 0 | `4100` | HTTP server port (UI, API, webhooks, OAuth). Also the port the CLI queries (`http://127.0.0.1:<port>`). |
+| `host` | text | `127.0.0.1` | Listen address. Any value other than loopback (`localhost`, `127.x.x.x`, `::1`) requires `RELAIS_UI_PASSWORD`. In Docker: `0.0.0.0`. |
+| `publicUrl` | URL | — | Public URL of Relais (tunnel or domain). If set, it is used as the base for the OAuth callback URL (`<publicUrl>/oauth/callback`) and the webhook URL (`<publicUrl>/webhooks/linear`), and `relais init` does not create a smee channel. Without it: `http://localhost:<port>`. |
+| `relay` | `{ kind: smee, url: <URL> }` or `{ kind: none }` | `{ kind: none }` | Linear webhook relay. `relais init` creates a smee.io channel when there is neither `publicUrl` nor a relay. See [`linear.md`](linear.md#3-webhooks-smee-or-public-url). |
+| `projects` | list of `{ id, repoPath, linearTeamKey, authz? }` | `[]` | One project = one local repository + one Linear team. See [`projets-et-workspaces.md`](projets-et-workspaces.md). `authz`: see [Authorization](#authorization). |
+| `limits.perDayUsd` | number > 0 | — (no cap) | Daily budget for the whole instance, in dollars. See [Daily budget](#daily-budget). |
+| `knowledge.repoPath` | path | — | Local clone of the knowledge base repository. Absent: the `learn` and `remember` jobs are skipped and `relais-agent kb search` returns nothing. |
+| `github` | `{ appId, privateKey, installationId?, webhookSecret? }` | — | The daemon's GitHub App. Absent: fallback to the `gh` CLI. See [GitHub App](#github-app). |
 
-Exemple :
+Example:
 
 ```yaml
 port: 4100
@@ -71,7 +71,7 @@ projects:
   - id: mon-app
     repoPath: /home/moi/code/mon-app
     linearTeamKey: APP
-    authz: # facultatif, voir « Autorisations »
+    authz: # optional, see "Authorization"
       maintainers: [6f1c2e0a-0000-4000-8000-000000000001]
       validators: [6f1c2e0a-0000-4000-8000-000000000002]
       githubLogins:
@@ -84,56 +84,56 @@ knowledge:
 github:
   appId: "123456"
   privateKey: /home/moi/.relais/github-app.pem
-  installationId: "987654" # facultatif
+  installationId: "987654" # optional
 ```
 
 ### GitHub App
 
-La section `github` configure l'identité du **démon** sur GitHub. Elle est facultative : sans elle, Relais utilise la CLI `gh` et `GH_TOKEN` comme avant (repli de migration, en lecture : sans la GitHub App, l'usine ne publie ni ne merge ; retiré par ORC-181).
+The `github` section configures the **daemon**'s identity on GitHub. It is optional: without it, Relais uses the `gh` CLI and `GH_TOKEN` as before (migration fallback, read-only: without the GitHub App, the factory neither publishes nor merges; removed by ORC-181).
 
-| Clé | Type | Défaut | Effet |
+| Key | Type | Default | Effect |
 |---|---|---|---|
-| `github.appId` | texte ou entier | — | App ID de la GitHub App. |
-| `github.privateKey` | texte | — | Clé privée PEM **inline**, ou chemin vers un fichier `.pem` (recommandé, mode `0600`). |
-| `github.installationId` | texte ou entier | découverte par dépôt | Installation à utiliser. Absent : le démon appelle `GET /repos/{owner}/{repo}/installation`. |
-| `github.webhookSecret` | texte | `GH_WEBHOOK_SECRET` | Secret des webhooks GitHub (`POST /webhooks/github`, signature `X-Hub-Signature-256`). Absent : la variable `GH_WEBHOOK_SECRET` ; sans l'un ni l'autre, tout webhook GitHub est refusé (401). Voir [`github.md`](github.md#webhooks-github). |
+| `github.appId` | text or integer | — | App ID of the GitHub App. |
+| `github.privateKey` | text | — | PEM private key **inline**, or path to a `.pem` file (recommended, mode `0600`). |
+| `github.installationId` | text or integer | discovered per repository | Installation to use. Absent: the daemon calls `GET /repos/{owner}/{repo}/installation`. |
+| `github.webhookSecret` | text | `GH_WEBHOOK_SECRET` | GitHub webhook secret (`POST /webhooks/github`, signature `X-Hub-Signature-256`). Absent: the `GH_WEBHOOK_SECRET` variable; without either, every GitHub webhook is refused (401). See [`github.md`](github.md#github-webhooks). |
 
-Les variables `GH_APP_ID`, `GH_APP_KEY` et `GH_APP_INSTALLATION_ID` servent de repli, champ par champ. Une configuration partielle (`appId` sans clé, ou l'inverse) empêche le démarrage : Relais ne bascule pas silencieusement sur `gh`.
+The `GH_APP_ID`, `GH_APP_KEY` and `GH_APP_INSTALLATION_ID` variables serve as a fallback, field by field. A partial configuration (`appId` without a key, or the reverse) prevents startup: Relais does not silently switch to `gh`.
 
-Le démon échange un JWT RS256 contre un **jeton d'installation limité au dépôt** demandé, le garde en mémoire au plus une heure (marge de sécurité de 60 s) et ne le transmet jamais aux runs. Permissions, création de l'App et rotation de clé : [`github.md`](github.md#github-app-recommandé).
+The daemon exchanges an RS256 JWT for an **installation token limited to the requested repository**, keeps it in memory for at most an hour (60 s safety margin) and never passes it to runs. Permissions, creating the App and key rotation: [`github.md`](github.md#github-app-recommended).
 
-> **Cible.** La section vit encore dans `config.yaml` : le passage à `factory.yml` est suivi par ORC-209. Les variables d'environnement resteront le repli pour Docker et les installations existantes.
+> **Target.** The section still lives in `config.yaml`: the move to `factory.yml` is tracked by ORC-209. The environment variables will remain the fallback for Docker and existing installations.
 
-### Autorisations
+### Authorization
 
-`projects[].authz` donne les rôles de la [matrice d'autorisations](linear.md#autorisations--qui-peut-faire-quoi) qu'aucune source ne fournit (ORC-186). Tout s'écrit en **ids d'utilisateur Linear** (UUID, par exemple `query { users { nodes { id name } } }` dans l'explorateur GraphQL de Linear) : ce sont les ids que portent les webhooks signés.
+`projects[].authz` gives the roles of the [authorization matrix](linear.md#authorizations-who-can-do-what) that no source provides (ORC-186). Everything is written as **Linear user ids** (UUID, for example `query { users { nodes { id name } } }` in Linear's GraphQL explorer): these are the ids that signed webhooks carry.
 
-| Clé | Type | Défaut | Effet |
+| Key | Type | Default | Effect |
 |---|---|---|---|
-| `authz.maintainers` | liste d'ids Linear | `[]` | Mainteneurs désignés : eux seuls pourront `/refreeze` (branché par ORC-131). |
-| `authz.validators` | liste d'ids Linear | `[]` | Valideurs désignés : eux seuls pourront valider une spec, jamais celle d'un run qu'ils ont lancé (branché par ORC-212). |
-| `authz.githubLogins` | table id Linear → login GitHub | `{}` | Le login GitHub de chaque utilisateur Linear dont les droits sur le dépôt comptent. Sans entrée, un utilisateur n'a aucun droit GitHub, donc ne peut pas déclencher l'agent ni (avec ORC-148) merger par *Done*. |
+| `authz.maintainers` | list of Linear ids | `[]` | Designated maintainers: only they will be able to `/refreeze` (wired by ORC-131). |
+| `authz.validators` | list of Linear ids | `[]` | Designated validators: only they will be able to validate a spec, never one from a run they launched (wired by ORC-212). |
+| `authz.githubLogins` | map Linear id → GitHub login | `{}` | The GitHub login of each Linear user whose permissions on the repository matter. Without an entry, a user has no GitHub permissions, and therefore cannot trigger the agent nor (with ORC-148) merge through *Done*. |
 
-Les membres de l'équipe Linear et les droits GitHub ne se configurent pas : ils sont lus (Linear, puis la GitHub App ou `gh`) et relus toutes les 60 s. L'App n'a besoin que de *Metadata* en lecture pour lire la permission d'un utilisateur.
+Linear team members and GitHub permissions are not configured: they are read (Linear, then the GitHub App or `gh`) and read again every 60 s. The App only needs read access to *Metadata* to read a user's permission.
 
-> **Cible.** Ces désignations passeront dans `.factory/config.yml` (ORC-209), et la matrice elle-même dans le préréglage `factory/default` (ORC-187).
+> **Target.** These designations will move to `.factory/config.yml` (ORC-209), and the matrix itself to the `factory/default` preset (ORC-187).
 
-### Budget journalier
+### Daily budget
 
-`limits.perDayUsd` plafonne la somme des coûts des runs depuis minuit **UTC**. Le coût d'un run est celui rapporté par Claude Code à la fin du run.
+`limits.perDayUsd` caps the sum of run costs since midnight **UTC**. A run's cost is the one reported by Claude Code at the end of the run.
 
-Quand le plafond est atteint : aucun nouveau run ne démarre, les demandes restent en file et Relais commente une fois par ticket et par jour « Budget journalier de Relais atteint : ce ticket reste en file jusqu'à demain (ou jusqu'à une hausse du plafond). ». Les runs déjà lancés vont au bout. La file repart d'elle-même au changement de jour (le démon réévalue la file toutes les minutes) ou après un redémarrage avec un plafond relevé.
+When the cap is reached: no new run starts, requests stay queued and Relais comments once per ticket per day « Budget journalier de Relais atteint : ce ticket reste en file jusqu'à demain (ou jusqu'à une hausse du plafond). ». Runs already launched run to completion. The queue restarts on its own when the day changes (the daemon re-evaluates the queue every minute) or after a restart with a raised cap.
 
-Le coût du jour et le plafond sont affichés dans l'interface et par `relais status`. Les plafonds **par run** (tours, durée, dollars) se règlent dans `workflow.yml` ([`workflow.md`](workflow.md#limits)).
+The day's cost and the cap are shown in the UI and by `relais status`. **Per-run** caps (turns, duration, dollars) are set in `workflow.yml` ([`workflow.md`](workflow.md#limits)).
 
 ### Ports
 
-- `port` (4100) : le serveur Relais.
-- `workspace.ports.base` (4200, dans `workflow.yml`) : chaque run de la file `dev` reçoit `PORT = base + n° de place`, de `base` à `base + parallel_sessions - 1`. Utile si l'agent lance un serveur de dev. Ces ports doivent être libres sur la machine.
+- `port` (4100): the Relais server.
+- `workspace.ports.base` (4200, in `workflow.yml`): each run in the `dev` queue receives `PORT = base + slot no.`, from `base` to `base + parallel_sessions - 1`. Useful if the agent starts a dev server. These ports must be free on the machine.
 
 ## `secrets.json`
 
-Écrit par `relais init` (identifiants de l'application) puis par la connexion OAuth (jetons), toujours en mode `0600`.
+Written by `relais init` (application credentials) then by the OAuth connection (tokens), always with mode `0600`.
 
 ```json
 {
@@ -150,18 +150,18 @@ Le coût du jour et le plafond sont affichés dans l'interface et par `relais st
 }
 ```
 
-| Champ | Source | Rôle |
+| Field | Source | Role |
 |---|---|---|
-| `clientId`, `clientSecret` | saisis pendant `relais init` | OAuth et rafraîchissement du jeton. |
-| `webhookSecret` | saisi pendant `relais init` (obligatoire) | Vérifie la signature HMAC des webhooks Linear. Vide ou absent : tous les webhooks sont refusés (401). |
-| `accessToken`, `refreshToken`, `expiresAt` | « Connecter Linear » | Jeton de l'application, rafraîchi automatiquement. |
-| `appUserId`, `organizationId` | « Connecter Linear » | Identité de l'agent dans Linear (sert à lister les tickets qui lui sont délégués). |
+| `clientId`, `clientSecret` | entered during `relais init` | OAuth and token refresh. |
+| `webhookSecret` | entered during `relais init` (required) | Verifies the HMAC signature of Linear webhooks. Empty or absent: all webhooks are refused (401). |
+| `accessToken`, `refreshToken`, `expiresAt` | « Connecter Linear » | Application token, refreshed automatically. |
+| `appUserId`, `organizationId` | « Connecter Linear » | The agent's identity in Linear (used to list the tickets delegated to it). |
 
-Relancer `relais init` avec le **même** client ID conserve les jetons ; avec un autre, il faut reconnecter Linear.
+Rerunning `relais init` with the **same** client ID keeps the tokens; with a different one, Linear must be reconnected.
 
 ## `factory.yml` (ORC-209)
 
-`<FACTORY_HOME>/factory.yml` est la configuration serveur de l'usine. Il est **facultatif** et coexiste avec `config.yaml` et `secrets.json` jusqu'à leur retrait (ORC-199). Tout secret s'y écrit `env:NOM` et se lit dans l'environnement du démon : un secret en clair est refusé. Il est lu **une fois, au démarrage** : un fichier invalide empêche `factory up` de démarrer, avec le chemin de la clé fautive, et une modification faite pendant que le démon tourne ne compte qu'au prochain démarrage. Seuls `factory up`, `factory doctor` (GitHub App) et `factory plan` (identifiants Linear) le lisent, avec l'environnement du démon ; les autres commandes (`status`, `stop`, `init`…) s'en passent, et marchent donc dans un shell qui n'a pas ses variables.
+`<FACTORY_HOME>/factory.yml` is the factory's server configuration. It is **optional** and coexists with `config.yaml` and `secrets.json` until they are removed (ORC-199). Every secret is written there as `env:NAME` and read from the daemon's environment: a plaintext secret is refused. It is read **once, at startup**: an invalid file prevents `factory up` from starting, with the path of the offending key, and a change made while the daemon is running only counts at the next startup. Only `factory up`, `factory doctor` (GitHub App) and `factory plan` (Linear credentials) read it, with the daemon's environment; the other commands (`status`, `stop`, `init`…) do without it, and therefore work in a shell that does not have its variables.
 
 ```yaml
 linear:   { app_client_id: env:LINEAR_CLIENT_ID, client_secret: env:LINEAR_CLIENT_SECRET, webhook_secret: env:LINEAR_WEBHOOK_SECRET }
@@ -179,30 +179,30 @@ budgets: { max_turns: { build: 150, fix: 60, review: 25 }, on_usage_limit: wait 
 repos:
   - linear_team: ORC
     github: LilianPe/Orchestrator
-    env: { NODE_ENV: test }                 # les valeurs de ce que .factory/config.yml déclare sous env
-    secrets: { NPM_TOKEN: env:ORC_NPM_TOKEN } # et sous setup_secrets : env:NOM seulement, 8 caractères au moins
+    env: { NODE_ENV: test }                 # the values of what .factory/config.yml declares under env
+    secrets: { NPM_TOKEN: env:ORC_NPM_TOKEN } # and under setup_secrets: env:NAME only, at least 8 characters
 read_guard: { max_lines: 350 }
 ```
 
-| Section | Effet aujourd'hui |
+| Section | Effect today |
 | -- | -- |
-| `github` | **Appliquée** : ses clés remplacent celles de `github` dans `config.yaml` ; une clé qu'il ne déclare pas (`installation_id`, `webhook_secret`) reste celle de `config.yaml`. |
-| `linear` | **Appliquée** : `app_client_id`, `client_secret` et `webhook_secret` remplacent ceux de `secrets.json`. Les jetons OAuth restent dans `secrets.json`, écrits par « Connecter Linear ». |
-| `claude` | **`accounts` et `active` appliqués** (ORC-211) : le jeton du compte actif est le seul identifiant du runner. **`effort` appliqué** (ORC-136) : `per_step` remplace l'effort d'une étape du préréglage, `default` sert aux jobs hors préréglage (`ask`, `learn`). Le reste du choix de compte avec ORC-215. |
-| `concurrency` | **Appliquée** (ORC-203) : capacité de la file `dev`, à la place de `limits.parallel_sessions` du workflow. La file `questions` garde `question_sessions`. |
-| `budgets` | **`max_turns` et `per_step_tokens` appliqués** (ORC-136), par étape : `max_turns` ne fait que baisser les tours de l'étape, `per_step_tokens` est un plafond par tentative, sans valeur par défaut. `per_ticket_tokens` et le pire cas de `factory validate` avec ORC-216, `on_usage_limit` avec ORC-215. |
-| `repos` | **`env` et `secrets` appliqués** (ORC-211), l'entrée étant trouvée par le remote `origin` du projet : voir [`configuration-depot.md`](configuration-depot.md#variables-et-secrets). Pour le reste, `projects[].repoPath` de `config.yaml` reste la copie de travail tant que le runner ne clone pas lui-même (ORC-204). |
-| `read_guard` | **Appliquée** : `max_lines` (entier positif, 350 sans cette clé) est le nombre de lignes au-delà duquel le hook du pack refuse une lecture complète ([ORC-279](pack-et-skills.md#lecture-complète-dun-gros-fichier)). Il compte à partir du prochain démarrage. |
+| `github` | **Applied**: its keys replace those of `github` in `config.yaml`; a key it does not declare (`installation_id`, `webhook_secret`) stays the one from `config.yaml`. |
+| `linear` | **Applied**: `app_client_id`, `client_secret` and `webhook_secret` replace those in `secrets.json`. The OAuth tokens stay in `secrets.json`, written by « Connecter Linear ». |
+| `claude` | **`accounts` and `active` applied** (ORC-211): the active account's token is the runner's only credential. **`effort` applied** (ORC-136): `per_step` replaces a preset step's effort, `default` is used for jobs outside the preset (`ask`, `learn`). The rest of account selection comes with ORC-215. |
+| `concurrency` | **Applied** (ORC-203): capacity of the `dev` queue, instead of the workflow's `limits.parallel_sessions`. The `questions` queue keeps `question_sessions`. |
+| `budgets` | **`max_turns` and `per_step_tokens` applied** (ORC-136), per step: `max_turns` can only lower the step's turns, `per_step_tokens` is a per-attempt cap, with no default value. `per_ticket_tokens` and the worst case of `factory validate` come with ORC-216, `on_usage_limit` with ORC-215. |
+| `repos` | **`env` and `secrets` applied** (ORC-211), the entry being found through the project's `origin` remote: see [`configuration-depot.md`](configuration-depot.md#variables-and-secrets). For the rest, `projects[].repoPath` in `config.yaml` remains the working copy as long as the runner does not clone by itself (ORC-204). |
+| `read_guard` | **Applied**: `max_lines` (positive integer, 350 without this key) is the number of lines beyond which the pack's hook refuses a full read ([ORC-279](pack-et-skills.md#full-read-of-a-large-file)). It counts from the next startup. |
 
-`factory.yml` n'est lu qu'à la lecture : `init` et l'écriture des jetons ne recopient jamais une de ses valeurs dans `config.yaml` ou `secrets.json`. Ses secrets sont masqués dans les transcripts des runs, comme ceux de `secrets.json`.
+`factory.yml` is only ever read: `init` and token writing never copy any of its values into `config.yaml` or `secrets.json`. Its secrets are masked in the runs' transcripts, like those of `secrets.json`.
 
-## Ce qui ne sort pas du démon
+## What does not leave the daemon
 
-Le démon détient les secrets ; les runs Claude Code n'en ont pas besoin et ne doivent pas y accéder.
+The daemon holds the secrets; Claude Code runs do not need them and must not access them.
 
-1. **Environnement des runs par liste blanche (ORC-211).** En sandbox, un run reçoit ses variables de run (`FACTORY_API`, `FACTORY_RUN_TOKEN`, jeton aléatoire valable pendant le run, `FACTORY_TICKET`…), les réglages du hook du pack, sans secret (`FACTORY_READ_MAX_LINES`, `FACTORY_FULL_READ_PATHS`), les variables que le dépôt déclare ([`configuration-depot.md`](configuration-depot.md#variables-et-secrets)) et le jeton du compte `claude.active` sous `CLAUDE_CODE_OAUTH_TOKEN` (sans `factory.yml`, celui du démon de ce nom) : rien d'autre, ni `ANTHROPIC_API_KEY`, ni `ANTHROPIC_BASE_URL`, ni `GH_TOKEN`. Sur l'hôte, un run reçoit en plus le système (`PATH`, `HOME`, `LANG`, `TMPDIR`…), l'identité des commits (`GIT_AUTHOR_*`, `GIT_COMMITTER_*`) et, en transition, `GH_TOKEN` (jusqu'à ORC-125) et `ANTHROPIC_API_KEY` (jusqu'à ORC-179, retirée dès qu'un compte actif existe). Toute autre variable reste dans le démon.
-2. **Linear passe par `relais-agent`.** L'agent ne voit jamais le jeton Linear : il appelle l'API locale avec son jeton de run, qui ne donne accès qu'au ticket du run, à la recherche, à la base de connaissance et à la question (`ask`). Voir [`cli.md`](cli.md#relais-agent-côté-agent).
-3. **`run-settings.json`.** À chaque `relais up`, Relais écrit `<RELAIS_HOME>/run-settings.json` : les permissions du pack (`packs/standard/settings.json`) plus des refus sur le **vrai** chemin de `RELAIS_HOME` : `Read`/`Edit` de `secrets.json`, `Read` de `relais.db*`, `transcripts/**`, `logs/**`, et toute commande Bash qui mentionne `secrets.json` ou `relais.db`. Ce fichier est passé à chaque run par `--settings`. Les worktrees (`workspaces/`) restent lisibles.
-4. **Jeton GitHub App hors des runs.** Le jeton d'installation est demandé pour le seul dépôt du run, conservé en mémoire du démon et jamais monté dans l'environnement du runner ni écrit dans un transcript. `GH_TOKEN` n'est plus transmis à aucun run (ORC-125) : l'usine publie. Voir [`github.md`](github.md#jetons).
+1. **Run environment by allowlist (ORC-211).** In a sandbox, a run receives its run variables (`FACTORY_API`, `FACTORY_RUN_TOKEN`, a random token valid during the run, `FACTORY_TICKET`…), the pack hook's settings, without secrets (`FACTORY_READ_MAX_LINES`, `FACTORY_FULL_READ_PATHS`), the variables the repository declares ([`configuration-depot.md`](configuration-depot.md#variables-and-secrets)) and the `claude.active` account's token as `CLAUDE_CODE_OAUTH_TOKEN` (without `factory.yml`, the daemon's variable of that name): nothing else, neither `ANTHROPIC_API_KEY`, nor `ANTHROPIC_BASE_URL`, nor `GH_TOKEN`. On the host, a run additionally receives the system variables (`PATH`, `HOME`, `LANG`, `TMPDIR`…), the commit identity (`GIT_AUTHOR_*`, `GIT_COMMITTER_*`) and, in transition, `GH_TOKEN` (until ORC-125) and `ANTHROPIC_API_KEY` (until ORC-179, removed as soon as an active account exists). Any other variable stays in the daemon.
+2. **Linear goes through `relais-agent`.** The agent never sees the Linear token: it calls the local API with its run token, which only gives access to the run's ticket, search, the knowledge base and the question (`ask`). See [`cli.md`](cli.md#relais-agent-agent-side).
+3. **`run-settings.json`.** On each `relais up`, Relais writes `<RELAIS_HOME>/run-settings.json`: the pack's permissions (`packs/standard/settings.json`) plus refusals on the **real** path of `RELAIS_HOME`: `Read`/`Edit` of `secrets.json`, `Read` of `relais.db*`, `transcripts/**`, `logs/**`, and any Bash command that mentions `secrets.json` or `relais.db`. This file is passed to each run through `--settings`. The worktrees (`workspaces/`) stay readable.
+4. **GitHub App token kept out of runs.** The installation token is requested for the run's repository only, kept in the daemon's memory and never mounted in the runner's environment nor written to a transcript. `GH_TOKEN` is no longer passed to any run (ORC-125): the factory publishes. See [`github.md`](github.md#tokens).
 
-Limite connue : ces refus sont des garde-fous de Claude Code, pas une frontière de sécurité. Un agent qui exécute du code (`node`, `npm`) avec le même utilisateur système que le démon peut lire `secrets.json`. Détails et conséquences : [`interface-et-securite.md`](interface-et-securite.md#limites-connues).
+Known limit: these refusals are Claude Code guardrails, not a security boundary. An agent that executes code (`node`, `npm`) as the same system user as the daemon can read `secrets.json`. Details and consequences: [`interface-et-securite.md`](interface-et-securite.md#known-limitations).

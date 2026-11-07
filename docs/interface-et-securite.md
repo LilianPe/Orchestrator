@@ -1,150 +1,150 @@
-# Interface web et sécurité
+# Web interface and security
 
-## L'interface
+## The interface
 
-`relais up` sert une interface web sur `http://localhost:<port>` (4100 par défaut). Elle nécessite `npm run build` (dossier `web/dist`) ; sans lui, seules l'API et les webhooks répondent.
+`relais up` serves a web interface at `http://localhost:<port>` (4100 by default). It requires `npm run build` (`web/dist` folder); without it, only the API and webhooks respond.
 
-Ce qu'elle montre, en direct :
+What it shows, live:
 
-- **En-tête** : places occupées (`dev`, `questions`), longueur de la file, coût du jour et budget, indicateur « en direct » ; boutons **Connecter Linear** (tant que Linear n'est pas connecté) et **Pause / Reprendre**.
-- **Flux** (ORC-297), lu sur `GET /api/flow` à l'ouverture, à chaque changement d'un ticket et toutes les 10 s :
-  - **Needs you** : ce qui attend un humain. Les tickets bloqués, groupés par cause (question de l'agent, ticket contesté, rouge non vérifié, panne d'infrastructure, plafond, boucle, run en échec, prise en charge refusée, événement mis de côté, PR fermée sans merge, arrêt, autre cause), chacun avec sa raison ; les PR en Human Review ; les portes en attente (`ready`, pour un workflow qui le déclare encore ; la porte de spec viendra avec ORC-212). Le plus ancien d'abord, selon la dernière activité du ticket. Une PR sur laquelle l'agent travaille encore, ou dont le run attend une place, n'y est pas ; une question posée à l'agent l'y laisse. Un ticket bloqué dont le run tourne encore est aux deux endroits.
-  - **Working** : chaque run en cours et chaque vérification en cours, avec son étape (le job du run), sa durée et les tokens du ticket ; bouton **Stop** sur le run actif d'un ticket. Cliquer un identifiant ouvre son run. Les tickets en file sont listés dessous.
-  - **Done** : les tickets terminés dont la dernière activité date de moins de 7 jours, 20 au plus, puis les autres tickets non terminés, repliés (**Autres tickets suivis**).
-- **Session en direct** : la sortie du run sélectionné (texte, appels d'outils), reçue en direct depuis l'ouverture de la page. Le transcript complet d'un run reste disponible par l'API (`/api/runs/<id>/transcript`) et dans `<RELAIS_HOME>/transcripts/`.
-- **Journal** : les derniers messages du démon et les événements reçus.
+- **Header**: occupied slots (`dev`, `questions`), queue length, today's cost and budget, « en direct » (live) indicator; **Connecter Linear** buttons (as long as Linear is not connected) and **Pause / Reprendre**.
+- **Flow** (ORC-297), read from `GET /api/flow` on opening, on every ticket change and every 10 s:
+  - **Needs you**: what is waiting for a human. Blocked tickets, grouped by cause (agent question, contested ticket, unverified red, infrastructure failure, cap, loop, failed run, pickup refused, event set aside, PR closed without merge, stop, other cause), each with its reason; PRs in Human Review; pending gates (`ready`, for a workflow that still declares it; the spec gate will come with ORC-212). Oldest first, by the ticket's last activity. A PR the agent is still working on, or whose run is waiting for a slot, is not there; a question asked to the agent leaves it there. A blocked ticket whose run is still running appears in both places.
+  - **Working**: every run in progress and every verification in progress, with its step (the run's job), its duration and the ticket's tokens; **Stop** button on a ticket's active run. Clicking an identifier opens its run. Queued tickets are listed below.
+  - **Done**: finished tickets whose last activity is less than 7 days old, 20 at most, then the other unfinished tickets, collapsed (**Autres tickets suivis**).
+- **Live session**: the output of the selected run (text, tool calls), received live since the page was opened. A run's full transcript remains available via the API (`/api/runs/<id>/transcript`) and in `<RELAIS_HOME>/transcripts/`.
+- **Log**: the daemon's latest messages and the events received.
 
-Le direct passe par un flux **SSE** (`GET /api/events`) avec un `ping` toutes les 15 s.
+Live updates go through an **SSE** stream (`GET /api/events`) with a `ping` every 15 s.
 
-Développement de l'interface : `npm run dev:web` lance Vite sur le port 5173 avec un proxy de `/api` et `/oauth` vers `http://127.0.0.1:4100` (un `relais up` doit tourner).
+Interface development: `npm run dev:web` starts Vite on port 5173 with a proxy from `/api` and `/oauth` to `http://127.0.0.1:4100` (a `relais up` must be running).
 
-**Les tokens du Flux** sont la mesure d'ORC-235 : la somme des tentatives terminées du ticket. Un run ne rapporte son usage qu'à sa fin : celui en cours n'y est pas encore, ce que la page dit sous le tableau. `≥` signale des tentatives terminées sans mesure ; `—` qu'aucune n'en a, avec le coût en dollars s'il existe, jusqu'à ORC-216 ; `?` que les mesures du ticket n'ont pas pu être lues (l'erreur est au journal). Si la lecture du Flux échoue, un bandeau le dit et les durées s'arrêtent. Le nombre affiché additionne entrée, sortie, cache lu et cache écrit ; le détail est au survol.
+**The Flow's tokens** are ORC-235's measurement: the sum of the ticket's finished attempts. A run only reports its usage when it ends: the one in progress is not included yet, which the page states below the table. `≥` indicates finished attempts without a measurement; `—` that none has one, with the cost in dollars if it exists, until ORC-216; `?` that the ticket's measurements could not be read (the error is in the log). If reading the Flow fails, a banner says so and the durations stop. The displayed number adds up input, output, cache read and cache write; the breakdown is shown on hover.
 
-**La cause d'un blocage** est lue dans sa raison (`src/core/block-cause.ts`), sur le début de phrase que l'usine écrit. Une raison inconnue tombe dans « Autre cause », affichée telle quelle. Un nouveau motif de blocage s'ajoute à cette table et à son test.
+**The cause of a block** is read from its reason (`src/core/block-cause.ts`), from the sentence opening the factory writes. An unknown reason falls into « Autre cause », displayed as is. A new block reason is added to that table and to its test.
 
-## Ce que le serveur expose
+## What the server exposes
 
-| Route | Rôle | Protection |
+| Route | Role | Protection |
 |---|---|---|
-| `GET /` et fichiers statiques | Interface | mot de passe (hors bouclage) |
-| `GET /api/state` | État : tickets, file, runs actifs (sans leurs jetons), coût, capacité | mot de passe |
-| `GET /api/flow` | Flux : Needs you, Working, Done (sans jetons de run ni contenu de la file) | mot de passe |
-| `GET /api/events`, `GET /api/events/recent` | Flux SSE, 100 derniers événements | mot de passe |
-| `GET /api/runs/:id/transcript` | Transcript d'un run | mot de passe |
-| `POST /api/control/pause`, `/api/control/resume` | Pause / reprise | mot de passe + contrôle d'origine |
-| `POST /api/tickets/:projet/:ticket/stop` | Arrêt d'un run | mot de passe + contrôle d'origine |
-| `GET /oauth/start` | Démarre la connexion Linear | mot de passe |
-| `GET /oauth/callback` | Retour OAuth de Linear | paramètre `state` aléatoire, à usage unique |
-| `POST /webhooks/linear` | Webhooks Linear | signature HMAC + fraîcheur 60 s |
-| `POST /webhooks/github` | Webhooks GitHub | signature HMAC `X-Hub-Signature-256` + déduplication par id d'événement |
-| `/agent/*` | API des agents (`relais-agent`) | jeton du run en cours (`Authorization: Bearer`) |
+| `GET /` and static files | Interface | password (except loopback) |
+| `GET /api/state` | State: tickets, queue, active runs (without their tokens), cost, capacity | password |
+| `GET /api/flow` | Flow: Needs you, Working, Done (without run tokens or queue contents) | password |
+| `GET /api/events`, `GET /api/events/recent` | SSE stream, last 100 events | password |
+| `GET /api/runs/:id/transcript` | A run's transcript | password |
+| `POST /api/control/pause`, `/api/control/resume` | Pause / resume | password + origin check |
+| `POST /api/tickets/:projet/:ticket/stop` | Stop a run | password + origin check |
+| `GET /oauth/start` | Starts the Linear connection | password |
+| `GET /oauth/callback` | Linear OAuth callback | random, single-use `state` parameter |
+| `POST /webhooks/linear` | Linear webhooks | HMAC signature + 60 s freshness |
+| `POST /webhooks/github` | GitHub webhooks | HMAC signature `X-Hub-Signature-256` + deduplication by event id |
+| `/agent/*` | Agent API (`relais-agent`) | current run's token (`Authorization: Bearer`) |
 
-Avec les sandboxes (`FACTORY_CONTAINER_CLI`, voir [`configuration.md`](configuration.md#variables-denvironnement)), un **second serveur** ne sert que `/agent/*`, avec les mêmes routes et le même jeton de run, sur `FACTORY_AGENT_PORT` (port de l'interface + 1) et `FACTORY_AGENT_HOST` (`127.0.0.1`) : les conteneurs, sans réseau, le joignent par le proxy de sortie du démon (voir [plus bas](#réseau-des-sandboxes)). Toute autre route y répond 404. L'interface reste à l'adresse de `host`.
+With sandboxes (`FACTORY_CONTAINER_CLI`, see [`configuration.md`](configuration.md#environment-variables)), a **second server** serves only `/agent/*`, with the same routes and the same run token, on `FACTORY_AGENT_PORT` (interface port + 1) and `FACTORY_AGENT_HOST` (`127.0.0.1`): the containers, which have no network, reach it through the daemon's egress proxy (see [below](#sandbox-network)). Any other route returns 404 there. The interface stays at the `host` address.
 
-## Exposition réseau et mot de passe
+## Network exposure and password
 
-Par défaut Relais écoute sur `127.0.0.1` : seule la machine locale y accède, sans mot de passe.
+By default Relais listens on `127.0.0.1`: only the local machine can access it, without a password.
 
-Pour l'exposer (serveur, Docker), mettez `host: 0.0.0.0` (ou une adresse précise) dans `config.yaml`. Relais **refuse alors de démarrer** sans la variable `RELAIS_UI_PASSWORD` :
+To expose it (server, Docker), set `host: 0.0.0.0` (or a specific address) in `config.yaml`. Relais then **refuses to start** without the `RELAIS_UI_PASSWORD` variable:
 
 > host: 0.0.0.0 expose l'interface et l'API de Relais hors de cette machine. Définissez la variable d'environnement RELAIS_UI_PASSWORD (mot de passe de l'interface), ou remettez host: 127.0.0.1 dans config.yaml.
 
-Avec le mot de passe, tout passe par une authentification **HTTP Basic** (nom d'utilisateur libre, mot de passe = `RELAIS_UI_PASSWORD`, comparé en temps constant), sauf quatre routes qui ont leur propre protection : `POST /webhooks/linear`, `POST /webhooks/github`, `GET /oauth/callback` et `/agent/*`. Vérification : `curl -i https://<domaine>/api/state` doit répondre 401.
+With the password, everything goes through **HTTP Basic** authentication (any username, password = `RELAIS_UI_PASSWORD`, compared in constant time), except four routes that have their own protection: `POST /webhooks/linear`, `POST /webhooks/github`, `GET /oauth/callback` and `/agent/*`. Check: `curl -i https://<domain>/api/state` must return 401.
 
-Les commandes `relais status|pause|resume|stop` envoient `RELAIS_UI_PASSWORD` si la variable est définie dans le shell.
+The `relais status|pause|resume|stop` commands send `RELAIS_UI_PASSWORD` if the variable is set in the shell.
 
-Le Basic auth transmet le mot de passe à chaque requête : derrière une exposition Internet, mettez Relais derrière un proxy **HTTPS** (Caddy, nginx, Traefik, tunnel Cloudflare) et réglez `publicUrl` sur l'URL HTTPS.
+Basic auth sends the password with every request: when exposed to the Internet, put Relais behind an **HTTPS** proxy (Caddy, nginx, Traefik, Cloudflare tunnel) and set `publicUrl` to the HTTPS URL.
 
-## Protection CSRF
+## CSRF protection
 
-Toute requête `POST` (et autre méthode non `GET`/`HEAD`) sur `/api/*` qui porte un en-tête `Origin` est refusée (403 `cross-origin request refused`) si cet `Origin` ne correspond pas à l'hôte du serveur. Une page tierce ouverte dans votre navigateur ne peut donc pas mettre la file en pause ni arrêter un run, même en local sans mot de passe. Les outils sans `Origin` (CLI, `curl`) ne sont pas concernés.
+Any `POST` request (and any other non-`GET`/`HEAD` method) on `/api/*` that carries an `Origin` header is refused (403 `cross-origin request refused`) if that `Origin` does not match the server's host. A third-party page open in your browser therefore cannot pause the queue or stop a run, even locally without a password. Tools without `Origin` (CLI, `curl`) are not affected.
 
-Derrière un proxy, l'en-tête `Host` transmis à Relais doit être celui de l'URL publique, sinon les boutons de l'interface sont refusés.
+Behind a proxy, the `Host` header passed to Relais must be that of the public URL, otherwise the interface's buttons are refused.
 
-## Jetons des agents
+## Agent tokens
 
-Chaque run reçoit un `RELAIS_RUN_TOKEN` aléatoire. L'API `/agent/*` ne l'accepte que tant que ce run est `running`. Ce jeton :
+Each run receives a random `RELAIS_RUN_TOKEN`. The `/agent/*` API only accepts it while that run is `running`. This token:
 
-- ne lit que **le ticket du run** (`/agent/issue/<autre ticket>` → 403) ;
-- peut chercher des tickets, chercher dans la base de connaissance et poser une question dans la session du ticket ;
-- n'apparaît ni dans `/api/state`, ni dans `/api/flow`, ni dans `/api/events` et `/api/events/recent`.
+- only reads **the run's ticket** (`/agent/issue/<other ticket>` → 403);
+- can search tickets, search the knowledge base and ask a question in the ticket's session;
+- appears neither in `/api/state`, nor in `/api/flow`, nor in `/api/events` and `/api/events/recent`.
 
-Sur l'hôte, `RELAIS_API` pointe sur `http://127.0.0.1:<port>/agent` : les agents parlent au démon en local. Dans un sandbox, elle pointe sur `http://<FACTORY_SANDBOX_AGENT_HOST>:<FACTORY_AGENT_PORT>/agent` (par défaut `host.docker.internal`) : un nom que le conteneur ne résout pas, que le proxy de sortie reconnaît et relaie vers le serveur dédié à l'API agent.
+On the host, `RELAIS_API` points to `http://127.0.0.1:<port>/agent`: agents talk to the daemon locally. In a sandbox, it points to `http://<FACTORY_SANDBOX_AGENT_HOST>:<FACTORY_AGENT_PORT>/agent` (by default `host.docker.internal`): a name the container does not resolve, which the egress proxy recognizes and relays to the server dedicated to the agent API.
 
-## MCP de l'usine
+## Factory MCP
 
-`POST /agent/mcp` est un serveur MCP (HTTP « Streamable », réponses JSON seulement, un message par requête ; toute autre méthode reçoit `405` avec `Allow: POST`, pas de flux SSE), derrière le même jeton de run que le reste de `/agent/*`, servi aussi par le serveur dédié aux sandboxes. Deux outils (ORC-288) :
+`POST /agent/mcp` is an MCP server ("Streamable" HTTP, JSON responses only, one message per request; any other method receives `405` with `Allow: POST`, no SSE stream), behind the same run token as the rest of `/agent/*`, also served by the server dedicated to sandboxes. Two tools (ORC-288):
 
-- **`submit_result`** : l'agent y rend son résultat, au format d'`agentOutputSchema` (`src/core/agent-output.ts`), dont le schéma JSON est l'`inputSchema` de l'outil. Un résultat valide est rangé pour **le run du jeton** (méta `agent-output:<run>`), le dernier envoi l'emporte ; un résultat invalide est refusé (`isError`) avec les champs fautifs, pour que l'agent le corrige pendant son run.
-- **`ask`** : comme `POST /agent/ask` (question dans Linear, ticket bloqué), qui reste jusqu'à ORC-192.
+- **`submit_result`**: the agent returns its result there, in the `agentOutputSchema` format (`src/core/agent-output.ts`), whose JSON schema is the tool's `inputSchema`. A valid result is stored for **the token's run** (meta `agent-output:<run>`), the last submission wins; an invalid result is refused (`isError`) with the offending fields, so the agent can fix it during its run.
+- **`ask`**: like `POST /agent/ask` (question in Linear, ticket blocked), which stays until ORC-192.
 
-`claude -p` le reçoit par `--mcp-config '{"mcpServers":{"factory":{"type":"http","url":"${FACTORY_API}/mcp","headers":{"Authorization":"Bearer ${FACTORY_RUN_TOKEN}"}}}}'` : Claude Code remplace les `${…}` par les variables de son environnement (vérifié sur 2.1.316). Le jeton n'est donc jamais sur la ligne de commande, que la liste des processus de l'hôte montre ; il arrive par l'environnement du run, comme avant.
+`claude -p` receives it via `--mcp-config '{"mcpServers":{"factory":{"type":"http","url":"${FACTORY_API}/mcp","headers":{"Authorization":"Bearer ${FACTORY_RUN_TOKEN}"}}}}'`: Claude Code replaces the `${…}` with the variables from its environment (verified on 2.1.316). The token is therefore never on the command line, which the host's process list shows; it arrives through the run's environment, as before.
 
-## Ce que l'agent charge, et ce qu'il ne charge pas
+## What the agent loads, and what it does not
 
-Le dépôt d'un projet est écrit par qui peut y pousser : ses réglages Claude Code ne pilotent pas les runs. Les options de `claude -p` sont celles mesurées dans [ORC-128](decisions/ORC-128.md) (ORC-284).
+A project's repository is written by whoever can push to it: its Claude Code settings do not drive the runs. The `claude -p` options are the ones measured in [ORC-128](decisions/ORC-128.md) (ORC-284).
 
-L'agent charge seulement ce que l'usine impose :
+The agent loads only what the factory imposes:
 
-- **les réglages du run** (`--settings`, le `run-settings.json` de l'usine) ;
-- **le pack** (`--plugin-dir`) : ses skills, son hook de démarrage (règles de l'usine, index de la base de connaissance) ;
-- **le MCP de l'usine**, seul déclaré par `--mcp-config` (voir [MCP de l'usine](#mcp-de-lusine)) ;
-- **les conventions du dépôt** : l'usine lit elle-même `CLAUDE.md`, `AGENTS.md` et `.claude/CLAUDE.md` du worktree (le seul fichier de `.claude/` que le retrait ci-dessous garde, Claude Code ne le chargeant pas) et les met dans le prompt du run, comme **données** : dans une section « Conventions du dépôt (données) », entre balises, présentées comme les conventions du dépôt, qui ne lèvent aucune règle de l'usine. Ensemble, ils sont coupés à 8 000 octets (proposition, à fixer avec le budget du prompt d'ORC-254), la coupe marquée ; un fichier plus gros n'est jamais lu en entier. Un fichier qui est un lien vers l'extérieur du worktree, ou illisible, n'est pas lu. Leurs imports `@chemin` ne sont pas suivis : seul le texte des fichiers est injecté. Ils sont relus à chaque tentative : ils sont dans le message du run, pas dans le prompt système figé à la reprise.
+- **the run settings** (`--settings`, the factory's `run-settings.json`);
+- **the pack** (`--plugin-dir`): its skills, its startup hook (factory rules, knowledge base index);
+- **the factory MCP**, the only one declared via `--mcp-config` (see [Factory MCP](#factory-mcp));
+- **the repository's conventions**: the factory itself reads `CLAUDE.md`, `AGENTS.md` and `.claude/CLAUDE.md` from the worktree (the only file in `.claude/` that the removal below keeps, since Claude Code does not load it) and puts them in the run's prompt, as **data**: in a « Conventions du dépôt (données) » section, between tags, presented as the repository's conventions, which lift no factory rule. Together, they are cut at 8,000 bytes (proposal, to be set with ORC-254's prompt budget), the cut marked; a larger file is never read in full. A file that is a link pointing outside the worktree, or unreadable, is not read. Their `@path` imports are not followed: only the files' text is injected. They are re-read on every attempt: they are in the run's message, not in the system prompt frozen on resume.
 
-Et rien du dépôt :
+And nothing from the repository:
 
-- **`--setting-sources ""`** : ni `.claude/settings.json`, ni `.claude/settings.local.json` (leurs hooks, leurs permissions, leur `env`), ni les skills de `.claude/`, ni `CLAUDE.md` chargé par Claude Code ; ni les réglages utilisateur de la machine.
-- **`--strict-mcp-config`** : ni le `.mcp.json` du dépôt, ni les connecteurs claude.ai du compte (Drive, Docs…), qui sinon se chargeraient avec un compte par abonnement.
-- **`.claude/` retiré du worktree avant chaque session**, après le `setup` (défense en profondeur, pour ce qu'ORC-128 n'a pas piégé : agents, commandes, output styles). Le worktree est en *sparse checkout* (mode non-cone, `/*` sauf `/.claude/*`, `/.claude/CLAUDE.md` gardé pour les conventions), propre à ce worktree (`extensions.worktreeConfig`) : la copie principale du dépôt garde son `.claude/`. `git status` reste propre, un `git add -A` ou `commit -a` de l'agent ne supprime pas `.claude/` de la PR, et un `git merge` ou un rebase qui le modifie ne le réécrit pas sur le disque. Limite : l'agent ne peut pas modifier les fichiers suivis de `.claude/` ; un ticket qui demande de les changer ne peut pas être fait par un run.
-- **`CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`** : pas de mémoire automatique (effet non vérifié par ORC-128).
-- **Télémétrie coupée** par `DISABLE_TELEMETRY=1` et `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` (laquelle suffit reste à mesurer) ; dans un sandbox, le proxy de sortie la bloque de toute façon : seul `api.anthropic.com` est permis pour Claude.
+- **`--setting-sources ""`**: no `.claude/settings.json`, no `.claude/settings.local.json` (their hooks, their permissions, their `env`), no skills from `.claude/`, no `CLAUDE.md` loaded by Claude Code; and no user settings from the machine.
+- **`--strict-mcp-config`**: neither the repository's `.mcp.json`, nor the account's claude.ai connectors (Drive, Docs…), which would otherwise load with a subscription account.
+- **`.claude/` removed from the worktree before each session**, after `setup` (defense in depth, for what ORC-128 did not trap: agents, commands, output styles). The worktree is in *sparse checkout* (non-cone mode, `/*` except `/.claude/*`, `/.claude/CLAUDE.md` kept for the conventions), specific to this worktree (`extensions.worktreeConfig`): the repository's main checkout keeps its `.claude/`. `git status` stays clean, an agent's `git add -A` or `commit -a` does not delete `.claude/` from the PR, and a `git merge` or rebase that modifies it does not rewrite it to disk. Limitation: the agent cannot modify tracked files in `.claude/`; a ticket that asks to change them cannot be done by a run.
+- **`CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`**: no automatic memory (effect not verified by ORC-128).
+- **Telemetry disabled** by `DISABLE_TELEMETRY=1` and `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` (which one suffices remains to be measured); in a sandbox, the egress proxy blocks it anyway: only `api.anthropic.com` is allowed for Claude.
 
-Dans un sandbox, `CLAUDE_CONFIG_DIR` est `/home/factory/.claude`. Pour la session du ticket, celle de l'implémenteur (un job de la file `dev` en `session: resume` ou `pickup: true` : `dev`, `dev-feedback`, `fix-ci`), c'est le dossier de session du ticket, monté depuis `<home>/sessions/<projet>/<ticket>` : tout le dossier de config de Claude est par ticket et survit au conteneur, d'où le `--resume` d'une tentative à l'autre, y compris pour un `dev` relancé sur un ticket qui a déjà sa session (ORC-217). Tout autre run (review, question, apprentissage) monte à la place un dossier vide propre au run (`<home>/runs/<runId>/claude`), supprimé avec le sandbox : contexte frais, et sa session ne devient jamais celle du ticket, même s'il est le premier run du ticket. Un job de la file `questions` en `session: resume` est refusé au chargement du workflow. L'identifiant arrive par l'environnement, seul : le jeton du compte `claude.active` sous `CLAUDE_CODE_OAUTH_TOKEN` (ORC-211). Sur l'hôte, sans sandbox, sans compte actif, c'est celui du démon, comme avant. Chaque run enregistre le rôle de sa session (`sessionRole` : `implementer`, `reviewer` ou `answerer`, absent pour `learn`/`remember`) avec son `claudeSessionId`.
+In a sandbox, `CLAUDE_CONFIG_DIR` is `/home/factory/.claude`. For the ticket's session, the implementer's (a job of the `dev` queue with `session: resume` or `pickup: true`: `dev`, `dev-feedback`, `fix-ci`), it is the ticket's session folder, mounted from `<home>/sessions/<project>/<ticket>`: the whole Claude config folder is per ticket and outlives the container, hence the `--resume` from one attempt to the next, including for a `dev` relaunched on a ticket that already has its session (ORC-217). Any other run (review, question, learning) instead mounts an empty folder specific to the run (`<home>/runs/<runId>/claude`), deleted with the sandbox: fresh context, and its session never becomes the ticket's, even if it is the ticket's first run. A job of the `questions` queue with `session: resume` is refused when the workflow is loaded. The credential arrives through the environment alone: the token of the `claude.active` account under `CLAUDE_CODE_OAUTH_TOKEN` (ORC-211). On the host, without a sandbox, with no active account, it is the daemon's, as before. Each run records its session's role (`sessionRole`: `implementer`, `reviewer` or `answerer`, absent for `learn`/`remember`) along with its `claudeSessionId`.
 
-Le test d'isolation n° 11 (`test/isolation/claude-settings.test.ts`) rejoue à chaque version de Claude Code le dépôt piégé d'ORC-128 avec ces options : hooks, MCP, skill, agent, commande et `CLAUDE.md` piégés, aucun ne doit se charger. Il demande un vrai `claude` et un identifiant ([`tests.md`](tests.md#les-projets-vitest)).
+Isolation test no. 11 (`test/isolation/claude-settings.test.ts`) replays, for each Claude Code version, ORC-128's trapped repository with these options: trapped hooks, MCP, skill, agent, command and `CLAUDE.md`, none of which must load. It requires a real `claude` and a credential ([`tests.md`](tests.md#the-vitest-projects)).
 
-## Réseau des sandboxes
+## Sandbox network
 
-Décision et options : [ORC-213](decisions/ORC-213.md). Chaque conteneur tourne en **`--network none`**, quel que soit le niveau : ni route, ni DNS, ni UDP. Sa seule sortie est le **socket Unix de son run**, ouvert par le proxy de sortie du démon (`src/network/proxy.ts`) et monté en `/run/factory/egress.sock`. Un relais (PID 1 du conteneur) l'expose en `127.0.0.1:3128`, et `HTTP_PROXY`/`HTTPS_PROXY` y pointent ; un outil qui ignore ces variables n'a aucun réseau.
+Decision and options: [ORC-213](decisions/ORC-213.md). Each container runs with **`--network none`**, whatever the level: no route, no DNS, no UDP. Its only way out is **its run's Unix socket**, opened by the daemon's egress proxy (`src/network/proxy.ts`) and mounted at `/run/factory/egress.sock`. A relay (the container's PID 1) exposes it at `127.0.0.1:3128`, and `HTTP_PROXY`/`HTTPS_PROXY` point to it; a tool that ignores these variables has no network.
 
-Le proxy applique le niveau du run :
+The proxy applies the run's level:
 
-| Niveau | Ce qui passe |
+| Level | What gets through |
 |---|---|
-| `none` | Rien, pas même l'API agent (`verify`). |
-| `claude-api` | `api.anthropic.com`, le renouvellement du jeton OAuth de Claude Code (POST `/v1/oauth/token` de `console.anthropic.com` et `platform.claude.com`) et l'API agent. |
-| `limited` (défaut des runs) | Le précédent ; npm, Yarn et PyPI ; GitHub en lecture ; une liste de domaines de doc (`src/network/levels.ts`). Méthodes GET, HEAD et OPTIONS seulement, sauf vers l'API Claude. |
-| `custom` (dépôt) | `limited` plus les hôtes de `network.allow`. |
-| `full` | Tout : réservé à `setup`, refusé pour l'agent. |
+| `none` | Nothing, not even the agent API (`verify`). |
+| `claude-api` | `api.anthropic.com`, Claude Code's OAuth token renewal (POST `/v1/oauth/token` on `console.anthropic.com` and `platform.claude.com`) and the agent API. |
+| `limited` (default for runs) | The previous; npm, Yarn and PyPI; GitHub read-only; a list of documentation domains (`src/network/levels.ts`). GET, HEAD and OPTIONS methods only, except toward the Claude API. |
+| `custom` (repository) | `limited` plus the hosts in `network.allow`. |
+| `full` | Everything: reserved for `setup`, refused for the agent. |
 
-- **Chaque tunnel est déchiffré** (`CONNECT`, port 443 seulement ; en `full`, un autre port est relayé tel quel en TCP, journalisé). Le proxy présente un certificat de l'**autorité de l'usine** pour l'hôte demandé, lit chaque requête, vérifie la méthode et le chemin, puis continue en TLS vers le vrai hôte, son certificat vérifié par le magasin de Node. Le conteneur ne fait confiance qu'à cette autorité : son certificat est monté en lecture seule en `/run/factory/egress-ca.crt`, et `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `REQUESTS_CA_BUNDLE`, `PIP_CERT`, `GIT_SSL_CAINFO`, `npm_config_cafile` et les variables de Yarn y pointent. Sa clé reste dans `<home>/egress-ca/` (`0600`) et n'est jamais montée.
-- **Écritures refusées partout** : `git push` (seule l'usine pousse, ORC-125), gist, publication d'un paquet, POST vers une doc ou un hôte de `network.allow`. Seul `git fetch` (POST vers `git-upload-pack` de `github.com`) est permis en plus. L'API Claude garde toutes ses méthodes, journalisées comme le reste.
-- **HTTP/1.1 seulement** dans un tunnel : un client qui n'offre que HTTP/2, une mise à niveau (WebSocket) ou autre chose que HTTP sont refusés et journalisés.
-- **Hôte vérifié = hôte joint** : la requête part vers la cible du `CONNECT`, avec cet hôte en `Host`, quel que soit l'en-tête envoyé par le conteneur.
-- **Jamais d'adresse privée** (boucle locale, réseaux privés, `169.254.0.0/16` des métadonnées cloud), même en `full`, même par un nom qui y mène.
-- **Journal** : chaque requête et chaque refus, avec l'hôte, la méthode, le chemin (sans sa requête, qui peut porter un jeton), les octets envoyés et reçus et la raison d'un refus, dans `<home>/network/<run>.jsonl`, purgé après 30 jours comme les transcripts.
-- **Après un redémarrage du démon**, le conteneur encore vivant d'une tentative en cours est repris (ORC-220) : le socket du run vit dans un dossier à lui, monté en lecture seule, et le démon l'y remet au même chemin, au niveau du label du conteneur. Les connexions en cours sont coupées ; le client les rouvre. La liste `allow` d'un dépôt `custom` n'est pas gardée : le run repris perd ses hôtes en plus, ce qui ne fait que restreindre. Tout autre conteneur vivant est détruit.
+- **Every tunnel is decrypted** (`CONNECT`, port 443 only; in `full`, another port is relayed as is over TCP, logged). The proxy presents a certificate from the **factory authority** for the requested host, reads each request, checks the method and path, then continues over TLS to the real host, its certificate verified against Node's store. The container trusts only this authority: its certificate is mounted read-only at `/run/factory/egress-ca.crt`, and `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `REQUESTS_CA_BUNDLE`, `PIP_CERT`, `GIT_SSL_CAINFO`, `npm_config_cafile` and Yarn's variables point to it. Its key stays in `<home>/egress-ca/` (`0600`) and is never mounted.
+- **Writes refused everywhere**: `git push` (only the factory pushes, ORC-125), gist, package publishing, POST to a documentation site or to a `network.allow` host. Only `git fetch` (POST to `git-upload-pack` on `github.com`) is additionally allowed. The Claude API keeps all its methods, logged like the rest.
+- **HTTP/1.1 only** in a tunnel: a client that only offers HTTP/2, an upgrade (WebSocket) or anything other than HTTP is refused and logged.
+- **Verified host = host reached**: the request goes to the `CONNECT` target, with that host as `Host`, whatever header the container sent.
+- **Never a private address** (loopback, private networks, cloud metadata's `169.254.0.0/16`), even in `full`, even through a name that leads there.
+- **Log**: every request and every refusal, with the host, method, path (without its query string, which may carry a token), bytes sent and received and the reason for a refusal, in `<home>/network/<run>.jsonl`, purged after 30 days like the transcripts.
+- **After a daemon restart**, the still-running container of an attempt in progress is taken back (ORC-220): the run's socket lives in a folder of its own, mounted read-only, and the daemon puts it back at the same path, at the level of the container's label. Ongoing connections are cut; the client reopens them. The `allow` list of a `custom` repository is not kept: the resumed run loses its extra hosts, which only restricts. Any other running container is destroyed.
 
 ## Secrets
 
-Où ils sont et comment ils restent dans le démon : [`configuration.md`](configuration.md#ce-qui-ne-sort-pas-du-démon). En résumé : `secrets.json` en `0600`, environnement des runs sans `RELAIS_*` ni `LINEAR_*`, jeton Linear jamais transmis aux agents, `run-settings.json` qui interdit aux runs de lire les fichiers sensibles de `RELAIS_HOME`.
+Where they live and how they stay inside the daemon: [`configuration.md`](configuration.md#what-does-not-leave-the-daemon). In short: `secrets.json` in `0600`, run environment without `RELAIS_*` or `LINEAR_*`, Linear token never passed to agents, `run-settings.json` that forbids runs from reading the sensitive files in `RELAIS_HOME`.
 
-## Limites connues
+## Known limitations
 
-- **Sans sandbox, même utilisateur système.** Sans `FACTORY_CONTAINER_CLI`, les runs tournent sur l'hôte sous le même utilisateur que le démon (le démon l'écrit au démarrage : « les runs tournent sur l'hôte, sans isolation »). Les refus de Claude Code sont indicatifs : un agent qui exécute du code (`node -e …`, autorisé par le pack) peut lire `secrets.json` ou `relais.db`. Une injection dans un ticket ou un commentaire pourrait l'y pousser. **Ne confiez pas à Relais des tickets écrits par des personnes non fiables** tant que les runs ne tournent pas sous un utilisateur séparé.
-- **Sandbox : la clé de l'autorité de sortie est un secret du démon.** Qui la lit (`<home>/egress-ca/ca.key`) peut se faire passer pour n'importe quel site auprès des sandboxes de cette instance, pas au-delà : rien d'autre ne fait confiance à cette autorité. Un run sans sandbox, sur l'hôte, peut la lire comme `secrets.json`.
-- **Sandbox : un client qui épingle un certificat échoue.** Il refuse le certificat de l'usine : la connexion échoue, journalisée (fermé par défaut). De même un outil qui ignore les variables d'autorité ci-dessus.
-- **Sandbox : redirection vers un hôte hors liste.** Une redirection (`git`, `npm`, `fetch`) vers un hôte que le niveau n'a pas est refusée comme une connexion directe : un dépôt GitHub renommé, ou un paquet servi depuis un autre CDN, échoue.
-- **Sandbox : un niveau par run, celui du dépôt.** Chaque run d'agent prend le `network` de `.factory/config.yml` lu au lancement (niveau, `allow` d'un dépôt `custom`), `claude-api` pour un dépôt en `none` (ORC-209 C, voir [configuration du dépôt](configuration-depot.md#réseau-de-lagent)). Le niveau de chaque étape du préréglage (la revue en `claude-api`) attend ORC-322. Le `setup` tourne dans un conteneur à lui, détruit avant que celui de l'agent soit créé (ORC-211), au niveau `limited`, pas en `full` : un `setup` qui sort de la liste échoue.
-- **Sandbox : journal réseau en base, pas encore au tableau de bord.** Le journal des connexions est un JSONL par run dans `<home>/network/`, écrit en base à la fin du run avec les refus de l'agent ([`pack-et-skills.md`](pack-et-skills.md#hook-pretooluse-et-journal-des-refus), ORC-296) ; le journal de sécurité du tableau de bord viendra avec ORC-300. La base n'est pas purgée.
-- **Sandbox : l'agent a son propre dépôt git, et l'hôte n'y lance jamais git (ORC-317).** Chaque espace de travail est un dépôt à part, créé par l'usine, avec son `.git` dans le worktree : sans hook, avec les réglages du dépôt sauf ceux de sa disposition et de ses hooks, ses objets copiés. Tout ce qui s'y trouve appartient à l'agent, et le dossier git de `repoPath` n'est jamais monté : `git fetch`, `git ls-remote` et le `fetch` qui crée un espace de travail tournent sur l'hôte, sur une configuration, des hooks et des refs que l'agent n'a jamais pu écrire. Sur ce que l'agent a écrit, l'hôte ne lit que des données : `HEAD` et les refs comme fichiers (ni lien ni FIFO, taille bornée), les objets comme un emplacement de plus depuis le dépôt de l'usine. Ce que git doit y faire, comme masquer `.claude/`, se fait à sa création, avant tout agent. Limites : ce que l'hôte lit de ce dépôt reste ce que l'agent a voulu y mettre (seul `verify` juge un commit) ; un paquet d'objets piégé atteint le git de l'hôte en lecture, et `objects/info/alternates` peut désigner les objets d'un autre dépôt de la machine, lisibles à condition d'en connaître l'empreinte. Sans sandbox (`FACTORY_ALLOW_HOST_VERIFY=1`), l'agent tourne sur l'hôte et git aussi dans son dossier : aucune de ces garanties. Un dépôt déjà exposé à un agent avant cette version peut garder sa configuration ou ses hooks : voir [`deploiement.md`](deploiement.md).
-- **Sandbox : `trunk-readonly` monté en lecture-écriture.** Le port monte toujours le worktree en écriture ; un job `trunk-readonly` n'est retenu que par `--permission-mode plan`, comme sur l'hôte. Ce qu'il y écrirait malgré tout disparaît avec sa question : chacune a son propre `_trunk/<runId>/`.
-- **Sandbox : rootless vérifié seulement en CI et sur le serveur.** En développement (Docker Desktop sous WSL), le moteur n'est pas rootless. Le job CI `isolation` (Podman rootless) et le serveur le vérifient.
-- **Sans sandbox : `verify` refuse de tourner, sauf demande explicite.** Avec les sandboxes, `verify` ne lance jamais le code de l'agent sur l'hôte : le travail sort par `git bundle` d'un conteneur sans réseau, l'usine le clone sans la config du dépôt, et les commandes tournent dans un conteneur neuf sur ce clone, au niveau réseau `none`, sans rien d'autre de monté (ORC-151). Un moteur en panne donne `verify.errored` : le ticket est bloqué pour cause d'infrastructure, sans repli sur l'hôte, et rien n'est renvoyé à l'agent. Sans `FACTORY_CONTAINER_CLI`, `verify` et le contrôle du rouge répondent de même, sauf avec `FACTORY_ALLOW_HOST_VERIFY=1` : ils tournent alors dans le worktree, sur l'hôte, sans aucune de ces garanties (lecture du disque et de `/proc/<pid>/environ` du démon comprise). Le `setup` sans sandbox reste sur l'hôte, comme les runs eux-mêmes (ORC-179).
-- **Sandbox : une session commencée sur l'hôte ne reprend pas dans le conteneur.** Un ticket dont la session Claude a été ouverte sur l'hôte (avant l'activation des sandboxes) n'a pas cette session dans le dossier monté en `~/.claude` : son prochain run de reprise échoue une fois. Bloquez-le, ou relancez-le à neuf.
-- **Sandbox : le jeton Claude est visible de l'agent.** C'est le seul identifiant du runner ; il sert à `claude -p`, et le niveau de réseau limite où il peut partir. `FACTORY_RUN_TOKEN`, l'autre jeton du run, ne donne accès qu'à l'API agent, pour le ticket du run et le temps du run.
-- **Sandbox : `sealSecrets` cherche des valeurs.** Un secret du `setup` écrit dans le worktree est supprimé tel quel, en base64 (même dans `user:jeton`), dans une URL ou en JSON. Haché, chiffré ou en base64 coupé en lignes, il n'est pas reconnu. Le reste de ce qu'a écrit le `setup` hors du worktree disparaît avec son conteneur. Un secret mal utilisé peut aussi partir pendant le `setup`, vers un hôte du niveau `limited` : par une requête GET seulement, le proxy refusant les autres méthodes.
-- **Sans sandbox : secrets transmis aux runs.** Sur l'hôte, `ANTHROPIC_API_KEY` (ORC-179) et l'agent SSH du démon sont visibles des agents ; `GH_TOKEN` ne l'est plus (ORC-125), mais seul le hook du pack empêche un `git push` par cet agent SSH. Les variables du démon, jetons Claude et secrets du dépôt compris, restent dans le processus du démon, qu'un run sur l'hôte peut lire (`/proc`) sous le même utilisateur. `verify` et le `setup` sur l'hôte ne reçoivent que le système, aucun identifiant ; les secrets du dépôt ne sont donnés qu'à un `setup` en sandbox. Donnez au compte GitHub les droits minimaux ([`github.md`](github.md#permissions-nécessaires)).
-- **Canal smee public.** Le contenu des webhooks transite par smee.io et y est lisible par qui connaît l'URL ([`linear.md`](linear.md#3-webhooks--smee-ou-url-publique)).
-- **Merge.** Seule la protection de branche GitHub garantit que l'agent ne merge pas ([`github.md`](github.md#protection-de-branche-fortement-conseillée)).
-- **Transcripts.** `transcripts/` contient tout ce que les agents ont lu et écrit ; protégez `RELAIS_HOME` en conséquence.
+- **Without a sandbox, same system user.** Without `FACTORY_CONTAINER_CLI`, runs execute on the host under the same user as the daemon (the daemon writes it at startup: « les runs tournent sur l'hôte, sans isolation »). Claude Code's refusals are advisory: an agent that runs code (`node -e …`, allowed by the pack) can read `secrets.json` or `relais.db`. An injection in a ticket or a comment could push it to do so. **Do not entrust Relais with tickets written by untrusted people** as long as runs do not execute under a separate user.
+- **Sandbox: the egress authority's key is a daemon secret.** Whoever reads it (`<home>/egress-ca/ca.key`) can impersonate any site to this instance's sandboxes, not beyond: nothing else trusts this authority. A run without a sandbox, on the host, can read it like `secrets.json`.
+- **Sandbox: a client that pins a certificate fails.** It refuses the factory's certificate: the connection fails, logged (closed by default). Likewise a tool that ignores the authority variables above.
+- **Sandbox: redirect to an unlisted host.** A redirect (`git`, `npm`, `fetch`) to a host the level does not include is refused like a direct connection: a renamed GitHub repository, or a package served from another CDN, fails.
+- **Sandbox: one level per run, the repository's.** Each agent run takes the `network` from `.factory/config.yml` read at launch (level, `allow` of a `custom` repository), `claude-api` for a repository at `none` (ORC-209 C, see [repository configuration](configuration-depot.md#the-agents-network)). The level of each preset step (review at `claude-api`) waits for ORC-322. `setup` runs in a container of its own, destroyed before the agent's is created (ORC-211), at the `limited` level, not `full`: a `setup` that goes outside the list fails.
+- **Sandbox: network log in the database, not yet on the dashboard.** The connection log is one JSONL per run in `<home>/network/`, written to the database at the end of the run along with the agent's refusals ([`pack-et-skills.md`](pack-et-skills.md#pretooluse-hook-and-refusal-log), ORC-296); the dashboard's security log will come with ORC-300. The database is not purged.
+- **Sandbox: the agent has its own git repository, and the host never runs git in it (ORC-317).** Each workspace is a separate repository, created by the factory, with its `.git` in the worktree: no hooks, with the repository's settings except those for its layout and its hooks, its objects copied. Everything in it belongs to the agent, and the git directory of `repoPath` is never mounted: `git fetch`, `git ls-remote` and the `fetch` that creates a workspace run on the host, on a configuration, hooks and refs the agent could never write. Of what the agent wrote, the host only reads data: `HEAD` and the refs as files (neither link nor FIFO, bounded size), the objects as one more location from the factory's repository. Whatever git needs to do there, such as hiding `.claude/`, is done at its creation, before any agent. Limitations: what the host reads from this repository is still what the agent chose to put there (only `verify` judges a commit); a trapped object pack reaches the host's git in read mode, and `objects/info/alternates` can point to the objects of another repository on the machine, readable provided one knows their hash. Without a sandbox (`FACTORY_ALLOW_HOST_VERIFY=1`), the agent runs on the host and so does git in its folder: none of these guarantees. A repository already exposed to an agent before this version may keep its configuration or hooks: see [`deploiement.md`](deploiement.md).
+- **Sandbox: `trunk-readonly` mounted read-write.** The port always mounts the worktree writable; a `trunk-readonly` job is only held back by `--permission-mode plan`, as on the host. Whatever it might write anyway disappears with its question: each one has its own `_trunk/<runId>/`.
+- **Sandbox: rootless verified only in CI and on the server.** In development (Docker Desktop under WSL), the engine is not rootless. The `isolation` CI job (rootless Podman) and the server verify it.
+- **Without a sandbox: `verify` refuses to run, unless explicitly requested.** With sandboxes, `verify` never runs the agent's code on the host: the work leaves via `git bundle` from a container without network, the factory clones it without the repository's config, and the commands run in a fresh container on that clone, at network level `none`, with nothing else mounted (ORC-151). A failed engine yields `verify.errored`: the ticket is blocked for an infrastructure reason, with no fallback to the host, and nothing is sent back to the agent. Without `FACTORY_CONTAINER_CLI`, `verify` and the red check respond the same way, except with `FACTORY_ALLOW_HOST_VERIFY=1`: they then run in the worktree, on the host, without any of these guarantees (including reading the disk and the daemon's `/proc/<pid>/environ`). `setup` without a sandbox stays on the host, like the runs themselves (ORC-179).
+- **Sandbox: a session started on the host does not resume in the container.** A ticket whose Claude session was opened on the host (before sandboxes were enabled) does not have that session in the folder mounted at `~/.claude`: its next resume run fails once. Block it, or relaunch it from scratch.
+- **Sandbox: the Claude token is visible to the agent.** It is the runner's only credential; it is used for `claude -p`, and the network level limits where it can go. `FACTORY_RUN_TOKEN`, the run's other token, only grants access to the agent API, for the run's ticket and for the duration of the run.
+- **Sandbox: `sealSecrets` looks for values.** A `setup` secret written into the worktree is removed as is, in base64 (even within `user:token`), in a URL or in JSON. Hashed, encrypted, or in base64 split across lines, it is not recognized. Everything else `setup` wrote outside the worktree disappears with its container. A misused secret can also leak during `setup`, to a host of the `limited` level: through a GET request only, since the proxy refuses other methods.
+- **Without a sandbox: secrets passed to runs.** On the host, `ANTHROPIC_API_KEY` (ORC-179) and the daemon's SSH agent are visible to agents; `GH_TOKEN` no longer is (ORC-125), but only the pack's hook prevents a `git push` through that SSH agent. The daemon's variables, Claude tokens and repository secrets included, stay in the daemon process, which a run on the host can read (`/proc`) under the same user. `verify` and `setup` on the host receive only the system, no credentials; repository secrets are only given to a sandboxed `setup`. Give the GitHub account minimal permissions ([`github.md`](github.md#permissions-required-for-the-gh-fallback)).
+- **Public smee channel.** Webhook contents transit through smee.io and can be read there by anyone who knows the URL ([`linear.md`](linear.md#3-webhooks-smee-or-public-url)).
+- **Merge.** Only GitHub branch protection guarantees that the agent does not merge ([`github.md`](github.md#branch-protection-strongly-recommended)).
+- **Transcripts.** `transcripts/` contains everything the agents read and wrote; protect `RELAIS_HOME` accordingly.

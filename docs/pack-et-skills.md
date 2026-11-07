@@ -1,131 +1,131 @@
-# Pack et skills
+# Pack and skills
 
-Le cœur de Relais ne contient aucune consigne métier : il orchestre. Ce que fait l'agent vient d'un **pack**, un plugin Claude Code livré dans `packs/standard/` :
+Relais's core contains no business instructions: it orchestrates. What the agent does comes from a **pack**, a Claude Code plugin shipped in `packs/standard/`:
 
 ```text
 packs/standard/
-├── .claude-plugin/plugin.json   # plugin « relais » → skills relais:<nom>
-├── workflow.yml                 # comportement par défaut (événements, jobs, limites)
-├── settings.json                # permissions des runs
-├── hooks/hooks.json             # hooks SessionStart et PreToolUse
-├── hooks/session-start.mjs      # règles toujours actives, méthode, index de la base de connaissance
-├── hooks/pre-tool-use.mjs       # refus des commandes interdites et des lectures complètes de gros fichiers, journal des refus
-├── NOTICE.md                    # origine de la méthode (superpowers, MIT)
-└── skills/<nom>/SKILL.md        # skills de job (un par type de run) et skills de méthode
+├── .claude-plugin/plugin.json   # "relais" plugin → skills relais:<name>
+├── workflow.yml                 # default behavior (events, jobs, limits)
+├── settings.json                # run permissions
+├── hooks/hooks.json             # SessionStart and PreToolUse hooks
+├── hooks/session-start.mjs      # always-on rules, method, knowledge base index
+├── hooks/pre-tool-use.mjs       # refuses forbidden commands and full reads of large files, refusal log
+├── NOTICE.md                    # origin of the method (superpowers, MIT)
+└── skills/<name>/SKILL.md       # job skills (one per run type) and method skills
 ```
 
-Chaque run lance Claude Code avec `--plugin-dir packs/standard` (les skills deviennent `/relais:<nom>`), `--settings <RELAIS_HOME>/run-settings.json` `--setting-sources ""` et `--strict-mcp-config` (ORC-284, options mesurées par ORC-128). Aucun réglage de Claude Code ne vient d'ailleurs que de l'usine : ni ceux de l'utilisateur (`~/.claude/settings.json`), ni ceux du dépôt (`.claude/settings.json`, `.claude/settings.local.json`, `.mcp.json`, skills, agents et commandes de `.claude/`). Le `.claude/` du worktree est retiré avant chaque session ([`interface-et-securite.md`](interface-et-securite.md)).
+Each run starts Claude Code with `--plugin-dir packs/standard` (skills become `/relais:<name>`), `--settings <RELAIS_HOME>/run-settings.json` `--setting-sources ""` and `--strict-mcp-config` (ORC-284, options measured by ORC-128). No Claude Code setting comes from anywhere but the factory: neither the user's (`~/.claude/settings.json`), nor the repository's (`.claude/settings.json`, `.claude/settings.local.json`, `.mcp.json`, skills, agents and commands in `.claude/`). The worktree's `.claude/` is removed before each session ([`interface-et-securite.md`](interface-et-securite.md)).
 
-Le comportement (quel skill, quand, avec quel modèle) se règle dans `.relais/workflow.yml` : voir [`workflow.md`](workflow.md).
+Behavior (which skill, when, with which model) is configured in `.relais/workflow.yml`: see [`workflow.md`](workflow.md).
 
-## Les skills du pack
+## The pack's skills
 
-Deux familles :
+Two families:
 
-- les **skills de job** sont ceux que `workflow.yml` lance (`skill: "relais:<nom>"`) : ils disent quoi faire du début à la fin d'un run et le format du dernier message ;
-- les **skills de méthode** disent *comment* faire une étape (tester, déboguer, vérifier, relire, traiter des retours). Les skills de job les chargent au bon moment, et le hook de démarrage rappelle à chaque run de les utiliser.
+- **job skills** are the ones `workflow.yml` launches (`skill: "relais:<name>"`): they say what to do from the start to the end of a run and the format of the last message;
+- **method skills** say *how* to do a step (test, debug, verify, review, handle feedback). Job skills load them at the right moment, and the startup hook reminds every run to use them.
 
-### Les skills de job
+### Job skills
 
-Tous écrivent leur dernier message en français : il est publié tel quel dans la session Linear. Quand l'agent pose une question (`relais-agent ask`), le ticket est bloqué et ce dernier message n'est **pas** publié : la question doit se suffire.
+All of them write their last message in French: it is posted as is in the Linear session. When the agent asks a question (`relais-agent ask`), the ticket is blocked and that last message is **not** posted: the question must stand on its own.
 
-| Skill | Job(s) | Espace | Rôle | Méthode chargée |
+| Skill | Job(s) | Workspace | Role | Method loaded |
 |---|---|---|---|---|
-| `relais:dev` | `dev` | worktree du ticket | Lit le ticket, le confronte au code, pose une question si une décision manque, fait un mini-plan si le ticket a plusieurs étapes, développe test d'abord, vérifie (tests ciblés, types, lint), fait une auto-review légère, contrôle les conflits avec le tronc (rebase tant que la branche n'est pas publiée), commite et rend la main : l'usine vérifie, publie et ouvre la PR draft (ORC-125). Message : ce qui a changé, comment tester, vérifié, points d'attention. | `tdd`, `debugging`, `verification`, `code-review` (rapide ou standard), `receiving-review` |
-| `relais:feedback` | `dev-feedback` | worktree, session reprise | Traite les retours (fil Linear, commentaires de review GitHub non résolus, vérifications en échec) : vérifie chacun dans le code, corrige avec un test, refuse avec une raison, un commit par cause ; fusionne la base en cas de conflit, et ce qu'un humain a poussé sur la branche (pas de rebase d'une branche publiée). Message : une ligne par retour. | `receiving-review`, `tdd`, `debugging`, `verification` |
-| `relais:fix-ci` | `fix-ci` | worktree, session reprise | Lit l'échec exact (`gh pr checks`, `gh run view --log-failed`), le reproduit en local, regarde si la base échoue aussi, classe la cause (régression, instable, infra). Régression : correction minimale + test. Instable ou infra : une question au lieu de « corriger » à l'aveugle. Deux corrections ratées sur un même check : question. Interdit de désactiver, sauter ou affaiblir un test ou une étape de CI. | `debugging`, `tdd`, `verification` |
-| `relais:review` | `review` | worktree, session neuve | Boucle de review IA : round 1 sur tout le diff au niveau que mérite son risque, corrections vérifiées, puis rounds ciblés sur les seuls commits de correction et leurs consommateurs, avec un registre des décisions. S'arrête quand un round ne trouve que des constats mineurs, au plafond `review_rounds`, ou sur un point à trancher (question). Puis vérification de types et fusion de la base si elle a bougé ; l'usine publie, et `fix-ci` traite la CI. Message : synthèse (rounds, niveau), corrigé, reste à voir, hors périmètre. | `code-review`, `receiving-review`, `tdd`, `debugging`, `verification` |
-| `relais:ask` | `ask` | `_trunk`, lecture seule (mode plan) | Répond à une question à partir de la base de connaissance, de `docs/agent/`, de `CLAUDE.md`, du code et des tickets, en n'affirmant que ce qu'il a lu, avec ses sources. | `verification` |
-| `relais:learn` | `learn`, `remember` | worktree du dépôt de connaissance | Écrit 0 à 3 fiches vérifiées (`notes/<slug>.md` + ligne dans `INDEX.md`), complète une fiche existante plutôt que d'en créer une, et les commite sur sa branche : personne ne les publie : l'écriture de la connaissance est à ORC-193. Pour `remember`, enregistre fidèlement ce qui est demandé. | — |
+| `relais:dev` | `dev` | ticket's worktree | Reads the ticket, checks it against the code, asks a question if a decision is missing, makes a mini-plan if the ticket has several steps, develops test-first, verifies (targeted tests, types, lint), does a light self-review, checks for conflicts with the trunk (rebases as long as the branch is not published), commits and hands back: the factory verifies, publishes and opens the draft PR (ORC-125). Message: what changed, how to test, verified, points of attention. | `tdd`, `debugging`, `verification`, `code-review` (quick or standard), `receiving-review` |
+| `relais:feedback` | `dev-feedback` | worktree, resumed session | Handles feedback (Linear thread, unresolved GitHub review comments, failed verifications): checks each item in the code, fixes with a test, refuses with a reason, one commit per cause; merges the base in case of conflict, and whatever a human pushed to the branch (no rebase of a published branch). Message: one line per feedback item. | `receiving-review`, `tdd`, `debugging`, `verification` |
+| `relais:fix-ci` | `fix-ci` | worktree, resumed session | Reads the exact failure (`gh pr checks`, `gh run view --log-failed`), reproduces it locally, checks whether the base fails too, classifies the cause (regression, flaky, infra). Regression: minimal fix + test. Flaky or infra: a question instead of blindly "fixing". Two failed fixes on the same check: question. Forbidden to disable, skip or weaken a test or a CI step. | `debugging`, `tdd`, `verification` |
+| `relais:review` | `review` | worktree, fresh session | AI review loop: round 1 on the whole diff at the level its risk deserves, verified fixes, then targeted rounds on the fix commits only and their consumers, with a decision log. Stops when a round finds only minor findings, at the `review_rounds` cap, or on an undecided point (question). Then type checking and merging the base if it has moved; the factory publishes, and `fix-ci` handles CI. Message: summary (rounds, level), fixed, still to look at, out of scope. | `code-review`, `receiving-review`, `tdd`, `debugging`, `verification` |
+| `relais:ask` | `ask` | `_trunk`, read-only (plan mode) | Answers a question from the knowledge base, `docs/agent/`, `CLAUDE.md`, the code and the tickets, asserting only what it has read, with its sources. | `verification` |
+| `relais:learn` | `learn`, `remember` | knowledge repository worktree | Writes 0 to 3 verified notes (`notes/<slug>.md` + a line in `INDEX.md`), extends an existing note rather than creating one, and commits them on its branch: nobody publishes them: writing knowledge belongs to ORC-193. For `remember`, faithfully records what is requested. | — |
 
-### Les skills de méthode
+### Method skills
 
-| Skill | Quand | Ce qu'il impose |
+| Skill | When | What it requires |
 |---|---|---|
-| `relais:tdd` | tout changement de comportement | Un test qui échoue pour la bonne raison avant le code ; code minimal ; tests voisins verts ; des tests qui peuvent vraiment échouer (pas d'assertion sur un mock). |
-| `relais:debugging` | bug, test rouge, CI ou vérification en échec | La cause avant la correction : lire l'erreur entière, reproduire, comparer à ce qui marche, une hypothèse à la fois ; après trois corrections ratées, question de conception plutôt qu'une quatrième. |
-| `relais:verification` | avant d'affirmer « fait », « vert », « corrigé », et avant commit, push, PR | Une commande lancée et lue pour chaque affirmation. Tests ciblés, types et lint ; pas la suite complète (c'est le rôle de `verify` et de la CI). Push vérifié par `git ls-remote`. |
-| `relais:code-review` | relire un diff (`review`, auto-review de `dev`) | Diff délimité à la base de la PR. Trois niveaux choisis sur le risque : **rapide** (texte, config), **standard** (logique, docs qui décrivent le code), **approfondi** (accès, données, migrations, secrets, gros diff ; passes par angle, en sous-agents parallèles si l'outil est disponible). Constats classés par portée (dans le périmètre, hors périmètre, conflit de règle) et gravité (bloquant, important, mineur), chacun vérifié avant d'être rapporté. |
-| `relais:receiving-review` | traiter des retours ou des constats | Tout lire, vérifier la prémisse et la correction proposée dans le code, ne pas trancher un compromis seul, un commit par cause avec sa preuve, répondre sans complaisance (corrigé, refusé avec raison, ou question). |
+| `relais:tdd` | any behavior change | A test that fails for the right reason before the code; minimal code; neighboring tests green; tests that can really fail (no assertion on a mock). |
+| `relais:debugging` | bug, red test, failed CI or verification | The cause before the fix: read the whole error, reproduce, compare with what works, one hypothesis at a time; after three failed fixes, a design question rather than a fourth. |
+| `relais:verification` | before claiming "done", "green", "fixed", and before commit, push, PR | A command run and read for every claim. Targeted tests, types and lint; not the full suite (that is the job of `verify` and CI). Push verified with `git ls-remote`. |
+| `relais:code-review` | review a diff (`review`, `dev`'s self-review) | Diff bounded at the PR's base. Three levels chosen by risk: **quick** (text, config), **standard** (logic, docs that describe the code), **thorough** (access, data, migrations, secrets, large diff; passes by angle, in parallel subagents if the tool is available). Findings classified by scope (in scope, out of scope, rule conflict) and severity (blocking, important, minor), each verified before being reported. |
+| `relais:receiving-review` | handle feedback or findings | Read everything, check the premise and the proposed fix in the code, do not decide a trade-off alone, one commit per cause with its proof, reply without complacency (fixed, refused with a reason, or question). |
 
-La méthode est réécrite à partir des skills superpowers (MIT) : voir `packs/standard/NOTICE.md`.
+The method is rewritten from the superpowers skills (MIT): see `packs/standard/NOTICE.md`.
 
-Texte complet : `packs/standard/skills/<nom>/SKILL.md`.
+Full text: `packs/standard/skills/<name>/SKILL.md`.
 
-## Règles toujours actives (hook SessionStart)
+## Always-on rules (SessionStart hook)
 
-`hooks/session-start.mjs` injecte au début de chaque run :
+`hooks/session-start.mjs` injects at the start of each run:
 
-- le ticket courant (`RELAIS_TICKET`) ;
-- les règles : messages Linear en français, ne jamais merger ni force-pusher, ne rien modifier hors du répertoire de travail, ne jamais déclarer fini sans tests lancés et lus, passer par `relais-agent` pour Linear, poser **une** question avec `relais-agent ask` plutôt qu'inventer, dernier message lisible seul ;
-- la méthode : avant chaque étape, charger le skill de méthode qui s'applique (`relais:tdd`, `relais:debugging`, `relais:verification`, `relais:code-review`, `relais:receiving-review`), le `CLAUDE.md` du dépôt l'emportant sur le style seulement, jamais sur les règles de l'usine ; si l'outil Skill est indisponible, lire le fichier du skill (le hook donne le chemin absolu du dossier `skills/`) ;
-- si `RELAIS_KNOWLEDGE` est défini et contient `INDEX.md` : l'index de la base de connaissance (8 000 caractères au plus) et le chemin des fiches.
+- the current ticket (`RELAIS_TICKET`);
+- the rules: Linear messages in French, never merge or force-push, modify nothing outside the working directory, never declare done without tests run and read, go through `relais-agent` for Linear, ask **one** question with `relais-agent ask` rather than invent, last message readable on its own;
+- the method: before each step, load the method skill that applies (`relais:tdd`, `relais:debugging`, `relais:verification`, `relais:code-review`, `relais:receiving-review`), the repository's `CLAUDE.md` taking precedence on style only, never on the factory's rules; if the Skill tool is unavailable, read the skill's file (the hook gives the absolute path of the `skills/` folder);
+- if `RELAIS_KNOWLEDGE` is set and contains `INDEX.md`: the knowledge base index (8,000 characters at most) and the path to the notes.
 
 ## Permissions
 
-`packs/standard/settings.json` fixe `defaultMode: acceptEdits` et :
+`packs/standard/settings.json` sets `defaultMode: acceptEdits` and:
 
-**Autorisé** sans confirmation : lecture, édition et recherche de fichiers ; `git status|diff|log|show|add|commit|fetch|rebase|checkout|switch|branch|rev-parse|merge-base|merge-tree|merge|revert|rev-list|ls-remote` ; `gh pr view|list|checks|diff` ; `gh run view|list` ; `npm`, `npx`, `node`, `pnpm`, `yarn` ; `ls`, `cat`, `grep`, `rg`, `find`, `head`, `tail`, `wc`, `sleep` ; `relais-agent` ; les outils `submit_result` et `ask` du MCP de l'usine (`mcp__factory__…`), que `claude -p` refuserait sinon.
+**Allowed** without confirmation: reading, editing and searching files; `git status|diff|log|show|add|commit|fetch|rebase|checkout|switch|branch|rev-parse|merge-base|merge-tree|merge|revert|rev-list|ls-remote`; `gh pr view|list|checks|diff`; `gh run view|list`; `npm`, `npx`, `node`, `pnpm`, `yarn`; `ls`, `cat`, `grep`, `rg`, `find`, `head`, `tail`, `wc`, `sleep`; `relais-agent`; the `submit_result` and `ask` tools of the factory MCP (`mcp__factory__…`), which `claude -p` would otherwise refuse.
 
-**Refusé** :
+**Refused**:
 
-- `gh pr merge` : seuls les humains mergent ;
-- tout `git push`, et les écritures `gh` (`gh pr create`, `gh pr edit`, `gh run rerun`) : **seule l'usine publie** (ORC-125, [`github.md`](github.md#publication)) ;
-- tout contournement des hooks git par `--no-verify` (`git commit --no-verify`, l'option en milieu de commande, ou toute commande qui la contient) ou par `-n` (`git commit -n`, `-nm`, `-m … -n` ; pas `-an`, que la syntaxe des motifs ne sait pas isoler) ; les règles explicites doublent le joker `*--no-verify*` au cas où la version de Claude Code n'appliquerait pas les jokers en début ou milieu de motif. Le scan du diff (`factory/anti-triche`, ORC-158) refuse aussi un `--no-verify` ajouté dans un fichier du dépôt, hors documentation, fichiers de test et règles de permission des réglages Claude ;
-- `git reset --hard origin…`, `rm -rf /` ;
-- un téléchargement envoyé à un shell : `curl … | sh`, `wget … | bash` ;
-- toute commande qui mentionne la socket Docker ou Podman (`docker.sock`, `podman.sock`) ou les variables qui y mènent (`DOCKER_HOST`, `CONTAINER_HOST`) : elle donnerait la main sur l'hôte depuis le conteneur du run ;
-- l'outil `WebSearch` : la recherche tourne chez Anthropic, hors de la vue du proxy de sortie ([ORC-128](decisions/ORC-128.md), point 1). `WebFetch` reste permis : il passe par le proxy ;
-- la lecture de `~/.relais/**`.
+- `gh pr merge`: only humans merge;
+- any `git push`, and `gh` writes (`gh pr create`, `gh pr edit`, `gh run rerun`): **only the factory publishes** (ORC-125, [`github.md`](github.md#publishing));
+- any bypass of git hooks via `--no-verify` (`git commit --no-verify`, the option in the middle of the command, or any command that contains it) or via `-n` (`git commit -n`, `-nm`, `-m … -n`; not `-an`, which the pattern syntax cannot isolate); the explicit rules duplicate the `*--no-verify*` wildcard in case the Claude Code version does not apply wildcards at the start or middle of a pattern. The diff scan (`factory/anti-triche`, ORC-158) also refuses a `--no-verify` added in a repository file, except documentation, test files and permission rules in Claude settings;
+- `git reset --hard origin…`, `rm -rf /`;
+- a download piped to a shell: `curl … | sh`, `wget … | bash`;
+- any command that mentions the Docker or Podman socket (`docker.sock`, `podman.sock`) or the variables leading to it (`DOCKER_HOST`, `CONTAINER_HOST`): it would give control of the host from the run's container;
+- the `WebSearch` tool: the search runs at Anthropic, out of the egress proxy's sight ([ORC-128](decisions/ORC-128.md), point 1). `WebFetch` remains allowed: it goes through the proxy;
+- reading `~/.relais/**`.
 
-Au démarrage, Relais complète ces refus pour le **vrai** `RELAIS_HOME` (même hors de `~/.relais`, par exemple `/data` en Docker) et écrit le résultat dans `<RELAIS_HOME>/run-settings.json` : lecture/édition de `secrets.json`, lecture de `relais.db*`, `transcripts/**`, `logs/**`, et toute commande qui mentionne `secrets.json` ou `relais.db`. Voir [`configuration.md`](configuration.md#ce-qui-ne-sort-pas-du-démon).
+At startup, Relais extends these refusals for the **real** `RELAIS_HOME` (even outside `~/.relais`, for example `/data` in Docker) and writes the result to `<RELAIS_HOME>/run-settings.json`: reading/editing `secrets.json`, reading `relais.db*`, `transcripts/**`, `logs/**`, and any command that mentions `secrets.json` or `relais.db`. See [`configuration.md`](configuration.md#what-does-not-leave-the-daemon).
 
-Ces règles sont une première barrière, pas une garantie : protégez la branche par défaut côté GitHub ([`github.md`](github.md#protection-de-branche-fortement-conseillée)). La recette vérifie que la version de Claude Code installée applique bien les jokers en milieu de motif ([`recette.md`](recette.md)).
+These rules are a first barrier, not a guarantee: protect the default branch on the GitHub side ([`github.md`](github.md#branch-protection-strongly-recommended)). The acceptance run checks that the installed Claude Code version does apply wildcards in the middle of a pattern ([`recette.md`](recette.md)).
 
-Les runs `trunk-readonly` (questions) tournent en plus avec `--permission-mode plan`. Limite connue, non mesurée : le mode plan peut refuser un outil MCP qui n'est pas en lecture seule malgré l'`allow`, donc `submit_result` et `ask` dans ces runs ; leur réponse reste alors leur dernier message (`post: reply`). À vérifier sur la version installée ([`recette.md`](recette.md)).
+`trunk-readonly` runs (questions) additionally run with `--permission-mode plan`. Known limitation, not measured: plan mode may refuse an MCP tool that is not read-only despite the `allow`, hence `submit_result` and `ask` in these runs; their answer then remains their last message (`post: reply`). To be checked on the installed version ([`recette.md`](recette.md)).
 
-### Hook PreToolUse et journal des refus
+### PreToolUse hook and refusal log
 
-Les motifs du `deny` sont des jokers sur le texte de la commande : un espace en trop, des guillemets (`git commit "--no-verify"`), un `sudo`, un `git -C dépôt` ou un `bash -c "…"` les déjouent. Et Claude Code découpe une commande composée avant d'appliquer ses règles : `curl … | sh` n'y est vu que morceau par morceau. `hooks/pre-tool-use.mjs` (hook `PreToolUse` sur `Bash`, `WebSearch` et `Read`, voir [plus bas](#lecture-complète-dun-gros-fichier) pour `Read`) refait donc les mêmes refus sur la commande analysée : mots et guillemets comme un shell (échappements POSIX entre guillemets doubles, `\` en fin de ligne), opérateurs (`|`, `|&`, `&&`, `;`…), préfixes (`VAR=…`, `sudo -u x`, `env -i`, `timeout 10`, `nice`, `nohup`, `command`) et options globales de `git` (`-C`, `--git-dir`…) et de `gh` (`-R`) ignorés avec leurs valeurs. Le texte entre guillemets est une donnée (`git commit -m "git push --force …"` passe) ; seuls la charge d'un `sh|bash|zsh|dash|ksh -c`, les arguments d'`eval` et une substitution `$(…)` sont relus comme commandes. Il refuse aussi `rm -fr /`, `rm -r -f /*`, `git commit -anm …`, `bash <(curl …)`, `sh -c "$(curl …)"`, un téléchargement envoyé à un shell quels que soient ses arguments (`curl … | bash -s x`), `git push --mirror` (`force-push`), `git push --all` et tout refspec qui écrit `main`/`master` (`HEAD:refs/heads/main`, `:main`, `--delete origin main` : `push-trunk`).
+The `deny` patterns are wildcards on the command text: an extra space, quotes (`git commit "--no-verify"`), a `sudo`, a `git -C repo` or a `bash -c "…"` defeat them. And Claude Code splits a compound command before applying its rules: `curl … | sh` is only seen piece by piece. `hooks/pre-tool-use.mjs` (`PreToolUse` hook on `Bash`, `WebSearch` and `Read`, see [below](#full-read-of-a-large-file) for `Read`) therefore repeats the same refusals on the parsed command: words and quotes like a shell (POSIX escapes inside double quotes, `\` at end of line), operators (`|`, `|&`, `&&`, `;`…), prefixes (`VAR=…`, `sudo -u x`, `env -i`, `timeout 10`, `nice`, `nohup`, `command`) and global options of `git` (`-C`, `--git-dir`…) and `gh` (`-R`) ignored along with their values. Quoted text is data (`git commit -m "git push --force …"` passes); only the payload of a `sh|bash|zsh|dash|ksh -c`, the arguments of `eval` and a `$(…)` substitution are re-read as commands. It also refuses `rm -fr /`, `rm -r -f /*`, `git commit -anm …`, `bash <(curl …)`, `sh -c "$(curl …)"`, a download piped to a shell whatever its arguments (`curl … | bash -s x`), `git push --mirror` (`force-push`), `git push --all` and any refspec that writes `main`/`master` (`HEAD:refs/heads/main`, `:main`, `--delete origin main`: `push-trunk`).
 
-Chaque refus est une règle nommée (`no-verify`, `commit-no-verify`, `force-push`, `push-trunk`, `merge`, `reset-origin`, `rm-root`, `pipe-to-shell`, `container-socket`, `web-search`, `full-read`, et avec le drapeau : `push`, `gh-write`). L'agent reçoit le nom de la règle dans le motif du refus, et le hook écrit une ligne JSON `{"at", "tool", "command", "rule", "ticket"}` (`ticket` : `$FACTORY_TICKET`, `null` hors d'un run) dans le **journal des refus** :
+Each refusal is a named rule (`no-verify`, `commit-no-verify`, `force-push`, `push-trunk`, `merge`, `reset-origin`, `rm-root`, `pipe-to-shell`, `container-socket`, `web-search`, `full-read`, and with the flag: `push`, `gh-write`). The agent receives the rule's name in the refusal reason, and the hook writes a JSON line `{"at", "tool", "command", "rule", "ticket"}` (`ticket`: `$FACTORY_TICKET`, `null` outside a run) to the **refusal log**:
 
-1. `$FACTORY_REFUSALS_LOG` s'il est défini. En sandbox, Relais le pose toujours à `/factory/refusals/refusals.jsonl`, monté depuis `<RELAIS_HOME>/runs/<runId>/refusals/` : le journal de chaque run (review et question comprises) survit au conteneur, et il est purgé à 30 jours (ORC-217). Sur l'hôte, le démon le transmet aux runs quand il l'a ;
-2. sinon `$CLAUDE_CONFIG_DIR/factory-refusals.jsonl` (le répertoire de configuration Claude du run) ;
-3. sinon `~/.claude/factory-refusals.jsonl`.
+1. `$FACTORY_REFUSALS_LOG` if it is set. In a sandbox, Relais always sets it to `/factory/refusals/refusals.jsonl`, mounted from `<RELAIS_HOME>/runs/<runId>/refusals/`: each run's log (review and question included) outlives the container, and it is purged after 30 days (ORC-217). On the host, the daemon passes it to runs when it has it;
+2. otherwise `$CLAUDE_CONFIG_DIR/factory-refusals.jsonl` (the run's Claude configuration directory);
+3. otherwise `~/.claude/factory-refusals.jsonl`.
 
-Les dossiers sont créés ; un journal impossible à écrire n'empêche ni le refus ni la session.
+Folders are created; a log that cannot be written prevents neither the refusal nor the session.
 
-**En base et dans le ticket (ORC-296).** En sandbox, quand le conteneur d'un run est détruit, Relais lit son journal des refus et le journal du proxy de sortie, et les écrit en base (tables `security_logs`, `refusals`, `egress_requests`), rattachés au run et au ticket, une fois par run. Le journal des refus est écrit depuis le sandbox : c'est une donnée non fiable. Une ligne mal formée, d'un outil, d'une règle ou d'un ticket inconnus, ou au-delà de 1 Mio de journal, est ignorée et comptée (le compte est en base et dans le journal du démon), jamais bloquante ; un journal qui n'est pas un fichier ordinaire (lien, dossier, FIFO) n'est pas lu. La commande, ou le chemin pour un `Read` refusé (ORC-279), est gardée en base, tronquée à 2 000 caractères. Si le run a eu au moins un refus (du hook ou du proxy), Relais poste dans la session Linear du run une pensée « Refus pendant ce run » : le nombre de refus par règle et les hôtes refusés par le proxy, **jamais les commandes ni les chemins** (ils peuvent contenir un secret) ; un hôte qui n'est pas un simple nom de domaine est compté sans être nommé. Sur l'hôte, sans sandbox, le journal n'est pas propre au run : rien n'est lu.
+**In the database and in the ticket (ORC-296).** In a sandbox, when a run's container is destroyed, Relais reads its refusal log and the egress proxy's log, and writes them to the database (tables `security_logs`, `refusals`, `egress_requests`), linked to the run and the ticket, once per run. The refusal log is written from the sandbox: it is untrusted data. A malformed line, from an unknown tool, rule or ticket, or beyond 1 MiB of log, is ignored and counted (the count is in the database and in the daemon's log), never blocking; a log that is not a regular file (link, folder, FIFO) is not read. The command, or the path for a refused `Read` (ORC-279), is kept in the database, truncated to 2,000 characters. If the run had at least one refusal (from the hook or the proxy), Relais posts in the run's Linear session a thought « Refus pendant ce run »: the number of refusals per rule and the hosts refused by the proxy, **never the commands or the paths** (they may contain a secret); a host that is not a plain domain name is counted without being named. On the host, without a sandbox, the log is not specific to the run: nothing is read.
 
-`src/pack-guard.test.ts` donne au hook, sur son entrée standard, un vrai appel `PreToolUse` pour chaque `Bash(…)` du `deny` de `settings.json` et vérifie le refus et la ligne de journal : un motif ajouté au `deny` sans règle dans le hook fait échouer le test.
+`src/pack-guard.test.ts` feeds the hook, on its standard input, a real `PreToolUse` call for each `Bash(…)` in the `deny` of `settings.json` and checks the refusal and the log line: a pattern added to `deny` without a rule in the hook makes the test fail.
 
-#### Lecture complète d'un gros fichier
+#### Full read of a large file
 
-Pour les tokens du build (ORC-279), le même hook refuse un `Read` sans `offset` ni `limit` d'un fichier de plus de 350 lignes (`read_guard.max_lines` dans [`factory.yml`](configuration.md#factoryyml-orc-209), transmis aux runs par `FACTORY_READ_MAX_LINES`). L'agent reçoit la consigne : chercher avec `grep`, puis lire la plage utile. Le refus est la règle `full-read` du journal des refus, avec le chemin dans `command`. Il s'applique à toutes les étapes. `allow_large` seul n'est pas une lecture ciblée. Un `offset` ou un `limit`, quelle qu'en soit la valeur, en est une : le hook réduit un coût, il ne se défend pas contre l'agent.
+For build tokens (ORC-279), the same hook refuses a `Read` with neither `offset` nor `limit` of a file of more than 350 lines (`read_guard.max_lines` in [`factory.yml`](configuration.md#factoryyml-orc-209), passed to runs via `FACTORY_READ_MAX_LINES`). The agent receives the instruction: search with `grep`, then read the relevant range. The refusal is the `full-read` rule in the refusal log, with the path in `command`. It applies to every step. `allow_large` alone is not a targeted read. An `offset` or a `limit`, whatever its value, is one: the hook reduces a cost, it does not defend against the agent.
 
-Cette règle **laisse passer en cas de doute**, à l'inverse des refus de commandes : elle coûte des tokens, elle ne protège rien. Un fichier absent ou illisible, un dossier, un FIFO, une liste malformée ou une erreur du hook laissent `Read` répondre lui-même. Un seuil invalide vaut 350. Sont aussi laissés à `Read` les fichiers qu'il ne découpe pas par lignes : images, PDF, notebooks, et tout fichier avec un octet nul dans ses premiers 64 Kio.
+This rule **lets through when in doubt**, unlike the command refusals: it costs tokens, it protects nothing. A missing or unreadable file, a folder, a FIFO, a malformed list or a hook error let `Read` respond on its own. An invalid threshold counts as 350. Also left to `Read` are the files it does not split by lines: images, PDFs, notebooks, and any file with a null byte in its first 64 KiB.
 
-Les fichiers lus en entier sont ceux de `FACTORY_FULL_READ_PATHS`, une liste JSON de chemins absolus tels que le run les voit, écrite par l'usine à chaque lancement à partir de la dépendance `fullReadPaths` de l'orchestrateur (chemins relatifs au dépôt, comme les clés de `frozenTests.files`). Une liste de plus de 64 Kio, ou impossible à obtenir, n'est pas transmise, avec un avertissement au journal du démon : le run démarre, et ces fichiers se lisent par plages. Le démon y met les tests gelés du ticket (ORC-131), les fichiers du harnais gelés compris. La spec du ticket s'y ajoutera avec ORC-212.
+The files read in full are those in `FACTORY_FULL_READ_PATHS`, a JSON list of absolute paths as the run sees them, written by the factory at each launch from the orchestrator's `fullReadPaths` dependency (paths relative to the repository, like the keys of `frozenTests.files`). A list of more than 64 KiB, or impossible to obtain, is not passed, with a warning in the daemon's log: the run starts, and these files are read by ranges. The daemon puts the ticket's frozen tests in it (ORC-131), frozen harness files included. The ticket's spec will be added with ORC-212.
 
-Pourquoi `git merge` est autorisé : une branche déjà poussée ne peut pas être rebasée, puisque le force-push est refusé. Les skills `feedback`, `fix-ci` et `review` intègrent donc la base par une fusion (`git merge --no-edit origin/<base>`) quand elle est en conflit ou qu'elle a bougé ; seul `dev`, avant son premier push, rebase. `git merge-tree` sert au contrôle de conflit sans toucher à l'arbre, `git ls-remote` à vérifier qu'un push a bien atteint le distant.
+Why `git merge` is allowed: an already-pushed branch cannot be rebased, since force-push is refused. The `feedback`, `fix-ci` and `review` skills therefore integrate the base with a merge (`git merge --no-edit origin/<base>`) when it conflicts or has moved; only `dev`, before its first push, rebases. `git merge-tree` is used for the conflict check without touching the tree, `git ls-remote` to verify that a push did reach the remote.
 
-## Personnaliser
+## Customizing
 
-Du plus simple au plus profond :
+From the simplest to the deepest:
 
-1. **Régler le comportement** sans toucher au pack : `.relais/workflow.yml` du dépôt (modèles, limites, vérifications, règles, jobs). Voir [`workflow.md`](workflow.md#6-recettes).
-2. **Donner du contexte au dépôt** : l'usine lit `CLAUDE.md`, `AGENTS.md` et `.claude/CLAUDE.md` et les met dans le prompt de chaque run comme données (8 000 octets au plus, imports `@chemin` non suivis, ORC-284) ; `docs/agent/*.md` est lu par les skills `dev`, `review` et `ask`. C'est l'endroit pour vos conventions de commit, de test, de nommage : elles l'emportent sur le style des skills, jamais sur les règles de l'usine. Les réglages Claude Code du dépôt (`.claude/settings.json`) ne s'appliquent pas aux runs.
-3. **Ajouter un skill** pour un nouveau job : depuis ORC-284, un skill de projet (`.claude/skills/<nom>/SKILL.md` du dépôt) **n'est plus chargé** par les runs ; ajoutez le skill au pack (point 4). L'ancienne façon, un skill de projet référencé par `skill: "<nom>"` dans un job de `.relais/workflow.yml`, ne marche plus. Exemple complet : [`workflow.md`](workflow.md#ajouter-un-job-personnalisé-avec-son-propre-skill).
-4. **Modifier le pack** lui-même : éditer `packs/standard/` (skills, hook, permissions) dans votre copie de Relais. Cela s'applique à tous les projets de l'instance ; redémarrez `relais up` pour régénérer `run-settings.json`. Pour changer la méthode de toute l'équipe (seuils des niveaux de review, commandes de vérification, règles de TDD), éditez le skill de méthode concerné : tous les skills de job qui le chargent suivent. Ajouter un skill de méthode : un dossier `skills/<nom>/SKILL.md`, cité comme `relais:<nom>` depuis un skill de job ou le hook.
+1. **Tune the behavior** without touching the pack: the repository's `.relais/workflow.yml` (models, limits, verifications, rules, jobs). See [`workflow.md`](workflow.md#6-recipes).
+2. **Give the repository context**: the factory reads `CLAUDE.md`, `AGENTS.md` and `.claude/CLAUDE.md` and puts them in each run's prompt as data (8,000 bytes at most, `@path` imports not followed, ORC-284); `docs/agent/*.md` is read by the `dev`, `review` and `ask` skills. That is the place for your commit, test and naming conventions: they take precedence over the skills' style, never over the factory's rules. The repository's Claude Code settings (`.claude/settings.json`) do not apply to runs.
+3. **Add a skill** for a new job: since ORC-284, a project skill (`.claude/skills/<name>/SKILL.md` in the repository) **is no longer loaded** by runs; add the skill to the pack (point 4). The old way, a project skill referenced by `skill: "<name>"` in a job of `.relais/workflow.yml`, no longer works. Full example: [`workflow.md`](workflow.md#adding-a-custom-job-with-its-own-skill).
+4. **Modify the pack** itself: edit `packs/standard/` (skills, hook, permissions) in your copy of Relais. This applies to all projects of the instance; restart `relais up` to regenerate `run-settings.json`. To change the method for the whole team (review level thresholds, verification commands, TDD rules), edit the relevant method skill: every job skill that loads it follows. To add a method skill: a `skills/<name>/SKILL.md` folder, cited as `relais:<name>` from a job skill or the hook.
 
-Relais charge toujours `packs/standard` : `extends` dans `workflow.yml` n'a pas d'effet et il n'existe pas encore de mécanisme pour choisir un autre pack. Pour un « pack » d'équipe, maintenez une copie de Relais avec votre `packs/standard/`.
+Relais always loads `packs/standard`: `extends` in `workflow.yml` has no effect and there is not yet a mechanism to choose another pack. For a team "pack", maintain a copy of Relais with your own `packs/standard/`.
 
-### Écrire un skill
+### Writing a skill
 
-- Frontmatter `name` (nom du dossier) et `description` ; `src/pack.test.ts` vérifie que chaque skill du pack a ce frontmatter, que chaque skill référencé par le `workflow.yml` du pack existe, et que chaque `relais:<nom>` cité dans un skill ou dans le hook existe.
-- Appuyez-vous sur les skills de méthode plutôt que de répéter leurs règles : « applique `relais:receiving-review` » reste juste quand la méthode évolue.
-- Le prompt du run commence par `/<skill>` suivi du bloc « Ticket » (identifiant, titre, URL, branche, PR, description), du « Contexte Linear » quand le webhook en fournit un et, selon `input`, « Retours à traiter », « CI en échec », « Message » ou « Vérifications en échec ».
-- Dites explicitement ce qu'il faut faire **à la fin** : commit/push, et le format du dernier message (publié dans Linear).
-- Utilisez `relais-agent ask` pour toute décision manquante, puis fin de tour.
-- Testez-le à la main dans un dépôt : `claude -p "/<skill> …" --plugin-dir packs/standard --settings ~/.relais/run-settings.json`.
+- Frontmatter `name` (folder name) and `description`; `src/pack.test.ts` checks that every pack skill has this frontmatter, that every skill referenced by the pack's `workflow.yml` exists, and that every `relais:<name>` cited in a skill or in the hook exists.
+- Rely on the method skills rather than repeating their rules: "apply `relais:receiving-review`" stays correct when the method evolves.
+- The run's prompt starts with `/<skill>` followed by the « Ticket » block (identifier, title, URL, branch, PR, description), the « Contexte Linear » block when the webhook provides one and, depending on `input`, « Retours à traiter », « CI en échec », « Message » or « Vérifications en échec ».
+- State explicitly what to do **at the end**: commit/push, and the format of the last message (posted in Linear).
+- Use `relais-agent ask` for any missing decision, then end the turn.
+- Test it by hand in a repository: `claude -p "/<skill> …" --plugin-dir packs/standard --settings ~/.relais/run-settings.json`.

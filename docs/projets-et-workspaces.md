@@ -1,108 +1,108 @@
-# Projets, worktrees et base de connaissance
+# Projects, worktrees and knowledge base
 
-## Projets
+## Projects
 
-Un **projet** Relais associe un dépôt git local à une équipe Linear. Ils sont listés dans `projects` de `<RELAIS_HOME>/config.yaml` :
+A Relais **project** associates a local git repository with a Linear team. They are listed in `projects` in `<RELAIS_HOME>/config.yaml`:
 
 ```yaml
 projects:
-  - id: mon-app                       # identifiant interne (dossiers, API)
-    repoPath: /home/moi/code/mon-app  # clone local, avec un remote origin
-    linearTeamKey: APP                # clé de l'équipe Linear suivie
+  - id: mon-app                       # internal identifier (directories, API)
+    repoPath: /home/moi/code/mon-app  # local clone, with an origin remote
+    linearTeamKey: APP                # key of the tracked Linear team
 ```
 
-Règles :
+Rules:
 
-- les tickets sont routés par clé d'équipe ; une délégation sur une équipe sans projet est bloquée, le reste ignoré ([`linear.md`](linear.md#4-utiliser-lagent-au-quotidien)). Une équipe peut avoir plusieurs projets : voir [Une équipe, plusieurs dépôts](#une-équipe-plusieurs-dépôts) ;
-- le comportement de chaque projet vient de son `.relais/workflow.yml` ([`workflow.md`](workflow.md)), lu dans la copie de travail `repoPath` au démarrage ;
-- `repoPath` doit être un clone avec `origin` : Relais y fait `git fetch origin` et en copie les objets pour chaque espace de travail. Vous pouvez continuer à y travailler. Les commits des agents n'y arrivent que par la forge.
+- tickets are routed by team key; a delegation on a team without a project is blocked, the rest ignored ([`linear.md`](linear.md#4-using-the-agent-day-to-day)). A team can have several projects: see [One team, several repositories](#one-team-several-repositories);
+- each project's behavior comes from its `.relais/workflow.yml` ([`workflow.md`](workflow.md)), read from the `repoPath` working copy at startup;
+- `repoPath` must be a clone with `origin`: Relais runs `git fetch origin` there and copies its objects for each workspace. You can keep working in it. The agents' commits only reach it through the forge.
 
-### Ajouter un projet
+### Adding a project
 
 ```bash
-cd <autre dépôt>
-relais init        # même clé d'application Linear : répondez avec les mêmes identifiants
+cd <other repository>
+relais init        # same Linear application key: answer with the same credentials
 ```
 
-`init` ajoute le projet (ou remplace celui qui a le même `repoPath`) et crée son `.relais/workflow.yml`. Redémarrez ensuite `relais up` : les statuts et labels sont créés dans la nouvelle équipe à la prochaine connexion Linear (bouton « Connecter Linear » ou `/oauth/start`).
+`init` adds the project (or replaces the one with the same `repoPath`) and creates its `.relais/workflow.yml`. Then restart `relais up`: the statuses and labels are created in the new team on the next Linear connection (« Connecter Linear » button or `/oauth/start`).
 
-> Les capacités des files (`parallel_sessions`, `question_sessions`) sont globales et lues dans le workflow du **premier** projet de la liste. Les autres réglages sont propres à chaque projet.
+> The queue capacities (`parallel_sessions`, `question_sessions`) are global and read from the workflow of the **first** project in the list. The other settings are specific to each project.
 
-### Une équipe, plusieurs dépôts
+### One team, several repositories
 
-Plusieurs projets peuvent déclarer le même `linearTeamKey`. Le ticket désigne alors son dépôt par un label **`repo:<id>`**, où `<id>` est l'`id` du projet dans `config.yaml` (casse indifférente) : `repo:api` envoie le ticket au projet `api`. Créez ces labels dans l'équipe Linear.
+Several projects can declare the same `linearTeamKey`. The ticket then designates its repository with a **`repo:<id>`** label, where `<id>` is the project's `id` in `config.yaml` (case-insensitive): `repo:api` sends the ticket to the `api` project. Create these labels in the Linear team.
 
-- Équipe à un seul projet : rien ne change, le label est inutile et ignoré.
-- Le label n'est lu que pour un ticket qu'aucun projet ne tient encore, à sa délégation (ou à une mention, une commande). **Le routage est collant** : un ticket délégué, ou qui a déjà une branche ou une PR, reste sous son projet, quoi que disent ses labels ensuite, et un projet ajouté à l'équipe ne prend aucun ticket existant. Ajouter à un ticket en cours le label d'un autre dépôt de l'équipe n'y change rien : Relais répond en commentaire que le dépôt ne change pas en cours de route. Sans branche ni PR, on en change en arrêtant le travail et en retirant la délégation, puis, une fois le retrait vu par la réconciliation (jusqu'à 5 minutes : aucun webhook ne le signale), en déléguant de nouveau ; sinon, il faut un nouveau ticket. Un label `repo:` qui ne nomme aucun dépôt de l'équipe est ignoré. Une réponse ou un arrêt sur un ticket qu'aucun projet ne tient suit aussi son label, y compris quand sa délégation n'est pas encore traitée : sans label, il reçoit la question ; avec un label, une réponse va à la copie du ticket qui a ouvert sa session.
-- Ticket sans label `repo:` qui nomme un des projets : la délégation est bloquée (label « Bloqué ») et la session Linear demande le label, avec la liste des choix. Le ticket attend sous le **premier** projet de l'équipe (ordre de `config.yaml`), même s'il était bloqué pour une autre raison, qu'il remplace. Une annulation ou un passage en terminé met fin à l'attente. Tant qu'il attend, une réponse, une mention, une commande ou un arrêt reçoit la même question, et rien d'autre (statut, label) ne lance de travail : aucun travail ne part dans un dépôt choisi par défaut.
-- Pour débloquer : ajoutez le label `repo:<id>`, puis déléguez de nouveau le ticket (retirez l'agent puis remettez-le) : le travail part dans ce dépôt, y compris si c'est celui où le ticket attendait, et le label « Bloqué » est retiré. Les deux stores gardent une copie du ticket par projet : celle qui attendait reste sous le premier projet jusqu'à ce que la réconciliation y mette fin. La nouvelle délégation est nécessaire : la réconciliation range bien le ticket sous son dépôt et retire le ticket en attente du premier projet (son blocage levé), mais une délégation qu'elle trouve n'a pas d'auteur signé, et les droits (ORC-186) ne lancent rien sans auteur.
-- Plusieurs labels `repo:` valides : le premier projet de la liste parmi eux gagne. Un ticket qui touche plusieurs dépôts se découpe en un sous-ticket par dépôt.
+- Team with a single project: nothing changes, the label is useless and ignored.
+- The label is only read for a ticket no project holds yet, at its delegation (or at a mention, a command). **Routing is sticky**: a delegated ticket, or one that already has a branch or a PR, stays under its project, whatever its labels say afterwards, and a project added to the team takes no existing ticket. Adding the label of another repository of the team to a ticket in progress changes nothing: Relais replies in a comment that the repository does not change midway. Without a branch or PR, you change it by stopping the work and removing the delegation, then, once the removal is seen by reconciliation (up to 5 minutes: no webhook reports it), delegating again; otherwise, a new ticket is needed. A `repo:` label that names no repository of the team is ignored. A reply or a stop on a ticket no project holds also follows its label, including when its delegation has not been processed yet: without a label, it receives the question; with a label, a reply goes to the copy of the ticket that opened its session.
+- Ticket without a `repo:` label naming one of the projects: the delegation is blocked (label « Bloqué ») and the Linear session asks for the label, with the list of choices. The ticket waits under the team's **first** project (order of `config.yaml`), even if it was blocked for another reason, which it replaces. A cancellation or a move to done ends the wait. While it waits, a reply, a mention, a command or a stop receives the same question, and nothing else (status, label) starts work: no work starts in a repository chosen by default.
+- To unblock: add the `repo:<id>` label, then delegate the ticket again (remove the agent then put it back): the work starts in that repository, including if it is the one where the ticket was waiting, and the « Bloqué » label is removed. Both stores keep a copy of the ticket per project: the one that was waiting stays under the first project until reconciliation ends it. The new delegation is necessary: reconciliation does file the ticket under its repository and removes the waiting ticket from the first project (its block lifted), but a delegation it finds has no signed author, and permissions (ORC-186) start nothing without an author.
+- Several valid `repo:` labels: the first project in the list among them wins. A ticket that touches several repositories is split into one sub-ticket per repository.
 
-Un seul projet tient un ticket, sur les deux stores (clé `(projet, ticket)`, ORC-316). Tant qu'un autre projet de la même équipe le tient, un événement routé sur une lecture périmée (un passage de la réconciliation qui a lu Linear avant une délégation signée, par exemple) est refusé s'il créerait une copie du ticket, ou s'il ferait tenir le ticket à la copie qui attendait ici. Le ticket reste intact, le refus est journalisé en erreur, et l'événement est mis de côté comme lettre morte, sans nouvel essai et sans bloquer le ticket. La session du ticket le dit (une activité `thought`, qui ne change pas l'état de la session), et la session d'où vient l'événement répond si c'en est une autre ; `factory run repair <ticket>` le montre. L'ignorer le clôt ; le rejouer le refuse de nouveau tant que l'autre projet tient le ticket. La ligne d'un projet qui n'est plus dans la configuration (renommé, par exemple) ne refuse rien : ses événements créent une copie sous le nouvel id, et l'ancienne ligne reste, sans lien avec elle.
+Only one project holds a ticket, across both stores (key `(project, ticket)`, ORC-316). While another project of the same team holds it, an event routed on a stale read (a reconciliation pass that read Linear before a signed delegation, for example) is refused if it would create a copy of the ticket, or if it would make the copy that was waiting here hold the ticket. The ticket stays intact, the refusal is logged as an error, and the event is set aside as a dead letter, with no retry and without blocking the ticket. The ticket's session says so (a `thought` activity, which does not change the session's state), and the session the event came from replies if it is a different one; `factory run repair <ticket>` shows it. Ignoring it closes it; replaying it refuses it again as long as the other project holds the ticket. The row of a project that is no longer in the configuration (renamed, for example) refuses nothing: its events create a copy under the new id, and the old row remains, unrelated to it.
 
-`relais plan` liste chaque ticket une fois, sous son projet, et marque « dépôt à préciser » ceux qui n'en nomment aucun.
+`relais plan` lists each ticket once, under its project, and marks « dépôt à préciser » those that name none.
 
-### Retirer un projet
+### Removing a project
 
-Supprimez son entrée de `config.yaml` et redémarrez. Les dossiers restants sous `workspaces/<id>/` se suppriment comme tout dossier.
+Delete its entry from `config.yaml` and restart. The remaining directories under `workspaces/<id>/` are deleted like any directory.
 
-## Worktrees par ticket
+## Per-ticket worktrees
 
-Chaque job déclare un type d'espace de travail (`workspace` dans [`workflow.md`](workflow.md#jobs)) :
+Each job declares a workspace type (`workspace` in [`workflow.md`](workflow.md#jobs)):
 
-| Type | Emplacement | Utilisé par (pack) |
+| Type | Location | Used by (pack) |
 |---|---|---|
-| `worktree` | `<RELAIS_HOME>/workspaces/<projet>/<ticket>/`, branche `relais/<ticket>-<titre>` | `dev`, `dev-feedback`, `fix-ci`, `review` |
-| `trunk-readonly` | `<RELAIS_HOME>/workspaces/<projet>/_trunk/<runId>/`, détaché sur `origin/<branche par défaut>` | `ask` (mode plan, lecture seule) |
-| `knowledge` | `<RELAIS_HOME>/workspaces/_kb/<runId>/`, branche `learn/<ticket>-<run>` | `learn`, `remember` |
+| `worktree` | `<RELAIS_HOME>/workspaces/<project>/<ticket>/`, branch `relais/<ticket>-<title>` | `dev`, `dev-feedback`, `fix-ci`, `review` |
+| `trunk-readonly` | `<RELAIS_HOME>/workspaces/<project>/_trunk/<runId>/`, detached on `origin/<default branch>` | `ask` (plan mode, read-only) |
+| `knowledge` | `<RELAIS_HOME>/workspaces/_kb/<runId>/`, branch `learn/<ticket>-<run>` | `learn`, `remember` |
 
-Ce ne sont pas des `git worktree` du dépôt : chacun est un dépôt à lui, avec son `.git` et sa copie des objets, pour que rien de ce qu'y écrit l'agent ne soit lu par le git de l'hôte ([sécurité](interface-et-securite.md), ORC-317). `git worktree list` ne les montre donc pas, et l'espace disque compte une copie de l'historique par ticket et par question.
+These are not `git worktree`s of the repository: each is a repository of its own, with its `.git` and its copy of the objects, so that nothing the agent writes there is read by the host's git ([security](interface-et-securite.md), ORC-317). `git worktree list` therefore does not show them, and disk space counts one copy of the history per ticket and per question.
 
-Cycle de vie d'un worktree de ticket :
+Lifecycle of a ticket worktree:
 
-1. **Création** au premier run : `git fetch origin`, puis un dépôt neuf sur la branche du ticket (réutilise une branche distante, à défaut locale, du même nom, sinon la crée depuis `origin/<branche par défaut>`). `.claude/` y est masqué dès ce moment, sauf `.claude/CLAUDE.md`, y compris pour le `setup`.
-2. **Setup** : les commandes `workspace.setup` (ex. `npm ci`) sont lancées une fois, dans l'ordre, via `bash -c`, dans le conteneur de la tentative quand `FACTORY_CONTAINER_CLI` est défini, sur l'hôte sinon. Si l'une échoue, le worktree est supprimé et le ticket bloqué (« Erreur au lancement : Le setup du worktree a échoué : <commande> ») ; le run suivant recommence de zéro.
-3. **Réutilisation** : les runs suivants du ticket (retours, CI, review) reprennent le même worktree, sans setup.
-4. **Nettoyage** : au merge de la PR (règle `pr.merged` → `do: cleanup`), le dossier est supprimé, son `.git` avec : un commit que l'agent n'avait pas poussé disparaît.
+1. **Creation** on the first run: `git fetch origin`, then a new repository on the ticket's branch (reuses a remote branch, failing that a local one, with the same name, otherwise creates it from `origin/<default branch>`). `.claude/` is masked there from that moment, except `.claude/CLAUDE.md`, including for the `setup`.
+2. **Setup**: the `workspace.setup` commands (e.g. `npm ci`) are run once, in order, via `bash -c`, in the attempt's container when `FACTORY_CONTAINER_CLI` is set, on the host otherwise. If one fails, the worktree is deleted and the ticket blocked (« Erreur au lancement : Le setup du worktree a échoué : <commande> »); the next run starts from scratch.
+3. **Reuse**: the ticket's following runs (feedback, CI, review) pick up the same worktree, without setup.
+4. **Cleanup**: when the PR is merged (rule `pr.merged` → `do: cleanup`), the directory is deleted, its `.git` with it: a commit the agent had not pushed disappears.
 
-Chaque question a son propre `_trunk/<runId>/`, créé pour elle et supprimé à sa fin.
+Each question has its own `_trunk/<runId>/`, created for it and deleted when it ends.
 
-Ce qui **n'est pas** nettoyé automatiquement (à faire à la main si l'espace disque compte) : les dossiers de tickets dont la PR a été fermée sans merge ou qui ont été abandonnés, les dossiers `_kb/<runId>` des runs `learn`/`remember`, et un `_trunk/<runId>` dont le démon a été tué en plein run. Ils se suppriment comme tout dossier, et git n'en garde aucune trace.
+What is **not** cleaned up automatically (to do by hand if disk space matters): directories of tickets whose PR was closed without merging or that were abandoned, the `_kb/<runId>` directories of `learn`/`remember` runs, and a `_trunk/<runId>` whose daemon was killed mid-run. They are deleted like any directory, and git keeps no trace of them.
 
-### `workspace.setup` et vérifications
+### `workspace.setup` and checks
 
-- `setup` : préparer un worktree neuf (dépendances, fichiers générés). Lancé à la création seulement.
-- `jobs.<job>.verify` : contrôles lancés par **Relais** (pas par l'agent) après chaque run réussi, 15 minutes maximum par commande. En cas d'échec, Relais relance le job avec la sortie d'erreur, puis bloque le ticket après `limits.verify_attempts` passes (4 par défaut, borne du préréglage), ou dès le troisième échec identique sur un worktree inchangé (cause « Boucle »).
+- `setup`: prepare a new worktree (dependencies, generated files). Run at creation only.
+- `jobs.<job>.verify`: checks run by **Relais** (not by the agent) after each successful run, 15 minutes maximum per command. On failure, Relais reruns the job with the error output, then blocks the ticket after `limits.verify_attempts` passes (4 by default, the preset's bound), or as soon as the third identical failure on an unchanged worktree (cause « Boucle »).
 
-Détails et exemples : [`workflow.md`](workflow.md#workspace).
+Details and examples: [`workflow.md`](workflow.md#workspace).
 
 ### Ports
 
-Chaque run de la file `dev` reçoit une variable `PORT` unique parmi les runs simultanés : `workspace.ports.base` (4200 par défaut) + numéro de place (0 à `parallel_sessions - 1`). Si vos tests ou votre serveur de dev lisent `PORT`, plusieurs tickets peuvent tourner en parallèle sans conflit. Les runs de la file `questions` n'en reçoivent pas.
+Each run in the `dev` queue receives a `PORT` variable unique among concurrent runs: `workspace.ports.base` (4200 by default) + slot number (0 to `parallel_sessions - 1`). If your tests or your dev server read `PORT`, several tickets can run in parallel without conflict. Runs in the `questions` queue do not receive one.
 
-## Base de connaissance partagée
+## Shared knowledge base
 
-Un dépôt git séparé, commun à tous les projets de l'instance, où les agents consignent ce qui mérite d'être retenu (conventions, pièges, décisions) :
+A separate git repository, shared by all projects of the instance, where agents record what is worth remembering (conventions, pitfalls, decisions):
 
 ```text
 relais-knowledge/
-├── INDEX.md        # une ligne par fiche
-└── notes/*.md      # une fiche par sujet
+├── INDEX.md        # one line per note
+└── notes/*.md      # one note per topic
 ```
 
-Comment il sert :
+How it is used:
 
-- **lecture** : à chaque run, le hook de démarrage du pack injecte `INDEX.md` (8 000 premiers caractères) dans le contexte de l'agent ; l'agent cherche dans les fiches avec `relais-agent kb search "<mots>"` ;
-- **mise à jour** : avant chaque run, Relais fait `git fetch origin` puis `git merge --ff-only` sur le clone ; le clone doit donc rester sur sa branche par défaut, sans commit local ;
-- **écriture** : après un merge (`learn`) ou sur `@relais retiens …` (`remember`), un agent écrit 0 à 3 fiches dans un worktree `learn/…` et ouvre une **PR** dans le dépôt de connaissance. Un humain la relit et la merge.
+- **reading**: on each run, the pack's startup hook injects `INDEX.md` (first 8,000 characters) into the agent's context; the agent searches the notes with `relais-agent kb search "<words>"`;
+- **updating**: before each run, Relais runs `git fetch origin` then `git merge --ff-only` on the clone; the clone must therefore stay on its default branch, with no local commits;
+- **writing**: after a merge (`learn`) or on `@relais retiens …` (`remember`), an agent writes 0 to 3 notes in a `learn/…` worktree and opens a **PR** in the knowledge repository. A human reviews and merges it.
 
-### Mise en place
+### Setup
 
-`relais init` propose « Créer un dépôt GitHub privé relais-knowledge » (`gh repo create relais-knowledge --private --add-readme --clone`), puis enregistre `knowledge.repoPath` dans `config.yaml`.
+`relais init` offers « Créer un dépôt GitHub privé relais-knowledge » (`gh repo create relais-knowledge --private --add-readme --clone`), then records `knowledge.repoPath` in `config.yaml`.
 
-> **À vérifier après `init`.** `init` enregistre `knowledge.repoPath: <RELAIS_HOME>/knowledge`, alors que `gh repo create --clone` lancé depuis `<RELAIS_HOME>` clone dans `<RELAIS_HOME>/relais-knowledge`. Contrôlez que `knowledge.repoPath` désigne bien un clone git contenant `INDEX.md` et `notes/` (`git -C <chemin> status`) ; sinon corrigez le chemin, ou faites la mise en place manuelle ci-dessous.
+> **Check after `init`.** `init` records `knowledge.repoPath: <RELAIS_HOME>/knowledge`, whereas `gh repo create --clone` run from `<RELAIS_HOME>` clones into `<RELAIS_HOME>/relais-knowledge`. Check that `knowledge.repoPath` does point to a git clone containing `INDEX.md` and `notes/` (`git -C <path> status`); otherwise fix the path, or do the manual setup below.
 
-Mise en place manuelle (ou dépôt existant) :
+Manual setup (or existing repository):
 
 ```bash
 gh repo create relais-knowledge --private --add-readme --clone
@@ -111,13 +111,13 @@ mkdir -p notes && touch notes/.gitkeep && printf '# Base de connaissance Relais\
 git add . && git commit -m "init knowledge base" && git push
 ```
 
-puis dans `config.yaml` :
+then in `config.yaml`:
 
 ```yaml
 knowledge:
   repoPath: /chemin/absolu/vers/relais-knowledge
 ```
 
-Sans `knowledge`, tout fonctionne sauf la mémoire : les jobs `learn` et `remember` sont ignorés (journal « skipped … no knowledge repo configured ») et `kb search` ne renvoie rien.
+Without `knowledge`, everything works except memory: the `learn` and `remember` jobs are skipped (log « skipped … no knowledge repo configured ») and `kb search` returns nothing.
 
-Il existe aussi une connaissance **par dépôt**, sans configuration : les skills lisent `CLAUDE.md` et `docs/agent/` du dépôt s'ils existent.
+There is also **per-repository** knowledge, with no configuration: the skills read the repository's `CLAUDE.md` and `docs/agent/` if they exist.

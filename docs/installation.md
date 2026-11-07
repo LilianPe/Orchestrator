@@ -1,73 +1,73 @@
 # Installation
 
-Cette page couvre l'installation de Relais sur une machine (poste de dev ou serveur sans Docker). Pour Docker, voir [`deploiement.md`](deploiement.md).
+This page covers installing Relais on a machine (dev workstation or server without Docker). For Docker, see [`deploiement.md`](deploiement.md).
 
-## Prérequis
+## Prerequisites
 
-| Outil | Version | Pourquoi |
+| Tool | Version | Why |
 |---|---|---|
-| Node.js | **24.22.1 ou plus** (`engines.node: ">=24.22.1"`) | Le démon utilise `node:sqlite`, intégré à Node 24 ; 24.22.1 est le minimum corrigé de la release de sécurité d'octobre 2026. |
-| npm | celui de Node 24 | Installation et build. |
-| git | récent (worktrees) | Un worktree git par ticket. |
-| GitHub CLI `gh` | **2.50 ou plus**, connecté (`gh auth login`) | Sans GitHub App, Relais lit par `gh pr …`, `gh api graphql` ; pousser et ouvrir les PR demande la GitHub App. Relais lit les checks d'une PR par `gh pr checks --json`, apparu en 2.50 : avant, il ne peut lire aucune PR ouverte (le `gh` des dépôts Ubuntu 24.04 est un 2.45, prenez celui de [cli.github.com](https://github.com/cli/cli/blob/trunk/docs/install_linux.md)). Voir [`github.md`](github.md). |
-| Claude Code CLI `claude` | connecté (abonnement ou `ANTHROPIC_API_KEY`) | Chaque run est un `claude -p … --output-format stream-json`. Il doit être dans le `PATH` du démon. |
-| bash | — | Les commandes `workspace.setup` et `verify` sont lancées via `bash -c`, sans profil de connexion : le `PATH` est celui du démon (ou de l'image du sandbox). Un outil que seul votre profil met sur le `PATH` (nvm, asdf, volta, `~/.local/bin`) doit être sur celui du démon : `Environment=PATH=…` dans l'unité systemd, par exemple. |
+| Node.js | **24.22.1 or later** (`engines.node: ">=24.22.1"`) | The daemon uses `node:sqlite`, built into Node 24; 24.22.1 is the patched minimum from the October 2026 security release. |
+| npm | the one shipped with Node 24 | Install and build. |
+| git | recent (worktrees) | One git worktree per ticket. |
+| GitHub CLI `gh` | **2.50 or later**, logged in (`gh auth login`) | Without a GitHub App, Relais reads through `gh pr …`, `gh api graphql`; pushing and opening PRs requires the GitHub App. Relais reads a PR's checks through `gh pr checks --json`, which appeared in 2.50: before that, it cannot read any open PR (the `gh` in the Ubuntu 24.04 repositories is 2.45, take the one from [cli.github.com](https://github.com/cli/cli/blob/trunk/docs/install_linux.md)). See [`github.md`](github.md). |
+| Claude Code CLI `claude` | logged in (subscription or `ANTHROPIC_API_KEY`) | Each run is a `claude -p … --output-format stream-json`. It must be on the daemon's `PATH`. |
+| bash | — | The `workspace.setup` and `verify` commands are run via `bash -c`, without a login profile: the `PATH` is the daemon's (or the sandbox image's). A tool that only your profile puts on the `PATH` (nvm, asdf, volta, `~/.local/bin`) must be on the daemon's: `Environment=PATH=…` in the systemd unit, for example. |
 
-Côté services : un espace Linear dont vous êtes admin (pour créer l'application OAuth, voir [`linear.md`](linear.md)) et un dépôt GitHub cloné localement.
+On the services side: a Linear workspace you are an admin of (to create the OAuth application, see [`linear.md`](linear.md)) and a GitHub repository cloned locally.
 
-La version exacte de Claude Code n'est pas figée par Relais. Elle doit accepter les options utilisées par le runner : `--output-format stream-json`, `--verbose`, `--session-id`, `--resume`, `--model`, `--plugin-dir`, `--settings`, `--setting-sources`, `--max-budget-usd` et `--permission-mode plan`. La recette ([`recette.md`](recette.md), « Points à vérifier ») liste ce qu'il faut contrôler sur la version installée.
+The exact Claude Code version is not pinned by Relais. It must accept the options used by the runner: `--output-format stream-json`, `--verbose`, `--session-id`, `--resume`, `--model`, `--plugin-dir`, `--settings`, `--setting-sources`, `--max-budget-usd` and `--permission-mode plan`. The acceptance run ([`recette.md`](recette.md), "Points to check") lists what to check on the installed version.
 
-## Installer Relais
+## Installing Relais
 
 ```bash
-git clone <url du dépôt relais> && cd relais
+git clone <relais repository url> && cd relais
 npm ci
-npm run build      # compile dist/ et l'interface web/dist
-npm link           # rend `relais` et `relais-agent` disponibles dans le PATH
+npm run build      # compiles dist/ and the web UI web/dist
+npm link           # makes `relais` and `relais-agent` available on the PATH
 ```
 
-`npm link` expose les deux exécutables déclarés dans `package.json` (`bin/relais`, `bin/relais-agent`). Ces scripts lancent `dist/src/cli/*.js` s'il existe, sinon les sources TypeScript via `tsx` : sans `npm run build`, la CLI fonctionne mais l'interface web n'est pas servie (le dossier `web/dist` manque).
+`npm link` exposes the two executables declared in `package.json` (`bin/relais`, `bin/relais-agent`). These scripts run `dist/src/cli/*.js` if it exists, otherwise the TypeScript sources via `tsx`: without `npm run build`, the CLI works but the web UI is not served (the `web/dist` directory is missing).
 
-Vérifier :
+Check:
 
 ```bash
-relais            # affiche l'aide (code de sortie 1, c'est normal)
+relais            # prints the help (exit code 1, this is normal)
 ```
 
-## Configurer un premier dépôt
+## Configuring a first repository
 
 ```bash
-cd <votre dépôt>
+cd <your repository>
 relais init
 ```
 
-L'assistant est décrit dans [`cli.md`](cli.md#relais-init) et la création de l'application Linear dans [`linear.md`](linear.md). Ensuite :
+The wizard is described in [`cli.md`](cli.md#relais-init) and creating the Linear application in [`linear.md`](linear.md). Then:
 
 ```bash
-relais up                 # http://localhost:4100, puis « Connecter Linear »
+relais up                 # http://localhost:4100, then « Connecter Linear »
 ```
 
-Pour découvrir l'interface sans Linear ni Claude : `relais up --fake-runner` (les runs sont simulés et ne coûtent rien).
+To explore the UI without Linear or Claude: `relais up --fake-runner` (runs are simulated and cost nothing).
 
-## Le répertoire home du démon
+## The daemon's home directory
 
-Tout l'état de l'instance vit dans **`RELAIS_HOME`**, par défaut `~/.relais` (`$HOME/.relais`). Changez-le avec la variable d'environnement `RELAIS_HOME` (le conteneur Docker utilise `/data`).
+All of the instance's state lives in **`RELAIS_HOME`**, by default `~/.relais` (`$HOME/.relais`). Change it with the `RELAIS_HOME` environment variable (the Docker container uses `/data`).
 
-| Chemin | Contenu | Sensible |
+| Path | Contents | Sensitive |
 |---|---|---|
-| `config.yaml` | Configuration de l'instance : port, hôte, projets, relais webhook, budget, base de connaissance. Voir [`configuration.md`](configuration.md). | non |
-| `secrets.json` | Identifiants et jetons Linear. Écrit en mode `0600`. Sous Windows, qui n'a pas de mode POSIX, le fichier hérite des droits (ACL) de son dossier : placez `FACTORY_HOME` dans un dossier que seul l'utilisateur de l'usine peut lire (le profil utilisateur l'est par défaut). | **oui** |
-| `run-settings.json` | Permissions Claude Code passées à chaque run (`--settings`), régénéré à chaque `relais up`. | non |
-| `relais.db` | Base SQLite : tickets suivis, événements, runs, coûts, file, minuteries. Absente quand `FACTORY_DATABASE_URL` désigne une base Postgres ([`configuration.md`](configuration.md#variables-denvironnement)). | oui (contient l'historique) |
-| `transcripts/<runId>.jsonl` | Sortie `stream-json` de chaque run, secrets masqués, supprimée 30 jours après sa dernière écriture ([`exploitation.md`](exploitation.md#journaux-transcripts-et-données)). | oui (code, contenu des tickets) |
-| `workspaces/<projet>/<ticket>/` | Worktree git de chaque ticket en cours. | — |
-| `workspaces/<projet>/_trunk/<runId>/` | Copie détachée de la branche principale, une par question en lecture seule, supprimée à sa fin. | — |
-| `workspaces/_kb/<runId>/` | Worktrees du dépôt de connaissance pour les runs `learn` / `remember`. | — |
-| `logs/` | Créé au démarrage mais pas encore utilisé : les journaux du démon sortent sur la sortie standard. | — |
-| `knowledge/` | Emplacement visé par `relais init` pour le dépôt de connaissance (voir [`projets-et-workspaces.md`](projets-et-workspaces.md#base-de-connaissance-partagée)). | — |
+| `config.yaml` | Instance configuration: port, host, projects, webhook relay, budget, knowledge base. See [`configuration.md`](configuration.md). | no |
+| `secrets.json` | Linear credentials and tokens. Written with mode `0600`. On Windows, which has no POSIX mode, the file inherits the permissions (ACL) of its directory: put `FACTORY_HOME` in a directory that only the factory's user can read (the user profile is, by default). | **yes** |
+| `run-settings.json` | Claude Code permissions passed to each run (`--settings`), regenerated on each `relais up`. | no |
+| `relais.db` | SQLite database: tracked tickets, events, runs, costs, queue, timers. Absent when `FACTORY_DATABASE_URL` points to a Postgres database ([`configuration.md`](configuration.md#environment-variables)). | yes (contains the history) |
+| `transcripts/<runId>.jsonl` | `stream-json` output of each run, secrets masked, deleted 30 days after its last write ([`exploitation.md`](exploitation.md#logs-transcripts-and-data)). | yes (code, ticket contents) |
+| `workspaces/<project>/<ticket>/` | Git worktree of each ticket in progress. | — |
+| `workspaces/<project>/_trunk/<runId>/` | Detached copy of the main branch, one per read-only question, deleted when it ends. | — |
+| `workspaces/_kb/<runId>/` | Worktrees of the knowledge repository for `learn` / `remember` runs. | — |
+| `logs/` | Created at startup but not used yet: the daemon's logs go to standard output. | — |
+| `knowledge/` | Location targeted by `relais init` for the knowledge repository (see [`projets-et-workspaces.md`](projets-et-workspaces.md#shared-knowledge-base)). | — |
 
-Sauvegarder une instance = sauvegarder `config.yaml`, `secrets.json` et `relais.db` (ou la base Postgres, avec `pg_dump`, quand `FACTORY_DATABASE_URL` est défini). Les worktrees se recréent à partir des branches poussées.
+Backing up an instance = backing up `config.yaml`, `secrets.json` and `relais.db` (or the Postgres database, with `pg_dump`, when `FACTORY_DATABASE_URL` is set). Worktrees are recreated from the pushed branches.
 
-## Désinstaller
+## Uninstalling
 
-`npm unlink -g relais` retire les commandes. Supprimer `RELAIS_HOME` efface l'état local (les branches, PR et tickets restent dans GitHub et Linear). Pensez à supprimer l'application OAuth dans Linear.
+`npm unlink -g relais` removes the commands. Deleting `RELAIS_HOME` erases the local state (branches, PRs and tickets remain in GitHub and Linear). Remember to delete the OAuth application in Linear.
