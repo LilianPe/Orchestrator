@@ -46,7 +46,7 @@ Relais was renamed in one go, with no change in behavior: only the names change.
 | variables `RELAIS_*` (`RELAIS_HOME`, `RELAIS_UI_PASSWORD`, `RELAIS_API`, `RELAIS_RUN_TOKEN`, `RELAIS_TICKET`, `RELAIS_KNOWLEDGE`, `RELAIS_ROOT`, `RELAIS_E2E`, `RELAIS_ISOLATION`) | `FACTORY_*`, same suffix; the old ones are no longer read, but are still stripped from the runs' environment, so that a secret forgotten in the daemon's shell does not reach the agents (transition filter, to be removed) |
 | `~/.relais`, `relais.db` | `~/.factory`, `factory.db` (no migration, see "Data") |
 | `.relais/workflow.yml` in the repository | `.factory/workflow.yml` |
-| plugin `relais`, skills `relais:<nom>` | plugin `factory`, skills `factory:<nom>` |
+| plugin `relais`, skills `relais:<name>` | plugin `factory`, skills `factory:<name>` |
 | branches `relais/<id>-<slug>` | branches `factory/<id>-<slug>` |
 | type `RelaisEvent`, `startRelais`, `relaisHome` | `FactoryEvent`, `startFactory`, `factoryHome` |
 | compose service `relais`, `relais-entrypoint`, `relais@localhost` | service `factoryd` (ORC-203), `factory-entrypoint`, `factory@localhost` |

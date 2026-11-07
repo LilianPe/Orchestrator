@@ -4,7 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { cli, PUBLIC_IMAGE } from './helpers.js';
 
 /**
- * The recipe of ORC-203 (docs/acceptance.md, critère 8): the whole stack on a real engine, under a project
+ * The recipe of ORC-203 (docs/acceptance.md, criterion 8): the whole stack on a real engine, under a project
  * name and ports of its own, then one runner created from inside `factoryd`, as the daemon creates them.
  * Skipped without FACTORY_COMPOSE=1, so no CI job runs it yet: it asks for an engine that can publish
  * ports and the two images already built, with FACTORY_RUNNER_IMAGE naming the runner's.
