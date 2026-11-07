@@ -43,7 +43,9 @@ interface EnvironmentDto {
   protection_rules?: { type: string; reviewers?: unknown[] }[];
 }
 
-const isFile = (v: unknown): v is ContentEntryDto => isRecord(v);
+/** A file of the Contents API: its content and encoding, both strings (a file too big has `encoding: 'none'`, rejected below). */
+const isFile = (v: unknown): v is ContentEntryDto & { content: string; encoding: string } =>
+  isRecord(v) && typeof v.content === 'string' && typeof v.encoding === 'string';
 
 const isDirEntry = (v: unknown): v is DirEntryDto =>
   isRecord(v) && typeof v.type === 'string' && typeof v.path === 'string' && (v.name === undefined || typeof v.name === 'string');
@@ -51,9 +53,12 @@ const isDirEntry = (v: unknown): v is DirEntryDto =>
 /** A listing of `.github/workflows`: read as "no workflow" when it is not one, `doctor` would skip the CI secret check (ORC-135). */
 const isDirListing = (v: unknown): v is DirEntryDto[] => Array.isArray(v) && v.every(isDirEntry);
 
-/** A rule that requires reviewers carries their list: without it, "no reviewer" would be a guess. */
+/** A reviewer of a rule, as GitHub lists it: an object with its type. Anything else is no proof of a human approval. */
+const isReviewer = (v: unknown): boolean => isRecord(v) && typeof v.type === 'string';
+
+/** A rule that requires reviewers carries their list: without it, "no reviewer" would be a guess, and "protected" a worse one. */
 const isProtectionRule = (r: unknown): r is { type: string; reviewers?: unknown[] } =>
-  isRecord(r) && typeof r.type === 'string' && (r.type !== 'required_reviewers' || Array.isArray(r.reviewers));
+  isRecord(r) && typeof r.type === 'string' && (r.type !== 'required_reviewers' || (Array.isArray(r.reviewers) && r.reviewers.every(isReviewer)));
 
 const isEnvironment = (v: unknown): v is EnvironmentDto =>
   isRecord(v) &&
@@ -89,7 +94,7 @@ export class GitHubAppApi extends GitHubAppAuth {
     const sources: WorkflowSource[] = [];
     for (const file of files) {
       const dto = await this.read('GET', `${contents}/${encodedPath(file.path)}`, token, isFile, 'a file');
-      if (typeof dto.content !== 'string' || dto.encoding !== 'base64') {
+      if (dto.encoding !== 'base64') {
         throw new Error(`GitHub : contenu illisible pour ${file.path} (fichier trop gros ou encodage inattendu)`);
       }
       sources.push({ path: file.path, content: Buffer.from(dto.content, 'base64').toString('utf8') });

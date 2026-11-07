@@ -185,6 +185,25 @@ describe('GitHubAppApi', () => {
     expect(gits).toBe(1);
   });
 
+  it('rejects a workflow file answered without its content, saying it is unreadable', async () => {
+    const api = makeApi([
+      tokenRoute(),
+      (url) => (url.pathname === '/repos/acme/app/contents/.github/workflows/ci.yml' ? { body: { message: 'ok' } } : undefined),
+      workflowsDir([{ type: 'file', name: 'ci.yml', path: '.github/workflows/ci.yml' }]),
+    ]);
+    await expect(api.listWorkflows('/repo')).rejects.toThrow(/workflows\/ci\.yml: unreadable answer, not a file: /);
+  });
+
+  it.each([
+    ['a reviewer that is null', [null]],
+    ['a reviewer without its type', [{}]],
+  ])('rejects, never reads "protected", required reviewers listing %s', async (_case, reviewers) => {
+    const body = { total_count: 1, environments: [{ name: 'prod', protection_rules: [{ type: 'required_reviewers', reviewers }] }] };
+    await expect(makeApi([tokenRoute(), environmentsRoute(() => body)]).listEnvironments('/repo')).rejects.toThrow(
+      /environments: unreadable answer, not a list of environments: /,
+    );
+  });
+
   it('surfaces API errors without leaking the installation token', async () => {
     const api = makeApi([
       tokenRoute(),
