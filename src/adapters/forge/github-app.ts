@@ -33,7 +33,7 @@ export const fetchHttp: HttpClient = async (url, init) => {
 /** GitHub rejects installation tokens older than one hour; cache them with a safety margin. */
 export const TOKEN_SAFETY_MARGIN_MS = 60_000;
 const ONE_HOUR_MS = 60 * 60_000;
-/** Pages of 100 read from one list, at most: GitHub keeps the check runs of a ref's last 1000 check suites. */
+/** Pages of 100 read from one list, at most: a bound against a server that ignores `page`, not a GitHub limit. */
 const MAX_PAGES = 10;
 
 const THREADS_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
@@ -555,18 +555,22 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
   /**
    * Every page of a list GitHub returns under `key`, 100 per page. An answer without that list, or with an entry
    * `isEntry` rejects, throws: read as empty, it would drop checks from the verdict, down to `none`, or hide a CI (ORC-273).
-   * Past `MAX_PAGES` it throws too: a server that ignores `page` would loop forever, under a lease renewed all along.
+   * A list longer than `MAX_PAGES` pages throws too: a server that ignores `page` would loop forever, under a lease
+   * renewed all along. After `MAX_PAGES` full pages, one more page is read: empty, the list is complete.
    */
   private async allPages<E>(path: string, key: string, what: string, isEntry: (e: unknown) => e is E, token: string): Promise<E[]> {
     const all: E[] = [];
-    for (let page = 1; page <= MAX_PAGES; page++) {
+    for (let page = 1; ; page++) {
       const url = `${path}?per_page=100&page=${page}`;
       const isPage = (d: unknown): d is Record<string, E[]> => isRecord(d) && Array.isArray(d[key]) && d[key].every(isEntry);
       const list = (await this.read('GET', url, token, isPage, what))[key]!;
+      if (page > MAX_PAGES) {
+        if (list.length === 0) return all;
+        throw new Error(`${apiLabel('GET', path)}: more than ${MAX_PAGES * 100} entries, never read as complete`);
+      }
       all.push(...list);
       if (list.length < 100) return all;
     }
-    throw new Error(`${apiLabel('GET', path)}: more than ${MAX_PAGES} pages of 100, never read as complete`);
   }
 
   private async checksFor(

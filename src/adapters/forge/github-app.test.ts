@@ -388,7 +388,7 @@ describe('GitHubAppForge.findPr', () => {
     }
   });
 
-  it('rejects, after ten pages, check runs a server answers the same whatever the page: never loops', async () => {
+  it('rejects, past ten pages, check runs a server answers the same whatever the page: never loops', async () => {
     const full = Array.from({ length: 100 }, (_, i) => ({ id: i, name: `job-${i}`, status: 'completed', conclusion: 'success' }));
     const { forge, calls } = makeForge([
       tokenRoute(42),
@@ -396,8 +396,23 @@ describe('GitHubAppForge.findPr', () => {
       (url) => (url.pathname === '/repos/acme/app/commits/abc123/check-runs' ? { body: { total_count: 100, check_runs: full } } : undefined),
       (url) => (url.pathname === '/repos/acme/app/commits/abc123/status' ? { body: { statuses: [] } } : undefined),
     ], { installationId: 42 });
-    await expect(forge.findPr('/repo', 'factory/REL-1')).rejects.toThrow(/check-runs: more than 10 pages of 100, never read as complete$/);
-    expect(calls.filter((c) => c.url.includes('/check-runs'))).toHaveLength(10);
+    await expect(forge.findPr('/repo', 'factory/REL-1')).rejects.toThrow(/check-runs: more than 1000 entries, never read as complete$/);
+    expect(calls.filter((c) => c.url.includes('/check-runs'))).toHaveLength(11);
+  });
+
+  it('reads a list of exactly ten full pages as complete, once the eleventh comes back empty', async () => {
+    const full = Array.from({ length: 100 }, (_, i) => ({ id: i, name: `job-${i}`, status: 'completed', conclusion: 'success' }));
+    const { forge, calls } = makeForge([
+      tokenRoute(42),
+      pullsRoute([openPr()]),
+      (url) =>
+        url.pathname === '/repos/acme/app/commits/abc123/check-runs'
+          ? { body: { total_count: 1000, check_runs: Number(url.searchParams.get('page')) <= 10 ? full : [] } }
+          : undefined,
+      (url) => (url.pathname === '/repos/acme/app/commits/abc123/status' ? { body: { statuses: [] } } : undefined),
+    ], { installationId: 42 });
+    expect(await forge.findPr('/repo', 'factory/REL-1')).toMatchObject({ checks: 'pass' });
+    expect(calls.filter((c) => c.url.includes('/check-runs'))).toHaveLength(11);
   });
 
   it('reports closed PRs', async () => {
