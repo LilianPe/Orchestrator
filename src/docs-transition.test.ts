@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const root = join(import.meta.dirname, '..');
@@ -20,7 +20,7 @@ const expand = (path: string): string[] => {
 
 const sourceFiles = readdirSync(join(root, 'src'), { recursive: true, withFileTypes: true })
   .filter((e) => e.isFile() && !e.name.startsWith('.') && !e.name.endsWith('.test.ts'))
-  .map((e) => join(e.parentPath, e.name).slice(root.length + 1));
+  .map((e) => join(e.parentPath, e.name).slice(root.length + 1).split(sep).join('/')); // doc rows use `/`, as git does
 
 // Inventory tables: the module cell is first, the status column is found by its header.
 const rows = new Map<string, string>();
