@@ -41,30 +41,30 @@ Without tokens, to try the interface: `relais up --fake-runner`.
 - [Installation](docs/installation.md): prerequisites, installation, the daemon's home directory.
 - [Linear](docs/linear.md): OAuth application, agent connection, webhooks, delegation, statuses and labels.
 - [GitHub](docs/github.md): account and permissions, PR polling, branches, branch protection, CI.
-- [Deployment](docs/deploiement.md): Docker, long-running service, clean shutdown and updates.
+- [Deployment](docs/deployment.md): Docker, long-running service, clean shutdown and updates.
 
 ### Configure
 - [Daemon configuration](docs/configuration.md): environment variables, `config.yaml`, `secrets.json`, `factory.yml` (secrets as `env:`), daily budget, ports, secrets.
 - [Customizing `workflow.yml`](docs/workflow.md): events, jobs, models, limits, checks, acceptance runs.
-- [Repository configuration (`.factory/config.yml`)](docs/configuration-depot.md): keys, what a configuration cannot remove from the baseline, `factory validate`.
+- [Repository configuration (`.factory/config.yml`)](docs/repository-configuration.md): keys, what a configuration cannot remove from the baseline, `factory validate`.
 - [The `factory/default` preset](docs/preset.md): typed steps, loop bounds, single counter for review + red CI, models and network per step, invariants checked at compile time, hash.
-- [Projects, worktrees and knowledge base](docs/projets-et-workspaces.md): multiple repositories, worktrees per ticket, `workspace.setup`, ports, cleanup, knowledge repository.
-- [Pack and skills](docs/pack-et-skills.md): job skills and method skills (TDD, debugging, verification, tiered review), always-on rules, permissions, customizing or creating a skill.
+- [Projects, worktrees and knowledge base](docs/projects-and-workspaces.md): multiple repositories, worktrees per ticket, `workspace.setup`, ports, cleanup, knowledge repository.
+- [Pack and skills](docs/pack-and-skills.md): job skills and method skills (TDD, debugging, verification, tiered review), always-on rules, permissions, customizing or creating a skill.
 
 ### Use
 - [Command line](docs/cli.md): `relais init|up|plan|status|pause|resume|stop` and `relais-agent`.
-- [Web interface and security](docs/interface-et-securite.md): interface, exposed routes, password, CSRF, known limitations.
+- [Web interface and security](docs/interface-and-security.md): interface, exposed routes, password, CSRF, known limitations.
 
 ### Operate
-- [Operations](docs/exploitation.md): limits reached, blocked tickets, pause, logs and transcripts, restarts, troubleshooting.
-- [Acceptance testing](docs/recette.md): end-to-end verification on a test Linear.
+- [Operations](docs/operations.md): limits reached, blocked tickets, pause, logs and transcripts, restarts, troubleshooting.
+- [Acceptance testing](docs/acceptance.md): end-to-end verification on a test Linear.
 
 ### Transition to the factory
 - [Starting point](docs/transition.md): reference commit and tag (`relais-v1-final`), live tests outside CI, module inventory with their status and the ticket that touches them.
 
 ### Testing
 - [Tests and harness](docs/tests.md): writing a scenario with the fake adapters, the simulated clock and the test preset.
-- [Idempotency of external effects](docs/idempotence.md): the table of the 7 effects (key, deduplication, behavior on duplicates), one test per row, what Linear, GitHub and Docker allow.
+- [Idempotency of external effects](docs/idempotency.md): the table of the 7 effects (key, deduplication, behavior on duplicates), one test per row, what Linear, GitHub and Docker allow.
 - [Port contracts](docs/ports/README.md): one sheet per port (methods, idempotency, errors, fencing) and its conformance suite, which every new adapter must pass.
 
 ### Decisions

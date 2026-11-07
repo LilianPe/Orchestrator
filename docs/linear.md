@@ -21,7 +21,7 @@ Create the application, then copy into `relais init`:
 
 They are saved in `<RELAIS_HOME>/secrets.json` (mode `0600`, see [`configuration.md`](configuration.md#secretsjson)).
 
-Linear may refuse a callback URL on `http://localhost`: in that case, temporarily expose Relais through a tunnel (`cloudflared tunnel --url http://localhost:4100`), put the tunnel URL in `publicUrl` in `config.yaml`, update the application's Callback URL and restart `relais up` for the duration of the connection. This point is to be checked during the acceptance run ([`recette.md`](recette.md)).
+Linear may refuse a callback URL on `http://localhost`: in that case, temporarily expose Relais through a tunnel (`cloudflared tunnel --url http://localhost:4100`), put the tunnel URL in `publicUrl` in `config.yaml`, update the application's Callback URL and restart `relais up` for the duration of the connection. This point is to be checked during the acceptance run ([`acceptance.md`](acceptance.md)).
 
 ## 2. Connect Linear (install the agent)
 
@@ -70,7 +70,7 @@ A smee channel is public: anyone who knows the URL can read the events on it (ti
 
 What it finds has no signed actor (`untrusted`): a rule that launches a run is refused by the matrix (see [Authorizations](#authorizations-who-can-do-what)), and a **caught-up move to done never merges**: only a signed human decides the merge. A ticket that Linear does not return because of a read error (network, Linear unavailable) is left as is until the next pass. Everything else only arrives by webhook and is lost if the webhook is missed or refused: replies in the session, `@relais` mentions and commands, stop requested in the session, and the changes on a ticket the factory does not track or that is no longer delegated.
 
-In a team with several repositories, the list is read only once per pass and each catch-up (status, cancellation, labels and their record) goes only to the project that has the ticket ([routing](projets-et-workspaces.md#one-team-several-repositories)). Another project that keeps a trace of it, because the ticket waited there for its repository, only sees its run stopped and its delegation removed.
+In a team with several repositories, the list is read only once per pass and each catch-up (status, cancellation, labels and their record) goes only to the project that has the ticket ([routing](projects-and-workspaces.md#one-team-several-repositories)). Another project that keeps a trace of it, because the ticket waited there for its repository, only sees its run stopped and its delegation removed.
 
 Its cadence is a **timer in the database** (ORC-185): each project's pseudo-ticket `_reconcile.<projet>` carries its `reconcile` timer, set at daemon startup if missing, in 5 minutes (connecting to Linear already runs a pass; a restart does not arm a second one), and re-armed on every pass. A failed pass is journaled without breaking the chain; the timer of a project removed from the configuration is deleted at startup. Each pass also rereads the PRs (see [GitHub](github.md)); what it catches up on enters the inbox like any event, with a deterministic id, so an event already received by webhook is not processed twice.
 
@@ -99,7 +99,7 @@ What triggers nothing: a *Done* with no signed actor (Linear's GitHub integratio
 
 After the PR is merged (detected by the GitHub poll): status *Done*, worktree deleted, `learn` run. The code run still in progress is stopped, and whatever was waiting (queue, reply in `debounce`) is dropped. After that, no more code work starts on the ticket: a reply in the ticket relaunches nothing (a reply is only kept). To resume the ticket, change its status to something other than *Done* (also when Relais could not move it to *Done*) or delegate it again.
 
-A team with several repositories: each ticket designates its own with a `repo:<id>` label ([`projets-et-workspaces.md`](projets-et-workspaces.md#one-team-several-repositories)).
+A team with several repositories: each ticket designates its own with a `repo:<id>` label ([`projects-and-workspaces.md`](projects-and-workspaces.md#one-team-several-repositories)).
 
 Only tickets **delegated** to the agent receive code work; a mention on a non-delegated ticket only gets an answer. All this behavior is changed in `.relais/workflow.yml`: [`workflow.md`](workflow.md). The checks before taking a ticket (description of at least 30 characters, no existing branch…) are described in [`workflow.md`](workflow.md#tracker); `relais plan` applies them as a dry run.
 
@@ -132,7 +132,7 @@ Tickets already started stay on the pinned version of their workflow: they keep 
 - **delegation**: the comment « Bien reçu. » on the ticket (a comment and not a reaction, until ORC-140 has decided), the same text as a `thought` activity in the session (Linear marks a session as unresponsive if no activity arrives within 10 s; a plan alone does not count), then the plan if the delegation launches a run;
 - **mention, command**: the `thought` activity in the session opened under the comment, neither comment nor plan. `/refreeze` has no acknowledgement: its reply (done, nothing to refreeze, or refusal), written by the same decision, stands in for it.
 
-The acknowledgement does not hold up the work: a comment or an activity that Linear refuses is journaled, without a retry and without blocking the ticket; the run starts anyway. The webhook → acknowledgement delay is kept on the inbox row (`acked_at`, time of the first visible write, before the plan; nothing if none succeeded): it is `signOfLifeMs` in the [measures](exploitation.md). **The 10 s are not guaranteed in two cases**, which this measure shows: the acknowledgement comes after role resolution (Linear and GitHub, cached 60 s; if one of them does not respond, the event waits), and after work already in progress on the same ticket, because the outbox executes a ticket's effects in order (a mention during the worktree preparation of a `start_run`, an effect waiting for its retry). A new ticket has nothing ahead of it. A refusal (ORC-186) or an already active run only receives its reply in the session: nothing was taken. A delegation found by reconciliation is not acknowledged.
+The acknowledgement does not hold up the work: a comment or an activity that Linear refuses is journaled, without a retry and without blocking the ticket; the run starts anyway. The webhook → acknowledgement delay is kept on the inbox row (`acked_at`, time of the first visible write, before the plan; nothing if none succeeded): it is `signOfLifeMs` in the [measures](operations.md). **The 10 s are not guaranteed in two cases**, which this measure shows: the acknowledgement comes after role resolution (Linear and GitHub, cached 60 s; if one of them does not respond, the event waits), and after work already in progress on the same ticket, because the outbox executes a ticket's effects in order (a mention during the worktree preparation of a `start_run`, an effect waiting for its retry). A new ticket has nothing ahead of it. A refusal (ORC-186) or an already active run only receives its reply in the session: nothing was taken. A delegation found by reconciliation is not acknowledged.
 
 ### Human messages during a run
 
@@ -140,7 +140,7 @@ A message (reply in a session, mention, command) goes through ingestion, then th
 
 - **On arrival.** The known secret shapes from transcripts (`maskTranscriptLine`) are masked before the journal; its author is warned, because the message stays in Linear. Masking only sees those shapes: neither the values of the factory's secrets, nor gitleaks (which only reads commits, in a sandbox). No injection analysis exists: the message remains data, marked by its taint.
 - **Classification, without a model** (`classifyMessage`, journaled with the event: a change in the rules does not change a past decision). `/status` and `/stop` are commands. A `?` outside a URL makes a question. A message that starts with an action verb (`corrige`, `change`, `arrête`, `reprends`…) is an instruction. Everything else, mentions included, is ambiguous, hence a question: the worst case is a useless answer. The final rules and the small model are undecided, in ORC-141.
-- **Sign of life.** An acknowledgement through the outbox as soon as the decision is made, written in the session, the `signOfLifeMs` of the [measures](exploitation.md).
+- **Sign of life.** An acknowledgement through the outbox as soon as the decision is made, written in the session, the `signOfLifeMs` of the [measures](operations.md).
 - **`humanInbox`.** Every accepted message enters it, whatever its classification; a message refused by the matrix receives its refusal and does not enter it. It leaves when an attempt that reads it is written, or when the ticket is canceled; beyond 50, the oldest of those already answered (question from a thread, command) leaves too, and stays in the journal. It keeps its event's taint: a run that empties the inbox has the sensitive paths protected as soon as it contains an untrusted message, including a command, even though it is not given to it.
 - **Classification adds, it does not divert.** A question launches `ask` right away (ORC-182 will extend this), and remains for the agent: a misclassified message is never lost. In a question thread, a question alone does not call the agent; an instruction does.
 - **The step boundary.** The launch of a run of the implementing agent (`tests`, `dev`, resumption after a failed verification, `fix-ci`, `dev-feedback`) carries all pending messages, in its prompt and in its record: relaunching a cut attempt rereads the same thing. A `review` does not read them. The 3-minute batching remains, and launches nothing while a run, a verification or a pending job is in progress: their end is what hands over the messages. When the work is finished with no next step (move to *Human Review*), or with no work in progress at all once the 3 minutes have passed, the agent is resumed on them by `dev-feedback`.
@@ -198,8 +198,8 @@ As long as a ticket is **blocked** (the factory is waiting for a reply), the `Bl
 
 ## 6. Teams and projects
 
-A Relais project = one repository + **one** Linear team (`linearTeamKey` in `config.yaml`). A single instance can track several teams (one project each); see [`projets-et-workspaces.md`](projets-et-workspaces.md). Webhooks from an unconfigured team are ignored.
+A Relais project = one repository + **one** Linear team (`linearTeamKey` in `config.yaml`). A single instance can track several teams (one project each); see [`projects-and-workspaces.md`](projects-and-workspaces.md). Webhooks from an unconfigured team are ignored.
 
 ## Troubleshooting
 
-See [`exploitation.md`](exploitation.md#troubleshooting): rejected webhooks, refused callback, duplicate statuses, reconnection.
+See [`operations.md`](operations.md#troubleshooting): rejected webhooks, refused callback, duplicate statuses, reconnection.

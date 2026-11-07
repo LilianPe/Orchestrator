@@ -1,6 +1,6 @@
 # Installation
 
-This page covers installing Relais on a machine (dev workstation or server without Docker). For Docker, see [`deploiement.md`](deploiement.md).
+This page covers installing Relais on a machine (dev workstation or server without Docker). For Docker, see [`deployment.md`](deployment.md).
 
 ## Prerequisites
 
@@ -15,7 +15,7 @@ This page covers installing Relais on a machine (dev workstation or server witho
 
 On the services side: a Linear workspace you are an admin of (to create the OAuth application, see [`linear.md`](linear.md)) and a GitHub repository cloned locally.
 
-The exact Claude Code version is not pinned by Relais. It must accept the options used by the runner: `--output-format stream-json`, `--verbose`, `--session-id`, `--resume`, `--model`, `--plugin-dir`, `--settings`, `--setting-sources`, `--max-budget-usd` and `--permission-mode plan`. The acceptance run ([`recette.md`](recette.md), "Points to check") lists what to check on the installed version.
+The exact Claude Code version is not pinned by Relais. It must accept the options used by the runner: `--output-format stream-json`, `--verbose`, `--session-id`, `--resume`, `--model`, `--plugin-dir`, `--settings`, `--setting-sources`, `--max-budget-usd` and `--permission-mode plan`. The acceptance run ([`acceptance.md`](acceptance.md), "Points to check") lists what to check on the installed version.
 
 ## Installing Relais
 
@@ -59,12 +59,12 @@ All of the instance's state lives in **`RELAIS_HOME`**, by default `~/.relais` (
 | `secrets.json` | Linear credentials and tokens. Written with mode `0600`. On Windows, which has no POSIX mode, the file inherits the permissions (ACL) of its directory: put `FACTORY_HOME` in a directory that only the factory's user can read (the user profile is, by default). | **yes** |
 | `run-settings.json` | Claude Code permissions passed to each run (`--settings`), regenerated on each `relais up`. | no |
 | `relais.db` | SQLite database: tracked tickets, events, runs, costs, queue, timers. Absent when `FACTORY_DATABASE_URL` points to a Postgres database ([`configuration.md`](configuration.md#environment-variables)). | yes (contains the history) |
-| `transcripts/<runId>.jsonl` | `stream-json` output of each run, secrets masked, deleted 30 days after its last write ([`exploitation.md`](exploitation.md#logs-transcripts-and-data)). | yes (code, ticket contents) |
+| `transcripts/<runId>.jsonl` | `stream-json` output of each run, secrets masked, deleted 30 days after its last write ([`operations.md`](operations.md#logs-transcripts-and-data)). | yes (code, ticket contents) |
 | `workspaces/<project>/<ticket>/` | Git worktree of each ticket in progress. | — |
 | `workspaces/<project>/_trunk/<runId>/` | Detached copy of the main branch, one per read-only question, deleted when it ends. | — |
 | `workspaces/_kb/<runId>/` | Worktrees of the knowledge repository for `learn` / `remember` runs. | — |
 | `logs/` | Created at startup but not used yet: the daemon's logs go to standard output. | — |
-| `knowledge/` | Location targeted by `relais init` for the knowledge repository (see [`projets-et-workspaces.md`](projets-et-workspaces.md#shared-knowledge-base)). | — |
+| `knowledge/` | Location targeted by `relais init` for the knowledge repository (see [`projects-and-workspaces.md`](projects-and-workspaces.md#shared-knowledge-base)). | — |
 
 Backing up an instance = backing up `config.yaml`, `secrets.json` and `relais.db` (or the Postgres database, with `pg_dump`, when `FACTORY_DATABASE_URL` is set). Worktrees are recreated from the pushed branches.
 

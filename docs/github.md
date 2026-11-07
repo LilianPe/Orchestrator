@@ -62,7 +62,7 @@ A value in `config.yaml` takes precedence over the environment variable. If only
 Without a `github` section, the daemon uses `GhCliForge` and the `gh` CLI, as before:
 
 - **Workstation**: `gh auth login`, and git configured to read `origin` (SSH or HTTPS). Check `gh auth status` and `git fetch` from the repository.
-- **Docker**: `GH_TOKEN` variable; at startup, the container runs `gh auth setup-git` so that git reads over HTTPS with this token. Mounted repositories must therefore have an **HTTPS** remote. See [`deploiement.md`](deploiement.md).
+- **Docker**: `GH_TOKEN` variable; at startup, the container runs `gh auth setup-git` so that git reads over HTTPS with this token. Mounted repositories must therefore have an **HTTPS** remote. See [`deployment.md`](deployment.md).
 
 Startup explicitly logs `forge GitHub : CLI gh (repli de migration…)`. This fallback only reads: **without a GitHub App, the factory neither publishes nor merges**, and a verified ticket is blocked with that reason. It will go away with ORC-181.
 
@@ -165,7 +165,7 @@ Each ticket works on `relais/<ticket>-<title-slug>` (e.g. `relais/rel-12-export-
 
 ## Branch protection (strongly recommended)
 
-The pack forbids agents from `gh pr merge` and any push ([`pack-et-skills.md`](pack-et-skills.md#permissions)), but these refusals are a **first barrier**: they depend on Claude Code, and an agent that runs code can bypass them. It is GitHub that guarantees only humans merge. On the default branch of each repository:
+The pack forbids agents from `gh pr merge` and any push ([`pack-and-skills.md`](pack-and-skills.md#permissions)), but these refusals are a **first barrier**: they depend on Claude Code, and an agent that runs code can bypass them. It is GitHub that guarantees only humans merge. On the default branch of each repository:
 
 - **Require a pull request before merging** (with at least one approval if your team reviews);
 - **Block force pushes** and forbid deletion;

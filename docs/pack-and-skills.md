@@ -14,7 +14,7 @@ packs/standard/
 └── skills/<name>/SKILL.md       # job skills (one per run type) and method skills
 ```
 
-Each run starts Claude Code with `--plugin-dir packs/standard` (skills become `/relais:<name>`), `--settings <RELAIS_HOME>/run-settings.json` `--setting-sources ""` and `--strict-mcp-config` (ORC-284, options measured by ORC-128). No Claude Code setting comes from anywhere but the factory: neither the user's (`~/.claude/settings.json`), nor the repository's (`.claude/settings.json`, `.claude/settings.local.json`, `.mcp.json`, skills, agents and commands in `.claude/`). The worktree's `.claude/` is removed before each session ([`interface-et-securite.md`](interface-et-securite.md)).
+Each run starts Claude Code with `--plugin-dir packs/standard` (skills become `/relais:<name>`), `--settings <RELAIS_HOME>/run-settings.json` `--setting-sources ""` and `--strict-mcp-config` (ORC-284, options measured by ORC-128). No Claude Code setting comes from anywhere but the factory: neither the user's (`~/.claude/settings.json`), nor the repository's (`.claude/settings.json`, `.claude/settings.local.json`, `.mcp.json`, skills, agents and commands in `.claude/`). The worktree's `.claude/` is removed before each session ([`interface-and-security.md`](interface-and-security.md)).
 
 Behavior (which skill, when, with which model) is configured in `.relais/workflow.yml`: see [`workflow.md`](workflow.md).
 
@@ -80,9 +80,9 @@ Full text: `packs/standard/skills/<name>/SKILL.md`.
 
 At startup, Relais extends these refusals for the **real** `RELAIS_HOME` (even outside `~/.relais`, for example `/data` in Docker) and writes the result to `<RELAIS_HOME>/run-settings.json`: reading/editing `secrets.json`, reading `relais.db*`, `transcripts/**`, `logs/**`, and any command that mentions `secrets.json` or `relais.db`. See [`configuration.md`](configuration.md#what-does-not-leave-the-daemon).
 
-These rules are a first barrier, not a guarantee: protect the default branch on the GitHub side ([`github.md`](github.md#branch-protection-strongly-recommended)). The acceptance run checks that the installed Claude Code version does apply wildcards in the middle of a pattern ([`recette.md`](recette.md)).
+These rules are a first barrier, not a guarantee: protect the default branch on the GitHub side ([`github.md`](github.md#branch-protection-strongly-recommended)). The acceptance run checks that the installed Claude Code version does apply wildcards in the middle of a pattern ([`acceptance.md`](acceptance.md)).
 
-`trunk-readonly` runs (questions) additionally run with `--permission-mode plan`. Known limitation, not measured: plan mode may refuse an MCP tool that is not read-only despite the `allow`, hence `submit_result` and `ask` in these runs; their answer then remains their last message (`post: reply`). To be checked on the installed version ([`recette.md`](recette.md)).
+`trunk-readonly` runs (questions) additionally run with `--permission-mode plan`. Known limitation, not measured: plan mode may refuse an MCP tool that is not read-only despite the `allow`, hence `submit_result` and `ask` in these runs; their answer then remains their last message (`post: reply`). To be checked on the installed version ([`acceptance.md`](acceptance.md)).
 
 ### PreToolUse hook and refusal log
 

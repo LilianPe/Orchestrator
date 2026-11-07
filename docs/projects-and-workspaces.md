@@ -56,7 +56,7 @@ Each job declares a workspace type (`workspace` in [`workflow.md`](workflow.md#j
 | `trunk-readonly` | `<RELAIS_HOME>/workspaces/<project>/_trunk/<runId>/`, detached on `origin/<default branch>` | `ask` (plan mode, read-only) |
 | `knowledge` | `<RELAIS_HOME>/workspaces/_kb/<runId>/`, branch `learn/<ticket>-<run>` | `learn`, `remember` |
 
-These are not `git worktree`s of the repository: each is a repository of its own, with its `.git` and its copy of the objects, so that nothing the agent writes there is read by the host's git ([security](interface-et-securite.md), ORC-317). `git worktree list` therefore does not show them, and disk space counts one copy of the history per ticket and per question.
+These are not `git worktree`s of the repository: each is a repository of its own, with its `.git` and its copy of the objects, so that nothing the agent writes there is read by the host's git ([security](interface-and-security.md), ORC-317). `git worktree list` therefore does not show them, and disk space counts one copy of the history per ticket and per question.
 
 Lifecycle of a ticket worktree:
 

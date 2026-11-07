@@ -30,7 +30,7 @@ Run it **in the repository** to entrust to Relais (otherwise it asks for the rep
 2. Adds (or replaces) the project in `config.yaml`: `id` = name of the repository directory (slug, 30 characters max), `repoPath` = git root, `linearTeamKey`.
 3. Without `publicUrl` or a configured relay, creates a **smee.io channel** and records it in `relay`.
 4. Prints the exact values to enter in Linear (callback URL, webhook URL, categories) then asks for **Client ID**, **Client secret** and **Webhook signing secret** (asked again as long as the answer is empty), recorded in `secrets.json`. Details: [`linear.md`](linear.md).
-5. If no knowledge base is configured, offers to create a private GitHub repository `relais-knowledge` (`gh repo create`). See [`projets-et-workspaces.md`](projets-et-workspaces.md#shared-knowledge-base).
+5. If no knowledge base is configured, offers to create a private GitHub repository `relais-knowledge` (`gh repo create`). See [`projects-and-workspaces.md`](projects-and-workspaces.md#shared-knowledge-base).
 6. If `.relais/workflow.yml` does not exist, creates it: asks for the verification commands (suggested from the `lint`, `typecheck`, `test` scripts in `package.json`, separated by `;`) and sets `workspace.setup: ["npm ci"]` if the repository has a `package-lock.json`. Exact contents: [`workflow.md`](workflow.md#1-role-of-the-file-and-merging-with-the-pack).
 7. Writes `config.yaml` and prints the next steps: `relais up`, « Connecter Linear », delegate a ticket.
 
@@ -41,7 +41,7 @@ Run it **in the repository** to entrust to Relais (otherwise it asks for the rep
 Starts the daemon in the foreground: HTTP server (UI, API, webhooks, OAuth), smee relay, timers, Linear and GitHub reconciliation every 5 minutes through a database timer (PR polling every 30 s if GitHub webhooks are refused), queue re-evaluation every minute. Prints `Relais tourne : <url>`.
 
 - Writes `<RELAIS_HOME>/run-settings.json` (see [`configuration.md`](configuration.md#what-does-not-leave-the-daemon)).
-- Resumes whatever a previous shutdown or crash cut off, without human intervention: reattaches to the containers still alive, relaunches the other steps (see [`exploitation.md`](exploitation.md#shutdown-restart-and-interrupted-runs)).
+- Resumes whatever a previous shutdown or crash cut off, without human intervention: reattaches to the containers still alive, relaunches the other steps (see [`operations.md`](operations.md#shutdown-restart-and-interrupted-runs)).
 - If Linear is not connected, logs `Linear non connecté : ouvrez <url>/oauth/start`.
 - If the webhook secret is missing from `secrets.json`, logs a warning: all webhooks will be refused (401) until it is filled in.
 - Refuses to start if `host` is not loopback and `RELAIS_UI_PASSWORD` is empty.
@@ -52,7 +52,7 @@ Starts the daemon in the foreground: HTTP server (UI, API, webhooks, OAuth), sme
 
 ### `factory validate [repo]`
 
-Checks the repository's `.factory/config.yml` (the current repository by default) against the baseline: a configuration adds checks or prohibitions, it never removes any. Exits 1 with one line per violation (unknown key, negative pattern, widened `max_diff`, `full` network), 0 otherwise or without a file. Does not need an instance. See [repository configuration](configuration-depot.md) (ORC-209).
+Checks the repository's `.factory/config.yml` (the current repository by default) against the baseline: a configuration adds checks or prohibitions, it never removes any. Exits 1 with one line per violation (unknown key, negative pattern, widened `max_diff`, `full` network), 0 otherwise or without a file. Does not need an instance. See [repository configuration](repository-configuration.md) (ORC-209).
 
 ### `factory doctor [repo]`
 
@@ -132,7 +132,7 @@ $ factory run repair REL-12 replay
 - `skip`: ignore it (refused for a run or verification result: use `force`);
 - `force`: record its facts without its decision (no effect).
 
-The ticket is unblocked and the repair logged (`dead_letter.repaired` event, with the user's name). The command writes to the instance's database (SQLite, or Postgres with `FACTORY_DATABASE_URL`): the daemon does not need to be running, it decides the repair on its next pass. An event without a ticket is designated by its id in place of `<ID>`. Details: [`exploitation.md`](exploitation.md#dead-letter-and-factory-run-repair-orc-175).
+The ticket is unblocked and the repair logged (`dead_letter.repaired` event, with the user's name). The command writes to the instance's database (SQLite, or Postgres with `FACTORY_DATABASE_URL`): the daemon does not need to be running, it decides the repair on its next pass. An event without a ticket is designated by its id in place of `<ID>`. Details: [`operations.md`](operations.md#dead-letter-and-factory-run-repair-orc-175).
 
 ## `relais-agent` (agent side)
 
@@ -145,7 +145,7 @@ During a run, Relais adds Relais's `bin/` to the `PATH` and sets `RELAIS_API` an
 | `relais-agent kb search <words>` | Searches `notes/*.md` in the knowledge base (words of 3 letters or more, ignoring accents and case). Prints `file:line: text`. |
 | `relais-agent ask <question>` | Posts the question in the ticket's block comment (ORC-196) and **blocks** the ticket. The agent must end its turn; the human reply restarts the work. |
 
-Launched outside a run, it answers `relais-agent doit être lancé par Relais (RELAIS_API et RELAIS_RUN_TOKEN manquants).` (code 2). The token is only accepted while the run is in progress. The pack allows `Bash(relais-agent:*)` and the startup hook reminds the agent of these commands ([`pack-et-skills.md`](pack-et-skills.md)).
+Launched outside a run, it answers `relais-agent doit être lancé par Relais (RELAIS_API et RELAIS_RUN_TOKEN manquants).` (code 2). The token is only accepted while the run is in progress. The pack allows `Bash(relais-agent:*)` and the startup hook reminds the agent of these commands ([`pack-and-skills.md`](pack-and-skills.md)).
 
 ## Development scripts
 

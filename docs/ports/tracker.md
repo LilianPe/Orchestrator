@@ -25,7 +25,7 @@ Ticket tracking: read a ticket, move it, label it, comment, and talk in its agen
 
 ## Idempotence
 
-The writes that can be replayed without harm are those that write a final state: `moveTo`, `setLabels`, `addExternalUrl` and `setSessionPlan`. `comment` and `activity` for an outbox effect are keyed by the effect id (ORC-162): the engine looks with `findComment` / `findActivity` before writing, and a replay writes nothing. Without `effectId` (resume notices, replies outside the outbox, relaying a run's stream), or for `ensureSession`, a replay writes a duplicate. The details, and what the Linear API allows, are in [Idempotence of external effects](../idempotence.md); these cases are tested by `test/scenarios/idempotency.test.ts` and `linear/tracker.test.ts`, not yet by the conformance suite (ORC-189).
+The writes that can be replayed without harm are those that write a final state: `moveTo`, `setLabels`, `addExternalUrl` and `setSessionPlan`. `comment` and `activity` for an outbox effect are keyed by the effect id (ORC-162): the engine looks with `findComment` / `findActivity` before writing, and a replay writes nothing. Without `effectId` (resume notices, replies outside the outbox, relaying a run's stream), or for `ensureSession`, a replay writes a duplicate. The details, and what the Linear API allows, are in [Idempotence of external effects](../idempotency.md); these cases are tested by `test/scenarios/idempotency.test.ts` and `linear/tracker.test.ts`, not yet by the conformance suite (ORC-189).
 
 ## Fencing
 

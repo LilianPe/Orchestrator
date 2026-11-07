@@ -122,7 +122,7 @@ docker compose exec factoryd node dist/src/cli/factory.js pause
 docker compose logs -f factoryd
 ```
 
-Acceptance run: [`recette.md`](recette.md#8-docker-criterion-8).
+Acceptance run: [`acceptance.md`](acceptance.md#8-docker-criterion-8).
 
 ## What is only proven on the server
 
@@ -140,7 +140,7 @@ The stack ran once under Docker Desktop, which is not rootless. These points rem
 
 `SIGTERM` (`docker compose stop`) triggers a clean shutdown: timers, PR polling and reconciliation are stopped; each run in progress receives SIGINT (SIGKILL after 10 s) and is recorded as **interrupted**; the daemon waits for these runs to end, closes the SSE connections and the database. `compose.yaml` gives it 30 s (`stop_grace_period`).
 
-On the next start, Relais resumes on its own whatever was cut off (by a shutdown or a crash): no ticket is blocked because of it; details in [`exploitation.md`](exploitation.md#shutdown-restart-and-interrupted-runs). Queued requests, timers (grouped feedback) and the pause state are kept in `relais.db`.
+On the next start, Relais resumes on its own whatever was cut off (by a shutdown or a crash): no ticket is blocked because of it; details in [`operations.md`](operations.md#shutdown-restart-and-interrupted-runs). Queued requests, timers (grouped feedback) and the pause state are kept in `relais.db`.
 
 Under compose, this state is in Postgres, not in a file.
 

@@ -32,7 +32,7 @@ On another ticket: `@relais où est géré X ?` → read-only answer. `@relais r
 Delegate a ticket, during the run click "Send stop request" in Linear. Expected in < 10 s: « Arrêté… », ticket blocked, run `stopped`.
 
 ## 8. Docker (criterion 8)
-On the server, images built ([`deploiement.md`](deploiement.md#first-start)), as an automated test, under its own project name and ports:
+On the server, images built ([`deployment.md`](deployment.md#first-start)), as an automated test, under its own project name and ports:
 
 ```bash
 FACTORY_ISOLATION=1 FACTORY_COMPOSE=1 FACTORY_CONTAINER_CLI=docker FACTORY_RUNNER_IMAGE=<image> \
