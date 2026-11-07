@@ -591,6 +591,37 @@ describe('GitHubAppForge.mergePr (ORC-148)', () => {
     expect(calls.some((c) => c.method === 'PUT')).toBe(false);
   });
 
+  it.each([
+    ['without its list', () => ({ body: { total_count: 1 } })],
+    ['with an entry without a state', () => ({ body: { total_count: 1, workflows: [{ path: '.github/workflows/ci.yml' }] } })],
+  ])('rejects, never merges, when GitHub answers the workflows %s: no proof of a repository without CI', async (_case, answer) => {
+    const unlisted: Route = (url) => (url.pathname === '/repos/acme/app/actions/workflows' ? answer() : undefined);
+    const { forge, calls } = makeForge([tokenRoute(42), pullRoute(withBase), repoRoute(), ...headChecks([]), unlisted, ...baseChecks([]), mergeRoute(200, { merged: true })], { installationId: 42 });
+    await expect(forge.mergePr('/repo', 7, 'abc123', { unchecked: true })).rejects.toThrow(/actions\/workflows: unreadable answer, not a list of workflows: /);
+    expect(calls.some((c) => c.method === 'PUT')).toBe(false);
+  });
+
+  it('reads every page of workflows: an active one past the first hundred is a CI', async () => {
+    const paged: Route = (url) =>
+      url.pathname === '/repos/acme/app/actions/workflows'
+        ? { body: { total_count: 101, workflows: url.searchParams.get('page') === '2' ? [{ state: 'active', path: '.github/workflows/ci.yml' }] : Array.from({ length: 100 }, (_, i) => ({ state: 'disabled_manually', path: `.github/workflows/w${i}.yml` })) } }
+        : undefined;
+    const { forge, calls } = makeForge([tokenRoute(42), pullRoute(withBase), repoRoute(), ...headChecks([]), paged, ...baseChecks([]), mergeRoute(200, { merged: true })], { installationId: 42 });
+    expect(await forge.mergePr('/repo', 7, 'abc123', { unchecked: true })).toEqual({ merged: false, reason: 'checks_missing' });
+    expect(calls.some((c) => c.method === 'PUT')).toBe(false);
+  });
+
+  it.each([
+    ['a PR without its head', [pullRoute({ number: 7, state: 'open', merged_at: null }), repoRoute()], /pulls\/7: unreadable answer, not a pull request: /],
+    ['repository settings that are not an object', [pullRoute(openPr()), (url: URL, init: HttpRequest) => (url.pathname === '/repos/acme/app' && init.method === 'GET' ? { raw: '' } : undefined)], /GET \/repos\/acme\/app: unreadable answer, not repository settings: undefined$/],
+  ])('rejects, saying it is unreadable, never merges, on %s: never a raw TypeError', async (_case, routes, message) => {
+    const { forge, calls } = makeForge([tokenRoute(42), ...(routes as Route[]), mergeRoute(200, { merged: true })], { installationId: 42 });
+    const err = await forge.mergePr('/repo', 7, 'abc123', { unchecked: true }).catch((e: unknown) => e);
+    expect(err).not.toBeInstanceOf(TypeError);
+    expect((err as Error).message).toMatch(message);
+    expect(calls.some((c) => c.method === 'PUT')).toBe(false);
+  });
+
   it('throws on another error, so the effect is retried', async () => {
     const { forge } = makeForge([tokenRoute(42), pullRoute(openPr()), repoRoute(), mergeRoute(502, { message: 'Bad gateway' })], { installationId: 42 });
     await expect(forge.mergePr('/repo', 7, 'abc123')).rejects.toMatchObject({ status: 502 });

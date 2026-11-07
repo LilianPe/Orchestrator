@@ -67,6 +67,11 @@ interface CheckRunsDto {
   check_runs?: CheckRunDto[];
 }
 
+interface WorkflowDto {
+  state: string;
+  path?: string;
+}
+
 interface StatusDto {
   context: string;
   state: string;
@@ -173,6 +178,9 @@ const isPull = (p: unknown): p is PullRequestDto =>
   isRecord(p.head) &&
   typeof p.head.ref === 'string' &&
   typeof p.head.sha === 'string';
+
+const isWorkflow = (w: unknown): w is WorkflowDto =>
+  isRecord(w) && typeof w.state === 'string' && (w.path === undefined || typeof w.path === 'string');
 
 const isStatus = (s: unknown): s is StatusDto => isRecord(s) && typeof s.context === 'string' && typeof s.state === 'string';
 
@@ -374,10 +382,12 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
     const token = await this.installationToken(repo);
     const url = `${repoApi(repo)}/pulls/${number}`;
     // A replay: the first call merged it on that head. Merged on another head is not ours to call merged.
-    const pr = await this.call<PullRequestDto>('GET', url, token);
+    const pr = await this.call<unknown>('GET', url, token);
+    if (!isPull(pr)) throw unreadable('GET', url, 'a pull request', pr);
     if (pr.merged_at && pr.head.sha === sha) return { merged: true, deduplicated: true };
     // A method the repository allows, a merge commit first: a squash-only repository refuses the others (405).
-    const settings = await this.call<{ allow_merge_commit?: boolean; allow_squash_merge?: boolean; allow_rebase_merge?: boolean }>('GET', repoApi(repo), token);
+    const settings = await this.call<{ allow_merge_commit?: boolean; allow_squash_merge?: boolean; allow_rebase_merge?: boolean } | undefined>('GET', repoApi(repo), token);
+    if (!isRecord(settings)) throw unreadable('GET', repoApi(repo), 'repository settings', settings);
     const method = settings.allow_merge_commit !== false ? 'merge' : settings.allow_squash_merge !== false ? 'squash' : 'rebase';
     if (opts.unchecked) {
       // Read as moved, answered as moved, with no PUT: a stale read must never let an unchecked head merge unverified.
@@ -511,25 +521,25 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
    * Whether an unchecked head is one of a repository with no CI (ORC-148): the head still has no check, the repository
    * no active Actions workflow of its own (a CI on `pull_request` only leaves the base unchecked; GitHub's dynamic
    * workflows, Pages or Dependabot, are no CI), and the PR's base commit no check either (a CI outside Actions that
-   * checks the base). Workflows unreadable (Actions permission missing) say CI.
+   * checks the base). Workflows unreadable (Actions permission missing) say CI; a 2xx answer without its list throws.
    */
   private async withoutCi(repo: GitHubRepoRef, pr: PullRequestDto, token: string): Promise<boolean> {
     if (!pr.base) return false;
     const [head, workflows, base] = await Promise.all([
       this.checksFor(repo, pr.head.sha, token),
-      this.call<{ workflows?: { state: string; path?: string }[] }>('GET', `${repoApi(repo)}/actions/workflows?per_page=100`, token).catch((err: unknown) => {
+      this.allPages(`${repoApi(repo)}/actions/workflows`, 'workflows', 'a list of workflows', isWorkflow, token).catch((err: unknown) => {
         if (err instanceof GitHubApiError && (err.status === 403 || err.status === 404)) return undefined;
         throw err;
       }),
       this.checksFor(repo, pr.base.sha, token),
     ]);
-    const ci = !workflows || (workflows.workflows ?? []).some((w) => w.state === 'active' && !w.path?.startsWith('dynamic/'));
+    const ci = !workflows || workflows.some((w) => w.state === 'active' && !w.path?.startsWith('dynamic/'));
     return head.checks === 'none' && !ci && base.checks === 'none';
   }
 
   /**
    * Every page of a list GitHub returns under `key`, 100 per page. An answer without that list, or with an entry
-   * `isEntry` rejects, throws: read as empty, it would drop checks from the verdict, down to `none` (ORC-273).
+   * `isEntry` rejects, throws: read as empty, it would drop checks from the verdict, down to `none`, or hide a CI (ORC-273).
    */
   private async allPages<E>(path: string, key: string, what: string, isEntry: (e: unknown) => e is E, token: string): Promise<E[]> {
     const all: E[] = [];
