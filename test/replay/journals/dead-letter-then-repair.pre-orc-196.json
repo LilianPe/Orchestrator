@@ -1137,13 +1137,13 @@
           "branch": "factory/rel-1-export-csv",
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
-          "blockReason": "Événement t-2 mis de côté (session.prompted) : sa décision a échoué (t.pendingFeedback is not iterable)."
+          "blockReason": "Event t-2 set aside (session.prompted): its decision failed (t.pendingFeedback is not iterable)."
         },
         "effects": [
           {
             "kind": "activity",
             "type": "error",
-            "body": "Événement t-2 mis de côté (session.prompted) : sa décision a échoué (t.pendingFeedback is not iterable). Un mainteneur peut le réparer : `factory run repair REL-1`."
+            "body": "Event t-2 set aside (session.prompted): its decision failed (t.pendingFeedback is not iterable). A maintainer can repair it: `factory run repair REL-1`."
           },
           {
             "kind": "labels",
@@ -1204,7 +1204,7 @@
           "branch": "factory/rel-1-export-csv",
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
-          "blockReason": "Événement t-2 mis de côté (session.prompted) : sa décision a échoué (t.pendingFeedback is not iterable)."
+          "blockReason": "Event t-2 set aside (session.prompted): its decision failed (t.pendingFeedback is not iterable)."
         },
         "ticket": {
           "projectId": "p",
@@ -1227,7 +1227,7 @@
           "branch": "factory/rel-1-export-csv",
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
-          "blockReason": "Événement t-2 mis de côté (session.prompted) : sa décision a échoué (t.pendingFeedback is not iterable)."
+          "blockReason": "Event t-2 set aside (session.prompted): its decision failed (t.pendingFeedback is not iterable)."
         },
         "effects": [],
         "timers": [],
@@ -1281,7 +1281,7 @@
           "branch": "factory/rel-1-export-csv",
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
-          "blockReason": "Événement t-2 mis de côté (session.prompted) : sa décision a échoué (t.pendingFeedback is not iterable)."
+          "blockReason": "Event t-2 set aside (session.prompted): its decision failed (t.pendingFeedback is not iterable)."
         },
         "ticket": {
           "projectId": "p",
@@ -1304,7 +1304,7 @@
           "branch": "factory/rel-1-export-csv",
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
-          "blockReason": "Événement t-2 mis de côté (session.prompted) : sa décision a échoué (t.pendingFeedback is not iterable)."
+          "blockReason": "Event t-2 set aside (session.prompted): its decision failed (t.pendingFeedback is not iterable)."
         },
         "effects": [],
         "timers": [],
@@ -1371,7 +1371,7 @@
           "branch": "factory/rel-1-export-csv",
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
-          "blockReason": "Événement t-2 mis de côté (session.prompted) : sa décision a échoué (t.pendingFeedback is not iterable)."
+          "blockReason": "Event t-2 set aside (session.prompted): its decision failed (t.pendingFeedback is not iterable)."
         },
         "ticket": {
           "projectId": "p",
@@ -1407,7 +1407,7 @@
           {
             "kind": "activity",
             "type": "response",
-            "body": "Événement t-2 réparé par ops (rejoué) : le ticket est débloqué."
+            "body": "Event t-2 repaired by ops (replayed): the ticket is unblocked."
           },
           {
             "kind": "labels",

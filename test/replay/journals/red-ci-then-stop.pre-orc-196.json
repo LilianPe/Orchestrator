@@ -1784,13 +1784,13 @@
           "branch": "factory/rel-1-export-csv",
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
-          "blockReason": "CI toujours en échec après 1 tentatives de fix-ci."
+          "blockReason": "CI still failing after 1 attempts of fix-ci."
         },
         "effects": [
           {
             "kind": "activity",
             "type": "elicitation",
-            "body": "CI toujours en échec après 1 tentatives de fix-ci.\n- `test`\nRépondez dans ce fil pour relancer."
+            "body": "CI still failing after 1 attempts of fix-ci.\n- `test`\nReply in this thread to relaunch."
           },
           {
             "kind": "labels",
@@ -1852,7 +1852,7 @@
           "branch": "factory/rel-1-export-csv",
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
-          "blockReason": "CI toujours en échec après 1 tentatives de fix-ci."
+          "blockReason": "CI still failing after 1 attempts of fix-ci."
         },
         "ticket": {
           "projectId": "p",
@@ -1875,7 +1875,7 @@
           "branch": "factory/rel-1-export-csv",
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
-          "blockReason": "CI toujours en échec après 1 tentatives de fix-ci."
+          "blockReason": "CI still failing after 1 attempts of fix-ci."
         },
         "effects": [],
         "timers": [],
@@ -1929,7 +1929,7 @@
           "branch": "factory/rel-1-export-csv",
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
-          "blockReason": "CI toujours en échec après 1 tentatives de fix-ci."
+          "blockReason": "CI still failing after 1 attempts of fix-ci."
         },
         "ticket": {
           "projectId": "p",
@@ -1952,7 +1952,7 @@
           "branch": "factory/rel-1-export-csv",
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
-          "blockReason": "CI toujours en échec après 1 tentatives de fix-ci."
+          "blockReason": "CI still failing after 1 attempts of fix-ci."
         },
         "effects": [],
         "timers": [],
@@ -2004,7 +2004,7 @@
           "branch": "factory/rel-1-export-csv",
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
-          "blockReason": "CI toujours en échec après 1 tentatives de fix-ci."
+          "blockReason": "CI still failing after 1 attempts of fix-ci."
         },
         "ticket": {
           "projectId": "p",
@@ -2027,7 +2027,7 @@
           "branch": "factory/rel-1-export-csv",
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
-          "blockReason": "Arrêté à la demande"
+          "blockReason": "Stopped on request"
         },
         "effects": [
           {
@@ -2036,7 +2036,7 @@
           {
             "kind": "activity",
             "type": "response",
-            "body": "Arrêté. Répondez dans ce fil ou posez le label agent:reprendre pour relancer."
+            "body": "Stopped. Reply in this thread or add the agent:reprendre label to relaunch."
           }
         ],
         "timers": [],
@@ -2090,7 +2090,7 @@
           "branch": "factory/rel-1-export-csv",
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
-          "blockReason": "Arrêté à la demande"
+          "blockReason": "Stopped on request"
         },
         "ticket": {
           "projectId": "p",
@@ -2113,7 +2113,7 @@
           "branch": "factory/rel-1-export-csv",
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
-          "blockReason": "Arrêté à la demande"
+          "blockReason": "Stopped on request"
         },
         "effects": [],
         "timers": [],
@@ -2167,7 +2167,7 @@
           "branch": "factory/rel-1-export-csv",
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
-          "blockReason": "Arrêté à la demande"
+          "blockReason": "Stopped on request"
         },
         "ticket": {
           "projectId": "p",
@@ -2190,7 +2190,7 @@
           "branch": "factory/rel-1-export-csv",
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
-          "blockReason": "Arrêté à la demande"
+          "blockReason": "Stopped on request"
         },
         "effects": [],
         "timers": [],

@@ -561,7 +561,7 @@
         "effects": [
           {
             "kind": "ack",
-            "body": "Noté, pris en compte à la prochaine étape.",
+            "body": "Noted, taken into account at the next step.",
             "linearSessionId": "ls-1"
           }
         ],
@@ -783,7 +783,7 @@
         "effects": [
           {
             "kind": "ack",
-            "body": "Noté, je regarde et je réponds ici.",
+            "body": "Noted, I am looking into it and will answer here.",
             "linearSessionId": "ls-1"
           },
           {

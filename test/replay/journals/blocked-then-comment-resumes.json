@@ -583,7 +583,7 @@
           "branch": "factory/rel-1-export-csv",
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
-          "blockReason": "Le run dev a atteint un plafond (tours, durée ou budget).",
+          "blockReason": "The run dev reached a limit (turns, duration or budget).",
           "blockedJob": "dev"
         },
         "effects": [
@@ -592,11 +592,11 @@
             "block": {
               "step": "build",
               "max": 1,
-              "reason": "Le run dev a atteint un plafond (tours, durée ou budget).",
+              "reason": "The run dev reached a limit (turns, duration or budget).",
               "tried": [
-                "Le run dev lancé : arrêté à son plafond."
+                "Started the run dev: stopped at its limit."
               ],
-              "question": "Je reprends l'étape telle quelle (répondez « oui ») ou avec une consigne (écrivez-la) ?"
+              "question": "Shall I redo the step as is (reply \"yes\") or with an instruction (write it)?"
             }
           },
           {
@@ -662,7 +662,7 @@
           "branch": "factory/rel-1-export-csv",
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
-          "blockReason": "Le run dev a atteint un plafond (tours, durée ou budget).",
+          "blockReason": "The run dev reached a limit (turns, duration or budget).",
           "blockedJob": "dev"
         },
         "ticket": {
@@ -687,7 +687,7 @@
           "branch": "factory/rel-1-export-csv",
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
-          "blockReason": "Le run dev a atteint un plafond (tours, durée ou budget).",
+          "blockReason": "The run dev reached a limit (turns, duration or budget).",
           "blockedJob": "dev"
         },
         "effects": [],
@@ -743,7 +743,7 @@
           "branch": "factory/rel-1-export-csv",
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
-          "blockReason": "Le run dev a atteint un plafond (tours, durée ou budget).",
+          "blockReason": "The run dev reached a limit (turns, duration or budget).",
           "blockedJob": "dev"
         },
         "ticket": {
@@ -768,7 +768,7 @@
           "branch": "factory/rel-1-export-csv",
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
-          "blockReason": "Le run dev a atteint un plafond (tours, durée ou budget).",
+          "blockReason": "The run dev reached a limit (turns, duration or budget).",
           "blockedJob": "dev"
         },
         "effects": [],
@@ -824,7 +824,7 @@
           "branch": "factory/rel-1-export-csv",
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
-          "blockReason": "Le run dev a atteint un plafond (tours, durée ou budget).",
+          "blockReason": "The run dev reached a limit (turns, duration or budget).",
           "blockedJob": "dev"
         },
         "ticket": {
@@ -849,7 +849,7 @@
           "branch": "factory/rel-1-export-csv",
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
-          "blockReason": "Le run dev a atteint un plafond (tours, durée ou budget).",
+          "blockReason": "The run dev reached a limit (turns, duration or budget).",
           "blockedJob": "dev"
         },
         "effects": [],
@@ -906,7 +906,7 @@
           "branch": "factory/rel-1-export-csv",
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
-          "blockReason": "Le run dev a atteint un plafond (tours, durée ou budget).",
+          "blockReason": "The run dev reached a limit (turns, duration or budget).",
           "blockedJob": "dev"
         },
         "ticket": {
@@ -931,13 +931,13 @@
           "branch": "factory/rel-1-export-csv",
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
-          "blockReason": "Le run dev a atteint un plafond (tours, durée ou budget).",
+          "blockReason": "The run dev reached a limit (turns, duration or budget).",
           "blockedJob": "dev"
         },
         "effects": [
           {
             "kind": "comment",
-            "body": "Refusé : relancer un run bloqué est réservé aux membres de l'équipe Linear. La vérification porte sur l'auteur signé de l'action, jamais sur un nom cité dans le texte."
+            "body": "Refused: relaunching a blocked run is reserved for Linear team members. The check is on the signed author of the action, never on a name quoted in the text."
           }
         ],
         "timers": [],
@@ -992,7 +992,7 @@
           "branch": "factory/rel-1-export-csv",
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
-          "blockReason": "Le run dev a atteint un plafond (tours, durée ou budget).",
+          "blockReason": "The run dev reached a limit (turns, duration or budget).",
           "blockedJob": "dev"
         },
         "ticket": {
@@ -1017,7 +1017,7 @@
           "branch": "factory/rel-1-export-csv",
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
-          "blockReason": "Le run dev a atteint un plafond (tours, durée ou budget).",
+          "blockReason": "The run dev reached a limit (turns, duration or budget).",
           "blockedJob": "dev"
         },
         "effects": [],
@@ -1078,7 +1078,7 @@
           "branch": "factory/rel-1-export-csv",
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
-          "blockReason": "Le run dev a atteint un plafond (tours, durée ou budget).",
+          "blockReason": "The run dev reached a limit (turns, duration or budget).",
           "blockedJob": "dev"
         },
         "ticket": {

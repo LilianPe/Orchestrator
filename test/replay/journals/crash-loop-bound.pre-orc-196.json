@@ -1350,13 +1350,13 @@
             1791622920000,
             1791622980000
           ],
-          "blockReason": "Trop de relances après coupure : 3 en 60 min."
+          "blockReason": "Too many relaunches after a cut: 3 in 60 min."
         },
         "effects": [
           {
             "kind": "activity",
             "type": "elicitation",
-            "body": "Trop de relances après coupure : 3 en 60 min. Orchestrator ou son runner redémarre en boucle : vérifiez le démon, puis répondez dans ce fil pour que je reprenne."
+            "body": "Too many relaunches after a cut: 3 in 60 min. Orchestrator or its runner keeps restarting: check the daemon, then reply in this thread and I will resume."
           },
           {
             "kind": "labels",
@@ -1425,7 +1425,7 @@
             1791622920000,
             1791622980000
           ],
-          "blockReason": "Trop de relances après coupure : 3 en 60 min."
+          "blockReason": "Too many relaunches after a cut: 3 in 60 min."
         },
         "ticket": {
           "projectId": "p",
@@ -1453,7 +1453,7 @@
             1791622920000,
             1791622980000
           ],
-          "blockReason": "Trop de relances après coupure : 3 en 60 min."
+          "blockReason": "Too many relaunches after a cut: 3 in 60 min."
         },
         "effects": [],
         "timers": [],
@@ -1512,7 +1512,7 @@
             1791622920000,
             1791622980000
           ],
-          "blockReason": "Trop de relances après coupure : 3 en 60 min."
+          "blockReason": "Too many relaunches after a cut: 3 in 60 min."
         },
         "ticket": {
           "projectId": "p",
@@ -1540,7 +1540,7 @@
             1791622920000,
             1791622980000
           ],
-          "blockReason": "Trop de relances après coupure : 3 en 60 min."
+          "blockReason": "Too many relaunches after a cut: 3 in 60 min."
         },
         "effects": [],
         "timers": [],
@@ -1599,7 +1599,7 @@
             1791622920000,
             1791622980000
           ],
-          "blockReason": "Trop de relances après coupure : 3 en 60 min."
+          "blockReason": "Too many relaunches after a cut: 3 in 60 min."
         },
         "ticket": {
           "projectId": "p",
@@ -1627,7 +1627,7 @@
             1791622920000,
             1791622980000
           ],
-          "blockReason": "Trop de relances après coupure : 3 en 60 min."
+          "blockReason": "Too many relaunches after a cut: 3 in 60 min."
         },
         "effects": [],
         "timers": [],
@@ -1685,7 +1685,7 @@
             1791622920000,
             1791622980000
           ],
-          "blockReason": "Trop de relances après coupure : 3 en 60 min."
+          "blockReason": "Too many relaunches after a cut: 3 in 60 min."
         },
         "ticket": {
           "projectId": "p",
