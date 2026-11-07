@@ -97,7 +97,7 @@ describe('a disposable sandbox per attempt', () => {
       return create(req);
     };
     await delegate(h);
-    expect(setups(h)).toMatchObject([{ id: 'sbx-1', argv: ['timeout', '900', 'bash', '-lc', 'npm ci'] }]);
+    expect(setups(h)).toMatchObject([{ id: 'sbx-1', argv: ['timeout', '900', 'bash', '-c', 'npm ci'] }]);
     const runId = h.runner.requests[0]!.runId;
     expect(h.sandboxes.created.map((c) => c.runId)).toEqual([`${runId}-setup`, runId]);
     expect(aliveAtCreate).toEqual([[], []]);
