@@ -1,6 +1,6 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { parseRepoConfig, REPO_CONFIG_PATH, RepoConfigError } from '../config/repo-config.js';
+import { parseRepoConfig, REPO_CONFIG_DIR, REPO_CONFIG_PATH, RepoConfigError } from '../config/repo-config.js';
 
 const FILE = REPO_CONFIG_PATH;
 /** A spelling the factory never reads: validating around it would pass a file nobody applies. */
@@ -21,7 +21,11 @@ export function runValidateCommand(opts: { repoPath: string; out: (line: string)
     return 1;
   };
   if (existsSync(join(opts.repoPath, MISSPELT))) return refuse([`${MISSPELT} : renommez-le en ${FILE}, seul nom lu par l'usine`]);
+  // As the daemon reads it on the default branch (`makeRepoConfig`): through a link, git sees no file, and the launch refuses it.
+  const dir = join(opts.repoPath, REPO_CONFIG_DIR);
+  if (existsSync(dir) && !lstatSync(dir).isDirectory()) return refuse([`${REPO_CONFIG_DIR} : un dossier attendu, pas un lien symbolique ni un fichier`]);
   const path = join(opts.repoPath, FILE);
+  if (existsSync(path) && lstatSync(path).isSymbolicLink()) return refuse([`${FILE} : un fichier attendu, pas un lien symbolique`]);
   if (!existsSync(path)) {
     opts.out(`pas de ${FILE} : le socle de factory/default s'applique tel quel.`);
     return 0;

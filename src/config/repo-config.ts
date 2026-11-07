@@ -43,8 +43,9 @@ export function repoNetworkCeiling(config: RepoConfig): NetworkLevel {
 /** A host name: no wildcard, no range, no path (a `*` or a `0.0.0.0/0` would be `full` in disguise). */
 const HOST = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/i;
 
-/** The one name the factory reads, at the repository's root. */
-export const REPO_CONFIG_PATH = '.factory/config.yml';
+/** The one name the factory reads, at the repository's root: a file in a directory, neither a link. */
+export const REPO_CONFIG_DIR = '.factory';
+export const REPO_CONFIG_PATH = `${REPO_CONFIG_DIR}/config.yml`;
 
 /** How the daemon reads it on the default branch. `fetch: false`: the forge was just fetched, or the read follows the launch's. */
 export interface RepoConfigRead {

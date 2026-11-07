@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, renameSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -50,6 +50,17 @@ describe('factory validate (ORC-209)', () => {
     const { code, out } = run(dir);
     expect(code).toBe(1);
     expect(out[1]).toMatch(/^- illisible : /);
+  });
+
+  it('refuses a link, at .factory or at its file, as the launch does: git reads nothing through it', () => {
+    const file = repo('commands: { test: npm test }\n');
+    renameSync(join(file, '.factory/config.yml'), join(file, 'factory.yml'));
+    symlinkSync('../factory.yml', join(file, '.factory/config.yml'));
+    expect(run(file)).toEqual({ code: 1, out: ['.factory/config.yml refusé :', '- .factory/config.yml : un fichier attendu, pas un lien symbolique'] });
+    const dir = repo('commands: { test: npm test }\n');
+    renameSync(join(dir, '.factory'), join(dir, 'ci'));
+    symlinkSync('ci', join(dir, '.factory'));
+    expect(run(dir)).toEqual({ code: 1, out: ['.factory/config.yml refusé :', '- .factory : un dossier attendu, pas un lien symbolique ni un fichier'] });
   });
 
   it('refuses an option where the repository path goes', () => {

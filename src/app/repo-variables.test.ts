@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -12,7 +12,7 @@ const YML = { repos: [{ linearTeam: 'REL', github: 'Org/App', env: { NODE_ENV: '
 const CONFIG = 'env: [NODE_ENV]\nsetup_secrets: [REGISTRY_TOKEN]\n';
 
 /** A repository: its origin, its default branch, the config committed on it. */
-function git(o: { origin?: string; head?: string; config?: string; mode?: string } = {}): { exec: Exec; calls: string[][] } {
+function git(o: { origin?: string; head?: string; config?: string; mode?: string; dir?: string } = {}): { exec: Exec; calls: string[][] } {
   const calls: string[][] = [];
   const ok = (stdout: string) => ({ stdout, stderr: '', code: 0 });
   const ko = { stdout: '', stderr: 'fatal', code: 128 };
@@ -21,6 +21,7 @@ function git(o: { origin?: string; head?: string; config?: string; mode?: string
     if (args.includes('get-url')) return ok(`${o.origin ?? 'https://github.com/org/app.git'}\n`);
     if (args.includes('symbolic-ref')) return o.head === undefined ? ko : ok(`${o.head}\n`);
     if (args.includes('fetch')) return ok('');
+    if (args.at(-1) === '.factory') return ok(o.config === undefined ? '' : `${o.dir ?? '040000 tree'} def456\t.factory\0`);
     if (args.includes('ls-tree')) return ok(o.config === undefined ? '' : `${o.mode ?? '100644 blob'} abc123\t.factory/config.yml\0`);
     if (args.includes('cat-file')) return o.config === undefined ? ko : ok(o.config);
     return ko;
@@ -29,6 +30,22 @@ function git(o: { origin?: string; head?: string; config?: string; mode?: string
 }
 
 const PROJECT = { id: 'p', repoPath: '/repo', teamKey: 'REL' };
+
+/** A real forge (bare) and the factory's clone of it, in `root`, the clone's default branch holding `config`. */
+function forgeAndClone(root: string, config: string) {
+  const run = (cwd: string, ...args: string[]) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' } });
+  const forge = join(root, 'forge');
+  const repo = join(root, 'repo');
+  execFileSync('git', ['init', '--quiet', '--bare', '-b', 'main', forge]);
+  execFileSync('git', ['clone', '--quiet', forge, repo]);
+  mkdirSync(join(repo, '.factory'));
+  writeFileSync(join(repo, '.factory', 'config.yml'), config);
+  run(repo, 'add', '.');
+  run(repo, 'commit', '--quiet', '-m', 'base');
+  run(repo, 'push', '--quiet', 'origin', 'main');
+  run(repo, 'remote', 'set-head', 'origin', 'main');
+  return { run, forge, repo };
+}
 const DECLARED = parseRepoConfig(CONFIG);
 
 describe('makeRepoConfig (ORC-209 C)', () => {
@@ -36,7 +53,8 @@ describe('makeRepoConfig (ORC-209 C)', () => {
     const { exec, calls } = git({ head: 'origin/trunk', config: CONFIG });
     expect(await makeRepoConfig({ exec })(PROJECT)).toEqual(DECLARED);
     expect(calls[0]).toEqual(['-C', '/repo', 'fetch', '--quiet', 'origin']);
-    expect(calls.slice(-2)).toEqual([
+    expect(calls.slice(-3)).toEqual([
+      ['-C', '/repo', 'ls-tree', '-z', 'refs/remotes/origin/trunk', '--', '.factory'],
       ['-C', '/repo', 'ls-tree', '-z', 'refs/remotes/origin/trunk', '--', '.factory/config.yml'],
       ['-C', '/repo', 'cat-file', 'blob', 'abc123'],
     ]);
@@ -68,16 +86,7 @@ describe('makeRepoConfig (ORC-209 C)', () => {
   it('reads the remote branch, never a tag of its name, when origin/HEAD is missing', async () => {
     const root = mkdtempSync(join(tmpdir(), 'factory-repo-config-'));
     try {
-      const run = (cwd: string, ...args: string[]) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' } });
-      const forge = join(root, 'forge');
-      const repo = join(root, 'repo');
-      execFileSync('git', ['init', '--quiet', '--bare', '-b', 'main', forge]);
-      execFileSync('git', ['clone', '--quiet', forge, repo]);
-      mkdirSync(join(repo, '.factory'));
-      writeFileSync(join(repo, '.factory', 'config.yml'), 'network: { level: none }\n');
-      run(repo, 'add', '.');
-      run(repo, 'commit', '--quiet', '-m', 'base');
-      run(repo, 'push', '--quiet', 'origin', 'main');
+      const { run, repo } = forgeAndClone(root, 'network: { level: none }\n');
       // An unmerged branch, and a tag named like the remote branch on it: pushed by anyone who can push to the forge.
       run(repo, 'checkout', '--quiet', '-b', 'widen');
       writeFileSync(join(repo, '.factory', 'config.yml'), 'network: { level: custom, allow: [evil.exemple.com] }\n');
@@ -90,20 +99,26 @@ describe('makeRepoConfig (ORC-209 C)', () => {
     }
   });
 
+  it('rejects a .factory that is not a directory: git reads nothing through a link, which is not an absent file', async () => {
+    await expect(makeRepoConfig({ exec: git({ head: 'origin/main', config: CONFIG, dir: '120000 blob' }).exec })(PROJECT)).rejects.toThrow(/\.factory n'est pas un dossier/);
+    const root = mkdtempSync(join(tmpdir(), 'factory-repo-config-'));
+    try {
+      const { run, repo } = forgeAndClone(root, 'network: { level: none }\n');
+      run(repo, 'mv', '.factory', 'ci');
+      symlinkSync('ci', join(repo, '.factory'));
+      run(repo, 'add', '-A');
+      run(repo, 'commit', '--quiet', '-m', 'link');
+      run(repo, 'push', '--quiet', 'origin', 'main');
+      await expect(makeRepoConfig()({ repoPath: repo })).rejects.toThrow(/\.factory n'est pas un dossier/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("ignores the agent's branch and its worktree: the default branch's file, as merged on the forge, applies (criterion 5)", async () => {
     const root = mkdtempSync(join(tmpdir(), 'factory-repo-config-'));
     try {
-      const run = (cwd: string, ...args: string[]) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' } });
-      const forge = join(root, 'forge');
-      const repo = join(root, 'repo');
-      execFileSync('git', ['init', '--quiet', '--bare', '-b', 'main', forge]);
-      execFileSync('git', ['clone', '--quiet', forge, repo]);
-      mkdirSync(join(repo, '.factory'));
-      writeFileSync(join(repo, '.factory', 'config.yml'), 'network: { level: none }\n');
-      run(repo, 'add', '.');
-      run(repo, 'commit', '--quiet', '-m', 'base');
-      run(repo, 'push', '--quiet', 'origin', 'main');
-      run(repo, 'remote', 'set-head', 'origin', 'main');
+      const { run, forge, repo } = forgeAndClone(root, 'network: { level: none }\n');
       run(repo, 'checkout', '--quiet', '-b', 'agent');
       writeFileSync(join(repo, '.factory', 'config.yml'), 'network: { level: custom, allow: [evil.exemple.com] }\n');
       run(repo, 'commit', '--quiet', '-am', 'widen');

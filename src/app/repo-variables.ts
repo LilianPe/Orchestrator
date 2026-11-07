@@ -2,7 +2,7 @@ import { execCmd, mustExec, type Exec } from '../adapters/exec.js';
 import { githubRepoOf } from '../adapters/forge/github-ingest.js';
 import { originHead } from '../adapters/workspace/git-workspaces.js';
 import type { FactoryYml } from '../config/factory-yml.js';
-import { parseRepoConfig, REPO_CONFIG_PATH, type RepoConfig, type RepoConfigRead } from '../config/repo-config.js';
+import { parseRepoConfig, REPO_CONFIG_DIR, REPO_CONFIG_PATH, type RepoConfig, type RepoConfigRead } from '../config/repo-config.js';
 import { NO_REPO_VARIABLES, repoVariables, type RepoVariables } from '../config/repo-variables.js';
 
 /**
@@ -20,9 +20,15 @@ export function makeRepoConfig(o: { exec?: Exec } = {}): (project: { repoPath: s
     // first, a tag anyone who pushes to the forge can make.
     const ref = `refs/remotes/${(await originHead(exec, repoPath)).replace(/^remotes\//, '')}`;
     // `ls-tree` tells a file absent from a branch it could not read, which `git show` answers alike.
-    const entry = await mustExec(exec, 'git', ['-C', repoPath, 'ls-tree', '-z', ref, '--', REPO_CONFIG_PATH]).catch((err: Error) => {
-      throw new Error(`branche par défaut illisible (${ref}) : ${err.message} ; si ce n'est pas la branche par défaut, lancez \`git remote set-head origin --auto\` dans ${repoPath}`);
-    });
+    const entryOf = (path: string) =>
+      mustExec(exec, 'git', ['-C', repoPath, 'ls-tree', '-z', ref, '--', path]).catch((err: Error) => {
+        throw new Error(`branche par défaut illisible (${ref}) : ${err.message} ; si ce n'est pas la branche par défaut, lancez \`git remote set-head origin --auto\` dans ${repoPath}`);
+      });
+    // `ls-tree` does not go through a `.factory` that is a link: the file under it would read as absent.
+    const dir = await entryOf(REPO_CONFIG_DIR);
+    if (!dir) return parseRepoConfig(undefined);
+    if (!dir.startsWith('040000 tree ')) throw new Error(`${REPO_CONFIG_DIR} n'est pas un dossier sur ${ref} (lien symbolique ou fichier)`);
+    const entry = await entryOf(REPO_CONFIG_PATH);
     if (!entry) return parseRepoConfig(undefined);
     const blob = /^100(?:644|755) blob ([0-9a-f]+)\t/.exec(entry)?.[1];
     if (!blob) throw new Error(`${REPO_CONFIG_PATH} n'est pas un fichier sur ${ref} (lien symbolique ou dossier)`);
