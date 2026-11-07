@@ -2,7 +2,7 @@
 
 # Relais
 
-Orchestrateur d'agents de code : un ticket Linear délégué à l'agent devient une PR, relue par un humain puis par une boucle de review IA, prête à merger. Prototype privé.
+Orchestrateur d'agents de code : un ticket Linear délégué à l'agent devient une PR, relue par un humain puis par une boucle de review IA, prête à merger. Prototype public, sous [licence Elastic 2.0](#licence).
 
 - Relais tourne comme un démon (`relais up`) relié à **Linear** (application agent OAuth + webhooks) et à **GitHub** (CLI `gh`).
 - Chaque ticket délégué obtient son worktree git et une session **Claude Code** headless, reprise de run en run (retours, CI, review).
