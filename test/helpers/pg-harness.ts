@@ -17,6 +17,8 @@ interface Database {
   pool: Promise<Pool>;
   /** Set once its test is over. */
   closed: boolean;
+  /** A connection lost while the test ran: the test fails on it once over. */
+  lost?: Error;
 }
 
 /** The databases of the current test: dropped once it ends. */
@@ -51,20 +53,17 @@ function pgDatabase() {
   const pool = queryOn(PG_URL, (c) => c.query(`create database "${name}" template "${from}"`)).then(() => {
     const u = new URL(PG_URL);
     u.pathname = `/${name}`;
-    const p = new Pool({ connectionString: u.toString(), max: 4 });
-    // A client still checked out when the test ends (a transaction whose callback called the store, which
-    // never answers once closed) is cut by the forced drop: the pool listens to idle clients only, and an
-    // 'error' nobody listens to is an uncaught exception that fails the whole run (ORC-290).
-    p.on('connect', (client) => client.on('error', onError));
-    return p;
+    return new Pool({ connectionString: u.toString(), max: 4 });
   });
   const db: Database = { name, pool, closed: false };
   open.push(db);
   // One PgStore per database, reused by every life of the harness (its clock is the harness's).
   let store: Store | undefined;
-  function onError(err: Error): void {
-    if (!db.closed) console.error(`scenarios-pg ${name}: ${err.message}`);
-  }
+  // PgStore hears every client, a checked-out one included (ORC-290). The forced drop at the end of the
+  // test cuts those its background work still holds: expected. Before that, a lost connection fails the test.
+  const onError = (err: Error) => {
+    if (!db.closed) db.lost ??= err;
+  };
   return (now: () => number): Store => (store ??= deferred(db, pool.then((p) => new PgStore({ pool: p, now, onError }))));
 }
 
@@ -95,6 +94,8 @@ if (PG_URL) {
     open = [];
     for (const db of dbs) db.closed = true;
     await Promise.all(dbs.map(drop));
+    const lost = dbs.find((db) => db.lost)?.lost;
+    if (lost) throw new Error(`scenarios-pg: a connection was lost during the test: ${lost.message}`);
   });
 
   afterAll(async () => {

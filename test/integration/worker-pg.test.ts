@@ -7,7 +7,7 @@ import { PgStore } from '../../src/store/pg/pg-store.js';
 import { PG_TABLE_NAMES } from '../../src/store/pg/schema.js';
 import type { DecisionOutcome, DecisionRequest, Store } from '../../src/store/types.js';
 import { CRASH_WORKFLOW, crashAfterDecision } from '../helpers/crash-workflow.js';
-import { createHarness, killHarnesses } from '../helpers/harness.js';
+import { createHarness, trackHarnesses } from '../helpers/harness.js';
 import { createTestDatabase, PG_URL } from '../helpers/pg-database.js';
 
 const TRUNCATE = `truncate table ${PG_TABLE_NAMES.map((name) => `"${name}"`).join(', ')} restart identity cascade`;
@@ -38,8 +38,8 @@ describe.skipIf(!PG_URL)('worker on PgStore', () => {
     await pool.query(TRUNCATE);
   });
 
-  // The harness of the previous test, killed: its background work stays out of the next one's database (ORC-290).
-  afterEach(killHarnesses);
+  // The harnesses of the test, shut down before the next one empties the database (ORC-290).
+  afterEach(trackHarnesses());
 
   afterAll(async () => {
     await pool.end();

@@ -47,21 +47,6 @@ const moves = (h: Harness) => h.tracker.calls.filter((c) => c.method === 'moveTo
 /** The run's summary in the session: its `post_output`, not what the run's stream shows on the way. */
 const responses = (h: Harness) => h.tracker.calls.filter((c) => c.method === 'activity' && (c.args[1] as { type: string }).type === 'response');
 
-/** Holds the publication: `entered` settles once it is under way, with no deadline of its own (ORC-290); `release` lets it go on. */
-function holdPublish(h: Harness): { entered: Promise<void>; release: () => void } {
-  let release!: () => void;
-  let enter!: () => void;
-  const gate = new Promise<void>((r) => (release = r));
-  const entered = new Promise<void>((r) => (enter = r));
-  const real = h.publisher.publish.bind(h.publisher);
-  vi.spyOn(h.publisher, 'publish').mockImplementation(async (req) => {
-    enter();
-    await gate;
-    return real(req);
-  });
-  return { entered, release };
-}
-
 describe('the factory publishes (ORC-125)', () => {
   it('a green verify: pushed by the factory, a draft PR linked to the ticket, then Human Review on that commit, out of draft', async () => {
     const h = verified();
@@ -85,9 +70,9 @@ describe('the factory publishes (ORC-125)', () => {
 
   it('the summary and the move wait for the publication: a run held on it shows neither', async () => {
     const h = verified();
-    const { entered, release } = holdPublish(h);
+    const { started, release } = h.publisher.holdNext();
     const delegated = delegate(h);
-    await entered;
+    await started;
     expect(moves(h)).not.toContain('Human Review');
     expect((await h.ticket()).verifyingRunId).toBeDefined();
     release();
@@ -100,9 +85,9 @@ describe('the factory publishes (ORC-125)', () => {
     // The copy that waited under another project of the team: neither refuses the holder's publication nor shares its effect keys.
     const waiting = { ...newTicketState('api', 'REL-1', 'T', 'dev', 1), delegated: true, blocked: true, awaitingRepo: ['p', 'api'] };
     await h.store.putTicket(waiting);
-    const { entered, release } = holdPublish(h);
+    const { started, release } = h.publisher.holdNext();
     const delegated = delegate(h);
-    await entered;
+    await started;
     const publishing = await h.ticket();
     expect(publishing.verifyingRunId).toBeDefined();
 
@@ -182,9 +167,9 @@ describe('the factory publishes (ORC-125)', () => {
 
   it('a stop while it publishes: its result moves nothing', async () => {
     const h = verified();
-    const { entered, release } = holdPublish(h);
+    const { started, release } = h.publisher.holdNext();
     const delegated = delegate(h);
-    await entered;
+    await started;
     const stopped = h.send('control.stop', {});
     release();
     await Promise.all([delegated, stopped]);

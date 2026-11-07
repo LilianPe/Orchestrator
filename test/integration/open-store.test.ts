@@ -12,17 +12,19 @@ import { createTestDatabase, PG_URL, queryOn } from '../helpers/pg-database.js';
 const migrationsFolder = join(import.meta.dirname, '../../drizzle');
 
 describe.skipIf(!PG_URL)('openStore and the daemon on Postgres', () => {
-  let db: Awaited<ReturnType<typeof createTestDatabase>>;
+  type TestDatabase = Awaited<ReturnType<typeof createTestDatabase>>;
+  let db: TestDatabase;
   /** Left unmigrated. Made and dropped in the hooks, which have 60 s: a drop waits for a checkpoint, past a test's 30 s on a loaded machine (ORC-290). */
-  let other: Awaited<ReturnType<typeof createTestDatabase>>;
+  let other: TestDatabase;
 
   beforeAll(async () => {
-    db = await createTestDatabase('factory_open');
-    other = await createTestDatabase('factory_nomigrate');
+    // Each assigned as soon as made: if the other fails, afterAll still drops it.
+    await Promise.all([createTestDatabase('factory_open').then((d) => (db = d)), createTestDatabase('factory_nomigrate').then((d) => (other = d))]);
   });
 
   afterAll(async () => {
-    await Promise.all([db.drop(), other.drop()]);
+    const made: (TestDatabase | undefined)[] = [db, other];
+    await Promise.all(made.map((d) => d?.drop()));
   });
 
   const tablesOf = (url: string) =>
