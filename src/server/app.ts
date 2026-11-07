@@ -249,7 +249,7 @@ export function createApp(d: ServerDeps): Hono {
   // In the inbox, in order behind the events before it: the agent waits for no decision, and hears of a failed write.
   const ask = async (run: RunRecord, question: string) => {
     const at = d.clock.now();
-    await d.submit({ ...TRUSTED, id: `ask:${run.id}:${at}`, type: 'agent.asked', at, projectId: run.projectId, ticketId: run.ticketId, payload: { question, job: run.job } });
+    await d.submit({ ...TRUSTED, id: `ask:${run.id}:${at}`, type: 'agent.asked', at, projectId: run.projectId, ticketId: run.ticketId, payload: { question, job: run.job, ...(run.linearSessionId ? { linearSessionId: run.linearSessionId } : {}) } });
   };
   agent.post('/ask', async (c) => {
     const { text } = (await c.req.json()) as { text?: string };

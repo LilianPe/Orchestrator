@@ -171,7 +171,7 @@ describe('server', () => {
     const { app, tracker, submitted } = await setup();
     const res = await app.request('/agent/ask', { method: 'POST', headers: { authorization: 'Bearer tok', 'content-type': 'application/json' }, body: JSON.stringify({ text: 'Quelle base ?' }) });
     expect(res.status).toBe(200);
-    expect(submitted).toEqual([expect.objectContaining({ type: 'agent.asked', projectId: 'p', ticketId: 'REL-1', payload: { question: 'Quelle base ?', job: expect.any(String) } })]);
+    expect(submitted).toEqual([expect.objectContaining({ type: 'agent.asked', projectId: 'p', ticketId: 'REL-1', payload: { question: 'Quelle base ?', job: expect.any(String), linearSessionId: 'ls-1' } })]);
     expect(tracker.activities('ls-1')).toEqual([]);
   });
 

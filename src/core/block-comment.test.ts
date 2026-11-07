@@ -3,7 +3,6 @@ import { composeBlockComment, type BlockFacts } from './block-comment.js';
 
 const facts: BlockFacts = {
   step: 'verify',
-  attempt: 3,
   max: 3,
   reason: 'Vérifications toujours en échec après 3 tentatives.',
   tried: ['`npm test` (code 1)', '`npm run lint` (code 2)'],

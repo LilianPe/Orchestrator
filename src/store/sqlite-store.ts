@@ -534,6 +534,14 @@ export class SqliteStore implements Store {
     );
   }
 
+  async ticketRuns(projectId: string, ticketId: string): Promise<RunRecord[]> {
+    return (
+      this.db
+        .prepare(`SELECT data FROM runs WHERE json_extract(data, '$.projectId') = ? AND json_extract(data, '$.ticketId') = ? ORDER BY started_at, rowid`)
+        .all(projectId, ticketId) as { data: string }[]
+    ).map((r) => JSON.parse(r.data) as RunRecord);
+  }
+
   async findRunByToken(token: string): Promise<RunRecord | undefined> {
     const row = this.db.prepare('SELECT data FROM runs WHERE token = ?').get(token) as { data: string } | undefined;
     return row ? JSON.parse(row.data) : undefined;
@@ -661,9 +669,6 @@ export class SqliteStore implements Store {
     const events = this.db
       .prepare(`SELECT data FROM events WHERE ticket_id = ? AND json_extract(data, '$.projectId') = ? ORDER BY rowid`)
       .all(ticketId, projectId) as { data: string }[];
-    const runs = this.db
-      .prepare(`SELECT data FROM runs WHERE json_extract(data, '$.projectId') = ? AND json_extract(data, '$.ticketId') = ? ORDER BY started_at, rowid`)
-      .all(projectId, ticketId) as { data: string }[];
     const acked = this.db
       .prepare(
         `SELECT id, acked_at FROM inbox WHERE acked_at IS NOT NULL
@@ -673,7 +678,7 @@ export class SqliteStore implements Store {
     return {
       devSession: this.ticketRow(projectId, ticketId)?.linearSessionId,
       events: events.map((r) => JSON.parse(r.data) as FactoryEvent),
-      runs: runs.map((r) => JSON.parse(r.data) as RunRecord),
+      runs: await this.ticketRuns(projectId, ticketId),
       effects: await this.listEffects(projectId, ticketId),
       acks: Object.fromEntries(acked.map((r) => [r.id, Number(r.acked_at)])),
     };

@@ -7,7 +7,7 @@ import type { TicketState } from './types.js';
 export interface BlockFacts {
   /** The step of `factory/default`, or the name of a job out of the preset. */
   step: string;
-  attempt: number;
+  /** The attempts the block ends: its last one is its bound. Effects recorded before may carry an `attempt` too, read by none. */
   max: number;
   reason: string;
   /** What was tried, facts only: as many as there are, 5 at most in the comment. */
@@ -34,7 +34,7 @@ const REDO = "Je reprends l'étape telle quelle (répondez « oui ») ou avec un
  * step no counter sends back had one try.
  */
 export function blockFacts({ reason, step, tried, attempts = 1, question = REDO }: Pick<BlockFacts, 'reason' | 'step' | 'tried'> & { attempts?: number; question?: string }): BlockFacts {
-  return { step, attempt: attempts, max: attempts, reason, tried, question };
+  return { step, max: attempts, reason, tried, question };
 }
 
 const CI: Record<NonNullable<TicketState['prChecks']>, string> = { pending: 'en cours', pass: 'verte', fail: 'rouge', none: 'aucune' };
@@ -52,7 +52,7 @@ function stateLine({ branch, sha, ci, tokens, durationMs }: BlockStatus): string
  */
 export function composeBlockComment(facts: BlockFacts, status: BlockStatus): string {
   return [
-    `🔴 Bloqué à l'étape ${facts.step} (tentative ${facts.attempt}/${facts.max})`,
+    `🔴 Bloqué à l'étape ${facts.step} (tentative ${facts.max}/${facts.max})`,
     `Raison : ${facts.reason.replace(/\s+/g, ' ').trim()}`,
     "Ce que j'ai essayé :",
     ...facts.tried.slice(0, MAX_TRIED).map((t) => `- ${t}`),

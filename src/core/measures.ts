@@ -1,5 +1,6 @@
 import type { RedCause } from '../checks/red.js';
 import type { MeasureFacts, Store } from '../store/types.js';
+import { allowed, DEFAULT_MATRIX } from './authz.js';
 import { isQuestionSession } from './engine.js';
 import { reduce } from './reduce.js';
 import { addTokens, newTicketState, NO_TOKENS, type FactoryEvent, type LogicalState, type MessageKind, type TicketState, type TokenUsage } from './types.js';
@@ -212,6 +213,14 @@ function redVerdicts(events: FactoryEvent[]): TicketMeasures['red'] {
 /** States a human sends a ticket back to dev from: its work had been handed over. */
 const HANDED_OVER = new Set<LogicalState>(['human_review', 'ai_review', 'ready', 'done']);
 
+/**
+ * A comment `decide` read (ORC-196), told from what it left: one it ignored left no effect, one it refused only its
+ * refusal, under the matrix `decide` checks.
+ */
+function readComment(e: FactoryEvent<'ticket.commented'>, ticket: TicketState, answered: ReadonlySet<string>): boolean {
+  return answered.has(e.id) && (e.roles === undefined || allowed({ action: 'relaunch_blocked', channel: 'linear' }, e.actor, ticket, DEFAULT_MATRIX, e.roles).ok);
+}
+
 /** The rework an event of the journal is, if any; `ticket` is the ticket once the event applied. */
 function rework(e: FactoryEvent, ticket: TicketState, relaunched: ReadonlySet<string>): Rework | undefined {
   switch (e.type) {
@@ -249,6 +258,7 @@ export function ticketMeasures(projectId: string, ticketId: string, facts: Measu
   let firstMerge: FactoryEvent<'pr.merged'> | undefined;
   const reworks: Rework[] = [];
   const relaunched = new Set(facts.effects.filter((r) => r.effect.kind === 'start_run').map((r) => r.eventId));
+  const answered = new Set(facts.effects.map((r) => r.eventId));
   const messages: { m: Message; kind: MeasuredKind }[] = [];
   for (const e of events) {
     ticket = reduce(ticket, e) ?? ticket;
@@ -260,8 +270,9 @@ export function ticketMeasures(projectId: string, ticketId: string, facts: Measu
       const r = rework(e, ticket, relaunched);
       if (r) reworks.push(r);
     }
-    if (e.type === 'ticket.commented') messages.push({ m: e, kind: e.payload.kind });
-    else if (e.type === 'session.prompted') messages.push({ m: e, kind: e.payload.kind ?? (isQuestionSession(ticket, e.payload.linearSessionId) ? 'question' : 'instruction') });
+    if (e.type === 'ticket.commented') {
+      if (readComment(e, ticket, answered)) messages.push({ m: e, kind: e.payload.kind });
+    } else if (e.type === 'session.prompted') messages.push({ m: e, kind: e.payload.kind ?? (isQuestionSession(ticket, e.payload.linearSessionId) ? 'question' : 'instruction') });
     else if (e.type in KIND) messages.push({ m: e as Message, kind: (e as Message & { payload: { kind?: MessageKind } }).payload.kind ?? KIND[e.type as keyof typeof KIND] });
   }
   const outs = outputs(facts, events, ticket.linearSessionId);

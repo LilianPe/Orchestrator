@@ -188,9 +188,10 @@ export interface EventPayloads {
   'session.stopped': { linearSessionId?: string; repos?: string[]; waitedIn?: string };
   /**
    * The agent's question through `/agent/ask` (ORC-196), journaled when it asks: told once the block is committed, by
-   * the same comment as any block, so that a reply always finds it. `job`: the job of the run that asks.
+   * the same comment as any block, so that a reply always finds it. `job`: the job of the run that asks;
+   * `linearSessionId`: its session, where a question thread hears it.
    */
-  'agent.asked': { question: string; job: string };
+  'agent.asked': { question: string; job: string; linearSessionId?: string };
   /**
    * A human's comment on the ticket, out of any session (ORC-196): the reply to a block's comment. Decided only while the ticket is
    * blocked. `kind`, `masked`: as a session's message (ORC-180); this event never existed without them.

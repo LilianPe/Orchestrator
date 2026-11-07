@@ -591,7 +591,6 @@
             "kind": "block_comment",
             "block": {
               "step": "build",
-              "attempt": 1,
               "max": 1,
               "reason": "Le run dev a atteint un plafond (tours, durée ou budget).",
               "tried": [

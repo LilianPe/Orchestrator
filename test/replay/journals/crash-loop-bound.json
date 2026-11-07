@@ -1372,7 +1372,6 @@
             "kind": "block_comment",
             "block": {
               "step": "build",
-              "attempt": 3,
               "max": 3,
               "reason": "Trop de relances après coupure : 3 en 60 min.",
               "tried": [

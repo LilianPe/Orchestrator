@@ -587,7 +587,6 @@
             "kind": "block_comment",
             "block": {
               "step": "build",
-              "attempt": 1,
               "max": 1,
               "reason": "Boucle : même commande, même échec, 3 fois, sans changement du code.",
               "tried": [

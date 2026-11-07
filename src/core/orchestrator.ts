@@ -318,6 +318,9 @@ function sessionSaved(configDir: string, sessionId: string): boolean {
 const PUSHED = 'la branche a reçu un push depuis la review';
 const HOST_CHECKS_OFF = "aucun sandbox (FACTORY_CONTAINER_CLI) et FACTORY_ALLOW_HOST_VERIFY n'est pas à 1 : je ne lance pas le code de l'agent sur l'hôte.";
 
+/** A block made out of a decision, its step to resume as the engine's `block` journals it: only where a reply resumes it (ORC-196). */
+const blockedOn = (workflow: Workflow, reason: string, job: string): InternalEvent => ({ type: 'ticket.blocked', reason, ...(workflow.blockComment ? { job } : {}) });
+
 export class Orchestrator {
   private background = new Map<Promise<void>, string | undefined>();
   /** Runs whose event stream is still open (the runner is working, nothing for the factory to do): drained() does not wait for them. */
@@ -905,7 +908,7 @@ export class Orchestrator {
   /** The state line of a block's comment. An unknown value is said as such: reading it must not stop the comment. */
   private async blockStatus(t: TicketState): Promise<BlockStatus> {
     const sha = t.worktreePath ? await this.d.workspaces.head(t.worktreePath).catch(() => undefined) : undefined;
-    const { runs } = await this.d.store.measureFacts(t.projectId, t.ticketId).catch(() => ({ runs: [] as RunRecord[] }));
+    const runs = await this.d.store.ticketRuns(t.projectId, t.ticketId).catch((): RunRecord[] => []);
     const reported = runs.filter((r) => r.tokens !== undefined);
     const ended = runs.filter((r) => r.endedAt !== undefined);
     return {
@@ -1701,7 +1704,7 @@ export class Orchestrator {
         if (!this.handles.has(fresh.activeRunId)) events.push({ type: 'run.cleared' });
       }
       const reason = `Erreur au lancement : ${(err as Error).message}`;
-      fresh = await this.apply(fresh, ...events, { type: 'ticket.blocked', reason, job: job.name });
+      fresh = await this.apply(fresh, ...events, blockedOn(project.workflow, reason, job.name));
       // The ticket is blocked: a failed notice must not fail the effect, whose retry would start again.
       try {
         await this.tellBlock(project, fresh, blockFacts({ reason, step: stepOf(project.workflow, job.name), tried: [`Le lancement de ${job.name}.`] }), async (failed) => {
@@ -1759,7 +1762,7 @@ export class Orchestrator {
       if (failures.length) {
         this.d.scheduler.release(key);
         const reason = failures.join(' ');
-        t = await this.apply(t, { type: 'ticket.blocked', reason, job: job.name });
+        t = await this.apply(t, blockedOn(project.workflow, reason, job.name));
         await this.tellBlock(project, t, blockFacts({ reason, step: 'intake', tried: failures, question: 'Pouvez-vous corriger cela, puis répondre ici ?' }), async (refused) => {
           const session = await this.sessionFor(refused);
           await tracker.activity(session, {

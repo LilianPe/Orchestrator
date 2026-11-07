@@ -1158,7 +1158,6 @@
             "kind": "block_comment",
             "block": {
               "step": "session.prompted",
-              "attempt": 1,
               "max": 1,
               "reason": "Événement t-2 mis de côté (session.prompted) : sa décision a échoué (t.pendingFeedback is not iterable).",
               "tried": [

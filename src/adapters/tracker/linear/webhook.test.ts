@@ -12,7 +12,7 @@ import { FakeTracker } from '../fake.js';
 import { IssueNotFoundError } from '../types.js';
 import { knownLabels, recordLabels, serial } from './labels.js';
 import { reconcileOnce } from './reconcile.js';
-import { isFresh, isUsableWebhookSecret, mapLinearWebhook, stripMention, verifyLinearSignature, type MapContext } from './webhook.js';
+import { deliveryKey, isFresh, isUsableWebhookSecret, mapLinearWebhook, stripMention, verifyLinearSignature, type MapContext } from './webhook.js';
 
 const fx = (name: string) => JSON.parse(readFileSync(join(import.meta.dirname, 'fixtures', `${name}.json`), 'utf8'));
 const NAMES: Record<string, string> = { 's-hr': 'Human Review', 's-ai': 'AI Review' };
@@ -874,6 +874,17 @@ describe('a comment on the ticket as the reply to a block (ORC-196)', () => {
 
   it('a thread under the block\'s comment is a reply too', async () => {
     expect(await mapLinearWebhook(comment({ parentId: 'c0' }), 'c1', blocked())).toHaveLength(1);
+  });
+
+  it('a reply in an agent session is the session\'s: its comment is not journaled a second time', async () => {
+    expect(await mapLinearWebhook(comment({ agentSessionId: 'as-1' }), 'c1', blocked())).toEqual([]);
+    expect(await mapLinearWebhook(comment({ agentSession: { id: 'as-1' } }), 'c1', blocked())).toEqual([]);
+  });
+
+  it('a session reply and the comment Linear writes for it share one delivery key: the inbox keeps the first', () => {
+    const prompted = { ...fx('session-prompted'), agentActivity: { ...fx('session-prompted').agentActivity, sourceCommentId: 'c1' } };
+    expect(deliveryKey(prompted)).toBe(deliveryKey(comment()));
+    expect(deliveryKey(fx('session-prompted'))).toBe('activity:aa-1');
   });
 
   it.each<[string, object, object]>([

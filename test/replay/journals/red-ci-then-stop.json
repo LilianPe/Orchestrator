@@ -1806,7 +1806,6 @@
             "kind": "block_comment",
             "block": {
               "step": "fix",
-              "attempt": 1,
               "max": 1,
               "reason": "CI toujours en échec après 1 tentatives de fix-ci.",
               "tried": [

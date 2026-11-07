@@ -452,6 +452,8 @@ export interface Store {
   renewRun(id: string, until: number): Promise<void>;
   getRun(id: string): Promise<RunRecord | undefined>;
   runsByStatus(status: RunRecord['status']): Promise<RunRecord[]>;
+  /** The attempts of one ticket, oldest first: `runs` of `measureFacts`, without the rest of its facts. */
+  ticketRuns(projectId: string, ticketId: string): Promise<RunRecord[]>;
   findRunByToken(token: string): Promise<RunRecord | undefined>;
   putTimer(t: TimerRecord): Promise<void>;
   /**

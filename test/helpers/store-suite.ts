@@ -114,6 +114,15 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     expect(await s.costSince(150)).toBe(1.5);
   });
 
+  it('reads the runs of one ticket of one project, oldest first (ORC-196)', async () => {
+    const s = await store();
+    await s.putRun(run({ id: 'r2', token: 't2', startedAt: 200 }));
+    await s.putRun(run());
+    await s.putRun(run({ id: 'r3', token: 't3', ticketId: 'REL-2' }));
+    await s.putRun(run({ id: 'r4', token: 't4', projectId: 'q' }));
+    expect((await s.ticketRuns('p', 'REL-1')).map((r) => r.id)).toEqual(['r1', 'r2']);
+  });
+
   it('keeps every label of an attempt, as set when it was created (ORC-226)', async () => {
     const s = await store();
     await s.putRun(run({ labels: LABELS }));

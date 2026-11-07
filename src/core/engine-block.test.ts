@@ -38,7 +38,8 @@ describe('a block posts the standard comment (ORC-196)', () => {
   it('a run at its cap: structured fields, the comment and the label, and nothing else tells it', () => {
     const out = decide(ticket(), finished(), workflow);
     expect(out.events).toContainEqual({ type: 'ticket.blocked', reason: 'Le run dev a atteint un plafond (tours, durée ou budget).', job: 'dev' });
-    expect(notice(out)?.block).toMatchObject({ step: 'build', attempt: 1, max: 1, reason: 'Le run dev a atteint un plafond (tours, durée ou budget).' });
+    expect(notice(out)?.block).toMatchObject({ step: 'build', max: 1, reason: 'Le run dev a atteint un plafond (tours, durée ou budget).' });
+    expect(notice(out)?.block).not.toHaveProperty('attempt');
     expect(out.effects).toContainEqual({ kind: 'labels', add: [BLOCKED_LABEL], remove: [] });
     expect(out.effects.filter((e) => e.kind === 'activity' || e.kind === 'comment')).toEqual([]);
   });
@@ -46,13 +47,20 @@ describe('a block posts the standard comment (ORC-196)', () => {
   it('the failed checks at the bound: their step, the attempt out of the bound, the commands tried', () => {
     const out = decide(verifying({ verifyAttempts: workflow.limits.verifyAttempts - 1 }), ev('verify.failed', { runId: 'r1', job: 'dev', failures: [failure] }), workflow);
     const max = workflow.limits.verifyAttempts;
-    expect(notice(out)?.block).toMatchObject({ step: 'verify', attempt: max, max, tried: ['`npm test` (code 1)'] });
+    expect(notice(out)?.block).toMatchObject({ step: 'verify', max, tried: ['`npm test` (code 1)'] });
   });
 
   it('a question of the agent is the comment\'s question, its block the cause « question »', () => {
     const out = decide(ticket(), finished({ outcome: 'success', attempt: 'needs_input', output: { status: 'blocked', question: 'Quel séparateur ?' } as never }), workflow);
     expect(notice(out)?.block.question).toBe('Quel séparateur ?');
     expect(blockCause(reduce(ticket(), out.events[0]!)?.blockReason)).toBe('question');
+  });
+
+  it('an agent that gives no question, or no justification, leaves the default question: no empty line', () => {
+    const asks = decide(ticket(), finished({ outcome: 'success', attempt: 'needs_input', output: { status: 'blocked', question: '' } as never }), workflow);
+    expect(notice(asks)?.block.question).toMatch(/^Je reprends l'étape/);
+    const disputes = decide(ticket(), finished({ outcome: 'success', attempt: 'spec_impossible', output: { status: 'blocked' } as never }), workflow);
+    expect(notice(disputes)?.block.question).toMatch(/^Pouvez-vous corriger le ticket/);
   });
 
   it.each<[string, TicketState, FactoryEvent, string]>([
@@ -69,7 +77,8 @@ describe('a block posts the standard comment (ORC-196)', () => {
   it('a red check that could not run says why in the comment', () => {
     const wf: Workflow = { ...workflow, jobs: { ...workflow.jobs, tests: { ...workflow.jobs['tests']!, red: { command: 'npm test --', mode: 'measure', attempts: 3 } } } };
     const out = decide(verifying({ activeJob: 'tests' }), ev('verify.failed', { runId: 'r1', job: 'tests', red: 'infra', failures: [{ command: 'factory/red', exitCode: null, output: 'base absente' }] }), wf);
-    expect(notice(out)?.block).toMatchObject({ step: 'red', tried: ['base absente'] });
+    // One line per check, as every verify path: never the raw output.
+    expect(notice(out)?.block).toMatchObject({ step: 'red', tried: ['`factory/red` (code timeout)'] });
   });
 
   it('a dead letter is told in the same comment, and its repair still lifts its block', () => {
@@ -81,14 +90,14 @@ describe('a block posts the standard comment (ORC-196)', () => {
 
   it('a row out of its attempts says so: the attempts in the header and what was tried, no failed decision for an outage (ORC-320)', () => {
     const out = decide(ticket(), ev('dead_letter.added', { eventId: 'x', eventType: 'pr.opened', error: 'connection refused', failures: 1, attempts: 5 }), workflow);
-    expect(notice(out)?.block).toMatchObject({ attempt: 5, max: 5, tried: ['5 essais de traiter cet événement.'], reason: 'Événement x mis de côté (pr.opened) : 5 essais sans aboutir (connection refused).' });
+    expect(notice(out)?.block).toMatchObject({ max: 5, tried: ['5 essais de traiter cet événement.'], reason: 'Événement x mis de côté (pr.opened) : 5 essais sans aboutir (connection refused).' });
     expect(blockCause(notice(out)?.block.reason)).toBe('dead_letter');
     expect(reduce(reduce(ticket(), out.events[0]!), { ...ev('dead_letter.repaired', { eventId: 'x', action: 'skip', by: 'ops', event: {} as never }) } as FactoryEvent)?.blocked).toBe(false);
   });
 
   it('a row whose decision threw keeps its sentence, and so does one journaled before', () => {
     const out = decide(ticket(), ev('dead_letter.added', { eventId: 'x', eventType: 'pr.opened', error: 'boom', failures: 1 }), workflow);
-    expect(notice(out)?.block).toMatchObject({ attempt: 1, max: 1, tried: ['1 décision(s) de cet événement.'], reason: 'Événement x mis de côté (pr.opened) : sa décision a échoué (boom).' });
+    expect(notice(out)?.block).toMatchObject({ max: 1, tried: ['1 décision(s) de cet événement.'], reason: 'Événement x mis de côté (pr.opened) : sa décision a échoué (boom).' });
   });
 
   it('a team with no repo: the comment says a reply is not enough, and still blocks with its reason', () => {
@@ -139,6 +148,21 @@ describe('the question of the agent, journaled (ORC-196)', () => {
 
   it('a frozen version posts what it did', () => {
     expect(decide(ticket(), asked, frozen).effects[0]).toEqual({ kind: 'activity', type: 'elicitation', body: 'Laquelle ?' });
+  });
+
+  it('a question asked from a question thread is told there too, besides the ticket comment', () => {
+    const out = decide(ticket(), ev('agent.asked', { question: 'Q', job: 'ask', linearSessionId: 's-q' }), workflow);
+    expect(out.effects).toContainEqual({ kind: 'activity', type: 'elicitation', body: 'Q', linearSessionId: 's-q' });
+    expect(notice(out)).toBeDefined();
+    // The dev session hears it by the comment only: one channel.
+    expect(decide(ticket(), ev('agent.asked', { question: 'Q', job: 'dev', linearSessionId: 's-dev' }), workflow).effects.filter((e) => e.kind === 'activity')).toEqual([]);
+    expect(decide(ticket(), ev('agent.asked', { question: 'Q', job: 'dev', linearSessionId: 's-q' }), frozen).effects[0]).toEqual({ kind: 'activity', type: 'elicitation', body: 'Q', linearSessionId: 's-q' });
+  });
+
+  it('a ticket not delegated is not blocked: no reply on it would resume anything, the question goes to its thread only', () => {
+    const out = decide(ticket({ delegated: false }), ev('agent.asked', { question: 'Q', job: 'ask', linearSessionId: 's-q' }), workflow);
+    expect(out.events).toEqual([]);
+    expect(out.effects).toEqual([{ kind: 'activity', type: 'elicitation', body: 'Q', linearSessionId: 's-q' }]);
   });
 });
 
@@ -239,6 +263,12 @@ describe('a reply resumes the blocked step (ORC-196)', () => {
     it('a secret masked out of a comment is told on the ticket, which has no session to carry it', () => {
       const out = decide(blockedOn('dev'), comment(signed, 'instruction', { masked: true }), workflow);
       expect(out.effects).toContainEqual({ kind: 'comment', body: expect.stringContaining('contenait un secret') });
+    });
+
+    it('a masked comment that is not read gets no notice: not awaited, or refused', () => {
+      const masked = (extra: Partial<FactoryEvent>) => comment(extra, 'instruction', { masked: true });
+      expect(decide(ticket(), masked(signed), workflow).effects).toEqual([]);
+      expect(decide(blockedOn('dev'), masked({ actor: 'u-out', roles: [] }), workflow).effects).toEqual([{ kind: 'comment', body: expect.stringContaining('Refusé') }]);
     });
   });
 

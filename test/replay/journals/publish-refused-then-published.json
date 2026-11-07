@@ -945,7 +945,6 @@
             "kind": "block_comment",
             "block": {
               "step": "publish",
-              "attempt": 1,
               "max": 1,
               "reason": "Publication refusée : la branche porte un commit que ce travail n'a pas",
               "tried": [

@@ -83,7 +83,7 @@ function redFailed(out: Decision, at: { event: FactoryEvent<'verify.failed'>; ti
   const { red: cause = 'error', failures, runId } = at.event.payload;
   if (cause === 'infra') {
     const reason = `Le contrôle du rouge de ${job.name} n'a pas pu tourner : panne d'infrastructure, l'agent n'est pas en cause.`;
-    return block(out, at.workflow, { reason, body: `${reason}\n${failures[0]?.output ?? ''}\nRépondez dans ce fil pour que je reprenne.`, job: job.name, step: 'red', tried: failures.map((f) => f.output) });
+    return block(out, at.workflow, { reason, body: `${reason}\n${failures[0]?.output ?? ''}\nRépondez dans ce fil pour que je reprenne.`, job: job.name, step: 'red', tried: triedFailures(failures) });
   }
   if (red.mode === 'measure') {
     out.trace.push(`red: aurait bloqué (${cause}), mode mesure : le run continue`);
@@ -139,7 +139,7 @@ function refreeze(out: Decision, event: FactoryEvent<'command'>, ticket: TicketS
  * A block, in fields. `body`: the free text a version frozen before ORC-196 posts instead. `job`: the step a reply
  * resumes, and the step the comment names unless `step` says otherwise.
  */
-type Block = Omit<Parameters<typeof blockFacts>[0], 'step'> & { body: string } & ({ job: string; step?: string } | { job?: undefined; step: string });
+type Block = Omit<Parameters<typeof blockFacts>[0], 'step'> & { body: string; linearSessionId?: string | undefined } & ({ job: string; step?: string } | { job?: undefined; step: string });
 
 /** What a run's end says of its block: its job is the caller's. */
 type RunBlock = Pick<Block, 'reason' | 'body' | 'tried' | 'question'>;
@@ -151,7 +151,7 @@ function tell(out: Decision, workflow: Workflow, facts: BlockFacts, frozen: Effe
 
 function block(out: Decision, workflow: Workflow, b: Block): Decision {
   out.events.push({ type: 'ticket.blocked', reason: b.reason, ...(workflow.blockComment && b.job ? { job: b.job } : {}) });
-  tell(out, workflow, blockFacts({ ...b, step: b.step ?? stepOf(workflow, b.job!) }), { kind: 'activity', type: 'elicitation', body: b.body });
+  tell(out, workflow, blockFacts({ ...b, step: b.step ?? stepOf(workflow, b.job!) }), { kind: 'activity', type: 'elicitation', body: b.body, ...(b.linearSessionId ? { linearSessionId: b.linearSessionId } : {}) });
   return out;
 }
 
@@ -193,13 +193,13 @@ function attemptDecision(p: EventPayloads['run.finished'], job: JobSpec): RunOut
       return { reason, body: `${reason} Répondez dans ce fil pour que je reprenne.`, tried: [`Le run ${job.name} lancé : son processus s'est arrêté sans résultat.`] };
     }
     case 'needs_input':
-      return { reason: "En attente d'une réponse à la question de l'agent.", body: `${question}\n\nRépondez dans ce fil pour que je reprenne.`, tried: [`Le run ${job.name} lancé : l'agent demande une précision.`], question };
+      return { reason: "En attente d'une réponse à la question de l'agent.", body: `${question}\n\nRépondez dans ce fil pour que je reprenne.`, tried: [`Le run ${job.name} lancé : l'agent demande une précision.`], question: question || undefined };
     case 'spec_impossible':
       return {
         reason: "L'agent conteste le ticket : il ne peut pas le réaliser honnêtement tel qu'il est écrit.",
         body: `Je ne peux pas réaliser ce ticket tel qu'il est écrit : ${question}\n\nCorrigez le ticket ou répondez dans ce fil pour que je reprenne.`,
         tried: [`Le run ${job.name} lancé : l'agent rend \`spec_impossible\`.`],
-        question: `${question} Pouvez-vous corriger le ticket, ou préciser ce qui est attendu ?`,
+        question: [question, 'Pouvez-vous corriger le ticket, ou préciser ce qui est attendu ?'].filter(Boolean).join(' '),
       };
     default:
       return p.outcome;
@@ -884,7 +884,8 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
     out.effects.push(blockedLabelChange(true, false)!);
   }
   acknowledge(out, event, state);
-  noticeMasked(out, event);
+  // A comment decide did not read (no reply awaited, refused) is not the factory's to answer.
+  if (event.type !== 'ticket.commented' || out.events.some((e) => e.type === 'feedback.appended')) noticeMasked(out, event);
   return out;
 }
 
@@ -1061,10 +1062,18 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
     case 'run.lost':
       return attemptLost(out, event, ticket, workflow);
     case 'agent.asked': {
+      const { question, job, linearSessionId } = event.payload;
+      const asker: Effect = { kind: 'activity', type: 'elicitation', body: question, ...(linearSessionId ? { linearSessionId } : {}) };
+      // Not delegated: no reply on the ticket would resume it, so nothing blocks it; its thread hears the question (ORC-180).
+      if (!ticket?.delegated) {
+        if (linearSessionId) out.effects.push(asker);
+        return out;
+      }
+      // A question thread hears it where it was asked; the dev session by the comment only, the one channel of a block.
+      if (workflow.blockComment && linearSessionId && linearSessionId !== ticket.linearSessionId) out.effects.push(asker);
       // The job at work is the step a reply resumes; a question run has none on the ticket.
-      const { question, job } = event.payload;
-      const at = ticket?.activeJob ? { job: ticket.activeJob } : { step: job };
-      return block(out, workflow, { reason: "Question posée par l'agent", body: question, ...at, tried: [`Le run ${job} en cours : l'agent demande une précision.`], question });
+      const at = ticket.activeJob ? { job: ticket.activeJob } : { step: job };
+      return block(out, workflow, { reason: "Question posée par l'agent", body: question, linearSessionId, ...at, tried: [`Le run ${job} en cours : l'agent demande une précision.`], question: question || undefined });
     }
     case 'verify.lost': {
       const { runId, job, output } = event.payload;

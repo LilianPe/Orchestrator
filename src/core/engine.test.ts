@@ -744,7 +744,7 @@ describe('decide — built-ins', () => {
       expect(out).toEqual(
         decision({
           events: [{ type: 'ticket.blocked', reason, job: 'fix-ci' }],
-          effects: [{ kind: 'block_comment', block: expect.objectContaining({ step: 'fix', attempt: 2, max: 2, reason, tried: ['`test`', '`lint`'] }) }, { kind: 'labels', add: ['Bloqué'], remove: [] }],
+          effects: [{ kind: 'block_comment', block: expect.objectContaining({ step: 'fix', max: 2, reason, tried: ['`test`', '`lint`'] }) }, { kind: 'labels', add: ['Bloqué'], remove: [] }],
         }),
       );
       // Blocked, the ticket gets no fix-ci from a later red CI either, and no second notice.

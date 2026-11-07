@@ -166,6 +166,8 @@ function sessionEvents(body: any, author: string, projectId: string, ctx: MapCon
 async function commentEvents(body: any, identifier: string, projectId: string, actor: string | undefined, author: string, ctx: MapContext): Promise<PartialEvent[]> {
   const text: unknown = body.data?.body;
   if (body.action !== 'create' || !actor || typeof text !== 'string' || !text.trim() || isEffectComment(text)) return [];
+  // A reply in an agent session comes as its `prompted` webhook: its comment is the same message (`deliveryKey` too).
+  if (body.data.agentSessionId || body.data.agentSession) return [];
   const bare = stripMention(text);
   if (bare !== text.trim() || parseCommand(bare).name === REFREEZE) return [];
   const ticket = await ctx.ticket(projectId, identifier);
@@ -284,7 +286,11 @@ export async function recordIssueLabels(body: any, ctx: MapContext): Promise<voi
 
 // Linear-Delivery is outside the HMAC: the dedup key must come from the signed body.
 export function deliveryKey(body: any): string {
+  // A session reply and the comment Linear may write for it are one message: one key, the inbox keeps the first (ORC-196).
+  // ponytail: the field names (`sourceCommentId`, the comment's `agentSessionId`) are Linear's API's, not seen in a captured webhook yet.
+  if (body?.type === 'Comment' && body.data?.id) return `comment:${body.data.id}`;
   if (body?.type === 'AgentSessionEvent') {
+    if (body.action === 'prompted' && body.agentActivity?.sourceCommentId) return `comment:${body.agentActivity.sourceCommentId}`;
     if (body.action === 'prompted' && body.agentActivity?.id) return `activity:${body.agentActivity.id}`;
     if (body.action === 'created' && body.agentSession?.id) return `session:${body.agentSession.id}`;
   }
