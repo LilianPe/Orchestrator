@@ -2,7 +2,14 @@
 
 Un dépôt peut déclarer à l'usine ses commandes, ses chemins sensibles et ses limites dans `.factory/config.yml`, à la racine. Le fichier est facultatif : sans lui, le socle de `factory/default` s'applique tel quel.
 
-**Statut (ORC-209, partie A).** Le schéma et `factory validate` existent. Le démon lit de ce fichier `env` et `setup_secrets`, sur la branche par défaut, à chaque lancement (ORC-211), et `commands`, `setup` et `env` à chaque `verify`, sur la branche par défaut de la forge, récupérée à ce moment-là : jamais sur la branche de l'agent, ni sur une référence du dépôt, qu'il peut écrire (ORC-151). La lecture du reste et l'interdiction de `.factory/**` à l'agent viennent avec la partie C d'ORC-209 ; `factory.yml` côté serveur avec la partie B.
+**Statut (ORC-209).** Le schéma, `factory validate` et la lecture par le démon existent (voir [Quand et où il est lu](#quand-et-où-il-est-lu)). Appliqués aux runs : `setup`, `env`, `setup_secrets` et `network` au lancement, `commands`, `setup` et `env` à chaque `verify`. Lus et validés, mais pas encore appliqués : `budgets` (ORC-216), `services` (ORC-282, ORC-309), `max_diff` (ORC-145, ORC-125), `sensitive_paths` (le moteur garde la liste du socle), `visual_paths` et `feature_flags`.
+
+## Quand et où il est lu
+
+- **Au lancement de chaque run d'agent**, une seule fois, sur la branche par défaut telle que le dépôt de l'usine la connaît (`origin/HEAD`, récupérée juste avant pour un worktree neuf) : jamais dans le worktree de l'agent, ni sur sa branche. L'agent ne peut pas écrire cette référence : son dossier git est le sien (ORC-317). Le run en tire son `setup`, ses variables et son niveau réseau.
+- **À chaque `verify`**, sur la branche par défaut de la forge, récupérée à ce moment-là dans un clone à part (ORC-151) : `commands`, `setup` et `env`.
+- **Un fichier invalide refuse le lancement** : le ticket se bloque avec le message de `factory validate` (« Erreur au lancement : .factory/config.yml refusé : … »), sans worktree neuf, sans sandbox ni run. Aucun run ne part sur une config à moitié lue. Corrigez le fichier sur la branche par défaut, puis relancez.
+- **L'agent ne peut pas changer la config de son run.** `.factory/**` est un chemin interdit : `verify` bloque un commit qui y touche (`factory/chemins-interdits`), et le run suivant relit le fichier de la branche par défaut. Une modification de la config passe par une PR humaine, mergée sur la branche par défaut.
 
 ## Exemple
 
@@ -26,7 +33,7 @@ network: { level: limited, allow: ["docs.exemple.com"] }   # none | limited (dé
 | Clé | Type | Défaut | Rôle |
 | -- | -- | -- | -- |
 | `extends` | texte | `factory/default@1.0` | Le préréglage ; seul `factory/default@1.0` existe au MVP. |
-| `setup` | commande | aucune | Préparation du dépôt (installation, migrations). `verify` la relance sur son clone neuf, à `limited` et sans secret, avant ses commandes ; absente : `workspace.setup` du workflow. |
+| `setup` | commande | aucune | Préparation du dépôt (installation, migrations), lancée sur chaque worktree neuf avant l'agent ; `verify` la relance sur son clone neuf, à `limited` et sans secret, avant ses commandes. Absente : `workspace.setup` du workflow. |
 | `commands` | `nom: commande` | `{}` | Les contrôles du dépôt (`lint`, `typecheck`, `test`…), lancés par `verify` dans l'ordre du fichier, au niveau réseau `none`. Vide : `jobs.<job>.verify` du workflow, jusqu'à ORC-177. |
 | `env` | liste de noms | `[]` | Variables que le runner reçoit : `setup`, agent, contrôle du rouge, et `verify`. Voir [Variables et secrets](#variables-et-secrets). |
 | `setup_secrets` | liste de noms | `[]` | Secrets que le `setup` seul reçoit, scellés avant que l'agent démarre. |
@@ -36,7 +43,7 @@ network: { level: limited, allow: ["docs.exemple.com"] }   # none | limited (dé
 | `max_diff` | `{ files, lines }` | `{ 15, 400 }` | Taille maximale du diff hors tests ; on ne peut que resserrer. |
 | `feature_flags.provider` | texte | aucun | Fournisseur de feature flags. |
 | `visual_paths` | liste de motifs | `[]` | Chemins qui demandent une preuve visuelle (ORC-176). |
-| `network` | `{ level, allow }` | `limited`, `[]` | Niveau réseau de l'agent : `none`, `limited` ou `custom`. |
+| `network` | `{ level, allow }` | `limited`, `[]` | Niveau réseau de l'agent : `none`, `limited` ou `custom`. Voir [Réseau de l'agent](#réseau-de-lagent). |
 
 ## Variables et secrets
 
@@ -77,6 +84,18 @@ Une configuration **ajoute** des contrôles ou des interdits, elle n'en **retire
 Les chemins interdits du socle (`.github/workflows/**`, `.factory/**`, `.claude/**`, `.git/hooks/**`, `.git/config`, `.gitattributes`, `.gitmodules`, `.npmrc`, `package.json#scripts`, `.husky/**`, `.vscode/**`, `Dockerfile*`, `.devcontainer/**`, `claims/**`, liens symboliques sortants) restent toujours interdits à l'agent, quoi que le fichier déclare. `factory/chemins-interdits` les bloque dans `verify`, à toute profondeur, sauf `.github/workflows/**` et `claims/**`, lus à la racine (ORC-151).
 
 `custom` est `limited` avec les hôtes du dépôt : c'est le plafond `limited` contre lequel les étapes du préréglage sont vérifiées ; `none` est le plafond `none`.
+
+## Réseau de l'agent
+
+Chaque run d'agent prend le niveau du dépôt, lu au lancement :
+
+| `network.level` | Ce que l'agent joint |
+| -- | -- |
+| `limited` (défaut) | L'API Claude, GitHub et les registres en lecture, les docs de la liste de l'usine. |
+| `custom` | `limited`, plus les hôtes de `network.allow`, en lecture. |
+| `none` | L'API Claude seule (`claude-api`) : sans elle, l'agent ne tourne pas. |
+
+Toutes les étapes ont aujourd'hui ce même niveau : celui que le préréglage donne à chaque étape (la revue en `claude-api`) s'appliquera quand la revue se passera de `gh` et de `git fetch` (ORC-322). Après un redémarrage du démon, un run repris garde son niveau mais perd la liste `allow` : il ne peut que se restreindre.
 
 ## Vérifier
 

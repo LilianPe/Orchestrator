@@ -6,13 +6,24 @@ import { parseRepoConfig, type RepoConfig } from '../config/repo-config.js';
 import { NO_REPO_VARIABLES, repoVariables, type RepoVariables } from '../config/repo-variables.js';
 
 /**
- * The variables of a project's repository at each launch (ORC-211): its entry in `factory.yml`, found by
- * its team and its `origin` on GitHub, and what `.factory/config.yml` declares on the default branch,
- * never in a worktree the agent writes. A failure is the caller's: a launch goes on without them, and a
- * setup that needs a secret then fails by itself.
- * ponytail: its own read of the config, for these two keys; ORC-209 C reads it whole at the launch.
- * The agent has neither `origin` nor `origin/HEAD` of this repository to write: its git dir is its own (ORC-317).
+ * `.factory/config.yml` of a project's repository, read once at each launch (ORC-209 C): on its default branch as
+ * the factory's repository has it (`originHead`), never in a worktree the agent writes nor on its branch. The agent
+ * has neither `origin` nor `origin/HEAD` of this repository to write: its git dir is its own (ORC-317). No file: the
+ * socle. An invalid file, or a default branch git cannot read, rejects: no run starts on a config half read.
  */
+export function makeRepoConfig(o: { exec?: Exec } = {}): (project: { repoPath: string }) => Promise<RepoConfig> {
+  const exec = o.exec ?? execCmd;
+  return async ({ repoPath }) => {
+    const ref = await originHead(exec, repoPath);
+    // `ls-tree` tells a file absent from a branch it could not read, which `git show` answers alike.
+    const entry = await mustExec(exec, 'git', ['-C', repoPath, 'ls-tree', '-z', ref, '--', REPO_CONFIG_PATH]);
+    const blob = /^\d+ blob ([0-9a-f]+)\t/.exec(entry)?.[1];
+    return parseRepoConfig(blob ? await mustExec(exec, 'git', ['-C', repoPath, 'cat-file', 'blob', blob]) : undefined);
+  };
+}
+
+const REPO_CONFIG_PATH = '.factory/config.yml';
+
 /**
  * Where a project's forge is, read once by process (ORC-151): `bootstrap` asks it before any run starts.
  * ponytail: the URL should come from the instance's configuration (`factory.yml`), with ORC-273's forge.
@@ -29,7 +40,11 @@ export function makeOriginUrl(o: { exec?: Exec } = {}): (project: { repoPath: st
   };
 }
 
-export function makeRepoVariables(o: { yml: FactoryYml | undefined; log: (message: string) => void; exec?: Exec }): (project: { id: string; repoPath: string; teamKey: string }, config?: RepoConfig) => Promise<RepoVariables> {
+/**
+ * The variables of a project's repository at each launch (ORC-211): its entry in `factory.yml`, found by its team and
+ * its `origin` on GitHub, and the names `config` declares, as the launch (`makeRepoConfig`) or `verify` (ORC-151) read it.
+ */
+export function makeRepoVariables(o: { yml: FactoryYml | undefined; log: (message: string) => void; exec?: Exec }): (project: { id: string; repoPath: string; teamKey: string }, config: RepoConfig) => Promise<RepoVariables> {
   const exec = o.exec ?? execCmd;
   const github = githubRepoOf(exec);
   return async ({ id, repoPath, teamKey }, config) => {
@@ -38,9 +53,7 @@ export function makeRepoVariables(o: { yml: FactoryYml | undefined; log: (messag
     const name = (await github(repoPath))?.toLowerCase();
     const server = entries.find((r) => r.github.toLowerCase() === name);
     if (!server) return NO_REPO_VARIABLES;
-    // `config`: the file as `verify` read it from the forge (ORC-151), not through a ref of this repository.
-    const file = config ? undefined : await exec('git', ['-C', repoPath, 'show', `${await originHead(exec, repoPath)}:.factory/config.yml`]);
-    const vars = repoVariables(config ?? parseRepoConfig(file?.code === 0 ? file.stdout : undefined), server);
+    const vars = repoVariables(config, server);
     if (vars.missing.length) o.log(`${id} : variables déclarées par le dépôt, sans valeur dans factory.yml, absentes du runner : ${vars.missing.join(', ')}`);
     return vars;
   };

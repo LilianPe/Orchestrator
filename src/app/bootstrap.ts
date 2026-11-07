@@ -27,7 +27,7 @@ import { isUsableWebhookSecret } from '../adapters/tracker/linear/webhook.js';
 import { GitWorkspaces } from '../adapters/workspace/git-workspaces.js';
 import { saveAgentOutput, type AgentOutput } from '../core/agent-output.js';
 import { activeClaudeToken, loadFactoryYml, stepSettings } from '../config/factory-yml.js';
-import { makeOriginUrl, makeRepoVariables } from './repo-variables.js';
+import { makeOriginUrl, makeRepoConfig, makeRepoVariables } from './repo-variables.js';
 import { daemonSecretValues, effectiveInstance, homePaths, linearSettings, saveLinearTokens } from '../config/instance.js';
 import { githubWebhookSecret, resolveGithubApp } from '../config/github-app.js';
 import { writeRunSettings } from '../config/run-settings.js';
@@ -231,6 +231,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       knowledgeConfigured: !!instance.knowledge,
       roles,
       repoVariables: makeRepoVariables({ yml, log }),
+      repoConfig: makeRepoConfig(),
       originUrl,
       fullReadPaths: (t) => Object.keys(t.frozenTests?.files ?? {}),
       ...(sandboxes

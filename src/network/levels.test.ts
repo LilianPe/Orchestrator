@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { parseRepoConfig } from '../config/repo-config.js';
-import { allowConnect, allowRequest, stepPolicy, type EgressPolicy } from './levels.js';
+import { agentPolicy, allowConnect, allowRequest, stepPolicy, type EgressPolicy } from './levels.js';
 
 const repo = (yaml?: string) => parseRepoConfig(yaml);
 const limited: EgressPolicy = { level: 'limited', allow: [] };
@@ -25,6 +25,17 @@ describe('stepPolicy', () => {
 
   it('refuses full: it is the setup’s, never the agent’s', () => {
     expect(() => stepPolicy(repo(), 'full')).toThrow(/setup/);
+  });
+});
+
+describe('agentPolicy (an agent run, ORC-209 C)', () => {
+  it("is the repository's level, with its hosts for custom", () => {
+    expect(agentPolicy(repo())).toEqual(limited);
+    expect(agentPolicy(repo('network: { level: custom, allow: [docs.exemple.com] }\n'))).toEqual({ level: 'limited', allow: ['docs.exemple.com'] });
+  });
+
+  it('keeps the Claude API for a repository at none: the agent cannot run without it', () => {
+    expect(agentPolicy(repo('network: { level: none }\n'))).toEqual({ level: 'claude-api', allow: [] });
   });
 });
 
