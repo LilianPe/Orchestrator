@@ -90,24 +90,15 @@ if (PG_URL) {
     }
   });
 
-  /**
-   * The drops under way, each settled with its error if any. A drop forces an immediate checkpoint of the
-   * whole server: on a loaded machine one took more than the hook's 60 s (ORC-290). Not awaited by the test
-   * that made the database, they go on beside the next tests, and drops at the same time share a checkpoint.
-   */
-  const dropping: Promise<unknown>[] = [];
-
-  afterEach(() => {
+  afterEach(async () => {
     const dbs = open;
     open = [];
     for (const db of dbs) db.closed = true;
-    dropping.push(...dbs.map((db) => drop(db).catch((err: unknown) => err)));
+    await Promise.all(dbs.map(drop));
   });
 
   afterAll(async () => {
-    const failed = (await Promise.all(dropping)).find((err) => err !== undefined);
     await template?.drop();
-    if (failed) throw failed;
   });
 } else {
   beforeEach((ctx) => ctx.skip());
