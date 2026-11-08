@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { BASE, checkBranchPaths, cloneGit, forkPoint, gitReader } from '../../core/clean-verify.js';
 import { readConventions } from '../../core/prompt.js';
 import { parseRepoConfig } from '../../config/repo-config.js';
@@ -421,6 +421,14 @@ describe('GitWorkspaces', () => {
   });
 
   it("checks the agent's files out through the LFS filter as the repository reaches the forge, its credentials left out of the agent's config (ORC-341)", async () => {
+    // Neither the machine's global nor its system config: where git-lfs is installed, its `filter.lfs.process` is there,
+    // and git runs it instead of the fake below, at the commit and at the checkout (as on GitHub's runners).
+    const none = join(mkdtempSync(join(tmpdir(), 'factory-git-')), 'none');
+    vi.stubEnv('GIT_CONFIG_GLOBAL', none);
+    vi.stubEnv('GIT_CONFIG_NOSYSTEM', '1');
+    onTestFinished(() => {
+      vi.unstubAllEnvs();
+    });
     const { base, repo, root } = fixtureRepo();
     const seen = join(base, 'seen');
     // As git-lfs's smudge: what it reads of the config to reach the forge.
@@ -435,6 +443,7 @@ describe('GitWorkspaces', () => {
     git(repo, 'config', 'http.https://github.com/.extraheader', 'AUTHORIZATION: basic SECRET-341');
     const w = await new GitWorkspaces({ root }).prepare(req(repo));
     expect(readFileSync(join(w.path, 'big.bin'), 'utf8')).toBe('data\n');
+    expect(existsSync(seen), 'the checkout ran the fake smudge').toBe(true);
     expect(readFileSync(seen, 'utf8').split('\n')).toEqual(expect.arrayContaining([TOKEN_URL, 'AUTHORIZATION: basic SECRET-341']));
     expect(agentConfig(w.path)).not.toContain('SECRET-341');
   });
