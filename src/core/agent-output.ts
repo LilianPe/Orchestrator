@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { OUTPUT_LIMITS } from '../publish/output-limits.js';
 import type { Store } from '../store/types.js';
-import { formatSpec, SPEC_FRAME, specSchema } from './spec.js';
+import { formatSpec, item, list, SPEC_FRAME, specSchema } from './spec.js';
 import { RISKS, TICKET_SIZES, type RunOutcome } from './types.js';
 
 /**
@@ -18,10 +18,6 @@ export const intakeAssessmentSchema = z
   })
   .strict()
   .refine((a) => a.complete || a.missing.length > 0, { path: ['missing'], message: 'at least one question when the ticket is not complete' });
-
-/** An entry of a list `submit_result` holds, and the list: capped as what the factory publishes of them (ORC-214). */
-const item = z.string().max(OUTPUT_LIMITS.item);
-const list = z.array(item).max(OUTPUT_LIMITS.items);
 
 /**
  * The comment of a build's end, in the factory's order and words (ORC-289, ORC-214): what the `OutputPolicy` publishes of a

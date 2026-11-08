@@ -6,8 +6,8 @@ import { OUTPUT_LIMITS } from '../publish/output-limits.js';
  * schema: whether one is missing is `spec_check`'s verdict, the factory's, not a refusal of the agent's result. The
  * sizes are capped as what the factory publishes (ORC-214), so the spec it posts in the session fits a message.
  */
-const item = z.string().max(OUTPUT_LIMITS.item);
-const list = z.array(item).max(OUTPUT_LIMITS.items);
+export const item = z.string().max(OUTPUT_LIMITS.item);
+export const list = z.array(item).max(OUTPUT_LIMITS.items);
 
 export const specSchema = z
   .object({
@@ -28,6 +28,8 @@ export const specSchema = z
   .strict();
 
 export type Spec = z.infer<typeof specSchema>;
+/** A `clarify` decision as the spec carries it, and as the ticket records it (ORC-210). */
+export type SpecDecision = NonNullable<Spec['decisions']>[number];
 
 /** A version of the ticket's spec (ORC-212): published for review, approved once by a designated validator. */
 export interface SpecVersion {
@@ -55,9 +57,10 @@ const SECTIONS = ['goal', 'out_of_scope', 'criteria', 'files', 'architecture', '
 /**
  * `spec_check` (ORC-212), deterministic: every section present (an empty list is present), at least one acceptance
  * criterion and none empty, each property with its statement, domain and target, and each `clarify` decision of the
- * ticket carried by the spec with its answer as the human gave it. The problems found, in the order a reader fixes them; none when the spec passes.
+ * ticket carried by the spec with its answer as the human gave it. The problems found, in the order a reader fixes
+ * them; none when the spec passes.
  */
-export function specCheck(spec: Spec | undefined, decisions: readonly { question: string; answer: string }[] = []): string[] {
+export function specCheck(spec: Spec | undefined, decisions: readonly SpecDecision[] = []): string[] {
   if (!spec) return ['No `spec` in the result.'];
   const missing = (v: string | readonly string[] | undefined) => v === undefined || (typeof v === 'string' && !v.trim());
   const problems = SECTIONS.filter((s) => missing(spec[s])).map((s) => `Section \`${s}\` is missing.`);
@@ -93,5 +96,15 @@ export function formatSpec(spec: Spec): string {
   ].join('\n\n');
 }
 
-/** What the published message adds around the spec (its head and the commands), kept out of the spec's own cap. */
-export const SPEC_FRAME = 600;
+const head = (risk: string, count: number, version: number) =>
+  `Spec published (risk: ${risk}). ${count} acceptance ${count === 1 ? 'criterion' : 'criteria'} → tests. Version ${version}, waiting for review.`;
+const COMMANDS = `Reply \`${APPROVE}\` to approve this version, \`${CHANGES} <comment>\` to ask for a new one, or \`${REJECT}\`. Approval is reserved for the validators designated by the project, never the run's initiator.`;
+const NOT_ASSESSED = 'not assessed';
+
+/** The message that publishes a version of the spec in the ticket's session (ORC-212): its head, the spec, the commands. */
+export function publishedSpec(spec: Spec, at: { version: number; risk?: string | undefined }): string {
+  return [head(at.risk ?? NOT_ASSESSED, spec.criteria?.length ?? 0, at.version), formatSpec(spec), COMMANDS].join('\n\n');
+}
+
+/** What the published message adds around the spec at its longest, kept out of the spec's own cap. */
+export const SPEC_FRAME = head(NOT_ASSESSED, OUTPUT_LIMITS.items, 99_999).length + COMMANDS.length + 4;

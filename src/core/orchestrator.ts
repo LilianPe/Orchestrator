@@ -2318,13 +2318,14 @@ export class Orchestrator {
       }
       if (carried.length) input = withHumanInbox(input, carried);
 
+      // The approved spec for the steps after its gate, the version not approved for the step that rewrites it (ORC-212).
+      const specShown = !!t.spec && job.queue === 'dev' && (job.step === 'spec_draft' ? !t.spec.approval : !!t.spec.approval);
       const promptInput = {
         skill: job.skill,
         issue: { identifier: issue.identifier, title: issue.title, description: issue.description, url: issue.url },
         branch: job.queue === 'dev' ? t.branch : undefined,
         prUrl: t.prUrl,
-        // The approved spec for the steps after its gate, the version not approved for the step that rewrites it (ORC-212).
-        spec: job.queue === 'dev' && t.spec && !!t.spec.approval !== (job.step === 'spec_draft') ? { version: t.spec.version, approved: !!t.spec.approval, text: formatSpec(t.spec.spec) } : undefined,
+        spec: specShown && t.spec ? { version: t.spec.version, approved: !!t.spec.approval, text: formatSpec(t.spec.spec) } : undefined,
         conventions,
         input,
         reviewRounds: wf.limits.reviewRounds,
