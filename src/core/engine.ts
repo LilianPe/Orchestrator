@@ -5,7 +5,7 @@ import { evalCondition } from './conditions.js';
 import { deadLetterReason, deadLetterTried, heldMessage, isRefusedNotice, liftDeadLetterBlock, REPAIR_LABELS, repairedEvent } from './dead-letter.js';
 import type { AgentOutput } from './agent-output.js';
 import { blockFacts, type BlockFacts } from './block-comment.js';
-import { AGENT_QUESTION, STOPPED } from './block-cause.js';
+import { AGENT_QUESTION, INCOMPLETE, NO_ASSESSMENT, STOPPED } from './block-cause.js';
 import type { Decision, Effect } from './decision.js';
 import { awaitsAgent, commandOf, forAgent, STOP_COMMAND } from './human-message.js';
 import { BEFORE_ORC_331 } from './legacy-messages.js';
@@ -13,7 +13,7 @@ import { PRODUCT_NAME } from '../product.js';
 import { CUT_RELAUNCHES, CUT_WINDOW_MS } from '../store/types.js';
 import { isOwnMoveEcho, reduce } from './reduce.js';
 import { holds, isNoRepo, isUnrouted, repoLabel, unroutedReason } from './routing.js';
-import type { EventPayloads, EventType, FactoryEvent, FeedbackItem, InputKind, MessageKind, PendingJob, RunOutcome, Taint, TicketState, VerifyFailure } from './types.js';
+import { higherRisk, type EventPayloads, type EventType, type FactoryEvent, type FeedbackItem, type InputKind, type MessageKind, type PendingJob, type RunOutcome, type Taint, type TicketState, type VerifyFailure } from './types.js';
 
 type StartRun = Extract<Effect, { kind: 'start_run' }>;
 
@@ -104,6 +104,32 @@ function handOver(out: Decision, at: { event: FactoryEvent; ticket: TicketState 
   if (!next) return;
   out.trace.push(`human inbox: handed over to ${next.name} at the end of ${job.name}`);
   startRun(out, event, after, next, { input: next.input });
+}
+
+/**
+ * The end of `intake` (ORC-206): its assessment is recorded, then the guard before In Progress. The risk never goes down
+ * (I4) and the visual proof only hardens to `required`. A ticket not complete enough, by intake's judgement or by the
+ * deterministic checks of its launch, does not start. Until `clarify` asks its questions (ORC-210), it is blocked on
+ * intake with them: a reply relaunches intake, which reads the ticket again, and nothing moves to In Progress meanwhile.
+ */
+function intakeEnd(out: Decision, at: { event: FactoryEvent; ticket: TicketState | undefined; workflow: Workflow }, job: JobSpec, p: EventPayloads['run.finished']): Decision {
+  const a = p.output?.intake;
+  if (!a) {
+    const reason = NO_ASSESSMENT;
+    return block(out, at.workflow, { reason, body: `${reason} Reply in this thread and I will resume.`, job: job.name, tried: [`Started the run ${job.name}: its result has no \`intake\` field.`] });
+  }
+  out.events.push({ type: 'ticket.patched', patch: { size: a.size, risk: higherRisk(at.ticket?.risk, a.risk), ...(a.screen ? { visualProof: 'required' as const } : {}) } });
+  const checks = p.pickup ?? [];
+  const gaps = [...checks, ...(a.complete ? [] : a.missing)];
+  if (!gaps.length) return success(out, at, job, p.runId);
+  const reason = `${INCOMPLETE} ${gaps.join(' ')}`;
+  return block(out, at.workflow, {
+    reason,
+    body: `I cannot start this ticket yet:\n${gaps.map((g) => `- ${g}`).join('\n')}\nAnswer here, or complete the ticket and reply, and I will read it again.`,
+    job: job.name,
+    tried: [`Read the ticket (${job.name}): not complete enough to start.`, ...checks],
+    question: a.complete ? 'Can you complete the ticket, then reply here?' : a.missing.join(' '),
+  });
 }
 
 /**
@@ -1190,6 +1216,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       // A run that ended well on a ticket already blocked (`ask`, then the end of its turn): no output is expected of it, its question stays.
       if (event.payload.outcome === 'success' && ticket?.blocked && job.queue === 'dev') return out;
       if (outcome === 'success') {
+        if (job.step === 'intake') return intakeEnd(out, { event, ticket, workflow }, job, event.payload);
         if (job.verify.length === 0 && !job.repoChecks && !job.red && !goesThroughFreeze(ticket, job)) return success(out, { event, ticket, workflow }, job, runId, output);
         out.events.push({ type: 'verify.started', runId });
         out.effects.push({ kind: 'run_verify', runId, job: jobName, ...(output ? { output } : {}) });
