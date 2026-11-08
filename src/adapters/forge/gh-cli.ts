@@ -1,7 +1,7 @@
 import type { FeedbackItem } from '../../core/types.js';
 import { execCmd, execFailure, mustExec, type Exec, type ExecResult } from '../exec.js';
 import { isRecord } from '../graphql-pages.js';
-import { openPullRequests, repoBranches } from './active-work.js';
+import { openPullRequests, recentRepoBranches, repoBranches } from './active-work.js';
 import { unresolvedReviewFeedback, type GraphQl } from './review-threads.js';
 import { REPO_PERMISSIONS, type RepoPermission, type RepoPermissions } from '../roles/types.js';
 import { isFactoryCheck, type Forge, type ForgeBranch, type OpenPr, type PrInfo } from './types.js';
@@ -142,9 +142,14 @@ export class GhCliForge implements Forge, RepoPermissions {
     return openPullRequests(gql, owner, name);
   }
 
-  async branches(repoPath: string, prefix?: string): Promise<ForgeBranch[]> {
+  async branches(repoPath: string, prefix: string): Promise<ForgeBranch[]> {
     const { owner, name, gql } = await this.graphQl(repoPath);
     return repoBranches(gql, owner, name, prefix);
+  }
+
+  async recentBranches(repoPath: string): Promise<ForgeBranch[]> {
+    const { owner, name, gql } = await this.graphQl(repoPath);
+    return recentRepoBranches(gql, owner, name);
   }
 
   /**

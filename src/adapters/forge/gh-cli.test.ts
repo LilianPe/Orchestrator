@@ -240,11 +240,11 @@ describe('GhCliForge: open PRs and branches (ORC-207)', () => {
 
   it('reads the open PRs with their files through gh api graphql', async () => {
     const page = (nodes: unknown[]) => ({ nodes, pageInfo: { hasNextPage: false, endCursor: null } });
-    const pr = { id: 'P1', number: 3, url: 'https://github.com/me/app/pull/3', title: 'CSV', headRefName: 'feat/csv', files: page([{ path: 'src/a.ts' }]) };
+    const pr = { number: 3, url: 'https://github.com/me/app/pull/3', title: 'CSV', headRefName: 'feat/csv', isCrossRepository: false, files: { totalCount: 1, nodes: [{ path: 'src/a.ts' }] } };
     const forge = new GhCliForge(
       fakeExec({ 'gh repo view': { stdout: JSON.stringify({ owner: { login: 'me' }, name: 'app' }) }, 'gh api graphql': { stdout: JSON.stringify({ data: { repository: { pullRequests: page([pr]) } } }) } }),
     );
-    expect(await forge.openPrs('/r')).toEqual([{ number: 3, url: 'https://github.com/me/app/pull/3', title: 'CSV', branch: 'feat/csv', files: ['src/a.ts'] }]);
+    expect(await forge.openPrs('/r')).toEqual([{ number: 3, url: 'https://github.com/me/app/pull/3', title: 'CSV', branch: 'feat/csv', fork: false, files: ['src/a.ts'], filesTotal: 1 }]);
   });
 });
 

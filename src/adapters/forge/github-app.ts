@@ -2,7 +2,7 @@ import { createPrivateKey, createSign } from 'node:crypto';
 import { execCmd, mustExec, type Exec } from '../exec.js';
 import type { FeedbackItem } from '../../core/types.js';
 import { aggregateChecks, excerpt, toRepoPermission } from './gh-cli.js';
-import { openPullRequests, repoBranches } from './active-work.js';
+import { openPullRequests, recentRepoBranches, repoBranches } from './active-work.js';
 import { unresolvedReviewFeedback, type GraphQl } from './review-threads.js';
 import type { RepoPermission, RepoPermissions } from '../roles/types.js';
 import { isFactoryCheck, NoCommitsBetween, type CheckRunRequest, type Forge, type ForgeWriter, type GitAccess, type ForgeBranch, type MergeResult, type OpenPr, type PrInfo, type PrRequest } from './types.js';
@@ -581,9 +581,14 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
     return openPullRequests(gql, repo.owner, repo.name);
   }
 
-  async branches(repoPath: string, prefix?: string): Promise<ForgeBranch[]> {
+  async branches(repoPath: string, prefix: string): Promise<ForgeBranch[]> {
     const { repo, gql } = await this.graphQl(repoPath);
     return repoBranches(gql, repo.owner, repo.name, prefix);
+  }
+
+  async recentBranches(repoPath: string): Promise<ForgeBranch[]> {
+    const { repo, gql } = await this.graphQl(repoPath);
+    return recentRepoBranches(gql, repo.owner, repo.name);
   }
 
   /** GraphQL with the installation token, each answer checked before it is read (ORC-273). */

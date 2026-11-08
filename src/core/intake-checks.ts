@@ -13,7 +13,7 @@ export const ownBranchPrefix = (identifier: string): string => `factory/${identi
 export function ownWork(identifier: string, branches: readonly ForgeBranch[], prs: readonly OpenPr[]): string | undefined {
   const own = branches.find((b) => b.name.startsWith(ownBranchPrefix(identifier)));
   if (!own) return undefined;
-  const link = prs.find((p) => p.branch === own.name)?.url ?? own.url;
+  const link = prs.find((p) => !p.fork && p.branch === own.name)?.url ?? own.url;
   return `This ticket already has work on the forge: ${link} (branch ${own.name}).`;
 }
 
@@ -30,22 +30,23 @@ export const ACTIVE_WORK_MAX = 12000;
 const PR_FILES = 30;
 
 /**
- * The work in progress elsewhere as intake reads it (ORC-207): the open PRs with the files they change, the branches without
- * an open PR, the tickets the tracker finds close. The ticket's own work is left out (`ownWork` checks it), and so is the
- * default branch's like: a branch is listed once, with its PR when it has one. Capped at `ACTIVE_WORK_MAX`, in that order,
- * what is cut counted at the end. Data the factory read: the forge's and the tracker's texts, not instructions.
+ * The work in progress elsewhere as intake reads it (ORC-207): the open PRs with the files they change, the most recently
+ * updated first, the tickets the tracker finds close, then the recent branches without an open PR. The ticket's own work is
+ * left out (`ownWork` checks it); a branch is listed once, with its PR when it has one (a fork's PR names a branch of
+ * another repository: it hides none). Capped at `ACTIVE_WORK_MAX`, in that order, what is cut counted at the end. Data the
+ * factory read: the forge's and the tracker's texts, not instructions.
  */
 export function formatActiveWork(identifier: string, work: ActiveWork): string {
   const own = ownBranchPrefix(identifier);
-  const prs = work.prs.filter((p) => !p.branch.startsWith(own));
-  const withPr = new Set(work.prs.map((p) => p.branch));
-  const branches = work.branches.filter((b) => !withPr.has(b.name) && !b.name.startsWith(own) && b.name !== 'main' && b.name !== 'master');
+  const prs = work.prs.filter((p) => p.fork || !p.branch.startsWith(own));
+  const withPr = new Set(work.prs.filter((p) => !p.fork).map((p) => p.branch));
+  const branches = work.branches.filter((b) => !withPr.has(b.name) && !b.name.startsWith(own));
   const tickets = work.tickets.filter((t) => t.identifier !== identifier);
   if (!prs.length && !branches.length && !tickets.length) return 'No open PR, no other branch, no close ticket.';
   const sections = [
     { head: 'Open PRs:', lines: prs.map(prLine) },
-    { head: 'Branches without an open PR:', lines: branches.map((b) => `- ${b.name}`) },
     { head: 'Close tickets in the tracker:', lines: tickets.map((t) => `- ${t.identifier} (${t.stateName}): ${t.title} ${t.url}`) },
+    { head: 'Recent branches without an open PR:', lines: branches.map((b) => `- ${b.name}`) },
   ];
   const out: string[] = [];
   const left = [0, 0, 0];
@@ -60,14 +61,17 @@ export function formatActiveWork(identifier: string, work: ActiveWork): string {
     left[i] = s.lines.length - shown.length;
     if (shown.length) out.push(s.head, ...shown);
   });
-  if (left.some((n) => n > 0)) out.push(`Capped at ${ACTIVE_WORK_MAX} characters: ${left[0]} more open PRs, ${left[1]} more branches and ${left[2]} more close tickets not shown.`);
+  if (left.some((n) => n > 0)) out.push(`Capped at ${ACTIVE_WORK_MAX} characters: ${left[0]} more open PRs, ${left[1]} more close tickets and ${left[2]} more branches not shown.`);
   return out.join('\n');
 }
 
 function prLine(p: OpenPr): string {
-  const files = p.files.slice(0, PR_FILES).map((f) => `\`${f}\``).join(', ');
-  const more = p.files.length > PR_FILES ? `, and ${p.files.length - PR_FILES} more files` : '';
-  return `- #${p.number} ${p.title} (${p.url}, branch ${p.branch}): ${files || 'no file'}${more}`;
+  const head = `- #${p.number} ${p.title} (${p.url}, ${p.fork ? 'from a fork, ' : ''}branch ${p.branch})`;
+  if (!p.files) return `${head}: files not listed by the forge`;
+  const shown = p.files.slice(0, PR_FILES);
+  const files = shown.map((f) => `\`${f}\``).join(', ');
+  const more = p.filesTotal > shown.length ? `, and ${p.filesTotal - shown.length} more files` : '';
+  return `${head}: ${files || 'no file'}${more}`;
 }
 
 /** The leads to existing code `build` is given (ORC-207), one line each. */

@@ -57,12 +57,21 @@ export class FakeForge implements Forge, ForgeWriter, RepoPermissions {
 
   async openPrs(): Promise<OpenPr[]> {
     this.answer();
-    return this.openPullRequests.map((pr) => ({ ...pr, files: [...pr.files] }));
+    return this.openPullRequests.map((pr) => ({ ...pr, files: pr.files && [...pr.files] }));
   }
 
-  async branches(_repoPath: string, prefix?: string): Promise<ForgeBranch[]> {
+  async branches(_repoPath: string, prefix: string): Promise<ForgeBranch[]> {
     this.answer();
-    return this.branchNames.filter((b) => !prefix || b.startsWith(prefix)).map((name) => ({ name, url: `${this.repoUrl}/tree/${name}` }));
+    return this.branchNames.filter((b) => b.startsWith(prefix)).map((name) => ({ name, url: `${this.repoUrl}/tree/${name}` }));
+  }
+
+  /** The default branch, which `recentBranches` leaves out. */
+  defaultBranch = 'main';
+
+  /** The branches but the default one, in the order a test set them: the most recent first. */
+  async recentBranches(): Promise<ForgeBranch[]> {
+    this.answer();
+    return this.branchNames.filter((b) => b !== this.defaultBranch).map((name) => ({ name, url: `${this.repoUrl}/tree/${name}` }));
   }
 
   async ensurePr(_repoPath: string, req: PrRequest): Promise<{ number: number; url: string; deduplicated: boolean }> {

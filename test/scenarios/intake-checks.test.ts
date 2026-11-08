@@ -31,7 +31,7 @@ function harness() {
 describe('intake: duplicates (ORC-207)', () => {
   it('an open PR on the same files: intake reads it with its files, the guard blocks the run with its link', async () => {
     const h = harness();
-    h.forge.openPullRequests = [{ number: 12, url: PR, title: 'CSV export of audits', branch: 'feat/csv', files: ['src/audits/export.ts', 'src/audits/list.tsx'] }];
+    h.forge.openPullRequests = [{ number: 12, url: PR, title: 'CSV export of audits', branch: 'feat/csv', fork: false, files: ['src/audits/export.ts', 'src/audits/list.tsx'], filesTotal: 2 }];
     h.forge.branchNames = ['main', 'feat/csv', 'wip/other'];
     h.tracker.addIssue({ identifier: 'REL-9', title: 'Export CSV of the audits, again', description: DESCRIPTION });
     h.runner.enqueue(assessment({ duplicates: [{ url: PR, why: 'PR #12 changes src/audits/export.ts for the same export.' }] }), DEV);
@@ -57,7 +57,7 @@ describe('intake: duplicates (ORC-207)', () => {
   it("the ticket's own branch already on the forge blocks it with the link, whatever intake judged (not_started, absorbed)", async () => {
     const h = harness();
     h.forge.branchNames = ['factory/rel-1-export-csv'];
-    h.forge.openPullRequests = [{ number: 3, url: 'https://github.com/acme/app/pull/3', title: 'REL-1', branch: 'factory/rel-1-export-csv', files: ['a.ts'] }];
+    h.forge.openPullRequests = [{ number: 3, url: 'https://github.com/acme/app/pull/3', title: 'REL-1', branch: 'factory/rel-1-export-csv', fork: false, files: ['a.ts'], filesTotal: 1 }];
     h.runner.enqueue(assessment(), DEV);
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
     expect(skills(h)).toEqual(['/factory:intake']);

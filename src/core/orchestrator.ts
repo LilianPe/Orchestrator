@@ -2180,9 +2180,9 @@ export class Orchestrator {
       const guarded = (intake || job.pickup) && !t.claudeSessionId;
       const checks = wf.tracker.pickup.checks;
       const failures = guarded ? pickupFailures(checks, issue) : [];
-      // The duplicate search of intake (ORC-207), which `not_started` is part of; a pickup job without intake keeps that check alone.
+      // The duplicate search of intake (ORC-207), which `not_started` is part of when listed; a pickup job without intake keeps that check alone.
       const search = guarded && intake ? await searchDuplicates(issue, project.repoPath, { forge, tracker }) : undefined;
-      const own = search ? search.own : guarded && checks.includes('not_started') ? await notStarted(issue, project.repoPath, forge) : undefined;
+      const own = guarded && checks.includes('not_started') ? await notStarted(issue, project.repoPath, forge, search?.prs) : undefined;
       if (own) failures.push(own);
       const blockers = guarded ? openBlockers(issue) : [];
       if (!intake && failures.length) {

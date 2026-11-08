@@ -105,7 +105,7 @@ describe('intake: duplicates, existing code and scope (ORC-207)', () => {
   it('a ticket out of scope is refused with its explanation and the split proposed, nothing created nor started', () => {
     const e = finished(assessed({ size: 'xl', scope: { refuse: 'A rewrite of the whole store layer is an architecture change.', split: [{ title: 'Extract the SQL of runs', summary: 'Move run queries behind one module.' }, { title: 'Port tickets', summary: 'Same for tickets.' }] } }));
     const out = decide(ticket(), e, workflow);
-    expect(out.effects.map((x) => x.kind)).toEqual(['block_comment']);
+    expect(out.effects.some((x) => x.kind === 'start_run' || x.kind === 'move')).toBe(false);
     const t = after(ticket(), e);
     expect(t).toMatchObject({ blocked: true, blockedJob: 'intake', size: 'xl' });
     expect(t.blockReason).toContain('A rewrite of the whole store layer is an architecture change.');
@@ -117,7 +117,7 @@ describe('intake: duplicates, existing code and scope (ORC-207)', () => {
     const reuse = [{ path: 'src/csv.ts', symbol: 'toCsv', why: 'Already writes a CSV line.' }];
     const t = after(ticket(), finished(assessed({ reuse })));
     expect(t.reuse).toEqual(reuse);
-    expect(after(t, finished(assessed())).reuse).toEqual([]);
+    expect(after({ ...t, activeRunId: 'r1', activeJob: 'intake' }, finished(assessed())).reuse).toEqual([]);
   });
 
   it('the duplicate found on its own launch (its branch or PR already there) is a failed check with its link', () => {

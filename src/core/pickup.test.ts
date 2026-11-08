@@ -30,15 +30,18 @@ describe('the duplicate search (ORC-207)', () => {
     expect(await notStarted(issue('x'), '/r', forge)).toBe('This ticket already has work on the forge: https://github.test/acme/app/tree/factory/rel-3-old (branch factory/rel-3-old).');
   });
 
-  it('reads the open PRs, the branches and the close tickets, and finds its own work among them', async () => {
+  it('reads the open PRs, the recent branches and the close tickets; not_started names its own PR from them', async () => {
     const forge = new FakeForge();
-    forge.openPullRequests = [{ number: 5, url: 'https://github.test/pr/5', title: 'Mine', branch: 'factory/rel-3-export-csv', files: ['a.ts'] }, { number: 6, url: 'https://github.test/pr/6', title: 'Theirs', branch: 'feat/x', files: ['b.ts'] }];
+    forge.openPullRequests = [
+      { number: 5, url: 'https://github.test/pr/5', title: 'Mine', branch: 'factory/rel-3-export-csv', fork: false, files: ['a.ts'], filesTotal: 1 },
+      { number: 6, url: 'https://github.test/pr/6', title: 'Theirs', branch: 'feat/x', fork: false, files: ['b.ts'], filesTotal: 1 },
+    ];
     forge.branchNames = ['main', 'factory/rel-3-export-csv', 'feat/x'];
     const tracker = new FakeTracker();
     tracker.addIssue({ identifier: 'REL-3', title: 'Export CSV' });
     tracker.addIssue({ identifier: 'REL-8', title: 'Export CSV for invoices' });
     const found = await searchDuplicates(issue('x'), '/r', { forge, tracker });
-    expect(found.own).toContain('https://github.test/pr/5');
+    expect(await notStarted(issue('x'), '/r', forge, found.prs)).toContain('https://github.test/pr/5');
     expect(found.activeWork).toContain('https://github.test/pr/6');
     expect(found.activeWork).toContain('`b.ts`');
     expect(found.activeWork).toContain('REL-8');

@@ -15,13 +15,19 @@ export interface PrInfo {
   failedChecks: string[];
 }
 
-/** An open PR of the repository as `intake`'s duplicate search reads it (ORC-207): every file it changes. */
+/**
+ * An open PR of the repository as `intake`'s duplicate search reads it (ORC-207). `fork`: its head branch is in another
+ * repository, so its name says nothing of this one's branches. `files`: its first files, `null` when the forge lists none;
+ * `filesTotal`, how many it changes.
+ */
 export interface OpenPr {
   number: number;
   url: string;
   title: string;
   branch: string;
-  files: string[];
+  fork: boolean;
+  files: string[] | null;
+  filesTotal: number;
 }
 
 /** A branch of the repository (ORC-207), with its page on the forge: the link a duplicate's block gives. */
@@ -33,10 +39,12 @@ export interface ForgeBranch {
 export interface Forge {
   findPr(repoPath: string, branch: string): Promise<PrInfo | undefined>;
   unresolvedReviewComments(repoPath: string, prNumber: number): Promise<FeedbackItem[]>;
-  /** Every open PR of the repository, each with every file it changes (ORC-207): every page read, never a list cut short. */
+  /** Every open PR of the repository, the most recently updated first, each with its first files (ORC-207): every page read, never a list cut short. */
   openPrs(repoPath: string): Promise<OpenPr[]>;
-  /** Every branch of the repository, or only those whose name starts with `prefix` (ORC-207): every page read. */
-  branches(repoPath: string, prefix?: string): Promise<ForgeBranch[]>;
+  /** Every branch whose name starts with `prefix` (ORC-207): every page read. */
+  branches(repoPath: string, prefix: string): Promise<ForgeBranch[]>;
+  /** The most recently committed branches, the default one left out (ORC-207): a selection, not the whole list. */
+  recentBranches(repoPath: string): Promise<ForgeBranch[]>;
 }
 
 /** A PR the factory opens for its branch (ORC-162), by its Publisher (ORC-125). */
