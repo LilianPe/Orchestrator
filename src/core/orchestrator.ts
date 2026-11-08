@@ -43,7 +43,7 @@ import {
   type WorkflowVersion,
 } from '../store/types.js';
 import { agentOutputKey, attemptOutcome, parseAgentOutput, type AgentOutput } from './agent-output.js';
-import { describePr } from '../publish/describe.js';
+import { describePr, verifySummary } from '../publish/describe.js';
 import { composeResult, OutputPolicy, OutputRefused, PolicedTracker } from '../publish/output-policy.js';
 import type { EventBus } from './bus.js';
 import type { Clock } from './clock.js';
@@ -87,7 +87,6 @@ import { checkRed, type RedDeps, type RedResult } from '../checks/red.js';
 import { checkFrozen, FREEZE_CHECK, freezeTests, newTestsOnly, REFREEZE, type FrozenTests } from '../checks/freeze.js';
 import { isTestFile } from '../checks/test-files.js';
 import { ANTI_CHEAT_CHECK, ANTI_CHEAT_OK } from '../checks/anti-cheat.js';
-import { mdCode } from '../checks/markdown.js';
 import { parseStatus } from '../adapters/workspace/git-workspaces.js';
 import { agentPolicy, type EgressPolicy } from '../network/levels.js';
 import { REPO_CONFIG_REFUSED, TICKET_TOKENS_REACHED, type BlockKind } from './block-cause.js';
@@ -1815,7 +1814,9 @@ export class Orchestrator {
       try {
         const mark = await this.untrustedMark(project, t);
         const untrusted = mark ? { untrusted: mark } : {};
-        const text = await this.policy.pr(describePr(c.output, { ticketId: t.ticketId, title: t.title, sha: c.sha, ...(c.commands ? { commands: c.commands } : {}), ...(t.visualProof ? { visualProof: t.visualProof } : {}) }));
+        // An open PR keeps its description (`ensurePr` finds it): the factory's facts alone, so a text never shown cannot hold back a fix.
+        const output = t.prNumber !== undefined && t.prState === 'OPEN' ? undefined : c.output;
+        const text = await this.policy.pr(describePr(output, { ticketId: t.ticketId, title: t.title, sha: c.sha, ...(c.commands ? { commands: c.commands } : {}), ...(t.visualProof ? { visualProof: t.visualProof } : {}) }));
         const pr = await publisher.publish({ projectId: project.id, repoPath: project.repoPath, ticketId: t.ticketId, runId: c.runId, worktree: t.worktreePath, branch: t.branch, sha: c.sha, ...untrusted, ...text });
         await this.accept({ ...base, id: prEventId(t.ticketId, pr.prNumber, 'opened'), type: 'pr.opened', at: this.d.clock.now(), payload: { number: pr.prNumber, url: pr.url, branch: t.branch } });
         await this.publishChecks(project, t, c);
@@ -1843,14 +1844,8 @@ export class Orchestrator {
     if (!writer) return;
     const { sha, commands } = c;
     const frozen = Object.keys(t.frozenTests?.files ?? {}).length;
-    const verify =
-      commands === undefined
-        ? ({ conclusion: 'success', summary: `${sha.slice(0, 12)} already found green by an earlier verification.` } as const)
-        : commands.length
-          ? ({ conclusion: 'success', summary: `Green on ${sha.slice(0, 12)}, in a fresh clone, without network:\n${commands.map((cmd) => `- ${mdCode(cmd)}`).join('\n')}` } as const)
-          : ({ conclusion: 'neutral', summary: 'No verification command declared: nothing ran.' } as const);
     const checks = [
-      { name: VERIFY_CHECK, ...verify },
+      { name: VERIFY_CHECK, ...verifySummary(sha, commands) },
       { name: FREEZE_CHECK, conclusion: frozen ? 'success' : 'neutral', summary: frozen ? `${frozen} frozen file(s) intact.` : 'No frozen test for this ticket.' },
       { name: ANTI_CHEAT_CHECK, conclusion: 'success', summary: ANTI_CHEAT_OK },
     ] as const;

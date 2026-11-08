@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { FakeSandboxProvider } from '../adapters/sandbox/fake.js';
-import { parseAgentOutput, type AgentOutput } from '../core/agent-output.js';
+import { parseAgentOutput, parseSubmittedResult, type AgentOutput } from '../core/agent-output.js';
 import { describePr } from './describe.js';
 import { OUTPUT_LIMITS } from './output-limits.js';
 import { composeResult, NO_RESULT, OutputPolicy, OutputRefused, sandboxSecretScan, type Capture } from './output-policy.js';
@@ -133,7 +133,7 @@ describe('OutputPolicy (ORC-214)', () => {
       expect(parseAgentOutput(output({ risks: Array.from({ length: OUTPUT_LIMITS.items + 1 }, () => 'r') }))).toMatchObject({ ok: false });
       // Each field under its cap, the comment they make over the comment's.
       const full = output({ summary: 's '.repeat(OUTPUT_LIMITS.summary / 2), why: 'w '.repeat(OUTPUT_LIMITS.field / 2), risks: Array.from({ length: 10 }, () => 'r '.repeat(OUTPUT_LIMITS.item / 2 - 5)) });
-      expect(parseAgentOutput(full)).toMatchObject({ ok: false, error: expect.stringContaining('together') });
+      expect(parseSubmittedResult(full)).toMatchObject({ ok: false, error: expect.stringContaining('together') });
     });
   });
 

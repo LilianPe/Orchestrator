@@ -36,10 +36,25 @@ export const PR_SECTIONS = ['Why', 'What changes', 'Assumptions', 'Risks', 'Unte
 const NONE = '_None stated._';
 const NO_RESULT = '_The agent returned no structured result: nothing of what it wrote is published._';
 
-/** An agent's text block: its line-leading `#` escaped, so no heading of its own can pass for one of the factory's sections. */
-const prose = (s: string): string => s.replace(/^(\s{0,3})#/gm, '$1\\#');
+/**
+ * An agent's text block, so that nothing of it can pass for one of the factory's sections or hide them: an HTML tag or comment
+ * (a heading, a comment that would swallow what follows) shown as text, and on each line an ATX heading, a setext underline and a code fence
+ * that would run to the end of the body escaped.
+ */
+const prose = (s: string): string =>
+  s
+    // Only a `<` that opens a tag or a comment: `a < b` stays as written.
+    .replace(/<(?=[A-Za-z!/?])/g, '&lt;')
+    .replace(/^(\s{0,3})(#|=+\s*$|-+\s*$|`{3}|~{3})/gm, '$1\\$2');
 /** An agent's list entry, on its one line: a line break would let it open a heading or an entry of its own. */
 const entry = (s: string): string => prose(s.replace(/\s*[\r\n]+\s*/g, ' ').trim());
+/** A capture's URL in a Markdown link: what would end the link or break it, percent-encoded. */
+const linkUrl = (url: string): string => url.replace(/[\s()<>[\]]/g, (c) => encodeURIComponent(c));
+/**
+ * What the factory's own facts may add to a description past the agent's fields: the ticket's id, the commands `verify` ran, the
+ * captures. `submit_result` keeps the agent's part under the cap of a PR body by this much (`publishedSizeIssues`).
+ */
+export const FACTS_ROOM = 1_500;
 const bullets = (items: readonly string[]): string => (items.length ? items.map((i) => `- ${i}`).join('\n') : NONE);
 
 /** The PR's title: the ticket's id and title, on one line clipped to what GitHub takes. */
@@ -48,21 +63,24 @@ function prTitle(f: Pick<PrFacts, 'ticketId' | 'title'>): string {
   return title.length > OUTPUT_LIMITS.prTitle ? `${title.slice(0, OUTPUT_LIMITS.prTitle - 1)}…` : title;
 }
 
+/**
+ * What `verify` found on the commit pushed (ORC-151), in the same words on the PR and on its `factory/verify` check: `commands`
+ * absent when an earlier verification found it green, empty when none is declared.
+ */
+export function verifySummary(sha: string, commands: readonly string[] | undefined): { conclusion: 'success' | 'neutral'; summary: string } {
+  if (commands === undefined) return { conclusion: 'success', summary: `${sha.slice(0, 12)} already found green by an earlier verification.` };
+  if (!commands.length) return { conclusion: 'neutral', summary: 'No verification command declared: nothing ran.' };
+  return { conclusion: 'success', summary: `Green on ${sha.slice(0, 12)}, in a fresh clone, without network:\n${commands.map((c) => `- ${mdCode(c)}`).join('\n')}` };
+}
+
 function evidence(o: AgentOutput | undefined, f: PrFacts): string {
-  const sha = mdCode(f.sha.slice(0, 12));
-  const checked =
-    f.commands === undefined
-      ? `**Checked by the factory**: ${sha} was found green by an earlier verification.`
-      : f.commands.length
-        ? `**Checked by the factory** on ${sha}, green in a fresh clone without network:\n${f.commands.map((c) => `- ${mdCode(c)}`).join('\n')}`
-        : `**Checked by the factory**: no verification command is declared, nothing ran on ${sha}.`;
-  const parts = [checked];
+  const parts = [`**Checked by the factory**: ${verifySummary(f.sha, f.commands).summary}`];
   if (o) parts.push(`**Tests added**, as stated by the agent:\n${bullets(o.tests_added.map((t) => mdCode(entry(t))))}`);
   if (f.visualProof === 'required') {
     const shots = [...(f.captures ?? [])].sort((a, b) => a.width - b.width);
     parts.push(
       shots.length
-        ? `**Screens**:\n${shots.map((c) => `![${entry(c.caption).replace(/[[\]]/g, '')} (${c.width} px)](${c.url})`).join('\n')}`
+        ? `**Screens**:\n${shots.map((c) => `![${entry(c.caption).replace(/[[\]]/g, '')} (${c.width} px)](${linkUrl(c.url)})`).join('\n')}`
         : '**Screens**: the visual proof is required for this ticket, and no capture was taken.',
     );
   }
@@ -110,7 +128,8 @@ function duration(ms: number): string {
 /**
  * The recap posted as the ticket goes to Human Review and its PR out of draft (ORC-195): the summary, the tests added, and the
  * work of the ticket's attempts, as the dashboard measures it (turns, tokens, duration: tokens, where Relais counted dollars).
- * Tokens are what a token cap counts (`spentTokens`), cache reads apart. What is not known is said, never shown as a zero.
+ * Tokens are what a token cap counts (`spentTokens`), cache reads apart. Every attempt of the ticket counts, as on the dashboard:
+ * intake, tests and questions too. What is not known is said, never shown as a zero.
  */
 export function formatRecap(o: Pick<AgentOutput, 'summary' | 'tests_added'>, runs: readonly RecapRun[]): string {
   const reported = runs.filter((r) => r.tokens !== null);
@@ -118,7 +137,8 @@ export function formatRecap(o: Pick<AgentOutput, 'summary' | 'tests_added'>, run
   const total = reported.reduce((sum, r) => sum + spentTokens(r.tokens!), 0);
   const tokens = reported.length ? `${count(total, 'token')} (cache reads apart${unreported ? `; ${count(unreported, 'attempt')} reported none` : ''})` : 'tokens not reported';
   const timed = runs.filter((r) => r.durationMs !== null);
-  const took = timed.length ? duration(timed.reduce((sum, r) => sum + r.durationMs!, 0)) : 'duration not measured';
+  const untimed = runs.length - timed.length;
+  const took = timed.length ? `${duration(timed.reduce((sum, r) => sum + r.durationMs!, 0))}${untimed ? ` (${count(untimed, 'attempt')} not measured)` : ''}` : 'duration not measured';
   const turns = runs.reduce((sum, r) => sum + r.turns, 0);
   return [
     o.summary,

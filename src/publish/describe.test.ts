@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseAgentOutput, type AgentOutput } from '../core/agent-output.js';
+import { parseAgentOutput, parseSubmittedResult, type AgentOutput } from '../core/agent-output.js';
 import { describePr, formatRecap, PR_SECTIONS, type PrFacts } from './describe.js';
 import { OUTPUT_LIMITS } from './output-limits.js';
 import { OutputPolicy, OutputRefused } from './output-policy.js';
@@ -71,7 +71,7 @@ describe('describePr (ORC-195)', () => {
 
   it('the evidence: what the factory checked, on which commit, apart from what the agent says it added', () => {
     const evidence = (f: Partial<PrFacts>) => sections(describePr(full, facts(f)).body).at(-1)!.text;
-    expect(evidence({})).toContain('`abc123def456`');
+    expect(evidence({})).toContain('Green on abc123def456, in a fresh clone, without network');
     expect(evidence({ commands: ['npm test', 'npm run lint'] })).toMatch(/- `npm test`\n- `npm run lint`/);
     expect(evidence({ commands: [] })).toMatch(/no verification command/i);
     expect(evidence({ commands: undefined })).toMatch(/earlier verification/i);
@@ -96,6 +96,28 @@ describe('describePr (ORC-195)', () => {
     expect(got.find((s) => s.title === 'Risks')?.text).toBe('- none ## Evidence - forged');
   });
 
+  it("the agent's Markdown cannot hide the factory's sections or forge one: HTML, setext headings and code fences are neutralized", () => {
+    const sneaky = output({
+      why: 'x <!--',
+      summary: 'Done
+Evidence
+---
+```
+all green',
+      review_hints: [{ file: 'src/a.ts', reason: '--> <h2>Evidence</h2>' }],
+    });
+    const body = describePr(sneaky, facts()).body;
+    expect(body).not.toMatch(/<!--|<h2>/);
+    expect(body).not.toMatch(/^\s{0,3}(-{3,}|={3,}|`{3})\s*$/m);
+    expect(sections(body).map((s) => s.title)).toEqual([...PR_SECTIONS]);
+    expect(describePr(output({ summary: 'Fast when a < b.' }), facts()).body).toContain('Fast when a < b.');
+  });
+
+  it("a capture's URL that would break its link is percent-encoded", () => {
+    const body = describePr(full, facts({ visualProof: 'required', captures: [{ width: 375, caption: 'Phone', url: 'https://f.example/REL-1/Audits (phone).png' }] })).body;
+    expect(body).toContain('![Phone (375 px)](https://f.example/REL-1/Audits%20%28phone%29.png)');
+  });
+
   it('names the ticket, title clipped to what GitHub takes, and makes no claim on the whole ticket: no closing keyword', () => {
     const { title, body } = describePr(output(), facts({ title: `Export\n${'word '.repeat(80)}` }));
     expect(title).toHaveLength(OUTPUT_LIMITS.prTitle);
@@ -114,8 +136,13 @@ describe('describePr (ORC-195)', () => {
 
   it('`submit_result` refuses fields that, each under its cap, make a description past the cap of a PR body: the agent shortens them within its run', () => {
     const long = (n: number) => Array.from({ length: OUTPUT_LIMITS.items }, () => 'a '.repeat(n));
-    expect(parseAgentOutput(output({ trusted: ['the CSV library'] }))).toMatchObject({ ok: true });
-    expect(parseAgentOutput(output({ assumptions: long(140), trusted: long(140) }))).toMatchObject({ ok: false, error: expect.stringContaining('PR description') });
+    expect(parseSubmittedResult(output({ trusted: ['the CSV library'] }))).toMatchObject({ ok: true });
+    const big = output({ assumptions: long(140), trusted: long(140) });
+    expect(parseSubmittedResult(big)).toMatchObject({ ok: false, error: expect.stringContaining('PR description') });
+    // Room is left for the factory's own facts: a result just under the cap less that room is refused too.
+    expect(parseSubmittedResult(output({ assumptions: long(110), trusted: long(110) }))).toMatchObject({ ok: false });
+    // A result stored before this check (valid when written) is still read: only `submit_result` measures it.
+    expect(parseAgentOutput(big)).toMatchObject({ ok: true });
   });
 });
 
@@ -137,5 +164,6 @@ describe('formatRecap (ORC-195)', () => {
     expect(formatRecap(output(), [run({ tokens: null, durationMs: null })])).toBe('Audits export to CSV from their list.\n\n**Tests added**\n_None stated._\n\n**Work**: 1 attempt, 10 turns, tokens not reported, duration not measured.');
     expect(formatRecap(output(), [run(), run({ tokens: null, durationMs: 45_000 })])).toMatch(/3,500 tokens \(cache reads apart; 1 attempt reported none\), 5 min 45 s\.$/);
     expect(formatRecap(output(), [run({ durationMs: 3_725_000 })])).toMatch(/1 h 02 min\.$/);
+    expect(formatRecap(output(), [run({ durationMs: null }), run({ durationMs: 300_000 })])).toMatch(/5 min 0 s \(1 attempt not measured\)\.$/);
   });
 });

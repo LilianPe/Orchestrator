@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { describePr, formatRecap } from '../publish/describe.js';
+import { describePr, FACTS_ROOM, formatRecap } from '../publish/describe.js';
 import { OUTPUT_LIMITS } from '../publish/output-limits.js';
 import type { Store } from '../store/types.js';
 import { RISKS, TICKET_SIZES, type RunOutcome } from './types.js';
@@ -53,11 +53,6 @@ export const agentOutputSchema = z
   .superRefine((o, ctx) => {
     if (o.status === 'blocked' && !o.question) ctx.addIssue({ code: 'custom', path: ['question'], message: 'required when status is blocked' });
     if (o.status === 'done' && o.reason) ctx.addIssue({ code: 'custom', path: ['reason'], message: 'only for a blocked status' });
-    // Each field under its cap can still add up past a published text's: refused here, while the agent can shorten it (ORC-214, ORC-195).
-    const recap = formatRecap(o, []).length;
-    if (recap > OUTPUT_LIMITS.text) ctx.addIssue({ code: 'custom', path: ['summary'], message: `summary and tests_added together make a recap of ${recap} characters, more than ${OUTPUT_LIMITS.text}: shorten them` });
-    const pr = describePr(o, { ticketId: '', title: '', sha: '' }).body.length;
-    if (pr > OUTPUT_LIMITS.text) ctx.addIssue({ code: 'custom', path: ['summary'], message: `the fields together make a PR description of ${pr} characters, more than ${OUTPUT_LIMITS.text}: shorten them` });
   });
 
 export type AgentOutput = z.infer<typeof agentOutputSchema>;
@@ -76,6 +71,29 @@ export function parseAgentOutput(raw: unknown): { ok: true; output: AgentOutput 
   const r = agentOutputSchema.safeParse(raw);
   if (r.success) return { ok: true, output: r.data };
   return { ok: false, error: r.error.issues.map((i) => `${i.path.join('.') || '(racine)'}: ${i.message}`).join('; ') };
+}
+
+/**
+ * Fields each under their cap can still add up past what the factory publishes of them (ORC-214, ORC-195): the recap past a
+ * comment's cap, the PR description past a body's less `FACTS_ROOM`, the room the factory's own facts take. Checked when the agent
+ * submits, so it shortens them within its run; never on a stored result, which was valid when it was written.
+ */
+function publishedSizeIssues(o: AgentOutput): string[] {
+  const issues: string[] = [];
+  const recap = formatRecap(o, []).length;
+  if (recap > OUTPUT_LIMITS.text) issues.push(`summary: summary and tests_added together make a recap of ${recap} characters, more than ${OUTPUT_LIMITS.text}: shorten them`);
+  const pr = describePr(o, { ticketId: '', title: '', sha: '' }).body.length;
+  const room = OUTPUT_LIMITS.text - FACTS_ROOM;
+  if (pr > room) issues.push(`summary: the fields together make a PR description of ${pr} characters, more than ${room}: shorten them`);
+  return issues;
+}
+
+/** What `submit_result` takes: a valid output whose published texts stay under their caps. */
+export function parseSubmittedResult(raw: unknown): ReturnType<typeof parseAgentOutput> {
+  const parsed = parseAgentOutput(raw);
+  if (!parsed.ok) return parsed;
+  const issues = publishedSizeIssues(parsed.output);
+  return issues.length ? { ok: false, error: issues.join('; ') } : parsed;
 }
 
 /**

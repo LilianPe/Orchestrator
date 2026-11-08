@@ -57,6 +57,20 @@ describe('the PR description and the recap on the chain (ORC-195)', () => {
     expect(t.logical).not.toBe('human_review');
   });
 
+  it('a fix published on the open PR: its description stays, so a blob in what the fix submitted holds nothing back', async () => {
+    const h = harness();
+    h.runner.enqueue({ events: [{ kind: 'text', text: 'done' }], output: result });
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    expect(h.publisher.published).toHaveLength(1);
+    h.workspaces.heads.set(WORKTREE, 'def456');
+    h.runner.enqueue({ events: [{ kind: 'text', text: 'Fixed.' }], output: { ...result, summary: 'Fixed.', risks: [`see ${base64(120)}`] } });
+    await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'buttons misaligned', author: 'Lilian', ack: true, kind: 'instruction' });
+    await h.advance(180_000);
+    expect(h.publisher.published).toHaveLength(2);
+    expect(h.publisher.published[1]!.body).not.toMatch(/see |Auditors copy/);
+    expect((await h.ticket()).blocked).toBe(false);
+  });
+
   it('criterion 5: at the move to Human Review, the recap: the summary, the tests added, the turns, the tokens and the duration', async () => {
     const h = harness();
     h.runner.enqueue({ hold: true, events: [{ kind: 'text', text: 'RAW_LAST_TEXT' }], output: result, turns: 27, tokens: { input: 1_200, output: 3_400, cacheRead: 90_000, cacheCreation: 400 } });
