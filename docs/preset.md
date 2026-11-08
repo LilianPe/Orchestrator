@@ -113,7 +113,7 @@ Then the guard before In Progress: a failed deterministic check or an incomplete
 
 ## `clarify`: questions, reminder and expiry (ORC-210)
 
-`clarify` runs no agent of its own: the questions are `intake`'s (`missing`), the separate intent agent being EVP 1's. At the guard, the factory asks at most 3 of them in the ticket's Linear session, one `elicitation` activity each: with Linear's `select` signal and the question's options when it has some, a free answer always possible (Linear lets the human type instead of picking). A failed deterministic check comes first, as a free question asking to complete the ticket; past 3, the last of intake's are dropped, and intake asks them again on its next pass.
+`clarify` runs no agent of its own: the questions are `intake`'s (`missing`), the separate intent agent being EVP 1's ([decision](decisions/ORC-210.md)). At the guard, the factory asks at most 3 of them in the ticket's Linear session, one `elicitation` activity each: with Linear's `select` signal and the question's options when it has some, a free answer always possible (Linear lets the human type instead of picking). A failed deterministic check comes first, as a free question asking to complete the ticket; past 3, the last of intake's are dropped, and intake asks them again on its next pass.
 
 The ticket then waits, **not blocked** (`TicketState.clarify`): nothing moves, the `Blocked` label stays off. Two timers are armed (ORC-161), on the decision's clock:
 
