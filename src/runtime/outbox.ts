@@ -1,5 +1,5 @@
 import { LEASE_MS, type EffectOutcome, type OutboxRow, type Store } from '../store/types.js';
-import { attemptsFor, backoff, type RetryPolicy } from './transient.js';
+import { attemptsFor, backoff, TRANSIENT_WINDOW_MS, type RetryPolicy } from './transient.js';
 
 /** Lease of a claimed outbox row, renewed every third of it while its effect runs (ORC-129: 60 s, renewed every 20 s). */
 export const EFFECT_LEASE_MS = LEASE_MS;
@@ -12,7 +12,7 @@ export type EffectRetry = RetryPolicy;
  * permanent; after 15 (about 33 min, `TRANSIENT_WINDOW_MS`) when it is transient (ORC-343): GitHub or Linear back
  * within half an hour, the effect goes through and its ticket is not blocked.
  */
-export const EFFECT_RETRY: EffectRetry = { attempts: 8, transientAttempts: 15, baseMs: 1_000, capMs: 300_000 };
+export const EFFECT_RETRY: EffectRetry = { attempts: 8, transientWindowMs: TRANSIENT_WINDOW_MS, baseMs: 1_000, capMs: 300_000 };
 
 /** The delay before the attempt after `attempt` (1 for the first one). */
 export function effectBackoff(attempt: number, retry: EffectRetry = EFFECT_RETRY): number {

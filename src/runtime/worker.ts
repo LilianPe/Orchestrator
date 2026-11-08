@@ -4,7 +4,7 @@ import type { FactoryEvent } from '../core/types.js';
 import { upcast, type StoredEvent } from '../core/upcast.js';
 import { TicketHeldError, type DecisionOutcome, type DecisionRequest, type EffectOutcome, type OutboxRow, type Store } from '../store/types.js';
 import { OutboxExecutor, type EffectRetry } from './outbox.js';
-import { attemptsFor, backoff, type RetryPolicy } from './transient.js';
+import { attemptsFor, backoff, TRANSIENT_WINDOW_MS, type RetryPolicy } from './transient.js';
 
 /** Inbox rows read per pass. */
 const INBOX_BATCH = 100;
@@ -17,7 +17,7 @@ const INBOX_BATCH = 100;
  * `baseMs * 3^(attempts-1)` (162 s; 5 min for a transient failure). A decision that throws is not
  * retried: it is dead-lettered at once (ORC-175).
  */
-export const PROCESS_RETRY = { attempts: 5, transientAttempts: 12, baseMs: 2_000, capMs: 300_000, factor: 3 } satisfies RetryPolicy;
+export const PROCESS_RETRY = { attempts: 5, transientWindowMs: TRANSIENT_WINDOW_MS, baseMs: 2_000, capMs: 300_000, factor: 3 } satisfies RetryPolicy;
 
 /**
  * What the event itself makes throw, whatever the infrastructure: its upcast, or its decision
@@ -123,7 +123,7 @@ export class Worker {
   private failures = new Map<string, number>();
   private retryTimers = new Set<NodeJS.Timeout>();
   /** When each failed row's retry is due: `poll` takes up those past due, as their timer would, on the worker's clock. */
-  private retryDue = new Map<string, { at: number; n: number; row: StoredEvent }>();
+  private retryDue = new Map<string, { at: number; row: StoredEvent }>();
   private readonly retry: RetryPolicy;
   /** Rows that found a row or an effect of their ticket first: retried at the next poll, or by `unwait`. */
   private waited = new Map<string, StoredEvent>();
@@ -222,7 +222,7 @@ export class Worker {
   poll(): Promise<number> {
     this.waited.clear();
     const now = this.now();
-    for (const { at, n, row } of [...this.retryDue.values()]) if (at <= now) this.retryFailed(row, n);
+    for (const { at, row } of this.retryDue.values()) if (at <= now) this.retryFailed(row, this.failures.get(row.id)!);
     return this.kick();
   }
 
@@ -343,7 +343,10 @@ export class Worker {
       } catch (err) {
         // Set aside as prepared (its snapshot filled), so that a replay decides what was decided.
         if (err instanceof PoisonEvent || err instanceof TicketHeldError) await this.deadLetter(event ?? row, key, err, 'its decision threw');
-        else if (await this.outOfAttempts(row, err)) await this.deadLetter(event ?? row, key, toError(err), `out of attempts after ${(this.failures.get(row.id) ?? 0) + 1}`, (this.failures.get(row.id) ?? 0) + 1);
+        else if (await this.outOfAttempts(row, err)) {
+          const n = (this.failures.get(row.id) ?? 0) + 1;
+          await this.deadLetter(event ?? row, key, toError(err), `out of attempts after ${n}`, n);
+        }
         else this.failed(row, key, toError(err));
         return 'done';
       }
@@ -380,7 +383,7 @@ export class Worker {
   private async deadLetter(row: StoredEvent, key: string, err: Error, why: string, attempts?: number): Promise<void> {
     let written: boolean;
     try {
-      written = await this.d.store.deadLetter(row, err.message, this.d.now?.() ?? Date.now(), err instanceof TicketHeldError ? err.holder : undefined, attempts);
+      written = await this.d.store.deadLetter(row, err.message, this.now(), err instanceof TicketHeldError ? err.holder : undefined, attempts);
     } catch (writeErr) {
       this.failed(row, key, new Error(`${err.message}; not dead-lettered: ${toError(writeErr).message}`, { cause: writeErr }));
       return;
@@ -433,7 +436,7 @@ export class Worker {
     const delay = backoff(this.retry, Math.min(n, attempts));
     const tried = n < attempts ? `attempt ${n} of ${attempts}` : `kept in the inbox after ${n} attempts`;
     this.d.log('error', `event ${row.id} (${row.type}): ${err.message} (${tried}, retried in ${Math.round(delay / 1000)} s)`);
-    this.retryDue.set(row.id, { at: this.now() + delay, n, row });
+    this.retryDue.set(row.id, { at: this.now() + delay, row });
     const timer = setTimeout(() => {
       this.retryTimers.delete(timer);
       this.retryFailed(row, n);
@@ -445,7 +448,7 @@ export class Worker {
   /** The `n`-th retry of a failed row is due: by its timer, or by a `poll` past its time. */
   private retryFailed(row: StoredEvent, n: number): void {
     // It was taken up meanwhile, behind an older row that took the hold, or by the other of the two: this retry is out of date.
-    if (this.failures.get(row.id) !== n || this.retryDue.get(row.id)?.n !== n) return;
+    if (this.failures.get(row.id) !== n || !this.retryDue.has(row.id)) return;
     this.retryDue.delete(row.id);
     this.skipped.delete(row.id);
     // Queued as read, not left to the next scan: a transaction that committed after all (the

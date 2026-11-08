@@ -57,14 +57,14 @@ export const TRANSIENT_WINDOW_MS = 30 * 60_000;
 
 /**
  * A retry with a backoff (ORC-129, ORC-343): the delay after the n-th failure is `baseMs × factor^(n − 1)`, capped at
- * `capMs`. Past `attempts` failures, given up; past `transientAttempts` when the last failure is transient
- * (`isTransient`), so that an outage of `TRANSIENT_WINDOW_MS` is waited out (`retryWindow`).
+ * `capMs`. Past `attempts` failures, given up; when the last failure is transient (`isTransient`), only once the
+ * attempts so far cover `transientWindowMs` (`retryWindow`).
  */
 export interface RetryPolicy {
   /** Attempts in all, the first one included, when the failure is permanent. */
   attempts: number;
-  /** Attempts in all when the failure is transient; `attempts` by default. */
-  transientAttempts?: number;
+  /** How long a transient failure is retried, from the first failure to the last attempt (`TRANSIENT_WINDOW_MS`); `attempts` alone by default. */
+  transientWindowMs?: number;
   /** Delay after the first failure. */
   baseMs: number;
   /** Ceiling of the delay; none by default. */
@@ -78,9 +78,12 @@ export function backoff(policy: RetryPolicy, failure: number): number {
   return Math.min(policy.capMs ?? Infinity, policy.baseMs * (policy.factor ?? 2) ** (failure - 1));
 }
 
-/** The attempts `err` gets in all under `policy`. */
+/** The attempts `err` gets in all under `policy`: for a transient one, the fewest whose retries cover its window. */
 export function attemptsFor(policy: RetryPolicy, err: unknown): number {
-  return isTransient(err) ? Math.max(policy.attempts, policy.transientAttempts ?? policy.attempts) : policy.attempts;
+  let n = policy.attempts;
+  if (policy.transientWindowMs === undefined || !isTransient(err)) return n;
+  while (retryWindow(policy, n) < policy.transientWindowMs) n++;
+  return n;
 }
 
 /** The time from the first failure to the last attempt, when there are `attempts` in all. */

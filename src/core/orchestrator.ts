@@ -25,7 +25,7 @@ import { NO_REPO_VARIABLES, type RepoVariables } from '../config/repo-variables.
 import { parseRepoConfig, RepoConfigError, type RepoConfig, type RepoConfigRead } from '../config/repo-config.js';
 import type { JobSpec, Workflow } from '../config/workflow-schema.js';
 import type { EffectRetry } from '../runtime/outbox.js';
-import { attemptsFor, backoff, isTransient, type RetryPolicy } from '../runtime/transient.js';
+import { attemptsFor, backoff, isTransient, TRANSIENT_WINDOW_MS, type RetryPolicy } from '../runtime/transient.js';
 import { Worker } from '../runtime/worker.js';
 import { workflowVersion } from '../runtime/workflow-version.js';
 import {
@@ -257,7 +257,7 @@ export interface OrchestratorDeps {
    * Retries of the inbox write of a run or check result (ORC-147): `attempts` writes in all, the
    * n-th retry after `baseMs * 2^(n-1)`. Default 5 writes from 200 ms (about 3 s in all).
    */
-  inboxRetry?: { attempts: number; baseMs: number };
+  inboxRetry?: RetryPolicy;
   /**
    * The daemon's start: events accepted before `replayInbox()` are only written, not processed,
    * so the inbox is not dispatched before the tracker is connected. Default false (tests).
@@ -318,7 +318,7 @@ class RetryableStart extends Error {
  * Starts of a queue item that failed before their `run.started` (ORC-339): handed out again after 2 s, 4 s, 8 s, 16 s,
  * doubled up to 5 min; past 5 attempts, or 14 (about 33 min) when the failure is transient (ORC-343), the ticket is blocked.
  */
-export const START_RETRY = { attempts: 5, transientAttempts: 14, baseMs: 2_000, capMs: 300_000 } satisfies RetryPolicy;
+export const START_RETRY = { attempts: 5, transientWindowMs: TRANSIENT_WINDOW_MS, baseMs: 2_000, capMs: 300_000 } satisfies RetryPolicy;
 
 /** What a start came to: queued, set pending behind a run that holds the ticket (`deferred`), or anything else. */
 type StartOutcome = 'queued' | 'deferred' | 'done';
@@ -492,14 +492,14 @@ export class Orchestrator {
    * start), as does a shutdown, which leaves it to that `recover()`. `write` must be idempotent: the inbox keeps an id once.
    */
   private async deliver(id: string, what: string, write: () => Promise<void>): Promise<void> {
-    const { attempts, baseMs } = this.d.inboxRetry ?? { attempts: 5, baseMs: 200 };
+    const policy = this.d.inboxRetry ?? { attempts: 5, baseMs: 200 };
     for (let n = 1; ; n++) {
       try {
         await write();
         return;
       } catch (err) {
-        if (n < attempts) {
-          await new Promise((resolve) => setTimeout(resolve, baseMs * 2 ** (n - 1)));
+        if (n < policy.attempts) {
+          await new Promise((resolve) => setTimeout(resolve, backoff(policy, n)));
           continue;
         }
         const kept = isTransient(err) && !this.stopping;
@@ -689,11 +689,11 @@ export class Orchestrator {
     this.beating = true;
     try {
       const { store, clock } = this.d;
-      // First: a run whose result is kept is still `running` in the store, its lease run out, and only its result tells its end.
-      await this.deliverKept();
       for (const runId of this.handles.keys()) {
         if (await this.alive(runId)) await store.renewRun(runId, clock.now() + RUN_LEASE_MS);
       }
+      // Before the leases: a run whose result is kept is still `running` in the store, its lease run out, and only its result tells its end.
+      await this.deliverKept();
       for (const run of await store.runsByStatus('running')) {
         // Its result is kept (`deliver`): ended, not lost, whatever its lease says.
         if (this.unwritten.has(endKey(run.id))) continue;
@@ -2401,6 +2401,8 @@ export class Orchestrator {
     // delivered until the database takes it (ORC-343). Recorded once: a retry sends only the result still missing.
     // Read once: a retry after a write whose answer was lost must not take its own record for a lease that expired.
     let end: { record?: RunRecord; send: boolean } | undefined = ended.infra ? { send: true } : undefined;
+    // Made once too: a retry sends the event as first made, its time and its usage hold.
+    let finished: FactoryEvent | undefined;
     await this.deliver(endKey(run.id), `the end of run ${run.id}`, async () => {
       try {
         end ??= await this.endOf(run, ended);
@@ -2412,7 +2414,7 @@ export class Orchestrator {
         this.log('error', `run ${run.id} ended, but was not recorded: ${(err as Error).message}`);
         end = { send: !(this.stopping && ended.outcome === 'stopped') };
       }
-      if (end.send) await this.accept(await this.finishedFor(run, ended));
+      if (end.send) await this.accept((finished ??= await this.finishedFor(run, ended)));
     });
   }
 

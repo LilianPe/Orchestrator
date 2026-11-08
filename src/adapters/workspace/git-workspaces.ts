@@ -110,7 +110,7 @@ export async function fetchOrigin(exec: Exec, repo: string, o: { deadlineMs?: nu
   const args = ['-C', repo, 'fetch', '--quiet', 'origin'];
   const expired = () => o.log?.(`git ${args.join(' ')}: killed at ${deadlineMs / 1000} s, its output still held ${FETCH_GRACE_MS / 1000} s later by a process out of its group`);
   // A forge silent past the deadline, whichever of git or `within` gives up first: a timeout (`isTransient`, ORC-343).
-  const timedOut = () => new Error(silent, { cause: Object.assign(new Error(silent), { code: 'ETIMEDOUT' }) });
+  const timedOut = () => Object.assign(new Error(silent), { code: 'ETIMEDOUT' });
   const r = await within(exec('git', args, { env: { GIT_TERMINAL_PROMPT: '0', ...STALLED }, timeoutMs: deadlineMs }), deadlineMs + FETCH_GRACE_MS, silent, expired).catch((err: Error) => {
     throw err.message === silent ? timedOut() : err;
   });
