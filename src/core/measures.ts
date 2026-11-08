@@ -251,7 +251,8 @@ function redVerdicts(events: FactoryEvent[]): TicketMeasures['red'] {
   return out;
 }
 
-const runMeasure = (r: RunRecord): RunMeasure => ({
+/** An attempt's measure, also the work the recap of Human Review sums (ORC-195). */
+export const runMeasure = (r: RunRecord): RunMeasure => ({
   id: r.id,
   job: r.job,
   role: r.sessionRole ?? null,
