@@ -4,7 +4,7 @@ import type { FeedbackItem } from '../../core/types.js';
 import { aggregateChecks, excerpt, toRepoPermission } from './gh-cli.js';
 import { unresolvedReviewFeedback, type GraphQl } from './review-threads.js';
 import type { RepoPermission, RepoPermissions } from '../roles/types.js';
-import { isFactoryCheck, NoCommitsBetween, type CheckRunRequest, type Forge, type ForgeWriter, type GitAccess, type MergeResult, type PrInfo, type PrMergeState, type PrRequest } from './types.js';
+import { isFactoryCheck, NoCommitsBetween, type CheckRunRequest, type Forge, type ForgeWriter, type GitAccess, type MergeResult, mergeStatus, type PrInfo, type PrMergeState, type PrRequest } from './types.js';
 
 export interface GitHubRepoRef {
   owner: string;
@@ -578,7 +578,7 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
     const token = await this.installationToken(repo);
     const pr = await this.read('GET', `${repoApi(repo)}/pulls/${prNumber}`, token, isMergeStateOf, 'a pull request with its mergeability');
     const mergeable = pr.mergeable === null ? 'UNKNOWN' : pr.mergeable ? 'MERGEABLE' : 'CONFLICTING';
-    return { base: pr.base.ref, mergeable, status: (pr.mergeable_state || 'unknown').toUpperCase() };
+    return { base: pr.base.ref, mergeable, status: mergeStatus(pr.mergeable_state) };
   }
 
   async unresolvedReviewComments(repoPath: string, prNumber: number): Promise<FeedbackItem[]> {

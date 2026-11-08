@@ -855,7 +855,7 @@ export class Orchestrator {
     const runDir = join(this.d.runsDir, runId);
     const claudeDir = ticketSession ? join(this.d.sessionsDir, project.id, ticketId) : join(runDir, 'claude');
     const refusalsDir = join(runDir, 'refusals');
-    const prDir = join(runDir, 'pr');
+    const prDir = this.prDir(runId);
     for (const dir of [claudeDir, refusalsDir, ...(prRefs ? [prDir] : [])]) mkdirSync(dir, { recursive: true });
     return sandboxes.create({
       runId,
@@ -906,17 +906,19 @@ export class Orchestrator {
     }
     if (this.d.prRefs && pr.base) {
       const inWorktree: InWorktree = sandbox ? (args) => this.d.sandboxes!.exec(sandbox.id, ['git', ...IN_SANDBOX, ...args]) : hostWorktree(worktree);
-      const dir = sandbox ? join(this.d.runsDir!, runId, 'pr') : mkdtempSync(join(tmpdir(), 'factory-pr-'));
+      const dir = sandbox ? this.prDir(runId) : mkdtempSync(join(tmpdir(), 'factory-pr-'));
       try {
-        const got = await this.d.prRefs({ repoPath: project.repoPath, branch, base: pr.base, bundleDir: dir, ...(sandbox ? { bundleTarget: PR_TARGET } : {}), inWorktree, fetch: o.fetch });
-        Object.assign(pr, { head: got.head, baseSha: got.base });
-      } catch (err) {
-        errors.push(failed('its commits', err));
-      }
-      try {
-        if (o.fastForward && pr.head) pr.worktree = await fastForward(inWorktree, branch);
-      } catch (err) {
-        errors.push(failed('the fast-forward of your branch', err));
+        try {
+          const got = await this.d.prRefs({ repoPath: project.repoPath, branch, base: pr.base, bundleDir: dir, ...(sandbox ? { bundleTarget: PR_TARGET } : {}), inWorktree, fetch: o.fetch });
+          Object.assign(pr, { head: got.head, baseSha: got.base });
+        } catch (err) {
+          errors.push(failed('its commits', err));
+        }
+        try {
+          if (o.fastForward && pr.head) pr.worktree = await fastForward(inWorktree, branch);
+        } catch (err) {
+          errors.push(failed('the fast-forward of your branch', err));
+        }
       } finally {
         if (!sandbox) rmSync(dir, { recursive: true, force: true });
       }
@@ -943,6 +945,11 @@ export class Orchestrator {
     })().finally(() => this.prReads.delete(run.id));
     this.prReads.set(run.id, read);
     return read;
+  }
+
+  /** Where a sandboxed review's bundle of its PR refs is written, mounted read-only at `PR_TARGET`. */
+  private prDir(runId: string): string {
+    return join(this.d.runsDir!, runId, 'pr');
   }
 
   /** `factory-agent pr` in flight, by run. */

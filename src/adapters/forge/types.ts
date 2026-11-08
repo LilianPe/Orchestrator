@@ -15,16 +15,19 @@ export interface PrInfo {
   failedChecks: string[];
 }
 
+export const MERGEABLE = ['MERGEABLE', 'CONFLICTING', 'UNKNOWN'] as const;
+
 /** What a review reads of its PR before it starts (ORC-322), the forge's answer at that moment. */
 export interface PrMergeState {
   base: string;
   /** `UNKNOWN` while the forge has not computed it yet. */
-  mergeable: 'MERGEABLE' | 'CONFLICTING' | 'UNKNOWN';
+  mergeable: (typeof MERGEABLE)[number];
   /** GitHub's `mergeStateStatus`: `CLEAN`, `BEHIND`, `DIRTY`, `BLOCKED`, `UNSTABLE`… */
   status: string;
 }
 
-export const MERGEABLE: readonly PrMergeState['mergeable'][] = ['MERGEABLE', 'CONFLICTING', 'UNKNOWN'];
+/** A merge status as both forges spell it, in capitals; `UNKNOWN` when it has none. */
+export const mergeStatus = (s: unknown): string => (typeof s === 'string' && s ? s.toUpperCase() : 'UNKNOWN');
 
 export interface Forge {
   findPr(repoPath: string, branch: string): Promise<PrInfo | undefined>;
