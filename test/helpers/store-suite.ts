@@ -876,7 +876,7 @@ export function storeContract(store: () => Store | Promise<Store>): void {
   describe('a decision another project of the ticket\'s team holds the ticket against (ORC-316)', () => {
     const plan = (ticket: TicketState): DecisionPlan => ({ ticket, effects: [], timers: [], clearTimers: false });
     const held = { ...newTicketState('api', 'REL-1', 'T', 'dev', 1), delegated: true };
-    const wait = { ...newTicketState('p', 'REL-1', 'T', 'dev', 1), delegated: true, blocked: true, awaitingRepo: ['p', 'api'] };
+    const wait = { ...newTicketState('p', 'REL-1', 'T', 'dev', 1), delegated: true, blocked: true, blockKind: 'pickup' as const, awaitingRepo: ['p', 'api'] };
     const on = async (...copies: TicketState[]) => {
       const s = await store();
       for (const c of copies) await s.putTicket(c);

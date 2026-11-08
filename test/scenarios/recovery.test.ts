@@ -2,12 +2,14 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { TRUSTED, type FactoryEvent } from '../../src/core/types.js';
-import { CUT_BOUND_REASON } from '../../src/core/engine.js';
 import { CUT_RELAUNCHES, CUT_WINDOW_MS, RUN_BEAT_MS, RUN_LEASE_MS } from '../../src/store/types.js';
 import type { Store } from '../../src/store/types.js';
 import { checkChain, Faults, settled } from '../helpers/faults.js';
 import { createHarness, heldRun } from '../helpers/harness.js';
 import { testPreset } from '../helpers/test-preset.js';
+
+/** The head of the reason of the cut bound (ORC-220): only its sentence, the block's kind is `limit`. */
+const CUT_BOUND = /^Too many relaunches after a cut: /;
 
 type H = ReturnType<typeof createHarness>;
 
@@ -305,7 +307,7 @@ describe('the bound of the relaunches after a cut', () => {
     expect(h.runner.requests).toHaveLength(1 + CUT_RELAUNCHES);
     const t = await h.ticket();
     expect(t).toMatchObject({ blocked: true });
-    expect(t.blockReason).toMatch(CUT_BOUND_REASON);
+    expect(t.blockReason).toMatch(CUT_BOUND);
     expect(t.activeRunId).toBeUndefined();
     expect(h.tracker.comments('REL-1').at(-1)).toContain('Reason: Too many relaunches after a cut: ');
     expect((await h.tracker.getIssue('REL-1')).labels).toContain('Bloqué');
@@ -373,7 +375,7 @@ describe('the bound of the relaunches after a cut', () => {
     await h.restart({ mode: 'brutal' });
     expect(h.checks.calls).toHaveLength(1 + CUT_RELAUNCHES);
     const t = await h.ticket();
-    expect(t.blockReason).toMatch(CUT_BOUND_REASON);
+    expect(t.blockReason).toMatch(CUT_BOUND);
     expect(t.verifyingRunId).toBeUndefined();
   });
 });

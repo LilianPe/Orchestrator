@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentOutput } from '../../src/core/agent-output.js';
-import { blockCause } from '../../src/core/block-cause.js';
+import { causeOf } from '../../src/core/block-cause.js';
 import { createHarness } from '../helpers/harness.js';
 
 /** A repository that makes delegation start with `intake` (ORC-206), as the pack's own comment says. */
@@ -46,7 +46,7 @@ describe('intake, the first step (ORC-206)', () => {
     expect(h.runner.requests).toHaveLength(1);
     const t = await h.ticket();
     expect(t).toMatchObject({ blocked: true, blockedJob: 'intake', logical: 'todo', size: 's', risk: 'low' });
-    expect(blockCause(t.blockReason)).toBe('pickup');
+    expect(causeOf(t.blockKind)).toBe('pickup');
     expect(h.tracker.calls.filter((c) => c.method === 'moveTo')).toEqual([]);
     expect(h.tracker.comments('REL-1').at(-1)).toContain('CSV or XLSX?');
 
