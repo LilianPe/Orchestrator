@@ -9,6 +9,7 @@ import { PrPoller } from '../adapters/forge/pr-poller.js';
 import { FakePublisher } from '../adapters/publisher/fake.js';
 import { CachedRoleResolver } from '../adapters/roles/cached.js';
 import { ClaudeCodeRunner, liveDir } from '../adapters/runner/claude-code.js';
+import { messageClassifier } from '../adapters/runner/message-classifier.js';
 import { purgeRunDirs, purgeSessionDirs, purgeTranscripts } from '../adapters/runner/transcript.js';
 import { FakeRunner } from '../adapters/runner/fake.js';
 import type { Runner } from '../adapters/runner/types.js';
@@ -283,8 +284,14 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     const webhookSecret = () => linearSettings(o.home, yml)?.webhookSecret ?? '';
     // One turn for the webhook and the reconciliation around the known labels (ORC-185).
     const labelsTurn = serial();
+    // The fake runner's daemon reaches no model: its messages are classified by the fallback rule (ORC-336).
+    const classify = o.fakeRunner ? undefined : messageClassifier(env, claudeToken, !sandboxes, log);
     const ingest = createLinearIngest({
       serial: labelsTurn,
+      // A message for the model is kept in the store and answered before it is classified (ORC-336); what an earlier
+      // start kept is written by `resume`, model or not.
+      ...(classify ? { classify } : {}),
+      deliveries: store,
       secret: webhookSecret,
       accept,
       log,
@@ -374,6 +381,12 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
         : undefined,
     });
 
+    // Webhooks answered before a stop and not written to the inbox yet (ORC-336), set on their way before any new one
+    // is taken: a new webhook of their issue goes behind them. A failure leaves them kept, for the next start.
+    await ingest.resume().then(
+      (n) => n && log(`webhooks: ${n} answered before the stop, written now`),
+      (e: unknown) => log(`webhooks kept before the stop not read: ${(e as Error).message}`),
+    );
     const server = serve({ fetch: app.fetch, port, hostname: instance.host });
     // Only with sandboxes: the agent API on a listener of its own, for them alone (ORC-204), reached through the egress proxy.
     const agentServer = sandboxes ? serve({ fetch: agentOnly(app), port: agentPort, hostname: agentListenHost }) : undefined;
@@ -387,7 +400,11 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       clearInterval(tickInterval);
       clearInterval(beatInterval);
       clearInterval(purgeInterval);
+      // No webhook taken from here on (503, Linear sends it again), then those answered are written or left kept for
+      // the next start, before anything closes the store (ORC-336).
       relay?.close();
+      ingest.close();
+      await ingest.settled();
       // A pass under way finishes first, so it never reads or writes a closed store.
       await Promise.all([timers.stop(), poller.stop(), reconciler.stop()]);
       orchestrator.stopAll();
