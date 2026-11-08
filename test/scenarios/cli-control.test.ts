@@ -59,7 +59,7 @@ describe('factory status and factory stop (ORC-220)', () => {
 
   it('stop goes to the project holding the ticket, not to a copy that only waited for its repo (ORC-316)', async () => {
     const copy = (projectId: string, patch: object) => ({ ...newTicketState(projectId, 'REL-1', 'T', 'dev', 1), ...patch });
-    const tickets = [copy('api', { delegated: true, blocked: true, awaitingRepo: ['api', 'web'] }), copy('web', { delegated: true })];
+    const tickets = [copy('api', { delegated: true, blocked: true, blockKind: 'pickup', awaitingRepo: ['api', 'web'] }), copy('web', { delegated: true })];
     const asked: string[] = [];
     const fetch = (url: string) => {
       asked.push(url);
