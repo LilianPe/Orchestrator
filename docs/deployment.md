@@ -87,7 +87,6 @@ On the server, with the user's rootless engine running:
    relay: { kind: none }
    projects:
      - { id: mon-app, repoPath: /srv/factory/repos/mon-app, linearTeamKey: APP }
-   limits: { perDayUsd: 40 }
    ```
 
    ```yaml

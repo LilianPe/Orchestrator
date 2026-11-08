@@ -45,11 +45,11 @@ A red CI is the failure of a push: as long as the PR is open, including during t
 | `review` | Opus | high | 25 | Claude API |
 | `spec_check`, `verify*`, `red`, `freeze_tests` | (factory check) | | | None |
 
-The turns of steps the MVP doc does not quantify reuse the old `per_run.turns: 150`. Token caps remain to be set (ORC-216): none by default.
+The turns of steps the MVP doc does not quantify reuse the old `per_run.turns: 150`. Token caps remain to be calibrated: none by default, and `factory validate` refuses until each agent step has its `per_step_tokens` and the ticket its `per_ticket_tokens` (ORC-216).
 
 A workflow job names its step (`step`, ORC-136): `dev` is `build`, `tests` is `tests`, `dev-feedback` and `fix-ci` are `fix`, `review` is `review`. Loading derives from it the effort, passed to `claude --effort` and recorded in the attempt's labels, and the turns. `factory.yml` can change a step's effort (`claude.effort.per_step`), lower its turns (`budgets.max_turns`) and give it a token cap (`budgets.per_step_tokens`). Like the whole workflow, these values are frozen with the ticket's version: a ticket already started keeps its own, and a version frozen before ORC-136 has neither effort nor tokens.
 
-A token cap counts `input + output + cache_creation` of the attempt's messages, not cache reads. When exceeded, the run stops as on a turn cap: `limit`, ticket Blocked.
+A token cap counts `input + output + cache_creation` of the attempt's messages, not cache reads. When exceeded, the run stops as on a turn cap: `limit`, and the runner says which cap (`overBudget: tokens | turns`, journaled on `run.finished`): the ticket is Blocked with the kind `budget` and the standard comment (ORC-216). A run stopped at its duration, or one journaled before ORC-216, blocks with the kind `limit` as before. The subscription's usage limit is no overrun: the run waits for the reset (`on_usage_limit: wait`, ORC-340).
 
 The network level is chosen per repository (Limited by default); a step can only tighten it. A step declared above the repository's level makes compilation fail.
 
@@ -180,7 +180,7 @@ On each `verify` with sandboxes, in the clone, on what the branch changed since 
 
 ## Compilation and version
 
-`compilePreset(preset, { repoNetwork })` checks the core invariants and returns the preset's hash, or throws a `PresetError` listing all violations:
+`compilePreset(preset, { repoNetwork, budgets })` checks the core invariants and returns the preset's hash, or throws a `PresetError` listing all violations:
 
 - **bounded cycles**: `next` links alone form no cycle, and every step back names a declared counter, with a positive integer limit;
 - **tests frozen before the build**: no step that writes code (`fix`, or `agent_step` with `writes: code`) is reachable without going through a `verify` in `freeze` mode;
@@ -188,6 +188,8 @@ On each `verify` with sandboxes, in the clone, on what the branch changed since 
 - **read-only reviewer**: every `review` step is read-only, Claude API network at most;
 - **offline checks**: every `verify` step runs without network;
 - **network**: no step at Full (reserved for `setup`), none above the repository's level;
-- **budget cap**: every agent step has a maximum number of turns.
+- **budget caps**: every agent step has a maximum number of turns; given `budgets` (`factory validate` gives them, the daemon does not yet: the values are to calibrate), every agent step has its `per_step_tokens`, the ticket its `per_ticket_tokens`, and the worst case stays under it (ORC-216).
+
+**Worst case** (`src/presets/budget.ts`): from the entry, the run follows `next` and, at each step with a failure edge (red CI included) whose counter is not spent, may take it instead. The worst case is the exact maximum over these runs of Σ cap of each agent step run, in tokens (`per_step_tokens`) and in turns (`maxTurns`, lowered by `max_turns`). On `factory/default` that is 26 agent attempts at most: `spec_draft` 5, `tests` 3, `build` and `fix` 9 together (the `verify` counter goes to either), `review` 6 (the review loop twice, the human one three times), the others once. With the review loop at 5 rounds, the worst case was almost twice the cap per ticket of the MVP doc: it is 2 (`review_ci`), the count shared with red CI, and `limits.review_rounds` (« Max review rounds » of the review prompt) defaults to it.
 
 The hash is the sha256 of the preset's canonical JSON (sorted keys): it does not depend on key order and changes as soon as a bound, a model or a step changes. Each run will be frozen on the hash it started with (`workflow_versions` table, ORC-149).

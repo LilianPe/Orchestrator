@@ -8,14 +8,14 @@ Running Relais day to day: limits, budget, pause, logs, recovery after a restart
 |---|---|---|---|
 | Concurrent code runs | `concurrency` (`factory.yml`), otherwise `limits.parallel_sessions` (workflow) | 3 | Further runs wait in the `dev` queue (persistent), by ticket priority. |
 | Concurrent question runs | `limits.question_sessions` (workflow) | 2 | Same, `questions` queue. |
-| Turns per run | `limits.per_run.turns` / `jobs.*.limits.turns` | 150 | Run interrupted, result `limit`. |
+| Turns per run | `limits.per_run.turns` / `jobs.*.limits.turns`, the step's `maxTurns` and `budgets.max_turns` | 150 | Run interrupted, ticket blocked, kind `budget` (ORC-216). |
 | Run duration | `limits.per_run.duration` | `90m` | Run interrupted, result `limit`. |
-| Dollars per run | `limits.per_run.usd` (→ `--max-budget-usd`) | 5 | Claude Code stops, result `limit`. |
+| Tokens per attempt | `budgets.per_step_tokens` (`factory.yml`) | none (to calibrate) | Run interrupted, ticket blocked, kind `budget` (ORC-216). |
+| Tokens per ticket | `budgets.per_ticket_tokens` (`factory.yml`, lowered by the repository's) | none (to calibrate) | An attempt never gets more than what is left; once spent, the next code run is refused, ticket blocked, kind `budget`. `factory validate` refuses a preset whose worst case exceeds it. |
 | Verification passes | `limits.verify_attempts` | 4 (preset: 3 retries) | Ticket blocked, failing commands posted in Linear. |
 | Same failure, unchanged worktree | preset (`sameFailure`) | 3 in a row | Ticket blocked with the cause « Loop », failing commands posted in Linear. |
 | Retries on red CI | `limits.ci_fix_attempts` | 2 | The next red CI does not relaunch `fix-ci`: ticket blocked, failing checks posted in Linear. Reset by a green CI (which also lifts this block), another PR, or a human relaunch of the blocked ticket. |
-| Review rounds | `limits.review_rounds` | 5 | The `review` skill stops and writes its summary. |
-| Daily budget | `limits.perDayUsd` (`config.yaml`) | none | No run starts until the next day (UTC); one comment per ticket per day. |
+| Review rounds | preset (`review_ci`), `limits.review_rounds` lowers it | 2 | The `review` skill stops and writes its summary. |
 | Duration of a `verify` / `setup` command | fixed | 15 min | Command counted as failed (`timeout`). |
 
 After a `limit` result or a failure, a code run **blocks** the ticket and Relais writes in the Linear session to reply in the thread to resume; a question run replies « I could not finish (failure or limit reached). ». Details and settings: [`workflow.md`](workflow.md#limits). Budget: [`configuration.md`](configuration.md#daily-budget).
@@ -226,7 +226,7 @@ Each repair is **journaled**: the command writes directly to the database (the d
 | Launch error mentioning the knowledge repository (`merge --ff-only`) | The knowledge clone has local commits or is not on its default branch. | Put it back on the up-to-date default branch (`git -C <clone> status`). |
 | Run fails immediately, empty transcript | `claude` missing from the daemon's `PATH`, not logged in, or an option not recognized by the installed version. | `claude --version` with the daemon's environment; the transcript and the daemon log give the error. |
 | Ticket blocked « Publication refused » | The factory's refusal, its reason in the ticket: branch that moved (a human push, to integrate), diff touching a forbidden path, instance with neither GitHub App nor sandboxes. | The block's reason; [`github.md`](github.md#publishing). |
-| Runs no longer start, queue growing | Pause, daily budget reached, or all slots taken. | `relais status` (queue, slots, today's cost); `relais resume`; raise `perDayUsd`. |
+| Runs no longer start, queue growing | Pause, usage limit of the Claude account reached, or all slots taken. | `relais status` (queue, slots); `relais resume`; the dashboard's usage-limit banner. |
 | A `verify` command passes by hand but not under Relais | Different environment: `bash -c` without a login profile, the daemon's `PATH`, `PORT`. | Rerun it with the daemon's environment, not your shell's: `env -i PATH="<daemon PATH>" HOME="$HOME" bash -c '<command>'` in the ticket's worktree (`<RELAIS_HOME>/workspaces/<projet>/<ticket>`). The daemon's `PATH`: `tr '\0' '\n' < /proc/<pid>/environ \| grep ^PATH=`. |
 | `npm`, `node` or another tool not found in `setup` or `verify` since the upgrade (ORC-324) | Commands no longer load a login profile (`bash -c` instead of `bash -lc`): what `~/.bash_profile` or `~/.profile` added to `PATH` (nvm, asdf, volta, `~/.local/bin`) is no longer there. | Give that `PATH` to the daemon itself: `Environment=PATH=…` in the systemd unit, `environment:` in `docker compose`, or export it before `relais up`. Commands receive the daemon's `PATH` as is. |
 | `factory status`: « does not answer on … » | Daemon stopped or different `port`. | Start `relais up`; check `port` and `RELAIS_HOME`. |

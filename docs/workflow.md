@@ -84,10 +84,9 @@ You can redefine only some of them; after merging, all five must have a name. `r
 | `question_sessions` | integer > 0 | 2 | Same for the `questions` queue. |
 | `per_run.turns` | integer > 0 | 150 | Number of assistant messages in a run, a message counting once even if written over several lines of the stream. Beyond that, the run is interrupted; its result is `limit`. A job with `step` never exceeds its step's turns: `per_run` and its `limits` can only lower them. |
 | `per_run.duration` | duration | `90m` | Maximum duration of a run, same `limit` result. |
-| `per_run.usd` | number > 0 | 5 | Passed to Claude Code (`--max-budget-usd`); when Claude Code stops on this cap, the result is `limit`. |
 | `verify_attempts` | integer ≥ 0 | 4 (preset) | Number of verification passes before blocking the ticket (see `jobs.*.verify`). `0` and `1` block on the first failure. By default, the bound from the [`factory/default` preset](preset.md): 3 returns to the run, the 4th failure blocks. |
 | `ci_fix_attempts` | integer ≥ 0 | 2 (preset) | Number of runs a red CI (`pr.checks_failed`) can launch before the next red CI blocks the ticket (see below). `0` blocks on the first red CI. |
-| `review_rounds` | integer > 0 | 5 | Given to the review skill in its prompt (« Max review rounds: 5 »); only for jobs whose skill ends with `:review`. The skill respects this number; Relais does not count it. |
+| `review_rounds` | integer > 0 | 2 (preset) | Given to the review skill in its prompt (« Max review rounds: 2 »); only for jobs whose skill ends with `:review`. The skill respects this number; Relais does not count it. By default the preset's `review_ci` bound, the count shared with red CI (ORC-184, ORC-216). |
 
 The defaults of `verify_attempts` and `ci_fix_attempts` come from the [`factory/default` preset](preset.md) (ORC-187); the pack no longer declares them. These two keys remain a possible override until `workflow.yml` is removed (ORC-177).
 
@@ -107,7 +106,7 @@ Durations: a number (milliseconds) or a `<integer><unit>` text with the unit `ms
 
 There is no "unlimited" value: see section 8.
 
-The **daily budget** for the whole instance is not set here, but in `~/.relais/config.yaml` (`limits.perDayUsd`). When it is reached, new runs stay queued until the next day (UTC day) and Relais reports it once per ticket per day in a comment.
+There is no budget in dollars (ORC-216): a `usd` key left in `per_run` or a job's `limits` is ignored. Budgets count tokens and turns: `budgets` of `factory.yml` ([`configuration.md`](configuration.md)).
 
 > Queue capacities (`parallel_sessions`, `question_sessions`) are global to the instance: they are read from the workflow of the **first** project in `config.yaml`. The other limits are specific to each project.
 
