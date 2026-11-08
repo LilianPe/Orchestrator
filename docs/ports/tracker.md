@@ -10,8 +10,8 @@ Ticket tracking: read a ticket, move it, label it, comment, and talk in its agen
 
 | Method | What it guarantees | Replayed | Error |
 |---|---|---|---|
-| `getIssue(id)` | the ticket, `teamKey` = prefix of the identifier; a copy the caller may modify | read | rejects on an unknown ticket with `IssueNotFoundError`, distinct from a read error |
-| `listDelegated(teamKey)` | the team's tickets delegated to the app, and only those | read | — |
+| `getIssue(id)` | the ticket, `teamKey` = prefix of the identifier; a copy the caller may modify; `blockedBy`: the tickets it is « blocked by », each with its status name and type, all of them (ORC-363; on Linear, the `blocks` relations where it is the related issue, every page) | read | rejects on an unknown ticket with `IssueNotFoundError`, distinct from a read error |
+| `listDelegated(teamKey)` | the team's tickets delegated to the app, and only those, each read as `getIssue` reads it | read | — |
 | `search(term)` | the tickets the term finds, including those that have it in their title, with URL and status | read | — |
 | `moveTo(id, status)` | the ticket is in that status | no further effect | rejects on an unknown ticket; on a status the team does not have, rejects and leaves the status |
 | `setLabels(id, add, remove)` | the final state: `add` applied (created if missing), `remove` removed; removing an absent label is ignored; a label from an exclusive group (Linear label group, `FakeTracker.setLabelGroup`) removes the other labels of its group, two labels from the same group in `add` are refused; nothing is written if the ticket already has it | writes nothing | rejects on an unknown ticket |
