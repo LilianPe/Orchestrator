@@ -82,6 +82,11 @@ export async function fastForward(inWorktree: InWorktree, branch: string): Promi
   return 'fast-forwarded';
 }
 
+/** The agent's git on the host, for a run without a sandbox, where none of ORC-317's guarantees hold anyway. */
+export function hostWorktree(path: string, exec: Exec = execCmd): InWorktree {
+  return (args) => exec('git', [...HARDENING.flatMap((c) => ['-c', c]), '-C', path, ...args]);
+}
+
 /** A ref's sha in the agent's repository: anything but a sha is no sha. */
 async function agentSha(inWorktree: InWorktree, ref: string): Promise<string | undefined> {
   const r = await inWorktree(['rev-parse', '--verify', '--quiet', '--end-of-options', `${ref}^{commit}`]);

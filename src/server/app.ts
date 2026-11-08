@@ -9,6 +9,7 @@ import type { Clock } from '../core/clock.js';
 import { pendingLabels } from '../core/attempt-labels.js';
 import { causeOf } from '../core/block-cause.js';
 import { measureTicket, type TicketMeasures } from '../core/measures.js';
+import type { PrState } from '../core/pr-state.js';
 import { TRUSTED, type FactoryEvent, type TicketState } from '../core/types.js';
 import type { RunRecord, Store } from '../store/types.js';
 import { handleMcp } from '../api/mcp.js';
@@ -34,6 +35,8 @@ export interface ServerDeps {
   linearConnected: () => boolean;
   tracker: Pick<Tracker, 'getIssue' | 'search' | 'activity'>;
   knowledgeSearch?: (q: string) => Promise<{ file: string; line: number; text: string }[]>;
+  /** A running review's PR read again, its new commits brought into its worktree (ORC-322): `factory-agent pr`. */
+  prState?: (run: RunRecord) => Promise<PrState | undefined>;
   capacity: () => { dev: { used: number; total: number }; questions: { used: number; total: number } };
   transcriptsDir: string;
   webDir?: string;
@@ -295,6 +298,11 @@ export function createApp(d: ServerDeps): Hono {
   });
   // The run's team alone (ORC-349): the factory's token reads the whole workspace, the agent reads its ticket's team.
   agent.get('/search', async (c) => c.json(await d.tracker.search(c.req.query('q') ?? '', teamOf(c.get('run').ticketId))));
+  // A read for the agent, even if it writes the PR's refs into its own repository: it reaches no forge itself.
+  agent.get('/pr', async (c) => {
+    const pr = d.prState ? await d.prState(c.get('run')) : undefined;
+    return pr ? c.json(pr) : c.json({ error: 'this run has no PR to read' }, 404);
+  });
   agent.get('/kb/search', async (c) => c.json(d.knowledgeSearch ? await d.knowledgeSearch(c.req.query('q') ?? '') : []));
   // In the inbox, in order behind the events before it: the agent waits for no decision, and hears of a failed write.
   const ask = async (run: RunRecord, question: string) => {

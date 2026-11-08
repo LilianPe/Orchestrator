@@ -97,7 +97,7 @@ const agentStep = (name: string): Extract<Step, { maxTurns: number }> | undefine
  * The job's effort and caps. Its step sets the effort, `factory.yml` may change it; the step's turns are a ceiling that a
  * project or `factory.yml` only lowers, as a step only narrows the network. A job out of the preset keeps its own limits.
  */
-function stepFields(job: string, raw: RawJob, own: RunLimits, settings: StepSettings): Pick<JobSpec, 'effort' | 'network' | 'limits'> {
+function stepFields(job: string, raw: RawJob, own: RunLimits, settings: StepSettings): Pick<JobSpec, 'effort' | 'network' | 'prState' | 'limits'> {
   const name = raw.step;
   if (name === undefined) return { ...(settings.effort?.default ? { effort: settings.effort.default } : {}), limits: own };
   const step = agentStep(name);
@@ -106,6 +106,7 @@ function stepFields(job: string, raw: RawJob, own: RunLimits, settings: StepSett
   return {
     effort: settings.effort?.perStep?.[name] ?? step.effort,
     ...(step.network ? { network: step.network } : {}),
+    ...(step.type === 'review' ? { prState: true as const } : {}),
     limits: { ...own, turns: Math.min(own.turns, step.maxTurns, settings.budgets?.maxTurns?.[name] ?? Infinity), ...(tokens !== undefined ? { tokens } : {}) },
   };
 }

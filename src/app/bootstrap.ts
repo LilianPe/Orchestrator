@@ -27,6 +27,7 @@ import { Reconciler, reconcileOnce } from '../adapters/tracker/linear/reconcile.
 import { LinearTracker } from '../adapters/tracker/linear/tracker.js';
 import { isUsableWebhookSecret } from '../adapters/tracker/linear/webhook.js';
 import { GitWorkspaces } from '../adapters/workspace/git-workspaces.js';
+import { bringPrRefs } from '../adapters/workspace/pr-refs.js';
 import { saveAgentOutput, type AgentOutput } from '../core/agent-output.js';
 import { activeClaudeToken, claudeToken as checkedClaudeToken, loadFactoryYml, stepSettings } from '../config/factory-yml.js';
 import { makeOriginUrl, makeRepoConfig, makeRepoVariables } from './repo-variables.js';
@@ -246,6 +247,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       roles,
       repoVariables: makeRepoVariables({ yml, log }),
       repoConfig: makeRepoConfig({ log }),
+      prRefs: bringPrRefs,
       originUrl,
       fullReadPaths: (t) => Object.keys(t.frozenTests?.files ?? {}),
       ...(sandboxes
@@ -350,6 +352,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     const oauthStates = new Set<string>();
     const app = createApp({
       knowledgeSearch: kb ? (q) => kb.search(q) : undefined,
+      prState: (run) => orchestrator.agentPrState(run),
       store,
       bus,
       clock,

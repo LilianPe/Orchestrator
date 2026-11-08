@@ -29,6 +29,22 @@ describe('factory-agent', () => {
     expect(out.join('')).toContain('REL-1 — Export (Todo)');
   });
 
+  it("reads the PR again through the factory, without network (ORC-322)", async () => {
+    const { f, calls } = fetchStub({ '/pr': { number: 3, url: 'https://github.test/pr/3', state: 'OPEN', branch: 'b', base: 'main', mergeable: 'MERGEABLE', mergeState: 'BEHIND', head: 'a'.repeat(40), baseSha: 'b'.repeat(40) } });
+    const out: string[] = [];
+    expect(await runAgentCli(['pr'], env, f, (s) => out.push(s))).toBe(0);
+    expect(calls[0]!.url).toBe('http://127.0.0.1:4100/agent/pr');
+    expect(out.join('')).toContain('#3 — OPEN — base `main` — mergeable: MERGEABLE (BEHIND)');
+    expect(out.join('')).toContain(`\`origin/b\` at ${'a'.repeat(12)}`);
+  });
+
+  it('says so when the run has no PR to read', async () => {
+    const { f } = fetchStub({});
+    const out: string[] = [];
+    expect(await runAgentCli(['pr'], env, f, (s) => out.push(s))).toBe(1);
+    expect(out.join('')).toContain('HTTP 404');
+  });
+
   it('searches the knowledge base and asks a question', async () => {
     const { f, calls } = fetchStub({ '/kb/search': [{ file: 'notes/a.md', line: 3, text: 'agrégats' }], '/ask': { ok: true } });
     const out: string[] = [];

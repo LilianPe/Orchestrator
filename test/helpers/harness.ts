@@ -226,6 +226,8 @@ export function createHarness(
     onUsageLimit?: 'wait';
     /** The policy in front of every text it publishes (ORC-214); without a secret scan by default. */
     outputPolicy?: OrchestratorDeps['outputPolicy'];
+    /** The PR refs a review brings (ORC-322); none by default. */
+    prRefs?: OrchestratorDeps['prRefs'];
   } = {},
 ) {
   if (opts.projectYaml !== undefined && opts.preset) throw new Error('createHarness: pass projectYaml or preset, not both');
@@ -303,6 +305,7 @@ export function createHarness(
     perTicketTokens: opts.perTicketTokens,
     onUsageLimit: opts.onUsageLimit,
     outputPolicy: opts.outputPolicy,
+    prRefs: opts.prRefs,
     roles: authz && new CachedRoleResolver({ projects: (id) => (id === 'p' ? authz : undefined), team: gate(tracker), repo: outside.forge, now: () => clock.now() }),
   });
   let orch = build(life);

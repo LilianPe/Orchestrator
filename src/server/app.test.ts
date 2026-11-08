@@ -11,7 +11,7 @@ import { LABELS } from '../../test/helpers/store-suite.js';
 import { pendingLabels } from '../core/attempt-labels.js';
 import { agentOnly, createApp } from './app.js';
 
-async function setup(extra: { uiPassword?: string; usageLimitedUntil?: () => Promise<number | undefined>; perTicketTokens?: number } = {}) {
+async function setup(extra: { uiPassword?: string; usageLimitedUntil?: () => Promise<number | undefined>; perTicketTokens?: number; prState?: Parameters<typeof createApp>[0]['prState'] } = {}) {
   const store = new SqliteStore(':memory:');
   const bus = new EventBus();
   const tracker = new FakeTracker();
@@ -249,6 +249,18 @@ describe('server', () => {
     for (const path of ['/api/state', '/', '/webhooks/linear', '/agent/../api/state', '/agent%2F..%2Fapi/state', '/agent']) {
       expect((await get(path)).status, path).toBe(404);
     }
+  });
+
+  it("agent pr answers the run's PR as the factory read it, and nothing for a run without one (ORC-322)", async () => {
+    const asked: string[] = [];
+    const pr = { number: 3, url: 'https://github.test/pr/3', state: 'OPEN' as const, branch: 'b', base: 'main', head: 'a'.repeat(40) };
+    const { app } = await setup({ prState: async (run) => (asked.push(run.id), run.id === 'r1' ? pr : undefined) });
+    expect((await app.request('/agent/pr')).status).toBe(401);
+    const res = await app.request('/agent/pr', { headers: { authorization: 'Bearer tok' } });
+    expect(await res.json()).toEqual(pr);
+    expect(asked).toEqual(['r1']);
+    const none = await (await setup({ prState: async () => undefined })).app.request('/agent/pr', { headers: { authorization: 'Bearer tok' } });
+    expect(none.status).toBe(404);
   });
 
   it('agent ask journals the question, and tells nothing itself: `decide` blocks and the outbox writes it', async () => {

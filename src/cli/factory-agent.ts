@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 import { fileURLToPath } from 'node:url';
+import { formatPrState, type PrState } from '../core/pr-state.js';
 import { PRODUCT_NAME } from '../product.js';
 
-const USAGE = 'Usage: factory-agent issue <ID> | search <text> | kb search <words> | ask <question>';
+const USAGE = 'Usage: factory-agent issue <ID> | search <text> | pr | kb search <words> | ask <question>';
 
 export async function runAgentCli(argv: string[], env: NodeJS.ProcessEnv, fetchImpl: typeof fetch, out: (s: string) => void): Promise<number> {
   const api = env['FACTORY_API'];
@@ -27,6 +28,10 @@ export async function runAgentCli(argv: string[], env: NodeJS.ProcessEnv, fetchI
     if (cmd === 'search' && rest.length) {
       const hits = (await get(`/search?q=${encodeURIComponent(rest.join(' '))}`)) as any[];
       out(hits.map((h) => `${h.identifier} — ${h.title} (${h.stateName}) ${h.url}`).join('\n') + '\n');
+      return 0;
+    }
+    if (cmd === 'pr' && !rest.length) {
+      out(`${formatPrState((await get('/pr')) as PrState)}\n`);
       return 0;
     }
     if (cmd === 'kb' && rest[0] === 'search' && rest.length > 1) {

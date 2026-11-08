@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import type { Forge, ForgeWriter, MergeResult } from '../adapters/forge/types.js';
@@ -87,6 +88,9 @@ import { isTestFile } from '../checks/test-files.js';
 import { ANTI_CHEAT_CHECK, ANTI_CHEAT_OK } from '../checks/anti-cheat.js';
 import { mdCode } from '../checks/markdown.js';
 import { parseStatus } from '../adapters/workspace/git-workspaces.js';
+import { fastForward, hostWorktree, type bringPrRefs, type InWorktree } from '../adapters/workspace/pr-refs.js';
+import { IN_SANDBOX } from '../publish/extract.js';
+import { PR_TARGET, type PrState } from './pr-state.js';
 import { agentPolicy, type EgressPolicy } from '../network/levels.js';
 import { REPO_CONFIG_REFUSED, TICKET_TOKENS_REACHED, type BlockKind } from './block-cause.js';
 import { readSecurityLog, refusalSummary } from '../network/security-log.js';
@@ -236,6 +240,8 @@ export interface OrchestratorDeps {
   onUsageLimit?: 'wait';
   /** The Claude account runs use (`claude.active`, ORC-211): a usage limit holds the launches of that account only. Absent: `default`. */
   claudeAccount?: () => string | undefined;
+  /** Brings a review's PR head and base into its worktree from the factory's repository (ORC-322). Absent: the review reads the forge's state only. */
+  prRefs?: typeof bringPrRefs;
   newId?: () => string;
   activityIntervalMs?: number;
   beforeRun?: (run: RunRecord) => Promise<void>;
@@ -844,12 +850,13 @@ export class Orchestrator {
    * from writing, as on the host. The network is applied by the egress proxy (ORC-213): for the agent, its step's
    * level narrowed by the repository's (`agentPolicy`, from the config read at the launch, ORC-322); `none` for a check (the red sandbox).
    */
-  private async openSandbox(sandboxes: SandboxProvider, project: ProjectRuntime, ticketId: string, ws: Workspace, runId: string, ticketSession: boolean, policy: EgressPolicy): Promise<Sandbox> {
+  private async openSandbox(sandboxes: SandboxProvider, project: ProjectRuntime, ticketId: string, ws: Workspace, runId: string, ticketSession: boolean, policy: EgressPolicy, prRefs = false): Promise<Sandbox> {
     if (!this.d.sessionsDir || !this.d.runsDir) throw new Error('sessionsDir and runsDir are required with sandboxes');
     const runDir = join(this.d.runsDir, runId);
     const claudeDir = ticketSession ? join(this.d.sessionsDir, project.id, ticketId) : join(runDir, 'claude');
     const refusalsDir = join(runDir, 'refusals');
-    for (const dir of [claudeDir, refusalsDir]) mkdirSync(dir, { recursive: true });
+    const prDir = join(runDir, 'pr');
+    for (const dir of [claudeDir, refusalsDir, ...(prRefs ? [prDir] : [])]) mkdirSync(dir, { recursive: true });
     return sandboxes.create({
       runId,
       ticketId,
@@ -863,9 +870,68 @@ export class Orchestrator {
         { host: refusalsDir, target: REFUSALS_TARGET, readOnly: false },
         { host: this.d.packDir, target: PACK_TARGET, readOnly: true },
         { host: this.settingsPath(), target: SETTINGS_TARGET, readOnly: true },
+        // A review's PR refs (ORC-322): the factory alone writes the bundle there.
+        ...(prRefs ? [{ host: prDir, target: PR_TARGET, readOnly: true }] : []),
         ...(this.d.sandboxMounts ?? []),
       ],
     });
+  }
+
+  /**
+   * A review's PR (ORC-322): the forge's state, and its head and base brought into the worktree from the factory's
+   * repository, so the agent reaches no forge. What fails is said in the state, never thrown: the review then reads
+   * it again with `factory-agent pr`. The forge's and git's messages go to the log, never to the agent: they name host paths.
+   */
+  private async readPr(project: ProjectRuntime, branch: string | undefined, worktree: string, runId: string, sandbox: Sandbox | undefined, o: { fetch: boolean; fastForward: boolean }): Promise<PrState | undefined> {
+    if (!branch) return undefined;
+    const failed = (what: string, err: unknown) => {
+      this.log('warn', `PR of ${branch}: ${what} not read: ${(err as Error).message}`);
+      return what;
+    };
+    let found;
+    try {
+      found = await this.d.forge.findPr(project.repoPath, branch);
+    } catch (err) {
+      failed('the PR', err);
+      return undefined;
+    }
+    if (!found) return undefined;
+    const pr: PrState = { number: found.number, url: found.url, state: found.state, branch };
+    const errors: string[] = [];
+    try {
+      const m = await this.d.forge.mergeState(project.repoPath, found.number);
+      Object.assign(pr, { base: m.base, mergeable: m.mergeable, mergeState: m.status });
+    } catch (err) {
+      errors.push(failed('its base and mergeability', err));
+    }
+    if (this.d.prRefs && pr.base) {
+      const inWorktree: InWorktree = sandbox ? (args) => this.d.sandboxes!.exec(sandbox.id, ['git', ...IN_SANDBOX, ...args]) : hostWorktree(worktree);
+      const dir = sandbox ? join(this.d.runsDir!, runId, 'pr') : mkdtempSync(join(tmpdir(), 'factory-pr-'));
+      try {
+        const got = await this.d.prRefs({ repoPath: project.repoPath, branch, base: pr.base, bundleDir: dir, ...(sandbox ? { bundleTarget: PR_TARGET } : {}), inWorktree, fetch: o.fetch });
+        Object.assign(pr, { head: got.head, baseSha: got.base });
+        if (o.fastForward) pr.worktree = await fastForward(inWorktree, branch);
+      } catch (err) {
+        errors.push(failed('its commits', err));
+      } finally {
+        if (!sandbox) rmSync(dir, { recursive: true, force: true });
+      }
+    }
+    if (errors.length) pr.error = `${errors.join(', ')} (the factory's log says why)`;
+    return pr;
+  }
+
+  /**
+   * `factory-agent pr` (ORC-322): a running review's PR read again, its new commits brought by a fetch of the
+   * factory's repository. Undefined for a run that is no review, or whose sandbox is gone.
+   */
+  async agentPrState(run: RunRecord): Promise<PrState | undefined> {
+    const project = this.d.projects.find((p) => p.id === run.projectId);
+    if (!project?.workflow.jobs[run.job]?.prState) return undefined;
+    const sandbox = this.d.sandboxes && (await this.d.sandboxes.findByAttempt(run.id));
+    if (this.d.sandboxes && !sandbox) return undefined;
+    const t = await this.ticket(project.id, run.ticketId);
+    return this.readPr(project, t.branch, run.cwd, run.id, sandbox || undefined, { fetch: true, fastForward: false });
   }
 
   private settingsPath(): string {
@@ -2276,7 +2342,9 @@ export class Orchestrator {
       }
       setUp = true;
       // Opened after the cheap exits above and after the setup, whose container is gone by now (ORC-211).
-      sandbox = this.d.sandboxes && (await this.openSandbox(this.d.sandboxes, project, ticketId, ws, runId, ticketSession, agentPolicy(config, job.network)));
+      sandbox = this.d.sandboxes && (await this.openSandbox(this.d.sandboxes, project, ticketId, ws, runId, ticketSession, agentPolicy(config, job.network), !!job.prState));
+      // Its launch has just fetched the factory's repository (`repoConfigOf`): the PR refs come from that fetch.
+      const pr = job.prState ? await this.readPr(project, t.branch, ws.path, runId, sandbox, { fetch: false, fastForward: true }) : undefined;
       // In each run's prompt, not the system prompt: read again at each attempt, never frozen at a resume
       // (ORC-128). The reset below keeps `.claude/CLAUDE.md`: the order does not matter.
       const conventions = readConventions(ws.path);
@@ -2308,6 +2376,7 @@ export class Orchestrator {
         prUrl: t.prUrl,
         // What `clarify`'s answers decided (ORC-210), for the steps after the guard: intake reads them as its feedback.
         decisions: job.queue === 'dev' && job.step !== 'intake' && t.decisions?.length ? t.decisions : undefined,
+        ...(pr ? { pr } : {}),
         conventions,
         input,
         reviewRounds: wf.limits.reviewRounds,

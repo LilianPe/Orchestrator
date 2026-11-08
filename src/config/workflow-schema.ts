@@ -150,6 +150,8 @@ export interface JobSpec {
   effort?: Effort;
   /** The network level of the preset step the job names (ORC-322), narrowed by the repository's. Absent from the jobs out of the preset and from versions frozen before it: the repository's level. */
   network?: NetworkLevel;
+  /** A review (ORC-322): the factory reads its PR and brings its head and base into the worktree before the run. Absent from the other jobs and from versions frozen before it. */
+  prState?: true;
   workspace: 'worktree' | 'trunk-readonly' | 'knowledge';
   session: 'new' | 'resume';
   skill: string;
