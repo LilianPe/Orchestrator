@@ -1,5 +1,5 @@
-import { formatDuration, formatTokens, plural, tokensCell } from './Flow.js';
-import type { MeasuredTicketView, RunMeasureView, TicketMeasuresView, TokensView } from './types.js';
+import { formatDuration, formatTokens, plural, PrLink, tokensCell, totalTokens } from './Flow.js';
+import type { MeasuredTicketView, RunMeasureView, TicketMeasuresView } from './types.js';
 
 /** The measures the MVP doc asks for that nothing in the factory feeds yet, and the ticket that brings each (ORC-223). */
 export const NO_SOURCE = [
@@ -7,8 +7,6 @@ export const NO_SOURCE = [
   { label: 'Minutes of human review', ticket: 'ORC-190', why: 'a review says when it was posted, not when it began' },
   { label: 'Baseline over 90 days', ticket: 'ORC-230', why: 'nothing to compare the overview with yet' },
 ] as const;
-
-const total = (t: TokensView) => t.input + t.output + t.cacheRead + t.cacheCreation;
 
 function median(values: number[]): number | null {
   if (!values.length) return null;
@@ -56,7 +54,7 @@ export interface Overview {
 export function overview(tickets: MeasuredTicketView[]): Overview {
   const measured = tickets.flatMap((t) => (t.measures ? [t.measures] : []));
   const merged = measured.filter((m) => m.mergedAt !== null);
-  const withTokens = merged.flatMap((m) => (m.tokens ? [total(m.tokens)] : []));
+  const withTokens = merged.flatMap((m) => (m.tokens ? [totalTokens(m.tokens)] : []));
   const messages = measured.flatMap((m) => m.messages);
   return {
     delivered: merged.length,
@@ -108,7 +106,7 @@ function Attempts({ ticket, now }: { ticket: MeasuredTicketView; now: number }) 
                 <td>{r.role ?? '—'}</td>
                 <td>{r.status}</td>
                 <td className="num">{runDuration(r, now)}</td>
-                <td className="num">{r.tokens ? formatTokens(total(r.tokens)) : '—'}</td>
+                <td className="num">{r.tokens ? formatTokens(totalTokens(r.tokens)) : '—'}</td>
                 <td className="num">${r.costUsd.toFixed(2)}</td>
                 <td className="num">{plural(r.turns, 'turn')}</td>
               </tr>
@@ -122,6 +120,20 @@ function Attempts({ ticket, now }: { ticket: MeasuredTicketView; now: number }) 
         {' · '}Reverted within 14 days: {m.revertedWithin14Days === null ? 'unknown' : m.revertedWithin14Days ? 'yes' : 'no'}
       </p>
     </section>
+  );
+}
+
+function MeasuredCells({ m, logical, now }: { m: TicketMeasuresView; logical: string; now: number }) {
+  const duration = ticketDuration(m, now, logical);
+  const cost = costCell(m);
+  return (
+    <>
+      <td className="num" title={duration.title}>{duration.text}</td>
+      <td className="num">{formatDuration(m.workMs)}</td>
+      <td className="num" title={cost.title}>{cost.text}</td>
+      <td className="num">{reviewRoundsCell(m.reviewRounds)}</td>
+      <td className="num">{m.attempts}</td>
+    </>
   );
 }
 
@@ -145,21 +157,11 @@ export function Measures({ tickets, now, selected, onSelect }: { tickets: Measur
             <tbody>
               {tickets.map((t) => {
                 const m = t.measures;
-                const cost = costCell(m);
-                const duration = m && ticketDuration(m, now, t.logical);
                 return (
                   <tr key={key(t)} className={key(t) === selected ? 'selected' : ''}>
-                    <td><button className="link" onClick={() => onSelect(key(t))}>{t.ticketId}</button> {t.title}</td>
+                    <td><button className="link" onClick={() => onSelect(key(t))}>{t.ticketId}</button> {t.title} <PrLink url={t.prUrl} /></td>
                     <td>{t.logical}{t.blocked && ' · blocked'}</td>
-                    {m && duration ? (
-                      <>
-                        <td className="num" title={duration.title}>{duration.text}</td>
-                        <td className="num">{formatDuration(m.workMs)}</td>
-                        <td className="num" title={cost.title}>{cost.text}</td>
-                        <td className="num">{reviewRoundsCell(m.reviewRounds)}</td>
-                        <td className="num">{m.attempts}</td>
-                      </>
-                    ) : <td colSpan={5} className="reason">{cost.text} {cost.title}</td>}
+                    {m ? <MeasuredCells m={m} logical={t.logical} now={now} /> : <td colSpan={5} className="reason">? {costCell(null).title}</td>}
                   </tr>
                 );
               })}

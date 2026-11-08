@@ -277,7 +277,7 @@ Network egress of the sandboxes (ORC-213, [decision](decisions/ORC-213.md)).
 
 | Module | Role | Status | Target ticket |
 |---|---|---|---|
-| `src/server/app.ts` | Hono API: interface, SSE, Linear webhook, `/agent/*`, pause/resume, password, CSRF | adapt | ORC-147 (done: webhook and interface commands wait for the inbox write), ORC-192 (`/agent/*` removed), ORC-200 (pause/resume removed), ORC-223 (dashboard API; done: `GET /api/flow`, ORC-297; done: `GET /api/measures` and `GET /api/tickets/:projectId/:ticketId/measures`, read-only), ORC-222 (named authentication), ORC-134 (done: `POST /webhooks/github`) |
+| `src/server/app.ts` | Hono API: interface, SSE, Linear webhook, `/agent/*`, pause/resume, password, CSRF | adapt | ORC-147 (done: webhook and interface commands wait for the inbox write), ORC-192 (`/agent/*` removed), ORC-200 (pause/resume removed), ORC-223 (dashboard API; done: `GET /api/flow`, ORC-297; done: `GET /api/measures`, read-only), ORC-222 (named authentication), ORC-134 (done: `POST /webhooks/github`) |
 | `src/server/flow.ts` | The dashboard's Flow: Needs you, Working, Done, field by field, without a run token | keep | ORC-297, ORC-177 (the preset step), ORC-212 (spec gate) |
 | `src/server/static.ts` | Serves the built interface | keep | ORC-223 |
 

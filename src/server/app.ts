@@ -11,7 +11,7 @@ import { measureTicket, type TicketMeasures } from '../core/measures.js';
 import { TRUSTED, type FactoryEvent, type TicketState } from '../core/types.js';
 import type { RunRecord, Store } from '../store/types.js';
 import { handleMcp } from '../api/mcp.js';
-import { buildFlow, flowKey } from './flow.js';
+import { buildFlow, flowKey, flowTicket } from './flow.js';
 import { readStatic } from './static.js';
 import { PRODUCT_NAME } from '../product.js';
 
@@ -53,7 +53,7 @@ type AgentEnv = { Variables: { run: RunRecord } };
 
 /** Tickets `GET /api/measures` serves, the most recently updated: each costs a read of its journal. */
 const MEASURED_TICKETS = 50;
-const MEASURES_AT_ONCE = 10;
+const MEASURES_AT_ONCE = 2;
 
 function startOfUtcDay(ts: number): number {
   const d = new Date(ts);
@@ -199,29 +199,15 @@ export function createApp(d: ServerDeps): Hono {
 
   // The measures of the most recently updated tickets (ORC-223), read-only: one ticket whose measures cannot be read is
   // served with `measures: null`, the others still are.
-  const measuredTicket = (t: TicketState, measures: TicketMeasures | null) => ({
-    projectId: t.projectId,
-    ticketId: t.ticketId,
-    title: t.title,
-    logical: t.logical,
-    blocked: t.blocked,
-    ...(t.prUrl === undefined ? {} : { prUrl: t.prUrl }),
-    measures,
-  });
+  const measuredTicket = (t: TicketState, measures: TicketMeasures | null) => ({ ...flowTicket(t), logical: t.logical, blocked: t.blocked, measures });
   app.get('/api/measures', async (c) => {
     const tickets = (await d.store.listTickets()).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, MEASURED_TICKETS);
-    // A few tickets at a time: each read is several queries, and the pool also serves the webhooks and the worker.
+    // Two tickets at a time: each read is five queries at once, on a pool of ten that also serves the webhooks and the worker.
     const served = [];
     for (let i = 0; i < tickets.length; i += MEASURES_AT_ONCE) {
       served.push(...(await Promise.all(tickets.slice(i, i + MEASURES_AT_ONCE).map(async (t) => measuredTicket(t, await measuresOf(t))))));
     }
     return c.json({ tickets: served });
-  });
-  app.get('/api/tickets/:projectId/:ticketId/measures', async (c) => {
-    const ticket = await d.store.getTicket(c.req.param('projectId'), c.req.param('ticketId'));
-    if (!ticket) return c.json({ error: 'unknown ticket' }, 404);
-    const measures = await measuresOf(ticket);
-    return measures ? c.json(measuredTicket(ticket, measures)) : c.json({ error: 'the measures could not be read' }, 500);
   });
 
   app.get('/api/events/recent', async (c) => c.json(await d.store.recentEvents(100, c.req.query('ticket') || undefined)));

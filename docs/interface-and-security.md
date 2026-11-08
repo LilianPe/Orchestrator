@@ -11,7 +11,7 @@ What it shows, live:
   - **Needs you**: what is waiting for a human. Blocked tickets, grouped by cause (agent question, contested ticket, unverified red, infrastructure failure, cap, loop, failed run, pickup refused, event set aside, PR closed without merge, stop, other cause), each with its reason; PRs in Human Review; pending gates (`ready`, for a workflow that still declares it; the spec gate will come with ORC-212). Oldest first, by the ticket's last activity. A PR the agent is still working on, or whose run is waiting for a slot, is not there; a question asked to the agent leaves it there. A blocked ticket whose run is still running appears in both places.
   - **Working**: every run in progress and every verification in progress, with its step (the run's job), its duration and the ticket's tokens; **Stop** button on a ticket's active run. Clicking an identifier opens its run. Queued tickets are listed below.
   - **Done**: finished tickets whose last activity is less than 7 days old, 20 at most, then the other unfinished tickets, collapsed (**Other tracked tickets**).
-- **Measures** (ORC-223, the **Measures** link of the header, `#measures`), read from `GET /api/measures` on opening and every 10 s while shown, for the 50 most recently updated tickets:
+- **Measures** (ORC-223, the **Measures** link of the header, `#measures`), read from `GET /api/measures` on opening and every 30 s while shown, for the 50 most recently updated tickets:
   - **Overview**: merged tickets, median lead time, tokens per merged ticket (those that reported none are counted apart), ready at the first try, median delays to the first sign of life and to the answer of the human messages. No baseline to compare with yet (ORC-230).
   - **Tickets**: each ticket's duration (delegation to merge, or so far), work time (its attempts' own durations), tokens (as in the Flow), review rounds (AI reviewer attempts, handovers to Human Review by the factory) and attempts. Clicking an identifier lists its **attempts**: step, role, status, duration, tokens, dollars and turns, with its first try, CI time and revert.
   - **No source yet**: the measures nothing in the factory feeds yet and the ticket that brings each (usage limit share, ORC-216; minutes of human review, ORC-190; baseline, ORC-230). Every figure is computed by the factory from its journal and run records ([operations](operations.md#measures-orc-235)), never from what an agent wrote; a ticket whose measures cannot be read says so instead of showing zeros.
@@ -34,7 +34,6 @@ Interface development: `npm run dev:web` starts Vite on port 5173 with a proxy f
 | `GET /api/state` | State: tickets, queue, active runs (without their tokens), cost, capacity | password |
 | `GET /api/flow` | Flow: Needs you, Working, Done (without run tokens or queue contents) | password |
 | `GET /api/measures` | Measures of the 50 most recently updated tickets: their attempts' cost, duration and review rounds (without run tokens nor agent text) | password |
-| `GET /api/tickets/:projet/:ticket/measures` | One ticket's measures; 404 for a ticket not tracked | password |
 | `GET /api/events`, `GET /api/events/recent` | SSE stream, last 100 events | password |
 | `GET /api/runs/:id/transcript` | A run's transcript | password |
 | `POST /api/control/pause`, `/api/control/resume` | Pause / resume | password + origin check |
@@ -73,7 +72,7 @@ Each run receives a random `RELAIS_RUN_TOKEN`. The `/agent/*` API only accepts i
 
 - only reads **the run's ticket** (`/agent/issue/<other ticket>` → 403);
 - can search tickets, search the knowledge base and ask a question in the ticket's session;
-- appears neither in `/api/state`, nor in `/api/flow`, nor in `/api/measures` and `/api/tickets/:projet/:ticket/measures`, nor in `/api/events` and `/api/events/recent`.
+- appears neither in `/api/state`, nor in `/api/flow`, nor in `/api/measures`, nor in `/api/events` and `/api/events/recent`.
 
 On the host, `RELAIS_API` points to `http://127.0.0.1:<port>/agent`: agents talk to the daemon locally. In a sandbox, it points to `http://<FACTORY_SANDBOX_AGENT_HOST>:<FACTORY_AGENT_PORT>/agent` (by default `host.docker.internal`): a name the container does not resolve, which the egress proxy recognizes and relays to the server dedicated to the agent API.
 

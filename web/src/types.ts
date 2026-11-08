@@ -41,7 +41,7 @@ export interface WorkingRunView extends FlowTicketView {
   stoppable: boolean;
   durationMs: number;
   measured: boolean;
-  tokens: { input: number; output: number; cacheRead: number; cacheCreation: number } | null;
+  tokens: TokensView | null;
   attemptsWithoutTokens: number;
   costUsd: number;
 }

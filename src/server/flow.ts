@@ -63,7 +63,7 @@ export interface FlowInput {
 
 export const flowKey = (r: { projectId: string; ticketId: string }): string => `${r.projectId}/${r.ticketId}`;
 
-const flowTicket = (t: TicketState): FlowTicket => ({
+export const flowTicket = (t: TicketState): FlowTicket => ({
   projectId: t.projectId,
   ticketId: t.ticketId,
   title: t.title,

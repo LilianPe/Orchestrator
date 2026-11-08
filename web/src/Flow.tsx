@@ -1,5 +1,5 @@
 import { AGENT_QUESTION, onlyRestatesCause, STOPPED, type BlockCause } from '../../src/core/block-cause.js';
-import type { FlowTicketView, FlowView, WorkingRunView } from './types.js';
+import type { FlowTicketView, FlowView, TokensView, WorkingRunView } from './types.js';
 
 const CAUSE_LABELS: Record<BlockCause, string> = {
   question: AGENT_QUESTION,
@@ -37,6 +37,9 @@ export function formatTokens(n: number): string {
   return k < 1_000 ? `${k.toFixed(1)} k` : `${(Math.round(n / 100_000) / 10).toFixed(1)} M`;
 }
 
+/** What the dashboard calls a ticket's tokens: input, output, cache read and cache write. */
+export const totalTokens = (t: TokensView): number => t.input + t.output + t.cacheRead + t.cacheCreation;
+
 /** The measure of the ticket; the cost in dollars is what exists when no attempt reported tokens (ORC-216). */
 export function tokensCell(run: Pick<WorkingRunView, 'measured' | 'tokens' | 'attemptsWithoutTokens' | 'costUsd'>): { text: string; title: string } {
   if (!run.measured) return { text: '?', title: 'This ticket’s measurements could not be read: see the log.' };
@@ -46,12 +49,12 @@ export function tokensCell(run: Pick<WorkingRunView, 'measured' | 'tokens' | 'at
   const { input, output, cacheRead, cacheCreation } = run.tokens;
   const missing = run.attemptsWithoutTokens > 0 ? `${plural(run.attemptsWithoutTokens, 'finished attempt')} without a measurement. ` : '';
   return {
-    text: `${missing ? '≥ ' : ''}${formatTokens(input + output + cacheRead + cacheCreation)}`,
+    text: `${missing ? '≥ ' : ''}${formatTokens(totalTokens(run.tokens))}`,
     title: `${missing}Input ${formatTokens(input)}, output ${formatTokens(output)}, cache read ${formatTokens(cacheRead)}, cache write ${formatTokens(cacheCreation)}.`,
   };
 }
 
-function PrLink({ url }: { url?: string }) {
+export function PrLink({ url }: { url?: string }) {
   return url ? <a className="pr" href={url} target="_blank" rel="noreferrer">PR</a> : null;
 }
 

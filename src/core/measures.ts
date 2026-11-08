@@ -261,10 +261,10 @@ const runMeasure = (r: RunRecord): RunMeasure => ({
   turns: r.turns,
 });
 
-/** A handover to a human reviewer: a move to Human Review the factory carried out. */
 /** A review round: a reviewer attempt that ran to its end. */
 const reviewed = (r: RunRecord): boolean => r.sessionRole === 'reviewer' && (r.status === 'success' || r.status === 'failure') && !r.infra;
 
+/** A handover to a human reviewer: a move to Human Review the factory carried out. */
 const handedToHuman = (row: OutboxRow): boolean => row.status === 'done' && row.effect.kind === 'move' && row.effect.to === 'human_review';
 
 /** States a human sends a ticket back to dev from: its work had been handed over. */
@@ -357,7 +357,7 @@ export function ticketMeasures(projectId: string, ticketId: string, facts: Measu
     startedAt,
     leadTimeMs: mergedAt === null || startedAt === null ? null : mergedAt - startedAt,
     workMs: runs.reduce((sum, r) => sum + (r.durationMs ?? 0), 0),
-    costUsd: facts.runs.reduce((sum, r) => sum + r.costUsd, 0),
+    costUsd: runs.reduce((sum, r) => sum + r.costUsd, 0),
     reviewRounds: { ai: facts.runs.filter(reviewed).length, human: facts.effects.filter(handedToHuman).length },
     runs,
   };

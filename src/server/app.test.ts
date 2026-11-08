@@ -112,7 +112,7 @@ describe('server', () => {
       await store.putTicket({ ...newTicketState('p', 'REL-3', 'Bloqué', 'dev', 1), blocked: true, blockReason: 'The run dev failed.' });
       await store.recordEvent({ ...TRUSTED, id: 'e1', type: 'run.finished', at: 2, projectId: 'p', ticketId: 'REL-2', payload: { runId: 'r2', job: 'dev', outcome: 'success', costUsd: 0, turns: 1, lastText: '' } });
 
-      for (const path of ['/api/state', '/api/flow', '/api/events/recent', '/api/measures', '/api/tickets/p/REL-2/measures']) {
+      for (const path of ['/api/state', '/api/flow', '/api/events/recent', '/api/measures']) {
         const res = await app.request(path);
         expect(res.status, path).toBe(200);
         expect(await res.text(), path).not.toContain(TOKEN);
@@ -153,15 +153,6 @@ describe('server', () => {
       expect(body.tickets[0].measures.runs.map((r: { id: string; durationMs: number | null }) => [r.id, r.durationMs])).toEqual([['r0', 3], ['r1', null]]);
     });
 
-    it('serves one ticket with all its measures, and 404 for a ticket the factory does not track', async () => {
-      const { app } = await setup();
-      const res = await app.request('/api/tickets/p/REL-1/measures');
-      expect(res.status).toBe(200);
-      expect(await res.json()).toMatchObject({ projectId: 'p', ticketId: 'REL-1', title: 'Export', measures: { attempts: 1, runs: [{ id: 'r1', status: 'running' }] } });
-      expect((await app.request('/api/tickets/p/REL-9/measures')).status).toBe(404);
-      expect((await app.request('/api/tickets/q/REL-1/measures')).status).toBe(404);
-    });
-
     it('serves a ticket whose measures cannot be read with null measures, the others still measured, and logs it', async () => {
       const { app, store, bus } = await setup();
       const logs: string[] = [];
@@ -176,7 +167,6 @@ describe('server', () => {
       expect(by['REL-2']).toBeNull();
       expect(by['REL-1']).toMatchObject({ attempts: 1 });
       expect(logs).toEqual([expect.stringContaining('journal illisible')]);
-      expect((await app.request('/api/tickets/p/REL-2/measures')).status).toBe(500);
     });
 
     it('serves the most recently updated tickets first, at most 50', async () => {
@@ -191,7 +181,6 @@ describe('server', () => {
     it('asks for the password, as the other routes of the interface', async () => {
       const { app } = await setup({ uiPassword: 'secret' });
       expect((await app.request('/api/measures')).status).toBe(401);
-      expect((await app.request('/api/tickets/p/REL-1/measures')).status).toBe(401);
     });
   });
 

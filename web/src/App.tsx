@@ -8,6 +8,7 @@ import { PRODUCT_NAME } from '../../src/product.js';
 
 /** A burst of ticket updates reads the Flow once. */
 const FLOW_DEBOUNCE_MS = 300;
+const MEASURES_POLL_MS = 30_000;
 
 function Line({ line }: { line: RunLine }) {
   switch (line.kind) {
@@ -39,7 +40,7 @@ function LiveFlow({ flow, flowAt, frozen, ...rest }: { flow: FlowView; flowAt: n
 type View = 'flow' | 'measures';
 const viewOf = (hash: string): View => (hash === '#measures' ? 'measures' : 'flow');
 
-/** The measures page (ORC-223), read when shown and every 10 s while it is. */
+/** The measures page (ORC-223), read when shown and every 30 s while it is: its figures change slowly, each read is a journal per ticket. */
 function MeasuresPage() {
   const [tickets, setTickets] = useState<MeasuredTicketView[]>();
   const [failed, setFailed] = useState(false);
@@ -53,7 +54,7 @@ function MeasuresPage() {
         () => live && setFailed(true),
       );
     load();
-    const timer = setInterval(load, 10_000);
+    const timer = setInterval(load, MEASURES_POLL_MS);
     return () => {
       live = false;
       clearInterval(timer);
@@ -61,7 +62,7 @@ function MeasuresPage() {
   }, []);
   return (
     <div className="flow">
-      {failed && <p className="flow-failed" role="alert">{tickets ? 'Measures out of date: reading them failed. Retrying within 10 s.' : 'Measures unavailable: reading them failed. Retrying within 10 s.'}</p>}
+      {failed && <p className="flow-failed" role="alert">{tickets ? 'Measures out of date: reading them failed. Retrying within 30 s.' : 'Measures unavailable: reading them failed. Retrying within 30 s.'}</p>}
       {tickets ? <Measures tickets={tickets} now={now} selected={selected} onSelect={setSelected} /> : !failed && <section><p className="empty">Loading the measures…</p></section>}
     </div>
   );
