@@ -153,6 +153,16 @@ describe('server', () => {
       expect(body.tickets[0].measures.runs.map((r: { id: string; durationMs: number | null }) => [r.id, r.durationMs])).toEqual([['r0', 3], ['r1', null]]);
     });
 
+    it("serves the share of the ticket's token budget its code runs spent, against factory.yml's cap (ORC-216)", async () => {
+      const share = async (perTicketTokens?: number) => {
+        const { app, store } = await setup(perTicketTokens ? { perTicketTokens } : {});
+        await store.putRun({ ...(await store.getRun('r1'))!, status: 'success', tokens: { input: 100, output: 150, cacheRead: 9_000, cacheCreation: 0 } });
+        return (await (await app.request('/api/measures')).json()).tickets[0].measures.usageLimitShare;
+      };
+      expect(await share(1_000)).toBe(0.25);
+      expect(await share()).toBeNull();
+    });
+
     it('serves a ticket whose measures cannot be read with null measures, the others still measured, and logs it', async () => {
       const { app, store, bus } = await setup();
       const logs: string[] = [];

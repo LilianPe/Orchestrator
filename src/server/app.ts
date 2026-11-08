@@ -25,6 +25,8 @@ export interface ServerDeps {
   isPaused: () => boolean | Promise<boolean>;
   /** Until when the Claude account's usage limit holds every launch (ORC-340); undefined when it holds none. Absent: never shown. */
   usageLimitedUntil?: () => Promise<number | undefined>;
+  /** `budgets.per_ticket_tokens` of factory.yml (ORC-216): what the measures' `usageLimitShare` is a share of. Absent: no share. */
+  perTicketTokens?: number;
   linearWebhook: (raw: string, headers: Record<string, string | undefined>) => { status: number } | Promise<{ status: number }>;
   /** The GitHub webhook (ORC-134): signature checked, events written to the inbox before the answer. */
   githubWebhook: (raw: string, headers: Record<string, string | undefined>) => Promise<{ status: number }>;
@@ -178,7 +180,7 @@ export function createApp(d: ServerDeps): Hono {
 
   // The measures of a ticket, or null when they cannot be read: the error is logged, and that ticket alone loses them.
   const measuresOf = (t: { projectId: string; ticketId: string }): Promise<TicketMeasures | null> =>
-    measureTicket(d.store, t.projectId, t.ticketId).catch((err: Error) => {
+    measureTicket(d.store, t.projectId, t.ticketId, d.perTicketTokens).catch((err: Error) => {
       d.bus.publish({ kind: 'log', level: 'error', message: `measures of ${t.ticketId}: ${err.message}`, at: d.clock.now() });
       return null;
     });

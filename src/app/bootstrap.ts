@@ -356,6 +356,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       submit: accept,
       isPaused: () => orchestrator.isPaused(),
       usageLimitedUntil: () => orchestrator.usageLimitedUntil(),
+      ...(yml?.budgets?.perTicketTokens ? { perTicketTokens: yml.budgets.perTicketTokens } : {}),
       linearWebhook: ingest,
       githubWebhook: githubIngest,
       linearConnected: () => !!trackerSwitch.current,
