@@ -935,16 +935,17 @@ function publishes(job: JobSpec): boolean {
 }
 
 /** The check of a human's push (ORC-159): no run made the commit, so the check's id names it, and the push's time. */
-const PUSH_CHECK = /^push-([0-9a-f]{4,64})-\d+$/;
+const SHA = '[0-9a-f]{4,64}';
+const PUSH_CHECK = new RegExp(`^push-(${SHA})-\\d+$`);
 export const pushCheckId = (sha: string, at: number): string => `push-${sha}-${at}`;
 /** The commit a check of a human's push verifies; undefined for the check of a run. */
-export const pushedHead = (runId: string): string | undefined => PUSH_CHECK.exec(runId)?.[1];
+const pushedHead = (runId: string): string | undefined => PUSH_CHECK.exec(runId)?.[1];
 
 /**
  * The job whose checks a human's push goes through (ORC-159): the first the factory publishes. None on a version whose
  * agents push themselves (frozen before ORC-125): their own pushes come in as `push.human`, and pause nothing.
  */
-export function pushCheckJob(workflow: Workflow): JobSpec | undefined {
+function pushCheckJob(workflow: Workflow): JobSpec | undefined {
   return Object.values(workflow.jobs).find((j) => publishes(j) && j.workspace === 'worktree' && j.verifyFailure !== 'block');
 }
 
@@ -966,18 +967,16 @@ function humanPush(out: Decision, event: FactoryEvent<'push.human'>, state: Tick
   if (!job) return undefined;
   // The commit shown to the reviewer is no longer the branch's: no approval from before the push passes a gate (I2).
   if (state?.reviewSha) out.events.push({ type: 'ticket.patched', patch: { reviewSha: null } });
-  if (!ticket?.delegated || settledTicket(ticket) || ticket.prState === 'CLOSED' || !/^[0-9a-f]{4,64}$/.test(sha)) return undefined;
-  const interrupted = state?.activeJob && workflow.jobs[state.activeJob]?.queue === 'dev' ? state.activeJob : (state?.pendingJob?.job ?? ticket.blockedJob);
-  const pausing = !ticket.blocked || ticket.blockKind === 'human_push';
-  if (pausing) cancelWork(out, `push.human: ${author} pushed ${sha.slice(0, 12)}, the agent's work paused`);
-  else {
+  if (!ticket?.delegated || settledTicket(ticket) || ticket.prState === 'CLOSED' || !PUSH_CHECK.test(pushCheckId(sha, event.at))) return undefined;
+  if (!ticket.blocked || ticket.blockKind === 'human_push') {
+    cancelWork(out, `push.human: ${author} pushed ${sha.slice(0, 12)}, the agent's work paused`);
+    // A push on a paused ticket keeps the job the first one interrupted.
+    const resumes = ticket.blockKind === 'human_push' ? ticket.blockedJob : state?.activeJob && workflow.jobs[state.activeJob]?.queue === 'dev' ? state.activeJob : (state?.pendingJob?.job ?? ticket.blockedJob);
+    out.events.push({ type: 'ticket.blocked', reason: `${pushed(sha)}: the agent's work is paused while verify checks it.`, kind: 'human_push', ...(workflow.blockComment && resumes ? { job: resumes } : {}) });
+  } else {
     // Its block, and the pending job a reply to it resumes, stay: only the run in flight stops.
     out.trace.push(`push.human: ${author} pushed ${sha.slice(0, 12)}, the ticket stays blocked for its own reason`);
     out.effects.push({ kind: 'stop_run' });
-  }
-  if (pausing) {
-    const resumes = ticket.blockKind === 'human_push' ? ticket.blockedJob : interrupted;
-    out.events.push({ type: 'ticket.blocked', reason: `${pushed(sha)}: the agent's work is paused while verify checks it.`, kind: 'human_push', ...(workflow.blockComment && resumes ? { job: resumes } : {}) });
   }
   const runId = pushCheckId(sha, event.at);
   out.events.push({ type: 'verify.started', runId });
@@ -993,8 +992,7 @@ const pushed = (sha: string): string => `A human pushed ${sha.slice(0, 12)} to t
  * the interrupted job on top of the push; a commit that fails waits for another push, or for a designated maintainer's
  * `/refreeze` when it changes a frozen test. A ticket a human relaunched meanwhile, or blocked for another reason, goes on as it is.
  */
-function pushChecked(out: Decision, event: FactoryEvent<'verify.passed' | 'verify.failed' | 'verify.errored'>, ticket: TicketState | undefined, workflow: Workflow): Decision {
-  const head = pushedHead(event.payload.runId)!;
+function pushChecked(out: Decision, event: FactoryEvent<'verify.passed' | 'verify.failed' | 'verify.errored'>, head: string, ticket: TicketState | undefined, workflow: Workflow): Decision {
   if (event.type === 'verify.passed') out.events.push({ type: 'ticket.patched', patch: { verifiedSha: event.payload.sha ?? head } });
   if (!ticket?.blocked || ticket.blockKind !== 'human_push') {
     out.trace.push(`${event.type} on the push of ${head.slice(0, 12)}: the ticket ${ticket?.blocked ? 'is blocked for another reason' : 'was relaunched meanwhile'}`);
@@ -1371,7 +1369,10 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       out.events.push({ type: 'ticket.patched', patch: { initiatorId: event.actor } });
     }
   }
-  if ((event.type === 'verify.passed' || event.type === 'verify.failed' || event.type === 'verify.errored') && pushedHead(event.payload.runId)) return pushChecked(out, event, ticket, workflow);
+  if (event.type === 'verify.passed' || event.type === 'verify.failed' || event.type === 'verify.errored') {
+    const head = pushedHead(event.payload.runId);
+    if (head) return pushChecked(out, event, head, ticket, workflow);
+  }
   switch (event.type) {
     case 'control.pause':
       out.effects.push({ kind: 'set_paused', paused: true });
@@ -1439,15 +1440,15 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
     case 'verify.lost': {
       const { runId, job, output } = event.payload;
       const recent = ticket ? recentCuts(ticket, event.at) : [];
+      const head = pushedHead(runId);
       if (recent.length >= CUT_RELAUNCHES) {
         // Nothing runs it any more: the ticket must not wait for its verdict, or no later start would pass it.
         out.events.push({ type: 'work.cancelled' });
         // The check of a human's push: its block says it is being checked, and would say so for good.
-        const pushCheck = !!pushedHead(runId) && ticket?.blockKind === 'human_push';
+        const pushCheck = !!head && ticket?.blockKind === 'human_push';
         return ticket?.blocked && !pushCheck ? out : blockOnCuts(out, workflow, job, checkOf(workflow, job));
       }
       out.events.push({ type: 'ticket.patched', patch: { cutRelaunches: [...recent, event.at] } });
-      const head = pushedHead(runId);
       out.effects.push({ kind: 'run_verify', runId, job, ...(output ? { output } : {}), ...(head ? { head } : {}) });
       return out;
     }

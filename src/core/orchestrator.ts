@@ -708,9 +708,8 @@ export class Orchestrator {
     const rows = await store.listEffects(t.projectId, t.ticketId);
     if (rows.some((r) => (r.effect.kind === 'run_verify' || r.effect.kind === 'publish') && r.effect.runId === runId && (r.status === 'pending' || r.status === 'running'))) return;
     const run = await store.getRun(runId);
-    // A human's push has no run (ORC-159): the effect of its check says under which job.
-    const pushed = rows.map((r) => r.effect).find((e): e is Extract<Effect, { kind: 'run_verify' }> => e.kind === 'run_verify' && e.runId === runId && !!e.head);
-    const job = run?.job ?? pushed?.job;
+    // A human's push has no run (ORC-159): the effect of its check says under which job, as any check's does.
+    const job = run?.job ?? rows.map((r) => r.effect).find((e): e is Extract<Effect, { kind: 'run_verify' }> => e.kind === 'run_verify' && e.runId === runId)?.job;
     if (!job) {
       this.log('warn', `verification of ${t.ticketId} names a run never written (${runId}): dropped`);
       await this.apply(t, { type: 'work.cancelled' });
@@ -1010,7 +1009,7 @@ export class Orchestrator {
       return { ...verified, ok: verified.ok && blocking.length === 0, failures: [...verified.failures, ...blocking], sha, commands: job.verify };
     }
     // The commits a human pushed (ORC-159) must be under what the agent wrote, or nothing of it is published.
-    return this.cleanCheck(project, t, run.id, job, { green, humanHead: t.humanHead ?? undefined });
+    return this.cleanCheck(project, t, run.id, job, { ...(green ? { green } : {}), ...(t.humanHead ? { humanHead: t.humanHead } : {}) });
   }
 
   /**
@@ -1037,9 +1036,7 @@ export class Orchestrator {
         setup: project.workflow.workspace.setup,
         commands: job.verify,
         gitleaks: true,
-        ...(over.green ? { green: over.green } : {}),
-        ...(over.head ? { head: over.head } : {}),
-        ...(over.humanHead ? { humanHead: over.humanHead } : {}),
+        ...over,
         ...(goesThroughFreeze(t, job) ? { frozen: t.frozenTests! } : {}),
         ...(untrusted ? { untrusted } : {}),
         env: async (config) => (await this.repoVariablesOf(project, config)).env,
@@ -1060,27 +1057,33 @@ export class Orchestrator {
     const job = project.workflow.jobs[c.job];
     // No longer awaited (a newer push, a stop): a replayed effect checks nothing.
     if (!job || t.verifyingRunId !== c.runId) return;
-    this.track(
-      (async () => {
-        const base = { ...TRUSTED, at: this.d.clock.now(), projectId: project.id, ticketId: t.ticketId, id: `check:${c.runId}` };
-        const payload = { runId: c.runId, job: job.name };
-        let res: CleanVerifyResult;
-        try {
-          if (!this.d.sandboxes) throw new Error(PUSH_NEEDS_SANDBOXES);
-          res = await this.cleanCheck(project, t, c.runId, job, { head });
-        } catch (err) {
-          await this.submitResult({ ...base, type: 'verify.errored', payload: { ...payload, error: (err as Error).message } });
-          return;
-        } finally {
-          // The check's own folder: no run purges it.
-          if (this.d.runsDir) await rm(join(this.d.runsDir, c.runId), { recursive: true, force: true }).catch(() => {});
-        }
-        await this.submitResult(
-          res.ok
-            ? { ...base, type: 'verify.passed', payload: { ...payload, sha: res.sha, ...(res.commands ? { commands: res.commands } : {}) } }
-            : { ...base, type: 'verify.failed', payload: { ...payload, failures: res.failures.map((f) => ({ ...f, output: logExcerpt(f.output) })), tree: res.tree } },
-        );
-      })(),
+    const check = async () => {
+      if (!this.d.sandboxes) throw new Error(PUSH_NEEDS_SANDBOXES);
+      try {
+        return await this.cleanCheck(project, t, c.runId, job, { head });
+      } finally {
+        // The check's own folder: no run purges it.
+        if (this.d.runsDir) await rm(join(this.d.runsDir, c.runId), { recursive: true, force: true }).catch(() => {});
+      }
+    };
+    this.track(this.submitVerdict(project, t, c.runId, job, check));
+  }
+
+  /** The verdict of a check, under its id `check:<runId>`: none when it threw, an infrastructure failure the agent is not sent. */
+  private async submitVerdict(project: ProjectRuntime, t: TicketState, runId: string, job: JobSpec, check: () => Promise<Verified & { tree?: string }>, output?: AgentOutput): Promise<void> {
+    const base = { ...TRUSTED, at: this.d.clock.now(), projectId: project.id, ticketId: t.ticketId, id: `check:${runId}` };
+    const payload = { runId, job: job.name };
+    let res: Verified & { tree?: string };
+    try {
+      res = await check();
+    } catch (err) {
+      await this.submitResult({ ...base, type: 'verify.errored', payload: { ...payload, error: (err as Error).message } });
+      return;
+    }
+    await this.submitResult(
+      res.ok
+        ? { ...base, type: 'verify.passed', payload: { ...payload, ...(res.sha ? { sha: res.sha } : {}), ...(res.commands ? { commands: res.commands } : {}), ...(output ? { output } : {}) } }
+        : { ...base, type: 'verify.failed', payload: { ...payload, failures: res.failures.map((f) => ({ ...f, output: logExcerpt(f.output) })), ...(res.tree ? { tree: res.tree } : {}) } },
     );
   }
 
@@ -1636,19 +1639,7 @@ export class Orchestrator {
               );
               return;
             }
-            const base = { ...TRUSTED, at: clock.now(), projectId: project.id, ticketId, id: `check:${run.id}` };
-            const payload = { runId: run.id, job: job.name };
-            let res: Verified;
-            try {
-              res = await this.verifyWork(project, t, run, job);
-            } catch (err) {
-              await this.submitResult({ ...base, type: 'verify.errored', payload: { ...payload, error: (err as Error).message } });
-              return;
-            }
-            const event: FactoryEvent = res.ok
-              ? { ...base, type: 'verify.passed', payload: { ...payload, ...(res.sha ? { sha: res.sha } : {}), ...(res.commands ? { commands: res.commands } : {}), ...(c.output ? { output: c.output } : {}) } }
-              : { ...base, type: 'verify.failed', payload: { ...payload, failures: res.failures.map((f) => ({ ...f, output: logExcerpt(f.output) })), ...(res.tree ? { tree: res.tree } : {}) } };
-            await this.submitResult(event);
+            await this.submitVerdict(project, t, run.id, job, () => this.verifyWork(project, t, run, job), c.output);
           })(),
         );
         return;

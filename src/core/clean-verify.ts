@@ -131,8 +131,9 @@ export const runCleanVerify: CleanVerifier = async (req) => {
   const cloneDir = join(req.workDir, 'clone');
   mkdirSync(bundleDir);
   try {
+    const forgeSilent = `the forge no longer responds after ${deadlineMs / 1000} s`;
     const { sha } = req.head
-      ? await within(fetchPushed(req, req.head, cloneDir), deadlineMs, `the forge no longer responds after ${deadlineMs / 1000} s`)
+      ? await within(fetchPushed(req, req.head, cloneDir), deadlineMs, forgeSilent)
       : await inBox('bundle', req.worktree, [{ host: bundleDir, target: BUNDLE_TARGET, readOnly: false }], (sandboxId) =>
           extractWork({ sandboxes, sandboxId, branch: req.branch, bundleDir, cloneDir, ...(req.exec ? { exec: req.exec } : {}) }),
         );
@@ -143,7 +144,7 @@ export const runCleanVerify: CleanVerifier = async (req) => {
     if (req.humanHead && !(await carries(git, req.humanHead, sha))) return { ok: false, failures: [humanCommitsMissing(req.humanHead, req.branch)], sha, tree };
     if (sha === req.green) return { ok: true, failures: [], sha, tree };
     // A human's push brought the base with it.
-    if (!req.head) await within(fetchBase(req, cloneDir), deadlineMs, `the forge no longer responds after ${deadlineMs / 1000} s`);
+    if (!req.head) await within(fetchBase(req, cloneDir), deadlineMs, forgeSilent);
     const config = await baseConfig(git);
     const declared = Object.values(config.commands);
     const commands = declared.length ? declared : req.commands;
@@ -196,8 +197,8 @@ export async function baseConfig(git: CloneGit): Promise<RepoConfig> {
  */
 async function fetchBase(req: CleanVerifyRequest, cloneDir: string, pushed = false): Promise<void> {
   // A human's push (ORC-159) comes in the same fetch, its objects checked: what it holds was written outside the factory.
-  const branch = pushed ? ['-c', 'transfer.fsckObjects=true'] : [];
-  const args = [...HARDENING.flatMap((c) => ['-c', c]), ...branch, '-C', cloneDir, 'fetch', '--quiet', '--no-tags', '--no-recurse-submodules', '--', req.originUrl, `+HEAD:${BASE}`, ...(pushed ? [`+refs/heads/${req.branch}:${PUSHED}`] : [])];
+  const fsck = pushed ? ['-c', 'transfer.fsckObjects=true'] : [];
+  const args = [...HARDENING.flatMap((c) => ['-c', c]), ...fsck, '-C', cloneDir, 'fetch', '--quiet', '--no-tags', '--no-recurse-submodules', '--', req.originUrl, `+HEAD:${BASE}`, ...(pushed ? [`+refs/heads/${req.branch}:${PUSHED}`] : [])];
   try {
     await mustExec(req.exec ?? execCmd, 'git', args, { env: { GIT_TERMINAL_PROMPT: '0' } });
   } catch (err) {
@@ -214,17 +215,17 @@ const PUSHED = 'refs/factory/pushed';
  * the clone the commands later run in. The pushed commit must still be on that branch; a newer push on top of it is the next check's.
  */
 async function fetchPushed(req: CleanVerifyRequest, head: string, cloneDir: string): Promise<{ sha: string }> {
-  const exec = req.exec ?? execCmd;
-  const opts = { env: { ...hostGitEnv(req.workDir, req.workDir), GIT_TERMINAL_PROMPT: '0' } };
-  const hardened = HARDENING.flatMap((c) => ['-c', c]);
-  await mustExec(exec, 'git', [...hardened, 'init', '--quiet', '--template=', cloneDir], opts);
+  mkdirSync(cloneDir);
+  const git = cloneGit(req, cloneDir);
+  await git('init', '--quiet', '--template=');
   // For whoever runs git in it next, as `extractWork` keeps them in its clone.
-  for (const c of HARDENING) await mustExec(exec, 'git', ['-C', cloneDir, 'config', c.slice(0, c.indexOf('=')), c.slice(c.indexOf('=') + 1)], opts);
+  for (const c of HARDENING) await git('config', c.slice(0, c.indexOf('=')), c.slice(c.indexOf('=') + 1));
   await fetchBase(req, cloneDir, true);
-  if ((await exec('git', [...hardened, '-C', cloneDir, 'merge-base', '--is-ancestor', head, PUSHED], opts)).code !== 0) {
+  // A commit the clone does not even hold is not on the branch either.
+  if ((await git.status('merge-base', '--is-ancestor', head, PUSHED)).code !== 0) {
     throw new Error(`the pushed commit ${head.slice(0, 12)} is no longer on the forge's branch ${req.branch}`);
   }
-  return { sha: (await mustExec(exec, 'git', [...hardened, '-C', cloneDir, 'rev-parse', '--verify', `${head}^{commit}`], opts)).trim() };
+  return { sha: await git('rev-parse', '--verify', `${head}^{commit}`) };
 }
 
 /** `factory/commits-humains` (ORC-159): the branch carries every commit a human pushed to it, or the factory publishes nothing over them. */
