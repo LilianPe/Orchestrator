@@ -111,6 +111,8 @@ jobs:
     session: new
     skill: "factory:review"
     lens: correctness
+    # The published commit's diff, read by the factory: whatever relaunched the lens, it reads that alone.
+    input: diff
     structured_output: true
     on_success: { run: review-security }
   review-security:

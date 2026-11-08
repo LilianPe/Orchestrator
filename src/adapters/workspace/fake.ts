@@ -23,11 +23,11 @@ export class FakeWorkspaces implements WorkspaceManager {
 
   async prepare(req: WorkspaceRequest): Promise<Workspace> {
     this.prepared.push(req);
+    if (req.kind === 'published' && !req.sha) throw new Error('An AI review needs the published commit, and there is no published commit to review.');
     if (req.kind === 'trunk-readonly' || req.kind === 'published') {
-      if (req.kind === 'published' && !req.sha) throw new Error('An AI review needs the published commit, and there is no published commit to review.');
       const trunk = `/tmp/factory-fake/${req.projectId}/_trunk/${req.runId}`;
       this.trunks.add(trunk);
-      return req.kind === 'published' ? { path: trunk, diff: this.diffs.get(req.sha!) ?? 'diff --git a/src/export.ts b/src/export.ts\n+export const csv = 1;' } : { path: trunk };
+      return req.sha ? { path: trunk, diff: this.diffs.get(req.sha) ?? 'diff --git a/src/export.ts b/src/export.ts\n+export const csv = 1;' } : { path: trunk };
     }
     if (req.kind === 'knowledge') return { path: `/tmp/factory-fake/_kb/${req.runId}` };
     const path = `/tmp/factory-fake/${req.projectId}/${req.ticketId}`;

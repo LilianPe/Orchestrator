@@ -35,7 +35,7 @@ export const rawJobSchema = z
     session: z.enum(['new', 'resume']).optional(),
     skill: z.string().optional(),
     lens: z.enum(['correctness', 'security']).optional(),
-    input: z.enum(['feedback', 'ci_failures', 'thread', 'verify_failures']).optional(),
+    input: z.enum(['feedback', 'ci_failures', 'thread', 'verify_failures', 'diff']).optional(),
     verify: z.array(z.string()).optional(),
     pickup: z.boolean().optional(),
     structured_output: z.boolean().optional(),
@@ -83,6 +83,7 @@ export const rawWorkflowSchema = z
         per_run: rawLimits,
         verify_attempts: z.number().int().nonnegative(),
         ci_fix_attempts: z.number().int().nonnegative(),
+        /** Read by nothing since ORC-183, accepted so a project file that still sets it loads. */
         review_rounds: z.number().int().positive(),
       })
       .partial()
@@ -123,7 +124,6 @@ export interface Limits {
   repeatedFailures?: number;
   /** An attempt that writes nothing for this long is stopped (ORC-136). Absent from versions frozen before it, which do not watch it. */
   silentAfterMs?: number;
-  reviewRounds: number;
 }
 
 export interface Rule {

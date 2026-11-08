@@ -246,12 +246,16 @@ export class GitWorkspaces implements WorkspaceManager {
 
   /** One per question, gone with it (`release`): what a question's agent left is for nobody else, and nothing has to be put back. */
   private async trunkWorkspace(req: WorkspaceRequest): Promise<Workspace> {
-    assertSafe(req.runId);
-    const path = join(this.o.root, req.projectId, '_trunk', req.runId);
-    await this.fetch(req.repoPath);
-    const ref = await originHead(this.exec, req.repoPath);
-    await this.agentRepository(req.repoPath, path, ref, ['--detach', ref]);
+    const { path, trunk } = await this.runClone(req);
+    await this.agentRepository(req.repoPath, path, trunk, ['--detach', trunk]);
     return { path };
+  }
+
+  /** Where a run's own repository goes (`_trunk/<runId>`, gone with it), and the trunk, read once the forge is fetched. */
+  private async runClone(req: WorkspaceRequest): Promise<{ path: string; trunk: string }> {
+    assertSafe(req.runId);
+    await this.fetch(req.repoPath);
+    return { path: join(this.o.root, req.projectId, '_trunk', req.runId), trunk: await originHead(this.exec, req.repoPath) };
   }
 
   /**
@@ -260,20 +264,15 @@ export class GitWorkspaces implements WorkspaceManager {
    * before any agent runs, its external diff drivers and text conversions off. Gone with its run (`release`).
    */
   private async publishedWorkspace(req: WorkspaceRequest): Promise<Workspace> {
-    assertSafe(req.runId);
     if (!req.sha) throw new Error('An AI review needs the published commit, and there is no published commit to review.');
     if (!SHA.test(req.sha)) throw new Error(`Not a commit id: ${req.sha}`);
-    const path = join(this.o.root, req.projectId, '_trunk', req.runId);
-    await this.fetch(req.repoPath);
-    const trunk = await originHead(this.exec, req.repoPath);
+    const { path, trunk } = await this.runClone(req);
     const range = `${trunk}...${req.sha}`;
-    // Read up to past the cap only: a diff that big is given as its changed files anyway.
-    const args = ['-C', req.repoPath, 'diff', '--no-color', '--no-ext-diff', '--no-textconv', range];
-    const read = await this.exec('git', args, { maxStdout: DIFF_MAX + 1 });
-    if (read.code !== 0 && !read.overflow) throw execFailure('git', args, read);
-    const stat = () => this.git(req.repoPath, 'diff', '--no-color', '--stat=200', range);
+    const git = gitAt(this.exec, req.repoPath, {});
+    // Read up to past the cap only: a diff that big is given as its changed files, by name.
+    const diff = await git.capped(DIFF_MAX + 1, 'diff', '--no-color', '--no-ext-diff', '--no-textconv', range);
     await this.agentRepository(req.repoPath, path, trunk, ['--detach', req.sha]);
-    return { path, diff: await capDiff(read.overflow ? undefined : read.stdout, stat) };
+    return { path, diff: await capDiff(diff, () => git.raw('diff', '--name-only', range)) };
   }
 
   private async knowledgeWorkspace(req: WorkspaceRequest): Promise<Workspace> {

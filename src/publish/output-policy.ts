@@ -133,6 +133,17 @@ export class OutputPolicy {
     return (await this.refused(() => this.vet(body, 'comment'))) ?? body;
   }
 
+  /**
+   * Texts published together (an AI review's, ORC-183), each as `comment` publishes it: checked one by one, then one secret
+   * scan for them all. Only when one is refused, each on its own, one after the other, to find it.
+   */
+  async comments(texts: readonly string[]): Promise<string[]> {
+    if ((await this.refused(() => this.vetAll(texts.map((text) => ({ where: 'comment', text }))))) === undefined) return [...texts];
+    const out: string[] = [];
+    for (const s of texts) out.push(await this.comment(s));
+    return out;
+  }
+
   /** A Linear activity: as it is, or of the same type with the notice in place of its texts. */
   async activity(a: ActivityInput): Promise<ActivityInput> {
     const notice = await this.refused(async () => {

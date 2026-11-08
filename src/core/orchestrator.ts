@@ -352,6 +352,11 @@ function roleOf(job: JobSpec, ticketSession: boolean): SessionRole | undefined {
   return job.workspace === 'trunk-readonly' ? 'answerer' : undefined;
 }
 
+/** Why the forge refused a check run, when it says so: the hint a 403 needs, nothing for any other failure. */
+function checksPermission(err: { status?: number }): string {
+  return err.status === 403 ? ': the GitHub App lacks the Checks write permission (docs/github.md)' : '';
+}
+
 function startOfUtcDay(ts: number): number {
   const d = new Date(ts);
   return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
@@ -1856,7 +1861,7 @@ export class Orchestrator {
     await Promise.all(
       checks.map(({ name, conclusion, summary }) =>
         writer.upsertCheckRun(project.repoPath, { sha, name, externalId: `${name}@${sha}`, status: 'completed', conclusion, summary }).catch((err: Error & { status?: number }) => {
-          const hint = err.status === 403 ? ': the GitHub App lacks the Checks write permission (docs/github.md)' : '';
+          const hint = checksPermission(err);
           this.log('warn', `check ${name} of ${t.ticketId} not published on ${sha.slice(0, 12)}${hint}: ${err.message}`);
         }),
       ),
@@ -1881,39 +1886,21 @@ export class Orchestrator {
     }
     const findings = await store.findingsOf(project.id, t.ticketId, c.sha);
     const placed = findings.filter(onItsLine);
-    const [body, ...texts] = await this.vetTogether([reviewBody(c.sha, findings, { inline: true }), ...placed.map(inlineComment)]);
+    const verdict = reviewVerdict(findings);
+    const [body, summary, ...texts] = await this.policy.comments([reviewBody(c.sha, findings, { inline: true }), `${verdict.summary}.`, ...placed.map(inlineComment)]);
     const post = (review: { body: string; comments: { path: string; line: number; body: string }[] }) => writer.postReview(project.repoPath, t.prNumber!, { sha: c.sha, ...review, externalId: `review:${key.id}` });
     const posted = await post({ body: body!, comments: placed.map((f, i) => ({ path: f.file, line: f.line, body: texts[i]! })) }).catch(async (err: unknown) => {
       if (!(err instanceof ReviewLinesRefused)) throw err;
       this.log('info', `AI review of ${t.ticketId}: a finding is on a line the PR does not show, all listed in the review's text`);
       return post({ body: await this.policy.comment(reviewBody(c.sha, findings, { inline: false })), comments: [] });
     });
-    const verdict = reviewVerdict(findings);
     await writer
-      .upsertCheckRun(project.repoPath, { sha: c.sha, name: REVIEW_CHECK, externalId: `${REVIEW_CHECK}@${c.sha}`, status: 'completed', conclusion: verdict.conclusion, title: verdict.summary, summary: await this.policy.comment(`${verdict.summary}.`) })
+      .upsertCheckRun(project.repoPath, { sha: c.sha, name: REVIEW_CHECK, externalId: `${REVIEW_CHECK}@${c.sha}`, status: 'completed', conclusion: verdict.conclusion, title: verdict.summary, summary: summary! })
       .catch((err: Error & { status?: number }) => {
-        if (err.status === 403) err.message += ': the GitHub App lacks the Checks write permission (docs/github.md)';
+        err.message += checksPermission(err);
         throw err;
       });
     return { deduplicated: posted.deduplicated };
-  }
-
-  /**
-   * Texts the factory publishes together (a review's), through the `OutputPolicy`: each checked for its size and blobs, then one
-   * secret scan for them all; only when one is refused, each on its own, one after the other, a refused one replaced by its notice.
-   */
-  private async vetTogether(texts: readonly string[]): Promise<string[]> {
-    if (texts.every((s) => !this.policy.check(s).length)) {
-      try {
-        await this.policy.vet(texts.join('\n\n'), 'review', Infinity);
-        return [...texts];
-      } catch (err) {
-        if (!(err instanceof OutputRefused)) throw err;
-      }
-    }
-    const out: string[] = [];
-    for (const s of texts) out.push(await this.policy.comment(s));
-    return out;
   }
 
   /**
@@ -2299,7 +2286,7 @@ export class Orchestrator {
       // The feedback the run reads, taken at the launch whoever started it (a decision, settle, the queue):
       // its taint completes the one the start was decided with (I12, ORC-274).
       // An AI review reads the diff alone, whatever relaunched it (ORC-183): a reply that lifted its block waits for the implementer.
-      const kind = from || job.workspace === 'published' ? undefined : (opts.input ?? job.input);
+      const kind = from ? undefined : job.input === 'diff' ? 'diff' : (opts.input ?? job.input);
       // The implementer's run (a `dev` from scratch or a resume) runs the ticket session: resumed when the
       // ticket has one, else made here and taken by the ticket. A review or a question never does (ORC-217).
       // A relaunch runs the session the lost attempt ran. Cut before Claude wrote it, that session does not
@@ -2366,8 +2353,8 @@ export class Orchestrator {
       let input: { kind: InputKind; text: string } | undefined;
       if (from) {
         input = from.input;
-      } else if (job.workspace === 'published') {
-        input = { kind: 'diff', text: ws.diff ?? '' };
+      } else if (kind === 'diff') {
+        input = { kind, text: ws.diff ?? '' };
       } else if (kind === 'feedback') {
         input = { kind, text: read.length ? formatFeedback(read) : '(no written feedback: read the PR and the Linear thread again)' };
       } else if (kind === 'verify_failures') {
@@ -2468,7 +2455,7 @@ export class Orchestrator {
         settingsPath: sandbox ? SETTINGS_TARGET : this.settingsPath(),
         readOnly: job.workspace === 'trunk-readonly',
         // An AI review reads and searches, nothing else: no write tool, no shell (ORC-183).
-        ...(job.workspace === 'published' ? { tools: REVIEW_TOOLS } : {}),
+        ...(job.lens ? { tools: REVIEW_TOOLS } : {}),
         limits,
         env: {
           // First: a variable of the repository never replaces one of the factory. Never its secrets (ORC-211).
