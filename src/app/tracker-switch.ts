@@ -17,7 +17,7 @@ export class TrackerSwitch implements Tracker {
 
   getIssue(id: string): Promise<TrackerIssue> { return Promise.resolve().then(() => this.t().getIssue(id)); }
   listDelegated(k: string): Promise<TrackerIssue[]> { return Promise.resolve().then(() => this.t().listDelegated(k)); }
-  search(q: string): Promise<SearchHit[]> { return Promise.resolve().then(() => this.t().search(q)); }
+  search(q: string, k: string): Promise<SearchHit[]> { return Promise.resolve().then(() => this.t().search(q, k)); }
   moveTo(id: string, s: string): Promise<void> { return Promise.resolve().then(() => this.t().moveTo(id, s)); }
   setLabels(id: string, a: string[], r: string[]): Promise<void> { return Promise.resolve().then(() => this.t().setLabels(id, a, r)); }
   comment(id: string, b: string, e?: string): Promise<void> { return Promise.resolve().then(() => this.t().comment(id, b, e)); }

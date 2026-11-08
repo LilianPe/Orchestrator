@@ -59,7 +59,8 @@ export class IssueNotFoundError extends Error {}
 export interface Tracker {
   getIssue(identifier: string): Promise<TrackerIssue>;
   listDelegated(teamKey: string): Promise<TrackerIssue[]>;
-  search(term: string): Promise<SearchHit[]>;
+  /** The issues of the team `teamKey` alone that match `term` (ORC-349): an agent never searches the whole workspace. */
+  search(term: string, teamKey: string): Promise<SearchHit[]>;
   moveTo(identifier: string, stateName: string): Promise<void>;
   /** Final state: adds `add`, takes off `remove`; writes nothing when the ticket already reads so. */
   setLabels(identifier: string, add: string[], remove: string[]): Promise<void>;

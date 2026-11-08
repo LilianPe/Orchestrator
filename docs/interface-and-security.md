@@ -37,13 +37,13 @@ Interface development: `npm run dev:web` starts Vite on port 5173 with a proxy f
 | `GET /oauth/callback` | Linear OAuth callback | random, single-use `state` parameter |
 | `POST /webhooks/linear` | Linear webhooks | HMAC signature + 60 s freshness |
 | `POST /webhooks/github` | GitHub webhooks | HMAC signature `X-Hub-Signature-256` + deduplication by event id |
-| `/agent/*` | Agent API (`relais-agent`) | current run's token (`Authorization: Bearer`) |
+| `/agent/*` | Agent API (`relais-agent`) | current run's token (`Authorization: Bearer`); `/agent/search` searches the Linear team of the run's ticket only, never the whole workspace the factory's token reads (ORC-349) |
 
 With sandboxes (`FACTORY_CONTAINER_CLI`, see [`configuration.md`](configuration.md#environment-variables)), a **second server** serves only `/agent/*`, with the same routes and the same run token, on `FACTORY_AGENT_PORT` (interface port + 1) and `FACTORY_AGENT_HOST` (`127.0.0.1`): the containers, which have no network, reach it through the daemon's egress proxy (see [below](#sandbox-network)). Any other route returns 404 there. The interface stays at the `host` address.
 
 ## Network exposure and password
 
-By default Relais listens on `127.0.0.1`: only the local machine can access it, without a password.
+By default Relais listens on `127.0.0.1`: only the local machine can access it, without a password. Without a password, the interface and `/api/*` answer only under a loopback name (`Host`: `localhost`, `127.0.0.1` or `[::1]`, any port) and refuse any other with 403 `Unknown host` (ORC-349): a web page whose name an attacker points at `127.0.0.1` (DNS rebinding) would otherwise be same-origin with Relais under that name, `Origin` and `Host` alike. The webhooks, the OAuth callback and `/agent/*` keep their own protection and answer under any name, so a tunnel to `publicUrl` still brings the webhooks; it no longer brings the interface, which would be on the Internet without a password: expose it with the password below.
 
 To expose it (server, Docker), set `host: 0.0.0.0` (or a specific address) in `config.yaml`. Relais then **refuses to start** without the `RELAIS_UI_PASSWORD` variable:
 
@@ -57,7 +57,7 @@ Basic auth sends the password with every request: when exposed to the Internet, 
 
 ## CSRF protection
 
-Any `POST` request (and any other non-`GET`/`HEAD` method) on `/api/*` that carries an `Origin` header is refused (403 `cross-origin request refused`) if that `Origin` does not match the server's host. A third-party page open in your browser therefore cannot pause the queue or stop a run, even locally without a password. Tools without `Origin` (CLI, `curl`) are not affected.
+Any `POST` request (and any other non-`GET`/`HEAD` method) on `/api/*` that carries an `Origin` header is refused (403 `cross-origin request refused`) if that `Origin` does not match the server's host, itself checked against the loopback names without a password (see above). A third-party page open in your browser therefore cannot pause the queue or stop a run, even locally without a password. Tools without `Origin` (CLI, `curl`) are not affected.
 
 Behind a proxy, the `Host` header passed to Relais must be that of the public URL, otherwise the interface's buttons are refused.
 

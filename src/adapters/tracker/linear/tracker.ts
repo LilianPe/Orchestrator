@@ -193,11 +193,12 @@ export class LinearTracker implements Tracker, TeamDirectory {
     return live.map(toIssue);
   }
 
-  async search(term: string): Promise<SearchHit[]> {
+  async search(term: string, teamKey: string): Promise<SearchHit[]> {
     const { searchIssues } = await this.api.gql<{
       searchIssues: { nodes: { identifier: string; title: string; url: string; state: { name: string } }[] };
-    }>(Q.search, { term });
-    return searchIssues.nodes.map((n) => ({ identifier: n.identifier, title: n.title, url: n.url, stateName: n.state.name }));
+    }>(Q.search, { term, teamKey });
+    // The filter is Linear's: a hit of another team is dropped here all the same.
+    return searchIssues.nodes.filter((n) => teamOf(n.identifier) === teamKey).map((n) => ({ identifier: n.identifier, title: n.title, url: n.url, stateName: n.state.name }));
   }
 
   async moveTo(identifier: string, stateName: string): Promise<void> {

@@ -141,7 +141,7 @@ During a run, Relais adds Relais's `bin/` to the `PATH` and sets `RELAIS_API` an
 | Command | Effect |
 |---|---|
 | `relais-agent issue <ID>` | Prints the ticket: identifier, title, status, URL, description. **Limited to the run's ticket** (403 otherwise). |
-| `relais-agent search <text>` | Searches Linear tickets. |
+| `relais-agent search <text>` | Searches the Linear tickets of the current ticket's team (ORC-349). |
 | `relais-agent kb search <words>` | Searches `notes/*.md` in the knowledge base (words of 3 letters or more, ignoring accents and case). Prints `file:line: text`. |
 | `relais-agent ask <question>` | Posts the question in the ticket's block comment (ORC-196) and **blocks** the ticket. The agent must end its turn; the human reply restarts the work. |
 

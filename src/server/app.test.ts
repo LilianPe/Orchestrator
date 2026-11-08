@@ -162,6 +162,15 @@ describe('server', () => {
     expect((await app.request('/agent/issue/REL-2', { headers: { authorization: 'Bearer tok' } })).status).toBe(403);
   });
 
+  it("searches the run's team alone, not the whole Linear workspace with the factory's token (ORC-349)", async () => {
+    const { app, tracker } = await setup();
+    tracker.addIssue({ identifier: 'REL-2', title: 'Export to CSV' });
+    tracker.addIssue({ identifier: 'HR-7', title: 'Export of salaries' });
+    const res = await app.request('/agent/search?q=export', { headers: { authorization: 'Bearer tok' } });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { identifier: string }[]).map((h) => h.identifier).sort()).toEqual(['REL-1', 'REL-2']);
+  });
+
   it('the agent listener serves the agent API, with its run token, and nothing else (ORC-204)', async () => {
     const { app } = await setup({ uiPassword: 'pw' });
     const fetch = agentOnly(app);
@@ -321,6 +330,35 @@ describe('server', () => {
       expect((await app.request('http://localhost:4100/api/control/pause', { method: 'POST', headers: { origin: 'http://localhost:4100' } })).status).toBe(200);
       expect((await app.request('/api/control/resume', { method: 'POST' })).status).toBe(200);
       expect(submitted).toHaveLength(2);
+    });
+  });
+
+  describe('a foreign Host is refused: DNS rebinding (ORC-349)', () => {
+    // A page of evil.example rebound to 127.0.0.1 sends Host and Origin of its own name: equal, so the Origin check passes.
+    const as = (host: string, init: RequestInit = {}) => ({ ...init, headers: { ...(init.headers as Record<string, string>), host } });
+
+    it('refuses the interface, its reads and its writes, under a name that is not the loopback or the public URL', async () => {
+      const { app, submitted } = await setup();
+      expect((await app.request('/api/state', as('evil.example:4100'))).status).toBe(403);
+      expect((await app.request('/', as('evil.example'))).status).toBe(403);
+      const pause = await app.request('/api/control/pause', as('evil.example:4100', { method: 'POST', headers: { origin: 'http://evil.example:4100' } }));
+      expect(pause.status).toBe(403);
+      expect(submitted).toEqual([]);
+    });
+
+    it('answers under the loopback names alone, not a tunnel that brings the public URL here', async () => {
+      const { app } = await setup();
+      for (const host of ['localhost:4100', '127.0.0.1:4100', '[::1]:4100', 'LOCALHOST']) expect((await app.request('/api/state', as(host))).status, host).toBe(200);
+      for (const host of ['relais.example.com', '127.0.0.1.evil.example', 'localhost.evil.example:4100']) expect((await app.request('/api/state', as(host))).status, host).toBe(403);
+    });
+
+    it('leaves the webhooks and the run-token agent API to their own guards, and the password-guarded interface to its password', async () => {
+      const { app } = await setup();
+      expect((await app.request('/webhooks/linear', as('relay.example', { method: 'POST', body: '{}' }))).status).toBe(200);
+      expect((await app.request('/agent/issue/REL-1', as('host.containers.internal:4101', { headers: { authorization: 'Bearer tok' } }))).status).toBe(200);
+      const guarded = await setup({ uiPassword: 's3cret' });
+      const basic = { authorization: `Basic ${Buffer.from('x:s3cret').toString('base64')}` };
+      expect((await guarded.app.request('/api/state', as('192.168.1.20:4100', { headers: basic }))).status).toBe(200);
     });
   });
 });

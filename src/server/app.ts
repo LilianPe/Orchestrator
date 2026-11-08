@@ -39,6 +39,17 @@ export interface ServerDeps {
   uiPassword?: string;
 }
 
+/**
+ * The names the interface without a password answers under (ORC-349): it listens on the loopback. Not `publicUrl`'s, which
+ * a tunnel brings here: the webhooks and the OAuth callback answer under any name, the interface does not.
+ */
+const LOOPBACK_NAMES = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+/** The host name of a `Host` header, port left out and lower-cased: `[::1]:4100` → `[::1]`. */
+function hostName(host: string): string {
+  return host.toLowerCase().replace(/:\d*$/, '');
+}
+
 type AgentEnv = { Variables: { run: RunRecord } };
 
 function startOfUtcDay(ts: number): number {
@@ -93,9 +104,17 @@ export function createApp(d: ServerDeps): Hono {
       }
       return next();
     });
+  } else {
+    // DNS rebinding (ORC-349): a page whose name the attacker rebinds to 127.0.0.1 is same-origin with this server under
+    // that name, Origin and Host alike. Without a password, only a name of the loopback is answered.
+    app.use('*', async (c, next) => {
+      if (isPublicPath(c.req.method, c.req.path)) return next();
+      if (!LOOPBACK_NAMES.has(hostName(c.req.header('host') ?? new URL(c.req.url).host))) return c.text('Unknown host', 403);
+      return next();
+    });
   }
 
-  // CSRF: a browser always sends Origin on a cross-site POST; refuse it unless it is this server.
+  // CSRF: a browser always sends Origin on a cross-site POST; refuse it unless it is this server, whose name is checked above.
   app.use('/api/*', async (c, next) => {
     if (c.req.method === 'GET' || c.req.method === 'HEAD') return next();
     const origin = c.req.header('origin');
@@ -248,7 +267,8 @@ export function createApp(d: ServerDeps): Hono {
     if (c.req.param('id') !== run.ticketId) return c.json({ error: 'forbidden' }, 403);
     return c.json(await d.tracker.getIssue(run.ticketId));
   });
-  agent.get('/search', async (c) => c.json(await d.tracker.search(c.req.query('q') ?? '')));
+  // The run's team alone (ORC-349): the factory's token reads the whole workspace, the agent reads its ticket's team.
+  agent.get('/search', async (c) => c.json(await d.tracker.search(c.req.query('q') ?? '', c.get('run').ticketId.split('-')[0]!)));
   agent.get('/kb/search', async (c) => c.json(d.knowledgeSearch ? await d.knowledgeSearch(c.req.query('q') ?? '') : []));
   // In the inbox, in order behind the events before it: the agent waits for no decision, and hears of a failed write.
   const ask = async (run: RunRecord, question: string) => {
