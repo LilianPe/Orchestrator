@@ -812,11 +812,11 @@ describe('decide — built-ins', () => {
     );
   });
 
-  it('decides nothing yet on the clarify and usage-limit timers, whose rules are ORC-210 and ORC-215 (ORC-161)', () => {
+  it('decides nothing on a clarify timer with no question waiting (ORC-210), nor on a usage reset without a job (ORC-161)', () => {
     for (const kind of ['clarify.remind', 'clarify.expire', 'usage.reset'] as const) {
       const out = decide(ticket({ logical: 'dev', blocked: true }), ev('timer.fired', { kind, payload: {} }), workflow);
       expect(out).toEqual(decision());
-      expect(out.trace).toContain(`timer.fired ${kind}: no rule decides it yet`);
+      expect(out.trace).toContain(kind === 'usage.reset' ? 'timer.fired usage.reset: no rule decides it yet' : `timer.fired ${kind}: no question of this round waits`);
     }
   });
 

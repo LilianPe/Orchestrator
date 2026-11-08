@@ -3,16 +3,20 @@ import { OUTPUT_LIMITS } from '../publish/output-limits.js';
 import type { Store } from '../store/types.js';
 import { RISKS, TICKET_SIZES, type RunOutcome } from './types.js';
 
+/** A question `clarify` asks (ORC-210): its options are the hypotheses the agent sees, a free answer always possible. */
+export const clarifyQuestionSchema = z.object({ question: z.string().min(1), options: z.array(z.string().min(1)).min(2).max(5) }).strict();
+
 /**
  * What `intake` makes of the ticket (ORC-206): its size and risk, whether it is complete enough to start, and whether it
  * speaks of a screen. `missing` are the questions a human must answer before the run starts: required when not complete.
+ * Each is a question with its options (ORC-210), or a bare one when the agent sees none, answered freely.
  */
 export const intakeAssessmentSchema = z
   .object({
     size: z.enum(TICKET_SIZES),
     risk: z.enum(RISKS),
     complete: z.boolean(),
-    missing: z.array(z.string().min(1)).max(3),
+    missing: z.array(z.union([z.string().min(1), clarifyQuestionSchema])).max(3),
     screen: z.boolean(),
   })
   .strict()
