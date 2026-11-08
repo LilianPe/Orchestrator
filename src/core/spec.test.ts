@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseAgentOutput } from './agent-output.js';
+import { parseAgentOutput, parseSubmittedResult } from './agent-output.js';
 import { formatSpec, specCheck, type Spec } from './spec.js';
 
 const SPEC: Spec = {
@@ -53,10 +53,10 @@ describe('the spec as published (ORC-212)', () => {
     expect(text).toContain('1. Given 2 audits');
   });
 
-  it('the result schema takes a spec with sections missing (spec_check judges it), but not an unknown key nor one too long to publish', () => {
+  it('the result schema takes a spec with sections missing (spec_check judges it), but not an unknown key; submit_result refuses one too long to publish', () => {
     expect(parseAgentOutput(result({ criteria: [] })).ok).toBe(true);
     expect(parseAgentOutput(result({ ...SPEC, extra: 1 })).ok).toBe(false);
-    const long = parseAgentOutput(result({ ...SPEC, criteria: Array.from({ length: 20 }, () => 'x'.repeat(500)) }));
+    const long = parseSubmittedResult(result({ ...SPEC, criteria: Array.from({ length: 20 }, () => 'x'.repeat(500)) }));
     expect(long).toMatchObject({ ok: false, error: expect.stringContaining('spec: the spec makes a message of') });
   });
 });

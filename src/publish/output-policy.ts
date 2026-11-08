@@ -6,10 +6,11 @@ import { z } from 'zod';
 import { execCmd, type Exec } from '../adapters/exec.js';
 import type { SandboxProvider } from '../adapters/sandbox/types.js';
 import type { ActivityInput, SearchHit, Tracker, TrackerIssue } from '../adapters/tracker/types.js';
-import { agentOutputSchema, formatResult, type AgentOutput } from '../core/agent-output.js';
+import { agentOutputSchema, type AgentOutput } from '../core/agent-output.js';
 import { boxOpener, gitleaksArgv, gitleaksFindings, sandboxGitleaksArgv, withDeadline } from '../core/clean-verify.js';
 import type { PlanStep } from '../core/session-plan.js';
 import { VERIFY_TIMEOUT_MS } from '../core/verify.js';
+import { formatRecap, type RecapRun } from './describe.js';
 import { OUTPUT_LIMITS } from './output-limits.js';
 
 /** What the policy refuses, and where: never the text itself, which may be the secret. */
@@ -42,7 +43,16 @@ const line = (max: number) => z.string().min(1).max(max).regex(/^[^\r\n]*$/, 'on
 const text = z.string().max(OUTPUT_LIMITS.text);
 /** The texts the factory publishes, strict: a Linear comment or activity, a PR's text, a capture's caption. */
 const activitySchema = z.discriminatedUnion('type', [
-  z.object({ type: z.enum(['thought', 'response', 'elicitation', 'error']), body: text.min(1), ephemeral: z.boolean().optional() }).strict(),
+  z.object({ type: z.enum(['thought', 'response', 'error']), body: text.min(1), ephemeral: z.boolean().optional() }).strict(),
+  /** A question; `options` are the choices of Linear's `select` signal (ORC-210), each one line. */
+  z
+    .object({
+      type: z.literal('elicitation'),
+      body: text.min(1),
+      options: z.array(line(OUTPUT_LIMITS.item)).max(OUTPUT_LIMITS.options).optional(),
+      ephemeral: z.boolean().optional(),
+    })
+    .strict(),
   z.object({ type: z.literal('action'), action: line(OUTPUT_LIMITS.item), parameter: text, result: text.optional(), ephemeral: z.boolean().optional() }).strict(),
 ]);
 const prSchema = z.object({ title: line(OUTPUT_LIMITS.prTitle), body: text.min(1) }).strict();
@@ -83,7 +93,8 @@ const zodRefusals = (where: string, error: z.ZodError): Refusal[] =>
   });
 
 /** The texts of an activity, for the blob and secret checks: every string field but its `type`, which the schema closes. */
-const texts = (a: ActivityInput): string[] => Object.entries(a).flatMap(([k, v]) => (k !== 'type' && typeof v === 'string' ? [v] : []));
+const texts = (a: ActivityInput): string[] =>
+  Object.entries(a).flatMap(([k, v]) => (k === 'type' ? [] : typeof v === 'string' ? [v] : Array.isArray(v) ? v.filter((o): o is string => typeof o === 'string') : []));
 
 /** What is published in place of a refused text: the rules it broke, nothing of it. */
 const withheld = (refusals: readonly Refusal[]): string =>
@@ -91,14 +102,15 @@ const withheld = (refusals: readonly Refusal[]): string =>
 
 /**
  * The comment of a run's end, composed by the factory from what the agent submitted (ORC-289, ORC-214), never from its last
- * text: a build's fields (`formatResult`), a reply's or a synthesis's summary alone. A run that submitted nothing has
- * `NO_RESULT`; a result its schema refuses today (a row older than the caps) has the notice that it is withheld.
+ * text: a build's recap, with the work of the ticket's attempts `runs` (`formatRecap`, ORC-195), a reply's or a synthesis's
+ * summary alone. A run that submitted nothing has `NO_RESULT`; a result its schema refuses today (a row older than the caps)
+ * has the notice that it is withheld.
  */
-export function composeResult(o: AgentOutput | undefined, style: 'summary' | 'reply' | 'synthesis'): string {
+export function composeResult(o: AgentOutput | undefined, style: 'summary' | 'reply' | 'synthesis', runs: readonly RecapRun[] = []): string {
   if (!o) return NO_RESULT;
   const valid = agentOutputSchema.safeParse(o);
   if (!valid.success) return withheld(zodRefusals('result', valid.error));
-  return style === 'summary' ? formatResult(o) : o.summary;
+  return style === 'summary' ? formatRecap(o, runs) : o.summary;
 }
 
 /** Scans kept by the text's hash: a retried effect, or the ack's comment and activity, scan once. Same text, same rules, same verdict. */

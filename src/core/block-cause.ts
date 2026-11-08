@@ -6,11 +6,12 @@ export type BlockCause = (typeof BLOCK_CAUSES)[number];
  * What a block is, set on `ticket.blocked` by the code that builds it (ORC-345): the engine decides on it, the Flow
  * classes by it, and the reason is only shown. A cause, or one of the kinds the engine tells apart within a cause:
  * `asked`, a question the agent asks during its run, whose reason says no more than its cause; `stuck`, a pending job
- * no settle could start (ORC-339), which a reply starts; `ci_bound`, the red-CI bound (ORC-270), which a green CI lifts.
+ * no settle could start (ORC-339), which a reply starts; `ci_bound`, the red-CI bound (ORC-270), which a green CI lifts;
+ * `budget`, a step or a ticket past its budget in tokens or in turns (ORC-216).
  */
-export type BlockKind = BlockCause | 'asked' | 'stuck' | 'ci_bound';
+export type BlockKind = BlockCause | 'asked' | 'stuck' | 'ci_bound' | 'budget';
 
-const WITHIN: Partial<Record<BlockKind, BlockCause>> = { asked: 'question', stuck: 'infra', ci_bound: 'limit' };
+const WITHIN: Partial<Record<BlockKind, BlockCause>> = { asked: 'question', stuck: 'infra', ci_bound: 'limit', budget: 'limit' };
 
 /** The cause the Flow shows a block under; `other` for a ticket blocked without a kind, never a guess. */
 export const causeOf = (kind: BlockKind | undefined): BlockCause => {
@@ -27,8 +28,8 @@ export const STOPPED = 'Stopped on request';
 /** The reason of a question the agent asks during its run: the label of its cause in the Flow too. */
 export const AGENT_QUESTION = 'Question asked by the agent';
 
-/** The head of the guard before In Progress refusing a ticket `intake` found incomplete (ORC-206): the ticket's to complete. */
-export const INCOMPLETE = 'The ticket is not complete enough to start:';
+/** The head of the block of `clarify` questions left unanswered 72 h (ORC-210), of kind `question`. */
+export const CLARIFY_EXPIRED = 'No answer to the questions after 72 h:';
 /** The reason of an `intake` whose result carries no assessment (ORC-206): the ticket does not start. */
 export const NO_ASSESSMENT = 'Intake returned no assessment of the ticket.';
 

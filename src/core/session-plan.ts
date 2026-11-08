@@ -1,6 +1,6 @@
 import type { JobSpec } from '../config/workflow-schema.js';
 
-/** The steps the MVP doc shows in the session; `Questions` runs nothing until ORC-210. */
+/** The steps the MVP doc shows in the session; `Questions` shows nothing of `clarify` yet (ORC-210 asks without a run). */
 const STEPS = ['Understand', 'Questions', 'Spec', 'Tests', 'Build', 'Verify', 'PR'] as const;
 export type PlanStepName = (typeof STEPS)[number];
 

@@ -18,8 +18,8 @@ function ev<T extends EventType>(type: T, payload: EventPayloads[T], extra: Part
 const ticket = (patch: Partial<TicketState> = {}): TicketState => ({ ...newTicketState('p', 'REL-1', 'Titre', 'dev', 0), delegated: true, ...patch });
 const finished = (patch: Partial<EventPayloads['run.finished']>) => ev('run.finished', { runId: 'r1', job: 'dev', outcome: 'failure', costUsd: 0, turns: 1, lastText: '', ...patch });
 const failure = { command: 'npm test', exitCode: 1, output: 'rouge' };
-const intaking = ticket({ logical: 'todo', activeRunId: 'r1', activeJob: 'intake' });
 const INTAKE_OUTPUT: AgentOutput = { status: 'done', summary: 'Read.', tests_added: [], why: '', assumptions: [], risks: [], untested: [], review_hints: [] };
+const intaking = ticket({ logical: 'todo', activeRunId: 'r1', activeJob: 'intake' });
 
 /** The block `decide` writes: the kind is read from what the engine really emits. */
 function blockOf(state: TicketState, event: FactoryEvent, wf = workflow): Extract<InternalEvent, { type: 'ticket.blocked' }> {
@@ -49,8 +49,8 @@ describe('the kind of a block, set by the code that builds it (ORC-345)', () => 
     ['pickup', () => blockOf(ticket({ delegated: false }), ev('ticket.delegated', { linearSessionId: 's1', noRepo: 'ZZZ' }))],
     ['pickup', () => blockOf(ticket({ delegated: false }), ev('ticket.delegated', { linearSessionId: 's1', repos: ['web', 'api'] }))],
     ['dead_letter', () => blockOf(ticket(), ev('dead_letter.added', { eventId: 'e9', eventType: 'pr.opened', error: 'boom', failures: 1 }))],
-    // The guard of intake (ORC-206): an incomplete ticket is a refused pickup, an intake without assessment a failed run.
-    ['pickup', () => blockOf(intaking, finished({ job: 'intake', outcome: 'success', attempt: 'succeeded', output: { ...INTAKE_OUTPUT, intake: { size: 'm', risk: 'medium', complete: false, missing: ['CSV or XLSX?'], screen: false } } }))],
+    // The guard of intake (ORC-206): an intake without assessment is a failed run. An incomplete ticket is no block since
+    // ORC-210 (`clarify` asks); its 72 h block, never written before ORC-345, is checked in engine-clarify.test.ts.
     ['failed', () => blockOf(intaking, finished({ job: 'intake', outcome: 'success', attempt: 'failed' }))],
   ] as const)('%s, for a block decide writes; its reason upcasts to the same kind', (kind, block) => {
     const b = block();
@@ -59,6 +59,13 @@ describe('the kind of a block, set by the code that builds it (ORC-345)', () => 
     // the recorded journals, whose tickets hold the reason alone, replaying bit for bit. A reason reworded later is no
     // longer one a ticket blocked before ORC-345 can hold: take its case out of this check, keep the old head in the table.
     expect(legacyBlock(b.reason).blockKind).toBe(kind);
+  });
+
+  it('budget, for a step past its token or turn cap (ORC-216): a kind of its own under the cause limit, set by decide, never read from a reason', () => {
+    for (const overBudget of ['tokens', 'turns'] as const) expect(blockOf(ticket({ activeRunId: 'r1' }), finished({ outcome: 'limit', overBudget })).kind).toBe('budget');
+    expect(causeOf('budget')).toBe('limit');
+    // A ticket blocked on the ticket's budget before ORC-216 keeps the kind its reason gave it.
+    expect(legacyBlock('Token budget of the ticket reached: 1000 tokens spent of 1000 by its code runs (budgets.per_ticket_tokens).').blockKind).toBe('limit');
   });
 
   it('conflict, for a rebase the agent stops on and for the bound the rebases reach: a kind of its own, under its own cause (ORC-146)', () => {

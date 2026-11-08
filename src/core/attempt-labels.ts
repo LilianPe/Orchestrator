@@ -92,6 +92,7 @@ export function promptTemplate(p: PromptInput): string {
     prUrl: p.prUrl && '<PR>',
     promptContext: p.promptContext && '<CONTEXTE>',
     spec: p.spec && { approved: p.spec.approved, version: 0, text: '<SPEC>' },
+    decisions: p.decisions && [{ question: '<QUESTION>', answer: '<REPONSE>', author: '<AUTEUR>' }],
     conventions: p.conventions && '<CONVENTIONS>',
     input: p.input && { kind: p.input.kind, text: '<ENTREE>' },
   });

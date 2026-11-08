@@ -86,8 +86,8 @@ const repair: fc.Arbitrary<EventPayloads['dead_letter.repaired']> = fc
 export const DEBOUNCE: EventPayloads['timer.fired'] = { kind: 'debounce', payload: { job: 'dev-feedback' } };
 
 /**
- * A timer firing (ORC-161): mostly a debounce, sometimes a clarify reminder or block or a usage-limit
- * reset, which no rule decides yet (ORC-210, ORC-215).
+ * A timer firing (ORC-161): mostly a debounce, sometimes a clarify reminder or block (ORC-210), of no
+ * round the pack's tickets wait on (they start with `dev`, not `intake`), or a usage reset without a job.
  */
 const timerFired: fc.Arbitrary<EventPayloads['timer.fired']> = fc.oneof(
   { arbitrary: fc.record({ job }).map((payload) => ({ kind: 'debounce' as const, payload })), weight: 3 },

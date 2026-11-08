@@ -221,6 +221,9 @@ export function createHarness(
     repoVariables?: OrchestratorDeps['repoVariables'];
     /** `.factory/config.yml` as the launch reads it on the default branch (ORC-209 C); the socle by default. */
     repoConfig?: OrchestratorDeps['repoConfig'];
+    /** `budgets.per_ticket_tokens` and `budgets.on_usage_limit` of factory.yml (ORC-340, ORC-216). */
+    perTicketTokens?: number;
+    onUsageLimit?: 'wait';
     /** The policy in front of every text it publishes (ORC-214); without a secret scan by default. */
     outputPolicy?: OrchestratorDeps['outputPolicy'];
   } = {},
@@ -297,6 +300,8 @@ export function createHarness(
     fullReadPaths: opts.fullReadPaths,
     repoVariables: opts.repoVariables,
     repoConfig: opts.repoConfig,
+    perTicketTokens: opts.perTicketTokens,
+    onUsageLimit: opts.onUsageLimit,
     outputPolicy: opts.outputPolicy,
     roles: authz && new CachedRoleResolver({ projects: (id) => (id === 'p' ? authz : undefined), team: gate(tracker), repo: outside.forge, now: () => clock.now() }),
   });

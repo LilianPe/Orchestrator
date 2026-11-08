@@ -254,7 +254,7 @@ Each scenario is delivered by the ticket that delivers the behavior it tests, wi
 | Test config modified | ORC-131 (done: `test/scenarios/freeze.test.ts`) | `h.workspaces` (`heads`, `steps` by `<worktree>@<freeze commit>`), `h.runner` (`hold`), `h.publisher`; once the factory pushes |
 | Human reply during a run | ORC-180 (done: `test/scenarios/human-inbox.test.ts`) | `h.runner` (`hold`), `h.advance` |
 | Restart during a check | ORC-220 (done: `test/scenarios/recovery.test.ts`, « a restart during a check ») | `h.checks.holdNext()`, `h.restart({ mode: 'brutal' })` |
-| Budget exhausted | ORC-216 | `h.runner` (`turns`, `costUsd`, `outcome: 'limit'`) |
+| Budget exhausted | ORC-216 (done: `test/scenarios/budget.test.ts`) | `createHarness({ perTicketTokens, onUsageLimit })`, `h.runner` (`tokens` past the attempt's cap, `turns` past its turns: the fake stops it and says `overBudget`; `usageLimit`), `h.advance` |
 | Delegation withdrawn | ORC-227 (done: `test/scenarios/cancel.test.ts`) | `h.tracker`, `h.runner` (`hold`), `h.sandboxes`, `h.checks.holdNext()` |
 
 `h.restart()` is a clean stop: it waits for checks in progress to finish. A restart **during** a check is written with `h.restart({ mode: 'brutal' })` (ORC-228), the check held by `h.checks.holdNext()`: `test/scenarios/recovery.test.ts`, where the check is relaunched and the ticket resumes on its own (ORC-220). An `h.runner` in `hold` survives a brutal restart, like a container: `h.runner.forget(id)` makes it disappear, `h.sandboxes.destroy` makes a sandboxed attempt miss its heartbeats, `h.advance` beats them. The cut points injectable at each step of the chain and the `kill -9` chaos on 500 events (ORC-163) are described above.
