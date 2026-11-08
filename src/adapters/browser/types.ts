@@ -18,6 +18,8 @@ export interface ShootRequest {
   /** A path of the app (`/settings`), never another host. */
   path: string;
   widths: readonly number[];
+  /** The variables the repository declares (ORC-211), as its commands get them: never a secret. */
+  env: Record<string, string>;
 }
 
 /** One page at one width: its PNG, and the errors its console or its scripts threw while it loaded. */

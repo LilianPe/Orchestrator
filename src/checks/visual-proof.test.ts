@@ -79,6 +79,17 @@ describe('the controls on the captures (ORC-176)', () => {
     expect(r.files).toEqual([]);
   });
 
+  it("a scanner that cannot run is no verdict on the capture: it rejects, an infrastructure failure", async () => {
+    const down = () => Promise.reject(new Error('gitleaks could not run (code 2)'));
+    await expect(judgeShots({ before: shots('base'), after: shots('head') }, SHAS, down)).rejects.toThrow(/gitleaks could not run/);
+  });
+
+  it("the base's failure is told by its first line alone: its log stays out of the journal and the check", async () => {
+    const r = await judgeShots({ before: { started: false, detail: 'nothing answers on port 4200\nTOKEN=abc in the log' }, after: shots('head') }, SHAS, gate);
+    expect(r.unavailable).toContain('nothing answers on port 4200');
+    expect(r.unavailable).not.toContain('TOKEN');
+  });
+
   it("a base that does not start is no fault of the branch: the proof is unavailable, and nothing fails", async () => {
     const r = await judgeShots({ before: { started: false, detail: 'port in use' }, after: shots('head') }, SHAS, gate);
     expect(r).toEqual({ failures: [], unavailable: expect.stringContaining('port in use'), files: [] });

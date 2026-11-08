@@ -9,7 +9,7 @@ import { checkFrozen, FREEZE_CHECK, isFrozenHarness, type FrozenTests } from '..
 import { checkForbiddenPaths, FORBIDDEN_CHECK, type ForbiddenView } from '../checks/forbidden-paths.js';
 import { mdCode } from '../checks/markdown.js';
 import { isTestSpec } from '../checks/test-files.js';
-import { decideVisualProof, judgeShots, type CaptureGate, type Judged, type VisualProof } from '../checks/visual-proof.js';
+import { afterPasses, decideVisualProof, judgeShots, type CaptureGate, type Judged, type VisualProof } from '../checks/visual-proof.js';
 import { parseRepoConfig, REPO_CONFIG_PATH, RepoConfigError, type RepoConfig } from '../config/repo-config.js';
 import { BUNDLE_TARGET, extractWork, HARDENING, hostGitEnv, IN_SANDBOX, IN_SANDBOX_ENV } from '../publish/extract.js';
 import { runSealedSetup } from './sealed-setup.js';
@@ -202,7 +202,7 @@ export const runCleanVerify: CleanVerifier = async (req) => {
   } finally {
     // Not synchronous: a clone holds a whole install, and the daemon serves meanwhile. Under a run dir, purged with it: what the attack left unremovable costs no verdict.
     await Promise.all(
-      [bundleDir, cloneDir, beforeDir].map((dir) => rm(dir, { recursive: true, force: true }).catch((err: Error) => req.log(`${dir} not removed: ${err.message}`))),
+      [bundleDir, cloneDir, beforeDir, beforeIndex(req)].map((dir) => rm(dir, { recursive: true, force: true }).catch((err: Error) => req.log(`${dir} not removed: ${err.message}`))),
     );
   }
 };
@@ -223,9 +223,13 @@ function visualPlan(v: VisualRequest, from: string): Shooting | string {
  * The base's files, from the clone's objects, by the host's git into a dir of their own: before any code of the agent has run
  * in the clone, whose objects it can rewrite once it has. A throwaway index: the clone's own is not touched.
  */
+function beforeIndex(req: Pick<CleanVerifyRequest, 'workDir'>): string {
+  return join(req.workDir, 'before.index');
+}
+
 async function checkoutBase(req: CleanVerifyRequest, cloneDir: string, beforeDir: string, from: string): Promise<void> {
   mkdirSync(beforeDir);
-  const env = { ...hostGitEnv(req.workDir, req.workDir), GIT_INDEX_FILE: join(req.workDir, 'before.index') };
+  const env = { ...hostGitEnv(req.workDir, req.workDir), GIT_INDEX_FILE: beforeIndex(req) };
   await gitAt(req.exec ?? execCmd, cloneDir, env).raw(`--work-tree=${beforeDir}`, 'checkout', from, '--', '.');
 }
 
@@ -243,10 +247,10 @@ async function shootBoth(
 ): Promise<Judged> {
   const widths = VIEWPORTS.map((w) => w.width);
   const shot = (side: 'before' | 'after', dir: string, sha: string) =>
-    inBox(`visual-${side}`, dir, [], (sandboxId) => v.shooter.shoot(sandboxes, { sandboxId, sha, start: v.start, port: v.port, path: v.path, widths }), v.shooter.requirements);
+    inBox(`visual-${side}`, dir, [], (sandboxId) => v.shooter.shoot(sandboxes, { sandboxId, sha, start: v.start, port: v.port, path: v.path, widths, env: at.env }), v.shooter.requirements);
   const after = await shot('after', at.cloneDir, at.sha);
   let before: Shots = { started: false, detail: 'not shot: the commit fails first' };
-  if (after.started && after.pages.every((p) => !p.consoleErrors.length)) {
+  if (afterPasses(after)) {
     if (at.setup.length) {
       await runSealedSetup(sandboxes, { runId: `${req.runId}-visual`, ticketId: req.ticketId, workspacePath: at.beforeDir, mounts: [], commands: at.setup, argv: verifyCommand, env: at.env, secrets: {}, now: new Date() });
     }

@@ -4,7 +4,7 @@ import { DEFAULT_REQUIREMENTS } from '../sandbox/types.js';
 import { fakePng } from './fake.js';
 import { parseShots, PlaywrightShooter } from './playwright.js';
 
-const REQ = { sha: 'abc', start: 'npm run preview', port: 4200, path: '/settings', widths: [1280, 768, 375] };
+const REQ = { sha: 'abc', start: 'npm run preview', port: 4200, path: '/settings', widths: [1280, 768, 375], env: { API_URL: 'http://127.0.0.1:9' } };
 
 async function shoot(answer: { code: number; stdout: string; stderr?: string }) {
   const sandboxes = new FakeSandboxProvider();
@@ -26,6 +26,8 @@ describe('the Playwright shooter (ORC-176)', () => {
     expect(await shots).toEqual({ started: true, pages: [{ width: 1280, png, consoleErrors: ['boom'] }] });
     const argv = sandboxes.execs[0]!.argv;
     expect(argv[0]).toBe('timeout');
+    // The repository's variables, as its commands get them: the application starts with them.
+    expect(sandboxes.execs[0]!.opts).toEqual({ env: { API_URL: 'http://127.0.0.1:9' } });
     expect(argv.slice(-5)).toEqual(['4200', 'npm run preview', expect.stringContaining("require('playwright')"), '/settings', '1280,768,375']);
   });
 
@@ -37,5 +39,6 @@ describe('the Playwright shooter (ORC-176)', () => {
   it("the browser's own failure rejects: an infrastructure failure, never a verdict on the branch", () => {
     expect(() => parseShots(3, '', "Cannot find module 'playwright'")).toThrow(/could not shoot \(code 3\).*playwright/);
     expect(() => parseShots(0, 'not json', '')).toThrow(/could not shoot/);
+    expect(() => parseShots(0, JSON.stringify({ started: true, pages: [] }), '')).toThrow(/no page/);
   });
 });

@@ -56,6 +56,21 @@ export interface Judged {
 
 const sha256 = (png: Uint8Array): string => createHash('sha256').update(png).digest('hex');
 const fail = (output: string): VerifyFailure => ({ command: VISUAL_PROOF_CHECK, exitCode: 1, output });
+/** What the base's failure says in the journal and the published check: its first line, short, as code. Its log stays out. */
+const brief = (detail: string): string => mdCode((detail.split('\n')[0] ?? '').slice(0, 200));
+
+/** The commit's page passes what needs no base: it started, and its console stayed clean. Only then is the base shot. */
+export const afterPasses = (after: Shots): boolean => after.started && after.pages.every((p) => !p.consoleErrors.length);
+
+/** A refusal of the policy is a verdict on the capture; any other rejection (its scanner down) is an infrastructure failure, and goes on. */
+async function vetted<T>(work: () => Promise<T>): Promise<{ files: T } | { refused: string }> {
+  try {
+    return { files: await work() };
+  } catch (err) {
+    if ((err as Error).name !== 'OutputRefused') throw err;
+    return { refused: (err as Error).message };
+  }
+}
 
 /**
  * The controls of the visual proof (ORC-176) on what the browser shot: the branch's page starts, loads without a console error,
@@ -66,9 +81,11 @@ export async function judgeShots(shots: { before: Shots; after: Shots }, shas: {
   const short = (sha: string) => sha.slice(0, 12);
   const { before, after } = shots;
   if (!after.started) return { failures: [fail(`The application did not start on ${short(shas.after)}, no capture could be taken:\n${after.detail}`)], files: [] };
-  const errors = after.pages.flatMap((p) => p.consoleErrors.map((e) => `- ${p.width} px: ${mdCode(e)}`));
-  if (errors.length) return { failures: [fail(`The page loads with errors in its console on ${short(shas.after)}:\n${errors.join('\n')}`)], files: [] };
-  if (!before.started) return { failures: [], unavailable: `the application does not start on the base ${short(shas.before)}: ${before.detail}`, files: [] };
+  if (!afterPasses(after)) {
+    const errors = after.pages.flatMap((p) => p.consoleErrors.map((e) => `- ${p.width} px: ${mdCode(e)}`));
+    return { failures: [fail(`The page loads with errors in its console on ${short(shas.after)}:\n${errors.join('\n')}`)], files: [] };
+  }
+  if (!before.started) return { failures: [], unavailable: `the application does not start on the base ${short(shas.before)}: ${brief(before.detail)}`, files: [] };
 
   const kept = async (side: VisualCapture['side'], pages: Page[]) => {
     const files = [];
@@ -78,18 +95,11 @@ export async function judgeShots(shots: { before: Shots; after: Shots }, shas: {
     }
     return files;
   };
-  let afterFiles;
-  try {
-    afterFiles = await kept('after', after.pages);
-  } catch (err) {
-    return { failures: [fail(`A capture of ${short(shas.after)} does not pass the output policy: ${(err as Error).message}`)], files: [] };
-  }
-  let beforeFiles;
-  try {
-    beforeFiles = await kept('before', before.pages);
-  } catch (err) {
-    return { failures: [], unavailable: `a capture of the base ${short(shas.before)} does not pass the output policy: ${(err as Error).message}`, files: [] };
-  }
+  const afterKept = await vetted(() => kept('after', after.pages));
+  if ('refused' in afterKept) return { failures: [fail(`A capture of ${short(shas.after)} does not pass the output policy: ${afterKept.refused}`)], files: [] };
+  const beforeKept = await vetted(() => kept('before', before.pages));
+  if ('refused' in beforeKept) return { failures: [], unavailable: `a capture of the base ${short(shas.before)} does not pass the output policy: ${brief(beforeKept.refused)}`, files: [] };
+  const [afterFiles, beforeFiles] = [afterKept.files, beforeKept.files];
   const hashBefore = new Map(beforeFiles.map((f) => [f.capture.width, f.capture.sha256]));
   if (afterFiles.every((f) => hashBefore.get(f.capture.width) === f.capture.sha256)) {
     return { failures: [fail(`The captures before (${short(shas.before)}) and after (${short(shas.after)}) are identical at every width: the change shows nothing on the page shot.`)], files: [] };
