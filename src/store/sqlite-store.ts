@@ -28,6 +28,7 @@ import {
   type MeasureFacts,
   type OutboxRow,
   type QueueClaim,
+  type QueueRetry,
   type QueueItem,
   type RunRecord,
   type SecurityLog,
@@ -632,11 +633,15 @@ export class SqliteStore implements Store {
     return Number(res.changes) === 1;
   }
 
-  async releaseQueued(claim: QueueClaim): Promise<boolean> {
+  async releaseQueued(claim: QueueClaim, retry?: QueueRetry): Promise<boolean> {
     const { projectId, ticketId, job } = claim.item;
+    // A retry's wait is a lease nobody holds: no claim takes the item before it ends.
     const res = this.db
-      .prepare('UPDATE queue SET lease = NULL, lease_until = NULL WHERE project_id = ? AND ticket_id = ? AND job = ? AND lease = ?')
-      .run(projectId, ticketId, job, claim.lease);
+      .prepare(
+        `UPDATE queue SET lease = NULL, lease_until = ?, data = CASE WHEN ? IS NULL THEN data ELSE json_set(data, '$.failedStarts', ?) END
+         WHERE project_id = ? AND ticket_id = ? AND job = ? AND lease = ?`,
+      )
+      .run(retry?.notBefore ?? null, retry?.failedStarts ?? null, retry?.failedStarts ?? null, projectId, ticketId, job, claim.lease);
     return Number(res.changes) === 1;
   }
 
@@ -645,6 +650,11 @@ export class SqliteStore implements Store {
       .prepare('SELECT data FROM queue WHERE lease_until IS NULL OR lease_until < ? ORDER BY rank, enqueued_at')
       .all(this.now()) as { data: string }[];
     return rows.map((r) => JSON.parse(r.data));
+  }
+
+  async queuedItems(projectId: string, ticketId: string): Promise<QueueItem[]> {
+    const rows = this.db.prepare('SELECT data FROM queue WHERE project_id = ? AND ticket_id = ?').all(projectId, ticketId) as { data: string }[];
+    return rows.map((r) => JSON.parse(r.data) as QueueItem);
   }
 
   async removeFromQueue(projectId: string, ticketId: string, queue?: QueueName): Promise<void> {

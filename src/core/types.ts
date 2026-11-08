@@ -379,7 +379,8 @@ export type ShellEvent =
   | { type: 'status.recorded'; to: LogicalState; reviewSha?: string }
   | { type: 'session.linked'; linearSessionId: string }
   | { type: 'pending.set'; job: PendingJob }
-  | { type: 'pending.cleared' }
+  /** `job`: only that pending job leaves the ticket, not one set since (ORC-339); absent, whichever is there. */
+  | { type: 'pending.cleared'; job?: PendingJob }
   | { type: 'workspace.prepared'; path: string; port?: number; branch?: string }
   | { type: 'workspace.released' }
   | {
@@ -395,12 +396,15 @@ export type ShellEvent =
        * `''` when none is read. Marks the ticket's branch (`untrustedSince`, ORC-338).
        */
       untrusted?: { head: string };
+      /** What the run starts, in the shape of a pending job: the run that starts the ticket's pending job takes it off (ORC-339). */
+      starts?: PendingJob;
     }
   /**
    * The pending feedback was given to a run, recorded once that run is written (ORC-220): a launch cut
-   * before it keeps the replies for the start taken up again.
+   * before it keeps the replies for the start taken up again. `items`: those the launch read, a message that came
+   * in since stays for the next run (ORC-339); absent, the whole inbox.
    */
-  | { type: 'feedback.consumed' }
+  | { type: 'feedback.consumed'; items?: readonly FeedbackItem[] }
   /** The active run is gone without a `run.finished` (launch failure, or a launch cut before its run was written). */
   | { type: 'run.cleared' }
   /**
@@ -440,6 +444,8 @@ export interface TicketState {
   activeRunId?: string;
   /** Job of `activeRunId`, read by `when: job == …` conditions. */
   activeJob?: string;
+  /** What `activeRunId` started, in the shape of a pending job (ORC-339): a launch that lost to it tells the same start from another. */
+  activeStart?: PendingJob;
   verifyingRunId?: string;
   /** The last commit `verify` found green (ORC-151): nothing else is published. Absent before it. */
   verifiedSha?: string;

@@ -31,6 +31,7 @@ import {
   type MeasureFacts,
   type OutboxRow,
   type QueueClaim,
+  type QueueRetry,
   type QueueItem,
   type RunRecord,
   type SecurityLog,
@@ -1085,13 +1086,16 @@ export class PgStore implements AsyncStore {
     return this.settleQueued(claim, 'done');
   }
 
-  async releaseQueued(claim: QueueClaim): Promise<boolean> {
-    return this.settleQueued(claim, 'pending');
+  async releaseQueued(claim: QueueClaim, retry?: QueueRetry): Promise<boolean> {
+    return this.settleQueued(claim, 'pending', retry);
   }
 
-  private async settleQueued(claim: QueueClaim, status: 'done' | 'pending'): Promise<boolean> {
+  private async settleQueued(claim: QueueClaim, status: 'done' | 'pending', retry?: QueueRetry): Promise<boolean> {
+    const payload = retry === undefined ? sql`payload - 'lease'` : sql`jsonb_set(payload - 'lease', '{failedStarts}', to_jsonb(${retry.failedStarts}::int))`;
+    // A retry's wait is the row's `available_at`: no claim takes it before.
+    const available = retry === undefined ? sql`` : sql`, available_at = to_timestamp(${retry.notBefore / 1000})`;
     const result = await this.db.execute(sql`
-      update outbox set status = ${status}, lease_until = null, payload = payload - 'lease', updated_at = to_timestamp(${this.now() / 1000})
+      update outbox set status = ${status}, lease_until = null, payload = ${payload}${available}, updated_at = to_timestamp(${this.now() / 1000})
       where id = ${claim.id} and status = 'running' and payload->>'lease' = ${claim.lease}
     `);
     return (result.rowCount ?? 0) > 0;
@@ -1162,6 +1166,17 @@ export class PgStore implements AsyncStore {
         where payload->>'queue' is not null
           and (status = 'pending' or (status = 'running' and coalesce(lease_until < to_timestamp(${this.now() / 1000}), true)))
         order by ${QUEUE_ORDER}
+      `,
+    );
+    return result.rows.map((row) => row.payload);
+  }
+
+  async queuedItems(projectId: string, ticketId: string): Promise<QueueItem[]> {
+    const result = await this.db.execute<{ payload: QueueItem }>(
+      sql`
+        select payload - 'lease' as payload from outbox
+        where ticket_id = ${ticketId} and status in ('pending', 'running') and payload->>'projectId' = ${projectId}
+          and payload->>'queue' is not null
       `,
     );
     return result.rows.map((row) => row.payload);

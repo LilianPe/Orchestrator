@@ -59,6 +59,10 @@ describe('blockCause (ORC-297)', () => {
     expect(failures.map(blockCause)).toEqual(['pickup', 'pickup', 'pickup']);
   });
 
+  it('classifies a pending job no settle could start as the infrastructure (ORC-339)', () => {
+    expect(blockCause('Error: the pending dev-feedback could not be started: connection reset')).toBe('infra');
+  });
+
   it('classifies a dead letter', () => {
     expect(blockCause(deadLetterReason({ eventId: 'e9', eventType: 'pr.opened', error: 'boom', failures: 1 }))).toBe('dead_letter');
   });

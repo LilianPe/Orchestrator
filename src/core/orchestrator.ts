@@ -34,6 +34,7 @@ import {
   type DecisionRequest,
   type EffectOutcome,
   type OutboxRow,
+  type QueueItem,
   type RunRecord,
   type SessionRole,
   type Store,
@@ -51,7 +52,7 @@ import { attemptLabels, packFingerprints } from './attempt-labels.js';
 import { pickupFailures } from './pickup.js';
 import { buildPrompt, formatFeedback, formatVerifyFailures, readConventions, withHumanInbox } from './prompt.js';
 import { carriedAtLaunch, forAgent } from './human-message.js';
-import { reduce } from './reduce.js';
+import { pendingOf, reduce, samePending } from './reduce.js';
 import { advancePlan, closePlan, planStepOfJob, startPlan, type PlanStep } from './session-plan.js';
 import type { StoredEvent } from './upcast.js';
 import type { Scheduler } from './scheduler.js';
@@ -298,6 +299,26 @@ interface StartFrom {
   admitted?: () => void;
   recorded?: () => Promise<void>;
 }
+
+/**
+ * A launch whose read or write of the factory's own state failed before its `run.started` (ORC-339): a passing store
+ * error, and nothing of the run is the ticket's yet. The start is tried again (the effect's retry, the drain's bounded
+ * one) instead of blocking the ticket. A launch's own failure (a worktree, a setup, the repository's config) still
+ * blocks it at once: retried, it would fail again. `failure`: what failed.
+ */
+class RetryableStart extends Error {
+  constructor(readonly failure: unknown) {
+    super(failure instanceof Error ? failure.message : String(failure));
+  }
+}
+
+/** Starts of a queue item that failed before their `run.started`, at most (ORC-339): past them, the ticket is blocked. */
+const START_ATTEMPTS = 5;
+/** The wait before such an item is handed out again, doubled at each failure (2 s, 4 s, 8 s, 16 s). */
+const START_BACKOFF_MS = 2_000;
+
+/** What a start came to: queued, set pending behind a run that holds the ticket (`deferred`), or anything else. */
+type StartOutcome = 'queued' | 'deferred' | 'done';
 
 const ECHO_MS = 60_000;
 /** The `meta` key of the installation's id (`instanceId`). */
@@ -589,7 +610,8 @@ export class Orchestrator {
       return;
     }
     // Nothing else will take it up (a pending job started by `settle` has no mark): `run.lost`, on the job the ticket holds.
-    const queued = (await store.listQueue()).some((q) => q.ticketId === t.ticketId && q.projectId === t.projectId && q.job === t.activeJob);
+    // Handed out too: a queue item whose launch the crash cut is the queue's to start again, under a lease still live (ORC-339).
+    const queued = t.activeJob !== undefined && (await this.queueHolds(t.projectId, t.ticketId, (q) => q.job === t.activeJob));
     const unfinished = (await store.listEffects(t.projectId, t.ticketId)).some((r) => r.effect.kind === 'start_run' && (r.status === 'pending' || r.status === 'running'));
     if (queued || unfinished || !t.activeJob) await this.apply(t, { type: 'run.cleared' });
     else await store.appendInbox(lostEvent({ id: runId, projectId: t.projectId, ticketId: t.ticketId, job: t.activeJob }, 'restart', clock.now()));
@@ -1283,14 +1305,31 @@ export class Orchestrator {
 
   private async settle(project: ProjectRuntime, ticketId: string): Promise<void> {
     const t = await this.ticket(project.id, ticketId);
+    const pending = t.pendingJob;
     // A step waiting for a usage reset keeps the pending job behind it (ORC-340): nothing to start yet.
-    if (!t.activeRunId && !t.verifyingRunId && !t.usageWait && t.pendingJob) {
-      const pending = t.pendingJob;
-      await this.apply(t, { type: 'pending.cleared' });
-      await this.startRun(project, ticketId, pending);
+    if (!t.activeRunId && !t.verifyingRunId && !t.usageWait && pending) {
+      // The job stays on the ticket until a run starts it (ORC-339): its `run.started` takes it off in the same
+      // write (`reduce`), whoever launches it. A crash or a throw before leaves it to the retry of this effect.
+      // Queued by a settle cut before the clear below: the queue holds that very start, a launch here would run it twice.
+      const queued = await this.queueHolds(project.id, ticketId, (q) => samePending(q, pending));
+      const outcome: StartOutcome = queued ? 'queued' : await this.startRun(project, ticketId, pending);
+      // Set pending again behind a run that took the ticket meanwhile: it stays. Not launched otherwise (refused,
+      // blocked, or the queue holds it now): it leaves the ticket, only if it is still the one started.
+      if (outcome !== 'deferred') await this.apply(t, { type: 'pending.cleared', job: pending });
     }
     await this.drain('dev');
     await this.drain('questions');
+  }
+
+  /**
+   * Whether a queue item of the ticket that `matches` is still the queue's to start (ORC-339): handed out or not, but
+   * not one whose start is handled already (its run written), a leftover the next drain drops.
+   */
+  private async queueHolds(projectId: string, ticketId: string, matches: (q: QueueItem) => boolean): Promise<boolean> {
+    for (const q of await this.d.store.queuedItems(projectId, ticketId)) {
+      if (matches(q) && !(q.startMark !== undefined && (await this.startHandled(q.startMark)))) return true;
+    }
+    return false;
   }
 
   /** Starts queued items while slots are free, one drain at a time. */
@@ -1337,8 +1376,28 @@ export class Orchestrator {
           const project = await this.runtimeFor(item.projectId, item.ticketId);
           // Launched before a crash cut it before it left the queue: recover()'s, not launched again (ORC-277).
           const launched = item.startMark !== undefined && (await this.startHandled(item.startMark));
-          const outcome = project && !launched ? await this.startRun(project, item.ticketId, item, { admitted, recorded: taken }) : 'done';
+          let outcome: StartOutcome = 'done';
+          try {
+            if (project && !launched) outcome = await this.startRun(project, item.ticketId, item, { admitted, recorded: taken });
+          } catch (err) {
+            if (!(err instanceof RetryableStart) || !project) throw err;
+            // A start that failed before its run.started: back in line, its failures counted on the item; past the
+            // bound, the ticket is blocked as a launch error, and the item leaves the queue (ORC-339).
+            const failed = (item.failedStarts ?? 0) + 1;
+            if (failed < START_ATTEMPTS) {
+              clearInterval(renew);
+              // Not handed out again at once: the same drain would spend every attempt within milliseconds.
+              const wait = START_BACKOFF_MS * 2 ** (failed - 1);
+              this.log('warn', `start ${item.job} on ${item.ticketId} failed (${err.message}), ${failed} of ${START_ATTEMPTS}: back in line in ${wait / 1000} s`);
+              await this.d.store.releaseQueued(claim, { failedStarts: failed, notBefore: this.d.clock.now() + wait });
+              return;
+            }
+            // No run of this start is the ticket's: whatever run the ticket holds is another launch's, left alone.
+            const job = project.workflow.jobs[item.job];
+            if (job) await this.launchFailed(project, item.ticketId, job, item, err.failure, undefined);
+          }
           clearInterval(renew);
+          // Deferred: set pending behind the run that holds the ticket, now the job's only holder.
           if (outcome === 'queued') await this.d.store.releaseQueued(claim);
           else if (!finished) await this.d.store.finishQueued(claim);
         })
@@ -1749,15 +1808,16 @@ export class Orchestrator {
 
   /**
    * `admitted` is called once the start took its slot, or will not take one (`drainNow`); `recorded`
-   * once the run is written. Resolves `queued` when the start went to the queue, `done` otherwise
-   * (started, set pending, refused or blocked).
+   * once the run is written. Resolves `queued` when the start went to the queue, `deferred` when it was set pending
+   * behind a run that holds the ticket, `done` otherwise (started, refused or blocked). Throws `RetryableStart` when
+   * its launch failed before its `run.started`.
    */
   private async startRun(
     project: ProjectRuntime,
     ticketId: string,
     opts: StartOpts,
     from: StartFrom = {},
-  ): Promise<'queued' | 'done'> {
+  ): Promise<StartOutcome> {
     const { admitted, recorded } = from;
     const job = project.workflow.jobs[opts.job];
     if (!job) {
@@ -1810,19 +1870,19 @@ export class Orchestrator {
       // job by `settle`) gets one too: cut once launched, handed out again, it must not run beside its relaunch (ORC-220).
       startMark: fromQueue ? opts.startMark : `${opts.startMark ?? `start:${project.id}:${ticketId}:${job.name}:${this.d.clock.now()}`}:queued`,
     };
-    // A step the usage limit cut holds the ticket's next ones too (ORC-340): it resumes first, at the reset, and they follow it.
-    if (job.queue === 'dev' && (t.activeRunId || t.verifyingRunId || t.usageWait)) {
-      await this.apply(t, {
-        type: 'pending.set',
-        job: { job: job.name, input: opts.input, inputText: opts.inputText, resume: opts.resume, sensitivePaths: opts.sensitivePaths, relaunchOf: opts.relaunchOf },
-      });
-      return 'done';
-    }
     // Back in line: through its claim for a start handed out of the queue, as a new request otherwise.
     const requeue = async (): Promise<'queued'> => {
       if (!fromQueue) await this.d.scheduler.enqueue(item);
       return 'queued';
     };
+    // A step the usage limit cut holds the ticket's next ones too (ORC-340): it resumes first, at the reset, and they follow it.
+    if (job.queue === 'dev' && (t.activeRunId || t.verifyingRunId || t.usageWait)) {
+      const start = pendingOf({ ...opts, job: job.name });
+      // Handed out of the queue to a ticket that holds another pending job: it stays in line, never in that one's place (ORC-339).
+      if (fromQueue && t.pendingJob && !samePending(t.pendingJob, start)) return requeue();
+      await this.apply(t, { type: 'pending.set', job: start });
+      return 'deferred';
+    }
     if (this.stopping || (await this.isPaused()) || (await this.usageLimited())) return requeue();
     if (await this.overBudget()) {
       const queued = await requeue();
@@ -1835,31 +1895,46 @@ export class Orchestrator {
     const slot = this.d.scheduler.free(job.queue) > promised ? this.d.scheduler.tryAcquire(job.queue, key) : null;
     admitted?.();
     if (slot === null) return requeue();
+    // Drawn here: a launch that fails lets go of its own run only, never another launch's (ORC-339).
+    const runId = this.newId();
     try {
-      await this.launch(project, ticketId, job, opts, slot, key, recorded);
+      const launched = await this.launch(project, ticketId, job, opts, slot, key, runId, recorded);
+      // Lost to another job while the ticket holds yet another pending one: back in line.
+      return launched === 'queued' ? await requeue() : (launched ?? 'done');
     } catch (err) {
       this.d.scheduler.release(key);
-      let fresh = await this.ticket(project.id, ticketId);
-      const events: InternalEvent[] = [];
-      if (fresh.activeRunId) {
-        const r = await this.d.store.getRun(fresh.activeRunId);
-        if (r && r.status === 'running' && !this.handles.has(r.id)) await this.d.store.putRun({ ...r, status: 'failure', endedAt: this.d.clock.now() });
-        if (!this.handles.has(fresh.activeRunId)) events.push({ type: 'run.cleared' });
-      }
-      // A file the repository has to fix is not a breakdown of the factory: the Flow shows it as such (`repo_config`).
-      const reason = err instanceof RepoConfigError ? `${REPO_CONFIG_REFUSED}${err.message}` : err instanceof TicketBudgetError ? err.message : `Launch error: ${(err as Error).message}`;
-      fresh = await this.apply(fresh, ...events, blockedOn(project.workflow, reason, job.name));
-      // The ticket is blocked: a failed notice must not fail the effect, whose retry would start again.
-      try {
-        await this.tellBlock(project, fresh, blockFacts({ reason, step: stepOf(project.workflow, job.name), tried: [`The launch of ${job.name}.`] }), async (failed) => {
-          const session = opts.linearSessionId ?? (await this.sessionFor(failed));
-          await this.d.tracker.activity(session, { type: 'error', body: reason });
-        });
-      } catch (e) {
-        this.log('warn', `could not post the launch error of ${ticketId}: ${(e as Error).message}`);
-      }
+      // Failed before its `run.started` (ORC-339): nothing of the run is the ticket's, the start is tried again (the
+      // effect's retry, the drain's bounded one). Past it, the run may be the ticket's: a launch error, as before.
+      if (err instanceof RetryableStart) throw err;
+      await this.launchFailed(project, ticketId, job, opts, err, runId);
+      return 'done';
     }
-    return 'done';
+  }
+
+  /**
+   * A launch that failed: the run it put on the ticket (`runId`, its own) is let go, and the ticket is blocked on its
+   * job, said once. A run of another launch the ticket holds stays as it is (ORC-339).
+   */
+  private async launchFailed(project: ProjectRuntime, ticketId: string, job: JobSpec, opts: StartOpts, err: unknown, runId: string | undefined): Promise<void> {
+    let fresh = await this.ticket(project.id, ticketId);
+    const events: InternalEvent[] = [];
+    if (runId !== undefined && fresh.activeRunId === runId) {
+      const r = await this.d.store.getRun(fresh.activeRunId);
+      if (r && r.status === 'running' && !this.handles.has(r.id)) await this.d.store.putRun({ ...r, status: 'failure', endedAt: this.d.clock.now() });
+      if (!this.handles.has(fresh.activeRunId)) events.push({ type: 'run.cleared' });
+    }
+    // A file the repository has to fix is not a breakdown of the factory: the Flow shows it as such (`repo_config`).
+    const reason = err instanceof RepoConfigError ? `${REPO_CONFIG_REFUSED}${err.message}` : err instanceof TicketBudgetError ? err.message : `Launch error: ${(err as Error).message}`;
+    fresh = await this.apply(fresh, ...events, blockedOn(project.workflow, reason, job.name));
+    // The ticket is blocked: a failed notice must not fail the effect, whose retry would start again.
+    try {
+      await this.tellBlock(project, fresh, blockFacts({ reason, step: stepOf(project.workflow, job.name), tried: [`The launch of ${job.name}.`] }), async (failed) => {
+        const session = opts.linearSessionId ?? (await this.sessionFor(failed));
+        await this.d.tracker.activity(session, { type: 'error', body: reason });
+      });
+    } catch (e) {
+      this.log('warn', `could not post the launch error of ${ticketId}: ${(e as Error).message}`);
+    }
   }
 
   /**
@@ -1906,47 +1981,86 @@ export class Orchestrator {
     opts: StartOpts,
     slot: number,
     key: string,
+    runId: string,
     recorded?: () => Promise<void>,
-  ): Promise<void> {
+  ): Promise<StartOutcome | undefined> {
     const { tracker, store, clock, workspaces, forge } = this.d;
     const wf = project.workflow;
-    const issue = await tracker.getIssue(ticketId);
-    let t = await this.ticket(project.id, ticketId);
-
-    if (job.pickup && !t.claudeSessionId) {
-      const failures = await pickupFailures(wf.tracker.pickup.checks, issue, project.repoPath, workspaces);
-      if (failures.length) {
-        this.d.scheduler.release(key);
-        const reason = failures.join(' ');
-        t = await this.apply(t, blockedOn(project.workflow, reason, job.name));
-        await this.tellBlock(project, t, blockFacts({ reason, step: 'intake', tried: failures, question: 'Can you fix this, then reply here?' }), async (refused) => {
-          const session = await this.sessionFor(refused);
-          await tracker.activity(session, {
-            type: 'elicitation',
-            body: `I cannot start this ticket:\n${failures.map((f) => `- ${f}`).join('\n')}\nFix it, then reply in this thread.`,
-          });
-        });
-        return;
+    // What the launch starts, in the shape of a pending job: its `run.started` names it (ORC-339).
+    const start = pendingOf({ ...opts, job: job.name });
+    /** The ticket holds another dev run (another worker's launch won the race). */
+    const taken = (x: TicketState): boolean => job.queue === 'dev' && !!x.activeRunId;
+    /**
+     * Another launch took the ticket (ORC-339). Its run is this very start, all of it (a settle taken up by another
+     * worker after a lost lease): nothing more to start. Another start: this one waits behind it, pending, as
+     * `startRun` sets a start that meets a busy ticket, unless the ticket holds another pending job, which it never
+     * replaces: then it goes back in line (`queued`).
+     */
+    const lose = async (holder: TicketState): Promise<StartOutcome> => {
+      this.d.scheduler.release(key);
+      if (samePending(holder.activeStart, start)) {
+        this.log('warn', `${job.name} on ${ticketId} not launched: run ${holder.activeRunId} of the same start took the ticket first`);
+        return 'done';
       }
-    }
+      if (holder.pendingJob && !samePending(holder.pendingJob, start)) {
+        this.log('warn', `${job.name} on ${ticketId} not launched: run ${holder.activeRunId} took the ticket first, and another job waits behind it: back in line`);
+        return 'queued';
+      }
+      this.log('warn', `${job.name} on ${ticketId} not launched: run ${holder.activeRunId} took the ticket first, it waits behind it`);
+      if (!holder.pendingJob) await this.apply(holder, { type: 'pending.set', job: start });
+      return 'deferred';
+    };
+    /** The factory's own state, read or written before the `run.started`: its failure is a start to try again. */
+    const state = <T>(io: Promise<T>): Promise<T> =>
+      io.catch((err: unknown) => {
+        throw new RetryableStart(err);
+      });
 
     // Before any workspace (ORC-340): factory.yml's cap now, the repository's, read from its config, once the worktree is there.
     // Read only under a cap: without one, a launch reads no run of the ticket.
-    let spent = job.queue === 'dev' && this.d.perTicketTokens !== undefined ? await this.codeTokensSpent(project.id, ticketId) : undefined;
+    let spent = job.queue === 'dev' && this.d.perTicketTokens !== undefined ? await state(this.codeTokensSpent(project.id, ticketId)) : undefined;
     if (spent !== undefined) this.tokensLeft(spent, this.d.perTicketTokens);
 
     // Read while the workspace is prepared; a pack it cannot read gives null fingerprints (ORC-226).
     const pack = packFingerprints(this.d.packDir, (err) => this.log('warn', `attempt labels: pack not fingerprinted: ${err.message}`));
-    const runId = this.newId();
-    const asked = { projectId: project.id, repoPath: project.repoPath, ticketId, title: issue.title, kind: job.workspace, slot, portBase: wf.workspace.portBase, runId };
-    let ws = await workspaces.prepare(asked);
-    // Left by a daemon killed before the end of its setup (ORC-211): half installed, perhaps holding a secret the
-    // configuration no longer names, so sealing it again proves nothing. It is made anew; no agent has worked in it.
-    if (await store.getMeta(setupPendingKey(ws.path))) {
-      await workspaces.cleanup(project.id, ticketId);
-      await store.setMeta(setupPendingKey(ws.path), '');
-      ws = await workspaces.prepare(asked);
-    }
+
+    // Up to the workspace: a launch that lost does nothing.
+    const head = await (async () => {
+      const t = await state(this.ticket(project.id, ticketId));
+      if (taken(t)) return { lost: t } as const;
+      const issue = await tracker.getIssue(ticketId);
+      if (job.pickup && !t.claudeSessionId) {
+        const failures = await pickupFailures(wf.tracker.pickup.checks, issue, project.repoPath, workspaces);
+        if (failures.length) {
+          this.d.scheduler.release(key);
+          const reason = failures.join(' ');
+          const refused = await this.apply(t, blockedOn(project.workflow, reason, job.name));
+          await this.tellBlock(project, refused, blockFacts({ reason, step: 'intake', tried: failures, question: 'Can you fix this, then reply here?' }), async (blocked) => {
+            const session = await this.sessionFor(blocked);
+            await tracker.activity(session, {
+              type: 'elicitation',
+              body: `I cannot start this ticket:\n${failures.map((f) => `- ${f}`).join('\n')}\nFix it, then reply in this thread.`,
+            });
+          });
+          return undefined;
+        }
+      }
+      const asked = { projectId: project.id, repoPath: project.repoPath, ticketId, title: issue.title, kind: job.workspace, slot, portBase: wf.workspace.portBase, runId };
+      let ws = await workspaces.prepare(asked);
+      // Left by a daemon killed before the end of its setup (ORC-211): half installed, perhaps holding a secret the
+      // configuration no longer names, so sealing it again proves nothing. It is made anew; no agent has worked in it.
+      if (await state(store.getMeta(setupPendingKey(ws.path)))) {
+        await workspaces.cleanup(project.id, ticketId);
+        await state(store.setMeta(setupPendingKey(ws.path), ''));
+        ws = await workspaces.prepare(asked);
+      }
+      return { issue, ws, lost: undefined };
+    })();
+    if (!head) return undefined;
+    if (head.lost) return lose(head.lost);
+    const { issue, ws } = head;
+    // Read again before the first write: the workspace took time.
+    let t: TicketState;
     // A fresh worktree is not set up until its setup succeeds: a launch ending before removes it, or
     // the next prepare would find it there (not fresh) and setup would never run.
     let setUp = !ws.fresh;
@@ -1960,20 +2074,25 @@ export class Orchestrator {
       const setup = config.setup ? [config.setup] : wf.workspace.setup;
       setUp ||= !setup.length;
       const caps = [this.d.perTicketTokens, config.budgets?.perTicketTokens].filter((c) => c !== undefined);
-      if (job.queue === 'dev' && caps.length) spent ??= await this.codeTokensSpent(project.id, ticketId);
+      if (job.queue === 'dev' && caps.length) spent ??= await state(this.codeTokensSpent(project.id, ticketId));
       const tokensLeft = spent === undefined || !caps.length ? undefined : this.tokensLeft(spent, Math.min(...caps));
       // The ticket's budget left caps the attempt too: past it, a `limit` blocks the ticket. Kept on the run, for a reattach (ORC-340).
       const limits = tokensLeft === undefined ? job.limits : { ...job.limits, tokens: Math.min(job.limits.tokens ?? Infinity, tokensLeft) };
-      t = await this.ticket(project.id, ticketId);
-      if (job.queue === 'dev') t = await this.apply(t, { type: 'workspace.prepared', path: ws.path, port: ws.port, branch: ws.branch });
+      t = await state(this.ticket(project.id, ticketId));
+      if (taken(t)) {
+        // Lost while the workspace was prepared, before the first write of the launch: the worktree is the winner's now.
+        setUp = true;
+        return await lose(t);
+      }
+      if (job.queue === 'dev') t = await state(this.apply(t, { type: 'workspace.prepared', path: ws.path, port: ws.port, branch: ws.branch }));
       if (job.onStart.move && t.logical !== job.onStart.move) await this.move(project, t, job.onStart.move);
-      t = await this.ticket(project.id, ticketId);
+      t = await state(this.ticket(project.id, ticketId));
 
       // A relaunch reads what the lost attempt read, whatever came in since stays for the next run (ORC-220).
-      const from = opts.relaunchOf ? await store.getRun(opts.relaunchOf) : undefined;
+      const from = opts.relaunchOf ? await state(store.getRun(opts.relaunchOf)) : undefined;
       // A question asked again (a usage reset, ORC-340) answers in the thread it was asked in.
       const linearSessionId = opts.linearSessionId ?? (job.queue === 'questions' ? from?.linearSessionId : undefined) ?? (await this.sessionFor(t));
-      t = await this.ticket(project.id, ticketId);
+      t = await state(this.ticket(project.id, ticketId));
       // The feedback the run reads, taken at the launch whoever started it (a decision, settle, the queue):
       // its taint completes the one the start was decided with (I12, ORC-274).
       const kind = from ? undefined : (opts.input ?? job.input);
@@ -2014,9 +2133,9 @@ export class Orchestrator {
 
       const vars = await this.repoVariablesOf(project, config);
       if (!setUp) {
-        await store.setMeta(setupPendingKey(ws.path), '1');
+        await state(store.setMeta(setupPendingKey(ws.path), '1'));
         await this.runSetup(project, ticketId, ws, runId, vars, setup);
-        await store.setMeta(setupPendingKey(ws.path), '');
+        await state(store.setMeta(setupPendingKey(ws.path), ''));
       }
       setUp = true;
       // Opened after the cheap exits above and after the setup, whose container is gone by now (ORC-211).
@@ -2029,7 +2148,7 @@ export class Orchestrator {
       await workspaces.resetClaudeDir(ws.path);
       // The head the tests step starts on (ORC-123): its red check reads the step's own commits from it. A return
       // to the step, a reply or a relaunch keeps the first one, so its earlier commits still count; only a step that has none takes one.
-      if (job.red && ((!kind && !opts.relaunchOf) || !(await store.getMeta(redBaseKey(project.id, ticketId))))) await store.setMeta(redBaseKey(project.id, ticketId), (await workspaces.head(ws.path)) ?? '');
+      if (job.red && ((!kind && !opts.relaunchOf) || !(await state(store.getMeta(redBaseKey(project.id, ticketId)))))) await state(store.setMeta(redBaseKey(project.id, ticketId), (await workspaces.head(ws.path)) ?? ''));
 
       let input: { kind: InputKind; text: string } | undefined;
       if (from) {
@@ -2082,15 +2201,30 @@ export class Orchestrator {
       };
       // The mark, then the ticket, then the run (`startHandled`, ORC-277): a dev ticket holds its run before
       // the run is written, so recover() finds it whichever write a crash falls after. The feedback stays
-      // on the ticket until the run that read it is written: a launch cut before reads it again.
-      if (opts.startMark) await store.setMeta(opts.startMark, runId);
-      // In the ticket's worktree by its job, whatever the ticket still says of its path (ORC-338).
-      const untrusted = sensitivePaths && job.workspace === 'worktree' ? { untrusted: { head: (await workspaces.head(ws.path)) ?? '' } } : {};
-      // A ticket from before the mark is read first: earlier untrusted commits then keep its whole branch checked (`reduce`).
-      if (sensitivePaths && job.workspace === 'worktree') t = await this.readUntrusted(project, t);
-      await this.apply(t, { type: 'run.started', runId, job: job.name, queue: job.queue, claudeSessionId, ...(ticketSession ? {} : { ticketSession: false as const }), ...untrusted });
+      // on the ticket until the run that read it is written: a launch cut before reads it again. The pending job this
+      // run starts leaves the ticket with its `run.started` (`reduce`, ORC-339).
+      if (opts.startMark) await state(store.setMeta(opts.startMark, runId));
+      // In the ticket's worktree by its job, whatever the ticket still says of its path (ORC-338). A ticket from before the
+      // mark is read first, so that its earlier untrusted commits keep its whole branch checked (`reduce`). `t` is kept: the
+      // feedback this launch consumes is what it read.
+      const marks = !!sensitivePaths && job.workspace === 'worktree';
+      if (marks) await state(this.readUntrusted(project, t));
+      const untrusted = marks ? { untrusted: { head: (await workspaces.head(ws.path)) ?? '' } } : {};
+      const took = await this.apply(t, {
+        type: 'run.started',
+        runId,
+        job: job.name,
+        queue: job.queue,
+        claudeSessionId,
+        ...(ticketSession ? {} : { ticketSession: false as const }),
+        starts: start,
+        ...untrusted,
+      });
+      // Taken in the same write by another launch (`reduce` refuses this one): it waits behind that run.
+      if (job.queue === 'dev' && took.activeRunId !== runId) return await lose(took);
       await store.putRun(run);
-      if (consumes) await this.apply(await this.ticket(project.id, ticketId), { type: 'feedback.consumed' });
+      // Only what this launch read: a message that came in since stays for the next run (ORC-339).
+      if (consumes) await this.apply(await this.ticket(project.id, ticketId), { type: 'feedback.consumed', items: t.humanInbox });
       const step = planStepOfJob(job);
       if (step) await this.updatePlan(t, (plan) => advancePlan(plan, step));
       // The run is written: a queued item it came from leaves the queue now (a crash from here on is recover()'s).

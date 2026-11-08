@@ -990,6 +990,45 @@ describe('decide — built-ins', () => {
     expect(decide(ticket({ prState: 'MERGED' }), ev('effect.failed', { ...result, error: 'x' }), workflow)).toEqual(decision());
     expect(decide(ticket({ blocked: true, blockReason: 'Arrêté à la demande' }), ev('effect.failed', { ...result, error: 'x' }), workflow)).toEqual(decision());
   });
+
+  it('a dead settle that leaves a pending job with no run blocks the ticket on that job, which a reply resumes (ORC-339)', () => {
+    const result = { effectId: 'REL-1:4:0', kind: 'settle', eventId: 'run:r1', attempts: 3, error: 'connection reset' };
+    const pendingJob = { job: 'dev-feedback', resume: true };
+    const out = decide(ticket({ pendingJob }), ev('effect.failed', result), workflow);
+    // The job stays pending, all of it: the reply starts that very job.
+    expect(out.events).toEqual([{ type: 'ticket.blocked', reason: 'Error: the pending dev-feedback could not be started: connection reset', job: 'dev-feedback' }]);
+    // Told as any block, its label with it.
+    expect(out.effects.map((e) => e.kind)).toEqual(['block_comment', 'labels']);
+    // The work in flight starts it at its end, a block keeps its own reason, a delivered or undelegated ticket starts nothing.
+    expect(decide(ticket({ pendingJob, activeRunId: 'r2' }), ev('effect.failed', result), workflow)).toEqual(decision());
+    expect(decide(ticket({ pendingJob, verifyingRunId: 'r2' }), ev('effect.failed', result), workflow)).toEqual(decision());
+    expect(decide(ticket({ pendingJob, blocked: true, blockReason: 'x' }), ev('effect.failed', result), workflow)).toEqual(decision());
+    expect(decide(ticket({ pendingJob, prState: 'MERGED' }), ev('effect.failed', result), workflow)).toEqual(decision());
+    expect(decide(ticket({ pendingJob, delegated: false }), ev('effect.failed', result), workflow)).toEqual(decision());
+  });
+
+  it('a reply to the block of a pending job no settle could start starts that very job, its input and restrictions with it (ORC-339)', () => {
+    const pendingJob = { job: 'fix-ci', input: 'ci_failures' as const, inputText: 'lint failed', sensitivePaths: ['.github/'] };
+    const blocked = ticket({ logical: 'dev', blocked: true, blockReason: 'Error: the pending fix-ci could not be started: x', blockedJob: 'fix-ci', linearSessionId: 's1', pendingJob });
+    const out = decide(blocked, ev('session.prompted', { linearSessionId: 's1', body: 'try again', author: 'L' }), workflow);
+    expect(out.events).toEqual(expect.arrayContaining([{ type: 'ticket.unblocked' }, { type: 'pending.cleared', job: pendingJob }]));
+    expect(out.effects.filter((e) => e.kind === 'start_run')).toEqual([
+      { kind: 'start_run', job: 'fix-ci', input: 'ci_failures', inputText: 'lint failed', sensitivePaths: ['.github/'] },
+    ]);
+    // Debounced: the reply keeps the block, which its timer lifts by starting that very job; held messages wait for it.
+    const debounced: Workflow = { ...workflow, on: { ...workflow.on, 'session.prompted': [{ run: 'dev-feedback', debounceMs: 180_000 }] } };
+    const reply = decide(blocked, ev('session.prompted', { linearSessionId: 's1', body: 'try again', author: 'L', kind: 'instruction' }), debounced);
+    expect(reply.events.map((e) => e.type)).not.toContain('ticket.unblocked');
+    expect(reply.timers).toEqual([expect.objectContaining({ kind: 'debounce' })]);
+    const fired = decide(blocked, ev('timer.fired', { kind: 'debounce', payload: { job: 'dev-feedback', inbox: true } }), debounced);
+    expect(fired.events).toEqual(expect.arrayContaining([{ type: 'ticket.unblocked' }, { type: 'pending.cleared', job: pendingJob }]));
+    expect(fired.effects.filter((e) => e.kind === 'start_run')).toEqual([
+      { kind: 'start_run', job: 'fix-ci', input: 'ci_failures', inputText: 'lint failed', sensitivePaths: ['.github/'] },
+    ]);
+    // A block on another job: the reply resumes as before, the pending job waits behind its run.
+    const other = decide({ ...blocked, blockedJob: 'dev' }, ev('session.prompted', { linearSessionId: 's1', body: 'try again', author: 'L' }), workflow);
+    expect(other.events).not.toContainEqual({ type: 'pending.cleared', job: pendingJob });
+  });
 });
 
 describe('decide — the tests step and the red check (ORC-123)', () => {
