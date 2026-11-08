@@ -798,10 +798,11 @@ function reviewCiLoop(out: Decision, rule: Rule, event: FactoryEvent<'pr.checks_
     out.events.push({ type: 'ticket.patched', patch: { ciFixAttempts: used + 1 } });
     return out;
   }
-  out.trace.push(`${event.type === 'pr.conflicted' ? 'conflict' : 'red CI'}: ${job.name} bound ${bound} reached`);
+  const conflict = event.type === 'pr.conflicted';
+  out.trace.push(`${conflict ? 'conflict' : 'red CI'}: ${job.name} bound ${bound} reached`);
   // Already blocked (by a rule without !blocked): the ticket keeps its reason and gets no second notice.
   if (ticket?.blocked) return out;
-  const past = event.type === 'pr.conflicted' ? conflictBound(event, bound) : redCiBound(event as FactoryEvent<'pr.checks_failed'>, job, bound);
+  const past = event.type === 'pr.conflicted' ? conflictBound(event, bound) : redCiBound(event, job, bound);
   return block(out, workflow, { ...past, job: job.name, attempts: bound });
 }
 

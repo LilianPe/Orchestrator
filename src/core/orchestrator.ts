@@ -1810,10 +1810,9 @@ export class Orchestrator {
     else if (!t.branch || !t.worktreePath) reason = `no branch or no worktree for ${t.ticketId}.`;
     else {
       try {
-        const mark = await this.untrustedMark(project, t);
-        const untrusted = mark ? { untrusted: mark } : {};
         // A rebase may replace what the factory published last on the branch, and nothing else (ORC-146).
-        const rewrites = c.rewrite ? await this.lastPublished(project.id, t.ticketId) : undefined;
+        const [mark, rewrites] = await Promise.all([this.untrustedMark(project, t), c.rewrite ? this.lastPublished(project.id, t.ticketId) : undefined]);
+        const untrusted = mark ? { untrusted: mark } : {};
         const pr = await publisher.publish({ projectId: project.id, repoPath: project.repoPath, ticketId: t.ticketId, runId: c.runId, worktree: t.worktreePath, branch: t.branch, sha: c.sha, ...untrusted, ...(rewrites ? { rewrites } : {}), ...prText(t) });
         await this.accept({ ...base, id: prEventId(t.ticketId, pr.prNumber, 'opened'), type: 'pr.opened', at: this.d.clock.now(), payload: { number: pr.prNumber, url: pr.url, branch: t.branch } });
         await this.publishChecks(project, t, c);

@@ -2,7 +2,6 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { loadWorkflow } from '../config/load-workflow.js';
 import type { AgentOutput } from './agent-output.js';
-import { causeOf } from './block-cause.js';
 import type { Decision } from './decision.js';
 import { decide } from './engine.js';
 import { reduce } from './reduce.js';
@@ -34,8 +33,8 @@ const blocked = (d: Decision) => d.events.find((e) => e.type === 'ticket.blocked
 const OUTPUT: AgentOutput = { status: 'done', summary: 'Rebased on main.', tests_added: [], why: '', assumptions: [], risks: [], untested: [], review_hints: [] };
 const rebasing = (patch: Partial<TicketState> = {}) => reviewed({ activeRunId: 'r1', activeJob: 'rebase', ...patch });
 const finished = (patch: Partial<EventPayloads['run.finished']>) => ev('run.finished', { runId: 'r1', job: 'rebase', outcome: 'success', costUsd: 0, turns: 1, lastText: '', ...patch });
-const stopsOn = (conflict: 'logic' | 'migrations' | 'scope', question = 'Which side wins?') =>
-  finished({ attempt: 'needs_input', output: { ...OUTPUT, status: 'blocked', reason: 'conflict', conflict, question } });
+const stopsOn = (conflict: 'logic' | 'migrations' | 'scope', question = 'Which side wins?', job = 'rebase') =>
+  finished({ job, attempt: 'needs_input', output: { ...OUTPUT, status: 'blocked', reason: 'conflict', conflict, question } });
 
 describe('a conflict with the default branch is handled by a rebase step the engine starts (ORC-146)', () => {
   it('criterion 1: a conflict of the open PR starts the rebase step, counted on the review and CI loop (I5)', () => {
@@ -119,7 +118,6 @@ describe('a conflict with the default branch is handled by a rebase step the eng
     expect(blocked(out)).toMatchObject({ type: 'ticket.blocked', kind: 'conflict', job: 'rebase', reason: expect.stringContaining(says) });
     expect(notice(out)?.block).toMatchObject({ step: 'rebase', question: 'Which side wins?' });
     expect(out.effects.filter((e) => e.kind === 'activity' || e.kind === 'run_verify' || e.kind === 'publish')).toEqual([]);
-    expect(causeOf('conflict')).toBe('conflict');
   });
 
   it('a conflict seen again while a rebase runs or waits starts and counts nothing more: one conflict, one rebase', () => {
@@ -133,7 +131,7 @@ describe('a conflict with the default branch is handled by a rebase step the eng
 
   it('a conflict another step reports is no conflict block: only the rebase step stops on one', () => {
     const fixing = reviewed({ activeRunId: 'r1', activeJob: 'dev-feedback' });
-    const out = decide(fixing, { ...stopsOn('logic'), payload: { ...(stopsOn('logic').payload as EventPayloads['run.finished']), job: 'dev-feedback' } } as FactoryEvent, workflow);
+    const out = decide(fixing, stopsOn('logic', 'Which side wins?', 'dev-feedback'), workflow);
     expect(blocked(out)).toMatchObject({ kind: 'question', job: 'dev-feedback' });
   });
 
