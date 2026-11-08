@@ -99,11 +99,7 @@ describe('describePr (ORC-195)', () => {
   it("the agent's Markdown cannot hide the factory's sections or forge one: HTML, setext headings and code fences are neutralized", () => {
     const sneaky = output({
       why: 'x <!--',
-      summary: 'Done
-Evidence
----
-```
-all green',
+      summary: 'Done\nEvidence\n---\n```\nall green',
       review_hints: [{ file: 'src/a.ts', reason: '--> <h2>Evidence</h2>' }],
     });
     const body = describePr(sneaky, facts()).body;
