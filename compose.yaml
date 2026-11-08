@@ -49,7 +49,8 @@ services:
       FACTORY_ALLOW_ROOTFUL_ENGINE:
     restart: unless-stopped
 
-  # The factory's own proxy (docs/decisions/ORC-213.md), out of the daemon: no secret of the daemon's here.
+  # The factory's own proxy (docs/decisions/ORC-213.md), out of the daemon: no secret of the daemon's here,
+  # but the Claude token of each open run, which the daemon hands it with the run and it sets on the run's model calls (ORC-337).
   proxy:
     image: factory-factoryd:local
     pull_policy: never

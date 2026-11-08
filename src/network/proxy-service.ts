@@ -14,7 +14,11 @@ export type Egress = Pick<EgressProxy, 'open' | 'close' | 'closeAll' | 'isOpen' 
 export const sandboxAgentHost = (env: NodeJS.ProcessEnv) => env['FACTORY_SANDBOX_AGENT_HOST'] || 'host.docker.internal';
 
 const CLOSE = z.object({ runId: z.string() });
-const OPEN = CLOSE.extend({ policy: z.object({ level: z.enum(Object.keys(NETWORK_RANK) as [NetworkLevel, ...NetworkLevel[]]), allow: z.array(z.string()) }) });
+const OPEN = CLOSE.extend({
+  policy: z.object({ level: z.enum(Object.keys(NETWORK_RANK) as [NetworkLevel, ...NetworkLevel[]]), allow: z.array(z.string()) }),
+  /** The run's Claude token, which the proxy sets on its model calls (ORC-337); held in memory only. */
+  claudeToken: z.string().optional(),
+});
 
 export interface EgressControl {
   close(): Promise<void>;
@@ -28,8 +32,8 @@ export interface EgressControl {
 export async function serveEgressControl(proxy: EgressProxy, path: string): Promise<EgressControl> {
   const routes = new Map<string, (input: unknown) => Promise<object>>([
     ['/open', async (input) => {
-      const { runId, policy } = OPEN.parse(input);
-      const socket = await proxy.open(runId, policy);
+      const { runId, policy, claudeToken } = OPEN.parse(input);
+      const socket = await proxy.openRun(runId, policy, claudeToken);
       return { socket, ca: proxy.caCertPath };
     }],
     ['/close', async (input) => {
@@ -68,6 +72,14 @@ export async function serveEgressControl(proxy: EgressProxy, path: string): Prom
   };
 }
 
+export interface EgressClientOptions {
+  log?: (message: string) => void;
+  /** A proxy that does not answer must not hold a run's place in the queue: 30 s by default. */
+  timeoutMs?: number;
+  /** Handed to the proxy with each run it opens (ORC-337): the `proxy` service reads no secret of its own. */
+  claudeToken?: () => string | undefined;
+}
+
 /**
  * The daemon's side: EgressProxy's interface over the control socket. `isOpen` is sync, for the provider
  * that asks it: the runs opened here since the proxy started. The proxy gone, none is, as after a daemon
@@ -80,9 +92,7 @@ export class EgressClient implements Egress {
 
   constructor(
     private readonly path: string,
-    private readonly log: (message: string) => void = () => {},
-    /** A proxy that does not answer must not hold a run's place in the queue. */
-    private readonly timeoutMs = 30_000,
+    private readonly o: EgressClientOptions = {},
   ) {}
 
   get caCertPath(): string {
@@ -101,7 +111,8 @@ export class EgressClient implements Egress {
 
   async open(runId: string, policy: EgressPolicy): Promise<string> {
     await this.watching();
-    const { socket, ca } = (await this.call('/open', { runId, policy })) as { socket: string; ca: string };
+    const claudeToken = this.o.claudeToken?.();
+    const { socket, ca } = (await this.call('/open', { runId, policy, ...(claudeToken ? { claudeToken } : {}) })) as { socket: string; ca: string };
     this.ca = ca;
     this.opened.add(runId);
     return socket;
@@ -110,7 +121,7 @@ export class EgressClient implements Egress {
   /** Never rejects: the container is already gone, and a socket left open dies with the proxy. */
   async close(runId: string): Promise<void> {
     this.opened.delete(runId);
-    await this.call('/close', { runId }).catch((err: Error) => this.log(`egress: run ${runId} not closed in the proxy: ${err.message}`));
+    await this.call('/close', { runId }).catch((err: Error) => this.o.log?.(`egress: run ${runId} not closed in the proxy: ${err.message}`));
   }
 
   async closeAll(): Promise<void> {
@@ -157,8 +168,9 @@ export class EgressClient implements Egress {
   }
 
   private send(method: string, path: string, failed: (err: Error) => void, answered: (res: IncomingMessage) => void): ClientRequest {
-    const req = request({ socketPath: this.path, path, method, timeout: this.timeoutMs }, answered);
-    req.once('timeout', () => req.destroy(new Error(`no answer in ${this.timeoutMs} ms`)));
+    const timeout = this.o.timeoutMs ?? 30_000;
+    const req = request({ socketPath: this.path, path, method, timeout }, answered);
+    req.once('timeout', () => req.destroy(new Error(`no answer in ${timeout} ms`)));
     req.once('error', (err) => failed(new Error(`egress: proxy unreachable at ${this.path}: ${err.message}`)));
     return req;
   }
