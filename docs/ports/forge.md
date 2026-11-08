@@ -11,6 +11,7 @@ The code forge, read-only: a branch's PR, the state of its checks, its unresolve
 | Method | What it guarantees | Replayed | Error |
 |---|---|---|---|
 | `findPr(repo, branch)` | `undefined` without a PR; otherwise the branch's PR (number, `https://` URL, state `OPEN`/`MERGED`/`CLOSED`), `checks` among `pending`/`pass`/`fail`/`none`, `failedChecks` non-empty exactly when `checks` is `fail`; a copy | read: same answer | rejects if the forge does not answer, including when it returns the PR but not its checks, and when it returns unreadable checks, even without an error (ORC-305: the PR poll logs the error and retries on the next round); an open PR with no checks at all gives `none`; a check in a state the forge does not know gives neither `pass` nor `none` (ORC-303) |
+| `mergeState(repo, n)` | the PR's base branch, `mergeable` among `MERGEABLE`/`CONFLICTING`/`UNKNOWN` (`UNKNOWN` while the forge computes it), and its merge status in capitals (`CLEAN`, `BEHIND`, `DIRTY`…): what a review reads before it starts (ORC-322) | read | rejects if the forge does not answer, or answers a mergeability it does not know |
 | `unresolvedReviewComments(repo, n)` | the unresolved review threads, as `FeedbackItem` with source `review` (author, body, date), bots' comments dropped and capped to the newest threads, the cut said by a last item (ORC-366); a copy | read | rejects if the forge does not answer, or returns unreadable threads (`GitHubAppForge`) |
 
 ## Idempotence
