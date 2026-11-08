@@ -75,7 +75,7 @@ Maps Relais's five **logical states** to the exact names of the team's Linear co
 | `ai_review` | `AI Review` |
 | `done` | `Done` |
 
-You can redefine only some of them; after merging, all five must have a name. `ready` ("Ready to Merge") is no longer declared by the pack (ORC-170); a `move` to a state without a name is rejected at load time, with the key's path. No other state name is accepted. During « Connecter Linear », Relais creates the missing statuses in the team. A Linear status that is not mapped to any logical state is seen as "unknown": a move to it produces a `status.changed` with an empty `to`, which `from`/`to` rules do not recognize.
+You can redefine only some of them; after merging, all five must have a name. `ready` ("Ready to Merge") is no longer declared by the pack (ORC-170); a `move` to a state without a name is rejected at load time, with the key's path. No other state name is accepted. During « Connect Linear », Relais creates the missing statuses in the team. A Linear status that is not mapped to any logical state is seen as "unknown": a move to it produces a `status.changed` with an empty `to`, which `from`/`to` rules do not recognize.
 
 ### `limits`
 | Key | Type | Default | Effect when the limit is reached |
@@ -153,7 +153,7 @@ The checks (`verify`): with sandboxes (`FACTORY_CONTAINER_CLI`), the factory pin
 - One fails and attempts remain: Relais relaunches **the same job**, resuming the session, with the output of the failing commands, trimmed to its beginning, its end and its error lines (8,000 characters at most).
 - After `limits.verify_attempts` failed passes: the ticket is blocked and Relais posts the list of failing commands in the session.
 - The check cannot run (engine down, silent sandbox, failing `setup`, rejected configuration, unreachable forge): `verify.errored`, the ticket is blocked for infrastructure reasons, without sending anything back to the agent or touching the counter.
-- Same failure three times in a row (same failing commands, same exit codes, unchanged commit content): the ticket is blocked with the cause « Boucle », even if passes remain. The worktree's fingerprint is the git tree of its content, untracked files included, computed without touching its index or its objects (60 s at most). Files written by the checks must be ignored by git (`coverage/`, reports): otherwise the fingerprint changes on every pass and the guard never triggers, without ever blocking wrongly. The count resets to zero on a green check or a human relaunch. Outside a git repository, this guard does not apply. Its bound comes from the preset and is not set in `workflow.yml`.
+- Same failure three times in a row (same failing commands, same exit codes, unchanged commit content): the ticket is blocked with the cause « Loop », even if passes remain. The worktree's fingerprint is the git tree of its content, untracked files included, computed without touching its index or its objects (60 s at most). Files written by the checks must be ignored by git (`coverage/`, reports): otherwise the fingerprint changes on every pass and the guard never triggers, without ever blocking wrongly. The count resets to zero on a green check or a human relaunch. Outside a git repository, this guard does not apply. Its bound comes from the preset and is not set in `workflow.yml`.
 
 Pack jobs:
 
@@ -425,7 +425,7 @@ states:
   human_review: "Relecture"
 ```
 
-The other states keep the pack's names. Missing statuses are created in Linear on « Connecter Linear ».
+The other states keep the pack's names. Missing statuses are created in Linear on « Connect Linear ».
 
 ### Requiring acceptance criteria
 

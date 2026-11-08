@@ -1795,7 +1795,7 @@ export class Orchestrator {
         if (r && r.status === 'running' && !this.handles.has(r.id)) await this.d.store.putRun({ ...r, status: 'failure', endedAt: this.d.clock.now() });
         if (!this.handles.has(fresh.activeRunId)) events.push({ type: 'run.cleared' });
       }
-      // A file the repository has to fix is not a breakdown of the factory: the Flux shows it as such (`repo_config`).
+      // A file the repository has to fix is not a breakdown of the factory: the Flow shows it as such (`repo_config`).
       const reason = err instanceof RepoConfigError ? `${REPO_CONFIG_REFUSED}${err.message}` : `Launch error: ${(err as Error).message}`;
       fresh = await this.apply(fresh, ...events, blockedOn(project.workflow, reason, job.name));
       // The ticket is blocked: a failed notice must not fail the effect, whose retry would start again.

@@ -20,13 +20,13 @@ function flowOf(h: Harness) {
 
 const TOKENS = { input: 1_000, output: 2_000, cacheRead: 30_000, cacheCreation: 4_000 };
 
-describe('the Flux on the engine (ORC-297)', () => {
+describe('the Flow on the engine (ORC-297)', () => {
   it('a real ticket: blocked with its cause in Needs you, then in Working with its step, duration and measured tokens', async () => {
     const h = createHarness();
     const flow = flowOf(h);
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Exporter les audits en CSV depuis la liste des audits.' });
 
-    // The first run fails: the ticket is blocked by the engine, for a cause the Flux names.
+    // The first run fails: the ticket is blocked by the engine, for a cause the Flow names.
     h.runner.enqueue({ outcome: 'failure', tokens: TOKENS });
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
     let f = await flow();

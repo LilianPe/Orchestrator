@@ -32,7 +32,7 @@ Run it **in the repository** to entrust to Relais (otherwise it asks for the rep
 4. Prints the exact values to enter in Linear (callback URL, webhook URL, categories) then asks for **Client ID**, **Client secret** and **Webhook signing secret** (asked again as long as the answer is empty), recorded in `secrets.json`. Details: [`linear.md`](linear.md).
 5. If no knowledge base is configured, offers to create a private GitHub repository `relais-knowledge` (`gh repo create`). See [`projects-and-workspaces.md`](projects-and-workspaces.md#shared-knowledge-base).
 6. If `.relais/workflow.yml` does not exist, creates it: asks for the verification commands (suggested from the `lint`, `typecheck`, `test` scripts in `package.json`, separated by `;`) and sets `workspace.setup: ["npm ci"]` if the repository has a `package-lock.json`. Exact contents: [`workflow.md`](workflow.md#1-role-of-the-file-and-merging-with-the-pack).
-7. Writes `config.yaml` and prints the next steps: `relais up`, « Connecter Linear », delegate a ticket.
+7. Writes `config.yaml` and prints the next steps: `relais up`, « Connect Linear », delegate a ticket.
 
 `relais init` can be rerun: for a second repository (new project), or to change the Linear credentials. It never rewrites an existing `.relais/workflow.yml`. Remember to commit `.relais/workflow.yml` to the repository.
 
@@ -95,7 +95,7 @@ For each ticket: its state, a check in progress, the reason for a block, and its
 
 ### `relais pause` / `relais resume`
 
-`pause`: no more runs start; requests accumulate in the queue. Runs in progress continue. The pause state is kept in `relais.db` and survives a restart. `resume` restarts the queue. Equivalent to the UI's « Pause / Reprendre » button.
+`pause`: no more runs start; requests accumulate in the queue. Runs in progress continue. The pause state is kept in `relais.db` and survives a restart. `resume` restarts the queue. Equivalent to the UI's « Pause / Resume » button.
 
 ### `factory stop <ID>`
 
