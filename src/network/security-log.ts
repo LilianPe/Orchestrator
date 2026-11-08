@@ -55,8 +55,11 @@ const refusalLine = (ticketId: string) =>
 const EGRESS_MAX_BYTES = 16 * 1024 * 1024;
 const REFUSALS_MAX_BYTES = 1024 * 1024;
 
-/** The valid lines of a journal, and how many were skipped: malformed, forged, cut by the cap (the rest past it counts as one). */
-function parse<T>(path: string | undefined, cap: number, line: z.ZodType<T>): { entries: T[]; skipped: number } {
+/**
+ * The valid lines of a journal, and how many were skipped: malformed, forged, cut by the cap (the rest past it counts as one).
+ * A line `aside` names is neither: the proxy's notes (ORC-337), no request nor refusal, stay in its journal alone.
+ */
+function parse<T>(path: string | undefined, cap: number, line: z.ZodType<T>, aside: (raw: unknown) => boolean = () => false): { entries: T[]; skipped: number } {
   const read = path === undefined ? undefined : readCapped(path, cap);
   if (read === undefined) return { entries: [], skipped: 0 };
   if (read === 'not a file') return { entries: [], skipped: 1 };
@@ -74,12 +77,16 @@ function parse<T>(path: string | undefined, cap: number, line: z.ZodType<T>): { 
       skipped++;
       continue;
     }
+    if (aside(raw)) continue;
     const r = line.safeParse(raw);
     if (r.success) entries.push(r.data);
     else skipped++;
   }
   return { entries, skipped };
 }
+
+/** A note of the proxy's journal (`EgressNote`): a beta dropped, a model call throttled or cut, its client gone. */
+const isNote = (raw: unknown) => typeof raw === 'object' && raw !== null && (raw as { kind?: unknown }).kind === 'note';
 
 const drop = <T extends object>(o: T): T => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as T;
 
@@ -91,7 +98,7 @@ export function readSecurityLog(
   run: Pick<SecurityLog, 'runId' | 'projectId' | 'ticketId' | 'at'>,
   paths: { egress?: string; refusals: string },
 ): SecurityLog {
-  const egress = parse(paths.egress, EGRESS_MAX_BYTES, egressLine);
+  const egress = parse(paths.egress, EGRESS_MAX_BYTES, egressLine, isNote);
   const refusals = parse(paths.refusals, REFUSALS_MAX_BYTES, refusalLine(run.ticketId));
   return {
     ...run,

@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
+import { validateHeaderValue } from 'node:http';
 import { join } from 'node:path';
 import { parse } from 'yaml';
 import { z } from 'zod';
@@ -40,7 +41,22 @@ const MIN_REPO_SECRET_LENGTH = 8;
 
 /** The token of the account `claude.active` names: the only credential a runner gets (ORC-211). ORC-215 owns the choice of the account. */
 export function activeClaudeToken(yml: FactoryYml | undefined): string | undefined {
-  return yml?.claude?.accounts.find((a) => a.name === yml.claude?.active)?.token || undefined;
+  return claudeToken(yml?.claude?.accounts.find((a) => a.name === yml.claude?.active)?.token, 'claude.active in factory.yml');
+}
+
+/**
+ * A Claude token as the egress proxy sets it on a header (ORC-337): trimmed, a secret file's newline gone. One a
+ * header cannot carry (a line break, a control character) is refused, naming `from`: the daemon does not start.
+ */
+export function claudeToken(value: string | undefined, from: string): string | undefined {
+  const token = value?.trim() || undefined;
+  if (token === undefined) return undefined;
+  try {
+    validateHeaderValue('authorization', `Bearer ${token}`);
+  } catch {
+    throw new Error(`${from}: the Claude token holds a character an HTTP header cannot carry (a line break or a control character)`);
+  }
+  return token;
 }
 
 /** What the workflow's agent steps read of the file (ORC-136). */

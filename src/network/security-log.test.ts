@@ -100,6 +100,16 @@ describe('the security log of a run (ORC-296)', () => {
   });
 });
 
+describe("the proxy's notes (ORC-337)", () => {
+  it('keeps them out of the requests and the refusals: a dropped beta, a throttled call, a client gone are no refused host', () => {
+    const note = (text: string) => JSON.stringify({ at: '2026-11-03T10:00:02.000Z', kind: 'note', method: 'POST', host: 'api.anthropic.com', path: '/v1/messages', note: text });
+    const log = readSecurityLog(RUN, files([egressLine(), note('anthropic-beta x dropped'), note('model call throttled'), note('model call dropped: its client went away')], []));
+    expect(log.egress).toHaveLength(1);
+    expect(log.skipped.egress).toBe(0);
+    expect(refusalSummary(log)).toBeUndefined();
+  });
+});
+
 describe('the refusals summary posted in the ticket session (ORC-296)', () => {
   const log = (patch: object = {}) => ({ ...RUN, egress: [], refusals: [], skipped: { egress: 0, refusals: 0 }, ...patch });
   const refusal = (rule: string) => ({ at: 1, tool: 'Bash', rule, command: 'git push origin main --token=SECRET' });

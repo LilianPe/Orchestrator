@@ -2,7 +2,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { activeClaudeToken, FactoryYmlError, loadFactoryYml, parseFactoryYml, stepSettings } from './factory-yml.js';
+import { activeClaudeToken, claudeToken, FactoryYmlError, loadFactoryYml, parseFactoryYml, stepSettings } from './factory-yml.js';
 
 const PEM = '-----BEGIN RSA PRIVATE KEY-----\\nabc\\n-----END RSA PRIVATE KEY-----';
 const ENV = {
@@ -146,6 +146,14 @@ describe('factory.yml (ORC-209, part B)', () => {
 
     it('refuses a secret of fewer than 8 characters: sealing it would purge any file that holds those letters', () => {
       expect(violations('repos: [{ linear_team: ORC, github: org/app, secrets: { REGISTRY_TOKEN: env:SHORT } }]\n', { ...env, SHORT: 'abc' }).join()).toContain('repos[0].secrets.REGISTRY_TOKEN');
+    });
+
+    it('trims the Claude token, and refuses one a header cannot carry, naming where it came from (ORC-337)', () => {
+      expect(claudeToken('  sk-ant-oat01-abc\n', 'X')).toBe('sk-ant-oat01-abc');
+      expect(claudeToken('   ', 'X')).toBeUndefined();
+      expect(claudeToken(undefined, 'X')).toBeUndefined();
+      for (const bad of ['sk-ant\r\nX-Injected: 1', 'a\nb', 'a\u0000b', 'a\u007fb']) expect(() => claudeToken(bad, 'CLAUDE_CODE_OAUTH_TOKEN'), JSON.stringify(bad)).toThrow(/^CLAUDE_CODE_OAUTH_TOKEN: the Claude token holds a character/);
+      expect(activeClaudeToken(parseFactoryYml(EXAMPLE, { ...ENV, CLAUDE_TOKEN_1: 'tok-1\n' }))).toBe('tok-1');
     });
 
     it('gives the token of the active account, none without a claude section', () => {
