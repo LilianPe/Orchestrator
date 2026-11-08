@@ -33,6 +33,19 @@ describe('FakeTracker', () => {
     expect(t.activities(s)).toEqual([{ type: 'thought', body: 'x' }]);
   });
 
+  it('reads « blocked by » relations with the blocker as it is now, until taken off (ORC-363)', async () => {
+    const t = new FakeTracker();
+    t.addIssue({ identifier: 'REL-1', delegateId: 'app' });
+    const blocker = t.addIssue({ identifier: 'REL-2', stateName: 'In Progress', stateType: 'started' });
+    expect((await t.getIssue('REL-1')).blockedBy).toEqual([]);
+    t.blocks('REL-2', 'REL-1');
+    expect((await t.getIssue('REL-1')).blockedBy).toEqual([{ identifier: 'REL-2', stateName: 'In Progress', stateType: 'started' }]);
+    Object.assign(blocker, { stateName: 'Done', stateType: 'completed' });
+    expect((await t.listDelegated('REL'))[0]!.blockedBy).toEqual([{ identifier: 'REL-2', stateName: 'Done', stateType: 'completed' }]);
+    t.unblocks('REL-2', 'REL-1');
+    expect((await t.getIssue('REL-1')).blockedBy).toEqual([]);
+  });
+
   it('knows the states of the standard workflow by default', () => {
     const { states } = loadWorkflow({ packDir: join(import.meta.dirname, '../../../packs/standard') });
     expect([...new FakeTracker().statesOf('REL')].sort()).toEqual(Object.values(states).sort());
