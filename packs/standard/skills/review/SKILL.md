@@ -47,9 +47,9 @@ Before declaring the loop converged, run the repository's type check (and the li
 
 ## 3. Has the base moved?
 
-1. `git fetch origin`, then `git merge-tree --write-tree --name-only origin/<base> HEAD` (exit code 1 = conflicts) and `git log --oneline HEAD..origin/<base>` (what arrived on the base since the branch started).
-2. Merge the base only if necessary: conflicts, `mergeStateStatus` at `BEHIND`, or a commit arrived on the base that touches a file of the PR or what it imports, or that invalidates a premise of a fix (a timeout, a quota, a contract cited in a commit message).
-3. No rebase: the branch is published, and the factory refuses a rewritten history. `git merge --no-edit origin/<base>`, resolve each hunk you have read with Edit, keeping the intent of both sides, `git add`, `git commit --no-edit`, then rerun the touched tests and the type check. The two sides contradict each other, two migrations change the same tables, or the resolution goes beyond the scope: `git merge --abort` and a question.
+1. `git fetch origin`, then `git log --oneline HEAD..origin/<base>`: what arrived on the base since the branch started.
+2. A commit there that invalidates a premise of a fix (a timeout, a quota, a contract cited in a commit message) is a finding like any other.
+3. Never integrate the base: no merge, no rebase, even on a conflict or a `mergeStateStatus` at `BEHIND`. A conflict is the factory's: it starts its own `factory:rebase` step on it, after your run.
 
 ## 4. Hand back
 
@@ -57,7 +57,7 @@ Commit everything, then end your turn. You do not push and you do not wait for t
 
 ## 5. When to ask a human
 
-A point **to decide** that may be a defect, a blocking defect still open at the cap, a conflict in one of the three stop cases: ask ONE question with `factory-agent ask`. It blocks the ticket: it does not move to "ready to merge" and your summary **is not published**. So the question carries the synthesis: rounds done, what is fixed, and the point to decide with its options and the key's history.
+A point **to decide** that may be a defect, or a blocking defect still open at the cap: ask ONE question with `factory-agent ask`. It blocks the ticket: it does not move to "ready to merge" and your summary **is not published**. So the question carries the synthesis: rounds done, what is fixed, and the point to decide with its options and the key's history.
 
 Points to decide that are only trade-offs or preferences, minor, out of scope: no question, they go into the summary.
 

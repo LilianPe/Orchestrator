@@ -40,6 +40,10 @@ on:
     - { do: stop }
   pr.checks_failed:
     - { when: "state in [human_review, ai_review] && !blocked", run: fix-ci }
+  # A conflict of the PR with the default branch (ORC-146): the engine starts the rebase step, on the counter of red CI.
+  # During another step, the rebase waits for that work to end: the agent at work never resolves the conflict.
+  pr.conflicted:
+    - { when: "state in [dev, human_review, ai_review] && !blocked", run: rebase }
   pr.merged:
     - { move: done, do: cleanup, run: learn }
 jobs:
@@ -98,6 +102,17 @@ jobs:
     extends: dev-feedback
     skill: "factory:fix-ci"
     input: ci_failures
+  # The `rebase` step of factory/default (ORC-146): rebases the ticket's branch on the default branch in its sandbox, or
+  # stops on the three conflicts a human decides (`submit_result` with `reason: conflict`). Its commit goes through `verify`,
+  # then the factory publishes it over the head it published itself. It moves nothing and posts nothing.
+  rebase:
+    extends: dev
+    step: rebase
+    session: resume
+    skill: "factory:rebase"
+    pickup: false
+    on_start: {}
+    on_success: {}
   review:
     step: review
     queue: dev
