@@ -31,7 +31,8 @@ export type Effect =
    * recorded on the inbox row. `comment`: on the ticket too (ORC-140), first. `plan`: then opens the session's plan.
    */
   | { kind: 'ack'; body: string; linearSessionId: string; comment?: true; plan?: true }
-  | { kind: 'activity'; type: ActivityType; body: string; linearSessionId?: string; runId?: string }
+  /** `options`: an elicitation answered by picking one (`select`, ORC-210). */
+  | { kind: 'activity'; type: ActivityType; body: string; linearSessionId?: string; runId?: string; options?: readonly string[] }
   | { kind: 'post_output'; style: 'summary' | 'reply' | 'synthesis'; runId: string; output?: AgentOutput }
   /**
    * An AI review lens's findings on the published commit `sha`, kept (ORC-183); `publish`: then every lens's findings on it go

@@ -6,6 +6,7 @@ import { mdCode } from './markdown.js';
 import { isTestHarnessFile, normalizePath } from './test-files.js';
 import { isTable, parseToml } from './toml.js';
 import type { CheckResult } from './types.js';
+import type { ClarifyAnswer } from '../core/types.js';
 
 export const FREEZE_CHECK = 'factory/tests-gelés';
 
@@ -21,6 +22,8 @@ export interface FrozenTests {
    * `package.json` part it was made with: a deploy blocks no ticket frozen before it on files it did not freeze.
    */
   rules?: number;
+  /** The answers to the `clarify` questions the tests were frozen with (ORC-210): what the tests hold the code to, as decided. */
+  decisions?: readonly ClarifyAnswer[];
 }
 
 /** A commit of the branch, read on the factory's repository, never in the agent's worktree (ORC-205). */

@@ -202,7 +202,7 @@ These types are accepted by the loader, but Relais handles them in hard-coded fa
 |---|---|
 | `run.finished` | Success: checks if the job has any, otherwise `on_success`. Failure or limit: ticket blocked (`dev` queue) or error message (`questions` queue). `dev` queue, depending on the attempt's outcome (ORC-289): agent question (`needs_input`) or disputed ticket (`spec_impossible`), ticket blocked with the question or the justification; infrastructure failure (`errored`: runner or sandbox down, unreadable output; not an error after the run has ended), ticket blocked, without a fix run; an already blocked ticket (the agent called `ask`) keeps its block, without a second message. A `done` returned by a failing run is a failure. Stopped run: nothing. End of a `dev` queue run after the PR is merged: nothing. |
 | `verify.passed` / `verify.failed` | `on_success`, or a new attempt, or a block (see `verify`). After the PR is merged: nothing. |
-| `timer.fired` | A timer set by a decision expires (event `timer:<key>:<due>` written to the inbox). Kind `debounce`: launches the job whose `debounce` delay just expired (and unblocks the ticket). The kinds `clarify.remind`, `clarify.expire` and `usage.reset` exist with no rule for now (ORC-210, ORC-215): nothing. |
+| `timer.fired` | A timer set by a decision expires (event `timer:<key>:<due>` written to the inbox). Kind `debounce`: launches the job whose `debounce` delay just expired (and unblocks the ticket). Kinds `clarify.remind` and `clarify.expire` (ORC-210): at 24 h the open `clarify` questions are asked again, at 72 h the ticket is blocked on `intake`; a round answered or ended since does nothing ([preset](preset.md#clarify-questions-reminder-and-expiry-orc-210)). Kind `usage.reset` without a job: nothing. |
 | `pr.opened` | Records the PR and attaches it to the Linear session. |
 | `control.pause` / `control.resume` / `control.stop` | Pause / resume of the queue, stop of a ticket (UI, `relais pause`, `relais resume`, `relais stop`). |
 
@@ -462,7 +462,7 @@ on:
     - { when: "state in [todo, dev] && !blocked", run: intake }
 ```
 
-Delegation then runs `intake` first: size and risk are recorded, and an incomplete ticket is blocked with its questions instead of starting `dev`. The pickup checks become inputs of that guard ([preset](preset.md#intake-step-and-the-guard-before-in-progress-orc-206)).
+Delegation then runs `intake` first: size and risk are recorded, and an incomplete ticket gets its questions (`clarify`, ORC-210) instead of starting `dev`. The pickup checks become inputs of that guard ([preset](preset.md#intake-step-and-the-guard-before-in-progress-orc-206)).
 
 ## 7. Common errors and validation
 
