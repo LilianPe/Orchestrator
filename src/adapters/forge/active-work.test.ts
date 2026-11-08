@@ -63,13 +63,13 @@ describe('repoBranches (ORC-207)', () => {
       { name: 'main', url: 'https://github.com/acme/app/tree/main' },
       { name: 'feat/x y', url: 'https://github.com/acme/app/tree/feat/x%20y' },
     ]);
-    expect(f.calls[0]!.variables.query).toBeNull();
+    expect(f.calls[0]!.variables.filter).toBeNull();
   });
 
   it('with a prefix, asks the forge to filter and keeps only the names that start with it', async () => {
     const f = forge(() => ({ repository: { url: 'https://github.com/acme/app', refs: conn([{ name: 'factory/rel-1-a' }, { name: 'old/factory/rel-1-b' }]) } }));
     expect((await repoBranches(f.gql, 'acme', 'app', 'factory/rel-1-')).map((b) => b.name)).toEqual(['factory/rel-1-a']);
-    expect(f.calls[0]!.variables.query).toBe('factory/rel-1-');
+    expect(f.calls[0]!.variables.filter).toBe('factory/rel-1-');
   });
 
   it('an answer without its list of branches is unreadable', async () => {

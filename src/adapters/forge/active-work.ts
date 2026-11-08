@@ -13,9 +13,9 @@ export const OPEN_PRS_QUERY = `query($owner: String!, $name: String!, $after: St
 export const PR_FILES_QUERY = `query($id: ID!, $after: String) { node(id: $id) { ... on PullRequest {
   files(first: 100, after: $after) { ${PAGE} nodes { path } } } } }`;
 
-/** The branches of a repository, a page at a time; `query` filters them by name on the forge. */
-export const BRANCHES_QUERY = `query($owner: String!, $name: String!, $after: String, $query: String) {
-  repository(owner: $owner, name: $name) { url refs(refPrefix: "refs/heads/", first: 100, after: $after, query: $query) { ${PAGE} nodes { name } } } }`;
+/** The branches of a repository, a page at a time; `$filter` filters them by name on the forge (named so: `gh api graphql` takes `query` for the document). */
+export const BRANCHES_QUERY = `query($owner: String!, $name: String!, $after: String, $filter: String) {
+  repository(owner: $owner, name: $name) { url refs(refPrefix: "refs/heads/", first: 100, after: $after, query: $filter) { ${PAGE} nodes { name } } } }`;
 
 interface PrNode {
   id: string;
@@ -84,7 +84,7 @@ export async function repoBranches(gql: GraphQl, owner: string, name: string, pr
   const repo = `${owner}/${name}`;
   let web = '';
   const refs = await allNodes<{ name: string }>(`the branches of ${repo}`, async (after) => {
-    const data = await gql(BRANCHES_QUERY, { owner, name, after, query: prefix ?? null }, isBranchesData, 'a GraphQL answer with branches');
+    const data = await gql(BRANCHES_QUERY, { owner, name, after, filter: prefix ?? null }, isBranchesData, 'a GraphQL answer with branches');
     if (!data.repository) throw new Error(`GitHub GraphQL: repository ${repo} not found`);
     web = data.repository.url;
     return data.repository.refs;

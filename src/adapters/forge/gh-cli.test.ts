@@ -222,6 +222,32 @@ describe('GhCliForge', () => {
   });
 });
 
+describe('GhCliForge: open PRs and branches (ORC-207)', () => {
+  it('sends the GraphQL document once as `query`, the branch filter apart, and reads the answer', async () => {
+    const calls: string[][] = [];
+    const forge = new GhCliForge(async (_cmd, args) => {
+      if (args[0] === 'repo') return { stdout: JSON.stringify({ owner: { login: 'me' }, name: 'app' }), stderr: '', code: 0 };
+      calls.push(args);
+      const refs = { nodes: [{ name: 'factory/rel-1-x' }], pageInfo: { hasNextPage: false, endCursor: null } };
+      return { stdout: JSON.stringify({ data: { repository: { url: 'https://github.com/me/app', refs } } }), stderr: '', code: 0 };
+    });
+    expect(await forge.branches('/r', 'factory/rel-1-')).toEqual([{ name: 'factory/rel-1-x', url: 'https://github.com/me/app/tree/factory/rel-1-x' }]);
+    const queries = calls[0]!.filter((a) => a.startsWith('query='));
+    expect(queries).toHaveLength(1);
+    expect(queries[0]).toContain('refs(refPrefix');
+    expect(calls[0]).toContain('filter=factory/rel-1-');
+  });
+
+  it('reads the open PRs with their files through gh api graphql', async () => {
+    const page = (nodes: unknown[]) => ({ nodes, pageInfo: { hasNextPage: false, endCursor: null } });
+    const pr = { id: 'P1', number: 3, url: 'https://github.com/me/app/pull/3', title: 'CSV', headRefName: 'feat/csv', files: page([{ path: 'src/a.ts' }]) };
+    const forge = new GhCliForge(
+      fakeExec({ 'gh repo view': { stdout: JSON.stringify({ owner: { login: 'me' }, name: 'app' }) }, 'gh api graphql': { stdout: JSON.stringify({ data: { repository: { pullRequests: page([pr]) } } }) } }),
+    );
+    expect(await forge.openPrs('/r')).toEqual([{ number: 3, url: 'https://github.com/me/app/pull/3', title: 'CSV', branch: 'feat/csv', files: ['src/a.ts'] }]);
+  });
+});
+
 describe('GhCliForge.repoPermission (ORC-186)', () => {
   it("reads a user's role on the repo through gh api, and throws on any failure, a 404 included", async () => {
     const forge = new GhCliForge(async (_cmd, args) => {
