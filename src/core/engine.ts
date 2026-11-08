@@ -138,10 +138,11 @@ export const CLARIFY_EXPIRE_MS = 72 * 3_600_000;
  * own words, in the session (a comment on the ticket is not read while it waits).
  */
 function askEffect(questions: readonly ClarifyQuestion[], n: number, head = ''): Effect {
-  const q = questions[n]!;
+  const { question, options } = questions[n]!;
   const rank = questions.length > 1 ? `Question ${n + 1}/${questions.length}: ` : '';
-  const body = `${head}${rank}${q.question}\n${q.options.length ? 'Pick an option, or answer here in your own words.' : 'Answer here in your own words.'}`;
-  return { kind: 'activity', type: 'elicitation', body, ...(q.options.length ? { options: q.options } : {}) };
+  const pick = options.length > 0;
+  const body = `${head}${rank}${question}\n${pick ? 'Pick an option, or answer here in your own words.' : 'Answer here in your own words.'}`;
+  return { kind: 'activity', type: 'elicitation', body, ...(pick ? { options } : {}) };
 }
 
 /**
@@ -164,11 +165,11 @@ function clarify(out: Decision, event: FactoryEvent, job: JobSpec, questions: Cl
 type Clarifying = TicketState & { clarify: NonNullable<TicketState['clarify']> };
 
 /**
- * Whether a reply in `sessionId` answers the ticket's `clarify` questions: its own session, while they wait. A question
- * back (`kind: question`) is none: it takes the question path, the questions stay open.
+ * Whether a reply of the ticket's own session answers its `clarify` questions: while they wait. A question back
+ * (`kind: question`) is none: it takes the question path, the questions stay open.
  */
-function answersClarify(ticket: TicketState | undefined, sessionId: string, kind?: MessageKind): ticket is Clarifying {
-  return !!ticket?.clarify && !ticket.blocked && kind !== 'question' && !isQuestionSession(ticket, sessionId);
+function answersClarify(ticket: TicketState | undefined, kind?: MessageKind): ticket is Clarifying {
+  return !!ticket?.clarify && !ticket.blocked && kind !== 'question';
 }
 
 /**
@@ -721,7 +722,7 @@ function classifiedReply(out: Decision, event: FactoryEvent<'session.prompted'>,
   const answerOnly = thread && (kind === 'question' || !ticket?.delegated);
   if (ticket) keepMessage(out, event, answerOnly ? 'thread' : 'session');
   if (kind === 'command') return factoryCommand(out, event, ticket, workflow);
-  if (answersClarify(ticket, event.payload.linearSessionId, kind)) return clarifyAnswer(out, event, ticket, workflow);
+  if (!thread && answersClarify(ticket, kind)) return clarifyAnswer(out, event, ticket, workflow);
   if (answerOnly || (kind === 'question' && !ticket?.blocked)) {
     out.trace.push(`session.prompted: ${kind}, answered`);
     askInThread(out, event, ticket, workflow);
@@ -1655,7 +1656,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       if (!authorize(out, event, ticket, ticket?.blocked ? 'relaunch_blocked' : 'answer_clarify', 'linear_session', matrix)) return out;
       // A reply in the dev session is kept whether a rule matches or not (I6).
       if (ticket) keepMessage(out, event, 'session');
-      if (answersClarify(ticket, event.payload.linearSessionId)) return clarifyAnswer(out, event, ticket, workflow);
+      if (answersClarify(ticket)) return clarifyAnswer(out, event, ticket, workflow);
       break;
     default:
       break;

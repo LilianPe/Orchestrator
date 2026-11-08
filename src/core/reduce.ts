@@ -228,7 +228,10 @@ export function reduce(state: TicketState | undefined, event: FactoryEvent | Int
     return created && external(created, event as FactoryEvent);
   }
   const next = isExternal(event) ? external(state, event) : internal(state, event);
-  if (!(next?.usageWait || next?.clarify) || !movesOn(state, next, event)) return next;
-  // The same events end a wait on `clarify`'s answers (ORC-210): its timers then find nothing to remind or block.
-  return { ...next, ...(next.usageWait ? { usageWait: null } : {}), ...(next.clarify ? { clarify: null } : {}) };
+  const waiting = next && WAITS.filter((w) => next[w]);
+  if (!waiting?.length || !movesOn(state, next!, event)) return next;
+  return { ...next!, ...Object.fromEntries(waiting.map((w) => [w, null])) };
 }
+
+/** The waits `movesOn` ends: the usage limit's (ORC-340) and `clarify`'s answers (ORC-210), whose timers then find nothing to do. */
+const WAITS = ['usageWait', 'clarify'] as const;

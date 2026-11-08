@@ -20,14 +20,8 @@ export interface ClarifyQuestion {
   options: string[];
 }
 
-/** An accepted answer to a `clarify` question (ORC-210), with who gave it: a decision, as an approval is. */
-export interface ClarifyAnswer {
-  question: string;
-  answer: string;
-  author: string;
-  authorId?: string;
-  at: number;
-}
+/** An accepted answer to a `clarify` question (ORC-210), signed as the reply that gave it: a decision, as an approval is. */
+export type ClarifyAnswer = Pick<FeedbackItem, 'author' | 'authorId' | 'at'> & { question: string; answer: string };
 /** The risk of a run, lowest first (ORC-206): the order I4 keeps from going down. */
 export const RISKS = ['low', 'medium', 'high'] as const;
 export type Risk = (typeof RISKS)[number];
