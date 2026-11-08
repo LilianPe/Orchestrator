@@ -153,9 +153,10 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     // The sandboxes' only way out (ORC-213): it applies each run's network level and journals its connections.
     // In a service of its own under compose (ORC-203), in this process otherwise.
     const egressControl = env['FACTORY_EGRESS_CONTROL'];
-    // The Claude account's token, resolved once for the runner and the proxy (ORC-337): the proxy sets it on the
-    // sandboxes' model calls, which hold a placeholder alone; a run on the host gets it in its env.
-    const claudeToken = activeClaudeToken(yml) ?? env['CLAUDE_CODE_OAUTH_TOKEN'];
+    // The chosen account replaces a host run's login (ORC-211). The sandboxes' token, resolved once for the runner
+    // and the proxy (ORC-337): the proxy sets it on their model calls, which hold a placeholder alone.
+    const claudeAccount = activeClaudeToken(yml);
+    const claudeToken = claudeAccount ?? env['CLAUDE_CODE_OAUTH_TOKEN'];
     const claudeTokenOf = () => claudeToken;
     const egress: Egress = egressControl ? new EgressClient(egressControl, { log, claudeToken: claudeTokenOf }) : new EgressProxy({
       dir: paths.network,
@@ -172,7 +173,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     if (sandboxes && !claudeToken) log('Warning: no Claude token (claude.active in factory.yml, or CLAUDE_CODE_OAUTH_TOKEN): sandboxed runs will not be able to authenticate.');
     const runner: Runner = o.fakeRunner
       ? Object.assign(new FakeRunner(), { submit: (runId: string, output: AgentOutput) => saveAgentOutput(store, runId, output) })
-      : new ClaudeCodeRunner({ transcriptsDir: paths.transcripts, secrets: daemonSecrets, claudeToken: claudeTokenOf, log, ...(sandboxes ? { sandboxes } : {}) });
+      : new ClaudeCodeRunner({ transcriptsDir: paths.transcripts, secrets: daemonSecrets, claudeToken: () => claudeAccount, sandboxClaudeToken: claudeTokenOf, log, ...(sandboxes ? { sandboxes } : {}) });
     const workspaces = new GitWorkspaces({ root: paths.workspaces, knowledgeRepo: instance.knowledge?.repoPath, log });
     const forge = githubApp
       ? new GitHubAppForge({ ...githubApp, log })

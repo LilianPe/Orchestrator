@@ -8,7 +8,7 @@ import { dirname, join } from 'node:path';
 import { pipeline, type Duplex } from 'node:stream';
 import { TLSSocket } from 'node:tls';
 import { LeafIssuer, loadOrCreateCa, type FactoryCa } from './ca.js';
-import { allowConnect, allowRequest, CLAUDE_API, CLAUDE_BETAS, CLAUDE_BODY_MAX, claudeBodyVerdict, norm, type EgressPolicy, type Verdict } from './levels.js';
+import { allowConnect, allowRequest, CLAUDE_API, CLAUDE_BETAS, CLAUDE_BODY_MAX, CLAUDE_READS_MAX, CLAUDE_READS_PER_RUN, claudeBody, norm, type EgressPolicy, type Verdict } from './levels.js';
 
 /** One line of a run's egress journal: every request, allowed or refused (ORC-213). */
 export interface EgressEntry {
@@ -45,6 +45,10 @@ interface Run {
   policy: EgressPolicy;
   /** Set on its requests to the Claude API in place of the client's (ORC-337): the sandbox never holds it. */
   claudeToken: string | undefined;
+  /** Its model calls being read (ORC-337), against `CLAUDE_READS_PER_RUN`. */
+  reading: number;
+  /** The `anthropic-beta` values dropped already: each is journaled once. */
+  droppedBetas: Set<string>;
   /** Listening once it resolves; a concurrent open waits on it. */
   ready: Promise<void>;
   /** The run's socket: HTTP proxy protocol. */
@@ -122,6 +126,8 @@ export class EgressProxy {
   /** The CA and its leaves, made at the first open. */
   private tlsReady?: Promise<void>;
   private tls?: { ca: FactoryCa; issuer: LeafIssuer };
+  /** Model calls being read, all runs together (ORC-337), against `CLAUDE_READS_MAX`. */
+  private reading = 0;
   /** The agent API's name in the sandbox, normalised as every CONNECT host is. */
   private readonly agentHost?: string;
 
@@ -171,12 +177,14 @@ export class EgressProxy {
         throw new Error(`egress: run ${runId} is open at ${existing.policy.level} [${existing.policy.allow.join(', ')}], asked ${policy.level} [${policy.allow.join(', ')}]`);
       }
       await existing.ready;
+      // A daemon restarted with another account: the next model calls get it (ORC-337).
+      existing.claudeToken = claudeToken;
       return path;
     }
     mkdirSync(this.o.dir, { recursive: true, mode: 0o700 });
     const journal = createWriteStream(journalPath, { flags: 'a' });
     journal.on('error', (err) => this.o.log?.(`egress: journal of ${runId} not written: ${err.message}`));
-    const run: Run = { policy, claudeToken, ready: Promise.resolve(), server: createServer(), mitm: createServer(), sockets: new Set(), journal, inflight: 0, closed: false };
+    const run: Run = { policy, claudeToken, reading: 0, droppedBetas: new Set(), ready: Promise.resolve(), server: createServer(), mitm: createServer(), sockets: new Set(), journal, inflight: 0, closed: false };
     this.runs.set(runId, run);
     run.ready = this.listen(run, path).catch((err: unknown) => {
       this.runs.delete(runId);
@@ -255,15 +263,26 @@ export class EgressProxy {
     run.journal.write(`${JSON.stringify({ at: new Date().toISOString(), up: 0, down: 0, ...e })}\n`);
   }
 
+  /** Something of the run under way: close() waits for its release (idempotent). */
+  private hold(run: Run): () => void {
+    run.inflight++;
+    let held = true;
+    return () => {
+      if (!held) return;
+      held = false;
+      if (--run.inflight === 0) run.drained?.();
+    };
+  }
+
   /** One request or tunnel under way: its `done` journals it once, and lets close() finish. */
   private track(run: Run, entry: (failure?: string) => Omit<EgressEntry, 'at'>): (failure?: string) => void {
-    run.inflight++;
+    const release = this.hold(run);
     let done = false;
     return (failure) => {
       if (done) return;
       done = true;
       this.journal(run, entry(failure));
-      if (--run.inflight === 0) run.drained?.();
+      release();
     };
   }
 
@@ -333,7 +352,7 @@ export class EgressProxy {
     const v = check(t.host, allowRequest(run.policy, t.host, method, path));
     if (!v.ok) return this.refuse(run, res, method, t.host, path, v.reason);
     this.readClaudeBody(run, req, res, method, t.host, path, (body) => {
-      const out = httpsRequest({ ...this.tlsTo(t.host, t.port), method, path, headers: { ...upstreamHeaders(run, t.host, req, body), host: authority(t.host, t.port, 443) } });
+      const out = httpsRequest({ ...this.tlsTo(t.host, t.port), method, path, headers: { ...this.upstreamHeaders(run, t.host, req, method, path, body), host: authority(t.host, t.port, 443) } });
       this.relay(run, req, res, out, method, t.host, path, body);
     });
   }
@@ -359,7 +378,7 @@ export class EgressProxy {
     if (!v.ok) return this.refuse(run, res, method, host, path, v.reason);
     this.readClaudeBody(run, req, res, method, host, path, (body) => {
       // Below full the port is 80 (checked above), so the Host is the bare host either way.
-      const opts = { method, path, headers: { ...upstreamHeaders(run, host, req, body), host: authority(host, port, 80) } };
+      const opts = { method, path, headers: { ...this.upstreamHeaders(run, host, req, method, path, body), host: authority(host, port, 80) } };
       let out: ClientRequest;
       if (agent) out = httpRequest({ ...opts, ...agent });
       else if (run.policy.level === 'full') out = httpRequest({ ...opts, host, port, lookup: publicLookup });
@@ -375,34 +394,78 @@ export class EgressProxy {
   }
 
   /**
-   * A model call (a POST to the Claude API below `full`) is read whole, up to the API's own cap, and its body checked
-   * before it goes on with the factory's token (ORC-337): no server tool, no MCP server. Any other request streams.
+   * A model call (a POST to the Claude API below `full`) is read whole, up to `CLAUDE_BODY_MAX`, and checked before
+   * it goes on with the factory's token (ORC-337); what goes on is the call as checked (`claudeBody`). Counted in
+   * flight while it is read; a client gone before its end is journaled. Any other request streams.
    */
   private readClaudeBody(run: Run, req: IncomingMessage, res: ServerResponse, method: string, host: string, path: string, send: (body?: Buffer) => void): void {
-    if (run.policy.level === 'full' || !CLAUDE_API.includes(host) || method !== 'POST') return send();
+    if (!isModelApi(run, host) || method !== 'POST') return send();
+    const refuse = (reason: string, status?: number) => this.refuse(run, res, method, host, path, reason, status);
     const encoding = req.headers['content-encoding'];
-    if (encoding !== undefined && encoding !== 'identity') return this.refuse(run, res, method, host, path, `Claude API body refused: content-encoding ${encoding}`);
+    if (encoding !== undefined && encoding !== 'identity') return refuse(`Claude API body refused: content-encoding ${encoding}`);
     const tooBig = `Claude API body refused: over ${CLAUDE_BODY_MAX} bytes`;
-    if (Number(req.headers['content-length'] ?? 0) > CLAUDE_BODY_MAX) return this.refuse(run, res, method, host, path, tooBig, 413);
+    // Answered, then cut: the rest of the body is not read.
+    const cut = () => res.once('finish', () => req.socket.destroy());
+    if (Number(req.headers['content-length'] ?? 0) > CLAUDE_BODY_MAX) return void (refuse(tooBig, 413), cut());
+    if (run.reading >= CLAUDE_READS_PER_RUN || this.reading >= CLAUDE_READS_MAX) return void (refuse('Claude API: too many model calls read at once', 429), cut());
+    run.reading++;
+    this.reading++;
+    const release = this.hold(run);
+    let settled = false;
+    /** Once: the read is over, whichever way. */
+    const settle = () => {
+      if (settled) return false;
+      settled = true;
+      run.reading--;
+      this.reading--;
+      release();
+      return true;
+    };
     const chunks: Buffer[] = [];
     let size = 0;
-    let over = false;
     req.on('data', (c: Buffer) => {
-      if (over) return;
+      if (settled) return;
       size += c.length;
       if (size <= CLAUDE_BODY_MAX) return void chunks.push(c);
-      over = true;
+      settle();
       chunks.length = 0;
-      this.refuse(run, res, method, host, path, tooBig, 413);
-      res.once('finish', () => req.destroy());
+      refuse(tooBig, 413);
+      cut();
     });
     req.on('end', () => {
-      if (over) return;
-      const body = Buffer.concat(chunks);
-      const v = claudeBodyVerdict(body);
-      if (!v.ok) return this.refuse(run, res, method, host, path, v.reason);
-      send(body);
+      if (!settle()) return;
+      const checked = claudeBody(Buffer.concat(chunks));
+      if (!checked.ok) return refuse(checked.reason);
+      send(checked.body);
     });
+    const aborted = () => {
+      if (settle()) this.journal(run, { method, host, path: pathOf(path), ok: false, reason: 'client gone while sending the body', up: size });
+    };
+    req.on('error', aborted).on('close', aborted);
+  }
+
+  /**
+   * What goes upstream of the request's headers. To the Claude API below `full` (ORC-337): never the client's
+   * credentials, the run's token in their place, or none; only the betas Claude Code sends, each other one journaled
+   * once per run; the length of a body read whole. At `full` (a setup, which runs no agent) nothing is changed.
+   */
+  private upstreamHeaders(run: Run, host: string, req: IncomingMessage, method: string, path: string, body: Buffer | undefined): Record<string, string | string[] | undefined> {
+    const h = hopless(req);
+    if (!isModelApi(run, host)) return h;
+    delete h['authorization'];
+    delete h['x-api-key'];
+    const sent = String(h['anthropic-beta'] ?? '').split(',').map((b) => b.trim()).filter(Boolean);
+    delete h['anthropic-beta'];
+    for (const b of sent.filter((b) => !CLAUDE_BETAS.has(b) && !run.droppedBetas.has(b))) {
+      run.droppedBetas.add(b);
+      this.journal(run, { method, host, path: pathOf(path), ok: false, reason: `anthropic-beta ${b} dropped, the request went on without it` });
+    }
+    const betas = sent.filter((b) => CLAUDE_BETAS.has(b));
+    if (body) {
+      delete h['transfer-encoding'];
+      h['content-length'] = String(body.length);
+    }
+    return { ...h, ...(betas.length ? { 'anthropic-beta': betas.join(',') } : {}), ...(run.claudeToken ? { authorization: `Bearer ${run.claudeToken}` } : {}) };
   }
 
   private refuse(run: Run, res: ServerResponse, method: string, host: string, path: string, reason: string, status = 403): void {
@@ -460,23 +523,9 @@ function hopless(req: IncomingMessage): Record<string, string | string[] | undef
   return h;
 }
 
-/**
- * What goes upstream of the request's headers. To the Claude API below `full` (ORC-337): never the client's
- * credentials, the run's token in their place, or none; only the betas Claude Code sends; the length of a body
- * read whole. At `full` (a setup, which runs no agent) nothing is changed.
- */
-function upstreamHeaders(run: Run, host: string, req: IncomingMessage, body: Buffer | undefined): Record<string, string | string[] | undefined> {
-  const h = hopless(req);
-  if (run.policy.level === 'full' || !CLAUDE_API.includes(host)) return h;
-  delete h['authorization'];
-  delete h['x-api-key'];
-  const betas = String(h['anthropic-beta'] ?? '').split(',').map((b) => b.trim()).filter((b) => CLAUDE_BETAS.has(b));
-  delete h['anthropic-beta'];
-  if (body) {
-    delete h['transfer-encoding'];
-    h['content-length'] = String(body.length);
-  }
-  return { ...h, ...(betas.length ? { 'anthropic-beta': betas.join(',') } : {}), ...(run.claudeToken ? { authorization: `Bearer ${run.claudeToken}` } : {}) };
+/** The Claude API, below `full`: where the proxy signs the requests with the run's token and reads them (ORC-337). */
+function isModelApi(run: Run, host: string): boolean {
+  return run.policy.level !== 'full' && CLAUDE_API.includes(host);
 }
 
 /** `host[:port]` as a Host header, the default port left out. */
