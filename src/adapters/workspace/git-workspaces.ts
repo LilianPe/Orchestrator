@@ -13,11 +13,16 @@ function assertSafe(id: string): void {
 }
 
 /**
- * What the agent's repository does not take of the repository's own config, which the agent read before and which no
- * agent writes: what describes that repository's layout, or names a host's path for hooks. The rest stays as it was for
- * a run: identity, remotes, credentials, filters, line endings.
+ * What the agent's repository takes of the repository's own config, and nothing else (ORC-341): its identity and line
+ * endings for a commit, Git LFS's filter, its remotes' URLs and what they fetch, each value without the credentials of a
+ * URL (`withoutUserinfo`).
+ * Left out, whatever its key: what reaches the forge with a credential (an extraheader, `credential.*`, a push URL, an
+ * `insteadOf` that names a token), runs a command of the host's (`core.sshCommand`, a hooks path), or describes the
+ * repository's layout. The agent has no token (ORC-125): the factory alone pushes, with its own.
  */
-const NOT_INHERITED = /^(core\.(bare|repositoryformatversion|worktree|hookspath|fsmonitor|sparsecheckout|sparsecheckoutcone)$|extensions\.)/i;
+const INHERITED = /^(user\.(name|email)|core\.(autocrlf|eol)|filter\.lfs\.(clean|smudge|process|required)|remote\..+\.(url|fetch))$/i;
+/** What the checkout that makes it (`agentRepository`) never takes of that config either: the layout of that repository, or a host's path for its hooks. */
+const LAYOUT = /^(core\.(bare|repositoryformatversion|worktree|hookspath|fsmonitor|sparsecheckout|sparsecheckoutcone)$|extensions\.)/i;
 const SHA = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
 /** Git's own rules on a ref's name (`git check-ref-format`), as a name out of them cannot be its branch. Never `..`: it becomes a path. */
 const BRANCH_REF = /^refs\/heads\/(?!-|\.)(?!.*(\.\.|@\{|\/\.|\/\/|\.lock(\/|$)))[^\s\p{Cc}~^:?*[\\]+$/u;
@@ -64,6 +69,18 @@ function agentHead(work: string): { branch: string; sha?: string } | undefined {
   if (loose && SHA.test(loose)) return { branch, sha: loose };
   const packed = agentFile(gitDir, 'packed-refs')?.split('\n').find((l) => l.endsWith(` ${ref}`))?.split(' ')[0];
   return packed && SHA.test(packed) ? { branch, sha: packed } : { branch };
+}
+
+/**
+ * A remote's URL without what authenticates it: `https://x-access-token:…@`, or a token as the user, a transport's
+ * (`<helper>::<url>`) included. Over ssh the user stays, as the server's login, never its password. An scp-like
+ * `git@host:path` or a path has none.
+ */
+export function withoutUserinfo(url: string): string {
+  return url.replace(/(^|::)([a-z][a-z0-9+.-]*:\/\/)([^/?#]*)@/i, (_, at: string, scheme: string, userinfo: string) => {
+    const user = /^(git\+)?ssh(\+git)?:/i.test(scheme) ? userinfo.split(':')[0] : '';
+    return `${at}${scheme}${user ? `${user}@` : ''}`;
+  });
 }
 
 /** The paths of `git status --porcelain -z`, a rename's or copy's both sides included (ORC-123). */
@@ -189,20 +206,28 @@ export class GitWorkspaces implements WorkspaceManager {
     await rm(making, { recursive: true, force: true });
     mkdirSync(dirname(path), { recursive: true });
     // Nothing of an agent has run in it: the checkout runs no hook, as `--template=` left none, and reads the daemon's own config.
-    const here = (...args: string[]) => mustExec(this.exec, 'git', [...HARDENING.flatMap((c) => ['-c', c]), ...args]);
+    const here = (args: string[], env?: Record<string, string>) => mustExec(this.exec, 'git', [...HARDENING.flatMap((c) => ['-c', c]), ...args], { env });
     try {
-      await here('init', '--quiet', '--template=', making);
-      const config = (await this.git(repo, 'config', '--local', '-z', '--list')).split('\0').filter(Boolean);
-      for (const entry of config) {
+      await here(['init', '--quiet', '--template=', making]);
+      // A key without a value is a boolean's true: `-z --list` gives it without the newline.
+      const config = zFields(await this.git(repo, 'config', '--local', '-z', '--list')).map((entry): [string, string] => {
         const at = entry.indexOf('\n');
-        if (at < 0 || NOT_INHERITED.test(entry.slice(0, at))) continue;
-        await here('-C', making, 'config', '--add', entry.slice(0, at), entry.slice(at + 1));
-      }
+        return at < 0 ? [entry, 'true'] : [entry.slice(0, at), entry.slice(at + 1)];
+      });
+      // Every value: a URL is never inherited with its credentials, whatever key the list admits next.
+      for (const [key, value] of config) if (INHERITED.test(key)) await here(['-C', making, 'config', '--add', key, withoutUserinfo(value)]);
+      // The checkout's LFS filter reaches the forge as the repository does, its credentials included: in the env of that
+      // checkout alone, never on a command line nor in the agent's config.
+      const forHost = config.filter(([key]) => !LAYOUT.test(key));
+      const asRepo = Object.fromEntries([
+        ['GIT_CONFIG_COUNT', String(forHost.length)],
+        ...forHost.flatMap(([key, value], i) => [[`GIT_CONFIG_KEY_${i}`, key], [`GIT_CONFIG_VALUE_${i}`, value]]),
+      ]);
       // Resolved: it is read from `making`, and `repoPath` can be relative.
-      await here('-C', making, 'fetch', '--quiet', '--no-tags', '--', resolve(repo), '+refs/remotes/origin/*:refs/remotes/origin/*', '+refs/tags/*:refs/tags/*', ...(localRef ? [`+${localRef}:${localRef}`] : []));
-      await here('-C', making, 'symbolic-ref', 'refs/remotes/origin/HEAD', trunk);
-      await here('-C', making, 'checkout', '--quiet', ...checkout);
-      await here('-C', making, 'sparse-checkout', 'set', '--no-cone', '/*', '!/.claude/*', '/.claude/CLAUDE.md');
+      await here(['-C', making, 'fetch', '--quiet', '--no-tags', '--', resolve(repo), '+refs/remotes/origin/*:refs/remotes/origin/*', '+refs/tags/*:refs/tags/*', ...(localRef ? [`+${localRef}:${localRef}`] : [])]);
+      await here(['-C', making, 'symbolic-ref', 'refs/remotes/origin/HEAD', trunk]);
+      await here(['-C', making, 'checkout', '--quiet', ...checkout], asRepo);
+      await here(['-C', making, 'sparse-checkout', 'set', '--no-cone', '/*', '!/.claude/*', '/.claude/CLAUDE.md'], asRepo);
       renameSync(making, path);
     } catch (err) {
       await rm(making, { recursive: true, force: true });

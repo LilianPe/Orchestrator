@@ -1,7 +1,7 @@
 import type { Parameters } from 'fast-check';
 import type { JobSpec, Workflow } from '../../src/config/workflow-schema.js';
 import type { Decision, Effect } from '../../src/core/decision.js';
-import { decide, refusesDevWork, sensitivePathsAtLaunch } from '../../src/core/engine.js';
+import { decide, historyTaint, refusesDevWork, sensitivePathsAtLaunch } from '../../src/core/engine.js';
 import { carriedAtLaunch } from '../../src/core/human-message.js';
 import { SETTLES_RUN } from '../../src/core/decision-plan.js';
 import { effectiveEvent } from '../../src/core/dead-letter.js';
@@ -114,18 +114,29 @@ function refusesStart(state: TicketState, job: JobSpec): boolean {
   return !!refusesDevWork(state, job) || (job.queue === 'dev' && state.blocked);
 }
 
+/** A knowledge job, whatever its input: it can read the ticket and its PR, so the ticket's whole history (ORC-349). */
+export function readsHistory(start: StartRun, wf: Workflow): boolean {
+  return wf.jobs[start.job]?.workspace === 'knowledge';
+}
+
 /**
  * The run `Orchestrator.launch` hands the runner for a start: with the sensitive paths of the human inbox it empties
  * now, the feedback it reads (I12, ORC-274) or what its step boundary carries for the agent that implements (ORC-180).
- * The forge's review comments, untrusted too, are not modelled: no PR has any.
+ * A knowledge job is refused (undefined) when what it reads is untrusted: that feedback, or the ticket's history once
+ * its journal holds untrusted content (ORC-349). The forge's review comments, untrusted too, are not modelled: no PR has
+ * any; nor is the branch's mark (`untrustedSince`, ORC-338), which the generator's `run.started` never sets.
  */
-function launch(start: StartRun, state: TicketState, wf: Workflow): StartRun {
+function launch(start: StartRun, state: TicketState, wf: Workflow, journal: readonly (FactoryEvent | InternalEvent)[]): StartRun | undefined {
   const job = wf.jobs[start.job];
   const implementer = job?.queue === 'dev' && (start.resume ?? (job.session === 'resume' || job.pickup));
   const consumes = readsFeedback(start, wf) || (implementer && carriedAtLaunch(state.humanInbox).length > 0);
   const sensitivePaths = sensitivePathsAtLaunch(start.sensitivePaths, consumes ? state.humanInbox : []);
+  if (readsHistory(start, wf) && (sensitivePaths || historyTaint(journal.filter(isFactoryEvent)) === 'untrusted')) return undefined;
   return deepFreeze(sensitivePaths ? { ...start, sensitivePaths } : start);
 }
+
+/** An event of the journal from outside, not one `decide` or the shell wrote: only these carry a taint. */
+export const isFactoryEvent = (e: FactoryEvent | InternalEvent): e is FactoryEvent => 'taint' in e;
 
 /**
  * The step of ORC-138: a duplicate id is dropped by the inbox, otherwise `decide` runs and `reduce`
@@ -189,7 +200,8 @@ export function fold(entries: readonly Entry[], wf: Workflow, inbox: Inbox = mem
         record({ type: 'pending.set', job: { job: e.job, input: e.input, inputText: e.inputText, resume: e.resume, sensitivePaths: e.sensitivePaths } });
         continue;
       }
-      launches.push(launch(e, state, wf));
+      const started = launch(e, state, wf, journal);
+      if (started) launches.push(started);
       if (dev) launched = true;
     }
     // `settle`: once nothing is in flight, the pending job starts, unless startRun refuses it.
@@ -199,7 +211,8 @@ export function fold(entries: readonly Entry[], wf: Workflow, inbox: Inbox = mem
     record({ type: 'pending.cleared' });
     const job = wf.jobs[pending.job];
     if (!job || refusesStart(state, job)) continue;
-    const start = launch({ kind: 'start_run', ...pending }, state, wf);
+    const start = launch({ kind: 'start_run', ...pending }, state, wf, journal);
+    if (!start) continue;
     steps.push({ kind: 'settled', event, before: settledFrom, after: state, start, journalEnd: journal.length });
   }
   return { steps, journal, final: state };

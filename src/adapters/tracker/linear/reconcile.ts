@@ -149,7 +149,7 @@ async function reconcileProject(d: ReconcileDeps, p: ProjectRuntime, team: strin
       // A read error (network, Linear down) says nothing of the ticket: left as it is this pass.
       if (!(err instanceof IssueNotFoundError)) continue;
     }
-    // Still delegated and open: past the list's first page, nothing to catch up.
+    // Still delegated and open: nothing to catch up.
     if (issue?.delegateId && issue.stateType !== 'completed' && issue.stateType !== 'canceled') continue;
     if (issue?.stateType === 'completed') await catchUpMove(d, emit, p, t, issue.stateName, at);
     // A cancel stops the work of a delegated ticket itself (ORC-170); `decide` stops nothing on another.

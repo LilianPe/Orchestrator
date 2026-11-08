@@ -62,7 +62,7 @@ It runs under these settings, set through the environment:
 | -- | -- | -- |
 | No install scripts | `npm_config_ignore_scripts`, `YARN_ENABLE_SCRIPTS`, and a `~/.yarnrc` for Yarn 1 | npm, pnpm and Yarn run no `postinstall`. An explicit command (`npm run db:migrate`) still runs. A native build at install time therefore does not happen. |
 | Binary wheels | `PIP_ONLY_BINARY=:all:`, `UV_NO_BUILD=1` | No source package built at install time. uv still builds the project itself; pip refuses a package without a wheel. |
-| Minimum age: 7 days | `npm_config_minimum_release_age`, `npm_config_before`, `UV_EXCLUDE_NEWER` | A version published less than 7 days ago is refused at resolution. A respected lockfile (`npm ci`, `uv sync --frozen`) keeps its versions. `uv sync --locked` fails on a lockfile made without this cap: use `--frozen`. |
+| Minimum age: 7 days | `npm_config_minimum_release_age`, `npm_config_before`, `UV_EXCLUDE_NEWER` | A version published less than 7 days ago is refused at resolution. A respected lockfile (`npm ci`, `uv sync --frozen`) keeps its versions. `uv sync --locked` fails on a lockfile made without this cap, and a plain `uv sync` rewrites `uv.lock` (it resolves again under the cap and records its date in `[options]`, a change the agent would find in its worktree): use `--frozen` (measured with uv 0.13.7, ORC-311). |
 
 A repository command can override them (`--ignore-scripts=false`): these settings protect against a dependency, not against the repository itself.
 
