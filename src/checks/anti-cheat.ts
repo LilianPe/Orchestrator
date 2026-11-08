@@ -73,12 +73,12 @@ const RULES: Rule[] = [
   // A checker directive only acts at the start of a comment. All three TypeScript ones silence the type checker.
   { form: 'bypass', langs: ['js', 'other'], keep: 'comment', pattern: /(?<=(?:\/\/|\/\*|^\s*\*)\s*)eslint-disable\b/ },
   { form: 'bypass', langs: ['js', 'other'], keep: 'comment', pattern: /(?<=(?:\/\/|\/\*|^\s*\*)[\s/*]*)@ts-(?:ignore|nocheck|expect-error)\b/ },
-  { form: 'bypass', langs: ['py'], keep: 'comment', pattern: /#\s*(?:type|pyright):\s*ignore\b/ },
+  { form: 'bypass', langs: ['py'], keep: 'comment', pattern: /#\s*type:\s*ignore\b/ },
   // The file-level ones: `# ruff: noqa`, `# flake8: noqa`; mypy's flags (`_` or `-`, several on a line) that drop its
-  // errors; pyright's `basic` mode and its rules turned off.
+  // errors; pyright's `ignore`, its `basic` mode and its rules turned off.
   { form: 'bypass', langs: ['py'], keep: 'comment', pattern: /#\s*(?:(?:ruff|flake8)\s*:\s*)?noqa\b/i },
   { form: 'bypass', langs: ['py'], keep: 'comment', pattern: /#\s*mypy\s*:.*?\b(?:ignore[-_]errors|disable[-_]error[-_]code)\b/ },
-  { form: 'bypass', langs: ['py'], keep: 'comment', pattern: /#\s*pyright\s*:\s*(?:basic\b|report\w+\s*=\s*(?:false|none)\b)/ },
+  { form: 'bypass', langs: ['py'], keep: 'comment', pattern: /#\s*pyright\s*:\s*(?:ignore\b|basic\b|report\w+\s*=\s*(?:false|none)\b)/ },
   // Emptied assertions: an assertion on a constant, true whatever the code does.
   { form: 'bypass', langs: ['js'], pattern: /\bexpect\s*\(\s*(?:true|false|null|undefined|-?\d+(?:\.\d+)?|'[^']*'|"[^"]*"|`[^`$]*`)\s*\)/ },
   { form: 'bypass', langs: ['js'], pattern: /(?<![\w.$])assert(?:\.ok)?\s*\(\s*(?:true|1|!0)\s*[,)]/ },
