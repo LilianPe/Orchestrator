@@ -11,7 +11,7 @@ import { LABELS } from '../../test/helpers/store-suite.js';
 import { pendingLabels } from '../core/attempt-labels.js';
 import { agentOnly, createApp } from './app.js';
 
-async function setup(extra: { uiPassword?: string; usageLimitedUntil?: () => Promise<number | undefined> } = {}) {
+async function setup(extra: { uiPassword?: string; usageLimitedUntil?: () => Promise<number | undefined>; perTicketTokens?: number } = {}) {
   const store = new SqliteStore(':memory:');
   const bus = new EventBus();
   const tracker = new FakeTracker();
