@@ -93,7 +93,7 @@ The defaults of `verify_attempts` and `ci_fix_attempts` come from the [`factory/
 `per_run` is the default limit for **all** jobs; each job can replace it field by field with its own `limits`.
 
 What happens when a run hits a limit (`limit`) or fails?
-- Job in the `dev` queue: the ticket is **blocked** and Relais says so in the ticket's block comment (« The run <job> reached a limit (turns, duration or budget). », or « … failed. »). A reply in the ticket relaunches that job, or `dev-feedback` if the block has none (the pack's `session.prompted` rule).
+- Job in the `dev` queue: the ticket is **blocked** and Relais says so in the ticket's block comment (« The run <job> reached a limit (turns, duration or budget). », or « … failed. »; an attempt stopped at its token or turn cap says « The run <job> spent its token budget … » or « … its turn budget (max_turns of its step). », kind `budget`, ORC-216). A reply in the ticket relaunches that job, or `dev-feedback` if the block has none (the pack's `session.prompted` rule).
 - Job in the `questions` queue: Relais replies « I could not finish (failure or limit reached). ».
 
 What happens when CI stays red (`ci_fix_attempts`)?
