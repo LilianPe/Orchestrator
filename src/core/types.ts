@@ -140,14 +140,14 @@ export interface EffectResultPayload {
  *   `inbox`: armed by a classified message (ORC-180): it starts nothing while work is in flight, the messages wait for its end.
  * - `clarify.remind` / `clarify.expire`: the reminder of a `clarify` question at 24 h, then the block at
  *   72 h, in the question's session; the rules that arm and decide them are ORC-210's.
- * - `usage.reset`: the reset of a subscription's usage limit, after which the waiting runs resume; the
- *   rule is ORC-215's.
+ * - `usage.reset`: the reset of a subscription's usage limit, armed by a `run.finished` the limit stopped
+ *   (`on_usage_limit: wait`, ORC-340): `job` starts again then, on the ticket's session.
  */
 export interface TimerPayloads {
   debounce: { job: string; inbox?: true };
   'clarify.remind': { linearSessionId?: string };
   'clarify.expire': { linearSessionId?: string };
-  'usage.reset': { account?: string };
+  'usage.reset': { account?: string; job?: string; runId?: string };
   /** The project's reconciliation (ORC-185), every 5 minutes, on its own pseudo-ticket (`reconcileTicket(project)`). */
   reconcile: Record<string, never>;
 }
@@ -249,7 +249,19 @@ export interface EventPayloads {
    * what `submit_result` recorded (`output`, when valid). Optional: no version bump, rows written before
    * it lack both and decide on `outcome` as before. `stagnation` (ORC-136): optional likewise, absent on rows written before it.
    */
-  'run.finished': { runId: string; job: string; outcome: RunOutcome; costUsd: number; turns: number; lastText: string; attempt?: AttemptOutcome; output?: AgentOutput; stagnation?: Stagnation };
+  'run.finished': {
+    runId: string;
+    job: string;
+    outcome: RunOutcome;
+    costUsd: number;
+    turns: number;
+    lastText: string;
+    attempt?: AttemptOutcome;
+    output?: AgentOutput;
+    stagnation?: Stagnation;
+    /** The usage limit of `account` stopped it and the factory waits on it (`on_usage_limit: wait`, ORC-340): resumed at `resetAt`. */
+    usageLimit?: { resetAt: number; account?: string };
+  };
   /**
    * `red`: the cause of the `red` check's verdict (ORC-123), for a job checked by it instead of `verify`. `frozen`: the
    * freeze read with it (ORC-131), on both verdicts, recorded once the run goes on to the build. `sha`: the commit it
@@ -346,7 +358,7 @@ export type DecidedEvent =
   | { type: 'ticket.unblocked' }
   | {
       type: 'ticket.patched';
-      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'verifiedSha' | 'awaitingRepo' | 'owedMove'>>;
+      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'verifiedSha' | 'awaitingRepo' | 'owedMove' | 'usageWait' | 'usageRelaunches' | 'usageAsks'>>;
     }
   | { type: 'feedback.appended'; item: FeedbackItem }
   /** The ticket's dev work is stopped: nothing pending, no verification awaited. */
@@ -451,6 +463,15 @@ export interface TicketState {
    * at the last one (ORC-220). Only a human relaunch empties it. Absent until the first: journals from before it replay as they were.
    */
   cutRelaunches?: number[];
+  /**
+   * The step the usage limit cut, waiting for its reset (`on_usage_limit: wait`, ORC-340): the `usage.reset` timer resumes it only
+   * while this still names its run. Whatever moves the ticket on ends the wait (`reduce`): `null` then. Absent on a ticket that never waited.
+   */
+  usageWait?: { runId: string; job: string; logical: LogicalState } | null;
+  /** Relaunches at a usage reset of `job` in a row (ORC-340), bounded by `USAGE_RELAUNCHES`; `null` once a run of the step ends without the limit. */
+  usageRelaunches?: { job: string; count: number } | null;
+  /** Questions asked again at a usage reset in a row (ORC-340), bounded like `usageRelaunches`; `null` once one ends without the limit. */
+  usageAsks?: number | null;
   /**
    * Signed actor of the last authorized delegation (ORC-186): the run's initiator, who never validates
    * its spec, and its requester, who may answer it.

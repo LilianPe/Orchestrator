@@ -104,6 +104,48 @@ export function childEnv(base: NodeJS.ProcessEnv, run: Record<string, string>, t
  */
 export const liveDir = (transcriptsDir: string): string => join(transcriptsDir, 'live');
 
+/**
+ * Anthropic's list prices in dollars per million tokens, by model family: those of the models the pack runs (Claude Opus 5.5,
+ * Sonnet 5.5, Haiku 5.5; price list of 2026-10). Cache reads are as listed, not a fixed share (Opus 5.5's are 5% of its input);
+ * a cache write is 1.25 times the input. What a run cut before its result line cost (ORC-340): the CLI reports its cost on that line only.
+ * ponytail: one generation's prices; update them with the price list. A model of no known family is priced as the dearest (Fable 5.1).
+ */
+const PRICES: [RegExp, { input: number; output: number; cacheRead: number }][] = [
+  [/haiku/, { input: 0.1, output: 0.5, cacheRead: 0.01 }],
+  [/sonnet/, { input: 2, output: 10, cacheRead: 0.2 }],
+  [/opus/, { input: 4, output: 20, cacheRead: 0.2 }],
+];
+const DEAREST = { input: 10, output: 50, cacheRead: 0.25 };
+
+/** An estimate of what `tokens` cost on `model`, for a run that ended without a result line to say it. */
+export function estimateCostUsd(model: string | undefined, t: TokenUsage): number {
+  const p = PRICES.find(([family]) => family.test(model ?? ''))?.[1] ?? DEAREST;
+  return (t.input * p.input + t.cacheCreation * p.input * 1.25 + t.cacheRead * p.cacheRead + t.output * p.output) / 1_000_000;
+}
+
+const maxTokens = (a: TokenUsage, b: TokenUsage): TokenUsage => ({
+  input: Math.max(a.input, b.input),
+  output: Math.max(a.output, b.output),
+  cacheRead: Math.max(a.cacheRead, b.cacheRead),
+  cacheCreation: Math.max(a.cacheCreation, b.cacheCreation),
+});
+
+/** The CLI's result when the subscription's limit stops it, its reset in epoch seconds after the bar. Anchored: no other error text that names a limit. */
+const USAGE_LIMIT_RESULT = /^Claude AI usage limit reached\|(\d{9,})$/;
+
+/**
+ * The subscription's usage limit (ORC-340), as the CLI says it: a `rate_limit_event` rejected, or the result `USAGE_LIMIT_RESULT`.
+ * `resetAt` in ms, when it tells it. Undefined for any other line.
+ */
+function usageLimitOf(raw: { type?: string; is_error?: boolean; result?: unknown; rate_limit_info?: { status?: unknown; resetsAt?: unknown } }): RunResult['usageLimit'] {
+  if (raw.type === 'rate_limit_event' && raw.rate_limit_info?.status === 'rejected') {
+    const at = raw.rate_limit_info.resetsAt;
+    return typeof at === 'number' ? { resetAt: at * 1000 } : {};
+  }
+  const at = raw.type === 'result' && raw.is_error && typeof raw.result === 'string' ? USAGE_LIMIT_RESULT.exec(raw.result.trim())?.[1] : undefined;
+  return at ? { resetAt: Number(at) * 1000 } : undefined;
+}
+
 /** How often the stream file is read for what the attempt wrote since: the relay (SSE, Linear) needs no better. */
 const POLL_MS = 250;
 
@@ -153,6 +195,8 @@ function hasResultLine(text: string): boolean {
 interface Followed {
   runId: string;
   limits: RunRequest['limits'];
+  /** Prices a run cut before its result line (`estimateCostUsd`). */
+  model?: string | undefined;
   secrets: readonly string[];
   remainingMs: number;
   /** Set on a start: it tells its own end. Absent, the attempt is taken up: what it wrote so far counts, and was relayed or is lost to the relay. */
@@ -241,7 +285,7 @@ export class ClaudeCodeRunner implements Runner {
       closeSync(err);
     }
     if (child.pid !== undefined) writeFileSync(join(dir, 'pid'), [child.pid, startTime(child.pid)].filter((x) => x !== undefined).join(' '), { mode: 0o600 });
-    return this.follow({ runId: req.runId, limits: req.limits, secrets, remainingMs: req.limits.durationMs, child, stagnation: req.stagnation, ...(req.stagnation?.repeats ? { tree: worktreeReader(this.o.sandboxes, req, (m) => this.o.log?.(maskTranscriptLine(m, secrets))) } : {}) });
+    return this.follow({ runId: req.runId, limits: req.limits, model: req.model, secrets, remainingMs: req.limits.durationMs, child, stagnation: req.stagnation, ...(req.stagnation?.repeats ? { tree: worktreeReader(this.o.sandboxes, req, (m) => this.o.log?.(maskTranscriptLine(m, secrets))) } : {}) });
   }
 
   /**
@@ -258,7 +302,7 @@ export class ClaudeCodeRunner implements Runner {
       return undefined;
     }
     const secrets = transcriptSecrets({ ...process.env, ...req.env }, this.o.secrets?.());
-    return this.follow({ runId: req.runId, limits: req.limits, secrets, remainingMs: req.limits.durationMs - req.elapsedMs, stagnation: req.stagnation, ...(writer ? { writer } : {}) });
+    return this.follow({ runId: req.runId, limits: req.limits, model: req.model, secrets, remainingMs: req.limits.durationMs - req.elapsedMs, stagnation: req.stagnation, ...(writer ? { writer } : {}) });
   }
 
   private dir(runId: string): string {
@@ -283,6 +327,8 @@ export class ClaudeCodeRunner implements Runner {
     const totalUsage = () => [...usage.values()].reduce(addTokens, NO_TOKENS);
     let stopped = false;
     let limited = false;
+    let usageLimit: RunResult['usageLimit'];
+    let model = a.model;
 
     // Sandboxed, this kills the `docker exec` client, not `claude` in the container: the orchestrator
     // destroys the sandbox at the end of the run, which ends it.
@@ -344,7 +390,15 @@ export class ClaudeCodeRunner implements Runner {
       try {
         const line = maskTranscriptLine(unmasked, a.secrets);
         transcript.write(line + '\n');
-        const raw = JSON.parse(line) as { type?: string; subtype?: string; message?: { id?: unknown; usage?: unknown } };
+        const raw = JSON.parse(line) as Parameters<typeof usageLimitOf>[0] & { subtype?: string; model?: unknown; message?: { id?: unknown; usage?: unknown; model?: unknown } };
+        // The model the CLI runs, as its init line says: what prices a cut run, whatever the request named (or did not).
+        if (raw?.type === 'system' && raw.subtype === 'init' && typeof raw.model === 'string') model = raw.model;
+        // A real model turn after a rejected rate limit event: the stream went on, the limit did not stop it. The CLI's own
+        // message (model `<synthetic>`, the text of the error) is no turn.
+        const modelTurn = raw?.type === 'assistant' && raw.message?.model !== '<synthetic>';
+        // A later event that allows again (`allowed`, `allowed_warning`) lifts it too.
+        const allowed = raw?.type === 'rate_limit_event' && typeof raw.rate_limit_info?.status === 'string' && raw.rate_limit_info.status.startsWith('allowed');
+        usageLimit = usageLimitOf(raw) ?? (modelTurn || allowed ? undefined : usageLimit);
         if (raw?.type === 'assistant') {
           const id = typeof raw.message?.id === 'string' ? raw.message.id : undefined;
           if (id === undefined || !turnIds.has(id)) {
@@ -420,8 +474,16 @@ export class ClaudeCodeRunner implements Runner {
         // It becomes the run's lastText, stored and posted to Linear: the stream's text is masked
         // already, stderr and a spawn error are masked here.
         const text = result?.text || lastText || maskTranscriptLine(spawnError ? spawnError.message : stderr.trim().slice(-2000), a.secrets);
-        const tokens = result?.tokens ?? (usage.size ? totalUsage() : undefined);
-        transcript.end(() => resolve({ outcome, costUsd: result?.costUsd ?? 0, turns: result?.turns ?? assistantTurns, lastText: text, ...(tokens ? { tokens } : {}), ...(broke ? { infra: true as const } : {}), ...(stagnation ? { stagnation } : {}) }));
+        // The larger of what the result line reports and what streamed, per field: a result that reports less than the work
+        // done (none at all, after real turns) must not price it at $0, nor spare the ticket's budget (ORC-340).
+        const streamed = usage.size ? totalUsage() : undefined;
+        const tokens = result?.tokens && streamed ? maxTokens(result.tokens, streamed) : (result?.tokens ?? streamed);
+        // What it consumed is priced, never $0 (ORC-340): cut before its result line (capped, stopped, killed), by estimate; with one,
+        // the larger of the reported cost and the estimate, so a result that reports less than the tokens it used is not kept.
+        const costUsd = Math.max(result?.costUsd ?? 0, tokens ? estimateCostUsd(model, tokens) : 0);
+        // Told only of a run that did not succeed: what to do of it is the factory's (`on_usage_limit`), `infra` stays as without it.
+        const cutByLimit = usageLimit && outcome !== 'success' ? { usageLimit } : {};
+        transcript.end(() => resolve({ outcome, costUsd, turns: result?.turns ?? assistantTurns, lastText: text, ...(tokens ? { tokens } : {}), ...(broke ? { infra: true as const } : {}), ...(stagnation ? { stagnation } : {}), ...cutByLimit }));
       };
       const poll = setInterval(() => {
         read(true);

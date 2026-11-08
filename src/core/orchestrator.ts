@@ -83,7 +83,7 @@ import { ANTI_CHEAT_CHECK, ANTI_CHEAT_OK } from '../checks/anti-cheat.js';
 import { mdCode } from '../checks/markdown.js';
 import { parseStatus } from '../adapters/workspace/git-workspaces.js';
 import { agentPolicy, type EgressPolicy } from '../network/levels.js';
-import { REPO_CONFIG_REFUSED } from './block-cause.js';
+import { REPO_CONFIG_REFUSED, TICKET_TOKENS_REACHED } from './block-cause.js';
 import { BEFORE_ORC_331 } from './legacy-messages.js';
 import { readSecurityLog, refusalSummary } from '../network/security-log.js';
 
@@ -125,9 +125,28 @@ async function storedOutput(store: Store, runId: string): Promise<AgentOutput | 
 }
 
 /** What only the runner knows of an attempt's end (ORC-136), kept on its row: recover() sends the same result if the process dies before it does. */
-function endFacts({ stagnation, infra }: Pick<RunResult, 'stagnation' | 'infra'>): Pick<RunResult, 'stagnation' | 'infra'> {
-  return { ...(stagnation ? { stagnation } : {}), ...(infra ? { infra } : {}) };
+function endFacts({ stagnation, infra, usageLimit }: Pick<RunResult, 'stagnation' | 'infra' | 'usageLimit'>): Pick<RunResult, 'stagnation' | 'infra' | 'usageLimit'> {
+  return { ...(stagnation ? { stagnation } : {}), ...(infra ? { infra } : {}), ...(usageLimit ? { usageLimit } : {}) };
 }
+
+/** A usage limit whose reset the CLI did not tell: tried again after this long (ORC-340). ponytail: a fixed probe, hourly. */
+const USAGE_RETRY_MS = 60 * 60_000;
+
+/** Meta key: until when (ms) the account's usage limit holds every launch (ORC-340). */
+const USAGE_LIMITED_UNTIL = 'usage-limited-until';
+/** The account of a hold: each account has its own limit, and a launch on another one is not held. */
+const usageHoldKey = (account: string): string => `${USAGE_LIMITED_UNTIL}:${account}`;
+/** The shortest wait on a usage limit: a reset already past (or announced late) is not a reason to hit the limit again at once. */
+const USAGE_MIN_WAIT_MS = 5 * 60_000;
+
+/** Tokens the ticket's code runs spent (`dev` queue, cache reads left out); undefined when none reported any. The budget's figure and the block comment's (ORC-340). */
+export function codeRunTokens(runs: readonly RunRecord[]): number | undefined {
+  const reported = runs.filter((r) => r.queue === 'dev' && r.tokens !== undefined);
+  return reported.length ? reported.reduce((n, r) => n + spentTokens(r.tokens!), 0) : undefined;
+}
+
+/** A launch refused because the ticket spent its token budget (ORC-340): blocked with this message as its reason. */
+class TicketBudgetError extends Error {}
 
 /** The message posted for a run that submitted its output: composed by the factory from it, never the agent's last text (ORC-289). */
 function formatAgentOutput(o: AgentOutput): string {
@@ -221,6 +240,12 @@ export interface OrchestratorDeps {
   /** Where a project's base branch is fetched (ORC-151): required with `sandboxes`. */
   originUrl?: (project: ProjectRuntime) => Promise<string>;
   dailyBudgetUsd?: number;
+  /** `budgets.per_ticket_tokens` of factory.yml (ORC-340): a ticket past it is blocked before its next run. The repository's own cap lowers it. */
+  perTicketTokens?: number;
+  /** `budgets.on_usage_limit` of factory.yml (ORC-340): `wait`, a run stopped by the usage limit resumes at its reset. Absent: it blocks, as any failure. */
+  onUsageLimit?: 'wait';
+  /** The Claude account runs use (`claude.active`, ORC-211): a usage limit holds the launches of that account only. Absent: `default`. */
+  claudeAccount?: () => string | undefined;
   newId?: () => string;
   activityIntervalMs?: number;
   beforeRun?: (run: RunRecord) => Promise<void>;
@@ -538,7 +563,8 @@ export class Orchestrator {
       if (!project || !job || !runner.attach) return false;
       const sandbox = sandboxes && (await sandboxes.reattach(run.id));
       if (sandboxes && !sandbox) return false;
-      const handle = runner.attach({ runId: run.id, limits: job.limits, elapsedMs: clock.now() - run.startedAt, env: this.d.agentEnv(run), ...stagnationBounds(project.workflow, job) });
+      // The limits it was launched with: the ticket's token budget may have lowered the job's (ORC-340).
+      const handle = runner.attach({ runId: run.id, limits: run.limits ?? job.limits, model: job.model, elapsedMs: clock.now() - run.startedAt, env: this.d.agentEnv(run), ...stagnationBounds(project.workflow, job) });
       if (!handle) return false;
       // Its slot, in the memory of this process. Over a capacity lowered meanwhile, it goes on all the same.
       scheduler.tryAcquire(run.queue, `${run.ticketId}:${run.queue}`);
@@ -930,13 +956,13 @@ export class Orchestrator {
   private async blockStatus(t: TicketState): Promise<BlockStatus> {
     const sha = t.worktreePath ? await this.d.workspaces.head(t.worktreePath).catch(() => undefined) : undefined;
     const runs = await this.d.store.ticketRuns(t.projectId, t.ticketId).catch((): RunRecord[] => []);
-    const reported = runs.filter((r) => r.tokens !== undefined);
     const ended = runs.filter((r) => r.endedAt !== undefined);
     return {
       branch: t.branch,
       sha,
       ci: t.prChecks,
-      tokens: reported.length ? reported.reduce((n, r) => n + spentTokens(r.tokens!), 0) : undefined,
+      // The figure of `per_ticket_tokens`: a budget block says the same number as its state line.
+      tokens: codeRunTokens(runs),
       durationMs: ended.length ? ended.reduce((n, r) => n + r.endedAt! - r.startedAt, 0) : undefined,
     };
   }
@@ -968,6 +994,30 @@ export class Orchestrator {
     return (await this.d.store.getMeta('paused')) === '1';
   }
 
+  private account(): string {
+    return this.d.claudeAccount?.() || 'default';
+  }
+
+  /**
+   * Until when the usage limit of the active account holds every launch (`on_usage_limit: wait`, ORC-340); undefined when it holds none.
+   * A launch before its reset would only hit it again; another account active is not held. The tick drains the queues once it passes.
+   */
+  async usageLimitedUntil(): Promise<number | undefined> {
+    const until = Number((await this.d.store.getMeta(usageHoldKey(this.account()))) ?? 0);
+    return until > this.d.clock.now() ? until : undefined;
+  }
+
+  private async usageLimited(): Promise<boolean> {
+    return (await this.usageLimitedUntil()) !== undefined;
+  }
+
+  /**
+   * ponytail: checked before the launch, on the costs of the runs ended so far: the runs in flight count once they end. The day can
+   * overshoot its budget by what the runs running at once spend: the code runs (`concurrency`) and the question runs (`question_sessions`),
+   * each up to its cap (`limits.per_run.usd`) when Claude Code reports its cost. A run cut before that report is priced by estimate
+   * (`estimateCostUsd`), at the dearest list price when it died before its init line named its model: that can exceed its cap.
+   * A lock or transaction around the read would not help, the cost of a live run is unknown until its end; reserve each run's cap if it must be exact.
+   */
   private async overBudget(): Promise<boolean> {
     const budget = this.d.dailyBudgetUsd;
     return budget !== undefined && (await this.d.store.costSince(startOfUtcDay(this.d.clock.now()))) >= budget;
@@ -1197,7 +1247,8 @@ export class Orchestrator {
 
   private async settle(project: ProjectRuntime, ticketId: string): Promise<void> {
     const t = await this.ticket(project.id, ticketId);
-    if (!t.activeRunId && !t.verifyingRunId && t.pendingJob) {
+    // A step waiting for a usage reset keeps the pending job behind it (ORC-340): nothing to start yet.
+    if (!t.activeRunId && !t.verifyingRunId && !t.usageWait && t.pendingJob) {
       const pending = t.pendingJob;
       await this.apply(t, { type: 'pending.cleared' });
       await this.startRun(project, ticketId, pending);
@@ -1228,7 +1279,7 @@ export class Orchestrator {
     const leaseMs = this.d.effectLeaseMs ?? LEASE_MS;
     const n = (await this.d.store.listQueue()).filter((q) => q.queue === queue).length;
     for (let i = 0; i < n; i++) {
-      if ((await this.isPaused()) || (await this.overBudget()) || this.d.scheduler.free(queue) - this.admitting[queue] <= 0) return;
+      if ((await this.isPaused()) || (await this.usageLimited()) || (await this.overBudget()) || this.d.scheduler.free(queue) - this.admitting[queue] <= 0) return;
       const claim = await this.d.scheduler.next(queue, leaseMs);
       if (!claim) return;
       const item = claim.item;
@@ -1721,7 +1772,8 @@ export class Orchestrator {
       // job by `settle`) gets one too: cut once launched, handed out again, it must not run beside its relaunch (ORC-220).
       startMark: fromQueue ? opts.startMark : `${opts.startMark ?? `start:${project.id}:${ticketId}:${job.name}:${this.d.clock.now()}`}:queued`,
     };
-    if (job.queue === 'dev' && (t.activeRunId || t.verifyingRunId)) {
+    // A step the usage limit cut holds the ticket's next ones too (ORC-340): it resumes first, at the reset, and they follow it.
+    if (job.queue === 'dev' && (t.activeRunId || t.verifyingRunId || t.usageWait)) {
       await this.apply(t, {
         type: 'pending.set',
         job: { job: job.name, input: opts.input, inputText: opts.inputText, resume: opts.resume, sensitivePaths: opts.sensitivePaths, relaunchOf: opts.relaunchOf },
@@ -1733,7 +1785,7 @@ export class Orchestrator {
       if (!fromQueue) await this.d.scheduler.enqueue(item);
       return 'queued';
     };
-    if (this.stopping || (await this.isPaused())) return requeue();
+    if (this.stopping || (await this.isPaused()) || (await this.usageLimited())) return requeue();
     if (await this.overBudget()) {
       const queued = await requeue();
       await this.noteBudget(project, ticketId);
@@ -1757,7 +1809,7 @@ export class Orchestrator {
         if (!this.handles.has(fresh.activeRunId)) events.push({ type: 'run.cleared' });
       }
       // A file the repository has to fix is not a breakdown of the factory: the Flow shows it as such (`repo_config`).
-      const reason = err instanceof RepoConfigError ? `${REPO_CONFIG_REFUSED}${err.message}` : `Launch error: ${(err as Error).message}`;
+      const reason = err instanceof RepoConfigError ? `${REPO_CONFIG_REFUSED}${err.message}` : err instanceof TicketBudgetError ? err.message : `Launch error: ${(err as Error).message}`;
       fresh = await this.apply(fresh, ...events, blockedOn(project.workflow, reason, job.name));
       // The ticket is blocked: a failed notice must not fail the effect, whose retry would start again.
       try {
@@ -1784,6 +1836,18 @@ export class Orchestrator {
     const value = await this.d.store.getMeta(mark);
     if (value === undefined) return false;
     return value === '1' || (await this.d.store.getRun(value)) !== undefined;
+  }
+
+  /** Tokens the ticket's code runs spent (`budgets.per_ticket_tokens`, ORC-340), cache reads left out: its questions (`ask`, `learn`) do not count. */
+  private async codeTokensSpent(projectId: string, ticketId: string): Promise<number> {
+    return codeRunTokens(await this.d.store.ticketRuns(projectId, ticketId)) ?? 0;
+  }
+
+  /** What is left under `cap` (ORC-340), undefined without one. Spent, it throws: the launch is refused and the ticket blocked with the reason. */
+  private tokensLeft(spent: number, cap: number | undefined): number | undefined {
+    if (cap === undefined) return undefined;
+    if (spent >= cap) throw new TicketBudgetError(`${TICKET_TOKENS_REACHED}${spent} tokens spent of ${cap} by its code runs (budgets.per_ticket_tokens). Raise the cap (factory.yml counts once the daemon restarts, the repository's .factory/config.yml at the next launch) or split the ticket, then reply here.`);
+    return cap - spent;
   }
 
   private async noteBudget(project: ProjectRuntime, ticketId: string): Promise<void> {
@@ -1828,6 +1892,11 @@ export class Orchestrator {
       }
     }
 
+    // Before any workspace (ORC-340): factory.yml's cap now, the repository's, read from its config, once the worktree is there.
+    // Read only under a cap: without one, a launch reads no run of the ticket.
+    let spent = job.queue === 'dev' && this.d.perTicketTokens !== undefined ? await this.codeTokensSpent(project.id, ticketId) : undefined;
+    if (spent !== undefined) this.tokensLeft(spent, this.d.perTicketTokens);
+
     // Read while the workspace is prepared; a pack it cannot read gives null fingerprints (ORC-226).
     const pack = packFingerprints(this.d.packDir, (err) => this.log('warn', `attempt labels: pack not fingerprinted: ${err.message}`));
     const runId = this.newId();
@@ -1852,16 +1921,21 @@ export class Orchestrator {
       const config = await this.repoConfigOf(project, { fetch: !ws.fresh && job.workspace !== 'trunk-readonly' });
       const setup = config.setup ? [config.setup] : wf.workspace.setup;
       setUp ||= !setup.length;
+      const caps = [this.d.perTicketTokens, config.budgets?.perTicketTokens].filter((c) => c !== undefined);
+      if (job.queue === 'dev' && caps.length) spent ??= await this.codeTokensSpent(project.id, ticketId);
+      const tokensLeft = spent === undefined || !caps.length ? undefined : this.tokensLeft(spent, Math.min(...caps));
+      // The ticket's budget left caps the attempt too: past it, a `limit` blocks the ticket. Kept on the run, for a reattach (ORC-340).
+      const limits = tokensLeft === undefined ? job.limits : { ...job.limits, tokens: Math.min(job.limits.tokens ?? Infinity, tokensLeft) };
       t = await this.ticket(project.id, ticketId);
       if (job.queue === 'dev') t = await this.apply(t, { type: 'workspace.prepared', path: ws.path, port: ws.port, branch: ws.branch });
       if (job.onStart.move && t.logical !== job.onStart.move) await this.move(project, t, job.onStart.move);
       t = await this.ticket(project.id, ticketId);
 
-      const linearSessionId = opts.linearSessionId ?? (await this.sessionFor(t));
-      t = await this.ticket(project.id, ticketId);
-
       // A relaunch reads what the lost attempt read, whatever came in since stays for the next run (ORC-220).
       const from = opts.relaunchOf ? await store.getRun(opts.relaunchOf) : undefined;
+      // A question asked again (a usage reset, ORC-340) answers in the thread it was asked in.
+      const linearSessionId = opts.linearSessionId ?? (job.queue === 'questions' ? from?.linearSessionId : undefined) ?? (await this.sessionFor(t));
+      t = await this.ticket(project.id, ticketId);
       // The feedback the run reads, taken at the launch whoever started it (a decision, settle, the queue):
       // its taint completes the one the start was decided with (I12, ORC-274).
       const kind = from ? undefined : (opts.input ?? job.input);
@@ -1966,6 +2040,7 @@ export class Orchestrator {
         sensitivePaths,
         ...(input ? { input } : {}),
         repoConfig: config,
+        ...(limits !== job.limits ? { limits } : {}),
       };
       // The mark, then the ticket, then the run (`startHandled`, ORC-277): a dev ticket holds its run before
       // the run is written, so recover() finds it whichever write a crash falls after. The feedback stays
@@ -1996,7 +2071,7 @@ export class Orchestrator {
         pluginDir: sandbox ? PACK_TARGET : this.d.packDir,
         settingsPath: sandbox ? SETTINGS_TARGET : this.settingsPath(),
         readOnly: job.workspace === 'trunk-readonly',
-        limits: job.limits,
+        limits,
         env: {
           // First: a variable of the repository never replaces one of the factory. Never its secrets (ORC-211).
           ...vars.env,
@@ -2116,6 +2191,24 @@ export class Orchestrator {
       this.log('error', `output of run ${run.id} not read: ${(err as Error).message}`);
       unreadable = true;
     }
+    // Only when the factory waits on it (`on_usage_limit: wait`): otherwise the run ends as any failure (ORC-340).
+    // A reset already past, or none told: never sooner than `USAGE_MIN_WAIT_MS`, an hour when none was told.
+    const now = this.d.clock.now();
+    const account = this.account();
+    const usageLimit =
+      result.usageLimit && this.d.onUsageLimit === 'wait' ? { resetAt: Math.max(result.usageLimit.resetAt ?? now + USAGE_RETRY_MS, now + USAGE_MIN_WAIT_MS), account } : undefined;
+    if (usageLimit) {
+      const until = new Date(usageLimit.resetAt).toISOString();
+      this.log('warn', `usage limit of the Claude account ${account} reached (run ${run.id}): launches held until ${until}`);
+      // The account's limit: every launch on it waits for its reset (`usageLimited`), the latest one heard of. A store that fails
+      // here must not hold back the result: logged, and recover() sets the hold again from the run's record.
+      try {
+        const key = usageHoldKey(account);
+        await this.d.store.setMeta(key, String(Math.max(Number((await this.d.store.getMeta(key)) ?? 0), usageLimit.resetAt)));
+      } catch (err) {
+        this.log('error', `usage hold until ${until} not recorded: ${(err as Error).message}`);
+      }
+    }
     return {
       ...TRUSTED,
       id: `attempt:${run.id}:finished`,
@@ -2133,6 +2226,7 @@ export class Orchestrator {
         attempt: attemptOutcome({ outcome: result.outcome, infraError: result.infra || unreadable }, output),
         ...(output ? { output } : {}),
         ...(result.stagnation ? { stagnation: result.stagnation } : {}),
+        ...(usageLimit ? { usageLimit } : {}),
       },
     };
   }

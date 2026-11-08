@@ -115,7 +115,7 @@ Reason: <one sentence>
 What I tried:
 - <fact>
 Question: <a closed question if possible>
-State: branch <name> · last commit <sha> · CI <state> · tokens <n> · <duration>
+State: branch <name> · last commit <sha> · CI <state> · code-run tokens <n> · <duration>
 Reply on this ticket: I will resume as soon as you answer.
 ```
 

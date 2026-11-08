@@ -25,6 +25,7 @@ button.link { border: 0; padding: 0; color: var(--agent); background: none; font
 a { color: var(--agent); }
 
 .flow { display: grid; gap: 16px; min-width: 0; }
+.usage-limit { margin: 0 0 12px; padding: 8px 12px; border: 1px solid var(--danger); border-radius: 8px; color: var(--danger); background: var(--surface); }
 .flow-failed { margin: 0; padding: 8px 12px; border: 1px solid var(--danger); border-radius: 8px; color: var(--danger); background: var(--surface); }
 .count { display: inline-block; min-width: 20px; padding: 0 6px; border-radius: 999px; background: color-mix(in srgb, var(--muted) 16%, transparent); color: var(--fg); font-size: 12px; font-weight: 600; letter-spacing: 0; text-align: center; font-variant-numeric: tabular-nums; }
 .needs.active { border-color: var(--human); }
