@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useReducer, useRef, useState, type ComponentProps } from 'react';
 import { fetchFlow, fetchSnapshot, post, subscribe } from './api.js';
-import { Flow } from './Flow.js';
+import { Flow, plural } from './Flow.js';
 import { initialState, reducer } from './state.js';
 import type { FlowView, RunLine, WorkingRunView } from './types.js';
 import { PRODUCT_NAME } from '../../src/product.js';
@@ -17,7 +17,7 @@ function Line({ line }: { line: RunLine }) {
     case 'tool_result':
       return line.isError ? <p className="line err">tool error</p> : null;
     case 'result':
-      return <p className="line result">{line.isError ? 'Failed' : 'Done'} · {line.turns} turns · ${line.costUsd.toFixed(2)}</p>;
+      return <p className="line result">{line.isError ? 'Failed' : 'Done'} · {plural(line.turns, 'turn')} · ${line.costUsd.toFixed(2)}</p>;
     default:
       return null;
   }
@@ -82,7 +82,7 @@ export function App() {
             <span>Slots {snap.capacity.dev.used}/{snap.capacity.dev.total}</span>
             <span>Questions {snap.capacity.questions.used}/{snap.capacity.questions.total}</span>
             <span>Queue {snap.queue.length}</span>
-            <span>Today’s cost ${snap.costTodayUsd.toFixed(2)}{snap.budgetUsd ? ` / $${snap.budgetUsd}` : ''}</span>
+            <span>Today’s cost ${snap.costTodayUsd.toFixed(2)}{snap.budgetUsd ? ` / $${snap.budgetUsd.toFixed(2)}` : ''}</span>
             <span className={s.connected ? 'live on' : 'live'}>{s.connected ? 'live' : 'disconnected'}</span>
             {!snap.linearConnected && <a className="button primary" href="/oauth/start">Connect Linear</a>}
             <button onClick={() => post(snap.paused ? '/api/control/resume' : '/api/control/pause')}>{snap.paused ? 'Resume' : 'Pause'}</button>

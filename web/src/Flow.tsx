@@ -1,8 +1,8 @@
-import type { BlockCause } from '../../src/core/block-cause.js';
+import { AGENT_QUESTION, onlyRestatesCause, STOPPED, type BlockCause } from '../../src/core/block-cause.js';
 import type { FlowTicketView, FlowView, WorkingRunView } from './types.js';
 
 const CAUSE_LABELS: Record<BlockCause, string> = {
-  question: 'Question asked by the agent',
+  question: AGENT_QUESTION,
   contested: 'Ticket disputed by the agent',
   red: 'Red not verified',
   infra: 'Infrastructure failure',
@@ -13,7 +13,7 @@ const CAUSE_LABELS: Record<BlockCause, string> = {
   repo_config: 'Invalid repository configuration',
   dead_letter: 'Event set aside',
   pr_closed: 'PR closed without merge',
-  stopped: 'Stopped on request',
+  stopped: STOPPED,
   other: 'Other cause',
 };
 
@@ -27,9 +27,14 @@ export function formatDuration(ms: number): string {
   return `${Math.floor(minutes / 60)} h ${pad(minutes % 60)} min`;
 }
 
+/** `1 turn`, `2 turns`. */
+export const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`;
+
 export function formatTokens(n: number): string {
   if (n < 1_000) return String(n);
-  return n < 1_000_000 ? `${(n / 1_000).toFixed(1)} k` : `${(n / 1_000_000).toFixed(1)} M`;
+  // Rounded before the unit is chosen: 999 950 reads 1.0 M, not 1000.0 k.
+  const k = Math.round(n / 100) / 10;
+  return k < 1_000 ? `${k.toFixed(1)} k` : `${(Math.round(n / 100_000) / 10).toFixed(1)} M`;
 }
 
 /** The measure of the ticket; the cost in dollars is what exists when no attempt reported tokens (ORC-216). */
@@ -39,7 +44,7 @@ export function tokensCell(run: WorkingRunView): { text: string; title: string }
     return { text: run.costUsd > 0 ? `— ($${run.costUsd.toFixed(2)})` : '—', title: 'No finished attempt reported its tokens.' };
   }
   const { input, output, cacheRead, cacheCreation } = run.tokens;
-  const missing = run.attemptsWithoutTokens > 0 ? `${run.attemptsWithoutTokens} finished attempt(s) without a measurement. ` : '';
+  const missing = run.attemptsWithoutTokens > 0 ? `${plural(run.attemptsWithoutTokens, 'finished attempt')} without a measurement. ` : '';
   return {
     text: `${missing ? '≥ ' : ''}${formatTokens(input + output + cacheRead + cacheCreation)}`,
     title: `${missing}Input ${formatTokens(input)}, output ${formatTokens(output)}, cache read ${formatTokens(cacheRead)}, cache write ${formatTokens(cacheCreation)}.`,
@@ -88,7 +93,7 @@ export function Flow({ flow, elapsedMs, selectedRun, onSelect, onStop }: {
       <section className={waiting ? 'needs active' : 'needs'}>
         <h2>Needs you{waiting > 0 && <span className="count">{waiting}</span>}</h2>
         {!waiting && <p className="empty">Nothing is waiting for a human.</p>}
-        {blocked.map((g) => <Group key={g.cause} label={CAUSE_LABELS[g.cause]} tone="blocked" tickets={g.tickets.map((ticket) => ({ ticket, detail: ticket.reason === CAUSE_LABELS[g.cause] ? undefined : ticket.reason }))} />)}
+        {blocked.map((g) => <Group key={g.cause} label={CAUSE_LABELS[g.cause]} tone="blocked" tickets={g.tickets.map((ticket) => ({ ticket, detail: onlyRestatesCause(g.cause, ticket.reason) ? undefined : ticket.reason }))} />)}
         {humanReview.length > 0 && <Group label="PRs in Human Review" tone="human" tickets={humanReview.map((ticket) => ({ ticket }))} />}
         {gates.length > 0 && <Group label="Pending gates" tone="human" tickets={gates.map((ticket) => ({ ticket, detail: 'Merge gate' }))} />}
       </section>

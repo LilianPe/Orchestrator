@@ -10,6 +10,8 @@ import type { BlockCause } from './block-cause.js';
 export const BEFORE_ORC_331 = {
   /** The reason of a stop (`settledTicket`). */
   stopped: 'Arrêté à la demande',
+  /** The reason of a question the agent asks during its run. */
+  question: "Question posée par l'agent",
   /** The head of the reason of the red-CI bound, which a green CI lifts. */
   redCiBlocked: 'CI toujours en échec après ',
   /** The head of the reason of a dead-lettered event, which its repair lifts. */

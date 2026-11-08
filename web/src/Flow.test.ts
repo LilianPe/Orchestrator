@@ -1,7 +1,9 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { Flow, formatDuration, formatTokens, tokensCell } from './Flow.js';
+import { AGENT_QUESTION, STOPPED } from '../../src/core/block-cause.js';
+import { BEFORE_ORC_331 } from '../../src/core/legacy-messages.js';
+import { Flow, formatDuration, formatTokens, plural, tokensCell } from './Flow.js';
 import type { FlowView, WorkingRunView } from './types.js';
 
 const EMPTY: FlowView = { needsYou: { blocked: [], humanReview: [], gates: [] }, working: [], queued: [], done: [], others: [] };
@@ -23,6 +25,17 @@ describe('formats', () => {
     expect(formatTokens(950)).toBe('950');
     expect(formatTokens(37_000)).toBe('37.0 k');
     expect(formatTokens(1_234_000)).toBe('1.2 M');
+    // Rounded before the unit is chosen (ORC-332).
+    expect(formatTokens(999_949)).toBe('999.9 k');
+    expect(formatTokens(999_950)).toBe('1.0 M');
+  });
+
+  it('plural: one, then more (ORC-332)', () => {
+    expect(plural(1, 'turn')).toBe('1 turn');
+    expect(plural(0, 'turn')).toBe('0 turns');
+    expect(plural(3, 'turn')).toBe('3 turns');
+    expect(tokensCell({ ...running, attemptsWithoutTokens: 1 }).title).toMatch(/^1 finished attempt without a measurement\. /);
+    expect(tokensCell({ ...running, attemptsWithoutTokens: 2 }).title).toMatch(/^2 finished attempts without a measurement\. /);
   });
 
   it('tokensCell: the measure, marked when attempts are missing from it, and the cost in dollars when none reported (ORC-216)', () => {
@@ -57,6 +70,17 @@ describe('Flow', () => {
     expect(html.match(/Stopped on request/g)).toHaveLength(1);
     const asked = page({ needsYou: { ...EMPTY.needsYou, blocked: [{ cause: 'question', tickets: [{ ...base, reason: 'Question asked by the agent' }] }] } });
     expect(asked.match(/Question asked by the agent/g)).toHaveLength(1);
+  });
+
+  it('does not repeat either a reason written before ORC-331 that only says what its cause says (ORC-332)', () => {
+    const html = page({ needsYou: { ...EMPTY.needsYou, blocked: [
+      { cause: 'stopped', tickets: [{ ...base, reason: BEFORE_ORC_331.stopped }] },
+      { cause: 'question', tickets: [{ ...base, ticketId: 'REL-2', reason: BEFORE_ORC_331.question }] },
+    ] } });
+    expect(html).toContain(`${STOPPED}</h3>`);
+    expect(html).toContain(`${AGENT_QUESTION}</h3>`);
+    expect(html).not.toContain('Arrêté');
+    expect(html).not.toContain('posée');
   });
 
   it('says on the page, not only on hover, that a running run counts when it ends', () => {

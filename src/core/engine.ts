@@ -5,6 +5,7 @@ import { evalCondition } from './conditions.js';
 import { deadLetterReason, deadLetterTried, heldMessage, isRefusedNotice, liftDeadLetterBlock, REPAIR_LABELS, repairedEvent } from './dead-letter.js';
 import type { AgentOutput } from './agent-output.js';
 import { blockFacts, type BlockFacts } from './block-comment.js';
+import { AGENT_QUESTION, STOPPED } from './block-cause.js';
 import type { Decision, Effect } from './decision.js';
 import { awaitsAgent, commandOf, forAgent, STOP_COMMAND } from './human-message.js';
 import { BEFORE_ORC_331 } from './legacy-messages.js';
@@ -18,7 +19,6 @@ type StartRun = Extract<Effect, { kind: 'start_run' }>;
 
 /** What a stop's answer says of the way back: versions frozen before ORC-196 keep their label. */
 const relaunch = (workflow: Workflow): string => (workflow.blockComment ? 'Reply on this ticket to relaunch.' : 'Reply in this thread or add the agent:reprendre label to relaunch.');
-const STOPPED = 'Stopped on request';
 
 /** Paths a run started from an untrusted event must not write; enforced by the runner's sandbox (ORC-151). */
 export const SENSITIVE_PATHS: readonly string[] = ['.github/**', '.factory/**', '.claude/**', 'CODEOWNERS', '.env*'];
@@ -254,7 +254,7 @@ function unblock(out: Decision, event: FactoryEvent, ticket: TicketState): void 
   if (ticket.cutRelaunches?.length) out.events.push({ type: 'ticket.patched', patch: { cutRelaunches: [] } });
 }
 
-/** The head of the reason of a ticket blocked by the bound: the Flux classes a block by the head of its reason (ORC-297). */
+/** The head of the reason of a ticket blocked by the bound: the Flow classes a block by the head of its reason (ORC-297). */
 export const CUT_BOUND_REASON = /^Too many relaunches after a cut: /;
 
 /** The relaunches still in the window at the time of the event: never the clock, so that a replay decides the same. */
@@ -1074,7 +1074,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       if (workflow.blockComment && linearSessionId && linearSessionId !== ticket.linearSessionId) out.effects.push(asker);
       // The job at work is the step a reply resumes; a question run has none on the ticket.
       const at = ticket.activeJob ? { job: ticket.activeJob } : { step: job };
-      return block(out, workflow, { reason: 'Question asked by the agent', body: question, linearSessionId, ...at, tried: [`The run ${job} in progress: the agent asks for a clarification.`], question: question || undefined });
+      return block(out, workflow, { reason: AGENT_QUESTION, body: question, linearSessionId, ...at, tried: [`The run ${job} in progress: the agent asks for a clarification.`], question: question || undefined });
     }
     case 'verify.lost': {
       const { runId, job, output } = event.payload;
@@ -1234,7 +1234,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
         out.trace.push(`effect.failed ignored: ticket ${settled}`);
         return out;
       }
-      // The comment of a block died (ORC-196): the tracker is down, the block keeps its reason and its step, shown in the Flux.
+      // The comment of a block died (ORC-196): the tracker is down, the block keeps its reason and its step, shown in the Flow.
       if (kind === 'block_comment' && ticket.blocked) {
         out.trace.push('effect.failed ignored: the comment of a block, which keeps its reason');
         return out;
