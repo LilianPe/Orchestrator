@@ -1,6 +1,7 @@
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { loadWorkflow } from '../config/load-workflow.js';
+import type { AgentOutput } from './agent-output.js';
 import { causeOf, restatesCause, type BlockKind } from './block-cause.js';
 import { liftDeadLetterBlock } from './dead-letter.js';
 import { decide, settledTicket } from './engine.js';
@@ -17,6 +18,7 @@ function ev<T extends EventType>(type: T, payload: EventPayloads[T], extra: Part
 const ticket = (patch: Partial<TicketState> = {}): TicketState => ({ ...newTicketState('p', 'REL-1', 'Titre', 'dev', 0), delegated: true, ...patch });
 const finished = (patch: Partial<EventPayloads['run.finished']>) => ev('run.finished', { runId: 'r1', job: 'dev', outcome: 'failure', costUsd: 0, turns: 1, lastText: '', ...patch });
 const failure = { command: 'npm test', exitCode: 1, output: 'rouge' };
+const INTAKE_OUTPUT: AgentOutput = { status: 'done', summary: 'Read.', tests_added: [], why: '', assumptions: [], risks: [], untested: [], review_hints: [] };
 const intaking = ticket({ logical: 'todo', activeRunId: 'r1', activeJob: 'intake' });
 
 /** The block `decide` writes: the kind is read from what the engine really emits. */
