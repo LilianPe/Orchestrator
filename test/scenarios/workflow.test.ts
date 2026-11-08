@@ -124,7 +124,8 @@ describe('standard workflow', () => {
     h.runner.enqueue({ events: [{ kind: 'text', text: 'Synthèse : 2 rounds, CI verte.' }] });
     await h.send('status.changed', { from: 'human_review', to: 'ai_review' });
     expect(h.runner.requests[1]).toMatchObject({ model: 'opus', resume: false });
-    expect(h.runner.requests[1]!.prompt).toContain('Max review rounds: 5');
+    // The preset's review loop, its count shared with red CI (ORC-216, ORC-184): 2, not the pack's former 5.
+    expect(h.runner.requests[1]!.prompt).toContain('Max review rounds: 2');
     expect((await h.ticket()).logical).toBe('human_review');
     expect(h.tracker.activities('ls-1').at(-1)).toEqual({ type: 'response', body: 'Synthèse : 2 rounds, CI verte.' });
     await h.send('pr.merged', { number: 3, url: 'https://gh/pr/3', branch: 'factory/rel-1-export-csv' });

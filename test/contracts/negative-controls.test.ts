@@ -89,8 +89,8 @@ describeAgentRuntimeContract(
 );
 
 const FAILED = 'a failed run ends in failure';
-const DURATION_CAP = 'a run past its duration cap ends in limit';
-const TURN_CAP = 'a run past its turn cap ends in limit';
+const DURATION_CAP = 'a run past its duration cap ends in limit, no budget spent';
+const TURN_CAP = 'a run past its turn cap ends in limit, its turn budget spent';
 
 const ending = (from: RunOutcome, end: (r: RunResult) => RunResult | Promise<RunResult>) => (inner: FakeRunner, req: RunRequest): RunHandle => {
   const h = inner.start(req);
@@ -131,6 +131,18 @@ describeAgentRuntimeContract(
   'a runtime whose done rejects when a run hits its cap',
   runtimeThat(ending('limit', () => Promise.reject(new Error('max turns reached')))),
   { violates: [DURATION_CAP, TURN_CAP] },
+);
+
+describeAgentRuntimeContract(
+  'a runtime that does not say its turn cap stopped the run (ORC-216)',
+  runtimeThat(ending('limit', ({ overBudget: _, ...r }) => r)),
+  { violates: [TURN_CAP] },
+);
+
+describeAgentRuntimeContract(
+  'a runtime that counts its duration cap as a spent turn budget (ORC-216)',
+  runtimeThat(ending('limit', (r) => ({ ...r, overBudget: 'turns' }))),
+  { violates: [DURATION_CAP] },
 );
 
 const STOP = 'stop ends a running run in stopped and closes its stream; stopping again changes nothing';

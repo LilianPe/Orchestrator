@@ -27,7 +27,7 @@ describe.skipIf(!enabled)(`an attempt outlives its daemon (${cli})`, () => {
 
       // As the next daemon's recover(): by the label, from a process that never saw the container.
       expect(await provider.reattach(req.runId)).toMatchObject({ id: sandbox.id });
-      const h = new ClaudeCodeRunner({ transcriptsDir, sandboxes: provider }).attach({ runId: req.runId, limits: { turns: 5, durationMs: 120_000, usd: 0 }, elapsedMs: 1_000, env: {} });
+      const h = new ClaudeCodeRunner({ transcriptsDir, sandboxes: provider }).attach({ runId: req.runId, limits: { turns: 5, durationMs: 120_000 }, elapsedMs: 1_000, env: {} });
       expect(h).toBeDefined();
       const events = await drain(h!.events);
       expect(await h!.done).toMatchObject({ outcome: 'success', lastText: 'Fini sans le démon.', costUsd: 0.1 });

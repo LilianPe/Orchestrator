@@ -39,7 +39,8 @@ const instanceSchema = z.object({
   publicUrl: z.string().url().optional(),
   relay: z.discriminatedUnion('kind', [z.object({ kind: z.literal('smee'), url: z.string().url() }), z.object({ kind: z.literal('none') })]).default({ kind: 'none' }),
   projects: z.array(projectSchema).default([]),
-  limits: z.object({ perDayUsd: z.number().positive().optional() }).default({}),
+  // The daily budget in dollars is gone (ORC-216): a config.yaml that still has `perDayUsd` loads without it.
+  limits: z.object({}).default({}),
   knowledge: z.object({ repoPath: z.string() }).optional(),
   github: githubSchema.optional(),
 });

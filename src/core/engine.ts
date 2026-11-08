@@ -1427,6 +1427,11 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
         out.effects.push({ kind: 'activity', type: 'error', body: 'I could not finish (failure or limit reached).', runId });
         return out;
       }
+      const over = outcome === 'limit' ? event.payload.overBudget : undefined;
+      if (over) {
+        const reason = over === 'tokens' ? `The run ${jobName} spent its token budget (budgets.per_step_tokens, or what the ticket had left).` : `The run ${jobName} spent its turn budget (max_turns of its step).`;
+        return block(out, workflow, { kind: 'budget', reason, body: `${reason} Reply in this thread and I will resume.`, job: jobName, tried: [`Started the run ${jobName}: stopped at its ${over === 'tokens' ? 'token' : 'turn'} budget.`] });
+      }
       const reason =
         outcome === 'limit'
           ? `The run ${jobName} reached a limit (turns, duration or budget).`

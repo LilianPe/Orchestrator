@@ -28,11 +28,17 @@ describe('instance config', () => {
     expect(loadInstance(home)).toEqual({ port: 4100, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
     const cfg = {
       port: 4100, host: '127.0.0.1', relay: { kind: 'smee' as const, url: 'https://smee.io/abc' },
-      projects: [{ id: 'perso', repoPath: '/code/perso', linearTeamKey: 'REL' }], limits: { perDayUsd: 20 },
+      projects: [{ id: 'perso', repoPath: '/code/perso', linearTeamKey: 'REL' }], limits: {},
       knowledge: { repoPath: join(home, 'knowledge') },
     };
     saveInstance(home, cfg);
     expect(loadInstance(home)).toEqual(cfg);
+  });
+
+  it('loads a config.yaml that still has the daily budget in dollars, without it: no queue waits on dollars (ORC-216)', () => {
+    const home = mkdtempSync(join(tmpdir(), 'factory-home-'));
+    writeFileSync(join(home, 'config.yaml'), 'limits:\n  perDayUsd: 20\n');
+    expect(loadInstance(home).limits).toEqual({});
   });
 
   it("reads a project's authorization designations and its Linear → GitHub logins (ORC-186), with defaults for what is left out", () => {
