@@ -189,6 +189,24 @@ On each `verify` with sandboxes, in the clone, on what the branch changed since 
 - **The four forms**: a test disabled (`skip`, `only`, `todo`, `xit`, `fit`, the runner's ignore lists), a check bypassed (checker directives, an assertion on constants, a success exit), code that behaves differently under test (`NODE_ENV` compared to `test`, the runners' variables). JS and TS files, the scripts of Vue, Svelte and Astro components included, are read on their syntax tree (ORC-342): an alias (`const later = it.skip`, `import { test as check } from 'vitest'`, `const { exit } = process`), another syntax (`it['skip']`, `test(name, { skip: true }, fn)`, a test context's `skip()`, `switch (process.env.NODE_ENV) { case 'test': }`, `['test'].includes(import.meta.env.MODE)`) or a constant spelled in parts (`'te' + 'st'`, a `const` bound to it) reads as the plain form. `expect(c)` on a constant counts only when its matcher compares with constants too (`expect(1).toBe(1)`, not `expect(1).toBe(count())`). Aliases are read in the file, by name, without scopes nor other files. Python and the other files are read line by line, with patterns, as before: there is no Python parser in the daemon.
 - **A test removed or renamed**: the set of tests of each test file (`*.test.ts`, `test_*.py`…) before and after the diff. JS and TS tests by name under their suites (`scores > rounds`, a title that is not a constant by its source), Python ones by function under their classes (`TestScores::test_rounds`, read by indentation). A test file deleted or renamed removes all its tests; a case renamed, or moved under another `describe`, removes its old name. Each is a finding, unless a commit of the branch justifies the file with a `Removed-test: <path>: <reason>` trailer, which the summary sent to the agent recalls; a frozen test changed is already refused by the freeze. A helper or a fixture is not a test file.
 
+## Default reactions and their scenarios (ORC-227)
+
+Each default reaction of the MVP doc has a harness scenario in `test/scenarios/`, tied to the ticket that delivered it. A reaction whose ticket is not delivered yet has none: its ticket brings both.
+
+| Reaction | Delivered by | Harness scenario |
+| -- | -- | -- |
+| A human message on a Blocked run relaunches the blocked step | ORC-196 | `block-comment.test.ts`, « a member answers on the ticket: the blocked step starts again… » |
+| A human message during a run goes to `humanInbox`, with a sign of life; a question starts the answering agent at once, instructions are regrouped over 3 min | ORC-180 | `human-inbox.test.ts`, « a human reply during a run… », « a question during a run is answered at once… », « with no agent at work, replies regrouped over 3 minutes… » |
+| Statuses, labels and human commits come in as typed events, never as free text | ORC-160, ORC-134 | `typed-events.test.ts`; `github-webhook.test.ts`, « criterion 2: a push on the agent branch… is a push.human in the inbox » |
+| Done by an authorized human merges if the checks are green on the last commit and nothing was pushed since the human review; otherwise back to Human Review with the reason | ORC-148 | `merge.test.ts`, « merges the PR on the reviewed commit… », « merges nothing for a human without the merge right… », « merges nothing after a push since the review… », « merges nothing on a red check… » |
+| A red CI comes into the inbox and the engine starts the step that handles it | ORC-134, ORC-270 | `github-webhook.test.ts`, « criterion 5 » (both); `workflow.test.ts`, « red CI relaunches fix-ci up to limits.ci_fix_attempts, then blocks… ». The mandatory « CI red 3 times » is ORC-184's |
+| A conflict with the default branch comes into the inbox and the engine starts the step that handles it | inbox: ORC-134; the step: ORC-146 (in progress) | inbox only: `github-webhook.test.ts`, « writes reviews and conflicts to the inbox without reacting to them yet » |
+| A human push on the branch starts again from `verify` | ORC-159 (not delivered) | none yet: the push only enters the inbox |
+| A spec changed during the run starts again from `spec_review` | ORC-212 (not delivered) | none yet |
+| A PR closed by a human cancels the run | ORC-134 | `github-webhook.test.ts`, « criterion 4: a factory PR closed by a human without merge cancels the run » |
+| A cancelled ticket cancels the run | ORC-170 (its cancel) | `cancel.test.ts`, « ticket cancelled by a human (ORC-170) » |
+| The delegation withdrawn cancels the run | ORC-227 | `cancel.test.ts`, « delegation withdrawn (ORC-227) » |
+
 ## Compilation and version
 
 `compilePreset(preset, { repoNetwork })` checks the core invariants and returns the preset's hash, or throws a `PresetError` listing all violations:

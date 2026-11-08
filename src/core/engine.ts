@@ -69,6 +69,14 @@ function empty(): Decision {
   return { events: [], effects: [], timers: [], trace: [] };
 }
 
+/** The ticket's work stops: the run in flight, the check awaited, the waiting job and the timers (`stop_run` clears them). */
+function cancelWork(out: Decision, why: string): Decision {
+  out.trace.push(why);
+  out.events.push({ type: 'work.cancelled' });
+  out.effects.push({ kind: 'stop_run' });
+  return out;
+}
+
 /** The ticket's work stops and it is blocked for `reason` until a human relaunches it; `body` tells the session: a stop is an answer, not an escalation. */
 function stop(out: Decision, workflow: Workflow, reason = STOPPED, body = `Stopped. ${relaunch(workflow)}`, kind: BlockKind = 'stopped'): Decision {
   out.events.push({ type: 'work.cancelled' }, { type: 'ticket.blocked', reason, kind });
@@ -1211,10 +1219,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       out.trace.push('status.changed: ticket cancelled, not delegated: nothing to stop');
       return out;
     }
-    out.trace.push('status.changed: ticket cancelled, work cancelled');
-    out.events.push({ type: 'work.cancelled' });
-    out.effects.push({ kind: 'stop_run' });
-    return out;
+    return cancelWork(out, 'status.changed: ticket cancelled, work cancelled');
   }
   // The late webhook of the factory's own move decides nothing (ORC-148: the move to AI Review after a push must not
   // start a second review).
@@ -1523,9 +1528,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
     case 'pr.merged':
       // Delivered: the dev run in flight stops, and nothing pending, queued or debounced starts after the merge.
       // Before the rule's effects, so its cleanup and learn run come after the stop.
-      out.trace.push('built-in pr.merged: work cancelled');
-      out.events.push({ type: 'work.cancelled' });
-      out.effects.push({ kind: 'stop_run' });
+      cancelWork(out, 'built-in pr.merged: work cancelled');
       break;
     case 'pr.closed': {
       // Closed without merge (ORC-134): the run is cancelled as by a stop, then the rules apply. The close
@@ -1542,7 +1545,11 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
     }
     case 'ticket.undelegated':
       // Its team got a repo, or delegated again with its `repo:` label the ticket went to its repo: here nothing waits any longer (ORC-171, ORC-291).
+      // Otherwise taken back by a human (ORC-227): its work is cancelled as a cancel's is (ORC-170), a check, a waiting job and the
+      // timers included, which the stop of a run under way does not reach. A blocked ticket keeps its block and its job: its work
+      // already ended, by that stop when the reconciliation sent one first.
       if (isUnrouted(ticket)) out.events.push(...END_OF_WAIT);
+      else if (state?.delegated && !state.blocked) cancelWork(out, 'built-in ticket.undelegated: work cancelled');
       break;
     case 'label.changed': {
       // Routing is sticky (ORC-291): a ticket at work stays in its repo, whichever repo of the team a label added names.
