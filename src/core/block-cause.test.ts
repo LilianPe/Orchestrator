@@ -61,6 +61,13 @@ describe('the kind of a block, set by the code that builds it (ORC-345)', () => 
     expect(legacyBlock(b.reason).blockKind).toBe(kind);
   });
 
+  it('budget, for a step past its token or turn cap (ORC-216): a kind of its own under the cause limit, set by decide, never read from a reason', () => {
+    for (const overBudget of ['tokens', 'turns'] as const) expect(blockOf(ticket({ activeRunId: 'r1' }), finished({ outcome: 'limit', overBudget })).kind).toBe('budget');
+    expect(causeOf('budget')).toBe('limit');
+    // A ticket blocked on the ticket's budget before ORC-216 keeps the kind its reason gave it.
+    expect(legacyBlock('Token budget of the ticket reached: 1000 tokens spent of 1000 by its code runs (budgets.per_ticket_tokens).').blockKind).toBe('limit');
+  });
+
   it('conflict, for a rebase the agent stops on and for the bound the rebases reach: a kind of its own, under its own cause (ORC-146)', () => {
     const rebasing = ticket({ logical: 'human_review', activeRunId: 'r1', activeJob: 'rebase', prNumber: 3, prState: 'OPEN' });
     const stop = finished({ job: 'rebase', outcome: 'success', attempt: 'needs_input', output: { ...INTAKE_OUTPUT, status: 'blocked', reason: 'conflict', conflict: 'logic', question: 'Which side?' } });
