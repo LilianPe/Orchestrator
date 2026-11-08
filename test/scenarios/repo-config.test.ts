@@ -111,6 +111,31 @@ describe("the repository's config at the launch", () => {
     expect(blockCause((await h.ticket()).blockReason)).toBe('repo_config');
   });
 
+  it('reads the config again when a member answers the block: still invalid, the same refusal and no agent; fixed, the step starts', async () => {
+    const member = 'user-lilian';
+    let yaml = 'network: { level: full }\n';
+    const h = createHarness({ sandboxed: true, authz: { githubLogins: { [member]: 'lilian-gh' } }, repoConfig: async () => parseRepoConfig(yaml) });
+    h.tracker.setTeamMembers('REL', [member]);
+    h.forge.setRepoPermission('lilian-gh', 'write');
+    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Exporter les audits en CSV depuis la liste des audits.' });
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' }, 'REL-1', { actor: member });
+    expect(await h.ticket()).toMatchObject({ blocked: true, blockedJob: 'dev' });
+    // Answered without the repository fixed: the launch reads the file again and refuses it again.
+    await h.send('ticket.commented', { body: 'Go ahead.', author: 'Lilian', kind: 'instruction' }, 'REL-1', { actor: member });
+    expect(h.runner.requests).toEqual([]);
+    expect(agents(h)).toEqual([]);
+    expect(await h.ticket()).toMatchObject({ blocked: true, blockedJob: 'dev' });
+    expect(blockCause((await h.ticket()).blockReason)).toBe('repo_config');
+    expect(h.tracker.comments('REL-1').filter((c) => /Reason: Repository configuration to fix/.test(c))).toHaveLength(2);
+    // Fixed on the default branch, then answered: the step starts, at the fixed file's level.
+    yaml = 'network: { level: none }\n';
+    h.runner.enqueue({ hold: true });
+    await h.send('ticket.commented', { body: 'Fixed.', author: 'Lilian', kind: 'instruction' }, 'REL-1', { actor: member });
+    expect(h.runner.requests).toHaveLength(1);
+    expect(agents(h)).toMatchObject([{ network: 'claude-api' }]);
+    expect(await h.ticket()).toMatchObject({ blocked: false, activeJob: 'dev' });
+  });
+
   it('keeps a config the forge could not give as a breakdown, not as a fault of the repository', async () => {
     const h = createHarness({ sandboxed: true, repoConfig: async () => Promise.reject(new Error('the forge no longer responds after 120 s')) });
     await delegate(h);
