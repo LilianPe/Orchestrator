@@ -22,6 +22,8 @@ export const factoryDefault: Preset = {
   // Longer than any Bash call of Claude Code (10 min at most) and than a slow model call retried: a long test run is no silence.
   silentRun: { minutes: 30 },
   redCi: { goto: 'fix', counter: 'review_ci' },
+  // A conflict with the default branch (ORC-146): the rebase step, on the counter of the review and CI loop.
+  conflict: { goto: 'rebase', counter: 'review_ci' },
   steps: [
     { id: 'intake', type: 'agent_step', writes: 'nothing', model: SONNET, effort: 'low', maxTurns: DEFAULT_TURNS, network: 'limited', next: 'clarify' },
     { id: 'clarify', type: 'agent_step', writes: 'nothing', model: SONNET, effort: 'low', maxTurns: DEFAULT_TURNS, network: 'limited', optional: true, next: 'spec_draft' },
@@ -52,5 +54,11 @@ export const factoryDefault: Preset = {
       model: SONNET, effort: 'medium', maxTurns: 60, network: 'limited', next: 'verify_fix',
     },
     { id: 'verify_fix', type: 'verify', mode: 'full', network: 'none', next: 'publish', onFailure: { goto: 'fix', counter: 'verify' } },
+    // A conflict with the default branch: rebased in the ticket's sandbox, verified, then published over the factory's own head.
+    {
+      id: 'rebase', type: 'agent_step', skill: 'factory:rebase', writes: 'code',
+      model: SONNET, effort: 'medium', maxTurns: 60, network: 'limited', next: 'verify_rebase',
+    },
+    { id: 'verify_rebase', type: 'verify', mode: 'full', network: 'none', next: 'publish', onFailure: { goto: 'rebase', counter: 'verify' } },
   ],
 };

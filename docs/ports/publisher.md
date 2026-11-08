@@ -20,7 +20,7 @@ The key is the branch ("Push" and "PR" rows of ORC-162): the branch head is read
 
 ## Fencing
 
-The push is done with `--force-with-lease` on the head that was read, and only if that head is part of the work: never over a commit the work does not have. `GitPublisher` is what proves it (on `--force-with-lease` refused after a move between the read and the push): the fake knows nothing of ancestry, it refuses on command (`refuseNext`).
+The push is done with `--force-with-lease` on the head that was read, and only if that head is part of the work: never over a commit the work does not have. One exception, the commit of a rebase (ORC-146): `req.rewrites` names the head the factory published last, and that head, and no other, may be replaced; a human's commit on the branch since is still refused (`moved`). `GitPublisher` is what proves it (on `--force-with-lease` refused after a move between the read and the push): the fake knows nothing of ancestry, it refuses on command (`refuseNext`).
 
 ## What the suite asks of the implementation
 

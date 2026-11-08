@@ -1,5 +1,5 @@
 /** Why a ticket waits for a human, in the order the Flow shows the causes (ORC-297). */
-export const BLOCK_CAUSES = ['question', 'contested', 'red', 'infra', 'limit', 'loop', 'failed', 'pickup', 'repo_config', 'dead_letter', 'pr_closed', 'stopped', 'other'] as const;
+export const BLOCK_CAUSES = ['question', 'contested', 'conflict', 'red', 'infra', 'limit', 'loop', 'failed', 'pickup', 'repo_config', 'dead_letter', 'pr_closed', 'stopped', 'other'] as const;
 export type BlockCause = (typeof BLOCK_CAUSES)[number];
 
 /**

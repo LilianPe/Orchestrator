@@ -6,16 +6,13 @@
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { asVersion1, record, SCENARIOS } from './scenarios.js';
+import { record, recordedFiles, SCENARIOS } from './scenarios.js';
 
 const dir = join(import.meta.dirname, 'journals');
 mkdirSync(dir, { recursive: true });
-const write = (name: string, journal: unknown) => {
-  writeFileSync(join(dir, `${name}.json`), `${JSON.stringify(journal, null, 2)}\n`);
-  console.log(`test/replay/journals/${name}.json`);
-};
 for (const name of Object.keys(SCENARIOS)) {
-  const journal = await record(name);
-  write(name, journal);
-  if (name === 'review-merge-done') write(`${name}.v1`, asVersion1(journal));
+  for (const { file, text } of recordedFiles(name, await record(name))) {
+    writeFileSync(join(dir, file), text);
+    console.log(`test/replay/journals/${file}`);
+  }
 }

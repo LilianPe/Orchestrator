@@ -517,8 +517,9 @@ export interface TicketState {
    */
   awaitingRepo?: string[] | null;
   /**
-   * Runs started by red CI (`pr.checks_failed`) since the last green CI or human relaunch, bounded by
-   * `limits.ciFixAttempts` (I5, ORC-270). The AI review loop does not share it yet (ORC-184, ORC-187).
+   * Runs started by red CI (`pr.checks_failed`) or by a conflict with the default branch (`pr.conflicted`, ORC-146) since
+   * the last green CI or human relaunch, bounded by `limits.ciFixAttempts` (I5, ORC-270). The AI review loop does not share it
+   * yet (ORC-184, ORC-187).
    */
   ciFixAttempts: number;
   /** Relaunches of an expired lease since an attempt last ended or a human relaunched (ORC-220). Absent before it. */

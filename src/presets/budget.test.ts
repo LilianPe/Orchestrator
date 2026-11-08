@@ -14,6 +14,7 @@ const loop: Preset = {
   sameFailure: { limit: 3, cause: 'boucle' },
   silentRun: { minutes: 30 },
   redCi: { goto: 'fix', counter: 'r' },
+  conflict: { goto: 'fix', counter: 'r' },
   steps: [
     { id: 'build', type: 'agent_step', writes: 'code', model: 'm', effort: 'low', maxTurns: 10, network: 'limited', next: 'verify' },
     { id: 'verify', type: 'verify', mode: 'full', network: 'none', next: 'review', onFailure: { goto: 'build', counter: 'v' } },
@@ -50,7 +51,14 @@ describe('the worst case of a preset (ORC-216)', () => {
   it('on factory/default: 41 agent attempts at most, the review loop twice and the human one three times', () => {
     // Each of the 5 entries into `fix` gets its 3 retries of `verify` again, as the build does.
     expect(worstCase(factoryDefault, { perStepTokens: every(1) })).toEqual({
-      tokens: 41, turns: 3600, attempts: { intake: 1, clarify: 1, spec_draft: 5, tests: 3, build: 4, review: 6, after_merge: 1, fix: 20 },
+      tokens: 41, turns: 3600, attempts: { intake: 1, clarify: 1, spec_draft: 5, tests: 3, build: 4, review: 6, after_merge: 1, fix: 20, rebase: 0 },
+    });
+  });
+
+  it('on factory/default: counts the rebases a conflict starts, on the review and CI counter, where they cost more than a fix (ORC-146)', () => {
+    // The 2 runs of `review_ci` go to `rebase` (each with its 3 retries of `verify_rebase`) instead of `fix`; the human loop keeps its 3 entries into `fix`.
+    expect(worstCase(factoryDefault, { perStepTokens: { ...every(1), rebase: 2 } })).toMatchObject({
+      tokens: 41 - 8 + 8 * 2, attempts: { review: 6, fix: 12, rebase: 8 },
     });
   });
 

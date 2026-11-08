@@ -85,8 +85,8 @@ You can redefine only some of them; after merging, all five must have a name. `r
 | `per_run.turns` | integer > 0 | 150 | Number of assistant messages in a run, a message counting once even if written over several lines of the stream. Beyond that, the run is interrupted; its result is `limit`. A job with `step` never exceeds its step's turns: `per_run` and its `limits` can only lower them. |
 | `per_run.duration` | duration | `90m` | Maximum duration of a run, same `limit` result. |
 | `verify_attempts` | integer ≥ 0 | 4 (preset) | Number of verification passes before blocking the ticket (see `jobs.*.verify`). `0` and `1` block on the first failure. By default, the bound from the [`factory/default` preset](preset.md): 3 returns to the run, the 4th failure blocks. |
-| `ci_fix_attempts` | integer ≥ 0 | 2 (preset) | Number of runs a red CI (`pr.checks_failed`) can launch before the next red CI blocks the ticket (see below). `0` blocks on the first red CI. |
-| `review_rounds` | integer > 0 | 2 (preset) | Given to the review skill in its prompt (« Max review rounds: 2 »); only for jobs whose skill ends with `:review`. The skill respects this number; Relais does not count it. By default the preset's `review_ci` bound, the count shared with red CI (ORC-184, ORC-216). |
+| `ci_fix_attempts` | integer ≥ 0 | 2 (preset) | Number of runs a red CI (`pr.checks_failed`) or a conflict with the base (`pr.conflicted`, ORC-146) can launch, together, before the next one blocks the ticket (see below). `0` blocks on the first. |
+| `review_rounds` | integer > 0 | 2 (preset) | Given to the review skill in its prompt (« Max review rounds: 2 »); only for jobs whose skill ends with `:review`. The skill respects this number; Relais does not count it. By default the preset's `review_ci` bound, the count shared with red CI and rebases (ORC-184, ORC-216, ORC-146). |
 
 The defaults of `verify_attempts` and `ci_fix_attempts` come from the [`factory/default` preset](preset.md) (ORC-187); the pack no longer declares them. These two keys remain a possible override until `workflow.yml` is removed (ORC-177).
 
@@ -185,6 +185,7 @@ Pack jobs:
 | `command` | `@relais <word> …` when `<word>` is a `say` value from the `command` list. | Filterable with `say`. |
 | `pr.checks_passed` | The PR's CI passes. | Before the rules, Relais resets the red-CI relaunch count (`limits.ci_fix_attempts`) and lifts the block caused by this bound. |
 | `pr.checks_failed` | The PR's CI fails. | A rule that launches a run is bounded by `limits.ci_fix_attempts`: once the bound is reached, Relais blocks the ticket instead of applying the rule. |
+| `pr.conflicted` | The PR conflicts with its base branch (ORC-146). | Only for the ticket's open PR. A rule that launches a run counts on the same bound as red CI (`limits.ci_fix_attempts`): once it is reached, Relais blocks the ticket (cause « conflict ») instead of applying the rule. |
 | `pr.merged` | The PR is merged. | Before the rules, Relais records the PR as merged and stops work on the ticket like a `stop`, without blocking it: the running `dev` run is stopped, waiting or queued runs and `debounce` timers are deleted. After that, no job from the `dev` queue starts on the ticket any more, whatever rule, timer or wait requests it (project label, reply, red CI, waiting or queued job): the refusal is only traced, with no message in Linear. The end of the stopped `dev` run and its checks are ignored. The rules apply after the stop: `done`, cleanup and `learn` do not change, and jobs from the `questions` queue (`learn`, `ask`) still run. The ticket becomes active again when a human changes its status to something other than *Done* (also when Relais could not move it to *Done*), delegates it again, or a new PR (another number) is detected for it. GitHub polling no longer looks at a ticket in *Done* whose PR is merged: a new PR is only seen once the ticket has left *Done*. |
 | `pr.closed` | The PR is closed without merging. | Before the rules, if it is the ticket's known PR, open, and the ticket is not *Done*, Relais cancels work on the ticket: the running `dev` run is stopped, the waiting job and the expected check are deleted, the ticket is blocked (« PR #n closed without merge ») with a message in the session. A human relaunches as after a `stop` (reply in the ticket); a new PR (another number) is followed like any PR, and the same PR reopened becomes open again (`pr.opened`). |
 
@@ -261,6 +262,7 @@ There is no `post` field in a rule: publishing the result is configured in `jobs
 | `label.changed` | `agent:stop` → `stop` |
 | `session.stopped` | → `stop` |
 | `pr.checks_failed` | if `state in [human_review, ai_review] && !blocked` → `fix-ci`, at most `limits.ci_fix_attempts` times in a row, then block |
+| `pr.conflicted` | if `state in [dev, human_review, ai_review] && !blocked` → `rebase` ([preset](preset.md#rebase-step-orc-146)), on the same count as `fix-ci`, then block |
 | `pr.merged` | → moves to `done`, deletes the worktree, launches `learn` |
 
 ## 4. `when` grammar

@@ -12,7 +12,7 @@ intake → clarify (if the ticket is unclear) → spec_draft → spec_check → 
   → merge (after a human moves it to Done) → after_merge
 ```
 
-After publishing, a single `fix` step serves all loops: `fix → verify_fix → publish → AI review → human_review`. Its skill depends on the cause: `factory:fix-ci` for a red CI, `factory:feedback` for an AI review or human feedback.
+After publishing, a single `fix` step serves all loops: `fix → verify_fix → publish → AI review → human_review`. Its skill depends on the cause: `factory:fix-ci` for a red CI, `factory:feedback` for an AI review or human feedback. A conflict with the default branch takes its own way back: `rebase → verify_rebase → publish → AI review → human_review` ([below](#rebase-step-orc-146)).
 
 Each step has a type: `spec_check`, `agent_step`, `verify` (modes `red`, `freeze`, `full`), `review`, `fix`, `human_gate` (gate `spec` or `merge`), `publish` (modes `push`, `merge`). A step has a follow-up on success (`next`) and, if it can fail, a step back (`onFailure`) that consumes a counter. Every `agent_step` step declares what it writes (`writes`: `nothing`, `spec`, `tests` or `code`): an omission makes compilation fail.
 
@@ -25,6 +25,7 @@ Each step has a type: `spec_check`, `agent_step`, `verify` (modes `red`, `freeze
 | Unverified red → `tests` (blocking mode) | `red` | 2 | Blocked; the agent can also return `spec_impossible` |
 | `verify` fails → `build` (or `verify_fix` → `fix`) | `verify` | 3 | Blocked |
 | AI review or red CI → `fix` | `review_ci` | 2, a single counter per run | Blocked |
+| Conflict with the default branch → `rebase` (ORC-146) | `review_ci`, the same | 2, shared with red CI | Blocked, cause « conflict » |
 | Human feedback → `fix` | `human_review` | 3, separate from AI rounds | Blocked |
 | Same command, same failure, diff unchanged | `sameFailure` | 3 | Blocked, cause « boucle » (loop): between two `verify` runs and during the attempt ([stagnation](#attempt-stagnation-orc-136)) |
 | Nothing written to the attempt's stream | `silentRun` | 30 min | Blocked ([stagnation](#attempt-stagnation-orc-136)) |
@@ -42,12 +43,13 @@ A red CI is the failure of a push: as long as the PR is open, including during t
 | `tests`, `after_merge` | Sonnet | medium | 150 | Limited |
 | `build` | Sonnet | medium | 150 | Limited |
 | `fix` | Sonnet | medium | 60 | Limited |
+| `rebase` | Sonnet | medium | 60 | Limited |
 | `review` | Opus | high | 25 | Claude API |
 | `spec_check`, `verify*`, `red`, `freeze_tests` | (factory check) | | | None |
 
 The turns of steps the MVP doc does not quantify reuse the old `per_run.turns: 150`. Token caps remain to be calibrated: none by default, and `factory validate` refuses until each agent step has its `per_step_tokens` and the ticket its `per_ticket_tokens` (ORC-216).
 
-A workflow job names its step (`step`, ORC-136): `dev` is `build`, `tests` is `tests`, `dev-feedback` and `fix-ci` are `fix`, `review` is `review`. Loading derives from it the effort, passed to `claude --effort` and recorded in the attempt's labels, and the turns. `factory.yml` can change a step's effort (`claude.effort.per_step`), lower its turns (`budgets.max_turns`) and give it a token cap (`budgets.per_step_tokens`). Like the whole workflow, these values are frozen with the ticket's version: a ticket already started keeps its own, and a version frozen before ORC-136 has neither effort nor tokens.
+A workflow job names its step (`step`, ORC-136): `dev` is `build`, `tests` is `tests`, `dev-feedback` and `fix-ci` are `fix`, `review` is `review`, `rebase` is `rebase` (ORC-146). Loading derives from it the effort, passed to `claude --effort` and recorded in the attempt's labels, and the turns. `factory.yml` can change a step's effort (`claude.effort.per_step`), lower its turns (`budgets.max_turns`) and give it a token cap (`budgets.per_step_tokens`). Like the whole workflow, these values are frozen with the ticket's version: a ticket already started keeps its own, and a version frozen before ORC-136 has neither effort nor tokens.
 
 A token cap counts `input + output + cache_creation` of the attempt's messages, not cache reads. When exceeded, the run stops as on a turn cap: `limit`, and the runner says which cap (`overBudget: tokens | turns`, journaled on `run.finished`): the ticket is Blocked with the kind `budget` and the standard comment (ORC-216). A run stopped at its duration, or one journaled before ORC-216, blocks with the kind `limit` as before. The subscription's usage limit is no overrun: the run waits for the reset (`on_usage_limit: wait`, ORC-340).
 
@@ -60,7 +62,7 @@ The network level is chosen per repository (Limited by default); a step can only
 | Preset bound | In the loaded workflow | Effect |
 | -- | -- | -- |
 | `counters.verify` (3) | `limits.verifyAttempts` = 4 | 3 returns to the run after a failed check; the 4th failure blocks |
-| `counters.review_ci` (2) | `limits.ciFixAttempts` = 2 | 2 `fix-ci` retries on red CI; the next one blocks. AI review rounds will join this counter with ORC-184 |
+| `counters.review_ci` (2) | `limits.ciFixAttempts` = 2 | 2 runs between `fix-ci` on red CI and `rebase` on a conflict (ORC-146); the next red CI or conflict blocks. AI review rounds will join this counter with ORC-184 |
 | `sameFailure` (3) | `limits.repeatedFailures` = 3 | same failure on an unchanged worktree, 3 times in a row: Blocked, cause « Loop » |
 | `counters.red` (2) | `jobs.<job>.red.attempts` = 3 | in blocking mode, 2 returns to `tests` after an unverified red; the 3rd blocks. A human retry resets the count to zero |
 
@@ -74,14 +76,34 @@ The YAML's `on` rules still drive the sequence (ORC-177): the engine does not ex
 
 | Blocked at | A reply relaunches |
 | -- | -- |
-| `build`, `tests`, `fix`, `review` (end of run, cap, loop, lease, interruption, question, including via `relais-agent ask`) | that step's job: `dev`, `tests`, `dev-feedback`, `review`. `fix-ci` goes through `dev-feedback`, same step: it reads its red checks, not a reply |
+| `build`, `tests`, `fix`, `review`, `rebase` (end of run, cap, loop, lease, interruption, question, a conflict the rebase stops on, including via `relais-agent ask`) | that step's job: `dev`, `tests`, `dev-feedback`, `review`, `rebase`. `fix-ci` goes through `dev-feedback`, same step: it reads its red checks, not a reply |
 | pickup, launch | the job being launched, its checks included |
-| `verify`, `verify_fix`, `red` (failure at the cap, loop, failure) | the job the check judges: that is the preset's step back. Not the check alone: `run_verify` needs the agent's output, which `verify.errored` does not carry |
+| `verify`, `verify_fix`, `verify_rebase`, `red` (failure at the cap, loop, failure) | the job the check judges: that is the preset's step back. Not the check alone: `run_verify` needs the agent's output, which `verify.errored` does not carry |
 | `verify` of a job that does not fix (`verify_failure: block`, the review) | `dev-feedback`, which writes |
 | `publish` refused | `dev-feedback`: it writes, goes through `verify` then `publish` again, and the owed move follows (`owedMove`) |
 | dead-letter, dead effect, `stop` | `dev-feedback`, these blocks have no step of their own |
 
 **Not yet**: relaunching a step without an agent (`verify`, `red`, `freeze_tests`, `spec_check`, `publish`, `merge`) on its own, and resuming at the human gates (`spec_review`, `human_review`): this needs an engine that executes the steps (ORC-177). `clarify`, `spec_draft`, `spec_check`, `spec_review` and `after_merge` do not have a job yet; `intake` has one, which a repository turns on ([below](#intake-step-and-the-guard-before-in-progress-orc-206)). A reply to the guard relaunches `intake`. The attempt number follows the counter that led to the block; a step without a counter shows 1/1. A project rule with a `debounce` on a blocked ticket keeps its job: its timer starts once the block is lifted.
+
+## `rebase` step (ORC-146)
+
+A conflict of the ticket's PR with its base branch arrives in the inbox as `pr.conflicted` (GitHub webhook, ORC-134). It is the engine that starts the step that handles it; an agent at work on another step never resolves it: the `dev`, `feedback`, `fix-ci` and `review` skills leave the base alone and hand back.
+
+**Start.** The pack's rule `pr.conflicted: { when: "state in [dev, human_review, ai_review] && !blocked", run: rebase }`, for the ticket's open PR only (another PR's conflict, a merged or closed one's, is only journaled). Each start counts on `review_ci` (`ciFixAttempts`), the counter of red CI (I5): the conflict's id carries the head and the base, so GitHub repeating it on the same pair starts nothing more. A rebase already running or waiting starts no second one either, whatever the head: it takes the branch onto the base as it is then. Past the bound, the conflict starts nothing and blocks the ticket, kind `conflict` (a green CI does not lift it, unlike the red-CI bound). A conflict during another step leaves that run alone: the start waits behind it, pending, and runs once that work is out (verified and published).
+
+**The step.** The `rebase` job (agent, skill `factory:rebase`, Sonnet, effort medium, 60 turns, the repository's network) resumes the ticket's session in its worktree, in its sandbox like any dev job. It runs `git rebase origin/<base>` and resolves the ordinary conflicts, then the touched tests, types and lint. It moves nothing and posts nothing. Three cases stop it: `git rebase --abort`, then `submit_result` with `status: blocked`, `reason: conflict` and `conflict`:
+
+| `conflict` | When |
+| -- | -- |
+| `logic` | the two sides contradict each other |
+| `migrations` | two migrations change the same schema |
+| `scope` | the resolution goes beyond the ticket's scope |
+
+The ticket is then Blocked, kind `conflict`, with the standard comment (step `rebase`, the case in the reason, the agent's question). A reply relaunches `rebase` with the answer.
+
+**Verify, then publish.** A rebase that ends well goes through `verify_rebase` (the repository's commands and the diff checks, in a fresh clone, like any job that writes code); failed checks send it back with them, bounded by `verify`. Only a green commit goes out (I1). The factory publishes it with `--force-with-lease` (ORC-125): the rebased branch no longer holds what was pushed, so its `publish` effect carries `rewrite`, and the push may replace the head the factory published last (the sha of the ticket's last `publish.done`, read from its journal), and only that head. A human's commit on the branch since is refused (`moved`), as for any publication. The ticket stays where it was (Human Review, AI Review or In Progress). In Human Review, the reviewed commit is no longer the head: a Done then goes back through the AI review, which shows the rebased head, as after any push since the review. Only the rebase step stops on a `conflict`: another step that reports one asks a plain question.
+
+**Not yet**: a conflict created by a push to the default branch, with no event on the PR, waits for the reconciliation (ORC-185); the freeze reads a rebase as a change since the freeze, which needs a `/refreeze` (see the freeze's « not yet »); the rebase's summary is not posted (ORC-214's `OutputPolicy` will compose what a step posts).
 
 ## `intake` step and the guard before In Progress (ORC-206)
 
@@ -219,6 +241,6 @@ Each default reaction of the MVP doc has a harness scenario in `test/scenarios/`
 - **network**: no step at Full (reserved for `setup`), none above the repository's level;
 - **budget caps**: every agent step has a maximum number of turns; given `budgets` (`factory validate` gives them, the daemon does not yet: the values are to calibrate), every agent step has its `per_step_tokens`, the ticket its `per_ticket_tokens`, and the worst case stays under it (ORC-216).
 
-**Worst case** (`src/presets/budget.ts`): from the entry, the run follows `next` and, at each step with a failure edge (red CI included) whose counter is not spent, may take it instead. The worst case is the exact maximum over these runs of Σ cap of each agent step run, in tokens (`per_step_tokens`) and in turns (`maxTurns`, lowered by `max_turns`). A `verify` step that passes refills its own counter, as the engine's `verify.passed` resets `verifyAttempts` and `redAttempts`: each entry into a checked loop gets all its retries. A way back that refills the counter it spends has no bound, and is refused. On `factory/default` that is 41 agent attempts at most: `spec_draft` 5, `tests` 3, `build` 4, `fix` 20 (5 entries, the review loop twice and the human one three times, each with its 3 retries of `verify`), `review` 6, the others once. Not counted: the red-CI count the engine resets on a green CI (ORC-270), which the preset bounds per run (`review_ci`, shared with the review loop, ORC-184); a human relaunch, which gives every bound back and is the ticket's `per_ticket_tokens` to bound at run time; and what an attempt spends past its cap before it is stopped (the cap is checked as each message reports its usage). With the review loop at 5 rounds, the worst case was almost twice the cap per ticket of the MVP doc: it is 2 (`review_ci`), the count shared with red CI, and `limits.review_rounds` (« Max review rounds » of the review prompt) defaults to it.
+**Worst case** (`src/presets/budget.ts`): from the entry, the run follows `next` and, at each step with a failure edge (red CI and conflict included) whose counter is not spent, may take it instead. The worst case is the exact maximum over these runs of Σ cap of each agent step run, in tokens (`per_step_tokens`) and in turns (`maxTurns`, lowered by `max_turns`). A `verify` step that passes refills its own counter, as the engine's `verify.passed` resets `verifyAttempts` and `redAttempts`: each entry into a checked loop gets all its retries. A way back that refills the counter it spends has no bound, and is refused. On `factory/default` that is 41 agent attempts at most: `spec_draft` 5, `tests` 3, `build` 4, `fix` 20 (5 entries, the review loop twice and the human one three times, each with its 3 retries of `verify`), `review` 6, the others once. A conflict spends the same `review_ci` as a red CI, and its way back (`rebase`, 60 turns, through `verify_rebase` with its 3 retries) weighs what `fix`'s does with equal caps: the worst case takes `rebase` instead where its `per_step_tokens` is higher, up to 8 attempts (2 entries × 4) in place of 8 of `fix`, and `factory validate` needs `per_step_tokens.rebase` like any agent step's (ORC-146). Not counted: the count of red CI and rebases the engine resets on a green CI (ORC-270), which the preset bounds per run (`review_ci`, shared with the review loop, ORC-184); a human relaunch, which gives every bound back and is the ticket's `per_ticket_tokens` to bound at run time; and what an attempt spends past its cap before it is stopped (the cap is checked as each message reports its usage). With the review loop at 5 rounds, the worst case was almost twice the cap per ticket of the MVP doc: it is 2 (`review_ci`), the count shared with red CI, and `limits.review_rounds` (« Max review rounds » of the review prompt) defaults to it.
 
 The hash is the sha256 of the preset's canonical JSON (sorted keys): it does not depend on key order and changes as soon as a bound, a model or a step changes. Each run will be frozen on the hash it started with (`workflow_versions` table, ORC-149).
