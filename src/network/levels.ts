@@ -13,8 +13,22 @@ export interface EgressPolicy {
 
 export type Verdict = { ok: true } | { ok: false; reason: string };
 
-/** Every method goes there: the agent's own model calls. */
+/** The agent's own model calls. The proxy sets the factory's token on them: the sandbox has none (ORC-337). */
 export const CLAUDE_API = ['api.anthropic.com'];
+
+/**
+ * What Claude Code calls there, method and path, the query aside (ORC-337, measured on 2.1.316 with the
+ * factory's run env): the model, its token count, and the two reads of the account's managed settings.
+ * Everything else is refused, `/v1/files` first: with the factory's token on it, it would be a write channel.
+ * Telemetry (`/api/event_logging/*`, `/api/eval/*`), the CLI bootstrap and the MCP registry, which the run env
+ * turns off already, are refused too: Claude Code runs on without them (measured).
+ */
+export const CLAUDE_API_CALLS: ReadonlySet<string> = new Set([
+  'POST /v1/messages',
+  'POST /v1/messages/count_tokens',
+  'GET /api/claude_code/settings',
+  'GET /api/claude_code/policy_limits',
+]);
 
 /**
  * Claude Code's OAuth token refresh, the token endpoint alone (POST); reads elsewhere on the host.
@@ -84,8 +98,8 @@ export function allowRequest(p: EgressPolicy, host: string, method: string, path
   if (p.level === 'full') return { ok: true };
   const c = allowConnect(p, h);
   if (!c.ok) return c;
-  if (CLAUDE_API.includes(h)) return { ok: true };
   const [pathname = '', query = ''] = path.split('?');
+  if (CLAUDE_API.includes(h)) return CLAUDE_API_CALLS.has(`${method} ${pathname}`) ? { ok: true } : refuse(`${method} ${h}${pathname} refused: not a call of Claude Code`);
   if (Object.hasOwn(CLAUDE_AUTH, h) && method === 'POST' && pathname === CLAUDE_AUTH[h]) return { ok: true };
   // A push starts with this advertisement, then POSTs to git-receive-pack.
   // Read as a forge reads it, whatever its spelling. A push's real step is the POST, which no rule below lets through.

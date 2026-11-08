@@ -53,6 +53,13 @@ describe('the egress proxy as a service of its own (ORC-203)', () => {
     }
   };
 
+  it('hands the proxy the Claude token of the run it opens, and none when the daemon has none (ORC-337)', async () => {
+    const open = vi.spyOn(proxy, 'open');
+    await new EgressClient(path, () => {}, undefined, () => 'sk-ant-oat01-daemon').open('run-1', LIMITED);
+    await client.open('run-2', LIMITED);
+    expect(open.mock.calls).toEqual([['run-1', LIMITED, 'sk-ant-oat01-daemon'], ['run-2', LIMITED, undefined]]);
+  });
+
   it("opens the run's socket in the proxy's process and gives back its path and the authority's certificate", async () => {
     const socket = await client.open('run-1', LIMITED);
     expect(socket).toBe(proxy.socketPath('run-1'));

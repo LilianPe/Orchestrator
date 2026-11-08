@@ -8,7 +8,7 @@ import { dirname, join } from 'node:path';
 import { pipeline, type Duplex } from 'node:stream';
 import { TLSSocket } from 'node:tls';
 import { LeafIssuer, loadOrCreateCa, type FactoryCa } from './ca.js';
-import { allowConnect, allowRequest, norm, type EgressPolicy, type Verdict } from './levels.js';
+import { allowConnect, allowRequest, CLAUDE_API, norm, type EgressPolicy, type Verdict } from './levels.js';
 
 /** One line of a run's egress journal: every request, allowed or refused (ORC-213). */
 export interface EgressEntry {
@@ -35,12 +35,16 @@ export interface EgressProxyOptions {
   agentApi?: { host: string; port: number; to: { host: string; port: number } };
   /** Where a journal that cannot be written is told; the run goes on. */
   log?: (message: string) => void;
+  /** The Claude token a run's model calls get when `open` is given none (ORC-337): the proxy in the daemon's process. */
+  claudeToken?: () => string | undefined;
   /** Tests only: the trust, the resolver and the port of the upstream connections (a local HTTPS server). */
   upstream?: { ca: string; lookup: LookupFunction; port: number };
 }
 
 interface Run {
   policy: EgressPolicy;
+  /** Set on its requests to the Claude API in place of the client's (ORC-337): the sandbox never holds it. */
+  claudeToken: string | undefined;
   /** Listening once it resolves; a concurrent open waits on it. */
   ready: Promise<void>;
   /** The run's socket: HTTP proxy protocol. */
@@ -151,8 +155,9 @@ export class EgressProxy {
   /**
    * The run's socket, listening; the same on a replay or a concurrent call. Another policy for an
    * open run is refused: the container's mount holds this socket, it cannot be swapped under it.
+   * `claudeToken`, the run's Claude account (the `proxy` service gets it from the daemon), else the option's.
    */
-  async open(runId: string, policy: EgressPolicy): Promise<string> {
+  async open(runId: string, policy: EgressPolicy, claudeToken = this.o.claudeToken?.()): Promise<string> {
     const path = this.socketPath(runId);
     const journalPath = this.journalPath(runId);
     const existing = this.runs.get(runId);
@@ -166,7 +171,7 @@ export class EgressProxy {
     mkdirSync(this.o.dir, { recursive: true, mode: 0o700 });
     const journal = createWriteStream(journalPath, { flags: 'a' });
     journal.on('error', (err) => this.o.log?.(`egress: journal of ${runId} not written: ${err.message}`));
-    const run: Run = { policy, ready: Promise.resolve(), server: createServer(), mitm: createServer(), sockets: new Set(), journal, inflight: 0, closed: false };
+    const run: Run = { policy, claudeToken, ready: Promise.resolve(), server: createServer(), mitm: createServer(), sockets: new Set(), journal, inflight: 0, closed: false };
     this.runs.set(runId, run);
     run.ready = this.listen(run, path).catch((err: unknown) => {
       this.runs.delete(runId);
@@ -322,7 +327,7 @@ export class EgressProxy {
     const path = req.url ?? '/';
     const v = check(t.host, allowRequest(run.policy, t.host, method, path));
     if (!v.ok) return this.refuse(run, res, method, t.host, path, v.reason);
-    const out = httpsRequest({ ...this.tlsTo(t.host, t.port), method, path, headers: { ...hopless(req), host: authority(t.host, t.port, 443) } });
+    const out = httpsRequest({ ...this.tlsTo(t.host, t.port), method, path, headers: { ...upstreamHeaders(run, t.host, req), host: authority(t.host, t.port, 443) } });
     this.relay(run, req, res, out, method, t.host, path);
   }
 
@@ -346,7 +351,7 @@ export class EgressProxy {
       : check(host, port === 80 || run.policy.level === 'full' ? allowRequest(run.policy, host, method, path) : { ok: false, reason: `port ${port} refused` });
     if (!v.ok) return this.refuse(run, res, method, host, path, v.reason);
     // Below full the port is 80 (checked above), so the Host is the bare host either way.
-    const opts = { method, path, headers: { ...hopless(req), host: authority(host, port, 80) } };
+    const opts = { method, path, headers: { ...upstreamHeaders(run, host, req), host: authority(host, port, 80) } };
     let out: ClientRequest;
     if (agent) out = httpRequest({ ...opts, ...agent });
     else if (run.policy.level === 'full') out = httpRequest({ ...opts, host, port, lookup: publicLookup });
@@ -412,6 +417,18 @@ function hopless(req: IncomingMessage): Record<string, string | string[] | undef
   const h = { ...req.headers };
   for (const k of ['proxy-connection', 'proxy-authorization', 'host']) delete h[k];
   return h;
+}
+
+/**
+ * What goes upstream of the request's headers. To the Claude API below `full`, the client's credentials never:
+ * the run's token in their place (ORC-337), or none. At `full` (a setup, which runs no agent) nothing is set.
+ */
+function upstreamHeaders(run: Run, host: string, req: IncomingMessage): Record<string, string | string[] | undefined> {
+  const h = hopless(req);
+  if (run.policy.level === 'full' || !CLAUDE_API.includes(host)) return h;
+  delete h['authorization'];
+  delete h['x-api-key'];
+  return run.claudeToken ? { ...h, authorization: `Bearer ${run.claudeToken}` } : h;
 }
 
 /** `host[:port]` as a Host header, the default port left out. */

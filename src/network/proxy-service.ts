@@ -14,7 +14,11 @@ export type Egress = Pick<EgressProxy, 'open' | 'close' | 'closeAll' | 'isOpen' 
 export const sandboxAgentHost = (env: NodeJS.ProcessEnv) => env['FACTORY_SANDBOX_AGENT_HOST'] || 'host.docker.internal';
 
 const CLOSE = z.object({ runId: z.string() });
-const OPEN = CLOSE.extend({ policy: z.object({ level: z.enum(Object.keys(NETWORK_RANK) as [NetworkLevel, ...NetworkLevel[]]), allow: z.array(z.string()) }) });
+const OPEN = CLOSE.extend({
+  policy: z.object({ level: z.enum(Object.keys(NETWORK_RANK) as [NetworkLevel, ...NetworkLevel[]]), allow: z.array(z.string()) }),
+  /** The run's Claude token, which the proxy sets on its model calls (ORC-337); held in memory only. */
+  claudeToken: z.string().optional(),
+});
 
 export interface EgressControl {
   close(): Promise<void>;
@@ -28,8 +32,8 @@ export interface EgressControl {
 export async function serveEgressControl(proxy: EgressProxy, path: string): Promise<EgressControl> {
   const routes = new Map<string, (input: unknown) => Promise<object>>([
     ['/open', async (input) => {
-      const { runId, policy } = OPEN.parse(input);
-      const socket = await proxy.open(runId, policy);
+      const { runId, policy, claudeToken } = OPEN.parse(input);
+      const socket = await proxy.open(runId, policy, claudeToken);
       return { socket, ca: proxy.caCertPath };
     }],
     ['/close', async (input) => {
@@ -83,6 +87,8 @@ export class EgressClient implements Egress {
     private readonly log: (message: string) => void = () => {},
     /** A proxy that does not answer must not hold a run's place in the queue. */
     private readonly timeoutMs = 30_000,
+    /** Handed to the proxy with each run it opens (ORC-337): the `proxy` service reads no secret of its own. */
+    private readonly claudeToken: () => string | undefined = () => undefined,
   ) {}
 
   get caCertPath(): string {
@@ -101,7 +107,8 @@ export class EgressClient implements Egress {
 
   async open(runId: string, policy: EgressPolicy): Promise<string> {
     await this.watching();
-    const { socket, ca } = (await this.call('/open', { runId, policy })) as { socket: string; ca: string };
+    const claudeToken = this.claudeToken();
+    const { socket, ca } = (await this.call('/open', { runId, policy, ...(claudeToken ? { claudeToken } : {}) })) as { socket: string; ca: string };
     this.ca = ca;
     this.opened.add(runId);
     return socket;

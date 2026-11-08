@@ -23,7 +23,9 @@ const upstream = createHttpsServer({ SNICallback: (name, cb) => cb(null, upIssue
   // Half a body, then the connection cut; or a response that never ends.
   if (req.url === '/cut') return void res.writeHead(200, { 'content-length': '100' }).write('half', () => res.destroy());
   if (req.url === '/slow') return void res.writeHead(200).write('start');
-  req.on('end', () => res.end(`up ${req.method} ${req.headers.host} ${req.url}`));
+  // The credentials it got, when it got any: what the proxy set on a Claude API call (ORC-337).
+  const creds = (['authorization', 'x-api-key'] as const).filter((k) => req.headers[k] !== undefined).map((k) => ` ${k}=${req.headers[k]}`).join('');
+  req.on('end', () => res.end(`up ${req.method} ${req.headers.host} ${req.url}${creds}`));
 });
 const toLocal = ((_h: string, opts: { all?: boolean }, cb: (e: null, a: unknown, f?: number) => void) =>
   opts.all ? cb(null, [{ address: '127.0.0.1', family: 4 }]) : cb(null, '127.0.0.1', 4)) as unknown as LookupFunction;
@@ -45,6 +47,7 @@ beforeEach(async () => {
     dir,
     caDir: join(dir, 'ca'),
     agentApi: { host: 'host.docker.internal', port: 4101, to: { host: '127.0.0.1', port: agentPort } },
+    claudeToken: () => FACTORY_TOKEN,
     upstream: { ca: upCa.certPem, lookup: toLocal, port: (upstream.address() as AddressInfo).port },
   });
 });
@@ -106,6 +109,8 @@ const journal = async (runId: string): Promise<EgressEntry[]> => {
 };
 
 const docs = { level: 'limited' as const, allow: ['docs.test'] };
+const FACTORY_TOKEN = 'sk-ant-oat01-the-factory-token';
+const CLAUDE = 'api.anthropic.com';
 
 describe('EgressProxy', () => {
   it('refuses a tunnel the policy refuses, and journals it', async () => {
@@ -212,6 +217,56 @@ describe('EgressProxy', () => {
     const sock = await proxy.open('run-1', { level: 'full', allow: [] });
     expect(await status(sock, 'localhost:22')).toBe('HTTP/1.1 502 Bad Gateway');
     expect(await journal('run-1')).toEqual([expect.objectContaining({ method: 'CONNECT', host: 'localhost', port: 22, ok: false, reason: expect.stringMatching(/private/) as string })]);
+  });
+
+  describe('the Claude API (ORC-337)', () => {
+    const attacker = { authorization: 'Bearer sk-ant-api03-attacker', 'x-api-key': 'sk-ant-api03-attacker' };
+
+    it("replaces any credential of the client with the run's token, tunnelled or plain", async () => {
+      const sock = await proxy.open('run-1', { level: 'claude-api', allow: [] });
+      expect(await viaTls(sock, CLAUDE, 'POST', '/v1/messages?beta=true', attacker)).toEqual({ status: 200, body: `up POST ${CLAUDE} /v1/messages?beta=true authorization=Bearer ${FACTORY_TOKEN}` });
+      expect(await viaTls(sock, CLAUDE, 'POST', '/v1/messages/count_tokens', { authorization: 'Bearer set-by-the-factory-egress-proxy' })).toEqual({ status: 200, body: `up POST ${CLAUDE} /v1/messages/count_tokens authorization=Bearer ${FACTORY_TOKEN}` });
+      expect((await viaTls(sock, CLAUDE, 'GET', '/api/claude_code/settings')).body).toBe(`up GET ${CLAUDE} /api/claude_code/settings authorization=Bearer ${FACTORY_TOKEN}`);
+      expect((await viaProxy(sock, 'POST', `http://${CLAUDE}/v1/messages`)).body).toBe(`up POST ${CLAUDE} /v1/messages authorization=Bearer ${FACTORY_TOKEN}`);
+      // The journal never holds a token.
+      expect(JSON.stringify(await journal('run-1'))).not.toMatch(/sk-ant/);
+    });
+
+    it('prefers the token the run was opened with: the proxy service gets it from the daemon', async () => {
+      const sock = await proxy.open('run-1', { level: 'limited', allow: [] }, 'sk-ant-oat01-of-this-run');
+      expect((await viaTls(sock, CLAUDE, 'POST', '/v1/messages', attacker)).body).toBe(`up POST ${CLAUDE} /v1/messages authorization=Bearer sk-ant-oat01-of-this-run`);
+    });
+
+    it("sends none of the client's credentials when the factory has no token", async () => {
+      const bare = new EgressProxy({ dir: join(dir, 'bare'), caDir: join(dir, 'ca'), upstream: { ca: upCa.certPem, lookup: toLocal, port: (upstream.address() as AddressInfo).port } });
+      try {
+        // The same CA: the one viaTls trusts, made by the first open.
+        await proxy.open('run-0', { level: 'claude-api', allow: [] });
+        const sock = await bare.open('run-1', { level: 'claude-api', allow: [] });
+        expect((await viaTls(sock, CLAUDE, 'POST', '/v1/messages', attacker)).body).toBe(`up POST ${CLAUDE} /v1/messages`);
+      } finally {
+        await bare.closeAll();
+      }
+    });
+
+    it('refuses a path Claude Code does not call, /v1/files first, and journals it', async () => {
+      const sock = await proxy.open('run-1', { level: 'limited', allow: [] });
+      const files = await viaTls(sock, CLAUDE, 'POST', '/v1/files', attacker);
+      expect(files.status).toBe(403);
+      expect(files.body).toMatch(/not a call of Claude Code/);
+      expect((await viaProxy(sock, 'POST', `http://${CLAUDE}/v1/files`)).status).toBe(403);
+      expect((await viaTls(sock, CLAUDE, 'POST', '/api/event_logging/v2/batch')).status).toBe(403);
+      expect(await journal('run-1')).toEqual([
+        expect.objectContaining({ method: 'POST', host: CLAUDE, path: '/v1/files', ok: false }),
+        expect.objectContaining({ method: 'POST', host: CLAUDE, path: '/v1/files', ok: false }),
+        expect.objectContaining({ method: 'POST', host: CLAUDE, path: '/api/event_logging/v2/batch', ok: false }),
+      ]);
+    });
+
+    it('leaves the credentials of other hosts alone', async () => {
+      const sock = await proxy.open('run-1', docs);
+      expect((await viaTls(sock, 'docs.test', 'GET', '/', { authorization: 'Bearer docs' })).body).toBe('up GET docs.test / authorization=Bearer docs');
+    });
   });
 
   it('shares one socket between concurrent opens, and refuses another policy for an open run', async () => {

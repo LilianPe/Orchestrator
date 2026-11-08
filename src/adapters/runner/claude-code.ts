@@ -25,8 +25,14 @@ export interface ClaudeRunnerOptions {
   log?: (message: string) => void;
 }
 
-/** The one credential a sandboxed `claude` gets (ORC-211): no API key, no other account, no gateway. */
+/** How `claude` logs in (ORC-211): no API key, no other account, no gateway. */
 const CLAUDE_TOKEN = 'CLAUDE_CODE_OAUTH_TOKEN';
+
+/**
+ * What a sandboxed `claude` gets in place of the account's token (ORC-337): it logs in by OAuth with it, and the
+ * egress proxy swaps it for the real one on the way to the Claude API. Nothing of the account enters the sandbox.
+ */
+export const SANDBOX_CLAUDE_TOKEN = 'set-by-the-factory-egress-proxy';
 
 /**
  * The factory's MCP (`POST /agent/mcp`, ORC-288). Claude Code expands `${VAR}` in a `--mcp-config`'s
@@ -200,10 +206,11 @@ export class ClaudeCodeRunner implements Runner {
     if (req.sandboxId !== undefined) {
       try {
         if (!this.o.sandboxes) throw new Error(`run ${req.runId} asks for sandbox ${req.sandboxId} but the runner has no sandbox provider`);
-        // The allowlist of the runner (ORC-211): the run's variables and the account's token, nothing else.
+        // The allowlist of the runner (ORC-211): the run's variables and a placeholder for the account's token, nothing else.
+        // Without a token, none: `claude` says it is not logged in, clearer than the proxy's 401.
         const token = chosen ?? process.env[CLAUDE_TOKEN];
         const { PATH: sandboxPath, ...run } = req.env;
-        const named = { ...run, ...(token ? { [CLAUDE_TOKEN]: token } : {}) };
+        const named = { ...run, ...(token ? { [CLAUDE_TOKEN]: SANDBOX_CLAUDE_TOKEN } : {}) };
         // req.env.PATH is the sandbox's: the host's `docker` is found on the daemon's, the command in
         // the container gets it through `env` (no secret in it, so on the command line is fine).
         const inner = sandboxPath !== undefined ? ['env', `PATH=${sandboxPath}`, ...argv] : argv;

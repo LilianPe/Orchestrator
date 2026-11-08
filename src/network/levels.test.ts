@@ -91,8 +91,22 @@ describe('allowRequest (plain HTTP: the method and the path are seen)', () => {
     expect(allowRequest(limited, 'api.github.com', 'POST', '/o/r.git/git-upload-pack').ok).toBe(false);
   });
 
-  it('keeps every method for the Claude API, the read methods elsewhere', () => {
-    expect(allowRequest(limited, 'api.anthropic.com', 'POST', '/v1/messages').ok).toBe(true);
+  it('lets through the Claude API only the calls Claude Code makes, at any level but none (ORC-337)', () => {
+    for (const p of [limited, { level: 'claude-api' as const, allow: [] }]) {
+      expect(allowRequest(p, 'api.anthropic.com', 'POST', '/v1/messages?beta=true').ok).toBe(true);
+      expect(allowRequest(p, 'API.anthropic.com.', 'POST', '/v1/messages/count_tokens?beta=true').ok).toBe(true);
+      expect(allowRequest(p, 'api.anthropic.com', 'GET', '/api/claude_code/settings').ok).toBe(true);
+      expect(allowRequest(p, 'api.anthropic.com', 'GET', '/api/claude_code/policy_limits').ok).toBe(true);
+    }
+    const refused = [
+      ['POST', '/v1/files'], ['GET', '/v1/files'], ['GET', '/v1/messages'], ['POST', '/v1/messages/batches'], ['POST', '/v1/messages/../files'],
+      ['POST', '//v1/messages'], ['POST', '/api/event_logging/v2/batch'], ['POST', '/api/eval/sdk-x'], ['GET', '/api/claude_cli/bootstrap'], ['POST', '/api/claude_code/settings'],
+    ];
+    for (const [method, path] of refused) expect(allowRequest(limited, 'api.anthropic.com', method!, path!), `${method} ${path}`).toMatchObject({ ok: false, reason: expect.stringMatching(/not a call of Claude Code/) as string });
+    expect(allowRequest({ level: 'none', allow: [] }, 'api.anthropic.com', 'POST', '/v1/messages').ok).toBe(false);
+  });
+
+  it('keeps the read methods elsewhere', () => {
     expect(allowRequest({ level: 'limited', allow: ['docs.exemple.com'] }, 'docs.exemple.com', 'OPTIONS', '/').ok).toBe(true);
     expect(allowRequest({ level: 'limited', allow: ['docs.exemple.com'] }, 'docs.exemple.com', 'DELETE', '/').ok).toBe(false);
   });
