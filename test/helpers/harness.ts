@@ -223,6 +223,8 @@ export function createHarness(
     repoConfig?: OrchestratorDeps['repoConfig'];
     /** The policy in front of every text it publishes (ORC-214); without a secret scan by default. */
     outputPolicy?: OrchestratorDeps['outputPolicy'];
+    /** The browser of the visual proof (ORC-176), with sandboxes; its captures kept in a temporary dir. */
+    visualShooter?: OrchestratorDeps['visualShooter'];
   } = {},
 ) {
   if (opts.projectYaml !== undefined && opts.preset) throw new Error('createHarness: pass projectYaml or preset, not both');
@@ -239,6 +241,7 @@ export function createHarness(
   const publisher = new FakePublisher(forge);
   const sessionsDir = opts.sandboxed ? mkdtempSync(join(tmpdir(), 'factory-sessions-')) : undefined;
   const runsDir = opts.sandboxed ? mkdtempSync(join(tmpdir(), 'factory-runs-')) : undefined;
+  const artifactsDir = opts.sandboxed ? mkdtempSync(join(tmpdir(), 'factory-artifacts-')) : undefined;
   /** The orchestrator's log lines, every life of it. */
   const logs: { level: string; message: string }[] = [];
   const project = { id: 'p', repoPath: '/repo', teamKey: 'REL', workflow };
@@ -264,7 +267,8 @@ export function createHarness(
       // The clean check is proved by itself (clean-verify.test.ts, the isolation suite): a scenario decides its verdict through the same fake.
       cleanVerify: opts.cleanVerify ?? (async (req: CleanVerifyRequest) => ({ ...(req.commands.length ? await life.gate(checks.run)(req.worktree, [...req.commands], undefined, {}) : { ok: true, failures: [] }), sha: (await workspaces.head(req.worktree)) ?? 'head', tree: 'clean-tree' })),
       // The proxy's journal of a run (ORC-296) beside its refusals log: a test writes both.
-      ...(sessionsDir ? { sandboxes: life.gate(sandboxes), sessionsDir, runsDir, egressJournal: (id: string) => join(runsDir!, id, 'egress.jsonl') } : {}),
+      ...(sessionsDir ? { sandboxes: life.gate(sandboxes), sessionsDir, runsDir, artifactsDir, egressJournal: (id: string) => join(runsDir!, id, 'egress.jsonl') } : {}),
+      ...(opts.visualShooter ? { visualShooter: opts.visualShooter } : {}),
     };
     return { ...life, outside };
   };

@@ -101,7 +101,7 @@ At its end, `decide` records the assessment in the ticket's state:
 
 - `size`, the last assessment's;
 - `risk`, the higher of the ticket's and the proposed one: the risk never goes down (I4, property in `test/properties/decide.prop.test.ts`). Nothing resets it yet, a later run of the ticket included;
-- `visualProof: required` when the ticket speaks of a screen; never lifted: the model cannot make visual proof `not_applicable`. Deciding it from the real diff is `verify`'s (ORC-176).
+- `visualProof: required` when the ticket speaks of a screen; never lifted: the model cannot make visual proof `not_applicable`. Deciding it from the real diff is `verify`'s (ORC-176): required too when the diff touches `visual_paths`.
 
 Each later attempt of the ticket carries its risk in its labels (`risk`, ORC-226).
 

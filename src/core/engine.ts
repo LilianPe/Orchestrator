@@ -1268,9 +1268,9 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       if (pending?.input === 'verify_failures') out.events.push({ type: 'pending.cleared', job: pending });
       if (job.red) freeze(out, ticket, event.payload.frozen);
       if (toPublish) {
-        const { runId, output, commands } = event.payload;
+        const { runId, output, commands, visualProof } = event.payload;
         out.events.push({ type: 'verify.started', runId });
-        out.effects.push({ kind: 'publish', runId, job: job.name, sha: toPublish, ...(output ? { output } : {}), ...(commands ? { commands } : {}) });
+        out.effects.push({ kind: 'publish', runId, job: job.name, sha: toPublish, ...(output ? { output } : {}), ...(commands ? { commands } : {}), ...(visualProof ? { visualProof } : {}) });
         return out;
       }
       return success(out, { event, ticket, workflow }, job, event.payload.runId, event.payload.output);

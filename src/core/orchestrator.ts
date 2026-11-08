@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
-import { rm } from 'node:fs/promises';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import type { Forge, ForgeWriter, MergeResult } from '../adapters/forge/types.js';
 import { prEventId } from '../adapters/forge/github-webhook.js';
@@ -77,7 +77,7 @@ import {
   spentTokens,
 } from './types.js';
 import { runSealedSetup } from './sealed-setup.js';
-import { checkBranchPaths, runCleanVerify, untrustedCheck, type CleanVerifier, type UntrustedMark } from './clean-verify.js';
+import { checkBranchPaths, runCleanVerify, untrustedCheck, type CleanVerifier, type CleanVerifyResult, type UntrustedMark, type VisualRequest } from './clean-verify.js';
 import { logExcerpt } from '../checks/log-excerpt.js';
 import { cappedCommand, VERIFY_CHECK, type Verifier, type VerifyResult } from './verify.js';
 import { PRODUCT_NAME } from '../product.js';
@@ -86,6 +86,8 @@ import { checkFrozen, FREEZE_CHECK, freezeTests, newTestsOnly, REFREEZE, type Fr
 import { isTestFile } from '../checks/test-files.js';
 import { ANTI_CHEAT_CHECK, ANTI_CHEAT_OK } from '../checks/anti-cheat.js';
 import { mdCode } from '../checks/markdown.js';
+import { scenarioPath, VISUAL_PROOF_CHECK, type VisualProof } from '../checks/visual-proof.js';
+import type { VisualShooter } from '../adapters/browser/types.js';
 import { parseStatus } from '../adapters/workspace/git-workspaces.js';
 import { agentPolicy, type EgressPolicy } from '../network/levels.js';
 import { REPO_CONFIG_REFUSED, TICKET_TOKENS_REACHED, type BlockKind } from './block-cause.js';
@@ -217,6 +219,13 @@ export interface OrchestratorDeps {
    * with its sandbox. Required with `sandboxes`.
    */
   runsDir?: string;
+  /**
+   * Where the visual-proof captures are kept (ORC-176), `<artifactsDir>/<ticket>/<sha256>.png`: on the daemon's disk, out of every
+   * mount of a run. Required with `visualShooter`.
+   */
+  artifactsDir?: string;
+  /** The browser of the visual proof (ORC-176), with sandboxes that offer one; absent, a required proof is unavailable, indicative. */
+  visualShooter?: VisualShooter;
   /** The egress proxy's journal of a run (`EgressProxy.journalPath`), read into its security log (ORC-296). */
   egressJournal?: (runId: string) => string;
   /** Other host paths every sandbox mounts (the factory's install, for `factory-agent`). */
@@ -370,8 +379,23 @@ function sessionSaved(configDir: string, sessionId: string): boolean {
   return existsSync(projects) && readdirSync(projects).some((dir) => existsSync(join(projects, dir, `${sessionId}.jsonl`)));
 }
 
+/**
+ * `factory/preuve-visuelle` (ORC-176): the captures the factory took, or that there is none to take. A required proof the instance
+ * could not take is neutral, indicative until the application starts reliably in the sandbox (ORC-152): it blocks nothing.
+ */
+function visualCheck(p: VisualProof): { conclusion: 'success' | 'neutral'; summary: string } {
+  if (p.decision === 'not_applicable') return { conclusion: 'neutral', summary: 'No visual proof applicable.' };
+  const why = [
+    ...(p.intake ? ['Asked for at intake.'] : []),
+    ...(p.triggers.length ? [`Changed under \`visual_paths\`:\n${p.triggers.map((t) => `- ${mdCode(t)}`).join('\n')}`] : []),
+  ].join('\n');
+  if (!p.captures?.length) return { conclusion: 'neutral', summary: `Visual proof required, not taken: ${p.unavailable ?? 'no capture'}. Indicative until the application starts reliably in the sandbox (ORC-152).\n${why}` };
+  const lines = p.captures.map((c) => `- ${c.side === 'before' ? 'Before' : 'After'}, ${c.sha.slice(0, 12)}, ${c.width} px: sha256 ${c.sha256}`);
+  return { conclusion: 'success', summary: `Captures taken by the factory, before on the base and after on this commit:\n${lines.join('\n')}\n${why}` };
+}
+
 /** A verdict on a commit: what ran on it, absent when it was found green before and nothing ran again. */
-type Verified = VerifyResult & { sha?: string | undefined; commands?: readonly string[] };
+type Verified = VerifyResult & { sha?: string | undefined; commands?: readonly string[]; visual?: CleanVerifyResult['visual'] };
 
 const HOST_CHECKS_OFF = "no sandbox (FACTORY_CONTAINER_CLI) and FACTORY_ALLOW_HOST_VERIFY is not 1: I do not run the agent's code on the host.";
 
@@ -987,7 +1011,7 @@ export class Orchestrator {
    * `runCleanVerify`. It throws when there is no verdict, an infrastructure failure the agent is not sent. Without
    * sandboxes, only under the explicit `hostChecks`: in the worktree, on the host, and without any of these guarantees.
    */
-  private async verifyWork(project: ProjectRuntime, t: TicketState, run: RunRecord, job: JobSpec): Promise<Verified> {
+  private async verifyWork(project: ProjectRuntime, t: TicketState, run: RunRecord, job: JobSpec, output?: AgentOutput): Promise<Verified> {
     const { sandboxes, runsDir, originUrl } = this.d;
     // A job that checks what it did not write (a review) has nothing to add on a commit found green: one that wrote it asks again.
     const green = job.verifyFailure === 'block' ? t.verifiedSha : undefined;
@@ -1025,12 +1049,43 @@ export class Orchestrator {
         ...(green ? { green } : {}),
         ...(goesThroughFreeze(t, job) ? { frozen: t.frozenTests! } : {}),
         ...(untrusted ? { untrusted } : {}),
+        // The commit a job writes, which it publishes (ORC-176): a review, which writes nothing, shoots nothing.
+        ...(job.verifyFailure === 'block' ? {} : { visual: this.visualRequest(project, t, output) }),
         env: async (config) => (await this.repoVariablesOf(project, config)).env,
         log: (message) => this.log('warn', `verify of ${t.ticketId}: ${message}`),
       });
     } finally {
       // Under the run's dir, purged with it: what the attack left unremovable costs no verdict.
       await rm(workDir, { recursive: true, force: true }).catch((err: Error) => this.log('warn', `verify of ${t.ticketId}: ${workDir} not removed: ${err.message}`));
+    }
+  }
+
+  /** What `verify` needs of the visual proof (ORC-176): the ticket's intake, never what the agent says of it but the page it names. */
+  private visualRequest(project: ProjectRuntime, t: TicketState, output: AgentOutput | undefined): VisualRequest {
+    const { preview, portBase } = project.workflow.workspace;
+    return {
+      intake: t.visualProof === 'required',
+      ...(this.d.visualShooter ? { shooter: this.d.visualShooter } : {}),
+      ...(preview ? { start: preview } : {}),
+      port: portBase,
+      path: scenarioPath(output?.visual_scenario?.url),
+      gate: (c) => this.policy.capture(c),
+    };
+  }
+
+  /**
+   * The captures `verify` took (ORC-176), kept before the verdict that names them: each file by its hash, under `artifactsDir`, which
+   * no run mounts, and its row in `artifacts`, once by its id. A capture that cannot be kept throws: no verdict names a missing file.
+   */
+  private async keepCaptures(t: TicketState, run: RunRecord, files: NonNullable<CleanVerifyResult['visual']>['files']): Promise<void> {
+    const root = this.d.artifactsDir;
+    if (!root) throw new Error('artifactsDir is required with visualShooter');
+    const dir = join(root, t.ticketId);
+    await mkdir(dir, { recursive: true });
+    for (const { capture, png } of files) {
+      const path = join(dir, `${capture.sha256}.png`);
+      await writeFile(path, png);
+      await this.d.store.putArtifact({ id: `visual:${run.id}:${capture.side}:${capture.width}`, ticketId: t.ticketId, attemptId: run.id, kind: 'visual-proof', path, sha256: capture.sha256, createdAt: this.d.clock.now() });
     }
   }
 
@@ -1589,13 +1644,14 @@ export class Orchestrator {
             const payload = { runId: run.id, job: job.name };
             let res: Verified;
             try {
-              res = await this.verifyWork(project, t, run, job);
+              res = await this.verifyWork(project, t, run, job, c.output);
+              if (res.ok && res.visual?.files.length) await this.keepCaptures(t, run, res.visual.files);
             } catch (err) {
               await this.submitResult({ ...base, type: 'verify.errored', payload: { ...payload, error: (err as Error).message } });
               return;
             }
             const event: FactoryEvent = res.ok
-              ? { ...base, type: 'verify.passed', payload: { ...payload, ...(res.sha ? { sha: res.sha } : {}), ...(res.commands ? { commands: res.commands } : {}), ...(c.output ? { output: c.output } : {}) } }
+              ? { ...base, type: 'verify.passed', payload: { ...payload, ...(res.sha ? { sha: res.sha } : {}), ...(res.commands ? { commands: res.commands } : {}), ...(c.output ? { output: c.output } : {}), ...(res.visual ? { visualProof: res.visual.proof } : {}) } }
               : { ...base, type: 'verify.failed', payload: { ...payload, failures: res.failures.map((f) => ({ ...f, output: logExcerpt(f.output) })), ...(res.tree ? { tree: res.tree } : {}) } };
             await this.submitResult(event);
           })(),
@@ -1849,6 +1905,7 @@ export class Orchestrator {
       { name: VERIFY_CHECK, ...verify },
       { name: FREEZE_CHECK, conclusion: frozen ? 'success' : 'neutral', summary: frozen ? `${frozen} frozen file(s) intact.` : 'No frozen test for this ticket.' },
       { name: ANTI_CHEAT_CHECK, conclusion: 'success', summary: ANTI_CHEAT_OK },
+      ...(c.visualProof ? [{ name: VISUAL_PROOF_CHECK, ...visualCheck(c.visualProof) }] : []),
     ] as const;
     await Promise.all(
       checks.map(({ name, conclusion, summary }) =>

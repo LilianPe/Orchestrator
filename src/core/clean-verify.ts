@@ -1,13 +1,15 @@
 import { mkdirSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
+import { VIEWPORTS, type Shots, type VisualShooter } from '../adapters/browser/types.js';
 import { execCmd, execFailure, mustExec, type Exec, type ExecResult } from '../adapters/exec.js';
-import { DEFAULT_REQUIREMENTS, type SandboxMount, type SandboxProvider } from '../adapters/sandbox/types.js';
+import { DEFAULT_REQUIREMENTS, type SandboxMount, type SandboxProvider, type SandboxRequirements } from '../adapters/sandbox/types.js';
 import { ANTI_CHEAT_CHECK, antiCheatCheck, justifiedRemovals } from '../checks/anti-cheat.js';
 import { checkFrozen, FREEZE_CHECK, isFrozenHarness, type FrozenTests } from '../checks/freeze.js';
 import { checkForbiddenPaths, FORBIDDEN_CHECK, type ForbiddenView } from '../checks/forbidden-paths.js';
 import { mdCode } from '../checks/markdown.js';
 import { isTestSpec } from '../checks/test-files.js';
+import { decideVisualProof, judgeShots, type CaptureGate, type Judged, type VisualProof } from '../checks/visual-proof.js';
 import { parseRepoConfig, REPO_CONFIG_PATH, RepoConfigError, type RepoConfig } from '../config/repo-config.js';
 import { BUNDLE_TARGET, extractWork, HARDENING, hostGitEnv, IN_SANDBOX, IN_SANDBOX_ENV } from '../publish/extract.js';
 import { runSealedSetup } from './sealed-setup.js';
@@ -46,13 +48,29 @@ export interface CleanVerifyRequest {
   untrusted?: UntrustedMark;
   /** The variables the repository declares (ORC-211), never a secret. */
   env: (config: RepoConfig) => Promise<Record<string, string>>;
+  /** The visual proof (ORC-176), for a job that writes the commit: absent, nothing of it is decided. */
+  visual?: VisualRequest;
   log: (message: string) => void;
   deadlineMs?: number;
   exec?: Exec;
 }
 
+export interface VisualRequest {
+  /** The ticket asked for it at `intake` (ORC-206). */
+  intake: boolean;
+  /** The browser; absent (no sandbox with one), a required proof is unavailable. */
+  shooter?: VisualShooter;
+  /** What starts the application (`workspace.preview`); absent, a required proof is unavailable. */
+  start?: string;
+  port: number;
+  /** The page shot: `visual_scenario.url` of `submit_result`, `/` without one. */
+  path: string;
+  /** Each capture through the `OutputPolicy` before it is kept (ORC-214). */
+  gate: CaptureGate;
+}
+
 /** `commands`: what ran on the commit, none when nothing is declared; absent when it was found green before, and nothing ran again. */
-export type CleanVerifyResult = VerifyResult & { sha: string; tree: string; commands?: readonly string[] };
+export type CleanVerifyResult = VerifyResult & { sha: string; tree: string; commands?: readonly string[]; visual?: { proof: VisualProof; files: Judged['files'] } };
 
 /** A verdict on the commit: rejecting means there is none, an infrastructure failure the agent is not sent. */
 export type CleanVerifier = (req: CleanVerifyRequest) => Promise<CleanVerifyResult>;
@@ -92,8 +110,8 @@ export function withDeadline(sandboxes: Boxes, ms: number): Boxes {
 }
 
 /** A sandbox at network `none` for `work`, gone before the next one opens. */
-export const boxOpener = (sandboxes: Boxes, of: { runId: string; ticketId: string; log: (message: string) => void }) => async <T>(suffix: string, workspacePath: string, mounts: readonly SandboxMount[], work: (id: string) => Promise<T>): Promise<T> => {
-  const { id } = await sandboxes.create({ runId: `${of.runId}-${suffix}`, ticketId: of.ticketId, workspacePath, network: 'none', requirements: DEFAULT_REQUIREMENTS, mounts });
+export const boxOpener = (sandboxes: Boxes, of: { runId: string; ticketId: string; log: (message: string) => void }) => async <T>(suffix: string, workspacePath: string, mounts: readonly SandboxMount[], work: (id: string) => Promise<T>, requirements: SandboxRequirements = DEFAULT_REQUIREMENTS): Promise<T> => {
+  const { id } = await sandboxes.create({ runId: `${of.runId}-${suffix}`, ticketId: of.ticketId, workspacePath, network: 'none', requirements, mounts });
   try {
     return await work(id);
   } finally {
@@ -111,7 +129,10 @@ export const boxOpener = (sandboxes: Boxes, of: { runId: string; ticketId: strin
  *    branch nor on a ref of the repository it can write. Every read of the clone happens here, before any code of the
  *    agent has run in it, the checks of the commit included;
  * 4. in a new sandbox at network `none`, gitleaks on the commits, then the checkout;
- * 5. the commands, in a new sandbox on that clone, at network `none`, with nothing else mounted.
+ * 5. the commands, in a new sandbox on that clone, at network `none`, with nothing else mounted;
+ * 6. the visual proof (ORC-176), when it is required and the commands passed: the application started and shot by the
+ *    factory's browser, after on the commit and before on the base, each in a sandbox of its own at network `none`. The
+ *    base is checked out from the clone's objects at step 3, before any code of the agent has run in it.
  *
  * `setup`, which has to install, runs before them in its own sandbox at `limited`, without a secret: it is sealed like
  * the attempt's (`runSealedSetup`), on commits nobody reviewed, and never on a commit the checks already refused. It
@@ -125,6 +146,7 @@ export const runCleanVerify: CleanVerifier = async (req) => {
 
   const bundleDir = join(req.workDir, 'bundle');
   const cloneDir = join(req.workDir, 'clone');
+  const beforeDir = join(req.workDir, 'before');
   mkdirSync(bundleDir);
   try {
     const { sha } = await inBox('bundle', req.worktree, [{ host: bundleDir, target: BUNDLE_TARGET, readOnly: false }], (sandboxId) =>
@@ -142,17 +164,25 @@ export const runCleanVerify: CleanVerifier = async (req) => {
     const env = await req.env(config);
     const from = await forkPoint(git, sha);
     const failures = await checkClone(git, from, sha, req.frozen, req.untrusted && untrustedCheck(req.untrusted, config));
-    if (req.gitleaks || (commands.length && !failures.length)) {
+    const proof = req.visual && decideVisualProof({ intake: req.visual.intake, changed: zFields(await git.raw('diff', '--name-only', '-z', '--no-renames', from, sha)), visualPaths: config.visualPaths });
+    const plan = proof?.decision === 'required' && !failures.length ? visualPlan(req.visual!, from) : undefined;
+    if (typeof plan === 'string') proof!.unavailable = plan;
+    const shooting = typeof plan === 'object' ? plan : undefined;
+    if (shooting) await checkoutBase(req, cloneDir, beforeDir, from);
+    const visual = (files: Judged['files'] = []) => (proof ? { visual: { proof: files.length ? { ...proof, captures: files.map((f) => f.capture) } : proof, files } } : {});
+    // Something runs on the commit: its commands, or the application for its captures.
+    const runs = commands.length > 0 || !!shooting;
+    if (req.gitleaks || (runs && !failures.length)) {
       await inBox('prepare', cloneDir, [], async (id) => {
         if (req.gitleaks) failures.push(...(await scanSecrets(sandboxes, id, from, sha)));
         // Refused already: nothing of it is installed or run. A forbidden `.npmrc` would be read by the install it forbids, and a breakdown of that install would hide the verdict.
-        if (failures.length || !commands.length) return;
+        if (failures.length || !runs) return;
         // `-c`: the clone's config is ours, and from the first command on it is no longer to be trusted.
         const out = await sandboxes.exec(id, ['git', ...IN_SANDBOX, 'checkout', '--quiet', '--detach', sha]);
         if (out.code !== 0) throw new Error(`git checkout (sandbox): ${out.stderr.trim()}`);
       });
     }
-    if (failures.length || !commands.length) return { ok: !failures.length, failures, sha, tree, commands };
+    if (failures.length || !runs) return { ok: !failures.length, failures, sha, tree, commands, ...visual() };
 
     if (setup.length) {
       await runSealedSetup(sandboxes, { runId: `${req.runId}-verify`, ticketId: req.ticketId, workspacePath: cloneDir, mounts: [], commands: setup, argv: verifyCommand, env, secrets: {}, now: new Date() });
@@ -164,16 +194,66 @@ export const runCleanVerify: CleanVerifier = async (req) => {
         if (code !== 0) failures.push({ command, exitCode: code === 124 ? null : code, output: stdout + stderr });
       }
     });
-    return { ok: !failures.length, failures, sha, tree, commands };
+    if (!shooting || failures.length) return { ok: !failures.length, failures, sha, tree, commands, ...visual() };
+    const judged = await shootBoth(sandboxes, inBox, req, shooting, { from, sha, setup, env, cloneDir, beforeDir });
+    failures.push(...judged.failures);
+    if (judged.unavailable) proof!.unavailable = judged.unavailable;
+    return { ok: !failures.length, failures, sha, tree, commands, ...visual(judged.files) };
   } finally {
     // Not synchronous: a clone holds a whole install, and the daemon serves meanwhile. Under a run dir, purged with it: what the attack left unremovable costs no verdict.
     await Promise.all(
-      [bundleDir, cloneDir].map((dir) => rm(dir, { recursive: true, force: true }).catch((err: Error) => req.log(`${dir} not removed: ${err.message}`))),
+      [bundleDir, cloneDir, beforeDir].map((dir) => rm(dir, { recursive: true, force: true }).catch((err: Error) => req.log(`${dir} not removed: ${err.message}`))),
     );
   }
 };
 
 export const BASE = 'refs/factory/base';
+
+type Shooting = VisualRequest & Required<Pick<VisualRequest, 'shooter' | 'start'>>;
+
+/** What takes a required proof, or why it cannot be taken: then indicative (ORC-152), no fault of the branch. */
+function visualPlan(v: VisualRequest, from: string): Shooting | string {
+  if (!v.shooter) return 'this instance has no sandbox with a browser';
+  if (!v.start) return 'no command starts the application (`workspace.preview`)';
+  if (from === EMPTY_TREE) return 'the branch shares no commit with the base, which has no page to compare';
+  return { ...v, shooter: v.shooter, start: v.start };
+}
+
+/**
+ * The base's files, from the clone's objects, by the host's git into a dir of their own: before any code of the agent has run
+ * in the clone, whose objects it can rewrite once it has. A throwaway index: the clone's own is not touched.
+ */
+async function checkoutBase(req: CleanVerifyRequest, cloneDir: string, beforeDir: string, from: string): Promise<void> {
+  mkdirSync(beforeDir);
+  const env = { ...hostGitEnv(req.workDir, req.workDir), GIT_INDEX_FILE: join(req.workDir, 'before.index') };
+  await gitAt(req.exec ?? execCmd, cloneDir, env).raw(`--work-tree=${beforeDir}`, 'checkout', from, '--', '.');
+}
+
+/**
+ * The captures (ORC-176): after on the commit, in the clone the commands ran in; then, only if its page passes, before on the base,
+ * set up as the commit was (`setup`, sealed: the base is the default branch's). Each in a sandbox of its own at network `none`,
+ * nothing mounted: the application and the browser together, nothing out. The browser's own failure rejects, an infrastructure one.
+ */
+async function shootBoth(
+  sandboxes: Boxes,
+  inBox: ReturnType<typeof boxOpener>,
+  req: CleanVerifyRequest,
+  v: Shooting,
+  at: { from: string; sha: string; setup: readonly string[]; env: Record<string, string>; cloneDir: string; beforeDir: string },
+): Promise<Judged> {
+  const widths = VIEWPORTS.map((w) => w.width);
+  const shot = (side: 'before' | 'after', dir: string, sha: string) =>
+    inBox(`visual-${side}`, dir, [], (sandboxId) => v.shooter.shoot(sandboxes, { sandboxId, sha, start: v.start, port: v.port, path: v.path, widths }), v.shooter.requirements);
+  const after = await shot('after', at.cloneDir, at.sha);
+  let before: Shots = { started: false, detail: 'not shot: the commit fails first' };
+  if (after.started && after.pages.every((p) => !p.consoleErrors.length)) {
+    if (at.setup.length) {
+      await runSealedSetup(sandboxes, { runId: `${req.runId}-visual`, ticketId: req.ticketId, workspacePath: at.beforeDir, mounts: [], commands: at.setup, argv: verifyCommand, env: at.env, secrets: {}, now: new Date() });
+    }
+    before = await shot('before', at.beforeDir, at.from);
+  }
+  return judgeShots({ before, after }, { before: at.from, after: at.sha }, v.gate);
+}
 
 /** `.factory/config.yml` as the base branch holds it, in the clone: never as the agent's branch does. */
 export async function baseConfig(git: CloneGit): Promise<RepoConfig> {

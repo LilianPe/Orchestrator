@@ -4,10 +4,14 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync 
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { fakePng } from '../adapters/browser/fake.js';
+import type { ShootRequest, Shots, VisualShooter } from '../adapters/browser/types.js';
 import { execCmd, type Exec, type ExecResult } from '../adapters/exec.js';
 import { FakeSandboxProvider } from '../adapters/sandbox/fake.js';
-import type { SandboxExecOptions, SandboxRequest } from '../adapters/sandbox/types.js';
+import { DEFAULT_REQUIREMENTS, type SandboxExecOptions, type SandboxProvider, type SandboxRequest } from '../adapters/sandbox/types.js';
+import { VISUAL_PROOF_CHECK } from '../checks/visual-proof.js';
 import { BUNDLE_TARGET } from '../publish/extract.js';
+import { OutputPolicy, type Capture } from '../publish/output-policy.js';
 import { runCleanVerify, verifyCommand, type CleanVerifyRequest } from './clean-verify.js';
 
 const BRANCH = 'factory/orc-1-x';
@@ -586,4 +590,125 @@ describe('a failure of its own git (ORC-125)', () => {
   });
 });
 
+});
+
+describe('the visual proof, taken by the factory in verify (ORC-176)', () => {
+  const VISUAL = 'visual_paths: ["app/**"]\n';
+  /** The browser of these tests: what it "shoots" is the page file of the checkout its sandbox has, read in that sandbox. */
+  class ReadingShooter implements VisualShooter {
+    readonly requirements = { ...DEFAULT_REQUIREMENTS, browser: true };
+    calls: ShootRequest[] = [];
+    seen: string[] = [];
+    answer?: (sha: string) => Shots | undefined;
+    async shoot(sandboxes: Pick<SandboxProvider, 'exec'>, req: ShootRequest): Promise<Shots> {
+      this.calls.push(req);
+      const page = (await sandboxes.exec(req.sandboxId, ['cat', 'app/page.txt'])).stdout.trim();
+      this.seen.push(page);
+      return this.answer?.(req.sha) ?? { started: true, pages: req.widths.map((width) => ({ width, png: fakePng(`${page}@${width}`), consoleErrors: [] })) };
+    }
+  }
+
+  /** The base has a page; the agent's branch changes it (`page`), or touches only a file outside `visual_paths`. */
+  function visual(opts: { page?: string; intake?: boolean; config?: string; shooter?: VisualShooter | null; start?: string | null; commands?: string[] } = {}) {
+    const shooter = new ReadingShooter();
+    const s = setup({ commands: opts.commands ?? [] }, opts.config ?? VISUAL);
+    write(s.origin, 'app/page.txt', 'old page\n');
+    commit(s.origin, 'page');
+    git(s.repo, 'pull', '-q', '--no-rebase', 'origin', 'main');
+    if (opts.page !== undefined) {
+      write(s.repo, 'app/page.txt', opts.page);
+      commit(s.repo, 'change the page');
+    }
+    const gate = (c: Capture) => new OutputPolicy().capture(c);
+    s.req.visual = {
+      intake: opts.intake ?? false,
+      ...(opts.shooter === null ? {} : { shooter: opts.shooter ?? shooter }),
+      ...(opts.start === null ? {} : { start: opts.start ?? 'npm start' }),
+      port: 4201,
+      path: '/',
+      gate,
+    };
+    return { ...s, shooter };
+  }
+
+  it('criterion 1: a diff in visual_paths: required, its trigger named, six captures, before on the base and after on the commit', async () => {
+    const { req, repo, origin, shooter, sandboxes } = visual({ page: 'new page\n' });
+    const res = await runCleanVerify(req);
+    expect(res.ok).toBe(true);
+    expect(res.visual?.proof).toMatchObject({ decision: 'required', triggers: ['app/page.txt'] });
+    const base = git(origin, 'rev-parse', 'main');
+    const head = git(repo, 'rev-parse', BRANCH);
+    expect(res.visual!.proof.captures!.map((c) => [c.side, c.sha, c.width])).toEqual([
+      ['before', base, 1280], ['before', base, 768], ['before', base, 375],
+      ['after', head, 1280], ['after', head, 768], ['after', head, 375],
+    ]);
+    expect(res.visual!.files).toHaveLength(6);
+    expect(new Set(shooter.seen)).toEqual(new Set(['old page', 'new page']));
+    expect(shooter.calls.map((c) => [c.sha, c.start, c.port, c.path])).toEqual(expect.arrayContaining([[head, 'npm start', 4201, '/'], [base, 'npm start', 4201, '/']]));
+  });
+
+  it("shoots in sandboxes of their own at network none, with a browser and nothing mounted, never on the agent's worktree", async () => {
+    const { req, repo, sandboxes } = visual({ page: 'new page\n' });
+    await runCleanVerify(req);
+    const boxes = sandboxes.created.filter((c) => c.runId.startsWith('r1-visual-') && c.runId !== 'r1-visual-setup');
+    expect(boxes.map((b) => b.runId).sort()).toEqual(['r1-visual-after', 'r1-visual-before']);
+    for (const b of boxes) {
+      expect(b).toMatchObject({ network: 'none', mounts: [], requirements: { browser: true } });
+      expect(b.workspacePath).not.toBe(repo);
+    }
+    expect(sandboxes.active()).toEqual([]);
+  });
+
+  it('criterion 2: a diff outside visual_paths: not applicable, nothing shot', async () => {
+    const { req, shooter } = visual();
+    const res = await runCleanVerify(req);
+    expect(res).toMatchObject({ ok: true, visual: { proof: { decision: 'not_applicable', triggers: [] } } });
+    expect(shooter.calls).toEqual([]);
+  });
+
+  it('a ticket intake marked visual needs it whatever the diff', async () => {
+    const { req, shooter } = visual({ intake: true, config: 'visual_paths: []\n', page: 'new page\n' });
+    const res = await runCleanVerify(req);
+    expect(res.visual?.proof).toMatchObject({ decision: 'required', triggers: [], intake: true });
+    expect(shooter.calls).toHaveLength(2);
+  });
+
+  it('criterion 3: before and after identical fail the check, with the commit not green', async () => {
+    const { req } = visual({ intake: true, config: 'visual_paths: []\n' });
+    const res = await runCleanVerify(req);
+    expect(res.ok).toBe(false);
+    expect(res.failures).toEqual([expect.objectContaining({ command: VISUAL_PROOF_CHECK, output: expect.stringContaining('identical') })]);
+  });
+
+  it('criterion 3: an application that does not start on the commit fails the check', async () => {
+    const { req, repo, shooter } = visual({ page: 'new page\n' });
+    const head = git(repo, 'rev-parse', BRANCH);
+    shooter.answer = (sha) => (sha === head ? { started: false, detail: 'EADDRINUSE' } : undefined);
+    const res = await runCleanVerify(req);
+    expect(res.ok).toBe(false);
+    expect(res.failures).toEqual([expect.objectContaining({ command: VISUAL_PROOF_CHECK, output: expect.stringContaining('EADDRINUSE') })]);
+  });
+
+  it('a commit whose commands fail is not shot', async () => {
+    const { req, shooter } = visual({ page: 'new page\n', commands: ['false'] });
+    const res = await runCleanVerify(req);
+    expect(res.failures.map((f) => f.command)).toEqual(['false']);
+    expect(shooter.calls).toEqual([]);
+  });
+
+  it('without a browser or a start command, a required proof is unavailable: indicative, the commit stays green', async () => {
+    for (const opts of [{ shooter: null }, { start: null }] as const) {
+      const { req } = visual({ page: 'new page\n', ...opts });
+      const res = await runCleanVerify(req);
+      expect(res.ok).toBe(true);
+      expect(res.visual?.proof).toMatchObject({ decision: 'required', unavailable: expect.any(String) });
+      expect(res.visual?.proof.captures).toBeUndefined();
+    }
+  });
+
+  it('the base is read before any code of the agent runs: a command that rewrites the clone changes nothing of the before', async () => {
+    const { req, shooter } = visual({ page: 'new page\n', commands: ['git --git-dir=.git update-ref refs/factory/base HEAD; true'] });
+    await runCleanVerify(req);
+    expect(shooter.seen).toContain('old page');
+  });
 });

@@ -4,6 +4,7 @@ import type { BlockKind } from './block-cause.js';
 import type { StoredEvent } from './upcast.js';
 import type { FrozenTests } from '../checks/freeze.js';
 import type { RedCause } from '../checks/red.js';
+import type { VisualProof } from '../checks/visual-proof.js';
 
 export const LOGICAL_STATES = ['todo', 'dev', 'human_review', 'ai_review', 'ready', 'done'] as const;
 export type LogicalState = (typeof LOGICAL_STATES)[number];
@@ -281,7 +282,8 @@ export interface EventPayloads {
    * found green (ORC-151), the only one a merge may then carry; absent on the `red` check and on older rows.
    */
   /** `commands`: what `verify` ran on `sha`, for its check on the forge (ORC-151); absent when it ran nothing again. */
-  'verify.passed': { runId: string; job: string; output?: AgentOutput; red?: RedCause; frozen?: FrozenTests; sha?: string; commands?: readonly string[] };
+  /** `visualProof`: what `verify` decided and took of the visual proof (ORC-176), the captures by their hash. */
+  'verify.passed': { runId: string; job: string; output?: AgentOutput; red?: RedCause; frozen?: FrozenTests; sha?: string; commands?: readonly string[]; visualProof?: VisualProof };
   /** `tree`: fingerprint of the content checked when the check failed: the commit's tree in a clean check, absent outside git (ORC-187). */
   'verify.failed': { runId: string; job: string; failures: VerifyFailure[]; tree?: string; red?: RedCause; frozen?: FrozenTests };
   /**
