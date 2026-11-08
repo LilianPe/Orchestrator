@@ -175,4 +175,14 @@ describe('OutputPolicy (ORC-214)', () => {
     expect(action).toMatchObject({ type: 'action', action: 'Withheld' });
     expect(JSON.stringify(action)).toMatch(/withheld/);
   });
+
+  it("a question's select options pass as they are, each checked like its body (ORC-210)", async () => {
+    const q = { type: 'elicitation' as const, body: 'Does the limit apply to admins?', options: ['Yes, to everyone', 'No, admins exempt'] };
+    expect(await leaks.activity(q)).toEqual(q);
+    const out = await leaks.activity({ ...q, options: ['Yes', `No ${SECRET}`] });
+    expect(out.type).toBe('elicitation');
+    expect(JSON.stringify(out)).not.toContain(SECRET);
+    const many = await leaks.activity({ ...q, options: Array.from({ length: OUTPUT_LIMITS.options + 1 }, (_, i) => `option ${i}`) });
+    expect(many).not.toHaveProperty('options');
+  });
 });
