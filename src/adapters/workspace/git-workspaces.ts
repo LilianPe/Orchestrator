@@ -14,7 +14,8 @@ function assertSafe(id: string): void {
 
 /**
  * What the agent's repository takes of the repository's own config, and nothing else (ORC-341): its identity and line
- * endings for a commit, Git LFS's filter, its remotes' URLs without credentials (`withoutUserinfo`) and what they fetch.
+ * endings for a commit, Git LFS's filter, its remotes' URLs and what they fetch, each value without the credentials of a
+ * URL (`withoutUserinfo`).
  * Left out, whatever its key: what reaches the forge with a credential (an extraheader, `credential.*`, a push URL, an
  * `insteadOf` that names a token), runs a command of the host's (`core.sshCommand`, a hooks path), or describes the
  * repository's layout. The agent has no token (ORC-125): the factory alone pushes, with its own.
@@ -209,13 +210,12 @@ export class GitWorkspaces implements WorkspaceManager {
     try {
       await here(['init', '--quiet', '--template=', making]);
       // A key without a value is a boolean's true: `-z --list` gives it without the newline.
-      const config = (await this.git(repo, 'config', '--local', '-z', '--list')).split('\0').filter(Boolean).map((entry): [string, string] => {
+      const config = zFields(await this.git(repo, 'config', '--local', '-z', '--list')).map((entry): [string, string] => {
         const at = entry.indexOf('\n');
         return at < 0 ? [entry, 'true'] : [entry.slice(0, at), entry.slice(at + 1)];
       });
-      for (const [key, value] of config) {
-        if (INHERITED.test(key)) await here(['-C', making, 'config', '--add', key, /\.url$/i.test(key) ? withoutUserinfo(value) : value]);
-      }
+      // Every value: a URL is never inherited with its credentials, whatever key the list admits next.
+      for (const [key, value] of config) if (INHERITED.test(key)) await here(['-C', making, 'config', '--add', key, withoutUserinfo(value)]);
       // The checkout's LFS filter reaches the forge as the repository does, its credentials included: in the env of that
       // checkout alone, never on a command line nor in the agent's config.
       const forHost = config.filter(([key]) => !LAYOUT.test(key));

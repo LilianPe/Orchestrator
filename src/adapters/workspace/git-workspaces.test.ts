@@ -27,6 +27,16 @@ function fixtureRepo() {
   return { base, repo, root: join(base, 'ws') };
 }
 
+const TOKEN_URL = 'https://x-access-token:SECRET-341@example.invalid/o/r.git';
+
+/** A remote whose URL names a token: the launch's fetch reaches the fixture's forge by an `insteadOf` that names it too. */
+function tokenRemote(base: string, repo: string, url = TOKEN_URL) {
+  git(repo, 'remote', 'set-url', 'origin', url);
+  git(repo, 'config', `url.${join(base, 'origin.git')}.insteadOf`, url);
+}
+
+const agentConfig = (path: string) => readFileSync(join(path, '.git', 'config'), 'utf8');
+
 const req = (repo: string, patch: object = {}) => ({
   projectId: 'p', repoPath: repo, ticketId: 'REL-1', title: 'Export CSV', kind: 'worktree' as const, slot: 1, portBase: 4200, runId: 'abcdef123456', ...patch,
 });
@@ -314,7 +324,6 @@ describe('GitWorkspaces', () => {
     const { repo, root } = fixtureRepo();
     git(repo, 'tag', 'v1');
     git(repo, 'push', '-q', 'origin', 'v1');
-    git(repo, 'config', 'core.sshCommand', 'a-deploy-key');
     git(repo, 'config', 'core.hooksPath', '/host/hooks');
     git(repo, 'branch', 'someone-elses');
     const hooks = join(repo, '.git', 'hooks');
@@ -330,7 +339,6 @@ describe('GitWorkspaces', () => {
     expect(git(w.path, 'tag')).toBe('v1');
     expect(git(w.path, 'branch', '--format=%(refname:short)')).toBe('factory/rel-1-export-csv');
     expect(existsSync(join(w.path, '.git', 'hooks'))).toBe(false);
-    expect(readFileSync(join(w.path, '.git', 'config'), 'utf8')).not.toContain('a-deploy-key');
     expect(readFileSync(join(w.path, '.git', 'config'), 'utf8')).not.toContain('/host/hooks');
     // Neither the factory's objects by a link, nor another's name for them: the agent rewrites only its own.
     expect(existsSync(join(w.path, '.git', 'objects', 'info', 'alternates'))).toBe(false);
@@ -343,34 +351,26 @@ describe('GitWorkspaces', () => {
 
   // What gives access to the forge or runs a command of the host's: none of it reaches a sandbox (ORC-341, ORC-125).
   it.each([
-    ['a token in the remote URL', (repo: string, origin: string) => {
-      git(repo, 'remote', 'set-url', 'origin', 'https://x-access-token:SECRET-341@example.invalid/o/r.git');
-      // The launch's fetch reaches the fixture's forge all the same; the rewrite, which names the token, is no more inherited.
-      git(repo, 'config', `url.${origin}.insteadOf`, 'https://x-access-token:SECRET-341@example.invalid/o/r.git');
-    }],
-    ["a token as the remote URL's user", (repo: string, origin: string) => {
-      git(repo, 'remote', 'set-url', 'origin', 'https://SECRET-341@example.invalid/o/r.git');
-      git(repo, 'config', `url.${origin}.insteadOf`, 'https://SECRET-341@example.invalid/o/r.git');
-    }],
-    ["actions/checkout's extraheader", (repo: string) => git(repo, 'config', 'http.https://github.com/.extraheader', 'AUTHORIZATION: basic SECRET-341')],
-    ['a credential helper', (repo: string) => {
+    ["a token as the remote URL's user", (base: string, repo: string) => tokenRemote(base, repo, 'https://SECRET-341@example.invalid/o/r.git')],
+    ["actions/checkout's extraheader", (_: string, repo: string) => git(repo, 'config', 'http.https://github.com/.extraheader', 'AUTHORIZATION: basic SECRET-341')],
+    ['a credential helper', (_: string, repo: string) => {
       git(repo, 'config', 'credential.helper', 'store --file /host/SECRET-341');
       git(repo, 'config', 'credential.https://github.com.username', 'SECRET-341');
     }],
-    ['core.sshCommand', (repo: string) => git(repo, 'config', 'core.sshCommand', 'ssh -i /host/SECRET-341')],
-    ['a push URL', (repo: string) => git(repo, 'config', 'remote.origin.pushurl', 'https://u:SECRET-341@example.invalid/o/r.git')],
+    ['core.sshCommand', (_: string, repo: string) => git(repo, 'config', 'core.sshCommand', 'ssh -i /host/SECRET-341')],
+    ['a push URL', (_: string, repo: string) => git(repo, 'config', 'remote.origin.pushurl', 'https://u:SECRET-341@example.invalid/o/r.git')],
   ])("leaves %s out of the agent's repository (ORC-341)", async (_, plant) => {
     const { base, repo, root } = fixtureRepo();
-    plant(repo, join(base, 'origin.git'));
+    plant(base, repo);
     const w = await new GitWorkspaces({ root }).prepare(req(repo));
-    expect(readFileSync(join(w.path, '.git', 'config'), 'utf8')).not.toContain('SECRET-341');
+    expect(agentConfig(w.path)).not.toContain('SECRET-341');
   });
 
-  it('gives the agent the remote URL without its credentials (ORC-341)', async () => {
+  it('gives the agent the remote URL without its credentials, nor the rewrite that names them (ORC-341)', async () => {
     const { base, repo, root } = fixtureRepo();
-    git(repo, 'remote', 'set-url', 'origin', 'https://x-access-token:SECRET-341@example.invalid/o/r.git');
-    git(repo, 'config', `url.${join(base, 'origin.git')}.insteadOf`, 'https://x-access-token:SECRET-341@example.invalid/o/r.git');
+    tokenRemote(base, repo);
     const w = await new GitWorkspaces({ root }).prepare(req(repo));
+    expect(agentConfig(w.path)).not.toContain('SECRET-341');
     expect(git(w.path, 'config', '--get-all', 'remote.origin.url')).toBe('https://example.invalid/o/r.git');
     expect(git(w.path, 'config', 'remote.origin.fetch')).toBe('+refs/heads/*:refs/remotes/origin/*');
   });
@@ -431,14 +431,12 @@ describe('GitWorkspaces', () => {
     git(repo, 'add', '.');
     git(repo, 'commit', '-qm', 'lfs');
     git(repo, 'push', '-q', 'origin', 'main');
-    git(repo, 'remote', 'set-url', 'origin', 'https://x-access-token:SECRET-341@example.invalid/o/r.git');
-    git(repo, 'config', `url.${join(base, 'origin.git')}.insteadOf`, 'https://x-access-token:SECRET-341@example.invalid/o/r.git');
+    tokenRemote(base, repo);
     git(repo, 'config', 'http.https://github.com/.extraheader', 'AUTHORIZATION: basic SECRET-341');
     const w = await new GitWorkspaces({ root }).prepare(req(repo));
     expect(readFileSync(join(w.path, 'big.bin'), 'utf8')).toBe('data\n');
-    expect(readFileSync(seen, 'utf8').split('\n')).toContain('https://x-access-token:SECRET-341@example.invalid/o/r.git');
-    expect(readFileSync(seen, 'utf8').split('\n')).toContain('AUTHORIZATION: basic SECRET-341');
-    expect(readFileSync(join(w.path, '.git', 'config'), 'utf8')).not.toContain('SECRET-341');
+    expect(readFileSync(seen, 'utf8').split('\n')).toEqual(expect.arrayContaining([TOKEN_URL, 'AUTHORIZATION: basic SECRET-341']));
+    expect(agentConfig(w.path)).not.toContain('SECRET-341');
   });
 
   it('takes a boolean the repository wrote without a value as true (ORC-341)', async () => {
