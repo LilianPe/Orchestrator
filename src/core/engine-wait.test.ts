@@ -35,10 +35,10 @@ describe('the wait on a « blocked by » ticket not done (ORC-363)', () => {
     expect(after(t, e)).toMatchObject({ blocked: false, size: 'm', waitingOn: { blockers: ['REL-2'], start: { job: 'dev' } } });
   });
 
-  it('an incomplete ticket is blocked on its questions first: the human has something to answer, the wait comes after', () => {
+  it('an incomplete ticket is asked its questions first (ORC-210): the human has something to answer, the wait comes after', () => {
     const t = ticket({ activeRunId: 'r1', activeJob: 'intake' });
     const out = after(t, intakeEnd({ blockedBy, output: { ...assessed, intake: { ...assessed.intake!, complete: false, missing: ['CSV or XLSX?'] } } }));
-    expect(out).toMatchObject({ blocked: true, blockedJob: 'intake' });
+    expect(out).toMatchObject({ blocked: false, clarify: { job: 'intake', questions: [{ question: 'CSV or XLSX?' }] } });
     expect(out.waitingOn ?? undefined).toBeUndefined();
   });
 

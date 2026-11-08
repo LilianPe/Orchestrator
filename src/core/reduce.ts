@@ -243,8 +243,17 @@ export function reduce(state: TicketState | undefined, event: FactoryEvent | Int
     const created = isExternal(event) ? tracked(event) : undefined;
     return created && external(created, event as FactoryEvent);
   }
-  let next = isExternal(event) ? external(state, event) : internal(state, event);
-  if (next?.usageWait && movesOn(state, next, event)) next = { ...next, usageWait: null };
-  if (next?.waitingOn && endsWait(event)) next = { ...next, waitingOn: null };
-  return next;
+  const next = isExternal(event) ? external(state, event) : internal(state, event);
+  const ended = next ? WAITS.filter(([w, ends]) => next[w] && ends(state, next, event)) : [];
+  return ended.length ? { ...next!, ...Object.fromEntries(ended.map(([w]) => [w, null])) } : next;
 }
+
+/**
+ * A ticket's waits and what ends each: the usage limit's (ORC-340) and `clarify`'s answers (ORC-210) end when the ticket
+ * moves on, their timers then finding nothing to do; the wait on blockers (ORC-363) only on what `endsWait` names.
+ */
+const WAITS: ReadonlyArray<readonly ['usageWait' | 'clarify' | 'waitingOn', (state: TicketState, next: TicketState, event: FactoryEvent | InternalEvent) => boolean]> = [
+  ['usageWait', movesOn],
+  ['clarify', movesOn],
+  ['waitingOn', (_state, _next, event) => endsWait(event)],
+];
