@@ -91,7 +91,7 @@ const HOST_LOGIN = ['CLAUDE_CONFIG_DIR', CLAUDE_TOKEN, 'ANTHROPIC_API_KEY', 'SSH
  * it for a remote with an explicit `pushurl`, and an agent under the daemon's user can undo it, as it can read the daemon's
  * secrets. The barrier is the sandbox.
  */
-export const NO_PUSH = { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'url.relais-no-push://.pushInsteadOf', GIT_CONFIG_VALUE_0: '' } as const;
+export const NO_PUSH = { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'url.factory-no-push://.pushInsteadOf', GIT_CONFIG_VALUE_0: '' } as const;
 
 /** The env of a run on the host; `token`, the chosen account, replaces any other login. */
 export function childEnv(base: NodeJS.ProcessEnv, run: Record<string, string>, token?: string): Record<string, string> {
