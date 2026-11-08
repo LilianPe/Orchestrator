@@ -61,6 +61,15 @@ describe('the kind of a block, set by the code that builds it (ORC-345)', () => 
     expect(legacyBlock(b.reason).blockKind).toBe(kind);
   });
 
+  it('conflict, for a rebase the agent stops on and for the bound the rebases reach: a kind of its own, under its own cause (ORC-146)', () => {
+    const rebasing = ticket({ logical: 'human_review', activeRunId: 'r1', activeJob: 'rebase', prNumber: 3, prState: 'OPEN' });
+    const stop = finished({ job: 'rebase', outcome: 'success', attempt: 'needs_input', output: { ...INTAKE_OUTPUT, status: 'blocked', reason: 'conflict', conflict: 'logic', question: 'Which side?' } });
+    expect(blockOf(rebasing, stop).kind).toBe('conflict');
+    const bound = ticket({ logical: 'human_review', prNumber: 3, prState: 'OPEN', ciFixAttempts: workflow.limits.ciFixAttempts });
+    expect(blockOf(bound, ev('pr.conflicted', { number: 3, url: 'u', branch: 'b', headSha: 'h', baseRef: 'main' })).kind).toBe('conflict');
+    expect(causeOf('conflict')).toBe('conflict');
+  });
+
   it('records the dead-lettered event with its block', () => {
     expect(blockOf(ticket(), ev('dead_letter.added', { eventId: 'e9', eventType: 'pr.opened', error: 'boom', failures: 1 }))).toMatchObject({ kind: 'dead_letter', eventId: 'e9' });
   });

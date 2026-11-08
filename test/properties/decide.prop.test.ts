@@ -426,11 +426,13 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
     );
 
     /**
-     * The red-CI loop of the pack, bounded by `limits.ci_fix_attempts` (ORC-270): between two resets
-     * (green CI, a human relaunch), red CI starts `fix-ci` at most that many times, and a red CI whose
-     * rule matches once the bound is reached starts nothing and blocks the ticket. The count is the
-     * model's, kept from the decisions; the ticket's `ciFixAttempts` must agree with it after every step.
+     * The review and CI loop of the pack, bounded by `limits.ci_fix_attempts` (ORC-270): between two resets
+     * (green CI, a human relaunch), red CI starting `fix-ci` and a conflict starting the rebase step (ORC-146) count on
+     * one counter, at most that many runs, and a red CI or a conflict whose rule matches once the bound is reached starts
+     * nothing and blocks the ticket. The count is the model's, kept from the decisions; the ticket's `ciFixAttempts` must
+     * agree with it after every step.
      */
+    const LOOP_JOBS: Partial<Record<EventType, string>> = { 'pr.checks_failed': 'fix-ci', 'pr.conflicted': 'rebase' };
     const redCiBounded = (r: Run, bound: number): void => {
       let fixes = 0;
       for (const step of decided(r)) {
@@ -439,15 +441,15 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
           expect(CI_RESETS, 'red-CI reset').toContain(step.event.type);
           fixes = 0;
         }
-        const red = step.event.type === 'pr.checks_failed';
-        const fixCi = red ? step.decision.effects.filter((e) => e.kind === 'start_run' && e.job === 'fix-ci') : [];
-        fixes += fixCi.length;
-        expect(fixes, 'fix-ci relaunches').toBeLessThanOrEqual(bound);
+        const job = LOOP_JOBS[step.event.type];
+        const runs = job ? step.decision.effects.filter((e) => e.kind === 'start_run' && e.job === job) : [];
+        fixes += runs.length;
+        expect(fixes, 'runs of the review and CI loop').toBeLessThanOrEqual(bound);
         if (step.after) expect(step.after.ciFixAttempts, 'ciFixAttempts').toBe(fixes);
-        if (!red || (step.before?.ciFixAttempts ?? 0) < bound) continue;
-        expect(fixCi).toEqual([]);
-        const matched = step.decision.trace.includes('on.pr.checks_failed[0]');
-        const refused = step.decision.trace.includes('merged: refused fix-ci');
+        if (!job || (step.before?.ciFixAttempts ?? 0) < bound) continue;
+        expect(runs).toEqual([]);
+        const matched = step.decision.trace.includes(`on.${step.event.type}[0]`);
+        const refused = step.decision.trace.includes(`merged: refused ${job}`);
         expect(step.decision.events.map((e) => e.type)).toEqual(matched && !refused ? ['ticket.blocked'] : []);
       }
     };
@@ -465,6 +467,27 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
         fc.assert(
           fc.property(sequences, fc.integer({ min: 0, max: 3 }), (s, bound) => redCiBounded(fold(s.withDuplicates, workflow(2, bound)), bound)),
           params<[Sequences, number]>([[redCiCounterexample, ciBound]]),
+        );
+      },
+      TIMEOUT,
+    );
+
+    // A rebase and a red CI on one counter (ORC-146): one of each, then the next conflict blocks.
+    const sharedCounterexample = seq(
+      ...delegated(),
+      ext('status.changed', { from: 'todo', to: 'human_review' }),
+      ext('pr.opened', { ...pr }),
+      ext('pr.conflicted', { ...pr, headSha: 'h1', baseRef: 'main' }),
+      ext('pr.checks_failed', { ...pr, failures: ['test'] }),
+      ext('pr.conflicted', { ...pr, headSha: 'h2', baseRef: 'main' }),
+    );
+
+    it(
+      'a conflict starts the rebase step on the same counter as red CI, and past the bound blocks (ORC-146)',
+      () => {
+        fc.assert(
+          fc.property(sequences, fc.integer({ min: 0, max: 3 }), (s, bound) => redCiBounded(fold(s.withDuplicates, workflow(2, bound)), bound)),
+          params<[Sequences, number]>([[sharedCounterexample, ciBound]]),
         );
       },
       TIMEOUT,

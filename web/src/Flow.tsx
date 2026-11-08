@@ -4,6 +4,7 @@ import type { FlowTicketView, FlowView, TokensView, WorkingRunView } from './typ
 export const CAUSE_LABELS: Record<BlockCause, string> = {
   question: AGENT_QUESTION,
   contested: 'Ticket disputed by the agent',
+  conflict: 'Conflict with the default branch',
   red: 'Red not verified',
   infra: 'Infrastructure failure',
   limit: 'Limit reached',

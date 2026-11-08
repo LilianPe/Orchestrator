@@ -91,6 +91,28 @@ describe('standard pack', () => {
     }
   });
 
+  it('leaves a conflict with the base to the rebase step: no other skill integrates the base, each hands back (ORC-146)', () => {
+    // A human's commits on the branch are not the base: bringing them in stays (ORC-159).
+    const integrates = /git (merge|rebase)[^`\n]*origin\/<(trunk|base)>/;
+    for (const name of ['dev', 'feedback', 'review', 'fix-ci', 'tests']) {
+      const text = readFileSync(join(pack, 'skills', name, 'SKILL.md'), 'utf8');
+      expect(text, name).not.toMatch(integrates);
+      expect(text, name).not.toMatch(/`git rebase --continue`/);
+    }
+    for (const name of ['dev', 'feedback', 'review', 'fix-ci']) {
+      expect(readFileSync(join(pack, 'skills', name, 'SKILL.md'), 'utf8'), name).toMatch(/factory:rebase/);
+    }
+  });
+
+  it('the rebase skill rebases on the base, never pushes, and stops in the three cases with a `conflict` result (ORC-146)', () => {
+    const text = readFileSync(join(pack, 'skills', 'rebase', 'SKILL.md'), 'utf8');
+    expect(text).toMatch(/`git rebase origin\/<base>`/);
+    expect(text).toMatch(/`git rebase --abort`/);
+    for (const c of ['`logic`', '`migrations`', '`scope`']) expect(text).toContain(c);
+    expect(text).toMatch(/reason: "conflict"/);
+    expect(text).not.toMatch(/git merge --no-edit origin\/<base>/);
+  });
+
   it('denies skipping the git hooks with --no-verify or -n, grouped (-nm) or late in the command', () => {
     const s = JSON.parse(readFileSync(join(pack, 'settings.json'), 'utf8'));
     expect(s.permissions.deny).toEqual(
