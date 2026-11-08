@@ -77,48 +77,53 @@ const byBot = (c: CommentNode): boolean => c.author?.__typename === 'Bot';
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
-/** What `items` take of the prompt, written as it writes them. */
-const size = (items: readonly FeedbackItem[]) => formatFeedback([...items]).length + 1;
+/** What an item takes of the prompt, written as it writes it: a line each. */
+const size = (i: FeedbackItem) => formatFeedback([i]).length + 1;
+const sizeOf = (items: readonly FeedbackItem[]) => items.reduce((n, i) => n + size(i), 0);
+const latestOf = (items: readonly FeedbackItem[]) => items.reduce((at, i) => Math.max(at, i.at), -Infinity);
 
 /**
  * The latest comments of a thread over the cap alone, as many as fit, the last one cut to fit when it does not on its
  * own: the agent never gets nothing of the newest thread.
  */
-function latestOf(items: FeedbackItem[]): { shown: FeedbackItem[]; earlier: FeedbackItem[]; cutShort: boolean } {
+function tail(items: FeedbackItem[]): { shown: FeedbackItem[]; earlier: FeedbackItem[]; cutShort: boolean } {
   let from = items.length;
-  while (from > 0 && size(items.slice(from - 1)) <= REVIEW_FEEDBACK_MAX) from--;
+  for (let used = 0; from > 0 && (used += size(items[from - 1]!)) <= REVIEW_FEEDBACK_MAX; ) from--;
   if (from < items.length) return { shown: items.slice(from), earlier: items.slice(0, from), cutShort: false };
   const last = items[items.length - 1]!;
-  const room = REVIEW_FEEDBACK_MAX - size([{ ...last, body: '' }]);
+  const room = REVIEW_FEEDBACK_MAX - size({ ...last, body: '' });
   return { shown: [{ ...last, body: last.body.slice(0, Math.max(0, room)) }], earlier: items.slice(0, -1), cutShort: true };
 }
 
 /**
  * The newest threads that fit in `REVIEW_FEEDBACK_MAX` together, a thread dated by its latest comment, kept whole and in
  * their order: none older than one cut, however short. The newest thread over the cap alone keeps its latest comments
- * (`latestOf`). Past the cap, an item last tells the agent what was left out.
+ * (`tail`). Past the cap, an item last tells the agent what was left out.
  */
 function capped(threads: FeedbackItem[][], pr: string): FeedbackItem[] {
-  const dated = threads.map((items) => ({ items, latest: Math.max(...items.map((i) => i.at)) }));
+  const dated = threads.map((items) => ({ items, latest: latestOf(items) }));
   const newestFirst = [...dated].sort((a, b) => b.latest - a.latest);
   let used = 0;
   let firstCut = 0;
   for (; firstCut < newestFirst.length; firstCut++) {
-    const s = size(newestFirst[firstCut]!.items);
-    if (used + s > REVIEW_FEEDBACK_MAX) break;
-    used += s;
+    used += sizeOf(newestFirst[firstCut]!.items);
+    if (used > REVIEW_FEEDBACK_MAX) break;
   }
   if (firstCut === newestFirst.length) return threads.flat();
   const shown = new Map(newestFirst.slice(0, firstCut).map((t) => [t, t.items]));
-  const older = newestFirst.slice(Math.max(firstCut, 1));
-  const hidden = older.flatMap((t) => t.items);
+  let older = newestFirst.slice(firstCut);
   const left: string[] = [];
+  // The latest of what is left out: the older threads come newest first.
+  let at = older[0]!.latest;
   if (firstCut === 0) {
-    const newest = latestOf(newestFirst[0]!.items);
-    shown.set(newestFirst[0]!, newest.shown);
-    hidden.push(...newest.earlier);
-    if (newest.earlier.length) left.push(`the ${plural(newest.earlier.length, 'earlier comment')} of the latest thread`);
-    if (newest.cutShort) left.push(`the end of its last comment`);
+    const [newest, ...rest] = older;
+    const part = tail(newest!.items);
+    shown.set(newest!, part.shown);
+    older = rest;
+    at = Math.max(older[0]?.latest ?? -Infinity, latestOf(part.earlier));
+    if (part.earlier.length) left.push(`the ${plural(part.earlier.length, 'earlier comment')} of the latest thread`);
+    if (part.cutShort) left.push('the end of its last comment');
+    if (at === -Infinity) at = newest!.latest;
   }
   if (older.length) left.push(plural(older.length, 'older thread'));
   return [
@@ -126,7 +131,7 @@ function capped(threads: FeedbackItem[][], pr: string): FeedbackItem[] {
     {
       author: 'factory',
       body: `Review feedback capped at ${REVIEW_FEEDBACK_MAX} characters, not shown: ${left.join(', ')}. All of it is still on ${pr}.`,
-      at: hidden.length ? Math.max(...hidden.map((i) => i.at)) : newestFirst[0]!.latest,
+      at,
       source: 'review',
     },
   ];
