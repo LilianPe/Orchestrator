@@ -16,14 +16,6 @@ const VERIFIED = 'version: 1\njobs:\n  dev: { verify: ["npm test"] }\n';
 /** The repository's own setup commands, without the rc file of Yarn 1 that comes before them. */
 const setups = (h: ReturnType<typeof createHarness>) => h.sandboxes.execs.filter((e) => e.argv[0] === 'timeout');
 
-/** How many times the ticket's run records are read from here on. */
-function spyOnRuns(h: ReturnType<typeof createHarness>): () => number {
-  let n = 0;
-  const ticketRuns = h.store.ticketRuns.bind(h.store);
-  h.store.ticketRuns = async (...args) => (n++, ticketRuns(...args));
-  return () => n;
-}
-
 function delegate(h: ReturnType<typeof createHarness>) {
   h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
   return h.send('ticket.delegated', { linearSessionId: 'ls-1' });
@@ -182,16 +174,31 @@ describe('a disposable sandbox per attempt', () => {
     const first = (await h.store.getRun(h.runner.requests[0]!.runId))!;
     await h.store.putRun({ ...first, id: 'legacy', sensitivePaths: SENSITIVE_PATHS });
     await h.store.updateTicket('p', 'REL-1', ({ untrustedSince: _, ...t }) => t);
-    const reads = spyOnRuns(h);
     await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'and the title', author: 'L' });
     await h.advance(600_000);
-    await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'and the date', author: 'L' });
-    await h.advance(600_000);
-    expect(seen.map((r) => r.untrusted?.since)).toEqual([undefined, '', '']);
-    expect(h.publisher.asked.map((r) => r.untrusted?.since)).toEqual([undefined, '', '']);
-    // Read once, then kept on the ticket: no scan of its runs at each check.
+    expect(seen.map((r) => r.untrusted?.since)).toEqual([undefined, '']);
+    expect(h.publisher.asked.map((r) => r.untrusted?.since)).toEqual([undefined, '']);
     expect((await h.ticket()).untrustedSince).toBe('');
-    expect(reads()).toBe(1);
+  });
+
+  it('reads a ticket\'s runs once: the answer kept on it, its runs are not scanned again at each check (ORC-338)', async () => {
+    const seen: CleanVerifyRequest[] = [];
+    const h = createHarness({
+      sandboxed: true,
+      projectYaml: VERIFIED,
+      cleanVerify: async (req) => {
+        seen.push(req);
+        return { ok: true, failures: [], sha: `sha-${seen.length}`, tree: 'tree' };
+      },
+    });
+    await delegate(h);
+    expect((await h.ticket()).untrustedSince).toBeNull();
+    // A run record that a second scan would find: none happens.
+    const first = (await h.store.getRun(h.runner.requests[0]!.runId))!;
+    await h.store.putRun({ ...first, id: 'late', sensitivePaths: SENSITIVE_PATHS });
+    await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'and the title', author: 'L' });
+    await h.advance(600_000);
+    expect(seen.map((r) => r.untrusted)).toEqual([undefined, undefined]);
   });
 
   it("a command's output reaches the journal and the agent cut to its useful parts (ORC-151)", async () => {
