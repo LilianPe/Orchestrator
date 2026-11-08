@@ -116,6 +116,20 @@ describe('a restart during a run', () => {
     expect(await h.ticket()).toMatchObject({ logical: 'human_review', blocked: false });
   });
 
+  it('reattaches with the limits the attempt was launched with, the ticket token budget included (ORC-340)', async () => {
+    const h = createHarness();
+    const runId = await heldRun(h);
+    const launched = { ...h.runner.requests[0]!.limits, tokens: 1_234 };
+    await h.store.putRun({ ...(await h.store.getRun(runId))!, limits: launched });
+    const seen: unknown[] = [];
+    const attach = h.runner.attach.bind(h.runner);
+    h.runner.attach = (req) => (seen.push(req.limits), attach(req));
+    await h.restart({ mode: 'brutal' });
+    expect(seen).toEqual([launched]);
+    h.runner.release(runId);
+    await h.orch.drained();
+  });
+
   it('a start out of the queue without an effect, cut once launched, is not handed out to run again', async () => {
     const faults = new Faults({ point: 'run.written', mode: 'kill', nth: 2 });
     const h = createHarness({ faults, effectLeaseMs: 60_000 });

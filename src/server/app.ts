@@ -22,6 +22,8 @@ export interface ServerDeps {
   /** Writes an event to the inbox (ORC-147); awaited before the route answers. */
   submit: (e: FactoryEvent) => unknown;
   isPaused: () => boolean | Promise<boolean>;
+  /** Until when the Claude account's usage limit holds every launch (ORC-340); undefined when it holds none. Absent: never shown. */
+  usageLimitedUntil?: () => Promise<number | undefined>;
   linearWebhook: (raw: string, headers: Record<string, string | undefined>) => { status: number } | Promise<{ status: number }>;
   /** The GitHub webhook (ORC-134): signature checked, events written to the inbox before the answer. */
   githubWebhook: (raw: string, headers: Record<string, string | undefined>) => Promise<{ status: number }>;
@@ -132,15 +134,17 @@ export function createApp(d: ServerDeps): Hono {
 
   app.get('/api/state', async (c) => {
     // Independent reads: one round trip's wait on Postgres, not five.
-    const [paused, tickets, queue, running, costTodayUsd] = await Promise.all([
+    const [paused, tickets, queue, running, costTodayUsd, usageLimitedUntil] = await Promise.all([
       d.isPaused(),
       d.store.listTickets(),
       d.store.listQueue(),
       d.store.runsByStatus('running'),
       d.store.costSince(startOfUtcDay(d.clock.now())),
+      d.usageLimitedUntil?.(),
     ]);
     return c.json({
       paused,
+      usageLimitedUntil: usageLimitedUntil ?? null,
       linearConnected: d.linearConnected(),
       tickets,
       queue,

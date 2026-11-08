@@ -16,6 +16,8 @@ export interface FakeScript {
   fail?: string;
   /** What the detector saw (ORC-136). */
   stagnation?: Stagnation;
+  /** The subscription's usage limit stopped it (ORC-340). */
+  usageLimit?: { resetAt?: number };
   /** `false`: this build never calls `submit_result`. */
   submit?: false;
 }
@@ -79,7 +81,7 @@ export class FakeRunner implements Runner {
       ch.close();
       this.live.delete(req.runId);
       if (s.fail) throw new Error(s.fail);
-      return { outcome: forced ?? s.outcome ?? 'success', costUsd: s.costUsd ?? 0.1, turns, lastText, ...(s.tokens ? { tokens: s.tokens } : {}), ...(s.stagnation ? { stagnation: s.stagnation } : {}) };
+      return { outcome: forced ?? s.outcome ?? 'success', costUsd: s.costUsd ?? 0.1, turns, lastText, ...(s.tokens ? { tokens: s.tokens } : {}), ...(s.stagnation ? { stagnation: s.stagnation } : {}), ...(s.usageLimit ? { usageLimit: s.usageLimit } : {}) };
     });
     const run: LiveRun = { deadline: this.clock.now() + req.limits.durationMs, end, done };
     if (s.hold) this.live.set(req.runId, run);

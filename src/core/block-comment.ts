@@ -22,6 +22,7 @@ export interface BlockStatus {
   branch?: string | undefined;
   sha?: string | undefined;
   ci?: TicketState['prChecks'];
+  /** Of the ticket's code runs, as `per_ticket_tokens` counts them (`codeRunTokens`, ORC-340). */
   tokens?: number | undefined;
   durationMs?: number | undefined;
 }
@@ -43,7 +44,7 @@ const SHORT_SHA = 12;
 
 function stateLine({ branch, sha, ci, tokens, durationMs }: BlockStatus): string {
   const duration = durationMs === undefined ? 'unknown duration' : `${Math.round(durationMs / 60_000)} min`;
-  return `State: branch ${branch ?? 'none'} · last commit ${sha?.slice(0, SHORT_SHA) ?? 'none'} · CI ${ci ? CI[ci] : 'none'} · tokens ${tokens ?? 'unknown'} · ${duration}`;
+  return `State: branch ${branch ?? 'none'} · last commit ${sha?.slice(0, SHORT_SHA) ?? 'none'} · CI ${ci ? CI[ci] : 'none'} · code-run tokens ${tokens ?? 'unknown'} · ${duration}`;
 }
 
 /**

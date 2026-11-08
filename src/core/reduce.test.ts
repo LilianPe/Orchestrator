@@ -166,7 +166,8 @@ describe('reduce — facts recorded by the orchestrator', () => {
 
   it('the read of a ticket the mark has not seen is kept once, and never over a mark; a later untrusted run still marks (ORC-338)', () => {
     const read = (since: '' | null) => ({ type: 'untrusted.read', since }) as const;
-    const none = reduce(ticket(), read(null))!;
+    const none = reduce(ticket({ untrustedSince: undefined }), read(null))!;
+    expect(reduce(ticket({ untrustedSince: undefined }), read(''))!.untrustedSince).toBe('');
     expect(none.untrustedSince).toBeNull();
     expect(reduce(none, read(''))!.untrustedSince).toBeNull();
     expect(reduce(ticket({ untrustedSince: 'h1' }), read(null))!.untrustedSince).toBe('h1');

@@ -21,6 +21,9 @@ export const onlyRestatesCause = (cause: BlockCause, reason: string): boolean =>
 /** The head of a launch refused on the repository's `.factory/config.yml` (ORC-209 C): the repository's to fix. */
 export const REPO_CONFIG_REFUSED = 'Repository configuration to fix: ';
 
+/** The head of a launch refused on the ticket's token budget (`budgets.per_ticket_tokens`, ORC-340). */
+export const TICKET_TOKENS_REACHED = 'Token budget of the ticket reached: ';
+
 /**
  * Each anchored on the head of a reason, which the factory writes: what follows may quote an error or
  * a job name. A block's cause lives in its reason alone, the projection has no field for it: a new
@@ -40,6 +43,7 @@ const CAUSES: readonly (readonly [Exclude<BlockCause, 'other'>, RegExp])[] = [
   ['limit', /^The run .+ reached a limit/],
   ['limit', /^The run .+ has written nothing for /],
   ['limit', /^Too many relaunches after a cut: /],
+  ['limit', new RegExp(`^${TICKET_TOKENS_REACHED}`)],
   ['limit', /^(Checks|CI) still failing after /],
   ['failed', /^Checks failing after /],
   ['loop', /^Loop: /],
