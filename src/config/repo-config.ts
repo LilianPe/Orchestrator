@@ -127,10 +127,11 @@ export function parseRepoConfig(text: string | undefined): RepoConfig {
   const visualPaths = read('visual_paths', strings, 'an array of paths is expected', 'a non-empty path is expected');
   for (const [key, paths] of [['sensitive_paths', sensitivePaths], ['visual_paths', visualPaths]] as const) {
     paths?.forEach((p, i) => {
+      // Enforced at `checkClone` (ORC-338): a pattern that names nothing of the repository would protect nothing.
+      const outside = key === 'sensitive_paths' ? repoPatternError(p) : undefined;
       // Anywhere in the pattern: `!x` and the extglob `src/!(auth)/**` both carve a hole.
       if (p.includes('!')) violations.push(`${key}[${i}]: "${p}" would remove a path; paths can only be added`);
-      // Enforced at `checkClone` (ORC-338): a pattern it cannot read would protect nothing.
-      else if (key === 'sensitive_paths' && repoPatternError(p)) violations.push(`${key}[${i}]: "${p}": ${repoPatternError(p)}`);
+      else if (outside) violations.push(`${key}[${i}]: "${p}": ${outside}`);
     });
   }
   const budgets = read('budgets', z.strictObject({ per_ticket_tokens: z.number().int().positive().optional() }), '`{ per_ticket_tokens }` positive integer expected');

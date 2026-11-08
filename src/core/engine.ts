@@ -21,8 +21,9 @@ const relaunch = (workflow: Workflow): string => (workflow.blockComment ? 'Reply
 const STOPPED = 'Stopped on request';
 
 /**
- * Paths a run started from an untrusted event must not write. Enforced at `checkClone`, on `verify` and on the publication
- * (ORC-338): `FORBIDDEN_PATHS` holds them all, and a run that carries them holds its branch to the repository's `sensitive_paths` too.
+ * The mark of a run started from untrusted content (I12, ORC-274), carried by its `start_run` and its run record. Only its
+ * presence is read: it sets `TicketState.untrustedSince` (ORC-338), from which the repository's `sensitive_paths` are
+ * refused. What every run is refused is `FORBIDDEN_PATHS`. Kept a list, not a flag, as the journals record it in decisions.
  */
 export const SENSITIVE_PATHS: readonly string[] = ['.github/**', '.factory/**', '.claude/**', 'CODEOWNERS', '.env*'];
 

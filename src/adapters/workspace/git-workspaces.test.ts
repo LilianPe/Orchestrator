@@ -110,6 +110,21 @@ describe('GitWorkspaces', () => {
     expect(await ws.stepDiff(repo, join(root, 'nowhere'), base)).toBeUndefined();
   });
 
+  it('reads where a worktree left the default branch, the base moving on meanwhile; none for a path that is not one (ORC-338)', async () => {
+    const { repo, root } = fixtureRepo();
+    const ws = new GitWorkspaces({ root });
+    const w = await ws.prepare(req(repo));
+    const fork = git(repo, 'rev-parse', 'HEAD');
+    git(w.path, 'config', 'user.email', 't@t');
+    git(w.path, 'config', 'user.name', 't');
+    git(w.path, 'commit', '--allow-empty', '-q', '-m', 'agent');
+    git(repo, 'commit', '--allow-empty', '-q', '-m', 'main moves on');
+    git(repo, 'push', '-q', 'origin', 'main');
+    git(repo, 'fetch', '-q', 'origin');
+    expect(await ws.forkPoint(repo, w.path)).toBe(fork);
+    expect(await ws.forkPoint(repo, join(root, 'nowhere'))).toBeUndefined();
+  });
+
   it('prepares the read-only trunk and a knowledge worktree', async () => {
     const { repo, root } = fixtureRepo();
     const kb = fixtureRepo();

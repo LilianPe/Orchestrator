@@ -142,15 +142,20 @@ describe('a disposable sandbox per attempt', () => {
     await h.orch.drained();
     await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'and the title', author: 'L' });
     await h.advance(600_000);
+    expect((await h.ticket()).untrustedSince).toBeUndefined();
+    h.workspaces.heads.set('/tmp/factory-fake/p/REL-1', 'head-before-untrusted');
     await h.orch.accept({ ...TRUSTED, taint: 'untrusted', id: 'u1', type: 'session.prompted', at: h.clock.now(), projectId: 'p', ticketId: 'REL-1', payload: { linearSessionId: 'ls-1', body: 'tidy CODEOWNERS', author: 'stranger' } });
     await h.orch.drained();
     await h.advance(600_000);
     await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'thanks, one more thing', author: 'L' });
     await h.advance(600_000);
     expect(h.runner.requests.map((r) => r.sensitivePaths)).toEqual([undefined, SENSITIVE_PATHS, undefined, SENSITIVE_PATHS, undefined]);
-    expect(seen.map((r) => r.untrusted)).toEqual([undefined, undefined, true, true]);
+    // The head the untrusted run started on, kept for the trusted run after it.
+    const since = [undefined, undefined, 'head-before-untrusted', 'head-before-untrusted'];
+    expect(seen.map((r) => r.untrustedSince)).toEqual(since);
     // The publication of each verified commit is held to the same rule.
-    expect(h.publisher.asked.map((r) => r.untrusted)).toEqual([undefined, undefined, true, true]);
+    expect(h.publisher.asked.map((r) => r.untrustedSince)).toEqual(since);
+    expect((await h.ticket()).untrustedSince).toBe('head-before-untrusted');
   });
 
   it("a command's output reaches the journal and the agent cut to its useful parts (ORC-151)", async () => {

@@ -41,8 +41,8 @@ export interface CleanVerifyRequest {
   gitleaks: boolean;
   /** `factory/tests-gelés` (ORC-131), once the ticket has a freeze. */
   frozen?: FrozenTests;
-  /** A run on this branch read untrusted content (ORC-338): the repository's `sensitive_paths` are then forbidden too. */
-  untrusted?: boolean;
+  /** `TicketState.untrustedSince` (ORC-338): what the branch changed since then in the repository's `sensitive_paths` is refused. */
+  untrustedSince?: string;
   /** The variables the repository declares (ORC-211), never a secret. */
   env: (config: RepoConfig) => Promise<Record<string, string>>;
   log: (message: string) => void;
@@ -140,7 +140,7 @@ export const runCleanVerify: CleanVerifier = async (req) => {
     const setup = config.setup ? [config.setup] : req.setup;
     const env = await req.env(config);
     const from = await forkPoint(git, sha);
-    const failures = await checkClone(git, from, sha, req.frozen, req.untrusted ? config.sensitivePaths : []);
+    const failures = await checkClone(git, from, sha, req.frozen, req.untrustedSince === undefined ? undefined : { patterns: config.sensitivePaths, since: req.untrustedSince });
     if (req.gitleaks || (commands.length && !failures.length)) {
       await inBox('prepare', cloneDir, [], async (id) => {
         if (req.gitleaks) failures.push(...(await scanSecrets(sandboxes, id, from, sha)));
@@ -200,7 +200,7 @@ function withoutCredentials(message: string, url: string): string {
 }
 
 /** Git's empty tree: what a branch that shares no commit with the base is compared with, every file of it then a change. */
-const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
+export const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 const SYMLINK = '120000';
 const MAX_READ_BYTES = 16 * 1024 * 1024;
 /** What the numstat and the patch of a diff may weigh together in the daemon's memory. */
@@ -247,11 +247,12 @@ export async function forkPoint(git: CloneGit, sha: string): Promise<string> {
 }
 
 /**
- * The blocking checks on the commit, from the clone's objects: `factory/chemins-interdits` (with `sensitive`, the repository's
- * `sensitive_paths` when the work read untrusted content, ORC-338), `factory/binaires` and `factory/anti-triche` (ORC-158) on all it changed since it left the base, whatever it says of its own history, and `factory/tests-gelés` on the frozen files as they are at
- * its head, which needs no frozen commit: a rebase can take it away, not its fingerprints. A read that fails rejects.
+ * The blocking checks on the commit, from the clone's objects: `factory/chemins-interdits`, `factory/binaires` and `factory/anti-triche`
+ * (ORC-158) on all it changed since it left the base, whatever it says of its own history, and `factory/tests-gelés` on the frozen files as they are at
+ * its head, which needs no frozen commit: a rebase can take it away, not its fingerprints. A read that fails rejects. `sensitive`, on a branch that took
+ * untrusted content (ORC-338): the repository's `sensitive_paths`, refused among what changed since `since` (`changedSince`).
  */
-export async function checkClone(git: CloneGit, from: string, sha: string, frozen: FrozenTests | undefined, sensitive: readonly string[]): Promise<VerifyFailure[]> {
+export async function checkClone(git: CloneGit, from: string, sha: string, frozen: FrozenTests | undefined, sensitive?: SensitiveSince): Promise<VerifyFailure[]> {
   const showAtHead = (p: string) => show(git, sha, p);
   // `--raw`: status and modes in one process, `:<old mode> <new mode> <old id> <new id> <status>`, then the path.
   const fields = (await git('diff', '--raw', '--no-renames', '-z', from, sha)).split('\0').filter(Boolean);
@@ -261,7 +262,8 @@ export async function checkClone(git: CloneGit, from: string, sha: string, froze
     const path = fields[i + 1]!;
     changed.push({ path, deleted: status === 'D', ...(mode === SYMLINK ? { link: (await showAtHead(path))! } : {}) });
   }
-  const forbidden = await checkForbiddenPaths({ changed, showAtBase: (p) => show(git, from, p), showAtHead, sensitive });
+  const since = sensitive?.patterns.length ? { sensitive: { patterns: sensitive.patterns, changed: await changedSince(git, from, sha, sensitive.since) } } : {};
+  const forbidden = await checkForbiddenPaths({ changed, showAtBase: (p) => show(git, from, p), showAtHead, ...since });
   const failures: VerifyFailure[] = forbidden.ok ? [] : [{ command: FORBIDDEN_CHECK, exitCode: 1, output: forbidden.summary }];
   failures.push(...(await checkAdded(git, from, sha)));
   if (frozen) {
@@ -272,6 +274,22 @@ export async function checkClone(git: CloneGit, from: string, sha: string, froze
     if (!r.ok) failures.push({ command: FREEZE_CHECK, exitCode: 1, output: r.summary });
   }
   return failures;
+}
+
+/** The repository's `sensitive_paths` and the head its branch was on when it took untrusted content (`TicketState.untrustedSince`). */
+export interface SensitiveSince {
+  patterns: readonly string[];
+  since: string;
+}
+
+/**
+ * The paths `sha` changed since `since`: what was committed once the branch took untrusted content. A `since` that is not
+ * one of its ancestors (unread, `''`, or gone in a rewritten history) gives everything since the fork point: the stricter
+ * reading. Read among what the branch changed since `from`, so that a merge of the base brings none of the base's own changes.
+ */
+async function changedSince(git: CloneGit, from: string, sha: string, since: string): Promise<ReadonlySet<string>> {
+  const ancestor = since !== '' && (await git.status('merge-base', '--is-ancestor', since, sha)).code === 0;
+  return new Set((await git('diff', '--name-only', '--no-renames', '-z', ancestor ? since : from, sha)).split('\0').filter(Boolean));
 }
 
 /**

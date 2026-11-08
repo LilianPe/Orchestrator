@@ -150,17 +150,15 @@ describe('parseRepoConfig (.factory/config.yml, ORC-209)', () => {
       ]);
     });
 
-    it('refuses a sensitive path the check cannot enforce as written (ORC-338), and takes the forms it reads', () => {
-      expect(violations('sensitive_paths: ["src/**/*.sql", "/infra/**", "infra/", "../x", "a/?.ts", "**", "sensitive_paths\\\\x"]\n')).toEqual([
-        'sensitive_paths[0]: "src/**/*.sql": only `dir/**`, `name*` at the end, or an exact path are supported',
-        'sensitive_paths[1]: "/infra/**": a path from the repository root is expected (no leading `/`, `./`, `..`, `\\` or empty segment)',
-        'sensitive_paths[2]: "infra/": a path from the repository root is expected (no leading `/`, `./`, `..`, `\\` or empty segment)',
-        'sensitive_paths[3]: "../x": a path from the repository root is expected (no leading `/`, `./`, `..`, `\\` or empty segment)',
-        'sensitive_paths[4]: "a/?.ts": only `dir/**`, `name*` at the end, or an exact path are supported',
-        'sensitive_paths[5]: "**": only `dir/**`, `name*` at the end, or an exact path are supported',
-        'sensitive_paths[6]: "sensitive_paths\\x": a path from the repository root is expected (no leading `/`, `./`, `..`, `\\` or empty segment)',
+    it('refuses a sensitive path that names nothing in the repository (ORC-338), and keeps every glob that does', () => {
+      expect(violations('sensitive_paths: ["/infra/**", "C:/infra", "../x", "a/../../b"]\n')).toEqual([
+        'sensitive_paths[0]: "/infra/**": a path from the repository root is expected (no leading `/`, no drive, no `..`)',
+        'sensitive_paths[1]: "C:/infra": a path from the repository root is expected (no leading `/`, no drive, no `..`)',
+        'sensitive_paths[2]: "../x": a path from the repository root is expected (no leading `/`, no drive, no `..`)',
+        'sensitive_paths[3]: "a/../../b": a path from the repository root is expected (no leading `/`, no drive, no `..`)',
       ]);
-      expect(parseRepoConfig('sensitive_paths: ["infra/**", "db/schema*", "src/auth.ts"]\n').sensitivePaths).toEqual(['infra/**', 'db/schema*', 'src/auth.ts']);
+      const globs = ['infra', 'infra/**', 'src/auth*', '**/migrations/**', 'src/**/*.sql', 'a/?.ts', '{db,sql}/**'];
+      expect(parseRepoConfig(`sensitive_paths: ${JSON.stringify(globs)}\n`).sensitivePaths).toEqual(globs);
     });
 
     it('refuses a sensitive_paths that is not a list of paths', () => {

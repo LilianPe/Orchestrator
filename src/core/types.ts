@@ -377,6 +377,11 @@ export type ShellEvent =
       claudeSessionId: string;
       /** `false` on a run out of the ticket session (a review): the ticket does not take its session (ORC-217). Absent before. */
       ticketSession?: false;
+      /**
+       * A run launched with sensitive paths (it read untrusted content, I12): where it works and the head it starts on,
+       * `''` when none is read. Marks the ticket's branch when `cwd` is its worktree (`untrustedSince`, ORC-338).
+       */
+      untrusted?: { cwd: string; head: string };
     }
   /**
    * The pending feedback was given to a run, recorded once that run is written (ORC-220): a launch cut
@@ -420,6 +425,12 @@ export interface TicketState {
   verifyingRunId?: string;
   /** The last commit `verify` found green (ORC-151): nothing else is published. Absent before it. */
   verifiedSha?: string;
+  /**
+   * The head of the ticket's branch when a run that read untrusted content first started in its worktree (ORC-338),
+   * `''` when that head was not read: from then on, what the branch changes in the repository's `sensitive_paths` is
+   * refused. Sticky: its commits stay on the branch whoever runs next. Absent on a branch no such run worked on.
+   */
+  untrustedSince?: string;
   pendingJob?: PendingJob;
   verifyAttempts: number;
   /** Unverified reds in blocking mode since the last verified one, bounded by the job's `red.attempts` (ORC-123). Absent before it. */

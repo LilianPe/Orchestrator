@@ -97,9 +97,12 @@ function internal(t: TicketState, e: InternalEvent): TicketState {
     case 'workspace.released':
       return { ...t, worktreePath: undefined, port: undefined };
     case 'run.started': {
-      if (e.queue !== 'dev') return { ...t };
+      // The first untrusted run in the ticket's worktree marks its branch, for good (ORC-338).
+      const marks = !!e.untrusted && e.untrusted.cwd === t.worktreePath && t.untrustedSince === undefined;
+      const next = marks ? { ...t, untrustedSince: e.untrusted!.head } : { ...t };
+      if (e.queue !== 'dev') return next;
       const claudeSessionId = e.ticketSession === false ? t.claudeSessionId : (t.claudeSessionId ?? e.claudeSessionId);
-      return { ...t, activeRunId: e.runId, activeJob: e.job, claudeSessionId };
+      return { ...next, activeRunId: e.runId, activeJob: e.job, claudeSessionId };
     }
     case 'feedback.consumed':
       return { ...t, humanInbox: [] };

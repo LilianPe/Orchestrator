@@ -2,7 +2,7 @@ import { existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, renameSync
 import { rm } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
 import { branchName } from '../../core/naming.js';
-import { within } from '../../core/clean-verify.js';
+import { EMPTY_TREE, within } from '../../core/clean-verify.js';
 import { STALLED } from '../../publish/publish.js';
 import { execCmd, execFailure, HARDENING, mustExec, TIMED_OUT, type Exec } from '../exec.js';
 import { readCapped } from '../read-capped.js';
@@ -281,6 +281,18 @@ export class GitWorkspaces implements WorkspaceManager {
       showAtHead: (p) => show(head, p),
       filesAtHead: async () => (await git('ls-tree', '-r', '--name-only', '-z', head)).split('\0').filter(Boolean),
     };
+  }
+
+  async forkPoint(repoPath: string, path: string): Promise<string | undefined> {
+    const head = await this.head(path);
+    const objects = resolve(path, '.git', 'objects');
+    if (!head || !isDir(objects)) return undefined;
+    const args = ['-C', repoPath, 'merge-base', await originHead(this.exec, repoPath), head];
+    const r = await this.exec('git', args, { env: { GIT_ALTERNATE_OBJECT_DIRECTORIES: objects } });
+    // 1: no common commit, so every file of the branch is a change.
+    if (r.code === 1) return EMPTY_TREE;
+    if (r.code !== 0) throw execFailure('git', args, r);
+    return r.stdout.trim();
   }
 
   /** Git in the agent's directory, on the host: only without sandboxes (`FACTORY_ALLOW_HOST_VERIFY`), where the agent runs on the host anyway. */

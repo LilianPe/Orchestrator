@@ -354,7 +354,7 @@ describe('runCleanVerify', () => {
       };
 
       it('an untrusted branch that touches one is refused', async () => {
-        const res = await runCleanVerify(touchInfra({ untrusted: true }).req);
+        const res = await runCleanVerify(touchInfra({ untrustedSince: '' }).req);
         expect(res.failures).toEqual([{ command: 'factory/chemins-interdits', exitCode: 1, output: expect.stringContaining('`infra/main.tf`: sensitive path of the repository (`infra/**`)') }]);
       });
 
@@ -362,15 +362,42 @@ describe('runCleanVerify', () => {
         expect((await runCleanVerify(touchInfra({}).req)).ok).toBe(true);
       });
 
+      it('only what changed since the branch took untrusted content counts: a trusted commit before it stays the reviewer\'s', async () => {
+        const { repo, req } = touchInfra({}, 'sensitive_paths: ["infra"]\n');
+        const marked = { ...req, untrustedSince: git(repo, 'rev-parse', 'HEAD') };
+        write(repo, 'src/a.ts', 'x\n');
+        commit(repo, 'untrusted work elsewhere');
+        expect((await runCleanVerify(marked)).ok).toBe(true);
+        write(repo, 'infra/vpc.tf', 'x\n');
+        commit(repo, 'untrusted work on infra');
+        const { output } = (await runCleanVerify(setupAgain(marked))).failures[0]!;
+        expect(output).toContain('infra/vpc.tf');
+        expect(output).not.toContain('infra/main.tf');
+      });
+
+      it('a mark that is no ancestor of the head (a rewritten history) reads the whole branch', async () => {
+        const { req } = touchInfra({ untrustedSince: '0123456789012345678901234567890123456789' });
+        expect((await runCleanVerify(req)).failures[0]!.output).toContain('infra/main.tf');
+      });
+
+      it('a merge of the base brings none of the base\'s own sensitive changes', async () => {
+        const { origin, repo, req } = setup({ commands: [] }, 'sensitive_paths: ["infra"]\n');
+        const marked = { ...req, untrustedSince: git(repo, 'rev-parse', 'HEAD') };
+        write(origin, 'infra/main.tf', 'base\n');
+        commit(origin, 'a human changes infra on main');
+        git(repo, 'pull', '-q', '--no-rebase', '--no-edit', 'origin', 'main');
+        expect((await runCleanVerify(marked)).ok).toBe(true);
+      });
+
       it('read on the base: a branch that drops the entry is refused all the same', async () => {
-        const { repo, req } = touchInfra({ untrusted: true });
+        const { repo, req } = touchInfra({ untrustedSince: '' });
         write(repo, '.factory/config.yml', 'sensitive_paths: []\n');
         commit(repo, 'drop it');
         expect((await runCleanVerify(req)).failures[0]!.output).toContain('infra/main.tf');
       });
 
-      it('an entry the check cannot read is a config error, not a path left open', async () => {
-        await expect(runCleanVerify(touchInfra({ untrusted: true }, 'sensitive_paths: ["infra/**/*.tf"]\n').req)).rejects.toThrow(/sensitive_paths\[0\]/);
+      it('an entry that names nothing in the repository is a config error, not a path left open', async () => {
+        await expect(runCleanVerify(touchInfra({ untrustedSince: '' }, 'sensitive_paths: ["/infra/**"]\n').req)).rejects.toThrow(/sensitive_paths\[0\]/);
       });
     });
 

@@ -7,6 +7,7 @@ import { makeRepoConfig } from '../../src/app/repo-variables.js';
 import { parseRepoConfig, type RepoConfig } from '../../src/config/repo-config.js';
 import type { RepoVariables } from '../../src/config/repo-variables.js';
 import { blockCause } from '../../src/core/block-cause.js';
+import { TRUSTED } from '../../src/core/types.js';
 import { createHarness } from '../helpers/harness.js';
 
 const VERIFIED = 'version: 1\njobs:\n  dev: { verify: ["npm test"] }\n';
@@ -184,5 +185,50 @@ describe("the repository's config at the launch", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+/** ORC-338: without sandboxes, `verify` on the host applies the path rules of `checkClone` to the worktree's commits. */
+describe('the path rules of verify on the host', () => {
+  const WORKTREE = '/tmp/factory-fake/p/REL-1';
+  const failed = async (h: ReturnType<typeof createHarness>) =>
+    (await h.store.recentEvents(50, 'REL-1')).filter((e) => e.type === 'verify.failed').map((e) => (e.payload as { failures: { command: string; output: string }[] }).failures);
+
+  /** A worktree whose commits since the default branch change `paths`, and since `later.since` (the head an untrusted run starts on) change `later.paths`. */
+  function onHost(paths: string[], later?: { since: string; paths: string[] }) {
+    const h = createHarness({ projectYaml: VERIFIED, ...onDefaultBranch('sensitive_paths: [infra]\n') });
+    h.workspaces.forks.set(WORKTREE, 'fork');
+    h.workspaces.steps.set(`${WORKTREE}@fork`, { changed: paths.map((path) => ({ path, deleted: false })) });
+    if (later) {
+      h.workspaces.heads.set(WORKTREE, later.since);
+      h.workspaces.steps.set(`${WORKTREE}@${later.since}`, { changed: later.paths.map((path) => ({ path, deleted: false })) });
+    }
+    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+    return h;
+  }
+
+  it('refuses a forbidden path, whoever ran', async () => {
+    const h = onHost(['.github/actions/setup/action.yml']);
+    h.runner.enqueue({});
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    expect((await failed(h))[0]).toEqual([expect.objectContaining({ command: 'factory/chemins-interdits', output: expect.stringContaining('.github/actions/setup/action.yml') })]);
+  });
+
+  it('lets a trusted branch change a sensitive path', async () => {
+    const h = onHost(['infra/main.tf']);
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    expect(await failed(h)).toEqual([]);
+    expect((await h.ticket()).untrustedSince).toBeUndefined();
+  });
+
+  it('refuses what an untrusted branch changed in a sensitive path since it took untrusted content, not what came before', async () => {
+    const h = onHost(['infra/old.tf', 'infra/new.tf'], { since: 'head-before', paths: ['infra/new.tf'] });
+    h.runner.enqueue({});
+    await h.orch.accept({ ...TRUSTED, taint: 'untrusted', id: 'd1', type: 'ticket.delegated', at: h.clock.now(), projectId: 'p', ticketId: 'REL-1', payload: { linearSessionId: 'ls-1' } });
+    await h.orch.drained();
+    expect((await h.ticket()).untrustedSince).toBe('head-before');
+    const [failures] = await failed(h);
+    expect(failures).toEqual([expect.objectContaining({ command: 'factory/chemins-interdits', output: expect.stringContaining('infra/new.tf') })]);
+    expect(failures![0]!.output).not.toContain('infra/old.tf');
   });
 });

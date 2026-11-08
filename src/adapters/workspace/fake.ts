@@ -60,6 +60,13 @@ export class FakeWorkspaces implements WorkspaceManager {
     };
   }
 
+  /** Where each worktree left the default branch, by path, as a test sets it; none (no worktree) otherwise. */
+  forks = new Map<string, string>();
+
+  async forkPoint(_repoPath: string, path: string): Promise<string | undefined> {
+    return this.forks.get(path);
+  }
+
   async uncommitted(path: string): Promise<string[]> {
     return this.steps.get(path)?.uncommitted ?? [];
   }
