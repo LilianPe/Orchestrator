@@ -20,6 +20,8 @@ function assertSafe(id: string): void {
  * repository's layout. The agent has no token (ORC-125): the factory alone pushes, with its own.
  */
 const INHERITED = /^(user\.(name|email)|core\.(autocrlf|eol)|filter\.lfs\.(clean|smudge|process|required)|remote\..+\.(url|fetch))$/i;
+/** What the checkout that makes it (`agentRepository`) never takes of that config either: the layout of that repository, or a host's path for its hooks. */
+const LAYOUT = /^(core\.(bare|repositoryformatversion|worktree|hookspath|fsmonitor|sparsecheckout|sparsecheckoutcone)$|extensions\.)/i;
 const SHA = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
 /** Git's own rules on a ref's name (`git check-ref-format`), as a name out of them cannot be its branch. Never `..`: it becomes a path. */
 const BRANCH_REF = /^refs\/heads\/(?!-|\.)(?!.*(\.\.|@\{|\/\.|\/\/|\.lock(\/|$)))[^\s\p{Cc}~^:?*[\\]+$/u;
@@ -203,22 +205,29 @@ export class GitWorkspaces implements WorkspaceManager {
     await rm(making, { recursive: true, force: true });
     mkdirSync(dirname(path), { recursive: true });
     // Nothing of an agent has run in it: the checkout runs no hook, as `--template=` left none, and reads the daemon's own config.
-    const here = (...args: string[]) => mustExec(this.exec, 'git', [...HARDENING.flatMap((c) => ['-c', c]), ...args]);
+    const here = (args: string[], env?: Record<string, string>) => mustExec(this.exec, 'git', [...HARDENING.flatMap((c) => ['-c', c]), ...args], { env });
     try {
-      await here('init', '--quiet', '--template=', making);
-      const config = (await this.git(repo, 'config', '--local', '-z', '--list')).split('\0').filter(Boolean);
-      for (const entry of config) {
+      await here(['init', '--quiet', '--template=', making]);
+      // A key without a value is a boolean's true: `-z --list` gives it without the newline.
+      const config = (await this.git(repo, 'config', '--local', '-z', '--list')).split('\0').filter(Boolean).map((entry): [string, string] => {
         const at = entry.indexOf('\n');
-        const key = entry.slice(0, at);
-        if (at < 0 || !INHERITED.test(key)) continue;
-        const value = entry.slice(at + 1);
-        await here('-C', making, 'config', '--add', key, /\.url$/i.test(key) ? withoutUserinfo(value) : value);
+        return at < 0 ? [entry, 'true'] : [entry.slice(0, at), entry.slice(at + 1)];
+      });
+      for (const [key, value] of config) {
+        if (INHERITED.test(key)) await here(['-C', making, 'config', '--add', key, /\.url$/i.test(key) ? withoutUserinfo(value) : value]);
       }
+      // The checkout's LFS filter reaches the forge as the repository does, its credentials included: in the env of that
+      // checkout alone, never on a command line nor in the agent's config.
+      const forHost = config.filter(([key]) => !LAYOUT.test(key));
+      const asRepo = Object.fromEntries([
+        ['GIT_CONFIG_COUNT', String(forHost.length)],
+        ...forHost.flatMap(([key, value], i) => [[`GIT_CONFIG_KEY_${i}`, key], [`GIT_CONFIG_VALUE_${i}`, value]]),
+      ]);
       // Resolved: it is read from `making`, and `repoPath` can be relative.
-      await here('-C', making, 'fetch', '--quiet', '--no-tags', '--', resolve(repo), '+refs/remotes/origin/*:refs/remotes/origin/*', '+refs/tags/*:refs/tags/*', ...(localRef ? [`+${localRef}:${localRef}`] : []));
-      await here('-C', making, 'symbolic-ref', 'refs/remotes/origin/HEAD', trunk);
-      await here('-C', making, 'checkout', '--quiet', ...checkout);
-      await here('-C', making, 'sparse-checkout', 'set', '--no-cone', '/*', '!/.claude/*', '/.claude/CLAUDE.md');
+      await here(['-C', making, 'fetch', '--quiet', '--no-tags', '--', resolve(repo), '+refs/remotes/origin/*:refs/remotes/origin/*', '+refs/tags/*:refs/tags/*', ...(localRef ? [`+${localRef}:${localRef}`] : [])]);
+      await here(['-C', making, 'symbolic-ref', 'refs/remotes/origin/HEAD', trunk]);
+      await here(['-C', making, 'checkout', '--quiet', ...checkout], asRepo);
+      await here(['-C', making, 'sparse-checkout', 'set', '--no-cone', '/*', '!/.claude/*', '/.claude/CLAUDE.md'], asRepo);
       renameSync(making, path);
     } catch (err) {
       await rm(making, { recursive: true, force: true });

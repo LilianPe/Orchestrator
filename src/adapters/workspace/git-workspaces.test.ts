@@ -420,6 +420,34 @@ describe('GitWorkspaces', () => {
     ]);
   });
 
+  it("checks the agent's files out through the LFS filter as the repository reaches the forge, its credentials left out of the agent's config (ORC-341)", async () => {
+    const { base, repo, root } = fixtureRepo();
+    const seen = join(base, 'seen');
+    // As git-lfs's smudge: what it reads of the config to reach the forge.
+    git(repo, 'config', 'filter.lfs.smudge', `sh -c 'git config remote.origin.url >> "${seen}"; git config http.https://github.com/.extraheader >> "${seen}"; cat'`);
+    git(repo, 'config', 'filter.lfs.clean', 'cat');
+    writeFileSync(join(repo, '.gitattributes'), '*.bin filter=lfs\n');
+    writeFileSync(join(repo, 'big.bin'), 'data\n');
+    git(repo, 'add', '.');
+    git(repo, 'commit', '-qm', 'lfs');
+    git(repo, 'push', '-q', 'origin', 'main');
+    git(repo, 'remote', 'set-url', 'origin', 'https://x-access-token:SECRET-341@example.invalid/o/r.git');
+    git(repo, 'config', `url.${join(base, 'origin.git')}.insteadOf`, 'https://x-access-token:SECRET-341@example.invalid/o/r.git');
+    git(repo, 'config', 'http.https://github.com/.extraheader', 'AUTHORIZATION: basic SECRET-341');
+    const w = await new GitWorkspaces({ root }).prepare(req(repo));
+    expect(readFileSync(join(w.path, 'big.bin'), 'utf8')).toBe('data\n');
+    expect(readFileSync(seen, 'utf8').split('\n')).toContain('https://x-access-token:SECRET-341@example.invalid/o/r.git');
+    expect(readFileSync(seen, 'utf8').split('\n')).toContain('AUTHORIZATION: basic SECRET-341');
+    expect(readFileSync(join(w.path, '.git', 'config'), 'utf8')).not.toContain('SECRET-341');
+  });
+
+  it('takes a boolean the repository wrote without a value as true (ORC-341)', async () => {
+    const { repo, root } = fixtureRepo();
+    writeFileSync(join(repo, '.git', 'config'), `${readFileSync(join(repo, '.git', 'config'), 'utf8')}[core]\n\tautocrlf\n`);
+    const w = await new GitWorkspaces({ root }).prepare(req(repo));
+    expect(git(w.path, 'config', 'core.autocrlf')).toBe('true');
+  });
+
   it('reads the head of a repository whose refs git packed, on a branch or detached', async () => {
     const { repo, root } = fixtureRepo();
     const ws = new GitWorkspaces({ root });
