@@ -171,6 +171,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       log('Warning: FACTORY_CONTAINER_CLI is not set, runs execute on the host, without isolation.');
       log(env['FACTORY_ALLOW_HOST_VERIFY'] === '1' ? "Warning: FACTORY_ALLOW_HOST_VERIFY=1, verify runs the agent's code on the host, next to the daemon's secrets." : 'Warning: without a sandbox or FACTORY_ALLOW_HOST_VERIFY=1, verify refuses to run: every verified ticket will be blocked.');
     }
+    // No default cap (ORC-340): on a subscription the dollar cost is an API-price equivalent, any default would be a guess that stops work silently.
+    if (instance.limits.perDayUsd === undefined) log('Warning: no daily budget (limits.perDayUsd in config.yaml): runs start whatever they cost today.');
     if (sandboxes && !claudeToken) log('Warning: no Claude token (claude.active in factory.yml, or CLAUDE_CODE_OAUTH_TOKEN): sandboxed runs will not be able to authenticate.');
     const runner: Runner = o.fakeRunner
       ? Object.assign(new FakeRunner(), { submit: (runId: string, output: AgentOutput) => saveAgentOutput(store, runId, output) })
@@ -234,6 +236,11 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       packDir,
       settingsPath: writeRunSettings(packDir, o.home),
       dailyBudgetUsd: instance.limits.perDayUsd,
+      ...(yml?.budgets?.perTicketTokens ? { perTicketTokens: yml.budgets.perTicketTokens } : {}),
+      ...(yml?.budgets?.onUsageLimit ? { onUsageLimit: yml.budgets.onUsageLimit } : {}),
+      // The account whose token the runner and the proxy use (`claudeToken` above): `claude.active` when its token is the one resolved,
+      // else the daemon's CLAUDE_CODE_OAUTH_TOKEN, held as `default`. A usage limit holds the launches of that account only (ORC-340).
+      claudeAccount: () => (claudeAccount ? yml?.claude?.active : undefined),
       knowledgeConfigured: !!instance.knowledge,
       roles,
       repoVariables: makeRepoVariables({ yml, log }),
@@ -347,6 +354,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       clock,
       submit: accept,
       isPaused: () => orchestrator.isPaused(),
+      usageLimitedUntil: () => orchestrator.usageLimitedUntil(),
       linearWebhook: ingest,
       githubWebhook: githubIngest,
       linearConnected: () => !!trackerSwitch.current,

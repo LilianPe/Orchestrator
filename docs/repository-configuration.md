@@ -40,7 +40,7 @@ network: { level: custom, allow: ["docs.exemple.com"] }    # none | limited (def
 | `setup_secrets` | list of names | `[]` | Secrets that only `setup` receives, sealed before the agent starts. |
 | `services` | list | `[]` | Services to start next to the runner (`postgres`…). |
 | `sensitive_paths` | list of patterns | `[]` | Paths whose modification flags the run (stricter review). |
-| `budgets.per_ticket_tokens` | integer > 0 | none | Token cap for the ticket (ORC-216). |
+| `budgets.per_ticket_tokens` | integer > 0 | none | Token cap for the ticket's code runs (questions do not count): past it, the ticket is blocked before its next code run (ORC-340). It can only lower the cap of `factory.yml`. |
 | `max_diff` | `{ files, lines }` | `{ 15, 400 }` | Maximum diff size excluding tests; can only be tightened. |
 | `feature_flags.provider` | text | none | Feature flag provider. |
 | `visual_paths` | list of patterns | `[]` | Paths that require visual proof (ORC-176). |

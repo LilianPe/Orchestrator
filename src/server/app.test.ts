@@ -11,7 +11,7 @@ import { LABELS } from '../../test/helpers/store-suite.js';
 import { pendingLabels } from '../core/attempt-labels.js';
 import { agentOnly, createApp } from './app.js';
 
-async function setup(extra: { uiPassword?: string } = {}) {
+async function setup(extra: { uiPassword?: string; usageLimitedUntil?: () => Promise<number | undefined> } = {}) {
   const store = new SqliteStore(':memory:');
   const bus = new EventBus();
   const tracker = new FakeTracker();
@@ -48,6 +48,12 @@ describe('server', () => {
     const res = await app.request('/webhooks/github', { method: 'POST', body: '{"x":1}', headers: { 'X-Hub-Signature-256': 'sha256=00', 'X-GitHub-Event': 'push' } });
     expect(res.status).toBe(401);
     expect(githubWebhook).toHaveBeenCalledWith('{"x":1}', expect.objectContaining({ 'x-hub-signature-256': 'sha256=00', 'x-github-event': 'push' }));
+  });
+
+  it('serves until when the usage limit holds the launches, null when it holds none (ORC-340)', async () => {
+    expect((await (await (await setup()).app.request('/api/state')).json()).usageLimitedUntil).toBeNull();
+    const held = await setup({ usageLimitedUntil: async () => 301_000 });
+    expect((await (await held.app.request('/api/state')).json()).usageLimitedUntil).toBe(301_000);
   });
 
   it('serves state without run tokens', async () => {

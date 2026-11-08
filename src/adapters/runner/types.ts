@@ -55,6 +55,8 @@ export interface RunResult {
   infra?: true;
   /** What stopped it, when the detector did (ORC-136): `outcome` is then `limit`. */
   stagnation?: Stagnation;
+  /** The subscription's usage limit stopped it (ORC-340); `resetAt` (ms) when the CLI told it. */
+  usageLimit?: { resetAt?: number };
 }
 
 export interface RunHandle {
@@ -67,6 +69,8 @@ export interface RunHandle {
 export interface AttachRequest {
   runId: string;
   limits: RunLimits;
+  /** Prices the attempt if it ended without a result line (ORC-340). */
+  model?: string;
   /** Spent already, against `limits.durationMs`. */
   elapsedMs: number;
   /** The run's environment: its secrets are masked as at the start. */

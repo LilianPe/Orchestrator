@@ -36,6 +36,9 @@ function setup(
     effectRetry?: EffectRetry;
     workspaces?: FakeWorkspaces;
     processRetry?: { attempts: number; baseMs: number };
+    perTicketTokens?: number;
+    onUsageLimit?: 'wait';
+    account?: () => string | undefined;
   } = {},
 ) {
   const workflow = loadWorkflow({ packDir });
@@ -48,16 +51,20 @@ function setup(
   const scheduler = new Scheduler(store, { dev: 3, questions: 2 });
   let n = 0;
   const bus = new EventBus();
+  const clock = new FakeClock(1_000);
   const orch = new Orchestrator({
-    store, clock: new FakeClock(1_000), bus, scheduler,
+    store, clock, bus, scheduler,
     tracker, forge: new FakeForge(), runner, workspaces: o.workspaces ?? new FakeWorkspaces(), verify: o.verify ?? (async () => ({ ok: true, failures: [] })), hostChecks: true, dailyBudgetUsd: o.budget,
     projects: [{ id: 'p', repoPath: '/repo', teamKey: 'REL', workflow }], packDir, settingsPath: o.settingsPath,
     agentEnv: (r) => ({ FACTORY_RUN_TOKEN: r.token }), newId: () => `id-${++n}`, activityIntervalMs: 0, holdInboxUntilReplay: o.hold, factoryCommit: 'cafe42',
     // One attempt: a failed effect dies at once (the retries have their own tests).
     effectRetry: o.effectRetry ?? { attempts: 1, baseMs: 1, capMs: 1 },
     processRetry: o.processRetry,
+    ...(o.perTicketTokens ? { perTicketTokens: o.perTicketTokens } : {}),
+    ...(o.onUsageLimit ? { onUsageLimit: o.onUsageLimit } : {}),
+    ...(o.account ? { claudeAccount: o.account } : {}),
   });
-  return { store, tracker, runner: fakeRunner, orch, scheduler, bus };
+  return { store, tracker, runner: fakeRunner, orch, scheduler, bus, clock };
 }
 
 const mentioned = (ticketId: string): FactoryEvent => ({
@@ -366,6 +373,158 @@ describe('Orchestrator', () => {
     const comments = tracker.calls.filter((c) => c.method === 'comment' && c.args[0] === 'REL-2');
     expect(comments).toHaveLength(1);
     expect(String(comments[0]!.args[1])).toContain('Daily budget');
+  });
+
+  describe('the cost caps of factory.yml (ORC-340)', () => {
+    /** An earlier attempt of REL-1 that spent `output` tokens. */
+    const spent = (store: SqliteStore, output: number, run: { id: string; job: string; queue: 'dev' | 'questions' } = { id: 'old', job: 'dev', queue: 'dev' }) =>
+      store.putRun({ ...run, projectId: 'p', ticketId: 'REL-1', status: 'limit', claudeSessionId: 's', startedAt: 1, endedAt: 2, costUsd: 1, turns: 1, lastText: '', token: `t-${run.id}`, cwd: '/w', tokens: { input: 0, output, cacheRead: 5_000_000, cacheCreation: 0 } });
+
+    it('blocks a ticket past per_ticket_tokens before its next run, before any workspace, and says why', async () => {
+      const workspaces = new FakeWorkspaces();
+      const { store, tracker, runner, orch } = setup({ perTicketTokens: 1_000, workspaces });
+      tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+      await spent(store, 1_000);
+      await orch.accept(delegated());
+      await orch.drained();
+      expect(runner.requests).toEqual([]);
+      expect(workspaces.prepared).toEqual([]);
+      const t = (await store.getTicket('p', 'REL-1'))!;
+      expect(t.blocked).toBe(true);
+      // It says when a raised cap counts: factory.yml is read once, at the daemon's start.
+      expect(t.blockReason).toBe("Token budget of the ticket reached: 1000 tokens spent of 1000 by its code runs (budgets.per_ticket_tokens). Raise the cap (factory.yml counts once the daemon restarts, the repository's .factory/config.yml at the next launch) or split the ticket, then reply here.");
+    });
+
+    it('caps a run under it at what the ticket has left, counting its code runs only, and keeps the cap on the run', async () => {
+      const { store, tracker, runner, orch } = setup({ perTicketTokens: 1_000 });
+      tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+      await spent(store, 400);
+      // A question on the ticket is no code run: its tokens are not the ticket's budget.
+      await spent(store, 500, { id: 'q-old', job: 'ask', queue: 'questions' });
+      await orch.accept(delegated());
+      await orch.drained();
+      expect(runner.requests[0]!.limits.tokens).toBe(600);
+      expect((await store.getRun(runner.requests[0]!.runId))!.limits).toMatchObject({ tokens: 600 });
+    });
+
+    it('on_usage_limit: wait, a run the usage limit stopped waits for the reset instead of blocking', async () => {
+      const { store, tracker, runner, orch } = setup({ onUsageLimit: 'wait' });
+      tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+      runner.enqueue({ outcome: 'failure', usageLimit: { resetAt: 1_000_000 } });
+      await orch.accept(delegated());
+      await orch.drained();
+      expect((await store.getTicket('p', 'REL-1'))!.blocked).toBe(false);
+      expect(await store.dueTimers(Number.MAX_SAFE_INTEGER)).toMatchObject([{ key: 'REL-1:usage.reset', kind: 'usage.reset', payload: { job: 'dev', account: 'default' }, fireAt: 1_000_000 }]);
+    });
+
+    it('without a cap, a launch reads no run of the ticket', async () => {
+      const { store, tracker, runner, orch } = setup();
+      tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+      const read = vi.spyOn(store, 'ticketRuns');
+      await orch.accept(delegated());
+      await orch.drained();
+      expect(runner.requests).toHaveLength(1);
+      expect(runner.requests[0]!.limits.tokens).toBeUndefined();
+      expect(read).not.toHaveBeenCalled();
+    });
+
+    /** REL-1 delegated, its first run cut by the usage limit until 50 000. */
+    async function cutByTheLimit() {
+      const s = setup({ onUsageLimit: 'wait' });
+      s.tracker.addIssue({ identifier: 'REL-1', title: 'A' });
+      s.tracker.addIssue({ identifier: 'REL-2', title: 'B' });
+      s.runner.enqueue({ outcome: 'failure', usageLimit: { resetAt: 1_000_000 } });
+      await s.orch.accept(delegated());
+      await s.orch.drained();
+      const reset = (): FactoryEvent => ({ ...TRUSTED, id: 'timer:REL-1:usage.reset:1000000', type: 'timer.fired', at: 1_000_000, projectId: 'p', ticketId: 'REL-1', payload: { kind: 'usage.reset', payload: { job: 'dev', runId: s.runner.requests[0]!.runId } } });
+      return { ...s, reset };
+    }
+
+    it('the limit is the account: no launch of any ticket until the reset, then the cut step first, as a relaunch of what it read', async () => {
+      const { store, runner, orch, clock, reset } = await cutByTheLimit();
+      const cut = runner.requests[0]!;
+      await orch.accept({ ...TRUSTED, id: 'e2', type: 'ticket.delegated', at: 2_000, projectId: 'p', ticketId: 'REL-2', payload: { linearSessionId: 'ls-2' } });
+      await orch.drained();
+      await orch.tick();
+      expect(runner.requests).toHaveLength(1);
+      expect((await store.listQueue()).map((q) => q.ticketId)).toEqual(['REL-2']);
+      clock.set(1_000_000);
+      await orch.accept(reset());
+      await orch.drained();
+      await orch.tick();
+      await orch.drained();
+      const relaunch = runner.requests[1]!;
+      expect(await store.getRun(relaunch.runId)).toMatchObject({ ticketId: 'REL-1', job: 'dev' });
+      // The implementer's session, taken up: a relaunch of the cut run, not a step from scratch.
+      expect(relaunch).toMatchObject({ claudeSessionId: cut.claudeSessionId, resume: true });
+      expect((await store.getRun(runner.requests[2]!.runId))!.ticketId).toBe('REL-2');
+    });
+
+    it("holds the ticket's next steps behind the cut one: they wait for it, never start in its place", async () => {
+      const { store, runner, orch, clock, reset } = await cutByTheLimit();
+      await store.putTicket({ ...(await store.getTicket('p', 'REL-1'))!, pendingJob: { job: 'dev-feedback' } });
+      clock.set(1_000_000);
+      // A result settles the ticket: settle would start the pending job, which waits behind the cut step.
+      await orch.accept({ ...TRUSTED, id: 'v1', type: 'verify.passed', at: 1_000_000, projectId: 'p', ticketId: 'REL-1', payload: { runId: 'old', job: 'dev' } });
+      await orch.drained();
+      expect(runner.requests).toHaveLength(1);
+      expect((await store.getTicket('p', 'REL-1'))!.pendingJob).toMatchObject({ job: 'dev-feedback' });
+      await orch.accept(reset());
+      await orch.drained();
+      // The cut step again, then, once it ended, the step that waited behind it.
+      expect(runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:dev', '/factory:dev', '/factory:feedback']);
+    });
+
+    it("a reset already past waits 5 minutes at least; the hold is the active account's, logged and shown", async () => {
+      let account = 'acc-1';
+      const { tracker, runner, orch, bus } = setup({ onUsageLimit: 'wait', account: () => account });
+      const logs: string[] = [];
+      bus.subscribe((m) => void (m.kind === 'log' && logs.push(`${m.level}: ${m.message}`)));
+      tracker.addIssue({ identifier: 'REL-1', title: 'A' });
+      runner.enqueue({ outcome: 'failure', usageLimit: { resetAt: 500 } });
+      await orch.accept(delegated());
+      await orch.drained();
+      const until = 1_000 + 5 * 60_000;
+      expect(await orch.usageLimitedUntil()).toBe(until);
+      expect(logs).toContain(`warn: usage limit of the Claude account acc-1 reached (run ${runner.requests[0]!.runId}): launches held until ${new Date(until).toISOString()}`);
+      // Another account has its own limit: not held.
+      account = 'acc-2';
+      expect(await orch.usageLimitedUntil()).toBeUndefined();
+    });
+
+    it('a store that fails to record the hold never holds back the result: the step still waits for its reset', async () => {
+      const { store, tracker, runner, orch } = setup({ onUsageLimit: 'wait' });
+      tracker.addIssue({ identifier: 'REL-1', title: 'A' });
+      const setMeta = store.setMeta.bind(store);
+      vi.spyOn(store, 'setMeta').mockImplementation(async (key, value) => (key.startsWith('usage-limited-until') ? Promise.reject(new Error('disk full')) : setMeta(key, value)));
+      runner.enqueue({ outcome: 'failure', usageLimit: { resetAt: 1_000_000 } });
+      await orch.accept(delegated());
+      await orch.drained();
+      expect(await store.getTicket('p', 'REL-1')).toMatchObject({ blocked: false, usageWait: { job: 'dev' } });
+      expect(await store.dueTimers(Number.MAX_SAFE_INTEGER)).toHaveLength(1);
+    });
+
+    it('a budget block says in its state line the same figure as its reason: code runs only', async () => {
+      const { store, tracker, orch } = setup({ perTicketTokens: 1_000 });
+      tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+      await spent(store, 1_000);
+      await spent(store, 500, { id: 'q-old', job: 'ask', queue: 'questions' });
+      await orch.accept(delegated());
+      await orch.drained();
+      const comment = String(tracker.calls.find((c) => c.method === 'comment')!.args[1]);
+      expect(comment).toContain('1000 tokens spent of 1000 by its code runs');
+      expect(comment).toContain('· code-run tokens 1000 ·');
+    });
+
+    it('without on_usage_limit, the same run blocks the ticket as any failure', async () => {
+      const { store, tracker, runner, orch } = setup();
+      tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+      runner.enqueue({ outcome: 'failure', usageLimit: { resetAt: 1_000_000 } });
+      await orch.accept(delegated());
+      await orch.drained();
+      expect((await store.getTicket('p', 'REL-1'))!.blocked).toBe(true);
+      expect(await store.dueTimers(Number.MAX_SAFE_INTEGER)).toEqual([]);
+    });
   });
 
   it('does not start runs after stopAll()', async () => {

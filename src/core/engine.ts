@@ -163,7 +163,7 @@ function block(out: Decision, workflow: Workflow, b: Block): Decision {
  */
 function stuckPending(out: Decision, ticket: TicketState, workflow: Workflow, error: string, attempts: number): Decision {
   const pending = ticket.pendingJob;
-  if (!pending || !ticket.delegated || ticket.activeRunId || ticket.verifyingRunId || ticket.blocked || settledTicket(ticket)) return out;
+  if (!pending || !ticket.delegated || ticket.activeRunId || ticket.verifyingRunId || ticket.usageWait || ticket.blocked || settledTicket(ticket)) return out;
   const reason = `Error: the pending ${pending.job} could not be started: ${error}`;
   return block(out, workflow, {
     reason,
@@ -270,6 +270,8 @@ function unblock(out: Decision, event: FactoryEvent, ticket: TicketState): void 
   // The lease's relaunch too (ORC-220), and the relaunches after a cut, which nothing else gives back.
   if (ticket.leaseRelaunches) out.events.push({ type: 'ticket.patched', patch: { leaseRelaunches: 0 } });
   if (ticket.cutRelaunches?.length) out.events.push({ type: 'ticket.patched', patch: { cutRelaunches: [] } });
+  // And the relaunches at a usage reset (ORC-340): a human's resume is not blocked again at the first cut.
+  if (ticket.usageRelaunches) out.events.push({ type: 'ticket.patched', patch: { usageRelaunches: null } });
 }
 
 /** The head of the reason of a ticket blocked by the bound: the Flow classes a block by the head of its reason (ORC-297). */
@@ -325,6 +327,48 @@ function attemptLost(out: Decision, event: FactoryEvent<'run.lost'>, ticket: Tic
   if (recent.length >= CUT_RELAUNCHES) return blockOnCuts(out, workflow, jobName);
   out.events.push({ type: 'ticket.patched', patch: { ...(cause === 'lease' ? { leaseRelaunches: used + 1 } : {}), cutRelaunches: [...recent, event.at] } });
   startRun(out, event, ticket, job, { relaunchOf: runId });
+  return out;
+}
+
+/** Relaunches at a usage reset a step gets in a row (ORC-340): the next cut blocks it. */
+export const USAGE_RELAUNCHES = 3;
+
+/**
+ * A run the subscription's usage limit stopped, the factory waiting on it (`on_usage_limit: wait`, ORC-340): no failure of the agent,
+ * no attempt counted. A question is asked again after the reset, its thread told so. A code step, the ticket's active one, waits for
+ * the reset (`usageWait`) and is relaunched then, `USAGE_RELAUNCHES` times in a row at most. Undefined: decided as any other end.
+ */
+function usageLimitDecision(out: Decision, event: FactoryEvent<'run.finished'>, ticket: TicketState | undefined, workflow: Workflow, limited: { resetAt: number; account?: string }): Decision | undefined {
+  const { job: jobName, runId } = event.payload;
+  const job = workflow.jobs[jobName]!;
+  const at = new Date(limited.resetAt).toISOString();
+  const ms = Math.max(0, limited.resetAt - event.at);
+  const payload = { job: jobName, runId, ...(limited.account ? { account: limited.account } : {}) };
+  if (job.queue === 'questions') {
+    const asks = ticket?.usageAsks ?? 0;
+    if (asks >= USAGE_RELAUNCHES) {
+      // Asked again as many times as a step is relaunched: the thread is told once, and nothing more is armed.
+      out.events.push({ type: 'ticket.patched', patch: { usageAsks: null } });
+      out.effects.push({ kind: 'activity', type: 'error', body: 'The usage limit is still reached; ask again later.', runId });
+      return out;
+    }
+    out.events.push({ type: 'ticket.patched', patch: { usageAsks: asks + 1 } });
+    out.effects.push({ kind: 'activity', type: 'response', body: `The usage limit is reached: I will answer after ${at}.`, runId });
+    out.timers.push({ kind: 'usage.reset', slot: `usage.reset:${runId}`, ms, payload });
+    return out;
+  }
+  // Only the ticket's active step reaches here: the result of another attempt is fenced before (`staleAttempt`). A blocked ticket keeps
+  // its block; an undelegated or delivered one has no step to resume (`attemptLost` guards the same): decided as any other end.
+  if (!ticket || ticket.blocked || !ticket.delegated || refusesDevWork(ticket, job)) return undefined;
+  const count = ticket.usageRelaunches?.job === jobName ? ticket.usageRelaunches.count : 0;
+  if (count >= USAGE_RELAUNCHES) {
+    const reason = `The run ${jobName} reached a limit: the usage limit stopped it ${count + 1} times in a row.`;
+    return block(out, workflow, { reason, body: `${reason} Reply in this thread and I will resume.`, job: jobName, attempts: count + 1, tried: [`${count} relaunch(es) at a usage reset.`] });
+  }
+  out.events.push({ type: 'ticket.patched', patch: { usageWait: { runId, job: jobName, logical: ticket.logical }, usageRelaunches: { job: jobName, count: count + 1 } } });
+  out.effects.push({ kind: 'activity', type: 'thought', body: `Usage limit reached; resuming at ${at}.` });
+  out.timers.push({ kind: 'usage.reset', slot: 'usage.reset', ms, payload });
+  out.trace.push(`usage limit: ${jobName} resumes at ${at}`);
   return out;
 }
 
@@ -596,7 +640,7 @@ function resumedJob(rule: Rule, event: FactoryEvent, ticket: TicketState | undef
  */
 function strandedPending(ticket: TicketState | undefined, workflow: Workflow): PendingJob | undefined {
   const pending = ticket?.pendingJob;
-  if (!pending || !ticket.blocked || ticket.blockedJob !== pending.job || ticket.activeRunId || ticket.verifyingRunId) return undefined;
+  if (!pending || !ticket.blocked || ticket.blockedJob !== pending.job || ticket.activeRunId || ticket.verifyingRunId || ticket.usageWait) return undefined;
   return workflow.jobs[pending.job] ? pending : undefined;
 }
 
@@ -1095,6 +1139,15 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       // An attempt that ended gives the lease's relaunch back (ORC-220): only two in a row block.
       if (ticket?.leaseRelaunches && job?.queue === 'dev') out.events.push({ type: 'ticket.patched', patch: { leaseRelaunches: 0 } });
       if (!job || event.payload.outcome === 'stopped') return out;
+      // A run that succeeded is kept, whatever the stream said of the limit on the way.
+      const limited = event.payload.outcome !== 'success' ? event.payload.usageLimit : undefined;
+      // A step that ended without the limit starts its count of relaunches at the reset again.
+      if (!limited && ticket?.usageRelaunches && job.queue === 'dev') out.events.push({ type: 'ticket.patched', patch: { usageRelaunches: null } });
+      if (!limited && ticket?.usageAsks && job.queue === 'questions') out.events.push({ type: 'ticket.patched', patch: { usageAsks: null } });
+      if (limited) {
+        const usage = usageLimitDecision(out, event, ticket, workflow, limited);
+        if (usage) return usage;
+      }
       const outcome = job.queue === 'dev' ? (stagnationBlock(event.payload, workflow) ?? attemptDecision(event.payload, job)) : event.payload.outcome;
       // Already blocked (the agent asked through `ask`, a human's stop…): it keeps its reason and gets no second notice.
       if (typeof outcome === 'object') return ticket?.blocked ? out : block(out, workflow, { ...outcome, job: jobName });
@@ -1214,8 +1267,30 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
         out.timers.push({ kind: 'reconcile', payload: {}, slot: 'reconcile', ms: RECONCILE_MS });
         return out;
       }
+      if (fired.kind === 'usage.reset' && fired.payload.job) {
+        const job = workflow.jobs[fired.payload.job];
+        // A question cut by the limit: asked again, from what it read, in its thread (`relaunchOf`).
+        if (job?.queue === 'questions' && fired.payload.runId) {
+          startRun(out, event, ticket, job, { relaunchOf: fired.payload.runId });
+          return out;
+        }
+        const wait = ticket?.usageWait;
+        // Only the cut step, still where it was cut: a ticket moved on since (a run, a move, a block, undelegated) ended the wait (`reduce`).
+        // ponytail: the timer row is left to fire into this check, not deleted; a per-slot delete in the decision plan if stale rows ever matter.
+        const current = !!job && !!ticket && !!wait && wait.runId === fired.payload.runId && wait.job === job.name && ticket.logical === wait.logical && ticket.delegated && !ticket.blocked && !ticket.activeRunId && !ticket.verifyingRunId;
+        if (!current) {
+          // Its reason gone, the wait goes with its timer: it never outlives it. A wait of another cut has its own timer.
+          if (wait && wait.runId === fired.payload.runId) out.events.push({ type: 'ticket.patched', patch: { usageWait: null } });
+          out.trace.push(`timer.fired usage.reset: ${fired.payload.job} not resumed, the ticket moved on`);
+          return out;
+        }
+        out.events.push({ type: 'ticket.patched', patch: { usageWait: null } });
+        // As a relaunch after a cut (`attemptLost`): the step reads again what the cut run read, in the session of its role.
+        startRun(out, event, ticket, job, { relaunchOf: wait.runId });
+        return out;
+      }
       if (fired.kind !== 'debounce') {
-        // Armed by no rule yet: the clarify reminder and block are ORC-210's, the usage-limit wait ORC-215's.
+        // Armed by no rule yet: the clarify reminder and block are ORC-210's; a usage reset without a job, by no version.
         out.trace.push(`timer.fired ${fired.kind}: no rule decides it yet`);
         return out;
       }

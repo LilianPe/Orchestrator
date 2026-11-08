@@ -85,10 +85,11 @@ const shutdown = trackHarnesses();
 
 /**
  * One step of the daemon's loop, each part on its own: in an outage the heartbeat throws, and the poll that follows it in
- * `advance` must still run. The tick drains the queue again, as an item put back in line after a fault waits for it.
+ * `advance` must still run. The tick drains the queue again, as an item put back in line after a fault waits for it: a
+ * step is longer than the first waits of such an item (2 s, then 4 s).
  */
 async function step(h: ReturnType<typeof createHarness>): Promise<void> {
-  await h.advance(10).catch(injected);
+  await h.advance(5_000).catch(injected);
   await h.orch.poll().catch(injected);
   await h.orch.drained().catch(injected);
   await h.orch.tick();

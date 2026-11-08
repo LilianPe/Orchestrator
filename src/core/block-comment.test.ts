@@ -20,14 +20,14 @@ describe('the standard blocking comment (ORC-196)', () => {
         '- `npm test` (code 1)',
         '- `npm run lint` (code 2)',
         'Question: Redo as is (reply "yes") or with an instruction?',
-        'State: branch factory/rel-1 · last commit abcdef012345 · CI red · tokens 12345 · 42 min',
+        'State: branch factory/rel-1 · last commit abcdef012345 · CI red · code-run tokens 12345 · 42 min',
         'Reply on this ticket: I will resume as soon as you answer.',
       ].join('\n'),
     );
   });
 
   it('keeps its form when the state is unknown: it says so, it invents nothing', () => {
-    expect(composeBlockComment(facts, {}).split('\n').at(-2)).toBe('State: branch none · last commit none · CI none · tokens unknown · unknown duration');
+    expect(composeBlockComment(facts, {}).split('\n').at(-2)).toBe('State: branch none · last commit none · CI none · code-run tokens unknown · unknown duration');
   });
 
   it('keeps the reason on one line, whatever error it quotes, and at most 5 tries', () => {
