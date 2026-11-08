@@ -27,7 +27,7 @@ cd <your repository>
 relais init          # Linear team, OAuth application, knowledge base, .relais/workflow.yml
 
 # 3. Start
-relais up            # http://localhost:4100, then « Connecter Linear »
+relais up            # http://localhost:4100, then « Connect Linear »
 ```
 
 4. In Linear, create a clear ticket (at least 30 characters of description) and **delegate it to `@relais`**. Within 10 s: the comment « Got it. » and the plan in the session, then status *In Progress*, live output in the interface, then the PR opened, status *Human Review* and a summary in the Linear session.

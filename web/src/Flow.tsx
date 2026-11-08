@@ -1,20 +1,20 @@
-import type { BlockCause } from '../../src/core/block-cause.js';
+import { AGENT_QUESTION, onlyRestatesCause, STOPPED, type BlockCause } from '../../src/core/block-cause.js';
 import type { FlowTicketView, FlowView, WorkingRunView } from './types.js';
 
 const CAUSE_LABELS: Record<BlockCause, string> = {
-  question: 'Question de l’agent',
-  contested: 'Ticket contesté par l’agent',
-  red: 'Rouge non vérifié',
-  infra: 'Panne d’infrastructure',
-  limit: 'Plafond atteint',
-  loop: 'Boucle',
-  failed: 'Run en échec',
-  pickup: 'Prise en charge refusée',
-  repo_config: 'Configuration du dépôt invalide',
-  dead_letter: 'Événement mis de côté',
-  pr_closed: 'PR fermée sans merge',
-  stopped: 'Stopped on request',
-  other: 'Autre cause',
+  question: AGENT_QUESTION,
+  contested: 'Ticket disputed by the agent',
+  red: 'Red not verified',
+  infra: 'Infrastructure failure',
+  limit: 'Limit reached',
+  loop: 'Loop',
+  failed: 'Run failed',
+  pickup: 'Pickup refused',
+  repo_config: 'Invalid repository configuration',
+  dead_letter: 'Event set aside',
+  pr_closed: 'PR closed without merge',
+  stopped: STOPPED,
+  other: 'Other cause',
 };
 
 const pad = (n: number) => String(n).padStart(2, '0');
@@ -27,24 +27,27 @@ export function formatDuration(ms: number): string {
   return `${Math.floor(minutes / 60)} h ${pad(minutes % 60)} min`;
 }
 
-const decimal = (n: number, digits = 1) => n.toFixed(digits).replace('.', ',');
+/** `1 turn`, `2 turns`. */
+export const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`;
 
 export function formatTokens(n: number): string {
   if (n < 1_000) return String(n);
-  return n < 1_000_000 ? `${decimal(n / 1_000)} k` : `${decimal(n / 1_000_000)} M`;
+  // Rounded before the unit is chosen: 999 950 reads 1.0 M, not 1000.0 k.
+  const k = Math.round(n / 100) / 10;
+  return k < 1_000 ? `${k.toFixed(1)} k` : `${(Math.round(n / 100_000) / 10).toFixed(1)} M`;
 }
 
 /** The measure of the ticket; the cost in dollars is what exists when no attempt reported tokens (ORC-216). */
 export function tokensCell(run: WorkingRunView): { text: string; title: string } {
-  if (!run.measured) return { text: '?', title: 'Les mesures de ce ticket sont illisibles : voir le journal.' };
+  if (!run.measured) return { text: '?', title: 'This ticket’s measurements could not be read: see the log.' };
   if (!run.tokens) {
-    return { text: run.costUsd > 0 ? `— (${decimal(run.costUsd, 2)} $)` : '—', title: 'Aucune tentative terminée n’a rapporté ses tokens.' };
+    return { text: run.costUsd > 0 ? `— ($${run.costUsd.toFixed(2)})` : '—', title: 'No finished attempt reported its tokens.' };
   }
   const { input, output, cacheRead, cacheCreation } = run.tokens;
-  const missing = run.attemptsWithoutTokens > 0 ? `${run.attemptsWithoutTokens} tentative(s) terminée(s) sans mesure. ` : '';
+  const missing = run.attemptsWithoutTokens > 0 ? `${plural(run.attemptsWithoutTokens, 'finished attempt')} without a measurement. ` : '';
   return {
     text: `${missing ? '≥ ' : ''}${formatTokens(input + output + cacheRead + cacheCreation)}`,
-    title: `${missing}Entrée ${formatTokens(input)}, sortie ${formatTokens(output)}, cache lu ${formatTokens(cacheRead)}, cache écrit ${formatTokens(cacheCreation)}.`,
+    title: `${missing}Input ${formatTokens(input)}, output ${formatTokens(output)}, cache read ${formatTokens(cacheRead)}, cache write ${formatTokens(cacheCreation)}.`,
   };
 }
 
@@ -89,17 +92,17 @@ export function Flow({ flow, elapsedMs, selectedRun, onSelect, onStop }: {
     <>
       <section className={waiting ? 'needs active' : 'needs'}>
         <h2>Needs you{waiting > 0 && <span className="count">{waiting}</span>}</h2>
-        {!waiting && <p className="empty">Rien n’attend un humain.</p>}
-        {blocked.map((g) => <Group key={g.cause} label={CAUSE_LABELS[g.cause]} tone="blocked" tickets={g.tickets.map((ticket) => ({ ticket, detail: ticket.reason === CAUSE_LABELS[g.cause] ? undefined : ticket.reason }))} />)}
-        {humanReview.length > 0 && <Group label="PR en Human Review" tone="human" tickets={humanReview.map((ticket) => ({ ticket }))} />}
-        {gates.length > 0 && <Group label="Portes en attente" tone="human" tickets={gates.map((ticket) => ({ ticket, detail: 'Porte de merge' }))} />}
+        {!waiting && <p className="empty">Nothing is waiting for a human.</p>}
+        {blocked.map((g) => <Group key={g.cause} label={CAUSE_LABELS[g.cause]} tone="blocked" tickets={g.tickets.map((ticket) => ({ ticket, detail: onlyRestatesCause(g.cause, ticket.reason) ? undefined : ticket.reason }))} />)}
+        {humanReview.length > 0 && <Group label="PRs in Human Review" tone="human" tickets={humanReview.map((ticket) => ({ ticket }))} />}
+        {gates.length > 0 && <Group label="Pending gates" tone="human" tickets={gates.map((ticket) => ({ ticket, detail: 'Merge gate' }))} />}
       </section>
       <section className="working">
         <h2>Working{flow.working.length > 0 && <span className="count">{flow.working.length}</span>}</h2>
         {flow.working.length > 0 ? (
           <table>
             <thead>
-              <tr><th>Ticket</th><th>Étape</th><th className="num">Durée</th><th className="num">Tokens du ticket</th><th></th></tr>
+              <tr><th>Ticket</th><th>Step</th><th className="num">Duration</th><th className="num">Ticket tokens</th><th></th></tr>
             </thead>
             <tbody>
               {flow.working.map((run) => {
@@ -107,7 +110,7 @@ export function Flow({ flow, elapsedMs, selectedRun, onSelect, onStop }: {
                 return (
                   <tr key={run.runId} className={run.runId === selectedRun ? 'selected' : ''}>
                     <td><button className="link" onClick={() => onSelect(run.runId)}>{run.ticketId}</button> {run.title} <PrLink url={run.prUrl} /></td>
-                    <td className="step">{run.step}{run.verifying && ' · vérification'}</td>
+                    <td className="step">{run.step}{run.verifying && ' · verification'}</td>
                     <td className="num">{formatDuration(run.durationMs + elapsedMs)}</td>
                     <td className="num" title={tokens.title}>{tokens.text}</td>
                     <td className="actions">{run.stoppable && <button onClick={() => onStop(run)}>Stop</button>}</td>
@@ -116,18 +119,18 @@ export function Flow({ flow, elapsedMs, selectedRun, onSelect, onStop }: {
               })}
             </tbody>
           </table>
-        ) : <p className="empty">Aucun run en cours.</p>}
-        {flow.working.length > 0 && <p className="note">Tokens des tentatives terminées du ticket. Un run en cours compte à sa fin.</p>}
+        ) : <p className="empty">No run in progress.</p>}
+        {flow.working.length > 0 && <p className="note">Tokens of the ticket’s finished attempts. A run in progress counts when it ends.</p>}
         {flow.queued.length > 0 && (
-          <p className="queued"><span>En file</span> {flow.queued.map((q) => `${q.ticketId} (${q.job})`).join(', ')}</p>
+          <p className="queued"><span>Queued</span> {flow.queued.map((q) => `${q.ticketId} (${q.job})`).join(', ')}</p>
         )}
       </section>
       <section className="done">
         <h2>Done</h2>
-        {flow.done.length > 0 ? <TicketList tickets={flow.done.map((ticket) => ({ ticket }))} /> : <p className="empty">Aucun ticket terminé cette semaine.</p>}
+        {flow.done.length > 0 ? <TicketList tickets={flow.done.map((ticket) => ({ ticket }))} /> : <p className="empty">No ticket finished this week.</p>}
         {flow.others.length > 0 && (
           <details>
-            <summary>Autres tickets suivis ({flow.others.length})</summary>
+            <summary>Other tracked tickets ({flow.others.length})</summary>
             <TicketList tickets={flow.others.map((ticket) => ({ ticket }))} />
           </details>
         )}
