@@ -1,8 +1,8 @@
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
-import { execCmd, TIMED_OUT } from './exec.js';
+import { describe, expect, it, vi } from 'vitest';
+import { DEFAULT_EXEC_TIMEOUT_MS, execCmd, TIMED_OUT } from './exec.js';
 
 const alive = (pid: number) => {
   try {
@@ -53,6 +53,27 @@ describe.skipIf(process.platform === 'win32')('execCmd with a deadline', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   }, 10_000);
+
+  it('gives every command a deadline by default: one that never returns is killed with its group at it (ORC-344)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'factory-exec-'));
+    const pidFile = join(dir, 'grandchild.pid');
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const pending = execCmd('sh', ['-c', `sleep 3000 & echo $! > ${pidFile}; wait`]);
+      let settled = false;
+      void pending.then(() => (settled = true));
+      await vi.waitFor(() => expect(readFileSync(pidFile, 'utf8').trim()).not.toBe(''));
+      const grandchild = Number(readFileSync(pidFile, 'utf8'));
+      await vi.advanceTimersByTimeAsync(DEFAULT_EXEC_TIMEOUT_MS - 1);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect((await pending).code).toBe(TIMED_OUT);
+      await vi.waitFor(() => expect(alive(grandchild)).toBe(false));
+    } finally {
+      vi.useRealTimers();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 
   it('leaves a command that ends in time as it is', async () => {
     expect(await execCmd('sh', ['-c', 'echo ok'], { timeoutMs: 5_000 })).toEqual({ stdout: 'ok\n', stderr: '', code: 0 });

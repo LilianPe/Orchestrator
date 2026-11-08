@@ -28,6 +28,8 @@ interface LiveRun {
   deadline: number;
   end: (outcome?: RunOutcome) => void;
   done: Promise<RunResult>;
+  /** The streams of the handles that follow it: its start's, then each attach's. */
+  streams: Set<Channel<RunStreamEvent>>;
 }
 
 /** Turn and duration caps hold as on the real runtime: turns on the scripted count, duration on `clock`, checked at each `tick`. */
@@ -49,6 +51,11 @@ export class FakeRunner implements Runner {
 
   release(runId: string): void {
     this.live.get(runId)?.end();
+  }
+
+  /** A held run writes one more event: each handle that follows it reads it, as progress (ORC-344). */
+  say(runId: string, event: RunStreamEvent): void {
+    for (const ch of this.live.get(runId)?.streams ?? []) ch.push(event);
   }
 
   /** The held run is gone with the daemon that started it: nothing left to attach to (ORC-220). */
@@ -85,7 +92,7 @@ export class FakeRunner implements Runner {
       if (s.fail) throw new Error(s.fail);
       return { outcome: forced ?? s.outcome ?? 'success', costUsd: s.costUsd ?? 0.1, turns, lastText, ...(s.tokens ? { tokens: s.tokens } : {}), ...(s.stagnation ? { stagnation: s.stagnation } : {}), ...(s.usageLimit ? { usageLimit: s.usageLimit } : {}) };
     });
-    const run: LiveRun = { deadline: this.clock.now() + req.limits.durationMs, end, done };
+    const run: LiveRun = { deadline: this.clock.now() + req.limits.durationMs, end, done, streams: new Set([ch]) };
     if (s.hold) this.live.set(req.runId, run);
     if (overTurns) end('limit');
     return this.handle(run, ch);
@@ -96,11 +103,23 @@ export class FakeRunner implements Runner {
     const run = this.live.get(req.runId);
     if (!run) return undefined;
     const ch = new Channel<RunStreamEvent>();
+    run.streams.add(ch);
     void run.done.finally(() => ch.close()).catch(() => {});
     return this.handle(run, ch);
   }
 
   private handle(run: LiveRun, events: Channel<RunStreamEvent>): RunHandle {
-    return { events, done: run.done, stop: () => run.end('stopped') };
+    // Detached, it never settles: the attempt's end is the next follower's.
+    const never = new Promise<RunResult>(() => {});
+    const done = run.done.catch(() => {}).then(() => (run.streams.has(events) ? run.done : never));
+    return {
+      events,
+      done,
+      stop: () => run.end('stopped'),
+      detach: () => {
+        run.streams.delete(events);
+        events.close();
+      },
+    };
   }
 }

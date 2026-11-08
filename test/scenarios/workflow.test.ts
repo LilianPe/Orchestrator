@@ -253,12 +253,14 @@ describe('standard workflow', () => {
   // ORC-220 replaces the block of a restart: `test/scenarios/recovery.test.ts` holds what a restart does now.
   describe('I1: restart during a run', () => {
     // Was: blocked, and a human's reply resumed it. Now nobody has to reply: the session is resumed by the factory.
+    // A shutdown leaves the run going (ORC-344): these are runs gone by the next start.
     it('a dev run interrupted by shutdown goes on by itself, on its session', async () => {
       const h = createHarness();
       h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
       h.runner.enqueue({ hold: true }, { events: [{ kind: 'text', text: 'Repris.' }] });
       await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
       const runId = (await h.ticket()).activeRunId!;
+      h.runner.forget(runId);
       await h.restart();
       expect((await h.store.getRun(runId))!.status).not.toBe('running');
       expect(h.runner.requests).toHaveLength(2);
@@ -273,6 +275,7 @@ describe('standard workflow', () => {
       h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
       h.runner.enqueue({ hold: true });
       await h.send('session.mentioned', { linearSessionId: 'ls-9', body: 'où ?', author: 'L' });
+      h.runner.forget(h.runner.requests[0]!.runId);
       await h.restart();
       expect(h.tracker.activities('ls-9').at(-1)).toMatchObject({ type: 'error', body: expect.stringContaining('restarted') });
       expect((await h.ticket()).blocked).toBe(false);

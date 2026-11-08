@@ -96,7 +96,7 @@ describe('the closed outcome of an attempt decides its end (ORC-289)', () => {
   it('a failure after the run ended (recording it) does not turn a finished attempt into errored', async () => {
     const h = await devRun(done, (inner) =>
       Object.assign(Object.create(inner) as Store, {
-        putRun: (r: Parameters<Store['putRun']>[0]) => (r.endedAt !== undefined ? Promise.reject(new Error('database down')) : inner.putRun(r)),
+        putRun: (r: Parameters<Store['putRun']>[0], fence?: number) => (r.endedAt !== undefined ? Promise.reject(new Error('database down')) : inner.putRun(r, fence)),
       }),
     );
     expect(await h.ticket()).toMatchObject({ logical: 'human_review', blocked: false });

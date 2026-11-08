@@ -424,7 +424,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       await Promise.all([timers.stop(), poller.stop(), reconciler.stop()]);
       orchestrator.stopAll();
       await orchestrator.drained();
-      await egress.closeAll();
+      // The sandboxes it let run on keep their socket folders: the next start listens in them again (ORC-344).
+      await egress.closeAll({ keep: true });
       const close = (s: typeof server) =>
         new Promise<void>((resolve) => {
           s.close(() => resolve());

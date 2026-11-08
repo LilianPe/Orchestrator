@@ -19,6 +19,7 @@ export interface ExecOpts {
    * Past it, the command and what stayed in its process group (git's ssh) are killed (POSIX; on Windows, the command
    * alone). The code is `TIMED_OUT` only if the command itself was still running then. A process that left the group
    * and holds the output open can still hold the promise: a caller that must not wait bounds it too (`within`).
+   * `DEFAULT_EXEC_TIMEOUT_MS` when absent: no command holds its ticket forever (ORC-344).
    */
   timeoutMs?: number;
   /** Past this many bytes of stdout, the command is killed, its output dropped, and the result says `overflow`. */
@@ -30,10 +31,20 @@ export type Exec = (cmd: string, args: string[], opts?: ExecOpts) => Promise<Exe
 /** The code of a command killed at its deadline, as `timeout(1)` gives it. */
 export const TIMED_OUT = 124;
 
+/**
+ * The deadline of a command that names none (ORC-344): twice a check's (`VERIFY_TIMEOUT_MS`, 15 min), which a command
+ * capped in a sandbox runs under, so that only a command that never returns reaches it. Its effect then fails and is
+ * tried again, its ticket freed.
+ */
+export const DEFAULT_EXEC_TIMEOUT_MS = 30 * 60_000;
+
+/** Each command in its own process group, so the kill at its deadline reaches the grandchildren too (POSIX; Windows kills the child alone). */
+const GROUP = process.platform !== 'win32';
+
 export const execCmd: Exec = (cmd, args, opts = {}) =>
   new Promise((resolve, reject) => {
-    // Its own process group under a deadline, so the kill reaches the grandchildren too (POSIX; Windows kills the child alone).
-    const group = opts.timeoutMs !== undefined && process.platform !== 'win32';
+    const group = GROUP;
+    const timeoutMs = opts.timeoutMs ?? DEFAULT_EXEC_TIMEOUT_MS;
     const child = spawn(cmd, args, { cwd: opts.cwd, env: { ...process.env, ...opts.env }, stdio: ['ignore', 'pipe', 'pipe'], detached: group });
     const out: Buffer[] = [];
     let size = 0;
@@ -57,15 +68,12 @@ export const execCmd: Exec = (cmd, args, opts = {}) =>
     // Set when the command itself ends, its pipes perhaps still held by what it left behind.
     let exited: number | undefined;
     child.on('exit', (code) => (exited = code ?? 1));
-    const timer =
-      opts.timeoutMs === undefined
-        ? undefined
-        : setTimeout(() => {
-            timedOut = exited === undefined;
-            kill();
-            // Ended already: what holds its output past the deadline, perhaps out of the group, does not hold its answer.
-            if (!timedOut) done(exited);
-          }, opts.timeoutMs);
+    const timer = setTimeout(() => {
+      timedOut = exited === undefined;
+      kill();
+      // Ended already: what holds its output past the deadline, perhaps out of the group, does not hold its answer.
+      if (!timedOut) done(exited);
+    }, timeoutMs);
     child.stdout.on('data', (d: Buffer) => {
       if (overflow) return;
       size += d.length;

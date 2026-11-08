@@ -20,7 +20,7 @@ type Fault = 'throw' | 'hang' | 'outage';
 class InjectedFault extends Error {}
 
 /** The ticket's state, its runs and the queue, which an outage refuses; the outbox's own bookkeeping still answers, so that the settle's death is recorded. */
-const OUTAGE = new Set(['getTicket', 'updateTicket', 'putTicket', 'listQueue', 'queuedItems', 'enqueue', 'getMeta', 'setMeta', 'getRun', 'putRun', 'renewRun', 'runsByStatus']);
+const OUTAGE = new Set(['getTicket', 'updateTicket', 'putTicket', 'listQueue', 'queuedItems', 'enqueue', 'getMeta', 'setMeta', 'getRun', 'putRun', 'renewRun', 'claimRun', 'runsByStatus']);
 
 interface Window {
   /** Store calls made in the window so far. */
