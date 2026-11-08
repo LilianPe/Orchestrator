@@ -124,7 +124,11 @@ function intakeEnd(out: Decision, at: { event: FactoryEvent; ticket: TicketState
   if (!gaps.length) {
     // Complete, but « blocked by » a ticket not done (ORC-363): what it would start waits for it.
     const next = job.onSuccess.run ? at.workflow.jobs[job.onSuccess.run] : undefined;
-    if (next && p.blockedBy?.length) return waitFor(out, p.blockedBy, pendingOf({ job: next.name, input: next.input }));
+    if (next && p.blockedBy?.length) {
+      // Its assessment is posted now; a move it owes waits with the start, which moves the ticket itself (`dev`'s `on_start`).
+      if (job.onSuccess.post) out.effects.push({ kind: 'post_output', style: job.onSuccess.post, runId: p.runId, ...(p.output ? { output: p.output } : {}) });
+      return waitFor(out, p.blockedBy, pendingOf({ job: next.name, input: next.input }));
+    }
     return success(out, at, job, p.runId);
   }
   const reason = `${INCOMPLETE} ${gaps.join(' ')}`;
@@ -461,18 +465,20 @@ function usageLimitDecision(out: Decision, event: FactoryEvent<'run.finished'>, 
 }
 
 /**
- * The tickets a waiting ticket was « blocked by » are done (ORC-363): the wait ends and its start is made, unless the ticket
- * moved on meanwhile (blocked, undelegated, at work), which ended the wait already.
+ * The tickets a waiting ticket was « blocked by » are done or no longer linked (ORC-363): the wait ends and its start is made,
+ * unless the ticket moved on meanwhile: blocked, undelegated or at work (which ended the wait already), or moved by a human
+ * out of the states a delegation starts from.
  */
 function blockersDone(out: Decision, event: FactoryEvent<'blockers.done'>, ticket: TicketState | undefined, workflow: Workflow): Decision {
   const wait = ticket?.waitingOn;
   const job = wait && workflow.jobs[wait.start.job];
   if (wait) out.events.push({ type: 'ticket.patched', patch: { waitingOn: null } });
-  if (!ticket || !wait || !job || !ticket.delegated || ticket.blocked || ticket.activeRunId || ticket.verifyingRunId) {
+  const startable = ticket?.logical === 'todo' || ticket?.logical === 'dev';
+  if (!ticket || !wait || !job || !startable || !ticket.delegated || ticket.blocked || ticket.activeRunId || ticket.verifyingRunId) {
     out.trace.push('blockers.done: the ticket no longer waits, nothing started');
     return out;
   }
-  out.effects.push({ kind: 'activity', type: 'thought', body: `${event.payload.blockers.join(', ')} done: starting.` });
+  out.effects.push({ kind: 'activity', type: 'thought', body: `Nothing blocks this ticket any more (${event.payload.blockers.join(', ')} done or no longer linked): starting.` });
   startAs(out, event, ticket, job, wait.start);
   return out;
 }

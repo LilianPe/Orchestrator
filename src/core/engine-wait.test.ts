@@ -60,6 +60,7 @@ describe('the wait on a « blocked by » ticket not done (ORC-363)', () => {
     ['blocked since', waiting({ blocked: true, blockReason: 'Stopped.' })],
     ['undelegated', waiting({ delegated: false })],
     ['with a run under way', waiting({ activeRunId: 'r9', activeJob: 'dev' })],
+    ['a human moved to Human Review meanwhile', waiting({ logical: 'human_review' })],
   ])('the blockers done on a ticket %s start nothing', (_what, t) => {
     expect(starts(t, event('blockers.done', { blockers: ['REL-2'] }))).toEqual([]);
   });

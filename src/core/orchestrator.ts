@@ -2122,7 +2122,7 @@ export class Orchestrator {
       }
       if (!intake && blockers.length) {
         this.d.scheduler.release(key);
-        const waiting = await this.apply(t, waitingOn(blockers, start));
+        const waiting = await state(this.apply(t, waitingOn(blockers, start)));
         this.log('info', `${job.name} on ${ticketId} waits for ${blockers.map((b) => b.identifier).join(', ')} to be done`);
         try {
           await tracker.activity(await this.sessionFor(waiting), { type: 'thought', body: waitingBody(blockers) });

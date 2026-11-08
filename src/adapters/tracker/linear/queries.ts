@@ -1,8 +1,10 @@
 const PAGE = 'pageInfo { hasNextPage endCursor }';
 /** An issue's relations where it is the related one (ORC-363): « blocked by » is a `blocks` relation of the blocker. */
-const INVERSE_RELATIONS = `nodes { type issue { identifier state { name type } } } ${PAGE}`;
+const INVERSE_RELATIONS = `nodes { type issue { identifier trashed state { name type } } } ${PAGE}`;
+// A first page of 10 relations: the list of delegated tickets reads 100 issues a page, under Linear's cost bound; the rest are
+// read by `issueRelations`, for the few issues that have more.
 const ISSUE_FIELDS = `id identifier title description url priority createdAt updatedAt trashed
-  state { id name type } labels { nodes { id name parent { id } } ${PAGE} } inverseRelations(first: 50) { ${INVERSE_RELATIONS} }
+  state { id name type } labels { nodes { id name parent { id } } ${PAGE} } inverseRelations(first: 10) { ${INVERSE_RELATIONS} }
   delegate { id } team { id key }`;
 
 export const Q = {

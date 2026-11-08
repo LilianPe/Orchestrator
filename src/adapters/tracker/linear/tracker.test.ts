@@ -57,7 +57,11 @@ describe('LinearTracker', () => {
   it("reads the tickets an issue is « blocked by », every page of its relations, the other kinds left out (ORC-363)", async () => {
     const rel = (type: string, identifier: string, state: { name: string; type: string }) => ({ type, issue: { identifier, state } });
     const { api, calls } = fakeLinear({
-      Issue: () => ({ issue: { ...node, inverseRelations: conn([rel('blocks', 'REL-2', { name: 'In Progress', type: 'started' }), rel('related', 'REL-3', { name: 'Todo', type: 'unstarted' })], 'r-next') } }),
+      Issue: () => ({ issue: { ...node, inverseRelations: conn([
+        rel('blocks', 'REL-2', { name: 'In Progress', type: 'started' }), rel('related', 'REL-3', { name: 'Todo', type: 'unstarted' }),
+        // One Linear will not show, one in the trash: neither holds the ticket back.
+        { type: 'blocks', issue: null }, { type: 'blocks', issue: { identifier: 'REL-5', trashed: true, state: { name: 'Todo', type: 'unstarted' } } },
+      ], 'r-next') } }),
       Delegated: () => ({ issues: conn([{ ...node, inverseRelations: conn([rel('blocks', 'OPS-9', { name: 'Done', type: 'completed' })]) }]) }),
       IssueRelations: () => ({ issue: { inverseRelations: conn([rel('blocks', 'REL-4', { name: 'Done', type: 'completed' })]) } }),
     });
@@ -71,6 +75,15 @@ describe('LinearTracker', () => {
     // Says more follow without a cursor: never read as complete, or a blocker past the page would be missed.
     const cut = fakeLinear({ Issue: () => ({ issue: { ...node, inverseRelations: { nodes: [], pageInfo: { hasNextPage: true, endCursor: null } } } }) });
     await expect(new LinearTracker(cut.api, 'app-1').getIssue('REL-1')).rejects.toThrow(/the relations of REL-1: more pages, but no cursor/);
+  });
+
+  it('a write reads no page of relations past the first: it needs the labels only (ORC-363)', async () => {
+    const { api, calls } = fakeLinear({
+      Issue: () => ({ issue: { ...node, inverseRelations: conn([], 'r-next') } }),
+      IssueUpdate: () => ({ issueUpdate: { success: true } }),
+    });
+    await new LinearTracker(api, 'app-1').setLabels('REL-1', [], ['bug']);
+    expect(calls.map((c) => c.op)).not.toContain('IssueRelations');
   });
 
   it('tells an issue Linear does not have from a read error', async () => {

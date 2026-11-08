@@ -524,7 +524,7 @@ export interface TicketState {
   usageAsks?: number | null;
   /**
    * The ticket waits for the Linear tickets it is « blocked by » to be done (ORC-363), then makes `start`: no block, nothing for a human
-   * to answer. Lifted by `blockers.done`; a block, a delegation again, an undelegation or a dev run ends it (`reduce`): `null` then.
+   * to answer. Lifted by `blockers.done`; a block, an undelegation or a dev run ends it (`reduce`): `null` then. A move or a delegation again do not.
    */
   waitingOn?: { blockers: string[]; start: PendingJob } | null;
   /**
