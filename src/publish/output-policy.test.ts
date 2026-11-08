@@ -131,7 +131,7 @@ describe('OutputPolicy (ORC-214)', () => {
       // Refused at `submit_result`, the agent shortens it within its run: the policy's refusal is the last word, not the first.
       expect(parseAgentOutput(output({ summary: 'x'.repeat(OUTPUT_LIMITS.summary + 1) }))).toMatchObject({ ok: false, error: expect.stringContaining('summary') });
       expect(parseAgentOutput(output({ risks: Array.from({ length: OUTPUT_LIMITS.items + 1 }, () => 'r') }))).toMatchObject({ ok: false });
-      // Each field under its cap, the comment they make over the comment's.
+      // Each field under its cap, the PR description they make over its cap (ORC-195): refused at submission.
       const full = output({ summary: 's '.repeat(OUTPUT_LIMITS.summary / 2), why: 'w '.repeat(OUTPUT_LIMITS.field / 2), risks: Array.from({ length: 10 }, () => 'r '.repeat(OUTPUT_LIMITS.item / 2 - 5)) });
       expect(parseSubmittedResult(full)).toMatchObject({ ok: false, error: expect.stringContaining('together') });
     });

@@ -1634,7 +1634,7 @@ export class Orchestrator {
         const session = run.linearSessionId ?? (await this.sessionFor(t));
         // Composed from what the run submitted, never from its last text (ORC-214): a reply is its summary, a build's end
         // its recap with the work of the ticket's attempts (ORC-195).
-        const runs = c.style === 'summary' ? (await store.ticketRuns(t.projectId, ticketId)).map(runMeasure) : [];
+        const runs = c.style === 'summary' && c.output ? (await store.ticketRuns(t.projectId, ticketId)).map(runMeasure) : [];
         return this.activityOnce(session, { type: 'response', body: composeResult(c.output, c.style, runs) }, key);
       }
       case 'link_pr':
@@ -1814,9 +1814,11 @@ export class Orchestrator {
       try {
         const mark = await this.untrustedMark(project, t);
         const untrusted = mark ? { untrusted: mark } : {};
-        // An open PR keeps its description (`ensurePr` finds it): the factory's facts alone, so a text never shown cannot hold back a fix.
-        const output = t.prNumber !== undefined && t.prState === 'OPEN' ? undefined : c.output;
-        const text = await this.policy.pr(describePr(output, { ticketId: t.ticketId, title: t.title, sha: c.sha, ...(c.commands ? { commands: c.commands } : {}), ...(t.visualProof ? { visualProof: t.visualProof } : {}) }));
+        const facts = { ticketId: t.ticketId, title: t.title, sha: c.sha, ...(c.commands ? { commands: c.commands } : {}), ...(t.visualProof ? { visualProof: t.visualProof } : {}) };
+        const described = describePr(c.output, facts);
+        // An open PR keeps its description (`ensurePr` finds it): a fixed body, the same for each fix (one scan), so a text never shown cannot hold one back.
+        const open = t.prNumber !== undefined && t.prState === 'OPEN';
+        const text = await this.policy.pr(open ? { title: described.title, body: `Ticket: ${t.ticketId}` } : described);
         const pr = await publisher.publish({ projectId: project.id, repoPath: project.repoPath, ticketId: t.ticketId, runId: c.runId, worktree: t.worktreePath, branch: t.branch, sha: c.sha, ...untrusted, ...text });
         await this.accept({ ...base, id: prEventId(t.ticketId, pr.prNumber, 'opened'), type: 'pr.opened', at: this.d.clock.now(), payload: { number: pr.prNumber, url: pr.url, branch: t.branch } });
         await this.publishChecks(project, t, c);

@@ -1,6 +1,7 @@
 import { mdCode } from '../checks/markdown.js';
 import type { AgentOutput } from '../core/agent-output.js';
-import { spentTokens, type TokenUsage } from '../core/types.js';
+import type { RunMeasure } from '../core/measures.js';
+import { spentTokens } from '../core/types.js';
 import { OUTPUT_LIMITS } from './output-limits.js';
 
 /**
@@ -56,6 +57,8 @@ const linkUrl = (url: string): string => url.replace(/[\s()<>[\]]/g, (c) => enco
  */
 export const FACTS_ROOM = 1_500;
 const bullets = (items: readonly string[]): string => (items.length ? items.map((i) => `- ${i}`).join('\n') : NONE);
+/** The tests the agent says it added, the same in the PR and in the recap. */
+const testsList = (o: Pick<AgentOutput, 'tests_added'>): string => bullets(o.tests_added.map((t) => mdCode(entry(t))));
 
 /** The PR's title: the ticket's id and title, on one line clipped to what GitHub takes. */
 function prTitle(f: Pick<PrFacts, 'ticketId' | 'title'>): string {
@@ -75,7 +78,7 @@ export function verifySummary(sha: string, commands: readonly string[] | undefin
 
 function evidence(o: AgentOutput | undefined, f: PrFacts): string {
   const parts = [`**Checked by the factory**: ${verifySummary(f.sha, f.commands).summary}`];
-  if (o) parts.push(`**Tests added**, as stated by the agent:\n${bullets(o.tests_added.map((t) => mdCode(entry(t))))}`);
+  if (o) parts.push(`**Tests added**, as stated by the agent:\n${testsList(o)}`);
   if (f.visualProof === 'required') {
     const shots = [...(f.captures ?? [])].sort((a, b) => a.width - b.width);
     parts.push(
@@ -94,27 +97,25 @@ function evidence(o: AgentOutput | undefined, f: PrFacts): string {
  * a claim on the whole ticket, and nothing here can make it.
  */
 export function describePr(o: AgentOutput | undefined, f: PrFacts): { title: string; body: string } {
-  const list = (items: readonly string[] | undefined) => (o ? bullets((items ?? []).map(entry)) : NO_RESULT);
+  /** A section of the agent's, or the notice that it returned nothing. */
+  const agent = (section: (r: AgentOutput) => string) => (o ? section(o) : NO_RESULT);
+  const list = (items: readonly string[]) => bullets(items.map(entry));
   const text: Record<(typeof PR_SECTIONS)[number], string> = {
-    Why: o ? (o.why.trim() ? prose(o.why.trim()) : NONE) : NO_RESULT,
-    'What changes': o ? prose(o.summary.trim()) : NO_RESULT,
-    Assumptions: list(o?.assumptions),
-    Risks: list(o?.risks),
-    Untested: list(o?.untested),
+    Why: agent((r) => prose(r.why.trim()) || NONE),
+    'What changes': agent((r) => prose(r.summary.trim())),
+    Assumptions: agent((r) => list(r.assumptions)),
+    Risks: agent((r) => list(r.risks)),
+    Untested: agent((r) => list(r.untested)),
     // The approved spec's section (ORC-212), as the agent carries it: ORC-212 may hand the spec's own once it keeps it.
-    'Trusted without verification': list(o?.trusted),
-    'Where to look first': o ? bullets(o.review_hints.map((h) => `${mdCode(entry(h.file))}: ${entry(h.reason)}`)) : NO_RESULT,
+    'Trusted without verification': agent((r) => list(r.trusted ?? [])),
+    'Where to look first': agent((r) => bullets(r.review_hints.map((h) => `${mdCode(entry(h.file))}: ${entry(h.reason)}`))),
     Evidence: evidence(o, f),
   };
   return { title: prTitle(f), body: [`Ticket: ${f.ticketId}`, ...PR_SECTIONS.map((s) => `## ${s}\n\n${text[s]}`)].join('\n\n') };
 }
 
-/** One attempt of the ticket as the recap reads it: its measure (`RunMeasure`, ORC-223), never its text. */
-export interface RecapRun {
-  turns: number;
-  tokens: TokenUsage | null;
-  durationMs: number | null;
-}
+/** One attempt of the ticket as the recap reads it: its measure (ORC-223), never its text. */
+export type RecapRun = Pick<RunMeasure, 'turns' | 'tokens' | 'durationMs'>;
 
 const count = (n: number, one: string) => `${n.toLocaleString('en-US')} ${one}${n === 1 ? '' : 's'}`;
 
@@ -127,22 +128,21 @@ function duration(ms: number): string {
 
 /**
  * The recap posted as the ticket goes to Human Review and its PR out of draft (ORC-195): the summary, the tests added, and the
- * work of the ticket's attempts, as the dashboard measures it (turns, tokens, duration: tokens, where Relais counted dollars).
- * Tokens are what a token cap counts (`spentTokens`), cache reads apart. Every attempt of the ticket counts, as on the dashboard:
- * intake, tests and questions too. What is not known is said, never shown as a zero.
+ * work of every attempt of the ticket (intake, tests and questions too), each measured as the dashboard measures it (`runMeasure`):
+ * turns, tokens, duration (tokens, where Relais counted dollars). Tokens are what a token cap counts (`spentTokens`), cache reads
+ * apart. What is not known is said, never shown as a zero.
  */
 export function formatRecap(o: Pick<AgentOutput, 'summary' | 'tests_added'>, runs: readonly RecapRun[]): string {
-  const reported = runs.filter((r) => r.tokens !== null);
-  const unreported = runs.length - reported.length;
-  const total = reported.reduce((sum, r) => sum + spentTokens(r.tokens!), 0);
-  const tokens = reported.length ? `${count(total, 'token')} (cache reads apart${unreported ? `; ${count(unreported, 'attempt')} reported none` : ''})` : 'tokens not reported';
-  const timed = runs.filter((r) => r.durationMs !== null);
-  const untimed = runs.length - timed.length;
-  const took = timed.length ? `${duration(timed.reduce((sum, r) => sum + r.durationMs!, 0))}${untimed ? ` (${count(untimed, 'attempt')} not measured)` : ''}` : 'duration not measured';
+  /** The sum of what is known of the attempts, and how many are unknown. */
+  const known = (pick: (r: RecapRun) => number | null) => {
+    const values = runs.map(pick).filter((v): v is number => v !== null);
+    return { sum: values.reduce((a, b) => a + b, 0), any: values.length > 0, missing: runs.length - values.length };
+  };
+  const unknown = (n: number, what: string) => (n ? `${count(n, 'attempt')} ${what}` : '');
+  const tokens = known((r) => (r.tokens ? spentTokens(r.tokens) : null));
+  const took = known((r) => r.durationMs);
+  const tokenText = tokens.any ? `${count(tokens.sum, 'token')} (${['cache reads apart', unknown(tokens.missing, 'reported none')].filter(Boolean).join('; ')})` : 'tokens not reported';
+  const tookText = took.any ? `${duration(took.sum)}${took.missing ? ` (${unknown(took.missing, 'not measured')})` : ''}` : 'duration not measured';
   const turns = runs.reduce((sum, r) => sum + r.turns, 0);
-  return [
-    o.summary,
-    `**Tests added**\n${bullets(o.tests_added.map((t) => mdCode(entry(t))))}`,
-    `**Work**: ${count(runs.length, 'attempt')}, ${count(turns, 'turn')}, ${tokens}, ${took}.`,
-  ].join('\n\n');
+  return [prose(o.summary), `**Tests added**\n${testsList(o)}`, `**Work**: ${count(runs.length, 'attempt')}, ${count(turns, 'turn')}, ${tokenText}, ${tookText}.`].join('\n\n');
 }
