@@ -74,8 +74,8 @@ export async function bringPrRefs(o: PrRefsRequest): Promise<{ head: string; bas
  */
 export async function fastForward(inWorktree: InWorktree, branch: string): Promise<'fast-forwarded' | 'up-to-date' | 'diverged'> {
   const remote = `refs/remotes/origin/${branch}`;
-  if ((await inWorktree(['merge-base', '--is-ancestor', remote, 'HEAD'])).code === 0) return 'up-to-date';
-  if ((await inWorktree(['merge-base', '--is-ancestor', 'HEAD', remote])).code !== 0) return 'diverged';
+  if (await isAncestor(inWorktree, remote, 'HEAD')) return 'up-to-date';
+  if (!(await isAncestor(inWorktree, 'HEAD', remote))) return 'diverged';
   await agent(inWorktree, ['merge', '--quiet', '--ff-only', remote]);
   return 'fast-forwarded';
 }
@@ -100,6 +100,13 @@ async function agentShas(inWorktree: InWorktree, refs: readonly string[]): Promi
     if (refs.includes(ref) && SHA.test(sha)) shas.set(ref, sha);
   }
   return shas;
+}
+
+/** `merge-base --is-ancestor`: 0 yes, 1 no; any other code is git failing (a missing commit, an unborn HEAD), never an answer. */
+async function isAncestor(inWorktree: InWorktree, a: string, b: string): Promise<boolean> {
+  const r = await inWorktree(['merge-base', '--is-ancestor', a, b]);
+  if (r.code === 0 || r.code === 1) return r.code === 0;
+  throw new Error(`git merge-base in the worktree: ${r.stderr.trim() || `code ${r.code}`}`);
 }
 
 async function agent(inWorktree: InWorktree, args: string[]): Promise<void> {

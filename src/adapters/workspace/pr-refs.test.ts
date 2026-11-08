@@ -146,6 +146,11 @@ describe('fastForward (ORC-322)', () => {
     expect(await fastForward(inWorktree, 'factory/rel-1')).toBe('up-to-date');
   });
 
+  it('fails on a git error rather than calling it a divergence', async () => {
+    git(agent, 'update-ref', '-d', 'refs/remotes/origin/factory/rel-1');
+    await expect(fastForward(inWorktree, 'factory/rel-1')).rejects.toThrow(/merge-base/);
+  });
+
   it('says so when the branch and the forge have diverged, and moves nothing', async () => {
     push(human, 'factory/rel-1', 'human.txt');
     await bringPrRefs({ repoPath: repo, branch: 'factory/rel-1', base: 'main', bundleDir, inWorktree, fetch: true });
