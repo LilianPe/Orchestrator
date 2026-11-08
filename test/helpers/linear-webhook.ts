@@ -97,3 +97,22 @@ export function linearIngest(accept: (e: FactoryEvent) => Promise<boolean>, opts
     },
   });
 }
+
+/**
+ * A signed Linear update of REL-1 by Lilian, as Linear posts it at `at`: the fixture `issue-moved-labeled.json`, moved from Human
+ * Review (`s-hr`) to AI Review (`s-ai`), the label `agent:reprendre` (`l-resume`) added beside `bug`. Map its ids with `ISSUE_UPDATE_CTX`.
+ */
+export function signedIssueUpdate(at = NOW): { raw: string; headers: Record<string, string> } {
+  const body = JSON.parse(readFileSync(join(import.meta.dirname, '../../src/adapters/tracker/linear/fixtures/issue-moved-labeled.json'), 'utf8')) as { webhookTimestamp: number; data: { updatedAt: string } };
+  body.webhookTimestamp = at;
+  body.data.updatedAt = new Date(at).toISOString();
+  return sign(body);
+}
+
+/** What the daemon reads of the team for `signedIssueUpdate`: its two states and its two labels. */
+export const ISSUE_UPDATE_CTX: Partial<MapContext> = {
+  logicalFor: (_p, name) => (({ 'Human Review': 'human_review', 'AI Review': 'ai_review' }) as const)[name as 'Human Review' | 'AI Review'] ?? null,
+  stateNameById: (_t, id) => ({ 's-hr': 'Human Review', 's-ai': 'AI Review' })[id],
+  stateTypeById: () => 'started',
+  labelNameById: (_t, id) => ({ 'l-bug': 'bug', 'l-resume': 'agent:reprendre' })[id],
+};
