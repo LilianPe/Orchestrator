@@ -2,6 +2,7 @@ import { createPrivateKey, createSign } from 'node:crypto';
 import { execCmd, mustExec, type Exec } from '../exec.js';
 import type { FeedbackItem } from '../../core/types.js';
 import { aggregateChecks, excerpt, toRepoPermission } from './gh-cli.js';
+import { unresolvedReviewFeedback, type GraphQl } from './review-threads.js';
 import type { RepoPermission, RepoPermissions } from '../roles/types.js';
 import { isFactoryCheck, NoCommitsBetween, type CheckRunRequest, type Forge, type ForgeWriter, type GitAccess, type MergeResult, type PrInfo, type PrRequest } from './types.js';
 
@@ -38,10 +39,6 @@ const ONE_HOUR_MS = 60 * 60_000;
 /** Pages of 100 read from one list, at most: a bound against a server that ignores `page`, not a GitHub limit. */
 const MAX_PAGES = 10;
 
-const THREADS_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
-  repository(owner: $owner, name: $name) { pullRequest(number: $number) { reviewThreads(first: 100) { nodes {
-    isResolved comments(first: 1) { nodes { author { login } body createdAt path line } } } } } } }`;
-
 interface AccessTokenDto {
   token: string;
   expires_at?: string;
@@ -75,18 +72,6 @@ interface WorkflowDto {
 interface StatusDto {
   context: string;
   state: string;
-}
-
-interface ReviewThreadNode {
-  isResolved: boolean;
-  comments: {
-    nodes: { author: { login: string } | null; body: string; createdAt: string; path: string; line: number | null }[];
-  };
-}
-
-interface ReviewThreadsDto {
-  data?: { repository?: { pullRequest?: { reviewThreads: { nodes: ReviewThreadNode[] } } | null } | null };
-  errors?: { message: string }[];
 }
 
 export interface GitHubAppForgeOptions {
@@ -221,30 +206,6 @@ const hasErrors = (d: Record<string, unknown>): boolean => Array.isArray(d.error
 /** The ready-for-review mutation: its errors, or its result. A `null` result without errors is no proof it ran. */
 const isReadyAnswer = (d: unknown): d is { errors?: { message: string }[] } =>
   isRecord(d) && isGraphQlErrors(d.errors) && (hasErrors(d) || (isRecord(d.data) && isRecord(d.data.markPullRequestReadyForReview)));
-
-const isThreadComment = (c: unknown): boolean =>
-  isRecord(c) &&
-  (c.author === null || (isRecord(c.author) && typeof c.author.login === 'string')) &&
-  typeof c.body === 'string' &&
-  typeof c.createdAt === 'string' &&
-  typeof c.path === 'string' &&
-  (c.line === null || typeof c.line === 'number');
-
-const isThread = (t: unknown): boolean =>
-  isRecord(t) && typeof t.isResolved === 'boolean' && isRecord(t.comments) && Array.isArray(t.comments.nodes) && t.comments.nodes.every(isThreadComment);
-
-/** The review threads query: its errors, or a repository and a PR each `null` (not found) or carrying their threads. */
-const isThreadsAnswer = (d: unknown): d is ReviewThreadsDto => {
-  if (!isRecord(d) || !isGraphQlErrors(d.errors)) return false;
-  if (hasErrors(d)) return true;
-  if (!isRecord(d.data)) return false;
-  const repo = d.data.repository;
-  if (repo === null) return true;
-  if (!isRecord(repo)) return false;
-  const pr = repo.pullRequest;
-  return pr === null || (isRecord(pr) && isRecord(pr.reviewThreads) && Array.isArray(pr.reviewThreads.nodes) && pr.reviewThreads.nodes.every(isThread));
-};
-
 /** `GitHub API <method> <path>`, without the query: the prefix of every error of a call. */
 const apiLabel = (method: string, path: string) => `GitHub API ${method} ${path.split('?')[0]}`;
 
@@ -611,24 +572,15 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
   async unresolvedReviewComments(repoPath: string, prNumber: number): Promise<FeedbackItem[]> {
     const repo = await this.repo(repoPath);
     const token = await this.installationToken(repo);
-    const out = await this.read('POST', '/graphql', token, isThreadsAnswer, 'a GraphQL answer with review threads', {
-      query: THREADS_QUERY,
-      variables: { owner: repo.owner, name: repo.name, number: prNumber },
-    });
-    if (out.errors?.length) throw new Error(`GitHub GraphQL: ${out.errors.map((e) => e.message).join('; ')}`);
-    const pr = out.data?.repository?.pullRequest;
-    if (!pr) throw new Error(`GitHub GraphQL: PR ${repo.owner}/${repo.name}#${prNumber} not found`);
-    return pr.reviewThreads.nodes
-      .filter((t) => !t.isResolved && t.comments.nodes[0])
-      .map((t) => {
-        const c = t.comments.nodes[0]!;
-        return {
-          author: c.author?.login ?? 'inconnu',
-          body: `${c.path}${c.line ? `:${c.line}` : ''} — ${c.body}`,
-          at: Date.parse(c.createdAt),
-          source: 'review' as const,
-        };
-      });
+    // Every page of threads and of their comments (ORC-347), each answer checked before it is read (ORC-273).
+    const gql: GraphQl = async <T>(query: string, variables: Record<string, unknown>, isData: (d: unknown) => d is T, what: string) => {
+      // With errors, `data` is not read.
+      const isAnswer = (d: unknown): d is { data: T; errors?: { message: string }[] } => isRecord(d) && isGraphQlErrors(d.errors) && (hasErrors(d) || isData(d.data));
+      const out = await this.read('POST', '/graphql', token, isAnswer, what, { query, variables });
+      if (out.errors?.length) throw new Error(`GitHub GraphQL: ${out.errors.map((e) => e.message).join('; ')}`);
+      return out.data;
+    };
+    return unresolvedReviewFeedback(gql, repo.owner, repo.name, prNumber);
   }
 
   /**
