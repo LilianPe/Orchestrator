@@ -53,7 +53,8 @@ export type Stagnation =
   | { kind: 'loop'; command: string; failure: string; tree: string; count: number }
   | { kind: 'silent'; silentMs: number };
 
-export type InputKind = 'feedback' | 'ci_failures' | 'thread' | 'verify_failures';
+/** `spec_check`: what the factory's check of a spec found wrong, with the refused draft (ORC-212). */
+export type InputKind = 'feedback' | 'ci_failures' | 'thread' | 'verify_failures' | 'spec_check';
 export type QueueName = 'dev' | 'questions';
 
 /** What a human message asks for (ORC-180), classified at its arrival and journaled with it. */
@@ -541,9 +542,10 @@ export interface TicketState {
   visualProof?: 'required';
   /**
    * The ticket's spec (ORC-212), its last version: waiting for review while it has no approval and no run of the ticket
-   * is in flight, the contract of the later steps once approved. Absent until `spec_draft` wrote one.
+   * is being drafted, the contract of the later steps once approved. Absent until `spec_draft` wrote one; `null` once a
+   * new delegation started the ticket's work afresh.
    */
-  spec?: SpecVersion;
+  spec?: SpecVersion | null;
   /** The returns to `spec_draft` a failed `spec_check` used on the current draft (ORC-212): the next failure blocks. */
   specCheckReturns?: number;
   /** The `/changes` rounds since the last approval (ORC-212): one past the preset's bound blocks. */

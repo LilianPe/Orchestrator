@@ -39,6 +39,8 @@ export interface SpecVersion {
   at: number;
   /** Absent while it waits for review: a new version always starts without one. */
   approval?: { author: string; authorId?: string; at: number };
+  /** A `/changes` asked for the next version, not published yet: nothing is approved meanwhile, a start in the queue included. */
+  drafting?: true;
 }
 
 /** The commands of the spec gate, the factory's own, read in a reply of the ticket's session (ORC-212). */
@@ -52,20 +54,26 @@ const SECTIONS = ['goal', 'out_of_scope', 'criteria', 'files', 'architecture', '
 
 /**
  * `spec_check` (ORC-212), deterministic: every section present (an empty list is present), at least one acceptance
- * criterion, each property with its statement, domain and target, and each `clarify` decision of the ticket carried
- * by the spec. The problems found, in the order a reader fixes them; none when the spec passes.
+ * criterion and none empty, each property with its statement, domain and target, and each `clarify` decision of the
+ * ticket carried by the spec with its answer as the human gave it. The problems found, in the order a reader fixes them; none when the spec passes.
  */
-export function specCheck(spec: Spec | undefined, decisions: readonly { question: string }[] = []): string[] {
+export function specCheck(spec: Spec | undefined, decisions: readonly { question: string; answer: string }[] = []): string[] {
   if (!spec) return ['No `spec` in the result.'];
   const missing = (v: string | readonly string[] | undefined) => v === undefined || (typeof v === 'string' && !v.trim());
   const problems = SECTIONS.filter((s) => missing(spec[s])).map((s) => `Section \`${s}\` is missing.`);
-  if (spec.criteria !== undefined && !spec.criteria.some((c) => c.trim())) problems.push('No acceptance criterion: at least one is required.');
+  if (spec.criteria?.length === 0) problems.push('No acceptance criterion: at least one is required.');
+  spec.criteria?.forEach((c, i) => {
+    if (!c.trim()) problems.push(`Criterion ${i + 1} is empty.`);
+  });
   (spec.properties ?? []).forEach((p, i) => {
     const gaps = (['statement', 'domain', 'target'] as const).filter((k) => !p[k]?.trim());
     if (gaps.length) problems.push(`Property ${i + 1} has no ${gaps.join(', ')}.`);
   });
-  const carried = new Set((spec.decisions ?? []).map((d) => d.question));
-  for (const d of decisions) if (!carried.has(d.question)) problems.push(`The decision « ${d.question} » is not in \`decisions\`.`);
+  for (const d of decisions) {
+    const carried = spec.decisions?.find((c) => c.question === d.question);
+    if (!carried) problems.push(`The decision « ${d.question} » is not in \`decisions\`.`);
+    else if (carried.answer !== d.answer) problems.push(`The decision « ${d.question} » was answered « ${d.answer} », not « ${carried.answer} ».`);
+  }
   return problems;
 }
 

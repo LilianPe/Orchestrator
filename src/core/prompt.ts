@@ -30,6 +30,7 @@ const HEADINGS: Record<InputKind, string> = {
   feedback: 'Feedback to address',
   ci_failures: 'CI failures',
   verify_failures: 'Failed checks',
+  spec_check: 'Spec refused by spec_check',
   thread: 'Message',
 };
 

@@ -137,7 +137,7 @@ function intakeEnd(out: Decision, at: { event: FactoryEvent; ticket: TicketState
  * The decisions `clarify` recorded on the ticket (ORC-210, `TicketState.decisions`): the spec must carry each. None
  * before ORC-210 adds the field; read here by its shape, so that the check holds as soon as it does.
  */
-const clarifyDecisions = (ticket: TicketState | undefined): readonly { question: string }[] => (ticket as { decisions?: readonly { question: string }[] } | undefined)?.decisions ?? [];
+const clarifyDecisions = (ticket: TicketState | undefined): readonly { question: string; answer: string }[] => (ticket as { decisions?: readonly { question: string; answer: string }[] } | undefined)?.decisions ?? [];
 
 /**
  * The end of `spec_draft` (ORC-212), then `spec_check`. A spec that fails it goes back to the job with what is wrong,
@@ -152,8 +152,9 @@ function specEnd(out: Decision, at: { event: FactoryEvent; ticket: TicketState |
     const used = ticket?.specCheckReturns ?? 0;
     if (used < (workflow.limits.specCheckReturns ?? 0)) {
       out.events.push({ type: 'ticket.patched', patch: { specCheckReturns: used + 1 } });
-      const failures: VerifyFailure[] = [{ command: 'spec_check', exitCode: 1, output: problems.join('\n') }];
-      startRun(out, event, ticket, job, { input: 'verify_failures', inputText: JSON.stringify(failures), resume: true });
+      // A session of its own (`session: new`): the refused draft goes with what is wrong, never the ticket's session.
+      const inputText = [...problems.map((x) => `- ${x}`), ...(spec ? ['', 'Your spec as it was refused:', '', formatSpec(spec)] : [])].join('\n');
+      startRun(out, event, ticket, job, { input: 'spec_check', inputText });
       return out;
     }
     const reason = `The spec does not pass spec_check after ${used + 1} draft(s) of ${job.name}.`;
@@ -169,8 +170,8 @@ function specEnd(out: Decision, at: { event: FactoryEvent; ticket: TicketState |
   return out;
 }
 
-/** The spec without its approval: a version changed, or about to be, is approved again. */
-const unapproved = ({ approval: _, ...spec }: SpecVersion): SpecVersion => spec;
+/** The spec being drafted again: its approval gone, it waits for the next version, which a start in the queue does not show. */
+const redrafted = ({ approval: _, ...spec }: SpecVersion): SpecVersion => ({ ...spec, drafting: true });
 
 /**
  * `/approve`, `/changes <comment>` and `/reject` (ORC-212): the spec gate, reserved for a designated validator, never
@@ -181,6 +182,7 @@ const unapproved = ({ approval: _, ...spec }: SpecVersion): SpecVersion => spec;
  */
 function specCommand(out: Decision, event: FactoryEvent<'command'>, ticket: TicketState | undefined, workflow: Workflow, matrix: AuthzMatrix): Decision {
   const { name, body, linearSessionId, author } = event.payload;
+  const [arg = ''] = body.trim().split(/\s+/, 1);
   const channel: Channel = !!ticket?.linearSessionId && linearSessionId === ticket.linearSessionId ? 'linear_session' : 'linear';
   if (!authorize(out, { ...event, roles: event.roles ?? [] }, ticket, 'validate_spec', channel, matrix)) return out;
   const answer = (text: string) => out.effects.push({ kind: 'activity', type: 'response', body: text, linearSessionId });
@@ -189,17 +191,21 @@ function specCommand(out: Decision, event: FactoryEvent<'command'>, ticket: Tick
   // Kept as any reply (I6), the factory's own: an accepted change goes to the drafting agent apart (`specChanges`).
   if (ticket && event.payload.kind) keepMessage(out, event, 'session');
   if (!ticket || !spec || !job) {
-    answer('No spec waits for review on this ticket.');
+    answer(ticket?.blocked ? 'No spec waits for review: the ticket is blocked. Reply in this thread, without a command, and the step it is blocked at starts again.' : 'No spec waits for review on this ticket.');
     return out;
   }
-  const inFlight = !!(ticket.activeRunId || ticket.verifyingRunId || ticket.pendingJob);
-  if (name === CHANGES) return specChanges(out, event, ticket, workflow, { spec, job, inFlight, answer });
+  if (name === CHANGES) return specChanges(out, event, ticket, workflow, { spec, job, answer });
   if (spec.approval) {
     answer(`Version ${spec.version} of the spec is already approved, by ${spec.approval.author}.`);
     return out;
   }
-  if (inFlight) {
+  if (spec.drafting) {
     answer('A new version of the spec is being drafted: wait for it.');
+    return out;
+  }
+  // `/approve 2`: the version read, which must be the one waiting.
+  if (/^\d+$/.test(arg) && Number(arg) !== spec.version) {
+    answer(`Version ${arg} is not the one waiting for review: version ${spec.version} is. Read it, then reply \`${name}\` again.`);
     return out;
   }
   if (name === REJECT) {
@@ -210,18 +216,20 @@ function specCommand(out: Decision, event: FactoryEvent<'command'>, ticket: Tick
   out.events.push({ type: 'ticket.patched', patch: { spec: { ...spec, approval: { author, ...(event.actor ? { authorId: event.actor } : {}), at: event.at } }, ...(ticket.specChanges ? { specChanges: 0 } : {}) } });
   out.trace.push(`spec_review: version ${spec.version} approved by ${event.actor}`);
   answer(`Spec version ${spec.version} approved by ${author}: its acceptance criteria become the tests.`);
-  return success(out, { event, ticket, workflow }, job, event.id);
+  // No run ends here: the job's `on_success` without a post, which would name a run that is not one.
+  const { post: _, ...onSuccess } = job.onSuccess;
+  return success(out, { event, ticket, workflow }, { ...job, onSuccess }, '');
 }
 
 /** `/changes <comment>`: the comment goes to the drafting agent through the human inbox (ORC-180), as an instruction. */
-function specChanges(out: Decision, event: FactoryEvent<'command'>, ticket: TicketState, workflow: Workflow, at: { spec: SpecVersion; job: JobSpec; inFlight: boolean; answer: (text: string) => void }): Decision {
-  const { spec, job, inFlight, answer } = at;
+function specChanges(out: Decision, event: FactoryEvent<'command'>, ticket: TicketState, workflow: Workflow, at: { spec: SpecVersion; job: JobSpec; answer: (text: string) => void }): Decision {
+  const { spec, job, answer } = at;
   const comment = event.payload.body.trim();
   if (!comment) {
     answer('Say what to change: `/changes <comment>`.');
     return out;
   }
-  if (!spec.approval && inFlight) {
+  if (spec.drafting) {
     answer('A new version of the spec is being drafted: wait for it.');
     return out;
   }
@@ -232,15 +240,17 @@ function specChanges(out: Decision, event: FactoryEvent<'command'>, ticket: Tick
     return block(out, workflow, { kind: 'limit', reason, body: `${reason} Reply in this thread and I will draft it again.`, job: job.name, step: 'spec_review', attempts: bound, tried: [`${bound} rounds of /changes.`], question: 'Can the ticket be settled first? Reply here and I will draft the spec again.' });
   }
   out.events.push({ type: 'feedback.appended', item: { author: event.payload.author, authorId: event.actor, body: comment, at: event.at, source: 'session', taint: event.taint, kind: 'instruction' } });
-  // A change to the approved spec during the run (ORC-212): the work on it stops, and the run starts again from the review.
-  if (spec.approval && inFlight) {
+  // A change to the approved spec during the run (ORC-212): the work on it stops, a start still in the queue too
+  // (`stop_run`), and the run starts again from the review.
+  if (spec.approval) {
     out.events.push({ type: 'work.cancelled' });
     out.effects.push({ kind: 'stop_run' });
   }
-  out.events.push({ type: 'ticket.patched', patch: { specChanges: used + 1, ...(spec.approval ? { spec: unapproved(spec) } : {}) } });
+  out.events.push({ type: 'ticket.patched', patch: { specChanges: used + 1, spec: redrafted(spec) } });
   out.trace.push(`spec_review: changes asked by ${event.actor}, round ${used + 1} of ${bound}`);
   answer(`Noted: I am drafting version ${spec.version + 1} of the spec.`);
-  startRun(out, event, ticket, job, { input: 'feedback', resume: true });
+  // Its own session (`session: new`): the draft and the comment are in its prompt, the ticket's session is not resumed.
+  startRun(out, event, ticket, job, { input: 'feedback' });
   return out;
 }
 
@@ -279,11 +289,18 @@ function freeze(out: Decision, ticket: TicketState | undefined, frozen: FrozenTe
   if (!frozen) return;
   const old = ticket?.frozenTests;
   // The old freeze keeps its rules (ORC-342): its harness is the one it was made with.
-  out.events.push({ type: 'ticket.patched', patch: { frozenTests: { ...(old ? { ...old, files: { ...frozen.files, ...old.files } } : frozen), ...frozenCriteria(ticket) } } });
+  out.events.push({ type: 'ticket.patched', patch: { frozenTests: { ...(old ? { ...old, files: { ...frozen.files, ...old.files } } : frozen), ...frozenCriteria(ticket, old?.criteria) } } });
 }
 
-/** The acceptance criteria of the approved spec (ORC-212), frozen with the tests that translate them, as they are at the freeze. */
-const frozenCriteria = (ticket: TicketState | undefined) => (ticket?.spec?.approval && ticket.spec.spec.criteria?.length ? { criteria: ticket.spec.spec.criteria } : {});
+/**
+ * The acceptance criteria of the approved spec (ORC-212), frozen with the tests that translate them. As the files, a later
+ * freeze adds the new ones to those already frozen: the tests of a criterion changed since stay frozen until `/refreeze`.
+ */
+function frozenCriteria(ticket: TicketState | undefined, kept: readonly string[] = []): { criteria?: readonly string[] } {
+  const approved = ticket?.spec?.approval ? (ticket.spec.spec.criteria ?? []) : [];
+  const criteria = [...kept, ...approved.filter((c) => !kept.includes(c))];
+  return criteria.length ? { criteria } : {};
+}
 
 /** A run in the ticket's worktree goes through `factory/tests-gelés` once frozen (ORC-131), verify commands or not. */
 export function goesThroughFreeze(ticket: TicketState | undefined, job: JobSpec): boolean {
@@ -1300,6 +1317,8 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
     if (event.type === 'ticket.delegated' && event.roles !== undefined && event.actor && ticket && ticket.initiatorId !== event.actor) {
       out.events.push({ type: 'ticket.patched', patch: { initiatorId: event.actor } });
     }
+    // A delegation starts the ticket's work afresh: the spec of an earlier one, approved or not, is no contract of it (ORC-212).
+    if (event.type === 'ticket.delegated' && ticket?.spec) out.events.push({ type: 'ticket.patched', patch: { spec: null, specChanges: 0, specCheckReturns: 0 } });
   }
   switch (event.type) {
     case 'control.pause':

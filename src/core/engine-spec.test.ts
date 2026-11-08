@@ -63,7 +63,10 @@ describe('spec_draft, spec_check and the spec_review gate (ORC-212)', () => {
   it('criterion 1: a spec without acceptance criterion goes back once to spec_draft, then the run is blocked', () => {
     const noCriterion = { ...SPEC, criteria: [] };
     const first = decide(ticket(), drafted(noCriterion), workflow);
-    expect(first.effects).toEqual([expect.objectContaining({ kind: 'start_run', job: 'spec', input: 'verify_failures', resume: true, inputText: expect.stringContaining('No acceptance criterion') })]);
+    expect(first.effects).toEqual([expect.objectContaining({ kind: 'start_run', job: 'spec', input: 'spec_check', inputText: expect.stringContaining('No acceptance criterion') })]);
+    // In a session of its own: the refused draft goes with the reason, the ticket's session is not resumed.
+    expect(first.effects[0]).not.toHaveProperty('resume');
+    expect(first.effects[0]).toMatchObject({ inputText: expect.stringContaining('Your spec as it was refused:\n\n**Goal**\nExport the audits as CSV.') });
     const back = after(ticket(), drafted(noCriterion));
     expect(back).toMatchObject({ blocked: false, specCheckReturns: 1 });
     const again = after({ ...back, activeRunId: 'r2' }, drafted(noCriterion, 'r2'));
@@ -114,12 +117,35 @@ describe('spec_draft, spec_check and the spec_review gate (ORC-212)', () => {
   it('/changes relaunches spec_draft with the comment as feedback for the agent, and a new version asks for a new approval', () => {
     const out = decide(reviewing(), command('/changes', 'Add the XLSX case.'), workflow);
     expect(out.events).toContainEqual({ type: 'feedback.appended', item: expect.objectContaining({ body: 'Add the XLSX case.', kind: 'instruction', source: 'session', authorId: VALIDATOR }) });
-    expect(out.effects).toContainEqual(expect.objectContaining({ kind: 'start_run', job: 'spec', input: 'feedback', resume: true }));
+    expect(out.effects).toContainEqual(expect.objectContaining({ kind: 'start_run', job: 'spec', input: 'feedback' }));
+    expect(out.effects.find((x) => x.kind === 'start_run')).not.toHaveProperty('resume');
     const changed = after(reviewing(), command('/changes', 'Add the XLSX case.'));
-    expect(changed.specChanges).toBe(1);
+    expect(changed).toMatchObject({ specChanges: 1, spec: { version: 1, drafting: true } });
     const v2 = after({ ...changed, activeRunId: 'r2' }, drafted({ ...SPEC, out_of_scope: [] }, 'r2'));
     expect(v2.spec).toMatchObject({ version: 2 });
     expect(v2.spec).not.toHaveProperty('approval');
+  });
+
+  it('while the next version is drafted, even still in the queue (no run on the ticket yet), nothing is approved, rejected or changed', () => {
+    const drafting = after(reviewing(), command('/changes', 'Add the XLSX case.'));
+    for (const name of ['/approve', '/reject', '/changes']) {
+      const out = decide({ ...drafting, activeRunId: undefined }, command(name, 'more'), workflow);
+      expect(out.effects).toEqual([expect.objectContaining({ kind: 'activity', body: expect.stringMatching(/^A new version of the spec is being drafted/) })]);
+    }
+    // Its version published, the mark goes with it.
+    expect(after({ ...drafting, activeRunId: 'r2' }, drafted(SPEC, 'r2')).spec).not.toHaveProperty('drafting');
+  });
+
+  it('/approve may name the version read: another than the one waiting approves nothing', () => {
+    const out = decide(reviewing(), command('/approve', '2'), workflow);
+    expect(out.effects).toEqual([expect.objectContaining({ kind: 'activity', body: expect.stringMatching(/^Version 2 is not the one waiting for review: version 1 is/) })]);
+    expect(decide(reviewing(), command('/approve', '1'), workflow).effects).toContainEqual(expect.objectContaining({ kind: 'start_run', job: 'tests' }));
+  });
+
+  it('a delegation again starts afresh: the spec of the earlier one is no contract any more', () => {
+    const delegated = ev('ticket.delegated', { linearSessionId: 's2' }, { actor: REQUESTER, roles: ['team_member', 'repo_writer'] } as Partial<FactoryEvent>);
+    const t = after({ ...approved(), activeRunId: undefined, activeJob: undefined, delegated: false }, delegated);
+    expect(t.spec).toBeNull();
   });
 
   it('/changes without a comment asks for one, and counts nothing', () => {
@@ -163,6 +189,8 @@ describe('spec_draft, spec_check and the spec_review gate (ORC-212)', () => {
   });
 
   it('criterion 4: a spec approved then changed during the run goes back to spec_review, and asks for a new approval', () => {
+    // Approved, nothing at work yet (a start may still wait in the queue): the work is cancelled all the same.
+    expect(decide(approved(), command('/changes', 'x'), workflow).effects.map((x) => x.kind)).toEqual(expect.arrayContaining(['stop_run', 'start_run']));
     // The tests step is at work on version 1 when the validator asks for a change.
     const working = { ...approved(), activeRunId: 'r-tests', activeJob: 'tests', logical: 'dev' as const };
     const out = decide(working, command('/changes', 'Exclude archived audits.'), workflow);
@@ -186,6 +214,13 @@ describe('spec_draft, spec_check and the spec_review gate (ORC-212)', () => {
     expect(out.frozenTests).toEqual({ ...frozen, criteria: SPEC.criteria });
     const refrozen = decide(out, ev('command', { name: '/refreeze', body: '', linearSessionId: 's1', author: 'M', frozen: { sha: 'new', files: {} } }, { roles: ['maintainer'], actor: 'u-m' } as Partial<FactoryEvent>), workflow);
     expect(refrozen.events).toContainEqual({ type: 'ticket.patched', patch: { frozenTests: { sha: 'new', files: {}, criteria: SPEC.criteria } } });
+  });
+
+  it('a later freeze adds the criteria of the version approved since to those already frozen, as it does the files', () => {
+    const first = { sha: 'abc', files: { 'test/a.test.ts': 'f1' }, rules: 1, criteria: ['Old criterion.'] };
+    const t = { ...approved(), frozenTests: first, activeRunId: 'r2', activeJob: 'tests', verifyingRunId: 'r2' };
+    const out = after(t, ev('verify.passed', { runId: 'r2', job: 'tests', red: 'assertion', frozen: { sha: 'def', files: { 'test/a.test.ts': 'f2', 'test/b.test.ts': 'f3' }, rules: 1 } }));
+    expect(out.frozenTests).toEqual({ sha: 'abc', files: { 'test/a.test.ts': 'f1', 'test/b.test.ts': 'f3' }, rules: 1, criteria: ['Old criterion.', ...SPEC.criteria!] });
   });
 
   it('a ticket with no approved spec freezes as before', () => {

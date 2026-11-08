@@ -27,10 +27,15 @@ describe('spec_check (ORC-212)', () => {
     ]);
   });
 
-  it('requires each decision of the ticket in the spec, by its question', () => {
-    const decisions = [{ question: 'CSV or XLSX?' }];
+  it('requires each decision of the ticket in the spec, with the answer the human gave', () => {
+    const decisions = [{ question: 'CSV or XLSX?', answer: 'CSV' }];
     expect(specCheck(SPEC, decisions)).toEqual(['The decision « CSV or XLSX? » is not in `decisions`.']);
+    expect(specCheck({ ...SPEC, decisions: [{ question: 'CSV or XLSX?', answer: 'XLSX' }] }, decisions)).toEqual(['The decision « CSV or XLSX? » was answered « CSV », not « XLSX ».']);
     expect(specCheck({ ...SPEC, decisions: [{ question: 'CSV or XLSX?', answer: 'CSV' }] }, decisions)).toEqual([]);
+  });
+
+  it('an empty criterion among others is refused: each one becomes a test', () => {
+    expect(specCheck({ ...SPEC, criteria: ['Given a, then b.', ' '] })).toEqual(['Criterion 2 is empty.']);
   });
 
   it('a result without spec fails it', () => {

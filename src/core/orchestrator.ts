@@ -2313,7 +2313,7 @@ export class Orchestrator {
         input = { kind, text: formatVerifyFailures(JSON.parse(opts.inputText ?? '[]') as VerifyFailure[]) };
       } else if (kind === 'ci_failures') {
         input = { kind, text: opts.inputText ?? 'The PR\'s CI is failing. Run `gh pr checks` for the details.' };
-      } else if (kind === 'thread') {
+      } else if (kind === 'thread' || kind === 'spec_check') {
         input = { kind, text: opts.inputText ?? '' };
       }
       if (carried.length) input = withHumanInbox(input, carried);
@@ -2323,8 +2323,8 @@ export class Orchestrator {
         issue: { identifier: issue.identifier, title: issue.title, description: issue.description, url: issue.url },
         branch: job.queue === 'dev' ? t.branch : undefined,
         prUrl: t.prUrl,
-        // The approved spec for the steps after its gate, the draft for the step that rewrites it (ORC-212).
-        spec: job.queue === 'dev' && t.spec && (t.spec.approval || job.step === 'spec_draft') ? { version: t.spec.version, approved: !!t.spec.approval, text: formatSpec(t.spec.spec) } : undefined,
+        // The approved spec for the steps after its gate, the version not approved for the step that rewrites it (ORC-212).
+        spec: job.queue === 'dev' && t.spec && !!t.spec.approval !== (job.step === 'spec_draft') ? { version: t.spec.version, approved: !!t.spec.approval, text: formatSpec(t.spec.spec) } : undefined,
         conventions,
         input,
         reviewRounds: wf.limits.reviewRounds,
