@@ -110,7 +110,7 @@ export function compilePreset(preset: Preset, options: CompileOptions = {}): Com
       if (NETWORK_RANK[s.network] > NETWORK_RANK['claude-api']) violations.push(`${where}: a review step runs with network claude-api at most`);
     }
     if (s.type === 'agent_step' && !s.writes) violations.push(`${where}: an agent step must declare what it writes`);
-    if ((s.type === 'agent_step' || s.type === 'fix' || s.type === 'review') && !isPositiveInt(s.maxTurns)) {
+    if (isAgentStep(s) && !isPositiveInt(s.maxTurns)) {
       violations.push(`${where}: maxTurns must be a positive integer`);
     }
   }
@@ -145,12 +145,21 @@ function isPositiveInt(n: number): boolean {
   return Number.isInteger(n) && n > 0;
 }
 
-function edges(s: Step, preset: Preset): string[] {
-  const out = s.next === null ? [] : [s.next];
-  if (s.onFailure) out.push(s.onFailure.goto);
+/** A step an agent runs: it has a model, an effort and a cap of turns. */
+export function isAgentStep(s: Step): s is Extract<Step, { maxTurns: number }> {
+  return s.type === 'agent_step' || s.type === 'fix' || s.type === 'review';
+}
+
+/** The ways back a step can take: its own failure edge and the red CI's. */
+export function failureEdges(s: Step, preset: Preset): FailureEdge[] {
+  const out = s.onFailure ? [s.onFailure] : [];
   // A red CI fails a push, and reaches the merge gate while the PR waits there; a merged PR has no way back.
-  if ((s.type === 'publish' && s.mode === 'push') || (s.type === 'human_gate' && s.gate === 'merge')) out.push(preset.redCi.goto);
+  if ((s.type === 'publish' && s.mode === 'push') || (s.type === 'human_gate' && s.gate === 'merge')) out.push(preset.redCi);
   return out;
+}
+
+function edges(s: Step, preset: Preset): string[] {
+  return [...(s.next === null ? [] : [s.next]), ...failureEdges(s, preset).map((e) => e.goto)];
 }
 
 /** Steps reachable from `starts` by success and failure edges, never entering a step that `stops` matches. */

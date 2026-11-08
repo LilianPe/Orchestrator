@@ -5,7 +5,7 @@ import { parseCondition } from '../core/conditions.js';
 import { parseDuration } from '../core/duration.js';
 import { RENAMED_V1, type EventType, type LogicalState } from '../core/types.js';
 import { factoryDefault } from '../presets/factory-default.js';
-import { compilePreset, type Effort, type Preset, type Step } from '../presets/preset.js';
+import { compilePreset, isAgentStep, type Effort, type Preset, type Step } from '../presets/preset.js';
 import {
   rawWorkflowSchema,
   type JobSpec,
@@ -90,7 +90,7 @@ export interface StepSettings {
 
 const agentStep = (name: string): Extract<Step, { maxTurns: number }> | undefined => {
   const step = preset.steps.find((s) => s.id === name);
-  return step && 'maxTurns' in step ? step : undefined;
+  return step && isAgentStep(step) ? step : undefined;
 };
 
 /**

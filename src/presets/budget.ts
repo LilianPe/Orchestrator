@@ -1,4 +1,4 @@
-import type { FailureEdge, Preset, Step } from './preset.js';
+import { failureEdges, isAgentStep, type Preset, type Step } from './preset.js';
 
 /** What bounds a ticket's spending (ORC-216): `budgets` of factory.yml, the repository's `per_ticket_tokens` already folded in. */
 export interface BudgetCaps {
@@ -22,15 +22,6 @@ type AgentStep = Extract<Step, { maxTurns: number }>;
 interface Heaviest {
   total: number;
   attempts: Map<string, number>;
-}
-
-const isAgent = (s: Step): s is AgentStep => s.type === 'agent_step' || s.type === 'fix' || s.type === 'review';
-
-/** The failure edges a step can take, the red CI's included (the same as `compilePreset` follows). */
-function failureEdges(s: Step, preset: Preset): FailureEdge[] {
-  const out = s.onFailure ? [s.onFailure] : [];
-  if ((s.type === 'publish' && s.mode === 'push') || (s.type === 'human_gate' && s.gate === 'merge')) out.push(preset.redCi);
-  return out;
 }
 
 /** A state the walk reached again while computing it: some way back is not bounded. */
@@ -63,7 +54,7 @@ function heaviest(preset: Preset, weight: (s: Step) => number): Heaviest {
       const failed = from(edge.goto, left.map((n, j) => (j === i ? n - 1 : n)));
       if (failed.total > best.total) best = failed;
     }
-    const attempts = isAgent(s) ? new Map(best.attempts).set(s.id, (best.attempts.get(s.id) ?? 0) + 1) : best.attempts;
+    const attempts = isAgentStep(s) ? new Map(best.attempts).set(s.id, (best.attempts.get(s.id) ?? 0) + 1) : best.attempts;
     const result = { total: best.total + weight(s), attempts };
     open.delete(key);
     memo.set(key, result);
@@ -81,12 +72,12 @@ const turnsOf = (s: AgentStep, caps: BudgetCaps): number => Math.min(s.maxTurns,
  * `unbounded`: a way back the counters do not bound, named by a step on it.
  */
 export function worstCase(preset: Preset, caps: BudgetCaps): WorstCase | { missing: string[] } | { unbounded: string } {
-  const agents = preset.steps.filter(isAgent);
+  const agents = preset.steps.filter(isAgentStep);
   const missing = agents.filter((s) => caps.perStepTokens?.[s.id] === undefined).map((s) => `budgets.per_step_tokens.${s.id}`);
   if (missing.length) return { missing };
   try {
-    const tokens = heaviest(preset, (s) => (isAgent(s) ? caps.perStepTokens![s.id]! : 0));
-    const turns = heaviest(preset, (s) => (isAgent(s) ? turnsOf(s, caps) : 0));
+    const tokens = heaviest(preset, (s) => (isAgentStep(s) ? caps.perStepTokens![s.id]! : 0));
+    const turns = heaviest(preset, (s) => (isAgentStep(s) ? turnsOf(s, caps) : 0));
     return { tokens: tokens.total, turns: turns.total, attempts: Object.fromEntries(agents.map((s) => [s.id, tokens.attempts.get(s.id) ?? 0])) };
   } catch (err) {
     if (err instanceof Unbounded) return { unbounded: err.message };

@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { checkBudgets, worstCase, type BudgetCaps } from './budget.js';
 import { factoryDefault } from './factory-default.js';
-import { compilePreset, PresetError, type Preset } from './preset.js';
+import { compilePreset, isAgentStep, PresetError, type Preset } from './preset.js';
 
-const AGENTS = ['intake', 'clarify', 'spec_draft', 'tests', 'build', 'review', 'after_merge', 'fix'];
+const AGENTS = factoryDefault.steps.filter(isAgentStep).map((s) => s.id);
 const every = (tokens: number): Record<string, number> => Object.fromEntries(AGENTS.map((s) => [s, tokens]));
 
 /** build → verify (back to build, `v`) → review (back to fix, `r`); fix → verify_fix (back to fix, `v`) → review. */

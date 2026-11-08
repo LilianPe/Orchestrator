@@ -69,7 +69,7 @@ export class FakeRunner implements Runner {
     for (const e of events) ch.push(e);
     const overTurns = (s.turns ?? 1) > req.limits.turns;
     // As the real runtime counts them (ORC-216): a usage past the attempt's cap in tokens stops it, cache reads left out.
-    const overTokens = !overTurns && s.tokens !== undefined && req.limits.tokens !== undefined && spentTokens(s.tokens) > req.limits.tokens;
+    const overTokens = s.tokens !== undefined && req.limits.tokens !== undefined && spentTokens(s.tokens) > req.limits.tokens;
     const overBudget: OverBudget | undefined = overTurns ? 'turns' : overTokens ? 'tokens' : undefined;
     const turns = overTurns ? req.limits.turns + 1 : (s.turns ?? 1);
     let forced: RunOutcome | undefined;

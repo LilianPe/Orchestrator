@@ -286,7 +286,7 @@ export function ticketMeasures(projectId: string, ticketId: string, facts: Measu
   }
   const outs = outputs(facts, events, ticket.linearSessionId);
   const withTokens = facts.runs.filter((r) => r.tokens !== undefined);
-  const codeTokens = codeRunTokens(facts.runs);
+  const codeTokens = perTicketTokens === undefined ? undefined : codeRunTokens(facts.runs);
   return {
     projectId,
     ticketId,
@@ -294,7 +294,7 @@ export function ticketMeasures(projectId: string, ticketId: string, facts: Measu
     tokens: withTokens.length ? withTokens.reduce((sum, r) => addTokens(sum, r.tokens!), NO_TOKENS) : null,
     attempts: facts.runs.length,
     attemptsWithoutTokens: facts.runs.filter((r) => r.tokens === undefined && r.status !== 'running').length,
-    usageLimitShare: perTicketTokens === undefined || codeTokens === undefined ? null : codeTokens / perTicketTokens,
+    usageLimitShare: codeTokens === undefined ? null : codeTokens / perTicketTokens!,
     firstTry: mergedAt === null ? null : reworks.length === 0,
     reworks: mergedAt === null ? [] : reworks,
     humanReviewMinutes: null,

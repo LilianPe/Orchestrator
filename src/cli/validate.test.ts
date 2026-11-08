@@ -3,9 +3,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { FactoryYmlError, type FactoryYml } from '../config/factory-yml.js';
+import { factoryDefault } from '../presets/factory-default.js';
+import { isAgentStep } from '../presets/preset.js';
 import { runValidateCommand } from './validate.js';
 
-const AGENTS = ['intake', 'clarify', 'spec_draft', 'tests', 'build', 'review', 'after_merge', 'fix'];
+const AGENTS = factoryDefault.steps.filter(isAgentStep).map((s) => s.id);
 /** factory.yml's budgets whose worst case on factory/default is its ticket cap exactly: 41 attempts of 1,000 tokens. */
 const budgeted = (perTicketTokens = 41_000): FactoryYml => ({ budgets: { perStepTokens: Object.fromEntries(AGENTS.map((s) => [s, 1_000])), perTicketTokens } });
 const WITHIN = 'Worst case of factory/default: 41000 tokens and 3600 turns per ticket, within budgets.per_ticket_tokens 41000.';

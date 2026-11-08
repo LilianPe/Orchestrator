@@ -20,11 +20,7 @@ export function runValidateCommand(opts: { repoPath: string; out: (line: string)
     opts.out('Usage: factory validate [repo] (no options)');
     return 1;
   }
-  const refuse = (violations: string[]): number => {
-    opts.out(`${FILE} refused:`);
-    for (const v of violations) opts.out(`- ${v}`);
-    return 1;
-  };
+  const refuse = (violations: string[]): number => list(opts.out, `${FILE} refused:`, violations);
   if (existsSync(join(opts.repoPath, MISSPELT))) return refuse([`${MISSPELT}: rename it to ${FILE}, the only name the factory reads`]);
   // As the daemon reads it on the default branch (`makeRepoConfig`): through a link, git sees no file, and the launch refuses it.
   // `lstat`, not `existsSync`, which follows a link: a dangling one would read as no file at all.
@@ -64,25 +60,27 @@ export function runValidateCommand(opts: { repoPath: string; out: (line: string)
   return validateBudgets(config, opts);
 }
 
+/** A refusal: its head, then one line per violation. Exit code 1. */
+function list(out: (line: string) => void, head: string, violations: string[]): number {
+  out(head);
+  for (const v of violations) out(`- ${v}`);
+  return 1;
+}
+
 /** The invariant « budget caps » (ORC-216), on factory.yml's budgets and the repository's cap, which only lowers the ticket's. */
 function validateBudgets(config: RepoConfig, opts: { out: (line: string) => void; factoryYml: () => Pick<FactoryYml, 'budgets'> | undefined }): number {
-  const list = (head: string, violations: string[]): number => {
-    opts.out(head);
-    for (const v of violations) opts.out(`- ${v}`);
-    return 1;
-  };
   let budgets: FactoryYml['budgets'];
   try {
     budgets = opts.factoryYml()?.budgets;
   } catch (err) {
     // A file it cannot read (EACCES, EISDIR) is refused as unreadable, as the repository's own file is.
-    return list('factory.yml refused:', err instanceof FactoryYmlError ? err.violations : [`unreadable: ${(err as Error).message}`]);
+    return list(opts.out, 'factory.yml refused:', err instanceof FactoryYmlError ? err.violations : [`unreadable: ${(err as Error).message}`]);
   }
   const perTicketTokens = ticketTokenCap(budgets?.perTicketTokens, config);
   const caps = { ...budgets, ...(perTicketTokens !== undefined ? { perTicketTokens } : {}) };
   // The preset's structure is compiled at load (`loadWorkflow`): only its budgets are left to check.
   const { violations, worst } = checkBudgets(factoryDefault, caps);
-  if (violations.length) return list(`Budgets of ${factoryDefault.name} refused:`, violations);
+  if (violations.length) return list(opts.out, `Budgets of ${factoryDefault.name} refused:`, violations);
   opts.out(`Worst case of ${factoryDefault.name}: ${worst!.tokens} tokens and ${worst!.turns} turns per ticket, within budgets.per_ticket_tokens ${perTicketTokens}.`);
   return 0;
 }
