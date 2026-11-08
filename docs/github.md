@@ -109,7 +109,7 @@ Every 5 minutes with reconciliation (ORC-185), and every 30 s when GitHub webhoo
 
 A **human push** whose webhook got lost is not caught up: polling reads the PR head, but the factory does not remember the head it pushed itself (follow-up of ORC-185, ORC-281). Publishing over such a push is refused: see [Publishing](#publishing).
 
-At the time of a `dev-feedback` run, **unresolved** review threads are read via GraphQL (`reviewThreads`) and turned into feedback for the agent.
+At the time of a `dev-feedback` run, **unresolved** review threads are read via GraphQL (`reviewThreads`) and turned into feedback for the agent: every comment of each thread, a reviewer's reply included, as its own item (ORC-347). Every page of threads and of an unresolved thread's comments is read; a list GitHub answers without saying where it ends, or longer than 10 pages of 100, fails the read rather than reach the agent cut short. Linear lists follow the same rule: delegated tickets (10 pages of 100), a team's states, labels and members (10 pages of 250), and an issue's labels past Linear's default page.
 
 Events produced (see [`workflow.md`](workflow.md#3-the-on-rules)):
 
@@ -165,7 +165,7 @@ Each ticket works on `relais/<ticket>-<title-slug>` (e.g. `relais/rel-12-export-
 
 ## Branch protection (strongly recommended)
 
-The pack forbids agents from `gh pr merge` and any push ([`pack-and-skills.md`](pack-and-skills.md#permissions)), but these refusals are a **first barrier**: they depend on Claude Code, and an agent that runs code can bypass them. It is GitHub that guarantees only humans merge. On the default branch of each repository:
+The pack forbids agents from `gh pr merge` and any push ([`pack-and-skills.md`](pack-and-skills.md#permissions)), but these refusals are a **guard against mistakes, not a barrier**: they depend on Claude Code and on how the command is written, and an agent that runs code can bypass them. A push fails for want of means: no token in a sandbox, and on the host a git config that sends every push nowhere, which an agent under the daemon's user can still undo (ORC-349, [`interface-and-security.md`](interface-and-security.md#known-limitations)). It is GitHub that guarantees only humans merge. On the default branch of each repository:
 
 - **Require a pull request before merging** (with at least one approval if your team reviews);
 - **Block force pushes** and forbid deletion;

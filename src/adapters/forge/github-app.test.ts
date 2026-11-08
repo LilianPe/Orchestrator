@@ -92,6 +92,12 @@ const openPr = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
+/** A GraphQL connection page: `next` is the cursor of the page after it, `null` on the last one. */
+const conn = <N>(nodes: N[], next: string | null = null) => ({ nodes, pageInfo: { hasNextPage: next !== null, endCursor: next } });
+const thread = (isResolved: boolean, comments: unknown[], next: string | null = null, id = 'thread') => ({ id, isResolved, comments: conn(comments, next) });
+const threadsAnswer = (threads: unknown[], next: string | null = null) => ({ data: { repository: { pullRequest: { reviewThreads: conn(threads, next) } } } });
+const comment = (login: string, body: string, at: string, path = 'src/a.ts', line: number | null = 12) => ({ author: { login }, body, createdAt: at, path, line });
+
 /** A GitHub API scripted per branch: each PR has its own head sha, whose checks answer as given. */
 function scriptedGitHub(prs: Record<string, { number: number; runs: Route; statuses?: unknown[] }>): Route[] {
   const sha = (branch: string) => `sha-${branch.replace(/\W/g, '-')}`;
@@ -109,10 +115,10 @@ function scriptedGitHub(prs: Record<string, { number: number; runs: Route; statu
     ]),
     (url) =>
       url.pathname === '/graphql'
-        ? { body: { data: { repository: { pullRequest: { reviewThreads: { nodes: [
-          { isResolved: false, comments: { nodes: [{ author: { login: 'alice' }, body: 'renommer', createdAt: '2026-10-10T10:00:00Z', path: 'src/a.ts', line: 3 }] } },
-          { isResolved: true, comments: { nodes: [{ author: { login: 'bob' }, body: 'fait', createdAt: '2026-10-10T11:00:00Z', path: 'src/b.ts', line: null }] } },
-        ] } } } } } }
+        ? { body: threadsAnswer([
+          thread(false, [{ author: { login: 'alice' }, body: 'renommer', createdAt: '2026-10-10T10:00:00Z', path: 'src/a.ts', line: 3 }]),
+          thread(true, [{ author: { login: 'bob' }, body: 'fait', createdAt: '2026-10-10T11:00:00Z', path: 'src/b.ts', line: null }]),
+        ]) }
         : undefined,
   ];
 }
@@ -442,37 +448,11 @@ describe('GitHubAppForge.unresolvedReviewComments', () => {
         (url) =>
           url.pathname === '/graphql'
             ? {
-                body: {
-                  data: {
-                    repository: {
-                      pullRequest: {
-                        reviewThreads: {
-                          nodes: [
-                            {
-                              isResolved: false,
-                              comments: {
-                                nodes: [
-                                  {
-                                    author: { login: 'lilian' },
-                                    body: 'Renomme ça',
-                                    createdAt: '2026-10-10T10:00:00Z',
-                                    path: 'src/a.ts',
-                                    line: 12,
-                                  },
-                                ],
-                              },
-                            },
-                            {
-                              isResolved: true,
-                              comments: { nodes: [{ author: { login: 'x' }, body: 'ok', createdAt: '2026-10-10T10:00:00Z', path: 'b', line: 1 }] },
-                            },
-                            { isResolved: false, comments: { nodes: [] } },
-                          ],
-                        },
-                      },
-                    },
-                  },
-                },
+                body: threadsAnswer([
+                  thread(false, [comment('lilian', 'Renomme ça', '2026-10-10T10:00:00Z')]),
+                  thread(true, [{ author: { login: 'x' }, body: 'ok', createdAt: '2026-10-10T10:00:00Z', path: 'b', line: 1 }]),
+                  thread(false, []),
+                ]),
               }
             : undefined,
       ],
@@ -497,11 +477,63 @@ describe('GitHubAppForge.unresolvedReviewComments', () => {
     ['an error that is null', { errors: [null] }],
     ['threads that are no list', { data: { repository: { pullRequest: { reviewThreads: { nodes: {} } } } } }],
     ['a thread without its comments', { data: { repository: { pullRequest: { reviewThreads: { nodes: [{ isResolved: false }] } } } } }],
+    // Read as the last page, a PR's 101st thread would never reach the agent (ORC-347).
+    ['threads without their pageInfo', { data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }],
+    ['a thread whose comments have no pageInfo', { data: { repository: { pullRequest: { reviewThreads: conn([{ id: 't', isResolved: false, comments: { nodes: [] } }]) } } } }],
   ])('rejects, saying it is unreadable, never a raw TypeError, review threads answered with %s', async (_case, answer) => {
     const { forge } = makeForge([tokenRoute(42), (url) => (url.pathname === '/graphql' ? { body: answer } : undefined)], { installationId: 42 });
     const err = await forge.unresolvedReviewComments('/repo', 7).catch((e: unknown) => e);
     expect(err).not.toBeInstanceOf(TypeError);
     expect((err as Error)?.message).toMatch(/POST \/graphql: unreadable answer, not a GraphQL answer with review threads: /);
+  });
+
+  it("reads every thread and every comment of an unresolved thread: a reviewer's reply reaches the agent (ORC-347)", async () => {
+    const calls: Call[] = [];
+    const graphql: Route = (url, _init, body) => {
+      if (url.pathname !== '/graphql') return undefined;
+      const { query, variables } = body as { query: string; variables: Record<string, unknown> };
+      if (query.includes('reviewThreads')) {
+        return {
+          body:
+            variables['after'] === null
+              ? threadsAnswer(
+                  [
+                    thread(false, [comment('alice', 'gère null', '2026-10-10T10:00:00Z')], 'comments-1', 'T1'),
+                    // Resolved: its other comments are never read.
+                    thread(true, [comment('bob', 'ok', '2026-10-10T10:30:00Z')], 'comments-r', 'T-resolved'),
+                  ],
+                  'threads-1',
+                )
+              : threadsAnswer([thread(false, [comment('carol', 'renomme', '2026-10-10T12:00:00Z', 'src/b.ts', null)], null, 'T2')]),
+        };
+      }
+      return { body: { data: { node: { comments: conn([comment('alice', 'toujours faux, gère aussi null', '2026-10-10T11:00:00Z')]) } } } };
+    };
+    const { forge } = makeForge([installationRoute(), tokenRoute(42), graphql], { calls });
+    expect(await forge.unresolvedReviewComments('/repo', 7)).toEqual([
+      { author: 'alice', body: 'src/a.ts:12 — gère null', at: Date.parse('2026-10-10T10:00:00Z'), source: 'review' },
+      { author: 'alice', body: 'src/a.ts:12 — toujours faux, gère aussi null', at: Date.parse('2026-10-10T11:00:00Z'), source: 'review' },
+      { author: 'carol', body: 'src/b.ts — renomme', at: Date.parse('2026-10-10T12:00:00Z'), source: 'review' },
+    ]);
+    const asked = calls.filter((c) => c.url.endsWith('/graphql')).map((c) => (c.body as { variables: unknown }).variables);
+    expect(asked).toEqual([
+      { owner: 'acme', name: 'app', number: 7, after: null },
+      { owner: 'acme', name: 'app', number: 7, after: 'threads-1' },
+      { id: 'T1', after: 'comments-1' },
+    ]);
+  });
+
+  it("never reads a thread's comments as complete when the thread is gone or answered unreadable (ORC-347)", async () => {
+    const graphql =
+      (node: unknown): Route =>
+      (url, _init, body) => {
+        if (url.pathname !== '/graphql') return undefined;
+        const more = threadsAnswer([thread(false, [comment('alice', 'a', '2026-10-10T10:00:00Z')], 'more', 'T1')]);
+        return { body: (body as { query: string }).query.includes('reviewThreads') ? more : { data: { node } } };
+      };
+    const read = (node: unknown) => makeForge([tokenRoute(42), graphql(node)], { installationId: 42 }).forge.unresolvedReviewComments('/repo', 7);
+    await expect(read(null)).rejects.toThrow(/review thread T1 not found/);
+    await expect(read({ comments: { nodes: [] } })).rejects.toThrow(/unreadable answer, not a GraphQL answer with a review thread's comments/);
   });
 
   it('surfaces GraphQL errors without leaking the installation token', async () => {

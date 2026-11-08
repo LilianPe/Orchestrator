@@ -16,7 +16,7 @@ import type { Runner } from '../adapters/runner/types.js';
 import { EgressProxy } from '../network/proxy.js';
 import { EgressClient, sandboxAgentHost, type Egress } from '../network/proxy-service.js';
 import { GitPublisher } from '../publish/publish.js';
-import { instanceId, makeSandboxes } from './sandbox-wiring.js';
+import { checkHostRuns, instanceId, makeSandboxes } from './sandbox-wiring.js';
 import { LinearApi } from '../adapters/tracker/linear/api.js';
 import { createLinearIngest } from '../adapters/tracker/linear/ingest.js';
 import { buildAuthorizeUrl, exchangeCode, TokenManager } from '../adapters/tracker/linear/oauth.js';
@@ -43,7 +43,7 @@ import type { FactoryEvent } from '../core/types.js';
 import { runVerify } from '../core/verify.js';
 import { KnowledgeBase } from '../knowledge/kb.js';
 import { startSmeeRelay } from '../relay/smee.js';
-import { agentOnly, createApp } from '../server/app.js';
+import { agentOnly, createApp, isLoopbackHost } from '../server/app.js';
 import { openStore } from '../store/open.js';
 import { RUN_BEAT_MS } from '../store/types.js';
 import { repoRoot } from './root.js';
@@ -57,11 +57,6 @@ export interface BootOptions {
   log?: (m: string) => void;
   /** Defaults to process.env; read for FACTORY_UI_PASSWORD. */
   env?: NodeJS.ProcessEnv;
-}
-
-export function isLoopbackHost(host: string): boolean {
-  const h = host.replace(/^\[|\]$/g, '').toLowerCase();
-  return h === 'localhost' || h === '::1' || /^127\.\d+\.\d+\.\d+$/.test(h);
 }
 
 const FACTORY_LABELS = ['agent:stop', BLOCKED_LABEL];
@@ -87,6 +82,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
         'Set the FACTORY_UI_PASSWORD environment variable (the interface password), or set host: 127.0.0.1 back in config.yaml.',
     );
   }
+  // Before anything opens: no agent on the host but by choice (ORC-349). --fake-runner launches none.
+  if (!o.fakeRunner) checkHostRuns(env);
   const paths = homePaths(o.home);
   const port = o.port ?? instance.port;
   const baseUrl = instance.publicUrl ?? `http://localhost:${port}`;
@@ -168,7 +165,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     });
     const sandboxes = o.fakeRunner ? undefined : makeSandboxes(env, instanceId(o.home), egress);
     if (!o.fakeRunner && !sandboxes) {
-      log('Warning: FACTORY_CONTAINER_CLI is not set, runs execute on the host, without isolation.');
+      log('Warning: FACTORY_ALLOW_HOST_RUNS=1 and no FACTORY_CONTAINER_CLI, runs execute on the host, without isolation.');
       log(env['FACTORY_ALLOW_HOST_VERIFY'] === '1' ? "Warning: FACTORY_ALLOW_HOST_VERIFY=1, verify runs the agent's code on the host, next to the daemon's secrets." : 'Warning: without a sandbox or FACTORY_ALLOW_HOST_VERIFY=1, verify refuses to run: every verified ticket will be blocked.');
     }
     // No default cap (ORC-340): on a subscription the dollar cost is an API-price equivalent, any default would be a guess that stops work silently.

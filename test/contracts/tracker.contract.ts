@@ -65,7 +65,7 @@ export function describeTrackerContract(name: string, make: () => TrackerSubject
 
     it('search finds the issue by a word of its title', async (ctx) => {
       const s = await subjectWith(make, () => ctx.skip(), 'searchTerm');
-      const hits = await s.tracker.search(s.searchTerm);
+      const hits = await s.tracker.search(s.searchTerm, (await s.tracker.getIssue(s.issue)).teamKey);
       expect(hits.map((h) => h.identifier)).toContain(s.issue);
       const hit = hits.find((h) => h.identifier === s.issue)!;
       expect(hit.url).not.toBe('');

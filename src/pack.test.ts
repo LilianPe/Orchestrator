@@ -55,6 +55,11 @@ describe('standard pack', () => {
     );
   });
 
+  it('allows the Python toolchain: uv, and pytest, ruff, mypy from the project environment (ORC-311)', () => {
+    const s = JSON.parse(readFileSync(join(pack, 'settings.json'), 'utf8'));
+    expect(s.permissions.allow).toEqual(expect.arrayContaining(['Bash(uv:*)', 'Bash(pytest:*)', 'Bash(ruff:*)', 'Bash(mypy:*)']));
+  });
+
   it('denies merge, every push, every write on the forge and reading factory secrets (ORC-125)', () => {
     const s = JSON.parse(readFileSync(join(pack, 'settings.json'), 'utf8'));
     expect(s.permissions.deny).toEqual(expect.arrayContaining(['Bash(gh pr merge:*)', 'Bash(git push:*)', 'Bash(gh pr create:*)', 'Bash(gh pr edit:*)', 'Bash(gh run rerun:*)', 'Read(~/.factory/**)']));

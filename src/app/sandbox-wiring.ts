@@ -11,6 +11,18 @@ export function instanceId(home: string): string {
 }
 
 /**
+ * Without a container engine, an agent would run on the host under the daemon's user, next to its secrets: the daemon
+ * refuses to start real runs so, unless `FACTORY_ALLOW_HOST_RUNS=1` chooses it, for development (ORC-349).
+ */
+export function checkHostRuns(env: NodeJS.ProcessEnv): void {
+  if (env['FACTORY_CONTAINER_CLI'] || env['FACTORY_ALLOW_HOST_RUNS'] === '1') return;
+  throw new Error(
+    'FACTORY_CONTAINER_CLI is not set: the agents would run on this machine, under the daemon\'s user, without isolation. ' +
+      'Set FACTORY_CONTAINER_CLI (docker or podman) and FACTORY_RUNNER_IMAGE, or FACTORY_ALLOW_HOST_RUNS=1 to run them on the host anyway (development only).',
+  );
+}
+
+/**
  * The sandboxes of real runs (ORC-204): a container per attempt when FACTORY_CONTAINER_CLI is set, none
  * otherwise. Each reaches out only through `egress`, the factory's proxy (ORC-213).
  */

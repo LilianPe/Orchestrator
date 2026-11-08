@@ -27,10 +27,38 @@ const relaunch = (workflow: Workflow): string => (workflow.blockComment ? 'Reply
  */
 export const SENSITIVE_PATHS: readonly string[] = ['.github/**', '.factory/**', '.claude/**', 'CODEOWNERS', '.env*'];
 
-/** The refusal of a knowledge job (I12): its event is untrusted, or what it would read at its launch is (ORC-274). */
-export function taintedKnowledge(job: string, source: 'event' | 'read' = 'event'): string {
-  const what = source === 'event' ? 'the event comes' : 'the feedback it would read (thread or review comments) comes';
+/**
+ * The refusal of a knowledge job (I12): its event is untrusted, or what it would read at its launch is (ORC-274), the
+ * ticket and its PR included (ORC-349).
+ */
+export function taintedKnowledge(job: string, source: 'event' | 'read' | 'history' = 'event'): string {
+  const what = {
+    event: 'the event comes',
+    read: 'the feedback it would read (thread or review comments) comes',
+    history: 'what it would read of the ticket and its PR (reviews, messages, commits) comes in part',
+  }[source];
   return `I am not starting ${job}: this job writes to the knowledge base, and ${what} from an untrusted source.`;
+}
+
+/**
+ * The events whose text or code a run reads later through the ticket or its PR, not only as its input (ORC-349): the
+ * ticket a delegation brings, a human message, a review of the PR, the commits a human pushed. The others carry nothing
+ * an agent reads (a move, a label, CI's facts) or what the factory wrote itself. `HUMAN_EVENTS` without its move and label, and the
+ * forge's two: a human event added there that brings text belongs here too.
+ */
+const CONTENT_EVENTS: ReadonlySet<EventType> = new Set<EventType>(['ticket.delegated', 'session.prompted', 'session.mentioned', 'command', 'ticket.commented', 'pr.reviewed', 'push.human']);
+
+/**
+ * The taint of a ticket's history, as a run that reads the ticket and its PR takes it in (ORC-349): untrusted once an
+ * untrusted event brought it content, whoever starts that run. `Orchestrator.launch` adds the branch's mark (ORC-338).
+ */
+export function historyTaint(events: readonly FactoryEvent[]): Taint {
+  return events.some((e) => e.taint === 'untrusted' && CONTENT_EVENTS.has(e.type) && !silentReview(e)) ? 'untrusted' : 'trusted';
+}
+
+/** A review without a word (an approval, most often): it brings nothing a run reads. */
+function silentReview(e: FactoryEvent): boolean {
+  return e.type === 'pr.reviewed' && !(e as FactoryEvent<'pr.reviewed'>).payload.body.trim();
 }
 
 const BUILT_IN = new Set<EventType>([
@@ -160,6 +188,9 @@ function block(out: Decision, workflow: Workflow, b: Block): Decision {
   return out;
 }
 
+/** Head of the reason of `stuckPending`'s block: what tells it from another block on the same job (ORC-360). */
+const stuckReason = (job: string): string => `Error: the pending ${job} could not be started: `;
+
 /**
  * A `settle` that died (ORC-339): its retries spent, a pending job with no run would hold the ticket's messages for
  * good, in silence. The ticket is blocked on that job instead; the job stays pending, all of it (its input, its
@@ -168,7 +199,7 @@ function block(out: Decision, workflow: Workflow, b: Block): Decision {
 function stuckPending(out: Decision, ticket: TicketState, workflow: Workflow, error: string, attempts: number): Decision {
   const pending = ticket.pendingJob;
   if (!pending || !ticket.delegated || ticket.activeRunId || ticket.verifyingRunId || ticket.usageWait || ticket.blocked || settledTicket(ticket)) return out;
-  const reason = `Error: the pending ${pending.job} could not be started: ${error}`;
+  const reason = `${stuckReason(pending.job)}${error}`;
   return block(out, workflow, {
     reason,
     body: `${reason} Reply in this thread to start it again.`,
@@ -641,10 +672,11 @@ function resumedJob(rule: Rule, event: FactoryEvent, ticket: TicketState | undef
 /**
  * A pending job no run will start (ORC-339): no run or check ahead of it, on a ticket blocked on it (a settle that could
  * not start it, `stuckPending`). Only a reply lifts that block, by starting the job: at once, or when its debounce fires.
+ * Read by its reason: another block on that job (the red-CI bound on a `fix-ci` kept pending) is not lifted (ORC-360).
  */
 function strandedPending(ticket: TicketState | undefined, workflow: Workflow): PendingJob | undefined {
   const pending = ticket?.pendingJob;
-  if (!pending || !ticket.blocked || ticket.blockedJob !== pending.job || ticket.activeRunId || ticket.verifyingRunId || ticket.usageWait) return undefined;
+  if (!pending || !ticket.blocked || ticket.blockedJob !== pending.job || !ticket.blockReason?.startsWith(stuckReason(pending.job)) || ticket.activeRunId || ticket.verifyingRunId || ticket.usageWait) return undefined;
   return workflow.jobs[pending.job] ? pending : undefined;
 }
 
@@ -1208,6 +1240,9 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       const toPublish = publishes(job) ? event.payload.sha : undefined;
       const patch = { verifyAttempts: 0, ...(ticket?.repeatedFailure ? { repeatedFailure: null } : {}), ...(ticket?.redAttempts ? { redAttempts: 0 } : {}), ...(event.payload.sha ? { verifiedSha: event.payload.sha } : {}), ...(toPublish && job.onSuccess.move ? { owedMove: job.onSuccess.move } : {}) };
       out.events.push({ type: 'ticket.patched', patch });
+      // A relaunch on failures still pending goes with them: settle would start it on a green check, in a loop just started over (ORC-360).
+      const pending = ticket?.pendingJob;
+      if (pending?.input === 'verify_failures') out.events.push({ type: 'pending.cleared', job: pending });
       if (job.red) freeze(out, ticket, event.payload.frozen);
       if (toPublish) {
         const { runId, output, commands } = event.payload;

@@ -1029,6 +1029,28 @@ describe('decide — built-ins', () => {
     const other = decide({ ...blocked, blockedJob: 'dev' }, ev('session.prompted', { linearSessionId: 's1', body: 'try again', author: 'L' }), workflow);
     expect(other.events).not.toContainEqual({ type: 'pending.cleared', job: pendingJob });
   });
+
+  it('a block of another cause on the pending job is no stranded pending job: neither a reply nor a debounce starts it (ORC-360)', () => {
+    // The relaunch a verify.failed decided waits pending, then the red-CI bound blocks the same job: nothing starts that relaunch
+    // here. A debounce still lifts the block as a machine event and starts its own job, as before ORC-339; settle starts the relaunch after it.
+    const pendingJob = { job: 'fix-ci', input: 'verify_failures' as const, inputText: 'rouge', resume: true };
+    const blocked = ticket({ logical: 'human_review', blocked: true, blockReason: 'CI still failing after 2 attempts of fix-ci.', blockedJob: 'fix-ci', linearSessionId: 's1', pendingJob });
+    const fired = decide(blocked, ev('timer.fired', { kind: 'debounce', payload: { job: 'dev-feedback' } }), workflow);
+    expect(fired.events).not.toContainEqual({ type: 'pending.cleared', job: pendingJob });
+    expect(fired.effects.filter((e) => e.kind === 'start_run' && e.input === 'verify_failures')).toEqual([]);
+    const reply = decide(blocked, ev('session.prompted', { linearSessionId: 's1', body: 'try again', author: 'L' }), workflow);
+    expect(reply.events).not.toContainEqual({ type: 'pending.cleared', job: pendingJob });
+    expect(reply.effects.filter((e) => e.kind === 'start_run' && e.input === 'verify_failures')).toEqual([]);
+  });
+
+  it('a green check takes off a relaunch on failures kept pending: the loop starts over, without it (ORC-360)', () => {
+    const pendingJob = { job: 'dev', input: 'verify_failures' as const, inputText: 'rouge', resume: true };
+    const passed = ev('verify.passed', { runId: 'r2', job: 'dev' });
+    expect(decide(ticket({ verifyingRunId: 'r2', verifyAttempts: 2, pendingJob }), passed, workflow).events).toContainEqual({ type: 'pending.cleared', job: pendingJob });
+    // Another pending job is no relaunch on failures: it stays for settle.
+    const other = { job: 'dev-feedback', input: 'feedback' as const };
+    expect(decide(ticket({ verifyingRunId: 'r2', pendingJob: other }), passed, workflow).events.map((e) => e.type)).not.toContain('pending.cleared');
+  });
 });
 
 describe('decide — the tests step and the red check (ORC-123)', () => {
