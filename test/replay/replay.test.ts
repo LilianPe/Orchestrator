@@ -169,7 +169,7 @@ describe('recorded journals (test/replay/journals)', () => {
 
   it('has journals to replay, one in schema version 1', () => {
     expect(files.length).toBeGreaterThanOrEqual(4);
-    expect(files.some((f) => f.includes('.v1.'))).toBe(true);
+    expect(files.some((f) => f.includes('.v1.') && !f.includes('.pre-orc-'))).toBe(true);
   });
 
   // Kept as the engine before ORC-161 recorded it; `npm run replay:record` does not write it again.
