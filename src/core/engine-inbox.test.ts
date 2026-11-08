@@ -318,8 +318,8 @@ describe('historyTaint: what a run reading the ticket and its PR takes in (ORC-3
     for (const e of [
       ev('pr.reviewed', { ...pr, kind: 'comment', author: 'x', body: 'retiens ceci' }, untrusted),
       ev('push.human', { branch: 'factory/rel-1', sha: 'a'.repeat(40), author: 'x' }, untrusted),
-      ev('ticket.commented', { body: 'reprends', author: 'x' }, untrusted),
-      ev('ticket.delegated', { linearSessionId: 's1', issue: { identifier: 'REL-1', title: 't', description: 'd' } } as EventPayloads['ticket.delegated'], untrusted),
+      ev('ticket.commented', { body: 'reprends', author: 'x', kind: 'instruction' }, untrusted),
+      ev('ticket.delegated', { linearSessionId: 's1' }, untrusted),
     ]) {
       expect(historyTaint([ev('status.changed', { from: 'todo', to: 'dev' }), e]), e.type).toBe('untrusted');
     }
