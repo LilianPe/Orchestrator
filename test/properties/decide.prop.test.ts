@@ -6,8 +6,8 @@ import type { Role } from '../../src/core/authz.js';
 import { AUTHZ_REFUSED, decide, isFenced, mayCheck, mayPublish, SENSITIVE_PATHS } from '../../src/core/engine.js';
 import { reduce } from '../../src/core/reduce.js';
 import {
+  higherRisk,
   newTicketState,
-  RISKS,
   TRUSTED,
   type EventPayloads,
   type EventType,
@@ -258,7 +258,7 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
         holds((s) => {
           for (const step of run(s).steps) {
             const before = step.before?.risk;
-            if (before) expect(RISKS.indexOf(step.after?.risk ?? 'low') >= RISKS.indexOf(before) && step.after?.risk !== undefined).toBe(true);
+            if (before) expect(step.after?.risk && higherRisk(before, step.after.risk)).toBe(step.after?.risk);
             if (step.before?.visualProof) expect(step.after?.visualProof).toBe('required');
           }
         }, [lowered]);

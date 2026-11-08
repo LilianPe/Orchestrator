@@ -5,7 +5,7 @@ import { evalCondition } from './conditions.js';
 import { deadLetterReason, deadLetterTried, heldMessage, isRefusedNotice, liftDeadLetterBlock, REPAIR_LABELS, repairedEvent } from './dead-letter.js';
 import type { AgentOutput } from './agent-output.js';
 import { blockFacts, type BlockFacts } from './block-comment.js';
-import { AGENT_QUESTION, INCOMPLETE, STOPPED } from './block-cause.js';
+import { AGENT_QUESTION, INCOMPLETE, NO_ASSESSMENT, STOPPED } from './block-cause.js';
 import type { Decision, Effect } from './decision.js';
 import { awaitsAgent, commandOf, forAgent, STOP_COMMAND } from './human-message.js';
 import { BEFORE_ORC_331 } from './legacy-messages.js';
@@ -87,18 +87,19 @@ function handOver(out: Decision, at: { event: FactoryEvent; ticket: TicketState 
 function intakeEnd(out: Decision, at: { event: FactoryEvent; ticket: TicketState | undefined; workflow: Workflow }, job: JobSpec, p: EventPayloads['run.finished']): Decision {
   const a = p.output?.intake;
   if (!a) {
-    const reason = `The run ${job.name} returned no assessment of the ticket.`;
+    const reason = NO_ASSESSMENT;
     return block(out, at.workflow, { reason, body: `${reason} Reply in this thread and I will resume.`, job: job.name, tried: [`Started the run ${job.name}: its result has no \`intake\` field.`] });
   }
   out.events.push({ type: 'ticket.patched', patch: { size: a.size, risk: higherRisk(at.ticket?.risk, a.risk), ...(a.screen ? { visualProof: 'required' as const } : {}) } });
-  const gaps = [...(p.pickup ?? []), ...(a.complete ? [] : a.missing)];
+  const checks = p.pickup ?? [];
+  const gaps = [...checks, ...(a.complete ? [] : a.missing)];
   if (!gaps.length) return success(out, at, job, p.runId);
   const reason = `${INCOMPLETE} ${gaps.join(' ')}`;
   return block(out, at.workflow, {
     reason,
     body: `I cannot start this ticket yet:\n${gaps.map((g) => `- ${g}`).join('\n')}\nAnswer here, or complete the ticket and reply, and I will read it again.`,
     job: job.name,
-    tried: [`Read the ticket (${job.name}): not complete enough to start.`, ...(p.pickup ?? [])],
+    tried: [`Read the ticket (${job.name}): not complete enough to start.`, ...checks],
     question: a.complete ? 'Can you complete the ticket, then reply here?' : a.missing.join(' '),
   });
 }

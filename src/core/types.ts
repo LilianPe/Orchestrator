@@ -269,7 +269,7 @@ export interface EventPayloads {
     attempt?: AttemptOutcome;
     output?: AgentOutput;
     stagnation?: Stagnation;
-    /** The deterministic checks of the ticket that failed at the launch of `intake` (ORC-206): inputs of the guard before In Progress. Only on an intake run. */
+    /** The deterministic checks of the ticket that failed at the launch of `intake` (ORC-206): inputs of the guard before In Progress. Absent when none failed. */
     pickup?: string[];
     /** The usage limit of `account` stopped it and the factory waits on it (`on_usage_limit: wait`, ORC-340): resumed at `resetAt`. */
     usageLimit?: { resetAt: number; account?: string };

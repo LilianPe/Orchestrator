@@ -2055,7 +2055,7 @@ export class Orchestrator {
         await state(store.setMeta(setupPendingKey(ws.path), ''));
         ws = await workspaces.prepare(asked);
       }
-      return { issue, ws, lost: undefined, ...(intake ? { pickup: failures } : {}) };
+      return { issue, ws, lost: undefined, pickup: intake && failures.length ? failures : undefined };
     })();
     if (!head) return undefined;
     if (head.lost) return lose(head.lost);

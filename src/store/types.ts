@@ -74,7 +74,7 @@ export interface RunRecord {
    * `verify` on the host) reads this one, not what the default branch holds by then. Absent on older records.
    */
   repoConfig?: RepoConfig;
-  /** The deterministic checks of the ticket that failed at the launch of an `intake` run (ORC-206), for its guard. Only on such a run. */
+  /** The deterministic checks of the ticket that failed at the launch of an `intake` run (ORC-206), for its guard. Absent when none failed. */
   pickup?: string[];
 }
 
