@@ -5,14 +5,14 @@ import { evalCondition } from './conditions.js';
 import { deadLetterReason, deadLetterTried, heldMessage, isRefusedNotice, liftDeadLetterBlock, REPAIR_LABELS, repairedEvent } from './dead-letter.js';
 import type { AgentOutput, ConflictCase } from './agent-output.js';
 import { blockFacts, type BlockFacts } from './block-comment.js';
-import { AGENT_QUESTION, INCOMPLETE, NO_ASSESSMENT, STOPPED, type BlockKind } from './block-cause.js';
+import { AGENT_QUESTION, CLARIFY_EXPIRED, NO_ASSESSMENT, STOPPED, type BlockKind } from './block-cause.js';
 import type { Decision, Effect } from './decision.js';
 import { awaitsAgent, commandOf, forAgent, STOP_COMMAND } from './human-message.js';
 import { PRODUCT_NAME } from '../product.js';
 import { CUT_RELAUNCHES, CUT_WINDOW_MS } from '../store/types.js';
 import { isOwnMoveEcho, pendingOf, reduce } from './reduce.js';
 import { holds, isNoRepo, isUnrouted, repoLabel, unroutedReason } from './routing.js';
-import { higherRisk, type Blocker, type EventPayloads, type EventType, type FactoryEvent, type FeedbackItem, type InputKind, type MessageKind, type PendingJob, type RunOutcome, type Taint, type TicketState, type VerifyFailure } from './types.js';
+import { higherRisk, type Blocker, type ClarifyQuestion, type EventPayloads, type EventType, type FactoryEvent, type FeedbackItem, type InputKind, type MessageKind, type PendingJob, type RunOutcome, type Taint, type TicketState, type VerifyFailure } from './types.js';
 
 type StartRun = Extract<Effect, { kind: 'start_run' }>;
 
@@ -116,8 +116,8 @@ function handOver(out: Decision, at: { event: FactoryEvent; ticket: TicketState 
 /**
  * The end of `intake` (ORC-206): its assessment is recorded, then the guard before In Progress. The risk never goes down
  * (I4) and the visual proof only hardens to `required`. A ticket not complete enough, by intake's judgement or by the
- * deterministic checks of its launch, does not start. Until `clarify` asks its questions (ORC-210), it is blocked on
- * intake with them: a reply relaunches intake, which reads the ticket again, and nothing moves to In Progress meanwhile.
+ * deterministic checks of its launch, does not start: `clarify` asks its questions (ORC-210), and nothing moves to In
+ * Progress meanwhile. A complete one « blocked by » a ticket not done waits for it (ORC-363).
  */
 function intakeEnd(out: Decision, at: { event: FactoryEvent; ticket: TicketState | undefined; workflow: Workflow }, job: JobSpec, p: EventPayloads['run.finished']): Decision {
   const a = p.output?.intake;
@@ -127,23 +127,115 @@ function intakeEnd(out: Decision, at: { event: FactoryEvent; ticket: TicketState
   }
   out.events.push({ type: 'ticket.patched', patch: { size: a.size, risk: higherRisk(at.ticket?.risk, a.risk), ...(a.screen ? { visualProof: 'required' as const } : {}) } });
   const checks = p.pickup ?? [];
-  const gaps = [...checks, ...(a.complete ? [] : a.missing)];
-  // Complete, but « blocked by » a ticket not done (ORC-363): what it would start waits for it.
-  const next = job.onSuccess.run ? at.workflow.jobs[job.onSuccess.run] : undefined;
-  if (!gaps.length && next && p.blockedBy?.length) {
+  if (!checks.length && a.complete) {
+    // Complete, but « blocked by » a ticket not done (ORC-363): what it would start waits for it.
+    const next = job.onSuccess.run ? at.workflow.jobs[job.onSuccess.run] : undefined;
+    if (!next || !p.blockedBy?.length) return success(out, at, job, p.runId);
     // Its assessment is posted now; a move it owes waits with the start, which moves the ticket itself (`dev`'s `on_start`).
     if (job.onSuccess.post) out.effects.push({ kind: 'post_output', style: job.onSuccess.post, runId: p.runId, ...(p.output ? { output: p.output } : {}) });
     return waitFor(out, p.blockedBy, pendingOf({ job: next.name, input: next.input }));
   }
-  if (!gaps.length) return success(out, at, job, p.runId);
-  const reason = `${INCOMPLETE} ${gaps.join(' ')}`;
-  return block(out, at.workflow, {
-    kind: 'pickup',
+  // Incomplete: the questions come first, blocked by a ticket or not; intake runs again after the last answer and comes back here.
+  // A failed check is a fact, not a question: the ticket's to complete, answered freely, within the 3 questions.
+  const completeIt: ClarifyQuestion[] = checks.length ? [{ question: `${checks.join(' ')} Can you complete the ticket, then reply here?`, options: [] }] : [];
+  const asked = a.complete ? [] : a.missing.map((m) => (typeof m === 'string' ? { question: m, options: [] } : m));
+  return clarify(out, at.event, job, [...completeIt, ...asked].slice(0, CLARIFY_MAX));
+}
+
+/** At most this many questions at once (MVP doc; 5 is EVP 1's). */
+const CLARIFY_MAX = 3;
+/** The reminder of the questions still open, then the block (ORC-210), on the decision's clock. */
+export const CLARIFY_REMIND_MS = 24 * 3_600_000;
+export const CLARIFY_EXPIRE_MS = 72 * 3_600_000;
+
+/**
+ * The question `n` of `questions` as the session shows it: picked in its options (`select`), or answered in the human's
+ * own words, in the session (a comment on the ticket is not read while it waits).
+ */
+function askEffect(questions: readonly ClarifyQuestion[], n: number, head = ''): Effect {
+  const { question, options } = questions[n]!;
+  const rank = questions.length > 1 ? `Question ${n + 1}/${questions.length}: ` : '';
+  const pick = options.length > 0;
+  const body = `${head}${rank}${question}\n${pick ? 'Pick an option, or answer here in your own words.' : 'Answer here in your own words.'}`;
+  return { kind: 'activity', type: 'elicitation', body, ...(pick ? { options } : {}) };
+}
+
+/**
+ * `clarify` (ORC-210): the guard's questions, one elicitation of the ticket's session at a time, the next once one is
+ * answered: Linear sends a picked option back as a plain reply, so the one on screen is the one it answers. The reminder
+ * at 24 h and the block at 72 h are armed. The ticket waits, not blocked: the requester may answer as well as the team
+ * (`answer_clarify`).
+ */
+function clarify(out: Decision, event: FactoryEvent, job: JobSpec, questions: ClarifyQuestion[]): Decision {
+  out.events.push({ type: 'ticket.patched', patch: { clarify: { job: job.name, questions, at: event.at, answered: 0 } } });
+  out.effects.push(askEffect(questions, 0));
+  out.timers.push(
+    { kind: 'clarify.remind', slot: 'clarify.remind', ms: CLARIFY_REMIND_MS, payload: { at: event.at } },
+    { kind: 'clarify.expire', slot: 'clarify.expire', ms: CLARIFY_EXPIRE_MS, payload: { at: event.at } },
+  );
+  out.trace.push(`clarify: ${questions.length} question(s) asked after ${job.name}`);
+  return out;
+}
+
+type Clarifying = TicketState & { clarify: NonNullable<TicketState['clarify']> };
+
+/**
+ * Whether a reply of the ticket's own session answers its `clarify` questions: while they wait. A question back
+ * (`kind: question`) is none: it takes the question path, the questions stay open.
+ */
+function answersClarify(ticket: TicketState | undefined, kind?: MessageKind): ticket is Clarifying {
+  return !!ticket?.clarify && !ticket.blocked && kind !== 'question';
+}
+
+/**
+ * An authorized reply to the `clarify` questions (ORC-210), already kept for the agent: it answers the question on
+ * screen, and becomes a decision of the ticket unless unsigned (I12: no run reads it as settled). The next question
+ * follows; once each has its answer, the job that asked them reads the ticket again with them.
+ */
+function clarifyAnswer(out: Decision, event: FactoryEvent<'session.prompted'>, ticket: Clarifying, workflow: Workflow): Decision {
+  const { questions, answered, job } = ticket.clarify;
+  const decision = { question: questions[answered]!.question, answer: event.payload.body, author: event.payload.author, ...(event.actor ? { authorId: event.actor } : {}), at: event.at };
+  const decisions = event.taint === 'untrusted' ? {} : { decisions: [...(ticket.decisions ?? []), decision] };
+  const open = questions.length - answered - 1;
+  out.events.push({ type: 'ticket.patched', patch: { ...decisions, clarify: open ? { ...ticket.clarify, answered: answered + 1 } : null } });
+  if (open) {
+    out.trace.push(`clarify: answered, ${open} question(s) still open`);
+    out.effects.push(askEffect(questions, answered + 1));
+    return out;
+  }
+  const next = workflow.jobs[job];
+  // A version is frozen with the ticket (ORC-149): the job that asked is in it, unless the journal was written by another.
+  out.trace.push(next ? `clarify: answered, ${job} reads the ticket again` : `clarify: answered, but ${job} is not in the workflow: nothing starts`);
+  if (next) startRun(out, event, ticket, next, { input: 'feedback' });
+  return out;
+}
+
+/**
+ * A `clarify` timer (ORC-210). Only the round that armed it, still waiting: one answered or ended since (a block, an
+ * undelegation, a move: `reduce`), or asked again since, does nothing. At 24 h the questions still open are asked again;
+ * at 72 h the ticket is blocked on the job that asked them, which a reply relaunches (ORC-196).
+ */
+function clarifyTimer(out: Decision, fired: { kind: 'clarify.remind' | 'clarify.expire'; payload: { at?: number } }, ticket: TicketState | undefined, workflow: Workflow): Decision {
+  const c = ticket?.clarify;
+  if (!c || c.at !== fired.payload.at || ticket.blocked || !ticket.delegated) {
+    out.trace.push(`timer.fired ${fired.kind}: no question of this round waits`);
+    return out;
+  }
+  if (fired.kind === 'clarify.remind') {
+    out.effects.push(askEffect(c.questions, c.answered, 'Reminder, still waiting for your answer. '));
+    return out;
+  }
+  const open = c.questions.slice(c.answered);
+  const asked = open.map((q) => q.question).join(' ');
+  const reason = `${CLARIFY_EXPIRED} ${asked}`;
+  return block(out, workflow, {
+    kind: 'question',
     reason,
-    body: `I cannot start this ticket yet:\n${gaps.map((g) => `- ${g}`).join('\n')}\nAnswer here, or complete the ticket and reply, and I will read it again.`,
-    job: job.name,
-    tried: [`Read the ticket (${job.name}): not complete enough to start.`, ...checks],
-    question: a.complete ? 'Can you complete the ticket, then reply here?' : a.missing.join(' '),
+    body: `${reason}\nReply in this thread and I will read the ticket again.`,
+    job: c.job,
+    step: 'clarify',
+    tried: [`Asked ${c.questions.length} question(s) in the session, and again after 24 h.`],
+    question: asked,
   });
 }
 
@@ -207,9 +299,13 @@ function redFailed(out: Decision, at: { event: FactoryEvent<'verify.failed'>; ti
 function freeze(out: Decision, ticket: TicketState | undefined, frozen: FrozenTests | undefined): void {
   if (!frozen) return;
   const old = ticket?.frozenTests;
+  const decisions = frozenDecisions(ticket);
   // The old freeze keeps its rules (ORC-342): its harness is the one it was made with.
-  out.events.push({ type: 'ticket.patched', patch: { frozenTests: old ? { ...old, files: { ...frozen.files, ...old.files } } : frozen } });
+  out.events.push({ type: 'ticket.patched', patch: { frozenTests: { ...(old ? { ...old, files: { ...frozen.files, ...old.files } } : frozen), ...decisions } } });
 }
+
+/** The answers to `clarify` (ORC-210), frozen with the tests they decided: the ticket's, as they are at the freeze or the refreeze. */
+const frozenDecisions = (ticket: TicketState | undefined) => (ticket?.decisions?.length ? { decisions: ticket.decisions } : {});
 
 /** A run in the ticket's worktree goes through `factory/tests-gelés` once frozen (ORC-131), verify commands or not. */
 export function goesThroughFreeze(ticket: TicketState | undefined, job: JobSpec): boolean {
@@ -231,7 +327,7 @@ function refreeze(out: Decision, event: FactoryEvent<'command'>, ticket: TicketS
   }
   const count = Object.keys(frozen.files).length;
   out.trace.push(`refreeze by ${event.actor}: ${count} files frozen at ${frozen.sha}`);
-  out.events.push({ type: 'ticket.patched', patch: { frozenTests: frozen } });
+  out.events.push({ type: 'ticket.patched', patch: { frozenTests: { ...frozen, ...frozenDecisions(ticket) } } });
   answer(`Refrozen: ${count} files, as of commit ${frozen.sha.slice(0, 12)}. The next verification starts from this freeze.`);
   return out;
 }
@@ -702,6 +798,7 @@ function classifiedReply(out: Decision, event: FactoryEvent<'session.prompted'>,
   const answerOnly = thread && (kind === 'question' || !ticket?.delegated);
   if (ticket) keepMessage(out, event, answerOnly ? 'thread' : 'session');
   if (kind === 'command') return factoryCommand(out, event, ticket, workflow);
+  if (!thread && answersClarify(ticket, kind)) return clarifyAnswer(out, event, ticket, workflow);
   if (answerOnly || (kind === 'question' && !ticket?.blocked)) {
     out.trace.push(`session.prompted: ${kind}, answered`);
     askInThread(out, event, ticket, workflow);
@@ -1463,8 +1560,9 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
         startRun(out, event, ticket, job, { relaunchOf: wait.runId });
         return out;
       }
+      if (fired.kind === 'clarify.remind' || fired.kind === 'clarify.expire') return clarifyTimer(out, fired, ticket, workflow);
       if (fired.kind !== 'debounce') {
-        // Armed by no rule yet: the clarify reminder and block are ORC-210's; a usage reset without a job, by no version.
+        // A usage reset without a job: armed by no version.
         out.trace.push(`timer.fired ${fired.kind}: no rule decides it yet`);
         return out;
       }
@@ -1685,6 +1783,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       if (!authorize(out, event, ticket, ticket?.blocked ? 'relaunch_blocked' : 'answer_clarify', 'linear_session', matrix)) return out;
       // A reply in the dev session is kept whether a rule matches or not (I6).
       if (ticket) keepMessage(out, event, 'session');
+      if (answersClarify(ticket)) return clarifyAnswer(out, event, ticket, workflow);
       break;
     default:
       break;
