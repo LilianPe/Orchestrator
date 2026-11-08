@@ -628,7 +628,7 @@ describe('the visual proof, taken by the factory in verify (ORC-176)', () => {
   }
 
   it('criterion 1: a diff in visual_paths: required, its trigger named, six captures, before on the base and after on the commit', async () => {
-    const { req, repo, origin, shooter, sandboxes } = visual({ page: 'new page\n' });
+    const { req, repo, origin, shooter } = visual({ page: 'new page\n' });
     const res = await runCleanVerify(req);
     expect(res.ok).toBe(true);
     expect(res.visual?.proof).toMatchObject({ decision: 'required', triggers: ['app/page.txt'] });
