@@ -2,6 +2,7 @@ import type { AgentOutput, AttemptOutcome } from './agent-output.js';
 import type { Role } from './authz.js';
 import type { BlockKind } from './block-cause.js';
 import type { StoredEvent } from './upcast.js';
+import type { SpecVersion } from './spec.js';
 import type { FrozenTests } from '../checks/freeze.js';
 import type { RedCause } from '../checks/red.js';
 
@@ -375,7 +376,7 @@ export type DecidedEvent =
   | { type: 'ticket.unblocked' }
   | {
       type: 'ticket.patched';
-      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'verifiedSha' | 'awaitingRepo' | 'owedMove' | 'usageWait' | 'usageRelaunches' | 'usageAsks' | 'size' | 'risk' | 'visualProof'>>;
+      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'verifiedSha' | 'awaitingRepo' | 'owedMove' | 'usageWait' | 'usageRelaunches' | 'usageAsks' | 'size' | 'risk' | 'visualProof' | 'spec' | 'specCheckReturns' | 'specChanges'>>;
     }
   | { type: 'feedback.appended'; item: FeedbackItem }
   /** The ticket's dev work is stopped: nothing pending, no verification awaited. */
@@ -538,6 +539,15 @@ export interface TicketState {
   risk?: Risk;
   /** Visual proof planned for the ticket (ORC-206): `intake` can only harden it to `required`, never lift it. Absent: undecided until `verify` (ORC-176). */
   visualProof?: 'required';
+  /**
+   * The ticket's spec (ORC-212), its last version: waiting for review while it has no approval and no run of the ticket
+   * is in flight, the contract of the later steps once approved. Absent until `spec_draft` wrote one.
+   */
+  spec?: SpecVersion;
+  /** The returns to `spec_draft` a failed `spec_check` used on the current draft (ORC-212): the next failure blocks. */
+  specCheckReturns?: number;
+  /** The `/changes` rounds since the last approval (ORC-212): one past the preset's bound blocks. */
+  specChanges?: number;
   /** Hash of the workflow version the ticket was decided on first, read for all its later decisions (ORC-149). */
   workflowHash?: string;
 }

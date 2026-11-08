@@ -12,6 +12,7 @@ import { PRODUCT_NAME } from '../product.js';
 import { CUT_RELAUNCHES, CUT_WINDOW_MS } from '../store/types.js';
 import { isOwnMoveEcho, reduce } from './reduce.js';
 import { holds, isNoRepo, isUnrouted, repoLabel, unroutedReason } from './routing.js';
+import { CHANGES, formatSpec, REJECT, SPEC_COMMANDS, specCheck, type SpecVersion } from './spec.js';
 import { higherRisk, type EventPayloads, type EventType, type FactoryEvent, type FeedbackItem, type InputKind, type MessageKind, type PendingJob, type RunOutcome, type Taint, type TicketState, type VerifyFailure } from './types.js';
 
 type StartRun = Extract<Effect, { kind: 'start_run' }>;
@@ -133,6 +134,117 @@ function intakeEnd(out: Decision, at: { event: FactoryEvent; ticket: TicketState
 }
 
 /**
+ * The decisions `clarify` recorded on the ticket (ORC-210, `TicketState.decisions`): the spec must carry each. None
+ * before ORC-210 adds the field; read here by its shape, so that the check holds as soon as it does.
+ */
+const clarifyDecisions = (ticket: TicketState | undefined): readonly { question: string }[] => (ticket as { decisions?: readonly { question: string }[] } | undefined)?.decisions ?? [];
+
+/**
+ * The end of `spec_draft` (ORC-212), then `spec_check`. A spec that fails it goes back to the job with what is wrong,
+ * `limits.specCheckReturns` times, then the ticket is blocked. One that passes is a new version, without approval:
+ * published in the session, it waits for a validator (`spec_review`, a human gate always at the MVP).
+ */
+function specEnd(out: Decision, at: { event: FactoryEvent; ticket: TicketState | undefined; workflow: Workflow }, job: JobSpec, p: EventPayloads['run.finished']): Decision {
+  const { event, ticket, workflow } = at;
+  const spec = p.output?.spec;
+  const problems = specCheck(spec, clarifyDecisions(ticket));
+  if (!spec || problems.length) {
+    const used = ticket?.specCheckReturns ?? 0;
+    if (used < (workflow.limits.specCheckReturns ?? 0)) {
+      out.events.push({ type: 'ticket.patched', patch: { specCheckReturns: used + 1 } });
+      const failures: VerifyFailure[] = [{ command: 'spec_check', exitCode: 1, output: problems.join('\n') }];
+      startRun(out, event, ticket, job, { input: 'verify_failures', inputText: JSON.stringify(failures), resume: true });
+      return out;
+    }
+    const reason = `The spec does not pass spec_check after ${used + 1} draft(s) of ${job.name}.`;
+    return block(out, workflow, { kind: 'failed', reason, body: `${reason}\n${problems.map((x) => `- ${x}`).join('\n')}\nReply in this thread and I will draft it again.`, job: job.name, step: 'spec_check', attempts: used + 1, tried: problems });
+  }
+  const version = (ticket?.spec?.version ?? 0) + 1;
+  out.events.push({ type: 'ticket.patched', patch: { spec: { job: job.name, version, spec, at: event.at }, ...(ticket?.specCheckReturns ? { specCheckReturns: 0 } : {}) } });
+  const count = spec.criteria!.length;
+  const head = `Spec published (risk: ${ticket?.risk ?? 'not assessed'}). ${count} acceptance ${count === 1 ? 'criterion' : 'criteria'} → tests. Version ${version}, waiting for review.`;
+  const commands = "Reply `/approve` to approve this version, `/changes <comment>` to ask for a new one, or `/reject`. Approval is reserved for the validators designated by the project, never the run's initiator.";
+  out.effects.push({ kind: 'activity', type: 'response', body: [head, formatSpec(spec), commands].join('\n\n') });
+  out.trace.push(`spec_review: version ${version} published, waiting for a validator`);
+  return out;
+}
+
+/** The spec without its approval: a version changed, or about to be, is approved again. */
+const unapproved = ({ approval: _, ...spec }: SpecVersion): SpecVersion => spec;
+
+/**
+ * `/approve`, `/changes <comment>` and `/reject` (ORC-212): the spec gate, reserved for a designated validator, never
+ * the run's initiator (`validate_spec`, ORC-186), in the ticket's session, where the spec is published. Checked even
+ * without resolved roles: a gate never opens by default. Approving starts the step after the gate (`tests`); a
+ * `/changes` drafts a new version, `limits.specChanges` rounds at most before a block, and stops the work in flight
+ * when the version it changes was approved: the run starts again from the review. A `/reject` blocks on the draft.
+ */
+function specCommand(out: Decision, event: FactoryEvent<'command'>, ticket: TicketState | undefined, workflow: Workflow, matrix: AuthzMatrix): Decision {
+  const { name, body, linearSessionId, author } = event.payload;
+  const channel: Channel = !!ticket?.linearSessionId && linearSessionId === ticket.linearSessionId ? 'linear_session' : 'linear';
+  if (!authorize(out, { ...event, roles: event.roles ?? [] }, ticket, 'validate_spec', channel, matrix)) return out;
+  const answer = (text: string) => out.effects.push({ kind: 'activity', type: 'response', body: text, linearSessionId });
+  const spec = ticket?.delegated && !ticket.blocked ? ticket.spec : undefined;
+  const job = spec && workflow.jobs[spec.job];
+  // Kept as any reply (I6), the factory's own: an accepted change goes to the drafting agent apart (`specChanges`).
+  if (ticket && event.payload.kind) keepMessage(out, event, 'session');
+  if (!ticket || !spec || !job) {
+    answer('No spec waits for review on this ticket.');
+    return out;
+  }
+  const inFlight = !!(ticket.activeRunId || ticket.verifyingRunId || ticket.pendingJob);
+  if (name === CHANGES) return specChanges(out, event, ticket, workflow, { spec, job, inFlight, answer });
+  if (spec.approval) {
+    answer(`Version ${spec.version} of the spec is already approved, by ${spec.approval.author}.`);
+    return out;
+  }
+  if (inFlight) {
+    answer('A new version of the spec is being drafted: wait for it.');
+    return out;
+  }
+  if (name === REJECT) {
+    const reason = `Spec version ${spec.version} rejected by ${author}.`;
+    answer(`${reason} I stop here; reply in this thread to have it drafted again.`);
+    return block(out, workflow, { kind: 'stopped', reason, body: `${reason} ${body}`.trim(), job: job.name, step: 'spec_review', tried: [`Published version ${spec.version} of the spec.`], question: 'What should the spec say instead? Reply here and I will draft it again.' });
+  }
+  out.events.push({ type: 'ticket.patched', patch: { spec: { ...spec, approval: { author, ...(event.actor ? { authorId: event.actor } : {}), at: event.at } }, ...(ticket.specChanges ? { specChanges: 0 } : {}) } });
+  out.trace.push(`spec_review: version ${spec.version} approved by ${event.actor}`);
+  answer(`Spec version ${spec.version} approved by ${author}: its acceptance criteria become the tests.`);
+  return success(out, { event, ticket, workflow }, job, event.id);
+}
+
+/** `/changes <comment>`: the comment goes to the drafting agent through the human inbox (ORC-180), as an instruction. */
+function specChanges(out: Decision, event: FactoryEvent<'command'>, ticket: TicketState, workflow: Workflow, at: { spec: SpecVersion; job: JobSpec; inFlight: boolean; answer: (text: string) => void }): Decision {
+  const { spec, job, inFlight, answer } = at;
+  const comment = event.payload.body.trim();
+  if (!comment) {
+    answer('Say what to change: `/changes <comment>`.');
+    return out;
+  }
+  if (!spec.approval && inFlight) {
+    answer('A new version of the spec is being drafted: wait for it.');
+    return out;
+  }
+  const used = ticket.specChanges ?? 0;
+  const bound = workflow.limits.specChanges ?? 0;
+  if (used >= bound) {
+    const reason = `The spec was changed ${bound} times without approval.`;
+    return block(out, workflow, { kind: 'limit', reason, body: `${reason} Reply in this thread and I will draft it again.`, job: job.name, step: 'spec_review', attempts: bound, tried: [`${bound} rounds of /changes.`], question: 'Can the ticket be settled first? Reply here and I will draft the spec again.' });
+  }
+  out.events.push({ type: 'feedback.appended', item: { author: event.payload.author, authorId: event.actor, body: comment, at: event.at, source: 'session', taint: event.taint, kind: 'instruction' } });
+  // A change to the approved spec during the run (ORC-212): the work on it stops, and the run starts again from the review.
+  if (spec.approval && inFlight) {
+    out.events.push({ type: 'work.cancelled' });
+    out.effects.push({ kind: 'stop_run' });
+  }
+  out.events.push({ type: 'ticket.patched', patch: { specChanges: used + 1, ...(spec.approval ? { spec: unapproved(spec) } : {}) } });
+  out.trace.push(`spec_review: changes asked by ${event.actor}, round ${used + 1} of ${bound}`);
+  answer(`Noted: I am drafting version ${spec.version + 1} of the spec.`);
+  startRun(out, event, ticket, job, { input: 'feedback', resume: true });
+  return out;
+}
+
+/**
  * The `red` check found no red for the right reason (ORC-123). In measure mode the run goes on, and the decision's
  * trace says what the check would have blocked, a step outside the tests (`scope`) included: measuring never blocks.
  * In blocking mode, the job goes back with the verdict, `red.attempts` checks at most, then the ticket is blocked.
@@ -167,8 +279,11 @@ function freeze(out: Decision, ticket: TicketState | undefined, frozen: FrozenTe
   if (!frozen) return;
   const old = ticket?.frozenTests;
   // The old freeze keeps its rules (ORC-342): its harness is the one it was made with.
-  out.events.push({ type: 'ticket.patched', patch: { frozenTests: old ? { ...old, files: { ...frozen.files, ...old.files } } : frozen } });
+  out.events.push({ type: 'ticket.patched', patch: { frozenTests: { ...(old ? { ...old, files: { ...frozen.files, ...old.files } } : frozen), ...frozenCriteria(ticket) } } });
 }
+
+/** The acceptance criteria of the approved spec (ORC-212), frozen with the tests that translate them, as they are at the freeze. */
+const frozenCriteria = (ticket: TicketState | undefined) => (ticket?.spec?.approval && ticket.spec.spec.criteria?.length ? { criteria: ticket.spec.spec.criteria } : {});
 
 /** A run in the ticket's worktree goes through `factory/tests-gelés` once frozen (ORC-131), verify commands or not. */
 export function goesThroughFreeze(ticket: TicketState | undefined, job: JobSpec): boolean {
@@ -190,7 +305,7 @@ function refreeze(out: Decision, event: FactoryEvent<'command'>, ticket: TicketS
   }
   const count = Object.keys(frozen.files).length;
   out.trace.push(`refreeze by ${event.actor}: ${count} files frozen at ${frozen.sha}`);
-  out.events.push({ type: 'ticket.patched', patch: { frozenTests: frozen } });
+  out.events.push({ type: 'ticket.patched', patch: { frozenTests: { ...frozen, ...frozenCriteria(ticket) } } });
   answer(`Refrozen: ${count} files, as of commit ${frozen.sha.slice(0, 12)}. The next verification starts from this freeze.`);
   return out;
 }
@@ -330,6 +445,9 @@ function unblock(out: Decision, event: FactoryEvent, ticket: TicketState): void 
   if (ticket.cutRelaunches?.length) out.events.push({ type: 'ticket.patched', patch: { cutRelaunches: [] } });
   // And the relaunches at a usage reset (ORC-340): a human's resume is not blocked again at the first cut.
   if (ticket.usageRelaunches) out.events.push({ type: 'ticket.patched', patch: { usageRelaunches: null } });
+  // And the spec's bounds (ORC-212): the draft a reply relaunches gets its return and its rounds back.
+  if (ticket.specCheckReturns) out.events.push({ type: 'ticket.patched', patch: { specCheckReturns: 0 } });
+  if (ticket.specChanges) out.events.push({ type: 'ticket.patched', patch: { specChanges: 0 } });
 }
 
 /** The relaunches still in the window at the time of the event: never the clock, so that a replay decides the same. */
@@ -1164,6 +1282,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
     return doneMerge(out, event, state, matrix, workflow);
   }
   if (event.type === 'command' && event.payload.name === REFREEZE) return refreeze(out, event, ticket, matrix);
+  if (event.type === 'command' && SPEC_COMMANDS.includes(event.payload.name)) return specCommand(out, event, ticket, workflow, matrix);
   if (TRIGGERS.has(event.type)) {
     // The event's facts stay recorded (Linear did delegate, the session exists): only the factory's answer is refused.
     if (!authorize(out, event, ticket, 'trigger', 'linear', matrix)) return out;
@@ -1213,6 +1332,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       if (event.payload.outcome === 'success' && ticket?.blocked && job.queue === 'dev') return out;
       if (outcome === 'success') {
         if (job.step === 'intake') return intakeEnd(out, { event, ticket, workflow }, job, event.payload);
+        if (job.step === 'spec_draft') return specEnd(out, { event, ticket, workflow }, job, event.payload);
         if (job.verify.length === 0 && !job.repoChecks && !job.red && !goesThroughFreeze(ticket, job)) return success(out, { event, ticket, workflow }, job, runId, output);
         out.events.push({ type: 'verify.started', runId });
         out.effects.push({ kind: 'run_verify', runId, job: jobName, ...(output ? { output } : {}) });

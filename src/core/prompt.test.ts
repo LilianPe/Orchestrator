@@ -27,6 +27,17 @@ describe('buildPrompt', () => {
     expect(out).toContain('## Feedback to address\n- **L** : x');
   });
 
+  it('carries the approved spec as the contract, or the draft under review to rewrite (ORC-212)', () => {
+    const approved = buildPrompt({ skill: 'factory:tests', issue, spec: { version: 2, approved: true, text: '**Acceptance criteria**
+1. Given x, then y.' }, reviewRounds: 5 });
+    expect(approved).toContain('## Approved spec (version 2)
+');
+    expect(approved).toContain('**Acceptance criteria**
+1. Given x, then y.');
+    expect(buildPrompt({ skill: 'factory:spec', issue, spec: { version: 1, approved: false, text: 'draft' }, reviewRounds: 5 })).toContain('## Spec under review (version 1)
+');
+  });
+
   it('renders the PR url after the branch line', () => {
     const out = buildPrompt({ skill: 'factory:review', issue, branch: 'b', prUrl: 'https://github.com/o/r/pull/3', reviewRounds: 2 });
     expect(out).toContain('Branch: b\nPR: https://github.com/o/r/pull/3\nMax review rounds: 2');

@@ -57,6 +57,7 @@ import { buildPrompt, formatFeedback, formatVerifyFailures, readConventions, wit
 import { carriedAtLaunch, forAgent } from './human-message.js';
 import { pendingOf, reduce, samePending } from './reduce.js';
 import { advancePlan, closePlan, planStepOfJob, startPlan, type PlanStep } from './session-plan.js';
+import { formatSpec } from './spec.js';
 import { MERGE_PUSHED, upcast, upcastMergeRefusal, type MergeRefusal, type StoredEvent } from './upcast.js';
 import type { Scheduler } from './scheduler.js';
 import {
@@ -2322,6 +2323,8 @@ export class Orchestrator {
         issue: { identifier: issue.identifier, title: issue.title, description: issue.description, url: issue.url },
         branch: job.queue === 'dev' ? t.branch : undefined,
         prUrl: t.prUrl,
+        // The approved spec for the steps after its gate, the draft for the step that rewrites it (ORC-212).
+        spec: job.queue === 'dev' && t.spec && (t.spec.approval || job.step === 'spec_draft') ? { version: t.spec.version, approved: !!t.spec.approval, text: formatSpec(t.spec.spec) } : undefined,
         conventions,
         input,
         reviewRounds: wf.limits.reviewRounds,

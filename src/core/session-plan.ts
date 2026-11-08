@@ -1,6 +1,6 @@
 import type { JobSpec } from '../config/workflow-schema.js';
 
-/** The steps the MVP doc shows in the session; `Questions` and `Spec` run nothing until ORC-210 and ORC-212. */
+/** The steps the MVP doc shows in the session; `Questions` runs nothing until ORC-210. */
 const STEPS = ['Understand', 'Questions', 'Spec', 'Tests', 'Build', 'Verify', 'PR'] as const;
 export type PlanStepName = (typeof STEPS)[number];
 
@@ -38,8 +38,9 @@ export function closePlan(plan: readonly PlanStep[], hasPr: boolean): PlanStep[]
  * The step of the plan a job works on, read from its shape. None for a review or a question, nor for a run that ends
  * without handing the ticket over (a reply, a CI fix): nothing would close the step it reopened.
  */
-export function planStepOfJob(job: Pick<JobSpec, 'queue' | 'skill' | 'red' | 'onSuccess'>): PlanStepName | undefined {
+export function planStepOfJob(job: Pick<JobSpec, 'queue' | 'skill' | 'red' | 'onSuccess'> & { step?: string }): PlanStepName | undefined {
   if (job.queue !== 'dev' || job.skill?.endsWith(':review')) return undefined;
+  if (job.step === 'spec_draft') return 'Spec';
   if (job.red) return 'Tests';
   return job.onSuccess.move ? 'Build' : undefined;
 }

@@ -122,6 +122,10 @@ export interface Limits {
   /** An attempt that writes nothing for this long is stopped (ORC-136). Absent from versions frozen before it, which do not watch it. */
   silentAfterMs?: number;
   reviewRounds: number;
+  /** Returns to `spec_draft` after a failed `spec_check`, the next failure blocks (ORC-212). Absent from versions frozen before it. */
+  specCheckReturns?: number;
+  /** `/changes` rounds of the spec review, one more blocks (ORC-212). Absent from versions frozen before it. */
+  specChanges?: number;
 }
 
 export interface Rule {

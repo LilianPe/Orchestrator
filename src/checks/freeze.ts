@@ -21,6 +21,8 @@ export interface FrozenTests {
    * `package.json` part it was made with: a deploy blocks no ticket frozen before it on files it did not freeze.
    */
   rules?: number;
+  /** The acceptance criteria of the approved spec the tests were frozen with (ORC-212): the contract they hold the code to. */
+  criteria?: readonly string[];
 }
 
 /** A commit of the branch, read on the factory's repository, never in the agent's worktree (ORC-205). */

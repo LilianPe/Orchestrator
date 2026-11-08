@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { OUTPUT_LIMITS } from '../publish/output-limits.js';
 import type { Store } from '../store/types.js';
+import { formatSpec, SPEC_FRAME, specSchema } from './spec.js';
 import { RISKS, TICKET_SIZES, type RunOutcome } from './types.js';
 
 /**
@@ -60,6 +61,8 @@ export const agentOutputSchema = z
     visual_scenario: z.object({ url: z.string().min(1), steps: z.array(z.string()) }).strict().optional(),
     /** The `intake` step's assessment (ORC-206); its guard reads nothing else. */
     intake: intakeAssessmentSchema.optional(),
+    /** The `spec_draft` step's spec (ORC-212): `spec_check` judges it, the factory publishes it. */
+    spec: specSchema.optional(),
   })
   .strict()
   .superRefine((o, ctx) => {
@@ -68,6 +71,8 @@ export const agentOutputSchema = z
     // Each field under its cap can still add up past a comment's: refused here, while the agent can shorten it (ORC-214).
     const published = formatResult(o).length;
     if (published > OUTPUT_LIMITS.text) ctx.addIssue({ code: 'custom', path: ['summary'], message: `summary, why, risks, untested and review_hints together make a comment of ${published} characters, more than ${OUTPUT_LIMITS.text}: shorten them` });
+    const spec = o.spec && formatSpec(o.spec).length;
+    if (spec && spec > OUTPUT_LIMITS.text - SPEC_FRAME) ctx.addIssue({ code: 'custom', path: ['spec'], message: `the spec makes a message of ${spec} characters, more than ${OUTPUT_LIMITS.text - SPEC_FRAME}: shorten it` });
   });
 
 export type AgentOutput = z.infer<typeof agentOutputSchema>;

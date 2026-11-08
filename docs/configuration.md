@@ -113,7 +113,7 @@ The daemon exchanges an RS256 JWT for an **installation token limited to the req
 | Key | Type | Default | Effect |
 |---|---|---|---|
 | `authz.maintainers` | list of Linear ids | `[]` | Designated maintainers: only they will be able to `/refreeze` (wired by ORC-131). |
-| `authz.validators` | list of Linear ids | `[]` | Designated validators: only they will be able to validate a spec, never one from a run they launched (wired by ORC-212). |
+| `authz.validators` | list of Linear ids | `[]` | Designated validators: only they will be able to validate a spec, never one from a run they launched: `/approve`, `/changes`, `/reject` of the spec gate (ORC-212). |
 | `authz.githubLogins` | map Linear id → GitHub login | `{}` | The GitHub login of each Linear user whose permissions on the repository matter. Without an entry, a user has no GitHub permissions, and therefore cannot trigger the agent nor (with ORC-148) merge through *Done*. |
 
 Linear team members and GitHub permissions are not configured: they are read (Linear, then the GitHub App or `gh`) and read again every 60 s. The App only needs read access to *Metadata* to read a user's permission.

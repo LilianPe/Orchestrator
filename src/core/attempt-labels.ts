@@ -91,6 +91,7 @@ export function promptTemplate(p: PromptInput): string {
     branch: p.branch && '<BRANCHE>',
     prUrl: p.prUrl && '<PR>',
     promptContext: p.promptContext && '<CONTEXTE>',
+    spec: p.spec && { ...p.spec, text: '<SPEC>' },
     conventions: p.conventions && '<CONVENTIONS>',
     input: p.input && { kind: p.input.kind, text: '<ENTREE>' },
   });
