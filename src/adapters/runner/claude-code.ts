@@ -112,6 +112,13 @@ export function estimateCostUsd(model: string | undefined, t: TokenUsage): numbe
   return (t.input * p.input + t.cacheCreation * p.input * 1.25 + t.cacheRead * p.cacheRead + t.output * p.output) / 1_000_000;
 }
 
+const maxTokens = (a: TokenUsage, b: TokenUsage): TokenUsage => ({
+  input: Math.max(a.input, b.input),
+  output: Math.max(a.output, b.output),
+  cacheRead: Math.max(a.cacheRead, b.cacheRead),
+  cacheCreation: Math.max(a.cacheCreation, b.cacheCreation),
+});
+
 /** The CLI's result when the subscription's limit stops it, its reset in epoch seconds after the bar. Anchored: no other error text that names a limit. */
 const USAGE_LIMIT_RESULT = /^Claude AI usage limit reached\|(\d{9,})$/;
 
@@ -371,11 +378,13 @@ export class ClaudeCodeRunner implements Runner {
       try {
         const line = maskTranscriptLine(unmasked, a.secrets);
         transcript.write(line + '\n');
-        const raw = JSON.parse(line) as Parameters<typeof usageLimitOf>[0] & { subtype?: string; model?: unknown; message?: { id?: unknown; usage?: unknown } };
+        const raw = JSON.parse(line) as Parameters<typeof usageLimitOf>[0] & { subtype?: string; model?: unknown; message?: { id?: unknown; usage?: unknown; model?: unknown } };
         // The model the CLI runs, as its init line says: what prices a cut run, whatever the request named (or did not).
         if (raw?.type === 'system' && raw.subtype === 'init' && typeof raw.model === 'string') model = raw.model;
-        // A model message after a rejected rate limit event: the stream went on, the limit did not stop it.
-        usageLimit = usageLimitOf(raw) ?? (raw?.type === 'assistant' ? undefined : usageLimit);
+        // A real model turn after a rejected rate limit event: the stream went on, the limit did not stop it. The CLI's own
+        // message (model `<synthetic>`, the text of the error) is no turn.
+        const modelTurn = raw?.type === 'assistant' && raw.message?.model !== '<synthetic>';
+        usageLimit = usageLimitOf(raw) ?? (modelTurn ? undefined : usageLimit);
         if (raw?.type === 'assistant') {
           const id = typeof raw.message?.id === 'string' ? raw.message.id : undefined;
           if (id === undefined || !turnIds.has(id)) {
@@ -451,7 +460,10 @@ export class ClaudeCodeRunner implements Runner {
         // It becomes the run's lastText, stored and posted to Linear: the stream's text is masked
         // already, stderr and a spawn error are masked here.
         const text = result?.text || lastText || maskTranscriptLine(spawnError ? spawnError.message : stderr.trim().slice(-2000), a.secrets);
-        const tokens = result?.tokens ?? (usage.size ? totalUsage() : undefined);
+        // The larger of what the result line reports and what streamed, per field: a result that reports less than the work
+        // done (none at all, after real turns) must not price it at $0, nor spare the ticket's budget (ORC-340).
+        const streamed = usage.size ? totalUsage() : undefined;
+        const tokens = result?.tokens && streamed ? maxTokens(result.tokens, streamed) : (result?.tokens ?? streamed);
         // Cut before its result line (capped, stopped, killed): what it consumed is priced, never $0 (ORC-340).
         const costUsd = result?.costUsd || (tokens ? estimateCostUsd(model, tokens) : 0);
         // Told only of a run that did not succeed: what to do of it is the factory's (`on_usage_limit`), `infra` stays as without it.

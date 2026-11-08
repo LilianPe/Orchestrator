@@ -1178,7 +1178,8 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
           return out;
         }
         out.events.push({ type: 'ticket.patched', patch: { usageWait: null } });
-        startRun(out, event, ticket, job, { resume: true });
+        // As a relaunch after a cut (`attemptLost`): the step reads again what the cut run read, in the session of its role.
+        startRun(out, event, ticket, job, { relaunchOf: wait.runId });
         return out;
       }
       if (fired.kind !== 'debounce') {

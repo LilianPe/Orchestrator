@@ -50,8 +50,9 @@ function setup(
   const scheduler = new Scheduler(store, { dev: 3, questions: 2 });
   let n = 0;
   const bus = new EventBus();
+  const clock = new FakeClock(1_000);
   const orch = new Orchestrator({
-    store, clock: new FakeClock(1_000), bus, scheduler,
+    store, clock, bus, scheduler,
     tracker, forge: new FakeForge(), runner, workspaces: o.workspaces ?? new FakeWorkspaces(), verify: o.verify ?? (async () => ({ ok: true, failures: [] })), hostChecks: true, dailyBudgetUsd: o.budget,
     projects: [{ id: 'p', repoPath: '/repo', teamKey: 'REL', workflow }], packDir, settingsPath: o.settingsPath,
     agentEnv: (r) => ({ FACTORY_RUN_TOKEN: r.token }), newId: () => `id-${++n}`, activityIntervalMs: 0, holdInboxUntilReplay: o.hold, factoryCommit: 'cafe42',
@@ -61,7 +62,7 @@ function setup(
     ...(o.perTicketTokens ? { perTicketTokens: o.perTicketTokens } : {}),
     ...(o.onUsageLimit ? { onUsageLimit: o.onUsageLimit } : {}),
   });
-  return { store, tracker, runner: fakeRunner, orch, scheduler, bus };
+  return { store, tracker, runner: fakeRunner, orch, scheduler, bus, clock };
 }
 
 const mentioned = (ticketId: string): FactoryEvent => ({
@@ -411,6 +412,64 @@ describe('Orchestrator', () => {
       await orch.drained();
       expect((await store.getTicket('p', 'REL-1'))!.blocked).toBe(false);
       expect(await store.dueTimers(Number.MAX_SAFE_INTEGER)).toMatchObject([{ key: 'REL-1:usage.reset', kind: 'usage.reset', payload: { job: 'dev' }, fireAt: 50_000 }]);
+    });
+
+    it('without a cap, a launch reads no run of the ticket', async () => {
+      const { store, tracker, runner, orch } = setup();
+      tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+      const read = vi.spyOn(store, 'ticketRuns');
+      await orch.accept(delegated());
+      await orch.drained();
+      expect(runner.requests).toHaveLength(1);
+      expect(runner.requests[0]!.limits.tokens).toBeUndefined();
+      expect(read).not.toHaveBeenCalled();
+    });
+
+    /** REL-1 delegated, its first run cut by the usage limit until 50 000. */
+    async function cutByTheLimit() {
+      const s = setup({ onUsageLimit: 'wait' });
+      s.tracker.addIssue({ identifier: 'REL-1', title: 'A' });
+      s.tracker.addIssue({ identifier: 'REL-2', title: 'B' });
+      s.runner.enqueue({ outcome: 'failure', usageLimit: { resetAt: 50_000 } });
+      await s.orch.accept(delegated());
+      await s.orch.drained();
+      const reset = (): FactoryEvent => ({ ...TRUSTED, id: 'timer:REL-1:usage.reset:50000', type: 'timer.fired', at: 50_000, projectId: 'p', ticketId: 'REL-1', payload: { kind: 'usage.reset', payload: { job: 'dev', runId: s.runner.requests[0]!.runId } } });
+      return { ...s, reset };
+    }
+
+    it('the limit is the account: no launch of any ticket until the reset, then the cut step first, as a relaunch of what it read', async () => {
+      const { store, runner, orch, clock, reset } = await cutByTheLimit();
+      const cut = runner.requests[0]!;
+      await orch.accept({ ...TRUSTED, id: 'e2', type: 'ticket.delegated', at: 2_000, projectId: 'p', ticketId: 'REL-2', payload: { linearSessionId: 'ls-2' } });
+      await orch.drained();
+      await orch.tick();
+      expect(runner.requests).toHaveLength(1);
+      expect((await store.listQueue()).map((q) => q.ticketId)).toEqual(['REL-2']);
+      clock.set(50_000);
+      await orch.accept(reset());
+      await orch.drained();
+      await orch.tick();
+      await orch.drained();
+      const relaunch = runner.requests[1]!;
+      expect(await store.getRun(relaunch.runId)).toMatchObject({ ticketId: 'REL-1', job: 'dev' });
+      // The implementer's session, taken up: a relaunch of the cut run, not a step from scratch.
+      expect(relaunch).toMatchObject({ claudeSessionId: cut.claudeSessionId, resume: true });
+      expect((await store.getRun(runner.requests[2]!.runId))!.ticketId).toBe('REL-2');
+    });
+
+    it("holds the ticket's next steps behind the cut one: they wait for it, never start in its place", async () => {
+      const { store, runner, orch, clock, reset } = await cutByTheLimit();
+      await store.putTicket({ ...(await store.getTicket('p', 'REL-1'))!, pendingJob: { job: 'dev-feedback' } });
+      clock.set(50_000);
+      // A result settles the ticket: settle would start the pending job, which waits behind the cut step.
+      await orch.accept({ ...TRUSTED, id: 'v1', type: 'verify.passed', at: 50_000, projectId: 'p', ticketId: 'REL-1', payload: { runId: 'old', job: 'dev' } });
+      await orch.drained();
+      expect(runner.requests).toHaveLength(1);
+      expect((await store.getTicket('p', 'REL-1'))!.pendingJob).toMatchObject({ job: 'dev-feedback' });
+      await orch.accept(reset());
+      await orch.drained();
+      // The cut step again, then, once it ended, the step that waited behind it.
+      expect(runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:dev', '/factory:dev', '/factory:feedback']);
     });
 
     it('without on_usage_limit, the same run blocks the ticket as any failure', async () => {

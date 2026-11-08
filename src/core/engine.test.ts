@@ -827,13 +827,20 @@ describe('decide — built-ins', () => {
       return out.events.reduce<TicketState>((t, e) => reduce(t, e)!, reduce(before, limited())!);
     };
 
-    it('a cut run arms its reset, without a block or an attempt; the reset resumes its step on the session', () => {
+    it('a cut review resumes as a relaunch too, never in the implementer session it does not run', () => {
+      const before = ticket({ logical: 'ai_review', activeRunId: 'r1', activeJob: 'review' });
+      const cut = limited({ job: 'review' });
+      const t = decide(before, cut, workflow).events.reduce<TicketState>((s, e) => reduce(s, e)!, reduce(before, cut)!);
+      expect(decide(t, ev('timer.fired', { kind: 'usage.reset', payload: { job: 'review', runId: 'r1' } }), workflow).effects).toEqual([{ kind: 'start_run', job: 'review', relaunchOf: 'r1' }]);
+    });
+
+    it('a cut run arms its reset, without a block or an attempt; the reset relaunches its step from what it read', () => {
       const out = decide(ticket({ logical: 'dev', activeRunId: 'r1' }), limited(), workflow);
       expect(out.effects).toEqual([]);
       expect(out.events).toEqual([{ type: 'ticket.patched', patch: { usageWait: { runId: 'r1', job: 'dev', logical: 'dev' } } }]);
       expect(out.timers).toEqual([{ kind: 'usage.reset', slot: 'usage.reset', ms: 60_000, payload: { job: 'dev', runId: 'r1' } }]);
       const resumed = decide(waiting(), reset, workflow);
-      expect(resumed.effects).toEqual([{ kind: 'start_run', job: 'dev', resume: true }]);
+      expect(resumed.effects).toEqual([{ kind: 'start_run', job: 'dev', relaunchOf: 'r1' }]);
       expect(resumed.events).toEqual([{ type: 'ticket.patched', patch: { usageWait: null } }]);
     });
 

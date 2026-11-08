@@ -427,6 +427,17 @@ describe('ClaudeCodeRunner: caps and stagnation of the build (ORC-136)', () => {
     expect(estimateCostUsd('some-new-model', t)).toBeCloseTo(10 + 50 + 0.25 + 12.5);
   });
 
+  it('a result line that reports less than what streamed takes the larger, per field: real work is never $0 nor off the budget', async () => {
+    const { r } = runner();
+    const streamed = assistant('m1', { input_tokens: 1_000_000, output_tokens: 0 });
+    const zero = JSON.stringify({ type: 'result', subtype: 'success', is_error: false, total_cost_usd: 0, num_turns: 1, result: 'ok', usage: { input_tokens: 0, output_tokens: 5 } });
+    expect(await r.start(req({ model: 'claude-sonnet-5-5' }, { FAKE_CLAUDE_SCRIPT: script(streamed, zero) })).done).toMatchObject({
+      outcome: 'success',
+      tokens: { input: 1_000_000, output: 5 },
+      costUsd: 2.00005,
+    });
+  });
+
   it('prices a cut run on the model the init line reports, whatever the request named', async () => {
     const { r } = runner();
     const init = JSON.stringify({ type: 'system', subtype: 'init', session_id: 's', model: 'claude-opus-5-5' });
@@ -456,6 +467,12 @@ describe('ClaudeCodeRunner: caps and stagnation of the build (ORC-136)', () => {
       expect(await r.start(req({}, { FAKE_CLAUDE_SCRIPT: script(limitEvent, assistant('m1'), resultOf('Done.')) })).done).not.toHaveProperty('usageLimit');
       expect(await r.start(req({}, { FAKE_CLAUDE_SCRIPT: script(assistant('m1'), limitEvent, resultOf('Done.', false)) })).done).toMatchObject({ outcome: 'success' });
       expect(await r.start(req({}, { FAKE_CLAUDE_SCRIPT: script(assistant('m1'), limitEvent, resultOf('Done.', false)) })).done).not.toHaveProperty('usageLimit');
+    });
+
+    it("the CLI's own message after the event (model <synthetic>) is no model turn: the limit stands", async () => {
+      const { r } = runner();
+      const synthetic = JSON.stringify({ type: 'assistant', message: { id: 'm-syn', model: '<synthetic>', content: [{ type: 'text', text: 'Claude AI usage limit reached|1900000000' }] } });
+      expect(await r.start(req({}, { FAKE_CLAUDE_SCRIPT: script(assistant('m1'), limitEvent, synthetic, resultOf('Claude AI usage limit reached|1900000000')) })).done).toMatchObject({ usageLimit: { resetAt: 1_900_000_000_000 } });
     });
 
     it('leaves infra as it is: what to make of the limit is the factory configuration', async () => {
