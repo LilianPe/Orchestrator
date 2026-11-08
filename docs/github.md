@@ -165,7 +165,7 @@ Each ticket works on `relais/<ticket>-<title-slug>` (e.g. `relais/rel-12-export-
 
 ## Branch protection (strongly recommended)
 
-The pack forbids agents from `gh pr merge` and any push ([`pack-and-skills.md`](pack-and-skills.md#permissions)), but these refusals are a **first barrier**: they depend on Claude Code, and an agent that runs code can bypass them. It is GitHub that guarantees only humans merge. On the default branch of each repository:
+The pack forbids agents from `gh pr merge` and any push ([`pack-and-skills.md`](pack-and-skills.md#permissions)), but these refusals are a **guard against mistakes, not a barrier**: they depend on Claude Code and on how the command is written, and an agent that runs code can bypass them. A push fails for want of means: no token in a sandbox, and on the host a git config that sends every push nowhere, which an agent under the daemon's user can still undo (ORC-349, [`interface-and-security.md`](interface-and-security.md#known-limitations)). It is GitHub that guarantees only humans merge. On the default branch of each repository:
 
 - **Require a pull request before merging** (with at least one approval if your team reviews);
 - **Block force pushes** and forbid deletion;

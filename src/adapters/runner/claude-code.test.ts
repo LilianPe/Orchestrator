@@ -7,7 +7,7 @@ import { describeAgentRuntimeContract, drain, type AgentScript } from '../../../
 import { ContainerSandboxProvider } from '../sandbox/docker-rootless.js';
 import { FakeSandboxProvider } from '../sandbox/fake.js';
 import type { SandboxProvider } from '../sandbox/types.js';
-import { buildClaudeArgs, childEnv, ClaudeCodeRunner, estimateCostUsd, liveDir, SANDBOX_CLAUDE_TOKEN, worktreeReader } from './claude-code.js';
+import { buildClaudeArgs, childEnv, ClaudeCodeRunner, estimateCostUsd, liveDir, NO_PUSH, SANDBOX_CLAUDE_TOKEN, worktreeReader } from './claude-code.js';
 import type { RunRequest } from './types.js';
 
 const fx = (n: string) => join(import.meta.dirname, 'fixtures', n);
@@ -699,24 +699,57 @@ describe('childEnv: a run on the host (ORC-211)', () => {
       HOME: '/h', PATH: '/app/bin:/bin', LANG: 'fr_FR.UTF-8', LC_ALL: 'C', TMPDIR: '/t', GIT_AUTHOR_NAME: 'n',
       CLAUDE_CODE_OAUTH_TOKEN: 'c',
       FACTORY_API: 'http://127.0.0.1:4100/agent', FACTORY_RUN_TOKEN: 't', FACTORY_TICKET: 'REL-1', FACTORY_KNOWLEDGE: '', FACTORY_ROOT: '/app',
+      ...NO_PUSH,
     });
   });
 
   it('gives no run on the host a GitHub token (ORC-125), and keeps ANTHROPIC_API_KEY until the host runs go (ORC-179)', () => {
-    expect(childEnv({ GH_TOKEN: 'g', GH_HOST: 'h', ANTHROPIC_API_KEY: 'k', SSH_AUTH_SOCK: '/s' }, {})).toEqual({ ANTHROPIC_API_KEY: 'k', SSH_AUTH_SOCK: '/s' });
+    expect(childEnv({ GH_TOKEN: 'g', GH_HOST: 'h', ANTHROPIC_API_KEY: 'k', SSH_AUTH_SOCK: '/s' }, {})).toEqual({ ANTHROPIC_API_KEY: 'k', SSH_AUTH_SOCK: '/s', ...NO_PUSH });
   });
 
   it('the chosen account replaces any other login of the daemon', () => {
-    expect(childEnv({ HOME: '/h', ANTHROPIC_API_KEY: 'k', CLAUDE_CODE_OAUTH_TOKEN: 'old' }, {}, 'chosen')).toEqual({ HOME: '/h', CLAUDE_CODE_OAUTH_TOKEN: 'chosen' });
+    expect(childEnv({ HOME: '/h', ANTHROPIC_API_KEY: 'k', CLAUDE_CODE_OAUTH_TOKEN: 'old' }, {}, 'chosen')).toEqual({ HOME: '/h', CLAUDE_CODE_OAUTH_TOKEN: 'chosen', ...NO_PUSH });
   });
 
   it('without a chosen account, a host run keeps both logins of the daemon, as before ORC-337', () => {
     // The daemon's CLAUDE_CODE_OAUTH_TOKEN goes to the proxy for the sandboxes (`sandboxClaudeToken`), never as a chosen account here.
-    expect(childEnv({ HOME: '/h', ANTHROPIC_API_KEY: 'k', CLAUDE_CODE_OAUTH_TOKEN: 'old' }, {})).toEqual({ HOME: '/h', ANTHROPIC_API_KEY: 'k', CLAUDE_CODE_OAUTH_TOKEN: 'old' });
+    expect(childEnv({ HOME: '/h', ANTHROPIC_API_KEY: 'k', CLAUDE_CODE_OAUTH_TOKEN: 'old' }, {})).toEqual({ HOME: '/h', ANTHROPIC_API_KEY: 'k', CLAUDE_CODE_OAUTH_TOKEN: 'old', ...NO_PUSH });
   });
 
   it('drops variables left over from the old prefix', () => {
     const env = childEnv({ HOME: '/h', RELAIS_UI_PASSWORD: 'pw', RELAIS_HOME: '/old' }, {}); // transition, à retirer (ORC-167)
-    expect(env).toEqual({ HOME: '/h' });
+    expect(env).toEqual({ HOME: '/h', ...NO_PUSH });
+  });
+
+  describe('a push from the host fails by its git config, however the command is written (ORC-349)', () => {
+    const git = (cwd: string, args: string[], env: NodeJS.ProcessEnv = process.env) => spawnSync('git', args, { cwd, env, encoding: 'utf8' });
+    const repos = () => {
+      const dir = mkdtempSync(join(tmpdir(), 'factory-nopush-'));
+      const id = { ...process.env, GIT_AUTHOR_NAME: 'a', GIT_AUTHOR_EMAIL: 'a@x', GIT_COMMITTER_NAME: 'a', GIT_COMMITTER_EMAIL: 'a@x', GIT_CONFIG_GLOBAL: '/dev/null' };
+      git(dir, ['init', '-q', '--bare', 'origin.git'], id);
+      git(dir, ['clone', '-q', 'origin.git', 'w'], id);
+      const work = join(dir, 'w');
+      git(work, ['commit', '-q', '--allow-empty', '-m', 'agent'], id);
+      return { origin: join(dir, 'origin.git'), work };
+    };
+    // What the parsing hook misses: a name in a variable, a substitution, an alias, a URL of its own.
+    const disguised = (origin: string) => [
+      'git push origin HEAD:refs/heads/a',
+      'g=git; $g push origin HEAD:refs/heads/b',
+      'git $(printf push) origin HEAD:refs/heads/c',
+      'git -c alias.ship=push ship origin HEAD:refs/heads/d',
+      `git push file://${origin} HEAD:refs/heads/e`,
+      `git push ${origin} HEAD:refs/heads/f`,
+    ];
+
+    it.skipIf(process.platform === 'win32')('fails every push to every remote, and leaves the fetch alone', () => {
+      const { origin, work } = repos();
+      const env = { ...childEnv(process.env, {}), GIT_CONFIG_GLOBAL: '/dev/null' };
+      for (const command of disguised(origin)) expect(spawnSync('bash', ['-c', command], { cwd: work, env, encoding: 'utf8' }).status, command).not.toBe(0);
+      expect(git(origin, ['for-each-ref'], env).stdout).toBe('');
+      expect(git(work, ['fetch', '-q', 'origin'], env).status).toBe(0);
+      // The control: the same push without the run's config reaches the remote.
+      expect(git(work, ['push', '-q', 'origin', 'HEAD:refs/heads/control'], { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null' }).status).toBe(0);
+    });
   });
 });
