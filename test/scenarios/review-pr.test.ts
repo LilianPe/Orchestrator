@@ -105,6 +105,19 @@ describe('a review without network', () => {
     expect(refs.calls.length - before).toBe(1);
   });
 
+  it("answers factory-agent pr from the workflow version the ticket is frozen on, not the current one", async () => {
+    const refs = prRefs([{ head: 'a'.repeat(40), base: 'b'.repeat(40) }]);
+    const h = createHarness({ sandboxed: true, prRefs: refs.bring });
+    h.runner.enqueue({}, { hold: true });
+    await toReview(h);
+    const run = (await h.store.getRun(reviewRun(h).runId))!;
+    // A deploy changes the workflow while the review runs: the ticket keeps the version it started on.
+    const { review, ...jobs } = h.project.workflow.jobs;
+    const { prState: _p, ...without } = review!;
+    h.project.workflow = { ...h.project.workflow, jobs: { ...jobs, review: without } };
+    expect(await h.orch.agentPrState(run)).toMatchObject({ state: 'OPEN', head: 'a'.repeat(40) });
+  });
+
   it('gives a dev run no PR section', async () => {
     const h = createHarness({ sandboxed: true, prRefs: prRefs([{ head: 'a'.repeat(40), base: 'b'.repeat(40) }]).bring });
     await toReview(h);

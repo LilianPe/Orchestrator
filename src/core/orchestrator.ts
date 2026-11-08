@@ -936,7 +936,8 @@ export class Orchestrator {
     const inFlight = this.prReads.get(run.id);
     if (inFlight) return inFlight;
     const read = (async () => {
-      const project = this.d.projects.find((p) => p.id === run.projectId);
+      // The version the ticket is frozen on, as its launch read it: a review started before ORC-322 has no PR to read.
+      const project = await this.runtimeFor(run.projectId, run.ticketId);
       if (!project?.workflow.jobs[run.job]?.prState) return undefined;
       const sandbox = this.d.sandboxes && (await this.d.sandboxes.findByAttempt(run.id));
       if (this.d.sandboxes && !sandbox) return undefined;
