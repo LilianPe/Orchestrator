@@ -65,7 +65,7 @@ describe('OutputPolicy (ORC-214)', () => {
     it('the text published is the text scanned, and a secret withholds it whole', async () => {
       const scanned: string[] = [];
       const policy = scanning((t) => (scanned.push(t), t.includes(SECRET) ? ['github-pat'] : []));
-      const body = await policy.comment(composeResult(output({ summary: `Export added, token ${SECRET} left in the config.` }), 'summary'));
+      const body = await policy.comment(composeResult(output({ risks: [`token ${SECRET} left in the config`] }), 'summary'));
       expect(scanned).toHaveLength(1);
       expect(scanned[0]).toContain(SECRET);
       expect(body).not.toContain(SECRET);
@@ -138,9 +138,9 @@ describe('OutputPolicy (ORC-214)', () => {
   });
 
   describe("criterion 4: a published comment is composed from the structured output, not copied from the agent's text", () => {
-    it('the end of a build: its recap, in the factory’s order and words (ORC-195); its risks and hints are the PR description’s', () => {
-      const body = composeResult(output({ summary: 'Export added.', risks: ['large files'], tests_added: ['src/a.test.ts'] }), 'summary', [{ turns: 3, tokens: null, durationMs: 61_000 }]);
-      expect(body).toBe('Export added.\n\n**Tests added**\n- `src/a.test.ts`\n\n**Work**: 1 attempt, 3 turns, tokens not reported, 1 min 1 s.');
+    it('the end of a build: its fields, then the tests added and the work of the recap (ORC-195), in the factory’s order and words', () => {
+      const body = composeResult(output({ summary: 'Export added.', risks: ['large files'], review_hints: [{ file: 'src/a.ts', reason: 'the parser' }], tests_added: ['src/a.test.ts'] }), 'summary', [{ turns: 3, tokens: null, durationMs: 61_000 }]);
+      expect(body).toBe('Export added.\n\n**Risks**\n- large files\n\n**To review**\n- `src/a.ts`: the parser\n\n**Tests added**\n- `src/a.test.ts`\n\n**Work**: 1 attempt, 3 turns, tokens not reported, 1 min 1 s.');
     });
 
     it('a reply is its summary, and a run that returned no result has nothing of its last message posted', () => {

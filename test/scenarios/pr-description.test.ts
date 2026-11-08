@@ -71,7 +71,7 @@ describe('the PR description and the recap on the chain (ORC-195)', () => {
     expect((await h.ticket()).blocked).toBe(false);
   });
 
-  it('criterion 5: at the move to Human Review, the recap: the summary, the tests added, the turns, the tokens and the duration', async () => {
+  it('criterion 5: at the move to Human Review, the recap: the end of the build as ORC-289 posts it, the tests added, the turns, the tokens and the duration', async () => {
     const h = harness();
     h.runner.enqueue({ hold: true, events: [{ kind: 'text', text: 'RAW_LAST_TEXT' }], output: result, turns: 27, tokens: { input: 1_200, output: 3_400, cacheRead: 90_000, cacheCreation: 400 } });
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
@@ -83,7 +83,7 @@ describe('the PR description and the recap on the chain (ORC-195)', () => {
     expect(h.forge.readied).toHaveLength(1);
     expect(responses(h).at(-1)).toEqual({
       type: 'response',
-      body: 'An Export button on the list of audits writes a CSV.\n\n**Tests added**\n- `src/export.test.ts`\n- `src/list.test.ts`\n\n**Work**: 1 attempt, 27 turns, 5,000 tokens (cache reads apart), 45 s.',
+      body: 'An Export button on the list of audits writes a CSV.\n\n**Why**: Auditors copy the list by hand.\n\n**Risks**\n- large lists are slow\n\n**Untested**\n- Safari download\n\n**To review**\n- `src/export.ts`: the quoting\n\n**Tests added**\n- `src/export.test.ts`\n- `src/list.test.ts`\n\n**Work**: 1 attempt, 27 turns, 5,000 tokens (cache reads apart), 45 s.',
     });
     expect(JSON.stringify(h.tracker.calls)).not.toContain('RAW_LAST_TEXT');
   });

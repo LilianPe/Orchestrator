@@ -81,7 +81,7 @@ export function parseAgentOutput(raw: unknown): { ok: true; output: AgentOutput 
 function publishedSizeIssues(o: AgentOutput): string[] {
   const issues: string[] = [];
   const recap = formatRecap(o, []).length;
-  if (recap > OUTPUT_LIMITS.text) issues.push(`summary: summary and tests_added together make a recap of ${recap} characters, more than ${OUTPUT_LIMITS.text}: shorten them`);
+  if (recap > OUTPUT_LIMITS.text) issues.push(`summary: summary, why, risks, untested, review_hints and tests_added together make a recap of ${recap} characters, more than ${OUTPUT_LIMITS.text}: shorten them`);
   const pr = describePr(o, { ticketId: '', title: '', sha: '' }).body.length;
   const room = OUTPUT_LIMITS.text - FACTS_ROOM;
   if (pr > room) issues.push(`summary: the fields together make a PR description of ${pr} characters, more than ${room}: shorten them`);

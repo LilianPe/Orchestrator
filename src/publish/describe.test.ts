@@ -156,6 +156,20 @@ describe('formatRecap (ORC-195)', () => {
     );
   });
 
+  it('keeps the end of a build as ORC-289 posts it: why, risks, untested and what to review when stated, before the tests and the work', () => {
+    expect(formatRecap(full, [run()])).toBe(
+      [
+        'An Export button on the list of audits writes a CSV.',
+        '**Why**: Auditors copy the list by hand.',
+        '**Risks**\n- large lists are slow',
+        '**Untested**\n- Safari download',
+        '**To review**\n- `src/export.ts`: the quoting',
+        '**Tests added**\n- `src/export.test.ts`',
+        '**Work**: 1 attempt, 10 turns, 3,500 tokens (cache reads apart), 5 min 0 s.',
+      ].join('\n\n'),
+    );
+  });
+
   it('says what it does not know rather than a zero: no test stated, attempts without a usage report, a duration unmeasured', () => {
     expect(formatRecap(output(), [run({ tokens: null, durationMs: null })])).toBe('Audits export to CSV from their list.\n\n**Tests added**\n_None stated._\n\n**Work**: 1 attempt, 10 turns, tokens not reported, duration not measured.');
     expect(formatRecap(output(), [run(), run({ tokens: null, durationMs: 45_000 })])).toMatch(/3,500 tokens \(cache reads apart; 1 attempt reported none\), 5 min 45 s\.$/);

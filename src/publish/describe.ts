@@ -49,8 +49,11 @@ const prose = (s: string): string =>
     .replace(/^(\s{0,3})(#|=+\s*$|-+\s*$|`{3}|~{3})/gm, '$1\\$2');
 /** An agent's list entry, on its one line: a line break would let it open a heading or an entry of its own. */
 const entry = (s: string): string => prose(s.replace(/\s*[\r\n]+\s*/g, ' ').trim());
-/** A capture's URL in a Markdown link: what would end the link or break it, percent-encoded. */
-const linkUrl = (url: string): string => url.replace(/[\s()<>[\]]/g, (c) => encodeURIComponent(c));
+/**
+ * A capture's URL in a Markdown link: what would end the link or break it, percent-encoded. `encodeURIComponent` leaves `(` and
+ * `)` as they are, and a `)` ends the link: those two by hand.
+ */
+const linkUrl = (url: string): string => url.replace(/[\s()<>[\]]/g, (c) => (c === '(' ? '%28' : c === ')' ? '%29' : encodeURIComponent(c)));
 /**
  * What the factory's own facts may add to a description past the agent's fields: the ticket's id, the commands `verify` ran, the
  * captures. `submit_result` keeps the agent's part under the cap of a PR body by this much (`publishedSizeIssues`).
@@ -127,12 +130,14 @@ function duration(ms: number): string {
 }
 
 /**
- * The recap posted as the ticket goes to Human Review and its PR out of draft (ORC-195): the summary, the tests added, and the
- * work of every attempt of the ticket (intake, tests and questions too), each measured as the dashboard measures it (`runMeasure`):
- * turns, tokens, duration (tokens, where Relais counted dollars). Tokens are what a token cap counts (`spentTokens`), cache reads
- * apart. What is not known is said, never shown as a zero.
+ * The recap posted as the ticket goes to Human Review and its PR out of draft (ORC-195): the end of a build as ORC-289 posts it
+ * (the summary, then why, risks, untested and what to review when stated), the tests added, and the work of every attempt of the
+ * ticket (intake, tests and questions too), each measured as the dashboard measures it (`runMeasure`): turns, tokens, duration
+ * (tokens, where the factory once counted dollars). Tokens are what a token cap counts (`spentTokens`), cache reads apart. What is
+ * not known is said, never shown as a zero.
  */
-export function formatRecap(o: Pick<AgentOutput, 'summary' | 'tests_added'>, runs: readonly RecapRun[]): string {
+export function formatRecap(o: Pick<AgentOutput, 'summary' | 'why' | 'risks' | 'untested' | 'review_hints' | 'tests_added'>, runs: readonly RecapRun[]): string {
+  const section = (title: string, items: readonly string[]) => (items.length ? [`**${title}**\n${bullets(items)}`] : []);
   /** The sum of what is known of the attempts, and how many are unknown. */
   const known = (pick: (r: RecapRun) => number | null) => {
     const values = runs.map(pick).filter((v): v is number => v !== null);
@@ -144,5 +149,13 @@ export function formatRecap(o: Pick<AgentOutput, 'summary' | 'tests_added'>, run
   const tokenText = tokens.any ? `${count(tokens.sum, 'token')} (${['cache reads apart', unknown(tokens.missing, 'reported none')].filter(Boolean).join('; ')})` : 'tokens not reported';
   const tookText = took.any ? `${duration(took.sum)}${took.missing ? ` (${unknown(took.missing, 'not measured')})` : ''}` : 'duration not measured';
   const turns = runs.reduce((sum, r) => sum + r.turns, 0);
-  return [prose(o.summary), `**Tests added**\n${testsList(o)}`, `**Work**: ${count(runs.length, 'attempt')}, ${count(turns, 'turn')}, ${tokenText}, ${tookText}.`].join('\n\n');
+  return [
+    prose(o.summary),
+    ...(o.why.trim() ? [`**Why**: ${entry(o.why)}`] : []),
+    ...section('Risks', o.risks.map(entry)),
+    ...section('Untested', o.untested.map(entry)),
+    ...section('To review', o.review_hints.map((h) => `${mdCode(entry(h.file))}: ${entry(h.reason)}`)),
+    `**Tests added**\n${testsList(o)}`,
+    `**Work**: ${count(runs.length, 'attempt')}, ${count(turns, 'turn')}, ${tokenText}, ${tookText}.`,
+  ].join('\n\n');
 }
