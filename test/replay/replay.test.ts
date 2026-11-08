@@ -262,6 +262,16 @@ describe('recorded journals (test/replay/journals)', () => {
     expect(files.filter((f) => f.endsWith('.pre-orc-310.json')).sort()).toEqual(expected.sort());
   });
 
+  // Nothing else reads most of the frozen copies by name: a deleted one would take its coverage away silently.
+  it('keeps the frozen copies of the pre-ORC-196 journals main held (ORC-310)', () => {
+    // The journals main held then, not today's SCENARIOS: a scenario added later has no copy to keep.
+    const expected = [
+      'build-loop-blocked', 'crash-loop-bound', 'dead-letter-then-repair',
+      'publish-refused-then-published', 'red-ci-then-stop',
+    ].map((name) => `${name}.pre-orc-196.json`);
+    expect(files.filter((f) => f.endsWith('.pre-orc-196.json')).sort()).toEqual(expected.sort());
+  });
+
   // The oracle replays a journal from its own recorded inputs, so a stale journal stays green there:
   // this compares it with what its scenario records today (ORC-310).
   it.each(Object.keys(SCENARIOS))('%s: the committed journals are what the scenario records today', async (name) => {
