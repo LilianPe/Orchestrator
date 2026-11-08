@@ -3,11 +3,11 @@
 // either way a finding is something on an ADDED line, so a removed line never blocks. A test the diff removes or
 // renames, by file or by case, is a finding unless a commit of the branch justifies it. Every finding blocks
 // `factory/anti-triche`.
-import { scanScript, scriptTests, type FileKind } from './anti-cheat-ast.js';
+import { readScript, scanScript, scriptTests, type FileKind } from './anti-cheat-ast.js';
 import { parseDiff, type DiffFile } from './diff.js';
 import { mdCode } from './markdown.js';
 import { isTestFile, isTestHarnessFile, isTestSpec, normalizePath } from './test-files.js';
-import { isScript } from './ts-ast.js';
+import { isPython, isScript } from './ts-ast.js';
 import type { CheckResult } from './types.js';
 
 export const ANTI_CHEAT_CHECK = 'factory/anti-triche';
@@ -102,7 +102,7 @@ const FORM_LABEL: Record<CheatForm, string> = {
 };
 
 /** The trailer of a commit message that justifies the tests a diff removes from a file: `Removed-test: <path>: <reason>`. */
-export const REMOVED_TEST_TRAILER = 'Removed-test';
+const REMOVED_TEST_TRAILER = 'Removed-test';
 
 // Documentation may quote any of the patterns: it is never scanned, agent instructions (`CLAUDE.md`, `SKILL.md`)
 // included. Prose cannot tell "never pass --no-verify" from "pass --no-verify", and the pack denies the command anyway.
@@ -113,7 +113,6 @@ const PROSE = /\.(?:md|mdx|markdown|rst|txt|adoc)$/i;
 const CLAUDE_SETTINGS = /(?:^|\/)settings(?:\.local)?\.json$/;
 const PERMISSION_RULE = /^\s*"\w+\(.*\)"\s*,?\s*$/;
 
-const isPython = (path: string): boolean => /\.pyi?$/.test(path);
 
 /**
  * One Python line cut into code, literals and comments. Line by line, without state: a string spanning lines reads as
@@ -198,15 +197,15 @@ function pythonTests(source: string): string[] {
 
 function testsOf(path: string, source: string): string[] {
   if (isPython(path)) return pythonTests(source);
-  return isScript(path) ? scriptTests(path, source) : [];
+  return isScript(path) ? scriptTests(readScript(path, source)) : [];
 }
 
 /** The tests of `before` that `after` no longer has, a name declared twice counting twice. */
-function removedTests(path: string, before: string, after: string | undefined): CheatFinding[] {
+function removedTests(path: string, before: string[], after: string[] | undefined): CheatFinding[] {
   const left = new Map<string, number>();
-  for (const name of after === undefined ? [] : testsOf(path, after)) left.set(name, (left.get(name) ?? 0) + 1);
+  for (const name of after ?? []) left.set(name, (left.get(name) ?? 0) + 1);
   const removed: CheatFinding[] = [];
-  for (const name of testsOf(path, before)) {
+  for (const name of before) {
     const n = left.get(name) ?? 0;
     if (n > 0) left.set(name, n - 1);
     else removed.push({ file: path, form: 'removed-test', match: name });
@@ -228,24 +227,28 @@ export function scanDiff(diff: string, options: AntiCheatOptions = {}): CheatFin
   const justified = new Set([...(options.justified ?? [])].map(normalizePath));
   const deleted = new Map(Object.entries(options.deletedTests ?? {}).map(([p, c]) => [normalizePath(p), c]));
   const findings: CheatFinding[] = [];
-  const removals = (path: string, before: string, after: string | undefined) => {
-    if (isTestSpec(path) && !justified.has(path)) findings.push(...removedTests(path, before, after));
+  // Read only for a test file whose removals count: a version is the whole file, with full context.
+  const removals = (path: string, before: () => string[], after: () => string[] | undefined) => {
+    if (isTestSpec(path) && !justified.has(path)) findings.push(...removedTests(path, before(), after()));
   };
   for (const file of parseDiff(diff)) {
     const frozenFinding = frozenChange(file, frozen);
     if (frozenFinding) findings.push(frozenFinding);
+    // Parsed once, for its findings and its tests.
+    const script = file.status !== 'deleted' && isScript(file.path) ? readScript(file.path, versionOf(file, 'new')) : undefined;
     // What the file was: its old path for a rename, under which its tests are gone. A frozen test changed is already refused.
     const was = file.oldPath ?? file.path;
-    const after = file.status === 'deleted' ? undefined : versionOf(file, 'new');
     if (file.status !== 'added' && !frozenFinding) {
-      removals(was, deleted.get(was) ?? versionOf(file, 'old'), file.status === 'modified' ? after : undefined);
+      const before = deleted.get(was);
+      const after = () => (file.status !== 'modified' ? undefined : script ? scriptTests(script) : testsOf(file.path, versionOf(file, 'new')));
+      removals(was, () => testsOf(was, before ?? versionOf(file, 'old')), after);
       deleted.delete(was);
     }
     if (PROSE.test(file.path) || file.status === 'deleted') continue;
     const kind: FileKind = isTestFile(file.path) ? 'test' : isTestHarnessFile(file.path) ? 'harness' : 'code';
-    if (isScript(file.path)) {
+    if (script) {
       const added = new Set(file.added.map((a) => a.line));
-      for (const f of scanScript(file.path, after ?? versionOf(file, 'new'), kind)) {
+      for (const f of scanScript(script, kind)) {
         const line = f.lines.find((n) => added.has(n));
         if (line !== undefined) findings.push({ file: file.path, line, form: f.form, match: f.match.trim() });
       }
@@ -265,7 +268,7 @@ export function scanDiff(diff: string, options: AntiCheatOptions = {}): CheatFin
       }
     }
   }
-  for (const [path, before] of deleted) removals(path, before, undefined);
+  for (const [path, before] of deleted) removals(path, () => testsOf(path, before), () => undefined);
   return findings;
 }
 
@@ -282,8 +285,8 @@ function describeFinding(f: CheatFinding): string {
 
 function summarize(findings: CheatFinding[]): string {
   const lines = [findings.length === 1 ? '1 finding:' : `${findings.length} findings:`];
-  const tail = findings.some((f) => f.form === 'removed-test') ? [JUSTIFY] : [];
-  let size = lines[0]!.length + tail.reduce((n, t) => n + 1 + t.length, 0);
+  const justify = findings.some((f) => f.form === 'removed-test') ? JUSTIFY : undefined;
+  let size = lines[0]!.length + (justify === undefined ? 0 : 1 + justify.length);
   for (const [i, f] of findings.entries()) {
     const line = describeFinding(f);
     const left = findings.length - i;
@@ -295,7 +298,7 @@ function summarize(findings: CheatFinding[]): string {
     lines.push(line);
     size += 1 + line.length;
   }
-  return [...lines, ...tail].join('\n');
+  return [...lines, ...(justify === undefined ? [] : [justify])].join('\n');
 }
 
 /** The `factory/anti-triche` check run: success only when the diff shows none of the four forms and removes no test. */

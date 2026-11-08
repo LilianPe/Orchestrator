@@ -7,7 +7,7 @@ import { boundNames, lineOf, parse, stringValue, ts } from './ts-ast.js';
 /** A test file, the test runner's configuration and global setup, or anything else. */
 export type FileKind = 'test' | 'harness' | 'code';
 
-export type ScriptForm = 'disabled-test' | 'bypass' | 'test-only-behaviour';
+type ScriptForm = 'disabled-test' | 'bypass' | 'test-only-behaviour';
 
 export interface ScriptFinding {
   form: ScriptForm;
@@ -48,11 +48,10 @@ const EQUALITY = new Set([ts.SyntaxKind.EqualsEqualsEqualsToken, ts.SyntaxKind.E
 
 const HOOKS = new Set(['beforeEach', 'afterEach', 'beforeAll', 'afterAll', 'before', 'after']);
 
-/** The local names an import binds. */
-function importedLocals(node: ts.ImportDeclaration): string[] {
-  const clause = node.importClause;
-  const bindings = clause?.namedBindings;
-  return [...(clause?.name ? [clause.name.text] : []), ...(bindings ? (ts.isNamespaceImport(bindings) ? [bindings.name.text] : bindings.elements.map((e) => e.name.text)) : [])];
+/** The property a binding element reads: `skip` of `{ skip }`, `{ skip: s }` and `{ 'skip': s }`. */
+function bindingProp(e: ts.BindingElement): string | undefined {
+  if (!e.propertyName) return ts.isIdentifier(e.name) ? e.name.text : undefined;
+  return ts.isIdentifier(e.propertyName) ? e.propertyName.text : stringValue(e.propertyName);
 }
 
 /** Parentheses, type assertions and `!` changed nothing. */
@@ -74,19 +73,20 @@ class Bindings {
   /** The lines of the import or declaration that binds each name: a finding that reads an alias counts on them too. */
   readonly declared = new Map<string, number[]>();
 
-  constructor(sf: ts.SourceFile) {
-    const lines = (node: ts.Node) => [lineOf(sf, node.getStart(sf)), lineOf(sf, node.end)];
+  constructor(private readonly sf: ts.SourceFile) {
     const visit = (node: ts.Node): void => {
-      if (ts.isImportDeclaration(node)) {
-        this.importOf(node);
-        for (const name of importedLocals(node)) this.declared.set(name, lines(node));
-      } else if (ts.isVariableDeclaration(node) && node.initializer) {
+      if (ts.isImportDeclaration(node)) this.importOf(node);
+      else if (ts.isVariableDeclaration(node) && node.initializer) {
         this.declare(node, node.initializer);
-        for (const name of boundNames(node.name)) this.declared.set(name, lines(node));
+        for (const name of boundNames(node.name)) this.declared.set(name, this.linesOf(node));
       } else if (ts.isParameter(node) && this.isTestCallback(node.parent)) for (const n of boundNames(node.name)) this.params.add(n);
       ts.forEachChild(node, visit);
     };
     visit(sf);
+  }
+
+  private linesOf(node: ts.Node): number[] {
+    return [lineOf(this.sf, node.getStart(this.sf)), lineOf(this.sf, node.end)];
   }
 
   /** A function passed to a test, a suite or a hook. */
@@ -103,15 +103,30 @@ class Bindings {
     return KNOWN.has(imported) ? imported : undefined;
   }
 
+  /** A module as one object, its namespace or `require`: `node:test`'s holds the test API too. */
+  private moduleObject(module: string): string | undefined {
+    return TEST_MODULES.has(module) ? NAMESPACE : this.moduleAlias(module, 'default');
+  }
+
   private importOf(node: ts.ImportDeclaration): void {
     const module = stringValue(node.moduleSpecifier);
     const clause = node.importClause;
     if (module === undefined || !clause) return;
-    const set = (local: string, canonical: string | undefined) => canonical && this.aliases.set(local, canonical);
+    const set = (local: string, canonical: string | undefined) => {
+      this.declared.set(local, this.linesOf(node));
+      if (canonical) this.aliases.set(local, canonical);
+    };
     if (clause.name) set(clause.name.text, this.moduleAlias(module, 'default'));
     const bindings = clause.namedBindings;
-    if (bindings && ts.isNamespaceImport(bindings)) set(bindings.name.text, TEST_MODULES.has(module) ? NAMESPACE : this.moduleAlias(module, 'default'));
+    if (bindings && ts.isNamespaceImport(bindings)) set(bindings.name.text, this.moduleObject(module));
     else if (bindings) for (const e of bindings.elements) set(e.name.text, this.moduleAlias(module, (e.propertyName ?? e.name).text));
+  }
+
+  /** What `prop` of the known object `from` is, destructured: `exit` of `process`, `test` of a test module, `equal` of `assert`. */
+  private propertyOf(from: string | undefined, prop: string): string | undefined {
+    if (from === NAMESPACE) return KNOWN.has(prop) ? prop : undefined;
+    if (from === 'process') return prop === 'exit' ? 'exit' : undefined;
+    return from === 'assert' ? this.moduleAlias('assert', prop) : undefined;
   }
 
   private declare(node: ts.VariableDeclaration, init: ts.Expression): void {
@@ -125,10 +140,10 @@ class Bindings {
     if (!ts.isObjectBindingPattern(node.name)) return;
     const from = this.canonical(init);
     for (const e of node.name.elements) {
-      const prop = e.propertyName ? (ts.isIdentifier(e.propertyName) ? e.propertyName.text : stringValue(e.propertyName)) : ts.isIdentifier(e.name) ? e.name.text : undefined;
+      const prop = bindingProp(e);
       if (prop === undefined || !ts.isIdentifier(e.name)) continue;
       const local = e.name.text;
-      const canonical = from === NAMESPACE ? (KNOWN.has(prop) ? prop : undefined) : from === 'process' && prop === 'exit' ? 'exit' : from === 'assert' ? this.moduleAlias('assert', prop) : undefined;
+      const canonical = this.propertyOf(from, prop);
       if (canonical) this.aliases.set(local, canonical);
       if (prop === 'NODE_ENV' || (prop === 'MODE' && this.nameOf(unwrap(init)) === 'env')) this.modes.add(local);
     }
@@ -160,7 +175,7 @@ class Bindings {
     if (ts.isIdentifier(e)) return this.aliases.get(e.text) ?? e.text;
     if (ts.isCallExpression(e) && ts.isIdentifier(e.expression) && e.expression.text === 'require') {
       const module = stringValue(e.arguments[0]);
-      return module === undefined ? undefined : TEST_MODULES.has(module) ? NAMESPACE : this.moduleAlias(module, 'default');
+      return module === undefined ? undefined : this.moduleObject(module);
     }
     if (!ts.isPropertyAccessExpression(e) && !ts.isElementAccessExpression(e)) return undefined;
     const name = this.nameOf(e);
@@ -259,21 +274,38 @@ function isReference(id: ts.Identifier): boolean {
 /** The comments of a file, each once: the trivia around every token (but JSX text, which is not trivia). */
 function commentsOf(sf: ts.SourceFile): ts.CommentRange[] {
   const seen = new Map<number, ts.CommentRange>();
+  // Nested nodes share their positions: each is read once.
+  const [leading, trailing] = [new Set<number>(), new Set<number>()];
+  const read = (done: Set<number>, at: number, ranges: (text: string, pos: number) => ts.CommentRange[] | undefined) => {
+    if (done.has(at)) return;
+    done.add(at);
+    for (const r of ranges(sf.text, at) ?? []) seen.set(r.pos, r);
+  };
   const visit = (node: ts.Node): void => {
     // A JSDoc node sits inside its comment: read from there, its text would pass for trivia.
     if (node.kind === ts.SyntaxKind.JsxText || (node.kind >= ts.SyntaxKind.FirstJSDocNode && node.kind <= ts.SyntaxKind.LastJSDocNode)) return;
     // Leading trivia starts at the next line: the end of a line is the trailing trivia of the token before.
-    for (const r of [...(ts.getLeadingCommentRanges(sf.text, node.pos) ?? []), ...(ts.getTrailingCommentRanges(sf.text, node.end) ?? [])]) seen.set(r.pos, r);
+    read(leading, node.pos, ts.getLeadingCommentRanges);
+    read(trailing, node.end, ts.getTrailingCommentRanges);
     if (node.kind >= ts.SyntaxKind.FirstNode) for (const c of node.getChildren(sf)) visit(c);
   };
   visit(sf);
   return [...seen.values()];
 }
 
-/** The anti-cheat findings of a JS or TS file, wherever they are in it: the caller keeps those on its added lines. */
-export function scanScript(path: string, text: string, kind: FileKind): ScriptFinding[] {
+/** A JS or TS file read once: its syntax tree and what it binds, for its findings and its tests. */
+export interface Script {
+  sf: ts.SourceFile;
+  b: Bindings;
+}
+
+export function readScript(path: string, text: string): Script {
   const sf = parse(path, text);
-  const b = new Bindings(sf);
+  return { sf, b: new Bindings(sf) };
+}
+
+/** The anti-cheat findings of a JS or TS file, wherever they are in it: the caller keeps those on its added lines. */
+export function scanScript({ sf, b }: Script, kind: FileKind): ScriptFinding[] {
   const findings: ScriptFinding[] = [];
   // An alias that renames (`import { xit as it }`), not `import { it }`: adding `vi` to that import makes no old finding new.
   const bound = (name: string) => (b.aliases.has(name) && b.aliases.get(name) !== name) || b.constants.has(name) || b.modes.has(name);
@@ -296,7 +328,7 @@ export function scanScript(path: string, text: string, kind: FileKind): ScriptFi
       if (name !== undefined && MODIFIERS.has(name) && TEST_API.has(b.testRoot(node.expression) ?? '')) at(node, 'disabled-test');
     }
     if (test && ts.isBindingElement(node) && ts.isVariableDeclaration(node.parent.parent) && node.parent.parent.initializer) {
-      const prop = node.propertyName && ts.isIdentifier(node.propertyName) ? node.propertyName.text : ts.isIdentifier(node.name) ? node.name.text : '';
+      const prop = bindingProp(node) ?? '';
       if (MODIFIERS.has(prop) && TEST_API.has(b.canonical(node.parent.parent.initializer) ?? '')) at(node, 'disabled-test');
     }
     if (ts.isIdentifier(node) && isReference(node)) {
@@ -306,9 +338,9 @@ export function scanScript(path: string, text: string, kind: FileKind): ScriptFi
     if (ts.isCallExpression(node)) call(node);
     // Tests left out by the runner: jest's ignore list, pytest's `--deselect`. Vitest's `exclude` is not read: the same
     // key leaves files out of coverage.
-    if (kind !== 'test' && ts.isIdentifier(node) && node.text === 'testPathIgnorePatterns') at(node, 'disabled-test');
+    if (!test && ts.isIdentifier(node) && node.text === 'testPathIgnorePatterns') at(node, 'disabled-test');
     const literal = stringValue(node) ?? (ts.isTemplateLiteralToken(node) ? node.text : undefined);
-    if (literal !== undefined) strings(node, literal);
+    if (!test && literal !== undefined) strings(node, literal);
     // 4. Code that behaves differently under test, outside tests and their harness only.
     if (kind === 'code') mode(node);
     ts.forEachChild(node, visit);
@@ -335,9 +367,10 @@ export function scanScript(path: string, text: string, kind: FileKind): ScriptFi
     // 3. Bypasses: an assertion on constants, leaving with success before the tests can fail.
     const canonical = b.canonical(callee) ?? '';
     const constantFirst = first !== undefined && b.isConstant(first);
-    const assertion = canonical === 'expect' ? constantFirst && matchedOnConstants(node) : ASSERT_ONE.has(canonical) ? constantFirst : ASSERT_TWO.has(canonical) && constantFirst && second !== undefined && b.isConstant(second);
-    if (assertion) at(node, 'bypass');
-    if (canonical === 'exit' && (node.arguments.length === 0 || (node.arguments.length === 1 && first !== undefined && ts.isNumericLiteral(unwrap(first)) && Number(unwrap(first).getText(sf)) === 0))) at(node, 'bypass');
+    const onConstants = canonical === 'expect' ? matchedOnConstants(node) : ASSERT_ONE.has(canonical) || (ASSERT_TWO.has(canonical) && second !== undefined && b.isConstant(second));
+    if (constantFirst && onConstants) at(node, 'bypass');
+    const code = first && unwrap(first);
+    if (canonical === 'exit' && (!code || (node.arguments.length === 1 && ts.isNumericLiteral(code) && Number(code.text) === 0))) at(node, 'bypass');
   };
 
   // `expect(c).toBe(d)`, `.not.toEqual(d)`, `.toBeTruthy()`: the matcher compares with constants only, or with nothing.
@@ -350,7 +383,6 @@ export function scanScript(path: string, text: string, kind: FileKind): ScriptFi
   };
 
   const strings = (node: ts.Node, value: string): void => {
-    if (kind === 'test') return;
     // Tests run `git commit --no-verify` in throwaway repositories: not a bypass of this one.
     if (value.includes('--no-verify')) at(node, 'bypass', '--no-verify');
     if (value.includes('--deselect')) at(node, 'disabled-test', '--deselect');
@@ -365,19 +397,21 @@ export function scanScript(path: string, text: string, kind: FileKind): ScriptFi
       const spelled = RUNNER_ENV.exec(b.constString(node.argumentExpression) ?? '')?.[0];
       if (spelled) at(node.argumentExpression, 'test-only-behaviour', spelled);
     }
+    // The cheap side first, `'test'`: almost no node has it, so the walks for a mode read almost never run.
     if (ts.isBinaryExpression(node) && EQUALITY.has(node.operatorToken.kind)) {
-      if ((b.containsMode(node.left) && b.isTest(node.right)) || (b.isTest(node.left) && b.containsMode(node.right))) at(node, 'test-only-behaviour');
+      if ((b.isTest(node.right) && b.containsMode(node.left)) || (b.isTest(node.left) && b.containsMode(node.right))) at(node, 'test-only-behaviour');
     } else if (ts.isCallExpression(node)) {
       const callee = unwrap(node.expression);
       const parts = [...(ts.isPropertyAccessExpression(callee) || ts.isElementAccessExpression(callee) ? [callee.expression] : []), ...node.arguments];
-      if (parts.some((p) => b.containsMode(p)) && parts.some((p) => b.holdsTest(p) && !b.containsMode(p))) at(node, 'test-only-behaviour');
-    } else if (ts.isSwitchStatement(node) && b.containsMode(node.expression)) {
+      const tests = parts.filter((p) => b.holdsTest(p));
+      if (tests.length > 0 && parts.some((p) => !tests.includes(p) && b.containsMode(p))) at(node, 'test-only-behaviour');
+    } else if (ts.isSwitchStatement(node)) {
       const clause = node.caseBlock.clauses.find((c) => ts.isCaseClause(c) && b.isTest(c.expression)) as ts.CaseClause | undefined;
-      if (clause) at(node, 'test-only-behaviour', `switch (${node.expression.getText(sf)}) case ${clause.expression.getText(sf)}`, clause.expression.end);
-    } else if (ts.isElementAccessExpression(node) && b.containsMode(node.argumentExpression)) {
+      if (clause && b.containsMode(node.expression)) at(node, 'test-only-behaviour', `switch (${node.expression.getText(sf)}) case ${clause.expression.getText(sf)}`, clause.expression.end);
+    } else if (ts.isElementAccessExpression(node)) {
       const table = unwrap(node.expression);
       const keys = ts.isObjectLiteralExpression(table) ? table.properties.map((p) => (p.name && (ts.isIdentifier(p.name) || ts.isStringLiteral(p.name)) ? p.name.text : undefined)) : [];
-      if (keys.includes('test')) at(node, 'test-only-behaviour');
+      if (keys.includes('test') && b.containsMode(node.argumentExpression)) at(node, 'test-only-behaviour');
     }
   };
 
@@ -397,9 +431,7 @@ export function scanScript(path: string, text: string, kind: FileKind): ScriptFi
  * The tests a JS or TS test file declares, by name, nested under their suites (`scores > rounds`): a title that is not a
  * constant reads as its source. A name declared twice counts twice.
  */
-export function scriptTests(path: string, text: string): string[] {
-  const sf = parse(path, text);
-  const b = new Bindings(sf);
+export function scriptTests({ sf, b }: Script): string[] {
   const names: string[] = [];
   const visit = (node: ts.Node, suites: string[]): void => {
     if (ts.isCallExpression(node)) {

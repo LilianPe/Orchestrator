@@ -141,8 +141,7 @@ function freeze(out: Decision, ticket: TicketState | undefined, frozen: FrozenTe
   if (!frozen) return;
   const old = ticket?.frozenTests;
   // The old freeze keeps its rules (ORC-342): its harness is the one it was made with.
-  const kept = old && { sha: old.sha, files: { ...frozen.files, ...old.files }, ...(old.rules !== undefined ? { rules: old.rules } : {}) };
-  out.events.push({ type: 'ticket.patched', patch: { frozenTests: kept ?? frozen } });
+  out.events.push({ type: 'ticket.patched', patch: { frozenTests: old ? { ...old, files: { ...frozen.files, ...old.files } } : frozen } });
 }
 
 /** A run in the ticket's worktree goes through `factory/tests-gelés` once frozen (ORC-131), verify commands or not. */

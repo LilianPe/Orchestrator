@@ -206,8 +206,6 @@ const SYMLINK = '120000';
 const MAX_READ_BYTES = 16 * 1024 * 1024;
 /** What the numstat and the patch of a diff may weigh together in the daemon's memory. */
 const MAX_PATCH_BYTES = 64 * 1024 * 1024;
-/** Lines of context past any file the read cap lets through (16 MB): a file's diff holds it whole. */
-const FULL_CONTEXT = 16 * 1024 * 1024;
 const SECRETS_CHECK = 'factory/secrets';
 const BINARY_CHECK = 'factory/binaires';
 const LEAKS_FOUND = 7;
@@ -395,8 +393,9 @@ export async function checkClone(git: CloneGit, from: string, sha: string, froze
  * its text never comes into the daemon's memory, nor does a whole read over `MAX_PATCH_BYTES`, which blocks too.
  */
 async function checkAdded(git: CloneGit, from: string, sha: string): Promise<VerifyFailure[]> {
-  // Full context (ORC-342): each file changed is whole in its diff, before and after, for its syntax tree and its tests.
-  const read = await git.capped(MAX_PATCH_BYTES, '-c', `core.bigFileThreshold=${MAX_READ_BYTES}`, 'diff', '--numstat', '--patch', '-z', `-U${FULL_CONTEXT}`, '--no-renames', '--no-ext-diff', '--no-textconv', '--diff-filter=d', from, sha);
+  // Full context (ORC-342), as many lines as the read cap lets a file weigh: each file changed is whole in its diff,
+  // before and after, for its syntax tree and its tests.
+  const read = await git.capped(MAX_PATCH_BYTES, '-c', `core.bigFileThreshold=${MAX_READ_BYTES}`, 'diff', '--numstat', '--patch', '-z', `-U${MAX_READ_BYTES}`, '--no-renames', '--no-ext-diff', '--no-textconv', '--diff-filter=d', from, sha);
   if (read === undefined) return [{ command: ANTI_CHEAT_CHECK, exitCode: 1, output: `Diff too large to analyze (over ${MAX_PATCH_BYTES / 2 ** 20} MB), publication blocked. Split the work.` }];
   const end = read.indexOf('\0\0');
   const binaries = (end === -1 ? [] : read.slice(0, end).split('\0')).filter((l) => l.startsWith('-\t-\t')).map((l) => l.slice(4));

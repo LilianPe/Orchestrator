@@ -174,8 +174,8 @@ describe('the freeze rule', () => {
     expect(isFrozenHarness('app.config.ts')).toBe(false);
   });
 
-  it('a package.json frozen before ORC-342, with a test script and nothing else of the test run, reads the same', () => {
-    expect(fingerprint('package.json', PKG)).toBe(createHash('sha256').update(JSON.stringify('vitest run')).digest('hex'));
+  it('a package.json read with the rules of a freeze made before ORC-342 reads its test script alone, as then', () => {
+    expect(fingerprint('package.json', PKG, true)).toBe(createHash('sha256').update(JSON.stringify('vitest run')).digest('hex'));
   });
 
   it('an unreadable package.json is fingerprinted whole: it cannot be read, so any change counts', () => {

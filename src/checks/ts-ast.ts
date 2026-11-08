@@ -7,6 +7,9 @@ export { ts };
 /** A file the checks read as JS or TS: the script blocks of a Vue, Svelte or Astro component included. */
 export const isScript = (path: string): boolean => /\.(?:[cm]?[jt]sx?|vue|svelte|astro)$/.test(path);
 
+/** A Python file: no parser here reads it, its checks stay line by line. */
+export const isPython = (path: string): boolean => /\.pyi?$/.test(path);
+
 const COMPONENT = /\.(?:vue|svelte|astro)$/;
 
 function kindOf(path: string): ts.ScriptKind {
@@ -22,7 +25,8 @@ function scriptsOf(text: string): string {
   for (const m of text.matchAll(/(<script\b[^>]*>)([\s\S]*?)<\/script>/gi)) keep.push([m.index + m[1]!.length, m.index + m[1]!.length + m[2]!.length]);
   const front = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
   // After `---\n`, or `---\r\n`.
-  if (front) keep.push([front[0].indexOf('\n') + 1, front[0].indexOf('\n') + 1 + front[1]!.length]);
+  const start = front ? front[0].indexOf('\n') + 1 : 0;
+  if (front) keep.push([start, start + front[1]!.length]);
   let out = '';
   let at = 0;
   for (const [from, to] of keep.sort((a, b) => a[0] - b[0])) {
@@ -72,8 +76,10 @@ export function exportedNames(sf: ts.SourceFile): Set<string> | undefined {
       const target = commonJsTarget(s.expression.left);
       const value = s.expression.right;
       if (target?.name !== undefined) names.add(target.name);
-      else if (target && !ts.isObjectLiteralExpression(value)) return undefined;
-      else if (target && ts.isObjectLiteralExpression(value)) for (const p of value.properties) if (p.name && (ts.isIdentifier(p.name) || ts.isStringLiteral(p.name))) names.add(p.name.text);
+      else if (target) {
+        if (!ts.isObjectLiteralExpression(value)) return undefined;
+        for (const p of value.properties) if (p.name && (ts.isIdentifier(p.name) || ts.isStringLiteral(p.name))) names.add(p.name.text);
+      }
     } else if (ts.isExportDeclaration(s)) {
       if (s.exportClause && ts.isNamedExports(s.exportClause)) for (const e of s.exportClause.elements) names.add(e.name.text);
       else if (s.exportClause) names.add(s.exportClause.name.text);

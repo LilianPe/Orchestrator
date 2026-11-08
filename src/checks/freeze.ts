@@ -80,15 +80,15 @@ function testScripts(scripts: Record<string, unknown>): string[] {
 }
 
 /**
- * What a test run reads of a package.json: the scripts `npm test` runs and the keys of the test tools. A package.json
- * whose only part is its `test` script reads as before ORC-342, its script alone: a freeze made then still holds.
+ * What a test run reads of a package.json: the scripts `npm test` runs and the keys of the test tools; undefined when it
+ * has none of them.
  */
 function packageTestPart(content: string): unknown {
   const pkg = JSON.parse(content) as { scripts?: Record<string, unknown> } & Record<string, unknown>;
   const scripts = pkg.scripts ?? {};
   const run = testScripts(scripts);
   const tools = PACKAGE_TOOLS.filter((k) => k in pkg);
-  if (tools.length === 0 && run.length <= 1) return scripts.test;
+  if (tools.length === 0 && run.length === 0) return undefined;
   return { scripts: Object.fromEntries(run.map((s) => [s, scripts[s]])), ...Object.fromEntries(tools.map((k) => [k, pkg[k]])) };
 }
 
@@ -139,8 +139,9 @@ export function isFrozenHarness(path: string): boolean {
 }
 
 /** The rules a freeze was made with: absent before ORC-342, whose harness and `package.json` part it keeps. */
-export const FREEZE_RULES = 2;
-const harnessOf = (frozen: Pick<FrozenTests, 'rules'>) => (frozen.rules === undefined ? isHarnessBefore342 : isFrozenHarness);
+const FREEZE_RULES = 2;
+/** What a freeze made before ORC-342 read of a package.json: its `test` script. */
+const packageTestScript = (content: string): unknown => (JSON.parse(content) as { scripts?: { test?: unknown } }).scripts?.test;
 
 const sha256 = (s: string): string => createHash('sha256').update(s).digest('hex');
 
@@ -153,7 +154,7 @@ const sha256 = (s: string): string => createHash('sha256').update(s).digest('hex
  */
 export function fingerprint(path: string, content: string, before342 = false): string | undefined {
   const name = fileName(path);
-  const part = before342 && name === 'package.json' ? (c: string) => (JSON.parse(c) as { scripts?: { test?: unknown } }).scripts?.test : TEST_PART.get(name);
+  const part = before342 && name === 'package.json' ? packageTestScript : TEST_PART.get(name);
   if (part && !content.includes('\0')) {
     try {
       const read = part(content);
@@ -194,13 +195,14 @@ export function newTestsOnly(read: FrozenTests): FrozenTests {
 /** `factory/tests-gelés` on `view.head`: every frozen file the commits since the freeze changed, and every harness file they added. */
 export async function checkFrozen(frozen: FrozenTests, view: FreezeView): Promise<CheckResult> {
   const findings: string[] = [];
-  const isHarness = harnessOf(frozen);
+  const before342 = frozen.rules === undefined;
+  const isHarness = before342 ? isHarnessBefore342 : isFrozenHarness;
   for (const { path: raw, deleted } of view.changed) {
     const path = normalizePath(raw);
     const was = frozen.files[path];
     if (was === undefined && !isHarness(path)) continue;
     const content = deleted ? undefined : await view.showAtHead(path);
-    const now = content === undefined ? undefined : fingerprint(path, content, frozen.rules === undefined);
+    const now = content === undefined ? undefined : fingerprint(path, content, before342);
     if (now === was) continue;
     findings.push(`${mdCode(path)}: ${was === undefined ? 'harness added after the freeze' : now === undefined ? 'deleted' : 'changed'}`);
   }

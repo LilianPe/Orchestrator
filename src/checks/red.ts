@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { posix } from 'node:path';
 import { ANSI } from './log-excerpt.js';
 import { isTestFile, isTestSpec, normalizePath } from './test-files.js';
-import { exportedNames, importedFrom, parse } from './ts-ast.js';
+import { exportedNames, importedFrom, isPython, parse } from './ts-ast.js';
 
 /**
  * Why the red is verified or not. Verified: an `assertion`; a `missing_module` the build will create (absent at
@@ -102,7 +102,7 @@ const ASSERTION_FAILURE = [/^(?:\w+\.)*AssertionError\b/, /^(?:Error: )?expect[.
  * load, never a test's name. Only those messages are read with the patterns, so a passing test named after a failure
  * changes nothing. Pure.
  */
-export function readReport(report: Report): TestRunReading {
+function readReport(report: Report): TestRunReading {
   const loading = report.loadErrors.join('\n');
   if (SYNTAX.some((re) => re.test(loading))) return { kind: 'compile' };
   const missing = readMissing([loading, ...report.failures].join('\n'));
@@ -133,10 +133,14 @@ function fromJson(json: JsonReport): Report {
 }
 
 const ENTITIES: Record<string, string> = { lt: '<', gt: '>', amp: '&', quot: '"', apos: "'" };
-const unescapeXml = (s: string): string =>
-  s
-    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
-    .replace(/&(#x[0-9a-f]+|#\d+|\w+);/gi, (all, e: string) => (e[0] === '#' ? String.fromCodePoint(Number(e[1] === 'x' || e[1] === 'X' ? `0${e.slice(1)}` : e.slice(1))) : (ENTITIES[e] ?? all)));
+/** An XML entity's character: `&#60;`, `&#x3c;`, `&lt;`. */
+function entity(all: string, e: string): string {
+  if (e[0] !== '#') return ENTITIES[e] ?? all;
+  const hex = e[1] === 'x' || e[1] === 'X';
+  return String.fromCodePoint(parseInt(e.slice(hex ? 2 : 1), hex ? 16 : 10));
+}
+// In one pass: `&amp;lt;` reads `&lt;`, not `<`.
+const unescapeXml = (s: string): string => s.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1').replace(/&(#x[0-9a-f]+|#\d+|\w+);/gi, entity);
 const attribute = (attrs: string, name: string): string => unescapeXml(new RegExp(`\\b${name}="([^"]*)"`).exec(attrs)?.[1] ?? '');
 
 /**
@@ -236,7 +240,7 @@ const escape = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
  * Python, which has no parser here: a `from <module> import ...` line naming it.
  */
 function importOf(path: string, source: string, symbol: string): { module: string; python?: true } | undefined {
-  if (!path.endsWith('.py')) {
+  if (!isPython(path)) {
     const module = importedFrom(parse(path, source), symbol);
     return module === undefined ? undefined : { module };
   }
@@ -250,7 +254,7 @@ function importOf(path: string, source: string, symbol: string): { module: strin
  */
 function hasSymbol(path: string, source: string, symbol: string): boolean {
   const s = escape(symbol);
-  if (!path.endsWith('.py')) {
+  if (!isPython(path)) {
     // `module.exports = build()`: its names cannot be read, a mention of the symbol counts.
     const names = exportedNames(parse(path, source));
     return names ? names.has(symbol) : new RegExp(`\\b${s}\\b`).test(source);
@@ -321,7 +325,16 @@ async function runWithReport(ran: string, runner: Runner | undefined, deps: RedD
   const id = randomUUID();
   const marker = `@@factory-report-${id}@@`;
   const end = `@@factory-report-end-${id}@@`;
-  const script = [`f="\${TMPDIR:-/tmp}/factory-report-${id}"`, `${ran} ${REPORT_FLAGS[runner]}`, 's=$?', `printf '\\n%s\\n' '${marker}'`, 'cat "$f" 2>/dev/null', `printf '\\n%s\\n' '${end}'`, 'rm -f "$f"', 'exit $s'].join('\n');
+  const script = [
+    `f="\${TMPDIR:-/tmp}/factory-report-${id}"`,
+    `${ran} ${REPORT_FLAGS[runner]}`,
+    's=$?',
+    `printf '\\n%s\\n' '${marker}'`,
+    'cat "$f" 2>/dev/null',
+    `printf '\\n%s\\n' '${end}'`,
+    'rm -f "$f"',
+    'exit $s',
+  ].join('\n');
   const { exitCode, output } = await deps.run(script);
   // Between its two markers: the runner's stdout comes before, and its stderr, which a sandbox appends, after (jest
   // writes its whole run there).
@@ -339,7 +352,9 @@ async function judge(m: Missing, tests: readonly string[], deps: RedDeps): Promi
     // An undefined function (vitest): its module is the one a test file imports it from.
     for (const t of tests) {
       const found = importOf(t, (await deps.showAtHead(t)) ?? '', m.symbol!);
-      if (found) [module, python, test] = [found.module, found.python, t];
+      if (!found) continue;
+      [module, python, test] = [found.module, found.python, t];
+      break;
     }
     if (module === undefined) return 'error';
   }
