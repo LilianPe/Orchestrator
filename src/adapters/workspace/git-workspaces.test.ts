@@ -124,6 +124,53 @@ describe('GitWorkspaces', () => {
     expect(existsSync(join(k.path, 'README.md'))).toBe(true);
   });
 
+  it.each(['worktree', 'trunk-readonly', 'knowledge'] as const)('%s: gives up on a forge that does not answer, naming neither the path nor the command', async (kind) => {
+    const { base, repo, root } = fixtureRepo();
+    // A transport that never answers: the deadline kills it with git.
+    const stall = join(base, 'stall.sh');
+    writeFileSync(stall, '#!/bin/sh\nexec sleep 60\n', { mode: 0o755 });
+    git(repo, 'config', 'protocol.ext.allow', 'always');
+    git(repo, 'remote', 'set-url', 'origin', `ext::${stall}`);
+    const logged: string[] = [];
+    const ws = new GitWorkspaces({ root, knowledgeRepo: repo, fetchDeadlineMs: 300, log: (m) => logged.push(m) });
+    const started = Date.now();
+    await expect(ws.prepare(req(repo, { kind }))).rejects.toThrow(/^the forge no longer responds after 0.3 s$/);
+    expect(Date.now() - started).toBeLessThan(5_000);
+    // A forge that answers with an error: its code, and the detail in the daemon's log only.
+    git(repo, 'remote', 'set-url', 'origin', join(base, 'gone.git'));
+    const err = (await ws.prepare(req(repo, { kind })).catch((e: Error) => e)) as Error;
+    expect(err.message).toBe('the forge could not be read (git fetch, code 128)');
+    expect(logged.at(-1)).toContain(`git -C ${repo} fetch`);
+  });
+
+  it.each(['worktree', 'trunk-readonly', 'knowledge'] as const)('%s: starts from the remote branch, never a tag of its name, when origin/HEAD is missing', async (kind) => {
+    const { repo, root } = fixtureRepo();
+    const trunk = git(repo, 'rev-parse', 'origin/main');
+    // A tag named like the remote branch, on a commit off the default branch: pushed by anyone who can push to the forge.
+    git(repo, 'checkout', '-q', '-b', 'elsewhere');
+    git(repo, 'commit', '-q', '--allow-empty', '-m', 'not merged');
+    git(repo, 'push', '-q', 'origin', 'elsewhere:refs/tags/origin/main');
+    git(repo, 'checkout', '-q', 'main');
+    git(repo, 'remote', 'set-head', 'origin', '--delete');
+    const w = await new GitWorkspaces({ root, knowledgeRepo: repo }).prepare(req(repo, { kind }));
+    expect(git(w.path, 'rev-parse', 'HEAD')).toBe(trunk);
+  });
+
+  it("checks out the ticket's branch from the forge in full, never a tag of its name", async () => {
+    const { repo, root } = fixtureRepo();
+    git(repo, 'checkout', '-q', '-b', 'factory/rel-1-export-csv');
+    git(repo, 'commit', '-q', '--allow-empty', '-m', 'the agent');
+    git(repo, 'push', '-q', 'origin', 'factory/rel-1-export-csv');
+    const pushed = git(repo, 'rev-parse', 'HEAD');
+    // A tag named like the remote branch, on another commit: pushed by anyone who can push to the forge.
+    git(repo, 'commit', '-q', '--allow-empty', '-m', 'not the agent');
+    git(repo, 'push', '-q', 'origin', 'HEAD:refs/tags/origin/factory/rel-1-export-csv');
+    git(repo, 'checkout', '-q', 'main');
+    git(repo, 'branch', '-q', '-D', 'factory/rel-1-export-csv');
+    const w = await new GitWorkspaces({ root }).prepare(req(repo));
+    expect(git(w.path, 'rev-parse', 'HEAD')).toBe(pushed);
+  });
+
   it('gives each question its own trunk: what one left is not there for the next', async () => {
     const { repo, root } = fixtureRepo();
     const ws = new GitWorkspaces({ root });
