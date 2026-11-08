@@ -53,6 +53,7 @@ type AgentEnv = { Variables: { run: RunRecord } };
 
 /** Tickets `GET /api/measures` serves, the most recently updated: each costs a read of its journal. */
 const MEASURED_TICKETS = 50;
+const MEASURES_AT_ONCE = 10;
 
 function startOfUtcDay(ts: number): number {
   const d = new Date(ts);
@@ -176,18 +177,21 @@ export function createApp(d: ServerDeps): Hono {
     });
   });
 
+  // The measures of a ticket, or null when they cannot be read: the error is logged, and that ticket alone loses them.
+  const measuresOf = (t: { projectId: string; ticketId: string }): Promise<TicketMeasures | null> =>
+    measureTicket(d.store, t.projectId, t.ticketId).catch((err: Error) => {
+      d.bus.publish({ kind: 'log', level: 'error', message: `measures of ${t.ticketId}: ${err.message}`, at: d.clock.now() });
+      return null;
+    });
+
   app.get('/api/flow', async (c) => {
     const [tickets, running, queue] = await Promise.all([d.store.listTickets(), d.store.runsByStatus('running'), d.store.listQueue()]);
     const verifying = (await Promise.all(tickets.filter((t) => t.verifyingRunId).map((t) => d.store.getRun(t.verifyingRunId!)))).filter((r) => r !== undefined);
     // One ticket whose measures cannot be read loses its tokens, not the whole page.
-    const measured = (r: RunRecord) =>
-      measureTicket(d.store, r.projectId, r.ticketId).then(
-        (m) => [flowKey(r), m] as const,
-        (err: Error) => {
-          d.bus.publish({ kind: 'log', level: 'error', message: `measures of ${r.ticketId}: ${err.message}`, at: d.clock.now() });
-          return undefined;
-        },
-      );
+    const measured = async (r: RunRecord) => {
+      const m = await measuresOf(r);
+      return m ? ([flowKey(r), m] as const) : undefined;
+    };
     const atWork = new Map([...running, ...verifying].map((r) => [flowKey(r), r]));
     const measures = new Map((await Promise.all([...atWork.values()].map(measured))).filter((m) => m !== undefined));
     return c.json(buildFlow({ now: d.clock.now(), tickets, running, verifying, queue, measures }));
@@ -204,14 +208,14 @@ export function createApp(d: ServerDeps): Hono {
     ...(t.prUrl === undefined ? {} : { prUrl: t.prUrl }),
     measures,
   });
-  const measuresOf = (t: TicketState) =>
-    measureTicket(d.store, t.projectId, t.ticketId).catch((err: Error) => {
-      d.bus.publish({ kind: 'log', level: 'error', message: `measures of ${t.ticketId}: ${err.message}`, at: d.clock.now() });
-      return null;
-    });
   app.get('/api/measures', async (c) => {
     const tickets = (await d.store.listTickets()).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, MEASURED_TICKETS);
-    return c.json({ tickets: await Promise.all(tickets.map(async (t) => measuredTicket(t, await measuresOf(t)))) });
+    // A few tickets at a time: each read is several queries, and the pool also serves the webhooks and the worker.
+    const served = [];
+    for (let i = 0; i < tickets.length; i += MEASURES_AT_ONCE) {
+      served.push(...(await Promise.all(tickets.slice(i, i + MEASURES_AT_ONCE).map(async (t) => measuredTicket(t, await measuresOf(t))))));
+    }
+    return c.json({ tickets: served });
   });
   app.get('/api/tickets/:projectId/:ticketId/measures', async (c) => {
     const ticket = await d.store.getTicket(c.req.param('projectId'), c.req.param('ticketId'));
@@ -220,7 +224,7 @@ export function createApp(d: ServerDeps): Hono {
     return measures ? c.json(measuredTicket(ticket, measures)) : c.json({ error: 'the measures could not be read' }, 500);
   });
 
-  app.get('/api/events/recent',async (c) => c.json(await d.store.recentEvents(100, c.req.query('ticket') || undefined)));
+  app.get('/api/events/recent', async (c) => c.json(await d.store.recentEvents(100, c.req.query('ticket') || undefined)));
 
   app.get('/api/events', (c) =>
     streamSSE(c, async (stream) => {

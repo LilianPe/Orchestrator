@@ -138,8 +138,8 @@ describe('server', () => {
       const { app, store } = await setup();
       const tokens = { input: 10, output: 20, cacheRead: 30, cacheCreation: 40 };
       const run = (await store.getRun('r1'))!;
-      await store.putRun({ ...run, id: 'r0', status: 'success', startedAt: 0, endedAt: 3, token: 'tok0', tokens, costUsd: 0.3, turns: 4, sessionRole: 'implementer' });
-      await store.putRun({ ...run, id: 'r1', sessionRole: 'reviewer', job: 'review' });
+      await store.putRun({ ...run, id: 'r0', status: 'success', startedAt: 0, endedAt: 3, token: 'tok0', tokens, costUsd: 0.3, turns: 4, sessionRole: 'reviewer', job: 'review' });
+      await store.putRun({ ...run, id: 'r1', sessionRole: 'implementer' });
       await store.recordEvent({ ...TRUSTED, id: 'd', type: 'ticket.delegated', at: 1, projectId: 'p', ticketId: 'REL-1', payload: { linearSessionId: 'ls-1' } });
       const res = await app.request('/api/measures');
       expect(res.status).toBe(200);
@@ -147,7 +147,7 @@ describe('server', () => {
       expect(body.tickets).toEqual([
         expect.objectContaining({
           projectId: 'p', ticketId: 'REL-1', title: 'Export', logical: 'dev', blocked: false,
-          measures: expect.objectContaining({ tokens, costUsd: 0.8, startedAt: 1, leadTimeMs: null, workMs: 3, reviewRounds: { ai: 1, human: 0 }, attempts: 2 }),
+          measures: expect.objectContaining({ tokens, costUsd: 0.8, startedAt: 0, leadTimeMs: null, workMs: 3, reviewRounds: { ai: 1, human: 0 }, attempts: 2 }),
         }),
       ]);
       expect(body.tickets[0].measures.runs.map((r: { id: string; durationMs: number | null }) => [r.id, r.durationMs])).toEqual([['r0', 3], ['r1', null]]);

@@ -244,6 +244,22 @@ describe('cost, duration and review rounds of each run (ORC-223)', () => {
     // Picked up without a delegation (a label, a move): from its first attempt.
     expect(ticketMeasures('p', 'REL-1', facts({ events: [merged], runs }))).toMatchObject({ startedAt: 1_000, leadTimeMs: 89_500 });
     expect(ticketMeasures('p', 'REL-1', facts({ events: [delegated], runs }))).toMatchObject({ startedAt: 500, leadTimeMs: null });
+    // Delegated after a label pickup, even after the merge: the work began with the first attempt, never a negative time.
+    const late = ev('d', 'ticket.delegated', 95_000, { linearSessionId: 'ls' });
+    expect(ticketMeasures('p', 'REL-1', facts({ events: [merged, late], runs }))).toMatchObject({ startedAt: 1_000, leadTimeMs: 89_500 });
+  });
+
+  it('gives no duration to an attempt settled after its lease ran out: a restart settles it at its own time, the downtime is no work', () => {
+    const m = ticketMeasures('p', 'REL-1', facts({
+      runs: [
+        run({ id: 'cut', startedAt: 0, endedAt: 8 * 3_600_000, leaseUntil: 300_000, status: 'failure' }),
+        run({ id: 'ok', startedAt: 0, endedAt: 60_000, leaseUntil: 120_000 }),
+        // A record older than the lease (ORC-220) keeps its end.
+        run({ id: 'old', startedAt: 0, endedAt: 30_000 }),
+      ],
+    }));
+    expect(m.runs.map((r) => [r.id, r.durationMs])).toEqual([['cut', null], ['ok', 60_000], ['old', 30_000]]);
+    expect(m.workMs).toBe(90_000);
   });
 
   it('counts the AI review rounds as the attempts of a reviewer, and the human ones as the factory moves to Human Review it carried out', () => {
@@ -253,6 +269,11 @@ describe('cost, duration and review rounds of each run (ORC-223)', () => {
         run({ id: 'r2', job: 'review', sessionRole: 'reviewer' }),
         run({ id: 'r3', sessionRole: 'implementer' }),
         run({ id: 'r4', job: 'review', sessionRole: 'reviewer', status: 'failure' }),
+        // A review stopped, cut by the usage limit, interrupted or still running is no round: its relaunch will be.
+        run({ id: 'r5', job: 'review', sessionRole: 'reviewer', status: 'stopped' }),
+        run({ id: 'r6', job: 'review', sessionRole: 'reviewer', status: 'limit', usageLimit: {} }),
+        run({ id: 'r7', job: 'review', sessionRole: 'reviewer', status: 'running' }),
+        run({ id: 'r8', job: 'review', sessionRole: 'reviewer', status: 'interrupted' }),
         // A question's answerer reviews nothing; a record older than ORC-217 has no role: not counted.
         run({ id: 'q', queue: 'questions', job: 'ask', sessionRole: 'answerer' }),
         run({ id: 'old', job: 'review' }),

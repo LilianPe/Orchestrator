@@ -23,9 +23,10 @@ export function runDuration(run: RunMeasureView, now: number): string {
   return run.status === 'running' ? `${formatDuration(now - run.startedAt)}, running` : '—';
 }
 
-/** Delegation to merge once merged, the time so far before. */
-export function ticketDuration(m: TicketMeasuresView, now: number): { text: string; title: string } {
+/** Delegation to merge once merged, the time so far before; nothing for a ticket finished without a merge. */
+export function ticketDuration(m: TicketMeasuresView, now: number, logical?: string): { text: string; title: string } {
   if (m.leadTimeMs !== null) return { text: formatDuration(m.leadTimeMs), title: 'From the delegation (or the first attempt) to the merge.' };
+  if (logical === 'done') return { text: '—', title: 'Done without a merge.' };
   if (m.startedAt !== null) return { text: `${formatDuration(now - m.startedAt)} so far`, title: 'Not merged: since the delegation (or the first attempt).' };
   return { text: '—', title: 'No delegation nor attempt yet.' };
 }
@@ -145,7 +146,7 @@ export function Measures({ tickets, now, selected, onSelect }: { tickets: Measur
               {tickets.map((t) => {
                 const m = t.measures;
                 const cost = costCell(m);
-                const duration = m && ticketDuration(m, now);
+                const duration = m && ticketDuration(m, now, t.logical);
                 return (
                   <tr key={key(t)} className={key(t) === selected ? 'selected' : ''}>
                     <td><button className="link" onClick={() => onSelect(key(t))}>{t.ticketId}</button> {t.title}</td>

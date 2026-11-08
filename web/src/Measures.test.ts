@@ -27,6 +27,8 @@ describe('the cells of the measures (ORC-223)', () => {
     expect(ticketDuration(measures({ mergedAt: 3_900_000, leadTimeMs: 3_900_000 }), 9_999_999)).toEqual({ text: '1 h 05 min', title: expect.stringContaining('merge') });
     expect(ticketDuration(measures({ startedAt: 1_000 }), 43_000).text).toBe('42 s so far');
     expect(ticketDuration(measures({ startedAt: null }), 43_000).text).toBe('—');
+    // Finished without a merge: nothing goes on.
+    expect(ticketDuration(measures({ startedAt: 1_000 }), 43_000, 'done')).toEqual({ text: '—', title: expect.stringContaining('without a merge') });
   });
 
   it('reviewRoundsCell: AI and human rounds apart', () => {

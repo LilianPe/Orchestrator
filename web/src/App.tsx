@@ -87,10 +87,7 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    const load = () => {
-      void fetchSnapshot().then((snapshot) => dispatch({ type: 'snapshot', snapshot })).catch(() => undefined);
-      void loadFlow();
-    };
+    const load = () => void fetchSnapshot().then((snapshot) => dispatch({ type: 'snapshot', snapshot })).catch(() => undefined);
     load();
     const timer = setInterval(load, 10_000);
     const off = subscribe((message) => dispatch({ type: 'bus', message }), (connected) => dispatch({ type: 'connection', connected }));
@@ -98,13 +95,21 @@ export function App() {
       clearInterval(timer);
       off();
     };
-  }, [loadFlow]);
+  }, []);
+
+  // The Flow is read while it is shown, not behind the measures.
+  useEffect(() => {
+    if (view !== 'flow') return;
+    void loadFlow();
+    const timer = setInterval(() => void loadFlow(), 10_000);
+    return () => clearInterval(timer);
+  }, [view, loadFlow]);
 
   useEffect(() => {
-    if (s.flowStale === 0) return;
+    if (s.flowStale === 0 || view !== 'flow') return;
     const timer = setTimeout(() => void loadFlow(), FLOW_DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [s.flowStale, loadFlow]);
+  }, [s.flowStale, view, loadFlow]);
 
   const stop = (run: WorkingRunView) => void post(`/api/tickets/${run.projectId}/${run.ticketId}/stop`);
 
