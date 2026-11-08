@@ -38,7 +38,7 @@ export function formatTokens(n: number): string {
 }
 
 /** The measure of the ticket; the cost in dollars is what exists when no attempt reported tokens (ORC-216). */
-export function tokensCell(run: WorkingRunView): { text: string; title: string } {
+export function tokensCell(run: Pick<WorkingRunView, 'measured' | 'tokens' | 'attemptsWithoutTokens' | 'costUsd'>): { text: string; title: string } {
   if (!run.measured) return { text: '?', title: 'This ticket’s measurements could not be read: see the log.' };
   if (!run.tokens) {
     return { text: run.costUsd > 0 ? `— ($${run.costUsd.toFixed(2)})` : '—', title: 'No finished attempt reported its tokens.' };

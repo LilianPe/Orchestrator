@@ -7,8 +7,8 @@ import { teamOf, type Tracker } from '../adapters/tracker/types.js';
 import type { BusMessage, EventBus } from '../core/bus.js';
 import type { Clock } from '../core/clock.js';
 import { pendingLabels } from '../core/attempt-labels.js';
-import { measureTicket } from '../core/measures.js';
-import { TRUSTED, type FactoryEvent } from '../core/types.js';
+import { measureTicket, type TicketMeasures } from '../core/measures.js';
+import { TRUSTED, type FactoryEvent, type TicketState } from '../core/types.js';
 import type { RunRecord, Store } from '../store/types.js';
 import { handleMcp } from '../api/mcp.js';
 import { buildFlow, flowKey } from './flow.js';
@@ -50,6 +50,9 @@ export function isLoopbackHost(host: string): boolean {
 }
 
 type AgentEnv = { Variables: { run: RunRecord } };
+
+/** Tickets `GET /api/measures` serves, the most recently updated: each costs a read of its journal. */
+const MEASURED_TICKETS = 50;
 
 function startOfUtcDay(ts: number): number {
   const d = new Date(ts);
@@ -190,7 +193,34 @@ export function createApp(d: ServerDeps): Hono {
     return c.json(buildFlow({ now: d.clock.now(), tickets, running, verifying, queue, measures }));
   });
 
-  app.get('/api/events/recent', async (c) => c.json(await d.store.recentEvents(100, c.req.query('ticket') || undefined)));
+  // The measures of the most recently updated tickets (ORC-223), read-only: one ticket whose measures cannot be read is
+  // served with `measures: null`, the others still are.
+  const measuredTicket = (t: TicketState, measures: TicketMeasures | null) => ({
+    projectId: t.projectId,
+    ticketId: t.ticketId,
+    title: t.title,
+    logical: t.logical,
+    blocked: t.blocked,
+    ...(t.prUrl === undefined ? {} : { prUrl: t.prUrl }),
+    measures,
+  });
+  const measuresOf = (t: TicketState) =>
+    measureTicket(d.store, t.projectId, t.ticketId).catch((err: Error) => {
+      d.bus.publish({ kind: 'log', level: 'error', message: `measures of ${t.ticketId}: ${err.message}`, at: d.clock.now() });
+      return null;
+    });
+  app.get('/api/measures', async (c) => {
+    const tickets = (await d.store.listTickets()).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, MEASURED_TICKETS);
+    return c.json({ tickets: await Promise.all(tickets.map(async (t) => measuredTicket(t, await measuresOf(t)))) });
+  });
+  app.get('/api/tickets/:projectId/:ticketId/measures', async (c) => {
+    const ticket = await d.store.getTicket(c.req.param('projectId'), c.req.param('ticketId'));
+    if (!ticket) return c.json({ error: 'unknown ticket' }, 404);
+    const measures = await measuresOf(ticket);
+    return measures ? c.json(measuredTicket(ticket, measures)) : c.json({ error: 'the measures could not be read' }, 500);
+  });
+
+  app.get('/api/events/recent',async (c) => c.json(await d.store.recentEvents(100, c.req.query('ticket') || undefined)));
 
   app.get('/api/events', (c) =>
     streamSSE(c, async (stream) => {

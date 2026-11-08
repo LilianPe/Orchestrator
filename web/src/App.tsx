@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useReducer, useRef, useState, type ComponentProps } from 'react';
-import { fetchFlow, fetchSnapshot, post, subscribe } from './api.js';
+import { fetchFlow, fetchMeasures, fetchSnapshot, post, subscribe } from './api.js';
 import { Flow, plural } from './Flow.js';
+import { Measures } from './Measures.js';
 import { initialState, reducer } from './state.js';
-import type { FlowView, RunLine, WorkingRunView } from './types.js';
+import type { FlowView, MeasuredTicketView, RunLine, WorkingRunView } from './types.js';
 import { PRODUCT_NAME } from '../../src/product.js';
 
 /** A burst of ticket updates reads the Flow once. */
@@ -35,7 +36,44 @@ function LiveFlow({ flow, flowAt, frozen, ...rest }: { flow: FlowView; flowAt: n
   return <Flow flow={flow} elapsedMs={Math.max(0, now - flowAt)} {...rest} />;
 }
 
+type View = 'flow' | 'measures';
+const viewOf = (hash: string): View => (hash === '#measures' ? 'measures' : 'flow');
+
+/** The measures page (ORC-223), read when shown and every 10 s while it is. */
+function MeasuresPage() {
+  const [tickets, setTickets] = useState<MeasuredTicketView[]>();
+  const [failed, setFailed] = useState(false);
+  const [selected, setSelected] = useState<string>();
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    let live = true;
+    const load = () =>
+      void fetchMeasures().then(
+        (t) => live && (setTickets(t), setFailed(false), setNow(Date.now())),
+        () => live && setFailed(true),
+      );
+    load();
+    const timer = setInterval(load, 10_000);
+    return () => {
+      live = false;
+      clearInterval(timer);
+    };
+  }, []);
+  return (
+    <div className="flow">
+      {failed && <p className="flow-failed" role="alert">{tickets ? 'Measures out of date: reading them failed. Retrying within 10 s.' : 'Measures unavailable: reading them failed. Retrying within 10 s.'}</p>}
+      {tickets ? <Measures tickets={tickets} now={now} selected={selected} onSelect={setSelected} /> : !failed && <section><p className="empty">Loading the measures…</p></section>}
+    </div>
+  );
+}
+
 export function App() {
+  const [view, setView] = useState<View>(() => viewOf(window.location.hash));
+  useEffect(() => {
+    const onHash = () => setView(viewOf(window.location.hash));
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
   const [s, dispatch] = useReducer(reducer, initialState);
   const lastRead = useRef(0);
 
@@ -77,6 +115,10 @@ export function App() {
     <div className="page">
       <header>
         <h1>{PRODUCT_NAME}</h1>
+        <nav className="views">
+          <a href="#flow" aria-current={view === 'flow' ? 'page' : undefined}>Flow</a>
+          <a href="#measures" aria-current={view === 'measures' ? 'page' : undefined}>Measures</a>
+        </nav>
         {snap && (
           <div className="stats">
             <span>Slots {snap.capacity.dev.used}/{snap.capacity.dev.total}</span>
@@ -94,7 +136,7 @@ export function App() {
           Paused by the usage limit of the Claude account: no run starts until {new Date(snap.usageLimitedUntil).toLocaleString()}.
         </p>
       )}
-      <main>
+      {view === 'measures' ? <main className="single"><MeasuresPage /></main> : <main>
         <div className="flow">
           {s.flowFailed && <p className="flow-failed" role="alert">{s.flow ? 'Flow out of date: reading it failed, what follows may be stale. Retrying within 10 s.' : 'Flow unavailable: reading it failed. Retrying within 10 s.'}</p>}
           {s.flow ? (
@@ -118,7 +160,7 @@ export function App() {
             ))}
           </ul>
         </section>
-      </main>
+      </main>}
     </div>
   );
 }

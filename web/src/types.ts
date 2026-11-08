@@ -81,3 +81,45 @@ export type BusMessage =
   | { kind: 'run'; runId: string; ticketId: string; ev: RunLine }
   | { kind: 'ticket' }
   | { kind: 'log'; level: 'info' | 'warn' | 'error'; message: string; at: number };
+
+export type TokensView = { input: number; output: number; cacheRead: number; cacheCreation: number };
+
+/** One attempt of a ticket: `RunMeasure` of src/core/measures.ts (ORC-223). */
+export interface RunMeasureView {
+  id: string;
+  job: string;
+  role: 'implementer' | 'reviewer' | 'answerer' | null;
+  status: string;
+  startedAt: number;
+  endedAt: number | null;
+  durationMs: number | null;
+  tokens: TokensView | null;
+  costUsd: number;
+  turns: number;
+}
+
+/** The part of `TicketMeasures` of src/core/measures.ts the dashboard reads (ORC-223). */
+export interface TicketMeasuresView {
+  mergedAt: number | null;
+  tokens: TokensView | null;
+  attempts: number;
+  attemptsWithoutTokens: number;
+  firstTry: boolean | null;
+  reworks: { cause: string; id: string }[];
+  revertedWithin14Days: boolean | null;
+  ciCost: { durationMs: number; runs: number } | null;
+  messages: { eventId: string; type: string; kind: string; at: number; signOfLifeMs: number | null; answerMs: number | null }[];
+  startedAt: number | null;
+  leadTimeMs: number | null;
+  workMs: number;
+  costUsd: number;
+  reviewRounds: { ai: number; human: number };
+  runs: RunMeasureView[];
+}
+
+/** An entry of `GET /api/measures`; `measures` null when they could not be read. */
+export interface MeasuredTicketView extends FlowTicketView {
+  logical: string;
+  blocked: boolean;
+  measures: TicketMeasuresView | null;
+}

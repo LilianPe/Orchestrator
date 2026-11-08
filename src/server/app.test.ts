@@ -112,7 +112,7 @@ describe('server', () => {
       await store.putTicket({ ...newTicketState('p', 'REL-3', 'Bloqué', 'dev', 1), blocked: true, blockReason: 'The run dev failed.' });
       await store.recordEvent({ ...TRUSTED, id: 'e1', type: 'run.finished', at: 2, projectId: 'p', ticketId: 'REL-2', payload: { runId: 'r2', job: 'dev', outcome: 'success', costUsd: 0, turns: 1, lastText: '' } });
 
-      for (const path of ['/api/state', '/api/flow', '/api/events/recent']) {
+      for (const path of ['/api/state', '/api/flow', '/api/events/recent', '/api/measures', '/api/tickets/p/REL-2/measures']) {
         const res = await app.request(path);
         expect(res.status, path).toBe(200);
         expect(await res.text(), path).not.toContain(TOKEN);
@@ -130,6 +130,68 @@ describe('server', () => {
       expect(chunk).toContain('REL-1');
       expect(chunk).not.toContain(TOKEN);
       await reader.cancel();
+    });
+  });
+
+  describe('the measures (ORC-223)', () => {
+    it('serves each ticket with the cost, duration and review rounds of its runs, from the journal and the run records', async () => {
+      const { app, store } = await setup();
+      const tokens = { input: 10, output: 20, cacheRead: 30, cacheCreation: 40 };
+      const run = (await store.getRun('r1'))!;
+      await store.putRun({ ...run, id: 'r0', status: 'success', startedAt: 0, endedAt: 3, token: 'tok0', tokens, costUsd: 0.3, turns: 4, sessionRole: 'implementer' });
+      await store.putRun({ ...run, id: 'r1', sessionRole: 'reviewer', job: 'review' });
+      await store.recordEvent({ ...TRUSTED, id: 'd', type: 'ticket.delegated', at: 1, projectId: 'p', ticketId: 'REL-1', payload: { linearSessionId: 'ls-1' } });
+      const res = await app.request('/api/measures');
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.tickets).toEqual([
+        expect.objectContaining({
+          projectId: 'p', ticketId: 'REL-1', title: 'Export', logical: 'dev', blocked: false,
+          measures: expect.objectContaining({ tokens, costUsd: 0.8, startedAt: 1, leadTimeMs: null, workMs: 3, reviewRounds: { ai: 1, human: 0 }, attempts: 2 }),
+        }),
+      ]);
+      expect(body.tickets[0].measures.runs.map((r: { id: string; durationMs: number | null }) => [r.id, r.durationMs])).toEqual([['r0', 3], ['r1', null]]);
+    });
+
+    it('serves one ticket with all its measures, and 404 for a ticket the factory does not track', async () => {
+      const { app } = await setup();
+      const res = await app.request('/api/tickets/p/REL-1/measures');
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({ projectId: 'p', ticketId: 'REL-1', title: 'Export', measures: { attempts: 1, runs: [{ id: 'r1', status: 'running' }] } });
+      expect((await app.request('/api/tickets/p/REL-9/measures')).status).toBe(404);
+      expect((await app.request('/api/tickets/q/REL-1/measures')).status).toBe(404);
+    });
+
+    it('serves a ticket whose measures cannot be read with null measures, the others still measured, and logs it', async () => {
+      const { app, store, bus } = await setup();
+      const logs: string[] = [];
+      bus.subscribe((m) => {
+        if (m.kind === 'log') logs.push(m.message);
+      });
+      await store.putTicket(newTicketState('p', 'REL-2', 'Import', 'todo', 2));
+      const read = store.measureFacts.bind(store);
+      vi.spyOn(store, 'measureFacts').mockImplementation((projectId, ticketId) => (ticketId === 'REL-2' ? Promise.reject(new Error('journal illisible')) : read(projectId, ticketId)));
+      const body = await (await app.request('/api/measures')).json();
+      const by = Object.fromEntries(body.tickets.map((t: { ticketId: string; measures: unknown }) => [t.ticketId, t.measures]));
+      expect(by['REL-2']).toBeNull();
+      expect(by['REL-1']).toMatchObject({ attempts: 1 });
+      expect(logs).toEqual([expect.stringContaining('journal illisible')]);
+      expect((await app.request('/api/tickets/p/REL-2/measures')).status).toBe(500);
+    });
+
+    it('serves the most recently updated tickets first, at most 50', async () => {
+      const { app, store } = await setup();
+      for (let i = 2; i <= 52; i++) await store.putTicket(newTicketState('p', `REL-${i}`, `T${i}`, 'todo', 100 + i));
+      const body = await (await app.request('/api/measures')).json();
+      expect(body.tickets).toHaveLength(50);
+      expect(body.tickets[0].ticketId).toBe('REL-52');
+      expect(body.tickets.map((t: { ticketId: string }) => t.ticketId)).not.toContain('REL-1');
+    });
+
+    it('asks for the password, as the other routes of the interface', async () => {
+      const { app } = await setup({ uiPassword: 'secret' });
+      expect((await app.request('/api/measures')).status).toBe(401);
+      expect((await app.request('/api/tickets/p/REL-1/measures')).status).toBe(401);
     });
   });
 
