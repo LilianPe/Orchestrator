@@ -1,7 +1,7 @@
 import type { NetworkLevel } from '../adapters/sandbox/types.js';
 import { NETWORK_RANK } from '../network/levels.js';
 import { hashCanonical } from '../runtime/workflow-version.js';
-import { budgetViolations, type BudgetCaps } from './budget.js';
+import { checkBudgets, type BudgetCaps } from './budget.js';
 
 /** A preset (ORC-187): typed steps chained by `next`, every way back bounded by a counter. */
 export interface Preset {
@@ -131,7 +131,7 @@ export function compilePreset(preset: Preset, options: CompileOptions = {}): Com
   }
 
   // The worst case walks the graph: only on a preset whose structure holds.
-  if (violations.length === 0 && options.budgets) violations.push(...budgetViolations(preset, options.budgets));
+  if (violations.length === 0 && options.budgets) violations.push(...checkBudgets(preset, options.budgets).violations);
   if (violations.length > 0) throw new PresetError(violations);
   return { preset, hash: hashCanonical(preset) };
 

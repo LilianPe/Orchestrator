@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { budgetViolations, worstCase, type BudgetCaps } from './budget.js';
+import { checkBudgets, worstCase, type BudgetCaps } from './budget.js';
 import { factoryDefault } from './factory-default.js';
 import { compilePreset, PresetError, type Preset } from './preset.js';
 
@@ -24,26 +24,34 @@ const loop: Preset = {
 };
 
 describe('the worst case of a preset (ORC-216)', () => {
-  it('takes every way back where it costs the most, each as often as its counter allows', () => {
-    // The `v` counter spent on the build (3 × 100) costs more than on the fix (3 × 50): 300 + review 10 + fix 50 + review 10.
-    expect(worstCase(loop, { perStepTokens: { build: 100, review: 10, fix: 50 } })).toEqual({ tokens: 370, turns: 44, attempts: { build: 3, review: 2, fix: 1 } });
-    // Where the loop costs the most changes with the caps: here on the fix.
-    expect(worstCase(loop, { perStepTokens: { build: 10, review: 10, fix: 50 } })).toMatchObject({ tokens: 180, attempts: { build: 1, review: 2, fix: 3 } });
+  it('takes every way back as often as its counter allows, a check that passes refilling its own', () => {
+    // `v` spent on the build (3 × 100), refilled when `verify` passes (as the engine's `verify.passed`), spent again on the fix (3 × 50).
+    expect(worstCase(loop, { perStepTokens: { build: 100, review: 10, fix: 50 } })).toEqual({ tokens: 300 + 10 + 150 + 10, turns: 30 + 5 + 12 + 5, attempts: { build: 3, review: 2, fix: 3 } });
+  });
+
+  it('a counter that is not refilled is shared by all its ways back: spent where it costs the most', () => {
+    const shared: Preset = { ...loop, steps: loop.steps.map((s) => (s.type === 'verify' ? { ...s, type: 'spec_check' as const } : s)) };
+    expect(worstCase(shared, { perStepTokens: { build: 100, review: 10, fix: 50 } })).toMatchObject({ tokens: 300 + 10 + 50 + 10, attempts: { build: 3, review: 2, fix: 1 } });
+    expect(worstCase(shared, { perStepTokens: { build: 10, review: 10, fix: 50 } })).toMatchObject({ tokens: 10 + 10 + 150 + 10, attempts: { build: 1, review: 2, fix: 3 } });
+  });
+
+  it('names a way back no counter bounds', () => {
+    // The review sends back to the build, whose check refills the counter the review spends: no end.
+    const refilling: Preset = { ...loop, steps: loop.steps.map((s) => (s.id === 'review' ? { ...s, onFailure: { goto: 'build', counter: 'v' } } : s)) };
+    expect(worstCase(refilling, { perStepTokens: { build: 1, review: 1, fix: 1 } })).toMatchObject({ unbounded: expect.any(String) });
   });
 
   it('counts the turns of a step as `max_turns` lowers them, never raises them', () => {
     const caps = { perStepTokens: { build: 1, review: 1, fix: 1 } };
-    // Lowered, the build no longer weighs the most: the `v` counter goes to the fix (2 + 5 + 3 × 4 + 5).
-    expect(worstCase(loop, { ...caps, maxTurns: { build: 2 } })).toMatchObject({ turns: 24 });
-    expect(worstCase(loop, { ...caps, maxTurns: { build: 999 } })).toMatchObject({ turns: 44 });
+    expect(worstCase(loop, { ...caps, maxTurns: { build: 2 } })).toMatchObject({ turns: 3 * 2 + 5 + 3 * 4 + 5 });
+    expect(worstCase(loop, { ...caps, maxTurns: { build: 999 } })).toMatchObject({ turns: 3 * 10 + 5 + 3 * 4 + 5 });
   });
 
-  it('on factory/default: 26 agent attempts at most, the review loop twice and the human one three times', () => {
-    const worst = worstCase(factoryDefault, { perStepTokens: every(1) });
-    expect(worst).toMatchObject({ tokens: 26 });
-    // One way back of `verify` to the build or the fix: either way the same count.
-    expect(worst).toMatchObject({ attempts: { intake: 1, clarify: 1, spec_draft: 5, tests: 3, review: 6, after_merge: 1 } });
-    if ('attempts' in worst) expect(worst.attempts['build']! + worst.attempts['fix']!).toBe(4 + 5);
+  it('on factory/default: 41 agent attempts at most, the review loop twice and the human one three times', () => {
+    // Each of the 5 entries into `fix` gets its 3 retries of `verify` again, as the build does.
+    expect(worstCase(factoryDefault, { perStepTokens: every(1) })).toEqual({
+      tokens: 41, turns: 3600, attempts: { intake: 1, clarify: 1, spec_draft: 5, tests: 3, build: 4, review: 6, after_merge: 1, fix: 20 },
+    });
   });
 
   it('has no bound while a step has no cap in tokens: it names each one', () => {
@@ -55,24 +63,24 @@ describe('the invariant « budget caps » of the core (ORC-216)', () => {
   const capped = (perTicketTokens?: number): BudgetCaps => ({ perStepTokens: every(1_000), ...(perTicketTokens ? { perTicketTokens } : {}) });
 
   it('passes a worst case under the ticket cap, the cap itself included', () => {
-    expect(budgetViolations(factoryDefault, capped(26_000))).toEqual([]);
+    expect(checkBudgets(factoryDefault, capped(41_000))).toMatchObject({ violations: [], worst: { tokens: 41_000 } });
   });
 
   it('refuses a worst case over the ticket cap, saying by how much', () => {
-    expect(budgetViolations(factoryDefault, capped(25_999))).toEqual([
-      'worst case 26000 tokens per ticket exceeds budgets.per_ticket_tokens 25999: lower a step\'s per_step_tokens or a counter of factory/default',
+    expect(checkBudgets(factoryDefault, capped(40_999)).violations).toEqual([
+      'worst case 41000 tokens per ticket exceeds budgets.per_ticket_tokens 40999: lower a step\'s per_step_tokens or a counter of factory/default',
     ]);
   });
 
   it('refuses while a cap is still to set, rather than passing', () => {
-    expect(budgetViolations(factoryDefault, {})).toEqual([
+    expect(checkBudgets(factoryDefault, {}).violations).toEqual([
       ...AGENTS.map((s) => `budgets.per_step_tokens.${s}: not set; the worst case of factory/default has no bound without it`),
       'budgets.per_ticket_tokens: not set; the worst case of factory/default has no bound without it',
     ]);
   });
 
   it('is checked when the preset compiles with its budgets', () => {
-    expect(() => compilePreset(factoryDefault, { budgets: capped(26_000) })).not.toThrow();
+    expect(() => compilePreset(factoryDefault, { budgets: capped(41_000) })).not.toThrow();
     expect(() => compilePreset(factoryDefault, { budgets: capped(1_000) })).toThrow(PresetError);
     // Without budgets, as the daemon loads it: the caps are to calibrate, the structure alone is checked.
     expect(() => compilePreset(factoryDefault)).not.toThrow();

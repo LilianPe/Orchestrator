@@ -4,7 +4,7 @@ Relais is configured at three levels:
 
 | Level | File | Scope | Doc |
 |---|---|---|---|
-| Instance | `<RELAIS_HOME>/config.yaml` | The daemon: port, host, projects, webhook relay, daily budget, knowledge base. | this page |
+| Instance | `<RELAIS_HOME>/config.yaml` | The daemon: port, host, projects, webhook relay, knowledge base. | this page |
 | Secrets | `<RELAIS_HOME>/secrets.json` | Linear credentials. | this page |
 | Project | `.relais/workflow.yml` in each repository | Behavior: events, jobs, models, per-run limits, checks. | [`workflow.md`](workflow.md) |
 

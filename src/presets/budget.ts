@@ -19,6 +19,10 @@ export interface WorstCase {
 }
 
 type AgentStep = Extract<Step, { maxTurns: number }>;
+interface Heaviest {
+  total: number;
+  attempts: Map<string, number>;
+}
 
 const isAgent = (s: Step): s is AgentStep => s.type === 'agent_step' || s.type === 'fix' || s.type === 'review';
 
@@ -29,74 +33,80 @@ function failureEdges(s: Step, preset: Preset): FailureEdge[] {
   return out;
 }
 
+/** A state the walk reached again while computing it: some way back is not bounded. */
+class Unbounded extends Error {}
+
 /**
- * The heaviest run of `preset` under `weight`, an exact maximum: from a step, the run follows `next` and, at each step
- * that has a failure edge whose counter is not spent, may take it instead. Memoized on the step and the counters left,
- * which a valid preset keeps small (its counters bound every way back, its `next` edges never loop).
+ * The heaviest run of `preset` under `weight`, an exact maximum: at each step, the run passes to `next` or takes a failure
+ * edge whose counter is not spent. A `verify` step that passes refills its own counter, as the engine's `verify.passed`
+ * resets `verifyAttempts` and `redAttempts`: each entry into a checked loop gets all its retries. Memoized on the step and
+ * the counters left; a state reached again while being computed throws `Unbounded`.
  */
-function heaviest(preset: Preset, weight: (s: Step) => number): { total: number; attempts: Map<string, number> } {
+function heaviest(preset: Preset, weight: (s: Step) => number): Heaviest {
   const byId = new Map(preset.steps.map((s) => [s.id, s]));
   const names = Object.keys(preset.counters);
-  const memo = new Map<string, { total: number; attempts: Map<string, number> }>();
-  const from = (start: string, left: number[]): { total: number; attempts: Map<string, number> } => {
-    const key = `${start}|${left.join(',')}`;
+  const full = (left: number[], counter: string) => left.map((n, i) => (names[i] === counter ? preset.counters[counter]!.limit : n));
+  const memo = new Map<string, Heaviest>();
+  const open = new Set<string>();
+  const from = (id: string | null, left: number[]): Heaviest => {
+    const s = id === null ? undefined : byId.get(id);
+    if (!s) return { total: 0, attempts: new Map() };
+    const key = `${s.id}|${left.join(',')}`;
     const known = memo.get(key);
     if (known) return known;
-    let best = { total: -1, attempts: new Map<string, number>() };
-    const ran: Step[] = [];
-    const consider = (total: number, rest: Map<string, number>) => {
-      if (total <= best.total) return;
-      const attempts = new Map(rest);
-      for (const s of ran) if (isAgent(s)) attempts.set(s.id, (attempts.get(s.id) ?? 0) + 1);
-      best = { total, attempts };
-    };
-    let spent = 0;
-    // Bounded by the steps' count too: a preset whose `next` edges loop is refused by `compilePreset`, never walked forever.
-    for (let s = byId.get(start); s && ran.length < byId.size; s = s.next === null ? undefined : byId.get(s.next)) {
-      ran.push(s);
-      spent += weight(s);
-      for (const edge of failureEdges(s, preset)) {
-        const i = names.indexOf(edge.counter);
-        if (i < 0 || left[i]! <= 0) continue;
-        const after = from(edge.goto, left.map((n, j) => (j === i ? n - 1 : n)));
-        consider(spent + after.total, after.attempts);
-      }
-      if (s.next === null) consider(spent, new Map());
+    if (open.has(key)) throw new Unbounded(s.id);
+    open.add(key);
+    let best = from(s.next, s.type === 'verify' && s.onFailure ? full(left, s.onFailure.counter) : left);
+    for (const edge of failureEdges(s, preset)) {
+      const i = names.indexOf(edge.counter);
+      if (i < 0 || left[i]! <= 0) continue;
+      const failed = from(edge.goto, left.map((n, j) => (j === i ? n - 1 : n)));
+      if (failed.total > best.total) best = failed;
     }
-    memo.set(key, best);
-    return best;
+    const attempts = isAgent(s) ? new Map(best.attempts).set(s.id, (best.attempts.get(s.id) ?? 0) + 1) : best.attempts;
+    const result = { total: best.total + weight(s), attempts };
+    open.delete(key);
+    memo.set(key, result);
+    return result;
   };
-  const best = from(preset.entry, names.map((n) => preset.counters[n]!.limit));
-  return { total: Math.max(0, best.total), attempts: best.attempts };
+  return from(preset.entry, names.map((n) => preset.counters[n]!.limit));
 }
 
-/** The caps an agent step runs with: its turns lowered by `max_turns`, its tokens from `per_step_tokens`. */
+/** The turns an agent step runs with: its `maxTurns`, lowered by `max_turns`. */
 const turnsOf = (s: AgentStep, caps: BudgetCaps): number => Math.min(s.maxTurns, caps.maxTurns?.[s.id] ?? Infinity);
 
 /**
  * The worst case of `preset` in tokens and in turns (ORC-216): Σ attempts × cap over the agent steps, on the run that
  * maximizes it. `missing` names the caps without which it has no bound: an agent step without `per_step_tokens`.
+ * `unbounded`: a way back the counters do not bound, named by a step on it.
  */
-export function worstCase(preset: Preset, caps: BudgetCaps): WorstCase | { missing: string[] } {
+export function worstCase(preset: Preset, caps: BudgetCaps): WorstCase | { missing: string[] } | { unbounded: string } {
   const agents = preset.steps.filter(isAgent);
   const missing = agents.filter((s) => caps.perStepTokens?.[s.id] === undefined).map((s) => `budgets.per_step_tokens.${s.id}`);
   if (missing.length) return { missing };
-  const tokens = heaviest(preset, (s) => (isAgent(s) ? caps.perStepTokens![s.id]! : 0));
-  const turns = heaviest(preset, (s) => (isAgent(s) ? turnsOf(s, caps) : 0));
-  return { tokens: tokens.total, turns: turns.total, attempts: Object.fromEntries(agents.map((s) => [s.id, tokens.attempts.get(s.id) ?? 0])) };
+  try {
+    const tokens = heaviest(preset, (s) => (isAgent(s) ? caps.perStepTokens![s.id]! : 0));
+    const turns = heaviest(preset, (s) => (isAgent(s) ? turnsOf(s, caps) : 0));
+    return { tokens: tokens.total, turns: turns.total, attempts: Object.fromEntries(agents.map((s) => [s.id, tokens.attempts.get(s.id) ?? 0])) };
+  } catch (err) {
+    if (err instanceof Unbounded) return { unbounded: err.message };
+    throw err;
+  }
 }
 
 /**
  * The invariant « budget caps » of the core (ORC-216): every agent step has its cap in tokens, the ticket has its own,
- * and the worst case stays under it. A cap still « to set » refuses, never passes.
+ * and the worst case stays under it. A cap still « to set » refuses, never passes. `worst`: when it has a bound.
  */
-export function budgetViolations(preset: Preset, caps: BudgetCaps): string[] {
+export function checkBudgets(preset: Preset, caps: BudgetCaps): { violations: string[]; worst?: WorstCase } {
   const worst = worstCase(preset, caps);
   const unset = (key: string) => `${key}: not set; the worst case of ${preset.name} has no bound without it`;
   const violations = 'missing' in worst ? worst.missing.map(unset) : [];
+  if ('unbounded' in worst) violations.push(`worst case unbounded: a counter refills inside its own loop, through step ${worst.unbounded}`);
   if (caps.perTicketTokens === undefined) violations.push(unset('budgets.per_ticket_tokens'));
-  else if (!('missing' in worst) && worst.tokens > caps.perTicketTokens) {
+  if (!('tokens' in worst)) return { violations };
+  if (caps.perTicketTokens !== undefined && worst.tokens > caps.perTicketTokens) {
     violations.push(`worst case ${worst.tokens} tokens per ticket exceeds budgets.per_ticket_tokens ${caps.perTicketTokens}: lower a step's per_step_tokens or a counter of ${preset.name}`);
   }
-  return violations;
+  return { violations, worst };
 }

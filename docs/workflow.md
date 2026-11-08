@@ -13,7 +13,7 @@ The project file contains **only what you change**. Exact merge rules:
 
 | Part | Rule |
 |---|---|
-| `tracker`, `states`, `limits`, `workspace` | Deep merge, key by key: `limits: { per_run: { usd: 10 } }` only changes the budget and keeps the pack's `turns` and `duration`. |
+| `tracker`, `states`, `limits`, `workspace` | Deep merge, key by key: `limits: { per_run: { duration: 2h } }` only changes the duration and keeps the pack's `turns`. |
 | Lists (`verify`, `setup`, `pickup.checks`…) | **Replaced** entirely, never concatenated. |
 | `on` | **Replaced per event type**: if the project declares `on.status.changed`, the pack's whole `status.changed` list is ignored; the pack's other events stay active. |
 | `jobs` | Deep merge, job by job: `jobs.review.model: sonnet` only changes the model of the pack's `review` job. A job name absent from the pack creates a new job. |
@@ -137,7 +137,7 @@ A job describes **how** to launch a Claude Code run. Fields:
 | `verify_failure` | `block` | — | A failing `verify` blocks the ticket instead of relaunching the job, which did not write the commit: `review`, on a human push. |
 | `pickup` | boolean | `false` | If `true`, applies `tracker.pickup.checks` before the ticket's first run (when no Claude session exists yet). `intake` runs them too, as inputs of its guard rather than a block (ORC-206, [preset](preset.md#intake-step-and-the-guard-before-in-progress-orc-206)). |
 | `structured_output` | boolean | absent | **Provisional** (ORC-289, until ORC-191/ORC-192 make every agent call `submit_result`): if `true`, a run in the `dev` queue that ends without valid output is a failure. When absent, it stays a success. In the pack, `true` for `dev` only, the `build` step (ORC-136). |
-| `limits` | `{ turns, duration, usd }`, each optional | `limits.per_run` | Replaces the per-run limits for this job. |
+| `limits` | `{ turns, duration }`, each optional | `limits.per_run` | Replaces the per-run limits for this job. |
 | `on_start` | `{ move: <logical state> }` | `{}` | Moves the ticket when the run starts (if it is not already there). |
 | `on_success` | `{ move: <logical state>, post: summary \| reply \| synthesis }` | `{}` | After a successful run (and successful checks): moves the ticket and/or posts in the Linear session the message composed from the agent's output (`submit_result`: summary, why, risks, untested, points to review), or failing that the run's last message. Only `summary` (end of the dev work) posts this composed message; `reply` (reply to feedback, to a question) and `synthesis` (review synthesis) post the run's last message, the agent's reply. |
 
@@ -307,7 +307,7 @@ To express an "or", write several rules in a row: the first one that matches win
    - `dev` queue on a non-delegated ticket: refused;
    - `knowledge` job without a knowledge repository: ignored;
    - `dev` queue while a run or checks are in progress on this ticket: the job is put **on hold on the ticket** and launched as soon as the current run is finished. There is only one waiting slot per ticket: a new request replaces the previous one;
-   - queue paused or daily budget reached: queued;
+   - queue paused or the Claude account's usage limit reached: queued;
    - no free slot in the queue (`parallel_sessions` / `question_sessions`): queued;
    - otherwise: launch.
 5. Launch: `pickup` checks if needed, preparation of the workspace (`workspace`), `on_start.move`, choice of session (`session`), prompt construction (`/<skill>`, ticket, `input`), then Claude Code with the job's `model` and `limits`.
@@ -354,7 +354,7 @@ version: 1
 jobs:
   review:
     model: sonnet
-    limits: { usd: 2, duration: 30m }
+    limits: { duration: 30m }
 ```
 
 ### Adding a custom job with its own skill
@@ -371,7 +371,7 @@ jobs:
     session: new
     skill: "audit-securite"
     input: thread
-    limits: { turns: 60, duration: 15m, usd: 2 }
+    limits: { turns: 60, duration: 15m }
     on_success: { post: reply }
 on:
   command:
@@ -489,7 +489,7 @@ All limits must be strictly positive (except `verify_attempts` and `ci_fix_attem
 ```yaml
 version: 1
 limits:
-  per_run: { turns: 1000, duration: 8h, usd: 50 }
+  per_run: { turns: 1000, duration: 8h }
 ```
 
 Still, keep reasonable caps: they stop an agent running in a loop, bound the spending on a poorly specified ticket, and free a blocked run's slot for other tickets (a run holds its slot in the queue until the end). A run stopped by a limit is not lost: the ticket is blocked with a message, and a reply in the thread resumes the same session.

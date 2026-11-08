@@ -6,9 +6,9 @@ import { FactoryYmlError, type FactoryYml } from '../config/factory-yml.js';
 import { runValidateCommand } from './validate.js';
 
 const AGENTS = ['intake', 'clarify', 'spec_draft', 'tests', 'build', 'review', 'after_merge', 'fix'];
-/** factory.yml's budgets whose worst case on factory/default is its ticket cap exactly: 26 attempts of 1,000 tokens. */
-const budgeted = (perTicketTokens = 26_000): FactoryYml => ({ budgets: { perStepTokens: Object.fromEntries(AGENTS.map((s) => [s, 1_000])), perTicketTokens } });
-const WITHIN = 'Worst case of factory/default: 26000 tokens and 2700 turns per ticket, within budgets.per_ticket_tokens 26000.';
+/** factory.yml's budgets whose worst case on factory/default is its ticket cap exactly: 41 attempts of 1,000 tokens. */
+const budgeted = (perTicketTokens = 41_000): FactoryYml => ({ budgets: { perStepTokens: Object.fromEntries(AGENTS.map((s) => [s, 1_000])), perTicketTokens } });
+const WITHIN = 'Worst case of factory/default: 41000 tokens and 3600 turns per ticket, within budgets.per_ticket_tokens 41000.';
 
 function repo(config?: string): string {
   const dir = mkdtempSync(join(tmpdir(), 'factory-validate-'));
@@ -132,9 +132,9 @@ describe('factory validate: the worst case of the preset (ORC-216)', () => {
   });
 
   it('refuses a preset whose worst case exceeds the ticket cap', () => {
-    expect(run(repo(), budgeted(25_999))).toEqual({
+    expect(run(repo(), budgeted(40_999))).toEqual({
       code: 1,
-      out: ['no .factory/config.yml: the factory/default baseline applies as is.', 'Budgets of factory/default refused:', "- worst case 26000 tokens per ticket exceeds budgets.per_ticket_tokens 25999: lower a step's per_step_tokens or a counter of factory/default"],
+      out: ['no .factory/config.yml: the factory/default baseline applies as is.', 'Budgets of factory/default refused:', "- worst case 41000 tokens per ticket exceeds budgets.per_ticket_tokens 40999: lower a step's per_step_tokens or a counter of factory/default"],
     });
   });
 
@@ -162,5 +162,12 @@ describe('factory validate: the worst case of the preset (ORC-216)', () => {
     const code = runValidateCommand({ repoPath: repo(), out: (l) => out.push(l), factoryYml: () => { throw new FactoryYmlError(['budgets.per_ticket_tokens: a positive integer is expected']); } });
     expect(code).toBe(1);
     expect(out.slice(1)).toEqual(['factory.yml refused:', '- budgets.per_ticket_tokens: a positive integer is expected']);
+  });
+
+  it('refuses a factory.yml it cannot read, as unreadable, not a crash', () => {
+    const out: string[] = [];
+    const code = runValidateCommand({ repoPath: repo(), out: (l) => out.push(l), factoryYml: () => { throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }); } });
+    expect(code).toBe(1);
+    expect(out.slice(1)).toEqual(['factory.yml refused:', '- unreadable: EACCES: permission denied']);
   });
 });

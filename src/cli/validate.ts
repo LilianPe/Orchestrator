@@ -1,10 +1,9 @@
 import { existsSync, lstatSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { FactoryYmlError, type FactoryYml } from '../config/factory-yml.js';
-import { parseRepoConfig, REPO_CONFIG_DIR, REPO_CONFIG_PATH, RepoConfigError, type RepoConfig } from '../config/repo-config.js';
-import { worstCase } from '../presets/budget.js';
+import { parseRepoConfig, REPO_CONFIG_DIR, REPO_CONFIG_PATH, RepoConfigError, ticketTokenCap, type RepoConfig } from '../config/repo-config.js';
+import { checkBudgets } from '../presets/budget.js';
 import { factoryDefault } from '../presets/factory-default.js';
-import { compilePreset, PresetError } from '../presets/preset.js';
 
 const FILE = REPO_CONFIG_PATH;
 /** A spelling the factory never reads: validating around it would pass a file nobody applies. */
@@ -16,7 +15,7 @@ const MISSPELT = '.factory/config.yaml';
  * Exit code 1 when the file takes from the socle, is malformed or unreadable, or when a budget is unset or exceeded, one
  * line per violation; 0 otherwise.
  */
-export function runValidateCommand(opts: { repoPath: string; out: (line: string) => void; factoryYml: () => FactoryYml | undefined }): number {
+export function runValidateCommand(opts: { repoPath: string; out: (line: string) => void; factoryYml: () => Pick<FactoryYml, 'budgets'> | undefined }): number {
   if (opts.repoPath.startsWith('-')) {
     opts.out('Usage: factory validate [repo] (no options)');
     return 1;
@@ -62,11 +61,11 @@ export function runValidateCommand(opts: { repoPath: string; out: (line: string)
     if (warnings.length) opts.out(`Warning, ignored entries (a branch that took untrusted content is refused until they are fixed):`);
     for (const w of warnings) opts.out(`- ${w}`);
   }
-  return checkBudgets(config, opts);
+  return validateBudgets(config, opts);
 }
 
 /** The invariant « budget caps » (ORC-216), on factory.yml's budgets and the repository's cap, which only lowers the ticket's. */
-function checkBudgets(config: RepoConfig, opts: { out: (line: string) => void; factoryYml: () => FactoryYml | undefined }): number {
+function validateBudgets(config: RepoConfig, opts: { out: (line: string) => void; factoryYml: () => Pick<FactoryYml, 'budgets'> | undefined }): number {
   const list = (head: string, violations: string[]): number => {
     opts.out(head);
     for (const v of violations) opts.out(`- ${v}`);
@@ -76,19 +75,14 @@ function checkBudgets(config: RepoConfig, opts: { out: (line: string) => void; f
   try {
     budgets = opts.factoryYml()?.budgets;
   } catch (err) {
-    if (!(err instanceof FactoryYmlError)) throw err;
-    return list('factory.yml refused:', err.violations);
+    // A file it cannot read (EACCES, EISDIR) is refused as unreadable, as the repository's own file is.
+    return list('factory.yml refused:', err instanceof FactoryYmlError ? err.violations : [`unreadable: ${(err as Error).message}`]);
   }
-  const ticketCaps = [budgets?.perTicketTokens, config.budgets?.perTicketTokens].filter((c) => c !== undefined);
-  const caps = { ...budgets, ...(ticketCaps.length ? { perTicketTokens: Math.min(...ticketCaps) } : {}) };
-  try {
-    compilePreset(factoryDefault, { budgets: caps });
-  } catch (err) {
-    if (!(err instanceof PresetError)) throw err;
-    return list(`Budgets of ${factoryDefault.name} refused:`, err.violations);
-  }
-  const worst = worstCase(factoryDefault, caps);
-  // Compiled with its budgets, the worst case has its bound and the ticket its cap.
-  if (!('missing' in worst)) opts.out(`Worst case of ${factoryDefault.name}: ${worst.tokens} tokens and ${worst.turns} turns per ticket, within budgets.per_ticket_tokens ${caps.perTicketTokens}.`);
+  const perTicketTokens = ticketTokenCap(budgets?.perTicketTokens, config);
+  const caps = { ...budgets, ...(perTicketTokens !== undefined ? { perTicketTokens } : {}) };
+  // The preset's structure is compiled at load (`loadWorkflow`): only its budgets are left to check.
+  const { violations, worst } = checkBudgets(factoryDefault, caps);
+  if (violations.length) return list(`Budgets of ${factoryDefault.name} refused:`, violations);
+  opts.out(`Worst case of ${factoryDefault.name}: ${worst!.tokens} tokens and ${worst!.turns} turns per ticket, within budgets.per_ticket_tokens ${perTicketTokens}.`);
   return 0;
 }

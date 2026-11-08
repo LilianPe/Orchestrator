@@ -22,7 +22,7 @@ import { ActivityRelay } from '../adapters/tracker/activity-relay.js';
 import { IssueNotFoundError, labelEchoKey, stateEchoKey, type ActivityInput, type Tracker, type TrackerIssue } from '../adapters/tracker/types.js';
 import type { Workspace, WorkspaceManager } from '../adapters/workspace/types.js';
 import { NO_REPO_VARIABLES, type RepoVariables } from '../config/repo-variables.js';
-import { parseRepoConfig, RepoConfigError, type RepoConfig, type RepoConfigRead } from '../config/repo-config.js';
+import { parseRepoConfig, RepoConfigError, ticketTokenCap, type RepoConfig, type RepoConfigRead } from '../config/repo-config.js';
 import type { JobSpec, Workflow } from '../config/workflow-schema.js';
 import type { EffectRetry } from '../runtime/outbox.js';
 import { attemptsFor, backoff, isTransient, TRANSIENT_WINDOW_MS, type RetryPolicy } from '../runtime/transient.js';
@@ -2109,9 +2109,9 @@ export class Orchestrator {
       const config = await this.repoConfigOf(project, { fetch: !ws.fresh && job.workspace !== 'trunk-readonly' });
       const setup = config.setup ? [config.setup] : wf.workspace.setup;
       setUp ||= !setup.length;
-      const caps = [this.d.perTicketTokens, config.budgets?.perTicketTokens].filter((c) => c !== undefined);
-      if (job.queue === 'dev' && caps.length) spent ??= await state(this.codeTokensSpent(project.id, ticketId));
-      const tokensLeft = spent === undefined || !caps.length ? undefined : this.tokensLeft(spent, Math.min(...caps));
+      const cap = ticketTokenCap(this.d.perTicketTokens, config);
+      if (job.queue === 'dev' && cap !== undefined) spent ??= await state(this.codeTokensSpent(project.id, ticketId));
+      const tokensLeft = spent === undefined ? undefined : this.tokensLeft(spent, cap);
       // The ticket's budget left caps the attempt too: past it, a `limit` blocks the ticket. Kept on the run, for a reattach (ORC-340).
       const limits = tokensLeft === undefined ? job.limits : { ...job.limits, tokens: Math.min(job.limits.tokens ?? Infinity, tokensLeft) };
       t = await state(this.ticket(project.id, ticketId));
