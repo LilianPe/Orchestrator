@@ -83,7 +83,7 @@ describe('the factory publishes (ORC-125)', () => {
   it('a stale event refused while the ticket is in publication: told once the publication ended, which it leaves alone (ORC-316)', async () => {
     const h = verified({ extraProjects: ['api'] });
     // The copy that waited under another project of the team: neither refuses the holder's publication nor shares its effect keys.
-    const waiting = { ...newTicketState('api', 'REL-1', 'T', 'dev', 1), delegated: true, blocked: true, awaitingRepo: ['p', 'api'] };
+    const waiting = { ...newTicketState('api', 'REL-1', 'T', 'dev', 1), delegated: true, blocked: true, blockKind: 'pickup' as const, awaitingRepo: ['p', 'api'] };
     await h.store.putTicket(waiting);
     const { started, release } = h.publisher.holdNext();
     const delegated = delegate(h);

@@ -2,7 +2,6 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { AGENT_QUESTION, STOPPED } from '../../src/core/block-cause.js';
-import { BEFORE_ORC_331 } from '../../src/core/legacy-messages.js';
 import { Flow, formatDuration, formatTokens, plural, tokensCell } from './Flow.js';
 import type { FlowView, WorkingRunView } from './types.js';
 
@@ -58,29 +57,32 @@ describe('Flow', () => {
   });
 
   it('shows a blocked ticket in Needs you under its cause, with its reason', () => {
-    const html = page({ needsYou: { ...EMPTY.needsYou, blocked: [{ cause: 'red', tickets: [{ ...base, reason: 'Red not verified after 2 attempts of tests.' }] }] } });
+    const html = page({ needsYou: { ...EMPTY.needsYou, blocked: [{ cause: 'red', tickets: [{ ...base, kind: 'red', reason: 'Red not verified after 2 attempts of tests.' }] }] } });
     expect(html).toContain('Red not verified</h3>');
     expect(html).toContain('REL-1');
     expect(html).toContain('Red not verified after 2 attempts of tests.');
     expect(html).not.toContain('Nothing is waiting for a human');
   });
 
-  it('does not repeat a reason that only says what its cause says', () => {
-    const html = page({ needsYou: { ...EMPTY.needsYou, blocked: [{ cause: 'stopped', tickets: [{ ...base, reason: 'Stopped on request' }] }] } });
+  it('does not repeat a reason whose kind says no more than its cause (ORC-332)', () => {
+    const html = page({ needsYou: { ...EMPTY.needsYou, blocked: [{ cause: 'stopped', tickets: [{ ...base, kind: 'stopped', reason: STOPPED }] }] } });
     expect(html.match(/Stopped on request/g)).toHaveLength(1);
-    const asked = page({ needsYou: { ...EMPTY.needsYou, blocked: [{ cause: 'question', tickets: [{ ...base, reason: 'Question asked by the agent' }] }] } });
+    const asked = page({ needsYou: { ...EMPTY.needsYou, blocked: [{ cause: 'question', tickets: [{ ...base, kind: 'asked', reason: AGENT_QUESTION }] }] } });
     expect(asked.match(/Question asked by the agent/g)).toHaveLength(1);
   });
 
-  it('does not repeat either a reason written before ORC-331 that only says what its cause says (ORC-332)', () => {
+  it('hides or shows a reason by the typed kind the server sends, whatever the reason says (ORC-345, criterion 3)', () => {
     const html = page({ needsYou: { ...EMPTY.needsYou, blocked: [
-      { cause: 'stopped', tickets: [{ ...base, reason: BEFORE_ORC_331.stopped }] },
-      { cause: 'question', tickets: [{ ...base, ticketId: 'REL-2', reason: BEFORE_ORC_331.question }] },
+      // Written before ORC-331, or reworded since: the kind still says it restates its cause.
+      { cause: 'stopped', tickets: [{ ...base, kind: 'stopped', reason: 'Arrêté à la demande' }] },
+      // The label of a cause as the reason of a block of another kind is shown: the kind decides, not the sentence.
+      { cause: 'question', tickets: [{ ...base, ticketId: 'REL-2', kind: 'question', reason: AGENT_QUESTION }] },
+      { cause: 'infra', tickets: [{ ...base, ticketId: 'REL-3', kind: 'infra', reason: STOPPED }] },
     ] } });
     expect(html).toContain(`${STOPPED}</h3>`);
-    expect(html).toContain(`${AGENT_QUESTION}</h3>`);
     expect(html).not.toContain('Arrêté');
-    expect(html).not.toContain('posée');
+    expect(html.match(/Question asked by the agent/g)).toHaveLength(2);
+    expect(html.match(/Stopped on request/g)).toHaveLength(2);
   });
 
   it('says on the page, not only on hover, that a running run counts when it ends', () => {
@@ -124,7 +126,7 @@ describe('Flow', () => {
   });
 
   it('escapes what a ticket says: its title and reason are data', () => {
-    const html = page({ needsYou: { ...EMPTY.needsYou, blocked: [{ cause: 'other', tickets: [{ ...base, title: '<img src=x>', reason: '<script>x</script>' }] }] } });
+    const html = page({ needsYou: { ...EMPTY.needsYou, blocked: [{ cause: 'other', tickets: [{ ...base, title: '<img src=x>', kind: 'other', reason: '<script>x</script>' }] }] } });
     expect(html).not.toContain('<img src=x>');
     expect(html).not.toContain('<script>');
   });

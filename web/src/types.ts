@@ -1,4 +1,4 @@
-import type { BlockCause } from '../../src/core/block-cause.js';
+import type { BlockCause, BlockKind } from '../../src/core/block-cause.js';
 
 export interface RunView {
   id: string;
@@ -49,7 +49,7 @@ export interface WorkingRunView extends FlowTicketView {
 /** `GET /api/flow`: `Flow` of src/server/flow.ts, which the web's types cannot import (it reaches Node's). */
 export interface FlowView {
   needsYou: {
-    blocked: { cause: BlockCause; tickets: (FlowTicketView & { reason: string })[] }[];
+    blocked: { cause: BlockCause; tickets: (FlowTicketView & { kind: BlockKind; reason: string })[] }[];
     humanReview: FlowTicketView[];
     gates: FlowTicketView[];
   };

@@ -55,7 +55,7 @@ import { buildPrompt, formatFeedback, formatVerifyFailures, readConventions, wit
 import { carriedAtLaunch, forAgent } from './human-message.js';
 import { pendingOf, reduce, samePending } from './reduce.js';
 import { advancePlan, closePlan, planStepOfJob, startPlan, type PlanStep } from './session-plan.js';
-import { upcast, type StoredEvent } from './upcast.js';
+import { MERGE_PUSHED, upcast, upcastMergeRefusal, type MergeRefusal, type StoredEvent } from './upcast.js';
 import type { Scheduler } from './scheduler.js';
 import {
   CREATES_TICKET,
@@ -86,8 +86,7 @@ import { ANTI_CHEAT_CHECK, ANTI_CHEAT_OK } from '../checks/anti-cheat.js';
 import { mdCode } from '../checks/markdown.js';
 import { parseStatus } from '../adapters/workspace/git-workspaces.js';
 import { agentPolicy, type EgressPolicy } from '../network/levels.js';
-import { REPO_CONFIG_REFUSED, TICKET_TOKENS_REACHED } from './block-cause.js';
-import { BEFORE_ORC_331 } from './legacy-messages.js';
+import { REPO_CONFIG_REFUSED, TICKET_TOKENS_REACHED, type BlockKind } from './block-cause.js';
 import { readSecurityLog, refusalSummary } from '../network/security-log.js';
 
 /** Meta key of the head a ticket's tests step started on (ORC-123). */
@@ -376,15 +375,13 @@ function sessionSaved(configDir: string, sessionId: string): boolean {
   return existsSync(projects) && readdirSync(projects).some((dir) => existsSync(join(projects, dir, `${sessionId}.jsonl`)));
 }
 
-/** Why the factory's merge is refused when the PR's head moved since the review (ORC-148). */
-const PUSHED = 'the branch received a push since the review';
 /** A verdict on a commit: what ran on it, absent when it was found green before and nothing ran again. */
 type Verified = VerifyResult & { sha?: string | undefined; commands?: readonly string[] };
 
 const HOST_CHECKS_OFF = "no sandbox (FACTORY_CONTAINER_CLI) and FACTORY_ALLOW_HOST_VERIFY is not 1: I do not run the agent's code on the host.";
 
 /** A block made out of a decision, its step to resume as the engine's `block` journals it: only where a reply resumes it (ORC-196). */
-const blockedOn = (workflow: Workflow, reason: string, job: string): InternalEvent => ({ type: 'ticket.blocked', reason, ...(workflow.blockComment ? { job } : {}) });
+const blockedOn = (workflow: Workflow, kind: BlockKind, reason: string, job: string): InternalEvent => ({ type: 'ticket.blocked', reason, kind, ...(workflow.blockComment ? { job } : {}) });
 
 export class Orchestrator {
   private background = new Map<Promise<void>, string | undefined>();
@@ -1805,11 +1802,13 @@ export class Orchestrator {
   private async merge(project: ProjectRuntime, t: TicketState, sha: string, key: EffectKey): Promise<EffectOutcome | void> {
     if (t.prNumber === undefined) return;
     const mark = `effect:${key.id}:refused`;
-    const refused = key.replay ? await this.d.store.getMeta(mark) : undefined;
-    if (refused) return this.refuseMerge(project, t, key, refused);
+    const saved = key.replay ? await this.d.store.getMeta(mark) : undefined;
+    if (saved) return this.refuseMerge(project, t, key, upcastMergeRefusal(saved));
     const writer = this.d.forgeWriter;
     const pr = t.branch ? await this.d.forge.findPr(project.repoPath, t.branch) : undefined;
     let reason: string;
+    // Said by the forge (`head_moved`) or seen here, never read back from the sentence (ORC-345).
+    let headMoved = false;
     if (pr?.number === t.prNumber && pr.state === 'MERGED') {
       if (pr.headSha === sha) return { deduplicated: true };
       // Merged on GitHub meanwhile, on another head: no refusal to answer, the merge's own events deliver the ticket.
@@ -1820,7 +1819,10 @@ export class Orchestrator {
     else if (pr && pr.number !== t.prNumber) reason = `the branch's PR (#${pr.number}) is not the ticket's (#${t.prNumber})`;
     else if (!writer) reason = "the factory's GitHub App is required to merge";
     else if (pr?.state !== 'OPEN') reason = 'the PR is no longer open';
-    else if (pr.headSha !== sha) reason = PUSHED;
+    else if (pr.headSha !== sha) {
+      reason = MERGE_PUSHED;
+      headMoved = true;
+    }
     else if (pr.checks !== 'pass' && pr.checks !== 'none') reason = `the checks of the reviewed commit are not green (${pr.failedChecks.join(', ') || pr.checks})`;
     else {
       // No check at all: the forge merges only in a repository with no CI (`mergePr`, `unchecked`).
@@ -1828,19 +1830,20 @@ export class Orchestrator {
       await writer.markPrReady(project.repoPath, t.prNumber);
       const res: MergeResult = await writer.mergePr(project.repoPath, t.prNumber, sha, pr.checks === 'none' ? { unchecked: true } : undefined);
       if (res.merged) return res.deduplicated ? { deduplicated: true } : undefined;
-      reason =
-        res.reason === 'head_moved'
-          ? PUSHED
-          : res.reason === 'checks_missing'
-            ? 'no check ran on the reviewed commit, while the repository has a CI or the factory cannot check that it has none (CI not started yet, checks just appearing, or a GitHub App without the Actions read permission)'
-            : `GitHub refuses the merge (${res.message})`;
+      headMoved = res.reason === 'head_moved';
+      reason = res.reason === 'head_moved'
+        ? MERGE_PUSHED
+        : res.reason === 'checks_missing'
+          ? 'no check ran on the reviewed commit, while the repository has a CI or the factory cannot check that it has none (CI not started yet, checks just appearing, or a GitHub App without the Actions read permission)'
+          : `GitHub refuses the merge (${res.message})`;
     }
-    await this.d.store.setMeta(mark, reason);
-    await this.refuseMerge(project, t, key, reason);
+    const refusal: MergeRefusal = { reason, headMoved };
+    await this.d.store.setMeta(mark, JSON.stringify(refusal));
+    await this.refuseMerge(project, t, key, refusal);
   }
 
   /** The `pr.merge_refused` of a merge effect, keyed by it. A failed write throws, so that the outbox retries the effect. */
-  private async refuseMerge(project: ProjectRuntime, t: TicketState, key: EffectKey, reason: string): Promise<void> {
+  private async refuseMerge(project: ProjectRuntime, t: TicketState, key: EffectKey, { reason, headMoved }: MergeRefusal): Promise<void> {
     await this.accept({
       ...TRUSTED,
       id: `merge-refused:${key.id}`,
@@ -1848,7 +1851,7 @@ export class Orchestrator {
       at: this.d.clock.now(),
       projectId: project.id,
       ticketId: t.ticketId,
-      payload: { number: t.prNumber!, url: t.prUrl ?? '', branch: t.branch ?? '', reason, headMoved: reason === PUSHED || reason === BEFORE_ORC_331.pushed },
+      payload: { number: t.prNumber!, url: t.prUrl ?? '', branch: t.branch ?? '', reason, headMoved },
     });
   }
 
@@ -1970,8 +1973,9 @@ export class Orchestrator {
       if (!this.handles.has(fresh.activeRunId)) events.push({ type: 'run.cleared' });
     }
     // A file the repository has to fix is not a breakdown of the factory: the Flow shows it as such (`repo_config`).
-    const reason = err instanceof RepoConfigError ? `${REPO_CONFIG_REFUSED}${err.message}` : err instanceof TicketBudgetError ? err.message : `Launch error: ${(err as Error).message}`;
-    fresh = await this.apply(fresh, ...events, blockedOn(project.workflow, reason, job.name));
+    const [kind, reason]: [BlockKind, string] =
+      err instanceof RepoConfigError ? ['repo_config', `${REPO_CONFIG_REFUSED}${err.message}`] : err instanceof TicketBudgetError ? ['limit', err.message] : ['infra', `Launch error: ${(err as Error).message}`];
+    fresh = await this.apply(fresh, ...events, blockedOn(project.workflow, kind, reason, job.name));
     // The ticket is blocked: a failed notice must not fail the effect, whose retry would start again.
     try {
       await this.tellBlock(project, fresh, blockFacts({ reason, step: stepOf(project.workflow, job.name), tried: [`The launch of ${job.name}.`] }), async (failed) => {
@@ -2110,7 +2114,7 @@ export class Orchestrator {
       if (!intake && failures.length) {
         this.d.scheduler.release(key);
         const reason = failures.join(' ');
-        const refused = await this.apply(t, blockedOn(project.workflow, reason, job.name));
+        const refused = await this.apply(t, blockedOn(project.workflow, 'pickup', reason, job.name));
         await this.tellBlock(project, refused, blockFacts({ reason, step: 'intake', tried: failures, question: 'Can you fix this, then reply here?' }), async (blocked) => {
           const session = await this.sessionFor(blocked);
           await tracker.activity(session, {

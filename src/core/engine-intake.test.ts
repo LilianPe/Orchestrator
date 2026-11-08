@@ -2,7 +2,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { loadWorkflow } from '../config/load-workflow.js';
 import type { AgentOutput } from './agent-output.js';
-import { blockCause } from './block-cause.js';
+import { causeOf } from './block-cause.js';
 import { decide } from './engine.js';
 import { reduce } from './reduce.js';
 import { newTicketState, type EventPayloads, type FactoryEvent, type TicketState } from './types.js';
@@ -56,7 +56,7 @@ describe('intake (ORC-206)', () => {
     const t = after(ticket(), e);
     expect(t).toMatchObject({ blocked: true, blockedJob: 'intake', risk: 'medium' });
     expect(t.blockReason).toContain('Which export format: CSV or XLSX?');
-    expect(blockCause(t.blockReason)).toBe('pickup');
+    expect(causeOf(t.blockKind)).toBe('pickup');
     const comment = out.effects.find((x) => x.kind === 'block_comment');
     expect(comment).toMatchObject({ block: { step: 'intake', question: expect.stringContaining('CSV or XLSX') } });
   });
@@ -85,6 +85,6 @@ describe('intake (ORC-206)', () => {
     const t = after(ticket(), finished(output(undefined)));
     expect(t).toMatchObject({ blocked: true, blockedJob: 'intake' });
     expect(t.size).toBeUndefined();
-    expect(blockCause(t.blockReason)).toBe('failed');
+    expect(causeOf(t.blockKind)).toBe('failed');
   });
 });

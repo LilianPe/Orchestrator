@@ -57,7 +57,7 @@ describe('the wait on a « blocked by » ticket not done (ORC-363)', () => {
 
   it.each([
     ['no longer waiting', ticket()],
-    ['blocked since', waiting({ blocked: true, blockReason: 'Stopped.' })],
+    ['blocked since', waiting({ blocked: true, blockReason: 'Stopped.', blockKind: 'stopped' })],
     ['undelegated', waiting({ delegated: false })],
     ['with a run under way', waiting({ activeRunId: 'r9', activeJob: 'dev' })],
     ['a human moved to Human Review meanwhile', waiting({ logical: 'human_review' })],
@@ -80,7 +80,7 @@ describe('the wait on a « blocked by » ticket not done (ORC-363)', () => {
   });
 
   it.each([
-    ['a block', { type: 'ticket.blocked', reason: 'Stopped.' }],
+    ['a block', { type: 'ticket.blocked', reason: 'Stopped.', kind: 'stopped' }],
     ['an undelegation', event('ticket.undelegated', {})],
     ['a dev run started', { type: 'run.started', runId: 'r2', job: 'dev', queue: 'dev', claudeSessionId: 'c2' }],
   ] as const)('ends with %s', (_what, e) => {
