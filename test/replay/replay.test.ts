@@ -253,7 +253,12 @@ describe('recorded journals (test/replay/journals)', () => {
 
   // Nothing else reads most of the frozen copies by name: a deleted one would take its coverage away silently.
   it('keeps the frozen copy of every scenario journal as main held it before the freshness check (ORC-310)', () => {
-    const expected = [...Object.keys(SCENARIOS), 'review-merge-done.v1'].map((name) => `${name}.pre-orc-310.json`);
+    // The journals main held then, not today's SCENARIOS: a scenario added later has no copy to keep.
+    const expected = [
+      'authz-refused-then-allowed', 'blocked-then-comment-resumes', 'build-loop-blocked', 'check-failed-then-feedback',
+      'crash-loop-bound', 'dead-letter-then-repair', 'human-reply-during-run', 'merge-revert-ci',
+      'publish-refused-then-published', 'red-ci-then-stop', 'review-merge-done', 'review-merge-done.v1', 'signed-actor-then-untrusted',
+    ].map((name) => `${name}.pre-orc-310.json`);
     expect(files.filter((f) => f.endsWith('.pre-orc-310.json')).sort()).toEqual(expected.sort());
   });
 
