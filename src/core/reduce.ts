@@ -35,6 +35,9 @@ export function pendingOf(start: PendingJob): PendingJob {
 export const samePending = (a: PendingJob | undefined, b: PendingJob | undefined): boolean =>
   !!a && !!b && isDeepStrictEqual(pendingOf(a), pendingOf(b));
 
+/** The start of the active run goes with it, when it had one: a ticket that never held one keeps its shape. */
+const ended = (t: TicketState, active: boolean): Partial<TicketState> => (active && t.activeStart ? { activeStart: undefined } : {});
+
 /** What tells a message of the inbox from another (ORC-339): its author, its moment, its source and its words. */
 const itemKey = (i: FeedbackItem): string => JSON.stringify([i.authorId ?? i.author, i.at, i.source, i.body]);
 
@@ -75,10 +78,11 @@ function external(t: TicketState, e: FactoryEvent): TicketState {
         costUsd: t.costUsd + e.payload.costUsd,
         activeRunId: active ? undefined : t.activeRunId,
         activeJob: active ? undefined : t.activeJob,
+        ...ended(t, active),
       };
     }
     case 'run.lost':
-      return t.activeRunId === e.payload.runId ? { ...t, activeRunId: undefined, activeJob: undefined } : t;
+      return t.activeRunId === e.payload.runId ? { ...t, activeRunId: undefined, activeJob: undefined, ...ended(t, true) } : t;
     case 'verify.passed':
     case 'verify.failed':
     case 'verify.errored':
@@ -129,7 +133,14 @@ function internal(t: TicketState, e: InternalEvent): TicketState {
       // the queue, a decision): never both, never neither (ORC-339). The same job with another input, or the relaunch of
       // a lost attempt, is not it.
       const startsPending = !!e.starts && samePending(t.pendingJob, e.starts);
-      return { ...t, activeRunId: e.runId, activeJob: e.job, claudeSessionId, ...(startsPending ? { pendingJob: undefined } : {}) };
+      return {
+        ...t,
+        activeRunId: e.runId,
+        activeJob: e.job,
+        claudeSessionId,
+        ...(e.starts ? { activeStart: pendingOf(e.starts) } : {}),
+        ...(startsPending ? { pendingJob: undefined } : {}),
+      };
     }
     case 'feedback.consumed': {
       if (!e.items) return { ...t, humanInbox: [] };
@@ -137,7 +148,7 @@ function internal(t: TicketState, e: InternalEvent): TicketState {
       return { ...t, humanInbox: t.humanInbox.filter((i) => !read.has(itemKey(i))) };
     }
     case 'run.cleared':
-      return { ...t, activeRunId: undefined, activeJob: undefined };
+      return { ...t, activeRunId: undefined, activeJob: undefined, ...ended(t, true) };
   }
 }
 

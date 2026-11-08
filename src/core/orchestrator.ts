@@ -289,6 +289,8 @@ class RetryableStart extends Error {
 
 /** Starts of a queue item that failed before their `run.started`, at most (ORC-339): past them, the ticket is blocked. */
 const START_ATTEMPTS = 5;
+/** The wait before such an item is handed out again, doubled at each failure (2 s, 4 s, 8 s, 16 s). */
+const START_BACKOFF_MS = 2_000;
 
 /** What a start came to: queued, set pending behind a run that holds the ticket (`deferred`), or anything else. */
 type StartOutcome = 'queued' | 'deferred' | 'done';
@@ -1297,12 +1299,15 @@ export class Orchestrator {
             const failed = (item.failedStarts ?? 0) + 1;
             if (failed < START_ATTEMPTS) {
               clearInterval(renew);
-              this.log('warn', `start ${item.job} on ${item.ticketId} failed (${err.message}), ${failed} of ${START_ATTEMPTS}: back in line`);
-              await this.d.store.releaseQueued(claim, failed);
+              // Not handed out again at once: the same drain would spend every attempt within milliseconds.
+              const wait = START_BACKOFF_MS * 2 ** (failed - 1);
+              this.log('warn', `start ${item.job} on ${item.ticketId} failed (${err.message}), ${failed} of ${START_ATTEMPTS}: back in line in ${wait / 1000} s`);
+              await this.d.store.releaseQueued(claim, { failedStarts: failed, notBefore: this.d.clock.now() + wait });
               return;
             }
+            // No run of this start is the ticket's: whatever run the ticket holds is another launch's, left alone.
             const job = project.workflow.jobs[item.job];
-            if (job) await this.launchFailed(project, item.ticketId, job, item, err.failure);
+            if (job) await this.launchFailed(project, item.ticketId, job, item, err.failure, undefined);
           }
           clearInterval(renew);
           // Deferred: set pending behind the run that holds the ticket, now the job's only holder.
@@ -1776,15 +1781,18 @@ export class Orchestrator {
       // job by `settle`) gets one too: cut once launched, handed out again, it must not run beside its relaunch (ORC-220).
       startMark: fromQueue ? opts.startMark : `${opts.startMark ?? `start:${project.id}:${ticketId}:${job.name}:${this.d.clock.now()}`}:queued`,
     };
-    if (job.queue === 'dev' && (t.activeRunId || t.verifyingRunId)) {
-      await this.apply(t, { type: 'pending.set', job: pendingOf({ ...opts, job: job.name }) });
-      return 'deferred';
-    }
     // Back in line: through its claim for a start handed out of the queue, as a new request otherwise.
     const requeue = async (): Promise<'queued'> => {
       if (!fromQueue) await this.d.scheduler.enqueue(item);
       return 'queued';
     };
+    if (job.queue === 'dev' && (t.activeRunId || t.verifyingRunId)) {
+      const start = pendingOf({ ...opts, job: job.name });
+      // Handed out of the queue to a ticket that holds another pending job: it stays in line, never in that one's place (ORC-339).
+      if (fromQueue && t.pendingJob && !samePending(t.pendingJob, start)) return requeue();
+      await this.apply(t, { type: 'pending.set', job: start });
+      return 'deferred';
+    }
     if (this.stopping || (await this.isPaused())) return requeue();
     if (await this.overBudget()) {
       const queued = await requeue();
@@ -1797,23 +1805,30 @@ export class Orchestrator {
     const slot = this.d.scheduler.free(job.queue) > promised ? this.d.scheduler.tryAcquire(job.queue, key) : null;
     admitted?.();
     if (slot === null) return requeue();
+    // Drawn here: a launch that fails lets go of its own run only, never another launch's (ORC-339).
+    const runId = this.newId();
     try {
-      return (await this.launch(project, ticketId, job, opts, slot, key, recorded)) ?? 'done';
+      const launched = await this.launch(project, ticketId, job, opts, slot, key, runId, recorded);
+      // Lost to another job while the ticket holds yet another pending one: back in line.
+      return launched === 'queued' ? await requeue() : (launched ?? 'done');
     } catch (err) {
       this.d.scheduler.release(key);
       // Failed before its `run.started` (ORC-339): nothing of the run is the ticket's, the start is tried again (the
       // effect's retry, the drain's bounded one). Past it, the run may be the ticket's: a launch error, as before.
       if (err instanceof RetryableStart) throw err;
-      await this.launchFailed(project, ticketId, job, opts, err);
+      await this.launchFailed(project, ticketId, job, opts, err, runId);
       return 'done';
     }
   }
 
-  /** A launch that failed: the run it may have put on the ticket is let go, and the ticket is blocked on its job, said once. */
-  private async launchFailed(project: ProjectRuntime, ticketId: string, job: JobSpec, opts: StartOpts, err: unknown): Promise<void> {
+  /**
+   * A launch that failed: the run it put on the ticket (`runId`, its own) is let go, and the ticket is blocked on its
+   * job, said once. A run of another launch the ticket holds stays as it is (ORC-339).
+   */
+  private async launchFailed(project: ProjectRuntime, ticketId: string, job: JobSpec, opts: StartOpts, err: unknown, runId: string | undefined): Promise<void> {
     let fresh = await this.ticket(project.id, ticketId);
     const events: InternalEvent[] = [];
-    if (fresh.activeRunId) {
+    if (runId !== undefined && fresh.activeRunId === runId) {
       const r = await this.d.store.getRun(fresh.activeRunId);
       if (r && r.status === 'running' && !this.handles.has(r.id)) await this.d.store.putRun({ ...r, status: 'failure', endedAt: this.d.clock.now() });
       if (!this.handles.has(fresh.activeRunId)) events.push({ type: 'run.cleared' });
@@ -1864,8 +1879,9 @@ export class Orchestrator {
     opts: StartOpts,
     slot: number,
     key: string,
+    runId: string,
     recorded?: () => Promise<void>,
-  ): Promise<'deferred' | 'done' | undefined> {
+  ): Promise<StartOutcome | undefined> {
     const { tracker, store, clock, workspaces, forge } = this.d;
     const wf = project.workflow;
     // What the launch starts, in the shape of a pending job: its `run.started` names it (ORC-339).
@@ -1873,18 +1889,23 @@ export class Orchestrator {
     /** The ticket holds another dev run (another worker's launch won the race). */
     const taken = (x: TicketState): boolean => job.queue === 'dev' && !!x.activeRunId;
     /**
-     * Another launch took the ticket (ORC-339). Its run is this very job (a settle taken up by another worker after a
-     * lost lease): nothing more to start. Another job: this start waits behind it, pending, as `startRun` sets a start
-     * that meets a busy ticket; a drain's item then leaves the queue, the pending job is its only holder.
+     * Another launch took the ticket (ORC-339). Its run is this very start, all of it (a settle taken up by another
+     * worker after a lost lease): nothing more to start. Another start: this one waits behind it, pending, as
+     * `startRun` sets a start that meets a busy ticket, unless the ticket holds another pending job, which it never
+     * replaces: then it goes back in line (`queued`).
      */
-    const lose = async (holder: TicketState): Promise<'deferred' | 'done'> => {
+    const lose = async (holder: TicketState): Promise<StartOutcome> => {
       this.d.scheduler.release(key);
-      if (holder.activeJob === job.name) {
-        this.log('warn', `${job.name} on ${ticketId} not launched: run ${holder.activeRunId} of the same job took the ticket first`);
+      if (samePending(holder.activeStart, start)) {
+        this.log('warn', `${job.name} on ${ticketId} not launched: run ${holder.activeRunId} of the same start took the ticket first`);
         return 'done';
       }
+      if (holder.pendingJob && !samePending(holder.pendingJob, start)) {
+        this.log('warn', `${job.name} on ${ticketId} not launched: run ${holder.activeRunId} took the ticket first, and another job waits behind it: back in line`);
+        return 'queued';
+      }
       this.log('warn', `${job.name} on ${ticketId} not launched: run ${holder.activeRunId} took the ticket first, it waits behind it`);
-      if (!samePending(holder.pendingJob, start)) await this.apply(holder, { type: 'pending.set', job: start });
+      if (!holder.pendingJob) await this.apply(holder, { type: 'pending.set', job: start });
       return 'deferred';
     };
     /** The factory's own state, read or written before the `run.started`: its failure is a start to try again. */
@@ -1894,7 +1915,6 @@ export class Orchestrator {
       });
     // Read while the workspace is prepared; a pack it cannot read gives null fingerprints (ORC-226).
     const pack = packFingerprints(this.d.packDir, (err) => this.log('warn', `attempt labels: pack not fingerprinted: ${err.message}`));
-    const runId = this.newId();
 
     // Up to the workspace: a launch that lost does nothing.
     const head = await (async () => {

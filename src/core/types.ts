@@ -421,6 +421,8 @@ export interface TicketState {
   activeRunId?: string;
   /** Job of `activeRunId`, read by `when: job == …` conditions. */
   activeJob?: string;
+  /** What `activeRunId` started, in the shape of a pending job (ORC-339): a launch that lost to it tells the same start from another. */
+  activeStart?: PendingJob;
   verifyingRunId?: string;
   /** The last commit `verify` found green (ORC-151): nothing else is published. Absent before it. */
   verifiedSha?: string;

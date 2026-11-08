@@ -883,6 +883,16 @@ describe('decide — built-ins', () => {
     expect(out.effects.filter((e) => e.kind === 'start_run')).toEqual([
       { kind: 'start_run', job: 'fix-ci', input: 'ci_failures', inputText: 'lint failed', sensitivePaths: ['.github/'] },
     ]);
+    // Debounced: the reply keeps the block, which its timer lifts by starting that very job; held messages wait for it.
+    const debounced: Workflow = { ...workflow, on: { ...workflow.on, 'session.prompted': [{ run: 'dev-feedback', debounceMs: 180_000 }] } };
+    const reply = decide(blocked, ev('session.prompted', { linearSessionId: 's1', body: 'try again', author: 'L', kind: 'instruction' }), debounced);
+    expect(reply.events.map((e) => e.type)).not.toContain('ticket.unblocked');
+    expect(reply.timers).toEqual([expect.objectContaining({ kind: 'debounce' })]);
+    const fired = decide(blocked, ev('timer.fired', { kind: 'debounce', payload: { job: 'dev-feedback', inbox: true } }), debounced);
+    expect(fired.events).toEqual(expect.arrayContaining([{ type: 'ticket.unblocked' }, { type: 'pending.cleared', job: pendingJob }]));
+    expect(fired.effects.filter((e) => e.kind === 'start_run')).toEqual([
+      { kind: 'start_run', job: 'fix-ci', input: 'ci_failures', inputText: 'lint failed', sensitivePaths: ['.github/'] },
+    ]);
     // A block on another job: the reply resumes as before, the pending job waits behind its run.
     const other = decide({ ...blocked, blockedJob: 'dev' }, ev('session.prompted', { linearSessionId: 's1', body: 'try again', author: 'L' }), workflow);
     expect(other.events).not.toContainEqual({ type: 'pending.cleared', job: pendingJob });

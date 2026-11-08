@@ -456,8 +456,9 @@ function keepMessage(out: Decision, event: HumanMessage, source: 'session' | 'th
  * behind: its end is their step boundary. A block that came since waits for a reply: the messages before it answer nothing.
  */
 function heldInbox(ticket: TicketState | undefined): string | undefined {
-  if (ticket?.activeRunId || ticket?.verifyingRunId || ticket?.pendingJob) return 'held for the end of the work in flight';
+  // The block first: a pending job a dead settle left on a blocked ticket is no work in flight (ORC-339).
   if (ticket?.blocked) return 'held by the block';
+  if (ticket?.activeRunId || ticket?.verifyingRunId || ticket?.pendingJob) return 'held for the end of the work in flight';
   return awaitsAgent(ticket?.humanInbox ?? []) ? undefined : 'nothing left to hand over';
 }
 
@@ -590,37 +591,47 @@ function resumedJob(rule: Rule, event: FactoryEvent, ticket: TicketState | undef
 }
 
 /**
- * The pending job a reply resumes (ORC-339): the ticket blocked on the job it holds pending, with no run (a settle that
- * could not start it, `stuckPending`). The reply starts that job as it was set pending, its input and restrictions.
+ * A pending job no run will start (ORC-339): no run or check ahead of it, on a ticket blocked on it (a settle that could
+ * not start it, `stuckPending`). Only a reply lifts that block, by starting the job: at once, or when its debounce fires.
  */
+function strandedPending(ticket: TicketState | undefined, workflow: Workflow): PendingJob | undefined {
+  const pending = ticket?.pendingJob;
+  if (!pending || !ticket.blocked || ticket.blockedJob !== pending.job || ticket.activeRunId || ticket.verifyingRunId) return undefined;
+  return workflow.jobs[pending.job] ? pending : undefined;
+}
+
+/** The pending job a reply resumes, at once: the reply rule is not debounced (`timer.fired` resumes it otherwise). */
 function resumedPending(rule: Rule, event: FactoryEvent, ticket: TicketState | undefined, workflow: Workflow): PendingJob | undefined {
   if (!workflow.blockComment || !REPLIES.has(event.type) || !rule.run || rule.debounceMs || !ticket?.blocked) return undefined;
-  const pending = ticket.pendingJob;
-  if (!pending || ticket.blockedJob !== pending.job || ticket.activeRunId || ticket.verifyingRunId || !workflow.jobs[pending.job]) return undefined;
-  return pending;
+  return strandedPending(ticket, workflow);
+}
+
+/** Starts a stranded pending job as it was set pending, its input and restrictions, and takes it off the ticket with this decision. */
+function startPending(out: Decision, event: FactoryEvent, ticket: TicketState, workflow: Workflow, pending: PendingJob): Decision {
+  const job = workflow.jobs[pending.job]!;
+  if (refusal(event, ticket, job, runTaint(event, ticket, pending.input ?? job.input))) return out;
+  unblock(out, event, ticket);
+  // Off the ticket with this decision: the start it makes is the outbox's now, at least once.
+  out.events.push({ type: 'pending.cleared', job: pending });
+  startRun(out, event, ticket, job, {
+    ...(pending.input ? { input: pending.input } : {}),
+    ...(pending.inputText !== undefined ? { inputText: pending.inputText } : {}),
+    ...(pending.resume ? { resume: true } : {}),
+    ...(pending.sensitivePaths ? { sensitivePaths: pending.sensitivePaths } : {}),
+    ...(pending.relaunchOf ? { relaunchOf: pending.relaunchOf } : {}),
+  });
+  return out;
 }
 
 function applyRule(out: Decision, rule: Rule, event: FactoryEvent, ticket: TicketState | undefined, workflow: Workflow): Decision {
   const pending = resumedPending(rule, event, ticket, workflow);
-  if (pending) {
-    const job = workflow.jobs[pending.job]!;
-    if (refusal(event, ticket, job, runTaint(event, ticket, pending.input ?? job.input))) return out;
-    unblock(out, event, ticket!);
-    // Off the ticket with this decision: the start it makes is the outbox's now, at least once.
-    out.events.push({ type: 'pending.cleared', job: pending });
-    startRun(out, event, ticket, job, {
-      ...(pending.input ? { input: pending.input } : {}),
-      ...(pending.inputText !== undefined ? { inputText: pending.inputText } : {}),
-      ...(pending.resume ? { resume: true } : {}),
-      ...(pending.sensitivePaths ? { sensitivePaths: pending.sensitivePaths } : {}),
-      ...(pending.relaunchOf ? { relaunchOf: pending.relaunchOf } : {}),
-    });
-    return out;
-  }
+  if (pending) return startPending(out, event, ticket!, workflow, pending);
   const resumed = resumedJob(rule, event, ticket, workflow);
   const job = resumed ?? (rule.run ? workflow.jobs[rule.run]! : undefined);
   // A resumed job reads the inbox whatever its own input says: judged on the taint it will start with, or the ticket would lose its block for a run refused (I12).
-  if (job && !refusal(event, ticket, job, runTaint(event, ticket, resumed ? 'feedback' : job.input)) && ticket?.blocked) unblock(out, event, ticket);
+  // A block on a stranded pending job stays until the debounce fires: it is what tells that reply to start that job (ORC-339).
+  const keepsBlock = !!rule.debounceMs && !!strandedPending(ticket, workflow);
+  if (job && !keepsBlock && !refusal(event, ticket, job, runTaint(event, ticket, resumed ? 'feedback' : job.input)) && ticket?.blocked) unblock(out, event, ticket);
   if (rule.move) out.effects.push({ kind: 'move', to: rule.move });
   if (rule.labels) out.effects.push({ kind: 'labels', add: rule.labels.add, remove: rule.labels.remove });
   if (rule.comment) out.effects.push({ kind: 'comment', body: rule.comment });
@@ -1210,6 +1221,9 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       }
       const job = workflow.jobs[fired.payload.job];
       if (!job) return out;
+      // The debounced reply to the block of a pending job no settle could start: that very job starts (ORC-339).
+      const stranded = ticket?.delegated ? strandedPending(ticket, workflow) : undefined;
+      if (stranded) return startPending(out, event, ticket!, workflow, stranded);
       const held = fired.payload.inbox ? heldInbox(ticket) : undefined;
       if (held) {
         out.trace.push(`timer.fired debounce: ${job.name} not started, ${held}`);

@@ -28,6 +28,7 @@ import {
   type MeasureFacts,
   type OutboxRow,
   type QueueClaim,
+  type QueueRetry,
   type QueueItem,
   type RunRecord,
   type SecurityLog,
@@ -632,14 +633,15 @@ export class SqliteStore implements Store {
     return Number(res.changes) === 1;
   }
 
-  async releaseQueued(claim: QueueClaim, failedStarts?: number): Promise<boolean> {
+  async releaseQueued(claim: QueueClaim, retry?: QueueRetry): Promise<boolean> {
     const { projectId, ticketId, job } = claim.item;
+    // A retry's wait is a lease nobody holds: no claim takes the item before it ends.
     const res = this.db
       .prepare(
-        `UPDATE queue SET lease = NULL, lease_until = NULL, data = CASE WHEN ? IS NULL THEN data ELSE json_set(data, '$.failedStarts', ?) END
+        `UPDATE queue SET lease = NULL, lease_until = ?, data = CASE WHEN ? IS NULL THEN data ELSE json_set(data, '$.failedStarts', ?) END
          WHERE project_id = ? AND ticket_id = ? AND job = ? AND lease = ?`,
       )
-      .run(failedStarts ?? null, failedStarts ?? null, projectId, ticketId, job, claim.lease);
+      .run(retry?.notBefore ?? null, retry?.failedStarts ?? null, retry?.failedStarts ?? null, projectId, ticketId, job, claim.lease);
     return Number(res.changes) === 1;
   }
 

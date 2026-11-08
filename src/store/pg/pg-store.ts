@@ -31,6 +31,7 @@ import {
   type MeasureFacts,
   type OutboxRow,
   type QueueClaim,
+  type QueueRetry,
   type QueueItem,
   type RunRecord,
   type SecurityLog,
@@ -1085,14 +1086,16 @@ export class PgStore implements AsyncStore {
     return this.settleQueued(claim, 'done');
   }
 
-  async releaseQueued(claim: QueueClaim, failedStarts?: number): Promise<boolean> {
-    return this.settleQueued(claim, 'pending', failedStarts);
+  async releaseQueued(claim: QueueClaim, retry?: QueueRetry): Promise<boolean> {
+    return this.settleQueued(claim, 'pending', retry);
   }
 
-  private async settleQueued(claim: QueueClaim, status: 'done' | 'pending', failedStarts?: number): Promise<boolean> {
-    const payload = failedStarts === undefined ? sql`payload - 'lease'` : sql`jsonb_set(payload - 'lease', '{failedStarts}', to_jsonb(${failedStarts}::int))`;
+  private async settleQueued(claim: QueueClaim, status: 'done' | 'pending', retry?: QueueRetry): Promise<boolean> {
+    const payload = retry === undefined ? sql`payload - 'lease'` : sql`jsonb_set(payload - 'lease', '{failedStarts}', to_jsonb(${retry.failedStarts}::int))`;
+    // A retry's wait is the row's `available_at`: no claim takes it before.
+    const available = retry === undefined ? sql`` : sql`, available_at = to_timestamp(${retry.notBefore / 1000})`;
     const result = await this.db.execute(sql`
-      update outbox set status = ${status}, lease_until = null, payload = ${payload}, updated_at = to_timestamp(${this.now() / 1000})
+      update outbox set status = ${status}, lease_until = null, payload = ${payload}${available}, updated_at = to_timestamp(${this.now() / 1000})
       where id = ${claim.id} and status = 'running' and payload->>'lease' = ${claim.lease}
     `);
     return (result.rowCount ?? 0) > 0;
