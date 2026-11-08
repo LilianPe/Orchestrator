@@ -557,7 +557,8 @@ describe('a pending job through its launch', () => {
     h.workspaces.prepare = (req) => (cut ? prepare(req) : ((cut = true), new Promise<never>(() => {})));
     h.runner.enqueue({ hold: true });
     h.runner.release(first);
-    await vi.waitFor(() => expect(cut).toBe(true));
+    // The verdict of the first run's check comes first: seconds on a loaded Postgres.
+    await vi.waitFor(() => expect(cut).toBe(true), { timeout: 10_000 });
     await h.restart({ mode: 'brutal' });
     await h.advance(60_001);
     expect(prompts(h)).toEqual(['/factory:dev', '/factory:feedback']);

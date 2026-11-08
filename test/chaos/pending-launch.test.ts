@@ -61,7 +61,7 @@ async function play(at: number, fault?: Fault): Promise<{ window: Window; h: Ret
   if (fault === 'hang') {
     // Driven as the clean play is, never awaited: the call that hangs holds it for good.
     void h.orch.drained().catch(() => {});
-    await vi.waitFor(() => expect(window.hit).toBe(true));
+    await vi.waitFor(() => expect(window.hit).toBe(true), { timeout: 10_000 });
     await h.restart({ mode: 'brutal' });
     await h.advance(60_001);
   } else {
