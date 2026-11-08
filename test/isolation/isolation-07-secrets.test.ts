@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { execCmd } from '../../src/adapters/exec.js';
-import { ClaudeCodeRunner } from '../../src/adapters/runner/claude-code.js';
+import { ClaudeCodeRunner, SANDBOX_CLAUDE_TOKEN } from '../../src/adapters/runner/claude-code.js';
 import { SANDBOX_HOME, WORKSPACE_TARGET, type Sandbox } from '../../src/adapters/sandbox/types.js';
 import { parseRepoConfig } from '../../src/config/repo-config.js';
 import { repoVariables } from '../../src/config/repo-variables.js';
@@ -14,8 +14,8 @@ import { runSealedSetup } from '../../src/core/sealed-setup.js';
 import { cli, enabled, image, useSandboxes } from './helpers.js';
 
 /**
- * Isolation n° 7 (ORC-218, extended by ORC-211): the only credential in a run is the token of the chosen
- * Claude account, and no secret of the repository outlives its `setup`. The run goes through the real
+ * Isolation n° 7 (ORC-218, extended by ORC-211 and ORC-337): a run holds no credential but its own run token, not even
+ * the chosen Claude account's (the egress proxy sets it on the model calls), and no secret of the repository outlives its `setup`. The run goes through the real
  * runner, its `claude` swapped for `sh -c env`, with a daemon environment full of secrets; the setup goes
  * through the real sealed setup, on a real engine; then the agent's sandbox, the disk and the image's
  * layers and config are searched. Run it on the runner image with FACTORY_RUNNER_IMAGE (built from
@@ -91,6 +91,9 @@ describe.skipIf(!enabled)(`no secret in the sandbox (${cli}, isolation n° 7)`, 
     },
   });
 
+  /** What every process of the last run held in its environment, read from `/proc` while it ran. */
+  let procEnvirons = '';
+
   /** The environment of the real runner's run, in a daemon whose environment is full of secrets. */
   async function runEnvOf(runEnv: Record<string, string>): Promise<Record<string, string>> {
     const ws = workspace();
@@ -98,7 +101,7 @@ describe.skipIf(!enabled)(`no secret in the sandbox (${cli}, isolation n° 7)`, 
     const saved = Object.fromEntries(Object.keys(DAEMON_SECRETS).map((k) => [k, process.env[k]]));
     Object.assign(process.env, DAEMON_SECRETS);
     try {
-      const runner = new ClaudeCodeRunner({ transcriptsDir: workspace(), sandboxes: provider, claudeToken: () => CHOSEN_ACCOUNT, command: ['sh', '-c', `env > ${WORKSPACE_TARGET}/env.txt`, 'sh'] });
+      const runner = new ClaudeCodeRunner({ transcriptsDir: workspace(), sandboxes: provider, claudeToken: () => CHOSEN_ACCOUNT, command: ['sh', '-c', `env > ${WORKSPACE_TARGET}/env.txt; cat /proc/[0-9]*/environ > ${WORKSPACE_TARGET}/proc.txt 2>/dev/null; true`, 'sh'] });
       await runner.start({
         runId: 'iso-07',
         cwd: WORKSPACE_TARGET,
@@ -119,22 +122,28 @@ describe.skipIf(!enabled)(`no secret in the sandbox (${cli}, isolation n° 7)`, 
         else process.env[k] = v;
       }
     }
+    procEnvirons = readFileSync(join(ws, 'proc.txt'), 'utf8');
     return Object.fromEntries(
       readFileSync(join(ws, 'env.txt'), 'utf8').split('\n').filter(Boolean).map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]),
     );
   }
 
-  it('hands a run its own variables and the chosen account token alone, none of the daemon', async () => {
+  it('hands a run its own variables and a placeholder for the Claude token, nothing of the daemon nor of the account', async () => {
     const env = await runEnvOf(RUN_ENV);
     for (const [k, v] of Object.entries(RUN_ENV)) expect(env[k]).toBe(v);
     const daemonOnly = /^(LINEAR_|FACTORY_|RELAIS_)/; // RELAIS_ : transition, à retirer (ORC-167)
     expect(Object.keys(env).filter((k) => daemonOnly.test(k)).sort()).toEqual(Object.keys(RUN_ENV).filter((k) => k.startsWith('FACTORY_')).sort());
     for (const k of Object.keys(DAEMON_SECRETS).filter((k) => k !== 'CLAUDE_CODE_OAUTH_TOKEN')) expect(env).not.toHaveProperty(k);
     for (const v of Object.values(DAEMON_SECRETS)) expect(Object.values(env)).not.toContain(v);
-    // Acceptance 2: listed by name and by shape, the account's token is the only credential; the run token is the factory's own, valid for this run.
+    // Listed by name and by shape: the run token, the factory's own and valid for this run, is the only credential (ORC-211).
+    // The Claude login is a placeholder the egress proxy swaps for the account's token (ORC-337).
     expect(Object.keys(env).filter((k) => CREDENTIAL_NAME.test(k)).sort()).toEqual(['CLAUDE_CODE_OAUTH_TOKEN', 'FACTORY_RUN_TOKEN']);
-    expect(env['CLAUDE_CODE_OAUTH_TOKEN']).toBe(CHOSEN_ACCOUNT);
-    expect(Object.entries(env).filter(([, v]) => TOKEN.test(v)).map(([k]) => k)).toEqual(['CLAUDE_CODE_OAUTH_TOKEN']);
+    expect(env['CLAUDE_CODE_OAUTH_TOKEN']).toBe(SANDBOX_CLAUDE_TOKEN);
+    expect(Object.entries(env).filter(([, v]) => TOKEN.test(v)).map(([k]) => k)).toEqual([]);
+    // Nor in any process of the sandbox, as /proc shows them (ORC-337 acceptance 1); read for real: the run's own variables are there.
+    expect(procEnvirons).toContain('run-token-of-this-run');
+    expect(procEnvirons).not.toContain(CHOSEN_ACCOUNT);
+    expect(procEnvirons).not.toMatch(TOKEN);
   }, 240_000);
 
   it('passes a repository variable only if .factory/config.yml declares it', async () => {

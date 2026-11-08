@@ -1,6 +1,7 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { REFREEZE } from '../../../checks/freeze.js';
 import { classifyMessage } from '../../../core/human-message.js';
+import type { MessageClassifier } from '../../runner/message-classifier.js';
 import { maskTranscriptLine } from '../../runner/transcript.js';
 import { isEffectComment, IssueNotFoundError, labelEchoKey, stateEchoKey } from '../types.js';
 import { labelChanges, type KnownLabels } from './labels.js';
@@ -112,7 +113,7 @@ const delegationPayload = (body: any) => ({ linearSessionId: body.agentSession.i
 
 /**
  * What a message becomes before the inbox (ORC-180): the secret shapes of the transcripts masked, so that none reaches
- * the journal, a prompt or an activity, then classified without a model. On Linear, the message stays as its author wrote it.
+ * the journal, a prompt or an activity, then classified (ORC-336). On Linear, the message stays as its author wrote it.
  */
 function message(text: string): { body: string; masked?: true } {
   const body = maskTranscriptLine(text, []);
@@ -299,7 +300,46 @@ export function deliveryKey(body: any): string {
   return `body:${createHash('sha256').update(JSON.stringify({ ...body, webhookTimestamp: undefined })).digest('hex')}`;
 }
 
-export async function mapLinearWebhook(body: any, key: string, ctx: MapContext): Promise<FactoryEvent[]> {
+/** The events of a message a model is to classify (ORC-336): a reply, a mention or a block's reply that is no command. */
+const CLASSIFIED = new Set<string>(['session.prompted', 'session.mentioned', 'ticket.commented']);
+
+/**
+ * What of a mapped event the small model classifies (ORC-336): its message as `mapLinearWebhook` classified it, masked
+ * and without its mention; nothing for an event that carries none, or for a command. The same mapping decides routing,
+ * commands and which comments are journaled: the model sees only what is about to be written.
+ */
+export function messageToClassify(e: FactoryEvent): string | undefined {
+  const p = e.payload as { body?: unknown; kind?: string };
+  return CLASSIFIED.has(e.type) && p.kind !== 'command' && typeof p.body === 'string' ? stripMention(p.body) : undefined;
+}
+
+/** The event classified with the model's verdict, by the same `classifyMessage` as the mapping; without one, the fallback rule. */
+export function withVerdict(e: FactoryEvent, verdict: Awaited<ReturnType<MessageClassifier>> | undefined): FactoryEvent {
+  const text = messageToClassify(e);
+  return text === undefined ? e : ({ ...e, payload: { ...(e.payload as object), kind: classifyMessage(text, verdict) } } as FactoryEvent);
+}
+
+/**
+ * A webhook that may carry a message for the model (ORC-336), read before any mapping: a session's mention or reply,
+ * a comment. Its classification goes after the webhook is answered.
+ */
+export function mayCarryMessage(body: any): boolean {
+  if (body?.type === 'AgentSessionEvent') return (body.action === 'created' && !!body.agentSession?.comment) || (body.action === 'prompted' && body.agentActivity?.signal !== 'stop');
+  // What `commentEvents` drops on the body alone: the factory's own comments, a session's, one opened by a mention, an empty one.
+  const text: unknown = body?.data?.body;
+  return (
+    body?.type === 'Comment' && body.action === 'create' && typeof text === 'string' && !!text.trim() && !isEffectComment(text) &&
+    !body.data.agentSessionId && !body.data.agentSession && stripMention(text) === text.trim()
+  );
+}
+
+/** The issue a webhook is about, by its stable id: an identifier changes when the issue moves to another team. */
+export function issueKeyOf(body: any): string | undefined {
+  return body?.agentSession?.issue?.id ?? body?.data?.issue?.id ?? body?.data?.issueId ?? (body?.type === 'Issue' ? body.data?.id : undefined) ?? issueIdentifier(body);
+}
+
+/** `at`: when the webhook arrived, before any wait (ORC-336). A message is classified by the fallback rule: see `withVerdict`. */
+export async function mapLinearWebhook(body: any, key: string, ctx: MapContext, o: { at?: number } = {}): Promise<FactoryEvent[]> {
   const identifier = issueIdentifier(body);
   if (!identifier) return [];
   const teamKey = identifier.split('-')[0]!;
@@ -307,6 +347,7 @@ export async function mapLinearWebhook(body: any, key: string, ctx: MapContext):
   if (!route) return [];
   const { projectId, repos, waitedIn, noRepo } = route;
   const { id: actor, taint, name } = signedActor(body);
+  const at = o.at ?? ctx.now();
   let partials: PartialEvent[];
   if (noRepo) partials = [{ type: 'ticket.delegated', payload: { ...delegationPayload(body), ack: true, noRepo } }];
   else if (body.type === 'AgentSessionEvent') partials = sessionEvents(body, name, projectId, ctx);
@@ -314,7 +355,6 @@ export async function mapLinearWebhook(body: any, key: string, ctx: MapContext):
   else partials = await issueEvents(body, identifier, teamKey, projectId, ctx);
   // The choice to make goes with the event: `decide` blocks the delegation, answers the rest.
   const routing = { ...(repos ? { repos } : {}), ...(waitedIn ? { waitedIn } : {}) };
-  const at = ctx.now();
   return partials.map(
     (p) =>
       ({

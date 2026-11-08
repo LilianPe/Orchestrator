@@ -3,6 +3,7 @@ import { createServer, request, type RequestListener } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { httpsUpstream } from '../../test/helpers/egress-upstream.js';
 import { EgressProxy } from './proxy.js';
 import { EgressClient, serveEgressControl, type EgressControl } from './proxy-service.js';
 
@@ -25,7 +26,7 @@ describe('the egress proxy as a service of its own (ORC-203)', () => {
     proxy = new EgressProxy({ dir: join(dir, 'network'), caDir: join(dir, 'ca') });
     control = await serveEgressControl(proxy, path);
     logs.length = 0;
-    client = new EgressClient(path, (m) => logs.push(m));
+    client = new EgressClient(path, { log: (m) => logs.push(m) });
   });
   afterEach(async () => {
     await client.closeAll().catch(() => {});
@@ -52,6 +53,35 @@ describe('the egress proxy as a service of its own (ORC-203)', () => {
       await new Promise((ok) => server.close(ok));
     }
   };
+
+  it("hands the proxy the daemon's Claude token with each run, and none when the daemon has none (ORC-337)", async () => {
+    // What reaches the Claude API through the run's socket: the token the run really uses.
+    const { server, upstream } = await httpsUpstream(dir, (req, res) => res.end(String(req.headers.authorization)));
+    // A token of its own: an undefined from the daemon must not fall back on it.
+    const tokened = new EgressProxy({ dir: join(dir, 'tokened'), caDir: join(dir, 'ca'), claudeToken: () => 'sk-ant-oat01-proxy-option', upstream });
+    const at = `${path}-tokened`;
+    const served = await serveEgressControl(tokened, at);
+    const modelCall = (socketPath: string) =>
+      new Promise<string>((ok, ko) => {
+        request({ socketPath, method: 'POST', path: 'http://api.anthropic.com/v1/messages', headers: { host: 'api.anthropic.com' } }, (res) => {
+          let body = '';
+          res.on('data', (c: Buffer) => (body += c));
+          res.on('end', () => ok(body));
+        }).on('error', ko).end('{}');
+      });
+    const daemon = new EgressClient(at, { claudeToken: () => 'sk-ant-oat01-daemon' });
+    const bare = new EgressClient(at);
+    try {
+      expect(await modelCall(await daemon.open('run-1', LIMITED))).toBe('Bearer sk-ant-oat01-daemon');
+      expect(await modelCall(await bare.open('run-2', LIMITED))).toBe('undefined');
+    } finally {
+      await daemon.closeAll();
+      await bare.closeAll();
+      await served.close();
+      await tokened.closeAll();
+      await new Promise((ok) => server.close(ok));
+    }
+  });
 
   it("opens the run's socket in the proxy's process and gives back its path and the authority's certificate", async () => {
     const socket = await client.open('run-1', LIMITED);
@@ -140,7 +170,7 @@ describe('the egress proxy as a service of its own (ORC-203)', () => {
 
   it('fails an open the proxy does not answer, instead of holding the dev slot', async () => {
     await withServer(() => {}, async (at) => {
-      await expect(new EgressClient(at, () => {}, 50).open('run-1', LIMITED)).rejects.toThrow(/proxy/);
+      await expect(new EgressClient(at, { timeoutMs: 50 }).open('run-1', LIMITED)).rejects.toThrow(/proxy/);
     });
   });
 
