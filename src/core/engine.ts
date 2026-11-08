@@ -114,10 +114,9 @@ function handOver(out: Decision, at: { event: FactoryEvent; ticket: TicketState 
 }
 
 /**
- * The end of `intake` (ORC-206): its assessment is recorded, then the guard before In Progress. Within a run, the risk
- * never goes down (I4) and the visual proof only hardens to `required`; the first assessment of a new run sets both from
- * its own level and closes the run's boundary (ORC-365). A ticket not complete enough, by intake's judgement or by the
- * deterministic checks of its launch, does not start: `clarify` asks its questions (ORC-210), and nothing moves to In
+ * The end of `intake` (ORC-206): its assessment is recorded, then the guard before In Progress. Within a run the risk
+ * never goes down (I4) and the visual proof only hardens to `required`; a new run starts from neither (`newRun`). A
+ * ticket not complete enough, by intake's judgement or by the deterministic checks of its launch, does not start: `clarify` asks its questions (ORC-210), and nothing moves to In
  * Progress meanwhile. A complete one « blocked by » a ticket not done waits for it (ORC-363).
  */
 function intakeEnd(out: Decision, at: { event: FactoryEvent; ticket: TicketState | undefined; workflow: Workflow }, job: JobSpec, p: EventPayloads['run.finished']): Decision {
@@ -126,11 +125,7 @@ function intakeEnd(out: Decision, at: { event: FactoryEvent; ticket: TicketState
     const reason = NO_ASSESSMENT;
     return block(out, at.workflow, { kind: 'failed', reason, body: `${reason} Reply in this thread and I will resume.`, job: job.name, tried: [`Started the run ${job.name}: its result has no \`intake\` field.`] });
   }
-  const visualProof = a.screen ? 'required' as const : null;
-  const patch = at.ticket?.newRun
-    ? { size: a.size, risk: a.risk, visualProof, newRun: null }
-    : { size: a.size, risk: higherRisk(at.ticket?.risk, a.risk), ...(visualProof ? { visualProof } : {}) };
-  out.events.push({ type: 'ticket.patched', patch });
+  out.events.push({ type: 'ticket.patched', patch: { size: a.size, risk: higherRisk(at.ticket?.risk, a.risk), ...(a.screen ? { visualProof: 'required' as const } : {}) } });
   const checks = p.pickup ?? [];
   if (!checks.length && a.complete) {
     // Complete, but « blocked by » a ticket not done (ORC-363): what it would start waits for it.
@@ -1255,10 +1250,22 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
   if ((event.payload as { waitedIn?: string }).waitedIn && !out.events.reduce<TicketState | undefined>((t, e) => reduce(t, e), reduce(state, event))?.blocked) {
     out.effects.push(blockedLabelChange(true, false)!);
   }
+  if (event.type === 'ticket.delegated') newRun(out, state);
   acknowledge(out, event, state);
   // A comment decide did not read (no reply awaited, refused) is not the factory's to answer.
   if (event.type !== 'ticket.commented' || out.events.some((e) => e.type === 'feedback.appended')) noticeMasked(out, event);
   return out;
+}
+
+/**
+ * The boundary of a run (ORC-365): a delegation whose decision starts a run starts a new one, which takes its risk and its
+ * visual proof from its own assessment, not from the last run's (I4). They go to `null`, the mark of a run not yet assessed.
+ * A delegation that starts nothing (refused, a run active, a blocked ticket, one waiting on its blockers) leaves the run
+ * as it is; a ticket never assessed has nothing to start again from, and patches nothing.
+ */
+function newRun(out: Decision, state: TicketState | undefined): void {
+  if (!state?.risk && !state?.visualProof) return;
+  if (out.effects.some((e) => e.kind === 'start_run')) out.events.push({ type: 'ticket.patched', patch: { risk: null, visualProof: null } });
 }
 
 /** Label put next to the status while the factory waits for a human (ORC-170). */
@@ -1390,11 +1397,6 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
     // Only a checked delegation names one: a row journaled before ORC-186 replays as it was decided.
     if (event.type === 'ticket.delegated' && event.roles !== undefined && event.actor && ticket && ticket.initiatorId !== event.actor) {
       out.events.push({ type: 'ticket.patched', patch: { initiatorId: event.actor } });
-    }
-    // A delegation with no run active starts a new run (ORC-365): its intake assesses it from its own level (I4). Marked
-    // only over an assessment: a first delegation has nothing to start again from, and patches nothing.
-    if (event.type === 'ticket.delegated' && ticket && !ticket.newRun && (ticket.risk || ticket.visualProof) && !state?.activeRunId && !state?.verifyingRunId) {
-      out.events.push({ type: 'ticket.patched', patch: { newRun: true } });
     }
   }
   switch (event.type) {

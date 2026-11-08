@@ -1,12 +1,13 @@
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { loadWorkflow } from '../config/load-workflow.js';
+import type { Workflow } from '../config/workflow-schema.js';
 import type { AgentOutput } from './agent-output.js';
 import { causeOf } from './block-cause.js';
 import { decide } from './engine.js';
 import { reduce } from './reduce.js';
 import { newTicketState, type EventPayloads, type FactoryEvent, type TicketState } from './types.js';
-import { upcastTicket } from './upcast.js';
+import { normalizeTicket } from './upcast.js';
 
 const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../packs/standard') });
 
@@ -84,52 +85,63 @@ describe('intake (ORC-206)', () => {
 });
 
 describe('the run boundary of the risk (ORC-365)', () => {
+  // Delegation starts with intake, as a repository turns it on.
+  const withIntake: Workflow = { ...workflow, on: { ...workflow.on, 'ticket.delegated': workflow.on['ticket.delegated']!.map((r) => ({ ...r, run: 'intake' })) } };
   const delegation = (extra: Partial<FactoryEvent> = {}) =>
     ({ id: 'e-delegated', type: 'ticket.delegated', at: 5000, projectId: 'p', ticketId: 'REL-1', schemaVersion: 3, taint: 'trusted', payload: { linearSessionId: 's2', ack: true }, ...extra }) as FactoryEvent;
   /** A ticket whose last run was assessed `high` with a screen, then taken back: undelegated, no run. */
   const takenBack = (patch: Partial<TicketState> = {}) => ticket({ delegated: false, activeRunId: undefined, activeJob: undefined, risk: 'high', size: 'l', visualProof: 'required', ...patch });
-  /** The new run's intake, started by `t`'s delegation. */
+  /** The ticket once `e` is decided under `wf`. */
+  const decided = (t: TicketState, e: FactoryEvent, wf = withIntake) => decide(t, e, wf).events.reduce<TicketState | undefined>((s, x) => reduce(s, x), reduce(t, e))!;
+  /** The run's intake, started by the delegation. */
   const intakeOf = (t: TicketState) => ({ ...t, activeRunId: 'r1', activeJob: 'intake' });
+  const marks = (t: TicketState, e: FactoryEvent, wf = withIntake) => decide(t, e, wf).events.some((x) => x.type === 'ticket.patched' && 'risk' in x.patch && x.patch.risk === null);
 
   it('within a run, a later intake proposing low leaves a high risk high (criterion 1)', () => {
-    const first = after(ticket(), finished(assessed({ risk: 'high', complete: false, missing: ['CSV or XLSX?'] })));
+    const first = after(ticket(), finished(assessed({ risk: 'high', screen: true, complete: false, missing: ['CSV or XLSX?'] })));
     // The answer relaunches intake in the same run: no delegation in between.
-    const again = after(intakeOf({ ...first, clarify: null }), finished(assessed({ risk: 'low' })));
-    expect(again.risk).toBe('high');
+    const again = after(intakeOf({ ...first, clarify: null }), finished(assessed({ risk: 'low', screen: false })));
+    expect(again).toMatchObject({ risk: 'high', visualProof: 'required' });
   });
 
   it('a ticket delegated again takes the risk its new intake proposes, low after high, and the visual proof it plans (criterion 2)', () => {
-    const delegated = after(takenBack(), delegation());
-    expect(delegated.newRun).toBe(true);
+    const delegated = decided(takenBack(), delegation());
+    expect(decide(takenBack(), delegation(), withIntake).effects).toContainEqual(expect.objectContaining({ kind: 'start_run', job: 'intake' }));
+    // The boundary: the last run's assessment does not carry over, the new run has none yet.
+    expect(delegated).toMatchObject({ risk: null, visualProof: null });
     const t = after(intakeOf(delegated), finished(assessed({ risk: 'low', size: 's', screen: false })));
     expect(t).toMatchObject({ risk: 'low', size: 's' });
     expect(t.visualProof ?? undefined).toBeUndefined();
-    // The new run's first assessment closes the boundary: its later intakes raise the risk again, never lower it.
-    expect(t.newRun ?? undefined).toBeUndefined();
-    expect(after(intakeOf(t), finished(assessed({ risk: 'high' }))).risk).toBe('high');
-    expect(after(intakeOf(after(intakeOf(t), finished(assessed({ risk: 'high' })))), finished(assessed({ risk: 'low' }))).risk).toBe('high');
+    // Within the new run, the risk goes up again and never down.
+    const raised = after(intakeOf(t), finished(assessed({ risk: 'high' })));
+    expect(raised.risk).toBe('high');
+    expect(after(intakeOf(raised), finished(assessed({ risk: 'low' }))).risk).toBe('high');
   });
 
   it('a new run whose intake sees a screen requires the visual proof again', () => {
-    const t = after(intakeOf(after(takenBack({ visualProof: undefined }), delegation())), finished(assessed({ risk: 'low', screen: true })));
-    expect(t.visualProof).toBe('required');
+    expect(after(intakeOf(decided(takenBack(), delegation())), finished(assessed({ risk: 'low', screen: true }))).visualProof).toBe('required');
   });
 
-  it('a delegation that starts no run marks no boundary: one refused, or one while a run is active', () => {
-    expect(decide(takenBack({ delegated: true, activeRunId: 'r0', activeJob: 'dev' }), delegation(), workflow).events).not.toContainEqual(expect.objectContaining({ patch: expect.objectContaining({ newRun: true }) }));
-    const refused = delegation({ actor: 'u-guest', roles: [] });
-    expect(decide(takenBack(), refused, workflow).events).not.toContainEqual(expect.objectContaining({ patch: expect.objectContaining({ newRun: true }) }));
+  it('a delegation straight to dev starts a new run too, with no risk until an intake assesses it', () => {
+    expect(decided(takenBack(), delegation(), workflow)).toMatchObject({ risk: null, visualProof: null });
+  });
+
+  it('a delegation that starts no run leaves the run as it is: refused, a run active, a blocked ticket, a wait on blockers', () => {
+    expect(marks(takenBack({ delegated: true, activeRunId: 'r0', activeJob: 'dev' }), delegation())).toBe(false);
+    expect(marks(takenBack(), delegation({ actor: 'u-guest', roles: [] }))).toBe(false);
+    expect(marks(takenBack({ blocked: true, blockReason: 'Question', blockKind: 'question', blockedJob: 'intake' }), delegation())).toBe(false);
+    expect(marks(takenBack({ delegated: true, waitingOn: { blockers: ['REL-2'], start: { job: 'dev' } } }), delegation())).toBe(false);
   });
 
   it('a first delegation, with nothing assessed yet, patches nothing: the journals of a single run stay as they were', () => {
-    const out = decide(undefined, delegation(), workflow);
-    expect(out.events).not.toContainEqual(expect.objectContaining({ patch: expect.objectContaining({ newRun: true }) }));
+    expect(decide(undefined, delegation(), withIntake).events.some((x) => x.type === 'ticket.patched' && 'risk' in x.patch)).toBe(false);
   });
 
-  it('a ticket from before ORC-365, with no boundary marked, keeps its run: its intake decides as before (upcast)', () => {
-    const old = upcastTicket(JSON.parse(JSON.stringify(ticket({ risk: 'high', visualProof: 'required' }))) as object);
+  it('a stored ticket from before ORC-365 has no boundary marked: it stays in its run and decides as before (upcast)', () => {
+    const stored: Record<string, unknown> = JSON.parse(JSON.stringify(ticket({ risk: 'high', visualProof: 'required' })));
+    const old = normalizeTicket(stored as unknown as TicketState);
+    expect(old).toMatchObject({ risk: 'high', visualProof: 'required' });
     const e = finished(assessed({ risk: 'low' }));
     expect(decide(old, e, workflow).events).toContainEqual({ type: 'ticket.patched', patch: { size: 'm', risk: 'high' } });
-    expect(after(old, e)).toMatchObject({ risk: 'high', visualProof: 'required' });
   });
 });

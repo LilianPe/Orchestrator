@@ -281,8 +281,8 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
       () => {
         holds((s) => {
           for (const step of run(s).steps) {
-            // The first assessment of a new run, which closes its boundary, sets them from its own level: the only step allowed to lower them.
-            if (step.before?.newRun && !step.after?.newRun) continue;
+            // A delegation that starts a run starts a new one: the only step that lowers them, to null (ORC-365).
+            if (step.kind === 'decided' && step.event.type === 'ticket.delegated' && step.launches.length && step.after?.risk === null) continue;
             const before = step.before?.risk;
             if (before) expect(step.after?.risk && higherRisk(before, step.after.risk)).toBe(step.after?.risk);
             if (step.before?.visualProof) expect(step.after?.visualProof).toBe('required');

@@ -82,14 +82,14 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     expect(await s.listTickets()).toHaveLength(1);
   });
 
-  it('keeps the run boundary of a ticket as written, marked then closed, and a visual proof lifted by a new run (ORC-365)', async () => {
+  it('keeps the run boundary of a ticket as written: a risk and a visual proof set to null by a new run (ORC-365)', async () => {
     const s = await store();
-    const marked = { ...newTicketState('p', 'REL-1', 'T', 'todo', 1), risk: 'high' as const, visualProof: 'required' as const, newRun: true as const };
-    await s.putTicket(marked);
-    expect(await s.getTicket('p', 'REL-1')).toEqual(marked);
-    const closed = { ...marked, risk: 'low' as const, visualProof: null, newRun: null };
-    await s.putTicket(closed);
-    expect(await s.getTicket('p', 'REL-1')).toEqual(closed);
+    const assessed = { ...newTicketState('p', 'REL-1', 'T', 'todo', 1), risk: 'high' as const, visualProof: 'required' as const };
+    await s.putTicket(assessed);
+    expect(await s.getTicket('p', 'REL-1')).toEqual(assessed);
+    const boundary = { ...assessed, risk: null, visualProof: null };
+    await s.putTicket(boundary);
+    expect(await s.getTicket('p', 'REL-1')).toEqual(boundary);
   });
 
   it('dedupes events by id and lists recent ones, newest first', async () => {
