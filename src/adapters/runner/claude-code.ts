@@ -459,6 +459,7 @@ export class ClaudeCodeRunner implements Runner {
     // Ended with a result while no daemon read it: the time since, the cut's, is no overrun.
     if (!a.child && result && !a.writer) clearTimeout(timer);
 
+    let poll: NodeJS.Timeout | undefined;
     const done = new Promise<RunResult>((resolve) => {
       const finish = (spawnError?: Error) => {
         if (finished) return;
@@ -493,7 +494,7 @@ export class ClaudeCodeRunner implements Runner {
         const cutByLimit = usageLimit && outcome !== 'success' ? { usageLimit } : {};
         transcript.end(() => resolve({ outcome, costUsd, turns: result?.turns ?? assistantTurns, lastText: text, ...(tokens ? { tokens } : {}), ...(broke ? { infra: true as const } : {}), ...(stagnation ? { stagnation } : {}), ...cutByLimit }));
       };
-      const poll = setInterval(() => {
+      poll = setInterval(() => {
         read(true);
         // Not its parent: its end is seen by its pid, once what it wrote is read.
         if (!a.child && (!a.writer || !writerAlive(a.writer))) finish();
@@ -511,6 +512,16 @@ export class ClaudeCodeRunner implements Runner {
         if (stopped) return;
         stopped = true;
         interrupt();
+      },
+      // Its process and its stream file stay: the next daemon's `attach` follows them from there (ORC-344).
+      detach: () => {
+        if (finished) return;
+        finished = true;
+        clearInterval(poll);
+        clearTimeout(timer);
+        clearTimeout(killTimer);
+        ch.close();
+        transcript.end();
       },
     };
   }

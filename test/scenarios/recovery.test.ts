@@ -154,12 +154,29 @@ describe('a restart during a run', () => {
     expect(await h.store.listQueue()).toEqual([]);
   });
 
-  it('a clean shutdown: the step starts again from the ticket session (`interrupted`, never a block)', async () => {
+  it('a clean shutdown leaves the attempt to finish: the next start reattaches to it, nothing runs twice (ORC-344)', async () => {
+    const h = createHarness({ sandboxed: true });
+    const runId = await heldRun(h);
+    await h.restart();
+    // Neither stopped nor closed: the same attempt, its sandbox kept, followed by the new process.
+    expect(h.sandboxes.destroyed).toEqual([]);
+    expect(h.runner.requests).toHaveLength(1);
+    expect((await h.store.getRun(runId))!.status).toBe('running');
+    expect(await h.ticket()).toMatchObject({ activeRunId: runId, blocked: false });
+    h.runner.release(runId);
+    await h.orch.drained();
+    expect((await h.store.getRun(runId))!.status).toBe('success');
+    expect(await h.ticket()).toMatchObject({ logical: 'human_review', blocked: false });
+    expect(h.runner.requests).toHaveLength(1);
+  });
+
+  it('a clean shutdown whose attempt is gone by the next start: the step starts again from the ticket session, never a block', async () => {
     const h = createHarness();
     const runId = await heldRun(h);
+    h.runner.forget(runId);
     h.runner.enqueue({ events: [{ kind: 'text', text: 'Repris.' }] });
     await h.restart();
-    expect((await h.store.getRun(runId))!.status).toBe('stopped');
+    expect((await h.store.getRun(runId))!.status).not.toBe('running');
     expect(h.runner.requests).toHaveLength(2);
     expect(h.runner.requests[1]).toMatchObject({ resume: true, claudeSessionId: h.runner.requests[0]!.claudeSessionId });
     expect(await h.ticket()).toMatchObject({ logical: 'human_review', blocked: false });
@@ -445,6 +462,38 @@ describe('the lease of an attempt', () => {
     expect((await h.store.getRun(first))!.leaseUntil).toBeGreaterThan(h.clock.now());
   });
 
+  it('an attempt that never returns and shows no progress: its lease runs out, its sandbox goes, and the step starts again (ORC-344)', async () => {
+    const h = createHarness({ sandboxed: true });
+    const first = await heldRun(h);
+    const box = (await h.sandboxes.findByAttempt(first))!.id;
+    saved(h);
+    h.runner.enqueue({ hold: true });
+    // Its container runs on, its agent writes nothing more: alive is not progress.
+    const silent = h.project.workflow.limits.silentAfterMs!;
+    for (let t = 0; t < silent; t += RUN_BEAT_MS) await h.advance(RUN_BEAT_MS);
+    expect(h.runner.requests).toHaveLength(1);
+    await h.advance(RUN_LEASE_MS + 1);
+    expect(h.sandboxes.destroyed).toContain(box);
+    expect((await h.store.getRun(first))!.status).toBe('failure');
+    expect(h.runner.requests).toHaveLength(2);
+    expect(h.runner.requests[1]).toMatchObject({ resume: true, claudeSessionId: h.runner.requests[0]!.claudeSessionId });
+    expect(await h.ticket()).toMatchObject({ blocked: false, leaseRelaunches: 1 });
+    expect((await h.ticket()).activeRunId).not.toBe(first);
+  });
+
+  it('an attempt that keeps writing keeps its lease, past the silence bound', async () => {
+    const h = createHarness({ sandboxed: true });
+    const runId = await heldRun(h);
+    const silent = h.project.workflow.limits.silentAfterMs!;
+    for (let t = 0; t < silent + RUN_LEASE_MS * 2; t += RUN_BEAT_MS) {
+      h.runner.say(runId, { kind: 'text', text: `step ${t}` });
+      await h.advance(RUN_BEAT_MS);
+    }
+    expect(h.runner.requests).toHaveLength(1);
+    expect(await h.ticket()).toMatchObject({ activeRunId: runId, blocked: false });
+    expect((await h.store.getRun(runId))!.leaseUntil).toBeGreaterThan(h.clock.now());
+  });
+
   it('a slot follows the relaunch: the replaced attempt ends without freeing the one that took its place', async () => {
     const h = createHarness({ sandboxed: true });
     const first = await heldRun(h);
@@ -463,6 +512,49 @@ describe('the lease of an attempt', () => {
     // The first attempt's end freed nothing: REL-1's slot is the relaunch's, so one ticket waits in line.
     expect((await h.store.listQueue()).map((q) => q.ticketId)).toEqual([`REL-${capacity + 1}`]);
     expect((await h.ticket()).activeRunId).toBe(second);
+  });
+});
+
+/** ORC-344, criterion 3: the lease token, checked at each write of the attempt. */
+describe('two daemons over one database', () => {
+  it('the daemon an attempt was taken from renews it no more: the one that reattached it follows it alone', async () => {
+    const h = createHarness({ sandboxed: true });
+    const runId = await heldRun(h);
+    const first = h.orch;
+    const second = h.another();
+    await second.recover();
+    const lease = (await h.store.getRun(runId))!.leaseUntil!;
+    h.clock.advance(RUN_BEAT_MS);
+    await first.supervise();
+    expect((await h.store.getRun(runId))!.leaseUntil).toBe(lease);
+    await second.supervise();
+    expect((await h.store.getRun(runId))!.leaseUntil).toBe(h.clock.now() + RUN_LEASE_MS);
+    h.runner.release(runId);
+    await Promise.all([first.drained(), second.drained()]);
+    expect((await h.store.getRun(runId))!.status).toBe('success');
+    expect(await h.ticket()).toMatchObject({ logical: 'human_review', blocked: false });
+  });
+
+  it('the daemon whose lease ran out has its later writes refused: the attempt stays as the new holder closed it', async () => {
+    const h = createHarness({ sandboxed: true });
+    const runId = await heldRun(h);
+    const first = h.orch;
+    const second = h.another();
+    h.runner.enqueue({ hold: true });
+    // The first daemon is stuck: no beat. The second sees the lease run out and takes the attempt over.
+    h.clock.advance(RUN_LEASE_MS + 1);
+    await second.supervise();
+    await second.drained();
+    const closed = (await h.store.getRun(runId))!;
+    expect(closed.status).toBe('failure');
+    const relaunched = (await h.ticket()).activeRunId!;
+    expect(relaunched).not.toBe(runId);
+    // The first wakes up, and its attempt ends there: nothing of it is written any more.
+    h.runner.release(runId);
+    await first.drained();
+    await first.supervise();
+    expect(await h.store.getRun(runId)).toEqual(closed);
+    expect(await h.ticket()).toMatchObject({ activeRunId: relaunched, blocked: false });
   });
 });
 
