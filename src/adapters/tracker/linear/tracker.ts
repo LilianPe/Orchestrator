@@ -136,16 +136,18 @@ export class LinearTracker implements Tracker, TeamDirectory {
    * would let it start.
    */
   private async withAllPages(n: IssueNode, relations: boolean): Promise<IssueNode> {
-    const rest = <K extends 'labels' | 'inverseRelations', N>(key: K, what: string, query: string) =>
-      allNodes<N>(`the ${what} of ${n.identifier}`, async (after) =>
-        after === null ? n[key] : (await this.api.gql<{ issue: Record<K, Connection<N>> }>(query, { id: n.id, after })).issue[key],
+    const rest = async <K extends 'labels' | 'inverseRelations'>(key: K, what: string, query: string): Promise<IssueNode[K]> => {
+      type Page = { issue: Pick<IssueNode, K> };
+      const nodes = await allNodes<IssueNode[K]['nodes'][number]>(`the ${what} of ${n.identifier}`, async (after) =>
+        after === null ? n[key] : (await this.api.gql<Page>(query, { id: n.id, after })).issue[key],
       );
-    const whole = <N>(nodes: N[]): Connection<N> => ({ nodes, pageInfo: { hasNextPage: false, endCursor: null } });
-    const [labels, related] = await Promise.all([
-      rest<'labels', LabelNode>('labels', 'labels', Q.issueLabels),
-      relations ? rest<'inverseRelations', RelationNode>('inverseRelations', 'relations', Q.issueRelations) : n.inverseRelations.nodes,
+      return { nodes, pageInfo: { hasNextPage: false, endCursor: null } } as IssueNode[K];
+    };
+    const [labels, inverseRelations] = await Promise.all([
+      rest('labels', 'labels', Q.issueLabels),
+      relations ? rest('inverseRelations', 'relations', Q.issueRelations) : n.inverseRelations,
     ]);
-    return { ...n, labels: whole(labels), inverseRelations: whole(related) };
+    return { ...n, labels, inverseRelations };
   }
 
   private async issueId(identifier: string): Promise<string> {

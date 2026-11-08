@@ -121,16 +121,14 @@ function intakeEnd(out: Decision, at: { event: FactoryEvent; ticket: TicketState
   out.events.push({ type: 'ticket.patched', patch: { size: a.size, risk: higherRisk(at.ticket?.risk, a.risk), ...(a.screen ? { visualProof: 'required' as const } : {}) } });
   const checks = p.pickup ?? [];
   const gaps = [...checks, ...(a.complete ? [] : a.missing)];
-  if (!gaps.length) {
-    // Complete, but « blocked by » a ticket not done (ORC-363): what it would start waits for it.
-    const next = job.onSuccess.run ? at.workflow.jobs[job.onSuccess.run] : undefined;
-    if (next && p.blockedBy?.length) {
-      // Its assessment is posted now; a move it owes waits with the start, which moves the ticket itself (`dev`'s `on_start`).
-      if (job.onSuccess.post) out.effects.push({ kind: 'post_output', style: job.onSuccess.post, runId: p.runId, ...(p.output ? { output: p.output } : {}) });
-      return waitFor(out, p.blockedBy, pendingOf({ job: next.name, input: next.input }));
-    }
-    return success(out, at, job, p.runId);
+  // Complete, but « blocked by » a ticket not done (ORC-363): what it would start waits for it.
+  const next = job.onSuccess.run ? at.workflow.jobs[job.onSuccess.run] : undefined;
+  if (!gaps.length && next && p.blockedBy?.length) {
+    // Its assessment is posted now; a move it owes waits with the start, which moves the ticket itself (`dev`'s `on_start`).
+    if (job.onSuccess.post) out.effects.push({ kind: 'post_output', style: job.onSuccess.post, runId: p.runId, ...(p.output ? { output: p.output } : {}) });
+    return waitFor(out, p.blockedBy, pendingOf({ job: next.name, input: next.input }));
   }
+  if (!gaps.length) return success(out, at, job, p.runId);
   const reason = `${INCOMPLETE} ${gaps.join(' ')}`;
   return block(out, at.workflow, {
     reason,
@@ -151,6 +149,10 @@ export function waitingBody(blockers: readonly Blocker[]): string {
 /** The wait on blockers as the ticket records it (ORC-363): `start` is made once they are done. */
 export const waitingOn = (blockers: readonly Blocker[], start: PendingJob) =>
   ({ type: 'ticket.patched', patch: { waitingOn: { blockers: blockers.map((b) => b.identifier), start } } }) as const;
+
+/** Why the wait on blockers holds back `job` (ORC-363): any dev work but the start it waits for, which `blockers.done` makes. */
+const heldByWait = (ticket: TicketState | undefined, job: JobSpec): string | undefined =>
+  ticket?.waitingOn && job.queue === 'dev' ? `waiting on ${ticket.waitingOn.blockers.join(', ')}` : undefined;
 
 /**
  * The ticket waits on the tickets it is « blocked by » that are not done (ORC-363): no block and no question, a thought in its
@@ -474,7 +476,7 @@ function blockersDone(out: Decision, event: FactoryEvent<'blockers.done'>, ticke
   const job = wait && workflow.jobs[wait.start.job];
   if (wait) out.events.push({ type: 'ticket.patched', patch: { waitingOn: null } });
   const startable = ticket?.logical === 'todo' || ticket?.logical === 'dev';
-  if (!ticket || !wait || !job || !startable || !ticket.delegated || ticket.blocked || ticket.activeRunId || ticket.verifyingRunId) {
+  if (!ticket || !wait || !job || !startable || refusesDevWork(ticket, job) || ticket.blocked || ticket.activeRunId || ticket.verifyingRunId) {
     out.trace.push('blockers.done: the ticket no longer waits, nothing started');
     return out;
   }
@@ -807,8 +809,9 @@ function applyRule(out: Decision, rule: Rule, event: FactoryEvent, ticket: Ticke
   }
   if (!job) return out;
   // Waiting on its blockers, the ticket starts no dev work for a message or a move: a reply stays in the inbox (ORC-363).
-  if (ticket?.waitingOn && job.queue === 'dev') {
-    out.trace.push(`waiting on ${ticket.waitingOn.blockers.join(', ')}: ${job.name} not started`);
+  const waits = heldByWait(ticket, job);
+  if (waits) {
+    out.trace.push(`${job.name} not started, ${waits}`);
     return out;
   }
   if (rule.debounceMs && rule.debounceMs > 0 && !refusal(event, ticket, job)) {
@@ -1434,8 +1437,9 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
         return out;
       }
       // Armed before the wait on blockers began (ORC-363): the wait holds it back as it does a reply.
-      if (ticket?.waitingOn && job.queue === 'dev') {
-        out.trace.push(`timer.fired debounce: ${job.name} not started, waiting on ${ticket.waitingOn.blockers.join(', ')}`);
+      const waits = heldByWait(ticket, job);
+      if (waits) {
+        out.trace.push(`timer.fired debounce: ${job.name} not started, ${waits}`);
         return out;
       }
       if (ticket?.blocked && !refusal(event, ticket, job)) unblock(out, event, ticket);
