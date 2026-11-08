@@ -457,6 +457,22 @@ describe('runCleanVerify', () => {
       expect((await runCleanVerify(req)).failures).toEqual([{ command: 'factory/anti-triche', exitCode: 1, output: expect.stringContaining('src/a.test.ts:1') }]);
     });
 
+    it('a test removed from the base, by case or by file, blocks unless a commit of the branch justifies it (ORC-342)', async () => {
+      const { origin, repo, req } = setup({ commands: [] });
+      write(repo, 'src/a.test.ts', "describe('scores', () => {\n  it('rounds', () => {});\n  it('floors', () => {});\n});\n");
+      write(repo, 'tests/test_scores.py', 'def test_rounds():\n    assert score(1.234) == 1.23\n');
+      commit(repo, 'tests');
+      git(origin, 'pull', '-q', repo, BRANCH);
+      write(repo, 'src/a.test.ts', "describe('scores', () => {\n  it('floors', () => {});\n});\n");
+      rmSync(join(repo, 'tests/test_scores.py'));
+      commit(repo, 'drop');
+      const [failure] = (await runCleanVerify(setupAgain(req))).failures;
+      expect(failure).toMatchObject({ command: 'factory/anti-triche', output: expect.stringContaining('`src/a.test.ts`: test removed or renamed (`scores > rounds`)') });
+      expect(failure!.output).toContain('`tests/test_scores.py`: test removed or renamed (`test_rounds`)');
+      git(repo, 'commit', '-q', '--allow-empty', '-m', 'chore: drop the rounding\n\nRemoved-test: src/a.test.ts: rounding is gone\nRemoved-test: tests/test_scores.py: same');
+      expect((await runCleanVerify(setupAgain(req))).ok).toBe(true);
+    });
+
     it('a text file over the read cap is never read, and blocks: neither scanned nor let through', async () => {
       const { repo, req } = setup({ commands: [] });
       write(repo, 'big.txt', 'x\n'.repeat(9 * 1024 * 1024));

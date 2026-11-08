@@ -4,7 +4,7 @@ import { parseDiff } from './diff.js';
 const diff = (...lines: string[]): string => lines.join('\n') + '\n';
 
 describe('parseDiff', () => {
-  it('numbers added lines in the new file across hunks, counting removed lines', () => {
+  it('numbers added and kept lines in the new file, removed and kept lines in the old one, across hunks', () => {
     const [f] = parseDiff(
       diff(
         'diff --git a/src/a.ts b/src/a.ts',
@@ -32,7 +32,15 @@ describe('parseDiff', () => {
         { line: 3, text: 'trois' },
         { line: 22, text: 'new' },
       ],
-      removed: 2,
+      removed: [
+        { line: 2, text: 'two' },
+        { line: 21, text: 'old' },
+      ],
+      kept: [
+        { line: 1, old: 1, text: 'one' },
+        { line: 4, old: 3, text: 'four' },
+        { line: 21, old: 20, text: 'keep' },
+      ],
     });
   });
 
@@ -59,7 +67,7 @@ describe('parseDiff', () => {
         'Binary files a/logo.png and b/logo.png differ',
       ),
     );
-    expect(files.map(({ path, oldPath, status, added, removed }) => ({ path, oldPath, status, added: added.length, removed }))).toEqual([
+    expect(files.map(({ path, oldPath, status, added, removed }) => ({ path, oldPath, status, added: added.length, removed: removed.length }))).toEqual([
       { path: 'new.ts', oldPath: undefined, status: 'added', added: 1, removed: 0 },
       { path: 'gone.ts', oldPath: undefined, status: 'deleted', added: 0, removed: 1 },
       { path: 'new name.ts', oldPath: 'old name.ts', status: 'renamed', added: 0, removed: 0 },
