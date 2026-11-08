@@ -1,7 +1,6 @@
 import type { Role } from './authz.js';
 import type { TimerRecord } from '../store/types.js';
-import { PRODUCT_NAME } from '../product.js';
-import { INCOMPLETE, NO_ASSESSMENT, REPO_CONFIG_REFUSED, TICKET_TOKENS_REACHED, type BlockKind } from './block-cause.js';
+import type { BlockKind } from './block-cause.js';
 import { BEFORE_ORC_331 } from './legacy-messages.js';
 import { RENAMED_V1, SCHEMA_VERSION, type FactoryEvent, type Taint, type TicketState, type TimerFired } from './types.js';
 
@@ -69,11 +68,13 @@ export function upcastTimer(stored: StoredTimer): TimerRecord {
  * The heads of the reasons the factory wrote before ORC-345, by kind, the English ones then the French ones of before
  * ORC-331: each anchored on the head of a reason, which the factory writes, since what follows may quote an error or
  * a job name. Read only to give a ticket blocked before ORC-345 its kind (`legacyBlock`): nothing decides on a reason.
- * A dead letter names its event (`event`), a stuck pending job its job (`job`).
+ * A dead letter names its event (`event`). Written out as the factory wrote them, never built from the constants it
+ * still writes: rewording a reason today must not lose the kind of a ticket blocked before.
  */
 const LEGACY_KINDS: readonly (readonly [Exclude<BlockKind, 'other'>, RegExp])[] = [
-  ['asked', /^Question asked by the agent/],
-  ['question', /^Waiting for an answer to the agent's question/],
+  // Only the label itself said no more than its cause (ORC-332); a longer reason is a question shown in full.
+  ['asked', /^Question asked by the agent$/],
+  ['question', /^(Question asked by the agent|Waiting for an answer to the agent's question)/],
   ['contested', /^The agent disputes the ticket/],
   ['red', /^Red not verified after /],
   ['infra', /^The run .+ was interrupted: infrastructure failure/],
@@ -82,24 +83,24 @@ const LEGACY_KINDS: readonly (readonly [Exclude<BlockKind, 'other'>, RegExp])[] 
   ['infra', /^Launch error: /],
   ['stuck', /^Error: the pending .+ could not be started: /],
   ['infra', /^Error: /],
-  ['infra', new RegExp(`^${PRODUCT_NAME} restarted during `)],
+  ['infra', /^Orchestrator restarted during /],
   ['infra', /^The lease of the run .+ expired \d+ times: /],
   ['limit', /^The run .+ reached a limit/],
   ['limit', /^The run .+ has written nothing for /],
   ['limit', /^Too many relaunches after a cut: /],
-  ['limit', new RegExp(`^${TICKET_TOKENS_REACHED}`)],
+  ['limit', /^Token budget of the ticket reached: /],
   ['limit', /^Checks still failing after /],
   ['ci_bound', /^CI still failing after /],
   ['failed', /^Checks failing after /],
   ['loop', /^Loop: /],
   ['failed', /^The run .+ failed\.$/],
-  ['failed', new RegExp(`^${NO_ASSESSMENT}`)],
+  ['failed', /^Intake returned no assessment of the ticket\./],
   ['pickup', /^The description (is shorter than|has no)/],
   ['pickup', /^A branch .+ already exists on origin\./],
   ['pickup', /^No repository known for the Linear team /],
   ['pickup', /^Repository to specify: /],
-  ['pickup', new RegExp(`^${INCOMPLETE}`)],
-  ['repo_config', new RegExp(`^${REPO_CONFIG_REFUSED}`)],
+  ['pickup', /^The ticket is not complete enough to start:/],
+  ['repo_config', /^Repository configuration to fix: /],
   ['dead_letter', /^Event (?<event>.+?) set aside \(/],
   ['pr_closed', /^PR #\d+ closed without merge$/],
   ['stopped', /^Stopped on request$/],
@@ -108,8 +109,9 @@ const LEGACY_KINDS: readonly (readonly [Exclude<BlockKind, 'other'>, RegExp])[] 
 
 /** The typed block of a ticket blocked before ORC-345, read from its reason: `other` when no kind is known for it, never a guess. */
 export function legacyBlock(reason: string | undefined): Pick<TicketState, 'blockKind' | 'blockedEvent'> {
+  if (reason === undefined) return { blockKind: 'other' };
   for (const [kind, head] of LEGACY_KINDS) {
-    const m = reason === undefined ? null : head.exec(reason);
+    const m = head.exec(reason);
     if (m) return { blockKind: kind, ...(m.groups?.['event'] ? { blockedEvent: m.groups['event'] } : {}) };
   }
   return { blockKind: 'other' };
@@ -150,7 +152,8 @@ export interface MergeRefusal {
 export function upcastMergeRefusal(saved: string): MergeRefusal {
   try {
     const parsed = JSON.parse(saved) as unknown;
-    if (typeof parsed === 'object' && parsed !== null && typeof (parsed as MergeRefusal).reason === 'string') return parsed as MergeRefusal;
+    const r = parsed as Partial<MergeRefusal> | null;
+    if (typeof r === 'object' && r !== null && typeof r.reason === 'string' && typeof r.headMoved === 'boolean') return { reason: r.reason, headMoved: r.headMoved };
   } catch {
     // A sentence: saved before ORC-345.
   }

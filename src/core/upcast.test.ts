@@ -97,6 +97,7 @@ describe('a ticket blocked before ORC-345 (criterion 2)', () => {
     ['Question asked by the agent', 'asked'],
     ["Question posée par l'agent", 'asked'],
     ["Waiting for an answer to the agent's question.", 'question'],
+    ['Question asked by the agent: which format?', 'question'],
     ['CI still failing after 2 attempts of fix-ci.', 'ci_bound'],
     ['CI toujours en échec après 2 tentatives de fix-ci.', 'ci_bound'],
     ['Checks still failing after 2 attempts.', 'limit'],
@@ -120,6 +121,7 @@ describe('a ticket blocked before ORC-345 (criterion 2)', () => {
   it('gets the event of a dead letter back, in English and in French', () => {
     expect(upcastTicket(old(deadLetterReason({ eventId: 'linear:d1', eventType: 'pr.opened', error: 'boom', failures: 1 })))).toMatchObject({ blockKind: 'dead_letter', blockedEvent: 'linear:d1' });
     expect(upcastTicket(old('Événement e9 mis de côté (pr.opened) : sa décision a échoué (boom).'))).toMatchObject({ blockKind: 'dead_letter', blockedEvent: 'e9' });
+    expect(upcastTicket(old('Événement e9 mis de côté (pr.opened) : sa décision a échoué (Événement e8 mis de côté (x)).'))).toMatchObject({ blockedEvent: 'e9' });
   });
 
   it('is never guessed: a block without a reason is `other`, shown under `other`', () => {
@@ -153,7 +155,8 @@ describe('a merge refusal saved before ORC-345', () => {
   it('reads a refusal saved since as saved: the flag, not the sentence', () => {
     expect(upcastMergeRefusal(JSON.stringify({ reason: 'GitHub says: head moved', headMoved: true }))).toEqual({ reason: 'GitHub says: head moved', headMoved: true });
     expect(upcastMergeRefusal(JSON.stringify({ reason: MERGE_PUSHED, headMoved: false }))).toEqual({ reason: MERGE_PUSHED, headMoved: false });
-    // A sentence that happens to be JSON but no refusal stays a sentence.
+    // A sentence that happens to be JSON but no refusal stays a sentence, and so does a refusal without its flag.
     expect(upcastMergeRefusal('42')).toEqual({ reason: '42', headMoved: false });
+    expect(upcastMergeRefusal(JSON.stringify({ reason: 'x' }))).toEqual({ reason: JSON.stringify({ reason: 'x' }), headMoved: false });
   });
 });

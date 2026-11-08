@@ -1,4 +1,3 @@
-import { PRODUCT_NAME } from '../product.js';
 import type { BlockKind } from './block-cause.js';
 
 /**
@@ -12,8 +11,8 @@ export const BEFORE_ORC_331 = {
   pushed: 'la branche a reçu un push depuis la review',
   /** The heads of the block reasons, by kind; a dead letter names its event (`event`). */
   kinds: [
-    ['asked', /^Question posée par l'agent/],
-    ['question', /^En attente d'une réponse à la question de l'agent/],
+    ['asked', /^Question posée par l'agent$/],
+    ['question', /^(Question posée par l'agent|En attente d'une réponse à la question de l'agent)/],
     ['contested', /^L'agent conteste le ticket/],
     ['red', /^Rouge non vérifié après /],
     ['infra', /^Le run .+ s'est interrompu : panne d'infrastructure/],
@@ -21,7 +20,7 @@ export const BEFORE_ORC_331 = {
     ['infra', /^La vérification de .+ n'a pas pu tourner : panne d'infrastructure/],
     ['infra', /^Erreur au lancement : /],
     ['infra', /^Erreur : /],
-    ['infra', new RegExp(`^${PRODUCT_NAME} a redémarré pendant `)],
+    ['infra', /^Orchestrator a redémarré pendant /],
     ['infra', /^Le bail du run .+ a expiré \d+ fois : /],
     ['limit', /^Le run .+ a atteint un plafond/],
     ['limit', /^Le run .+ n'a rien écrit depuis /],
@@ -36,7 +35,7 @@ export const BEFORE_ORC_331 = {
     ['pickup', /^Aucun dépôt connu pour l'équipe Linear /],
     ['pickup', /^Dépôt à préciser : /],
     ['repo_config', /^Configuration du dépôt à corriger : /],
-    ['dead_letter', /^Événement (?<event>.+) mis de côté \(/],
+    ['dead_letter', /^Événement (?<event>.+?) mis de côté \(/],
     ['pr_closed', /^PR #\d+ fermée sans merge$/],
     ['stopped', /^Arrêté à la demande$/],
   ] as readonly (readonly [Exclude<BlockKind, 'other'>, RegExp])[],

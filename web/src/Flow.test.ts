@@ -75,12 +75,14 @@ describe('Flow', () => {
     const html = page({ needsYou: { ...EMPTY.needsYou, blocked: [
       // Written before ORC-331, or reworded since: the kind still says it restates its cause.
       { cause: 'stopped', tickets: [{ ...base, kind: 'stopped', reason: 'Arrêté à la demande' }] },
-      // The sentence of a stop on a block of another kind is shown: it is not the cause's label.
+      // The label of a cause as the reason of a block of another kind is shown: the kind decides, not the sentence.
       { cause: 'question', tickets: [{ ...base, ticketId: 'REL-2', kind: 'question', reason: AGENT_QUESTION }] },
+      { cause: 'infra', tickets: [{ ...base, ticketId: 'REL-3', kind: 'infra', reason: STOPPED }] },
     ] } });
     expect(html).toContain(`${STOPPED}</h3>`);
     expect(html).not.toContain('Arrêté');
     expect(html.match(/Question asked by the agent/g)).toHaveLength(2);
+    expect(html.match(/Stopped on request/g)).toHaveLength(2);
   });
 
   it('says on the page, not only on hover, that a running run counts when it ends', () => {

@@ -55,7 +55,9 @@ describe('the kind of a block, set by the code that builds it (ORC-345)', () => 
   ] as const)('%s, for a block decide writes; its reason upcasts to the same kind', (kind, block) => {
     const b = block();
     expect(b.kind).toBe(kind);
-    // The one place that still reads a reason gives a ticket blocked before ORC-345 the kind decide sets today.
+    // The one place that still reads a reason gives a ticket blocked before ORC-345 the kind decide sets today: what keeps
+    // the recorded journals, whose tickets hold the reason alone, replaying bit for bit. A reason reworded later is no
+    // longer one a ticket blocked before ORC-345 can hold: take its case out of this check, keep the old head in the table.
     expect(legacyBlock(b.reason).blockKind).toBe(kind);
   });
 
@@ -69,6 +71,8 @@ describe('the kind of a block, set by the code that builds it (ORC-345)', () => 
     expect(causeOf('ci_bound')).toBe('limit');
     expect(causeOf('red')).toBe('red');
     expect(causeOf(undefined)).toBe('other');
+    // Written by a newer version: its ticket stays in sight.
+    expect(causeOf('a_kind_from_tomorrow' as BlockKind)).toBe('other');
   });
 
   it('knows the kinds whose reason says no more than their cause (ORC-332)', () => {

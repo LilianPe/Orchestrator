@@ -13,7 +13,11 @@ export type BlockKind = BlockCause | 'asked' | 'stuck' | 'ci_bound';
 const WITHIN: Partial<Record<BlockKind, BlockCause>> = { asked: 'question', stuck: 'infra', ci_bound: 'limit' };
 
 /** The cause the Flow shows a block under; `other` for a ticket blocked without a kind, never a guess. */
-export const causeOf = (kind: BlockKind | undefined): BlockCause => (kind === undefined ? 'other' : (WITHIN[kind] ?? (kind as BlockCause)));
+export const causeOf = (kind: BlockKind | undefined): BlockCause => {
+  const cause = kind === undefined ? undefined : (WITHIN[kind] ?? kind);
+  // A kind this version does not know (written by a newer one) still shows its ticket, under `other`.
+  return (BLOCK_CAUSES as readonly string[]).includes(cause ?? '') ? (cause as BlockCause) : 'other';
+};
 
 /** The kinds whose reason says no more than their cause: the Flow does not repeat it under it (ORC-332). */
 export const restatesCause = (kind: BlockKind | undefined): boolean => kind === 'stopped' || kind === 'asked';
