@@ -72,13 +72,12 @@ import {
   spentTokens,
 } from './types.js';
 import { runSealedSetup } from './sealed-setup.js';
-import { checkBranchPaths, runCleanVerify, type CleanVerifier } from './clean-verify.js';
+import { checkBranchPaths, runCleanVerify, type CleanVerifier, type UntrustedMark } from './clean-verify.js';
 import { logExcerpt } from '../checks/log-excerpt.js';
 import { cappedCommand, VERIFY_CHECK, type Verifier, type VerifyResult } from './verify.js';
 import { PRODUCT_NAME } from '../product.js';
 import { checkRed, type RedDeps, type RedResult } from '../checks/red.js';
 import { checkFrozen, FREEZE_CHECK, freezeTests, newTestsOnly, REFREEZE, type FrozenTests } from '../checks/freeze.js';
-import { FORBIDDEN_CHECK } from '../checks/forbidden-paths.js';
 import { isTestFile } from '../checks/test-files.js';
 import { ANTI_CHEAT_CHECK, ANTI_CHEAT_OK } from '../checks/anti-cheat.js';
 import { mdCode } from '../checks/markdown.js';
@@ -853,17 +852,18 @@ export class Orchestrator {
       // Read before the commands: what they would commit is not what they checked.
       const sha = await this.d.workspaces.head(run.cwd);
       if (sha && sha === green) return { ok: true, failures: [], sha };
-      const verified = job.verify.length > 0 ? await this.d.verify(run.cwd, job.verify, undefined, (await this.repoVariablesOf(project, run.repoConfig)).env) : { ok: true, failures: [] };
+      // As on the clone, before any command: a refused branch runs nothing.
+      const paths = await this.checkPathsOnHost(project, t, run);
+      const verified = paths.length || !job.verify.length ? { ok: true, failures: [] } : await this.d.verify(run.cwd, job.verify, undefined, (await this.repoVariablesOf(project, run.repoConfig)).env);
       // `factory/tests-gelés` (ORC-131), blocking from the first ticket, on top of the job's commands.
       const frozen = goesThroughFreeze(t, job) ? await this.checkFrozen(project, run.cwd, t.frozenTests!) : [];
-      const paths = await this.checkPathsOnHost(project, t, run);
-      const blocking = [...frozen, ...paths];
+      const blocking = [...paths, ...frozen];
       return { ...verified, ok: verified.ok && blocking.length === 0, failures: [...verified.failures, ...blocking], sha, commands: job.verify };
     }
     if (!runsDir || !originUrl) throw new Error('runsDir and originUrl are required with sandboxes');
     if (!t.branch || !t.worktreePath) throw new Error(`no branch or no worktree for ${t.ticketId}`);
+    const untrusted = await this.untrustedMark(project, t);
     // A place the engine mounts from, new for each check: one cut can leave its own behind.
-    const untrustedSince = await this.untrustedSince(t);
     const workDir = join(runsDir, run.id, `verify-${randomUUID()}`);
     mkdirSync(workDir, { recursive: true });
     try {
@@ -880,7 +880,7 @@ export class Orchestrator {
         gitleaks: true,
         ...(green ? { green } : {}),
         ...(goesThroughFreeze(t, job) ? { frozen: t.frozenTests! } : {}),
-        ...(untrustedSince === undefined ? {} : { untrustedSince }),
+        ...(untrusted ? { untrusted } : {}),
         env: async (config) => (await this.repoVariablesOf(project, config)).env,
         log: (message) => this.log('warn', `verify of ${t.ticketId}: ${message}`),
       });
@@ -892,27 +892,30 @@ export class Orchestrator {
 
   /**
    * `factory/chemins-interdits` without sandboxes (ORC-338): `checkBranchPaths`, as on the clone, on the worktree's branch read
-   * on the factory's repository against its default branch. No worktree, or a read that fails, blocks: nothing is let through unread.
+   * on the factory's repository against the forge's default branch. As on the clone, what gives no verdict throws, an
+   * infrastructure or config failure the agent is not sent: no worktree, a read that fails, a config the default branch refuses.
    */
   private async checkPathsOnHost(project: ProjectRuntime, t: TicketState, run: RunRecord): Promise<VerifyFailure[]> {
-    const fail = (output: string) => [{ command: FORBIDDEN_CHECK, exitCode: 1, output }];
-    try {
-      const reader = await this.d.workspaces.branchReader(project.repoPath, run.cwd);
-      if (!reader) return fail(`The forbidden paths check could not run: no worktree with a commit at ${run.cwd}.`);
-      return await checkBranchPaths(reader, await this.untrustedSince(t));
-    } catch (err) {
-      return fail(`The forbidden paths check could not run: ${(err as Error).message}`);
-    }
+    const reader = await this.d.workspaces.branchReader(project.repoPath, run.cwd);
+    if (!reader) throw new Error(`the forbidden paths check could not run: no worktree with a commit at ${run.cwd}`);
+    const untrusted = await this.untrustedMark(project, t);
+    return checkBranchPaths(reader, untrusted && { ...untrusted, sensitivePaths: parseRepoConfig(await reader.baseConfig()).sensitivePaths });
   }
 
   /**
-   * `TicketState.untrustedSince`, or for a ticket whose untrusted dev runs started before the mark existed, `''`: its whole
-   * branch, as nothing says where it took untrusted content (fail closed). A ticket started since has its mark set by any
-   * such run (`reduce`), so the read only finds what came before.
+   * The ticket's mark (ORC-338), with the heads humans pushed to its branch; none on a trusted branch. A ticket the mark
+   * has not seen yet (`untrustedSince` absent: it came before the mark existed) is read once in its run records, and the
+   * answer kept on it: `''` (its whole branch) when an untrusted run of a worktree job worked on it, the scope of the mark, else `null`.
    */
-  private async untrustedSince(t: TicketState): Promise<string | undefined> {
-    if (t.untrustedSince !== undefined) return t.untrustedSince;
-    return (await this.d.store.ticketRuns(t.projectId, t.ticketId)).some((r) => r.queue === 'dev' && !!r.sensitivePaths?.length) ? '' : undefined;
+  private async untrustedMark(project: ProjectRuntime, t: TicketState): Promise<UntrustedMark | undefined> {
+    let since = t.untrustedSince;
+    if (since === undefined) {
+      const runs = await this.d.store.ticketRuns(t.projectId, t.ticketId);
+      // A job gone from the workflow counts: fail closed.
+      const read = runs.some((r) => !!r.sensitivePaths?.length && (project.workflow.jobs[r.job]?.workspace ?? 'worktree') === 'worktree') ? '' : null;
+      since = (await this.apply(t, { type: 'untrusted.read', since: read })).untrustedSince;
+    }
+    return since === null || since === undefined ? undefined : { since, humanHeads: t.humanHeads ?? [] };
   }
 
   /**
@@ -1585,8 +1588,8 @@ export class Orchestrator {
     else if (!t.branch || !t.worktreePath) reason = `no branch or no worktree for ${t.ticketId}.`;
     else {
       try {
-        const untrustedSince = await this.untrustedSince(t);
-        const untrusted = untrustedSince === undefined ? {} : { untrustedSince };
+        const mark = await this.untrustedMark(project, t);
+        const untrusted = mark ? { untrusted: mark } : {};
         const pr = await publisher.publish({ projectId: project.id, repoPath: project.repoPath, ticketId: t.ticketId, runId: c.runId, worktree: t.worktreePath, branch: t.branch, sha: c.sha, ...untrusted, ...prText(t) });
         await this.accept({ ...base, id: prEventId(t.ticketId, pr.prNumber, 'opened'), type: 'pr.opened', at: this.d.clock.now(), payload: { number: pr.prNumber, url: pr.url, branch: t.branch } });
         await this.publishChecks(project, t, c);

@@ -78,7 +78,7 @@ A configuration **adds** checks or prohibitions, it never **removes** any from t
 
 - an unknown key, such as `checks: { disable: [...] }`: nothing can turn off a baseline check, and a silently ignored key would suggest otherwise;
 - a negative pattern (`!…`) in `sensitive_paths` or `visual_paths`: it would remove a path;
-- in `sensitive_paths`, a pattern that names nothing in the repository: an absolute path (`/infra/**`), a drive (`C:/infra`), one that climbs out (`../x`), the root itself (`.`, `./`), or one that compiles to no glob; `\` is read as `/`: a path the repository believes protected would be open;
+- in `sensitive_paths`, a pattern that names nothing in the repository: a drive (`C:/infra`), one that climbs out (`../x`), the root itself (`.`, `./`, `/`), an absolute path or a climb inside a brace (`{src,/etc}`), or one that does not compile as a glob (too long); `\` is read as `/`, and a leading `/` as the root (`/infra/**` is `infra/**`): a path the repository believes protected would be open;
 - a `max_diff` wider than the baseline (15 files, 400 lines);
 - `network.level: full`, reserved for `setup`, never for the agent; in `network.allow`, anything that is not a hostname (`*`, `*.com`, `0.0.0.0/0`): a wildcard or a range would amount to `full`; and an `allow` list under a level other than `custom`, which would open nothing;
 - a preset other than `factory/default@1.0`.

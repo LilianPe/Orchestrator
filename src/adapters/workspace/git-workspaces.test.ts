@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { BASE, checkBranchPaths, cloneGit, forkPoint, gitReader } from '../../core/clean-verify.js';
 import { readConventions } from '../../core/prompt.js';
+import { parseRepoConfig } from '../../config/repo-config.js';
 import { execCmd } from '../exec.js';
 import { GitWorkspaces } from './git-workspaces.js';
 
@@ -122,7 +123,8 @@ describe('GitWorkspaces', () => {
       git(dir, 'add', '-A');
       git(dir, 'commit', '-q', '-m', message);
     };
-    put(repo, '.factory/config.yml', 'sensitive_paths: [infra]\n');
+    const sensitivePaths = ['infra', '*.tf'];
+    put(repo, '.factory/config.yml', `sensitive_paths: ${JSON.stringify(sensitivePaths)}\n`);
     commit(repo, 'config');
     git(repo, 'push', '-q', 'origin', 'main');
     const ws = new GitWorkspaces({ root });
@@ -132,19 +134,34 @@ describe('GitWorkspaces', () => {
     put(w.path, 'infra/old.tf', 'trusted\n');
     put(w.path, 'src/a.ts', 'x\n');
     commit(w.path, 'trusted work');
+    git(w.path, 'push', '-q', origin, 'HEAD:refs/heads/factory/rel-1-export-csv');
     const mark = git(w.path, 'rev-parse', 'HEAD');
     put(w.path, 'infra/new.tf', 'untrusted\n');
     put(w.path, 'CODEOWNERS', '* @x\n');
     put(w.path, 'claims/.env.example', 'A=\n');
     put(w.path, 'package.json', '{"scripts":{"postinstall":"x"}}');
     commit(w.path, 'untrusted work');
-    // The default branch moves on, with a sensitive change of its own, and the branch merges it.
-    put(repo, 'infra/main.tf', 'a human\n');
-    commit(repo, 'main moves on');
-    git(repo, 'push', '-q', 'origin', 'main');
-    git(repo, 'fetch', '-q', 'origin');
+    // A teammate, from a clone of their own: a commit on the ticket's branch, and one on the default branch, both on infra.
+    const mate = join(base, 'mate');
+    git(base, 'clone', '-q', origin, mate);
+    git(mate, 'config', 'user.email', 'm@m');
+    git(mate, 'config', 'user.name', 'm');
+    git(mate, 'checkout', '-q', 'factory/rel-1-export-csv');
+    put(mate, 'infra/human.tf', 'a human on the branch\n');
+    commit(mate, 'human push');
+    git(mate, 'push', '-q', 'origin', 'factory/rel-1-export-csv');
+    const humanHead = git(mate, 'rev-parse', 'HEAD');
+    git(mate, 'checkout', '-q', 'main');
+    put(mate, 'infra/main.tf', 'a human on main\n');
+    commit(mate, 'main moves on');
+    git(mate, 'push', '-q', 'origin', 'main');
+    // The branch takes both in, then the agent writes a path that starts with a space: the first a `-z` listing gives.
+    git(w.path, 'fetch', '-q', origin, 'factory/rel-1-export-csv');
+    git(w.path, 'merge', '-q', '--no-edit', 'FETCH_HEAD');
     git(w.path, 'fetch', '-q', origin, 'main');
     git(w.path, 'merge', '-q', '--no-edit', 'FETCH_HEAD');
+    put(w.path, ' space.tf', 'untrusted\n');
+    commit(w.path, 'untrusted, spaced');
     const head = git(w.path, 'rev-parse', 'HEAD');
 
     // The clone `verify` and the publication read: the work's objects, the forge's default branch as `BASE`.
@@ -154,16 +171,21 @@ describe('GitWorkspaces', () => {
     const clone = cloneGit({ workDir: base }, cloneDir);
     const from = await forkPoint(clone, head);
 
+    // The host's repository has not fetched main since: its reader fetches the forge, as the clone does.
     const reader = (await ws.branchReader(repo, w.path))!;
+    expect(parseRepoConfig(await reader.baseConfig()).sensitivePaths).toEqual(sensitivePaths);
     for (const since of [undefined, '', mark, '0123456789012345678901234567890123456789']) {
-      const onClone = await checkBranchPaths(gitReader(clone, BASE, from, head), since);
-      expect(await checkBranchPaths(reader, since), String(since)).toEqual(onClone);
+      const untrusted = since === undefined ? undefined : { since, humanHeads: [humanHead], sensitivePaths };
+      const onClone = await checkBranchPaths(gitReader(clone, BASE, from, head), untrusted);
+      expect(await checkBranchPaths(reader, untrusted), String(since)).toEqual(onClone);
     }
-    const [marked] = await checkBranchPaths(reader, mark);
-    for (const path of ['infra/new.tf', 'CODEOWNERS', 'claims/.env.example', 'package.json#scripts']) expect(marked!.output).toContain(path);
-    expect(marked!.output).not.toContain('infra/old.tf');
-    expect(marked!.output).not.toContain('infra/main.tf');
-    expect((await checkBranchPaths(reader, ''))[0]!.output).toContain('infra/old.tf');
+    const [marked] = await checkBranchPaths(reader, { since: mark, humanHeads: [humanHead], sensitivePaths });
+    for (const path of ['infra/new.tf', '` space.tf`', 'CODEOWNERS', 'claims/.env.example', 'package.json#scripts']) expect(marked!.output).toContain(path);
+    // Neither what came before the mark, nor what a human pushed and the branch took in, nor what the default branch brought.
+    for (const path of ['infra/old.tf', 'infra/human.tf', 'infra/main.tf']) expect(marked!.output).not.toContain(path);
+    const whole = (await checkBranchPaths(reader, { since: '', humanHeads: [humanHead], sensitivePaths }))[0]!.output;
+    expect(whole).toContain('infra/old.tf');
+    expect(whole).toContain('infra/human.tf');
     expect(await ws.branchReader(repo, join(root, 'nowhere'))).toBeUndefined();
   });
 

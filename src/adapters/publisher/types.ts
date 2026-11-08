@@ -1,3 +1,5 @@
+import type { UntrustedMark } from '../../core/clean-verify.js';
+
 /** The factory pushes the verified sha and opens or finds the branch's PR (ORC-125). */
 export interface PublishRequest {
   projectId: string;
@@ -9,8 +11,8 @@ export interface PublishRequest {
   worktree: string;
   branch: string;
   sha: string;
-  /** `TicketState.untrustedSince` (ORC-338): what the branch changed since then in the repository's `sensitive_paths` is refused. */
-  untrustedSince?: string;
+  /** The branch took untrusted content (ORC-338): what its agent commits changed since the mark in the repository's `sensitive_paths` is refused. */
+  untrusted?: UntrustedMark;
   title: string;
   body: string;
 }

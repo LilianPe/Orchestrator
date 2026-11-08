@@ -151,17 +151,22 @@ describe('parseRepoConfig (.factory/config.yml, ORC-209)', () => {
     });
 
     it('refuses a sensitive path that names nothing in the repository (ORC-338), and keeps every glob that does', () => {
-      expect(violations('sensitive_paths: ["/infra/**", "C:/infra", "../x", "a/../../b"]\n')).toEqual([
-        'sensitive_paths[0]: "/infra/**": a path from the repository root is expected (no leading `/`, no drive, no `..`)',
-        'sensitive_paths[1]: "C:/infra": a path from the repository root is expected (no leading `/`, no drive, no `..`)',
-        'sensitive_paths[2]: "../x": a path from the repository root is expected (no leading `/`, no drive, no `..`)',
-        'sensitive_paths[3]: "a/../../b": a path from the repository root is expected (no leading `/`, no drive, no `..`)',
+      const outside = 'a path from the repository root is expected (no drive, no `..`, no absolute path in a brace)';
+      expect(violations('sensitive_paths: ["C:/infra", "../x", "a/../../b", "{src,/etc}", "a/{b,..}/c"]\n')).toEqual([
+        `sensitive_paths[0]: "C:/infra": ${outside}`,
+        `sensitive_paths[1]: "../x": ${outside}`,
+        `sensitive_paths[2]: "a/../../b": ${outside}`,
+        `sensitive_paths[3]: "{src,/etc}": ${outside}`,
+        `sensitive_paths[4]: "a/{b,..}/c": ${outside}`,
       ]);
-      expect(violations('sensitive_paths: [".", "./"]\n')).toEqual([
+      expect(violations('sensitive_paths: [".", "./", "/"]\n')).toEqual([
         'sensitive_paths[0]: ".": it names the whole repository, or nothing: name a directory or a file',
         'sensitive_paths[1]: "./": it names the whole repository, or nothing: name a directory or a file',
+        'sensitive_paths[2]: "/": it names the whole repository, or nothing: name a directory or a file',
       ]);
-      const globs = ['infra', 'infra/**', 'src/auth*', '**/migrations/**', 'src/**/*.sql', 'a/?.ts', '{db,sql}/**'];
+      expect(violations(`sensitive_paths: ["${'x'.repeat(70_000)}"]\n`)).toEqual(['sensitive_paths[0]: "' + 'x'.repeat(70_000) + '": not a glob (pattern is too long)']);
+      // A leading `/` is read from the root, as `./` is.
+      const globs = ['infra', 'infra/**', '/infra/**', 'src/auth*', '**/migrations/**', 'src/**/*.sql', 'a/?.ts', '{db,sql}/**'];
       expect(parseRepoConfig(`sensitive_paths: ${JSON.stringify(globs)}\n`).sensitivePaths).toEqual(globs);
     });
 

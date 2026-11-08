@@ -5,6 +5,8 @@ const MAX_QUESTION_SESSIONS = 50;
 
 const MAX_ANSWERED_MESSAGES = 50;
 
+const MAX_HUMAN_HEADS = 50;
+
 /**
  * Only an implementer's run empties the human inbox, and a ticket may never see one. What already had its answer (a
  * question of a thread, a command) stays within a bound, its oldest dropped: it is in the journal, and was answered. What waits for the agent is never dropped (I6).
@@ -26,6 +28,9 @@ function external(t: TicketState, e: FactoryEvent): TicketState {
       return reopened({ ...t, delegated: true, linearSessionId: t.linearSessionId ?? e.payload.linearSessionId });
     case 'ticket.undelegated':
       return { ...t, delegated: false };
+    case 'push.human':
+      // What a human pushed is theirs (ORC-338); the newest heads are kept, each one reaching those before it.
+      return { ...t, humanHeads: [...(t.humanHeads ?? []).filter((h) => h !== e.payload.sha), e.payload.sha].slice(-MAX_HUMAN_HEADS) };
     case 'session.mentioned':
     case 'command': {
       const id = e.payload.linearSessionId;
@@ -98,7 +103,7 @@ function internal(t: TicketState, e: InternalEvent): TicketState {
       return { ...t, worktreePath: undefined, port: undefined };
     case 'run.started': {
       // The first untrusted run in the ticket's worktree marks its branch, for good (ORC-338).
-      const next = e.untrusted && t.untrustedSince === undefined ? { ...t, untrustedSince: e.untrusted.head } : { ...t };
+      const next = e.untrusted && (t.untrustedSince === undefined || t.untrustedSince === null) ? { ...t, untrustedSince: e.untrusted.head } : { ...t };
       if (e.queue !== 'dev') return next;
       const claudeSessionId = e.ticketSession === false ? t.claudeSessionId : (t.claudeSessionId ?? e.claudeSessionId);
       return { ...next, activeRunId: e.runId, activeJob: e.job, claudeSessionId };
@@ -107,6 +112,9 @@ function internal(t: TicketState, e: InternalEvent): TicketState {
       return { ...t, humanInbox: [] };
     case 'run.cleared':
       return { ...t, activeRunId: undefined, activeJob: undefined };
+    case 'untrusted.read':
+      // Only once, and never over a mark a run set meanwhile.
+      return t.untrustedSince === undefined ? { ...t, untrustedSince: e.since } : t;
   }
 }
 

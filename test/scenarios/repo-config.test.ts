@@ -207,21 +207,37 @@ describe('the path rules of verify on the host', () => {
     return h;
   }
 
-  it('fails closed on a worktree it cannot read', async () => {
+  /** What gives no verdict is an infrastructure or config failure, as on the clone: the ticket blocked, nothing sent to the agent. */
+  const errored = async (h: ReturnType<typeof createHarness>) =>
+    (await h.store.recentEvents(50, 'REL-1')).filter((e) => e.type === 'verify.errored').map((e) => (e.payload as { error: string }).error);
+
+  it('fails closed on a worktree it cannot read: an infrastructure failure, not the agent\'s', async () => {
     const h = onHost([]);
     h.workspaces.gone.add(WORKTREE);
     h.runner.enqueue({});
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
-    expect((await failed(h))[0]).toEqual([expect.objectContaining({ command: 'factory/chemins-interdits', output: expect.stringContaining('could not run') })]);
+    expect(await errored(h)).toEqual([expect.stringContaining('no worktree')]);
+    expect(await failed(h)).toEqual([]);
+    expect(h.runner.requests).toHaveLength(1);
+    expect((await h.ticket()).blocked).toBe(true);
   });
 
-  it('fails closed on a default branch config it cannot read, once the branch is untrusted', async () => {
+  it('fails closed on a default branch config it cannot read, once the branch is untrusted: a config failure, not the agent\'s', async () => {
     const h = onHost(['src/a.ts'], { since: 'head-before', paths: ['src/a.ts'] });
-    h.workspaces.branches.get(WORKTREE)!.baseConfig = 'sensitive_paths: ["/infra"]\n';
+    h.workspaces.branches.get(WORKTREE)!.baseConfig = 'sensitive_paths: ["../infra"]\n';
     h.runner.enqueue({});
     await h.orch.accept({ ...TRUSTED, taint: 'untrusted', id: 'd1', type: 'ticket.delegated', at: h.clock.now(), projectId: 'p', ticketId: 'REL-1', payload: { linearSessionId: 'ls-1' } });
     await h.orch.drained();
-    expect((await failed(h))[0]).toEqual([expect.objectContaining({ command: 'factory/chemins-interdits', output: expect.stringContaining('sensitive_paths[0]') })]);
+    expect(await errored(h)).toEqual([expect.stringContaining('sensitive_paths[0]')]);
+    expect(await failed(h)).toEqual([]);
+    expect(h.runner.requests).toHaveLength(1);
+  });
+
+  it('runs no command on a branch it refuses, as on the clone', async () => {
+    const h = onHost(['.github/workflows/ci.yml']);
+    h.runner.enqueue({});
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    expect(h.checks.calls.filter((c) => c.commands.includes('npm test'))).toHaveLength(0);
   });
 
   it('refuses a forbidden path, whoever ran', async () => {
@@ -235,7 +251,22 @@ describe('the path rules of verify on the host', () => {
     const h = onHost(['infra/main.tf']);
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
     expect(await failed(h)).toEqual([]);
-    expect((await h.ticket()).untrustedSince).toBeUndefined();
+    // Read once in its runs: none untrusted, and kept so.
+    expect((await h.ticket()).untrustedSince).toBeNull();
+  });
+
+  it('a human push the branch took in is the human\'s: only the agent\'s commits since the mark count', async () => {
+    const h = onHost(['infra/human.tf', 'src/a.ts'], { since: 'head-before', paths: ['src/a.ts'] });
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    await h.orch.accept({ ...TRUSTED, taint: 'untrusted', id: 'p1', type: 'push.human', at: h.clock.now(), projectId: 'p', ticketId: 'REL-1', payload: { branch: 'factory/rel-1-export-csv', sha: 'human-head', author: 'mate' } });
+    await h.orch.drained();
+    expect((await h.ticket()).humanHeads).toEqual(['human-head']);
+    await h.orch.accept({ ...TRUSTED, taint: 'untrusted', id: 'u1', type: 'session.prompted', at: h.clock.now(), projectId: 'p', ticketId: 'REL-1', payload: { linearSessionId: 'ls-1', body: 'tidy infra', author: 'stranger' } });
+    await h.orch.drained();
+    await h.advance(600_000);
+    expect((await h.ticket()).untrustedSince).toBe('head-before');
+    expect(h.workspaces.sinceAsked).toEqual([{ rev: 'head-before', humanHeads: ['human-head'] }]);
+    expect(await failed(h)).toEqual([]);
   });
 
   it('refuses what an untrusted branch changed in a sensitive path since it took untrusted content, not what came before', async () => {

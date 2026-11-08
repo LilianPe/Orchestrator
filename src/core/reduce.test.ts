@@ -155,6 +155,21 @@ describe('reduce — facts recorded by the orchestrator', () => {
     expect(reduce(ticket(), { type: 'run.started', runId: 'r2', job: 'dev', queue: 'dev', claudeSessionId: 'c' })!.untrustedSince).toBeUndefined();
   });
 
+  it('keeps the heads humans pushed to the branch, once each, the newest last (ORC-338)', () => {
+    const push = (sha: string) => ev('push.human', { branch: 'factory/rel-1', sha, author: 'mate' });
+    const t = [push('a'), push('b'), push('a')].reduce((s, e) => reduce(s, e)!, ticket());
+    expect(t.humanHeads).toEqual(['b', 'a']);
+  });
+
+  it('the read of a ticket the mark has not seen is kept once, and never over a mark; a later untrusted run still marks (ORC-338)', () => {
+    const read = (since: '' | null) => ({ type: 'untrusted.read', since }) as const;
+    const none = reduce(ticket(), read(null))!;
+    expect(none.untrustedSince).toBeNull();
+    expect(reduce(none, read(''))!.untrustedSince).toBeNull();
+    expect(reduce(ticket({ untrustedSince: 'h1' }), read(null))!.untrustedSince).toBe('h1');
+    expect(reduce(none, { type: 'run.started', runId: 'r1', job: 'dev-feedback', queue: 'dev', claudeSessionId: 'c', untrusted: { head: 'h2' } })!.untrustedSince).toBe('h2');
+  });
+
   it('a run that consumes the feedback empties it', () => {
     const t = ticket({ humanInbox: [{ author: 'L', body: 'x', at: 1, source: 'session' }] });
     // Kept until the run that read it is written (ORC-220): a launch cut before reads it again.

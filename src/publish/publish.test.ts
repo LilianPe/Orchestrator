@@ -173,7 +173,7 @@ describe('GitPublisher', () => {
 
       it('an untrusted branch that touches one is refused', async () => {
         const s = infra();
-        const r = await refusal(s.publisher.publish(s.request({ untrustedSince: '' })));
+        const r = await refusal(s.publisher.publish(s.request({ untrusted: { since: '', humanHeads: [] } })));
         expect(r.code).toBe('diff');
         expect(r.message).toContain('`infra/main.tf`: sensitive path of the repository (`infra/**`)');
         expect(s.pushes).toEqual([]);
@@ -187,16 +187,16 @@ describe('GitPublisher', () => {
 
       it('a sensitive change a trusted run committed before the branch took untrusted content is published', async () => {
         const s = infra();
-        const untrustedSince = git(s.repo, 'rev-parse', 'HEAD');
+        const untrusted = { since: git(s.repo, 'rev-parse', 'HEAD'), humanHeads: [] };
         write(s.repo, 'src/a.ts', 'x\n');
         commit(s.repo);
-        await s.publisher.publish(s.request({ untrustedSince }));
+        await s.publisher.publish(s.request({ untrusted }));
         expect(s.onForge()).toBe(git(s.repo, 'rev-parse', 'HEAD'));
       });
 
       it('a base config the check cannot read is a refusal, decided once, not a breakdown', async () => {
-        const s = setup({ config: 'sensitive_paths: ["/infra"]\n' });
-        const r = await refusal(s.publisher.publish(s.request({ untrustedSince: '' })));
+        const s = setup({ config: 'sensitive_paths: ["../infra"]\n' });
+        const r = await refusal(s.publisher.publish(s.request({ untrusted: { since: '', humanHeads: [] } })));
         expect(r.code).toBe('config');
         expect(r.message).toContain('sensitive_paths[0]');
         expect(s.pushes).toEqual([]);

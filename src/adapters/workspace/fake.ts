@@ -68,13 +68,18 @@ export class FakeWorkspaces implements WorkspaceManager {
    */
   branches = new Map<string, { changed: StepDiff['changed']; since?: Record<string, string[]>; baseConfig?: string }>();
   gone = new Set<string>();
+  /** What each `changedSince` was asked: the mark, and the human heads left out. */
+  sinceAsked: { rev: string; humanHeads: readonly string[] }[] = [];
 
   async branchReader(_repoPath: string, path: string): Promise<BranchReader | undefined> {
     if (this.gone.has(path)) return undefined;
     const b = this.branches.get(path) ?? { changed: [] };
     return {
       changed: async () => b.changed,
-      changedSince: async (rev) => b.since?.[rev],
+      changedSince: async (rev, humanHeads) => {
+        this.sinceAsked.push({ rev, humanHeads });
+        return b.since?.[rev];
+      },
       showAtFork: async () => undefined,
       showAtHead: async () => undefined,
       baseConfig: async () => b.baseConfig,

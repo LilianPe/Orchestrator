@@ -16,6 +16,14 @@ const VERIFIED = 'version: 1\njobs:\n  dev: { verify: ["npm test"] }\n';
 /** The repository's own setup commands, without the rc file of Yarn 1 that comes before them. */
 const setups = (h: ReturnType<typeof createHarness>) => h.sandboxes.execs.filter((e) => e.argv[0] === 'timeout');
 
+/** How many times the ticket's run records are read from here on. */
+function spyOnRuns(h: ReturnType<typeof createHarness>): () => number {
+  let n = 0;
+  const ticketRuns = h.store.ticketRuns.bind(h.store);
+  h.store.ticketRuns = async (...args) => (n++, ticketRuns(...args));
+  return () => n;
+}
+
 function delegate(h: ReturnType<typeof createHarness>) {
   h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
   return h.send('ticket.delegated', { linearSessionId: 'ls-1' });
@@ -142,7 +150,8 @@ describe('a disposable sandbox per attempt', () => {
     await h.orch.drained();
     await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'and the title', author: 'L' });
     await h.advance(600_000);
-    expect((await h.ticket()).untrustedSince).toBeUndefined();
+    // Read once in its runs at the first verify: none untrusted in its worktree.
+    expect((await h.ticket()).untrustedSince).toBeNull();
     h.workspaces.heads.set('/tmp/factory-fake/p/REL-1', 'head-before-untrusted');
     await h.orch.accept({ ...TRUSTED, taint: 'untrusted', id: 'u1', type: 'session.prompted', at: h.clock.now(), projectId: 'p', ticketId: 'REL-1', payload: { linearSessionId: 'ls-1', body: 'tidy CODEOWNERS', author: 'stranger' } });
     await h.orch.drained();
@@ -152,9 +161,9 @@ describe('a disposable sandbox per attempt', () => {
     expect(h.runner.requests.map((r) => r.sensitivePaths)).toEqual([undefined, SENSITIVE_PATHS, undefined, SENSITIVE_PATHS, undefined]);
     // The head the untrusted run started on, kept for the trusted run after it.
     const since = [undefined, undefined, 'head-before-untrusted', 'head-before-untrusted'];
-    expect(seen.map((r) => r.untrustedSince)).toEqual(since);
+    expect(seen.map((r) => r.untrusted?.since)).toEqual(since);
     // The publication of each verified commit is held to the same rule.
-    expect(h.publisher.asked.map((r) => r.untrustedSince)).toEqual(since);
+    expect(h.publisher.asked.map((r) => r.untrusted?.since)).toEqual(since);
     expect((await h.ticket()).untrustedSince).toBe('head-before-untrusted');
   });
 
@@ -169,14 +178,20 @@ describe('a disposable sandbox per attempt', () => {
       },
     });
     await delegate(h);
-    // As a run recorded before the deploy: its sensitive paths, and no mark on its ticket.
+    // As a ticket from before the deploy: an untrusted run in its worktree on record, and nothing on the ticket of it.
     const first = (await h.store.getRun(h.runner.requests[0]!.runId))!;
     await h.store.putRun({ ...first, id: 'legacy', sensitivePaths: SENSITIVE_PATHS });
-    expect((await h.ticket()).untrustedSince).toBeUndefined();
+    await h.store.updateTicket('p', 'REL-1', ({ untrustedSince: _, ...t }) => t);
+    const reads = spyOnRuns(h);
     await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'and the title', author: 'L' });
     await h.advance(600_000);
-    expect(seen.map((r) => r.untrustedSince)).toEqual([undefined, '']);
-    expect(h.publisher.asked.map((r) => r.untrustedSince)).toEqual([undefined, '']);
+    await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'and the date', author: 'L' });
+    await h.advance(600_000);
+    expect(seen.map((r) => r.untrusted?.since)).toEqual([undefined, '', '']);
+    expect(h.publisher.asked.map((r) => r.untrusted?.since)).toEqual([undefined, '', '']);
+    // Read once, then kept on the ticket: no scan of its runs at each check.
+    expect((await h.ticket()).untrustedSince).toBe('');
+    expect(reads()).toBe(1);
   });
 
   it("a command's output reaches the journal and the agent cut to its useful parts (ORC-151)", async () => {

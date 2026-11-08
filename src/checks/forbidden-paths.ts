@@ -57,8 +57,11 @@ export function forbiddenPattern(path: string): string | undefined {
 /** Dotfiles matched like any file, case ignored as a case-insensitive checkout reads it, and no `#` comment or `!` negation (the config refuses `!`). */
 const GLOB = { dot: true, nocase: true, nocomment: true, nonegate: true } as const;
 
-/** A `sensitive_paths` entry as it is matched: `\` read as `/`, and `./infra/` naming what `infra` does, as the paths compared have neither. */
-const normalizePattern = (pattern: string): string => pattern.replace(/\\/g, '/').replace(/^(\.\/)+/, '').replace(/\/+$/, '');
+/**
+ * A `sensitive_paths` entry as it is matched: `\` read as `/`, and `./infra/` or `/infra` naming what `infra` does, as the
+ * paths compared are from the root and have neither.
+ */
+const normalizePattern = (pattern: string): string => pattern.replace(/\\/g, '/').replace(/^(\.?\/)+/, '').replace(/\/+$/, '');
 
 /**
  * The repository's `sensitive_paths` (globs from the root), each compiled once: the first that names a path or one of its
@@ -74,14 +77,24 @@ export function sensitiveMatcher(patterns: readonly string[]): (path: string) =>
 }
 
 /**
- * Why a `sensitive_paths` entry would name no path of the repository, or undefined: it must start at the root, stay
- * inside it, name something (not `.`, `./` or empty), and compile to a glob that can match.
+ * Why a `sensitive_paths` entry would name no path of the repository, or undefined: it must compile, and each of its
+ * expansions (`{a,b}`) must name something from the root (not `.` or empty), with no drive, no `..` and no absolute path
+ * left inside a brace, where no `/` is stripped.
  */
 export function repoPatternError(pattern: string): string | undefined {
   const p = normalizePattern(pattern);
-  if (p.startsWith('/') || /^[a-zA-Z]:/.test(p) || p.split('/').includes('..')) return 'a path from the repository root is expected (no leading `/`, no drive, no `..`)';
   if (p === '' || p === '.') return 'it names the whole repository, or nothing: name a directory or a file';
-  const glob = new Minimatch(p, GLOB);
+  let glob: Minimatch;
+  try {
+    glob = new Minimatch(p, GLOB);
+  } catch (err) {
+    return `not a glob (${(err as Error).message})`;
+  }
+  for (const expanded of glob.braceExpand()) {
+    const segments = expanded.split('/');
+    if (expanded.startsWith('/') || /^[a-zA-Z]:/.test(expanded) || segments.includes('..')) return 'a path from the repository root is expected (no drive, no `..`, no absolute path in a brace)';
+    if (expanded === '' || segments.every((s) => s === '.' || s === '')) return 'it names the whole repository, or nothing: name a directory or a file';
+  }
   if (glob.empty || glob.makeRe() === false) return 'not a glob that can match a path';
   return undefined;
 }
