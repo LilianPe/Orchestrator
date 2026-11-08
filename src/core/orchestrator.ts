@@ -937,10 +937,11 @@ export class Orchestrator {
     const inFlight = this.prReads.get(run.id);
     if (inFlight) return inFlight;
     const read = (async () => {
-      const t = await this.ticket(run.projectId, run.ticketId);
+      // A run without a tracked ticket (a question on any issue) has no PR to read: 404, not the factory failing.
+      const t = await this.d.store.getTicket(run.projectId, run.ticketId);
       // The version the ticket is frozen on, as its launch read it: a review started before ORC-322 has no PR to read.
-      const project = await this.runtimeFor(run.projectId, run.ticketId, t);
-      if (!project?.workflow.jobs[run.job]?.prState) return undefined;
+      const project = await this.runtimeFor(run.projectId, run.ticketId, t ?? null);
+      if (!t || !project?.workflow.jobs[run.job]?.prState) return undefined;
       const sandbox = this.d.sandboxes && (await this.d.sandboxes.findByAttempt(run.id));
       if (this.d.sandboxes && !sandbox) return undefined;
       return this.readPr(project, t.branch, run.cwd, run.id, sandbox || undefined, { fetch: true, fastForward: false });

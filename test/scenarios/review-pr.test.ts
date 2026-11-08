@@ -119,6 +119,14 @@ describe('a review without network', () => {
     expect(await h.orch.agentPrState(run)).toMatchObject({ state: 'OPEN', head: 'a'.repeat(40) });
   });
 
+  it('answers no PR, not a failure, for a run whose ticket the factory does not track', async () => {
+    const h = createHarness({ sandboxed: true, prRefs: prRefs([{ head: 'a'.repeat(40), base: 'b'.repeat(40) }]).bring });
+    h.runner.enqueue({}, { hold: true });
+    await toReview(h);
+    const run = (await h.store.getRun(reviewRun(h).runId))!;
+    expect(await h.orch.agentPrState({ ...run, ticketId: 'REL-404' })).toBeUndefined();
+  });
+
   it("removes the review's PR refs dir with its sandbox", async () => {
     const h = createHarness({ sandboxed: true, prRefs: prRefs([{ head: 'a'.repeat(40), base: 'b'.repeat(40) }]).bring });
     await toReview(h);
