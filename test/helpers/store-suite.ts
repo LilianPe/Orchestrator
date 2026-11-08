@@ -145,6 +145,39 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     expect((await s.getRun('r1'))!.tokens).toEqual(tokens);
   });
 
+  it('tells whether the inbox holds an event id, processed or not (ORC-336)', async () => {
+    const s = await store();
+    expect(await s.inboxHas('e1')).toBe(false);
+    await s.appendInbox(delegatedEvent('e1', 'REL-1', 10));
+    expect(await s.inboxHas('e1')).toBe(true);
+    await s.markInboxProcessed('e1');
+    expect(await s.inboxHas('e1')).toBe(true);
+    expect(await s.inboxHas('e2')).toBe(false);
+  });
+
+  it('keeps a delivery answered before the inbox until it is deleted, once, in the order received (ORC-336)', async () => {
+    const s = await store();
+    expect(await s.pendingDeliveries()).toEqual([]);
+    expect(await s.receiveDelivery('activity:b', '{"raw":"2"}')).toBe(true);
+    expect(await s.receiveDelivery('activity:a', '{"raw":"1"}')).toBe(true);
+    expect(await s.receiveDelivery('activity:b', '{"raw":"other"}')).toBe(false);
+    expect(await s.pendingDeliveries()).toEqual([{ key: 'activity:b', value: '{"raw":"2"}' }, { key: 'activity:a', value: '{"raw":"1"}' }]);
+    await s.deleteDelivery('activity:b');
+    expect(await s.pendingDeliveries()).toEqual([{ key: 'activity:a', value: '{"raw":"1"}' }]);
+    expect(await s.receiveDelivery('activity:b', '{"raw":"again"}')).toBe(true);
+    // Set aside: no longer pending, its value kept for an operator; the key may be kept again.
+    await s.asideDelivery('activity:a');
+    expect(await s.pendingDeliveries()).toEqual([{ key: 'activity:b', value: '{"raw":"again"}' }]);
+    expect(await s.getMeta('delivery-aside:activity:a')).toBe('{"raw":"1"}');
+    expect(await s.receiveDelivery('activity:a', '{"raw":"new"}')).toBe(true);
+    await s.asideDelivery('activity:a');
+    expect(await s.getMeta('delivery-aside:activity:a')).toBe('{"raw":"new"}');
+    // The same delivery, same value, kept again once set aside: kept, beside the row set aside.
+    expect(await s.receiveDelivery('activity:a', '{"raw":"new"}')).toBe(true);
+    expect(await s.pendingDeliveries()).toContainEqual({ key: 'activity:a', value: '{"raw":"new"}' });
+    expect(await s.getMeta('delivery:activity:a')).toBe('{"raw":"new"}');
+  });
+
   it("gathers a ticket's measure facts: journal in order, its attempts, its outbox, the first ack of its events (ORC-235)", async () => {
     const s = await store();
     expect(await s.measureFacts('p', 'REL-1')).toEqual({ devSession: undefined, events: [], runs: [], effects: [], acks: {} });

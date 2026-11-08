@@ -9,6 +9,7 @@ import { PrPoller } from '../adapters/forge/pr-poller.js';
 import { FakePublisher } from '../adapters/publisher/fake.js';
 import { CachedRoleResolver } from '../adapters/roles/cached.js';
 import { ClaudeCodeRunner, liveDir } from '../adapters/runner/claude-code.js';
+import { messageClassifier } from '../adapters/runner/message-classifier.js';
 import { purgeRunDirs, purgeSessionDirs, purgeTranscripts } from '../adapters/runner/transcript.js';
 import { FakeRunner } from '../adapters/runner/fake.js';
 import type { Runner } from '../adapters/runner/types.js';
@@ -26,7 +27,7 @@ import { LinearTracker } from '../adapters/tracker/linear/tracker.js';
 import { isUsableWebhookSecret } from '../adapters/tracker/linear/webhook.js';
 import { GitWorkspaces } from '../adapters/workspace/git-workspaces.js';
 import { saveAgentOutput, type AgentOutput } from '../core/agent-output.js';
-import { activeClaudeToken, loadFactoryYml, stepSettings } from '../config/factory-yml.js';
+import { activeClaudeToken, claudeToken as checkedClaudeToken, loadFactoryYml, stepSettings } from '../config/factory-yml.js';
 import { makeOriginUrl, makeRepoConfig, makeRepoVariables } from './repo-variables.js';
 import { daemonSecretValues, effectiveInstance, homePaths, linearSettings, saveLinearTokens } from '../config/instance.js';
 import { githubWebhookSecret, resolveGithubApp } from '../config/github-app.js';
@@ -153,10 +154,16 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     // The sandboxes' only way out (ORC-213): it applies each run's network level and journals its connections.
     // In a service of its own under compose (ORC-203), in this process otherwise.
     const egressControl = env['FACTORY_EGRESS_CONTROL'];
-    const egress: Egress = egressControl ? new EgressClient(egressControl, log) : new EgressProxy({
+    // The chosen account replaces a host run's login (ORC-211). The sandboxes' token, resolved once for the runner
+    // and the proxy (ORC-337): the proxy sets it on their model calls, which hold a placeholder alone.
+    const claudeAccount = activeClaudeToken(yml);
+    const claudeToken = claudeAccount ?? checkedClaudeToken(env['CLAUDE_CODE_OAUTH_TOKEN'], 'CLAUDE_CODE_OAUTH_TOKEN');
+    const claudeTokenOf = () => claudeToken;
+    const egress: Egress = egressControl ? new EgressClient(egressControl, { log, claudeToken: claudeTokenOf }) : new EgressProxy({
       dir: paths.network,
       caDir: paths.egressCa,
       log,
+      claudeToken: claudeTokenOf,
       agentApi: { host: agentHostInSandbox, port: agentPort, to: { host: agentListenHost === '0.0.0.0' ? '127.0.0.1' : agentListenHost, port: agentPort } },
     });
     const sandboxes = o.fakeRunner ? undefined : makeSandboxes(env, instanceId(o.home), egress);
@@ -164,11 +171,10 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       log('Warning: FACTORY_CONTAINER_CLI is not set, runs execute on the host, without isolation.');
       log(env['FACTORY_ALLOW_HOST_VERIFY'] === '1' ? "Warning: FACTORY_ALLOW_HOST_VERIFY=1, verify runs the agent's code on the host, next to the daemon's secrets." : 'Warning: without a sandbox or FACTORY_ALLOW_HOST_VERIFY=1, verify refuses to run: every verified ticket will be blocked.');
     }
-    const claudeToken = activeClaudeToken(yml);
-    if (sandboxes && !claudeToken && !env['CLAUDE_CODE_OAUTH_TOKEN']) log('Warning: no Claude token (claude.active in factory.yml, or CLAUDE_CODE_OAUTH_TOKEN): sandboxed runs will not be able to authenticate.');
+    if (sandboxes && !claudeToken) log('Warning: no Claude token (claude.active in factory.yml, or CLAUDE_CODE_OAUTH_TOKEN): sandboxed runs will not be able to authenticate.');
     const runner: Runner = o.fakeRunner
       ? Object.assign(new FakeRunner(), { submit: (runId: string, output: AgentOutput) => saveAgentOutput(store, runId, output) })
-      : new ClaudeCodeRunner({ transcriptsDir: paths.transcripts, secrets: daemonSecrets, claudeToken: () => claudeToken, log, ...(sandboxes ? { sandboxes } : {}) });
+      : new ClaudeCodeRunner({ transcriptsDir: paths.transcripts, secrets: daemonSecrets, claudeToken: () => claudeAccount, sandboxClaudeToken: claudeTokenOf, log, ...(sandboxes ? { sandboxes } : {}) });
     const workspaces = new GitWorkspaces({ root: paths.workspaces, knowledgeRepo: instance.knowledge?.repoPath, log });
     const forge = githubApp
       ? new GitHubAppForge({ ...githubApp, log })
@@ -283,8 +289,14 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     const webhookSecret = () => linearSettings(o.home, yml)?.webhookSecret ?? '';
     // One turn for the webhook and the reconciliation around the known labels (ORC-185).
     const labelsTurn = serial();
+    // The fake runner's daemon reaches no model: its messages are classified by the fallback rule (ORC-336).
+    const classify = o.fakeRunner ? undefined : messageClassifier(env, claudeToken, !sandboxes, log);
     const ingest = createLinearIngest({
       serial: labelsTurn,
+      // A message for the model is kept in the store and answered before it is classified (ORC-336); what an earlier
+      // start kept is written by `resume`, model or not.
+      ...(classify ? { classify } : {}),
+      deliveries: store,
       secret: webhookSecret,
       accept,
       log,
@@ -374,6 +386,12 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
         : undefined,
     });
 
+    // Webhooks answered before a stop and not written to the inbox yet (ORC-336), set on their way before any new one
+    // is taken: a new webhook of their issue goes behind them. A failure leaves them kept, for the next start.
+    await ingest.resume().then(
+      (n) => n && log(`webhooks: ${n} answered before the stop, written now`),
+      (e: unknown) => log(`webhooks kept before the stop not read: ${(e as Error).message}`),
+    );
     const server = serve({ fetch: app.fetch, port, hostname: instance.host });
     // Only with sandboxes: the agent API on a listener of its own, for them alone (ORC-204), reached through the egress proxy.
     const agentServer = sandboxes ? serve({ fetch: agentOnly(app), port: agentPort, hostname: agentListenHost }) : undefined;
@@ -387,7 +405,11 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       clearInterval(tickInterval);
       clearInterval(beatInterval);
       clearInterval(purgeInterval);
+      // No webhook taken from here on (503, Linear sends it again), then those answered are written or left kept for
+      // the next start, before anything closes the store (ORC-336).
       relay?.close();
+      ingest.close();
+      await ingest.settled();
       // A pass under way finishes first, so it never reads or writes a closed store.
       await Promise.all([timers.stop(), poller.stop(), reconciler.stop()]);
       orchestrator.stopAll();

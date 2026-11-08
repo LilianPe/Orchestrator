@@ -2,35 +2,29 @@ import { describe, expect, it } from 'vitest';
 import { awaitsAgent, carriedAtLaunch, classifyMessage, forAgent } from './human-message.js';
 import type { FeedbackItem } from './types.js';
 
-describe('classifyMessage (ORC-180): deterministic rules, no model', () => {
-  it.each(['/status', '/stop', '  /STOP  ', '/status du ticket ?'])('%j is a command', (body) => {
+describe('classifyMessage (ORC-180, ORC-336)', () => {
+  it.each(['/status', '/stop', '  /STOP  ', '/status du ticket ?'])('%j is a command, whatever the model says', (body) => {
+    expect(classifyMessage(body, 'instruction')).toBe('command');
     expect(classifyMessage(body)).toBe('command');
   });
 
-  it.each(['et pour mobile ?', 'pourquoi?', 'change le titre ?', 'corrige https://a.b/c?d=1 ?'])('%j has a question mark: a question', (body) => {
-    expect(classifyMessage(body)).toBe('question');
-  });
-
   it.each([
-    'arrête',
-    'Arrête de toucher au CSS',
-    'change le titre',
-    'reprends',
-    'corrige le bug du tri',
-    'Ajoute un test',
-    'enlève ce log',
-    "n'oublie pas le mobile",
-    'il faut garder le format',
-    'merci de renommer ce champ',
-    'stp corrige le bug',
-    'please fix the sort',
-    'corrige le lien https://app/x?id=1',
-  ])('%j asks for an action: an instruction', (body) => {
-    expect(classifyMessage(body)).toBe('instruction');
+    ['Le tri doit être décroissant', 'instruction'],
+    ['Could you switch the sort?', 'instruction'],
+    ['corrige le tri, ok ?', 'instruction'],
+    ['boutons mal alignés', 'question'],
+  ] as const)('%j: the model says %s, so it is', (body, verdict) => {
+    expect(classifyMessage(body, verdict)).toBe(verdict);
   });
 
-  it.each(['boutons mal alignés', 'ok', 'bug quand la liste est vide', 'changement de plan', '', '   ', '/autre chose', 'regarde https://app/x?id=1'])('%j stays ambiguous: a question', (body) => {
-    expect(classifyMessage(body)).toBe('question');
+  describe('without a verdict, the fallback rule', () => {
+    it.each(['et pour mobile ?', 'pourquoi?', 'change le titre ?', 'corrige https://a.b/c?d=1 ?'])('%j has a question mark: a question', (body) => {
+      expect(classifyMessage(body)).toBe('question');
+    });
+
+    it.each(['Le tri doit être décroissant', 'please fix the sort', 'boutons mal alignés', 'regarde https://app/x?id=1', 'regarde HTTPS://x?y=1', 'Http://a.b/?q', '/autre chose'])('%j has none outside a URL: an instruction', (body) => {
+      expect(classifyMessage(body)).toBe('instruction');
+    });
   });
 });
 

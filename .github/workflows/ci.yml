@@ -124,7 +124,7 @@ jobs:
       - name: Check the runner image
         run: |
           podman build -f docker/runner.Dockerfile -t localhost/factory-runner:ci docker
-          npx vitest run --project isolation test/isolation/runner-image.test.ts test/isolation/isolation-07-secrets.test.ts test/isolation/isolation-07-layers.test.ts
+          npx vitest run --project isolation test/isolation/runner-image.test.ts test/isolation/isolation-07-secrets.test.ts test/isolation/isolation-07-layers.test.ts test/isolation/claude-token.test.ts
         env:
           FACTORY_RUNNER_IMAGE: localhost/factory-runner:ci
       # Isolation n° 11 runs a real claude -p when this secret is set, and is skipped without it (forks too).

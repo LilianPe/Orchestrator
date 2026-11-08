@@ -7,7 +7,7 @@ import { describeAgentRuntimeContract, drain, type AgentScript } from '../../../
 import { ContainerSandboxProvider } from '../sandbox/docker-rootless.js';
 import { FakeSandboxProvider } from '../sandbox/fake.js';
 import type { SandboxProvider } from '../sandbox/types.js';
-import { buildClaudeArgs, childEnv, ClaudeCodeRunner, liveDir, worktreeReader } from './claude-code.js';
+import { buildClaudeArgs, childEnv, ClaudeCodeRunner, liveDir, SANDBOX_CLAUDE_TOKEN, worktreeReader } from './claude-code.js';
 import type { RunRequest } from './types.js';
 
 const fx = (n: string) => join(import.meta.dirname, 'fixtures', n);
@@ -495,14 +495,27 @@ describe('ClaudeCodeRunner attached to an attempt of a dead daemon', () => {
 describe('ClaudeCodeRunner in a sandbox (ORC-204)', () => {
   afterEach(() => vi.unstubAllEnvs());
 
-  it('names the token of the chosen account, whatever login the daemon holds', async () => {
+  it("names a placeholder for the chosen account, never its token nor the daemon's (ORC-337)", async () => {
     vi.stubEnv('CLAUDE_CODE_OAUTH_TOKEN', 'daemon-login');
     const { sandboxes, id, spawnCommand } = await sandbox();
     const transcriptsDir = mkdtempSync(join(tmpdir(), 'factory-tr-'));
     const r = new ClaudeCodeRunner({ transcriptsDir, command: [process.execPath, fx('fake-claude.mjs')], sandboxes, claudeToken: () => 'chosen-account' });
     await r.start(req({ sandboxId: id, cwd: '/work' }, { FAKE_CLAUDE_SCRIPT: fx('stream-success.jsonl') })).done;
     const [, , opts] = spawnCommand.mock.calls[0]! as Parameters<SandboxProvider['spawnCommand']>;
-    expect(opts!.env).toMatchObject({ CLAUDE_CODE_OAUTH_TOKEN: 'chosen-account' });
+    expect(opts!.env).toMatchObject({ CLAUDE_CODE_OAUTH_TOKEN: SANDBOX_CLAUDE_TOKEN });
+    expect(JSON.stringify(opts)).not.toMatch(/chosen-account|daemon-login/);
+  });
+
+  it('follows the token resolved with the proxy when given one: none there, no placeholder, whatever the daemon holds (ORC-337)', async () => {
+    vi.stubEnv('CLAUDE_CODE_OAUTH_TOKEN', 'daemon-login');
+    const { sandboxes, id, spawnCommand } = await sandbox();
+    const transcriptsDir = mkdtempSync(join(tmpdir(), 'factory-tr-'));
+    const make = (token: string | undefined) => new ClaudeCodeRunner({ transcriptsDir, command: [process.execPath, fx('fake-claude.mjs')], sandboxes, sandboxClaudeToken: () => token });
+    await make(undefined).start(req({ sandboxId: id, cwd: '/work' }, { FAKE_CLAUDE_SCRIPT: fx('stream-success.jsonl') })).done;
+    await make('resolved').start(req({ sandboxId: id, cwd: '/work', runId: 'r-2' }, { FAKE_CLAUDE_SCRIPT: fx('stream-success.jsonl') })).done;
+    const envs = spawnCommand.mock.calls.map((c) => (c as Parameters<SandboxProvider['spawnCommand']>)[2]!.env);
+    expect(envs[0]).not.toHaveProperty('CLAUDE_CODE_OAUTH_TOKEN');
+    expect(envs[1]).toMatchObject({ CLAUDE_CODE_OAUTH_TOKEN: SANDBOX_CLAUDE_TOKEN });
   });
 
   it('names no credential at all when there is none, and the API key never', async () => {
@@ -516,7 +529,7 @@ describe('ClaudeCodeRunner in a sandbox (ORC-204)', () => {
     expect(opts!.env).toEqual({ FAKE_CLAUDE_SCRIPT: fx('stream-success.jsonl') });
   });
 
-  it('runs claude through spawnCommand, naming the run env and the account token only', async () => {
+  it('runs claude through spawnCommand, naming the run env and the token placeholder only', async () => {
     vi.stubEnv('SOME_DAEMON_VAR', 'leak');
     vi.stubEnv('GH_TOKEN', 'ghp_leak');
     vi.stubEnv('ANTHROPIC_API_KEY', 'sk-test');
@@ -533,7 +546,7 @@ describe('ClaudeCodeRunner in a sandbox (ORC-204)', () => {
     const [sid, argv, opts] = spawnCommand.mock.calls[0]! as Parameters<SandboxProvider['spawnCommand']>;
     expect(sid).toBe(id);
     expect(argv).toEqual([process.execPath, fx('fake-claude.mjs'), ...buildClaudeArgs(rq)]);
-    expect(opts).toEqual({ cwd: '/work', env: { ...runEnv, CLAUDE_CODE_OAUTH_TOKEN: 'oauth-test' } });
+    expect(opts).toEqual({ cwd: '/work', env: { ...runEnv, CLAUDE_CODE_OAUTH_TOKEN: SANDBOX_CLAUDE_TOKEN } });
   });
 
   it('spawns the engine CLI with the daemon PATH, and hands the sandbox PATH to the command in the container', async () => {
@@ -609,6 +622,11 @@ describe('childEnv: a run on the host (ORC-211)', () => {
 
   it('the chosen account replaces any other login of the daemon', () => {
     expect(childEnv({ HOME: '/h', ANTHROPIC_API_KEY: 'k', CLAUDE_CODE_OAUTH_TOKEN: 'old' }, {}, 'chosen')).toEqual({ HOME: '/h', CLAUDE_CODE_OAUTH_TOKEN: 'chosen' });
+  });
+
+  it('without a chosen account, a host run keeps both logins of the daemon, as before ORC-337', () => {
+    // The daemon's CLAUDE_CODE_OAUTH_TOKEN goes to the proxy for the sandboxes (`sandboxClaudeToken`), never as a chosen account here.
+    expect(childEnv({ HOME: '/h', ANTHROPIC_API_KEY: 'k', CLAUDE_CODE_OAUTH_TOKEN: 'old' }, {})).toEqual({ HOME: '/h', ANTHROPIC_API_KEY: 'k', CLAUDE_CODE_OAUTH_TOKEN: 'old' });
   });
 
   it('drops variables left over from the old prefix', () => {
