@@ -14,6 +14,8 @@ export const OUTPUT_LIMITS = {
   field: 2_000,
   item: 500,
   items: 20,
+  /** Choices of one `select` question (ORC-210): the agent gives 2 to 5. */
+  options: 5,
   captureBytes: 2 * 1024 * 1024,
   captureWidth: { min: 320, max: 3_840 },
   base64Run: 100,
