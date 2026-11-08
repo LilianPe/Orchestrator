@@ -104,6 +104,13 @@ describe('standard pack', () => {
     expect(text).not.toMatch(/git merge --no-edit origin\/<base>/);
   });
 
+  it('has the review reach no forge: neither it nor the code review it runs calls gh or git fetch (ORC-322)', () => {
+    for (const name of ['review', 'code-review']) {
+      const text = readFileSync(join(pack, 'skills', name, 'SKILL.md'), 'utf8');
+      expect(text, name).not.toMatch(/`gh \w|`git fetch \S|^\s*git fetch\b/m);
+    }
+  });
+
   it('denies skipping the git hooks with --no-verify or -n, grouped (-nm) or late in the command', () => {
     const s = JSON.parse(readFileSync(join(pack, 'settings.json'), 'utf8'));
     expect(s.permissions.deny).toEqual(

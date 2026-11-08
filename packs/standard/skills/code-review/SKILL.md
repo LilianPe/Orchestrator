@@ -9,10 +9,9 @@ You review a diff as a demanding reviewer, not as its author. The result is a **
 
 ## 1. Scope the diff
 
-The base is the PR's target branch (`gh pr view <branch> --json baseRefName --jq .baseRefName`); without a PR, the trunk (`git rev-parse --abbrev-ref origin/HEAD`, which prints `origin/<trunk>`). One command per call, no shell chaining:
+The base is the PR's target branch, as the `## Pull request` section of the prompt names it (or `factory-agent pr`); without a PR, the trunk (`git rev-parse --abbrev-ref origin/HEAD`, which prints `origin/<trunk>`). The factory keeps `origin/<base>` up to date in your worktree: never `gh` nor `git fetch`, a review has no network. One command per call, no shell chaining:
 
 ```bash
-git fetch origin
 git log --oneline origin/<base>..HEAD
 git diff --stat origin/<base>...HEAD
 git diff origin/<base>...HEAD
