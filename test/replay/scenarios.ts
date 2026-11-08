@@ -228,6 +228,9 @@ export async function record(name: string): Promise<ExportedJournal> {
   const scenario = SCENARIOS[name];
   if (!scenario) throw new Error(`unknown scenario ${name}`);
   const h = createHarness({ preset: scenario.preset, authz: scenario.authz });
+  // The instance id salts the keys of the effects (and so the id of `publish.refused`): drawn at random, it
+  // would make two recordings of one scenario differ.
+  await h.store.setMeta('instance-id', '0123456789ab');
   await scenario.run(h);
   h.orch.stopAll();
   await h.orch.drained();
