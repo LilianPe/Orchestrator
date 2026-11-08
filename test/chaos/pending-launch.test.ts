@@ -20,7 +20,7 @@ type Fault = 'throw' | 'hang' | 'outage';
 class InjectedFault extends Error {}
 
 /** The ticket's state, its runs and the queue, which an outage refuses; the outbox's own bookkeeping still answers, so that the settle's death is recorded. */
-const OUTAGE = new Set(['getTicket', 'updateTicket', 'putTicket', 'listQueue', 'queuedJobs', 'enqueue', 'getMeta', 'setMeta', 'getRun', 'putRun', 'renewRun', 'runsByStatus']);
+const OUTAGE = new Set(['getTicket', 'updateTicket', 'putTicket', 'listQueue', 'queuedItems', 'enqueue', 'getMeta', 'setMeta', 'getRun', 'putRun', 'renewRun', 'runsByStatus']);
 
 interface Window {
   /** Store calls made in the window so far. */
@@ -148,16 +148,20 @@ async function play(at: number, fault: Fault | undefined, queued: boolean): Prom
   return { window, h };
 }
 
-/** Launched once, or blocked with its reason: never lost, never twice. */
+/**
+ * Launched once, or blocked with its reason: never lost, never twice. A ticket blocked on the pending job no settle
+ * could start still holds it, for the reply that starts it; any other end leaves nothing pending.
+ */
 async function holds(h: ReturnType<typeof createHarness>, where: string): Promise<void> {
   const t = await h.ticket();
   const feedback = h.runner.requests.filter((r) => r.prompt.startsWith('/factory:feedback'));
-  expect(t.pendingJob, where).toBeUndefined();
   expect(await h.store.listQueue(), where).toEqual([]);
   if (t.blocked) {
     expect(t.blockReason, where).toMatch(/^(Launch error|Error: the pending dev-feedback could not be started)/);
+    expect(t.pendingJob, where).toEqual(/could not be started/.test(t.blockReason!) ? { job: 'dev-feedback', resume: true } : undefined);
     expect(feedback, where).toHaveLength(0);
   } else {
+    expect(t.pendingJob, where).toBeUndefined();
     expect(feedback, where).toHaveLength(1);
     expect(t.activeRunId, where).toBe(feedback[0]!.runId);
   }
@@ -199,7 +203,8 @@ describe('chaos: a pending job through its start (ORC-339)', () => {
     for (let i = 0; i < 6; i++) await step(h);
     const t = await h.ticket();
     expect(t).toMatchObject({ blocked: true, blockReason: expect.stringMatching(/^Error: the pending dev-feedback could not be started: database down at /) });
-    expect(t.pendingJob).toBeUndefined();
+    // Kept for the reply that starts it.
+    expect(t.pendingJob).toEqual({ job: 'dev-feedback', resume: true });
     expect(h.runner.requests).toHaveLength(1);
     await shutdown();
   });

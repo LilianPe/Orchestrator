@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util';
 import { liftDeadLetterBlock, repairedEvent } from './dead-letter.js';
 import { CREATES_TICKET, newTicketState, type InternalEvent, type FactoryEvent, type FeedbackItem, type IssueSnapshot, type PendingJob, type TicketState } from './types.js';
 
@@ -15,18 +16,24 @@ function withinBound(inbox: FeedbackItem[]): FeedbackItem[] {
   return excess <= 0 ? inbox : inbox.filter((i) => !answered(i) || excess-- <= 0);
 }
 
-/** The same pending job (ORC-339): a field-wise look, a store's JSON may keep its keys in another order. */
-export function samePending(a: PendingJob | undefined, b: PendingJob | undefined): boolean {
-  if (!a || !b) return a === b;
-  return (
-    a.job === b.job &&
-    a.input === b.input &&
-    a.inputText === b.inputText &&
-    !!a.resume === !!b.resume &&
-    a.relaunchOf === b.relaunchOf &&
-    (a.sensitivePaths ?? []).join('\n') === (b.sensitivePaths ?? []).join('\n')
-  );
+/**
+ * What a start is, in the shape of a pending job (ORC-339): its job and all it starts it with. Read off anything that
+ * carries those fields (a queue item, a start's options): an absent field and an empty one are the same start.
+ */
+export function pendingOf(start: PendingJob): PendingJob {
+  return {
+    job: start.job,
+    ...(start.input ? { input: start.input } : {}),
+    ...(start.inputText !== undefined ? { inputText: start.inputText } : {}),
+    ...(start.resume ? { resume: true } : {}),
+    ...(start.sensitivePaths?.length ? { sensitivePaths: [...start.sensitivePaths] } : {}),
+    ...(start.relaunchOf ? { relaunchOf: start.relaunchOf } : {}),
+  };
 }
+
+/** The same pending job, every field of it (ORC-339): a store's JSON may keep the keys in another order. */
+export const samePending = (a: PendingJob | undefined, b: PendingJob | undefined): boolean =>
+  !!a && !!b && isDeepStrictEqual(pendingOf(a), pendingOf(b));
 
 /** What tells a message of the inbox from another (ORC-339): its author, its moment, its source and its words. */
 const itemKey = (i: FeedbackItem): string => JSON.stringify([i.authorId ?? i.author, i.at, i.source, i.body]);
@@ -119,9 +126,9 @@ function internal(t: TicketState, e: InternalEvent): TicketState {
       if (t.activeRunId && t.activeRunId !== e.runId) return { ...t };
       const claudeSessionId = e.ticketSession === false ? t.claudeSessionId : (t.claudeSessionId ?? e.claudeSessionId);
       // The run that starts the pending job takes it off the ticket in the same write, whoever launched it (settle,
-      // the queue, a decision): never both, never neither (ORC-339). A relaunch of a lost attempt is not it.
-      const pending = t.pendingJob;
-      const startsPending = pending && pending.job === e.job && pending.relaunchOf === e.relaunchOf;
+      // the queue, a decision): never both, never neither (ORC-339). The same job with another input, or the relaunch of
+      // a lost attempt, is not it.
+      const startsPending = !!e.starts && samePending(t.pendingJob, e.starts);
       return { ...t, activeRunId: e.runId, activeJob: e.job, claudeSessionId, ...(startsPending ? { pendingJob: undefined } : {}) };
     }
     case 'feedback.consumed': {

@@ -302,17 +302,28 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     expect((await s.listQueue()).map((i) => `${i.ticketId}:${i.job}`)).toEqual(['B:dev']);
   });
 
-  it("names a ticket's queued jobs, handed-out ones included, which the line no longer lists (ORC-339)", async () => {
+  it("gives a ticket's queued items, handed-out ones included, which the line no longer lists (ORC-339)", async () => {
     const s = await store();
-    await s.enqueue(q({ ticketId: 'A', job: 'dev-feedback', queue: 'dev' }));
+    await s.enqueue(q({ ticketId: 'A', job: 'dev-feedback', queue: 'dev', input: 'feedback', resume: true }));
     await s.enqueue(q({ ticketId: 'B', job: 'dev', queue: 'dev' }));
     const claim = await s.claimQueued('dev', 60_000);
     expect(claim?.item.ticketId).toBe('A');
     expect((await s.listQueue()).map((i) => i.ticketId)).toEqual(['B']);
-    expect(await s.queuedJobs('p', 'A')).toEqual(['dev-feedback']);
-    expect(await s.queuedJobs('other', 'A')).toEqual([]);
+    expect(await s.queuedItems('p', 'A')).toEqual([expect.objectContaining({ job: 'dev-feedback', input: 'feedback', resume: true })]);
+    expect(await s.queuedItems('other', 'A')).toEqual([]);
     await s.finishQueued(claim!);
-    expect(await s.queuedJobs('p', 'A')).toEqual([]);
+    expect(await s.queuedItems('p', 'A')).toEqual([]);
+  });
+
+  it('keeps the failed starts of an item put back in line on the item (ORC-339)', async () => {
+    const s = await store();
+    await s.enqueue(q({ ticketId: 'A' }));
+    expect(await s.releaseQueued((await s.claimQueued('dev', 60_000))!, 2)).toBe(true);
+    const again = await s.claimQueued('dev', 60_000);
+    expect(again?.item.failedStarts).toBe(2);
+    // Put back without a count: the one it has stays.
+    expect(await s.releaseQueued(again!)).toBe(true);
+    expect((await s.claimQueued('dev', 60_000))?.item.failedStarts).toBe(2);
   });
 
   it('keeps the order of arrival of items of one priority enqueued at the same instant (ORC-228)', async () => {

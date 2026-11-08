@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { reduce } from './reduce.js';
-import { newTicketState, normalizeTicket, type EventPayloads, type EventType, type FeedbackItem, type InternalEvent, type FactoryEvent, type TicketState } from './types.js';
+import { newTicketState, normalizeTicket, type EventPayloads, type EventType, type FeedbackItem, type InternalEvent, type FactoryEvent, type PendingJob, type TicketState } from './types.js';
 
 function ev<T extends EventType>(type: T, payload: EventPayloads[T]): FactoryEvent {
   return { id: `e-${type}`, type, at: 1000, projectId: 'p', ticketId: 'REL-1', schemaVersion: 3, taint: 'trusted', payload } as FactoryEvent;
@@ -161,17 +161,23 @@ describe('reduce — facts recorded by the orchestrator', () => {
 
   describe('the pending job (ORC-339)', () => {
     const pendingJob = { job: 'dev-feedback', resume: true, sensitivePaths: ['a'] };
-    const started = (patch: Partial<{ runId: string; job: string; relaunchOf: string }> = {}) =>
-      ({ type: 'run.started', runId: 'r2', job: 'dev-feedback', queue: 'dev', claudeSessionId: 'c', ...patch }) as const;
+    const started = (starts: PendingJob = pendingJob, runId = 'r2') =>
+      ({ type: 'run.started', runId, job: starts.job, queue: 'dev', claudeSessionId: 'c', starts }) as const;
 
     it('leaves the ticket with the run that starts it, in the same step, whoever launched it', () => {
       expect(reduce(ticket({ pendingJob }), started())).toMatchObject({ activeRunId: 'r2', pendingJob: undefined });
+      // Its keys in another order, an empty field left out: the same start.
+      expect(reduce(ticket({ pendingJob }), started({ sensitivePaths: ['a'], job: 'dev-feedback', resume: true, input: undefined }))!.pendingJob).toBeUndefined();
     });
 
-    it('stays behind a run of another job, or the relaunch of a lost attempt of the same job', () => {
+    it('stays behind a run of another job, of the same job with another input, or the relaunch of a lost attempt', () => {
       expect(reduce(ticket({ pendingJob }), started({ job: 'dev' }))!.pendingJob).toEqual(pendingJob);
-      expect(reduce(ticket({ pendingJob }), started({ relaunchOf: 'r0' }))!.pendingJob).toEqual(pendingJob);
-      expect(reduce(ticket({ pendingJob: { ...pendingJob, relaunchOf: 'r0' } }), started({ relaunchOf: 'r0' }))!.pendingJob).toBeUndefined();
+      expect(reduce(ticket({ pendingJob }), started({ ...pendingJob, inputText: 'other' }))!.pendingJob).toEqual(pendingJob);
+      expect(reduce(ticket({ pendingJob }), started({ ...pendingJob, sensitivePaths: undefined }))!.pendingJob).toEqual(pendingJob);
+      expect(reduce(ticket({ pendingJob }), started({ ...pendingJob, relaunchOf: 'r0' }))!.pendingJob).toEqual(pendingJob);
+      expect(reduce(ticket({ pendingJob: { ...pendingJob, relaunchOf: 'r0' } }), started({ ...pendingJob, relaunchOf: 'r0' }))!.pendingJob).toBeUndefined();
+      // A run.started that names no start (written before ORC-339) clears nothing.
+      expect(reduce(ticket({ pendingJob }), { type: 'run.started', runId: 'r2', job: 'dev-feedback', queue: 'dev', claudeSessionId: 'c' })!.pendingJob).toEqual(pendingJob);
     });
 
     it('a run does not take a ticket another launch took first', () => {

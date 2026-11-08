@@ -378,8 +378,8 @@ export type ShellEvent =
       claudeSessionId: string;
       /** `false` on a run out of the ticket session (a review): the ticket does not take its session (ORC-217). Absent before. */
       ticketSession?: false;
-      /** The lost attempt whose step this run starts again (ORC-220): it is not the pending job of the same name (ORC-339). */
-      relaunchOf?: string;
+      /** What the run starts, in the shape of a pending job: the run that starts the ticket's pending job takes it off (ORC-339). */
+      starts?: PendingJob;
     }
   /**
    * The pending feedback was given to a run, recorded once that run is written (ORC-220): a launch cut

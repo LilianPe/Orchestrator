@@ -13,7 +13,7 @@ import { PRODUCT_NAME } from '../product.js';
 import { CUT_RELAUNCHES, CUT_WINDOW_MS } from '../store/types.js';
 import { isOwnMoveEcho, reduce } from './reduce.js';
 import { holds, isNoRepo, isUnrouted, repoLabel, unroutedReason } from './routing.js';
-import type { EventPayloads, EventType, FactoryEvent, FeedbackItem, InputKind, MessageKind, RunOutcome, Taint, TicketState, VerifyFailure } from './types.js';
+import type { EventPayloads, EventType, FactoryEvent, FeedbackItem, InputKind, MessageKind, PendingJob, RunOutcome, Taint, TicketState, VerifyFailure } from './types.js';
 
 type StartRun = Extract<Effect, { kind: 'start_run' }>;
 
@@ -158,13 +158,13 @@ function block(out: Decision, workflow: Workflow, b: Block): Decision {
 
 /**
  * A `settle` that died (ORC-339): its retries spent, a pending job with no run would hold the ticket's messages for
- * good, in silence. The ticket is blocked on that job instead, a reply resumes it. Anything else: only logged.
+ * good, in silence. The ticket is blocked on that job instead; the job stays pending, all of it (its input, its
+ * restrictions), and a reply starts that very job (`resumedPending`). Anything else: only logged.
  */
 function stuckPending(out: Decision, ticket: TicketState, workflow: Workflow, error: string, attempts: number): Decision {
   const pending = ticket.pendingJob;
-  if (!pending || ticket.activeRunId || ticket.verifyingRunId || ticket.blocked || settledTicket(ticket)) return out;
+  if (!pending || !ticket.delegated || ticket.activeRunId || ticket.verifyingRunId || ticket.blocked || settledTicket(ticket)) return out;
   const reason = `Error: the pending ${pending.job} could not be started: ${error}`;
-  out.events.push({ type: 'pending.cleared', job: pending });
   return block(out, workflow, {
     reason,
     body: `${reason} Reply in this thread to start it again.`,
@@ -589,7 +589,34 @@ function resumedJob(rule: Rule, event: FactoryEvent, ticket: TicketState | undef
   return job && (!job.input || job.input === 'feedback') ? job : undefined;
 }
 
+/**
+ * The pending job a reply resumes (ORC-339): the ticket blocked on the job it holds pending, with no run (a settle that
+ * could not start it, `stuckPending`). The reply starts that job as it was set pending, its input and restrictions.
+ */
+function resumedPending(rule: Rule, event: FactoryEvent, ticket: TicketState | undefined, workflow: Workflow): PendingJob | undefined {
+  if (!workflow.blockComment || !REPLIES.has(event.type) || !rule.run || rule.debounceMs || !ticket?.blocked) return undefined;
+  const pending = ticket.pendingJob;
+  if (!pending || ticket.blockedJob !== pending.job || ticket.activeRunId || ticket.verifyingRunId || !workflow.jobs[pending.job]) return undefined;
+  return pending;
+}
+
 function applyRule(out: Decision, rule: Rule, event: FactoryEvent, ticket: TicketState | undefined, workflow: Workflow): Decision {
+  const pending = resumedPending(rule, event, ticket, workflow);
+  if (pending) {
+    const job = workflow.jobs[pending.job]!;
+    if (refusal(event, ticket, job, runTaint(event, ticket, pending.input ?? job.input))) return out;
+    unblock(out, event, ticket!);
+    // Off the ticket with this decision: the start it makes is the outbox's now, at least once.
+    out.events.push({ type: 'pending.cleared', job: pending });
+    startRun(out, event, ticket, job, {
+      ...(pending.input ? { input: pending.input } : {}),
+      ...(pending.inputText !== undefined ? { inputText: pending.inputText } : {}),
+      ...(pending.resume ? { resume: true } : {}),
+      ...(pending.sensitivePaths ? { sensitivePaths: pending.sensitivePaths } : {}),
+      ...(pending.relaunchOf ? { relaunchOf: pending.relaunchOf } : {}),
+    });
+    return out;
+  }
   const resumed = resumedJob(rule, event, ticket, workflow);
   const job = resumed ?? (rule.run ? workflow.jobs[rule.run]! : undefined);
   // A resumed job reads the inbox whatever its own input says: judged on the taint it will start with, or the ticket would lose its block for a run refused (I12).

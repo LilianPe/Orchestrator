@@ -863,17 +863,29 @@ describe('decide — built-ins', () => {
     const result = { effectId: 'REL-1:4:0', kind: 'settle', eventId: 'run:r1', attempts: 3, error: 'connection reset' };
     const pendingJob = { job: 'dev-feedback', resume: true };
     const out = decide(ticket({ pendingJob }), ev('effect.failed', result), workflow);
-    expect(out.events).toEqual([
-      { type: 'pending.cleared', job: pendingJob },
-      { type: 'ticket.blocked', reason: 'Error: the pending dev-feedback could not be started: connection reset', job: 'dev-feedback' },
-    ]);
+    // The job stays pending, all of it: the reply starts that very job.
+    expect(out.events).toEqual([{ type: 'ticket.blocked', reason: 'Error: the pending dev-feedback could not be started: connection reset', job: 'dev-feedback' }]);
     // Told as any block, its label with it.
     expect(out.effects.map((e) => e.kind)).toEqual(['block_comment', 'labels']);
-    // The work in flight starts it at its end, a block keeps its own reason, a delivered ticket starts nothing.
+    // The work in flight starts it at its end, a block keeps its own reason, a delivered or undelegated ticket starts nothing.
     expect(decide(ticket({ pendingJob, activeRunId: 'r2' }), ev('effect.failed', result), workflow)).toEqual(decision());
     expect(decide(ticket({ pendingJob, verifyingRunId: 'r2' }), ev('effect.failed', result), workflow)).toEqual(decision());
     expect(decide(ticket({ pendingJob, blocked: true, blockReason: 'x' }), ev('effect.failed', result), workflow)).toEqual(decision());
     expect(decide(ticket({ pendingJob, prState: 'MERGED' }), ev('effect.failed', result), workflow)).toEqual(decision());
+    expect(decide(ticket({ pendingJob, delegated: false }), ev('effect.failed', result), workflow)).toEqual(decision());
+  });
+
+  it('a reply to the block of a pending job no settle could start starts that very job, its input and restrictions with it (ORC-339)', () => {
+    const pendingJob = { job: 'fix-ci', input: 'ci_failures' as const, inputText: 'lint failed', sensitivePaths: ['.github/'] };
+    const blocked = ticket({ logical: 'dev', blocked: true, blockReason: 'Error: the pending fix-ci could not be started: x', blockedJob: 'fix-ci', linearSessionId: 's1', pendingJob });
+    const out = decide(blocked, ev('session.prompted', { linearSessionId: 's1', body: 'try again', author: 'L' }), workflow);
+    expect(out.events).toEqual(expect.arrayContaining([{ type: 'ticket.unblocked' }, { type: 'pending.cleared', job: pendingJob }]));
+    expect(out.effects.filter((e) => e.kind === 'start_run')).toEqual([
+      { kind: 'start_run', job: 'fix-ci', input: 'ci_failures', inputText: 'lint failed', sensitivePaths: ['.github/'] },
+    ]);
+    // A block on another job: the reply resumes as before, the pending job waits behind its run.
+    const other = decide({ ...blocked, blockedJob: 'dev' }, ev('session.prompted', { linearSessionId: 's1', body: 'try again', author: 'L' }), workflow);
+    expect(other.events).not.toContainEqual({ type: 'pending.cleared', job: pendingJob });
   });
 });
 

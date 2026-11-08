@@ -1080,13 +1080,14 @@ export class PgStore implements AsyncStore {
     return this.settleQueued(claim, 'done');
   }
 
-  async releaseQueued(claim: QueueClaim): Promise<boolean> {
-    return this.settleQueued(claim, 'pending');
+  async releaseQueued(claim: QueueClaim, failedStarts?: number): Promise<boolean> {
+    return this.settleQueued(claim, 'pending', failedStarts);
   }
 
-  private async settleQueued(claim: QueueClaim, status: 'done' | 'pending'): Promise<boolean> {
+  private async settleQueued(claim: QueueClaim, status: 'done' | 'pending', failedStarts?: number): Promise<boolean> {
+    const payload = failedStarts === undefined ? sql`payload - 'lease'` : sql`jsonb_set(payload - 'lease', '{failedStarts}', to_jsonb(${failedStarts}::int))`;
     const result = await this.db.execute(sql`
-      update outbox set status = ${status}, lease_until = null, payload = payload - 'lease', updated_at = to_timestamp(${this.now() / 1000})
+      update outbox set status = ${status}, lease_until = null, payload = ${payload}, updated_at = to_timestamp(${this.now() / 1000})
       where id = ${claim.id} and status = 'running' and payload->>'lease' = ${claim.lease}
     `);
     return (result.rowCount ?? 0) > 0;
@@ -1162,15 +1163,15 @@ export class PgStore implements AsyncStore {
     return result.rows.map((row) => row.payload);
   }
 
-  async queuedJobs(projectId: string, ticketId: string): Promise<string[]> {
-    const result = await this.db.execute<{ job: string }>(
+  async queuedItems(projectId: string, ticketId: string): Promise<QueueItem[]> {
+    const result = await this.db.execute<{ payload: QueueItem }>(
       sql`
-        select effect as job from outbox
+        select payload - 'lease' as payload from outbox
         where ticket_id = ${ticketId} and status in ('pending', 'running') and payload->>'projectId' = ${projectId}
           and payload->>'queue' is not null
       `,
     );
-    return result.rows.map((row) => row.job);
+    return result.rows.map((row) => row.payload);
   }
 
   /** Handed-out items too (a stop during their start): `releaseQueued` then finds nothing to put back. */
