@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runCleanVerify, type CleanVerifyResult } from '../../src/core/clean-verify.js';
+import { sandboxSecretScan } from '../../src/publish/output-policy.js';
 import { cli, enabled, useSandboxes } from './helpers.js';
 
 /**
@@ -270,5 +271,15 @@ describe.skipIf(!enabled)(`gitleaks in verify (${cli})`, () => {
     git(repo, 'commit', '-q', '-m', 'merge side');
     const found = (await check('merge')).failures.find((f) => f.command === 'factory/secrets');
     expect(found?.output).toContain('merged.ts');
+  });
+
+  it('scans a text the factory would publish (ORC-214): a secret found through the `gitleaks:allow` beside it, a clean text passes', async () => {
+    const runsDir = join(base, 'output-runs');
+    mkdirSync(runsDir);
+    // The container's user must read what is mounted.
+    execFileSync('chmod', ['0777', runsDir]);
+    const scan = sandboxSecretScan({ sandboxes: provider, runsDir, log: () => {} });
+    expect(await scan('Export added, tests green.')).toEqual([]);
+    expect(await scan(`Done. The token is ${SECRET} // gitleaks:allow`)).toEqual(['github-pat']);
   });
 });
