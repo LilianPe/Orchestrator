@@ -73,7 +73,7 @@ describe('delegation withdrawn (ORC-227)', () => {
     expect(h.tracker.issues.get('REL-1')!.labels).not.toContain(BLOCKED_LABEL);
   });
 
-  it('a ticket at rest (in human review, nothing in flight) is only let go: no stop, nothing said', async () => {
+  it('a ticket at rest (in human review, nothing in flight) is only let go: nothing said', async () => {
     const h = createHarness();
     addIssue(h);
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
@@ -87,6 +87,25 @@ describe('delegation withdrawn (ORC-227)', () => {
     expect(await h.ticket()).toMatchObject({ delegated: false, blocked: false, logical: 'human_review' });
     expect(h.tracker.activities('ls-1')).toHaveLength(said);
     expect(h.tracker.comments('REL-1')).toHaveLength(comments);
+  });
+
+  it('while replies are regrouped: the grouping timer goes, no feedback run starts and nothing is said when it would have fired', async () => {
+    const h = createHarness();
+    addIssue(h);
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'corrige le tri', author: 'Lilian', ack: true, kind: 'instruction' });
+    expect((await h.ticket()).activeRunId).toBeUndefined();
+    const timers = async () => (await h.store.dueTimers(Number.MAX_SAFE_INTEGER)).filter((t) => t.ticketId === 'REL-1');
+    expect(await timers()).toHaveLength(1);
+    const said = h.tracker.activities('ls-1').length;
+
+    await withdraw(h);
+    expect(await timers()).toEqual([]);
+    await h.advance(60 * 60_000);
+
+    expect(h.runner.requests).toHaveLength(1);
+    expect(h.tracker.activities('ls-1')).toHaveLength(said);
+    expect(await h.ticket()).toMatchObject({ delegated: false, blocked: false });
   });
 });
 

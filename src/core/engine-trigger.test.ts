@@ -218,8 +218,13 @@ describe('decide — a delegation withdrawn (ORC-227)', () => {
     expect(after).toMatchObject({ delegated: false, blocked: false, verifyingRunId: undefined, pendingJob: undefined });
   });
 
-  it('has nothing to cancel on a ticket at rest, nor on one the factory no longer holds', () => {
-    expect(decide(ticket({ delegated: true, logical: 'human_review' }), undelegated, workflow)).toMatchObject({ events: [], effects: [] });
+  it('cancels at rest too: the timers decide cannot see go with the stop (a grouping of replies)', () => {
+    expect(decide(ticket({ delegated: true, logical: 'human_review' }), undelegated, workflow)).toMatchObject({ events: [{ type: 'work.cancelled' }], effects: [{ kind: 'stop_run' }] });
+  });
+
+  it('cancels nothing on a blocked ticket, which keeps its block and its job, nor on one the factory no longer holds', () => {
+    const stuck = ticket({ delegated: true, blocked: true, blockKind: 'stuck', blockReason: 'x', pendingJob: { job: 'dev-feedback' }, activeRunId: 'r-stopped' });
+    expect(decide(stuck, undelegated, workflow)).toMatchObject({ events: [], effects: [] });
     expect(decide(ticket({ delegated: false, verifyingRunId: 'r1' }), undelegated, workflow)).toMatchObject({ events: [], effects: [] });
   });
 });

@@ -99,18 +99,14 @@ export function linearIngest(accept: (e: FactoryEvent) => Promise<boolean>, opts
 }
 
 /**
- * A signed Linear update of REL-1 by Lilian, as Linear posts it at `at`: moved from Human Review (`s-hr`) to AI Review
- * (`s-ai`), the label `agent:reprendre` (`l-resume`) added beside `bug`. Map its ids with `ISSUE_UPDATE_CTX`.
+ * A signed Linear update of REL-1 by Lilian, as Linear posts it at `at`: the fixture `issue-moved-labeled.json`, moved from Human
+ * Review (`s-hr`) to AI Review (`s-ai`), the label `agent:reprendre` (`l-resume`) added beside `bug`. Map its ids with `ISSUE_UPDATE_CTX`.
  */
 export function signedIssueUpdate(at = NOW): { raw: string; headers: Record<string, string> } {
-  return sign({
-    type: 'Issue',
-    action: 'update',
-    webhookTimestamp: at,
-    actor: { id: 'user-lilian', type: 'user', name: 'Lilian' },
-    data: { id: 'u1', updatedAt: new Date(at).toISOString(), identifier: 'REL-1', number: 1, team: { key: 'REL' }, stateId: 's-ai', state: { id: 's-ai', name: 'AI Review' }, labelIds: ['l-bug', 'l-resume'] },
-    updatedFrom: { stateId: 's-hr', labelIds: ['l-bug'] },
-  });
+  const body = JSON.parse(readFileSync(join(import.meta.dirname, '../../src/adapters/tracker/linear/fixtures/issue-moved-labeled.json'), 'utf8')) as { webhookTimestamp: number; data: { updatedAt: string } };
+  body.webhookTimestamp = at;
+  body.data.updatedAt = new Date(at).toISOString();
+  return sign(body);
 }
 
 /** What the daemon reads of the team for `signedIssueUpdate`: its two states and its two labels. */
