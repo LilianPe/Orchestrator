@@ -248,10 +248,18 @@ export class EgressProxy {
     if (!PIPE) chmodSync(path, 0o600);
   }
 
-  /** Idempotent: an unknown run is ignored. What was in flight is journaled before the journal ends. */
-  async close(runId: string): Promise<void> {
+  /**
+   * Idempotent. What was in flight is journaled before the journal ends. The run's socket folder goes with it, an unknown
+   * run's too (one a daemon before this one opened); `keep`: it stays, the run's container still mounting it, for the
+   * next daemon to listen in again (ORC-344).
+   */
+  async close(runId: string, { keep = false }: { keep?: boolean } = {}): Promise<void> {
+    const folder = PIPE || keep ? undefined : dirname(this.socketPath(runId));
     const run = this.runs.get(runId);
-    if (!run) return;
+    if (!run) {
+      if (folder) rmSync(folder, { recursive: true, force: true });
+      return;
+    }
     this.runs.delete(runId);
     await run.ready.catch(() => {});
     for (const s of run.sockets) s.destroy();
@@ -268,11 +276,12 @@ export class EgressProxy {
       new Promise<void>((ok) => run.server.close(() => ok())),
       new Promise<void>((ok) => run.journal.end(() => ok())),
     ]);
-    if (!PIPE) rmSync(dirname(this.socketPath(runId)), { recursive: true, force: true });
+    if (folder) rmSync(folder, { recursive: true, force: true });
   }
 
-  async closeAll(): Promise<void> {
-    await Promise.all([...this.runs.keys()].map((id) => this.close(id)));
+  /** `keep`: a clean shutdown, or the daemon gone, whose runs go on in their containers (`close`). */
+  async closeAll(o: { keep?: boolean } = {}): Promise<void> {
+    await Promise.all([...this.runs.keys()].map((id) => this.close(id, o)));
   }
 
   /** Where the daemon listens for the agent API, when `host:port` is its name in the sandbox. */
