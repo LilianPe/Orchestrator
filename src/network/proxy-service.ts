@@ -33,7 +33,7 @@ export async function serveEgressControl(proxy: EgressProxy, path: string): Prom
   const routes = new Map<string, (input: unknown) => Promise<object>>([
     ['/open', async (input) => {
       const { runId, policy, claudeToken } = OPEN.parse(input);
-      const socket = await proxy.open(runId, policy, claudeToken);
+      const socket = await proxy.openRun(runId, policy, claudeToken);
       return { socket, ca: proxy.caCertPath };
     }],
     ['/close', async (input) => {
@@ -77,19 +77,29 @@ export async function serveEgressControl(proxy: EgressProxy, path: string): Prom
  * that asks it: the runs opened here since the proxy started. The proxy gone, none is, as after a daemon
  * restart with the proxy in-process: the provider then replaces those containers, whose socket is dead.
  */
+export interface EgressClientOptions {
+  log?: (message: string) => void;
+  /** A proxy that does not answer must not hold a run's place in the queue. */
+  timeoutMs?: number;
+  /** Handed to the proxy with each run it opens (ORC-337): the `proxy` service reads no secret of its own. */
+  claudeToken?: () => string | undefined;
+}
+
 export class EgressClient implements Egress {
   private readonly opened = new Set<string>();
   private ca?: string;
   private watch?: Promise<ClientRequest>;
 
+  private readonly log: (message: string) => void;
+  private readonly timeoutMs: number;
+
   constructor(
     private readonly path: string,
-    private readonly log: (message: string) => void = () => {},
-    /** A proxy that does not answer must not hold a run's place in the queue. */
-    private readonly timeoutMs = 30_000,
-    /** Handed to the proxy with each run it opens (ORC-337): the `proxy` service reads no secret of its own. */
-    private readonly claudeToken: () => string | undefined = () => undefined,
-  ) {}
+    private readonly o: EgressClientOptions = {},
+  ) {
+    this.log = o.log ?? (() => {});
+    this.timeoutMs = o.timeoutMs ?? 30_000;
+  }
 
   get caCertPath(): string {
     if (!this.ca) throw new Error('egress: no run opened yet, so no CA');
@@ -107,7 +117,7 @@ export class EgressClient implements Egress {
 
   async open(runId: string, policy: EgressPolicy): Promise<string> {
     await this.watching();
-    const claudeToken = this.claudeToken();
+    const claudeToken = this.o.claudeToken?.();
     const { socket, ca } = (await this.call('/open', { runId, policy, ...(claudeToken ? { claudeToken } : {}) })) as { socket: string; ca: string };
     this.ca = ca;
     this.opened.add(runId);

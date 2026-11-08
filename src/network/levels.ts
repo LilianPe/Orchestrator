@@ -31,13 +31,60 @@ export const CLAUDE_API_CALLS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Claude Code's OAuth token refresh, the token endpoint alone (POST); reads elsewhere on the host.
- * Unmeasured: ORC-128 saw only api.anthropic.com with a long-lived token, which never refreshes.
+ * The `anthropic-beta` values Claude Code sends (measured on 2.1.316, haiku, sonnet and opus, with the factory's
+ * options): the proxy drops any other (ORC-337). A beta can turn on what makes Anthropic's servers call out
+ * (`mcp-client-*`, `code-execution-*`, `web-fetch-*`, `files-api-*`) on the factory's account.
  */
-export const CLAUDE_AUTH: Readonly<Record<string, string>> = {
-  'console.anthropic.com': '/v1/oauth/token',
-  'platform.claude.com': '/v1/oauth/token',
-};
+export const CLAUDE_BETAS: ReadonlySet<string> = new Set([
+  'oauth-2025-04-20',
+  'claude-code-20250219',
+  'interleaved-thinking-2025-05-14',
+  'context-management-2025-06-27',
+  'prompt-caching-scope-2026-01-05',
+  'per-turn-control-2026-07-01',
+  'mid-conversation-tool-changes-2026-07-01',
+  'thinking-token-count-2026-05-13',
+  'advanced-tool-use-2025-11-20',
+  'mid-conversation-system-clear-at-2026-08-21',
+  'effort-2025-11-24',
+  'thinking-binding-controls-2026-08-01',
+  'thinking-display-updates-2026-08-18',
+  'extended-cache-ttl-2025-04-11',
+  'cache-diagnosis-2026-04-07',
+]);
+
+/** The Messages API's own cap on a request: a body the proxy reads whole before it lets it through (ORC-337). */
+export const CLAUDE_BODY_MAX = 32 * 1024 * 1024;
+
+/**
+ * Tools run by the client, Claude Code: its own (no `type`, or `custom`), and the Anthropic-defined ones the
+ * client executes. Any other type is a server tool (web search, web fetch, code execution, MCP toolset, tool
+ * search…), run by Anthropic's servers on the factory's account: a way out for a hijacked agent.
+ */
+const CLIENT_TOOL = /^(custom|(bash|text_editor|computer|memory)_\d{8})$/;
+
+/**
+ * A model call's body (`/v1/messages`, `/v1/messages/count_tokens`), read by the proxy (ORC-337): JSON, no MCP
+ * server, no container, client tools only. Claude Code sends none of these (measured).
+ */
+export function claudeBodyVerdict(body: Buffer): Verdict {
+  let call: unknown;
+  try {
+    call = JSON.parse(body.toString('utf8'));
+  } catch {
+    return refuse('Claude API body refused: not JSON');
+  }
+  if (typeof call !== 'object' || call === null || Array.isArray(call)) return refuse('Claude API body refused: not a JSON object');
+  const c = call as Record<string, unknown>;
+  for (const k of ['mcp_servers', 'container']) if (Object.hasOwn(c, k)) return refuse(`Claude API body refused: ${k}`);
+  if (c['tools'] === undefined) return { ok: true };
+  if (!Array.isArray(c['tools'])) return refuse('Claude API body refused: tools is not a list');
+  for (const t of c['tools'] as unknown[]) {
+    const type = typeof t === 'object' && t !== null ? (t as Record<string, unknown>)['type'] : 'not an object';
+    if (type !== undefined && !(typeof type === 'string' && CLIENT_TOOL.test(type))) return refuse(`Claude API body refused: server tool ${String(type)}`);
+  }
+  return { ok: true };
+}
 
 /** The `limited` hosts. Every request is decrypted by the proxy: read methods only, whatever the host. */
 export const LIMITED = [
@@ -87,7 +134,7 @@ export function agentPolicy(config: RepoConfig): EgressPolicy {
 export function allowConnect(p: EgressPolicy, host: string): Verdict {
   const h = norm(host);
   if (p.level === 'full') return { ok: true };
-  if (p.level !== 'none' && (CLAUDE_API.includes(h) || Object.hasOwn(CLAUDE_AUTH, h))) return { ok: true };
+  if (p.level !== 'none' && CLAUDE_API.includes(h)) return { ok: true };
   if (p.level === 'limited' && (LIMITED.includes(h) || p.allow.includes(h))) return { ok: true };
   return refuse(`${h} not allowed at ${p.level}`);
 }
@@ -100,7 +147,6 @@ export function allowRequest(p: EgressPolicy, host: string, method: string, path
   if (!c.ok) return c;
   const [pathname = '', query = ''] = path.split('?');
   if (CLAUDE_API.includes(h)) return CLAUDE_API_CALLS.has(`${method} ${pathname}`) ? { ok: true } : refuse(`${method} ${h}${pathname} refused: not a call of Claude Code`);
-  if (Object.hasOwn(CLAUDE_AUTH, h) && method === 'POST' && pathname === CLAUDE_AUTH[h]) return { ok: true };
   // A push starts with this advertisement, then POSTs to git-receive-pack.
   // Read as a forge reads it, whatever its spelling. A push's real step is the POST, which no rule below lets through.
   if (new URLSearchParams(query.toLowerCase()).getAll('service').includes('git-receive-pack')) return refuse(`${h}: git push refused (read-only)`);

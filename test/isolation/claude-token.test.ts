@@ -1,14 +1,13 @@
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
-import { createServer, type Server } from 'node:https';
-import type { AddressInfo, LookupFunction } from 'node:net';
+import type { Server } from 'node:https';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { SANDBOX_CLAUDE_TOKEN } from '../../src/adapters/runner/claude-code.js';
 import type { Sandbox } from '../../src/adapters/sandbox/types.js';
 import { CLAUDE_RUN_ENV } from '../../src/core/orchestrator.js';
-import { LeafIssuer, loadOrCreateCa } from '../../src/network/ca.js';
 import { EgressProxy, type EgressEntry } from '../../src/network/proxy.js';
+import { httpsUpstream } from '../helpers/egress-upstream.js';
 import { cli, enabled, useSandboxes } from './helpers.js';
 
 /**
@@ -32,30 +31,28 @@ const REPLY =
   sse('message_stop', {});
 
 describe.skipIf(!runnable)(`the Claude token stays out of the sandbox (${cli}, ORC-337)`, () => {
-  const dir = mkdtempSync(join(tmpdir(), 'factory-claude-token-'));
+  let dir = '';
   /** What the stand-in API got: method, path and credentials. */
   const seen: { method: string; url: string; authorization?: string; apiKey?: string }[] = [];
   let api: Server;
   let proxy: EgressProxy;
   let sbx: Sandbox;
+  let runId = '';
   let hasClaude = false;
   const { provider, request, sh } = useSandboxes('claude-token', {
     egress: {
-      open: (runId, policy) => proxy.open(runId, policy),
-      close: (runId) => proxy.close(runId),
-      isOpen: (runId) => proxy.isOpen(runId),
+      open: (id, policy) => proxy.open(id, policy),
+      close: (id) => proxy.close(id),
+      isOpen: (id) => proxy.isOpen(id),
       get caCertPath() {
         return proxy.caCertPath;
       },
     },
   });
 
-  const runId = request().runId;
-
   beforeAll(async () => {
-    const ca = await loadOrCreateCa(join(dir, 'api-ca'));
-    const issuer = await LeafIssuer.create(ca);
-    api = createServer({ SNICallback: (name, cb) => cb(null, issuer.context(name)) }, (req, res) => {
+    dir = mkdtempSync(join(tmpdir(), 'factory-claude-token-'));
+    const up = await httpsUpstream(dir, (req, res) => {
       seen.push({ method: req.method!, url: req.url!, authorization: req.headers.authorization, apiKey: req.headers['x-api-key'] as string | undefined });
       req.resume();
       req.on('end', () => {
@@ -63,34 +60,43 @@ describe.skipIf(!runnable)(`the Claude token stays out of the sandbox (${cli}, O
         res.writeHead(404, { 'content-type': 'application/json' }).end('{"type":"error","error":{"type":"not_found_error","message":"stand-in"}}');
       });
     });
-    await new Promise<void>((ok) => api.listen(0, '127.0.0.1', ok));
-    const toApi = ((_h: string, o: { all?: boolean }, cb: (e: null, a: unknown, f?: number) => void) =>
-      o.all ? cb(null, [{ address: '127.0.0.1', family: 4 }]) : cb(null, '127.0.0.1', 4)) as unknown as LookupFunction;
-    proxy = new EgressProxy({ dir: join(dir, 'network'), caDir: join(dir, 'ca'), claudeToken: () => FACTORY_TOKEN, upstream: { ca: ca.certPem, lookup: toApi, port: (api.address() as AddressInfo).port } });
-    sbx = await provider.create(request({ runId, network: 'claude-api' }));
+    api = up.server;
+    proxy = new EgressProxy({ dir: join(dir, 'network'), caDir: join(dir, 'ca'), claudeToken: () => FACTORY_TOKEN, upstream: up.upstream });
+    const req = request({ network: 'claude-api' });
+    runId = req.runId;
+    sbx = await provider.create(req);
     hasClaude = (await sh(sbx.id, 'command -v claude')).code === 0;
   }, 300_000);
 
   afterAll(async () => {
     await proxy?.closeAll();
     await new Promise((ok) => (api ? api.close(ok) : ok(undefined)));
-    rmSync(dir, { recursive: true, force: true });
+    if (dir) rmSync(dir, { recursive: true, force: true });
   }, 120_000);
 
-  it('claude -p answers through the proxy with a placeholder token; the API gets the factory token alone; /v1/files is refused', async ({ skip }) => {
+  /** A request the agent could make itself, with Node's fetch through the proxy: the status it gets. */
+  const agentFetch = async (path: string, body: string) =>
+    (await sh(sbx.id, `node -e "fetch('https://api.anthropic.com${path}',{method:'POST',headers:{'x-api-key':'sk-ant-api03-attacker','content-type':'application/json'},body:process.argv[1]}).then(r=>console.log(r.status),e=>{console.log('ERR',e.cause?.code??e.message);process.exit(3)})" '${body}'`)).stdout;
+
+  it('claude -p answers through the proxy with a placeholder token, its own tools and betas let through; the API gets the factory token alone', async ({ skip }) => {
     if (!hasClaude) skip();
     const env = { ...CLAUDE_RUN_ENV, CLAUDE_CONFIG_DIR: '/tmp/claude-config', CLAUDE_CODE_OAUTH_TOKEN: SANDBOX_CLAUDE_TOKEN };
-    const r = await sh(sbx.id, `env ${Object.entries(env).map(([k, v]) => `${k}=${v}`).join(' ')} claude -p 'say pong' --output-format stream-json --verbose --model haiku --max-turns 1 --tools ''`);
+    const r = await sh(sbx.id, `env ${Object.entries(env).map(([k, v]) => `${k}=${v}`).join(' ')} claude -p 'say pong' --output-format stream-json --verbose --model haiku --max-turns 1`);
     const result = r.stdout.split('\n').filter((l) => l.startsWith('{')).map((l) => JSON.parse(l) as Record<string, unknown>).find((e) => e['type'] === 'result');
     expect(result, r.stderr).toMatchObject({ is_error: false, result: 'PONG-FROM-THE-STAND-IN' });
     expect(seen.some((s) => s.method === 'POST' && s.url.startsWith('/v1/messages'))).toBe(true);
     for (const s of seen) expect(s).toMatchObject({ authorization: `Bearer ${FACTORY_TOKEN}`, apiKey: undefined });
+  }, 240_000);
 
-    // What a hijacked agent would do: its own key, to a path Claude Code never calls.
-    const files = `node -e "fetch('https://api.anthropic.com/v1/files',{method:'POST',headers:{'x-api-key':'sk-ant-api03-attacker'},body:'x'}).then(r=>console.log(r.status),e=>{console.log('ERR',e.cause?.code??e.message);process.exit(3)})"`;
-    expect((await sh(sbx.id, files)).stdout).toBe('403');
+  it('refuses what a hijacked agent would send with its own key: /v1/files, an MCP server, a server tool', async () => {
+    const before = seen.length;
+    expect(await agentFetch('/v1/files', 'x')).toBe('403');
+    expect(await agentFetch('/v1/messages', JSON.stringify({ model: 'm', max_tokens: 1, messages: [], mcp_servers: [{ type: 'url', url: 'https://attacker.example/mcp', name: 'x' }] }))).toBe('403');
+    expect(await agentFetch('/v1/messages', JSON.stringify({ model: 'm', max_tokens: 1, messages: [], tools: [{ type: 'web_fetch_20250910', name: 'web_fetch' }] }))).toBe('403');
+    expect(seen.length).toBe(before);
     const journal = readFileSync(proxy.journalPath(runId), 'utf8').trim().split('\n').map((l) => JSON.parse(l) as EgressEntry);
     expect(journal).toContainEqual(expect.objectContaining({ method: 'POST', host: 'api.anthropic.com', path: '/v1/files', ok: false }));
-    expect(seen.map((s) => s.url)).not.toContain('/v1/files');
+    expect(journal).toContainEqual(expect.objectContaining({ path: '/v1/messages', ok: false, reason: 'Claude API body refused: mcp_servers' }));
+    expect(journal).toContainEqual(expect.objectContaining({ path: '/v1/messages', ok: false, reason: 'Claude API body refused: server tool web_fetch_20250910' }));
   }, 240_000);
 });

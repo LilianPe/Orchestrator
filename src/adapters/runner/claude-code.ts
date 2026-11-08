@@ -19,7 +19,7 @@ export interface ClaudeRunnerOptions {
   secrets?: () => readonly string[];
   /** Where a run with a `sandboxId` executes (ORC-204); without it such a run is refused, never run on the host. */
   sandboxes?: SandboxProvider;
-  /** The token of the chosen Claude account (`claude.active`, ORC-211); without one, the daemon's `CLAUDE_CODE_OAUTH_TOKEN`. */
+  /** The Claude token (`claude.active`, ORC-211, else the daemon's `CLAUDE_CODE_OAUTH_TOKEN`), resolved once with the egress proxy's (ORC-337). */
   claudeToken?: () => string | undefined;
   /** The daemon's log. */
   log?: (message: string) => void;
@@ -208,9 +208,8 @@ export class ClaudeCodeRunner implements Runner {
         if (!this.o.sandboxes) throw new Error(`run ${req.runId} asks for sandbox ${req.sandboxId} but the runner has no sandbox provider`);
         // The allowlist of the runner (ORC-211): the run's variables and a placeholder for the account's token, nothing else.
         // Without a token, none: `claude` says it is not logged in, clearer than the proxy's 401.
-        const token = chosen ?? process.env[CLAUDE_TOKEN];
         const { PATH: sandboxPath, ...run } = req.env;
-        const named = { ...run, ...(token ? { [CLAUDE_TOKEN]: SANDBOX_CLAUDE_TOKEN } : {}) };
+        const named = { ...run, ...(chosen ? { [CLAUDE_TOKEN]: SANDBOX_CLAUDE_TOKEN } : {}) };
         // req.env.PATH is the sandbox's: the host's `docker` is found on the daemon's, the command in
         // the container gets it through `env` (no secret in it, so on the command line is fine).
         const inner = sandboxPath !== undefined ? ['env', `PATH=${sandboxPath}`, ...argv] : argv;

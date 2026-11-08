@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { parseRepoConfig } from '../config/repo-config.js';
-import { agentPolicy, allowConnect, allowRequest, stepPolicy, type EgressPolicy } from './levels.js';
+import { agentPolicy, allowConnect, allowRequest, claudeBodyVerdict, stepPolicy, type EgressPolicy } from './levels.js';
 
 const repo = (yaml?: string) => parseRepoConfig(yaml);
 const limited: EgressPolicy = { level: 'limited', allow: [] };
@@ -111,13 +111,28 @@ describe('allowRequest (plain HTTP: the method and the path are seen)', () => {
     expect(allowRequest({ level: 'limited', allow: ['docs.exemple.com'] }, 'docs.exemple.com', 'DELETE', '/').ok).toBe(false);
   });
 
-  it('lets Claude Code refresh its OAuth token, and write nothing else to the auth hosts', () => {
-    const claude = { level: 'claude-api' as const, allow: [] };
-    expect(allowRequest(claude, 'console.anthropic.com', 'POST', '/v1/oauth/token').ok).toBe(true);
-    expect(allowRequest(claude, 'platform.claude.com', 'POST', '/v1/oauth/token?x=1').ok).toBe(true);
-    expect(allowRequest(claude, 'console.anthropic.com', 'POST', '/v1/other').ok).toBe(false);
-    expect(allowRequest(claude, 'nodejs.org', 'GET', '/').ok).toBe(false);
-    expect(allowRequest({ level: 'none', allow: [] }, 'console.anthropic.com', 'POST', '/v1/oauth/token').ok).toBe(false);
+  it('refuses the OAuth refresh hosts: a sandbox holds no refresh token, its token is the proxy\'s (ORC-337)', () => {
+    for (const p of [{ level: 'claude-api' as const, allow: [] }, limited]) {
+      for (const host of ['console.anthropic.com', 'platform.claude.com']) {
+        expect(allowConnect(p, host).ok).toBe(false);
+        expect(allowRequest(p, host, 'POST', '/v1/oauth/token').ok).toBe(false);
+      }
+      expect(allowRequest(p, 'nodejs.org', 'POST', '/').ok).toBe(false);
+    }
+  });
+
+  it('reads a model call\'s body: JSON, client tools only, no MCP server nor container (ORC-337)', () => {
+    const v = (body: unknown) => claudeBodyVerdict(Buffer.from(typeof body === 'string' ? body : JSON.stringify(body)));
+    expect(v({ model: 'm', messages: [] }).ok).toBe(true);
+    expect(v({ tools: [{ name: 'Bash', input_schema: {} }, { name: 'R', type: 'custom', input_schema: {} }, { type: 'bash_20250124', name: 'bash' }, { type: 'text_editor_20250728', name: 'e' }, { type: 'computer_20250124', name: 'c' }, { type: 'memory_20250818', name: 'memory' }] }).ok).toBe(true);
+    for (const type of ['web_search_20250305', 'web_fetch_20250910', 'code_execution_20250825', 'mcp_toolset', 'tool_search_tool_regex_20251119', 'bash', 'bash_2025', 'custom_x', 7]) {
+      expect(v({ tools: [{ type, name: 'x' }] }), String(type)).toMatchObject({ ok: false, reason: expect.stringMatching(/server tool/) as string });
+    }
+    expect(v({ mcp_servers: [] })).toMatchObject({ ok: false, reason: 'Claude API body refused: mcp_servers' });
+    expect(v({ container: 'c' }).ok).toBe(false);
+    expect(v({ tools: {} }).ok).toBe(false);
+    expect(v({ tools: [null] }).ok).toBe(false);
+    for (const bad of ['', 'nope', '[]', 'null', '"s"']) expect(v(bad).ok, bad).toBe(false);
   });
 
   it('follows the level', () => {

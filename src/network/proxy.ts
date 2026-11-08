@@ -8,7 +8,7 @@ import { dirname, join } from 'node:path';
 import { pipeline, type Duplex } from 'node:stream';
 import { TLSSocket } from 'node:tls';
 import { LeafIssuer, loadOrCreateCa, type FactoryCa } from './ca.js';
-import { allowConnect, allowRequest, CLAUDE_API, norm, type EgressPolicy, type Verdict } from './levels.js';
+import { allowConnect, allowRequest, CLAUDE_API, CLAUDE_BETAS, CLAUDE_BODY_MAX, claudeBodyVerdict, norm, type EgressPolicy, type Verdict } from './levels.js';
 
 /** One line of a run's egress journal: every request, allowed or refused (ORC-213). */
 export interface EgressEntry {
@@ -35,7 +35,7 @@ export interface EgressProxyOptions {
   agentApi?: { host: string; port: number; to: { host: string; port: number } };
   /** Where a journal that cannot be written is told; the run goes on. */
   log?: (message: string) => void;
-  /** The Claude token a run's model calls get when `open` is given none (ORC-337): the proxy in the daemon's process. */
+  /** The Claude token of the runs `open` opens (ORC-337): the proxy in the daemon's process. The `proxy` service gets each run's from the daemon (`openRun`). */
   claudeToken?: () => string | undefined;
   /** Tests only: the trust, the resolver and the port of the upstream connections (a local HTTPS server). */
   upstream?: { ca: string; lookup: LookupFunction; port: number };
@@ -155,9 +155,14 @@ export class EgressProxy {
   /**
    * The run's socket, listening; the same on a replay or a concurrent call. Another policy for an
    * open run is refused: the container's mount holds this socket, it cannot be swapped under it.
-   * `claudeToken`, the run's Claude account (the `proxy` service gets it from the daemon), else the option's.
+   * Its model calls get the `claudeToken` option's token.
    */
-  async open(runId: string, policy: EgressPolicy, claudeToken = this.o.claudeToken?.()): Promise<string> {
+  open(runId: string, policy: EgressPolicy): Promise<string> {
+    return this.openRun(runId, policy, this.o.claudeToken?.());
+  }
+
+  /** `open`, the run's model calls getting `claudeToken`, none when undefined (ORC-337): the run's own, as the daemon hands it to the `proxy` service. */
+  async openRun(runId: string, policy: EgressPolicy, claudeToken: string | undefined): Promise<string> {
     const path = this.socketPath(runId);
     const journalPath = this.journalPath(runId);
     const existing = this.runs.get(runId);
@@ -327,8 +332,10 @@ export class EgressProxy {
     const path = req.url ?? '/';
     const v = check(t.host, allowRequest(run.policy, t.host, method, path));
     if (!v.ok) return this.refuse(run, res, method, t.host, path, v.reason);
-    const out = httpsRequest({ ...this.tlsTo(t.host, t.port), method, path, headers: { ...upstreamHeaders(run, t.host, req), host: authority(t.host, t.port, 443) } });
-    this.relay(run, req, res, out, method, t.host, path);
+    this.readClaudeBody(run, req, res, method, t.host, path, (body) => {
+      const out = httpsRequest({ ...this.tlsTo(t.host, t.port), method, path, headers: { ...upstreamHeaders(run, t.host, req, body), host: authority(t.host, t.port, 443) } });
+      this.relay(run, req, res, out, method, t.host, path, body);
+    });
   }
 
   /** A plain HTTP request (`GET http://host/path`): the agent API, or the internet in HTTPS below full. */
@@ -350,13 +357,15 @@ export class EgressProxy {
       ? agentVerdict(run.policy)
       : check(host, port === 80 || run.policy.level === 'full' ? allowRequest(run.policy, host, method, path) : { ok: false, reason: `port ${port} refused` });
     if (!v.ok) return this.refuse(run, res, method, host, path, v.reason);
-    // Below full the port is 80 (checked above), so the Host is the bare host either way.
-    const opts = { method, path, headers: { ...upstreamHeaders(run, host, req), host: authority(host, port, 80) } };
-    let out: ClientRequest;
-    if (agent) out = httpRequest({ ...opts, ...agent });
-    else if (run.policy.level === 'full') out = httpRequest({ ...opts, host, port, lookup: publicLookup });
-    else out = httpsRequest({ ...opts, ...this.tlsTo(host, 443) });
-    this.relay(run, req, res, out, method, host, path);
+    this.readClaudeBody(run, req, res, method, host, path, (body) => {
+      // Below full the port is 80 (checked above), so the Host is the bare host either way.
+      const opts = { method, path, headers: { ...upstreamHeaders(run, host, req, body), host: authority(host, port, 80) } };
+      let out: ClientRequest;
+      if (agent) out = httpRequest({ ...opts, ...agent });
+      else if (run.policy.level === 'full') out = httpRequest({ ...opts, host, port, lookup: publicLookup });
+      else out = httpsRequest({ ...opts, ...this.tlsTo(host, 443) });
+      this.relay(run, req, res, out, method, host, path, body);
+    });
   }
 
   /** Where a checked request goes over TLS: the host's real certificate verified, no private address. */
@@ -365,9 +374,40 @@ export class EgressProxy {
     return { host, port: u?.port ?? port, ...(isIP(host) ? {} : { servername: host }), lookup: u?.lookup ?? publicLookup, ...(u ? { ca: u.ca } : {}) };
   }
 
-  private refuse(run: Run, res: ServerResponse, method: string, host: string, path: string, reason: string): void {
+  /**
+   * A model call (a POST to the Claude API below `full`) is read whole, up to the API's own cap, and its body checked
+   * before it goes on with the factory's token (ORC-337): no server tool, no MCP server. Any other request streams.
+   */
+  private readClaudeBody(run: Run, req: IncomingMessage, res: ServerResponse, method: string, host: string, path: string, send: (body?: Buffer) => void): void {
+    if (run.policy.level === 'full' || !CLAUDE_API.includes(host) || method !== 'POST') return send();
+    const encoding = req.headers['content-encoding'];
+    if (encoding !== undefined && encoding !== 'identity') return this.refuse(run, res, method, host, path, `Claude API body refused: content-encoding ${encoding}`);
+    const tooBig = `Claude API body refused: over ${CLAUDE_BODY_MAX} bytes`;
+    if (Number(req.headers['content-length'] ?? 0) > CLAUDE_BODY_MAX) return this.refuse(run, res, method, host, path, tooBig, 413);
+    const chunks: Buffer[] = [];
+    let size = 0;
+    let over = false;
+    req.on('data', (c: Buffer) => {
+      if (over) return;
+      size += c.length;
+      if (size <= CLAUDE_BODY_MAX) return void chunks.push(c);
+      over = true;
+      chunks.length = 0;
+      this.refuse(run, res, method, host, path, tooBig, 413);
+      res.once('finish', () => req.destroy());
+    });
+    req.on('end', () => {
+      if (over) return;
+      const body = Buffer.concat(chunks);
+      const v = claudeBodyVerdict(body);
+      if (!v.ok) return this.refuse(run, res, method, host, path, v.reason);
+      send(body);
+    });
+  }
+
+  private refuse(run: Run, res: ServerResponse, method: string, host: string, path: string, reason: string, status = 403): void {
     this.journal(run, { method, host, path: pathOf(path), ok: false, reason });
-    res.writeHead(403, { 'content-type': 'text/plain' }).end(`egress proxy: ${reason}\n`);
+    res.writeHead(status, { 'content-type': 'text/plain' }).end(`egress proxy: ${reason}\n`);
   }
 
   /**
@@ -375,12 +415,12 @@ export class EgressProxy {
    * cut mid-body ends the client's response and is a failure), by the request's errors before. The
    * upstream request dies with the client's.
    */
-  private relay(run: Run, req: IncomingMessage, res: ServerResponse, out: ClientRequest, method: string, host: string, path: string): void {
-    let up = 0;
+  private relay(run: Run, req: IncomingMessage, res: ServerResponse, out: ClientRequest, method: string, host: string, path: string, body?: Buffer): void {
+    let up = body?.length ?? 0;
     let down = 0;
     let responded = false;
     const done = this.track(run, (failure) => ({ method, host, path: pathOf(path), ok: !failure, ...(failure ? { reason: failure } : {}), up, down }));
-    req.on('data', (c: Buffer) => (up += c.length));
+    if (!body) req.on('data', (c: Buffer) => (up += c.length));
     out.on('response', (r) => {
       responded = true;
       res.writeHead(r.statusCode ?? 502, r.headers);
@@ -397,7 +437,8 @@ export class EgressProxy {
       out.destroy();
       if (!responded) done('client closed before the response');
     });
-    req.pipe(out);
+    if (body) out.end(body);
+    else req.pipe(out);
   }
 }
 
@@ -420,15 +461,22 @@ function hopless(req: IncomingMessage): Record<string, string | string[] | undef
 }
 
 /**
- * What goes upstream of the request's headers. To the Claude API below `full`, the client's credentials never:
- * the run's token in their place (ORC-337), or none. At `full` (a setup, which runs no agent) nothing is set.
+ * What goes upstream of the request's headers. To the Claude API below `full` (ORC-337): never the client's
+ * credentials, the run's token in their place, or none; only the betas Claude Code sends; the length of a body
+ * read whole. At `full` (a setup, which runs no agent) nothing is changed.
  */
-function upstreamHeaders(run: Run, host: string, req: IncomingMessage): Record<string, string | string[] | undefined> {
+function upstreamHeaders(run: Run, host: string, req: IncomingMessage, body: Buffer | undefined): Record<string, string | string[] | undefined> {
   const h = hopless(req);
   if (run.policy.level === 'full' || !CLAUDE_API.includes(host)) return h;
   delete h['authorization'];
   delete h['x-api-key'];
-  return run.claudeToken ? { ...h, authorization: `Bearer ${run.claudeToken}` } : h;
+  const betas = String(h['anthropic-beta'] ?? '').split(',').map((b) => b.trim()).filter((b) => CLAUDE_BETAS.has(b));
+  delete h['anthropic-beta'];
+  if (body) {
+    delete h['transfer-encoding'];
+    h['content-length'] = String(body.length);
+  }
+  return { ...h, ...(betas.length ? { 'anthropic-beta': betas.join(',') } : {}), ...(run.claudeToken ? { authorization: `Bearer ${run.claudeToken}` } : {}) };
 }
 
 /** `host[:port]` as a Host header, the default port left out. */

@@ -34,11 +34,11 @@ function req(patch: Partial<RunRequest> = {}, env: Record<string, string> = {}):
   };
 }
 
-function runner(sandboxes?: FakeSandboxProvider) {
+function runner(sandboxes?: FakeSandboxProvider, claudeToken?: string) {
   const transcriptsDir = mkdtempSync(join(tmpdir(), 'factory-tr-'));
   return {
     transcriptsDir,
-    r: new ClaudeCodeRunner({ transcriptsDir, command: [process.execPath, fx('fake-claude.mjs')], killGraceMs: 500, ...(sandboxes ? { sandboxes } : {}) }),
+    r: new ClaudeCodeRunner({ transcriptsDir, command: [process.execPath, fx('fake-claude.mjs')], killGraceMs: 500, ...(sandboxes ? { sandboxes } : {}), ...(claudeToken ? { claudeToken: () => claudeToken } : {}) }),
   };
 }
 
@@ -507,7 +507,8 @@ describe('ClaudeCodeRunner in a sandbox (ORC-204)', () => {
   });
 
   it('names no credential at all when there is none, and the API key never', async () => {
-    vi.stubEnv('CLAUDE_CODE_OAUTH_TOKEN', '');
+    // The daemon's own login is not looked at: the token is resolved once, with the proxy's (ORC-337).
+    vi.stubEnv('CLAUDE_CODE_OAUTH_TOKEN', 'daemon-login');
     vi.stubEnv('ANTHROPIC_API_KEY', 'sk-test');
     vi.stubEnv('ANTHROPIC_BASE_URL', 'https://gateway');
     const { sandboxes, id, spawnCommand } = await sandbox();
@@ -523,7 +524,7 @@ describe('ClaudeCodeRunner in a sandbox (ORC-204)', () => {
     vi.stubEnv('ANTHROPIC_API_KEY', 'sk-test');
     vi.stubEnv('CLAUDE_CODE_OAUTH_TOKEN', 'oauth-test');
     const { sandboxes, id, spawnCommand } = await sandbox();
-    const { r } = runner(sandboxes);
+    const { r } = runner(sandboxes, 'oauth-test');
     const runEnv = { FAKE_CLAUDE_SCRIPT: fx('stream-success.jsonl'), FACTORY_RUN_TOKEN: 't' };
     // cwd is a sandbox path: the host spawn must not use it.
     const rq = req({ sandboxId: id, cwd: '/work' }, runEnv);
