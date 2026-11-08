@@ -1,4 +1,4 @@
-import type { BusMessage, FlowView, Snapshot } from './types.js';
+import type { BusMessage, FlowView, MeasuredTicketView, Snapshot } from './types.js';
 
 export async function fetchSnapshot(): Promise<Snapshot> {
   return (await fetch('/api/state')).json();
@@ -8,6 +8,12 @@ export async function fetchFlow(): Promise<FlowView> {
   const res = await fetch('/api/flow');
   if (!res.ok) throw new Error(`/api/flow: ${res.status}`);
   return res.json();
+}
+
+export async function fetchMeasures(): Promise<MeasuredTicketView[]> {
+  const res = await fetch('/api/measures');
+  if (!res.ok) throw new Error(`/api/measures: ${res.status}`);
+  return ((await res.json()) as { tickets: MeasuredTicketView[] }).tickets;
 }
 
 export const post = (path: string) => fetch(path, { method: 'POST' });
