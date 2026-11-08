@@ -249,6 +249,23 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
       () => {
         // Today the bound counts attempts (verify_attempts), the target counts relaunches (ORC-138, point 8):
         // N + 1 attempts here is the target's bound N, until ORC-187 converts the unit.
+        // Found by fast-check (ORC-360): the relaunch of fix-ci its verify.failed decides waits behind the tests run, then the
+        // red-CI bound blocks fix-ci; a debounce took that block for a pending job no settle could start, and relaunched again.
+        const started = (job: string) => sh({ type: 'run.started', runId: 'r1', job, queue: 'dev', claudeSessionId: 'claude-1' });
+        const finished = (job: string) => ext('run.finished', { runId: 'r1', job, outcome: 'success', costUsd: 0.5, turns: 3, lastText: 'fini' });
+        const failed = (job: string) => ext('verify.failed', { runId: 'r1', job, failures: VERIFY_FAILURES });
+        const redCiOnPending = seq(
+          ...delegated(),
+          started('fix-ci'),
+          finished('fix-ci'),
+          started('tests'),
+          failed('fix-ci'),
+          finished('tests'),
+          failed('tests'),
+          ext('status.changed', { from: 'dev', to: 'human_review' }),
+          ...Array.from({ length: 3 }, () => ext('pr.checks_failed', { ...pr, failures: ['test'] })),
+          ext('timer.fired', DEBOUNCE),
+        );
         fc.assert(
           fc.property(sequences, fc.integer({ min: 1, max: 3 }), (s, attempts) => {
             const w = workflow(attempts);
@@ -270,7 +287,7 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
               }
             }
           }),
-          params<[Sequences, number]>(),
+          params<[Sequences, number]>([[redCiOnPending, 2]]),
         );
       },
       TIMEOUT,

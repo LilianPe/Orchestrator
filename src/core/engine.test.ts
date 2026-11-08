@@ -1029,6 +1029,18 @@ describe('decide — built-ins', () => {
     const other = decide({ ...blocked, blockedJob: 'dev' }, ev('session.prompted', { linearSessionId: 's1', body: 'try again', author: 'L' }), workflow);
     expect(other.events).not.toContainEqual({ type: 'pending.cleared', job: pendingJob });
   });
+
+  it('a block of another cause on the pending job is no stranded pending job: neither a reply nor a debounce starts it (ORC-360)', () => {
+    // The relaunch a verify.failed decided waits pending, then the red-CI bound blocks the same job: that block is not lifted.
+    const pendingJob = { job: 'fix-ci', input: 'verify_failures' as const, inputText: 'rouge', resume: true };
+    const blocked = ticket({ logical: 'human_review', blocked: true, blockReason: 'CI still failing after 2 fix-ci runs.', blockedJob: 'fix-ci', linearSessionId: 's1', pendingJob });
+    const fired = decide(blocked, ev('timer.fired', { kind: 'debounce', payload: { job: 'dev-feedback' } }), workflow);
+    expect(fired.events).not.toContainEqual({ type: 'pending.cleared', job: pendingJob });
+    expect(fired.effects.filter((e) => e.kind === 'start_run' && e.input === 'verify_failures')).toEqual([]);
+    const reply = decide(blocked, ev('session.prompted', { linearSessionId: 's1', body: 'try again', author: 'L' }), workflow);
+    expect(reply.events).not.toContainEqual({ type: 'pending.cleared', job: pendingJob });
+    expect(reply.effects.filter((e) => e.kind === 'start_run' && e.input === 'verify_failures')).toEqual([]);
+  });
 });
 
 describe('decide — the tests step and the red check (ORC-123)', () => {
