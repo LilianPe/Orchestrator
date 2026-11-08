@@ -277,6 +277,11 @@ describe('GitHubAppForge.mergeState (ORC-322)', () => {
     const { forge } = makeForge([installationRoute(), tokenRoute(42), (url) => (url.pathname === '/repos/acme/app/pulls/7' ? { body: openPr({ mergeable: true, mergeable_state: 'clean' }) } : undefined)]);
     await expect(forge.mergeState('/repo', 7)).rejects.toThrow();
   });
+
+  it('refuses an empty base branch, as gh-cli does', async () => {
+    const { forge } = makeForge([installationRoute(), tokenRoute(42), pullRoute({ base: { ref: '', sha: 'b0' }, mergeable: true, mergeable_state: 'clean' })]);
+    await expect(forge.mergeState('/repo', 7)).rejects.toThrow();
+  });
 });
 
 describe('GitHubAppForge.findPr', () => {

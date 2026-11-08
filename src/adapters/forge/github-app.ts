@@ -178,7 +178,7 @@ const isPulls = (v: unknown): v is PullRequestDto[] => Array.isArray(v) && v.eve
 
 /** One PR as `mergeState` reads it (ORC-322): its base, and GitHub's mergeability, `null` while it computes it. */
 const isMergeStateOf = (p: unknown): p is PullRequestDto & { base: { ref: string }; mergeable: boolean | null; mergeable_state?: string } =>
-  isPull(p) && p.base !== undefined && isRecord(p) && (p['mergeable'] === null || typeof p['mergeable'] === 'boolean') && (p['mergeable_state'] === undefined || typeof p['mergeable_state'] === 'string');
+  isPull(p) && p.base !== undefined && p.base.ref !== '' && isRecord(p) && (p['mergeable'] === null || typeof p['mergeable'] === 'boolean') && (p['mergeable_state'] === undefined || typeof p['mergeable_state'] === 'string');
 
 /** A PR as `markPrReady` reads it: its draft state, and the node id the mutation needs when it is a draft. */
 const isDraftState = (p: unknown): p is PullRequestDto & { draft: boolean } =>
