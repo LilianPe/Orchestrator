@@ -533,7 +533,7 @@ describe('decide — built-ins', () => {
           // `dev`'s end starts the AI review (ORC-183).
           { kind: 'move', to: 'ai_review' },
           { kind: 'post_output', style: 'summary', runId: 'r1' },
-          { kind: 'start_run', job: 'review', input: 'diff' },
+          { kind: 'start_run', job: 'review' },
         ],
       }),
     );

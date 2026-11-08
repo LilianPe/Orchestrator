@@ -143,7 +143,7 @@ describe('the AI review (ORC-183)', () => {
   it('blocks a lens that returns no findings list, and publishes nothing', async () => {
     const h = createHarness({ aiReview: true });
     h.workspaces.heads.set(WORKTREE, SHA);
-    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Export the audits to CSV.' });
+    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Export the audits to CSV from their list.' });
     const { findings: _, ...silent } = lens('Nothing to say.', []);
     h.runner.enqueue({ events: [{ kind: 'text', text: 'Built.' }] }, { output: silent });
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });

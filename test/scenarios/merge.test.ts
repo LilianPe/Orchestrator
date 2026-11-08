@@ -76,6 +76,7 @@ describe('Done by a human, merge by the factory (ORC-148)', () => {
     const h = createHarness({ aiReview: true, authz: { githubLogins: { 'user-lilian': 'lilian-gh' } } });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Exporter les audits en CSV depuis la liste des audits.' });
     h.tracker.setTeamMembers('REL', ['user-lilian']);
+    h.forge.setRepoPermission('lilian-gh', 'write');
     h.workspaces.heads.set(WORKTREE, 'abc123');
     h.runner.enqueue({ events: [{ kind: 'init', sessionId: 'x' }] }, { hold: true });
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' }, 'REL-1', { actor: 'user-lilian' });
@@ -102,19 +103,17 @@ describe('Done by a human, merge by the factory (ORC-148)', () => {
     expect((await h.ticket()).reviewSha).toBe('abc123');
   });
 
-  it('a review that ended on another commit than the PR\'s head: its publication is refused, nothing written over and nothing merged (ORC-125)', async () => {
+  it('an AI review publishes nothing, and a head pushed since it is never recorded as reviewed (ORC-183, ORC-125)', async () => {
     const h = await inHumanReview();
+    const asked = h.publisher.asked.length;
     h.forge.setPr(BRANCH, { ...PR, state: 'OPEN', headSha: 'def456', checks: 'pass', failedChecks: [] });
-    // The review did not bring the push into its worktree: it read abc123, the forge shows def456, which the work does not hold.
-    h.publisher.refuseNext('moved', 'la branche porte un commit que ce travail n\'a pas');
-    h.runner.enqueue({ events: [{ kind: 'init', sessionId: 'y' }, { kind: 'text', text: 'Rien à redire.' }] });
-    await h.send('status.changed', { from: 'human_review', to: 'done' }, 'REL-1', { actor: 'user-lilian' });
-    expect(h.forge.merges).toEqual([]);
-    const t = await h.ticket();
-    expect(t.reviewSha).toBeUndefined();
-    expect(t.blockReason).toMatch(/que ce travail n'a pas/);
+    await h.send('status.changed', { from: 'human_review', to: 'ai_review' }, 'REL-1', { actor: 'user-lilian' });
+    // It read the published abc123, in a clone of its own: nothing of it goes to the branch.
+    expect(h.workspaces.prepared.filter((w) => w.kind === 'published').map((w) => w.sha)).toEqual(['abc123', 'abc123']);
+    expect(h.publisher.asked).toHaveLength(asked);
+    expect(lastMove(h)).toBe('Human Review');
+    expect((await h.ticket()).reviewSha).not.toBe('def456');
     expect((await h.forge.findPr('', BRANCH))?.headSha).toBe('def456');
-    expect(lastMove(h)).not.toBe('Human Review');
   });
 
   it('refuses to merge another PR than the ticket\'s, found on its branch', async () => {
@@ -188,7 +187,7 @@ describe('Done by a human, merge by the factory (ORC-148)', () => {
     for (let i = 0; i < 6; i++) await h.advance(10);
     expect(failures).toBe(0);
     expect(h.forge.merges).toEqual([]);
-    expect(comments(h).some((c) => /push since the review.*reads only the commits the factory published/.test(c))).toBe(true);
+    expect(comments(h).some((c) => /reads only the commits the factory published/.test(c))).toBe(true);
   });
 
   it('a refusal saved since ORC-345 replays by its flag, whatever its sentence says: a reworded moved head is a push since the review', async () => {
@@ -222,7 +221,7 @@ describe('Done by a human, merge by the factory (ORC-148)', () => {
     // Saved with the flag the shell saw, not a sentence to compare.
     expect(Object.values(saved).map((v) => JSON.parse(v) as unknown)).toEqual([{ reason: 'the branch received a push since the review', headMoved: true }]);
     expect(h.forge.merges).toEqual([]);
-    expect(comments(h).some((c) => /push since the review.*reads only the commits the factory published/.test(c))).toBe(true);
+    expect(comments(h).some((c) => /reads only the commits the factory published/.test(c))).toBe(true);
   });
 
   it('a PR merged on GitHub meanwhile, on another head, is no refusal: the ticket stays in Done', async () => {

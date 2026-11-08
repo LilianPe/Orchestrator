@@ -161,6 +161,8 @@ describe('the human inbox (ORC-180)', () => {
 
     it('a review neither reads nor empties it, whatever waits there', async () => {
       const h = createHarness();
+      // The worktree's head, which verify finds green and the factory publishes: what the AI review reads (ORC-183).
+      h.workspaces.heads.set('/tmp/factory-fake/p/REL-1', 'abc123');
       await inReview(h);
       await h.send('session.prompted', instruction('corrige le tri'), 'REL-1', { taint: 'untrusted' });
       h.runner.enqueue({ hold: true, events: [{ kind: 'text', text: 'Synthèse.' }], submit: false });
@@ -173,6 +175,8 @@ describe('the human inbox (ORC-180)', () => {
 
   it('a review does not read them: they wait for the agent that implements', async () => {
     const h = createHarness();
+    // The worktree's head, which verify finds green and the factory publishes: what the AI review reads (ORC-183).
+    h.workspaces.heads.set('/tmp/factory-fake/p/REL-1', 'abc123');
     await inReview(h);
     // The review's two lenses (ORC-183), then the implementer.
     h.runner.enqueue({ hold: true }, {}, { events: [{ kind: 'text', text: 'Pris en compte.' }] });

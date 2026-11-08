@@ -35,7 +35,7 @@ export const rawJobSchema = z
     session: z.enum(['new', 'resume']).optional(),
     skill: z.string().optional(),
     lens: z.enum(['correctness', 'security']).optional(),
-    input: z.enum(['feedback', 'ci_failures', 'thread', 'verify_failures', 'diff']).optional(),
+    input: z.enum(['feedback', 'ci_failures', 'thread', 'verify_failures']).optional(),
     verify: z.array(z.string()).optional(),
     pickup: z.boolean().optional(),
     structured_output: z.boolean().optional(),

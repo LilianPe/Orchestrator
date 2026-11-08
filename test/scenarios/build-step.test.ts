@@ -24,6 +24,8 @@ describe('the build step (ORC-136)', () => {
 
   it('a feedback run takes the turns of `fix`, a review those of `review`', async () => {
     const h = delegated();
+    // The worktree's head, which verify finds green and the factory publishes: what the AI review reads (ORC-183).
+    h.workspaces.heads.set('/tmp/factory-fake/p/REL-1', 'abc123');
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
     await h.advance(0);
     await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'reprends', author: 'L' });

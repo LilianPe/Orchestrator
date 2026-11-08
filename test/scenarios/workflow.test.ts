@@ -120,6 +120,8 @@ describe('standard workflow', () => {
 
   it('criterion 5: AI review -> Human Review (no Ready to Merge, ORC-170) -> merge -> done, cleanup, learn', async () => {
     const h = createHarness();
+    // The worktree's head, which verify finds green and the factory publishes: what the review reads.
+    h.workspaces.heads.set('/tmp/factory-fake/p/REL-1', 'abc123');
     await delegatedAndInReview(h);
     const summary = h.tracker.activities('ls-1').at(-1);
     // A human's move to AI Review reviews the published commit again: the two read-only lenses, then Human Review (ORC-183).

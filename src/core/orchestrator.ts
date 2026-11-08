@@ -1910,7 +1910,7 @@ export class Orchestrator {
         err.message += checksPermission(err);
         throw err;
       });
-    return { deduplicated: posted.deduplicated };
+    return posted.deduplicated ? { deduplicated: true } : undefined;
   }
 
   /**
@@ -2310,7 +2310,8 @@ export class Orchestrator {
       // The feedback the run reads, taken at the launch whoever started it (a decision, settle, the queue):
       // its taint completes the one the start was decided with (I12, ORC-274).
       // An AI review reads the diff alone, whatever relaunched it (ORC-183): a reply that lifted its block waits for the implementer.
-      const kind = from ? undefined : job.input === 'diff' ? 'diff' : (opts.input ?? job.input);
+      // An AI review reads the published commit's diff alone, whatever relaunched it (ORC-183): a reply that lifted its block waits for the implementer.
+      const kind = from ? undefined : job.lens ? 'diff' : (opts.input ?? job.input);
       // The implementer's run (a `dev` from scratch or a resume) runs the ticket session: resumed when the
       // ticket has one, else made here and taken by the ticket. A review or a question never does (ORC-217).
       // A relaunch runs the session the lost attempt ran. Cut before Claude wrote it, that session does not

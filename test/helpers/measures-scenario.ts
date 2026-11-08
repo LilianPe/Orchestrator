@@ -31,6 +31,8 @@ export async function firstRun(h: Harness): Promise<TicketMeasures> {
     { now: () => h.clock.now() },
   );
   h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Exporter les audits en CSV depuis la liste des audits.' });
+  // The worktree's head, which verify finds green and the factory publishes: what the AI review reads (ORC-183).
+  h.workspaces.heads.set('/tmp/factory-fake/p/REL-1', 'abc123');
   h.runner.enqueue(
     { events: [{ kind: 'text', text: 'PR prête et mergeable du premier coup, 0 token utilisé.' }], tokens: DEV_TOKENS },
     { events: [{ kind: 'text', text: "C'est pour garder l'ordre des audits." }], tokens: ASK_TOKENS, hold: true },

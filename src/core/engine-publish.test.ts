@@ -64,7 +64,7 @@ describe('the publish effect (ORC-125)', () => {
 
   it('published, the on_success of the job applies: the move, the summary, the AI review (ORC-183)', () => {
     const out = decide(verifying(), ev('publish.done', { runId: 'r1', job: 'dev', sha: 'abc' }), workflow);
-    expect(out.effects).toEqual([{ kind: 'move', to: 'ai_review' }, { kind: 'post_output', style: 'summary', runId: 'r1' }, expect.objectContaining({ kind: 'start_run', job: 'review', input: 'diff' })]);
+    expect(out.effects).toEqual([{ kind: 'move', to: 'ai_review' }, { kind: 'post_output', style: 'summary', runId: 'r1' }, expect.objectContaining({ kind: 'start_run', job: 'review' })]);
     expect(after(verifying(), ev('publish.done', { runId: 'r1', job: 'dev', sha: 'abc' }), out).verifyingRunId).toBeUndefined();
   });
 
@@ -87,7 +87,7 @@ describe('the publish effect (ORC-125)', () => {
     const relaunched = { ...blocked, blocked: false, blockReason: undefined, verifyingRunId: 'r2' };
     const done = ev('publish.done', { runId: 'r2', job: 'dev-feedback', sha: 'def' });
     const out = decide(relaunched, done, workflow);
-    expect(out.effects).toEqual([{ kind: 'move', to: 'ai_review' }, { kind: 'post_output', style: 'reply', runId: 'r2' }, expect.objectContaining({ kind: 'start_run', job: 'review', input: 'diff' })]);
+    expect(out.effects).toEqual([{ kind: 'move', to: 'ai_review' }, { kind: 'post_output', style: 'reply', runId: 'r2' }, expect.objectContaining({ kind: 'start_run', job: 'review' })]);
     expect(after(relaunched, done, out).owedMove).toBeNull();
   });
 
