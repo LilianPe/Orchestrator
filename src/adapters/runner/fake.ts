@@ -38,7 +38,7 @@ export class FakeRunner implements Runner {
   private scripts: FakeScript[] = [];
   private live = new Map<string, LiveRun>();
   /**
-   * Stands for the `submit_result` of a build, the one step the pack asks it of (ORC-136): given a store, the fake
+   * Stands for the `submit_result` every job ends on (ORC-136, ORC-214: a reply is its summary): given a store, the fake
    * agent does what the skill says, with its last text as summary. Without it, it submits nothing.
    */
   submit?: (runId: string, output: AgentOutput) => Promise<void>;
@@ -85,7 +85,7 @@ export class FakeRunner implements Runner {
     };
     const lastText = [...events].reverse().find((e): e is Extract<RunStreamEvent, { kind: 'text' }> => e.kind === 'text')?.text ?? '';
     const output: AgentOutput = s.output ?? { status: 'done', summary: lastText || 'Done.', tests_added: [], why: '', assumptions: [], risks: [], untested: [], review_hints: [] };
-    const submitted = this.submit && s.submit !== false && (s.output || req.prompt.startsWith('/factory:dev\n')) ? this.submit(req.runId, output).catch(() => {}) : Promise.resolve();
+    const submitted = this.submit && s.submit !== false ? this.submit(req.runId, output).catch(() => {}) : Promise.resolve();
     const done: Promise<RunResult> = Promise.all([held, submitted]).then(() => {
       ch.close();
       this.live.delete(req.runId);
