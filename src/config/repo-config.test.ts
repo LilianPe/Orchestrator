@@ -99,7 +99,7 @@ describe('parseRepoConfig (.factory/config.yml, ORC-209)', () => {
   });
 
   it('always keeps the forbidden paths of the socle, whatever the file adds', () => {
-    expect(parseRepoConfig(EXAMPLE).forbiddenPaths).toEqual(expect.arrayContaining(['.factory/**', '.github/workflows/**', 'claims/**']));
+    expect(parseRepoConfig(EXAMPLE).forbiddenPaths).toEqual(expect.arrayContaining(['.factory/**', '.github/**', 'claims/**']));
   });
 
   describe('a configuration can only add to the socle, never take from it', () => {
@@ -148,6 +148,24 @@ describe('parseRepoConfig (.factory/config.yml, ORC-209)', () => {
       expect(violations('sensitive_paths: ["src/!(auth)/**"]\n')).toEqual([
         'sensitive_paths[0]: "src/!(auth)/**" would remove a path; paths can only be added',
       ]);
+    });
+
+    it('refuses a sensitive path the check cannot enforce as written (ORC-338), and takes the forms it reads', () => {
+      expect(violations('sensitive_paths: ["src/**/*.sql", "/infra/**", "infra/", "../x", "a/?.ts", "**", "sensitive_paths\\\\x"]\n')).toEqual([
+        'sensitive_paths[0]: "src/**/*.sql": only `dir/**`, `name*` at the end, or an exact path are supported',
+        'sensitive_paths[1]: "/infra/**": a path from the repository root is expected (no leading `/`, `./`, `..`, `\\` or empty segment)',
+        'sensitive_paths[2]: "infra/": a path from the repository root is expected (no leading `/`, `./`, `..`, `\\` or empty segment)',
+        'sensitive_paths[3]: "../x": a path from the repository root is expected (no leading `/`, `./`, `..`, `\\` or empty segment)',
+        'sensitive_paths[4]: "a/?.ts": only `dir/**`, `name*` at the end, or an exact path are supported',
+        'sensitive_paths[5]: "**": only `dir/**`, `name*` at the end, or an exact path are supported',
+        'sensitive_paths[6]: "sensitive_paths\\x": a path from the repository root is expected (no leading `/`, `./`, `..`, `\\` or empty segment)',
+      ]);
+      expect(parseRepoConfig('sensitive_paths: ["infra/**", "db/schema*", "src/auth.ts"]\n').sensitivePaths).toEqual(['infra/**', 'db/schema*', 'src/auth.ts']);
+    });
+
+    it('refuses a sensitive_paths that is not a list of paths', () => {
+      expect(violations('sensitive_paths: "infra/**"\n')).toEqual(['sensitive_paths: an array of paths is expected']);
+      expect(violations('sensitive_paths: [3]\n')).toEqual(['sensitive_paths[0]: a non-empty path is expected']);
     });
 
     it('refuses a preset other than factory/default', () => {

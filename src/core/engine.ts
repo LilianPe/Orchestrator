@@ -20,7 +20,10 @@ type StartRun = Extract<Effect, { kind: 'start_run' }>;
 const relaunch = (workflow: Workflow): string => (workflow.blockComment ? 'Reply on this ticket to relaunch.' : 'Reply in this thread or add the agent:reprendre label to relaunch.');
 const STOPPED = 'Stopped on request';
 
-/** Paths a run started from an untrusted event must not write; enforced by the runner's sandbox (ORC-151). */
+/**
+ * Paths a run started from an untrusted event must not write. Enforced at `checkClone`, on `verify` and on the publication
+ * (ORC-338): `FORBIDDEN_PATHS` holds them all, and a run that carries them holds its branch to the repository's `sensitive_paths` too.
+ */
 export const SENSITIVE_PATHS: readonly string[] = ['.github/**', '.factory/**', '.claude/**', 'CODEOWNERS', '.env*'];
 
 /** The refusal of a knowledge job (I12): its event is untrusted, or what it would read at its launch is (ORC-274). */

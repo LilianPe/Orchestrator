@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { checkForbiddenPaths, FORBIDDEN_CHECK, forbiddenPattern, isOutwardLink, type ForbiddenView } from './forbidden-paths.js';
+import { SENSITIVE_PATHS } from '../core/engine.js';
+import { checkForbiddenPaths, FORBIDDEN_CHECK, forbiddenPattern, isOutwardLink, repoPatternError, sensitivePattern, type ForbiddenView } from './forbidden-paths.js';
 
 const view = (changed: ForbiddenView['changed'], base: Record<string, string> = {}, head: Record<string, string> = {}): ForbiddenView => ({
   changed,
@@ -10,8 +11,24 @@ const file = (path: string, deleted = false) => ({ path, deleted });
 
 describe('forbiddenPattern', () => {
   it.each([
-    ['.github/workflows/ci.yml', '.github/workflows/**'],
-    ['.github/workflows/deep/ci.yml', '.github/workflows/**'],
+    ['.github/workflows/ci.yml', '.github/**'],
+    ['.github/workflows/deep/ci.yml', '.github/**'],
+    ['.github/actions/setup/action.yml', '.github/**'],
+    ['.github/dependabot.yml', '.github/**'],
+    ['.github/CODEOWNERS', '.github/**'],
+    ['CODEOWNERS', 'CODEOWNERS'],
+    ['docs/CODEOWNERS', 'CODEOWNERS'],
+    ['.env', '.env*'],
+    ['.env.production', '.env*'],
+    ['apps/web/.env.local', '.env*'],
+    ['.envrc', '.env*'],
+    ['.yarnrc.yml', '.yarnrc*'],
+    ['.yarnrc', '.yarnrc*'],
+    ['.yarn/releases/yarn-4.cjs', '.yarn/releases/**'],
+    ['.yarn/plugins/x.cjs', '.yarn/plugins/**'],
+    ['.pnpmfile.cjs', '.pnpmfile.cjs'],
+    ['setup.py', 'setup.py'],
+    ['packages/lib/setup.py', 'setup.py'],
     ['.factory/config.yml', '.factory/**'],
     ['.claude/settings.json', '.claude/**'],
     ['packages/app/.claude/settings.json', '.claude/**'],
@@ -27,18 +44,46 @@ describe('forbiddenPattern', () => {
     ['services/api/Dockerfile', 'Dockerfile*'],
     ['.devcontainer/devcontainer.json', '.devcontainer/**'],
     ['claims/facts.md', 'claims/**'],
-    ['.GitHub/Workflows/ci.yml', '.github/workflows/**'],
+    ['.GitHub/Workflows/ci.yml', '.github/**'],
     ['.\\.factory\\config.yml', '.factory/**'],
   ])('%s is forbidden', (path, pattern) => {
     expect(forbiddenPattern(path)).toBe(pattern);
   });
 
-  it.each(['src/app.ts', '.github/CODEOWNERS', 'src/claims/model.ts', 'docs/Dockerfile.md.txt.keep/readme', 'mydockerfile', 'src/factory/x.ts', '.npmrc.example', 'a/.factory.ts', 'package.json'])(
+  it.each(['src/app.ts', 'packages/a/.github/workflows/ci.yml', 'docs/codeowners.md', 'src/environment.ts', '.yarn/cache/x.zip', 'setup.pyc', 'src/claims/model.ts', 'docs/Dockerfile.md.txt.keep/readme', 'mydockerfile', 'src/factory/x.ts', '.npmrc.example', 'a/.factory.ts', 'package.json'])(
     '%s is not',
     (path) => {
       expect(forbiddenPattern(path)).toBeUndefined();
     },
   );
+
+  it('holds every path an untrusted run carries (SENSITIVE_PATHS): those are refused to every run', () => {
+    for (const path of ['.github/actions/setup/action.yml', '.factory/config.yml', '.claude/settings.json', 'CODEOWNERS', '.env.local']) expect(forbiddenPattern(path), path).toBeDefined();
+    expect(SENSITIVE_PATHS.every((p) => forbiddenPattern(p.replace('**', 'x').replace('*', '.x')) !== undefined)).toBe(true);
+  });
+});
+
+describe('sensitivePattern', () => {
+  const patterns = ['infra/**', 'db/schema*', 'src/auth.ts'];
+
+  it.each([
+    ['infra/main.tf', 'infra/**'],
+    ['infra/modules/vpc/main.tf', 'infra/**'],
+    ['Infra/main.tf', 'infra/**'],
+    ['db/schema.sql', 'db/schema*'],
+    ['src/auth.ts', 'src/auth.ts'],
+    ['.\\infra\\x.tf', 'infra/**'],
+  ])('%s is named by %s, from the root', (path, pattern) => {
+    expect(sensitivePattern(path, patterns)).toBe(pattern);
+  });
+
+  it.each(['infrastructure/x', 'apps/infra/x', 'db/schema/x.sql', 'db/old/schema.sql', 'lib/src/auth.ts', 'src/auth.ts.bak'])('%s is not', (path) => {
+    expect(sensitivePattern(path, patterns)).toBeUndefined();
+  });
+
+  it('every form it reads passes the config check', () => {
+    expect(patterns.map(repoPatternError)).toEqual([undefined, undefined, undefined]);
+  });
 });
 
 describe('isOutwardLink', () => {
@@ -74,6 +119,21 @@ describe('factory/chemins-interdits', () => {
     expect(r.summary).toContain('.factory/config.yml');
     expect(r.summary).toContain('.github/workflows/ci.yml');
     expect(r.summary).not.toContain('src/a.ts');
+  });
+
+  it('the repository sensitive paths given (untrusted work) block; without them the same diff passes', async () => {
+    const changed = [file('infra/main.tf'), file('src/a.ts')];
+    const r = await checkForbiddenPaths({ ...view(changed), sensitive: ['infra/**'] });
+    expect(r.ok).toBe(false);
+    expect(r.summary).toContain('`infra/main.tf`: sensitive path of the repository (`infra/**`)');
+    expect(r.summary).not.toContain('src/a.ts');
+    expect((await checkForbiddenPaths(view(changed))).ok).toBe(true);
+  });
+
+  it('a path both forbidden and sensitive is named once, as forbidden', async () => {
+    const r = await checkForbiddenPaths({ ...view([file('.github/actions/setup/action.yml')]), sensitive: ['.github/**'] });
+    expect(r.summary.match(/action\.yml/g)).toHaveLength(1);
+    expect(r.summary).toContain('forbidden path');
   });
 
   it('an outward symbolic link blocks, an inward one does not', async () => {

@@ -9,6 +9,8 @@ export interface PublishRequest {
   worktree: string;
   branch: string;
   sha: string;
+  /** A run on this branch read untrusted content (ORC-338): the repository's `sensitive_paths` are then refused too. */
+  untrusted?: boolean;
   title: string;
   body: string;
 }

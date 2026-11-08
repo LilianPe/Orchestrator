@@ -60,7 +60,7 @@ const identify = (repo: string) => {
 };
 
 /** A bare forge whose default branch has a commit, the agent's clone on its branch one commit ahead, and a publisher to that forge. */
-function setup(o: { exec?: Exec; gitleaks?: boolean; package?: string } = {}) {
+function setup(o: { exec?: Exec; gitleaks?: boolean; package?: string; config?: string } = {}) {
   const base = mkdtempSync(join(tmpdir(), 'factory-publish-'));
   const remote = join(base, 'remote.git');
   git(base, 'init', '-q', '--bare', '-b', 'main', remote);
@@ -70,6 +70,7 @@ function setup(o: { exec?: Exec; gitleaks?: boolean; package?: string } = {}) {
   git(seed, 'checkout', '-q', '-b', 'main');
   write(seed, 'README.md', 'base\n');
   if (o.package) write(seed, 'package.json', o.package);
+  if (o.config) write(seed, '.factory/config.yml', o.config);
   commit(seed, 'base');
   git(seed, 'push', '-q', 'origin', 'main');
 
@@ -147,6 +148,7 @@ describe('GitPublisher', () => {
     it.each([
       '.github/workflows/ci.yml', '.factory/config.yml', '.claude/settings.json', '.gitattributes', '.gitmodules', '.npmrc', '.husky/pre-commit', '.vscode/tasks.json',
       'Dockerfile', 'Dockerfile.dev', '.devcontainer/devcontainer.json', 'claims/fact.md', 'sub/.npmrc',
+      'CODEOWNERS', 'docs/CODEOWNERS', '.github/actions/setup/action.yml', '.github/dependabot.yml', '.env', '.env.local', 'setup.py', '.pnpmfile.cjs', '.yarnrc.yml',
     ])('a change of %s', async (path) => {
       const s = setup();
       write(s.repo, path, 'trap\n');
@@ -157,6 +159,31 @@ describe('GitPublisher', () => {
     it('.git/hooks and .git/config, which no commit can hold: named forbidden all the same, should a tree carry them', () => {
       expect(forbiddenPattern('.git/hooks/pre-push')).toBe('.git/hooks/**');
       expect(forbiddenPattern('.git/config')).toBe('.git/config');
+    });
+
+    describe("the repository's sensitive_paths, read on the base (ORC-338)", () => {
+      const infra = () => {
+        const s = setup({ config: 'sensitive_paths: ["infra/**"]\n' });
+        git(s.repo, 'fetch', '-q', 'origin');
+        git(s.repo, 'merge', '-q', '--no-edit', 'origin/main');
+        write(s.repo, 'infra/main.tf', 'x\n');
+        commit(s.repo);
+        return s;
+      };
+
+      it('an untrusted branch that touches one is refused', async () => {
+        const s = infra();
+        const r = await refusal(s.publisher.publish(s.request({ untrusted: true })));
+        expect(r.code).toBe('diff');
+        expect(r.message).toContain('`infra/main.tf`: sensitive path of the repository (`infra/**`)');
+        expect(s.pushes).toEqual([]);
+      });
+
+      it('a trusted branch publishes it', async () => {
+        const s = infra();
+        await s.publisher.publish(s.request());
+        expect(s.onForge()).toBe(git(s.repo, 'rev-parse', 'HEAD'));
+      });
     });
 
     it('package.json#scripts changed', async () => {

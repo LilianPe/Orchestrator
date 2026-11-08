@@ -335,6 +335,45 @@ describe('runCleanVerify', () => {
       expect((await runCleanVerify(req)).failures[0]).toMatchObject({ command: 'factory/chemins-interdits', output: expect.stringContaining('.github/workflows/ci.yml') });
     });
 
+    it('CODEOWNERS and a setup action under .github block, trusted or not (ORC-338)', async () => {
+      const { repo, req } = setup({ commands: [] });
+      write(repo, 'CODEOWNERS', '* @someone\n');
+      write(repo, '.github/actions/setup/action.yml', 'runs: { using: composite, steps: [] }\n');
+      commit(repo, 'tidy CODEOWNERS and the setup action');
+      const { output } = (await runCleanVerify(req)).failures[0]!;
+      expect(output).toContain('CODEOWNERS');
+      expect(output).toContain('.github/actions/setup/action.yml');
+    });
+
+    describe("the repository's sensitive_paths (ORC-338)", () => {
+      const touchInfra = (over: Partial<CleanVerifyRequest>, config = 'sensitive_paths: ["infra/**"]\n') => {
+        const s = setup({ commands: [], ...over }, config);
+        write(s.repo, 'infra/main.tf', 'resource "x" "y" {}\n');
+        commit(s.repo, 'infra');
+        return s;
+      };
+
+      it('an untrusted branch that touches one is refused', async () => {
+        const res = await runCleanVerify(touchInfra({ untrusted: true }).req);
+        expect(res.failures).toEqual([{ command: 'factory/chemins-interdits', exitCode: 1, output: expect.stringContaining('`infra/main.tf`: sensitive path of the repository (`infra/**`)') }]);
+      });
+
+      it('a trusted branch may touch it', async () => {
+        expect((await runCleanVerify(touchInfra({}).req)).ok).toBe(true);
+      });
+
+      it('read on the base: a branch that drops the entry is refused all the same', async () => {
+        const { repo, req } = touchInfra({ untrusted: true });
+        write(repo, '.factory/config.yml', 'sensitive_paths: []\n');
+        commit(repo, 'drop it');
+        expect((await runCleanVerify(req)).failures[0]!.output).toContain('infra/main.tf');
+      });
+
+      it('an entry the check cannot read is a config error, not a path left open', async () => {
+        await expect(runCleanVerify(touchInfra({ untrusted: true }, 'sensitive_paths: ["infra/**/*.tf"]\n').req)).rejects.toThrow(/sensitive_paths\[0\]/);
+      });
+    });
+
     it('package.json#scripts blocks, its dependencies do not', async () => {
       const { origin, repo, req } = setup({ commands: [] });
       const manifest = (o: object) => write(repo, 'package.json', JSON.stringify(o));

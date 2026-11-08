@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { SECRET_NAME } from '../adapters/runner/transcript.js';
 import type { NetworkLevel } from '../adapters/sandbox/types.js';
 import { MaxDiffConfigError, resolveMaxDiff, type MaxDiff } from '../checks/diff-size.js';
-import { FORBIDDEN_PATHS } from '../checks/forbidden-paths.js';
+import { FORBIDDEN_PATHS, repoPatternError } from '../checks/forbidden-paths.js';
 
 /**
  * `.factory/config.yml` (ORC-209): what a repository declares to the factory, optional. It can add controls or
@@ -129,6 +129,8 @@ export function parseRepoConfig(text: string | undefined): RepoConfig {
     paths?.forEach((p, i) => {
       // Anywhere in the pattern: `!x` and the extglob `src/!(auth)/**` both carve a hole.
       if (p.includes('!')) violations.push(`${key}[${i}]: "${p}" would remove a path; paths can only be added`);
+      // Enforced at `checkClone` (ORC-338): a pattern it cannot read would protect nothing.
+      else if (key === 'sensitive_paths' && repoPatternError(p)) violations.push(`${key}[${i}]: "${p}": ${repoPatternError(p)}`);
     });
   }
   const budgets = read('budgets', z.strictObject({ per_ticket_tokens: z.number().int().positive().optional() }), '`{ per_ticket_tokens }` positive integer expected');

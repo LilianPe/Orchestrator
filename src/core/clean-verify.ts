@@ -41,6 +41,8 @@ export interface CleanVerifyRequest {
   gitleaks: boolean;
   /** `factory/tests-gelés` (ORC-131), once the ticket has a freeze. */
   frozen?: FrozenTests;
+  /** A run on this branch read untrusted content (ORC-338): the repository's `sensitive_paths` are then forbidden too. */
+  untrusted?: boolean;
   /** The variables the repository declares (ORC-211), never a secret. */
   env: (config: RepoConfig) => Promise<Record<string, string>>;
   log: (message: string) => void;
@@ -132,13 +134,13 @@ export const runCleanVerify: CleanVerifier = async (req) => {
     const tree = await git('rev-parse', `${sha}^{tree}`);
     if (sha === req.green) return { ok: true, failures: [], sha, tree };
     await within(fetchBase(req, cloneDir), deadlineMs, `the forge no longer responds after ${deadlineMs / 1000} s`);
-    const config = parseRepoConfig(await show(git, BASE, REPO_CONFIG_PATH));
+    const config = await baseConfig(git);
     const declared = Object.values(config.commands);
     const commands = declared.length ? declared : req.commands;
     const setup = config.setup ? [config.setup] : req.setup;
     const env = await req.env(config);
     const from = await forkPoint(git, sha);
-    const failures = await checkClone(git, from, sha, req.frozen);
+    const failures = await checkClone(git, from, sha, req.frozen, req.untrusted ? config.sensitivePaths : []);
     if (req.gitleaks || (commands.length && !failures.length)) {
       await inBox('prepare', cloneDir, [], async (id) => {
         if (req.gitleaks) failures.push(...(await scanSecrets(sandboxes, id, from, sha)));
@@ -171,6 +173,11 @@ export const runCleanVerify: CleanVerifier = async (req) => {
 };
 
 export const BASE = 'refs/factory/base';
+
+/** `.factory/config.yml` as the base branch holds it, in the clone: never as the agent's branch does. */
+export async function baseConfig(git: CloneGit): Promise<RepoConfig> {
+  return parseRepoConfig(await show(git, BASE, REPO_CONFIG_PATH));
+}
 
 /**
  * The forge's default branch, in the clone. The daemon's own config is read, for its credentials: the repository's is
@@ -240,11 +247,11 @@ export async function forkPoint(git: CloneGit, sha: string): Promise<string> {
 }
 
 /**
- * The blocking checks on the commit, from the clone's objects: `factory/chemins-interdits`, `factory/binaires` and `factory/anti-triche`
- * (ORC-158) on all it changed since it left the base, whatever it says of its own history, and `factory/tests-gelés` on the frozen files as they are at
+ * The blocking checks on the commit, from the clone's objects: `factory/chemins-interdits` (with `sensitive`, the repository's
+ * `sensitive_paths` when the work read untrusted content, ORC-338), `factory/binaires` and `factory/anti-triche` (ORC-158) on all it changed since it left the base, whatever it says of its own history, and `factory/tests-gelés` on the frozen files as they are at
  * its head, which needs no frozen commit: a rebase can take it away, not its fingerprints. A read that fails rejects.
  */
-export async function checkClone(git: CloneGit, from: string, sha: string, frozen: FrozenTests | undefined): Promise<VerifyFailure[]> {
+export async function checkClone(git: CloneGit, from: string, sha: string, frozen: FrozenTests | undefined, sensitive: readonly string[]): Promise<VerifyFailure[]> {
   const showAtHead = (p: string) => show(git, sha, p);
   // `--raw`: status and modes in one process, `:<old mode> <new mode> <old id> <new id> <status>`, then the path.
   const fields = (await git('diff', '--raw', '--no-renames', '-z', from, sha)).split('\0').filter(Boolean);
@@ -254,7 +261,7 @@ export async function checkClone(git: CloneGit, from: string, sha: string, froze
     const path = fields[i + 1]!;
     changed.push({ path, deleted: status === 'D', ...(mode === SYMLINK ? { link: (await showAtHead(path))! } : {}) });
   }
-  const forbidden = await checkForbiddenPaths({ changed, showAtBase: (p) => show(git, from, p), showAtHead });
+  const forbidden = await checkForbiddenPaths({ changed, showAtBase: (p) => show(git, from, p), showAtHead, sensitive });
   const failures: VerifyFailure[] = forbidden.ok ? [] : [{ command: FORBIDDEN_CHECK, exitCode: 1, output: forbidden.summary }];
   failures.push(...(await checkAdded(git, from, sha)));
   if (frozen) {

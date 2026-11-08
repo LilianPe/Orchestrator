@@ -876,6 +876,7 @@ export class Orchestrator {
         gitleaks: true,
         ...(green ? { green } : {}),
         ...(goesThroughFreeze(t, job) ? { frozen: t.frozenTests! } : {}),
+        ...((await this.untrustedBranch(t)) ? { untrusted: true } : {}),
         env: async (config) => (await this.repoVariablesOf(project, config)).env,
         log: (message) => this.log('warn', `verify of ${t.ticketId}: ${message}`),
       });
@@ -883,6 +884,15 @@ export class Orchestrator {
       // Under the run's dir, purged with it: what the attack left unremovable costs no verdict.
       await rm(workDir, { recursive: true, force: true }).catch((err: Error) => this.log('warn', `verify of ${t.ticketId}: ${workDir} not removed: ${err.message}`));
     }
+  }
+
+  /**
+   * Whether a run that worked in the ticket's worktree read untrusted content (I12, ORC-338): its commits stay on the
+   * branch after it, so the whole branch is held to the repository's `sensitive_paths`, whoever runs next. Sticky by
+   * design: a human who wants such a path changed on that ticket changes it.
+   */
+  private async untrustedBranch(t: TicketState): Promise<boolean> {
+    return (await this.d.store.ticketRuns(t.projectId, t.ticketId)).some((r) => r.cwd === t.worktreePath && !!r.sensitivePaths?.length);
   }
 
   /**
@@ -1555,7 +1565,8 @@ export class Orchestrator {
     else if (!t.branch || !t.worktreePath) reason = `no branch or no worktree for ${t.ticketId}.`;
     else {
       try {
-        const pr = await publisher.publish({ projectId: project.id, repoPath: project.repoPath, ticketId: t.ticketId, runId: c.runId, worktree: t.worktreePath, branch: t.branch, sha: c.sha, ...prText(t) });
+        const untrusted = await this.untrustedBranch(t);
+        const pr = await publisher.publish({ projectId: project.id, repoPath: project.repoPath, ticketId: t.ticketId, runId: c.runId, worktree: t.worktreePath, branch: t.branch, sha: c.sha, ...(untrusted ? { untrusted } : {}), ...prText(t) });
         await this.accept({ ...base, id: prEventId(t.ticketId, pr.prNumber, 'opened'), type: 'pr.opened', at: this.d.clock.now(), payload: { number: pr.prNumber, url: pr.url, branch: t.branch } });
         await this.publishChecks(project, t, c);
         return published();
