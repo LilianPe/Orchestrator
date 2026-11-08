@@ -1329,7 +1329,17 @@
           "costUsd": 0.1,
           "turns": 1,
           "lastText": "Done.",
-          "attempt": "failed"
+          "attempt": "succeeded",
+          "output": {
+            "status": "done",
+            "summary": "Done.",
+            "tests_added": [],
+            "why": "",
+            "assumptions": [],
+            "risks": [],
+            "untested": [],
+            "review_hints": []
+          }
         }
       },
       "decision": {
@@ -1396,7 +1406,17 @@
           {
             "kind": "run_verify",
             "runId": "id-4",
-            "job": "fix-ci"
+            "job": "fix-ci",
+            "output": {
+              "status": "done",
+              "summary": "Done.",
+              "tests_added": [],
+              "why": "",
+              "assumptions": [],
+              "risks": [],
+              "untested": [],
+              "review_hints": []
+            }
           },
           {
             "kind": "settle"
@@ -1502,7 +1522,17 @@
           "job": "fix-ci",
           "commands": [
             "fake:check"
-          ]
+          ],
+          "output": {
+            "status": "done",
+            "summary": "Done.",
+            "tests_added": [],
+            "why": "",
+            "assumptions": [],
+            "risks": [],
+            "untested": [],
+            "review_hints": []
+          }
         }
       },
       "decision": {
@@ -1563,7 +1593,17 @@
           {
             "kind": "post_output",
             "style": "reply",
-            "runId": "id-4"
+            "runId": "id-4",
+            "output": {
+              "status": "done",
+              "summary": "Done.",
+              "tests_added": [],
+              "why": "",
+              "assumptions": [],
+              "risks": [],
+              "untested": [],
+              "review_hints": []
+            }
           },
           {
             "kind": "settle"
@@ -1878,6 +1918,7 @@
           "claudeSessionId": "id-2",
           "untrustedSince": null,
           "blockReason": "CI still failing after 1 attempts of fix-ci.",
+          "blockKind": "ci_bound",
           "blockedJob": "fix-ci"
         },
         "effects": [
@@ -1955,6 +1996,7 @@
           "claudeSessionId": "id-2",
           "untrustedSince": null,
           "blockReason": "CI still failing after 1 attempts of fix-ci.",
+          "blockKind": "ci_bound",
           "blockedJob": "fix-ci"
         },
         "ticket": {
@@ -1980,6 +2022,7 @@
           "claudeSessionId": "id-2",
           "untrustedSince": null,
           "blockReason": "CI still failing after 1 attempts of fix-ci.",
+          "blockKind": "ci_bound",
           "blockedJob": "fix-ci"
         },
         "effects": [],
@@ -2036,6 +2079,7 @@
           "claudeSessionId": "id-2",
           "untrustedSince": null,
           "blockReason": "CI still failing after 1 attempts of fix-ci.",
+          "blockKind": "ci_bound",
           "blockedJob": "fix-ci"
         },
         "ticket": {
@@ -2061,6 +2105,7 @@
           "claudeSessionId": "id-2",
           "untrustedSince": null,
           "blockReason": "CI still failing after 1 attempts of fix-ci.",
+          "blockKind": "ci_bound",
           "blockedJob": "fix-ci"
         },
         "effects": [],
@@ -2115,6 +2160,7 @@
           "claudeSessionId": "id-2",
           "untrustedSince": null,
           "blockReason": "CI still failing after 1 attempts of fix-ci.",
+          "blockKind": "ci_bound",
           "blockedJob": "fix-ci"
         },
         "ticket": {
@@ -2139,7 +2185,8 @@
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
           "untrustedSince": null,
-          "blockReason": "Stopped on request"
+          "blockReason": "Stopped on request",
+          "blockKind": "stopped"
         },
         "effects": [
           {
@@ -2203,7 +2250,8 @@
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
           "untrustedSince": null,
-          "blockReason": "Stopped on request"
+          "blockReason": "Stopped on request",
+          "blockKind": "stopped"
         },
         "ticket": {
           "projectId": "p",
@@ -2227,7 +2275,8 @@
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
           "untrustedSince": null,
-          "blockReason": "Stopped on request"
+          "blockReason": "Stopped on request",
+          "blockKind": "stopped"
         },
         "effects": [],
         "timers": [],
@@ -2282,7 +2331,8 @@
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
           "untrustedSince": null,
-          "blockReason": "Stopped on request"
+          "blockReason": "Stopped on request",
+          "blockKind": "stopped"
         },
         "ticket": {
           "projectId": "p",
@@ -2306,7 +2356,8 @@
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
           "untrustedSince": null,
-          "blockReason": "Stopped on request"
+          "blockReason": "Stopped on request",
+          "blockKind": "stopped"
         },
         "effects": [],
         "timers": [],

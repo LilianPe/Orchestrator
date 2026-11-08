@@ -1197,7 +1197,9 @@
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
           "untrustedSince": null,
-          "blockReason": "Event t-2 set aside (session.prompted): its decision failed (t.humanInbox is not iterable)."
+          "blockReason": "Event t-2 set aside (session.prompted): its decision failed (t.humanInbox is not iterable).",
+          "blockKind": "dead_letter",
+          "blockedEvent": "t-2"
         },
         "effects": [
           {
@@ -1272,7 +1274,9 @@
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
           "untrustedSince": null,
-          "blockReason": "Event t-2 set aside (session.prompted): its decision failed (t.humanInbox is not iterable)."
+          "blockReason": "Event t-2 set aside (session.prompted): its decision failed (t.humanInbox is not iterable).",
+          "blockKind": "dead_letter",
+          "blockedEvent": "t-2"
         },
         "ticket": {
           "projectId": "p",
@@ -1296,7 +1300,9 @@
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
           "untrustedSince": null,
-          "blockReason": "Event t-2 set aside (session.prompted): its decision failed (t.humanInbox is not iterable)."
+          "blockReason": "Event t-2 set aside (session.prompted): its decision failed (t.humanInbox is not iterable).",
+          "blockKind": "dead_letter",
+          "blockedEvent": "t-2"
         },
         "effects": [],
         "timers": [],
@@ -1351,7 +1357,9 @@
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
           "untrustedSince": null,
-          "blockReason": "Event t-2 set aside (session.prompted): its decision failed (t.humanInbox is not iterable)."
+          "blockReason": "Event t-2 set aside (session.prompted): its decision failed (t.humanInbox is not iterable).",
+          "blockKind": "dead_letter",
+          "blockedEvent": "t-2"
         },
         "ticket": {
           "projectId": "p",
@@ -1375,7 +1383,9 @@
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
           "untrustedSince": null,
-          "blockReason": "Event t-2 set aside (session.prompted): its decision failed (t.humanInbox is not iterable)."
+          "blockReason": "Event t-2 set aside (session.prompted): its decision failed (t.humanInbox is not iterable).",
+          "blockKind": "dead_letter",
+          "blockedEvent": "t-2"
         },
         "effects": [],
         "timers": [],
@@ -1443,7 +1453,9 @@
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
           "untrustedSince": null,
-          "blockReason": "Event t-2 set aside (session.prompted): its decision failed (t.humanInbox is not iterable)."
+          "blockReason": "Event t-2 set aside (session.prompted): its decision failed (t.humanInbox is not iterable).",
+          "blockKind": "dead_letter",
+          "blockedEvent": "t-2"
         },
         "ticket": {
           "projectId": "p",

@@ -1891,7 +1891,17 @@
           "costUsd": 0.1,
           "turns": 1,
           "lastText": "Done.",
-          "attempt": "failed"
+          "attempt": "succeeded",
+          "output": {
+            "status": "done",
+            "summary": "Done.",
+            "tests_added": [],
+            "why": "",
+            "assumptions": [],
+            "risks": [],
+            "untested": [],
+            "review_hints": []
+          }
         }
       },
       "decision": {

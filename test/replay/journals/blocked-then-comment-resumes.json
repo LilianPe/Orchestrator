@@ -615,6 +615,7 @@
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "blockReason": "The run dev reached a limit (turns, duration or budget).",
+          "blockKind": "limit",
           "blockedJob": "dev"
         },
         "effects": [
@@ -694,6 +695,7 @@
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "blockReason": "The run dev reached a limit (turns, duration or budget).",
+          "blockKind": "limit",
           "blockedJob": "dev"
         },
         "ticket": {
@@ -719,6 +721,7 @@
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "blockReason": "The run dev reached a limit (turns, duration or budget).",
+          "blockKind": "limit",
           "blockedJob": "dev"
         },
         "effects": [],
@@ -775,6 +778,7 @@
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "blockReason": "The run dev reached a limit (turns, duration or budget).",
+          "blockKind": "limit",
           "blockedJob": "dev"
         },
         "ticket": {
@@ -800,6 +804,7 @@
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "blockReason": "The run dev reached a limit (turns, duration or budget).",
+          "blockKind": "limit",
           "blockedJob": "dev"
         },
         "effects": [],
@@ -856,6 +861,7 @@
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "blockReason": "The run dev reached a limit (turns, duration or budget).",
+          "blockKind": "limit",
           "blockedJob": "dev"
         },
         "ticket": {
@@ -881,6 +887,7 @@
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "blockReason": "The run dev reached a limit (turns, duration or budget).",
+          "blockKind": "limit",
           "blockedJob": "dev"
         },
         "effects": [],
@@ -938,6 +945,7 @@
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "blockReason": "The run dev reached a limit (turns, duration or budget).",
+          "blockKind": "limit",
           "blockedJob": "dev"
         },
         "ticket": {
@@ -963,6 +971,7 @@
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "blockReason": "The run dev reached a limit (turns, duration or budget).",
+          "blockKind": "limit",
           "blockedJob": "dev"
         },
         "effects": [
@@ -1024,6 +1033,7 @@
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "blockReason": "The run dev reached a limit (turns, duration or budget).",
+          "blockKind": "limit",
           "blockedJob": "dev"
         },
         "ticket": {
@@ -1049,6 +1059,7 @@
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "blockReason": "The run dev reached a limit (turns, duration or budget).",
+          "blockKind": "limit",
           "blockedJob": "dev"
         },
         "effects": [],
@@ -1110,6 +1121,7 @@
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "blockReason": "The run dev reached a limit (turns, duration or budget).",
+          "blockKind": "limit",
           "blockedJob": "dev"
         },
         "ticket": {

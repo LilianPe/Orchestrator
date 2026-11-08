@@ -1129,7 +1129,17 @@
           "costUsd": 0.1,
           "turns": 1,
           "lastText": "Parce que.",
-          "attempt": "failed"
+          "attempt": "succeeded",
+          "output": {
+            "status": "done",
+            "summary": "Parce que.",
+            "tests_added": [],
+            "why": "",
+            "assumptions": [],
+            "risks": [],
+            "untested": [],
+            "review_hints": []
+          }
         }
       },
       "decision": {
@@ -1231,7 +1241,17 @@
           {
             "kind": "post_output",
             "style": "reply",
-            "runId": "id-4"
+            "runId": "id-4",
+            "output": {
+              "status": "done",
+              "summary": "Parce que.",
+              "tests_added": [],
+              "why": "",
+              "assumptions": [],
+              "risks": [],
+              "untested": [],
+              "review_hints": []
+            }
           },
           {
             "kind": "settle"
@@ -2385,7 +2405,17 @@
           "costUsd": 0.1,
           "turns": 1,
           "lastText": "Pris en compte.",
-          "attempt": "failed"
+          "attempt": "succeeded",
+          "output": {
+            "status": "done",
+            "summary": "Pris en compte.",
+            "tests_added": [],
+            "why": "",
+            "assumptions": [],
+            "risks": [],
+            "untested": [],
+            "review_hints": []
+          }
         }
       },
       "decision": {
@@ -2452,7 +2482,17 @@
           {
             "kind": "run_verify",
             "runId": "id-7",
-            "job": "dev-feedback"
+            "job": "dev-feedback",
+            "output": {
+              "status": "done",
+              "summary": "Pris en compte.",
+              "tests_added": [],
+              "why": "",
+              "assumptions": [],
+              "risks": [],
+              "untested": [],
+              "review_hints": []
+            }
           },
           {
             "kind": "settle"
@@ -2635,7 +2675,17 @@
         "payload": {
           "runId": "id-7",
           "job": "dev-feedback",
-          "commands": []
+          "commands": [],
+          "output": {
+            "status": "done",
+            "summary": "Pris en compte.",
+            "tests_added": [],
+            "why": "",
+            "assumptions": [],
+            "risks": [],
+            "untested": [],
+            "review_hints": []
+          }
         }
       },
       "decision": {
@@ -2696,7 +2746,17 @@
           {
             "kind": "post_output",
             "style": "reply",
-            "runId": "id-7"
+            "runId": "id-7",
+            "output": {
+              "status": "done",
+              "summary": "Pris en compte.",
+              "tests_added": [],
+              "why": "",
+              "assumptions": [],
+              "risks": [],
+              "untested": [],
+              "review_hints": []
+            }
           },
           {
             "kind": "settle"

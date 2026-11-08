@@ -1474,6 +1474,7 @@
           ],
           "untrustedSince": null,
           "blockReason": "Too many relaunches after a cut: 3 in 60 min.",
+          "blockKind": "limit",
           "blockedJob": "dev"
         },
         "effects": [
@@ -1558,6 +1559,7 @@
           ],
           "untrustedSince": null,
           "blockReason": "Too many relaunches after a cut: 3 in 60 min.",
+          "blockKind": "limit",
           "blockedJob": "dev"
         },
         "ticket": {
@@ -1588,6 +1590,7 @@
           ],
           "untrustedSince": null,
           "blockReason": "Too many relaunches after a cut: 3 in 60 min.",
+          "blockKind": "limit",
           "blockedJob": "dev"
         },
         "effects": [],
@@ -1649,6 +1652,7 @@
           ],
           "untrustedSince": null,
           "blockReason": "Too many relaunches after a cut: 3 in 60 min.",
+          "blockKind": "limit",
           "blockedJob": "dev"
         },
         "ticket": {
@@ -1679,6 +1683,7 @@
           ],
           "untrustedSince": null,
           "blockReason": "Too many relaunches after a cut: 3 in 60 min.",
+          "blockKind": "limit",
           "blockedJob": "dev"
         },
         "effects": [],
@@ -1740,6 +1745,7 @@
           ],
           "untrustedSince": null,
           "blockReason": "Too many relaunches after a cut: 3 in 60 min.",
+          "blockKind": "limit",
           "blockedJob": "dev"
         },
         "ticket": {
@@ -1770,6 +1776,7 @@
           ],
           "untrustedSince": null,
           "blockReason": "Too many relaunches after a cut: 3 in 60 min.",
+          "blockKind": "limit",
           "blockedJob": "dev"
         },
         "effects": [],
@@ -1830,6 +1837,7 @@
           ],
           "untrustedSince": null,
           "blockReason": "Too many relaunches after a cut: 3 in 60 min.",
+          "blockKind": "limit",
           "blockedJob": "dev"
         },
         "ticket": {

@@ -611,6 +611,7 @@
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "blockReason": "Loop: same command, same failure, 3 times, with no code change.",
+          "blockKind": "loop",
           "blockedJob": "dev"
         },
         "effects": [
@@ -689,6 +690,7 @@
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "blockReason": "Loop: same command, same failure, 3 times, with no code change.",
+          "blockKind": "loop",
           "blockedJob": "dev"
         },
         "ticket": {
@@ -713,6 +715,7 @@
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "blockReason": "Loop: same command, same failure, 3 times, with no code change.",
+          "blockKind": "loop",
           "blockedJob": "dev"
         },
         "effects": [],
@@ -768,6 +771,7 @@
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "blockReason": "Loop: same command, same failure, 3 times, with no code change.",
+          "blockKind": "loop",
           "blockedJob": "dev"
         },
         "ticket": {
@@ -792,6 +796,7 @@
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "blockReason": "Loop: same command, same failure, 3 times, with no code change.",
+          "blockKind": "loop",
           "blockedJob": "dev"
         },
         "effects": [],
@@ -847,6 +852,7 @@
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "blockReason": "Loop: same command, same failure, 3 times, with no code change.",
+          "blockKind": "loop",
           "blockedJob": "dev"
         },
         "ticket": {
@@ -871,6 +877,7 @@
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "blockReason": "Loop: same command, same failure, 3 times, with no code change.",
+          "blockKind": "loop",
           "blockedJob": "dev"
         },
         "effects": [],
