@@ -21,6 +21,14 @@ describe('parseAgentOutput', () => {
     expect(parseAgentOutput({ ...done, extra: 1 }).ok).toBe(false);
     expect(parseAgentOutput('texte libre').ok).toBe(false);
   });
+
+  it("takes intake's assessment, with its questions when the ticket is not complete (ORC-206)", () => {
+    const intake = { size: 'm', risk: 'high', complete: true, missing: [], screen: true } as const;
+    expect(parseAgentOutput({ ...done, intake }).ok).toBe(true);
+    expect(parseAgentOutput({ ...done, intake: { ...intake, complete: false } })).toEqual({ ok: false, error: expect.stringContaining('intake.missing') });
+    expect(parseAgentOutput({ ...done, intake: { ...intake, complete: false, missing: ['CSV or XLSX?'] } }).ok).toBe(true);
+    expect(parseAgentOutput({ ...done, intake: { ...intake, risk: 'none' } })).toEqual({ ok: false, error: expect.stringContaining('intake.risk') });
+  });
 });
 
 describe('attemptOutcome', () => {

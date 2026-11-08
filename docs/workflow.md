@@ -136,7 +136,7 @@ A job describes **how** to launch a Claude Code run. Fields:
 | `verify` | list of commands | `[]` | Run after a successful run (see below). |
 | `repo_checks` | boolean | `false` | The run goes through `verify` even without commands: the commands from `.factory/config.yml` read on the base branch, forbidden paths, the freeze. Merging then requires a green `verify` on the reviewed commit. True in the pack for `dev`, what inherits from it, and `review`. **Only such a job publishes** (ORC-125): a job that writes code without it stays in its worktree, the agent having no way to push. |
 | `verify_failure` | `block` | — | A failing `verify` blocks the ticket instead of relaunching the job, which did not write the commit: `review`, on a human push. |
-| `pickup` | boolean | `false` | If `true`, applies `tracker.pickup.checks` before the ticket's first run (when no Claude session exists yet). |
+| `pickup` | boolean | `false` | If `true`, applies `tracker.pickup.checks` before the ticket's first run (when no Claude session exists yet), unless `intake` already assessed the ticket: its guard read them then (ORC-206, [preset](preset.md#intake-step-and-the-guard-before-in-progress-orc-206)). |
 | `structured_output` | boolean | absent | **Provisional** (ORC-289, until ORC-191/ORC-192 make every agent call `submit_result`): if `true`, a run in the `dev` queue that ends without valid output is a failure. When absent, it stays a success. In the pack, `true` for `dev` only, the `build` step (ORC-136). |
 | `limits` | `{ turns, duration, usd }`, each optional | `limits.per_run` | Replaces the per-run limits for this job. |
 | `on_start` | `{ move: <logical state> }` | `{}` | Moves the ticket when the run starts (if it is not already there). |
@@ -443,6 +443,17 @@ tracker:
 ```
 
 The list replaces the pack's: repeat the checks you want to keep.
+
+### Starting with `intake`
+
+```yaml
+version: 1
+on:
+  ticket.delegated:
+    - { when: "state in [todo, dev] && !blocked", run: intake }
+```
+
+Delegation then runs `intake` first: size and risk are recorded, and an incomplete ticket is blocked with its questions instead of starting `dev`. The pickup checks become inputs of that guard ([preset](preset.md#intake-step-and-the-guard-before-in-progress-orc-206)).
 
 ## 7. Common errors and validation
 
