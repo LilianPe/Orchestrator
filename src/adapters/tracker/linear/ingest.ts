@@ -70,8 +70,8 @@ export function createLinearIngest(d: IngestDeps) {
   // messages are classified side by side; those of other issues wait for none of it.
   const mapped = new Map<string, Promise<unknown>>();
   const written = new Map<string, Promise<unknown>>();
-  // The kept deliveries this process is delivering: a redelivery of one of them changes nothing.
-  const active = new Set<string>();
+  // The kept deliveries this process is delivering, or keeping (how many at once): a redelivery of one changes nothing.
+  const active = new Map<string, number>();
   const failures = new Map<string, number>();
   let classifying = 0;
   // Resumed deliveries wait for a slot rather than take the fallback rule: at most as many as rows kept.
@@ -80,12 +80,16 @@ export function createLinearIngest(d: IngestDeps) {
   // The retries waiting: `close` cuts them short.
   const sleepers = new Set<() => void>();
 
-  const failed = (reason: string): undefined => {
+  /** Logs `message` at most every 10 min for the same `reason`: a fault that lasts shows without flooding. */
+  const once = (reason: string, message: string) => {
     const now = Date.now();
     if (now - (failures.get(reason) ?? -Infinity) >= FAILURE_LOG_MS) {
       failures.set(reason, now);
-      d.log(`message classifier: no verdict (${reason}), the fallback rule classifies; this reason is logged at most every 10 min`);
+      d.log(`${message}; this reason is logged at most every 10 min`);
     }
+  };
+  const failed = (reason: string): undefined => {
+    once(reason, `message classifier: no verdict (${reason}), the fallback rule classifies`);
     return undefined;
   };
 
@@ -144,7 +148,13 @@ export function createLinearIngest(d: IngestDeps) {
   /** The model's verdict on an event's message, if it has one and the inbox does not hold it yet. */
   async function classified(e: FactoryEvent, key: string, since: number, resumed: boolean): Promise<FactoryEvent> {
     const text = messageToClassify(e);
-    if (text === undefined || !d.classify || (await tried(key, since, 'inbox lookup', () => d.deliveries!.inboxHas(e.id)))) return e;
+    if (text === undefined || !d.classify) return e;
+    // Only spares a model call for an event the inbox holds already: when the lookup fails, the event is classified anyway.
+    const held = await d.deliveries!.inboxHas(e.id).catch((err: Error) => {
+      once('inbox lookup', `webhook ${key}: inbox lookup failed, classified anyway: ${err.message}`);
+      return false;
+    });
+    if (held) return e;
     if (!(await slot(resumed))) return failed(`${MAX_CLASSIFICATIONS} classifications already running`) ?? e;
     try {
       return withVerdict(e, await d.classify(text).catch((err: Error) => failed(err.message)));
@@ -170,15 +180,21 @@ export function createLinearIngest(d: IngestDeps) {
    * after the issue's earlier writes, then let go. A webhook with no message waits for the earlier writes before it is
    * mapped, as when it is written before its answer: what it reads (labels known, echoes) is theirs.
    */
-  function deliver(key: string, { delivery: { at }, body }: { delivery: Delivery; body: any }, resumed = false): Promise<void> {
+  function deliver(key: string, { delivery: { at }, body }: { delivery: Delivery; body: any }, o: { resumed?: boolean; kept?: Promise<boolean> } = {}): Promise<void> {
     const issue = issueKeyOf(body) ?? '';
     const message = mayCarryMessage(body);
     // The events' ids: a reply and the comment Linear writes for it share them, and the inbox keeps the first.
     const eventKey = deliveryKey(body);
-    active.add(key);
-    const map = after(message ? mapped.get(issue) : written.get(issue)).then(() => tried(key, at, 'mapping', () => inTurn(() => mapLinearWebhook(body, eventKey, d.ctx, { at }))));
-    const events = map.then((list) => Promise.all(list.map((e) => classified(e, key, at, resumed))));
+    // Registered at once, before the row is even kept: a later webhook of the issue goes behind it. Not kept (kept
+    // already, or the insert failed): nothing to do, and the chain lets the next one go.
+    active.set(key, (active.get(key) ?? 0) + 1);
+    const map = after(message ? mapped.get(issue) : written.get(issue)).then(async () => {
+      if (!(await (o.kept ?? Promise.resolve(true)))) return undefined;
+      return tried(key, at, 'mapping', () => inTurn(() => mapLinearWebhook(body, eventKey, d.ctx, { at })));
+    });
+    const events = map.then((list) => list && Promise.all(list.map((e) => classified(e, key, at, !!o.resumed))));
     const done = Promise.all([events, after(written.get(issue))]).then(async ([list]) => {
+      if (!list) return;
       await tried(key, at, 'inbox write', () => inTurn(() => write(body, list)));
       await tried(key, at, 'kept row removal', () => d.deliveries!.deleteDelivery(key));
     });
@@ -189,12 +205,14 @@ export function createLinearIngest(d: IngestDeps) {
         // Closing: left kept, the next start writes it.
         if (!closed) await aside(key, `retried for ${Math.round(retry.horizonMs / 60_000)} min: ${err.message}`);
       })
-      .finally(() => active.delete(key));
+      .finally(() => {
+        const n = (active.get(key) ?? 1) - 1;
+        if (n) active.set(key, n);
+        else active.delete(key);
+      });
   }
 
   const ingest = async (raw: string, headers: Record<string, string | undefined>): Promise<{ status: number }> => {
-    // Stopping: Linear sends it again, to the next start.
-    if (closed) return { status: 503 };
     if (!verifyLinearSignature(raw, headers['linear-signature'], d.secret())) return { status: 401 };
     let body: any;
     try {
@@ -207,20 +225,33 @@ export function createLinearIngest(d: IngestDeps) {
     if (!isFresh(body, at)) return { status: 401 };
     const key = deliveryKey(body);
     const issue = issueKeyOf(body) ?? '';
+    if (closed) {
+      // Stopping: kept for the next start, which writes it; a relay could not send it again. Without a store, 503.
+      if (!d.deliveries) return { status: 503 };
+      try {
+        await d.deliveries.receiveDelivery(`${body.type}:${key}`, JSON.stringify({ raw, at } satisfies Delivery));
+      } catch (err) {
+        d.log(`webhook not kept: ${(err as Error).message}`);
+        return { status: 500 };
+      }
+      return { status: 200 };
+    }
     // Kept, then answered: classified and written after, behind the ticket's earlier webhooks. One that waits behind
     // such a webhook goes the same way, so that the answer never waits on the model.
     if (d.classify && d.deliveries && (mayCarryMessage(body) || written.has(issue))) {
       // Kept by its kind as well: a reply and the comment Linear writes for it share `key`, and neither may drop the other.
       const row = `${body.type}:${key}`;
+      const kept = d.deliveries.receiveDelivery(row, JSON.stringify({ raw, at } satisfies Delivery));
+      void deliver(row, { delivery: { raw, at }, body }, { kept: kept.catch(() => false) });
       try {
-        if (await d.deliveries.receiveDelivery(row, JSON.stringify({ raw, at } satisfies Delivery))) void deliver(row, { delivery: { raw, at }, body });
         // Kept already and no longer being delivered here: delivered again, timed at its first arrival.
-        else if (!active.has(row)) {
-          const kept = await d.deliveries.getMeta(`delivery:${row}`);
-          if (kept !== undefined) {
+        // This request's own `deliver` counts once: another keeps or delivers it when the count is above that.
+        if (!(await kept) && (active.get(row) ?? 0) <= 1) {
+          const value = await d.deliveries.getMeta(`delivery:${row}`);
+          if (value !== undefined) {
             let read: { delivery: Delivery; body: any } | undefined;
             try {
-              read = readDelivery(kept);
+              read = readDelivery(value);
             } catch (err) {
               await aside(row, `unreadable: ${(err as Error).message}`);
             }
@@ -260,7 +291,7 @@ export function createLinearIngest(d: IngestDeps) {
           await aside(key, `unreadable: ${(err as Error).message}`);
           continue;
         }
-        void deliver(key, row, true);
+        void deliver(key, row, { resumed: true });
       }
       return kept.length;
     },
@@ -268,7 +299,10 @@ export function createLinearIngest(d: IngestDeps) {
     async settled(): Promise<void> {
       while (written.size) await Promise.allSettled([...written.values()]);
     },
-    /** Stops taking webhooks (503: Linear sends them again) and cuts the retries short: what is not written stays kept. */
+    /**
+     * Stopping: a webhook still received is kept for the next start, not delivered (503 only without a store), and the
+     * retries stop short: what is not written stays kept. The relay is closed before, so that nothing is refused.
+     */
     close(): void {
       closed = true;
       for (const done of [...sleepers]) done();

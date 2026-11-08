@@ -232,6 +232,12 @@ describe('mapLinearWebhook', () => {
       expect(m.asked).toEqual([text]);
     });
 
+    it.each(['merci, parfait', 'ok'])('%j, which asks for no change, is a question when the model says so', async (text) => {
+      const m = model('question');
+      expect((await m.reply(text))[0]).toMatchObject({ payload: { body: text, kind: 'question' } });
+      expect(m.asked).toEqual([text]);
+    });
+
     it('an instruction with a question mark is one when the model says so', async () => {
       const m = model('instruction');
       expect((await m.reply('corrige le tri, ok ?'))[0]).toMatchObject({ payload: { kind: 'instruction' } });
@@ -686,19 +692,22 @@ describe('ingest', () => {
       expect(await store.pendingDeliveries()).toEqual([]);
     });
 
-    it('a blip of the store on the inbox lookup or the kept row removal strands nothing', async () => {
+    it('a failing inbox lookup is skipped, logged once, and never sets a delivery aside; a blip on the kept row removal strands nothing', async () => {
       const inner = new SqliteStore(':memory:');
       let blips = 2;
-      const blip = <T>(f: () => Promise<T>) => () => (blips-- > 0 ? Promise.reject(new Error('connection reset')) : f());
       const store = Object.assign(Object.create(inner) as SqliteStore, {
-        inboxHas: (id: string) => blip(() => inner.inboxHas(id))(),
-        deleteDelivery: (key: string) => blip(() => inner.deleteDelivery(key))(),
+        inboxHas: async () => Promise.reject(new Error('connection reset')),
+        deleteDelivery: async (key: string) => (blips-- > 0 ? Promise.reject(new Error('connection reset')) : inner.deleteDelivery(key)),
       });
-      const { send, ingest, accepted, logs } = setup(async () => 'instruction', { store });
+      const kinds: unknown[] = [];
+      const { send, ingest, logs } = setup(async () => 'question', { store, accept: async (e) => void kinds.push((e.payload as { kind?: string }).kind) });
       await send(reply('a1', 'corrige'));
+      await send(reply('a2', 'corrige encore'));
       await ingest.settled();
-      expect(accepted).toEqual(['REL-1 session.prompted']);
-      expect(logs.some((l) => l.includes('inbox lookup failed'))).toBe(true);
+      // Classified by the model all the same, both written.
+      expect(kinds).toEqual(['question', 'question']);
+      expect(logs.filter((l) => l.includes('inbox lookup failed'))).toHaveLength(1);
+      expect(logs.some((l) => l.startsWith('ERROR'))).toBe(false);
       expect(await inner.pendingDeliveries()).toEqual([]);
     });
 
@@ -857,7 +866,7 @@ describe('ingest', () => {
       expect(kinds).toEqual(Array(6).fill('instruction'));
     });
 
-    it('once closed, a webhook gets 503 and the retries stop short, what is not written left kept', async () => {
+    it('once closed, a webhook still received is kept for the next start, not refused, and the retries stop short', async () => {
       const { send, ingest, store } = setup(async () => 'instruction', {
         accept: async () => Promise.reject(new Error('disk')),
         retry: { baseMs: 10_000, maxMs: 10_000, horizonMs: 3_600_000 },
@@ -868,8 +877,50 @@ describe('ingest', () => {
       const t = Date.now();
       await ingest.settled();
       expect(Date.now() - t).toBeLessThan(1_000);
-      expect(await store.pendingDeliveries()).toHaveLength(1);
-      expect(await send(reply('a2', 'trop tard'))).toEqual({ status: 503 });
+      // A relay cannot send it again: kept, not delivered, for the next start; an issue's webhook too.
+      expect(await send(reply('a2', 'trop tard'))).toEqual({ status: 200 });
+      expect(await send(moved('u2', 'REL-2'))).toEqual({ status: 200 });
+      await ingest.settled();
+      expect((await store.pendingDeliveries()).map((r) => r.key)).toEqual(['AgentSessionEvent:activity:a1', 'AgentSessionEvent:activity:a2', expect.stringMatching(/^Issue:issue:u2:/)]);
+      // Without a store, Linear is asked to send it again.
+      const bare = createLinearIngest({ secret: () => 'sec', ctx: ctx(), accept: async () => true, log: () => {} });
+      bare.close();
+      const { raw, sig } = reply('a3', 'trop tard');
+      expect(await bare(raw, { 'linear-signature': sig })).toEqual({ status: 503 });
+    });
+
+    it('a later webhook of the issue never overtakes one whose row is still being kept', async () => {
+      const inner = new SqliteStore(':memory:');
+      let releaseInsert!: () => void;
+      const slowInsert = new Promise<void>((r) => (releaseInsert = r));
+      const store = Object.assign(Object.create(inner) as SqliteStore, {
+        receiveDelivery: async (key: string, value: string) => {
+          if (key.endsWith('activity:a1')) await slowInsert;
+          return inner.receiveDelivery(key, value);
+        },
+      });
+      const { send, ingest, accepted } = setup(async () => 'instruction', { store });
+      const first = send(reply('a1', 'premier'));
+      // The issue's status change comes while the reply's row is still being kept: it must not take the direct path.
+      const second = send(moved('u1', 'REL-1'));
+      await new Promise((r) => setTimeout(r, 50));
+      expect(accepted).toEqual([]);
+      releaseInsert();
+      await Promise.all([first, second]);
+      await ingest.settled();
+      expect(accepted).toEqual(['REL-1 session.prompted', 'REL-1 status.changed', 'REL-1 label.changed']);
+    });
+
+    it('a failed insert lets the next webhook of the issue through, and answers 500', async () => {
+      const inner = new SqliteStore(':memory:');
+      const store = Object.assign(Object.create(inner) as SqliteStore, {
+        receiveDelivery: async (key: string, value: string) => (key.endsWith('activity:a1') ? Promise.reject(new Error('disk')) : inner.receiveDelivery(key, value)),
+      });
+      const { send, ingest, accepted } = setup(async () => 'instruction', { store });
+      expect(await send(reply('a1', 'premier'))).toEqual({ status: 500 });
+      expect(await send(reply('a2', 'second'))).toEqual({ status: 200 });
+      await ingest.settled();
+      expect(accepted).toEqual(['REL-1 session.prompted']);
     });
 
     it("takes the event's time at the webhook's arrival, before the model's wait", async () => {

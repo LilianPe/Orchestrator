@@ -402,8 +402,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       clearInterval(purgeInterval);
       // No webhook taken from here on (503, Linear sends it again), then those answered are written or left kept for
       // the next start, before anything closes the store (ORC-336).
-      ingest.close();
       relay?.close();
+      ingest.close();
       await ingest.settled();
       // A pass under way finishes first, so it never reads or writes a closed store.
       await Promise.all([timers.stop(), poller.stop(), reconciler.stop()]);
