@@ -166,7 +166,8 @@ function redFailed(out: Decision, at: { event: FactoryEvent<'verify.failed'>; ti
 function freeze(out: Decision, ticket: TicketState | undefined, frozen: FrozenTests | undefined): void {
   if (!frozen) return;
   const old = ticket?.frozenTests;
-  out.events.push({ type: 'ticket.patched', patch: { frozenTests: old ? { sha: old.sha, files: { ...frozen.files, ...old.files } } : frozen } });
+  // The old freeze keeps its rules (ORC-342): its harness is the one it was made with.
+  out.events.push({ type: 'ticket.patched', patch: { frozenTests: old ? { ...old, files: { ...frozen.files, ...old.files } } : frozen } });
 }
 
 /** A run in the ticket's worktree goes through `factory/tests-gelés` once frozen (ORC-131), verify commands or not. */
