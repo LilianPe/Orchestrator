@@ -3,7 +3,7 @@ import type { JobSpec, Rule, Workflow } from '../config/workflow-schema.js';
 import { allowed, DEFAULT_MATRIX, refusalMessage, type AuthzAction, type AuthzMatrix, type Channel } from './authz.js';
 import { evalCondition } from './conditions.js';
 import { deadLetterReason, deadLetterTried, heldMessage, isRefusedNotice, liftDeadLetterBlock, REPAIR_LABELS, repairedEvent } from './dead-letter.js';
-import type { AgentOutput } from './agent-output.js';
+import type { AgentOutput, ConflictCase } from './agent-output.js';
 import { blockFacts, type BlockFacts } from './block-comment.js';
 import { AGENT_QUESTION, INCOMPLETE, NO_ASSESSMENT, STOPPED, type BlockKind } from './block-cause.js';
 import type { Decision, Effect } from './decision.js';
@@ -288,8 +288,21 @@ Reply in this thread to relaunch.`, tried: triedFailures(failures) });
 /** The preset step of a job, by its own name when it is out of the preset. */
 export const stepOf = (workflow: Workflow, job: string): string => workflow.jobs[job]?.step ?? job;
 
-/** The check after a job: the one a fix goes through has its own step in the preset. */
-const checkOf = (workflow: Workflow, job: string): string => (stepOf(workflow, job) === 'fix' ? 'verify_fix' : 'verify');
+/** The step of the preset that rebases a ticket's branch on the default branch (ORC-146). */
+const REBASE = 'rebase';
+
+/** The check after a job: the ones a fix and a rebase go through have their own steps in the preset. */
+const checkOf = (workflow: Workflow, job: string): string => {
+  const step = stepOf(workflow, job);
+  return step === 'fix' || step === REBASE ? `verify_${step}` : 'verify';
+};
+
+/** What each conflict the rebase step stops on says in its block (ORC-146). */
+const CONFLICTS: Record<ConflictCase, string> = {
+  logic: 'the two sides contradict each other',
+  migrations: 'two migrations change the same schema',
+  scope: "the resolution goes beyond the ticket's scope",
+};
 
 const triedFailures = (failures: VerifyFailure[]): string[] => failures.map((f) => `\`${f.command}\` (code ${f.exitCode ?? 'timeout'})`);
 
@@ -312,8 +325,16 @@ function attemptDecision(p: EventPayloads['run.finished'], job: JobSpec): RunOut
       const reason = `The run ${job.name} was interrupted: infrastructure failure, not the agent's fault.`;
       return { kind: 'infra', reason, body: `${reason} Reply in this thread and I will resume.`, tried: [`Started the run ${job.name}: its process stopped without a result.`] };
     }
-    case 'needs_input':
+    case 'needs_input': {
+      // A rebase the agent stops on one of the three conflicts a human decides (ORC-146): a block of its own kind.
+      // Another step that reports one asks a question: the conflict is the rebase step's, started by its event.
+      const conflict = p.output?.reason === 'conflict' && job.step === REBASE ? p.output.conflict : undefined;
+      if (conflict) {
+        const reason = `Conflict with the default branch left to a human: ${CONFLICTS[conflict]}.`;
+        return { kind: 'conflict', reason, body: `${reason}\n${question}\n\nReply in this thread and I will resume.`, tried: [`Started the run ${job.name}: the agent stops the rebase (\`${conflict}\`).`], question: question || undefined };
+      }
       return { kind: 'question', reason: "Waiting for an answer to the agent's question.", body: `${question}\n\nReply in this thread and I will resume.`, tried: [`Started the run ${job.name}: the agent asks for a clarification.`], question: question || undefined };
+    }
     case 'spec_impossible':
       return {
         kind: 'contested',
@@ -832,12 +853,13 @@ function applyRule(out: Decision, rule: Rule, event: FactoryEvent, ticket: Ticke
 }
 
 /**
- * A rule that answers red CI with a run, bounded by `limits.ciFixAttempts` (I5, ORC-270): each run it
- * starts is counted, and once the count reaches the bound the next red CI blocks the ticket instead of
- * applying the rule. A green CI, another PR or a human relaunch (`unblock`) resets the count. A run the rule would
- * not start anyway (merged PR, I8 b) is neither counted nor blocked.
+ * A rule that answers red CI or a conflict with the default branch with a run, bounded by `limits.ciFixAttempts` (I5,
+ * ORC-270): red CI's `fix-ci` and the rebase step (ORC-146) count on this one counter of the review and CI loop. Each run
+ * it starts is counted, and once the count reaches the bound the next red CI or conflict blocks the ticket instead of
+ * applying the rule. A green CI, another PR or a human relaunch (`unblock`) resets the count. A run the rule would not
+ * start anyway (merged PR, I8 b) is neither counted nor blocked.
  */
-function fixRedCi(out: Decision, rule: Rule, event: FactoryEvent<'pr.checks_failed'>, ticket: TicketState | undefined, workflow: Workflow): Decision {
+function reviewCiLoop(out: Decision, rule: Rule, event: FactoryEvent<'pr.checks_failed' | 'pr.conflicted'>, ticket: TicketState | undefined, workflow: Workflow): Decision {
   const job = workflow.jobs[rule.run!]!;
   if (refusal(event, ticket, job)) return applyRule(out, rule, event, ticket, workflow);
   const used = ticket?.ciFixAttempts ?? 0;
@@ -847,19 +869,36 @@ function fixRedCi(out: Decision, rule: Rule, event: FactoryEvent<'pr.checks_fail
     out.events.push({ type: 'ticket.patched', patch: { ciFixAttempts: used + 1 } });
     return out;
   }
-  out.trace.push(`red CI: ${job.name} bound ${bound} reached`);
+  const conflict = event.type === 'pr.conflicted';
+  out.trace.push(`${conflict ? 'conflict' : 'red CI'}: ${job.name} bound ${bound} reached`);
   // Already blocked (by a rule without !blocked): the ticket keeps its reason and gets no second notice.
   if (ticket?.blocked) return out;
+  const past = event.type === 'pr.conflicted' ? conflictBound(event, bound) : redCiBound(event, job, bound);
+  return block(out, workflow, { ...past, job: job.name, attempts: bound });
+}
+
+/** Red CI past the bound: `ci_bound`, which a green CI lifts. */
+function redCiBound(event: FactoryEvent<'pr.checks_failed'>, job: JobSpec, bound: number): RunBlock {
   const reason = `CI still failing after ${bound} attempts of ${job.name}.`;
   const failures = event.payload.failures.map((f) => `- \`${f}\``);
-  return block(out, workflow, {
+  return {
     kind: 'ci_bound',
     reason,
     body: [reason, ...failures, 'Reply in this thread to relaunch.'].join('\n'),
-    job: job.name,
-    attempts: bound,
     tried: event.payload.failures.length ? event.payload.failures.map((f) => `\`${f}\``) : [`${bound} run(s) of ${job.name}.`],
-  });
+  };
+}
+
+/** A conflict past the bound (ORC-146): a block of the conflict's own kind, which a green CI says nothing of. */
+function conflictBound(event: FactoryEvent<'pr.conflicted'>, bound: number): RunBlock {
+  const { number, baseRef, headSha } = event.payload;
+  const reason = `Conflict with ${baseRef}, and the review and CI loop has used its ${bound} runs: I am not starting a rebase.`;
+  return {
+    kind: 'conflict',
+    reason,
+    body: `${reason}\nReply in this thread to relaunch.`,
+    tried: [`PR #${number} conflicts with ${baseRef} at ${headSha.slice(0, 12)}.`, `${bound} run(s) of the review and CI loop (fix-ci, rebase).`],
+  };
 }
 
 /**
@@ -1341,7 +1380,9 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       if (toPublish) {
         const { runId, output, commands, visualProof } = event.payload;
         out.events.push({ type: 'verify.started', runId });
-        out.effects.push({ kind: 'publish', runId, job: job.name, sha: toPublish, ...(output ? { output } : {}), ...(commands ? { commands } : {}), ...(visualProof ? { visualProof } : {}) });
+        // A rebase rewrites the branch (ORC-146): its commit may replace the head the factory published, and that head only.
+        const rewrite = job.step === REBASE ? { rewrite: true as const } : {};
+        out.effects.push({ kind: 'publish', runId, job: job.name, sha: toPublish, ...(output ? { output } : {}), ...(commands ? { commands } : {}), ...rewrite, ...(visualProof ? { visualProof } : {}) });
         return out;
       }
       return success(out, { event, ticket, workflow }, job, event.payload.runId, event.payload.output);
@@ -1562,10 +1603,21 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
     case 'pr.merge_refused':
       return mergeRefused(out, event, ticket, workflow);
     case 'pr.reviewed':
-    case 'pr.conflicted':
-      // In the inbox, but no reaction yet (ORC-190 for reviews, ORC-146 for conflicts): no rule applies to them.
+      // In the inbox, but no reaction yet (ORC-190): no rule applies to it.
       out.trace.push(`${event.type}: no reaction yet`);
       return out;
+    case 'pr.conflicted':
+      // The open PR of the ticket only is rebased (ORC-146): another PR's conflict, or a merged or closed one's, is recorded.
+      if (ticket?.prNumber !== event.payload.number || ticket.prState !== 'OPEN') {
+        out.trace.push(`pr.conflicted: PR #${event.payload.number} is not the open PR of the ticket, nothing started`);
+        return out;
+      }
+      // A rebase already running or waiting takes the branch onto the base as it is then: a new head still in conflict asks no second one.
+      if ([ticket.activeJob, ticket.pendingJob?.job].some((j) => j && stepOf(workflow, j) === REBASE)) {
+        out.trace.push('pr.conflicted: a rebase is already running or waiting, nothing started');
+        return out;
+      }
+      break;
     case 'default_branch.pushed':
     case 'ci.run_completed':
       // Facts for the measures (ORC-278): a revert of the ticket's PR, a CI run's duration. Nothing to decide.
@@ -1649,6 +1701,6 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
   if (rule.run && (event.type === 'label.changed' || event.type === 'status.changed') && !authorize(out, event, ticket, ruleAction(ticket), 'linear', matrix)) {
     return out;
   }
-  if (event.type === 'pr.checks_failed' && rule.run) return fixRedCi(out, rule, event, ticket, workflow);
+  if ((event.type === 'pr.checks_failed' || event.type === 'pr.conflicted') && rule.run) return reviewCiLoop(out, rule, event, ticket, workflow);
   return applyRule(out, rule, event, ticket, workflow);
 }

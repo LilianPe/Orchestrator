@@ -20,7 +20,7 @@ export class WorkflowError extends Error {}
 
 const EVENT_TYPES: readonly string[] = [
   'ticket.delegated', 'session.mentioned', 'session.prompted', 'session.stopped', 'status.changed', 'label.changed',
-  'ticket.commented', 'push.human', 'command', 'pr.opened', 'pr.checks_passed', 'pr.checks_failed', 'pr.merged', 'pr.closed', 'run.finished',
+  'ticket.commented', 'push.human', 'command', 'pr.opened', 'pr.checks_passed', 'pr.checks_failed', 'pr.conflicted', 'pr.merged', 'pr.closed', 'run.finished',
   'verify.passed', 'verify.failed', 'timer.fired', 'control.pause', 'control.resume', 'control.stop',
 ];
 

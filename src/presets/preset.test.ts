@@ -76,6 +76,17 @@ describe('factory/default', () => {
     expect(step(factoryDefault, 'verify_fix')).toMatchObject({ next: 'publish', onFailure: { goto: 'fix', counter: 'verify' } });
   });
 
+  it('sends a conflict with the default branch to a rebase step, on the review and CI counter, then through verify and publish (ORC-146)', () => {
+    expect(factoryDefault.conflict).toEqual({ goto: 'rebase', counter: 'review_ci' });
+    expect(step(factoryDefault, 'rebase')).toMatchObject({ type: 'agent_step', writes: 'code', skill: 'factory:rebase', model: 'claude-sonnet-5-5', effort: 'medium', maxTurns: 60, network: 'limited', next: 'verify_rebase' });
+    expect(step(factoryDefault, 'verify_rebase')).toMatchObject({ type: 'verify', mode: 'full', network: 'none', next: 'publish', onFailure: { goto: 'rebase', counter: 'verify' } });
+  });
+
+  it('refuses a conflict edge to an unknown step or on an undeclared counter', () => {
+    expect(violations({ ...factoryDefault, conflict: { goto: 'nowhere', counter: 'review_ci' } })).toContain('conflict: goto nowhere is not a step');
+    expect(violations({ ...factoryDefault, conflict: { goto: 'rebase', counter: 'rebases' } })).toContain('conflict: counter rebases is not declared');
+  });
+
   it('sets model, effort and turns per step', () => {
     expect(step(factoryDefault, 'build')).toMatchObject({ model: 'claude-sonnet-5-5', effort: 'medium', maxTurns: 150 });
     expect(step(factoryDefault, 'fix')).toMatchObject({ model: 'claude-sonnet-5-5', effort: 'medium', maxTurns: 60 });
@@ -87,7 +98,7 @@ describe('factory/default', () => {
 
   it('only references skills the standard pack ships', () => {
     const skills = factoryDefault.steps.flatMap((s) => (s.type === 'fix' ? Object.values(s.skills) : 'skill' in s && s.skill ? [s.skill] : []));
-    expect(skills).toEqual(expect.arrayContaining(['factory:dev', 'factory:fix-ci', 'factory:feedback', 'factory:review']));
+    expect(skills).toEqual(expect.arrayContaining(['factory:dev', 'factory:fix-ci', 'factory:feedback', 'factory:review', 'factory:rebase']));
     for (const skill of skills) {
       const [plugin, name] = skill.split(':');
       expect(plugin).toBe('factory');

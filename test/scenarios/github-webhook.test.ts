@@ -144,9 +144,11 @@ describe('GitHub webhooks', () => {
     expect((await events(h, 'pr.checks_passed')).map((e) => e.id)).toEqual(['pr:REL-1:3:checks:pass:head2']);
   });
 
-  it('writes reviews and conflicts to the inbox without reacting to them yet (ORC-190, ORC-146)', async () => {
+  it('writes reviews to the inbox without reacting to them yet, and a conflict starts the rebase step (ORC-190, ORC-146)', async () => {
     const h = createHarness();
     await delegated(h);
+    const rebased = { status: 'done' as const, summary: 'Rebased on main.', tests_added: [], why: '', assumptions: [], risks: [], untested: [], review_hints: [] };
+    h.runner.enqueue({ output: rebased });
     const review = {
       ...pullRequestBody('submitted'),
       action: 'submitted',
@@ -158,7 +160,7 @@ describe('GitHub webhooks', () => {
       { id: 'pr:REL-1:3:review:11', taint: 'untrusted', payload: { kind: 'review', author: 'lilian', body: 'Renomme la fonction', state: 'changes_requested' } },
     ]);
     expect(await events(h, 'pr.conflicted')).toMatchObject([{ id: 'pr:REL-1:3:conflicted:head1:base1', payload: { headSha: 'head1', baseRef: 'main' } }]);
-    expect(h.runner.requests).toHaveLength(1);
+    expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:dev', '/factory:rebase']);
     expect(await h.ticket()).toMatchObject({ logical: 'human_review', blocked: false, humanInbox: [] });
   });
 

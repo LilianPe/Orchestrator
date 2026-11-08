@@ -112,7 +112,7 @@ export interface Limits {
   questionSessions: number;
   perRun: RunLimits;
   verifyAttempts: number;
-  /** Runs red CI may start before the next red CI blocks the ticket (I5, ORC-270); 0 blocks at the first. */
+  /** Runs red CI and conflicts may start, together, before the next one blocks the ticket (I5, ORC-270, ORC-146); 0 blocks at the first. */
   ciFixAttempts: number;
   /**
    * Same failed commands on an unchanged worktree, N times in a row: blocked, cause « boucle » (ORC-187).
