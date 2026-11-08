@@ -1,24 +1,22 @@
 import { LEASE_MS, type EffectOutcome, type OutboxRow, type Store } from '../store/types.js';
+import { attemptsFor, backoff, TRANSIENT_WINDOW_MS, type RetryPolicy } from './transient.js';
 
 /** Lease of a claimed outbox row, renewed every third of it while its effect runs (ORC-129: 60 s, renewed every 20 s). */
 export const EFFECT_LEASE_MS = LEASE_MS;
 
-/** How an effect that throws is tried again (ORC-150). */
-export interface EffectRetry {
-  /** Attempts in all, the first one included: past the last one, the effect is dead. */
-  attempts: number;
-  /** Delay before the second attempt; doubled for each next one. */
-  baseMs: number;
-  /** Ceiling of the delay. */
-  capMs: number;
-}
+/** How an effect that throws is tried again (ORC-150, ORC-343): doubled from `baseMs` up to `capMs`. */
+export type EffectRetry = RetryPolicy;
 
-/** ORC-129: backoff `1 s × 2^(attempt − 1)` capped at 5 min, dead after 8 attempts. */
-export const EFFECT_RETRY: EffectRetry = { attempts: 8, baseMs: 1_000, capMs: 300_000 };
+/**
+ * ORC-129: backoff `1 s × 2^(attempt − 1)` capped at 5 min. Dead after 8 attempts (about 2 min) when the failure is
+ * permanent; after 15 (about 33 min, `TRANSIENT_WINDOW_MS`) when it is transient (ORC-343): GitHub or Linear back
+ * within half an hour, the effect goes through and its ticket is not blocked.
+ */
+export const EFFECT_RETRY: EffectRetry = { attempts: 8, transientWindowMs: TRANSIENT_WINDOW_MS, baseMs: 1_000, capMs: 300_000 };
 
 /** The delay before the attempt after `attempt` (1 for the first one). */
 export function effectBackoff(attempt: number, retry: EffectRetry = EFFECT_RETRY): number {
-  return Math.min(retry.capMs, retry.baseMs * 2 ** (attempt - 1));
+  return backoff(retry, attempt);
 }
 
 export interface OutboxExecutorDeps {
@@ -44,7 +42,8 @@ export interface OutboxExecutorDeps {
  * - **done**: the row is `done` and its result `effect:<id>` (`effect.done`) enters the inbox in
  *   the same transaction, to be decided by the worker like any event;
  * - **failed, attempts left**: the row goes back to `pending` with its error, claimable again
- *   after the backoff (`effectBackoff`); the ticket's later rows wait behind it;
+ *   after the backoff (`effectBackoff`); the ticket's later rows wait behind it. A transient failure
+ *   (`isTransient`: GitHub, Linear or the database down) has more attempts, to wait out an outage (ORC-343);
  * - **failed, last attempt**: the row is `dead`, the later rows of its decision are skipped, the
  *   timers it armed are deleted, and `effect:<id>` (`effect.failed`) enters the inbox: its
  *   decision blocks the ticket. All of it in one transaction: nothing of it is kept in memory.
@@ -110,13 +109,14 @@ export class OutboxExecutor {
       return 'lost';
     }
     const what = `effect ${row.id} (${row.effect.kind})`;
-    if (row.attempts < this.retry.attempts) {
+    const attempts = attemptsFor(this.retry, failure);
+    if (row.attempts < attempts) {
       const delay = effectBackoff(row.attempts, this.retry);
       if (!(await store.retryEffect(row.id, lease, failure.message, delay))) {
         this.d.log('warn', `${what} failed (${failure.message}), but its lease went to another worker: not settled here`);
         return 'lost';
       }
-      this.d.log('warn', `${what}: ${failure.message} (attempt ${row.attempts} of ${this.retry.attempts}, retried in ${delay} ms)`);
+      this.d.log('warn', `${what}: ${failure.message} (attempt ${row.attempts} of ${attempts}, retried in ${delay} ms)`);
       this.d.retryIn(delay);
       return 'retry';
     }
