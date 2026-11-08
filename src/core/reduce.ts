@@ -220,6 +220,15 @@ function movesOn(state: TicketState, next: TicketState, event: FactoryEvent | In
   }
 }
 
+/**
+ * Whether `event` ends the wait on blockers (ORC-363): a block (a human's stop), an undelegation, or a dev run started all the
+ * same. A move or a delegation again do not: the blockers still hold, and the wait holds back the run they would start.
+ */
+function endsWait(event: FactoryEvent | InternalEvent): boolean {
+  if (event.type === 'run.started') return event.queue === 'dev';
+  return event.type === 'ticket.blocked' || event.type === 'ticket.undelegated';
+}
+
 /** Pure: applies one event to a ticket's state and returns the new state; the input is never mutated. */
 export function reduce(state: TicketState | undefined, event: FactoryEvent | InternalEvent): TicketState | undefined {
   if (isExternal(event) && event.type === 'dead_letter.repaired') return repaired(state, event);
@@ -228,10 +237,16 @@ export function reduce(state: TicketState | undefined, event: FactoryEvent | Int
     return created && external(created, event as FactoryEvent);
   }
   const next = isExternal(event) ? external(state, event) : internal(state, event);
-  const waiting = next && WAITS.filter((w) => next[w]);
-  if (!waiting?.length || !movesOn(state, next!, event)) return next;
-  return { ...next!, ...Object.fromEntries(waiting.map((w) => [w, null])) };
+  const ended = next ? WAITS.filter(([w, ends]) => next[w] && ends(state, next, event)) : [];
+  return ended.length ? { ...next!, ...Object.fromEntries(ended.map(([w]) => [w, null])) } : next;
 }
 
-/** The waits `movesOn` ends: the usage limit's (ORC-340) and `clarify`'s answers (ORC-210), whose timers then find nothing to do. */
-const WAITS = ['usageWait', 'clarify'] as const;
+/**
+ * A ticket's waits and what ends each: the usage limit's (ORC-340) and `clarify`'s answers (ORC-210) end when the ticket
+ * moves on, their timers then finding nothing to do; the wait on blockers (ORC-363) only on what `endsWait` names.
+ */
+const WAITS: ReadonlyArray<readonly ['usageWait' | 'clarify' | 'waitingOn', (state: TicketState, next: TicketState, event: FactoryEvent | InternalEvent) => boolean]> = [
+  ['usageWait', movesOn],
+  ['clarify', movesOn],
+  ['waitingOn', (_state, _next, event) => endsWait(event)],
+];

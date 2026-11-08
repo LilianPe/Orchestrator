@@ -1,4 +1,5 @@
 import type { PlanStep } from '../../core/session-plan.js';
+import type { Blocker } from '../../core/types.js';
 
 export interface TrackerIssue {
   identifier: string;
@@ -14,6 +15,8 @@ export interface TrackerIssue {
   createdAt: number;
   /** When Linear last changed the issue, when read: orders what the factory reads of its labels (ORC-185). */
   updatedAt?: number;
+  /** The issues this one is « blocked by » in the tracker (ORC-363), with their status type. Absent: none read. */
+  blockedBy?: (Blocker & { stateType: string })[];
 }
 
 export type ActivityInput =
