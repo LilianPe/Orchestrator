@@ -218,7 +218,9 @@ describe('recorded journals (test/replay/journals)', () => {
   });
 
   it('reads a decision recorded before ORC-180 through the ticket upcaster: its pendingFeedback is the human inbox', () => {
-    const journal = readJournal(readFileSync(join(dir, 'review-merge-done.pre-orc-310.json'), 'utf8'));
+    // The copy of the .v1 journal: its ticket.moved goes through the event upcaster on the same replay.
+    const journal = readJournal(readFileSync(join(dir, 'review-merge-done.v1.pre-orc-310.json'), 'utf8'));
+    expect(journal.entries.some((e) => e.event.type === 'ticket.moved')).toBe(true);
     const tickets = journal.entries.flatMap((e) => [e.decision?.before, e.decision?.ticket]).filter((t) => t !== undefined && t !== null);
     expect(tickets.length).toBeGreaterThan(0);
     expect(tickets.every((t) => 'pendingFeedback' in t && !('humanInbox' in t))).toBe(true);
