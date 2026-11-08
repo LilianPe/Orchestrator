@@ -201,7 +201,7 @@ describe('recorded journals (test/replay/journals)', () => {
   });
 
   it('reads a decision recorded before ORC-180 through the ticket upcaster: its pendingFeedback is the human inbox', () => {
-    const journal = readJournal(readFileSync(join(dir, 'review-merge-done.v1.json'), 'utf8'));
+    const journal = readJournal(readFileSync(join(dir, 'review-merge-done.pre-orc-310.json'), 'utf8'));
     const tickets = journal.entries.flatMap((e) => [e.decision?.before, e.decision?.ticket]).filter((t) => t !== undefined && t !== null);
     expect(tickets.length).toBeGreaterThan(0);
     expect(tickets.every((t) => 'pendingFeedback' in t && !('humanInbox' in t))).toBe(true);
@@ -262,8 +262,9 @@ describe('recorded journals (test/replay/journals)', () => {
 
   // Regression replays each decision on the workflow version it was frozen on, kept in the journal: a
   // change of the pack or of a preset shows only against the workflow of today, hence this what-if pass.
-  // Journals kept as the engine before ORC-196 recorded them, on versions without its comment: they pin those versions, today's differ by design.
-  it.each(files.filter((f) => !f.includes('.pre-orc-196.')))('%s decides the same under the standard pack and its preset as they are today', (file) => {
+  // Journals kept as an older engine recorded them (before ORC-196, or as main held them before ORC-310): they pin
+  // those versions, today's differ by design.
+  it.each(files.filter((f) => !/\.pre-orc-(196|310)\./.test(f)))('%s decides the same under the standard pack and its preset as they are today', (file) => {
     const scenario = file.replace(/(\.v\d+)?\.json$/, '');
     expect(Object.keys(SCENARIOS)).toContain(scenario);
     const report = replayJournal(readJournal(readFileSync(join(dir, file), 'utf8'), file), { mode: 'what-if', workflow: scenarioWorkflow(scenario) });

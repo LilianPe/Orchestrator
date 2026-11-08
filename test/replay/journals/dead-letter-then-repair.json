@@ -392,7 +392,7 @@
           "blocked": false,
           "verifyAttempts": 0,
           "ciFixAttempts": 0,
-          "pendingFeedback": [],
+          "humanInbox": [],
           "priority": 0,
           "costUsd": 0,
           "updatedAt": 1791622800000,
@@ -445,7 +445,7 @@
           "blocked": false,
           "verifyAttempts": 0,
           "ciFixAttempts": 0,
-          "pendingFeedback": [],
+          "humanInbox": [],
           "priority": 0,
           "costUsd": 0,
           "updatedAt": 1791622800000,
@@ -469,7 +469,7 @@
           "blocked": false,
           "verifyAttempts": 0,
           "ciFixAttempts": 0,
-          "pendingFeedback": [],
+          "humanInbox": [],
           "priority": 0,
           "costUsd": 0,
           "updatedAt": 1791622800000,
@@ -537,7 +537,7 @@
           "blocked": false,
           "verifyAttempts": 0,
           "ciFixAttempts": 0,
-          "pendingFeedback": [],
+          "humanInbox": [],
           "priority": 0,
           "costUsd": 0,
           "updatedAt": 1791622800000,
@@ -561,7 +561,7 @@
           "blocked": false,
           "verifyAttempts": 0,
           "ciFixAttempts": 0,
-          "pendingFeedback": [],
+          "humanInbox": [],
           "priority": 0,
           "costUsd": 0.1,
           "updatedAt": 1791622800000,
@@ -634,7 +634,7 @@
           "blocked": false,
           "verifyAttempts": 0,
           "ciFixAttempts": 0,
-          "pendingFeedback": [],
+          "humanInbox": [],
           "priority": 0,
           "costUsd": 0.1,
           "updatedAt": 1791622800000,
@@ -657,7 +657,7 @@
           "blocked": false,
           "verifyAttempts": 0,
           "ciFixAttempts": 0,
-          "pendingFeedback": [],
+          "humanInbox": [],
           "priority": 0,
           "costUsd": 0.1,
           "updatedAt": 1791622800000,
@@ -690,6 +690,7 @@
         "payload": {
           "runId": "id-1",
           "job": "dev",
+          "commands": [],
           "output": {
             "status": "done",
             "summary": "PR ouverte, tests verts.",
@@ -719,7 +720,7 @@
           "blocked": false,
           "verifyAttempts": 0,
           "ciFixAttempts": 0,
-          "pendingFeedback": [],
+          "humanInbox": [],
           "priority": 0,
           "costUsd": 0.1,
           "updatedAt": 1791622800000,
@@ -742,7 +743,7 @@
           "blocked": false,
           "verifyAttempts": 0,
           "ciFixAttempts": 0,
-          "pendingFeedback": [],
+          "humanInbox": [],
           "priority": 0,
           "costUsd": 0.1,
           "updatedAt": 1791622800000,
@@ -818,7 +819,7 @@
           "blocked": false,
           "verifyAttempts": 0,
           "ciFixAttempts": 0,
-          "pendingFeedback": [],
+          "humanInbox": [],
           "priority": 0,
           "costUsd": 0.1,
           "updatedAt": 1791622800000,
@@ -840,7 +841,7 @@
           "blocked": false,
           "verifyAttempts": 0,
           "ciFixAttempts": 0,
-          "pendingFeedback": [],
+          "humanInbox": [],
           "priority": 0,
           "costUsd": 0.1,
           "updatedAt": 1791622800000,
@@ -893,7 +894,7 @@
           "blocked": false,
           "verifyAttempts": 0,
           "ciFixAttempts": 0,
-          "pendingFeedback": [],
+          "humanInbox": [],
           "priority": 0,
           "costUsd": 0.1,
           "updatedAt": 1791622800000,
@@ -915,7 +916,7 @@
           "blocked": false,
           "verifyAttempts": 0,
           "ciFixAttempts": 0,
-          "pendingFeedback": [],
+          "humanInbox": [],
           "priority": 0,
           "costUsd": 0.1,
           "updatedAt": 1791622800000,
@@ -968,7 +969,7 @@
           "blocked": false,
           "verifyAttempts": 0,
           "ciFixAttempts": 0,
-          "pendingFeedback": [],
+          "humanInbox": [],
           "priority": 0,
           "costUsd": 0.1,
           "updatedAt": 1791622800000,
@@ -990,7 +991,7 @@
           "blocked": false,
           "verifyAttempts": 0,
           "ciFixAttempts": 0,
-          "pendingFeedback": [],
+          "humanInbox": [],
           "priority": 0,
           "costUsd": 0.1,
           "updatedAt": 1791622800000,
@@ -1043,7 +1044,7 @@
           "blocked": false,
           "verifyAttempts": 0,
           "ciFixAttempts": 0,
-          "pendingFeedback": [],
+          "humanInbox": [],
           "priority": 0,
           "costUsd": 0.1,
           "updatedAt": 1791622800000,
@@ -1065,7 +1066,7 @@
           "blocked": false,
           "verifyAttempts": 0,
           "ciFixAttempts": 0,
-          "pendingFeedback": [],
+          "humanInbox": [],
           "priority": 0,
           "costUsd": 0.1,
           "updatedAt": 1791622800000,
@@ -1097,7 +1098,7 @@
         "payload": {
           "eventId": "t-2",
           "eventType": "session.prompted",
-          "error": "t.pendingFeedback is not iterable",
+          "error": "t.humanInbox is not iterable",
           "failures": 1
         }
       },
@@ -1118,7 +1119,7 @@
           "blocked": false,
           "verifyAttempts": 0,
           "ciFixAttempts": 0,
-          "pendingFeedback": null,
+          "humanInbox": null,
           "priority": 0,
           "costUsd": 0.1,
           "updatedAt": 1791622800000,
@@ -1140,7 +1141,7 @@
           "blocked": true,
           "verifyAttempts": 0,
           "ciFixAttempts": 0,
-          "pendingFeedback": null,
+          "humanInbox": null,
           "priority": 0,
           "costUsd": 0.1,
           "updatedAt": 1791622800000,
@@ -1151,7 +1152,7 @@
           "branch": "factory/rel-1-export-csv",
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
-          "blockReason": "Event t-2 set aside (session.prompted): its decision failed (t.pendingFeedback is not iterable)."
+          "blockReason": "Event t-2 set aside (session.prompted): its decision failed (t.humanInbox is not iterable)."
         },
         "effects": [
           {
@@ -1159,7 +1160,7 @@
             "block": {
               "step": "session.prompted",
               "max": 1,
-              "reason": "Event t-2 set aside (session.prompted): its decision failed (t.pendingFeedback is not iterable).",
+              "reason": "Event t-2 set aside (session.prompted): its decision failed (t.humanInbox is not iterable).",
               "tried": [
                 "1 decision(s) of this event."
               ],
@@ -1214,7 +1215,7 @@
           "blocked": true,
           "verifyAttempts": 0,
           "ciFixAttempts": 0,
-          "pendingFeedback": null,
+          "humanInbox": null,
           "priority": 0,
           "costUsd": 0.1,
           "updatedAt": 1791622800000,
@@ -1225,7 +1226,7 @@
           "branch": "factory/rel-1-export-csv",
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
-          "blockReason": "Event t-2 set aside (session.prompted): its decision failed (t.pendingFeedback is not iterable)."
+          "blockReason": "Event t-2 set aside (session.prompted): its decision failed (t.humanInbox is not iterable)."
         },
         "ticket": {
           "projectId": "p",
@@ -1237,7 +1238,7 @@
           "blocked": true,
           "verifyAttempts": 0,
           "ciFixAttempts": 0,
-          "pendingFeedback": null,
+          "humanInbox": null,
           "priority": 0,
           "costUsd": 0.1,
           "updatedAt": 1791622800000,
@@ -1248,7 +1249,7 @@
           "branch": "factory/rel-1-export-csv",
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
-          "blockReason": "Event t-2 set aside (session.prompted): its decision failed (t.pendingFeedback is not iterable)."
+          "blockReason": "Event t-2 set aside (session.prompted): its decision failed (t.humanInbox is not iterable)."
         },
         "effects": [],
         "timers": [],
@@ -1291,7 +1292,7 @@
           "blocked": true,
           "verifyAttempts": 0,
           "ciFixAttempts": 0,
-          "pendingFeedback": null,
+          "humanInbox": null,
           "priority": 0,
           "costUsd": 0.1,
           "updatedAt": 1791622800000,
@@ -1302,7 +1303,7 @@
           "branch": "factory/rel-1-export-csv",
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
-          "blockReason": "Event t-2 set aside (session.prompted): its decision failed (t.pendingFeedback is not iterable)."
+          "blockReason": "Event t-2 set aside (session.prompted): its decision failed (t.humanInbox is not iterable)."
         },
         "ticket": {
           "projectId": "p",
@@ -1314,7 +1315,7 @@
           "blocked": true,
           "verifyAttempts": 0,
           "ciFixAttempts": 0,
-          "pendingFeedback": null,
+          "humanInbox": null,
           "priority": 0,
           "costUsd": 0.1,
           "updatedAt": 1791622800000,
@@ -1325,7 +1326,7 @@
           "branch": "factory/rel-1-export-csv",
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
-          "blockReason": "Event t-2 set aside (session.prompted): its decision failed (t.pendingFeedback is not iterable)."
+          "blockReason": "Event t-2 set aside (session.prompted): its decision failed (t.humanInbox is not iterable)."
         },
         "effects": [],
         "timers": [],
@@ -1381,7 +1382,7 @@
           "blocked": true,
           "verifyAttempts": 0,
           "ciFixAttempts": 0,
-          "pendingFeedback": [],
+          "humanInbox": [],
           "priority": 0,
           "costUsd": 0.1,
           "updatedAt": 1791622800000,
@@ -1392,7 +1393,7 @@
           "branch": "factory/rel-1-export-csv",
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
-          "blockReason": "Event t-2 set aside (session.prompted): its decision failed (t.pendingFeedback is not iterable)."
+          "blockReason": "Event t-2 set aside (session.prompted): its decision failed (t.humanInbox is not iterable)."
         },
         "ticket": {
           "projectId": "p",
@@ -1404,7 +1405,7 @@
           "blocked": false,
           "verifyAttempts": 0,
           "ciFixAttempts": 0,
-          "pendingFeedback": [
+          "humanInbox": [
             {
               "author": "Lilian",
               "body": "et le mobile ?",
@@ -1491,7 +1492,7 @@
           "blocked": false,
           "verifyAttempts": 0,
           "ciFixAttempts": 0,
-          "pendingFeedback": [
+          "humanInbox": [
             {
               "author": "Lilian",
               "body": "et le mobile ?",
@@ -1521,7 +1522,7 @@
           "blocked": false,
           "verifyAttempts": 0,
           "ciFixAttempts": 0,
-          "pendingFeedback": [
+          "humanInbox": [
             {
               "author": "Lilian",
               "body": "et le mobile ?",
@@ -1582,7 +1583,7 @@
           "blocked": false,
           "verifyAttempts": 0,
           "ciFixAttempts": 0,
-          "pendingFeedback": [
+          "humanInbox": [
             {
               "author": "Lilian",
               "body": "et le mobile ?",
@@ -1612,7 +1613,7 @@
           "blocked": false,
           "verifyAttempts": 0,
           "ciFixAttempts": 0,
-          "pendingFeedback": [
+          "humanInbox": [
             {
               "author": "Lilian",
               "body": "et le mobile ?",
