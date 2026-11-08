@@ -40,18 +40,19 @@ describe('clarify (ORC-210)', () => {
     expect(out.effects).toContainEqual(expect.objectContaining({ kind: 'start_run', job: 'dev' }));
   });
 
-  it('criterion 2: an unclear ticket gets its questions as elicitations with select, a free answer possible, and is neither blocked nor moved', () => {
+  it('criterion 2: an unclear ticket gets its questions as elicitations with select, one at a time, a free answer possible, and is neither blocked nor moved', () => {
     const e = finished(assessed({ complete: false, missing: [RATE, FORMAT] }));
     const out = decide(ticket(), e, workflow);
-    const asked = out.effects.filter((x) => x.kind === 'activity');
-    expect(asked).toEqual([
-      expect.objectContaining({ type: 'elicitation', body: expect.stringContaining(RATE.question), options: RATE.options }),
-      expect.objectContaining({ type: 'elicitation', body: expect.stringContaining(FORMAT.question), options: FORMAT.options }),
+    // One at a time: Linear sends a picked option back as a plain reply, so the list on screen is the question it answers.
+    expect(out.effects.filter((x) => x.kind === 'activity')).toEqual([
+      expect.objectContaining({ type: 'elicitation', body: expect.stringMatching(/^Question 1\/2: Does the rate limit[\s\S]*your own words/), options: RATE.options }),
     ]);
-    for (const a of asked) expect((a as { body: string }).body).toMatch(/your own words/);
     expect(out.effects.some((x) => x.kind === 'start_run' || x.kind === 'move' || x.kind === 'block_comment')).toBe(false);
     const t = after(ticket(), e);
     expect(t).toMatchObject({ blocked: false, logical: 'todo', clarify: { job: 'intake', at: 1000, answered: 0, questions: [RATE, FORMAT] } });
+    expect(decide(t, reply('Yes, to everyone'), workflow).effects.filter((x) => x.kind === 'activity')).toEqual([
+      expect.objectContaining({ type: 'elicitation', body: expect.stringMatching(/^Question 2\/2: Which export format\?/), options: FORMAT.options }),
+    ]);
   });
 
   it('criterion 2: at most 3 questions, each with its options; a question without options is a free one', () => {
@@ -116,6 +117,7 @@ describe('clarify (ORC-210)', () => {
     const first = decide(asking(), reply('Yes, to everyone'), workflow);
     expect(first.events).toContainEqual(expect.objectContaining({ type: 'feedback.appended' }));
     expect(first.effects.some((x) => x.kind === 'start_run')).toBe(false);
+    expect(first.trace).toContain('clarify: answered, 1 question(s) still open');
     const t = after(asking(), reply('Yes, to everyone'));
     expect(t.clarify).toMatchObject({ answered: 1 });
     const out = decide(t, reply('CSV'), workflow);
@@ -139,12 +141,28 @@ describe('clarify (ORC-210)', () => {
     expect(t.clarify).toMatchObject({ answered: 0 });
   });
 
+  it('a question back is no answer: it is answered in the session, the questions stay open', () => {
+    const e = reply('What do you mean by admin accounts?', {}, { kind: 'question' });
+    expect(decide(asking(), e, workflow).effects).toContainEqual(expect.objectContaining({ kind: 'start_run', job: 'ask' }));
+    expect(after(asking(), e)).toMatchObject({ clarify: { answered: 0 } });
+    expect(after(asking(), e).decisions).toBeUndefined();
+  });
+
+  it('an unsigned answer answers its question for the agent, but is no decision of the ticket (I12)', () => {
+    const t = after(asking([RATE]), reply('Yes', { taint: 'untrusted' }));
+    expect(t.clarify).toBeNull();
+    expect(t.decisions).toBeUndefined();
+  });
+
   it('criterion 6: an accepted answer is kept as a decision of the ticket, and is found in the tests once frozen', () => {
     const answered = [reply('Yes, to everyone'), reply('CSV')].reduce(after, asking());
     expect(answered.decisions).toEqual([
       { question: RATE.question, answer: 'Yes, to everyone', author: 'Lilian', at: 2000 },
       { question: FORMAT.question, answer: 'CSV', author: 'Lilian', at: 2000 },
     ]);
+    // A later freeze, or a refreeze, holds the ticket's decisions as they are then.
+    const refrozen = decide({ ...answered, frozenTests: { sha: 'old', files: {} } }, ev('command', { name: '/refreeze', body: '', linearSessionId: 's1', author: 'M', frozen: { sha: 'new', files: {} } }, { roles: ['maintainer'], actor: 'u-m' }), workflow);
+    expect(refrozen.events).toContainEqual({ type: 'ticket.patched', patch: { frozenTests: { sha: 'new', files: {}, decisions: answered.decisions } } });
     const frozen = { sha: 'abc', files: { 'test/rate.test.ts': 'f1' }, rules: 1 };
     const t = after({ ...answered, activeRunId: 'r2', activeJob: 'tests', verifyingRunId: 'r2' }, ev('verify.passed', { runId: 'r2', job: 'tests', red: 'assertion', frozen }));
     expect(t.frozenTests).toMatchObject({ sha: 'abc', decisions: answered.decisions });

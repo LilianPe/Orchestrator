@@ -43,17 +43,14 @@ describe('clarify, end to end (ORC-210)', () => {
     const h = setup();
     await asked(h);
     expect(h.runner.requests).toHaveLength(1);
-    expect(elicitations(h)).toEqual([
-      expect.objectContaining({ body: expect.stringContaining(RATE.question), options: RATE.options }),
-      expect.objectContaining({ body: expect.stringContaining(WINDOW.question), options: WINDOW.options }),
-    ]);
+    expect(elicitations(h)).toEqual([expect.objectContaining({ body: expect.stringContaining(RATE.question), options: RATE.options })]);
     expect(await h.ticket()).toMatchObject({ blocked: false, logical: 'todo' });
 
     await h.advance(23 * HOUR);
-    expect(elicitations(h)).toHaveLength(2);
+    expect(elicitations(h)).toHaveLength(1);
     await h.advance(HOUR);
-    expect(elicitations(h)).toHaveLength(4);
-    expect(elicitations(h)[2]).toMatchObject({ body: expect.stringMatching(/^Reminder/), options: RATE.options });
+    expect(elicitations(h)).toHaveLength(2);
+    expect(elicitations(h)[1]).toMatchObject({ body: expect.stringMatching(/^Reminder/), options: RATE.options });
     expect((await h.ticket()).blocked).toBe(false);
 
     await h.advance(47 * HOUR);
@@ -79,10 +76,13 @@ describe('clarify, end to end (ORC-210)', () => {
     h.runner.enqueue(assessment(), DEV);
     await answer(h, 'Yes, to everyone', 'user-lilian');
     expect(h.runner.requests).toHaveLength(1);
+    expect(elicitations(h).at(-1)).toMatchObject({ body: expect.stringContaining(WINDOW.question), options: WINDOW.options });
     await answer(h, 'Sliding', 'user-armand');
     expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:intake', '/factory:intake', '/factory:dev']);
     expect(h.runner.requests[1]!.prompt).toContain('Yes, to everyone');
     expect(h.runner.requests[1]!.prompt).not.toContain('No, admins are exempt');
+    // Intake reads the answers as its feedback, once: the decisions are for the steps after the guard.
+    expect(h.runner.requests[1]!.prompt).not.toContain('## Decisions');
     // The decisions go to the steps that write the tests and the code.
     expect(h.runner.requests[2]!.prompt).toMatch(/## Decisions[\s\S]*Does the rate limit apply to admin accounts too\?[\s\S]*Yes, to everyone/);
     expect((await h.ticket()).decisions).toHaveLength(2);

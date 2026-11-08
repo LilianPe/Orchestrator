@@ -2250,8 +2250,8 @@ export class Orchestrator {
         issue: { identifier: issue.identifier, title: issue.title, description: issue.description, url: issue.url },
         branch: job.queue === 'dev' ? t.branch : undefined,
         prUrl: t.prUrl,
-        // What `clarify`'s answers decided (ORC-210), for the steps that write the tests and the code.
-        decisions: job.queue === 'dev' && t.decisions?.length ? t.decisions : undefined,
+        // What `clarify`'s answers decided (ORC-210), for the steps after the guard: intake reads them as its feedback.
+        decisions: job.queue === 'dev' && job.step !== 'intake' && t.decisions?.length ? t.decisions : undefined,
         conventions,
         input,
         reviewRounds: wf.limits.reviewRounds,
