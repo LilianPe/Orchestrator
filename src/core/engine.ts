@@ -1212,6 +1212,9 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       const toPublish = publishes(job) ? event.payload.sha : undefined;
       const patch = { verifyAttempts: 0, ...(ticket?.repeatedFailure ? { repeatedFailure: null } : {}), ...(ticket?.redAttempts ? { redAttempts: 0 } : {}), ...(event.payload.sha ? { verifiedSha: event.payload.sha } : {}), ...(toPublish && job.onSuccess.move ? { owedMove: job.onSuccess.move } : {}) };
       out.events.push({ type: 'ticket.patched', patch });
+      // A relaunch on failures still pending goes with them: settle would start it on a green check, in a loop just started over (ORC-360).
+      const pending = ticket?.pendingJob;
+      if (pending?.input === 'verify_failures') out.events.push({ type: 'pending.cleared', job: pending });
       if (job.red) freeze(out, ticket, event.payload.frozen);
       if (toPublish) {
         const { runId, output, commands } = event.payload;

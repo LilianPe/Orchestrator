@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { REFREEZE } from '../../src/checks/freeze.js';
 import { effectiveEvent } from '../../src/core/dead-letter.js';
 import type { Role } from '../../src/core/authz.js';
+import type { Effect } from '../../src/core/decision.js';
 import { AUTHZ_REFUSED, decide, isFenced, mayCheck, mayPublish, SENSITIVE_PATHS } from '../../src/core/engine.js';
 import { reduce } from '../../src/core/reduce.js';
 import {
@@ -249,45 +250,61 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
       () => {
         // Today the bound counts attempts (verify_attempts), the target counts relaunches (ORC-138, point 8):
         // N + 1 attempts here is the target's bound N, until ORC-187 converts the unit.
-        // Found by fast-check (ORC-360): the relaunch of fix-ci its verify.failed decides waits behind the tests run, then the
-        // red-CI bound blocks fix-ci; a debounce took that block for a pending job no settle could start, and relaunched again.
-        const started = (job: string) => sh({ type: 'run.started', runId: 'r1', job, queue: 'dev', claudeSessionId: 'claude-1' });
-        const finished = (job: string) => ext('run.finished', { runId: 'r1', job, outcome: 'success', costUsd: 0.5, turns: 3, lastText: 'fini' });
-        const failed = (job: string) => ext('verify.failed', { runId: 'r1', job, failures: VERIFY_FAILURES });
+        // Counted as the runner gets them (`launches`, ORC-360): a relaunch kept pending counts once, when it starts, by a
+        // decision or by `settle`; a decision that starts a pending job hands over the start an earlier one made.
+        const started = (job: string, runId = 'r1') => sh({ type: 'run.started', runId, job, queue: 'dev', claudeSessionId: 'claude-1' });
+        const finished = (job: string, runId = 'r1') => ext('run.finished', { runId, job, outcome: 'success', costUsd: 0.5, turns: 3, lastText: 'fini' });
+        const failed = (job: string, runId = 'r1') => ext('verify.failed', { runId, job, failures: VERIFY_FAILURES });
+        // The relaunch of fix-ci its verify.failed decides waits behind the tests run, which dev's start keeps there.
+        const pendingRelaunch = [...delegated(), started('fix-ci'), finished('fix-ci'), started('tests'), failed('fix-ci'), finished('tests'), failed('tests')];
+        // Found by fast-check (ORC-360): the red-CI bound then blocks fix-ci, and a debounce took that block for a pending job
+        // no settle could start: it lifted the block and started the relaunch, in place of its own job.
         const redCiOnPending = seq(
-          ...delegated(),
-          started('fix-ci'),
-          finished('fix-ci'),
-          started('tests'),
-          failed('fix-ci'),
-          finished('tests'),
-          failed('tests'),
+          ...pendingRelaunch,
           ext('status.changed', { from: 'dev', to: 'human_review' }),
           ...Array.from({ length: 3 }, () => ext('pr.checks_failed', { ...pr, failures: ['test'] })),
           ext('timer.fired', DEBOUNCE),
+        );
+        // ORC-339's own path: the settle dies, the ticket is blocked on the pending relaunch, the debounce starts it, once.
+        const stuckSettle = seq(
+          ...pendingRelaunch,
+          ext('effect.failed', { effectId: 'REL-1:1:1', kind: 'settle', eventId: 'ex-1', attempts: 8, error: 'Linear down' }),
+          ext('timer.fired', DEBOUNCE),
+        );
+        // Found by the count of launches (ORC-360): a relaunch kept pending outlived the green check that started the loop over;
+        // settle then started it, on failures gone, and the new loop still had all its relaunches (attempts 3).
+        const pendingPastGreen = seq(
+          ...delegated(),
+          started('dev'),
+          finished('dev'),
+          started('dev'),
+          failed('dev'),
+          finished('dev'),
+          failed('dev'),
+          started('dev', 'r2'),
+          finished('dev', 'r2'),
+          ext('verify.passed', { runId: 'r2', job: 'dev' }),
+          ...[1, 2].flatMap((i) => [started('dev', `r${2 + i}`), finished('dev', `r${2 + i}`), failed('dev', `r${2 + i}`)]),
         );
         fc.assert(
           fc.property(sequences, fc.integer({ min: 1, max: 3 }), (s, attempts) => {
             const w = workflow(attempts);
             const r = fold(s.withDuplicates, w);
+            // The red check's returns have their own counter: the next property.
+            const relaunch = (e: Effect): boolean => e.kind === 'start_run' && e.input === 'verify_failures' && !w.jobs[e.job]?.red;
             let relaunches = 0;
-            for (const step of decided(r)) {
-              const reset = step.decision.events.some((e) => e.type === 'ticket.patched' && e.patch.verifyAttempts === 0);
-              if (reset) relaunches = 0;
-              // The red check's returns have their own counter: the next property.
-              const resumed = step.decision.effects.filter((e) => e.kind === 'start_run' && e.input === 'verify_failures' && !w.jobs[e.job]?.red);
-              relaunches += resumed.length;
+            for (const step of r.steps) {
+              if (step.kind === 'decided' && step.decision.events.some((e) => e.type === 'ticket.patched' && e.patch.verifyAttempts === 0)) relaunches = 0;
+              relaunches += launches(step).filter(relaunch).length;
               expect(relaunches).toBeLessThanOrEqual(attempts - 1);
-              if (step.event.type === 'verify.failed' && !isFenced(step.decision) && !w.jobs[step.event.payload.job]?.red) {
-                const used = step.before?.verifyAttempts ?? 0;
-                if (used + 1 >= attempts) {
-                  expect(resumed).toEqual([]);
-                  expect(step.decision.events.map((e) => e.type)).toContain('ticket.blocked');
-                }
+              if (step.kind !== 'decided' || step.event.type !== 'verify.failed' || isFenced(step.decision) || w.jobs[step.event.payload.job]?.red) continue;
+              if ((step.before?.verifyAttempts ?? 0) + 1 >= attempts) {
+                expect(step.decision.effects.filter(relaunch)).toEqual([]);
+                expect(step.decision.events.map((e) => e.type)).toContain('ticket.blocked');
               }
             }
           }),
-          params<[Sequences, number]>([[redCiOnPending, 2]]),
+          params<[Sequences, number]>([[redCiOnPending, 2], [stuckSettle, 2], [pendingPastGreen, 3]]),
         );
       },
       TIMEOUT,
