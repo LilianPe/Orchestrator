@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, renameSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, renameSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -50,6 +50,26 @@ describe('factory validate (ORC-209)', () => {
     const { code, out } = run(dir);
     expect(code).toBe(1);
     expect(out[1]).toMatch(/^- unreadable: /);
+  });
+
+  it('reports a .factory it cannot look into as unreadable, not a crash', () => {
+    // A loop on the way to .factory (ELOOP).
+    const loop = repo();
+    symlinkSync('self', join(loop, 'self'));
+    const looped = run(join(loop, 'self'));
+    expect(looped.code).toBe(1);
+    expect(looped.out).toEqual(['.factory/config.yml refused:', expect.stringMatching(/^- unreadable: .*ELOOP/)]);
+    // A .factory that cannot be searched (EACCES); root reads it all the same.
+    if (process.getuid?.() === 0) return;
+    const locked = repo('commands: { test: npm test }\n');
+    chmodSync(join(locked, '.factory'), 0o000);
+    try {
+      const denied = run(locked);
+      expect(denied.code).toBe(1);
+      expect(denied.out).toEqual(['.factory/config.yml refused:', expect.stringMatching(/^- unreadable: .*EACCES/)]);
+    } finally {
+      chmodSync(join(locked, '.factory'), 0o755);
+    }
   });
 
   it('refuses a link, at .factory or at its file, as the launch does: git reads nothing through it', () => {

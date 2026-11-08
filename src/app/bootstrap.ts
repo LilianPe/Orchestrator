@@ -171,7 +171,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     const runner: Runner = o.fakeRunner
       ? Object.assign(new FakeRunner(), { submit: (runId: string, output: AgentOutput) => saveAgentOutput(store, runId, output) })
       : new ClaudeCodeRunner({ transcriptsDir: paths.transcripts, secrets: daemonSecrets, claudeToken: () => claudeToken, log, ...(sandboxes ? { sandboxes } : {}) });
-    const workspaces = new GitWorkspaces({ root: paths.workspaces, knowledgeRepo: instance.knowledge?.repoPath });
+    const workspaces = new GitWorkspaces({ root: paths.workspaces, knowledgeRepo: instance.knowledge?.repoPath, log });
     const forge = githubApp
       ? new GitHubAppForge({ ...githubApp, log })
       : new GhCliForge();
