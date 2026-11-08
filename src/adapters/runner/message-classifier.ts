@@ -40,9 +40,8 @@ export function apiClassifier(apiKey: string, o: { fetch?: typeof fetch; timeout
   const doFetch = o.fetch ?? fetch;
   const timeoutMs = o.timeoutMs ?? API_TIMEOUT_MS;
   return async (body) => {
-    let res: Response;
     try {
-      res = await doFetch('https://api.anthropic.com/v1/messages', {
+      const res = await doFetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -55,13 +54,18 @@ export function apiClassifier(apiKey: string, o: { fetch?: typeof fetch; timeout
         }),
         signal: AbortSignal.timeout(timeoutMs),
       });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      // The body is read under the same bound: a stalled answer is a timeout too.
+      const msg = (await res.json()) as { content?: { type: string; text?: string }[] };
+      const texts = (msg.content ?? []).filter((b) => b.type === 'text');
+      return parseVerdict(texts.length === 1 ? texts[0]!.text : undefined);
     } catch (err) {
-      throw new Error((err as Error).name === 'TimeoutError' ? `timed out after ${timeoutMs} ms` : `request failed: ${(err as Error).message}`, { cause: err });
+      const e = err as Error;
+      if (e.name === 'TimeoutError' || e.name === 'AbortError') throw new Error(`timed out after ${timeoutMs} ms`, { cause: err });
+      if (e instanceof SyntaxError) throw new Error('unparseable answer', { cause: err });
+      if (/^(HTTP \d+|unparseable answer)$/.test(e.message)) throw e;
+      throw new Error(`request failed: ${e.message}`, { cause: err });
     }
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const msg = (await res.json()) as { content?: { type: string; text?: string }[] };
-    const texts = (msg.content ?? []).filter((b) => b.type === 'text');
-    return parseVerdict(texts.length === 1 ? texts[0]!.text : undefined);
   };
 }
 
@@ -78,7 +82,8 @@ export function cliClassifier(o: { command?: string[]; env: NodeJS.ProcessEnv; c
     '-p', '--model', CLASSIFIER_MODEL, '--effort', 'low', '--output-format', 'json',
     '--tools', '', '--strict-mcp-config', '--setting-sources', '', '--no-session-persistence', '--system-prompt', SYSTEM,
   ];
-  const env = childEnv(o.env, { CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' }, o.claudeToken);
+  // The account, never a key: `claude` would take ANTHROPIC_API_KEY over CLAUDE_CODE_OAUTH_TOKEN, which passes through.
+  const env = childEnv({ ...o.env, ANTHROPIC_API_KEY: undefined }, { CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' }, o.claudeToken);
   return (body) =>
     new Promise((resolve, reject) => {
       // A grandchild that keeps the pipe open would hold execFile's callback: the bound rejects on its own as well.
@@ -87,6 +92,7 @@ export function cliClassifier(o: { command?: string[]; env: NodeJS.ProcessEnv; c
         clearTimeout(backstop);
         if (err) {
           const e = err as NodeJS.ErrnoException & { killed?: boolean; code?: number | string };
+          if (e.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') return reject(new Error('output too large'));
           return reject(new Error(e.killed ? `timed out after ${timeoutMs} ms` : typeof e.code === 'number' ? `exit ${e.code}` : `spawn failed: ${e.code ?? e.message}`));
         }
         try {

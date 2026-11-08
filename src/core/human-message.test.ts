@@ -22,7 +22,7 @@ describe('classifyMessage (ORC-180, ORC-336)', () => {
       expect(classifyMessage(body)).toBe('question');
     });
 
-    it.each(['Le tri doit être décroissant', 'please fix the sort', 'boutons mal alignés', 'regarde https://app/x?id=1', '/autre chose'])('%j has none outside a URL: an instruction', (body) => {
+    it.each(['Le tri doit être décroissant', 'please fix the sort', 'boutons mal alignés', 'regarde https://app/x?id=1', 'regarde HTTPS://x?y=1', 'Http://a.b/?q', '/autre chose'])('%j has none outside a URL: an instruction', (body) => {
       expect(classifyMessage(body)).toBe('instruction');
     });
   });

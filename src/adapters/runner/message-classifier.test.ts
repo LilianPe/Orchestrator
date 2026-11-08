@@ -38,6 +38,14 @@ describe('the small model of messages (ORC-336)', () => {
     await expect(apiClassifier('k', { fetch: answer([], 529) })('x')).rejects.toThrow('HTTP 529');
     await expect(apiClassifier('k', { fetch: answer([{ type: 'text', text: 'sure: question' }]) })('x')).rejects.toThrow('unparseable answer');
     await expect(apiClassifier('k', { fetch: answer([{ type: 'tool_use' }]) })('x')).rejects.toThrow('unparseable answer');
+    const notJson = (async () => ({ ok: true, status: 200, json: async () => JSON.parse('<html>') })) as unknown as typeof fetch;
+    await expect(apiClassifier('k', { fetch: notJson })('x')).rejects.toThrow('unparseable answer');
+    const refused = (async () => Promise.reject(new TypeError('fetch failed'))) as unknown as typeof fetch;
+    await expect(apiClassifier('k', { fetch: refused })('x')).rejects.toThrow('request failed: fetch failed');
+    // Headers came, the body stalls: the same bound cuts it.
+    const stalls = ((_u: string, init: RequestInit) =>
+      Promise.resolve({ ok: true, status: 200, json: () => new Promise((_, reject) => init.signal!.addEventListener('abort', () => reject(init.signal!.reason))) })) as unknown as typeof fetch;
+    await expect(apiClassifier('k', { fetch: stalls, timeoutMs: 50 })('x')).rejects.toThrow('timed out after 50 ms');
     const hangs = ((_u: string, init: RequestInit) =>
       new Promise((_, reject) => init.signal!.addEventListener('abort', () => reject(init.signal!.reason)))) as unknown as typeof fetch;
     const t = Date.now();
@@ -50,6 +58,7 @@ describe('the small model of messages (ORC-336)', () => {
     await expect(printing(JSON.stringify({ is_error: true, result: 'question' }))('x')).rejects.toThrow('claude reported an error');
     await expect(printing('not json')('x')).rejects.toThrow('unparseable answer');
     await expect(cli('process.exit(3)')('x')).rejects.toThrow('exit 3');
+    await expect(cli("process.stdout.write('x'.repeat(200 * 1024))")('x')).rejects.toThrow('output too large');
     await expect(cliClassifier({ command: ['no-such-claude-binary'], env: process.env })('x')).rejects.toThrow('spawn failed: ENOENT');
     const t = Date.now();
     await expect(cli('setTimeout(() => {}, 10_000)', 200)('x')).rejects.toThrow('timed out after 200 ms');
@@ -62,6 +71,14 @@ describe('the small model of messages (ORC-336)', () => {
     const t = Date.now();
     await expect(cli(script, 200)('x')).rejects.toThrow('timed out after 200 ms');
     expect(Date.now() - t).toBeLessThan(3_000);
+  });
+
+  it('claude -p gets the account, never the key: ANTHROPIC_API_KEY left out, CLAUDE_CODE_OAUTH_TOKEN through', async () => {
+    const script = "process.stdout.write(JSON.stringify({ result: !process.env.ANTHROPIC_API_KEY && process.env.CLAUDE_CODE_OAUTH_TOKEN === 't' ? 'question' : 'instruction' }))";
+    const run = (env: NodeJS.ProcessEnv, claudeToken?: string) =>
+      cliClassifier({ command: [process.execPath, '-e', script, '--'], env: { ...process.env, ...env }, ...(claudeToken ? { claudeToken } : {}) })('x');
+    expect(await run({ ANTHROPIC_API_KEY: 'k', CLAUDE_CODE_OAUTH_TOKEN: 't' })).toBe('question');
+    expect(await run({ ANTHROPIC_API_KEY: 'k' }, 't')).toBe('question');
   });
 
   it('picks the backend of the runners credential, and none when turned off', () => {

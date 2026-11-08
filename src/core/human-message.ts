@@ -26,7 +26,7 @@ export function classifyMessage(body: string, verdict?: ModelVerdict): MessageKi
   if (isCommand(body)) return 'command';
   if (verdict) return verdict;
   // The question mark of a URL asks nothing.
-  return body.replace(/\bhttps?:\/\/\S+/g, '').includes('?') ? 'question' : 'instruction';
+  return body.replace(/\bhttps?:\/\/\S+/gi, '').includes('?') ? 'question' : 'instruction';
 }
 
 /** What of the human inbox a run reads: a command is answered by the factory, nothing is left of it for an agent. */

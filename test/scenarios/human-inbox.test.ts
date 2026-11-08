@@ -236,10 +236,11 @@ describe('the human inbox (ORC-180)', () => {
     const through = async (classify: MessageClassifier, text: string) => {
       const h = createHarness();
       await inReview(h);
-      const ingest = linearIngest((e) => h.orch.accept(e), { now: () => h.clock.now(), classify });
+      const ingest = linearIngest((e) => h.orch.accept(e), { now: () => h.clock.now(), classify, deliveries: h.store });
       const { raw, headers } = signedReply('ls-1', text, h.clock.now());
       h.runner.enqueue({ events: [{ kind: 'text', text: 'Parce que.' }] });
       expect((await ingest(raw, headers)).status).toBe(200);
+      await ingest.settled();
       await h.orch.drained();
       const prompted = (await h.store.recentEvents(100, 'REL-1')).find((e) => e.type === 'session.prompted')!;
       return { h, prompted };

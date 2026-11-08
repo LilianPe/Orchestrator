@@ -523,6 +523,14 @@ export interface Store {
   /** Requests per host and refusals per rule of the entries dated in `[since, until)` (ORC-296). */
   securityStats(since: number, until: number): Promise<SecurityStats>;
   getMeta(key: string): Promise<string | undefined>;
+  /**
+   * A webhook delivery answered before it is written to the inbox (ORC-336), kept until it is: false, and nothing
+   * written, when one with this key is kept already. In the meta rows, under `delivery:`: a few short-lived rows.
+   */
+  receiveDelivery(key: string, value: string): Promise<boolean>;
+  /** The deliveries kept, in the order received: what a restart writes to the inbox. */
+  pendingDeliveries(): Promise<{ key: string; value: string }[]>;
+  deleteDelivery(key: string): Promise<void>;
   setMeta(key: string, value: string): Promise<void>;
   close(): Promise<void>;
 }

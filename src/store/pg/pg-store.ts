@@ -1231,6 +1231,31 @@ export class PgStore implements AsyncStore {
     `);
   }
 
+  async receiveDelivery(key: string, value: string): Promise<boolean> {
+    const id = metaId(`delivery:${key}`);
+    const hash = createHash('sha256').update(`${id}\0${value}`).digest('hex');
+    const result = await this.db.execute(sql`
+      insert into workflow_versions (id, hash, definition, created_at)
+      values (${id}, ${hash}, ${JSON.stringify({ key: `delivery:${key}`, value })}::jsonb, clock_timestamp())
+      on conflict (id) do nothing
+      returning id
+    `);
+    return result.rows.length > 0;
+  }
+
+  async pendingDeliveries(): Promise<{ key: string; value: string }[]> {
+    const prefix = metaId('delivery:');
+    const result = await this.db.execute<{ id: string; value: string }>(sql`
+      select id, definition->>'value' as value from workflow_versions
+      where starts_with(id, ${prefix}) order by created_at, id
+    `);
+    return result.rows.map((r) => ({ key: r.id.slice(prefix.length), value: r.value }));
+  }
+
+  async deleteDelivery(key: string): Promise<void> {
+    await this.db.execute(sql`delete from workflow_versions where id = ${metaId(`delivery:${key}`)}`);
+  }
+
   async close(): Promise<void> {
     if (this.ownsPool) await this.pool.end();
   }

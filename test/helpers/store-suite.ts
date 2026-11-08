@@ -155,6 +155,18 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     expect(await s.inboxHas('e2')).toBe(false);
   });
 
+  it('keeps a delivery answered before the inbox until it is deleted, once, in the order received (ORC-336)', async () => {
+    const s = await store();
+    expect(await s.pendingDeliveries()).toEqual([]);
+    expect(await s.receiveDelivery('activity:b', '{"raw":"2"}')).toBe(true);
+    expect(await s.receiveDelivery('activity:a', '{"raw":"1"}')).toBe(true);
+    expect(await s.receiveDelivery('activity:b', '{"raw":"other"}')).toBe(false);
+    expect(await s.pendingDeliveries()).toEqual([{ key: 'activity:b', value: '{"raw":"2"}' }, { key: 'activity:a', value: '{"raw":"1"}' }]);
+    await s.deleteDelivery('activity:b');
+    expect(await s.pendingDeliveries()).toEqual([{ key: 'activity:a', value: '{"raw":"1"}' }]);
+    expect(await s.receiveDelivery('activity:b', '{"raw":"again"}')).toBe(true);
+  });
+
   it("gathers a ticket's measure facts: journal in order, its attempts, its outbox, the first ack of its events (ORC-235)", async () => {
     const s = await store();
     expect(await s.measureFacts('p', 'REL-1')).toEqual({ devSession: undefined, events: [], runs: [], effects: [], acks: {} });

@@ -288,8 +288,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     const classify = o.fakeRunner ? undefined : messageClassifier(env, claudeToken, !sandboxes, log);
     const ingest = createLinearIngest({
       serial: labelsTurn,
-      ...(classify ? { classify } : {}),
-      inboxHas: (id) => store.inboxHas(id),
+      // A message for the model is kept in the store and answered before it is classified (ORC-336).
+      ...(classify ? { classify, deliveries: store } : {}),
       secret: webhookSecret,
       accept,
       log,
@@ -393,6 +393,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       clearInterval(beatInterval);
       clearInterval(purgeInterval);
       relay?.close();
+      // The webhooks answered and not written yet: what is cut stays kept, written at the next start (ORC-336).
+      await ingest.settled();
       // A pass under way finishes first, so it never reads or writes a closed store.
       await Promise.all([timers.stop(), poller.stop(), reconciler.stop()]);
       orchestrator.stopAll();
@@ -442,6 +444,11 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       if (!isUsableWebhookSecret(githubSecret)) poller.start();
       if (await connectLinear()) void reconciler.once();
       else log(`Linear not connected: open ${baseUrl}/oauth/start`);
+      // Webhooks answered before a stop and not written to the inbox yet (ORC-336).
+      ingest.resume().then(
+        (n) => n && log(`webhooks: ${n} answered before the stop, written now`),
+        (e: unknown) => log(`webhooks kept before the stop: ${(e as Error).message}`),
+      );
       // The worker (ORC-149) executes the effects decided before a crash, then the events written
       // before it (or whose processing failed), oldest first; it then polls the inbox and the outbox
       // every second, for what another process wrote and for leases that expired.
