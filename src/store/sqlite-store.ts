@@ -130,6 +130,9 @@ function outboxRow(r: OutboxSqlRow): OutboxRow {
 
 const rank = (priority: number) => (priority === 0 ? 5 : priority);
 
+/** The lease token of a stored attempt (ORC-344), 0 on a record from before it. */
+const LEASE_TOKEN = `coalesce(json_extract(runs.data, '$.leaseToken'), 0)`;
+
 /** The SQLite store, kept until ORC-178: synchronous `node:sqlite` calls behind the async `Store` port. */
 export class SqliteStore implements Store {
   private db: DatabaseSync;
@@ -513,19 +516,31 @@ export class SqliteStore implements Store {
   }
 
   /** A run's `labels` keep what it was created with: a later write cannot change them (ORC-226). */
-  async putRun(r: RunRecord): Promise<void> {
-    this.db
+  async putRun(r: RunRecord, fence?: number): Promise<boolean> {
+    const res = this.db
       .prepare(
         `INSERT INTO runs (id, status, token, started_at, cost_usd, data) VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT DO UPDATE SET status = excluded.status, cost_usd = excluded.cost_usd,
            data = CASE WHEN json_type(runs.data, '$.labels') IS NULL THEN excluded.data
-                       ELSE json_set(excluded.data, '$.labels', json(json_extract(runs.data, '$.labels'))) END`,
+                       ELSE json_set(excluded.data, '$.labels', json(json_extract(runs.data, '$.labels'))) END
+         WHERE ? IS NULL OR ${LEASE_TOKEN} = ?`,
       )
-      .run(r.id, r.status, r.token, r.startedAt, r.costUsd, JSON.stringify(r));
+      .run(r.id, r.status, r.token, r.startedAt, r.costUsd, JSON.stringify(r), fence ?? null, fence ?? null);
+    return Number(res.changes) === 1;
   }
 
-  async renewRun(id: string, until: number): Promise<void> {
-    this.db.prepare(`UPDATE runs SET data = json_set(data, '$.leaseUntil', ?) WHERE id = ? AND status = 'running'`).run(until, id);
+  async renewRun(id: string, until: number, fence?: number): Promise<boolean> {
+    const res = this.db
+      .prepare(`UPDATE runs SET data = json_set(data, '$.leaseUntil', ?) WHERE id = ? AND status = 'running' AND (? IS NULL OR ${LEASE_TOKEN} = ?)`)
+      .run(until, id, fence ?? null, fence ?? null);
+    return Number(res.changes) === 1;
+  }
+
+  async claimRun(id: string, fence: number): Promise<number | undefined> {
+    const res = this.db
+      .prepare(`UPDATE runs SET data = json_set(data, '$.leaseToken', ?) WHERE id = ? AND status = 'running' AND ${LEASE_TOKEN} = ?`)
+      .run(fence + 1, id, fence);
+    return Number(res.changes) === 1 ? fence + 1 : undefined;
   }
 
   async getRun(id: string): Promise<RunRecord | undefined> {

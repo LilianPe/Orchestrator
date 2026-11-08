@@ -47,7 +47,7 @@ Starts the daemon in the foreground: HTTP server (UI, API, webhooks, OAuth), sme
 - Refuses to start if `host` is not loopback and `RELAIS_UI_PASSWORD` is empty.
 - Refuses to start without `FACTORY_CONTAINER_CLI` (the agents would run on the host), unless `FACTORY_ALLOW_HOST_RUNS=1` chooses it, for development (ORC-349). `--fake-runner` launches no agent and needs neither.
 
-`Ctrl+C` (SIGINT) or SIGTERM: clean shutdown (runs in progress are interrupted, then taken back on the next start).
+`Ctrl+C` (SIGINT) or SIGTERM: clean shutdown (runs in progress are left running, then reattached on the next start, or started again if they vanished meanwhile, ORC-344).
 
 `--fake-runner`: replaces Claude Code with a simulated runner that answers « Done. » at no cost. For testing the UI and the Linear wiring.
 

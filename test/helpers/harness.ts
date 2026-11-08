@@ -353,9 +353,14 @@ export function createHarness(
     await orch.drained();
   }
 
+  /** Another daemon over the same database, alive beside this one (ORC-344): its own connection, its own memory, the same runner and engine. */
+  function another(): Orchestrator {
+    return build(connect());
+  }
+
   return {
     clock, tracker, forge, runner, workspaces, checks, sandboxes, publisher, sessionsDir, runsDir, logs,
-    send, advance, restart, project,
+    send, advance, restart, another, project,
     get orch() {
       return orch;
     },

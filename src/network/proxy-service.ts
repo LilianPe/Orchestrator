@@ -45,9 +45,10 @@ export async function serveEgressControl(proxy: EgressProxy, path: string): Prom
   const server = createServer((req, res) => {
     if (req.method === 'GET' && req.url === '/watch') {
       watchers++;
-      // The daemon gone, its runs go, as with the proxy in its process; unless a new one already took over.
+      // The daemon gone, its runs' sockets go, as with the proxy in its process; unless a new one already took over. Their
+      // folders stay: the containers still mount them, and the next daemon listens in again when it reattaches (ORC-344).
       res.once('close', () => {
-        if (--watchers === 0) void proxy.closeAll();
+        if (--watchers === 0) void proxy.closeAll({ keep: true });
       });
       return void res.writeHead(200).flushHeaders();
     }
@@ -124,7 +125,9 @@ export class EgressClient implements Egress {
     await this.call('/close', { runId }).catch((err: Error) => this.o.log?.(`egress: run ${runId} not closed in the proxy: ${err.message}`));
   }
 
-  async closeAll(): Promise<void> {
+  /** `keep`: a clean shutdown, its runs left running (ORC-344): not closed one by one, the proxy keeps their folders when the watch ends. */
+  async closeAll({ keep = false }: { keep?: boolean } = {}): Promise<void> {
+    if (keep) this.opened.clear();
     await Promise.all([...this.opened].map((id) => this.close(id)));
     const watch = this.watch;
     this.watch = undefined;
