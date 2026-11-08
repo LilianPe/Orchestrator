@@ -1,3 +1,4 @@
+import { formatFeedback } from '../../core/prompt.js';
 import type { FeedbackItem } from '../../core/types.js';
 import { allNodes, isConnection, isRecord, type Connection } from '../graphql-pages.js';
 
@@ -5,7 +6,7 @@ const PAGE = 'pageInfo { hasNextPage endCursor }';
 const COMMENT = 'author { __typename login } body createdAt path line';
 
 /**
- * Characters of review feedback the agent is given, its comments' bodies together (ORC-366): past it, the newest
+ * Characters of review feedback the agent is given, as the prompt writes it (ORC-366): past it, the newest
  * threads are kept and the agent told how many older ones were cut. Proposal: settled with the prompt budget (ORC-254).
  */
 export const REVIEW_FEEDBACK_MAX = 16000;
@@ -44,6 +45,7 @@ const isComment = (c: unknown): boolean =>
   (c.author === null || (isRecord(c.author) && typeof c.author.__typename === 'string' && typeof c.author.login === 'string')) &&
   typeof c.body === 'string' &&
   typeof c.createdAt === 'string' &&
+  Number.isFinite(Date.parse(c.createdAt)) &&
   typeof c.path === 'string' &&
   (c.line === null || typeof c.line === 'number');
 
@@ -73,24 +75,58 @@ const toFeedback = (c: CommentNode): FeedbackItem => ({
 /** A GitHub App, the CI, Dependabot: GitHub types their accounts `Bot` (ORC-366). The factory's own reviewer, ORC-183's, will be let through. */
 const byBot = (c: CommentNode): boolean => c.author?.__typename === 'Bot';
 
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+/** What `items` take of the prompt, written as it writes them. */
+const size = (items: readonly FeedbackItem[]) => formatFeedback([...items]).length + 1;
+
 /**
- * The newest threads whose comments fit in `REVIEW_FEEDBACK_MAX` together, a thread dated by its latest comment, kept in
- * their order: none older than one cut, however short. Past the cap, an item last tells the agent how many were cut.
+ * The latest comments of a thread over the cap alone, as many as fit, the last one cut to fit when it does not on its
+ * own: the agent never gets nothing of the newest thread.
+ */
+function latestOf(items: FeedbackItem[]): { shown: FeedbackItem[]; earlier: FeedbackItem[]; cutShort: boolean } {
+  let from = items.length;
+  while (from > 0 && size(items.slice(from - 1)) <= REVIEW_FEEDBACK_MAX) from--;
+  if (from < items.length) return { shown: items.slice(from), earlier: items.slice(0, from), cutShort: false };
+  const last = items[items.length - 1]!;
+  const room = REVIEW_FEEDBACK_MAX - size([{ ...last, body: '' }]);
+  return { shown: [{ ...last, body: last.body.slice(0, Math.max(0, room)) }], earlier: items.slice(0, -1), cutShort: true };
+}
+
+/**
+ * The newest threads that fit in `REVIEW_FEEDBACK_MAX` together, a thread dated by its latest comment, kept whole and in
+ * their order: none older than one cut, however short. The newest thread over the cap alone keeps its latest comments
+ * (`latestOf`). Past the cap, an item last tells the agent what was left out.
  */
 function capped(threads: FeedbackItem[][], pr: string): FeedbackItem[] {
-  const latest = (t: FeedbackItem[]) => Math.max(...t.map((i) => i.at));
-  const newestFirst = [...threads].sort((a, b) => latest(b) - latest(a));
-  let size = 0;
-  const fits = newestFirst.findIndex((t) => (size += t.reduce((n, i) => n + i.body.length, 0)) > REVIEW_FEEDBACK_MAX);
-  if (fits === -1) return threads.flat();
-  const cut = new Set(newestFirst.slice(fits));
-  const n = cut.size;
+  const dated = threads.map((items) => ({ items, latest: Math.max(...items.map((i) => i.at)) }));
+  const newestFirst = [...dated].sort((a, b) => b.latest - a.latest);
+  let used = 0;
+  let firstCut = 0;
+  for (; firstCut < newestFirst.length; firstCut++) {
+    const s = size(newestFirst[firstCut]!.items);
+    if (used + s > REVIEW_FEEDBACK_MAX) break;
+    used += s;
+  }
+  if (firstCut === newestFirst.length) return threads.flat();
+  const shown = new Map(newestFirst.slice(0, firstCut).map((t) => [t, t.items]));
+  const older = newestFirst.slice(Math.max(firstCut, 1));
+  const hidden = older.flatMap((t) => t.items);
+  const left: string[] = [];
+  if (firstCut === 0) {
+    const newest = latestOf(newestFirst[0]!.items);
+    shown.set(newestFirst[0]!, newest.shown);
+    hidden.push(...newest.earlier);
+    if (newest.earlier.length) left.push(`the ${plural(newest.earlier.length, 'earlier comment')} of the latest thread`);
+    if (newest.cutShort) left.push(`the end of its last comment`);
+  }
+  if (older.length) left.push(plural(older.length, 'older thread'));
   return [
-    ...threads.filter((t) => !cut.has(t)).flat(),
+    ...dated.flatMap((t) => shown.get(t) ?? []),
     {
       author: 'factory',
-      body: `${n} older review thread${n === 1 ? '' : 's'} not shown: the review feedback given here is capped at ${REVIEW_FEEDBACK_MAX} characters. ${n === 1 ? 'It is' : 'They are'} still open on ${pr}.`,
-      at: latest(newestFirst[fits]!),
+      body: `Review feedback capped at ${REVIEW_FEEDBACK_MAX} characters, not shown: ${left.join(', ')}. All of it is still on ${pr}.`,
+      at: hidden.length ? Math.max(...hidden.map((i) => i.at)) : newestFirst[0]!.latest,
       source: 'review',
     },
   ];
