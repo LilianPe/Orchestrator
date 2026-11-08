@@ -114,6 +114,7 @@ const PAYLOADS: { [K in EventType]: fc.Arbitrary<EventPayloads[K]> } = {
   'session.prompted': message,
   'ticket.commented': fc.record({ body, author, kind: fc.constantFrom('question' as const, 'instruction' as const, 'command' as const) }),
   'agent.asked': fc.record({ question: body, job: fc.constantFrom('dev', 'dev-feedback') }),
+  'blockers.done': fc.record({ blockers: fc.constant(['REL-2']) }),
   'session.stopped': fc.record({ linearSessionId: fc.option(session, { nil: undefined }) }),
   'status.changed': fc.record({ from: fc.option(logical, { nil: null }), to: fc.option(logical, { nil: null }) }),
   'label.changed': fc.record({ label: fc.constantFrom('agent:stop', 'bug'), change: fc.constantFrom('added' as const, 'removed' as const) }),
@@ -165,9 +166,9 @@ const PAYLOADS: { [K in EventType]: fc.Arbitrary<EventPayloads[K]> } = {
     lastText: fc.constant('fini'),
   })
     // The closed outcome of ORC-289, absent on rows written before it; a blocked one carries its question, a success
-    // sometimes intake's assessment (ORC-206), and an intake run the deterministic checks of its launch.
+    // sometimes intake's assessment (ORC-206), and an intake run the deterministic checks of its launch and its blockers.
     .chain((p) =>
-      fc.tuple(fc.constantFrom(undefined, 'succeeded', 'failed', 'noop', 'needs_input', 'timeout', 'spec_impossible', 'errored' as const), fc.option(assessment, { nil: undefined }), fc.constantFrom<string[] | undefined>(undefined, [], ['The description has no acceptance criteria.'])).map(([attempt, intake, pickup]) =>
+      fc.tuple(fc.constantFrom(undefined, 'succeeded', 'failed', 'noop', 'needs_input', 'timeout', 'spec_impossible', 'errored' as const), fc.option(assessment, { nil: undefined }), fc.constantFrom<string[] | undefined>(undefined, [], ['The description has no acceptance criteria.']), fc.boolean()).map(([attempt, intake, pickup, blocked]) =>
         attempt === undefined
           ? p
           : {
@@ -180,6 +181,8 @@ const PAYLOADS: { [K in EventType]: fc.Arbitrary<EventPayloads[K]> } = {
               // A spec run's spec, passing `spec_check` or not (ORC-212).
               ...(attempt === 'succeeded' && p.job === 'spec' ? { output: { status: 'done' as const, summary: 's', tests_added: [], why: '', assumptions: [], risks: [], untested: [], review_hints: [], spec: SPECS[p.costUsd ? 0 : 1]! } } : {}),
               ...(p.job === 'intake' && pickup ? { pickup } : {}),
+              // A « blocked by » ticket not done at its launch (ORC-363): the ticket waits, and `blockers.done` resumes it.
+              ...(p.job === 'intake' && blocked ? { blockedBy: [{ identifier: 'REL-2', stateName: 'In Progress' }] } : {}),
             },
       ),
     ),
