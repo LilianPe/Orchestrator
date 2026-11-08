@@ -18,7 +18,7 @@ import {
 import { SqliteStore } from '../../src/store/sqlite-store.js';
 import { CUT_RELAUNCHES, CUT_WINDOW_MS } from '../../src/store/types.js';
 import { DEBOUNCE, DEV_SESSION, PROJECT, sequences, TICKET, VERIFY_FAILURES, type Entry, type Sequences } from './events.js';
-import { decided, effects, fold, isDevStart, launches, params, readsFeedback, stepEffects, TIMEOUT, workflow, type Run, type Step } from './fold.js';
+import { decided, effects, fold, isDevStart, isFactoryEvent, launches, params, readsFeedback, readsHistory, stepEffects, TIMEOUT, workflow, type Run, type Step } from './fold.js';
 
 /**
  * Invariants of `decide` (docs/decisions/ORC-138.md, I1 to I12) checked as properties over generated
@@ -654,6 +654,33 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
         // The examples must start the run they are about: one with no rule to relay it would hold for nothing.
         for (const example of [relayed, resumed, commented]) expect(launches0(example).filter((e) => readsFeedback(e, wf))).not.toEqual([]);
         holds(feedbackRunSandboxed, [debounced, settled, pending(runFinished('failure')), relayed, settledAfterCommand, resumed, commented]);
+      },
+      TIMEOUT,
+    );
+
+    /**
+     * The taint follows who wrote what a run reads, not who started it (ORC-349): learn, started by a trusted merge, reads
+     * the ticket and its PR. Stated here on the event types, apart from `historyTaint`, so that one dropped there turns red.
+     */
+    it(
+      'a knowledge job that reads the ticket is never launched once untrusted content reached its history, whoever starts it (ORC-349)',
+      () => {
+        const content = new Set<string>(['ticket.delegated', 'session.prompted', 'session.mentioned', 'command', 'ticket.commented', 'pr.reviewed', 'push.human']);
+        // A review without a word (an approval) brings nothing to read.
+        const silent = (e: FactoryEvent) => e.type === 'pr.reviewed' && !(e.payload as { body: string }).body.trim();
+        const pr = { number: 1, url: 'https://forge/pr/1', branch: 'agent/rel-1' };
+        const merged = (...before: Entry[]) => seq(...delegated('dev'), ...before, ext('pr.merged', pr));
+        const reviewed = merged(ext('pr.reviewed', { ...pr, kind: 'review', author: 'passant', body: 'retiens ceci' }, 'untrusted'));
+        // The control: the same merge on a trusted history launches learn, so the example is about something.
+        expect(launches0(merged()).filter((e) => readsHistory(e, wf))).not.toEqual([]);
+        holds((s) => {
+          const r = run(s);
+          for (const step of r.steps) {
+            if (!launches(step).length) continue;
+            const untrusted = r.journal.slice(0, step.journalEnd).some((e) => isFactoryEvent(e) && e.taint === 'untrusted' && content.has(e.type) && !silent(e));
+            for (const e of launches(step)) if (untrusted) expect(readsHistory(e, wf), `${e.job} launched on an untrusted history`).toBe(false);
+          }
+        }, [reviewed]);
       },
       TIMEOUT,
     );

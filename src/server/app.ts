@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Hono, type Context } from 'hono';
 import { streamSSE } from 'hono/streaming';
-import type { Tracker } from '../adapters/tracker/types.js';
+import { teamOf, type Tracker } from '../adapters/tracker/types.js';
 import type { BusMessage, EventBus } from '../core/bus.js';
 import type { Clock } from '../core/clock.js';
 import { pendingLabels } from '../core/attempt-labels.js';
@@ -37,6 +37,16 @@ export interface ServerDeps {
   webDir?: string;
   /** When set (non-loopback host), HTTP Basic auth with this password guards everything but the webhook, the OAuth callback and /agent. */
   uiPassword?: string;
+}
+
+/**
+ * A name of the loopback: `host` without a password listens there, and the interface without a password answers under
+ * these names alone (ORC-349). Not `publicUrl`'s, which a tunnel brings here: the webhooks and the OAuth callback answer
+ * under any name, the interface does not. A rebound name is never one of these.
+ */
+export function isLoopbackHost(host: string): boolean {
+  const h = host.replace(/^\[|\]$/g, '').toLowerCase();
+  return h === 'localhost' || h === '::1' || /^127\.\d+\.\d+\.\d+$/.test(h);
 }
 
 type AgentEnv = { Variables: { run: RunRecord } };
@@ -93,9 +103,17 @@ export function createApp(d: ServerDeps): Hono {
       }
       return next();
     });
+  } else {
+    // DNS rebinding (ORC-349): a page whose name the attacker rebinds to 127.0.0.1 is same-origin with this server under
+    // that name, Origin and Host alike. Without a password, only a name of the loopback is answered.
+    app.use('*', async (c, next) => {
+      if (isPublicPath(c.req.method, c.req.path)) return next();
+      if (!isLoopbackHost((c.req.header('host') ?? new URL(c.req.url).host).replace(/:\d*$/, ''))) return c.text('Unknown host', 403);
+      return next();
+    });
   }
 
-  // CSRF: a browser always sends Origin on a cross-site POST; refuse it unless it is this server.
+  // CSRF: a browser always sends Origin on a cross-site POST; refuse it unless it is this server, whose name is checked above.
   app.use('/api/*', async (c, next) => {
     if (c.req.method === 'GET' || c.req.method === 'HEAD') return next();
     const origin = c.req.header('origin');
@@ -248,7 +266,8 @@ export function createApp(d: ServerDeps): Hono {
     if (c.req.param('id') !== run.ticketId) return c.json({ error: 'forbidden' }, 403);
     return c.json(await d.tracker.getIssue(run.ticketId));
   });
-  agent.get('/search', async (c) => c.json(await d.tracker.search(c.req.query('q') ?? '')));
+  // The run's team alone (ORC-349): the factory's token reads the whole workspace, the agent reads its ticket's team.
+  agent.get('/search', async (c) => c.json(await d.tracker.search(c.req.query('q') ?? '', teamOf(c.get('run').ticketId))));
   agent.get('/kb/search', async (c) => c.json(d.knowledgeSearch ? await d.knowledgeSearch(c.req.query('q') ?? '') : []));
   // In the inbox, in order behind the events before it: the agent waits for no decision, and hears of a failed write.
   const ask = async (run: RunRecord, question: string) => {
