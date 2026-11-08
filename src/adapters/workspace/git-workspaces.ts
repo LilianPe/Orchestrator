@@ -2,7 +2,9 @@ import { existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, renameSync
 import { rm } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
 import { branchName } from '../../core/naming.js';
-import { execCmd, HARDENING, mustExec, type Exec } from '../exec.js';
+import { within } from '../../core/clean-verify.js';
+import { STALLED } from '../../publish/publish.js';
+import { execCmd, execFailure, HARDENING, mustExec, TIMED_OUT, type Exec } from '../exec.js';
 import { readCapped } from '../read-capped.js';
 import type { StepDiff, Workspace, WorkspaceManager, WorkspaceRequest } from './types.js';
 
@@ -75,26 +77,59 @@ export function parseStatus(out: string): string[] {
   return paths;
 }
 
-/** The default branch as `origin/<name>`; `origin/main` when the clone does not know it. */
+/**
+ * The default branch as a full ref, `refs/remotes/origin/<name>`; `refs/remotes/origin/main` when the clone does not
+ * know it. In full: a short `origin/main` is resolved by git as `refs/tags/origin/main` first, a tag anyone who pushes
+ * to the forge can make.
+ */
 export async function originHead(exec: Exec, repo: string): Promise<string> {
-  return (await originHeadOf(exec, repo)).name;
+  return (await originHeadOf(exec, repo)).ref;
 }
 
-/** `originHead`, and whether `origin/HEAD` gave it (`set`) or `origin/main` is assumed. */
-export async function originHeadOf(exec: Exec, repo: string): Promise<{ name: string; set: boolean }> {
-  const r = await exec('git', ['-C', repo, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD']);
-  return r.code === 0 ? { name: r.stdout.trim(), set: true } : { name: 'origin/main', set: false };
+/** `originHead` (`ref`), its short name for a message (`origin/main`), and whether `origin/HEAD` gave it (`set`) or `origin/main` is assumed. */
+export async function originHeadOf(exec: Exec, repo: string): Promise<{ ref: string; name: string; set: boolean }> {
+  const r = await exec('git', ['-C', repo, 'symbolic-ref', 'refs/remotes/origin/HEAD']);
+  const ref = r.code === 0 ? r.stdout.trim() : 'refs/remotes/origin/main';
+  return { ref, name: ref.replace(/^refs\/remotes\//, ''), set: r.code === 0 };
+}
+
+/** A launch waits this long for the forge, at most: past it, it is refused (ORC-209 C). */
+export const FETCH_DEADLINE_MS = 2 * 60_000;
+/** What the launch still gives git, killed at its deadline, to end: past it, it stops waiting for a process that left git's group. */
+const FETCH_GRACE_MS = 5_000;
+
+/**
+ * `git fetch origin` in `repo`, never longer than `deadlineMs` and never a prompt for a credential: past the deadline,
+ * git and what stayed in its process group (its ssh) are killed, and the launch stops waiting a few seconds later
+ * whatever still holds git's output. A failure's message reaches the ticket (Linear): it names neither the server's
+ * path nor the command, which go to `log`.
+ */
+export async function fetchOrigin(exec: Exec, repo: string, o: { deadlineMs?: number; log?: (message: string) => void } = {}): Promise<void> {
+  const deadlineMs = o.deadlineMs ?? FETCH_DEADLINE_MS;
+  const silent = `the forge no longer responds after ${deadlineMs / 1000} s`;
+  const args = ['-C', repo, 'fetch', '--quiet', 'origin'];
+  const expired = () => o.log?.(`git ${args.join(' ')}: killed at ${deadlineMs / 1000} s, its output still held ${FETCH_GRACE_MS / 1000} s later by a process out of its group`);
+  const r = await within(exec('git', args, { env: { GIT_TERMINAL_PROMPT: '0', ...STALLED }, timeoutMs: deadlineMs }), deadlineMs + FETCH_GRACE_MS, silent, expired);
+  if (r.code === 0) return;
+  o.log?.(execFailure('git', args, r).message);
+  throw new Error(r.code === TIMED_OUT ? silent : `the forge could not be read (git fetch, code ${r.code})`);
 }
 
 export class GitWorkspaces implements WorkspaceManager {
   private exec: Exec;
 
-  constructor(private o: { root: string; knowledgeRepo?: string; exec?: Exec }) {
+  /** `log`: the detail of a failed fetch (the server's path, git's own words), which the ticket never gets. */
+  constructor(private o: { root: string; knowledgeRepo?: string; exec?: Exec; fetchDeadlineMs?: number; log?: (message: string) => void }) {
     this.exec = o.exec ?? execCmd;
   }
 
   private git(repo: string, ...args: string[]): Promise<string> {
     return mustExec(this.exec, 'git', ['-C', repo, ...args]);
+  }
+
+  /** Bounded: a forge that does not answer refuses the launch, which never waits for it forever (ORC-209). */
+  private fetch(repo: string): Promise<void> {
+    return fetchOrigin(this.exec, repo, { deadlineMs: this.o.fetchDeadlineMs, log: this.o.log });
   }
 
   async prepare(req: WorkspaceRequest): Promise<Workspace> {
@@ -109,7 +144,7 @@ export class GitWorkspaces implements WorkspaceManager {
       if (!branch) throw new Error(`The git repository of ${path} is not the one the factory created, or is no longer readable: this worktree must be deleted.`);
       return { path, port, branch };
     }
-    await this.git(req.repoPath, 'fetch', 'origin');
+    await this.fetch(req.repoPath);
     const branch = branchName(req.ticketId, req.title);
     const has = async (ref: string) =>
       (await this.exec('git', ['-C', req.repoPath, 'rev-parse', '--verify', '--quiet', ref])).code === 0;
@@ -120,7 +155,8 @@ export class GitWorkspaces implements WorkspaceManager {
     // The forge first: an agent's commits reach it, never the repository's own branch, which can only lag behind.
     if (await has(`refs/remotes/origin/${branch}`)) {
       existing = `refs/remotes/origin/${branch}`;
-      checkout = ['-b', branch, `origin/${branch}`];
+      // In full, as the trunk: a short `origin/<branch>` resolves a tag of that name first.
+      checkout = ['-b', branch, existing];
     } else if (await has(`refs/heads/${branch}`)) {
       existing = local = `refs/heads/${branch}`;
       checkout = [branch];
@@ -164,7 +200,7 @@ export class GitWorkspaces implements WorkspaceManager {
       }
       // Resolved: it is read from `making`, and `repoPath` can be relative.
       await here('-C', making, 'fetch', '--quiet', '--no-tags', '--', resolve(repo), '+refs/remotes/origin/*:refs/remotes/origin/*', '+refs/tags/*:refs/tags/*', ...(localRef ? [`+${localRef}:${localRef}`] : []));
-      await here('-C', making, 'symbolic-ref', 'refs/remotes/origin/HEAD', `refs/remotes/${trunk}`);
+      await here('-C', making, 'symbolic-ref', 'refs/remotes/origin/HEAD', trunk);
       await here('-C', making, 'checkout', '--quiet', ...checkout);
       await here('-C', making, 'sparse-checkout', 'set', '--no-cone', '/*', '!/.claude/*', '/.claude/CLAUDE.md');
       renameSync(making, path);
@@ -178,7 +214,7 @@ export class GitWorkspaces implements WorkspaceManager {
   private async trunkWorkspace(req: WorkspaceRequest): Promise<Workspace> {
     assertSafe(req.runId);
     const path = join(this.o.root, req.projectId, '_trunk', req.runId);
-    await this.git(req.repoPath, 'fetch', 'origin');
+    await this.fetch(req.repoPath);
     const ref = await originHead(this.exec, req.repoPath);
     await this.agentRepository(req.repoPath, path, ref, ['--detach', ref]);
     return { path };
@@ -187,7 +223,7 @@ export class GitWorkspaces implements WorkspaceManager {
   private async knowledgeWorkspace(req: WorkspaceRequest): Promise<Workspace> {
     const kb = this.o.knowledgeRepo;
     if (!kb) throw new Error('No knowledge repository configured.');
-    await this.git(kb, 'fetch', 'origin');
+    await this.fetch(kb);
     const path = join(this.o.root, '_kb', req.runId);
     const branch = `learn/${req.ticketId.toLowerCase()}-${req.runId.slice(0, 8)}`;
     const trunk = await originHead(this.exec, kb);
