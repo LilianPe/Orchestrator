@@ -53,7 +53,7 @@ function fakeEgress(live: string[] = []) {
     },
   };
 }
-const inspectLine = (id: string, running: boolean, runId: string, network: string) => `${id}\t${running}\t${runId}\t${network}\n`;
+const inspectLine = (id: string, running: boolean, runId: string, network: string, allow = '') => `${id}\t${running}\t${runId}\t${network}\t${allow}\n`;
 
 /** An engine with no container yet: `run` prints the new id. */
 const empty = () => engine((a) => (a[0] === 'run' ? ok('c1\n') : ok()));
@@ -201,6 +201,28 @@ describe('ContainerSandboxProvider.create', () => {
     // Twice in one process, the egress is not opened twice.
     await p.reattach('r1');
     expect(egress.opened).toHaveLength(1);
+  });
+
+  it('keeps the allow list of a custom repository on a label, and reattaches with it (ORC-322)', async () => {
+    const made = empty();
+    await new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: made.exec, egress: fakeEgress() }).create(req({ network: 'limited', allow: ['a.example.com', 'b.example.com'] }));
+    const a = runArgs(made.calls);
+    expect(a[a.indexOf('factory.allow=a.example.com,b.example.com') - 1]).toBe('--label');
+
+    const e = engine((x) => {
+      if (x[0] === 'ps') return ok('c9\n');
+      if (x[0] === 'inspect') return ok(inspectLine('c9', true, 'r1', 'limited', 'a.example.com,b.example.com'));
+      throw new Error(`unexpected ${x.join(' ')}`);
+    });
+    const egress = fakeEgress();
+    await new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: e.exec, egress }).reattach('r1');
+    expect(egress.opened).toEqual([{ runId: 'r1', policy: { level: 'limited', allow: ['a.example.com', 'b.example.com'] } }]);
+  });
+
+  it('puts no allow label on a sandbox without hosts of its own', async () => {
+    const made = empty();
+    await new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: made.exec }).create(req({ network: 'limited' }));
+    expect(runArgs(made.calls).some((x) => x.startsWith('factory.allow='))).toBe(false);
   });
 
   it('has nothing to reattach to when the container of the attempt is stopped or gone', async () => {
