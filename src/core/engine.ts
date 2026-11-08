@@ -1471,6 +1471,13 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
     case 'ticket.undelegated':
       // Its team got a repo, or delegated again with its `repo:` label the ticket went to its repo: here nothing waits any longer (ORC-171, ORC-291).
       if (isUnrouted(ticket)) out.events.push(...END_OF_WAIT);
+      // Taken back by a human (ORC-227): its work in flight is cancelled as a cancel's is (ORC-170), a check or a waiting job
+      // included, which the stop of a run under way does not reach. A ticket at rest has nothing to cancel.
+      else if (state?.delegated && (state.activeRunId || state.verifyingRunId || state.pendingJob)) {
+        out.trace.push('built-in ticket.undelegated: work cancelled');
+        out.events.push({ type: 'work.cancelled' });
+        out.effects.push({ kind: 'stop_run' });
+      }
       break;
     case 'label.changed': {
       // Routing is sticky (ORC-291): a ticket at work stays in its repo, whichever repo of the team a label added names.
