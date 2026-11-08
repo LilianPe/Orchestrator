@@ -1,5 +1,5 @@
 import { expect } from 'vitest';
-import type { RunHandle, RunRequest, Runner, RunStreamEvent } from '../../src/adapters/runner/types.js';
+import type { RunHandle, RunRequest, RunResult, Runner, RunStreamEvent } from '../../src/adapters/runner/types.js';
 import { describeContract, resolved, type ContractOptions } from './cases.js';
 
 /**
@@ -21,7 +21,7 @@ let n = 0;
 function request(patch: Partial<RunRequest>): RunRequest {
   return {
     runId: `contract-${++n}`, cwd: process.cwd(), prompt: '/factory:dev', claudeSessionId: `session-${n}`, resume: false, model: 'sonnet',
-    pluginDir: '/pack', settingsPath: '/pack/settings.json', readOnly: false, limits: { turns: 50, durationMs: 10_000, usd: 5 }, env: {},
+    pluginDir: '/pack', settingsPath: '/pack/settings.json', readOnly: false, limits: { turns: 50, durationMs: 10_000 }, env: {},
     ...patch,
   };
 }
@@ -101,22 +101,25 @@ export function describeAgentRuntimeContract(name: string, make: () => AgentRunt
       expect(await within(resolved(b.done), 1_500)).toMatchObject({ outcome: 'stopped' });
     });
 
-    const endsInLimit = async (script: AgentScript, limits: RunRequest['limits'], elapse = 0) => {
+    /** `overBudget`: the budget it says it spent (ORC-216), absent for its duration. */
+    const endsInLimit = async (script: AgentScript, limits: RunRequest['limits'], overBudget: 'turns' | undefined, elapse = 0) => {
       const s = make();
       const h = start(s, script, { limits });
       s.elapse?.(elapse);
       try {
-        expect(await within(resolved(h.done), s.elapse ? 100 : 1_500)).toMatchObject({ outcome: 'limit' });
+        const done = await within(resolved(h.done), s.elapse ? 100 : 1_500);
+        expect(done).toMatchObject({ outcome: 'limit' });
+        expect((done as RunResult).overBudget).toBe(overBudget);
       } finally {
         h.stop();
       }
     };
 
-    it('a run past its duration cap ends in limit', () =>
-      endsInLimit('hang', { turns: 50, durationMs: 200, usd: 5 }, 200));
+    it('a run past its duration cap ends in limit, no budget spent', () =>
+      endsInLimit('hang', { turns: 50, durationMs: 200 }, undefined, 200));
 
-    it('a run past its turn cap ends in limit', () =>
-      endsInLimit('chatty', { turns: 2, durationMs: 10_000, usd: 5 }));
+    it('a run past its turn cap ends in limit, its turn budget spent', () =>
+      endsInLimit('chatty', { turns: 2, durationMs: 10_000 }, 'turns'));
 
   });
 }

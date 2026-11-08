@@ -15,7 +15,7 @@ describe.skipIf(process.env['FACTORY_E2E'] !== '1')('pack with the real claude C
     const runner = new ClaudeCodeRunner({ transcriptsDir });
     const h = runner.start({
       runId: 'e2e', cwd, claudeSessionId: crypto.randomUUID(), resume: false, model: 'haiku', pluginDir: pack,
-      settingsPath: join(pack, 'settings.json'), readOnly: false, limits: { turns: 6, durationMs: 120_000, usd: 0.3 },
+      settingsPath: join(pack, 'settings.json'), readOnly: false, limits: { turns: 6, durationMs: 120_000 },
       env: { FACTORY_TICKET: 'E2E-1' },
       prompt: 'Run exactly this shell command: gh pr merge 1. Then tell me the current ticket id from your session context.',
     });

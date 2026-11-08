@@ -29,7 +29,6 @@ function setup(
   o: {
     runner?: Runner;
     verify?: Verifier;
-    budget?: number;
     hold?: boolean;
     settingsPath?: string;
     tweak?: (w: ReturnType<typeof loadWorkflow>) => void;
@@ -54,7 +53,7 @@ function setup(
   const clock = new FakeClock(1_000);
   const orch = new Orchestrator({
     store, clock, bus, scheduler,
-    tracker, forge: new FakeForge(), runner, workspaces: o.workspaces ?? new FakeWorkspaces(), verify: o.verify ?? (async () => ({ ok: true, failures: [] })), hostChecks: true, dailyBudgetUsd: o.budget,
+    tracker, forge: new FakeForge(), runner, workspaces: o.workspaces ?? new FakeWorkspaces(), verify: o.verify ?? (async () => ({ ok: true, failures: [] })), hostChecks: true,
     projects: [{ id: 'p', repoPath: '/repo', teamKey: 'REL', workflow }], packDir, settingsPath: o.settingsPath,
     agentEnv: (r) => ({ FACTORY_RUN_TOKEN: r.token }), newId: () => `id-${++n}`, activityIntervalMs: 0, holdInboxUntilReplay: o.hold, factoryCommit: 'cafe42',
     // One attempt: a failed effect dies at once (the retries have their own tests).
@@ -357,22 +356,18 @@ describe('Orchestrator', () => {
     expect((await store.getTicket('p', 'REL-1'))!.logical).not.toBe('human_review');
   });
 
-  it('enqueues over budget and comments only once per ticket per day', async () => {
-    const { store, tracker, runner, orch } = setup({ budget: 0.01 });
+  it('never holds the queue on a daily budget in dollars, however much the day cost (ORC-216)', async () => {
+    const { store, tracker, runner, orch } = setup();
     tracker.addIssue({ identifier: 'REL-1', title: 'A' });
     tracker.addIssue({ identifier: 'REL-2', title: 'B' });
+    runner.enqueue({ costUsd: 10_000 });
     await orch.accept(delegated());
     await orch.drained();
-    expect(runner.requests).toHaveLength(1);
-    const d2 = (id: string): FactoryEvent => ({ ...TRUSTED, id, type: 'ticket.delegated', at: 1_000, projectId: 'p', ticketId: 'REL-2', payload: { linearSessionId: 'ls-2' } });
-    await orch.accept(d2('e2'));
-    await orch.accept(d2('e3'));
+    await orch.accept({ ...TRUSTED, id: 'e2', type: 'ticket.delegated', at: 1_000, projectId: 'p', ticketId: 'REL-2', payload: { linearSessionId: 'ls-2' } });
     await orch.drained();
-    expect(runner.requests).toHaveLength(1);
-    expect((await store.listQueue()).length).toBeGreaterThanOrEqual(1);
-    const comments = tracker.calls.filter((c) => c.method === 'comment' && c.args[0] === 'REL-2');
-    expect(comments).toHaveLength(1);
-    expect(String(comments[0]!.args[1])).toContain('Daily budget');
+    expect(runner.requests.map((r) => r.runId)).toHaveLength(2);
+    expect(await store.listQueue()).toEqual([]);
+    expect(tracker.calls.filter((c) => c.method === 'comment' && String(c.args[1]).includes('budget'))).toEqual([]);
   });
 
   describe('the cost caps of factory.yml (ORC-340)', () => {
@@ -391,6 +386,8 @@ describe('Orchestrator', () => {
       expect(workspaces.prepared).toEqual([]);
       const t = (await store.getTicket('p', 'REL-1'))!;
       expect(t.blocked).toBe(true);
+      // Typed (ORC-216): the Flow files it under its cause, the engine decides on its kind, never on the sentence.
+      expect(t.blockKind).toBe('budget');
       // It says when a raised cap counts: factory.yml is read once, at the daemon's start.
       expect(t.blockReason).toBe("Token budget of the ticket reached: 1000 tokens spent of 1000 by its code runs (budgets.per_ticket_tokens). Raise the cap (factory.yml counts once the daemon restarts, the repository's .factory/config.yml at the next launch) or split the ticket, then reply here.");
     });
@@ -415,6 +412,19 @@ describe('Orchestrator', () => {
       await orch.drained();
       expect((await store.getTicket('p', 'REL-1'))!.blocked).toBe(false);
       expect(await store.dueTimers(Number.MAX_SAFE_INTEGER)).toMatchObject([{ key: 'REL-1:usage.reset', kind: 'usage.reset', payload: { job: 'dev', account: 'default' }, fireAt: 1_000_000 }]);
+    });
+
+    it('a run that spends what the ticket had left is blocked, kind budget, with the standard comment (ORC-216)', async () => {
+      const { store, tracker, runner, orch } = setup({ perTicketTokens: 1_000 });
+      tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+      await spent(store, 400);
+      runner.enqueue({ tokens: { input: 0, output: 700, cacheRead: 0, cacheCreation: 0 } });
+      await orch.accept(delegated());
+      await orch.drained();
+      const run = (await store.getRun(runner.requests[0]!.runId))!;
+      expect(run).toMatchObject({ status: 'limit', overBudget: 'tokens' });
+      expect(await store.getTicket('p', 'REL-1')).toMatchObject({ blocked: true, blockKind: 'budget', blockReason: 'The run dev spent its token budget (budgets.per_step_tokens, or what the ticket had left).' });
+      expect(tracker.comments('REL-1').at(-1)).toMatch(/^🔴 Blocked at step build/);
     });
 
     it('without a cap, a launch reads no run of the ticket', async () => {

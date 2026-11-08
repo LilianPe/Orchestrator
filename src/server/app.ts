@@ -32,7 +32,6 @@ export interface ServerDeps {
   tracker: Pick<Tracker, 'getIssue' | 'search' | 'activity'>;
   knowledgeSearch?: (q: string) => Promise<{ file: string; line: number; text: string }[]>;
   capacity: () => { dev: { used: number; total: number }; questions: { used: number; total: number } };
-  dailyBudgetUsd?: number;
   transcriptsDir: string;
   webDir?: string;
   /** When set (non-loopback host), HTTP Basic auth with this password guards everything but the webhook, the OAuth callback and /agent. */
@@ -168,7 +167,6 @@ export function createApp(d: ServerDeps): Hono {
       queue,
       activeRuns: running.map(publicRun),
       costTodayUsd,
-      budgetUsd: d.dailyBudgetUsd ?? null,
       capacity: d.capacity(),
     });
   });

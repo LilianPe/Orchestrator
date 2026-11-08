@@ -127,8 +127,8 @@ async function storedOutput(store: Store, runId: string): Promise<AgentOutput | 
 }
 
 /** What only the runner knows of an attempt's end (ORC-136), kept on its row: recover() sends the same result if the process dies before it does. */
-function endFacts({ stagnation, infra, usageLimit }: Pick<RunResult, 'stagnation' | 'infra' | 'usageLimit'>): Pick<RunResult, 'stagnation' | 'infra' | 'usageLimit'> {
-  return { ...(stagnation ? { stagnation } : {}), ...(infra ? { infra } : {}), ...(usageLimit ? { usageLimit } : {}) };
+function endFacts({ stagnation, infra, usageLimit, overBudget }: Pick<RunResult, 'stagnation' | 'infra' | 'usageLimit' | 'overBudget'>): Pick<RunResult, 'stagnation' | 'infra' | 'usageLimit' | 'overBudget'> {
+  return { ...(stagnation ? { stagnation } : {}), ...(infra ? { infra } : {}), ...(usageLimit ? { usageLimit } : {}), ...(overBudget ? { overBudget } : {}) };
 }
 
 /** A usage limit whose reset the CLI did not tell: tried again after this long (ORC-340). ponytail: a fixed probe, hourly. */
@@ -241,7 +241,6 @@ export interface OrchestratorDeps {
   repoConfig?: (project: ProjectRuntime, read?: RepoConfigRead) => Promise<RepoConfig>;
   /** Where a project's base branch is fetched (ORC-151): required with `sandboxes`. */
   originUrl?: (project: ProjectRuntime) => Promise<string>;
-  dailyBudgetUsd?: number;
   /** `budgets.per_ticket_tokens` of factory.yml (ORC-340): a ticket past it is blocked before its next run. The repository's own cap lowers it. */
   perTicketTokens?: number;
   /** `budgets.on_usage_limit` of factory.yml (ORC-340): `wait`, a run stopped by the usage limit resumes at its reset. Absent: it blocks, as any failure. */
@@ -354,11 +353,6 @@ function roleOf(job: JobSpec, ticketSession: boolean): SessionRole | undefined {
   if (ticketSession) return 'implementer';
   if (job.queue === 'dev') return 'reviewer';
   return job.workspace === 'trunk-readonly' ? 'answerer' : undefined;
-}
-
-function startOfUtcDay(ts: number): number {
-  const d = new Date(ts);
-  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
 }
 
 /** The inbox id of an attempt's result, and its key among the results kept (`deliver`). */
@@ -1111,18 +1105,6 @@ export class Orchestrator {
     return (await this.usageLimitedUntil()) !== undefined;
   }
 
-  /**
-   * ponytail: checked before the launch, on the costs of the runs ended so far: the runs in flight count once they end. The day can
-   * overshoot its budget by what the runs running at once spend: the code runs (`concurrency`) and the question runs (`question_sessions`),
-   * each up to its cap (`limits.per_run.usd`) when Claude Code reports its cost. A run cut before that report is priced by estimate
-   * (`estimateCostUsd`), at the dearest list price when it died before its init line named its model: that can exceed its cap.
-   * A lock or transaction around the read would not help, the cost of a live run is unknown until its end; reserve each run's cap if it must be exact.
-   */
-  private async overBudget(): Promise<boolean> {
-    const budget = this.d.dailyBudgetUsd;
-    return budget !== undefined && (await this.d.store.costSince(startOfUtcDay(this.d.clock.now()))) >= budget;
-  }
-
   private log(level: 'info' | 'warn' | 'error', message: string): void {
     this.d.bus.publish({ kind: 'log', level, message, at: this.d.clock.now() });
   }
@@ -1396,7 +1378,7 @@ export class Orchestrator {
     const leaseMs = this.d.effectLeaseMs ?? LEASE_MS;
     const n = (await this.d.store.listQueue()).filter((q) => q.queue === queue).length;
     for (let i = 0; i < n; i++) {
-      if ((await this.isPaused()) || (await this.usageLimited()) || (await this.overBudget()) || this.d.scheduler.free(queue) - this.admitting[queue] <= 0) return;
+      if ((await this.isPaused()) || (await this.usageLimited()) || this.d.scheduler.free(queue) - this.admitting[queue] <= 0) return;
       const claim = await this.d.scheduler.next(queue, leaseMs);
       if (!claim) return;
       const item = claim.item;
@@ -1933,11 +1915,6 @@ export class Orchestrator {
       return 'deferred';
     }
     if (this.stopping || (await this.isPaused()) || (await this.usageLimited())) return requeue();
-    if (await this.overBudget()) {
-      const queued = await requeue();
-      await this.noteBudget(project, ticketId);
-      return queued;
-    }
     const key = `${ticketId}:${job.queue}`;
     // A start from a decision leaves alone the slots a drain promised to the items it dequeued.
     const promised = admitted ? 0 : this.admitting[job.queue];
@@ -1974,7 +1951,7 @@ export class Orchestrator {
     }
     // A file the repository has to fix is not a breakdown of the factory: the Flow shows it as such (`repo_config`).
     const [kind, reason]: [BlockKind, string] =
-      err instanceof RepoConfigError ? ['repo_config', `${REPO_CONFIG_REFUSED}${err.message}`] : err instanceof TicketBudgetError ? ['limit', err.message] : ['infra', `Launch error: ${(err as Error).message}`];
+      err instanceof RepoConfigError ? ['repo_config', `${REPO_CONFIG_REFUSED}${err.message}`] : err instanceof TicketBudgetError ? ['budget', err.message] : ['infra', `Launch error: ${(err as Error).message}`];
     fresh = await this.apply(fresh, ...events, blockedOn(project.workflow, kind, reason, job.name));
     // The ticket is blocked: a failed notice must not fail the effect, whose retry would start again.
     try {
@@ -2011,17 +1988,6 @@ export class Orchestrator {
     if (cap === undefined) return undefined;
     if (spent >= cap) throw new TicketBudgetError(`${TICKET_TOKENS_REACHED}${spent} tokens spent of ${cap} by its code runs (budgets.per_ticket_tokens). Raise the cap (factory.yml counts once the daemon restarts, the repository's .factory/config.yml at the next launch) or split the ticket, then reply here.`);
     return cap - spent;
-  }
-
-  private async noteBudget(project: ProjectRuntime, ticketId: string): Promise<void> {
-    const day = new Date(this.d.clock.now()).toISOString().slice(0, 10);
-    const key = `budget:${day}:${project.id}:${ticketId}`;
-    if (await this.d.store.getMeta(key)) return;
-    await this.d.store.setMeta(key, '1');
-    await this.d.tracker.comment(
-      ticketId,
-      `Daily budget of ${PRODUCT_NAME} reached: this ticket stays queued until tomorrow (or until the cap is raised).`,
-    );
   }
 
   /**
@@ -2511,6 +2477,7 @@ export class Orchestrator {
         ...(result.stagnation ? { stagnation: result.stagnation } : {}),
         ...(run.pickup ? { pickup: run.pickup } : {}),
         ...(usageLimit ? { usageLimit } : {}),
+        ...(result.overBudget ? { overBudget: result.overBudget } : {}),
       },
     };
   }

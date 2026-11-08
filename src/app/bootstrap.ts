@@ -168,8 +168,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       log('Warning: FACTORY_ALLOW_HOST_RUNS=1 and no FACTORY_CONTAINER_CLI, runs execute on the host, without isolation.');
       log(env['FACTORY_ALLOW_HOST_VERIFY'] === '1' ? "Warning: FACTORY_ALLOW_HOST_VERIFY=1, verify runs the agent's code on the host, next to the daemon's secrets." : 'Warning: without a sandbox or FACTORY_ALLOW_HOST_VERIFY=1, verify refuses to run: every verified ticket will be blocked.');
     }
-    // No default cap (ORC-340): on a subscription the dollar cost is an API-price equivalent, any default would be a guess that stops work silently.
-    if (instance.limits.perDayUsd === undefined) log('Warning: no daily budget (limits.perDayUsd in config.yaml): runs start whatever they cost today.');
+    // No default cap (ORC-216): the values are to calibrate, any default would be a guess that stops work silently.
+    if (yml?.budgets?.perTicketTokens === undefined) log('Warning: no ticket budget (budgets.per_ticket_tokens in factory.yml): a ticket runs whatever it spends; `factory validate` refuses until it is set.');
     if (sandboxes && !claudeToken) log('Warning: no Claude token (claude.active in factory.yml, or CLAUDE_CODE_OAUTH_TOKEN): sandboxed runs will not be able to authenticate.');
     const runner: Runner = o.fakeRunner
       ? Object.assign(new FakeRunner(), { submit: (runId: string, output: AgentOutput) => saveAgentOutput(store, runId, output) })
@@ -232,7 +232,6 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       projects,
       packDir,
       settingsPath: writeRunSettings(packDir, o.home),
-      dailyBudgetUsd: instance.limits.perDayUsd,
       ...(yml?.budgets?.perTicketTokens ? { perTicketTokens: yml.budgets.perTicketTokens } : {}),
       ...(yml?.budgets?.onUsageLimit ? { onUsageLimit: yml.budgets.onUsageLimit } : {}),
       // The account whose token the runner and the proxy use (`claudeToken` above): `claude.active` when its token is the one resolved,
@@ -360,7 +359,6 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
         dev: { used: scheduler.inUse('dev'), total: devSessions },
         questions: { used: scheduler.inUse('questions'), total: limits?.questionSessions ?? 2 },
       }),
-      dailyBudgetUsd: instance.limits.perDayUsd,
       transcriptsDir: paths.transcripts,
       webDir: existsSync(webDir) ? webDir : undefined,
       uiPassword,

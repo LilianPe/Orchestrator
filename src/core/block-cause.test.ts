@@ -61,6 +61,13 @@ describe('the kind of a block, set by the code that builds it (ORC-345)', () => 
     expect(legacyBlock(b.reason).blockKind).toBe(kind);
   });
 
+  it('budget, for a step past its token or turn cap (ORC-216): a kind of its own under the cause limit, set by decide, never read from a reason', () => {
+    for (const overBudget of ['tokens', 'turns'] as const) expect(blockOf(ticket({ activeRunId: 'r1' }), finished({ outcome: 'limit', overBudget })).kind).toBe('budget');
+    expect(causeOf('budget')).toBe('limit');
+    // A ticket blocked on the ticket's budget before ORC-216 keeps the kind its reason gave it.
+    expect(legacyBlock('Token budget of the ticket reached: 1000 tokens spent of 1000 by its code runs (budgets.per_ticket_tokens).').blockKind).toBe('limit');
+  });
+
   it('records the dead-lettered event with its block', () => {
     expect(blockOf(ticket(), ev('dead_letter.added', { eventId: 'e9', eventType: 'pr.opened', error: 'boom', failures: 1 }))).toMatchObject({ kind: 'dead_letter', eventId: 'e9' });
   });

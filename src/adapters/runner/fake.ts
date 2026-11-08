@@ -1,6 +1,6 @@
 import { FakeClock, type Clock } from '../../core/clock.js';
 import type { AgentOutput } from '../../core/agent-output.js';
-import type { RunOutcome, Stagnation, TokenUsage } from '../../core/types.js';
+import { spentTokens, type OverBudget, type RunOutcome, type Stagnation, type TokenUsage } from '../../core/types.js';
 import { Channel } from './channel.js';
 import type { AttachRequest, RunHandle, RunRequest, RunResult, Runner, RunStreamEvent } from './types.js';
 
@@ -68,6 +68,9 @@ export class FakeRunner implements Runner {
     const ch = new Channel<RunStreamEvent>();
     for (const e of events) ch.push(e);
     const overTurns = (s.turns ?? 1) > req.limits.turns;
+    // As the real runtime counts them (ORC-216): a usage past the attempt's cap in tokens stops it, cache reads left out.
+    const overTokens = !overTurns && s.tokens !== undefined && req.limits.tokens !== undefined && spentTokens(s.tokens) > req.limits.tokens;
+    const overBudget: OverBudget | undefined = overTurns ? 'turns' : overTokens ? 'tokens' : undefined;
     const turns = overTurns ? req.limits.turns + 1 : (s.turns ?? 1);
     let forced: RunOutcome | undefined;
     let releaseHold: () => void = () => {};
@@ -83,11 +86,11 @@ export class FakeRunner implements Runner {
       ch.close();
       this.live.delete(req.runId);
       if (s.fail) throw new Error(s.fail);
-      return { outcome: forced ?? s.outcome ?? 'success', costUsd: s.costUsd ?? 0.1, turns, lastText, ...(s.tokens ? { tokens: s.tokens } : {}), ...(s.stagnation ? { stagnation: s.stagnation } : {}), ...(s.usageLimit ? { usageLimit: s.usageLimit } : {}) };
+      return { outcome: forced ?? s.outcome ?? 'success', costUsd: s.costUsd ?? 0.1, turns, lastText, ...(s.tokens ? { tokens: s.tokens } : {}), ...(s.stagnation ? { stagnation: s.stagnation } : {}), ...(s.usageLimit ? { usageLimit: s.usageLimit } : {}), ...(overBudget ? { overBudget } : {}) };
     });
     const run: LiveRun = { deadline: this.clock.now() + req.limits.durationMs, end, done };
     if (s.hold) this.live.set(req.runId, run);
-    if (overTurns) end('limit');
+    if (overBudget) end('limit');
     return this.handle(run, ch);
   }
 

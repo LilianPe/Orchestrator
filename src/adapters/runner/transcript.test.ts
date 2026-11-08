@@ -147,7 +147,7 @@ describe('ClaudeCodeRunner transcript', () => {
     const runner = new ClaudeCodeRunner({ transcriptsDir, command: [process.execPath, fx('fake-claude.mjs')], killGraceMs: 500, secrets: () => ['linear-client-secret'] });
     const h = runner.start({
       runId: 'r-masked', cwd: process.cwd(), prompt: '/factory:dev', claudeSessionId: 'uuid-1', resume: false, model: 'sonnet',
-      pluginDir: '/pack', settingsPath: '/pack/settings.json', readOnly: false, limits: { turns: 50, durationMs: 10_000, usd: 5 },
+      pluginDir: '/pack', settingsPath: '/pack/settings.json', readOnly: false, limits: { turns: 50, durationMs: 10_000 },
       env: { FAKE_CLAUDE_SCRIPT: script, FACTORY_RUN_TOKEN: 'tok-abcdef-123456' },
     });
     const events = await drain(h.events);
