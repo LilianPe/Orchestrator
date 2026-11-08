@@ -82,6 +82,16 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     expect(await s.listTickets()).toHaveLength(1);
   });
 
+  it('keeps the run boundary of a ticket as written, marked then closed, and a visual proof lifted by a new run (ORC-365)', async () => {
+    const s = await store();
+    const marked = { ...newTicketState('p', 'REL-1', 'T', 'todo', 1), risk: 'high' as const, visualProof: 'required' as const, newRun: true as const };
+    await s.putTicket(marked);
+    expect(await s.getTicket('p', 'REL-1')).toEqual(marked);
+    const closed = { ...marked, risk: 'low' as const, visualProof: null, newRun: null };
+    await s.putTicket(closed);
+    expect(await s.getTicket('p', 'REL-1')).toEqual(closed);
+  });
+
   it('dedupes events by id and lists recent ones, newest first', async () => {
     const s = await store();
     const e = { id: 'e1', type: 'control.pause', at: 5, projectId: 'p', payload: {} } as FactoryEvent;

@@ -273,16 +273,30 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
       }),
     ];
     const lowered = seq(...delegated(), ...assessedRisk('r1', 'high'), ...assessedRisk('r2', 'low'));
+    // Taken back, then delegated again (ORC-365): a new run, whose intake proposes low.
+    const again = [ext('ticket.undelegated', {}), ext('ticket.delegated', { linearSessionId: 's-again', ack: true })];
+    const redelegated = seq(...delegated(), ...assessedRisk('r1', 'high'), ...again, ...assessedRisk('r2', 'low'));
     it(
-      'once assessed, the risk stays and never goes below what it was; the visual proof, once required, stays required',
+      'within a run, once assessed, the risk stays and never goes below what it was; the visual proof, once required, stays required',
       () => {
         holds((s) => {
           for (const step of run(s).steps) {
+            // The first assessment of a new run, which closes its boundary, sets them from its own level: the only step allowed to lower them.
+            if (step.before?.newRun && !step.after?.newRun) continue;
             const before = step.before?.risk;
             if (before) expect(step.after?.risk && higherRisk(before, step.after.risk)).toBe(step.after?.risk);
             if (step.before?.visualProof) expect(step.after?.visualProof).toBe('required');
           }
-        }, [lowered]);
+        }, [lowered, redelegated]);
+      },
+      TIMEOUT,
+    );
+    it(
+      'a ticket delegated again starts from its new intake: low after high',
+      () => {
+        const steps = run(redelegated).steps;
+        expect(steps.at(-1)?.after?.risk).toBe('low');
+        expect(run(lowered).steps.at(-1)?.after?.risk).toBe('high');
       },
       TIMEOUT,
     );

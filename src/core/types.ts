@@ -398,7 +398,7 @@ export type DecidedEvent =
   | { type: 'ticket.unblocked' }
   | {
       type: 'ticket.patched';
-      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'verifiedSha' | 'awaitingRepo' | 'owedMove' | 'usageWait' | 'usageRelaunches' | 'usageAsks' | 'size' | 'risk' | 'visualProof' | 'clarify' | 'decisions' | 'waitingOn'>>;
+      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'verifiedSha' | 'awaitingRepo' | 'owedMove' | 'usageWait' | 'usageRelaunches' | 'usageAsks' | 'size' | 'risk' | 'visualProof' | 'newRun' | 'clarify' | 'decisions' | 'waitingOn'>>;
     }
   | { type: 'feedback.appended'; item: FeedbackItem }
   /** The ticket's dev work is stopped: nothing pending, no verification awaited. */
@@ -563,8 +563,17 @@ export interface TicketState {
   updatedAt: number;
   /** The size `intake` estimated (ORC-206), its last assessment. Absent until one. */
   size?: TicketSize;
-  /** The risk of the run (ORC-206): the highest any step proposed, never lowered (I4). Absent until `intake` assessed it. */
+  /**
+   * The risk of the run (ORC-206): the highest any step of it proposed, never lowered within it (I4). A new run starts
+   * again from its own intake's (`newRun`, ORC-365). Absent until `intake` assessed it.
+   */
   risk?: Risk;
+  /**
+   * The boundary of a run (ORC-365): a delegation started a new run after an assessment, and no intake of it has assessed
+   * yet. Its first assessment sets the risk and the visual proof from its own level instead of raising them, then closes
+   * the boundary (`null`). Absent on a ticket from before ORC-365, read as the same run: it decides as it did.
+   */
+  newRun?: true | null;
   /**
    * The `clarify` questions waiting for their answers (ORC-210): asked by the guard after `job` (intake) at `at`, the first
    * `answered` of them answered, in order. Not a block: the ticket waits, and whatever moves it on ends the wait (`reduce`).
@@ -573,8 +582,11 @@ export interface TicketState {
   clarify?: { job: string; questions: ClarifyQuestion[]; at: number; answered: number } | null;
   /** The answers accepted to the `clarify` questions (ORC-210): decisions of the ticket, given to its runs and kept with the freeze. */
   decisions?: ClarifyAnswer[];
-  /** Visual proof planned for the ticket (ORC-206): `intake` can only harden it to `required`, never lift it. Absent: undecided until `verify` (ORC-176). */
-  visualProof?: 'required';
+  /**
+   * Visual proof planned for the ticket (ORC-206): within a run, `intake` can only harden it to `required`, never lift it;
+   * a new run plans its own (`newRun`, ORC-365), `null` when it sees no screen. Absent or `null`: undecided until `verify` (ORC-176).
+   */
+  visualProof?: 'required' | null;
   /** Hash of the workflow version the ticket was decided on first, read for all its later decisions (ORC-149). */
   workflowHash?: string;
 }

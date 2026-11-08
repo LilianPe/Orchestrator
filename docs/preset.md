@@ -122,8 +122,10 @@ Before the ticket's first run (no Claude session yet), the factory runs the dete
 At its end, `decide` records the assessment in the ticket's state:
 
 - `size`, the last assessment's;
-- `risk`, the higher of the ticket's and the proposed one: the risk never goes down (I4, property in `test/properties/decide.prop.test.ts`). Nothing resets it yet, a later run of the ticket included;
-- `visualProof: required` when the ticket speaks of a screen; never lifted: the model cannot make visual proof `not_applicable`. Deciding it from the real diff is `verify`'s (ORC-176).
+- `risk`, the higher of the ticket's and the proposed one: within a run, the risk never goes down (I4, property in `test/properties/decide.prop.test.ts`);
+- `visualProof: required` when the ticket speaks of a screen; never lifted within a run: the model cannot make visual proof `not_applicable`. Deciding it from the real diff is `verify`'s (ORC-176).
+
+A new run starts again from its own level (ORC-365). A delegation that finds no run active, on a ticket already assessed, marks the run's boundary (`newRun`); the next intake's assessment then sets the risk to what it proposes, and the visual proof to `required` or `null` by its own `screen`, and closes the boundary. A delegation refused by the matrix, or made while a run is active, marks nothing. A ticket from before ORC-365 has no boundary marked: it stays in its run and decides as before.
 
 Each later attempt of the ticket carries its risk in its labels (`risk`, ORC-226).
 
