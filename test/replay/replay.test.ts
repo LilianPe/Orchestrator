@@ -262,7 +262,7 @@ describe('recorded journals (test/replay/journals)', () => {
     expect(files.filter((f) => f.endsWith('.pre-orc-310.json')).sort()).toEqual(expected.sort());
   });
 
-  // Nothing else reads most of the frozen copies by name: a deleted one would take its coverage away silently.
+  // Only build-loop-blocked is read by name; the other four are merely replayed, so a deleted one left the suite green.
   it('keeps the frozen copies of the pre-ORC-196 journals main held (ORC-310)', () => {
     // The journals main held then, not today's SCENARIOS: a scenario added later has no copy to keep.
     const expected = [
