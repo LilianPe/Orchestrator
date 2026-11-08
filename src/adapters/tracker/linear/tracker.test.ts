@@ -23,7 +23,7 @@ const conn = <N>(nodes: N[], next: string | null = null) => ({ nodes, pageInfo: 
 const node = {
   id: 'uuid-1', identifier: 'REL-1', title: 'Export', description: 'Desc', url: 'https://linear.app/x/REL-1', priority: 2,
   createdAt: '2026-10-10T08:00:00.000Z', state: { id: 's-todo', name: 'Todo', type: 'unstarted' },
-  labels: conn([{ id: 'l1', name: 'bug' }]), delegate: { id: 'app-1' }, team: { id: 't-1', key: 'REL' },
+  labels: conn([{ id: 'l1', name: 'bug' }]), inverseRelations: conn([]), delegate: { id: 'app-1' }, team: { id: 't-1', key: 'REL' },
 };
 const states = { workflowStates: conn([
   { id: 's-todo', name: 'Todo', type: 'unstarted', position: 0 },
@@ -50,8 +50,40 @@ describe('LinearTracker', () => {
     const { api } = fakeLinear({ Issue: () => ({ issue: node }) });
     expect(await new LinearTracker(api, 'app-1').getIssue('REL-1')).toEqual({
       identifier: 'REL-1', title: 'Export', description: 'Desc', url: 'https://linear.app/x/REL-1', stateName: 'Todo', stateType: 'unstarted',
-      labels: ['bug'], delegateId: 'app-1', teamKey: 'REL', priority: 2, createdAt: Date.parse('2026-10-10T08:00:00.000Z'),
+      labels: ['bug'], delegateId: 'app-1', teamKey: 'REL', priority: 2, createdAt: Date.parse('2026-10-10T08:00:00.000Z'), blockedBy: [],
     });
+  });
+
+  it("reads the tickets an issue is « blocked by », every page of its relations, the other kinds left out (ORC-363)", async () => {
+    const rel = (type: string, identifier: string, state: { name: string; type: string }) => ({ type, issue: { identifier, state } });
+    const { api, calls } = fakeLinear({
+      Issue: () => ({ issue: { ...node, inverseRelations: conn([
+        rel('blocks', 'REL-2', { name: 'In Progress', type: 'started' }), rel('related', 'REL-3', { name: 'Todo', type: 'unstarted' }),
+        // One Linear will not show, one in the trash: neither holds the ticket back.
+        { type: 'blocks', issue: null }, { type: 'blocks', issue: { identifier: 'REL-5', trashed: true, state: { name: 'Todo', type: 'unstarted' } } },
+      ], 'r-next') } }),
+      Delegated: () => ({ issues: conn([{ ...node, inverseRelations: conn([rel('blocks', 'OPS-9', { name: 'Done', type: 'completed' })]) }]) }),
+      IssueRelations: () => ({ issue: { inverseRelations: conn([rel('blocks', 'REL-4', { name: 'Done', type: 'completed' })]) } }),
+    });
+    const t = new LinearTracker(api, 'app-1');
+    expect((await t.getIssue('REL-1')).blockedBy).toEqual([
+      { identifier: 'REL-2', stateName: 'In Progress', stateType: 'started' },
+      { identifier: 'REL-4', stateName: 'Done', stateType: 'completed' },
+    ]);
+    expect(calls.at(-1)).toEqual({ op: 'IssueRelations', vars: { id: 'uuid-1', after: 'r-next' } });
+    expect((await t.listDelegated('REL'))[0]!.blockedBy).toEqual([{ identifier: 'OPS-9', stateName: 'Done', stateType: 'completed' }]);
+    // Says more follow without a cursor: never read as complete, or a blocker past the page would be missed.
+    const cut = fakeLinear({ Issue: () => ({ issue: { ...node, inverseRelations: { nodes: [], pageInfo: { hasNextPage: true, endCursor: null } } } }) });
+    await expect(new LinearTracker(cut.api, 'app-1').getIssue('REL-1')).rejects.toThrow(/the relations of REL-1: more pages, but no cursor/);
+  });
+
+  it('a write reads no page of relations past the first: it needs the labels only (ORC-363)', async () => {
+    const { api, calls } = fakeLinear({
+      Issue: () => ({ issue: { ...node, inverseRelations: conn([], 'r-next') } }),
+      IssueUpdate: () => ({ issueUpdate: { success: true } }),
+    });
+    await new LinearTracker(api, 'app-1').setLabels('REL-1', [], ['bug']);
+    expect(calls.map((c) => c.op)).not.toContain('IssueRelations');
   });
 
   it('tells an issue Linear does not have from a read error', async () => {
