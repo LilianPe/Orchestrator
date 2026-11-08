@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { checkForbiddenPaths, FORBIDDEN_CHECK, forbiddenPattern, isOutwardLink, repoPatternError, sensitivePattern, type ForbiddenView } from './forbidden-paths.js';
+import { checkForbiddenPaths, FORBIDDEN_CHECK, forbiddenPattern, isOutwardLink, repoPatternError, sensitiveMatcher, type ForbiddenView } from './forbidden-paths.js';
+
+const sensitivePattern = (path: string, patterns: readonly string[]) => sensitiveMatcher(patterns)(path);
 
 const view = (changed: ForbiddenView['changed'], base: Record<string, string> = {}, head: Record<string, string> = {}): ForbiddenView => ({
   changed,
@@ -63,6 +65,16 @@ describe('forbiddenPattern', () => {
   it.each(['.env.example', '.env.sample', '.env.template', 'apps/web/.env.example', '.ENV.EXAMPLE', '.envoy.yaml', 'env.ts'])('%s, a template or another file, is not', (path) => {
     expect(forbiddenPattern(path)).toBeUndefined();
   });
+
+  it.each([
+    ['claims/.env.example', 'claims/**'],
+    ['.factory/.env.example', '.factory/**'],
+    ['.github/workflows/.env.example', '.github/**'],
+    ['.claude/.env.sample', '.claude/**'],
+    ['.devcontainer/.env.template', '.devcontainer/**'],
+  ])('a template under a forbidden directory, %s, stays forbidden by %s', (path, pattern) => {
+    expect(forbiddenPattern(path)).toBe(pattern);
+  });
 });
 
 describe('sensitivePattern', () => {
@@ -100,9 +112,19 @@ describe('sensitivePattern', () => {
     expect(sensitivePattern(path, [pattern])).toBeUndefined();
   });
 
-  it('refuses only what names nothing in the repository: an absolute path, a drive, a climb', () => {
-    expect(['infra', 'src/auth*', '**/migrations/**', 'src/**/*.sql', './infra', 'a/{b,c}/**'].map(repoPatternError)).toEqual([undefined, undefined, undefined, undefined, undefined, undefined]);
-    for (const p of ['/infra/**', '\\infra', 'C:/infra', 'a/../b', '..']) expect(repoPatternError(p), p).toBeDefined();
+  it('refuses only what names nothing in the repository: an absolute path, a drive, a climb, the root itself', () => {
+    const kept = ['infra', 'src/auth*', '**/migrations/**', 'src/**/*.sql', './infra', 'a/{b,c}/**', 'infra\\modules'];
+    expect(kept.map(repoPatternError)).toEqual(kept.map(() => undefined));
+    for (const p of ['/infra/**', '\\infra', 'C:/infra', 'C:\\infra', 'a/../b', 'a\\..\\b', '..', '.', './', '', '/']) expect(repoPatternError(p), p).toBeDefined();
+  });
+
+  it('reads `\\` as `/`, as the config check does', () => {
+    expect(sensitivePattern('infra/modules/x.tf', ['infra\\modules'])).toBe('infra\\modules');
+  });
+
+  it('compiles each pattern once for all the paths it is asked about', () => {
+    const match = sensitiveMatcher(['infra', 'db/**']);
+    expect(['infra/a', 'db/b', 'src/c'].map(match)).toEqual(['infra', 'db/**', undefined]);
   });
 });
 

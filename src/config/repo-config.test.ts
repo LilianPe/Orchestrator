@@ -157,6 +157,10 @@ describe('parseRepoConfig (.factory/config.yml, ORC-209)', () => {
         'sensitive_paths[2]: "../x": a path from the repository root is expected (no leading `/`, no drive, no `..`)',
         'sensitive_paths[3]: "a/../../b": a path from the repository root is expected (no leading `/`, no drive, no `..`)',
       ]);
+      expect(violations('sensitive_paths: [".", "./"]\n')).toEqual([
+        'sensitive_paths[0]: ".": it names the whole repository, or nothing: name a directory or a file',
+        'sensitive_paths[1]: "./": it names the whole repository, or nothing: name a directory or a file',
+      ]);
       const globs = ['infra', 'infra/**', 'src/auth*', '**/migrations/**', 'src/**/*.sql', 'a/?.ts', '{db,sql}/**'];
       expect(parseRepoConfig(`sensitive_paths: ${JSON.stringify(globs)}\n`).sensitivePaths).toEqual(globs);
     });

@@ -72,13 +72,13 @@ import {
   spentTokens,
 } from './types.js';
 import { runSealedSetup } from './sealed-setup.js';
-import { runCleanVerify, type CleanVerifier } from './clean-verify.js';
+import { checkBranchPaths, runCleanVerify, type CleanVerifier } from './clean-verify.js';
 import { logExcerpt } from '../checks/log-excerpt.js';
 import { cappedCommand, VERIFY_CHECK, type Verifier, type VerifyResult } from './verify.js';
 import { PRODUCT_NAME } from '../product.js';
 import { checkRed, type RedDeps, type RedResult } from '../checks/red.js';
 import { checkFrozen, FREEZE_CHECK, freezeTests, newTestsOnly, REFREEZE, type FrozenTests } from '../checks/freeze.js';
-import { checkForbiddenPaths, FORBIDDEN_CHECK, type ForbiddenView } from '../checks/forbidden-paths.js';
+import { FORBIDDEN_CHECK } from '../checks/forbidden-paths.js';
 import { isTestFile } from '../checks/test-files.js';
 import { ANTI_CHEAT_CHECK, ANTI_CHEAT_OK } from '../checks/anti-cheat.js';
 import { mdCode } from '../checks/markdown.js';
@@ -863,6 +863,7 @@ export class Orchestrator {
     if (!runsDir || !originUrl) throw new Error('runsDir and originUrl are required with sandboxes');
     if (!t.branch || !t.worktreePath) throw new Error(`no branch or no worktree for ${t.ticketId}`);
     // A place the engine mounts from, new for each check: one cut can leave its own behind.
+    const untrustedSince = await this.untrustedSince(t);
     const workDir = join(runsDir, run.id, `verify-${randomUUID()}`);
     mkdirSync(workDir, { recursive: true });
     try {
@@ -879,7 +880,7 @@ export class Orchestrator {
         gitleaks: true,
         ...(green ? { green } : {}),
         ...(goesThroughFreeze(t, job) ? { frozen: t.frozenTests! } : {}),
-        ...(t.untrustedSince === undefined ? {} : { untrustedSince: t.untrustedSince }),
+        ...(untrustedSince === undefined ? {} : { untrustedSince }),
         env: async (config) => (await this.repoVariablesOf(project, config)).env,
         log: (message) => this.log('warn', `verify of ${t.ticketId}: ${message}`),
       });
@@ -890,28 +891,28 @@ export class Orchestrator {
   }
 
   /**
-   * `factory/chemins-interdits` without sandboxes (ORC-338): `checkClone`'s path rules on the worktree's commits since they
-   * left the default branch, read on the factory's repository, the `sensitive_paths` of the launch's config. Symbolic links
-   * are not read here. A path that is no worktree has no commits to check; a read that fails blocks.
+   * `factory/chemins-interdits` without sandboxes (ORC-338): `checkBranchPaths`, as on the clone, on the worktree's branch read
+   * on the factory's repository against its default branch. No worktree, or a read that fails, blocks: nothing is let through unread.
    */
   private async checkPathsOnHost(project: ProjectRuntime, t: TicketState, run: RunRecord): Promise<VerifyFailure[]> {
     const fail = (output: string) => [{ command: FORBIDDEN_CHECK, exitCode: 1, output }];
     try {
-      const fork = await this.d.workspaces.forkPoint(project.repoPath, run.cwd);
-      const diff = fork && (await this.d.workspaces.stepDiff(project.repoPath, run.cwd, fork));
-      if (!diff) return [];
-      const patterns = run.repoConfig?.sensitivePaths ?? [];
-      let sensitive: ForbiddenView['sensitive'];
-      if (t.untrustedSince !== undefined && patterns.length) {
-        // An unread or unreachable head reads the whole branch, as `changedSince` does.
-        const since = t.untrustedSince ? await this.d.workspaces.stepDiff(project.repoPath, run.cwd, t.untrustedSince).catch(() => undefined) : undefined;
-        sensitive = { patterns, changed: new Set((since ?? diff).changed.map((f) => f.path)) };
-      }
-      const r = await checkForbiddenPaths({ changed: diff.changed, showAtBase: diff.showAtBase, showAtHead: diff.showAtHead, ...(sensitive ? { sensitive } : {}) });
-      return r.ok ? [] : fail(r.summary);
+      const reader = await this.d.workspaces.branchReader(project.repoPath, run.cwd);
+      if (!reader) return fail(`The forbidden paths check could not run: no worktree with a commit at ${run.cwd}.`);
+      return await checkBranchPaths(reader, await this.untrustedSince(t));
     } catch (err) {
       return fail(`The forbidden paths check could not run: ${(err as Error).message}`);
     }
+  }
+
+  /**
+   * `TicketState.untrustedSince`, or for a ticket whose untrusted dev runs started before the mark existed, `''`: its whole
+   * branch, as nothing says where it took untrusted content (fail closed). A ticket started since has its mark set by any
+   * such run (`reduce`), so the read only finds what came before.
+   */
+  private async untrustedSince(t: TicketState): Promise<string | undefined> {
+    if (t.untrustedSince !== undefined) return t.untrustedSince;
+    return (await this.d.store.ticketRuns(t.projectId, t.ticketId)).some((r) => r.queue === 'dev' && !!r.sensitivePaths?.length) ? '' : undefined;
   }
 
   /**
@@ -1584,7 +1585,8 @@ export class Orchestrator {
     else if (!t.branch || !t.worktreePath) reason = `no branch or no worktree for ${t.ticketId}.`;
     else {
       try {
-        const untrusted = t.untrustedSince === undefined ? {} : { untrustedSince: t.untrustedSince };
+        const untrustedSince = await this.untrustedSince(t);
+        const untrusted = untrustedSince === undefined ? {} : { untrustedSince };
         const pr = await publisher.publish({ projectId: project.id, repoPath: project.repoPath, ticketId: t.ticketId, runId: c.runId, worktree: t.worktreePath, branch: t.branch, sha: c.sha, ...untrusted, ...prText(t) });
         await this.accept({ ...base, id: prEventId(t.ticketId, pr.prNumber, 'opened'), type: 'pr.opened', at: this.d.clock.now(), payload: { number: pr.prNumber, url: pr.url, branch: t.branch } });
         await this.publishChecks(project, t, c);
@@ -2001,7 +2003,8 @@ export class Orchestrator {
       // the run is written, so recover() finds it whichever write a crash falls after. The feedback stays
       // on the ticket until the run that read it is written: a launch cut before reads it again.
       if (opts.startMark) await store.setMeta(opts.startMark, runId);
-      const untrusted = sensitivePaths ? { untrusted: { cwd: ws.path, head: (await workspaces.head(ws.path)) ?? '' } } : {};
+      // In the ticket's worktree by its job, whatever the ticket still says of its path (ORC-338).
+      const untrusted = sensitivePaths && job.workspace === 'worktree' ? { untrusted: { head: (await workspaces.head(ws.path)) ?? '' } } : {};
       await this.apply(t, { type: 'run.started', runId, job: job.name, queue: job.queue, claudeSessionId, ...(ticketSession ? {} : { ticketSession: false as const }), ...untrusted });
       await store.putRun(run);
       if (consumes) await this.apply(await this.ticket(project.id, ticketId), { type: 'feedback.consumed' });

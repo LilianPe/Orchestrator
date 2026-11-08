@@ -378,10 +378,10 @@ export type ShellEvent =
       /** `false` on a run out of the ticket session (a review): the ticket does not take its session (ORC-217). Absent before. */
       ticketSession?: false;
       /**
-       * A run launched with sensitive paths (it read untrusted content, I12): where it works and the head it starts on,
-       * `''` when none is read. Marks the ticket's branch when `cwd` is its worktree (`untrustedSince`, ORC-338).
+       * A run launched with sensitive paths (it read untrusted content, I12) in the ticket's worktree: the head it starts on,
+       * `''` when none is read. Marks the ticket's branch (`untrustedSince`, ORC-338).
        */
-      untrusted?: { cwd: string; head: string };
+      untrusted?: { head: string };
     }
   /**
    * The pending feedback was given to a run, recorded once that run is written (ORC-220): a launch cut

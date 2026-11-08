@@ -158,6 +158,27 @@ describe('a disposable sandbox per attempt', () => {
     expect((await h.ticket()).untrustedSince).toBe('head-before-untrusted');
   });
 
+  it('a ticket whose untrusted dev run came before the mark existed reads its whole branch: no mark, no way to say where (ORC-338)', async () => {
+    const seen: CleanVerifyRequest[] = [];
+    const h = createHarness({
+      sandboxed: true,
+      projectYaml: VERIFIED,
+      cleanVerify: async (req) => {
+        seen.push(req);
+        return { ok: true, failures: [], sha: `sha-${seen.length}`, tree: 'tree' };
+      },
+    });
+    await delegate(h);
+    // As a run recorded before the deploy: its sensitive paths, and no mark on its ticket.
+    const first = (await h.store.getRun(h.runner.requests[0]!.runId))!;
+    await h.store.putRun({ ...first, id: 'legacy', sensitivePaths: SENSITIVE_PATHS });
+    expect((await h.ticket()).untrustedSince).toBeUndefined();
+    await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'and the title', author: 'L' });
+    await h.advance(600_000);
+    expect(seen.map((r) => r.untrustedSince)).toEqual([undefined, '']);
+    expect(h.publisher.asked.map((r) => r.untrustedSince)).toEqual([undefined, '']);
+  });
+
   it("a command's output reaches the journal and the agent cut to its useful parts (ORC-151)", async () => {
     const output = `${'line\n'.repeat(5000)}Error: the cause\n${'line\n'.repeat(5000)}`;
     const h = createHarness({

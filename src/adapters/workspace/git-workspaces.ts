@@ -2,7 +2,7 @@ import { existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, renameSync
 import { rm } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
 import { branchName } from '../../core/naming.js';
-import { EMPTY_TREE, within } from '../../core/clean-verify.js';
+import { forkPoint, gitAt, gitReader, within, type BranchReader } from '../../core/clean-verify.js';
 import { STALLED } from '../../publish/publish.js';
 import { execCmd, execFailure, HARDENING, mustExec, TIMED_OUT, type Exec } from '../exec.js';
 import { readCapped } from '../read-capped.js';
@@ -283,16 +283,14 @@ export class GitWorkspaces implements WorkspaceManager {
     };
   }
 
-  async forkPoint(repoPath: string, path: string): Promise<string | undefined> {
+  /** As `stepDiff`: on the factory's repository, the agent's objects only one more place to read objects from. */
+  async branchReader(repoPath: string, path: string): Promise<BranchReader | undefined> {
     const head = await this.head(path);
     const objects = resolve(path, '.git', 'objects');
     if (!head || !isDir(objects)) return undefined;
-    const args = ['-C', repoPath, 'merge-base', await originHead(this.exec, repoPath), head];
-    const r = await this.exec('git', args, { env: { GIT_ALTERNATE_OBJECT_DIRECTORIES: objects } });
-    // 1: no common commit, so every file of the branch is a change.
-    if (r.code === 1) return EMPTY_TREE;
-    if (r.code !== 0) throw execFailure('git', args, r);
-    return r.stdout.trim();
+    const git = gitAt(this.exec, repoPath, { GIT_ALTERNATE_OBJECT_DIRECTORIES: objects });
+    const base = await originHead(this.exec, repoPath);
+    return gitReader(git, base, await forkPoint(git, head, base), head);
   }
 
   /** Git in the agent's directory, on the host: only without sandboxes (`FACTORY_ALLOW_HOST_VERIFY`), where the agent runs on the host anyway. */

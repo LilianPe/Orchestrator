@@ -1,3 +1,4 @@
+import type { BranchReader } from '../../core/clean-verify.js';
 import { branchName } from '../../core/naming.js';
 import type { StepDiff, Workspace, WorkspaceManager, WorkspaceRequest } from './types.js';
 
@@ -60,11 +61,24 @@ export class FakeWorkspaces implements WorkspaceManager {
     };
   }
 
-  /** Where each worktree left the default branch, by path, as a test sets it; none (no worktree) otherwise. */
-  forks = new Map<string, string>();
+  /**
+   * Each worktree's branch as the path rules read it (ORC-338), as a test sets it: what it changed since the fork point,
+   * what it changed since each of its ancestors, and the default branch's config. A worktree not set changed nothing;
+   * one in `gone` is no worktree at all.
+   */
+  branches = new Map<string, { changed: StepDiff['changed']; since?: Record<string, string[]>; baseConfig?: string }>();
+  gone = new Set<string>();
 
-  async forkPoint(_repoPath: string, path: string): Promise<string | undefined> {
-    return this.forks.get(path);
+  async branchReader(_repoPath: string, path: string): Promise<BranchReader | undefined> {
+    if (this.gone.has(path)) return undefined;
+    const b = this.branches.get(path) ?? { changed: [] };
+    return {
+      changed: async () => b.changed,
+      changedSince: async (rev) => b.since?.[rev],
+      showAtFork: async () => undefined,
+      showAtHead: async () => undefined,
+      baseConfig: async () => b.baseConfig,
+    };
   }
 
   async uncommitted(path: string): Promise<string[]> {

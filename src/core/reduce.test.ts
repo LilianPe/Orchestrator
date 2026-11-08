@@ -145,6 +145,16 @@ describe('reduce — facts recorded by the orchestrator', () => {
     expect(reduce(ticket(), started('questions', 'c1'))).toEqual(ticket());
   });
 
+  it('the first untrusted run in the worktree marks the branch for good, whatever the ticket says of its path (ORC-338)', () => {
+    const untrusted = (head: string) => ({ type: 'run.started', runId: 'r1', job: 'dev-feedback', queue: 'dev', claudeSessionId: 'c', untrusted: { head } }) as const;
+    // Released meanwhile: the worktree's path is gone from the ticket, not the run's place in it.
+    const marked = reduce(ticket({ worktreePath: undefined }), untrusted('h1'))!;
+    expect(marked.untrustedSince).toBe('h1');
+    expect(reduce(marked, untrusted('h2'))!.untrustedSince).toBe('h1');
+    expect(reduce(marked, { type: 'run.started', runId: 'r2', job: 'dev', queue: 'dev', claudeSessionId: 'c' })!.untrustedSince).toBe('h1');
+    expect(reduce(ticket(), { type: 'run.started', runId: 'r2', job: 'dev', queue: 'dev', claudeSessionId: 'c' })!.untrustedSince).toBeUndefined();
+  });
+
   it('a run that consumes the feedback empties it', () => {
     const t = ticket({ humanInbox: [{ author: 'L', body: 'x', at: 1, source: 'session' }] });
     // Kept until the run that read it is written (ORC-220): a launch cut before reads it again.

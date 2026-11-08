@@ -1,7 +1,7 @@
 // `factory/chemins-interdits` (ORC-151): what the agent's diff never touches, whatever it was asked: what judges it, what
 // runs at the next checkout or install, and the factory's knowledge. Pure: the caller reads the commit.
 import { dirname, posix } from 'node:path';
-import { minimatch } from 'minimatch';
+import { Minimatch } from 'minimatch';
 import { mdCode } from './markdown.js';
 import { normalizePath } from './test-files.js';
 import type { CheckResult } from './types.js';
@@ -49,27 +49,40 @@ function matches(path: string, pattern: string, anywhere: boolean): boolean {
 
 export function forbiddenPattern(path: string): string | undefined {
   const p = normalizePath(path);
-  if (ENV_TEMPLATES.has((p.split('/').at(-1) ?? '').toLowerCase())) return undefined;
-  return FORBIDDEN_PATHS.find((pattern) => matches(p, pattern, !ROOT_ONLY.has(pattern)));
+  // The templates leave the `.env.*` rule only: under a forbidden directory, they stay forbidden with it.
+  const template = ENV_TEMPLATES.has((p.split('/').at(-1) ?? '').toLowerCase());
+  return FORBIDDEN_PATHS.find((pattern) => !(template && pattern === '.env.*') && matches(p, pattern, !ROOT_ONLY.has(pattern)));
 }
 
 /** Dotfiles matched like any file, case ignored as a case-insensitive checkout reads it, and no `#` comment or `!` negation (the config refuses `!`). */
 const GLOB = { dot: true, nocase: true, nocomment: true, nonegate: true } as const;
 
+/** A `sensitive_paths` entry as it is matched: `\` read as `/`, and `./infra/` naming what `infra` does, as the paths compared have neither. */
+const normalizePattern = (pattern: string): string => pattern.replace(/\\/g, '/').replace(/^(\.\/)+/, '').replace(/\/+$/, '');
+
 /**
- * The first of the repository's `sensitive_paths` (globs from the root) that names `path` or one of its parent
- * directories: `infra` protects `infra/main.tf`, and `src/auth*` protects `src/authz/x.ts`.
+ * The repository's `sensitive_paths` (globs from the root), each compiled once: the first that names a path or one of its
+ * parent directories. `infra` protects `infra/main.tf`, and `src/auth*` protects `src/authz/x.ts`.
  */
-export function sensitivePattern(path: string, patterns: readonly string[]): string | undefined {
-  const segments = normalizePath(path).split('/');
-  const prefixes = segments.map((_, i) => segments.slice(0, i + 1).join('/'));
-  // `./infra/` names what `infra` does: the paths compared have neither.
-  return patterns.find((pattern) => prefixes.some((p) => minimatch(p, pattern.replace(/^(\.\/)+/, '').replace(/\/+$/, ''), GLOB)));
+export function sensitiveMatcher(patterns: readonly string[]): (path: string) => string | undefined {
+  const compiled = patterns.map((pattern) => ({ pattern, glob: new Minimatch(normalizePattern(pattern), GLOB) }));
+  return (path) => {
+    const segments = normalizePath(path).split('/');
+    const prefixes = segments.map((_, i) => segments.slice(0, i + 1).join('/'));
+    return compiled.find(({ glob }) => prefixes.some((p) => glob.match(p)))?.pattern;
+  };
 }
 
-/** Why a `sensitive_paths` entry can name no path of the repository, or undefined: it starts at the root and stays inside it. */
+/**
+ * Why a `sensitive_paths` entry would name no path of the repository, or undefined: it must start at the root, stay
+ * inside it, name something (not `.`, `./` or empty), and compile to a glob that can match.
+ */
 export function repoPatternError(pattern: string): string | undefined {
-  if (pattern.startsWith('/') || pattern.startsWith('\\') || /^[a-zA-Z]:/.test(pattern) || pattern.split(/[/\\]/).includes('..')) return 'a path from the repository root is expected (no leading `/`, no drive, no `..`)';
+  const p = normalizePattern(pattern);
+  if (p.startsWith('/') || /^[a-zA-Z]:/.test(p) || p.split('/').includes('..')) return 'a path from the repository root is expected (no leading `/`, no drive, no `..`)';
+  if (p === '' || p === '.') return 'it names the whole repository, or nothing: name a directory or a file';
+  const glob = new Minimatch(p, GLOB);
+  if (glob.empty || glob.makeRe() === false) return 'not a glob that can match a path';
   return undefined;
 }
 
@@ -106,9 +119,10 @@ export interface ForbiddenView {
 /** Every forbidden or sensitive path the diff touches, every outward link it adds, and `package.json#scripts` changed, at any depth. */
 export async function checkForbiddenPaths(view: ForbiddenView): Promise<CheckResult> {
   const findings: string[] = [];
+  const sensitivePattern = view.sensitive && sensitiveMatcher(view.sensitive.patterns);
   for (const { path, deleted, link } of view.changed) {
     const pattern = forbiddenPattern(path);
-    const sensitive = pattern || !view.sensitive?.changed.has(path) ? undefined : sensitivePattern(path, view.sensitive.patterns);
+    const sensitive = pattern || !view.sensitive?.changed.has(path) ? undefined : sensitivePattern?.(path);
     if (pattern) findings.push(`${mdCode(path)}: forbidden path (${mdCode(pattern)})`);
     if (sensitive) findings.push(`${mdCode(path)}: sensitive path of the repository (${mdCode(sensitive)}), forbidden to work that read untrusted content`);
     if (link !== undefined && isOutwardLink(path, link)) findings.push(`${mdCode(path)}: symbolic link pointing outside (to ${mdCode(link)})`);

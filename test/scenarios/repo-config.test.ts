@@ -194,18 +194,35 @@ describe('the path rules of verify on the host', () => {
   const failed = async (h: ReturnType<typeof createHarness>) =>
     (await h.store.recentEvents(50, 'REL-1')).filter((e) => e.type === 'verify.failed').map((e) => (e.payload as { failures: { command: string; output: string }[] }).failures);
 
-  /** A worktree whose commits since the default branch change `paths`, and since `later.since` (the head an untrusted run starts on) change `later.paths`. */
+  /**
+   * A worktree whose commits since the default branch change `paths`, and since `later.since` (the head an untrusted run
+   * starts on) change `later.paths`. The default branch's config, as the clone would read it, declares `infra` sensitive.
+   */
   function onHost(paths: string[], later?: { since: string; paths: string[] }) {
-    const h = createHarness({ projectYaml: VERIFIED, ...onDefaultBranch('sensitive_paths: [infra]\n') });
-    h.workspaces.forks.set(WORKTREE, 'fork');
-    h.workspaces.steps.set(`${WORKTREE}@fork`, { changed: paths.map((path) => ({ path, deleted: false })) });
-    if (later) {
-      h.workspaces.heads.set(WORKTREE, later.since);
-      h.workspaces.steps.set(`${WORKTREE}@${later.since}`, { changed: later.paths.map((path) => ({ path, deleted: false })) });
-    }
+    const h = createHarness({ projectYaml: VERIFIED });
+    const since = later ? { since: { [later.since]: later.paths } } : {};
+    h.workspaces.branches.set(WORKTREE, { changed: paths.map((path) => ({ path, deleted: false })), baseConfig: 'sensitive_paths: [infra]\n', ...since });
+    if (later) h.workspaces.heads.set(WORKTREE, later.since);
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
     return h;
   }
+
+  it('fails closed on a worktree it cannot read', async () => {
+    const h = onHost([]);
+    h.workspaces.gone.add(WORKTREE);
+    h.runner.enqueue({});
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    expect((await failed(h))[0]).toEqual([expect.objectContaining({ command: 'factory/chemins-interdits', output: expect.stringContaining('could not run') })]);
+  });
+
+  it('fails closed on a default branch config it cannot read, once the branch is untrusted', async () => {
+    const h = onHost(['src/a.ts'], { since: 'head-before', paths: ['src/a.ts'] });
+    h.workspaces.branches.get(WORKTREE)!.baseConfig = 'sensitive_paths: ["/infra"]\n';
+    h.runner.enqueue({});
+    await h.orch.accept({ ...TRUSTED, taint: 'untrusted', id: 'd1', type: 'ticket.delegated', at: h.clock.now(), projectId: 'p', ticketId: 'REL-1', payload: { linearSessionId: 'ls-1' } });
+    await h.orch.drained();
+    expect((await failed(h))[0]).toEqual([expect.objectContaining({ command: 'factory/chemins-interdits', output: expect.stringContaining('sensitive_paths[0]') })]);
+  });
 
   it('refuses a forbidden path, whoever ran', async () => {
     const h = onHost(['.github/actions/setup/action.yml']);

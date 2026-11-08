@@ -5,7 +5,7 @@ import { execCmd, execFailure, mustExec, type Exec, type ExecResult } from '../a
 import { DEFAULT_REQUIREMENTS, type SandboxMount, type SandboxProvider } from '../adapters/sandbox/types.js';
 import { ANTI_CHEAT_CHECK, antiCheatCheck } from '../checks/anti-cheat.js';
 import { checkFrozen, FREEZE_CHECK, isFrozenHarness, type FrozenTests } from '../checks/freeze.js';
-import { checkForbiddenPaths, FORBIDDEN_CHECK } from '../checks/forbidden-paths.js';
+import { checkForbiddenPaths, FORBIDDEN_CHECK, type ForbiddenView } from '../checks/forbidden-paths.js';
 import { mdCode } from '../checks/markdown.js';
 import { parseRepoConfig, REPO_CONFIG_PATH, type RepoConfig } from '../config/repo-config.js';
 import { BUNDLE_TARGET, extractWork, HARDENING, hostGitEnv, IN_SANDBOX, IN_SANDBOX_ENV } from '../publish/extract.js';
@@ -140,7 +140,7 @@ export const runCleanVerify: CleanVerifier = async (req) => {
     const setup = config.setup ? [config.setup] : req.setup;
     const env = await req.env(config);
     const from = await forkPoint(git, sha);
-    const failures = await checkClone(git, from, sha, req.frozen, req.untrustedSince === undefined ? undefined : { patterns: config.sensitivePaths, since: req.untrustedSince });
+    const failures = await checkClone(git, from, sha, req.frozen, req.untrustedSince);
     if (req.gitleaks || (commands.length && !failures.length)) {
       await inBox('prepare', cloneDir, [], async (id) => {
         if (req.gitleaks) failures.push(...(await scanSecrets(sandboxes, id, from, sha)));
@@ -200,7 +200,7 @@ function withoutCredentials(message: string, url: string): string {
 }
 
 /** Git's empty tree: what a branch that shares no commit with the base is compared with, every file of it then a change. */
-export const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
+const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 const SYMLINK = '120000';
 const MAX_READ_BYTES = 16 * 1024 * 1024;
 /** What the numstat and the patch of a diff may weigh together in the daemon's memory. */
@@ -240,31 +240,76 @@ export function isYes(r: ExecResult): boolean {
   return r.code === 0;
 }
 
-/** Where the commit left the base, the empty tree for one that never shares a commit with it: all its files are then changes. */
-export async function forkPoint(git: CloneGit, sha: string): Promise<string> {
-  const common = await git.status('merge-base', BASE, sha);
+/** Where the commit left the default branch (`base`, the clone's by default), the empty tree for one that never shares a commit with it: all its files are then changes. */
+export async function forkPoint(git: CloneGit, sha: string, base = BASE): Promise<string> {
+  const common = await git.status('merge-base', base, sha);
   return isYes(common) ? common.stdout.trim() : EMPTY_TREE;
 }
 
 /**
- * The blocking checks on the commit, from the clone's objects: `factory/chemins-interdits`, `factory/binaires` and `factory/anti-triche`
- * (ORC-158) on all it changed since it left the base, whatever it says of its own history, and `factory/tests-gelés` on the frozen files as they are at
- * its head, which needs no frozen commit: a rebase can take it away, not its fingerprints. A read that fails rejects. `sensitive`, on a branch that took
- * untrusted content (ORC-338): the repository's `sensitive_paths`, refused among what changed since `since` (`changedSince`).
+ * What the path rules read of a branch (ORC-338): on the clone (`checkClone`), or without sandboxes on the factory's
+ * repository (`WorkspaceManager.branchReader`). Both are `gitReader`: one reading, one verdict.
  */
-export async function checkClone(git: CloneGit, from: string, sha: string, frozen: FrozenTests | undefined, sensitive?: SensitiveSince): Promise<VerifyFailure[]> {
-  const showAtHead = (p: string) => show(git, sha, p);
-  // `--raw`: status and modes in one process, `:<old mode> <new mode> <old id> <new id> <status>`, then the path.
-  const fields = (await git('diff', '--raw', '--no-renames', '-z', from, sha)).split('\0').filter(Boolean);
-  const changed = [];
-  for (let i = 0; i + 1 < fields.length; i += 2) {
-    const [, mode, , , status] = fields[i]!.split(' ');
-    const path = fields[i + 1]!;
-    changed.push({ path, deleted: status === 'D', ...(mode === SYMLINK ? { link: (await showAtHead(path))! } : {}) });
+export interface BranchReader {
+  /** What the head changed since it left the default branch; `link`, the target of one that is a symbolic link at the head. */
+  changed(): Promise<ForbiddenView['changed']>;
+  /** The paths changed from `rev` to the head; undefined when `rev` is not one of its ancestors (unknown, or a rewritten history). */
+  changedSince(rev: string): Promise<readonly string[] | undefined>;
+  showAtFork(path: string): Promise<string | undefined>;
+  showAtHead(path: string): Promise<string | undefined>;
+  /** `.factory/config.yml` as the default branch holds it, never as the branch does. */
+  baseConfig(): Promise<string | undefined>;
+}
+
+/** A branch read by git: `base`, the default branch's ref; `from`, where `sha` left it. */
+export function gitReader(git: CloneGit, base: string, from: string, sha: string): BranchReader {
+  const names = async (rev: string) => (await git('diff', '--name-only', '--no-renames', '-z', rev, sha)).split('\0').filter(Boolean);
+  return {
+    changed: async () => {
+      // `--raw`: status and modes in one process, `:<old mode> <new mode> <old id> <new id> <status>`, then the path.
+      const fields = (await git('diff', '--raw', '--no-renames', '-z', from, sha)).split('\0').filter(Boolean);
+      const changed = [];
+      for (let i = 0; i + 1 < fields.length; i += 2) {
+        const [, mode, , , status] = fields[i]!.split(' ');
+        const path = fields[i + 1]!;
+        changed.push({ path, deleted: status === 'D', ...(mode === SYMLINK ? { link: (await show(git, sha, path))! } : {}) });
+      }
+      return changed;
+    },
+    changedSince: async (rev) => ((await git.status('merge-base', '--is-ancestor', rev, sha)).code === 0 ? names(rev) : undefined),
+    showAtFork: (p) => show(git, from, p),
+    showAtHead: (p) => show(git, sha, p),
+    baseConfig: () => show(git, base, REPO_CONFIG_PATH),
+  };
+}
+
+/**
+ * `factory/chemins-interdits` on a branch, whoever reads it: the forbidden paths, outward links and `package.json#scripts`
+ * on all it changed since the fork point; and on a branch that took untrusted content (`untrustedSince`, ORC-338), the
+ * default branch's `sensitive_paths` among what it changed since that head. A mark that is `''`, or that is not one of the
+ * head's ancestors, reads the whole branch: the stricter reading. Only paths changed since the fork point count, so a merge
+ * of the default branch brings none of its own changes. A config the default branch refuses throws its `RepoConfigError`.
+ */
+export async function checkBranchPaths(reader: BranchReader, untrustedSince: string | undefined): Promise<VerifyFailure[]> {
+  const changed = await reader.changed();
+  let sensitive: ForbiddenView['sensitive'];
+  if (untrustedSince !== undefined) {
+    const patterns = parseRepoConfig(await reader.baseConfig()).sensitivePaths;
+    const since = patterns.length && untrustedSince ? await reader.changedSince(untrustedSince) : undefined;
+    if (patterns.length) sensitive = { patterns, changed: new Set(since ?? changed.map((f) => f.path)) };
   }
-  const since = sensitive?.patterns.length ? { sensitive: { patterns: sensitive.patterns, changed: await changedSince(git, from, sha, sensitive.since) } } : {};
-  const forbidden = await checkForbiddenPaths({ changed, showAtBase: (p) => show(git, from, p), showAtHead, ...since });
-  const failures: VerifyFailure[] = forbidden.ok ? [] : [{ command: FORBIDDEN_CHECK, exitCode: 1, output: forbidden.summary }];
+  const r = await checkForbiddenPaths({ changed, showAtBase: (p) => reader.showAtFork(p), showAtHead: (p) => reader.showAtHead(p), ...(sensitive ? { sensitive } : {}) });
+  return r.ok ? [] : [{ command: FORBIDDEN_CHECK, exitCode: 1, output: r.summary }];
+}
+
+/**
+ * The blocking checks on the commit, from the clone's objects: `factory/chemins-interdits` (`checkBranchPaths`), `factory/binaires` and `factory/anti-triche`
+ * (ORC-158) on all it changed since it left the base, whatever it says of its own history, and `factory/tests-gelés` on the frozen files as they are at
+ * its head, which needs no frozen commit: a rebase can take it away, not its fingerprints. A read that fails rejects.
+ */
+export async function checkClone(git: CloneGit, from: string, sha: string, frozen: FrozenTests | undefined, untrustedSince?: string): Promise<VerifyFailure[]> {
+  const showAtHead = (p: string) => show(git, sha, p);
+  const failures = await checkBranchPaths(gitReader(git, BASE, from, sha), untrustedSince);
   failures.push(...(await checkAdded(git, from, sha)));
   if (frozen) {
     const atHead = (await git('ls-tree', '-r', '--name-only', '-z', sha)).split('\0').filter(Boolean);
@@ -274,22 +319,6 @@ export async function checkClone(git: CloneGit, from: string, sha: string, froze
     if (!r.ok) failures.push({ command: FREEZE_CHECK, exitCode: 1, output: r.summary });
   }
   return failures;
-}
-
-/** The repository's `sensitive_paths` and the head its branch was on when it took untrusted content (`TicketState.untrustedSince`). */
-export interface SensitiveSince {
-  patterns: readonly string[];
-  since: string;
-}
-
-/**
- * The paths `sha` changed since `since`: what was committed once the branch took untrusted content. A `since` that is not
- * one of its ancestors (unread, `''`, or gone in a rewritten history) gives everything since the fork point: the stricter
- * reading. Read among what the branch changed since `from`, so that a merge of the base brings none of the base's own changes.
- */
-async function changedSince(git: CloneGit, from: string, sha: string, since: string): Promise<ReadonlySet<string>> {
-  const ancestor = since !== '' && (await git.status('merge-base', '--is-ancestor', since, sha)).code === 0;
-  return new Set((await git('diff', '--name-only', '--no-renames', '-z', ancestor ? since : from, sha)).split('\0').filter(Boolean));
 }
 
 /**
@@ -329,9 +358,12 @@ export type CloneGit = ((...args: string[]) => Promise<string>) & {
 };
 
 export function cloneGit(req: Pick<CleanVerifyRequest, 'workDir' | 'exec'>, cloneDir: string): CloneGit {
-  const env = hostGitEnv(req.workDir, req.workDir);
-  const exec = req.exec ?? execCmd;
-  const argv = (args: string[]) => [...HARDENING.flatMap((c) => ['-c', c]), '-C', cloneDir, ...args];
+  return gitAt(req.exec ?? execCmd, cloneDir, hostGitEnv(req.workDir, req.workDir));
+}
+
+/** Git in `dir`, hardened (no hook, no fsmonitor), under `env`. */
+export function gitAt(exec: Exec, dir: string, env: Record<string, string>): CloneGit {
+  const argv = (args: string[]) => [...HARDENING.flatMap((c) => ['-c', c]), '-C', dir, ...args];
   const raw = (...args: string[]) => mustExec(exec, 'git', argv(args), { env });
   const status = (...args: string[]) => exec('git', argv(args), { env });
   const capped = async (max: number, ...args: string[]) => {

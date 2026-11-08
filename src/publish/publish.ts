@@ -7,7 +7,7 @@ import { NoCommitsBetween, type ForgeWriter } from '../adapters/forge/types.js';
 import { PublishRefused, type Publication, type Publisher, type PublishRequest } from '../adapters/publisher/types.js';
 import { WORKSPACE_TARGET, type SandboxMount, type SandboxProvider } from '../adapters/sandbox/types.js';
 import { RepoConfigError, REPO_CONFIG_PATH } from '../config/repo-config.js';
-import { BASE, baseConfig, boxOpener, checkClone, cloneGit, forkPoint, isYes, scanSecrets, withDeadline, within, type CloneGit } from '../core/clean-verify.js';
+import { BASE, boxOpener, checkClone, cloneGit, forkPoint, isYes, scanSecrets, withDeadline, within } from '../core/clean-verify.js';
 import { BUNDLE_TARGET, extractWork, HARDENING, hostGitEnv } from './extract.js';
 
 /** Git and a scan, no command of the repository: a stop waits behind the publication, so it is not given `verify`'s time. */
@@ -99,8 +99,7 @@ export class GitPublisher implements Publisher {
     const from = await forkPoint(git, req.sha);
     if (from === req.sha) throw nothingToPublish(req.branch);
 
-    const sensitive = req.untrustedSince === undefined ? undefined : { patterns: await sensitivePathsOf(git), since: req.untrustedSince };
-    const failures = await checkClone(git, from, req.sha, undefined, sensitive);
+    const failures = await refusedConfig(() => checkClone(git, from, req.sha, undefined, req.untrustedSince));
     if (this.d.gitleaks !== false) failures.push(...(await inBox('publish-secrets', cloneDir, [], (id) => scanSecrets(sandboxes, id, from, req.sha))));
     if (failures.length) throw new PublishRefused('diff', failures.map((f) => `${f.command}: ${f.output}`).join('\n'));
 
@@ -118,17 +117,17 @@ export class GitPublisher implements Publisher {
   }
 }
 
-/** The base's `sensitive_paths`; a config the base refuses is an answer, journaled once, not a breakdown retried forever (ORC-338). */
-async function sensitivePathsOf(git: CloneGit): Promise<readonly string[]> {
+/** A base config the check of an untrusted branch cannot read is an answer, journaled once, not a breakdown retried forever (ORC-338). */
+async function refusedConfig<T>(check: () => Promise<T>): Promise<T> {
   try {
-    return (await baseConfig(git)).sensitivePaths;
+    return await check();
   } catch (err) {
     if (!(err instanceof RepoConfigError)) throw err;
     throw new PublishRefused('config', `the default branch's ${REPO_CONFIG_PATH} is refused, so the sensitive paths of this branch, which took untrusted content, cannot be checked: ${err.message}`);
   }
 }
 
-const nothingToPublish =(branch: string) => new PublishRefused('empty', `the branch ${branch} has nothing more than the base branch.`);
+const nothingToPublish = (branch: string) => new PublishRefused('empty', `the branch ${branch} has nothing more than the base branch.`);
 
 /**
  * The agent's own git dir (ORC-317), read-only over its worktree: nothing here writes, and the factory's repository is mounted nowhere. Its worktree can hold

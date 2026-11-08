@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpath
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { BASE, checkBranchPaths, cloneGit, forkPoint, gitReader } from '../../core/clean-verify.js';
 import { readConventions } from '../../core/prompt.js';
 import { execCmd } from '../exec.js';
 import { GitWorkspaces } from './git-workspaces.js';
@@ -110,19 +111,60 @@ describe('GitWorkspaces', () => {
     expect(await ws.stepDiff(repo, join(root, 'nowhere'), base)).toBeUndefined();
   });
 
-  it('reads where a worktree left the default branch, the base moving on meanwhile; none for a path that is not one (ORC-338)', async () => {
-    const { repo, root } = fixtureRepo();
+  it('reads a branch for the path rules as the clone does: the same verdict, whatever the mark (ORC-338)', async () => {
+    const { base, repo, root } = fixtureRepo();
+    const origin = join(base, 'origin.git');
+    const put = (dir: string, path: string, content: string) => {
+      mkdirSync(join(dir, path, '..'), { recursive: true });
+      writeFileSync(join(dir, path), content);
+    };
+    const commit = (dir: string, message: string) => {
+      git(dir, 'add', '-A');
+      git(dir, 'commit', '-q', '-m', message);
+    };
+    put(repo, '.factory/config.yml', 'sensitive_paths: [infra]\n');
+    commit(repo, 'config');
+    git(repo, 'push', '-q', 'origin', 'main');
     const ws = new GitWorkspaces({ root });
     const w = await ws.prepare(req(repo));
-    const fork = git(repo, 'rev-parse', 'HEAD');
     git(w.path, 'config', 'user.email', 't@t');
     git(w.path, 'config', 'user.name', 't');
-    git(w.path, 'commit', '--allow-empty', '-q', '-m', 'agent');
-    git(repo, 'commit', '--allow-empty', '-q', '-m', 'main moves on');
+    put(w.path, 'infra/old.tf', 'trusted\n');
+    put(w.path, 'src/a.ts', 'x\n');
+    commit(w.path, 'trusted work');
+    const mark = git(w.path, 'rev-parse', 'HEAD');
+    put(w.path, 'infra/new.tf', 'untrusted\n');
+    put(w.path, 'CODEOWNERS', '* @x\n');
+    put(w.path, 'claims/.env.example', 'A=\n');
+    put(w.path, 'package.json', '{"scripts":{"postinstall":"x"}}');
+    commit(w.path, 'untrusted work');
+    // The default branch moves on, with a sensitive change of its own, and the branch merges it.
+    put(repo, 'infra/main.tf', 'a human\n');
+    commit(repo, 'main moves on');
     git(repo, 'push', '-q', 'origin', 'main');
     git(repo, 'fetch', '-q', 'origin');
-    expect(await ws.forkPoint(repo, w.path)).toBe(fork);
-    expect(await ws.forkPoint(repo, join(root, 'nowhere'))).toBeUndefined();
+    git(w.path, 'fetch', '-q', origin, 'main');
+    git(w.path, 'merge', '-q', '--no-edit', 'FETCH_HEAD');
+    const head = git(w.path, 'rev-parse', 'HEAD');
+
+    // The clone `verify` and the publication read: the work's objects, the forge's default branch as `BASE`.
+    const cloneDir = join(base, 'clone');
+    git(base, 'clone', '-q', '--no-checkout', w.path, cloneDir);
+    git(cloneDir, 'fetch', '-q', origin, `+refs/heads/main:${BASE}`);
+    const clone = cloneGit({ workDir: base }, cloneDir);
+    const from = await forkPoint(clone, head);
+
+    const reader = (await ws.branchReader(repo, w.path))!;
+    for (const since of [undefined, '', mark, '0123456789012345678901234567890123456789']) {
+      const onClone = await checkBranchPaths(gitReader(clone, BASE, from, head), since);
+      expect(await checkBranchPaths(reader, since), String(since)).toEqual(onClone);
+    }
+    const [marked] = await checkBranchPaths(reader, mark);
+    for (const path of ['infra/new.tf', 'CODEOWNERS', 'claims/.env.example', 'package.json#scripts']) expect(marked!.output).toContain(path);
+    expect(marked!.output).not.toContain('infra/old.tf');
+    expect(marked!.output).not.toContain('infra/main.tf');
+    expect((await checkBranchPaths(reader, ''))[0]!.output).toContain('infra/old.tf');
+    expect(await ws.branchReader(repo, join(root, 'nowhere'))).toBeUndefined();
   });
 
   it('prepares the read-only trunk and a knowledge worktree', async () => {
