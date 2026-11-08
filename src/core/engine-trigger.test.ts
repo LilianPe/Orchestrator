@@ -108,7 +108,7 @@ describe('decide — a ticket of a team with no repo (ORC-171)', () => {
   const issue = { title: 'T', logical: 'todo' as const, priority: 0 };
   const noRepo = ev('ticket.delegated', { linearSessionId: 's-1', issue, noRepo: 'ZZZ' }, undefined);
   const blocked = decide(undefined, noRepo, workflow).events.reduce<TicketState | undefined>((t, e) => reduce(t, e), reduce(undefined, noRepo))!;
-  const NO_REPO_EVENTS = [{ type: 'ticket.blocked', reason: expect.stringContaining('ZZZ') }, { type: 'ticket.patched', patch: { awaitingRepo: [] } }];
+  const NO_REPO_EVENTS = [{ type: 'ticket.blocked', reason: expect.stringContaining('ZZZ'), kind: 'pickup' }, { type: 'ticket.patched', patch: { awaitingRepo: [] } }];
 
   it('blocks the delegation, labels it and says why in the standard comment, and starts nothing', () => {
     const out = decide(undefined, noRepo, workflow);
