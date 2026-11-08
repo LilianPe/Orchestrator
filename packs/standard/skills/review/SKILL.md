@@ -13,7 +13,7 @@ You bring the current branch's PR to a clean state: review, fixes, targeted revi
 
 1. PR state: the prompt's `## Pull request` section (number, state, base, mergeable, URL). Missing, or a part "not read by the factory": `factory-agent pr`. PR closed or merged: stop and say so in your last message.
 2. `git status`: nothing unexpected in progress (uncommitted changes that are not yours: stop and say so, do not overwrite them).
-3. The PR's head is in your worktree: the factory fast-forwarded your branch to it before the run, and the prompt says so. This way you review the PR's head, the one the factory will record as reviewed: if your last commit is not the PR's head at the end of the run, nothing is recorded and the *Done* that follows does not merge. The prompt says the branches have diverged: stop and say so, force nothing.
+3. The PR's head must be in your worktree. The prompt says your branch was fast-forwarded to it or already holds it: go on. It says the branches have diverged: stop and say so, force nothing. It says neither (the commits or the fast-forward "not read by the factory"): once `factory-agent pr` has brought them, `git merge --ff-only origin/<branch>`; if that fails (diverged), stop and say so. This way you review the PR's head, the one the factory will record as reviewed: if your last commit is not the PR's head at the end of the run, nothing is recorded and the *Done* that follows does not merge.
 4. Read the ticket (what the PR must do), the repository's `CLAUDE.md` and `docs/agent/`: the rules that will be used to judge the fixes.
 5. Open your **decision log** (in your session notes, not in the repository): one line per decision, `<key> — <decision> — <reason> — round <n>`, where the key is the place (file + function, doc sentence) or the mechanism touched. Every fix, refused finding or point to decide goes into it.
 
@@ -49,7 +49,7 @@ Before declaring the loop converged, run the repository's type check (and the li
 
 ## 3. Has the base moved?
 
-1. `factory-agent pr` (what arrived on the PR and its base since your run started), then `git log --oneline HEAD..origin/<base>`: what arrived on the base since the branch started. A human pushed to the PR meanwhile (`origin/<branch>` has commits your branch lacks): `git merge --ff-only origin/<branch>`, or, if it fails (diverged), stop and say so, force nothing.
+1. `factory-agent pr` (what arrived on the PR and its base since your run started), then `git log --oneline HEAD..origin/<base>`: what arrived on the base since the branch started. A human pushed to the PR meanwhile (`origin/<branch>` has commits your branch lacks): those commits are not reviewed yet. With a round left in "Max review rounds": `git merge --ff-only origin/<branch>` (if it fails, diverged: stop and say so, force nothing), then review them as a targeted round (step 2, its commits are `git log --oneline <your head before the merge>..HEAD`), and come back here. No round left: do not merge them, so the PR's head is not recorded as reviewed, and say so in your last message.
 2. A commit there that invalidates a premise of a fix (a timeout, a quota, a contract cited in a commit message) is a finding like any other.
 3. Never integrate the base: no merge, no rebase, even on a conflict or a mergeable status at `BEHIND`. A conflict is the factory's: it starts its own `factory:rebase` step on it, after your run.
 
