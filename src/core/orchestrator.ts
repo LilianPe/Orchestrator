@@ -47,14 +47,14 @@ import type { Effect } from './decision.js';
 import { repairedEvent } from './dead-letter.js';
 import { NO_PLAN, planDecision } from './decision-plan.js';
 import { blockFacts, composeBlockComment, type BlockFacts, type BlockStatus } from './block-comment.js';
-import { blockedLabelChange, goesThroughFreeze, HUMAN_EVENTS, mayCheck, mayPublish, RECONCILE_MS, reconcileTicket, refusesDevWork, sensitivePathsAtLaunch, stepOf, taintedKnowledge } from './engine.js';
+import { blockedLabelChange, goesThroughFreeze, historyTaint, HUMAN_EVENTS, mayCheck, mayPublish, RECONCILE_MS, reconcileTicket, refusesDevWork, SENSITIVE_PATHS, sensitivePathsAtLaunch, stepOf, taintedKnowledge } from './engine.js';
 import { attemptLabels, packFingerprints } from './attempt-labels.js';
 import { pickupFailures } from './pickup.js';
 import { buildPrompt, formatFeedback, formatVerifyFailures, readConventions, withHumanInbox } from './prompt.js';
 import { carriedAtLaunch, forAgent } from './human-message.js';
 import { pendingOf, reduce, samePending } from './reduce.js';
 import { advancePlan, closePlan, planStepOfJob, startPlan, type PlanStep } from './session-plan.js';
-import type { StoredEvent } from './upcast.js';
+import { upcast, type StoredEvent } from './upcast.js';
 import type { Scheduler } from './scheduler.js';
 import {
   CREATES_TICKET,
@@ -67,6 +67,7 @@ import {
   type QueueName,
   type FactoryEvent,
   type RunOutcome,
+  type Taint,
   type TicketState,
   type VerifyFailure,
   TRUSTED,
@@ -958,6 +959,16 @@ export class Orchestrator {
   private async untrustedMark(project: ProjectRuntime, t: TicketState): Promise<UntrustedMark | undefined> {
     const since = (await this.readUntrusted(project, t)).untrustedSince;
     return since === null || since === undefined ? undefined : { since, humanPushes: t.humanPushes ?? [] };
+  }
+
+  /**
+   * The taint of what a run reads of the ticket (ORC-349): untrusted on a branch an untrusted run worked on (the mark,
+   * ORC-338: its commits, and what that run read), and with `pr`, once its journal holds untrusted content (`historyTaint`).
+   */
+  private async ticketTaint(project: ProjectRuntime, t: TicketState, pr: boolean): Promise<Taint> {
+    if (typeof (await this.readUntrusted(project, t)).untrustedSince === 'string') return 'untrusted';
+    if (!pr) return 'trusted';
+    return historyTaint((await this.d.store.ticketJournal(project.id, t.ticketId)).map((j) => upcast(j.event)));
   }
 
   /** The one-time read of `untrustedMark`, for a ticket the mark has not seen; the ticket as it is otherwise. */
@@ -2113,21 +2124,26 @@ export class Orchestrator {
           read.push(...comments.map((c) => ({ ...c, taint: 'untrusted' as const })));
         }
       }
+      const held = ticketSession ? t.claudeSessionId : undefined;
+      const resume = !!held && (!opts.relaunchOf || !this.d.sessionsDir || sessionSaved(join(this.d.sessionsDir, project.id, ticketId), held));
       // A launch that empties the inbox takes the taint of all it empties, what the agent is not given included (`runTaint`).
       const consumes = kind === 'feedback' || carried.length > 0;
-      const sensitivePaths = sensitivePathsAtLaunch(opts.sensitivePaths ?? from?.sensitivePaths, consumes ? [...read, ...t.humanInbox] : read);
-      if (sensitivePaths && job.workspace === 'knowledge') {
+      const fedUntrusted = sensitivePathsAtLaunch(opts.sensitivePaths ?? from?.sensitivePaths, consumes ? [...read, ...t.humanInbox] : read);
+      // What the run reads beyond its input takes the mark of who wrote it, not of who started the run (ORC-349): a resumed
+      // session, what its earlier attempts read; a knowledge job without an input, the ticket and its PR.
+      const knowledge = job.workspace === 'knowledge';
+      const history = !fedUntrusted && (resume || (knowledge && !kind)) ? await state(this.ticketTaint(project, t, knowledge)) : 'trusted';
+      const sensitivePaths = fedUntrusted ?? (history === 'untrusted' ? SENSITIVE_PATHS : undefined);
+      if (sensitivePaths && knowledge) {
         // As decide refuses it (I12), for what it could not see: untrusted content read at the launch.
         this.d.scheduler.release(key);
         this.log('warn', `refused ${job.name} on ${ticketId}: it would write the knowledge base from untrusted content`);
         await tracker
-          .activity(linearSessionId, { type: 'response', body: taintedKnowledge(job.name, 'read') })
+          .activity(linearSessionId, { type: 'response', body: taintedKnowledge(job.name, fedUntrusted ? 'read' : 'history') })
           .catch((err: Error) => this.log('warn', `could not answer ${ticketId}: ${err.message}`));
         return;
       }
 
-      const held = ticketSession ? t.claudeSessionId : undefined;
-      const resume = !!held && (!opts.relaunchOf || !this.d.sessionsDir || sessionSaved(join(this.d.sessionsDir, project.id, ticketId), held));
       const claudeSessionId = held ?? this.newId();
       const sessionRole = roleOf(job, ticketSession);
 

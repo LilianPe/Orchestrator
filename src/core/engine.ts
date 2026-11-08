@@ -27,10 +27,32 @@ const relaunch = (workflow: Workflow): string => (workflow.blockComment ? 'Reply
  */
 export const SENSITIVE_PATHS: readonly string[] = ['.github/**', '.factory/**', '.claude/**', 'CODEOWNERS', '.env*'];
 
-/** The refusal of a knowledge job (I12): its event is untrusted, or what it would read at its launch is (ORC-274). */
-export function taintedKnowledge(job: string, source: 'event' | 'read' = 'event'): string {
-  const what = source === 'event' ? 'the event comes' : 'the feedback it would read (thread or review comments) comes';
+/**
+ * The refusal of a knowledge job (I12): its event is untrusted, or what it would read at its launch is (ORC-274), the
+ * ticket and its PR included (ORC-349).
+ */
+export function taintedKnowledge(job: string, source: 'event' | 'read' | 'history' = 'event'): string {
+  const what = {
+    event: 'the event comes',
+    read: 'the feedback it would read (thread or review comments) comes',
+    history: 'what it would read of the ticket and its PR (reviews, messages, commits) comes in part',
+  }[source];
   return `I am not starting ${job}: this job writes to the knowledge base, and ${what} from an untrusted source.`;
+}
+
+/**
+ * The events whose text or code a run reads later through the ticket or its PR, not only as its input (ORC-349): the
+ * ticket a delegation brings, a human message, a review of the PR, the commits a human pushed. The others carry nothing
+ * an agent reads (a move, a label, CI's facts) or what the factory wrote itself.
+ */
+const CONTENT_EVENTS: ReadonlySet<EventType> = new Set<EventType>(['ticket.delegated', 'session.prompted', 'session.mentioned', 'command', 'ticket.commented', 'pr.reviewed', 'push.human']);
+
+/**
+ * The taint of a ticket's history, as a run that reads the ticket and its PR takes it in (ORC-349): untrusted once an
+ * untrusted event brought it content, whoever starts that run. `Orchestrator.launch` adds the branch's mark (ORC-338).
+ */
+export function historyTaint(events: readonly FactoryEvent[]): Taint {
+  return events.some((e) => e.taint === 'untrusted' && CONTENT_EVENTS.has(e.type)) ? 'untrusted' : 'trusted';
 }
 
 const BUILT_IN = new Set<EventType>([
