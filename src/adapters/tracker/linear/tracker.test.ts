@@ -38,6 +38,14 @@ describe('LinearTracker', () => {
     expect(calls.at(-1)?.vars).toEqual({ id: 'as-1', input: { plan } });
   });
 
+  it("searches the team it is given alone, and keeps no hit of another team Linear would answer all the same (ORC-349)", async () => {
+    const hit = (identifier: string) => ({ identifier, title: 'Export', url: `https://linear.app/x/${identifier}`, state: { name: 'Todo' } });
+    const { api, calls } = fakeLinear({ Search: () => ({ searchIssues: { nodes: [hit('REL-1'), hit('HR-7'), hit('RELX-2')] } }) });
+    const hits = await new LinearTracker(api, 'app-1').search('export', 'REL');
+    expect(calls.at(-1)?.vars).toEqual({ term: 'export', teamKey: 'REL' });
+    expect(hits.map((h) => h.identifier)).toEqual(['REL-1']);
+  });
+
   it('maps an issue', async () => {
     const { api } = fakeLinear({ Issue: () => ({ issue: node }) });
     expect(await new LinearTracker(api, 'app-1').getIssue('REL-1')).toEqual({

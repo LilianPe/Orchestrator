@@ -119,9 +119,9 @@ export class FakeTracker implements Tracker, TeamDirectory {
     return [...(this.members.get(teamKey) ?? [])];
   }
 
-  async search(term: string): Promise<SearchHit[]> {
+  async search(term: string, teamKey: string): Promise<SearchHit[]> {
     return [...this.issues.values()]
-      .filter((i) => i.title.toLowerCase().includes(term.toLowerCase()))
+      .filter((i) => i.teamKey === teamKey && i.title.toLowerCase().includes(term.toLowerCase()))
       .map((i) => ({ identifier: i.identifier, title: i.title, url: i.url, stateName: i.stateName }));
   }
 

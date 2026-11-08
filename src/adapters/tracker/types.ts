@@ -50,6 +50,9 @@ export function labelEchoKey(identifier: string, label: string, change: 'added' 
 /** The tracker has no such issue (deleted, or never existed): an answer about the issue, unlike a read error. */
 export class IssueNotFoundError extends Error {}
 
+/** The team of an issue, by the prefix of its identifier: `REL-12` → `REL`. */
+export const teamOf = (identifier: string): string => identifier.split('-')[0]!;
+
 /**
  * Writes are keyed by the outbox effect id (`ticket:seq:i`) when they come from an effect (ORC-162):
  * an effect replayed after it acted looks for what its first execution wrote before writing again
@@ -59,7 +62,8 @@ export class IssueNotFoundError extends Error {}
 export interface Tracker {
   getIssue(identifier: string): Promise<TrackerIssue>;
   listDelegated(teamKey: string): Promise<TrackerIssue[]>;
-  search(term: string): Promise<SearchHit[]>;
+  /** The issues of the team `teamKey` alone that match `term` (ORC-349): an agent never searches the whole workspace. */
+  search(term: string, teamKey: string): Promise<SearchHit[]>;
   moveTo(identifier: string, stateName: string): Promise<void>;
   /** Final state: adds `add`, takes off `remove`; writes nothing when the ticket already reads so. */
   setLabels(identifier: string, add: string[], remove: string[]): Promise<void>;

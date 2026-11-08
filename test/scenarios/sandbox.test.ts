@@ -150,7 +150,8 @@ describe('a disposable sandbox per attempt', () => {
     await h.advance(600_000);
     await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'thanks, one more thing', author: 'L' });
     await h.advance(600_000);
-    expect(h.runner.requests.map((r) => r.sensitivePaths)).toEqual([undefined, SENSITIVE_PATHS, undefined, SENSITIVE_PATHS, undefined]);
+    // The trusted reply resumes the session the untrusted run worked in: it takes its mark (ORC-349).
+    expect(h.runner.requests.map((r) => r.sensitivePaths)).toEqual([undefined, SENSITIVE_PATHS, undefined, SENSITIVE_PATHS, SENSITIVE_PATHS]);
     // The head the untrusted run started on, kept for the trusted run after it.
     const since = [undefined, undefined, 'head-before-untrusted', 'head-before-untrusted'];
     expect(seen.map((r) => r.untrusted?.since)).toEqual(since);

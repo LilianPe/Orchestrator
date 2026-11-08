@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import type { PlanStep } from '../../../core/session-plan.js';
 import type { LogicalState } from '../../../core/types.js';
 import type { TeamDirectory } from '../../roles/types.js';
-import { effectMarker, IssueNotFoundError, type ActivityInput, type SearchHit, type Tracker, type TrackerIssue } from '../types.js';
+import { effectMarker, IssueNotFoundError, teamOf, type ActivityInput, type SearchHit, type Tracker, type TrackerIssue } from '../types.js';
 import { LinearApiError, type LinearApi, type LinearGqlError } from './api.js';
 import { allNodes, type Connection } from '../../graphql-pages.js';
 import { Q } from './queries.js';
@@ -46,7 +46,7 @@ const STATE_TYPES: Record<LogicalState, string> = {
   done: 'completed',
 };
 
-export const teamOf = (identifier: string) => identifier.split('-')[0]!;
+export { teamOf };
 
 /** Linear's answer for an issue it does not have: `Entity not found: Issue`, shown as `Could not find referenced Issue.` */
 const isNotFound = (e: LinearGqlError) => /Entity not found: Issue\b|Could not find referenced Issue\b/.test(`${e.message} ${e.extensions?.userPresentableMessage ?? ''}`);
@@ -210,11 +210,12 @@ export class LinearTracker implements Tracker, TeamDirectory {
     return (await Promise.all(live.map((n) => this.withAllLabels(n)))).map(toIssue);
   }
 
-  async search(term: string): Promise<SearchHit[]> {
+  async search(term: string, teamKey: string): Promise<SearchHit[]> {
     const { searchIssues } = await this.api.gql<{
       searchIssues: { nodes: { identifier: string; title: string; url: string; state: { name: string } }[] };
-    }>(Q.search, { term });
-    return searchIssues.nodes.map((n) => ({ identifier: n.identifier, title: n.title, url: n.url, stateName: n.state.name }));
+    }>(Q.search, { term, teamKey });
+    // The filter is Linear's: a hit of another team is dropped here all the same.
+    return searchIssues.nodes.filter((n) => teamOf(n.identifier) === teamKey).map((n) => ({ identifier: n.identifier, title: n.title, url: n.url, stateName: n.state.name }));
   }
 
   async moveTo(identifier: string, stateName: string): Promise<void> {
