@@ -83,7 +83,8 @@ describe('the visual proof in the orchestrator (ORC-176)', () => {
       ['after', SHA, 1280], ['after', SHA, 768], ['after', SHA, 375],
     ]);
     const artifacts = await h.store.artifacts('REL-1');
-    expect(artifacts.map((a) => a.sha256)).toEqual(proof.captures!.map((c) => c.sha256));
+    // Kept together, at one time: their order among themselves is the store's.
+    expect(artifacts.map((a) => a.sha256).sort()).toEqual(proof.captures!.map((c) => c.sha256).sort());
     for (const a of artifacts) {
       expect(a).toMatchObject({ kind: 'visual-proof', attemptId: expect.any(String) });
       expect(sha256(readFileSync(a.path))).toBe(a.sha256);
