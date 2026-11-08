@@ -181,6 +181,40 @@ describe('Done by a human, merge by the factory (ORC-148)', () => {
     expect((await h.ticket()).reviewSha).toBe('def456');
   });
 
+  it('a refusal saved since ORC-345 replays by its flag, whatever its sentence says: a reworded moved head goes through the AI review', async () => {
+    let failures = 1;
+    const saved: Record<string, string> = {};
+    const h = await inHumanReview({
+      effectRetry: { attempts: 6, baseMs: 1, capMs: 1 },
+      wrapStore: (inner) =>
+        Object.assign(Object.create(inner) as Store, {
+          appendInbox: async (e: Parameters<Store['appendInbox']>[0]) => {
+            if (e.id.startsWith('merge-refused:') && failures > 0) {
+              failures--;
+              throw new Error('inbox unavailable');
+            }
+            return inner.appendInbox(e);
+          },
+          setMeta: async (key: string, value: string) => {
+            if (key.endsWith(':refused')) saved[key] = value;
+            return inner.setMeta(key, value);
+          },
+          // The refusal as saved, its sentence reworded since: the flag decides.
+          getMeta: async (key: string) => (key.endsWith(':refused') ? JSON.stringify({ reason: 'Someone pushed after the review.', headMoved: true }) : inner.getMeta(key)),
+        }),
+    });
+    h.forge.setPr(BRANCH, { ...PR, state: 'OPEN', headSha: 'def456', checks: 'pass', failedChecks: [] });
+    h.workspaces.heads.set(WORKTREE, 'def456');
+    h.runner.enqueue({ events: [{ kind: 'init', sessionId: 'y' }, { kind: 'text', text: 'Rien à redire.' }] });
+    await h.send('status.changed', { from: 'human_review', to: 'done' }, 'REL-1', { actor: 'user-lilian' });
+    for (let i = 0; i < 6; i++) await h.advance(10);
+    expect(failures).toBe(0);
+    // Saved with the flag the shell saw, not a sentence to compare.
+    expect(Object.values(saved).map((v) => JSON.parse(v) as unknown)).toEqual([{ reason: 'the branch received a push since the review', headMoved: true }]);
+    expect(h.forge.merges).toEqual([]);
+    expect((await h.store.getRun(h.runner.requests.at(-1)!.runId))?.job).toBe('review');
+  });
+
   it('a PR merged on GitHub meanwhile, on another head, is no refusal: the ticket stays in Done', async () => {
     const h = await inHumanReview();
     h.forge.setPr(BRANCH, { ...PR, state: 'MERGED', headSha: 'def456', checks: 'pass', failedChecks: [] });

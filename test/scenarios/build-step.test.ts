@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Stagnation } from '../../src/core/types.js';
 import { agentOutputKey } from '../../src/core/agent-output.js';
-import { blockCause } from '../../src/core/block-cause.js';
+import { causeOf } from '../../src/core/block-cause.js';
 import { createHarness } from '../helpers/harness.js';
 
 function delegated() {
@@ -42,7 +42,7 @@ describe('the build step (ORC-136)', () => {
     expect(h.runner.requests).toHaveLength(1);
     const t = await h.ticket();
     expect(t).toMatchObject({ blocked: true, blockReason: expect.stringContaining('reached a limit') });
-    expect(blockCause(t.blockReason)).toBe('limit');
+    expect(causeOf(t.blockKind)).toBe('limit');
   });
 
   it('three times the same command on the same failure, diff unchanged: Bloqué, cause « boucle », no run after it', async () => {
@@ -53,7 +53,7 @@ describe('the build step (ORC-136)', () => {
     expect(h.runner.requests).toHaveLength(1);
     const t = await h.ticket();
     expect(t.blocked).toBe(true);
-    expect(blockCause(t.blockReason)).toBe('loop');
+    expect(causeOf(t.blockKind)).toBe('loop');
     expect((await h.tracker.getIssue('REL-1')).labels).toContain('Bloqué');
     expect(h.tracker.comments('REL-1').at(-1)).toContain('npm test');
   });
@@ -79,7 +79,7 @@ describe('the build step (ORC-136)', () => {
     h.runner.forget(runId);
     await h.restart({ mode: 'brutal' });
     await h.orch.drained();
-    expect(blockCause((await h.ticket()).blockReason)).toBe('loop');
+    expect(causeOf((await h.ticket()).blockKind)).toBe('loop');
   });
 
   it('a human reply relaunches a ticket blocked on a loop: the session resumes, nothing is counted against it', async () => {
@@ -101,7 +101,7 @@ describe('the build step (ORC-136)', () => {
     expect(h.runner.requests).toHaveLength(1);
     const t = await h.ticket();
     expect(t).toMatchObject({ blocked: true, blockReason: expect.stringContaining("has written nothing for 30 min") });
-    expect(blockCause(t.blockReason)).toBe('limit');
+    expect(causeOf(t.blockKind)).toBe('limit');
   });
 
   it('a build that ends without a valid `submit_result` is a failure, not a success posted from its last text', async () => {
@@ -114,7 +114,7 @@ describe('the build step (ORC-136)', () => {
     await h.advance(0);
     const t = await h.ticket();
     expect(t).toMatchObject({ logical: 'dev', blocked: true });
-    expect(blockCause(t.blockReason)).toBe('failed');
+    expect(causeOf(t.blockKind)).toBe('failed');
     expect(h.tracker.comments('REL-1').at(-1)).toContain('🔴 Blocked');
     expect(h.tracker.activities('ls-1').filter((a) => a.type === 'response')).toEqual([]);
   });
@@ -126,7 +126,7 @@ describe('the build step (ORC-136)', () => {
     await h.advance(600_000);
     expect(h.runner.requests).toHaveLength(1);
     const t = await h.ticket();
-    expect(blockCause(t.blockReason)).toBe('infra');
+    expect(causeOf(t.blockKind)).toBe('infra');
     const journal = await h.store.ticketJournal('p', 'REL-1');
     expect(journal.find((e) => e.event.type === 'run.finished')!.event.payload).toMatchObject({ attempt: 'errored' });
   });

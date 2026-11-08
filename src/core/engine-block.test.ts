@@ -2,7 +2,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { loadWorkflow } from '../config/load-workflow.js';
 import type { Workflow } from '../config/workflow-schema.js';
-import { blockCause } from './block-cause.js';
+import { causeOf, type BlockKind } from './block-cause.js';
 import type { Role } from './authz.js';
 import type { Decision } from './decision.js';
 import { BLOCKED_LABEL, decide, mayCheck, SENSITIVE_PATHS } from './engine.js';
@@ -37,7 +37,7 @@ const classified = (kind: MessageKind, body: string, linearSessionId = 's-dev', 
 describe('a block posts the standard comment (ORC-196)', () => {
   it('a run at its cap: structured fields, the comment and the label, and nothing else tells it', () => {
     const out = decide(ticket(), finished(), workflow);
-    expect(out.events).toContainEqual({ type: 'ticket.blocked', reason: 'The run dev reached a limit (turns, duration or budget).', job: 'dev' });
+    expect(out.events).toContainEqual({ type: 'ticket.blocked', reason: 'The run dev reached a limit (turns, duration or budget).', kind: 'limit', job: 'dev' });
     expect(notice(out)?.block).toMatchObject({ step: 'build', max: 1, reason: 'The run dev reached a limit (turns, duration or budget).' });
     expect(notice(out)?.block).not.toHaveProperty('attempt');
     expect(out.effects).toContainEqual({ kind: 'labels', add: [BLOCKED_LABEL], remove: [] });
@@ -53,7 +53,7 @@ describe('a block posts the standard comment (ORC-196)', () => {
   it('a question of the agent is the comment\'s question, its block the cause « question »', () => {
     const out = decide(ticket(), finished({ outcome: 'success', attempt: 'needs_input', output: { status: 'blocked', question: 'Quel séparateur ?' } as never }), workflow);
     expect(notice(out)?.block.question).toBe('Quel séparateur ?');
-    expect(blockCause(reduce(ticket(), out.events[0]!)?.blockReason)).toBe('question');
+    expect(causeOf(reduce(ticket(), out.events[0]!)?.blockKind)).toBe('question');
   });
 
   it('an agent that gives no question, or no justification, leaves the default question: no empty line', () => {
@@ -68,10 +68,10 @@ describe('a block posts the standard comment (ORC-196)', () => {
     ['a failed run', ticket(), finished({ outcome: 'failure' }), 'failed'],
     ['the loop guard', ticket(), finished({ stagnation: { kind: 'loop', command: 'npm test', failure: 'f', tree: 't', count: 3 } }), 'loop'],
     ['a verification that could not run', verifying(), ev('verify.errored', { runId: 'r1', job: 'dev', error: 'moteur' }), 'infra'],
-  ])('the Flow still reads the cause of %s from the reason', (_what, state, event, cause) => {
+  ])('the Flow reads the cause of %s from its kind', (_what, state, event, cause) => {
     const out = decide(state, event, workflow);
     expect(notice(out)).toBeDefined();
-    expect(blockCause(out.events.reduce<TicketState | undefined>((t, e) => reduce(t, e), state)?.blockReason)).toBe(cause);
+    expect(causeOf(out.events.reduce<TicketState | undefined>((t, e) => reduce(t, e), state)?.blockKind)).toBe(cause);
   });
 
   it('a red check that could not run says why in the comment', () => {
@@ -85,13 +85,13 @@ describe('a block posts the standard comment (ORC-196)', () => {
     const out = decide(ticket(), ev('dead_letter.added', { eventId: 'x', eventType: 'pr.opened', error: 'boom', failures: 1 }), workflow);
     expect(notice(out)?.block.question).toContain('factory run repair REL-1');
     expect(out.effects.filter((e) => e.kind === 'activity')).toEqual([]);
-    expect(blockCause(reduce(ticket(), out.events[0]!)?.blockReason)).toBe('dead_letter');
+    expect(causeOf(reduce(ticket(), out.events[0]!)?.blockKind)).toBe('dead_letter');
   });
 
   it('a row out of its attempts says so: the attempts in the header and what was tried, no failed decision for an outage (ORC-320)', () => {
     const out = decide(ticket(), ev('dead_letter.added', { eventId: 'x', eventType: 'pr.opened', error: 'connection refused', failures: 1, attempts: 5 }), workflow);
     expect(notice(out)?.block).toMatchObject({ max: 5, tried: ['5 attempts to process this event.'], reason: 'Event x set aside (pr.opened): 5 attempts without success (connection refused).' });
-    expect(blockCause(notice(out)?.block.reason)).toBe('dead_letter');
+    expect(out.events[0]).toMatchObject({ type: 'ticket.blocked', kind: 'dead_letter', eventId: 'x' });
     expect(reduce(reduce(ticket(), out.events[0]!), { ...ev('dead_letter.repaired', { eventId: 'x', action: 'skip', by: 'ops', event: {} as never }) } as FactoryEvent)?.blocked).toBe(false);
   });
 
@@ -103,7 +103,7 @@ describe('a block posts the standard comment (ORC-196)', () => {
   it('a team with no repo: the comment says a reply is not enough, and still blocks with its reason', () => {
     const out = decide(undefined, ev('ticket.delegated', { linearSessionId: 's1', noRepo: 'ZZZ', issue: { title: 'T', logical: 'todo', priority: 0 } } as never), workflow);
     expect(notice(out)?.block).toMatchObject({ waits: true });
-    expect(blockCause((out.events[0] as { reason: string }).reason)).toBe('pickup');
+    expect(causeOf((out.events[0] as { kind: BlockKind }).kind)).toBe('pickup');
     expect(out.effects.filter((e) => e.kind === 'activity')).toEqual([]);
   });
 
@@ -137,13 +137,13 @@ describe('the question of the agent, journaled (ORC-196)', () => {
 
   it('blocks with the cause « question », the job at work to resume, the question in the comment', () => {
     const out = decide(ticket(), asked, workflow);
-    expect(out.events).toEqual([{ type: 'ticket.blocked', reason: 'Question asked by the agent', job: 'dev' }]);
-    expect(blockCause('Question asked by the agent')).toBe('question');
+    expect(out.events).toEqual([{ type: 'ticket.blocked', reason: 'Question asked by the agent', kind: 'asked', job: 'dev' }]);
+    expect(causeOf('asked')).toBe('question');
     expect(notice(out)?.block).toMatchObject({ step: 'build', question: 'Laquelle ?' });
   });
 
   it('a question run has no job of the ticket to resume', () => {
-    expect(decide(ticket({ activeRunId: undefined, activeJob: undefined }), ev('agent.asked', { question: 'Q', job: 'ask' }), workflow).events).toEqual([{ type: 'ticket.blocked', reason: 'Question asked by the agent' }]);
+    expect(decide(ticket({ activeRunId: undefined, activeJob: undefined }), ev('agent.asked', { question: 'Q', job: 'ask' }), workflow).events).toEqual([{ type: 'ticket.blocked', reason: 'Question asked by the agent', kind: 'asked' }]);
   });
 
   it('a frozen version posts what it did', () => {
@@ -169,7 +169,7 @@ describe('the question of the agent, journaled (ORC-196)', () => {
 describe('versions frozen before it decide bit for bit as they did', () => {
   it('the run\'s cap: the elicitation, no comment, no job on the event', () => {
     const out = decide(ticket(), finished(), frozen);
-    expect(out.events).toEqual([{ type: 'ticket.blocked', reason: 'The run dev reached a limit (turns, duration or budget).' }]);
+    expect(out.events).toEqual([{ type: 'ticket.blocked', reason: 'The run dev reached a limit (turns, duration or budget).', kind: 'limit' }]);
     expect(out.effects[0]).toEqual({ kind: 'activity', type: 'elicitation', body: 'The run dev reached a limit (turns, duration or budget). Reply in this thread and I will resume.' });
     expect(notice(out)).toBeUndefined();
   });
@@ -224,7 +224,7 @@ describe('a reply resumes the blocked step (ORC-196)', () => {
   ])('`/stop` %s stops: it does not relaunch what it stops', (_where, event) => {
     const out = decide(blockedOn('dev'), event, workflow);
     expect(starts(out)).toEqual([]);
-    expect(out.events).toContainEqual({ type: 'ticket.blocked', reason: 'Stopped on request' });
+    expect(out.events).toContainEqual({ type: 'ticket.blocked', reason: 'Stopped on request', kind: 'stopped' });
   });
 
   it('a question in another thread of a blocked ticket is no reply to its block', () => {
@@ -320,9 +320,9 @@ describe('a reply resumes the blocked step (ORC-196)', () => {
   });
 
   it('unblocked, the ticket forgets the step', () => {
-    const t = reduce(ticket(), { type: 'ticket.blocked', reason: 'r', job: 'dev' });
+    const t = reduce(ticket(), { type: 'ticket.blocked', reason: 'r', kind: 'infra', job: 'dev' });
     expect(t?.blockedJob).toBe('dev');
     expect(reduce(t, { type: 'ticket.unblocked' })?.blockedJob).toBeUndefined();
-    expect(reduce(t, { type: 'ticket.blocked', reason: 'other' })?.blockedJob).toBeUndefined();
+    expect(reduce(t, { type: 'ticket.blocked', reason: 'other', kind: 'other' })?.blockedJob).toBeUndefined();
   });
 });

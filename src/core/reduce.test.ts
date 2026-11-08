@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { reduce } from './reduce.js';
-import { newTicketState, normalizeTicket, type EventPayloads, type EventType, type FeedbackItem, type InternalEvent, type FactoryEvent, type PendingJob, type TicketState } from './types.js';
+import { normalizeTicket } from './upcast.js';
+import { newTicketState, type EventPayloads, type EventType, type FeedbackItem, type InternalEvent, type FactoryEvent, type PendingJob, type TicketState } from './types.js';
 
 function ev<T extends EventType>(type: T, payload: EventPayloads[T]): FactoryEvent {
   return { id: `e-${type}`, type, at: 1000, projectId: 'p', ticketId: 'REL-1', schemaVersion: 3, taint: 'trusted', payload } as FactoryEvent;
@@ -92,7 +93,7 @@ describe('reduce — facts carried by external events', () => {
 
 describe('reduce — decided events', () => {
   it('blocks and unblocks', () => {
-    const blocked = reduce(ticket(), { type: 'ticket.blocked', reason: 'Arrêté' })!;
+    const blocked = reduce(ticket(), { type: 'ticket.blocked', reason: 'Arrêté', kind: 'stopped' })!;
     expect(blocked).toMatchObject({ blocked: true, blockReason: 'Arrêté' });
     expect(reduce(blocked, { type: 'ticket.unblocked' })).toMatchObject({ blocked: false, blockReason: undefined });
   });
