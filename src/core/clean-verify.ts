@@ -44,6 +44,10 @@ export interface CleanVerifyRequest {
   frozen?: FrozenTests;
   /** The branch took untrusted content (ORC-338): what its agent commits changed since the mark in the repository's `sensitive_paths` is refused. */
   untrusted?: UntrustedMark;
+  /** A human's push (ORC-159): this commit is checked as the forge's branch holds it, fetched from the forge; the worktree is not read. */
+  head?: string;
+  /** The last commit a human pushed to the branch (ORC-159): a commit that does not carry it is refused before anything runs, as its publication would be. */
+  humanHead?: string;
   /** The variables the repository declares (ORC-211), never a secret. */
   env: (config: RepoConfig) => Promise<Record<string, string>>;
   log: (message: string) => void;
@@ -127,12 +131,16 @@ export const runCleanVerify: CleanVerifier = async (req) => {
   const cloneDir = join(req.workDir, 'clone');
   mkdirSync(bundleDir);
   try {
-    const { sha } = await inBox('bundle', req.worktree, [{ host: bundleDir, target: BUNDLE_TARGET, readOnly: false }], (sandboxId) =>
-      extractWork({ sandboxes, sandboxId, branch: req.branch, bundleDir, cloneDir, ...(req.exec ? { exec: req.exec } : {}) }),
-    );
+    const { sha } = req.head
+      ? await within(fetchPushed(req, req.head, cloneDir), deadlineMs, `the forge no longer responds after ${deadlineMs / 1000} s`)
+      : await inBox('bundle', req.worktree, [{ host: bundleDir, target: BUNDLE_TARGET, readOnly: false }], (sandboxId) =>
+          extractWork({ sandboxes, sandboxId, branch: req.branch, bundleDir, cloneDir, ...(req.exec ? { exec: req.exec } : {}) }),
+        );
 
     const git = cloneGit(req, cloneDir);
     const tree = await git('rev-parse', `${sha}^{tree}`);
+    // Before a commit found green is taken as it is: one from before the push does not carry it either.
+    if (req.humanHead && !(await carries(git, req.humanHead, sha))) return { ok: false, failures: [humanCommitsMissing(req.humanHead, req.branch)], sha, tree };
     if (sha === req.green) return { ok: true, failures: [], sha, tree };
     await within(fetchBase(req, cloneDir), deadlineMs, `the forge no longer responds after ${deadlineMs / 1000} s`);
     const config = await baseConfig(git);
@@ -194,6 +202,47 @@ async function fetchBase(req: CleanVerifyRequest, cloneDir: string): Promise<voi
     throw new Error(`base branch not read: ${withoutCredentials((err as Error).message, req.originUrl)}`);
   }
 }
+
+const PUSHED = 'refs/factory/pushed';
+
+/**
+ * A human's push (ORC-159), from the forge into a new repository of ours, as the base is: its branch fetched with its
+ * objects checked, and no remote recorded, so its URL and credentials stay out of the clone the commands later run in.
+ * The pushed commit must still be on that branch; a newer push on top of it is the next check's.
+ */
+async function fetchPushed(req: CleanVerifyRequest, head: string, cloneDir: string): Promise<{ sha: string }> {
+  const exec = req.exec ?? execCmd;
+  const opts = { env: { ...hostGitEnv(req.workDir, req.workDir), GIT_TERMINAL_PROMPT: '0' } };
+  const hardened = HARDENING.flatMap((c) => ['-c', c]);
+  await mustExec(exec, 'git', [...hardened, 'init', '--quiet', '--template=', cloneDir], opts);
+  // For whoever runs git in it next, as `extractWork` keeps them in its clone.
+  for (const c of HARDENING) await mustExec(exec, 'git', ['-C', cloneDir, 'config', c.slice(0, c.indexOf('=')), c.slice(c.indexOf('=') + 1)], opts);
+  const fetch = ['-c', 'transfer.fsckObjects=true', '-C', cloneDir, 'fetch', '--quiet', '--no-tags', '--no-recurse-submodules', '--', req.originUrl, `+refs/heads/${req.branch}:${PUSHED}`];
+  try {
+    await mustExec(exec, 'git', [...hardened, ...fetch], opts);
+  } catch (err) {
+    // eslint-disable-next-line preserve-caught-error -- its message holds the URL and its credentials: it stays out of what is journaled.
+    throw new Error(`the pushed branch not read: ${withoutCredentials((err as Error).message, req.originUrl)}`);
+  }
+  if ((await exec('git', [...hardened, '-C', cloneDir, 'merge-base', '--is-ancestor', head, PUSHED], opts)).code !== 0) {
+    throw new Error(`the pushed commit ${head.slice(0, 12)} is no longer on the forge's branch ${req.branch}`);
+  }
+  return { sha: (await mustExec(exec, 'git', [...hardened, '-C', cloneDir, 'rev-parse', '--verify', `${head}^{commit}`], opts)).trim() };
+}
+
+/** `factory/commits-humains` (ORC-159): the branch carries every commit a human pushed to it, or the factory publishes nothing over them. */
+export const HUMAN_COMMITS_CHECK = 'factory/commits-humains';
+
+/** Whether `sha` carries `human`: a commit the clone does not even hold does not. */
+async function carries(git: CloneGit, human: string, sha: string): Promise<boolean> {
+  return (await git.status('merge-base', '--is-ancestor', human, sha)).code === 0;
+}
+
+const humanCommitsMissing = (human: string, branch: string): VerifyFailure => ({
+  command: HUMAN_COMMITS_CHECK,
+  exitCode: 1,
+  output: `The branch does not carry the commits a human pushed to it (up to ${human.slice(0, 12)}), and the factory never publishes over them. \`git fetch origin\`, then \`git rebase origin/${branch}\`: your commits not yet published go on top of theirs. Resolve, commit, and never push.`,
+});
 
 /** The message goes to the journal and to the ticket: neither the URL, which can carry a token, nor what git quotes of one. */
 function withoutCredentials(message: string, url: string): string {

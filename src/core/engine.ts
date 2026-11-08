@@ -895,6 +895,77 @@ function publishes(job: JobSpec): boolean {
   return !!job.repoChecks && !job.red;
 }
 
+/** The check of a human's push (ORC-159): no run made the commit, so the check's id names it, and the push's time. */
+const PUSH_CHECK = /^push-([0-9a-f]{4,64})-\d+$/;
+export const pushCheckId = (sha: string, at: number): string => `push-${sha}-${at}`;
+/** The commit a check of a human's push verifies; undefined for the check of a run. */
+export const pushedHead = (runId: string): string | undefined => PUSH_CHECK.exec(runId)?.[1];
+
+/**
+ * The job whose checks a human's push goes through (ORC-159): the first the factory publishes. None on a version whose
+ * agents push themselves (frozen before ORC-125): their own pushes come in as `push.human`, and pause nothing.
+ */
+export function pushCheckJob(workflow: Workflow): JobSpec | undefined {
+  return Object.values(workflow.jobs).find((j) => publishes(j) && j.workspace === 'worktree' && j.verifyFailure !== 'block');
+}
+
+/**
+ * A human pushed to the ticket's branch (ORC-159). The agent's work pauses: the run in flight stops, the check or the
+ * publication awaited and the waiting job go with it, and the ticket is blocked on the job the push interrupted, which a
+ * human's reply resumes. `verify` starts again from the pushed commit, as the forge holds it, in a fresh clone; its verdict
+ * is told then (`pushChecked`). A push of the commit `verify` last found green is the factory's own publication: nothing
+ * pauses. Nor does a ticket the factory does not work on (not delegated, delivered, stopped, its PR closed): the rules decide.
+ * A ticket blocked for another reason keeps it, and its push is checked all the same.
+ */
+function humanPush(out: Decision, event: FactoryEvent<'push.human'>, state: TicketState | undefined, ticket: TicketState | undefined, workflow: Workflow): Decision | undefined {
+  const { sha, author } = event.payload;
+  if (sha === state?.verifiedSha) {
+    out.trace.push(`push.human: ${sha} is the commit verify last found green, the factory's own publication`);
+    return out;
+  }
+  const job = pushCheckJob(workflow);
+  if (!job || !ticket?.delegated || settledTicket(ticket) || ticket.prState === 'CLOSED' || !/^[0-9a-f]{4,64}$/.test(sha)) return undefined;
+  const interrupted = state?.activeJob && workflow.jobs[state.activeJob]?.queue === 'dev' ? state.activeJob : (state?.pendingJob?.job ?? ticket.blockedJob);
+  cancelWork(out, `push.human: ${author} pushed ${sha.slice(0, 12)}, the agent's work paused`);
+  if (!ticket.blocked || ticket.blockKind === 'human_push') {
+    const resumes = ticket.blockKind === 'human_push' ? ticket.blockedJob : interrupted;
+    out.events.push({ type: 'ticket.blocked', reason: `${pushed(sha)}: the agent's work is paused while verify checks it.`, kind: 'human_push', ...(workflow.blockComment && resumes ? { job: resumes } : {}) });
+  }
+  const runId = pushCheckId(sha, event.at);
+  out.events.push({ type: 'verify.started', runId });
+  out.effects.push({ kind: 'run_verify', runId, job: job.name, head: sha });
+  return out;
+}
+
+const pushed = (sha: string): string => `A human pushed ${sha.slice(0, 12)} to the ticket's branch`;
+
+/**
+ * The verdict of `verify` on a human's push (ORC-159). Green, the pushed commit is the one verified last: what a
+ * publication or a merge may carry. Either way the ticket stays paused and the human hears the verdict: a reply resumes
+ * the interrupted job on top of the push; a commit that fails waits for another push, or for a designated maintainer's
+ * `/refreeze` when it changes a frozen test. A ticket a human relaunched meanwhile, or blocked for another reason, goes on as it is.
+ */
+function pushChecked(out: Decision, event: FactoryEvent<'verify.passed' | 'verify.failed' | 'verify.errored'>, ticket: TicketState | undefined, workflow: Workflow): Decision {
+  const head = pushedHead(event.payload.runId)!;
+  if (event.type === 'verify.passed') out.events.push({ type: 'ticket.patched', patch: { verifiedSha: event.payload.sha ?? head } });
+  if (!ticket?.blocked || ticket.blockKind !== 'human_push') {
+    out.trace.push(`${event.type} on the push of ${head.slice(0, 12)}: the ticket ${ticket?.blocked ? 'is blocked for another reason' : 'was relaunched meanwhile'}`);
+    return out;
+  }
+  const at = ticket.blockedJob ? { job: ticket.blockedJob, step: 'verify' } : { step: 'verify' };
+  const resume = 'reply to resume the agent: it rebases its work on top of your commits, and never pushes over them.';
+  if (event.type === 'verify.errored') {
+    const reason = `The verification of ${head.slice(0, 12)}, pushed by a human, could not run: infrastructure failure.`;
+    return block(out, workflow, { kind: 'infra', reason, body: `${reason}\n${event.payload.error}\nReply in this thread and I will resume.`, ...at, tried: [`Started the verification of the pushed commit: ${event.payload.error}`] });
+  }
+  if (event.type === 'verify.failed') {
+    const reason = `${pushed(head)}: verify fails on it.`;
+    return block(out, workflow, { kind: 'human_push', ...failedChecks(reason, event.payload.failures), ...at, question: `Push a fix (it is checked again), or have a designated maintainer send /refreeze if it changes a frozen test on purpose; then ${resume}` });
+  }
+  const reason = `${pushed(head)}: verify passed on it, in a fresh clone. The agent's work is paused.`;
+  return block(out, workflow, { kind: 'human_push', reason, body: `${reason}\nReply in this thread to resume the agent on top of it.`, ...at, tried: [`Checked the pushed commit ${head.slice(0, 12)} in a fresh clone of the forge: green.`], question: `Shall I go on? Move the ticket to AI Review to have your commits reviewed, or ${resume}` });
+}
+
 /** The ticket goes back to Human Review (ORC-148): nothing merged, `reason` answered in the ticket. */
 function backToReview(out: Decision, reason: string): Decision {
   out.trace.push(`not merged: ${reason}`);
@@ -1251,6 +1322,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       out.events.push({ type: 'ticket.patched', patch: { initiatorId: event.actor } });
     }
   }
+  if ((event.type === 'verify.passed' || event.type === 'verify.failed' || event.type === 'verify.errored') && pushedHead(event.payload.runId)) return pushChecked(out, event, ticket, workflow);
   switch (event.type) {
     case 'control.pause':
       out.effects.push({ kind: 'set_paused', paused: true });
@@ -1324,7 +1396,8 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
         return ticket?.blocked ? out : blockOnCuts(out, workflow, job, checkOf(workflow, job));
       }
       out.events.push({ type: 'ticket.patched', patch: { cutRelaunches: [...recent, event.at] } });
-      out.effects.push({ kind: 'run_verify', runId, job, ...(output ? { output } : {}) });
+      const head = pushedHead(runId);
+      out.effects.push({ kind: 'run_verify', runId, job, ...(output ? { output } : {}), ...(head ? { head } : {}) });
       return out;
     }
     case 'verify.passed': {
@@ -1557,6 +1630,11 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       if (change === 'added' && otherRepo && ticket && holds(ticket)) {
         out.effects.push({ kind: 'comment', body: `This ticket stays on the repository ${event.projectId}: the repository does not change along the way. With no branch or PR yet, stop the work, remove the delegation, wait 5 minutes for the reconciliation to see it, then delegate again. Otherwise, open a new ticket for the other repository.` });
       }
+      break;
+    }
+    case 'push.human': {
+      const paused = humanPush(out, event, state, ticket, workflow);
+      if (paused) return paused;
       break;
     }
     case 'pr.merge_refused':

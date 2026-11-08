@@ -13,6 +13,7 @@ export const CAUSE_LABELS: Record<BlockCause, string> = {
   repo_config: 'Invalid repository configuration',
   dead_letter: 'Event set aside',
   pr_closed: 'PR closed without merge',
+  human_push: 'Human push on the branch',
   stopped: STOPPED,
   other: 'Other cause',
 };

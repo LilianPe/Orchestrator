@@ -41,7 +41,7 @@ export interface GitPublisherDeps {
  *    the agent's commits changed since the branch took untrusted content, ORC-338), then gitleaks in a sandbox at `none`.
  *    `verify` checked the same commit: this is the last word before the forge, and it depends on no state;
  * 5. a push only forward. What the forge's branch holds must be in the work: otherwise the branch moved (a human's commit,
- *    which is ORC-159's, or a history the agent rewrote), and it is refused. The lease is on the head read in 3: a push in
+ *    which the agent rebases its work on, ORC-159, or a history the agent rewrote), and it is refused. The lease is on the head read in 3: a push in
  *    between is refused by git, and nothing is ever written over;
  * 6. the draft PR, found by its branch before it is opened (`ensurePr`).
  */
@@ -94,7 +94,7 @@ export class GitPublisher implements Publisher {
     // The head fetched is the one the lease names: read after the fetch, it is the one compared with the work.
     const remote = known ? await git('rev-parse', REMOTE_HEAD) : undefined;
     if (remote && !isYes(await git.status('merge-base', '--is-ancestor', remote, req.sha))) {
-      throw new PublishRefused('moved', `the branch ${req.branch} has a commit on the forge that this work does not have (${remote.slice(0, 12)}): a human push, or a rewritten history. Nothing is overwritten: merge it into the ticket's branch.`);
+      throw new PublishRefused('moved', `the branch ${req.branch} has a commit on the forge that this work does not have (${remote.slice(0, 12)}): a human push, or a rewritten history. Nothing is overwritten: the work goes on top of it (\`git rebase origin/${req.branch}\`), never over it.`);
     }
     const from = await forkPoint(git, req.sha);
     if (from === req.sha) throw nothingToPublish(req.branch);

@@ -82,6 +82,15 @@ describe('standard pack', () => {
     }
   });
 
+  it("tells the steps that write to rebase on a human's push, never to merge it (ORC-159)", () => {
+    for (const name of ['dev', 'feedback']) {
+      const text = readFileSync(join(pack, 'skills', name, 'SKILL.md'), 'utf8');
+      expect(text, name).toContain('`git rebase origin/<branch>`');
+      expect(text, name).toContain('factory/commits-humains');
+      expect(text, name).not.toContain('merge --no-edit origin/<branch>');
+    }
+  });
+
   it('denies skipping the git hooks with --no-verify or -n, grouped (-nm) or late in the command', () => {
     const s = JSON.parse(readFileSync(join(pack, 'settings.json'), 'utf8'));
     expect(s.permissions.deny).toEqual(

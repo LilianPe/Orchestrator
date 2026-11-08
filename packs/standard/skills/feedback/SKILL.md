@@ -26,7 +26,7 @@ Read all the feedback, then apply `factory:receiving-review`: understand each it
 
 1. `factory:verification`: the tests of what you changed, the repository's type check and lint if they exist; for failed checks, rerun exactly the command that failed.
 2. Conflict with the PR's base: `git fetch origin`, then `git merge-tree --write-tree --name-only origin/<base> HEAD` (base: `gh pr view <branch> --json baseRefName --jq .baseRefName`). Exit code 1: merge the base (`git merge --no-edit origin/<base>`), resolve each hunk you have read with Edit, keeping the intent of both sides, `git add`, `git commit --no-edit`, rerun tests and types. Contradiction between the two sides, two migrations on the same tables, or a resolution beyond the scope: `git merge --abort` and a question.
-3. A human may have pushed to the branch: `git fetch origin`, and if there is something new on `origin/<branch>`, `git merge --no-edit origin/<branch>`; without it, the factory refuses to publish on top.
+3. A human may have pushed to the branch (the factory paused you for it, then a human resumed you): `git fetch origin`, and if `origin/<branch>` has commits you do not have, `git rebase origin/<branch>`. Your commits not yet published go on top of theirs; the published ones are already under them. Resolve each hunk as above (`git rebase --continue`), or `git rebase --abort` and a question in the same three cases. Without it, the factory refuses your commit (`factory/commits-humains`) and never publishes over theirs.
 4. Commit, then end your turn: **the factory publishes**, after verifying your last commit. You do not push.
 
 ## Forbidden

@@ -49,6 +49,10 @@ If the ticket asks for several changes (several modules, a migration plus code, 
 3. Commit everything that must go out, then end your turn. **The factory publishes, not you**: it verifies your last commit in a fresh clone, checks its diff, pushes it to the branch and opens the draft PR. You have neither the token nor the network to do it, and nothing of the kind is allowed to you: do not try. What is not committed does not go out.
 4. The diff must neither touch the forbidden paths (anything under `.github/` (workflows, actions, `dependabot.yml`), `CODEOWNERS` wherever it is, `.env`, `.envrc` and every `.env.*` but `.env.example`, `.env.sample` and `.env.template`, `.factory/`, `.claude/`, `.gitattributes`, `.gitmodules`, `.npmrc`, `.yarnrc*`, `.yarn/releases/`, `.yarn/plugins/`, `.pnpmfile.cjs`, `setup.py`, `.husky/`, `.vscode/`, `Dockerfile*`, `.devcontainer/`, `claims/`, the `scripts` of a `package.json`), nor carry a secret, a binary or a symbolic link pointing outside the repository: all of these block publication. When your input holds content the factory does not trust (a review comment on the PR, a reply from outside the team), the `sensitive_paths` of `.factory/config.yml` on the default branch are forbidden too, for the rest of the ticket. A ticket that requires changing any of these: `factory-agent ask`, never a commit.
 
+## A human pushed to your branch
+
+The factory pauses you when a human pushes to the branch, and a human resumes you. Before anything else: `git fetch origin`, and if `origin/<branch>` has commits you do not have, `git rebase origin/<branch>` (your commits not yet published go on top of theirs; resolve as in section 5, or `git rebase --abort` and `factory-agent ask`). Without it, the factory refuses your commit (`factory/commits-humains`): it never publishes over a human's commits.
+
 ## Forbidden
 
 Never merge. Never push, to any branch, never open or edit a PR: the factory publishes. Do not rewrite a published history. Do not switch branches. Touch nothing outside the worktree, and do not change the git configuration.

@@ -55,8 +55,11 @@ function external(t: TicketState, e: FactoryEvent): TicketState {
     case 'ticket.undelegated':
       return { ...t, delegated: false };
     case 'push.human':
-      // What a human pushed is theirs (ORC-338): the newest pushes are kept, once each.
-      return { ...t, humanPushes: [...(t.humanPushes ?? []).filter((p) => p.after !== e.payload.sha), { ...(e.payload.before ? { before: e.payload.before } : {}), after: e.payload.sha }].slice(-MAX_HUMAN_PUSHES) };
+      // The commit `verify` last found green is the factory's own publication, not a human's (ORC-159).
+      if (e.payload.sha === t.verifiedSha) return t;
+      // What a human pushed is theirs (ORC-338): the newest pushes are kept, once each. The commit shown to the
+      // reviewer is no longer the branch's: no approval from before the push passes a gate (I2, ORC-159).
+      return { ...t, reviewSha: undefined, humanPushes: [...(t.humanPushes ?? []).filter((p) => p.after !== e.payload.sha), { ...(e.payload.before ? { before: e.payload.before } : {}), after: e.payload.sha }].slice(-MAX_HUMAN_PUSHES) };
     case 'session.mentioned':
     case 'command': {
       const id = e.payload.linearSessionId;
