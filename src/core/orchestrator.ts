@@ -393,10 +393,11 @@ export class Orchestrator {
   private liveRuns = new Set<string>();
   private handles = new Map<string, RunHandle>();
   /**
-   * The attempts this process follows (ORC-344): the token of their lease, which each of its writes of them carries, when
-   * they last showed progress, and how long a silence their lease outlives.
+   * The attempts this process follows (ORC-344), until their end is delivered: the token of their lease, which each of its
+   * writes of them carries, when they last showed progress, how long a silence their lease outlives, and whether a stop
+   * was asked of them. `ending`: their stream is over, their end on its way: no beat renews them, none takes them over.
    */
-  private held = new Map<string, { token: number; seenAt: number; silentMs: number }>();
+  private held = new Map<string, { token: number; seenAt: number; silentMs: number; stopped?: true; ending?: true }>();
   /** Attempts this process let go of, still running: a shutdown, or another daemon that took them over. Nothing of them is written here. */
   private released = new Set<string>();
   private beating = false;
@@ -624,6 +625,7 @@ export class Orchestrator {
   private async attach(cut: RunRecord, ticket: TicketState | undefined): Promise<boolean> {
     const { sandboxes, runner, clock, store, scheduler } = this.d;
     if (cut.queue === 'dev' && ticket?.activeRunId !== cut.id) return false;
+    let handle: RunHandle | undefined;
     try {
       const project = await this.runtimeFor(cut.projectId, cut.ticketId, ticket ?? null);
       const job = project?.workflow.jobs[cut.job];
@@ -635,17 +637,19 @@ export class Orchestrator {
       if (sandboxes && !sandbox) return false;
       // The limits it was launched with: the ticket's token budget may have lowered the job's (ORC-340).
       const bounds = stagnationBounds(project.workflow, job);
-      const handle = runner.attach({ runId: run.id, limits: run.limits ?? job.limits, model: job.model, elapsedMs: clock.now() - run.startedAt, env: this.d.agentEnv(run), ...bounds });
+      handle = runner.attach({ runId: run.id, limits: run.limits ?? job.limits, model: job.model, elapsedMs: clock.now() - run.startedAt, env: this.d.agentEnv(run), ...bounds });
       if (!handle) return false;
+      await store.renewRun(run.id, clock.now() + RUN_LEASE_MS, run.leaseToken);
       // Its slot, in the memory of this process. Over a capacity lowered meanwhile, it goes on all the same.
       scheduler.tryAcquire(run.queue, `${run.ticketId}:${run.queue}`);
-      await store.renewRun(run.id, clock.now() + RUN_LEASE_MS, run.leaseToken);
       this.follow(run.id, handle, run.leaseToken!, bounds);
       this.liveRuns.add(run.id);
       this.track(this.pump(run, handle, sandbox?.id), run.id);
       this.log('info', `run ${run.id} of ${run.ticketId} still alive: reattached`);
       return true;
     } catch (err) {
+      // Taken up and not followed: stopped, since its step starts again.
+      handle?.stop();
       this.log('warn', `run ${cut.id} not reattached, its step starts again: ${(err as Error).message}`);
       return false;
     }
@@ -674,6 +678,13 @@ export class Orchestrator {
     this.handles.get(runId)?.detach?.();
     this.handles.delete(runId);
     this.held.delete(runId);
+  }
+
+  /** A stop asked of an attempt (a human, a session stopped): a shutdown then waits for its end rather than letting it run on. */
+  private stopRun(runId: string): void {
+    const held = this.held.get(runId);
+    if (held) held.stopped = true;
+    this.handles.get(runId)?.stop();
   }
 
   /** The ticket's active run, cut and not settled: its result was never sent, or its launch never wrote it. */
@@ -732,20 +743,21 @@ export class Orchestrator {
     try {
       const { store, clock } = this.d;
       for (const [runId, held] of this.held) {
-        if (clock.now() - held.seenAt >= held.silentMs || !(await this.alive(runId))) continue;
+        if (held.ending || clock.now() - held.seenAt >= held.silentMs || !(await this.alive(runId))) continue;
         if (await store.renewRun(runId, clock.now() + RUN_LEASE_MS, held.token)) continue;
-        // Refused: ended (its end is on its way, or `leaseExpired` closed it), or taken over by another daemon, which follows it now.
+        // Refused: `leaseExpired` closed it, or another daemon took it over and follows it now, with its slot.
         const rec = await store.getRun(runId);
         if (rec?.status === 'running' && (rec.leaseToken ?? 0) !== held.token) {
           this.log('warn', `lease of run ${runId} of ${rec.ticketId} taken over by another daemon: let go of here`);
           this.letGo(runId);
+          this.d.scheduler.release(`${rec.ticketId}:${rec.queue}`);
         }
       }
       // Before the leases: a run whose result is kept is still `running` in the store, its lease run out, and only its result tells its end.
       await this.deliverKept();
       for (const run of await store.runsByStatus('running')) {
-        // Its result is kept (`deliver`): ended, not lost, whatever its lease says.
-        if (this.unwritten.has(endKey(run.id))) continue;
+        // Its result is kept (`deliver`), or on its way: ended, not lost, whatever its lease says.
+        if (this.unwritten.has(endKey(run.id)) || this.held.get(run.id)?.ending) continue;
         if (run.leaseUntil !== undefined && run.leaseUntil < clock.now()) await this.leaseExpired(run);
       }
     } finally {
@@ -1137,7 +1149,11 @@ export class Orchestrator {
   stopAll(): void {
     this.stopping = true;
     this.worker.stop();
-    for (const runId of [...this.handles.keys()]) this.letGo(runId);
+    for (const runId of [...this.handles.keys()]) {
+      // Ended already, its end on its way, or stopped on request: drained() waits for its end, written here.
+      if (this.liveRuns.has(runId) && !this.held.get(runId)?.stopped) this.letGo(runId);
+      else this.liveRuns.delete(runId);
+    }
   }
 
   project(id: string): ProjectRuntime {
@@ -1545,14 +1561,14 @@ export class Orchestrator {
       case 'stop_run': {
         if (c.linearSessionId) {
           for (const r of await store.runsByStatus('running')) {
-            if (r.projectId === project.id && r.ticketId === ticketId && r.linearSessionId === c.linearSessionId) this.handles.get(r.id)?.stop();
+            if (r.projectId === project.id && r.ticketId === ticketId && r.linearSessionId === c.linearSessionId) this.stopRun(r.id);
           }
           return;
         }
         // The ticket's timers were deleted by the decision itself (`clearTimers`).
         // The ticket's dev work only: a question waiting for its slot is still answered.
         await store.removeFromQueue(project.id, ticketId, 'dev');
-        if (t.activeRunId) this.handles.get(t.activeRunId)?.stop();
+        if (t.activeRunId) this.stopRun(t.activeRunId);
         return;
       }
       case 'run_verify': {
@@ -2432,14 +2448,27 @@ export class Orchestrator {
    * over. Let go of (a shutdown, a takeover), it ends here: nothing written, its sandbox and its workspace kept.
    */
   private async pump(run: RunRecord, handle: RunHandle, sandboxId?: string): Promise<void> {
+    try {
+      await this.stream(run, handle, sandboxId);
+    } finally {
+      this.held.delete(run.id);
+      this.released.delete(run.id);
+    }
+  }
+
+  private async stream(run: RunRecord, handle: RunHandle, sandboxId?: string): Promise<void> {
     const { tracker, bus, store, clock } = this.d;
     let result: RunResult | undefined;
     let fence = run.leaseToken ?? 0;
-    /** Followed no more by this process: its token, as a `leaseExpired` of this process may have raised it, is what it writes under. */
-    const unfollow = () => {
-      fence = this.held.get(run.id)?.token ?? fence;
+    /**
+     * Its stream over: no beat renews it and none takes it over until its end is delivered. Its token, as a `leaseExpired`
+     * of this process may have raised it before, is what it writes under.
+     */
+    const ending = () => {
+      const held = this.held.get(run.id);
+      if (held) held.ending = true;
+      fence = held?.token ?? fence;
       this.handles.delete(run.id);
-      this.held.delete(run.id);
     };
     try {
       const relay = new ActivityRelay(
@@ -2450,6 +2479,8 @@ export class Orchestrator {
       for await (const ev of handle.events) {
         const held = this.held.get(run.id);
         if (held) held.seenAt = clock.now();
+        // Its result given, a process that lingers is not silent: its end comes, whatever it writes until then.
+        if (held && ev.kind === 'result') held.silentMs = Infinity;
         bus.publish({ kind: 'run', runId: run.id, ticketId: run.ticketId, ev });
         relay.push(ev);
       }
@@ -2457,7 +2488,7 @@ export class Orchestrator {
       if (this.released.has(run.id)) return;
       result = await handle.done;
       await relay.flush().catch((err: Error) => this.log('warn', `run ${run.id}: last activities not relayed: ${err.message}`));
-      unfollow();
+      ending();
     } catch (err) {
       const message = (err as Error).message;
       this.liveRuns.delete(run.id);
@@ -2468,7 +2499,7 @@ export class Orchestrator {
       } catch {
         /* best effort */
       }
-      unfollow();
+      ending();
       try {
         const rec = (await store.getRun(run.id)) ?? run;
         if (rec.status !== 'running') return;

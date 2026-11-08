@@ -1,7 +1,7 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { createServer, request, type RequestListener } from 'node:http';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { httpsUpstream } from '../../test/helpers/egress-upstream.js';
 import { EgressProxy } from './proxy.js';
@@ -119,6 +119,17 @@ describe('the egress proxy as a service of its own (ORC-203)', () => {
     await next.open('run-1', { level: 'none', allow: [] });
     expect(proxy.isOpen('run-1')).toBe(true);
     await next.closeAll();
+  });
+
+  it.skipIf(process.platform === 'win32')('a daemon gone keeps the socket folders of its runs, still running in their containers (ORC-344)', async () => {
+    const socket = await client.open('run-1', LIMITED);
+    await client.closeAll({ keep: true });
+    await vi.waitFor(() => expect(proxy.isOpen('run-1')).toBe(false));
+    expect(existsSync(dirname(socket))).toBe(true);
+    const next = new EgressClient(path);
+    expect(await next.open('run-1', LIMITED)).toBe(socket);
+    await next.close('run-1');
+    expect(existsSync(dirname(socket))).toBe(false);
   });
 
   it('leaves the runs of the daemon that took over when an older watch ends late', async () => {
