@@ -25,6 +25,7 @@ import { NO_REPO_VARIABLES, type RepoVariables } from '../config/repo-variables.
 import { parseRepoConfig, RepoConfigError, type RepoConfig, type RepoConfigRead } from '../config/repo-config.js';
 import type { JobSpec, Workflow } from '../config/workflow-schema.js';
 import type { EffectRetry } from '../runtime/outbox.js';
+import { attemptsFor, backoff, isTransient, type RetryPolicy } from '../runtime/transient.js';
 import { Worker } from '../runtime/worker.js';
 import { workflowVersion } from '../runtime/workflow-version.js';
 import {
@@ -301,21 +302,23 @@ interface StartFrom {
 }
 
 /**
- * A launch whose read or write of the factory's own state failed before its `run.started` (ORC-339): a passing store
- * error, and nothing of the run is the ticket's yet. The start is tried again (the effect's retry, the drain's bounded
- * one) instead of blocking the ticket. A launch's own failure (a worktree, a setup, the repository's config) still
- * blocks it at once: retried, it would fail again. `failure`: what failed.
+ * A launch that failed before its `run.started`, and nothing of the run is the ticket's yet: its read or write of the
+ * factory's own state failed (ORC-339), or anything it called failed transiently (`isTransient`: GitHub, Linear or the
+ * database down, ORC-343). The start is tried again (the effect's retry, the drain's bounded one) instead of blocking
+ * the ticket. A launch's own failure (a worktree, a setup, the repository's config) still blocks it at once: retried,
+ * it would fail again. `failure`: what failed, also its `cause`, which `isTransient` reads.
  */
 class RetryableStart extends Error {
   constructor(readonly failure: unknown) {
-    super(failure instanceof Error ? failure.message : String(failure));
+    super(failure instanceof Error ? failure.message : String(failure), { cause: failure });
   }
 }
 
-/** Starts of a queue item that failed before their `run.started`, at most (ORC-339): past them, the ticket is blocked. */
-const START_ATTEMPTS = 5;
-/** The wait before such an item is handed out again, doubled at each failure (2 s, 4 s, 8 s, 16 s). */
-const START_BACKOFF_MS = 2_000;
+/**
+ * Starts of a queue item that failed before their `run.started` (ORC-339): handed out again after 2 s, 4 s, 8 s, 16 s,
+ * doubled up to 5 min; past 5 attempts, or 14 (about 33 min) when the failure is transient (ORC-343), the ticket is blocked.
+ */
+export const START_RETRY = { attempts: 5, transientAttempts: 14, baseMs: 2_000, capMs: 300_000 } satisfies RetryPolicy;
 
 /** What a start came to: queued, set pending behind a run that holds the ticket (`deferred`), or anything else. */
 type StartOutcome = 'queued' | 'deferred' | 'done';
@@ -402,6 +405,8 @@ export class Orchestrator {
   /** Drains run one at a time. */
   private draining: Promise<void> = Promise.resolve();
   private instance: Promise<string> | undefined;
+  /** Results this process could not write, the database down (ORC-343): written again at each beat (`supervise`), by id. */
+  private unwritten = new Map<string, { what: string; write: () => Promise<void> }>();
 
   constructor(private d: OrchestratorDeps) {
     this.newId = d.newId ?? randomUUID;
@@ -471,23 +476,48 @@ export class Orchestrator {
     return this.replayInbox();
   }
 
+  /** A result the orchestrator produces itself (a check, a run lost): `deliver`ed to the inbox. */
+  private submitResult(event: FactoryEvent): Promise<void> {
+    return this.deliver(event.id, `event ${event.id} (${event.type})`, async () => void (await this.accept(event)));
+  }
+
   /**
-   * For the results the orchestrator produces itself (run finished, checks): nobody resends them,
-   * so a failed inbox write is retried with a bounded backoff before giving up with an error (the
-   * run's slot is then held until `recover()` at the next start).
+   * For the results the orchestrator produces itself (run finished, checks): nobody resends them, so a failed write is
+   * retried with a short backoff. Still failing transiently (`isTransient`: the database down), it is kept and written
+   * again at each beat, with no bound but this process's life (ORC-343): the ticket and its slot go on once the database
+   * is back. A permanent failure gives up with an error (the run's slot is then held until `recover()` at the next
+   * start), as does a shutdown, which leaves it to that `recover()`. `write` must be idempotent: the inbox keeps an id once.
    */
-  private async submitResult(event: FactoryEvent): Promise<void> {
+  private async deliver(id: string, what: string, write: () => Promise<void>): Promise<void> {
     const { attempts, baseMs } = this.d.inboxRetry ?? { attempts: 5, baseMs: 200 };
     for (let n = 1; ; n++) {
       try {
-        await this.accept(event);
+        await write();
         return;
       } catch (err) {
-        if (n >= attempts) {
-          this.log('error', `event ${event.id} (${event.type}) not written to the inbox after ${n} attempts, lost: ${(err as Error).message}`);
-          return;
+        if (n < attempts) {
+          await new Promise((resolve) => setTimeout(resolve, baseMs * 2 ** (n - 1)));
+          continue;
         }
-        await new Promise((resolve) => setTimeout(resolve, baseMs * 2 ** (n - 1)));
+        const kept = isTransient(err) && !this.stopping;
+        this.log('error', `${what} not written to the inbox after ${n} attempts, ${kept ? 'written again at each beat' : 'lost'}: ${(err as Error).message}`);
+        if (kept) this.unwritten.set(id, { what, write });
+        return;
+      }
+    }
+  }
+
+  /** Writes again the results `deliver` kept (ORC-343), oldest first. One still failing transiently waits for the next beat. */
+  private async deliverKept(): Promise<void> {
+    for (const [id, { what, write }] of this.unwritten) {
+      try {
+        await write();
+        this.unwritten.delete(id);
+        this.log('info', `${what} written to the inbox`);
+      } catch (err) {
+        if (isTransient(err)) continue;
+        this.unwritten.delete(id);
+        this.log('error', `${what} not written to the inbox, lost: ${(err as Error).message}`);
       }
     }
   }
@@ -655,6 +685,8 @@ export class Orchestrator {
     this.beating = true;
     try {
       const { store, clock } = this.d;
+      // First: a run whose result is kept is still `running` in the store, its lease run out, and only its result tells its end.
+      await this.deliverKept();
       for (const runId of this.handles.keys()) {
         if (await this.alive(runId)) await store.renewRun(runId, clock.now() + RUN_LEASE_MS);
       }
@@ -1384,11 +1416,12 @@ export class Orchestrator {
             // A start that failed before its run.started: back in line, its failures counted on the item; past the
             // bound, the ticket is blocked as a launch error, and the item leaves the queue (ORC-339).
             const failed = (item.failedStarts ?? 0) + 1;
-            if (failed < START_ATTEMPTS) {
+            const attempts = attemptsFor(START_RETRY, err);
+            if (failed < attempts) {
               clearInterval(renew);
               // Not handed out again at once: the same drain would spend every attempt within milliseconds.
-              const wait = START_BACKOFF_MS * 2 ** (failed - 1);
-              this.log('warn', `start ${item.job} on ${item.ticketId} failed (${err.message}), ${failed} of ${START_ATTEMPTS}: back in line in ${wait / 1000} s`);
+              const wait = backoff(START_RETRY, failed);
+              this.log('warn', `start ${item.job} on ${item.ticketId} failed (${err.message}), ${failed} of ${attempts}: back in line in ${wait / 1000} s`);
               await this.d.store.releaseQueued(claim, { failedStarts: failed, notBefore: this.d.clock.now() + wait });
               return;
             }
@@ -1974,6 +2007,10 @@ export class Orchestrator {
     );
   }
 
+  /**
+   * `launchRun`, whose transient failure before its `run.started` (Linear, GitHub or the database down: `isTransient`)
+   * is a start to try again (ORC-343), as its failed reads and writes of the factory's state are (ORC-339).
+   */
   private async launch(
     project: ProjectRuntime,
     ticketId: string,
@@ -1982,6 +2019,27 @@ export class Orchestrator {
     slot: number,
     key: string,
     runId: string,
+    recorded?: () => Promise<void>,
+  ): Promise<StartOutcome | undefined> {
+    const at = { started: false };
+    try {
+      return await this.launchRun(project, ticketId, job, opts, slot, key, runId, at, recorded);
+    } catch (err) {
+      if (!at.started && !(err instanceof RetryableStart) && isTransient(err)) throw new RetryableStart(err);
+      throw err;
+    }
+  }
+
+  /** `at.started`: set once the launch writes its `run.started`; from there, the run may be the ticket's. */
+  private async launchRun(
+    project: ProjectRuntime,
+    ticketId: string,
+    job: JobSpec,
+    opts: StartOpts,
+    slot: number,
+    key: string,
+    runId: string,
+    at: { started: boolean },
     recorded?: () => Promise<void>,
   ): Promise<StartOutcome | undefined> {
     const { tracker, store, clock, workspaces, forge } = this.d;
@@ -2210,6 +2268,7 @@ export class Orchestrator {
       const marks = !!sensitivePaths && job.workspace === 'worktree';
       if (marks) await state(this.readUntrusted(project, t));
       const untrusted = marks ? { untrusted: { head: (await workspaces.head(ws.path)) ?? '' } } : {};
+      at.started = true;
       const took = await this.apply(t, {
         type: 'run.started',
         runId,
@@ -2308,53 +2367,67 @@ export class Orchestrator {
       result = await handle.done;
       await relay.flush().catch((err: Error) => this.log('warn', `run ${run.id}: last activities not relayed: ${err.message}`));
       this.handles.delete(run.id);
-      const rec = (await store.getRun(run.id)) ?? run;
-      const interrupted = this.stopping && result.outcome === 'stopped';
-      // Closed before its end (`leaseExpired`): `run.lost` speaks for it. What it spent is still recorded.
-      const closed = rec.status !== 'running';
-      await store.putRun({
-        ...rec,
-        status: closed ? rec.status : interrupted ? 'interrupted' : result.outcome,
-        endedAt: rec.endedAt ?? clock.now(),
-        costUsd: result.costUsd,
-        turns: result.turns,
-        lastText: result.lastText,
-        ...(result.tokens ? { tokens: result.tokens } : {}),
-        ...endFacts(result),
-      });
-      // Shutdown, not a user stop: keep the ticket's activeRunId so the next start's recover() starts its step again.
-      if (interrupted || closed) return;
     } catch (err) {
       const message = (err as Error).message;
-      if (result) {
-        // The attempt ended: recording it failed, not the agent nor the runner (ORC-289).
-        this.handles.delete(run.id);
-        this.log('error', `run ${run.id} ended, but was not recorded: ${message}`);
-        if (this.stopping && result.outcome === 'stopped') return;
-      } else {
-        this.liveRuns.delete(run.id);
-        this.log('error', `run ${run.id} failed: ${message}`);
-        try {
-          handle.stop();
-        } catch {
-          /* best effort */
-        }
-        this.handles.delete(run.id);
-        try {
-          const rec = (await store.getRun(run.id)) ?? run;
-          if (rec.status !== 'running') return;
-          await store.putRun({ ...rec, status: 'failure', endedAt: clock.now(), lastText: message, infra: true });
-        } catch (e) {
-          this.log('error', `could not record failure of run ${run.id}: ${(e as Error).message}`);
-        }
-        // The runner broke (stream, sandbox): nothing for the agent to fix (ORC-289).
-        result = { outcome: 'failure', costUsd: 0, turns: 0, lastText: message, infra: true };
+      this.liveRuns.delete(run.id);
+      this.log('error', `run ${run.id} failed: ${message}`);
+      try {
+        handle.stop();
+      } catch {
+        /* best effort */
       }
+      this.handles.delete(run.id);
+      try {
+        const rec = (await store.getRun(run.id)) ?? run;
+        if (rec.status !== 'running') return;
+        await store.putRun({ ...rec, status: 'failure', endedAt: clock.now(), lastText: message, infra: true });
+      } catch (e) {
+        this.log('error', `could not record failure of run ${run.id}: ${(e as Error).message}`);
+      }
+      // The runner broke (stream, sandbox): nothing for the agent to fix (ORC-289).
+      result = { outcome: 'failure', costUsd: 0, turns: 0, lastText: message, infra: true };
     } finally {
       if (sandboxId) await this.destroySandbox(sandboxId, run.id, run);
       await this.d.workspaces.release(run.projectId, run.id).catch((err: Error) => this.log('warn', `trunk of run ${run.id} not removed: ${err.message}`));
     }
-    await this.submitResult(await this.finishedFor(run, result));
+    const ended = result;
+    // Recording the attempt and sending its result is the store's work, not the agent's nor the runner's (ORC-289):
+    // delivered until the database takes it (ORC-343). Recorded once: a retry sends only the result still missing.
+    let send = ended.infra ? true : undefined;
+    await this.deliver(`attempt:${run.id}:finished`, `the end of run ${run.id}`, async () => {
+      try {
+        send ??= await this.recordEnd(run, ended);
+      } catch (err) {
+        if (isTransient(err)) throw err;
+        // Not recorded for good: its result still goes, the attempt did end.
+        this.log('error', `run ${run.id} ended, but was not recorded: ${(err as Error).message}`);
+        send = !(this.stopping && ended.outcome === 'stopped');
+      }
+      if (send) await this.accept(await this.finishedFor(run, ended));
+    });
+  }
+
+  /**
+   * Records an ended attempt on its run, its status and what it spent, and tells whether its result is to be sent: not
+   * for an attempt closed before its end (`leaseExpired`: `run.lost` speaks for it), nor for one a shutdown stopped,
+   * whose ticket keeps its `activeRunId` so that the next start's recover() starts its step again.
+   */
+  private async recordEnd(run: RunRecord, result: RunResult): Promise<boolean> {
+    const { store, clock } = this.d;
+    const rec = (await store.getRun(run.id)) ?? run;
+    const interrupted = this.stopping && result.outcome === 'stopped';
+    const closed = rec.status !== 'running';
+    await store.putRun({
+      ...rec,
+      status: closed ? rec.status : interrupted ? 'interrupted' : result.outcome,
+      endedAt: rec.endedAt ?? clock.now(),
+      costUsd: result.costUsd,
+      turns: result.turns,
+      lastText: result.lastText,
+      ...(result.tokens ? { tokens: result.tokens } : {}),
+      ...endFacts(result),
+    });
+    return !(interrupted || closed);
   }
 
   /** The result of an attempt, whoever sends it: its pump, or recover() when the process died between the two (ORC-220). */
@@ -2364,6 +2437,8 @@ export class Orchestrator {
     try {
       output = await storedOutput(this.d.store, run.id);
     } catch (err) {
+      // The database down: read again once it is back (`deliver`), not taken for an output the agent never gave.
+      if (isTransient(err)) throw err;
       this.log('error', `output of run ${run.id} not read: ${(err as Error).message}`);
       unreadable = true;
     }

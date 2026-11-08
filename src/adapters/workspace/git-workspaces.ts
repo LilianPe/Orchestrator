@@ -111,8 +111,11 @@ export async function fetchOrigin(exec: Exec, repo: string, o: { deadlineMs?: nu
   const expired = () => o.log?.(`git ${args.join(' ')}: killed at ${deadlineMs / 1000} s, its output still held ${FETCH_GRACE_MS / 1000} s later by a process out of its group`);
   const r = await within(exec('git', args, { env: { GIT_TERMINAL_PROMPT: '0', ...STALLED }, timeoutMs: deadlineMs }), deadlineMs + FETCH_GRACE_MS, silent, expired);
   if (r.code === 0) return;
-  o.log?.(execFailure('git', args, r).message);
-  throw new Error(r.code === TIMED_OUT ? silent : `the forge could not be read (git fetch, code ${r.code})`);
+  const failure = execFailure('git', args, r);
+  o.log?.(failure.message);
+  // git's own words stay out of the message, which reaches the ticket, but in its cause: `isTransient` reads them (ORC-343).
+  if (r.code === TIMED_OUT) throw new Error(silent, { cause: Object.assign(new Error(silent), { code: 'ETIMEDOUT' }) });
+  throw new Error(`the forge could not be read (git fetch, code ${r.code})`, { cause: failure });
 }
 
 export class GitWorkspaces implements WorkspaceManager {
