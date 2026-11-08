@@ -21,6 +21,12 @@ export const higherRisk = (held: Risk | undefined, proposed: Risk): Risk => (hel
 
 export type RunOutcome = 'success' | 'failure' | 'stopped' | 'limit';
 
+/** A Linear ticket the ticket is « blocked by » (ORC-363), as read: its status name, for the human. */
+export interface Blocker {
+  identifier: string;
+  stateName: string;
+}
+
 /**
  * Tokens of a run as `claude -p` reports them in its `result` line (`usage`), never as the agent
  * writes them (ORC-235). `cacheRead` and `cacheCreation` are input tokens read from or written to
@@ -202,6 +208,11 @@ export interface EventPayloads {
    */
   'agent.asked': { question: string; job: string; linearSessionId?: string };
   /**
+   * The reconciliation read every ticket a waiting ticket is « blocked by » done, or no such relation left (ORC-363): the start
+   * it waited for is made. `blockers`: those it waited on. Trusted: no human content, and the start keeps its own restrictions.
+   */
+  'blockers.done': { blockers: string[] };
+  /**
    * A human's comment on the ticket, out of any session (ORC-196): the reply to a block's comment. Decided only while the ticket is
    * blocked. `kind`, `masked`: as a session's message (ORC-180); this event never existed without them.
    */
@@ -271,6 +282,8 @@ export interface EventPayloads {
     stagnation?: Stagnation;
     /** The deterministic checks of the ticket that failed at the launch of `intake` (ORC-206): inputs of the guard before In Progress. Absent when none failed. */
     pickup?: string[];
+    /** The tickets not done that the ticket was « blocked by » at the launch of `intake` (ORC-363): an input of the guard. Absent when none. */
+    blockedBy?: Blocker[];
     /** The usage limit of `account` stopped it and the factory waits on it (`on_usage_limit: wait`, ORC-340): resumed at `resetAt`. */
     usageLimit?: { resetAt: number; account?: string };
   };
@@ -370,7 +383,7 @@ export type DecidedEvent =
   | { type: 'ticket.unblocked' }
   | {
       type: 'ticket.patched';
-      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'verifiedSha' | 'awaitingRepo' | 'owedMove' | 'usageWait' | 'usageRelaunches' | 'usageAsks' | 'size' | 'risk' | 'visualProof'>>;
+      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'verifiedSha' | 'awaitingRepo' | 'owedMove' | 'usageWait' | 'usageRelaunches' | 'usageAsks' | 'size' | 'risk' | 'visualProof' | 'waitingOn'>>;
     }
   | { type: 'feedback.appended'; item: FeedbackItem }
   /** The ticket's dev work is stopped: nothing pending, no verification awaited. */
@@ -509,6 +522,11 @@ export interface TicketState {
   usageRelaunches?: { job: string; count: number } | null;
   /** Questions asked again at a usage reset in a row (ORC-340), bounded like `usageRelaunches`; `null` once one ends without the limit. */
   usageAsks?: number | null;
+  /**
+   * The ticket waits for the Linear tickets it is « blocked by » to be done (ORC-363), then makes `start`: no block, nothing for a human
+   * to answer. Lifted by `blockers.done`; a block, a delegation again, an undelegation or a dev run ends it (`reduce`): `null` then.
+   */
+  waitingOn?: { blockers: string[]; start: PendingJob } | null;
   /**
    * Signed actor of the last authorized delegation (ORC-186): the run's initiator, who never validates
    * its spec, and its requester, who may answer it.

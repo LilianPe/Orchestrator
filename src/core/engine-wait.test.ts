@@ -73,16 +73,24 @@ describe('the wait on a « blocked by » ticket not done (ORC-363)', () => {
     expect(after(t, reply)).toMatchObject({ humanInbox: [expect.objectContaining({ body: 'semicolons' })], waitingOn: { blockers: ['REL-2'] } });
   });
 
+  it('a debounced reply armed before the wait began starts nothing when it fires', () => {
+    const fired = event('timer.fired', { kind: 'debounce', payload: { job: 'dev-feedback' } } as EventPayloads['timer.fired']);
+    expect(starts(waiting({ logical: 'dev' }), fired)).toEqual([]);
+  });
+
   it.each([
     ['a block', { type: 'ticket.blocked', reason: 'Stopped.' }],
-    ['a delegation again, whose start checks the blockers again', event('ticket.delegated', { linearSessionId: 's2' })],
     ['an undelegation', event('ticket.undelegated', {})],
     ['a dev run started', { type: 'run.started', runId: 'r2', job: 'dev', queue: 'dev', claudeSessionId: 'c2' }],
   ] as const)('ends with %s', (_what, e) => {
     expect(reduce(waiting(), e as never)!.waitingOn ?? undefined).toBeUndefined();
   });
 
-  it('a move by a human does not end it: the blockers still hold', () => {
-    expect(reduce(waiting(), event('status.changed', { from: 'todo', to: 'dev' }))!.waitingOn).toEqual({ blockers: ['REL-2'], start: { job: 'dev' } });
+  it('a move by a human or a delegation again does not end it: the blockers still hold, and nothing starts', () => {
+    const moved = event('status.changed', { from: 'todo', to: 'dev' });
+    expect(reduce(waiting(), moved)!.waitingOn).toEqual({ blockers: ['REL-2'], start: { job: 'dev' } });
+    const again = event('ticket.delegated', { linearSessionId: 's2' });
+    expect(after(waiting(), again).waitingOn).toEqual({ blockers: ['REL-2'], start: { job: 'dev' } });
+    expect(starts(waiting(), again)).toEqual([]);
   });
 });

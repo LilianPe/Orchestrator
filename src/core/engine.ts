@@ -11,9 +11,9 @@ import { awaitsAgent, commandOf, forAgent, STOP_COMMAND } from './human-message.
 import { BEFORE_ORC_331 } from './legacy-messages.js';
 import { PRODUCT_NAME } from '../product.js';
 import { CUT_RELAUNCHES, CUT_WINDOW_MS } from '../store/types.js';
-import { isOwnMoveEcho, reduce } from './reduce.js';
+import { isOwnMoveEcho, pendingOf, reduce } from './reduce.js';
 import { holds, isNoRepo, isUnrouted, repoLabel, unroutedReason } from './routing.js';
-import { higherRisk, type EventPayloads, type EventType, type FactoryEvent, type FeedbackItem, type InputKind, type MessageKind, type PendingJob, type RunOutcome, type Taint, type TicketState, type VerifyFailure } from './types.js';
+import { higherRisk, type Blocker, type EventPayloads, type EventType, type FactoryEvent, type FeedbackItem, type InputKind, type MessageKind, type PendingJob, type RunOutcome, type Taint, type TicketState, type VerifyFailure } from './types.js';
 
 type StartRun = Extract<Effect, { kind: 'start_run' }>;
 
@@ -63,7 +63,7 @@ function silentReview(e: FactoryEvent): boolean {
 
 const BUILT_IN = new Set<EventType>([
   'control.pause', 'control.resume', 'control.stop', 'run.finished', 'run.lost', 'verify.passed', 'verify.failed', 'verify.errored', 'verify.lost', 'publish.done', 'publish.refused', 'timer.fired', 'pr.opened',
-  'effect.done', 'effect.failed', 'dead_letter.added', 'agent.asked',
+  'effect.done', 'effect.failed', 'dead_letter.added', 'agent.asked', 'blockers.done',
 ]);
 
 function empty(): Decision {
@@ -121,7 +121,12 @@ function intakeEnd(out: Decision, at: { event: FactoryEvent; ticket: TicketState
   out.events.push({ type: 'ticket.patched', patch: { size: a.size, risk: higherRisk(at.ticket?.risk, a.risk), ...(a.screen ? { visualProof: 'required' as const } : {}) } });
   const checks = p.pickup ?? [];
   const gaps = [...checks, ...(a.complete ? [] : a.missing)];
-  if (!gaps.length) return success(out, at, job, p.runId);
+  if (!gaps.length) {
+    // Complete, but « blocked by » a ticket not done (ORC-363): what it would start waits for it.
+    const next = job.onSuccess.run ? at.workflow.jobs[job.onSuccess.run] : undefined;
+    if (next && p.blockedBy?.length) return waitFor(out, p.blockedBy, pendingOf({ job: next.name, input: next.input }));
+    return success(out, at, job, p.runId);
+  }
   const reason = `${INCOMPLETE} ${gaps.join(' ')}`;
   return block(out, at.workflow, {
     reason,
@@ -130,6 +135,28 @@ function intakeEnd(out: Decision, at: { event: FactoryEvent; ticket: TicketState
     tried: [`Read the ticket (${job.name}): not complete enough to start.`, ...checks],
     question: a.complete ? 'Can you complete the ticket, then reply here?' : a.missing.join(' '),
   });
+}
+
+/** What the session hears of a wait on blockers (ORC-363): what it waits for, and that nothing is asked. */
+export function waitingBody(blockers: readonly Blocker[]): string {
+  const them = blockers.length > 1;
+  const list = blockers.map((b) => `${b.identifier} (${b.stateName})`).join(', ');
+  return `This ticket is « blocked by » ${list} in Linear: I am waiting for ${them ? 'them' : 'it'} to be Done before starting, and will start on my own then. Nothing to answer; take the relation off to start without waiting.`;
+}
+
+/** The wait on blockers as the ticket records it (ORC-363): `start` is made once they are done. */
+export const waitingOn = (blockers: readonly Blocker[], start: PendingJob) =>
+  ({ type: 'ticket.patched', patch: { waitingOn: { blockers: blockers.map((b) => b.identifier), start } } }) as const;
+
+/**
+ * The ticket waits on the tickets it is « blocked by » that are not done (ORC-363): no block and no question, a thought in its
+ * session. `blockers.done`, from the reconciliation, makes `start` then.
+ */
+function waitFor(out: Decision, blockers: readonly Blocker[], start: PendingJob): Decision {
+  out.events.push(waitingOn(blockers, start));
+  out.effects.push({ kind: 'activity', type: 'thought', body: waitingBody(blockers) });
+  out.trace.push(`waiting on ${blockers.map((b) => b.identifier).join(', ')}: ${start.job} starts once done`);
+  return out;
 }
 
 /**
@@ -433,6 +460,23 @@ function usageLimitDecision(out: Decision, event: FactoryEvent<'run.finished'>, 
   return out;
 }
 
+/**
+ * The tickets a waiting ticket was « blocked by » are done (ORC-363): the wait ends and its start is made, unless the ticket
+ * moved on meanwhile (blocked, undelegated, at work), which ended the wait already.
+ */
+function blockersDone(out: Decision, event: FactoryEvent<'blockers.done'>, ticket: TicketState | undefined, workflow: Workflow): Decision {
+  const wait = ticket?.waitingOn;
+  const job = wait && workflow.jobs[wait.start.job];
+  if (wait) out.events.push({ type: 'ticket.patched', patch: { waitingOn: null } });
+  if (!ticket || !wait || !job || !ticket.delegated || ticket.blocked || ticket.activeRunId || ticket.verifyingRunId) {
+    out.trace.push('blockers.done: the ticket no longer waits, nothing started');
+    return out;
+  }
+  out.effects.push({ kind: 'activity', type: 'thought', body: `${event.payload.blockers.join(', ')} done: starting.` });
+  startAs(out, event, ticket, job, wait.start);
+  return out;
+}
+
 /** A Linear session that carries questions (read-only answers), not the ticket's dev conversation. */
 export function isQuestionSession(ticket: TicketState | undefined, sessionId: string | undefined): boolean {
   if (!ticket || !sessionId) return false;
@@ -719,6 +763,12 @@ function startPending(out: Decision, event: FactoryEvent, ticket: TicketState, w
   unblock(out, event, ticket);
   // Off the ticket with this decision: the start it makes is the outbox's now, at least once.
   out.events.push({ type: 'pending.cleared', job: pending });
+  startAs(out, event, ticket, job, pending);
+  return out;
+}
+
+/** Starts `job` as `pending` was set aside: its input and its restrictions. */
+function startAs(out: Decision, event: FactoryEvent, ticket: TicketState, job: JobSpec, pending: PendingJob): void {
   startRun(out, event, ticket, job, {
     ...(pending.input ? { input: pending.input } : {}),
     ...(pending.inputText !== undefined ? { inputText: pending.inputText } : {}),
@@ -726,7 +776,6 @@ function startPending(out: Decision, event: FactoryEvent, ticket: TicketState, w
     ...(pending.sensitivePaths ? { sensitivePaths: pending.sensitivePaths } : {}),
     ...(pending.relaunchOf ? { relaunchOf: pending.relaunchOf } : {}),
   });
-  return out;
 }
 
 function applyRule(out: Decision, rule: Rule, event: FactoryEvent, ticket: TicketState | undefined, workflow: Workflow): Decision {
@@ -751,6 +800,11 @@ function applyRule(out: Decision, rule: Rule, event: FactoryEvent, ticket: Ticke
     });
   }
   if (!job) return out;
+  // Waiting on its blockers, the ticket starts no dev work for a message or a move: a reply stays in the inbox (ORC-363).
+  if (ticket?.waitingOn && job.queue === 'dev') {
+    out.trace.push(`waiting on ${ticket.waitingOn.blockers.join(', ')}: ${job.name} not started`);
+    return out;
+  }
   if (rule.debounceMs && rule.debounceMs > 0 && !refusal(event, ticket, job)) {
     const inbox = (event.type === 'session.prompted' || event.type === 'session.mentioned') && !!event.payload.kind;
     out.timers.push({ kind: 'debounce', slot: job.name, ms: rule.debounceMs, payload: { job: job.name, ...(inbox ? { inbox: true as const } : {}) } });
@@ -1013,6 +1067,7 @@ function statusAnswer(ticket: TicketState | undefined): string {
   if (ticket.activeJob) lines.push(`Running: ${ticket.activeJob}`);
   else if (ticket.verifyingRunId) lines.push('Running: verification');
   if (ticket.blocked) lines.push(`Blocked: ${ticket.blockReason ?? 'no recorded reason'}`);
+  if (ticket.waitingOn) lines.push(`Waiting for: ${ticket.waitingOn.blockers.join(', ')} to be done`);
   lines.push(`Messages waiting for the agent: ${forAgent(ticket.humanInbox).length}`);
   return lines.join('\n');
 }
@@ -1234,6 +1289,8 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
     }
     case 'run.lost':
       return attemptLost(out, event, ticket, workflow);
+    case 'blockers.done':
+      return blockersDone(out, event, ticket, workflow);
     case 'agent.asked': {
       const { question, job, linearSessionId } = event.payload;
       const asker: Effect = { kind: 'activity', type: 'elicitation', body: question, ...(linearSessionId ? { linearSessionId } : {}) };
@@ -1368,6 +1425,11 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       const held = fired.payload.inbox ? heldInbox(ticket) : undefined;
       if (held) {
         out.trace.push(`timer.fired debounce: ${job.name} not started, ${held}`);
+        return out;
+      }
+      // Armed before the wait on blockers began (ORC-363): the wait holds it back as it does a reply.
+      if (ticket?.waitingOn && job.queue === 'dev') {
+        out.trace.push(`timer.fired debounce: ${job.name} not started, waiting on ${ticket.waitingOn.blockers.join(', ')}`);
         return out;
       }
       if (ticket?.blocked && !refusal(event, ticket, job)) unblock(out, event, ticket);

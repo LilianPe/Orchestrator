@@ -19,8 +19,10 @@ interface IssueNode {
   /** In the trash: deleted, until Linear purges it 30 days later. */
   trashed?: boolean | null;
   state: { id: string; name: string; type: string };
-  /** Linear's default page of them: `withAllLabels` reads the rest (ORC-347). */
+  /** Linear's default page of them: `withAllPages` reads the rest (ORC-347). */
   labels: Connection<LabelNode>;
+  /** Linear's first page of them: `withAllPages` reads the rest (ORC-363). */
+  inverseRelations: Connection<RelationNode>;
   delegate: { id: string } | null;
   team: { id: string; key: string };
 }
@@ -29,6 +31,11 @@ interface LabelNode {
   id: string;
   name: string;
   parent?: { id: string } | null;
+}
+/** A relation where the issue is the related one: `blocks` from `issue`, the blocker (ORC-363). */
+interface RelationNode {
+  type: string;
+  issue: { identifier: string; state: { name: string; type: string } };
 }
 interface StateNode {
   id: string;
@@ -74,6 +81,7 @@ function toIssue(n: IssueNode): TrackerIssue {
     stateName: n.state.name,
     stateType: n.state.type,
     labels: n.labels.nodes.map((l) => l.name),
+    blockedBy: n.inverseRelations.nodes.filter((r) => r.type === 'blocks').map((r) => ({ identifier: r.issue.identifier, stateName: r.issue.state.name, stateType: r.issue.state.type })),
     delegateId: n.delegate?.id,
     teamKey: n.team.key,
     priority: n.priority,
@@ -109,7 +117,7 @@ export class LinearTracker implements Tracker, TeamDirectory {
     }
     if (!issue) throw new IssueNotFoundError(`Linear ticket not found: ${identifier}`);
     this.issueIds.set(identifier, issue.id);
-    return this.withAllLabels(issue);
+    return this.withAllPages(issue);
   }
 
   /** Every node of a list `query` reads under `key`, page after page (ORC-347). */
@@ -119,13 +127,16 @@ export class LinearTracker implements Tracker, TeamDirectory {
 
   /**
    * The issue with every label, those past the page its query read included (ORC-347): cut short, they would read as
-   * removed, by the reconciliation and by `setLabels`.
+   * removed, by the reconciliation and by `setLabels`. Its relations likewise (ORC-363): a blocker missed would let it start.
    */
-  private async withAllLabels(n: IssueNode): Promise<IssueNode> {
-    const nodes = await allNodes<LabelNode>(`the labels of ${n.identifier}`, async (after) =>
-      after === null ? n.labels : (await this.api.gql<{ issue: { labels: Connection<LabelNode> } }>(Q.issueLabels, { id: n.id, after })).issue.labels,
-    );
-    return { ...n, labels: { nodes, pageInfo: { hasNextPage: false, endCursor: null } } };
+  private async withAllPages(n: IssueNode): Promise<IssueNode> {
+    const rest = <K extends 'labels' | 'inverseRelations', N>(key: K, what: string, query: string) =>
+      allNodes<N>(`the ${what} of ${n.identifier}`, async (after) =>
+        after === null ? n[key] : (await this.api.gql<{ issue: Record<K, Connection<N>> }>(query, { id: n.id, after })).issue[key],
+      );
+    const whole = <N>(nodes: N[]): Connection<N> => ({ nodes, pageInfo: { hasNextPage: false, endCursor: null } });
+    const [labels, relations] = await Promise.all([rest<'labels', LabelNode>('labels', 'labels', Q.issueLabels), rest<'inverseRelations', RelationNode>('inverseRelations', 'relations', Q.issueRelations)]);
+    return { ...n, labels: whole(labels), inverseRelations: whole(relations) };
   }
 
   private async issueId(identifier: string): Promise<string> {
@@ -207,7 +218,7 @@ export class LinearTracker implements Tracker, TeamDirectory {
     // A deleted issue is not delegated, as getIssue says, even if the query still lists it from the trash.
     const live = issues.filter((n) => !n.trashed);
     for (const n of live) this.issueIds.set(n.identifier, n.id);
-    return (await Promise.all(live.map((n) => this.withAllLabels(n)))).map(toIssue);
+    return (await Promise.all(live.map((n) => this.withAllPages(n)))).map(toIssue);
   }
 
   async search(term: string, teamKey: string): Promise<SearchHit[]> {

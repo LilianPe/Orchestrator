@@ -1,11 +1,16 @@
 const PAGE = 'pageInfo { hasNextPage endCursor }';
+/** An issue's relations where it is the related one (ORC-363): « blocked by » is a `blocks` relation of the blocker. */
+const INVERSE_RELATIONS = `nodes { type issue { identifier state { name type } } } ${PAGE}`;
 const ISSUE_FIELDS = `id identifier title description url priority createdAt updatedAt trashed
-  state { id name type } labels { nodes { id name parent { id } } ${PAGE} } delegate { id } team { id key }`;
+  state { id name type } labels { nodes { id name parent { id } } ${PAGE} } inverseRelations(first: 50) { ${INVERSE_RELATIONS} }
+  delegate { id } team { id key }`;
 
 export const Q = {
   issue: `query Issue($id: String!) { issue(id: $id) { ${ISSUE_FIELDS} } }`,
   /** An issue's labels past the page `ISSUE_FIELDS` read (ORC-347). */
   issueLabels: `query IssueLabels($id: String!, $after: String) { issue(id: $id) { labels(first: 250, after: $after) { nodes { id name parent { id } } ${PAGE} } } }`,
+  /** An issue's relations past the page `ISSUE_FIELDS` read (ORC-363). */
+  issueRelations: `query IssueRelations($id: String!, $after: String) { issue(id: $id) { inverseRelations(first: 250, after: $after) { ${INVERSE_RELATIONS} } } }`,
   /** The lists below are read a page at a time, every page (ORC-347): `allNodes`. */
   delegated: `query Delegated($teamKey: String!, $appUserId: ID!, $after: String) {
     issues(first: 100, after: $after, filter: { team: { key: { eq: $teamKey } }, delegate: { id: { eq: $appUserId } },
