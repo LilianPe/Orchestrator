@@ -156,6 +156,21 @@ describe('GitWorkspaces', () => {
     expect(git(w.path, 'rev-parse', 'HEAD')).toBe(trunk);
   });
 
+  it("checks out the ticket's branch from the forge in full, never a tag of its name", async () => {
+    const { repo, root } = fixtureRepo();
+    git(repo, 'checkout', '-q', '-b', 'factory/rel-1-export-csv');
+    git(repo, 'commit', '-q', '--allow-empty', '-m', 'the agent');
+    git(repo, 'push', '-q', 'origin', 'factory/rel-1-export-csv');
+    const pushed = git(repo, 'rev-parse', 'HEAD');
+    // A tag named like the remote branch, on another commit: pushed by anyone who can push to the forge.
+    git(repo, 'commit', '-q', '--allow-empty', '-m', 'not the agent');
+    git(repo, 'push', '-q', 'origin', 'HEAD:refs/tags/origin/factory/rel-1-export-csv');
+    git(repo, 'checkout', '-q', 'main');
+    git(repo, 'branch', '-q', '-D', 'factory/rel-1-export-csv');
+    const w = await new GitWorkspaces({ root }).prepare(req(repo));
+    expect(git(w.path, 'rev-parse', 'HEAD')).toBe(pushed);
+  });
+
   it('gives each question its own trunk: what one left is not there for the next', async () => {
     const { repo, root } = fixtureRepo();
     const ws = new GitWorkspaces({ root });

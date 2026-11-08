@@ -154,7 +154,8 @@ export class GitWorkspaces implements WorkspaceManager {
     // The forge first: an agent's commits reach it, never the repository's own branch, which can only lag behind.
     if (await has(`refs/remotes/origin/${branch}`)) {
       existing = `refs/remotes/origin/${branch}`;
-      checkout = ['-b', branch, `origin/${branch}`];
+      // In full, as the trunk: a short `origin/<branch>` resolves a tag of that name first.
+      checkout = ['-b', branch, existing];
     } else if (await has(`refs/heads/${branch}`)) {
       existing = local = `refs/heads/${branch}`;
       checkout = [branch];
