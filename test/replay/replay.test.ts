@@ -34,7 +34,7 @@ const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'obj
 function firstDifference(committed: unknown, recorded: unknown, path = ''): string {
   const at = path || 'the root';
   if (isObject(committed) && isObject(recorded) && Array.isArray(committed) === Array.isArray(recorded)) {
-    const only = (a: object, b: object) => Object.keys(a).filter((k) => !(k in b));
+    const only = (a: object, b: object) => Object.keys(a).filter((k) => !Object.hasOwn(b, k));
     const [gone, added] = [only(committed, recorded), only(recorded, committed)];
     if (!Array.isArray(recorded) && gone.length + added.length > 0) {
       return `keys differ at ${at}: only committed has ${shown(gone)}, only recorded has ${shown(added)}`;
