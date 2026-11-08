@@ -175,10 +175,11 @@ describe('a short outage blocks no ticket and loses no result (ORC-343)', () => 
     const h = createHarness({
       wrapStore: (inner) =>
         Object.assign(Object.create(inner) as Store, {
-          putRun: async (run: Parameters<Store['putRun']>[0]) => {
-            await inner.putRun(run);
+          putRun: async (run: Parameters<Store['putRun']>[0], fence?: number) => {
+            const written = await inner.putRun(run, fence);
             // The COMMIT went through, the connection broke before its answer.
             if (run.status !== 'running' && lost-- > 0) throw Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' });
+            return written;
           },
         }),
     });

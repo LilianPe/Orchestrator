@@ -3,7 +3,7 @@ import { createServer, request, type Server } from 'node:http';
 import type { Server as HttpsServer } from 'node:https';
 import { connect, type AddressInfo, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { once } from 'node:events';
 import { connect as tlsConnect } from 'node:tls';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -145,6 +145,22 @@ const FACTORY_TOKEN = 'sk-ant-oat01-the-factory-token';
 const CLAUDE = 'api.anthropic.com';
 
 describe('EgressProxy', () => {
+  it.skipIf(process.platform === 'win32')('keeps the socket folder of the runs a clean shutdown leaves running, for the next daemon to listen in again (ORC-344)', async () => {
+    const path = await proxy.open('run-1', { level: 'none', allow: [] });
+    await proxy.closeAll({ keep: true });
+    expect(proxy.isOpen('run-1')).toBe(false);
+    // The container mounted this folder: the next daemon's socket must appear in it, not in a new one.
+    expect(existsSync(dirname(path))).toBe(true);
+    const next = new EgressProxy({ dir, caDir: join(dir, 'ca') });
+    expect(await next.open('run-1', { level: 'none', allow: [] })).toBe(path);
+    expect(existsSync(path)).toBe(true);
+    // Left again, then its sandbox destroyed by a daemon that never opened it (`destroyDeadSandboxes`): the folder goes.
+    await next.closeAll({ keep: true });
+    expect(existsSync(dirname(path))).toBe(true);
+    await proxy.close('run-1');
+    expect(existsSync(dirname(path))).toBe(false);
+  });
+
   it('refuses a tunnel the policy refuses, and journals it', async () => {
     const sock = await proxy.open('run-1', { level: 'limited', allow: [] });
     expect(await status(sock, 'evil.example:443')).toBe('HTTP/1.1 403 Forbidden');
