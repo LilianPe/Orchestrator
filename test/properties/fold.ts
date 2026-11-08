@@ -114,10 +114,9 @@ function refusesStart(state: TicketState, job: JobSpec): boolean {
   return !!refusesDevWork(state, job) || (job.queue === 'dev' && state.blocked);
 }
 
-/** A knowledge job without an input: it reads the ticket and its PR, so the ticket's whole history (ORC-349). */
+/** A knowledge job, whatever its input: it can read the ticket and its PR, so the ticket's whole history (ORC-349). */
 export function readsHistory(start: StartRun, wf: Workflow): boolean {
-  const job = wf.jobs[start.job];
-  return job?.workspace === 'knowledge' && !(start.input ?? job.input);
+  return wf.jobs[start.job]?.workspace === 'knowledge';
 }
 
 /**
@@ -132,7 +131,7 @@ function launch(start: StartRun, state: TicketState, wf: Workflow, journal: read
   const implementer = job?.queue === 'dev' && (start.resume ?? (job.session === 'resume' || job.pickup));
   const consumes = readsFeedback(start, wf) || (implementer && carriedAtLaunch(state.humanInbox).length > 0);
   const sensitivePaths = sensitivePathsAtLaunch(start.sensitivePaths, consumes ? state.humanInbox : []);
-  if (job?.workspace === 'knowledge' && (sensitivePaths || (readsHistory(start, wf) && historyTaint(journal.filter(isFactoryEvent)) === 'untrusted'))) return undefined;
+  if (readsHistory(start, wf) && (sensitivePaths || historyTaint(journal.filter(isFactoryEvent)) === 'untrusted')) return undefined;
   return deepFreeze(sensitivePaths ? { ...start, sensitivePaths } : start);
 }
 

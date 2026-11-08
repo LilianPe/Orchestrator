@@ -676,6 +676,7 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
         holds((s) => {
           const r = run(s);
           for (const step of r.steps) {
+            if (!launches(step).length) continue;
             const untrusted = r.journal.slice(0, step.journalEnd).some((e) => isFactoryEvent(e) && e.taint === 'untrusted' && content.has(e.type) && !silent(e));
             for (const e of launches(step)) if (untrusted) expect(readsHistory(e, wf), `${e.job} launched on an untrusted history`).toBe(false);
           }

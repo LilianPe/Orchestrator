@@ -721,11 +721,14 @@ describe('childEnv: a run on the host (ORC-211)', () => {
     expect(env).toEqual({ HOME: '/h', ...NO_PUSH });
   });
 
-  describe('a push from the host fails by its git config, however the command is written (ORC-349)', () => {
+  describe('a push from the host fails by its git config, however the command names it (ORC-349)', () => {
+    // No global config of the machine: its pushurl or its rewrites would decide for the test.
+    const isolated = { GIT_CONFIG_GLOBAL: '/dev/null' };
+    const clean = { ...process.env, ...isolated };
     const git = (cwd: string, args: string[], env: NodeJS.ProcessEnv = process.env) => spawnSync('git', args, { cwd, env, encoding: 'utf8' });
     const repos = () => {
       const dir = mkdtempSync(join(tmpdir(), 'factory-nopush-'));
-      const id = { ...process.env, GIT_AUTHOR_NAME: 'a', GIT_AUTHOR_EMAIL: 'a@x', GIT_COMMITTER_NAME: 'a', GIT_COMMITTER_EMAIL: 'a@x', GIT_CONFIG_GLOBAL: '/dev/null' };
+      const id = { ...clean, GIT_AUTHOR_NAME: 'a', GIT_AUTHOR_EMAIL: 'a@x', GIT_COMMITTER_NAME: 'a', GIT_COMMITTER_EMAIL: 'a@x' };
       git(dir, ['init', '-q', '--bare', 'origin.git'], id);
       git(dir, ['clone', '-q', 'origin.git', 'w'], id);
       const work = join(dir, 'w');
@@ -744,12 +747,12 @@ describe('childEnv: a run on the host (ORC-211)', () => {
 
     it.skipIf(process.platform === 'win32')('fails every push to every remote, and leaves the fetch alone', () => {
       const { origin, work } = repos();
-      const env = { ...childEnv(process.env, {}), GIT_CONFIG_GLOBAL: '/dev/null' };
+      const env = { ...childEnv(process.env, {}), ...isolated };
       for (const command of disguised(origin)) expect(spawnSync('bash', ['-c', command], { cwd: work, env, encoding: 'utf8' }).status, command).not.toBe(0);
       expect(git(origin, ['for-each-ref'], env).stdout).toBe('');
       expect(git(work, ['fetch', '-q', 'origin'], env).status).toBe(0);
       // The control: the same push without the run's config reaches the remote.
-      expect(git(work, ['push', '-q', 'origin', 'HEAD:refs/heads/control'], { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null' }).status).toBe(0);
+      expect(git(work, ['push', '-q', 'origin', 'HEAD:refs/heads/control'], clean).status).toBe(0);
     });
   });
 });

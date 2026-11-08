@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Hono, type Context } from 'hono';
 import { streamSSE } from 'hono/streaming';
-import type { Tracker } from '../adapters/tracker/types.js';
+import { teamOf, type Tracker } from '../adapters/tracker/types.js';
 import type { BusMessage, EventBus } from '../core/bus.js';
 import type { Clock } from '../core/clock.js';
 import { pendingLabels } from '../core/attempt-labels.js';
@@ -47,11 +47,6 @@ export interface ServerDeps {
 export function isLoopbackHost(host: string): boolean {
   const h = host.replace(/^\[|\]$/g, '').toLowerCase();
   return h === 'localhost' || h === '::1' || /^127\.\d+\.\d+\.\d+$/.test(h);
-}
-
-/** The host name of a `Host` header, port left out and lower-cased: `[::1]:4100` → `[::1]`. */
-function hostName(host: string): string {
-  return host.toLowerCase().replace(/:\d*$/, '');
 }
 
 type AgentEnv = { Variables: { run: RunRecord } };
@@ -113,7 +108,7 @@ export function createApp(d: ServerDeps): Hono {
     // that name, Origin and Host alike. Without a password, only a name of the loopback is answered.
     app.use('*', async (c, next) => {
       if (isPublicPath(c.req.method, c.req.path)) return next();
-      if (!isLoopbackHost(hostName(c.req.header('host') ?? new URL(c.req.url).host))) return c.text('Unknown host', 403);
+      if (!isLoopbackHost((c.req.header('host') ?? new URL(c.req.url).host).replace(/:\d*$/, ''))) return c.text('Unknown host', 403);
       return next();
     });
   }
@@ -272,7 +267,7 @@ export function createApp(d: ServerDeps): Hono {
     return c.json(await d.tracker.getIssue(run.ticketId));
   });
   // The run's team alone (ORC-349): the factory's token reads the whole workspace, the agent reads its ticket's team.
-  agent.get('/search', async (c) => c.json(await d.tracker.search(c.req.query('q') ?? '', c.get('run').ticketId.split('-')[0]!)));
+  agent.get('/search', async (c) => c.json(await d.tracker.search(c.req.query('q') ?? '', teamOf(c.get('run').ticketId))));
   agent.get('/kb/search', async (c) => c.json(d.knowledgeSearch ? await d.knowledgeSearch(c.req.query('q') ?? '') : []));
   // In the inbox, in order behind the events before it: the agent waits for no decision, and hears of a failed write.
   const ask = async (run: RunRecord, question: string) => {

@@ -43,7 +43,8 @@ export function taintedKnowledge(job: string, source: 'event' | 'read' | 'histor
 /**
  * The events whose text or code a run reads later through the ticket or its PR, not only as its input (ORC-349): the
  * ticket a delegation brings, a human message, a review of the PR, the commits a human pushed. The others carry nothing
- * an agent reads (a move, a label, CI's facts) or what the factory wrote itself.
+ * an agent reads (a move, a label, CI's facts) or what the factory wrote itself. `HUMAN_EVENTS` without its move and label, and the
+ * forge's two: a human event added there that brings text belongs here too.
  */
 const CONTENT_EVENTS: ReadonlySet<EventType> = new Set<EventType>(['ticket.delegated', 'session.prompted', 'session.mentioned', 'command', 'ticket.commented', 'pr.reviewed', 'push.human']);
 

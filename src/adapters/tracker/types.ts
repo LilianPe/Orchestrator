@@ -50,6 +50,9 @@ export function labelEchoKey(identifier: string, label: string, change: 'added' 
 /** The tracker has no such issue (deleted, or never existed): an answer about the issue, unlike a read error. */
 export class IssueNotFoundError extends Error {}
 
+/** The team of an issue, by the prefix of its identifier: `REL-12` → `REL`. */
+export const teamOf = (identifier: string): string => identifier.split('-')[0]!;
+
 /**
  * Writes are keyed by the outbox effect id (`ticket:seq:i`) when they come from an effect (ORC-162):
  * an effect replayed after it acted looks for what its first execution wrote before writing again
