@@ -1812,7 +1812,9 @@ export class Orchestrator {
       try {
         const mark = await this.untrustedMark(project, t);
         const untrusted = mark ? { untrusted: mark } : {};
-        const pr = await publisher.publish({ projectId: project.id, repoPath: project.repoPath, ticketId: t.ticketId, runId: c.runId, worktree: t.worktreePath, branch: t.branch, sha: c.sha, ...untrusted, ...prText(t) });
+        // A rebase may replace what the factory published last on the branch, and nothing else (ORC-146).
+        const rewrites = c.rewrite ? await this.lastPublished(project.id, t.ticketId) : undefined;
+        const pr = await publisher.publish({ projectId: project.id, repoPath: project.repoPath, ticketId: t.ticketId, runId: c.runId, worktree: t.worktreePath, branch: t.branch, sha: c.sha, ...untrusted, ...(rewrites ? { rewrites } : {}), ...prText(t) });
         await this.accept({ ...base, id: prEventId(t.ticketId, pr.prNumber, 'opened'), type: 'pr.opened', at: this.d.clock.now(), payload: { number: pr.prNumber, url: pr.url, branch: t.branch } });
         await this.publishChecks(project, t, c);
         return published();
@@ -1825,6 +1827,15 @@ export class Orchestrator {
     }
     await this.d.store.setMeta(mark, reason);
     await refuse(reason);
+  }
+
+  /**
+   * The head the factory published last on the ticket's branch (ORC-146), read from its journal: the sha of its last
+   * `publish.done`, which is journaled once the push is on the forge. The one head a rebase may replace.
+   */
+  private async lastPublished(projectId: string, ticketId: string): Promise<string | undefined> {
+    const done = (await this.d.store.ticketJournal(projectId, ticketId)).findLast((e) => e.event.type === 'publish.done');
+    return (done?.event.payload as EventPayloads['publish.done'] | undefined)?.sha;
   }
 
   /**

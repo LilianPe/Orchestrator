@@ -25,7 +25,7 @@ Read all the feedback, then apply `factory:receiving-review`: understand each it
 ## 3. Verify and hand back
 
 1. `factory:verification`: the tests of what you changed, the repository's type check and lint if they exist; for failed checks, rerun exactly the command that failed.
-2. Conflict with the PR's base: `git fetch origin`, then `git merge-tree --write-tree --name-only origin/<base> HEAD` (base: `gh pr view <branch> --json baseRefName --jq .baseRefName`). Exit code 1: merge the base (`git merge --no-edit origin/<base>`), resolve each hunk you have read with Edit, keeping the intent of both sides, `git add`, `git commit --no-edit`, rerun tests and types. Contradiction between the two sides, two migrations on the same tables, or a resolution beyond the scope: `git merge --abort` and a question.
+2. A conflict with the PR's base is not yours: do not merge or rebase the base, even when the PR shows it conflicting. Hand back as usual; the factory starts its own `factory:rebase` step on the conflict, after your run.
 3. A human may have pushed to the branch: `git fetch origin`, and if there is something new on `origin/<branch>`, `git merge --no-edit origin/<branch>`; without it, the factory refuses to publish on top.
 4. Commit, then end your turn: **the factory publishes**, after verifying your last commit. You do not push.
 

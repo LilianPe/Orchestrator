@@ -30,6 +30,15 @@ describe('parseAgentOutput', () => {
     expect(parseAgentOutput({ ...done, intake: { ...intake, risk: 'none' } })).toEqual({ ok: false, error: expect.stringContaining('intake.risk') });
     expect(parseAgentOutput({ ...done, intake: { ...intake, complete: false, missing: ['a?', 'b?', 'c?', 'd?'] } })).toEqual({ ok: false, error: expect.stringContaining('intake.missing') });
   });
+
+  it('takes a conflict the rebase step stops on, with its case, and only with a blocked status (ORC-146)', () => {
+    const stops = { ...done, status: 'blocked', reason: 'conflict', conflict: 'migrations', question: 'Which migration goes first?' };
+    expect(parseAgentOutput(stops).ok).toBe(true);
+    expect(attemptOutcome({ outcome: 'success' }, parseAgentOutput(stops).ok ? (stops as AgentOutput) : undefined)).toBe('needs_input');
+    expect(parseAgentOutput({ ...stops, conflict: undefined })).toEqual({ ok: false, error: expect.stringContaining('conflict') });
+    expect(parseAgentOutput({ ...stops, conflict: 'style' })).toEqual({ ok: false, error: expect.stringContaining('conflict') });
+    expect(parseAgentOutput({ ...done, status: 'blocked', question: 'q', conflict: 'logic' })).toEqual({ ok: false, error: expect.stringContaining('conflict') });
+  });
 });
 
 describe('attemptOutcome', () => {

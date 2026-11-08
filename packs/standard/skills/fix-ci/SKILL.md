@@ -29,7 +29,7 @@ Is a failure already on the base? `gh run list --branch <base> --limit 5` (same 
 
 ## 4. Act
 
-- **Regression**: minimal fix at the cause, with a test that covers the bug if none exists (`factory:tdd`). Rerun the failing command and the relevant tests until green (`factory:verification`), commit (`<ID>: fix CI — <cause>`), one commit per cause. Conflict with the base: same rule as `factory:feedback` (merge the base, never rebase a published branch). End your turn: the factory verifies your commit and publishes it.
+- **Regression**: minimal fix at the cause, with a test that covers the bug if none exists (`factory:tdd`). Rerun the failing command and the relevant tests until green (`factory:verification`), commit (`<ID>: fix CI — <cause>`), one commit per cause. A conflict with the base is not yours: do not merge or rebase the base, the factory's `factory:rebase` step handles it. End your turn: the factory verifies your commit and publishes it.
 - **Flaky or infrastructure**: do not blindly "fix" anything, and do not rerun anything yourself: you do not write to the forge. What needs a human (rerunning a job, a secret, a runner, a service, a flaky test to repair): ONE precise question with `factory-agent ask "<question>"` (what you observed, what must be done), then end of turn.
 - **Third attempt**: if `git log --oneline` already shows two `<ID>: fix CI` commits for the same check without it passing, do not try a third fix: describe what was tried and ask the question.
 
