@@ -1,0 +1,306 @@
+{
+  "set": "712d491db065d9e986cfae14011523dcf5ba4549458a9880d9e01a42760bdd2a",
+  "passes": 3,
+  "tickets": [
+    {
+      "ticket": "V3-705",
+      "risk": "low",
+      "passes": [
+        {
+          "verdict": "pr",
+          "inputs": "12f1df99e37c13c72cb9705b35a3d92e5b24a80089129f34ca64d089fff5ad9d",
+          "pr": {
+            "branch": "factory/v3-705-lead-an-external-form-on-the-home-to-its",
+            "title": "V3-705 Lead an external form on the Home to its link, not to an entry"
+          }
+        },
+        {
+          "verdict": "pr",
+          "inputs": "12f1df99e37c13c72cb9705b35a3d92e5b24a80089129f34ca64d089fff5ad9d",
+          "pr": {
+            "branch": "factory/v3-705-lead-an-external-form-on-the-home-to-its",
+            "title": "V3-705 Lead an external form on the Home to its link, not to an entry"
+          }
+        },
+        {
+          "verdict": "pr",
+          "inputs": "12f1df99e37c13c72cb9705b35a3d92e5b24a80089129f34ca64d089fff5ad9d",
+          "pr": {
+            "branch": "factory/v3-705-lead-an-external-form-on-the-home-to-its",
+            "title": "V3-705 Lead an external form on the Home to its link, not to an entry"
+          }
+        }
+      ]
+    },
+    {
+      "ticket": "AUD-1139",
+      "risk": "low",
+      "passes": [
+        {
+          "verdict": "pr",
+          "inputs": "bf1ab8d6e008426aeabd24864a08f0a5f8d3ec863170a50f3dcb87f36beef621",
+          "pr": {
+            "branch": "factory/aud-1139-read-receipts-side-by-side-two-avatars-a",
+            "title": "AUD-1139 Read receipts side by side, two avatars and +X from four readers"
+          }
+        },
+        {
+          "verdict": "pr",
+          "inputs": "bf1ab8d6e008426aeabd24864a08f0a5f8d3ec863170a50f3dcb87f36beef621",
+          "pr": {
+            "branch": "factory/aud-1139-read-receipts-side-by-side-two-avatars-a",
+            "title": "AUD-1139 Read receipts side by side, two avatars and +X from four readers"
+          }
+        },
+        {
+          "verdict": "pr",
+          "inputs": "bf1ab8d6e008426aeabd24864a08f0a5f8d3ec863170a50f3dcb87f36beef621",
+          "pr": {
+            "branch": "factory/aud-1139-read-receipts-side-by-side-two-avatars-a",
+            "title": "AUD-1139 Read receipts side by side, two avatars and +X from four readers"
+          }
+        }
+      ]
+    },
+    {
+      "ticket": "V3-582",
+      "risk": "medium",
+      "passes": [
+        {
+          "verdict": "pr",
+          "inputs": "3eae24b2689d15825646faa82fba4e3739526babd52f3465088e47cd6eac0b2c",
+          "pr": {
+            "branch": "factory/v3-582-rename-a-questionnaire-from-its-card-s-m",
+            "title": "V3-582 Rename a questionnaire from its card's menu"
+          }
+        },
+        {
+          "verdict": "pr",
+          "inputs": "3eae24b2689d15825646faa82fba4e3739526babd52f3465088e47cd6eac0b2c",
+          "pr": {
+            "branch": "factory/v3-582-rename-a-questionnaire-from-its-card-s-m",
+            "title": "V3-582 Rename a questionnaire from its card's menu"
+          }
+        },
+        {
+          "verdict": "pr",
+          "inputs": "3eae24b2689d15825646faa82fba4e3739526babd52f3465088e47cd6eac0b2c",
+          "pr": {
+            "branch": "factory/v3-582-rename-a-questionnaire-from-its-card-s-m",
+            "title": "V3-582 Rename a questionnaire from its card's menu"
+          }
+        }
+      ]
+    },
+    {
+      "ticket": "AUD-1277",
+      "risk": "medium",
+      "passes": [
+        {
+          "verdict": "pr",
+          "inputs": "d0aad95835e0553977e59429adfeb7cb8b56642db63bcf12d5355e14d286221a",
+          "pr": {
+            "branch": "factory/aud-1277-show-thread-tags-and-filter-the-thread-l",
+            "title": "AUD-1277 Show thread tags and filter the thread list by tag"
+          }
+        },
+        {
+          "verdict": "pr",
+          "inputs": "d0aad95835e0553977e59429adfeb7cb8b56642db63bcf12d5355e14d286221a",
+          "pr": {
+            "branch": "factory/aud-1277-show-thread-tags-and-filter-the-thread-l",
+            "title": "AUD-1277 Show thread tags and filter the thread list by tag"
+          }
+        },
+        {
+          "verdict": "pr",
+          "inputs": "d0aad95835e0553977e59429adfeb7cb8b56642db63bcf12d5355e14d286221a",
+          "pr": {
+            "branch": "factory/aud-1277-show-thread-tags-and-filter-the-thread-l",
+            "title": "AUD-1277 Show thread tags and filter the thread list by tag"
+          }
+        }
+      ]
+    },
+    {
+      "ticket": "V3-622",
+      "risk": "high",
+      "passes": [
+        {
+          "verdict": "pr",
+          "inputs": "3f6a07908118d930635044ed7089cf5a83d11ef5219045a5eb0e29548d2f4e20",
+          "pr": {
+            "branch": "factory/v3-622-refuse-a-replay-on-a-base-that-keeps-row",
+            "title": "V3-622 Refuse a replay on a base that keeps rows the replay no longer writes"
+          }
+        },
+        {
+          "verdict": "pr",
+          "inputs": "3f6a07908118d930635044ed7089cf5a83d11ef5219045a5eb0e29548d2f4e20",
+          "pr": {
+            "branch": "factory/v3-622-refuse-a-replay-on-a-base-that-keeps-row",
+            "title": "V3-622 Refuse a replay on a base that keeps rows the replay no longer writes"
+          }
+        },
+        {
+          "verdict": "pr",
+          "inputs": "3f6a07908118d930635044ed7089cf5a83d11ef5219045a5eb0e29548d2f4e20",
+          "pr": {
+            "branch": "factory/v3-622-refuse-a-replay-on-a-base-that-keeps-row",
+            "title": "V3-622 Refuse a replay on a base that keeps rows the replay no longer writes"
+          }
+        }
+      ]
+    },
+    {
+      "ticket": "ORC-302",
+      "risk": "low",
+      "passes": [
+        {
+          "verdict": "pr",
+          "inputs": "467c304e2ebfecef607da71ac33a7b0d97c064f3562e6de8ec4fe49191c4feb7",
+          "pr": {
+            "branch": "factory/orc-302-drop-a-creating-event-whose-issue-was-de",
+            "title": "ORC-302 Drop a creating event whose issue was deleted instead of retrying it"
+          }
+        },
+        {
+          "verdict": "pr",
+          "inputs": "467c304e2ebfecef607da71ac33a7b0d97c064f3562e6de8ec4fe49191c4feb7",
+          "pr": {
+            "branch": "factory/orc-302-drop-a-creating-event-whose-issue-was-de",
+            "title": "ORC-302 Drop a creating event whose issue was deleted instead of retrying it"
+          }
+        },
+        {
+          "verdict": "pr",
+          "inputs": "467c304e2ebfecef607da71ac33a7b0d97c064f3562e6de8ec4fe49191c4feb7",
+          "pr": {
+            "branch": "factory/orc-302-drop-a-creating-event-whose-issue-was-de",
+            "title": "ORC-302 Drop a creating event whose issue was deleted instead of retrying it"
+          }
+        }
+      ]
+    },
+    {
+      "ticket": "ORC-305",
+      "risk": "medium",
+      "passes": [
+        {
+          "verdict": "pr",
+          "inputs": "bbac373a5e591c89e605d39cb180e63959a9d216684b139612bd841979af4cb9",
+          "pr": {
+            "branch": "factory/orc-305-an-unreadable-gh-pr-checks-answer-reject",
+            "title": "ORC-305 An unreadable gh pr checks answer rejects findPr instead of reading as no checks"
+          }
+        },
+        {
+          "verdict": "pr",
+          "inputs": "bbac373a5e591c89e605d39cb180e63959a9d216684b139612bd841979af4cb9",
+          "pr": {
+            "branch": "factory/orc-305-an-unreadable-gh-pr-checks-answer-reject",
+            "title": "ORC-305 An unreadable gh pr checks answer rejects findPr instead of reading as no checks"
+          }
+        },
+        {
+          "verdict": "pr",
+          "inputs": "bbac373a5e591c89e605d39cb180e63959a9d216684b139612bd841979af4cb9",
+          "pr": {
+            "branch": "factory/orc-305-an-unreadable-gh-pr-checks-answer-reject",
+            "title": "ORC-305 An unreadable gh pr checks answer rejects findPr instead of reading as no checks"
+          }
+        }
+      ]
+    },
+    {
+      "ticket": "ORC-145",
+      "risk": "medium",
+      "passes": [
+        {
+          "verdict": "pr",
+          "inputs": "d51d8b38c6099dd662cd0f2e3611431b1c3e7ca8de69269707d66a75caeddf34",
+          "pr": {
+            "branch": "factory/orc-145-add-the-factory-taille-du-diff-check-aga",
+            "title": "ORC-145 Add the factory/taille-du-diff check against max_diff"
+          }
+        },
+        {
+          "verdict": "pr",
+          "inputs": "d51d8b38c6099dd662cd0f2e3611431b1c3e7ca8de69269707d66a75caeddf34",
+          "pr": {
+            "branch": "factory/orc-145-add-the-factory-taille-du-diff-check-aga",
+            "title": "ORC-145 Add the factory/taille-du-diff check against max_diff"
+          }
+        },
+        {
+          "verdict": "pr",
+          "inputs": "d51d8b38c6099dd662cd0f2e3611431b1c3e7ca8de69269707d66a75caeddf34",
+          "pr": {
+            "branch": "factory/orc-145-add-the-factory-taille-du-diff-check-aga",
+            "title": "ORC-145 Add the factory/taille-du-diff check against max_diff"
+          }
+        }
+      ]
+    },
+    {
+      "ticket": "ORC-277",
+      "risk": "high",
+      "passes": [
+        {
+          "verdict": "pr",
+          "inputs": "2f0cbb7ab365cbcc644bf10697a11b4d6486640e3a2a71248f284071e7ffc983",
+          "pr": {
+            "branch": "factory/orc-277-name-the-run-in-its-start-mark-before-wr",
+            "title": "ORC-277 Name the run in its start mark before writing it, so a question cut at launch is not run twice"
+          }
+        },
+        {
+          "verdict": "pr",
+          "inputs": "2f0cbb7ab365cbcc644bf10697a11b4d6486640e3a2a71248f284071e7ffc983",
+          "pr": {
+            "branch": "factory/orc-277-name-the-run-in-its-start-mark-before-wr",
+            "title": "ORC-277 Name the run in its start mark before writing it, so a question cut at launch is not run twice"
+          }
+        },
+        {
+          "verdict": "pr",
+          "inputs": "2f0cbb7ab365cbcc644bf10697a11b4d6486640e3a2a71248f284071e7ffc983",
+          "pr": {
+            "branch": "factory/orc-277-name-the-run-in-its-start-mark-before-wr",
+            "title": "ORC-277 Name the run in its start mark before writing it, so a question cut at launch is not run twice"
+          }
+        }
+      ]
+    },
+    {
+      "ticket": "ORC-341",
+      "risk": "high",
+      "passes": [
+        {
+          "verdict": "pr",
+          "inputs": "62ab64d75c9a35ddce13ee3b17f4c5d05b439eb16d657258d37df1870993643c",
+          "pr": {
+            "branch": "factory/orc-341-the-agent-s-repository-takes-the-reposit",
+            "title": "ORC-341 The agent's repository takes the repository's git config by an allow list"
+          }
+        },
+        {
+          "verdict": "pr",
+          "inputs": "62ab64d75c9a35ddce13ee3b17f4c5d05b439eb16d657258d37df1870993643c",
+          "pr": {
+            "branch": "factory/orc-341-the-agent-s-repository-takes-the-reposit",
+            "title": "ORC-341 The agent's repository takes the repository's git config by an allow list"
+          }
+        },
+        {
+          "verdict": "pr",
+          "inputs": "62ab64d75c9a35ddce13ee3b17f4c5d05b439eb16d657258d37df1870993643c",
+          "pr": {
+            "branch": "factory/orc-341-the-agent-s-repository-takes-the-reposit",
+            "title": "ORC-341 The agent's repository takes the repository's git config by an allow list"
+          }
+        }
+      ]
+    }
+  ]
+}
