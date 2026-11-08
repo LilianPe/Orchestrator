@@ -1,7 +1,7 @@
 import type { Role } from './authz.js';
 import type { TimerRecord } from '../store/types.js';
 import { PRODUCT_NAME } from '../product.js';
-import { REPO_CONFIG_REFUSED, TICKET_TOKENS_REACHED, type BlockKind } from './block-cause.js';
+import { INCOMPLETE, NO_ASSESSMENT, REPO_CONFIG_REFUSED, TICKET_TOKENS_REACHED, type BlockKind } from './block-cause.js';
 import { BEFORE_ORC_331 } from './legacy-messages.js';
 import { RENAMED_V1, SCHEMA_VERSION, type FactoryEvent, type Taint, type TicketState, type TimerFired } from './types.js';
 
@@ -93,10 +93,12 @@ const LEGACY_KINDS: readonly (readonly [Exclude<BlockKind, 'other'>, RegExp])[] 
   ['failed', /^Checks failing after /],
   ['loop', /^Loop: /],
   ['failed', /^The run .+ failed\.$/],
+  ['failed', new RegExp(`^${NO_ASSESSMENT}`)],
   ['pickup', /^The description (is shorter than|has no)/],
   ['pickup', /^A branch .+ already exists on origin\./],
   ['pickup', /^No repository known for the Linear team /],
   ['pickup', /^Repository to specify: /],
+  ['pickup', new RegExp(`^${INCOMPLETE}`)],
   ['repo_config', new RegExp(`^${REPO_CONFIG_REFUSED}`)],
   ['dead_letter', /^Event (?<event>.+?) set aside \(/],
   ['pr_closed', /^PR #\d+ closed without merge$/],

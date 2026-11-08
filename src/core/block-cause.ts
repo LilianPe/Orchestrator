@@ -23,6 +23,11 @@ export const STOPPED = 'Stopped on request';
 /** The reason of a question the agent asks during its run: the label of its cause in the Flow too. */
 export const AGENT_QUESTION = 'Question asked by the agent';
 
+/** The head of the guard before In Progress refusing a ticket `intake` found incomplete (ORC-206): the ticket's to complete. */
+export const INCOMPLETE = 'The ticket is not complete enough to start:';
+/** The reason of an `intake` whose result carries no assessment (ORC-206): the ticket does not start. */
+export const NO_ASSESSMENT = 'Intake returned no assessment of the ticket.';
+
 /** The head of a launch refused on the repository's `.factory/config.yml` (ORC-209 C): the repository's to fix. */
 export const REPO_CONFIG_REFUSED = 'Repository configuration to fix: ';
 

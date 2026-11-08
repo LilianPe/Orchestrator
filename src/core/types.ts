@@ -11,6 +11,15 @@ export function isLogicalState(v: string): v is LogicalState {
   return (LOGICAL_STATES as readonly string[]).includes(v);
 }
 
+/** The size of a ticket as `intake` estimates it (ORC-206). */
+export const TICKET_SIZES = ['xs', 's', 'm', 'l', 'xl'] as const;
+export type TicketSize = (typeof TICKET_SIZES)[number];
+/** The risk of a run, lowest first (ORC-206): the order I4 keeps from going down. */
+export const RISKS = ['low', 'medium', 'high'] as const;
+export type Risk = (typeof RISKS)[number];
+/** The higher of two risks: a proposal never lowers the run's (I4). */
+export const higherRisk = (held: Risk | undefined, proposed: Risk): Risk => (held && RISKS.indexOf(held) > RISKS.indexOf(proposed) ? held : proposed);
+
 export type RunOutcome = 'success' | 'failure' | 'stopped' | 'limit';
 
 /**
@@ -261,6 +270,8 @@ export interface EventPayloads {
     attempt?: AttemptOutcome;
     output?: AgentOutput;
     stagnation?: Stagnation;
+    /** The deterministic checks of the ticket that failed at the launch of `intake` (ORC-206): inputs of the guard before In Progress. Absent when none failed. */
+    pickup?: string[];
     /** The usage limit of `account` stopped it and the factory waits on it (`on_usage_limit: wait`, ORC-340): resumed at `resetAt`. */
     usageLimit?: { resetAt: number; account?: string };
   };
@@ -364,7 +375,7 @@ export type DecidedEvent =
   | { type: 'ticket.unblocked' }
   | {
       type: 'ticket.patched';
-      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'verifiedSha' | 'awaitingRepo' | 'owedMove' | 'usageWait' | 'usageRelaunches' | 'usageAsks'>>;
+      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'verifiedSha' | 'awaitingRepo' | 'owedMove' | 'usageWait' | 'usageRelaunches' | 'usageAsks' | 'size' | 'risk' | 'visualProof'>>;
     }
   | { type: 'feedback.appended'; item: FeedbackItem }
   /** The ticket's dev work is stopped: nothing pending, no verification awaited. */
@@ -521,6 +532,12 @@ export interface TicketState {
   priority: number;
   costUsd: number;
   updatedAt: number;
+  /** The size `intake` estimated (ORC-206), its last assessment. Absent until one. */
+  size?: TicketSize;
+  /** The risk of the run (ORC-206): the highest any step proposed, never lowered (I4). Absent until `intake` assessed it. */
+  risk?: Risk;
+  /** Visual proof planned for the ticket (ORC-206): `intake` can only harden it to `required`, never lift it. Absent: undecided until `verify` (ORC-176). */
+  visualProof?: 'required';
   /** Hash of the workflow version the ticket was decided on first, read for all its later decisions (ORC-149). */
   workflowHash?: string;
 }

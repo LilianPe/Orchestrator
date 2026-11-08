@@ -46,6 +46,7 @@ export interface AttemptLabels {
 /** Labels nothing in the factory provides yet, and the tickets that will. */
 const PENDING_LABELS = {
   image: ['ORC-204'],
+  // Null until the ticket's `intake` assessed it (ORC-206), and on a job out of the ticket's run.
   risk: ['ORC-206'],
   registryCommit: ['ORC-257'],
   deliveredFactIds: ['ORC-257'],
@@ -209,6 +210,8 @@ export interface AttemptLabelInput {
   pack: PackFingerprints;
   /** Defaults to `FACTORY_COMMIT`, or null when unset. */
   factoryCommit?: string | null;
+  /** The ticket's risk when the attempt starts (ORC-206): null before `intake` assessed it. */
+  risk?: string | null;
 }
 
 export function attemptLabels(i: AttemptLabelInput): AttemptLabels {
@@ -222,7 +225,7 @@ export function attemptLabels(i: AttemptLabelInput): AttemptLabels {
     factoryCommit,
     effort: i.job.effort ?? null,
     image: null,
-    risk: null,
+    risk: i.risk ?? null,
     registryCommit: null,
     deliveredFactIds: null,
     fingerprints: {

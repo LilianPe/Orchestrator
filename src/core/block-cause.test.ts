@@ -1,6 +1,7 @@
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { loadWorkflow } from '../config/load-workflow.js';
+import type { AgentOutput } from './agent-output.js';
 import { causeOf, restatesCause, type BlockKind } from './block-cause.js';
 import { liftDeadLetterBlock } from './dead-letter.js';
 import { decide, settledTicket } from './engine.js';
@@ -17,6 +18,8 @@ function ev<T extends EventType>(type: T, payload: EventPayloads[T], extra: Part
 const ticket = (patch: Partial<TicketState> = {}): TicketState => ({ ...newTicketState('p', 'REL-1', 'Titre', 'dev', 0), delegated: true, ...patch });
 const finished = (patch: Partial<EventPayloads['run.finished']>) => ev('run.finished', { runId: 'r1', job: 'dev', outcome: 'failure', costUsd: 0, turns: 1, lastText: '', ...patch });
 const failure = { command: 'npm test', exitCode: 1, output: 'rouge' };
+const intaking = ticket({ logical: 'todo', activeRunId: 'r1', activeJob: 'intake' });
+const INTAKE_OUTPUT: AgentOutput = { status: 'done', summary: 'Read.', tests_added: [], why: '', assumptions: [], risks: [], untested: [], review_hints: [] };
 
 /** The block `decide` writes: the kind is read from what the engine really emits. */
 function blockOf(state: TicketState, event: FactoryEvent, wf = workflow): Extract<InternalEvent, { type: 'ticket.blocked' }> {
@@ -46,6 +49,9 @@ describe('the kind of a block, set by the code that builds it (ORC-345)', () => 
     ['pickup', () => blockOf(ticket({ delegated: false }), ev('ticket.delegated', { linearSessionId: 's1', noRepo: 'ZZZ' }))],
     ['pickup', () => blockOf(ticket({ delegated: false }), ev('ticket.delegated', { linearSessionId: 's1', repos: ['web', 'api'] }))],
     ['dead_letter', () => blockOf(ticket(), ev('dead_letter.added', { eventId: 'e9', eventType: 'pr.opened', error: 'boom', failures: 1 }))],
+    // The guard of intake (ORC-206): an incomplete ticket is a refused pickup, an intake without assessment a failed run.
+    ['pickup', () => blockOf(intaking, finished({ job: 'intake', outcome: 'success', attempt: 'succeeded', output: { ...INTAKE_OUTPUT, intake: { size: 'm', risk: 'medium', complete: false, missing: ['CSV or XLSX?'], screen: false } } }))],
+    ['failed', () => blockOf(intaking, finished({ job: 'intake', outcome: 'success', attempt: 'failed' }))],
   ] as const)('%s, for a block decide writes; its reason upcasts to the same kind', (kind, block) => {
     const b = block();
     expect(b.kind).toBe(kind);

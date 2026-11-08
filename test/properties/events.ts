@@ -3,6 +3,8 @@ import { REFREEZE, type FrozenTests } from '../../src/checks/freeze.js';
 import type { Role } from '../../src/core/authz.js';
 import {
   LOGICAL_STATES,
+  RISKS,
+  TICKET_SIZES,
   TRUSTED,
   type EventPayloads,
   type EventType,
@@ -28,8 +30,8 @@ export const TICKET = 'REL-1';
 export const DEV_SESSION = 's-dev';
 const RUN_IDS = ['r1', 'r2', 'r3'] as const;
 /** Every job of the standard pack, plus one the workflow does not know. */
-const JOBS = ['dev', 'tests', 'dev-feedback', 'fix-ci', 'review', 'ask', 'learn', 'remember', 'unknown'] as const;
-const DEV_JOBS = ['dev', 'tests', 'dev-feedback', 'fix-ci', 'review'] as const;
+const JOBS = ['intake', 'dev', 'tests', 'dev-feedback', 'fix-ci', 'review', 'ask', 'learn', 'remember', 'unknown'] as const;
+const DEV_JOBS = ['intake', 'dev', 'tests', 'dev-feedback', 'fix-ci', 'review'] as const;
 export const VERIFY_FAILURES = [{ command: 'fake:check', exitCode: 1, output: 'rouge' }];
 /** Freezes the red check reads, or a `/refreeze` (ORC-131): they share a file, with another fingerprint. */
 const FREEZES: readonly FrozenTests[] = [
@@ -95,6 +97,11 @@ const message = fc
   .record({ linearSessionId: session, body, author, issue, kind: fc.option(fc.constantFrom('question' as const, 'instruction' as const, 'command' as const), { nil: undefined }) })
   .map(({ kind, ...p }) => (kind ? { ...p, ack: true as const, kind } : p));
 
+/** What `intake` makes of the ticket (ORC-206): any risk, so that a later one proposes a lower one. */
+const assessment = fc
+  .record({ size: fc.constantFrom(...TICKET_SIZES), risk: fc.constantFrom(...RISKS), complete: fc.boolean(), screen: fc.boolean() })
+  .map((a) => ({ ...a, missing: a.complete ? [] : ['Quel format ?'] }));
+
 /** One arbitrary per event type: adding an event type to `EventPayloads` fails to compile until it is generated here. */
 const PAYLOADS: { [K in EventType]: fc.Arbitrary<EventPayloads[K]> } = {
   'ticket.delegated': fc.record({ linearSessionId: fc.option(session, { nil: undefined }), issue }),
@@ -153,9 +160,10 @@ const PAYLOADS: { [K in EventType]: fc.Arbitrary<EventPayloads[K]> } = {
     turns: fc.constant(3),
     lastText: fc.constant('fini'),
   })
-    // The closed outcome of ORC-289, absent on rows written before it; a blocked one carries its question.
+    // The closed outcome of ORC-289, absent on rows written before it; a blocked one carries its question, a success
+    // sometimes intake's assessment (ORC-206), and an intake run the deterministic checks of its launch.
     .chain((p) =>
-      fc.constantFrom(undefined, 'succeeded', 'failed', 'noop', 'needs_input', 'timeout', 'spec_impossible', 'errored' as const).map((attempt) =>
+      fc.tuple(fc.constantFrom(undefined, 'succeeded', 'failed', 'noop', 'needs_input', 'timeout', 'spec_impossible', 'errored' as const), fc.option(assessment, { nil: undefined }), fc.constantFrom<string[] | undefined>(undefined, [], ['The description has no acceptance criteria.'])).map(([attempt, intake, pickup]) =>
         attempt === undefined
           ? p
           : {
@@ -164,6 +172,8 @@ const PAYLOADS: { [K in EventType]: fc.Arbitrary<EventPayloads[K]> } = {
               ...(attempt === 'needs_input' || attempt === 'spec_impossible'
                 ? { output: { status: 'blocked' as const, summary: 's', question: 'pourquoi ?', ...(attempt === 'spec_impossible' ? { reason: attempt } : {}), tests_added: [], why: '', assumptions: [], risks: [], untested: [], review_hints: [] } }
                 : {}),
+              ...(attempt === 'succeeded' && intake ? { output: { status: 'done' as const, summary: 's', tests_added: [], why: '', assumptions: [], risks: [], untested: [], review_hints: [], intake } } : {}),
+              ...(p.job === 'intake' && pickup ? { pickup } : {}),
             },
       ),
     ),
