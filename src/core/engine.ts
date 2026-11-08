@@ -286,7 +286,8 @@ function attemptDecision(p: EventPayloads['run.finished'], job: JobSpec): RunOut
     }
     case 'needs_input': {
       // A rebase the agent stops on one of the three conflicts a human decides (ORC-146): a block of its own kind.
-      const conflict = p.output?.reason === 'conflict' ? p.output.conflict : undefined;
+      // Another step that reports one asks a question: the conflict is the rebase step's, started by its event.
+      const conflict = p.output?.reason === 'conflict' && job.step === REBASE ? p.output.conflict : undefined;
       if (conflict) {
         const reason = `Conflict with the default branch left to a human: ${CONFLICTS[conflict]}.`;
         return { kind: 'conflict', reason, body: `${reason}\n${question}\n\nReply in this thread and I will resume.`, tried: [`Started the run ${job.name}: the agent stops the rebase (\`${conflict}\`).`], question: question || undefined };
@@ -1529,6 +1530,11 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       // The open PR of the ticket only is rebased (ORC-146): another PR's conflict, or a merged or closed one's, is recorded.
       if (ticket?.prNumber !== event.payload.number || ticket.prState !== 'OPEN') {
         out.trace.push(`pr.conflicted: PR #${event.payload.number} is not the open PR of the ticket, nothing started`);
+        return out;
+      }
+      // A rebase already running or waiting takes the branch onto the base as it is then: a new head still in conflict asks no second one.
+      if ([ticket.activeJob, ticket.pendingJob?.job].some((j) => j && stepOf(workflow, j) === REBASE)) {
+        out.trace.push('pr.conflicted: a rebase is already running or waiting, nothing started');
         return out;
       }
       break;

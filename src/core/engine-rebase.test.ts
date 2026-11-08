@@ -122,6 +122,21 @@ describe('a conflict with the default branch is handled by a rebase step the eng
     expect(causeOf('conflict')).toBe('conflict');
   });
 
+  it('a conflict seen again while a rebase runs or waits starts and counts nothing more: one conflict, one rebase', () => {
+    const running = decide(reviewed({ activeRunId: 'r1', activeJob: 'rebase', ciFixAttempts: 1 }), conflicted(), workflow);
+    expect(starts(running)).toEqual([]);
+    expect(running.events).toEqual([]);
+    const waiting = decide(reviewed({ logical: 'dev', activeRunId: 'r0', activeJob: 'dev-feedback', pendingJob: { job: 'rebase' }, ciFixAttempts: 1 }), conflicted(), workflow);
+    expect(starts(waiting)).toEqual([]);
+    expect(waiting.events).toEqual([]);
+  });
+
+  it('a conflict another step reports is no conflict block: only the rebase step stops on one', () => {
+    const fixing = reviewed({ activeRunId: 'r1', activeJob: 'dev-feedback' });
+    const out = decide(fixing, { ...stopsOn('logic'), payload: { ...(stopsOn('logic').payload as EventPayloads['run.finished']), job: 'dev-feedback' } } as FactoryEvent, workflow);
+    expect(blocked(out)).toMatchObject({ kind: 'question', job: 'dev-feedback' });
+  });
+
   it('a reply to a conflict block resumes the rebase step with the reply', () => {
     const t = decide(rebasing(), stopsOn('logic'), workflow).events.reduce<TicketState | undefined>((s, e) => reduce(s, e), reduce(rebasing(), stopsOn('logic')))!;
     const reply = ev('ticket.commented', { body: 'Keep the base side.', author: 'Lilian', kind: 'instruction' });
