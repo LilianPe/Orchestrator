@@ -16,6 +16,7 @@ import type { Runner } from '../adapters/runner/types.js';
 import { EgressProxy } from '../network/proxy.js';
 import { EgressClient, sandboxAgentHost, type Egress } from '../network/proxy-service.js';
 import { GitPublisher } from '../publish/publish.js';
+import { hostSecretScan, OutputPolicy, sandboxSecretScan } from '../publish/output-policy.js';
 import { checkHostRuns, instanceId, makeSandboxes } from './sandbox-wiring.js';
 import { LinearApi } from '../adapters/tracker/linear/api.js';
 import { createLinearIngest } from '../adapters/tracker/linear/ingest.js';
@@ -188,6 +189,9 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     }
     const publisher = o.fakeRunner ? new FakePublisher() : sandboxes && forge instanceof GitHubAppForge ? new GitPublisher({ sandboxes, forge, runsDir: paths.runs, log }) : undefined;
     if (!publisher) log('Warning: publication impossible (it needs the sandboxes and the GitHub App): a verified ticket will be blocked with this reason.');
+    // gitleaks on every text it publishes (ORC-214), as on the diff: in its sandboxes, or the host's own for host runs. The fake runner's daemon reaches no model.
+    const outputPolicy = o.fakeRunner ? new OutputPolicy() : new OutputPolicy(sandboxes ? sandboxSecretScan({ sandboxes, runsDir: paths.runs, log }) : hostSecretScan());
+    if (!o.fakeRunner && !sandboxes) log("Warning: runs on the host, the texts the factory publishes are scanned by the host's gitleaks: without it, nothing is posted.");
     const kb = instance.knowledge ? new KnowledgeBase(instance.knowledge.repoPath) : undefined;
     // The roles of a human event's signed actor (ORC-186): Linear team members and GitHub rights, read
     // again past their TTL, and the designations of config.yaml.
@@ -219,6 +223,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       bus,
       scheduler,
       tracker: trackerSwitch,
+      outputPolicy,
       forge,
       // Only the GitHub App merges (ORC-148): with the gh CLI, a Done goes back to Human Review with the reason.
       // A fake run writes nothing real: its fake PR's number would be another one's on the forge.

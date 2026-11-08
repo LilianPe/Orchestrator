@@ -42,6 +42,7 @@ import {
   type WorkflowVersion,
 } from '../store/types.js';
 import { agentOutputKey, attemptOutcome, parseAgentOutput, type AgentOutput } from './agent-output.js';
+import { composeResult, OutputPolicy, OutputRefused, policedTracker } from '../publish/output-policy.js';
 import type { EventBus } from './bus.js';
 import type { Clock } from './clock.js';
 import type { Effect } from './decision.js';
@@ -151,18 +152,6 @@ export function codeRunTokens(runs: readonly RunRecord[]): number | undefined {
 /** A launch refused because the ticket spent its token budget (ORC-340): blocked with this message as its reason. */
 class TicketBudgetError extends Error {}
 
-/** The message posted for a run that submitted its output: composed by the factory from it, never the agent's last text (ORC-289). */
-function formatAgentOutput(o: AgentOutput): string {
-  const list = (title: string, items: string[]) => (items.length ? [`**${title}**\n${items.map((i) => `- ${i}`).join('\n')}`] : []);
-  return [
-    o.summary,
-    ...(o.why ? [`**Why**: ${o.why}`] : []),
-    ...list('Risks', o.risks),
-    ...list('Untested', o.untested),
-    ...list('To review', o.review_hints.map((h) => `\`${h.file}\`: ${h.reason}`)),
-  ].join('\n\n');
-}
-
 /**
  * What a run's stagnation is watched against (ORC-136). `silentAfterMs` tells a version frozen since: one before it has
  * `repeatedFailures` too (ORC-187), for its checks only, and keeps running as it did. Only a dev job has its worktree read
@@ -193,6 +182,11 @@ export interface OrchestratorDeps {
   reconcile?: (project: ProjectRuntime) => Promise<void>;
   /** The factory's writes on the forge (ORC-148: the merge); absent with the `gh` CLI, which merges nothing. */
   forgeWriter?: ForgeWriter;
+  /**
+   * The policy in front of every text the orchestrator publishes (ORC-214): its comments and activities, the PR's text. Absent: one
+   * without gitleaks, for a test or the fake runner's daemon; the daemon's scans in its sandboxes.
+   */
+  outputPolicy?: OutputPolicy;
   /** The factory publishes what `verify` found green (ORC-125); absent without sandboxes or a GitHub App, a ticket that gets there is blocked and told why. */
   publisher?: Publisher;
   runner: Runner;
@@ -400,6 +394,9 @@ export class Orchestrator {
   private dispatchOpen: boolean;
   /** The inbox worker (ORC-149): one task per ticket, a decision transaction per event. */
   private readonly worker: Worker;
+  /** The policy every published text goes through (ORC-214), and the tracker without it, for the live relay alone: its words are the factory's. */
+  private readonly policy: OutputPolicy;
+  private readonly relayTracker: Tracker;
   /** Versions of the projects' workflows, by workflow object. */
   private versionOfWorkflow = new WeakMap<Workflow, WorkflowVersion>();
   /** Workflows by version hash: the current ones and those tickets are frozen on. */
@@ -413,6 +410,9 @@ export class Orchestrator {
   private unwritten = new Map<string, { what: string; write: () => Promise<void> }>();
 
   constructor(private d: OrchestratorDeps) {
+    this.policy = d.outputPolicy ?? new OutputPolicy();
+    this.relayTracker = d.tracker;
+    this.d = { ...d, tracker: policedTracker(d.tracker, this.policy, (m) => this.log('warn', m)) };
     this.newId = d.newId ?? randomUUID;
     this.dispatchOpen = !d.holdInboxUntilReplay;
     this.worker = new Worker({
@@ -1568,9 +1568,8 @@ export class Orchestrator {
         const run = await store.getRun(c.runId);
         if (!run) return;
         const session = run.linearSessionId ?? (await this.sessionFor(t));
-        // The template stands for the dev's end of work only: a reply (feedback, a question) is the agent's own answer.
-        const body = c.output && c.style === 'summary' ? formatAgentOutput(c.output) : run.lastText.trim() || 'Done.';
-        return this.activityOnce(session, { type: 'response', body }, key);
+        // Composed from what the run submitted, never from its last text (ORC-214): a reply is its summary.
+        return this.activityOnce(session, { type: 'response', body: composeResult(c.output, c.style) }, key);
       }
       case 'link_pr':
         if (t.linearSessionId) await tracker.addExternalUrl(t.linearSessionId, 'Pull request', c.url);
@@ -1749,15 +1748,19 @@ export class Orchestrator {
       try {
         const mark = await this.untrustedMark(project, t);
         const untrusted = mark ? { untrusted: mark } : {};
-        const pr = await publisher.publish({ projectId: project.id, repoPath: project.repoPath, ticketId: t.ticketId, runId: c.runId, worktree: t.worktreePath, branch: t.branch, sha: c.sha, ...untrusted, ...prText(t) });
+        const text = await this.policy.pr(prText(t));
+        const pr = await publisher.publish({ projectId: project.id, repoPath: project.repoPath, ticketId: t.ticketId, runId: c.runId, worktree: t.worktreePath, branch: t.branch, sha: c.sha, ...untrusted, ...text });
         await this.accept({ ...base, id: prEventId(t.ticketId, pr.prNumber, 'opened'), type: 'pr.opened', at: this.d.clock.now(), payload: { number: pr.prNumber, url: pr.url, branch: t.branch } });
         await this.publishChecks(project, t, c);
         return published();
       } catch (err) {
-        if (!(err instanceof PublishRefused)) throw err;
-        // A run that committed nothing has nothing to show: it ends as it would have, without a PR.
-        if (err.code === 'empty') return published();
-        reason = err.message;
+        if (err instanceof OutputRefused) reason = `the PR's text does not pass the output policy: ${err.refusals.map((r) => r.detail).join('; ')}.`;
+        else {
+          if (!(err instanceof PublishRefused)) throw err;
+          // A run that committed nothing has nothing to show: it ends as it would have, without a PR.
+          if (err.code === 'empty') return published();
+          reason = err.message;
+        }
       }
     }
     await this.d.store.setMeta(mark, reason);
@@ -2375,11 +2378,14 @@ export class Orchestrator {
 
   /** Streams a run to its end, destroys its sandbox whatever the outcome, then writes its result to the inbox. */
   private async pump(run: RunRecord, handle: RunHandle, sandboxId?: string): Promise<void> {
-    const { tracker, bus, store, clock } = this.d;
+    const { bus, store, clock } = this.d;
     let result: RunResult | undefined;
     try {
+      // Composed by the relay of the factory's words alone (ORC-214): checked without gitleaks, which would cost a sandbox per activity.
+      const step = this.d.projects.find((p) => p.id === run.projectId)?.workflow.jobs[run.job]?.step ?? run.job;
       const relay = new ActivityRelay(
-        (a) => (run.linearSessionId ? tracker.activity(run.linearSessionId, a) : Promise.resolve()),
+        (a) => (run.linearSessionId && !this.policy.checkRelay(a).length ? this.relayTracker.activity(run.linearSessionId, a) : Promise.resolve()),
+        step,
         this.d.activityIntervalMs ?? 2000,
         () => clock.now(),
       );

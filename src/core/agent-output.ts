@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { PUBLISHED_FIELDS } from '../publish/output-policy.js';
 import type { Store } from '../store/types.js';
 import { RISKS, TICKET_SIZES, type RunOutcome } from './types.js';
 
@@ -25,17 +26,18 @@ export const intakeAssessmentSchema = z
 export const agentOutputSchema = z
   .object({
     status: z.enum(['done', 'blocked']),
-    summary: z.string().min(1),
+    /** Capped as the `OutputPolicy` caps what the factory composes from it (ORC-214): refused here, the agent shortens it within its run. */
+    summary: PUBLISHED_FIELDS.summary,
     /** Required when blocked: the question (`needs_input`) or the justification (`spec_impossible`). */
-    question: z.string().min(1).optional(),
+    question: PUBLISHED_FIELDS.question.optional(),
     /** `spec_impossible` contests the ticket; absent, a blocked attempt needs a human's answer. */
     reason: z.enum(['needs_input', 'spec_impossible']).optional(),
-    tests_added: z.array(z.string()),
-    why: z.string(),
-    assumptions: z.array(z.string()),
-    risks: z.array(z.string()),
-    untested: z.array(z.string()),
-    review_hints: z.array(z.object({ file: z.string().min(1), reason: z.string().min(1) }).strict()),
+    tests_added: PUBLISHED_FIELDS.list,
+    why: PUBLISHED_FIELDS.why,
+    assumptions: PUBLISHED_FIELDS.list,
+    risks: PUBLISHED_FIELDS.list,
+    untested: PUBLISHED_FIELDS.list,
+    review_hints: PUBLISHED_FIELDS.hints,
     visual_scenario: z.object({ url: z.string().min(1), steps: z.array(z.string()) }).strict().optional(),
     /** The `intake` step's assessment (ORC-206); its guard reads nothing else. */
     intake: intakeAssessmentSchema.optional(),

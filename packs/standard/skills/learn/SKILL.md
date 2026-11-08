@@ -33,6 +33,8 @@ Quick test: would a dev opening a neighboring ticket in three months lose time w
 
 Never merge.
 
-## Last message (published in Linear)
+## `submit_result` summary (published in Linear)
+
+End your turn with `mcp__factory__submit_result`: its `summary` is this message, which the factory publishes. Nothing else you write is.
 
 In English: "Remembered: <title> — commit <short sha> on <branch>", one line per note, or "Nothing durable to remember from this ticket."
