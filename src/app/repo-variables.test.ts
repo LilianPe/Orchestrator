@@ -90,8 +90,11 @@ describe('makeRepoConfig (ORC-209 C)', () => {
       run(repo, 'config', 'protocol.ext.allow', 'always');
       run(repo, 'remote', 'set-url', 'origin', `ext::${stall}`);
       const started = Date.now();
-      await expect(makeRepoConfig({ fetchDeadlineMs: 300, log: () => {} })({ repoPath: repo })).rejects.toThrow(/^the forge no longer responds after 0.3 s$/);
+      const logged: string[] = [];
+      await expect(makeRepoConfig({ fetchDeadlineMs: 300, log: (m) => logged.push(m) })({ repoPath: repo })).rejects.toThrow(/^the forge no longer responds after 0.3 s$/);
       expect(Date.now() - started).toBeLessThan(15_000);
+      // The ticket names neither the path nor the command: the daemon's log does.
+      expect(logged).toEqual([expect.stringContaining(`git -C ${repo} fetch`)]);
     } finally {
       try {
         process.kill(Number(readFileSync(pidFile, 'utf8')), 'SIGKILL');
