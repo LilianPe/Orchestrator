@@ -90,7 +90,7 @@ The baseline's forbidden paths (`.github/**`, `CODEOWNERS`, `.env`, `.envrc`, `.
 
 ## The agent's network
 
-Each agent run takes the repository's level, read at launch:
+Each agent run takes the repository's level, read at launch, narrowed by its step's:
 
 | `network.level` | What the agent reaches |
 | -- | -- |
@@ -98,7 +98,7 @@ Each agent run takes the repository's level, read at launch:
 | `custom` | `limited`, plus the hosts in `network.allow`, read-only. |
 | `none` | The Claude API only (`claude-api`): without it, the agent does not run. |
 
-All steps currently have this same level: the one the preset gives each step (review at `claude-api`) will apply once review no longer needs `gh` and `git fetch` (ORC-322). After a daemon restart, a resumed run keeps its level but loses the `allow` list: it can only become more restricted.
+A step can only narrow it (ORC-183): the build, its fixes and intake run at `limited` at most, the AI review at `claude-api`, the Claude API alone, whatever the repository's level. `ask` and `learn` have no step and take the repository's level. After a daemon restart, a resumed run keeps its level but loses the `allow` list: it can only become more restricted.
 
 ## Checking
 

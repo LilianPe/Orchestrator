@@ -27,7 +27,6 @@ const promptFor = (identifier: string, title = 'Export CSV') => ({
   skill: 'factory:dev',
   issue: { identifier, title, description: `Description de ${identifier}`, url: `https://linear.app/t/${identifier}` },
   branch: `factory/${identifier.toLowerCase()}`,
-  reviewRounds: 2,
 });
 const P = promptFor('REL-1');
 /** The label input of a prompt: the prompt text and what it was built from. */

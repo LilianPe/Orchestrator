@@ -1,4 +1,4 @@
-import { NoCommitsBetween } from './types.js';
+import { NoCommitsBetween, ReviewLinesRefused } from './types.js';
 import { generateKeyPairSync, verify } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { describeForgeContract } from '../../../test/contracts/forge.contract.js';
@@ -1028,6 +1028,50 @@ describe('GitHubAppForge writes, idempotent (ORC-162)', () => {
     await expect(forge.upsertCheckRun('/repo', { sha: 'abc123', name: 'factory/verify', externalId: 'REL-1:4:1', status: 'in_progress' })).rejects.toThrow(
       /POST \/repos\/acme\/app\/check-runs: unreadable answer, not a check run: "\{\}"$/,
     );
+  });
+});
+
+describe('GitHubAppForge.postReview (ORC-183)', () => {
+  const writes = (calls: Call[]) => calls.filter((c) => c.method !== 'GET' && !c.url.endsWith('/access_tokens'));
+  const review = { sha: 'abc123', body: '**AI review** of `abc123`', comments: [{ path: 'src/a.ts', line: 12, body: '**Blocking** · security lens' }], externalId: 'review@abc123' };
+  const listed = (reviews: unknown[]): Route => (url, init) => (url.pathname === '/repos/acme/app/pulls/7/reviews' && init.method === 'GET' ? { body: reviews } : undefined);
+  const created = (status = 200, body: unknown = { id: 31 }): Route => (url, init) => (url.pathname === '/repos/acme/app/pulls/7/reviews' && init.method === 'POST' ? { status, body } : undefined);
+
+  it('posts one review on the commit read, its comments on their lines, marked with its external id', async () => {
+    const { forge, calls } = makeForge([tokenRoute(42), listed([{ id: 1, body: 'a human review' }]), created()], { installationId: 42 });
+    expect(await forge.postReview('/repo', 7, review)).toEqual({ id: 31, deduplicated: false });
+    expect(writes(calls).map((c) => c.body)).toEqual([
+      {
+        commit_id: 'abc123',
+        event: 'COMMENT',
+        body: '**AI review** of `abc123`\n\n<!-- factory-review:review@abc123 -->',
+        comments: [{ path: 'src/a.ts', line: 12, side: 'RIGHT', body: '**Blocking** · security lens' }],
+      },
+    ]);
+  });
+
+  it('finds the review a replay already posted, past the first page, and posts nothing again', async () => {
+    const page = (n: number) => Array.from({ length: n === 1 ? 100 : 1 }, (_, i) => ({ id: n * 1000 + i, body: n === 2 ? 'x\n\n<!-- factory-review:review@abc123 -->' : 'other' }));
+    const pages: Route = (url, init) => (url.pathname === '/repos/acme/app/pulls/7/reviews' && init.method === 'GET' ? { body: page(Number(url.searchParams.get('page'))) } : undefined);
+    const { forge, calls } = makeForge([tokenRoute(42), pages, created()], { installationId: 42 });
+    expect(await forge.postReview('/repo', 7, review)).toEqual({ id: 2000, deduplicated: true });
+    expect(writes(calls)).toEqual([]);
+  });
+
+  it('says when GitHub cannot place a comment on its line, so the caller posts the findings in the text', async () => {
+    const { forge } = makeForge([tokenRoute(42), listed([]), created(422, { message: 'Unprocessable Entity', errors: ['Line could not be resolved'] })], { installationId: 42 });
+    await expect(forge.postReview('/repo', 7, review)).rejects.toBeInstanceOf(ReviewLinesRefused);
+    // Without inline comments, a 422 is GitHub's own refusal, thrown as it is.
+    const plain = makeForge([tokenRoute(42), listed([]), created(422, { message: 'Unprocessable Entity' })], { installationId: 42 }).forge;
+    const err = await plain.postReview('/repo', 7, { ...review, comments: [] }).catch((e: unknown) => e);
+    expect(err).not.toBeInstanceOf(ReviewLinesRefused);
+    expect((err as Error).message).toMatch(/422/);
+  });
+
+  it('rejects, never posts a second review, when the list comes back unreadable', async () => {
+    const { forge, calls } = makeForge([tokenRoute(42), listed({ reviews: [] } as never), created()], { installationId: 42 });
+    await expect(forge.postReview('/repo', 7, review)).rejects.toThrow(/unreadable answer, not a list of reviews/);
+    expect(writes(calls)).toEqual([]);
   });
 });
 

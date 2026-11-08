@@ -1,6 +1,7 @@
 import { closeSync, openSync, readSync, realpathSync, statSync } from 'node:fs';
 import { join, sep } from 'node:path';
 import { logExcerpt } from '../checks/log-excerpt.js';
+import type { ReviewLens } from '../config/workflow-schema.js';
 import type { FeedbackItem, InputKind, VerifyFailure } from './types.js';
 
 export interface PromptIssue {
@@ -19,7 +20,9 @@ export interface PromptInput {
   /** The repository's CLAUDE.md, AGENTS.md, .claude/CLAUDE.md (`readConventions`), injected as data. */
   conventions?: string;
   input?: { kind: InputKind; text: string };
-  reviewRounds: number;
+  /** An AI review's lens, and the published commit it reads (ORC-183). */
+  lens?: ReviewLens;
+  commit?: string;
   /** The step starts again on its session, after an attempt cut by a restart or a lost lease (ORC-220). */
   resumedAfterCut?: boolean;
 }
@@ -29,13 +32,15 @@ const HEADINGS: Record<InputKind, string> = {
   ci_failures: 'CI failures',
   verify_failures: 'Failed checks',
   thread: 'Message',
+  diff: 'Diff to review',
 };
 
 export function buildPrompt(p: PromptInput): string {
   const lines = [`/${p.skill}`, '', `## Ticket ${p.issue.identifier} — ${p.issue.title}`, `URL: ${p.issue.url}`];
   if (p.branch) lines.push(`Branch: ${p.branch}`);
   if (p.prUrl) lines.push(`PR: ${p.prUrl}`);
-  if (p.skill.endsWith(':review')) lines.push(`Max review rounds: ${p.reviewRounds}`);
+  if (p.lens) lines.push(`Lens: ${p.lens}`);
+  if (p.commit) lines.push(`Commit: ${p.commit}`);
   lines.push('', p.issue.description.trim() || '(no description)', '');
   if (p.promptContext) lines.push('## Linear context', p.promptContext, '');
   if (p.conventions) {

@@ -14,7 +14,6 @@ Running Relais day to day: limits, budget, pause, logs, recovery after a restart
 | Verification passes | `limits.verify_attempts` | 4 (preset: 3 retries) | Ticket blocked, failing commands posted in Linear. |
 | Same failure, unchanged worktree | preset (`sameFailure`) | 3 in a row | Ticket blocked with the cause « Loop », failing commands posted in Linear. |
 | Retries on red CI | `limits.ci_fix_attempts` | 2 | The next red CI does not relaunch `fix-ci`: ticket blocked, failing checks posted in Linear. Reset by a green CI (which also lifts this block), another PR, or a human relaunch of the blocked ticket. |
-| Review rounds | `limits.review_rounds` | 5 | The `review` skill stops and writes its summary. |
 | Daily budget | `limits.perDayUsd` (`config.yaml`) | none | No run starts until the next day (UTC); one comment per ticket per day. |
 | Duration of a `verify` / `setup` command | fixed | 15 min | Command counted as failed (`timeout`). |
 | Duration of any other subprocess of the daemon (git, `gh`, the container engine) | `DEFAULT_EXEC_TIMEOUT_MS` (`src/adapters/exec.ts`), unless the caller names its own | 30 min | Killed with its whole process group (POSIX), code 124 (ORC-344): the effect that ran it fails and is tried again, its ticket freed. |

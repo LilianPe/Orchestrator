@@ -18,7 +18,7 @@ export const ASK_TOKENS = { input: 100, output: 50, cacheRead: 2_000, cacheCreat
 /**
  * The first run of the factory on fake adapters (ORC-235): a delegation and a question come in
  * through the Linear webhook (acked as the daemon acks them), the dev run, the question's ask run,
- * the AI review, the merge and the learn run. Every agent announces a result in its text that the
+ * the AI review (its two lenses), the merge and the learn run. Every agent announces a result in its text that the
  * measures must never read.
  */
 export async function firstRun(h: Harness): Promise<TicketMeasures> {
@@ -58,9 +58,9 @@ export async function firstRun(h: Harness): Promise<TicketMeasures> {
 /** What the first run writes, measure by measure: those with a source are filled, the others empty. */
 export function expectFirstRunMeasures(m: TicketMeasures): void {
   expect(m.mergedAt).toEqual(expect.any(Number));
-  // Dev, ask, review and learn: the learn run reports no usage, and is counted apart.
-  expect(m.attempts).toBe(4);
-  expect(m.attemptsWithoutTokens).toBe(1);
+  // Dev, ask, the review's two lenses (ORC-183) and learn: the second lens and the learn run report no usage, and are counted apart.
+  expect(m.attempts).toBe(5);
+  expect(m.attemptsWithoutTokens).toBe(2);
   expect(m.tokens).toEqual([DEV_TOKENS, ASK_TOKENS, REVIEW_TOKENS].reduce(addTokens, NO_TOKENS));
   expect(m.firstTry).toBe(true);
   expect(m.reworks).toEqual([]);

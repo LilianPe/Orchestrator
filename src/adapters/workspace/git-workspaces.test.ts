@@ -271,6 +271,52 @@ describe('GitWorkspaces', () => {
     expect(git(w.path, 'rev-parse', 'HEAD')).toBe(pushed);
   });
 
+  describe('published: what an AI review reads (ORC-183)', () => {
+    /** The ticket's branch on the forge: a commit the factory published, then a later one (a human's push). */
+    function published() {
+      const fx = fixtureRepo();
+      git(fx.repo, 'checkout', '-q', '-b', 'factory/rel-1-export-csv');
+      mkdirSync(join(fx.repo, 'src'));
+      writeFileSync(join(fx.repo, 'src', 'export.ts'), 'export const csv = 1;\n');
+      git(fx.repo, 'add', '.');
+      git(fx.repo, 'commit', '-q', '-m', 'the agent');
+      const sha = git(fx.repo, 'rev-parse', 'HEAD');
+      writeFileSync(join(fx.repo, 'later.ts'), 'pushed later\n');
+      git(fx.repo, 'add', '.');
+      git(fx.repo, 'commit', '-q', '-m', 'later');
+      git(fx.repo, 'push', '-q', 'origin', 'factory/rel-1-export-csv');
+      git(fx.repo, 'checkout', '-q', 'main');
+      git(fx.repo, 'branch', '-q', '-D', 'factory/rel-1-export-csv');
+      return { ...fx, sha };
+    }
+
+    it('is a fresh clone of the published commit, detached, never the ticket worktree, with its diff against the trunk; gone once released', async () => {
+      const { repo, root, sha } = published();
+      const ws = new GitWorkspaces({ root });
+      const ticket = await ws.prepare(req(repo));
+      const w = await ws.prepare(req(repo, { kind: 'published', sha }));
+      expect(w.path).toBe(join(root, 'p', '_trunk', 'abcdef123456'));
+      expect(w.path).not.toBe(ticket.path);
+      expect(git(w.path, 'rev-parse', 'HEAD')).toBe(sha);
+      expect(git(w.path, 'status', '--porcelain', '--branch')).toBe('## HEAD (no branch)');
+      expect(existsSync(join(w.path, 'later.ts'))).toBe(false);
+      expect(w.diff).toContain('+++ b/src/export.ts');
+      expect(w.diff).toContain('+export const csv = 1;');
+      expect(w.diff).not.toContain('later.ts');
+      await ws.release('p', 'abcdef123456');
+      expect(existsSync(w.path)).toBe(false);
+      expect(existsSync(ticket.path)).toBe(true);
+    });
+
+    it('refuses without a commit, or on one the forge does not have', async () => {
+      const { repo, root } = published();
+      const ws = new GitWorkspaces({ root });
+      await expect(ws.prepare(req(repo, { kind: 'published' }))).rejects.toThrow(/no published commit/);
+      await expect(ws.prepare(req(repo, { kind: 'published', sha: 'f'.repeat(40) }))).rejects.toThrow();
+      expect(existsSync(join(root, 'p', '_trunk', 'abcdef123456'))).toBe(false);
+    });
+  });
+
   it('gives each question its own trunk: what one left is not there for the next', async () => {
     const { repo, root } = fixtureRepo();
     const ws = new GitWorkspaces({ root });

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { Condition } from '../core/conditions.js';
 import type { EventType, InputKind, LogicalState, QueueName } from '../core/types.js';
+import type { NetworkLevel } from '../adapters/sandbox/types.js';
 import type { Effort } from '../presets/preset.js';
 
 const logical = z.enum(['todo', 'dev', 'human_review', 'ai_review', 'ready', 'done']);
@@ -30,9 +31,10 @@ export const rawJobSchema = z
     step: z.string().optional(),
     queue: z.enum(['dev', 'questions']).optional(),
     model: z.string().optional(),
-    workspace: z.enum(['worktree', 'trunk-readonly', 'knowledge']).optional(),
+    workspace: z.enum(['worktree', 'trunk-readonly', 'knowledge', 'published']).optional(),
     session: z.enum(['new', 'resume']).optional(),
     skill: z.string().optional(),
+    lens: z.enum(['correctness', 'security']).optional(),
     input: z.enum(['feedback', 'ci_failures', 'thread', 'verify_failures']).optional(),
     verify: z.array(z.string()).optional(),
     pickup: z.boolean().optional(),
@@ -43,7 +45,7 @@ export const rawJobSchema = z
     limits: rawLimits.optional(),
     on_start: z.object({ move: logical.optional() }).strict().optional(),
     on_success: z
-      .object({ move: logical.optional(), post: z.enum(['summary', 'reply', 'synthesis']).optional(), run: z.string().optional() })
+      .object({ move: logical.optional(), post: z.enum(['summary', 'reply', 'synthesis', 'review']).optional(), run: z.string().optional() })
       .strict()
       .optional(),
   })
@@ -147,9 +149,17 @@ export interface JobSpec {
   step?: string;
   /** `claude --effort`, of the preset step the job names (`step`, ORC-136). Absent from the jobs out of the preset and from versions frozen before it: the CLI's default. */
   effort?: Effort;
-  workspace: 'worktree' | 'trunk-readonly' | 'knowledge';
+  /**
+   * `published`: a fresh clone of the commit the factory published, detached, gone with the run (ORC-183): what an AI review
+   * reads, never the agent's worktree. Only a job of the `review` step has it.
+   */
+  workspace: 'worktree' | 'trunk-readonly' | 'knowledge' | 'published';
   session: 'new' | 'resume';
   skill: string;
+  /** The angle of an AI review job (ORC-183): correctness and the spec, or security and the tests. Only a job of the `review` step has one. */
+  lens?: ReviewLens;
+  /** The network level of the job's preset step (ORC-183), narrowed by the repository's at the launch. Absent from the jobs out of the preset. */
+  network?: NetworkLevel;
   input?: InputKind;
   verify: string[];
   /**
@@ -175,8 +185,11 @@ export interface JobSpec {
   limits: RunLimits;
   onStart: { move?: LogicalState };
   /** `run`: the job started once this one succeeded (ORC-123: `tests` then `dev`). */
-  onSuccess: { move?: LogicalState; post?: 'summary' | 'reply' | 'synthesis'; run?: string };
+  /** `post: review`: the findings of the ticket's AI review lenses, on the published commit, as a GitHub review and `factory/review` (ORC-183). */
+  onSuccess: { move?: LogicalState; post?: 'summary' | 'reply' | 'synthesis' | 'review'; run?: string };
 }
+
+export type ReviewLens = 'correctness' | 'security';
 
 export interface Workflow {
   version: 1;

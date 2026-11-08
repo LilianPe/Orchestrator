@@ -22,6 +22,27 @@ export const intakeAssessmentSchema = z
 const item = z.string().max(OUTPUT_LIMITS.item);
 const list = z.array(item).max(OUTPUT_LIMITS.items);
 
+/** How a review lens weighs a finding (ORC-183): only a `blocking` one fails `factory/review`. */
+export const FINDING_SEVERITIES = ['blocking', 'minor', 'out_of_scope'] as const;
+export type FindingSeverity = (typeof FINDING_SEVERITIES)[number];
+
+/**
+ * A finding of a review lens (ORC-183), on a line of the commit it read. `fact`: the id of the Claim Ledger fact it violates,
+ * once the reviewers get the facts of the diff's paths as a checklist (ORC-254), to measure their misses (ORC-229).
+ */
+export const findingSchema = z
+  .object({
+    file: item.min(1),
+    line: z.number().int().positive(),
+    severity: z.enum(FINDING_SEVERITIES),
+    explanation: z.string().min(1).max(OUTPUT_LIMITS.field),
+    suggestion: z.string().max(OUTPUT_LIMITS.field),
+    fact: item.min(1).optional(),
+  })
+  .strict();
+
+export type Finding = z.infer<typeof findingSchema>;
+
 /**
  * The comment of a build's end, in the factory's order and words (ORC-289, ORC-214): what the `OutputPolicy` publishes of a
  * result, never the agent's last text. Pure: the schema measures it, the policy posts it.
@@ -60,6 +81,8 @@ export const agentOutputSchema = z
     visual_scenario: z.object({ url: z.string().min(1), steps: z.array(z.string()) }).strict().optional(),
     /** The `intake` step's assessment (ORC-206); its guard reads nothing else. */
     intake: intakeAssessmentSchema.optional(),
+    /** A review lens's findings (ORC-183), an empty list when it found nothing: the factory publishes them, never its summary alone. */
+    findings: z.array(findingSchema).max(OUTPUT_LIMITS.findings).optional(),
   })
   .strict()
   .superRefine((o, ctx) => {

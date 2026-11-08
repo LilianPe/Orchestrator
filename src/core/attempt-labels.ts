@@ -92,6 +92,7 @@ export function promptTemplate(p: PromptInput): string {
     prUrl: p.prUrl && '<PR>',
     promptContext: p.promptContext && '<CONTEXTE>',
     conventions: p.conventions && '<CONVENTIONS>',
+    commit: p.commit && '<COMMIT>',
     input: p.input && { kind: p.input.kind, text: '<ENTREE>' },
   });
 }

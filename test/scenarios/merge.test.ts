@@ -47,17 +47,24 @@ describe('Done by a human, merge by the factory (ORC-148)', () => {
     expect(lastMove(h)).toBe('Human Review');
   });
 
-  it('merges nothing after a push since the review: the new commits go through the AI review, then the next Done merges them', async () => {
+  it('merges nothing after a push since the review: the agent takes it in, the AI review reads it once published, then the next Done merges it (ORC-183)', async () => {
     const h = await inHumanReview();
     h.forge.setPr(BRANCH, { ...PR, state: 'OPEN', headSha: 'def456', checks: 'pass', failedChecks: [] });
-    // The review's first step brings the push into its worktree (`git merge --ff-only`): it ends its run on def456.
-    h.workspaces.heads.set(WORKTREE, 'def456');
-    h.runner.enqueue({ events: [{ kind: 'init', sessionId: 'y' }, { kind: 'text', text: 'Rien à redire.' }] });
     await h.send('status.changed', { from: 'human_review', to: 'done' }, 'REL-1', { actor: 'user-lilian' });
     expect(h.forge.merges).toEqual([]);
-    expect(comments(h).some((c) => /push since the review.*go through the AI review again/.test(c))).toBe(true);
-    expect((await h.store.getRun(h.runner.requests.at(-1)!.runId))?.job).toBe('review');
-    // The review done, the factory shows the pushed head in Human Review: that commit is now the reviewed one.
+    // The AI review reads only what the factory published: the push goes back to the human, with the way to a merge.
+    expect(comments(h).at(-1)).toMatch(/push since the review.*reads only the commits the factory published/);
+    expect(lastMove(h)).toBe('Human Review');
+    expect(h.runner.requests).toHaveLength(1);
+    expect((await h.ticket()).reviewSha).toBe('abc123');
+    // A reply: the agent takes the push in (its feedback skill), its worktree ends on def456, which the factory verifies and publishes.
+    h.workspaces.heads.set(WORKTREE, 'def456');
+    await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'prends mon push', author: 'Lilian' }, 'REL-1', { actor: 'user-lilian' });
+    await h.advance(180_000);
+    expect((await h.ticket()).verifiedSha).toBe('def456');
+    // Then the move to AI Review: the review reads the published def456, and shows it in Human Review.
+    await h.send('status.changed', { from: 'human_review', to: 'ai_review' }, 'REL-1', { actor: 'user-lilian' });
+    expect(h.workspaces.prepared.filter((w) => w.kind === 'published').map((w) => w.sha)).toEqual(['def456', 'def456']);
     expect(lastMove(h)).toBe('Human Review');
     expect((await h.ticket()).reviewSha).toBe('def456');
     await h.send('status.changed', { from: 'human_review', to: 'done' }, 'REL-1', { actor: 'user-lilian' });
@@ -65,30 +72,34 @@ describe('Done by a human, merge by the factory (ORC-148)', () => {
   });
 
   it('the late webhook of the factory\'s move to AI Review (after its 60 s echo) starts no second review', async () => {
-    const h = await inHumanReview();
-    h.forge.setPr(BRANCH, { ...PR, state: 'OPEN', headSha: 'def456', checks: 'pass', failedChecks: [] });
-    h.runner.enqueue({ events: [{ kind: 'init', sessionId: 'y' }], hold: true });
-    await h.send('status.changed', { from: 'human_review', to: 'done' }, 'REL-1', { actor: 'user-lilian' });
+    // The factory moves the ticket to AI Review at the end of `dev` (ORC-183); its first lens is at work.
+    const h = createHarness({ aiReview: true, authz: { githubLogins: { 'user-lilian': 'lilian-gh' } } });
+    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Exporter les audits en CSV depuis la liste des audits.' });
+    h.tracker.setTeamMembers('REL', ['user-lilian']);
+    h.workspaces.heads.set(WORKTREE, 'abc123');
+    h.runner.enqueue({ events: [{ kind: 'init', sessionId: 'x' }] }, { hold: true });
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' }, 'REL-1', { actor: 'user-lilian' });
+    expect(lastMove(h)).toBe('AI Review');
     const runs = h.runner.requests.length;
+    expect(runs).toBe(2);
     await h.advance(61_000);
-    await h.send('status.changed', { from: 'done', to: 'ai_review' }, 'REL-1', { actor: 'user-lilian' });
+    await h.send('status.changed', { from: 'dev', to: 'ai_review' }, 'REL-1', { actor: 'user-lilian' });
     expect(h.runner.requests).toHaveLength(runs);
     expect(await h.store.listQueue()).toEqual([]);
     expect((await h.ticket()).pendingJob).toBeUndefined();
   });
 
-  it('a push between the factory\'s reading and its merge, refused by GitHub, also goes through the AI review', async () => {
+  it('a push between the factory\'s reading and its merge, refused by GitHub, is a push since the review too', async () => {
     const h = await inHumanReview();
     const shown = await h.forge.findPr('', BRANCH);
     h.forge.setPr(BRANCH, { ...PR, state: 'OPEN', headSha: 'def456', checks: 'pass', failedChecks: [] });
     // The factory still reads the reviewed head; GitHub, given that head, refuses the merge (409).
     vi.spyOn(h.forge, 'findPr').mockResolvedValueOnce(shown);
-    h.workspaces.heads.set(WORKTREE, 'def456');
     await h.send('status.changed', { from: 'human_review', to: 'done' }, 'REL-1', { actor: 'user-lilian' });
     expect(h.forge.merges).toEqual([]);
-    expect((await h.store.getRun(h.runner.requests.at(-1)!.runId))?.job).toBe('review');
-    expect(comments(h).some((c) => /push since the review.*go through the AI review again/.test(c))).toBe(true);
-    expect((await h.ticket()).reviewSha).toBe('def456');
+    expect(comments(h).some((c) => /push since the review.*reads only the commits the factory published/.test(c))).toBe(true);
+    expect(h.runner.requests).toHaveLength(1);
+    expect((await h.ticket()).reviewSha).toBe('abc123');
   });
 
   it('a review that ended on another commit than the PR\'s head: its publication is refused, nothing written over and nothing merged (ORC-125)', async () => {
@@ -153,7 +164,7 @@ describe('Done by a human, merge by the factory (ORC-148)', () => {
     expect(lastMove(h)).toBe('Human Review');
   });
 
-  it('a push-since-review refusal saved before ORC-331, in French, replays as a moved head: the new commits go through the AI review', async () => {
+  it('a push-since-review refusal saved before ORC-331, in French, replays as a moved head: a push since the review', async () => {
     let failures = 1;
     const h = await inHumanReview({
       effectRetry: { attempts: 6, baseMs: 1, capMs: 1 },
@@ -177,11 +188,10 @@ describe('Done by a human, merge by the factory (ORC-148)', () => {
     for (let i = 0; i < 6; i++) await h.advance(10);
     expect(failures).toBe(0);
     expect(h.forge.merges).toEqual([]);
-    expect((await h.store.getRun(h.runner.requests.at(-1)!.runId))?.job).toBe('review');
-    expect((await h.ticket()).reviewSha).toBe('def456');
+    expect(comments(h).some((c) => /push since the review.*reads only the commits the factory published/.test(c))).toBe(true);
   });
 
-  it('a refusal saved since ORC-345 replays by its flag, whatever its sentence says: a reworded moved head goes through the AI review', async () => {
+  it('a refusal saved since ORC-345 replays by its flag, whatever its sentence says: a reworded moved head is a push since the review', async () => {
     let failures = 1;
     const saved: Record<string, string> = {};
     const h = await inHumanReview({
@@ -212,7 +222,7 @@ describe('Done by a human, merge by the factory (ORC-148)', () => {
     // Saved with the flag the shell saw, not a sentence to compare.
     expect(Object.values(saved).map((v) => JSON.parse(v) as unknown)).toEqual([{ reason: 'the branch received a push since the review', headMoved: true }]);
     expect(h.forge.merges).toEqual([]);
-    expect((await h.store.getRun(h.runner.requests.at(-1)!.runId))?.job).toBe('review');
+    expect(comments(h).some((c) => /push since the review.*reads only the commits the factory published/.test(c))).toBe(true);
   });
 
   it('a PR merged on GitHub meanwhile, on another head, is no refusal: the ticket stays in Done', async () => {

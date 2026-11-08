@@ -174,7 +174,8 @@ describe('the human inbox (ORC-180)', () => {
   it('a review does not read them: they wait for the agent that implements', async () => {
     const h = createHarness();
     await inReview(h);
-    h.runner.enqueue({ hold: true, events: [{ kind: 'text', text: 'Synthèse.' }], submit: false }, { events: [{ kind: 'text', text: 'Pris en compte.' }] });
+    // The review's two lenses (ORC-183), then the implementer.
+    h.runner.enqueue({ hold: true }, {}, { events: [{ kind: 'text', text: 'Pris en compte.' }] });
     await h.send('status.changed', { from: 'human_review', to: 'ai_review' });
     const review = (await h.ticket()).activeRunId!;
     expect(h.runner.requests[1]!.prompt.startsWith('/factory:review\n')).toBe(true);
@@ -182,9 +183,11 @@ describe('the human inbox (ORC-180)', () => {
     expect(h.runner.requests[1]!.prompt).not.toContain('corrige le tri');
     h.runner.release(review);
     await h.orch.drained();
-    expect(h.runner.requests).toHaveLength(3);
-    expect(h.runner.requests[2]!.prompt.startsWith('/factory:feedback\n')).toBe(true);
-    expect(h.runner.requests[2]!.prompt).toContain('corrige le tri');
+    expect(h.runner.requests).toHaveLength(4);
+    expect(h.runner.requests[2]!.prompt.startsWith('/factory:review\n')).toBe(true);
+    expect(h.runner.requests[2]!.prompt).not.toContain('corrige le tri');
+    expect(h.runner.requests[3]!.prompt.startsWith('/factory:feedback\n')).toBe(true);
+    expect(h.runner.requests[3]!.prompt).toContain('corrige le tri');
   });
 
   it('with no agent at work, replies regrouped over 3 minutes resume it once, and a restart loses nothing', async () => {

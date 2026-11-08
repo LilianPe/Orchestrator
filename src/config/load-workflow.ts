@@ -97,13 +97,17 @@ const agentStep = (name: string): Extract<Step, { maxTurns: number }> | undefine
  * The job's effort and caps. Its step sets the effort, `factory.yml` may change it; the step's turns are a ceiling that a
  * project or `factory.yml` only lowers, as a step only narrows the network. A job out of the preset keeps its own limits.
  */
-function stepFields(job: string, raw: RawJob, own: RunLimits, settings: StepSettings): Pick<JobSpec, 'effort' | 'limits'> {
+function stepFields(job: string, raw: RawJob, own: RunLimits, settings: StepSettings): Pick<JobSpec, 'effort' | 'limits' | 'network'> {
   const name = raw.step;
+  // Read by the AI review only (ORC-183): the rest of the review's contract is the preset's step.
+  if (name !== 'review' && raw.lens) throw new WorkflowError(`jobs.${job}.lens: only a job of the review step has one`);
+  if ((name === 'review') !== (raw.workspace === 'published')) throw new WorkflowError(`jobs.${job}.workspace: published is the AI review's, and only a job of the review step has it`);
   if (name === undefined) return { ...(settings.effort?.default ? { effort: settings.effort.default } : {}), limits: own };
   const step = agentStep(name);
   if (!step) throw new WorkflowError(`jobs.${job}.step: ${name} is not an agent step of ${preset.name}`);
   const tokens = settings.budgets?.perStepTokens?.[name];
   return {
+    network: step.network,
     effort: settings.effort?.perStep?.[name] ?? step.effort,
     limits: { ...own, turns: Math.min(own.turns, step.maxTurns, settings.budgets?.maxTurns?.[name] ?? Infinity), ...(tokens !== undefined ? { tokens } : {}) },
   };
@@ -148,6 +152,7 @@ function buildJob(name: string, raw: RawJob, perRun: RunLimits, settings: StepSe
     workspace: need('workspace'),
     session: raw.session ?? 'new',
     skill: need('skill'),
+    ...(raw.lens ? { lens: raw.lens } : {}),
     input: raw.input,
     verify: raw.verify ?? [],
     ...(raw.repo_checks ? { repoChecks: true } : {}),

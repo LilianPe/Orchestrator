@@ -1,5 +1,5 @@
 import { REFREEZE, type FrozenTests } from '../checks/freeze.js';
-import type { JobSpec, Rule, Workflow } from '../config/workflow-schema.js';
+import type { JobSpec, ReviewLens, Rule, Workflow } from '../config/workflow-schema.js';
 import { allowed, DEFAULT_MATRIX, refusalMessage, type AuthzAction, type AuthzMatrix, type Channel } from './authz.js';
 import { evalCondition } from './conditions.js';
 import { deadLetterReason, deadLetterTried, heldMessage, isRefusedNotice, liftDeadLetterBlock, REPAIR_LABELS, repairedEvent } from './dead-letter.js';
@@ -79,7 +79,8 @@ function stop(out: Decision, workflow: Workflow, reason = STOPPED, body = `Stopp
 /** The job's `on_success`, its `run` included (ORC-123: `tests` starts `dev`). */
 function success(out: Decision, at: { event: FactoryEvent; ticket: TicketState | undefined; workflow: Workflow }, job: JobSpec, runId: string, output?: AgentOutput): Decision {
   if (job.onSuccess.move) out.effects.push({ kind: 'move', to: job.onSuccess.move });
-  if (job.onSuccess.post) out.effects.push({ kind: 'post_output', style: job.onSuccess.post, runId, ...(output ? { output } : {}) });
+  // `review`: the findings, published by the `review` effect (`reviewEnd`); nothing of the lens's summary goes to Linear.
+  if (job.onSuccess.post && job.onSuccess.post !== 'review') out.effects.push({ kind: 'post_output', style: job.onSuccess.post, runId, ...(output ? { output } : {}) });
   const next = job.onSuccess.run ? at.workflow.jobs[job.onSuccess.run] : undefined;
   if (next) startRun(out, at.event, at.ticket, next, { input: next.input });
   else handOver(out, at, job);
@@ -130,6 +131,22 @@ function intakeEnd(out: Decision, at: { event: FactoryEvent; ticket: TicketState
     tried: [`Read the ticket (${job.name}): not complete enough to start.`, ...checks],
     question: a.complete ? 'Can you complete the ticket, then reply here?' : a.missing.join(' '),
   });
+}
+
+/**
+ * The end of an AI review lens (ORC-183): its findings kept on the published commit it read (`verifiedSha`, what its
+ * launch cloned), and published with the other lens's by the job whose `on_success` posts the review; then its `on_success`.
+ * A lens that handed back no findings list, or a ticket with no published commit, is blocked: a silent review is no review.
+ */
+function reviewEnd(out: Decision, at: { event: FactoryEvent; ticket: TicketState | undefined; workflow: Workflow }, job: JobSpec & { lens: ReviewLens }, p: EventPayloads['run.finished']): Decision {
+  const findings = p.output?.findings;
+  const sha = at.ticket?.verifiedSha;
+  if (!findings || !sha) {
+    const reason = sha ? `The AI review ${job.name} returned no findings list.` : `The AI review ${job.name} has no published commit to review.`;
+    return block(out, at.workflow, { kind: 'failed', reason, body: `${reason} Reply in this thread and I will resume.`, job: job.name, tried: [`Started the run ${job.name} (${job.lens} lens).`] });
+  }
+  out.effects.push({ kind: 'review', runId: p.runId, lens: job.lens, sha, findings, ...(job.onSuccess.post === 'review' ? { publish: true as const } : {}) });
+  return success(out, at, job, p.runId, p.output);
 }
 
 /**
@@ -882,14 +899,16 @@ function mergeRefused(out: Decision, event: FactoryEvent<'pr.merge_refused'>, ti
     out.effects.push({ kind: 'comment', body: refused });
     return out;
   }
-  return event.payload.headMoved ? backThroughAiReview(out, event, ticket, workflow, refused) : backToReview(out, refused);
+  return event.payload.headMoved ? backThroughAiReview(out, event, ticket, workflow, refused, { pushed: true }) : backToReview(out, refused);
 }
 
 /**
  * New commits go through the AI review again, whose `verify` finds them green or not, and which shows the head in Human
- * Review. A blocked ticket (it waits for a human) or a workflow with no AI review goes back to Human Review.
+ * Review. A blocked ticket (it waits for a human) or a workflow with no AI review goes back to Human Review. So does a push
+ * since the review (`pushed`) when the review reads only what the factory published (ORC-183): it can neither take the push
+ * in nor verify it, which the implementer's feedback run does.
  */
-function backThroughAiReview(out: Decision, event: FactoryEvent, ticket: TicketState, workflow: Workflow, refused: string): Decision {
+function backThroughAiReview(out: Decision, event: FactoryEvent, ticket: TicketState, workflow: Workflow, refused: string, o: { pushed?: true } = {}): Decision {
   // The rule a human's move from Done to AI Review would apply, read on the ticket as it would then be.
   const moved: FactoryEvent<'status.changed'> = { ...event, type: 'status.changed', payload: { from: 'done', to: 'ai_review' } } as FactoryEvent<'status.changed'>;
   const inAiReview = { ...ticket, logical: 'ai_review' as const };
@@ -897,11 +916,15 @@ function backThroughAiReview(out: Decision, event: FactoryEvent, ticket: TicketS
   const run = (workflow.on['status.changed'] ?? []).find((r) => ruleAllowed(r, moved, inAiReview, workflow) && ruleMatches(r, moved, inAiReview, ticket.activeJob))?.run;
   const job = run && workflow.states.ai_review ? workflow.jobs[run] : undefined;
   if (!job || ticket.blocked) return backToReview(out, refused);
+  if (o.pushed && job.workspace === 'published') return backToReview(out, `${refused} ${PUSH_NOT_REVIEWED}`);
   out.trace.push(`not merged: ${refused}, back to the AI review`);
   out.effects.push({ kind: 'move', to: 'ai_review' }, { kind: 'comment', body: `${refused} The new commits go through the AI review again.` });
   startRun(out, event, ticket, job, { input: job.input });
   return out;
 }
+
+/** A push since the review, which today's AI review never reads (ORC-183): how its commits reach a merge. */
+export const PUSH_NOT_REVIEWED = 'The AI review reads only the commits the factory published, and these were pushed since: reply in this thread so that the agent takes them in and the factory verifies them, then move the ticket to AI Review to have them reviewed.';
 
 const FENCED = 'fenced: ';
 
@@ -1213,6 +1236,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       if (event.payload.outcome === 'success' && ticket?.blocked && job.queue === 'dev') return out;
       if (outcome === 'success') {
         if (job.step === 'intake') return intakeEnd(out, { event, ticket, workflow }, job, event.payload);
+        if (job.lens) return reviewEnd(out, { event, ticket, workflow }, { ...job, lens: job.lens }, event.payload);
         if (job.verify.length === 0 && !job.repoChecks && !job.red && !goesThroughFreeze(ticket, job)) return success(out, { event, ticket, workflow }, job, runId, output);
         out.events.push({ type: 'verify.started', runId });
         out.effects.push({ kind: 'run_verify', runId, job: jobName, ...(output ? { output } : {}) });

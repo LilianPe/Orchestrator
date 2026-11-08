@@ -18,12 +18,16 @@ export class FakeWorkspaces implements WorkspaceManager {
   private made = new Set<string>();
   private trunks = new Set<string>();
 
+  /** The diff a `published` workspace gives of each commit, as a test sets it (ORC-183); a one-file diff by default. */
+  diffs = new Map<string, string>();
+
   async prepare(req: WorkspaceRequest): Promise<Workspace> {
     this.prepared.push(req);
-    if (req.kind === 'trunk-readonly') {
+    if (req.kind === 'trunk-readonly' || req.kind === 'published') {
+      if (req.kind === 'published' && !req.sha) throw new Error('An AI review needs the published commit, and there is no published commit to review.');
       const trunk = `/tmp/factory-fake/${req.projectId}/_trunk/${req.runId}`;
       this.trunks.add(trunk);
-      return { path: trunk };
+      return req.kind === 'published' ? { path: trunk, diff: this.diffs.get(req.sha!) ?? 'diff --git a/src/export.ts b/src/export.ts\n+export const csv = 1;' } : { path: trunk };
     }
     if (req.kind === 'knowledge') return { path: `/tmp/factory-fake/_kb/${req.runId}` };
     const path = `/tmp/factory-fake/${req.projectId}/${req.ticketId}`;
