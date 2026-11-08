@@ -48,7 +48,7 @@ describe('the golden tickets replayed on fake runners (ORC-236)', () => {
     expect(spawned).toEqual([]);
     expect(fetched).not.toHaveBeenCalled();
     for (const t of report.tickets) {
-      for (const p of t.passes) expect(p).toMatchObject({ verdict: 'pr', pr: { title: expect.stringContaining(t.ticket) as string } });
+      for (const p of t.passes) expect(p).toMatchObject({ verdict: 'pr', pr: { title: expect.stringContaining(t.ticket) } });
     }
   });
 
