@@ -26,7 +26,7 @@ import { LinearTracker } from '../adapters/tracker/linear/tracker.js';
 import { isUsableWebhookSecret } from '../adapters/tracker/linear/webhook.js';
 import { GitWorkspaces } from '../adapters/workspace/git-workspaces.js';
 import { saveAgentOutput, type AgentOutput } from '../core/agent-output.js';
-import { activeClaudeToken, loadFactoryYml, stepSettings } from '../config/factory-yml.js';
+import { activeClaudeToken, claudeToken as checkedClaudeToken, loadFactoryYml, stepSettings } from '../config/factory-yml.js';
 import { makeOriginUrl, makeRepoConfig, makeRepoVariables } from './repo-variables.js';
 import { daemonSecretValues, effectiveInstance, homePaths, linearSettings, saveLinearTokens } from '../config/instance.js';
 import { githubWebhookSecret, resolveGithubApp } from '../config/github-app.js';
@@ -156,7 +156,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     // The chosen account replaces a host run's login (ORC-211). The sandboxes' token, resolved once for the runner
     // and the proxy (ORC-337): the proxy sets it on their model calls, which hold a placeholder alone.
     const claudeAccount = activeClaudeToken(yml);
-    const claudeToken = claudeAccount ?? env['CLAUDE_CODE_OAUTH_TOKEN'];
+    const claudeToken = claudeAccount ?? checkedClaudeToken(env['CLAUDE_CODE_OAUTH_TOKEN'], 'CLAUDE_CODE_OAUTH_TOKEN');
     const claudeTokenOf = () => claudeToken;
     const egress: Egress = egressControl ? new EgressClient(egressControl, { log, claudeToken: claudeTokenOf }) : new EgressProxy({
       dir: paths.network,

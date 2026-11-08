@@ -62,8 +62,10 @@ interface Run {
   claudeToken: string | undefined;
   /** Its model calls held, read or being sent on (ORC-337), against `CLAUDE_READS_PER_RUN`. */
   reading: number;
-  /** The `anthropic-beta` values dropped already: each is journaled once. */
+  /** The `anthropic-beta` values dropped already: each is noted once, `DROPPED_BETAS_LISTED` at most. */
   droppedBetas: Set<string>;
+  /** Past that bound, noted once. */
+  betasUnlisted: boolean;
   /** Listening once it resolves; a concurrent open waits on it. */
   ready: Promise<void>;
   /** The run's socket: HTTP proxy protocol. */
@@ -78,6 +80,13 @@ interface Run {
   drained?: () => void;
   closed: boolean;
 }
+
+/** The dropped `anthropic-beta` values a run's journal lists (ORC-337). */
+const DROPPED_BETAS_LISTED = 64;
+
+/** What a cut call's client may still send before its socket goes, so that it reads the answer rather than a reset (ORC-337). */
+const CUT_DRAIN_BYTES = 1024 * 1024;
+const CUT_DRAIN_MS = 5000;
 
 /** Nothing reached through the proxy is the host's network, its engine's bridge or a cloud metadata service. */
 const PRIVATE = new BlockList();
@@ -199,7 +208,7 @@ export class EgressProxy {
     mkdirSync(this.o.dir, { recursive: true, mode: 0o700 });
     const journal = createWriteStream(journalPath, { flags: 'a' });
     journal.on('error', (err) => this.o.log?.(`egress: journal of ${runId} not written: ${err.message}`));
-    const run: Run = { policy, claudeToken, reading: 0, droppedBetas: new Set(), ready: Promise.resolve(), server: createServer(), mitm: createServer(), sockets: new Set(), journal, inflight: 0, closed: false };
+    const run: Run = { policy, claudeToken, reading: 0, droppedBetas: new Set(), betasUnlisted: false, ready: Promise.resolve(), server: createServer(), mitm: createServer(), sockets: new Set(), journal, inflight: 0, closed: false };
     this.runs.set(runId, run);
     run.ready = this.listen(run, path).catch((err: unknown) => {
       this.runs.delete(runId);
@@ -372,10 +381,12 @@ export class EgressProxy {
     const path = req.url ?? '/';
     const v = check(t.host, allowRequest(run.policy, t.host, method, path));
     if (!v.ok) return this.refuse(run, res, method, t.host, path, v.reason);
-    this.readClaudeBody(run, req, res, method, t.host, path, (body, sent) => {
-      const out = httpsRequest({ ...this.tlsTo(t.host, t.port), method, path, headers: { ...this.upstreamHeaders(run, t.host, req, method, path, body), host: authority(t.host, t.port, 443) } });
-      this.relay(run, req, res, out, method, t.host, path, body, sent);
-    });
+    this.readClaudeBody(run, req, res, method, t.host, path, (body, sent) =>
+      this.guarded(run, res, method, t.host, path, sent, () => {
+        const out = httpsRequest({ ...this.tlsTo(t.host, t.port), method, path, headers: { ...this.upstreamHeaders(run, t.host, req, method, path, body), host: authority(t.host, t.port, 443) } });
+        this.relay(run, req, res, out, method, t.host, path, body, sent);
+      }),
+    );
   }
 
   /** A plain HTTP request (`GET http://host/path`): the agent API, or the internet in HTTPS below full. */
@@ -397,15 +408,33 @@ export class EgressProxy {
       ? agentVerdict(run.policy)
       : check(host, port === 80 || run.policy.level === 'full' ? allowRequest(run.policy, host, method, path) : { ok: false, reason: `port ${port} refused` });
     if (!v.ok) return this.refuse(run, res, method, host, path, v.reason);
-    this.readClaudeBody(run, req, res, method, host, path, (body, sent) => {
-      // Below full the port is 80 (checked above), so the Host is the bare host either way.
-      const opts = { method, path, headers: { ...this.upstreamHeaders(run, host, req, method, path, body), host: authority(host, port, 80) } };
-      let out: ClientRequest;
-      if (agent) out = httpRequest({ ...opts, ...agent });
-      else if (run.policy.level === 'full') out = httpRequest({ ...opts, host, port, lookup: publicLookup });
-      else out = httpsRequest({ ...opts, ...this.tlsTo(host, 443) });
-      this.relay(run, req, res, out, method, host, path, body, sent);
-    });
+    this.readClaudeBody(run, req, res, method, host, path, (body, sent) =>
+      this.guarded(run, res, method, host, path, sent, () => {
+        // Below full the port is 80 (checked above), so the Host is the bare host either way.
+        const opts = { method, path, headers: { ...this.upstreamHeaders(run, host, req, method, path, body), host: authority(host, port, 80) } };
+        let out: ClientRequest;
+        if (agent) out = httpRequest({ ...opts, ...agent });
+        else if (run.policy.level === 'full') out = httpRequest({ ...opts, host, port, lookup: publicLookup });
+        else out = httpsRequest({ ...opts, ...this.tlsTo(host, 443) });
+        this.relay(run, req, res, out, method, host, path, body, sent);
+      }),
+    );
+  }
+
+  /**
+   * Sends a checked request on; whatever throws on the way (a header Node refuses, ORC-337) is answered 502 and
+   * journaled, never thrown out of the server, which would take the proxy down, and the daemon with it outside compose.
+   */
+  private guarded(run: Run, res: ServerResponse, method: string, host: string, path: string, sent: (() => void) | undefined, go: () => void): void {
+    try {
+      go();
+    } catch (err) {
+      sent?.();
+      const reason = `not sent on: ${err instanceof Error ? err.message : String(err)}`.slice(0, 300);
+      this.journal(run, { method, host, path: pathOf(path), ok: false, reason });
+      if (!res.headersSent) res.writeHead(502, { 'content-type': 'text/plain' }).end(`egress proxy: ${reason}\n`);
+      else res.destroy();
+    }
   }
 
   /** Where a checked request goes over TLS: the host's real certificate verified, no private address. */
@@ -424,10 +453,27 @@ export class EgressProxy {
     if (!isModelApi(run, host) || method !== 'POST') return send();
     const refuse = (reason: string, status?: number) => this.refuse(run, res, method, host, path, reason, status);
     const note = (text: string) => this.note(run, method, host, path, text);
-    /** Answered, then the connection cut: the rest of the body is not read. */
+    /**
+     * Answered with `Connection: close`: once the answer is flushed the server half-closes, and what the client still
+     * sends is read and dropped, up to `CUT_DRAIN_BYTES` or `CUT_DRAIN_MS`, before the socket goes. Closed outright
+     * under a client still sending, the connection would be reset, the answer lost before the client reads it.
+     */
     const cut = (status: number, text: string) => {
-      if (!res.headersSent) res.writeHead(status, { 'content-type': 'text/plain' }).end(`egress proxy: ${text}\n`);
-      res.once('finish', () => req.socket.destroy());
+      const socket = req.socket;
+      // The server's own close once the answer is out (`destroySoon`), made a linger.
+      socket.destroySoon = () => {
+        socket.end();
+        let left = CUT_DRAIN_BYTES;
+        socket.on('data', (c: Buffer) => {
+          left -= c.length;
+          if (left < 0) socket.destroy();
+        });
+        socket.once('end', () => socket.destroy());
+        setTimeout(() => socket.destroy(), CUT_DRAIN_MS).unref();
+        socket.resume();
+      };
+      req.resume();
+      if (!res.headersSent) res.writeHead(status, { 'content-type': 'text/plain', connection: 'close' }).end(`egress proxy: ${text}\n`);
     };
     const encoding = req.headers['content-encoding'];
     if (encoding !== undefined && encoding !== 'identity') return refuse(`Claude API body refused: content-encoding ${encoding}`);
@@ -518,6 +564,12 @@ export class EgressProxy {
     const sent = String(h['anthropic-beta'] ?? '').split(',').map((b) => b.trim()).filter(Boolean);
     delete h['anthropic-beta'];
     for (const b of sent.filter((b) => !CLAUDE_BETAS.has(b) && !run.droppedBetas.has(b))) {
+      // Bounded: a client sending a new value with each call cannot grow the run's memory, nor its journal.
+      if (run.droppedBetas.size >= DROPPED_BETAS_LISTED) {
+        if (!run.betasUnlisted) this.note(run, method, host, path, `more anthropic-beta values dropped: past ${DROPPED_BETAS_LISTED}, they are not listed`);
+        run.betasUnlisted = true;
+        break;
+      }
       run.droppedBetas.add(b);
       this.note(run, method, host, path, `anthropic-beta ${b} dropped, the request went on without it`);
     }

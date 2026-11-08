@@ -86,6 +86,11 @@ describe.skipIf(!runnable)(`the Claude token stays out of the sandbox (${cli}, O
     expect(result, r.stderr).toMatchObject({ is_error: false, result: 'PONG-FROM-THE-STAND-IN' });
     expect(seen.some((s) => s.method === 'POST' && s.url.startsWith('/v1/messages'))).toBe(true);
     for (const s of seen) expect(s).toMatchObject({ authorization: `Bearer ${FACTORY_TOKEN}`, apiKey: undefined });
+    // Nothing of its run was refused nor dropped: a Claude Code bump that needs a new beta or endpoint fails here.
+    await new Promise((r) => setTimeout(r, 200)); // the last line, written as its connection closes
+    const lines = readFileSync(proxy.journalPath(runId), 'utf8').trim().split('\n').map((l) => JSON.parse(l) as Record<string, unknown>);
+    expect(lines.filter((l) => l['kind'] === 'note' || l['ok'] === false)).toEqual([]);
+    expect(lines.some((l) => l['path'] === '/v1/messages' && l['ok'] === true)).toBe(true);
   }, 240_000);
 
   it('refuses what a hijacked agent would send with its own key: /v1/files, an MCP server, a server tool, an image by URL', async () => {
