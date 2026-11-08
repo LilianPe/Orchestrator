@@ -16,7 +16,7 @@ const pr = (number: number, branch: string) => JSON.stringify([{ number, url: `h
 /** A GraphQL connection page: `next` is the cursor of the page after it, `null` on the last one. */
 const conn = <N>(nodes: N[], next: string | null = null) => ({ nodes, pageInfo: { hasNextPage: next !== null, endCursor: next } });
 const threadsAnswer = (threads: unknown[], next: string | null = null) => JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: conn(threads, next) } } } });
-const comment = (login: string, body: string, at: string, path = 'src/a.ts', line: number | null = 12) => ({ author: { login }, body, createdAt: at, path, line });
+const comment = (login: string, body: string, at: string, path = 'src/a.ts', line: number | null = 12, type = 'User') => ({ author: { __typename: type, login }, body, createdAt: at, path, line });
 const thread = { id: 'T', isResolved: false, comments: conn([comment('alice', 'renommer', '2026-10-10T10:00:00Z', 'src/a.ts', 3)]) };
 
 describeForgeContract('GhCliForge (scripted gh)', () => ({
@@ -196,6 +196,18 @@ describe('GhCliForge', () => {
       ['owner=me', 'name=app', 'number=7', 'after=threads-1'],
       ['id=T1', 'after=comments-1'],
     ]);
+  });
+
+  it("drops a bot's reply and keeps the human one of the same thread, the query asking for the author's type (ORC-366)", async () => {
+    let query = '';
+    const forge = new GhCliForge(async (_cmd, args) => {
+      if (args[0] === 'repo') return { stdout: JSON.stringify({ owner: { login: 'me' }, name: 'app' }), stderr: '', code: 0 };
+      query = args.find((a) => a.startsWith('query='))!;
+      const comments = [comment('alice', 'gère null', '2026-10-10T10:00:00Z'), comment('ci', 'CI failed', '2026-10-10T10:05:00Z', 'src/a.ts', 12, 'Bot'), comment('bob', 'oui', '2026-10-10T10:10:00Z')];
+      return { stdout: threadsAnswer([{ id: 'T1', isResolved: false, comments: conn(comments) }]), stderr: '', code: 0 };
+    });
+    expect((await forge.unresolvedReviewComments('/r', 7)).map((i) => i.author)).toEqual(['alice', 'bob']);
+    expect(query).toContain('author { __typename login }');
   });
 
   it.each([

@@ -202,6 +202,8 @@ These types are accepted by the loader, but Relais handles them in hard-coded fa
 | `pr.opened` | Records the PR and attaches it to the Linear session. |
 | `control.pause` / `control.resume` / `control.stop` | Pause / resume of the queue, stop of a ticket (UI, `relais pause`, `relais resume`, `relais stop`). |
 
+**Delegation withdrawn** (`ticket.undelegated`, internal: no rule can name it). The reconciliation writes it when a human takes the ticket back from the agent in Linear, after a `session.stopped` when a run is under way, which stops that run as Linear's Stop does. On a delegated ticket that is not blocked, Relais cancels its work as a cancel of the ticket stops it (ORC-227): the run is stopped, the verdict of a check in progress is ignored, the waiting job and the `debounce` timers are deleted, nothing is published. It writes nothing in Linear and blocks nothing. A blocked ticket keeps its block and its job: its work already ended, by the `session.stopped` when a run was under way. Unlike a cancel, the block and the messages kept in `humanInbox` stay.
+
 Any other name under `on` is rejected (`on.<name>: unknown event type`), except the old names, still accepted as aliases: `ticket.moved` (read as `status.changed`), `label.added` (read as `label.changed`) and `debounce.fired` (read as `timer.fired`). A single file cannot declare an event under both its names: loading is rejected (`on.ticket.moved: same event as on.status.changed`).
 
 Events about a ticket that Relais does not follow yet are ignored, except `ticket.delegated`, `session.mentioned`, `session.prompted` and `command`, which add it to the followed tickets.

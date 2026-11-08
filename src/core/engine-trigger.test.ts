@@ -200,3 +200,31 @@ describe('decide — the ack of a ticket waiting for its repo (ORC-171, ORC-291)
     expect(out.events).toEqual([{ type: 'ticket.unblocked' }, { type: 'ticket.patched', patch: { awaitingRepo: null } }]);
   });
 });
+
+describe('decide — a delegation withdrawn (ORC-227)', () => {
+  const undelegated = ev('ticket.undelegated', {}, undefined, undefined);
+
+  it.each([
+    ['a run under way', { activeRunId: 'r1', activeJob: 'dev' }],
+    ['a check in flight', { verifyingRunId: 'r1' }],
+    ['a job waiting for its slot', { pendingJob: { job: 'dev-feedback', input: 'x' } }],
+  ] as [string, Partial<TicketState>][])('cancels the work of a ticket with %s, and stops what runs: no block, nothing said', (_name, work) => {
+    const at = ticket({ delegated: true, logical: 'dev', ...work });
+    const out = decide(at, undelegated, workflow);
+    expect(out.events).toEqual([{ type: 'work.cancelled' }]);
+    expect(out.effects).toEqual([{ kind: 'stop_run' }]);
+    expect(out.timers).toEqual([]);
+    const after = out.events.reduce((t, e) => reduce(t, e)!, reduce(at, undelegated)!);
+    expect(after).toMatchObject({ delegated: false, blocked: false, verifyingRunId: undefined, pendingJob: undefined });
+  });
+
+  it('cancels at rest too: the timers decide cannot see go with the stop (a grouping of replies)', () => {
+    expect(decide(ticket({ delegated: true, logical: 'human_review' }), undelegated, workflow)).toMatchObject({ events: [{ type: 'work.cancelled' }], effects: [{ kind: 'stop_run' }] });
+  });
+
+  it('cancels nothing on a blocked ticket, which keeps its block and its job, nor on one the factory no longer holds', () => {
+    const stuck = ticket({ delegated: true, blocked: true, blockKind: 'stuck', blockReason: 'x', pendingJob: { job: 'dev-feedback' }, activeRunId: 'r-stopped' });
+    expect(decide(stuck, undelegated, workflow)).toMatchObject({ events: [], effects: [] });
+    expect(decide(ticket({ delegated: false, verifyingRunId: 'r1' }), undelegated, workflow)).toMatchObject({ events: [], effects: [] });
+  });
+});
