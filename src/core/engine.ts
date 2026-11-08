@@ -52,7 +52,12 @@ const CONTENT_EVENTS: ReadonlySet<EventType> = new Set<EventType>(['ticket.deleg
  * untrusted event brought it content, whoever starts that run. `Orchestrator.launch` adds the branch's mark (ORC-338).
  */
 export function historyTaint(events: readonly FactoryEvent[]): Taint {
-  return events.some((e) => e.taint === 'untrusted' && CONTENT_EVENTS.has(e.type)) ? 'untrusted' : 'trusted';
+  return events.some((e) => e.taint === 'untrusted' && CONTENT_EVENTS.has(e.type) && !silentReview(e)) ? 'untrusted' : 'trusted';
+}
+
+/** A review without a word (an approval, most often): it brings nothing a run reads. */
+function silentReview(e: FactoryEvent): boolean {
+  return e.type === 'pr.reviewed' && !(e as FactoryEvent<'pr.reviewed'>).payload.body.trim();
 }
 
 const BUILT_IN = new Set<EventType>([

@@ -964,9 +964,10 @@ export class Orchestrator {
   /**
    * The taint of what a run reads of the ticket (ORC-349): untrusted on a branch an untrusted run worked on (the mark,
    * ORC-338: its commits, and what that run read), and with `pr`, once its journal holds untrusted content (`historyTaint`).
+   * `t` has its mark read (`readUntrusted`).
    */
   private async ticketTaint(project: ProjectRuntime, t: TicketState, pr: boolean): Promise<Taint> {
-    if (typeof (await this.readUntrusted(project, t)).untrustedSince === 'string') return 'untrusted';
+    if (typeof t.untrustedSince === 'string') return 'untrusted';
     if (!pr) return 'trusted';
     return historyTaint((await this.d.store.ticketJournal(project.id, t.ticketId)).map((j) => upcast(j.event)));
   }
@@ -2130,9 +2131,13 @@ export class Orchestrator {
       const consumes = kind === 'feedback' || carried.length > 0;
       const fedUntrusted = sensitivePathsAtLaunch(opts.sensitivePaths ?? from?.sensitivePaths, consumes ? [...read, ...t.humanInbox] : read);
       // What the run reads beyond its input takes the mark of who wrote it, not of who started the run (ORC-349): a resumed
-      // session, what its earlier attempts read; a knowledge job without an input, the ticket and its PR.
+      // session, what its earlier attempts read; a knowledge job without an input, the ticket and its PR. A relaunch is
+      // judged on the input its lost attempt had, as its first launch was.
       const knowledge = job.workspace === 'knowledge';
-      const history = !fedUntrusted && (resume || (knowledge && !kind)) ? await state(this.ticketTaint(project, t, knowledge)) : 'trusted';
+      const readsTicket = !fedUntrusted && (resume || (knowledge && !(from ? from.input : kind)));
+      // The mark read once here serves the branch's mark below too.
+      const seen = readsTicket ? await state(this.readUntrusted(project, t)) : t;
+      const history = readsTicket ? await state(this.ticketTaint(project, seen, knowledge)) : 'trusted';
       const sensitivePaths = fedUntrusted ?? (history === 'untrusted' ? SENSITIVE_PATHS : undefined);
       if (sensitivePaths && knowledge) {
         // As decide refuses it (I12), for what it could not see: untrusted content read at the launch.
@@ -2224,7 +2229,7 @@ export class Orchestrator {
       // mark is read first, so that its earlier untrusted commits keep its whole branch checked (`reduce`). `t` is kept: the
       // feedback this launch consumes is what it read.
       const marks = !!sensitivePaths && job.workspace === 'worktree';
-      if (marks) await state(this.readUntrusted(project, t));
+      if (marks) await state(this.readUntrusted(project, seen));
       const untrusted = marks ? { untrusted: { head: (await workspaces.head(ws.path)) ?? '' } } : {};
       const took = await this.apply(t, {
         type: 'run.started',

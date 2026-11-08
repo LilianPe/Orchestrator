@@ -348,8 +348,8 @@ describe('server', () => {
 
     it('answers under the loopback names alone, not a tunnel that brings the public URL here', async () => {
       const { app } = await setup();
-      for (const host of ['localhost:4100', '127.0.0.1:4100', '[::1]:4100', 'LOCALHOST']) expect((await app.request('/api/state', as(host))).status, host).toBe(200);
-      for (const host of ['relais.example.com', '127.0.0.1.evil.example', 'localhost.evil.example:4100']) expect((await app.request('/api/state', as(host))).status, host).toBe(403);
+      for (const host of ['localhost:4100', '127.0.0.1:4100', '127.0.1.1:4100', '[::1]:4100', 'LOCALHOST']) expect((await app.request('/api/state', as(host))).status, host).toBe(200);
+      for (const host of ['relais.example.com', '127.0.0.1.evil.example', 'localhost.evil.example:4100', '127.0.0.1x']) expect((await app.request('/api/state', as(host))).status, host).toBe(403);
     });
 
     it('leaves the webhooks and the run-token agent API to their own guards, and the password-guarded interface to its password', async () => {

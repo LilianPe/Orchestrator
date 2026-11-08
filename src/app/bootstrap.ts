@@ -43,7 +43,7 @@ import type { FactoryEvent } from '../core/types.js';
 import { runVerify } from '../core/verify.js';
 import { KnowledgeBase } from '../knowledge/kb.js';
 import { startSmeeRelay } from '../relay/smee.js';
-import { agentOnly, createApp } from '../server/app.js';
+import { agentOnly, createApp, isLoopbackHost } from '../server/app.js';
 import { openStore } from '../store/open.js';
 import { RUN_BEAT_MS } from '../store/types.js';
 import { repoRoot } from './root.js';
@@ -57,11 +57,6 @@ export interface BootOptions {
   log?: (m: string) => void;
   /** Defaults to process.env; read for FACTORY_UI_PASSWORD. */
   env?: NodeJS.ProcessEnv;
-}
-
-export function isLoopbackHost(host: string): boolean {
-  const h = host.replace(/^\[|\]$/g, '').toLowerCase();
-  return h === 'localhost' || h === '::1' || /^127\.\d+\.\d+\.\d+$/.test(h);
 }
 
 const FACTORY_LABELS = ['agent:stop', BLOCKED_LABEL];

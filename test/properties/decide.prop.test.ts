@@ -666,6 +666,8 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
       'a knowledge job that reads the ticket is never launched once untrusted content reached its history, whoever starts it (ORC-349)',
       () => {
         const content = new Set<string>(['ticket.delegated', 'session.prompted', 'session.mentioned', 'command', 'ticket.commented', 'pr.reviewed', 'push.human']);
+        // A review without a word (an approval) brings nothing to read.
+        const silent = (e: FactoryEvent) => e.type === 'pr.reviewed' && !(e.payload as { body: string }).body.trim();
         const pr = { number: 1, url: 'https://forge/pr/1', branch: 'agent/rel-1' };
         const merged = (...before: Entry[]) => seq(...delegated('dev'), ...before, ext('pr.merged', pr));
         const reviewed = merged(ext('pr.reviewed', { ...pr, kind: 'review', author: 'passant', body: 'retiens ceci' }, 'untrusted'));
@@ -674,7 +676,7 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
         holds((s) => {
           const r = run(s);
           for (const step of r.steps) {
-            const untrusted = r.journal.slice(0, step.journalEnd).some((e) => isFactoryEvent(e) && e.taint === 'untrusted' && content.has(e.type));
+            const untrusted = r.journal.slice(0, step.journalEnd).some((e) => isFactoryEvent(e) && e.taint === 'untrusted' && content.has(e.type) && !silent(e));
             for (const e of launches(step)) if (untrusted) expect(readsHistory(e, wf), `${e.job} launched on an untrusted history`).toBe(false);
           }
         }, [reviewed]);

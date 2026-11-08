@@ -87,8 +87,9 @@ const HOST_LOGIN = ['CLAUDE_CONFIG_DIR', CLAUDE_TOKEN, 'ANTHROPIC_API_KEY', 'SSH
 
 /**
  * A run on the host pushes nowhere (ORC-349): git rewrites every push URL, the ticket's remote or one the agent names, to
- * a transport it does not have, however the command is written. Fetches are left alone. A config, not a barrier: an agent
- * that runs code under the daemon's user can undo it, as it can read the daemon's secrets. The barrier is the sandbox.
+ * a transport it does not have, however the command names it. Fetches are left alone. A config, not a barrier: git skips
+ * it for a remote with an explicit `pushurl`, and an agent under the daemon's user can undo it, as it can read the daemon's
+ * secrets. The barrier is the sandbox.
  */
 export const NO_PUSH = { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'url.relais-no-push://.pushInsteadOf', GIT_CONFIG_VALUE_0: '' } as const;
 

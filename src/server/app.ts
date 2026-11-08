@@ -40,10 +40,14 @@ export interface ServerDeps {
 }
 
 /**
- * The names the interface without a password answers under (ORC-349): it listens on the loopback. Not `publicUrl`'s, which
- * a tunnel brings here: the webhooks and the OAuth callback answer under any name, the interface does not.
+ * A name of the loopback: `host` without a password listens there, and the interface without a password answers under
+ * these names alone (ORC-349). Not `publicUrl`'s, which a tunnel brings here: the webhooks and the OAuth callback answer
+ * under any name, the interface does not. A rebound name is never one of these.
  */
-const LOOPBACK_NAMES = new Set(['localhost', '127.0.0.1', '[::1]']);
+export function isLoopbackHost(host: string): boolean {
+  const h = host.replace(/^\[|\]$/g, '').toLowerCase();
+  return h === 'localhost' || h === '::1' || /^127\.\d+\.\d+\.\d+$/.test(h);
+}
 
 /** The host name of a `Host` header, port left out and lower-cased: `[::1]:4100` → `[::1]`. */
 function hostName(host: string): string {
@@ -109,7 +113,7 @@ export function createApp(d: ServerDeps): Hono {
     // that name, Origin and Host alike. Without a password, only a name of the loopback is answered.
     app.use('*', async (c, next) => {
       if (isPublicPath(c.req.method, c.req.path)) return next();
-      if (!LOOPBACK_NAMES.has(hostName(c.req.header('host') ?? new URL(c.req.url).host))) return c.text('Unknown host', 403);
+      if (!isLoopbackHost(hostName(c.req.header('host') ?? new URL(c.req.url).host))) return c.text('Unknown host', 403);
       return next();
     });
   }

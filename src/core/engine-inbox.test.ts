@@ -329,6 +329,8 @@ describe('historyTaint: what a run reading the ticket and its PR takes in (ORC-3
     // CI's facts and the default branch's push are untrusted on every ticket with CI: they must not refuse every learn.
     expect(historyTaint([
       ev('pr.reviewed', { ...pr, kind: 'review', author: 'lilian', body: 'ok' }),
+      // An approval without a word, untrusted as every review: nothing to read.
+      ev('pr.reviewed', { ...pr, kind: 'review', author: 'passant', body: ' ', state: 'APPROVED' }, untrusted),
       ev('status.changed', { from: 'human_review', to: 'dev' }, untrusted),
       ev('label.changed', { label: 'x', change: 'added' } as EventPayloads['label.changed'], untrusted),
       ev('pr.merged', pr),
