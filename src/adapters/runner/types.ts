@@ -33,8 +33,9 @@ export interface RunRequest {
   limits: RunLimits;
   env: Record<string, string>;
   /**
-   * Paths the run must not write: set when it reads untrusted content (I12, ORC-274). Carried, not
-   * enforced yet: `ClaudeCodeRunner` ignores it until the runner's sandbox does (ORC-151, ORC-204).
+   * Paths the run must not write: set when it reads untrusted content (I12, ORC-274). The runner
+   * does not enforce it: it marks the ticket's branch untrusted (`TicketState.untrustedSince`, ORC-338), and `checkClone` refuses what
+   * the branch then commits in the repository's `sensitive_paths`.
    */
   sensitivePaths?: readonly string[];
   /**

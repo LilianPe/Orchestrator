@@ -6,7 +6,7 @@ export type ActivityType = 'thought' | 'response' | 'elicitation' | 'error';
 
 /** An action outside the ticket state, carried out by the orchestrator (later: the outbox). */
 export type Effect =
-  /** `sensitivePaths`: set on a run started from an untrusted event, for the runner's sandbox (ORC-151) to protect. */
+  /** `sensitivePaths`: set on a run started from an untrusted event, the mark that makes the branch untrusted (`SENSITIVE_PATHS`, ORC-338). */
   /** `relaunchOf`: the lost attempt whose step this starts again (ORC-220): what it read and its session come from its record. */
   | { kind: 'start_run'; job: string; input?: InputKind; inputText?: string; linearSessionId?: string; resume?: boolean; sensitivePaths?: readonly string[]; relaunchOf?: string }
   /** Without linearSessionId: stop the ticket's dev work. With it: stop only the runs of that (question) session. */

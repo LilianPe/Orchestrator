@@ -2,7 +2,7 @@
 
 A repository can declare its commands, its sensitive paths and its limits to the factory in `.factory/config.yml`, at the root. The file is optional: without it, the `factory/default` baseline applies as is.
 
-**Status (ORC-209).** The schema, `factory validate` and reading by the daemon exist (see [When and where it is read](#when-and-where-it-is-read)). Applied to runs: `setup`, `env`, `setup_secrets` and `network` at launch, `commands`, `setup` and `env` on each `verify`. Read and validated, but not yet applied: `budgets` (ORC-216), `services` (ORC-282, ORC-309), `max_diff` (ORC-145, ORC-125), `sensitive_paths` (the engine keeps the baseline's list), `visual_paths` and `feature_flags`.
+**Status (ORC-209).** The schema, `factory validate` and reading by the daemon exist (see [When and where it is read](#when-and-where-it-is-read)). Applied to runs: `setup`, `env`, `setup_secrets` and `network` at launch, `commands`, `setup` and `env` on each `verify`, `sensitive_paths` on each `verify` and publication of a branch an untrusted run worked on, on what it changed since (ORC-338). Read and validated, but not yet applied: `budgets` (ORC-216), `services` (ORC-282, ORC-309), `max_diff` (ORC-145, ORC-125), `visual_paths` and `feature_flags`.
 
 ## When and where it is read
 
@@ -39,7 +39,7 @@ network: { level: custom, allow: ["docs.exemple.com"] }    # none | limited (def
 | `env` | list of names | `[]` | Variables the runner receives: `setup`, agent, red check, and `verify`. See [Variables and secrets](#variables-and-secrets). |
 | `setup_secrets` | list of names | `[]` | Secrets that only `setup` receives, sealed before the agent starts. |
 | `services` | list | `[]` | Services to start next to the runner (`postgres`…). |
-| `sensitive_paths` | list of patterns | `[]` | Paths whose modification flags the run (stricter review). |
+| `sensitive_paths` | list of globs | `[]` | Globs from the root (`infra`, `src/auth*`, `**/migrations/**`, `src/**/*.sql`), dotfiles included and case ignored; a pattern that names a directory protects everything under it. What a branch changes in them once an untrusted run worked on it is refused by `verify` and the publication. A trusted branch may change them ([workflow](workflow.md#lifecycle-events-not-configurable)). |
 | `budgets.per_ticket_tokens` | integer > 0 | none | Token cap for the ticket's code runs (questions do not count): past it, the ticket is blocked before its next code run (ORC-340). It can only lower the cap of `factory.yml`. |
 | `max_diff` | `{ files, lines }` | `{ 15, 400 }` | Maximum diff size excluding tests; can only be tightened. |
 | `feature_flags.provider` | text | none | Feature flag provider. |
@@ -74,6 +74,8 @@ The `setup` receives **no secrets** when its branch has commits beyond the defau
 
 ## What a configuration cannot do
 
+A `sensitive_paths` entry that names nothing in the repository is not refused but left out, with a warning from `factory validate` and in the daemon's log: a drive (`C:/infra`), one that climbs out (`../x`), the root itself (`.`, `./`, `/`), a `.` or empty segment (`a/./b`, `{./infra,db}/**`), an absolute path or a climb inside a brace (`{src,/etc}`), or one that does not compile as a glob (too long). A branch that took untrusted content is refused, as a config failure, until it is fixed (ORC-338). `\` is read as `/`, and a leading `/` or `./` as the root (`/infra/**` is `infra/**`).
+
 A configuration **adds** checks or prohibitions, it never **removes** any from the baseline. `factory validate` refuses, with the path of the offending key:
 
 - an unknown key, such as `checks: { disable: [...] }`: nothing can turn off a baseline check, and a silently ignored key would suggest otherwise;
@@ -82,7 +84,7 @@ A configuration **adds** checks or prohibitions, it never **removes** any from t
 - `network.level: full`, reserved for `setup`, never for the agent; in `network.allow`, anything that is not a hostname (`*`, `*.com`, `0.0.0.0/0`): a wildcard or a range would amount to `full`; and an `allow` list under a level other than `custom`, which would open nothing;
 - a preset other than `factory/default@1.0`.
 
-The baseline's forbidden paths (`.github/workflows/**`, `.factory/**`, `.claude/**`, `.git/hooks/**`, `.git/config`, `.gitattributes`, `.gitmodules`, `.npmrc`, `package.json#scripts`, `.husky/**`, `.vscode/**`, `Dockerfile*`, `.devcontainer/**`, `claims/**`, outgoing symbolic links) always remain forbidden to the agent, whatever the file declares. `factory/chemins-interdits` blocks them in `verify`, at any depth, except `.github/workflows/**` and `claims/**`, read at the root (ORC-151).
+The baseline's forbidden paths (`.github/**`, `CODEOWNERS`, `.env`, `.envrc`, `.env.*` but `.env.example`, `.env.sample` and `.env.template`, `.factory/**`, `.claude/**`, `.git/hooks/**`, `.git/config`, `.gitattributes`, `.gitmodules`, `.npmrc`, `.yarnrc*`, `.yarn/releases/**`, `.yarn/plugins/**`, `.pnpmfile.cjs`, `setup.py`, `package.json#scripts`, `.husky/**`, `.vscode/**`, `Dockerfile*`, `.devcontainer/**`, `claims/**`, outgoing symbolic links) always remain forbidden to the agent, whatever the file declares. `factory/chemins-interdits` blocks them in `verify` and on the publication, at any depth, except `.github/**` and `claims/**`, read at the root (ORC-151, ORC-338).
 
 `custom` is `limited` plus the repository's hosts: it is the `limited` ceiling against which the preset's steps are checked; `none` is the `none` ceiling.
 

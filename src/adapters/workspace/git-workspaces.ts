@@ -2,7 +2,7 @@ import { existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, renameSync
 import { rm } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
 import { branchName } from '../../core/naming.js';
-import { within } from '../../core/clean-verify.js';
+import { forkPoint, gitAt, gitReader, parseRawDiff, within, zFields, type BranchReader, type CloneGit } from '../../core/clean-verify.js';
 import { STALLED } from '../../publish/publish.js';
 import { execCmd, execFailure, HARDENING, mustExec, TIMED_OUT, type Exec } from '../exec.js';
 import { readCapped } from '../read-capped.js';
@@ -250,22 +250,26 @@ export class GitWorkspaces implements WorkspaceManager {
   }
 
   /**
-   * On the factory's repository, its config and its hooks: the agent's objects are only one more place to read objects
-   * from, whatever their `info/alternates` says. A link for `objects` could reach another repository's: not followed.
+   * A worktree's head, and git on the factory's repository, its config and its hooks, to read it: the agent's objects are
+   * only one more place to read objects from, whatever their `info/alternates` says. A link for `objects` could reach
+   * another repository's: not followed. None for a path that is no worktree.
    */
-  async stepDiff(repoPath: string, path: string, base: string): Promise<StepDiff | undefined> {
+  private async worktreeGit(repoPath: string, path: string): Promise<{ head: string; git: CloneGit } | undefined> {
     const head = await this.head(path);
     // Absolute: read from `repoPath`, and the workspaces' root can be relative.
     const objects = resolve(path, '.git', 'objects');
     if (!head || !isDir(objects)) return undefined;
-    const env = { GIT_ALTERNATE_OBJECT_DIRECTORIES: objects };
-    const git = (...args: string[]) => mustExec(this.exec, 'git', ['-C', repoPath, ...args], { env });
+    return { head, git: gitAt(this.exec, repoPath, { GIT_ALTERNATE_OBJECT_DIRECTORIES: objects }) };
+  }
+
+  async stepDiff(repoPath: string, path: string, base: string): Promise<StepDiff | undefined> {
+    const at = await this.worktreeGit(repoPath, path);
+    if (!at) return undefined;
+    const { head, git } = at;
     // Without renames, a source file moved into a test is its deletion: a change outside the tests.
-    const fields = (await git('diff', '--name-status', '--no-renames', '-z', base, head)).split('\0').filter(Boolean);
-    const changed: StepDiff['changed'] = [];
-    for (let i = 0; i + 1 < fields.length; i += 2) changed.push({ path: fields[i + 1]!, deleted: fields[i] === 'D' });
+    const changed = parseRawDiff(await git.raw('diff', '--raw', '--no-renames', '-z', base, head)).map(({ path: p, deleted }) => ({ path: p, deleted }));
     const show = async (rev: string, p: string) => {
-      const r = await this.exec('git', ['-C', repoPath, 'show', `${rev}:${p}`], { env });
+      const r = await git.status('show', `${rev}:${p}`);
       return r.code === 0 ? r.stdout : undefined;
     };
     return {
@@ -274,13 +278,25 @@ export class GitWorkspaces implements WorkspaceManager {
       existsAtBase: async (paths) => {
         if (paths.length === 0) return new Set();
         // One process for every candidate: the files at the base under these paths.
-        const listed = (await git('--literal-pathspecs', 'ls-tree', '-r', '--name-only', '-z', base, '--', ...paths)).split('\0');
+        const listed = zFields(await git.raw('--literal-pathspecs', 'ls-tree', '-r', '--name-only', '-z', base, '--', ...paths));
         return new Set(paths.filter((p) => listed.some((f) => f === p || f.startsWith(`${p}/`))));
       },
       showAtBase: (p) => show(base, p),
       showAtHead: (p) => show(head, p),
-      filesAtHead: async () => (await git('ls-tree', '-r', '--name-only', '-z', head)).split('\0').filter(Boolean),
+      filesAtHead: async () => zFields(await git.raw('ls-tree', '-r', '--name-only', '-z', head)),
     };
+  }
+
+  /**
+   * The same reading as the clone's (`gitReader`), on the factory's repository: its default branch fetched from the forge
+   * first, as the clone fetches it, so that the fork point and the config are the forge's. A forge that does not answer rejects.
+   */
+  async branchReader(repoPath: string, path: string): Promise<BranchReader | undefined> {
+    const at = await this.worktreeGit(repoPath, path);
+    if (!at) return undefined;
+    await this.fetch(repoPath);
+    const base = await originHead(this.exec, repoPath);
+    return gitReader(at.git, base, await forkPoint(at.git, at.head, base), at.head);
   }
 
   /** Git in the agent's directory, on the host: only without sandboxes (`FACTORY_ALLOW_HOST_VERIFY`), where the agent runs on the host anyway. */

@@ -335,6 +335,76 @@ describe('runCleanVerify', () => {
       expect((await runCleanVerify(req)).failures[0]).toMatchObject({ command: 'factory/chemins-interdits', output: expect.stringContaining('.github/workflows/ci.yml') });
     });
 
+    it('CODEOWNERS and a setup action under .github block, trusted or not (ORC-338)', async () => {
+      const { repo, req } = setup({ commands: [] });
+      write(repo, 'CODEOWNERS', '* @someone\n');
+      write(repo, '.github/actions/setup/action.yml', 'runs: { using: composite, steps: [] }\n');
+      commit(repo, 'tidy CODEOWNERS and the setup action');
+      const { output } = (await runCleanVerify(req)).failures[0]!;
+      expect(output).toContain('CODEOWNERS');
+      expect(output).toContain('.github/actions/setup/action.yml');
+    });
+
+    describe("the repository's sensitive_paths (ORC-338)", () => {
+      const touchInfra = (over: Partial<CleanVerifyRequest>, config = 'sensitive_paths: ["infra/**"]\n') => {
+        const s = setup({ commands: [], ...over }, config);
+        write(s.repo, 'infra/main.tf', 'resource "x" "y" {}\n');
+        commit(s.repo, 'infra');
+        return s;
+      };
+
+      it('an untrusted branch that touches one is refused', async () => {
+        const res = await runCleanVerify(touchInfra({ untrusted: { since: '', humanPushes: [] } }).req);
+        expect(res.failures).toEqual([{ command: 'factory/chemins-interdits', exitCode: 1, output: expect.stringContaining('`infra/main.tf`: sensitive path of the repository (`infra/**`)') }]);
+      });
+
+      it('a trusted branch may touch it', async () => {
+        expect((await runCleanVerify(touchInfra({}).req)).ok).toBe(true);
+      });
+
+      it('only what changed since the branch took untrusted content counts: a trusted commit before it stays the reviewer\'s', async () => {
+        const { repo, req } = touchInfra({}, 'sensitive_paths: ["infra"]\n');
+        const marked = { ...req, untrusted: { since: git(repo, 'rev-parse', 'HEAD'), humanPushes: [] } };
+        write(repo, 'src/a.ts', 'x\n');
+        commit(repo, 'untrusted work elsewhere');
+        expect((await runCleanVerify(marked)).ok).toBe(true);
+        write(repo, 'infra/vpc.tf', 'x\n');
+        commit(repo, 'untrusted work on infra');
+        const { output } = (await runCleanVerify(setupAgain(marked))).failures[0]!;
+        expect(output).toContain('infra/vpc.tf');
+        expect(output).not.toContain('infra/main.tf');
+      });
+
+      it('a mark that is no ancestor of the head (a rewritten history) reads the whole branch', async () => {
+        const { req } = touchInfra({ untrusted: { since: '0123456789012345678901234567890123456789', humanPushes: [] } });
+        expect((await runCleanVerify(req)).failures[0]!.output).toContain('infra/main.tf');
+      });
+
+      it('a merge of the base brings none of the base\'s own sensitive changes', async () => {
+        const { origin, repo, req } = setup({ commands: [] }, 'sensitive_paths: ["infra"]\n');
+        const marked = { ...req, untrusted: { since: git(repo, 'rev-parse', 'HEAD'), humanPushes: [] } };
+        write(origin, 'infra/main.tf', 'base\n');
+        commit(origin, 'a human changes infra on main');
+        git(repo, 'pull', '-q', '--no-rebase', '--no-edit', 'origin', 'main');
+        expect((await runCleanVerify(marked)).ok).toBe(true);
+      });
+
+      it('read on the base: a branch that drops the entry is refused all the same', async () => {
+        const { repo, req } = touchInfra({ untrusted: { since: '', humanPushes: [] } });
+        write(repo, '.factory/config.yml', 'sensitive_paths: []\n');
+        commit(repo, 'drop it');
+        expect((await runCleanVerify(req)).failures[0]!.output).toContain('infra/main.tf');
+      });
+
+      it('an entry that names nothing refuses an untrusted branch as a config failure, never a path left open', async () => {
+        await expect(runCleanVerify(touchInfra({ untrusted: { since: '', humanPushes: [] } }, 'sensitive_paths: ["../infra/**"]\n').req)).rejects.toThrow(/sensitive_paths\[0\].*refused until it is fixed/);
+      });
+
+      it('and leaves a trusted branch alone: an old entry, valid before, blocks no ticket of the repository', async () => {
+        expect((await runCleanVerify(touchInfra({}, 'sensitive_paths: ["../infra/**"]\n').req)).ok).toBe(true);
+      });
+    });
+
     it('package.json#scripts blocks, its dependencies do not', async () => {
       const { origin, repo, req } = setup({ commands: [] });
       const manifest = (o: object) => write(repo, 'package.json', JSON.stringify(o));

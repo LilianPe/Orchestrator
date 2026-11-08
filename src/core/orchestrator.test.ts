@@ -421,6 +421,8 @@ describe('Orchestrator', () => {
       const { store, tracker, runner, orch } = setup();
       tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
       const read = vi.spyOn(store, 'ticketRuns');
+      // Held: the launch alone. Its check and publication after it read the ticket's runs once, for ORC-338's mark.
+      runner.enqueue({ hold: true });
       await orch.accept(delegated());
       await orch.drained();
       expect(runner.requests).toHaveLength(1);

@@ -202,7 +202,8 @@ export interface EventPayloads {
   /** `otherRepo`: the label names another repo of the ticket's team (ORC-291). */
   'label.changed': { label: string; change: 'added' | 'removed'; otherRepo?: true };
   /** A commit pushed by a human on the ticket's branch. */
-  'push.human': { branch: string; sha: string; author: string };
+  /** `before`: the branch's head before the push (all zeros for a new branch); absent on events recorded before ORC-338. */
+  'push.human': { branch: string; sha: string; author: string; before?: string };
   /** `frozen`: for a `/refreeze`, the freeze at the branch's head, read before the decision (ORC-131); absent without a freeze or a branch. */
   command: { name: string; body: string; linearSessionId: string; author: string; issue?: IssueSnapshot; ack?: true; kind?: MessageKind; masked?: true; frozen?: FrozenTests; repos?: string[]; waitedIn?: string };
   'pr.opened': PrPayload;
@@ -390,6 +391,11 @@ export type ShellEvent =
       claudeSessionId: string;
       /** `false` on a run out of the ticket session (a review): the ticket does not take its session (ORC-217). Absent before. */
       ticketSession?: false;
+      /**
+       * A run launched with sensitive paths (it read untrusted content, I12) in the ticket's worktree: the head it starts on,
+       * `''` when none is read. Marks the ticket's branch (`untrustedSince`, ORC-338).
+       */
+      untrusted?: { head: string };
       /** What the run starts, in the shape of a pending job: the run that starts the ticket's pending job takes it off (ORC-339). */
       starts?: PendingJob;
     }
@@ -400,7 +406,12 @@ export type ShellEvent =
    */
   | { type: 'feedback.consumed'; items?: readonly FeedbackItem[] }
   /** The active run is gone without a `run.finished` (launch failure, or a launch cut before its run was written). */
-  | { type: 'run.cleared' };
+  | { type: 'run.cleared' }
+  /**
+   * What a ticket's run records said, read once, of a branch the mark has not seen yet (ORC-338): `''` when an untrusted
+   * worktree run came before the mark existed (its whole branch is read), `null` when none did.
+   */
+  | { type: 'untrusted.read'; since: '' | null };
 
 export type InternalEvent = DecidedEvent | ShellEvent;
 
@@ -438,6 +449,15 @@ export interface TicketState {
   verifyingRunId?: string;
   /** The last commit `verify` found green (ORC-151): nothing else is published. Absent before it. */
   verifiedSha?: string;
+  /**
+   * The head of the ticket's branch when a run that read untrusted content first started in its worktree (ORC-338),
+   * `''` when that head was not read or the run came before the mark existed: from then on, what the agent's commits
+   * change in the repository's `sensitive_paths` is refused. Sticky: its commits stay on the branch whoever runs next.
+   * `null` once read that no such run worked on it (`untrusted.read`); absent until then.
+   */
+  untrustedSince?: string | null;
+  /** The pushes humans made to the ticket's branch (`push.human`, ORC-338): the commits of each are theirs, not the agent's. */
+  humanPushes?: { before?: string; after: string }[];
   pendingJob?: PendingJob;
   verifyAttempts: number;
   /** Unverified reds in blocking mode since the last verified one, bounded by the job's `red.attempts` (ORC-123). Absent before it. */

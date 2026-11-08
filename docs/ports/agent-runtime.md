@@ -37,7 +37,7 @@ ORC-155 will decide whether this port becomes an abstraction of the harness (Cla
 
 ## Known gaps
 
-`RunRequest.sensitivePaths` (the paths a run that reads untrusted content must not write, ORC-274) is carried all the way to the port but enforced by no implementation: `ClaudeCodeRunner` ignores it, and the suite does not check it. Enforcing it falls to the runner's sandbox (ORC-151, ORC-204).
+`RunRequest.sensitivePaths` (the mark of a run that reads untrusted content, ORC-274) is carried all the way to the port, and no implementation enforces it while the run writes: `ClaudeCodeRunner` ignores it, and the suite does not check it. It marks the ticket's branch untrusted, and what the branch then commits in the repository's `sensitive_paths` is refused afterwards, at `checkClone`, on `verify` and on the publication (ORC-338, see [workflow](../workflow.md#lifecycle-events-not-configurable)).
 
 `FakeRunner` ignored `limits`: since ORC-189, it enforces them like the real runtime.
 

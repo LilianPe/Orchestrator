@@ -109,6 +109,13 @@ describe('makeRepoConfig (ORC-209 C)', () => {
     expect(await makeRepoConfig({ exec: git({ head: 'origin/main' }).exec })(PROJECT)).toEqual(parseRepoConfig(undefined));
   });
 
+  it('logs a sensitive path that names nothing, and reads the file all the same (ORC-338)', async () => {
+    const logged: string[] = [];
+    const config = await makeRepoConfig({ exec: git({ head: 'origin/main', config: 'sensitive_paths: [infra, "../x"]\n' }).exec, log: (m) => logged.push(m) })(PROJECT);
+    expect(config.sensitivePaths).toEqual(['infra']);
+    expect(logged).toEqual([expect.stringContaining('ignored sensitive_paths[1]: "../x"')]);
+  });
+
   it('rejects an invalid file, naming the fault', async () => {
     await expect(makeRepoConfig({ exec: git({ head: 'origin/main', config: 'env: [PATH]\n' }).exec })(PROJECT)).rejects.toThrow('env[0]');
   });

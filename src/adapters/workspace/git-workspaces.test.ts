@@ -3,7 +3,9 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpath
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { BASE, checkBranchPaths, cloneGit, forkPoint, gitReader } from '../../core/clean-verify.js';
 import { readConventions } from '../../core/prompt.js';
+import { parseRepoConfig } from '../../config/repo-config.js';
 import { execCmd } from '../exec.js';
 import { GitWorkspaces } from './git-workspaces.js';
 
@@ -108,6 +110,94 @@ describe('GitWorkspaces', () => {
     expect(await diff.filesAtHead()).toContain('export.test.ts');
     expect((await ws.uncommitted(w.path)).sort()).toEqual(['draft.ts', 'src/export.ts']);
     expect(await ws.stepDiff(repo, join(root, 'nowhere'), base)).toBeUndefined();
+  });
+
+  it('reads a branch for the path rules as the clone does: the same verdict, whatever the mark (ORC-338)', async () => {
+    const { base, repo, root } = fixtureRepo();
+    const origin = join(base, 'origin.git');
+    const put = (dir: string, path: string, content: string) => {
+      mkdirSync(join(dir, path, '..'), { recursive: true });
+      writeFileSync(join(dir, path), content);
+    };
+    const commit = (dir: string, message: string) => {
+      git(dir, 'add', '-A');
+      git(dir, 'commit', '-q', '-m', message);
+    };
+    const sensitivePaths = ['infra', '*.tf'];
+    put(repo, '.factory/config.yml', `sensitive_paths: ${JSON.stringify(sensitivePaths)}\n`);
+    commit(repo, 'config');
+    git(repo, 'push', '-q', 'origin', 'main');
+    const ws = new GitWorkspaces({ root });
+    const w = await ws.prepare(req(repo));
+    git(w.path, 'config', 'user.email', 't@t');
+    git(w.path, 'config', 'user.name', 't');
+    put(w.path, 'infra/old.tf', 'trusted\n');
+    put(w.path, 'src/a.ts', 'x\n');
+    commit(w.path, 'trusted work');
+    git(w.path, 'push', '-q', origin, 'HEAD:refs/heads/factory/rel-1-export-csv');
+    const mark = git(w.path, 'rev-parse', 'HEAD');
+    put(w.path, 'infra/new.tf', 'untrusted\n');
+    put(w.path, 'CODEOWNERS', '* @x\n');
+    put(w.path, 'claims/.env.example', 'A=\n');
+    put(w.path, 'package.json', '{"scripts":{"postinstall":"x"}}');
+    commit(w.path, 'untrusted work');
+    // Published: the teammate's push below builds on the untrusted commit, which stays the agent's.
+    git(w.path, 'push', '-q', origin, 'HEAD:refs/heads/factory/rel-1-export-csv');
+    const before = git(w.path, 'rev-parse', 'HEAD');
+    // A teammate, from a clone of their own: a commit on the ticket's branch, and one on the default branch, both on infra.
+    const mate = join(base, 'mate');
+    git(base, 'clone', '-q', origin, mate);
+    git(mate, 'config', 'user.email', 'm@m');
+    git(mate, 'config', 'user.name', 'm');
+    git(mate, 'checkout', '-q', 'factory/rel-1-export-csv');
+    put(mate, 'infra/human.tf', 'a human on the branch\n');
+    commit(mate, 'human push');
+    git(mate, 'push', '-q', 'origin', 'factory/rel-1-export-csv');
+    const human = [{ before, after: git(mate, 'rev-parse', 'HEAD') }];
+    git(mate, 'checkout', '-q', 'main');
+    put(mate, 'infra/main.tf', 'a human on main\n');
+    commit(mate, 'main moves on');
+    git(mate, 'push', '-q', 'origin', 'main');
+    // The branch takes both in, then the agent writes a path that starts with a space: the first a `-z` listing gives.
+    git(w.path, 'fetch', '-q', origin, 'factory/rel-1-export-csv');
+    git(w.path, 'merge', '-q', '--no-edit', 'FETCH_HEAD');
+    git(w.path, 'fetch', '-q', origin, 'main');
+    git(w.path, 'merge', '-q', '--no-edit', 'FETCH_HEAD');
+    put(w.path, ' space.tf', 'untrusted\n');
+    commit(w.path, 'untrusted, spaced');
+    const head = git(w.path, 'rev-parse', 'HEAD');
+
+    // The clone `verify` and the publication read: the work's objects, the forge's default branch as `BASE`.
+    const cloneDir = join(base, 'clone');
+    git(base, 'clone', '-q', '--no-checkout', w.path, cloneDir);
+    git(cloneDir, 'fetch', '-q', origin, `+refs/heads/main:${BASE}`);
+    const clone = cloneGit({ workDir: base }, cloneDir);
+    const from = await forkPoint(clone, head);
+
+    // The host's repository has not fetched main since: its reader fetches the forge, as the clone does.
+    const reader = (await ws.branchReader(repo, w.path))!;
+    expect(parseRepoConfig(await reader.baseConfig()).sensitivePaths).toEqual(sensitivePaths);
+    for (const since of [undefined, '', mark, '0123456789012345678901234567890123456789']) {
+      const untrusted = since === undefined ? undefined : { since, humanPushes: human, sensitivePaths };
+      const onClone = await checkBranchPaths(gitReader(clone, BASE, from, head), untrusted);
+      expect(await checkBranchPaths(reader, untrusted), String(since)).toEqual(onClone);
+    }
+    const [marked] = await checkBranchPaths(reader, { since: mark, humanPushes: human, sensitivePaths });
+    for (const path of ['infra/new.tf', '` space.tf`', 'CODEOWNERS', 'claims/.env.example', 'package.json#scripts']) expect(marked!.output).toContain(path);
+    // Neither what came before the mark, nor what a human pushed and the branch took in, nor what the default branch brought.
+    for (const path of ['infra/old.tf', 'infra/human.tf', 'infra/main.tf']) expect(marked!.output).not.toContain(path);
+    // The whole branch, the `''` mark, still leaves out what a human pushed.
+    const whole = (await checkBranchPaths(reader, { since: '', humanPushes: human, sensitivePaths }))[0]!.output;
+    expect(whole).toContain('infra/old.tf');
+    expect(whole).not.toContain('infra/human.tf');
+    // The agent's commits only: not the human's (only theirs, not the agent's they built on), nor the default branch's merged in after the mark.
+    const sinceMark = await reader.agentChanges(mark, human);
+    expect([...sinceMark].sort()).toEqual([' space.tf', 'CODEOWNERS', 'claims/.env.example', 'infra/new.tf', 'package.json']);
+    const sinceFork = await reader.agentChanges('', human);
+    expect([...sinceFork].sort()).toEqual([' space.tf', 'CODEOWNERS', 'claims/.env.example', 'infra/new.tf', 'infra/old.tf', 'package.json', 'src/a.ts']);
+    // A push recorded without its `before` leaves out nothing: its range cannot be told.
+    expect(await reader.agentChanges(mark, [{ after: human[0]!.after }])).toContain('infra/human.tf');
+    expect(await ws.branchReader(repo, join(root, 'nowhere'))).toBeUndefined();
   });
 
   it('prepares the read-only trunk and a knowledge worktree', async () => {

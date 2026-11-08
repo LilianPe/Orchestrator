@@ -6,6 +6,8 @@ const MAX_QUESTION_SESSIONS = 50;
 
 const MAX_ANSWERED_MESSAGES = 50;
 
+const MAX_HUMAN_PUSHES = 50;
+
 /**
  * Only an implementer's run empties the human inbox, and a ticket may never see one. What already had its answer (a
  * question of a thread, a command) stays within a bound, its oldest dropped: it is in the journal, and was answered. What waits for the agent is never dropped (I6).
@@ -52,6 +54,9 @@ function external(t: TicketState, e: FactoryEvent): TicketState {
       return reopened({ ...t, delegated: true, linearSessionId: t.linearSessionId ?? e.payload.linearSessionId });
     case 'ticket.undelegated':
       return { ...t, delegated: false };
+    case 'push.human':
+      // What a human pushed is theirs (ORC-338): the newest pushes are kept, once each.
+      return { ...t, humanPushes: [...(t.humanPushes ?? []).filter((p) => p.after !== e.payload.sha), { ...(e.payload.before ? { before: e.payload.before } : {}), after: e.payload.sha }].slice(-MAX_HUMAN_PUSHES) };
     case 'session.mentioned':
     case 'command': {
       const id = e.payload.linearSessionId;
@@ -124,17 +129,21 @@ function internal(t: TicketState, e: InternalEvent): TicketState {
     case 'workspace.released':
       return { ...t, worktreePath: undefined, port: undefined };
     case 'run.started': {
-      if (e.queue !== 'dev') return { ...t };
       // Another launch took the ticket first (a settle whose lease went to another worker, ORC-339): one dev run at a
-      // time, this one does not take it. The launch sees it and lets go.
-      if (t.activeRunId && t.activeRunId !== e.runId) return { ...t };
+      // time, this one does not take it, nor marks it. The launch sees it and lets go.
+      if (e.queue === 'dev' && t.activeRunId && t.activeRunId !== e.runId) return { ...t };
+      // The first untrusted run in the ticket's worktree marks its branch, for good (ORC-338). Over `null` only, the read
+      // that found no untrusted run before; a ticket never read (the launch reads it first) takes its whole branch: fail closed.
+      const mark = !e.untrusted ? t.untrustedSince : t.untrustedSince === null ? e.untrusted.head : (t.untrustedSince ?? '');
+      const next = { ...t, ...(mark === undefined ? {} : { untrustedSince: mark }) };
+      if (e.queue !== 'dev') return next;
       const claudeSessionId = e.ticketSession === false ? t.claudeSessionId : (t.claudeSessionId ?? e.claudeSessionId);
       // The run that starts the pending job takes it off the ticket in the same write, whoever launched it (settle,
       // the queue, a decision): never both, never neither (ORC-339). The same job with another input, or the relaunch of
       // a lost attempt, is not it.
       const startsPending = !!e.starts && samePending(t.pendingJob, e.starts);
       return {
-        ...t,
+        ...next,
         activeRunId: e.runId,
         activeJob: e.job,
         claudeSessionId,
@@ -149,6 +158,9 @@ function internal(t: TicketState, e: InternalEvent): TicketState {
     }
     case 'run.cleared':
       return { ...t, activeRunId: undefined, activeJob: undefined, ...ended(t, true) };
+    case 'untrusted.read':
+      // Only once, and never over a mark a run set meanwhile.
+      return t.untrustedSince === undefined ? { ...t, untrustedSince: e.since } : t;
   }
 }
 

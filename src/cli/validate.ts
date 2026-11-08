@@ -43,12 +43,16 @@ export function runValidateCommand(opts: { repoPath: string; out: (line: string)
   } catch (err) {
     return refuse([`unreadable: ${(err as Error).message}`]);
   }
+  let warnings: string[];
   try {
-    parseRepoConfig(text);
+    warnings = parseRepoConfig(text).sensitivePathWarnings ?? [];
   } catch (err) {
     if (!(err instanceof RepoConfigError)) throw err;
     return refuse(err.violations);
   }
   opts.out(`${FILE} valid: it only adds checks or prohibitions to the baseline.`);
+  // ORC-338: kept out of the check, and a branch that took untrusted content is refused until they are fixed.
+  if (warnings.length) opts.out(`Warning, ignored entries (a branch that took untrusted content is refused until they are fixed):`);
+  for (const w of warnings) opts.out(`- ${w}`);
   return 0;
 }

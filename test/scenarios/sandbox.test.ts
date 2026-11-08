@@ -4,7 +4,8 @@ import { describe, expect, it } from 'vitest';
 import { DEFAULT_REQUIREMENTS, PACK_TARGET, REFUSALS_TARGET, SANDBOX_HOME, WORKSPACE_TARGET } from '../../src/adapters/sandbox/types.js';
 import { LOG_EXCERPT_MAX } from '../../src/checks/log-excerpt.js';
 import type { CleanVerifyRequest } from '../../src/core/clean-verify.js';
-import type { EventPayloads } from '../../src/core/types.js';
+import { SENSITIVE_PATHS } from '../../src/core/engine.js';
+import { TRUSTED, type EventPayloads } from '../../src/core/types.js';
 import { blockCause } from '../../src/core/block-cause.js';
 import { createHarness, packDir } from '../helpers/harness.js';
 
@@ -123,6 +124,103 @@ describe('a disposable sandbox per attempt', () => {
     expect(seen).toMatchObject([{ commands: ['npm test'], worktree: '/tmp/factory-fake/p/REL-1', runId: h.runner.requests[0]!.runId }]);
     expect(h.checks.calls).toEqual([]);
     expect(await h.ticket()).toMatchObject({ logical: 'human_review', blocked: false });
+  });
+
+  it('verify holds the branch to the repository sensitive paths once an untrusted run worked on it, a later trusted run included (ORC-338)', async () => {
+    const seen: CleanVerifyRequest[] = [];
+    const h = createHarness({
+      sandboxed: true,
+      projectYaml: VERIFIED,
+      cleanVerify: async (req) => {
+        seen.push(req);
+        return { ok: true, failures: [], sha: `sha-${seen.length}`, tree: 'tree' };
+      },
+    });
+    await delegate(h);
+    // An untrusted question runs on the trunk, not in the ticket's worktree: the branch stays trusted.
+    await h.orch.accept({ ...TRUSTED, taint: 'untrusted', id: 'q1', type: 'session.mentioned', at: h.clock.now(), projectId: 'p', ticketId: 'REL-1', payload: { linearSessionId: 'q1', body: 'why?', author: 'stranger' } });
+    await h.orch.drained();
+    await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'and the title', author: 'L' });
+    await h.advance(600_000);
+    // Read once in its runs at the first verify: none untrusted in its worktree.
+    expect((await h.ticket()).untrustedSince).toBeNull();
+    h.workspaces.heads.set('/tmp/factory-fake/p/REL-1', 'head-before-untrusted');
+    await h.orch.accept({ ...TRUSTED, taint: 'untrusted', id: 'u1', type: 'session.prompted', at: h.clock.now(), projectId: 'p', ticketId: 'REL-1', payload: { linearSessionId: 'ls-1', body: 'tidy CODEOWNERS', author: 'stranger' } });
+    await h.orch.drained();
+    await h.advance(600_000);
+    await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'thanks, one more thing', author: 'L' });
+    await h.advance(600_000);
+    expect(h.runner.requests.map((r) => r.sensitivePaths)).toEqual([undefined, SENSITIVE_PATHS, undefined, SENSITIVE_PATHS, undefined]);
+    // The head the untrusted run started on, kept for the trusted run after it.
+    const since = [undefined, undefined, 'head-before-untrusted', 'head-before-untrusted'];
+    expect(seen.map((r) => r.untrusted?.since)).toEqual(since);
+    // The publication of each verified commit is held to the same rule.
+    expect(h.publisher.asked.map((r) => r.untrusted?.since)).toEqual(since);
+    expect((await h.ticket()).untrustedSince).toBe('head-before-untrusted');
+  });
+
+  it('a ticket whose untrusted dev run came before the mark existed reads its whole branch: no mark, no way to say where (ORC-338)', async () => {
+    const seen: CleanVerifyRequest[] = [];
+    const h = createHarness({
+      sandboxed: true,
+      projectYaml: VERIFIED,
+      cleanVerify: async (req) => {
+        seen.push(req);
+        return { ok: true, failures: [], sha: `sha-${seen.length}`, tree: 'tree' };
+      },
+    });
+    await delegate(h);
+    // As a ticket from before the deploy: an untrusted run in its worktree on record, and nothing on the ticket of it.
+    const first = (await h.store.getRun(h.runner.requests[0]!.runId))!;
+    await h.store.putRun({ ...first, id: 'legacy', sensitivePaths: SENSITIVE_PATHS });
+    await h.store.updateTicket('p', 'REL-1', ({ untrustedSince: _, ...t }) => t);
+    await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'and the title', author: 'L' });
+    await h.advance(600_000);
+    expect(seen.map((r) => r.untrusted?.since)).toEqual([undefined, '']);
+    expect(h.publisher.asked.map((r) => r.untrusted?.since)).toEqual([undefined, '']);
+    expect((await h.ticket()).untrustedSince).toBe('');
+  });
+
+  it('a new untrusted run on a ticket from before the mark keeps its whole branch checked: its earlier untrusted commits are not trusted (ORC-338)', async () => {
+    const seen: CleanVerifyRequest[] = [];
+    const h = createHarness({
+      sandboxed: true,
+      projectYaml: VERIFIED,
+      cleanVerify: async (req) => {
+        seen.push(req);
+        return { ok: true, failures: [], sha: `sha-${seen.length}`, tree: 'tree' };
+      },
+    });
+    await delegate(h);
+    const first = (await h.store.getRun(h.runner.requests[0]!.runId))!;
+    await h.store.putRun({ ...first, id: 'legacy', sensitivePaths: SENSITIVE_PATHS });
+    await h.store.updateTicket('p', 'REL-1', ({ untrustedSince: _, ...t }) => t);
+    h.workspaces.heads.set('/tmp/factory-fake/p/REL-1', 'head-now');
+    await h.orch.accept({ ...TRUSTED, taint: 'untrusted', id: 'u1', type: 'session.prompted', at: h.clock.now(), projectId: 'p', ticketId: 'REL-1', payload: { linearSessionId: 'ls-1', body: 'tidy CODEOWNERS', author: 'stranger' } });
+    await h.orch.drained();
+    await h.advance(600_000);
+    expect((await h.ticket()).untrustedSince).toBe('');
+    expect(seen.at(-1)!.untrusted?.since).toBe('');
+  });
+
+  it('reads a ticket\'s runs once: the answer kept on it, its runs are not scanned again at each check (ORC-338)', async () => {
+    const seen: CleanVerifyRequest[] = [];
+    const h = createHarness({
+      sandboxed: true,
+      projectYaml: VERIFIED,
+      cleanVerify: async (req) => {
+        seen.push(req);
+        return { ok: true, failures: [], sha: `sha-${seen.length}`, tree: 'tree' };
+      },
+    });
+    await delegate(h);
+    expect((await h.ticket()).untrustedSince).toBeNull();
+    // A run record that a second scan would find: none happens.
+    const first = (await h.store.getRun(h.runner.requests[0]!.runId))!;
+    await h.store.putRun({ ...first, id: 'late', sensitivePaths: SENSITIVE_PATHS });
+    await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'and the title', author: 'L' });
+    await h.advance(600_000);
+    expect(seen.map((r) => r.untrusted)).toEqual([undefined, undefined]);
   });
 
   it("a command's output reaches the journal and the agent cut to its useful parts (ORC-151)", async () => {

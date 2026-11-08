@@ -20,7 +20,11 @@ type StartRun = Extract<Effect, { kind: 'start_run' }>;
 /** What a stop's answer says of the way back: versions frozen before ORC-196 keep their label. */
 const relaunch = (workflow: Workflow): string => (workflow.blockComment ? 'Reply on this ticket to relaunch.' : 'Reply in this thread or add the agent:reprendre label to relaunch.');
 
-/** Paths a run started from an untrusted event must not write; enforced by the runner's sandbox (ORC-151). */
+/**
+ * The mark of a run started from untrusted content (I12, ORC-274), carried by its `start_run` and its run record. Only its
+ * presence is read: it sets `TicketState.untrustedSince` (ORC-338), from which the repository's `sensitive_paths` are
+ * refused. What every run is refused is `FORBIDDEN_PATHS`. Kept a list, not a flag, as the journals record it in decisions.
+ */
 export const SENSITIVE_PATHS: readonly string[] = ['.github/**', '.factory/**', '.claude/**', 'CODEOWNERS', '.env*'];
 
 /** The refusal of a knowledge job (I12): its event is untrusted, or what it would read at its launch is (ORC-274). */
