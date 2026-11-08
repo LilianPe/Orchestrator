@@ -1,6 +1,7 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { REFREEZE } from '../../../checks/freeze.js';
-import { classifyMessage, type ModelVerdict } from '../../../core/human-message.js';
+import { classifyMessage } from '../../../core/human-message.js';
+import type { MessageClassifier } from '../../runner/message-classifier.js';
 import { maskTranscriptLine } from '../../runner/transcript.js';
 import { isEffectComment, IssueNotFoundError, labelEchoKey, stateEchoKey } from '../types.js';
 import { labelChanges, type KnownLabels } from './labels.js';
@@ -312,9 +313,10 @@ export function messageToClassify(e: FactoryEvent): string | undefined {
   return CLASSIFIED.has(e.type) && p.kind !== 'command' && typeof p.body === 'string' ? stripMention(p.body) : undefined;
 }
 
-/** The event with the model's verdict as its class, journaled with it; without a verdict, the fallback rule's stays. */
-export function withVerdict(e: FactoryEvent, verdict: ModelVerdict): FactoryEvent {
-  return verdict ? ({ ...e, payload: { ...(e.payload as object), kind: verdict } } as FactoryEvent) : e;
+/** The event classified with the model's verdict, by the same `classifyMessage` as the mapping; without one, the fallback rule. */
+export function withVerdict(e: FactoryEvent, verdict: Awaited<ReturnType<MessageClassifier>> | undefined): FactoryEvent {
+  const text = messageToClassify(e);
+  return text === undefined ? e : ({ ...e, payload: { ...(e.payload as object), kind: classifyMessage(text, verdict) } } as FactoryEvent);
 }
 
 /**
@@ -323,7 +325,12 @@ export function withVerdict(e: FactoryEvent, verdict: ModelVerdict): FactoryEven
  */
 export function mayCarryMessage(body: any): boolean {
   if (body?.type === 'AgentSessionEvent') return (body.action === 'created' && !!body.agentSession?.comment) || (body.action === 'prompted' && body.agentActivity?.signal !== 'stop');
-  return body?.type === 'Comment' && body.action === 'create';
+  // What `commentEvents` drops on the body alone: the factory's own comments, a session's, one opened by a mention, an empty one.
+  const text: unknown = body?.data?.body;
+  return (
+    body?.type === 'Comment' && body.action === 'create' && typeof text === 'string' && !!text.trim() && !isEffectComment(text) &&
+    !body.data.agentSessionId && !body.data.agentSession && stripMention(text) === text.trim()
+  );
 }
 
 /** The issue a webhook is about, by its stable id: an identifier changes when the issue moves to another team. */

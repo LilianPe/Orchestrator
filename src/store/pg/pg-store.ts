@@ -1260,7 +1260,12 @@ export class PgStore implements AsyncStore {
     const aside = metaId(`delivery-aside:${key}`);
     await this.db.transaction(async (tx) => {
       await tx.execute(sql`delete from workflow_versions where id = ${aside}`);
-      await tx.execute(sql`update workflow_versions set id = ${aside} where id = ${metaId(`delivery:${key}`)}`);
+      const kept = await tx.execute<{ value: string }>(sql`select definition->>'value' as value from workflow_versions where id = ${metaId(`delivery:${key}`)} for update`);
+      const value = kept.rows[0]?.value;
+      if (value === undefined) return;
+      // Its hash follows its id, as `setMeta` computes it: the same delivery kept again must not meet it on the hash's unique index.
+      const hash = createHash('sha256').update(`${aside}\0${value}`).digest('hex');
+      await tx.execute(sql`update workflow_versions set id = ${aside}, hash = ${hash} where id = ${metaId(`delivery:${key}`)}`);
     });
   }
 

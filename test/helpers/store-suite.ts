@@ -172,6 +172,10 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     expect(await s.receiveDelivery('activity:a', '{"raw":"new"}')).toBe(true);
     await s.asideDelivery('activity:a');
     expect(await s.getMeta('delivery-aside:activity:a')).toBe('{"raw":"new"}');
+    // The same delivery, same value, kept again once set aside: kept, beside the row set aside.
+    expect(await s.receiveDelivery('activity:a', '{"raw":"new"}')).toBe(true);
+    expect(await s.pendingDeliveries()).toContainEqual({ key: 'activity:a', value: '{"raw":"new"}' });
+    expect(await s.getMeta('delivery:activity:a')).toBe('{"raw":"new"}');
   });
 
   it("gathers a ticket's measure facts: journal in order, its attempts, its outbox, the first ack of its events (ORC-235)", async () => {

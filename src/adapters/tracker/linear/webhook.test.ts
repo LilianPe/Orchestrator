@@ -9,7 +9,7 @@ import { loadWorkflow } from '../../../config/load-workflow.js';
 import { FakeClock } from '../../../core/clock.js';
 import { unroutedReason } from '../../../core/routing.js';
 import { FakeTracker } from '../fake.js';
-import { IssueNotFoundError } from '../types.js';
+import { effectMarker, IssueNotFoundError } from '../types.js';
 import { knownLabels, recordLabels, serial } from './labels.js';
 import { reconcileOnce } from './reconcile.js';
 import { deliveryKey, isFresh, isUsableWebhookSecret, mapLinearWebhook, stripMention, verifyLinearSignature, type MapContext } from './webhook.js';
@@ -543,12 +543,18 @@ describe('ingest', () => {
   }
 
   describe('the small model after the answer, outside the serial turn (ORC-336)', () => {
-    const reply = (id: string, text: string, issue = { id: 'u1', identifier: 'REL-1' }) => {
+    const reply = (id: string, text: string, issue = { id: 'u1', identifier: 'REL-1' }, o: { at?: number; sourceCommentId?: string } = {}) => {
       const body = fx('session-prompted');
-      body.agentActivity = { ...body.agentActivity, id, content: { type: 'prompt', body: text } };
+      body.agentActivity = { ...body.agentActivity, id, content: { type: 'prompt', body: text }, ...(o.sourceCommentId ? { sourceCommentId: o.sourceCommentId } : {}) };
       body.agentSession.issue = { ...body.agentSession.issue, ...issue };
-      return signed({ ...body, webhookTimestamp: 5000 });
+      return signed({ ...body, webhookTimestamp: o.at ?? 5000 });
     };
+    /** The comment Linear writes for a session reply: the same message, as a `Comment` webhook of the session. */
+    const commentBody = (data: object) => ({
+      type: 'Comment', action: 'create', webhookTimestamp: 5000, actor: { id: 'user-lilian', type: 'user', name: 'Lilian' },
+      data: { id: 'c1', body: 'Prends le point-virgule', issue: { id: 'u1', identifier: 'REL-1' }, ...data },
+    });
+    const sessionComment = (id: string, text: string) => signed(commentBody({ id, body: text, agentSessionId: 'as-1' }));
     const moved = (id: string, identifier: string) =>
       signed({ ...fx('issue-moved-labeled'), data: { ...fx('issue-moved-labeled').data, id, identifier, updatedAt: `2026-10-15T10:00:0${id.length}.000Z` }, webhookTimestamp: 5000 });
     const slow = (ms: number, asked: string[] = []) => async (b: string) => {
@@ -699,19 +705,21 @@ describe('ingest', () => {
     it('past the horizon a delivery is set aside, loudly, and a redelivery of it is written', async () => {
       let down = true;
       const events: string[] = [];
+      const now = Date.now();
       const { send, ingest, store, logs } = setup(async () => 'instruction', {
         accept: async (e) => {
           if (down) throw new Error('disk');
           events.push(e.id);
         },
+        c: { ...ctx(), now: () => Date.now() },
       });
-      const once = reply('a1', 'corrige');
+      const once = reply('a1', 'corrige', undefined, { at: now });
       await send(once);
       await ingest.settled();
       expect(events).toEqual([]);
-      expect(logs.at(-1)).toMatch(/^ERROR: webhook activity:a1 set aside/);
+      expect(logs.at(-1)).toMatch(/^ERROR: webhook AgentSessionEvent:activity:a1 set aside/);
       expect(await store.pendingDeliveries()).toEqual([]);
-      expect(await store.getMeta('delivery-aside:activity:a1')).toContain('corrige');
+      expect(await store.getMeta('delivery-aside:AgentSessionEvent:activity:a1')).toContain('corrige');
       // Linear sends it again: no longer kept, so taken afresh.
       down = false;
       await send(once);
@@ -722,12 +730,104 @@ describe('ingest', () => {
     it('a redelivery of a row still kept but not being delivered delivers it again, timed at its first arrival', async () => {
       const store = new SqliteStore(':memory:');
       const { raw } = reply('a1', 'corrige');
-      await store.receiveDelivery('activity:a1', JSON.stringify({ raw, at: 4000 }));
+      await store.receiveDelivery('AgentSessionEvent:activity:a1', JSON.stringify({ raw, at: 4000 }));
       const events: FactoryEvent[] = [];
       const { send, ingest } = setup(async () => 'question', { store, accept: async (e) => void events.push(e) });
       expect(await send(reply('a1', 'corrige'))).toEqual({ status: 200 });
       await ingest.settled();
       expect(events).toMatchObject([{ id: 'linear:activity:a1', at: 4000, payload: { kind: 'question' } }]);
+    });
+
+    it('a redelivery of a kept row that cannot be read sets it aside', async () => {
+      const store = new SqliteStore(':memory:');
+      await store.receiveDelivery('AgentSessionEvent:activity:a1', '{broken');
+      const { send, ingest, logs, accepted } = setup(async () => 'question', { store });
+      expect(await send(reply('a1', 'corrige'))).toEqual({ status: 200 });
+      await ingest.settled();
+      expect(accepted).toEqual([]);
+      expect(logs).toEqual([expect.stringMatching(/^ERROR: webhook AgentSessionEvent:activity:a1 set aside.*unreadable/)]);
+      expect(await store.getMeta('delivery-aside:AgentSessionEvent:activity:a1')).toBe('{broken');
+    });
+
+    it('the past-horizon clock starts at the first arrival as kept, not at each start', async () => {
+      const store = new SqliteStore(':memory:');
+      const now = Date.now();
+      // Kept two hours ago, never written: past its hour already, so set aside at its first failure.
+      await store.receiveDelivery('AgentSessionEvent:activity:a1', JSON.stringify({ raw: reply('a1', 'corrige').raw, at: now - 2 * 3_600_000 }));
+      const { ingest, logs } = setup(async () => 'instruction', {
+        store,
+        accept: async () => Promise.reject(new Error('disk')),
+        c: { ...ctx(), now: () => Date.now() },
+        retry: { baseMs: 5, maxMs: 20, horizonMs: 3_600_000 },
+      });
+      await ingest.resume();
+      await ingest.settled();
+      expect(logs).toEqual([expect.stringMatching(/^ERROR: webhook AgentSessionEvent:activity:a1 set aside/)]);
+    });
+
+    it('a session reply is not lost to the comment Linear writes for it, whichever comes first', async () => {
+      for (const commentKept of [false, true]) {
+        const store = new SqliteStore(':memory:');
+        const events: FactoryEvent[] = [];
+        const { send, ingest } = setup(slow(100), { store, accept: async (e) => void (events.push(e), store.appendInbox(e)) });
+        if (commentKept) {
+          // The comment's row kept by an earlier start and not delivered: the reply must still go through.
+          await store.receiveDelivery('Comment:comment:c9', JSON.stringify({ raw: sessionComment('c9', 'corrige le tri').raw, at: 5000 }));
+        } else {
+          expect(await send(sessionComment('c9', 'corrige le tri'))).toEqual({ status: 200 });
+        }
+        expect(await send(reply('aa-9', 'corrige le tri', undefined, { sourceCommentId: 'c9' }))).toEqual({ status: 200 });
+        await ingest.settled();
+        expect(events.map((e) => [e.id, e.type])).toEqual([['linear:comment:c9', 'session.prompted']]);
+      }
+    });
+
+    it('never runs more than 4 classifications at once, resumed and live together', async () => {
+      const store = new SqliteStore(':memory:');
+      for (const k of [1, 2, 3, 4, 5, 6]) {
+        await store.receiveDelivery(`r${k}`, JSON.stringify({ raw: reply(`r${k}`, `resumed ${k}`, { id: `u${k}`, identifier: `REL-${k}` }).raw, at: 5000 }));
+      }
+      let running = 0;
+      let most = 0;
+      const { ingest, send } = setup(
+        async () => {
+          most = Math.max(most, ++running);
+          await new Promise((r) => setTimeout(r, 30));
+          running--;
+          return 'instruction';
+        },
+        { store },
+      );
+      await ingest.resume();
+      // Live messages come while the resumed ones hand their slots over.
+      for (const k of [7, 8, 9]) {
+        await new Promise((r) => setTimeout(r, 10));
+        await send(reply(`l${k}`, `live ${k}`, { id: `u${k}`, identifier: `REL-${k}` }));
+      }
+      await ingest.settled();
+      expect(most).toBeLessThanOrEqual(4);
+      expect(most).toBe(4);
+    });
+
+    it("the factory's own comments, a session's, and an empty one never take the kept path", async () => {
+      const store = new SqliteStore(':memory:');
+      const { send } = setup(async () => 'instruction', { store });
+      const comment = (data: object) => signed(commentBody(data));
+      for (const data of [{ id: 'k1', body: `fait ${effectMarker('e1')}` }, { id: 'k2', agentSessionId: 'as-1' }, { id: 'k3', body: '   ' }, { id: 'k4', body: '@quelqu-un regarde' }]) {
+        expect(await send(comment(data))).toEqual({ status: 200 });
+      }
+      expect(await store.pendingDeliveries()).toEqual([]);
+    });
+
+    it('without a model, a start still writes the rows an earlier start kept', async () => {
+      const store = new SqliteStore(':memory:');
+      await store.receiveDelivery('AgentSessionEvent:activity:a1', JSON.stringify({ raw: reply('a1', 'corrige ?').raw, at: 5000 }));
+      const events: FactoryEvent[] = [];
+      const ingest = createLinearIngest({ secret: () => 'sec', ctx: ctx(), accept: async (e) => void events.push(e), log: () => {}, deliveries: store });
+      expect(await ingest.resume()).toBe(1);
+      await ingest.settled();
+      expect(events).toMatchObject([{ id: 'linear:activity:a1', payload: { kind: 'question' } }]);
+      expect(await store.pendingDeliveries()).toEqual([]);
     });
 
     it('resume sets an unreadable row aside and goes on with the others', async () => {

@@ -288,8 +288,10 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     const classify = o.fakeRunner ? undefined : messageClassifier(env, claudeToken, !sandboxes, log);
     const ingest = createLinearIngest({
       serial: labelsTurn,
-      // A message for the model is kept in the store and answered before it is classified (ORC-336).
-      ...(classify ? { classify, deliveries: store } : {}),
+      // A message for the model is kept in the store and answered before it is classified (ORC-336); what an earlier
+      // start kept is written by `resume`, model or not.
+      ...(classify ? { classify } : {}),
+      deliveries: store,
       secret: webhookSecret,
       accept,
       log,

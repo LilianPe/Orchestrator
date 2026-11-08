@@ -5,9 +5,9 @@ import { serial, type Serial } from './labels.js';
 import { deliveryKey, isFresh, issueKeyOf, mapLinearWebhook, mayCarryMessage, messageToClassify, recordIssueLabels, verifyLinearSignature, withVerdict, type MapContext } from './webhook.js';
 
 /** What the store keeps of a delivery answered before the inbox (ORC-336). */
-export type DeliveryStore = Pick<Store, 'receiveDelivery' | 'pendingDeliveries' | 'deleteDelivery' | 'asideDelivery' | 'inboxHas'>;
+export type DeliveryStore = Pick<Store, 'receiveDelivery' | 'pendingDeliveries' | 'deleteDelivery' | 'asideDelivery' | 'inboxHas' | 'getMeta'>;
 
-/** How a kept delivery is tried again: from `baseMs`, doubling up to `maxMs`, until `horizonMs` after its first try. */
+/** How a kept delivery is tried again: from `baseMs`, doubling up to `maxMs`, until `horizonMs` after its first arrival. */
 export interface RetryPolicy {
   baseMs: number;
   maxMs: number;
@@ -29,7 +29,7 @@ export interface IngestDeps {
   serial?: Serial;
   /** The small model that classifies a message (ORC-336); without it, the fallback rule alone, and every webhook is written before its answer. */
   classify?: MessageClassifier;
-  /** Where a delivery answered before the inbox is kept until written (ORC-336); required with `classify`. */
+  /** Where a delivery answered before the inbox is kept until written (ORC-336): required with `classify`, and read back by `resume` even without it. */
   deliveries?: DeliveryStore;
   retry?: RetryPolicy;
 }
@@ -110,7 +110,8 @@ export function createLinearIngest(d: IngestDeps) {
     });
 
   /**
-   * `work` tried again with backoff until the horizon from `since` (the delivery's first try): a blip in Linear or the
+   * `work` tried again with backoff until the horizon from `since` (the delivery's first arrival, as kept, so that a
+   * restart does not start the hour again): a blip in Linear or the
    * store strands nothing. Past it, or once the ingest closes, it throws: the caller moves the row aside, or leaves it
    * kept for the next start.
    */
@@ -120,7 +121,7 @@ export function createLinearIngest(d: IngestDeps) {
         return await work();
       } catch (err) {
         const delay = Math.min(retry.baseMs * 2 ** (attempt - 1), retry.maxMs);
-        if (closed || Date.now() + delay - since > retry.horizonMs) throw err;
+        if (closed || d.ctx.now() + delay - since > retry.horizonMs) throw err;
         d.log(`webhook ${key}: ${what} failed (try ${attempt}), tried again in ${Math.round(delay / 1000)} s: ${(err as Error).message}`);
         await pause(delay);
       }
@@ -130,13 +131,14 @@ export function createLinearIngest(d: IngestDeps) {
   async function slot(wait: boolean): Promise<boolean> {
     if (classifying < MAX_CLASSIFICATIONS) return (classifying++, true);
     if (!wait) return false;
+    // The slot is handed over by `release`, never freed in between: no live message takes it meanwhile.
     await new Promise<void>((r) => waiting.push(r));
-    classifying++;
     return true;
   }
   const release = () => {
-    classifying--;
-    waiting.shift()?.();
+    const next = waiting.shift();
+    if (next) next();
+    else classifying--;
   };
 
   /** The model's verdict on an event's message, if it has one and the inbox does not hold it yet. */
@@ -171,13 +173,14 @@ export function createLinearIngest(d: IngestDeps) {
   function deliver(key: string, { delivery: { at }, body }: { delivery: Delivery; body: any }, resumed = false): Promise<void> {
     const issue = issueKeyOf(body) ?? '';
     const message = mayCarryMessage(body);
-    const since = Date.now();
+    // The events' ids: a reply and the comment Linear writes for it share them, and the inbox keeps the first.
+    const eventKey = deliveryKey(body);
     active.add(key);
-    const map = after(message ? mapped.get(issue) : written.get(issue)).then(() => tried(key, since, 'mapping', () => inTurn(() => mapLinearWebhook(body, key, d.ctx, { at }))));
-    const events = map.then((list) => Promise.all(list.map((e) => classified(e, key, since, resumed))));
+    const map = after(message ? mapped.get(issue) : written.get(issue)).then(() => tried(key, at, 'mapping', () => inTurn(() => mapLinearWebhook(body, eventKey, d.ctx, { at }))));
+    const events = map.then((list) => Promise.all(list.map((e) => classified(e, key, at, resumed))));
     const done = Promise.all([events, after(written.get(issue))]).then(async ([list]) => {
-      await tried(key, since, 'inbox write', () => inTurn(() => write(body, list)));
-      await tried(key, since, 'kept row removal', () => d.deliveries!.deleteDelivery(key));
+      await tried(key, at, 'inbox write', () => inTurn(() => write(body, list)));
+      await tried(key, at, 'kept row removal', () => d.deliveries!.deleteDelivery(key));
     });
     settle(mapped, issue, message ? map : done);
     settle(written, issue, done);
@@ -207,13 +210,22 @@ export function createLinearIngest(d: IngestDeps) {
     // Kept, then answered: classified and written after, behind the ticket's earlier webhooks. One that waits behind
     // such a webhook goes the same way, so that the answer never waits on the model.
     if (d.classify && d.deliveries && (mayCarryMessage(body) || written.has(issue))) {
+      // Kept by its kind as well: a reply and the comment Linear writes for it share `key`, and neither may drop the other.
+      const row = `${body.type}:${key}`;
       try {
-        if (await d.deliveries.receiveDelivery(key, JSON.stringify({ raw, at } satisfies Delivery))) void deliver(key, { delivery: { raw, at }, body });
-        // Kept already and no longer being delivered here (a write that failed until it gave up): delivered again,
-        // timed at its first arrival.
-        else if (!active.has(key)) {
-          const kept = (await d.deliveries.pendingDeliveries()).find((r) => r.key === key);
-          if (kept) void deliver(key, readDelivery(kept.value));
+        if (await d.deliveries.receiveDelivery(row, JSON.stringify({ raw, at } satisfies Delivery))) void deliver(row, { delivery: { raw, at }, body });
+        // Kept already and no longer being delivered here: delivered again, timed at its first arrival.
+        else if (!active.has(row)) {
+          const kept = await d.deliveries.getMeta(`delivery:${row}`);
+          if (kept !== undefined) {
+            let read: { delivery: Delivery; body: any } | undefined;
+            try {
+              read = readDelivery(kept);
+            } catch (err) {
+              await aside(row, `unreadable: ${(err as Error).message}`);
+            }
+            if (read) void deliver(row, read);
+          }
         }
       } catch (err) {
         d.log(`webhook not kept: ${(err as Error).message}`);
