@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useReducer, useRef, useState, type ComponentProps } from 'react';
 import { fetchFlow, fetchSnapshot, post, subscribe } from './api.js';
-import { Flow } from './Flow.js';
+import { Flow, plural } from './Flow.js';
 import { initialState, reducer } from './state.js';
 import type { FlowView, RunLine, WorkingRunView } from './types.js';
 import { PRODUCT_NAME } from '../../src/product.js';
 
-/** A burst of ticket updates reads the Flux once. */
+/** A burst of ticket updates reads the Flow once. */
 const FLOW_DEBOUNCE_MS = 300;
 
 function Line({ line }: { line: RunLine }) {
@@ -15,15 +15,15 @@ function Line({ line }: { line: RunLine }) {
     case 'tool':
       return <p className="line tool"><span>{line.name}</span> {line.input}</p>;
     case 'tool_result':
-      return line.isError ? <p className="line err">outil en erreur</p> : null;
+      return line.isError ? <p className="line err">tool error</p> : null;
     case 'result':
-      return <p className="line result">{line.isError ? 'Échec' : 'Terminé'} · {line.turns} tours · {line.costUsd.toFixed(2)} $</p>;
+      return <p className="line result">{line.isError ? 'Failed' : 'Done'} · {plural(line.turns, 'turn')} · ${line.costUsd.toFixed(2)}</p>;
     default:
       return null;
   }
 }
 
-/** The durations go on between two reads: only the Flux renders each second, not the session nor the journal. */
+/** The durations go on between two reads: only the Flow renders each second, not the session nor the journal. */
 function LiveFlow({ flow, flowAt, frozen, ...rest }: { flow: FlowView; flowAt: number; frozen: boolean } & Omit<ComponentProps<typeof Flow>, 'flow' | 'elapsedMs'>) {
   const [now, setNow] = useState(() => Date.now());
   const ticking = !frozen && flow.working.length > 0;
@@ -79,37 +79,37 @@ export function App() {
         <h1>{PRODUCT_NAME}</h1>
         {snap && (
           <div className="stats">
-            <span>Places {snap.capacity.dev.used}/{snap.capacity.dev.total}</span>
+            <span>Slots {snap.capacity.dev.used}/{snap.capacity.dev.total}</span>
             <span>Questions {snap.capacity.questions.used}/{snap.capacity.questions.total}</span>
-            <span>File {snap.queue.length}</span>
-            <span>Coût du jour {snap.costTodayUsd.toFixed(2)} ${snap.budgetUsd ? ` / ${snap.budgetUsd} $` : ''}</span>
-            <span className={s.connected ? 'live on' : 'live'}>{s.connected ? 'en direct' : 'déconnecté'}</span>
-            {!snap.linearConnected && <a className="button primary" href="/oauth/start">Connecter Linear</a>}
-            <button onClick={() => post(snap.paused ? '/api/control/resume' : '/api/control/pause')}>{snap.paused ? 'Reprendre' : 'Pause'}</button>
+            <span>Queue {snap.queue.length}</span>
+            <span>Today’s cost ${snap.costTodayUsd.toFixed(2)}{snap.budgetUsd ? ` / $${snap.budgetUsd.toFixed(2)}` : ''}</span>
+            <span className={s.connected ? 'live on' : 'live'}>{s.connected ? 'live' : 'disconnected'}</span>
+            {!snap.linearConnected && <a className="button primary" href="/oauth/start">Connect Linear</a>}
+            <button onClick={() => post(snap.paused ? '/api/control/resume' : '/api/control/pause')}>{snap.paused ? 'Resume' : 'Pause'}</button>
           </div>
         )}
       </header>
       <main>
         <div className="flow">
-          {s.flowFailed && <p className="flow-failed" role="alert">{s.flow ? 'Flux non à jour : sa lecture a échoué, ce qui suit peut être dépassé. Nouvel essai sous 10 s.' : 'Flux indisponible : sa lecture a échoué. Nouvel essai sous 10 s.'}</p>}
+          {s.flowFailed && <p className="flow-failed" role="alert">{s.flow ? 'Flow out of date: reading it failed, what follows may be stale. Retrying within 10 s.' : 'Flow unavailable: reading it failed. Retrying within 10 s.'}</p>}
           {s.flow ? (
             <LiveFlow flow={s.flow} flowAt={s.flowAt} frozen={s.flowFailed} selectedRun={s.selectedRun} onSelect={(runId) => dispatch({ type: 'select', runId })} onStop={stop} />
-          ) : !s.flowFailed && <section><p className="empty">Chargement du Flux…</p></section>}
+          ) : !s.flowFailed && <section><p className="empty">Loading the Flow…</p></section>}
         </div>
         <section className="run">
-          <h2>Session en direct {s.selectedRun ? `· ${s.selectedRun.slice(0, 8)}` : ''}</h2>
+          <h2>Live session {s.selectedRun ? `· ${s.selectedRun.slice(0, 8)}` : ''}</h2>
           <div className="lines">
-            {lines.length ? lines.map((l, i) => <Line key={i} line={l} />) : <p className="empty">{s.selectedRun ? 'Rien reçu de ce run depuis l’ouverture de la page.' : 'Choisissez un run dans Working.'}</p>}
+            {lines.length ? lines.map((l, i) => <Line key={i} line={l} />) : <p className="empty">{s.selectedRun ? 'Nothing received from this run since the page was opened.' : 'Pick a run in Working.'}</p>}
           </div>
         </section>
         <section className="journal">
-          <h2>Journal</h2>
+          <h2>Log</h2>
           <ul>
             {s.logs.slice(0, 5).map((l, i) => (
-              <li key={`log-${i}`} className={`log ${l.level}`}>{new Date(l.at).toLocaleTimeString('fr-FR')} {l.message}</li>
+              <li key={`log-${i}`} className={`log ${l.level}`}>{new Date(l.at).toLocaleTimeString('en-US')} {l.message}</li>
             ))}
             {s.events.map((e) => (
-              <li key={e.id}>{new Date(e.at).toLocaleTimeString('fr-FR')} <strong>{e.type}</strong> {e.ticketId ?? ''}</li>
+              <li key={e.id}>{new Date(e.at).toLocaleTimeString('en-US')} <strong>{e.type}</strong> {e.ticketId ?? ''}</li>
             ))}
           </ul>
         </section>

@@ -154,8 +154,8 @@ Written by `relais init` (application credentials) then by the OAuth connection 
 |---|---|---|
 | `clientId`, `clientSecret` | entered during `relais init` | OAuth and token refresh. |
 | `webhookSecret` | entered during `relais init` (required) | Verifies the HMAC signature of Linear webhooks. Empty or absent: all webhooks are refused (401). |
-| `accessToken`, `refreshToken`, `expiresAt` | « Connecter Linear » | Application token, refreshed automatically. |
-| `appUserId`, `organizationId` | « Connecter Linear » | The agent's identity in Linear (used to list the tickets delegated to it). |
+| `accessToken`, `refreshToken`, `expiresAt` | « Connect Linear » | Application token, refreshed automatically. |
+| `appUserId`, `organizationId` | « Connect Linear » | The agent's identity in Linear (used to list the tickets delegated to it). |
 
 Rerunning `relais init` with the **same** client ID keeps the tokens; with a different one, Linear must be reconnected.
 
@@ -187,7 +187,7 @@ read_guard: { max_lines: 350 }
 | Section | Effect today |
 | -- | -- |
 | `github` | **Applied**: its keys replace those of `github` in `config.yaml`; a key it does not declare (`installation_id`, `webhook_secret`) stays the one from `config.yaml`. |
-| `linear` | **Applied**: `app_client_id`, `client_secret` and `webhook_secret` replace those in `secrets.json`. The OAuth tokens stay in `secrets.json`, written by « Connecter Linear ». |
+| `linear` | **Applied**: `app_client_id`, `client_secret` and `webhook_secret` replace those in `secrets.json`. The OAuth tokens stay in `secrets.json`, written by « Connect Linear ». |
 | `claude` | **`accounts` and `active` applied** (ORC-211): the active account's token is the runner's only credential. **`effort` applied** (ORC-136): `per_step` replaces a preset step's effort, `default` is used for jobs outside the preset (`ask`, `learn`). The rest of account selection comes with ORC-215. |
 | `concurrency` | **Applied** (ORC-203): capacity of the `dev` queue, instead of the workflow's `limits.parallel_sessions`. The `questions` queue keeps `question_sessions`. |
 | `budgets` | **`max_turns` and `per_step_tokens` applied** (ORC-136), per step: `max_turns` can only lower the step's turns, `per_step_tokens` is a per-attempt cap, with no default value. `per_ticket_tokens` and the worst case of `factory validate` come with ORC-216, `on_usage_limit` with ORC-215. |

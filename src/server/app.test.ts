@@ -59,7 +59,7 @@ describe('server', () => {
     expect(body.capacity.dev).toEqual({ used: 1, total: 3 });
   });
 
-  describe('the Flux (ORC-297)', () => {
+  describe('the Flow (ORC-297)', () => {
     it('serves a blocked ticket in Needs you with its cause, a running run in Working with its step, duration and tokens', async () => {
       const { app, store } = await setup();
       const tokens = { input: 10, output: 20, cacheRead: 30, cacheCreation: 40 };
@@ -94,7 +94,7 @@ describe('server', () => {
       expect((await app.request('/api/flow')).status).toBe(401);
     });
 
-    it('serves no run token to the browser: not in the state, the Flux, the events nor the live stream', async () => {
+    it('serves no run token to the browser: not in the state, the Flow, the events nor the live stream', async () => {
       const { app, store, bus } = await setup();
       const TOKEN = 'CANARY-RUN-TOKEN';
       const run = (await store.getRun('r1'))!;

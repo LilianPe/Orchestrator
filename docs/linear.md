@@ -26,7 +26,7 @@ Linear may refuse a callback URL on `http://localhost`: in that case, temporaril
 ## 2. Connect Linear (install the agent)
 
 1. `relais up`.
-2. Open the UI (`http://localhost:4100`) and click **Connecter Linear** (or open `/oauth/start`).
+2. Open the UI (`http://localhost:4100`) and click **Connect Linear** (or open `/oauth/start`).
 3. Linear asks you to authorize the application for the workspace, with the scopes `read`, `write`, `app:assignable`, `app:mentionable` and `actor=app` (the application acts in its own name, not yours).
 4. Back on `/oauth/callback`: « Linear is connected. You can close this tab. »
 
