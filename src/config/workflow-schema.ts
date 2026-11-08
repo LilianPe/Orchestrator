@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { Condition } from '../core/conditions.js';
 import type { EventType, InputKind, LogicalState, QueueName } from '../core/types.js';
+import type { NetworkLevel } from '../adapters/sandbox/types.js';
 import type { Effort } from '../presets/preset.js';
 
 const logical = z.enum(['todo', 'dev', 'human_review', 'ai_review', 'ready', 'done']);
@@ -147,6 +148,8 @@ export interface JobSpec {
   step?: string;
   /** `claude --effort`, of the preset step the job names (`step`, ORC-136). Absent from the jobs out of the preset and from versions frozen before it: the CLI's default. */
   effort?: Effort;
+  /** The network level of the preset step the job names (ORC-322), narrowed by the repository's. Absent from the jobs out of the preset and from versions frozen before it: the repository's level. */
+  network?: NetworkLevel;
   workspace: 'worktree' | 'trunk-readonly' | 'knowledge';
   session: 'new' | 'resume';
   skill: string;

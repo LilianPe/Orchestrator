@@ -841,8 +841,8 @@ export class Orchestrator {
    * a fresh context that never sees the ticket's (ORC-217). The run's refusals dir, read-write, so the
    * hook's log outlives the sandbox. The pack and the run settings read-only.
    * A `trunk-readonly` job gets its worktree read-write too: only `--permission-mode plan` keeps it
-   * from writing, as on the host. The network is applied by the egress proxy (ORC-213): the repository's
-   * level for the agent (`agentPolicy`, from the config read at the launch); `none` for a check (the red sandbox).
+   * from writing, as on the host. The network is applied by the egress proxy (ORC-213): for the agent, its step's
+   * level narrowed by the repository's (`agentPolicy`, from the config read at the launch, ORC-322); `none` for a check (the red sandbox).
    */
   private async openSandbox(sandboxes: SandboxProvider, project: ProjectRuntime, ticketId: string, ws: Workspace, runId: string, ticketSession: boolean, policy: EgressPolicy): Promise<Sandbox> {
     if (!this.d.sessionsDir || !this.d.runsDir) throw new Error('sessionsDir and runsDir are required with sandboxes');
@@ -2276,7 +2276,7 @@ export class Orchestrator {
       }
       setUp = true;
       // Opened after the cheap exits above and after the setup, whose container is gone by now (ORC-211).
-      sandbox = this.d.sandboxes && (await this.openSandbox(this.d.sandboxes, project, ticketId, ws, runId, ticketSession, agentPolicy(config)));
+      sandbox = this.d.sandboxes && (await this.openSandbox(this.d.sandboxes, project, ticketId, ws, runId, ticketSession, agentPolicy(config, job.network)));
       // In each run's prompt, not the system prompt: read again at each attempt, never frozen at a resume
       // (ORC-128). The reset below keeps `.claude/CLAUDE.md`: the order does not matter.
       const conventions = readConventions(ws.path);

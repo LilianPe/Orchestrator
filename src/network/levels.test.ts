@@ -35,6 +35,17 @@ describe('agentPolicy (an agent run, ORC-209 C)', () => {
     expect(agentPolicy(repo('network: { level: custom, allow: [docs.exemple.com] }\n'))).toEqual({ level: 'limited', allow: ['docs.exemple.com'] });
   });
 
+  it("narrows to the step's level, never wider than the repository's (ORC-322)", () => {
+    const custom = repo('network: { level: custom, allow: [docs.exemple.com] }\n');
+    expect(agentPolicy(custom, 'claude-api')).toEqual({ level: 'claude-api', allow: [] });
+    expect(agentPolicy(custom, 'limited')).toEqual({ level: 'limited', allow: ['docs.exemple.com'] });
+    expect(agentPolicy(repo('network: { level: none }\n'), 'limited')).toEqual({ level: 'claude-api', allow: [] });
+  });
+
+  it('keeps the Claude API for an agent step at none: it could not reach its model', () => {
+    expect(agentPolicy(repo(), 'none')).toEqual({ level: 'claude-api', allow: [] });
+  });
+
   it('keeps the Claude API for a repository at none: the agent cannot run without it', () => {
     expect(agentPolicy(repo('network: { level: none }\n'))).toEqual({ level: 'claude-api', allow: [] });
   });

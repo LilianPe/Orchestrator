@@ -86,6 +86,13 @@ on:
       expect(jobs['review']).toMatchObject({ effort: 'high', limits: { turns: 25 } });
     });
 
+    it("gives each job its step's network level: review at claude-api, the others at limited (ORC-322)", () => {
+      const { jobs } = loadWorkflow({ packDir });
+      expect(jobs['review']!.network).toBe('claude-api');
+      for (const name of ['dev', 'tests', 'dev-feedback', 'fix-ci']) expect(jobs[name]!.network).toBe('limited');
+      expect(jobs['ask']).not.toHaveProperty('network');
+    });
+
     it('leaves the jobs out of the preset alone: their own limits, no effort', () => {
       const { jobs } = loadWorkflow({ packDir });
       expect(jobs['ask']!.limits.turns).toBe(30);

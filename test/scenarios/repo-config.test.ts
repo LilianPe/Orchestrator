@@ -38,6 +38,17 @@ describe("the repository's config at the launch", () => {
     expect(agents(h)).toMatchObject([{ network: 'limited', allow: ['docs.exemple.com'] }]);
   });
 
+  it("opens a review's sandbox at its step's level, claude-api, under a custom repository (ORC-322)", async () => {
+    const h = createHarness({ sandboxed: true, ...onDefaultBranch(BASE) });
+    await delegate(h);
+    await h.send('status.changed', { from: 'human_review', to: 'ai_review' });
+    expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:dev', '/factory:review']);
+    expect(agents(h).map((c) => [c.network, c.allow])).toEqual([
+      ['limited', ['docs.exemple.com']],
+      ['claude-api', undefined],
+    ]);
+  });
+
   it('keeps the Claude API for a repository at none: its agent runs at claude-api', async () => {
     const h = createHarness({ sandboxed: true, ...onDefaultBranch('network: { level: none }\n') });
     await delegate(h);
