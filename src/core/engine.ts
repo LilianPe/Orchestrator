@@ -1250,7 +1250,7 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
   if ((event.payload as { waitedIn?: string }).waitedIn && !out.events.reduce<TicketState | undefined>((t, e) => reduce(t, e), reduce(state, event))?.blocked) {
     out.effects.push(blockedLabelChange(true, false)!);
   }
-  if (event.type === 'ticket.delegated') newRun(out, state);
+  if (event.type === 'ticket.delegated') newRun(out, state, workflow);
   acknowledge(out, event, state);
   // A comment decide did not read (no reply awaited, refused) is not the factory's to answer.
   if (event.type !== 'ticket.commented' || out.events.some((e) => e.type === 'feedback.appended')) noticeMasked(out, event);
@@ -1258,14 +1258,14 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
 }
 
 /**
- * The boundary of a run (ORC-365): a delegation whose decision starts a run starts a new one, which takes its risk and its
- * visual proof from its own assessment, not from the last run's (I4). They go to `null`, the mark of a run not yet assessed.
+ * The boundary of a run (ORC-365): a delegation whose decision starts a dev run starts a new run, which takes its risk and
+ * its visual proof from its own assessment, not from the last run's (I4): they are cleared (`null`) until it assesses.
  * A delegation that starts nothing (refused, a run active, a blocked ticket, one waiting on its blockers) leaves the run
- * as it is; a ticket never assessed has nothing to start again from, and patches nothing.
+ * as it is; a ticket never assessed has nothing to clear, and patches nothing.
  */
-function newRun(out: Decision, state: TicketState | undefined): void {
-  if (!state?.risk && !state?.visualProof) return;
-  if (out.effects.some((e) => e.kind === 'start_run')) out.events.push({ type: 'ticket.patched', patch: { risk: null, visualProof: null } });
+function newRun(out: Decision, state: TicketState | undefined, workflow: Workflow): void {
+  const starts = out.effects.some((e) => e.kind === 'start_run' && workflow.jobs[e.job]?.queue === 'dev');
+  if ((state?.risk || state?.visualProof) && starts) out.events.push({ type: 'ticket.patched', patch: { risk: null, visualProof: null } });
 }
 
 /** Label put next to the status while the factory waits for a human (ORC-170). */

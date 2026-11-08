@@ -26,7 +26,7 @@ export type ClarifyAnswer = Pick<FeedbackItem, 'author' | 'authorId' | 'at'> & {
 /** The risk of a run, lowest first (ORC-206): the order I4 keeps from going down. */
 export const RISKS = ['low', 'medium', 'high'] as const;
 export type Risk = (typeof RISKS)[number];
-/** The higher of two risks: a proposal never lowers the run's (I4). A new run's not yet assessed (`null`, ORC-365) is no level. */
+/** The higher of two risks: a proposal never lowers the run's (I4). A risk cleared by a new run (`null`, ORC-365) is none. */
 export const higherRisk = (held: Risk | null | undefined, proposed: Risk): Risk => (held && RISKS.indexOf(held) > RISKS.indexOf(proposed) ? held : proposed);
 
 export type RunOutcome = 'success' | 'failure' | 'stopped' | 'limit';
@@ -565,8 +565,7 @@ export interface TicketState {
   size?: TicketSize;
   /**
    * The risk of the run (ORC-206): the highest any step of it proposed, never lowered within it (I4). Absent until `intake`
-   * assessed it. `null` marks the boundary of a run (ORC-365): a delegation started a new run over an assessment, and none
-   * of the new run has assessed yet; its own intake sets it then. A ticket from before ORC-365 has no such mark: same run.
+   * assessed it. A delegation that starts a new run clears it (`null`, ORC-365): the new run's intake sets it from its own level.
    */
   risk?: Risk | null;
   /**
@@ -579,7 +578,7 @@ export interface TicketState {
   decisions?: ClarifyAnswer[];
   /**
    * Visual proof planned for the ticket (ORC-206): within a run, `intake` can only harden it to `required`, never lift it;
-   * a new run plans its own, `null` at its boundary like `risk` (ORC-365). Absent or `null`: undecided until `verify` (ORC-176).
+   * a new run plans its own, cleared (`null`) like `risk` (ORC-365). Absent or `null`: undecided until `verify` (ORC-176).
    */
   visualProof?: 'required' | null;
   /** Hash of the workflow version the ticket was decided on first, read for all its later decisions (ORC-149). */

@@ -274,15 +274,17 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
     ];
     const lowered = seq(...delegated(), ...assessedRisk('r1', 'high'), ...assessedRisk('r2', 'low'));
     // Taken back, then delegated again (ORC-365): a new run, whose intake proposes low.
-    const again = [ext('ticket.undelegated', {}), ext('ticket.delegated', { linearSessionId: 's-again', ack: true })];
-    const redelegated = seq(...delegated(), ...assessedRisk('r1', 'high'), ...again, ...assessedRisk('r2', 'low'));
+    const redelegated = seq(...delegated(), ...assessedRisk('r1', 'high'), ext('ticket.undelegated', {}), ...delegated(), ...assessedRisk('r2', 'low'));
     it(
       'within a run, once assessed, the risk stays and never goes below what it was; the visual proof, once required, stays required',
       () => {
         holds((s) => {
           for (const step of run(s).steps) {
-            // A delegation that starts a run starts a new one: the only step that lowers them, to null (ORC-365).
-            if (step.kind === 'decided' && step.event.type === 'ticket.delegated' && step.launches.length && step.after?.risk === null) continue;
+            // A delegation that starts a run starts a new one: the only step that lowers them, and only to cleared (ORC-365).
+            if (step.kind === 'decided' && step.event.type === 'ticket.delegated' && step.launches.length) {
+              if (step.before?.risk) expect(step.after).toMatchObject({ risk: null, visualProof: null });
+              continue;
+            }
             const before = step.before?.risk;
             if (before) expect(step.after?.risk && higherRisk(before, step.after.risk)).toBe(step.after?.risk);
             if (step.before?.visualProof) expect(step.after?.visualProof).toBe('required');
@@ -294,8 +296,7 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
     it(
       'a ticket delegated again starts from its new intake: low after high',
       () => {
-        const steps = run(redelegated).steps;
-        expect(steps.at(-1)?.after?.risk).toBe('low');
+        expect(run(redelegated).steps.at(-1)?.after?.risk).toBe('low');
         expect(run(lowered).steps.at(-1)?.after?.risk).toBe('high');
       },
       TIMEOUT,
