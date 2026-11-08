@@ -17,6 +17,8 @@ export interface QueueView {
 
 export interface Snapshot {
   paused: boolean;
+  /** Until when (ms) the Claude account's usage limit holds every launch (ORC-340); null when it holds none. Absent from an older server. */
+  usageLimitedUntil?: number | null;
   linearConnected: boolean;
   queue: QueueView[];
   activeRuns: RunView[];

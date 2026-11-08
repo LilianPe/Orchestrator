@@ -141,8 +141,26 @@ export function isOwnMoveEcho(t: TicketState | undefined, e: FactoryEvent | Inte
   return !cancelled && to === t.recordedStatus && t.logical === t.recordedStatus;
 }
 
-/** What moves a ticket on, and so ends its wait on the usage limit (ORC-340): its `usage.reset` timer then resumes nothing. */
-const ENDS_USAGE_WAIT: ReadonlySet<string> = new Set(['ticket.undelegated', 'status.changed', 'status.recorded', 'ticket.blocked', 'work.cancelled', 'run.started']);
+/**
+ * Whether `event` moved the ticket on, and so ends its wait on the usage limit (ORC-340): its `usage.reset` timer then resumes nothing.
+ * Only what changes its work: a block, an undelegation, a new code run, a move to another state or a cancel. An event that starts no
+ * work (a move recorded to the state it is in, a `work.cancelled` of a failed effect) leaves the wait as it is.
+ */
+function movesOn(state: TicketState, next: TicketState, event: FactoryEvent | InternalEvent): boolean {
+  switch (event.type) {
+    case 'ticket.blocked':
+    case 'ticket.undelegated':
+      return true;
+    case 'run.started':
+      return event.queue === 'dev';
+    case 'status.changed':
+      return !!event.payload.cancelled || next.logical !== state.logical;
+    case 'status.recorded':
+      return next.logical !== state.logical;
+    default:
+      return false;
+  }
+}
 
 /** Pure: applies one event to a ticket's state and returns the new state; the input is never mutated. */
 export function reduce(state: TicketState | undefined, event: FactoryEvent | InternalEvent): TicketState | undefined {
@@ -152,7 +170,5 @@ export function reduce(state: TicketState | undefined, event: FactoryEvent | Int
     return created && external(created, event as FactoryEvent);
   }
   const next = isExternal(event) ? external(state, event) : internal(state, event);
-  // An echo of the factory's own move changes nothing, and a run out of the dev queue (a question) does not take the step.
-  const movedOn = next !== state && ENDS_USAGE_WAIT.has(event.type) && (event.type !== 'run.started' || event.queue === 'dev');
-  return next?.usageWait && movedOn ? { ...next, usageWait: null } : next;
+  return next?.usageWait && movesOn(state, next, event) ? { ...next, usageWait: null } : next;
 }

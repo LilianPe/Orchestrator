@@ -89,6 +89,11 @@ export function App() {
           </div>
         )}
       </header>
+      {snap?.usageLimitedUntil && (
+        <p className="usage-limit" role="status">
+          Paused by the usage limit of the Claude account: no run starts until {new Date(snap.usageLimitedUntil).toLocaleString()}.
+        </p>
+      )}
       <main>
         <div className="flow">
           {s.flowFailed && <p className="flow-failed" role="alert">{s.flow ? 'Flow out of date: reading it failed, what follows may be stale. Retrying within 10 s.' : 'Flow unavailable: reading it failed. Retrying within 10 s.'}</p>}

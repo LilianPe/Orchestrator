@@ -384,7 +384,9 @@ export class ClaudeCodeRunner implements Runner {
         // A real model turn after a rejected rate limit event: the stream went on, the limit did not stop it. The CLI's own
         // message (model `<synthetic>`, the text of the error) is no turn.
         const modelTurn = raw?.type === 'assistant' && raw.message?.model !== '<synthetic>';
-        usageLimit = usageLimitOf(raw) ?? (modelTurn ? undefined : usageLimit);
+        // A later event that allows again (`allowed`, `allowed_warning`) lifts it too.
+        const allowed = raw?.type === 'rate_limit_event' && typeof raw.rate_limit_info?.status === 'string' && raw.rate_limit_info.status.startsWith('allowed');
+        usageLimit = usageLimitOf(raw) ?? (modelTurn || allowed ? undefined : usageLimit);
         if (raw?.type === 'assistant') {
           const id = typeof raw.message?.id === 'string' ? raw.message.id : undefined;
           if (id === undefined || !turnIds.has(id)) {

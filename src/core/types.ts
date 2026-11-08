@@ -259,8 +259,8 @@ export interface EventPayloads {
     attempt?: AttemptOutcome;
     output?: AgentOutput;
     stagnation?: Stagnation;
-    /** The usage limit stopped it and the factory waits on it (`on_usage_limit: wait`, ORC-340): resumed at `resetAt`, never blocked. */
-    usageLimit?: { resetAt: number };
+    /** The usage limit of `account` stopped it and the factory waits on it (`on_usage_limit: wait`, ORC-340): resumed at `resetAt`. */
+    usageLimit?: { resetAt: number; account?: string };
   };
   /**
    * `red`: the cause of the `red` check's verdict (ORC-123), for a job checked by it instead of `verify`. `frozen`: the
@@ -358,7 +358,7 @@ export type DecidedEvent =
   | { type: 'ticket.unblocked' }
   | {
       type: 'ticket.patched';
-      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'verifiedSha' | 'awaitingRepo' | 'owedMove' | 'usageWait'>>;
+      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'verifiedSha' | 'awaitingRepo' | 'owedMove' | 'usageWait' | 'usageRelaunches'>>;
     }
   | { type: 'feedback.appended'; item: FeedbackItem }
   /** The ticket's dev work is stopped: nothing pending, no verification awaited. */
@@ -468,6 +468,8 @@ export interface TicketState {
    * while this still names its run. Whatever moves the ticket on ends the wait (`reduce`): `null` then. Absent on a ticket that never waited.
    */
   usageWait?: { runId: string; job: string; logical: LogicalState } | null;
+  /** Relaunches at a usage reset of `job` in a row (ORC-340), bounded by `USAGE_RELAUNCHES`; `null` once a run of the step ends without the limit. */
+  usageRelaunches?: { job: string; count: number } | null;
   /**
    * Signed actor of the last authorized delegation (ORC-186): the run's initiator, who never validates
    * its spec, and its requester, who may answer it.

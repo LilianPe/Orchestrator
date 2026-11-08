@@ -462,6 +462,12 @@ describe('ClaudeCodeRunner: caps and stagnation of the build (ORC-136)', () => {
       }
     });
 
+    it.each(['allowed', 'allowed_warning'])('a later event %s lifts a rejected one', async (status) => {
+      const { r } = runner();
+      const lifted = JSON.stringify({ type: 'rate_limit_event', rate_limit_info: { status, resetsAt: 1_900_000_000 } });
+      expect(await r.start(req({}, { FAKE_CLAUDE_SCRIPT: script(limitEvent, lifted, resultOf('Something else broke.')) })).done).not.toHaveProperty('usageLimit');
+    });
+
     it('a stream that goes on after a rejected event was not stopped by it, and a run that succeeds never is', async () => {
       const { r } = runner();
       expect(await r.start(req({}, { FAKE_CLAUDE_SCRIPT: script(limitEvent, assistant('m1'), resultOf('Done.')) })).done).not.toHaveProperty('usageLimit');
