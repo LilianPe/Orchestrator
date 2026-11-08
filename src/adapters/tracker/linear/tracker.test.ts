@@ -18,15 +18,17 @@ function fakeLinear(handlers: Record<string, Handler>) {
   return { api: new LinearApi(async () => 'tok', fetchImpl), calls };
 }
 
+/** A GraphQL connection page: `next` is the cursor of the page after it, `null` on the last one. */
+const conn = <N>(nodes: N[], next: string | null = null) => ({ nodes, pageInfo: { hasNextPage: next !== null, endCursor: next } });
 const node = {
   id: 'uuid-1', identifier: 'REL-1', title: 'Export', description: 'Desc', url: 'https://linear.app/x/REL-1', priority: 2,
   createdAt: '2026-10-10T08:00:00.000Z', state: { id: 's-todo', name: 'Todo', type: 'unstarted' },
-  labels: { nodes: [{ id: 'l1', name: 'bug' }] }, delegate: { id: 'app-1' }, team: { id: 't-1', key: 'REL' },
+  labels: conn([{ id: 'l1', name: 'bug' }]), delegate: { id: 'app-1' }, team: { id: 't-1', key: 'REL' },
 };
-const states = { workflowStates: { nodes: [
+const states = { workflowStates: conn([
   { id: 's-todo', name: 'Todo', type: 'unstarted', position: 0 },
   { id: 's-dev', name: 'In Progress', type: 'started', position: 1 },
-] } };
+]) };
 
 describe('LinearTracker', () => {
   it('writes the whole plan of a session, as Linear replaces it at each update (ORC-171)', async () => {
@@ -69,7 +71,7 @@ describe('LinearTracker', () => {
   });
 
   it('lists no issue in the trash among the delegated ones', async () => {
-    const { api } = fakeLinear({ Delegated: () => ({ issues: { nodes: [node, { ...node, id: 'uuid-2', identifier: 'REL-2', trashed: true }] } }) });
+    const { api } = fakeLinear({ Delegated: () => ({ issues: conn([node, { ...node, id: 'uuid-2', identifier: 'REL-2', trashed: true }]) }) });
     expect((await new LinearTracker(api, 'app-1').listDelegated('REL')).map((i) => i.identifier)).toEqual(['REL-1']);
   });
 
@@ -80,7 +82,7 @@ describe('LinearTracker', () => {
 
   it('reads the active members of a team, every page (ORC-186)', async () => {
     const page = (ids: [string, boolean][], next: string | null) => ({
-      teams: { nodes: [{ members: { nodes: ids.map(([id, active]) => ({ id, active })), pageInfo: { hasNextPage: next !== null, endCursor: next } } }] },
+      teams: { nodes: [{ members: conn(ids.map(([id, active]) => ({ id, active })), next) }] },
     });
     const { api, calls } = fakeLinear({
       TeamMembers: (v) => (v['after'] === null ? page([['u-1', true], ['u-gone', false]], 'c1') : page([['u-2', true]], null)),
@@ -92,6 +94,54 @@ describe('LinearTracker', () => {
   it('fails on an unknown team rather than give it no member', async () => {
     const { api } = fakeLinear({ TeamMembers: () => ({ teams: { nodes: [] } }) });
     await expect(new LinearTracker(api, 'app-1').teamMembers('NOPE')).rejects.toThrow('Linear team not found: NOPE');
+  });
+
+  it('never reads the members as complete when Linear says more follow without a cursor (ORC-347)', async () => {
+    const { api } = fakeLinear({
+      TeamMembers: () => ({ teams: { nodes: [{ members: { nodes: [{ id: 'u-1', active: true }], pageInfo: { hasNextPage: true, endCursor: null } } }] } }),
+    });
+    await expect(new LinearTracker(api, 'app-1').teamMembers('REL')).rejects.toThrow(/never read as complete/);
+  });
+
+  it("reads an issue's labels past Linear's page of them, for a ticket read alone or listed (ORC-347)", async () => {
+    const { api, calls } = fakeLinear({
+      Issue: () => ({ issue: { ...node, labels: conn([{ id: 'l1', name: 'bug' }], 'l-next') } }),
+      Delegated: () => ({ issues: conn([{ ...node, labels: conn([{ id: 'l1', name: 'bug' }], 'l-next') }]) }),
+      IssueLabels: () => ({ issue: { labels: conn([{ id: 'l51', name: 'repo:api' }]) } }),
+    });
+    const t = new LinearTracker(api, 'app-1');
+    expect((await t.getIssue('REL-1')).labels).toEqual(['bug', 'repo:api']);
+    expect(calls.at(-1)).toEqual({ op: 'IssueLabels', vars: { id: 'uuid-1', after: 'l-next' } });
+    expect((await t.listDelegated('REL'))[0]!.labels).toEqual(['bug', 'repo:api']);
+    // Says more follow without a cursor: never read as complete.
+    const cut = fakeLinear({ Issue: () => ({ issue: { ...node, labels: { ...node.labels, pageInfo: { hasNextPage: true, endCursor: null } } } }) });
+    await expect(new LinearTracker(cut.api, 'app-1').getIssue('REL-1')).rejects.toThrow(/the labels of REL-1: more pages, but no cursor/);
+  });
+
+  it('lists the delegated tickets of every page, not the first 100 (ORC-347)', async () => {
+    const { api, calls } = fakeLinear({
+      Delegated: (v) => (!v['after'] ? { issues: conn([node], 'c1') } : { issues: conn([{ ...node, id: 'uuid-3', identifier: 'REL-3' }]) }),
+    });
+    expect((await new LinearTracker(api, 'app-1').listDelegated('REL')).map((i) => i.identifier)).toEqual(['REL-1', 'REL-3']);
+    expect(calls.map((c) => c.vars)).toEqual([
+      { teamKey: 'REL', appUserId: 'app-1', after: null },
+      { teamKey: 'REL', appUserId: 'app-1', after: 'c1' },
+    ]);
+  });
+
+  it('finds a team label or a state past the first page, and creates no duplicate of it (ORC-347)', async () => {
+    const { api, calls } = fakeLinear({
+      Issue: () => ({ issue: node }),
+      TeamLabels: (v) => (!v['after'] ? { issueLabels: conn([{ id: 'l1', name: 'bug' }], 'l-next') } : { issueLabels: conn([{ id: 'l-251', name: 'agent:stop' }]) }),
+      TeamStates: (v) => (!v['after'] ? { workflowStates: conn(states.workflowStates.nodes, 's-next') } : { workflowStates: conn([{ id: 's-done', name: 'Done', type: 'completed', position: 2 }]) }),
+      IssueUpdate: () => ({ issueUpdate: { success: true } }),
+    });
+    const t = new LinearTracker(api, 'app-1');
+    await t.setLabels('REL-1', ['agent:stop'], []);
+    expect(calls.map((c) => c.op)).not.toContain('LabelCreate');
+    expect(calls.at(-1)).toEqual({ op: 'IssueUpdate', vars: { id: 'uuid-1', input: { addedLabelIds: ['l-251'], removedLabelIds: [] } } });
+    await t.moveTo('REL-1', 'Done');
+    expect(calls.at(-1)).toEqual({ op: 'IssueUpdate', vars: { id: 'uuid-1', input: { stateId: 's-done' } } });
   });
 
   it('moves by state name', async () => {
@@ -119,7 +169,7 @@ describe('LinearTracker', () => {
   it('creates missing labels when adding them', async () => {
     const { api, calls } = fakeLinear({
       Issue: () => ({ issue: node }),
-      TeamLabels: () => ({ issueLabels: { nodes: [{ id: 'l1', name: 'bug' }] } }),
+      TeamLabels: () => ({ issueLabels: conn([{ id: 'l1', name: 'bug' }]) }),
       Team: () => ({ teams: { nodes: [{ id: 't-1', key: 'REL', name: 'Factory' }] } }),
       LabelCreate: (v) => ({ issueLabelCreate: { success: true, issueLabel: { id: 'l2', name: v.input.name } } }),
       IssueUpdate: () => ({ issueUpdate: { success: true } }),
@@ -131,8 +181,8 @@ describe('LinearTracker', () => {
 
   it('writes nothing when the labels already read as asked (a replayed effect, ORC-162)', async () => {
     const { api, calls } = fakeLinear({
-      Issue: () => ({ issue: { ...node, labels: { nodes: [{ id: 'l1', name: 'bug' }, { id: 'l2', name: 'agent:pris' }] } } }),
-      TeamLabels: () => ({ issueLabels: { nodes: [{ id: 'l1', name: 'bug' }, { id: 'l2', name: 'agent:pris' }] } }),
+      Issue: () => ({ issue: { ...node, labels: conn([{ id: 'l1', name: 'bug' }, { id: 'l2', name: 'agent:pris' }]) } }),
+      TeamLabels: () => ({ issueLabels: conn([{ id: 'l1', name: 'bug' }, { id: 'l2', name: 'agent:pris' }]) }),
       IssueUpdate: () => ({ issueUpdate: { success: true } }),
     });
     const t = new LinearTracker(api, 'app-1');
@@ -146,8 +196,8 @@ describe('LinearTracker', () => {
     const group = { id: 'g-prio' };
     let onIssue = [{ id: 'l1', name: 'bug' }, { id: 'l-low', name: 'prio:basse', parent: group }];
     const { api, calls } = fakeLinear({
-      Issue: () => ({ issue: { ...node, labels: { nodes: onIssue } } }),
-      TeamLabels: () => ({ issueLabels: { nodes: [{ id: 'l1', name: 'bug' }, { id: 'l-low', name: 'prio:basse', parent: group }, { id: 'l-high', name: 'prio:haute', parent: group }] } }),
+      Issue: () => ({ issue: { ...node, labels: conn(onIssue) } }),
+      TeamLabels: () => ({ issueLabels: conn([{ id: 'l1', name: 'bug' }, { id: 'l-low', name: 'prio:basse', parent: group }, { id: 'l-high', name: 'prio:haute', parent: group }]) }),
       IssueUpdate: () => ({ issueUpdate: { success: true } }),
     });
     const t = new LinearTracker(api, 'app-1');
@@ -168,9 +218,9 @@ describe('LinearTracker', () => {
   it('reads the team labels again before adding one, so a group made since the start counts (ORC-160)', async () => {
     let teamLabels: { id: string; name: string; parent?: { id: string } }[] = [{ id: 'l-low', name: 'prio:basse' }, { id: 'l-high', name: 'prio:haute' }];
     const { api, calls } = fakeLinear({
-      Issue: () => ({ issue: { ...node, labels: { nodes: [{ id: 'l-low', name: 'prio:basse', parent: { id: 'g' } }] } } }),
+      Issue: () => ({ issue: { ...node, labels: conn([{ id: 'l-low', name: 'prio:basse', parent: { id: 'g' } }]) } }),
       TeamStates: () => states,
-      TeamLabels: () => ({ issueLabels: { nodes: teamLabels } }),
+      TeamLabels: () => ({ issueLabels: conn(teamLabels) }),
       IssueUpdate: () => ({ issueUpdate: { success: true } }),
     });
     const t = new LinearTracker(api, 'app-1');
@@ -236,7 +286,7 @@ describe('LinearTracker', () => {
   it('ensureSetup creates only the missing states', async () => {
     const { api, calls } = fakeLinear({
       TeamStates: () => states,
-      TeamLabels: () => ({ issueLabels: { nodes: [] } }),
+      TeamLabels: () => ({ issueLabels: conn([]) }),
       Team: () => ({ teams: { nodes: [{ id: 't-1', key: 'REL', name: 'Factory' }] } }),
       StateCreate: (v) => ({ workflowStateCreate: { success: true, workflowState: { id: 'x', name: v.input.name } } }),
       LabelCreate: (v) => ({ issueLabelCreate: { success: true, issueLabel: { id: 'y', name: v.input.name } } }),
