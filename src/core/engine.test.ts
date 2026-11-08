@@ -1034,7 +1034,7 @@ describe('decide — built-ins', () => {
     // The relaunch a verify.failed decided waits pending, then the red-CI bound blocks the same job: nothing starts that relaunch
     // here. A debounce still lifts the block as a machine event and starts its own job, as before ORC-339; settle starts the relaunch after it.
     const pendingJob = { job: 'fix-ci', input: 'verify_failures' as const, inputText: 'rouge', resume: true };
-    const blocked = ticket({ logical: 'human_review', blocked: true, blockReason: 'CI still failing after 2 fix-ci runs.', blockedJob: 'fix-ci', linearSessionId: 's1', pendingJob });
+    const blocked = ticket({ logical: 'human_review', blocked: true, blockReason: 'CI still failing after 2 attempts of fix-ci.', blockedJob: 'fix-ci', linearSessionId: 's1', pendingJob });
     const fired = decide(blocked, ev('timer.fired', { kind: 'debounce', payload: { job: 'dev-feedback' } }), workflow);
     expect(fired.events).not.toContainEqual({ type: 'pending.cleared', job: pendingJob });
     expect(fired.effects.filter((e) => e.kind === 'start_run' && e.input === 'verify_failures')).toEqual([]);

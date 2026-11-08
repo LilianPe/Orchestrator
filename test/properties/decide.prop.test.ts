@@ -319,14 +319,16 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
         const bound = tests.red!.attempts;
         fc.assert(
           fc.property(sequences, (s) => {
+            // Counted as the runner gets them, as the verify loop (ORC-360).
+            const returned = (e: Effect): boolean => e.kind === 'start_run' && e.job === 'tests' && e.input === 'verify_failures';
             let relaunches = 0;
-            for (const step of decided(fold(s.withDuplicates, w))) {
-              if (step.decision.events.some((e) => e.type === 'ticket.patched' && e.patch.redAttempts === 0)) relaunches = 0;
-              const resumed = step.decision.effects.filter((e) => e.kind === 'start_run' && e.job === 'tests' && e.input === 'verify_failures');
-              relaunches += resumed.length;
+            for (const step of fold(s.withDuplicates, w).steps) {
+              if (step.kind === 'decided' && step.decision.events.some((e) => e.type === 'ticket.patched' && e.patch.redAttempts === 0)) relaunches = 0;
+              relaunches += launches(step).filter(returned).length;
               expect(relaunches).toBeLessThanOrEqual(bound - 1);
-              if (step.event.type === 'verify.failed' && step.event.payload.job === 'tests' && !isFenced(step.decision) && (step.before?.redAttempts ?? 0) + 1 >= bound) {
-                expect(resumed).toEqual([]);
+              if (step.kind !== 'decided' || step.event.type !== 'verify.failed' || step.event.payload.job !== 'tests' || isFenced(step.decision)) continue;
+              if ((step.before?.redAttempts ?? 0) + 1 >= bound) {
+                expect(step.decision.effects.filter(returned)).toEqual([]);
                 expect(step.decision.events.map((e) => e.type)).toContain('ticket.blocked');
               }
             }
