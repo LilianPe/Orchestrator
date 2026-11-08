@@ -268,7 +268,7 @@ export interface OrchestratorDeps {
   /** Retries of an effect that throws (ORC-150); default `EFFECT_RETRY` (8 attempts, 1 s doubled, 5 min at most). */
   effectRetry?: EffectRetry;
   /** Retries of an inbox row whose processing throws (ORC-149); default `PROCESS_RETRY`. */
-  processRetry?: { attempts: number; baseMs: number };
+  processRetry?: RetryPolicy;
   /** The factory build's commit, labelled on each attempt; defaults to `FACTORY_COMMIT`, else null (ORC-226). */
   factoryCommit?: string | null;
   /**
@@ -360,6 +360,9 @@ function startOfUtcDay(ts: number): number {
   const d = new Date(ts);
   return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
 }
+
+/** The inbox id of an attempt's result, and its key among the results kept (`deliver`). */
+const endKey = (runId: string): string => `attempt:${runId}:finished`;
 
 /** The event of an attempt gone without a result (ORC-220), once per attempt by its id. */
 function lostEvent(run: Pick<RunRecord, 'id' | 'projectId' | 'ticketId' | 'job'>, cause: EventPayloads['run.lost']['cause'], at: number): FactoryEvent<'run.lost'> {
@@ -515,7 +518,8 @@ export class Orchestrator {
         this.unwritten.delete(id);
         this.log('info', `${what} written to the inbox`);
       } catch (err) {
-        if (isTransient(err)) continue;
+        // The same outage for all of them: the next beat tries again, without waiting for each one's timeout in turn.
+        if (isTransient(err)) return;
         this.unwritten.delete(id);
         this.log('error', `${what} not written to the inbox, lost: ${(err as Error).message}`);
       }
@@ -691,6 +695,8 @@ export class Orchestrator {
         if (await this.alive(runId)) await store.renewRun(runId, clock.now() + RUN_LEASE_MS);
       }
       for (const run of await store.runsByStatus('running')) {
+        // Its result is kept (`deliver`): ended, not lost, whatever its lease says.
+        if (this.unwritten.has(endKey(run.id))) continue;
         if (run.leaseUntil !== undefined && run.leaseUntil < clock.now()) await this.leaseExpired(run);
       }
     } finally {
@@ -2393,41 +2399,43 @@ export class Orchestrator {
     const ended = result;
     // Recording the attempt and sending its result is the store's work, not the agent's nor the runner's (ORC-289):
     // delivered until the database takes it (ORC-343). Recorded once: a retry sends only the result still missing.
-    let send = ended.infra ? true : undefined;
-    await this.deliver(`attempt:${run.id}:finished`, `the end of run ${run.id}`, async () => {
+    // Read once: a retry after a write whose answer was lost must not take its own record for a lease that expired.
+    let end: { record?: RunRecord; send: boolean } | undefined = ended.infra ? { send: true } : undefined;
+    await this.deliver(endKey(run.id), `the end of run ${run.id}`, async () => {
       try {
-        send ??= await this.recordEnd(run, ended);
+        end ??= await this.endOf(run, ended);
+        if (end.record) await this.d.store.putRun(end.record);
+        end.record = undefined;
       } catch (err) {
         if (isTransient(err)) throw err;
         // Not recorded for good: its result still goes, the attempt did end.
         this.log('error', `run ${run.id} ended, but was not recorded: ${(err as Error).message}`);
-        send = !(this.stopping && ended.outcome === 'stopped');
+        end = { send: !(this.stopping && ended.outcome === 'stopped') };
       }
-      if (send) await this.accept(await this.finishedFor(run, ended));
+      if (end.send) await this.accept(await this.finishedFor(run, ended));
     });
   }
 
   /**
-   * Records an ended attempt on its run, its status and what it spent, and tells whether its result is to be sent: not
-   * for an attempt closed before its end (`leaseExpired`: `run.lost` speaks for it), nor for one a shutdown stopped,
-   * whose ticket keeps its `activeRunId` so that the next start's recover() starts its step again.
+   * An ended attempt's record, its status and what it spent, and whether its result is to be sent: not for an attempt
+   * closed before its end (`leaseExpired`: `run.lost` speaks for it), nor for one a shutdown stopped, whose ticket keeps
+   * its `activeRunId` so that the next start's recover() starts its step again.
    */
-  private async recordEnd(run: RunRecord, result: RunResult): Promise<boolean> {
-    const { store, clock } = this.d;
-    const rec = (await store.getRun(run.id)) ?? run;
+  private async endOf(run: RunRecord, result: RunResult): Promise<{ record: RunRecord; send: boolean }> {
+    const rec = (await this.d.store.getRun(run.id)) ?? run;
     const interrupted = this.stopping && result.outcome === 'stopped';
     const closed = rec.status !== 'running';
-    await store.putRun({
+    const record: RunRecord = {
       ...rec,
       status: closed ? rec.status : interrupted ? 'interrupted' : result.outcome,
-      endedAt: rec.endedAt ?? clock.now(),
+      endedAt: rec.endedAt ?? this.d.clock.now(),
       costUsd: result.costUsd,
       turns: result.turns,
       lastText: result.lastText,
       ...(result.tokens ? { tokens: result.tokens } : {}),
       ...endFacts(result),
-    });
-    return !(interrupted || closed);
+    };
+    return { record, send: !(interrupted || closed) };
   }
 
   /** The result of an attempt, whoever sends it: its pump, or recover() when the process died between the two (ORC-220). */
@@ -2462,7 +2470,7 @@ export class Orchestrator {
     }
     return {
       ...TRUSTED,
-      id: `attempt:${run.id}:finished`,
+      id: endKey(run.id),
       type: 'run.finished',
       at: this.d.clock.now(),
       projectId: run.projectId,

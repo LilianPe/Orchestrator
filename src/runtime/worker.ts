@@ -382,7 +382,7 @@ export class Worker {
     try {
       written = await this.d.store.deadLetter(row, err.message, this.d.now?.() ?? Date.now(), err instanceof TicketHeldError ? err.holder : undefined, attempts);
     } catch (writeErr) {
-      this.failed(row, key, new Error(`${err.message}; not dead-lettered: ${toError(writeErr).message}`));
+      this.failed(row, key, new Error(`${err.message}; not dead-lettered: ${toError(writeErr).message}`, { cause: writeErr }));
       return;
     }
     // Not written: another worker processed the row meanwhile. Either way, the rows behind it go on.

@@ -8,8 +8,8 @@ import { LinearApiError } from '../adapters/tracker/linear/api.js';
  * - **GitHub** (`GitHubApiError`, github-app.ts): a 5xx, a 408, a 429, or a rate limit GitHub answers with a 403.
  * - **Linear** (`LinearApiError`, linear/api.ts): a 5xx, a 408, a 429, or a GraphQL error coded `RATELIMITED` (Linear
  *   answers its rate limit with a 400).
- * - **The network** under `fetch` (undici's `TypeError: fetch failed`, its `cause` a socket error), `pg` and its pool:
- *   a refused, reset or timed-out connection, a name that does not resolve now.
+ * - **The network** under `fetch` (undici's `TypeError: fetch failed`, its `cause` a socket error or an undici timeout), `pg`
+ *   and its pool: a refused, reset or timed-out connection, a name that does not resolve now. A certificate refused is not.
  * - **Postgres** (`pg`'s `DatabaseError`, wrapped by drizzle's `DrizzleQueryError` as its `cause`): the SQLSTATE classes
  *   `08` (connection), `53` (resources), `57P01`–`57P03` (server shutting down or starting), a serialization failure or
  *   a deadlock (`40001`, `40P01`); and `pg`'s own messages for a connection lost or not obtained in time.
@@ -28,6 +28,8 @@ export function isTransient(err: unknown): boolean {
 
 /** Socket errors: the server is not there now, or the network between. */
 const NETWORK_CODES = new Set(['ECONNREFUSED', 'ECONNRESET', 'ECONNABORTED', 'ETIMEDOUT', 'EPIPE', 'EHOSTUNREACH', 'ENETUNREACH', 'ENETDOWN', 'ENOTFOUND', 'EAI_AGAIN']);
+/** undici's own codes for a connection that timed out or broke; its other `UND_ERR_*` are misuses, permanent. */
+const UNDICI_TRANSIENT = new Set(['UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT', 'UND_ERR_SOCKET', 'UND_ERR_CLOSED']);
 /** SQLSTATE codes of a database that is down, starting, overloaded or that asked to try again. */
 const PG_TRANSIENT = /^(08|53)|^57P0[123]$|^40001$|^40P01$/;
 /** `pg` and `pg-pool`: a connection lost, or none obtained in time. "Client was closed" and "Cannot use a pool after calling end" are this process's own shutdown: not transient. */
@@ -40,11 +42,10 @@ function transientHere(e: unknown): boolean {
   if (e instanceof GitHubApiError) return e.rateLimited || retryableStatus(e.status);
   if (e instanceof LinearApiError) return (e.status !== undefined && retryableStatus(e.status)) || e.errors.some((g) => g.extensions?.code === 'RATELIMITED');
   if (!(e instanceof Error)) return false;
-  // undici's network failure: its cause tells which (read on the next turn), but a fetch that failed is a network error whatever it says.
-  if (e instanceof TypeError && e.message === 'fetch failed') return true;
-  if (e.name === 'AbortError' || e.name === 'TimeoutError') return true;
+  // undici's `TypeError: fetch failed` says nothing by itself: its cause tells a socket error from a certificate refused (read on the next turn).
+  if (e.name === 'TimeoutError') return true;
   const { code, errcode } = e as { code?: unknown; errcode?: unknown };
-  if (typeof code === 'string' && (NETWORK_CODES.has(code) || code.startsWith('UND_ERR_') || PG_TRANSIENT.test(code))) return true;
+  if (typeof code === 'string' && (NETWORK_CODES.has(code) || UNDICI_TRANSIENT.has(code) || PG_TRANSIENT.test(code))) return true;
   if (code === 'ERR_SQLITE_ERROR' && typeof errcode === 'number' && [5, 6].includes(errcode & 0xff)) return true;
   return PG_MESSAGES.test(e.message) || EXEC_NETWORK.test(e.message);
 }

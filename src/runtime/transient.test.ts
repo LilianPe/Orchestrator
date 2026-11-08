@@ -1,4 +1,5 @@
 import { mkdtempSync, rmSync } from 'node:fs';
+import { createServer, type AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -14,6 +15,15 @@ import { EFFECT_RETRY } from './outbox.js';
 import { attemptsFor, backoff, isTransient, retryWindow, TRANSIENT_WINDOW_MS } from './transient.js';
 import { PROCESS_RETRY } from './worker.js';
 
+/** A loopback port no one listens on: one the system gave, then freed. */
+async function closedPort(): Promise<number> {
+  const server = createServer();
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address() as AddressInfo;
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  return port;
+}
+
 /** What `LinearApi.gql` throws for this answer of Linear. */
 async function linearThrows(status: number, body: string): Promise<unknown> {
   const fetchImpl: FetchLike = async () => ({ ok: status < 400, status, json: async () => JSON.parse(body) as unknown });
@@ -28,11 +38,12 @@ async function fetchThrows(stderr: string): Promise<unknown> {
 
 describe('isTransient (ORC-343)', () => {
   it('tells a network that is not there, as fetch and pg really throw it', async () => {
-    // Port 1 on the loopback: nothing listens, the connection is refused at once, no wait and no network.
-    const fetched = await fetch('http://127.0.0.1:1/').catch((err: unknown) => err);
+    // A loopback port just freed: nothing listens, the connection is refused at once, no wait and no network.
+    const port = await closedPort();
+    const fetched = await fetch(`http://127.0.0.1:${port}/`).catch((err: unknown) => err);
     expect(fetched).toBeInstanceOf(TypeError);
     expect(isTransient(fetched)).toBe(true);
-    const client = new pg.Client({ host: '127.0.0.1', port: 1, connectionTimeoutMillis: 2_000 });
+    const client = new pg.Client({ host: '127.0.0.1', port, connectionTimeoutMillis: 2_000 });
     const connected = await client.connect().catch((err: unknown) => err);
     expect((connected as { code?: string }).code).toBe('ECONNREFUSED');
     expect(isTransient(connected)).toBe(true);
@@ -117,6 +128,10 @@ describe('isTransient (ORC-343)', () => {
   it('reads through a wrapper, and calls anything else permanent', () => {
     expect(isTransient(new Error('start failed', { cause: new GitHubApiError(503, 'x') }))).toBe(true);
     expect(isTransient(new Error('boom'))).toBe(false);
+    // undici's failure says nothing by itself: a certificate refused is not an outage.
+    expect(isTransient(new TypeError('fetch failed', { cause: Object.assign(new Error('certificate has expired'), { code: 'CERT_HAS_EXPIRED' }) }))).toBe(false);
+    expect(isTransient(new TypeError('fetch failed', { cause: Object.assign(new Error('Connect Timeout Error'), { code: 'UND_ERR_CONNECT_TIMEOUT' }) }))).toBe(true);
+    expect(isTransient(Object.assign(new Error('invalid'), { code: 'UND_ERR_INVALID_ARG' }))).toBe(false);
     expect(isTransient('a string')).toBe(false);
     expect(isTransient(undefined)).toBe(false);
   });

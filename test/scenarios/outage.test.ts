@@ -170,6 +170,25 @@ describe('a short outage blocks no ticket and loses no result (ORC-343)', () => 
     expect((await h.ticket()).activeRunId).not.toBe(runId);
   });
 
+  it("criterion 3: the run's record committed but its answer lost, the retry still sends its result", async () => {
+    let lost = 1;
+    const h = createHarness({
+      wrapStore: (inner) =>
+        Object.assign(Object.create(inner) as Store, {
+          putRun: async (run: Parameters<Store['putRun']>[0]) => {
+            await inner.putRun(run);
+            // The COMMIT went through, the connection broke before its answer.
+            if (run.status !== 'running' && lost-- > 0) throw Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' });
+          },
+        }),
+    });
+    const runId = await heldRun(h);
+    h.runner.release(runId);
+    await h.orch.drained();
+    expect((await h.store.recentEvents(50, 'REL-1')).map((e) => e.id)).toContain(`attempt:${runId}:finished`);
+    expect(await h.store.getRun(runId)).toMatchObject({ status: 'success' });
+  });
+
   it('point 4: an event whose decision meets the database down for 10 minutes is decided once it is back, not dead-lettered', async () => {
     let down = false;
     const h = createHarness({
