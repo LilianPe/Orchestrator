@@ -228,5 +228,7 @@ export function reduce(state: TicketState | undefined, event: FactoryEvent | Int
     return created && external(created, event as FactoryEvent);
   }
   const next = isExternal(event) ? external(state, event) : internal(state, event);
-  return next?.usageWait && movesOn(state, next, event) ? { ...next, usageWait: null } : next;
+  if (!(next?.usageWait || next?.clarify) || !movesOn(state, next, event)) return next;
+  // The same events end a wait on `clarify`'s answers (ORC-210): its timers then find nothing to remind or block.
+  return { ...next, ...(next.usageWait ? { usageWait: null } : {}), ...(next.clarify ? { clarify: null } : {}) };
 }

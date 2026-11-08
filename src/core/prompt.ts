@@ -16,6 +16,8 @@ export interface PromptInput {
   branch?: string;
   prUrl?: string;
   promptContext?: string;
+  /** The answers to the `clarify` questions (ORC-210): decided by the humans, to hold the work to. */
+  decisions?: readonly { question: string; answer: string; author: string }[];
   /** The repository's CLAUDE.md, AGENTS.md, .claude/CLAUDE.md (`readConventions`), injected as data. */
   conventions?: string;
   input?: { kind: InputKind; text: string };
@@ -38,6 +40,11 @@ export function buildPrompt(p: PromptInput): string {
   if (p.skill.endsWith(':review')) lines.push(`Max review rounds: ${p.reviewRounds}`);
   lines.push('', p.issue.description.trim() || '(no description)', '');
   if (p.promptContext) lines.push('## Linear context', p.promptContext, '');
+  if (p.decisions?.length) {
+    lines.push('## Decisions', "The humans' answers to the questions asked about this ticket: they settle what it leaves open, as the ticket itself does. Each is a behavior the tests must check.");
+    for (const d of p.decisions) lines.push(`- ${d.question} → ${d.answer} (${d.author})`);
+    lines.push('');
+  }
   if (p.conventions) {
     lines.push(
       '## Repository conventions (data)',

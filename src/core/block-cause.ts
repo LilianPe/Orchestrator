@@ -18,8 +18,13 @@ const CAUSE_ONLY: Partial<Record<BlockCause, readonly string[]>> = {
 
 export const onlyRestatesCause = (cause: BlockCause, reason: string): boolean => CAUSE_ONLY[cause]?.includes(reason) ?? false;
 
-/** The head of the guard before In Progress refusing a ticket `intake` found incomplete (ORC-206): the ticket's to complete. */
+/**
+ * The head of the guard before In Progress refusing a ticket `intake` found incomplete (ORC-206): the ticket's to complete.
+ * No longer written since `clarify` asks instead (ORC-210): a ticket blocked so before keeps its cause.
+ */
 export const INCOMPLETE = 'The ticket is not complete enough to start:';
+/** The head of the block of `clarify` questions left unanswered 72 h (ORC-210). */
+export const CLARIFY_EXPIRED = 'No answer to the questions after 72 h:';
 /** The reason of an `intake` whose result carries no assessment (ORC-206): the ticket does not start. */
 export const NO_ASSESSMENT = 'Intake returned no assessment of the ticket.';
 
@@ -36,6 +41,7 @@ export const TICKET_TOKENS_REACHED = 'Token budget of the ticket reached: ';
  */
 const CAUSES: readonly (readonly [Exclude<BlockCause, 'other'>, RegExp])[] = [
   ['question', /^(Question asked by the agent|Waiting for an answer to the agent's question)/],
+  ['question', new RegExp(`^${CLARIFY_EXPIRED}`)],
   ['contested', /^The agent disputes the ticket/],
   ['red', /^Red not verified after /],
   ['infra', /^The run .+ was interrupted: infrastructure failure/],

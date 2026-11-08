@@ -92,7 +92,7 @@ The `intake` job (agent, skill `factory:intake`, Sonnet, effort low, the reposit
 | `size` | `xs`, `s`, `m`, `l`, `xl` |
 | `risk` | `low`, `medium`, `high` |
 | `complete` | whether a developer can build it without asking anything |
-| `missing` | the questions to answer: at least one when not complete, at most 3 |
+| `missing` | the questions to answer: at least one when not complete, at most 3; each `{ question, options }` (2 to 5 hypotheses), or a bare question when the agent sees none (ORC-210) |
 | `screen` | whether the ticket changes something a user sees |
 
 Before the ticket's first run (no Claude session yet), the factory runs the deterministic checks of `tracker.pickup.checks` (`src/core/pickup.ts`) and journals the failed ones with the attempt's end (`pickup` of `run.finished`): they no longer block on their own, they are inputs of the guard.
@@ -105,11 +105,30 @@ At its end, `decide` records the assessment in the ticket's state:
 
 Each later attempt of the ticket carries its risk in its labels (`risk`, ORC-226).
 
-Then the guard before In Progress: a failed deterministic check or an incomplete ticket does not start. Until `clarify` exists (ORC-210), the ticket is blocked on `intake` (cause « pickup refused ») and the blocking comment asks the questions; nothing moves to In Progress. A reply relaunches `intake` with the answer, which reads the ticket again. A complete ticket starts `dev` (`on_success.run`), which moves it to In Progress. `dev` runs its own pickup checks again before its first run: they pass when the guard did, unless the ticket changed in between.
+Then the guard before In Progress: a failed deterministic check or an incomplete ticket does not start, it goes to `clarify` ([below](#clarify-questions-reminder-and-expiry-orc-210)); nothing moves to In Progress. A complete ticket starts `dev` (`on_success.run`), which moves it to In Progress. `dev` runs its own pickup checks again before its first run: they pass when the guard did, unless the ticket changed in between.
 
 `intake` is off in the pack: a repository turns it on by making delegation start with it (`ticket.delegated: - { when: "state in [todo, dev] && !blocked", run: intake }`). Without it, `dev`'s pickup checks block directly, as before.
 
-**Not yet**: the wait on a Linear « blocked by » ticket that is not done (ORC-206, second part); `clarify`'s questions with choices, reminder and expiry (ORC-210); the duplicate, existing code and scope checks, and `not_started` with them (ORC-207); handing intake's understanding to `build`, after which `factory:dev`'s « Understand » section can shrink (ORC-254); a per-step network level (all dev jobs run at the repository's).
+**Not yet**: the wait on a Linear « blocked by » ticket that is not done (ORC-206, second part, ORC-363); the duplicate, existing code and scope checks, and `not_started` with them (ORC-207); handing intake's understanding to `build`, after which `factory:dev`'s « Understand » section can shrink (ORC-254); a per-step network level (all dev jobs run at the repository's).
+
+## `clarify`: questions, reminder and expiry (ORC-210)
+
+`clarify` runs no agent of its own: the questions are `intake`'s (`missing`), the separate intent agent being EVP 1's. At the guard, the factory asks at most 3 of them in the ticket's Linear session, one `elicitation` activity each: with Linear's `select` signal and the question's options when it has some, a free answer always possible (Linear lets the human type instead of picking). A failed deterministic check comes first, as a free question asking to complete the ticket; past 3, the last of intake's are dropped, and intake asks them again on its next pass.
+
+The ticket then waits, **not blocked** (`TicketState.clarify`): nothing moves, the `Blocked` label stays off. Two timers are armed (ORC-161), on the decision's clock:
+
+| After | If questions are still open |
+| -- | -- |
+| 24 h (`clarify.remind`) | each open question is asked again, prefixed « Reminder » |
+| 72 h (`clarify.expire`) | the ticket is blocked on `intake` at step `clarify`, cause « question », the open questions in the blocking comment; a reply relaunches `intake` (ORC-196) |
+
+A timer only acts on the round that armed it (`at`): a round answered, asked again, or ended by whatever moves the ticket on (a block, an undelegation, a delegation again, a dev run, a move: the same events as the usage-limit wait) does nothing.
+
+**Answers.** A reply in the ticket's session is checked against the matrix (`answer_clarify`: the requester or a team member, ORC-186); refused, it is traced, answered in the session and counts for nothing. Accepted, it is kept in `humanInbox` as any reply (ORC-180) and answers the first question still open: each reply answers one question, in order, a picked option or free text alike. A command (`/status`) answers none. A comment on the ticket is no answer while it waits (the matrix keeps `answer_clarify` to the session); it stays in the inbox for intake's next pass. Once every question has its answer, `intake` starts again with the inbox as feedback, reads the ticket again and judges it anew: complete, `dev` starts; otherwise it asks again.
+
+**Decisions.** Each accepted answer is recorded on the ticket (`decisions`: question, answer, author, time). Every later run of the dev queue gets them in its prompt (« Decisions »), so the `tests` step writes them as tests; the freeze after `red` keeps them with the frozen files (`frozenTests.decisions`), and `/refreeze` carries them over.
+
+**Not yet**: resuming intake's Claude session (`--resume`) after the answer: `intake` runs in a session of its own, not the ticket's (ORC-217, ORC-254), so it starts afresh with the answers; the `Questions` step of the session plan stays canceled (ORC-171); a `knowledge.candidate` event per answer (ORC-258); not asking again what was already decided (ORC-254).
 
 ## Attempt stagnation (ORC-136)
 

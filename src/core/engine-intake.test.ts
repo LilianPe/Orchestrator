@@ -49,16 +49,12 @@ describe('intake (ORC-206)', () => {
     expect(t).toMatchObject({ risk: 'high', size: 's' });
   });
 
-  it('an incomplete ticket does not start: blocked on intake with its questions, until clarify exists (ORC-210)', () => {
+  it('an incomplete ticket does not start: clarify asks its questions, nothing moves (ORC-210)', () => {
     const e = finished(assessed({ complete: false, missing: ['Which export format: CSV or XLSX?'] }));
     const out = decide(ticket(), e, workflow);
     expect(out.effects.some((x) => x.kind === 'start_run' || x.kind === 'move')).toBe(false);
-    const t = after(ticket(), e);
-    expect(t).toMatchObject({ blocked: true, blockedJob: 'intake', risk: 'medium' });
-    expect(t.blockReason).toContain('Which export format: CSV or XLSX?');
-    expect(blockCause(t.blockReason)).toBe('pickup');
-    const comment = out.effects.find((x) => x.kind === 'block_comment');
-    expect(comment).toMatchObject({ block: { step: 'intake', question: expect.stringContaining('CSV or XLSX') } });
+    expect(out.effects).toEqual([expect.objectContaining({ kind: 'activity', type: 'elicitation', body: expect.stringContaining('CSV or XLSX') })]);
+    expect(after(ticket(), e)).toMatchObject({ blocked: false, risk: 'medium', clarify: { job: 'intake', answered: 0 } });
   });
 
   it('the deterministic checks of its launch are inputs of the guard: a failed one keeps the ticket from starting, even judged complete', () => {
@@ -66,18 +62,15 @@ describe('intake (ORC-206)', () => {
     const out = decide(ticket(), e, workflow);
     expect(out.effects.some((x) => x.kind === 'start_run')).toBe(false);
     const t = after(ticket(), e);
-    expect(t).toMatchObject({ blocked: true, blockedJob: 'intake', size: 'm' });
-    expect(t.blockReason).toContain('The description has no acceptance criteria.');
-    // A failed check is a fact, not a question: it goes with what was tried, and the question asks to complete the ticket.
-    expect(out.effects.find((x) => x.kind === 'block_comment')).toMatchObject({
-      block: { tried: expect.arrayContaining(['The description has no acceptance criteria.']), question: 'Can you complete the ticket, then reply here?' },
-    });
+    expect(t).toMatchObject({ blocked: false, size: 'm' });
+    // A failed check is a fact, not a question: the ticket's to complete, answered freely.
+    expect(t.clarify?.questions).toEqual([{ question: 'The description has no acceptance criteria. Can you complete the ticket, then reply here?', options: [] }]);
   });
 
   it('a reply to the guard relaunches intake, which reads the ticket again', () => {
-    const blocked = after(ticket(), finished(assessed({ complete: false, missing: ['CSV or XLSX?'] })));
+    const asked = after(ticket(), finished(assessed({ complete: false, missing: ['CSV or XLSX?'] })));
     const reply = { id: 'e-reply', type: 'session.prompted', at: 2000, projectId: 'p', ticketId: 'REL-1', schemaVersion: 3, taint: 'trusted', payload: { linearSessionId: 's1', body: 'CSV', author: 'L', ack: true, kind: 'instruction' } } as FactoryEvent;
-    const out = decide({ ...blocked, activeRunId: undefined, activeJob: undefined }, reply, workflow);
+    const out = decide({ ...asked, activeRunId: undefined, activeJob: undefined }, reply, workflow);
     expect(out.effects).toContainEqual(expect.objectContaining({ kind: 'start_run', job: 'intake' }));
   });
 

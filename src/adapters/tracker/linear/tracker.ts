@@ -292,6 +292,10 @@ export class LinearTracker implements Tracker, TeamDirectory {
         ? { type: 'action', action: a.action, parameter: a.parameter, ...(a.result ? { result: a.result } : {}) }
         : { type: a.type, body: a.body };
     const input: Record<string, unknown> = { agentSessionId: sessionId, content };
+    if (a.type === 'elicitation' && a.options?.length) {
+      input['signal'] = 'select';
+      input['signalMetadata'] = { options: a.options.map((o) => ({ label: o, value: o })) };
+    }
     if (a.ephemeral) input['ephemeral'] = true;
     if (effectId !== undefined) input['id'] = effectUuid('activity', effectId);
     await this.api.gql(Q.activityCreate, { input });

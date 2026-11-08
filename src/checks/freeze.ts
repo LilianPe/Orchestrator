@@ -21,6 +21,8 @@ export interface FrozenTests {
    * `package.json` part it was made with: a deploy blocks no ticket frozen before it on files it did not freeze.
    */
   rules?: number;
+  /** The answers to the `clarify` questions the tests were frozen with (ORC-210): what the tests hold the code to, as decided. */
+  decisions?: readonly { question: string; answer: string; author: string }[];
 }
 
 /** A commit of the branch, read on the factory's repository, never in the agent's worktree (ORC-205). */

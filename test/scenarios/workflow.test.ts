@@ -76,12 +76,12 @@ describe('standard workflow', () => {
     expect(await h.store.dueTimers(Number.MAX_SAFE_INTEGER)).toEqual([]);
   });
 
-  it('fires a timer at +24 h and another at +72 h each once through the inbox, decided without effect until their rules (ORC-161)', async () => {
+  it('fires a timer at +24 h and another at +72 h each once through the inbox, without effect when no clarify question waits (ORC-161)', async () => {
     const h = createHarness();
     await delegatedAndInReview(h);
     const start = h.clock.now();
     const HOUR = 3_600_000;
-    // The clarify rules that arm them are ORC-210's: the timers are put as its decision would write them.
+    // Put by hand on a ticket in review: no question of theirs waits (ORC-210), so they change nothing.
     await h.store.putTimer({ key: 'REL-1:clarify.remind', projectId: 'p', ticketId: 'REL-1', kind: 'clarify.remind', payload: { linearSessionId: 'ls-1' }, fireAt: start + 24 * HOUR });
     await h.store.putTimer({ key: 'REL-1:clarify.expire', projectId: 'p', ticketId: 'REL-1', kind: 'clarify.expire', payload: { linearSessionId: 'ls-1' }, fireAt: start + 72 * HOUR });
     const before = await h.ticket();
