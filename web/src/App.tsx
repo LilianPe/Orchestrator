@@ -1,29 +1,15 @@
 import { useCallback, useEffect, useReducer, useRef, useState, type ComponentProps } from 'react';
-import { fetchFlow, fetchMeasures, fetchSnapshot, post, subscribe } from './api.js';
-import { Flow, plural } from './Flow.js';
-import { Measures } from './Measures.js';
+import { fetchFlow, fetchMeasures, fetchRunDetail, fetchSnapshot, post, subscribe } from './api.js';
+import { Flow } from './Flow.js';
+import { Measures, runIdOf } from './Measures.js';
+import { Line, RunDetail } from './RunDetail.js';
 import { initialState, reducer } from './state.js';
-import type { FlowView, MeasuredTicketView, RunLine, WorkingRunView } from './types.js';
+import type { FlowView, MeasuredTicketView, RunDetailView, WorkingRunView } from './types.js';
 import { PRODUCT_NAME } from '../../src/product.js';
 
 /** A burst of ticket updates reads the Flow once. */
 const FLOW_DEBOUNCE_MS = 300;
 const MEASURES_POLL_MS = 30_000;
-
-function Line({ line }: { line: RunLine }) {
-  switch (line.kind) {
-    case 'text':
-      return <p className="line text">{line.text}</p>;
-    case 'tool':
-      return <p className="line tool"><span>{line.name}</span> {line.input}</p>;
-    case 'tool_result':
-      return line.isError ? <p className="line err">tool error</p> : null;
-    case 'result':
-      return <p className="line result">{line.isError ? 'Failed' : 'Done'} · {plural(line.turns, 'turn')} · ${line.costUsd.toFixed(2)}</p>;
-    default:
-      return null;
-  }
-}
 
 /** The durations go on between two reads: only the Flow renders each second, not the session nor the journal. */
 function LiveFlow({ flow, flowAt, frozen, ...rest }: { flow: FlowView; flowAt: number; frozen: boolean } & Omit<ComponentProps<typeof Flow>, 'flow' | 'elapsedMs'>) {
@@ -37,8 +23,8 @@ function LiveFlow({ flow, flowAt, frozen, ...rest }: { flow: FlowView; flowAt: n
   return <Flow flow={flow} elapsedMs={Math.max(0, now - flowAt)} {...rest} />;
 }
 
-type View = 'flow' | 'measures';
-const viewOf = (hash: string): View => (hash === '#measures' ? 'measures' : 'flow');
+type View = 'flow' | 'measures' | 'run';
+const viewOf = (hash: string): View => (runIdOf(hash) !== undefined ? 'run' : hash === '#measures' ? 'measures' : 'flow');
 
 /** The measures page (ORC-223), read when shown and every 30 s while it is: its figures change slowly, each read is a journal per ticket. */
 function MeasuresPage() {
@@ -68,10 +54,36 @@ function MeasuresPage() {
   );
 }
 
-export function App() {
-  const [view, setView] = useState<View>(() => viewOf(window.location.hash));
+/** The detail of a run (ORC-298), read when opened: a finished run's detail changes no more. */
+function RunPage({ runId }: { runId: string }) {
+  const [detail, setDetail] = useState<RunDetailView>();
+  const [failed, setFailed] = useState<'missing' | 'error'>();
   useEffect(() => {
-    const onHash = () => setView(viewOf(window.location.hash));
+    let live = true;
+    setDetail(undefined);
+    setFailed(undefined);
+    void fetchRunDetail(runId).then(
+      (d) => live && (d ? setDetail(d) : setFailed('missing')),
+      () => live && setFailed('error'),
+    );
+    return () => {
+      live = false;
+    };
+  }, [runId]);
+  return (
+    <div className="flow">
+      <p><a href="#measures">← Measures</a></p>
+      {failed && <p className="flow-failed" role="alert">{failed === 'missing' ? `No run ${runId}.` : 'Run detail unavailable: reading it failed. Reload to retry.'}</p>}
+      {detail ? <RunDetail detail={detail} now={Date.now()} /> : !failed && <section><p className="empty">Loading the run…</p></section>}
+    </div>
+  );
+}
+
+export function App() {
+  const [hash, setHash] = useState(() => window.location.hash);
+  const view = viewOf(hash);
+  useEffect(() => {
+    const onHash = () => setHash(window.location.hash);
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
   }, []);
@@ -123,7 +135,7 @@ export function App() {
         <h1>{PRODUCT_NAME}</h1>
         <nav className="views">
           <a href="#flow" aria-current={view === 'flow' ? 'page' : undefined}>Flow</a>
-          <a href="#measures" aria-current={view === 'measures' ? 'page' : undefined}>Measures</a>
+          <a href="#measures" aria-current={view !== 'flow' ? 'page' : undefined}>Measures</a>
         </nav>
         {snap && (
           <div className="stats">
@@ -142,7 +154,7 @@ export function App() {
           Paused by the usage limit of the Claude account: no run starts until {new Date(snap.usageLimitedUntil).toLocaleString()}.
         </p>
       )}
-      {view === 'measures' ? <main className="single"><MeasuresPage /></main> : <main>
+      {view === 'run' ? <main className="single"><RunPage runId={runIdOf(hash)!} /></main> : view === 'measures' ? <main className="single"><MeasuresPage /></main> : <main>
         <div className="flow">
           {s.flowFailed && <p className="flow-failed" role="alert">{s.flow ? 'Flow out of date: reading it failed, what follows may be stale. Retrying within 10 s.' : 'Flow unavailable: reading it failed. Retrying within 10 s.'}</p>}
           {s.flow ? (

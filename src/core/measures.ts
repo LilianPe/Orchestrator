@@ -248,7 +248,7 @@ function redVerdicts(events: FactoryEvent[]): TicketMeasures['red'] {
   return out;
 }
 
-const runMeasure = (r: RunRecord): RunMeasure => ({
+export const runMeasure = (r: RunRecord): RunMeasure => ({
   id: r.id,
   job: r.job,
   role: r.sessionRole ?? null,

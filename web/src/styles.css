@@ -76,5 +76,9 @@ main.single { grid-template-columns: minmax(0, 1fr); }
 .tiles div { border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; }
 .tiles dt { font-size: 12px; color: var(--muted); }
 .tiles dd { margin: 0; font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.timeline { list-style: none; margin: 0; padding: 0; max-height: 360px; overflow-y: auto; font-size: 13px; }
+.timeline li { padding: 2px 0; color: var(--muted); }
+.timeline li.of-run { color: inherit; font-weight: 600; }
+.timeline time { font-variant-numeric: tabular-nums; margin-right: 6px; }
 .no-source { margin: 0; padding-left: 18px; color: var(--muted); }
 .no-source strong { color: var(--fg); }
