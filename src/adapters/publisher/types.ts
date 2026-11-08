@@ -1,4 +1,5 @@
 import type { UntrustedMark } from '../../core/clean-verify.js';
+import { OUTPUT_LIMITS } from '../../publish/output-limits.js';
 
 /** The factory pushes the verified sha and opens or finds the branch's PR (ORC-125). */
 export interface PublishRequest {
@@ -48,11 +49,13 @@ export class PublishRefused extends Error {
 }
 
 /**
- * The PR's text until the factory composes it (ORC-195, through the `OutputPolicy` of ORC-214): the ticket's id and title, its own
- * sentence, and nothing an agent wrote. No closing keyword: it is a claim on the whole ticket, and nothing here can make it.
+ * The PR's text until the factory composes it from the structured output (ORC-195): the ticket's id and title, on one line clipped
+ * to what GitHub takes, its own sentence, and nothing an agent wrote. The `OutputPolicy` checks it before it goes out (ORC-214). No
+ * closing keyword: it is a claim on the whole ticket, and nothing here can make it.
  */
 export function prText(t: { ticketId: string; title: string }): { title: string; body: string } {
-  return { title: `${t.ticketId} ${t.title}`, body: `Ticket: ${t.ticketId}\n\nPublished by the factory: every pushed commit passed its verification.` };
+  const title = `${t.ticketId} ${t.title.replace(/\s+/g, ' ').trim()}`;
+  return { title: title.length > OUTPUT_LIMITS.prTitle ? `${title.slice(0, OUTPUT_LIMITS.prTitle - 1)}…` : title, body: `Ticket: ${t.ticketId}\n\nPublished by the factory: every pushed commit passed its verification.` };
 }
 
 export interface Publisher {

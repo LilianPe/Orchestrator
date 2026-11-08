@@ -9,7 +9,7 @@ You bring the current branch's PR to a clean state: review, fixes, targeted revi
 
 ## 0. Prepare
 
-1. PR state: `gh pr view <branch> --json number,state,baseRefName,mergeable,mergeStateStatus,url`. PR closed or merged: stop and say so in your last message.
+1. PR state: `gh pr view <branch> --json number,state,baseRefName,mergeable,mergeStateStatus,url`. PR closed or merged: stop and say so in your summary.
 2. `git status`: nothing unexpected in progress (uncommitted changes that are not yours: stop and say so, do not overwrite them).
 3. Bring the commits pushed to the branch into your worktree (a human may have pushed during the review): `git fetch origin`, then `git merge --ff-only origin/<branch>`. This way you review the PR's head, the one the factory will record as reviewed: if your last commit is not the PR's head at the end of the run, nothing is recorded and the *Done* that follows does not merge. Fast-forward impossible (the remote branch has diverged from yours): stop and say so, force nothing.
 4. Read the ticket (what the PR must do), the repository's `CLAUDE.md` and `docs/agent/`: the rules that will be used to judge the fixes.
@@ -57,15 +57,17 @@ Commit everything, then end your turn. You do not push and you do not wait for t
 
 ## 5. When to ask a human
 
-A point **to decide** that may be a defect, or a blocking defect still open at the cap: ask ONE question with `factory-agent ask`. It blocks the ticket: it does not move to "ready to merge" and your last message **is not published**. So the question carries the synthesis: rounds done, what is fixed, and the point to decide with its options and the key's history.
+A point **to decide** that may be a defect, or a blocking defect still open at the cap: ask ONE question with `factory-agent ask`. It blocks the ticket: it does not move to "ready to merge" and your summary **is not published**. So the question carries the synthesis: rounds done, what is fixed, and the point to decide with its options and the key's history.
 
-Points to decide that are only trade-offs or preferences, minor, out of scope: no question, they go into the last message.
+Points to decide that are only trade-offs or preferences, minor, out of scope: no question, they go into the summary.
 
 ## Forbidden
 
 Never merge. Never push, to any branch: the factory publishes. Do not rebase, do not rewrite history (`--amend` included). Do not switch branches. Never fix an out-of-scope finding. Do not disable or weaken any test or CI step.
 
-## Last message (published in Linear)
+## `submit_result` summary (published in Linear)
+
+End your turn with `mcp__factory__submit_result`: its `summary` is this message, which the factory publishes. Nothing else you write is.
 
 In English:
 

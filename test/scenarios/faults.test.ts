@@ -138,11 +138,9 @@ describe('fault injection at each point of the chain (ORC-163)', () => {
       [
         "start_run:moveTo",
         "start_run:start",
-        "start_run:activity",
         "move:moveTo",
         "post_output:activity",
         "start_run:start",
-        "start_run:activity",
         "post_output:activity",
       ]
     `);

@@ -11,6 +11,7 @@ async function delegatedAndInReview(h: ReturnType<typeof createHarness>) {
       { kind: 'tool', name: 'Bash', input: 'npm test' },
       { kind: 'text', text: 'PR ouverte, tests verts.' },
     ],
+    output: { status: 'done', summary: 'Audits export to CSV from their list.', tests_added: ['src/export.test.ts'], why: '', assumptions: [], risks: ['large lists'], untested: [], review_hints: [] },
   });
   await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
 }
@@ -29,8 +30,10 @@ describe('standard workflow', () => {
     const moves = h.tracker.calls.filter((c) => c.method === 'moveTo').map((c) => c.args[1]);
     expect(moves).toEqual(['In Progress', 'Human Review']);
     const acts = h.tracker.activities('ls-1');
-    expect(acts).toContainEqual({ type: 'action', action: 'Bash', parameter: 'npm test', ephemeral: true });
-    expect(acts.at(-1)).toEqual({ type: 'response', body: 'PR ouverte, tests verts.' });
+    // Live, what the agent does in the factory's words; the summary composed from its `submit_result`, never its last text (ORC-214).
+    expect(acts).toContainEqual({ type: 'action', action: 'Running a command', parameter: 'step build', ephemeral: true });
+    expect(acts.at(-1)).toEqual({ type: 'response', body: 'Audits export to CSV from their list.\n\n**Risks**\n- large lists' });
+    expect(JSON.stringify(acts)).not.toMatch(/npm test|PR ouverte/);
   });
 
   it('criterion 4: two instructions regrouped with no agent at work resume its session once, the replies together (ORC-180)', async () => {

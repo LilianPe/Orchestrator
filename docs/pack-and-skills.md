@@ -22,12 +22,12 @@ Behavior (which skill, when, with which model) is configured in `.relais/workflo
 
 Two families:
 
-- **job skills** are the ones `workflow.yml` launches (`skill: "relais:<name>"`): they say what to do from the start to the end of a run and the format of the last message;
+- **job skills** are the ones `workflow.yml` launches (`skill: "relais:<name>"`): they say what to do from the start to the end of a run and the format of the `submit_result` summary;
 - **method skills** say *how* to do a step (test, debug, verify, review, handle feedback). Job skills load them at the right moment, and the startup hook reminds every run to use them.
 
 ### Job skills
 
-All of them write their last message in French: it is posted as is in the Linear session. When the agent asks a question (`relais-agent ask`), the ticket is blocked and that last message is **not** posted: the question must stand on its own.
+All of them end on `submit_result`, whose summary, in English, is what the factory posts in the Linear session, composed and checked by its `OutputPolicy` (ORC-214): nothing the agent writes as a message is posted. When the agent asks a question (`factory-agent ask`), the ticket is blocked and that summary is **not** posted: the question must stand on its own.
 
 | Skill | Job(s) | Workspace | Role | Method loaded |
 |---|---|---|---|---|
@@ -59,7 +59,7 @@ Full text: `packs/standard/skills/<name>/SKILL.md`.
 `hooks/session-start.mjs` injects at the start of each run:
 
 - the current ticket (`RELAIS_TICKET`);
-- the rules: Linear messages in French, never merge or force-push, modify nothing outside the working directory, never declare done without tests run and read, go through `relais-agent` for Linear, ask **one** question with `relais-agent ask` rather than invent, last message readable on its own;
+- the rules: Linear messages in French, never merge or force-push, modify nothing outside the working directory, never declare done without tests run and read, go through `relais-agent` for Linear, ask **one** question with `relais-agent ask` rather than invent, nothing written as a message is published: Linear shows what the factory composes from `submit_result`, whose summary, for a reply, reads on its own (ORC-214);
 - the method: before each step, load the method skill that applies (`relais:tdd`, `relais:debugging`, `relais:verification`, `relais:code-review`, `relais:receiving-review`), the repository's `CLAUDE.md` taking precedence on style only, never on the factory's rules; if the Skill tool is unavailable, read the skill's file (the hook gives the absolute path of the `skills/` folder);
 - if `RELAIS_KNOWLEDGE` is set and contains `INDEX.md`: the knowledge base index (8,000 characters at most) and the path to the notes.
 

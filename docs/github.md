@@ -79,7 +79,7 @@ The factory publishes (ORC-125), through the outbox's `publish` effect, which `d
 
 A refusal is an answer: the ticket is blocked with the reason (`publish.refused`), decided once; the retry that publishes takes it where it was meant to go (`owedMove`). A failure is replayed by the outbox, then blocks the ticket. A run with no commit beyond the base ends without a PR.
 
-The PR text is provisional: the ticket's id and title, and a sentence from the factory, with nothing from the agent and no closing keyword. Its composition belongs to ORC-195, through the `OutputPolicy` of ORC-214.
+The PR text is provisional: the ticket's id and title (clipped to GitHub's 256 characters), and a sentence from the factory, with nothing from the agent and no closing keyword. It goes through the `OutputPolicy` (ORC-214, see [`linear.md`](linear.md#what-the-factory-publishes-orc-214)): a refused text blocks the publication with the reason. Its composition from the structured output belongs to ORC-195.
 
 On the agent side: `git push` and `gh` writes are refused by the pack and its hook, the proxy refuses `git-receive-pack` at every agent network level, and no token enters a sandbox. On the host, without a sandbox, only the hook holds: ORC-179.
 

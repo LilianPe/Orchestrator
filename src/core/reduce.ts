@@ -220,6 +220,15 @@ function movesOn(state: TicketState, next: TicketState, event: FactoryEvent | In
   }
 }
 
+/**
+ * Whether `event` ends the wait on blockers (ORC-363): a block (a human's stop), an undelegation, or a dev run started all the
+ * same. A move or a delegation again do not: the blockers still hold, and the wait holds back the run they would start.
+ */
+function endsWait(event: FactoryEvent | InternalEvent): boolean {
+  if (event.type === 'run.started') return event.queue === 'dev';
+  return event.type === 'ticket.blocked' || event.type === 'ticket.undelegated';
+}
+
 /** Pure: applies one event to a ticket's state and returns the new state; the input is never mutated. */
 export function reduce(state: TicketState | undefined, event: FactoryEvent | InternalEvent): TicketState | undefined {
   if (isExternal(event) && event.type === 'dead_letter.repaired') return repaired(state, event);
@@ -227,6 +236,8 @@ export function reduce(state: TicketState | undefined, event: FactoryEvent | Int
     const created = isExternal(event) ? tracked(event) : undefined;
     return created && external(created, event as FactoryEvent);
   }
-  const next = isExternal(event) ? external(state, event) : internal(state, event);
-  return next?.usageWait && movesOn(state, next, event) ? { ...next, usageWait: null } : next;
+  let next = isExternal(event) ? external(state, event) : internal(state, event);
+  if (next?.usageWait && movesOn(state, next, event)) next = { ...next, usageWait: null };
+  if (next?.waitingOn && endsWait(event)) next = { ...next, waitingOn: null };
+  return next;
 }

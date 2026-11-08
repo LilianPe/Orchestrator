@@ -33,8 +33,10 @@ Read all the feedback, then apply `factory:receiving-review`: understand each it
 
 Never merge the PR. Never push, to any branch: the factory publishes. Do not rewrite history, do not rebase a published branch. Do not switch branches. Do not disable or weaken any test or CI step.
 
-## Last message (published in Linear)
+## `submit_result` summary (published in Linear)
+
+End your turn with `mcp__factory__submit_result`: its `summary` is this message, which the factory publishes. Nothing else you write is.
 
 In English, one bullet per feedback item: `- <summarized feedback> → <what was done> (<short sha>)`, or `→ not applied: <reason>`. Then a **Verified** line (commands and result). End with the feedback not handled and why, if any.
 
-If you ask a question with `factory-agent ask`, this last message is not published: the question must also say what has already been handled.
+If you ask a question with `factory-agent ask`, this summary is not published: the question must also say what has already been handled.

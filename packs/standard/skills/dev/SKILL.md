@@ -15,7 +15,7 @@ The prompt carries the **what** (the ticket); this skill carries the **how**. Th
 
 1. Read the whole ticket, then the files it cites. A linked ticket is mentioned: `factory-agent issue <ID>`. Read the repository's `CLAUDE.md` and `docs/agent/` if they exist, and the knowledge base (`factory-agent kb search "<words>"`) on the subject.
 2. Check against the code that the ticket still holds: what it says to change or reuse exists (`grep -rn "<symbol>"`), and what it must deliver is not already there. A contradiction between the ticket and the code is a question, not a choice to make alone.
-3. **A product decision is missing** (ambiguous expected behavior, two possible readings, contradictory criterion): ask ONE precise question with `factory-agent ask "<question>"` before coding, giving the options you see, then end your turn. A technical question that the code or the repository settles is not one: settle it and say so in your last message.
+3. **A product decision is missing** (ambiguous expected behavior, two possible readings, contradictory criterion): ask ONE precise question with `factory-agent ask "<question>"` before coding, giving the options you see, then end your turn. A technical question that the code or the repository settles is not one: settle it and say so in your summary.
 4. Stay within the ticket's scope. An unrelated neighboring defect: note it for your points of attention, do not fix it.
 
 ## 2. Mini-plan, if useful
@@ -47,9 +47,9 @@ Never merge. Never push, to any branch, never open or edit a PR: the factory pub
 
 ## End of turn: `submit_result`
 
-**Always** end with the `mcp__factory__submit_result` tool. The factory reads nothing else: without a valid result, your work counts as a failure, even if finished. If it rejects the result, fix the fields it names and send it again. `summary` carries the message below, which the factory publishes in Linear.
+**Always** end with the `mcp__factory__submit_result` tool. The factory reads nothing else: without a valid result, your work counts as a failure, even if finished. If it rejects the result, fix the fields it names and send it again. `summary` carries the message below, which the factory publishes in Linear: nothing else you write is.
 
-## Last message (published in Linear)
+## `submit_result` summary (published in Linear)
 
 In English, self-contained, in this format:
 
@@ -60,4 +60,4 @@ In English, self-contained, in this format:
 **Points of attention** — risks, choices made, what is not covered, out-of-scope neighboring defects; if this work only settles part of the ticket, say what remains.
 ```
 
-If you ask a question with `factory-agent ask`, this last message is not published: the question must stand on its own (context, options, what you have already done).
+If you ask a question with `factory-agent ask`, this summary is not published: the question must stand on its own (context, options, what you have already done).
