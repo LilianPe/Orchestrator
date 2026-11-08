@@ -27,17 +27,18 @@ describe('bootstrap', () => {
     await app.stop();
   });
 
-  it('says at startup that no daily budget caps the runs, and only then (ORC-340)', async () => {
-    const started = async (limits: { perDayUsd?: number }) => {
+  it('says at startup that no token budget caps a ticket, and only then (ORC-216)', async () => {
+    const started = async (factoryYml?: string) => {
       const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
-      saveInstance(home, { port: 4178, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits });
+      saveInstance(home, { port: 4178, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
+      if (factoryYml) writeFileSync(join(home, 'factory.yml'), factoryYml);
       const logs: string[] = [];
       const app = await startFactory({ home, fakeRunner: true, log: (m) => void logs.push(m), env: {} });
       await app.stop();
-      return logs.some((m) => m.startsWith('Warning: no daily budget'));
+      return logs.filter((m) => m.startsWith('Warning: no'));
     };
-    expect(await started({})).toBe(true);
-    expect(await started({ perDayUsd: 40 })).toBe(false);
+    expect(await started()).toContain('Warning: no ticket budget (budgets.per_ticket_tokens in factory.yml): a ticket runs whatever it spends; `factory validate` refuses until it is set.');
+    expect((await started('budgets:\n  per_ticket_tokens: 1000000\n')).filter((m) => m.includes('budget'))).toEqual([]);
   });
 
   it('selects the GitHub App forge when the app is configured, without logging the key', async () => {

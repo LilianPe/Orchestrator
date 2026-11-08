@@ -30,7 +30,7 @@ function req(patch: Partial<RunRequest> = {}, env: Record<string, string> = {}):
   return {
     runId: `r-${Math.random().toString(36).slice(2)}`, cwd: process.cwd(), prompt: '/factory:dev\n\n## Ticket', claudeSessionId: 'uuid-1', resume: false,
     model: 'sonnet', pluginDir: '/pack', settingsPath: '/pack/settings.json', readOnly: false,
-    limits: { turns: 50, durationMs: 10_000, usd: 5 }, env, ...patch,
+    limits: { turns: 50, durationMs: 10_000 }, env, ...patch,
   };
 }
 
@@ -116,7 +116,7 @@ describe('buildClaudeArgs', () => {
   it('starts a new session', () => {
     expect(buildClaudeArgs(req())).toEqual([
       '-p', '/factory:dev\n\n## Ticket', '--output-format', 'stream-json', '--verbose', '--session-id', 'uuid-1', '--model', 'sonnet',
-      '--plugin-dir', '/pack', '--settings', '/pack/settings.json', '--setting-sources', '', '--strict-mcp-config', '--mcp-config', expect.any(String), '--max-budget-usd', '5',
+      '--plugin-dir', '/pack', '--settings', '/pack/settings.json', '--setting-sources', '', '--strict-mcp-config', '--mcp-config', expect.any(String),
     ]);
   });
   it("loads the factory's MCP only, its token read from the run's env, never on the command line (ORC-288)", () => {
@@ -231,25 +231,27 @@ describe('ClaudeCodeRunner: caps and stagnation of the build (ORC-136)', () => {
     const { r } = runner();
     const lines = ['m1', 'm1', 'm1', 'm2', 'm2'].map((id) => assistant(id));
     // The agent ends by itself once its lines are written, without a result line: no timer, no stop to hide a limit (ORC-325).
-    const h = r.start(req({ limits: { turns: 2, durationMs: 10_000, usd: 5 } }, { FAKE_CLAUDE_SCRIPT: script(...lines) }));
+    const h = r.start(req({ limits: { turns: 2, durationMs: 10_000 } }, { FAKE_CLAUDE_SCRIPT: script(...lines) }));
     expect(await h.done).toMatchObject({ outcome: 'failure', turns: 2 });
   });
 
   it('stops past the cap of turns of the step', async () => {
     const { r } = runner();
     const lines = ['m1', 'm2', 'm3'].map((id) => assistant(id));
-    const h = r.start(req({ limits: { turns: 2, durationMs: 10_000, usd: 5 } }, { FAKE_CLAUDE_SCRIPT: script(...lines), FAKE_CLAUDE_HANG: '1' }));
-    expect(await h.done).toMatchObject({ outcome: 'limit' });
+    const h = r.start(req({ limits: { turns: 2, durationMs: 10_000 } }, { FAKE_CLAUDE_SCRIPT: script(...lines), FAKE_CLAUDE_HANG: '1' }));
+    // The step's budget in turns, which the factory blocks on as such (ORC-216).
+    expect(await h.done).toMatchObject({ outcome: 'limit', overBudget: 'turns' });
   });
 
   it('stops past the cap of tokens, cache reads left out', async () => {
     const { r } = runner();
     const cached = { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 1_000_000 };
     // Ends by itself, as above: a limit would show, where a stop would win over it.
-    const under = r.start(req({ limits: { turns: 50, durationMs: 10_000, usd: 5, tokens: 100 } }, { FAKE_CLAUDE_SCRIPT: script(assistant('m1', cached)) }));
+    const under = r.start(req({ limits: { turns: 50, durationMs: 10_000, tokens: 100 } }, { FAKE_CLAUDE_SCRIPT: script(assistant('m1', cached)) }));
     expect(await under.done).toMatchObject({ outcome: 'failure' });
-    const over = r.start(req({ limits: { turns: 50, durationMs: 10_000, usd: 5, tokens: 100 } }, { FAKE_CLAUDE_SCRIPT: script(assistant('m1', { input_tokens: 60, output_tokens: 60 })), FAKE_CLAUDE_HANG: '1' }));
-    expect(await over.done).toMatchObject({ outcome: 'limit' });
+    expect(await under.done).not.toHaveProperty('overBudget');
+    const over = r.start(req({ limits: { turns: 50, durationMs: 10_000, tokens: 100 } }, { FAKE_CLAUDE_SCRIPT: script(assistant('m1', { input_tokens: 60, output_tokens: 60 })), FAKE_CLAUDE_HANG: '1' }));
+    expect(await over.done).toMatchObject({ outcome: 'limit', overBudget: 'tokens' });
   });
 
   it('stops at the third same failure on an unchanged worktree, and tells what it saw', async () => {
@@ -405,16 +407,18 @@ describe('ClaudeCodeRunner: caps and stagnation of the build (ORC-136)', () => {
     const stopped = r.start(req({}, { FAKE_CLAUDE_SCRIPT: script(assistant('m1')), FAKE_CLAUDE_HANG: '1' }));
     stopped.stop();
     expect(await stopped.done).not.toHaveProperty('infra');
-    const capped = r.start(req({ limits: { turns: 50, durationMs: 200, usd: 5 } }, { FAKE_CLAUDE_SCRIPT: script(assistant('m1')), FAKE_CLAUDE_HANG: '1' }));
+    const capped = r.start(req({ limits: { turns: 50, durationMs: 200 } }, { FAKE_CLAUDE_SCRIPT: script(assistant('m1')), FAKE_CLAUDE_HANG: '1' }));
     const done = await capped.done;
     expect(done).toMatchObject({ outcome: 'limit' });
     expect(done).not.toHaveProperty('infra');
+    // Its duration is no budget (ORC-216): a `limit` as before.
+    expect(done).not.toHaveProperty('overBudget');
   });
 
   it('prices a run killed at its duration cap from the tokens it consumed, never $0 (ORC-340)', async () => {
     const { r } = runner();
     const usage = { input_tokens: 1_000_000, output_tokens: 100_000, cache_read_input_tokens: 1_000_000, cache_creation_input_tokens: 0 };
-    const capped = r.start(req({ model: 'claude-sonnet-5-5', limits: { turns: 50, durationMs: 200, usd: 5 } }, { FAKE_CLAUDE_SCRIPT: script(assistant('m1', usage)), FAKE_CLAUDE_HANG: '1' }));
+    const capped = r.start(req({ model: 'claude-sonnet-5-5', limits: { turns: 50, durationMs: 200 } }, { FAKE_CLAUDE_SCRIPT: script(assistant('m1', usage)), FAKE_CLAUDE_HANG: '1' }));
     // $2 of input, $1 of output, $0.20 of cache reads.
     expect(await capped.done).toMatchObject({ outcome: 'limit', costUsd: 3.2 });
   });
@@ -450,7 +454,7 @@ describe('ClaudeCodeRunner: caps and stagnation of the build (ORC-136)', () => {
   it('prices a cut run on the model the init line reports, whatever the request named', async () => {
     const { r } = runner();
     const init = JSON.stringify({ type: 'system', subtype: 'init', session_id: 's', model: 'claude-opus-5-5' });
-    const h = r.start(req({ model: '', limits: { turns: 50, durationMs: 200, usd: 5 } }, { FAKE_CLAUDE_SCRIPT: script(init, assistant('m1', { input_tokens: 1_000_000, output_tokens: 0 })), FAKE_CLAUDE_HANG: '1' }));
+    const h = r.start(req({ model: '', limits: { turns: 50, durationMs: 200 } }, { FAKE_CLAUDE_SCRIPT: script(init, assistant('m1', { input_tokens: 1_000_000, output_tokens: 0 })), FAKE_CLAUDE_HANG: '1' }));
     expect(await h.done).toMatchObject({ outcome: 'limit', costUsd: 4 });
   });
 
@@ -505,7 +509,7 @@ describe('ClaudeCodeRunner attached to an attempt of a dead daemon', () => {
     const died = spawnSync(process.execPath, ['--import', 'tsx', fx('start-and-die.ts'), transcriptsDir, runId, fx('fake-claude.mjs'), JSON.stringify(env)], { stdio: 'ignore' });
     expect(died.status === 0).toBe(false);
   };
-  const attach = { limits: { turns: 50, durationMs: 60_000, usd: 5 }, elapsedMs: 0, env: {} };
+  const attach = { limits: { turns: 50, durationMs: 60_000 }, elapsedMs: 0, env: {} };
   const writerDead = async (transcriptsDir: string, runId: string) => {
     const pid = Number(readFileSync(join(liveDir(transcriptsDir), runId, 'pid'), 'utf8').split(' ')[0]);
     await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow(), { timeout: 5_000 });

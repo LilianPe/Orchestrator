@@ -8,7 +8,7 @@ import { TokenManager } from '../adapters/tracker/linear/oauth.js';
 import { LinearTracker } from '../adapters/tracker/linear/tracker.js';
 import { startFactory } from '../app/bootstrap.js';
 import { repoRoot } from '../app/root.js';
-import { FactoryYmlError, loadFactoryYml } from '../config/factory-yml.js';
+import { FactoryYmlError, loadFactoryBudgets, loadFactoryYml } from '../config/factory-yml.js';
 import { homePaths, linearSettings, loadInstance, factoryHome, saveLinearTokens } from '../config/instance.js';
 import { loadWorkflow } from '../config/load-workflow.js';
 import { createSmeeChannel } from '../relay/smee.js';
@@ -45,8 +45,8 @@ function uiAuth(): Record<string, string> {
 async function main(): Promise<number> {
   // Its own options, and no instance needed to replay a file (the CI has none).
   if (process.argv[2] === 'replay') return runReplayCommand(process.argv.slice(3));
-  // A repository file only: no instance needed either.
-  if (process.argv[2] === 'validate') return runValidateCommand({ repoPath: process.argv[3] ?? process.cwd(), out: (l) => console.log(l) });
+  // The repository's file and the budgets of factory.yml (ORC-216), its secrets left unresolved: no running instance needed.
+  if (process.argv[2] === 'validate') return runValidateCommand({ repoPath: process.argv[3] ?? process.cwd(), out: (l) => console.log(l), factoryYml: () => ({ budgets: loadFactoryBudgets(factoryHome()) }) });
   const { positionals, values } = parseArgs({
     allowPositionals: true,
     options: { 'fake-runner': { type: 'boolean' }, json: { type: 'boolean' } },

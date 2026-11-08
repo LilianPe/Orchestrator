@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { validateHeaderValue } from 'node:http';
 import { join } from 'node:path';
-import { parse } from 'yaml';
+import { parse, stringify } from 'yaml';
 import { z } from 'zod';
 import type { Effort } from '../presets/preset.js';
 import type { StepSettings } from './load-workflow.js';
@@ -87,6 +87,24 @@ const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 export function loadFactoryYml(home: string, env: NodeJS.ProcessEnv = process.env): FactoryYml | undefined {
   const file = join(home, 'factory.yml');
   return existsSync(file) ? parseFactoryYml(readFileSync(file, 'utf8'), env) : undefined;
+}
+
+/**
+ * The `budgets` of `<home>/factory.yml` alone (ORC-216), validated as the daemon validates them: what `factory validate`
+ * reads, without resolving the file's `env:` secrets, which the shell it runs in need not have. A read error is thrown as is.
+ */
+export function loadFactoryBudgets(home: string): FactoryYml['budgets'] {
+  const file = join(home, 'factory.yml');
+  if (!existsSync(file)) return undefined;
+  let raw: unknown;
+  try {
+    raw = parse(readFileSync(file, 'utf8'));
+  } catch (err) {
+    if (err instanceof Error && 'code' in err) throw err;
+    throw new FactoryYmlError([`unreadable YAML: ${(err as Error).message}`]);
+  }
+  const budgets = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>)['budgets'] : undefined;
+  return budgets === undefined || budgets === null ? undefined : parseFactoryYml(stringify({ budgets })).budgets;
 }
 
 /** Validates the file and resolves its `env:` values; throws a FactoryYmlError naming the path of every faulty key. */
