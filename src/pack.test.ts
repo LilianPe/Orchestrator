@@ -55,7 +55,7 @@ describe('standard pack', () => {
     );
   });
 
-  it("allows the Python toolchain of the runner image: uv, pytest, ruff, mypy (ORC-311)", () => {
+  it('allows the Python toolchain: uv, and pytest, ruff, mypy from the project environment (ORC-311)', () => {
     const s = JSON.parse(readFileSync(join(pack, 'settings.json'), 'utf8'));
     expect(s.permissions.allow).toEqual(expect.arrayContaining(['Bash(uv:*)', 'Bash(pytest:*)', 'Bash(ruff:*)', 'Bash(mypy:*)']));
   });

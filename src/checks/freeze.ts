@@ -27,6 +27,9 @@ export interface FreezeView {
   showAtHead(path: string): Promise<string | undefined>;
 }
 
+/** The section pytest reads in the INI files it shares with other tools (ORC-311). */
+const PYTEST_INI_SECTION = new Map([['tox.ini', 'pytest'], ['setup.cfg', 'tool:pytest']]);
+
 /**
  * The harness beyond the runner's config (`isTestHarnessFile`): `conftest.py` (pytest's shared fixtures), `tsconfig*.json`,
  * and the files whose test part only is frozen (`package.json`'s `test` script, the pytest section of `pyproject.toml`,
@@ -34,25 +37,22 @@ export interface FreezeView {
  */
 export function isFrozenHarness(path: string): boolean {
   const name = normalizePath(path).split('/').at(-1) ?? '';
-  return isTestHarnessFile(path) || /^(?:conftest\.py|tsconfig(?:\.[\w-]+)*\.json|package\.json|pyproject\.toml|tox\.ini|setup\.cfg)$/.test(name);
+  return isTestHarnessFile(path) || PYTEST_INI_SECTION.has(name) || /^(?:conftest\.py|tsconfig(?:\.[\w-]+)*\.json|package\.json|pyproject\.toml)$/.test(name);
 }
 
 const sha256 = (s: string): string => createHash('sha256').update(s).digest('hex');
 
-/** The section pytest reads in the INI files it shares with other tools (ORC-311). */
-const PYTEST_INI_SECTION: Record<string, string> = { 'tox.ini': 'pytest', 'setup.cfg': 'tool:pytest' };
-
 /**
  * The lines of `[section]` in an INI file, blank and comment lines left out, indentation kept (it continues a value).
- * Undefined when the file has no such section.
+ * A header as pytest's iniconfig reads it: exact, alone on its line but for a comment. Undefined when the file has no such section.
  */
 function iniSection(content: string, section: string): string[] | undefined {
   let lines: string[] | undefined;
   let inside = false;
   for (const raw of content.split(/\r?\n/)) {
-    const header = /^\[([^\]]*)\]/.exec(raw);
+    const header = /^\[([^\]]*)\]\s*(?:[#;].*)?$/.exec(raw);
     if (header) {
-      inside = header[1]!.trim() === section;
+      inside = header[1] === section;
       if (inside) lines ??= [];
     } else if (inside && raw.trim() !== '' && !/^\s*[#;]/.test(raw)) lines!.push(raw.trimEnd());
   }
@@ -67,8 +67,9 @@ function iniSection(content: string, section: string): string[] | undefined {
  */
 export function fingerprint(path: string, content: string): string | undefined {
   const name = normalizePath(path).split('/').at(-1) ?? '';
-  const ini = PYTEST_INI_SECTION[name];
-  if (ini) {
+  const ini = PYTEST_INI_SECTION.get(name);
+  // A NUL is no INI text: the read of a blob too large to show, fingerprinted whole below.
+  if (ini && !content.includes('\0')) {
     const section = iniSection(content, ini);
     return section === undefined ? undefined : sha256(JSON.stringify(section));
   }

@@ -137,4 +137,18 @@ describe('the freeze rule', () => {
   it('an unreadable package.json is fingerprinted whole: it cannot be read, so any change counts', () => {
     expect(fingerprint('package.json', '{oops')).toBe(fingerprint('x', '{oops'));
   });
+
+  it('a tox.ini or setup.cfg read as a blob too large to show is fingerprinted whole (ORC-311)', () => {
+    expect(fingerprint('setup.cfg', '\0too large: 1234')).toBe(fingerprint('x', '\0too large: 1234'));
+  });
+
+  it('reads the pytest section of an INI file as pytest does: an exact header, no other (ORC-311)', () => {
+    const tox = '[pytest]\naddopts = -q\n';
+    expect(fingerprint('tox.ini', `${tox}[ pytest ]\naddopts = --ignore=tests\n`)).toBe(fingerprint('tox.ini', tox));
+    expect(fingerprint('tox.ini', '[pytest] # the runner\naddopts = -q\n')).toBe(fingerprint('tox.ini', tox));
+  });
+
+  it('a file named after an Object property is fingerprinted whole, not read as an INI file (ORC-311)', () => {
+    for (const name of ['constructor', 'toString', '__proto__']) expect(fingerprint(`tests/fixtures/${name}`, 'data'), name).toBe(fingerprint('x', 'data'));
+  });
 });
