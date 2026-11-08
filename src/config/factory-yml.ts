@@ -24,7 +24,7 @@ export interface FactoryYml {
   };
   /** Tickets worked at once: the dev queue's capacity, over `parallel_sessions` of the workflow (ORC-203). */
   concurrency?: number;
-  /** `max_turns` and `per_step_tokens` are applied by `stepSettings` (ORC-136); `per_ticket_tokens`, `validate`'s worst case and the wait on a usage limit by ORC-216 and ORC-215. */
+  /** `max_turns` and `per_step_tokens` are applied by `stepSettings` (ORC-136); `per_ticket_tokens` and `on_usage_limit` by the orchestrator (ORC-340); `validate`'s worst case waits for ORC-216. */
   budgets?: { perStepTokens?: Record<string, number>; perTicketTokens?: number; maxTurns?: Record<string, number>; onUsageLimit?: 'wait' };
   /**
    * `projects[].repoPath` of config.yaml stays the working copy until the runner clones (ORC-204). `env` and

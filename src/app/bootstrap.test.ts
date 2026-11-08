@@ -27,6 +27,19 @@ describe('bootstrap', () => {
     await app.stop();
   });
 
+  it('says at startup that no daily budget caps the runs, and only then (ORC-340)', async () => {
+    const started = async (limits: { perDayUsd?: number }) => {
+      const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
+      saveInstance(home, { port: 4178, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits });
+      const logs: string[] = [];
+      const app = await startFactory({ home, fakeRunner: true, log: (m) => void logs.push(m), env: {} });
+      await app.stop();
+      return logs.some((m) => m.startsWith('Warning: no daily budget'));
+    };
+    expect(await started({})).toBe(true);
+    expect(await started({ perDayUsd: 40 })).toBe(false);
+  });
+
   it('selects the GitHub App forge when the app is configured, without logging the key', async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
     const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });

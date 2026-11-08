@@ -60,6 +60,8 @@ export interface RunRecord {
   stagnation?: Stagnation;
   /** The runner or its sandbox broke: nothing for the agent to fix (ORC-136). */
   infra?: true;
+  /** The subscription's usage limit stopped the attempt (ORC-340). */
+  usageLimit?: { resetAt?: number };
   /** Renewed by the heartbeat while the attempt lives (ORC-220, `renewRun`); absent on older records. */
   leaseUntil?: number;
   /** What the attempt was given to read (ORC-220): a relaunch of its step reads the same, the feedback it consumed included. */

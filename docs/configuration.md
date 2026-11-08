@@ -120,7 +120,11 @@ Linear team members and GitHub permissions are not configured: they are read (Li
 
 ### Daily budget
 
-`limits.perDayUsd` caps the sum of run costs since midnight **UTC**. A run's cost is the one reported by Claude Code at the end of the run.
+`limits.perDayUsd` caps the sum of run costs since midnight **UTC**. A run's cost is the one reported by Claude Code at the end of the run. A run cut before that report (stopped at a turn, token or duration cap, stopped by a human, killed) is priced from the tokens it consumed, at the list price of its model family (ORC-340): it counts in the day's budget and in the ticket's cost like any other.
+
+There is **no default cap**: on a subscription the dollar figure is an API-price equivalent, not a bill, and a default would be a guess that silently stops work. Without `perDayUsd`, `factory up` logs `Warning: no daily budget (limits.perDayUsd in config.yaml): runs start whatever they cost today.`
+
+The cap is checked before each launch, on the runs ended so far: runs still in flight count once they end. The day can therefore overshoot the cap by at most the runs running at once (`concurrency`) times their per-run cap (`limits.per_run.usd`).
 
 When the cap is reached: no new run starts, requests stay queued and Relais comments once per ticket per day « Daily budget of Relais reached: this ticket stays queued until tomorrow (or until the cap is raised). ». Runs already launched run to completion. The queue restarts on its own when the day changes (the daemon re-evaluates the queue every minute) or after a restart with a raised cap.
 
@@ -190,7 +194,7 @@ read_guard: { max_lines: 350 }
 | `linear` | **Applied**: `app_client_id`, `client_secret` and `webhook_secret` replace those in `secrets.json`. The OAuth tokens stay in `secrets.json`, written by « Connecter Linear ». |
 | `claude` | **`accounts` and `active` applied** (ORC-211): the active account's token is the runner's only credential. **`effort` applied** (ORC-136): `per_step` replaces a preset step's effort, `default` is used for jobs outside the preset (`ask`, `learn`). The rest of account selection comes with ORC-215. |
 | `concurrency` | **Applied** (ORC-203): capacity of the `dev` queue, instead of the workflow's `limits.parallel_sessions`. The `questions` queue keeps `question_sessions`. |
-| `budgets` | **`max_turns` and `per_step_tokens` applied** (ORC-136), per step: `max_turns` can only lower the step's turns, `per_step_tokens` is a per-attempt cap, with no default value. `per_ticket_tokens` and the worst case of `factory validate` come with ORC-216, `on_usage_limit` with ORC-215. |
+| `budgets` | **`max_turns` and `per_step_tokens` applied** (ORC-136), per step: `max_turns` can only lower the step's turns, `per_step_tokens` is a per-attempt cap, with no default value. **`per_ticket_tokens` applied** (ORC-340): the tokens of all the ticket's runs (cache reads left out); once spent, the next code run is refused and the ticket blocked with `Token budget of the ticket reached: <spent> tokens spent of <cap> (budgets.per_ticket_tokens).`, and a run never gets more than what is left. The repository's `budgets.per_ticket_tokens` can only lower it. **`on_usage_limit: wait` applied** (ORC-340): a code run stopped by the subscription's usage limit neither blocks the ticket nor counts as an attempt; its step resumes on the ticket's session at the reset the CLI announced (an hour later when it announced none). Without the key, such a run blocks the ticket like any failure. The worst case of `factory validate` comes with ORC-216. |
 | `repos` | **`env` and `secrets` applied** (ORC-211), the entry being found through the project's `origin` remote: see [`repository-configuration.md`](repository-configuration.md#variables-and-secrets). For the rest, `projects[].repoPath` in `config.yaml` remains the working copy as long as the runner does not clone by itself (ORC-204). |
 | `read_guard` | **Applied**: `max_lines` (positive integer, 350 without this key) is the number of lines beyond which the pack's hook refuses a full read ([ORC-279](pack-and-skills.md#full-read-of-a-large-file)). It counts from the next startup. |
 

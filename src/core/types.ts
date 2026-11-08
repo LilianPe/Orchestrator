@@ -140,14 +140,14 @@ export interface EffectResultPayload {
  *   `inbox`: armed by a classified message (ORC-180): it starts nothing while work is in flight, the messages wait for its end.
  * - `clarify.remind` / `clarify.expire`: the reminder of a `clarify` question at 24 h, then the block at
  *   72 h, in the question's session; the rules that arm and decide them are ORC-210's.
- * - `usage.reset`: the reset of a subscription's usage limit, after which the waiting runs resume; the
- *   rule is ORC-215's.
+ * - `usage.reset`: the reset of a subscription's usage limit, armed by a `run.finished` the limit stopped
+ *   (`on_usage_limit: wait`, ORC-340): `job` starts again then, on the ticket's session.
  */
 export interface TimerPayloads {
   debounce: { job: string; inbox?: true };
   'clarify.remind': { linearSessionId?: string };
   'clarify.expire': { linearSessionId?: string };
-  'usage.reset': { account?: string };
+  'usage.reset': { account?: string; job?: string };
   /** The project's reconciliation (ORC-185), every 5 minutes, on its own pseudo-ticket (`reconcileTicket(project)`). */
   reconcile: Record<string, never>;
 }
@@ -249,7 +249,19 @@ export interface EventPayloads {
    * what `submit_result` recorded (`output`, when valid). Optional: no version bump, rows written before
    * it lack both and decide on `outcome` as before. `stagnation` (ORC-136): optional likewise, absent on rows written before it.
    */
-  'run.finished': { runId: string; job: string; outcome: RunOutcome; costUsd: number; turns: number; lastText: string; attempt?: AttemptOutcome; output?: AgentOutput; stagnation?: Stagnation };
+  'run.finished': {
+    runId: string;
+    job: string;
+    outcome: RunOutcome;
+    costUsd: number;
+    turns: number;
+    lastText: string;
+    attempt?: AttemptOutcome;
+    output?: AgentOutput;
+    stagnation?: Stagnation;
+    /** The usage limit stopped it and the factory waits on it (`on_usage_limit: wait`, ORC-340): resumed at `resetAt`, never blocked. */
+    usageLimit?: { resetAt: number };
+  };
   /**
    * `red`: the cause of the `red` check's verdict (ORC-123), for a job checked by it instead of `verify`. `frozen`: the
    * freeze read with it (ORC-131), on both verdicts, recorded once the run goes on to the build. `sha`: the commit it

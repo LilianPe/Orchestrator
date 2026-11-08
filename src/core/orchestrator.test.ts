@@ -36,6 +36,8 @@ function setup(
     effectRetry?: EffectRetry;
     workspaces?: FakeWorkspaces;
     processRetry?: { attempts: number; baseMs: number };
+    perTicketTokens?: number;
+    onUsageLimit?: 'wait';
   } = {},
 ) {
   const workflow = loadWorkflow({ packDir });
@@ -56,6 +58,8 @@ function setup(
     // One attempt: a failed effect dies at once (the retries have their own tests).
     effectRetry: o.effectRetry ?? { attempts: 1, baseMs: 1, capMs: 1 },
     processRetry: o.processRetry,
+    ...(o.perTicketTokens ? { perTicketTokens: o.perTicketTokens } : {}),
+    ...(o.onUsageLimit ? { onUsageLimit: o.onUsageLimit } : {}),
   });
   return { store, tracker, runner: fakeRunner, orch, scheduler, bus };
 }
@@ -366,6 +370,53 @@ describe('Orchestrator', () => {
     const comments = tracker.calls.filter((c) => c.method === 'comment' && c.args[0] === 'REL-2');
     expect(comments).toHaveLength(1);
     expect(String(comments[0]!.args[1])).toContain('Daily budget');
+  });
+
+  describe('the cost caps of factory.yml (ORC-340)', () => {
+    /** An earlier attempt of REL-1 that spent `output` tokens. */
+    const spent = (store: SqliteStore, output: number) =>
+      store.putRun({ id: 'old', projectId: 'p', ticketId: 'REL-1', job: 'dev', queue: 'dev', status: 'limit', claudeSessionId: 's', startedAt: 1, endedAt: 2, costUsd: 1, turns: 1, lastText: '', token: 't-old', cwd: '/w', tokens: { input: 0, output, cacheRead: 5_000_000, cacheCreation: 0 } });
+
+    it('blocks a ticket past per_ticket_tokens before its next run, and says why', async () => {
+      const { store, tracker, runner, orch } = setup({ perTicketTokens: 1_000 });
+      tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+      await spent(store, 1_000);
+      await orch.accept(delegated());
+      await orch.drained();
+      expect(runner.requests).toEqual([]);
+      const t = (await store.getTicket('p', 'REL-1'))!;
+      expect(t.blocked).toBe(true);
+      expect(t.blockReason).toBe('Token budget of the ticket reached: 1000 tokens spent of 1000 (budgets.per_ticket_tokens). Raise the cap or split the ticket, then reply here.');
+    });
+
+    it('caps a run under it at what the ticket has left, cache reads left out', async () => {
+      const { store, tracker, runner, orch } = setup({ perTicketTokens: 1_000 });
+      tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+      await spent(store, 400);
+      await orch.accept(delegated());
+      await orch.drained();
+      expect(runner.requests[0]!.limits.tokens).toBe(600);
+    });
+
+    it('on_usage_limit: wait, a run the usage limit stopped waits for the reset instead of blocking', async () => {
+      const { store, tracker, runner, orch } = setup({ onUsageLimit: 'wait' });
+      tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+      runner.enqueue({ outcome: 'failure', usageLimit: { resetAt: 50_000 } });
+      await orch.accept(delegated());
+      await orch.drained();
+      expect((await store.getTicket('p', 'REL-1'))!.blocked).toBe(false);
+      expect(await store.dueTimers(Number.MAX_SAFE_INTEGER)).toMatchObject([{ key: 'REL-1:usage.reset', kind: 'usage.reset', payload: { job: 'dev' }, fireAt: 50_000 }]);
+    });
+
+    it('without on_usage_limit, the same run blocks the ticket as any failure', async () => {
+      const { store, tracker, runner, orch } = setup();
+      tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+      runner.enqueue({ outcome: 'failure', usageLimit: { resetAt: 50_000 } });
+      await orch.accept(delegated());
+      await orch.drained();
+      expect((await store.getTicket('p', 'REL-1'))!.blocked).toBe(true);
+      expect(await store.dueTimers(Number.MAX_SAFE_INTEGER)).toEqual([]);
+    });
   });
 
   it('does not start runs after stopAll()', async () => {

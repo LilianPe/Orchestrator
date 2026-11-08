@@ -7,7 +7,7 @@ import { describeAgentRuntimeContract, drain, type AgentScript } from '../../../
 import { ContainerSandboxProvider } from '../sandbox/docker-rootless.js';
 import { FakeSandboxProvider } from '../sandbox/fake.js';
 import type { SandboxProvider } from '../sandbox/types.js';
-import { buildClaudeArgs, childEnv, ClaudeCodeRunner, liveDir, worktreeReader } from './claude-code.js';
+import { buildClaudeArgs, childEnv, ClaudeCodeRunner, estimateCostUsd, liveDir, worktreeReader } from './claude-code.js';
 import type { RunRequest } from './types.js';
 
 const fx = (n: string) => join(import.meta.dirname, 'fixtures', n);
@@ -409,6 +409,32 @@ describe('ClaudeCodeRunner: caps and stagnation of the build (ORC-136)', () => {
     const done = await capped.done;
     expect(done).toMatchObject({ outcome: 'limit' });
     expect(done).not.toHaveProperty('infra');
+  });
+
+  it('prices a run killed at its duration cap from the tokens it consumed, never $0 (ORC-340)', async () => {
+    const { r } = runner();
+    const usage = { input_tokens: 1_000_000, output_tokens: 100_000, cache_read_input_tokens: 1_000_000, cache_creation_input_tokens: 0 };
+    const capped = r.start(req({ model: 'claude-sonnet-5-5', limits: { turns: 50, durationMs: 200, usd: 5 } }, { FAKE_CLAUDE_SCRIPT: script(assistant('m1', usage)), FAKE_CLAUDE_HANG: '1' }));
+    // $2 of input, $1 of output, $0.20 of cache reads.
+    expect(await capped.done).toMatchObject({ outcome: 'limit', costUsd: 3.2 });
+  });
+
+  it('an unknown model is priced at the dearest: a cut run is never under-counted', () => {
+    const t = { input: 1_000_000, output: 0, cacheRead: 0, cacheCreation: 0 };
+    expect(estimateCostUsd('claude-haiku-5-5', t)).toBe(0.1);
+    expect(estimateCostUsd('some-new-model', t)).toBe(10);
+  });
+
+  it('tells the usage limit of the subscription, with its reset, apart from a failure of the agent (ORC-340)', async () => {
+    const { r } = runner();
+    const limitEvent = JSON.stringify({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', resetsAt: 1_900_000_000 } });
+    const result = JSON.stringify({ type: 'result', subtype: 'success', is_error: true, total_cost_usd: 0, num_turns: 1, result: 'Claude AI usage limit reached|1900000000' });
+    const evented = r.start(req({}, { FAKE_CLAUDE_SCRIPT: script(assistant('m1'), limitEvent, result) }));
+    expect(await evented.done).toMatchObject({ outcome: 'failure', usageLimit: { resetAt: 1_900_000_000_000 } });
+    const told = r.start(req({}, { FAKE_CLAUDE_SCRIPT: script(JSON.stringify({ type: 'result', subtype: 'success', is_error: true, num_turns: 1, result: "You've hit your limit" })) }));
+    expect(await told.done).toMatchObject({ usageLimit: {} });
+    const plain = r.start(req({}, { FAKE_CLAUDE_SCRIPT: script(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, num_turns: 1, result: 'Done within the usage limit.' })) }));
+    expect(await plain.done).not.toHaveProperty('usageLimit');
   });
 });
 

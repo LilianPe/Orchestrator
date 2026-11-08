@@ -817,6 +817,18 @@ describe('decide — built-ins', () => {
     }
   });
 
+  it('a run the usage limit stopped arms its reset, without a block or an attempt; the reset resumes its step on the session (ORC-340)', () => {
+    const limited = ev('run.finished', { runId: 'r1', job: 'dev', outcome: 'failure', costUsd: 0.5, turns: 3, lastText: '', usageLimit: { resetAt: 61_000 } });
+    const out = decide(ticket({ logical: 'dev', activeRunId: 'r1' }), { ...limited, at: 1_000 }, workflow);
+    expect(out.effects).toEqual([]);
+    expect(out.events).toEqual([]);
+    expect(out.timers).toEqual([{ kind: 'usage.reset', slot: 'usage.reset', ms: 60_000, payload: { job: 'dev' } }]);
+    const reset = ev('timer.fired', { kind: 'usage.reset', payload: { job: 'dev' } });
+    expect(decide(ticket({ logical: 'dev' }), reset, workflow).effects).toEqual([{ kind: 'start_run', job: 'dev', resume: true }]);
+    // A human took the ticket over meanwhile: theirs to resume.
+    expect(decide(ticket({ logical: 'dev', blocked: true }), reset, workflow).effects).toEqual([]);
+  });
+
   it('pr.opened records and links the PR', () => {
     expect(decide(ticket(), ev('pr.opened', { number: 7, url: 'https://gh/pr/7', branch: 'b' }), workflow)).toEqual(
       decision({

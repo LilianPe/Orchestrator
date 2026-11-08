@@ -1039,6 +1039,13 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       // An attempt that ended gives the lease's relaunch back (ORC-220): only two in a row block.
       if (ticket?.leaseRelaunches && job?.queue === 'dev') out.events.push({ type: 'ticket.patched', patch: { leaseRelaunches: 0 } });
       if (!job || event.payload.outcome === 'stopped') return out;
+      const limited = event.payload.usageLimit;
+      if (limited && job.queue === 'dev') {
+        // The subscription's limit is no failure of the agent (ORC-340): no block, no attempt counted; the step resumes at the reset.
+        out.timers.push({ kind: 'usage.reset', slot: 'usage.reset', ms: Math.max(0, limited.resetAt - event.at), payload: { job: jobName } });
+        out.trace.push(`usage limit: ${jobName} resumes at ${new Date(limited.resetAt).toISOString()}`);
+        return out;
+      }
       const outcome = job.queue === 'dev' ? (stagnationBlock(event.payload, workflow) ?? attemptDecision(event.payload, job)) : event.payload.outcome;
       // Already blocked (the agent asked through `ask`, a human's stop…): it keeps its reason and gets no second notice.
       if (typeof outcome === 'object') return ticket?.blocked ? out : block(out, workflow, { ...outcome, job: jobName });
@@ -1158,8 +1165,18 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
         out.timers.push({ kind: 'reconcile', payload: {}, slot: 'reconcile', ms: RECONCILE_MS });
         return out;
       }
+      if (fired.kind === 'usage.reset' && fired.payload.job) {
+        const job = workflow.jobs[fired.payload.job];
+        // A human took the ticket over meanwhile (a block, a stop, another run): theirs to resume.
+        if (!job || ticket?.blocked || ticket?.activeRunId) {
+          out.trace.push(`timer.fired usage.reset: ${fired.payload.job} not resumed`);
+          return out;
+        }
+        startRun(out, event, ticket, job, { resume: true });
+        return out;
+      }
       if (fired.kind !== 'debounce') {
-        // Armed by no rule yet: the clarify reminder and block are ORC-210's, the usage-limit wait ORC-215's.
+        // Armed by no rule yet: the clarify reminder and block are ORC-210's; a usage reset without a job, by no version.
         out.trace.push(`timer.fired ${fired.kind}: no rule decides it yet`);
         return out;
       }

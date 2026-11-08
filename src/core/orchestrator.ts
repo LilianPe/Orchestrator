@@ -83,7 +83,7 @@ import { ANTI_CHEAT_CHECK, ANTI_CHEAT_OK } from '../checks/anti-cheat.js';
 import { mdCode } from '../checks/markdown.js';
 import { parseStatus } from '../adapters/workspace/git-workspaces.js';
 import { agentPolicy, type EgressPolicy } from '../network/levels.js';
-import { REPO_CONFIG_REFUSED } from './block-cause.js';
+import { REPO_CONFIG_REFUSED, TICKET_TOKENS_REACHED } from './block-cause.js';
 import { BEFORE_ORC_331 } from './legacy-messages.js';
 import { readSecurityLog, refusalSummary } from '../network/security-log.js';
 
@@ -125,9 +125,15 @@ async function storedOutput(store: Store, runId: string): Promise<AgentOutput | 
 }
 
 /** What only the runner knows of an attempt's end (ORC-136), kept on its row: recover() sends the same result if the process dies before it does. */
-function endFacts({ stagnation, infra }: Pick<RunResult, 'stagnation' | 'infra'>): Pick<RunResult, 'stagnation' | 'infra'> {
-  return { ...(stagnation ? { stagnation } : {}), ...(infra ? { infra } : {}) };
+function endFacts({ stagnation, infra, usageLimit }: Pick<RunResult, 'stagnation' | 'infra' | 'usageLimit'>): Pick<RunResult, 'stagnation' | 'infra' | 'usageLimit'> {
+  return { ...(stagnation ? { stagnation } : {}), ...(infra ? { infra } : {}), ...(usageLimit ? { usageLimit } : {}) };
 }
+
+/** A usage limit whose reset the CLI did not tell: tried again after this long (ORC-340). ponytail: a fixed probe, hourly. */
+const USAGE_RETRY_MS = 60 * 60_000;
+
+/** A launch refused because the ticket spent its token budget (ORC-340): blocked with this message as its reason. */
+class TicketBudgetError extends Error {}
 
 /** The message posted for a run that submitted its output: composed by the factory from it, never the agent's last text (ORC-289). */
 function formatAgentOutput(o: AgentOutput): string {
@@ -221,6 +227,10 @@ export interface OrchestratorDeps {
   /** Where a project's base branch is fetched (ORC-151): required with `sandboxes`. */
   originUrl?: (project: ProjectRuntime) => Promise<string>;
   dailyBudgetUsd?: number;
+  /** `budgets.per_ticket_tokens` of factory.yml (ORC-340): a ticket past it is blocked before its next run. The repository's own cap lowers it. */
+  perTicketTokens?: number;
+  /** `budgets.on_usage_limit` of factory.yml (ORC-340): `wait`, a run stopped by the usage limit resumes at its reset. Absent: it blocks, as any failure. */
+  onUsageLimit?: 'wait';
   newId?: () => string;
   activityIntervalMs?: number;
   beforeRun?: (run: RunRecord) => Promise<void>;
@@ -538,7 +548,7 @@ export class Orchestrator {
       if (!project || !job || !runner.attach) return false;
       const sandbox = sandboxes && (await sandboxes.reattach(run.id));
       if (sandboxes && !sandbox) return false;
-      const handle = runner.attach({ runId: run.id, limits: job.limits, elapsedMs: clock.now() - run.startedAt, env: this.d.agentEnv(run), ...stagnationBounds(project.workflow, job) });
+      const handle = runner.attach({ runId: run.id, limits: job.limits, model: job.model, elapsedMs: clock.now() - run.startedAt, env: this.d.agentEnv(run), ...stagnationBounds(project.workflow, job) });
       if (!handle) return false;
       // Its slot, in the memory of this process. Over a capacity lowered meanwhile, it goes on all the same.
       scheduler.tryAcquire(run.queue, `${run.ticketId}:${run.queue}`);
@@ -968,6 +978,11 @@ export class Orchestrator {
     return (await this.d.store.getMeta('paused')) === '1';
   }
 
+  /**
+   * ponytail: checked before the launch, on the costs of the runs ended so far: the runs in flight count once they end, so
+   * the day can overshoot its budget by at most the runs running at once (`concurrency`) times their own cap (`limits.per_run.usd`).
+   * A lock or transaction around the read would not help, the cost of a live run is unknown until its end; reserve each run's cap if it must be exact.
+   */
   private async overBudget(): Promise<boolean> {
     const budget = this.d.dailyBudgetUsd;
     return budget !== undefined && (await this.d.store.costSince(startOfUtcDay(this.d.clock.now()))) >= budget;
@@ -1757,7 +1772,7 @@ export class Orchestrator {
         if (!this.handles.has(fresh.activeRunId)) events.push({ type: 'run.cleared' });
       }
       // A file the repository has to fix is not a breakdown of the factory: the Flux shows it as such (`repo_config`).
-      const reason = err instanceof RepoConfigError ? `${REPO_CONFIG_REFUSED}${err.message}` : `Launch error: ${(err as Error).message}`;
+      const reason = err instanceof RepoConfigError ? `${REPO_CONFIG_REFUSED}${err.message}` : err instanceof TicketBudgetError ? err.message : `Launch error: ${(err as Error).message}`;
       fresh = await this.apply(fresh, ...events, blockedOn(project.workflow, reason, job.name));
       // The ticket is blocked: a failed notice must not fail the effect, whose retry would start again.
       try {
@@ -1784,6 +1799,18 @@ export class Orchestrator {
     const value = await this.d.store.getMeta(mark);
     if (value === undefined) return false;
     return value === '1' || (await this.d.store.getRun(value)) !== undefined;
+  }
+
+  /**
+   * What the ticket may still spend under `budgets.per_ticket_tokens` (ORC-340), the lower of factory.yml's and the repository's;
+   * undefined without a cap. Spent, it throws: the launch is refused and the ticket blocked with the reason.
+   */
+  private async ticketTokensLeft(projectId: string, ticketId: string, config: RepoConfig): Promise<number | undefined> {
+    const cap = Math.min(this.d.perTicketTokens ?? Infinity, config.budgets?.perTicketTokens ?? Infinity);
+    if (cap === Infinity) return undefined;
+    const spent = (await this.d.store.ticketRuns(projectId, ticketId)).reduce((n, r) => n + (r.tokens ? spentTokens(r.tokens) : 0), 0);
+    if (spent >= cap) throw new TicketBudgetError(`${TICKET_TOKENS_REACHED}${spent} tokens spent of ${cap} (budgets.per_ticket_tokens). Raise the cap or split the ticket, then reply here.`);
+    return cap - spent;
   }
 
   private async noteBudget(project: ProjectRuntime, ticketId: string): Promise<void> {
@@ -1852,6 +1879,7 @@ export class Orchestrator {
       const config = await this.repoConfigOf(project, { fetch: !ws.fresh && job.workspace !== 'trunk-readonly' });
       const setup = config.setup ? [config.setup] : wf.workspace.setup;
       setUp ||= !setup.length;
+      const tokensLeft = job.queue === 'dev' ? await this.ticketTokensLeft(project.id, ticketId, config) : undefined;
       t = await this.ticket(project.id, ticketId);
       if (job.queue === 'dev') t = await this.apply(t, { type: 'workspace.prepared', path: ws.path, port: ws.port, branch: ws.branch });
       if (job.onStart.move && t.logical !== job.onStart.move) await this.move(project, t, job.onStart.move);
@@ -1996,7 +2024,8 @@ export class Orchestrator {
         pluginDir: sandbox ? PACK_TARGET : this.d.packDir,
         settingsPath: sandbox ? SETTINGS_TARGET : this.settingsPath(),
         readOnly: job.workspace === 'trunk-readonly',
-        limits: job.limits,
+        // The ticket's budget left caps the attempt too: past it, a `limit` blocks the ticket (ORC-340).
+        limits: tokensLeft === undefined ? job.limits : { ...job.limits, tokens: Math.min(job.limits.tokens ?? Infinity, tokensLeft) },
         env: {
           // First: a variable of the repository never replaces one of the factory. Never its secrets (ORC-211).
           ...vars.env,
@@ -2133,6 +2162,8 @@ export class Orchestrator {
         attempt: attemptOutcome({ outcome: result.outcome, infraError: result.infra || unreadable }, output),
         ...(output ? { output } : {}),
         ...(result.stagnation ? { stagnation: result.stagnation } : {}),
+        // Only when the factory waits on it (`on_usage_limit: wait`): otherwise the run ends as any failure (ORC-340).
+        ...(result.usageLimit && this.d.onUsageLimit === 'wait' ? { usageLimit: { resetAt: result.usageLimit.resetAt ?? this.d.clock.now() + USAGE_RETRY_MS } } : {}),
       },
     };
   }
