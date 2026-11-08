@@ -1,5 +1,6 @@
 import type { Clock } from '../../../core/clock.js';
 import { logicalFromName, type ProjectRuntime } from '../../../core/orchestrator.js';
+import { openBlockers } from '../../../core/pickup.js';
 import { isNoRepo, isUnrouted, namesOtherRepo, resolveRoute, type Route } from '../../../core/routing.js';
 import { SCHEMA_VERSION, TRUSTED, type EventPayloads, type EventType, type FactoryEvent, type TicketState } from '../../../core/types.js';
 import type { Store } from '../../../store/types.js';
@@ -122,6 +123,11 @@ async function reconcileProject(d: ReconcileDeps, p: ProjectRuntime, team: strin
     }
     await catchUpMove(d, emit, p, t, issue.stateName, at);
     await inTurn(() => catchUpLabels(d, emit, p.id, team, issue, t, at));
+    // The wait on « blocked by » tickets ends here (ORC-363): their move to Done reaches no webhook of this ticket, and may be
+    // another team's; the ticket's own relations, read again each pass, also see one taken off.
+    if (t.waitingOn && !openBlockers(issue).length) {
+      await emit(t, TRUSTED, `reconcile:blockers-done:${p.id}:${t.ticketId}:${t.updatedAt}`, 'blockers.done', { blockers: t.waitingOn.blockers });
+    }
   }
   for (const t of await d.store.listTickets()) {
     if (t.projectId !== p.id || routedTo.get(t.ticketId) === p.id) continue;

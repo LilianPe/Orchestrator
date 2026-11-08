@@ -5,7 +5,7 @@ import { upcastTicket } from '../../src/core/upcast.js';
 import { formatReplay, readJournal, replayJournal, type ExportedJournal } from '../../src/runtime/replay.js';
 import { loadTestWorkflow } from '../helpers/harness.js';
 import { testPreset } from '../helpers/test-preset.js';
-import { asVersion1, record as recordScenario, scenarioWorkflow, SCENARIOS } from './scenarios.js';
+import { asVersion1, record as recordScenario, recordedFiles, scenarioWorkflow, SCENARIOS } from './scenarios.js';
 
 // Replay must never reach the small model of messages (ORC-336): any call to it fails this file.
 vi.mock('../../src/adapters/runner/message-classifier.js', () => {
@@ -19,6 +19,47 @@ const dir = join(import.meta.dirname, 'journals');
 
 /** A deep copy, to change a journal without touching the recorded one. */
 const copy = (j: ExportedJournal): ExportedJournal => JSON.parse(JSON.stringify(j)) as ExportedJournal;
+
+const shown = (v: unknown) => {
+  const s = JSON.stringify(v) ?? 'absent';
+  return s.length > 80 ? `${s.slice(0, 77)}...` : s;
+};
+
+const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null;
+
+/**
+ * The first place where two parsed journals differ, as `entries[3].decision.before.status`. Objects whose
+ * keys differ are reported by those keys (a new projection field, a changed workflow hash), not walked.
+ */
+function firstDifference(committed: unknown, recorded: unknown, path = ''): string {
+  const at = path || 'the root';
+  if (isObject(committed) && isObject(recorded) && Array.isArray(committed) === Array.isArray(recorded)) {
+    const only = (a: object, b: object) => Object.keys(a).filter((k) => !Object.hasOwn(b, k));
+    const [gone, added] = [only(committed, recorded), only(recorded, committed)];
+    if (!Array.isArray(recorded) && gone.length + added.length > 0) {
+      return `keys differ at ${at}: only committed has ${shown(gone)}, only recorded has ${shown(added)}`;
+    }
+    for (const key of new Set([...Object.keys(committed), ...Object.keys(recorded)])) {
+      const diff = firstDifference(committed[key], recorded[key], Array.isArray(recorded) ? `${path}[${key}]` : path ? `${path}.${key}` : key);
+      if (diff) return diff;
+    }
+    return '';
+  }
+  if (JSON.stringify(committed) === JSON.stringify(recorded)) return '';
+  return `first difference at ${at}: committed ${shown(committed)}, recorded ${shown(recorded)}`;
+}
+
+/** Why a committed journal is not the recorded one. */
+function drift(committed: string | undefined, recorded: string): string {
+  if (committed === undefined) return 'missing';
+  let was: unknown;
+  try {
+    was = JSON.parse(committed);
+  } catch {
+    return 'not valid JSON';
+  }
+  return firstDifference(was, JSON.parse(recorded)) || 'same content, written differently';
+}
 
 /** Each scenario runs once; every test gets its own copy of the journal. */
 const recorded = new Map<string, Promise<ExportedJournal>>();
@@ -128,7 +169,7 @@ describe('recorded journals (test/replay/journals)', () => {
 
   it('has journals to replay, one in schema version 1', () => {
     expect(files.length).toBeGreaterThanOrEqual(4);
-    expect(files.some((f) => f.includes('.v1.'))).toBe(true);
+    expect(files.some((f) => f.includes('.v1.') && !f.includes('.pre-orc-'))).toBe(true);
   });
 
   // Kept as the engine before ORC-161 recorded it; `npm run replay:record` does not write it again.
@@ -177,11 +218,13 @@ describe('recorded journals (test/replay/journals)', () => {
   });
 
   it('reads a decision recorded before ORC-180 through the ticket upcaster: its pendingFeedback is the human inbox', () => {
-    const journal = readJournal(readFileSync(join(dir, 'review-merge-done.v1.json'), 'utf8'));
+    // The copy of the .v1 journal: its ticket.moved goes through the event upcaster on the same replay.
+    const journal = readJournal(readFileSync(join(dir, 'review-merge-done.v1.pre-orc-310.json'), 'utf8'));
+    expect(journal.entries.some((e) => e.event.type === 'ticket.moved')).toBe(true);
     const tickets = journal.entries.flatMap((e) => [e.decision?.before, e.decision?.ticket]).filter((t) => t !== undefined && t !== null);
     expect(tickets.length).toBeGreaterThan(0);
     expect(tickets.every((t) => 'pendingFeedback' in t && !('humanInbox' in t))).toBe(true);
-    expect(replayJournal(journal).divergences).toEqual([]);
+    expect(replayJournal(journal)).toMatchObject({ upcast: 1, divergences: [] });
     // Upcast, not ignored: a value that differs is still caught.
     (journal.entries.find((e) => e.decision?.ticket)!.decision!.ticket as unknown as { pendingFeedback: unknown[] }).pendingFeedback = [{ body: 'x' }];
     expect(replayJournal(journal).divergences.map((d) => d.field)).toContain('ticket');
@@ -208,6 +251,31 @@ describe('recorded journals (test/replay/journals)', () => {
     expect(replayJournal(journal)).toMatchObject({ divergences: [], replayed: journal.entries.length });
   });
 
+  // Nothing else reads most of the frozen copies by name: a deleted one would take its coverage away silently.
+  it('keeps the frozen copies of the 13 journals main held before the freshness check (ORC-310)', () => {
+    // The journals main held then, not today's SCENARIOS: a scenario added later has no copy to keep.
+    const expected = [
+      'authz-refused-then-allowed', 'blocked-then-comment-resumes', 'build-loop-blocked', 'check-failed-then-feedback',
+      'crash-loop-bound', 'dead-letter-then-repair', 'human-reply-during-run', 'merge-revert-ci',
+      'publish-refused-then-published', 'red-ci-then-stop', 'review-merge-done', 'review-merge-done.v1', 'signed-actor-then-untrusted',
+    ].map((name) => `${name}.pre-orc-310.json`);
+    expect(files.filter((f) => f.endsWith('.pre-orc-310.json')).sort()).toEqual(expected.sort());
+  });
+
+  // The oracle replays a journal from its own recorded inputs, so a stale journal stays green there:
+  // this compares it with what its scenario records today (ORC-310).
+  it.each(Object.keys(SCENARIOS))('%s: the committed journals are what the scenario records today', async (name) => {
+    for (const { file, text } of recordedFiles(name, await record(name))) {
+      const committed = files.includes(file) ? readFileSync(join(dir, file), 'utf8') : undefined;
+      if (committed !== text) {
+        expect.fail(
+          `test/replay/journals/${file} is not what its scenario records today (${drift(committed, text)}). ` +
+            'If the change of the pack, a projection or an event payload is meant, run `npm run replay:record` and commit the journals\' diff.',
+        );
+      }
+    }
+  });
+
   it.each(files)('%s replays identical bit for bit', (file) => {
     const report = replayJournal(readJournal(readFileSync(join(dir, file), 'utf8'), file));
     expect(report.divergences).toEqual([]);
@@ -224,8 +292,9 @@ describe('recorded journals (test/replay/journals)', () => {
 
   // Regression replays each decision on the workflow version it was frozen on, kept in the journal: a
   // change of the pack or of a preset shows only against the workflow of today, hence this what-if pass.
-  // Journals kept as the engine before ORC-196 recorded them, on versions without its comment: they pin those versions, today's differ by design.
-  it.each(files.filter((f) => !f.includes('.pre-orc-196.')))('%s decides the same under the standard pack and its preset as they are today', (file) => {
+  // Journals kept as an older engine recorded them (before ORC-196, or as main held them before ORC-310): they pin
+  // those versions, today's differ by design.
+  it.each(files.filter((f) => !/\.pre-orc-(196|310)\./.test(f)))('%s decides the same under the standard pack and its preset as they are today', (file) => {
     const scenario = file.replace(/(\.v\d+)?\.json$/, '');
     expect(Object.keys(SCENARIOS)).toContain(scenario);
     const report = replayJournal(readJournal(readFileSync(join(dir, file), 'utf8'), file), { mode: 'what-if', workflow: scenarioWorkflow(scenario) });

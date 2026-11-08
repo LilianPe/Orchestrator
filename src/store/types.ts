@@ -5,7 +5,7 @@ import type { AttemptLabels } from '../core/attempt-labels.js';
 import type { DeadLetter, RepairAction } from '../core/dead-letter.js';
 import type { OutboxEffect } from '../core/decision.js';
 import type { ReviewFinding } from '../core/review.js';
-import { TRUSTED, type EffectResultPayload, type InputKind, type TimerFired, type QueueName, type FactoryEvent, type RunOutcome, type Stagnation, type TicketState, type TokenUsage } from '../core/types.js';
+import { TRUSTED, type Blocker, type EffectResultPayload, type InputKind, type TimerFired, type QueueName, type FactoryEvent, type RunOutcome, type Stagnation, type TicketState, type TokenUsage } from '../core/types.js';
 import type { StoredEvent } from '../core/upcast.js';
 import { factoryDefault } from '../presets/factory-default.js';
 
@@ -89,6 +89,8 @@ export interface RunRecord {
   repoConfig?: RepoConfig;
   /** The deterministic checks of the ticket that failed at the launch of an `intake` run (ORC-206), for its guard. Absent when none failed. */
   pickup?: string[];
+  /** The tickets not done it was « blocked by » at the launch of an `intake` run (ORC-363), for its guard. Absent when none. */
+  blockedBy?: Blocker[];
 }
 
 /**

@@ -3,16 +3,16 @@ import type { JobSpec, ReviewLens, Rule, Workflow } from '../config/workflow-sch
 import { allowed, DEFAULT_MATRIX, refusalMessage, type AuthzAction, type AuthzMatrix, type Channel } from './authz.js';
 import { evalCondition } from './conditions.js';
 import { deadLetterReason, deadLetterTried, heldMessage, isRefusedNotice, liftDeadLetterBlock, REPAIR_LABELS, repairedEvent } from './dead-letter.js';
-import type { AgentOutput } from './agent-output.js';
+import type { AgentOutput, ConflictCase } from './agent-output.js';
 import { blockFacts, type BlockFacts } from './block-comment.js';
 import { AGENT_QUESTION, INCOMPLETE, NO_ASSESSMENT, STOPPED, type BlockKind } from './block-cause.js';
 import type { Decision, Effect } from './decision.js';
 import { awaitsAgent, commandOf, forAgent, STOP_COMMAND } from './human-message.js';
 import { PRODUCT_NAME } from '../product.js';
 import { CUT_RELAUNCHES, CUT_WINDOW_MS } from '../store/types.js';
-import { isOwnMoveEcho, reduce } from './reduce.js';
+import { isOwnMoveEcho, pendingOf, reduce } from './reduce.js';
 import { holds, isNoRepo, isUnrouted, repoLabel, unroutedReason } from './routing.js';
-import { higherRisk, type EventPayloads, type EventType, type FactoryEvent, type FeedbackItem, type InputKind, type MessageKind, type PendingJob, type RunOutcome, type Taint, type TicketState, type VerifyFailure } from './types.js';
+import { higherRisk, type Blocker, type EventPayloads, type EventType, type FactoryEvent, type FeedbackItem, type InputKind, type MessageKind, type PendingJob, type RunOutcome, type Taint, type TicketState, type VerifyFailure } from './types.js';
 
 type StartRun = Extract<Effect, { kind: 'start_run' }>;
 
@@ -62,11 +62,19 @@ function silentReview(e: FactoryEvent): boolean {
 
 const BUILT_IN = new Set<EventType>([
   'control.pause', 'control.resume', 'control.stop', 'run.finished', 'run.lost', 'verify.passed', 'verify.failed', 'verify.errored', 'verify.lost', 'publish.done', 'publish.refused', 'timer.fired', 'pr.opened',
-  'effect.done', 'effect.failed', 'dead_letter.added', 'agent.asked',
+  'effect.done', 'effect.failed', 'dead_letter.added', 'agent.asked', 'blockers.done',
 ]);
 
 function empty(): Decision {
   return { events: [], effects: [], timers: [], trace: [] };
+}
+
+/** The ticket's work stops: the run in flight, the check awaited, the waiting job and the timers (`stop_run` clears them). */
+function cancelWork(out: Decision, why: string): Decision {
+  out.trace.push(why);
+  out.events.push({ type: 'work.cancelled' });
+  out.effects.push({ kind: 'stop_run' });
+  return out;
 }
 
 /** The ticket's work stops and it is blocked for `reason` until a human relaunches it; `body` tells the session: a stop is an answer, not an escalation. */
@@ -121,6 +129,13 @@ function intakeEnd(out: Decision, at: { event: FactoryEvent; ticket: TicketState
   out.events.push({ type: 'ticket.patched', patch: { size: a.size, risk: higherRisk(at.ticket?.risk, a.risk), ...(a.screen ? { visualProof: 'required' as const } : {}) } });
   const checks = p.pickup ?? [];
   const gaps = [...checks, ...(a.complete ? [] : a.missing)];
+  // Complete, but « blocked by » a ticket not done (ORC-363): what it would start waits for it.
+  const next = job.onSuccess.run ? at.workflow.jobs[job.onSuccess.run] : undefined;
+  if (!gaps.length && next && p.blockedBy?.length) {
+    // Its assessment is posted now; a move it owes waits with the start, which moves the ticket itself (`dev`'s `on_start`).
+    if (job.onSuccess.post) out.effects.push({ kind: 'post_output', style: job.onSuccess.post, runId: p.runId, ...(p.output ? { output: p.output } : {}) });
+    return waitFor(out, p.blockedBy, pendingOf({ job: next.name, input: next.input }));
+  }
   if (!gaps.length) return success(out, at, job, p.runId);
   const reason = `${INCOMPLETE} ${gaps.join(' ')}`;
   return block(out, at.workflow, {
@@ -131,6 +146,32 @@ function intakeEnd(out: Decision, at: { event: FactoryEvent; ticket: TicketState
     tried: [`Read the ticket (${job.name}): not complete enough to start.`, ...checks],
     question: a.complete ? 'Can you complete the ticket, then reply here?' : a.missing.join(' '),
   });
+}
+
+/** What the session hears of a wait on blockers (ORC-363): what it waits for, and that nothing is asked. */
+export function waitingBody(blockers: readonly Blocker[]): string {
+  const them = blockers.length > 1;
+  const list = blockers.map((b) => `${b.identifier} (${b.stateName})`).join(', ');
+  return `This ticket is « blocked by » ${list} in Linear: I am waiting for ${them ? 'them' : 'it'} to be Done before starting, and will start on my own then. Nothing to answer; take the relation off to start without waiting.`;
+}
+
+/** The wait on blockers as the ticket records it (ORC-363): `start` is made once they are done. */
+export const waitingOn = (blockers: readonly Blocker[], start: PendingJob) =>
+  ({ type: 'ticket.patched', patch: { waitingOn: { blockers: blockers.map((b) => b.identifier), start } } }) as const;
+
+/** Why the wait on blockers holds back `job` (ORC-363): any dev work but the start it waits for, which `blockers.done` makes. */
+const heldByWait = (ticket: TicketState | undefined, job: JobSpec): string | undefined =>
+  ticket?.waitingOn && job.queue === 'dev' ? `waiting on ${ticket.waitingOn.blockers.join(', ')}` : undefined;
+
+/**
+ * The ticket waits on the tickets it is « blocked by » that are not done (ORC-363): no block and no question, a thought in its
+ * session. `blockers.done`, from the reconciliation, makes `start` then.
+ */
+function waitFor(out: Decision, blockers: readonly Blocker[], start: PendingJob): Decision {
+  out.events.push(waitingOn(blockers, start));
+  out.effects.push({ kind: 'activity', type: 'thought', body: waitingBody(blockers) });
+  out.trace.push(`waiting on ${blockers.map((b) => b.identifier).join(', ')}: ${start.job} starts once done`);
+  return out;
 }
 
 /**
@@ -264,8 +305,21 @@ Reply in this thread to relaunch.`, tried: triedFailures(failures) });
 /** The preset step of a job, by its own name when it is out of the preset. */
 export const stepOf = (workflow: Workflow, job: string): string => workflow.jobs[job]?.step ?? job;
 
-/** The check after a job: the one a fix goes through has its own step in the preset. */
-const checkOf = (workflow: Workflow, job: string): string => (stepOf(workflow, job) === 'fix' ? 'verify_fix' : 'verify');
+/** The step of the preset that rebases a ticket's branch on the default branch (ORC-146). */
+const REBASE = 'rebase';
+
+/** The check after a job: the ones a fix and a rebase go through have their own steps in the preset. */
+const checkOf = (workflow: Workflow, job: string): string => {
+  const step = stepOf(workflow, job);
+  return step === 'fix' || step === REBASE ? `verify_${step}` : 'verify';
+};
+
+/** What each conflict the rebase step stops on says in its block (ORC-146). */
+const CONFLICTS: Record<ConflictCase, string> = {
+  logic: 'the two sides contradict each other',
+  migrations: 'two migrations change the same schema',
+  scope: "the resolution goes beyond the ticket's scope",
+};
 
 const triedFailures = (failures: VerifyFailure[]): string[] => failures.map((f) => `\`${f.command}\` (code ${f.exitCode ?? 'timeout'})`);
 
@@ -288,8 +342,16 @@ function attemptDecision(p: EventPayloads['run.finished'], job: JobSpec): RunOut
       const reason = `The run ${job.name} was interrupted: infrastructure failure, not the agent's fault.`;
       return { kind: 'infra', reason, body: `${reason} Reply in this thread and I will resume.`, tried: [`Started the run ${job.name}: its process stopped without a result.`] };
     }
-    case 'needs_input':
+    case 'needs_input': {
+      // A rebase the agent stops on one of the three conflicts a human decides (ORC-146): a block of its own kind.
+      // Another step that reports one asks a question: the conflict is the rebase step's, started by its event.
+      const conflict = p.output?.reason === 'conflict' && job.step === REBASE ? p.output.conflict : undefined;
+      if (conflict) {
+        const reason = `Conflict with the default branch left to a human: ${CONFLICTS[conflict]}.`;
+        return { kind: 'conflict', reason, body: `${reason}\n${question}\n\nReply in this thread and I will resume.`, tried: [`Started the run ${job.name}: the agent stops the rebase (\`${conflict}\`).`], question: question || undefined };
+      }
       return { kind: 'question', reason: "Waiting for an answer to the agent's question.", body: `${question}\n\nReply in this thread and I will resume.`, tried: [`Started the run ${job.name}: the agent asks for a clarification.`], question: question || undefined };
+    }
     case 'spec_impossible':
       return {
         kind: 'contested',
@@ -442,6 +504,25 @@ function usageLimitDecision(out: Decision, event: FactoryEvent<'run.finished'>, 
   out.effects.push({ kind: 'activity', type: 'thought', body: `Usage limit reached; resuming at ${at}.` });
   out.timers.push({ kind: 'usage.reset', slot: 'usage.reset', ms, payload });
   out.trace.push(`usage limit: ${jobName} resumes at ${at}`);
+  return out;
+}
+
+/**
+ * The tickets a waiting ticket was « blocked by » are done or no longer linked (ORC-363): the wait ends and its start is made,
+ * unless the ticket moved on meanwhile: blocked, undelegated or at work (which ended the wait already), or moved by a human
+ * out of the states a delegation starts from.
+ */
+function blockersDone(out: Decision, event: FactoryEvent<'blockers.done'>, ticket: TicketState | undefined, workflow: Workflow): Decision {
+  const wait = ticket?.waitingOn;
+  const job = wait && workflow.jobs[wait.start.job];
+  if (wait) out.events.push({ type: 'ticket.patched', patch: { waitingOn: null } });
+  const startable = ticket?.logical === 'todo' || ticket?.logical === 'dev';
+  if (!ticket || !wait || !job || !startable || refusesDevWork(ticket, job) || ticket.blocked || ticket.activeRunId || ticket.verifyingRunId) {
+    out.trace.push('blockers.done: the ticket no longer waits, nothing started');
+    return out;
+  }
+  out.effects.push({ kind: 'activity', type: 'thought', body: `Nothing blocks this ticket any more (${event.payload.blockers.join(', ')} done or no longer linked): starting.` });
+  startAs(out, event, ticket, job, wait.start);
   return out;
 }
 
@@ -731,6 +812,12 @@ function startPending(out: Decision, event: FactoryEvent, ticket: TicketState, w
   unblock(out, event, ticket);
   // Off the ticket with this decision: the start it makes is the outbox's now, at least once.
   out.events.push({ type: 'pending.cleared', job: pending });
+  startAs(out, event, ticket, job, pending);
+  return out;
+}
+
+/** Starts `job` as `pending` was set aside: its input and its restrictions. */
+function startAs(out: Decision, event: FactoryEvent, ticket: TicketState, job: JobSpec, pending: PendingJob): void {
   startRun(out, event, ticket, job, {
     ...(pending.input ? { input: pending.input } : {}),
     ...(pending.inputText !== undefined ? { inputText: pending.inputText } : {}),
@@ -738,7 +825,6 @@ function startPending(out: Decision, event: FactoryEvent, ticket: TicketState, w
     ...(pending.sensitivePaths ? { sensitivePaths: pending.sensitivePaths } : {}),
     ...(pending.relaunchOf ? { relaunchOf: pending.relaunchOf } : {}),
   });
-  return out;
 }
 
 function applyRule(out: Decision, rule: Rule, event: FactoryEvent, ticket: TicketState | undefined, workflow: Workflow): Decision {
@@ -763,6 +849,12 @@ function applyRule(out: Decision, rule: Rule, event: FactoryEvent, ticket: Ticke
     });
   }
   if (!job) return out;
+  // Waiting on its blockers, the ticket starts no dev work for a message or a move: a reply stays in the inbox (ORC-363).
+  const waits = heldByWait(ticket, job);
+  if (waits) {
+    out.trace.push(`${job.name} not started, ${waits}`);
+    return out;
+  }
   if (rule.debounceMs && rule.debounceMs > 0 && !refusal(event, ticket, job)) {
     const inbox = (event.type === 'session.prompted' || event.type === 'session.mentioned') && !!event.payload.kind;
     out.timers.push({ kind: 'debounce', slot: job.name, ms: rule.debounceMs, payload: { job: job.name, ...(inbox ? { inbox: true as const } : {}) } });
@@ -778,12 +870,13 @@ function applyRule(out: Decision, rule: Rule, event: FactoryEvent, ticket: Ticke
 }
 
 /**
- * A rule that answers red CI with a run, bounded by `limits.ciFixAttempts` (I5, ORC-270): each run it
- * starts is counted, and once the count reaches the bound the next red CI blocks the ticket instead of
- * applying the rule. A green CI, another PR or a human relaunch (`unblock`) resets the count. A run the rule would
- * not start anyway (merged PR, I8 b) is neither counted nor blocked.
+ * A rule that answers red CI or a conflict with the default branch with a run, bounded by `limits.ciFixAttempts` (I5,
+ * ORC-270): red CI's `fix-ci` and the rebase step (ORC-146) count on this one counter of the review and CI loop. Each run
+ * it starts is counted, and once the count reaches the bound the next red CI or conflict blocks the ticket instead of
+ * applying the rule. A green CI, another PR or a human relaunch (`unblock`) resets the count. A run the rule would not
+ * start anyway (merged PR, I8 b) is neither counted nor blocked.
  */
-function fixRedCi(out: Decision, rule: Rule, event: FactoryEvent<'pr.checks_failed'>, ticket: TicketState | undefined, workflow: Workflow): Decision {
+function reviewCiLoop(out: Decision, rule: Rule, event: FactoryEvent<'pr.checks_failed' | 'pr.conflicted'>, ticket: TicketState | undefined, workflow: Workflow): Decision {
   const job = workflow.jobs[rule.run!]!;
   if (refusal(event, ticket, job)) return applyRule(out, rule, event, ticket, workflow);
   const used = ticket?.ciFixAttempts ?? 0;
@@ -793,19 +886,36 @@ function fixRedCi(out: Decision, rule: Rule, event: FactoryEvent<'pr.checks_fail
     out.events.push({ type: 'ticket.patched', patch: { ciFixAttempts: used + 1 } });
     return out;
   }
-  out.trace.push(`red CI: ${job.name} bound ${bound} reached`);
+  const conflict = event.type === 'pr.conflicted';
+  out.trace.push(`${conflict ? 'conflict' : 'red CI'}: ${job.name} bound ${bound} reached`);
   // Already blocked (by a rule without !blocked): the ticket keeps its reason and gets no second notice.
   if (ticket?.blocked) return out;
+  const past = event.type === 'pr.conflicted' ? conflictBound(event, bound) : redCiBound(event, job, bound);
+  return block(out, workflow, { ...past, job: job.name, attempts: bound });
+}
+
+/** Red CI past the bound: `ci_bound`, which a green CI lifts. */
+function redCiBound(event: FactoryEvent<'pr.checks_failed'>, job: JobSpec, bound: number): RunBlock {
   const reason = `CI still failing after ${bound} attempts of ${job.name}.`;
   const failures = event.payload.failures.map((f) => `- \`${f}\``);
-  return block(out, workflow, {
+  return {
     kind: 'ci_bound',
     reason,
     body: [reason, ...failures, 'Reply in this thread to relaunch.'].join('\n'),
-    job: job.name,
-    attempts: bound,
     tried: event.payload.failures.length ? event.payload.failures.map((f) => `\`${f}\``) : [`${bound} run(s) of ${job.name}.`],
-  });
+  };
+}
+
+/** A conflict past the bound (ORC-146): a block of the conflict's own kind, which a green CI says nothing of. */
+function conflictBound(event: FactoryEvent<'pr.conflicted'>, bound: number): RunBlock {
+  const { number, baseRef, headSha } = event.payload;
+  const reason = `Conflict with ${baseRef}, and the review and CI loop has used its ${bound} runs: I am not starting a rebase.`;
+  return {
+    kind: 'conflict',
+    reason,
+    body: `${reason}\nReply in this thread to relaunch.`,
+    tried: [`PR #${number} conflicts with ${baseRef} at ${headSha.slice(0, 12)}.`, `${bound} run(s) of the review and CI loop (fix-ci, rebase).`],
+  };
 }
 
 /**
@@ -1032,6 +1142,7 @@ function statusAnswer(ticket: TicketState | undefined): string {
   if (ticket.activeJob) lines.push(`Running: ${ticket.activeJob}`);
   else if (ticket.verifyingRunId) lines.push('Running: verification');
   if (ticket.blocked) lines.push(`Blocked: ${ticket.blockReason ?? 'no recorded reason'}`);
+  if (ticket.waitingOn) lines.push(`Waiting for: ${ticket.waitingOn.blockers.join(', ')} to be done`);
   lines.push(`Messages waiting for the agent: ${forAgent(ticket.humanInbox).length}`);
   return lines.join('\n');
 }
@@ -1170,10 +1281,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       out.trace.push('status.changed: ticket cancelled, not delegated: nothing to stop');
       return out;
     }
-    out.trace.push('status.changed: ticket cancelled, work cancelled');
-    out.events.push({ type: 'work.cancelled' });
-    out.effects.push({ kind: 'stop_run' });
-    return out;
+    return cancelWork(out, 'status.changed: ticket cancelled, work cancelled');
   }
   // The late webhook of the factory's own move decides nothing (ORC-148: the move to AI Review after a push must not
   // start a second review).
@@ -1254,6 +1362,8 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
     }
     case 'run.lost':
       return attemptLost(out, event, ticket, workflow);
+    case 'blockers.done':
+      return blockersDone(out, event, ticket, workflow);
     case 'agent.asked': {
       const { question, job, linearSessionId } = event.payload;
       const asker: Effect = { kind: 'activity', type: 'elicitation', body: question, ...(linearSessionId ? { linearSessionId } : {}) };
@@ -1294,7 +1404,9 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       if (toPublish) {
         const { runId, output, commands } = event.payload;
         out.events.push({ type: 'verify.started', runId });
-        out.effects.push({ kind: 'publish', runId, job: job.name, sha: toPublish, ...(output ? { output } : {}), ...(commands ? { commands } : {}) });
+        // A rebase rewrites the branch (ORC-146): its commit may replace the head the factory published, and that head only.
+        const rewrite = job.step === REBASE ? { rewrite: true as const } : {};
+        out.effects.push({ kind: 'publish', runId, job: job.name, sha: toPublish, ...(output ? { output } : {}), ...(commands ? { commands } : {}), ...rewrite });
         return out;
       }
       return success(out, { event, ticket, workflow }, job, event.payload.runId, event.payload.output);
@@ -1308,7 +1420,13 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
         out.events.push({ type: 'ticket.patched', patch: { owedMove: null } });
         if (!job.onSuccess.move) out.effects.push({ kind: 'move', to: owed });
       }
-      return success(out, { event, ticket, workflow }, job, event.payload.runId, event.payload.output);
+      success(out, { event, ticket, workflow }, job, event.payload.runId, event.payload.output);
+      // What the owed move came with: `dev`'s AI review (ORC-183), started as that job's own end would have, or the ticket
+      // would sit in AI Review with no review.
+      const then = owed && !job.onSuccess.run ? Object.values(workflow.jobs).find((j) => j.onSuccess.move === owed && j.onSuccess.run)?.onSuccess.run : undefined;
+      const next = then ? workflow.jobs[then] : undefined;
+      if (next) startRun(out, event, ticket, next, { input: next.input });
+      return out;
     }
     case 'publish.refused': {
       const reason = `Publication refused: ${event.payload.reason}`;
@@ -1388,6 +1506,12 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       const held = fired.payload.inbox ? heldInbox(ticket) : undefined;
       if (held) {
         out.trace.push(`timer.fired debounce: ${job.name} not started, ${held}`);
+        return out;
+      }
+      // Armed before the wait on blockers began (ORC-363): the wait holds it back as it does a reply.
+      const waits = heldByWait(ticket, job);
+      if (waits) {
+        out.trace.push(`timer.fired debounce: ${job.name} not started, ${waits}`);
         return out;
       }
       if (ticket?.blocked && !refusal(event, ticket, job)) unblock(out, event, ticket);
@@ -1475,9 +1599,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
     case 'pr.merged':
       // Delivered: the dev run in flight stops, and nothing pending, queued or debounced starts after the merge.
       // Before the rule's effects, so its cleanup and learn run come after the stop.
-      out.trace.push('built-in pr.merged: work cancelled');
-      out.events.push({ type: 'work.cancelled' });
-      out.effects.push({ kind: 'stop_run' });
+      cancelWork(out, 'built-in pr.merged: work cancelled');
       break;
     case 'pr.closed': {
       // Closed without merge (ORC-134): the run is cancelled as by a stop, then the rules apply. The close
@@ -1494,7 +1616,11 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
     }
     case 'ticket.undelegated':
       // Its team got a repo, or delegated again with its `repo:` label the ticket went to its repo: here nothing waits any longer (ORC-171, ORC-291).
+      // Otherwise taken back by a human (ORC-227): its work is cancelled as a cancel's is (ORC-170), a check, a waiting job and the
+      // timers included, which the stop of a run under way does not reach. A blocked ticket keeps its block and its job: its work
+      // already ended, by that stop when the reconciliation sent one first.
       if (isUnrouted(ticket)) out.events.push(...END_OF_WAIT);
+      else if (state?.delegated && !state.blocked) cancelWork(out, 'built-in ticket.undelegated: work cancelled');
       break;
     case 'label.changed': {
       // Routing is sticky (ORC-291): a ticket at work stays in its repo, whichever repo of the team a label added names.
@@ -1507,10 +1633,21 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
     case 'pr.merge_refused':
       return mergeRefused(out, event, ticket, workflow);
     case 'pr.reviewed':
-    case 'pr.conflicted':
-      // In the inbox, but no reaction yet (ORC-190 for reviews, ORC-146 for conflicts): no rule applies to them.
+      // In the inbox, but no reaction yet (ORC-190): no rule applies to it.
       out.trace.push(`${event.type}: no reaction yet`);
       return out;
+    case 'pr.conflicted':
+      // The open PR of the ticket only is rebased (ORC-146): another PR's conflict, or a merged or closed one's, is recorded.
+      if (ticket?.prNumber !== event.payload.number || ticket.prState !== 'OPEN') {
+        out.trace.push(`pr.conflicted: PR #${event.payload.number} is not the open PR of the ticket, nothing started`);
+        return out;
+      }
+      // A rebase already running or waiting takes the branch onto the base as it is then: a new head still in conflict asks no second one.
+      if ([ticket.activeJob, ticket.pendingJob?.job].some((j) => j && stepOf(workflow, j) === REBASE)) {
+        out.trace.push('pr.conflicted: a rebase is already running or waiting, nothing started');
+        return out;
+      }
+      break;
     case 'default_branch.pushed':
     case 'ci.run_completed':
       // Facts for the measures (ORC-278): a revert of the ticket's PR, a CI run's duration. Nothing to decide.
@@ -1594,6 +1731,6 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
   if (rule.run && (event.type === 'label.changed' || event.type === 'status.changed') && !authorize(out, event, ticket, ruleAction(ticket), 'linear', matrix)) {
     return out;
   }
-  if (event.type === 'pr.checks_failed' && rule.run) return fixRedCi(out, rule, event, ticket, workflow);
+  if ((event.type === 'pr.checks_failed' || event.type === 'pr.conflicted') && rule.run) return reviewCiLoop(out, rule, event, ticket, workflow);
   return applyRule(out, rule, event, ticket, workflow);
 }

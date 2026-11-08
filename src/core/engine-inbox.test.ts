@@ -285,8 +285,9 @@ describe('decide — a step ends with messages waiting (ORC-180)', () => {
   it('the state it is read on is the one this end leaves, a move owed by a refused publication included', () => {
     const done = ev('publish.done', { runId: run, job: 'dev-feedback', sha: 'abc' });
     const t = ticket({ logical: 'dev', verifyingRunId: run, owedMove: 'ai_review', humanInbox: [item()] });
-    // Owed to AI Review, where no reply rule applies: the messages wait.
-    expect(decide(t, done, workflow).effects.map((e) => e.kind)).not.toContain('start_run');
+    // Owed to AI Review, where no reply rule applies: the messages wait; only the review the move came with starts (ORC-183).
+    const starts = decide(t, done, workflow).effects.filter((e) => e.kind === 'start_run');
+    expect(starts).toEqual([expect.objectContaining({ job: 'review' })]);
     expect(decide({ ...t, owedMove: 'human_review' }, done, workflow).effects.at(-1)).toMatchObject({ kind: 'start_run', job: 'dev-feedback' });
   });
 

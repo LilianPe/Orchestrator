@@ -12,7 +12,7 @@ intake → clarify (if the ticket is unclear) → spec_draft → spec_check → 
   → merge (after a human moves it to Done) → after_merge
 ```
 
-After publishing, a single `fix` step serves all loops: `fix → verify_fix → publish → AI review → human_review`. Its skill depends on the cause: `factory:fix-ci` for a red CI, `factory:feedback` for an AI review or human feedback.
+After publishing, a single `fix` step serves all loops: `fix → verify_fix → publish → AI review → human_review`. Its skill depends on the cause: `factory:fix-ci` for a red CI, `factory:feedback` for an AI review or human feedback. A conflict with the default branch takes its own way back: `rebase → verify_rebase → publish → AI review → human_review` ([below](#rebase-step-orc-146)).
 
 Each step has a type: `spec_check`, `agent_step`, `verify` (modes `red`, `freeze`, `full`), `review`, `fix`, `human_gate` (gate `spec` or `merge`), `publish` (modes `push`, `merge`). A step has a follow-up on success (`next`) and, if it can fail, a step back (`onFailure`) that consumes a counter. Every `agent_step` step declares what it writes (`writes`: `nothing`, `spec`, `tests` or `code`): an omission makes compilation fail.
 
@@ -25,6 +25,7 @@ Each step has a type: `spec_check`, `agent_step`, `verify` (modes `red`, `freeze
 | Unverified red → `tests` (blocking mode) | `red` | 2 | Blocked; the agent can also return `spec_impossible` |
 | `verify` fails → `build` (or `verify_fix` → `fix`) | `verify` | 3 | Blocked |
 | AI review or red CI → `fix` | `review_ci` | 2, a single counter per run | Blocked |
+| Conflict with the default branch → `rebase` (ORC-146) | `review_ci`, the same | 2, shared with red CI | Blocked, cause « conflict » |
 | Human feedback → `fix` | `human_review` | 3, separate from AI rounds | Blocked |
 | Same command, same failure, diff unchanged | `sameFailure` | 3 | Blocked, cause « boucle » (loop): between two `verify` runs and during the attempt ([stagnation](#attempt-stagnation-orc-136)) |
 | Nothing written to the attempt's stream | `silentRun` | 30 min | Blocked ([stagnation](#attempt-stagnation-orc-136)) |
@@ -42,6 +43,7 @@ A red CI is the failure of a push: as long as the PR is open, including during t
 | `tests`, `after_merge` | Sonnet | medium | 150 | Limited |
 | `build` | Sonnet | medium | 150 | Limited |
 | `fix` | Sonnet | medium | 60 | Limited |
+| `rebase` | Sonnet | medium | 60 | Limited |
 | `review` | Opus | high | 25 | Claude API |
 | `spec_check`, `verify*`, `red`, `freeze_tests` | (factory check) | | | None |
 
@@ -60,7 +62,7 @@ The network level is chosen per repository (Limited by default); a step can only
 | Preset bound | In the loaded workflow | Effect |
 | -- | -- | -- |
 | `counters.verify` (3) | `limits.verifyAttempts` = 4 | 3 returns to the run after a failed check; the 4th failure blocks |
-| `counters.review_ci` (2) | `limits.ciFixAttempts` = 2 | 2 `fix-ci` retries on red CI; the next one blocks. AI review rounds will join this counter with ORC-184 |
+| `counters.review_ci` (2) | `limits.ciFixAttempts` = 2 | 2 runs between `fix-ci` on red CI and `rebase` on a conflict (ORC-146); the next red CI or conflict blocks. AI review rounds will join this counter with ORC-184 |
 | `sameFailure` (3) | `limits.repeatedFailures` = 3 | same failure on an unchanged worktree, 3 times in a row: Blocked, cause « Loop » |
 | `counters.red` (2) | `jobs.<job>.red.attempts` = 3 | in blocking mode, 2 returns to `tests` after an unverified red; the 3rd blocks. A human retry resets the count to zero |
 
@@ -74,14 +76,34 @@ The YAML's `on` rules still drive the sequence (ORC-177): the engine does not ex
 
 | Blocked at | A reply relaunches |
 | -- | -- |
-| `build`, `tests`, `fix`, `review` (end of run, cap, loop, lease, interruption, question, including via `relais-agent ask`) | that step's job: `dev`, `tests`, `dev-feedback`, `review` (its first lens: the review starts over, ORC-183). `fix-ci` goes through `dev-feedback`, same step: it reads its red checks, not a reply |
+| `build`, `tests`, `fix`, `review`, `rebase` (end of run, cap, loop, lease, interruption, question, a conflict the rebase stops on, including via `relais-agent ask`) | that step's job: `dev`, `tests`, `dev-feedback`, `review` (its first lens: the review starts over, ORC-183), `rebase`. `fix-ci` goes through `dev-feedback`, same step: it reads its red checks, not a reply |
 | pickup, launch | the job being launched, its checks included |
-| `verify`, `verify_fix`, `red` (failure at the cap, loop, failure) | the job the check judges: that is the preset's step back. Not the check alone: `run_verify` needs the agent's output, which `verify.errored` does not carry |
+| `verify`, `verify_fix`, `verify_rebase`, `red` (failure at the cap, loop, failure) | the job the check judges: that is the preset's step back. Not the check alone: `run_verify` needs the agent's output, which `verify.errored` does not carry |
 | `verify` of a job that does not fix (`verify_failure: block`, the review of a version frozen before ORC-183) | `dev-feedback`, which writes |
 | `publish` refused | `dev-feedback`: it writes, goes through `verify` then `publish` again, and the owed move follows (`owedMove`) |
 | dead-letter, dead effect, `stop` | `dev-feedback`, these blocks have no step of their own |
 
 **Not yet**: relaunching a step without an agent (`verify`, `red`, `freeze_tests`, `spec_check`, `publish`, `merge`) on its own, and resuming at the human gates (`spec_review`, `human_review`): this needs an engine that executes the steps (ORC-177). `clarify`, `spec_draft`, `spec_check`, `spec_review` and `after_merge` do not have a job yet; `intake` has one, which a repository turns on ([below](#intake-step-and-the-guard-before-in-progress-orc-206)). A reply to the guard relaunches `intake`. The attempt number follows the counter that led to the block; a step without a counter shows 1/1. A project rule with a `debounce` on a blocked ticket keeps its job: its timer starts once the block is lifted.
+
+## `rebase` step (ORC-146)
+
+A conflict of the ticket's PR with its base branch arrives in the inbox as `pr.conflicted` (GitHub webhook, ORC-134). It is the engine that starts the step that handles it; an agent at work on another step never resolves it: the `dev`, `feedback`, `fix-ci` and `review` skills leave the base alone and hand back.
+
+**Start.** The pack's rule `pr.conflicted: { when: "state in [dev, human_review, ai_review] && !blocked", run: rebase }`, for the ticket's open PR only (another PR's conflict, a merged or closed one's, is only journaled). Each start counts on `review_ci` (`ciFixAttempts`), the counter of red CI (I5): the conflict's id carries the head and the base, so GitHub repeating it on the same pair starts nothing more. A rebase already running or waiting starts no second one either, whatever the head: it takes the branch onto the base as it is then. Past the bound, the conflict starts nothing and blocks the ticket, kind `conflict` (a green CI does not lift it, unlike the red-CI bound). A conflict during another step leaves that run alone: the start waits behind it, pending, and runs once that work is out (verified and published).
+
+**The step.** The `rebase` job (agent, skill `factory:rebase`, Sonnet, effort medium, 60 turns, the repository's network) resumes the ticket's session in its worktree, in its sandbox like any dev job. It runs `git rebase origin/<base>` and resolves the ordinary conflicts, then the touched tests, types and lint. It moves nothing and posts nothing. Three cases stop it: `git rebase --abort`, then `submit_result` with `status: blocked`, `reason: conflict` and `conflict`:
+
+| `conflict` | When |
+| -- | -- |
+| `logic` | the two sides contradict each other |
+| `migrations` | two migrations change the same schema |
+| `scope` | the resolution goes beyond the ticket's scope |
+
+The ticket is then Blocked, kind `conflict`, with the standard comment (step `rebase`, the case in the reason, the agent's question). A reply relaunches `rebase` with the answer.
+
+**Verify, then publish.** A rebase that ends well goes through `verify_rebase` (the repository's commands and the diff checks, in a fresh clone, like any job that writes code); failed checks send it back with them, bounded by `verify`. Only a green commit goes out (I1). The factory publishes it with `--force-with-lease` (ORC-125): the rebased branch no longer holds what was pushed, so its `publish` effect carries `rewrite`, and the push may replace the head the factory published last (the sha of the ticket's last `publish.done`, read from its journal), and only that head. A human's commit on the branch since is refused (`moved`), as for any publication. The ticket stays where it was (Human Review, AI Review or In Progress). In Human Review, the reviewed commit is no longer the head: a Done then goes back through the AI review, which shows the rebased head, as after any push since the review. Only the rebase step stops on a `conflict`: another step that reports one asks a plain question.
+
+**Not yet**: a conflict created by a push to the default branch, with no event on the PR, waits for the reconciliation (ORC-185); the freeze reads a rebase as a change since the freeze, which needs a `/refreeze` (see the freeze's « not yet »); the rebase's summary is not posted (ORC-214's `OutputPolicy` will compose what a step posts).
 
 ## `intake` step and the guard before In Progress (ORC-206)
 
@@ -109,11 +131,22 @@ Then the guard before In Progress: a failed deterministic check or an incomplete
 
 `intake` is off in the pack: a repository turns it on by making delegation start with it (`ticket.delegated: - { when: "state in [todo, dev] && !blocked", run: intake }`). Without it, `dev`'s pickup checks block directly, as before.
 
-**Not yet**: the wait on a Linear « blocked by » ticket that is not done (ORC-206, second part); `clarify`'s questions with choices, reminder and expiry (ORC-210); the duplicate, existing code and scope checks, and `not_started` with them (ORC-207); handing intake's understanding to `build`, after which `factory:dev`'s « Understand » section can shrink (ORC-254). Each job runs at its step's network level narrowed by the repository's (ORC-183): `limited` for intake as for the build, `claude-api` for the review.
+### Waiting on a blocked-by ticket (ORC-363)
+
+A ticket « blocked by » a Linear ticket that is not done waits instead of starting. Done is a status of Linear's `completed` type; a cancelled blocker delivered nothing and still holds; a deleted one (in Linear's trash), or one the factory's token cannot read, holds nothing. The blockers are read with the ticket (`blockedBy` of the [tracker port](ports/tracker.md)), before its first run, where the pickup checks run:
+
+- **`intake` on**: they are an input of its guard, journaled with its end (`blockedBy` of `run.finished`). A ticket incomplete or failing a check is blocked on its questions first: the human has something to answer. A complete one waits, and what `intake` would start (`on_success.run`, `dev`) is the start it waits for; an `on_success.post` is posted at once, an `on_success.move` is not made (the start moves the ticket itself).
+- **`intake` off** (the pack): the guard lives at the launch of the job with `pickup: true` (`dev`), in the orchestrator, after the pickup checks: a failed check still blocks; else, an open blocker makes that very start wait, as it was decided (its input, its restrictions).
+
+The wait is no block: no `Bloqué` label, no blocking comment, nothing to answer. The session gets a thought naming the blockers and their status. `/status` says it. The ticket stays where it is (Todo): nothing moves to In Progress. While it waits, a reply, a move or a debounced reply starts no dev work; a message stays in `humanInbox` for the run that starts later. A delegation again keeps the wait. A stop (a block), an undelegation or a dev run started all the same end it.
+
+**The resume comes from the reconciliation**, every 5 minutes ([Linear](linear.md)): it reads each waiting ticket's relations again and, when none is open (blockers done, or a relation taken off), sends `blockers.done`; `decide` makes the start it waited for, and the session hears it, unless a human moved the ticket meanwhile out of Todo and In Progress: then the wait only ends. Not a webhook: the blocker's move to Done comes on another issue, maybe of a team the factory does not follow, and a relation taken off sends no webhook the factory reads; the reconciliation already reads these tickets each pass, so the wait costs no extra call. The price is up to 5 minutes before the resume. `dev` reads the blockers again at its launch: one reopened meanwhile makes it wait again.
+
+**Not yet**: `clarify`'s questions with choices, reminder and expiry (ORC-210); the duplicate, existing code and scope checks, and `not_started` with them (ORC-207); handing intake's understanding to `build`, after which `factory:dev`'s « Understand » section can shrink (ORC-254). Each job runs at its step's network level narrowed by the repository's (ORC-183): `limited` for intake as for the build, `claude-api` for the review.
 
 ## `review` step (ORC-183)
 
-Once `dev`'s commit is published (`on_success: { move: ai_review, post: summary, run: review }`), the AI review starts: two agent sessions on Opus, effort high, 25 turns, one after the other, each a fresh session of its own (role `reviewer`), never the implementer's.
+Once `dev`'s commit is published (`on_success: { move: ai_review, post: summary, run: review }`), the AI review starts: two agent sessions on Opus, effort high, 25 turns, one after the other, each a fresh session of its own (role `reviewer`), never the implementer's. When `dev`'s publication is refused and a later `dev-feedback` publishes, that end makes the move `dev` owed and starts the review it came with.
 
 | Job | Lens | What it looks at |
 | -- | -- | -- |
@@ -196,6 +229,24 @@ On each `verify` with sandboxes, in the clone, on what the branch changed since 
 
 - **The four forms**: a test disabled (`skip`, `only`, `todo`, `xit`, `fit`, the runner's ignore lists), a check bypassed (checker directives, an assertion on constants, a success exit), code that behaves differently under test (`NODE_ENV` compared to `test`, the runners' variables). JS and TS files, the scripts of Vue, Svelte and Astro components included, are read on their syntax tree (ORC-342): an alias (`const later = it.skip`, `import { test as check } from 'vitest'`, `const { exit } = process`), another syntax (`it['skip']`, `test(name, { skip: true }, fn)`, a test context's `skip()`, `switch (process.env.NODE_ENV) { case 'test': }`, `['test'].includes(import.meta.env.MODE)`) or a constant spelled in parts (`'te' + 'st'`, a `const` bound to it) reads as the plain form. `expect(c)` on a constant counts only when its matcher compares with constants too (`expect(1).toBe(1)`, not `expect(1).toBe(count())`). Aliases are read in the file, by name, without scopes nor other files. Python and the other files are read line by line, with patterns, as before: there is no Python parser in the daemon.
 - **A test removed or renamed**: the set of tests of each test file (`*.test.ts`, `test_*.py`…) before and after the diff. JS and TS tests by name under their suites (`scores > rounds`, a title that is not a constant by its source), Python ones by function under their classes (`TestScores::test_rounds`, read by indentation). A test file deleted or renamed removes all its tests; a case renamed, or moved under another `describe`, removes its old name. Each is a finding, unless a commit of the branch justifies the file with a `Removed-test: <path>: <reason>` trailer, which the summary sent to the agent recalls; a frozen test changed is already refused by the freeze. A helper or a fixture is not a test file.
+
+## Default reactions and their scenarios (ORC-227)
+
+Each default reaction of the MVP doc has a harness scenario in `test/scenarios/`, tied to the ticket that delivered it. A reaction whose ticket is not delivered yet has none: its ticket brings both.
+
+| Reaction | Delivered by | Harness scenario |
+| -- | -- | -- |
+| A human message on a Blocked run relaunches the blocked step | ORC-196 | `block-comment.test.ts`, « a member answers on the ticket: the blocked step starts again… » |
+| A human message during a run goes to `humanInbox`, with a sign of life; a question starts the answering agent at once, instructions are regrouped over 3 min | ORC-180 | `human-inbox.test.ts`, « a human reply during a run… », « a question during a run is answered at once… », « with no agent at work, replies regrouped over 3 minutes… » |
+| Statuses, labels and human commits come in as typed events, never as free text | ORC-160, ORC-134 | `typed-events.test.ts`; `github-webhook.test.ts`, « criterion 2: a push on the agent branch… is a push.human in the inbox » |
+| Done by an authorized human merges if the checks are green on the last commit and nothing was pushed since the human review; otherwise back to Human Review with the reason | ORC-148 | `merge.test.ts`, « merges the PR on the reviewed commit… », « merges nothing for a human without the merge right… », « merges nothing after a push since the review… », « merges nothing on a red check… » |
+| A red CI comes into the inbox and the engine starts the step that handles it | ORC-134, ORC-270 | `github-webhook.test.ts`, « criterion 5 » (both); `workflow.test.ts`, « red CI relaunches fix-ci up to limits.ci_fix_attempts, then blocks… ». The mandatory « CI red 3 times » is ORC-184's |
+| A conflict with the default branch comes into the inbox and the engine starts the step that handles it | inbox: ORC-134; the step: ORC-146 (in progress) | inbox only: `github-webhook.test.ts`, « writes reviews and conflicts to the inbox without reacting to them yet » |
+| A human push on the branch starts again from `verify` | ORC-159 (not delivered) | none yet: the push only enters the inbox |
+| A spec changed during the run starts again from `spec_review` | ORC-212 (not delivered) | none yet |
+| A PR closed by a human cancels the run | ORC-134 | `github-webhook.test.ts`, « criterion 4: a factory PR closed by a human without merge cancels the run » |
+| A cancelled ticket cancels the run | ORC-170 (its cancel) | `cancel.test.ts`, « ticket cancelled by a human (ORC-170) » |
+| The delegation withdrawn cancels the run | ORC-227 | `cancel.test.ts`, « delegation withdrawn (ORC-227) » |
 
 ## Compilation and version
 

@@ -96,7 +96,7 @@ const openPr = (overrides: Record<string, unknown> = {}) => ({
 const conn = <N>(nodes: N[], next: string | null = null) => ({ nodes, pageInfo: { hasNextPage: next !== null, endCursor: next } });
 const thread = (isResolved: boolean, comments: unknown[], next: string | null = null, id = 'thread') => ({ id, isResolved, comments: conn(comments, next) });
 const threadsAnswer = (threads: unknown[], next: string | null = null) => ({ data: { repository: { pullRequest: { reviewThreads: conn(threads, next) } } } });
-const comment = (login: string, body: string, at: string, path = 'src/a.ts', line: number | null = 12) => ({ author: { login }, body, createdAt: at, path, line });
+const comment = (login: string, body: string, at: string, path = 'src/a.ts', line: number | null = 12, type = 'User') => ({ author: { __typename: type, login }, body, createdAt: at, path, line });
 
 /** A GitHub API scripted per branch: each PR has its own head sha, whose checks answer as given. */
 function scriptedGitHub(prs: Record<string, { number: number; runs: Route; statuses?: unknown[] }>): Route[] {
@@ -116,8 +116,8 @@ function scriptedGitHub(prs: Record<string, { number: number; runs: Route; statu
     (url) =>
       url.pathname === '/graphql'
         ? { body: threadsAnswer([
-          thread(false, [{ author: { login: 'alice' }, body: 'renommer', createdAt: '2026-10-10T10:00:00Z', path: 'src/a.ts', line: 3 }]),
-          thread(true, [{ author: { login: 'bob' }, body: 'fait', createdAt: '2026-10-10T11:00:00Z', path: 'src/b.ts', line: null }]),
+          thread(false, [{ author: { __typename: 'User', login: 'alice' }, body: 'renommer', createdAt: '2026-10-10T10:00:00Z', path: 'src/a.ts', line: 3 }]),
+          thread(true, [{ author: { __typename: 'User', login: 'bob' }, body: 'fait', createdAt: '2026-10-10T11:00:00Z', path: 'src/b.ts', line: null }]),
         ]) }
         : undefined,
   ];
@@ -450,7 +450,7 @@ describe('GitHubAppForge.unresolvedReviewComments', () => {
             ? {
                 body: threadsAnswer([
                   thread(false, [comment('lilian', 'Renomme ça', '2026-10-10T10:00:00Z')]),
-                  thread(true, [{ author: { login: 'x' }, body: 'ok', createdAt: '2026-10-10T10:00:00Z', path: 'b', line: 1 }]),
+                  thread(true, [{ author: { __typename: 'User', login: 'x' }, body: 'ok', createdAt: '2026-10-10T10:00:00Z', path: 'b', line: 1 }]),
                   thread(false, []),
                 ]),
               }
@@ -521,6 +521,14 @@ describe('GitHubAppForge.unresolvedReviewComments', () => {
       { owner: 'acme', name: 'app', number: 7, after: 'threads-1' },
       { id: 'T1', after: 'comments-1' },
     ]);
+  });
+
+  it("drops a bot's reply and keeps the human one of the same thread, the query asking for the author's type (ORC-366)", async () => {
+    const calls: Call[] = [];
+    const comments = [comment('alice', 'gère null', '2026-10-10T10:00:00Z'), comment('ci', 'CI failed', '2026-10-10T10:05:00Z', 'src/a.ts', 12, 'Bot'), comment('bob', 'oui', '2026-10-10T10:10:00Z')];
+    const { forge } = makeForge([installationRoute(), tokenRoute(42), (url) => (url.pathname === '/graphql' ? { body: threadsAnswer([thread(false, comments)]) } : undefined)], { calls });
+    expect((await forge.unresolvedReviewComments('/repo', 7)).map((i) => i.author)).toEqual(['alice', 'bob']);
+    expect(JSON.stringify(calls.find((c) => c.url.endsWith('/graphql'))!.body)).toContain('author { __typename login }');
   });
 
   it("never reads a thread's comments as complete when the thread is gone or answered unreadable (ORC-347)", async () => {

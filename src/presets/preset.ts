@@ -18,6 +18,11 @@ export interface Preset {
    * a push, and it never restarts `fix` outside this counter.
    */
   redCi: FailureEdge;
+  /**
+   * Where a conflict with the default branch goes (ORC-146), from the same steps as `redCi`: the engine starts the rebase
+   * step, on the same counter, and no agent at work on another step resolves it.
+   */
+  conflict: FailureEdge;
 }
 
 export interface FailureEdge {
@@ -87,6 +92,7 @@ export function compilePreset(preset: Preset, options: CompileOptions = {}): Com
   if (!isPositiveInt(preset.sameFailure.limit)) violations.push('sameFailure: limit must be a positive integer');
   if (!isPositiveInt(preset.silentRun.minutes)) violations.push('silentRun: minutes must be a positive integer');
   checkEdge('redCi', preset.redCi);
+  checkEdge('conflict', preset.conflict);
 
   for (const s of preset.steps) {
     const where = `step ${s.id}`;
@@ -140,8 +146,8 @@ function isPositiveInt(n: number): boolean {
 function edges(s: Step, preset: Preset): string[] {
   const out = s.next === null ? [] : [s.next];
   if (s.onFailure) out.push(s.onFailure.goto);
-  // A red CI fails a push, and reaches the merge gate while the PR waits there; a merged PR has no way back.
-  if ((s.type === 'publish' && s.mode === 'push') || (s.type === 'human_gate' && s.gate === 'merge')) out.push(preset.redCi.goto);
+  // A red CI fails a push, and reaches the merge gate while the PR waits there, as a conflict does; a merged PR has no way back.
+  if ((s.type === 'publish' && s.mode === 'push') || (s.type === 'human_gate' && s.gate === 'merge')) out.push(preset.redCi.goto, preset.conflict.goto);
   return out;
 }
 

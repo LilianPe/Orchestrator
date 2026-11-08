@@ -215,15 +215,15 @@ describe('decide — YAML rules of the standard pack', () => {
     expect(out.events).toEqual([{ type: 'ticket.patched', patch: { prNumber: 3, prUrl: 'u', prState: 'OPEN' } }]);
   });
 
-  it('a review or a conflict reaches decide without any reaction yet (ORC-190, ORC-146)', () => {
+  it('a review reaches decide without any reaction yet (ORC-190); a conflict goes through the rules (ORC-146)', () => {
     const pr = { number: 3, url: 'u', branch: 'b' };
     const reviewed = { ...ev('pr.reviewed', { ...pr, kind: 'review' as const, author: 'L', body: 'renomme' }), taint: 'untrusted' as const };
-    const wf = { ...workflow, on: { ...workflow.on, 'pr.reviewed': [{ run: 'dev-feedback' }], 'pr.conflicted': [{ run: 'dev-feedback' }] } };
-    for (const e of [reviewed, ev('pr.conflicted', { ...pr, headSha: 'h', baseRef: 'main' })]) {
-      const out = decide(ticket({ logical: 'human_review', prNumber: 3 }), e, wf);
-      expect(out).toEqual(decision());
-      expect(out.trace).toEqual([`${e.type}: no reaction yet`]);
-    }
+    const wf = { ...workflow, on: { ...workflow.on, 'pr.reviewed': [{ run: 'dev-feedback' }] } };
+    const out = decide(ticket({ logical: 'human_review', prNumber: 3 }), reviewed, wf);
+    expect(out).toEqual(decision());
+    expect(out.trace).toEqual(['pr.reviewed: no reaction yet']);
+    const conflict = decide(ticket({ logical: 'human_review', prNumber: 3, prState: 'OPEN' }), ev('pr.conflicted', { ...pr, headSha: 'h', baseRef: 'main' }), workflow);
+    expect(conflict.trace).toContain('on.pr.conflicted[0]');
   });
 });
 
@@ -530,8 +530,10 @@ describe('decide — built-ins', () => {
     expect(out).toEqual(
       decision({
         effects: [
-          { kind: 'move', to: 'human_review' },
+          // `dev`'s end starts the AI review (ORC-183).
+          { kind: 'move', to: 'ai_review' },
           { kind: 'post_output', style: 'summary', runId: 'r1' },
+          { kind: 'start_run', job: 'review', input: 'diff' },
         ],
       }),
     );
