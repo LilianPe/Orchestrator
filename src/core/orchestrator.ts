@@ -1834,8 +1834,8 @@ export class Orchestrator {
       reason = res.reason === 'head_moved'
         ? MERGE_PUSHED
         : res.reason === 'checks_missing'
-            ? 'no check ran on the reviewed commit, while the repository has a CI or the factory cannot check that it has none (CI not started yet, checks just appearing, or a GitHub App without the Actions read permission)'
-            : `GitHub refuses the merge (${res.message})`;
+          ? 'no check ran on the reviewed commit, while the repository has a CI or the factory cannot check that it has none (CI not started yet, checks just appearing, or a GitHub App without the Actions read permission)'
+          : `GitHub refuses the merge (${res.message})`;
     }
     const refusal: MergeRefusal = { reason, headMoved };
     await this.d.store.setMeta(mark, JSON.stringify(refusal));

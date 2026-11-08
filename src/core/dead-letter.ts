@@ -1,5 +1,5 @@
 import { upcast, type StoredEvent } from './upcast.js';
-import { TRUSTED, type EventPayloads, type FactoryEvent, type TicketState } from './types.js';
+import { TRUSTED, UNBLOCKED, type EventPayloads, type FactoryEvent, type TicketState } from './types.js';
 
 /**
  * The dead-letter of ORC-175: an inbox row whose decision throws (`decide` or `reduce`, a poison
@@ -56,7 +56,7 @@ const blockedByDeadLetter = (t: TicketState, eventId: string): boolean => t.bloc
 
 /** The ticket with the block of a dead-lettered event lifted, or as it is when blocked by anything else (`decide` and `reduce` of a repair). */
 export function liftDeadLetterBlock<T extends TicketState | undefined>(t: T, eventId: string): T {
-  return t && blockedByDeadLetter(t, eventId) ? { ...t, blocked: false, blockReason: undefined, blockKind: undefined, blockedEvent: undefined } : t;
+  return t && blockedByDeadLetter(t, eventId) ? { ...t, ...UNBLOCKED } : t;
 }
 
 /** The event a dead-lettered row is about: a failed repair is the event it repairs, not a new dead letter. */

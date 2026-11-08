@@ -542,6 +542,9 @@ export interface TicketState {
   workflowHash?: string;
 }
 
+/** What lifting a block clears, the whole block with it: its reason, its kind and their data. */
+export const UNBLOCKED = { blocked: false, blockReason: undefined, blockKind: undefined, blockedEvent: undefined, blockedJob: undefined } as const satisfies Partial<TicketState>;
+
 export function newTicketState(
   projectId: string,
   ticketId: string,

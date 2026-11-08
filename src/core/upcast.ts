@@ -151,8 +151,7 @@ export interface MergeRefusal {
 /** A saved merge refusal, whatever factory version wrote it: before ORC-345, its sentence alone, which then said whether the head moved. */
 export function upcastMergeRefusal(saved: string): MergeRefusal {
   try {
-    const parsed = JSON.parse(saved) as unknown;
-    const r = parsed as Partial<MergeRefusal> | null;
+    const r = JSON.parse(saved) as Partial<MergeRefusal> | null;
     if (typeof r === 'object' && r !== null && typeof r.reason === 'string' && typeof r.headMoved === 'boolean') return { reason: r.reason, headMoved: r.headMoved };
   } catch {
     // A sentence: saved before ORC-345.

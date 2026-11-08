@@ -14,9 +14,9 @@ const WITHIN: Partial<Record<BlockKind, BlockCause>> = { asked: 'question', stuc
 
 /** The cause the Flow shows a block under; `other` for a ticket blocked without a kind, never a guess. */
 export const causeOf = (kind: BlockKind | undefined): BlockCause => {
-  const cause = kind === undefined ? undefined : (WITHIN[kind] ?? kind);
+  const cause = kind && (WITHIN[kind] ?? kind);
   // A kind this version does not know (written by a newer one) still shows its ticket, under `other`.
-  return (BLOCK_CAUSES as readonly string[]).includes(cause ?? '') ? (cause as BlockCause) : 'other';
+  return cause && (BLOCK_CAUSES as readonly string[]).includes(cause) ? (cause as BlockCause) : 'other';
 };
 
 /** The kinds whose reason says no more than their cause: the Flow does not repeat it under it (ORC-332). */
