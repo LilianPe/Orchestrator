@@ -2,8 +2,6 @@ import type { PlanStep } from '../../core/session-plan.js';
 import type { TeamDirectory } from '../roles/types.js';
 import { IssueNotFoundError, type ActivityInput, type SearchHit, type Tracker, type TrackerIssue } from './types.js';
 
-const snapshot = (i: TrackerIssue): TrackerIssue => ({ ...i, labels: [...i.labels] });
-
 /** The states of packs/standard/workflow.yml, the catalogue every team has unless a test declares another. */
 export const STANDARD_STATES = ['Todo', 'In Progress', 'Human Review', 'AI Review', 'Done'] as const;
 
@@ -15,6 +13,8 @@ export class FakeTracker implements Tracker, TeamDirectory {
   /** Group of each grouped label, by name: labels of a group are exclusive, as in Linear (ORC-160). */
   private labelGroups = new Map<string, string>();
   private members = new Map<string, readonly string[]>();
+  /** The blockers of each issue, by identifier: « blocked by » relations (ORC-363). */
+  private blockers = new Map<string, string[]>();
 
   constructor(private readonly defaultStates: readonly string[] = STANDARD_STATES) {}
 
@@ -25,6 +25,25 @@ export class FakeTracker implements Tracker, TeamDirectory {
   /** Declares a label group: adding one of `labels` takes the others off the ticket. */
   setLabelGroup(group: string, labels: readonly string[]): void {
     for (const l of labels) this.labelGroups.set(l, group);
+  }
+
+  /** `blocker` blocks `blocked`, as a Linear relation (ORC-363): `blocked` reads it in `blockedBy`, with the blocker as it is then. */
+  blocks(blocker: string, blocked: string): void {
+    this.blockers.set(blocked, [...(this.blockers.get(blocked) ?? []), blocker]);
+  }
+
+  /** The relation taken off. */
+  unblocks(blocker: string, blocked: string): void {
+    this.blockers.set(blocked, (this.blockers.get(blocked) ?? []).filter((b) => b !== blocker));
+  }
+
+  /** The issue as read: a copy, its blockers with their status now. */
+  private snapshot(i: TrackerIssue): TrackerIssue {
+    const blockedBy = (this.blockers.get(i.identifier) ?? []).map((b) => {
+      const { stateName, stateType } = this.must(b);
+      return { identifier: b, stateName, stateType };
+    });
+    return { ...i, labels: [...i.labels], blockedBy };
   }
 
   /** The Linear user ids of the team's active members (ORC-186); none until set. */
@@ -104,14 +123,14 @@ export class FakeTracker implements Tracker, TeamDirectory {
   }
 
   async getIssue(identifier: string): Promise<TrackerIssue> {
-    return snapshot(this.must(identifier));
+    return this.snapshot(this.must(identifier));
   }
 
   async listDelegated(teamKey: string): Promise<TrackerIssue[]> {
     // As Linear's query: a completed or canceled issue is not listed, delegated or not.
     return [...this.issues.values()]
       .filter((i) => i.teamKey === teamKey && i.delegateId && i.stateType !== 'completed' && i.stateType !== 'canceled')
-      .map(snapshot);
+      .map((i) => this.snapshot(i));
   }
 
   async teamMembers(teamKey: string): Promise<string[]> {

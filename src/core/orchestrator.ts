@@ -50,9 +50,9 @@ import type { Effect } from './decision.js';
 import { repairedEvent } from './dead-letter.js';
 import { NO_PLAN, planDecision } from './decision-plan.js';
 import { blockFacts, composeBlockComment, type BlockFacts, type BlockStatus } from './block-comment.js';
-import { blockedLabelChange, goesThroughFreeze, historyTaint, HUMAN_EVENTS, mayCheck, mayPublish, RECONCILE_MS, reconcileTicket, refusesDevWork, SENSITIVE_PATHS, sensitivePathsAtLaunch, stepOf, taintedKnowledge } from './engine.js';
+import { blockedLabelChange, goesThroughFreeze, historyTaint, HUMAN_EVENTS, mayCheck, mayPublish, RECONCILE_MS, reconcileTicket, refusesDevWork, SENSITIVE_PATHS, sensitivePathsAtLaunch, stepOf, taintedKnowledge, waitingBody, waitingOn } from './engine.js';
 import { attemptLabels, packFingerprints } from './attempt-labels.js';
-import { pickupFailures } from './pickup.js';
+import { openBlockers, pickupFailures } from './pickup.js';
 import { buildPrompt, formatFeedback, formatVerifyFailures, readConventions, withHumanInbox } from './prompt.js';
 import { carriedAtLaunch, forAgent } from './human-message.js';
 import { pendingOf, reduce, samePending } from './reduce.js';
@@ -2230,9 +2230,12 @@ export class Orchestrator {
       if (taken(t)) return { lost: t } as const;
       const issue = await tracker.getIssue(ticketId);
       // The deterministic checks, before the ticket's first run: at intake, inputs of its guard, journaled with its end
-      // (ORC-206); else they block a job that picks up the ticket.
+      // (ORC-206); else they block a job that picks up the ticket. The « blocked by » tickets not done likewise (ORC-363),
+      // except that they make the job wait instead of blocking it.
       const intake = job.step === 'intake';
-      const failures = (intake || job.pickup) && !t.claudeSessionId ? await pickupFailures(wf.tracker.pickup.checks, issue, project.repoPath, workspaces) : [];
+      const guarded = (intake || job.pickup) && !t.claudeSessionId;
+      const failures = guarded ? await pickupFailures(wf.tracker.pickup.checks, issue, project.repoPath, workspaces) : [];
+      const blockers = guarded ? openBlockers(issue) : [];
       if (!intake && failures.length) {
         this.d.scheduler.release(key);
         const reason = failures.join(' ');
@@ -2246,6 +2249,17 @@ export class Orchestrator {
         });
         return undefined;
       }
+      if (!intake && blockers.length) {
+        this.d.scheduler.release(key);
+        const waiting = await state(this.apply(t, waitingOn(blockers, start)));
+        this.log('info', `${job.name} on ${ticketId} waits for ${blockers.map((b) => b.identifier).join(', ')} to be done`);
+        try {
+          await tracker.activity(await this.sessionFor(waiting), { type: 'thought', body: waitingBody(blockers) });
+        } catch (err) {
+          this.log('warn', `could not tell ${ticketId}'s session that it waits: ${(err as Error).message}`);
+        }
+        return undefined;
+      }
       const asked = { projectId: project.id, repoPath: project.repoPath, ticketId, title: issue.title, kind: job.workspace, slot, portBase: wf.workspace.portBase, runId };
       let ws = await workspaces.prepare(asked);
       // Left by a daemon killed before the end of its setup (ORC-211): half installed, perhaps holding a secret the
@@ -2255,11 +2269,11 @@ export class Orchestrator {
         await state(store.setMeta(setupPendingKey(ws.path), ''));
         ws = await workspaces.prepare(asked);
       }
-      return { issue, ws, lost: undefined, pickup: intake && failures.length ? failures : undefined };
+      return { issue, ws, lost: undefined, pickup: intake && failures.length ? failures : undefined, blockedBy: intake && blockers.length ? blockers : undefined };
     })();
     if (!head) return undefined;
     if (head.lost) return lose(head.lost);
-    const { issue, ws, pickup } = head;
+    const { issue, ws, pickup, blockedBy } = head;
     // Read again before the first write: the workspace took time.
     let t: TicketState;
     // A fresh worktree is not set up until its setup succeeds: a launch ending before removes it, or
@@ -2410,6 +2424,7 @@ export class Orchestrator {
         repoConfig: config,
         ...(limits !== job.limits ? { limits } : {}),
         ...(pickup ? { pickup } : {}),
+        ...(blockedBy ? { blockedBy } : {}),
       };
       // The mark, then the ticket, then the run (`startHandled`, ORC-277): a dev ticket holds its run before
       // the run is written, so recover() finds it whichever write a crash falls after. The feedback stays
@@ -2673,6 +2688,7 @@ export class Orchestrator {
         ...(output ? { output } : {}),
         ...(result.stagnation ? { stagnation: result.stagnation } : {}),
         ...(run.pickup ? { pickup: run.pickup } : {}),
+        ...(run.blockedBy ? { blockedBy: run.blockedBy } : {}),
         ...(usageLimit ? { usageLimit } : {}),
       },
     };
