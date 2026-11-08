@@ -358,7 +358,7 @@ export type DecidedEvent =
   | { type: 'ticket.unblocked' }
   | {
       type: 'ticket.patched';
-      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'verifiedSha' | 'awaitingRepo' | 'owedMove' | 'usageWait' | 'usageRelaunches'>>;
+      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'verifiedSha' | 'awaitingRepo' | 'owedMove' | 'usageWait' | 'usageRelaunches' | 'usageAsks'>>;
     }
   | { type: 'feedback.appended'; item: FeedbackItem }
   /** The ticket's dev work is stopped: nothing pending, no verification awaited. */
@@ -470,6 +470,8 @@ export interface TicketState {
   usageWait?: { runId: string; job: string; logical: LogicalState } | null;
   /** Relaunches at a usage reset of `job` in a row (ORC-340), bounded by `USAGE_RELAUNCHES`; `null` once a run of the step ends without the limit. */
   usageRelaunches?: { job: string; count: number } | null;
+  /** Questions asked again at a usage reset in a row (ORC-340), bounded like `usageRelaunches`; `null` once one ends without the limit. */
+  usageAsks?: number | null;
   /**
    * Signed actor of the last authorized delegation (ORC-186): the run's initiator, who never validates
    * its spec, and its requester, who may answer it.

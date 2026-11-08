@@ -1846,7 +1846,7 @@ export class Orchestrator {
   /** What is left under `cap` (ORC-340), undefined without one. Spent, it throws: the launch is refused and the ticket blocked with the reason. */
   private tokensLeft(spent: number, cap: number | undefined): number | undefined {
     if (cap === undefined) return undefined;
-    if (spent >= cap) throw new TicketBudgetError(`${TICKET_TOKENS_REACHED}${spent} tokens spent of ${cap} by its code runs (budgets.per_ticket_tokens). Raise the cap or split the ticket, then reply here.`);
+    if (spent >= cap) throw new TicketBudgetError(`${TICKET_TOKENS_REACHED}${spent} tokens spent of ${cap} by its code runs (budgets.per_ticket_tokens). Raise the cap (factory.yml counts once the daemon restarts, the repository's .factory/config.yml at the next launch) or split the ticket, then reply here.`);
     return cap - spent;
   }
 

@@ -143,13 +143,15 @@ export function isOwnMoveEcho(t: TicketState | undefined, e: FactoryEvent | Inte
 
 /**
  * Whether `event` moved the ticket on, and so ends its wait on the usage limit (ORC-340): its `usage.reset` timer then resumes nothing.
- * Only what changes its work: a block, an undelegation, a new code run, a move to another state or a cancel. An event that starts no
+ * Only what changes its work: a block, an undelegation or a delegation again, a new code run, a move to another state or a cancel. An event that starts no
  * work (a move recorded to the state it is in, a `work.cancelled` of a failed effect) leaves the wait as it is.
  */
 function movesOn(state: TicketState, next: TicketState, event: FactoryEvent | InternalEvent): boolean {
   switch (event.type) {
+    // A delegation again starts the ticket's work afresh: the cut step is not resumed behind it.
     case 'ticket.blocked':
     case 'ticket.undelegated':
+    case 'ticket.delegated':
       return true;
     case 'run.started':
       return event.queue === 'dev';

@@ -391,7 +391,8 @@ describe('Orchestrator', () => {
       expect(workspaces.prepared).toEqual([]);
       const t = (await store.getTicket('p', 'REL-1'))!;
       expect(t.blocked).toBe(true);
-      expect(t.blockReason).toBe('Token budget of the ticket reached: 1000 tokens spent of 1000 by its code runs (budgets.per_ticket_tokens). Raise the cap or split the ticket, then reply here.');
+      // It says when a raised cap counts: factory.yml is read once, at the daemon's start.
+      expect(t.blockReason).toBe("Token budget of the ticket reached: 1000 tokens spent of 1000 by its code runs (budgets.per_ticket_tokens). Raise the cap (factory.yml counts once the daemon restarts, the repository's .factory/config.yml at the next launch) or split the ticket, then reply here.");
     });
 
     it('caps a run under it at what the ticket has left, counting its code runs only, and keeps the cap on the run', async () => {

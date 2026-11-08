@@ -252,6 +252,8 @@ function unblock(out: Decision, event: FactoryEvent, ticket: TicketState): void 
   // The lease's relaunch too (ORC-220), and the relaunches after a cut, which nothing else gives back.
   if (ticket.leaseRelaunches) out.events.push({ type: 'ticket.patched', patch: { leaseRelaunches: 0 } });
   if (ticket.cutRelaunches?.length) out.events.push({ type: 'ticket.patched', patch: { cutRelaunches: [] } });
+  // And the relaunches at a usage reset (ORC-340): a human's resume is not blocked again at the first cut.
+  if (ticket.usageRelaunches) out.events.push({ type: 'ticket.patched', patch: { usageRelaunches: null } });
 }
 
 /** The head of the reason of a ticket blocked by the bound: the Flow classes a block by the head of its reason (ORC-297). */
@@ -325,12 +327,21 @@ function usageLimitDecision(out: Decision, event: FactoryEvent<'run.finished'>, 
   const ms = Math.max(0, limited.resetAt - event.at);
   const payload = { job: jobName, runId, ...(limited.account ? { account: limited.account } : {}) };
   if (job.queue === 'questions') {
+    const asks = ticket?.usageAsks ?? 0;
+    if (asks >= USAGE_RELAUNCHES) {
+      // Asked again as many times as a step is relaunched: the thread is told once, and nothing more is armed.
+      out.events.push({ type: 'ticket.patched', patch: { usageAsks: null } });
+      out.effects.push({ kind: 'activity', type: 'error', body: 'The usage limit is still reached; ask again later.', runId });
+      return out;
+    }
+    out.events.push({ type: 'ticket.patched', patch: { usageAsks: asks + 1 } });
     out.effects.push({ kind: 'activity', type: 'response', body: `The usage limit is reached: I will answer after ${at}.`, runId });
     out.timers.push({ kind: 'usage.reset', slot: `usage.reset:${runId}`, ms, payload });
     return out;
   }
-  // Only the ticket's active step reaches here: the result of another attempt is fenced before (`staleAttempt`). A blocked ticket keeps its block.
-  if (!ticket || ticket.blocked) return undefined;
+  // Only the ticket's active step reaches here: the result of another attempt is fenced before (`staleAttempt`). A blocked ticket keeps
+  // its block; an undelegated or delivered one has no step to resume (`attemptLost` guards the same): decided as any other end.
+  if (!ticket || ticket.blocked || !ticket.delegated || refusesDevWork(ticket, job)) return undefined;
   const count = ticket.usageRelaunches?.job === jobName ? ticket.usageRelaunches.count : 0;
   if (count >= USAGE_RELAUNCHES) {
     const reason = `The run ${jobName} reached a limit: the usage limit stopped it ${count + 1} times in a row.`;
@@ -1076,6 +1087,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       const limited = event.payload.outcome !== 'success' ? event.payload.usageLimit : undefined;
       // A step that ended without the limit starts its count of relaunches at the reset again.
       if (!limited && ticket?.usageRelaunches && job.queue === 'dev') out.events.push({ type: 'ticket.patched', patch: { usageRelaunches: null } });
+      if (!limited && ticket?.usageAsks && job.queue === 'questions') out.events.push({ type: 'ticket.patched', patch: { usageAsks: null } });
       if (limited) {
         const usage = usageLimitDecision(out, event, ticket, workflow, limited);
         if (usage) return usage;
@@ -1211,6 +1223,8 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
         // ponytail: the timer row is left to fire into this check, not deleted; a per-slot delete in the decision plan if stale rows ever matter.
         const current = !!job && !!ticket && !!wait && wait.runId === fired.payload.runId && wait.job === job.name && ticket.logical === wait.logical && ticket.delegated && !ticket.blocked && !ticket.activeRunId && !ticket.verifyingRunId;
         if (!current) {
+          // Its reason gone, the wait goes with its timer: it never outlives it. A wait of another cut has its own timer.
+          if (wait && wait.runId === fired.payload.runId) out.events.push({ type: 'ticket.patched', patch: { usageWait: null } });
           out.trace.push(`timer.fired usage.reset: ${fired.payload.job} not resumed, the ticket moved on`);
           return out;
         }

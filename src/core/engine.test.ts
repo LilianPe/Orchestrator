@@ -907,6 +907,43 @@ describe('decide — built-ins', () => {
       expect(decide(t, reset, workflow).effects).toEqual([{ kind: 'start_run', job: 'dev', relaunchOf: 'r1' }]);
     });
 
+    it('records no wait on a ticket no longer delegated: no step to resume, decided as any other end', () => {
+      const out = decide(ticket({ logical: 'dev', activeRunId: 'r1', delegated: false }), limited(), workflow);
+      expect(out.timers).toEqual([]);
+      expect(JSON.stringify(out.events)).not.toContain('usageWait');
+    });
+
+    it('a reset that finds its wait no longer current clears it: the wait never outlives its reason', () => {
+      const stale = { ...waiting(), logical: 'human_review' as const };
+      expect(decide(stale, reset, workflow).events).toEqual([{ type: 'ticket.patched', patch: { usageWait: null } }]);
+      // A wait of another cut keeps its own timer: left alone.
+      expect(decide(stale, ev('timer.fired', { kind: 'usage.reset', payload: { job: 'dev', runId: 'r0' } }), workflow).events).toEqual([]);
+    });
+
+    it('a delegation again ends the wait', () => {
+      expect(reduce(waiting(), ev('ticket.delegated', { linearSessionId: 'ls-1' }))!.usageWait).toBeNull();
+    });
+
+    it('a human relaunch of the blocked ticket starts the count of usage relaunches again', () => {
+      const human = decide(
+        ticket({ logical: 'dev', blocked: true, linearSessionId: 's1', usageRelaunches: { job: 'dev', count: USAGE_RELAUNCHES } }),
+        ev('session.prompted', { linearSessionId: 's1', body: 'go on', author: 'L' }),
+        workflow,
+      );
+      expect(human.events).toContainEqual({ type: 'ticket.patched', patch: { usageRelaunches: null } });
+    });
+
+    it(`asks a question again ${USAGE_RELAUNCHES} times in a row at most, then tells its thread once and stops`, () => {
+      const asked = { ...ev('run.finished', { runId: 'q4', job: 'ask', outcome: 'failure', costUsd: 0, turns: 1, lastText: '', usageLimit: { resetAt: 61_000 } }), at: 1_000 };
+      const out = decide(ticket({ usageAsks: USAGE_RELAUNCHES }), asked, workflow);
+      expect(out.timers).toEqual([]);
+      expect(out.effects).toEqual([{ kind: 'activity', type: 'error', body: 'The usage limit is still reached; ask again later.', runId: 'q4' }]);
+      expect(out.events).toEqual([{ type: 'ticket.patched', patch: { usageAsks: null } }]);
+      // A question answered (no limit) starts the count again.
+      const answered = decide(ticket({ usageAsks: 2 }), ev('run.finished', { runId: 'q5', job: 'ask', outcome: 'success', costUsd: 0, turns: 1, lastText: 'ok' }), workflow);
+      expect(answered.events).toContainEqual({ type: 'ticket.patched', patch: { usageAsks: null } });
+    });
+
     it('a cancel ends the wait, whatever state it leaves', () => {
       expect(reduce(waiting(), ev('status.changed', { from: 'dev', to: 'dev', cancelled: true }))!.usageWait).toBeNull();
     });

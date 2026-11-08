@@ -438,6 +438,15 @@ describe('ClaudeCodeRunner: caps and stagnation of the build (ORC-136)', () => {
     });
   });
 
+  it('keeps the larger of the reported cost and the estimate: a result that under-reports is not kept, one that reports more is', async () => {
+    const { r } = runner();
+    const used = assistant('m1', { input_tokens: 1_000_000, output_tokens: 0 });
+    const costing = (usd: number) => JSON.stringify({ type: 'result', subtype: 'success', is_error: false, total_cost_usd: usd, num_turns: 1, result: 'ok' });
+    // $2 of Sonnet input, reported as $0.01.
+    expect(await r.start(req({ model: 'claude-sonnet-5-5' }, { FAKE_CLAUDE_SCRIPT: script(used, costing(0.01)) })).done).toMatchObject({ costUsd: 2 });
+    expect(await r.start(req({ model: 'claude-sonnet-5-5' }, { FAKE_CLAUDE_SCRIPT: script(used, costing(3)) })).done).toMatchObject({ costUsd: 3 });
+  });
+
   it('prices a cut run on the model the init line reports, whatever the request named', async () => {
     const { r } = runner();
     const init = JSON.stringify({ type: 'system', subtype: 'init', session_id: 's', model: 'claude-opus-5-5' });

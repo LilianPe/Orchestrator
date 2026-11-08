@@ -466,8 +466,9 @@ export class ClaudeCodeRunner implements Runner {
         // done (none at all, after real turns) must not price it at $0, nor spare the ticket's budget (ORC-340).
         const streamed = usage.size ? totalUsage() : undefined;
         const tokens = result?.tokens && streamed ? maxTokens(result.tokens, streamed) : (result?.tokens ?? streamed);
-        // Cut before its result line (capped, stopped, killed): what it consumed is priced, never $0 (ORC-340).
-        const costUsd = result?.costUsd || (tokens ? estimateCostUsd(model, tokens) : 0);
+        // What it consumed is priced, never $0 (ORC-340): cut before its result line (capped, stopped, killed), by estimate; with one,
+        // the larger of the reported cost and the estimate, so a result that reports less than the tokens it used is not kept.
+        const costUsd = Math.max(result?.costUsd ?? 0, tokens ? estimateCostUsd(model, tokens) : 0);
         // Told only of a run that did not succeed: what to do of it is the factory's (`on_usage_limit`), `infra` stays as without it.
         const cutByLimit = usageLimit && outcome !== 'success' ? { usageLimit } : {};
         transcript.end(() => resolve({ outcome, costUsd, turns: result?.turns ?? assistantTurns, lastText: text, ...(tokens ? { tokens } : {}), ...(broke ? { infra: true as const } : {}), ...(stagnation ? { stagnation } : {}), ...cutByLimit }));
