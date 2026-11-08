@@ -88,3 +88,43 @@ describe('intake (ORC-206)', () => {
     expect(causeOf(t.blockKind)).toBe('failed');
   });
 });
+
+describe('intake: duplicates, existing code and scope (ORC-207)', () => {
+  const pr = 'https://github.com/acme/app/pull/12';
+
+  it('a probable duplicate goes to the guard: the ticket does not start, blocked with the link, even judged complete', () => {
+    const e = finished(assessed({ duplicates: [{ url: pr, why: 'PR #12 changes src/export.ts for the same CSV export.' }] }));
+    const out = decide(ticket(), e, workflow);
+    expect(out.effects.some((x) => x.kind === 'start_run' || x.kind === 'move')).toBe(false);
+    const t = after(ticket(), e);
+    expect(t).toMatchObject({ blocked: true, blockedJob: 'intake' });
+    expect(t.blockReason).toContain(pr);
+    expect(out.effects.find((x) => x.kind === 'block_comment')).toMatchObject({ block: { tried: expect.arrayContaining([expect.stringContaining(pr)]) } });
+  });
+
+  it('a ticket out of scope is refused with its explanation and the split proposed, nothing created nor started', () => {
+    const e = finished(assessed({ size: 'xl', scope: { refuse: 'A rewrite of the whole store layer is an architecture change.', split: [{ title: 'Extract the SQL of runs', summary: 'Move run queries behind one module.' }, { title: 'Port tickets', summary: 'Same for tickets.' }] } }));
+    const out = decide(ticket(), e, workflow);
+    expect(out.effects.map((x) => x.kind)).toEqual(['block_comment']);
+    const t = after(ticket(), e);
+    expect(t).toMatchObject({ blocked: true, blockedJob: 'intake', size: 'xl' });
+    expect(t.blockReason).toContain('A rewrite of the whole store layer is an architecture change.');
+    expect(t.blockReason).toContain('Extract the SQL of runs');
+    expect(t.blockReason).toContain('Port tickets');
+  });
+
+  it('records the existing code to reuse for build, replaced by the next assessment', () => {
+    const reuse = [{ path: 'src/csv.ts', symbol: 'toCsv', why: 'Already writes a CSV line.' }];
+    const t = after(ticket(), finished(assessed({ reuse })));
+    expect(t.reuse).toEqual(reuse);
+    expect(after(t, finished(assessed())).reuse).toEqual([]);
+  });
+
+  it('the duplicate found on its own launch (its branch or PR already there) is a failed check with its link', () => {
+    const own = `This ticket already has work on the forge: ${pr} (branch factory/rel-1-export).`;
+    const t = after(ticket(), finished(assessed(), { pickup: [own] }));
+    expect(t).toMatchObject({ blocked: true, blockedJob: 'intake' });
+    expect(t.blockReason).toContain(pr);
+  });
+});
+

@@ -27,6 +27,15 @@ describe('buildPrompt', () => {
     expect(out).toContain('## Feedback to address\n- **L** : x');
   });
 
+  it('gives intake the work in progress elsewhere, and build the code to reuse, each as data after the ticket (ORC-207)', () => {
+    const out = buildPrompt({ skill: 'factory:intake', issue, activeWork: '- PR #12', reuse: '- `src/csv.ts`', reviewRounds: 5 });
+    expect(out).toContain('## Work in progress elsewhere (data)');
+    expect(out).toContain('- PR #12');
+    expect(out).toContain('## Existing code to reuse\n');
+    expect(out.indexOf('Exporter les audits.')).toBeLessThan(out.indexOf('## Work in progress elsewhere'));
+    expect(buildPrompt({ skill: 'factory:dev', issue, reviewRounds: 5 })).not.toContain('## Existing code');
+  });
+
   it('renders the PR url after the branch line', () => {
     const out = buildPrompt({ skill: 'factory:review', issue, branch: 'b', prUrl: 'https://github.com/o/r/pull/3', reviewRounds: 2 });
     expect(out).toContain('Branch: b\nPR: https://github.com/o/r/pull/3\nMax review rounds: 2');
