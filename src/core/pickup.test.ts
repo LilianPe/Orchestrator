@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { FakeForge } from '../adapters/forge/fake.js';
 import { FakeTracker } from '../adapters/tracker/fake.js';
 import type { TrackerIssue } from '../adapters/tracker/types.js';
-import { notStarted, pickupFailures, searchDuplicates } from './pickup.js';
+import { ownWork } from './intake-checks.js';
+import { pickupFailures, searchDuplicates } from './pickup.js';
 
 const issue = (description: string): TrackerIssue => ({
   identifier: 'REL-3', title: 'Export CSV', description, url: 'u', stateName: 'Todo', stateType: 'unstarted', labels: [], teamKey: 'REL', priority: 0, createdAt: 0,
@@ -23,14 +24,15 @@ describe('pickupFailures', () => {
 });
 
 describe('the duplicate search (ORC-207)', () => {
-  it("not_started: the ticket's own branch on the forge, with its link", async () => {
-    const forge = new FakeForge();
-    expect(await notStarted(issue('x'), '/r', forge)).toBeUndefined();
-    forge.branchNames = ['factory/rel-31-other', 'factory/rel-3-old'];
-    expect(await notStarted(issue('x'), '/r', forge)).toBe('This ticket already has work on the forge: https://github.test/acme/app/tree/factory/rel-3-old (branch factory/rel-3-old).');
+  it("not_started fails with the ticket's own work when it is listed, and only then", () => {
+    const own = 'This ticket already has work on the forge: u (branch factory/rel-3-old).';
+    const d = 'Une description complète.\nCritères d’acceptation : export CSV.';
+    expect(pickupFailures(['has_description', 'not_started'], issue(d), own)).toEqual([own]);
+    expect(pickupFailures(['has_description'], issue(d), own)).toEqual([]);
+    expect(pickupFailures(['not_started'], issue(d))).toEqual([]);
   });
 
-  it('reads the open PRs, the recent branches and the close tickets; not_started names its own PR from them', async () => {
+  it('reads the open PRs, the recent branches and the close tickets; its own work is named by its PR from them', async () => {
     const forge = new FakeForge();
     forge.openPullRequests = [
       { number: 5, url: 'https://github.test/pr/5', title: 'Mine', branch: 'factory/rel-3-export-csv', fork: false, files: ['a.ts'], filesTotal: 1 },
@@ -41,7 +43,7 @@ describe('the duplicate search (ORC-207)', () => {
     tracker.addIssue({ identifier: 'REL-3', title: 'Export CSV' });
     tracker.addIssue({ identifier: 'REL-8', title: 'Export CSV for invoices' });
     const found = await searchDuplicates(issue('x'), '/r', { forge, tracker });
-    expect(await notStarted(issue('x'), '/r', forge, found.prs)).toContain('https://github.test/pr/5');
+    expect(ownWork('REL-3', await forge.branches('/r', 'factory/rel-3-'), found.prs)).toContain('https://github.test/pr/5');
     expect(found.activeWork).toContain('https://github.test/pr/6');
     expect(found.activeWork).toContain('`b.ts`');
     expect(found.activeWork).toContain('REL-8');
@@ -52,6 +54,5 @@ describe('the duplicate search (ORC-207)', () => {
     const forge = new FakeForge();
     forge.offline = true;
     await expect(searchDuplicates(issue('x'), '/r', { forge, tracker: new FakeTracker() })).rejects.toThrow(/unreachable/);
-    await expect(notStarted(issue('x'), '/r', forge)).rejects.toThrow(/unreachable/);
   });
 });

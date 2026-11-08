@@ -5,7 +5,7 @@ import { evalCondition } from './conditions.js';
 import { deadLetterReason, deadLetterTried, heldMessage, isRefusedNotice, liftDeadLetterBlock, REPAIR_LABELS, repairedEvent } from './dead-letter.js';
 import type { AgentOutput } from './agent-output.js';
 import { blockFacts, type BlockFacts } from './block-comment.js';
-import { AGENT_QUESTION, CHECK_FINDINGS, INCOMPLETE, NO_ASSESSMENT, STOPPED, type BlockKind } from './block-cause.js';
+import { AGENT_QUESTION, CANNOT_START, CHECK_FINDINGS, INCOMPLETE, NO_ASSESSMENT, STOPPED, type BlockKind } from './block-cause.js';
 import type { Decision, Effect } from './decision.js';
 import { awaitsAgent, commandOf, forAgent, STOP_COMMAND } from './human-message.js';
 import { PRODUCT_NAME } from '../product.js';
@@ -141,7 +141,7 @@ function intakeEnd(out: Decision, at: { event: FactoryEvent; ticket: TicketState
     return waitFor(out, p.blockedBy, pendingOf({ job: next.name, input: next.input }));
   }
   if (!gaps.length) return success(out, at, job, p.runId);
-  const reason = `${INCOMPLETE} ${gaps.join(' ')}`;
+  const reason = `${findings.length ? CANNOT_START : INCOMPLETE} ${gaps.join(' ')}`;
   return block(out, at.workflow, {
     kind: 'pickup',
     reason,

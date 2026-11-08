@@ -27,11 +27,10 @@ export const STOPPED = 'Stopped on request';
 /** The reason of a question the agent asks during its run: the label of its cause in the Flow too. */
 export const AGENT_QUESTION = 'Question asked by the agent';
 
-/**
- * The head of the guard before In Progress refusing a ticket `intake` found incomplete (ORC-206), or, by its three checks,
- * a probable duplicate or out of scope (ORC-207): the ticket's to complete, or the human's to answer. The upcaster reads it.
- */
+/** The head of the guard before In Progress refusing a ticket `intake` found incomplete (ORC-206): the ticket's to complete. */
 export const INCOMPLETE = 'The ticket is not complete enough to start:';
+/** The head of the guard refusing a ticket for a probable duplicate or its scope (ORC-207): the human's to answer. */
+export const CANNOT_START = 'The ticket cannot start yet:';
 /** The question of a guard that refused a complete ticket for a duplicate or its scope (ORC-207): a human's answer lifts it. */
 export const CHECK_FINDINGS = 'Is this right? Answer here, or change the ticket and reply, and I will read it again with your answer.';
 /** The reason of an `intake` whose result carries no assessment (ORC-206): the ticket does not start. */

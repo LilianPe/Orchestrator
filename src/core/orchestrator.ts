@@ -52,8 +52,9 @@ import { NO_PLAN, planDecision } from './decision-plan.js';
 import { blockFacts, composeBlockComment, type BlockFacts, type BlockStatus } from './block-comment.js';
 import { blockedLabelChange, goesThroughFreeze, historyTaint, HUMAN_EVENTS, mayCheck, mayPublish, RECONCILE_MS, reconcileTicket, refusesDevWork, SENSITIVE_PATHS, sensitivePathsAtLaunch, stepOf, taintedKnowledge, waitingBody, waitingOn } from './engine.js';
 import { attemptLabels, packFingerprints } from './attempt-labels.js';
-import { formatReuse } from './intake-checks.js';
-import { notStarted, openBlockers, pickupFailures, searchDuplicates } from './pickup.js';
+import { formatReuse, ownWork } from './intake-checks.js';
+import { ownBranchPrefix } from './naming.js';
+import { openBlockers, pickupFailures, searchDuplicates } from './pickup.js';
 import { buildPrompt, formatFeedback, formatVerifyFailures, readConventions, withHumanInbox } from './prompt.js';
 import { carriedAtLaunch, forAgent } from './human-message.js';
 import { pendingOf, reduce, samePending } from './reduce.js';
@@ -2179,11 +2180,14 @@ export class Orchestrator {
       const intake = job.step === 'intake';
       const guarded = (intake || job.pickup) && !t.claudeSessionId;
       const checks = wf.tracker.pickup.checks;
-      const failures = guarded ? pickupFailures(checks, issue) : [];
-      // The duplicate search of intake (ORC-207), which `not_started` is part of when listed; a pickup job without intake keeps that check alone.
-      const search = guarded && intake ? await searchDuplicates(issue, project.repoPath, { forge, tracker }) : undefined;
-      const own = guarded && checks.includes('not_started') ? await notStarted(issue, project.repoPath, forge, search?.prs) : undefined;
-      if (own) failures.push(own);
+      // The duplicate search of intake (ORC-207), and the ticket's own branches for `not_started`, read together.
+      const [search, ownBranches] = guarded
+        ? await Promise.all([
+            intake ? searchDuplicates(issue, project.repoPath, { forge, tracker }) : undefined,
+            checks.includes('not_started') ? forge.branches(project.repoPath, ownBranchPrefix(issue.identifier)) : undefined,
+          ])
+        : [];
+      const failures = guarded ? pickupFailures(checks, issue, ownBranches && ownWork(issue.identifier, ownBranches, search?.prs ?? [])) : [];
       const blockers = guarded ? openBlockers(issue) : [];
       if (!intake && failures.length) {
         this.d.scheduler.release(key);
@@ -2345,8 +2349,8 @@ export class Orchestrator {
         conventions,
         input,
         activeWork,
-        // intake's leads to existing code (ORC-207), for the build alone.
-        reuse: job.step === 'build' && t.reuse?.length ? formatReuse(t.reuse) : undefined,
+        // intake's leads to existing code (ORC-207), for the dev work that follows it.
+        reuse: job.queue === 'dev' && job.step !== 'intake' && t.reuse?.length ? formatReuse(t.reuse) : undefined,
         reviewRounds: wf.limits.reviewRounds,
         resumedAfterCut: !!opts.relaunchOf && resume,
       };

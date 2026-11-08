@@ -571,28 +571,28 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
   }
 
   async unresolvedReviewComments(repoPath: string, prNumber: number): Promise<FeedbackItem[]> {
-    const { repo, gql } = await this.graphQl(repoPath);
+    const { owner, name, gql } = await this.graphQl(repoPath);
     // Every page of threads and of their comments (ORC-347).
-    return unresolvedReviewFeedback(gql, repo.owner, repo.name, prNumber);
+    return unresolvedReviewFeedback(gql, owner, name, prNumber);
   }
 
   async openPrs(repoPath: string): Promise<OpenPr[]> {
-    const { repo, gql } = await this.graphQl(repoPath);
-    return openPullRequests(gql, repo.owner, repo.name);
+    const { owner, name, gql } = await this.graphQl(repoPath);
+    return openPullRequests(gql, owner, name);
   }
 
   async branches(repoPath: string, prefix: string): Promise<ForgeBranch[]> {
-    const { repo, gql } = await this.graphQl(repoPath);
-    return repoBranches(gql, repo.owner, repo.name, prefix);
+    const { owner, name, gql } = await this.graphQl(repoPath);
+    return repoBranches(gql, owner, name, prefix);
   }
 
   async recentBranches(repoPath: string): Promise<ForgeBranch[]> {
-    const { repo, gql } = await this.graphQl(repoPath);
-    return recentRepoBranches(gql, repo.owner, repo.name);
+    const { owner, name, gql } = await this.graphQl(repoPath);
+    return recentRepoBranches(gql, owner, name);
   }
 
   /** GraphQL with the installation token, each answer checked before it is read (ORC-273). */
-  private async graphQl(repoPath: string): Promise<{ repo: GitHubRepoRef; gql: GraphQl }> {
+  private async graphQl(repoPath: string): Promise<{ owner: string; name: string; gql: GraphQl }> {
     const repo = await this.repo(repoPath);
     const token = await this.installationToken(repo);
     const gql: GraphQl = async <T>(query: string, variables: Record<string, unknown>, isData: (d: unknown) => d is T, what: string) => {
@@ -602,7 +602,7 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
       if (out.errors?.length) throw new Error(`GitHub GraphQL: ${out.errors.map((e) => e.message).join('; ')}`);
       return out.data;
     };
-    return { repo, gql };
+    return { owner: repo.owner, name: repo.name, gql };
   }
 
   /**

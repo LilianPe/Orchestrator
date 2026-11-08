@@ -1,3 +1,4 @@
+import { branchOf } from './active-work.js';
 import type { FeedbackItem } from '../../core/types.js';
 import type { RepoPermission, RepoPermissions } from '../roles/types.js';
 import type { CheckRunRequest, Forge, ForgeBranch, ForgeWriter, GitAccess, MergeResult, OpenPr, PrInfo, PrRequest } from './types.js';
@@ -62,7 +63,7 @@ export class FakeForge implements Forge, ForgeWriter, RepoPermissions {
 
   async branches(_repoPath: string, prefix: string): Promise<ForgeBranch[]> {
     this.answer();
-    return this.branchNames.filter((b) => b.startsWith(prefix)).map((name) => ({ name, url: `${this.repoUrl}/tree/${name}` }));
+    return this.branchNames.filter((b) => b.startsWith(prefix)).map((name) => branchOf(this.repoUrl, name));
   }
 
   /** The default branch, which `recentBranches` leaves out. */
@@ -71,7 +72,7 @@ export class FakeForge implements Forge, ForgeWriter, RepoPermissions {
   /** The branches but the default one, in the order a test set them: the most recent first. */
   async recentBranches(): Promise<ForgeBranch[]> {
     this.answer();
-    return this.branchNames.filter((b) => b !== this.defaultBranch).map((name) => ({ name, url: `${this.repoUrl}/tree/${name}` }));
+    return this.branchNames.filter((b) => b !== this.defaultBranch).map((name) => branchOf(this.repoUrl, name));
   }
 
   async ensurePr(_repoPath: string, req: PrRequest): Promise<{ number: number; url: string; deduplicated: boolean }> {

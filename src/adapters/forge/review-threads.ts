@@ -1,8 +1,7 @@
 import { formatFeedback } from '../../core/prompt.js';
 import type { FeedbackItem } from '../../core/types.js';
-import { allNodes, isConnection, isRecord, type Connection } from '../graphql-pages.js';
+import { allNodes, isConnection, isRecord, PAGE_INFO as PAGE, type Connection } from '../graphql-pages.js';
 
-const PAGE = 'pageInfo { hasNextPage endCursor }';
 const COMMENT = 'author { __typename login } body createdAt path line';
 
 /**

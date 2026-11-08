@@ -1,10 +1,8 @@
 import type { ForgeBranch, OpenPr } from '../adapters/forge/types.js';
 import type { SearchHit } from '../adapters/tracker/types.js';
 import type { AgentOutput } from './agent-output.js';
+import { ownBranchPrefix } from './naming.js';
 import type { ReuseLead } from './types.js';
-
-/** The prefix of the branches the factory makes for a ticket (`branchName`). */
-export const ownBranchPrefix = (identifier: string): string => `factory/${identifier.toLowerCase()}-`;
 
 /**
  * The work the ticket itself already has on the forge (ORC-207): a branch of its own, named by its open PR when it has one.
@@ -26,8 +24,8 @@ export interface ActiveWork {
 
 /** Characters of work in progress the intake prompt carries (ORC-207): past it, what is left out is counted. Proposal: settled with the prompt budget (ORC-254). */
 export const ACTIVE_WORK_MAX = 12000;
-/** Files listed of one PR. */
-const PR_FILES = 30;
+/** Files shown of one PR: as many as the forge reads of it (`PR_FILES`). */
+const PR_FILES_SHOWN = 30;
 
 /**
  * The work in progress elsewhere as intake reads it (ORC-207): the open PRs with the files they change, the most recently
@@ -44,31 +42,29 @@ export function formatActiveWork(identifier: string, work: ActiveWork): string {
   const tickets = work.tickets.filter((t) => t.identifier !== identifier);
   if (!prs.length && !branches.length && !tickets.length) return 'No open PR, no other branch, no close ticket.';
   const sections = [
-    { head: 'Open PRs:', lines: prs.map(prLine) },
-    { head: 'Close tickets in the tracker:', lines: tickets.map((t) => `- ${t.identifier} (${t.stateName}): ${t.title} ${t.url}`) },
-    { head: 'Recent branches without an open PR:', lines: branches.map((b) => `- ${b.name}`) },
+    { head: 'Open PRs:', noun: 'open PRs', lines: prs.map(prLine) },
+    { head: 'Close tickets in the tracker:', noun: 'close tickets', lines: tickets.map((t) => `- ${t.identifier} (${t.stateName}): ${t.title} ${t.url}`) },
+    { head: 'Recent branches without an open PR:', noun: 'branches', lines: branches.map((b) => `- ${b.name}`) },
   ];
   const out: string[] = [];
-  const left = [0, 0, 0];
   let used = 0;
-  sections.forEach((s, i) => {
-    if (!s.lines.length) return;
+  const cut = sections.map((s) => {
     const shown = s.lines.filter((line) => {
       if (used + line.length + 1 > ACTIVE_WORK_MAX) return false;
       used += line.length + 1;
       return true;
     });
-    left[i] = s.lines.length - shown.length;
     if (shown.length) out.push(s.head, ...shown);
+    return { noun: s.noun, left: s.lines.length - shown.length };
   });
-  if (left.some((n) => n > 0)) out.push(`Capped at ${ACTIVE_WORK_MAX} characters: ${left[0]} more open PRs, ${left[1]} more close tickets and ${left[2]} more branches not shown.`);
+  if (cut.some((c) => c.left > 0)) out.push(`Capped at ${ACTIVE_WORK_MAX} characters: ${cut.map((c) => `${c.left} more ${c.noun}`).join(', ')} not shown.`);
   return out.join('\n');
 }
 
 function prLine(p: OpenPr): string {
   const head = `- #${p.number} ${p.title} (${p.url}, ${p.fork ? 'from a fork, ' : ''}branch ${p.branch})`;
   if (!p.files) return `${head}: files not listed by the forge`;
-  const shown = p.files.slice(0, PR_FILES);
+  const shown = p.files.slice(0, PR_FILES_SHOWN);
   const files = shown.map((f) => `\`${f}\``).join(', ');
   const more = p.filesTotal > shown.length ? `, and ${p.filesTotal - shown.length} more files` : '';
   return `${head}: ${files || 'no file'}${more}`;

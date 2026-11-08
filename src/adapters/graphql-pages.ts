@@ -4,6 +4,9 @@ export interface Connection<N> {
   pageInfo: { hasNextPage: boolean; endCursor: string | null };
 }
 
+/** The page fields every connection `allNodes` reads asks for. */
+export const PAGE_INFO = 'pageInfo { hasNextPage endCursor }';
+
 /** Pages read from one connection, at most: a bound against a server that keeps answering a next page, not an API limit. */
 export const MAX_GRAPHQL_PAGES = 10;
 

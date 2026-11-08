@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ForgeBranch, OpenPr } from '../adapters/forge/types.js';
-import { ACTIVE_WORK_MAX, formatActiveWork, formatReuse, guardFindings, ownBranchPrefix, ownWork } from './intake-checks.js';
+import { ACTIVE_WORK_MAX, formatActiveWork, formatReuse, guardFindings, ownWork } from './intake-checks.js';
+import { branchName, ownBranchPrefix } from './naming.js';
 
 const branch = (name: string): ForgeBranch => ({ name, url: `https://github.com/acme/app/tree/${name}` });
 const pr = (number: number, branchName: string, files: string[] | null = ['src/a.ts'], extra: Partial<OpenPr> = {}): OpenPr => ({ number, url: `https://github.com/acme/app/pull/${number}`, title: `PR ${number}`, branch: branchName, fork: false, files, filesTotal: files?.length ?? 0, ...extra });
@@ -8,6 +9,7 @@ const pr = (number: number, branchName: string, files: string[] | null = ['src/a
 describe('ownWork: the not_started check, absorbed by the duplicate search (ORC-207)', () => {
   it("names the ticket's own branch, by its PR's link when it has an open one", () => {
     expect(ownBranchPrefix('REL-3')).toBe('factory/rel-3-');
+    expect(branchName('REL-3', 'Export CSV').startsWith(ownBranchPrefix('REL-3'))).toBe(true);
     expect(ownWork('REL-3', [branch('factory/rel-3-old')], [])).toBe(
       'This ticket already has work on the forge: https://github.com/acme/app/tree/factory/rel-3-old (branch factory/rel-3-old).',
     );
@@ -65,7 +67,7 @@ describe('formatActiveWork: what intake reads of the work in progress elsewhere 
     const prs = Array.from({ length: 400 }, (_, i) => pr(i + 1, `b${i}`, [`src/${'x'.repeat(40)}${i}.ts`]));
     const text = formatActiveWork('REL-3', { prs, branches: [], tickets: [] });
     expect(text.length).toBeLessThanOrEqual(ACTIVE_WORK_MAX + 200);
-    expect(text).toMatch(/Capped at \d+ characters: \d+ more open PRs, 0 more close tickets and 0 more branches not shown\./);
+    expect(text).toMatch(/Capped at \d+ characters: \d+ more open PRs, 0 more close tickets, 0 more branches not shown\./);
   });
 });
 

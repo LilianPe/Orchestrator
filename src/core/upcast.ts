@@ -100,6 +100,7 @@ const LEGACY_KINDS: readonly (readonly [Exclude<BlockKind, 'other'>, RegExp])[] 
   ['pickup', /^No repository known for the Linear team /],
   ['pickup', /^Repository to specify: /],
   ['pickup', /^The ticket is not complete enough to start:/],
+  ['pickup', /^The ticket cannot start yet:/],
   ['repo_config', /^Repository configuration to fix: /],
   ['dead_letter', /^Event (?<event>.+?) set aside \(/],
   ['pr_closed', /^PR #\d+ closed without merge$/],
