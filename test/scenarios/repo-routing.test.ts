@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { BLOCKED_LABEL } from '../../src/core/engine.js';
 import { reconcileOnce } from '../../src/adapters/tracker/linear/reconcile.js';
-import { blockCause } from '../../src/core/block-cause.js';
+import { causeOf } from '../../src/core/block-cause.js';
 import { unroutedReason } from '../../src/core/routing.js';
 import { newTicketState, type EventPayloads, type EventType, type FactoryEvent } from '../../src/core/types.js';
 import { createHarness } from '../helpers/harness.js';
@@ -168,7 +168,7 @@ describe('routed from the webhook, on either store', () => {
     await delegate('REL-1', 'as-1');
     const t = await h.store.getTicket('p', 'REL-1');
     expect(t).toMatchObject({ blocked: true, delegated: true, awaitingRepo: ['p', 'api'] });
-    expect(blockCause(t!.blockReason)).toBe('pickup');
+    expect(causeOf(t!.blockKind)).toBe('pickup');
     expect(h.tracker.activities('as-1')).toEqual([{ type: 'thought', body: 'Got it.' }]);
     expect(h.tracker.comments('REL-1')).toEqual(['Got it.', expect.stringContaining(unroutedReason(['p', 'api']))]);
     expect(h.tracker.plans('as-1')).toEqual([]);
@@ -223,7 +223,7 @@ describe('routed from the webhook, on either store', () => {
     await delegate('ZZZ-1', 'as-1');
     const t = await h.store.getTicket('p', 'ZZZ-1');
     expect(t).toMatchObject({ blocked: true, delegated: true, awaitingRepo: [] });
-    expect(blockCause(t!.blockReason)).toBe('pickup');
+    expect(causeOf(t!.blockKind)).toBe('pickup');
     expect(h.tracker.activities('as-1')).toEqual([{ type: 'thought', body: 'Got it.' }]);
     expect(h.tracker.comments('ZZZ-1')).toEqual(['Got it.', expect.stringContaining('ZZZ')]);
     expect(h.runner.requests).toEqual([]);

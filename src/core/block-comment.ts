@@ -2,7 +2,7 @@ import type { TicketState } from './types.js';
 
 /**
  * What a block says, in fields (ORC-196): `decide` writes them on the `block_comment` effect, so that a replay compares
- * facts and not a sentence. `reason` is also the ticket's `blockReason`, whose head gives the cause (`blockCause`).
+ * facts and not a sentence. `reason` is also the ticket's `blockReason`, shown only: the block's kind says its cause (ORC-345).
  */
 export interface BlockFacts {
   /** The step of `factory/default`, or the name of a job out of the preset. */

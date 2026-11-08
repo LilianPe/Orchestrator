@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { loadWorkflow } from '../config/load-workflow.js';
 import type { AgentOutput } from './agent-output.js';
 import { parseAgentOutput } from './agent-output.js';
-import { blockCause } from './block-cause.js';
+import { causeOf } from './block-cause.js';
 import { CLARIFY_EXPIRE_MS, CLARIFY_REMIND_MS, decide } from './engine.js';
 import { reduce } from './reduce.js';
 import { newTicketState, type EventPayloads, type EventType, type FactoryEvent, type TicketState } from './types.js';
@@ -93,7 +93,8 @@ describe('clarify (ORC-210)', () => {
     expect(out.effects).toContainEqual(expect.objectContaining({ kind: 'block_comment', block: expect.objectContaining({ step: 'clarify', question: expect.stringContaining(RATE.question) }) }));
     const t = after(asking(), e);
     expect(t).toMatchObject({ blocked: true, blockedJob: 'intake', clarify: null });
-    expect(blockCause(t.blockReason)).toBe('question');
+    expect(t.blockKind).toBe('question');
+    expect(causeOf(t.blockKind)).toBe('question');
   });
 
   it('a reply to the 72 h block relaunches intake, which reads the answer', () => {

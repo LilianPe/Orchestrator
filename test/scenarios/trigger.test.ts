@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { reconcileOnce, type ReconcileDeps } from '../../src/adapters/tracker/linear/reconcile.js';
-import { CUT_BOUND_REASON } from '../../src/core/engine.js';
 import { measureTicket } from '../../src/core/measures.js';
 import { CUT_RELAUNCHES } from '../../src/store/types.js';
 import { createHarness } from '../helpers/harness.js';
 import { linearIngest, signedDelegation, signedMention } from '../helpers/linear-webhook.js';
 import { testPreset } from '../helpers/test-preset.js';
+
+/** The head of the reason of the cut bound (ORC-220): only its sentence, the block's kind is `limit`. */
+const CUT_BOUND = /^Too many relaunches after a cut: /;
 
 const CLEAR = { identifier: 'REL-1', title: 'Export CSV', description: 'Exporter les audits en CSV depuis la liste des audits.' };
 
@@ -369,7 +371,7 @@ describe('the trigger (ORC-171)', () => {
       const written = h.tracker.plans('ls-1').length;
       await h.restart({ mode: 'brutal' });
       expect(h.runner.requests).toHaveLength(1);
-      expect((await h.ticket()).blockReason).toMatch(CUT_BOUND_REASON);
+      expect((await h.ticket()).blockReason).toMatch(CUT_BOUND);
       expect(h.tracker.plans('ls-1')).toHaveLength(written);
       expect(underWay(h)).toEqual(['Build']);
     });

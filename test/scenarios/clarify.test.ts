@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentOutput } from '../../src/core/agent-output.js';
-import { blockCause } from '../../src/core/block-cause.js';
+import { causeOf } from '../../src/core/block-cause.js';
 import { createHarness } from '../helpers/harness.js';
 
 /** A repository that makes delegation start with `intake` (ORC-206). */
@@ -58,7 +58,8 @@ describe('clarify, end to end (ORC-210)', () => {
     await h.advance(HOUR);
     const t = await h.ticket();
     expect(t).toMatchObject({ blocked: true, blockedJob: 'intake' });
-    expect(blockCause(t.blockReason)).toBe('question');
+    expect(t.blockKind).toBe('question');
+    expect(causeOf(t.blockKind)).toBe('question');
     expect(h.tracker.comments('REL-1').at(-1)).toContain(RATE.question);
     expect(h.tracker.calls.filter((c) => c.method === 'moveTo')).toEqual([]);
     expect(h.runner.requests).toHaveLength(1);

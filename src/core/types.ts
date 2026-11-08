@@ -1,5 +1,6 @@
 import type { AgentOutput, AttemptOutcome } from './agent-output.js';
 import type { Role } from './authz.js';
+import type { BlockKind } from './block-cause.js';
 import type { StoredEvent } from './upcast.js';
 import type { FrozenTests } from '../checks/freeze.js';
 import type { RedCause } from '../checks/red.js';
@@ -376,7 +377,11 @@ export type FactoryEvent<T extends EventType = EventType> = {
 /** State changes decided by `decide`, applied to the ticket by `reduce`. */
 export type DecidedEvent =
   /** `job`: the step a reply resumes (ORC-196); none when no job of the workflow stands for it, then the rule's runs. */
-  | { type: 'ticket.blocked'; reason: string; job?: string }
+  /**
+   * `kind`: what the block is, set by the code that builds it (ORC-345); the engine decides on it, `reason` is only shown.
+   * `eventId`: the event a `dead_letter` block sets aside, which its repair lifts.
+   */
+  | { type: 'ticket.blocked'; reason: string; kind: BlockKind; eventId?: string; job?: string }
   | { type: 'ticket.unblocked' }
   | {
       type: 'ticket.patched';
@@ -446,7 +451,12 @@ export interface TicketState {
   /** Linear sessions opened by a mention or a command on this ticket: replies there are questions, never feedback. */
   questionSessionIds: string[];
   blocked: boolean;
+  /** What a human reads of the block: shown, never decided on (ORC-345). */
   blockReason?: string;
+  /** What the block is (ORC-345): set with it, read by the engine and the Flow. A ticket blocked before it gets one from its reason (`upcastTicket`). */
+  blockKind?: BlockKind;
+  /** The event a `dead_letter` block sets aside: its repair lifts that block, not another one. */
+  blockedEvent?: string;
   /** The job a reply resumes while the ticket is blocked (ORC-196). Absent on a block of no job, and on versions frozen before it. */
   blockedJob?: string;
   claudeSessionId?: string;
@@ -550,22 +560,8 @@ export interface TicketState {
   workflowHash?: string;
 }
 
-/**
- * A ticket as a projection or a recorded decision may hold it, whatever factory version wrote it: before ORC-180, the
- * human inbox was `pendingFeedback`. Same items: only the name changes, and only in the ticket; no event carries it, so no
- * event changes version. What it holds is not looked at: a corrupt one stays corrupt, its decision dead-letters as before.
- */
-export function upcastTicket(stored: object): TicketState {
-  if (!('pendingFeedback' in stored)) return stored as TicketState;
-  const { pendingFeedback, ...rest } = stored;
-  return { ...rest, humanInbox: pendingFeedback } as TicketState;
-}
-
-/** Fills fields added after a row was first persisted. */
-export function normalizeTicket(stored: TicketState): TicketState {
-  const t = upcastTicket(stored);
-  return { ...t, delegated: t.delegated ?? false, questionSessionIds: t.questionSessionIds ?? [], ciFixAttempts: t.ciFixAttempts ?? 0 };
-}
+/** What lifting a block clears, the whole block with it: its reason, its kind and their data. */
+export const UNBLOCKED = { blocked: false, blockReason: undefined, blockKind: undefined, blockedEvent: undefined, blockedJob: undefined } as const satisfies Partial<TicketState>;
 
 export function newTicketState(
   projectId: string,

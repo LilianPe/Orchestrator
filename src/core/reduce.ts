@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from 'node:util';
 import { liftDeadLetterBlock, repairedEvent } from './dead-letter.js';
-import { CREATES_TICKET, newTicketState, type InternalEvent, type FactoryEvent, type FeedbackItem, type IssueSnapshot, type PendingJob, type TicketState } from './types.js';
+import { CREATES_TICKET, newTicketState, UNBLOCKED, type InternalEvent, type FactoryEvent, type FeedbackItem, type IssueSnapshot, type PendingJob, type TicketState } from './types.js';
 
 const MAX_QUESTION_SESSIONS = 50;
 
@@ -67,7 +67,7 @@ function external(t: TicketState, e: FactoryEvent): TicketState {
       // Cancelled (ORC-170): nothing waits for a human any longer, and the replies kept for a next run are dropped.
       // Any human move, a cancel or an unmapped status included, ends the status the factory put the ticket in.
       // A cancel also ends a wait for the ticket's repo: delegated and unblocked, it would hold this repo (ORC-291).
-      if (e.payload.cancelled) return { ...t, ...(t.awaitingRepo ? { delegated: false, awaitingRepo: null } : {}), blocked: false, blockReason: undefined, blockedJob: undefined, humanInbox: [], recordedStatus: undefined };
+      if (e.payload.cancelled) return { ...t, ...(t.awaitingRepo ? { delegated: false, awaitingRepo: null } : {}), ...UNBLOCKED, humanInbox: [], recordedStatus: undefined };
       if (isOwnMoveEcho(t, e)) return t;
       const to = e.payload.to;
       if (!to) return { ...t, recordedStatus: undefined };
@@ -104,9 +104,9 @@ function external(t: TicketState, e: FactoryEvent): TicketState {
 function internal(t: TicketState, e: InternalEvent): TicketState {
   switch (e.type) {
     case 'ticket.blocked':
-      return { ...t, blocked: true, blockReason: e.reason, blockedJob: e.job };
+      return { ...t, blocked: true, blockReason: e.reason, blockKind: e.kind, blockedEvent: e.eventId, blockedJob: e.job };
     case 'ticket.unblocked':
-      return { ...t, blocked: false, blockReason: undefined, blockedJob: undefined };
+      return { ...t, ...UNBLOCKED };
     case 'ticket.patched':
       return { ...t, ...e.patch };
     case 'feedback.appended':

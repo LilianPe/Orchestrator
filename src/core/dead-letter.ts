@@ -1,6 +1,5 @@
 import { upcast, type StoredEvent } from './upcast.js';
-import { BEFORE_ORC_331 } from './legacy-messages.js';
-import { TRUSTED, type EventPayloads, type FactoryEvent, type TicketState } from './types.js';
+import { TRUSTED, UNBLOCKED, type EventPayloads, type FactoryEvent, type TicketState } from './types.js';
 
 /**
  * The dead-letter of ORC-175: an inbox row whose decision throws (`decide` or `reduce`, a poison
@@ -37,9 +36,6 @@ export interface DeadLetter {
   resolvedBy?: string;
 }
 
-/** Prefix of the block reason of a dead-lettered event: its repair lifts that block, not another one. */
-const reasonPrefix = (eventId: string) => `Event ${eventId} set aside`;
-
 /**
  * The block reason of `dead_letter.added`, naming the event: `Raison` of its standard comment (ORC-196). A row out of
  * attempts (`attempts`, ORC-320) may have failed for a store or a Linear down: its decision never came, none failed.
@@ -47,7 +43,7 @@ const reasonPrefix = (eventId: string) => `Event ${eventId} set aside`;
  */
 export function deadLetterReason(p: EventPayloads['dead_letter.added']): string {
   const what = p.attempts ? `${p.attempts} attempts without success` : 'its decision failed';
-  return `${reasonPrefix(p.eventId)} (${p.eventType}): ${what} (${p.error}).`;
+  return `Event ${p.eventId} set aside (${p.eventType}): ${what} (${p.error}).`;
 }
 
 /** What was tried, in the block's comment: `failures` counts the times it was set aside, not the attempts behind each. */
@@ -55,13 +51,12 @@ export function deadLetterTried(p: EventPayloads['dead_letter.added']): string {
   return p.attempts ? `${p.attempts} attempts to process this event.` : `${p.failures} decision(s) of this event.`;
 }
 
-function blockedByDeadLetter(t: TicketState, eventId: string): boolean {
-  return t.blocked && [reasonPrefix(eventId), BEFORE_ORC_331.deadLetter(eventId)].some((prefix) => t.blockReason?.startsWith(`${prefix} (`));
-}
+/** Blocked by that dead-lettered event (ORC-345: by its kind and event, not its reason): its repair lifts that block, not another one. */
+const blockedByDeadLetter = (t: TicketState, eventId: string): boolean => t.blocked && t.blockKind === 'dead_letter' && t.blockedEvent === eventId;
 
 /** The ticket with the block of a dead-lettered event lifted, or as it is when blocked by anything else (`decide` and `reduce` of a repair). */
 export function liftDeadLetterBlock<T extends TicketState | undefined>(t: T, eventId: string): T {
-  return t && blockedByDeadLetter(t, eventId) ? { ...t, blocked: false, blockReason: undefined } : t;
+  return t && blockedByDeadLetter(t, eventId) ? { ...t, ...UNBLOCKED } : t;
 }
 
 /** The event a dead-lettered row is about: a failed repair is the event it repairs, not a new dead letter. */

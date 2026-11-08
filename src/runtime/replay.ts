@@ -1,7 +1,7 @@
 import type { Workflow } from '../config/workflow-schema.js';
 import { NO_PLAN, planDecision } from '../core/decision-plan.js';
-import { SCHEMA_VERSION, upcastTicket, type FactoryEvent } from '../core/types.js';
-import { upcast, upcastTimer, type StoredTimer } from '../core/upcast.js';
+import { SCHEMA_VERSION, type FactoryEvent } from '../core/types.js';
+import { upcast, upcastTicket, upcastTimer, type StoredTimer } from '../core/upcast.js';
 import type { DecisionPlan, DecisionRecord, JournalEntry, Store } from '../store/types.js';
 import { canonical } from './workflow-version.js';
 
