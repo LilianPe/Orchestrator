@@ -228,6 +228,12 @@ describe('decide — the regrouping ends (ORC-180)', () => {
     expect(out.trace.join()).toMatch(/held/);
   });
 
+  it('a blocked ticket holds them by its block, not by a pending job left with it (ORC-339)', () => {
+    const out = decide(ticket({ humanInbox: inbox, blocked: true, blockReason: 'x', blockedJob: 'dev', pendingJob: { job: 'review' } }), timer, workflow);
+    expect(out.effects).toEqual([]);
+    expect(out.trace.join()).toMatch(/held by the block/);
+  });
+
   it('with no work in flight, the agent is resumed on them', () => {
     expect(decide(ticket({ logical: 'human_review', humanInbox: inbox }), timer, workflow).effects).toEqual([expect.objectContaining({ kind: 'start_run', job: 'dev-feedback', input: 'feedback' })]);
   });

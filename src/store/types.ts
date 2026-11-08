@@ -109,6 +109,8 @@ export interface QueueItem {
    * effect: a launch cut before the item left the queue is not launched again when handed out.
    */
   startMark?: string;
+  /** Its starts that failed on a passing error so far (ORC-339): past a bound, the ticket is blocked. */
+  failedStarts?: number;
 }
 
 /** A workflow definition and its hash (`workflowHash`): what a ticket's run is frozen on (ORC-149). */
@@ -359,6 +361,12 @@ export function timerEvent(t: TimerRecord, at: number): FactoryEvent<'timer.fire
 }
 
 /** A queue item handed out under a lease (ORC-150): it stays in the queue until its start is recorded. */
+/** A queued item put back after a start that failed (ORC-339): counted, and handed out again only from `notBefore` on. */
+export interface QueueRetry {
+  failedStarts: number;
+  notBefore: number;
+}
+
 export interface QueueClaim {
   id: string;
   lease: string;
@@ -497,10 +505,18 @@ export interface Store {
   renewQueued(claim: QueueClaim, leaseMs: number): Promise<boolean>;
   /** The item's start is recorded (or the item is dropped): out of the queue for good. */
   finishQueued(claim: QueueClaim): Promise<boolean>;
-  /** The item goes back in line, at its place (no free slot, paused, over budget). */
-  releaseQueued(claim: QueueClaim): Promise<boolean>;
+  /**
+   * The item goes back in line, at its place (no free slot, paused, over budget). `retry`: after a start that failed
+   * (ORC-339), its failures so far, kept on the item, and the time before which no drain hands it out again.
+   */
+  releaseQueued(claim: QueueClaim, retry?: QueueRetry): Promise<boolean>;
   /** Items waiting in line: not handed out, or handed out under a lease that expired (their holder died). */
   listQueue(): Promise<QueueItem[]>;
+  /**
+   * A ticket's items in a queue, handed-out ones included (ORC-339): an item whose start a crash cut under a live
+   * lease is still the queue's to start, not a start to make again.
+   */
+  queuedItems(projectId: string, ticketId: string): Promise<QueueItem[]>;
   /**
    * Takes the ticket's items out of the queue, of every queue or of `queue` only, handed-out ones
    * included (a stop): their claim then settles nothing.

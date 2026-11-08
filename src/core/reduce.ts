@@ -1,5 +1,6 @@
+import { isDeepStrictEqual } from 'node:util';
 import { liftDeadLetterBlock, repairedEvent } from './dead-letter.js';
-import { CREATES_TICKET, newTicketState, type InternalEvent, type FactoryEvent, type FeedbackItem, type IssueSnapshot, type TicketState } from './types.js';
+import { CREATES_TICKET, newTicketState, type InternalEvent, type FactoryEvent, type FeedbackItem, type IssueSnapshot, type PendingJob, type TicketState } from './types.js';
 
 const MAX_QUESTION_SESSIONS = 50;
 
@@ -14,6 +15,31 @@ function withinBound(inbox: FeedbackItem[]): FeedbackItem[] {
   let excess = inbox.filter(answered).length - MAX_ANSWERED_MESSAGES;
   return excess <= 0 ? inbox : inbox.filter((i) => !answered(i) || excess-- <= 0);
 }
+
+/**
+ * What a start is, in the shape of a pending job (ORC-339): its job and all it starts it with. Read off anything that
+ * carries those fields (a queue item, a start's options): an absent field and an empty one are the same start.
+ */
+export function pendingOf(start: PendingJob): PendingJob {
+  return {
+    job: start.job,
+    ...(start.input ? { input: start.input } : {}),
+    ...(start.inputText !== undefined ? { inputText: start.inputText } : {}),
+    ...(start.resume ? { resume: true } : {}),
+    ...(start.sensitivePaths?.length ? { sensitivePaths: [...start.sensitivePaths] } : {}),
+    ...(start.relaunchOf ? { relaunchOf: start.relaunchOf } : {}),
+  };
+}
+
+/** The same pending job, every field of it (ORC-339): a store's JSON may keep the keys in another order. */
+export const samePending = (a: PendingJob | undefined, b: PendingJob | undefined): boolean =>
+  !!a && !!b && isDeepStrictEqual(pendingOf(a), pendingOf(b));
+
+/** The start of the active run goes with it, when it had one: a ticket that never held one keeps its shape. */
+const ended = (t: TicketState, active: boolean): Partial<TicketState> => (active && t.activeStart ? { activeStart: undefined } : {});
+
+/** What tells a message of the inbox from another (ORC-339): its author, its moment, its source and its words. */
+const itemKey = (i: FeedbackItem): string => JSON.stringify([i.authorId ?? i.author, i.at, i.source, i.body]);
 
 /** A human takes a delivered ticket back: it is no longer merged, and dev work may start again (I8 b ends). */
 function reopened(t: TicketState): TicketState {
@@ -52,10 +78,11 @@ function external(t: TicketState, e: FactoryEvent): TicketState {
         costUsd: t.costUsd + e.payload.costUsd,
         activeRunId: active ? undefined : t.activeRunId,
         activeJob: active ? undefined : t.activeJob,
+        ...ended(t, active),
       };
     }
     case 'run.lost':
-      return t.activeRunId === e.payload.runId ? { ...t, activeRunId: undefined, activeJob: undefined } : t;
+      return t.activeRunId === e.payload.runId ? { ...t, activeRunId: undefined, activeJob: undefined, ...ended(t, true) } : t;
     case 'verify.passed':
     case 'verify.failed':
     case 'verify.errored':
@@ -91,20 +118,37 @@ function internal(t: TicketState, e: InternalEvent): TicketState {
     case 'pending.set':
       return { ...t, pendingJob: e.job };
     case 'pending.cleared':
-      return { ...t, pendingJob: undefined };
+      return e.job && !samePending(t.pendingJob, e.job) ? { ...t } : { ...t, pendingJob: undefined };
     case 'workspace.prepared':
       return { ...t, worktreePath: e.path, port: e.port, branch: e.branch ?? t.branch };
     case 'workspace.released':
       return { ...t, worktreePath: undefined, port: undefined };
     case 'run.started': {
       if (e.queue !== 'dev') return { ...t };
+      // Another launch took the ticket first (a settle whose lease went to another worker, ORC-339): one dev run at a
+      // time, this one does not take it. The launch sees it and lets go.
+      if (t.activeRunId && t.activeRunId !== e.runId) return { ...t };
       const claudeSessionId = e.ticketSession === false ? t.claudeSessionId : (t.claudeSessionId ?? e.claudeSessionId);
-      return { ...t, activeRunId: e.runId, activeJob: e.job, claudeSessionId };
+      // The run that starts the pending job takes it off the ticket in the same write, whoever launched it (settle,
+      // the queue, a decision): never both, never neither (ORC-339). The same job with another input, or the relaunch of
+      // a lost attempt, is not it.
+      const startsPending = !!e.starts && samePending(t.pendingJob, e.starts);
+      return {
+        ...t,
+        activeRunId: e.runId,
+        activeJob: e.job,
+        claudeSessionId,
+        ...(e.starts ? { activeStart: pendingOf(e.starts) } : {}),
+        ...(startsPending ? { pendingJob: undefined } : {}),
+      };
     }
-    case 'feedback.consumed':
-      return { ...t, humanInbox: [] };
+    case 'feedback.consumed': {
+      if (!e.items) return { ...t, humanInbox: [] };
+      const read = new Set(e.items.map(itemKey));
+      return { ...t, humanInbox: t.humanInbox.filter((i) => !read.has(itemKey(i))) };
+    }
     case 'run.cleared':
-      return { ...t, activeRunId: undefined, activeJob: undefined };
+      return { ...t, activeRunId: undefined, activeJob: undefined, ...ended(t, true) };
   }
 }
 
