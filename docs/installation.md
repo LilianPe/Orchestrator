@@ -15,7 +15,7 @@ This page covers installing Relais on a machine (dev workstation or server witho
 
 On the services side: a Linear workspace you are an admin of (to create the OAuth application, see [`linear.md`](linear.md)) and a GitHub repository cloned locally.
 
-The exact Claude Code version is not pinned by Relais. It must accept the options used by the runner: `--output-format stream-json`, `--verbose`, `--session-id`, `--resume`, `--model`, `--plugin-dir`, `--settings`, `--setting-sources`, `--max-budget-usd`, `--permission-mode plan` and `--tools` (the AI review's `Read,Grep,Glob`, ORC-183). The acceptance run ([`acceptance.md`](acceptance.md), "Points to check") lists what to check on the installed version.
+The exact Claude Code version is not pinned by Relais. It must accept the options used by the runner: `--output-format stream-json`, `--verbose`, `--session-id`, `--resume`, `--model`, `--plugin-dir`, `--settings`, `--setting-sources`, `--effort`, `--strict-mcp-config`, `--mcp-config`, `--permission-mode plan` and `--tools` (the AI review's `Read,Grep,Glob`, ORC-183). The acceptance run ([`acceptance.md`](acceptance.md), "Points to check") lists what to check on the installed version.
 
 ## Installing Relais
 

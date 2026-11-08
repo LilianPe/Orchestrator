@@ -2,9 +2,9 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { prText } from '../adapters/publisher/types.js';
 import { FakeSandboxProvider } from '../adapters/sandbox/fake.js';
-import { parseAgentOutput, type AgentOutput } from '../core/agent-output.js';
+import { parseAgentOutput, parseSubmittedResult, type AgentOutput } from '../core/agent-output.js';
+import { describePr } from './describe.js';
 import { OUTPUT_LIMITS } from './output-limits.js';
 import { composeResult, NO_RESULT, OutputPolicy, OutputRefused, sandboxSecretScan, type Capture } from './output-policy.js';
 
@@ -132,7 +132,7 @@ describe('OutputPolicy (ORC-214)', () => {
 
     it('a PR title longer than GitHub takes; the one the factory composes of a long ticket title is clipped, and passes', async () => {
       await expect(leaks.pr({ title: 'x'.repeat(OUTPUT_LIMITS.prTitle + 1), body: 'b' })).rejects.toThrow(OutputRefused);
-      const text = prText({ ticketId: 'REL-1', title: `Export\n${'word '.repeat(80)}` });
+      const text = describePr(output(), { ticketId: 'REL-1', title: `Export\n${'word '.repeat(80)}`, sha: 'abc123' });
       expect(text.title).toHaveLength(OUTPUT_LIMITS.prTitle);
       await expect(leaks.pr(text)).resolves.toEqual(text);
     });
@@ -142,16 +142,16 @@ describe('OutputPolicy (ORC-214)', () => {
       // Refused at `submit_result`, the agent shortens it within its run: the policy's refusal is the last word, not the first.
       expect(parseAgentOutput(output({ summary: 'x'.repeat(OUTPUT_LIMITS.summary + 1) }))).toMatchObject({ ok: false, error: expect.stringContaining('summary') });
       expect(parseAgentOutput(output({ risks: Array.from({ length: OUTPUT_LIMITS.items + 1 }, () => 'r') }))).toMatchObject({ ok: false });
-      // Each field under its cap, the comment they make over the comment's.
+      // Each field under its cap, the PR description they make over its cap (ORC-195): refused at submission.
       const full = output({ summary: 's '.repeat(OUTPUT_LIMITS.summary / 2), why: 'w '.repeat(OUTPUT_LIMITS.field / 2), risks: Array.from({ length: 10 }, () => 'r '.repeat(OUTPUT_LIMITS.item / 2 - 5)) });
-      expect(parseAgentOutput(full)).toMatchObject({ ok: false, error: expect.stringContaining('together') });
+      expect(parseSubmittedResult(full)).toMatchObject({ ok: false, error: expect.stringContaining('together') });
     });
   });
 
   describe("criterion 4: a published comment is composed from the structured output, not copied from the agent's text", () => {
-    it('the end of a build: its fields, in the factory’s order and words', () => {
-      const body = composeResult(output({ summary: 'Export added.', risks: ['large files'], review_hints: [{ file: 'src/a.ts', reason: 'the parser' }] }), 'summary');
-      expect(body).toBe('Export added.\n\n**Risks**\n- large files\n\n**To review**\n- `src/a.ts`: the parser');
+    it('the end of a build: its fields, then the tests added and the work of the recap (ORC-195), in the factory’s order and words', () => {
+      const body = composeResult(output({ summary: 'Export added.', risks: ['large files'], review_hints: [{ file: 'src/a.ts', reason: 'the parser' }], tests_added: ['src/a.test.ts'] }), 'summary', [{ turns: 3, tokens: null, durationMs: 61_000 }]);
+      expect(body).toBe('Export added.\n\n**Risks**\n- large files\n\n**To review**\n- `src/a.ts`: the parser\n\n**Tests added**\n- `src/a.test.ts`\n\n**Work**: 1 attempt, 3 turns, tokens not reported, 1 min 1 s.');
     });
 
     it('a reply is its summary, and a run that returned no result has nothing of its last message posted', () => {

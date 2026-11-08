@@ -57,7 +57,7 @@ describe.skipIf(!enabled)('claude -p loads nothing of the repository (isolation 
       pluginDir: pack,
       settingsPath: join(pack, 'settings.json'),
       readOnly: false,
-      limits: { turns: 2, durationMs: 120_000, usd: 1 },
+      limits: { turns: 2, durationMs: 120_000 },
       env: {},
     });
     // No tool: the model cannot read CLAUDE.md as a file, only be handed it (ORC-128, calls 11 and 13).

@@ -4,7 +4,7 @@ import { rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { ReviewLinesRefused, type Forge, type ForgeWriter, type MergeResult } from '../adapters/forge/types.js';
 import { prEventId } from '../adapters/forge/github-webhook.js';
-import { prText, PublishRefused, type Publisher } from '../adapters/publisher/types.js';
+import { PublishRefused, type Publisher } from '../adapters/publisher/types.js';
 import type { RoleResolver } from '../adapters/roles/types.js';
 import type { RunHandle, RunResult, Runner, StagnationBounds } from '../adapters/runner/types.js';
 import {
@@ -22,7 +22,7 @@ import { ActivityRelay } from '../adapters/tracker/activity-relay.js';
 import { IssueNotFoundError, labelEchoKey, stateEchoKey, type ActivityInput, type Tracker, type TrackerIssue } from '../adapters/tracker/types.js';
 import type { Workspace, WorkspaceManager } from '../adapters/workspace/types.js';
 import { NO_REPO_VARIABLES, type RepoVariables } from '../config/repo-variables.js';
-import { parseRepoConfig, RepoConfigError, type RepoConfig, type RepoConfigRead } from '../config/repo-config.js';
+import { parseRepoConfig, RepoConfigError, ticketTokenCap, type RepoConfig, type RepoConfigRead } from '../config/repo-config.js';
 import type { JobSpec, Workflow } from '../config/workflow-schema.js';
 import type { EffectRetry } from '../runtime/outbox.js';
 import { attemptsFor, backoff, isTransient, TRANSIENT_WINDOW_MS, type RetryPolicy } from '../runtime/transient.js';
@@ -43,6 +43,7 @@ import {
   type WorkflowVersion,
 } from '../store/types.js';
 import { agentOutputKey, attemptOutcome, parseAgentOutput, type AgentOutput } from './agent-output.js';
+import { describePr, verifySummary } from '../publish/describe.js';
 import { composeResult, OutputPolicy, OutputRefused, PolicedTracker } from '../publish/output-policy.js';
 import type { EventBus } from './bus.js';
 import type { Clock } from './clock.js';
@@ -51,7 +52,9 @@ import { repairedEvent } from './dead-letter.js';
 import { NO_PLAN, planDecision } from './decision-plan.js';
 import { blockFacts, composeBlockComment, type BlockFacts, type BlockStatus } from './block-comment.js';
 import { blockedLabelChange, goesThroughFreeze, historyTaint, HUMAN_EVENTS, mayCheck, mayPublish, RECONCILE_MS, reconcileTicket, refusesDevWork, SENSITIVE_PATHS, sensitivePathsAtLaunch, stepOf, taintedKnowledge, waitingBody, waitingOn } from './engine.js';
+import { codeRunTokens } from './measures.js';
 import { attemptLabels, packFingerprints } from './attempt-labels.js';
+import { runMeasure } from './measures.js';
 import { openBlockers, pickupFailures } from './pickup.js';
 import { buildPrompt, formatFeedback, formatVerifyFailures, readConventions, withHumanInbox } from './prompt.js';
 import { carriedAtLaunch, forAgent } from './human-message.js';
@@ -74,7 +77,6 @@ import {
   type TicketState,
   type VerifyFailure,
   TRUSTED,
-  spentTokens,
 } from './types.js';
 import { runSealedSetup } from './sealed-setup.js';
 import { checkBranchPaths, runCleanVerify, untrustedCheck, type CleanVerifier, type UntrustedMark } from './clean-verify.js';
@@ -86,7 +88,6 @@ import { checkRed, type RedDeps, type RedResult } from '../checks/red.js';
 import { checkFrozen, FREEZE_CHECK, freezeTests, newTestsOnly, REFREEZE, type FrozenTests } from '../checks/freeze.js';
 import { isTestFile } from '../checks/test-files.js';
 import { ANTI_CHEAT_CHECK, ANTI_CHEAT_OK } from '../checks/anti-cheat.js';
-import { mdCode } from '../checks/markdown.js';
 import { parseStatus } from '../adapters/workspace/git-workspaces.js';
 import { agentPolicy, type EgressPolicy } from '../network/levels.js';
 import { REPO_CONFIG_REFUSED, TICKET_TOKENS_REACHED, type BlockKind } from './block-cause.js';
@@ -130,8 +131,8 @@ async function storedOutput(store: Store, runId: string): Promise<AgentOutput | 
 }
 
 /** What only the runner knows of an attempt's end (ORC-136), kept on its row: recover() sends the same result if the process dies before it does. */
-function endFacts({ stagnation, infra, usageLimit }: Pick<RunResult, 'stagnation' | 'infra' | 'usageLimit'>): Pick<RunResult, 'stagnation' | 'infra' | 'usageLimit'> {
-  return { ...(stagnation ? { stagnation } : {}), ...(infra ? { infra } : {}), ...(usageLimit ? { usageLimit } : {}) };
+function endFacts({ stagnation, infra, usageLimit, overBudget }: Pick<RunResult, 'stagnation' | 'infra' | 'usageLimit' | 'overBudget'>): Pick<RunResult, 'stagnation' | 'infra' | 'usageLimit' | 'overBudget'> {
+  return { ...(stagnation ? { stagnation } : {}), ...(infra ? { infra } : {}), ...(usageLimit ? { usageLimit } : {}), ...(overBudget ? { overBudget } : {}) };
 }
 
 /** A usage limit whose reset the CLI did not tell: tried again after this long (ORC-340). ponytail: a fixed probe, hourly. */
@@ -143,12 +144,6 @@ const USAGE_LIMITED_UNTIL = 'usage-limited-until';
 const usageHoldKey = (account: string): string => `${USAGE_LIMITED_UNTIL}:${account}`;
 /** The shortest wait on a usage limit: a reset already past (or announced late) is not a reason to hit the limit again at once. */
 const USAGE_MIN_WAIT_MS = 5 * 60_000;
-
-/** Tokens the ticket's code runs spent (`dev` queue, cache reads left out); undefined when none reported any. The budget's figure and the block comment's (ORC-340). */
-export function codeRunTokens(runs: readonly RunRecord[]): number | undefined {
-  const reported = runs.filter((r) => r.queue === 'dev' && r.tokens !== undefined);
-  return reported.length ? reported.reduce((n, r) => n + spentTokens(r.tokens!), 0) : undefined;
-}
 
 /** A launch refused because the ticket spent its token budget (ORC-340): blocked with this message as its reason. */
 class TicketBudgetError extends Error {}
@@ -237,7 +232,6 @@ export interface OrchestratorDeps {
   repoConfig?: (project: ProjectRuntime, read?: RepoConfigRead) => Promise<RepoConfig>;
   /** Where a project's base branch is fetched (ORC-151): required with `sandboxes`. */
   originUrl?: (project: ProjectRuntime) => Promise<string>;
-  dailyBudgetUsd?: number;
   /** `budgets.per_ticket_tokens` of factory.yml (ORC-340): a ticket past it is blocked before its next run. The repository's own cap lowers it. */
   perTicketTokens?: number;
   /** `budgets.on_usage_limit` of factory.yml (ORC-340): `wait`, a run stopped by the usage limit resumes at its reset. Absent: it blocks, as any failure. */
@@ -355,11 +349,6 @@ function roleOf(job: JobSpec, ticketSession: boolean): SessionRole | undefined {
 /** Why the forge refused a check run, when it says so: the hint a 403 needs, nothing for any other failure. */
 function checksPermission(err: { status?: number }): string {
   return err.status === 403 ? ': the GitHub App lacks the Checks write permission (docs/github.md)' : '';
-}
-
-function startOfUtcDay(ts: number): number {
-  const d = new Date(ts);
-  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
 }
 
 /** The inbox id of an attempt's result, and its key among the results kept (`deliver`). */
@@ -1183,18 +1172,6 @@ export class Orchestrator {
     return (await this.usageLimitedUntil()) !== undefined;
   }
 
-  /**
-   * ponytail: checked before the launch, on the costs of the runs ended so far: the runs in flight count once they end. The day can
-   * overshoot its budget by what the runs running at once spend: the code runs (`concurrency`) and the question runs (`question_sessions`),
-   * each up to its cap (`limits.per_run.usd`) when Claude Code reports its cost. A run cut before that report is priced by estimate
-   * (`estimateCostUsd`), at the dearest list price when it died before its init line named its model: that can exceed its cap.
-   * A lock or transaction around the read would not help, the cost of a live run is unknown until its end; reserve each run's cap if it must be exact.
-   */
-  private async overBudget(): Promise<boolean> {
-    const budget = this.d.dailyBudgetUsd;
-    return budget !== undefined && (await this.d.store.costSince(startOfUtcDay(this.d.clock.now()))) >= budget;
-  }
-
   private log(level: 'info' | 'warn' | 'error', message: string): void {
     this.d.bus.publish({ kind: 'log', level, message, at: this.d.clock.now() });
   }
@@ -1468,7 +1445,7 @@ export class Orchestrator {
     const leaseMs = this.d.effectLeaseMs ?? LEASE_MS;
     const n = (await this.d.store.listQueue()).filter((q) => q.queue === queue).length;
     for (let i = 0; i < n; i++) {
-      if ((await this.isPaused()) || (await this.usageLimited()) || (await this.overBudget()) || this.d.scheduler.free(queue) - this.admitting[queue] <= 0) return;
+      if ((await this.isPaused()) || (await this.usageLimited()) || this.d.scheduler.free(queue) - this.admitting[queue] <= 0) return;
       const claim = await this.d.scheduler.next(queue, leaseMs);
       if (!claim) return;
       const item = claim.item;
@@ -1637,8 +1614,10 @@ export class Orchestrator {
         const run = await store.getRun(c.runId);
         if (!run) return;
         const session = run.linearSessionId ?? (await this.sessionFor(t));
-        // Composed from what the run submitted, never from its last text (ORC-214): a reply is its summary.
-        return this.activityOnce(session, { type: 'response', body: composeResult(c.output, c.style) }, key);
+        // Composed from what the run submitted, never from its last text (ORC-214): a reply is its summary, a build's end
+        // its recap with the work of the ticket's attempts (ORC-195).
+        const runs = c.style === 'summary' && c.output ? (await store.ticketRuns(t.projectId, ticketId)).map(runMeasure) : [];
+        return this.activityOnce(session, { type: 'response', body: composeResult(c.output, c.style, runs) }, key);
       }
       case 'review':
         return this.review(project, t, c, key);
@@ -1820,7 +1799,11 @@ export class Orchestrator {
         // A rebase may replace what the factory published last on the branch, and nothing else (ORC-146).
         const [mark, rewrites] = await Promise.all([this.untrustedMark(project, t), c.rewrite ? this.lastPublished(project.id, t.ticketId) : undefined]);
         const untrusted = mark ? { untrusted: mark } : {};
-        const text = await this.policy.pr(prText(t));
+        const facts = { ticketId: t.ticketId, title: t.title, sha: c.sha, ...(c.commands ? { commands: c.commands } : {}), ...(t.visualProof ? { visualProof: t.visualProof } : {}) };
+        const described = describePr(c.output, facts);
+        // An open PR keeps its description (`ensurePr` finds it): a fixed body, the same for each fix (one scan), so a text never shown cannot hold one back.
+        const open = t.prNumber !== undefined && t.prState === 'OPEN';
+        const text = await this.policy.pr(open ? { title: described.title, body: `Ticket: ${t.ticketId}` } : described);
         const pr = await publisher.publish({ projectId: project.id, repoPath: project.repoPath, ticketId: t.ticketId, runId: c.runId, worktree: t.worktreePath, branch: t.branch, sha: c.sha, ...untrusted, ...(rewrites ? { rewrites } : {}), ...text });
         await this.accept({ ...base, id: prEventId(t.ticketId, pr.prNumber, 'opened'), type: 'pr.opened', at: this.d.clock.now(), payload: { number: pr.prNumber, url: pr.url, branch: t.branch } });
         await this.publishChecks(project, t, c);
@@ -1857,14 +1840,8 @@ export class Orchestrator {
     if (!writer) return;
     const { sha, commands } = c;
     const frozen = Object.keys(t.frozenTests?.files ?? {}).length;
-    const verify =
-      commands === undefined
-        ? ({ conclusion: 'success', summary: `${sha.slice(0, 12)} already found green by an earlier verification.` } as const)
-        : commands.length
-          ? ({ conclusion: 'success', summary: `Green on ${sha.slice(0, 12)}, in a fresh clone, without network:\n${commands.map((cmd) => `- ${mdCode(cmd)}`).join('\n')}` } as const)
-          : ({ conclusion: 'neutral', summary: 'No verification command declared: nothing ran.' } as const);
     const checks = [
-      { name: VERIFY_CHECK, ...verify },
+      { name: VERIFY_CHECK, ...verifySummary(sha, commands) },
       { name: FREEZE_CHECK, conclusion: frozen ? 'success' : 'neutral', summary: frozen ? `${frozen} frozen file(s) intact.` : 'No frozen test for this ticket.' },
       { name: ANTI_CHEAT_CHECK, conclusion: 'success', summary: ANTI_CHEAT_OK },
     ] as const;
@@ -2054,11 +2031,6 @@ export class Orchestrator {
       return 'deferred';
     }
     if (this.stopping || (await this.isPaused()) || (await this.usageLimited())) return requeue();
-    if (await this.overBudget()) {
-      const queued = await requeue();
-      await this.noteBudget(project, ticketId);
-      return queued;
-    }
     const key = `${ticketId}:${job.queue}`;
     // A start from a decision leaves alone the slots a drain promised to the items it dequeued.
     const promised = admitted ? 0 : this.admitting[job.queue];
@@ -2095,7 +2067,7 @@ export class Orchestrator {
     }
     // A file the repository has to fix is not a breakdown of the factory: the Flow shows it as such (`repo_config`).
     const [kind, reason]: [BlockKind, string] =
-      err instanceof RepoConfigError ? ['repo_config', `${REPO_CONFIG_REFUSED}${err.message}`] : err instanceof TicketBudgetError ? ['limit', err.message] : ['infra', `Launch error: ${(err as Error).message}`];
+      err instanceof RepoConfigError ? ['repo_config', `${REPO_CONFIG_REFUSED}${err.message}`] : err instanceof TicketBudgetError ? ['budget', err.message] : ['infra', `Launch error: ${(err as Error).message}`];
     fresh = await this.apply(fresh, ...events, blockedOn(project.workflow, kind, reason, job.name));
     // The ticket is blocked: a failed notice must not fail the effect, whose retry would start again.
     try {
@@ -2132,17 +2104,6 @@ export class Orchestrator {
     if (cap === undefined) return undefined;
     if (spent >= cap) throw new TicketBudgetError(`${TICKET_TOKENS_REACHED}${spent} tokens spent of ${cap} by its code runs (budgets.per_ticket_tokens). Raise the cap (factory.yml counts once the daemon restarts, the repository's .factory/config.yml at the next launch) or split the ticket, then reply here.`);
     return cap - spent;
-  }
-
-  private async noteBudget(project: ProjectRuntime, ticketId: string): Promise<void> {
-    const day = new Date(this.d.clock.now()).toISOString().slice(0, 10);
-    const key = `budget:${day}:${project.id}:${ticketId}`;
-    if (await this.d.store.getMeta(key)) return;
-    await this.d.store.setMeta(key, '1');
-    await this.d.tracker.comment(
-      ticketId,
-      `Daily budget of ${PRODUCT_NAME} reached: this ticket stays queued until tomorrow (or until the cap is raised).`,
-    );
   }
 
   /**
@@ -2286,9 +2247,9 @@ export class Orchestrator {
       const config = await this.repoConfigOf(project, { fetch: !ws.fresh && job.workspace !== 'trunk-readonly' && job.workspace !== 'published' });
       const setup = config.setup ? [config.setup] : wf.workspace.setup;
       setUp ||= !setup.length;
-      const caps = [this.d.perTicketTokens, config.budgets?.perTicketTokens].filter((c) => c !== undefined);
-      if (job.queue === 'dev' && caps.length) spent ??= await state(this.codeTokensSpent(project.id, ticketId));
-      const tokensLeft = spent === undefined || !caps.length ? undefined : this.tokensLeft(spent, Math.min(...caps));
+      const cap = ticketTokenCap(this.d.perTicketTokens, config);
+      if (job.queue === 'dev' && cap !== undefined) spent ??= await state(this.codeTokensSpent(project.id, ticketId));
+      const tokensLeft = spent === undefined ? undefined : this.tokensLeft(spent, cap);
       // The ticket's budget left caps the attempt too: past it, a `limit` blocks the ticket. Kept on the run, for a reattach (ORC-340).
       const limits = tokensLeft === undefined ? job.limits : { ...job.limits, tokens: Math.min(job.limits.tokens ?? Infinity, tokensLeft) };
       t = await state(this.ticket(project.id, ticketId));
@@ -2698,6 +2659,7 @@ export class Orchestrator {
         ...(run.pickup ? { pickup: run.pickup } : {}),
         ...(run.blockedBy ? { blockedBy: run.blockedBy } : {}),
         ...(usageLimit ? { usageLimit } : {}),
+        ...(result.overBudget ? { overBudget: result.overBudget } : {}),
       },
     };
   }

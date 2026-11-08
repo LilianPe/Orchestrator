@@ -12,7 +12,7 @@ states:
 limits:
   parallel_sessions: 3
   question_sessions: 2
-  per_run: { turns: 150, duration: 90m, usd: 5 }
+  per_run: { turns: 150, duration: 90m }
 workspace:
   setup: []
   ports: { base: 4200 }
@@ -139,7 +139,7 @@ jobs:
     session: new
     skill: "factory:ask"
     input: thread
-    limits: { turns: 30, duration: 5m, usd: 0.5 }
+    limits: { turns: 30, duration: 5m }
     on_success: { post: reply }
   learn:
     queue: questions
@@ -147,7 +147,7 @@ jobs:
     workspace: knowledge
     session: new
     skill: "factory:learn"
-    limits: { turns: 40, duration: 10m, usd: 0.5 }
+    limits: { turns: 40, duration: 10m }
     on_success: {}
   remember:
     extends: learn

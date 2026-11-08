@@ -5,7 +5,7 @@ import { parseCondition } from '../core/conditions.js';
 import { parseDuration } from '../core/duration.js';
 import { RENAMED_V1, type EventType, type LogicalState } from '../core/types.js';
 import { factoryDefault } from '../presets/factory-default.js';
-import { compilePreset, type Effort, type Preset, type Step } from '../presets/preset.js';
+import { compilePreset, isAgentStep, type Effort, type Preset, type Step } from '../presets/preset.js';
 import {
   rawWorkflowSchema,
   type JobSpec,
@@ -90,7 +90,7 @@ export interface StepSettings {
 
 const agentStep = (name: string): Extract<Step, { maxTurns: number }> | undefined => {
   const step = preset.steps.find((s) => s.id === name);
-  return step && 'maxTurns' in step ? step : undefined;
+  return step && isAgentStep(step) ? step : undefined;
 };
 
 /**
@@ -124,11 +124,10 @@ function checkStepSettings({ effort, budgets }: StepSettings): void {
   }
 }
 
-function limits(raw: { turns?: number; duration?: string | number; usd?: number } | undefined, base: RunLimits): RunLimits {
+function limits(raw: { turns?: number; duration?: string | number } | undefined, base: RunLimits): RunLimits {
   return {
     turns: raw?.turns ?? base.turns,
     durationMs: raw?.duration !== undefined ? parseDuration(raw.duration) : base.durationMs,
-    usd: raw?.usd ?? base.usd,
   };
 }
 
@@ -185,7 +184,7 @@ export function loadWorkflow(opts: { packDir: string; projectFile?: string | und
 
   const settings = opts.settings ?? {};
   checkStepSettings(settings);
-  const perRun = limits(raw.limits?.per_run, { turns: 150, durationMs: 90 * 60_000, usd: 5 });
+  const perRun = limits(raw.limits?.per_run, { turns: 150, durationMs: 90 * 60_000 });
   const rawJobs = raw.jobs ?? {};
   const jobs: Record<string, JobSpec> = {};
   for (const name of Object.keys(rawJobs)) jobs[name] = buildJob(name, resolveJob(name, rawJobs), perRun, settings);

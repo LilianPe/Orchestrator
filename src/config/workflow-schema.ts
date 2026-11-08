@@ -23,7 +23,8 @@ export const rawRuleSchema = z
   })
   .strict();
 
-const rawLimits = z.object({ turns: z.number().int().positive(), duration, usd: z.number().positive() }).partial();
+// No `usd` (ORC-216): a budget counts tokens and turns, `budgets` of factory.yml.
+const rawLimits = z.object({ turns: z.number().int().positive(), duration }).partial();
 
 export const rawJobSchema = z
   .object({
@@ -105,7 +106,6 @@ export type PickupCheck = 'has_description' | 'not_started' | 'has_acceptance_cr
 export interface RunLimits {
   turns: number;
   durationMs: number;
-  usd: number;
   /** Tokens of the attempt (`budgets.per_step_tokens`, ORC-136), cache reads left out: past it, a cap. Absent: no cap, the values are to calibrate (ORC-216). */
   tokens?: number;
 }

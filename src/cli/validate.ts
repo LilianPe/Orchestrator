@@ -1,25 +1,26 @@
 import { existsSync, lstatSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { parseRepoConfig, REPO_CONFIG_DIR, REPO_CONFIG_PATH, RepoConfigError } from '../config/repo-config.js';
+import { FactoryYmlError, type FactoryYml } from '../config/factory-yml.js';
+import { parseRepoConfig, REPO_CONFIG_DIR, REPO_CONFIG_PATH, RepoConfigError, ticketTokenCap, type RepoConfig } from '../config/repo-config.js';
+import { checkBudgets } from '../presets/budget.js';
+import { factoryDefault } from '../presets/factory-default.js';
 
 const FILE = REPO_CONFIG_PATH;
 /** A spelling the factory never reads: validating around it would pass a file nobody applies. */
 const MISSPELT = '.factory/config.yaml';
 
 /**
- * `factory validate [repo]` (ORC-209): checks the repository's `.factory/config.yml` against the socle. Exit code
- * 1 when the file takes from the socle, is malformed or unreadable, one line per violation; 0 otherwise.
+ * `factory validate [repo]` (ORC-209): checks the repository's `.factory/config.yml` against the socle, then the worst
+ * case of the preset against the ticket's budget (ORC-216), with `factory.yml`'s budgets (`factoryYml`, read when asked).
+ * Exit code 1 when the file takes from the socle, is malformed or unreadable, or when a budget is unset or exceeded, one
+ * line per violation; 0 otherwise.
  */
-export function runValidateCommand(opts: { repoPath: string; out: (line: string) => void }): number {
+export function runValidateCommand(opts: { repoPath: string; out: (line: string) => void; factoryYml: () => Pick<FactoryYml, 'budgets'> | undefined }): number {
   if (opts.repoPath.startsWith('-')) {
     opts.out('Usage: factory validate [repo] (no options)');
     return 1;
   }
-  const refuse = (violations: string[]): number => {
-    opts.out(`${FILE} refused:`);
-    for (const v of violations) opts.out(`- ${v}`);
-    return 1;
-  };
+  const refuse = (violations: string[]): number => list(opts.out, `${FILE} refused:`, violations);
   if (existsSync(join(opts.repoPath, MISSPELT))) return refuse([`${MISSPELT}: rename it to ${FILE}, the only name the factory reads`]);
   // As the daemon reads it on the default branch (`makeRepoConfig`): through a link, git sees no file, and the launch refuses it.
   // `lstat`, not `existsSync`, which follows a link: a dangling one would read as no file at all.
@@ -33,26 +34,53 @@ export function runValidateCommand(opts: { repoPath: string; out: (line: string)
   } catch (err) {
     return refuse([`unreadable: ${(err as Error).message}`]);
   }
+  let config: RepoConfig;
   if (!existsSync(path)) {
     opts.out(`no ${FILE}: the factory/default baseline applies as is.`);
-    return 0;
+    config = parseRepoConfig(undefined);
+  } else {
+    let text: string;
+    try {
+      text = readFileSync(path, 'utf8');
+    } catch (err) {
+      return refuse([`unreadable: ${(err as Error).message}`]);
+    }
+    try {
+      config = parseRepoConfig(text);
+    } catch (err) {
+      if (!(err instanceof RepoConfigError)) throw err;
+      return refuse(err.violations);
+    }
+    const warnings = config.sensitivePathWarnings ?? [];
+    opts.out(`${FILE} valid: it only adds checks or prohibitions to the baseline.`);
+    // ORC-338: kept out of the check, and a branch that took untrusted content is refused until they are fixed.
+    if (warnings.length) opts.out(`Warning, ignored entries (a branch that took untrusted content is refused until they are fixed):`);
+    for (const w of warnings) opts.out(`- ${w}`);
   }
-  let text: string;
+  return validateBudgets(config, opts);
+}
+
+/** A refusal: its head, then one line per violation. Exit code 1. */
+function list(out: (line: string) => void, head: string, violations: string[]): number {
+  out(head);
+  for (const v of violations) out(`- ${v}`);
+  return 1;
+}
+
+/** The invariant « budget caps » (ORC-216), on factory.yml's budgets and the repository's cap, which only lowers the ticket's. */
+function validateBudgets(config: RepoConfig, opts: { out: (line: string) => void; factoryYml: () => Pick<FactoryYml, 'budgets'> | undefined }): number {
+  let budgets: FactoryYml['budgets'];
   try {
-    text = readFileSync(path, 'utf8');
+    budgets = opts.factoryYml()?.budgets;
   } catch (err) {
-    return refuse([`unreadable: ${(err as Error).message}`]);
+    // A file it cannot read (EACCES, EISDIR) is refused as unreadable, as the repository's own file is.
+    return list(opts.out, 'factory.yml refused:', err instanceof FactoryYmlError ? err.violations : [`unreadable: ${(err as Error).message}`]);
   }
-  let warnings: string[];
-  try {
-    warnings = parseRepoConfig(text).sensitivePathWarnings ?? [];
-  } catch (err) {
-    if (!(err instanceof RepoConfigError)) throw err;
-    return refuse(err.violations);
-  }
-  opts.out(`${FILE} valid: it only adds checks or prohibitions to the baseline.`);
-  // ORC-338: kept out of the check, and a branch that took untrusted content is refused until they are fixed.
-  if (warnings.length) opts.out(`Warning, ignored entries (a branch that took untrusted content is refused until they are fixed):`);
-  for (const w of warnings) opts.out(`- ${w}`);
+  const perTicketTokens = ticketTokenCap(budgets?.perTicketTokens, config);
+  const caps = { ...budgets, ...(perTicketTokens !== undefined ? { perTicketTokens } : {}) };
+  // The preset's structure is compiled at load (`loadWorkflow`): only its budgets are left to check.
+  const { violations, worst } = checkBudgets(factoryDefault, caps);
+  if (violations.length) return list(opts.out, `Budgets of ${factoryDefault.name} refused:`, violations);
+  opts.out(`Worst case of ${factoryDefault.name}: ${worst!.tokens} tokens and ${worst!.turns} turns per ticket, within budgets.per_ticket_tokens ${perTicketTokens}.`);
   return 0;
 }

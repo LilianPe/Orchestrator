@@ -5,7 +5,7 @@ import type { AttemptLabels } from '../core/attempt-labels.js';
 import type { DeadLetter, RepairAction } from '../core/dead-letter.js';
 import type { OutboxEffect } from '../core/decision.js';
 import type { ReviewFinding } from '../core/review.js';
-import { TRUSTED, type Blocker, type EffectResultPayload, type InputKind, type TimerFired, type QueueName, type FactoryEvent, type RunOutcome, type Stagnation, type TicketState, type TokenUsage } from '../core/types.js';
+import { TRUSTED, type Blocker, type EffectResultPayload, type InputKind, type TimerFired, type QueueName, type FactoryEvent, type OverBudget, type RunOutcome, type Stagnation, type TicketState, type TokenUsage } from '../core/types.js';
 import type { StoredEvent } from '../core/upcast.js';
 import { factoryDefault } from '../presets/factory-default.js';
 
@@ -73,6 +73,8 @@ export interface RunRecord {
   limits?: RunLimits;
   /** The subscription's usage limit stopped the attempt (ORC-340). */
   usageLimit?: { resetAt?: number };
+  /** The cap of its budget that stopped the attempt (ORC-216): recover() sends it again with its result. */
+  overBudget?: OverBudget;
   /** Renewed by the heartbeat while the attempt lives (ORC-220, `renewRun`); absent on older records. */
   leaseUntil?: number;
   /**
