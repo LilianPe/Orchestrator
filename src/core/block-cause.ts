@@ -1,9 +1,22 @@
 import { PRODUCT_NAME } from '../product.js';
 import { BEFORE_ORC_331 } from './legacy-messages.js';
 
-/** Why a ticket waits for a human, in the order the Flux shows the causes (ORC-297). */
+/** Why a ticket waits for a human, in the order the Flow shows the causes (ORC-297). */
 export const BLOCK_CAUSES = ['question', 'contested', 'red', 'infra', 'limit', 'loop', 'failed', 'pickup', 'repo_config', 'dead_letter', 'pr_closed', 'stopped', 'other'] as const;
 export type BlockCause = (typeof BLOCK_CAUSES)[number];
+
+/** The reason of a stop: the label of its cause in the Flow too. */
+export const STOPPED = 'Stopped on request';
+/** The reason of a question the agent asks during its run: the label of its cause in the Flow too. */
+export const AGENT_QUESTION = 'Question asked by the agent';
+
+/** The reasons that say no more than their cause, before ORC-331 too: the Flow does not repeat them under it (ORC-332). */
+const CAUSE_ONLY: Partial<Record<BlockCause, readonly string[]>> = {
+  stopped: [STOPPED, BEFORE_ORC_331.stopped],
+  question: [AGENT_QUESTION, BEFORE_ORC_331.question],
+};
+
+export const onlyRestatesCause = (cause: BlockCause, reason: string): boolean => CAUSE_ONLY[cause]?.includes(reason) ?? false;
 
 /** The head of a launch refused on the repository's `.factory/config.yml` (ORC-209 C): the repository's to fix. */
 export const REPO_CONFIG_REFUSED = 'Repository configuration to fix: ';

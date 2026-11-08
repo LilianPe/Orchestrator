@@ -158,8 +158,8 @@ Written by `relais init` (application credentials) then by the OAuth connection 
 |---|---|---|
 | `clientId`, `clientSecret` | entered during `relais init` | OAuth and token refresh. |
 | `webhookSecret` | entered during `relais init` (required) | Verifies the HMAC signature of Linear webhooks. Empty or absent: all webhooks are refused (401). |
-| `accessToken`, `refreshToken`, `expiresAt` | « Connecter Linear » | Application token, refreshed automatically. |
-| `appUserId`, `organizationId` | « Connecter Linear » | The agent's identity in Linear (used to list the tickets delegated to it). |
+| `accessToken`, `refreshToken`, `expiresAt` | « Connect Linear » | Application token, refreshed automatically. |
+| `appUserId`, `organizationId` | « Connect Linear » | The agent's identity in Linear (used to list the tickets delegated to it). |
 
 Rerunning `relais init` with the **same** client ID keeps the tokens; with a different one, Linear must be reconnected.
 
@@ -191,7 +191,7 @@ read_guard: { max_lines: 350 }
 | Section | Effect today |
 | -- | -- |
 | `github` | **Applied**: its keys replace those of `github` in `config.yaml`; a key it does not declare (`installation_id`, `webhook_secret`) stays the one from `config.yaml`. |
-| `linear` | **Applied**: `app_client_id`, `client_secret` and `webhook_secret` replace those in `secrets.json`. The OAuth tokens stay in `secrets.json`, written by « Connecter Linear ». |
+| `linear` | **Applied**: `app_client_id`, `client_secret` and `webhook_secret` replace those in `secrets.json`. The OAuth tokens stay in `secrets.json`, written by « Connect Linear ». |
 | `claude` | **`accounts` and `active` applied** (ORC-211): the active account's token is the runner's only credential. **`effort` applied** (ORC-136): `per_step` replaces a preset step's effort, `default` is used for jobs outside the preset (`ask`, `learn`). The rest of account selection comes with ORC-215. |
 | `concurrency` | **Applied** (ORC-203): capacity of the `dev` queue, instead of the workflow's `limits.parallel_sessions`. The `questions` queue keeps `question_sessions`. |
 | `budgets` | **`max_turns` and `per_step_tokens` applied** (ORC-136), per step: `max_turns` can only lower the step's turns, `per_step_tokens` is a per-attempt cap, with no default value. **`per_ticket_tokens` applied** (ORC-340): the tokens of the ticket's code runs (the `dev` queue; questions such as `ask` and `learn` do not count; cache reads left out). Once spent, the next code run is refused before any workspace is prepared, and the ticket is blocked with `Token budget of the ticket reached: <spent> tokens spent of <cap> by its code runs (budgets.per_ticket_tokens).`. A run never gets more than what is left, and keeps that cap if the daemon restarts under it. The repository's `budgets.per_ticket_tokens` can only lower it. **`on_usage_limit: wait` applied** (ORC-340): a code run that did not succeed because the subscription's usage limit stopped it (a rejected `rate_limit_event` the stream did not go on after, or the result `Claude AI usage limit reached|<reset>`) neither blocks the ticket nor counts as an attempt. Its step resumes on the ticket's session at the announced reset (an hour later when none was announced), only if the ticket is still where it was cut: still delegated, unblocked, in the same state, with no run started since. Without the key, such a run blocks the ticket like any failure. The worst case of `factory validate` comes with ORC-216. |

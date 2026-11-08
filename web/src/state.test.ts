@@ -14,14 +14,14 @@ describe('reducer', () => {
     expect(s.selectedRun).toBe('r1');
   });
 
-  it('keeps the Flux with the time it was received, its durations go on from there (ORC-297)', () => {
+  it('keeps the Flow with the time it was received, its durations go on from there (ORC-297)', () => {
     const flow: FlowView = { needsYou: { blocked: [], humanReview: [], gates: [] }, working: [], queued: [], done: [], others: [] };
     const s = reducer(initialState, { type: 'flow', flow, at: 42 });
     expect(s.flow).toBe(flow);
     expect(s.flowAt).toBe(42);
   });
 
-  it('says when the Flux could not be read, keeps the last one, and forgets it at the next read (ORC-297)', () => {
+  it('says when the Flow could not be read, keeps the last one, and forgets it at the next read (ORC-297)', () => {
     const flow: FlowView = { needsYou: { blocked: [], humanReview: [], gates: [] }, working: [], queued: [], done: [], others: [] };
     let s = reducer(initialState, { type: 'flow', flow, at: 42 });
     s = reducer(s, { type: 'flowFailed' });
@@ -31,7 +31,7 @@ describe('reducer', () => {
     expect(s.flowFailed).toBe(false);
   });
 
-  it('marks the Flux stale on a ticket update: the page reads it again (ORC-297)', () => {
+  it('marks the Flow stale on a ticket update: the page reads it again (ORC-297)', () => {
     let s = reducer(initialState, { type: 'snapshot', snapshot });
     const stale = s.flowStale;
     s = reducer(s, { type: 'bus', message: { kind: 'event', event: { id: 'e1', type: 'status.changed', at: 5, projectId: 'p', ticketId: 'REL-1', payload: {} } } });

@@ -44,7 +44,7 @@ relais init
 The wizard is described in [`cli.md`](cli.md#relais-init) and creating the Linear application in [`linear.md`](linear.md). Then:
 
 ```bash
-relais up                 # http://localhost:4100, then « Connecter Linear »
+relais up                 # http://localhost:4100, then « Connect Linear »
 ```
 
 To explore the UI without Linear or Claude: `relais up --fake-runner` (runs are simulated and cost nothing).

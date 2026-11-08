@@ -110,7 +110,7 @@ On the server, with the user's rootless engine running:
    ```
 
 4. `docker compose up -d`.
-5. Open `https://usine.exemple.fr` (password `FACTORY_UI_PASSWORD`), click **Connecter Linear**.
+5. Open `https://usine.exemple.fr` (password `FACTORY_UI_PASSWORD`), click **Connect Linear**.
 
 `factoryd` refuses to start on an engine that is not rootless: holding its socket would give root on the host.
 

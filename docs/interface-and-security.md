@@ -6,11 +6,11 @@
 
 What it shows, live:
 
-- **Header**: occupied slots (`dev`, `questions`), queue length, today's cost and budget, « en direct » (live) indicator; **Connecter Linear** buttons (as long as Linear is not connected) and **Pause / Reprendre**.
+- **Header**: « Slots » (occupied `dev` slots out of the total), « Questions » (occupied `questions` slots), « Queue » (queue length), « Today's cost » with the budget, the « live » indicator; the **Connect Linear** button (as long as Linear is not connected) and **Pause / Resume**.
 - **Flow** (ORC-297), read from `GET /api/flow` on opening, on every ticket change and every 10 s:
   - **Needs you**: what is waiting for a human. Blocked tickets, grouped by cause (agent question, contested ticket, unverified red, infrastructure failure, cap, loop, failed run, pickup refused, event set aside, PR closed without merge, stop, other cause), each with its reason; PRs in Human Review; pending gates (`ready`, for a workflow that still declares it; the spec gate will come with ORC-212). Oldest first, by the ticket's last activity. A PR the agent is still working on, or whose run is waiting for a slot, is not there; a question asked to the agent leaves it there. A blocked ticket whose run is still running appears in both places.
   - **Working**: every run in progress and every verification in progress, with its step (the run's job), its duration and the ticket's tokens; **Stop** button on a ticket's active run. Clicking an identifier opens its run. Queued tickets are listed below.
-  - **Done**: finished tickets whose last activity is less than 7 days old, 20 at most, then the other unfinished tickets, collapsed (**Autres tickets suivis**).
+  - **Done**: finished tickets whose last activity is less than 7 days old, 20 at most, then the other unfinished tickets, collapsed (**Other tracked tickets**).
 - **Live session**: the output of the selected run (text, tool calls), received live since the page was opened. A run's full transcript remains available via the API (`/api/runs/<id>/transcript`) and in `<RELAIS_HOME>/transcripts/`.
 - **Log**: the daemon's latest messages and the events received.
 
@@ -20,7 +20,7 @@ Interface development: `npm run dev:web` starts Vite on port 5173 with a proxy f
 
 **The Flow's tokens** are ORC-235's measurement: the sum of the ticket's finished attempts. A run only reports its usage when it ends: the one in progress is not included yet, which the page states below the table. `≥` indicates finished attempts without a measurement; `—` that none has one, with the cost in dollars if it exists, until ORC-216; `?` that the ticket's measurements could not be read (the error is in the log). If reading the Flow fails, a banner says so and the durations stop. The displayed number adds up input, output, cache read and cache write; the breakdown is shown on hover.
 
-**The cause of a block** is read from its reason (`src/core/block-cause.ts`), from the sentence opening the factory writes. An unknown reason falls into « Autre cause », displayed as is. A ticket blocked before ORC-331 keeps its French reason, which the same table still reads (`src/core/legacy-messages.ts`). A new block reason is added to that table and to its test.
+**The cause of a block** is read from its reason (`src/core/block-cause.ts`), from the sentence opening the factory writes. An unknown reason falls into « Other cause », displayed as is. A reason that says no more than its cause is not repeated: « Stopped on request » and « Question asked by the agent » are at once the reasons the engine writes and the labels of their causes, one constant each (`STOPPED`, `AGENT_QUESTION`), and their French forms from before ORC-331 are not repeated either (`onlyRestatesCause`). A ticket blocked before ORC-331 keeps its French reason, which the same table still reads (`src/core/legacy-messages.ts`). A new block reason is added to that table and to its test.
 
 ## What the server exposes
 
