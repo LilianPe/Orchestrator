@@ -103,7 +103,11 @@ function entropy(s: string): number {
   return [...counts.values()].reduce((h, n) => h - (n / s.length) * Math.log2(n / s.length), 0);
 }
 
-function blob(s: string): string | undefined {
+/** A line break between two long runs of the encoders' charset: how `base64` (76 columns) and `xxd -p` (60) wrap a blob, joined before it is measured. */
+const WRAP = /(?<=[A-Za-z0-9+/_=-]{16})\r?\n(?=[A-Za-z0-9+/_=-]{16})/g;
+
+function blob(text: string): string | undefined {
+  const s = text.replace(WRAP, '');
   if (HEX.test(s)) return 'a hexadecimal blob';
   for (const [run] of s.matchAll(BASE64)) if (entropy(run) >= BLOB_ENTROPY) return 'a base64 blob';
   return undefined;
@@ -116,8 +120,8 @@ const zodRefusals = (where: string, error: z.ZodError): Refusal[] =>
     return { rule: 'schema', detail: `${at}: ${i.message}` };
   });
 
-/** Every string of a value, for the blob and secret checks: an activity's fields, a PR's title and body. */
-const strings = (v: Record<string, unknown>): string[] => Object.values(v).filter((x): x is string => typeof x === 'string');
+/** The texts of an activity, for the blob and secret checks: every string field but its `type`, which the schema closes. */
+const texts = (a: ActivityInput): string[] => Object.entries(a).flatMap(([k, v]) => (k !== 'type' && typeof v === 'string' ? [v] : []));
 
 /**
  * The comment of a run's end, composed by the factory from what the agent submitted (ORC-289, ORC-214), never from its last
@@ -167,13 +171,18 @@ export class OutputPolicy {
   checkRelay(a: ActivityInput): Refusal[] {
     const shape = activitySchema.safeParse(a);
     if (!shape.success) return zodRefusals('relay', shape.error);
-    return strings(a as unknown as Record<string, unknown>).flatMap((s) => this.check(s, 'relay', OUTPUT_LIMITS.relay));
+    return texts(a).flatMap((s) => this.check(s, 'relay', OUTPUT_LIMITS.relay));
   }
 
   /** Rejects `OutputRefused` with what `text` breaks, gitleaks included. A scanner that cannot run rejects with its own error. */
-  async vet(s: string, where = 'text', max: number = OUTPUT_LIMITS.text): Promise<void> {
-    const refusals = this.check(s, where, max);
-    if (!refusals.length) refusals.push(...(await this.secrets(s, where)));
+  vet(s: string, where = 'text', max: number = OUTPUT_LIMITS.text): Promise<void> {
+    return this.vetAll([{ where, text: s, max }]);
+  }
+
+  /** The texts of one published item together: each checked on its own, then one gitleaks scan of them all, one sandbox per item. */
+  private async vetAll(parts: readonly { where: string; text: string; max?: number }[]): Promise<void> {
+    const refusals = parts.flatMap((p) => this.check(p.text, p.where, p.max));
+    if (!refusals.length) refusals.push(...(await this.secrets(parts.map((p) => p.text).join('\n'), parts.map((p) => p.where).join(', '))));
     if (refusals.length) throw new OutputRefused(refusals);
   }
 
@@ -187,7 +196,7 @@ export class OutputPolicy {
     const notice = await this.refused(async () => {
       const shape = activitySchema.safeParse(a);
       if (!shape.success) throw new OutputRefused(zodRefusals('activity', shape.error));
-      for (const s of strings(a as unknown as Record<string, unknown>)) await this.vet(s, 'activity');
+      await this.vetAll(texts(a).map((text) => ({ where: 'activity', text })));
     });
     if (notice === undefined) return a;
     return a.type === 'action' ? { type: 'action', action: 'Withheld', parameter: notice, ...(a.ephemeral ? { ephemeral: true } : {}) } : { type: a.type, body: notice, ...(a.ephemeral ? { ephemeral: true } : {}) };
@@ -197,8 +206,10 @@ export class OutputPolicy {
   async pr(t: { title: string; body: string }): Promise<{ title: string; body: string }> {
     const shape = prSchema.safeParse(t);
     if (!shape.success) throw new OutputRefused(zodRefusals('pr', shape.error));
-    await this.vet(t.title, 'pr.title', OUTPUT_LIMITS.prTitle);
-    await this.vet(t.body, 'pr.body');
+    await this.vetAll([
+      { where: 'pr.title', text: t.title, max: OUTPUT_LIMITS.prTitle },
+      { where: 'pr.body', text: t.body },
+    ]);
     return t;
   }
 

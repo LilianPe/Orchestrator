@@ -2382,7 +2382,8 @@ export class Orchestrator {
     let result: RunResult | undefined;
     try {
       // Composed by the relay of the factory's words alone (ORC-214): checked without gitleaks, which would cost a sandbox per activity.
-      const step = this.d.projects.find((p) => p.id === run.projectId)?.workflow.jobs[run.job]?.step ?? run.job;
+      const frozen = await this.runtimeFor(run.projectId, run.ticketId).catch(() => undefined);
+      const step = frozen?.workflow.jobs[run.job]?.step ?? run.job;
       const relay = new ActivityRelay(
         (a) => (run.linearSessionId && !this.policy.checkRelay(a).length ? this.relayTracker.activity(run.linearSessionId, a) : Promise.resolve()),
         step,

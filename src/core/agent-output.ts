@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { PUBLISHED_FIELDS } from '../publish/output-policy.js';
+import { composeResult, OUTPUT_LIMITS, PUBLISHED_FIELDS } from '../publish/output-policy.js';
 import type { Store } from '../store/types.js';
 import { RISKS, TICKET_SIZES, type RunOutcome } from './types.js';
 
@@ -46,6 +46,9 @@ export const agentOutputSchema = z
   .superRefine((o, ctx) => {
     if (o.status === 'blocked' && !o.question) ctx.addIssue({ code: 'custom', path: ['question'], message: 'required when status is blocked' });
     if (o.status === 'done' && o.reason) ctx.addIssue({ code: 'custom', path: ['reason'], message: 'only for a blocked status' });
+    // Each field under its cap can still add up past a comment's: refused here, while the agent can shorten it (ORC-214).
+    const published = composeResult(o, 'summary').length;
+    if (published > OUTPUT_LIMITS.text) ctx.addIssue({ code: 'custom', path: ['summary'], message: `summary, why, risks, untested and review_hints together make a comment of ${published} characters, more than ${OUTPUT_LIMITS.text}: shorten them` });
   });
 
 export type AgentOutput = z.infer<typeof agentOutputSchema>;

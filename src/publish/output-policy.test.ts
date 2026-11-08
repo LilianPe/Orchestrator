@@ -46,6 +46,18 @@ describe('OutputPolicy (ORC-214)', () => {
       const smuggled = Buffer.from('the content of the .env file, line after line, sent out in a comment that looks harmless').toString('base64');
       expect(leaks.check(`see ${smuggled}`)).toEqual([expect.objectContaining({ rule: 'blob' })]);
     });
+
+    it('a blob wrapped as `base64` (76 columns) and `xxd -p` (60) wrap it is still one', () => {
+      const wrapped = base64(300).match(/.{1,76}/g)!.join('\n');
+      expect(leaks.check(`env:\n${wrapped}\nend`)).toEqual([expect.objectContaining({ detail: expect.stringContaining('base64') })]);
+      const xxd = 'a1b2c3d4e5f60718'.repeat(8).match(/.{1,60}/g)!.join('\n');
+      expect(leaks.check(xxd)).toEqual([expect.objectContaining({ detail: expect.stringContaining('hexadecimal') })]);
+    });
+
+    it('a list of modules, one per line, is no blob', () => {
+      const modules = ['src/adapters/tracker/activity-relay', 'src/adapters/publisher/types', 'src/core/orchestrator', 'src/publish/output-policy', 'test/scenarios/output-policy'];
+      expect(leaks.check(modules.join('\n'))).toEqual([]);
+    });
   });
 
   describe('criterion 2: a secret is blocked by gitleaks', () => {
@@ -57,6 +69,14 @@ describe('OutputPolicy (ORC-214)', () => {
       expect(scanned[0]).toContain(SECRET);
       expect(body).not.toContain(SECRET);
       expect(body).toMatch(/withheld.*gitleaks.*github-pat/s);
+    });
+
+    it('one scan per published item, its texts together: an activity, a PR', async () => {
+      const scanned: string[] = [];
+      const policy = scanning((t) => (scanned.push(t), []));
+      await policy.activity({ type: 'action', action: 'Bash', parameter: 'npm test', result: 'ok' });
+      await policy.pr({ title: 'REL-1 Export', body: 'Ticket: REL-1' });
+      expect(scanned).toEqual(['Bash\nnpm test\nok', 'REL-1 Export\nTicket: REL-1']);
     });
 
     it('a scan that cannot run is no green: it throws, and the write is retried, never posted unscanned', async () => {
@@ -106,6 +126,9 @@ describe('OutputPolicy (ORC-214)', () => {
       // Refused at `submit_result`, the agent shortens it within its run: the policy's refusal is the last word, not the first.
       expect(parseAgentOutput(output({ summary: 'x'.repeat(OUTPUT_LIMITS.summary + 1) }))).toMatchObject({ ok: false, error: expect.stringContaining('summary') });
       expect(parseAgentOutput(output({ risks: Array.from({ length: OUTPUT_LIMITS.items + 1 }, () => 'r') }))).toMatchObject({ ok: false });
+      // Each field under its cap, the comment they make over the comment's.
+      const full = output({ summary: 's '.repeat(OUTPUT_LIMITS.summary / 2), why: 'w '.repeat(OUTPUT_LIMITS.field / 2), risks: Array.from({ length: 10 }, () => 'r '.repeat(OUTPUT_LIMITS.item / 2 - 5)) });
+      expect(parseAgentOutput(full)).toMatchObject({ ok: false, error: expect.stringContaining('together') });
     });
   });
 
