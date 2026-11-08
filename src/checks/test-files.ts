@@ -11,7 +11,7 @@ const TEST_DIR = new Set(['test', 'tests', '__tests__']);
 // The test runner's own configuration and global setup: not a test, but read only by the test run. Variants
 // (`vitest.config.e2e.ts`) included. `vite.config.*` is not: it also builds the app, where a `define` reading the test
 // environment would change what ships.
-const HARNESS_NAME = [/^(?:vitest|jest)\.(?:config|setup|workspace)(?:\.[\w-]+)?\.(?:[cm]?[jt]s|json)$/, /^setupTests\.[cm]?[jt]sx?$/, /^pytest\.ini$/];
+const HARNESS_NAME = [/^(?:vitest|jest)\.(?:config|setup|workspace)(?:\.[\w-]+)?\.(?:[cm]?[jt]s|json)$/, /^setupTests\.[cm]?[jt]sx?$/, /^\.?pytest\.(?:ini|toml)$/];
 
 /** Repository-relative path with slashes and no leading `./`, as git prints it. */
 export function normalizePath(path: string): string {
