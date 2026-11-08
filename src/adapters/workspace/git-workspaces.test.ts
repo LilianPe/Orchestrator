@@ -7,7 +7,7 @@ import { BASE, checkBranchPaths, cloneGit, forkPoint, gitReader } from '../../co
 import { readConventions } from '../../core/prompt.js';
 import { parseRepoConfig } from '../../config/repo-config.js';
 import { execCmd } from '../exec.js';
-import { GitWorkspaces } from './git-workspaces.js';
+import { GitWorkspaces, withoutUserinfo } from './git-workspaces.js';
 
 const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
 
@@ -330,7 +330,7 @@ describe('GitWorkspaces', () => {
     expect(git(w.path, 'tag')).toBe('v1');
     expect(git(w.path, 'branch', '--format=%(refname:short)')).toBe('factory/rel-1-export-csv');
     expect(existsSync(join(w.path, '.git', 'hooks'))).toBe(false);
-    expect(git(w.path, 'config', 'core.sshCommand')).toBe('a-deploy-key');
+    expect(readFileSync(join(w.path, '.git', 'config'), 'utf8')).not.toContain('a-deploy-key');
     expect(readFileSync(join(w.path, '.git', 'config'), 'utf8')).not.toContain('/host/hooks');
     // Neither the factory's objects by a link, nor another's name for them: the agent rewrites only its own.
     expect(existsSync(join(w.path, '.git', 'objects', 'info', 'alternates'))).toBe(false);
@@ -339,6 +339,85 @@ describe('GitWorkspaces', () => {
     const head = (await ws.head(w.path))!;
     expect(head).toBe(git(w.path, 'rev-parse', 'HEAD'));
     expect(() => execFileSync('git', ['cat-file', '-e', head], { cwd: repo, stdio: 'ignore' })).toThrow();
+  });
+
+  // What gives access to the forge or runs a command of the host's: none of it reaches a sandbox (ORC-341, ORC-125).
+  it.each([
+    ['a token in the remote URL', (repo: string, origin: string) => {
+      git(repo, 'remote', 'set-url', 'origin', 'https://x-access-token:SECRET-341@example.invalid/o/r.git');
+      // The launch's fetch reaches the fixture's forge all the same; the rewrite, which names the token, is no more inherited.
+      git(repo, 'config', `url.${origin}.insteadOf`, 'https://x-access-token:SECRET-341@example.invalid/o/r.git');
+    }],
+    ["a token as the remote URL's user", (repo: string, origin: string) => {
+      git(repo, 'remote', 'set-url', 'origin', 'https://SECRET-341@example.invalid/o/r.git');
+      git(repo, 'config', `url.${origin}.insteadOf`, 'https://SECRET-341@example.invalid/o/r.git');
+    }],
+    ["actions/checkout's extraheader", (repo: string) => git(repo, 'config', 'http.https://github.com/.extraheader', 'AUTHORIZATION: basic SECRET-341')],
+    ['a credential helper', (repo: string) => {
+      git(repo, 'config', 'credential.helper', 'store --file /host/SECRET-341');
+      git(repo, 'config', 'credential.https://github.com.username', 'SECRET-341');
+    }],
+    ['core.sshCommand', (repo: string) => git(repo, 'config', 'core.sshCommand', 'ssh -i /host/SECRET-341')],
+    ['a push URL', (repo: string) => git(repo, 'config', 'remote.origin.pushurl', 'https://u:SECRET-341@example.invalid/o/r.git')],
+  ])("leaves %s out of the agent's repository (ORC-341)", async (_, plant) => {
+    const { base, repo, root } = fixtureRepo();
+    plant(repo, join(base, 'origin.git'));
+    const w = await new GitWorkspaces({ root }).prepare(req(repo));
+    expect(readFileSync(join(w.path, '.git', 'config'), 'utf8')).not.toContain('SECRET-341');
+  });
+
+  it('gives the agent the remote URL without its credentials (ORC-341)', async () => {
+    const { base, repo, root } = fixtureRepo();
+    git(repo, 'remote', 'set-url', 'origin', 'https://x-access-token:SECRET-341@example.invalid/o/r.git');
+    git(repo, 'config', `url.${join(base, 'origin.git')}.insteadOf`, 'https://x-access-token:SECRET-341@example.invalid/o/r.git');
+    const w = await new GitWorkspaces({ root }).prepare(req(repo));
+    expect(git(w.path, 'config', '--get-all', 'remote.origin.url')).toBe('https://example.invalid/o/r.git');
+    expect(git(w.path, 'config', 'remote.origin.fetch')).toBe('+refs/heads/*:refs/remotes/origin/*');
+  });
+
+  it.each([
+    ['https://x-access-token:t@github.com/o/r.git', 'https://github.com/o/r.git'],
+    ['https://t@github.com/o/r.git', 'https://github.com/o/r.git'],
+    ['http://u:p@a@host:8080/r?x=1', 'http://host:8080/r?x=1'],
+    ['persistent-https::https://u:p@host/r', 'persistent-https::https://host/r'],
+    ['ssh://git:p@github.com/o/r.git', 'ssh://git@github.com/o/r.git'],
+    ['ssh://git@github.com/o/r.git', 'ssh://git@github.com/o/r.git'],
+    ['git@github.com:o/r.git', 'git@github.com:o/r.git'],
+    ['https://github.com/o/r.git', 'https://github.com/o/r.git'],
+    ['/srv/git/r.git', '/srv/git/r.git'],
+    ['C:\\git\\r', 'C:\\git\\r'],
+  ])('reads %s without its credentials as %s', (url, bare) => {
+    expect(withoutUserinfo(url)).toBe(bare);
+  });
+
+  it("lets a run commit as the repository's identity, with its line endings and its LFS filter, and nothing else of the host's (ORC-341)", async () => {
+    const { base, repo, root } = fixtureRepo();
+    git(repo, 'config', 'user.name', 'The Operator');
+    git(repo, 'config', 'user.email', 'op@example.com');
+    git(repo, 'config', 'core.autocrlf', 'input');
+    git(repo, 'config', 'core.eol', 'lf');
+    git(repo, 'config', 'filter.lfs.clean', 'git-lfs clean -- %f');
+    git(repo, 'config', 'filter.lfs.smudge', 'git-lfs smudge -- %f');
+    git(repo, 'config', 'filter.lfs.process', 'git-lfs filter-process');
+    git(repo, 'config', 'filter.lfs.required', 'true');
+    const w = await new GitWorkspaces({ root }).prepare(req(repo));
+    // As in a sandbox: neither the host's global nor its system config, only the agent's repository's own.
+    const home = join(base, 'agent-home');
+    mkdirSync(home);
+    const env = { ...process.env, HOME: home, GIT_CONFIG_GLOBAL: join(home, 'none'), GIT_CONFIG_NOSYSTEM: '1' };
+    for (const k of ['GIT_AUTHOR_NAME', 'GIT_AUTHOR_EMAIL', 'GIT_COMMITTER_NAME', 'GIT_COMMITTER_EMAIL', 'EMAIL']) delete env[k];
+    const agent = (...args: string[]) => execFileSync('git', args, { cwd: w.path, encoding: 'utf8', env }).trim();
+    writeFileSync(join(w.path, 'out.txt'), 'one\r\ntwo\r\n');
+    agent('add', 'out.txt');
+    agent('commit', '-q', '-m', 'the agent');
+    expect(agent('log', '-1', '--format=%an <%ae> / %cn <%ce>')).toBe('The Operator <op@example.com> / The Operator <op@example.com>');
+    expect(agent('cat-file', '-p', 'HEAD:out.txt')).toBe('one\ntwo');
+    expect(agent('config', '--get-regexp', '^filter\\.lfs\\.').split('\n')).toEqual([
+      'filter.lfs.clean git-lfs clean -- %f',
+      'filter.lfs.smudge git-lfs smudge -- %f',
+      'filter.lfs.process git-lfs filter-process',
+      'filter.lfs.required true',
+    ]);
   });
 
   it('reads the head of a repository whose refs git packed, on a branch or detached', async () => {

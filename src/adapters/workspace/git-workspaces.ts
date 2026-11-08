@@ -13,11 +13,13 @@ function assertSafe(id: string): void {
 }
 
 /**
- * What the agent's repository does not take of the repository's own config, which the agent read before and which no
- * agent writes: what describes that repository's layout, or names a host's path for hooks. The rest stays as it was for
- * a run: identity, remotes, credentials, filters, line endings.
+ * What the agent's repository takes of the repository's own config, and nothing else (ORC-341): its identity and line
+ * endings for a commit, Git LFS's filter, its remotes' URLs without credentials (`withoutUserinfo`) and what they fetch.
+ * Left out, whatever its key: what reaches the forge with a credential (an extraheader, `credential.*`, a push URL, an
+ * `insteadOf` that names a token), runs a command of the host's (`core.sshCommand`, a hooks path), or describes the
+ * repository's layout. The agent has no token (ORC-125): the factory alone pushes, with its own.
  */
-const NOT_INHERITED = /^(core\.(bare|repositoryformatversion|worktree|hookspath|fsmonitor|sparsecheckout|sparsecheckoutcone)$|extensions\.)/i;
+const INHERITED = /^(user\.(name|email)|core\.(autocrlf|eol)|filter\.lfs\.(clean|smudge|process|required)|remote\..+\.(url|fetch))$/i;
 const SHA = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
 /** Git's own rules on a ref's name (`git check-ref-format`), as a name out of them cannot be its branch. Never `..`: it becomes a path. */
 const BRANCH_REF = /^refs\/heads\/(?!-|\.)(?!.*(\.\.|@\{|\/\.|\/\/|\.lock(\/|$)))[^\s\p{Cc}~^:?*[\\]+$/u;
@@ -64,6 +66,18 @@ function agentHead(work: string): { branch: string; sha?: string } | undefined {
   if (loose && SHA.test(loose)) return { branch, sha: loose };
   const packed = agentFile(gitDir, 'packed-refs')?.split('\n').find((l) => l.endsWith(` ${ref}`))?.split(' ')[0];
   return packed && SHA.test(packed) ? { branch, sha: packed } : { branch };
+}
+
+/**
+ * A remote's URL without what authenticates it: `https://x-access-token:…@`, or a token as the user, a transport's
+ * (`<helper>::<url>`) included. Over ssh the user stays, as the server's login, never its password. An scp-like
+ * `git@host:path` or a path has none.
+ */
+export function withoutUserinfo(url: string): string {
+  return url.replace(/(^|::)([a-z][a-z0-9+.-]*:\/\/)([^/?#]*)@/i, (_, at: string, scheme: string, userinfo: string) => {
+    const user = /^(git\+)?ssh(\+git)?:/i.test(scheme) ? userinfo.split(':')[0] : '';
+    return `${at}${scheme}${user ? `${user}@` : ''}`;
+  });
 }
 
 /** The paths of `git status --porcelain -z`, a rename's or copy's both sides included (ORC-123). */
@@ -195,8 +209,10 @@ export class GitWorkspaces implements WorkspaceManager {
       const config = (await this.git(repo, 'config', '--local', '-z', '--list')).split('\0').filter(Boolean);
       for (const entry of config) {
         const at = entry.indexOf('\n');
-        if (at < 0 || NOT_INHERITED.test(entry.slice(0, at))) continue;
-        await here('-C', making, 'config', '--add', entry.slice(0, at), entry.slice(at + 1));
+        const key = entry.slice(0, at);
+        if (at < 0 || !INHERITED.test(key)) continue;
+        const value = entry.slice(at + 1);
+        await here('-C', making, 'config', '--add', key, /\.url$/i.test(key) ? withoutUserinfo(value) : value);
       }
       // Resolved: it is read from `making`, and `repoPath` can be relative.
       await here('-C', making, 'fetch', '--quiet', '--no-tags', '--', resolve(repo), '+refs/remotes/origin/*:refs/remotes/origin/*', '+refs/tags/*:refs/tags/*', ...(localRef ? [`+${localRef}:${localRef}`] : []));
