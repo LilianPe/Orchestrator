@@ -1,4 +1,4 @@
-import { BLOCK_CAUSES, blockCause, type BlockCause } from '../core/block-cause.js';
+import { BLOCK_CAUSES, causeOf, type BlockCause, type BlockKind } from '../core/block-cause.js';
 import type { TicketMeasures } from '../core/measures.js';
 import type { TicketState, TokenUsage } from '../core/types.js';
 import type { QueueItem, RunRecord } from '../store/types.js';
@@ -11,6 +11,12 @@ export interface FlowTicket {
   ticketId: string;
   title: string;
   prUrl?: string;
+}
+
+/** A blocked ticket: its kind, which the Flow decides on (ORC-345), and its reason, only shown. */
+export interface BlockedTicket extends FlowTicket {
+  kind: BlockKind;
+  reason: string;
 }
 
 export interface WorkingRun extends FlowTicket {
@@ -38,7 +44,7 @@ export interface WorkingRun extends FlowTicket {
  */
 export interface Flow {
   needsYou: {
-    blocked: { cause: BlockCause; tickets: (FlowTicket & { reason: string })[] }[];
+    blocked: { cause: BlockCause; tickets: BlockedTicket[] }[];
     humanReview: FlowTicket[];
     /** The merge gate of a workflow that still declares `ready`; the spec gate comes with ORC-212. */
     gates: FlowTicket[];
@@ -63,7 +69,7 @@ export interface FlowInput {
 
 export const flowKey = (r: { projectId: string; ticketId: string }): string => `${r.projectId}/${r.ticketId}`;
 
-const flowTicket = (t: TicketState): FlowTicket => ({
+export const flowTicket = (t: TicketState): FlowTicket => ({
   projectId: t.projectId,
   ticketId: t.ticketId,
   title: t.title,
@@ -79,10 +85,11 @@ export function buildFlow({ now, tickets, running, verifying, queue, measures }:
   const waiting = tickets.filter((t) => !t.blocked && !t.activeRunId && !t.verifyingRunId && !devQueued.has(flowKey(t))).sort(oldestFirst);
 
   const blocked = tickets.filter((t) => t.blocked).sort(oldestFirst);
-  const byCause = new Map<BlockCause, (FlowTicket & { reason: string })[]>();
+  const byCause = new Map<BlockCause, BlockedTicket[]>();
   for (const t of blocked) {
-    const cause = blockCause(t.blockReason);
-    byCause.set(cause, [...(byCause.get(cause) ?? []), { ...flowTicket(t), reason: t.blockReason ?? '' }]);
+    const kind = t.blockKind ?? 'other';
+    const cause = causeOf(kind);
+    byCause.set(cause, [...(byCause.get(cause) ?? []), { ...flowTicket(t), kind, reason: t.blockReason ?? '' }]);
   }
   const causes = BLOCK_CAUSES.flatMap((cause) => {
     const tickets = byCause.get(cause);

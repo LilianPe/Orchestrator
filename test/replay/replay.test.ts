@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { upcastTicket } from '../../src/core/types.js';
+import { upcastTicket } from '../../src/core/upcast.js';
 import { formatReplay, readJournal, replayJournal, type ExportedJournal } from '../../src/runtime/replay.js';
 import { loadTestWorkflow } from '../helpers/harness.js';
 import { testPreset } from '../helpers/test-preset.js';

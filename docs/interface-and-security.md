@@ -11,6 +11,10 @@ What it shows, live:
   - **Needs you**: what is waiting for a human. Blocked tickets, grouped by cause (agent question, contested ticket, unverified red, infrastructure failure, cap, loop, failed run, pickup refused, event set aside, PR closed without merge, stop, other cause), each with its reason; PRs in Human Review; pending gates (`ready`, for a workflow that still declares it; the spec gate will come with ORC-212). Oldest first, by the ticket's last activity. A PR the agent is still working on, or whose run is waiting for a slot, is not there; a question asked to the agent leaves it there. A blocked ticket whose run is still running appears in both places.
   - **Working**: every run in progress and every verification in progress, with its step (the run's job), its duration and the ticket's tokens; **Stop** button on a ticket's active run. Clicking an identifier opens its run. Queued tickets are listed below.
   - **Done**: finished tickets whose last activity is less than 7 days old, 20 at most, then the other unfinished tickets, collapsed (**Other tracked tickets**).
+- **Measures** (ORC-223, the **Measures** link of the header, `#measures`), read from `GET /api/measures` on opening and every 30 s while shown, for the 50 most recently updated tickets:
+  - **Overview**: merged tickets, median lead time, tokens per merged ticket (those that reported none are counted apart), ready at the first try, median delays to the first sign of life and to the answer of the human messages. No baseline to compare with yet (ORC-230).
+  - **Tickets**: each ticket's state (a blocked ticket with its cause, from its typed kind as in the Flow), duration (delegation to merge, or so far), work time (its attempts' own durations), tokens (as in the Flow), review rounds (AI reviewer attempts, handovers to Human Review by the factory) and attempts. Clicking an identifier lists its **attempts**: step, role, status, duration, tokens, dollars and turns, with its first try, CI time and revert.
+  - **No source yet**: the measures nothing in the factory feeds yet and the ticket that brings each (usage limit share, ORC-216; minutes of human review, ORC-190; baseline, ORC-230). Every figure is computed by the factory from its journal and run records ([operations](operations.md#measures-orc-235)), never from what an agent wrote; a ticket whose measures cannot be read says so instead of showing zeros.
 - **Live session**: the output of the selected run (text, tool calls), received live since the page was opened. A run's full transcript remains available via the API (`/api/runs/<id>/transcript`) and in `<RELAIS_HOME>/transcripts/`.
 - **Log**: the daemon's latest messages and the events received.
 
@@ -20,7 +24,7 @@ Interface development: `npm run dev:web` starts Vite on port 5173 with a proxy f
 
 **The Flow's tokens** are ORC-235's measurement: the sum of the ticket's finished attempts. A run only reports its usage when it ends: the one in progress is not included yet, which the page states below the table. `≥` indicates finished attempts without a measurement; `—` that none has one, with the cost in dollars if it exists, until ORC-216; `?` that the ticket's measurements could not be read (the error is in the log). If reading the Flow fails, a banner says so and the durations stop. The displayed number adds up input, output, cache read and cache write; the breakdown is shown on hover.
 
-**The cause of a block** is read from its reason (`src/core/block-cause.ts`), from the sentence opening the factory writes. An unknown reason falls into « Other cause », displayed as is. A reason that says no more than its cause is not repeated: « Stopped on request » and « Question asked by the agent » are at once the reasons the engine writes and the labels of their causes, one constant each (`STOPPED`, `AGENT_QUESTION`), and their French forms from before ORC-331 are not repeated either (`onlyRestatesCause`). A ticket blocked before ORC-331 keeps its French reason, which the same table still reads (`src/core/legacy-messages.ts`). A new block reason is added to that table and to its test.
+**The cause of a block** is its kind (`blockKind`, `src/core/block-cause.ts`, ORC-345), set by the code that builds the block and sent by the server with each blocked ticket: the dashboard never reads the reason, which it only shows. A kind is a cause, or one the engine tells apart within a cause (`asked`, `stuck`, `ci_bound`), shown under that cause (`causeOf`). A block without a known kind falls into « Other cause », its reason displayed as is. A reason whose kind says no more than its cause is not repeated (`restatesCause`): a stop and a question the agent asks during its run, whose reasons « Stopped on request » and « Question asked by the agent » are the labels of their causes (`STOPPED`, `AGENT_QUESTION`). A ticket blocked before ORC-345 gets its kind back once, from its reason, when it is read (`upcastTicket`, `src/core/upcast.ts`), French reasons from before ORC-331 included (`src/core/legacy-messages.ts`). A new block sets its kind where it is built. Rewording a reason changes no decision and no cause: the upcaster's table keeps the wording of before ORC-345, written out, not built from the constants the factory writes today.
 
 ## What the server exposes
 
@@ -29,6 +33,7 @@ Interface development: `npm run dev:web` starts Vite on port 5173 with a proxy f
 | `GET /` and static files | Interface | password (except loopback) |
 | `GET /api/state` | State: tickets, queue, active runs (without their tokens), cost, capacity | password |
 | `GET /api/flow` | Flow: Needs you, Working, Done (without run tokens or queue contents) | password |
+| `GET /api/measures` | Measures of the 50 most recently updated tickets: their attempts' cost, duration and review rounds (without run tokens nor agent text) | password |
 | `GET /api/events`, `GET /api/events/recent` | SSE stream, last 100 events | password |
 | `GET /api/runs/:id/transcript` | A run's transcript | password |
 | `POST /api/control/pause`, `/api/control/resume` | Pause / resume | password + origin check |
@@ -67,7 +72,7 @@ Each run receives a random `RELAIS_RUN_TOKEN`. The `/agent/*` API only accepts i
 
 - only reads **the run's ticket** (`/agent/issue/<other ticket>` → 403);
 - can search tickets, search the knowledge base and ask a question in the ticket's session;
-- appears neither in `/api/state`, nor in `/api/flow`, nor in `/api/events` and `/api/events/recent`.
+- appears neither in `/api/state`, nor in `/api/flow`, nor in `/api/measures`, nor in `/api/events` and `/api/events/recent`.
 
 On the host, `RELAIS_API` points to `http://127.0.0.1:<port>/agent`: agents talk to the daemon locally. In a sandbox, it points to `http://<FACTORY_SANDBOX_AGENT_HOST>:<FACTORY_AGENT_PORT>/agent` (by default `host.docker.internal`): a name the container does not resolve, which the egress proxy recognizes and relays to the server dedicated to the agent API.
 
@@ -75,7 +80,7 @@ On the host, `RELAIS_API` points to `http://127.0.0.1:<port>/agent`: agents talk
 
 `POST /agent/mcp` is an MCP server ("Streamable" HTTP, JSON responses only, one message per request; any other method receives `405` with `Allow: POST`, no SSE stream), behind the same run token as the rest of `/agent/*`, also served by the server dedicated to sandboxes. Two tools (ORC-288):
 
-- **`submit_result`**: the agent returns its result there, in the `agentOutputSchema` format (`src/core/agent-output.ts`), whose JSON schema is the tool's `inputSchema`. A valid result is stored for **the token's run** (meta `agent-output:<run>`), the last submission wins; an invalid result is refused (`isError`) with the offending fields, so the agent can fix it during its run.
+- **`submit_result`**: the agent returns its result there, in the `agentOutputSchema` format (`src/core/agent-output.ts`), whose JSON schema is the tool's `inputSchema`. A valid result is stored for **the token's run** (meta `agent-output:<run>`), the last submission wins; an invalid result is refused (`isError`) with the offending fields, so the agent can fix it during its run. Its texts are capped (`OUTPUT_LIMITS` of `src/publish/output-limits.ts`): what Linear and GitHub show is composed from them by the factory and goes through its `OutputPolicy` ([`linear.md`](linear.md#what-the-factory-publishes-orc-214)).
 - **`ask`**: like `POST /agent/ask` (question in Linear, ticket blocked), which stays until ORC-192.
 
 `claude -p` receives it via `--mcp-config '{"mcpServers":{"factory":{"type":"http","url":"${FACTORY_API}/mcp","headers":{"Authorization":"Bearer ${FACTORY_RUN_TOKEN}"}}}}'`: Claude Code replaces the `${…}` with the variables from its environment (verified on 2.1.316). The token is therefore never on the command line, which the host's process list shows; it arrives through the run's environment, as before.

@@ -105,6 +105,35 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     expect((await s.findRunByToken((await s.getRun('r1'))!.token))!.id).toBe('r1');
   });
 
+  it('fences an attempt by its lease token: once taken over, the old holder can neither renew nor record it (ORC-344)', async () => {
+    const s = await store();
+    await s.putRun(run({ leaseToken: 1, leaseUntil: 1_000 }));
+    expect(await s.renewRun('r1', 2_000, 1)).toBe(true);
+    // Another daemon takes it over: the token goes up, once, whoever else tries with the same one.
+    expect(await s.claimRun('r1', 1)).toBe(2);
+    expect(await s.claimRun('r1', 1)).toBeUndefined();
+    expect((await s.getRun('r1'))!.leaseToken).toBe(2);
+    expect(await s.renewRun('r1', 3_000, 1)).toBe(false);
+    expect(await s.putRun(run({ leaseToken: 1, status: 'success', lastText: 'late' }), 1)).toBe(false);
+    expect(await s.getRun('r1')).toMatchObject({ status: 'running', leaseUntil: 2_000, leaseToken: 2, lastText: '' });
+    // Its new holder writes as usual.
+    expect(await s.renewRun('r1', 3_000, 2)).toBe(true);
+    expect(await s.putRun(run({ leaseToken: 2, leaseUntil: 3_000, status: 'failure' }), 2)).toBe(true);
+    expect(await s.getRun('r1')).toMatchObject({ status: 'failure', leaseToken: 2 });
+    // An ended attempt is no longer taken over, nor renewed.
+    expect(await s.claimRun('r1', 2)).toBeUndefined();
+    expect(await s.renewRun('r1', 4_000, 2)).toBe(false);
+  });
+
+  it('takes a record written before the lease tokens for token 0 (ORC-344)', async () => {
+    const s = await store();
+    await s.putRun(run({ leaseUntil: 1_000 }));
+    expect(await s.renewRun('r1', 2_000, 0)).toBe(true);
+    expect(await s.claimRun('r1', 0)).toBe(1);
+    expect(await s.putRun(run({ status: 'success' }), 0)).toBe(false);
+    expect((await s.getRun('r1'))!.status).toBe('running');
+  });
+
   it('stores runs and finds them by token and status', async () => {
     const s = await store();
     await s.putRun(run());
@@ -847,7 +876,7 @@ export function storeContract(store: () => Store | Promise<Store>): void {
   describe('a decision another project of the ticket\'s team holds the ticket against (ORC-316)', () => {
     const plan = (ticket: TicketState): DecisionPlan => ({ ticket, effects: [], timers: [], clearTimers: false });
     const held = { ...newTicketState('api', 'REL-1', 'T', 'dev', 1), delegated: true };
-    const wait = { ...newTicketState('p', 'REL-1', 'T', 'dev', 1), delegated: true, blocked: true, awaitingRepo: ['p', 'api'] };
+    const wait = { ...newTicketState('p', 'REL-1', 'T', 'dev', 1), delegated: true, blocked: true, blockKind: 'pickup' as const, awaitingRepo: ['p', 'api'] };
     const on = async (...copies: TicketState[]) => {
       const s = await store();
       for (const c of copies) await s.putTicket(c);

@@ -13,8 +13,8 @@ import {
 } from '../../core/dead-letter.js';
 import type { OutboxEffect } from '../../core/decision.js';
 import { claims, holds } from '../../core/routing.js';
-import { normalizeTicket, type FactoryEvent, type QueueName, type TicketState } from '../../core/types.js';
-import { upcastTimer, type StoredEvent, type StoredTimer } from '../../core/upcast.js';
+import type { FactoryEvent, QueueName, TicketState } from '../../core/types.js';
+import { normalizeTicket, upcastTimer, type StoredEvent, type StoredTimer } from '../../core/upcast.js';
 import {
   TicketHeldError,
   decidedOn,
@@ -178,6 +178,9 @@ const deadLetterRow = (r: DeadLetterPgRow): DeadLetter => ({
 /** An attempt's label column on update: kept once the attempt has labels, else the write's (ORC-226). */
 const FIRST_LABELS = (column: string) =>
   sql.raw(`case when attempts.data ? 'labels' then attempts.${column} else excluded.${column} end`);
+
+/** The lease token of a stored attempt (ORC-344), 0 on a record from before it. */
+const LEASE_TOKEN = sql.raw(`coalesce((attempts.data->>'leaseToken')::bigint, 0)`);
 
 export class PgStore implements AsyncStore {
   private readonly pool: Pool;
@@ -730,14 +733,14 @@ export class PgStore implements AsyncStore {
    * where an agent execution belongs. The full legacy record lives in `attempts.data`, so the
    * async port can return it unchanged until the run/attempt split lands.
    */
-  async putRun(run: RunRecord): Promise<void> {
+  async putRun(run: RunRecord, fence?: number): Promise<boolean> {
     const endedAt = run.endedAt === undefined ? null : new Date(run.endedAt);
     const l = run.labels;
     const fact = l?.deliveredFactIds == null ? null : JSON.stringify(l.deliveredFactIds);
     const tokens = run.tokens;
     // The first record with labels fixes them, in `data.labels` and in their columns alike: an
     // attempt's labels say what it was created with (ORC-226).
-    await this.db.execute(sql`
+    const res = await this.db.execute(sql`
       insert into attempts (
         id, ticket_id, step, model, effort, fingerprints, image, risk,
         factory_version, factory_commit, registry_commit, delivered_fact_ids,
@@ -775,14 +778,25 @@ export class PgStore implements AsyncStore {
         output_tokens = excluded.output_tokens,
         cache_read_tokens = excluded.cache_read_tokens,
         cache_creation_tokens = excluded.cache_creation_tokens
+      ${fence === undefined ? sql`` : sql`where ${LEASE_TOKEN} = ${fence}`}
     `);
+    return (res.rowCount ?? 0) === 1;
   }
 
-  async renewRun(id: string, until: number): Promise<void> {
-    await this.db.execute(sql`
+  async renewRun(id: string, until: number, fence?: number): Promise<boolean> {
+    const res = await this.db.execute(sql`
       update attempts set data = jsonb_set(data, '{leaseUntil}', to_jsonb(${until}::bigint))
-      where id = ${id} and status = 'running'
+      where id = ${id} and status = 'running' ${fence === undefined ? sql`` : sql`and ${LEASE_TOKEN} = ${fence}`}
     `);
+    return (res.rowCount ?? 0) === 1;
+  }
+
+  async claimRun(id: string, fence: number): Promise<number | undefined> {
+    const res = await this.db.execute(sql`
+      update attempts set data = jsonb_set(data, '{leaseToken}', to_jsonb(${fence + 1}::bigint))
+      where id = ${id} and status = 'running' and ${LEASE_TOKEN} = ${fence}
+    `);
+    return (res.rowCount ?? 0) === 1 ? fence + 1 : undefined;
   }
 
   async getRun(id: string): Promise<RunRecord | undefined> {

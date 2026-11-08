@@ -221,6 +221,8 @@ export function createHarness(
     repoVariables?: OrchestratorDeps['repoVariables'];
     /** `.factory/config.yml` as the launch reads it on the default branch (ORC-209 C); the socle by default. */
     repoConfig?: OrchestratorDeps['repoConfig'];
+    /** The policy in front of every text it publishes (ORC-214); without a secret scan by default. */
+    outputPolicy?: OrchestratorDeps['outputPolicy'];
   } = {},
 ) {
   if (opts.projectYaml !== undefined && opts.preset) throw new Error('createHarness: pass projectYaml or preset, not both');
@@ -295,6 +297,7 @@ export function createHarness(
     fullReadPaths: opts.fullReadPaths,
     repoVariables: opts.repoVariables,
     repoConfig: opts.repoConfig,
+    outputPolicy: opts.outputPolicy,
     roles: authz && new CachedRoleResolver({ projects: (id) => (id === 'p' ? authz : undefined), team: gate(tracker), repo: outside.forge, now: () => clock.now() }),
   });
   let orch = build(life);
@@ -353,9 +356,14 @@ export function createHarness(
     await orch.drained();
   }
 
+  /** Another daemon over the same database, alive beside this one (ORC-344): its own connection, its own memory, the same runner and engine. */
+  function another(): Orchestrator {
+    return build(connect());
+  }
+
   return {
     clock, tracker, forge, runner, workspaces, checks, sandboxes, publisher, sessionsDir, runsDir, logs,
-    send, advance, restart, project,
+    send, advance, restart, another, project,
     get orch() {
       return orch;
     },

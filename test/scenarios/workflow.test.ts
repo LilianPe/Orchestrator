@@ -11,6 +11,7 @@ async function delegatedAndInReview(h: ReturnType<typeof createHarness>) {
       { kind: 'tool', name: 'Bash', input: 'npm test' },
       { kind: 'text', text: 'PR ouverte, tests verts.' },
     ],
+    output: { status: 'done', summary: 'Audits export to CSV from their list.', tests_added: ['src/export.test.ts'], why: '', assumptions: [], risks: ['large lists'], untested: [], review_hints: [] },
   });
   await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
 }
@@ -29,8 +30,10 @@ describe('standard workflow', () => {
     const moves = h.tracker.calls.filter((c) => c.method === 'moveTo').map((c) => c.args[1]);
     expect(moves).toEqual(['In Progress', 'Human Review']);
     const acts = h.tracker.activities('ls-1');
-    expect(acts).toContainEqual({ type: 'action', action: 'Bash', parameter: 'npm test', ephemeral: true });
-    expect(acts.at(-1)).toEqual({ type: 'response', body: 'PR ouverte, tests verts.' });
+    // Live, what the agent does in the factory's words; the summary composed from its `submit_result`, never its last text (ORC-214).
+    expect(acts).toContainEqual({ type: 'action', action: 'Running a command', parameter: 'step build', ephemeral: true });
+    expect(acts.at(-1)).toEqual({ type: 'response', body: 'Audits export to CSV from their list.\n\n**Risks**\n- large lists' });
+    expect(JSON.stringify(acts)).not.toMatch(/npm test|PR ouverte/);
   });
 
   it('criterion 4: two instructions regrouped with no agent at work resume its session once, the replies together (ORC-180)', async () => {
@@ -250,12 +253,14 @@ describe('standard workflow', () => {
   // ORC-220 replaces the block of a restart: `test/scenarios/recovery.test.ts` holds what a restart does now.
   describe('I1: restart during a run', () => {
     // Was: blocked, and a human's reply resumed it. Now nobody has to reply: the session is resumed by the factory.
+    // A shutdown leaves the run going (ORC-344): these are runs gone by the next start.
     it('a dev run interrupted by shutdown goes on by itself, on its session', async () => {
       const h = createHarness();
       h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
       h.runner.enqueue({ hold: true }, { events: [{ kind: 'text', text: 'Repris.' }] });
       await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
       const runId = (await h.ticket()).activeRunId!;
+      h.runner.forget(runId);
       await h.restart();
       expect((await h.store.getRun(runId))!.status).not.toBe('running');
       expect(h.runner.requests).toHaveLength(2);
@@ -270,6 +275,7 @@ describe('standard workflow', () => {
       h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
       h.runner.enqueue({ hold: true });
       await h.send('session.mentioned', { linearSessionId: 'ls-9', body: 'où ?', author: 'L' });
+      h.runner.forget(h.runner.requests[0]!.runId);
       await h.restart();
       expect(h.tracker.activities('ls-9').at(-1)).toMatchObject({ type: 'error', body: expect.stringContaining('restarted') });
       expect((await h.ticket()).blocked).toBe(false);

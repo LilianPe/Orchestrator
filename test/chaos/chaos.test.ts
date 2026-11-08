@@ -4,13 +4,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Pool } from 'pg';
 import { describe, expect, it } from 'vitest';
-import { CUT_BOUND_REASON } from '../../src/core/engine.js';
 import { migratePgStore } from '../../src/store/pg/migrate.js';
 import { SqliteStore } from '../../src/store/sqlite-store.js';
 import { allEffects, checkChain, settled, type VisibleCall } from '../helpers/faults.js';
 import { createTestDatabase, PG_URL } from '../helpers/pg-database.js';
 import { storeAt } from '../helpers/store-at.js';
 import { CHAOS_LEASE_MS, chaosEvents, rng, ticketIds, type ChaosEvent, type ChaosMessage, type DaemonMessage } from './events.js';
+
+/** The head of the reason of the cut bound (ORC-220): only its sentence, the block's kind is `limit`. */
+const CUT_BOUND = /^Too many relaunches after a cut: /;
 
 /**
  * ORC-163: a real daemon process (`daemon.ts`) killed with SIGKILL at random moments while a driver
@@ -199,7 +201,7 @@ describe('chaos: kill -9 at random moments (ORC-163)', () => {
         const cutRuns = (await store.runsByStatus('failure')).length;
         const relaunches = effects.filter((r) => r.effect.kind === 'start_run' && r.effect.relaunchOf).length;
         // A normal outcome, not a violation: a ticket cut too often waits for a human, and the chain holds all the same.
-        const bound = effects.filter((r) => r.effect.kind === 'activity' && CUT_BOUND_REASON.test(r.effect.body)).length;
+        const bound = effects.filter((r) => r.effect.kind === 'activity' && CUT_BOUND.test(r.effect.body)).length;
         const summary = `seed ${SEED}: ${EVENTS} events, ${kills} kill(s), ${life} daemon(s), ${resent} event(s) sent again, ${retaken} of ${effects.length} effect(s) taken up again, ${cutRuns} run(s) cut, ${relaunches} step(s) started again, ${bound} block(s) by the bound of the relaunches`;
         console.log(`chaos ${summary}; at-least-once doubles: ${report.atLeastOnce.length}${report.atLeastOnce.map((l) => `\n  ${l}`).join('')}`);
         expect(kills, summary).toBeGreaterThan(0);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { blockCause } from '../../src/core/block-cause.js';
+import { causeOf } from '../../src/core/block-cause.js';
 import { SENSITIVE_PATHS } from '../../src/core/engine.js';
 import { replayJournal, exportJournal } from '../../src/runtime/replay.js';
 import { createHarness } from '../helpers/harness.js';
@@ -21,7 +21,7 @@ describe('the standard blocking comment and the reply that resumes (ORC-196)', (
   it('a block: the comment follows the template, the label is on, and nothing else tells it', async () => {
     const h = await blocked();
     const t = await h.ticket();
-    expect(blockCause(t.blockReason)).toBe('limit');
+    expect(causeOf(t.blockKind)).toBe('limit');
     expect(t).toMatchObject({ blocked: true, blockedJob: 'dev' });
     expect((await h.tracker.getIssue('REL-1')).labels).toContain('Bloqué');
     const body = h.tracker.comments('REL-1').at(-1)!;

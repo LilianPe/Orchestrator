@@ -48,7 +48,12 @@ describe('harness: new port fakes and the test preset', () => {
     await delegate(h);
     const runId = (await h.ticket()).activeRunId!;
     const cap = h.runner.requests[0]!.limits.durationMs;
-    await h.advance(cap - 1);
+    // The agent keeps writing: a silent one would lose its lease first (ORC-344).
+    const step = h.project.workflow.limits.silentAfterMs! / 2;
+    for (let left = cap - 1; left > 0; left -= step) {
+      h.runner.say(runId, { kind: 'text', text: 'working' });
+      await h.advance(Math.min(step, left));
+    }
     expect((await h.ticket()).activeRunId).toBe(runId);
     await h.advance(1);
     expect(await h.store.getRun(runId)).toMatchObject({ status: 'limit' });

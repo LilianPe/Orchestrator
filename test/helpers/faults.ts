@@ -274,13 +274,14 @@ export class FaultLife {
         if (fired) this.fire('timer.fired', info);
         return fired;
       },
-      putRun: async (r: RunRecord) => {
+      putRun: async (r: RunRecord, fence?: number) => {
         const first = r.status === 'running' && !this.runs.has(r.id);
         if (first) this.fire('run.write', { id: r.id, ticketId: r.ticketId });
         this.runs.set(r.id, r.ticketId);
         this.session(r.linearSessionId, r.ticketId);
-        await inner.putRun(r);
+        const written = await inner.putRun(r, fence);
         if (first) this.fire('run.written', { id: r.id, ticketId: r.ticketId });
+        return written;
       },
       // What an effect reads before it posts (its ticket's session, its run's): a new life that takes
       // up a dead one's effect has decided nothing on that ticket yet.
