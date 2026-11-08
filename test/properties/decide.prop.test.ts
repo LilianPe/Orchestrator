@@ -850,4 +850,33 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
       TIMEOUT,
     );
   });
+
+  describe('ORC-363 — a ticket waiting on its « blocked by » tickets starts no dev work until they are done', () => {
+    const waitThenReply = seq(
+      ...delegated('dev'),
+      runStarted('intake'),
+      ext('run.finished', {
+        runId: 'r1', job: 'intake', outcome: 'success', costUsd: 0.1, turns: 3, lastText: 'lu', attempt: 'succeeded', blockedBy: [{ identifier: 'REL-2', stateName: 'In Progress' }],
+        output: { status: 'done', summary: 's', tests_added: [], why: '', assumptions: [], risks: [], untested: [], review_hints: [], intake: { size: 'm', risk: 'low', complete: true, missing: [], screen: false } },
+      }),
+      reply(),
+      ext('blockers.done', { blockers: ['REL-2'] }),
+    );
+    it(
+      'while it waits, only blockers.done starts a dev-queue job, nothing arms one for later; the wait is never a block',
+      () => {
+        holds((s) => {
+          for (const step of decided(run(s))) {
+            if (!step.before?.waitingOn) continue;
+            expect(step.before.blocked).toBe(false);
+            if (step.event.type === 'blockers.done') continue;
+            const dev = step.decision.effects.filter((e) => e.kind === 'start_run' && wf.jobs[e.job]?.queue === 'dev');
+            expect(dev, `${step.event.type} started dev work on a waiting ticket`).toEqual([]);
+            expect(step.decision.timers.filter((t) => t.kind === 'debounce'), `${step.event.type} armed a debounced run on a waiting ticket`).toEqual([]);
+          }
+        }, [waitThenReply]);
+      },
+      TIMEOUT,
+    );
+  });
 });
