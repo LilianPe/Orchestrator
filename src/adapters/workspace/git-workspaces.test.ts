@@ -404,7 +404,7 @@ describe('GitWorkspaces', () => {
     // As in a sandbox: neither the host's global nor its system config, only the agent's repository's own.
     const home = join(base, 'agent-home');
     mkdirSync(home);
-    const env = { ...process.env, HOME: home, GIT_CONFIG_GLOBAL: join(home, 'none'), GIT_CONFIG_NOSYSTEM: '1' };
+    const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, GIT_CONFIG_GLOBAL: join(home, 'none'), GIT_CONFIG_NOSYSTEM: '1' };
     for (const k of ['GIT_AUTHOR_NAME', 'GIT_AUTHOR_EMAIL', 'GIT_COMMITTER_NAME', 'GIT_COMMITTER_EMAIL', 'EMAIL']) delete env[k];
     const agent = (...args: string[]) => execFileSync('git', args, { cwd: w.path, encoding: 'utf8', env }).trim();
     writeFileSync(join(w.path, 'out.txt'), 'one\r\ntwo\r\n');
