@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { PrRefsRequest } from '../../src/adapters/workspace/pr-refs.js';
@@ -116,6 +117,14 @@ describe('a review without network', () => {
     const { prState: _p, ...without } = review!;
     h.project.workflow = { ...h.project.workflow, jobs: { ...jobs, review: without } };
     expect(await h.orch.agentPrState(run)).toMatchObject({ state: 'OPEN', head: 'a'.repeat(40) });
+  });
+
+  it("removes the review's PR refs dir with its sandbox", async () => {
+    const h = createHarness({ sandboxed: true, prRefs: prRefs([{ head: 'a'.repeat(40), base: 'b'.repeat(40) }]).bring });
+    await toReview(h);
+    const dir = join(h.runsDir!, reviewRun(h).runId, 'pr');
+    expect(h.sandboxes.created.some((c) => c.mounts.some((m) => m.host === dir))).toBe(true);
+    expect(existsSync(dir)).toBe(false);
   });
 
   it('gives a dev run no PR section', async () => {

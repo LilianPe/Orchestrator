@@ -815,7 +815,8 @@ export class Orchestrator {
    */
   private async destroySandbox(id: string, runId: string, owner?: RunRecord): Promise<void> {
     await this.d.sandboxes?.destroy(id).catch((err: Error) => this.log('error', `sandbox ${id} not destroyed: ${err.message}`));
-    if (this.d.runsDir) rmSync(join(this.d.runsDir, runId, 'claude'), { recursive: true, force: true });
+    // A review's bundle of its PR refs too (ORC-322): it can hold the whole history, and nothing reads it once the sandbox is gone.
+    if (this.d.runsDir) for (const dir of ['claude', 'pr']) rmSync(join(this.d.runsDir, runId, dir), { recursive: true, force: true });
     if (owner) await this.ingestSecurityLog(runId, owner);
   }
 
