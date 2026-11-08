@@ -15,7 +15,7 @@ export async function runAgentCli(argv: string[], env: NodeJS.ProcessEnv, fetchI
   const headers = { authorization: `Bearer ${token}`, 'content-type': 'application/json' };
   const get = async (path: string) => {
     const res = await fetchImpl(`${api}${path}`, { headers });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}${await reason(res)}`);
     return res.json() as Promise<any>;
   };
   const [cmd, ...rest] = argv;
@@ -51,6 +51,16 @@ export async function runAgentCli(argv: string[], env: NodeJS.ProcessEnv, fetchI
   }
   out(`${USAGE}\n`);
   return 1;
+}
+
+/** The factory's own `{ error }` of a refused read (`pr`: 404 no PR to read, 503 ask again later); nothing else of the body. */
+async function reason(res: Response): Promise<string> {
+  try {
+    const body = (await res.json()) as { error?: unknown };
+    return typeof body.error === 'string' && body.error ? `: ${body.error}` : '';
+  } catch {
+    return '';
+  }
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {

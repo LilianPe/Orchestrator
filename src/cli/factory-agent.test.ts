@@ -45,6 +45,13 @@ describe('factory-agent', () => {
     expect(out.join('')).toContain('HTTP 404');
   });
 
+  it("prints the factory's reason with a refused read, so the review can tell 'ask again' from 'no PR'", async () => {
+    const f = (async () => new Response(JSON.stringify({ error: 'the forge did not answer, ask again later' }), { status: 503 })) as unknown as typeof fetch;
+    const out: string[] = [];
+    expect(await runAgentCli(['pr'], env, f, (s) => out.push(s))).toBe(1);
+    expect(out.join('')).toContain('HTTP 503: the forge did not answer, ask again later');
+  });
+
   it('searches the knowledge base and asks a question', async () => {
     const { f, calls } = fetchStub({ '/kb/search': [{ file: 'notes/a.md', line: 3, text: 'agrégats' }], '/ask': { ok: true } });
     const out: string[] = [];
