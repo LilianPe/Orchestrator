@@ -1,8 +1,9 @@
-// Reads the unified diff of `git diff baseSha..SHA` (default `a/` and `b/` prefixes) into files and added lines.
+// Reads the unified diff of `git diff baseSha..SHA` (default `a/` and `b/` prefixes) into files and their lines: added,
+// removed and kept. With full context (`-U` past the file's length), a file's two versions are in its diff (ORC-342).
 // No git call here: the checks stay pure, the caller produces the text.
 
-export interface AddedLine {
-  /** Line number in the new version of the file. */
+export interface DiffLine {
+  /** Line number in the new version of the file (the old one, for a removed line). */
   line: number;
   text: string;
 }
@@ -13,8 +14,10 @@ export interface DiffFile {
   /** Path before the change, when it differs: a rename, or a copy. */
   oldPath?: string;
   status: 'added' | 'deleted' | 'modified' | 'renamed';
-  added: AddedLine[];
-  removed: number;
+  added: DiffLine[];
+  removed: DiffLine[];
+  /** Context lines, at their number in both versions. */
+  kept: (DiffLine & { old: number })[];
 }
 
 // Git quotes a path with special characters C-style: "b/caf\303\251.ts".
@@ -60,6 +63,7 @@ export function parseDiff(text: string): DiffFile[] {
   let oldLeft = 0;
   let newLeft = 0;
   let next = 0;
+  let oldNext = 0;
 
   const finish = (): void => {
     if (!file) return;
@@ -77,12 +81,12 @@ export function parseDiff(text: string): DiffFile[] {
         file!.added.push({ line: next++, text: line.slice(1) });
         newLeft--;
       } else if (line.startsWith('-')) {
-        file!.removed++;
+        file!.removed.push({ line: oldNext++, text: line.slice(1) });
         oldLeft--;
       } else if (line.startsWith('\\')) {
         // "\ No newline at end of file"
       } else {
-        next++;
+        file!.kept.push({ line: next++, old: oldNext++, text: line.slice(1) });
         oldLeft--;
         newLeft--;
       }
@@ -91,15 +95,16 @@ export function parseDiff(text: string): DiffFile[] {
     if (line.startsWith('diff --git ')) {
       finish();
       const { a, b } = fromGitHeader(line);
-      file = { path: b, oldPath: a, status: 'modified', added: [], removed: 0 };
+      file = { path: b, oldPath: a, status: 'modified', added: [], removed: [], kept: [] };
       continue;
     }
     if (!file) continue;
-    const hunk = /^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line);
+    const hunk = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line);
     if (hunk) {
-      oldLeft = Number(hunk[1] ?? 1);
-      next = Number(hunk[2]);
-      newLeft = Number(hunk[3] ?? 1);
+      oldLeft = Number(hunk[2] ?? 1);
+      oldNext = Number(hunk[1]);
+      next = Number(hunk[3]);
+      newLeft = Number(hunk[4] ?? 1);
     } else if (line.startsWith('new file mode')) file.status = 'added';
     else if (line.startsWith('deleted file mode')) file.status = 'deleted';
     else if (line.startsWith('rename from ')) [file.status, file.from] = ['renamed', unquote(line.slice('rename from '.length))];
