@@ -18,7 +18,7 @@ new ClaudeCodeRunner({ transcriptsDir, command: [process.execPath, fake] }).star
   pluginDir: '/pack',
   settingsPath: '/pack/settings.json',
   readOnly: false,
-  limits: { turns: 50, durationMs: 60_000, usd: 5 },
+  limits: { turns: 50, durationMs: 60_000 },
   env: JSON.parse(env) as Record<string, string>,
 });
 // The kernel's kill, at once: no cleanup of any kind, and the attempt has not even written yet.

@@ -45,6 +45,12 @@ export function repoNetworkCeiling(config: RepoConfig): NetworkLevel {
   return config.network.level === 'none' ? 'none' : 'limited';
 }
 
+/** The ticket's token cap (ORC-340, ORC-216): factory.yml's, lowered by the repository's, never raised. Undefined without either. */
+export function ticketTokenCap(factoryCap: number | undefined, config: RepoConfig): number | undefined {
+  const caps = [factoryCap, config.budgets?.perTicketTokens].filter((c) => c !== undefined);
+  return caps.length ? Math.min(...caps) : undefined;
+}
+
 /** A host name: no wildcard, no range, no path (a `*` or a `0.0.0.0/0` would be `full` in disguise). */
 const HOST = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/i;
 

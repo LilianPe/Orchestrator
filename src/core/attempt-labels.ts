@@ -91,6 +91,7 @@ export function promptTemplate(p: PromptInput): string {
     branch: p.branch && '<BRANCHE>',
     prUrl: p.prUrl && '<PR>',
     promptContext: p.promptContext && '<CONTEXTE>',
+    decisions: p.decisions && [{ question: '<QUESTION>', answer: '<REPONSE>', author: '<AUTEUR>' }],
     conventions: p.conventions && '<CONVENTIONS>',
     activeWork: p.activeWork && '<TRAVAUX>',
     reuse: p.reuse && '<REUTILISER>',

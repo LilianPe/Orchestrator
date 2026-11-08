@@ -23,7 +23,7 @@ new ClaudeCodeRunner({ transcriptsDir, sandboxes, command: ['sh', '-c', script, 
   pluginDir: '/factory/pack',
   settingsPath: '/factory/pack/settings.json',
   readOnly: false,
-  limits: { turns: 5, durationMs: 120_000, usd: 0 },
+  limits: { turns: 5, durationMs: 120_000 },
   env: {},
   sandboxId: sandbox.id,
 });

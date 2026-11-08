@@ -5,10 +5,13 @@ import { RISKS, TICKET_SIZES, type RunOutcome } from './types.js';
 
 /** A text of intake's three checks (ORC-207): one entry of what the factory publishes. */
 const finding = z.string().min(1).max(OUTPUT_LIMITS.item);
+/** A question `clarify` asks (ORC-210): its options are the hypotheses the agent sees, a free answer always possible. */
+export const clarifyQuestionSchema = z.object({ question: z.string().min(1), options: z.array(z.string().min(1)).min(2).max(5) }).strict();
 
 /**
  * What `intake` makes of the ticket (ORC-206): its size and risk, whether it is complete enough to start, and whether it
  * speaks of a screen. `missing` are the questions a human must answer before the run starts: required when not complete.
+ * Each is a question with its options (ORC-210), or a bare one when the agent sees none, answered freely.
  * Its three checks (ORC-207), each absent when it found nothing: `duplicates`, the work in progress elsewhere that does the
  * same (a PR, a branch, a ticket, by its link); `reuse`, the existing code close to the request, leads for `build`; `scope`,
  * a refusal of a ticket out of scope, with the split it proposes, never created.
@@ -18,7 +21,7 @@ export const intakeAssessmentSchema = z
     size: z.enum(TICKET_SIZES),
     risk: z.enum(RISKS),
     complete: z.boolean(),
-    missing: z.array(z.string().min(1)).max(3),
+    missing: z.array(z.union([z.string().min(1), clarifyQuestionSchema])).max(3),
     screen: z.boolean(),
     duplicates: z.array(z.object({ url: finding, why: finding }).strict()).max(3).optional(),
     reuse: z.array(z.object({ path: finding, symbol: finding.optional(), why: finding }).strict()).max(10).optional(),

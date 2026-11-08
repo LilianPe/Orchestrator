@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentOutput } from '../../src/core/agent-output.js';
-import { causeOf } from '../../src/core/block-cause.js';
 import { createHarness } from '../helpers/harness.js';
 
 /** A repository that makes delegation start with `intake` (ORC-206). */
@@ -29,7 +28,7 @@ function harness() {
 }
 
 describe('intake: duplicates (ORC-207)', () => {
-  it('an open PR on the same files: intake reads it with its files, the guard blocks the run with its link', async () => {
+  it('an open PR on the same files: intake reads it with its files, the guard asks about it with its link (clarify)', async () => {
     const h = harness();
     h.forge.openPullRequests = [{ number: 12, url: PR, title: 'CSV export of audits', branch: 'feat/csv', fork: false, files: ['src/audits/export.ts', 'src/audits/list.tsx'], filesTotal: 2 }];
     h.forge.branchNames = ['main', 'feat/csv', 'wip/other'];
@@ -47,14 +46,14 @@ describe('intake: duplicates (ORC-207)', () => {
 
     expect(skills(h)).toEqual(['/factory:intake']);
     const t = await h.ticket();
-    expect(t).toMatchObject({ blocked: true, blockedJob: 'intake', logical: 'todo' });
-    expect(causeOf(t.blockKind)).toBe('pickup');
-    expect(t.blockReason).toContain(PR);
-    expect(h.tracker.comments('REL-1').at(-1)).toContain(PR);
+    // The guard asks through clarify (ORC-210): the ticket waits, not blocked, the link in the question on screen.
+    expect(t).toMatchObject({ blocked: false, logical: 'todo', clarify: { job: 'intake' } });
+    expect(t.clarify?.questions[0]?.question).toContain(PR);
+    expect(h.tracker.activities('ls-1').at(-1)).toMatchObject({ type: 'elicitation', body: expect.stringContaining(PR) });
     expect(h.tracker.calls.filter((c) => c.method === 'moveTo')).toEqual([]);
   });
 
-  it("the ticket's own branch already on the forge blocks it with the link, whatever intake judged (not_started, absorbed)", async () => {
+  it("the ticket's own branch already on the forge is asked about with the link, whatever intake judged (not_started, absorbed)", async () => {
     const h = harness();
     h.forge.branchNames = ['factory/rel-1-export-csv'];
     h.forge.openPullRequests = [{ number: 3, url: 'https://github.com/acme/app/pull/3', title: 'REL-1', branch: 'factory/rel-1-export-csv', fork: false, files: ['a.ts'], filesTotal: 1 }];
@@ -62,8 +61,7 @@ describe('intake: duplicates (ORC-207)', () => {
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
     expect(skills(h)).toEqual(['/factory:intake']);
     const t = await h.ticket();
-    expect(t).toMatchObject({ blocked: true, blockedJob: 'intake' });
-    expect(t.blockReason).toContain('https://github.com/acme/app/pull/3');
+    expect(t.clarify?.questions[0]?.question).toContain('https://github.com/acme/app/pull/3');
   });
 
   it('a forge that cannot be read starts no intake that would see no duplicate', async () => {
@@ -105,8 +103,8 @@ describe('intake: scope (ORC-207)', () => {
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
     expect(skills(h)).toEqual(['/factory:intake']);
     const t = await h.ticket();
-    expect(t).toMatchObject({ blocked: true, blockedJob: 'intake', logical: 'todo' });
-    const comment = h.tracker.comments('REL-1').at(-1)!;
+    expect(t).toMatchObject({ blocked: false, logical: 'todo', clarify: { job: 'intake' } });
+    const comment = JSON.stringify(h.tracker.activities('ls-1').at(-1));
     expect(comment).toContain('A refactor of every adapter: too big for one PR.');
     expect(comment).toContain('Port the forge adapters');
     expect(h.tracker.calls.map((c) => c.method)).not.toContain('createIssue');

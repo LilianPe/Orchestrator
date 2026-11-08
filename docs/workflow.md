@@ -13,7 +13,7 @@ The project file contains **only what you change**. Exact merge rules:
 
 | Part | Rule |
 |---|---|
-| `tracker`, `states`, `limits`, `workspace` | Deep merge, key by key: `limits: { per_run: { usd: 10 } }` only changes the budget and keeps the pack's `turns` and `duration`. |
+| `tracker`, `states`, `limits`, `workspace` | Deep merge, key by key: `limits: { per_run: { duration: 2h } }` only changes the duration and keeps the pack's `turns`. |
 | Lists (`verify`, `setup`, `pickup.checks`…) | **Replaced** entirely, never concatenated. |
 | `on` | **Replaced per event type**: if the project declares `on.status.changed`, the pack's whole `status.changed` list is ignored; the pack's other events stay active. |
 | `jobs` | Deep merge, job by job: `jobs.review.model: sonnet` only changes the model of the pack's `review` job. A job name absent from the pack creates a new job. |
@@ -84,17 +84,16 @@ You can redefine only some of them; after merging, all five must have a name. `r
 | `question_sessions` | integer > 0 | 2 | Same for the `questions` queue. |
 | `per_run.turns` | integer > 0 | 150 | Number of assistant messages in a run, a message counting once even if written over several lines of the stream. Beyond that, the run is interrupted; its result is `limit`. A job with `step` never exceeds its step's turns: `per_run` and its `limits` can only lower them. |
 | `per_run.duration` | duration | `90m` | Maximum duration of a run, same `limit` result. |
-| `per_run.usd` | number > 0 | 5 | Passed to Claude Code (`--max-budget-usd`); when Claude Code stops on this cap, the result is `limit`. |
 | `verify_attempts` | integer ≥ 0 | 4 (preset) | Number of verification passes before blocking the ticket (see `jobs.*.verify`). `0` and `1` block on the first failure. By default, the bound from the [`factory/default` preset](preset.md): 3 returns to the run, the 4th failure blocks. |
 | `ci_fix_attempts` | integer ≥ 0 | 2 (preset) | Number of runs a red CI (`pr.checks_failed`) or a conflict with the base (`pr.conflicted`, ORC-146) can launch, together, before the next one blocks the ticket (see below). `0` blocks on the first. |
-| `review_rounds` | integer > 0 | 5 | Given to the review skill in its prompt (« Max review rounds: 5 »); only for jobs whose skill ends with `:review`. The skill respects this number; Relais does not count it. |
+| `review_rounds` | integer > 0 | 2 (preset) | Given to the review skill in its prompt (« Max review rounds: 2 »); only for jobs whose skill ends with `:review`. The skill respects this number; Relais does not count it. By default the preset's `review_ci` bound, the count shared with red CI and rebases (ORC-184, ORC-216, ORC-146). |
 
 The defaults of `verify_attempts` and `ci_fix_attempts` come from the [`factory/default` preset](preset.md) (ORC-187); the pack no longer declares them. These two keys remain a possible override until `workflow.yml` is removed (ORC-177).
 
 `per_run` is the default limit for **all** jobs; each job can replace it field by field with its own `limits`.
 
 What happens when a run hits a limit (`limit`) or fails?
-- Job in the `dev` queue: the ticket is **blocked** and Relais says so in the ticket's block comment (« The run <job> reached a limit (turns, duration or budget). », or « … failed. »). A reply in the ticket relaunches that job, or `dev-feedback` if the block has none (the pack's `session.prompted` rule).
+- Job in the `dev` queue: the ticket is **blocked** and Relais says so in the ticket's block comment (« The run <job> reached a limit (turns, duration or budget). », or « … failed. »; an attempt stopped at its token or turn cap says « The run <job> spent its token budget … » or « … its turn budget (max_turns of its step). », kind `budget`, ORC-216). A reply in the ticket relaunches that job, or `dev-feedback` if the block has none (the pack's `session.prompted` rule).
 - Job in the `questions` queue: Relais replies « I could not finish (failure or limit reached). ».
 
 What happens when CI stays red (`ci_fix_attempts`)?
@@ -107,7 +106,7 @@ Durations: a number (milliseconds) or a `<integer><unit>` text with the unit `ms
 
 There is no "unlimited" value: see section 8.
 
-The **daily budget** for the whole instance is not set here, but in `~/.relais/config.yaml` (`limits.perDayUsd`). When it is reached, new runs stay queued until the next day (UTC day) and Relais reports it once per ticket per day in a comment.
+There is no budget in dollars (ORC-216): a `usd` key left in `per_run` or a job's `limits` is ignored. Budgets count tokens and turns: `budgets` of `factory.yml` ([`configuration.md`](configuration.md)).
 
 > Queue capacities (`parallel_sessions`, `question_sessions`) are global to the instance: they are read from the workflow of the **first** project in `config.yaml`. The other limits are specific to each project.
 
@@ -138,7 +137,7 @@ A job describes **how** to launch a Claude Code run. Fields:
 | `verify_failure` | `block` | — | A failing `verify` blocks the ticket instead of relaunching the job, which did not write the commit: `review`, on a human push. |
 | `pickup` | boolean | `false` | If `true`, applies `tracker.pickup.checks` before the ticket's first run (when no Claude session exists yet). `intake` runs them too, as inputs of its guard rather than a block (ORC-206, [preset](preset.md#intake-step-and-the-guard-before-in-progress-orc-206)). Both also read the « blocked by » tickets not done: the ticket waits for them instead of starting (ORC-363, [preset](preset.md#waiting-on-a-blocked-by-ticket-orc-363)). |
 | `structured_output` | boolean | absent | **Provisional** (ORC-289, until ORC-191/ORC-192 make every agent call `submit_result`): if `true`, a run in the `dev` queue that ends without valid output is a failure. When absent, it stays a success. In the pack, `true` for `dev` only, the `build` step (ORC-136). |
-| `limits` | `{ turns, duration, usd }`, each optional | `limits.per_run` | Replaces the per-run limits for this job. |
+| `limits` | `{ turns, duration }`, each optional | `limits.per_run` | Replaces the per-run limits for this job. |
 | `on_start` | `{ move: <logical state> }` | `{}` | Moves the ticket when the run starts (if it is not already there). |
 | `on_success` | `{ move: <logical state>, post: summary \| reply \| synthesis }` | `{}` | After a successful run (and successful checks): moves the ticket and/or posts in the Linear session the message the factory composes from the agent's `submit_result`, never from its last message (ORC-214): `summary` (end of the dev work) posts its summary, why, risks, untested and points to review; `reply` (reply to feedback, to a question) and `synthesis` (review synthesis) post its `summary` alone. A run that returned no result posts a fixed sentence saying so. The text then goes through the `OutputPolicy` ([`linear.md`](linear.md#what-the-factory-publishes-orc-214)). |
 
@@ -200,7 +199,7 @@ These types are accepted by the loader, but Relais handles them in hard-coded fa
 |---|---|
 | `run.finished` | Success: checks if the job has any, otherwise `on_success`. Failure or limit: ticket blocked (`dev` queue) or error message (`questions` queue). `dev` queue, depending on the attempt's outcome (ORC-289): agent question (`needs_input`) or disputed ticket (`spec_impossible`), ticket blocked with the question or the justification; infrastructure failure (`errored`: runner or sandbox down, unreadable output; not an error after the run has ended), ticket blocked, without a fix run; an already blocked ticket (the agent called `ask`) keeps its block, without a second message. A `done` returned by a failing run is a failure. Stopped run: nothing. End of a `dev` queue run after the PR is merged: nothing. |
 | `verify.passed` / `verify.failed` | `on_success`, or a new attempt, or a block (see `verify`). After the PR is merged: nothing. |
-| `timer.fired` | A timer set by a decision expires (event `timer:<key>:<due>` written to the inbox). Kind `debounce`: launches the job whose `debounce` delay just expired (and unblocks the ticket). The kinds `clarify.remind`, `clarify.expire` and `usage.reset` exist with no rule for now (ORC-210, ORC-215): nothing. |
+| `timer.fired` | A timer set by a decision expires (event `timer:<key>:<due>` written to the inbox). Kind `debounce`: launches the job whose `debounce` delay just expired (and unblocks the ticket). Kinds `clarify.remind` and `clarify.expire` (ORC-210): at 24 h the open `clarify` questions are asked again, at 72 h the ticket is blocked on `intake`; a round answered or ended since does nothing ([preset](preset.md#clarify-questions-reminder-and-expiry-orc-210)). Kind `usage.reset` without a job: nothing. |
 | `pr.opened` | Records the PR and attaches it to the Linear session. |
 | `control.pause` / `control.resume` / `control.stop` | Pause / resume of the queue, stop of a ticket (UI, `relais pause`, `relais resume`, `relais stop`). |
 
@@ -312,7 +311,7 @@ To express an "or", write several rules in a row: the first one that matches win
    - `dev` queue on a non-delegated ticket: refused;
    - `knowledge` job without a knowledge repository: ignored;
    - `dev` queue while a run or checks are in progress on this ticket: the job is put **on hold on the ticket** and launched as soon as the current run is finished. There is only one waiting slot per ticket: a new request replaces the previous one;
-   - queue paused or daily budget reached: queued;
+   - queue paused or the Claude account's usage limit reached: queued;
    - no free slot in the queue (`parallel_sessions` / `question_sessions`): queued;
    - otherwise: launch.
 5. Launch: `pickup` checks if needed, preparation of the workspace (`workspace`), `on_start.move`, choice of session (`session`), prompt construction (`/<skill>`, ticket, `input`), then Claude Code with the job's `model` and `limits`.
@@ -359,7 +358,7 @@ version: 1
 jobs:
   review:
     model: sonnet
-    limits: { usd: 2, duration: 30m }
+    limits: { duration: 30m }
 ```
 
 ### Adding a custom job with its own skill
@@ -376,7 +375,7 @@ jobs:
     session: new
     skill: "audit-securite"
     input: thread
-    limits: { turns: 60, duration: 15m, usd: 2 }
+    limits: { turns: 60, duration: 15m }
     on_success: { post: reply }
 on:
   command:
@@ -457,7 +456,7 @@ on:
     - { when: "state in [todo, dev] && !blocked", run: intake }
 ```
 
-Delegation then runs `intake` first: size and risk are recorded, and an incomplete ticket is blocked with its questions instead of starting `dev`. The pickup checks become inputs of that guard ([preset](preset.md#intake-step-and-the-guard-before-in-progress-orc-206)).
+Delegation then runs `intake` first: size and risk are recorded, and an incomplete ticket gets its questions (`clarify`, ORC-210) instead of starting `dev`. The pickup checks become inputs of that guard ([preset](preset.md#intake-step-and-the-guard-before-in-progress-orc-206)).
 
 ## 7. Common errors and validation
 
@@ -494,7 +493,7 @@ All limits must be strictly positive (except `verify_attempts` and `ci_fix_attem
 ```yaml
 version: 1
 limits:
-  per_run: { turns: 1000, duration: 8h, usd: 50 }
+  per_run: { turns: 1000, duration: 8h }
 ```
 
 Still, keep reasonable caps: they stop an agent running in a loop, bound the spending on a poorly specified ticket, and free a blocked run's slot for other tickets (a run holds its slot in the queue until the end). A run stopped by a limit is not lost: the ticket is blocked with a message, and a reply in the thread resumes the same session.

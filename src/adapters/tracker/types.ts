@@ -20,7 +20,9 @@ export interface TrackerIssue {
 }
 
 export type ActivityInput =
-  | { type: 'thought' | 'response' | 'elicitation' | 'error'; body: string; ephemeral?: boolean }
+  | { type: 'thought' | 'response' | 'error'; body: string; ephemeral?: boolean }
+  /** `options`: picked in a list (Linear's `select` signal, ORC-210), a free answer still possible. */
+  | { type: 'elicitation'; body: string; options?: readonly string[]; ephemeral?: boolean }
   | { type: 'action'; action: string; parameter: string; result?: string; ephemeral?: boolean };
 
 export interface SearchHit {

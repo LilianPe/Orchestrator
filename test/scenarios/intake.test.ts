@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentOutput } from '../../src/core/agent-output.js';
-import { causeOf } from '../../src/core/block-cause.js';
 import { createHarness } from '../helpers/harness.js';
 
 /** A repository that makes delegation start with `intake` (ORC-206), as the pack's own comment says. */
@@ -38,17 +37,16 @@ describe('intake, the first step (ORC-206)', () => {
     expect(dev?.labels?.risk).toBe('medium');
   });
 
-  it('an incomplete ticket goes to clarify instead of starting: blocked with its questions, never moved to In Progress', async () => {
+  it('an incomplete ticket goes to clarify instead of starting: asked its questions, never moved to In Progress', async () => {
     const h = createHarness({ projectYaml: INTAKE_FIRST });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export', description: DESCRIPTION });
     h.runner.enqueue(assessment({ complete: false, missing: ['CSV or XLSX?'] }));
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
     expect(h.runner.requests).toHaveLength(1);
     const t = await h.ticket();
-    expect(t).toMatchObject({ blocked: true, blockedJob: 'intake', logical: 'todo', size: 's', risk: 'low' });
-    expect(causeOf(t.blockKind)).toBe('pickup');
+    expect(t).toMatchObject({ blocked: false, logical: 'todo', size: 's', risk: 'low', clarify: { job: 'intake' } });
     expect(h.tracker.calls.filter((c) => c.method === 'moveTo')).toEqual([]);
-    expect(h.tracker.comments('REL-1').at(-1)).toContain('CSV or XLSX?');
+    expect(h.tracker.activities('ls-1').at(-1)).toMatchObject({ type: 'elicitation', body: expect.stringContaining('CSV or XLSX?') });
 
     // The answer relaunches intake, which reads the ticket again; complete now, dev starts.
     h.runner.enqueue(assessment(), DEV);
@@ -57,15 +55,15 @@ describe('intake, the first step (ORC-206)', () => {
     expect(h.runner.requests[1]!.prompt).toContain('CSV');
   });
 
-  it('the deterministic checks no longer block directly: they are inputs of the guard, which blocks after intake', async () => {
+  it('the deterministic checks no longer block directly: they are inputs of the guard, which asks after intake', async () => {
     const h = createHarness({ projectYaml: INTAKE_FIRST });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Flou', description: 'trop court' });
     h.runner.enqueue(assessment({ size: 'xs' }));
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
     expect(skills(h)).toEqual(['/factory:intake']);
     const t = await h.ticket();
-    expect(t).toMatchObject({ blocked: true, blockedJob: 'intake', size: 'xs' });
-    expect(t.blockReason).toContain('The description is shorter than 30 characters.');
+    expect(t).toMatchObject({ blocked: false, size: 'xs' });
+    expect(t.clarify?.questions[0]?.question).toContain('The description is shorter than 30 characters.');
   });
 
   it('the checks hold before the first run only: a ticket delegated again after its dev run is not refused for its own branch', async () => {
