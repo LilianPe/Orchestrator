@@ -92,10 +92,10 @@ The `intake` job (agent, skill `factory:intake`, Sonnet, effort low, the reposit
 | `size` | `xs`, `s`, `m`, `l`, `xl` |
 | `risk` | `low`, `medium`, `high` |
 | `complete` | whether a developer can build it without asking anything |
-| `missing` | the questions to answer, at least one when not complete |
+| `missing` | the questions to answer: at least one when not complete, at most 3 |
 | `screen` | whether the ticket changes something a user sees |
 
-At its launch, the factory runs the deterministic checks of `tracker.pickup.checks` (`src/core/pickup.ts`) and journals the failed ones with the attempt's end (`pickup` of `run.finished`): they no longer block on their own, they are inputs of the guard.
+Before the ticket's first run (no Claude session yet), the factory runs the deterministic checks of `tracker.pickup.checks` (`src/core/pickup.ts`) and journals the failed ones with the attempt's end (`pickup` of `run.finished`): they no longer block on their own, they are inputs of the guard.
 
 At its end, `decide` records the assessment in the ticket's state:
 
@@ -105,7 +105,7 @@ At its end, `decide` records the assessment in the ticket's state:
 
 Each later attempt of the ticket carries its risk in its labels (`risk`, ORC-226).
 
-Then the guard before In Progress: a failed deterministic check or an incomplete ticket does not start. Until `clarify` exists (ORC-210), the ticket is blocked on `intake` (cause « pickup refused ») and the blocking comment asks the questions; nothing moves to In Progress. A reply relaunches `intake` with the answer, which reads the ticket again. A complete ticket starts `dev` (`on_success.run`), which moves it to In Progress. A `dev` on a ticket `intake` already assessed does not run the pickup checks again.
+Then the guard before In Progress: a failed deterministic check or an incomplete ticket does not start. Until `clarify` exists (ORC-210), the ticket is blocked on `intake` (cause « pickup refused ») and the blocking comment asks the questions; nothing moves to In Progress. A reply relaunches `intake` with the answer, which reads the ticket again. A complete ticket starts `dev` (`on_success.run`), which moves it to In Progress. `dev` runs its own pickup checks again before its first run: they pass when the guard did, unless the ticket changed in between.
 
 `intake` is off in the pack: a repository turns it on by making delegation start with it (`ticket.delegated: - { when: "state in [todo, dev] && !blocked", run: intake }`). Without it, `dev`'s pickup checks block directly, as before.
 

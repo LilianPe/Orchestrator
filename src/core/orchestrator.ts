@@ -2029,10 +2029,10 @@ export class Orchestrator {
       const t = await state(this.ticket(project.id, ticketId));
       if (taken(t)) return { lost: t } as const;
       const issue = await tracker.getIssue(ticketId);
-      // The deterministic checks of the ticket (ORC-206): at intake, inputs of its guard, journaled with its end; else
-      // they block a job that picks up a ticket, unless intake already assessed it (its guard read them then).
+      // The deterministic checks, before the ticket's first run: at intake, inputs of its guard, journaled with its end
+      // (ORC-206); else they block a job that picks up the ticket.
       const intake = job.step === 'intake';
-      const failures = intake || (job.pickup && !t.claudeSessionId && !t.size) ? await pickupFailures(wf.tracker.pickup.checks, issue, project.repoPath, workspaces) : [];
+      const failures = (intake || job.pickup) && !t.claudeSessionId ? await pickupFailures(wf.tracker.pickup.checks, issue, project.repoPath, workspaces) : [];
       if (!intake && failures.length) {
         this.d.scheduler.release(key);
         const reason = failures.join(' ');

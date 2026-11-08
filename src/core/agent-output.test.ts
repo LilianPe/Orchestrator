@@ -28,6 +28,7 @@ describe('parseAgentOutput', () => {
     expect(parseAgentOutput({ ...done, intake: { ...intake, complete: false } })).toEqual({ ok: false, error: expect.stringContaining('intake.missing') });
     expect(parseAgentOutput({ ...done, intake: { ...intake, complete: false, missing: ['CSV or XLSX?'] } }).ok).toBe(true);
     expect(parseAgentOutput({ ...done, intake: { ...intake, risk: 'none' } })).toEqual({ ok: false, error: expect.stringContaining('intake.risk') });
+    expect(parseAgentOutput({ ...done, intake: { ...intake, complete: false, missing: ['a?', 'b?', 'c?', 'd?'] } })).toEqual({ ok: false, error: expect.stringContaining('intake.missing') });
   });
 });
 

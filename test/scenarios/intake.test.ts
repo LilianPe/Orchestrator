@@ -60,4 +60,22 @@ describe('intake, the first step (ORC-206)', () => {
     expect(t).toMatchObject({ blocked: true, blockedJob: 'intake', size: 'xs' });
     expect(t.blockReason).toContain('The description is shorter than 30 characters.');
   });
+
+  it('the checks hold before the first run only: a ticket delegated again after its dev run is not refused for its own branch', async () => {
+    const h = createHarness({ projectYaml: INTAKE_FIRST });
+    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: DESCRIPTION });
+    const complete = { output: assessment({ size: 's', risk: 'low', complete: true, missing: [], screen: false }) };
+    h.runner.enqueue(complete, { events: [{ kind: 'text', text: 'Done.' }] });
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    // The dev run published its branch; the ticket goes back to In Progress and is delegated again.
+    h.workspaces.remoteBranches.add('factory/rel-1-export-csv');
+    await h.send('status.changed', { from: 'human_review', to: 'dev' });
+    await h.orch.drained();
+    const before = h.runner.requests.length;
+    h.runner.enqueue(complete, { events: [{ kind: 'text', text: 'Done.' }] });
+    await h.send('ticket.delegated', { linearSessionId: 'ls-2' });
+    const t = await h.ticket();
+    expect(t.blocked).toBe(false);
+    expect(h.runner.requests.slice(before).map((r) => r.prompt.split('\n')[0])[0]).toBe('/factory:intake');
+  });
 });

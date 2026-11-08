@@ -68,6 +68,10 @@ describe('intake (ORC-206)', () => {
     const t = after(ticket(), e);
     expect(t).toMatchObject({ blocked: true, blockedJob: 'intake', size: 'm' });
     expect(t.blockReason).toContain('The description has no acceptance criteria.');
+    // A failed check is a fact, not a question: it goes with what was tried, and the question asks to complete the ticket.
+    expect(out.effects.find((x) => x.kind === 'block_comment')).toMatchObject({
+      block: { tried: expect.arrayContaining(['The description has no acceptance criteria.']), question: 'Can you complete the ticket, then reply here?' },
+    });
   });
 
   it('a reply to the guard relaunches intake, which reads the ticket again', () => {

@@ -98,8 +98,8 @@ function intakeEnd(out: Decision, at: { event: FactoryEvent; ticket: TicketState
     reason,
     body: `I cannot start this ticket yet:\n${gaps.map((g) => `- ${g}`).join('\n')}\nAnswer here, or complete the ticket and reply, and I will read it again.`,
     job: job.name,
-    tried: [`Read the ticket (${job.name}): not complete enough to start.`],
-    question: gaps.join(' '),
+    tried: [`Read the ticket (${job.name}): not complete enough to start.`, ...(p.pickup ?? [])],
+    question: a.complete ? 'Can you complete the ticket, then reply here?' : a.missing.join(' '),
   });
 }
 

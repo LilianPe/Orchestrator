@@ -11,7 +11,7 @@ export const intakeAssessmentSchema = z
     size: z.enum(TICKET_SIZES),
     risk: z.enum(RISKS),
     complete: z.boolean(),
-    missing: z.array(z.string().min(1)),
+    missing: z.array(z.string().min(1)).max(3),
     screen: z.boolean(),
   })
   .strict()
