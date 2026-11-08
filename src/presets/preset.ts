@@ -1,6 +1,7 @@
 import type { NetworkLevel } from '../adapters/sandbox/types.js';
 import { NETWORK_RANK } from '../network/levels.js';
 import { hashCanonical } from '../runtime/workflow-version.js';
+import { budgetViolations, type BudgetCaps } from './budget.js';
 
 /** A preset (ORC-187): typed steps chained by `next`, every way back bounded by a counter. */
 export interface Preset {
@@ -42,7 +43,7 @@ interface BaseStep {
 interface AgentFields {
   model: string;
   effort: Effort;
-  /** Turn cap of the step: the budget ceiling until token caps exist (ORC-216). */
+  /** Turn cap of the step; its cap in tokens is `budgets.per_step_tokens` of factory.yml (ORC-216). */
   maxTurns: number;
   network: NetworkLevel;
 }
@@ -59,6 +60,11 @@ export type Step =
 export interface CompileOptions {
   /** Network level chosen by the repository; a step can only narrow it. */
   repoNetwork?: NetworkLevel;
+  /**
+   * The budgets to check the invariant « budget caps » against (ORC-216): a cap to set, or a worst case over the
+   * ticket's, refuses the preset. Absent, as the daemon loads it: the caps are still to calibrate, the structure alone is checked.
+   */
+  budgets?: BudgetCaps;
 }
 
 export interface CompiledPreset {
@@ -124,6 +130,8 @@ export function compilePreset(preset: Preset, options: CompileOptions = {}): Com
     if (s.type === 'publish' && s.mode === 'merge' && ungated.has(s.id)) violations.push(`step ${s.id}: reachable from written code without a merge gate`);
   }
 
+  // The worst case walks the graph: only on a preset whose structure holds.
+  if (violations.length === 0 && options.budgets) violations.push(...budgetViolations(preset, options.budgets));
   if (violations.length > 0) throw new PresetError(violations);
   return { preset, hash: hashCanonical(preset) };
 

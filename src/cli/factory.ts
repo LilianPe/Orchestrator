@@ -46,7 +46,7 @@ async function main(): Promise<number> {
   // Its own options, and no instance needed to replay a file (the CI has none).
   if (process.argv[2] === 'replay') return runReplayCommand(process.argv.slice(3));
   // A repository file only: no instance needed either.
-  if (process.argv[2] === 'validate') return runValidateCommand({ repoPath: process.argv[3] ?? process.cwd(), out: (l) => console.log(l) });
+  if (process.argv[2] === 'validate') return runValidateCommand({ repoPath: process.argv[3] ?? process.cwd(), out: (l) => console.log(l), factoryYml: () => loadFactoryYml(factoryHome()) });
   const { positionals, values } = parseArgs({
     allowPositionals: true,
     options: { 'fake-runner': { type: 'boolean' }, json: { type: 'boolean' } },
