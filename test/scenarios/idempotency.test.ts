@@ -89,7 +89,8 @@ describe('idempotency table (ORC-162, docs/idempotency.md)', () => {
     h.runner.enqueue({ events: [{ kind: 'text', text: 'PR ouverte, tests verts.' }] });
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
     await settled();
-    expect(h.tracker.activities('ls-1').filter((a) => a.type === 'response')).toEqual([{ type: 'response', body: 'PR ouverte, tests verts.' }]);
+    // The end of a build is its recap (ORC-195): the summary submitted, then the tests added and the work.
+    expect(h.tracker.activities('ls-1').filter((a) => a.type === 'response')).toEqual([{ type: 'response', body: expect.stringMatching(/^PR ouverte, tests verts\.\n\n\*\*Tests added\*\*\n_None stated\._\n\n\*\*Work\*\*: 1 attempt, 1 turn, /) }]);
     expect(await result()).toMatchObject({ kind: 'post_output', deduplicated: true });
   });
 

@@ -23,14 +23,27 @@ function harness(title = 'Export CSV') {
 const responses = (h: ReturnType<typeof harness>) => h.tracker.activities('ls-1').filter((a) => a.type === 'response');
 
 describe('the OutputPolicy on the chain (ORC-214)', () => {
-  it('a summary carrying a secret: Linear gets the notice that it is withheld, nothing of the secret', async () => {
+  it('a summary carrying a secret: the PR it describes is not published (ORC-195), and nothing of the secret reaches Linear or GitHub', async () => {
     const h = harness();
     h.runner.enqueue({ events: [{ kind: 'text', text: 'done' }], output: result(`Export added. Token: ${SECRET}`) });
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
-    expect((await h.ticket()).logical).toBe('human_review');
+    expect(h.forge.opened).toEqual([]);
+    const t = await h.ticket();
+    expect(t.blocked).toBe(true);
+    expect(t.blockReason).toMatch(/output policy.*github-pat/s);
     expect(JSON.stringify(h.tracker.calls)).not.toContain(SECRET);
-    expect(responses(h).at(-1)).toMatchObject({ body: expect.stringMatching(/withheld.*github-pat/s) });
-    expect(h.logs.some((l) => l.level === 'warn' && /withheld/.test(l.message) && !l.message.includes(SECRET))).toBe(true);
+  });
+
+  it("a recap that no longer passes once published: Linear gets the notice that it is withheld, nothing of the secret", async () => {
+    // The same text passed the PR, and the policy's verdict on the recap is its own: here the scan finds the recap's line of work.
+    const h = createHarness({ outputPolicy: new OutputPolicy(async (text) => (text.includes('**Work**') ? ['generic-api-key'] : [])) });
+    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Export the audits to CSV from the list of audits.' });
+    h.workspaces.heads.set(WORKTREE, 'abc123');
+    h.runner.enqueue({ events: [{ kind: 'text', text: 'done' }], output: result('Export added.') });
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    expect((await h.ticket()).logical).toBe('human_review');
+    expect(responses(h).at(-1)).toMatchObject({ body: expect.stringMatching(/withheld.*generic-api-key/s) });
+    expect(h.logs.some((l) => l.level === 'warn' && /withheld/.test(l.message))).toBe(true);
   });
 
   it("a reply to feedback is its `submit_result` summary; one that returned none has nothing of its last message posted", async () => {
