@@ -251,6 +251,12 @@ describe('recorded journals (test/replay/journals)', () => {
     expect(replayJournal(journal)).toMatchObject({ divergences: [], replayed: journal.entries.length });
   });
 
+  // Nothing else reads most of the frozen copies by name: a deleted one would take its coverage away silently.
+  it('keeps the frozen copy of every scenario journal as main held it before the freshness check (ORC-310)', () => {
+    const expected = [...Object.keys(SCENARIOS), 'review-merge-done.v1'].map((name) => `${name}.pre-orc-310.json`);
+    expect(files.filter((f) => f.endsWith('.pre-orc-310.json')).sort()).toEqual(expected.sort());
+  });
+
   // The oracle replays a journal from its own recorded inputs, so a stale journal stays green there:
   // this compares it with what its scenario records today (ORC-310).
   it.each(Object.keys(SCENARIOS))('%s: the committed journals are what the scenario records today', async (name) => {
