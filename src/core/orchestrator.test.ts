@@ -374,28 +374,33 @@ describe('Orchestrator', () => {
 
   describe('the cost caps of factory.yml (ORC-340)', () => {
     /** An earlier attempt of REL-1 that spent `output` tokens. */
-    const spent = (store: SqliteStore, output: number) =>
-      store.putRun({ id: 'old', projectId: 'p', ticketId: 'REL-1', job: 'dev', queue: 'dev', status: 'limit', claudeSessionId: 's', startedAt: 1, endedAt: 2, costUsd: 1, turns: 1, lastText: '', token: 't-old', cwd: '/w', tokens: { input: 0, output, cacheRead: 5_000_000, cacheCreation: 0 } });
+    const spent = (store: SqliteStore, output: number, run: { id: string; job: string; queue: 'dev' | 'questions' } = { id: 'old', job: 'dev', queue: 'dev' }) =>
+      store.putRun({ ...run, projectId: 'p', ticketId: 'REL-1', status: 'limit', claudeSessionId: 's', startedAt: 1, endedAt: 2, costUsd: 1, turns: 1, lastText: '', token: `t-${run.id}`, cwd: '/w', tokens: { input: 0, output, cacheRead: 5_000_000, cacheCreation: 0 } });
 
-    it('blocks a ticket past per_ticket_tokens before its next run, and says why', async () => {
-      const { store, tracker, runner, orch } = setup({ perTicketTokens: 1_000 });
+    it('blocks a ticket past per_ticket_tokens before its next run, before any workspace, and says why', async () => {
+      const workspaces = new FakeWorkspaces();
+      const { store, tracker, runner, orch } = setup({ perTicketTokens: 1_000, workspaces });
       tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
       await spent(store, 1_000);
       await orch.accept(delegated());
       await orch.drained();
       expect(runner.requests).toEqual([]);
+      expect(workspaces.prepared).toEqual([]);
       const t = (await store.getTicket('p', 'REL-1'))!;
       expect(t.blocked).toBe(true);
-      expect(t.blockReason).toBe('Token budget of the ticket reached: 1000 tokens spent of 1000 (budgets.per_ticket_tokens). Raise the cap or split the ticket, then reply here.');
+      expect(t.blockReason).toBe('Token budget of the ticket reached: 1000 tokens spent of 1000 by its code runs (budgets.per_ticket_tokens). Raise the cap or split the ticket, then reply here.');
     });
 
-    it('caps a run under it at what the ticket has left, cache reads left out', async () => {
+    it('caps a run under it at what the ticket has left, counting its code runs only, and keeps the cap on the run', async () => {
       const { store, tracker, runner, orch } = setup({ perTicketTokens: 1_000 });
       tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
       await spent(store, 400);
+      // A question on the ticket is no code run: its tokens are not the ticket's budget.
+      await spent(store, 500, { id: 'q-old', job: 'ask', queue: 'questions' });
       await orch.accept(delegated());
       await orch.drained();
       expect(runner.requests[0]!.limits.tokens).toBe(600);
+      expect((await store.getRun(runner.requests[0]!.runId))!.limits).toMatchObject({ tokens: 600 });
     });
 
     it('on_usage_limit: wait, a run the usage limit stopped waits for the reset instead of blocking', async () => {

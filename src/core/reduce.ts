@@ -141,6 +141,9 @@ export function isOwnMoveEcho(t: TicketState | undefined, e: FactoryEvent | Inte
   return !cancelled && to === t.recordedStatus && t.logical === t.recordedStatus;
 }
 
+/** What moves a ticket on, and so ends its wait on the usage limit (ORC-340): its `usage.reset` timer then resumes nothing. */
+const ENDS_USAGE_WAIT: ReadonlySet<string> = new Set(['ticket.undelegated', 'status.changed', 'status.recorded', 'ticket.blocked', 'work.cancelled', 'run.started']);
+
 /** Pure: applies one event to a ticket's state and returns the new state; the input is never mutated. */
 export function reduce(state: TicketState | undefined, event: FactoryEvent | InternalEvent): TicketState | undefined {
   if (isExternal(event) && event.type === 'dead_letter.repaired') return repaired(state, event);
@@ -148,5 +151,8 @@ export function reduce(state: TicketState | undefined, event: FactoryEvent | Int
     const created = isExternal(event) ? tracked(event) : undefined;
     return created && external(created, event as FactoryEvent);
   }
-  return isExternal(event) ? external(state, event) : internal(state, event);
+  const next = isExternal(event) ? external(state, event) : internal(state, event);
+  // An echo of the factory's own move changes nothing, and a run out of the dev queue (a question) does not take the step.
+  const movedOn = next !== state && ENDS_USAGE_WAIT.has(event.type) && (event.type !== 'run.started' || event.queue === 'dev');
+  return next?.usageWait && movedOn ? { ...next, usageWait: null } : next;
 }

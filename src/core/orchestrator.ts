@@ -548,7 +548,8 @@ export class Orchestrator {
       if (!project || !job || !runner.attach) return false;
       const sandbox = sandboxes && (await sandboxes.reattach(run.id));
       if (sandboxes && !sandbox) return false;
-      const handle = runner.attach({ runId: run.id, limits: job.limits, model: job.model, elapsedMs: clock.now() - run.startedAt, env: this.d.agentEnv(run), ...stagnationBounds(project.workflow, job) });
+      // The limits it was launched with: the ticket's token budget may have lowered the job's (ORC-340).
+      const handle = runner.attach({ runId: run.id, limits: run.limits ?? job.limits, model: job.model, elapsedMs: clock.now() - run.startedAt, env: this.d.agentEnv(run), ...stagnationBounds(project.workflow, job) });
       if (!handle) return false;
       // Its slot, in the memory of this process. Over a capacity lowered meanwhile, it goes on all the same.
       scheduler.tryAcquire(run.queue, `${run.ticketId}:${run.queue}`);
@@ -1801,15 +1802,15 @@ export class Orchestrator {
     return value === '1' || (await this.d.store.getRun(value)) !== undefined;
   }
 
-  /**
-   * What the ticket may still spend under `budgets.per_ticket_tokens` (ORC-340), the lower of factory.yml's and the repository's;
-   * undefined without a cap. Spent, it throws: the launch is refused and the ticket blocked with the reason.
-   */
-  private async ticketTokensLeft(projectId: string, ticketId: string, config: RepoConfig): Promise<number | undefined> {
-    const cap = Math.min(this.d.perTicketTokens ?? Infinity, config.budgets?.perTicketTokens ?? Infinity);
-    if (cap === Infinity) return undefined;
-    const spent = (await this.d.store.ticketRuns(projectId, ticketId)).reduce((n, r) => n + (r.tokens ? spentTokens(r.tokens) : 0), 0);
-    if (spent >= cap) throw new TicketBudgetError(`${TICKET_TOKENS_REACHED}${spent} tokens spent of ${cap} (budgets.per_ticket_tokens). Raise the cap or split the ticket, then reply here.`);
+  /** Tokens the ticket's code runs spent (`budgets.per_ticket_tokens`, ORC-340), cache reads left out: its questions (`ask`, `learn`) do not count. */
+  private async codeTokensSpent(projectId: string, ticketId: string): Promise<number> {
+    return (await this.d.store.ticketRuns(projectId, ticketId)).reduce((n, r) => n + (r.queue === 'dev' && r.tokens ? spentTokens(r.tokens) : 0), 0);
+  }
+
+  /** What is left under `cap` (ORC-340), undefined without one. Spent, it throws: the launch is refused and the ticket blocked with the reason. */
+  private tokensLeft(spent: number, cap: number | undefined): number | undefined {
+    if (cap === undefined) return undefined;
+    if (spent >= cap) throw new TicketBudgetError(`${TICKET_TOKENS_REACHED}${spent} tokens spent of ${cap} by its code runs (budgets.per_ticket_tokens). Raise the cap or split the ticket, then reply here.`);
     return cap - spent;
   }
 
@@ -1855,6 +1856,10 @@ export class Orchestrator {
       }
     }
 
+    // Before any workspace (ORC-340): factory.yml's cap now, the repository's, read from its config, once the worktree is there.
+    const spent = job.queue === 'dev' ? await this.codeTokensSpent(project.id, ticketId) : undefined;
+    if (spent !== undefined) this.tokensLeft(spent, this.d.perTicketTokens);
+
     // Read while the workspace is prepared; a pack it cannot read gives null fingerprints (ORC-226).
     const pack = packFingerprints(this.d.packDir, (err) => this.log('warn', `attempt labels: pack not fingerprinted: ${err.message}`));
     const runId = this.newId();
@@ -1879,7 +1884,10 @@ export class Orchestrator {
       const config = await this.repoConfigOf(project, { fetch: !ws.fresh && job.workspace !== 'trunk-readonly' });
       const setup = config.setup ? [config.setup] : wf.workspace.setup;
       setUp ||= !setup.length;
-      const tokensLeft = job.queue === 'dev' ? await this.ticketTokensLeft(project.id, ticketId, config) : undefined;
+      const caps = [this.d.perTicketTokens, config.budgets?.perTicketTokens].filter((c) => c !== undefined);
+      const tokensLeft = spent === undefined || !caps.length ? undefined : this.tokensLeft(spent, Math.min(...caps));
+      // The ticket's budget left caps the attempt too: past it, a `limit` blocks the ticket. Kept on the run, for a reattach (ORC-340).
+      const limits = tokensLeft === undefined ? job.limits : { ...job.limits, tokens: Math.min(job.limits.tokens ?? Infinity, tokensLeft) };
       t = await this.ticket(project.id, ticketId);
       if (job.queue === 'dev') t = await this.apply(t, { type: 'workspace.prepared', path: ws.path, port: ws.port, branch: ws.branch });
       if (job.onStart.move && t.logical !== job.onStart.move) await this.move(project, t, job.onStart.move);
@@ -1994,6 +2002,7 @@ export class Orchestrator {
         sensitivePaths,
         ...(input ? { input } : {}),
         repoConfig: config,
+        ...(limits !== job.limits ? { limits } : {}),
       };
       // The mark, then the ticket, then the run (`startHandled`, ORC-277): a dev ticket holds its run before
       // the run is written, so recover() finds it whichever write a crash falls after. The feedback stays
@@ -2024,8 +2033,7 @@ export class Orchestrator {
         pluginDir: sandbox ? PACK_TARGET : this.d.packDir,
         settingsPath: sandbox ? SETTINGS_TARGET : this.settingsPath(),
         readOnly: job.workspace === 'trunk-readonly',
-        // The ticket's budget left caps the attempt too: past it, a `limit` blocks the ticket (ORC-340).
-        limits: tokensLeft === undefined ? job.limits : { ...job.limits, tokens: Math.min(job.limits.tokens ?? Infinity, tokensLeft) },
+        limits,
         env: {
           // First: a variable of the repository never replaces one of the factory. Never its secrets (ORC-211).
           ...vars.env,

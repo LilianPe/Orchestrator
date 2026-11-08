@@ -147,7 +147,7 @@ export interface TimerPayloads {
   debounce: { job: string; inbox?: true };
   'clarify.remind': { linearSessionId?: string };
   'clarify.expire': { linearSessionId?: string };
-  'usage.reset': { account?: string; job?: string };
+  'usage.reset': { account?: string; job?: string; runId?: string };
   /** The project's reconciliation (ORC-185), every 5 minutes, on its own pseudo-ticket (`reconcileTicket(project)`). */
   reconcile: Record<string, never>;
 }
@@ -358,7 +358,7 @@ export type DecidedEvent =
   | { type: 'ticket.unblocked' }
   | {
       type: 'ticket.patched';
-      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'verifiedSha' | 'awaitingRepo' | 'owedMove'>>;
+      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'verifiedSha' | 'awaitingRepo' | 'owedMove' | 'usageWait'>>;
     }
   | { type: 'feedback.appended'; item: FeedbackItem }
   /** The ticket's dev work is stopped: nothing pending, no verification awaited. */
@@ -463,6 +463,11 @@ export interface TicketState {
    * at the last one (ORC-220). Only a human relaunch empties it. Absent until the first: journals from before it replay as they were.
    */
   cutRelaunches?: number[];
+  /**
+   * The step the usage limit cut, waiting for its reset (`on_usage_limit: wait`, ORC-340): the `usage.reset` timer resumes it only
+   * while this still names its run. Whatever moves the ticket on ends the wait (`reduce`): `null` then. Absent on a ticket that never waited.
+   */
+  usageWait?: { runId: string; job: string; logical: LogicalState } | null;
   /**
    * Signed actor of the last authorized delegation (ORC-186): the run's initiator, who never validates
    * its spec, and its requester, who may answer it.

@@ -1,4 +1,5 @@
 import type { RepoConfig } from '../config/repo-config.js';
+import type { RunLimits } from '../config/workflow-schema.js';
 import type { AttemptLabels } from '../core/attempt-labels.js';
 import type { DeadLetter, RepairAction } from '../core/dead-letter.js';
 import type { OutboxEffect } from '../core/decision.js';
@@ -60,6 +61,8 @@ export interface RunRecord {
   stagnation?: Stagnation;
   /** The runner or its sandbox broke: nothing for the agent to fix (ORC-136). */
   infra?: true;
+  /** The limits it was launched with when they are not its job's: the ticket's token budget lowered them (ORC-340). A reattach keeps them. */
+  limits?: RunLimits;
   /** The subscription's usage limit stopped the attempt (ORC-340). */
   usageLimit?: { resetAt?: number };
   /** Renewed by the heartbeat while the attempt lives (ORC-220, `renewRun`); absent on older records. */

@@ -419,22 +419,50 @@ describe('ClaudeCodeRunner: caps and stagnation of the build (ORC-136)', () => {
     expect(await capped.done).toMatchObject({ outcome: 'limit', costUsd: 3.2 });
   });
 
-  it('an unknown model is priced at the dearest: a cut run is never under-counted', () => {
-    const t = { input: 1_000_000, output: 0, cacheRead: 0, cacheCreation: 0 };
-    expect(estimateCostUsd('claude-haiku-5-5', t)).toBe(0.1);
-    expect(estimateCostUsd('some-new-model', t)).toBe(10);
+  it('prices at the list price of each family; a model of no known family at the dearest, never under-counted', () => {
+    const t = { input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000, cacheCreation: 1_000_000 };
+    expect(estimateCostUsd('claude-opus-5-5', t)).toBeCloseTo(4 + 20 + 0.2 + 5);
+    expect(estimateCostUsd('claude-sonnet-5-5', t)).toBeCloseTo(2 + 10 + 0.2 + 2.5);
+    expect(estimateCostUsd('claude-haiku-5-5', t)).toBeCloseTo(0.1 + 0.5 + 0.01 + 0.125);
+    expect(estimateCostUsd('some-new-model', t)).toBeCloseTo(10 + 50 + 0.25 + 12.5);
   });
 
-  it('tells the usage limit of the subscription, with its reset, apart from a failure of the agent (ORC-340)', async () => {
+  it('prices a cut run on the model the init line reports, whatever the request named', async () => {
     const { r } = runner();
+    const init = JSON.stringify({ type: 'system', subtype: 'init', session_id: 's', model: 'claude-opus-5-5' });
+    const h = r.start(req({ model: '', limits: { turns: 50, durationMs: 200, usd: 5 } }, { FAKE_CLAUDE_SCRIPT: script(init, assistant('m1', { input_tokens: 1_000_000, output_tokens: 0 })), FAKE_CLAUDE_HANG: '1' }));
+    expect(await h.done).toMatchObject({ outcome: 'limit', costUsd: 4 });
+  });
+
+  describe('the usage limit of the subscription (ORC-340)', () => {
     const limitEvent = JSON.stringify({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', resetsAt: 1_900_000_000 } });
-    const result = JSON.stringify({ type: 'result', subtype: 'success', is_error: true, total_cost_usd: 0, num_turns: 1, result: 'Claude AI usage limit reached|1900000000' });
-    const evented = r.start(req({}, { FAKE_CLAUDE_SCRIPT: script(assistant('m1'), limitEvent, result) }));
-    expect(await evented.done).toMatchObject({ outcome: 'failure', usageLimit: { resetAt: 1_900_000_000_000 } });
-    const told = r.start(req({}, { FAKE_CLAUDE_SCRIPT: script(JSON.stringify({ type: 'result', subtype: 'success', is_error: true, num_turns: 1, result: "You've hit your limit" })) }));
-    expect(await told.done).toMatchObject({ usageLimit: {} });
-    const plain = r.start(req({}, { FAKE_CLAUDE_SCRIPT: script(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, num_turns: 1, result: 'Done within the usage limit.' })) }));
-    expect(await plain.done).not.toHaveProperty('usageLimit');
+    const resultOf = (text: string, isError = true) => JSON.stringify({ type: 'result', subtype: 'success', is_error: isError, total_cost_usd: 0, num_turns: 1, result: text });
+
+    it('is told with its reset, from the event or from the CLI result', async () => {
+      const { r } = runner();
+      expect(await r.start(req({}, { FAKE_CLAUDE_SCRIPT: script(assistant('m1'), limitEvent) })).done).toMatchObject({ usageLimit: { resetAt: 1_900_000_000_000 } });
+      expect(await r.start(req({}, { FAKE_CLAUDE_SCRIPT: script(resultOf('Claude AI usage limit reached|1900000000')) })).done).toMatchObject({ outcome: 'failure', usageLimit: { resetAt: 1_900_000_000_000 } });
+    });
+
+    it('only from the anchored result: an error that names a limit in other words is a failure of the agent', async () => {
+      const { r } = runner();
+      for (const text of ["You've hit your limit", 'The API usage limit reached|1900000000 was quoted in a log', 'Done within the usage limit.']) {
+        expect(await r.start(req({}, { FAKE_CLAUDE_SCRIPT: script(resultOf(text)) })).done).not.toHaveProperty('usageLimit');
+      }
+    });
+
+    it('a stream that goes on after a rejected event was not stopped by it, and a run that succeeds never is', async () => {
+      const { r } = runner();
+      expect(await r.start(req({}, { FAKE_CLAUDE_SCRIPT: script(limitEvent, assistant('m1'), resultOf('Done.')) })).done).not.toHaveProperty('usageLimit');
+      expect(await r.start(req({}, { FAKE_CLAUDE_SCRIPT: script(assistant('m1'), limitEvent, resultOf('Done.', false)) })).done).toMatchObject({ outcome: 'success' });
+      expect(await r.start(req({}, { FAKE_CLAUDE_SCRIPT: script(assistant('m1'), limitEvent, resultOf('Done.', false)) })).done).not.toHaveProperty('usageLimit');
+    });
+
+    it('leaves infra as it is: what to make of the limit is the factory configuration', async () => {
+      const { r } = runner();
+      // No result line, nobody stopped it: the infrastructure, as without the limit.
+      expect(await r.start(req({}, { FAKE_CLAUDE_SCRIPT: script(assistant('m1'), limitEvent) })).done).toMatchObject({ outcome: 'failure', infra: true, usageLimit: { resetAt: 1_900_000_000_000 } });
+    });
   });
 });
 

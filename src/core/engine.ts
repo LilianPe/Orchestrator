@@ -1040,9 +1040,11 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       if (ticket?.leaseRelaunches && job?.queue === 'dev') out.events.push({ type: 'ticket.patched', patch: { leaseRelaunches: 0 } });
       if (!job || event.payload.outcome === 'stopped') return out;
       const limited = event.payload.usageLimit;
-      if (limited && job.queue === 'dev') {
+      // A run that succeeded is kept, whatever the stream said of the limit on the way; a blocked ticket keeps its block.
+      if (limited && job.queue === 'dev' && event.payload.outcome !== 'success' && ticket && !ticket.blocked) {
         // The subscription's limit is no failure of the agent (ORC-340): no block, no attempt counted; the step resumes at the reset.
-        out.timers.push({ kind: 'usage.reset', slot: 'usage.reset', ms: Math.max(0, limited.resetAt - event.at), payload: { job: jobName } });
+        out.events.push({ type: 'ticket.patched', patch: { usageWait: { runId, job: jobName, logical: ticket.logical } } });
+        out.timers.push({ kind: 'usage.reset', slot: 'usage.reset', ms: Math.max(0, limited.resetAt - event.at), payload: { job: jobName, runId } });
         out.trace.push(`usage limit: ${jobName} resumes at ${new Date(limited.resetAt).toISOString()}`);
         return out;
       }
@@ -1167,11 +1169,15 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       }
       if (fired.kind === 'usage.reset' && fired.payload.job) {
         const job = workflow.jobs[fired.payload.job];
-        // A human took the ticket over meanwhile (a block, a stop, another run): theirs to resume.
-        if (!job || ticket?.blocked || ticket?.activeRunId) {
-          out.trace.push(`timer.fired usage.reset: ${fired.payload.job} not resumed`);
+        const wait = ticket?.usageWait;
+        // Only the cut step, still where it was cut: a ticket moved on since (a run, a move, a block, undelegated) ended the wait (`reduce`).
+        // ponytail: the timer row is left to fire into this check, not deleted; a per-slot delete in the decision plan if stale rows ever matter.
+        const current = !!job && !!ticket && !!wait && wait.runId === fired.payload.runId && wait.job === job.name && ticket.logical === wait.logical && ticket.delegated && !ticket.blocked && !ticket.activeRunId && !ticket.verifyingRunId;
+        if (!current) {
+          out.trace.push(`timer.fired usage.reset: ${fired.payload.job} not resumed, the ticket moved on`);
           return out;
         }
+        out.events.push({ type: 'ticket.patched', patch: { usageWait: null } });
         startRun(out, event, ticket, job, { resume: true });
         return out;
       }
