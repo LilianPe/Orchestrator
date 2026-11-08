@@ -75,7 +75,7 @@ const EGRESS_ENV = [
   'no_proxy=localhost,127.0.0.1',
   // Node's own fetch (factory-agent) reads the variables above only with it.
   'NODE_USE_ENV_PROXY=1',
-  ...['NODE_EXTRA_CA_CERTS', 'SSL_CERT_FILE', 'CURL_CA_BUNDLE', 'REQUESTS_CA_BUNDLE', 'PIP_CERT', 'GIT_SSL_CAINFO', 'npm_config_cafile', 'YARN_CAFILE', 'YARN_HTTPS_CA_FILE_PATH'].map(
+  ...['NODE_EXTRA_CA_CERTS', 'SSL_CERT_FILE', 'CURL_CA_BUNDLE', 'REQUESTS_CA_BUNDLE', 'PIP_CERT', 'GIT_SSL_CAINFO', 'npm_config_cafile', 'YARN_HTTPS_CA_FILE_PATH'].map(
     (k) => `${k}=${EGRESS_CA}`,
   ),
   // Its POST would be refused at every install.
