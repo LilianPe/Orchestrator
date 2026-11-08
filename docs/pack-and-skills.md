@@ -65,7 +65,7 @@ Full text: `packs/standard/skills/<name>/SKILL.md`.
 
 `packs/standard/settings.json` sets `defaultMode: acceptEdits` and:
 
-**Allowed** without confirmation: reading, editing and searching files; `git status|diff|log|show|add|commit|fetch|rebase|checkout|switch|branch|rev-parse|merge-base|merge-tree|merge|revert|rev-list|ls-remote`; `gh pr view|list|checks|diff`; `gh run view|list`; `npm`, `npx`, `node`, `pnpm`, `yarn`; `ls`, `cat`, `grep`, `rg`, `find`, `head`, `tail`, `wc`, `sleep`; `relais-agent`; the `submit_result` and `ask` tools of the factory MCP (`mcp__factory__…`), which `claude -p` would otherwise refuse.
+**Allowed** without confirmation: reading, editing and searching files; `git status|diff|log|show|add|commit|fetch|rebase|checkout|switch|branch|rev-parse|merge-base|merge-tree|merge|revert|rev-list|ls-remote`; `gh pr view|list|checks|diff`; `gh run view|list`; `npm`, `npx`, `node`, `pnpm`, `yarn`; `uv`, `pytest`, `ruff`, `mypy` (the Python toolchain of the runner image); `ls`, `cat`, `grep`, `rg`, `find`, `head`, `tail`, `wc`, `sleep`; `relais-agent`; the `submit_result` and `ask` tools of the factory MCP (`mcp__factory__…`), which `claude -p` would otherwise refuse.
 
 **Refused**:
 

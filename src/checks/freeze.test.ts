@@ -101,6 +101,25 @@ describe('checkFrozen (ORC-131)', () => {
     expect((await after({ 'pyproject.toml': PYPROJECT.replace('"app"', '"app2"') })).ok).toBe(true);
   });
 
+  it('the pytest section of tox.ini or setup.cfg changed blocks; another section does not (ORC-311)', async () => {
+    const tox = '[tox]\nenvlist = py312\n\n[pytest]\naddopts = -q\n';
+    const cfg = '[metadata]\nname = app\n\n[tool:pytest]\ntestpaths = tests\n';
+    const base = await freezeTests([], view('sha-1', { 'tox.ini': tox, 'setup.cfg': cfg }));
+    expect(Object.keys(base.files).sort()).toEqual(['setup.cfg', 'tox.ini']);
+    const check = (files: Record<string, string>) => checkFrozen(base, view('sha-2', { 'tox.ini': tox, 'setup.cfg': cfg, ...files }, Object.keys(files)));
+    expect((await check({ 'tox.ini': tox.replace('-q', '-q --ignore=tests/test_export.py') })).ok).toBe(false);
+    expect((await check({ 'setup.cfg': cfg.replace('testpaths = tests', 'testpaths = src') })).ok).toBe(false);
+    expect((await check({ 'tox.ini': tox.replace('py312', 'py313'), 'setup.cfg': cfg.replace('name = app', 'name = app2') })).ok).toBe(true);
+  });
+
+  it('a pytest configuration added after the freeze blocks: pytest reads the first it finds (ORC-311)', async () => {
+    for (const files of [{ 'setup.cfg': '[tool:pytest]\naddopts = --ignore=src\n' }, { 'tox.ini': '[pytest]\naddopts = -k "not export"\n' }, { '.pytest.ini': '[pytest]\n' }, { 'pytest.toml': '[pytest]\n' }]) {
+      expect((await after(files)).ok, Object.keys(files)[0]).toBe(false);
+    }
+    // A tox.ini or setup.cfg without a pytest section is not read by pytest.
+    expect((await after({ 'tox.ini': '[tox]\nenvlist = py312\n', 'setup.cfg': '[flake8]\nmax-line-length = 100\n' })).ok).toBe(true);
+  });
+
   it('a file that is not frozen passes, a new test included', async () => {
     const r = await after({ 'src/export.ts': 'export const toCsv = (r: string[]) => r.join(",");\n', 'src/other.test.ts': TEST });
     expect(r).toEqual({ check: FREEZE_CHECK, ok: true, summary: '6 frozen files, unchanged since the freeze' });
@@ -109,7 +128,7 @@ describe('checkFrozen (ORC-131)', () => {
 
 describe('the freeze rule', () => {
   it('reads the harness by name, anywhere in the repository', () => {
-    for (const p of ['vitest.config.ts', 'web/vitest.config.mts', 'jest.config.js', 'tsconfig.build.json', 'pkg/package.json', 'pytest.ini', 'a/conftest.py', 'pyproject.toml']) {
+    for (const p of ['vitest.config.ts', 'web/vitest.config.mts', 'jest.config.js', 'tsconfig.build.json', 'pkg/package.json', 'pytest.ini', 'a/conftest.py', 'pyproject.toml', '.pytest.ini', 'pytest.toml', '.pytest.toml', 'tox.ini', 'pkg/setup.cfg']) {
       expect(isFrozenHarness(p), p).toBe(true);
     }
     for (const p of ['src/export.test.ts', 'vite.config.ts', 'README.md']) expect(isFrozenHarness(p), p).toBe(false);

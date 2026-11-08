@@ -34,6 +34,10 @@ describe('scanDiff', () => {
     ['bypass', 'app/scores.py', 'total = compute(x)  # type: ignore[arg-type]', '# type: ignore'],
     ['bypass', 'app/scores.py', 'total = compute(x)  # pyright: ignore', '# pyright: ignore'],
     ['bypass', 'app/scores.py', 'import os, sys  # noqa: E401', '# noqa'],
+    // The file-level directives of ruff, flake8 and mypy (ORC-311), the Python `eslint-disable` and `@ts-nocheck`.
+    ['bypass', 'app/scores.py', '# ruff: noqa', '# ruff: noqa'],
+    ['bypass', 'app/scores.py', '# flake8: noqa: E501', '# flake8: noqa'],
+    ['bypass', 'app/scores.py', '# mypy: ignore-errors', '# mypy: ignore-errors'],
     ['bypass', 'src/a.test.ts', '    expect(true).toBe(true);', 'expect(true)'],
     ['bypass', 'src/a.test.ts', "    expect('ok').toEqual('ok');", "expect('ok')"],
     ['bypass', 'src/a.test.ts', '    assert.ok(true);', 'assert.ok(true)'],

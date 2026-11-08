@@ -74,7 +74,9 @@ const RULES: Rule[] = [
   { form: 'bypass', langs: ['js', 'other'], keep: 'comment', pattern: /(?<=(?:\/\/|\/\*|^\s*\*)\s*)eslint-disable\b/ },
   { form: 'bypass', langs: ['js', 'other'], keep: 'comment', pattern: /(?<=(?:\/\/|\/\*|^\s*\*)[\s/*]*)@ts-(?:ignore|nocheck|expect-error)\b/ },
   { form: 'bypass', langs: ['py'], keep: 'comment', pattern: /#\s*(?:type|pyright):\s*ignore\b/ },
-  { form: 'bypass', langs: ['py'], keep: 'comment', pattern: /#\s*noqa\b/i },
+  // ruff and flake8 read `# ruff: noqa` and `# flake8: noqa` for the whole file, mypy `# mypy: ignore-errors`.
+  { form: 'bypass', langs: ['py'], keep: 'comment', pattern: /#\s*(?:(?:ruff|flake8)\s*:\s*)?noqa\b/i },
+  { form: 'bypass', langs: ['py'], keep: 'comment', pattern: /#\s*mypy\s*:\s*ignore-errors\b/ },
   // Emptied assertions: an assertion on a constant, true whatever the code does.
   { form: 'bypass', langs: ['js'], pattern: /\bexpect\s*\(\s*(?:true|false|null|undefined|-?\d+(?:\.\d+)?|'[^']*'|"[^"]*"|`[^`$]*`)\s*\)/ },
   { form: 'bypass', langs: ['js'], pattern: /(?<![\w.$])assert(?:\.ok)?\s*\(\s*(?:true|1|!0)\s*[,)]/ },
