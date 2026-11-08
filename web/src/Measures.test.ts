@@ -13,7 +13,7 @@ const measures = (patch: Partial<TicketMeasuresView> = {}): TicketMeasuresView =
   startedAt: 0, leadTimeMs: null, workMs: 60_000, costUsd: 0, reviewRounds: { ai: 0, human: 0 }, runs: [attempt()], ...patch,
 });
 const ticket = (ticketId: string, m: TicketMeasuresView | null, patch: Partial<MeasuredTicketView> = {}): MeasuredTicketView => ({
-  projectId: 'p', ticketId, title: `Title ${ticketId}`, logical: 'dev', blocked: false, measures: m, ...patch,
+  projectId: 'p', ticketId, title: `Title ${ticketId}`, logical: 'dev', blocked: false, blockCause: null, measures: m, ...patch,
 });
 
 describe('the cells of the measures (ORC-223)', () => {
@@ -102,6 +102,11 @@ describe('Measures (ORC-223)', () => {
     expect(html).toContain('reviewer');
     expect(html).toContain('10 s, running');
     expect(html).toContain('5 turns');
+  });
+
+  it("shows a blocked ticket's cause by the label the Flow gives it", () => {
+    const html = page([ticket('REL-3', measures(), { blocked: true, blockCause: 'infra' })]);
+    expect(html).toContain('blocked: Infrastructure failure');
   });
 
   it('marks a ticket whose measures could not be read, rather than showing zeros', () => {

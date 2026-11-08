@@ -1,7 +1,7 @@
 import { AGENT_QUESTION, restatesCause, STOPPED, type BlockCause } from '../../src/core/block-cause.js';
 import type { FlowTicketView, FlowView, TokensView, WorkingRunView } from './types.js';
 
-const CAUSE_LABELS: Record<BlockCause, string> = {
+export const CAUSE_LABELS: Record<BlockCause, string> = {
   question: AGENT_QUESTION,
   contested: 'Ticket disputed by the agent',
   red: 'Red not verified',

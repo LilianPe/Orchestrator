@@ -169,6 +169,14 @@ describe('server', () => {
       expect(logs).toEqual([expect.stringContaining('journal illisible')]);
     });
 
+    it("serves a blocked ticket's cause from its typed kind, as the Flow classes it (ORC-345), and none for a ticket not blocked", async () => {
+      const { app, store } = await setup();
+      await store.putTicket({ ...newTicketState('p', 'REL-2', 'Import', 'dev', 2), blocked: true, blockKind: 'asked', blockReason: 'Something else entirely' });
+      const body = await (await app.request('/api/measures')).json();
+      const by = Object.fromEntries(body.tickets.map((t: { ticketId: string; blockCause: unknown }) => [t.ticketId, t.blockCause]));
+      expect(by).toEqual({ 'REL-1': null, 'REL-2': 'question' });
+    });
+
     it('serves the most recently updated tickets first, at most 50', async () => {
       const { app, store } = await setup();
       for (let i = 2; i <= 52; i++) await store.putTicket(newTicketState('p', `REL-${i}`, `T${i}`, 'todo', 100 + i));

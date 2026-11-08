@@ -1,4 +1,4 @@
-import { formatDuration, formatTokens, plural, PrLink, tokensCell, totalTokens } from './Flow.js';
+import { CAUSE_LABELS, formatDuration, formatTokens, plural, PrLink, tokensCell, totalTokens } from './Flow.js';
 import type { MeasuredTicketView, RunMeasureView, TicketMeasuresView } from './types.js';
 
 /** The measures the MVP doc asks for that nothing in the factory feeds yet, and the ticket that brings each (ORC-223). */
@@ -160,7 +160,7 @@ export function Measures({ tickets, now, selected, onSelect }: { tickets: Measur
                 return (
                   <tr key={key(t)} className={key(t) === selected ? 'selected' : ''}>
                     <td><button className="link" onClick={() => onSelect(key(t))}>{t.ticketId}</button> {t.title} <PrLink url={t.prUrl} /></td>
-                    <td>{t.logical}{t.blocked && ' · blocked'}</td>
+                    <td>{t.logical}{t.blockCause && ` · blocked: ${CAUSE_LABELS[t.blockCause]}`}</td>
                     {m ? <MeasuredCells m={m} logical={t.logical} now={now} /> : <td colSpan={5} className="reason">? {costCell(null).title}</td>}
                   </tr>
                 );

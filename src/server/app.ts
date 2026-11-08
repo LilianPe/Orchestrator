@@ -7,6 +7,7 @@ import { teamOf, type Tracker } from '../adapters/tracker/types.js';
 import type { BusMessage, EventBus } from '../core/bus.js';
 import type { Clock } from '../core/clock.js';
 import { pendingLabels } from '../core/attempt-labels.js';
+import { causeOf } from '../core/block-cause.js';
 import { measureTicket, type TicketMeasures } from '../core/measures.js';
 import { TRUSTED, type FactoryEvent, type TicketState } from '../core/types.js';
 import type { RunRecord, Store } from '../store/types.js';
@@ -198,8 +199,14 @@ export function createApp(d: ServerDeps): Hono {
   });
 
   // The measures of the most recently updated tickets (ORC-223), read-only: one ticket whose measures cannot be read is
-  // served with `measures: null`, the others still are.
-  const measuredTicket = (t: TicketState, measures: TicketMeasures | null) => ({ ...flowTicket(t), logical: t.logical, blocked: t.blocked, measures });
+  // served with `measures: null`, the others still are. A blocked ticket's cause is its typed kind's, as the Flow classes it (ORC-345).
+  const measuredTicket = (t: TicketState, measures: TicketMeasures | null) => ({
+    ...flowTicket(t),
+    logical: t.logical,
+    blocked: t.blocked,
+    blockCause: t.blocked ? causeOf(t.blockKind) : null,
+    measures,
+  });
   app.get('/api/measures', async (c) => {
     const tickets = (await d.store.listTickets()).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, MEASURED_TICKETS);
     // Two tickets at a time: each read is five queries at once, on a pool of ten that also serves the webhooks and the worker.

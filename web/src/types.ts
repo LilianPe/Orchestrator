@@ -121,5 +121,7 @@ export interface TicketMeasuresView {
 export interface MeasuredTicketView extends FlowTicketView {
   logical: string;
   blocked: boolean;
+  /** Of a blocked ticket, from its typed kind as the Flow classes it (ORC-345); null when not blocked. */
+  blockCause: BlockCause | null;
   measures: TicketMeasuresView | null;
 }
