@@ -3,6 +3,7 @@
 // when the runner wrote none; it never takes the agent's word.
 import { randomUUID } from 'node:crypto';
 import { posix } from 'node:path';
+import { ANSI } from './log-excerpt.js';
 import { isTestFile, isTestSpec, normalizePath } from './test-files.js';
 import { exportedNames, importedFrom, parse } from './ts-ast.js';
 
@@ -91,7 +92,7 @@ interface Report {
   ran: number;
 }
 
-const stripAnsi = (s: string): string => s.replace(/\u001b\[[0-9;]*m/g, '');
+const stripAnsi = (s: string): string => s.replace(ANSI, '');
 
 // An assertion library's error: chai's and node's `AssertionError`, jest's `expect(received)`, pytest's rewritten `assert`.
 const ASSERTION_FAILURE = [/^(?:\w+\.)*AssertionError\b/, /^(?:Error: )?expect[.(]/, /^assert /, /^E\s+(?:AssertionError\b|assert )/m];

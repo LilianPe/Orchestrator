@@ -222,7 +222,8 @@ class Bindings {
 /** An identifier read as a value: not a property's name, not the name a declaration gives. */
 function isReference(id: ts.Identifier): boolean {
   const p = id.parent;
-  if ((ts.isPropertyAccessExpression(p) || ts.isQualifiedName(p)) && p.name === id) return false;
+  if (ts.isPropertyAccessExpression(p) && p.name === id) return false;
+  if (ts.isQualifiedName(p) && p.right === id) return false;
   if ((ts.isBindingElement(p) || ts.isImportSpecifier(p) || ts.isExportSpecifier(p)) && p.propertyName === id) return false;
   return ts.isShorthandPropertyAssignment(p) || !('name' in p) || (p as { name?: ts.Node }).name !== id;
 }
